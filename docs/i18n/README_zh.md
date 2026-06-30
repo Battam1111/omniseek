@@ -17,7 +17,7 @@
 &nbsp;![Built for MCP](https://img.shields.io/badge/built_for-MCP-D4952B?style=flat-square)
 &nbsp;![Self-hosted](https://img.shields.io/badge/self--hosted-D4952B?style=flat-square)
 
-[快速开始](#快速开始) · [工作原理](#工作原理) · [配置](#配置) · [工具](#工具) · [贡献](#贡献)
+[快速开始](#快速开始) · [工作原理](#工作原理) · [你会得到什么](#你会得到什么) · [配置](#配置) · [贡献](#贡献)
 
 **Languages:** [English](../../README.md) · 中文 · [日本語](README_ja.md)
 
@@ -94,6 +94,9 @@ Windows 上请在 Git Bash 或 WSL 里运行 `bootstrap.sh`(它是 POSIX shell �
 
 Linux 常驻服务参见 [`deploy/penumbra.service`](../../deploy/penumbra.service)。
 
+Penumbra 绑定 `127.0.0.1`,每个请求都需要 bearer token。
+未经反向代理不要对外暴露([SECURITY.md](../../.github/SECURITY.md))。
+
 ## 工作原理
 
 Penumbra 是**基础设施,不是应用**:原始互联网和你的 AI agent 之间的检索层。
@@ -109,9 +112,21 @@ Penumbra 在目录中扇出、穿越壁垒、跨独立上游去重,返回结构�
 
 源目录**开放且持续生长**:目前已有数百个策展源,任何人都能增加。每个源靠一种特定模式(structure、unwall、transcribe、recall、monitor)胜过普通搜索来赢得一席之地,而非复述搜索本就能返回的内容。
 
+入口是 **`penumbra_search_ranked`**;`penumbra_list_sources()` 返回活的能力索引。
+[完整工具清单](../tools.md)覆盖搜索、论文、引用、人物、文档、音频与监控。
+
 ## 你会得到什么
 
-一次广播调用,在整个目录上去重 + 排序,并附一份"哪里没能触及"的台账。下面是 `penumbra_search_ranked("retrieval augmented generation survey")` 的一段真实(已精简)返回:
+`penumbra_search_ranked("retrieval augmented generation survey")` 在 91 个源上扇出,
+将 402 条原始命中按上游身份去重为 12 条,26 秒返回。排名最高的结果被 5 个独立上游
+各自命中(OpenReview、DBLP、HackerNews、OpenAlex、YouTube)。
+
+每条结果带 `corroboration`(几个独立来源命中了它)和 `also_in`(是哪些)。
+`_meta` 就是盲区台账:查了什么、哪些返空、哪些被排除。5 源共识胜过孤证;
+知道哪里*没能*触及,和知道哪里触及了一样重要。
+
+<details>
+<summary>响应结构(真实数据,已精简)</summary>
 
 ```jsonc
 {
@@ -121,35 +136,23 @@ Penumbra 在目录中扇出、穿越壁垒、跨独立上游去重,返回结构�
     {
       "source": "openreview",
       "title": "Graph Retrieval-Augmented Generation: A Survey",
-      "url": "https://openreview.net/forum?id=9ldXNHQFMl",
-      "date": "2024-01-01T00:00:00Z",
       "metadata": {
-        "corroboration": 5,                                 // 同一篇工作被 5 个独立上游各自命中
+        "corroboration": 5,                    // 同一篇工作,5 个独立上游
         "also_in": ["dblp", "hackernews", "openalex", "youtube"],
-        "merge_basis": "title",
         "_rank": 0.68
       }
-    },
-    {
-      "source": "github_trending",
-      "title": "taichengguo/LLM_MultiAgents_Survey_Papers",
-      "url": "https://github.com/taichengguo/LLM_MultiAgents_Survey_Papers",
-      "signals": { "stars": { "value": 1282, "kind": "engagement", "computed_by": "source:github_trending/stars" } },
-      "metadata": { "live_sources": ["github_trending"], "_rank": 0.76 }
     }
-    // ... 还有 10 条
+    // ... 还有 11 条
   ],
   "_meta": {
-    "searched": 91,                          // 本次查询的源数
-    "elapsed_s": 26.1,
-    "deduped": { "in": 402, "out": 12 },     // 402 条原始命中按上游身份去重为 12 条
-    "empty": ["core", "bluesky", "acl_anthology", "..."],  // 返空(没配密钥,或无匹配)
-    "excluded_relevant": []                  // 与本查询相关的墙内/慢速源,各带一个 sources=[...] 重跑提示
+    "searched": 91,                            // 本次查询的源数
+    "deduped": { "in": 402, "out": 12 },       // 402 条原始命中 -> 12 条(按上游身份)
+    "empty": ["core", "bluesky", "..."]        // 返空(没配密钥,或无匹配)
   }
 }
 ```
 
-独立性是具体的:同一篇工作从多个上游浮现时,会折叠成一条,带上 `corroboration`(几个来源)和 `also_in`(是哪些),让你的 agent 把"5 源佐证的综述"看得比孤证更重。`_meta` 就是盲区台账:查了什么、哪些返空、哪些被排除。
+</details>
 
 ## 配置
 
@@ -164,16 +167,6 @@ Penumbra 采用**源目录优先**设计:无配置时,所有良性源开启、�
 | **circumvention** | **关,不随附** |
 
 完整参考见 **[configuration](../configuration.md)**;墙内源登录见 **[walled sources](../walled-sources.md)**。
-
-## 工具
-
-优先用 **`penumbra_search_ranked`**(整个目录去重 + 排序的一张表,查"X 的最佳/最新"的默认)。`penumbra_list_sources()` 返回活的能力索引。搜索、论文、引用、人物、文档、音频、监控:完整分组清单见 **[tools](../tools.md)**。
-
-## 安全与责任
-
-- **默认回环、token 守门。** 绑定 `127.0.0.1`,无 bearer token 拒绝启动,任何非回环绑定都大声警告。未经反向代理不要对外暴露。
-- **默认不可信。** 出站请求经 SSRF 防护;Penumbra 返回的一切都是外部数据、绝非指令;`penumbra_read_document` 沙箱化到白名单收件箱。
-- **你的责任。** Penumbra 以你自己 agent 的身份检索,须守你所在司法辖区的法律与各站条款。完整姿态见 [SECURITY.md](../../.github/SECURITY.md) 与 [NOTICE](../../NOTICE)。
 
 ## 贡献
 
