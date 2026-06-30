@@ -96,7 +96,7 @@ Linux 常驻服务参见 [`deploy/penumbra.service`](../../deploy/penumbra.servi
 
 ## 工作原理
 
-Penumbra 是**基础设施,不是应用**。它位于原始互联网和你的 AI agent 之间,将不可触及的半影区转化为结构化的、可检索的证据。
+Penumbra 是**基础设施,不是应用**:原始互联网和你的 AI agent 之间的检索层。
 
 <div align="center">
   <picture>
@@ -149,7 +149,7 @@ Penumbra 在目录中扇出、穿越壁垒、跨独立上游去重,返回结构�
 }
 ```
 
-独立性是具体的:同一篇工作从多个上游浮现时会折叠成一条,带上 `corroboration`(几个来源)和 `also_in`(是哪些),让你的 agent 把"5 源佐证的综述"看得比孤证更重。`_meta` 就是盲区台账:查了什么、哪些返空、哪些被排除。默认调用只用 free 源;keyed 与墙内源在你配好密钥或登录前保持安静。
+独立性是具体的:同一篇工作从多个上游浮现时,会折叠成一条,带上 `corroboration`(几个来源)和 `also_in`(是哪些),让你的 agent 把"5 源佐证的综述"看得比孤证更重。`_meta` 就是盲区台账:查了什么、哪些返空、哪些被排除。
 
 ## 配置
 
@@ -163,11 +163,11 @@ Penumbra 采用**源目录优先**设计:无配置时,所有良性源开启、�
 | **walled**(你有权访问的登录墙) | **关**;自带浏览器 |
 | **circumvention** | **关,不随附** |
 
-Keyed 源配置、polite-pool 联系邮箱、全部环境变量见 **[configuration](../configuration.md)**;墙内源登录见 **[walled sources](../walled-sources.md)**。
+完整参考见 **[configuration](../configuration.md)**;墙内源登录见 **[walled sources](../walled-sources.md)**。
 
 ## 工具
 
-Penumbra 暴露一族 MCP 工具,覆盖搜索与路由、论文与引用、人物与机构、文档与视觉、音频、健康检查、以及自迭代策展。优先用 **`penumbra_search_ranked`**(整个目录去重 + 排序的一张表,查"最佳/最新"的默认),`penumbra_list_sources()` 返回活的能力索引。完整分组清单见 **[tools](../tools.md)**。
+优先用 **`penumbra_search_ranked`**(整个目录去重 + 排序的一张表,查"X 的最佳/最新"的默认)。`penumbra_list_sources()` 返回活的能力索引。搜索、论文、引用、人物、文档、音频、监控:完整分组清单见 **[tools](../tools.md)**。
 
 ## 安全与责任
 

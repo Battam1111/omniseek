@@ -79,8 +79,8 @@ Point your MCP client at `http://127.0.0.1:8765/mcp` with header
 `Authorization: Bearer <token>`. The token is generated on first start and stored in
 `~/.penumbra/credentials/http.json` (mounted as `./.penumbra/credentials/http.json` under Docker).
 
-To opt into optional extras (you accept their licenses, see [NOTICE](NOTICE)):
-`EXTRAS="[pdf,asr,walled]"` as a build arg in `docker-compose.yml`.
+Optional extras (their licenses apply; see [NOTICE](NOTICE)):
+set `EXTRAS="[pdf,asr,walled]"` as a build arg in `docker-compose.yml`.
 
 ### Without Docker
 
@@ -96,7 +96,7 @@ For an always-on Linux service, see [`deploy/penumbra.service`](deploy/penumbra.
 
 ## How it works
 
-Penumbra is **infrastructure, not an application**. It sits between the raw internet and your AI agent, turning the inaccessible penumbra into structured, retrievable evidence.
+Penumbra is **infrastructure, not an application**: a retrieval layer between the raw internet and your AI agent.
 
 <div align="center">
   <picture>
@@ -149,7 +149,7 @@ One broad call, deduped and ranked across the whole catalog, with a ledger of wh
 }
 ```
 
-Independence is concrete: when the same work surfaces from several upstreams it collapses to one entry with `corroboration` (how many sources) and `also_in` (which), so your agent can trust a 5-source survey over a lone hit. `_meta` is the gap-ledger: what was searched, what came back empty, what was excluded. A default call uses free sources; keyed and walled stay quiet until you add a key or log in.
+Independence is concrete: when the same work surfaces from several upstreams, it collapses to one entry with `corroboration` (how many sources) and `also_in` (which), so your agent can trust a 5-source survey over a lone hit. `_meta` is the gap-ledger: what was searched, what came back empty, what was excluded.
 
 ## Configure
 
@@ -164,17 +164,14 @@ are off. Tune everything in one file, `~/.penumbra/profile.json` (seeded from
 | **walled** (a login you hold) | **off**; you bring your own browser |
 | **circumvention** | **off, and never shipped** |
 
-Keyed-source setup, the polite-pool contact, and every environment variable are in
-**[configuration](docs/configuration.md)**; logging into a walled source is in
-**[walled sources](docs/walled-sources.md)**.
+Full reference in **[configuration](docs/configuration.md)**; browser login for walled sources
+in **[walled sources](docs/walled-sources.md)**.
 
 ## Tools
 
-Penumbra exposes MCP tools across search and routing, papers and citations, people and
-organizations, documents and vision, audio, health, and a self-iterating curator. Start with
-**`penumbra_search_ranked`** (one deduped, ranked list; the default for best/latest on X);
-`penumbra_list_sources()` returns the live capability index. The full grouped list is in
-**[tools](docs/tools.md)**.
+Start with **`penumbra_search_ranked`** (one deduped, ranked list; the default for "best of X").
+`penumbra_list_sources()` returns the live capability index. Search, papers, citations, people,
+documents, audio, monitoring: the full grouped list is in **[tools](docs/tools.md)**.
 
 ## Safety and responsibility
 
