@@ -98,18 +98,9 @@ For an always-on Linux service, see [`deploy/penumbra.service`](deploy/penumbra.
 
 Penumbra is **infrastructure, not an application**. It sits between the raw internet and your AI agent, turning the inaccessible penumbra into structured, retrievable evidence.
 
-```
-                        ┌─────────────────────────────────┐
-  you / your agent      │           penumbra              │      the penumbra
-  ──────────────── MCP ─┤                                 ├─── logins, languages,
-                        │  sources · retrieval · tagging  │     paywalls, audio,
-                        │  dedup · gap-mapping · monitor  │     video, images,
-                        │                                 │     deleted content,
-                        │  growing catalog (hundreds+)    │     citation graphs
-                        └─────────────────────────────────┘
-```
-
-*Your agent speaks MCP to Penumbra; Penumbra reaches the penumbra (logins, languages, paywalls, audio, video, images, deleted content, citation graphs) and hands back tagged, deduped, gap-mapped evidence.*
+<div align="center">
+  <img src="assets/architecture.svg" alt="Your agent speaks MCP to Penumbra; Penumbra crosses logins, languages, paywalls, audio, video, images, deleted content, and citation graphs, and hands back tagged, deduped, gap-mapped evidence." width="820">
+</div>
 
 Your agent sends a query. Penumbra fans out across its source catalog, crosses the barriers (logins, languages, paywalls, modalities, time), retrieves what it finds, tags every finding with source and provenance, deduplicates across independent upstreams, and returns structured evidence with an explicit map of what it couldn't reach. Your agent does the reasoning. Penumbra makes sure it reasons over depth, not surface.
 

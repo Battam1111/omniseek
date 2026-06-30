@@ -83,13 +83,23 @@ Xiaohongshu, Zhihu, Douyin, and other login-only platforms are read through a br
 and log into; Penumbra never sees your password. They are off until you opt in, per source. See
 **[walled sources](walled-sources.md)** for the full browser-and-CDP setup.
 
-## Semantic recall (optional)
+## Advanced
+
+<details>
+<summary><b>Semantic recall</b> (optional vector layer)</summary>
+
+<br>
 
 Cross-lingual, paraphrase-tolerant recall uses a local embedding model. Install the `recall` extra
 and place the model at `~/.penumbra/models/qwen3-embedding-0.6b`. Without it, recall fail-opens to
 the lexical FTS5 index, so search still works, just without the vector layer.
 
-## Server environment
+</details>
+
+<details>
+<summary><b>Server environment</b> (variables)</summary>
+
+<br>
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
@@ -100,6 +110,8 @@ the lexical FTS5 index, so search still works, just without the vector layer.
 | `PENUMBRA_CDP_POOL` | off | keep a persistent CDP connection per walled browser |
 | `PENUMBRA_ALLOW_NETS` | (none) | extra CIDRs the SSRF guard may reach (advanced) |
 | `PENUMBRA_DOC_ROOTS` | inbox only | additional roots `penumbra_read_document` may read |
+
+</details>
 
 ---
 
