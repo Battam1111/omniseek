@@ -77,7 +77,7 @@ curl -s http://127.0.0.1:8765/healthz
 
 将你的 MCP 客户端指向 `http://127.0.0.1:8765/mcp`,携带请求头
 `Authorization: Bearer <token>`。token 在首次启动时自动生成,
-存储在 `./.penumbra/credentials/http.json`。
+存储在 `~/.penumbra/credentials/http.json`(Docker 下挂载为 `./.penumbra/credentials/http.json`)。
 
 可选扩展(你需接受其许可,参见 [NOTICE](../../NOTICE)):
 在 `docker-compose.yml` 中设置 `EXTRAS="[pdf,asr,walled]"`。
@@ -101,11 +101,11 @@ Penumbra 是**基础设施,不是应用**。它位于原始互联网和你的 AI
 ```
                         ┌─────────────────────────────────┐
   你 / 你的 agent       │           penumbra              │       半影区
-  ──────────────── MCP ─┤                                 ├─── 登录墙、语言壁、
+  ──────────────── MCP ─┤                                 ├─── 登录墙、语言、
                         │  源 · 检索 · 标注 · 去重        │     付费墙、音频、
                         │  盲区度量 · 变化监控            │     视频、图像、
-                        │                                 │     删帖、引用图谱
-                        │  持续生长的目录 (数百+)          │
+                        │                                 │     删帖、
+                        │  持续生长的目录 (数百+)          │     引用图谱
                         └─────────────────────────────────┘
 ```
 
@@ -113,7 +113,7 @@ Penumbra 是**基础设施,不是应用**。它位于原始互联网和你的 AI
 
 你的 agent 发送查询。Penumbra 在源目录中扇出检索,穿越壁垒(登录墙、语言、付费墙、模态、时间),为每条发现标注来源与出处,跨独立上游去重,返回结构化证据并附带一份精确的"哪里没能触及"的地图。你的 agent 负责推理。Penumbra 确保它推理的依据是深度,而非表层。
 
-源目录**开放且持续生长**:目前已有数百个策展源,任何人都能增加。每个源必须通过一种特定模式胜过普通搜索来赢得一席之地:**structure**(搜索无法干净返回的结构化数据)、**unwall**(运营者有权访问的登录墙后内容)、**transcribe**(agent 无法直接阅读的音视频)、**recall**(开放网络会遗忘的纵向信息流)、或 **monitor**(命名的、可监控的信息源)。
+源目录**开放且持续生长**:目前已有数百个策展源,任何人都能增加。每个源靠一种特定模式(structure、unwall、transcribe、recall、monitor)胜过普通搜索来赢得一席之地,而非复述搜索本就能返回的内容。
 
 ## 你会得到什么
 
@@ -159,66 +159,27 @@ Penumbra 是**基础设施,不是应用**。它位于原始互联网和你的 AI
 
 ## 配置
 
-Penumbra 采用**源目录优先**设计:预置一套分类好的源,由你(或你的 agent)选择启用哪些。无配置 = 所有良性默认源开启,登录墙源关闭。
+Penumbra 采用**源目录优先**设计:无配置时,所有良性源开启、登录墙源关闭。全部调节集中在一个文件
+`~/.penumbra/profile.json`(从 [`profile.example.json`](../../profile.example.json) 播种),按源名、领域、地区、访问层级缩放:
 
-`~/.penumbra/profile.json`(从 [`profile.example.json`](../../profile.example.json) 播种)
-可按源名、领域、地区和访问层级缩放:
+| 层级 | 默认 |
+|------|------|
+| **free**(公开,无需密钥) | **开** |
+| **keyed**(你提供的免费/付费 API 密钥) | 配好密钥即开 |
+| **walled**(你有权访问的登录墙) | **关**;自带浏览器 |
+| **circumvention** | **关,不随附** |
 
-| 层级 | 含义 | 默认 |
-|------|------|------|
-| free | 公开,无需密钥 | 开 |
-| keyed | 需要你提供的免费/付费 API 密钥 | 有密钥则开 |
-| walled | 你有权访问的登录墙后内容 | 关 |
-| circumvention | 需要突破访问控制 | 关,不随附 |
-
-通过 `penumbra_list_sources(domain=..., query=...)` 按需路由,无需记忆源列表;
-每个源报告其 `access_tier`,agent 可按法律合规需求过滤。
-
-**Keyed 源**(CORE 全文、Adzuna 职位、Podcast Index、Bluesky …)需要你自己提供 API 密钥,大多免费。
-没有密钥时适配器只会静默返空,所以"查不到结果"往往只是"没配密钥"。密钥放在
-`~/.penumbra/credentials/<source>.json`,在项目树之外,不会被提交。每个 keyed 适配器首次导入时会在旁边
-落一个 `<source>.json.template`,内联注明申请密钥的网址(如 CORE 的 `https://core.ac.uk/services/api`):
-把它复制成 `<source>.json` 填好即可。随时运行 `python scripts/creds_doctor.py` 查看哪些 keyed 源已配置、
-哪些还缺(只报有无,绝不打印密钥)。
-
-**墙内源**(小红书、知乎、抖音 …)通过**你自己**运行并登录的浏览器读取,Penumbra 从不接触你的密码。
-接入方法见 [docs/walled-sources.md](../walled-sources.md)。
+Keyed 源配置、polite-pool 联系邮箱、全部环境变量见 **[configuration](../configuration.md)**;墙内源登录见 **[walled sources](../walled-sources.md)**。
 
 ## 工具
 
-Penumbra 通过 MCP 暴露以下工具族:
-
-| 类别 | 工具 |
-|------|------|
-| **搜索** | `penumbra_search` · `penumbra_search_ranked` · `penumbra_fetch` · `penumbra_list_sources` · `penumbra_add_url` |
-| **论文 + 引用** | `penumbra_paper_enrich` · `penumbra_paper_recommend` · `penumbra_field_skeleton` |
-| **人物 + 机构** | `penumbra_resolve_identity` · `penumbra_coauthors` · `penumbra_institution_cohort` |
-| **文档 + 视觉** | `penumbra_read_document` · `penumbra_view_doc_images` · `penumbra_view_images` · `penumbra_view_video_frames` |
-| **音频** | `penumbra_transcribe` |
-| **健康 + 策展** | `penumbra_health_check` · `penumbra_curator_*`(自迭代源获取) |
-
-权威列表以服务器实际注册为准;`penumbra_list_sources()` 返回完整的能力索引。
-
-优先用 `penumbra_search_ranked`:在整个目录上去重 + 排序的一张表(查"最佳/最新"的默认选择)。当你想要按源分桶而非合并时,用 `penumbra_search`。
+Penumbra 暴露一族 MCP 工具,覆盖搜索与路由、论文与引用、人物与机构、文档与视觉、音频、健康检查、以及自迭代策展。优先用 **`penumbra_search_ranked`**(整个目录去重 + 排序的一张表,查"最佳/最新"的默认),`penumbra_list_sources()` 返回活的能力索引。完整分组清单见 **[tools](../tools.md)**。
 
 ## 安全与责任
 
-- **默认绑定回环,token 守门。** 默认 `127.0.0.1`;无 bearer token 拒绝启动;非回环绑定时大声警告。未经反向代理不要对外暴露。
-- **SSRF 防护。** 所有出站请求锁定 IP 并拒绝内网地址;`penumbra_read_document` 沙箱化到白名单收件箱。
-- **不可信内容。** Penumbra 返回的一切都是外部数据,不是指令。
-- **你的责任。** Penumbra 以你自己 agent 的身份进行检索。你有责任在你所在的司法管辖区内合法合规地使用它。参见 [SECURITY.md](../../.github/SECURITY.md) 和 [NOTICE](../../NOTICE)。
-
-## 目录结构
-
-```
-src/penumbra/
-  server.py            MCP 工具层 (penumbra_* 工具)
-  serve_http.py        HTTP 传输层 (token 守门,默认回环)
-  core/                 检索引擎: fetcher · rank · normalize · cache
-                       profile · _netguard (SSRF) · enrich · asr · curator
-  core/sources/         适配器: api/ · scrape/ · walled/
-tests/smoke.py         离线不变量 + 黄金 fixture (CI 闸门)
-```
+- **默认回环、token 守门。** 绑定 `127.0.0.1`,无 bearer token 拒绝启动,任何非回环绑定都大声警告。未经反向代理不要对外暴露。
+- **默认不可信。** 出站请求经 SSRF 防护;Penumbra 返回的一切都是外部数据、绝非指令;`penumbra_read_document` 沙箱化到白名单收件箱。
+- **你的责任。** Penumbra 以你自己 agent 的身份检索,须守你所在司法辖区的法律与各站条款。完整姿态见 [SECURITY.md](../../.github/SECURITY.md) 与 [NOTICE](../../NOTICE)。
 
 ## 贡献
 

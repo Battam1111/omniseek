@@ -1,5 +1,7 @@
 # Walled sources: bring your own browser
 
+<sub>[penumbra](../README.md)&nbsp;·&nbsp;[Configuration](configuration.md)&nbsp;·&nbsp;[Tools](tools.md)&nbsp;·&nbsp;**Walled sources**&nbsp;·&nbsp;[Brand](BRAND.md)</sub>
+
 Some of the richest corners of the penumbra sit behind a **login**: Xiaohongshu, Zhihu, Douyin,
 WeChat, and other platforms that no search engine indexes and no public API exposes. Penumbra can
 reach them, but only on **your** behalf, through **your** logged-in browser. This guide explains the
@@ -160,3 +162,7 @@ See [SECURITY.md](../.github/SECURITY.md) and [NOTICE](../NOTICE).
 | `launch_cdp.sh` seems to do nothing, or `cdp_health` still fails after it | a previous Chrome already held this profile+port, so the new launch forwarded to it and exited | the launcher now kills a stale CDP instance on that port for you; if you had opened Chrome by hand on this profile, quit it and re-run |
 | Works once, then empties | parallel calls tripping flood-control | calls are serial by design; reduce concurrency |
 | Login challenge every time | profile dir not persistent | pass a STABLE `profile-dir` to `launch_cdp.sh` |
+
+---
+
+<div align="center"><sub><a href="../README.md">← back to the README</a></sub></div>

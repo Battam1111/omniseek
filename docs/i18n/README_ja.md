@@ -77,7 +77,7 @@ curl -s http://127.0.0.1:8765/healthz
 
 MCPクライアントを `http://127.0.0.1:8765/mcp` に向け、ヘッダー
 `Authorization: Bearer <token>` を付与する。トークンは初回起動時に自動生成され、
-`./.penumbra/credentials/http.json` に保存される。
+`~/.penumbra/credentials/http.json` に保存される(Docker では `./.penumbra/credentials/http.json` にマウントされる)。
 
 オプション拡張(ライセンスへの同意が必要、[NOTICE](../../NOTICE) 参照):
 `docker-compose.yml` で `EXTRAS="[pdf,asr,walled]"` をビルド引数に指定。
@@ -113,7 +113,7 @@ Penumbraは**インフラストラクチャであり、アプリケーション�
 
 エージェントがクエリを送信する。Penumbraはソースカタログ全体に展開し、障壁(ログイン、言語、ペイウォール、モダリティ、時間)を越え、発見をソースと出典でタグ付けし、独立した上流間で重複排除し、到達できなかった領域の明示的な地図とともに構造化された証拠を返す。推論はエージェントが行う。Penumbraは、その推論が表層ではなく深層に基づくことを保証する。
 
-ソースカタログは**オープンかつ成長し続ける**:現在数百のキュレーション済みソースがあり、誰でも追加できる。各ソースは、通常の検索に対して特定のモードで優位性を示すことで採用される:**structure**(検索では整然と返せない構造化データ)、**unwall**(運用者がアクセス権を持つログインウォール内のコンテンツ)、**transcribe**(エージェントが直接読めない音声・映像)、**recall**(オープンウェブが忘却する縦断的な情報流)、**monitor**(名前付きの監視可能なフィード)。
+ソースカタログは**オープンかつ成長し続ける**:現在数百のキュレーション済みソースがあり、誰でも追加できる。各ソースは、特定のモード(structure、unwall、transcribe、recall、monitor)で通常の検索を上回ることで採用される。検索が既に返すものを焼き直すだけでは採られない。
 
 ## 得られるもの
 
@@ -159,60 +159,26 @@ Penumbraは**インフラストラクチャであり、アプリケーション�
 
 ## 設定
 
-Penumbraは**カタログ優先**設計:分類済みのソースセットを同梱し、あなた(またはエージェント)が有効にするものを選択する。設定なし = すべての安全なデフォルトソースがオン、ログインウォールソースはオフ。
+Penumbraは**カタログ優先**設計:設定なしでも、すべての安全なソースはオン、ログインウォールソースはオフ。調整はすべて一つのファイル `~/.penumbra/profile.json`([`profile.example.json`](../../profile.example.json) から初期化)で、ソース名・ドメイン・地域・アクセス階層ごとに行う:
 
-`~/.penumbra/profile.json`([`profile.example.json`](../../profile.example.json) から初期化)
-で、ソース名・ドメイン・地域・アクセス階層で絞り込める:
+| 階層 | デフォルト |
+|------|-----------|
+| **free**(公開、キー不要) | **オン** |
+| **keyed**(あなたが用意する無料/有料の API キー) | キー設定でオン |
+| **walled**(あなたが権利を持つログイン) | **オフ**;ブラウザは自前 |
+| **circumvention** | **オフ、同梱されない** |
 
-| 階層 | 意味 | デフォルト |
-|------|------|-----------|
-| free | 公開、キー不要 | オン |
-| keyed | ユーザー提供のAPIキーが必要 | キーがあればオン |
-| walled | アクセス権のあるログインウォール内コンテンツ | オフ |
-| circumvention | アクセス制御の突破が必要 | オフ、同梱されない |
-
-`penumbra_list_sources(domain=..., query=...)` で実行時にルーティング可能。
-各ソースが `access_tier` を報告するため、法的要件でフィルタリングできる。
-
-**Keyed ソース**(CORE 全文・Adzuna 求人・Podcast Index・Bluesky …)は、あなた自身が用意する API キーが必要だ(多くは無料)。キーが無いとアダプタは静かに空を返すだけなので、「結果が出ない」の多くは単に「キー未設定」を意味する。キーは `~/.penumbra/credentials/<source>.json` に置く。プロジェクトツリーの外なので、コミットされることはない。各 keyed アダプタは初回インポート時に隣へ `<source>.json.template` を落とし、取得 URL をインラインで記す(例:CORE は `https://core.ac.uk/services/api`)。それを `<source>.json` にコピーして値を埋めればよい。`python scripts/creds_doctor.py` をいつでも実行すれば、どの keyed ソースが設定済みで、どれが未設定かを確認できる(有無のみ報告し、秘密情報は決して表示しない)。
-
-**ログイン必須ソース**(小紅書・知乎・抖音 …)は、**あなた自身**が起動してログインするブラウザ経由で読み取る。Penumbra がパスワードを見ることはない。設定方法は [docs/walled-sources.md](../walled-sources.md) を参照。
+keyed ソースの設定、polite-pool 連絡先、すべての環境変数は **[configuration](../configuration.md)** に、ログイン必須ソースへのログインは **[walled sources](../walled-sources.md)** にある。
 
 ## ツール
 
-PenumbraはMCPツール群を公開する:
-
-| カテゴリ | ツール |
-|----------|--------|
-| **検索** | `penumbra_search` · `penumbra_search_ranked` · `penumbra_fetch` · `penumbra_list_sources` · `penumbra_add_url` |
-| **論文 + 引用** | `penumbra_paper_enrich` · `penumbra_paper_recommend` · `penumbra_field_skeleton` |
-| **人物 + 組織** | `penumbra_resolve_identity` · `penumbra_coauthors` · `penumbra_institution_cohort` |
-| **文書 + 視覚** | `penumbra_read_document` · `penumbra_view_doc_images` · `penumbra_view_images` · `penumbra_view_video_frames` |
-| **音声** | `penumbra_transcribe` |
-| **ヘルス + キュレーション** | `penumbra_health_check` · `penumbra_curator_*`(自己反復型ソース獲得) |
-
-正式なリストはサーバーの実際の登録内容に準ずる。`penumbra_list_sources()` で完全な能力インデックスを取得できる。
-
-まず `penumbra_search_ranked` を使う:カタログ全体を横断した重複排除 + ランク付け済みの一覧(「Xの最良・最新」のデフォルト)。ソースごとにバケット分けしたい場合は `penumbra_search` を使う。
+Penumbra は MCP ツール群を公開する:検索とルーティング、論文と引用、人物と組織、文書と視覚、音声、ヘルス、そして自己反復型のキュレーター。まず **`penumbra_search_ranked`**(カタログ全体を重複排除 + ランク付けした一覧。「Xの最良・最新」のデフォルト)を使う。`penumbra_list_sources()` が実行時の能力インデックスを返す。完全なグループ別一覧は **[tools](../tools.md)** にある。
 
 ## 安全性と責任
 
-- **ループバックバインド + トークンゲート。** デフォルト `127.0.0.1`。bearerトークンなしでは起動拒否。非ループバックバインド時は警告を出力。リバースプロキシなしで公開しないこと。
-- **SSRF防護。** すべての外向きリクエストはIPをピンし、プライベート範囲を拒否。`penumbra_read_document` はホワイトリスト制のインボックスにサンドボックス化。
-- **非信頼コンテンツ。** Penumbraが返すものはすべて外部データであり、指示ではない。
-- **あなたの責任。** Penumbraはあなた自身のエージェントとして取得を行う。あなたの管轄区域の法律と各サイトの利用規約に従って使用する責任がある。[SECURITY.md](../../.github/SECURITY.md) と [NOTICE](../../NOTICE) を参照。
-
-## ディレクトリ構造
-
-```
-src/penumbra/
-  server.py            MCPツールサーフェス (penumbra_* ツール)
-  serve_http.py        HTTPトランスポート (トークンゲート、ループバックデフォルト)
-  core/                 検索エンジン: fetcher · rank · normalize · cache
-                       profile · _netguard (SSRF) · enrich · asr · curator
-  core/sources/         アダプタ: api/ · scrape/ · walled/
-tests/smoke.py         オフライン不変量 + ゴールデンfixture (CIゲート)
-```
+- **デフォルトでループバック、トークンゲート。** `127.0.0.1` にバインドし、bearer トークンなしでは起動を拒否し、非ループバックバインドには警告を出す。リバースプロキシなしで公開しないこと。
+- **設計上、非信頼。** 外向きリクエストは SSRF 防護下にある。Penumbra が返すものはすべて外部データであり、指示ではない。`penumbra_read_document` はホワイトリスト制のインボックスにサンドボックス化される。
+- **あなたの責任。** Penumbra はあなた自身のエージェントとして、管轄区域の法律と各サイトの規約の範囲で取得する。全体の姿勢は [SECURITY.md](../../.github/SECURITY.md) と [NOTICE](../../NOTICE) を参照。
 
 ## コントリビュート
 
