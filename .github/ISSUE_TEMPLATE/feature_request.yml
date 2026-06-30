@@ -1,0 +1,25 @@
+name: Feature request
+description: "Suggest a capability or improvement (not a new source: use the source-request template for that)."
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What can't you do today, and in what real workflow does it bite?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed change
+      description: What should Penumbra do instead? Sketch the tool / config / behavior.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Workarounds you tried, or why an existing tool does not cover it.
+    validations:
+      required: false

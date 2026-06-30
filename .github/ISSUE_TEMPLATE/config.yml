@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/Battam1111/penumbra/security/advisories/new
+    about: Do not open a public issue for security or SSRF problems. Report privately here (see SECURITY.md).
+  - name: Read the docs first
+    url: https://github.com/Battam1111/penumbra#readme
+    about: Quick start, how it works, configure, and the tool list are in the README.

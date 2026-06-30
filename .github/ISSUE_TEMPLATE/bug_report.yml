@@ -1,0 +1,58 @@
+name: Bug report
+description: Something in Penumbra is broken (a tool errors, a source returns nothing, the server misbehaves).
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. If this is a security or SSRF issue, do NOT file it here: use
+        GitHub's "Report a vulnerability" (see SECURITY.md). If a single SOURCE stopped returning
+        results, the "New source request" template is not the right fit either; describe it below.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what actually happened. Paste the exact error / traceback in a code block.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: The exact tool call or curl (redact your bearer token). e.g. penumbra_search_ranked("large language model agents").
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version / commit
+      description: pip show penumbra-mcp, or the git commit you are on.
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: Install
+      description: How did you install it?
+      options:
+        - Core only (pip install -e .)
+        - Core + extras (pdf / asr / recall / ocr / walled)
+        - Docker (docker compose)
+    validations:
+      required: true
+  - type: input
+    id: env
+    attributes:
+      label: OS + Python
+      description: e.g. Ubuntu 24.04, Python 3.11.
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before filing
+      options:
+        - label: I ran `python tests/smoke.py` and noted whether it passes.
+          required: false
+        - label: I confirmed this is not a security/SSRF issue (those go to SECURITY.md).
+          required: true
