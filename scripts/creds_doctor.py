@@ -18,6 +18,11 @@ from penumbra.core import auth, fetcher  # noqa: E402
 
 
 def main() -> int:
+    # Source adapters self-register on import; pull them all in first, else the registry is
+    # empty here and every keyed source is silently missed ("nothing to configure").
+    from penumbra import server  # noqa: F401  (importing runs _safe_import_sources)
+    server.load_sources()
+
     print(f"credential store : {auth.CREDS_DIR}")
     contact = auth.contact_email()
     placeholder = contact.endswith("example.com") or contact.endswith("example.org")
