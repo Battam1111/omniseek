@@ -57,3 +57,15 @@ fabricate fields or signals: a field the source doesn't provide is absent, not g
 - `python tests/smoke.py` passes; `python -m compileall src` is clean.
 - No em-dash in human-facing text (use colon, comma, period, or parens).
 - One source (or one fix) per PR where practical; explain the mode edge in the description.
+
+## Layout
+
+```
+src/penumbra/
+  server.py            MCP tool surface (penumbra_* tools)
+  serve_http.py        HTTP transport (token-gated, loopback-default)
+  core/                retrieval engine: fetcher · rank · normalize · cache
+                       profile · _netguard (SSRF) · enrich · asr · curator
+  core/sources/        adapters: api/ · scrape/ · walled/
+tests/smoke.py         offline invariants + golden fixtures (CI gate)
+```

@@ -1,5 +1,7 @@
 # Brand
 
+<sub>[penumbra](../README.md)&nbsp;·&nbsp;[Configuration](configuration.md)&nbsp;·&nbsp;[Tools](tools.md)&nbsp;·&nbsp;[Walled sources](walled-sources.md)&nbsp;·&nbsp;**Brand**</sub>
+
 The single canonical reference for Penumbra's visual identity. Keep it locked so the look does not
 drift as contributors add diagrams, badges, or assets.
 
@@ -33,3 +35,7 @@ The eclipse sphere: a navy dark side with an amber-lit right limb.
 
 - All shields.io badges use color `D4952B` and `style=flat-square`.
 - No personal information appears in any brand asset.
+
+---
+
+<div align="center"><sub><a href="../README.md">← back to the README</a></sub></div>

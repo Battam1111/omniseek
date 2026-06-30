@@ -77,7 +77,7 @@ curl -s http://127.0.0.1:8765/healthz
 
 Point your MCP client at `http://127.0.0.1:8765/mcp` with header
 `Authorization: Bearer <token>`. The token is generated on first start and stored in
-`./.penumbra/credentials/http.json`.
+`~/.penumbra/credentials/http.json` (mounted as `./.penumbra/credentials/http.json` under Docker).
 
 To opt into optional extras (you accept their licenses, see [NOTICE](NOTICE)):
 `EXTRAS="[pdf,asr,walled]"` as a build arg in `docker-compose.yml`.
@@ -113,7 +113,7 @@ Penumbra is **infrastructure, not an application**. It sits between the raw inte
 
 Your agent sends a query. Penumbra fans out across its source catalog, crosses the barriers (logins, languages, paywalls, modalities, time), retrieves what it finds, tags every finding with source and provenance, deduplicates across independent upstreams, and returns structured evidence with an explicit map of what it couldn't reach. Your agent does the reasoning. Penumbra makes sure it reasons over depth, not surface.
 
-The source catalog is **open and growing**: hundreds of curated sources today, and anyone can add more. Each source earns its place by beating plain web search via a specific mode: **structure** (data search can't cleanly return), **unwall** (content behind a login the operator has a right to), **transcribe** (audio/video the agent can't otherwise read), **recall** (a longitudinal stream the open web forgets), or **monitor** (a named, watchable feed).
+The source catalog is **open and growing**: hundreds of curated sources today, and anyone can add more. Each earns its place by beating plain web search through a specific mode (structure, unwall, transcribe, recall, or monitor), never by duplicating what search already returns.
 
 ## What you get
 
@@ -159,74 +159,37 @@ Independence is concrete, not a slogan: when the same work surfaces from multipl
 
 ## Configure
 
-Penumbra is **catalog-first**: it ships a classified set of sources, and you (or your agent)
-select what to enable. With no config, all benign default sources are on and login-walled
-sources are off.
+Penumbra is **catalog-first**: with no config, every benign source is on and login-walled sources
+are off. Tune everything in one file, `~/.penumbra/profile.json` (seeded from
+[`profile.example.json`](profile.example.json)), by source, domain, region, and access tier:
 
-A `~/.penumbra/profile.json` (seeded from [`profile.example.json`](profile.example.json))
-lets you narrow or widen by source name, domain, region, and access tier:
+| Tier | Default |
+|------|---------|
+| **free** (public, no key) | **on** |
+| **keyed** (a free or paid API key you supply) | on once the key is set |
+| **walled** (a login you hold) | **off**; you bring your own browser |
+| **circumvention** | **off, and never shipped** |
 
-| Tier | Meaning | Default |
-|------|---------|---------|
-| free | public, no key | ON |
-| keyed | needs a free/paid API key you supply | ON if key present |
-| walled | content behind a login you have a right to | OFF |
-| circumvention | requires defeating an access control | OFF, never shipped |
-
-Route at call time with `penumbra_list_sources(domain=..., query=...)` rather than memorizing
-the set; each source reports its `access_tier`, so an agent can filter by legal posture.
-
-**Keyed sources** (CORE full text, Adzuna jobs, Podcast Index, Bluesky, …) need an API key you
-supply, most of them free. Without a key the adapter simply stays quiet, so an empty result often
-just means "no key set." Keys live in `~/.penumbra/credentials/<source>.json`, outside the project
-tree so they are never committed. On its first import each keyed adapter drops a
-`<source>.json.template` beside it with the sign-up URL inline (CORE's, for instance, is
-`https://core.ac.uk/services/api`): copy it to `<source>.json` and fill in the values. Run
-`python scripts/creds_doctor.py` any time to see which keyed sources are configured and which are
-still missing (it reports presence only, never secrets).
-
-**Walled sources** (Xiaohongshu, Zhihu, Douyin, …) read through a browser **you** run and log into:
-Penumbra never sees your password. See [docs/walled-sources.md](docs/walled-sources.md) to set one up.
+Keyed-source setup, the polite-pool contact, and every environment variable are in
+**[configuration](docs/configuration.md)**; logging into a walled source is in
+**[walled sources](docs/walled-sources.md)**.
 
 ## Tools
 
-Penumbra exposes a family of MCP tools:
-
-| Category | Tools |
-|----------|-------|
-| **Search** | `penumbra_search` · `penumbra_search_ranked` · `penumbra_fetch` · `penumbra_list_sources` · `penumbra_add_url` |
-| **Papers + citations** | `penumbra_paper_enrich` · `penumbra_paper_recommend` · `penumbra_field_skeleton` |
-| **People + orgs** | `penumbra_resolve_identity` · `penumbra_coauthors` · `penumbra_institution_cohort` |
-| **Documents + vision** | `penumbra_read_document` · `penumbra_view_doc_images` · `penumbra_view_images` · `penumbra_view_video_frames` |
-| **Audio** | `penumbra_transcribe` |
-| **Health + curation** | `penumbra_health_check` · `penumbra_curator_*` (self-iterating source acquisition) |
-
-The authoritative list is whatever the server registers; `penumbra_list_sources()` returns the
-full capability index.
-
-Start with `penumbra_search_ranked`: one deduped, ranked list across the catalog (the default for best/latest on X). Use `penumbra_search` when you want results bucketed per source instead of merged.
+Penumbra exposes a family of MCP tools across search and routing, papers and citations, people and
+organizations, documents and vision, audio, health, and a self-iterating curator. Start with
+**`penumbra_search_ranked`** (one deduped, ranked list; the default for best/latest on X), and
+`penumbra_list_sources()` returns the live capability index. The full, grouped list is in
+**[tools](docs/tools.md)**.
 
 ## Safety and responsibility
 
-- **Bind loopback, gate with a token.** Defaults to `127.0.0.1`; refuses to start without a
-  bearer token; warns loudly on non-loopback bind. Do not expose without a reverse proxy.
-- **SSRF-guarded.** All outbound fetches pin the IP and reject private ranges;
-  `penumbra_read_document` is sandboxed to an allowlisted inbox.
-- **Untrusted content.** Everything Penumbra returns is external data, never instructions.
-- **Your responsibility.** Penumbra fetches as your own agent. You are responsible for using
-  it within the law and each site's terms. See [SECURITY.md](.github/SECURITY.md) and [NOTICE](NOTICE).
-
-## Structure
-
-```
-src/penumbra/
-  server.py            MCP tool surface (penumbra_* tools)
-  serve_http.py        HTTP transport (token-gated, loopback-default)
-  core/                 retrieval engine: fetcher · rank · normalize · cache
-                       profile · _netguard (SSRF) · enrich · asr · curator
-  core/sources/         adapters: api/ · scrape/ · walled/
-tests/smoke.py         offline invariants + golden fixtures (CI gate)
-```
+- **Loopback by default, token-gated.** Binds `127.0.0.1`, refuses to start without a bearer token,
+  and warns on any non-loopback bind. Do not expose it without a reverse proxy.
+- **Untrusted by construction.** Outbound fetches are SSRF-guarded; everything Penumbra returns is
+  external data, never instructions; `penumbra_read_document` is sandboxed to an allowlisted inbox.
+- **Your responsibility.** Penumbra fetches as your own agent, within the law and each site's terms.
+  Full posture in [SECURITY.md](.github/SECURITY.md) and [NOTICE](NOTICE).
 
 ## Contributing
 

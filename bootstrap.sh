@@ -41,7 +41,7 @@ fi
 
 echo
 echo "Done. Optional model pre-pull (the recall vector layer fail-opens to lexical without it):"
-echo "    # set PENUMBRA_EMBED_MODEL / the model dir, then pre-download your embedder of choice"
+echo "    # install the [recall] extra, then place the model at ~/.penumbra/models/qwen3-embedding-0.6b"
 echo
 echo "Optional: keyed sources (CORE, Adzuna, Podcast Index, …) need an API key you supply (most free)."
 echo "    Run  python scripts/creds_doctor.py  to see which are set vs missing; each keyed adapter"
