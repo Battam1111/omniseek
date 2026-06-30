@@ -1,6 +1,9 @@
 <div align="center">
 
-<img src="../../assets/logo-hero.png" width="320" alt="Penumbra">
+<picture>
+  <source media="(prefers-color-scheme: light)" srcset="../../assets/logo-icon.png">
+  <img src="../../assets/logo-hero-dark.png" width="320" alt="Penumbra">
+</picture>
 
 # penumbra
 
