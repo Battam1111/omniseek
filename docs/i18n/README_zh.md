@@ -99,7 +99,10 @@ Linux 常驻服务参见 [`deploy/penumbra.service`](../../deploy/penumbra.servi
 Penumbra 是**基础设施,不是应用**。它位于原始互联网和你的 AI agent 之间,将不可触及的半影区转化为结构化的、可检索的证据。
 
 <div align="center">
-  <img src="../../assets/architecture.svg" alt="你的 agent 用 MCP 与 Penumbra 对话;Penumbra 穿过登录墙、语言、付费墙、音频、视频、图像、删帖、引用图谱,交回标注、去重、标好盲区的证据。" width="820">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="../../assets/architecture_dark.svg">
+    <img src="../../assets/architecture_light.svg" alt="你的 agent 经 MCP 向 Penumbra 提问;Penumbra 伸进半影区(登录墙、语言、付费墙、音频、视频、图像、删帖、引用图谱),交回标注、去重、标好盲区的证据。" width="700">
+  </picture>
 </div>
 
 你的 agent 发送查询。Penumbra 在源目录中扇出检索,穿越壁垒(登录墙、语言、付费墙、模态、时间),为每条发现标注来源与出处,跨独立上游去重,返回结构化证据并附带一份精确的"哪里没能触及"的地图。你的 agent 负责推理。Penumbra 确保它推理的依据是深度,而非表层。
