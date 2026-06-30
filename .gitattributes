@@ -1,6 +1,9 @@
-# Bytes as-is: never normalize line endings (shell scripts must stay LF;
-# the tree is shipped verbatim to a mac via git archive | tar).
+# Bytes as-is: never normalize line endings (the tree is shipped verbatim to a mac via
+# git archive | tar).
 * -text
+
+# Shell scripts must stay LF so they run on a fresh Unix clone (a stray CRLF breaks the shebang).
+*.sh text eol=lf
 
 # Historical one-off debug scripts stay in git but out of deploys.
 scripts/debug/ export-ignore

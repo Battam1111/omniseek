@@ -2,14 +2,17 @@
 
 <picture>
   <source media="(prefers-color-scheme: light)" srcset="../../assets/logo-icon.png">
-  <img src="../../assets/logo-hero-dark.png" width="320" alt="Penumbra">
+  <img src="../../assets/logo-hero-dark.png" width="320" alt="Penumbra:日食のマーク、紺色の球体と琥珀色に照らされた縁">
 </picture>
 
 # penumbra
 
 **表層の、その下へ。**
 
-[![License](https://img.shields.io/badge/License-Apache_2.0-D4952B?style=flat-square)](../../LICENSE)
+AIエージェントのための、セルフホスト型ディープ検索MCPサーバー。
+
+[![CI](https://github.com/Battam1111/penumbra/actions/workflows/ci.yml/badge.svg)](https://github.com/Battam1111/penumbra/actions/workflows/ci.yml)
+&nbsp;[![License](https://img.shields.io/badge/License-Apache_2.0-D4952B?style=flat-square)](../../LICENSE)
 &nbsp;![Python](https://img.shields.io/badge/Python_3.11+-D4952B?style=flat-square)
 &nbsp;![Built for MCP](https://img.shields.io/badge/built_for-MCP-D4952B?style=flat-square)
 &nbsp;![Self-hosted](https://img.shields.io/badge/self--hosted-D4952B?style=flat-square)
@@ -40,7 +43,7 @@
 
 <br>
 
-**なぜ到達できないのか?** 音声・映像・画像・スキャン文書の中に閉じ込められている。テキスト検索では永遠に解析できない。あなたの読めない言語で書かれている。ログインウォールやペイウォールの向こう側にある。そして時間的に流動する:昨日あった投稿が、明日には消えているかもしれない。どんなツールを使っても、同じ壁にぶつかる。
+**なぜ到達できないのか?** 音声・映像・画像の中に閉じ込められている。テキスト検索では永遠に解析できない。あなたの読めない言語で書かれている。ログインウォールやペイウォールの向こう側にある。そして時間的に流動する:昨日あった投稿が、明日には消えているかもしれない。どんなツールを使っても、同じ壁にぶつかる。
 
 **Penumbraは、その壁を越える。**
 
@@ -66,6 +69,7 @@
 ### Docker(推奨)
 
 ```bash
+git clone https://github.com/Battam1111/penumbra.git && cd penumbra
 docker compose up -d
 docker compose logs penumbra        # 初回起動時に表示される bearer token をコピー
 curl -s http://127.0.0.1:8765/healthz
@@ -86,6 +90,8 @@ python -m venv .venv && . .venv/bin/activate     # Windows: .venv\Scripts\activa
 python -m penumbra.serve_http                      # http://127.0.0.1:8765 で起動
 ```
 
+Windows では `bootstrap.sh` を Git Bash または WSL で実行してください(POSIX シェルスクリプトです)。Docker が最も簡単な経路です。
+
 Linux常駐サービスは [`deploy/penumbra.service`](../../deploy/penumbra.service) を参照。
 
 ## 仕組み
@@ -103,9 +109,53 @@ Penumbraは**インフラストラクチャであり、アプリケーション�
                         └─────────────────────────────────┘
 ```
 
+*エージェントは MCP で Penumbra と対話する。Penumbra は半影領域(ログイン、言語、ペイウォール、音声、映像、画像、削除コンテンツ、引用グラフ)に手を伸ばし、タグ付け・重複排除・盲点を地図化した証拠を返す。*
+
 エージェントがクエリを送信する。Penumbraはソースカタログ全体に展開し、障壁(ログイン、言語、ペイウォール、モダリティ、時間)を越え、発見をソースと出典でタグ付けし、独立した上流間で重複排除し、到達できなかった領域の明示的な地図とともに構造化された証拠を返す。推論はエージェントが行う。Penumbraは、その推論が表層ではなく深層に基づくことを保証する。
 
 ソースカタログは**オープンかつ成長し続ける**:現在数百のキュレーション済みソースがあり、誰でも追加できる。各ソースは、通常の検索に対して特定のモードで優位性を示すことで採用される:**structure**(検索では整然と返せない構造化データ)、**unwall**(運用者がアクセス権を持つログインウォール内のコンテンツ)、**transcribe**(エージェントが直接読めない音声・映像)、**recall**(オープンウェブが忘却する縦断的な情報流)、**monitor**(名前付きの監視可能なフィード)。
+
+## 得られるもの
+
+ひとつのブロード呼び出しで、カタログ全体を横断して重複排除 + ランク付けし、「どこに到達できなかったか」の台帳まで添える。`penumbra_search_ranked("retrieval augmented generation survey")` の実際の応答(抜粋):
+
+```jsonc
+{
+  "query": "retrieval augmented generation survey",
+  "count": 12,
+  "documents": [
+    {
+      "source": "openreview",
+      "title": "Graph Retrieval-Augmented Generation: A Survey",
+      "url": "https://openreview.net/forum?id=9ldXNHQFMl",
+      "date": "2024-01-01T00:00:00Z",
+      "metadata": {
+        "corroboration": 5,                                 // 同じ作品が5つの独立した上流から現れた
+        "also_in": ["dblp", "hackernews", "openalex", "youtube"],
+        "merge_basis": "title",
+        "_rank": 0.68
+      }
+    },
+    {
+      "source": "github_trending",
+      "title": "taichengguo/LLM_MultiAgents_Survey_Papers",
+      "url": "https://github.com/taichengguo/LLM_MultiAgents_Survey_Papers",
+      "signals": { "stars": { "value": 1282, "kind": "engagement", "computed_by": "source:github_trending/stars" } },
+      "metadata": { "live_sources": ["github_trending"], "_rank": 0.76 }
+    }
+    // ... 他に10件
+  ],
+  "_meta": {
+    "searched": 91,                          // この呼び出しで検索したソース数
+    "elapsed_s": 26.1,
+    "deduped": { "in": 402, "out": 12 },     // 402件の生ヒットを上流の同一性で12件に統合
+    "empty": ["core", "bluesky", "acl_anthology", "..."],  // 空で返った(キー未設定、または一致なし)
+    "excluded_relevant": []                  // この問い合わせに合致する walled / 低速ソース。各々 sources=[...] の再実行ヒント付き
+  }
+}
+```
+
+独立性は標語ではなく具体的だ:同じ作品が複数の上流から現れると一つのエントリにまとまり、`corroboration`(いくつの異なるソースか)と `also_in`(どれか)を帯びる。だからエージェントは「5ソースに裏付けられたサーベイ」を単独ヒットより重く扱える。そして `_meta` は盲点の台帳だ:何を検索し、何が空で返り、何が除外されたか。何も黙って捨てない。デフォルトのブロード呼び出しは free ソースのみを使う。keyed とログイン必須ソースは、キーを追加するかログインするまで静かなままだ(「設定」を参照)。
 
 ## 設定
 
@@ -143,7 +193,9 @@ PenumbraはMCPツール群を公開する:
 
 正式なリストはサーバーの実際の登録内容に準ずる。`penumbra_list_sources()` で完全な能力インデックスを取得できる。
 
-## 安全性 + 責任
+まず `penumbra_search_ranked` を使う:カタログ全体を横断した重複排除 + ランク付け済みの一覧(「Xの最良・最新」のデフォルト)。ソースごとにバケット分けしたい場合は `penumbra_search` を使う。
+
+## 安全性と責任
 
 - **ループバックバインド + トークンゲート。** デフォルト `127.0.0.1`。bearerトークンなしでは起動拒否。非ループバックバインド時は警告を出力。リバースプロキシなしで公開しないこと。
 - **SSRF防護。** すべての外向きリクエストはIPをピンし、プライベート範囲を拒否。`penumbra_read_document` はホワイトリスト制のインボックスにサンドボックス化。
@@ -167,6 +219,8 @@ tests/smoke.py         オフライン不変量 + ゴールデンfixture (CIゲ�
 [CONTRIBUTING.md](../../CONTRIBUTING.md) を参照。新しいソースの基準:特定のモード
 (structure / unwall / transcribe / recall / monitor)で通常の検索に勝つこと。
 壊れたソースの修復の基準:低い。ぜひ修復を。プッシュ前に `python tests/smoke.py` を実行。
+
+参加することで[行動規範](../../CODE_OF_CONDUCT.md)に同意したものとみなされます。
 
 <div align="center">
 

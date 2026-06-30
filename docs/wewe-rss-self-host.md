@@ -4,7 +4,7 @@
 > (e.g., 学术志, 科研圈, or any niche/new account).
 >
 > Default wechat adapter already covers PaperWeekly + 机器之心 + 量子位 via the free
-> wechat2rss.xlab.app aggregator — zero setup, zero maintenance.
+> wechat2rss.xlab.app aggregator: zero setup, zero maintenance.
 
 ## Trade-off
 
@@ -61,7 +61,7 @@ MAX_REQUEST_PER_MINUTE=60
 FEED_MODE=fulltext
 SERVER_ORIGIN_URL=http://127.0.0.1:4000
 
-# 7:35 AM + 7:35 PM — twice daily, conservative to avoid throttling
+# 7:35 AM + 7:35 PM, twice daily, conservative to avoid throttling
 CRON_EXPRESSION="35 7,19 * * *"
 
 ENABLE_CLEAN_HTML=true
@@ -196,7 +196,7 @@ curl -s http://127.0.0.1:4000/feeds/all.atom | head -20
 
 | Symptom | Solution |
 |---|---|
-| Account 2-3 day expiry | Re-scan QR — structural |
+| Account 2-3 day expiry | Re-scan QR (structural) |
 | Adding accounts → "小黑屋" | ≥30s between additions; wait 24h for release |
 | Single account >10 公众号 → banned | Cap at 10/account, add more accounts to scale |
 | DNS pollution for default WeRead | Use `PLATFORM_URL=https://weread.965111.xyz` (already in config) |

@@ -2,14 +2,17 @@
 
 <picture>
   <source media="(prefers-color-scheme: light)" srcset="../../assets/logo-icon.png">
-  <img src="../../assets/logo-hero-dark.png" width="320" alt="Penumbra">
+  <img src="../../assets/logo-hero-dark.png" width="320" alt="Penumbra:日食标记,暗蓝球体与琥珀色受光边缘">
 </picture>
 
 # penumbra
 
 **表层之下。**
 
-[![License](https://img.shields.io/badge/License-Apache_2.0-D4952B?style=flat-square)](../../LICENSE)
+面向 AI agent 的自托管深度检索 MCP 服务器。
+
+[![CI](https://github.com/Battam1111/penumbra/actions/workflows/ci.yml/badge.svg)](https://github.com/Battam1111/penumbra/actions/workflows/ci.yml)
+&nbsp;[![License](https://img.shields.io/badge/License-Apache_2.0-D4952B?style=flat-square)](../../LICENSE)
 &nbsp;![Python](https://img.shields.io/badge/Python_3.11+-D4952B?style=flat-square)
 &nbsp;![Built for MCP](https://img.shields.io/badge/built_for-MCP-D4952B?style=flat-square)
 &nbsp;![Self-hosted](https://img.shields.io/badge/self--hosted-D4952B?style=flat-square)
@@ -66,6 +69,7 @@
 ### Docker(推荐)
 
 ```bash
+git clone https://github.com/Battam1111/penumbra.git && cd penumbra
 docker compose up -d
 docker compose logs penumbra        # 首次启动时会打印 bearer token,复制它
 curl -s http://127.0.0.1:8765/healthz
@@ -86,6 +90,8 @@ python -m venv .venv && . .venv/bin/activate     # Windows: .venv\Scripts\activa
 python -m penumbra.serve_http                      # 启动于 http://127.0.0.1:8765
 ```
 
+Windows 上请在 Git Bash 或 WSL 里运行 `bootstrap.sh`(它是 POSIX shell 脚本);Docker 是最省事的路径。
+
 Linux 常驻服务参见 [`deploy/penumbra.service`](../../deploy/penumbra.service)。
 
 ## 工作原理
@@ -103,9 +109,53 @@ Penumbra 是**基础设施,不是应用**。它位于原始互联网和你的 AI
                         └─────────────────────────────────┘
 ```
 
+*你的 agent 用 MCP 与 Penumbra 对话;Penumbra 伸进半影区(登录墙、语言、付费墙、音频、视频、图像、删帖、引用图谱),交回标注、去重、标好盲区的证据。*
+
 你的 agent 发送查询。Penumbra 在源目录中扇出检索,穿越壁垒(登录墙、语言、付费墙、模态、时间),为每条发现标注来源与出处,跨独立上游去重,返回结构化证据并附带一份精确的"哪里没能触及"的地图。你的 agent 负责推理。Penumbra 确保它推理的依据是深度,而非表层。
 
 源目录**开放且持续生长**:目前已有数百个策展源,任何人都能增加。每个源必须通过一种特定模式胜过普通搜索来赢得一席之地:**structure**(搜索无法干净返回的结构化数据)、**unwall**(运营者有权访问的登录墙后内容)、**transcribe**(agent 无法直接阅读的音视频)、**recall**(开放网络会遗忘的纵向信息流)、或 **monitor**(命名的、可监控的信息源)。
+
+## 你会得到什么
+
+一次广播调用,在整个目录上去重 + 排序,并附一份"哪里没能触及"的台账。下面是 `penumbra_search_ranked("retrieval augmented generation survey")` 的一段真实(已精简)返回:
+
+```jsonc
+{
+  "query": "retrieval augmented generation survey",
+  "count": 12,
+  "documents": [
+    {
+      "source": "openreview",
+      "title": "Graph Retrieval-Augmented Generation: A Survey",
+      "url": "https://openreview.net/forum?id=9ldXNHQFMl",
+      "date": "2024-01-01T00:00:00Z",
+      "metadata": {
+        "corroboration": 5,                                 // 同一篇工作被 5 个独立上游各自命中
+        "also_in": ["dblp", "hackernews", "openalex", "youtube"],
+        "merge_basis": "title",
+        "_rank": 0.68
+      }
+    },
+    {
+      "source": "github_trending",
+      "title": "taichengguo/LLM_MultiAgents_Survey_Papers",
+      "url": "https://github.com/taichengguo/LLM_MultiAgents_Survey_Papers",
+      "signals": { "stars": { "value": 1282, "kind": "engagement", "computed_by": "source:github_trending/stars" } },
+      "metadata": { "live_sources": ["github_trending"], "_rank": 0.76 }
+    }
+    // ... 还有 10 条
+  ],
+  "_meta": {
+    "searched": 91,                          // 本次查询的源数
+    "elapsed_s": 26.1,
+    "deduped": { "in": 402, "out": 12 },     // 402 条原始命中按上游身份去重为 12 条
+    "empty": ["core", "bluesky", "acl_anthology", "..."],  // 返空(没配密钥,或无匹配)
+    "excluded_relevant": []                  // 与本查询相关的墙内/慢速源,各带一个 sources=[...] 重跑提示
+  }
+}
+```
+
+独立性是具体的,不是口号:同一篇工作从多个上游浮现时会折叠成一条,带上 `corroboration`(几个不同来源)和 `also_in`(是哪些),让你的 agent 把"5 源佐证的综述"看得比"孤证"更重。而 `_meta` 就是盲区台账:查了什么、哪些返空、哪些被排除,绝不悄悄丢弃。默认的广播调用只用 free 源;keyed 与墙内源在你配好密钥或登录之前保持安静(见"配置")。
 
 ## 配置
 
@@ -149,7 +199,9 @@ Penumbra 通过 MCP 暴露以下工具族:
 
 权威列表以服务器实际注册为准;`penumbra_list_sources()` 返回完整的能力索引。
 
-## 安全 + 责任
+优先用 `penumbra_search_ranked`:在整个目录上去重 + 排序的一张表(查"最佳/最新"的默认选择)。当你想要按源分桶而非合并时,用 `penumbra_search`。
+
+## 安全与责任
 
 - **默认绑定回环,token 守门。** 默认 `127.0.0.1`;无 bearer token 拒绝启动;非回环绑定时大声警告。未经反向代理不要对外暴露。
 - **SSRF 防护。** 所有出站请求锁定 IP 并拒绝内网地址;`penumbra_read_document` 沙箱化到白名单收件箱。
@@ -173,6 +225,8 @@ tests/smoke.py         离线不变量 + 黄金 fixture (CI 闸门)
 参见 [CONTRIBUTING.md](../../CONTRIBUTING.md)。新源的门槛:必须通过一种模式
 (structure / unwall / transcribe / recall / monitor)胜过普通搜索。
 修复衰变源的门槛:低,欢迎。提交前跑 `python tests/smoke.py`。
+
+参与即表示你同意遵守[行为准则](../../CODE_OF_CONDUCT.md)。
 
 <div align="center">
 

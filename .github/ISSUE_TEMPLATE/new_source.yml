@@ -1,0 +1,62 @@
+name: New source request
+description: Propose a source for the catalog (a site, API, feed, or walled platform Penumbra should reach).
+labels: ["source-request"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        A source earns a slot only if its acquisition MODE beats plain web search, not by duplicating
+        prose the open web already returns. If you cannot name a mode edge below, it will be declined
+        no matter how easy it is to build. See CONTRIBUTING.md (the admission razor).
+  - type: input
+    id: source
+    attributes:
+      label: Source
+      description: Name + URL of the site / API / feed.
+    validations:
+      required: true
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Mode edge over web search
+      description: Which mode does this source give that plain web search cannot?
+      options:
+        - "STRUCTURE (structured data web search can't cleanly return: citation graph, filings, an answer body)"
+        - "UNWALL (content behind a login the operator has a right to: their own account)"
+        - "TRANSCRIBE (speech/audio an agent can't otherwise read)"
+        - "RECALL (a longitudinal/monitored stream the open web forgets)"
+        - "MONITOR (a named, watchable per-entity feed)"
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: Why web search is not enough
+      description: Concretely, what does an agent get from this source that a web search for the same query does not give?
+    validations:
+      required: true
+  - type: dropdown
+    id: access
+    attributes:
+      label: Access tier
+      description: Does reaching it require a login or defeating an access control?
+      options:
+        - Open (public API or static page, no login)
+        - Walled (needs a logged-in session the operator owns)
+        - Anti-bot / signed requests (fingerprint or signature required)
+    validations:
+      required: true
+  - type: input
+    id: region
+    attributes:
+      label: Region / language
+      description: e.g. China, Singapore, JP, global; CJK / Latin.
+    validations:
+      required: false
+  - type: checkboxes
+    id: legal
+    attributes:
+      label: Legal posture
+      options:
+        - label: This source can be fetched within its Terms of Service without defeating an access control, OR I understand a circumvention source ships explicit_only and off by default (SECURITY.md).
+          required: true

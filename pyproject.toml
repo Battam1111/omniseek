@@ -5,10 +5,19 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "penumbra-mcp"
 version = "0.1.0"
-description = "Penumbra — a self-hosted deep-retrieval MCP server (curated sources + citation graph + document/vision reading + transcription + a self-iterating source curator)"
+description = "Penumbra: a self-hosted deep-retrieval MCP server (curated sources + citation graph + document/vision reading + transcription + a self-iterating source curator)"
 requires-python = ">=3.11"
 readme = "README.md"
 license = "Apache-2.0"
+keywords = ["mcp", "deep-retrieval", "ai-agent", "llm", "rag", "citation-graph", "transcription", "web-scraping", "self-hosted"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Internet :: WWW/HTTP :: Indexing/Search",
+]
 
 # CORE = the permissive-licensed, out-of-the-box engine: every benign open-API + static-scrape
 # source, the recall index, document reading (minus PDF), and the shared infra. Heavy / AGPL /
@@ -88,6 +97,13 @@ all = ["pymupdf>=1.24", "funasr>=1.0", "imageio-ffmpeg>=0.5", "patchright>=1.40"
 
 [project.scripts]
 penumbra-mcp = "penumbra.server:main"
+
+[project.urls]
+Homepage = "https://github.com/Battam1111/penumbra"
+Repository = "https://github.com/Battam1111/penumbra"
+Issues = "https://github.com/Battam1111/penumbra/issues"
+Changelog = "https://github.com/Battam1111/penumbra/blob/main/CHANGELOG.md"
+Documentation = "https://github.com/Battam1111/penumbra#readme"
 
 [tool.setuptools.packages.find]
 where = ["src"]
