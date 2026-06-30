@@ -105,7 +105,7 @@ Penumbra is **infrastructure, not an application**. It sits between the raw inte
   </picture>
 </div>
 
-Your agent sends a query. Penumbra fans out across its source catalog, crosses the barriers (logins, languages, paywalls, modalities, time), retrieves what it finds, tags every finding with source and provenance, deduplicates across independent upstreams, and returns structured evidence with an explicit map of what it couldn't reach. Your agent does the reasoning. Penumbra makes sure it reasons over depth, not surface.
+Penumbra fans out across the catalog, crosses the barriers, dedupes across independent upstreams, and returns structured evidence with a map of what it couldn't reach. Your agent does the reasoning; Penumbra makes sure it reasons over depth, not surface.
 
 The source catalog is **open and growing**: hundreds of curated sources today, and anyone can add more. Each earns its place by beating plain web search through a specific mode (structure, unwall, transcribe, recall, or monitor), never by duplicating what search already returns.
 
@@ -149,7 +149,7 @@ One broad call, deduped and ranked across the whole catalog, with a ledger of wh
 }
 ```
 
-Independence is concrete, not a slogan: when the same work surfaces from multiple upstreams it collapses to one entry carrying `corroboration` (how many distinct sources) and `also_in` (which ones), so your agent can weight a 5-source survey over a lone hit. And `_meta` is the gap-ledger: what was searched, what came back empty, what was excluded, so nothing is silently dropped. A default broad call uses free sources; keyed and walled sources stay quiet until you add a key or log in (see Configure).
+Independence is concrete: when the same work surfaces from several upstreams it collapses to one entry with `corroboration` (how many sources) and `also_in` (which), so your agent can trust a 5-source survey over a lone hit. `_meta` is the gap-ledger: what was searched, what came back empty, what was excluded. A default call uses free sources; keyed and walled stay quiet until you add a key or log in.
 
 ## Configure
 
@@ -170,10 +170,10 @@ Keyed-source setup, the polite-pool contact, and every environment variable are 
 
 ## Tools
 
-Penumbra exposes a family of MCP tools across search and routing, papers and citations, people and
+Penumbra exposes MCP tools across search and routing, papers and citations, people and
 organizations, documents and vision, audio, health, and a self-iterating curator. Start with
-**`penumbra_search_ranked`** (one deduped, ranked list; the default for best/latest on X), and
-`penumbra_list_sources()` returns the live capability index. The full, grouped list is in
+**`penumbra_search_ranked`** (one deduped, ranked list; the default for best/latest on X);
+`penumbra_list_sources()` returns the live capability index. The full grouped list is in
 **[tools](docs/tools.md)**.
 
 ## Safety and responsibility
