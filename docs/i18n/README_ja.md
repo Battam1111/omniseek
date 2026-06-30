@@ -17,7 +17,7 @@ AIエージェントのための、セルフホスト型ディープ検索MCPサ
 &nbsp;![Built for MCP](https://img.shields.io/badge/built_for-MCP-D4952B?style=flat-square)
 &nbsp;![Self-hosted](https://img.shields.io/badge/self--hosted-D4952B?style=flat-square)
 
-[クイックスタート](#クイックスタート) · [仕組み](#仕組み) · [得られるもの](#得られるもの) · [設定](#設定) · [コントリビュート](#コントリビュート)
+[仕組み](#仕組み) · [クイックスタート](#クイックスタート) · [設定](#設定) · [コントリビュート](#コントリビュート)
 
 **Languages:** [English](../../README.md) · [中文](README_zh.md) · 日本語
 
@@ -64,6 +64,24 @@ AIエージェントのための、セルフホスト型ディープ検索MCPサ
 
 ---
 
+## 仕組み
+
+```
+penumbra_search_ranked("retrieval augmented generation survey")
+
+91のソースを検索、26秒。
+402件の生ヒット → 12件のユニークな結果。
+トップの結果は5つの独立したソースに確認された。
+3つのソースは何も返さなかった(レスポンスにその理由が記載)。
+```
+
+エージェントはMCPで接続する。Penumbraはキュレーション済みソースカタログを検索し、
+ペイウォール、ログイン、言語、音声、映像、引用グラフを越え、独立したソース間で
+重複排除し、構造化された証拠を返す。カタログはオープンかつ成長し続ける。
+各ソースは通常の検索に勝つことで採用される。エントリポイントは
+**`penumbra_search_ranked`**;`penumbra_list_sources()` が利用可能な能力を表示する。
+完全なツール一覧は **[tools](../tools.md)** にある。
+
 ## クイックスタート
 
 ### Docker(推奨)
@@ -96,65 +114,6 @@ Linux常駐サービスは [`deploy/penumbra.service`](../../deploy/penumbra.ser
 
 Penumbra は `127.0.0.1` にバインドし、すべてのリクエストに bearer token を要求する。
 リバースプロキシなしで公開しないこと([SECURITY.md](../../.github/SECURITY.md))。
-
-## 仕組み
-
-Penumbra は**インフラであり、アプリケーションではない**:生のインターネットとAIエージェントの間にある検索レイヤーだ。
-
-<div align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="../../assets/architecture_dark.svg">
-    <img src="../../assets/architecture_light.svg" alt="エージェントは MCP で Penumbra に問い合わせ、Penumbra は半影領域(ログイン・言語・ペイウォール・音声・映像・画像・削除コンテンツ・引用グラフ)に手を伸ばし、タグ付け・重複排除・盲点を地図化した証拠を返す。" width="700">
-  </picture>
-</div>
-
-Penumbra はカタログ全体に展開し、障壁を越え、独立した上流間で重複排除し、到達できなかった領域の地図とともに構造化された証拠を返す。推論はエージェントが行う。Penumbra はそれが表層ではなく深層に基づくことを保証する。
-
-ソースカタログは**オープンかつ成長し続ける**:現在数百のキュレーション済みソースがあり、誰でも追加できる。各ソースは、特定のモード(structure、unwall、transcribe、recall、monitor)で通常の検索を上回ることで採用される。検索が既に返すものを焼き直すだけでは採られない。
-
-エントリポイントは **`penumbra_search_ranked`**;`penumbra_list_sources()` が実行時の能力
-インデックスを返す。[完全なツール一覧](../tools.md)は検索、論文、引用、人物、文書、
-音声、監視をカバーする。
-
-## 得られるもの
-
-`penumbra_search_ranked("retrieval augmented generation survey")` は91のソースに展開し、
-402件の生ヒットを上流の同一性で12件にまとめ、26秒で返す。最上位の結果は5つの独立した
-上流(OpenReview、DBLP、HackerNews、OpenAlex、YouTube)からそれぞれ見つかった。
-
-すべての結果に `corroboration`(いくつの独立したソースが見つけたか)と `also_in`
-(どれか)が付く。`_meta` は盲点の台帳:何を検索し、何が空で返り、何が除外されたか。
-5ソースの合意は単独ヒットに勝る。到達*できなかった*ところを知ることは、
-到達できたところを知ることと同じくらい重要だ。
-
-<details>
-<summary>レスポンス構造(実データ、トリム済み)</summary>
-
-```jsonc
-{
-  "query": "retrieval augmented generation survey",
-  "count": 12,
-  "documents": [
-    {
-      "source": "openreview",
-      "title": "Graph Retrieval-Augmented Generation: A Survey",
-      "metadata": {
-        "corroboration": 5,                    // 同じ作品、5つの独立した上流
-        "also_in": ["dblp", "hackernews", "openalex", "youtube"],
-        "_rank": 0.68
-      }
-    }
-    // ... 他に11件
-  ],
-  "_meta": {
-    "searched": 91,                            // この呼び出しで検索したソース数
-    "deduped": { "in": 402, "out": 12 },       // 402件の生ヒット -> 12件(上流の同一性で)
-    "empty": ["core", "bluesky", "..."]        // キー未設定、または一致なし
-  }
-}
-```
-
-</details>
 
 ## 設定
 

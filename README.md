@@ -17,7 +17,7 @@ Self-hosted deep-retrieval MCP server for AI agents.
 &nbsp;![Built for MCP](https://img.shields.io/badge/built_for-MCP-D4952B?style=flat-square)
 &nbsp;![Self-hosted](https://img.shields.io/badge/self--hosted-D4952B?style=flat-square)
 
-[Quick start](#quick-start) · [How it works](#how-it-works) · [What you get](#what-you-get) · [Configure](#configure) · [Contributing](#contributing)
+[How it works](#how-it-works) · [Quick start](#quick-start) · [Configure](#configure) · [Contributing](#contributing)
 
 **Languages:** English · [中文](docs/i18n/README_zh.md) · [日本語](docs/i18n/README_ja.md)
 
@@ -64,6 +64,24 @@ A self-hosted deep-retrieval engine. Transcribes audio. Digests documents. Extra
 
 ---
 
+## How it works
+
+```
+penumbra_search_ranked("retrieval augmented generation survey")
+
+91 sources searched, 26 seconds.
+402 raw hits → 12 unique results.
+Top hit confirmed by 5 independent sources.
+3 sources returned nothing (the response says why).
+```
+
+Your agent connects over MCP. Penumbra searches its curated source catalog, across
+paywalls, logins, languages, audio, video, and citation graphs, deduplicates across
+independent sources, and returns structured evidence. The catalog is open and growing;
+each source earns its place by beating plain search. Start with
+**`penumbra_search_ranked`**; `penumbra_list_sources()` shows what's available.
+Full tool list in **[tools](docs/tools.md)**.
+
 ## Quick start
 
 ### Docker (recommended)
@@ -96,65 +114,6 @@ For an always-on Linux service, see [`deploy/penumbra.service`](deploy/penumbra.
 
 Penumbra binds `127.0.0.1` and requires the bearer token on every request.
 Do not expose without a reverse proxy ([SECURITY.md](.github/SECURITY.md)).
-
-## How it works
-
-Penumbra is **infrastructure, not an application**: a retrieval layer between the raw internet and your AI agent.
-
-<div align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="assets/architecture_dark.svg">
-    <img src="assets/architecture_light.svg" alt="Your agent asks Penumbra over MCP; Penumbra reaches into the penumbra (logins, languages, paywalls, audio, video, images, deleted content, citation graphs) and returns tagged, deduped, gap-mapped evidence." width="700">
-  </picture>
-</div>
-
-Penumbra fans out across the catalog, crosses the barriers, dedupes across independent upstreams, and returns structured evidence with a map of what it couldn't reach. Your agent does the reasoning; Penumbra makes sure it reasons over depth, not surface.
-
-The source catalog is **open and growing**: hundreds of curated sources today, and anyone can add more. Each earns its place by beating plain web search through a specific mode (structure, unwall, transcribe, recall, or monitor), never by duplicating what search already returns.
-
-Your entry point is **`penumbra_search_ranked`**; `penumbra_list_sources()` returns the live
-capability index. The [full tool list](docs/tools.md) covers search, papers, citations, people,
-documents, audio, and monitoring.
-
-## What you get
-
-`penumbra_search_ranked("retrieval augmented generation survey")` fans out across 91 sources,
-collapses 402 raw hits to 12 by upstream identity, returns in 26 seconds. The top result was
-independently surfaced by 5 upstreams (OpenReview, DBLP, HackerNews, OpenAlex, YouTube).
-
-Every result carries `corroboration` (how many independent sources found it) and `also_in`
-(which ones). `_meta` is the gap-ledger: what was searched, what came back empty, what was
-excluded. A 5-source consensus beats a lone hit; knowing what you *didn't* reach matters as
-much as what you did.
-
-<details>
-<summary>Response shape (real, trimmed)</summary>
-
-```jsonc
-{
-  "query": "retrieval augmented generation survey",
-  "count": 12,
-  "documents": [
-    {
-      "source": "openreview",
-      "title": "Graph Retrieval-Augmented Generation: A Survey",
-      "metadata": {
-        "corroboration": 5,                    // same work, 5 independent upstreams
-        "also_in": ["dblp", "hackernews", "openalex", "youtube"],
-        "_rank": 0.68
-      }
-    }
-    // ... 11 more
-  ],
-  "_meta": {
-    "searched": 91,                            // sources queried this call
-    "deduped": { "in": 402, "out": 12 },       // 402 raw -> 12 by upstream identity
-    "empty": ["core", "bluesky", "..."]        // no key set, or no match
-  }
-}
-```
-
-</details>
 
 ## Configure
 
