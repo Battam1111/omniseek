@@ -99,7 +99,10 @@ Linux常駐サービスは [`deploy/penumbra.service`](../../deploy/penumbra.ser
 Penumbraは**インフラストラクチャであり、アプリケーションではない**。生のインターネットとあなたのAIエージェントの間に位置し、到達不可能な半影領域を構造化された検索可能な証拠に変換する。
 
 <div align="center">
-  <img src="../../assets/architecture.svg" alt="エージェントは MCP で Penumbra と対話し、Penumbra はログイン・言語・ペイウォール・音声・映像・画像・削除コンテンツ・引用グラフを越え、タグ付け・重複排除・盲点を地図化した証拠を返す。" width="820">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="../../assets/architecture_dark.svg">
+    <img src="../../assets/architecture_light.svg" alt="エージェントは MCP で Penumbra に問い合わせ、Penumbra は半影領域(ログイン・言語・ペイウォール・音声・映像・画像・削除コンテンツ・引用グラフ)に手を伸ばし、タグ付け・重複排除・盲点を地図化した証拠を返す。" width="700">
+  </picture>
 </div>
 
 エージェントがクエリを送信する。Penumbraはソースカタログ全体に展開し、障壁(ログイン、言語、ペイウォール、モダリティ、時間)を越え、発見をソースと出典でタグ付けし、独立した上流間で重複排除し、到達できなかった領域の明示的な地図とともに構造化された証拠を返す。推論はエージェントが行う。Penumbraは、その推論が表層ではなく深層に基づくことを保証する。
