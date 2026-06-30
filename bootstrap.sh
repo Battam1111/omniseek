@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Penumbra — non-Docker first-run provisioning. Run from the repo root, inside your venv.
+# Penumbra: non-Docker first-run provisioning. Run from the repo root, inside your venv.
 # (Docker users don't need this: the container entrypoint does the equivalent.)
 set -euo pipefail
 
@@ -42,6 +42,10 @@ fi
 echo
 echo "Done. Optional model pre-pull (the recall vector layer fail-opens to lexical without it):"
 echo "    # set PENUMBRA_EMBED_MODEL / the model dir, then pre-download your embedder of choice"
+echo
+echo "Optional: keyed sources (CORE, Adzuna, Podcast Index, …) need an API key you supply (most free)."
+echo "    Run  python scripts/creds_doctor.py  to see which are set vs missing; each keyed adapter"
+echo "    drops a ~/.penumbra/credentials/<source>.json.template with the sign-up URL inline."
 echo
 echo "Start Penumbra:   python -m penumbra.serve_http"
 echo "Health check:    curl -s http://127.0.0.1:8765/healthz"

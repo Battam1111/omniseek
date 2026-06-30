@@ -156,5 +156,7 @@ See [SECURITY.md](../SECURITY.md) and [NOTICE](../NOTICE).
 |---------|--------------|-----|
 | Source returns empty | session expired, or browser not running | re-launch + log in; check the port |
 | `cdp_health` fails | no Chrome on that port | run `launch_cdp.sh <port>` |
+| `cdp_health` fails though Chrome is up | Chrome started without `--remote-allow-origins=*` (Chrome 111+ rejects the CDP connection) | use `launch_cdp.sh` (it sets the flag), or add `--remote-allow-origins=*` to your own launch command |
+| `launch_cdp.sh` seems to do nothing, or `cdp_health` still fails after it | a previous Chrome already held this profile+port, so the new launch forwarded to it and exited | the launcher now kills a stale CDP instance on that port for you; if you had opened Chrome by hand on this profile, quit it and re-run |
 | Works once, then empties | parallel calls tripping flood-control | calls are serial by design; reduce concurrency |
 | Login challenge every time | profile dir not persistent | pass a STABLE `profile-dir` to `launch_cdp.sh` |
