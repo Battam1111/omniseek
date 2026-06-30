@@ -43,7 +43,7 @@ Not secrets. Not the open web.
 
 <br>
 
-**Why unreachable?** Locked in audio, video, and images no text search can parse. In languages you don't read. Behind logins and paywalls. And temporal: yesterday's post may be gone tomorrow. Whatever tool you use, it hits the same barriers.
+**Why unreachable?** Locked in audio, video, and images no text search can parse. In languages you don't read. Behind logins. And temporal: yesterday's post may be gone tomorrow. Whatever tool you use, it hits the same barriers.
 
 **Penumbra crosses them.**
 
