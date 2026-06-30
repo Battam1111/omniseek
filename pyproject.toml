@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "penumbra-mcp"
 version = "0.1.0"
-description = "Penumbra: a self-hosted deep-retrieval MCP server (curated sources + citation graph + document/vision reading + transcription + a self-iterating source curator)"
+description = "Self-hosted deep-retrieval MCP server for AI agents. Reaches what plain search can't: audio, video, logins, other languages."
 requires-python = ">=3.11"
 readme = "README.md"
 license = "Apache-2.0"
