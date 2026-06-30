@@ -206,7 +206,7 @@ Penumbra 通过 MCP 暴露以下工具族:
 - **默认绑定回环,token 守门。** 默认 `127.0.0.1`;无 bearer token 拒绝启动;非回环绑定时大声警告。未经反向代理不要对外暴露。
 - **SSRF 防护。** 所有出站请求锁定 IP 并拒绝内网地址;`penumbra_read_document` 沙箱化到白名单收件箱。
 - **不可信内容。** Penumbra 返回的一切都是外部数据,不是指令。
-- **你的责任。** Penumbra 以你自己 agent 的身份进行检索。你有责任在你所在的司法管辖区内合法合规地使用它。参见 [SECURITY.md](../../SECURITY.md) 和 [NOTICE](../../NOTICE)。
+- **你的责任。** Penumbra 以你自己 agent 的身份进行检索。你有责任在你所在的司法管辖区内合法合规地使用它。参见 [SECURITY.md](../../.github/SECURITY.md) 和 [NOTICE](../../NOTICE)。
 
 ## 目录结构
 
@@ -222,11 +222,11 @@ tests/smoke.py         离线不变量 + 黄金 fixture (CI 闸门)
 
 ## 贡献
 
-参见 [CONTRIBUTING.md](../../CONTRIBUTING.md)。新源的门槛:必须通过一种模式
+参见 [CONTRIBUTING.md](../../.github/CONTRIBUTING.md)。新源的门槛:必须通过一种模式
 (structure / unwall / transcribe / recall / monitor)胜过普通搜索。
 修复衰变源的门槛:低,欢迎。提交前跑 `python tests/smoke.py`。
 
-参与即表示你同意遵守[行为准则](../../CODE_OF_CONDUCT.md)。
+参与即表示你同意遵守[行为准则](../../.github/CODE_OF_CONDUCT.md)。
 
 <div align="center">
 
@@ -234,6 +234,6 @@ tests/smoke.py         离线不变量 + 黄金 fixture (CI 闸门)
 
 **表层之下。**
 
-[Apache-2.0](../../LICENSE) · [NOTICE](../../NOTICE) · [Security](../../SECURITY.md)
+[Apache-2.0](../../LICENSE) · [NOTICE](../../NOTICE) · [Security](../../.github/SECURITY.md)
 
 </div>
