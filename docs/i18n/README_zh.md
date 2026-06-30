@@ -17,7 +17,7 @@
 &nbsp;![Built for MCP](https://img.shields.io/badge/built_for-MCP-D4952B?style=flat-square)
 &nbsp;![Self-hosted](https://img.shields.io/badge/self--hosted-D4952B?style=flat-square)
 
-[快速开始](#快速开始) · [工作原理](#工作原理) · [你会得到什么](#你会得到什么) · [配置](#配置) · [贡献](#贡献)
+[工作原理](#工作原理) · [快速开始](#快速开始) · [配置](#配置) · [贡献](#贡献)
 
 **Languages:** [English](../../README.md) · 中文 · [日本語](README_ja.md)
 
@@ -64,6 +64,23 @@
 
 ---
 
+## 工作原理
+
+```
+penumbra_search_ranked("retrieval augmented generation survey")
+
+搜索了 91 个源,耗时 26 秒。
+402 条原始命中 → 12 条去重结果。
+排名第一的结果被 5 个独立来源分别确认。
+3 个源返回空(响应中说明了原因)。
+```
+
+你的 agent 经 MCP 接入。Penumbra 在其策展源目录中检索,穿越付费墙、登录墙、语言、
+音频、视频和引用图谱,跨独立来源去重,返回结构化证据。目录开放且持续生长;
+每个源靠胜过普通搜索来赢得席位。入口是
+**`penumbra_search_ranked`**;`penumbra_list_sources()` 展示可用能力。
+完整工具清单见 **[tools](../tools.md)**。
+
 ## 快速开始
 
 ### Docker(推荐)
@@ -96,63 +113,6 @@ Linux 常驻服务参见 [`deploy/penumbra.service`](../../deploy/penumbra.servi
 
 Penumbra 绑定 `127.0.0.1`,每个请求都需要 bearer token。
 未经反向代理不要对外暴露([SECURITY.md](../../.github/SECURITY.md))。
-
-## 工作原理
-
-Penumbra 是**基础设施,不是应用**:原始互联网和你的 AI agent 之间的检索层。
-
-<div align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="../../assets/architecture_dark.svg">
-    <img src="../../assets/architecture_light.svg" alt="你的 agent 经 MCP 向 Penumbra 提问;Penumbra 伸进半影区(登录墙、语言、付费墙、音频、视频、图像、删帖、引用图谱),交回标注、去重、标好盲区的证据。" width="700">
-  </picture>
-</div>
-
-Penumbra 在目录中扇出、穿越壁垒、跨独立上游去重,返回结构化证据 + 一份"哪里没能触及"的地图。推理由你的 agent 做;Penumbra 只保证它推理的依据是深度,而非表层。
-
-源目录**开放且持续生长**:目前已有数百个策展源,任何人都能增加。每个源靠一种特定模式(structure、unwall、transcribe、recall、monitor)胜过普通搜索来赢得一席之地,而非复述搜索本就能返回的内容。
-
-入口是 **`penumbra_search_ranked`**;`penumbra_list_sources()` 返回活的能力索引。
-[完整工具清单](../tools.md)覆盖搜索、论文、引用、人物、文档、音频与监控。
-
-## 你会得到什么
-
-`penumbra_search_ranked("retrieval augmented generation survey")` 在 91 个源上扇出,
-将 402 条原始命中按上游身份去重为 12 条,26 秒返回。排名最高的结果被 5 个独立上游
-各自命中(OpenReview、DBLP、HackerNews、OpenAlex、YouTube)。
-
-每条结果带 `corroboration`(几个独立来源命中了它)和 `also_in`(是哪些)。
-`_meta` 就是盲区台账:查了什么、哪些返空、哪些被排除。5 源共识胜过孤证;
-知道哪里*没能*触及,和知道哪里触及了一样重要。
-
-<details>
-<summary>响应结构(真实数据,已精简)</summary>
-
-```jsonc
-{
-  "query": "retrieval augmented generation survey",
-  "count": 12,
-  "documents": [
-    {
-      "source": "openreview",
-      "title": "Graph Retrieval-Augmented Generation: A Survey",
-      "metadata": {
-        "corroboration": 5,                    // 同一篇工作,5 个独立上游
-        "also_in": ["dblp", "hackernews", "openalex", "youtube"],
-        "_rank": 0.68
-      }
-    }
-    // ... 还有 11 条
-  ],
-  "_meta": {
-    "searched": 91,                            // 本次查询的源数
-    "deduped": { "in": 402, "out": 12 },       // 402 条原始命中 -> 12 条(按上游身份)
-    "empty": ["core", "bluesky", "..."]        // 返空(没配密钥,或无匹配)
-  }
-}
-```
-
-</details>
 
 ## 配置
 
