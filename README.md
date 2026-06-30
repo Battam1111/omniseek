@@ -123,6 +123,15 @@ lets you narrow or widen by source name, domain, region, and access tier:
 Route at call time with `penumbra_list_sources(domain=..., query=...)` rather than memorizing
 the set; each source reports its `access_tier`, so an agent can filter by legal posture.
 
+**Keyed sources** (CORE full text, Adzuna jobs, Podcast Index, Bluesky, …) need an API key you
+supply, most of them free. Without a key the adapter simply stays quiet, so an empty result often
+just means "no key set." Keys live in `~/.penumbra/credentials/<source>.json`, outside the project
+tree so they are never committed. On its first import each keyed adapter drops a
+`<source>.json.template` beside it with the sign-up URL inline (CORE's, for instance, is
+`https://core.ac.uk/services/api`): copy it to `<source>.json` and fill in the values. Run
+`python scripts/creds_doctor.py` any time to see which keyed sources are configured and which are
+still missing (it reports presence only, never secrets).
+
 **Walled sources** (Xiaohongshu, Zhihu, Douyin, …) read through a browser **you** run and log into:
 Penumbra never sees your password. See [docs/walled-sources.md](docs/walled-sources.md) to set one up.
 

@@ -121,6 +121,13 @@ Penumbra 采用**源目录优先**设计:预置一套分类好的源,由你(或�
 通过 `penumbra_list_sources(domain=..., query=...)` 按需路由,无需记忆源列表;
 每个源报告其 `access_tier`,agent 可按法律合规需求过滤。
 
+**Keyed 源**(CORE 全文、Adzuna 职位、Podcast Index、Bluesky …)需要你自己提供 API 密钥,大多免费。
+没有密钥时适配器只会静默返空,所以"查不到结果"往往只是"没配密钥"。密钥放在
+`~/.penumbra/credentials/<source>.json`,在项目树之外,不会被提交。每个 keyed 适配器首次导入时会在旁边
+落一个 `<source>.json.template`,内联注明申请密钥的网址(如 CORE 的 `https://core.ac.uk/services/api`):
+把它复制成 `<source>.json` 填好即可。随时运行 `python scripts/creds_doctor.py` 查看哪些 keyed 源已配置、
+哪些还缺(只报有无,绝不打印密钥)。
+
 **墙内源**(小红书、知乎、抖音 …)通过**你自己**运行并登录的浏览器读取,Penumbra 从不接触你的密码。
 接入方法见 [docs/walled-sources.md](../walled-sources.md)。
 

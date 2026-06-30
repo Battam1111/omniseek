@@ -121,6 +121,8 @@ Penumbraは**カタログ優先**設計:分類済みのソースセットを同�
 `penumbra_list_sources(domain=..., query=...)` で実行時にルーティング可能。
 各ソースが `access_tier` を報告するため、法的要件でフィルタリングできる。
 
+**Keyed ソース**(CORE 全文・Adzuna 求人・Podcast Index・Bluesky …)は、あなた自身が用意する API キーが必要だ(多くは無料)。キーが無いとアダプタは静かに空を返すだけなので、「結果が出ない」の多くは単に「キー未設定」を意味する。キーは `~/.penumbra/credentials/<source>.json` に置く。プロジェクトツリーの外なので、コミットされることはない。各 keyed アダプタは初回インポート時に隣へ `<source>.json.template` を落とし、取得 URL をインラインで記す(例:CORE は `https://core.ac.uk/services/api`)。それを `<source>.json` にコピーして値を埋めればよい。`python scripts/creds_doctor.py` をいつでも実行すれば、どの keyed ソースが設定済みで、どれが未設定かを確認できる(有無のみ報告し、秘密情報は決して表示しない)。
+
 **ログイン必須ソース**(小紅書・知乎・抖音 …)は、**あなた自身**が起動してログインするブラウザ経由で読み取る。Penumbra がパスワードを見ることはない。設定方法は [docs/walled-sources.md](../walled-sources.md) を参照。
 
 ## ツール

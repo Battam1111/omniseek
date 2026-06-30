@@ -53,9 +53,31 @@ echo "    profile : $PROFILE  (your login persists here)"
 [ -n "$URL" ] && echo "    opening : $URL"
 echo "    Log in by hand in the window, then leave this browser running."
 
+# Pre-flight: if a Chrome is already bound to this CDP port (a stale or zombie instance from a
+# previous launch), a fresh `chrome --user-data-dir=<same profile>` will NOT open a new debugging
+# port. Chrome sees the profile is already owned, forwards these flags to the running instance, and
+# exits, so cdp_health keeps failing even though "a Chrome is up". Kill the stale one first.
+# (pgrep/pkill exist on macOS and Linux; on systems without them this just no-ops.)
+if command -v pkill >/dev/null 2>&1 && pgrep -f "remote-debugging-port=$PORT" >/dev/null 2>&1; then
+  echo "==> a Chrome is already bound to port $PORT; killing the stale instance so this launch owns it" >&2
+  pkill -f "remote-debugging-port=$PORT" || true
+  sleep 2
+fi
+
+# Flag rationale (all loopback-only, so safe on your own machine):
+#   --remote-allow-origins=*  REQUIRED on Chrome 111+ (Mar 2023). Without it, Chrome rejects the
+#                             CDP WebSocket upgrade and Penumbra cannot attach (the symptom is a
+#                             walled source silently returning empty even though Chrome is running).
+#   --disable-blink-features=AutomationControlled  hides the navigator.webdriver automation tell, so
+#                             the site sees an ordinary Chrome. Do NOT add --enable-automation (it
+#                             sets navigator.webdriver=true, the opposite of what you want).
+#   --disable-features=PrivacySandboxAdsAPIs  suppresses the Privacy Sandbox prompt that can steal focus.
 exec "$CHROME" \
   --remote-debugging-port="$PORT" \
+  --remote-allow-origins=* \
   --user-data-dir="$PROFILE" \
   --no-first-run \
   --no-default-browser-check \
+  --disable-blink-features=AutomationControlled \
+  --disable-features=PrivacySandboxAdsAPIs \
   ${URL:+"$URL"}
