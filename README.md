@@ -27,7 +27,7 @@ Self-hosted deep-retrieval MCP server for AI agents.
 
 You can only act on what you can find. You can only find what's on the surface.
 
-Below the surface: a podcast holds the insight you need at minute 47, never transcribed. A PDF behind a paywall contains the number that changes everything. A forum post in a language you don't read laid out the trap you're about to walk into, deleted last week.
+Below the surface: a podcast holds the insight you need at minute 47, never transcribed. The setting that makes it reproduce flashed across a slide for three seconds; the deck was never posted. The method you are about to call new was worked out years ago, in a language you do not read.
 
 All there. All reachable. Untouched.
 
@@ -47,7 +47,7 @@ Not secrets. Not the open web.
 
 **Penumbra crosses them.**
 
-A self-hosted deep-retrieval engine. Transcribes audio. Digests documents. Extracts from video and images. Traverses citation graphs. Monitors what changed. A growing, open catalog of curated sources (hundreds today, extensible by anyone) spanning the deep web. Speaks MCP, so any AI agent, workflow, or application plugs in.
+A self-hosted deep-retrieval engine. Transcribes audio. Digests documents. Extracts from video and images. Reads across languages. Traverses citation graphs. Monitors what changed. A growing, open catalog of curated sources (hundreds today, extensible by anyone) spanning the deep web. Speaks MCP, so any AI agent, workflow, or application plugs in.
 
 **But fragments aren't knowledge.** A hundred scattered findings are noise. Signal is when a salary thread in English, a hiring freeze on a Chinese forum, and a podcast aside point to the same conclusion from three independent angles no single source reveals. Penumbra equips your agent: every finding tagged by source, timestamp, and independence, with a precise map of what couldn't be reached. Your agent reasons over structured, source-traced, gap-mapped evidence. Not surface-level confidence.
 
@@ -66,21 +66,16 @@ A self-hosted deep-retrieval engine. Transcribes audio. Digests documents. Extra
 
 ## How it works
 
-```
-penumbra_search_ranked("retrieval augmented generation survey")
+<div align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/demo-dark.png">
+    <img src="assets/demo-light.png" alt="A worked example. Your agent asks why a result will not reproduce. Plain search (the paper, the README, the blog post) says it works. Penumbra reaches beneath the surface and returns three pieces the surface left out: a caveat the author only spoke in a talk Q&A, the hyperparameters shown on a conference slide and never written down, and a preprocessing step written years ago in another language. What makes it reproduce was spoken, shown, and written in another language; Penumbra brought back all three." width="780">
+  </picture>
+</div>
 
-91 sources searched, 26 seconds.
-402 raw hits → 12 unique results.
-Top hit confirmed by 5 independent sources.
-3 sources returned nothing (the response says why).
-```
-
-Your agent connects over MCP. Penumbra searches its curated source catalog, across
-paywalls, logins, languages, audio, video, and citation graphs, deduplicates across
-independent sources, and returns structured evidence. The catalog is open and growing;
-each source earns its place by beating plain search. Start with
-**`penumbra_search_ranked`**; `penumbra_list_sources()` shows what's available.
-Full tool list in **[tools](docs/tools.md)**.
+Your agent connects over MCP. Start with **`penumbra_search_ranked`**; `penumbra_list_sources()`
+shows what's available. The catalog is open and growing: each source earns its place by beating
+plain search. Full tool list in **[tools](docs/tools.md)**.
 
 ## Quick start
 
