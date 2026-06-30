@@ -1,0 +1,23 @@
+[
+  "papersxSTRUCTURE", "papersxUNWALL", "papersxRECALL", "papersxMONITOR",
+  "evalxSTRUCTURE", "evalxUNWALL", "evalxRECALL", "evalxMONITOR",
+  "methodologyxSTRUCTURE", "methodologyxRECALL", "methodologyxMONITOR",
+  "codexSTRUCTURE", "codexRECALL", "codexMONITOR",
+  "toolingxRECALL", "toolingxMONITOR",
+  "modelsxSTRUCTURE",
+  "datasetsxSTRUCTURE",
+  "safetyxRECALL", "safetyxMONITOR",
+  "newsxSTRUCTURE", "newsxUNWALL", "newsxRECALL", "newsxMONITOR",
+  "mediaxUNWALL", "mediaxRECALL", "mediaxMONITOR",
+  "communityxSTRUCTURE", "communityxUNWALL", "communityxRECALL", "communityxMONITOR",
+  "deadlinesxSTRUCTURE", "deadlinesxRECALL", "deadlinesxMONITOR",
+  "careerxSTRUCTURE", "careerxUNWALL", "careerxRECALL", "careerxMONITOR",
+  "jobsxSTRUCTURE", "jobsxRECALL", "jobsxMONITOR",
+  "fundingxSTRUCTURE", "fundingxRECALL", "fundingxMONITOR",
+  "compensationxSTRUCTURE",
+  "insiderxUNWALL", "insiderxRECALL",
+  "immigrationxRECALL", "immigrationxMONITOR",
+  "socialxUNWALL", "socialxMONITOR",
+  "videoxTRANSCRIBE", "videoxUNWALL", "videoxRECALL", "videoxMONITOR",
+  "podcastxTRANSCRIBE", "podcastxRECALL", "podcastxMONITOR"
+]

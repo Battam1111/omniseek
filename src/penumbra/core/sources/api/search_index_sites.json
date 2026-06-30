@@ -1,0 +1,88 @@
+[
+ {
+  "name": "blind",
+  "site": "teamblind.com",
+  "extra": "",
+  "explicit_only": "fires a web-search query (engine quota)",
+  "domains": ["insider", "career"],
+  "description": "Blind 在职员工匿名爆料 (经搜索索引, 非爬墙) — 按国籍的 EP/签证真实结果、firm 真实薪资、招聘冻结、内推渠道. 全 insider 层最高价值生信号. explicit_only; 查询里带 公司名 + EP/visa/offer/freeze/referral"
+ },
+ {
+  "name": "glassdoor",
+  "site": "glassdoor.com",
+  "extra": "",
+  "explicit_only": "fires a web-search query (engine quota)",
+  "domains": ["insider", "career"],
+  "description": "Glassdoor 面试经历 + 公司评价 + 文化 (经搜索索引) — 按角色的真实面试 bar/流程/红旗 (Cohere/RBC Borealis/Google SG/DBS). 与 levels.fyi(薪酬) 互补, 定位面试 bar+文化. explicit_only"
+ },
+ {
+  "name": "x_search",
+  "site": "x.com",
+  "extra": "",
+  "explicit_only": "fires a web-search query (engine quota)",
+  "domains": ["social", "career"],
+  "description": "X/Twitter 经搜索索引 (非 twscrape, 与封印的 twitter_x 互补) — 研究者 'joining lab X' / 'we are hiring' / 招聘意图, 新 PI/新 lab 形成 (暖、不拥挤的 faculty/postdoc 入口). explicit_only; 查询带 joining/hiring/recruiting + 方向 + 机构(Vector/Mila/NUS/NTU/A*STAR)"
+ },
+ {
+  "name": "maimai",
+  "site": "maimai.cn",
+  "extra": "",
+  "explicit_only": "fires a web-search query (engine quota)",
+  "domains": ["insider", "career"],
+  "regions": ["cn", "sg"],
+  "description": "脉脉职言 经搜索索引 (仅 /article/detail 公开层, 评论登录墙不取) — CN-HQ 大厂(字节/Sea/Shopee)staffing SG/海外 的内幕: 内推/真实薪资/裁员风声/招聘冻结. CN 大厂海外 / SG staffing 内幕最佳. explicit_only"
+ },
+ {
+  "name": "linkedin_posts",
+  "site": "linkedin.com/posts",
+  "extra": "hiring",
+  "explicit_only": "fires a web-search query (engine quota)",
+  "domains": ["career"],
+  "description": "LinkedIn 公开招聘帖 经搜索索引 (仅 Track A 公开 /posts; 人脉/档案/国籍属法务封死的 Track B, 不碰) — 具名 hiring manager 'we are hiring' = 最暖的当前招聘意图. explicit_only"
+ },
+ {
+  "name": "zhihu_search",
+  "site": "zhihu.com",
+  "extra": "",
+  "explicit_only": "fires a web-search query (engine quota)",
+  "domains": ["community", "immigration", "career", "insider"],
+  "regions": ["cn"],
+  "description": "知乎 经搜索索引 (keyless-via-Brave 稳健补充, 非 CDP) — 中文海量一手经验: 读博/求职/公司内幕/签证/城市对比. 与 CDP zhihu 互补 (CDP 取登录全文, 此取引擎索引快照, CDP 挂时仍通). explicit_only (点名即达)"
+ },
+ {
+  "name": "quora",
+  "site": "quora.com",
+  "extra": "",
+  "explicit_only": "fires a web-search query (engine quota)",
+  "domains": ["community", "immigration", "career"],
+  "description": "Quora 经搜索索引 — 英文 Q&A: 移民/签证(EP/PR/Express Entry)、读博、公司文化、城市/offer 对比. 与中文源(脉脉/一亩三分地/知乎)互补的英文视角. explicit_only (点名即达)"
+ },
+ {
+  "name": "yipin_search",
+  "site": "1point3acres.com",
+  "extra": "",
+  "explicit_only": "fires a web-search query (engine quota)",
+  "domains": ["community", "career", "immigration"],
+  "regions": ["cn"],
+  "description": "一亩三分地 经搜索索引 (keyless-via-Brave, CDP yipinsanfendi 的稳健 fallback) — 北美/海外 CS PhD 申请+毕业去向+签证核心中文社区. CDP 防灌水间隔挂时此路仍通. explicit_only (点名即达)"
+ },
+ {
+  "name": "hardwarezone",
+  "site": "hardwarezone.com.sg",
+  "extra": "",
+  "explicit_only": "fires a web-search query (engine quota)",
+  "domains": ["community", "immigration", "insider", "career"],
+  "regions": ["sg"],
+  "description": "HardwareZone/EDMW 经搜索索引 (snippet) — 新加坡本地最大论坛, 本地人视角的 EP/外籍人才/薪资/公司/移民讨论 (与 Blind/脉脉的'圈内人'视角互补的'本地人'地面真相). explicit_only (点名即达). 全文: 本站封数据中心 IP、直抓不到 → 用 exa 源 site:hardwarezone.com.sg 借 Exa 爬虫取全文"
+ },
+ {
+  "name": "xiaohongshu_search",
+  "site": "xiaohongshu.com",
+  "extra": "",
+  "url_filter": "/(?:explore|discovery/item)/[0-9a-f]|/mobile/question/[0-9]",
+  "explicit_only": "fires a web-search query (engine quota)",
+  "domains": ["community", "immigration", "career"],
+  "regions": ["cn"],
+  "description": "小红书 经搜索索引 (Brave site: → 笔记 snippet; 永不用账号/CDP 碰站 → 零设备风险, 与封印的 CDP xiaohongshu 完全隔离, ToS 干净) — 留学/读博/求职/城市/公司体验的海量一手笔记 (实测出字节面经/HKPFS 攻略). url_filter 只留真实笔记(discovery/item·explore), 滤掉 pro./job. 导航页. explicit_only (点名即达)"
+ }
+]

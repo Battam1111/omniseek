@@ -1,0 +1,26 @@
+# Keep the image lean AND private files out of the build context (defense-in-depth; the public repo
+# should already exclude these, but never ship them even if a local checkout has them).
+.git
+.gitignore
+**/__pycache__
+**/*.pyc
+.venv
+venv
+*.egg-info
+.pytest_cache
+.ruff_cache
+
+# Operator-private / host-specific (NEVER in a public image)
+deploy.sh
+scripts/_profile.py
+SERVICES.md
+SOURCE_BACKLOG.md
+deploy/*.plist
+deploy/com.penumbra.*
+**/platform-notes*
+**/credentials.md
+**/relationship-reconstruction*
+
+# Local state (mounted at runtime, never baked in)
+.penumbra
+.penumbra-inbox

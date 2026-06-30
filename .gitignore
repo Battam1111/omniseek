@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.ruff_cache/
+.pytest_cache/
+.venv/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+
+# Never commit credentials or local state (they live in ~/.penumbra on the host)
+*credentials*.json
+*.token
+*.secret
+
+*.stackdump

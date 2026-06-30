@@ -1,0 +1,114 @@
+[
+ {
+  "name": "mom_ep_eligibility",
+  "label": "MOM EP/COMPASS 资格规则",
+  "url": "https://www.mom.gov.sg/passes-and-permits/employment-pass/eligibility",
+  "regions": ["sg"],
+  "note": "EP 合格薪资门槛 + COMPASS 框架; 2026-06-10 实证静态 102KB, compass/salary 关键词 89 处"
+ },
+ {
+  "name": "mom_onepass_eligibility",
+  "label": "ONE Pass 资格标准",
+  "url": "https://www.mom.gov.sg/passes-and-permits/overseas-networks-expertise-pass/eligibility",
+  "regions": ["sg"],
+  "note": "顶级人才准证标准 (2027-01 将开 AI and Tech Track)"
+ },
+ {
+  "name": "ica_pr_apply",
+  "label": "ICA PR 申请规则",
+  "url": "https://www.ica.gov.sg/reside/PR/apply",
+  "regions": ["sg"],
+  "note": "新加坡 PR 申请资格与流程官方页; 2026-06-10 实证 200/39KB"
+ },
+ {
+  "name": "ri_firecrawl_pricing",
+  "label": "检索基建·Firecrawl 价格/免费档",
+  "url": "https://www.firecrawl.dev/pricing",
+  "regions": ["retrieval-infra"],
+  "note": "免费档 1000 credits/月; 指纹变=档位/价格变. 2026-06-17 实证 httpx 200/5516 chars. 雷达免费(无 key 纯 GET)"
+ },
+ {
+  "name": "ri_firecrawl_changelog",
+  "label": "检索基建·Firecrawl 更新日志",
+  "url": "https://www.firecrawl.dev/changelog",
+  "regions": ["retrieval-infra"],
+  "note": "新能力发布(/extract /monitor /search). 该页无 RSS, page_watch 是唯一免费盯法. 2026-06-17 实证 200/43KB"
+ },
+ {
+  "name": "ri_jina_reader",
+  "label": "检索基建·Jina Reader 免费档",
+  "url": "https://jina.ai/reader/",
+  "regions": ["retrieval-infra"],
+  "note": "r.jina.ai 渲染回退候选; 免费 20 RPM 无 key / 500 RPM + 10M tokens 带免费 key. 2026-06-17 实证 httpx 200/29KB(WebFetch 误判 SPA, 纯 httpx 取到静态全文)"
+ },
+ {
+  "name": "ri_tikhub_pricing",
+  "label": "检索基建·TikHub 价格",
+  "url": "https://tikhub.io/pricing",
+  "regions": ["retrieval-infra"],
+  "note": "墙内社媒 API; ~50 次注册赠额 + PAYG $0.001/次. 付费决策归 the operator; 雷达只盯价格/免费档变. 2026-06-17 实证 200/3909 chars"
+ },
+ {
+  "name": "ri_brave_search_api",
+  "label": "检索基建·Brave Search API 价格",
+  "url": "https://brave.com/search/api/",
+  "regions": ["retrieval-infra"],
+  "note": "$5/月免费额度; web-search 切面 razor 下冗余, 盯它是为捕捉档位翻新. 2026-06-17 实证 200/40KB"
+ },
+ {
+  "name": "ri_tavily_pricing",
+  "label": "检索基建·Tavily 价格/免费档",
+  "url": "https://tavily.com/pricing",
+  "regions": ["retrieval-infra"],
+  "note": "Researcher 免费档 1000 credits/月, 无需信用卡. 2026-06-17 实证 200/1006 chars(含免费档数字)"
+ },
+ {
+  "name": "ri_core_api",
+  "label": "检索基建·CORE API 免费档",
+  "url": "https://core.ac.uk/services/api",
+  "regions": ["retrieval-infra"],
+  "note": "210M+ OA 全文; 免费 read 档. 真免费学术缺口候选(S2/OpenAlex 只给元数据). core.ac.uk 对 WebFetch 403 但 page_watch httpx UA 200/4551 chars(2026-06-17 实证)"
+ },
+ {
+  "name": "ri_scrapingbee_pricing",
+  "label": "检索基建·ScrapingBee 价格",
+  "url": "https://www.scrapingbee.com/pricing/",
+  "regions": ["retrieval-infra"],
+  "note": "1000 免费试用 credits; WAF/JS-render fallback 候选. 2026-06-17 实证 200/758 chars(含免费试用数字)"
+ },
+ {
+  "name": "ri_brightdata_pricing",
+  "label": "检索基建·Bright Data 价格",
+  "url": "https://brightdata.com/pricing",
+  "regions": ["retrieval-infra"],
+  "note": "代理/采集网络; 盯免费档/入门价变. 2026-06-17 实证 200/1689 chars"
+ },
+ {
+  "name": "ri_exa_sdk_releases",
+  "label": "检索基建·Exa SDK 发布 (竞品能力雷达)",
+  "url": "https://github.com/exa-labs/exa-py/releases.atom",
+  "regions": ["retrieval-infra"],
+  "note": "竞品威胁雷达 (见竞品全景报告): Exa 是学术引用图最强商业候选, 若给搜索加'越登录墙'就跨轴逼近眼. 其文档站是 SPA, httpx 盯不了; releases.atom 是静态可盯的能力信号 (新能力多先落进 SDK release). 2026-06-22 实证 page_watch httpx 取到 ~1027 chars, 最新 v2.14.0. 配套 changedetection 式 JS 盯哨见 roadmap C 门."
+ },
+ {
+  "name": "ri_valyu_sdk_releases",
+  "label": "检索基建·Valyu SDK 发布 (竞品能力雷达)",
+  "url": "https://github.com/valyuAI/valyu-py/releases.atom",
+  "regions": ["retrieval-infra"],
+  "note": "竞品威胁雷达: Valyu 是'统一多源+STRUCTURE'最近的商业反例 (金融/SEC 深度胜眼), 若加越墙或可遍历引用图就跨轴逼近. 文档站 SPA 盯不了; releases.atom 静态可盯. 2026-06-22 实证 10 entries, 最新 v2.11.0 (Deep Research 状态轮询硬化)."
+ },
+ {
+  "name": "ri_exa_changelog",
+  "label": "检索基建·Exa changelog",
+  "url": "https://docs.exa.ai/changelog",
+  "regions": ["retrieval-infra"],
+  "note": "竞品能力雷达·真盯 changelog (取代 step-0 的 SDK-releases 代理). Mintlify 是 SSR, host httpx 实测取到全文 (8658 chars) — step-0 误判为盯不了的 SPA, 真因是老 _strip_to_text 抽不出 SSR 正文 + 非住宅 IP; 新 strip 能抽. render 能力已建+smoke 测, 留给真 JS-only 页. 跨轴新能力在这先公告. 2026-06-22."
+ },
+ {
+  "name": "ri_valyu_changelog",
+  "label": "检索基建·Valyu changelog",
+  "url": "https://docs.valyu.ai/changelog/platform",
+  "regions": ["retrieval-infra"],
+  "note": "竞品能力雷达·真盯 changelog. Mintlify SSR, host httpx 实测取到全文 (13598 chars). 盯它何时加越墙/可遍历引用图/ASR 等跨轴能力. 2026-06-22."
+ }
+]

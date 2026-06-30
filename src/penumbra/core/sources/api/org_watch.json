@@ -1,0 +1,337 @@
+[
+    {
+        "name":  "sea_ai_lab",
+        "affiliations":  [
+                             "Sea AI Lab"
+                         ],
+        "regions":  "sg",
+        "description":  "Sea AI Lab (SAIL) — Sea 集团新加坡工业 AI 研究院最新论文 (OpenAlex affiliation 搜 Sea AI Lab, keyless, 无 CDP/无作者消歧). LLM/RL/reasoning/AI-systems; 无 OpenAlex 机构实体且官网 SPA, 故走 affiliation 文本搜."
+    },
+    {
+        "name":  "deepseek",
+        "affiliations":  [
+                             "DeepSeek-AI"
+                         ],
+        "regions":  "cn",
+        "description":  "DeepSeek (深度求索) 近期论文,经 OpenAlex raw-affiliation 短语 \"DeepSeek-AI\" 精确隔离单实验室产出 (meta.count=25),保留 authorship 真带该串者。覆盖 LLM/RL/reasoning/multimodal 前沿 (DeepSeek-R1、V3、Janus 多模态、Fire-Flyer AI-HPC):中国最受关注的开源前沿团队之一。注意必须用连字符短语,bare \u0027DeepSeek\u0027 / 未引号变体会被山寨 spam 预印本过匹配。"
+    },
+    {
+        "name":  "qwen",
+        "affiliations":  [
+                             "Tongyi Lab",
+                             "Qwen Team"
+                         ],
+        "regions":  "cn",
+        "description":  "阿里通义 (Qwen) 实验室近期论文,经 OpenAlex 短语对 \"Tongyi Lab\"(90 篇,全部 \u0027Tongyi Lab, Alibaba Group\u0027)+\"Qwen Team\"(显式 Qwen-LLM-team 论文如 ProcessBench)精确隔离阿里旗舰 AI 实验室及 Qwen 线。覆盖 agentic-RL/RL-蒸馏 (AgentJet、EvoRubric、TCOD) 与多模态/视频生成。Qwen 是开源权重生态主力。precision 关键:勿用 bare \u0027Qwen\u0027(被 author 名 \u0027Quan Wen\u0027/\u0027Qingdao\u0027 污染)或 \u0027Alibaba Group\u0027(过宽含电商);两短语干净,Tongyi Lab 承载体量。"
+    },
+    {
+        "name":  "moonshot",
+        "affiliations":  [
+                             "Moonshot AI",
+                             "Moonshot AI, Beijing"
+                         ],
+        "regions":  "cn",
+        "description":  "Moonshot AI (月之暗面 / Kimi) 近期论文,经 OpenAlex raw-affiliation \"Moonshot AI\"(meta.count=24)精确隔离,authorship 真带 \u0027Moonshot AI\u0027/\u0027Moonshot AI, Beijing, China\u0027。覆盖 LLM serving/reasoning (Mooncake KVCache 服务、ExtendAttack on LRMs、VisionLLaMA)。长上下文/推理服务系统是热门方向。caveat:~3-4 篇 AI-generated spam 预印本把 \u0027Moonshot AI\u0027 当伪 AI-assistant 署名,靠 keep-authorships 过滤 + 多大厂署名堆叠启发式剔除;窄变体 \u0027Moonshot AI, Beijing\u0027(逗号 %2C)100% 真但 recall 低 (6)。"
+    },
+    {
+        "name":  "zhipu",
+        "affiliations":  [
+                             "Zhipu AI",
+                             "Zhipu.AI"
+                         ],
+        "regions":  "cn",
+        "description":  "智谱 AI (Zhipu / GLM) 近期论文,经 OpenAlex \"Zhipu AI\"(meta.count=34)+点号变体 \"Zhipu.AI\" 精确隔离,authorship 真带 \u0027Zhipu AI, Beijing, China\u0027 等。高度 on-topic (GLM 系 LLM、视频生成、RL/alignment、agent):VPO 文生视频对齐、LVBench 长视频理解、Concat-ID 身份保持视频。GLM 生态风向标。precision:勿用 bare \u0027Zhipu\u0027(过匹配 \u0027Beijing Zhipu Medical Laboratory\u0027 生物科技),勿单用 \u0027Z.ai\u0027(count 4 含 spam);keep-authorships + 大厂堆叠启发式剔除单篇 AI-spam。"
+    },
+    {
+        "name":  "yi_01ai",
+        "affiliations":  [
+                             "01.AI, Beijing",
+                             "01.AI, Beijing, China"
+                         ],
+        "regions":  "cn",
+        "description":  "零一万物 (01.AI / Yi,李开复创办) 近期论文,经 OpenAlex 引号短语 \"01.AI, Beijing\"(count=7,全部 7 篇真带 \u002701.AI, Beijing, China\u0027)精确隔离。on-topic ML/LLM:LLM 情绪控制、LLM 引导故事可视化、多模态几何题求解、人体动作视频生成。体量偏小 (7,因 01.AI 2024 后收缩) 但 latest 到 2026-05,仍可监控。precision:bare \u002701.AI\u0027 在点号上 token-split 过匹配 (raw 99 含无关 EU/医学);必须用 Beijing 锚定引号短语,可选加 Shanghai 变体扩 recall。"
+    },
+    {
+        "name":  "stepfun",
+        "affiliations":  [
+                             "StepFun",
+                             "StepFun Inc"
+                         ],
+        "regions":  "cn",
+        "description":  "阶跃星辰 (StepFun) 近期论文,经 OpenAlex bare \u0027StepFun\u0027(34 篇)精确隔离 (名字独特、零 off-target 碰撞),authorship 真带 \u0027StepFun\u0027/\u0027StepFun Inc\u0027/\u0027Stepfun, Shanghai, China\u0027。全部前沿 AI:自动形式化 LLM、code agent (GitTaskBench)、视频扩散 (Sparse-vDiT)、多模态 LLM 训练 (DIP)、MLLM 幻觉缓解。来源干净。\u0027StepFun Inc\u0027 为子集冗余安全网;hint \u0027StepStar\u0027 已死 (count=0) 丢弃。"
+    },
+    {
+        "name":  "baichuan",
+        "affiliations":  [
+                             "Baichuan Inc",
+                             "Baichuan Intelligent Technology"
+                         ],
+        "regions":  "cn",
+        "description":  "百川智能 (Baichuan) 近期论文,经 OpenAlex 两个更具体短语 \"Baichuan Inc\"(14 篇全真)+\"Baichuan Intelligent Technology\"(英文/北京公司变体,捕 AITQE、HtmlRAG、Sequential Preference Optimization)精确隔离北京 LLM 实验室。覆盖 LLM 医生、多模态数学 benchmark、长上下文 KV cache (PQCache)、长上下文数据框架。precision 关键:bare \u0027Baichuan\u0027(190)被生物医药/中医/机械 (唐山百川地铁部件) 淹没必弃;勿用更松的 \u0027Baichuan Intelligent\u0027(漏唐山机械);keep-only 过滤到两精确串。"
+    },
+    {
+        "name":  "tencent_hunyuan",
+        "affiliations":  [
+                             "Tencent Hunyuan",
+                             "Hunyuan Team"
+                         ],
+        "regions":  "cn",
+        "description":  "腾讯混元 (Hunyuan) 实验室近期论文,经 OpenAlex 短语对 \"Tencent Hunyuan\"(33)+\"Hunyuan Team\"(6,捕写作 \u0027Hunyuan Team, Tencent\u0027 的 agent/RL 论文)精确隔离 (~39 篇,100% 腾讯零 off-target)。强 on-topic LLM/RL/reasoning/agent:强化微调熵极性、技能图任务合成 (agent)、On-Policy 上下文扩展、混合奖励 RL、LLM 权重量化。precision:必须用两短语,勿用 bare \u0027Hunyuan\u0027(误捕山西浑源县医院/CDC)或 \u0027Tencent AI Lab\u0027(被腾讯生命科学实验室单细胞/蛋白/分子结合污染)。"
+    },
+    {
+        "name":  "shanghai_ai_lab",
+        "affiliations":  [
+                             "Shanghai AI Laboratory",
+                             "Shanghai Artificial Intelligence Laboratory"
+                         ],
+        "regions":  "cn",
+        "description":  "上海人工智能实验室 (Shanghai AI Lab) 近期论文,经 OpenAlex 引号短语对 \"Shanghai AI Laboratory\"(1212)+\"Shanghai Artificial Intelligence Laboratory\"(1836,两写法仅重叠 23 篇,互补 union ~3025)精确隔离。重度 LLM/RL/MLLM/agent on-topic:LLM 训练 survey、置信度作奖励推进 LLM 推理、Human-LLM 协写、Minecraft 多 agent。头部 prolific 实验室。precision 强制:必须引号 (raw_affiliation_strings.search:%22...%22);未引号形过匹配 ~3x 无关论文 (脑研究/气象/抗药)。体量 ~3k,建议加日期窗口监控。"
+    },
+    {
+        "name":  "baai",
+        "affiliations":  [
+                             "Beijing Academy of Artificial Intelligence",
+                             "BAAI"
+                         ],
+        "regions":  "cn",
+        "description":  "北京智源人工智能研究院 (BAAI) 近期论文,经 OpenAlex 引号短语 \"Beijing Academy of Artificial Intelligence\"(640,15/15 抽样真带) + 干净缩写 \u0027BAAI\u0027(85,10/10 真) 精确隔离。on-topic 核心:VLA、RL 机器人规划 (RoboGPT-R1)、LLM 上下文-记忆调和、多模态 next-token 预测、高效 LLM 探索。precision 强制:必须引号短语;未引号 (11,338) 在 Beijing/Artificial/Intelligence token 上严重过匹配无关 CAS/医学-AI 机构。注意 BAAI 发文广 (含神经科学/生物),LLM/RL/agent/VLA 子集为 on-topic 核心。"
+    },
+    {
+        "name":  "bytedance_research",
+        "affiliations":  [
+                             "ByteDance Seed"
+                         ],
+        "regions":  "cn",
+        "description":  "字节跳动 Seed 研究实验室近期论文,经 OpenAlex \u0027ByteDance Seed\u0027(79,~10/10 真带 \u0027ByteDance Seed, Beijing/Shanghai/Singapore\u0027 等)精确隔离。\u0027Seed\u0027 限定词关键:bare \u0027ByteDance\u0027 会过匹配游戏/广告/推荐/电商,\u0027ByteDance Seed\u0027 锁定研究实验室。on-topic:统一视觉-语言生成模型、超大规模多模态 LLM 训练系统 (MegaScale-Omni)、MoE 训练、语音自回归扩散 DPO。含 Singapore 站点 (Bytedance Seed, Singapore)。约 1/3 近期为 AI-for-Science,LLM/RL/multimodal/agent 子集为核心。"
+    },
+    {
+        "name":  "ant_ling",
+        "affiliations":  [
+                             "Ant Group"
+                         ],
+        "regions":  "cn",
+        "description":  "蚂蚁集团 (Ant Group,含 Ling / Inclusion AI 实验室) 近期论文,经 OpenAlex \u0027Ant Group\u0027(count=2260,14/14 抽样真带连续公司短语,零昆虫/生物误匹配)捕获。透传捕获 Ling/Inclusion AI 论文 (其署名读作 \u0027Inclusion AI, Ant Group, Hangzhou, China\u0027)。强 on-topic LLM/RL/agent/RAG/reasoning:多 agent RAG、test-time-compute survey、GraphRAG、越狱攻击、LLM 数据合成。窄串 \u0027Inclusion AI\u0027(20) 在 \u0027Inclusion\u0027+\u0027AI\u0027 token 上过匹配 (医学/普惠金融),不能独立成源。caveat:捕获蚂蚁整个研究臂 (含金融-ML),精确到公司即 org_watch 目标;注意 OpenAlex filter 拒绝串内逗号 (HTTP 400)。"
+    },
+    {
+        "name":  "huawei_noah",
+        "affiliations":  [
+                             "Huawei Noah\u0027s Ark Lab",
+                             "Noah\u0027s Ark Lab"
+                         ],
+        "regions":  "cn",
+        "description":  "华为诺亚方舟实验室 (Huawei Noah\u0027s Ark Lab) 近期论文,经 OpenAlex \u0027Huawei Noah\u0027s Ark Lab\u0027(1604,主串,10/10 真) + 可选更宽 \u0027Noah\u0027s Ark Lab\u0027(1622,~+18 同精度) 精确隔离。名字高度独特,跨深圳/北京/Paris/Montreal 研究中心,零误匹配。强 on-topic LLM/RL/reasoning/agent:扩散 LLM 训练 (Mask Is What DLLM Needs)、LLM 数学推理 (CAMA)、LLM 多 agent 协调的自适应心智理论、LLM 极致压缩 (PocketLLM)。"
+    },
+    {
+        "name":  "openai",
+        "affiliations":  [
+                             "OpenAI, San Francisco",
+                             "OpenAI, San Francisco, CA, USA"
+                         ],
+        "regions":  "global",
+        "description":  "OpenAI 近期论文流 (经 OpenAlex raw-affiliation 短语 \"OpenAI, San Francisco\" 精确隔离: 73 篇均为真实研究, 已逐条核 raw_affiliation_strings). 裸 \"OpenAI\" 被 GitHub release-bot / 以 \u0027Codex\u0027 \u0027Claude\u0027 为伪作者的 \u0027@openai\u0027 垃圾污染, 故只用带城市的短语. LLM/RL/reasoning/agent 核心 lab, 工业 LLM 前沿. precision-over-recall: 量小 (多数 arXiv-only 不带城市) 但干净可监控."
+    },
+    {
+        "name":  "google_deepmind",
+        "affiliations":  [
+                             "Google DeepMind, London",
+                             "Google DeepMind",
+                             "DeepMind, London"
+                         ],
+        "regions":  "global",
+        "description":  "Google DeepMind 近期论文流 (经 OpenAlex \"Google DeepMind, London\" 精确隔离: 375 篇均真实, 已核 raw_affiliation). 裸 \"Google DeepMind\"/\"DeepMind\" 被把 Gemini 当共同作者的博客垃圾 (\u0027My Weird Prompts\u0027) 污染, 故以 London 总部限定为主, \u0027DeepMind, London\u0027 兜旧地址. LLM/RL/agent/reasoning 第一梯队. 宽口径机构, 浏览需带主题词查 (DeepMind 还跨生物/物理/数学)."
+    },
+    {
+        "name":  "meta_fair",
+        "affiliations":  [
+                             "Facebook AI Research",
+                             "FAIR at Meta",
+                             "Fundamental AI Research"
+                         ],
+        "regions":  "global",
+        "description":  "Meta FAIR 近期论文流 (经 OpenAlex 三短语精确隔离: 旧名 \u0027Facebook AI Research\u0027=1352 + 现名 \u0027FAIR at Meta\u0027=32 + \u0027Fundamental AI Research\u0027=48, 均干净). 故意不用裸 \u0027Meta AI\u0027 (有拼接伪影且更宽). LLM/RL/reasoning/agent 领军 lab, 工业 LLM 研究前沿. 宽口径机构, 浏览需带主题词查 (FAIR 还跨催化/分子晶体/神经影像)."
+    },
+    {
+        "name":  "microsoft_research",
+        "affiliations":  [
+                             "Microsoft Research"
+                         ],
+        "regions":  "global",
+        "description":  "Microsoft Research 近期论文流 (经 OpenAlex 短语 \u0027Microsoft Research\u0027=37227 精确隔离, 每条 raw_affiliation 均含该短语; 不像裸 \u0027Microsoft\u0027 误中硬件/产品). 各子单元 (Redmond/New England/AI for Science/Asia) 都带母短语, 单串覆盖全 lab. 含真实 on-topic 工作 (如 \u0027The Geometry of LLM-as-Judge\u0027). 宽口径机构, 浏览需带主题词查 (MSR 横跨生物/系统/理论/材料)."
+    },
+    {
+        "name":  "cohere",
+        "affiliations":  [
+                             "Cohere for AI",
+                             "Cohere Labs"
+                         ],
+        "regions":  "ca",
+        "description":  "Cohere 研究部近期论文流 (经 OpenAlex \u0027Cohere for AI\u0027=14 + \u0027Cohere Labs\u0027=8 精确隔离, 两者均 100% 干净; Cohere Labs 是 Cohere For AI 的 2025 改名). 裸 \u0027Cohere\u0027 被拒 (误中 Cohere Health 等). 多语言 LLM/RL/agent/MoE/LLM 安全, 多伦多本部. 量小但隔离精准."
+    },
+    {
+        "name":  "ai2",
+        "affiliations":  [
+                             "Allen Institute for Artificial Intelligence",
+                             "Allen Institute for AI"
+                         ],
+        "regions":  "global",
+        "description":  "Ai2 近期论文流 (经 OpenAlex 两全名短语精确隔离: 长名=819 + 短名=570, 名称唯一无误中). OLMo/Tulu 开源 LLM、agentic LLM contexts、reasoning, 工业+研究 LLM 前沿. 宽口径机构, 浏览需带主题词查 (Ai2 还带气候 emulator/保护工具/软件 release)."
+    },
+    {
+        "name":  "nvidia_research",
+        "affiliations":  [
+                             "NVIDIA Research"
+                         ],
+        "regions":  "global",
+        "description":  "NVIDIA Research 近期论文流 (经 OpenAlex \u0027NVIDIA Research\u0027=548 精确隔离, 10/10 抽样 raw_affiliation 均含该短语). 选 \u0027NVIDIA Research\u0027 而非裸 \u0027NVIDIA Corporation\u0027 (1813, 误中 HPC/基因组/气候/量子硬件). 含 long-horizon agent 记忆、code-reasoning RL、RL 策略摘要等 on-topic. 宽口径机构, 浏览需带主题词查 (NVIDIA 还跨图形/神经渲染/气候/自动驾驶)."
+    },
+    {
+        "name":  "salesforce_research",
+        "affiliations":  [
+                             "Salesforce Research",
+                             "Salesforce AI Research"
+                         ],
+        "regions":  "global",
+        "description":  "Salesforce Research 近期论文流 (经 OpenAlex \u0027Salesforce Research\u0027=385 为主 + \u0027Salesforce AI Research\u0027=131 为 LLM-纯子集, 均干净短语匹配). \u0027...Research\u0027 限定避开产品/营销裸提及. 近期流以 LLM/RL/agent/multimodal 为主 (GUI grounding、多模态 deep-search agent、text-to-viz 多目标 RL); 含 Singapore (Salesforce Research Asia) 节点. 不算宽口径."
+    },
+    {
+        "name":  "sakana",
+        "affiliations":  [
+                             "Sakana AI"
+                         ],
+        "regions":  "global",
+        "description":  "Sakana AI 近期论文流 (经 OpenAlex \u0027Sakana AI\u0027=16 完全精确, 造词名零误中). 东京小 lab (David Ha/Llion Jones/Takuya Akiba), 量小即真实总量, 正是 org_watch 的价值. 核心 on-topic: AI-Scientist 端到端自动化、Darwin Gödel Machine 自改进 agent、模型融合、LLM agent 合谋. 单串足够, 不宽."
+    },
+    {
+        "name":  "eleutherai",
+        "affiliations":  [
+                             "EleutherAI"
+                         ],
+        "regions":  "global",
+        "description":  "EleutherAI 近期论文流 (经 OpenAlex \u0027EleutherAI\u0027=43 精确隔离, 造词名无 false-friend; type:article=18 为真实论文流, 余为 Zenodo 软件 release 也属 lab 产出). 真实成员 (Nora Belrose/Stella Biderman/Hailey Schoelkopf). LLM/interp/eval/reasoning 集中, 不宽 (建议带 type:article 跳过软件 release)."
+    },
+    {
+        "name":  "together_ai",
+        "affiliations":  [
+                             "Together AI"
+                         ],
+        "regions":  "global",
+        "description":  "Together AI 近期论文流 (经 OpenAlex \u0027Together AI\u0027=4 精确, 尾缀 \u0027AI\u0027 消歧, raw_affiliation 均为公司真实地址; 裸 \u0027Together\u0027 会误中, 禁用). on-topic (RAG/LLM benchmark). 量极少 (主产出 RedPajama/FlashAttention 在 arXiv 未一致索引此短语), 精确但稀疏, 作低频监控."
+    },
+    {
+        "name":  "huggingface",
+        "affiliations":  [
+                             "Hugging Face"
+                         ],
+        "regions":  "global",
+        "description":  "Hugging Face 近期论文流 (经 OpenAlex \u0027Hugging Face\u0027=144 精确隔离, 双词短语无通用碰撞; 真实成员 Loubna Ben Allal/Lewis Tunstall/Thomas Wolf 等, 最新 2026-06-08 仍活跃). LLM/RL/agent (TRL/RLHF、开源模型训练、Nash learning from human feedback). 不宽, 无需主题词."
+    },
+    {
+        "name":  "reka",
+        "affiliations":  [
+                             "Reka AI"
+                         ],
+        "regions":  "global",
+        "description":  "Reka AI 论文流 (经 OpenAlex \u0027Reka AI\u0027=6 精确; 裸 \u0027Reka\u0027 禁用: =151 几乎全为马来/印尼 \u0027Reka\u0027=设计 院系, 零 AI 公司). 精确但低产+陈旧 (最新 2025-01, 多为 2022-2023, Reka 已转产品/API). 作低频 tripwire 监控, 不会误报; 切勿换裸 \u0027Reka\u0027 凑数. 不宽."
+    },
+    {
+        "name":  "stability",
+        "affiliations":  [
+                             "Stability AI"
+                         ],
+        "regions":  "global",
+        "description":  "Stability AI 近期论文流 (经 OpenAlex \u0027Stability AI\u0027=49 精确隔离, 抽样 raw_affiliation 含 \u0027Stability AI, \u003ccity\u003e\u0027, 无通用误中). 生成式 AI lab (diffusion 图/视频/3D/音频、音频 LLM、多模态), 部分 RAG/LLM 重叠. 集中于生成媒体/ML, 不宽, 单串可用."
+    },
+    {
+        "name":  "contextual",
+        "affiliations":  [
+                             "Contextual AI"
+                         ],
+        "regions":  "global",
+        "description":  "Contextual AI 近期论文流 (经 OpenAlex \u0027Contextual AI\u0027=13, 抽样多为真实公司地址 \u0027Contextual AI, Mountain View\u0027). RAG/LLM eval/alignment 公司, on-topic (LMUNIT eval、APO alignment、MIEB embedding benchmark). 注意: \u0027Contextual AI\u0027 也是通用英文短语, ~1-2/13 为描述性 false positive, 量小可容忍但需偶尔人眼核. 不宽."
+    },
+    {
+        "name":  "nous",
+        "affiliations":  [
+                             "Nous Research"
+                         ],
+        "regions":  "global",
+        "description":  "Nous Research 近期论文流 (经 OpenAlex \u0027Nous Research\u0027=15 隔离 AI lab; 近 4 篇 2026 LLM 论文带 \u0027Nous Research Nous Research Nous Research\u0027 三连真实 affiliation, 其余 11 篇为 2000-2011 已停的都柏林同名机构, 因按 publication_date desc 监控近期流而自然落出窗口). LLM 预训练/attention/tokenization/reasoning, 不宽 (可加 from 2024 过滤旧同名)."
+    },
+    {
+        "name":  "databricks_mosaic",
+        "affiliations":  [
+                             "Databricks",
+                             "Databricks Mosaic AI Research"
+                         ],
+        "regions":  "global",
+        "description":  "Databricks/Mosaic 近期论文流 (经 OpenAlex \u0027Databricks\u0027=189 精确隔离公司 + LLM 专属 \u0027Databricks Mosaic AI Research\u0027; MosaicML 被收购后 ML/LLM 研究归于 Databricks). 拒裸 \u0027Mosaic\u0027/\u0027Mosaic Research\u0027 (2744/75, 几乎全为无关机构/医院). 含 LLM/agent (skill shadowing、agentic coding). 宽口径机构, 浏览需带主题词查 (流偏数据工程/系统 + GitHub release)."
+    },
+    {
+        "name":  "scale_ai",
+        "affiliations":  [
+                             "Scale AI",
+                             "Scale AI, Inc., San Francisco, CA"
+                         ],
+        "regions":  "global",
+        "description":  "Scale AI 近期论文流 (经 OpenAlex \u0027Scale AI\u0027=63 精确隔离 SF eval/数据公司, raw_affiliation 含 \u0027Scale AI, Inc., San Francisco, CA\u0027 等; 双词短语足够消歧, 少数 topic-cooccurrence false positive). on-topic: LLM benchmark (专家级题库、核决策 benchmark)、安全 alignment、对抗/agent eval. 不宽."
+    },
+    {
+        "name":  "liquid_ai",
+        "affiliations":  [
+                             "Liquid AI"
+                         ],
+        "regions":  "global",
+        "description":  "Liquid AI 论文流 (经 OpenAlex \u0027Liquid AI\u0027=4 精确; 引号 bigram 不与化学/流体碰撞, 抽样 raw_affiliation 含 \u0027Liquid AI, San Francisco\u0027, 零 false positive). Liquid 神经网络/基础模型创业公司, on-topic (flow matching、基因组基础模型 Evo 2). 量低 (年轻公司多在 arXiv/blog), 精确, 随索引增长. 不宽."
+    },
+    {
+        "name":  "astar_cfar",
+        "affiliations":  [
+                             "Centre for Frontier AI Research"
+                         ],
+        "regions":  "sg",
+        "description":  "A*STAR CFAR (新加坡) 近期论文流 (经 OpenAlex 全名短语 \u0027Centre for Frontier AI Research\u0027=422 精确隔离, 10/10 抽样绑 A*STAR/Singapore, 零 false positive; 裸缩写 \u0027CFAR\u0027 禁用: 误中雷达 Constant False Alarm Rate). on-topic (Tool-Using LLM Agents、dataset distillation、rectified flow). 宽口径机构, 浏览需带主题词查 (CFAR 跨医疗 AI/MRI/跨模态 hashing)."
+    },
+    {
+        "name":  "vector_institute",
+        "affiliations":  [
+                             "Vector Institute for Artificial Intelligence"
+                         ],
+        "regions":  "ca",
+        "description":  "Vector Institute (多伦多) 近期论文流 (经 OpenAlex 全名短语 \u0027Vector Institute for Artificial Intelligence\u0027=1051 精确隔离; 裸 \u0027Vector Institute\u0027=2688 噪声更高, 用全名串). 托管核心 ML/LLM/RL faculty. 宽口径机构, 浏览需带主题词查 (即使精确串仍重偏化学/生医/药物发现 ML, 需主题词捞 LLM/RL/agent)."
+    },
+    {
+        "name":  "mila",
+        "affiliations":  [
+                             "Quebec AI Institute",
+                             "Mila - Quebec AI Institute"
+                         ],
+        "regions":  "ca",
+        "description":  "Mila (蒙特利尔) 近期论文流 (经 OpenAlex 多词短语 \u0027Quebec AI Institute\u0027=892 为主 + \u0027Mila - Quebec AI Institute\u0027=849 兜底; 裸 \u0027Mila\u0027 禁用: =4203 误中阿尔及利亚/马来西亚大学+城市). on-topic 密度高 (Drift Q-Learning、MoE 语言适配、LLM query 重写、AI 供应链后门). 宽口径机构, 浏览需带主题词查 (Mila 亦发化学/医疗 AI/优化), 但 on-topic 密度远高于 Vector, 主题词可选."
+    },
+    {
+        "name":  "amii",
+        "affiliations":  [
+                             "Alberta Machine Intelligence Institute",
+                             "Amii"
+                         ],
+        "regions":  "ca",
+        "description":  "Amii (埃德蒙顿) 近期论文流 (经 OpenAlex 全名 \u0027Alberta Machine Intelligence Institute\u0027=542 为锚 + 裸 \u0027Amii\u0027=279 经 10/10 抽样验证干净加召回). 强 RL/reasoning 产出 (offline policy selection、Nash 均衡 meta-learning、K-Step return 蒸馏). 宽口径机构, 浏览需带主题词查 (亦发计算生物/化学材料/医学影像)."
+    },
+    {
+        "name":  "rbc_borealis",
+        "affiliations":  [
+                             "Borealis AI",
+                             "RBC Borealis"
+                         ],
+        "regions":  "ca",
+        "description":  "RBC Borealis 近期论文流 (经 OpenAlex \u0027Borealis AI\u0027=97 + 改名后 \u0027RBC Borealis\u0027=5 精确隔离, 抽样 raw_affiliation 均含该串, 双词无误中). 多伦多/温哥华/蒙特利尔 RBC 工业 lab. on-topic: LLM/RL/agent (LLM 先验启动 bandit、微电网 RL、金融 AI×LLM). 聚焦工业 ML, 不宽 (软 LLM/RL 过滤仍有助)."
+    },
+    {
+        "name":  "servicenow_research",
+        "affiliations":  [
+                             "ServiceNow Research"
+                         ],
+        "regions":  "ca",
+        "description":  "ServiceNow Research 近期论文流 (经 OpenAlex \u0027ServiceNow Research\u0027=103 精确自隔离, raw_affiliation 含 \u0027ServiceNow Research, Montreal/Santa Clara\u0027; \u0027...Research\u0027 限定避开 SaaS 产品裸提及). on-topic: LLM/agent/RL/reasoning (agent 后门、LLM 性能预测、goal-conditioned RL、多模态 abstention). 蒙特利尔 ML 生态. 主题溢出小, 不宽."
+    }
+]

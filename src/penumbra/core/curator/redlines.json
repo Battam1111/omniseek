@@ -1,0 +1,30 @@
+[
+  {
+    "id": "linkedin_trackb",
+    "severity": "hard",
+    "kind": "host_suffix",
+    "value": "linkedin.com",
+    "reason": "Track-B ToS/privacy: scraping LinkedIn profiles/connections is a declared red line. NOT national-origin."
+  },
+  {
+    "id": "pii_email_query",
+    "severity": "hard",
+    "kind": "query_term",
+    "value": "(?i)[a-z0-9._%+-]+@[a-z0-9.-]+\\.[a-z]{2,}",
+    "reason": "An individual's email as a monitored query term is a personal-data-harvesting (privacy) line."
+  },
+  {
+    "id": "pii_employment_tracker",
+    "severity": "soft",
+    "kind": "query_term",
+    "value": "(?i)\\bformer\\s+\\w+",
+    "reason": "A 'former <Org>' affiliation query tracks a named individual's employment history; flag for agent review (privacy-adjacent, not always a person). HARD for curator-discovered candidates (no human submitter to vet it)."
+  },
+  {
+    "id": "scraper_data_broker",
+    "severity": "hard",
+    "kind": "host_suffix",
+    "value": "rocketreach.co",
+    "reason": "Data-broker / contact-scraper denylist seed (P4 Attack-2): a discovered host on a people-data broker hard-blocks at probe time. the operator extends this denylist; a single seed entry freezes the rule's existence so a discovery loop cannot silently re-surface a broker host."
+  }
+]

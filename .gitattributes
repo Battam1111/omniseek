@@ -1,0 +1,6 @@
+# Bytes as-is: never normalize line endings (shell scripts must stay LF;
+# the tree is shipped verbatim to a mac via git archive | tar).
+* -text
+
+# Historical one-off debug scripts stay in git but out of deploys.
+scripts/debug/ export-ignore

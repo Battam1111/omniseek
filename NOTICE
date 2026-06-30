@@ -1,0 +1,44 @@
+Penumbra
+Copyright 2026 The Penumbra authors
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+------------------------------------------------------------------------------
+Third-party dependency licenses
+------------------------------------------------------------------------------
+
+The CORE install (`pip install -e .`) depends only on permissively-licensed
+packages (Apache-2.0 / MIT / BSD / PSF / Unlicense), e.g. mcp, httpx,
+beautifulsoup4, lxml, feedparser, playwright, curl_cffi, pydantic, numpy,
+sentence-transformers, yt-dlp, python-pptx/docx, openpyxl, pillow,
+rapidocr-onnxruntime.
+
+OPTIONAL extras pull in heavier or differently-licensed packages; install them
+only if you accept their terms:
+
+  - penumbra-mcp[pdf]  -> PyMuPDF (fitz) is AGPL-3.0 (or a commercial license
+    from Artifex). It is NOT part of the core install precisely so the default
+    engine stays Apache-clean. If you install [pdf] AND redistribute a
+    network-accessible service built on it, AGPL section 13 may require you to
+    offer the corresponding source to your users. Choose this extra knowingly.
+
+  - penumbra-mcp[asr]  -> funasr + imageio-ffmpeg (transcription). funasr pulls
+    PyTorch (large). imageio-ffmpeg vendors an ffmpeg binary; ffmpeg components
+    carry their own (LGPL/GPL) terms depending on build.
+
+  - penumbra-mcp[walled] -> patchright (stealth Playwright fork) + xhshow (an
+    anti-bot request signer). The xhshow-backed source is OPT-IN and is NOT in
+    the default source pack; see SECURITY.md (access-tier posture)
+    and the per-source legal notes before enabling any walled/grey source.
+
+------------------------------------------------------------------------------
+Operator responsibility
+------------------------------------------------------------------------------
+
+This project publishes an ENGINE; it does not run a service for you and does not
+adjudicate whether your access to any given source is lawful where you deploy it.
+YOU are responsible for the sources you enable, the sites you point this at, your
+own credentials/accounts, and compliance with each site's Terms of Service and
+the law of your jurisdiction(s). Walled/login sources are OFF by default and
+require you to bring your own account. See LICENSE sections 7-8 (no warranty,
+no liability) and SECURITY.md.

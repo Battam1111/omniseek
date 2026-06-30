@@ -1,0 +1,49 @@
+{
+  "_doc": "Curator P3 RED-LINE coverage policy as DATA (operator-owned). The mechanical safety flags in source_audit.py READ these numbers; the agent physically cannot cross them (record_source_verdict raises). Widening any number is a deliberate operator edit. This file is NEVER read as a verdict: it carries only coverage-floor / cadence / cold-start thresholds, no keep/watch/prune word.",
+  "version": 1,
+
+  "coverage_floor": 1,
+  "_coverage_floor_doc": "The last-occupant rule: a (domain x mode) cell may never be walked below this many LIVE occupants by a prune. Default 1 = never empty a cell. the operator may raise a critical cell (e.g. immigration, a region-specific cell) by listing it in coverage_floor_overrides; absent an override the default applies.",
+  "coverage_floor_overrides": {},
+
+  "min_evidence": {
+    "searches_floor": 30,
+    "min_age_days": 14,
+    "_doc": "Cold-start guard. A source is min_evidence_met only once it has been OFFERED to (searches_present + searches_timed_out) >= searches_floor real searches AND its first yield record is >= min_age_days old. Below this floor a low-yield / redundant prune is un-offerable (we have not measured it enough to prune it). DEAD (watchdog failure) is exempt: a never-resolving source is dead regardless of yield volume."
+  },
+
+  "cadence_floor_days": {
+    "_doc": "below_cadence_floor exempts a source from a low-yield prune when its live feed has been silent FEWER days than its slowest declared domain's floor (a quarterly funding feed between cycles is expected silence, not death). Keyed off DOMAINS (kind is unreliable: 'fellowships' is kind:stream yet a slow funding feed). A source's effective floor is the MAX over its declared domains (its slowest expectation wins). EVERY domain token present in facets.json maps here; there is no silent default.",
+    "funding": 120,
+    "immigration": 120,
+    "deadlines": 90,
+    "compensation": 90,
+    "career": 30,
+    "jobs": 21,
+    "methodology": 21,
+    "insider": 21,
+    "eval": 21,
+    "safety": 14,
+    "papers": 14,
+    "models": 14,
+    "datasets": 14,
+    "code": 14,
+    "tooling": 14,
+    "news": 7,
+    "media": 7,
+    "community": 7,
+    "social": 7,
+    "video": 7,
+    "podcast": 14,
+    "_fallback": 14
+  },
+
+  "deadline_starved_timeout_rate": 0.5,
+  "_deadline_starved_doc": "A LABELED reference number (not a verdict threshold the code judges with): the gather computes timeout_rate as a fact and sets deadline_starved when timeout_rate >= this. A high timeout rate means the source's yield was never fairly measured (it kept missing the search deadline), so a redundant / low-yield prune is un-offerable. The agent still chooses its own interpretation; this only governs the mechanical safety flag.",
+
+  "verdict_revalidation_floor_days": 90,
+  "_verdict_revalidation_floor_days_doc": "The STALE-JUDGMENT floor (a SEPARATE clock from cadence_floor_days, NOT a reuse): a prior keep/watch/prune the agent recorded grows stale, and the gather flags a source as a revalidation_candidate once its last verdict is older than this many days. Default 90 ~ the monthly curator cron cadence (a quarter of silence on a judgment is a fair window to re-look). This is feed-AGNOSTIC: cadence_floor_days asks 'did the FEED go quiet past its expected silence' (a data-freshness clock); this asks 'did MY last JUDGMENT go stale' (a re-look clock). The gather still emits NO verdict word; this only governs whether a neutral revalidation nudge is raised, and the cold-start gate (min_evidence_met) still applies so a never-measured source is never surfaced as stale.",
+
+  "never_retire_a_class": true,
+  "_never_retire_a_class_doc": "The whole-class invariant: a prune may retire individual sources but the agent is instructed (prompt B.5) never to propose retiring an entire source-class (e.g. all immigration sources). Encoded mechanically by coverage_critical: retiring the sole occupant of any cell is un-offerable, so a class with one source per cell can never be fully emptied by safe prunes. coverage_impact (the operator case) surfaces any prune that would leave a cell single-occupant."
+}

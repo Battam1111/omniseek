@@ -1,0 +1,55 @@
+name: ci
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+  workflow_dispatch:        # manual trigger (Actions tab -> Run workflow) — no local docker needed
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install (core, Apache-clean)
+        run: pip install -e .
+      - name: Byte-compile all sources
+        run: python -m compileall -q src scripts tests
+      - name: Smoke (offline golden fixtures + invariants)
+        env:
+          PYTHONUTF8: "1"
+          PYTHONIOENCODING: "utf-8"
+        run: python tests/smoke.py
+
+  # Verifies the Docker quickstart on GitHub's runner (which has Docker preinstalled), so a
+  # maintainer without local Docker still gets the image built + booted + smoke-tested on every
+  # push to main (and on demand via workflow_dispatch). Skipped on PRs to avoid the chromium-layer
+  # build cost on every review.
+  docker:
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the image (core) via the exact README command
+        run: docker compose build
+      - name: Boot it (docker compose up -d) and smoke healthz + token gate
+        run: |
+          docker compose up -d
+          ok=
+          for i in $(seq 1 40); do
+            if curl -fsS http://127.0.0.1:8765/healthz >/dev/null 2>&1; then ok=1; break; fi
+            sleep 3
+          done
+          if [ -z "$ok" ]; then echo "healthz never came up"; docker compose logs; exit 1; fi
+          curl -fsS http://127.0.0.1:8765/healthz | grep -q '"ok":true'
+          echo "healthz OK"
+          code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8765/mcp)
+          echo "/mcp without token -> $code"
+          test "$code" = "401" || { echo "token gate not enforced"; docker compose logs; exit 1; }
+          echo "token gate OK"
+      - name: Logs + teardown
+        if: always()
+        run: docker compose logs; docker compose down -v

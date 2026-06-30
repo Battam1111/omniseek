@@ -1,0 +1,82 @@
+[
+ {
+  "name": "scrape_singapore",
+  "description": "新加坡 AI 机构 + 移民 (scrape, 无 RSS) — SEA-LION (AISG 开源 SEA LLM 产品/发布) + A*STAR press releases + SMU SCIS news + Fragomen-SG 工准证/EP 解读 + MOM newsroom (官方 press releases: EP/COMPASS/工准证政策一手, 实证 2026-06-10 静态可取). 补 singapore_ai_research / sg_immigration",
+  "sites": [
+   {"url": "https://sea-lion.ai/blog/"},
+   {"url": "https://www.a-star.edu.sg/News/astarNews/press-releases"},
+   {"url": "https://computing.smu.edu.sg/news"},
+   {"url": "https://www.fragomen.com/countries/singapore.html"},
+   {"url": "https://www.mom.gov.sg/newsroom", "path_contains": "press-releases"}
+  ],
+  "cache_ttl": 10800,
+  "url_pattern": "(sea-lion\\.ai|a-star\\.edu\\.sg|smu\\.edu\\.sg|fragomen\\.com|mom\\.gov\\.sg)"
+ },
+ {
+  "name": "gter",
+  "description": "寄托天下 gter — 中文留学申请/海外生活主社区, 按地区分区 (CDP 渲染: f.gter.net 是 JS 壳, 2026-06-10 实证). 盯 新加坡/加拿大/香港 三区的新帖 (申请经验/签证/录取汇报). 与 yipinsanfendi(北美 CS 重)互补的泛留学层. explicit_only",
+  "explicit_only": "CDP-rendered SPA (f.gter.net sections, slow shared Chrome)",
+  "sites": [
+   {"url": "https://f.gter.net/section/P1qY9zXkLb2W", "render": true, "path_contains": "/details/"},
+   {"url": "https://f.gter.net/section/qwDE1cPUI2ab", "render": true, "path_contains": "/details/"},
+   {"url": "https://f.gter.net/section/Lz9aimSLXeim", "render": true, "path_contains": "/details/"}
+  ],
+  "cache_ttl": 21600,
+  "url_pattern": "(f|bbs)\\.gter\\.net"
+ },
+ {
+  "name": "academic_job_boards",
+  "description": "学术职位板 (scrape, 实证 2026-06-10: 无 RSS, 静态列表可取) — jobs.ac.uk (英国/全球学术岗, ML+CS 关键词搜索页, 47 条干净条目验证). 开放性准则: 学术 track 永久在册, 不随职业分支砍. (AJO 已试: 通用 scraper 抽出的是表格代码碎片, 职位标题不在锚文本内 → 需小型专用解析器, 在 backlog.) 补 academic_jobs(Nature Careers) / higheredjobs_cs / jobrxiv_canada",
+  "sites": [
+   {"url": "https://www.jobs.ac.uk/search/?keywords=machine+learning&sortOrder=dateposted", "path_contains": "/job/"},
+   {"url": "https://www.jobs.ac.uk/search/?keywords=computer+science&sortOrder=dateposted", "path_contains": "/job/"}
+  ],
+  "cache_ttl": 10800,
+  "url_pattern": "jobs\\.ac\\.uk"
+ },
+ {
+  "name": "scrape_canada",
+  "description": "加拿大工业界 AI lab (scrape, 无 RSS) — RBC Borealis research blog 博文 (加拿大最大工业 AI 实验室, Toronto/Edmonton). 论文已由 rbc_borealis 覆盖,这里补 blog 长文",
+  "sites": [
+   {"url": "https://rbcborealis.com/research/", "render": true, "path_contains": "/research-blogs/"}
+  ],
+  "cache_ttl": 10800,
+  "url_pattern": "rbcborealis\\.com",
+  "explicit_only": "rbcborealis 博客已 SPA 化(posts 走 JS 加载,静态只剩导航 + 分类筛选链接);CDP 渲染 + 只收 /research-blogs/ 帖,命名调用,不进广搜"
+ },
+ {
+  "name": "scrape_hongkong",
+  "description": "香港创新生态 (scrape, 无 RSS) — HKSTP 科技园 news & events (AI co-incubation / launchpad, 本地招 ML 的深科技公司). 补 hk_career_research",
+  "sites": [
+   {"url": "https://www.hkstp.org/en/park-life/news-and-events", "render": true}
+  ],
+  "cache_ttl": 10800,
+  "url_pattern": "hkstp\\.org",
+  "explicit_only": "HKSTP 已 SPA 化(news/events 走 tab JS 加载,静态只剩常青 insights);CDP 渲染取,命名调用,不进广搜"
+ },
+ {
+  "name": "scrape_ml_orgs",
+  "description": "ML 工程 / 评测 / 科研方法 机构 (scrape, 无 RSS) — Baseten (推理云工程深文) + UK AISI (政府级前沿评测/安全研究) + Simon Peyton Jones research-skills (写论文/做报告 canonical craft)",
+  "sites": [
+   {"url": "https://www.baseten.co/blog/"},
+   {"url": "https://www.aisi.gov.uk/research"},
+   {"url": "https://simon.peytonjones.org/research-skills/"}
+  ],
+  "cache_ttl": 10800,
+  "url_pattern": "(baseten\\.co|aisi\\.gov\\.uk|peytonjones\\.org)"
+ },
+ {
+  "name": "scrape_js_sites",
+  "explicit_only": "CDP-rendered SPAs (slow, shared Chrome)",
+  "description": "JS 渲染源 (explicit_only, 经共享 CDP Chrome 渲染, 较慢, 显式点名才查) — Amii (加拿大 AI 研究所) + NTU CCDS (新加坡 CS 院系新闻) + ITIB (香港创新科技及工业局) + Apollo Research (前沿评测/AI safety) + SenseTime 商汤. 这些站初始 HTML 是空壳, 内容靠运行时 JS, 故必须渲染",
+  "sites": [
+   {"url": "https://www.amii.ca/updates-insights", "render": true},
+   {"url": "https://www.ntu.edu.sg/computing/news-events/news", "render": true},
+   {"url": "https://www.itib.gov.hk/en/new/", "render": true},
+   {"url": "https://www.apolloresearch.ai/blog/", "render": true},
+   {"url": "https://www.sensetime.com/cn/news-press-release", "render": true}
+  ],
+  "cache_ttl": 21600,
+  "url_pattern": null
+ }
+]
