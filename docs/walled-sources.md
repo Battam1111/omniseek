@@ -7,7 +7,7 @@ model and the setup.
 
 > Walled sources are **OFF by default**. They are the advanced, bring-your-own-account tier. You opt
 > in deliberately (see [Enable a walled source](#5-enable-the-source)), and you are responsible for
-> using each platform within its Terms of Service in your jurisdiction. See [SECURITY.md](../SECURITY.md).
+> using each platform within its Terms of Service in your jurisdiction. See [SECURITY.md](../.github/SECURITY.md).
 
 ---
 
@@ -103,7 +103,7 @@ Walled sources are off until you opt in. In `~/.penumbra/profile.json`:
 ```
 
 `enabled: true` is your explicit acknowledgment that you accept operator responsibility for these
-sources (see [SECURITY.md](../SECURITY.md)). List under `bring_your_own` the sources you have logged
+sources (see [SECURITY.md](../.github/SECURITY.md)). List under `bring_your_own` the sources you have logged
 in for; the rest stay dark.
 
 ### 6. Use it
@@ -146,7 +146,7 @@ access control you are not authorized to be on the far side of.
 It is **not** circumvention: Penumbra ships nothing that defeats a paywall, breaks a rate-limit, or
 decrypts a protected response. Those are a separate tier that is never in the default pack. You are
 responsible for using each platform within its Terms of Service and the law in your jurisdiction.
-See [SECURITY.md](../SECURITY.md) and [NOTICE](../NOTICE).
+See [SECURITY.md](../.github/SECURITY.md) and [NOTICE](../NOTICE).
 
 ---
 

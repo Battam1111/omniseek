@@ -35,4 +35,4 @@ Penumbra fetches as the operator's own agent. The operator is responsible for us
 and each site's terms of service in their jurisdiction. Login-walled sources and any source that
 would require defeating an access control are **off by default** and never in the shipped default
 pack; enabling them is a deliberate operator choice. See
-[SECURITY.md](SECURITY.md) and [NOTICE](NOTICE).
+[SECURITY.md](SECURITY.md) and [NOTICE](../NOTICE).

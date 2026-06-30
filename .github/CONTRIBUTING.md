@@ -13,7 +13,7 @@ python tests/smoke.py                            # must pass before you push
 python -m penumbra.serve_http                      # run it; curl http://127.0.0.1:8765/healthz
 ```
 
-Core install is Apache-clean. Optional extras carry their own licenses (see [NOTICE](NOTICE)):
+Core install is Apache-clean. Optional extras carry their own licenses (see [NOTICE](../NOTICE)):
 `pip install -e '.[pdf,asr,walled]'`.
 
 ## The admission razor (for a NEW source)

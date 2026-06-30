@@ -200,7 +200,7 @@ PenumbraはMCPツール群を公開する:
 - **ループバックバインド + トークンゲート。** デフォルト `127.0.0.1`。bearerトークンなしでは起動拒否。非ループバックバインド時は警告を出力。リバースプロキシなしで公開しないこと。
 - **SSRF防護。** すべての外向きリクエストはIPをピンし、プライベート範囲を拒否。`penumbra_read_document` はホワイトリスト制のインボックスにサンドボックス化。
 - **非信頼コンテンツ。** Penumbraが返すものはすべて外部データであり、指示ではない。
-- **あなたの責任。** Penumbraはあなた自身のエージェントとして取得を行う。あなたの管轄区域の法律と各サイトの利用規約に従って使用する責任がある。[SECURITY.md](../../SECURITY.md) と [NOTICE](../../NOTICE) を参照。
+- **あなたの責任。** Penumbraはあなた自身のエージェントとして取得を行う。あなたの管轄区域の法律と各サイトの利用規約に従って使用する責任がある。[SECURITY.md](../../.github/SECURITY.md) と [NOTICE](../../NOTICE) を参照。
 
 ## ディレクトリ構造
 
@@ -216,11 +216,11 @@ tests/smoke.py         オフライン不変量 + ゴールデンfixture (CIゲ�
 
 ## コントリビュート
 
-[CONTRIBUTING.md](../../CONTRIBUTING.md) を参照。新しいソースの基準:特定のモード
+[CONTRIBUTING.md](../../.github/CONTRIBUTING.md) を参照。新しいソースの基準:特定のモード
 (structure / unwall / transcribe / recall / monitor)で通常の検索に勝つこと。
 壊れたソースの修復の基準:低い。ぜひ修復を。プッシュ前に `python tests/smoke.py` を実行。
 
-参加することで[行動規範](../../CODE_OF_CONDUCT.md)に同意したものとみなされます。
+参加することで[行動規範](../../.github/CODE_OF_CONDUCT.md)に同意したものとみなされます。
 
 <div align="center">
 
@@ -228,6 +228,6 @@ tests/smoke.py         オフライン不変量 + ゴールデンfixture (CIゲ�
 
 **表層の、その下へ。**
 
-[Apache-2.0](../../LICENSE) · [NOTICE](../../NOTICE) · [Security](../../SECURITY.md)
+[Apache-2.0](../../LICENSE) · [NOTICE](../../NOTICE) · [Security](../../.github/SECURITY.md)
 
 </div>

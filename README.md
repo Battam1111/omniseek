@@ -214,7 +214,7 @@ Start with `penumbra_search_ranked`: one deduped, ranked list across the catalog
   `penumbra_read_document` is sandboxed to an allowlisted inbox.
 - **Untrusted content.** Everything Penumbra returns is external data, never instructions.
 - **Your responsibility.** Penumbra fetches as your own agent. You are responsible for using
-  it within the law and each site's terms. See [SECURITY.md](SECURITY.md) and [NOTICE](NOTICE).
+  it within the law and each site's terms. See [SECURITY.md](.github/SECURITY.md) and [NOTICE](NOTICE).
 
 ## Structure
 
@@ -230,11 +230,11 @@ tests/smoke.py         offline invariants + golden fixtures (CI gate)
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md). The bar for a new source: it must beat plain web
+See [CONTRIBUTING.md](.github/CONTRIBUTING.md). The bar for a new source: it must beat plain web
 search via a mode (structure / unwall / transcribe / recall / monitor). The bar for fixing a
 decayed source: low, please do. `python tests/smoke.py` before you push.
 
-By participating you agree to the [Code of Conduct](CODE_OF_CONDUCT.md).
+By participating you agree to the [Code of Conduct](.github/CODE_OF_CONDUCT.md).
 
 <div align="center">
 
@@ -242,6 +242,6 @@ By participating you agree to the [Code of Conduct](CODE_OF_CONDUCT.md).
 
 **the layer beneath the surface.**
 
-[Apache-2.0](./LICENSE) · [NOTICE](./NOTICE) · [Security](./SECURITY.md)
+[Apache-2.0](./LICENSE) · [NOTICE](./NOTICE) · [Security](.github/SECURITY.md)
 
 </div>

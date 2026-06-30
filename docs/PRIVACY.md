@@ -54,7 +54,7 @@ Penumbra's wall-crossing (UNWALL) is bounded to **credentialed access the operat
 entitled to**. The engine blesses the operator using their own credentials for what those credentials
 already grant them. It does **not** host, broker, or authenticate any access that bypasses a control
 the operator is not entitled to be on the far side of. (The full legal posture is in
-[SECURITY.md](SECURITY.md).)
+[SECURITY.md](../.github/SECURITY.md).)
 
 ## 6. Open source
 
@@ -75,4 +75,4 @@ Questions, audit requests, or privacy concerns: open an issue (link TBD at relea
 
 ---
 
-*See also [SECURITY.md](SECURITY.md) (the security + legal posture) and [NOTICE](NOTICE).*
+*See also [SECURITY.md](../.github/SECURITY.md) (the security + legal posture) and [NOTICE](../NOTICE).*
