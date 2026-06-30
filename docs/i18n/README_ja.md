@@ -17,7 +17,7 @@ AIエージェントのための、セルフホスト型ディープ検索MCPサ
 &nbsp;![Built for MCP](https://img.shields.io/badge/built_for-MCP-D4952B?style=flat-square)
 &nbsp;![Self-hosted](https://img.shields.io/badge/self--hosted-D4952B?style=flat-square)
 
-[クイックスタート](#クイックスタート) · [仕組み](#仕組み) · [設定](#設定) · [ツール](#ツール) · [コントリビュート](#コントリビュート)
+[クイックスタート](#クイックスタート) · [仕組み](#仕組み) · [得られるもの](#得られるもの) · [設定](#設定) · [コントリビュート](#コントリビュート)
 
 **Languages:** [English](../../README.md) · [中文](README_zh.md) · 日本語
 
@@ -94,9 +94,12 @@ Windows では `bootstrap.sh` を Git Bash または WSL で実行してくだ�
 
 Linux常駐サービスは [`deploy/penumbra.service`](../../deploy/penumbra.service) を参照。
 
+Penumbra は `127.0.0.1` にバインドし、すべてのリクエストに bearer token を要求する。
+リバースプロキシなしで公開しないこと([SECURITY.md](../../.github/SECURITY.md))。
+
 ## 仕組み
 
-Penumbraは**インフラであり、アプリケーションではない**:生のインターネットとAIエージェントの間にある検索レイヤーだ。
+Penumbra は**インフラであり、アプリケーションではない**:生のインターネットとAIエージェントの間にある検索レイヤーだ。
 
 <div align="center">
   <picture>
@@ -109,9 +112,23 @@ Penumbra はカタログ全体に展開し、障壁を越え、独立した上�
 
 ソースカタログは**オープンかつ成長し続ける**:現在数百のキュレーション済みソースがあり、誰でも追加できる。各ソースは、特定のモード(structure、unwall、transcribe、recall、monitor)で通常の検索を上回ることで採用される。検索が既に返すものを焼き直すだけでは採られない。
 
+エントリポイントは **`penumbra_search_ranked`**;`penumbra_list_sources()` が実行時の能力
+インデックスを返す。[完全なツール一覧](../tools.md)は検索、論文、引用、人物、文書、
+音声、監視をカバーする。
+
 ## 得られるもの
 
-ひとつのブロード呼び出しで、カタログ全体を横断して重複排除 + ランク付けし、「どこに到達できなかったか」の台帳まで添える。`penumbra_search_ranked("retrieval augmented generation survey")` の実際の応答(抜粋):
+`penumbra_search_ranked("retrieval augmented generation survey")` は91のソースに展開し、
+402件の生ヒットを上流の同一性で12件にまとめ、26秒で返す。最上位の結果は5つの独立した
+上流(OpenReview、DBLP、HackerNews、OpenAlex、YouTube)からそれぞれ見つかった。
+
+すべての結果に `corroboration`(いくつの独立したソースが見つけたか)と `also_in`
+(どれか)が付く。`_meta` は盲点の台帳:何を検索し、何が空で返り、何が除外されたか。
+5ソースの合意は単独ヒットに勝る。到達*できなかった*ところを知ることは、
+到達できたところを知ることと同じくらい重要だ。
+
+<details>
+<summary>レスポンス構造(実データ、トリム済み)</summary>
 
 ```jsonc
 {
@@ -121,35 +138,23 @@ Penumbra はカタログ全体に展開し、障壁を越え、独立した上�
     {
       "source": "openreview",
       "title": "Graph Retrieval-Augmented Generation: A Survey",
-      "url": "https://openreview.net/forum?id=9ldXNHQFMl",
-      "date": "2024-01-01T00:00:00Z",
       "metadata": {
-        "corroboration": 5,                                 // 同じ作品が5つの独立した上流から現れた
+        "corroboration": 5,                    // 同じ作品、5つの独立した上流
         "also_in": ["dblp", "hackernews", "openalex", "youtube"],
-        "merge_basis": "title",
         "_rank": 0.68
       }
-    },
-    {
-      "source": "github_trending",
-      "title": "taichengguo/LLM_MultiAgents_Survey_Papers",
-      "url": "https://github.com/taichengguo/LLM_MultiAgents_Survey_Papers",
-      "signals": { "stars": { "value": 1282, "kind": "engagement", "computed_by": "source:github_trending/stars" } },
-      "metadata": { "live_sources": ["github_trending"], "_rank": 0.76 }
     }
-    // ... 他に10件
+    // ... 他に11件
   ],
   "_meta": {
-    "searched": 91,                          // この呼び出しで検索したソース数
-    "elapsed_s": 26.1,
-    "deduped": { "in": 402, "out": 12 },     // 402件の生ヒットを上流の同一性で12件に統合
-    "empty": ["core", "bluesky", "acl_anthology", "..."],  // 空で返った(キー未設定、または一致なし)
-    "excluded_relevant": []                  // この問い合わせに合致する walled / 低速ソース。各々 sources=[...] の再実行ヒント付き
+    "searched": 91,                            // この呼び出しで検索したソース数
+    "deduped": { "in": 402, "out": 12 },       // 402件の生ヒット -> 12件(上流の同一性で)
+    "empty": ["core", "bluesky", "..."]        // キー未設定、または一致なし
   }
 }
 ```
 
-独立性は具体的だ:同じ作品が複数の上流から現れると、一つにまとまり、`corroboration`(いくつのソースか)と `also_in`(どれか)を帯びる。だからエージェントは「5ソースに裏付けられたサーベイ」を単独ヒットより重く扱える。`_meta` は盲点の台帳だ:何を検索し、何が空で返り、何が除外されたか。
+</details>
 
 ## 設定
 
@@ -163,16 +168,6 @@ Penumbraは**カタログ優先**設計:設定なしでも、すべての安全�
 | **circumvention** | **オフ、同梱されない** |
 
 詳細は **[configuration](../configuration.md)** に、ログイン必須ソースへのブラウザログインは **[walled sources](../walled-sources.md)** にある。
-
-## ツール
-
-まず **`penumbra_search_ranked`** を使う(カタログ全体を重複排除 + ランク付けした一覧。「Xの最良・最新」のデフォルト)。`penumbra_list_sources()` が実行時の能力インデックスを返す。検索、論文、引用、人物、文書、音声、監視:完全なグループ別一覧は **[tools](../tools.md)** にある。
-
-## 安全性と責任
-
-- **デフォルトでループバック、トークンゲート。** `127.0.0.1` にバインドし、bearer トークンなしでは起動を拒否し、非ループバックバインドには警告を出す。リバースプロキシなしで公開しないこと。
-- **設計上、非信頼。** 外向きリクエストは SSRF 防護下にある。Penumbra が返すものはすべて外部データであり、指示ではない。`penumbra_read_document` はホワイトリスト制のインボックスにサンドボックス化される。
-- **あなたの責任。** Penumbra はあなた自身のエージェントとして、管轄区域の法律と各サイトの規約の範囲で取得する。全体の姿勢は [SECURITY.md](../../.github/SECURITY.md) と [NOTICE](../../NOTICE) を参照。
 
 ## コントリビュート
 

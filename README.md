@@ -17,7 +17,7 @@ Self-hosted deep-retrieval MCP server for AI agents.
 &nbsp;![Built for MCP](https://img.shields.io/badge/built_for-MCP-D4952B?style=flat-square)
 &nbsp;![Self-hosted](https://img.shields.io/badge/self--hosted-D4952B?style=flat-square)
 
-[Quick start](#quick-start) · [How it works](#how-it-works) · [Configure](#configure) · [Tools](#tools) · [Contributing](#contributing)
+[Quick start](#quick-start) · [How it works](#how-it-works) · [What you get](#what-you-get) · [Configure](#configure) · [Contributing](#contributing)
 
 **Languages:** English · [中文](docs/i18n/README_zh.md) · [日本語](docs/i18n/README_ja.md)
 
@@ -94,6 +94,9 @@ On Windows, run `bootstrap.sh` under Git Bash or WSL (it is a POSIX shell script
 
 For an always-on Linux service, see [`deploy/penumbra.service`](deploy/penumbra.service).
 
+Penumbra binds `127.0.0.1` and requires the bearer token on every request.
+Do not expose without a reverse proxy ([SECURITY.md](.github/SECURITY.md)).
+
 ## How it works
 
 Penumbra is **infrastructure, not an application**: a retrieval layer between the raw internet and your AI agent.
@@ -109,9 +112,23 @@ Penumbra fans out across the catalog, crosses the barriers, dedupes across indep
 
 The source catalog is **open and growing**: hundreds of curated sources today, and anyone can add more. Each earns its place by beating plain web search through a specific mode (structure, unwall, transcribe, recall, or monitor), never by duplicating what search already returns.
 
+Your entry point is **`penumbra_search_ranked`**; `penumbra_list_sources()` returns the live
+capability index. The [full tool list](docs/tools.md) covers search, papers, citations, people,
+documents, audio, and monitoring.
+
 ## What you get
 
-One broad call, deduped and ranked across the whole catalog, with a ledger of what it could not reach. A trimmed but real response to `penumbra_search_ranked("retrieval augmented generation survey")`:
+`penumbra_search_ranked("retrieval augmented generation survey")` fans out across 91 sources,
+collapses 402 raw hits to 12 by upstream identity, returns in 26 seconds. The top result was
+independently surfaced by 5 upstreams (OpenReview, DBLP, HackerNews, OpenAlex, YouTube).
+
+Every result carries `corroboration` (how many independent sources found it) and `also_in`
+(which ones). `_meta` is the gap-ledger: what was searched, what came back empty, what was
+excluded. A 5-source consensus beats a lone hit; knowing what you *didn't* reach matters as
+much as what you did.
+
+<details>
+<summary>Response shape (real, trimmed)</summary>
 
 ```jsonc
 {
@@ -121,35 +138,23 @@ One broad call, deduped and ranked across the whole catalog, with a ledger of wh
     {
       "source": "openreview",
       "title": "Graph Retrieval-Augmented Generation: A Survey",
-      "url": "https://openreview.net/forum?id=9ldXNHQFMl",
-      "date": "2024-01-01T00:00:00Z",
       "metadata": {
-        "corroboration": 5,                                 // the SAME work surfaced from 5 independent upstreams
+        "corroboration": 5,                    // same work, 5 independent upstreams
         "also_in": ["dblp", "hackernews", "openalex", "youtube"],
-        "merge_basis": "title",
         "_rank": 0.68
       }
-    },
-    {
-      "source": "github_trending",
-      "title": "taichengguo/LLM_MultiAgents_Survey_Papers",
-      "url": "https://github.com/taichengguo/LLM_MultiAgents_Survey_Papers",
-      "signals": { "stars": { "value": 1282, "kind": "engagement", "computed_by": "source:github_trending/stars" } },
-      "metadata": { "live_sources": ["github_trending"], "_rank": 0.76 }
     }
-    // ... 10 more
+    // ... 11 more
   ],
   "_meta": {
-    "searched": 91,                          // sources queried this call
-    "elapsed_s": 26.1,
-    "deduped": { "in": 402, "out": 12 },     // 402 raw hits collapsed to 12 by upstream identity
-    "empty": ["core", "bluesky", "acl_anthology", "..."],  // returned nothing (no key set, or no match)
-    "excluded_relevant": []                  // walled/slow sources matching this query, each with a sources=[...] re-run hint
+    "searched": 91,                            // sources queried this call
+    "deduped": { "in": 402, "out": 12 },       // 402 raw -> 12 by upstream identity
+    "empty": ["core", "bluesky", "..."]        // no key set, or no match
   }
 }
 ```
 
-Independence is concrete: when the same work surfaces from several upstreams, it collapses to one entry with `corroboration` (how many sources) and `also_in` (which), so your agent can trust a 5-source survey over a lone hit. `_meta` is the gap-ledger: what was searched, what came back empty, what was excluded.
+</details>
 
 ## Configure
 
@@ -166,21 +171,6 @@ are off. Tune everything in one file, `~/.penumbra/profile.json` (seeded from
 
 Full reference in **[configuration](docs/configuration.md)**; browser login for walled sources
 in **[walled sources](docs/walled-sources.md)**.
-
-## Tools
-
-Start with **`penumbra_search_ranked`** (one deduped, ranked list; the default for "best of X").
-`penumbra_list_sources()` returns the live capability index. Search, papers, citations, people,
-documents, audio, monitoring: the full grouped list is in **[tools](docs/tools.md)**.
-
-## Safety and responsibility
-
-- **Loopback by default, token-gated.** Binds `127.0.0.1`, refuses to start without a bearer token,
-  and warns on any non-loopback bind. Do not expose it without a reverse proxy.
-- **Untrusted by construction.** Outbound fetches are SSRF-guarded; everything Penumbra returns is
-  external data, never instructions; `penumbra_read_document` is sandboxed to an allowlisted inbox.
-- **Your responsibility.** Penumbra fetches as your own agent, within the law and each site's terms.
-  Full posture in [SECURITY.md](.github/SECURITY.md) and [NOTICE](NOTICE).
 
 ## Contributing
 
