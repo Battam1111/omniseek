@@ -27,7 +27,7 @@ Self-hosted deep-retrieval MCP server for AI agents.
 
 You can only act on what you can find. You can only find what's on the surface.
 
-Below the surface: a podcast holds the insight you need at minute 47, never transcribed. The setting that makes it reproduce flashed across a slide for three seconds; the deck was never posted. The method you are about to call new was worked out years ago, in a language you do not read.
+Below the surface: a podcast holds the insight you need at minute 47, never transcribed. The number that settles it sat on a slide for three seconds, shown but never said. The answer you have been hunting for was written out years ago, in a language you do not read.
 
 All there. All reachable. Untouched.
 
@@ -68,8 +68,8 @@ A self-hosted deep-retrieval engine. Transcribes audio. Digests documents. Extra
 
 <div align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="assets/demo-dark.png">
-    <img src="assets/demo-light.png" alt="A worked example. Your agent asks why a result will not reproduce. Plain search (the paper, the README, the blog post) says it works. Penumbra reaches beneath the surface and returns three pieces the surface left out: a caveat the author only spoke in a talk Q&A, the hyperparameters shown on a conference slide and never written down, and a preprocessing step written years ago in another language. What makes it reproduce was spoken, shown, and written in another language; Penumbra brought back all three." width="780">
+    <source media="(prefers-color-scheme: dark)" srcset="assets/demo-en-dark.png">
+    <img src="assets/demo-en-light.png" alt="A worked example. Your agent asks whether something is as good as they say. Plain search (the homepage, the reviews, the docs) all say yes. Penumbra reaches beneath the surface and returns three pieces the surface left out: an engineer admitting offhand on a podcast that it falls apart at scale, an error that flickers on screen in a demo video and is never said aloud, and the workaround that the people who hit it wrote in another language. What the reviews left out was spoken, shown, and written in another language; Penumbra brought back all three." width="780">
   </picture>
 </div>
 
