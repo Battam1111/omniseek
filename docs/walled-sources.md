@@ -145,10 +145,12 @@ The walled tier is the **unwall** acquisition mode: content behind a login you h
 read with a credential **you** hold, to obtain access **you** are already entitled to. It crosses no
 access control you are not authorized to be on the far side of.
 
-It is **not** circumvention: Penumbra ships nothing that defeats a paywall, breaks a rate-limit, or
-decrypts a protected response. Those are a separate tier that is never in the default pack. You are
-responsible for using each platform within its Terms of Service and the law in your jurisdiction.
-See [SECURITY.md](../.github/SECURITY.md) and [NOTICE](../NOTICE).
+It is **not** circumvention: the walled tier crosses logins you hold, not access controls you are
+not authorized to pass. Sources that defeat a paywall, break a rate-limit, or decrypt a protected
+response fall under the separate **circumvention** tier, which is off by default and absent from
+the shipped catalog. The framework supports circumvention-class adapters as opt-in `explicit_only`
+sources for deployers who choose to build or enable them; the legal judgment is theirs. See
+[configuration](configuration.md), [SECURITY.md](../.github/SECURITY.md), and [NOTICE](../NOTICE).
 
 ---
 

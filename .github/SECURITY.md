@@ -32,7 +32,8 @@ boundaries it enforces:
 ## Operator responsibility
 
 Penumbra fetches as the operator's own agent. The operator is responsible for using it within the law
-and each site's terms of service in their jurisdiction. Login-walled sources and any source that
-would require defeating an access control are **off by default** and never in the shipped default
-pack; enabling them is a deliberate operator choice. See
-[SECURITY.md](SECURITY.md) and [NOTICE](../NOTICE).
+and each site's terms of service in their jurisdiction. Login-walled sources are **off by default**;
+sources that defeat an access control (the circumvention tier) are off by default and absent from
+the shipped catalog. The framework supports both as opt-in categories; enabling them is a deliberate
+operator choice, and the legal judgment belongs to the operator. See [NOTICE](../NOTICE) and
+[configuration](../docs/configuration.md).
