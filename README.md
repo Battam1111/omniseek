@@ -69,7 +69,7 @@ A self-hosted deep-retrieval engine. Transcribes audio. Digests documents. Extra
 <div align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="assets/demo-en-dark.png">
-    <img src="assets/demo-en-light.png" alt="A worked example. Your agent asks whether something is as good as they say. Plain search (the homepage, the reviews, the docs) all say yes. Penumbra reaches beneath the surface and returns three pieces the surface left out: an engineer admitting offhand on a podcast that it falls apart at scale, an error that flickers on screen in a demo video and is never said aloud, and the workaround that the people who hit it wrote in another language. What the reviews left out was spoken, shown, and written in another language; Penumbra brought back all three." width="780">
+    <img src="assets/demo-en-light.png" alt="A worked example. Your agent asks what is really going on. Plain search returns only the surface: the announcement, the reviews, the docs, all clean and agreeing. Penumbra reaches beneath and brings back four fragments no single search surfaces: a talk it transcribed, where two argue on stage and expose the fault line the write-up hides; a demo video it read from the frame, where a number flickers for a second and is never said aloud; a hundred records it connected, revealing a tie no single page states; and a forum in a language you don't read, where an insider says the quiet part. Alone, each is noise. Assembled, they become the map only you can build. Penumbra's reach spans audio, video, images, languages, connections, the deleted, logins, and more." width="780">
   </picture>
 </div>
 
