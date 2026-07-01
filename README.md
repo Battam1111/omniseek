@@ -25,40 +25,37 @@ Self-hosted deep-retrieval MCP server for AI agents.
 
 ---
 
-You can only act on what you can find. You can only find what's on the surface.
+Your agent is only as good as what it can reach. Plain search only reaches the surface: written down, in a language it reads, still standing where it was.
 
-Below the surface: a podcast holds the insight you need at minute 47, never transcribed. The number that settles it sat on a slide for three seconds, shown but never said. The answer you have been hunting for was written out years ago, in a language you do not read.
+Below the surface: you're deciding whether to join a startup, and every public report says it's thriving; three months ago on a podcast, at minute 52, the founder let slip "we've got maybe nine months of runway left," and it was never transcribed. You're weighing a product every review gives five stars; in the demo video, a real performance metric flashes on screen for under two seconds, ten times worse than the spec sheet, and no one ever said it aloud. You're thinking about moving to a new city, and every travel blogger calls it livable; locals wrote out the real picture on a forum long ago, in a language you don't read.
 
-All there. All reachable. Untouched.
+All there. Untouched.
 
 <h3 align="center">That's the penumbra.</h3>
 
 <div align="center">
 
-The vast shadow zone between what search shows you and what actually exists.
-Not secrets. Not the open web.
-**Where knowledge is real, scattered, and structurally unreachable.**
+The zone between what your agent can reach and what actually exists: vast, half-lit.
+Not secret. A blind spot:
+**the knowledge is right there, scattered everywhere, just invisible to the surface.**
 
 </div>
 
 <br>
 
-**Why unreachable?** Locked in audio, video, and images no text search can parse. In languages you don't read. Behind logins. And temporal: yesterday's post may be gone tomorrow. Whatever tool you use, it hits the same barriers.
+**Why can't it reach?** What's spoken, search can't hear; what's on screen, search can't read; what's in another language, you can't read; what you can see when logged in, search can't get to; what was there yesterday, gone today. Plain search hits every wall. Reach it yourself, one at a time? You'd get there eventually. You just don't have that much time.
 
-**Penumbra crosses them.**
+**Penumbra gives your agent that reach:** it transcribes what was spoken into text, reads what flickered across a screen, translates what was written in another language into yours, gets into places you can see when logged in but search can't, pulls back what's been deleted, and threads together what's scattered across hundreds of records. What was out of reach, it brings back in one pass.
 
-A self-hosted deep-retrieval engine. Transcribes audio. Digests documents. Extracts from video and images. Reads across languages. Traverses citation graphs. Monitors what changed. A growing, open catalog of curated sources (hundreds today, extensible by anyone) spanning the deep web. Speaks MCP, so any AI agent, workflow, or application plugs in.
+**But a pile of fragments still isn't knowledge.** A hundred scattered findings are noise until they line up: independent angles converging on the same conclusion, none of them telling the whole story alone. Penumbra marks where each fragment came from, when, and whether it's an echo of another, then weaves together what's scattered across different sources: the same name surfacing in three unrelated places, a timeline that only makes sense laid end to end, a relationship hiding in the gaps between records. What's left, your agent assembles into the one map that's yours alone.
 
-**But fragments aren't knowledge.** A hundred scattered findings are noise until they line up: the same conclusion from independent angles no single source holds. Penumbra reaches each fragment and tags it by source, time, and independence, so your agent assembles the map instead of trusting the surface.
-
-**Imagine what becomes answerable.** Who knows whom in your field, across every language? What signal hides between a regulatory filing and a translated earnings call? What insider knowledge could you accumulate in months, not years? These are just the ones we've thought of.
+**Imagine what becomes answerable.** That product you use every day, stellar reviews everywhere: can you tell how many are actually independent? That piece of insider knowledge everyone in your industry passes around: is it firsthand, or did one person make it up on three different platforms? A risk that directly concerns you, already discussed for two years in a language you couldn't read, and you didn't even know it existed? These are only the questions that came to mind first.
 
 <div align="center">
 
-*The advantage was never about who's smarter.*
-*It was about who could reach the penumbra.*
+*The penumbra was always there.*
 
-**Now you can.**
+**Now it's within reach.**
 
 </div>
 
