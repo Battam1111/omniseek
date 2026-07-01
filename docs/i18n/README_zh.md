@@ -115,7 +115,7 @@ Penumbra 采用**源目录优先**设计:无配置时,所有良性源开启、�
 | **free**(公开,无需密钥) | **开** |
 | **keyed**(你提供的免费/付费 API 密钥) | 配好密钥即开 |
 | **walled**(你有权访问的登录墙) | **关**;自带浏览器 |
-| **circumvention** | **关,不随附** |
+| **circumvention** | **关**;默认包中无此类源 |
 
 完整参考见 **[configuration](../configuration.md)**;墙内源登录见 **[walled sources](../walled-sources.md)**。
 

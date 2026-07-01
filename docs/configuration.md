@@ -37,7 +37,7 @@ default.
 | **free** | public, no key | **on** | nothing |
 | **keyed** | a free or paid API key | on once a key is present | the key |
 | **walled** | content behind a login you are entitled to | **off** | your own logged-in browser |
-| **circumvention** | requires defeating an access control | **off, and never shipped** | (not in the public pack) |
+| **circumvention** | requires defeating an access control | **off**; none in the default pack | your own adapter + legal judgment |
 
 Route at call time with `penumbra_list_sources(domain=..., query=...)`; each source reports its
 `access_tier`, so an agent can filter by legal posture instead of memorizing the set.
@@ -106,6 +106,32 @@ Install the `asr` extra and `penumbra_transcribe` is available; nothing to downl
 one-time download; the wait depends on your connection). The weights land in `~/.penumbra/models`
 (the same persisted root as credentials and the recall index), so a container rebuild does not
 trigger it again.
+
+</details>
+
+<details>
+<summary><b>Circumvention tier</b> (legal posture)</summary>
+
+<br>
+
+The access-tier system classifies every source by legal posture: `free`, `keyed`, `walled`, and
+`circumvention`. The first three ship in the default pack; circumvention does not.
+
+A circumvention source is one that **defeats an access control** (decrypts an encrypted response,
+circumvents a paywall, bypasses a rate-limit enforcement). The engine's tier-detection logic
+(`_CIRCUMVENTION_RE`) auto-classifies any adapter whose `explicit_only` reason mentions these
+patterns. No circumvention-class sources currently ship in the public catalog.
+
+**Why it exists as a tier**: the framework is designed so that deployers who choose to build or
+contribute circumvention-class adapters can do so as opt-in `explicit_only` sources, gated behind
+the same profile consent mechanism as walled sources. The project does not ship them by default,
+but it does not reject the category: the deployer's jurisdiction, legal counsel, and Terms of
+Service obligations determine what is appropriate for their deployment.
+
+**Legal responsibility**: if you build, install, or enable a circumvention-class source, you are
+responsible for compliance with the laws and platform terms in your jurisdiction. Penumbra provides
+the classification framework and the opt-in gate; the legal judgment is yours. See
+[SECURITY.md](../.github/SECURITY.md).
 
 </details>
 
