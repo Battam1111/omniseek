@@ -1,6 +1,6 @@
 # Walled sources: bring your own browser
 
-<sub>[penumbra](../README.md)&nbsp;·&nbsp;[Configuration](configuration.md)&nbsp;·&nbsp;[Tools](tools.md)&nbsp;·&nbsp;**Walled sources**&nbsp;·&nbsp;[Brand](BRAND.md)</sub>
+<sub>[penumbra](../README.md)&nbsp;·&nbsp;[Configuration](configuration.md)&nbsp;·&nbsp;[Tools](tools.md)&nbsp;·&nbsp;[Patterns](patterns.md)&nbsp;·&nbsp;**Walled sources**&nbsp;·&nbsp;[Brand](BRAND.md)</sub>
 
 Some of the richest corners of the penumbra sit behind a **login**: Xiaohongshu, Zhihu, Douyin,
 WeChat, and other platforms that no search engine indexes and no public API exposes. Penumbra can
