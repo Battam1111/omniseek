@@ -58,5 +58,5 @@ body:
     attributes:
       label: Legal posture
       options:
-        - label: This source can be fetched within its Terms of Service without defeating an access control, OR I understand a circumvention source ships explicit_only and off by default (SECURITY.md).
+        - label: This source can be fetched within its Terms of Service without defeating an access control (SECURITY.md).
           required: true
