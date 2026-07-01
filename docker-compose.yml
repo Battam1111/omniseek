@@ -15,7 +15,7 @@ services:
                                 # expose it to the internet; put a reverse proxy + firewall in front
                                 # if you must reach it off-box, and keep the bearer token secret.
     volumes:
-      - ./.penumbra:/root/.penumbra               # credentials + token + profile + cache + recall + curator state
+      - ./.penumbra:/root/.penumbra               # credentials + token + profile + cache + recall + curator state + ASR models
       - ./.penumbra-inbox:/root/penumbra-inbox    # penumbra_read_document inbox (scp/copy files here)
     environment:
       PENUMBRA_HTTP_HOST: "0.0.0.0"   # bind inside the container; the port-map above keeps it host-loopback

@@ -30,8 +30,9 @@ COPY deploy/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
 EXPOSE 8765
-# State (credentials + bearer token + profile + cache + recall index + curator state) lives under
-# /root/.penumbra; the penumbra_read_document inbox under /root/penumbra-inbox. Mount both to persist.
+# State (credentials + bearer token + profile + cache + recall index + curator state + downloaded
+# ASR model weights) lives under /root/.penumbra; the penumbra_read_document inbox under
+# /root/penumbra-inbox. Mount both to persist.
 VOLUME ["/root/.penumbra", "/root/penumbra-inbox"]
 
 # Liveness: /healthz is open (no token).

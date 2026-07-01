@@ -65,6 +65,12 @@ _model = None  # lazy global singleton (load is expensive; keep warm across call
 def _get_model():
     global _model
     if _model is None:
+        # funasr pulls model weights from ModelScope on first use; without this, they land in
+        # ModelScope's own default cache (unversioned, outside ~/.penumbra) and re-download on
+        # every container rebuild. Route them under the same persisted root as credentials/cache
+        # (setdefault so an operator's own MODELSCOPE_CACHE still wins).
+        os.environ.setdefault(
+            "MODELSCOPE_CACHE", os.path.join(os.path.expanduser("~"), ".penumbra", "models"))
         AutoModel = _optdep.require("funasr", "asr").AutoModel
         last = None
         for dev in ("mps", "cpu"):
