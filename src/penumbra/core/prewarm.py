@@ -1,5 +1,5 @@
 """Cache pre-warmer for the QUERY-INDEPENDENT slow sources — shared by the in-service warmer
-thread (penumbra.serve_http) and the standalone scripts/prewarm.py.
+thread (penumbra.serve_http) and the standalone scripts/eye_prewarm.py.
 
 Keeps sources whose EXPENSIVE fetch is cached independently of the query/limit hot, so a broad
 search (for ANY query) hits warm cache instead of paying their live cost under the 78-source
@@ -41,9 +41,9 @@ timeouts + the per-source try/except below, and warm_loop wraps the whole cycle.
 WHY in-service (2026-06-14): the standalone launchd cron (com.penumbra.core-prewarm) was observed
 to fire only ONCE at load and never on its 30-min StartInterval (runs=1 after 14.5h), so the
 warmed caches silently expired (6h TTL) and Lever B's speedup evaporated in production. Tying the
-warmer to the always-on HTTP service (a daemon thread) makes it fire reliably. (That dead plist
-com.penumbra.core-prewarm was never installed on the host and has since been REMOVED from the repo
-2026-06-16; the in-service daemon is the sole AUTOMATIC warmer. scripts/prewarm.py remains only
+warmer to the always-on eye-http service (a daemon thread) makes it fire reliably. (That dead plist
+com.penumbra.core-prewarm was never installed on the mini and has since been REMOVED from the repo
+2026-06-16; the in-service daemon is the sole AUTOMATIC warmer. scripts/eye_prewarm.py remains only
 as a manual one-shot CLI.)
 """
 
@@ -105,7 +105,7 @@ def warm_sources() -> tuple[int, int]:
 
 def warm_loop(interval_s: float = WARM_INTERVAL_S) -> None:
     """Forever: warm on entry (kills the cold-herd right after a service (re)start) then every
-    ``interval_s``. Designed to run as a daemon thread inside the always-on HTTP service."""
+    ``interval_s``. Designed to run as a daemon thread inside the always-on eye-http service."""
     while True:
         try:
             ok, total = warm_sources()

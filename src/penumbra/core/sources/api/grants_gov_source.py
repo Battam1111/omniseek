@@ -3,7 +3,7 @@
 The complement to nsf_awards / nih_reporter: those return grants already AWARDED (retrospective,
 who got the money); Grants.gov returns the OPPORTUNITIES you can still apply to (prospective:
 posted + forecasted solicitations) across ALL ~26 federal grant-making agencies (NSF CISE/IIS,
-DOE, DARPA, IARPA, NIST, NIH, ...), not just one. Penumbra's "find funding to apply for"
+DOE, DARPA, IARPA, NIST, NIH, ...), not just one. Polaris-eye's "find funding to apply for"
 STRUCTURE source: a filterable, all-agency federal opportunity feed web search cannot assemble.
 
 Access via the public Search2 API (no auth, no key; POST-only):
@@ -19,8 +19,8 @@ explicit_only: a named funding-opportunity drill. closeDate is the application D
 field an applicant cares about most), so it is used as the doc date.
 
 ENV note: the Claude sandbox DNS-blackholes api.grants.gov (198.18.x); the real adapter runs on
-the host, which reaches it. Live-verify the oppHits field names from the host
-(penumbra_fetch) before trusting them.
+the Mac eye host, which reaches it. Live-verify the oppHits field names from the eye host
+(eye_fetch) before trusting them. Recon trail: brain note eye-free-api-probe-round2-2026-06-21.
 """
 
 from __future__ import annotations
@@ -29,7 +29,7 @@ from datetime import datetime
 from typing import Any, Optional
 
 from penumbra.core import http
-from penumbra.core.normalize import Document, jsonsafe
+from penumbra.core.normalize import PolarisDocument, jsonsafe
 from penumbra.core.sources.scrape._base import BaseScrapeAdapter
 
 API_URL = "https://api.grants.gov/v1/api/search2"
@@ -62,18 +62,18 @@ class GrantsGovAdapter(BaseScrapeAdapter):
         }
         return http.post_json(API_URL, json=body, timeout=20)
 
-    def _to_documents(self, raw: Any, query: str, limit: int) -> list[Document]:
+    def _to_documents(self, raw: Any, query: str, limit: int) -> list[PolarisDocument]:
         if not isinstance(raw, dict):
             return []
         hits = ((raw.get("data") or {}).get("oppHits")) or []
-        docs: list[Document] = []
+        docs: list[PolarisDocument] = []
         for opp in hits[:limit]:
             doc = self._opp_to_doc(opp)
             if doc is not None:
                 docs.append(doc)
         return docs
 
-    def _opp_to_doc(self, opp: Any) -> Optional[Document]:
+    def _opp_to_doc(self, opp: Any) -> Optional[PolarisDocument]:
         if not isinstance(opp, dict):
             return None
         oid = opp.get("id")
@@ -93,7 +93,7 @@ class GrantsGovAdapter(BaseScrapeAdapter):
             content_bits.append(f"Opportunity number: {number}")
         if opp.get("closeDate"):
             content_bits.append(f"Closes: {opp.get('closeDate')}")
-        return Document(
+        return PolarisDocument(
             source=self.name,
             source_id=str(oid),
             url=DETAIL_URL.format(id=oid),

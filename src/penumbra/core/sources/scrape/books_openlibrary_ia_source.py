@@ -1,6 +1,6 @@
 """Books axis: Open Library (bibliographic) + Internet Archive (full-text-inside-books).
 
-Penumbra's BOOKS axis, two keyless surfaces merged behind one source so a single
+Polaris-eye's BOOKS axis, two keyless surfaces merged behind one source so a single
 query reaches both the catalog record AND the readable full text:
 
   (a) Open Library (openlibrary.org): the bibliographic record: title, author,
@@ -39,7 +39,7 @@ self-registration ritual lives in the base; this adapter declares its facets and
 fills the two hooks. ``_raw_fetch`` does the dual GET (failure of EITHER surface is
 tolerated: a partial payload still yields docs; only a total miss returns None ->
 []). ``rank`` stays default-False: each surface returns its own server order
-(Open Library relevance, IA default), and Penumbra's ranked search re-scores across
+(Open Library relevance, IA default), and the eye's ranked search re-scores across
 sources when it needs a unified relevance order.
 """
 
@@ -50,7 +50,7 @@ from datetime import datetime
 from typing import Any, Optional
 
 from penumbra.core import http
-from penumbra.core.normalize import Document, jsonsafe, mk_signal
+from penumbra.core.normalize import PolarisDocument, jsonsafe, mk_signal
 from penumbra.core.sources.scrape._base import BaseScrapeAdapter
 
 logger = logging.getLogger(__name__)
@@ -113,10 +113,10 @@ class BooksOpenLibraryIAAdapter(BaseScrapeAdapter):
             return None
         return {"ol": ol, "ia": ia, "ol_n": ol_n, "ia_n": ia_n}
 
-    def _to_documents(self, raw: Any, query: str, limit: int) -> list[Document]:
+    def _to_documents(self, raw: Any, query: str, limit: int) -> list[PolarisDocument]:
         if not isinstance(raw, dict):
             return []
-        docs: list[Document] = []
+        docs: list[PolarisDocument] = []
 
         # (a) Open Library bibliographic records
         ol = raw.get("ol")
@@ -144,7 +144,7 @@ class BooksOpenLibraryIAAdapter(BaseScrapeAdapter):
 
     # ── per-surface mappers ───────────────────────────────────────────────────
     @staticmethod
-    def _ol_to_doc(rec: dict) -> Document:
+    def _ol_to_doc(rec: dict) -> PolarisDocument:
         key = rec.get("key") or ""  # e.g. "/works/OL17854085W"
         title = (rec.get("title") or "(untitled)").strip()
         read_url = f"{OL_BASE}{key}" if key else OL_BASE
@@ -173,7 +173,7 @@ class BooksOpenLibraryIAAdapter(BaseScrapeAdapter):
         content_lines.append(f"Book page: {read_url}")
         content = "\n\n".join(content_lines)
 
-        return Document(
+        return PolarisDocument(
             source="books_openlibrary_ia",
             source_id=key.rsplit("/", 1)[-1] if key else (title or "ol"),
             url=read_url,
@@ -198,7 +198,7 @@ class BooksOpenLibraryIAAdapter(BaseScrapeAdapter):
         )
 
     @staticmethod
-    def _ia_to_doc(rec: dict) -> Document:
+    def _ia_to_doc(rec: dict) -> PolarisDocument:
         ident = (rec.get("identifier") or "").strip()
         title = _first_str(rec.get("title")) or "(untitled)"
         read_url = f"{IA_DETAILS}/{ident}" if ident else IA_DETAILS
@@ -221,7 +221,7 @@ class BooksOpenLibraryIAAdapter(BaseScrapeAdapter):
         content_lines.append(f"Read full text: {read_url}")
         content = "\n\n".join(content_lines)
 
-        return Document(
+        return PolarisDocument(
             source="books_openlibrary_ia",
             source_id=ident or (title or "ia"),
             url=read_url,

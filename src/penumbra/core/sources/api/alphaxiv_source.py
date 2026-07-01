@@ -13,13 +13,13 @@ Rationale for minimal scope:
   (verified 2026-05-28: /sitemap.xml 404, /api/* 404, /feed 308 → 404,
   only /health and root respond unauthenticated)
 - The official programmatic channel is api.alphaxiv.org/mcp/v1 with
-  **OAuth 2.0 + SSE transport** — wrapping requires Penumbra to act
+  **OAuth 2.0 + SSE transport** — wrapping requires Polaris-eye to act
   as an OAuth client, store/refresh tokens, and bridge MCP-in-MCP. This
   is high implementation cost (~100+ tool calls), questionable architecture
   (nested MCP servers), and the *unique* value is community discussion
   which alphaXiv MCP also requires user auth to access.
 - Without community discussion access, alphaXiv ≈ arXiv mirror, and
-  Penumbra already has a solid arXiv adapter.
+  Polaris-eye already has a solid arXiv adapter.
 
 What this adapter DOES provide:
 - Recognize alphaxiv.org URLs (/abs/, /overview/, /paper/, /resources/)
@@ -48,7 +48,7 @@ from urllib.parse import urlparse
 
 import httpx
 
-from penumbra.core.normalize import Document
+from penumbra.core.normalize import PolarisDocument
 
 logger = logging.getLogger(__name__)
 
@@ -73,12 +73,12 @@ class AlphaXivAdapter:
         "full community / AI insights require OAuth MCP, not yet wrapped)"
     )
 
-    def search(self, query: str, limit: int = 10) -> list[Document]:
+    def search(self, query: str, limit: int = 10) -> list[PolarisDocument]:
         # AlphaXiv has no public search API; arXiv adapter covers paper search.
         # Returning [] is intentional — search_many() handles empty gracefully.
         return []
 
-    def fetch_url(self, url: str) -> Optional[Document]:
+    def fetch_url(self, url: str) -> Optional[PolarisDocument]:
         host = (urlparse(url).hostname or "").lower()
         if "alphaxiv.org" not in host:
             return None
@@ -124,7 +124,7 @@ class AlphaXivAdapter:
                 "https://api.alphaxiv.org/health",
                 timeout=10,
                 follow_redirects=True,
-                headers={"User-Agent": "penumbra/0.1"},
+                headers={"User-Agent": "polaris-eye/0.1"},
             )
             if resp.status_code == 200:
                 return True, (

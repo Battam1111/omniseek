@@ -2,7 +2,7 @@
 
 The World Bank open data API exposes thousands of indicators (GDP, unemployment,
 population, school enrollment, …) for every country as a clean time series, no
-auth and no key. Penumbra's macro-statistics STRUCTURE source: a structured
+auth and no key. Polaris-eye's macro-statistics STRUCTURE source: a structured
 point-lookup the open web can only narrate, not hand back as queryable data
 (one indicator's full year-by-year series for a country, as numbers).
 
@@ -36,7 +36,7 @@ fed to the headline signal.
 Recon trail: the v2 [meta, rows] envelope + per-row field names (indicator.value,
 country.value, countryiso3code, date, value) are the documented, long-stable
 shape of api.worldbank.org/v2; the Claude sandbox DNS-blackholes the host, so the
-field decode is written to that shape and live-verified from the host.
+field decode is written to that shape and live-verified from the eye host.
 
 Eurostat (the JSON-stat cube sibling) is intentionally NOT in this round: its
 response is a flat value map indexed by zipped size/dimension.category.index that
@@ -58,7 +58,7 @@ from datetime import datetime
 from typing import Any, Optional
 
 from penumbra.core import http
-from penumbra.core.normalize import Document, jsonsafe, mk_signal
+from penumbra.core.normalize import PolarisDocument, jsonsafe, mk_signal
 from penumbra.core.sources.api._base import BaseAPIAdapter
 
 API_URL = "https://api.worldbank.org/v2/country/{country}/indicator/{indicator}"
@@ -177,7 +177,7 @@ class WorldBankStatsAdapter(BaseAPIAdapter):
             return []
         return [(country, indicator, rows)]
 
-    def _to_document(self, raw) -> Optional[Document]:
+    def _to_document(self, raw) -> Optional[PolarisDocument]:
         """One aggregation unit (country, indicator, rows) -> one time-series doc."""
         if not isinstance(raw, tuple) or len(raw) != 3:
             return None
@@ -196,7 +196,7 @@ class WorldBankStatsAdapter(BaseAPIAdapter):
 
     @classmethod
     def _series_to_doc(cls, country: str, indicator: str,
-                       rows: list) -> Optional[Document]:
+                       rows: list) -> Optional[PolarisDocument]:
         """Build ONE doc for a country x indicator from its row list. Per-row
         decode is guarded so a single malformed row can't sink the series; an
         empty / all-malformed series returns None (no doc on nothing)."""
@@ -247,7 +247,7 @@ class WorldBankStatsAdapter(BaseAPIAdapter):
             v = series[y]
             lines.append(f"{y}: {cls._fmt_num(v)}" + (f" {unit}" if unit else ""))
 
-        return Document(
+        return PolarisDocument(
             source="worldbank_stats",
             source_id=f"{country}/{indicator}",
             url=PAGE_URL.format(indicator=indicator, country=country),

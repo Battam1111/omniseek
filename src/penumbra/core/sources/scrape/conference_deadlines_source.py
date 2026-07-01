@@ -31,13 +31,13 @@ import httpx
 import yaml
 
 from penumbra.core import cache
-from penumbra.core.normalize import Document, jsonsafe, keyword_score_filter
+from penumbra.core.normalize import PolarisDocument, jsonsafe, keyword_score_filter
 
 logger = logging.getLogger(__name__)
 
 YAML_URL = "https://ccfddl.github.io/conference/allconf.yml"
 TIMEOUT = 25
-USER_AGENT = "Mozilla/5.0 (compatible; Penumbra/0.1)"
+USER_AGENT = "Mozilla/5.0 (compatible; PolarisEye/0.1)"
 CACHE_TTL = 21600  # 6h — deadlines change infrequently
 
 # CCF sub-categories to include. 'AI' = all 55 core ML/AI/CV/NLP/robotics venues.
@@ -116,9 +116,9 @@ class ConferenceDeadlinesAdapter:
             return ed, dl, False
         return None
 
-    def search(self, query: str, limit: int = 10) -> list[Document]:
+    def search(self, query: str, limit: int = 10) -> list[PolarisDocument]:
         confs = self._fetch_confs()
-        docs: list[Document] = []
+        docs: list[PolarisDocument] = []
         for conf in confs:
             best = self._best_edition(conf)
             if not best:
@@ -137,7 +137,7 @@ class ConferenceDeadlinesAdapter:
         docs = keyword_score_filter(docs, query)
         return docs[:limit]
 
-    def fetch_url(self, url: str) -> Optional[Document]:
+    def fetch_url(self, url: str) -> Optional[PolarisDocument]:
         # Aggregator of conference deadlines — no per-URL resolution.
         return None
 
@@ -153,7 +153,7 @@ class ConferenceDeadlinesAdapter:
         return True, f"OK ({len(confs)} AI confs; {upcoming} with upcoming deadlines)"
 
     def _to_document(self, conf: dict, ed: dict, deadline: Optional[datetime],
-                     is_upcoming: bool) -> Optional[Document]:
+                     is_upcoming: bool) -> Optional[PolarisDocument]:
         title = conf.get("title") or "(conf)"
         year = ed.get("year")
         rank = conf.get("rank") or {}
@@ -202,7 +202,7 @@ class ConferenceDeadlinesAdapter:
         status = "upcoming" if is_upcoming else "past"
         title_str = f"{title} {year}" + (f" — deadline in {days_left}d" if days_left is not None else f" — {status}")
 
-        return Document(
+        return PolarisDocument(
             source="conference_deadlines",
             source_id=str(source_id),
             url=link or f"https://ccfddl.github.io/conference/{title.lower()}",

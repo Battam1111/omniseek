@@ -5,7 +5,7 @@
   "extra": "",
   "explicit_only": "fires a web-search query (engine quota)",
   "domains": ["insider", "career"],
-  "description": "Blind 在职员工匿名爆料 (经搜索索引, 非爬墙) — 按国籍的 EP/签证真实结果、firm 真实薪资、招聘冻结、内推渠道. 全 insider 层最高价值生信号. explicit_only; 查询里带 公司名 + EP/visa/offer/freeze/referral"
+  "description": "Blind 在职员工匿名爆料 (经搜索索引, 非爬墙) — 按国籍的 EP/签证真实结果、firm 真实薪资、招聘冻结、内推渠道. 全 insider 层最高价值生信号 (HK/中国护照 EP 可批性). explicit_only; 查询里带 公司名 + EP/visa/offer/freeze/referral"
  },
  {
   "name": "glassdoor",
@@ -30,7 +30,7 @@
   "explicit_only": "fires a web-search query (engine quota)",
   "domains": ["insider", "career"],
   "regions": ["cn", "sg"],
-  "description": "脉脉职言 经搜索索引 (仅 /article/detail 公开层, 评论登录墙不取) — CN-HQ 大厂(字节/Sea/Shopee)staffing SG/海外 的内幕: 内推/真实薪资/裁员风声/招聘冻结. CN 大厂海外 / SG staffing 内幕最佳. explicit_only"
+  "description": "脉脉职言 经搜索索引 (仅 /article/detail 公开层, 评论登录墙不取) — CN-HQ 大厂(字节/Sea/Shopee)staffing SG/海外 的内幕: 内推/真实薪资/裁员风声/招聘冻结. CN-HQ-SG 切片最佳. explicit_only"
  },
  {
   "name": "linkedin_posts",
@@ -38,7 +38,7 @@
   "extra": "hiring",
   "explicit_only": "fires a web-search query (engine quota)",
   "domains": ["career"],
-  "description": "LinkedIn 公开招聘帖 经搜索索引 (仅 Track A 公开 /posts; 人脉/档案/国籍属法务封死的 Track B, 不碰) — 具名 hiring manager 'we are hiring' = 最暖的当前招聘意图. explicit_only"
+  "description": "LinkedIn 公开招聘帖 经搜索索引 (仅 Track A 公开 /posts; 人脉/档案/国籍属法务封死的 Track B, 不碰) — 具名 hiring manager 'we are hiring' = 最暖的当前招聘意图 + 直接暖介绍目标. explicit_only"
  },
  {
   "name": "zhihu_search",

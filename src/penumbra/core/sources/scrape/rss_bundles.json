@@ -46,7 +46,7 @@
  },
  {
   "name": "academic_jobs",
-  "description": "Academic faculty / postdoc / staff scientist job RSS — Nature Careers per-country (Singapore / Canada / Hong Kong + UK / US / Australia backup).",
+  "description": "Academic faculty / postdoc / staff scientist job RSS — Nature Careers per-country (Singapore / Canada / Hong Kong + UK / US / Australia backup). HK PhD → overseas placement signal.",
   "feeds": [
    "https://www.nature.com/naturecareers/jobsrss/?countrycode=SG",
    "https://www.nature.com/naturecareers/jobsrss/?countrycode=CA",
@@ -119,7 +119,7 @@
  },
  {
   "name": "chinese_podcasts",
-  "description": "中文 AI / 科技 / PhD 方法论 播客 — 晚点 LateTalk / 硅谷101 / 时差 in-betweenness + 1 (张小珺/OnBoard!/42章经 等走 xiaoyuzhou 原生适配器, 无需 RSSHub; 口语内容配 penumbra_transcribe)",
+  "description": "中文 AI / 科技 / PhD 方法论 播客 — 晚点 LateTalk / 硅谷101 / 时差 in-betweenness + 1 (张小珺/OnBoard!/42章经 等走 xiaoyuzhou 原生适配器, 无需 RSSHub; 口语内容配 eye_transcribe)",
   "feeds": [
    "https://feeds.fireside.fm/latetalk/rss",
    "https://feeds.fireside.fm/sv101/rss",
@@ -137,7 +137,7 @@
   ],
   "cache_ttl": 86400,
   "url_pattern": "distill\\.pub",
-  "explicit_only": "archive: Distill.pub 2021 起无限期停更(自发 Distill Hiatus);命名 penumbra_fetch 取可解释性经典,不进广搜避免旧文混入近期论文检索"
+  "explicit_only": "archive: Distill.pub 2021 起无限期停更(自发 Distill Hiatus);命名 eye_fetch 取可解释性经典,不进广搜避免旧文混入近期论文检索"
  },
  {
   "name": "frontier_labs",
@@ -181,7 +181,7 @@
  },
  {
   "name": "hk_career_research",
-  "description": "Hong Kong AI / career / 媒体信号 — SCMP News + HKFP + ASTRI (R&D 院所) + info.gov.hk (SenseTime 经 scrape_js_sites). ",
+  "description": "Hong Kong AI / career / 媒体信号 — SCMP News + HKFP + ASTRI (R&D 院所) + info.gov.hk (SenseTime 经 scrape_js_sites). HK PhD 出海+本地路径专用",
   "feeds": [
    "https://www.scmp.com/rss/91/feed",
    "https://hongkongfp.com/feed/",
@@ -346,7 +346,7 @@
  },
  {
   "name": "vector_talent_hub",
-  "description": "Vector Institute Talent Hub — 加拿大顶尖 AI 研究所策展的 AI 职位板 (research + industry, 多伦多/加拿大). 加拿大 AI 职位主源; 与 overseas_ai_jobs(跨 lab ATS)/academic_jobs(Nature 教职) 互补",
+  "description": "Vector Institute Talent Hub — 加拿大顶尖 AI 研究所策展的 AI 职位板 (research + industry, 多伦多/加拿大). 落地加拿大主信号; 与 overseas_ai_jobs(跨 lab ATS)/academic_jobs(Nature 教职) 互补",
   "feeds": [
    "https://talenthub.vectorinstitute.ai/jobs/search.rss"
   ],
@@ -355,24 +355,24 @@
  },
  {
   "name": "higheredjobs_cs",
-  "description": "HigherEdJobs CS/IT — 美国/北美 高校 CS·ML 教职 + 博后 + 研究岗 RSS (category 102). 学术职位源, 补 academic_jobs(Nature Careers per-country)",
+  "description": "HigherEdJobs CS/IT — 美国/北美 高校 CS·ML 教职 + 博后 + 研究岗 RSS (category 102). 学术 track 落地板, 补 academic_jobs(Nature Careers per-country)",
   "feeds": [
    "https://www.higheredjobs.com/rss/categoryFeed.cfm?catID=102"
   ],
   "cache_ttl": 7200,
   "url_pattern": "higheredjobs\\.com",
-  "explicit_only": "US 高校 CS·ML 教职/博后 RSS (HigherEdJobs cat 102). JA3/TLS WAF (PerimeterX) 墙 httpx, 经 tls_impersonate (curl_cffi Chrome 指纹) 取真 feed. 命名 penumbra_fetch 用于学术 track. 2026-06-22 经 curl_cffi 复活 (此前因 JA3 墙退役)。",
+  "explicit_only": "US 高校 CS·ML 教职/博后 RSS (HigherEdJobs cat 102). JA3/TLS WAF (PerimeterX) 墙 httpx, 经 tls_impersonate (curl_cffi Chrome 指纹) 取真 feed. 命名 eye_fetch 用于学术 track. 2026-06-22 经 curl_cffi 复活 (此前因 JA3 墙退役)。",
   "tls_impersonate": true
  },
  {
   "name": "wikicfp_nlp",
-  "description": "WikiCFP 自然语言处理征稿发现 (cat=natural language processing) — NLP 方向会议/研讨会的征稿 (CFP) 条目: 会议名 + 地点 + 日期范围 + 事件页链接. 长尾 CFP 发现, 补 conference_deadlines/ml_conferences 的主榜. 注意: 截稿日不在 feed 里 (feed 只给会议日期), 真截稿需打开事件页看. 命名 penumbra_fetch.",
+  "description": "WikiCFP 自然语言处理征稿发现 (cat=natural language processing) — NLP 方向会议/研讨会的征稿 (CFP) 条目: 会议名 + 地点 + 日期范围 + 事件页链接. 长尾 CFP 发现, 补 conference_deadlines/ml_conferences 的主榜. 注意: 截稿日不在 feed 里 (feed 只给会议日期), 真截稿需打开事件页看. 命名 eye_fetch.",
   "feeds": [
    "http://www.wikicfp.com/cfp/rss?cat=natural+language+processing"
   ],
   "cache_ttl": 21600,
   "url_pattern": "wikicfp\\.com",
-  "explicit_only": "WikiCFP 长尾 CFP 发现 (NLP); 命名 penumbra_fetch 补会议征稿. http scheme (443 无 TLS)"
+  "explicit_only": "WikiCFP 长尾 CFP 发现 (NLP); 命名 eye_fetch 补会议征稿. http scheme (443 无 TLS)"
  },
  {
   "name": "jobrxiv_canada",
@@ -385,7 +385,7 @@
  },
  {
   "name": "rl_llm_frameworks",
-  "description": "RL-on-LLM 训练框架发布流 — OpenRLHF / verl(volcengine) / TRL(HuggingFace) / LLaMA-Factory. RL/reasoning 方向的工程交付层; github_releases(推理栈 vLLM/SGLang/...)未覆盖的训练框架补充",
+  "description": "RL-on-LLM 训练框架发布流 — OpenRLHF / verl(volcengine) / TRL(HuggingFace) / LLaMA-Factory. Captain 正方向(RL/reasoning)的工程交付层; github_releases(推理栈 vLLM/SGLang/...)未覆盖的训练框架补充",
   "feeds": [
    "https://github.com/OpenRLHF/OpenRLHF/releases.atom",
    "https://github.com/volcengine/verl/releases.atom",
@@ -397,7 +397,7 @@
  },
  {
   "name": "ml_cmu_blog",
-  "description": "ML@CMU 博客 — CMU 机器学习系学生/教师撰写的 RL/LLM/reasoning/agent 深读 (低传播、不会自己上 HN/Twitter 的高信号源). 补 academic_ai_labs(CRFM/BAIR/CSAIL)",
+  "description": "ML@CMU 博客 — CMU 机器学习系学生/教师撰写的 RL/LLM/reasoning/agent 深读 (低传播、不会自己上 HN/Twitter 的高信号源, 正方向). 补 academic_ai_labs(CRFM/BAIR/CSAIL)",
   "feeds": [
    "https://blog.ml.cmu.edu/feed/"
   ],

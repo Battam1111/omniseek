@@ -1,10 +1,10 @@
-"""Penumbra's perception-memory index (``recall``): makes the ENUMERABLE sources STATEFUL.
+"""The eye's perception-memory index (``recall``): makes the ENUMERABLE sources STATEFUL.
 
-Public surface for the rest of Penumbra. See ``store`` (read/schema) and ``writer`` (write/ingest).
+Public surface for the rest of the eye. See ``store`` (read/schema) and ``writer`` (write/ingest).
 
-Penumbra stays a perception layer —
+Design of record: [[eye-recall-index-blueprint-2026-06-14]]. The eye stays a perception organ —
 this sub-layer stores + retrieves + scores MECHANICALLY (FTS5 recall feeds the unchanged
-``rank.merge_rank``); it never judges. It is a retrieval sub-layer, not a separate subsystem.
+``rank.merge_rank``); it never judges. It is an EYE sub-layer, not a 4th organ.
 """
 
 from __future__ import annotations

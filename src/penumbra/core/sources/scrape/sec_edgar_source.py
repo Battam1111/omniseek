@@ -3,7 +3,7 @@
 The U.S. SEC's EDGAR system holds every public-company filing: 10-K / 10-Q annual and
 quarterly reports, 8-K material events, DEF 14A proxy statements (the canonical source
 for executive compensation), S-1 registrations, 6-K foreign reports, and the rest. The
-full-text search backend indexes the body text of filings since 2001, so Penumbra can find
+full-text search backend indexes the body text of filings since 2001, so the eye can find
 WHICH companies disclosed a given term (a risk factor, a product, a person, a phrase) and
 hand back the specific filing.
 
@@ -12,7 +12,7 @@ Access via the keyless EDGAR full-text search backend (the JSON API behind efts.
     GET https://efts.sec.gov/LATEST/search-index?q=<query>
 
 SEC REQUIRES a descriptive User-Agent identifying the requester, or it returns 403. We send
-one explicitly via the shared http helper's ``headers=`` pass-through (the default Penumbra
+one explicitly via the shared http helper's ``headers=`` pass-through (the default PolarisEye
 UA is fine for most sources, but SEC wants a contact, so we override it here).
 
 Response shape (verified live 2026-06-17): ``{"hits": {"total": {...}, "hits": [<hit>, ...]}}``
@@ -46,7 +46,7 @@ from datetime import datetime
 from typing import Any, Optional
 
 from penumbra.core import auth, http
-from penumbra.core.normalize import Document, jsonsafe, mk_signal
+from penumbra.core.normalize import PolarisDocument, jsonsafe, mk_signal
 from penumbra.core.sources.scrape._base import BaseScrapeAdapter
 
 logger = logging.getLogger(__name__)
@@ -56,7 +56,7 @@ API_URL = "https://efts.sec.gov/LATEST/search-index"
 # User-Agent the endpoint 403s (see module docstring). The shared http helper merges this
 # over its default UA via the headers= pass-through. Contact is host-injected, never a
 # hardcoded personal address (see auth.contact_email).
-SEC_UA = f"penumbra research {auth.contact_email()}"
+SEC_UA = f"polaris-eye research {auth.contact_email()}"
 TIMEOUT = 15
 
 # A display_name looks like "USA TRUCK INC  (CIK 0000883945)" or
@@ -86,7 +86,7 @@ class SECEdgarAdapter(BaseScrapeAdapter):
             timeout=TIMEOUT,
         )
 
-    def _to_documents(self, raw: Any, query: str, limit: int) -> list[Document]:
+    def _to_documents(self, raw: Any, query: str, limit: int) -> list[PolarisDocument]:
         if not isinstance(raw, dict):
             return []
         hits = (raw.get("hits") or {}).get("hits") or []
@@ -102,7 +102,7 @@ class SECEdgarAdapter(BaseScrapeAdapter):
         # file_date first, undated hits last, ties keep the backend's relevance order
         # (Python's sort is stable). Same recency-bias shape as the zenodo fix.
         hits = _sort_by_recency(hits)
-        docs: list[Document] = []
+        docs: list[PolarisDocument] = []
         for hit in hits[:limit]:
             try:
                 doc = self._hit_to_document(hit)
@@ -113,7 +113,7 @@ class SECEdgarAdapter(BaseScrapeAdapter):
                 docs.append(doc)
         return docs
 
-    def _hit_to_document(self, hit: dict) -> Optional[Document]:
+    def _hit_to_document(self, hit: dict) -> Optional[PolarisDocument]:
         if not isinstance(hit, dict):
             return None
         src = hit.get("_source") or {}
@@ -180,7 +180,7 @@ class SECEdgarAdapter(BaseScrapeAdapter):
             kind="other", by="sec_edgar/_score",
         )
 
-        return Document(
+        return PolarisDocument(
             source=self.name,
             source_id=hit_id or adsh or (cik or title),
             url=url,

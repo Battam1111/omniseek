@@ -5,14 +5,14 @@ WHY (STRUCTURE + UNWALL + MONITOR): sousuo.www.gov.cn's 政策库 is the AUTHORI
 vehicle (国发/国办发/国令) / theme. Google indexes individual gov.cn pages but cannot return a
 faceted, structured policy index keyed to 文号 + issuing-org + publish-date. No login, no token
 (verified 2026-06-18: q=数据安全 → 《网络数据安全管理条例》国令第790号 国务院 + the gov.cn 原文 url).
-Each hit's url is the full policy text on gov.cn → penumbra_add_url it for the body. Strongest telos
+Each hit's url is the full policy text on gov.cn → eye_add_url it for the body. Strongest telos
 fit for Chinese-policy 信息差 / policy-trend (RECALL) work.
 
 SHAPE: a JSON GET endpoint (BaseScrapeAdapter, bespoke curl_cffi). search(query) → the 国务院
 policy library (t=zhengcelibrary_gw). Other libraries (部门文件 zhengcelibrary_bm, 地方 etc.) are
 a future facet via the `t` param.
 
-
+Recon trail: brain note eye-recon-gov_policy.
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ from datetime import datetime, timezone
 from typing import Optional
 from urllib.parse import quote
 
-from penumbra.core.normalize import Document
+from penumbra.core.normalize import PolarisDocument
 from penumbra.core.sources.scrape._base import BaseScrapeAdapter
 
 logger = logging.getLogger(__name__)
@@ -50,8 +50,8 @@ def _list_of(j: dict) -> list:
             or ((j.get("data") or {}).get("searchVO") or {}).get("listVO") or [])
 
 
-def _doc_from_policy(it: dict) -> Optional[Document]:
-    """One gov.cn policy-library item → Document (pure fn → golden-fixture testable)."""
+def _doc_from_policy(it: dict) -> Optional[PolarisDocument]:
+    """One gov.cn policy-library item → PolarisDocument (pure fn → golden-fixture testable)."""
     title = _strip_em(it.get("title"))
     url = it.get("url")
     if not title or not url:
@@ -65,7 +65,7 @@ def _doc_from_policy(it: dict) -> Optional[Document]:
             date = None
     wenhao = _strip_em(it.get("wenhao")) or _strip_em(it.get("pcode")) or _strip_em(it.get("fwzh")) or None
     puborg = _strip_em(it.get("puborg")) or None
-    return Document(
+    return PolarisDocument(
         source="gov_policy",
         source_id=str(it.get("code") or it.get("id") or url),
         url=url,
@@ -83,7 +83,7 @@ class GovPolicyAdapter(BaseScrapeAdapter):
     name = "gov_policy"
     description = (
         "中国政府网 政策文件库 (gov.cn) — the AUTHORITATIVE 国务院/国办 policy-document corpus (法规/条例/"
-        "通知/国令), keyword search with each hit linking the FULL policy text on gov.cn (penumbra_add_url it). "
+        "通知/国令), keyword search with each hit linking the FULL policy text on gov.cn (eye_add_url it). "
         "Google can't return this faceted policy index keyed to 文号 + issuing-org + date. No login. Reach "
         "for Chinese central-government policy / 政策 on a topic (incl. policy-trend / longitudinal work)."
     )
@@ -108,7 +108,7 @@ class GovPolicyAdapter(BaseScrapeAdapter):
             logger.warning("gov_policy fetch failed: %s", exc)
             return None
 
-    def _to_documents(self, raw, query, limit) -> list[Document]:
+    def _to_documents(self, raw, query, limit) -> list[PolarisDocument]:
         return [d for it in raw[:limit] if (d := _doc_from_policy(it))]
 
     def health_check(self) -> tuple[bool, str]:

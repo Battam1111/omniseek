@@ -33,7 +33,7 @@ from urllib.parse import urlparse
 import httpx
 
 from penumbra.core import auth
-from penumbra.core.normalize import Document, jsonsafe
+from penumbra.core.normalize import PolarisDocument, jsonsafe
 from penumbra.core.sources.scrape._base import BaseScrapeAdapter
 
 logger = logging.getLogger(__name__)
@@ -99,8 +99,8 @@ class MLRCAdapter(BaseScrapeAdapter):
             return None
         return data["notes"]
 
-    def _to_documents(self, raw: Any, query: str, limit: int) -> list[Document]:
-        docs: list[Document] = []
+    def _to_documents(self, raw: Any, query: str, limit: int) -> list[PolarisDocument]:
+        docs: list[PolarisDocument] = []
         for note in raw:
             # Filter to trusted venues by invitation OR venue text
             invitations = note.get("invitations") or []
@@ -129,7 +129,7 @@ class MLRCAdapter(BaseScrapeAdapter):
         return docs
 
     # --------------------------------------------------------------- fetch_url
-    def fetch_url(self, url: str) -> Optional[Document]:
+    def fetch_url(self, url: str) -> Optional[PolarisDocument]:
         host = urlparse(url).hostname or ""
         if "openreview.net" not in host:
             return None
@@ -156,7 +156,7 @@ class MLRCAdapter(BaseScrapeAdapter):
         return True, f"OK ({hits} hits on probe)"
 
     @staticmethod
-    def _note_to_document(note: dict) -> Document:
+    def _note_to_document(note: dict) -> PolarisDocument:
         content = note.get("content") or {}
 
         def _val(field):
@@ -183,7 +183,7 @@ class MLRCAdapter(BaseScrapeAdapter):
         venue = _val("venue") or ""
         invitations = note.get("invitations") or []
 
-        return Document(
+        return PolarisDocument(
             source="mlrc",
             source_id=note.get("id", ""),
             url=f"https://openreview.net/forum?id={note.get('id', '')}",

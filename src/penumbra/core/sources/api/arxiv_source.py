@@ -1,7 +1,7 @@
 """arXiv adapter — queries the arXiv Atom API directly through the shared http helpers.
 
 arXiv has a free public API (``export.arxiv.org/api/query``) with no auth. We hit it via
-``penumbra.core.http`` (shared UA / timeout / 30MB size-cap / streaming) and parse the Atom feed with
+``eye.http`` (shared UA / timeout / 30MB size-cap / streaming) and parse the Atom feed with
 ``feedparser`` — the SAME parser the official ``arxiv`` package uses internally, so the
 field mapping is well-understood.
 
@@ -35,7 +35,7 @@ import feedparser
 import httpx
 
 from penumbra.core import http
-from penumbra.core.normalize import Document
+from penumbra.core.normalize import PolarisDocument
 from penumbra.core.sources.api._base import BaseAPIAdapter
 
 logger = logging.getLogger(__name__)
@@ -82,11 +82,11 @@ class ArxivAdapter(BaseAPIAdapter):
         feed = feedparser.parse(xml)
         return feed.entries
 
-    def _to_document(self, raw) -> Document:
+    def _to_document(self, raw) -> PolarisDocument:
         return self._entry_to_document(raw)
 
     # --------------------------------------------------------------- fetch_url
-    def fetch_url(self, url: str) -> Optional[Document]:
+    def fetch_url(self, url: str) -> Optional[PolarisDocument]:
         # arXiv URLs: arxiv.org/abs/XXXX.YYYYY or arxiv.org/pdf/XXXX.YYYYY
         host = urlparse(url).hostname or ""
         if "arxiv.org" not in host:
@@ -136,7 +136,7 @@ class ArxivAdapter(BaseAPIAdapter):
             return None
 
     @staticmethod
-    def _entry_to_document(e) -> Document:
+    def _entry_to_document(e) -> PolarisDocument:
         entry_id = e.get("id", "") or ""
         arxiv_id = entry_id.rsplit("/", 1)[-1]
         authors = [a.get("name", "").strip() for a in (e.get("authors") or []) if a.get("name")]
@@ -149,7 +149,7 @@ class ArxivAdapter(BaseAPIAdapter):
         )
         title = (e.get("title") or "").strip().replace("\n", " ")
         summary = (e.get("summary") or "").strip()
-        return Document(
+        return PolarisDocument(
             source="arxiv",
             source_id=arxiv_id,
             url=entry_id,

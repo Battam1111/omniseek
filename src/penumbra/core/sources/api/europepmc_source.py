@@ -3,8 +3,8 @@
 Europe PMC (https://europepmc.org) is EMBL-EBI's index of the biomedical and life
 sciences literature: ~40M abstracts plus a large open-access full-text corpus
 (PMC articles, Agricola, preprint servers, patents, theses). Its public REST API
-is fully keyless. Penumbra's biomedical STRUCTURE source — and, via the
-fullTextXML endpoint, Penumbra's SECOND keyless full-text spine alongside CORE
+is fully keyless. Polaris-eye's biomedical STRUCTURE source — and, via the
+fullTextXML endpoint, the eye's SECOND keyless full-text spine alongside CORE
 (core.ac.uk needs a registered key; Europe PMC's OA full text needs none).
 
 Access via the public REST API (no auth, no key):
@@ -35,7 +35,7 @@ pull PubMed-flavoured hits into a general ML retrieval.
 
 Recon trail: field names from the live Europe PMC REST docs + a probe of the
 search + fullTextXML endpoints (the Claude sandbox DNS-blackholes www.ebi.ac.uk;
-Penumbra host live-verifies post-deploy).
+the eye host live-verifies post-deploy).
 """
 
 from __future__ import annotations
@@ -45,7 +45,7 @@ from datetime import datetime
 from typing import Any, Optional
 
 from penumbra.core import http
-from penumbra.core.normalize import Document, jsonsafe, mk_signal
+from penumbra.core.normalize import PolarisDocument, jsonsafe, mk_signal
 from penumbra.core.sources.scrape._base import BaseScrapeAdapter
 
 SEARCH_URL = "https://www.ebi.ac.uk/europepmc/webservices/rest/search"
@@ -60,7 +60,7 @@ ARTICLE_URL = "https://europepmc.org/article/{source}/{id}"
 # a few small follow-ups, not N slow ones against the shared EBI host.
 _MAX_FULLTEXT = 3
 # Cap the inlined full-text body so one large article cannot dominate the payload;
-# the agent can penumbra_add_url the article for the whole thing. (The true length is
+# the agent can eye_add_url the article for the whole thing. (The true length is
 # implicit in the content itself; this is a defensive ceiling, not a truncation flag.)
 _BODY_CAP = 20000
 
@@ -70,7 +70,7 @@ class EuropePMCAdapter(BaseScrapeAdapter):
     needs_credentials = False
     description = ("Europe PMC — keyless biomedical / life-sciences literature "
                    "(abstracts + citations + open-access JATS full text); name it to "
-                   "drill a clinical / biomedical question. Penumbra's SECOND keyless "
+                   "drill a clinical / biomedical question. The eye's SECOND keyless "
                    "full-text spine (CORE needs a key, this does not). STRUCTURE, "
                    "keyless www.ebi.ac.uk.")
     cache_ttl = 3600  # literature metadata changes slowly
@@ -94,11 +94,11 @@ class EuropePMCAdapter(BaseScrapeAdapter):
             timeout=20,
         )
 
-    def _to_documents(self, raw: Any, query: str, limit: int) -> list[Document]:
+    def _to_documents(self, raw: Any, query: str, limit: int) -> list[PolarisDocument]:
         if not isinstance(raw, dict):
             return []
         results = ((raw.get("resultList") or {}).get("result")) or []
-        docs: list[Document] = []
+        docs: list[PolarisDocument] = []
         fulltext_budget = _MAX_FULLTEXT
         for result in results[:limit]:
             doc = self._result_to_doc(result)
@@ -114,8 +114,8 @@ class EuropePMCAdapter(BaseScrapeAdapter):
         return docs
 
     # ---------------------------------------------------------------- doc builder
-    def _result_to_doc(self, result: Any) -> Optional[Document]:
-        """One search result -> a Document (or None to drop a junk row).
+    def _result_to_doc(self, result: Any) -> Optional[PolarisDocument]:
+        """One search result -> a PolarisDocument (or None to drop a junk row).
 
         Pure: builds the doc from the search payload alone (no network). The OA
         full-text body is grafted on separately by _maybe_fulltext."""
@@ -149,7 +149,7 @@ class EuropePMCAdapter(BaseScrapeAdapter):
         author = (result.get("authorString") or "").strip() or None
         date = self._parse_date(result.get("firstPublicationDate"), result.get("pubYear"))
 
-        return Document(
+        return PolarisDocument(
             source=self.name,
             source_id=source_id,
             url=url,
@@ -189,7 +189,7 @@ class EuropePMCAdapter(BaseScrapeAdapter):
             and bool(result.get("source"))
         )
 
-    def _maybe_fulltext(self, doc: Document, result: dict) -> bool:
+    def _maybe_fulltext(self, doc: PolarisDocument, result: dict) -> bool:
         """Fetch the JATS full text for an eligible OA article and graft the stripped
         body into ``doc.content``. Returns True iff a non-empty body was grafted (so the
         caller can spend its fan-out budget on real hits only). Any failure -> False and

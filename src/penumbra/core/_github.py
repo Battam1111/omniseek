@@ -1,6 +1,6 @@
 """Shared GitHub plumbing: one keyed client, one pacer, one breaker, one health probe.
 
-Three adapters egress to api.github.com: github (code/issues/discussions + tree
+Three eye adapters egress to api.github.com: github (code/issues/discussions + tree
 browse), github_trending (repo discovery by stars) and, by URL, both. Before this
 module each carried its own bare ``http.get_json`` call, and github_trending sent NO
 token at all (stuck on the unauth ~10/min Search ceiling + 60/hr core) while sitting
@@ -40,9 +40,9 @@ logger = logging.getLogger(__name__)
 
 BASE = "https://api.github.com"
 _BASE_HOST = "api.github.com"
-USER_AGENT = "penumbra/0.1 (automated retrieval)"
+USER_AGENT = "polaris-eye/0.1 (automated retrieval)"
 TIMEOUT = 20
-CRED = Path.home() / ".penumbra" / "credentials" / "github.json"
+CRED = Path.home() / ".polaris" / "credentials" / "github.json"
 
 _BREAK_AFTER = 5      # consecutive failures that open the circuit
 _BREAK_FOR_S = 120.0  # seconds the circuit stays open
@@ -51,7 +51,7 @@ _lock = threading.Lock()
 
 # GitHub's Search API is the binding constraint: 30 req/min AUTHENTICATED (10/min unauth),
 # far stricter than the 5000/hr (~83/min) core bucket, and a 403 secondary-rate limit triggers
-# on concurrency. Penumbra egresses ALL GitHub traffic from one host IP across three sources
+# on concurrency. The eye egresses ALL GitHub traffic from one host IP across three sources
 # (github + github_trending in the broad fan-out + by-URL fetch); a workflow's fan-out can spike
 # the Search rate and 429 the shared token, which then trips the breaker below and degrades every
 # GitHub-backed source at once. _load_token authenticates every request (get_json injects the
@@ -71,7 +71,7 @@ _pace_lock = threading.Lock()
 
 
 def _load_token() -> Optional[str]:
-    """The GitHub token from ~/.penumbra/credentials/github.json (``{"token": "..."}``).
+    """The GitHub token from ~/.polaris/credentials/github.json (``{"token": "..."}``).
 
     Classic OR fine-grained PAT (both accept ``Authorization: Bearer``). None when the
     file is absent / unreadable, so the Authorization injection is a no-op and behavior
@@ -85,7 +85,7 @@ def _load_token() -> Optional[str]:
 
 # Loaded once at import (mirrors _openalex's keyed-client pattern): None when no key file
 # exists, so the Authorization injection is a no-op and behavior is unchanged until
-# ~/.penumbra/credentials/github.json is dropped on the host.
+# ~/.polaris/credentials/github.json is dropped on the host.
 _token = _load_token()
 
 # Pooled client: reuse one keep-alive connection to api.github.com across the three GitHub-backed

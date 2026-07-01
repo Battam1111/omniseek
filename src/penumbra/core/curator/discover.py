@@ -8,7 +8,7 @@ the AGENT judges. THE RAZOR holds here as hard as anywhere:
 
   - It emits NO key in evidence.BANNED_KEYS at any depth and NO verdict/score/rank-of-worthiness.
   - It returns ``[]`` when ``policy['enabled']`` is false (scaffold mode: near-idle).
-  - It imports NO verdict-writer (penumbra_curator_decide / candidates.record_verdict /
+  - It imports NO verdict-writer (eye_curator_decide / candidates.record_verdict /
     source_audit.record_source_verdict / candidates.record_applied), NO model/anthropic client,
     NO WebSearch, NO profile.* / relevance / employer_hits. (Smoke 9.1 greps for this.)
   - Trust-inheritance is a RELEVANCE heuristic, NEVER a safety control (Attack-2): the only

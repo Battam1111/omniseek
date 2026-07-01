@@ -1,7 +1,7 @@
 """Relationship reconstruction — typed, public-artifact-backed EDGE FACTS. No judgment.
 
 A connection between two people is not a scalar; it is a typed, directed, weighted,
-time-stamped, evidence-backed edge, and co-authorship is only ONE type. Penumbra
+time-stamped, evidence-backed edge, and co-authorship is only ONE type. The eye
 supplies the mechanical edge FACTS per layer; the AGENT overlays the layers and
 decides what a connection MEANS (advisor vs peer, real tie vs list-mate). This
 module is the channel; the agent is the network cartographer (same split as
@@ -27,11 +27,11 @@ THE THREE CLEAN-STRUCTURED LAYERS BUILT HERE (mechanical, keyless, read-only):
 Fuzzy / behavioral layers (media co-mention, social proximity, business ties,
 advisor-as-meaning, academic siblings, code collaboration) are deliberately NOT
 primitives — there the "edge" is a judgment, so the agent assembles them from a
-dossier + existing Penumbra tools (field_skeleton, github, bluesky, exa, cdp_fulltext,
-penumbra_add_url). See the capability doc.
+dossier + existing eye tools (field_skeleton, github, bluesky, exa, cdp_fulltext,
+eye_add_url). See the capability doc.
 
 Read-only over public scholarly data (OpenAlex / Semantic Scholar), the same
-standard bibliometric substrate the rest of Penumbra already maps (field_skeleton,
+standard bibliometric substrate the rest of the eye already maps (field_skeleton,
 researcher_watch, csrankings, org_watch).
 """
 
@@ -75,8 +75,8 @@ def _name_tokens(name: str) -> set[str]:
 
 def _name_matches(query: str, candidate: str) -> bool:
     """True iff every significant query token appears in the candidate name (set
-    subset, order-independent). '{wei,zhang} <= {wei,jun,zhang}' accepts
-    'Wei Jun Zhang'; '{ming,lin}' rejects 'Ming-Hao Wu'."""
+    subset, order-independent). '{wenjie,li} <= {maggie,wenjie,li}' accepts the
+    advisor 'Maggie Wenjie Li'; '{zhennan,shen}' rejects 'Zhi-Qiang Shen'."""
     q = _name_tokens(query)
     return bool(q) and q <= _name_tokens(candidate)
 
@@ -193,7 +193,7 @@ def _likely_same_person(candidates: list[dict]) -> list[dict]:
             "ids": ids,
             "name": members[0].get("name"),
             "merge_token": _id_merge_token(ids),
-            "note": "same name, same backend → consider +-merging into one penumbra_coauthors input",
+            "note": "same name, same backend → consider +-merging into one eye_coauthors input",
         })
     return out
 
@@ -309,7 +309,7 @@ def _looks_like_id(s: str) -> Optional[str]:
 
 def _oa_author_works(author_id: str, fresh: bool = False) -> list[dict]:
     # Cache the heavy per-author OpenAlex pull (up to _MAX_WORKS works) keyed by the author id, so a
-    # repeated penumbra_coauthors over the same people reads disk instead of re-spending the shared key. The
+    # repeated eye_coauthors over the same people reads disk instead of re-spending the shared key. The
     # normalized work shape below is what gets cached, identical on a hit. (mirrors researcher_watch's
     # _fetch_pi_works + cartographer's fresh-bypass idiom.)
     key = cache.make_key("relations", "works", "openalex", author_id)
@@ -341,7 +341,7 @@ def _s2_author_works(author_id: str, cap: int = _MAX_WORKS, fresh: bool = False)
     """S2 author's papers as the SAME normalized shape. S2 consolidates a junior's
     profile far better than OpenAlex (which splits arXiv-recent papers across ids), so
     this is the right backend for junior / arXiv-frontier co-authorship edges. Uses the
-    Penumbra's S2 API key (not the rate-limited keyless tier)."""
+    eye's S2 API key (not the rate-limited keyless tier)."""
     # Same cache as the OpenAlex path: a repeated S2 co-authorship pull reads disk, not the metered S2
     # key. The cap is part of the key so a wider re-request (more works) is a distinct entry, never a
     # silently-truncated hit. (mirrors researcher_watch's _fetch_pi_works + cartographer's fresh bypass.)
@@ -475,7 +475,7 @@ def coauthors(authors: list[str], source: str = "openalex", hints: Optional[list
 
     # per-node neighborhood, keyed by NAME (collapse split author ids; count = papers shared).
     # rep_idc keeps a representative id per name so the agent can DRILL a coauthor (harvest an
-    # id straight from the neighborhood, then penumbra_coauthors([id])) without re-resolving a
+    # id straight from the neighborhood, then eye_coauthors([id])) without re-resolving a
     # common name — the 'anchor + harvest' technique the handbook documents.
     rep: dict[str, str] = {}
     rep_idc: dict[str, Counter] = {}
@@ -514,7 +514,7 @@ def coauthors(authors: list[str], source: str = "openalex", hints: Optional[list
         # joint = 1/n-weighted collaboration strength (the RANK); papers = raw count of shared works.
         # joint = 1/n-author-weighted collaboration strength (the RANK); papers = raw count of
         # shared works. The two together let the reader SEE a big-list-paper artifact (high papers,
-        # low joint) and judge it, so Penumbra reports the facts and does not editorialize.
+        # low joint) and judge it, so the eye reports the facts and does not editorialize.
         n["top_coauthors"] = [{"id": rep_idc[k].most_common(1)[0][0], "name": rep[k], "joint": round(ct, 2), "papers": cp[k]}
                               for k, ct in c.most_common(12)]
         neigh.append(c)
@@ -584,14 +584,14 @@ def institution_cohort(institution: str, concept: str = "", year_from: Optional[
                        limit: int = 40, fresh: bool = False) -> dict:
     """Who actively publishes at an institution (a lab/dept/university), optionally within a
     FIELD and since a year. The organizational network — orthogonal to co-authorship
-    ('same lab, never co-authored' is still a tie, and a lab's roster is the
+    ('same lab, never co-authored' is still a tie, and a lab's roster is the SG/Canada
     cohort question). Counts a person by their works AT this institution IN this field
     (so juniors with a few papers surface, unlike a total-output sort).
 
     WITHOUT a concept this is every field at the institution (very broad). Pass
     concept='natural language processing' / 'machine learning' / 'reinforcement learning'
     to scope to a cohort. ``year_from`` (e.g. 2022) biases toward the CURRENT cohort. The
-    roster is a starting point the agent drills (penumbra_coauthors / homepages), not a verified
+    roster is a starting point the agent drills (eye_coauthors / homepages), not a verified
     lab-member list — OpenAlex has no 'PhD student' flag.
 
     fresh=True bypasses the cache (the same fresh idiom cartographer/field_skeleton uses).

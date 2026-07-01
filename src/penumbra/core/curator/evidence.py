@@ -6,7 +6,7 @@ judging agent reads. It emits NO key in the banned verdict set at ANY depth, AND
 of judge_instructions/note/reason contains a verdict token. The DECISION POSTURE lives in
 admission_policy.json (operator data), surfaced as ``policy_posture``: never a code literal.
 
-Penumbra assembles facts; the agent renders the verdict. ``evidence_complete`` is a FACT (all
+The eye assembles facts; the agent renders the verdict. ``evidence_complete`` is a FACT (all
 stages reached, no errors), NOT a recommendation.
 """
 
@@ -60,12 +60,12 @@ def _now_iso() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
 
-def _git_sha() -> Optional[str]:
+def _eye_git_sha() -> Optional[str]:
     """Best-effort: read a deploy-written sha file if present, else None (weaker audit trail  
     flagged as an open risk, non-blocking)."""
     try:
         from pathlib import Path
-        p = Path.home() / ".penumbra" / "state" / "penumbra_git_sha.txt"
+        p = Path.home() / ".polaris" / "state" / "penumbra_git_sha.txt"
         if p.exists():
             return p.read_text(encoding="utf-8").strip()[:64] or None
     except Exception:  # noqa: BLE001
@@ -228,7 +228,7 @@ def _family_dryrun(family: str, row: Optional[dict]) -> str:
 
 def build_packet(candidate_id: str) -> dict:
     """Assemble the neutral evidence packet for a candidate. Pure facts; NO verdict key/value.
-    Stages that need fetching read the candidate's cached probe output (set by penumbra_curator_probe
+    Stages that need fetching read the candidate's cached probe output (set by eye_curator_probe
     via candidate['_probe_cache']); when absent, those stages report empties + an error fact."""
     cand = _cand.get(candidate_id)
     if cand is None:
@@ -342,7 +342,7 @@ def build_packet_for(cand: dict) -> dict:
         "policy_posture": _apply.default_posture(),  # operator DATA, NOT a code literal
         "provenance": {
             "generated_at": _now_iso(),
-            "penumbra_git_sha": _git_sha(),
+            "penumbra_git_sha": _eye_git_sha(),
             "probe_fetch_meta": [fetch_meta] if fetch_meta else [],
         },
         "judge_instructions": _JUDGE_INSTRUCTIONS,

@@ -3,7 +3,7 @@
 OpenAlex backs 40+ named sources (openalex, researcher_watch, every org_watch
 row) plus the cartographer. Before this module, three source files each carried
 their own copy of the HTTP call, the inverted-index abstract reconstruction and
-the work-to-fields parsing; and a dead upstream degraded a third of Penumbra with
+the work-to-fields parsing; and a dead upstream degraded a third of the eye with
 no shared protection. Here:
 
   get_json()             keyed client (api_key → the raised per-key credit budget),
@@ -35,7 +35,7 @@ logger = logging.getLogger(__name__)
 BASE = "https://api.openalex.org"
 _BASE_HOST = "api.openalex.org"
 # Contact is host-injected, never a hardcoded personal address (see auth.contact_email).
-USER_AGENT = f"penumbra/0.1 (mailto:{auth.contact_email()}; automated retrieval)"
+USER_AGENT = f"polaris-eye/0.1 (mailto:{auth.contact_email()}; automated retrieval)"
 TIMEOUT = 20
 
 _BREAK_AFTER = 5      # consecutive failures that open the circuit
@@ -50,8 +50,8 @@ _lock = threading.Lock()
 # OpenAlex's 2026 credit model (verified 2026-06-17 from the live 429 body + rate headers): every
 # call costs $0.0001 and each IDENTITY gets a $1/day budget = 10,000 calls/day, resetting at midnight
 # UTC. CRUCIALLY the api_key and the anonymous per-IP path are SEPARATE buckets, each $1/day (an
-# api_key does NOT raise the allotment, contra the old belief) -- so Penumbra's one host has TWO free
-# daily budgets. Penumbra egresses ALL OpenAlex traffic across 40+ sources (researcher_watch + 39
+# api_key does NOT raise the allotment, contra the old belief) -- so the eye's one host has TWO free
+# daily budgets. The eye egresses ALL OpenAlex traffic across 40+ sources (researcher_watch + 39
 # org_watch + openalex + cartographer/field_skeleton + relations) from that host, and an active day's
 # legitimate fan-out (a single field_skeleton is 100+ calls) exhausts one $1 bucket. get_json
 # therefore uses BOTH buckets: the api_key bucket first, spilling to the anonymous per-IP bucket on a
@@ -71,7 +71,7 @@ _MIN_INTERVAL_S = 0.2
 # Hard cap on how long ONE caller may wait on the rate gate. Without it, an OA 429 / budget-exhaustion
 # storm (40+ OA sources fanning out, each retry re-reserving a slot) grows the backlog unboundedly and
 # a fresh caller inherits the WHOLE queue — the same unbounded-pace-wait bug that made an S2
-# field_skeleton sit 886s on its gate. Past this, fail fast
+# field_skeleton sit 886s on its gate (brain: eye-s2-rate-gate-hang-2026-06-21). Past this, fail fast
 # (raise OpenAlexDown → caller degrades to cache/empty) instead of hanging for minutes.
 _PACE_MAX_WAIT_S = 15.0
 _pace_state = {"next_at": 0.0}
@@ -87,7 +87,7 @@ def _load_api_key() -> Optional[str]:
 
 
 # Loaded once at import (mirrors _s2's keyed-client pattern): None when no key file exists, so
-# get_json's injection is a no-op and behavior is unchanged until ~/.penumbra/credentials/openalex.json
+# get_json's injection is a no-op and behavior is unchanged until ~/.polaris/credentials/openalex.json
 # is dropped on the host. Committing the code before the key exists is therefore safe.
 _api_key = _load_api_key()
 
@@ -201,17 +201,17 @@ def _is_budget_429(resp) -> bool:
 
 
 # --- per-caller OpenAlex usage attribution (lightweight: surface a hidden over-consumer) ---------
-# Every budget-spending success is tallied by Penumbra component that drove it (cartographer /
+# Every budget-spending success is tallied by the eye component that drove it (cartographer /
 # relations / org_watch / the openalex search source / researcher_watch / enrich), with the live
 # per-bucket remaining. In-memory (resets on restart; `window_hours` reports the span). Exposed via
-# penumbra_health_check so any day's OpenAlex breakdown is INSPECTABLE, not inferred.
+# eye_health_check so any day's OpenAlex breakdown is INSPECTABLE, not inferred.
 _usage_lock = threading.Lock()
 _usage: dict = {"since": None, "by_caller": {}, "spilled_to_anon": 0,
                 "remaining": {"keyed": None, "anon": None}}
 
 
 def _caller_tag() -> str:
-    """The nearest stack frame OUTSIDE this module = Penumbra component that drove the call."""
+    """The nearest stack frame OUTSIDE this module = the eye component that drove the call."""
     import sys
     f = sys._getframe(2)  # 0=_caller_tag, 1=get_json, 2=the immediate caller
     for _ in range(15):
@@ -248,7 +248,7 @@ def _record_ok(caller: str, bucket: str) -> None:
 
 
 def usage_stats() -> dict:
-    """Snapshot of OpenAlex usage by caller since process start (surfaced by penumbra_health_check)."""
+    """Snapshot of OpenAlex usage by caller since process start (surfaced by eye_health_check)."""
     with _usage_lock:
         by = dict(_usage["by_caller"])
         since = _usage["since"]
@@ -310,7 +310,7 @@ def get_json(path: str, params: Optional[dict] = None, timeout: float = TIMEOUT)
         diag.note("openalex.get_json", url=f"{BASE}{path}", exc=_dry)
         raise _dry
 
-    caller = _caller_tag()  # attribute this call's budget spend to Penumbra component that drove it
+    caller = _caller_tag()  # attribute this call's budget spend to the eye component that drove it
     last_exc: Optional[Exception] = None
     for lane_name, p in lanes:
         for attempt in (1, 2):

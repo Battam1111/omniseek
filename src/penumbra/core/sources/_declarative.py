@@ -1,9 +1,9 @@
 """Declarative REST/JSON sources — a standard search-API source is now ONE table row.
 
-Many of Penumbra's open-API sources are mechanically identical: GET a JSON endpoint
+Many of the eye's open-API sources are mechanically identical: GET a JSON endpoint
 with the query interpolated into a param template, walk a list of result objects out
 of the response, pluck a handful of fields (title / url / content / date / author /
-score / id) by name, wrap each in a ``Document``, and keyword-filter. The only
+score / id) by name, wrap each in a ``PolarisDocument``, and keyword-filter. The only
 things that differ per source are the *endpoint*, the *param shape*, and *where the
 fields live in the JSON*. Everything else (shared pooled HTTP, cache round-trip, the
 ONE BM25 scorer, health probe, registration) is identical boilerplate.
@@ -15,13 +15,13 @@ What a row declares (see ``sources.json`` for the live rows + per-key notes)::
 
     {
       "name":            "hackernews",
-      "description":     "... shown in penumbra_list_sources, the agent's router ...",
+      "description":     "... shown in eye_list_sources, the agent's router ...",
       "endpoint":        "https://hn.algolia.com/api/v1/search",
       "method":          "GET",               # or "POST" (body = rendered params)
       "params_template": {"query": "{query}", "tags": "story",
                           "hitsPerPage": "{limit}"},
       "results_path":    "hits",              # dot path to the list of result objects
-      "field_map": {                          # Document field <- dot path in a result
+      "field_map": {                          # PolarisDocument field <- dot path in a result
           "title":   "title",
           "url":     "url",
           "content": "story_text",
@@ -65,7 +65,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from penumbra.core import cache, http
-from penumbra.core.normalize import Document, jsonsafe, keyword_score_filter, mk_signal
+from penumbra.core.normalize import PolarisDocument, jsonsafe, keyword_score_filter, mk_signal
 
 logger = logging.getLogger(__name__)
 
@@ -211,7 +211,7 @@ def _as_date(v: Any) -> Optional[datetime]:
 class DeclarativeAPIAdapter:
     """A standard REST/JSON search source, fully described by a data row.
 
-    Mechanism only (Penumbra's "code is dumb, agent is smart" rule): fetch via the
+    Mechanism only (the eye's "code is dumb, agent is smart" rule): fetch via the
     shared pooled client, extract fields by dot path, rank with the ONE shared BM25
     scorer (``keyword_score_filter`` -> ``relevance.doc_scores``). It makes NO
     business judgement — no custom sort, no relevance heuristic, no field synthesis.
@@ -256,7 +256,7 @@ class DeclarativeAPIAdapter:
         self.needs_credentials = bool(needs_credentials)
         self.limit_cap = limit_cap
         self.timeout = timeout
-        # post_filter=True (default): re-rank+drop via the shared BM25 scorer (Penumbra
+        # post_filter=True (default): re-rank+drop via the shared BM25 scorer (the eye
         # canon, like RSSAdapterBase). post_filter=False: the ENDPOINT already ranked
         # server-side for this query (Algolia, Elastic, a relevance API) — keep its
         # order verbatim, just truncate to limit; this is what makes such a source
@@ -307,12 +307,12 @@ class DeclarativeAPIAdapter:
 
     # -- mapping ---------------------------------------------------------------
 
-    def _to_doc(self, item: dict) -> Optional[Document]:
-        """Map one raw result dict to a Document via ``field_map`` dot paths.
+    def _to_doc(self, item: dict) -> Optional[PolarisDocument]:
+        """Map one raw result dict to a PolarisDocument via ``field_map`` dot paths.
 
         Each field's spec is a dot path (str) or a fallback list (first non-None wins,
         e.g. ``"url": ["url", "external_url"]``). ``metadata['raw']`` keeps the original
-        item (the lossless escape hatch the whole engine relies on); ``to_tool_dict`` drops
+        item (the lossless escape hatch the whole eye relies on); ``to_tool_dict`` drops
         it from the agent projection."""
         fm = self.field_map
         title = _as_str(_dig_any(item, fm["title"])) or "(no title)"
@@ -321,7 +321,7 @@ class DeclarativeAPIAdapter:
             return None  # a doc with no canonical URL is unusable downstream
         content = _as_str(_dig_any(item, fm["content"])) if fm.get("content") else None
         source_id = _as_str(_dig_any(item, fm["id"])) if fm.get("id") else None
-        return Document(
+        return PolarisDocument(
             source=self.name,
             source_id=source_id or url,
             url=url,
@@ -349,7 +349,7 @@ class DeclarativeAPIAdapter:
 
     # -- SourceAdapter protocol ------------------------------------------------
 
-    def search(self, query: str, limit: int = 10) -> list[Document]:
+    def search(self, query: str, limit: int = 10) -> list[PolarisDocument]:
         key = cache.make_key(self.name, "search", query, limit)
         cached = cache.get_docs(key)
         if cached is not None:
@@ -360,7 +360,7 @@ class DeclarativeAPIAdapter:
             # Server already ranked for this query → keep API order, just truncate
             # (and truncate BEFORE mapping, exactly as the former coded adapters did).
             items = items[:limit]
-        docs: list[Document] = []
+        docs: list[PolarisDocument] = []
         for item in items:
             try:
                 doc = self._to_doc(item)
@@ -375,7 +375,7 @@ class DeclarativeAPIAdapter:
         cache.set_docs(key, docs, ttl=self.cache_ttl)
         return docs
 
-    def fetch_url(self, url: str) -> Optional[Document]:
+    def fetch_url(self, url: str) -> Optional[PolarisDocument]:
         """Declarative sources are SEARCH-ONLY: they declare a search endpoint + param
         template, not a per-item GET-by-id endpoint, so there is no mechanical way to
         turn an arbitrary URL into one result object. Returns None (does not claim the

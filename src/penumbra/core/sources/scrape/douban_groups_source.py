@@ -2,7 +2,7 @@
 
 Douban (douban.com) hosts China's densest grassroots-community graph: 小组 (groups) are
 member-run forums where overseas-study, immigration, and diaspora-life experience is shared
-candidly (the lived, unofficial counterpart to the institutional sources Penumbra already
+candidly (the lived, unofficial counterpart to the institutional sources the eye already
 covers). It fills a COMMUNITY gap: the first-person "我在德国/加拿大/新加坡的真实生活" thread,
 the group that organizes around a destination, the answer to "哪个组在讨论 X".
 
@@ -18,13 +18,13 @@ Two facets of the same query, combined into one result set:
 Per the http module's contract, anti-bot sources do NOT route through ``penumbra.core.http``
 (the shared client carries one fixed UA + no per-site headers); like the bilibili adapter we
 own a bespoke ``httpx.Client`` with a real-browser UA + Referer + Accept-Language. Verified
-2026-06-17 from the host (US-LA egress): both endpoints return HTTP 200 SSR HTML, not a 403 /
+2026-06-17 from the mini (US-LA egress): both endpoints return HTTP 200 SSR HTML, not a 403 /
 captcha / risk page, so the US IP is currently NOT gated for group search.
 
 BaseScrapeAdapter (template method): the cache check / atomic set_docs / self-registration
 ritual lives in the base; this adapter owns the two-endpoint anti-bot fetch (``_raw_fetch``)
 and the dual HTML→doc parse (``_to_documents``). ``rank`` stays default-False: groups come back
-in Douban's own relevance order and topics newest-first, and Penumbra's ranked search re-scores
+in Douban's own relevance order and topics newest-first, and the eye's ranked search re-scores
 across sources when it needs a unified relevance order.
 """
 
@@ -38,7 +38,7 @@ from typing import Any, Optional
 import httpx
 from bs4 import BeautifulSoup
 
-from penumbra.core.normalize import Document, jsonsafe, mk_signal
+from penumbra.core.normalize import PolarisDocument, jsonsafe, mk_signal
 from penumbra.core.sources.scrape._base import BaseScrapeAdapter
 
 logger = logging.getLogger(__name__)
@@ -145,7 +145,7 @@ class DoubanGroupsAdapter(BaseScrapeAdapter):
             return None
         return {"groups": groups_html, "topics": topics_html}
 
-    def _to_documents(self, raw: dict, query: str, limit: int) -> list[Document]:
+    def _to_documents(self, raw: dict, query: str, limit: int) -> list[PolarisDocument]:
         """Parse both tabs into docs. Groups first (the community structure the agent can join),
         then topics (the discussion content); each side gets roughly half the limit so neither
         starves the other, and the combined list is sliced to ``limit``."""
@@ -153,11 +153,11 @@ class DoubanGroupsAdapter(BaseScrapeAdapter):
             return []
         half = max(1, limit // 2)
 
-        group_docs: list[Document] = []
+        group_docs: list[PolarisDocument] = []
         if raw.get("groups"):
             group_docs = self._parse_groups(raw["groups"], half + (limit - 2 * half))
 
-        topic_docs: list[Document] = []
+        topic_docs: list[PolarisDocument] = []
         if raw.get("topics"):
             topic_docs = self._parse_topics(raw["topics"], limit)  # may backfill if few groups
 
@@ -165,9 +165,9 @@ class DoubanGroupsAdapter(BaseScrapeAdapter):
         return combined[:limit]
 
     # ------------------------------------------------------------------ parsers
-    def _parse_groups(self, html: str, limit: int) -> list[Document]:
+    def _parse_groups(self, html: str, limit: int) -> list[PolarisDocument]:
         soup = BeautifulSoup(html, "lxml")
-        docs: list[Document] = []
+        docs: list[PolarisDocument] = []
         for result in soup.select("div.groups div.result"):
             try:
                 doc = self._group_to_doc(result)
@@ -180,9 +180,9 @@ class DoubanGroupsAdapter(BaseScrapeAdapter):
                 break
         return docs
 
-    def _parse_topics(self, html: str, limit: int) -> list[Document]:
+    def _parse_topics(self, html: str, limit: int) -> list[PolarisDocument]:
         soup = BeautifulSoup(html, "lxml")
-        docs: list[Document] = []
+        docs: list[PolarisDocument] = []
         for row in soup.select("table.olt tr.pl"):
             try:
                 doc = self._topic_to_doc(row)
@@ -196,7 +196,7 @@ class DoubanGroupsAdapter(BaseScrapeAdapter):
         return docs
 
     # ------------------------------------------------------------------ field mapping
-    def _group_to_doc(self, result) -> Optional[Document]:
+    def _group_to_doc(self, result) -> Optional[PolarisDocument]:
         link = result.select_one("div.title h3 a") or result.select_one("div.pic a")
         if link is None:
             return None
@@ -227,7 +227,7 @@ class DoubanGroupsAdapter(BaseScrapeAdapter):
         if img_src.startswith("http"):
             media.append(img_src)
 
-        return Document(
+        return PolarisDocument(
             source=self.name,
             source_id=f"g{gid}",
             url=url,
@@ -244,7 +244,7 @@ class DoubanGroupsAdapter(BaseScrapeAdapter):
             },
         )
 
-    def _topic_to_doc(self, row) -> Optional[Document]:
+    def _topic_to_doc(self, row) -> Optional[PolarisDocument]:
         subj = row.select_one("td.td-subject a")
         if subj is None:
             return None
@@ -275,7 +275,7 @@ class DoubanGroupsAdapter(BaseScrapeAdapter):
         content_lines.append(f"Topic page: {clean_url}")
         content = "\n\n".join(content_lines)
 
-        return Document(
+        return PolarisDocument(
             source=self.name,
             source_id=f"t{tid}",
             url=clean_url,

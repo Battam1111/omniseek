@@ -3,15 +3,15 @@
 Two-layer architecture:
 - **Layer A (this file's primary path)**: single-URL fetch via direct HTTP.
   `https://mp.weixin.qq.com/s/<id>` URLs are publicly accessible without
-  login. Penumbra can fetch any specific article a user passes in.
+  login. Polaris can fetch any specific article a user passes in.
 
 - **Layer B (search/discovery via wewe-rss)**: planned as a separate path
   inside this same adapter. wewe-rss runs as a launchd service on the Mac;
   it uses an operator-supplied 微信读书 account to poll subscribed 公众号 and
   expose them as RSS. This adapter's `search()` reads those RSS feeds.
-  See docs/wewe-rss-self-host.md for setup (after Layer B is deployed).
+  See docs/wewe-rss-setup.md for setup (after Layer B is deployed).
 
-For Penumbra use cases, Layer A covers the 80% case (user reads 微信 daily,
+For Polaris use cases, Layer A covers the 80% case (user reads 微信 daily,
 shares interesting article URLs). Layer B adds proactive monitoring.
 """
 
@@ -28,7 +28,7 @@ from bs4 import BeautifulSoup
 from markdownify import markdownify as html_to_md
 
 from penumbra.core import auth, cache
-from penumbra.core.normalize import Document, jsonsafe
+from penumbra.core.normalize import PolarisDocument, jsonsafe
 
 logger = logging.getLogger(__name__)
 
@@ -75,14 +75,14 @@ auth.write_template(
 class WechatAdapter:
     name = "wechat"
     needs_credentials = False  # Layer A needs no creds; Layer B is optional
-    explicit_only = "walled(微信公众号);命名 penumbra_fetch 才调,不进广搜"
+    explicit_only = "walled(微信公众号);命名 eye_fetch 才调,不进广搜"
     description = "微信公众号 — single-URL fetch (mp.weixin.qq.com/s/<id>); discovery via wewe-rss (Layer B)"
 
     # ─────────────────────────────────────────────────────────────────
     # Layer A: single-URL fetch (works immediately, no extra setup)
     # ─────────────────────────────────────────────────────────────────
 
-    def fetch_url(self, url: str) -> Optional[Document]:
+    def fetch_url(self, url: str) -> Optional[PolarisDocument]:
         host = urlparse(url).hostname or ""
         # Accept mp.weixin.qq.com (canonical) and mp.weixin.qq.com.cn (rare)
         if "mp.weixin.qq.com" not in host:
@@ -91,7 +91,7 @@ class WechatAdapter:
         key = cache.make_key("wechat", "fetch", url)
         cached = cache.get(key)
         if cached is not None:
-            return Document.model_validate(cached)
+            return PolarisDocument.model_validate(cached)
 
         try:
             resp = httpx.get(
@@ -117,7 +117,7 @@ class WechatAdapter:
         return doc
 
     @staticmethod
-    def _parse_article(url: str, html: str) -> Optional[Document]:
+    def _parse_article(url: str, html: str) -> Optional[PolarisDocument]:
         soup = BeautifulSoup(html, "lxml")
 
         # ── Title ──
@@ -182,7 +182,7 @@ class WechatAdapter:
         parsed = urlparse(url)
         source_id = parsed.path.split("/")[-1] or url
 
-        return Document(
+        return PolarisDocument(
             source="wechat",
             source_id=source_id,
             url=url,
@@ -216,18 +216,18 @@ class WechatAdapter:
                 feeds.append((f"wewerss:{fid}", f"{wewerss_base.rstrip('/')}/feeds/{fid}.atom"))
         return feeds
 
-    def search(self, query: str, limit: int = 10) -> list[Document]:
+    def search(self, query: str, limit: int = 10) -> list[PolarisDocument]:
         """Search across WeChat 公众号 RSS feeds.
 
         Sources are (in order): wechat2rss.xlab.app feeds for the popular
         AI accounts (hardcoded defaults), plus any user-added feeds in
-        ~/.penumbra/credentials/wechat.json (wechat2rss extras OR wewe-rss
+        ~/.polaris/credentials/wechat.json (wechat2rss extras OR wewe-rss
         self-hosted).
         """
         key = cache.make_key("wechat", "search", query, limit)
         cached = cache.get(key)
         if cached is not None:
-            return [Document.model_validate(d) for d in cached]
+            return [PolarisDocument.model_validate(d) for d in cached]
 
         import feedparser
         from penumbra.core.sources.scrape._rss import entry_to_document, _DictAsObj
@@ -270,7 +270,7 @@ class WechatAdapter:
             scored.append((score, account_name, feed_url, entry))
         scored.sort(key=lambda x: x[0], reverse=True)
 
-        docs: list[Document] = []
+        docs: list[PolarisDocument] = []
         for score, account_name, feed_url, entry in scored[:limit]:
             doc = entry_to_document(_DictAsObj(entry), "wechat", feed_url)
             if doc:

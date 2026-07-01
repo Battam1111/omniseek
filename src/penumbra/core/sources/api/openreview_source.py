@@ -4,7 +4,7 @@ We skip the official openreview-py package because its `editdistance`
 dependency has no Python 3.13 wheel and is fragile to build. The REST
 API is well-documented at https://docs.openreview.net/reference/api-v2
 
-Reads credentials from ~/.penumbra/credentials/openreview.json:
+Reads credentials from ~/.polaris/credentials/openreview.json:
     {"username": "you@email.com", "password": "..."}
 
 OpenReview is the unique source where we can read actual peer reviews,
@@ -23,7 +23,7 @@ from urllib.parse import urlparse
 import httpx
 
 from penumbra.core import auth, cache
-from penumbra.core.normalize import Document, jsonsafe
+from penumbra.core.normalize import PolarisDocument, jsonsafe
 
 logger = logging.getLogger(__name__)
 
@@ -145,7 +145,7 @@ class OpenReviewAdapter:
             logger.warning("OpenReview API call failed: %s", exc)
             return None
 
-    def search(self, query: str, limit: int = 10) -> list[Document]:
+    def search(self, query: str, limit: int = 10) -> list[PolarisDocument]:
         forum = _parse_reviews(query)
         if forum:
             return self.fetch_reviews(forum, limit)
@@ -153,7 +153,7 @@ class OpenReviewAdapter:
         key = cache.make_key("openreview", "search", venueid or "-", terms, limit)
         cached = cache.get(key)
         if cached is not None:
-            return [Document.model_validate(d) for d in cached]
+            return [PolarisDocument.model_validate(d) for d in cached]
 
         if venueid:
             # Venue browse: newest notes of one venue; remaining terms filter within.
@@ -172,7 +172,7 @@ class OpenReviewAdapter:
         if not data or "notes" not in data:
             return []
 
-        docs: list[Document] = []
+        docs: list[PolarisDocument] = []
         for note in data["notes"]:
             try:
                 docs.append(self._note_to_document(note))
@@ -186,7 +186,7 @@ class OpenReviewAdapter:
         cache.set(key, [d.model_dump(mode="json") for d in docs], ttl=1800)
         return docs
 
-    def fetch_reviews(self, forum_id: str, limit: int = 20) -> list[Document]:
+    def fetch_reviews(self, forum_id: str, limit: int = 20) -> list[PolarisDocument]:
         """Fetch the actual peer reviews / rebuttals / meta-reviews of one submission. The reply
         notes of a forum (``/notes?forum=<id>``) carry the reviewer ratings + text; we keep the
         ones whose content sniffs review-ish (a review/meta-review/rebuttal/decision). Public
@@ -197,11 +197,11 @@ class OpenReviewAdapter:
         key = cache.make_key("openreview", "reviews", forum_id, limit)
         cached = cache.get(key)
         if cached is not None:
-            return [Document.model_validate(d) for d in cached]
+            return [PolarisDocument.model_validate(d) for d in cached]
         data = self._api_get("/notes", {"forum": forum_id, "limit": 200, "sort": "cdate:asc"})
         if not data or "notes" not in data:
             return []
-        docs: list[Document] = []
+        docs: list[PolarisDocument] = []
         for note in data["notes"]:
             if note.get("id") == forum_id:  # the submission itself, not a review reply
                 continue
@@ -217,8 +217,8 @@ class OpenReviewAdapter:
         return docs
 
     @staticmethod
-    def _review_note_to_document(note: dict, forum_id: str) -> Optional[Document]:
-        """Pure parse of one reply note → a Document (reviewer rating + text). Returns None
+    def _review_note_to_document(note: dict, forum_id: str) -> Optional[PolarisDocument]:
+        """Pure parse of one reply note → a PolarisDocument (reviewer rating + text). Returns None
         when the note carries no review-ish field (a bare comment with no signal). No network."""
         content = note.get("content") or {}
 
@@ -261,7 +261,7 @@ class OpenReviewAdapter:
         title = kind.replace("_", " ").title()
         if rating not in (None, ""):
             title += f" (rating {rating})"
-        return Document(
+        return PolarisDocument(
             source="openreview",
             source_id=note.get("id", ""),
             url=f"https://openreview.net/forum?id={forum_id}&noteId={note.get('id', '')}",
@@ -281,7 +281,7 @@ class OpenReviewAdapter:
             },
         )
 
-    def fetch_url(self, url: str) -> Optional[Document]:
+    def fetch_url(self, url: str) -> Optional[PolarisDocument]:
         host = urlparse(url).hostname or ""
         if "openreview.net" not in host:
             return None
@@ -299,14 +299,14 @@ class OpenReviewAdapter:
 
     def health_check(self) -> tuple[bool, str]:
         if not auth.is_configured("openreview"):
-            return False, "credentials not configured (see ~/.penumbra/credentials/openreview.json.template)"
+            return False, "credentials not configured (see ~/.polaris/credentials/openreview.json.template)"
         token = self._get_token()
         if token is None:
             return False, "login failed"
         return True, "OK (logged in)"
 
     @staticmethod
-    def _note_to_document(note: dict) -> Document:
+    def _note_to_document(note: dict) -> PolarisDocument:
         content = note.get("content") or {}
         # OpenReview v2 wraps fields as {"value": ..., "readers": ...}
         def _val(field):
@@ -335,7 +335,7 @@ class OpenReviewAdapter:
         invitations = note.get("invitations") or []
         venue = _val("venue") or (invitations[0] if invitations else None)
 
-        return Document(
+        return PolarisDocument(
             source="openreview",
             source_id=note.get("id", ""),
             url=f"https://openreview.net/forum?id={note.get('id', '')}",

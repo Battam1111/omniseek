@@ -1,4 +1,4 @@
-"""Curator P1: the source-admission gate of the self-iterating engine.
+"""Curator P1: the source-admission gate of the self-iterating eye.
 
 Given a CANDIDATE source (name + URL(s) + a proposed mode/domain/family), the Curator gathers
 MECHANICAL evidence (safety / coverage / dedup / mode probe / live parse), persists a durable

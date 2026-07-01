@@ -27,13 +27,13 @@ import httpx
 from bs4 import BeautifulSoup
 
 from penumbra.core import cache, http
-from penumbra.core.normalize import Document, jsonsafe
+from penumbra.core.normalize import PolarisDocument, jsonsafe
 
 logger = logging.getLogger(__name__)
 
 INDEX_URL = "https://transformer-circuits.pub/"
 TIMEOUT = 15
-USER_AGENT = "penumbra/0.1 (interpretability research aggregator)"
+USER_AGENT = "polaris-eye/0.1 (interpretability research aggregator)"
 
 # Articles live under year-prefixed paths like /2026/march-update/index.html
 # or /2024/scaling-monosemanticity/index.html. Skip nav links and external.
@@ -127,7 +127,7 @@ class TransformerCircuitsAdapter:
         cache.set(key, entries, ttl=3600)
         return entries
 
-    def search(self, query: str, limit: int = 10) -> list[Document]:
+    def search(self, query: str, limit: int = 10) -> list[PolarisDocument]:
         entries = self._fetch_index()
         if not entries:
             return []
@@ -146,7 +146,7 @@ class TransformerCircuitsAdapter:
                     scored.append((score, e))
             scored.sort(key=lambda x: x[0], reverse=True)
 
-        docs: list[Document] = []
+        docs: list[PolarisDocument] = []
         for score, e in scored[:limit]:
             date = None
             if e.get("date"):
@@ -154,7 +154,7 @@ class TransformerCircuitsAdapter:
                     date = datetime.fromisoformat(e["date"])
                 except ValueError:
                     pass
-            doc = Document(
+            doc = PolarisDocument(
                 source="transformer_circuits",
                 source_id=e["url"],
                 url=e["url"],
@@ -168,7 +168,7 @@ class TransformerCircuitsAdapter:
             docs.append(doc)
         return docs
 
-    def fetch_url(self, url: str) -> Optional[Document]:
+    def fetch_url(self, url: str) -> Optional[PolarisDocument]:
         host = urlparse(url).hostname or ""
         if "transformer-circuits.pub" not in host:
             return None
@@ -180,7 +180,7 @@ class TransformerCircuitsAdapter:
                         date = datetime.fromisoformat(e["date"])
                     except ValueError:
                         pass
-                return Document(
+                return PolarisDocument(
                     source="transformer_circuits",
                     source_id=url,
                     url=url,

@@ -2,7 +2,7 @@
 
 The NSF Award Search Web API exposes every NSF-funded award: the PI, the awardee
 institution, the obligated/total dollar amounts, and the full project abstract.
-Penumbra's US-research-funding STRUCTURE source — filterable grant records (by
+Polaris-eye's US-research-funding STRUCTURE source — filterable grant records (by
 keyword / institution / PI) the open web cannot hand back as data. Fills the
 grants/funding gap (zero coverage before this).
 
@@ -19,8 +19,8 @@ default-False (the API returns its own order for the keyword). explicit_only: US
 federal science grants are a named, deliberate drill (by institution / PI / topic), not
 broad-fan-out fodder.
 
-
-confirmed by penumbra_add_url from the host — the Claude sandbox DNS-blackholes api.nsf.gov).
+Recon trail: brain note eye-free-api-probe-2026-06-21 (live-probed; response field names
+confirmed by eye_add_url from the eye host — the Claude sandbox DNS-blackholes api.nsf.gov).
 """
 
 from __future__ import annotations
@@ -29,7 +29,7 @@ from datetime import datetime
 from typing import Any, Optional
 
 from penumbra.core import http
-from penumbra.core.normalize import Document, jsonsafe, mk_signal
+from penumbra.core.normalize import PolarisDocument, jsonsafe, mk_signal
 from penumbra.core.sources.scrape._base import BaseScrapeAdapter
 
 API_URL = "https://api.nsf.gov/services/v1/awards.json"
@@ -64,18 +64,18 @@ class NSFAwardsAdapter(BaseScrapeAdapter):
             timeout=15,
         )
 
-    def _to_documents(self, raw: Any, query: str, limit: int) -> list[Document]:
+    def _to_documents(self, raw: Any, query: str, limit: int) -> list[PolarisDocument]:
         if not isinstance(raw, dict):
             return []
         awards = ((raw.get("response") or {}).get("award")) or []
-        docs: list[Document] = []
+        docs: list[PolarisDocument] = []
         for award in awards[:limit]:
             doc = self._award_to_doc(award)
             if doc is not None:
                 docs.append(doc)
         return docs
 
-    def _award_to_doc(self, award: Any) -> Optional[Document]:
+    def _award_to_doc(self, award: Any) -> Optional[PolarisDocument]:
         if not isinstance(award, dict):
             return None
         aid = award.get("id")
@@ -83,7 +83,7 @@ class NSFAwardsAdapter(BaseScrapeAdapter):
         if not aid or not title:
             return None  # no stable id / title ⇒ no usable doc
         amt = award.get("fundsObligatedAmt") or award.get("estimatedTotalAmt")
-        return Document(
+        return PolarisDocument(
             source=self.name,
             source_id=str(aid),
             url=AWARD_URL.format(id=aid),

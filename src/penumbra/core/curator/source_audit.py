@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 # Verdict write-back lives in the SAME tree as candidates.json / yield.json (survives redeploys,
 # rides the weekly state-backup launchd, keeps the read-only deploy tree pristine). Created on first
 # write. The gather + the policy are READ-ONLY; only record_source_verdict ever writes here.
-STATE_DIR = Path.home() / ".penumbra" / "state" / "curator"
+STATE_DIR = Path.home() / ".polaris" / "state" / "curator"
 SOURCE_VERDICTS_PATH = STATE_DIR / "source_verdicts.json"
 
 _POLICY_PATH = Path(__file__).with_name("audit_policy.json")
@@ -104,7 +104,7 @@ def load_policy() -> dict:
 
 
 def load_coverage_targets() -> list:
-    """Read coverage_targets.json (operator DATA): the (domain x mode) cells Penumbra INTENDS to
+    """Read coverage_targets.json (operator DATA): the (domain x mode) cells Polaris INTENDS to
     cover, as a list of ``domainXmode`` strings, independent of what sources currently exist.
     This DECOUPLES the P4 discovery gap signal + the STOP streak from the live roster (Attack-1):
     a cold-start domain no living source declares can still be a discovery target, and STOP means

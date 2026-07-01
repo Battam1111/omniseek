@@ -1,8 +1,8 @@
-"""Shared SSRF / egress guard: validate an attacker-influenceable URL before Penumbra fetches it.
+"""Shared SSRF / egress guard: validate an attacker-influenceable URL before the eye fetches it.
 
 Extracted from curator/probe.py so BOTH the probe-time fetch AND the mainline egress (http.get,
-penumbra_add_url / web_fallback, docreader URL download, asr ffmpeg / yt-dlp, view_images) share ONE
-guard, instead of probe being the only hardened path. Stdlib-only (no core imports) so the
+eye_add_url / web_fallback, docreader URL download, asr ffmpeg / yt-dlp, view_images) share ONE
+guard, instead of probe being the only hardened path. Stdlib-only (no eye imports) so the
 low-level http client can import it with no dependency cycle.
 
 Blocks: non-http(s) schemes, userinfo in the URL, non-80/443 ports, and any host that resolves to
@@ -12,7 +12,7 @@ class: 127.0.0.0/8, 10/8, 192.168/16, 169.254.169.254, ::1, metadata.google.inte
 Allows 198.18.0.0/15 by default: the RFC-2544 benchmarking range that Clash-style fake-IP
 split-tunnel resolvers use to FRONT public domains (connecting to the fake IP routes to the real
 public site). It is almost never a real internal target, so allowing it keeps such deployments
-working WITHOUT opening any dangerous range. Extra allowed CIDRs come from PENUMBRA_ALLOW_NETS
+working WITHOUT opening any dangerous range. Extra allowed CIDRs come from POLARIS_ALLOW_NETS
 (comma/space separated) for an operator whose proxy uses a different pool.
 """
 from __future__ import annotations
@@ -36,7 +36,7 @@ SECURITY_BLOCK_REASONS = frozenset({"private_ip", "bad_scheme", "bad_port", "use
 
 def _allow_nets() -> tuple:
     nets = [ipaddress.ip_network("198.18.0.0/15")]
-    for tok in os.environ.get("PENUMBRA_ALLOW_NETS", "").replace(",", " ").split():
+    for tok in os.environ.get("POLARIS_ALLOW_NETS", "").replace(",", " ").split():
         try:
             nets.append(ipaddress.ip_network(tok, strict=False))
         except ValueError:

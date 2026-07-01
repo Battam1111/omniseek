@@ -11,7 +11,7 @@
   "label": "ONE Pass 资格标准",
   "url": "https://www.mom.gov.sg/passes-and-permits/overseas-networks-expertise-pass/eligibility",
   "regions": ["sg"],
-  "note": "顶级人才准证标准 (2027-01 将开 AI and Tech Track)"
+  "note": "顶级人才准证标准 (2027-01 将开 AI and Tech Track, 对 Captain 直接相关)"
  },
  {
   "name": "ica_pr_apply",
@@ -46,7 +46,7 @@
   "label": "检索基建·TikHub 价格",
   "url": "https://tikhub.io/pricing",
   "regions": ["retrieval-infra"],
-  "note": "墙内社媒 API; ~50 次注册赠额 + PAYG $0.001/次. 付费决策归 the operator; 雷达只盯价格/免费档变. 2026-06-17 实证 200/3909 chars"
+  "note": "墙内社媒 API; ~50 次注册赠额 + PAYG $0.001/次. 付费决策归 Captain; 雷达只盯价格/免费档变. 2026-06-17 实证 200/3909 chars"
  },
  {
   "name": "ri_brave_search_api",
@@ -102,13 +102,13 @@
   "label": "检索基建·Exa changelog",
   "url": "https://docs.exa.ai/changelog",
   "regions": ["retrieval-infra"],
-  "note": "竞品能力雷达·真盯 changelog (取代 step-0 的 SDK-releases 代理). Mintlify 是 SSR, host httpx 实测取到全文 (8658 chars) — step-0 误判为盯不了的 SPA, 真因是老 _strip_to_text 抽不出 SSR 正文 + 非住宅 IP; 新 strip 能抽. render 能力已建+smoke 测, 留给真 JS-only 页. 跨轴新能力在这先公告. 2026-06-22."
+  "note": "竞品能力雷达·真盯 changelog (取代 step-0 的 SDK-releases 代理). Mintlify 是 SSR, mini httpx 实测取到全文 (8658 chars) — step-0 误判为盯不了的 SPA, 真因是老 _strip_to_text 抽不出 SSR 正文 + 非住宅 IP; 新 strip 能抽. render 能力已建+smoke 测, 留给真 JS-only 页. 跨轴新能力在这先公告. 2026-06-22."
  },
  {
   "name": "ri_valyu_changelog",
   "label": "检索基建·Valyu changelog",
   "url": "https://docs.valyu.ai/changelog/platform",
   "regions": ["retrieval-infra"],
-  "note": "竞品能力雷达·真盯 changelog. Mintlify SSR, host httpx 实测取到全文 (13598 chars). 盯它何时加越墙/可遍历引用图/ASR 等跨轴能力. 2026-06-22."
+  "note": "竞品能力雷达·真盯 changelog. Mintlify SSR, mini httpx 实测取到全文 (13598 chars). 盯它何时加越墙/可遍历引用图/ASR 等跨轴能力. 2026-06-22."
  }
 ]

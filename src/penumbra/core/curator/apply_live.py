@@ -1,9 +1,9 @@
 """The QUARANTINED live-mutation core of the curator (apply.py stays pure / gate-only).
 
 THE CORE SPLIT (the load-bearing safety property):
-  * LIVE EFFECT (reversible)  = an overlay row under ~/.penumbra/state/curator/overlays/ + a live
+  * LIVE EFFECT (reversible)  = an overlay row under ~/.polaris/state/curator/overlays/ + a live
     re-register into the RUNNING worker's fetcher._adapters. NO git, NO restart, NO in-tree write.
-    A single operator tap (server.penumbra_curator_apply_live) applies exactly this.
+    A single operator tap (server.eye_curator_apply_live) applies exactly this.
   * DURABLE TRUTH (irreversible) = the in-tree config JSON commit + redeploy. THE OPERATOR'S HAND
     ONLY; NOTHING in this module (or anywhere in code) runs git / deploy.sh / launchctl.
 
@@ -15,7 +15,7 @@ This module owns:
   * apply_overlay_row(cand) -> the ONE load-bearing ordering: validate -> re-gate -> live-register
     BEFORE the overlay write -> append -> recall-cache-invalidate -> record_applied
   * rollback_overlay_row(name) -> the FULL revert: unregister the live adapter AND drop the overlay
-  * the runtime retire overlay (explicit_only_overrides.json) read/write for penumbra_curator_retire_live
+  * the runtime retire overlay (explicit_only_overrides.json) read/write for eye_curator_retire_live
 
 append() REFUSES (raises) if the row name already exists in the BASE config JSON OR in the overlay.
 The 4 family loaders read base + overlay_rows(family), appending the overlay AFTER base and SKIPPING
@@ -38,7 +38,7 @@ logger = logging.getLogger(__name__)
 
 # Same state tree as candidates.json / source_verdicts.json (survives redeploys, rides the weekly
 # state-backup launchd, keeps the read-only deploy tree pristine). Created on first append.
-OVERLAY_DIR = Path.home() / ".penumbra" / "state" / "curator" / "overlays"
+OVERLAY_DIR = Path.home() / ".polaris" / "state" / "curator" / "overlays"
 
 # Guards every overlay write (mirrors candidates._LOCK / source_audit._LOCK). All mutations go
 # through append/drop/mark_committed under this lock; an atomic cache._atomic_write_text means a
@@ -51,7 +51,7 @@ _KNOWN_FAMILIES = frozenset({"rss", "org_watch", "page_watch", "news_scraper", "
 # indexable cache). rss qualifies; the never-auto families also index but never reach this lane.
 _RECALL_CAPABLE_FAMILIES = frozenset({"rss", "org_watch", "page_watch", "news_scraper"})
 
-# The in-tree config file each family's base rows live in (relative to .../core/sources/). Reused to
+# The in-tree config file each family's base rows live in (relative to .../eye/sources/). Reused to
 # read the BASE names for the collision check in append() (an overlay row may NEVER shadow a base
 # adapter). Mirrors apply._FAMILY_CONFIG_FILE / candidates evidence file mapping.
 _FAMILY_CONFIG_FILE = {
@@ -61,7 +61,7 @@ _FAMILY_CONFIG_FILE = {
     "search_index": "api/search_index_sites.json",
     "page_watch": "scrape/page_watch.json",
 }
-_SOURCES_DIR = (Path(__file__).resolve().parents[1] / "sources")  # .../penumbra/core/sources
+_SOURCES_DIR = (Path(__file__).resolve().parents[1] / "sources")  # .../polaris/eye/sources
 
 
 # ── overlay IO (atomic, lock-guarded, corrupt-tolerant; mirrors candidates._load_all) ────────────
@@ -250,7 +250,7 @@ def apply_overlay_row(cand: dict) -> dict:
     rev = evidence.get("reversibility") or {}
     row = rev.get("proposed_config_row") or cand.get("proposed_config_row")
     if not isinstance(row, dict):
-        raise ValueError("no proposed_config_row to apply (run penumbra_curator_probe first)")
+        raise ValueError("no proposed_config_row to apply (run eye_curator_probe first)")
 
     # 1. typed validation (network-free; never tests/smoke.py which sys.exits + reloads all 143).
     problems = _apply.validate_row_typed(family, row)
@@ -261,11 +261,11 @@ def apply_overlay_row(cand: dict) -> dict:
     if family in _apply._NEVER_AUTO_FAMILIES:
         raise ValueError(
             f"refuse live apply: family {family!r} is in _NEVER_AUTO_FAMILIES "
-            "(recurring fetch bypasses safe_fetch); use penumbra_curator_stage_commit")
+            "(recurring fetch bypasses safe_fetch); use eye_curator_stage_commit")
     if not _apply._auto_apply_ok(cand):
         raise ValueError(
             "refuse live apply: the auto-apply gate is not satisfied (family/mode/redline/evidence/"
-            "render/classification). Use the git-commit path (penumbra_curator_stage_commit).")
+            "render/classification). Use the git-commit path (eye_curator_stage_commit).")
 
     name = str(row["name"])
     # 3. register live BEFORE the overlay write (a collision aborts with nothing persisted).
@@ -320,7 +320,7 @@ def apply_overlay_row(cand: dict) -> dict:
 def rollback_overlay_row(family: str, name: str) -> dict:
     """FULL revert of a live-applied overlay row (spec §3.2): unregister the live adapter AND drop
     the overlay row, under the registry lock semantics. A rollback that only dropped the overlay
-    would leave the adapter in _adapters (still penumbra_fetch-able): a half-applied state. Idempotent:
+    would leave the adapter in _adapters (still eye_fetch-able): a half-applied state. Idempotent:
     a double-rollback with the name already gone is a no-op success."""
     from penumbra.core import fetcher
 
@@ -338,8 +338,8 @@ def rollback_overlay_row(family: str, name: str) -> dict:
     return {"rolled_back": True, "family": family, "name": name, "overlay_dropped": dropped}
 
 
-# ── the runtime retire overlay (penumbra_curator_retire_live; the prune live-half) ────────────────────
-_RETIRE_PATH = (Path.home() / ".penumbra" / "state" / "curator" / "explicit_only_overrides.json")
+# ── the runtime retire overlay (eye_curator_retire_live; the prune live-half) ────────────────────
+_RETIRE_PATH = (Path.home() / ".polaris" / "state" / "curator" / "explicit_only_overrides.json")
 
 
 def load_retire_overlay() -> dict:

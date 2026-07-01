@@ -24,7 +24,7 @@ from __future__ import annotations
 from typing import Any, Optional
 
 from penumbra.core import _stackexchange
-from penumbra.core.normalize import Document
+from penumbra.core.normalize import PolarisDocument
 from penumbra.core.sources.scrape._base import BaseScrapeAdapter
 
 SITE = "stackoverflow"
@@ -46,10 +46,10 @@ class StackOverflowAdapter(BaseScrapeAdapter):
     def _raw_fetch(self, query: str, limit: int) -> Optional[Any]:
         return _stackexchange.search(query, limit, SITE)
 
-    def _to_documents(self, raw: Any, query: str, limit: int) -> list[Document]:
+    def _to_documents(self, raw: Any, query: str, limit: int) -> list[PolarisDocument]:
         return _stackexchange.build_documents(raw, limit, self.name, SITE, SITE_HOST)
 
-    def fetch_url(self, url: str) -> Optional[Document]:
+    def fetch_url(self, url: str) -> Optional[PolarisDocument]:
         return _stackexchange.fetch_question_document(url, self.name, SITE, SITE_HOST)
 
     def health_check(self) -> tuple[bool, str]:

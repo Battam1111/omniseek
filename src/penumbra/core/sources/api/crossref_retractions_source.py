@@ -3,7 +3,7 @@
 Crossref exposes every registered retraction notice as a queryable JSON list
 (``filter=update-type:retraction``). This is a longitudinal research-integrity stream the open web
 forgets: each item carries the notice's own DOI, the RETRACTED paper's DOI (update-to[0]), journal,
-publisher, retraction date, and the original authors. It complements ``penumbra_paper_enrich`` (which
+publisher, retraction date, and the original authors. It complements ``eye_paper_enrich`` (which
 checks ONE paper's retraction/integrity) by giving the live FIREHOSE of recent retractions, filterable
 by topic via ``query=``.
 
@@ -14,7 +14,7 @@ total-results 72654, newest item retracted same day.
 
 Caveat (in the description so the agent routes right): the raw stream skews heavily biomedical, so
 AI/NLP signal is sparse — treat it as a filterable firehose (pass ``query=``), not a pre-curated
-NLP feed. explicit_only: named via penumbra_fetch (a topic-filtered integrity probe), not the broad sweep.
+NLP feed. explicit_only: named via eye_fetch (a topic-filtered integrity probe), not the broad sweep.
 """
 
 from __future__ import annotations
@@ -24,12 +24,12 @@ from typing import Optional
 from urllib.parse import urlencode
 
 from penumbra.core import auth, http
-from penumbra.core.normalize import Document
+from penumbra.core.normalize import PolarisDocument
 from penumbra.core.sources.api._base import BaseAPIAdapter
 
 # Crossref's "polite pool" courtesy contact (NOT a credential / not auth): a working mailto gets the
-# Penumbra into Crossref's faster, monitored request pool. The address is the DEPLOYER's, host-injected via
-# auth.contact_email() (~/.penumbra/credentials/contact.json or PENUMBRA_CONTACT_EMAIL), never in-tree.
+# eye into Crossref's faster, monitored request pool. The address is the DEPLOYER's, host-injected via
+# auth.contact_email() (~/.polaris/credentials/contact.json or POLARIS_CONTACT_EMAIL), never in-tree.
 _ENDPOINT = "https://api.crossref.org/works"
 
 
@@ -39,10 +39,10 @@ class CrossrefRetractionsAdapter(BaseAPIAdapter):
         "Crossref 撤稿通知流 (filter=update-type:retraction) — 最新撤稿的结构化记录: 撤稿通知 DOI + "
         "被撤论文 DOI (update-to) + 期刊/出版商/撤稿日期/原作者. MONITOR 研究诚信 + STRUCTURE (网搜只给"
         "撤稿的散文报道, 这里给逐条机读记录, 最新在前). query= 可按主题过滤 (如 'language model'). "
-        "注意整体偏生物医学, AI/NLP 信号稀疏 — 当可过滤的 firehose 用, 非预筛 NLP 榜. 命名 penumbra_fetch. "
-        "补 penumbra_paper_enrich (查单篇论文撤稿/诚信) 的逆向: 给最近撤稿的流."
+        "注意整体偏生物医学, AI/NLP 信号稀疏 — 当可过滤的 firehose 用, 非预筛 NLP 榜. 命名 eye_fetch. "
+        "补 eye_paper_enrich (查单篇论文撤稿/诚信) 的逆向: 给最近撤稿的流."
     )
-    explicit_only = "Crossref 撤稿 MONITOR firehose (偏生物医学); 命名 penumbra_fetch 按主题查最近撤稿"
+    explicit_only = "Crossref 撤稿 MONITOR firehose (偏生物医学); 命名 eye_fetch 按主题查最近撤稿"
     cache_ttl = 21600  # 6h: a retraction stream moves slowly
     rank_locally = False  # crossref sorts by created(desc) [no query] or relevance [query]; preserve it
     url_host = "crossref.org"
@@ -62,12 +62,12 @@ class CrossrefRetractionsAdapter(BaseAPIAdapter):
         if (query or "").strip():
             params["query"] = query.strip()  # server-side full-text filter within the retraction set
         url = f"{_ENDPOINT}?{urlencode(params)}"
-        data = http.get_json(url, headers={"User-Agent": f"Penumbra/1.0 (mailto:{auth.contact_email()})"})
+        data = http.get_json(url, headers={"User-Agent": f"PolarisEye/1.0 (mailto:{auth.contact_email()})"})
         if not isinstance(data, dict):
             return []
         return ((data.get("message") or {}).get("items")) or []
 
-    def _to_document(self, raw) -> Optional[Document]:
+    def _to_document(self, raw) -> Optional[PolarisDocument]:
         if not isinstance(raw, dict):
             return None
         doi = (raw.get("DOI") or "").strip()
@@ -99,7 +99,7 @@ class CrossrefRetractionsAdapter(BaseAPIAdapter):
         url = (raw.get("URL") or (f"https://doi.org/{doi}" if doi else "")).strip()
         content = (f"撤稿通知. 被撤论文 DOI: {retracted_doi or 'n/a'}. "
                    f"期刊: {journal or 'n/a'}. 出版商: {publisher or 'n/a'}.")
-        return Document(
+        return PolarisDocument(
             source=self.name,
             source_id=doi or url or title,
             url=url,

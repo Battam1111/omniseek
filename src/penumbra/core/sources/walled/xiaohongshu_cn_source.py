@@ -9,7 +9,7 @@ SERVER-SIDE (the /search/notes XHR does NOT fire), so search is a DOM parse of t
 ``/comment/page`` XHR + a DOM harvest. The browser issues its own real signed navigation either way.
 This replaces self-signing as the posture: the browser's own signature is real, so the account traffic
 is indistinguishable from a human's (no re-implemented-signer bot-tell). The operator made this call WITH
-the safety-research caveat in hand (docs/walled-sources.md flags driving
+the safety-research caveat in hand (docs/platform-notes/xiaohongshu-safety-research.md flags driving
 CDP automation on the mainland 小号 as a high-risk vector); the basis is the international 小号's
 zero-incident track record on the same browser method. The browser flow below carries the full
 human-behavior layer (_human) + the 风控 breaker + the read-only posture.
@@ -35,7 +35,7 @@ MediaCrawler "page.evaluate the signer" trick is dead. xhshow re-implements the 
 survives the common input/constant rotation; on a FULL scheme rotation it breaks and is fixed by
 a lib bump, with the rednote browser-scroll adapter staying as the degraded fallback.
 
-IDENTITY = (mainland account logged into the 9224 Chrome, its cookies, the host's Shenzhen
+IDENTITY = (mainland account logged into the 9224 Chrome, its cookies, the mini's Shenzhen
 residential DIRECT IP). The 9224 browser stays alive ONLY to mint/refresh cookies (and for
 captcha / manual fallback); every data fetch here is browserless. READ-ONLY. Paced under the safe
 rate (a jittered min-interval between signed calls + the 6h per-note cache). explicit_only so it
@@ -59,13 +59,13 @@ from typing import Optional
 from urllib.parse import parse_qs, quote, urlparse
 
 from penumbra.core import cache, diag
-from penumbra.core.normalize import Document, mk_signal
+from penumbra.core.normalize import PolarisDocument, mk_signal
 from penumbra.core.sources.walled._cdp import cdp_call
 
 logger = logging.getLogger(__name__)
 
-# The mainland account's OWN isolated CDP Chrome (port 9224, profile ~/.penumbra/chrome-xhs-cn,
-# port-isolated Chrome. 2026-06-25 (operator: align with the international account): this
+# The mainland account's OWN isolated CDP Chrome (port 9224, profile ~/.polaris/chrome-xhs-cn,
+# launchd com.penumbra.cdp.xhs-cn). 2026-06-25 (operator: align with the international account): this
 # browser is now DRIVEN to xiaohongshu.com to issue its OWN signed XHR (the PRIMARY path) — not only
 # cookie-minting (which the signed-API fallback below still uses it for).
 _CN_CDP_URL = "http://127.0.0.1:9224"
@@ -530,7 +530,7 @@ def _cn_login_wall(page) -> bool:
     return False
 
 
-def _cn_card_to_document(card) -> "Optional[Document]":
+def _cn_card_to_document(card) -> "Optional[PolarisDocument]":
     """One mainland ``section.note-item`` card (BeautifulSoup) → xiaohongshu_cn doc. Mainland search
     results are SSR'd into the DOM and the /search/notes XHR does NOT fire (probed 2026-06-25), so this
     DOM parse is the PRIMARY search decode (vs the rednote 小号's XHR intercept). Same card shape as
@@ -556,12 +556,12 @@ def _cn_card_to_document(card) -> "Optional[Document]":
     author = author_el.get_text(strip=True) if author_el else None
     count_el = card.select_one("span.count, .like-wrapper .count, .count")
     likes = _xhs_parse_count(count_el.get_text(strip=True)) if count_el else None
-    return Document(
+    return PolarisDocument(
         source="xiaohongshu_cn",
         source_id=note_id,
         url=full_url,
         title=title,
-        content="(card preview; call penumbra_add_url on this url for the full note body)",
+        content="(card preview; call eye_add_url on this url for the full note body)",
         author=author,
         signals=mk_signal("likes", likes, kind="engagement", by="xhs/liked_count"),
         metadata={"note_id": note_id, "via": "browser-dom"},
@@ -608,7 +608,7 @@ def _cn_items_to_docs(items: list, limit: int) -> list:
         user = nc.get("user") or {}
         inter = nc.get("interact_info") or {}
         likes = _xhs_parse_count(inter.get("liked_count"))
-        docs.append(Document(
+        docs.append(PolarisDocument(
             source="xiaohongshu_cn",
             source_id=nid,
             url=_note_url(nid, token),
@@ -689,7 +689,7 @@ def _browser_search(query: str, limit: int) -> tuple[str, list]:
             return ("ok", page.content())
 
         # 'safe' (default) human profile — NOT _human.fast (fast is cleared ONLY for the international
-        # 小号; this WARNED account stays slower, safety research §5). timeout 85s < the penumbra_fetch search
+        # 小号; this WARNED account stays slower, safety research §5). timeout 85s < the eye_fetch search
         # deadline (~90s) so cdp_call cleans up before the fetcher backstop fires.
         try:
             status, html = cdp_call(_flow, initial_url=None, timeout=85, cdp_url=_CN_CDP_URL)
@@ -715,7 +715,7 @@ def _browser_search(query: str, limit: int) -> tuple[str, list]:
         _browser_slot.release()
 
 
-def _browser_fetch(note_id: str, token: str, url: str) -> tuple[str, Optional["Document"]]:
+def _browser_fetch(note_id: str, token: str, url: str) -> tuple[str, Optional["PolarisDocument"]]:
     """PRIMARY mainland note fetch via the 9224 browser: navigate the note, INTERCEPT the page's OWN
     /comment/page XHR + exhaustively DOM-load the comment thread + surface carousel images. Mirrors
     the rednote 小号's _fetch_url_live. Returns (status, doc): 'login' → caller trips the breaker;
@@ -817,7 +817,7 @@ def _browser_fetch(note_id: str, token: str, url: str) -> tuple[str, Optional["D
                 lk = f" ·赞{c['likes']}" if c.get("likes") else ""
                 lines.append(f"[{who}{lk}] {c.get('text', '')}")
             content += "\n".join(lines)
-        doc = Document(
+        doc = PolarisDocument(
             source="xiaohongshu_cn",
             source_id=note_id,
             url=url or _note_url(note_id, token),
@@ -842,7 +842,7 @@ class XiaohongshuCNAdapter:
                    "self-signed direct-API 切换): search 读 SSR 笔记卡片, 笔记正文 + 完整评论区走拦截+DOM; "
                    "forge nothing. signed direct-API 为 degraded fallback.")
     fetch_timeout = 120.0  # >= the browser path's 110s cdp_call (matches the rednote 小号); the old 90s
-                           # would let penumbra_add_url's backstop kill an in-progress fetch + orphan a 9224 tab.
+                           # would let eye_add_url's backstop kill an in-progress fetch + orphan a 9224 tab.
 
     def _alive(self) -> bool:
         # Alive if EITHER path is available: the browser path (primary) or the signed-API (fallback).
@@ -852,9 +852,9 @@ class XiaohongshuCNAdapter:
         """Pure STATE read — NO network, so the health SWEEP itself never adds an account touch on the
         warned 9224 account (the sweep is recurring/automated; the safety research's §5 'low-frequency'
         line is about minimizing such automated activity). NOTE: the sweep is not the ONLY automated
-        9224 driver — the browser path self-warms cookies on every named call. With the
-        browser path now self-warming cookies on every named call, you may further reduce
-        automated touches on a sensitive account (your risk call)."""
+        9224 driver — scripts/session_warmer.py runs an active-hours cookie-warm search on 9224. With the
+        browser path now self-warming cookies on every named call, the operator may want to drop the 大陆号
+        from session_warmer to cut total automated touches (the operator's risk call; flagged, not auto-changed)."""
         if not (_BROWSER_OK or _DEPS_OK):
             return False, "browser deps (bs4/lxml + xiaohongshu_source helpers) AND signed deps (xhshow/curl_cffi) both unavailable"
         if _SEALED:
@@ -865,13 +865,13 @@ class XiaohongshuCNAdapter:
         return True, (f"ok (primary={primary}; today {_daily_count}/{_DAILY_REQ_CAP} live account-touches "
                       f"[browser + signed]; sub_comments={'ON' if _FETCH_SUB_COMMENTS else 'off'})")
 
-    def search(self, query: str, limit: int = 20) -> list[Document]:
+    def search(self, query: str, limit: int = 20) -> list[PolarisDocument]:
         if _SEALED:
             return []
         key = cache.make_key("xiaohongshu_cn", "search", query, limit)
         cached = cache.get(key)
         if cached:  # non-empty hit only (a cached [] is a miss — xhs transient empties aren't authoritative)
-            return [Document.model_validate(d) for d in cached]
+            return [PolarisDocument.model_validate(d) for d in cached]
         if _tripped():  # gate LIVE calls when the 风控 breaker is open (cache above served regardless)
             reason = f"风控 breaker OPEN: {_last_signal}"
             logger.info("xhs_cn search skip (breaker open): %s", reason)
@@ -903,20 +903,20 @@ class XiaohongshuCNAdapter:
             return self._search_signed(query, limit)
         return []
 
-    def _items_to_docs(self, items: list, limit: int) -> list[Document]:
+    def _items_to_docs(self, items: list, limit: int) -> list[PolarisDocument]:
         """Decode intercepted /search/notes XHR items → docs. Delegates to the module-level
         _cn_items_to_docs (kept as the XHR-bonus decoder + for the smoke golden); the mainland search
         PRIMARY decode is _cn_cards_from_html (DOM cards), since the mainland SSRs results."""
         return _cn_items_to_docs(items, limit)
 
-    def _search_signed(self, query: str, limit: int = 20) -> list[Document]:
+    def _search_signed(self, query: str, limit: int = 20) -> list[PolarisDocument]:
         """FALLBACK: the self-signed direct edith API search (the pre-2026-06-25 primary path)."""
         if not _DEPS_OK:
             return []
         key = cache.make_key("xiaohongshu_cn", "search", query, limit)
         cached = cache.get(key)
         if cached:  # non-empty hit only; a cached [] is treated as a miss (xhs transient empties
-            return [Document.model_validate(d) for d in cached]  # are never authoritative)
+            return [PolarisDocument.model_validate(d) for d in cached]  # are never authoritative)
         if _tripped():  # cache above is served regardless; gate LIVE calls only when the 风控 breaker is open
             reason = f"风控 breaker OPEN: {_last_signal}"
             logger.info("xhs_cn search skip (breaker open): %s", reason)
@@ -943,7 +943,7 @@ class XiaohongshuCNAdapter:
         if not isinstance(j, dict) or j.get("code") != 0:
             logger.warning("xhs_cn search non-zero: %s", (j or {}).get("msg"))
             return []
-        docs: list[Document] = []
+        docs: list[PolarisDocument] = []
         for it in ((j.get("data") or {}).get("items") or []):
             nc = it.get("note_card") or {}
             if not nc:
@@ -954,7 +954,7 @@ class XiaohongshuCNAdapter:
                 continue
             user = nc.get("user") or {}
             inter = nc.get("interact_info") or {}
-            docs.append(Document(
+            docs.append(PolarisDocument(
                 source="xiaohongshu_cn",
                 source_id=nid,
                 url=_note_url(nid, token),
@@ -973,7 +973,7 @@ class XiaohongshuCNAdapter:
             _clear_streak()  # a clean live run resets the 风控-trip escalation back to the 1h floor
         return docs
 
-    def fetch_url(self, url: str) -> Optional[Document]:
+    def fetch_url(self, url: str) -> Optional[PolarisDocument]:
         if _SEALED:
             return None
         note_id, token = _parse_note_url(url)
@@ -983,7 +983,7 @@ class XiaohongshuCNAdapter:
         key = cache.make_key("xiaohongshu_cn", "note", note_id, "full" if full else "top")
         cached = cache.get(key)
         if cached is not None:
-            return Document.model_validate(cached)
+            return PolarisDocument.model_validate(cached)
         if _tripped():  # gate LIVE here only when the 风控 breaker is open (cache above served regardless)
             reason = f"风控 breaker OPEN: {_last_signal}"
             logger.info("xhs_cn fetch skip (breaker open): %s", reason)
@@ -1014,7 +1014,7 @@ class XiaohongshuCNAdapter:
             return self._fetch_signed(url)
         return None
 
-    def _fetch_signed(self, url: str) -> Optional[Document]:
+    def _fetch_signed(self, url: str) -> Optional[PolarisDocument]:
         """FALLBACK: the self-signed feed + cursor-paginated comment fetch (pre-2026-06-25 primary)."""
         if not _DEPS_OK:
             return None
@@ -1025,7 +1025,7 @@ class XiaohongshuCNAdapter:
         key = cache.make_key("xiaohongshu_cn", "note", note_id, "full" if full else "top")
         cached = cache.get(key)
         if cached is not None:
-            return Document.model_validate(cached)
+            return PolarisDocument.model_validate(cached)
         if _tripped():  # cache above is served regardless; gate LIVE here only when the 风控 breaker is open
             reason = f"风控 breaker OPEN: {_last_signal}"
             logger.info("xhs_cn fetch skip (breaker open): %s", reason)
@@ -1045,7 +1045,7 @@ class XiaohongshuCNAdapter:
             _clear_streak()  # a clean live run resets the 风控-trip escalation back to the 1h floor
         return doc
 
-    def _fetch_note(self, note_id: str, token: str, url: str, full: bool = False) -> Optional[Document]:
+    def _fetch_note(self, note_id: str, token: str, url: str, full: bool = False) -> Optional[PolarisDocument]:
         # 1) body via the signed feed API
         feed_payload = {"source_note_id": note_id, "image_formats": ["jpg", "webp", "avif"],
                         "extra": {"need_body_topic": "1"}, "xsec_source": "pc_feed", "xsec_token": token}
@@ -1073,7 +1073,7 @@ class XiaohongshuCNAdapter:
         comments = fetch_all_comments(note_id, token, fetch_sub=full)
 
         body = desc or title or "(no body)"
-        return Document(
+        return PolarisDocument(
             source="xiaohongshu_cn",
             source_id=note_id,
             url=url or _note_url(note_id, token),

@@ -1,6 +1,6 @@
 """掘金 Juejin — Chinese developer-article search (keyless, no login).
 
-WHY (STRUCTURE): Penumbra has NO Chinese dev-knowledge source. Juejin (juejin.cn) is a major CN
+WHY (STRUCTURE): the eye has NO Chinese dev-knowledge source. Juejin (juejin.cn) is a major CN
 developer community; its public search API returns a STRUCTURED, engagement-ranked feed of dev
 articles (title / brief / author / 赞 digg / 看 views / 收藏) that Google's blue links don't — for
 "the most-engaged Chinese dev深度 writing on X". No login. (Individual articles ARE Google-indexed,
@@ -10,7 +10,7 @@ honest STRUCTURE-only claim.)
 SHAPE: JSON POST (BaseScrapeAdapter + bespoke curl_cffi). Verified 2026-06-18: 向量数据库 → 20 dev
 articles with digg/view counts + authors.
 
-
+Recon trail: brain note eye-recon-juejin.
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Optional
 
-from penumbra.core.normalize import Document, mk_signal
+from penumbra.core.normalize import PolarisDocument, mk_signal
 from penumbra.core.sources.scrape._base import BaseScrapeAdapter
 
 logger = logging.getLogger(__name__)
@@ -43,8 +43,8 @@ def _int(v) -> int:
         return 0
 
 
-def _article_to_doc(rm: dict) -> Optional[Document]:
-    """One search result_model → Document (pure fn → golden-fixture testable). Non-article
+def _article_to_doc(rm: dict) -> Optional[PolarisDocument]:
+    """One search result_model → PolarisDocument (pure fn → golden-fixture testable). Non-article
     result types (沸点/课程/…) carry no article_info → None (skipped)."""
     ai = rm.get("article_info") or {}
     au = rm.get("author_user_info") or {}
@@ -59,7 +59,7 @@ def _article_to_doc(rm: dict) -> Optional[Document]:
             date = datetime.fromtimestamp(int(ct), tz=timezone.utc)
         except (ValueError, OSError, TypeError):
             date = None
-    return Document(
+    return PolarisDocument(
         source="juejin",
         source_id=str(aid),
         url=f"https://juejin.cn/post/{aid}",
@@ -77,7 +77,7 @@ class JuejinAdapter(BaseScrapeAdapter):
     name = "juejin"
     description = (
         "掘金 Juejin — Chinese developer-article search (keyless). query → an engagement-ranked feed "
-        "of CN dev深度 articles: title / brief / author / 赞(digg) / 看(views). Penumbra's source for "
+        "of CN dev深度 articles: title / brief / author / 赞(digg) / 看(views). The eye's source for "
         "Chinese dev/tech writing (前端/后端/AI工程/架构) that web search can't rank or structure. No login."
     )
     explicit_only = "Chinese dev articles (Juejin); name it for 中文技术/开发 topic search"
@@ -107,7 +107,7 @@ class JuejinAdapter(BaseScrapeAdapter):
             logger.warning("juejin fetch failed: %s", exc)
             return None
 
-    def _to_documents(self, raw, query, limit) -> list[Document]:
+    def _to_documents(self, raw, query, limit) -> list[PolarisDocument]:
         return [d for it in raw[:limit] if (d := _article_to_doc(it.get("result_model") or {}))]
 
     def health_check(self) -> tuple[bool, str]:

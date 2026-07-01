@@ -1,12 +1,12 @@
 """CORE (core.ac.uk): the world's largest aggregator of open-access research,
-and Penumbra's only source of EXTRACTED FULL-TEXT paper bodies.
+and the eye's only source of EXTRACTED FULL-TEXT paper bodies.
 
 Why this exists, against the existing paper adapters:
 - arxiv / semantic_scholar / openalex / crossref return METADATA only
   (title + abstract + citations + venue). They never carry the paper body.
 - CORE harvests the open-access PDFs themselves and extracts the text, so a
   work returned here carries ``fullText`` (the whole document as plain text)
-  plus a working OA download URL. That body is content Penumbra gets from NO
+  plus a working OA download URL. That body is content the eye gets from NO
   other source: the differentiator this adapter adds.
 
 API (https://core.ac.uk/documentation/api ; v3):
@@ -22,7 +22,7 @@ no-registration tier was probed live (this host + a US egress, within the
 documented 5-req/10s pace) and returned 429 / 500 every time: it is not usable
 for an automated client. A free registered key (https://core.ac.uk/services/api,
 no cost) raises the per-key limit to usable. The key lives only on the host at
-~/.penumbra/credentials/core.json -> {"api_key": "..."} and is sent as
+~/.polaris/credentials/core.json -> {"api_key": "..."} and is sent as
 ``Authorization: Bearer <key>``. With no per-call COST, CORE is NOT explicit_only:
 it joins the papers broad fan-out alongside openalex / s2 / crossref.
 
@@ -44,7 +44,7 @@ from urllib.parse import urlparse
 import httpx
 
 from penumbra.core import auth
-from penumbra.core.normalize import Document, jsonsafe, mk_signal
+from penumbra.core.normalize import PolarisDocument, jsonsafe, mk_signal
 from penumbra.core.sources.api._base import BaseAPIAdapter
 
 logger = logging.getLogger(__name__)
@@ -54,7 +54,7 @@ CORE_WORK = "https://api.core.ac.uk/v3/works"            # /{coreId} by-id looku
 TIMEOUT = 30
 # Full body can be large; cap the inline preview so a single result does not blow
 # the tool payload. The TRUE length is stamped in metadata so the agent knows to
-# penumbra_add_url the PDF (downloadUrl) for the whole document.
+# eye_add_url the PDF (downloadUrl) for the whole document.
 _BODY_PREVIEW_CAP = 12000
 
 # Drop a credential template on first import (free registered key, see module docstring).
@@ -85,7 +85,7 @@ class CoreAdapter(BaseAPIAdapter):
     name = "core"
     needs_credentials = True
     description = (
-        "CORE (core.ac.uk): largest open-access research aggregator; the only Penumbra "
+        "CORE (core.ac.uk): largest open-access research aggregator; the ONLY eye "
         "paper source that returns the EXTRACTED FULL-TEXT body (work.fullText) + a "
         "working OA PDF url, where arxiv/openalex/semantic_scholar/crossref give only "
         "metadata. Reach for it to read a paper's actual text, not just its abstract."
@@ -105,7 +105,7 @@ class CoreAdapter(BaseAPIAdapter):
         return {
             "Authorization": f"Bearer {key}",
             "Accept": "application/json",
-            "User-Agent": "penumbra/0.1 (+https://github.com/cyj/penumbra)",
+            "User-Agent": "polaris-eye/0.1 (+https://github.com/cyj/polaris)",
         }
 
     # ------------------------------------------------------------------ hooks
@@ -117,7 +117,7 @@ class CoreAdapter(BaseAPIAdapter):
         to empty, surfaced to the agent as 'needs_credentials')."""
         key = self._key()
         if not key:
-            logger.warning("core: no api_key configured (~/.penumbra/credentials/core.json)")
+            logger.warning("core: no api_key configured (~/.polaris/credentials/core.json)")
             return []
         try:
             resp = _core_get(
@@ -136,11 +136,11 @@ class CoreAdapter(BaseAPIAdapter):
         results = data.get("results") if isinstance(data, dict) else None
         return results or []
 
-    def _to_document(self, raw) -> Optional[Document]:
+    def _to_document(self, raw) -> Optional[PolarisDocument]:
         return self._work_to_document(raw)
 
     # --------------------------------------------------------------- fetch_url
-    def fetch_url(self, url: str) -> Optional[Document]:
+    def fetch_url(self, url: str) -> Optional[PolarisDocument]:
         """Claim core.ac.uk/works/{id} (by-id lookup) and doi.org/{doi} URLs."""
         host = (urlparse(url).hostname or "").lower()
         core_id: Optional[str] = None
@@ -172,7 +172,7 @@ class CoreAdapter(BaseAPIAdapter):
     def health_check(self) -> tuple[bool, str]:
         key = self._key()
         if not key:
-            return False, "no api_key (~/.penumbra/credentials/core.json)"
+            return False, "no api_key (~/.polaris/credentials/core.json)"
         try:
             resp = _core_get(CORE_SEARCH, params={"q": "test", "limit": 1},
                              headers=self._headers(key), timeout=10,
@@ -185,7 +185,7 @@ class CoreAdapter(BaseAPIAdapter):
 
     # ----------------------------------------------------------- doc assembly
     @staticmethod
-    def _work_to_document(work: dict) -> Optional[Document]:
+    def _work_to_document(work: dict) -> Optional[PolarisDocument]:
         if not isinstance(work, dict):
             return None
 
@@ -230,7 +230,7 @@ class CoreAdapter(BaseAPIAdapter):
 
         # THE DIFFERENTIATOR: the extracted full-text body. Preview-capped for the
         # tool payload; the TRUE length is stamped so the agent knows there is more
-        # (penumbra_add_url the PDF for the whole document). Abstract is the fallback.
+        # (eye_add_url the PDF for the whole document). Abstract is the fallback.
         full_text = (work.get("fullText") or "").strip()
         abstract = (work.get("abstract") or "").strip()
         full_text_chars = len(full_text)
@@ -253,7 +253,7 @@ class CoreAdapter(BaseAPIAdapter):
                     if isinstance(j, dict) and j.get("title")]
         venue = journals[0] if journals else None
 
-        return Document(
+        return PolarisDocument(
             source="core",
             source_id=core_id or doi or url,
             url=url,

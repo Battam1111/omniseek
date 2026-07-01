@@ -4,7 +4,7 @@ Ordinary web search is weak at prior-art: patents are long, formulaic, and live 
 JS app, so a plain query rarely surfaces the right publication. Google Patents has an
 undocumented keyless XHR JSON endpoint that the patents.google.com front-end itself calls,
 which returns structured hits (publication number, title, assignee, inventor, dates, a
-highlighted snippet) for any query. This adapter wraps that endpoint so Penumbra can do
+highlighted snippet) for any query. This adapter wraps that endpoint so the eye can do
 patent / prior-art lookup that the open web cannot.
 
 Endpoint (probed live, undocumented):
@@ -13,7 +13,7 @@ Endpoint (probed live, undocumented):
 
 i.e. the ``url`` query-param is itself a URL-encoded ``q=<query>`` string (double-encoded:
 the query is encoded once for the inner ``q=...`` and the whole ``q=...`` is encoded again
-for the outer ``url=...``). A real browser User-Agent is required (the Penumbra UA is
+for the outer ``url=...``). A real browser User-Agent is required (the PolarisEye UA is
 403-gated), so this adapter passes a Chrome UA through the shared http client.
 
 Response shape (confirmed against several live queries):
@@ -42,7 +42,7 @@ The body is normally bare JSON, but XHR endpoints sometimes prefix an anti-hijac
 
 BaseScrapeAdapter (template method): the cache check / atomic set_docs / self-registration
 ritual lives in the base; this adapter fills the two hooks (_raw_fetch = the XHR GET with a
-browser UA; _to_documents = the patent -> Document map). ``rank`` stays default-False:
+browser UA; _to_documents = the patent -> PolarisDocument map). ``rank`` stays default-False:
 Google Patents returns its own server-relevance order, kept byte-faithful here.
 """
 
@@ -56,7 +56,7 @@ from typing import Any, Optional
 from urllib.parse import quote
 
 from penumbra.core import http
-from penumbra.core.normalize import Document, jsonsafe
+from penumbra.core.normalize import PolarisDocument, jsonsafe
 from penumbra.core.sources.scrape._base import BaseScrapeAdapter
 
 logger = logging.getLogger(__name__)
@@ -64,7 +64,7 @@ logger = logging.getLogger(__name__)
 XHR_URL = "https://patents.google.com/xhr/query"
 PATENT_PAGE_BASE = "https://patents.google.com/patent"
 PDF_BASE = "https://patentimages.storage.googleapis.com"
-# patents.google.com 403s the default Penumbra UA; the XHR endpoint wants a real browser UA.
+# patents.google.com 403s the default PolarisEye UA; the XHR endpoint wants a real browser UA.
 BROWSER_UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
@@ -134,12 +134,12 @@ class GooglePatentsAdapter(BaseScrapeAdapter):
             return None
         return _parse_body(body)
 
-    def _to_documents(self, raw: Any, query: str, limit: int) -> list[Document]:
+    def _to_documents(self, raw: Any, query: str, limit: int) -> list[PolarisDocument]:
         if not isinstance(raw, dict):
             return []
         results = (raw.get("results") or {})
         clusters = results.get("cluster") or []
-        docs: list[Document] = []
+        docs: list[PolarisDocument] = []
         for cluster in clusters:
             if not isinstance(cluster, dict):
                 continue
@@ -153,7 +153,7 @@ class GooglePatentsAdapter(BaseScrapeAdapter):
                     docs.append(doc)
         return docs
 
-    def _item_to_doc(self, item: dict) -> Optional[Document]:
+    def _item_to_doc(self, item: dict) -> Optional[PolarisDocument]:
         patent = item.get("patent")
         if not isinstance(patent, dict):
             return None
@@ -209,7 +209,7 @@ class GooglePatentsAdapter(BaseScrapeAdapter):
             "raw": jsonsafe(item),
         }
 
-        return Document(
+        return PolarisDocument(
             source=self.name,
             source_id=number,
             url=url,

@@ -2,7 +2,7 @@
 
 clinicaltrials.gov is the US NIH registry of clinical studies worldwide: the
 authoritative source for trial protocols, recruitment status, phase, sponsor,
-and the conditions/interventions under study. Penumbra's clinical/health
+and the conditions/interventions under study. Polaris-eye's clinical/health
 depth source — full-text trial summaries the open web does not surface in a
 structured form.
 
@@ -29,7 +29,7 @@ from datetime import datetime
 from typing import Any, Optional
 
 from penumbra.core import http
-from penumbra.core.normalize import Document, jsonsafe, mk_signal
+from penumbra.core.normalize import PolarisDocument, jsonsafe, mk_signal
 from penumbra.core.sources.scrape._base import BaseScrapeAdapter
 
 API_URL = "https://clinicaltrials.gov/api/v2/studies"
@@ -53,18 +53,18 @@ class ClinicalTrialsAdapter(BaseScrapeAdapter):
             timeout=15,
         )
 
-    def _to_documents(self, raw: Any, query: str, limit: int) -> list[Document]:
+    def _to_documents(self, raw: Any, query: str, limit: int) -> list[PolarisDocument]:
         if not isinstance(raw, dict):
             return []
         studies = raw.get("studies") or []
-        docs: list[Document] = []
+        docs: list[PolarisDocument] = []
         for study in studies[:limit]:
             doc = self._study_to_doc(study)
             if doc is not None:
                 docs.append(doc)
         return docs
 
-    def _study_to_doc(self, study: Any) -> Optional[Document]:
+    def _study_to_doc(self, study: Any) -> Optional[PolarisDocument]:
         if not isinstance(study, dict):
             return None
         ps = study.get("protocolSection") or {}
@@ -89,7 +89,7 @@ class ClinicalTrialsAdapter(BaseScrapeAdapter):
 
         signals = self._enrollment_signal(dgm)
 
-        return Document(
+        return PolarisDocument(
             source=self.name,
             source_id=nct,
             url=STUDY_URL.format(nct=nct),

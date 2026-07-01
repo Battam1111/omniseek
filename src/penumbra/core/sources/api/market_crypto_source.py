@@ -11,7 +11,7 @@ A query that names no coin returns []. CoinGecko's /simple/price silently omits 
 bad id yields no document rather than an error.
 
 explicit_only (a named lookup, like market_quote): reached when an agent routes a crypto quote to
-it, not on every broad search.
+it, not on every broad search. Recon trail: brain note eye-recon-market-crypto.
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ import re
 from typing import Optional
 
 from penumbra.core import http
-from penumbra.core.normalize import Document, mk_signal
+from penumbra.core.normalize import PolarisDocument, mk_signal
 
 logger = logging.getLogger(__name__)
 
@@ -75,8 +75,8 @@ def _resolve(query: str) -> list[tuple[str, str]]:
     return out
 
 
-def _to_doc(cid: str, sym: str, data: dict) -> Optional[Document]:
-    """One CoinGecko /simple/price entry → Document (no price → None, no fabrication)."""
+def _to_doc(cid: str, sym: str, data: dict) -> Optional[PolarisDocument]:
+    """One CoinGecko /simple/price entry → PolarisDocument (no price → None, no fabrication)."""
     if not isinstance(data, dict):
         return None
     price = data.get("usd")
@@ -97,7 +97,7 @@ def _to_doc(cid: str, sym: str, data: dict) -> Optional[Document]:
     if isinstance(chg, (int, float)):
         signals.update(mk_signal("change_pct", round(float(chg), 3), kind="quote",
                                  by="coingecko/usd_24h_change", unit="%"))
-    return Document(
+    return PolarisDocument(
         source="market_crypto",
         source_id=cid,
         url=f"https://www.coingecko.com/en/coins/{cid}",
@@ -125,7 +125,7 @@ class MarketCryptoAdapter:
         "命名查询, 不进广搜; 主流币静态映射、未知大写符号不臆测 → query 无币种或无法解析返空."
     )
 
-    def search(self, query: str, limit: int = 10) -> list[Document]:
+    def search(self, query: str, limit: int = 10) -> list[PolarisDocument]:
         plan = _resolve(query)[:max(limit, 1)]
         if not plan:
             return []
@@ -143,14 +143,14 @@ class MarketCryptoAdapter:
         )
         if not isinstance(payload, dict):
             return []
-        docs: list[Document] = []
+        docs: list[PolarisDocument] = []
         for cid, sym in plan:
             doc = _to_doc(cid, sym, payload.get(cid) or {})
             if doc is not None:
                 docs.append(doc)
         return docs[:limit]
 
-    def fetch_url(self, url: str) -> Optional[Document]:
+    def fetch_url(self, url: str) -> Optional[PolarisDocument]:
         return None
 
     def health_check(self) -> tuple[bool, str]:

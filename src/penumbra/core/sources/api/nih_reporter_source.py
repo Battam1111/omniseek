@@ -2,7 +2,7 @@
 
 NIH RePORTER is the authoritative record of NIH-funded biomedical research: the
 project, the contact PI, the awardee organization, the fiscal-year award amount,
-and the full project abstract + MeSH-ish terms. Penumbra's US biomedical
+and the full project abstract + MeSH-ish terms. Polaris-eye's US biomedical
 funding STRUCTURE source — filterable grant records (by topic / PI / organization)
 that the open web cannot hand back as data, and the biomedical sibling of
 nsf_awards (which covers NSF, not NIH).
@@ -28,7 +28,7 @@ advanced_text_search). explicit_only: US-only federal biomedical grants are a
 named, deliberate drill (by topic / PI / organization), not broad-fan-out fodder.
 
 Recon trail: the sandbox DNS-blackholes api.reporter.nih.gov, so field names are
-from the spec/probe handed to the source-builder; Penumbra host live-verifies the
+from the spec/probe handed to the source-builder; the eye host live-verifies the
 POST after deploy.
 """
 
@@ -38,7 +38,7 @@ from datetime import datetime
 from typing import Any, Optional
 
 from penumbra.core import http
-from penumbra.core.normalize import Document, jsonsafe, mk_signal
+from penumbra.core.normalize import PolarisDocument, jsonsafe, mk_signal
 from penumbra.core.sources.scrape._base import BaseScrapeAdapter
 
 API_URL = "https://api.reporter.nih.gov/v2/projects/search"
@@ -79,18 +79,18 @@ class NIHReporterAdapter(BaseScrapeAdapter):
         }
         return http.post_json(API_URL, json=body, timeout=20)
 
-    def _to_documents(self, raw: Any, query: str, limit: int) -> list[Document]:
+    def _to_documents(self, raw: Any, query: str, limit: int) -> list[PolarisDocument]:
         if not isinstance(raw, dict):
             return []
         results = raw.get("results") or []
-        docs: list[Document] = []
+        docs: list[PolarisDocument] = []
         for proj in results[:limit]:
             doc = self._project_to_doc(proj)
             if doc is not None:
                 docs.append(doc)
         return docs
 
-    def _project_to_doc(self, proj: Any) -> Optional[Document]:
+    def _project_to_doc(self, proj: Any) -> Optional[PolarisDocument]:
         if not isinstance(proj, dict):
             return None
         appl_id = proj.get("appl_id")
@@ -108,7 +108,7 @@ class NIHReporterAdapter(BaseScrapeAdapter):
         org_name = org.get("org_name")
         agency = proj.get("agency_ic_admin") if isinstance(proj.get("agency_ic_admin"), dict) else {}
 
-        return Document(
+        return PolarisDocument(
             source=self.name,
             source_id=str(sid),
             url=url,

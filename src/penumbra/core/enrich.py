@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 # Contact for the polite pools (Unpaywall ?email=, Crossref ?mailto=, our UA). Host-injected;
 # never a hardcoded personal address (see auth.contact_email).
 _MAIL = auth.contact_email()
-_UA = f"penumbra/0.1 (mailto:{_MAIL}; paper enrichment)"
+_UA = f"polaris-eye/0.1 (mailto:{_MAIL}; paper enrichment)"
 _TIMEOUT = 20
 _MAX_IDS = 50
 
@@ -179,7 +179,7 @@ def enrich(ids: list[str]) -> list[dict]:
             from penumbra.core import _s2
             p = _s2.get_paper(ax, fields=["citationCount"])
             rec = {"id": raw, "kind": "arxiv", "doi": f"10.48550/arXiv.{ax}",
-                   # .pdf suffix so penumbra_read_document/_fmt_of routes it to the PDF reader (a bare
+                   # .pdf suffix so eye_read_document/_fmt_of routes it to the PDF reader (a bare
                    # /pdf/<id> has no extension → was rejected as "unsupported"). arXiv serves both.
                    "is_oa": True, "pdf_url": f"https://arxiv.org/pdf/{ax}.pdf",
                    "oa_url": f"https://arxiv.org/abs/{ax}",

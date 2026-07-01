@@ -1,7 +1,7 @@
-"""Opt-in failure-evidence trace: Penumbra's "what went wrong" capture for a SINGLE source.
+"""Opt-in failure-evidence trace: the eye's "what went wrong" capture for a SINGLE source.
 
-When penumbra_fetch(source, query) comes back empty or errored, the agent that has to FIX
-the source (the source-repair flow) needs evidence: which egress helper failed, the HTTP
+When eye_fetch(source, query) comes back empty or errored, the agent that has to FIX
+the source (the /eye-fix skill) needs evidence: which egress helper failed, the HTTP
 status + a body snippet, the exception type. This module is that capture, and nothing
 more. The razor: it stores; it never judges (the fixing agent judges the root cause).
 
@@ -30,7 +30,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 # None = capture OFF (the default, and the broad-search state). A list = capture ON; note()
 # appends to it. The default is shared, but enable() always sets a FRESH list, so two
 # concurrent armed contexts never share a list (contextvars are per-logical-context).
-_trace_var: contextvars.ContextVar = contextvars.ContextVar("penumbra_diag", default=None)
+_trace_var: contextvars.ContextVar = contextvars.ContextVar("polaris_eye_diag", default=None)
 
 _MAX_BODY = 500       # a body snippet beyond this is truncated (a marker is appended)
 _MAX_CAPTURES = 50    # an upper bound on captures per run, so a retry storm cannot grow unbounded

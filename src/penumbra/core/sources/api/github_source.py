@@ -20,7 +20,7 @@ This one covers the platform surfaces those don't:
 GitHub search qualifiers (``org:`` ``repo:`` ``language:`` ``path:`` ``is:`` ``label:``
 ``state:`` …) pass straight through ``q`` to every surface.
 
-Token: ``~/.penumbra/credentials/github.json`` → ``{"token": "..."}`` (classic *or*
+Token: ``~/.polaris/credentials/github.json`` → ``{"token": "..."}`` (classic *or*
 fine-grained — both accept ``Authorization: Bearer``). Without a token, code-search +
 discussions are skipped (issues/repos still work at the anonymous 60/h limit); the
 adapter never hard-fails on a missing token.
@@ -43,7 +43,7 @@ from urllib.parse import urlparse
 
 from penumbra.core import _github, cache, http
 from penumbra.core.fetcher import register_adapter
-from penumbra.core.normalize import Document, mk_signal
+from penumbra.core.normalize import PolarisDocument, mk_signal
 
 logger = logging.getLogger(__name__)
 
@@ -105,7 +105,7 @@ class GitHubAdapter:
         return h
 
     # -------------------------------------------------------------- Protocol
-    def search(self, query: str, limit: int = 10) -> list[Document]:
+    def search(self, query: str, limit: int = 10) -> list[PolarisDocument]:
         q = (query or "").strip()
         if not q:
             return []
@@ -126,7 +126,7 @@ class GitHubAdapter:
         cache.set_docs(key, docs, ttl=CACHE_TTL)
         return docs
 
-    def fetch_url(self, url: str) -> Optional[Document]:
+    def fetch_url(self, url: str) -> Optional[PolarisDocument]:
         p = urlparse(url)
         if (p.hostname or "").lower() not in ("github.com", "www.github.com"):
             return None
@@ -149,19 +149,19 @@ class GitHubAdapter:
         return _github.health()
 
     # --------------------------------------------------------- search surfaces
-    def _multi_surface(self, q: str, limit: int) -> list[Document]:
+    def _multi_surface(self, q: str, limit: int) -> list[PolarisDocument]:
         # SERIAL on purpose — GitHub triggers secondary rate limits on concurrency.
         issues = self._search_issues(q, limit)
         discussions = self._search_discussions(q, limit)
         code = self._search_code(q, limit)
-        merged: list[Document] = []
+        merged: list[PolarisDocument] = []
         for triple in zip_longest(issues, discussions, code):
             for d in triple:
                 if d is not None:
                     merged.append(d)
         return merged[:limit] if limit else merged
 
-    def _search_code(self, q: str, limit: int) -> list[Document]:
+    def _search_code(self, q: str, limit: int) -> list[PolarisDocument]:
         if not self._token:  # /search/code is auth-required (401 otherwise)
             return []
         data = _github.get_json(
@@ -172,13 +172,13 @@ class GitHubAdapter:
         )
         if not data:  # None on 422 (bad/unqualified q) or any failure → empty
             return []
-        out: list[Document] = []
+        out: list[PolarisDocument] = []
         for it in (data.get("items") or [])[:limit]:
             repo = it.get("repository") or {}
             full = repo.get("full_name") or "?"
             tms = it.get("text_matches") or []
             frag = (tms[0].get("fragment") or "").strip() if tms else ""
-            out.append(Document(
+            out.append(PolarisDocument(
                 source="github",
                 source_id=f"code:{it.get('sha') or it.get('html_url')}",
                 url=it.get("html_url") or "",
@@ -193,7 +193,7 @@ class GitHubAdapter:
             ))
         return out
 
-    def _search_issues(self, q: str, limit: int) -> list[Document]:
+    def _search_issues(self, q: str, limit: int) -> list[PolarisDocument]:
         data = _github.get_json(
             "/search/issues",
             params={"q": q, "per_page": min(max(limit, 1), 50),
@@ -204,7 +204,7 @@ class GitHubAdapter:
             return []
         return [self._issue_to_doc(it) for it in (data.get("items") or [])[:limit] if it]
 
-    def _search_discussions(self, q: str, limit: int) -> list[Document]:
+    def _search_discussions(self, q: str, limit: int) -> list[PolarisDocument]:
         if not self._token:  # graphql is 0/h unauth
             return []
         gql = (
@@ -220,13 +220,13 @@ class GitHubAdapter:
         if not data:
             return []
         nodes = (((data.get("data") or {}).get("search") or {}).get("nodes")) or []
-        out: list[Document] = []
+        out: list[PolarisDocument] = []
         for n in nodes[:limit]:
             if not n:
                 continue
             repo = (n.get("repository") or {}).get("nameWithOwner")
             cat = (n.get("category") or {}).get("name")
-            out.append(Document(
+            out.append(PolarisDocument(
                 source="github",
                 source_id=f"discussion:{n.get('url')}",
                 url=n.get("url") or "",
@@ -240,7 +240,7 @@ class GitHubAdapter:
             ))
         return out
 
-    def _owner_recent_repos(self, kind: str, name: str, limit: int) -> list[Document]:
+    def _owner_recent_repos(self, kind: str, name: str, limit: int) -> list[PolarisDocument]:
         if kind == "org":
             path = f"/orgs/{name}/repos"
             params = {"sort": "created", "direction": "desc",
@@ -254,9 +254,9 @@ class GitHubAdapter:
         data = _github.get_json(path, params=params, timeout=TIMEOUT)
         if not data or not isinstance(data, list):
             return []
-        out: list[Document] = []
+        out: list[PolarisDocument] = []
         for r in data[:limit]:
-            out.append(Document(
+            out.append(PolarisDocument(
                 source="github",
                 source_id=f"repo:{r.get('id')}",
                 url=r.get("html_url") or "",
@@ -276,8 +276,8 @@ class GitHubAdapter:
         return out
 
     # ----------------------------------------------------------------- tree mode
-    def _repo_tree(self, owner: str, repo: str, branch: Optional[str]) -> Optional[Document]:
-        """Read a repo's FILE TREE (recursive, bounded) → a readable Document. Degrades
+    def _repo_tree(self, owner: str, repo: str, branch: Optional[str]) -> Optional[PolarisDocument]:
+        """Read a repo's FILE TREE (recursive, bounded) → a readable PolarisDocument. Degrades
         gracefully without a token (anonymous 60/h limit; never hard-fails on a missing token)."""
         full = f"{owner}/{repo}"
         if not branch:
@@ -301,8 +301,8 @@ class GitHubAdapter:
         return self._tree_to_doc(owner, repo, branch, data)
 
     @staticmethod
-    def _tree_to_doc(owner: str, repo: str, branch: str, data: dict) -> Document:
-        """Pure parse of the git/trees API response → a Document whose content is the file
+    def _tree_to_doc(owner: str, repo: str, branch: str, data: dict) -> PolarisDocument:
+        """Pure parse of the git/trees API response → a PolarisDocument whose content is the file
         tree as indented text. Bounded to ``_TREE_NODE_CAP`` nodes. No network (smoke-testable)."""
         full = f"{owner}/{repo}"
         entries = data.get("tree") or []
@@ -322,7 +322,7 @@ class GitHubAdapter:
         truncated = bool(data.get("truncated")) or total > _TREE_NODE_CAP
         header = f"{full}@{branch}: {n_files} file(s), {n_dirs} dir(s)" + (
             f" (showing {len(paths)} of {total}+ nodes; tree truncated)" if truncated else "")
-        return Document(
+        return PolarisDocument(
             source="github",
             source_id=f"tree:{full}@{data.get('sha') or branch}",
             url=f"https://github.com/{full}/tree/{branch}",
@@ -337,12 +337,12 @@ class GitHubAdapter:
         )
 
     # ------------------------------------------------------------- doc helpers
-    def _issue_to_doc(self, it: dict) -> Document:
+    def _issue_to_doc(self, it: dict) -> PolarisDocument:
         is_pr = bool(it.get("pull_request"))
         ru = it.get("repository_url") or ""
         repo = ru.rsplit("/repos/", 1)[-1] if "/repos/" in ru else None
         labels = [l.get("name") for l in (it.get("labels") or []) if isinstance(l, dict)]
-        return Document(
+        return PolarisDocument(
             source="github",
             source_id=f"{'pr' if is_pr else 'issue'}:{it.get('id')}",
             url=it.get("html_url") or "",
@@ -359,7 +359,7 @@ class GitHubAdapter:
                       "raw": it},  # GitHub issue/PR item
         )
 
-    def _discussion_by_number(self, owner: str, repo: str, num: str) -> Optional[Document]:
+    def _discussion_by_number(self, owner: str, repo: str, num: str) -> Optional[PolarisDocument]:
         if not self._token:
             return None
         try:
@@ -383,7 +383,7 @@ class GitHubAdapter:
             return None
         cat = (d.get("category") or {}).get("name")
         full = f"{owner}/{repo}"
-        return Document(
+        return PolarisDocument(
             source="github",
             source_id=f"discussion:{d.get('url')}",
             url=d.get("url") or "",

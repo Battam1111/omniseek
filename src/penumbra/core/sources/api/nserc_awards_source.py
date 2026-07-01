@@ -2,7 +2,7 @@
 
 NSERC (Natural Sciences and Engineering Research Council) is Canada's main science-funding body. Its
 open data is published ONLY as bulk per-fiscal-year CSV files (no query API, no DataStore) — FY2024
-Expenditures is ~56MB / ~62k award rows. This is Penumbra's FIRST Canadian funding source (it had US
+Expenditures is ~56MB / ~62k award rows. This is the eye's FIRST Canadian funding source (it had US
 NSF/NIH but no CA funding): for a PhD heading to a Canadian postdoc/faculty track, knowing which
 Canadian labs/PIs hold NSERC grants in NLP/ML — amounts, institutions, programs, keywords — is direct
 career-targeting intel web search can't return as structured records.
@@ -11,7 +11,7 @@ Razor (STRUCTURE): the per-award record (recipient, institution, amount, program
 beats web search's prose. Telos: Canada-bound NLP researcher; the CS/AI grant landscape = where the
 funded work + hireable labs are.
 
-DESIGN — Penumbra's bulk-file pattern (reusable for SSHRC/CIHR later):
+DESIGN — the eye's bulk-file pattern (reusable for SSHRC/CIHR later):
   * The 56MB CSV is a STATIC annual snapshot, so we fetch it at most monthly (cache_ttl 30d) and only
     on a cache miss. We never re-fetch per query.
   * On refresh we keep ONLY the telos slice — rows whose ResearchSubjectEN is Computer Science OR whose
@@ -35,7 +35,7 @@ from typing import Optional
 import httpx
 
 from penumbra.core import cache
-from penumbra.core.normalize import Document, keyword_score_filter
+from penumbra.core.normalize import PolarisDocument, keyword_score_filter
 
 logger = logging.getLogger(__name__)
 
@@ -56,10 +56,10 @@ class NSERCAwardsAdapter:
         "NSERC 是加拿大主科学资助局, 开放数据仅以逐年 bulk CSV 发布 (无查询 API, FY2024 ~56MB/~6 万行). "
         "逐笔奖助: 获奖人 + 机构 + 金额 (CAD) + program + 学科 + 关键词. 博士赴加找实验室/PI/资助方向的"
         "一手结构 (网搜给不出). 仅收 CS 学科 + AI/ML/NLP 关键词的子集 (~3-4k 行, telos 视角, 非全 NSERC). "
-        "命名 penumbra_fetch."
+        "命名 eye_fetch."
     )
     needs_credentials = False
-    explicit_only = "NSERC 加拿大经费 CS/AI 切片 (bulk CSV, 命名 penumbra_fetch); 月级刷新"
+    explicit_only = "NSERC 加拿大经费 CS/AI 切片 (bulk CSV, 命名 eye_fetch); 月级刷新"
     kind = "lookup"
     domains = ["funding"]
     regions = ["ca"]
@@ -80,7 +80,7 @@ class NSERCAwardsAdapter:
             "FieldOfResearchListNamesEN", "ResearchSubjectEN")).lower()
         return any(t in blob for t in _AI_TERMS)
 
-    def _row_to_doc(self, row: dict) -> Optional[Document]:
+    def _row_to_doc(self, row: dict) -> Optional[PolarisDocument]:
         name = (row.get("Name-Nom") or "").strip()
         title = (row.get("ApplicationTitle") or "").strip()
         if not (name or title):
@@ -104,7 +104,7 @@ class NSERCAwardsAdapter:
             parts.append(f"关键词: {keywords}.")
         if summary:
             parts.append(summary)
-        return Document(
+        return PolarisDocument(
             source=self.name,
             source_id=f"nserc:{self._YEAR}:{app_id or (name + title)[:48]}",
             url=self._DATASET_URL,
@@ -119,7 +119,7 @@ class NSERCAwardsAdapter:
         )
 
     # ── bulk fetch + subset cache (query-independent) ───────────────────────
-    def _subset_docs(self) -> list[Document]:
+    def _subset_docs(self) -> list[PolarisDocument]:
         key = cache.make_key(self.name, "subset", self._YEAR)
         cached = cache.get_docs(key)
         if cached is not None:
@@ -129,7 +129,7 @@ class NSERCAwardsAdapter:
             cache.set_docs(key, docs, ttl=self._CACHE_TTL)
         return docs
 
-    def _fetch_filter_build(self) -> list[Document]:
+    def _fetch_filter_build(self) -> list[PolarisDocument]:
         try:
             r = httpx.get(self._CSV_URL, headers={"User-Agent": _UA},
                           timeout=240, follow_redirects=True)
@@ -138,7 +138,7 @@ class NSERCAwardsAdapter:
         except Exception as exc:  # noqa: BLE001 — failure → [] (the contract); don't cache a miss
             logger.warning("nserc_awards: CSV fetch failed: %s", exc)
             return []
-        docs: list[Document] = []
+        docs: list[PolarisDocument] = []
         for row in csv.DictReader(io.StringIO(text)):
             if self._is_cs_ai(row):
                 d = self._row_to_doc(row)
@@ -148,7 +148,7 @@ class NSERCAwardsAdapter:
         return docs
 
     # ── Protocol surface ────────────────────────────────────────────────────
-    def search(self, query: str, limit: int = 10) -> list[Document]:
+    def search(self, query: str, limit: int = 10) -> list[PolarisDocument]:
         docs = self._subset_docs()
         if not docs:
             return []
@@ -157,7 +157,7 @@ class NSERCAwardsAdapter:
             return docs[:limit]
         return keyword_score_filter(docs, q)[:limit]
 
-    def fetch_url(self, url: str) -> Optional[Document]:
+    def fetch_url(self, url: str) -> Optional[PolarisDocument]:
         return None
 
     def health_check(self) -> tuple[bool, str]:
