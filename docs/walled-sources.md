@@ -146,7 +146,7 @@ read with a credential **you** hold, to obtain access **you** are already entitl
 access control you are not authorized to be on the far side of.
 
 It is **not** circumvention: Penumbra ships nothing that defeats a paywall, breaks a rate-limit, or
-decrypts a protected response. Those are a separate tier that is never in the default pack. You are
+decrypts a protected response. Those capabilities were never built and are not part of Penumbra. You are
 responsible for using each platform within its Terms of Service and the law in your jurisdiction.
 See [SECURITY.md](../.github/SECURITY.md) and [NOTICE](../NOTICE).
 

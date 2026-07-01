@@ -12,7 +12,7 @@ All notable changes to Penumbra are documented here. The format follows
 ### Added
 
 - Initial public release: a self-hosted deep-retrieval MCP server.
-- Around 200 curated sources across 157 independent upstreams, classified by access tier (free / keyed / walled / circumvention).
+- Around 200 curated sources across 157 independent upstreams, classified by access tier (free / keyed / walled).
 - MCP tool surface: `penumbra_search`, `penumbra_search_ranked`, `penumbra_fetch`, `penumbra_list_sources`, `penumbra_add_url`, paper + citation tools, people + organization tools, document + vision reading, audio transcription, health check, and a self-iterating source curator.
 - Token-gated loopback HTTP transport; SSRF guard; sandboxed document inbox.
 - Apache-clean core install; opt-in extras (`pdf` / `asr` / `recall` / `ocr` / `walled`).

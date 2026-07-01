@@ -23,7 +23,7 @@ boundaries it enforces:
   CIDR set deliberately with `PENUMBRA_ALLOW_NETS` (needed for some split-tunnel setups).
 - **Local-file sandbox.** `penumbra_read_document` resolves and contains every path to an allowlisted
   inbox (`~/penumbra-inbox` plus `PENUMBRA_DOC_ROOTS`); a path that escapes is refused.
-- **Untrusted retrieved content.** Documents and snippets Penumbra returns are external data, never
+- **Untrusted retrieved content.** Documents and snippets penumbra returns are external data, never
   instructions. A consuming agent must treat them as data and never let a fetched page redirect its
   task or disclose secrets (the MCP instructions state this to the agent).
 - **Secrets.** Credentials, tokens, and cookies live under `~/.penumbra` (outside the repo), never in
