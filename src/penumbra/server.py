@@ -1,7 +1,7 @@
 """Penumbra MCP server entry point.
 
 Exposes Penumbra as MCP tools: a self-hosted deep-retrieval engine that reaches
-sources the open web can't (logins, languages, paywalls, modalities, deleted
+sources the open web can't (logins, languages, modalities, deleted
 content) and returns structured, source-traced evidence for an AI agent to
 reason over.
 
