@@ -37,7 +37,7 @@ All there. All reachable. Untouched.
 
 The vast shadow zone between what search shows you and what actually exists.
 Not secrets. Not the open web.
-**The in-between where knowledge is real, scattered, and structurally unreachable.**
+**Where knowledge is real, scattered, and structurally unreachable.**
 
 </div>
 
@@ -49,9 +49,9 @@ Not secrets. Not the open web.
 
 A self-hosted deep-retrieval engine. Transcribes audio. Digests documents. Extracts from video and images. Reads across languages. Traverses citation graphs. Monitors what changed. A growing, open catalog of curated sources (hundreds today, extensible by anyone) spanning the deep web. Speaks MCP, so any AI agent, workflow, or application plugs in.
 
-**But fragments aren't knowledge.** A hundred scattered findings are noise. Signal is when a salary thread in English, a hiring freeze on a Chinese forum, and a podcast aside point to the same conclusion from three independent angles no single source reveals. Penumbra equips your agent: every finding tagged by source, timestamp, and independence, with a precise map of what couldn't be reached. Your agent reasons over structured, source-traced, gap-mapped evidence. Not surface-level confidence.
+**But fragments aren't knowledge.** A hundred scattered findings are noise until they line up: the same conclusion from independent angles no single source holds. Penumbra reaches each fragment and tags it by source, time, and independence, so your agent assembles the map instead of trusting the surface.
 
-**Imagine what becomes answerable.** Who knows whom in your field, across every language? What signal hides between a regulatory filing and a translated earnings call? What insider knowledge could you accumulate in months, not years? From the surface: unanswerable. From the penumbra: tractable. These are just the ones we've thought of.
+**Imagine what becomes answerable.** Who knows whom in your field, across every language? What signal hides between a regulatory filing and a translated earnings call? What insider knowledge could you accumulate in months, not years? These are just the ones we've thought of.
 
 <div align="center">
 
