@@ -118,7 +118,7 @@ are off. Tune everything in one file, `~/.penumbra/profile.json` (seeded from
 | **free** (public, no key) | **on** |
 | **keyed** (a free or paid API key you supply) | on once the key is set |
 | **walled** (a login you hold) | **off**; you bring your own browser |
-| **circumvention** | **off, and never shipped** |
+| **circumvention** | **off**; none in the default pack |
 
 Full reference in **[configuration](docs/configuration.md)**; browser login for walled sources
 in **[walled sources](docs/walled-sources.md)**.

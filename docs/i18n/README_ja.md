@@ -114,7 +114,7 @@ Penumbraは**カタログ優先**設計:設定なしでも、すべての安全�
 | **free**(公開、キー不要) | **オン** |
 | **keyed**(あなたが用意する無料/有料の API キー) | キー設定でオン |
 | **walled**(あなたが権利を持つログイン) | **オフ**;ブラウザは自前 |
-| **circumvention** | **オフ、同梱されない** |
+| **circumvention** | **オフ**;デフォルトパックに含まれない |
 
 詳細は **[configuration](../configuration.md)** に、ログイン必須ソースへのブラウザログインは **[walled sources](../walled-sources.md)** にある。
 
