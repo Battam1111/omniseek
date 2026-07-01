@@ -34,14 +34,14 @@ from urllib.parse import urlparse
 
 import httpx
 
-from penumbra.core.normalize import Document, jsonsafe
+from penumbra.core.normalize import PolarisDocument, jsonsafe
 from penumbra.core.sources.api._base import BaseAPIAdapter
 
 logger = logging.getLogger(__name__)
 
 DBLP_BASE = "https://dblp.org"
 TIMEOUT = 20
-USER_AGENT = "penumbra/0.1 (automated retrieval)"
+USER_AGENT = "polaris-eye/0.1 (automated retrieval)"
 
 
 class DBLPAdapter(BaseAPIAdapter):
@@ -83,8 +83,8 @@ class DBLPAdapter(BaseAPIAdapter):
 
         return (((data.get("result") or {}).get("hits") or {}).get("hit")) or []
 
-    def _to_document(self, raw) -> Document:
-        """One publ-search hit → Document (delegates to the verbatim mapper)."""
+    def _to_document(self, raw) -> PolarisDocument:
+        """One publ-search hit → PolarisDocument (delegates to the verbatim mapper)."""
         return self._publ_to_document(raw)
 
     # --------------------------------------------------------------- API call
@@ -99,7 +99,7 @@ class DBLPAdapter(BaseAPIAdapter):
         return resp.json()
 
     # --------------------------------------------------------------- fetch_url
-    def fetch_url(self, url: str) -> Optional[Document]:
+    def fetch_url(self, url: str) -> Optional[PolarisDocument]:
         host = (urlparse(url).hostname or "").lower()
         if "dblp.org" not in host:
             return None
@@ -129,7 +129,7 @@ class DBLPAdapter(BaseAPIAdapter):
 
     # ------------------------------------------------------------ field mapping
     @staticmethod
-    def _publ_to_document(hit: dict) -> Document:
+    def _publ_to_document(hit: dict) -> PolarisDocument:
         info = hit.get("info") or {}
         publ_id = hit.get("@id") or info.get("key") or ""
         title = info.get("title") or "(no title)"
@@ -166,7 +166,7 @@ class DBLPAdapter(BaseAPIAdapter):
 
         pub_type = info.get("type")  # e.g., "Conference and Workshop Papers", "Journal Articles"
 
-        return Document(
+        return PolarisDocument(
             source="dblp",
             source_id=str(publ_id),
             url=url,

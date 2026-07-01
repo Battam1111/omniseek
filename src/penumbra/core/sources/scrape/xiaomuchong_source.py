@@ -25,7 +25,7 @@ from urllib.parse import quote, urlparse
 
 from bs4 import BeautifulSoup
 
-from penumbra.core.normalize import Document, jsonsafe
+from penumbra.core.normalize import PolarisDocument, jsonsafe
 from penumbra.core.sources.walled._base import BaseCDPAdapter
 from penumbra.core.sources.walled._cdp import cdp_call, cdp_health, content_with_media, images_from_page
 
@@ -72,7 +72,7 @@ class XiaomuchongAdapter(BaseCDPAdapter):
         page.wait_for_timeout(1200)  # small hydration buffer
         return page.content()
 
-    def _to_documents(self, raw: str, query: str, limit: int) -> list[Document]:
+    def _to_documents(self, raw: str, query: str, limit: int) -> list[PolarisDocument]:
         soup = BeautifulSoup(raw, "lxml")
 
         # Results live in the Discuz result table's title cells (th.t_new). Prefer those to exclude
@@ -81,7 +81,7 @@ class XiaomuchongAdapter(BaseCDPAdapter):
         anchors = soup.select('th.t_new a[href*="/t-"]') or [
             a for a in soup.find_all("a", href=True) if re.search(r"/t-\d+", a["href"])
         ]
-        docs: list[Document] = []
+        docs: list[PolarisDocument] = []
         seen: set[str] = set()
         for a in anchors:
             href = a["href"]
@@ -106,7 +106,7 @@ class XiaomuchongAdapter(BaseCDPAdapter):
                 full_url = f"{BASE}/{href.lstrip('/')}"
 
             docs.append(
-                Document(
+                PolarisDocument(
                     source="xiaomuchong",
                     source_id=tid,
                     url=full_url,
@@ -124,7 +124,7 @@ class XiaomuchongAdapter(BaseCDPAdapter):
         return docs
 
     # ----- bespoke overrides (no base default expresses these) -----------------
-    def fetch_url(self, url: str) -> Optional[Document]:
+    def fetch_url(self, url: str) -> Optional[PolarisDocument]:
         host = urlparse(url).hostname or ""
         if "muchong.com" not in host and "emuch.net" not in host:
             return None
@@ -148,7 +148,7 @@ class XiaomuchongAdapter(BaseCDPAdapter):
         m = re.search(r"thread-(\d+)|tid=(\d+)", url)
         tid = (m.group(1) or m.group(2)) if m else url
 
-        return Document(
+        return PolarisDocument(
             source="xiaomuchong",
             source_id=tid,
             url=url,

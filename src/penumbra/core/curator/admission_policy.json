@@ -1,9 +1,9 @@
 {
   "default_posture": "reject_if_thin",
-  "rationale": "the operator policy: a candidate source whose evidence is thin (probe did not surface a clear acquisition edge over plain web search) is REJECTED, not admitted-on-doubt. Admission is the exception that must be earned; Penumbra stays small and high-signal. This posture is DATA, read into the evidence packet's policy_posture; it is NOT a code constant.",
+  "rationale": "Captain policy: a candidate source whose evidence is thin (probe did not surface a clear acquisition edge over plain web search) is REJECTED, not admitted-on-doubt. Admission is the exception that must be earned; the eye stays small and high-signal. This posture is DATA, read into the evidence packet's policy_posture; it is NOT a code constant.",
   "auto_apply": {
     "families": ["rss"],
     "modes": ["STRUCTURE", "UNWALL", "TRANSCRIBE"],
-    "note": "Conservative floor for a FUTURE P1.5 live auto-apply. org_watch / page_watch / news_scraper / render-scrapers are EXCLUDED (their recurring post-admission fetch bypasses safe_fetch; org_watch is a turnkey people-tracker that 'delete the row' cannot un-harvest). In P1 there is NO live auto-apply at all: every admit stages to owner_review. Widening this list is a deliberate operator edit."
+    "note": "Conservative floor for a FUTURE P1.5 live auto-apply. org_watch / page_watch / news_scraper / render-scrapers are EXCLUDED (their recurring post-admission fetch bypasses safe_fetch; org_watch is a turnkey people-tracker that 'delete the row' cannot un-harvest). In P1 there is NO live auto-apply at all: every admit stages to captain_review. Widening this list is a deliberate Captain edit."
   }
 }

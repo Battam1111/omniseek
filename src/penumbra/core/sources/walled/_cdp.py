@@ -1,8 +1,9 @@
 """Shared CDP (Chrome DevTools Protocol) helper for walled-garden adapters.
 
-Connects to a persistent Chrome instance you launch with remote debugging
-(see docs/walled-sources.md). All adapters that need authenticated browser
-sessions (zhihu, yipinsanfendi, xiaohongshu) reuse this connection helper so
+Connects to the persistent Chrome instance launched by
+`scripts/launch_cdp_cn_forums.sh` (registered as a launchd service on the
+Mac mini). All adapters that need authenticated browser sessions
+(zhihu, yipinsanfendi, xiaohongshu) reuse this connection helper so
 they share one browser, one set of logged-in cookies.
 
 The persistent browser advantage:
@@ -77,7 +78,7 @@ _inflight_lock = threading.Lock()
 # Per-Chrome SERIALIZATION gate. The default cdp_call path spawns a fresh thread PER call with no
 # concurrency bound, so two named walled fetches to the SAME Chrome run truly concurrently: two
 # tabs, two same-site searches on one shared browser → the site's flood-control throttles one and
-# Penumbra SILENTLY caches the empty as success (the gap-③ false-empty; proven 2026-06-22: two
+# the eye SILENTLY caches the empty as success (the gap-③ false-empty; proven 2026-06-22: two
 # parallel 一亩三分地 fetches false-emptied one, while a serial fetch returned 35). Walled sources
 # are slow + explicit_only (named, never in the broad fan-out), so STRICT serial-per-Chrome is the
 # right trade: correctness over a little queueing latency. (Borrowed from exa-mcp's async job-queue
@@ -127,7 +128,7 @@ def _sweep_excess_tabs(ctx, keep_recent: int = 6) -> None:
             pass
 
 
-# ── Lever A: persistent CDP connection pool (opt-in via PENUMBRA_CDP_POOL=1) ──────────────────
+# ── Lever A: persistent CDP connection pool (opt-in via POLARIS_CDP_POOL=1) ──────────────────
 # The default cdp_call() spawns a fresh thread + sync_playwright() + connect_over_cdp() PER call
 # (~1.5-3s of pure driver-startup + CDP-handshake waste, since the browser itself is persistent
 # but the connection is rebuilt every time). This pool keeps N persistent worker threads per
@@ -143,7 +144,7 @@ def _sweep_excess_tabs(ctx, keep_recent: int = 6) -> None:
 # reconnects on the NEXT task (the in-flight one fails exactly as the old per-call path would). The
 # flag defaults OFF → behavior is byte-identical to before unless explicitly enabled, so it ships
 # inert and is reversible by unsetting the env var.
-_POOL_ENV = "PENUMBRA_CDP_POOL"
+_POOL_ENV = "POLARIS_CDP_POOL"
 
 
 def _pool_enabled() -> bool:
@@ -375,7 +376,7 @@ def wait_through_cloudflare(page, timeout: float = 20.0) -> bool:
     """Wait out a Cloudflare 'Just a moment' interstitial before reading the page.
 
     The persistent real Chrome (real profile + fingerprint) solves CF's non-interactive JS
-    challenge on its OWN — measured ~2s on the host (verified 2026-06-11 on 1point3acres). The
+    challenge on its OWN — measured ~2s on the mini (verified 2026-06-11 on 1point3acres). The
     only bug was reading title/content BEFORE it cleared (the cause of the false 'CF-walled,
     needs VNC' verdict). This polls cheaply until the CF markers are gone.
 
@@ -437,7 +438,7 @@ def is_logged_in_zhihu(page: Page) -> bool:
 # Many social/forum sources (xiaohongshu carousels, zhihu answer screenshots, Discuz
 # attachments, Quora/X/脉脉 image posts) hide the real content in IMAGES, not the text.
 # These helpers let any CDP source surface the content-image URLs (doc.media) so the
-# consuming agent can VIEW them with its own vision. Penumbra does NOT OCR (free CJK OCR
+# consuming agent can VIEW them with its own vision. The eye does NOT OCR (free CJK OCR
 # is poor on stylized images; the agent's vision is better + free) — it just surfaces.
 _CONTENT_IMAGES_JS = (
     "()=>{const seen=new Set(),out=[];"
@@ -469,6 +470,6 @@ def content_with_media(text: str, images: list) -> str:
     text = (text or "").strip()
     if images and len(text) < 200:
         hint = (f"[正文/干货可能在 {len(images)} 张图里:图片 URL 见 media 字段,"
-                f"下载后用视觉读图(Penumbra 不做 OCR)]")
+                f"下载后用视觉读图(eye 不做 OCR)]")
         return (text + "\n\n" + hint) if text else hint
     return text

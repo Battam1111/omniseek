@@ -1,15 +1,15 @@
 """Perception-memory index — the WRITE half: a single serialized writer (the ONLY writer) + the
 ingest hooks.
 
-SQLite is single-writer; Penumbra is highly concurrent (one uvicorn worker, a 64-wide fetch pool,
+SQLite is single-writer; the eye is highly concurrent (one uvicorn worker, a 64-wide fetch pool,
 256 anyio threads) and runs SEPARATE cron processes (watchtower / digest / health). So ALL writes
-funnel through ONE daemon thread owning ONE WAL connection, and writes are GATED to Penumbra-http
+funnel through ONE daemon thread owning ONE WAL connection, and writes are GATED to the eye-http
 process via ``WRITES_ENABLED`` (set once in ``serve_http.main``). A cron process imports this module
 fresh -> ``WRITES_ENABLED`` stays False -> the same ingest hook is a silent no-op there: no second
 writer, no cross-process write contention (crons may only ever READ).
 
 ``maybe_ingest`` is the hook spliced into the fetcher return path (the true chokepoint — every
-adapter's ``search`` returns ``list[Document]`` there, regardless of its internal cache
+adapter's ``search`` returns ``list[PolarisDocument]`` there, regardless of its internal cache
 shape). It is ENQUEUE-ONLY and NEVER raises: a hook exception would break every search.
 """
 
@@ -22,7 +22,7 @@ import threading
 import time
 from typing import Optional
 
-from penumbra.core.normalize import Document
+from penumbra.core.normalize import PolarisDocument
 from penumbra.core.recall import store
 
 logger = logging.getLogger(__name__)
@@ -225,7 +225,7 @@ def _backfill_page(con) -> None:
 
 def start_backfill() -> None:
     """Kick off the page-at-a-time backfill of vectors for the existing corpus (and after a model
-    swap). No-op unless writes are enabled (HTTP process only)."""
+    swap). No-op unless writes are enabled (eye-http process only)."""
     if not WRITES_ENABLED or store._disabled:
         return
     try:
@@ -234,7 +234,7 @@ def start_backfill() -> None:
         pass
 
 
-def _doc_json(d: Document) -> str:
+def _doc_json(d: PolarisDocument) -> str:
     data = d.model_dump(mode="json")
     md = data.get("metadata")
     if isinstance(md, dict) and "raw" in md:  # metadata['raw'] is write-only (to_tool_dict drops it)
@@ -251,13 +251,13 @@ def _dt(date) -> Optional[str]:
         return str(date)
 
 
-def _embed_text(d: Document) -> str:
+def _embed_text(d: PolarisDocument) -> str:
     """RAW title+content for the SEMANTIC embedder (NOT docs.seg, which is the lexical bigram
     shadow — feeding that to a semantic model is garbage). Capped so a giant doc can't stall a batch."""
     return ((d.title or "") + "\n" + (d.content or "")).strip()[:2000]
 
 
-def _upsert(con, rank, d: Document, now: float):
+def _upsert(con, rank, d: PolarisDocument, now: float):
     """Upsert one doc. Returns ``(rowid, raw_text)`` when the doc NEEDS (re-)embedding (new doc, or
     content changed), else ``None`` (unchanged → just a last_seen bump, no re-embed)."""
     source = getattr(d, "source", None)

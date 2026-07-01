@@ -2,7 +2,7 @@
 
 Some decision-critical pages (MOM EP/COMPASS eligibility, ONE Pass criteria,
 ICA PR application rules) have no feed and change rarely but MATTER when they
-do (salary thresholds, criteria). Penumbra's watchtower diffs source_ids, so the
+do (salary thresholds, criteria). The eye's watchtower diffs source_ids, so the
 whole "page diff" capability collapses into one dumb trick: each watched page
 becomes ONE document whose source_id embeds the normalized-content FINGERPRINT.
 Page changes → fingerprint changes → a NEW source_id appears → the existing
@@ -28,7 +28,7 @@ import httpx
 from bs4 import BeautifulSoup
 
 from penumbra.core import cache
-from penumbra.core.normalize import Document, keyword_score_filter
+from penumbra.core.normalize import PolarisDocument, keyword_score_filter
 
 logger = logging.getLogger(__name__)
 
@@ -129,7 +129,7 @@ class PageWatchAdapter:
             logger.warning("page_watch overlay rows skipped: %s", exc)
         return rows
 
-    def _doc_for(self, row: dict) -> Optional[Document]:
+    def _doc_for(self, row: dict) -> Optional[PolarisDocument]:
         key = cache.make_key("page_watch", "text", row["url"])
         text = cache.get(key)
         if text is None:
@@ -139,7 +139,7 @@ class PageWatchAdapter:
         if not text or len(text) < 200:
             return None  # JS shell or fetch failure: no honest fingerprint possible
         fp = hashlib.sha256(text.encode("utf-8")).hexdigest()[:10]
-        return Document(
+        return PolarisDocument(
             source="page_watch",
             source_id=f"{row['name']}:{fp}",
             url=row["url"],
@@ -151,12 +151,12 @@ class PageWatchAdapter:
                       "note": row.get("note", "")},
         )
 
-    def search(self, query: str, limit: int = 10) -> list[Document]:
+    def search(self, query: str, limit: int = 10) -> list[PolarisDocument]:
         docs = [d for d in (self._doc_for(r) for r in self._rows()) if d]
         docs = keyword_score_filter(docs, (query or "").strip())
         return docs[:limit]
 
-    def fetch_url(self, url: str) -> Optional[Document]:
+    def fetch_url(self, url: str) -> Optional[PolarisDocument]:
         norm = url.split("?")[0].rstrip("/")
         for row in self._rows():
             if row["url"].split("?")[0].rstrip("/") == norm:

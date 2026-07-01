@@ -3,7 +3,7 @@
 The Center for Security and Emerging Technology (cset.georgetown.edu) is the leading
 US think-tank on AI policy, compute / semiconductor export controls, AI safety and
 national-security implications of emerging tech. Its analysis (reports, data briefs,
-blog, expert commentary) is the empty think-tank cell in Penumbra: high-signal,
+blog, expert commentary) is the empty think-tank cell in Polaris-eye: high-signal,
 policy-grade primary analysis the open web buries under news re-prints.
 
 The site runs on WordPress, whose REST API exposes every published post keyless:
@@ -18,9 +18,9 @@ article URL), ``date`` (ISO ``YYYY-MM-DDTHH:MM:SS``), and (with ``_embed``) an
 Thin subclass over BaseScrapeAdapter: the cache check / atomic set_docs /
 self-registration ritual lives in the base; this adapter declares its facets and
 fills the two hooks (_raw_fetch = the /posts search GET; _to_documents = the
-post -> report-Document map). ``rank`` stays default-False: the WP search
+post -> report-PolarisDocument map). ``rank`` stays default-False: the WP search
 endpoint already returns server relevance order, so we keep it byte-faithful and let
-Penumbra's ranked search re-score across sources when it needs cross-source relevance.
+the eye's ranked search re-score across sources when it needs cross-source relevance.
 """
 
 from __future__ import annotations
@@ -32,7 +32,7 @@ from datetime import datetime
 from typing import Any, Optional
 
 from penumbra.core import http, relevance
-from penumbra.core.normalize import Document, jsonsafe
+from penumbra.core.normalize import PolarisDocument, jsonsafe
 from penumbra.core.sources.scrape._base import BaseScrapeAdapter
 
 logger = logging.getLogger(__name__)
@@ -41,7 +41,7 @@ API_URL = "https://cset.georgetown.edu/wp-json/wp/v2/posts"
 TIMEOUT = 15
 # WordPress 'search' relevance is weak (LIKE-based + date-skewed), so a narrow per_page can
 # miss CSET's own on-topic reports while returning off-topic recent posts (proven in a live
-# WebSearch head-to-head). Pull a WIDE candidate pool, then re-rank locally with Penumbra's
+# WebSearch head-to-head). Pull a WIDE candidate pool, then re-rank locally with the eye's
 # shared BM25 scorer and cap to the caller's limit (see _to_documents).
 _CANDIDATE_POOL = 30
 
@@ -67,10 +67,10 @@ class CSETAdapter(BaseScrapeAdapter):
             timeout=TIMEOUT,
         )
 
-    def _to_documents(self, raw: Any, query: str, limit: int) -> list[Document]:
+    def _to_documents(self, raw: Any, query: str, limit: int) -> list[PolarisDocument]:
         if not isinstance(raw, list):
             return []  # WP returns a bare list of posts; an error payload is a dict -> skip
-        docs: list[Document] = []
+        docs: list[PolarisDocument] = []
         for post in raw:  # the WIDE candidate pool (see _raw_fetch); re-ranked + capped below
             if not isinstance(post, dict):
                 continue
@@ -82,7 +82,7 @@ class CSETAdapter(BaseScrapeAdapter):
             if doc is not None:
                 docs.append(doc)
         # WP 'search' is LIKE-based + date-skewed (proven to dump off-topic recent posts while
-        # missing CSET's own on-topic reports). Re-rank the wide pool with Penumbra's shared BM25
+        # missing CSET's own on-topic reports). Re-rank the wide pool with the eye's shared BM25
         # scorer (title 3x + content 1x), keep only query matches, cap to limit -> a real
         # relevance search. A term-less query keeps WP's own order (relevance.query_terms empty).
         if docs and relevance.query_terms(query):
@@ -91,7 +91,7 @@ class CSETAdapter(BaseScrapeAdapter):
                     if _s > 0.0]
         return docs[:limit]
 
-    def _post_to_doc(self, post: dict) -> Optional[Document]:
+    def _post_to_doc(self, post: dict) -> Optional[PolarisDocument]:
         title = _clean_text((post.get("title") or {}).get("rendered"))
         if not title:
             return None
@@ -108,7 +108,7 @@ class CSETAdapter(BaseScrapeAdapter):
         author = _embedded_author(post)
         tags = _embedded_terms(post)
 
-        return Document(
+        return PolarisDocument(
             source=self.name,
             source_id=post_id or url or title,
             url=url,

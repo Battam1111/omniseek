@@ -4,9 +4,9 @@ SlidesLive is the de-facto video host for the big ML/NLP conferences' VIRTUAL
 content. Most of these talks are NOT on YouTube and ship NO machine transcript,
 so they are invisible to ordinary web search and to caption-based tooling: a
 paper's authors explain the work in a 5 to 15 minute talk that exists only as a
-SlidesLive embed behind a conference virtual portal. Penumbra's TRANSCRIBE mode
+SlidesLive embed behind a conference virtual portal. The eye's TRANSCRIBE mode
 unlocks them: yt-dlp (already a dep, with a maintained ``slideslive`` extractor)
-resolves a talk's audio stream, which ``penumbra_transcribe`` then feeds to local
+resolves a talk's audio stream, which ``eye_transcribe`` then feeds to local
 SenseVoice ASR. This adapter is the discovery + resolve layer in front of that.
 
 SCOPE (be honest): this is a URL-RESOLVE adapter, not a full search engine.
@@ -20,7 +20,7 @@ SCOPE (be honest): this is a URL-RESOLVE adapter, not a full search engine.
     shipped here: the portals are JS-rendered, per-conference, and frequently
     login-gated, which is its own unit. The honest contract: the agent finds the
     SlidesLive URL (from a paper page, a conference schedule, or web search) and
-    hands it here; Penumbra resolves + transcribes it.
+    hands it here; the eye resolves + transcribes it.
 
 yt-dlp valid-url shape (verified 2026-06-17, yt-dlp 2026.06.09):
     https?://slideslive.com/(embed/(presentation/)?)?<numeric-id>
@@ -46,7 +46,7 @@ from typing import Any, Optional
 
 import yt_dlp
 
-from penumbra.core.normalize import Document, mk_signal
+from penumbra.core.normalize import PolarisDocument, mk_signal
 from penumbra.core.sources.scrape._base import BaseScrapeAdapter
 
 logger = logging.getLogger(__name__)
@@ -113,15 +113,15 @@ class SlidesLiveTalksAdapter(BaseScrapeAdapter):
             return None
         return self._extract_info(_canonical_url(talk_id))
 
-    def _to_documents(self, raw: Any, query: str, limit: int) -> list[Document]:
+    def _to_documents(self, raw: Any, query: str, limit: int) -> list[PolarisDocument]:
         if not isinstance(raw, dict):
             return []
         doc = self._info_to_document(raw)
         return [doc] if doc is not None else []
 
-    def fetch_url(self, url: str) -> Optional[Document]:
+    def fetch_url(self, url: str) -> Optional[PolarisDocument]:
         """Claim a slideslive.com talk URL: resolve its metadata + audio handle into
-        one doc (the penumbra_add_url / penumbra_fetch drill-down path). Returns None for any
+        one doc (the eye_add_url / eye_fetch drill-down path). Returns None for any
         non-SlidesLive url so the fetcher's host routing skips this source."""
         talk_id = _talk_id(url)
         if not talk_id:
@@ -153,7 +153,7 @@ class SlidesLiveTalksAdapter(BaseScrapeAdapter):
             return None
 
     @staticmethod
-    def _info_to_document(info: dict) -> Optional[Document]:
+    def _info_to_document(info: dict) -> Optional[PolarisDocument]:
         talk_id = str(info.get("id") or "")
         if not talk_id:
             return None
@@ -164,7 +164,7 @@ class SlidesLiveTalksAdapter(BaseScrapeAdapter):
         duration = info.get("duration")
 
         # The audio stream is the TRANSCRIBE handle. We surface its presence (the agent
-        # transcribes by passing this doc's url to penumbra_transcribe, which runs the same
+        # transcribes by passing this doc's url to eye_transcribe, which runs the same
         # yt-dlp bestaudio resolve under the hood; we don't ship the signed CDN url,
         # which expires; the talk url is the durable handle).
         audio_fmt = _best_audio_format(info.get("formats") or [])
@@ -194,7 +194,7 @@ class SlidesLiveTalksAdapter(BaseScrapeAdapter):
         if isinstance(thumb, str) and thumb.startswith("http"):
             media.append(thumb)
 
-        return Document(
+        return PolarisDocument(
             source="slideslive_talks",
             source_id=talk_id,
             url=url,
@@ -213,7 +213,7 @@ class SlidesLiveTalksAdapter(BaseScrapeAdapter):
                 "audio_format": _slim_audio(audio_fmt),  # compact: NO 200+ DASH-fragment dump
                 "caption_languages": caption_langs,
                 "n_slides": len(chapter_titles) or None,
-                "transcribe_url": url,  # the durable handle to pass to penumbra_transcribe
+                "transcribe_url": url,  # the durable handle to pass to eye_transcribe
             },
         )
 
@@ -293,11 +293,11 @@ def _build_content(*, description: str, duration: Optional[float], audio_present
     if caption_langs:
         lines.append(
             "SlidesLive captions available (" + ", ".join(caption_langs) + "). "
-            "Use penumbra_transcribe on this talk's URL for a clean full transcript via local ASR."
+            "Use eye_transcribe on this talk's URL for a clean full transcript via local ASR."
         )
     elif audio_present:
         lines.append(
-            "No transcript on SlidesLive: pass this talk's URL to penumbra_transcribe to "
+            "No transcript on SlidesLive: pass this talk's URL to eye_transcribe to "
             "resolve its audio and transcribe it with local ASR (the TRANSCRIBE unlock)."
         )
     else:

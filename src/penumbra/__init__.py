@@ -1,8 +1,9 @@
-"""Penumbra: a self-hosted deep-retrieval MCP server.
+"""Polaris — PhD navigation system.
 
-A deep-retrieval engine that reaches sources the open web can't (logins,
-languages, modalities, deleted content) and returns structured,
-source-traced evidence for an AI agent to reason over.
+This package exposes Polaris's capabilities as an MCP server. The first
+capability is the "eye" — multi-source information retrieval. Future
+capabilities (retrospective analysis, methodology query) will live as
+sibling modules under this same namespace.
 """
 
 __version__ = "0.1.0"

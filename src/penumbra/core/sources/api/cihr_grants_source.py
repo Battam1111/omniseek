@@ -4,10 +4,10 @@ The third of Canada's three federal research councils (NSERC sciences, SSHRC hum
 CIHR funds health research, where the NLP/ML-relevant work is clinical NLP, medical machine learning,
 health data science, predictive models on EHR/clinical text — a slice the other two councils don't
 cover. Open data is bulk per-fiscal-year XLSX (FY2025-26 ~12MB, no DataStore / query API; openpyxl
-ingest, NEW for Penumbra). The grant sheet (G&A_S&B) carries ApplicationTitle / Abstract / Keywords /
+ingest, NEW for the eye). The grant sheet (G&A_S&B) carries ApplicationTitle / Abstract / Keywords /
 research categories, so the AI/NLP slice is cleanly extractable.
 
-Acquisition (Penumbra's bulk-file pattern, shared via _bulk_funding):
+Acquisition (the eye's bulk-file pattern, shared via _bulk_funding):
   * The latest "CIHR Investments YYYY-YY" XLSX url is resolved from CKAN ``package_show`` each refresh
     (read the resource url, never hardcode the UUID).
   * Fetch the static annual XLSX at most monthly (cache_ttl 30d), stream the G&A_S&B sheet (openpyxl
@@ -28,7 +28,7 @@ from typing import Optional
 import httpx
 
 from penumbra.core import http
-from penumbra.core.normalize import Document
+from penumbra.core.normalize import PolarisDocument
 from penumbra.core.sources.api._bulk_funding import UA, BulkFundingBase, is_ai_relevant, year_of
 
 logger = logging.getLogger(__name__)
@@ -51,9 +51,9 @@ class CIHRGrantsAdapter(BulkFundingBase):
         "加拿大 CIHR 健康研究经费 — 临床 AI/健康 NLP 切片 (加拿大三大联邦研究局之三: NSERC 理工、SSHRC 人文、"
         "CIHR 健康). NLP/ML 在健康这边以 临床 NLP/医学机器学习/健康数据科学/EHR 预测模型 形式存在, 是另两局"
         "不覆盖的. 开放数据为逐年 bulk XLSX (FY2025-26 ~12MB, 无查询 API; openpyxl 解析). 逐笔奖助: 获奖人 + "
-        "机构/系 + 金额(CAD) + program + 主题/类别 + 标题/摘要/关键词. 仅收 AI/ML/NLP 相关切片. 命名 penumbra_fetch."
+        "机构/系 + 金额(CAD) + program + 主题/类别 + 标题/摘要/关键词. 仅收 AI/ML/NLP 相关切片. 命名 eye_fetch."
     )
-    explicit_only = "CIHR 加拿大健康经费 临床-AI/NLP 切片 (bulk XLSX, 命名 penumbra_fetch); 月级刷新"
+    explicit_only = "CIHR 加拿大健康经费 临床-AI/NLP 切片 (bulk XLSX, 命名 eye_fetch); 月级刷新"
     domains = ["funding"]
     regions = ["ca"]
     modes = ["STRUCTURE"]
@@ -70,7 +70,7 @@ class CIHRGrantsAdapter(BulkFundingBase):
         inv.sort(key=lambda r: year_of(r.get("name")), reverse=True)
         return inv[0]["url"] if inv else None
 
-    def _build_subset_docs(self) -> list[Document]:
+    def _build_subset_docs(self) -> list[PolarisDocument]:
         url = self._resolve_xlsx_url()
         if not url:
             logger.warning("cihr_grants: could not resolve XLSX url via package_show")
@@ -97,7 +97,7 @@ class CIHRGrantsAdapter(BulkFundingBase):
             header = [str(h or "") for h in next(it)]
         except StopIteration:
             return []
-        docs: list[Document] = []
+        docs: list[PolarisDocument] = []
         for row in it:
             rowd = {header[i]: _clean(row[i] if i < len(row) else None) for i in range(len(header))}
             if not self._is_relevant(rowd):
@@ -124,7 +124,7 @@ class CIHRGrantsAdapter(BulkFundingBase):
                               self._pick(rowd, "AllResearchCategoriesEN"),
                               self._pick(rowd, "PrimaryThemeEN"))
 
-    def _row_to_doc(self, rowd: dict) -> Optional[Document]:
+    def _row_to_doc(self, rowd: dict) -> Optional[PolarisDocument]:
         p = self._pick
         name = (p(rowd, "FirstName") + " " + p(rowd, "FamilyName")).strip()
         title = p(rowd, "ApplicationTitle")
@@ -149,7 +149,7 @@ class CIHRGrantsAdapter(BulkFundingBase):
             parts.append(f"关键词: {keywords}.")
         if abstract:
             parts.append(abstract)
-        return Document(
+        return PolarisDocument(
             source=self.name,
             source_id=f"cihr:{self._version}:{ref or (name + title)[:48]}",
             url=_DATASET_URL,

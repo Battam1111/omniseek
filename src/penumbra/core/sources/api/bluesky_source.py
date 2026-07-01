@@ -1,13 +1,13 @@
 """Bluesky adapter — uses the atproto Python package.
 
-Reads credentials from ~/.penumbra/credentials/bluesky.json:
+Reads credentials from ~/.polaris/credentials/bluesky.json:
     {"handle": "name.bsky.social", "app_password": "xxxx-xxxx-xxxx-xxxx"}
 
 App passwords are generated at https://bsky.app/settings/app-passwords
 (they are scoped, revocable, and don't expose your main password).
 
 AT Protocol is the best-documented social API among all the platforms
-in our Penumbra stack — 5000 points/hour, 35000/day, no payment required.
+in our Polaris stack — 5000 points/hour, 35000/day, no payment required.
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ from urllib.parse import urlparse
 from atproto import Client
 
 from penumbra.core import auth, cache
-from penumbra.core.normalize import Document, jsonsafe, mk_signal
+from penumbra.core.normalize import PolarisDocument, jsonsafe, mk_signal
 
 logger = logging.getLogger(__name__)
 
@@ -87,7 +87,7 @@ class BlueskyAdapter:
                 return None
         return self._client
 
-    def search(self, query: str, limit: int = 10) -> list[Document]:
+    def search(self, query: str, limit: int = 10) -> list[PolarisDocument]:
         client = self._ensure_client()
         if client is None:
             return []
@@ -95,7 +95,7 @@ class BlueskyAdapter:
         key = cache.make_key("bluesky", "search", query, limit)
         cached = cache.get(key)
         if cached is not None:
-            return [Document.model_validate(d) for d in cached]
+            return [PolarisDocument.model_validate(d) for d in cached]
 
         try:
             response = client.app.bsky.feed.search_posts(
@@ -105,7 +105,7 @@ class BlueskyAdapter:
             logger.warning("Bluesky search failed: %s", exc)
             return []
 
-        docs: list[Document] = []
+        docs: list[PolarisDocument] = []
         for post in (response.posts or [])[:limit]:
             try:
                 docs.append(self._post_to_document(post))
@@ -115,7 +115,7 @@ class BlueskyAdapter:
         cache.set(key, [d.model_dump(mode="json") for d in docs], ttl=900)
         return docs
 
-    def fetch_url(self, url: str) -> Optional[Document]:
+    def fetch_url(self, url: str) -> Optional[PolarisDocument]:
         host = urlparse(url).hostname or ""
         if "bsky.app" not in host and "bsky.social" not in host:
             return None
@@ -139,14 +139,14 @@ class BlueskyAdapter:
 
     def health_check(self) -> tuple[bool, str]:
         if not auth.is_configured("bluesky"):
-            return False, "credentials not configured (see ~/.penumbra/credentials/bluesky.json.template)"
+            return False, "credentials not configured (see ~/.polaris/credentials/bluesky.json.template)"
         client = self._ensure_client()
         if client is None:
             return False, "login failed"
         return True, "OK (logged in)"
 
     @staticmethod
-    def _post_to_document(post) -> Document:
+    def _post_to_document(post) -> PolarisDocument:
         record = post.record
         author = post.author
         text = getattr(record, "text", "") or ""
@@ -162,7 +162,7 @@ class BlueskyAdapter:
         rkey = post.uri.rsplit("/", 1)[-1] if post.uri else ""
         url = f"https://bsky.app/profile/{author.handle}/post/{rkey}"
 
-        return Document(
+        return PolarisDocument(
             source="bluesky",
             source_id=post.uri or "",
             url=url,

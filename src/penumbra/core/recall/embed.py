@@ -5,11 +5,11 @@ keep warm. This is the ONLY place the model + its asymmetric prefix scheme live,
 ``MODEL_VERSION`` — a model / dim / prefix change bumps the version, the old vectors simply fall out
 of the live matrix (lexical-only until backfilled), and cross-space cosine is mechanically
 impossible. Import-guarded + FAIL-OPEN at every layer: if sentence-transformers is absent or the
-weights won't load, the whole vector layer disables itself and Penumbra degrades to Phase-1 lexical
+weights won't load, the whole vector layer disables itself and the eye degrades to Phase-1 lexical
 (never an error, never blocks boot). One forward ``Lock`` so a query-embed and an ingest-embed never
 run two concurrent MPS forwards (the real 16GB peak).
 
-Model chosen by an on-host bake-off on REAL content (test on real data, never a benchmark):
+Model chosen by an on-mini bake-off on REAL eye content (test on real data, never a benchmark):
 Qwen3-Embedding-0.6B won on cross-lingual RELIABILITY — zero whiffs on 12 real code-switched queries
 vs bge-m3's two, plus the widest related/unrelated cosine contrast. Local, ~0.6B, dim 1024.
 """
@@ -26,7 +26,7 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
-MODEL_PATH = str(Path.home() / ".penumbra" / "models" / "qwen3-embedding-0.6b")
+MODEL_PATH = str(Path.home() / ".polaris" / "models" / "qwen3-embedding-0.6b")
 DIM = 1024
 # Qwen3-Embedding: the instruct prefix goes on the QUERY side only; documents embed raw.
 _QUERY_PREFIX = "Instruct: Given a query, retrieve relevant documents.\nQuery: "
@@ -71,7 +71,7 @@ def _get_model():
             _model = m
             logger.info("recall embedder ready (%s, dim=%d)", MODEL_VERSION, DIM)
             return _model
-        except Exception as exc:  # noqa: BLE001 — fail-open: no vector layer, recall stays lexical
+        except Exception as exc:  # noqa: BLE001 — fail-open: no vector layer, eye stays lexical
             logger.warning("recall embedder DISABLED (load failed): %s", exc)
             _disabled = True
             return None

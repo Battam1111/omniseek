@@ -2,7 +2,7 @@
 
 Remotive is an independent, curated remote-only job board: structured listings with a
 category taxonomy, candidate-required-location (Worldwide / region), job type, tags and a
-canonical url. Penumbra's remote-jobs STRUCTURE source: a filterable remote-AI/ML job
+canonical url. Polaris-eye's remote-jobs STRUCTURE source: a filterable remote-AI/ML job
 feed web search cannot assemble. Reinforces the jobs cell (a keyless remote-native source
 alongside the keyed Adzuna aggregator and the per-company overseas_ai_jobs ATS crawler).
 
@@ -16,7 +16,7 @@ RATE LIMIT (load-bearing): Remotive's public API bans clients over ~2 requests/m
 expects only a few calls/day. So this is explicit_only (never in the broad fan-out) with a
 long cache_ttl, and is meant to be a curated / low-frequency drill, never a hot path.
 
-
+Recon trail: brain note eye-free-api-probe-round2-2026-06-21 (live-probed keyless 200).
 """
 
 from __future__ import annotations
@@ -27,7 +27,7 @@ from datetime import datetime
 from typing import Any, Optional
 
 from penumbra.core import http
-from penumbra.core.normalize import Document, jsonsafe
+from penumbra.core.normalize import PolarisDocument, jsonsafe
 from penumbra.core.sources.scrape._base import BaseScrapeAdapter
 
 API_URL = "https://remotive.com/api/remote-jobs"
@@ -56,18 +56,18 @@ class RemotiveAdapter(BaseScrapeAdapter):
             params["search"] = query.strip()
         return http.get_json(API_URL, params=params, timeout=20)
 
-    def _to_documents(self, raw: Any, query: str, limit: int) -> list[Document]:
+    def _to_documents(self, raw: Any, query: str, limit: int) -> list[PolarisDocument]:
         if not isinstance(raw, dict):
             return []
         jobs = raw.get("jobs") or []
-        docs: list[Document] = []
+        docs: list[PolarisDocument] = []
         for job in jobs[:limit]:  # the API does not strictly honor limit, so truncate here
             doc = self._job_to_doc(job)
             if doc is not None:
                 docs.append(doc)
         return docs
 
-    def _job_to_doc(self, job: Any) -> Optional[Document]:
+    def _job_to_doc(self, job: Any) -> Optional[PolarisDocument]:
         if not isinstance(job, dict):
             return None
         url = job.get("url")
@@ -78,7 +78,7 @@ class RemotiveAdapter(BaseScrapeAdapter):
         category = job.get("category")
         location = job.get("candidate_required_location")
         tags = job.get("tags") if isinstance(job.get("tags"), list) else []
-        return Document(
+        return PolarisDocument(
             source=self.name,
             source_id=str(job.get("id")) if job.get("id") else url,
             url=url,

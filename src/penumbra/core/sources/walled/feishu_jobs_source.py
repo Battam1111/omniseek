@@ -53,7 +53,7 @@ import threading
 import httpx
 
 from penumbra.core import cache
-from penumbra.core.normalize import Document, jsonsafe, keyword_score_filter
+from penumbra.core.normalize import PolarisDocument, jsonsafe, keyword_score_filter
 
 logger = logging.getLogger(__name__)
 
@@ -175,7 +175,7 @@ def _list_portal_jobs(subdomain: str, website_path: str) -> list[dict]:
 
 
 def _job_to_document(job: dict, label: str, subdomain: str,
-                     website_path: str, tier: int) -> Optional[Document]:
+                     website_path: str, tier: int) -> Optional[PolarisDocument]:
     job_id = str(job.get("id") or "")
     if not job_id:
         return None
@@ -214,7 +214,7 @@ def _job_to_document(job: dict, label: str, subdomain: str,
     if job_category:
         tags.append(job_category)
 
-    return Document(
+    return PolarisDocument(
         source="feishu_jobs",
         source_id=f"{subdomain}-{job_id}",
         url=url,
@@ -241,24 +241,24 @@ def _job_to_document(job: dict, label: str, subdomain: str,
 class FeishuJobsAdapter:
     name = "feishu_jobs"
     needs_credentials = False
-    explicit_only = "walled 招聘源(飞书);命名 penumbra_fetch 才调,不进广搜"
+    explicit_only = "walled 招聘源(飞书);命名 eye_fetch 才调,不进广搜"
     description = (
         "Feishu 招聘 — 6 个 Tier 1 大模型 startup (MiniMax/智谱/01.AI/生数/"
         "无问芯穹/百川), 549+ 活跃岗位; 与 mokahr_ats + bytedance_seed 互补"
     )
 
-    def search(self, query: str, limit: int = 10) -> list[Document]:
+    def search(self, query: str, limit: int = 10) -> list[PolarisDocument]:
         key = cache.make_key("feishu_jobs", "search", query, limit)
         cached = cache.get(key)
         if cached is not None:
-            return [Document.model_validate(d) for d in cached]
+            return [PolarisDocument.model_validate(d) for d in cached]
 
         # Fetch the 6 portals CONCURRENTLY (each a different subdomain, plaintext JSON; feishu
         # measured no rate limit). Was serial = ~7s; collapses to ~the slowest portal. Per-portal
         # pagination (with its own inter-page sleep) + the tier-sort/keyword-filter below unchanged.
         def _one(site):
             label, subdomain, website_path, tier = site
-            out: list[Document] = []
+            out: list[PolarisDocument] = []
             try:
                 jobs = _list_portal_jobs(subdomain, website_path)
             except Exception as exc:  # noqa: BLE001
@@ -269,7 +269,7 @@ class FeishuJobsAdapter:
                 if doc:
                     out.append(doc)
             return out
-        all_docs: list[Document] = []
+        all_docs: list[PolarisDocument] = []
         with ThreadPoolExecutor(max_workers=len(SITES)) as ex:
             for docs in ex.map(_one, SITES):
                 all_docs.extend(docs)
@@ -287,7 +287,7 @@ class FeishuJobsAdapter:
         cache.set(key, [d.model_dump(mode="json") for d in all_docs], ttl=1800)
         return all_docs
 
-    def fetch_url(self, url: str) -> Optional[Document]:
+    def fetch_url(self, url: str) -> Optional[PolarisDocument]:
         host = (urlparse(url).hostname or "").lower()
         if not host.endswith(".jobs.feishu.cn"):
             return None

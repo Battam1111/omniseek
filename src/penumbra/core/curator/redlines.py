@@ -7,7 +7,7 @@ data, reviewed/edited at install. Smoke freezes the shape + an EXPECTED_REDLINES
 silent loosening fails the deploy, and asserts NO national-origin term appears.
 
 ``match(candidate)`` reports WHICH lines a candidate touches. It does NOT decide admission.
-The ONE place severity bites mechanically is downstream (penumbra_curator_decide refuses an admit
+The ONE place severity bites mechanically is downstream (eye_curator_decide refuses an admit
 when any HARD line hit): and that refusal lives in the decide tool, not here. This module
 only reports facts.
 

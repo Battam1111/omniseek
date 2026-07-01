@@ -1,6 +1,6 @@
 """A-share / 港股 / 美股 real-time (delayed) stock quotes (keyless, no login).
 
-WHY (STRUCTURE): Penumbra's market_quote covers US stocks only; A-share / 港股 quotes were a gap
+WHY (STRUCTURE): the eye's market_quote covers US stocks only; A-share / 港股 quotes were a gap
 (雪球 is now login-walled). This source gives name/code → a structured quote (price / 涨跌 / 市值 /
 高低 / PE) for CN + HK + US, no login — the Chinese analog of market_quote. Google can't return
 clean structured quote numbers.
@@ -10,14 +10,14 @@ SHAPE: 2-step (BaseScrapeAdapter + bespoke curl_cffi). Step 1 — EastMoney sugg
 QUOTE comes from Tencent qt.gtimg.cn (one BATCHED `q=sym,sym,...` call, GBK, `~`-delimited fields).
 
 WHY Tencent for the quote (2026-06-20): the original backend was EastMoney push2.eastmoney.com, but
-push2 has aggressive per-IP anti-abuse — under Penumbra's MULTI-AGENT burst load (a research workflow
-fired many parallel eastmoney calls) push2 began dropping the host's connections (accept-then-close,
+push2 has aggressive per-IP anti-abuse — under the eye's MULTI-AGENT burst load (a research workflow
+fired many parallel eastmoney calls) push2 began dropping the mini's connections (accept-then-close,
 curl 56/52) for hours, while searchapi stayed fine. Tencent qt.gtimg.cn is the burst-tolerant,
 keyless, industry-standard A-share/HK/US quote endpoint (verified 2026-06-20: 5 rapid hits all 200,
 ~45ms, no throttle), so the QUOTE moved there. Name resolution stays on EastMoney suggest (it works);
 the agent-facing `url` stays an EastMoney quote page; provenance is stamped tencent/qt.gtimg.cn.
 
-
+Recon trail: brain notes eye-recon-eastmoney + eye-maint-reddit-breaker-logrotate-eastmoney-route-2026-06-20.
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
-from penumbra.core.normalize import Document, mk_signal
+from penumbra.core.normalize import PolarisDocument, mk_signal
 from penumbra.core.sources.scrape._base import BaseScrapeAdapter
 
 logger = logging.getLogger(__name__)
@@ -111,8 +111,8 @@ def _parse_tencent_quotes(body: str) -> dict:
 # Tencent `~`-field indices (probed live 2026-06-20, consistent across A-share/HK/US):
 #   1 name · 2 code · 3 price · 4 prev_close · 5 open · 31 change · 32 change% · 33 high · 34 low
 #   · 39 PE · 45 total_market_cap(亿). ([46] is PB for A-share but the English name for HK/US, so unused.)
-def _quote_to_doc(f: list, quoteid: str, code: str) -> Optional[Document]:
-    """One Tencent quote field-list → Document (pure fn → golden-fixture testable)."""
+def _quote_to_doc(f: list, quoteid: str, code: str) -> Optional[PolarisDocument]:
+    """One Tencent quote field-list → PolarisDocument (pure fn → golden-fixture testable)."""
     if len(f) < 40:
         return None
     name = (f[1] or "").strip()
@@ -128,7 +128,7 @@ def _quote_to_doc(f: list, quoteid: str, code: str) -> Optional[Document]:
     mktcap = _num(f[45]) if len(f) > 45 else None
     summary = (f"{name}（{code}）现价 {price} 涨跌 {chg} ({pct}%) | 今开 {openp} 最高 {high} "
                f"最低 {low} 昨收 {prev} | 总市值 {mktcap}亿 市盈率 {pe}")
-    return Document(
+    return PolarisDocument(
         source="eastmoney",
         source_id=quoteid or code,
         url=_quote_url(quoteid, code),
@@ -205,7 +205,7 @@ class EastMoneyAdapter(BaseScrapeAdapter):
             logger.warning("eastmoney (tencent quote) fetch failed: %s", exc)
             return None
 
-    def _to_documents(self, raw, query, limit) -> list[Document]:
+    def _to_documents(self, raw, query, limit) -> list[PolarisDocument]:
         return [doc for (f, qid, code) in raw[:limit] if (doc := _quote_to_doc(f, qid, code))]
 
     def health_check(self) -> tuple[bool, str]:

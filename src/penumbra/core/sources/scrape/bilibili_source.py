@@ -25,7 +25,7 @@ on the legacy one, which the buvid-bootstrapped session reaches). Comments key o
 the video's ``aid`` (numeric), resolved from the BV-id via ``/x/web-interface/view``.
 They surface in TWO shapes, both bounded to the top ~_MAX_COMMENTS by likes:
   * ``search(<BV-id or video URL>)`` returns the top comments as SEPARATE docs
-    (one Document per comment: content=message, author=uname, signals=like,
+    (one PolarisDocument per comment: content=message, author=uname, signals=like,
     date from ctime, url=the video url). This mirrors the arXiv / YouTube
     "query is itself a video ref → by-ref lookup" convenience: a free-text search
     query never matches the strict BV-ref detector, so ordinary keyword video
@@ -45,7 +45,7 @@ from urllib.parse import urlparse
 import httpx
 
 from penumbra.core import cache
-from penumbra.core.normalize import Document, jsonsafe, mk_signal
+from penumbra.core.normalize import PolarisDocument, jsonsafe, mk_signal
 from penumbra.core.sources.scrape._base import BaseScrapeAdapter
 
 logger = logging.getLogger(__name__)
@@ -158,8 +158,8 @@ def _fetch_comments(aid: int, limit: int = _MAX_COMMENTS) -> list[dict]:
     return ranked
 
 
-def _comment_to_document(reply: dict, bvid: str, aid: int, video_url: str) -> Document:
-    """One legacy-reply dict → one Document (content=message, author=uname,
+def _comment_to_document(reply: dict, bvid: str, aid: int, video_url: str) -> PolarisDocument:
+    """One legacy-reply dict → one PolarisDocument (content=message, author=uname,
     signals=like, date from ctime, url=the video url)."""
     message = ((reply.get("content") or {}).get("message") or "").strip()
     member = reply.get("member") or {}
@@ -174,7 +174,7 @@ def _comment_to_document(reply: dict, bvid: str, aid: int, video_url: str) -> Do
         except (ValueError, OSError, OverflowError):
             date = None
 
-    return Document(
+    return PolarisDocument(
         source="bilibili",
         source_id=f"{bvid}:comment:{rpid}" if rpid else f"{bvid}:comment",
         url=video_url,  # a comment has no standalone URL; point at the video
@@ -207,7 +207,7 @@ class BilibiliAdapter(BaseScrapeAdapter):
     rank = False
 
     # --------------------------------------------------------------------- search
-    def search(self, query: str, limit: int = 10) -> list[Document]:
+    def search(self, query: str, limit: int = 10) -> list[PolarisDocument]:
         """Routing convenience (arXiv id_list / YouTube precedent): if the query is
         itself a single bilibili video URL or bare BV-id, return that video's TOP
         COMMENTS (by likes) as separate docs. A multi-word / non-BV query never
@@ -218,14 +218,14 @@ class BilibiliAdapter(BaseScrapeAdapter):
             return self._comments_search(bvid, limit)
         return super().search(query, limit)
 
-    def _comments_search(self, bvid: str, limit: int) -> list[Document]:
+    def _comments_search(self, bvid: str, limit: int) -> list[PolarisDocument]:
         """Return up to ``limit`` top comments (by likes) for one video, each as a doc."""
         aid = _bvid_to_aid(bvid)
         if not aid:
             return []
         video_url = f"https://www.bilibili.com/video/{bvid}"
         replies = _fetch_comments(aid, limit=min(max(limit, 1), _MAX_COMMENTS))
-        docs: list[Document] = []
+        docs: list[PolarisDocument] = []
         for r in replies[:limit]:
             try:
                 docs.append(_comment_to_document(r, bvid, aid, video_url))
@@ -264,13 +264,13 @@ class BilibiliAdapter(BaseScrapeAdapter):
 
         return (data.get("data") or {}).get("result") or []
 
-    def _to_documents(self, raw, query: str, limit: int) -> list[Document]:
-        """Result list → Documents (verbatim per-video map, slice to limit).
+    def _to_documents(self, raw, query: str, limit: int) -> list[PolarisDocument]:
+        """Result list → PolarisDocuments (verbatim per-video map, slice to limit).
 
         The base does NOT re-slice, so the ``results[:limit]`` cut stays here,
         preserving the exact "take first N" semantics; a malformed video is skipped
         per-record (one bad record can't sink the rest)."""
-        docs: list[Document] = []
+        docs: list[PolarisDocument] = []
         for v in (raw or [])[:limit]:
             try:
                 docs.append(self._video_to_document(v))
@@ -279,7 +279,7 @@ class BilibiliAdapter(BaseScrapeAdapter):
         return docs
 
     # --------------------------------------------------------------- fetch_url
-    def fetch_url(self, url: str) -> Optional[Document]:
+    def fetch_url(self, url: str) -> Optional[PolarisDocument]:
         import re
         host = urlparse(url).hostname or ""
         if "bilibili.com" not in host:
@@ -307,7 +307,7 @@ class BilibiliAdapter(BaseScrapeAdapter):
                 date = None
         cover = d.get("pic") or ""
         media = [cover] if isinstance(cover, str) and cover.startswith("http") else []
-        hint = ("\n\n[视频的口语干货在音频里;B 站字幕需登录 → 用 penumbra_transcribe 取本地 Whisper "
+        hint = ("\n\n[视频的口语干货在音频里;B 站字幕需登录 → 用 eye_transcribe 取本地 Whisper "
                 "全文转写(免费,首次较慢、之后缓存)]")
         video_url = f"https://www.bilibili.com/video/{bvid}"
         content = (d.get("desc") or "(no description)") + hint
@@ -341,7 +341,7 @@ class BilibiliAdapter(BaseScrapeAdapter):
         else:
             metadata["comments_fetched"] = 0
 
-        return Document(
+        return PolarisDocument(
             source="bilibili",
             source_id=bvid,
             url=video_url,
@@ -374,7 +374,7 @@ class BilibiliAdapter(BaseScrapeAdapter):
 
     # ------------------------------------------------------------ field mapping
     @staticmethod
-    def _video_to_document(v: dict) -> Document:
+    def _video_to_document(v: dict) -> PolarisDocument:
         # Bilibili returns title with <em> highlight tags around matches
         import re
 
@@ -406,7 +406,7 @@ class BilibiliAdapter(BaseScrapeAdapter):
             if pic.startswith("http"):
                 media.append(pic)
 
-        return Document(
+        return PolarisDocument(
             source="bilibili",
             source_id=bvid or str(v.get("aid", "")),
             url=url,

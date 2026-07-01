@@ -37,12 +37,12 @@ from urllib.parse import urlparse
 import httpx
 
 from penumbra.core import cache
-from penumbra.core.normalize import Document, jsonsafe, keyword_score_filter
+from penumbra.core.normalize import PolarisDocument, jsonsafe, keyword_score_filter
 
 logger = logging.getLogger(__name__)
 
 TIMEOUT = 30
-USER_AGENT = "Mozilla/5.0 (compatible; Penumbra/0.1)"
+USER_AGENT = "Mozilla/5.0 (compatible; PolarisEye/0.1)"
 
 # Per-host in-flight cap. This source fans out (ThreadPoolExecutor below) over rows that COLLAPSE onto
 # a few shared ATS hosts (boards-api.greenhouse.io, api.ashbyhq.com, ...), so one search can put ~7
@@ -120,7 +120,7 @@ class _Job:
     summary: str = ""
     raw: dict = field(default_factory=dict)  # original ATS API record (lossless escape hatch)
 
-    def to_doc(self) -> Document:
+    def to_doc(self) -> PolarisDocument:
         locs = [l for l in dict.fromkeys(self.locations) if l]  # dedup, keep order
         loc_blob = " ".join(locs)
         sgca = bool(SGCA_RE.search(loc_blob))
@@ -138,7 +138,7 @@ class _Job:
             content += f"  ·  {self.employment_type}"
         if self.summary:
             content += f"\n\n{self.summary}"
-        return Document(
+        return PolarisDocument(
             source="overseas_ai_jobs",
             source_id=self.url,
             url=self.url,
@@ -323,12 +323,12 @@ class OverseasAIJobsAdapter:
         "Lever/SmartRecruiters/Workable; 标注 Singapore/Canada/remote (按部署方配置的目标地区)"
     )
 
-    def _all_docs(self) -> list[Document]:
+    def _all_docs(self) -> list[PolarisDocument]:
         key = cache.make_key("overseas_ai_jobs", "all")
         cached = cache.get(key)
         if cached is not None:
-            return [Document.model_validate(d) for d in cached]
-        docs: list[Document] = []
+            return [PolarisDocument.model_validate(d) for d in cached]
+        docs: list[PolarisDocument] = []
 
         # Each ATS is a distinct host with no shared rate limit, so the 14-site
         # fan-out is pure independent network wait → parallelize it. One worker
@@ -357,15 +357,16 @@ class OverseasAIJobsAdapter:
         for jobs in site_jobs:
             for job in jobs:
                 docs.append(job.to_doc())
-        # Remote-friendly first, then the rest.
-        docs.sort(key=lambda d: 0 if "remote-ok" in d.tags else 1)
+        # SG/Canada first, then remote-friendly, then the rest.
+        docs.sort(key=lambda d: (0 if "sg-or-canada" in d.tags else 1,
+                                 0 if "remote-ok" in d.tags else 1))
         cache.set(key, [d.model_dump(mode="json") for d in docs], ttl=CACHE_TTL)
         return docs
 
-    def search(self, query: str, limit: int = 10) -> list[Document]:
+    def search(self, query: str, limit: int = 10) -> list[PolarisDocument]:
         return keyword_score_filter(self._all_docs(), query)[:limit]
 
-    def fetch_url(self, url: str) -> Optional[Document]:
+    def fetch_url(self, url: str) -> Optional[PolarisDocument]:
         return None
 
     def health_check(self) -> tuple[bool, str]:

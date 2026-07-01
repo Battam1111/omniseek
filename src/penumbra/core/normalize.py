@@ -1,6 +1,6 @@
-"""Unified document model for all Penumbra sources.
+"""Unified document model for all Polaris eye sources.
 
-Every adapter returns content normalized to Document so downstream
+Every adapter returns content normalized to PolarisDocument so downstream
 processing doesn't care whether content came from Reddit, Zhihu, or arXiv.
 """
 
@@ -49,7 +49,7 @@ LenientInt = Annotated[int, BeforeValidator(_coerce_int)]
 LenientBool = Annotated[bool, BeforeValidator(_coerce_bool)]
 
 
-# ── block detection (borrowed: crawl4ai antibot_detector + Penumbra's own 风控 texts) ────────────
+# ── block detection (borrowed: crawl4ai antibot_detector + the eye's own 风控 texts) ────────────
 # A fetch that comes back EMPTY but whose RAW page matches one of these is a BLOCK, not authoritative
 # 'no results'. Lets an adapter LABEL a [] as a block (surface + pace/retry) instead of silently
 # treating it as 'nothing there' — the gap-③ false-empty's detect-half.
@@ -111,8 +111,8 @@ def schema_extract(html: str, schema: dict) -> list[dict]:
 
 class Signal(BaseModel):
     """One named, source-reported mechanical FACT about a document: a count, a rating, a salary.
-    Not a judgment. Penumbra records what a source asserted (with provenance); the agent / the
-    ranker decide what it is worth. Replaces the old fused score scalar )."""
+    Not a judgment. The eye records what a source asserted (with provenance); the agent / the
+    ranker decide what it is worth. Replaces the old fused score scalar (see docs/PHILOSOPHY.md)."""
 
     model_config = ConfigDict(frozen=True)
 
@@ -127,8 +127,8 @@ class Signal(BaseModel):
 _ATTENTION_KINDS = frozenset({'engagement', 'citation'})
 
 
-class Document(BaseModel):
-    """Normalized representation of content from any Penumbra source."""
+class PolarisDocument(BaseModel):
+    """Normalized representation of content from any Polaris eye source."""
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
@@ -145,7 +145,7 @@ class Document(BaseModel):
 
     # Discovery signals: named, source-reported FACTS (a count, a citation tally, a salary), each
     # with provenance + a semantic kind. Never a judgment: the agent / the ranker decide worth.
-    # Replaces the old fused score / relevance scalars .
+    # Replaces the old fused score / relevance scalars (see docs/PHILOSOPHY.md).
     signals: dict[str, Signal] = Field(default_factory=dict)
 
     # Categorization
@@ -198,18 +198,18 @@ class Document(BaseModel):
         return max(vals) if vals else None
 
     def to_tool_dict(self, *, full: bool = False, content_cap: int = 2000) -> dict:
-        """Agent-facing serialization for the MCP penumbra_* tools — the single lean projection.
+        """Agent-facing serialization for the MCP eye_* tools — the single lean projection.
 
         ALWAYS drops ``metadata['raw']``: that lossless escape-hatch is write-only (no code
         path consumes it — every useful field is already parsed out of it), so it is pure
         token weight in a tool response (~65% of a ranked-search payload). It stays on the
         cached document; it just isn't sent to the agent.
 
-        ``full=False`` (DISCOVERY — penumbra_search / penumbra_search_ranked, where the agent triages
+        ``full=False`` (DISCOVERY — eye_search / eye_search_ranked, where the agent triages
         many results) caps ``content`` to a ``content_cap``-char preview and sets
         ``content_truncated`` + ``content_full_chars`` so the agent knows to drill in
-        (``penumbra_add_url`` on this doc's ``url``) for the whole text. ``full=True`` (DRILL-DOWN —
-        penumbra_fetch / penumbra_add_url, a source/URL the agent already chose) keeps content whole.
+        (``eye_add_url`` on this doc's ``url``) for the whole text. ``full=True`` (DRILL-DOWN —
+        eye_fetch / eye_add_url, a source/URL the agent already chose) keeps content whole.
         """
         d = self.model_dump(mode="json")
         meta = d.get("metadata")
@@ -254,7 +254,7 @@ def jsonsafe(obj, _depth: int = 0):
     return str(obj)
 
 
-def keyword_score_filter(docs: list[Document], query: str) -> list[Document]:
+def keyword_score_filter(docs: list[PolarisDocument], query: str) -> list[PolarisDocument]:
     """Filter + rank docs by lexical relevance to ``query`` (title weighted 3x over content).
 
     Delegates to ``penumbra.core.relevance`` (BM25-shaped: tf saturation + length

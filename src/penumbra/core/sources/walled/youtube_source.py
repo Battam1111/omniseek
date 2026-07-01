@@ -7,7 +7,7 @@ youtube-transcript-api extracts auto-generated or manual captions.
 
 Search uses yt-dlp's `ytsearch<N>:<query>` URL form. This is slower than
 the YouTube Data API but needs no key. If the user wants higher throughput,
-they can drop a YouTube Data API v3 key at ~/.penumbra/credentials/youtube.json
+they can drop a YouTube Data API v3 key at ~/.polaris/credentials/youtube.json
 — Phase 3.5 enhancement, not done yet.
 
 Transcripts are pulled lazily — only when a doc's `fetch_url()` is called
@@ -20,7 +20,7 @@ top ~50:
   * fetch_url(<video>) folds a short comment preview onto the single video doc
     (alongside the transcript — the transcript behaviour is preserved verbatim).
   * search(<video url or 11-char id>) returns the top comments as SEPARATE docs
-    (one Document per comment, content=text, author, signals=like_count,
+    (one PolarisDocument per comment, content=text, author, signals=like_count,
     url=the video url). This mirrors the arXiv "query is an id → by-id lookup"
     convenience: a plain free-text query never matches the strict id/URL detector,
     so ordinary video search (and broad fan-out) is byte-identical to before.
@@ -43,7 +43,7 @@ from youtube_transcript_api import (
 )
 
 from penumbra.core import cache
-from penumbra.core.normalize import Document, jsonsafe, mk_signal
+from penumbra.core.normalize import PolarisDocument, jsonsafe, mk_signal
 
 # Single API instance reused across calls
 _TRANSCRIPT_API = YouTubeTranscriptApi()
@@ -164,8 +164,8 @@ def _fetch_comments(video_id: str, limit: int = _MAX_COMMENTS) -> list[dict]:
     return ranked
 
 
-def _comment_to_document(comment: dict, video_id: str, video_url: str) -> Document:
-    """One yt-dlp comment dict → one Document (content=text, author,
+def _comment_to_document(comment: dict, video_id: str, video_url: str) -> PolarisDocument:
+    """One yt-dlp comment dict → one PolarisDocument (content=text, author,
     signals=like_count, url=the video url)."""
     text = (comment.get("text") or "").strip()
     author = comment.get("author") or None
@@ -179,7 +179,7 @@ def _comment_to_document(comment: dict, video_id: str, video_url: str) -> Docume
         except (ValueError, OSError, OverflowError):
             date = None
 
-    return Document(
+    return PolarisDocument(
         source="youtube",
         source_id=f"{video_id}:comment:{cid}" if cid else f"{video_id}:comment",
         url=video_url,  # a comment has no standalone URL; point at the video
@@ -267,7 +267,7 @@ class YouTubeAdapter:
         "lectures, talks; pass a video URL/id as the query to get its comments as docs)"
     )
 
-    def search(self, query: str, limit: int = 10) -> list[Document]:
+    def search(self, query: str, limit: int = 10) -> list[PolarisDocument]:
         # Routing convenience (arXiv id_list precedent): if the query is itself a
         # single YouTube video URL or 11-char id, return that video's TOP COMMENTS
         # as separate docs. A multi-word / non-id query never matches, so ordinary
@@ -279,7 +279,7 @@ class YouTubeAdapter:
         key = cache.make_key("youtube", "search", query, limit)
         cached = cache.get(key)
         if cached is not None:
-            return [Document.model_validate(d) for d in cached]
+            return [PolarisDocument.model_validate(d) for d in cached]
 
         # ytsearch<N>:<query> tells yt-dlp to do a YouTube search and return N results
         search_url = f"ytsearch{min(limit, 25)}:{query}"
@@ -291,7 +291,7 @@ class YouTubeAdapter:
             return []
 
         entries = (info or {}).get("entries") or []
-        docs: list[Document] = []
+        docs: list[PolarisDocument] = []
         for entry in entries[:limit]:
             if not entry:
                 continue
@@ -303,11 +303,11 @@ class YouTubeAdapter:
         cache.set(key, [d.model_dump(mode="json") for d in docs], ttl=1800)
         return docs
 
-    def _comments_search(self, video_id: str, limit: int) -> list[Document]:
+    def _comments_search(self, video_id: str, limit: int) -> list[PolarisDocument]:
         """Return up to ``limit`` top comments for one video, each as a doc."""
         video_url = f"https://www.youtube.com/watch?v={video_id}"
         comments = _fetch_comments(video_id, limit=min(max(limit, 1), _MAX_COMMENTS))
-        docs: list[Document] = []
+        docs: list[PolarisDocument] = []
         for c in comments[:limit]:
             try:
                 docs.append(_comment_to_document(c, video_id, video_url))
@@ -315,7 +315,7 @@ class YouTubeAdapter:
                 logger.debug("Skipping YouTube comment: %s", exc)
         return docs
 
-    def fetch_url(self, url: str) -> Optional[Document]:
+    def fetch_url(self, url: str) -> Optional[PolarisDocument]:
         video_id = _extract_video_id(url)
         if not video_id:
             return None
@@ -380,7 +380,7 @@ class YouTubeAdapter:
             return False, f"{type(exc).__name__}: {str(exc)[:100]}"
 
     @staticmethod
-    def _entry_to_document(entry: dict, include_full_description: bool = False) -> Document:
+    def _entry_to_document(entry: dict, include_full_description: bool = False) -> PolarisDocument:
         video_id = entry.get("id") or _extract_video_id(entry.get("url") or "")
         url = entry.get("webpage_url") or (
             f"https://www.youtube.com/watch?v={video_id}" if video_id else entry.get("url", "")
@@ -422,7 +422,7 @@ class YouTubeAdapter:
                     if isinstance(u, str) and u.startswith("http"):
                         media.append(u)
 
-        return Document(
+        return PolarisDocument(
             source="youtube",
             source_id=video_id or url,
             url=url,

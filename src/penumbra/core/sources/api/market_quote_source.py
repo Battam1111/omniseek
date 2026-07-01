@@ -11,7 +11,7 @@ Source: CNBC's keyless quote backend (the JSON the cnbc.com quote pages call):
     GET https://quote.cnbc.com/quote-html-webservice/restQuote/symbolType/symbol
         ?symbols=ORCL|NVDA&requestMethod=itv&fund=1&exthrs=1&output=json
 
-Probed live from the host US egress (2026-06-17). Hard facts that shaped this code:
+Probed live from the mini US egress (2026-06-17). Hard facts that shaped this code:
   - Multi-symbol uses a PIPE separator (``ORCL|NVDA``). A comma (``ORCL,NVDA``) is
     NOT split: the backend treats it as one bogus symbol and returns a ``code:1``
     stub. So we join requested tickers with ``|``.
@@ -36,13 +36,13 @@ from datetime import datetime
 from typing import Optional
 
 from penumbra.core import http
-from penumbra.core.normalize import Document, jsonsafe, mk_signal
+from penumbra.core.normalize import PolarisDocument, jsonsafe, mk_signal
 
 logger = logging.getLogger(__name__)
 
 API_URL = "https://quote.cnbc.com/quote-html-webservice/restQuote/symbolType/symbol"
 TIMEOUT = 15
-# CNBC serves this backend to browsers; the shared Penumbra UA gets thinner data,
+# CNBC serves this backend to browsers; the shared PolarisEye UA gets thinner data,
 # so we send a browser UA via the http helper's headers= merge (same pattern sec_edgar
 # uses to send its contact UA).
 BROWSER_UA = (
@@ -142,7 +142,7 @@ class MarketQuoteAdapter:
         "52周区间 + 盘前盘后. 多 symbol 一次. 命名查询, 不进广搜; query 无 ticker 返空."
     )
 
-    def search(self, query: str, limit: int = 10) -> list[Document]:
+    def search(self, query: str, limit: int = 10) -> list[PolarisDocument]:
         tickers = _extract_tickers(query)
         if not tickers:
             return []
@@ -159,7 +159,7 @@ class MarketQuoteAdapter:
             headers={"User-Agent": BROWSER_UA},
             timeout=TIMEOUT,
         )
-        docs: list[Document] = []
+        docs: list[PolarisDocument] = []
         for q in _quotes(payload):
             try:
                 doc = self._to_doc(q)
@@ -170,7 +170,7 @@ class MarketQuoteAdapter:
                 docs.append(doc)
         return docs
 
-    def fetch_url(self, url: str) -> Optional[Document]:
+    def fetch_url(self, url: str) -> Optional[PolarisDocument]:
         return None
 
     def health_check(self) -> tuple[bool, str]:
@@ -186,7 +186,7 @@ class MarketQuoteAdapter:
         return False, "no good quote (UA gating or endpoint change?)"
 
     @staticmethod
-    def _to_doc(q: dict) -> Optional[Document]:
+    def _to_doc(q: dict) -> Optional[PolarisDocument]:
         symbol = (q.get("symbol") or "").strip().upper()
         # code != 0 (or no last) is CNBC's "unknown / no quote" stub: drop it, do not invent.
         if not symbol or q.get("code") != 0 or not q.get("last"):
@@ -223,7 +223,7 @@ class MarketQuoteAdapter:
         signals.update(mk_signal("last_price", _num(last), kind="other", by="cnbc/last", unit="USD"))
         signals.update(mk_signal("change_pct", _num(change_pct), kind="other", by="cnbc/change_pct", unit="%"))
 
-        return Document(
+        return PolarisDocument(
             source="market_quote",
             source_id=symbol,
             url=f"https://www.cnbc.com/quotes/{symbol}",

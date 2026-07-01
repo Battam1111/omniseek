@@ -1,6 +1,6 @@
 """AI residency / fellows / scholars / catalyst programs tracker (config-driven).
 
-The 时间敏感 piece of Penumbra: residency application windows are rigid, and
+The 时间敏感 piece of Polaris-eye: residency application windows are rigid, and
 missing one means a year's wait. Programs live as ROWS in ``ai_residencies.json``
 (P1-4 rework, 2026-06-10: the former file hand-coded one fetcher per program,
 ~1050 lines; now there are five generic fetchers and adding a program is a one-row
@@ -16,7 +16,7 @@ JSON edit, same as rss_bundles / org_watch / scrape_sites):
 
 Row fields: kind, lab, tier, chinese_friendly (+ slug/title_filter/program for
 boards; url/program/title/location, optional default_status/cn_status for static).
-A separate monitor script reuses this adapter to detect changes and notify on change.
+A separate monitor script reuses this adapter to detect changes and Bark-notify.
 """
 
 from __future__ import annotations
@@ -37,13 +37,13 @@ import httpx
 from bs4 import BeautifulSoup
 
 from penumbra.core import cache, relevance
-from penumbra.core.normalize import Document, jsonsafe
+from penumbra.core.normalize import PolarisDocument, jsonsafe
 
 logger = logging.getLogger(__name__)
 
 _DATA = Path(__file__).with_name("ai_residencies.json")
 TIMEOUT = 20
-USER_AGENT = "penumbra/0.1 (automated retrieval / residency tracking)"
+USER_AGENT = "polaris-eye/0.1 (automated retrieval / residency tracking)"
 
 
 @dataclass
@@ -62,7 +62,7 @@ class ResidencyPosition:
     tier: int = 2
     raw: dict = field(default_factory=dict)  # original source record/page (lossless escape hatch)
 
-    def to_penumbra_doc(self) -> Document:
+    def to_polaris_doc(self) -> PolarisDocument:
         tags = [
             "residency",
             f"lab:{self.lab.lower().replace(' ', '_')}",
@@ -78,7 +78,7 @@ class ResidencyPosition:
         elif self.chinese_friendly is False:
             tags.append("chinese-phd-blocked")
 
-        return Document(
+        return PolarisDocument(
             source="ai_residencies",
             source_id=self.url,
             url=self.url,
@@ -492,7 +492,7 @@ class AIResidenciesAdapter:
         cache.set(key, [_position_to_dict(p) for p in positions], ttl=7200)  # 2h cache
         return positions
 
-    def search(self, query: str, limit: int = 10) -> list[Document]:
+    def search(self, query: str, limit: int = 10) -> list[PolarisDocument]:
         positions = self._fetch_all_positions()
         if not positions:
             return []
@@ -519,18 +519,18 @@ class AIResidenciesAdapter:
             )
             scored.append((sort_key, p))
         scored.sort(key=lambda x: x[0])
-        return [p.to_penumbra_doc() for _, p in scored[:limit]]
+        return [p.to_polaris_doc() for _, p in scored[:limit]]
 
-    def fetch_url(self, url: str) -> Optional[Document]:
+    def fetch_url(self, url: str) -> Optional[PolarisDocument]:
         host = (urlparse(url).hostname or "").lower()
         positions = self._fetch_all_positions()
         for p in positions:
             if p.url == url:
-                return p.to_penumbra_doc()
+                return p.to_polaris_doc()
         for p in positions:  # no exact match: host match
             p_host = (urlparse(p.url).hostname or "").lower()
             if p_host and (p_host == host or p_host.endswith("." + host) or host.endswith("." + p_host)):
-                return p.to_penumbra_doc()
+                return p.to_polaris_doc()
         return None
 
     def health_check(self) -> tuple[bool, str]:

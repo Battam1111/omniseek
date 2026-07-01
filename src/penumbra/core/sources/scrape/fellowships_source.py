@@ -6,7 +6,7 @@ are **open to international / HK applicants** (many are citizens-only → exclud
 and which are feed-trackable.
 
 Two layers:
-1. **RSS bundle** (Batch A — feeds verified healthy on the host): institutional
+1. **RSS bundle** (Batch A — feeds verified healthy on Mac mini): institutional
    blogs that announce calls. Keyword-filtered to funding posts so we don't drown
    in general research news. Vector / CIFAR / IVADO / AI Singapore / Schmidt are
    dedicated; Google Research / Apple ML / NVIDIA blogs are where the big
@@ -19,7 +19,7 @@ Two layers:
 
 Key corrections from the recon (don't re-add these):
 - **Banting & Vanier are DISCONTINUED** — replaced by NSERC CGRS-Doctoral / CPRA.
-- **A*STAR AIF / CDF** are citizens/PR-only or internal → citizens/PR-only, not open to international applicants.
+- **A*STAR AIF / CDF** are citizens/PR-only or internal → NOT open to a HK PhD.
 - Mitacs Globalink = undergrad only; Marie Curie = Europe-bound. Excluded.
 """
 
@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import re
 
-from penumbra.core.normalize import Document, jsonsafe, keyword_score_filter
+from penumbra.core.normalize import PolarisDocument, jsonsafe, keyword_score_filter
 from penumbra.core.sources.scrape._rss import RSSAdapterBase
 
 # Funding-relevance keyword gate (applied to RSS entries).
@@ -38,12 +38,12 @@ _KW = re.compile(
 
 # Batch C — awards with no trackable feed. (name, url, note: international-openness + window)
 LINKS: list[tuple[str, str, str]] = [
-    # 工业 AI PhD fellowships（多数全球开放）
+    # 工业 AI PhD fellowships（与研究者方向最契合，多数全球开放）
     ("Microsoft Research PhD Fellowship", "https://www.microsoft.com/en-us/research/academic-program/microsoft-research-fellowship/", "国际·明列 HK · 截~12月 · 学费+$17K"),
     ("Meta PhD Research Fellowship", "https://metaresearchphdfellowship.smapply.io/", "全球·无国籍限 · 8月开/9月截"),
     ("Qualcomm Innovation Fellowship", "https://www.qualcomm.com/research/university-relations/innovation-fellowship", "有 APAC 区 · 截~4月 · $40K"),
-    # 新加坡轴（在读 → 博后 → 独立 PI）
-    ("NRF Fellowship (Singapore)", "https://www.nrf.gov.sg/grants/nrf-fellowship", "任何国籍·PhD 后≤7y · 独立 PI 资助"),
+    # 新加坡轴（落地通道：在读→博后→独立 PI）
+    ("NRF Fellowship (Singapore)", "https://www.nrf.gov.sg/grants/nrf-fellowship", "任何国籍·PhD 后≤7y · 独立 PI 落地 SG"),
     ("NUS Presidential Postdoctoral Fellowship", "https://www.nus.edu.sg/careers/nus-programmes/", "全球·PhD±1y · 全年滚动"),
     ("A*STAR SINGA (Singapore PhD)", "https://www.a-star.edu.sg/Scholarships/for-graduate-studies/singapore-international-graduate-award-singa", "国际博士 · 截~12/1"),
     ("Lee Kuan Yew Postdoctoral Fellowship (NTU)", "https://www.ntu.edu.sg/research/research-careers", "Eng/Sci/Med · 截~1月"),
@@ -65,7 +65,7 @@ class FellowshipsAdapter(RSSAdapterBase):
     description = (
         "海外 PhD/postdoc 资助与 Fellowship — Vector/CIFAR/IVADO(加) + AISG/NRF/"
         "SINGA(新) + Google/Apple/NVIDIA/Meta/MS PhD Fellowship + Schmidt/OpenPhil/"
-        "LTFF(全球 AI). 国际开放（全球 AI）; RSS 自动 + 静态链接人工核窗口"
+        "LTFF(全球 AI). 国际开放 + HK→SG/加拿大路径; RSS 自动 + 静态链接人工核窗口"
     )
     cache_ttl = 21600  # 6h
     feeds = [
@@ -81,9 +81,9 @@ class FellowshipsAdapter(RSSAdapterBase):
         "https://blogs.nvidia.com/feed/",
     ]
 
-    def _static_docs(self) -> list[Document]:
+    def _static_docs(self) -> list[PolarisDocument]:
         return [
-            Document(
+            PolarisDocument(
                 source=self.name,
                 source_id=url,
                 url=url,
@@ -99,7 +99,7 @@ class FellowshipsAdapter(RSSAdapterBase):
             for name, url, note in LINKS
         ]
 
-    def search(self, query: str, limit: int = 10) -> list[Document]:
+    def search(self, query: str, limit: int = 10) -> list[PolarisDocument]:
         # RSS entries, keyword-gated to funding-relevant posts.
         rss = [
             d for d in super().search(query, max(limit * 4, 40))
@@ -114,7 +114,7 @@ class FellowshipsAdapter(RSSAdapterBase):
         # buried under verbose institutional news on raw keyword counts.
         sr = keyword_score_filter(static, query)
         rr = keyword_score_filter(rss, query)
-        out: list[Document] = []
+        out: list[PolarisDocument] = []
         si = ri = 0
         while len(out) < limit and (si < len(sr) or ri < len(rr)):
             if si < len(sr):

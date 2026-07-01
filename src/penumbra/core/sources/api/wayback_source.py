@@ -1,8 +1,8 @@
 """Wayback Machine — archived / historical / deleted versions of a URL (keyless, Internet Archive CDX).
 
-Penumbra's DISCONFIRM + RECALL primitive: when a page changed, vanished, or you need what it said
+The eye's DISCONFIRM + RECALL primitive: when a page changed, vanished, or you need what it said
 BEFORE, query its URL → the available snapshots (each a timestamp + an archived web.archive.org URL
-you can `penumbra_add_url` to read the historical content). Web search only ever shows the LIVE page;
+you can `eye_add_url` to read the historical content). Web search only ever shows the LIVE page;
 this reaches what the open web forgot or deleted. explicit_only named lookup (query = a URL).
 
 Source: the Internet Archive CDX API (keyless):
@@ -11,7 +11,7 @@ Source: the Internet Archive CDX API (keyless):
 Response is a JSON array of rows; row[0] is the header. `collapse=digest` drops consecutive
 identical-content captures; `limit=-N` returns the N NEWEST. A snapshot is read at
     https://web.archive.org/web/<timestamp>/<original>
-
+Recon trail: brain note eye-recon-wayback.
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ from datetime import datetime
 from typing import Optional
 
 from penumbra.core import http
-from penumbra.core.normalize import Document
+from penumbra.core.normalize import PolarisDocument
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +32,7 @@ CDX_URL = "https://web.archive.org/cdx/search/cdx"
 # and intermittently 503s under Internet Archive load. A generous timeout + the 1h cache (a hit
 # caches, repeats are instant) make it usable; a 503/slow miss degrades to [] with a diagnostic.
 TIMEOUT = 30
-_UA = "Mozilla/5.0 (compatible; Penumbra/1.0; +archive lookup)"
+_UA = "Mozilla/5.0 (compatible; PolarisEye/1.0; +archive lookup)"
 # Accept a URL-ish query: starts with http(s), or a bare domain (no spaces, has a dotted host).
 _URLISH = re.compile(r"^(https?://|[\w-]+(\.[\w-]+)+(/|$))", re.I)
 
@@ -42,8 +42,8 @@ def _looks_like_url(q: str) -> bool:
     return bool(q) and " " not in q and bool(_URLISH.match(q))
 
 
-def _snap_to_doc(row: list, idx: dict) -> Optional[Document]:
-    """One CDX row → a snapshot Document (pure fn → golden-fixture testable)."""
+def _snap_to_doc(row: list, idx: dict) -> Optional[PolarisDocument]:
+    """One CDX row → a snapshot PolarisDocument (pure fn → golden-fixture testable)."""
     ts = row[idx["timestamp"]] if "timestamp" in idx else ""
     orig = row[idx["original"]] if "original" in idx else ""
     if not ts or not orig:
@@ -55,14 +55,14 @@ def _snap_to_doc(row: list, idx: dict) -> Optional[Document]:
         pretty = dt.strftime("%Y-%m-%d %H:%M")
     except (ValueError, TypeError):
         dt, pretty = None, ts
-    return Document(
+    return PolarisDocument(
         source="wayback",
         source_id=f"{ts}:{orig}",
         url=snap_url,
         title=f"{orig} @ {pretty}" + (f" [HTTP {status}]" if status else ""),
         content=(f"Wayback snapshot of {orig}\nCaptured: {pretty}"
                  + (f"  ·  HTTP {status}" if status else "")
-                 + f"\nRead the archived page: penumbra_add_url {snap_url}"),
+                 + f"\nRead the archived page: eye_add_url {snap_url}"),
         date=dt,
         metadata={"timestamp": ts, "original": orig, "status": status, "snapshot_url": snap_url,
                   "provider": "internet_archive_cdx"},
@@ -79,11 +79,11 @@ class WaybackAdapter:
     cache_ttl = 3600
     description = (
         "Wayback Machine 时光机 — 一个 URL 的历史/被删快照 (keyless, Internet Archive CDX). query = "
-        "一个 URL → 该页的存档快照列表(时间戳 + web.archive.org 存档链接,再 penumbra_add_url 读历史正文). "
+        "一个 URL → 该页的存档快照列表(时间戳 + web.archive.org 存档链接,再 eye_add_url 读历史正文). "
         "web 搜只给 LIVE 页;这取开放网已遗忘/已删改的旧版本(对抗检索、读历史、读被删)。命名查询;非 URL 返空."
     )
 
-    def search(self, query: str, limit: int = 10) -> list[Document]:
+    def search(self, query: str, limit: int = 10) -> list[PolarisDocument]:
         q = (query or "").strip()
         if not _looks_like_url(q):
             return []  # not a URL — do not guess
@@ -108,7 +108,7 @@ class WaybackAdapter:
         if not isinstance(payload, list) or len(payload) < 2:
             return []
         idx = {name: i for i, name in enumerate(payload[0])}
-        docs: list[Document] = []
+        docs: list[PolarisDocument] = []
         for row in payload[1:]:
             try:
                 doc = _snap_to_doc(row, idx)
@@ -119,7 +119,7 @@ class WaybackAdapter:
         docs.sort(key=lambda d: d.metadata.get("timestamp", ""), reverse=True)  # newest first
         return docs[:limit]
 
-    def fetch_url(self, url: str) -> Optional[Document]:
+    def fetch_url(self, url: str) -> Optional[PolarisDocument]:
         return None
 
     def health_check(self) -> tuple[bool, str]:

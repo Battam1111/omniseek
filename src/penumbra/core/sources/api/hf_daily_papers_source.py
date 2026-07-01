@@ -36,13 +36,13 @@ from urllib.parse import urlparse
 import httpx
 
 from penumbra.core import cache, http
-from penumbra.core.normalize import Document, jsonsafe, mk_signal
+from penumbra.core.normalize import PolarisDocument, jsonsafe, mk_signal
 
 logger = logging.getLogger(__name__)
 
 API_URL = "https://huggingface.co/api/daily_papers"
 TIMEOUT = 15
-USER_AGENT = "penumbra/0.1 (automated retrieval)"
+USER_AGENT = "polaris-eye/0.1 (automated retrieval)"
 CACHE_TTL = 3600  # 1h — daily curation, but multiple intra-day visits possible
 
 
@@ -65,7 +65,7 @@ class HFDailyPapersAdapter:
         cache.set(key, data, ttl=CACHE_TTL)
         return data
 
-    def search(self, query: str, limit: int = 10) -> list[Document]:
+    def search(self, query: str, limit: int = 10) -> list[PolarisDocument]:
         items = self._fetch_all()
         if not items:
             return []
@@ -87,14 +87,14 @@ class HFDailyPapersAdapter:
                 if score > 0:
                     scored.append((score, it))
         scored.sort(key=lambda x: x[0], reverse=True)
-        docs: list[Document] = []
+        docs: list[PolarisDocument] = []
         for sc, it in scored[:limit]:
             doc = self._item_to_document(it)
             if doc:
                 docs.append(doc)
         return docs
 
-    def fetch_url(self, url: str) -> Optional[Document]:
+    def fetch_url(self, url: str) -> Optional[PolarisDocument]:
         host = (urlparse(url).hostname or "").lower()
         if "huggingface.co" not in host:
             return None
@@ -121,7 +121,7 @@ class HFDailyPapersAdapter:
             return False, f"{type(exc).__name__}: {exc}"
 
     @staticmethod
-    def _item_to_document(it: dict) -> Optional[Document]:
+    def _item_to_document(it: dict) -> Optional[PolarisDocument]:
         paper = it.get("paper") or {}
         paper_id = paper.get("id")
         if not paper_id:
@@ -168,7 +168,7 @@ class HFDailyPapersAdapter:
         upvotes = paper.get("upvotes") or 0
         tags = list(paper.get("ai_keywords") or [])[:8]
 
-        return Document(
+        return PolarisDocument(
             source="hf_daily_papers",
             source_id=paper_id,
             url=url,

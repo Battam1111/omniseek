@@ -1,4 +1,4 @@
-"""Wikipedia + Wikidata — the encyclopedia + structured-fact spine Penumbra lacked.
+"""Wikipedia + Wikidata — the encyclopedia + structured-fact spine the eye lacked.
 
 Two complementary keyless layers behind one query:
 
@@ -29,7 +29,7 @@ self-registration ritual lives in the base; this adapter fans out across the fou
 endpoints in ``_raw_fetch`` (returning an already-assembled ``{"articles", "entities"}``
 payload) and maps that to docs in ``_to_documents``. ``rank`` stays default-False:
 each endpoint already returns server-relevance order (Wikipedia search relevance +
-Wikidata entity-match order), so we keep the merged order faithful and let Penumbra's
+Wikidata entity-match order), so we keep the merged order faithful and let the eye's
 ranked search re-score across sources when it needs cross-source relevance.
 """
 
@@ -40,7 +40,7 @@ from typing import Any, Optional
 from urllib.parse import quote
 
 from penumbra.core import http
-from penumbra.core.normalize import Document, jsonsafe, mk_signal
+from penumbra.core.normalize import PolarisDocument, jsonsafe, mk_signal
 from penumbra.core.sources.scrape._base import BaseScrapeAdapter
 
 logger = logging.getLogger(__name__)
@@ -210,10 +210,10 @@ class WikidataWikipediaAdapter(BaseScrapeAdapter):
         return out
 
     # ----------------------------------------------------------- documents hook
-    def _to_documents(self, raw: Any, query: str, limit: int) -> list[Document]:
+    def _to_documents(self, raw: Any, query: str, limit: int) -> list[PolarisDocument]:
         if not isinstance(raw, dict):
             return []
-        docs: list[Document] = []
+        docs: list[PolarisDocument] = []
         for art in raw.get("articles") or []:
             doc = self._article_to_doc(art)
             if doc is not None:
@@ -224,7 +224,7 @@ class WikidataWikipediaAdapter(BaseScrapeAdapter):
                 docs.append(doc)
         return docs
 
-    def _article_to_doc(self, art: dict) -> Optional[Document]:
+    def _article_to_doc(self, art: dict) -> Optional[PolarisDocument]:
         title = (art.get("title") or "").strip()
         extract = (art.get("extract") or "").strip()
         if not title:
@@ -252,7 +252,7 @@ class WikidataWikipediaAdapter(BaseScrapeAdapter):
         thumb = (art.get("thumbnail") or {}).get("source")
         media = [thumb] if isinstance(thumb, str) and thumb else []
 
-        return Document(
+        return PolarisDocument(
             source=self.name,
             source_id=f"wp:{art.get('pageid') or title}",
             url=url,
@@ -268,7 +268,7 @@ class WikidataWikipediaAdapter(BaseScrapeAdapter):
             },
         )
 
-    def _entity_to_doc(self, ent: dict) -> Optional[Document]:
+    def _entity_to_doc(self, ent: dict) -> Optional[PolarisDocument]:
         qid = ent.get("id")
         label = (ent.get("label") or "").strip()
         if not qid or not label:
@@ -295,7 +295,7 @@ class WikidataWikipediaAdapter(BaseScrapeAdapter):
 
         signals = mk_signal("qid_numeric", _qid_numeric(qid), kind="other", by="wikidata/qid")
 
-        return Document(
+        return PolarisDocument(
             source=self.name,
             source_id=f"wd:{qid}",
             url=page_url,

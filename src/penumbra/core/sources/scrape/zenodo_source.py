@@ -3,7 +3,7 @@
 Zenodo (CERN-operated, on InvenioRDM) is the catch-all open-access archive for the long
 tail of scholarship that arXiv / OpenAlex / Crossref under-cover: deposited datasets,
 software releases, posters, theses, preprints, and conference material — each with a
-minted DOI. It fills Penumbra's gap on RESEARCH ARTIFACTS (the dataset/software half of
+minted DOI. It fills Polaris-eye's gap on RESEARCH ARTIFACTS (the dataset/software half of
 "papers"), not just the journal article.
 
 Access via the public Zenodo REST API (no auth required for read search):
@@ -20,7 +20,7 @@ Thin subclass over BaseScrapeAdapter: the cache check / atomic set_docs / self-r
 ritual lives in the base; this adapter only declares its facets and fills the two hooks.
 The query path takes Zenodo's default RELEVANCE order (no explicit sort -- q-present defaults to
 relevance) over a WIDE candidate pool (capped at Zenodo's max page size of 25; size>=30 -> HTTP
-400), then re-ranks locally with Penumbra's shared BM25 scorer and caps to ``limit`` (server
+400), then re-ranks locally with the eye's shared BM25 scorer and caps to ``limit`` (server
 relevance alone leaks off-topic keyword hits, e.g. matching "model" in an unrelated paper --
 caught in a WebSearch head-to-head, 2026-06-17).
 """
@@ -33,11 +33,11 @@ from typing import Any, Optional
 from markdownify import markdownify as html_to_md
 
 from penumbra.core import http, relevance
-from penumbra.core.normalize import Document, jsonsafe, mk_signal
+from penumbra.core.normalize import PolarisDocument, jsonsafe, mk_signal
 from penumbra.core.sources.scrape._base import BaseScrapeAdapter
 
 API_URL = "https://zenodo.org/api/records"
-# Pull a WIDE candidate pool, then re-rank with Penumbra's shared BM25 scorer + cap to limit
+# Pull a WIDE candidate pool, then re-rank with the eye's shared BM25 scorer + cap to limit
 # (_to_documents). Zenodo CAPS page size at 25 (size>=30 -> HTTP 400), so 25 is the max pool.
 _ZENODO_MAX_SIZE = 25
 _CANDIDATE_POOL = 25
@@ -55,18 +55,18 @@ class ZenodoAdapter(BaseScrapeAdapter):
     def _raw_fetch(self, query: str, limit: int) -> Optional[Any]:
         # NO explicit sort: Zenodo defaults to RELEVANCE order when q is present. Pull a WIDE pool
         # (capped at Zenodo's max page size of 25 -- size>=30 returns HTTP 400); _to_documents
-        # re-ranks it with Penumbra's shared BM25 + caps to the caller's limit.
+        # re-ranks it with the eye's shared BM25 + caps to the caller's limit.
         return http.get_json(
             API_URL,
             params={"q": query, "size": min(max(limit, _CANDIDATE_POOL), _ZENODO_MAX_SIZE)},
             timeout=15,
         )
 
-    def _to_documents(self, raw: Any, query: str, limit: int) -> list[Document]:
+    def _to_documents(self, raw: Any, query: str, limit: int) -> list[PolarisDocument]:
         if not isinstance(raw, dict):
             return []
         hits = (raw.get("hits") or {}).get("hits") or []
-        docs: list[Document] = []
+        docs: list[PolarisDocument] = []
         for rec in hits:  # the WIDE candidate pool (see _raw_fetch); re-ranked + capped below
             if not isinstance(rec, dict):
                 continue
@@ -74,7 +74,7 @@ class ZenodoAdapter(BaseScrapeAdapter):
             if doc is not None:
                 docs.append(doc)
         # Zenodo's server relevance still leaks off-topic keyword hits; re-rank the wide pool with
-        # Penumbra's shared BM25 scorer (title 3x + content 1x), keep only matches, cap to limit.
+        # the eye's shared BM25 scorer (title 3x + content 1x), keep only matches, cap to limit.
         # A term-less query keeps Zenodo's own order.
         if docs and relevance.query_terms(query):
             scores = relevance.doc_scores(docs, query)
@@ -82,7 +82,7 @@ class ZenodoAdapter(BaseScrapeAdapter):
                     if _s > 0.0]
         return docs[:limit]
 
-    def _record_to_doc(self, rec: dict) -> Optional[Document]:
+    def _record_to_doc(self, rec: dict) -> Optional[PolarisDocument]:
         meta = rec.get("metadata") or {}
         title = (meta.get("title") or "").strip()
         if not title:
@@ -133,7 +133,7 @@ class ZenodoAdapter(BaseScrapeAdapter):
         if journal:
             metadata["journal"] = jsonsafe(journal)
 
-        return Document(
+        return PolarisDocument(
             source=self.name,
             source_id=rec_id or (doi or title),
             url=url,

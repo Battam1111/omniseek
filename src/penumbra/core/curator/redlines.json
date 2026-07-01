@@ -25,6 +25,6 @@
     "severity": "hard",
     "kind": "host_suffix",
     "value": "rocketreach.co",
-    "reason": "Data-broker / contact-scraper denylist seed (P4 Attack-2): a discovered host on a people-data broker hard-blocks at probe time. the operator extends this denylist; a single seed entry freezes the rule's existence so a discovery loop cannot silently re-surface a broker host."
+    "reason": "Data-broker / contact-scraper denylist seed (P4 Attack-2): a discovered host on a people-data broker hard-blocks at probe time. Captain extends this denylist; a single seed entry freezes the rule's existence so a discovery loop cannot silently re-surface a broker host."
   }
 ]

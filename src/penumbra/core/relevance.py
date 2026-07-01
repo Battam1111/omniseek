@@ -1,4 +1,4 @@
-"""Lexical relevance: Penumbra's ONE mechanical text-match scorer.
+"""Lexical relevance: the eye's ONE mechanical text-match scorer.
 
 Replaces raw term-counting (3*title.count(t) + body.count(t)), whose measured
 failure modes were:
@@ -101,7 +101,7 @@ def field_scores(items: list[list[tuple[str, float]]], query: str) -> list[float
 
 
 def doc_scores(docs, query: str) -> list[float]:
-    """Score Documents: title weighted 3x over content. The one entry point
+    """Score PolarisDocuments: title weighted 3x over content. The one entry point
     shared by rank.merge_rank and keyword_score_filter, so search ranking and
     adapter-side filtering can never drift apart again."""
     return field_scores([[(d.title or "", 3.0), (d.content or "", 1.0)] for d in docs], query)

@@ -1,9 +1,9 @@
 """Render-fallback for ad-hoc URLs no adapter claims: plain fetch, then Jina on a thin page.
 
-``fetcher.fetch_url`` (the ``penumbra_add_url`` path) tries every registered adapter until one
+``fetcher.fetch_url`` (the ``eye_add_url`` path) tries every registered adapter until one
 CLAIMS the URL. ~167 adapters cover specific sources, but there is NO generic "read any web
 page" adapter, so a URL outside every adapter (a Next.js / SPA marketing page, a JS-walled
-doc, an arbitrary blog) returns ``matched=false`` today: Penumbra does not reach it at all.
+doc, an arbitrary blog) returns ``matched=false`` today: the eye does not reach it at all.
 
 This is the LAST RESORT, invoked by ``fetch_url`` ONLY after the adapter loop claims nothing,
 so it costs the happy path zero: a claiming adapter returns first and this never runs.
@@ -28,7 +28,7 @@ from typing import Optional
 from urllib.parse import urlparse
 
 from penumbra.core import cache, diag, http
-from penumbra.core.normalize import Document, jsonsafe
+from penumbra.core.normalize import PolarisDocument, jsonsafe
 
 logger = logging.getLogger(__name__)
 
@@ -80,9 +80,9 @@ def _is_http_url(url: str) -> bool:
         return False
 
 
-def read_via_fallback(url: str) -> Optional[Document]:
+def read_via_fallback(url: str) -> Optional[PolarisDocument]:
     """Last-resort read for a URL no adapter claimed. Plain fetch; escalate to Jina if thin.
-    Returns a Document(source='web') or None (None keeps penumbra_add_url matched=false)."""
+    Returns a PolarisDocument(source='web') or None (None keeps eye_add_url matched=false)."""
     if not _is_http_url(url):
         return None  # only http(s); never let a file:// or odd scheme through
     if cache.cache_only():
@@ -91,7 +91,7 @@ def read_via_fallback(url: str) -> Optional[Document]:
     key = cache.make_key("web", "fallback", url)
     cached = cache.get(key)
     if cached is not None:
-        return Document(**cached) if isinstance(cached, dict) else cached
+        return PolarisDocument(**cached) if isinstance(cached, dict) else cached
 
     resp = http.get(url)  # shared UA + redirects + 30MB cap; None on any failure
     plain_title, plain_text = "", ""
@@ -119,7 +119,7 @@ def read_via_fallback(url: str) -> Optional[Document]:
                   body=f"plain+jina both thin (plain={len(plain_text)} chars)")
         return None  # genuinely nothing: keep matched=false, never a fake empty doc
 
-    doc = Document(
+    doc = PolarisDocument(
         source="web",
         source_id=url,
         url=url,

@@ -1,7 +1,7 @@
 """HuggingFace Hub — models, datasets, and Spaces unified search.
 
 HF Hub is the canonical ML model/dataset/code-app distribution platform.
-Penumbra exposes it for:
+Polaris-eye exposes it for:
 - Finding pre-trained models by task/keyword
 - Discovering datasets (e.g., instruction-tuned, multi-modal)
 - Exploring deployed Spaces (interactive demos)
@@ -35,14 +35,14 @@ from urllib.parse import urlparse
 import httpx
 
 from penumbra.core import http
-from penumbra.core.normalize import Document, jsonsafe, mk_signal
+from penumbra.core.normalize import PolarisDocument, jsonsafe, mk_signal
 from penumbra.core.sources.api._base import BaseAPIAdapter
 
 logger = logging.getLogger(__name__)
 
 HF_API_BASE = "https://huggingface.co/api"
 TIMEOUT = 15
-USER_AGENT = "penumbra/0.1 (automated retrieval)"
+USER_AGENT = "polaris-eye/0.1 (automated retrieval)"
 
 
 class HuggingFaceHubAdapter(BaseAPIAdapter):
@@ -91,12 +91,12 @@ class HuggingFaceHubAdapter(BaseAPIAdapter):
         pairs.sort(key=lambda p: (p[0].get("downloads") or 0), reverse=True)
         return pairs[:limit]
 
-    def _to_document(self, raw) -> Optional[Document]:
+    def _to_document(self, raw) -> Optional[PolarisDocument]:
         item, kind = raw
         return self._item_to_document(item, kind)
 
     # --------------------------------------------------------------- fetch_url
-    def fetch_url(self, url: str) -> Optional[Document]:
+    def fetch_url(self, url: str) -> Optional[PolarisDocument]:
         host = (urlparse(url).hostname or "").lower()
         if "huggingface.co" not in host:
             return None
@@ -143,7 +143,7 @@ class HuggingFaceHubAdapter(BaseAPIAdapter):
             return False, f"{type(exc).__name__}: {exc}"
 
     @staticmethod
-    def _item_to_document(item: dict, kind: str) -> Document:
+    def _item_to_document(item: dict, kind: str) -> PolarisDocument:
         item_id = item.get("id") or item.get("modelId") or item.get("datasetId") or "?"
         if kind == "models":
             url = f"https://huggingface.co/{item_id}"
@@ -187,7 +187,7 @@ class HuggingFaceHubAdapter(BaseAPIAdapter):
             if library:
                 description += f" • library: {library}"
 
-        return Document(
+        return PolarisDocument(
             source="huggingface_hub",
             source_id=item_id,
             url=url,

@@ -10,7 +10,7 @@ the account's real ct0.
 Account safety (the burner must not get banned) — LOW frequency BY DESIGN:
   * 1h result cache → X is hit at most once/hour for the whole handle set;
   * a small random jitter between per-handle fetches (no fixed cadence);
-  * residential IP (the the host); twscrape queues requests respecting X's
+  * residential IP (the Mac mini); twscrape queues requests respecting X's
     per-endpoint rate windows.
 Treat the burner as disposable — if X flags it the account goes read-only/inactive,
 health_check reports it, and the health watchdog alerts.
@@ -19,9 +19,9 @@ asyncio isolation: twscrape is async; SourceAdapter.search is sync and may run o
 FastMCP's event-loop thread, so every twscrape call goes through ``_run_async``
 (fresh thread + new loop) — the same isolation the CDP adapters use.
 
-Config: ``~/.penumbra/credentials/twitter_x.json`` →
+Config: ``~/.polaris/credentials/twitter_x.json`` →
   {"auth_token": "...", "handles": ["karpathy", ...]}   (handles optional)
-twscrape account db: ``~/.penumbra/state/twscrape_accounts.db``.
+twscrape account db: ``~/.polaris/state/twscrape_accounts.db``.
 """
 
 from __future__ import annotations
@@ -40,17 +40,17 @@ from urllib.parse import urlparse
 
 from penumbra.core import cache
 from penumbra.core.fetcher import register_adapter
-from penumbra.core.normalize import Document, jsonsafe, keyword_score_filter, mk_signal
+from penumbra.core.normalize import PolarisDocument, jsonsafe, keyword_score_filter, mk_signal
 
 logger = logging.getLogger(__name__)
 
-CRED = Path.home() / ".penumbra" / "credentials" / "twitter_x.json"
-DB_PATH = Path.home() / ".penumbra" / "state" / "twscrape_accounts.db"
+CRED = Path.home() / ".polaris" / "credentials" / "twitter_x.json"
+DB_PATH = Path.home() / ".polaris" / "state" / "twscrape_accounts.db"
 CACHE_TTL = 3600          # 1h — keep X access low-frequency (account safety)
 PER_HANDLE_TWEETS = 20
 _JITTER = (1.0, 3.5)      # random seconds between per-handle fetches
 _EPOCH = datetime.min.replace(tzinfo=timezone.utc)
-_ID_CACHE = Path.home() / ".penumbra" / "state" / "twitter_x_ids.json"  # handle→user_id
+_ID_CACHE = Path.home() / ".polaris" / "state" / "twitter_x_ids.json"  # handle→user_id
 
 
 def _load_id_cache() -> dict:
@@ -189,7 +189,7 @@ async def _ensure_account(api) -> bool:
         pass
     ct0 = secrets.token_hex(16)
     await api.pool.add_account(
-        "penumbra_x_burner", "x", "x@local", "x",
+        "polaris_x_burner", "x", "x@local", "x",
         cookies=f"auth_token={tok}; ct0={ct0}",
     )
     info = await api.pool.accounts_info()
@@ -226,22 +226,22 @@ class TwitterXAdapter:
     needs_credentials = True
     explicit_only = "low-frequency burner (account-rate-sensitive)"
     description = (
-        "X/Twitter 顶级 ML 研究者 + 研究/招聘信号 (twscrape 直连 burner cookie, "
-        "低频). 起步 curated 名单, 可配 ~/.penumbra/credentials/twitter_x.json handles"
+        "X/Twitter 顶级 ML 研究者 + 加拿大/SG AI 信号 (twscrape 直连 burner cookie, "
+        "低频). 起步 curated 名单, 可配 ~/.polaris/credentials/twitter_x.json handles"
     )
 
     def __init__(self) -> None:
         self._lock = threading.Lock()  # serialize twscrape (one sqlite db)
 
     # ------------------------------------------------------------ async cores
-    async def _fetch_all(self, handles: list[str], per: int) -> list[Document]:
+    async def _fetch_all(self, handles: list[str], per: int) -> list[PolarisDocument]:
         api = _api()
         if not await _ensure_account(api):
             logger.warning("twitter_x: no active burner account (auth_token missing/rejected)")
             return []
         id_cache = _load_id_cache()  # handle→id: skip the rate-limited resolve when cached
         dirty = False
-        out: list[Document] = []
+        out: list[PolarisDocument] = []
         for h in handles:
             try:
                 uid = id_cache.get(h.lower())
@@ -278,7 +278,7 @@ class TwitterXAdapter:
         return await api.user_by_login(_handles()[0]) is not None
 
     # -------------------------------------------------------------- Protocol
-    def search(self, query: str, limit: int = 10) -> list[Document]:
+    def search(self, query: str, limit: int = 10) -> list[PolarisDocument]:
         if _SEALED:
             logger.warning(_SEALED_MSG)
             return []
@@ -305,7 +305,7 @@ class TwitterXAdapter:
             return keyword_score_filter(docs, q)[:limit]
         return sorted(docs, key=lambda d: d.date or _EPOCH, reverse=True)[:limit]
 
-    def fetch_url(self, url: str) -> Optional[Document]:
+    def fetch_url(self, url: str) -> Optional[PolarisDocument]:
         if _SEALED:
             logger.warning(_SEALED_MSG)
             return None
@@ -321,7 +321,7 @@ class TwitterXAdapter:
             try:
                 with self._lock:
                     tw = _run_async(self._one_tweet(tid), timeout=30)
-            except Exception as exc:  # noqa: BLE001 — bounded: never hang penumbra_add_url
+            except Exception as exc:  # noqa: BLE001 — bounded: never hang eye_add_url
                 logger.warning("twitter_x fetch_url timed out / failed for %s: %s", url, exc)
                 return None
             if tw is None:
@@ -346,13 +346,13 @@ class TwitterXAdapter:
                (False, "burner inactive — auth_token likely expired/flagged")
 
     # ----------------------------------------------------------- normalize
-    def _tweet_to_doc(self, tw, handle: str) -> Document:
+    def _tweet_to_doc(self, tw, handle: str) -> PolarisDocument:
         content = getattr(tw, "rawContent", "") or ""
         user = getattr(tw, "user", None)
         uname = getattr(user, "username", None) or handle
         title = content.strip().replace("\n", " ")[:80] or "(tweet)"
         tags = [f"@{uname}"] + [f"#{h}" for h in (getattr(tw, "hashtags", None) or [])[:5]]
-        return Document(
+        return PolarisDocument(
             source="twitter_x",
             source_id=str(getattr(tw, "id", "")),
             url=getattr(tw, "url", "") or f"https://x.com/{uname}",

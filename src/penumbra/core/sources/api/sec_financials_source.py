@@ -8,7 +8,7 @@ revenue) straight from the structured XBRL the SEC publishes, and (b) the most r
 filings (form + date + a direct link). This is clean, official, machine-read structure a
 web search cannot return: it would hand you an article ABOUT the 10-K, not the numbers.
 
-Three keyless SEC endpoints, probed live from the host US egress (2026-06-17):
+Three keyless SEC endpoints, probed live from the mini US egress (2026-06-17):
   - Ticker -> CIK map: ``https://www.sec.gov/files/company_tickers.json`` ->
     ``{idx: {cik_str (int), ticker, title}}``. Loaded once per process and cached. CIK is
     zero-padded to 10 digits for the data.sec.gov endpoints. (Oracle's live CIK is
@@ -35,7 +35,7 @@ import threading
 from typing import Any, Optional
 
 from penumbra.core import auth, http
-from penumbra.core.normalize import Document, mk_signal
+from penumbra.core.normalize import PolarisDocument, mk_signal
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +44,7 @@ SUBMISSIONS_URL = "https://data.sec.gov/submissions/CIK{cik}.json"
 COMPANYFACTS_URL = "https://data.sec.gov/api/xbrl/companyfacts/CIK{cik}.json"
 # SEC requires a descriptive contact UA or it 403s (same contract as sec_edgar). Contact is
 # host-injected, never a hardcoded personal address (see auth.contact_email).
-SEC_UA = f"penumbra research {auth.contact_email()}"
+SEC_UA = f"polaris-eye research {auth.contact_email()}"
 SEC_HEADERS = {"User-Agent": SEC_UA, "Accept": "application/json"}
 TIMEOUT = 20
 FACTS_TIMEOUT = 30  # companyfacts is ~4MB
@@ -218,14 +218,14 @@ class SECFinancialsAdapter:
         "+ 最近 10 条备案 (form/日期/直达链接). 命名查询, 不进广搜. web search 给不了干净的结构化数字."
     )
 
-    def search(self, query: str, limit: int = 10) -> list[Document]:
+    def search(self, query: str, limit: int = 10) -> list[PolarisDocument]:
         ident = _resolve(query)
         if not ident:
             return []
         doc = self._build_doc(ident)
         return [doc] if doc is not None else []
 
-    def fetch_url(self, url: str) -> Optional[Document]:
+    def fetch_url(self, url: str) -> Optional[PolarisDocument]:
         return None
 
     def health_check(self) -> tuple[bool, str]:
@@ -234,7 +234,7 @@ class SECFinancialsAdapter:
             return False, "ticker map fetch failed (UA gating or endpoint change?)"
         return True, f"OK ({len(by_ticker)} tickers)"
 
-    def _build_doc(self, ident: dict) -> Optional[Document]:
+    def _build_doc(self, ident: dict) -> Optional[PolarisDocument]:
         cik = ident["cik"]
         ticker = ident.get("ticker") or ""
         title = ident.get("title") or ticker or cik
@@ -309,7 +309,7 @@ class SECFinancialsAdapter:
             except (ValueError, KeyError):
                 latest_date = None
 
-        return Document(
+        return PolarisDocument(
             source="sec_financials",
             source_id=cik,
             url=edgar_url,

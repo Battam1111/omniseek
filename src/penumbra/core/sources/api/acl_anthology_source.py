@@ -2,7 +2,7 @@
 
 The Anthology's own data repo ships one structured XML per collection
 (verified live 2026-06-10: 2025.acl / 2024.emnlp / 2025.naacl all 200 on raw
-.githubusercontent). That gives Penumbra what dblp keyword search cannot: "list
+.githubusercontent). That gives the eye what dblp keyword search cannot: "list
 what actually appeared at ACL 2025", with titles, authors, abstracts and
 canonical aclanthology.org links. MODE: STRUCTURE (venue-of-record browse).
 
@@ -26,13 +26,13 @@ from urllib.parse import urlparse
 import httpx
 
 from penumbra.core import cache
-from penumbra.core.normalize import Document, keyword_score_filter
+from penumbra.core.normalize import PolarisDocument, keyword_score_filter
 
 logger = logging.getLogger(__name__)
 
 RAW = "https://raw.githubusercontent.com/acl-org/acl-anthology/master/data/xml"
 TIMEOUT = 30
-USER_AGENT = "penumbra/0.1 (automated retrieval)"
+USER_AGENT = "polaris-eye/0.1 (automated retrieval)"
 CACHE_TTL = 7 * 86400  # published volumes are immutable; a week is conservative
 
 _VENUES = "acl|emnlp|naacl|eacl|aacl|coling|tacl|cl|conll"
@@ -111,7 +111,7 @@ class ACLAnthologyAdapter:
         cache.set(key, papers, ttl=CACHE_TTL)
         return papers
 
-    def search(self, query: str, limit: int = 10) -> list[Document]:
+    def search(self, query: str, limit: int = 10) -> list[PolarisDocument]:
         terms, coll = _parse_collection(query)
         if not coll:
             return []  # no volume token: not this source's job (see description)
@@ -119,7 +119,7 @@ class ACLAnthologyAdapter:
         docs = keyword_score_filter(docs, terms)
         return docs[:limit]
 
-    def fetch_url(self, url: str) -> Optional[Document]:
+    def fetch_url(self, url: str) -> Optional[PolarisDocument]:
         host = (urlparse(url).hostname or "").lower()
         if "aclanthology.org" not in host:
             return None
@@ -142,7 +142,7 @@ class ACLAnthologyAdapter:
             return False, f"{type(exc).__name__}: {exc}"
 
     @staticmethod
-    def _to_doc(p: dict, coll: str) -> Document:
+    def _to_doc(p: dict, coll: str) -> PolarisDocument:
         date = None
         try:
             date = datetime(int(p["year"]), 1, 1, tzinfo=timezone.utc)
@@ -150,7 +150,7 @@ class ACLAnthologyAdapter:
             pass
         content = (f"Volume: {coll} ({p['volume']})\n"
                    f"Authors: {', '.join(p['authors'])}\n\n{p['abstract'] or '(no abstract in XML)'}")
-        return Document(
+        return PolarisDocument(
             source="acl_anthology",
             source_id=p["id"],
             url=p["url"],

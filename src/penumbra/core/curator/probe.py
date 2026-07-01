@@ -1,6 +1,6 @@
 """Mechanical mode-probes + the SSRF-hardened fetcher for attacker-influenceable candidate URLs.
 
-This is Penumbra's FIRST fetcher pointed at hosts an adversary chose (a candidate-source URL).
+This is the eye's FIRST fetcher pointed at hosts an adversary chose (a candidate-source URL).
 Everything here is MECHANICAL: it fetches / measures / counts / resolves / matches and returns
 FACTS. It renders NO verdict. There is no key or string-value naming score/verdict/passes/
 recommend/admit/reject/good/quality/rating/confidence/decision/beats_web_search anywhere in a
@@ -44,7 +44,7 @@ _BLOCKED_HOST_SUFFIXES = (
 _ALLOWED_SCHEMES = ("http", "https")
 _ALLOWED_PORTS = (80, 443)
 
-# This engine runs on a host whose resolver uses FAKE-IP proxying (Clash-style): PUBLIC domains
+# This eye runs on a host whose resolver uses FAKE-IP proxying (Clash-style): PUBLIC domains
 # resolve into 198.18.0.0/15 (a reserved range is_private flags) which the local proxy maps back
 # to the real domain, so CONNECTING to the fake IP routes to the genuine public site. These are
 # NOT real internal hosts, so they are ALLOWED. Every other private/loopback/link-local/reserved
@@ -174,11 +174,11 @@ def safe_fetch(url: str, *, method: str = "GET", render: bool = False,
     for signature parity but P1 NEVER drives a browser here (anonymous stranger only, no CDP).
 
     SAFE_FETCH BOUNDARY (spec 8c, SSRF pass): safe_fetch hardens the PROBE-TIME fetch ONLY -- the
-    one fetch Penumbra makes at a candidate URL before any verdict. The POST-ADMISSION recurring
+    one fetch the eye makes at a candidate URL before any verdict. The POST-ADMISSION recurring
     fetch a family adapter makes once a source is live (org_watch / page_watch / news_scraper /
     render) goes through the NORMAL fetcher and is NOT IP-pinned by this guard. That is exactly why
     those families are in apply._NEVER_AUTO_FAMILIES (never auto-applied) and why an admit of one
-    must consciously acknowledge the unguarded recurring fetch (server.penumbra_curator_decide requires
+    must consciously acknowledge the unguarded recurring fetch (server.eye_curator_decide requires
     baseline_ref.recurring_fetch_acknowledged for a first-seen host in that subclass). Routing the
     enrich/OpenAlex resolution hosts through a fixed-API host allowlist is a flagged follow-up
     hardening (the id regexes constrain path injection today), not a P4 blocker.
@@ -285,8 +285,8 @@ def safe_fetch(url: str, *, method: str = "GET", render: bool = False,
 
 # ─────────────────────────────────────────────────────────────────────────────────
 # Mode probes: each FETCHES candidate URLs via safe_fetch and returns provenance-tagged
-# FACTS only. Provenance tags: 'verified' (Penumbra independently confirmed), 'claimed' (parsed
-# straight from publisher bytes), 'derived' (computed by Penumbra over fetched content).
+# FACTS only. Provenance tags: 'verified' (eye independently confirmed), 'claimed' (parsed
+# straight from publisher bytes), 'derived' (computed by the eye over fetched content).
 # ─────────────────────────────────────────────────────────────────────────────────
 
 _PASSWORD_INPUT_RE = re.compile(r'<input[^>]*type=["\']?password', re.IGNORECASE)
@@ -329,7 +329,7 @@ def _baseline_queries(sample_titles: list) -> list:
 
 def _probe_structure(candidate: dict, fetch: dict) -> dict:
     """STRUCTURE: report RESOLVED ids, not regex hits (a syntax match is fabrication-prone).
-    structured_fields_present = what the page CLAIMS; structured_fields_resolved = what Penumbra
+    structured_fields_present = what the page CLAIMS; structured_fields_resolved = what the eye
     VERIFIED against OpenAlex/S2/Crossref. The divergence is the fabrication tell."""
     text = fetch.get("text") or ""
     present: list = []
@@ -349,7 +349,7 @@ def _probe_structure(candidate: dict, fetch: dict) -> dict:
     venue = None
     retracted = None
 
-    # Resolve a DOI / arXiv id through the SAME enrich path Penumbra already trusts (Crossref/OA).
+    # Resolve a DOI / arXiv id through the SAME enrich path the eye already trusts (Crossref/OA).
     for ident in (dois + arxiv)[:3]:
         try:
             from penumbra.core import enrich

@@ -24,7 +24,7 @@ from typing import Optional
 import httpx
 
 from penumbra.core import cache
-from penumbra.core.normalize import Document, jsonsafe, mk_signal
+from penumbra.core.normalize import PolarisDocument, jsonsafe, mk_signal
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +43,7 @@ class MyCareersFutureAdapter:
         "SG 全境岗位 (本地/MNC/政府), 自由文本查询; 新加坡求职主板"
     )
 
-    def search(self, query: str, limit: int = 10) -> list[Document]:
+    def search(self, query: str, limit: int = 10) -> list[PolarisDocument]:
         q = (query or "").strip() or DEFAULT_QUERY
         key = cache.make_key("mycareersfuture", "search", q, limit)
         cached = cache.get_docs(key)
@@ -66,7 +66,7 @@ class MyCareersFutureAdapter:
             logger.warning("MyCareersFuture search failed: %s", exc)
             return []
 
-        docs: list[Document] = []
+        docs: list[PolarisDocument] = []
         for j in results:
             doc = self._to_doc(j)
             if doc:
@@ -76,7 +76,7 @@ class MyCareersFutureAdapter:
         cache.set_docs(key, docs, ttl=CACHE_TTL)
         return docs
 
-    def fetch_url(self, url: str) -> Optional[Document]:
+    def fetch_url(self, url: str) -> Optional[PolarisDocument]:
         return None
 
     def health_check(self) -> tuple[bool, str]:
@@ -91,7 +91,7 @@ class MyCareersFutureAdapter:
             return False, f"{type(exc).__name__}: {exc}"
 
     @staticmethod
-    def _to_doc(j: dict) -> Optional[Document]:
+    def _to_doc(j: dict) -> Optional[PolarisDocument]:
         uuid = j.get("uuid") or ""
         title = (j.get("title") or "").strip()
         if not uuid or not title:
@@ -129,7 +129,7 @@ class MyCareersFutureAdapter:
         if skills:
             content += f"\n技能: {', '.join(skills)}"
 
-        return Document(
+        return PolarisDocument(
             source="mycareersfuture",
             source_id=uuid,
             url=url,

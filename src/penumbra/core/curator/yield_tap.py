@@ -3,7 +3,7 @@ the return of ``search_ranked`` that records, per source, its MARGINAL contribut
 results. It records FACTS ONLY (integer counters + timestamps), NEVER a verdict. A later audit AGENT
 (P3) reads the accumulated facts and decides KEEP / WATCH / PRUNE; this module decides nothing.
 
-THE RAZOR holds here exactly as in recall/writer.py and curator/candidates.py: Penumbra records /
+THE RAZOR holds here exactly as in recall/writer.py and curator/candidates.py: the eye records /
 counts / measures; every judgment is the agent's. There is NO field named score / verdict /
 redundant / dead / low_yield / passes / recommend anywhere in the durable store; no ratio, no
 threshold. The ratio sole/appeared and any "redundant"/"low-yield" call is the audit agent's at P3.
@@ -39,10 +39,10 @@ from penumbra.core import cache
 
 logger = logging.getLogger(__name__)
 
-# Runtime state lives under ~/.penumbra/state/curator/ (same tree as candidates.json + the
+# Runtime state lives under ~/.polaris/state/curator/ (same tree as candidates.json + the
 # health-watchdog state; survives redeploys, rides the weekly state-backup launchd, keeps the
 # read-only deploy tree pristine). Created on first flush.
-STATE_DIR = Path.home() / ".penumbra" / "state" / "curator"
+STATE_DIR = Path.home() / ".polaris" / "state" / "curator"
 YIELD_PATH = STATE_DIR / "yield.json"
 
 _VERSION = 1

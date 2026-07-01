@@ -24,7 +24,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from penumbra.core import cache
-from penumbra.core.normalize import Document, keyword_score_filter
+from penumbra.core.normalize import PolarisDocument, keyword_score_filter
 
 logger = logging.getLogger(__name__)
 
@@ -78,12 +78,12 @@ class IRCCEERoundsAdapter:
         cache.set(key, rounds, ttl=CACHE_TTL)
         return rounds
 
-    def search(self, query: str, limit: int = 10) -> list[Document]:
+    def search(self, query: str, limit: int = 10) -> list[PolarisDocument]:
         docs = [d for d in (self._to_doc(r) for r in self._rounds()) if d]
         docs = keyword_score_filter(docs, (query or "").strip())
         return docs[:limit]
 
-    def fetch_url(self, url: str) -> Optional[Document]:
+    def fetch_url(self, url: str) -> Optional[PolarisDocument]:
         return None  # structured lookup source; reach it via search
 
     def health_check(self) -> tuple[bool, str]:
@@ -103,7 +103,7 @@ class IRCCEERoundsAdapter:
         return True, "OK (CDP up; no cache yet)"
 
     @staticmethod
-    def _to_doc(r: dict) -> Optional[Document]:
+    def _to_doc(r: dict) -> Optional[PolarisDocument]:
         num = str(r.get("drawNumber") or "").strip()
         if not num:
             return None
@@ -130,7 +130,7 @@ class IRCCEERoundsAdapter:
         if r.get("dd18"):
             parts.append(f"Pool total (as of {r.get('drawDistributionAsOn', '?')}): {r['dd18']}")
 
-        return Document(
+        return PolarisDocument(
             source="ircc_ee_rounds",
             source_id=num,  # stable per draw: the watchtower's "new round" key
             url=url,

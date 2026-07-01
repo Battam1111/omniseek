@@ -6,7 +6,7 @@ posts, then filters by query. Use case: track senior Chinese ML/NLP
 researchers who publish on Zhihu rather than English venues.
 
 Initially follows 张俊林 (新浪微博 AI 首席科学家, an S-tier Chinese-world
-senior). The deployer extends the list via `~/.penumbra/credentials/zhihu_users.json`:
+senior). The deployer extends the list via `~/.polaris/credentials/zhihu_users.json`:
 
     {
       "users": [
@@ -30,7 +30,7 @@ from urllib.parse import urlparse
 from bs4 import BeautifulSoup
 
 from penumbra.core import auth, cache, relevance
-from penumbra.core.normalize import Document, jsonsafe
+from penumbra.core.normalize import PolarisDocument, jsonsafe
 from penumbra.core.sources.walled._cdp import cdp_call, cdp_health
 
 logger = logging.getLogger(__name__)
@@ -70,7 +70,7 @@ class ZhihuUsersAdapter:
     explicit_only = "shared CDP Chrome (precious logged-in session)"
     description = (
         "知乎 followed researchers — 张俊林 等 senior 中文 NLP/ML 作者跟踪 "
-        "(via CDP, configurable via ~/.penumbra/credentials/zhihu_users.json)"
+        "(via CDP, configurable via ~/.polaris/credentials/zhihu_users.json)"
     )
 
     def _load_users(self) -> list[dict]:
@@ -79,7 +79,7 @@ class ZhihuUsersAdapter:
             return creds["users"]
         return DEFAULT_USERS
 
-    def search(self, query: str, limit: int = 10) -> list[Document]:
+    def search(self, query: str, limit: int = 10) -> list[PolarisDocument]:
         users = self._load_users()
         if not users:
             return []
@@ -93,7 +93,7 @@ class ZhihuUsersAdapter:
         # Each user's posts are fetched + cached query-INDEPENDENTLY (see _fetch_user_posts), so
         # the expensive CDP nav is paid once per handle per TTL and EVERY query (+ the prewarmer)
         # reuses it — a different-query call is now an in-memory filter, not a re-nav.
-        all_docs: list[Document] = []
+        all_docs: list[PolarisDocument] = []
         for user in users:
             handle = user.get("handle")
             display_name = user.get("display_name", handle)
@@ -113,7 +113,7 @@ class ZhihuUsersAdapter:
         all_docs = relevance.filter_rank(all_docs, query)
 
         # Sort by date desc (None last)
-        def sort_key(d: Document):
+        def sort_key(d: PolarisDocument):
             return d.date or datetime.min
         all_docs.sort(key=sort_key, reverse=True)
         all_docs = all_docs[:limit]
@@ -121,7 +121,7 @@ class ZhihuUsersAdapter:
         cache.set_docs(key, all_docs, ttl=1800)
         return all_docs
 
-    def _fetch_user_posts(self, handle: str, display_name: str) -> list[Document]:
+    def _fetch_user_posts(self, handle: str, display_name: str) -> list[PolarisDocument]:
         """The expensive CDP nav, cached query-INDEPENDENTLY per handle (a researcher's recent
         posts don't depend on the search query). Paid once per handle per POSTS_TTL and reused by
         every query + the prewarmer — instead of re-navving on each new query (the old behavior,
@@ -163,7 +163,7 @@ class ZhihuUsersAdapter:
         if not anchors:
             anchors = soup.select("a[href*='zhuanlan.zhihu.com/p/'], a[href*='/p/']")
 
-        docs: list[Document] = []
+        docs: list[PolarisDocument] = []
         seen_urls: set[str] = set()
         for a in anchors:
             try:
@@ -179,7 +179,7 @@ class ZhihuUsersAdapter:
         cache.set_docs(pkey, docs, ttl=POSTS_TTL)
         return docs
 
-    def fetch_url(self, url: str) -> Optional[Document]:
+    def fetch_url(self, url: str) -> Optional[PolarisDocument]:
         host = (urlparse(url).hostname or "").lower()
         if "zhihu.com" not in host:
             return None
@@ -212,7 +212,7 @@ class ZhihuUsersAdapter:
         except Exception as exc:  # noqa: BLE001
             return False, f"{type(exc).__name__}: {exc}"
 
-    def _anchor_to_document(self, a, handle: str, display_name: str) -> Optional[Document]:
+    def _anchor_to_document(self, a, handle: str, display_name: str) -> Optional[PolarisDocument]:
         title = a.get_text(strip=True)
         href = a.get("href") or ""
         if not title or not href:
@@ -246,7 +246,7 @@ class ZhihuUsersAdapter:
         m = re.search(r"/p/(\d+)", url)
         source_id = m.group(1) if m else url
 
-        return Document(
+        return PolarisDocument(
             source="zhihu_users",
             source_id=str(source_id),
             url=url,

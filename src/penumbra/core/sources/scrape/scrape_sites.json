@@ -36,7 +36,7 @@
  },
  {
   "name": "scrape_canada",
-  "description": "加拿大工业界 AI lab (scrape, 无 RSS) — RBC Borealis research blog 博文 (加拿大最大工业 AI 实验室, Toronto/Edmonton). 论文已由 rbc_borealis 覆盖,这里补 blog 长文",
+  "description": "加拿大工业界 AI lab (scrape, 无 RSS) — RBC Borealis research blog 博文 (加拿大最大工业 AI 实验室, Toronto/Edmonton, 落地招聘目标). 论文已由 rbc_borealis 覆盖,这里补 blog 长文",
   "sites": [
    {"url": "https://rbcborealis.com/research/", "render": true, "path_contains": "/research-blogs/"}
   ],

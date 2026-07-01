@@ -1,4 +1,4 @@
-"""Unified fetcher — the entry point for Penumbra operations.
+"""Unified fetcher — the entry point for Polaris eye operations.
 
 All source adapters register themselves with this module via
 register_adapter(). The fetcher then routes queries to the appropriate
@@ -18,7 +18,7 @@ from concurrent.futures import ThreadPoolExecutor, wait
 from pathlib import Path
 from typing import Optional, Protocol, runtime_checkable
 
-from penumbra.core.normalize import Document
+from penumbra.core.normalize import PolarisDocument
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 _SEARCH_WORKERS = 64
 # BROAD (sources=None) cap. Two values, by freshness:
 #  - default (cache-allowed) path: 11s. MEASURED (2026-06-13, after the L1 slow-source
-#    parallelization + Penumbra-prewarm cron + the S2 API key): a broad on a NEW query
+#    parallelization + the eye-prewarm cron + the S2 API key): a broad on a NEW query
 #    completes EVERY source except reddit within ~10s — reddit (~25s, host-bound on the
 #    Arctic mirror) is the only straggler, and it is dropped at 16s too, then self-warms.
 #    So 11s drops nothing 16s kept. (The old 16s was set to wait for "semantic_scholar ~12-15s";
@@ -51,7 +51,7 @@ _EXPLICIT_DEADLINE_S = 45  # When the caller NAMES sources, they chose them → 
 # change deliberately (edit the adapter AND the frozen list in tests/smoke.py).
 _EXPLICIT_ONLY_SOURCES: dict[str, str] = {}
 
-# A REVERSIBLE runtime retire overlay (the curator one-tap penumbra_curator_retire_live): name -> a
+# A REVERSIBLE runtime retire overlay (the curator one-tap eye_curator_retire_live): name -> a
 # "retired:<reason> <date>" reason string. Lives OUTSIDE the deploy tree (rides the state backup,
 # pristine tree), so a live retire takes effect with NO restart and NO git. CACHED in-process (the
 # broad-search routing loop reads _explicit_only_reason once per source per query, a disk read
@@ -59,7 +59,7 @@ _EXPLICIT_ONLY_SOURCES: dict[str, str] = {}
 # (apply_live.invalidate_explicit_only_overrides), so a live retire/rollback shows up at once. The
 # DURABLE half (the in-tree explicit_only edit + the smoke frozen-list line) is staged for the operator.
 _EXPLICIT_ONLY_OVERRIDES_PATH = (
-    Path.home() / ".penumbra" / "state" / "curator" / "explicit_only_overrides.json")
+    Path.home() / ".polaris" / "state" / "curator" / "explicit_only_overrides.json")
 _explicit_only_overrides_cache: "Optional[dict[str, str]]" = None
 _overrides_lock = threading.Lock()
 
@@ -156,7 +156,7 @@ def _derive_stability(adapter: "SourceAdapter") -> str:
 
 
 # Legal-facing ACCESS TIER (free < keyed < walled < circumvention) — the catalog's self-describing
-# legal posture (see SECURITY.md), distinct from the `stability` fragility class. Its one
+# legal posture (see docs/LEGAL-POSTURE.md), distinct from the `stability` fragility class. Its one
 # unique signal over stability is `circumvention`: a source that defeats an access control (decrypts
 # an encrypted response, etc.), which is NEVER in the default pack. An adapter may set an
 # ``access_tier`` attr to OVERRIDE; otherwise derived from the explicit_only reason + stability.
@@ -182,7 +182,7 @@ from penumbra.core import profile as _profile  # noqa: E402  — stdlib-only mod
 
 
 def _profile_enabled(name: str, adapter: "SourceAdapter") -> bool:
-    """Whether the deployment PROFILE exposes this source (broad fan-out + named penumbra_fetch). No
+    """Whether the deployment PROFILE exposes this source (broad fan-out + named eye_fetch). No
     profile -> True (pre-profile behavior; an existing host is unaffected). Derives the facets that
     profile.is_source_enabled needs (stability/domains/regions/kind) from the adapter + facets.json,
     so a deployer's group/region/walled rules apply across ~190 adapters without per-adapter edits.
@@ -199,7 +199,7 @@ def _profile_enabled(name: str, adapter: "SourceAdapter") -> bool:
 
 
 def is_enabled_by_profile(name: str) -> bool:
-    """Public predicate for the named path (penumbra_fetch): True if the profile exposes ``name`` (or the
+    """Public predicate for the named path (eye_fetch): True if the profile exposes ``name`` (or the
     adapter is unknown — let the normal 'unknown source' path handle that)."""
     a = get_adapter(name)
     return a is None or _profile_enabled(name, a)
@@ -207,7 +207,7 @@ def is_enabled_by_profile(name: str) -> bool:
 
 # P19 health-watchdog state — surfaced (advisory) in list_sources so the agent can
 # route around currently-dead sources. Recent, not instant (watchdog runs 6-hourly).
-_WATCHDOG_STATE = Path.home() / ".penumbra" / "state" / "health-watchdog-state.json"
+_WATCHDOG_STATE = Path.home() / ".polaris" / "state" / "health-watchdog-state.json"
 
 # Routing-facet fallback table: adapters / config rows may declare kind / domains /
 # regions on themselves; facets.json decorates the rest (one data file, not code).
@@ -226,11 +226,11 @@ class SourceAdapter(Protocol):
     needs_credentials: bool
     description: str  # Brief description shown in list_sources()
 
-    def search(self, query: str, limit: int = 10) -> list[Document]:
+    def search(self, query: str, limit: int = 10) -> list[PolarisDocument]:
         """Search the source for the query, return up to `limit` documents."""
         ...
 
-    def fetch_url(self, url: str) -> Optional[Document]:
+    def fetch_url(self, url: str) -> Optional[PolarisDocument]:
         """Fetch a single URL from this source. Return None if URL doesn't belong."""
         ...
 
@@ -324,7 +324,7 @@ _FETCH_URL_TIMEOUT_S = 30.0    # default per-adapter cap when probing who-claims
                                # A genuinely slow adapter (e.g. a CDP source that scrolls a
                                # full comment thread) may declare a larger budget via a
                                # ``fetch_timeout`` attribute — the default stays tight so a
-                               # STALLED adapter still can't hang penumbra_add_url.
+                               # STALLED adapter still can't hang eye_add_url.
 
 
 def _run_bounded(fn, timeout: float):
@@ -351,24 +351,24 @@ def _run_bounded(fn, timeout: float):
 
 
 def fetch_one(source: str, query: str, limit: int = 10, fresh: bool = False,
-              deadline_s: Optional[float] = _FETCH_ONE_DEADLINE_S) -> list[Document]:
+              deadline_s: Optional[float] = _FETCH_ONE_DEADLINE_S) -> list[PolarisDocument]:
     """Fetch from ONE named source, BOUNDED by ``deadline_s`` (default 90s).
 
     A daemon-thread backstop means a hung source can never stall the caller (the
-    watchtower daemon, ``penumbra_fetch``, ``penumbra_add_url``); on timeout it returns ``[]``.
+    watchtower daemon, ``eye_fetch``, ``eye_add_url``); on timeout it returns ``[]``.
     Pass ``deadline_s=None`` to opt OUT (deliberate unbounded — a slow source you truly
     want complete). ``fresh=True`` bypasses the cache for live data.
 
     Returns the documents only (the historical contract); ``fetch_one_with_diag`` is the
-    sibling that also returns the failure-evidence trace for the source-repair loop.
+    sibling that also returns the failure-evidence trace for the /eye-fix repair loop.
     """
     return fetch_one_with_diag(source, query, limit, fresh=fresh, deadline_s=deadline_s)[0]
 
 
 def fetch_one_with_diag(source: str, query: str, limit: int = 10, fresh: bool = False,
                         deadline_s: Optional[float] = _FETCH_ONE_DEADLINE_S
-                        ) -> tuple[list[Document], Optional[dict]]:
-    """``fetch_one`` plus a diagnostic for a FAILED/EMPTY fetch (the failure-evidence tap).
+                        ) -> tuple[list[PolarisDocument], Optional[dict]]:
+    """``fetch_one`` plus a diagnostic for a FAILED/EMPTY fetch (the /eye-fix evidence tap).
 
     Arms the opt-in ``diag`` capture for THIS one run only (the broad search_many fan-out
     never arms it, so it stays zero-cost + zero cross-source pollution there), runs the
@@ -384,7 +384,7 @@ def fetch_one_with_diag(source: str, query: str, limit: int = 10, fresh: bool = 
          "note": <one human-readable line>}
 
     On a propagating adapter error the captured egress failures are stashed on the exception
-    (``exc._diag``) so ``penumbra_fetch`` can still surface them; the historical contract that
+    (``exc._eye_diag``) so ``eye_fetch`` can still surface them; the historical contract that
     the error propagates is preserved. fail-open: the diagnostic machinery is wrapped so it
     can NEVER turn a working retrieval into a broken one.
     """
@@ -395,25 +395,25 @@ def fetch_one_with_diag(source: str, query: str, limit: int = 10, fresh: bool = 
         )
     from penumbra.core import cache, diag  # local import: avoid package-init import cycle
 
-    def _work() -> tuple[list[Document], list]:
+    def _work() -> tuple[list[PolarisDocument], list]:
         cache.set_fresh(fresh)
         diag.enable()  # arm capture in THIS worker thread (the contextvar is thread/context-local)
         try:
             docs = adapter.search(query, limit)
             from penumbra.core import recall  # local import: avoid package-init cycle
-            recall.maybe_ingest(docs)  # Path A: index enumerable docs (no-op off Penumbra-http process)
+            recall.maybe_ingest(docs)  # Path A: index enumerable docs (no-op off the eye-http process)
             return docs, diag.drain()
         except BaseException as exc:  # the adapter raised: note it, attach the trace, RE-RAISE
             try:
                 diag.note(f"{source}.search", exc=exc)  # so the contract is byte-identical to before
-                exc._diag = diag.drain()  # type: ignore[attr-defined] (read by the except below)
+                exc._eye_diag = diag.drain()  # type: ignore[attr-defined] (read by the except below)
             except Exception:  # noqa: BLE001 (capture must never mask the real error)
                 pass
             raise
         finally:
             cache.set_fresh(False)  # never leak `fresh` into the next request on a reused thread
 
-    docs: list[Document] = []
+    docs: list[PolarisDocument] = []
     captures: list = []
     timed_out = False
     try:
@@ -430,11 +430,11 @@ def fetch_one_with_diag(source: str, query: str, limit: int = 10, fresh: bool = 
             else:
                 docs, captures = r
     except BaseException as exc:  # noqa: BLE001 (preserve the contract: re-raise after stashing the
-        diagnostic = _build_diagnostic(  # diagnostic so penumbra_fetch can surface it even on a hard error)
-            adapter, docs=[], captures=getattr(exc, "_diag", []) or [],
+        diagnostic = _build_diagnostic(  # diagnostic so eye_fetch can surface it even on a hard error)
+            adapter, docs=[], captures=getattr(exc, "_eye_diag", []) or [],
             timed_out=False, raised=exc, deadline_s=deadline_s)
         try:
-            exc._diagnostic = diagnostic  # type: ignore[attr-defined]
+            exc._eye_diagnostic = diagnostic  # type: ignore[attr-defined]
         except Exception:  # noqa: BLE001
             pass
         raise
@@ -447,7 +447,7 @@ def fetch_one_with_diag(source: str, query: str, limit: int = 10, fresh: bool = 
 def _build_diagnostic(adapter: "SourceAdapter", *, docs: list, captures: list,
                       timed_out: bool, raised: Optional[BaseException],
                       deadline_s: Optional[float]) -> Optional[dict]:
-    """Assemble the failure diagnostic, or None for a clean success (docs + no captured failure).
+    """Assemble the /eye-fix diagnostic, or None for a clean success (docs + no captured failure).
 
     fail-open: any assembly error degrades to None (a diagnostic bug never breaks retrieval)."""
     try:
@@ -567,7 +567,7 @@ def search_many(
     deadline_s: Optional[float] = None,
     fresh: bool = False,
     cache_only: bool = False,
-) -> tuple[dict[str, list[Document]], dict]:
+) -> tuple[dict[str, list[PolarisDocument]], dict]:
     """Fan out across sources in parallel; return ``(results, _meta)``.
 
     Every source starts at once. Returns after ``deadline_s`` with whatever responded;
@@ -583,12 +583,12 @@ def search_many(
     ``excluded_relevant`` is the query-AWARE subset of ``excluded``: walled/slow sources whose
     facets/description thematically match THIS query, each with a copy-paste ``sources=[...]``
     re-run hint (empty when no excluded source matches). A NAMED search (sources=[...]) also carries
-    ``diagnostics`` when present: the same per-source failure-evidence penumbra_fetch emits, for each
+    ``diagnostics`` when present: the same per-source /eye-fix evidence eye_fetch emits, for each
     named source that came back empty / errored / timed out (a broad sweep never arms it).
     """
     excluded_relevant: list[dict] = []
     _er_scored: list[tuple[int, dict]] = []  # (overlap_count, hint) → ranked + capped after the loop
-    # A NAMED search (sources=[...] explicit) arms the per-source failure diagnostic; a broad
+    # A NAMED search (sources=[...] explicit) arms the per-source /eye-fix diagnostic; a broad
     # sweep (sources=None) deliberately does NOT, so the 64-worker fan-out stays zero-cost and
     # never cross-pollutes one source's trace with another's (see diag.py).
     _named = sources is not None
@@ -636,10 +636,16 @@ def search_many(
     if not target_sources:
         return {}, {"searched": 0, "elapsed_s": 0.0, "empty": [], "timed_out": [],
                     "errored": {}, "excluded": excluded, "disabled": sorted(disabled),
-                    "excluded_relevant": excluded_relevant, "truncated": [],
-                    "fast_sources": [], "slow_sources": [], "pending_sources": []}
+                    "excluded_relevant": excluded_relevant, "truncated": []}
 
-    def _one(source: str) -> tuple[list[Document], list]:
+    # Progressive-return timing (#6): source -> completion monotonic time. Populated inside
+    # _one() (closure capture, same pattern as fresh/cache_only/query). Concurrent writes go to
+    # DISTINCT keys (one per source) which are atomic in CPython — no lock needed. Advisory only:
+    # feeds the fast/slow/pending _meta facets after wait(), NEVER any control flow (wait() is
+    # kept exactly as load-tested; the razor: this does not touch ranking).
+    _result_times: dict[str, float] = {}
+
+    def _one(source: str) -> tuple[list[PolarisDocument], list]:
         from penumbra.core import cache, diag  # local import: avoid package-init cycle
         cache.set_fresh(fresh)  # set in the worker thread → adapter's cache calls honor it
         cache.set_cache_only(cache_only)  # cache-only (cache_only=True): egresses short-circuit
@@ -653,22 +659,22 @@ def search_many(
             if not cache_only:  # Path A: index enumerable docs (skip during a cache-only collect)
                 from penumbra.core import recall
                 recall.maybe_ingest(docs)
+            _result_times[source] = time.monotonic()  # #6: stamp completion (advisory timing)
             return docs, (diag.drain() if _named else [])
         except Exception as exc:  # noqa: BLE001 — stash captures so the assembly can diagnose
             if _named:
-                exc._diag = diag.drain()  # type: ignore[attr-defined]
+                exc._eye_diag = diag.drain()  # type: ignore[attr-defined]
             raise
         finally:
             cache.set_fresh(False)  # don't leak `fresh` into a reused pool thread's next task
             cache.set_cache_only(False)  # nor `cache_only`
 
-    results: dict[str, list[Document]] = {s: [] for s in target_sources}
+    results: dict[str, list[PolarisDocument]] = {s: [] for s in target_sources}
     empty: list[str] = []
     timed_out: list[str] = []
     errored: dict[str, str] = {}
     truncated: list[str] = []
-    diagnostics: dict[str, dict] = {}  # named-search only: per-source failure-evidence
-    _result_times: dict[str, float] = {}
+    diagnostics: dict[str, dict] = {}  # named-search only: per-source /eye-fix evidence
 
     workers = min(_SEARCH_WORKERS, len(target_sources))
     executor = ThreadPoolExecutor(max_workers=workers)
@@ -692,34 +698,34 @@ def search_many(
             except Exception as exc:  # noqa: BLE001 — record it, don't kill the search
                 errored[src] = f"{type(exc).__name__}: {exc}"[:80]
                 r = []
-                caps = list(getattr(exc, "_diag", None) or [])
+                caps = list(getattr(exc, "_eye_diag", None) or [])
                 raised_exc = exc
             results[src] = r
-            _result_times[src] = time.monotonic()  # #6: stamp completion (advisory timing)
             if not r:
                 empty.append(src)
             elif len(r) >= limit_per_source:
                 truncated.append(src)  # returned == limit → likely more exists
-            if _named:  # the same failure diagnostic penumbra_fetch emits (None on a clean success)
+            if _named:  # the same /eye-fix diagnostic eye_fetch emits (None on a clean success)
                 d = _build_diagnostic(get_adapter(src), docs=r, captures=caps,
                                       timed_out=False, raised=raised_exc, deadline_s=deadline)
                 if d:
                     diagnostics[src] = d
-        # Progressive-return facets (#6, fail-open): partition the sources that responded within the
-        # deadline into fast (< 3s) vs slow (>= 3s) by their stamped completion time, and re-expose
-        # the already-computed timeouts under a 'pending_sources' name (they keep running detached).
-        # Advisory metadata only, NO control-flow / ranking impact (the razor).
-        fast_sources: list[str] = []
-        slow_sources: list[str] = []
-        pending_sources: list[str] = []
-        try:
-            fast_sources = sorted(s for s, t in _result_times.items() if t - t0 < 3.0)
-            slow_sources = sorted(s for s, t in _result_times.items() if t - t0 >= 3.0)
-            pending_sources = sorted(timed_out)  # same data as timed_out, progressive-return semantics
-        except Exception:
-            pass
     finally:
         executor.shutdown(wait=False)  # stragglers finish detached + warm the cache
+
+    # Progressive-return facets (#6, fail-open): partition the sources that responded within the
+    # deadline into fast (< 3s) vs slow (>= 3s) by their stamped completion time, and re-expose
+    # the already-computed timeouts under a 'pending_sources' name (they keep running detached).
+    # Advisory metadata only — NO control-flow / ranking impact (the razor).
+    fast_sources: list[str] = []
+    slow_sources: list[str] = []
+    pending_sources: list[str] = []
+    try:
+        fast_sources = sorted(s for s, t in _result_times.items() if t - t0 < 3.0)
+        slow_sources = sorted(s for s, t in _result_times.items() if t - t0 >= 3.0)
+        pending_sources = sorted(timed_out)  # same data as timed_out, progressive-return semantics
+    except Exception:  # noqa: BLE001 — a timing-facet failure must never corrupt the search return
+        fast_sources, slow_sources, pending_sources = [], [], []
 
     meta = {
         "searched": len(target_sources),
@@ -740,11 +746,11 @@ def search_many(
     return results, meta
 
 
-def _compute_source_diversity(ranked: list[Document]) -> dict:
+def _compute_source_diversity(ranked: list[PolarisDocument]) -> dict:
     """PERSPECTIVE distribution of ranked results. Mechanical tally by a FIXED perspective
     taxonomy (academic / social / audio / walled / news) mapped from each source's routing
     FACETS (domains + modes + access_tier, data-driven from the adapter attr / facets.json,
-    self-maintaining as sources are added) -- the agent judges what a one-sided distribution
+    self-maintaining as sources are added) — the agent judges what a one-sided distribution
     means; the eye only counts. NOTE the ``kind`` facet (stream/lookup/proxy/portal) is HOW a
     source behaves, NOT a perspective, so it is deliberately NOT used here. MULTI-LABEL: a source
     that spans types (e.g. a walled community forum) counts toward EACH perspective it satisfies,
@@ -783,7 +789,7 @@ def _compute_source_diversity(ranked: list[Document]) -> dict:
             'unique_sources': len(sources_seen)}
 
 
-def _detect_conflicts(ranked: list[Document]) -> list[dict]:
+def _detect_conflicts(ranked: list[PolarisDocument]) -> list[dict]:
     """Surface divergent Signal values across docs the dedup layer confirmed are
     about the same entity (corroboration > 1 in the same merge group). Mechanical
     divergence flag, NOT the eye picking a winner. Piggybacks on dedup's validated
@@ -792,7 +798,7 @@ def _detect_conflicts(ranked: list[Document]) -> list[dict]:
     # also_in chain. Since merge_rank outputs survivors (one per group), we
     # cannot directly compare intra-group members. Instead, compare Signal
     # values with the SAME name across different ranked docs from different
-    # sources (n<=limit<=15, so <=105 pairs, negligible, NOT a title-similarity scan).
+    # sources (n<=limit<=15, so <=105 pairs — negligible, NOT a title-similarity scan).
     # The >50% divergence threshold (ratio > 1.5) is tighter than a naive >20% to
     # keep minor legitimate fluctuations out. Advisory: NEVER fed to ranking (the razor).
     conflicts: list[dict] = []
@@ -831,7 +837,7 @@ def search_ranked(
     cache_only: bool = False,
     semantic: Optional[bool] = None,
     record_yield: bool = True,
-) -> tuple[list[Document], dict]:
+) -> tuple[list[PolarisDocument], dict]:
     """Search, then DEDUP + RANK into one list; return ``(documents, _meta)``.
 
     Collapses cross-source duplicates (same paper from arxiv+openalex+… → one entry,
@@ -848,7 +854,7 @@ def search_ranked(
     total_in = sum(len(v) for v in results.values())  # LIVE bucket count (before index injection)
     # Hybrid: fold the perception-memory index's recall into the SAME merge_rank/dedup the live
     # path uses — index docs collapse against live twins by fingerprint, rolled-off docs the feeds
-    # forgot resurface, and Penumbra answers even network-down. The index is pure RECALL: merge_rank
+    # forgot resurface, and the eye answers even network-down. The index is pure RECALL: merge_rank
     # re-scores it identically to live docs (THE RAZOR). A cache_only pickup stays cache-only.
     if not cache_only:
         from penumbra.core import recall
@@ -868,17 +874,17 @@ def search_ranked(
     meta["deduped"] = {"in": total_in, "out": len(ranked)}
     # ── Passive enrichments (#8 source_diversity, #11 conflicts) ── computed AFTER merge_rank on
     # the already-ranked+deduped list. Each is a MECHANICAL measurement stamped as _meta for the
-    # agent to interpret; NEITHER is fed to composite()/ranking (the razor, order is unchanged).
+    # agent to interpret; NEITHER is fed to composite()/ranking (the razor — order is unchanged).
     # Each is wrapped fail-open so one signal's failure never corrupts `ranked` or the other _meta.
     try:
         meta["source_diversity"] = _compute_source_diversity(ranked)
-    except Exception:  # noqa: BLE001 -- an enrichment failure must never break the search
+    except Exception:  # noqa: BLE001 — an enrichment failure must never break the search
         pass
     try:
         _cf = _detect_conflicts(ranked)
-        if _cf:  # key ABSENT when no conflict -> zero noise
+        if _cf:  # key ABSENT when no conflict → zero noise
             meta["conflicts"] = _cf
-    except Exception:  # noqa: BLE001 -- an enrichment failure must never break the search
+    except Exception:  # noqa: BLE001 — an enrichment failure must never break the search
         pass
     # ── Curator P2 yield tap (fail-open) ── records each source's marginal contribution to this
     # top-K. Skipped for synthetic/in-process searches (record_yield=False) and cache-only pickups
@@ -1022,9 +1028,9 @@ def list_sources(check_health: bool = False, domain: Optional[str] = None,
 
 def facet_vocabulary() -> dict:
     """The closed routing vocabularies (domain / region / kind → source count), from the live
-    registry. Handed to the agent by penumbra_list_sources so domain= becomes a DISCOVERABLE router
+    registry. Handed to the agent by eye_list_sources so domain= becomes a DISCOVERABLE router
     instead of a token the agent must already know (a wrong guess used to return a silent empty
-    that read as 'Penumbra has nothing here'). Cheap: facet read only, no health probe."""
+    that read as 'the eye has nothing here'). Cheap: facet read only, no health probe."""
     from collections import Counter
     doms, regs, kinds = Counter(), Counter(), Counter()
     with _registry_lock:
@@ -1049,7 +1055,7 @@ def facet_vocabulary() -> dict:
 def distinct_backend_count() -> int:
     """Distinct upstream backends — the HONEST coverage figure (the ~42-slice OpenAlex family
     collapses to 1). Cheap registry walk, no health probe; used in the connect-time instructions
-    so the headline number matches what penumbra_list_sources reports."""
+    so the headline number matches what eye_list_sources reports."""
     with _registry_lock:
         adapters = list(_adapters.values())
     backends = set()
@@ -1068,9 +1074,9 @@ def health_check() -> dict[str, dict]:
     return {name: {"healthy": bool(h), "status": m} for name, (h, m) in live.items()}
 
 
-def fetch_url(url: str) -> Optional[Document]:
+def fetch_url(url: str) -> Optional[PolarisDocument]:
     """Try every adapter until one claims this URL — each attempt BOUNDED so no single
-    adapter's ``fetch_url`` (e.g. a stalled twscrape / CDP) can hang ``penumbra_add_url``."""
+    adapter's ``fetch_url`` (e.g. a stalled twscrape / CDP) can hang ``eye_add_url``."""
     with _registry_lock:  # snapshot under the lock; iterate (slow per-adapter fetch) on the copy
         adapters_snapshot = list(_adapters.values())
     for adapter in adapters_snapshot:
@@ -1086,7 +1092,7 @@ def fetch_url(url: str) -> Optional[Document]:
         except Exception as exc:  # noqa: BLE001
             logger.debug("Adapter %s couldn't claim URL %s: %s", adapter.name, url, exc)
     # No adapter claimed this URL. LAST RESORT: a generic web read (plain fetch, then a Jina
-    # headless render if the page is a thin JS-wall / SPA shell). This is the ONLY way Penumbra
+    # headless render if the page is a thin JS-wall / SPA shell). This is the ONLY way the eye
     # reaches an arbitrary page outside its ~190 source adapters; before it, such a URL returned
     # matched=false. It runs only HERE (after every adapter declined), so the happy path adds
     # zero calls. Best-effort: any failure degrades to None (matched=false), the historical

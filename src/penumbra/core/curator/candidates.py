@@ -1,9 +1,9 @@
 """Curator candidate backlog: the durable, atomically-persisted source-admission state.
 
-Penumbra otherwise forgets (fetch-live, TTL-cache). The Curator must NOT: a candidate
+The eye otherwise forgets (fetch-live, TTL-cache). The Curator must NOT: a candidate
 source submitted, probed, and awaiting a verdict has to survive a redeploy / restart /
 crash, or the work is lost (a prior bug lost candidates held only in transient task
-output). So this module owns ONE JSON file under ``~/.penumbra/state/curator/`` (the same
+output). So this module owns ONE JSON file under ``~/.polaris/state/curator/`` (the same
 tree as ``health-watchdog-state.json``; survives redeploys, rides the weekly state-backup
 launchd, keeps the read-only deploy tree pristine).
 
@@ -32,10 +32,10 @@ logger = logging.getLogger(__name__)
 # the builtin under a private alias for the type checks inside this module.
 _builtin_list = list
 
-# Runtime state lives under ~/.penumbra/state/curator/ (NOT in the repo). Created on first
+# Runtime state lives under ~/.polaris/state/curator/ (NOT in the repo). Created on first
 # write. Survives redeploys + rides the state-backup launchd. The deploy SMOKE must touch
 # NO write path here (smoke imports the module read-only; see smoke §12 invariant 5).
-STATE_DIR = Path.home() / ".penumbra" / "state" / "curator"
+STATE_DIR = Path.home() / ".polaris" / "state" / "curator"
 CANDIDATES_PATH = STATE_DIR / "candidates.json"
 SEEN_HOSTS_PATH = STATE_DIR / "seen_hosts.json"
 # P4 anti-rediscovery: the canonical-host TERMINAL ledger. A host that ever reached a terminal
@@ -154,6 +154,12 @@ def _load_all() -> list:
     if not isinstance(data, _builtin_list):
         logger.warning("curator candidates.json is not a list -> treating as empty []")
         return []
+    # Legacy-state migration: the admit-staging state was renamed captain_review -> owner_review
+    # (open-source de-identification). Normalize any persisted candidate so an in-flight one is not
+    # orphaned by the new STATES / ALLOWED_TRANSITIONS.
+    for _r in data:
+        if isinstance(_r, dict) and _r.get("state") == "captain_review":
+            _r["state"] = "owner_review"
     return data
 
 
@@ -332,7 +338,7 @@ def _load_seen_hosts() -> set:
 
 
 def host_seen(host: str) -> bool:
-    """True iff this EXACT FQDN is already known to Penumbra: present in the FRESH live
+    """True iff this EXACT FQDN is already known to the eye: present in the FRESH live
     roster's derived hosts (via apply._live_hosts: never a stale/passed-in list) OR in the
     seen_hosts.json ledger. Matching is exact-FQDN: a shared-suffix host (github.io,
     substack.com, ...) NEVER confers 'seen' to a sibling subdomain (each is its own first-seen

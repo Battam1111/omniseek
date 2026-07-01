@@ -2,10 +2,10 @@
 
 Most of our Tier-1 open-API sources (arXiv, DBLP, OpenAlex, Crossref, Hacker
 News, …) share the SAME skeleton: build a cache key → check the cache → early
-return on a hit → hit the API → map each raw record to a Document →
+return on a hit → hit the API → map each raw record to a PolarisDocument →
 (optionally) lexically rank → cache → return. The per-source code that actually
 differs is tiny: *how to fetch the raw records* and *how to turn one raw record
-into a Document*. Everything else is mechanism repeated ~38 times.
+into a PolarisDocument*. Everything else is mechanism repeated ~38 times.
 
 ``BaseAPIAdapter`` factors that mechanism out, mirroring ``scrape/_rss.py``'s
 ``RSSAdapterBase``: a subclass only implements two hooks and declares a handful
@@ -15,7 +15,7 @@ of class attributes; the base supplies ``search`` / ``fetch_url`` /
 Two hooks (the ONLY required overrides)::
 
     def _raw_fetch(self, query: str, limit: int) -> list:      # API-specific I/O
-    def _to_document(self, raw) -> Optional[Document]:   # one record → doc
+    def _to_document(self, raw) -> Optional[PolarisDocument]:   # one record → doc
 
 Class attributes (declare on the subclass)::
 
@@ -62,7 +62,7 @@ from typing import Optional
 from urllib.parse import urlparse
 
 from penumbra.core import cache, http
-from penumbra.core.normalize import Document, keyword_score_filter
+from penumbra.core.normalize import PolarisDocument, keyword_score_filter
 
 logger = logging.getLogger(__name__)
 
@@ -108,8 +108,8 @@ class BaseAPIAdapter:
         """
         raise NotImplementedError("subclass must implement _raw_fetch")
 
-    def _to_document(self, raw) -> Optional[Document]:
-        """Map ONE raw record to a Document (or None to drop it).
+    def _to_document(self, raw) -> Optional[PolarisDocument]:
+        """Map ONE raw record to a PolarisDocument (or None to drop it).
 
         Called once per item returned by ``_raw_fetch``. Returning None silently
         skips a malformed record (the base logs it at debug). Any exception raised
@@ -118,13 +118,13 @@ class BaseAPIAdapter:
         raise NotImplementedError("subclass must implement _to_document")
 
     # ------------------------------------------------------------------ search
-    def search(self, query: str, limit: int = 10) -> list[Document]:
+    def search(self, query: str, limit: int = 10) -> list[PolarisDocument]:
         """Cache-checked search: make_key → get_docs → early return → _raw_fetch →
         map → (rank) → set_docs.
 
         Cache identity is ``(name, search_label, query, limit)`` — set
         ``search_label`` to match an existing source's key on migration. On a hit
-        the cached, already-mapped Documents are returned directly (zero
+        the cached, already-mapped PolarisDocuments are returned directly (zero
         re-parse, zero re-score). Empty results are NOT cached (a transient
         failure must not pin an empty answer for the whole TTL).
         """
@@ -134,7 +134,7 @@ class BaseAPIAdapter:
             return cached
 
         raw_items = self._raw_fetch(query, limit) or []
-        docs: list[Document] = []
+        docs: list[PolarisDocument] = []
         for raw in raw_items[:limit]:
             try:
                 doc = self._to_document(raw)
@@ -156,7 +156,7 @@ class BaseAPIAdapter:
         return docs
 
     # --------------------------------------------------------------- fetch_url
-    def fetch_url(self, url: str) -> Optional[Document]:
+    def fetch_url(self, url: str) -> Optional[PolarisDocument]:
         """Default claim-by-host: if ``url_host`` is a substring of the URL's
         hostname, scan this source's already-cached search docs for an exact URL
         match. Returns None when the URL isn't ours or isn't in cache.

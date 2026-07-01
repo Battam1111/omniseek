@@ -36,14 +36,14 @@ from urllib.parse import quote, urlparse
 
 import httpx
 
-from penumbra.core.normalize import Document
+from penumbra.core.normalize import PolarisDocument
 
 logger = logging.getLogger(__name__)
 
 GH = "https://raw.githubusercontent.com/emeryberger/CSrankings/gh-pages"
 FACULTY_CSV = f"{GH}/csrankings.csv"
 TIMEOUT = 30
-USER_AGENT = "penumbra/0.1 (automated retrieval)"
+USER_AGENT = "polaris-eye/0.1 (automated retrieval)"
 
 # Region -> institution-name substrings (lowercased), filtered to the deployer's
 # configured target geographies. Matching is substring-on-affiliation, so canonical
@@ -114,7 +114,7 @@ class CSRankingsAdapter:
         "(No per-area filter — take a name into dblp for that.)"
     )
 
-    def search(self, query: str, limit: int = 10) -> list[Document]:
+    def search(self, query: str, limit: int = 10) -> list[PolarisDocument]:
         faculty = _load_faculty()
         if not faculty:
             return []
@@ -158,7 +158,7 @@ class CSRankingsAdapter:
             deduped.append(f)
         return [self._to_doc(f) for f in deduped[:limit]]
 
-    def fetch_url(self, url: str) -> Optional[Document]:
+    def fetch_url(self, url: str) -> Optional[PolarisDocument]:
         # Roster-lookup source: nothing meaningful to fetch by a single URL.
         return None
 
@@ -171,7 +171,7 @@ class CSRankingsAdapter:
             return False, f"{type(exc).__name__}: {exc}"
 
     @staticmethod
-    def _to_doc(f: dict) -> Document:
+    def _to_doc(f: dict) -> PolarisDocument:
         name, aff = f["name"], f["affiliation"]
         homepage = f["homepage"]
         scholar = (f"https://scholar.google.com/citations?user={f['scholarid']}"
@@ -190,7 +190,7 @@ class CSRankingsAdapter:
             parts.append(f"ORCID: {orcid}")
         parts.append(f"DBLP: {dblp_search}")
 
-        return Document(
+        return PolarisDocument(
             source="csrankings",
             source_id=f"{name}|{aff}",
             url=homepage or dblp_search,

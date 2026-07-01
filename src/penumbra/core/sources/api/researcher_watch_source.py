@@ -16,12 +16,14 @@ Mechanism (no CDP, no scraping):
   →merged multi-person profiles). Every seed ID below was checked against the
   researcher's actual recent paper titles.
 
-Default seed (10 example ML PIs, meant to be EDITED by the deployer to their own
-field + institutions): Bryan Hooi, Min-Yen Kan, Wee Sun Lee, Bo An, Yoshua Bengio,
-Aaron Courville, Pascal Poupart, Roger Grosse, Jimmy Ba, Dit-Yan Yeung.
+Default seed (10 example ML PIs, meant to be EDITED by the deployer):
+- Singapore: Bryan Hooi, Min-Yen Kan, Wee Sun Lee (NUS), Bo An (NTU)
+- Canada:    Yoshua Bengio, Aaron Courville (Mila), Pascal Poupart (Waterloo),
+             Roger Grosse, Jimmy Ba (Toronto/Vector)
+- Hong Kong: Dit-Yan Yeung (HKUST)
 
 Deployer customization: drop a JSON file at
-`~/.penumbra/credentials/researcher_watch.json`:
+`~/.polaris/credentials/researcher_watch.json`:
     [
       {"name": "My Advisor", "openalex_id": "A5012345678"},
       {"name": "Target PI",  "openalex_id": "A5099999999", "note": "postdoc target"}
@@ -47,7 +49,7 @@ import platformdirs
 
 from penumbra.core import _openalex as oa
 from penumbra.core import cache
-from penumbra.core.normalize import Document, keyword_score_filter, mk_signal
+from penumbra.core.normalize import PolarisDocument, keyword_score_filter, mk_signal
 
 logger = logging.getLogger(__name__)
 
@@ -77,8 +79,8 @@ DEFAULT_SEED: list[tuple[str, str, str]] = [
 def _load_watch_list() -> list[tuple[str, str, str]]:
     """Return [(name, institution, openalex_id)]. Deployer config replaces seed."""
     cfg = Path(platformdirs.user_config_dir("penumbra")) / "credentials" / "researcher_watch.json"
-    # Also accept the credentials dir layout used elsewhere (~/.penumbra/credentials)
-    alt = Path.home() / ".penumbra" / "credentials" / "researcher_watch.json"
+    # Also accept the credentials dir layout used elsewhere (~/.polaris/credentials)
+    alt = Path.home() / ".polaris" / "credentials" / "researcher_watch.json"
     for path in (alt, cfg):
         if path.exists():
             try:
@@ -138,8 +140,8 @@ class ResearcherWatchAdapter:
     needs_credentials = False
     description = (
         "Researcher watch — newest papers from tracked PIs via OpenAlex "
-        "(default: 10 example ML faculty; customize via "
-        "~/.penumbra/credentials/researcher_watch.json). Postdoc/collab upstream signal."
+        "(default: 10 SG/Canada/HK ML faculty; customize via "
+        "~/.polaris/credentials/researcher_watch.json). Postdoc/collab upstream signal."
     )
 
     def _fetch_pi_works(self, oaid: str) -> "tuple[list[dict], bool]":
@@ -175,7 +177,7 @@ class ResearcherWatchAdapter:
                 return stale, True
         return works, False
 
-    def search(self, query: str, limit: int = 10) -> list[Document]:
+    def search(self, query: str, limit: int = 10) -> list[PolarisDocument]:
         # An OpenAlex author ID in the query (e.g. `A5086198262` or
         # `openalex.org/A5086198262`) pins the watch to THAT author, overriding
         # the default seed. ID-only by design — no runtime name resolution. The
@@ -190,7 +192,7 @@ class ResearcherWatchAdapter:
         # stale cache. The global _openalex semaphore keeps the fan-out polite (no 429 storm).
         # The PI set, per-PI WORKS_PER_PI, sort, dedup and keyword filter below are all
         # UNCHANGED → identical result set, just gathered in parallel instead of in series.
-        all_docs: list[Document] = []
+        all_docs: list[PolarisDocument] = []
         if watch:
             # Capture one context copy PER PI HERE — in this thread, where the fetcher has
             # set the `fresh` contextvar. (Calling copy_context() inside the worker lambda
@@ -219,8 +221,8 @@ class ResearcherWatchAdapter:
         # watched PIs co-author it, or when OpenAlex has preprint + published
         # records. Keep the first (most-recent-sorted); fold the other PI's name
         # into tags so co-authorship stays visible.
-        seen: dict[str, Document] = {}
-        deduped: list[Document] = []
+        seen: dict[str, PolarisDocument] = {}
+        deduped: list[PolarisDocument] = []
         for d in all_docs:
             norm = " ".join((d.title.split("] ", 1)[-1]).lower().split())
             if norm in seen:
@@ -236,7 +238,7 @@ class ResearcherWatchAdapter:
         all_docs = keyword_score_filter(all_docs, query)
         return all_docs[:limit]
 
-    def fetch_url(self, url: str) -> Optional[Document]:
+    def fetch_url(self, url: str) -> Optional[PolarisDocument]:
         host = (urlparse(url).hostname or "").lower()
         if "openalex.org" not in host:
             return None
@@ -261,7 +263,7 @@ class ResearcherWatchAdapter:
 
     @staticmethod
     def _work_to_document(work: dict, pi_name: str, institution: str,
-                          oaid: str) -> Optional[Document]:
+                          oaid: str) -> Optional[PolarisDocument]:
         p = oa.parse_work(work)
         if not p["title"]:
             return None
@@ -274,7 +276,7 @@ class ResearcherWatchAdapter:
             content_parts.append("\n" + p["abstract"][:3000])
         content = "\n".join(content_parts) or "(no abstract)"
 
-        return Document(
+        return PolarisDocument(
             source="researcher_watch",
             source_id=f"{oaid or 'x'}:{p['work_id']}",
             url=p["url"],

@@ -5,7 +5,7 @@ this host (verified 2026-06 across all four channels, both UAs, and consent
 cookies — a host/endpoint-level denial, not a bad channel id). yt-dlp's
 flat-playlist extraction hits the innertube API instead — the SAME mechanism the
 healthy ``youtube`` search adapter uses — which works. We pull each channel's
-recent uploads, normalize to Document (thumbnail ``media`` + ``raw``
+recent uploads, normalize to PolarisDocument (thumbnail ``media`` + ``raw``
 escape hatch), and keyword-filter.
 
 URL fetch is intentionally deferred to the dedicated ``youtube`` adapter (it adds
@@ -20,7 +20,7 @@ from typing import Optional
 import yt_dlp
 
 from penumbra.core import cache
-from penumbra.core.normalize import Document, jsonsafe, keyword_score_filter, mk_signal
+from penumbra.core.normalize import PolarisDocument, jsonsafe, keyword_score_filter, mk_signal
 
 logger = logging.getLogger(__name__)
 
@@ -81,13 +81,13 @@ class YoutubeChannelsAdapter:
         cache.set(key, out, ttl=CACHE_TTL)
         return out
 
-    def _to_doc(self, e: dict) -> Document:
+    def _to_doc(self, e: dict) -> PolarisDocument:
         vid = e["id"]
         # YouTube's per-video thumbnail URL is stable and always valid.
         thumb = f"https://i.ytimg.com/vi/{vid}/hqdefault.jpg"
         dur = e.get("duration")
         content = f"{e.get('channel', '')} — YouTube video" + (f" ({int(dur)}s)" if dur else "")
-        return Document(
+        return PolarisDocument(
             source="youtube_channels",
             source_id=str(vid),
             url=e.get("url") or f"https://www.youtube.com/watch?v={vid}",
@@ -107,8 +107,8 @@ class YoutubeChannelsAdapter:
             },
         )
 
-    def search(self, query: str, limit: int = 10) -> list[Document]:
-        docs: list[Document] = []
+    def search(self, query: str, limit: int = 10) -> list[PolarisDocument]:
+        docs: list[PolarisDocument] = []
         for cid, disp in CHANNELS:
             for e in self._fetch_channel(cid, disp):
                 docs.append(self._to_doc(e))
@@ -117,7 +117,7 @@ class YoutubeChannelsAdapter:
             return keyword_score_filter(docs, q)[:limit]
         return docs[:limit]
 
-    def fetch_url(self, url: str) -> Optional[Document]:
+    def fetch_url(self, url: str) -> Optional[PolarisDocument]:
         # Defer YouTube URL fetches to the dedicated `youtube` adapter (it adds
         # transcripts). This source only provides the curated-channel stream.
         return None

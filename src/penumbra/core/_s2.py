@@ -5,7 +5,7 @@ and the relationship layer (resolve_identity, coauthors, the paper-anchored
 disambiguator). Before this module, FIVE call sites each constructed their own
 ``SemanticScholar(api_key=...)`` client from ``auth.load`` and TWO of them carried
 their own copy of the bare-arXiv-id / DOI → S2-prefix normalizer; nothing shared
-the polite-pool rate limit or protected Penumbra from S2's frequent 429 storms.
+the polite-pool rate limit or protected the eye from S2's frequent 429 storms.
 This is the symmetric twin of ``_openalex`` for the S2 backend:
 
   get_client()              one shared keyed client (singleton, lazy, thread-safe)
@@ -22,7 +22,7 @@ This is the symmetric twin of ``_openalex`` for the S2 backend:
                             stop_after_attempt(10) + wait_exponential(5,60) ~= 250s of hidden
                             backoff on a 429) is turned OFF at construction so it can no longer
                             pre-empt the breaker with a ~260s fake-hang (the field_skeleton cold-
-                            seed symptom); a SHORT Penumbra-owned bounded retry (a few seconds) rides a
+                            seed symptom); a SHORT eye-owned bounded retry (a few seconds) rides a
                             brief throttle, then degrades fast and lets the breaker take over
   thin wrappers             get_paper / get_paper_references / get_paper_citations /
                             search_paper / get_recommended_papers / search_author /
@@ -105,7 +105,7 @@ def _pace() -> None:
         time.sleep(wait)
 
 
-# Penumbra-owned bounded retry on a 429, REPLACING the lib's (now-disabled) 10x/250s tenacity backoff.
+# Eye-owned bounded retry on a 429, REPLACING the lib's (now-disabled) 10x/250s tenacity backoff.
 # A 429 surfaces from the lib as ConnectionRefusedError (see _is_rate_limit); with the lib's own retry
 # off, this SHORT loop rides out a brief throttle (the common case: clears in seconds) while a sustained
 # throttle fails fast (a few seconds, not 260s) and lets the breaker take over. Bound, not abandon: it
@@ -141,7 +141,7 @@ def recently_throttled(within_s: float = 120.0) -> bool:
 # One ``SemanticScholar`` client reused across the cartographer + relations call sites
 # instead of five fresh constructions. The semanticscholar lib's client is a thin httpx
 # wrapper and is safe to share for concurrent reads; the global _sema still bounds in-flight
-# concurrency. Keyed from auth.load("semantic_scholar") (Penumbra's API key → un-throttled
+# concurrency. Keyed from auth.load("semantic_scholar") (the eye's API key → un-throttled
 # tier), falling back to the S2_API_KEY env var, then the keyless shared pool.
 _client = None  # type: ignore[var-annotated]
 _client_lock = threading.Lock()
@@ -167,7 +167,7 @@ def get_client():
                 # stop_after_attempt(10) + wait_exponential(5,60) ~= 250s of HIDDEN backoff on a 429,
                 # which pre-empts this module's breaker/pace and surfaces as a ~260s fake-hang (the
                 # field_skeleton cold-seed symptom). With it off, a 429 surfaces here in ~1s and the
-                # the engine owns the short, bounded retry (_retry_rl) instead.
+                # eye owns the short, bounded retry (_retry_rl) instead.
                 _client = SemanticScholar(api_key=_load_api_key(), timeout=TIMEOUT, retry=False)
     return _client
 
@@ -229,7 +229,7 @@ def _record_fail(exc: Optional[Exception] = None) -> None:
 
 def _retry_rl(do):
     """Run ``do()``, retrying ONLY on a rate-limit (429 -> ConnectionRefusedError; see _is_rate_limit)
-    with Penumbra's own SHORT bounded backoff. Any other exception propagates on the first occurrence
+    with the eye's own SHORT bounded backoff. Any other exception propagates on the first occurrence
     exactly as before. This is the retry budget the lib used to own (and overspent at ~250s); here it
     is a handful of seconds, after which the caller degrades + the breaker takes over."""
     for _i in range(_RL_RETRIES + 1):
@@ -242,7 +242,7 @@ def _retry_rl(do):
 
 
 def _call(label: str, fn):
-    """Run one S2 client call behind the semaphore + breaker + Penumbra-owned rate-limit retry.
+    """Run one S2 client call behind the semaphore + breaker + eye-owned rate-limit retry.
 
     Returns ``fn()`` (the raw lib return — a record OR a lazy ``PaginatedResults``;
     NOTE: the lib defers the HTTP call to iteration time for paginated calls, so the

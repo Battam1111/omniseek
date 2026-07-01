@@ -1,7 +1,7 @@
 """Government open-data — config-driven dataset search across national/regional portals.
 
 A single keyless adapter that fans out over several government open-data portals and
-merges the hits into one dataset feed. It fills Penumbra's gap on OFFICIAL government
+merges the hits into one dataset feed. It fills Polaris-eye's gap on OFFICIAL government
 statistics + open datasets (income/wage tables, labour-force series, census/economic
 indicators) for Singapore, Hong Kong, and Canada, where the canonical numbers live on
 the portal rather than in scholarship.
@@ -41,7 +41,7 @@ import logging
 from typing import Any, Optional
 
 from penumbra.core import http
-from penumbra.core.normalize import Document, jsonsafe, mk_signal
+from penumbra.core.normalize import PolarisDocument, jsonsafe, mk_signal
 from penumbra.core.sources.scrape._base import BaseScrapeAdapter
 
 logger = logging.getLogger(__name__)
@@ -165,13 +165,13 @@ class GovOpenDataAdapter(BaseScrapeAdapter):
             return None  # could not read even one page -> a real failure for this portal
         return hits[:limit]
 
-    def _to_documents(self, raw: Any, query: str, limit: int) -> list[Document]:
+    def _to_documents(self, raw: Any, query: str, limit: int) -> list[PolarisDocument]:
         """Merged (portal, record) pairs -> dataset docs. The base re-ranks (rank=True) and
-        Penumbra's ranked search re-scores across sources, so we do NOT slice to ``limit`` here:
+        the eye's ranked search re-scores across sources, so we do NOT slice to ``limit`` here:
         each portal already capped its own contribution at ``limit``."""
         if not isinstance(raw, list):
             return []
-        docs: list[Document] = []
+        docs: list[PolarisDocument] = []
         for item in raw:
             try:
                 portal, rec = item
@@ -182,14 +182,14 @@ class GovOpenDataAdapter(BaseScrapeAdapter):
                 docs.append(doc)
         return docs
 
-    def _record_to_doc(self, portal: dict, rec: dict) -> Optional[Document]:
+    def _record_to_doc(self, portal: dict, rec: dict) -> Optional[PolarisDocument]:
         if portal["kind"] == "ckan":
             return self._ckan_to_doc(portal, rec)
         if portal["kind"] == "sg_v2":
             return self._sg_to_doc(portal, rec)
         return None
 
-    def _ckan_to_doc(self, portal: dict, rec: dict) -> Optional[Document]:
+    def _ckan_to_doc(self, portal: dict, rec: dict) -> Optional[PolarisDocument]:
         title = (rec.get("title") or rec.get("name") or "").strip()
         if not title:
             return None
@@ -223,7 +223,7 @@ class GovOpenDataAdapter(BaseScrapeAdapter):
             unit="resources",
         )
 
-        return Document(
+        return PolarisDocument(
             source=self.name,
             source_id=f"{portal['id']}:{slug or title}",
             url=url,
@@ -235,7 +235,7 @@ class GovOpenDataAdapter(BaseScrapeAdapter):
             metadata=metadata,
         )
 
-    def _sg_to_doc(self, portal: dict, rec: dict) -> Optional[Document]:
+    def _sg_to_doc(self, portal: dict, rec: dict) -> Optional[PolarisDocument]:
         title = (rec.get("name") or "").strip()
         if not title:
             return None
@@ -262,7 +262,7 @@ class GovOpenDataAdapter(BaseScrapeAdapter):
             unit="resources",
         )
 
-        return Document(
+        return PolarisDocument(
             source=self.name,
             source_id=f"{portal['id']}:{ds_id or title}",
             url=url,

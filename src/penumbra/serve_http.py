@@ -1,12 +1,12 @@
-"""Penumbra as a shared HTTP MCP service (streamable-http + bearer-token auth).
+"""Polaris eye as a shared HTTP MCP service (streamable-http + bearer-token auth).
 
-ONE always-on process (a launchd/systemd service) that every agent / window connects to
+ONE always-on process (launchd com.penumbra.organ.eye-http) that every agent / window connects to
 over the network, instead of each Claude window spawning its own stdio-over-ssh server (N
-heavy processes, a cold 86-adapter load each). Token-gated, because Penumbra drives
+heavy processes, a cold 86-adapter load each). Token-gated, because the eye drives
 credentialed + logged-in-browser tools: it must NEVER serve open.
 
-Run:    python -m penumbra.serve_http      (env: PENUMBRA_HTTP_HOST / PENUMBRA_HTTP_PORT)
-Token:  ~/.penumbra/credentials/http.json  ->  {"token": "..."}  (mode 600)
+Run:    python -m penumbra.serve_http      (env: POLARIS_HTTP_HOST / POLARIS_HTTP_PORT)
+Token:  ~/.polaris/credentials/eye_http.json  ->  {"token": "..."}  (mode 600)
 Client: send  Authorization: Bearer <token>  on every request. Unauthed -> 401.
         /healthz is open (liveness only, returns no data).
 """
@@ -27,13 +27,13 @@ from penumbra.server import mcp
 
 logger = logging.getLogger("penumbra.serve_http")
 
-# Bind LOOPBACK by default: Penumbra drives credentialed + logged-in-browser tools, so a stranger's
+# Bind LOOPBACK by default: the eye drives credentialed + logged-in-browser tools, so a stranger's
 # fresh deploy must NOT be reachable off-box. A deployer who wants LAN/tailnet access sets
-# PENUMBRA_HTTP_HOST=0.0.0.0 explicitly (and owns putting it behind a firewall / reverse proxy).
-HOST = os.environ.get("PENUMBRA_HTTP_HOST", "127.0.0.1")
+# POLARIS_HTTP_HOST=0.0.0.0 explicitly (and owns putting it behind a firewall / reverse proxy).
+HOST = os.environ.get("POLARIS_HTTP_HOST", "127.0.0.1")
 _IS_LOOPBACK = HOST in ("127.0.0.1", "::1", "localhost")
-PORT = int(os.environ.get("PENUMBRA_HTTP_PORT", "8765"))
-_TOKEN_PATH = Path.home() / ".penumbra" / "credentials" / "http.json"
+PORT = int(os.environ.get("POLARIS_HTTP_PORT", "8765"))
+_TOKEN_PATH = Path.home() / ".polaris" / "credentials" / "penumbra_http.json"
 
 
 def _load_token() -> str:
@@ -42,7 +42,7 @@ def _load_token() -> str:
     except Exception:  # noqa: BLE001
         tok = None
     if not tok:
-        # fail closed — never serve the credentialed engine without a token
+        # fail closed — never serve the credentialed eye without a token
         raise SystemExit(f"refusing to start: no token at {_TOKEN_PATH}")
     return tok
 
@@ -74,7 +74,7 @@ mcp.settings.transport_security = TransportSecuritySettings(
     enable_dns_rebinding_protection=_IS_LOOPBACK)
 if not _IS_LOOPBACK:
     logger.warning(
-        "PENUMBRA_HTTP_HOST=%s binds NON-loopback: Penumbra is reachable off-box. Ensure a "
+        "POLARIS_HTTP_HOST=%s binds NON-loopback: the eye is reachable off-box. Ensure a "
         "firewall / reverse proxy + keep the bearer token secret (it drives credentialed tools).",
         HOST)
 
@@ -94,7 +94,7 @@ def main() -> None:
     import threading
     from penumbra.core import prewarm
     threading.Thread(target=prewarm.warm_loop, name="cache-warmer", daemon=True).start()
-    # Perception-memory index (penumbra.core.recall): make the enumerable sources STATEFUL. init() is
+    # Perception-memory index (eye.recall): make the enumerable sources STATEFUL. init() is
     # fail-open (a bad index never crashes boot); ENABLE writes for THIS process only (cron
     # processes that hit the same ingest hook leave WRITES_ENABLED False → no cross-process writer);
     # start the single serialized writer + a Path-C completeness ingest loop beside the warmer.
@@ -119,7 +119,7 @@ def main() -> None:
             logger.info("recall index: writes enabled + ingest loop + vector backfill started")
     except Exception as exc:  # noqa: BLE001 — the index is best-effort; never block boot
         logger.warning("recall index disabled (init failed): %s", exc)
-    logger.info("Penumbra HTTP service on %s:%s (token-gated; MCP at /mcp)", HOST, PORT)
+    logger.info("Polaris eye HTTP service on %s:%s (token-gated; MCP at /mcp)", HOST, PORT)
     uvicorn.run(app, host=HOST, port=PORT, log_level="info")
 
 
