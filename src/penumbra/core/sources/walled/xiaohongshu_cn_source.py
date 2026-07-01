@@ -357,11 +357,11 @@ def _flatten(comments: list, out: list) -> None:
     for c in comments:
         ui = (c.get("user_info") or {})
         out.append({"author": ui.get("nickname") or "", "text": c.get("content") or "",
-                    "likes": _int(c.get("like_count"))})
+                    "likes": _int(c.get("like_count")), "id": c.get("id") or ""})
         for sub in (c.get("sub_comments") or []):
             sui = (sub.get("user_info") or {})
             out.append({"author": sui.get("nickname") or "", "text": "↳ " + (sub.get("content") or ""),
-                        "likes": _int(sub.get("like_count"))})
+                        "likes": _int(sub.get("like_count")), "id": sub.get("id") or ""})
 
 
 def fetch_all_comments(note_id: str, xsec_token: str, fetch_sub: Optional[bool] = None) -> list[dict]:

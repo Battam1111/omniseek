@@ -151,7 +151,7 @@ def _flatten_captured_comments(items: list) -> list[dict]:
         text = (c.get("content") or "").strip()
         if text:
             out.append({"author": (c.get("user_info") or {}).get("nickname") or "匿名",
-                        "text": text, "likes": c.get("like_count") or ""})
+                        "text": text, "likes": c.get("like_count") or "", "id": cid or ""})
         for sc in (c.get("sub_comments") or []):
             if not isinstance(sc, dict):
                 continue
@@ -163,7 +163,7 @@ def _flatten_captured_comments(items: list) -> list[dict]:
             stext = (sc.get("content") or "").strip()
             if stext:
                 out.append({"author": (sc.get("user_info") or {}).get("nickname") or "匿名",
-                            "text": "↳ " + stext, "likes": sc.get("like_count") or ""})
+                            "text": "↳ " + stext, "likes": sc.get("like_count") or "", "id": scid or ""})
     return out
 
 

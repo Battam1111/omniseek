@@ -157,6 +157,29 @@ def _engagement(doc: Document) -> float:
     return min(1.0, math.log10(1 + s) / 4.0)  # ~1.0 at score≈10k
 
 
+def _extract_hook(doc: Document, terms: list[str], cap: int = 120) -> str:
+    """Extractive one-liner: the sentence from the doc's own text with the highest
+    query-term overlap. Pure substring selection, NOT generative (the eye does not
+    editorialize) -- the agent reads the hook to decide relevance at a glance."""
+    if not terms:
+        return ''
+    text = (doc.title or '') + '. ' + (doc.content or '')[:500]
+    # Split into sentences (period+space, newline, Chinese period)
+    sents = [s.strip() for s in re.split(r'(?<=[.!?])\s+|\n|。', text) if s.strip()]
+    if not sents:
+        return ''
+    from penumbra.core.relevance import tokenize  # local import: keep the helper self-contained
+    term_set = set(terms)
+    best, best_n = '', 0
+    for s in sents:
+        n = len(term_set & set(tokenize(s)))
+        if n > best_n:
+            best, best_n = s, n
+    if best_n == 0:
+        return ''
+    return best[:cap]
+
+
 def merge_rank(results, query: str, limit: int = 15) -> list[Document]:
     """Flatten → dedup → rank. ``results`` is a search_many dict or a flat list."""
     if isinstance(results, dict):
@@ -200,5 +223,58 @@ def merge_rank(results, query: str, limit: int = 15) -> list[Document]:
     out: list[Document] = []
     for d, rel, rec, eng, corrob, rrf in scored[:limit]:
         d.metadata = {**(d.metadata or {}), "_rank": round(composite(rel, rec, eng, corrob, rrf), 3)}
+        # ── Phase A stamps (advisory metadata, NEVER fed to composite/ranking) ──
+        try:
+            _corrob = int((d.metadata or {}).get("corroboration", 1))
+            _mb = (d.metadata or {}).get("merge_basis", "id")
+            # title-only merges are WEAK corroboration (two distinct same-titled items may merge)
+            _ind = min(1.0, max(0.0, (_corrob - 1) / 3.0)) * (1.0 if _mb == "id" else 0.7)
+            d.metadata["independence_score"] = round(_ind, 3)
+        except Exception:
+            pass
+        try:
+            _dd = d.date
+            if _dd is not None:
+                if _dd.tzinfo is None:
+                    _dd = _dd.replace(tzinfo=timezone.utc)
+                _fd = round((now - _dd).total_seconds() / 86400.0, 1)
+            else:
+                _fd = None
+            _fc = ('breaking' if _fd is not None and _fd <= 1 else
+                   'recent' if _fd is not None and _fd <= 7 else
+                   'current' if _fd is not None and _fd <= 30 else
+                   'dated' if _fd is not None and _fd <= 365 else
+                   'archival' if _fd is not None else None)
+            d.metadata["freshness_days"] = _fd
+            d.metadata["freshness_class"] = _fc
+        except Exception:
+            pass
+        try:
+            d.metadata["relevance_hook"] = _extract_hook(d, terms)
+        except Exception:
+            pass
+        try:
+            _h: dict[str, list[str] | bool] = {}
+            _urls = [u for u in (d.media or []) + ([d.url] if d.url else []) if u]
+            _trans = [u for u in _urls if any(dom in u for dom in
+                      ('xiaoyuzhou.com', 'typlog.com', 'bilibili.com', 'b23.tv',
+                       'podcasts.apple.com'))
+                      or u.rsplit('.', 1)[-1].lower() in
+                      ('mp3', 'm4a', 'wav', 'aac', 'ogg', 'flac', 'opus')]
+            _capt = [u for u in _urls if 'youtube.com' in u or 'youtu.be' in u]
+            if _trans:
+                _h['transcribable'] = _trans
+            if _capt:
+                _h['captioned'] = _capt
+            _eids = (d.metadata or {}).get('external_ids', {})
+            _enrich = [v for k, v in _eids.items()
+                       if k.lower() in ('doi', 'arxiv') and v]
+            if _enrich:
+                _h['enrichable'] = _enrich
+            _h['has_comments'] = bool((d.metadata or {}).get('comments'))
+            if _h.get('transcribable') or _h.get('captioned') or _h.get('enrichable') or _h['has_comments']:
+                d.metadata['handles'] = _h
+        except Exception:
+            pass
         out.append(d)
     return out
