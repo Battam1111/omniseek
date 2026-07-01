@@ -3989,9 +3989,9 @@ _xhs_cap = [
 ]
 _flat = _xhs2._flatten_captured_comments(_xhs_cap)
 check("xhs: _flatten_captured_comments flattens comments + inline sub_comments, dedupes by id",
-      _flat == [{"author": "猛猿", "text": "评论区分享学习材料", "likes": "3"},
-                {"author": "猛猿", "text": "↳ 不许营销", "likes": "11"},
-                {"author": "momo", "text": "rl for llm 有项目推荐吗", "likes": "2"}],
+      _flat == [{"author": "猛猿", "text": "评论区分享学习材料", "likes": "3", "id": "c1"},
+                {"author": "猛猿", "text": "↳ 不许营销", "likes": "11", "id": "s1"},
+                {"author": "momo", "text": "rl for llm 有项目推荐吗", "likes": "2", "id": "c2"}],
       detail=str(_flat))
 
 
@@ -4012,11 +4012,12 @@ check("xhs_cn: _wants_full reads the &xhs_full=1 per-note deep-drill override of
       and _xcn._wants_full("https://www.xiaohongshu.com/explore/x?xsec_token=t") is False)
 _xcn_out: list = []
 _xcn._flatten([{"content": "正文评论", "like_count": "5", "user_info": {"nickname": "momo"},
+                "id": "cc1",
                 "sub_comments": [{"content": "一条回复", "like_count": "1",
-                                  "user_info": {"nickname": "屿"}}]}], _xcn_out)
-check("xhs_cn: _flatten emits {author,text,likes} with sub-replies prefixed '↳ '",
-      _xcn_out == [{"author": "momo", "text": "正文评论", "likes": 5},
-                   {"author": "屿", "text": "↳ 一条回复", "likes": 1}], detail=str(_xcn_out))
+                                  "user_info": {"nickname": "屿"}, "id": "ss1"}]}], _xcn_out)
+check("xhs_cn: _flatten emits {author,text,likes,id} with sub-replies prefixed '↳ '",
+      _xcn_out == [{"author": "momo", "text": "正文评论", "likes": 5, "id": "cc1"},
+                   {"author": "屿", "text": "↳ 一条回复", "likes": 1, "id": "ss1"}], detail=str(_xcn_out))
 _xcn_a = fetcher.get_adapter("xiaohongshu_cn")
 check("xhs_cn: registered + explicit_only (account-rate-sensitive, never in the broad fan-out)",
       _xcn_a is not None and bool(fetcher._explicit_only_reason(_xcn_a)))
@@ -5137,6 +5138,257 @@ finally:
     _oa._state.clear(); _oa._state.update(_oa_save2)
 check("org_watch: OpenAlex DOWN + a last-good snapshot → serve it stamped stale (not a blind [])",
       _ow_stale is True and len(_ow_works) == 1 and _ow_works[0]["title"] == "Stale Lab Paper")
+
+# ---------------------------------------------------------------------------
+# 42. Phase A signals: advisory metadata stamps (independence_score, freshness_days/class,
+#     relevance_hook, source_diversity, conflict_detection, progressive_return). Each tests
+#     the EXACT new metadata/_meta shape the implementers produce. Golden-fixtured offline
+#     on synthetic inputs; each asserts the EXACT new metadata/_meta shape.
+# ---------------------------------------------------------------------------
+
+# --- #3 comment/paragraph-level provenance (normalize.comment_anchor + COMMENT_SCHEMA_KEYS,
+#     and the xhs _flatten emitting a per-comment 'id'). Pure string builder + pure flattener. ---
+from penumbra.core.normalize import comment_anchor as _comment_anchor  # noqa: E402
+from penumbra.core.normalize import COMMENT_SCHEMA_KEYS as _COMMENT_SCHEMA_KEYS  # noqa: E402
+check("provenance: comment_anchor builds stable URI",
+      _comment_anchor("xiaohongshu_cn", "note123", "cmt456") == "xiaohongshu_cn:note123#comment-cmt456")
+check("provenance: comment_anchor with empty id",
+      _comment_anchor("xhs", "n1", "") == "xhs:n1#comment-")
+check("provenance: COMMENT_SCHEMA_KEYS has id but not ts (adversarial: ts deliberately excluded)",
+      "id" in _COMMENT_SCHEMA_KEYS and "ts" not in _COMMENT_SCHEMA_KEYS)
+# xhs _flatten is a pure fn: golden-fixture it offline — the top-level + inline-reply dicts must now
+# carry an 'id' matching COMMENT_SCHEMA_KEYS, and the reply text is '↳'-prefixed.
+from penumbra.core.sources.walled import xiaohongshu_cn_source as _xhscn  # noqa: E402
+_xhs_out: list = []
+_xhscn._flatten([{"user_info": {"nickname": "Ann"}, "content": "top comment", "like_count": 12,
+                  "id": "c1", "sub_comments": [
+                      {"user_info": {"nickname": "Bob"}, "content": "a reply", "like_count": 3,
+                       "id": "c2"}]}], _xhs_out)
+check("provenance: xhs _flatten emits top + inline reply, each with an 'id' key",
+      len(_xhs_out) == 2 and _xhs_out[0]["id"] == "c1" and _xhs_out[1]["id"] == "c2"
+      and _xhs_out[1]["text"].startswith("↳"))
+check("provenance: xhs _flatten comment dict keys == COMMENT_SCHEMA_KEYS (set-equal, no stray/missing)",
+      set(_xhs_out[0].keys()) == set(_COMMENT_SCHEMA_KEYS))
+check("provenance: xhs _flatten defaults a missing comment id to '' (never KeyError/None)",
+      _xhscn._flatten([{"content": "no id here"}], (_e3 := [])) or _e3[0]["id"] == "")
+
+# --- #7 independence_score (rank.merge_rank stamps it on each survivor; 0.7x discount for a
+#     title-only merge; a singleton gets 0.0). Metadata-only, does NOT touch composite(). ---
+from penumbra.core.rank import merge_rank as _merge_rank  # noqa: E402
+from penumbra.core.normalize import Document as _PDoc42  # noqa: E402
+_ind_d1 = _PDoc42(source="arxiv", source_id="1", url="http://a",
+                title="A Long Enough Title For Dedup Testing Here", content="x")
+_ind_d2 = _PDoc42(source="s2", source_id="2", url="http://b",
+                title="A Long Enough Title For Dedup Testing Here", content="xx")
+_ind_ranked = _merge_rank({"arxiv": [_ind_d1], "s2": [_ind_d2]}, "test", limit=5)
+check("independence: merged doc carries independence_score",
+      "independence_score" in (_ind_ranked[0].metadata or {}))
+check("independence: score is a float in [0,1]",
+      0.0 <= _ind_ranked[0].metadata.get("independence_score", -1) <= 1.0)
+check("independence: a title-only merge is discounted (< 0.5)",
+      _ind_ranked[0].metadata["independence_score"] < 0.5)
+_ind_solo = _merge_rank({"arxiv": [_PDoc42(source="arxiv", source_id="3", url="http://c",
+                                         title="Solo Unique Title That Is Long Enough",
+                                         content="y")]}, "test", limit=5)
+check("independence: a singleton (no corroboration) gets exactly 0.0",
+      _ind_solo[0].metadata.get("independence_score") == 0.0)
+
+# --- #8 source_diversity (fetcher._compute_source_diversity: kind-facet distribution of the ranked
+#     list, absent-perspective advisory, unique-source count). Data-driven, not a hardcoded list. ---
+_sd_docs = [_PDoc42(source="arxiv", source_id=str(_i), url=f"http://{_i}",
+                  title=f"Paper {_i} Title Long", content="x") for _i in range(3)]
+_sd = fetcher._compute_source_diversity(_sd_docs)
+check("source_diversity: _compute_source_diversity is callable",
+      callable(getattr(fetcher, "_compute_source_diversity", None)))
+check("source_diversity: output has distribution/absent_perspectives/unique_sources",
+      isinstance(_sd, dict) and "distribution" in _sd and "absent_perspectives" in _sd
+      and "unique_sources" in _sd)
+check("source_diversity: 3 docs from ONE source -> unique_sources == 1",
+      _sd["unique_sources"] == 1)
+check("source_diversity: distribution tallies all 3 ranked docs; absent_perspectives is a list",
+      sum(_sd["distribution"].values()) == 3 and isinstance(_sd["absent_perspectives"], list))
+check("source_diversity: empty ranked list -> empty distribution, 0 unique, absent is a list",
+      (lambda z: z["unique_sources"] == 0 and z["distribution"] == {}
+       and isinstance(z["absent_perspectives"], list))(fetcher._compute_source_diversity([])))
+
+# --- #10 freshness_days + freshness_class (rank.merge_rank stamps a float age + a mechanical
+#     bucket; None/None for a dateless doc; naive dates handled like _recency). Pure metadata. ---
+from datetime import datetime as _dt42, timezone as _tz42, timedelta as _td42  # noqa: E402
+_fd_doc = _PDoc42(source="test", source_id="1", url="http://x",
+                title="Fresh Paper Title Long Enough", content="x",
+                date=_dt42.now(_tz42.utc) - _td42(days=3))
+_fd = _merge_rank({"test": [_fd_doc]}, "test", limit=5)
+check("freshness_days: present on a dated doc",
+      "freshness_days" in (_fd[0].metadata or {}))
+check("freshness_days: ~3 for a doc 3 days old",
+      2.5 < _fd[0].metadata.get("freshness_days", 0) < 3.5)
+check("freshness_class: 'recent' for a 3-day-old doc (1<d<=7 bucket)",
+      _fd[0].metadata.get("freshness_class") == "recent")
+_fd_none = _merge_rank({"test": [_PDoc42(source="test", source_id="2", url="http://y",
+                                       title="No Date Doc Title Long Enough", content="y")]},
+                       "test", limit=5)
+check("freshness_days: None for a dateless doc",
+      _fd_none[0].metadata.get("freshness_days") is None)
+check("freshness_class: None for a dateless doc",
+      _fd_none[0].metadata.get("freshness_class") is None)
+_fd_brk = _merge_rank({"test": [_PDoc42(source="test", source_id="3", url="http://z",
+                                      title="Breaking Item Title Long Enough", content="z",
+                                      date=_dt42.now(_tz42.utc) - _td42(hours=6))]}, "test", limit=5)
+check("freshness_class: 'breaking' for a <=1-day-old doc (boundary bucket)",
+      _fd_brk[0].metadata.get("freshness_class") == "breaking")
+
+# --- #14 relevance_hook (rank.merge_rank stamps an EXTRACTIVE substring from the doc's own text
+#     with the highest query-term overlap; '' in browse mode / no-match). Not generative. ---
+_rh_doc = _PDoc42(source="test", source_id="1", url="http://x", title="Machine Learning Survey Paper",
+                content="This paper surveys deep learning. Neural networks are discussed. "
+                        "Machine learning methods are compared.")
+_rh = _merge_rank({"test": [_rh_doc]}, "machine learning", limit=5)
+check("relevance_hook: present on a ranked doc",
+      "relevance_hook" in (_rh[0].metadata or {}))
+check("relevance_hook: non-empty for a matching query (extracted from the doc's own text)",
+      len(_rh[0].metadata.get("relevance_hook", "")) > 0
+      and _rh[0].metadata["relevance_hook"] in
+          (_rh_doc.title + ". " + _rh_doc.content))
+_rh_browse = _merge_rank({"test": [_rh_doc]}, "", limit=5)
+check("relevance_hook: '' in browse mode (empty query -> no hook)",
+      _rh_browse[0].metadata.get("relevance_hook") == "")
+
+# --- #11 conflict_detection (fetcher._detect_conflicts: flags same-named Signal values that
+#     diverge >50% across docs from DIFFERENT sources; capped at 5; key absent when none).
+#     Adversarial fix: compares deduped Signal values, NOT an O(n^2) title-similarity heuristic. ---
+from penumbra.core.normalize import Signal as _Signal42  # noqa: E402
+_cf1 = _PDoc42(source="s1", source_id="1", url="http://a", title="Company X Revenue Report Long Title",
+             content="revenue 5M",
+             signals={"revenue": _Signal42(value=5000000.0, kind="other",
+                                           computed_by="source:s1", unit="USD")})
+_cf2 = _PDoc42(source="s2", source_id="2", url="http://b", title="Company X Revenue Report 2025 Long",
+             content="revenue 8M",
+             signals={"revenue": _Signal42(value=8000000.0, kind="other",
+                                           computed_by="source:s2", unit="USD")})
+_conflicts = fetcher._detect_conflicts([_cf1, _cf2])
+check("conflict: a >50%-divergent shared signal across two sources is flagged",
+      len(_conflicts) >= 1 and _conflicts[0]["topic"] == "revenue"
+      and _conflicts[0]["source_a"] != _conflicts[0]["source_b"])
+check("conflict: a singleton (no cross-source pair) produces an empty list",
+      fetcher._detect_conflicts([_PDoc42(source="a", source_id="1", url="http://x",
+                                       title="Unique Title Long Enough", content="x")]) == [])
+# Same source -> NOT a conflict (the fn skips d1.source == d2.source), even with divergent signals.
+_cf_same_a = _PDoc42(source="s1", source_id="1", url="http://a", title="Same Source Doc One Long",
+                   content="x", signals={"m": _Signal42(value=10.0, kind="other",
+                                                        computed_by="source:s1")})
+_cf_same_b = _PDoc42(source="s1", source_id="2", url="http://b", title="Same Source Doc Two Long",
+                   content="y", signals={"m": _Signal42(value=100.0, kind="other",
+                                                        computed_by="source:s1")})
+check("conflict: two docs from the SAME source are NOT flagged (cross-source only)",
+      fetcher._detect_conflicts([_cf_same_a, _cf_same_b]) == [])
+# A shared signal that agrees (ratio <= 1.5) -> no conflict.
+_cf_agree_a = _PDoc42(source="s1", source_id="1", url="http://a", title="Agreeing Doc One Long Title",
+                    content="x", signals={"m": _Signal42(value=100.0, kind="other",
+                                                         computed_by="source:s1")})
+_cf_agree_b = _PDoc42(source="s2", source_id="2", url="http://b", title="Agreeing Doc Two Long Title",
+                    content="y", signals={"m": _Signal42(value=110.0, kind="other",
+                                                         computed_by="source:s2")})
+check("conflict: a shared signal within 50% (ratio<=1.5) is NOT flagged",
+      fetcher._detect_conflicts([_cf_agree_a, _cf_agree_b]) == [])
+
+# --- #6 progressive_return (fetcher.search_many classifies fast/slow/pending sources from a
+#     shared _result_times dict and stamps them in _meta). search_many needs live adapters, so
+#     assert the code STRUCTURE (the adversarial fix kept wait(), not as_completed()). ---
+import inspect as _inspect42  # noqa: E402
+_sm_src = _inspect42.getsource(fetcher.search_many)
+check("progressive: search_many stamps fast_sources in _meta",
+      "fast_sources" in _sm_src)
+check("progressive: search_many stamps slow_sources in _meta",
+      "slow_sources" in _sm_src)
+check("progressive: search_many stamps pending_sources in _meta",
+      "pending_sources" in _sm_src)
+check("progressive: kept the load-tested wait() path (adversarial: did NOT switch to as_completed)",
+      "_result_times" in _sm_src and "as_completed" not in _sm_src)
+
+# ---------------------------------------------------------------------------
+# 43. Orchestration-layer features: handles, gather, evidence schema, overlap, prompts.
+# ---------------------------------------------------------------------------
+
+# --- handles: per-doc affordance detection (rank.merge_rank stamps transcribable/enrichable/
+#     has_comments as metadata['handles']). Pure pattern match, not a suggestion. ---
+_hnd_doc = _PDoc42(source="youtube", source_id="v1", url="https://www.youtube.com/watch?v=abc",
+                 title="A Talk About RL Sufficient Length Title", content="RL talk",
+                 media=["https://www.youtube.com/watch?v=abc"])
+_hnd_r = _merge_rank({"youtube": [_hnd_doc]}, "RL", limit=5)
+check("handles: youtube URL detected as 'captioned' (not transcribable, youtube has captions)",
+      "captioned" in _hnd_r[0].metadata.get("handles", {}))
+_hnd_bili = _PDoc42(source="bilibili", source_id="b1", url="https://www.bilibili.com/video/BV1x",
+                  title="Bilibili Video Long Title For Dedup Testing", content="x",
+                  media=["https://www.bilibili.com/video/BV1x"])
+_hnd_br = _merge_rank({"bilibili": [_hnd_bili]}, "test", limit=5)
+check("handles: bilibili URL detected as 'transcribable'",
+      "transcribable" in _hnd_br[0].metadata.get("handles", {}))
+_hnd_doi = _PDoc42(source="s2", source_id="1", url="http://a",
+                 title="Paper With DOI External Id Long Title", content="x",
+                 metadata={"external_ids": {"DOI": "10.1038/test", "ArXiv": "2501.99999"}})
+_hnd_dr = _merge_rank({"s2": [_hnd_doi]}, "test", limit=5)
+check("handles: DOI + arxiv in external_ids detected as 'enrichable'",
+      sorted(_hnd_dr[0].metadata.get("handles", {}).get("enrichable", [])) ==
+      ["10.1038/test", "2501.99999"])
+_hnd_cmt = _PDoc42(source="xhs", source_id="1", url="http://a",
+                 title="XHS Post With Comments Long Title", content="x",
+                 metadata={"comments": [{"author": "a", "text": "hi"}]})
+_hnd_cr = _merge_rank({"xhs": [_hnd_cmt]}, "test", limit=5)
+check("handles: has_comments=True when metadata['comments'] is non-empty",
+      _hnd_cr[0].metadata.get("handles", {}).get("has_comments") is True)
+_hnd_plain = _PDoc42(source="test", source_id="1", url="http://a",
+                   title="Plain Doc No Handles Long Enough Title", content="x")
+_hnd_pr = _merge_rank({"test": [_hnd_plain]}, "test", limit=5)
+check("handles: absent from metadata when no affordances detected (no noise)",
+      "handles" not in _hnd_pr[0].metadata)
+
+# --- evidence.py: EvidencePackage TypedDict is importable (pure schema, zero logic) ---
+from penumbra.core.evidence import EvidencePackage as _EP, GapEntry as _GE  # noqa: E402
+check("evidence: EvidencePackage is importable", _EP is not None)
+check("evidence: GapEntry is importable", _GE is not None)
+
+# --- overlap_count: each excluded_relevant entry carries an 'overlap' key ---
+_fetch_src = _inspect42.getsource(fetcher.search_many)
+check("overlap: excluded_relevant entries carry 'overlap' key",
+      '"overlap": _n' in _fetch_src or "'overlap': _n" in _fetch_src)
+
+# --- penumbra_gather: registered, whitelist excludes curator + gather itself ---
+from penumbra.server import penumbra_gather as _eg, _init_gather_tools, _GATHER_TOOLS  # noqa: E402
+check("gather: penumbra_gather is registered as a tool", _eg is not None)
+_GATHER_TOOLS.clear()
+_init_gather_tools()
+check("gather: whitelist has 15+ read-only tools", len(_GATHER_TOOLS) >= 15)
+check("gather: whitelist excludes all curator tools",
+      not any("curator" in k for k in _GATHER_TOOLS))
+check("gather: whitelist excludes penumbra_gather itself (no recursion)",
+      "penumbra_gather" not in _GATHER_TOOLS)
+check("gather: rejects empty calls",
+      _eg.__wrapped__(calls=[], timeout_s=10).get("error") is not None)
+check("gather: rejects >10 calls",
+      _eg.__wrapped__(calls=[{"tool": "x"}] * 11, timeout_s=10).get("error") is not None)
+# A call to an unknown tool returns status=error per-call (fail-open, not crash)
+_g_unk = _eg.__wrapped__(calls=[{"tool": "no_such_tool", "args": {}}], timeout_s=5)
+check("gather: unknown tool returns per-call error (fail-open)",
+      _g_unk["results"][0]["status"] == "error" and _g_unk["completed"] == 0)
+# A call to penumbra_list_sources (the simplest real tool) works inside gather
+_g_ls = _eg.__wrapped__(calls=[{"tool": "penumbra_list_sources", "args": {}}], timeout_s=30)
+check("gather: penumbra_list_sources works inside gather",
+      _g_ls["results"][0]["status"] == "ok" and "sources" in _g_ls["results"][0].get("result", {}))
+
+# --- MCP prompts: registered on the server ---
+from penumbra.server import mcp as _mcp43  # noqa: E402
+# FastMCP stores prompts in _prompt_manager; check via the prompt functions themselves
+from penumbra.server import investigate_person, investigate_lab  # noqa: E402
+from penumbra.server import investigate_field, investigate_product, saturation_chase  # noqa: E402
+check("prompt: investigate_person is callable", callable(investigate_person))
+check("prompt: investigate_lab is callable", callable(investigate_lab))
+check("prompt: investigate_field is callable", callable(investigate_field))
+check("prompt: investigate_product is callable", callable(investigate_product))
+check("prompt: saturation_chase is callable", callable(saturation_chase))
+_p_person = investigate_person(target="Test Person", context="RL researcher")
+check("prompt: investigate_person returns a list of message dicts",
+      isinstance(_p_person, list) and len(_p_person) > 0
+      and _p_person[0].get("role") == "user" and "Test Person" in _p_person[0].get("content", ""))
 
 
 print()

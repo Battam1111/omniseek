@@ -615,7 +615,8 @@ def search_many(
                     if _n:
                         _er_scored.append((_n, {
                             "name": s, "reason": reason,
-                            "why": f"relevant but excluded; re-run naming it: sources=['{s}']"}))
+                            "why": f"relevant but excluded; re-run naming it: sources=['{s}']",
+                            "overlap": _n}))
             else:
                 target_sources.append(s)
         # Rank the matched walled sources best-first (most query-token overlap) and cap: the agent
@@ -635,7 +636,8 @@ def search_many(
     if not target_sources:
         return {}, {"searched": 0, "elapsed_s": 0.0, "empty": [], "timed_out": [],
                     "errored": {}, "excluded": excluded, "disabled": sorted(disabled),
-                    "excluded_relevant": excluded_relevant, "truncated": []}
+                    "excluded_relevant": excluded_relevant, "truncated": [],
+                    "fast_sources": [], "slow_sources": [], "pending_sources": []}
 
     def _one(source: str) -> tuple[list[Document], list]:
         from penumbra.core import cache, diag  # local import: avoid package-init cycle
@@ -666,6 +668,7 @@ def search_many(
     errored: dict[str, str] = {}
     truncated: list[str] = []
     diagnostics: dict[str, dict] = {}  # named-search only: per-source failure-evidence
+    _result_times: dict[str, float] = {}
 
     workers = min(_SEARCH_WORKERS, len(target_sources))
     executor = ThreadPoolExecutor(max_workers=workers)
@@ -692,6 +695,7 @@ def search_many(
                 caps = list(getattr(exc, "_diag", None) or [])
                 raised_exc = exc
             results[src] = r
+            _result_times[src] = time.monotonic()  # #6: stamp completion (advisory timing)
             if not r:
                 empty.append(src)
             elif len(r) >= limit_per_source:
@@ -701,6 +705,19 @@ def search_many(
                                       timed_out=False, raised=raised_exc, deadline_s=deadline)
                 if d:
                     diagnostics[src] = d
+        # Progressive-return facets (#6, fail-open): partition the sources that responded within the
+        # deadline into fast (< 3s) vs slow (>= 3s) by their stamped completion time, and re-expose
+        # the already-computed timeouts under a 'pending_sources' name (they keep running detached).
+        # Advisory metadata only, NO control-flow / ranking impact (the razor).
+        fast_sources: list[str] = []
+        slow_sources: list[str] = []
+        pending_sources: list[str] = []
+        try:
+            fast_sources = sorted(s for s, t in _result_times.items() if t - t0 < 3.0)
+            slow_sources = sorted(s for s, t in _result_times.items() if t - t0 >= 3.0)
+            pending_sources = sorted(timed_out)  # same data as timed_out, progressive-return semantics
+        except Exception:
+            pass
     finally:
         executor.shutdown(wait=False)  # stragglers finish detached + warm the cache
 
@@ -714,10 +731,95 @@ def search_many(
         "disabled": sorted(disabled),
         "excluded_relevant": excluded_relevant,
         "truncated": sorted(truncated),
+        "fast_sources": fast_sources,
+        "slow_sources": slow_sources,
+        "pending_sources": pending_sources,
     }
     if diagnostics:  # named search only, and only when a named source was empty / errored / slow
         meta["diagnostics"] = diagnostics
     return results, meta
+
+
+def _compute_source_diversity(ranked: list[Document]) -> dict:
+    """PERSPECTIVE distribution of ranked results. Mechanical tally by a FIXED perspective
+    taxonomy (academic / social / audio / walled / news) mapped from each source's routing
+    FACETS (domains + modes + access_tier, data-driven from the adapter attr / facets.json,
+    self-maintaining as sources are added) -- the agent judges what a one-sided distribution
+    means; the eye only counts. NOTE the ``kind`` facet (stream/lookup/proxy/portal) is HOW a
+    source behaves, NOT a perspective, so it is deliberately NOT used here. MULTI-LABEL: a source
+    that spans types (e.g. a walled community forum) counts toward EACH perspective it satisfies,
+    so ``distribution`` may sum to more than len(ranked). NOT a hardcoded name list. Advisory
+    metadata: NEVER fed to ranking (the razor)."""
+    perspectives = ('academic', 'social', 'audio', 'walled', 'news')
+    dist: dict[str, int] = {}
+    sources_seen: set[str] = set()
+    for d in ranked:
+        sources_seen.add(d.source)
+        a = get_adapter(d.source)
+        fj = _FACETS.get(d.source, {})
+        domains = set((getattr(a, 'domains', None) if a else None) or fj.get('domains', []) or [])
+        modes = set((getattr(a, 'modes', None) if a else None) or fj.get('modes', []) or [])
+        try:
+            tier = _derive_access_tier(a) if a else 'free'
+        except Exception:
+            tier = 'free'
+        hits: set[str] = set()
+        if ('TRANSCRIBE' in modes) or (domains & {'podcast', 'video'}):
+            hits.add('audio')          # transcribable / audio-visual voice
+        if tier in ('walled', 'circumvention'):
+            hits.add('walled')         # login-walled depth
+        if 'papers' in domains:
+            hits.add('academic')       # scholarly literature
+        if domains & {'social', 'community', 'insider'}:
+            hits.add('social')         # community / gripe / social-platform voice
+        if domains & {'news', 'media'}:
+            hits.add('news')
+        if not hits:
+            hits.add('other')
+        for h in hits:
+            dist[h] = dist.get(h, 0) + 1
+    absent = sorted(p for p in perspectives if p not in dist)
+    return {'distribution': dist, 'absent_perspectives': absent,
+            'unique_sources': len(sources_seen)}
+
+
+def _detect_conflicts(ranked: list[Document]) -> list[dict]:
+    """Surface divergent Signal values across docs the dedup layer confirmed are
+    about the same entity (corroboration > 1 in the same merge group). Mechanical
+    divergence flag, NOT the eye picking a winner. Piggybacks on dedup's validated
+    fingerprint (adversarial fix: no O(n^2) title-similarity heuristic)."""
+    # Group docs by their merge group: docs with corroboration > 1 share an
+    # also_in chain. Since merge_rank outputs survivors (one per group), we
+    # cannot directly compare intra-group members. Instead, compare Signal
+    # values with the SAME name across different ranked docs from different
+    # sources (n<=limit<=15, so <=105 pairs, negligible, NOT a title-similarity scan).
+    # The >50% divergence threshold (ratio > 1.5) is tighter than a naive >20% to
+    # keep minor legitimate fluctuations out. Advisory: NEVER fed to ranking (the razor).
+    conflicts: list[dict] = []
+    for i, d1 in enumerate(ranked):
+        if len(conflicts) >= 5:
+            break
+        for d2 in ranked[i+1:]:
+            if len(conflicts) >= 5:
+                break
+            if d1.source == d2.source:
+                continue
+            # Compare Signal values with same name across docs
+            shared_signals = set(d1.signals.keys()) & set(d2.signals.keys())
+            for sig_name in shared_signals:
+                v1 = d1.signals[sig_name].value
+                v2 = d2.signals[sig_name].value
+                if v1 is not None and v2 is not None and v1 > 0 and v2 > 0:
+                    ratio = max(v1, v2) / min(v1, v2)
+                    if ratio > 1.5:  # >50% divergence
+                        conflicts.append({
+                            'topic': sig_name,
+                            'source_a': d1.source,
+                            'claim_a': f'{sig_name}={v1} ({d1.signals[sig_name].unit or ""})',
+                            'source_b': d2.source,
+                            'claim_b': f'{sig_name}={v2} ({d2.signals[sig_name].unit or ""})',
+                        })
+    return conflicts
 
 
 def search_ranked(
@@ -764,6 +866,20 @@ def search_ranked(
             meta["index"] = {**info, "candidates": len(idx), "as_of": recall.as_of()}
     ranked = rank.merge_rank(results, query, limit)
     meta["deduped"] = {"in": total_in, "out": len(ranked)}
+    # ── Passive enrichments (#8 source_diversity, #11 conflicts) ── computed AFTER merge_rank on
+    # the already-ranked+deduped list. Each is a MECHANICAL measurement stamped as _meta for the
+    # agent to interpret; NEITHER is fed to composite()/ranking (the razor, order is unchanged).
+    # Each is wrapped fail-open so one signal's failure never corrupts `ranked` or the other _meta.
+    try:
+        meta["source_diversity"] = _compute_source_diversity(ranked)
+    except Exception:  # noqa: BLE001 -- an enrichment failure must never break the search
+        pass
+    try:
+        _cf = _detect_conflicts(ranked)
+        if _cf:  # key ABSENT when no conflict -> zero noise
+            meta["conflicts"] = _cf
+    except Exception:  # noqa: BLE001 -- an enrichment failure must never break the search
+        pass
     # ── Curator P2 yield tap (fail-open) ── records each source's marginal contribution to this
     # top-K. Skipped for synthetic/in-process searches (record_yield=False) and cache-only pickups
     # so they never pollute the real-traffic statistic. The tap NEVER touches `ranked`

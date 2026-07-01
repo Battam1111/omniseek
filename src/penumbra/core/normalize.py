@@ -279,6 +279,20 @@ def mk_signal(name: str, value, kind: str = 'engagement', by: str = '', unit: Op
     return {name: Signal(value=val, kind=kind, computed_by=('source:' + by if by else ''), unit=unit)}
 
 
+# Comment/paragraph-level provenance (feature #3). Pure helpers: the agent reads them,
+# they do NOT feed composite()/ranking coefficients.
+def comment_anchor(source: str, source_id: str, comment_id: str) -> str:
+    """Build a stable per-comment provenance URI from (source, source_id, comment_id), so a
+    quoted comment can be cited back to its exact anchor. Pure string builder, no side effects."""
+    return f'{source}:{source_id}#comment-{comment_id}'
+
+
+# The keys each per-comment dict is guaranteed to carry in adapter output. Documents what
+# EXISTS, not what might exist: 'ts' is deliberately EXCLUDED because the raw XHS comment
+# API timestamp field name is unverified. A future builder who verifies it adds 'ts' then.
+COMMENT_SCHEMA_KEYS = ('author', 'text', 'likes', 'id')
+
+
 def _yaml_quote(s: str) -> str:
     """Quote a string for YAML if it contains special characters."""
     if any(c in s for c in ':#\n"\''):
