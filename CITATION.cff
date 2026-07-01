@@ -1,7 +1,7 @@
 cff-version: 1.2.0
 message: "If you use Penumbra in your research, please cite it using these metadata."
 title: "Penumbra: self-hosted deep retrieval for AI agents"
-abstract: "A self-hosted deep-retrieval MCP server that reaches the half-lit zone between secrets and the search surface (multi-modal, multi-lingual, walled, and temporal), equipping an AI agent with structured, source-traced, gap-mapped evidence."
+abstract: "A self-hosted deep-retrieval MCP server that reaches the half-lit zone between secrets and the search surface (multi-modal, multi-lingual, walled, and temporal), equipping an AI agent with structured, source-traced evidence."
 type: software
 license: Apache-2.0
 repository-code: "https://github.com/Battam1111/penumbra"
