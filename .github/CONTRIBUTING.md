@@ -44,8 +44,9 @@ fabricate fields or signals: a field the source doesn't provide is absent, not g
 
 ## Legal + safety (read before adding a walled or scrape source)
 
-- Respect each site's Terms of Service and robots. A source that requires defeating an access control
-  (decrypting an encrypted response, circumventing a paywall) is NOT accepted. See
+- Respect each site's Terms of Service and robots. A source that requires defeating access controls
+  (decrypting an encrypted response, breaking a paywall you have no right to) is NOT accepted into the
+  default pack: keep such adapters `explicit_only` and document the legal posture. See
   [SECURITY.md](SECURITY.md).
 - Penumbra fetches as the OPERATOR's own agent. The deployer is responsible for using it within the law
   and the sites' terms in their jurisdiction.
