@@ -1,6 +1,6 @@
 # Brand
 
-<sub>[penumbra](../README.md)&nbsp;·&nbsp;[Configuration](configuration.md)&nbsp;·&nbsp;[Tools](tools.md)&nbsp;·&nbsp;[Walled sources](walled-sources.md)&nbsp;·&nbsp;**Brand**</sub>
+<sub>[penumbra](../README.md)&nbsp;·&nbsp;[Configuration](configuration.md)&nbsp;·&nbsp;[Tools](tools.md)&nbsp;·&nbsp;[Patterns](patterns.md)&nbsp;·&nbsp;[Walled sources](walled-sources.md)&nbsp;·&nbsp;**Brand**</sub>
 
 The single canonical reference for Penumbra's visual identity. Keep it locked so the look does not
 drift as contributors add diagrams, badges, or assets.

@@ -1,6 +1,6 @@
 # Tools
 
-<sub>[penumbra](../README.md)&nbsp;·&nbsp;[Configuration](configuration.md)&nbsp;·&nbsp;**Tools**&nbsp;·&nbsp;[Walled sources](walled-sources.md)&nbsp;·&nbsp;[Brand](BRAND.md)</sub>
+<sub>[penumbra](../README.md)&nbsp;·&nbsp;[Configuration](configuration.md)&nbsp;·&nbsp;**Tools**&nbsp;·&nbsp;[Patterns](patterns.md)&nbsp;·&nbsp;[Walled sources](walled-sources.md)&nbsp;·&nbsp;[Brand](BRAND.md)</sub>
 
 Penumbra exposes its capability as a family of MCP tools. The authoritative list is whatever the
 server registers; `penumbra_list_sources()` returns the live capability index at runtime. Start with
