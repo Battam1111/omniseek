@@ -97,6 +97,19 @@ the lexical FTS5 index, so search still works, just without the vector layer.
 </details>
 
 <details>
+<summary><b>Audio transcription</b> (optional ASR)</summary>
+
+<br>
+
+Install the `asr` extra and `penumbra_transcribe` is available; nothing to download by hand. On its
+**first call**, it pulls the SenseVoice-Small + VAD model weights from ModelScope automatically (a
+one-time download; the wait depends on your connection). The weights land in `~/.penumbra/models`
+(the same persisted root as credentials and the recall index), so a container rebuild does not
+trigger it again.
+
+</details>
+
+<details>
 <summary><b>Server environment</b> (variables)</summary>
 
 <br>
