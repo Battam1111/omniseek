@@ -8,7 +8,7 @@ import logging
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path.home() / "penumbra-mcp" / "scripts"))  # sibling _sentinel_common
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # sibling _sentinel_common
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s",
                     stream=sys.stderr)

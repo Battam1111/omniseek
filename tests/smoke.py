@@ -1507,15 +1507,16 @@ check("yield_tap: persisted state round-trips through _load_all + is bounded by 
 
 # (9) rank.dedup stamps the new P2 fields on EVERY survivor (the prerequisite the tap trusts).
 # two-source LIVE group merged on an ID (short titles → fingerprint falls through to the shared
-# arXiv-id in the URL, NOT the title) → live_sources len 2, index_only False, merge_basis "id".
+# arXiv-id in the URL, NOT the title) → live_sources len 2, merge_basis "id". (index_only was
+# a derived duplicate of live_sources==[]; the 2026-07-01 fixpoint rescan deleted the stamp.)
 _g1 = _doc("arxiv", "ResNet", "http://arxiv.org/abs/1512.03385")
 _g2 = _doc("openalex", "ResNet", "http://arxiv.org/pdf/1512.03385")
 check("yield_tap: §9 fixture merges on arXiv-id (not title)", rank.fingerprint(_g1).startswith("arxiv:"))
 _dd2 = rank.dedup([_g1, _g2])
-check("yield_tap: rank.dedup stamps live_sources/index_only/merge_basis on a 2-source id-grade group",
+check("yield_tap: rank.dedup stamps live_sources/merge_basis on a 2-source id-grade group",
       len(_dd2) == 1
       and set(_dd2[0].metadata.get("live_sources")) == {"arxiv", "openalex"}
-      and _dd2[0].metadata.get("index_only") is False
+      and "index_only" not in _dd2[0].metadata
       and _dd2[0].metadata.get("merge_basis") == "id")
 # and a cross-source LONG-TITLE paper merge correctly stamps merge_basis "title" (the common case;
 # the universal cross-source key is the title; see rank.fingerprint) so the tap records it as a
@@ -1529,19 +1530,19 @@ check("yield_tap: a cross-source long-title paper merge stamps merge_basis 'titl
 # a SINGLETON live survivor also carries the stamps (presence-trustable, not inferred-absent).
 _solo = _doc("arxiv", "A Singleton Paper With A Sufficiently Long Title", "http://arxiv.org/abs/2401.00002")
 _dds = rank.dedup([_solo])
-check("yield_tap: rank.dedup stamps a SINGLETON survivor too (live_sources=[src], index_only False)",
+check("yield_tap: rank.dedup stamps a SINGLETON survivor too (live_sources=[src])",
       _dds[0].metadata.get("live_sources") == ["arxiv"]
-      and _dds[0].metadata.get("index_only") is False
+      and "index_only" not in _dds[0].metadata
       and _dds[0].metadata.get("merge_basis") == "title")
-# an INDEX-ONLY group (every member from recall) → index_only True, live_sources empty.
+# an INDEX-ONLY group (every member from recall) → live_sources empty (THE raw fact).
 _ix1 = _doc("mycareersfuture", "Senior ML Engineer Opening At A Long Titled Company", "https://e.com/ix1")
 _ix1.metadata = {"from_index": True}
 _ix2 = _doc("overseas_ai_jobs", "Senior ML Engineer Opening At A Long Titled Company", "https://e.com/ix2")
 _ix2.metadata = {"from_index": True}
 _ddi = rank.dedup([_ix1, _ix2])
-check("yield_tap: rank.dedup marks an index-only group (index_only True, live_sources empty)",
-      len(_ddi) == 1 and _ddi[0].metadata.get("index_only") is True
-      and _ddi[0].metadata.get("live_sources") == [])
+check("yield_tap: rank.dedup marks an index-only group (live_sources empty = the raw fact)",
+      len(_ddi) == 1 and _ddi[0].metadata.get("live_sources") == []
+      and "index_only" not in _ddi[0].metadata)
 
 # ---------------------------------------------------------------------------
 # 14. Curator P3 (source audit): the 5 invariants that keep the read-only mechanical fact-gather
@@ -5364,8 +5365,8 @@ check("progressive: search_many stamps fast_sources in _meta",
       "fast_sources" in _sm_src)
 check("progressive: search_many stamps slow_sources in _meta",
       "slow_sources" in _sm_src)
-check("progressive: search_many stamps pending_sources in _meta",
-      "pending_sources" in _sm_src)
+check("progressive: pending_sources alias is GONE (byte-duplicate of timed_out, rescan deletion)",
+      "pending_sources" not in _sm_src)
 check("progressive: kept the load-tested wait() path (adversarial: did NOT switch to as_completed)",
       "_result_times" in _sm_src and "as_completed" not in _sm_src)
 
