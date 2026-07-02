@@ -25,8 +25,26 @@ import urllib.parse
 import feedparser
 
 from penumbra.core import auth, cache, http
+from penumbra.core.recall import graph
 
 logger = logging.getLogger(__name__)
+
+# Vocabulary this tap MINTS (vocabulary-by-minting, design section 3), declared on the tap + folded
+# into ``graph.declared_vocabulary``. enrich is the per-paper integrity/OA primitive, so it enriches
+# a WORK node with the facts it resolves (retraction flag, is_oa, doi, citation count) and — when a
+# venue is known — a ``published_in`` edge (work → venue). The venue arm is the tap's DECLARED
+# vocabulary; enrich's current Crossref/Unpaywall/arXiv records carry no OpenAlex venue id, so it is
+# forward-looking (the design's phase-2 published_in home is paper_enrich / OA primary_location), the
+# same "declared ⊇ minted-on-every-path" shape cartographer uses. Do NOT store doc<->work same_as
+# here: that is DERIVED at query time from external_ids (graph.py ``_derived_id_eq_edges``); storing
+# it would double-book.
+GRAPH_MINTS = {
+    "kinds": ["work", "venue"],
+    "edge_types": ["published_in"],
+    "methods": ["api:openalex"],
+}
+graph.register_mints("enrich", kinds=GRAPH_MINTS["kinds"],
+                     edge_types=GRAPH_MINTS["edge_types"], methods=GRAPH_MINTS["methods"])
 
 # Contact for the polite pools (Unpaywall ?email=, Crossref ?mailto=, our UA). Host-injected;
 # never a hardcoded personal address (see auth.contact_email).
@@ -162,6 +180,65 @@ def _arxiv_integrity(ax: str) -> dict:
         return {"retracted": None, "notices": [], "note": "arxiv: not checked"}
 
 
+def _work_node_id(rec: dict) -> str | None:
+    """The graph work-node id for an enrich record, using the SAME id-namespace scheme graph.py's
+    doc->work id_eq derivation mints (``work:arxiv:{id}`` / ``work:doi:{doi}``) so this node JOINS the
+    same world entity a retrieved doc points at (never a synthetic canonical id — that would BE the
+    entity-resolution trap). arXiv records key on the BARE arXiv id (matching graph.py's
+    ``work:arxiv:{arxiv_id}``); DOI records key on the lowercased DOI (matching ``work:doi:{doi}``).
+    None for an error record or one with no usable id."""
+    if not isinstance(rec, dict) or rec.get("error"):
+        return None
+    if rec.get("kind") == "arxiv":
+        ax = _arxiv_id(rec.get("id") or "")
+        return f"work:arxiv:{ax}" if ax else None
+    doi = rec.get("doi")
+    return f"work:doi:{str(doi).strip().lower()}" if doi else None
+
+
+def _graph_tap(rec: dict) -> None:
+    """FAIL-OPEN graph write tap (design section 6): after a successful enrich, upsert the paper's
+    WORK node with the facts this primitive resolved — retracted flag, is_oa, doi, citation count —
+    through the single-writer queue. NEVER raises (a tap failure must not break enrich); NO-OP when
+    writes are disabled (cron) or the record has no usable id. published_in (work → venue) is minted
+    ONLY when a venue is known; enrich's Crossref/Unpaywall/arXiv records carry no OpenAlex venue id,
+    so that arm is inert today (declared, forward-looking). Does NOT store a doc<->work same_as: that
+    is derived at query time from external_ids; storing it would double-book. Idempotent upsert, so a
+    re-enrich (or a cache-hit re-tap) is an honest last_seen bump, never a duplicate row."""
+    try:
+        nid = _work_node_id(rec)
+        if not nid:
+            return
+        from penumbra.core.recall import writer
+        integ = rec.get("integrity") or {}
+        attrs: dict = {}
+        if integ.get("retracted") is not None:
+            attrs["retracted"] = integ.get("retracted")
+        if rec.get("is_oa") is not None:
+            attrs["is_oa"] = rec.get("is_oa")
+        if rec.get("doi"):
+            attrs["doi"] = rec.get("doi")
+        if rec.get("citation_count") is not None:
+            attrs["citation_count"] = rec.get("citation_count")
+        node = {"id": nid, "kind": "work", "label": None, "attrs": attrs or None}
+        edges: list[dict] = []
+        # published_in: only when a venue id is actually known (none in enrich's current records → no
+        # edge minted). Kept as the tap's declared, forward-looking vocabulary; never mint a venue
+        # node without an id-namespaced source (the design has only venue:openalex:…).
+        venue = rec.get("venue")
+        if isinstance(venue, dict) and venue.get("id"):
+            venue_nid = f"venue:openalex:{venue['id']}"
+            edges.append({"src": nid, "dst": venue_nid, "type": "published_in",
+                          "tier": "M", "method": "api:openalex"})
+            writer.enqueue_graph([node, {"id": venue_nid, "kind": "venue",
+                                         "label": venue.get("display_name") or None, "attrs": None}],
+                                 edges)
+        else:
+            writer.enqueue_graph([node], edges)
+    except Exception as exc:  # noqa: BLE001 — a tap failure must NEVER break enrich
+        logger.debug("enrich graph tap swallowed: %s", exc)
+
+
 def enrich(ids: list[str]) -> list[dict]:
     """For each DOI / arXiv id: open-access PDF + integrity. Keyless, cached 24h."""
     out: list[dict] = []
@@ -170,6 +247,7 @@ def enrich(ids: list[str]) -> list[dict]:
         cached = cache.get(key)
         if cached is not None:
             out.append(cached)
+            _graph_tap(cached)   # a cache hit is still a successful enrich → honest re-observation
             continue
         ax = _arxiv_id(raw)
         if ax:
@@ -199,4 +277,5 @@ def enrich(ids: list[str]) -> list[dict]:
                        "integrity": integrity}
         cache.set(key, rec, ttl=24 * 3600)
         out.append(rec)
+        _graph_tap(rec)          # mint the work node's integrity/OA facts (fail-open, enqueue-only)
     return out

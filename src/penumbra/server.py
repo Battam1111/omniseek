@@ -220,23 +220,11 @@ def _threaded(fn):
     return _runner
 
 
-# The non-search VERBS, surfaced BY penumbra_sources (the one call the route-first ritual guarantees
-# is hit) so an agent discovers them WITHOUT having to already know to load each deferred tool — the
-# sources surface knew only data SOURCES, never these capabilities, so they went unused.
-_PENUMBRA_VERBS = {
-    "penumbra_search": "broad sweep: ranked cross-lingual dedup by default; raw=True for per-source buckets; the drill idiom sources=[one]+raw=True+full=True drills ONE named source UNBOUNDED (for walled/explicit_only sources the broad sweep deadline-drops)",
-    "penumbra_read": "read ONE arbitrary URL or document FILE deep (a page / PDF / pptx / docx / xlsx / walled note) — auto-routes URL vs file",
-    "penumbra_view": "SEE images / document figures / video frames with your own vision — auto-routes",
-    "penumbra_field_skeleton": "map a research field's citation neighborhood (source='s2' for the arXiv frontier)",
-    "penumbra_paper_recommend": "papers semantically similar to a seed (beyond keyword + citations)",
-    "penumbra_paper_enrich": "one paper's open-access full-text PDF + retraction/integrity + citation count",
-    "penumbra_resolve_identity": "name → WHICH person (the front door before any relationship map)",
-    "penumbra_coauthors": "co-authorship network of a resolved person (advisor surfaces by joint-work frequency)",
-    "penumbra_institution_cohort": "who is at a lab / dept in a field",
-    "penumbra_transcribe": "local ASR for the SPOKEN content of podcasts / bilibili / audio URLs you cannot hear",
-    "penumbra_gather": "run N independent eye tools IN PARALLEL, one round-trip (sweep+zoom investigation pattern)",
-    "penumbra_graph": "the memory of relations: find -> stats -> neighborhood; policies conservative|working|exploratory",
-}
+# _PENUMBRA_VERBS (the capability index surfaced BY penumbra_sources on its orient call, so an agent discovers
+# the whole toolkit WITHOUT having to already know to load each deferred tool — the sources surface
+# knew only data SOURCES, never these capabilities, so they went unused) is DERIVED from the tool
+# docstrings' first lines, defined AFTER the tool defs below (near _GATHER_TOOLS) — mechanism demoted
+# to data, so it cannot drift out of sync with the registered tools the way a hand-written dict did.
 
 
 @mcp.tool()
@@ -544,8 +532,8 @@ def penumbra_field_skeleton(query: str = "", seeds: Optional[list[str]] = None, 
 @mcp.tool()
 @_threaded
 def penumbra_paper_recommend(ids: list[str], limit: LenientInt =20) -> dict:
-    """Semantically-SIMILAR papers to seed paper(s) — discovery BEYOND keyword search + the
-    citation graph. Uses Semantic Scholar's recommendation model (SPECTER embeddings + co-citation),
+    """Semantically-SIMILAR papers to seed paper(s) — discovery BEYOND keyword search + the citation graph.
+    Uses Semantic Scholar's recommendation model (SPECTER embeddings + co-citation),
     so it surfaces conceptually-related work that penumbra_search (keyword) and penumbra_field_skeleton
     (citations) miss — including very recent papers the citation graph has not caught up to.
 
@@ -566,9 +554,8 @@ def penumbra_paper_recommend(ids: list[str], limit: LenientInt =20) -> dict:
 @mcp.tool()
 @_threaded
 def penumbra_paper_enrich(ids: list[str]) -> dict:
-    """Enrich papers with signals the field-map tools do NOT give cleanly for ONE paper: open-access
-    full text + retraction/integrity status + this paper's citation count. Keyless, mechanical: YOU
-    decide when + on which papers.
+    """Enrich ONE paper with the signals the field-map tools do NOT give cleanly: open-access full text + retraction/integrity status + citation count.
+    Keyless, mechanical: YOU decide when + on which papers.
 
     Pass DOIs and/or arXiv ids (e.g. "2306.08543", "10.1145/3292500.3330701"; use a node's
     ``doi`` from penumbra_field_skeleton, or metadata.paper_id/metadata.doi from an openalex penumbra_search
@@ -1664,6 +1651,24 @@ def penumbra_sensor(action: str, query: str = "", sources: Optional[list[str]] =
         return run_sensor(s, store)
 
     return {"error": f"unknown action {action!r}; valid: create | list | delete | run"}
+
+
+# The capability index penumbra_sources hands back on its orient call, DERIVED (mechanism demoted to data,
+# the same move as _GATHER_TOOLS above): each entry is a registered tool's name -> its docstring's
+# FIRST LINE, over an EXPLICIT tuple of ALL SIXTEEN tools. A hand-written dict drifted once already
+# (a fixpoint rescan caught penumbra_graph missing); derivation cannot. Each tool's first docstring line
+# is written to READ as a capability blurb; the __wrapped__ unwrap reaches the underlying sync body
+# where the source docstring lives (past @_threaded's functools.wraps async wrapper).
+_PENUMBRA_VERBS: dict[str, str] = {
+    fn.__name__: ((fn.__wrapped__ if hasattr(fn, "__wrapped__") else fn).__doc__ or "").strip().splitlines()[0]
+    for fn in (
+        penumbra_sources, penumbra_search, penumbra_read, penumbra_view,
+        penumbra_field_skeleton, penumbra_paper_recommend, penumbra_paper_enrich,
+        penumbra_resolve_identity, penumbra_coauthors, penumbra_institution_cohort,
+        penumbra_transcribe, penumbra_graph, penumbra_gather, penumbra_sensor,
+        penumbra_curator_view, penumbra_curator_act,
+    )
+}
 
 
 # ---------------------------------------------------------------------------

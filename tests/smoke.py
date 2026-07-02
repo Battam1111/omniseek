@@ -6218,6 +6218,275 @@ finally:
     _rstore._local = _p2_local_prev
 
 
+# ---------------------------------------------------------------------------
+# 49. P2 — the FIRST write taps (design section 6 + "Vocabulary-by-minting"): cartographer +
+#     enrich mint FACTS + labeled candidates through the ONE single-writer queue, never verdicts,
+#     fail-open on every path. This section exercises the taps' GOLDEN fixtures (recorded-shape
+#     input -> expected node/edge rows, the STABILITY.md convention), the writer's edge semantics
+#     (upsert dedupe / symmetric src<dst normalization / tier fail-open), and the mint TRIPWIRE that
+#     bounds ACTUAL graph data to the declared vocabulary (the gate that replaces the central enum).
+#     Same FRESH temp-db pattern as §47/§48 (repoint store.DB_PATH etc., restore in finally); the
+#     taps enqueue and we drain->_apply synchronously on the temp db (no daemon), the §48 idiom.
+#     Verbs + docs-drift (items 5/6) are pure source/registration checks, AFTER the temp-db finally.
+# ---------------------------------------------------------------------------
+import penumbra.core.cartographer as _cartg49  # noqa: E402 — importing the tap registers its mints
+import penumbra.core.enrich as _enr49  # noqa: E402 — importing the tap registers its mints
+
+_t49_db_prev = _rstore.DB_PATH
+_t49_disabled_prev = _rstore._disabled
+_t49_local_prev = _rstore._local
+_t49_writes_prev = _recall.writer.WRITES_ENABLED
+_rstore.DB_PATH = Path(_tf47.mkdtemp()) / "smoke_taps.db"
+_rstore._disabled = False
+_rstore._local = _thr47.local()  # fresh per-thread conn cache -> _read_con() reconnects to THIS db
+try:
+    check("taps: index init creates the tables in the temp db", _rstore.init())
+    _t49con = _rstore.connect()
+    _recall.writer.WRITES_ENABLED = True
+
+    # Drain the writer queue into ONE _apply against the temp-db connection (the real apply path: the
+    # taps call writer.enqueue_graph; the daemon would drain+_apply; here we drain synchronously).
+    def _t49_drain_apply():
+        _items = []
+        while not _recall.writer._queue.empty():
+            try:
+                _items.append(_recall.writer._queue.get_nowait())
+            except Exception:  # noqa: BLE001
+                break
+        if _items:
+            _recall.writer._apply(_t49con, _items)
+
+    # (1) CARTOGRAPHER TAP golden fixture. A ``works`` dict shaped like the field_skeleton _build input
+    #     (id -> normalized work). TWO OpenAlex works: W1 carries an author WITH an id, a concept WITH
+    #     an id, a primary_location venue, and a referenced_works edge to W2 (the one IN-CORPUS cite);
+    #     W2 carries a second id-bearing author. Plus ONE S2-shaped work with a DISPLAY-NAME-ONLY
+    #     authorship (no author id). The tap runs once per backend (it namespaces every work under that
+    #     backend), so drive openalex then s2; combined -> 3 work nodes. Expected: person nodes ONLY for
+    #     the OA-id authors; ONE cites edge (directed, tier M); an about edge to topic:openalex; a
+    #     published_in to venue:openalex; and NOTHING minted from the S2 display-name authorship.
+    _t49_oa_works = {
+        "W1": {"title": "Cartographer Work One", "publication_year": 2020, "cited_by_count": 5,
+               "referenced_works": ["https://openalex.org/W2"],
+               "concepts": [{"id": "https://openalex.org/C10", "display_name": "RL", "level": 1}],
+               "authorships": [{"author": {"id": "https://openalex.org/A100", "display_name": "Alice"}}],
+               "venue": {"id": "S50", "display_name": "NeurIPS"},
+               "doi": "https://doi.org/10.1/w1"},
+        "W2": {"title": "Cartographer Work Two", "publication_year": 2019, "cited_by_count": 9,
+               "referenced_works": [], "concepts": [],
+               "authorships": [{"author": {"id": "https://openalex.org/A200", "display_name": "Bob"}}]},
+    }
+    _t49_s2_works = {
+        "99": {"title": "S2 Cartographer Work", "publication_year": 2021, "cited_by_count": 1,
+               "referenced_works": [], "concepts": [],
+               # display-name-only authorship (no author id) -> the S2 path mints NO person here.
+               "authorships": [{"author": {"display_name": "DisplayNameOnly"}}]},
+    }
+    _cartg49._graph_tap("openalex", _t49_oa_works)
+    _cartg49._graph_tap("s2", _t49_s2_works)
+    _t49_drain_apply()
+
+    _t49_works = {r[0] for r in _t49con.execute(
+        "SELECT id FROM graph_nodes WHERE kind='work'").fetchall()}
+    check("taps (cartographer): 3 work nodes across the two backends (W1/W2 openalex + 99 s2)",
+          _t49_works == {"work:openalex:W1", "work:openalex:W2", "work:s2:99"})
+    _t49_persons = {r[0] for r in _t49con.execute(
+        "SELECT id FROM graph_nodes WHERE kind='person'").fetchall()}
+    check("taps (cartographer): person nodes ONLY for the OA-id authors (A100, A200)",
+          _t49_persons == {"person:openalex:A100", "person:openalex:A200"})
+    _t49_cites = _t49con.execute(
+        "SELECT src, dst, tier, method FROM graph_edges WHERE type='cites'").fetchall()
+    check("taps (cartographer): exactly ONE cites edge, directed W1->W2, tier M (in-corpus reference)",
+          _t49_cites == [("work:openalex:W1", "work:openalex:W2", "M", "api:openalex")])
+    _t49_about = _t49con.execute(
+        "SELECT src, dst, tier FROM graph_edges WHERE type='about'").fetchall()
+    check("taps (cartographer): an about edge W1->topic:openalex:C10 (concept WITH id), tier M",
+          _t49_about == [("work:openalex:W1", "topic:openalex:C10", "M")])
+    _t49_pub = _t49con.execute(
+        "SELECT src, dst, tier FROM graph_edges WHERE type='published_in'").fetchall()
+    check("taps (cartographer): a published_in edge W1->venue:openalex:S50, tier M",
+          _t49_pub == [("work:openalex:W1", "venue:openalex:S50", "M")])
+    # The S2 display-name authorship minted NOTHING: no person node, no authored edge on the s2 side.
+    _t49_s2_authored = _t49con.execute(
+        "SELECT count(*) FROM graph_edges WHERE type='authored' AND src LIKE 'work:s2:%'").fetchone()[0]
+    _t49_s2_person = _t49con.execute(
+        "SELECT count(*) FROM graph_nodes WHERE kind='person' AND id LIKE 'person:s2:%'").fetchone()[0]
+    check("taps (cartographer): the S2 display-name-only authorship mints NO node/edge (P3 owns persons)",
+          _t49_s2_authored == 0 and _t49_s2_person == 0)
+
+    # (2) ENRICH TAP fixture. A fake enrich RESULT (the arxiv-branch record shape enrich() emits):
+    #     the tap upserts the WORK node with the resolved attrs (retracted / is_oa), and a published_in
+    #     edge WHEN a venue is present; it must NOT store a doc<->work same_as (that is DERIVED at query
+    #     time from external_ids — storing it would double-book).
+    _t49_rec = {"id": "2501.00001", "kind": "arxiv", "doi": "10.48550/arXiv.2501.00001",
+                "is_oa": True, "citation_count": 7,
+                "integrity": {"retracted": False, "notices": []},
+                "venue": {"id": "S77", "display_name": "ICLR"}}
+    _enr49._graph_tap(_t49_rec)
+    _t49_drain_apply()
+    _t49_wnid = "work:arxiv:2501.00001"
+    _t49_wrow = _t49con.execute(
+        "SELECT kind, attrs_json FROM graph_nodes WHERE id=?", (_t49_wnid,)).fetchone()
+    _t49_wattrs = json.loads(_t49_wrow[1]) if _t49_wrow and _t49_wrow[1] else {}
+    check("taps (enrich): the work node is upserted with retracted + is_oa attrs",
+          _t49_wrow is not None and _t49_wrow[0] == "work"
+          and _t49_wattrs.get("retracted") is False and _t49_wattrs.get("is_oa") is True)
+    _t49_enr_pub = _t49con.execute(
+        "SELECT tier, method FROM graph_edges WHERE type='published_in' AND src=?",
+        (_t49_wnid,)).fetchone()
+    check("taps (enrich): a published_in edge is minted when a venue is present (work->venue, tier M)",
+          _t49_enr_pub == ("M", "api:openalex"))
+    check("taps (enrich): NO doc<->work same_as row is stored (that edge is DERIVED, not persisted)",
+          _t49con.execute("SELECT count(*) FROM graph_edges WHERE type='same_as'").fetchone()[0] == 0)
+
+    # Snapshot the TAP-MINTED vocabulary NOW — after the golden fixtures (items 1-2), BEFORE item 3's
+    # writer-semantics probes hand-insert deliberately out-of-vocabulary rows (a reversed align:title_fp
+    # same_as, a rejected tier='J') that are test scaffolding, NOT tap output. The mint tripwire (item 4,
+    # "after the fixtures") bounds what the TAPS minted, so it reads this snapshot, not the polluted db.
+    _t49_minted_kinds = {r[0] for r in _t49con.execute(
+        "SELECT DISTINCT kind FROM graph_nodes").fetchall()}
+    _t49_minted_types = {r[0] for r in _t49con.execute(
+        "SELECT DISTINCT type FROM graph_edges").fetchall()}
+    _t49_minted_methods = {r[0] for r in _t49con.execute(
+        "SELECT DISTINCT method FROM graph_edges").fetchall()}
+
+    # (3) WRITER edge semantics (design section 4). Drive the writer's real upsert helper directly on
+    #     the temp-db connection (the same code path _apply_graph calls per edge).
+    #   (i) re-upserting the SAME edge bumps last_seen, never adds a row; first_seen stays immutable.
+    _t49_e = {"src": "work:openalex:W1", "dst": "work:openalex:W2", "type": "cites",
+              "tier": "M", "method": "api:openalex"}   # the exact edge the cartographer fixture minted
+    _t49_c_before = _t49con.execute("SELECT count(*) FROM graph_edges WHERE type='cites'").fetchone()[0]
+    _t49_fs_before, _t49_ls_before = _t49con.execute(
+        "SELECT first_seen, last_seen FROM graph_edges WHERE src=? AND dst=? AND type='cites'",
+        ("work:openalex:W1", "work:openalex:W2")).fetchone()
+    _t49_bump = _t49_ls_before + 100.0
+    _t49con.execute("BEGIN")
+    _recall.writer._upsert_edge(_t49con, _t49_e, _t49_bump)
+    _t49con.commit()
+    _t49_c_after = _t49con.execute("SELECT count(*) FROM graph_edges WHERE type='cites'").fetchone()[0]
+    _t49_fs_after, _t49_ls_after = _t49con.execute(
+        "SELECT first_seen, last_seen FROM graph_edges WHERE src=? AND dst=? AND type='cites'",
+        ("work:openalex:W1", "work:openalex:W2")).fetchone()
+    check("taps (writer): re-upserting the same edge bumps last_seen, keeps row count + first_seen fixed",
+          _t49_c_after == _t49_c_before and _t49_ls_after == _t49_bump
+          and _t49_ls_after > _t49_ls_before and _t49_fs_after == _t49_fs_before)
+    #   (ii) a SYMMETRIC-type edge written REVERSED lands on the SAME row (the src<dst helper). same_as
+    #        is symmetric: write (A,B) then (B,A) with one method -> ONE row, stored src < dst.
+    _t49_A, _t49_B = "doc:arxiv:zzz_late", "doc:arxiv:aaa_early"   # A > B lexicographically on purpose
+    _t49_lo, _t49_hi = sorted((_t49_A, _t49_B))
+    _t49con.execute("BEGIN")
+    _recall.writer._upsert_edge(
+        _t49con, {"src": _t49_A, "dst": _t49_B, "type": "same_as",
+                  "tier": "A", "method": "align:title_fp"}, 10.0)
+    _recall.writer._upsert_edge(
+        _t49con, {"src": _t49_B, "dst": _t49_A, "type": "same_as",
+                  "tier": "A", "method": "align:title_fp"}, 20.0)   # reversed write, same pair
+    _t49con.commit()
+    _t49_sym = _t49con.execute(
+        "SELECT src, dst FROM graph_edges WHERE type='same_as' AND method='align:title_fp'").fetchall()
+    check("taps (writer): a symmetric edge written reversed lands on ONE row, stored src < dst",
+          _t49_sym == [(_t49_lo, _t49_hi)] and _t49_lo < _t49_hi)
+    #   (iii) a tier='J' item is DROPPED fail-open by the writer (validated before the SQL touches it),
+    #         AND the SQL CHECK would refuse it anyway (the organ boundary, belt + suspenders).
+    _t49_j_before = _t49con.execute("SELECT count(*) FROM graph_edges").fetchone()[0]
+    _t49con.execute("BEGIN")
+    _recall.writer._upsert_edge(
+        _t49con, {"src": "j_src", "dst": "j_dst", "type": "same_as",
+                  "tier": "J", "method": "ruling"}, 1.0)   # illegal tier -> dropped, no row, no raise
+    _t49con.commit()
+    _t49_j_after = _t49con.execute("SELECT count(*) FROM graph_edges").fetchone()[0]
+    check("taps (writer): a tier='J' edge is DROPPED fail-open (no row, no raise; J never enters the store)",
+          _t49_j_after == _t49_j_before)
+    _t49_check_raised = False
+    try:
+        _t49con.execute("BEGIN")
+        _t49con.execute("INSERT INTO graph_edges(src, dst, type, tier, method, first_seen, last_seen) "
+                        "VALUES('j_src', 'j_dst', 'same_as', 'J', 'ruling', 1.0, 1.0)")
+        _t49con.commit()
+    except _sqlite47.IntegrityError:
+        _t49_check_raised = True
+        _t49con.rollback()
+    check("taps (writer): the SQL CHECK would refuse a tier='J' row anyway (structural organ boundary)",
+          _t49_check_raised)
+
+    # (4) MINT TRIPWIRE (the vocabulary-by-minting GATE, design "Vocabulary-by-minting"): after the
+    #     fixtures, the kinds/edge-types/methods the TAPS minted (snapshotted above, before item 3's
+    #     out-of-vocabulary scaffolding) must be a SUBSET of the declared union (a tap writing an
+    #     UNDECLARED kind/type/method is the bug this catches). And the registry must contain the three
+    #     shipped taps (shipping the tap IS the grant). Non-empty guards ensure the fixtures actually
+    #     minted rows, so the subset checks are not vacuously true against empty sets.
+    _t49_vocab = _graph.declared_vocabulary()
+    check("taps (mint tripwire): DISTINCT kinds minted by the taps ⊆ declared_vocabulary().kinds",
+          bool(_t49_minted_kinds) and _t49_minted_kinds <= _t49_vocab["kinds"],
+          f"undeclared kinds: {sorted(_t49_minted_kinds - _t49_vocab['kinds'])}")
+    check("taps (mint tripwire): DISTINCT edge types minted by the taps ⊆ declared edge_types",
+          bool(_t49_minted_types) and _t49_minted_types <= _t49_vocab["edge_types"],
+          f"undeclared types: {sorted(_t49_minted_types - _t49_vocab['edge_types'])}")
+    check("taps (mint tripwire): DISTINCT edge methods minted by the taps ⊆ declared methods",
+          bool(_t49_minted_methods) and _t49_minted_methods <= _t49_vocab["methods"],
+          f"undeclared methods: {sorted(_t49_minted_methods - _t49_vocab['methods'])}")
+    check("taps (mint tripwire): the registry contains the three taps (thin_memory, cartographer, enrich)",
+          {"thin_memory", "cartographer", "enrich"} <= set(_graph._MINT_REGISTRY.keys()),
+          f"registry: {sorted(_graph._MINT_REGISTRY.keys())}")
+finally:
+    _recall.writer.WRITES_ENABLED = _t49_writes_prev
+    # drain any residue so a later section never inherits our queue items.
+    while not _recall.writer._queue.empty():
+        try:
+            _recall.writer._queue.get_nowait()
+        except Exception:  # noqa: BLE001
+            break
+    _rstore.DB_PATH = _t49_db_prev
+    _rstore._disabled = _t49_disabled_prev
+    _rstore._local = _t49_local_prev
+
+# (5) VERBS: _PENUMBRA_VERBS is the capability index penumbra_sources surfaces. It must carry EXACTLY the 16 tool
+#     names, every value NON-EMPTY and DERIVED (== that tool's docstring first line, not hand-written
+#     prose that could drift). It drifted once already (it was a hand-maintained dict); recompute each
+#     tool's docstring first line independently and demand equality, so a docstring edit or a renamed
+#     tool that skips the dict is caught.
+from penumbra.server import _PENUMBRA_VERBS as _t49_verbs  # noqa: E402
+_t49_tool_fns = (
+    _srv.penumbra_sources, _srv.penumbra_search, _srv.penumbra_read, _srv.penumbra_view,
+    _srv.penumbra_field_skeleton, _srv.penumbra_paper_recommend, _srv.penumbra_paper_enrich,
+    _srv.penumbra_resolve_identity, _srv.penumbra_coauthors, _srv.penumbra_institution_cohort,
+    _srv.penumbra_transcribe, _srv.penumbra_graph, _srv.penumbra_gather, _srv.penumbra_sensor,
+    _srv.penumbra_curator_view, _srv.penumbra_curator_act,
+)
+_t49_expect_names = {fn.__name__ for fn in _t49_tool_fns}
+check("verbs: _PENUMBRA_VERBS has EXACTLY the 16 tool names",
+      set(_t49_verbs.keys()) == _t49_expect_names and len(_t49_verbs) == 16,
+      f"missing={_t49_expect_names - set(_t49_verbs)} extra={set(_t49_verbs) - _t49_expect_names}")
+check("verbs: every _PENUMBRA_VERBS value is non-empty",
+      all(bool((v or '').strip()) for v in _t49_verbs.values()),
+      f"empty: {sorted(k for k, v in _t49_verbs.items() if not (v or '').strip())}")
+_t49_verb_drift = []
+for _t49_fn in _t49_tool_fns:
+    _t49_raw = _t49_fn.__wrapped__ if hasattr(_t49_fn, "__wrapped__") else _t49_fn
+    _t49_first = ((_t49_raw.__doc__ or "").strip().splitlines() or [""])[0]
+    if _t49_verbs.get(_t49_fn.__name__) != _t49_first:
+        _t49_verb_drift.append(_t49_fn.__name__)
+check("verbs: each _PENUMBRA_VERBS value == that tool's docstring first line (derivation, not prose)",
+      not _t49_verb_drift, f"drifted: {_t49_verb_drift}")
+
+# (6) DOCS-DRIFT EXTENSION: the existing docs-drift tripwire (above) scans the product-facing docs for
+#     penumbra_* tokens against registered tool names. Extend the SAME discipline to the _PENUMBRA_INSTRUCTIONS
+#     string (the brief the server ships to every agent on connect): a renamed tool that updates the
+#     tools but not the instructions would otherwise teach a stale name. One legitimate NON-tool token
+#     is exempted (with justification); anything else undeclared is drift the tripwire must catch.
+# EXEMPTIONS — legitimate penumbra_* tokens in _PENUMBRA_INSTRUCTIONS that are NOT (and should not be) tools:
+#   • penumbra_fetch — a RETIRED tool named on PURPOSE to teach the idiom that replaced it ("the drill
+#     idiom sources=[one]+raw=True+full=True replaces the old penumbra_fetch"). Naming a retired tool in
+#     explanatory narrative is the same carve-out the docs-drift tripwire already grants CHANGELOG/
+#     design/recon docs; the mention is pedagogy, not a live reference.
+_t49_instr_exempt = {"penumbra_fetch"}
+_t49_dd_registered = {n for n in dir(_srv) if n.startswith("penumbra_")}
+_t49_instr_tokens = set(_dd_re_mod.findall(r"penumbra_[a-z_]+", _srv._PENUMBRA_INSTRUCTIONS))
+_t49_instr_stale = sorted(_t49_instr_tokens - _t49_dd_registered - _t49_instr_exempt)
+check("docs-drift (instructions): every penumbra_* token in _PENUMBRA_INSTRUCTIONS is a REGISTERED tool "
+      "(or an explicit exemption)",
+      not _t49_instr_stale, f"stale: {_t49_instr_stale}")
+
+
 print()
 if FAIL:
     print(f"SMOKE FAILED: {len(FAIL)} problem(s)")
