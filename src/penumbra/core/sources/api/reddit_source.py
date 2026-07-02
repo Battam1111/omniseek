@@ -760,7 +760,7 @@ class RedditAdapter:
         """One Reddit COMMENT → Document. content=body (already Markdown — no HTML
         conversion needed for comments), url from the comment permalink, author=u/…, score
         through mk_signal, tags=[r/sub]. The thread (link_id) + parent are kept in metadata so
-        the agent can drill to the full thread (penumbra_add_url on the parent submission)."""
+        the agent can drill to the full thread (penumbra_read on the parent submission)."""
         body = (payload.get("body") or "").strip()
 
         permalink = payload.get("permalink") or ""

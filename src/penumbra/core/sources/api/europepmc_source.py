@@ -60,7 +60,7 @@ ARTICLE_URL = "https://europepmc.org/article/{source}/{id}"
 # a few small follow-ups, not N slow ones against the shared EBI host.
 _MAX_FULLTEXT = 3
 # Cap the inlined full-text body so one large article cannot dominate the payload;
-# the agent can penumbra_add_url the article for the whole thing. (The true length is
+# the agent can penumbra_read the article for the whole thing. (The true length is
 # implicit in the content itself; this is a defensive ceiling, not a truncation flag.)
 _BODY_CAP = 20000
 

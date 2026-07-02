@@ -35,6 +35,7 @@ from urllib.parse import urlsplit
 import httpx
 
 from penumbra.core import cache, diag
+from penumbra.core._guard import BackendGuard
 
 logger = logging.getLogger(__name__)
 
@@ -46,8 +47,6 @@ CRED = Path.home() / ".penumbra" / "credentials" / "github.json"
 
 _BREAK_AFTER = 5      # consecutive failures that open the circuit
 _BREAK_FOR_S = 120.0  # seconds the circuit stays open
-_state = {"fails": 0, "open_until": 0.0, "last_429": 0.0}
-_lock = threading.Lock()
 
 # GitHub's Search API is the binding constraint: 30 req/min AUTHENTICATED (10/min unauth),
 # far stricter than the 5000/hr (~83/min) core bucket, and a 403 secondary-rate limit triggers
@@ -58,7 +57,6 @@ _lock = threading.Lock()
 # Authorization header) to move github_trending off the unauth ceiling onto the shared token; the
 # pacer + concurrency cap are the load bounds, independent of the token.
 _MAX_CONCURRENCY = 4
-_sema = threading.BoundedSemaphore(_MAX_CONCURRENCY)
 
 # Rate cap: space GitHub request STARTS at least _MIN_INTERVAL_S apart so a fan-out across the three
 # GitHub-backed sources (the health sweep, the watchtower org poll, a workflow's burst) can never
@@ -66,8 +64,18 @@ _sema = threading.BoundedSemaphore(_MAX_CONCURRENCY)
 # RATE; together a burst is impossible by construction. ~1 req / 2s = 30/min, sitting right at the
 # Search ceiling, so the stricter Search bucket (not the laxer core bucket) is what we pace to.
 _MIN_INTERVAL_S = 2.0
-_pace_state = {"next_at": 0.0}
-_pace_lock = threading.Lock()
+
+# The shared load-guard (concurrency cap + rate pacer + circuit breaker): the byte-identical machinery
+# _openalex / _s2 / _github each carried, extracted to _guard (2026-07-01 parsimony audit P1). The
+# breaker state dict + its lock, the semaphore and the pace lock/state now live on the guard; the
+# module reaches them by name below so every threshold, sleep, log message and error path is unchanged.
+_guard = BackendGuard("github", _MAX_CONCURRENCY, break_after=_BREAK_AFTER,
+                      break_for_s=_BREAK_FOR_S, min_interval_s=_MIN_INTERVAL_S, log=logger)
+_state = _guard.state   # health probe reads fails / open_until / last_429
+_lock = _guard.lock
+_sema = _guard.sema
+_pace_state = _guard.pace_state   # the slot reservation _pace() reads/reserves (aliases the guard)
+_pace_lock = _guard.pace_lock
 
 
 def _load_token() -> Optional[str]:
@@ -133,12 +141,7 @@ def _pace() -> None:
     """Reserve the next request-start slot (>= _MIN_INTERVAL_S after the previous), then wait for it.
     The slot reservation is under the lock; the wait is NOT, so callers do not serialize on the lock
     itself, only on the wire-rate. Bounds GitHub requests/minute across all callers + threads."""
-    with _pace_lock:
-        start = max(time.monotonic(), _pace_state["next_at"])
-        _pace_state["next_at"] = start + _MIN_INTERVAL_S
-    delay = start - time.monotonic()
-    if delay > 0:
-        time.sleep(delay)
+    _guard.pace()
 
 
 def _retry_after(resp: "httpx.Response") -> float:
@@ -230,8 +233,7 @@ def get_json(path: str, params: Optional[dict] = None, headers: Optional[dict] =
                           body="rate / secondary-rate limited (survived one retry)")
                 return None
             resp.raise_for_status()
-            with _lock:
-                _state["fails"] = 0
+            _guard.record_ok()  # reset the consecutive-failure streak
             try:
                 return resp.json()
             except Exception as exc:  # noqa: BLE001 — unparseable body is a failure, degrade to None
@@ -253,12 +255,7 @@ def get_json(path: str, params: Optional[dict] = None, headers: Optional[dict] =
 
 def _trip_breaker() -> None:
     """Record one failure; open the circuit once _BREAK_AFTER consecutive failures pile up."""
-    with _lock:
-        _state["fails"] += 1
-        if _state["fails"] >= _BREAK_AFTER:
-            _state["open_until"] = time.time() + _BREAK_FOR_S
-            _state["fails"] = 0
-            logger.warning("github circuit OPEN for %.0fs (consecutive failures)", _BREAK_FOR_S)
+    _guard.record_fail()
 
 
 _HEALTH_TTL_S = 60.0

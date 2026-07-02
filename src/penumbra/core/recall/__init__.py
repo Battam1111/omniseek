@@ -12,7 +12,7 @@ from __future__ import annotations
 import logging
 import time
 
-from penumbra.core.recall import embed, store, writer  # noqa: F401
+from penumbra.core.recall import embed, graph, store, writer  # noqa: F401
 from penumbra.core.recall.store import as_of, doc_count, init, search, segment, vector_search  # noqa: F401
 from penumbra.core.recall.writer import (  # noqa: F401
     last_write_ts, mark_run, maybe_ingest, start_backfill, start_writer, vec_embed_failures,

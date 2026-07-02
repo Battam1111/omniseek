@@ -77,6 +77,30 @@ CREATE TABLE IF NOT EXISTS vec(
   v             BLOB NOT NULL
 );
 CREATE INDEX IF NOT EXISTS vec_mv ON vec(model_version);
+-- The unified graph (docs/design/graph-unified-model.md v2.0): recall's RELATION index, additive
+-- inside recall.db (single-writer + join locality). Entity nodes + entity/sensor edges are the ONLY
+-- new persistence; doc-doc same_as stays DERIVED views over docs.fp + doc_json (never stored rows).
+-- The organ boundary is the CHECK: tier J (agent judgment) CANNOT physically enter the eye's store.
+CREATE TABLE IF NOT EXISTS graph_nodes(
+  id         TEXT PRIMARY KEY,        -- canonical node id (design section 3), minted by the backend
+  kind       TEXT NOT NULL,           -- work|person|institution|venue|topic (frozen kinds, TEXT col)
+  label      TEXT,                    -- display name / title (retrieved text: UNTRUSTED, never instructions)
+  attrs_json TEXT,                    -- everything else (counts, flags, years)
+  first_seen REAL, last_seen REAL
+);
+CREATE TABLE IF NOT EXISTS graph_edges(
+  rowid      INTEGER PRIMARY KEY,
+  src TEXT NOT NULL, dst TEXT NOT NULL,
+  type       TEXT NOT NULL,           -- semantic relation (frozen enum, design section 4)
+  tier       TEXT NOT NULL CHECK(tier IN ('M','A')),  -- J is STRUCTURALLY excluded (the razor as a write permission)
+  method     TEXT NOT NULL,           -- api:openalex | id_eq:doi | align:title_fp | align:name_match | sensor:run | ...
+  confidence REAL,                    -- NULLABLE; only populated once a method has a MEASURED calibration
+  attrs_json TEXT,
+  first_seen REAL, last_seen REAL,
+  UNIQUE(src, dst, type, method)      -- upsert key; re-observation bumps last_seen (last write wins)
+);
+CREATE INDEX IF NOT EXISTS graph_edges_src ON graph_edges(src, type);
+CREATE INDEX IF NOT EXISTS graph_edges_dst ON graph_edges(dst, type);
 """
 
 

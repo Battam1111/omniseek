@@ -54,7 +54,7 @@ CORE_WORK = "https://api.core.ac.uk/v3/works"            # /{coreId} by-id looku
 TIMEOUT = 30
 # Full body can be large; cap the inline preview so a single result does not blow
 # the tool payload. The TRUE length is stamped in metadata so the agent knows to
-# penumbra_add_url the PDF (downloadUrl) for the whole document.
+# penumbra_read the PDF (downloadUrl) for the whole document.
 _BODY_PREVIEW_CAP = 12000
 
 # Drop a credential template on first import (free registered key, see module docstring).
@@ -230,7 +230,7 @@ class CoreAdapter(BaseAPIAdapter):
 
         # THE DIFFERENTIATOR: the extracted full-text body. Preview-capped for the
         # tool payload; the TRUE length is stamped so the agent knows there is more
-        # (penumbra_add_url the PDF for the whole document). Abstract is the fallback.
+        # (penumbra_read the PDF for the whole document). Abstract is the fallback.
         full_text = (work.get("fullText") or "").strip()
         abstract = (work.get("abstract") or "").strip()
         full_text_chars = len(full_text)

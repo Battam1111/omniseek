@@ -2,7 +2,7 @@
 
 The citation sources give an abstract + (via penumbra_paper_enrich) the open-access PDF *url*, but
 not the WHOLE paper. This closes that gap: hand it a PDF url (arxiv.org/pdf/..., or any *.pdf)
-via ``penumbra_add_url`` and it downloads the PDF (size-capped via eye.http) and extracts the text
+via ``penumbra_read`` and it downloads the PDF (size-capped via eye.http) and extracts the text
 with PyMuPDF, so the AGENT can read the full paper and synthesize itself. This is the thin
 "read the PDF" primitive we chose INSTEAD of a heavy synthesis engine: minimal code, max agent.
 """
@@ -31,9 +31,9 @@ class PdfAdapter:
 
     def search(self, query: str, limit: int = 10) -> list[Document]:
         # URL-only adapter: there is no index to search, BUT the description tells the agent
-        # to hand this source a PDF url, and penumbra_fetch routes the query here (not to fetch_url).
+        # to hand this source a PDF url, and penumbra_search 单源钻取 routes the query here (not to fetch_url).
         # So when the query IS a PDF url, do exactly what the description promises: download +
-        # extract via the same fetch_url path (and the same fitz engine penumbra_read_document uses).
+        # extract via the same fetch_url path (and the same fitz engine penumbra_read uses).
         # A non-url topic query has nothing to match, so it still correctly returns [].
         path = (urlparse(query).path or "").lower()
         if path.endswith(".pdf") or "/pdf/" in path:

@@ -65,7 +65,7 @@ DEFAULT_TOP_SEED_REGEX = r"Seed.*(?:校招|实习|招)"
 class BytedanceSeedAdapter:
     name = "bytedance_seed"
     needs_credentials = False
-    explicit_only = "walled 招聘源(字节校招);命名 penumbra_fetch 才调,不进广搜"
+    explicit_only = "walled 招聘源(字节校招);命名钻取 (penumbra_search 单源 raw) 才调,不进广搜"
     description = (
         "字节跳动 Top Seed 校招 + 实习 — 大模型 / 前沿技术 PhD 人才招聘 "
         "(httpx 直连 jobs.bytedance.com JSON API, 无需 CDP/auth/sign)"

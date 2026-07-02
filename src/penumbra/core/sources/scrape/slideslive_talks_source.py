@@ -121,7 +121,7 @@ class SlidesLiveTalksAdapter(BaseScrapeAdapter):
 
     def fetch_url(self, url: str) -> Optional[Document]:
         """Claim a slideslive.com talk URL: resolve its metadata + audio handle into
-        one doc (the penumbra_add_url / penumbra_fetch drill-down path). Returns None for any
+        one doc (the penumbra_read / penumbra_search 单源钻取 drill-down path). Returns None for any
         non-SlidesLive url so the fetcher's host routing skips this source."""
         talk_id = _talk_id(url)
         if not talk_id:

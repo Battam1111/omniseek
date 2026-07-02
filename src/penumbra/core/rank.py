@@ -111,6 +111,33 @@ def dedup(docs: list[Document]) -> list[Document]:
                 add["also_in"] = others
             if len(srcs) > 1:  # corroboration = how many DISTINCT sources surfaced this work
                 add["corroboration"] = len(srcs)
+            # --- #11 signal_conflicts: same-named Signal values diverging >50% across the
+            #     group's different-source members. Detected HERE because the merge is the
+            #     only place the collapsed members are still visible (post-dedup one survivor
+            #     per group remains, so any later cross-doc comparison compares DIFFERENT
+            #     works — the 2026-07-01 dogfood noise). Mechanical flag; never fed to
+            #     ranking (the razor); fail-open.
+            try:
+                _confs: list[dict] = []
+                for _i, _da in enumerate(grp):
+                    for _db in grp[_i + 1:]:
+                        if _da.source == _db.source or len(_confs) >= 3:
+                            continue
+                        for _nm in set(_da.signals or {}) & set(_db.signals or {}):
+                            _v1, _v2 = _da.signals[_nm].value, _db.signals[_nm].value
+                            if (_v1 is not None and _v2 is not None and _v1 > 0 and _v2 > 0
+                                    and max(_v1, _v2) / min(_v1, _v2) > 1.5):
+                                _confs.append({
+                                    "topic": _nm,
+                                    "source_a": _da.source,
+                                    "claim_a": f"{_nm}={_v1} ({_da.signals[_nm].unit or ''})",
+                                    "source_b": _db.source,
+                                    "claim_b": f"{_nm}={_v2} ({_db.signals[_nm].unit or ''})",
+                                })
+                if _confs:
+                    add["signal_conflicts"] = _confs[:3]
+            except Exception:  # noqa: BLE001 — one signal's failure never corrupts the merge
+                pass
         # Curator P2 attribution stamps (pure facts, no judgment; stamped on EVERY survivor,
         # singletons included, so the yield tap can TRUST field presence rather than infer absence).
         # live_sources: group members that were LIVE this run (a recall-index rehydration carries
@@ -226,19 +253,6 @@ def merge_rank(results, query: str, limit: int = 15) -> list[Document]:
         # Passive metadata stamps (Phase-A). MECHANICAL measurements the agent interprets;
         # NONE feed composite()/the ranking blend (the razor: measure, don't rank by them).
         # Each is fail-open so one signal's failure never corrupts the return for the others.
-        # --- #7 independence_score: how many DISTINCT sources independently corroborate.
-        # NOTE: corroboration counts source NAMES, not backends. See also_in for
-        # the source list; the agent judges backend independence. (~42 org_watch
-        # sources share the OpenAlex backend, so corroboration=5 is NOT necessarily
-        # 5 independent upstreams — cross-reference also_in with penumbra_list_sources.)
-        try:
-            _corrob = int((d.metadata or {}).get("corroboration", 1))
-            _mb = (d.metadata or {}).get("merge_basis", "id")
-            # title-only merges are WEAK corroboration (two distinct same-titled items may merge)
-            _ind = min(1.0, max(0.0, (_corrob - 1) / 3.0)) * (1.0 if _mb == "id" else 0.7)
-            d.metadata["independence_score"] = round(_ind, 3)
-        except Exception:
-            pass
         # --- #10 freshness_days + freshness_class: mechanical age bucketing (agent interprets).
         # Already feeds ranking via _recency; these are pure metadata. Timezone-naive dates
         # handled the same way as _recency (line ~147-148).

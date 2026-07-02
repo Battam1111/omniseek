@@ -789,45 +789,6 @@ def _compute_source_diversity(ranked: list[Document]) -> dict:
             'unique_sources': len(sources_seen)}
 
 
-def _detect_conflicts(ranked: list[Document]) -> list[dict]:
-    """Surface divergent Signal values across docs the dedup layer confirmed are
-    about the same entity (corroboration > 1 in the same merge group). Mechanical
-    divergence flag, NOT the eye picking a winner. Piggybacks on dedup's validated
-    fingerprint (adversarial fix: no O(n^2) title-similarity heuristic)."""
-    # Group docs by their merge group: docs with corroboration > 1 share an
-    # also_in chain. Since merge_rank outputs survivors (one per group), we
-    # cannot directly compare intra-group members. Instead, compare Signal
-    # values with the SAME name across different ranked docs from different
-    # sources (n<=limit<=15, so <=105 pairs — negligible, NOT a title-similarity scan).
-    # The >50% divergence threshold (ratio > 1.5) is tighter than a naive >20% to
-    # keep minor legitimate fluctuations out. Advisory: NEVER fed to ranking (the razor).
-    conflicts: list[dict] = []
-    for i, d1 in enumerate(ranked):
-        if len(conflicts) >= 5:
-            break
-        for d2 in ranked[i+1:]:
-            if len(conflicts) >= 5:
-                break
-            if d1.source == d2.source:
-                continue
-            # Compare Signal values with same name across docs
-            shared_signals = set(d1.signals.keys()) & set(d2.signals.keys())
-            for sig_name in shared_signals:
-                v1 = d1.signals[sig_name].value
-                v2 = d2.signals[sig_name].value
-                if v1 is not None and v2 is not None and v1 > 0 and v2 > 0:
-                    ratio = max(v1, v2) / min(v1, v2)
-                    if ratio > 1.5:  # >50% divergence
-                        conflicts.append({
-                            'topic': sig_name,
-                            'source_a': d1.source,
-                            'claim_a': f'{sig_name}={v1} ({d1.signals[sig_name].unit or ""})',
-                            'source_b': d2.source,
-                            'claim_b': f'{sig_name}={v2} ({d2.signals[sig_name].unit or ""})',
-                        })
-    return conflicts
-
-
 def search_ranked(
     query: str,
     sources: Optional[list[str]] = None,
@@ -881,8 +842,11 @@ def search_ranked(
     except Exception:  # noqa: BLE001 — an enrichment failure must never break the search
         pass
     try:
-        _cf = _detect_conflicts(ranked)
-        if _cf:  # key ABSENT when no conflict → zero noise
+        # #11 conflicts: rank.dedup stamps same-group cross-source Signal divergence on each
+        # survivor at MERGE time (the only place the collapsed members are still visible);
+        # collect the survivors' stamps here. Key ABSENT when no conflict → zero noise.
+        _cf = [c for d in ranked for c in (d.metadata or {}).get("signal_conflicts", [])][:5]
+        if _cf:
             meta["conflicts"] = _cf
     except Exception:  # noqa: BLE001 — an enrichment failure must never break the search
         pass

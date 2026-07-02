@@ -3,7 +3,7 @@ via a ``site:``-scoped web search, NOT by scraping the venue itself.
 
 Each row in ``search_index_sites.json`` becomes one adapter. All are ``explicit_only``:
 every call fires an external search-engine query, so they stay OUT of the broad
-fan-out — name them in ``sources=[...]`` (or penumbra_fetch). The result is the engine's
+fan-out — name them in ``sources=[...]`` (or penumbra_search 单源钻取). The result is the engine's
 indexed title + URL + snippet → Document (snippet is the content; the venue
 itself is login/JS-walled, so the snippet is the reachable signal).
 

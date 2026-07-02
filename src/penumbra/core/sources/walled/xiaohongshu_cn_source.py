@@ -561,7 +561,7 @@ def _cn_card_to_document(card) -> "Optional[Document]":
         source_id=note_id,
         url=full_url,
         title=title,
-        content="(card preview; call penumbra_add_url on this url for the full note body)",
+        content="(card preview; call penumbra_read on this url for the full note body)",
         author=author,
         signals=mk_signal("likes", likes, kind="engagement", by="xhs/liked_count"),
         metadata={"note_id": note_id, "via": "browser-dom"},
@@ -689,7 +689,7 @@ def _browser_search(query: str, limit: int) -> tuple[str, list]:
             return ("ok", page.content())
 
         # 'safe' (default) human profile — NOT _human.fast (fast is cleared ONLY for the international
-        # 小号; this WARNED account stays slower, safety research §5). timeout 85s < the penumbra_fetch search
+        # 小号; this WARNED account stays slower, safety research §5). timeout 85s < the penumbra_search 单源钻取 search
         # deadline (~90s) so cdp_call cleans up before the fetcher backstop fires.
         try:
             status, html = cdp_call(_flow, initial_url=None, timeout=85, cdp_url=_CN_CDP_URL)
@@ -842,7 +842,7 @@ class XiaohongshuCNAdapter:
                    "self-signed direct-API 切换): search 读 SSR 笔记卡片, 笔记正文 + 完整评论区走拦截+DOM; "
                    "forge nothing. signed direct-API 为 degraded fallback.")
     fetch_timeout = 120.0  # >= the browser path's 110s cdp_call (matches the rednote 小号); the old 90s
-                           # would let penumbra_add_url's backstop kill an in-progress fetch + orphan a 9224 tab.
+                           # would let penumbra_read's backstop kill an in-progress fetch + orphan a 9224 tab.
 
     def _alive(self) -> bool:
         # Alive if EITHER path is available: the browser path (primary) or the signed-API (fallback).

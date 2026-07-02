@@ -5,7 +5,7 @@ repository — every listed company's 年报/季报/招股书/ad-hoc 公告 as a
 DIRECT PDF link per hit. Google returns tutorials about CNINFO, never the structured filing
 index or the PDFs themselves. No login, no token (verified 2026-06-18: keyword '数据安全' →
 永信至诚/立思辰/天喻信息 公告 + finalpage/*.PDF links). Each adjunctUrl resolves to a fetchable
-PDF on static.cninfo.com.cn → pair with penumbra_read_document for full-text filing analysis. Telos
+PDF on static.cninfo.com.cn → pair with penumbra_read for full-text filing analysis. Telos
 Chinese 信息差 (authoritative financial disclosure).
 
 SHAPE: a JSON POST endpoint (BaseScrapeAdapter, bespoke curl_cffi). search(query) → keyword
@@ -63,7 +63,7 @@ def _ann_to_doc(a: dict) -> Optional[Document]:
     return Document(
         source="cninfo",
         source_id=str(a.get("announcementId") or adj),
-        url=_PDF_BASE + adj,  # the filing PDF — penumbra_read_document it for the full body
+        url=_PDF_BASE + adj,  # the filing PDF — penumbra_read it for the full body
         title=title,
         content=title,  # the index carries no abstract; the PDF at `url` IS the body
         author=sec_name,
@@ -79,7 +79,7 @@ class CninfoAdapter(BaseScrapeAdapter):
     description = (
         "巨潮资讯网 CNINFO — the SSE/SZSE OFFICIAL A-share disclosure repository (the Chinese EDGAR). "
         "Keyword full-text search over every listed-company filing (年报/季报/招股书/ad-hoc 公告), each "
-        "hit a DIRECT PDF link (static.cninfo.com.cn) — pair with penumbra_read_document for the body. "
+        "hit a DIRECT PDF link (static.cninfo.com.cn) — pair with penumbra_read for the body. "
         "Google can't return this structured filing index. No login. Reach for 上市公司/A股 "
         "disclosures / 财报 / 年报 / 公告 / 招股书 on a company or topic."
     )

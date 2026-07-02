@@ -14,7 +14,7 @@ total-results 72654, newest item retracted same day.
 
 Caveat (in the description so the agent routes right): the raw stream skews heavily biomedical, so
 AI/NLP signal is sparse — treat it as a filterable firehose (pass ``query=``), not a pre-curated
-NLP feed. explicit_only: named via penumbra_fetch (a topic-filtered integrity probe), not the broad sweep.
+NLP feed. explicit_only: named via penumbra_search 单源钻取 (a topic-filtered integrity probe), not the broad sweep.
 """
 
 from __future__ import annotations
@@ -39,10 +39,10 @@ class CrossrefRetractionsAdapter(BaseAPIAdapter):
         "Crossref 撤稿通知流 (filter=update-type:retraction) — 最新撤稿的结构化记录: 撤稿通知 DOI + "
         "被撤论文 DOI (update-to) + 期刊/出版商/撤稿日期/原作者. MONITOR 研究诚信 + STRUCTURE (网搜只给"
         "撤稿的散文报道, 这里给逐条机读记录, 最新在前). query= 可按主题过滤 (如 'language model'). "
-        "注意整体偏生物医学, AI/NLP 信号稀疏 — 当可过滤的 firehose 用, 非预筛 NLP 榜. 命名 penumbra_fetch. "
+        "注意整体偏生物医学, AI/NLP 信号稀疏 — 当可过滤的 firehose 用, 非预筛 NLP 榜. 命名钻取 (penumbra_search 单源 raw). "
         "补 penumbra_paper_enrich (查单篇论文撤稿/诚信) 的逆向: 给最近撤稿的流."
     )
-    explicit_only = "Crossref 撤稿 MONITOR firehose (偏生物医学); 命名 penumbra_fetch 按主题查最近撤稿"
+    explicit_only = "Crossref 撤稿 MONITOR firehose (偏生物医学); 命名钻取 (penumbra_search 单源 raw) 按主题查最近撤稿"
     cache_ttl = 21600  # 6h: a retraction stream moves slowly
     rank_locally = False  # crossref sorts by created(desc) [no query] or relevance [query]; preserve it
     url_host = "crossref.org"

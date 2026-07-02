@@ -192,7 +192,7 @@ def _json_item_to_document(item: dict) -> Optional[Document]:
         source_id=note_id,
         url=url,
         title=title,
-        content="(card preview; call penumbra_add_url on this url for the full note body)",
+        content="(card preview; call penumbra_read on this url for the full note body)",
         author=author,
         signals=mk_signal('likes', score, kind='engagement', by='xiaohongshu/score'),
         metadata={"time_hint": time_hint, "like_count": score},
@@ -780,7 +780,7 @@ class XiaohongshuAdapter:
             content = body or "(no body extracted; note may require interaction to load)"
 
         # Comments carry the crowd-sourced 经验 — render them into the body so any
-        # penumbra_add_url consumer sees them, and keep the structured list in metadata.
+        # penumbra_read consumer sees them, and keep the structured list in metadata.
         # "取到 N / 共 M" makes an incomplete harvest VISIBLE (honest completeness signal).
         comments = cdata.get("list") or []
         declared = cdata.get("declared")
@@ -880,7 +880,7 @@ class XiaohongshuAdapter:
             source_id=note_id or "",
             url=full_url,
             title=title,
-            content="(card preview; call penumbra_add_url on this url for the full note body)",
+            content="(card preview; call penumbra_read on this url for the full note body)",
             author=author,
             signals=mk_signal('likes', score, kind='engagement', by='xiaohongshu/score'),
             metadata={"time_hint": time_hint, "like_count": score},

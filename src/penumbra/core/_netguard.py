@@ -70,6 +70,26 @@ def _host_suffix_blocked(host: str) -> bool:
     return False
 
 
+# ── Public delegation surface ──────────────────────────────────────────────────────
+# Thin public aliases so an attacker-URL fetcher that pins the IP itself (curator.probe) can
+# reuse the SAME shape / IP / host-suffix decisions instead of re-implementing them. probe keeps
+# its own socket.getaddrinfo + connect mechanics; only the DECISIONS live here (one guard).
+def ip_is_blocked(ip: "ipaddress.IPv4Address | ipaddress.IPv6Address") -> bool:
+    """Public: True iff this resolved IP is a range we must never connect to. See _ip_is_blocked."""
+    return _ip_is_blocked(ip)
+
+
+def host_suffix_blocked(host: str) -> bool:
+    """Public: True iff this hostname is on the literal denylist. See _host_suffix_blocked."""
+    return _host_suffix_blocked(host)
+
+
+def validate_url_shape(url: str) -> "tuple[Optional[dict], Optional[str]]":
+    """Public: validate scheme / userinfo / port on a single URL (no DNS). See _validate_url_shape.
+    (parsed_parts, None) or (None, reason in {bad_scheme, userinfo, bad_port, dns})."""
+    return _validate_url_shape(url)
+
+
 def _resolve_safe_ip(host: str) -> "tuple[Optional[str], Optional[int], Optional[str]]":
     """Resolve ``host`` and validate EVERY returned IP. Returns (safe_ip_literal, family, None) or
     (None, None, blocked_reason). Resolve-once / pin-the-IP: a caller that CONNECTS to the returned

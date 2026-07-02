@@ -13,7 +13,7 @@ Verified by direct CDP test 2026-06-07 (NO login required for any of these):
 NOT usable from our datacenter egress IP (served a login/gateway page): HardwareZone
 (forums.hardwarezone.com.sg) -> keep using its search-index source.
 
-Workflow: DISCOVER via the matching search-index source, then penumbra_add_url the result
+Workflow: DISCOVER via the matching search-index source, then penumbra_read the result
 URL here for the full text. READ-ONLY, no login, URL-only (search() is []).
 """
 
@@ -56,7 +56,7 @@ class CdpFulltextAdapter:
         "Full-text via the CDP real browser for venues that wall/403 headless but render for a "
         "real browser (Quora, Blind/teamblind, Glassdoor, 脉脉/maimai, LinkedIn public posts, "
         "X/Twitter profiles+tweets). Discover via the matching search-index source, then "
-        "penumbra_add_url the URL here to turn a snippet into the full post/article/answer. "
+        "penumbra_read the URL here to turn a snippet into the full post/article/answer. "
         "READ-ONLY, no login. LinkedIn limited to /posts/ (public Track A only)."
     )
 

@@ -37,9 +37,9 @@ class DataGovSgPassesAdapter(BaseAPIAdapter):
         "新加坡非居民人口按准证类型占比 (data.gov.sg DataStore 官方统计) — Work Permit / S Pass / "
         "Employment Pass / 家属准证 / 学生准证 等占非居民人口的逐年百分比序列. SG 移民/外籍劳动力结构"
         "一手官方数据 (网搜给不出可解析的时间序列). 新加坡移民问题的决策语境: 准证构成 = decision-context. "
-        "命名 penumbra_fetch."
+        "命名钻取 (penumbra_search 单源 raw)."
     )
-    explicit_only = "data.gov.sg 准证类型占比 (单数据集, 统计 lookup); 命名 penumbra_fetch"
+    explicit_only = "data.gov.sg 准证类型占比 (单数据集, 统计 lookup); 命名钻取 (penumbra_search 单源 raw)"
     cache_ttl = 86400  # daily: an annual statistic
     rank_locally = True  # small dataset; filter by DataSeries name against the query
     url_host = "data.gov.sg"

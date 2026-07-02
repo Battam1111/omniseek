@@ -29,6 +29,7 @@ from urllib.parse import urlsplit
 import httpx
 
 from penumbra.core import auth, diag
+from penumbra.core._guard import BackendGuard
 
 logger = logging.getLogger(__name__)
 
@@ -40,12 +41,6 @@ TIMEOUT = 20
 
 _BREAK_AFTER = 5      # consecutive failures that open the circuit
 _BREAK_FOR_S = 120.0  # seconds the circuit stays open
-_state = {"fails": 0, "open_until": 0.0, "last_429": 0.0,
-          # Per-bucket budget-exhaustion reset (monotonic deadline). OpenAlex 2026 gives the api_key
-          # and the anonymous per-IP path SEPARATE $1/day credit buckets; when one 429s "insufficient
-          # budget" we mark it dry until its reset and route to the other (get_json's two-lane spill).
-          "dry_until": {"keyed": 0.0, "anon": 0.0}}
-_lock = threading.Lock()
 
 # OpenAlex's 2026 credit model (verified 2026-06-17 from the live 429 body + rate headers): every
 # call costs $0.0001 and each IDENTITY gets a $1/day budget = 10,000 calls/day, resetting at midnight
@@ -60,7 +55,6 @@ _lock = threading.Lock()
 # (the polite-pool fast-lane is dead). The concurrency cap + rate pacer + breaker remain the load
 # bounds, independent of the credit budget.
 _MAX_CONCURRENCY = 8
-_sema = threading.BoundedSemaphore(_MAX_CONCURRENCY)
 
 # Rate cap: space OpenAlex request STARTS at least _MIN_INTERVAL_S apart so a fan-out across the 40+
 # OpenAlex-backed sources (the health sweep, the org_watch cron, a workflow's cohort burst) can never
@@ -74,8 +68,22 @@ _MIN_INTERVAL_S = 0.2
 # field_skeleton sit 886s on its gate (brain: eye-s2-rate-gate-hang-2026-06-21). Past this, fail fast
 # (raise OpenAlexDown → caller degrades to cache/empty) instead of hanging for minutes.
 _PACE_MAX_WAIT_S = 15.0
-_pace_state = {"next_at": 0.0}
-_pace_lock = threading.Lock()
+
+# The shared load-guard (concurrency cap + rate pacer + circuit breaker): the byte-identical machinery
+# _openalex / _s2 / _github each carried, extracted to _guard (2026-07-01 parsimony audit P1). The
+# breaker state dict + its lock, the semaphore and the pace lock/state now live on the guard; the
+# module reaches them by name below so every threshold, sleep, log message and error path is unchanged.
+# extra_state carries OpenAlex's per-bucket budget-exhaustion reset (monotonic deadline): OpenAlex 2026
+# gives the api_key and the anonymous per-IP path SEPARATE $1/day credit buckets; when one 429s
+# "insufficient budget" we mark it dry until its reset and route to the other (get_json's two-lane spill).
+_guard = BackendGuard("openalex", _MAX_CONCURRENCY, break_after=_BREAK_AFTER,
+                      break_for_s=_BREAK_FOR_S, min_interval_s=_MIN_INTERVAL_S,
+                      extra_state={"dry_until": {"keyed": 0.0, "anon": 0.0}}, log=logger)
+_state = _guard.state   # health probes + lane selection read fails / open_until / last_429 / dry_until
+_lock = _guard.lock
+_sema = _guard.sema
+_pace_state = _guard.pace_state   # read-only backlog probe; aliases the guard's slot reservation
+_pace_lock = _guard.pace_lock
 
 
 def _load_api_key() -> Optional[str]:
@@ -161,12 +169,7 @@ def _pace() -> None:
     """Reserve the next request-start slot (>= _MIN_INTERVAL_S after the previous), then wait for it.
     The slot reservation is under the lock; the wait is NOT, so callers do not serialize on the lock
     itself, only on the wire-rate. Bounds OpenAlex requests/second across all callers + threads."""
-    with _pace_lock:
-        start = max(time.monotonic(), _pace_state["next_at"])
-        _pace_state["next_at"] = start + _MIN_INTERVAL_S
-    delay = start - time.monotonic()
-    if delay > 0:
-        time.sleep(delay)
+    _guard.pace()
 
 
 def _pace_backlog_s() -> float:
@@ -174,7 +177,7 @@ def _pace_backlog_s() -> float:
     _PACE_MAX_WAIT_S means the backlog is pathological (a 429 storm) and get_json fails fast instead
     of inheriting the whole queue. The fast-fail lives at get_json's top (beside the breaker check),
     not in _pace(), so it never tangles with the in-loop retry/fails bookkeeping."""
-    return max(0.0, _pace_state["next_at"] - time.monotonic())
+    return _guard.pace_backlog_s()
 
 
 def _retry_after(resp, default: float = 0.0) -> float:
@@ -333,8 +336,7 @@ def get_json(path: str, params: Optional[dict] = None, timeout: float = TIMEOUT)
                     time.sleep(min(_retry_after(resp, 1.5), 5.0))
                     continue
                 resp.raise_for_status()
-                with _lock:
-                    _state["fails"] = 0
+                _guard.record_ok()  # reset the consecutive-failure streak
                 _record_ok(caller, lane_name)  # budget-spending success → tally to its caller
                 return resp.json()
             except Exception as exc:  # noqa: BLE001
@@ -342,12 +344,7 @@ def get_json(path: str, params: Optional[dict] = None, timeout: float = TIMEOUT)
                 if attempt == 1:
                     time.sleep(1.0)
         # this bucket failed (budget-429 spill, or two transient failures) → try the next bucket
-    with _lock:
-        _state["fails"] += 1
-        if _state["fails"] >= _BREAK_AFTER:
-            _state["open_until"] = time.time() + _BREAK_FOR_S
-            _state["fails"] = 0
-            logger.warning("openalex circuit OPEN for %.0fs (consecutive failures)", _BREAK_FOR_S)
+    _guard.record_fail()  # one failure; opens the circuit at _BREAK_AFTER consecutive (logs on open)
     # Every lane failed (budget-429 spill or two transient failures each). Surface the last
     # exception + the path so the fixing agent sees WHY OpenAlex gave nothing (429 budget, 5xx,
     # timeout): only on this real-failure exit, never the success return above.

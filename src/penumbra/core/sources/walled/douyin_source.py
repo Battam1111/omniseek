@@ -103,10 +103,10 @@ class DouyinAdapter(BaseCDPAdapter):
         "抖音 — 中国第一短视频平台的登录墙网页搜索 (UNWALL). 一手 留学/移民/海外生活、政务/官方号公告、"
         "创作者实时评论, 视频原生, 与 知乎(文字问答)/小红书(生活笔记)/一亩三分地(北美技术移民) 不重叠. "
         "隔离 小号 会话 (9225 专属 Chrome, 同小红书 9223 模式). 返回视频的标题/文案、作者、互动数 + 视频 URL "
-        "(再对该 url 调 penumbra_transcribe 可转写语音正文). 命名调用 (penumbra_fetch), 不进广搜."
+        "(再对该 url 调 penumbra_transcribe 可转写语音正文). 命名调用 (penumbra_search 单源钻取), 不进广搜."
     )
     needs_credentials = True
-    explicit_only = "抖音 walled (isolated 9225 小号 session, account-rate-sensitive); named via penumbra_fetch"
+    explicit_only = "抖音 walled (isolated 9225 小号 session, account-rate-sensitive); named via penumbra_search 单源钻取"
     cdp_url = DOUYIN_CDP
     cdp_timeout = 60
     cache_ttl = 1800  # 30 min: balances freshness vs sparing the single 小号 session a retry-storm
