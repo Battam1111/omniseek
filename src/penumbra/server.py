@@ -105,8 +105,8 @@ _PENUMBRA_INSTRUCTIONS = (
     "keep warming). penumbra_sensor (standing queries with novelty detection; action=create/list/"
     "delete/run). penumbra_ruling (record/list/retract your identity rulings same_as|not_same_as; "
     "action=create/list/delete — the one judgment channel the graph's working policy applies). "
-    "penumbra_graph (the memory of relations: find -> stats -> neighborhood -> between -> voices; "
-    "policies conservative|working|exploratory). Scholarly depth: penumbra_field_skeleton / "
+    "penumbra_graph (the memory of relations: find -> stats -> neighborhood -> between -> voices -> "
+    "since -> similar; policies conservative|working|exploratory). Scholarly depth: penumbra_field_skeleton / "
     "penumbra_paper_recommend / penumbra_paper_enrich / penumbra_resolve_identity / penumbra_coauthors / "
     "penumbra_institution_cohort (per-tool contracts in their docstrings). Curator (source "
     "lifecycle): penumbra_curator_view + penumbra_curator_act. "
@@ -1504,7 +1504,8 @@ def penumbra_gather(calls: list[dict], wait_s: LenientInt = 60) -> dict:
 def penumbra_graph(view: str, anchor: str = "", label_query: str = "", kind: str = "",
               depth: LenientInt = 1, types: Optional[list[str]] = None,
               policy: str = "conservative", max_nodes: LenientInt = 40,
-              other: str = "", doc_ids: Optional[list[str]] = None) -> dict:
+              other: str = "", doc_ids: Optional[list[str]] = None,
+              date: str = "", k: LenientInt = 10) -> dict:
     """The eye's MEMORY OF RELATIONS — read-only, budgeted projections of ONE graph.
 
     Everything the eye perceives is a statement with provenance ("X relates to Y, per Z");
@@ -1533,6 +1534,16 @@ def penumbra_graph(view: str, anchor: str = "", label_query: str = "", kind: str
       authored; the independence counter (mirrors collapse, shared-speaker docs merge, docs with
       zero evidence land in ``unresolved`` and are NEVER counted as a voice). Input capped at 64 doc
       ids by explicit error; non-``doc:`` ids come back in ``skipped``.
+    • view="since" (anchor, date; optional types, max_nodes) -> the accretion log: what accreted
+      around an anchor after a date (``YYYY-MM-DD`` or full ISO), STORED edges only, tier + method
+      shown on every row, NO collapsing (accretion is a fact stream, not an identity question).
+      Derived edges carry no timestamps and are structurally absent. The sensor consumer ("what
+      changed around this person / lab / query").
+    • view="similar" (anchor doc, k) -> vector-nearest doc CANDIDATES for an anchor doc, method
+      align:embed, by RANK (k is a budget, never a score threshold). PROPOSALS only, never collapsed
+      by any policy; verify, then ratify with penumbra_ruling. Coverage: vector-indexed docs only (a thin
+      row is not embedded -> an error naming that line). NO cosine scores (rank is the honest unit),
+      NO edges (a listing, not graph structure).
     Identity rulings are WRITTEN via penumbra_ruling (this tool stays read-only, hence gather-safe).
 
     ``policy`` = conservative | working | exploratory: NAMED METHOD-SETS for how far to trust
@@ -1561,7 +1572,7 @@ def penumbra_graph(view: str, anchor: str = "", label_query: str = "", kind: str
     it must NEVER break search or recall.
     """
     v = (view or "").strip().lower()
-    valid_views = ("find", "stats", "neighborhood", "between", "voices")
+    valid_views = ("find", "stats", "neighborhood", "between", "voices", "since", "similar")
     if v not in valid_views:
         return {"error": f"unknown view {view!r}; valid: {' | '.join(valid_views)}"}
 
@@ -1580,6 +1591,10 @@ def penumbra_graph(view: str, anchor: str = "", label_query: str = "", kind: str
             return recall.graph.voices(doc_ids or [], p)
         if v == "between":
             return recall.graph.between(anchor, other, types, p, int(max_nodes or 40))
+        if v == "since":
+            return recall.graph.since(anchor, date, types, int(max_nodes or 40))
+        if v == "similar":
+            return recall.graph.similar(anchor, int(k or 10))
         d = min(int(depth or 1), 2)  # depth cap enforced at the surface (budget discipline)
         return recall.graph.neighborhood(anchor, d, types, p, int(max_nodes or 40))
     except Exception as exc:  # noqa: BLE001 — a graph failure NEVER breaks the caller (fail-open)

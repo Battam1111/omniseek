@@ -27,12 +27,34 @@ so the ranking is auditable, never a black box.
 
 from __future__ import annotations
 
+import logging
 import math
 import re
 from datetime import datetime, timezone
 
 from penumbra.core import relevance
 from penumbra.core.normalize import Document
+
+logger = logging.getLogger(__name__)
+
+from penumbra.core.recall import graph as _graph  # noqa: E402 — the graph write verb + mint registry
+
+# Vocabulary this tap MINTS (vocabulary-by-minting, design section 3): declared on the tap itself,
+# registered at import, folded into ``_graph.declared_vocabulary`` as the computed union; the smoke
+# tripwire bounds ACTUAL graph data to that union. The conflicts tap is the P4 event layer's second
+# half: it mints ``conflicts`` A-tier edges (doc <-> doc) where dedup already found same-work signal
+# DIVERGENCE across sources. NO node kinds (doc endpoints are virtual/thin), NO new methods beyond
+# ``signal:divergence``. The edge attrs carry the signal NAME and its KIND (e.g. "engagement"), so
+# views/agents can mechanically filter the cross-platform engagement-count noise class the GRPO
+# dogfood exposed. THE DETECTION lives in ``dedup`` (the only place a group's collapsed members are
+# still visible); the HOOK is fail-open on the ranked-search path (fetcher.py).
+GRAPH_MINTS = {
+    "kinds": [],
+    "edge_types": ["conflicts"],
+    "methods": ["signal:divergence"],
+}
+_graph.register_mints("conflicts", kinds=GRAPH_MINTS["kinds"],
+                      edge_types=GRAPH_MINTS["edge_types"], methods=GRAPH_MINTS["methods"])
 
 _ARXIV_RE = re.compile(r"arxiv\.org/(?:abs|pdf)/(\d{4}\.\d{4,5})", re.I)
 _DOI_RE = re.compile(r"10\.\d{4,9}/[-._;()/:a-z0-9]+", re.I)
@@ -119,6 +141,14 @@ def dedup(docs: list[Document]) -> list[Document]:
             #     ranking (the razor); fail-open.
             try:
                 _confs: list[dict] = []
+                # Parallel to the agent-visible signal_conflicts stamp: the graph tap's RECORDS,
+                # carrying each member's full (source, source_id) identity + the signal's KIND +
+                # the two raw values, so _conflict_mints can build a doc<->doc conflicts edge the
+                # dedup stamp (topic/source/claim strings only) cannot reconstruct. Stamped under a
+                # PRIVATE key (_conflict_pairs) the fetcher POPS before returning — never agent-facing
+                # (the STABILITY contract: signal_conflicts stays byte-identical, the tap rides beside
+                # it). Same comparison, one pass; capped identically at 3.
+                _conf_pairs: list[dict] = []
                 for _i, _da in enumerate(grp):
                     for _db in grp[_i + 1:]:
                         if _da.source == _db.source or len(_confs) >= 3:
@@ -134,8 +164,19 @@ def dedup(docs: list[Document]) -> list[Document]:
                                     "source_b": _db.source,
                                     "claim_b": f"{_nm}={_v2} ({_db.signals[_nm].unit or ''})",
                                 })
+                                # the tap record: full identities + the signal's semantic kind
+                                # (the noise-class filter, e.g. "engagement") + the raw values.
+                                _conf_pairs.append({
+                                    "a": (_da.source, _da.source_id),
+                                    "b": (_db.source, _db.source_id),
+                                    "signal": _nm,
+                                    "kind": getattr(_da.signals[_nm], "kind", None),
+                                    "values": {_da.source: _v1, _db.source: _v2},
+                                })
                 if _confs:
                     add["signal_conflicts"] = _confs[:3]
+                if _conf_pairs:
+                    add["_conflict_pairs"] = _conf_pairs[:3]   # PRIVATE: fetcher pops before return
             except Exception:  # noqa: BLE001 — one signal's failure never corrupts the merge
                 pass
         # Curator P2 attribution stamps (pure facts, no judgment; stamped on EVERY survivor,
@@ -163,6 +204,57 @@ def dedup(docs: list[Document]) -> list[Document]:
             best.metadata = {**(best.metadata or {}), **add}
         out.append(best)
     return out
+
+
+# ── graph write tap (design section 6 + P4 taps row): mint conflicts edges from dedup divergence ──
+# THE MINT RULE (design "Mint the product"): the tap mints what dedup RETURNS as a divergence
+# record, not its internal comparison material. Each record carries both members' full identities +
+# the signal's name + KIND + the two raw values (collected in ``dedup`` under the private
+# ``_conflict_pairs`` stamp the fetcher pops). The builder is PURE (records -> (nodes, edges)) so
+# the smoke can golden-test it with zero network; ``_conflict_tap`` wraps enqueue_graph fail-open (a
+# tap failure must NEVER break the search the agent gets). NO nodes are minted — the doc endpoints
+# are virtual/thin document rows, and a stored edge does not require a node row for its endpoints.
+
+def _conflict_mints(records: list) -> tuple[list[dict], list[dict]]:
+    """From dedup's conflict RECORDS (each ``{a: (source, source_id), b: (source, source_id),
+    signal: str, kind: str|None, values: {...}}``): one ``conflicts`` A-tier edge doc <-> doc per
+    record, method ``signal:divergence``, attrs {signal, kind, values}. ``kind`` is the SIGNAL's
+    kind field (e.g. "engagement") lifted from the diverging signals, so views/agents can
+    mechanically filter the engagement-count noise class. No nodes (doc endpoints are virtual/thin).
+    The writer normalizes the symmetric pair to src < dst, so do NOT pre-sort here. A record with a
+    missing endpoint is skipped (fail-open). Pure."""
+    edges: list[dict] = []
+    for rec in (records or []):
+        if not isinstance(rec, dict):
+            continue
+        a = rec.get("a") or ()
+        b = rec.get("b") or ()
+        if len(a) != 2 or len(b) != 2 or not a[0] or not a[1] or not b[0] or not b[1]:
+            continue
+        a_nid = _graph.doc_node_id(a[0], a[1])
+        b_nid = _graph.doc_node_id(b[0], b[1])
+        if a_nid == b_nid:
+            continue
+        edges.append({"src": a_nid, "dst": b_nid, "type": "conflicts", "tier": "A",
+                      "method": "signal:divergence",
+                      "attrs": {"signal": rec.get("signal"), "kind": rec.get("kind"),
+                                "values": rec.get("values")}})
+    return [], edges
+
+
+def _conflict_tap(records: list) -> None:
+    """FAIL-OPEN wrapper (the relations.py idiom): build the conflicts edges from dedup's records and
+    enqueue them through the single-writer queue. Never raises (a tap failure must NEVER break the
+    search); NO-OP when writes are disabled (cron) or there are no records. Import the writer INSIDE
+    the try so an import hiccup degrades to a swallow, never a broken search."""
+    try:
+        _nodes, edges = _conflict_mints(records)
+        if not edges:
+            return
+        from penumbra.core.recall import writer
+        writer.enqueue_graph([], edges)
+    except Exception as exc:  # noqa: BLE001 — a tap failure must NEVER break the search
+        logger.debug("conflicts graph tap swallowed: %s", exc)
 
 
 def _recency(doc: Document, now: datetime) -> float:

@@ -42,6 +42,15 @@ All notable changes to Penumbra are documented here. The format follows
   edges); `penumbra_graph` gains `between` (bounded connection paths) and `voices` (the
   independence counter, with an honest `unresolved` bucket); new `penumbra_ruling` tool
   records / lists / retracts identity rulings the `working` policy applies at read time.
+- **The event layer (P4)**: sensor runs mint `observed` edges from the run diff (a no-news run
+  mints nothing); the dedup conflict detector mints `conflicts` edges carrying the signal name
+  and kind (so engagement-count noise is filterable); `penumbra_graph` gains `since`, the
+  accretion log around a node (stored edges only, tier and method visible, no collapsing).
+- **Alignment candidates as a view, not writes (P5)**: `penumbra_graph` gains `similar`, the
+  vector-nearest doc candidates for an anchor doc, derived at query time from the live vector
+  index (nothing stored, so an embedding-model upgrade upgrades every answer). Top-k by rank,
+  no scores, and no collapse policy ever includes embedding proximity: candidates are
+  proposals for your judgment, recorded via `penumbra_ruling`.
 - Sensors: optional `notify` flag pushes on new results (runner-side).
 
 - PyPI publish (`pip install penumbra-mcp`) planned.

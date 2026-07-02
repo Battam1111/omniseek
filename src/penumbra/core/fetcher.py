@@ -967,6 +967,21 @@ def search_ranked(
             meta["conflicts"] = _cf
     except Exception:  # noqa: BLE001 — an enrichment failure must never break the search
         pass
+    # ── P4 conflicts graph tap (fail-open) ── dedup also stamped each survivor with a PRIVATE
+    # _conflict_pairs record (full identities + signal kind + values) beside the agent-visible
+    # signal_conflicts. Collect those records, mint the doc<->doc conflicts edges (enqueue-only,
+    # after dedup, NEVER blocking), then POP the private key so it never reaches the agent (the
+    # STABILITY contract: the doc shape the agent sees is byte-identical to pre-P4). The tap is a
+    # no-op off the eye-http process (WRITES_ENABLED off) exactly like every other tap.
+    try:
+        _conf_pairs = [c for d in ranked for c in (d.metadata or {}).get("_conflict_pairs", [])]
+        if _conf_pairs:
+            rank._conflict_tap(_conf_pairs)
+        for _d in ranked:
+            if _d.metadata and "_conflict_pairs" in _d.metadata:
+                _d.metadata.pop("_conflict_pairs", None)   # private: never agent-facing
+    except Exception:  # noqa: BLE001 — the tap NEVER touches the search result
+        pass
     # ── Curator P2 yield tap (fail-open) ── records each source's marginal contribution to this
     # top-K. Skipped for synthetic/in-process searches (record_yield=False) and cache-only pickups
     # so they never pollute the real-traffic statistic. The tap NEVER touches `ranked`

@@ -70,9 +70,12 @@ If a xiaohongshu note URL appears, `penumbra_read(url)` retrieves full note + co
   realization: hand it the doc ids from a search and it collapses them to distinct upstream voices
   via same_as + authored, so "5 sources agree" becomes "3 independent voices agree" (or fewer). The
   `unresolved` bucket is the honesty line: docs it could not resolve are returned separately, NEVER
-  counted as voices. The other graph views (`find` -> `stats` -> `neighborhood` -> `between`) walk
-  the relation memory; when an exploratory view surfaces a same_as candidate you verify, record it
-  with `penumbra_ruling(action=create)` so the `working` policy collapses it thereafter.
+  counted as voices. The other graph views (`find` -> `stats` -> `neighborhood` -> `between` ->
+  `since` -> `similar`) walk the relation memory: `since` projects what accreted around a node after
+  a date (stored edges only, tier + method shown, no collapsing), and `similar` lists the
+  vector-nearest doc candidates for an anchor doc by rank (proposals only, method `align:embed`). When
+  an exploratory view or `similar` surfaces a same_as candidate you verify, record it with
+  `penumbra_ruling(action=create)` so the `working` policy collapses it thereafter.
 - **Flag conflicts, don't average**: when _meta.conflicts appears, present the divergence,
   don't pick a winner.
 - **Stamp freshness**: carry each key fact's freshness_days.

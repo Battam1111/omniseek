@@ -426,6 +426,38 @@ def _stored_edges(con, frontier: list[str], types: Optional[list[str]]) -> list[
     return [{"src": s, "dst": d, "type": t, "method": m} for (s, d, t, m) in rows]
 
 
+def _stored_edges_since(con, anchor: str, types: Optional[list[str]], cutoff: float) -> list[dict]:
+    """STORED graph_edges rows touching ``anchor`` (either endpoint, one hop) whose ``first_seen`` is
+    >= ``cutoff`` — the accretion-log SELECT the ``since`` view needs. Unlike the shared
+    ``_stored_edges`` (which returns only src/dst/type/method), this returns ``tier`` + ``first_seen``
+    too: since projects accretion HISTORY with honest epistemics (every row shows its tier + method;
+    the reader judges), and it orders by recency, so both columns are load-bearing. Scoped to the one
+    anchor (never a full-table scan); optional type filter. Fail-open to []."""
+    if not anchor:
+        return []
+    type_clause = ""
+    params: list = [anchor, cutoff]
+    if types:
+        tmarks = ",".join("?" * len(types))
+        type_clause = f" AND type IN ({tmarks})"
+        params = [anchor, *types, cutoff, anchor, *types, cutoff]
+    else:
+        params = [anchor, cutoff, anchor, cutoff]
+    sql = (
+        f"SELECT src, dst, type, tier, method, first_seen FROM graph_edges "
+        f"WHERE src = ?{type_clause} AND first_seen >= ? "
+        f"UNION SELECT src, dst, type, tier, method, first_seen FROM graph_edges "
+        f"WHERE dst = ?{type_clause} AND first_seen >= ?"
+    )
+    try:
+        rows = con.execute(sql, params).fetchall()
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("graph._stored_edges_since failed: %s", exc)
+        return []
+    return [{"src": s, "dst": d, "type": t, "tier": ti, "method": m, "first_seen": fs}
+            for (s, d, t, ti, m, fs) in rows]
+
+
 def _anchor_fp(con, source: str, source_id: str) -> Optional[str]:
     """The title fingerprint of a frontier doc node — docs.fp if indexed, else the thin row's
     ``attrs_json.fp`` (P2.0 thin-memory coverage). Returns the fp ONLY when it is a ``title:``
@@ -977,6 +1009,157 @@ def between(a: str, b: str, types: Optional[list[str]] = None, policy: str = "co
     result["edges"] = edges_out
     result["capped"] = capped
     return result
+
+
+# ── since: the accretion log (design section 7 + the P4 sensor consumer) ─────────────────────────
+# "What accreted around X after T." STORED edges only: derived edges (title_fp / id_eq same_as) are
+# computed live and carry NO timestamps, so they are structurally absent here — since projects a
+# fact STREAM (what changed), not an identity question, and it does NOT collapse identity (no policy,
+# no rulings overlay). Every row returns WITH its tier + method visible: honest epistemics, the
+# reader judges. The natural consumer is a sensor's observed edges ("what did this standing query
+# newly surface after T"), but any stored edge touching the anchor qualifies.
+
+def _parse_since_cutoff(date: str) -> Optional[float]:
+    """Parse ``date`` to an epoch-UTC float. Accepts a bare ``YYYY-MM-DD`` (= midnight UTC that day)
+    or a full ISO timestamp (``2026-07-03T12:00:00+00:00``; a naive timestamp is read as UTC). Returns
+    None when empty/unparseable (the caller maps that to an error). Mechanical, no guessing."""
+    s = (date or "").strip()
+    if not s:
+        return None
+    try:
+        if len(s) == 10 and s[4] == "-" and s[7] == "-":   # bare YYYY-MM-DD -> midnight UTC
+            dt = datetime.strptime(s, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        else:
+            dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+        return dt.timestamp()
+    except Exception as exc:  # noqa: BLE001 — an unparseable date is a caller error, not a crash
+        logger.debug("graph._parse_since_cutoff failed for %r: %s", date, exc)
+        return None
+
+
+def since(anchor: str, date: str, types: Optional[list[str]] = None, max_nodes: int = 40) -> dict:
+    """The ACCRETION LOG around a node: the STORED edges touching ``anchor`` (one hop, both
+    directions, optional ``types`` filter) whose ``first_seen`` is >= the parsed cutoff. Derived
+    edges (title_fp / doc-work id_eq same_as) are computed live and carry NO timestamps, so this view
+    is STORED-ROWS-ONLY and they are structurally absent. There is NO policy and NO rulings overlay:
+    since projects accretion HISTORY, it does not collapse identity; every edge row returns WITH its
+    ``tier`` and ``method`` visible (honest epistemics — the reader judges).
+
+    ``date`` accepts ``YYYY-MM-DD`` (= midnight UTC) or a full ISO timestamp; empty/unparseable ->
+    ``{"error": ...}``. Returns ``{edges: [{src, dst, type, tier, method, first_seen}], nodes:
+    [hydrated endpoints], since: <parsed cutoff, ISO>, capped, truncation}`` with the anchor's
+    neighborhood capped at ``max_nodes`` by the same MECHANICAL truncation as neighborhood (recency
+    then degree; edges whose endpoints were dropped are dropped too). Deterministic ordering
+    (first_seen DESC, then the edge tuple). Fail-open to empty on any error."""
+    max_nodes = max(1, int(max_nodes))
+    anchor = (anchor or "").strip()
+    cutoff = _parse_since_cutoff(date)
+    if cutoff is None:
+        return {"error": "since requires date=YYYY-MM-DD (or full ISO)"}
+    since_iso = datetime.fromtimestamp(cutoff, timezone.utc).isoformat()
+    result: dict = {"edges": [], "nodes": [], "since": since_iso, "capped": False,
+                    "truncation": "recency-then-degree"}
+    if not anchor:
+        return result
+    con = _con()
+    if con is None:
+        return result
+    try:
+        rows = _stored_edges_since(con, anchor, types, cutoff)
+        # Deterministic order: newest accretion first, then the edge tuple for a stable tie-break.
+        rows.sort(key=lambda e: (-(e.get("first_seen") or 0.0),
+                                 e.get("src") or "", e.get("dst") or "",
+                                 e.get("type") or "", e.get("method") or ""))
+        # Collect the endpoint node set (anchor + every edge endpoint), hydrate, then apply the
+        # SAME mechanical max_nodes truncation neighborhood uses; drop edges whose endpoints were cut.
+        node_ids: set = {anchor}
+        for e in rows:
+            node_ids.add(e["src"])
+            node_ids.add(e["dst"])
+        nodes = _hydrate_nodes(con, node_ids, anchor)
+        capped = len(nodes) > max_nodes
+        if capped:
+            nodes = _truncate_nodes(con, nodes, max_nodes, anchor)
+            kept_ids = {n["id"] for n in nodes}
+            rows = [e for e in rows if e["src"] in kept_ids and e["dst"] in kept_ids]
+        result["edges"] = rows
+        result["nodes"] = nodes
+        result["capped"] = capped
+    except Exception as exc:  # noqa: BLE001 — fail-open: a since failure never breaks the caller
+        logger.debug("graph.since failed: %s", exc)
+        return {"edges": [], "nodes": [], "since": since_iso, "capped": False,
+                "truncation": "recency-then-degree"}
+    return result
+
+
+# ── similar: the alignment CANDIDATES view (design "P5 shipped", the P5 sketch overturned) ────────
+# The earlier P5 sketch (a tap MINTING align:embed same_as candidate edges, exploratory-visible) is
+# overturned by two of this design's own principles, and the shipped form is a ZERO-WRITE view:
+#   (1) Durability: storing embedding neighbors freezes ONE model's judgment into the wall (the store
+#       must stay non-thinking so it appreciates as models improve), so candidates are DERIVED at
+#       query time from the live vec index, never stored — a model upgrade upgrades every future
+#       answer; nothing rots.
+#   (2) The razor: "similar" vs "same" always admits a reasoned objection (it is a JUDGMENT), so NO
+#       collapse policy may include align:embed, not even exploratory (embedding proximity in a
+#       collapse would fabricate identity out of topicality, corrupting voices). The ladder is:
+#       similar PROPOSES (top-k by RANK) -> the agent verifies -> penumbra_ruling records -> the working
+#       policy collapses. The method is the epistemic unit, carried to its end: align:embed exists
+#       ONLY as a proposal label, never as a stored edge method.
+
+def similar(anchor: str, k: int = 10) -> dict:
+    """Vector-NEAREST doc CANDIDATES for an anchor doc — PROPOSALS from embedding proximity, never
+    collapsed by any policy. ``anchor`` must be a ``doc:{source}:{source_id}`` id of a doc present in
+    the VECTOR index (the recall vec matrix covers indexed docs; thin rows have no content and are
+    not embedded). Reuses the anchor's OWN stored vector by its row identity (never re-embeds), ranks
+    all other vectors by cosine, and takes top-k BY RANK (k is a resource budget like max_nodes,
+    NEVER a similarity threshold: rank, never a score cutoff — the RRF discipline).
+
+    Returns ``{anchor, candidates: [{id, kind: "document", label: title, rank: 1..k}], method:
+    "align:embed", note, coverage, capped}``. Deliberately NO cosine scores (rank is the honest unit;
+    a score invites pseudo-precision) and NO edges (candidates are a listing, not graph structure).
+    An anchor that is NOT a ``doc:`` id, or not in the vector index (a thin/un-embedded doc), returns
+    ``{"error": ...}`` naming the coverage line. Fail-open to an empty candidate list on store
+    failure. This view WRITES NOTHING (the P1 zero-new-writes move, repeated)."""
+    coverage = "vector-indexed docs only"
+    anchor = (anchor or "").strip()
+    if not anchor.startswith("doc:"):
+        return {"error": f"similar needs a doc:{{source}}:{{source_id}} anchor ({coverage}); "
+                         f"got {anchor!r}"}
+    rest = anchor[len("doc:"):]
+    source, _, source_id = rest.partition(":")
+    if not source or not source_id:
+        return {"error": f"malformed doc anchor {anchor!r} (expected doc:{{source}}:{{source_id}})"}
+    k = max(1, int(k))
+    try:
+        rowid = store.anchor_rowid(source, source_id)
+        if rowid is None:
+            return {"error": f"anchor {anchor} is not in the vector index ({coverage}); "
+                             f"a thin / non-indexed doc has no embedding"}
+        # +1 over-fetch so capped is a STRICT truncation test (the find idiom): a full page whose
+        # (k+1)th neighbor does not exist is COMPLETE, not capped (no false "more exist" flag).
+        hits = store.similar_by_rowid(rowid, k + 1)
+        if hits is None:   # the anchor row itself is not in the current-model matrix
+            return {"error": f"anchor {anchor} is not in the vector index ({coverage}); "
+                             f"a thin / non-indexed doc has no embedding"}
+    except Exception as exc:  # noqa: BLE001 — fail-open: a similar failure never breaks the caller
+        logger.debug("graph.similar failed: %s", exc)
+        hits = []
+    capped = len(hits or []) > k
+    candidates: list[dict] = []
+    for i, (_rid, c_source, c_source_id, c_title) in enumerate((hits or [])[:k]):
+        candidates.append({"id": doc_node_id(c_source, c_source_id), "kind": "document",
+                           "label": c_title, "rank": i + 1})
+    return {
+        "anchor": anchor,
+        "candidates": candidates,
+        "method": "align:embed",
+        "note": ("candidates are PROPOSALS from embedding proximity, never collapsed by any policy; "
+                 "verify, then record a ruling via penumbra_ruling"),
+        "coverage": coverage,
+        "capped": capped,
+    }
 
 
 def _node_kind(node_id: str) -> str:

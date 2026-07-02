@@ -355,6 +355,79 @@ def vector_search(qvec, k: int = 60) -> list:
     return _hydrate_rowids(con, rowids, recall_via="vector")
 
 
+def anchor_rowid(source: str, source_id: str) -> Optional[int]:
+    """The ``docs.rowid`` for one ``(source, source_id)`` — the row identity the vector matrix aligns
+    on (``vec.rowid == docs.rowid``). None when the doc is not an indexed row (a thin/non-indexed
+    doc has no rowid, hence no vector). Fail-open to None."""
+    con = _read_con()
+    if con is None:
+        return None
+    try:
+        row = con.execute(
+            "SELECT rowid FROM docs WHERE source = ? AND source_id = ?", (source, source_id)
+        ).fetchone()
+        return int(row[0]) if row else None
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("anchor_rowid failed: %s", exc)
+        return None
+
+
+def similar_by_rowid(rowid: int, k: int = 10) -> Optional[list]:
+    """Vector-NEAREST docs to an INDEXED anchor doc, ranked by cosine over the cached matrix, the
+    anchor itself excluded. The P5 ``similar`` view's engine: it reuses the anchor's OWN stored
+    vector (never re-embeds) by its row identity, so a model upgrade upgrades every future answer and
+    nothing rots (the store stays non-thinking). Returns ``[(rowid, source, source_id, title)]`` in
+    cosine-RANK order (top-k BY RANK — k is a resource budget, never a score threshold; the RRF
+    discipline), or:
+      - ``None`` when the anchor is NOT in the current-model vector index (no rowid in the matrix:
+        a thin/un-embedded doc). The caller maps None to the coverage-line error.
+      - ``[]`` when the matrix is unavailable / empty / a failure (fail-open: similar degrades to
+        an empty candidate list, never an exception).
+    PURE RECALL: the cosine is never surfaced (rank is the honest unit); the caller adds no score."""
+    if _disabled or _np is None or rowid is None:
+        return []
+    con = _read_con()
+    if con is None:
+        return []
+    M, ids = _ensure_matrix(con)
+    if M is None or ids is None or len(ids) == 0:
+        return []
+    try:
+        # locate the anchor's row in the matrix by its docs.rowid; absent -> not vector-indexed.
+        pos = _np.where(ids == int(rowid))[0]
+        if pos.size == 0:
+            return None
+        q = M[int(pos[0])]                     # the anchor's OWN stored (already L2-normalized) vector
+        sims = M @ q
+        sims[int(pos[0])] = -_np.inf           # exclude the anchor itself from its own ranking
+        kk = min(max(1, int(k)), len(ids) - 1) if len(ids) > 1 else 0
+        if kk <= 0:
+            return []
+        top = _np.argpartition(-sims, kk - 1)[:kk]
+        top = top[_np.argsort(-sims[top])]
+        rowids = [int(ids[i]) for i in top]
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("similar_by_rowid failed: %s", exc)
+        return []
+    if not rowids:
+        return []
+    qmarks = ",".join("?" * len(rowids))
+    try:
+        rows = con.execute(
+            f"SELECT rowid, source, source_id, title FROM docs WHERE rowid IN ({qmarks})", rowids
+        ).fetchall()
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("similar_by_rowid hydrate failed: %s", exc)
+        return []
+    by_id = {r[0]: r for r in rows}
+    out: list = []
+    for rid in rowids:                          # preserve the cosine-rank order
+        r = by_id.get(rid)
+        if r is not None:
+            out.append((r[0], r[1], r[2], r[3]))
+    return out
+
+
 def _hydrate_one(con, doc_json, last_seen, source, recall_via, now=None):
     try:
         d = Document.model_validate(json.loads(doc_json))
