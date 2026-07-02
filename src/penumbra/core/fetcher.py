@@ -178,6 +178,23 @@ def _derive_access_tier(adapter: "SourceAdapter") -> str:
     return "free"  # public, no key (stable / scrape)
 
 
+def is_walled_source(name: str) -> bool:
+    """Whether source ``name`` is WALLED or circumvention tier — the operator-privacy boundary the
+    thin-memory tap keys off (what a logged-in account has retrieved is operator privacy, so those
+    docs become perception history only on an explicit profile opt-in). Keyed by NAME so callers
+    without the adapter (the recall writer hook) can classify. Fail-open to False (treat as public)
+    when the adapter is unknown or classification errors: walled adapters live under
+    ``sources/walled/`` (a stable module-path derivation), so this only ever mislabels the truly
+    non-walled, never the reverse."""
+    try:
+        a = get_adapter(name)
+        if a is None:
+            return False
+        return _derive_access_tier(a) in ("walled", "circumvention")
+    except Exception:  # noqa: BLE001 — classification must never break the caller
+        return False
+
+
 from penumbra.core import profile as _profile  # noqa: E402  — stdlib-only module, no import cycle
 
 
@@ -787,6 +804,95 @@ def _compute_source_diversity(ranked: list[Document]) -> dict:
             'unique_sources': len(sources_seen)}
 
 
+def _doc_sid(d: Document) -> str:
+    """The persisted source_id key for a doc — source_id, else url, else '' — matching the recall
+    writer's ``sid`` derivation so a stamp lookup keys on the SAME (source, source_id) a doc was
+    stored under."""
+    return str(getattr(d, "source_id", None) or getattr(d, "url", None) or "")
+
+
+def _stamp_seen_before(ranked: list[Document], t0_wall: float) -> None:
+    """Stamp ``metadata['seen_before']`` (+ ``first_seen_at`` when known) on each ranked doc: whether
+    THIS deployment had retrieved the doc BEFORE this search (the wall's novelty stamp). ONE batched
+    first_seen lookup across the perception memory — docs UNION thin document nodes (graph_nodes,
+    kind='document') — keyed on (source, source_id). ``seen_before`` is True iff a first_seen exists
+    AND is strictly earlier than ``t0_wall`` (this search's start), so a doc THIS search is the first
+    to see is NOT flagged (its first_seen >= t0_wall). Docs with no persisted first_seen (recall
+    disabled, or a synthetic doc) get NO stamp. Fail-open: any error leaves stamps absent."""
+    if not ranked:
+        return
+    from penumbra.core.recall import store
+    if store._disabled:
+        return
+    con = store._read_con()
+    if con is None:
+        return
+    # (source, sid) for every ranked doc, deduped; keep the doc refs to stamp after the lookup.
+    keys: list[tuple[str, str]] = []
+    seen_keys: set = set()
+    for d in ranked:
+        source = getattr(d, "source", None)
+        if not source:
+            continue
+        sid = _doc_sid(d)
+        if not sid:
+            continue
+        k = (source, sid)
+        if k not in seen_keys:
+            seen_keys.add(k)
+            keys.append(k)
+    if not keys:
+        return
+    first_seen: dict[tuple[str, str], float] = {}
+    _CHUNK = 400  # bound the SQL variable count per statement (row-value IN over pairs)
+    from penumbra.core.recall.graph import doc_node_id
+    for i in range(0, len(keys), _CHUNK):
+        chunk = keys[i:i + _CHUNK]
+        # (a) indexed docs (UNIQUE(source, source_id) → an index probe per pair).
+        try:
+            marks = ",".join(["(?,?)"] * len(chunk))
+            params: list = [x for pair in chunk for x in pair]
+            for source, sid, fs in con.execute(
+                f"SELECT source, source_id, first_seen FROM docs "
+                f"WHERE (source, source_id) IN (VALUES {marks})", params,
+            ).fetchall():
+                if fs is not None:
+                    first_seen[(source, sid)] = float(fs)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("seen_before docs lookup failed: %s", exc)
+        # (b) thin document nodes (graph_nodes id = doc:{source}:{sid}).
+        try:
+            id_to_key = {doc_node_id(s, sid): (s, sid) for (s, sid) in chunk}
+            id_marks = ",".join("?" * len(id_to_key))
+            for nid, fs in con.execute(
+                f"SELECT id, first_seen FROM graph_nodes "
+                f"WHERE kind = 'document' AND id IN ({id_marks})", list(id_to_key.keys()),
+            ).fetchall():
+                key = id_to_key.get(nid)
+                if key is not None and fs is not None:
+                    # Mutually exclusive with docs in practice; keep the EARLIEST if ever both.
+                    prev = first_seen.get(key)
+                    first_seen[key] = float(fs) if prev is None else min(prev, float(fs))
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("seen_before thin lookup failed: %s", exc)
+    if not first_seen:
+        return
+    for d in ranked:
+        source = getattr(d, "source", None)
+        if not source:
+            continue
+        fs = first_seen.get((source, _doc_sid(d)))
+        if fs is None:
+            continue
+        d.metadata = dict(d.metadata or {})
+        d.metadata["seen_before"] = fs < t0_wall
+        try:
+            from datetime import datetime, timezone
+            d.metadata["first_seen_at"] = datetime.fromtimestamp(fs, timezone.utc).isoformat()
+        except Exception:  # noqa: BLE001 — the boolean stamp still stands without the ISO string
+            pass
+
+
 def search_ranked(
     query: str,
     sources: Optional[list[str]] = None,
@@ -807,6 +913,12 @@ def search_ranked(
     """
     from penumbra.core import rank  # local import keeps the module graph acyclic
 
+    # WALL-CLOCK at THIS search's start (search_many's own t0 is monotonic; the DB stores epoch
+    # seconds). The seen_before stamp compares each doc's persisted first_seen against this instant.
+    # Race-proof BY CONSTRUCTION: this search's own async ingest writes carry first_seen >= t0_wall
+    # (they are stamped with time.time() only AFTER this line runs), so they can never flip the stamp
+    # to "seen before" for a doc this very search is the first to retrieve.
+    t0_wall = time.time()
     per_source = min(max(limit, 5), 15)
     results, meta = search_many(query, sources, per_source, deadline_s=deadline_s, fresh=fresh,
                                 cache_only=cache_only)
@@ -831,6 +943,13 @@ def search_ranked(
             meta["index"] = {**info, "candidates": len(idx), "as_of": recall.as_of()}
     ranked = rank.merge_rank(results, query, limit)
     meta["deduped"] = {"in": total_in, "out": len(ranked)}
+    # ── seen_before stamp (the wall's novelty stamp) ── one BATCHED first_seen lookup across the
+    # perception memory (docs UNION thin graph_nodes) marks which ranked results THIS deployment had
+    # retrieved before this search. Fail-open: on any error the stamps are simply absent.
+    try:
+        _stamp_seen_before(ranked, t0_wall)
+    except Exception:  # noqa: BLE001 — a stamp failure must never break the search
+        pass
     # ── Passive enrichments (#8 source_diversity, #11 conflicts) ── computed AFTER merge_rank on
     # the already-ranked+deduped list. Each is a MECHANICAL measurement stamped as _meta for the
     # agent to interpret; NEITHER is fed to composite()/ranking (the razor — order is unchanged).

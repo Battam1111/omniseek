@@ -257,7 +257,9 @@ def stats() -> dict:
     by type and by tier, and the rulings count. Fail-open — any sub-count that fails is simply
     omitted / zero. NOTE the cold-start expectation (design section 10): at P1 the entity kinds are
     EMPTY and only document same_as edges exist (derived, so they do not appear in graph_edges
-    either); empty entity kinds here are CORRECT, not broken."""
+    either); empty entity kinds here are CORRECT, not broken. ``document`` counts the virtual docs
+    (indexed sources); ``document_thin`` counts the retrieval-anchored thin rows (P2.0 — docs from
+    non-indexed sources, title + url only) SEPARATELY so the cold-start story stays honest."""
     result: dict = {"node_kinds": {}, "edge_types": {}, "edge_tiers": {}, "rulings": 0}
     con = _con()
     if con is None:
@@ -265,7 +267,9 @@ def stats() -> dict:
         return result
     try:
         for kind, n in con.execute("SELECT kind, count(*) FROM graph_nodes GROUP BY kind").fetchall():
-            result["node_kinds"][kind] = n
+            # Thin document nodes (kind='document' in graph_nodes) count SEPARATELY from the virtual
+            # docs-table documents; true entity kinds pass through under their own name.
+            result["node_kinds"]["document_thin" if kind == "document" else kind] = n
     except Exception as exc:  # noqa: BLE001
         logger.debug("graph.stats node_kinds failed: %s", exc)
     try:  # virtual document nodes are the docs table, not graph_nodes rows.
@@ -307,47 +311,39 @@ def _stored_edges(con, frontier: list[str], types: Optional[list[str]]) -> list[
     return [{"src": s, "dst": d, "type": t, "method": m} for (s, d, t, m) in rows]
 
 
-def _derived_title_fp_edges(con, frontier: list[str]) -> list[dict]:
-    """DERIVED same_as edges (design v2.0): the docs.fp self-join IS the title_fp same_as edge set,
-    live and always current (no stored rows). Scoped to frontier DOC nodes each hop via a self-join
-    keyed on fp (never a full-table cross join). method ``align:title_fp``, tier A (exploratory-only).
-    Only ``fp LIKE 'title:%'`` fingerprints are title alignments (id-fallback fps are not)."""
-    doc_ids = [f for f in frontier if f.startswith("doc:")]
-    if not doc_ids:
-        return []
-    # Map each frontier doc id -> (source, source_id) so we can anchor the self-join to those rows.
-    pairs: list[tuple[str, str]] = []
-    for nid in doc_ids:
-        rest = nid[len("doc:"):]
-        source, _, source_id = rest.partition(":")
-        if source and source_id:
-            pairs.append((source, source_id))
-    if not pairs:
-        return []
-    edges: list[dict] = []
+def _anchor_fp(con, source: str, source_id: str) -> Optional[str]:
+    """The title fingerprint of a frontier doc node — docs.fp if indexed, else the thin row's
+    ``attrs_json.fp`` (P2.0 thin-memory coverage). Returns the fp ONLY when it is a ``title:``
+    alignment (id-fallback fps never align cross-source); else None."""
+    fp: Optional[str] = None
     try:
-        for source, source_id in pairs:
-            rows = con.execute(
-                "SELECT b.source, b.source_id FROM docs a JOIN docs b ON a.fp = b.fp "
-                "WHERE a.source = ? AND a.source_id = ? AND a.fp LIKE 'title:%' "
-                "AND (b.source != a.source OR b.source_id != a.source_id)",
-                (source, source_id),
-            ).fetchall()
-            anchor = doc_node_id(source, source_id)
-            for b_source, b_source_id in rows:
-                other = doc_node_id(b_source, b_source_id)
-                lo, hi = sorted((anchor, other))  # symmetric: store once with src < dst
-                edges.append({"src": lo, "dst": hi, "type": "same_as", "method": "align:title_fp"})
+        row = con.execute(
+            "SELECT fp FROM docs WHERE source = ? AND source_id = ?", (source, source_id)
+        ).fetchone()
+        if row is not None:
+            fp = row[0]
+        else:
+            row = con.execute(
+                "SELECT json_extract(attrs_json, '$.fp') FROM graph_nodes "
+                "WHERE id = ? AND kind = 'document'", (doc_node_id(source, source_id),)
+            ).fetchone()
+            if row is not None:
+                fp = row[0]
     except Exception as exc:  # noqa: BLE001
-        logger.debug("graph._derived_title_fp_edges failed: %s", exc)
-    return edges
+        logger.debug("graph._anchor_fp failed: %s", exc)
+        return None
+    if fp and str(fp).startswith("title:"):
+        return fp
+    return None
 
 
-def _derived_id_eq_edges(con, frontier: list[str]) -> list[dict]:
-    """DERIVED doc->work id_eq same_as (design v2.0): a document's external ids (in doc_json) equal a
-    world entity's id. Query-time via json_extract, scoped to frontier DOC nodes. methods
-    ``id_eq:doi`` / ``id_eq:arxiv`` (conservative). This joins the perception atom (doc) to the
-    bibliographic entity (work) WITHOUT collapsing them into one node."""
+def _derived_title_fp_edges(con, frontier: list[str]) -> list[dict]:
+    """DERIVED same_as edges (design v2.0 + P2.0): a shared title fingerprint IS the title_fp same_as
+    edge set, live and always current (no stored rows). Scoped to frontier DOC nodes each hop and
+    keyed on the anchor's exact fp value (never a full-table cross join). method ``align:title_fp``,
+    tier A (exploratory-only). Only ``title:`` fingerprints align (id-fallback fps are not). Coverage
+    spans BOTH stores: a thin row's attrs fp can match a docs.fp AND another thin row's fp, so a
+    non-indexed arXiv original and its indexed mirror unify identically to two docs-table rows."""
     doc_ids = [f for f in frontier if f.startswith("doc:")]
     if not doc_ids:
         return []
@@ -357,17 +353,84 @@ def _derived_id_eq_edges(con, frontier: list[str]) -> list[dict]:
         source, _, source_id = rest.partition(":")
         if not source or not source_id:
             continue
-        try:
-            row = con.execute(
-                "SELECT json_extract(doc_json, '$.metadata.openalex_id'), "
-                "json_extract(doc_json, '$.metadata.doi'), "
-                "json_extract(doc_json, '$.metadata.arxiv_id') "
-                "FROM docs WHERE source = ? AND source_id = ?",
-                (source, source_id),
-            ).fetchone()
-        except Exception as exc:  # noqa: BLE001
-            logger.debug("graph._derived_id_eq_edges json_extract failed: %s", exc)
+        fp = _anchor_fp(con, source, source_id)
+        if not fp:
             continue
+        anchor = doc_node_id(source, source_id)
+        others: list[str] = []
+        try:
+            # (a) indexed docs sharing this fp (docs.fp is indexed → an equality probe, not a scan).
+            for b_source, b_source_id in con.execute(
+                "SELECT source, source_id FROM docs WHERE fp = ?", (fp,)
+            ).fetchall():
+                others.append(doc_node_id(b_source, b_source_id))
+            # (b) thin document nodes whose attrs fp matches (bounded to document rows).
+            for (other_id,) in con.execute(
+                "SELECT id FROM graph_nodes WHERE kind = 'document' "
+                "AND json_extract(attrs_json, '$.fp') = ?", (fp,)
+            ).fetchall():
+                others.append(other_id)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("graph._derived_title_fp_edges match failed: %s", exc)
+            continue
+        for other in others:
+            if other == anchor:
+                continue
+            lo, hi = sorted((anchor, other))  # symmetric: store once with src < dst
+            edges.append({"src": lo, "dst": hi, "type": "same_as", "method": "align:title_fp"})
+    return edges
+
+
+def _id_eq_triple(con, source: str, source_id: str) -> Optional[tuple]:
+    """The ``(openalex_id, doi, arxiv_id)`` for a frontier doc node — from the docs table if it is an
+    indexed doc, ELSE from its thin graph_nodes row's attrs_json (the P2.0 thin-memory coverage).
+    A given ``doc:{source}:{sid}`` is in exactly ONE store (indexable -> docs; non-indexed -> thin),
+    so docs-first-then-thin never double-reads. The attrs_json keys are the SAME names writer.py's
+    thin upsert lifts (``openalex_id`` / ``doi`` / ``arxiv_id``), read here at the FLAT attrs root
+    (``$.openalex_id``) — mirroring the docs arm's ``$.metadata.openalex_id``. None -> no row found."""
+    try:
+        row = con.execute(
+            "SELECT json_extract(doc_json, '$.metadata.openalex_id'), "
+            "json_extract(doc_json, '$.metadata.doi'), "
+            "json_extract(doc_json, '$.metadata.arxiv_id') "
+            "FROM docs WHERE source = ? AND source_id = ?",
+            (source, source_id),
+        ).fetchone()
+        if row is not None:
+            return row
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("graph._id_eq_triple docs json_extract failed: %s", exc)
+    # Thin document node: same keys, at the flat attrs_json root.
+    try:
+        row = con.execute(
+            "SELECT json_extract(attrs_json, '$.openalex_id'), "
+            "json_extract(attrs_json, '$.doi'), "
+            "json_extract(attrs_json, '$.arxiv_id') "
+            "FROM graph_nodes WHERE id = ? AND kind = 'document'",
+            (doc_node_id(source, source_id),),
+        ).fetchone()
+        return row
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("graph._id_eq_triple thin json_extract failed: %s", exc)
+        return None
+
+
+def _derived_id_eq_edges(con, frontier: list[str]) -> list[dict]:
+    """DERIVED doc->work id_eq same_as (design v2.0): a document's external ids equal a world
+    entity's id. Query-time via json_extract, scoped to frontier DOC nodes, covering BOTH indexed
+    docs (docs.doc_json) and thin document nodes (graph_nodes.attrs_json — the P2.0 thin-memory arm).
+    methods ``id_eq:openalex`` / ``id_eq:doi`` / ``id_eq:arxiv`` (conservative). This joins the
+    perception atom (doc) to the bibliographic entity (work) WITHOUT collapsing them into one node."""
+    doc_ids = [f for f in frontier if f.startswith("doc:")]
+    if not doc_ids:
+        return []
+    edges: list[dict] = []
+    for nid in doc_ids:
+        rest = nid[len("doc:"):]
+        source, _, source_id = rest.partition(":")
+        if not source or not source_id:
+            continue
+        row = _id_eq_triple(con, source, source_id)
         if not row:
             continue
         openalex_id, doi, arxiv_id = row
@@ -539,8 +602,10 @@ def _hydrate_nodes(con, ids: set, anchor: str) -> list[dict]:
 
 
 def _node_recency(con, node_id: str) -> float:
-    """last_seen for a node (entity from graph_nodes, doc from docs); 0.0 when unknown. Used as the
-    PRIMARY truncation key so a capped view drops the least-recently-seen first."""
+    """last_seen for a node (indexed doc from docs, thin doc / entity from graph_nodes); 0.0 when
+    unknown. Used as the PRIMARY truncation key so a capped view drops the least-recently-seen first.
+    An indexed doc lives in docs; a thin doc node lives in graph_nodes — so a doc: id falls back to
+    graph_nodes when it is not an indexed row (else thin nodes would always read as recency 0.0)."""
     try:
         if node_id.startswith("doc:"):
             rest = node_id[len("doc:"):]
@@ -549,6 +614,10 @@ def _node_recency(con, node_id: str) -> float:
                 "SELECT last_seen FROM docs WHERE source = ? AND source_id = ?",
                 (source, source_id),
             ).fetchone()
+            if row is None:  # not indexed -> a thin document node in graph_nodes
+                row = con.execute(
+                    "SELECT last_seen FROM graph_nodes WHERE id = ?", (node_id,)
+                ).fetchone()
         else:
             row = con.execute(
                 "SELECT last_seen FROM graph_nodes WHERE id = ?", (node_id,)
