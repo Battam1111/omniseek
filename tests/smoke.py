@@ -5464,6 +5464,26 @@ check("parsimony tripwire: MCP tool count == frozen 16 (bump consciously or fuse
       f"found {_pt_src.count(chr(10) + '@mcp.tool()')}")
 check("parsimony tripwire: MCP prompt count == frozen 1 (the one recipe channel)",
       _pt_src.count(chr(10) + "@mcp.prompt()") == _PROMPT_COUNT_FROZEN)
+
+# --- docs-drift tripwire: every penumbra_* token in the PRODUCT-FACING docs must be a REGISTERED tool.
+#     The native-docs zone is deliberately outside the mirror sync, which is exactly why it needs a
+#     gate: a tool rename that skips the docs otherwise ships stale names to users (caught by hand
+#     2026-07-02 in the mirror's README/tools.md; this makes it mechanical, on BOTH repos since the
+#     mirror sync renames this check's prefix too). CHANGELOG + design/ + recon docs are exempt
+#     (historical narrative is allowed to name retired tools). ---
+import re as _dd_re_mod  # noqa: E402
+_dd_registered = {n for n in dir(_pt_srv) if n.startswith("penumbra_")}
+_dd_docs = [ROOT / "README.md", ROOT / "docs" / "tools.md", ROOT / "docs" / "patterns.md",
+            ROOT / "docs" / "configuration.md", ROOT / "docs" / "walled-sources.md"]
+_dd_stale: list = []
+for _dd_p in _dd_docs:
+    if not _dd_p.exists():
+        continue
+    for _dd_tok in set(_dd_re_mod.findall(r"penumbra_[a-z_]+", _dd_p.read_text(encoding="utf-8"))):
+        if _dd_tok not in _dd_registered:
+            _dd_stale.append(f"{_dd_p.name}:{_dd_tok}")
+check("docs-drift tripwire: product docs name only REGISTERED tools",
+      not _dd_stale, f"stale: {sorted(_dd_stale)}")
 check("gather: rejects empty calls",
       _eg.__wrapped__(calls=[], wait_s=10).get("error") is not None)
 check("gather: rejects >10 calls",
