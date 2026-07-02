@@ -10,7 +10,7 @@
 # tests) run at the end and FAIL the script loudly. Never push a sync whose
 # gates did not pass.
 #
-# Syncs:  src/  (minus polyu + mokahr_ats), tests/smoke.py, scripts/sensor_runner.py
+# Syncs:  src/  (minus polyu + mokahr_ats), tests/smoke.py
 # Keeps:  skills/, README*, CLAUDE.md, docs/, pyproject.toml, .github/, other scripts/
 #
 # Usage:  cd organs/penumbra && bash scripts/sync_from_eye.sh
@@ -66,22 +66,23 @@ cp "$EYE_ROOT/tests/smoke.py" "$PEN_ROOT/tests/smoke.py"
 sed -i "${RENAME[@]}" "$PEN_ROOT/tests/smoke.py"
 sed -i 's/\bpolyu\b *//g' "$PEN_ROOT/tests/smoke.py"
 
-# --- 4. sensor_runner.py: same renames ---
-echo "  [4/6] syncing sensor_runner.py ..."
-cp "$EYE_ROOT/scripts/sensor_runner.py" "$PEN_ROOT/scripts/sensor_runner.py"
-sed -i "${RENAME[@]}" "$PEN_ROOT/scripts/sensor_runner.py"
+# --- 4. (retired) the standalone cron runner script was DELETED at the eye (P6, 2026-07-03):
+#     it was a second, memory-less perception path; the scheduler moved in-process. Its stale
+#     penumbra copy was removed the same day; nothing ships it anymore, so there is nothing to
+#     sync or delete here (step kept as a numbered placeholder so the 1-6 narration stays stable).
+echo "  [4/6] (retired step: the cron runner is gone; scheduler is in-process) ..."
 
 # --- 5. RESIDUE GATE (hard fail) ---
 echo "  [5/6] residue gate ..."
 FAILED=0
-if grep -rniq 'polaris' "$PEN_SRC" "$PEN_ROOT/tests/smoke.py" "$PEN_ROOT/scripts/sensor_runner.py"; then
+if grep -rniq 'polaris' "$PEN_SRC" "$PEN_ROOT/tests/smoke.py"; then
   echo "  GATE FAIL: 'polaris' residue:"
-  grep -rni 'polaris' "$PEN_SRC" "$PEN_ROOT/tests/smoke.py" "$PEN_ROOT/scripts/sensor_runner.py" | head -10
+  grep -rni 'polaris' "$PEN_SRC" "$PEN_ROOT/tests/smoke.py" | head -10
   FAILED=1
 fi
-if grep -rnqE '\beye_' "$PEN_SRC" "$PEN_ROOT/tests/smoke.py" "$PEN_ROOT/scripts/sensor_runner.py"; then
+if grep -rnqE '\beye_' "$PEN_SRC" "$PEN_ROOT/tests/smoke.py"; then
   echo "  GATE FAIL: 'eye_' tool-name residue:"
-  grep -rnE '\beye_' "$PEN_SRC" "$PEN_ROOT/tests/smoke.py" "$PEN_ROOT/scripts/sensor_runner.py" | head -10
+  grep -rnE '\beye_' "$PEN_SRC" "$PEN_ROOT/tests/smoke.py" | head -10
   FAILED=1
 fi
 # prose "the eye" is kept by design; report count for awareness only

@@ -168,6 +168,14 @@ def _writer_loop() -> None:
             if time.time() - last_sweep > 3600:
                 _sweep(con)
                 last_sweep = time.time()
+            # P7 thin-title catch-up: ONLY at the idle point (queue drained), so a queued write is
+            # never delayed. One bounded page per idle cycle; monotone convergence to zero backlog,
+            # then a cheap empty query. Fail-open (never raises into the loop).
+            if _queue.empty():
+                try:
+                    _thin_catchup(con)
+                except Exception as exc:  # noqa: BLE001 — a catch-up failure never breaks the writer
+                    logger.debug("recall thin catch-up cycle errored: %s", exc)
         except Exception as exc:  # noqa: BLE001 — never let the writer thread die
             logger.warning("recall writer cycle errored: %s", exc)
             try:
@@ -218,9 +226,12 @@ def _apply(con, items) -> None:
                     staged.append(r)
             except Exception as exc:  # noqa: BLE001 — one bad doc never aborts the batch
                 logger.debug("recall upsert skipped one doc: %s", exc)
+    thin_staged: list = []   # (node_id, title) for thin rows whose title needs embedding (P7)
     for d in thin_docs:
         try:
-            _upsert_thin(con, rank, d, now)   # graph_nodes document node, NEVER content
+            r = _upsert_thin(con, rank, d, now)   # graph_nodes document node, NEVER content
+            if r:
+                thin_staged.append(r)
         except Exception as exc:  # noqa: BLE001 — one bad thin doc never aborts the batch
             logger.debug("recall thin upsert skipped one doc: %s", exc)
     for _tag, gnodes, gedges in graph_batches:
@@ -236,6 +247,8 @@ def _apply(con, items) -> None:
             pass
     if staged:
         _embed_and_store(con, staged)   # ONE batched embed → vec rows, in this same transaction
+    if thin_staged:
+        _embed_and_store_thin(con, thin_staged)   # P7: thin TITLE vectors → vec_thin, same txn
     con.commit()
     if doc_batches:
         _last_write_ts = now
@@ -263,6 +276,92 @@ def _embed_and_store(con, staged) -> None:
                         (rid, mv, dim, v.astype("float32").tobytes()))
         except Exception as exc:  # noqa: BLE001
             logger.debug("recall vec write skipped: %s", exc)
+
+
+def _embed_and_store_thin(con, staged) -> None:
+    """P7: embed a staged ``(node_id, title)`` batch of THIN rows ONCE and write the vectors into
+    ``vec_thin`` in the CURRENT transaction (atomic with the thin node upserts). Mirrors
+    ``_embed_and_store`` for the thin lane: FAIL-OPEN at the ROW level (embedder disabled or a forward
+    failure -> those thin rows stay un-embedded, a first-class state; ``similar`` just does not see
+    them until the catch-up embeds them; the coverage gauge is the visibility, not per-row logs). The
+    TITLE is the passage (a thin row has no content); same MODEL_VERSION + embedder as ``vec`` so both
+    live in ONE cosine space."""
+    global _vec_fail
+    from penumbra.core.recall import embed
+    if not embed.available():
+        return
+    titles = [t for (_nid, t) in staged]
+    vecs = embed.embed_passage(titles)
+    if vecs is None or len(vecs) != len(staged):
+        _vec_fail += 1
+        logger.debug("recall: thin batch embed failed/short → %d thin rows un-embedded", len(staged))
+        return
+    mv, dim = embed.MODEL_VERSION, embed.DIM
+    for (nid, _t), v in zip(staged, vecs):
+        try:
+            con.execute(
+                "INSERT OR REPLACE INTO vec_thin(node_id, model_version, dim, v) VALUES(?,?,?,?)",
+                (nid, mv, dim, v.astype("float32").tobytes()))
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("recall vec_thin write skipped: %s", exc)
+
+
+_THIN_CATCHUP_PAGE = 50   # thin rows the idle catch-up embeds per cycle (bounded; monotone convergence)
+
+
+def _thin_catchup(con) -> int:
+    """P7 self-converging catch-up (no script, no cron): embed up to ``_THIN_CATCHUP_PAGE`` thin rows
+    that HAVE a title (graph_nodes.label) but NO ``vec_thin`` row for the current model_version, in one
+    bounded page + own transaction. Called at the writer's IDLE point (after the queue drains — see
+    ``_writer_loop``), so it NEVER delays a queued write (drain first, then catch up). Monotone
+    convergence: committed rows drop out of the WHERE, so each cycle shrinks the backlog until it hits
+    zero and then costs one cheap empty query. Returns the number embedded this cycle (0 when caught
+    up or the embedder is unavailable). FAIL-OPEN — a catch-up failure never touches search."""
+    from penumbra.core.recall import embed
+    if not embed.available():
+        return 0
+    mv = embed.MODEL_VERSION
+    try:
+        rows = con.execute(
+            "SELECT g.id, g.label FROM graph_nodes g "
+            "LEFT JOIN vec_thin t ON t.node_id = g.id AND t.model_version = ? "
+            "WHERE g.kind = 'document' AND g.label IS NOT NULL AND TRIM(g.label) != '' "
+            "AND t.node_id IS NULL LIMIT ?", (mv, _THIN_CATCHUP_PAGE),
+        ).fetchall()
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("recall thin catch-up query failed: %s", exc)
+        return 0
+    if not rows:
+        return 0   # caught up: every titled thin row has a current-model vec_thin vector
+    staged = [(r[0], (r[1] or "").strip()) for r in rows if (r[1] or "").strip()]
+    # LEGACY whitespace-only labels (a pre-fix nbsp title survives SQLite's ASCII-only TRIM but
+    # Python-strips to empty): normalize them to NULL so they leave the WHERE clause permanently.
+    # Without this the same unembeddable page is re-fetched every idle cycle and can starve real
+    # titled rows out of the LIMIT. New rows store Python-stripped labels, so this arm only ever
+    # touches legacy data, then goes quiet (true convergence, not a filtered spin).
+    ghost = [r[0] for r in rows if not (r[1] or "").strip()]
+    if ghost:
+        try:
+            marks = ",".join("?" * len(ghost))
+            con.execute(f"UPDATE graph_nodes SET label = NULL WHERE id IN ({marks})", ghost)
+            con.commit()
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("recall thin catch-up label normalization failed: %s", exc)
+    if not staged:
+        return 0
+    try:
+        con.execute("BEGIN")
+        _embed_and_store_thin(con, staged)
+        con.commit()
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("recall thin catch-up write failed: %s", exc)
+        try:
+            con.rollback()
+        except Exception:  # noqa: BLE001
+            pass
+        return 0
+    logger.info("recall thin catch-up: embedded a page of %d thin titles into vec_thin", len(staged))
+    return len(staged)
 
 
 def _backfill_page(con) -> None:
@@ -356,7 +455,7 @@ def _upsert_node(con, nid: str, kind: str, label: Optional[str], attrs_json: Opt
     )
 
 
-def _upsert_thin(con, rank, d: Document, now: float) -> None:
+def _upsert_thin(con, rank, d: Document, now: float):
     """Upsert one THIN document node into ``graph_nodes`` (P2.0 retrieval-anchored perception).
 
     A thin row anchors a doc from a NON-indexed source in the graph with title + url + fp +
@@ -364,14 +463,23 @@ def _upsert_thin(con, rank, d: Document, now: float) -> None:
     (graph.doc_node_id, the SAME scheme the views resolve), kind = ``document``, label = title
     (capped). ``first_seen`` is immutable on conflict (INSERT-supplied first_seen is ignored when the
     row exists); ``last_seen`` is bumped. An indexable doc NEVER reaches here (it gets a full docs
-    row, which the union view already surfaces — no double node)."""
+    row, which the union view already surfaces — no double node).
+
+    P7: returns ``(node_id, title)`` when the thin row HAS a title (so the caller can batch-embed the
+    title into vec_thin, letting ``similar`` see the whole perception history), else ``None`` (no
+    title -> nothing to embed). The embed itself is off the hot path (writer daemon thread, batched in
+    ``_apply``) and fail-open, so a thin row is upserted whether or not its title ever embeds."""
     source = getattr(d, "source", None)
     sid = str(getattr(d, "source_id", None) or getattr(d, "url", None) or "")
     if not source or not sid:
-        return
+        return None
     from penumbra.core.recall.graph import doc_node_id
     nid = doc_node_id(source, sid)
-    label = (d.title or "")[:_THIN_LABEL_CAP] or None
+    # STRIPPED before the cap: the embed staging + the catch-up SQL both key on "has a real
+    # title", and an unstripped whitespace-only label (e.g. an nbsp from scraped HTML) would
+    # pass the SQL's label != '' forever while the staging strip drops it -> a catch-up page
+    # that never converges. One strip here keeps every downstream predicate in agreement.
+    label = (d.title or "").strip()[:_THIN_LABEL_CAP] or None
     try:
         fp = rank.fingerprint(d)
     except Exception:  # noqa: BLE001
@@ -386,6 +494,9 @@ def _upsert_thin(con, rank, d: Document, now: float) -> None:
     # The shared node upsert: first_seen preserved on conflict, last_seen bumped, label/attrs
     # refreshed (last write wins) — the P2.0 semantics, now one code path for thin + entity lanes.
     _upsert_node(con, nid, "document", label, attrs_json, now)
+    # P7 title-embed staging: only when the row carries a title (the TITLE is embedded, not the url/fp).
+    title = (d.title or "").strip()
+    return (nid, title) if title else None
 
 
 # ── Graph lanes (design sections 4-6): generalize the P2.0 thin lane to entity nodes + M/A edges ──
@@ -540,6 +651,7 @@ def _sweep(con) -> None:
             con.execute("DELETE FROM vec WHERE rowid = ?", (rowid,))
             con.execute("DELETE FROM docs WHERE rowid = ?", (rowid,))
         for (nid,) in stale_thin:
+            con.execute("DELETE FROM vec_thin WHERE node_id = ?", (nid,))   # P7: drop its title vector
             con.execute("DELETE FROM graph_nodes WHERE id = ?", (nid,))
         con.commit()
         logger.info("recall roll-off swept %d docs + %d thin document nodes older than %dd",

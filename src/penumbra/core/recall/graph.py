@@ -21,6 +21,7 @@ wall is born pre-populated by construction, everything recall ever indexed is al
 
 from __future__ import annotations
 
+import inspect
 import json
 import logging
 import threading
@@ -192,6 +193,24 @@ def _policy_methods(policy: str) -> frozenset:
     return _POLICIES.get((policy or "").strip().lower(), CONSERVATIVE)
 
 
+# ── View registry (design P6: the open family gets an open ABI) ──────────────────────────────────
+# penumbra_graph is the eye's ONE open-family verb: its intents (views) grow with the model and their
+# parameters are DISJOINT per view, so it gets an open ABI ``(view, args)``, frozen forever, with the
+# views as a REGISTRY (the same mechanism-demoted-to-data move as _GATHER_TOOLS / register_mints).
+# Each view function's OWN python signature is its per-view contract; the dispatcher, the valid-view
+# list, per-view argument validation, and the runtime self-description all DERIVE from the registry
+# via ``inspect`` (adding a view is dropping a decorated function, nothing else to touch).
+
+_VIEWS: dict[str, object] = {}
+
+
+def graph_view(fn):
+    """Register a view function under its own name (so the registry IS the valid-view list). The
+    function's signature is the per-view arg contract; its docstring's first line is its blurb."""
+    _VIEWS[fn.__name__] = fn
+    return fn
+
+
 # ── Rulings store (the one J exception; sensors.json precedent) ─────────────────────────────────
 
 def load_rulings() -> list[dict]:
@@ -301,6 +320,7 @@ def _con() -> Optional["object"]:
     return store._read_con()
 
 
+@graph_view
 def find(label_query: str, kind: str = "", limit: int = 20) -> dict:
     """The graph's ENTRY POINT: turn a name into candidate node ids (every other view takes an
     anchor id and nothing else). Mechanical token/substring match over ``graph_nodes.label`` UNIONed
@@ -367,6 +387,7 @@ def find(label_query: str, kind: str = "", limit: int = 20) -> dict:
     return {"nodes": out[: max(1, limit)], "capped": capped}
 
 
+@graph_view
 def stats() -> dict:
     """The cheap orientation call: counts by node kind (incl. the virtual docs count), edge counts
     by type and by tier, and the rulings count. Fail-open — any sub-count that fails is simply
@@ -374,7 +395,9 @@ def stats() -> dict:
     EMPTY and only document same_as edges exist (derived, so they do not appear in graph_edges
     either); empty entity kinds here are CORRECT, not broken. ``document`` counts the virtual docs
     (indexed sources); ``document_thin`` counts the retrieval-anchored thin rows (P2.0 — docs from
-    non-indexed sources, title + url only) SEPARATELY so the cold-start story stays honest."""
+    non-indexed sources, title + url only) SEPARATELY so the cold-start story stays honest.
+    ``document_thin_embedded`` counts the vec_thin rows (P7 — thin titles that have an embedding, the
+    mechanical coverage gauge for how much of the thin perception history ``similar`` can see)."""
     result: dict = {"node_kinds": {}, "edge_types": {}, "edge_tiers": {}, "rulings": 0}
     con = _con()
     if con is None:
@@ -391,6 +414,12 @@ def stats() -> dict:
         result["node_kinds"]["document"] = con.execute("SELECT count(*) FROM docs").fetchone()[0]
     except Exception as exc:  # noqa: BLE001
         logger.debug("graph.stats doc count failed: %s", exc)
+    try:  # P7 thin-title embedding coverage gauge: vec_thin rows (a mechanical count, no ratio, no
+        # judgment). Beside document_thin so "how much of the thin history similar can see" is visible.
+        result["node_kinds"]["document_thin_embedded"] = con.execute(
+            "SELECT count(*) FROM vec_thin").fetchone()[0]
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("graph.stats vec_thin count failed: %s", exc)
     try:
         for typ, n in con.execute("SELECT type, count(*) FROM graph_edges GROUP BY type").fetchall():
             result["edge_types"][typ] = n
@@ -644,6 +673,7 @@ def _policy_hop_edges(con, frontier: list[str], types: Optional[list[str]], meth
     return _apply_policy_and_rulings(hop_edges, methods, not_same, same, use_rulings)
 
 
+@graph_view
 def neighborhood(anchor: str, depth: int = 1, types: Optional[list[str]] = None,
                  policy: str = "conservative", max_nodes: int = 40) -> dict:
     """The bounded subgraph around a node: BFS over the UNION of (i) stored graph_edges rows and
@@ -745,6 +775,7 @@ class _UnionFind:
             self.parent[hi] = lo
 
 
+@graph_view
 def voices(doc_ids: list[str], policy: str = "conservative") -> dict:
     """Collapse a DOC SET to distinct upstream VOICES via same_as + authored — the independence
     counter. Input: graph doc ids (``doc:{source}:{source_id}``). NON-``doc:``-prefixed entries are
@@ -870,6 +901,7 @@ def voices(doc_ids: list[str], policy: str = "conservative") -> dict:
         return fail_open
 
 
+@graph_view
 def between(a: str, b: str, types: Optional[list[str]] = None, policy: str = "conservative",
             max_nodes: int = 40) -> dict:
     """Bounded connection PATHS between two anchors — the "how do these relate" question. Bidirectional
@@ -1039,6 +1071,7 @@ def _parse_since_cutoff(date: str) -> Optional[float]:
         return None
 
 
+@graph_view
 def since(anchor: str, date: str, types: Optional[list[str]] = None, max_nodes: int = 40) -> dict:
     """The ACCRETION LOG around a node: the STORED edges touching ``anchor`` (one hop, both
     directions, optional ``types`` filter) whose ``first_seen`` is >= the parsed cutoff. Derived
@@ -1108,21 +1141,29 @@ def since(anchor: str, date: str, types: Optional[list[str]] = None, max_nodes: 
 #       policy collapses. The method is the epistemic unit, carried to its end: align:embed exists
 #       ONLY as a proposal label, never as a stored edge method.
 
+@graph_view
 def similar(anchor: str, k: int = 10) -> dict:
     """Vector-NEAREST doc CANDIDATES for an anchor doc — PROPOSALS from embedding proximity, never
-    collapsed by any policy. ``anchor`` must be a ``doc:{source}:{source_id}`` id of a doc present in
-    the VECTOR index (the recall vec matrix covers indexed docs; thin rows have no content and are
-    not embedded). Reuses the anchor's OWN stored vector by its row identity (never re-embeds), ranks
-    all other vectors by cosine, and takes top-k BY RANK (k is a resource budget like max_nodes,
-    NEVER a similarity threshold: rank, never a score cutoff — the RRF discipline).
+    collapsed by any policy. ``anchor`` must be a ``doc:{source}:{source_id}`` id of a doc that has an
+    EMBEDDED vector in EITHER store: an INDEXED doc (the recall ``vec`` matrix) OR a THIN doc whose
+    title was embedded as the writer caught up (``vec_thin``, P7). Reuses the anchor's OWN stored
+    vector by its identity (never re-embeds), ranks all other vectors across the UNION of both stores
+    by cosine, and takes top-k BY RANK (k is a resource budget like max_nodes, NEVER a similarity
+    threshold: rank, never a score cutoff — the RRF discipline).
 
     Returns ``{anchor, candidates: [{id, kind: "document", label: title, rank: 1..k}], method:
-    "align:embed", note, coverage, capped}``. Deliberately NO cosine scores (rank is the honest unit;
-    a score invites pseudo-precision) and NO edges (candidates are a listing, not graph structure).
-    An anchor that is NOT a ``doc:`` id, or not in the vector index (a thin/un-embedded doc), returns
-    ``{"error": ...}`` naming the coverage line. Fail-open to an empty candidate list on store
-    failure. This view WRITES NOTHING (the P1 zero-new-writes move, repeated)."""
-    coverage = "vector-indexed docs only"
+    "align:embed", note, coverage, capped}``. A candidate may be an indexed doc OR a thin doc (its
+    ``id`` is the thin node id, its label the thin row's title) — so similar now covers the WHOLE
+    perception history, exactly the cross-boundary pairs it exists for (an indexed Chinese post vs a
+    thin arXiv original). Deliberately NO cosine scores (rank is the honest unit; a score invites
+    pseudo-precision) and NO edges (candidates are a listing, not graph structure). An anchor that is
+    NOT a ``doc:`` id, or has NO vector in EITHER store (un-embedded yet), returns ``{"error": ...}``
+    naming the real condition. Fail-open to an empty candidate list on store failure. This view WRITES
+    NOTHING (the P1 zero-new-writes move, repeated).
+
+    DELIBERATE NON-GOAL (P7): vec_thin does NOT feed penumbra_search's recall arm — that fold is a separate
+    decision with its own dogfood. similar (and future P5 consumers) read vec_thin; search does not."""
+    coverage = "docs with an embedded title (indexed vec OR thin vec_thin)"
     anchor = (anchor or "").strip()
     if not anchor.startswith("doc:"):
         return {"error": f"similar needs a doc:{{source}}:{{source_id}} anchor ({coverage}); "
@@ -1133,24 +1174,23 @@ def similar(anchor: str, k: int = 10) -> dict:
         return {"error": f"malformed doc anchor {anchor!r} (expected doc:{{source}}:{{source_id}})"}
     k = max(1, int(k))
     try:
-        rowid = store.anchor_rowid(source, source_id)
-        if rowid is None:
-            return {"error": f"anchor {anchor} is not in the vector index ({coverage}); "
-                             f"a thin / non-indexed doc has no embedding"}
+        # Resolve the anchor vector from EITHER store (docs vec by rowid, else vec_thin by node id).
+        resolved = store.similar_anchor(source, source_id)
+        if resolved is None:
+            return {"error": f"no embedding for this doc yet ({anchor}): thin rows embed as the "
+                             f"writer catches up, so a just-seen doc may not be embedded yet; "
+                             f"coverage is {coverage}"}
+        anchor_vec, anchor_nid = resolved
         # +1 over-fetch so capped is a STRICT truncation test (the find idiom): a full page whose
         # (k+1)th neighbor does not exist is COMPLETE, not capped (no false "more exist" flag).
-        hits = store.similar_by_rowid(rowid, k + 1)
-        if hits is None:   # the anchor row itself is not in the current-model matrix
-            return {"error": f"anchor {anchor} is not in the vector index ({coverage}); "
-                             f"a thin / non-indexed doc has no embedding"}
+        hits = store.similar_neighbors(anchor_vec, anchor_nid, k + 1)
     except Exception as exc:  # noqa: BLE001 — fail-open: a similar failure never breaks the caller
         logger.debug("graph.similar failed: %s", exc)
         hits = []
     capped = len(hits or []) > k
     candidates: list[dict] = []
-    for i, (_rid, c_source, c_source_id, c_title) in enumerate((hits or [])[:k]):
-        candidates.append({"id": doc_node_id(c_source, c_source_id), "kind": "document",
-                           "label": c_title, "rank": i + 1})
+    for i, (c_nid, c_title) in enumerate((hits or [])[:k]):
+        candidates.append({"id": c_nid, "kind": "document", "label": c_title, "rank": i + 1})
     return {
         "anchor": anchor,
         "candidates": candidates,
@@ -1254,3 +1294,92 @@ def _truncate_nodes(con, nodes: list[dict], max_nodes: int, anchor: str) -> list
     rest.sort(key=lambda n: (_node_recency(con, n["id"]), -order_index[n["id"]]), reverse=True)
     keep = anchor_nodes + rest
     return keep[:max_nodes]
+
+
+# ── The open ABI: describe + dispatch, both DERIVED from the registry (design P6) ─────────────────
+# describe_views is the runtime self-description (a no-view call returns it, so the surface is
+# self-describing and future views appear WITHOUT a client restart). dispatch_view is the ONE
+# mechanical gate: unknown view, per-view arg validation (against the view's OWN signature), lenient
+# coercion mirroring the server's Lenient* types, then a fail-open call. The tool schema upstream is
+# now (view, args) and FROZEN: adding a view is data growth here, never schema growth there.
+
+
+def describe_views() -> dict:
+    """The live view catalog, DERIVED from the registry via ``inspect``: per view, its parameters
+    (name, whether required, default) plus its docstring's FIRST LINE (the same first-line convention
+    _PENUMBRA_VERBS uses). This is what a no-view dispatch returns, so the surface self-describes."""
+    out: dict = {}
+    for name, fn in _VIEWS.items():
+        sig = inspect.signature(fn)
+        params: list[dict] = []
+        for pname, p in sig.parameters.items():
+            required = p.default is inspect.Parameter.empty
+            params.append({
+                "name": pname,
+                "required": required,
+                "default": None if required else p.default,
+            })
+        first_line = ((getattr(fn, "__doc__", "") or "").strip().splitlines() or [""])[0]
+        out[name] = {"params": params, "doc": first_line}
+    return out
+
+
+def _coerce_arg(value, param: "inspect.Parameter"):
+    """Lenient coercion for ONE arg, mirroring the server's Lenient* types (it reuses the very
+    functions behind LenientInt / LenientBool): a str that parses as int for an int-typed/int-defaulted
+    param becomes int; a str/0/1 for a bool-typed/bool-defaulted param becomes bool; everything else
+    (lists, strings, already-correct values) passes through unchanged. bool is checked BEFORE int
+    because ``bool`` is a subclass of ``int`` in Python (a bool default must not read as an int)."""
+    from penumbra.core.normalize import _coerce_bool, _coerce_int
+    ann = param.annotation
+    default = param.default
+    is_bool = ann is bool or isinstance(default, bool)
+    is_int = (ann is int) or (isinstance(default, int) and not isinstance(default, bool))
+    if is_bool:
+        return _coerce_bool(value)
+    if is_int:
+        return _coerce_int(value)
+    return value
+
+
+def dispatch_view(view: str, args: Optional[dict] = None) -> dict:
+    """The ONE mechanical gate behind penumbra_graph's frozen ``(view, args)`` ABI.
+
+    - EMPTY view -> the live view catalog (``{"views": describe_views(), "note": ...}``): a no-view
+      call is self-describing, not an error.
+    - UNKNOWN view -> ``{"error": "unknown view X; valid: ...", "views": describe_views()}`` (the
+      error names every valid view; the catalog rides along so one round-trip teaches the surface).
+    - ARG VALIDATION against the view function's OWN signature: an unexpected key -> an error naming
+      the view's real params and the unexpected ones; a missing REQUIRED param -> an error naming it.
+      Values are leniently coerced (int / bool mirroring the server's Lenient* types; lists and
+      strings pass through). Depth / max_nodes caps STAY inside the view functions where they live.
+    - Then ``fn(**args)``; any exception -> a fail-open error dict (the same contract the tool had).
+    """
+    v = (view or "").strip().lower()
+    if not v:
+        return {"views": describe_views(),
+                "note": "pass view=<name> with args={...}; this is the live view catalog"}
+    fn = _VIEWS.get(v)
+    if fn is None:
+        valid = " | ".join(sorted(_VIEWS.keys()))
+        return {"error": f"unknown view {view!r}; valid: {valid}", "views": describe_views()}
+
+    call_args = dict(args or {})
+    sig = inspect.signature(fn)
+    real_params = list(sig.parameters.keys())
+    unexpected = [k for k in call_args if k not in sig.parameters]
+    if unexpected:
+        return {"error": f"view {v} takes {real_params}; got unexpected {unexpected}"}
+    missing = [pname for pname, p in sig.parameters.items()
+               if p.default is inspect.Parameter.empty and pname not in call_args]
+    if missing:
+        return {"error": f"view {v} requires {missing} (takes {real_params})"}
+
+    coerced: dict = {}
+    for pname, val in call_args.items():
+        coerced[pname] = _coerce_arg(val, sig.parameters[pname])
+
+    try:
+        return fn(**coerced)
+    except Exception as exc:  # noqa: BLE001 — a graph failure NEVER breaks the caller (fail-open)
+        return {"error": f"graph {v} failed: {str(exc)[:300]}"}

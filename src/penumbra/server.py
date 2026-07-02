@@ -103,9 +103,11 @@ _PENUMBRA_INSTRUCTIONS = (
     "document figures / video frames; auto-routes). penumbra_transcribe (spoken audio -> text). "
     "penumbra_gather (run several read-only calls in ONE round-trip; wait_s budget, stragglers "
     "keep warming). penumbra_sensor (standing queries with novelty detection; action=create/list/"
-    "delete/run). penumbra_ruling (record/list/retract your identity rulings same_as|not_same_as; "
+    "delete/run; scheduled runs execute in-process on the live service). penumbra_ruling (record/list/"
+    "retract your identity rulings same_as|not_same_as; "
     "action=create/list/delete — the one judgment channel the graph's working policy applies). "
-    "penumbra_graph (the memory of relations: find -> stats -> neighborhood -> between -> voices -> "
+    "penumbra_graph (the memory of relations, one stable verb: view= + args={...}; a no-view call lists "
+    "the views; find -> stats -> neighborhood -> between -> voices -> "
     "since -> similar; policies conservative|working|exploratory). Scholarly depth: penumbra_field_skeleton / "
     "penumbra_paper_recommend / penumbra_paper_enrich / penumbra_resolve_identity / penumbra_coauthors / "
     "penumbra_institution_cohort (per-tool contracts in their docstrings). Curator (source "
@@ -137,7 +139,8 @@ _PENUMBRA_INSTRUCTIONS = (
     "\n\n"
     "(5) _META (per-search, read via _meta.*): "
     "source_diversity: perspectives present/absent (academic/social/audio/walled/news). "
-    "conflicts: same signal name, different values across sources (ratio > 1.5x = flagged). "
+    "conflicts: the most divergent same-work signal pairs by ratio (top-3 per doc), each carrying "
+    "the measured ratio; materiality is yours to judge. "
     "excluded_relevant: walled/slow sources thematically matching the query but excluded from the "
     "broad sweep; each has overlap (query-token match count) + sources=[...] re-run hint. "
     "empty / timed_out / errored: per-source outcome reasons. "
@@ -1501,11 +1504,7 @@ def penumbra_gather(calls: list[dict], wait_s: LenientInt = 60) -> dict:
 
 @mcp.tool()
 @_threaded
-def penumbra_graph(view: str, anchor: str = "", label_query: str = "", kind: str = "",
-              depth: LenientInt = 1, types: Optional[list[str]] = None,
-              policy: str = "conservative", max_nodes: LenientInt = 40,
-              other: str = "", doc_ids: Optional[list[str]] = None,
-              date: str = "", k: LenientInt = 10) -> dict:
+def penumbra_graph(view: str = "", args: Optional[dict] = None) -> dict:
     """The eye's MEMORY OF RELATIONS — read-only, budgeted projections of ONE graph.
 
     Everything the eye perceives is a statement with provenance ("X relates to Y, per Z");
@@ -1516,39 +1515,47 @@ def penumbra_graph(view: str, anchor: str = "", label_query: str = "", kind: str
     string mentions, signal conflicts). Judgment (claims, gaps, identity rulings) is tier J and
     is STRUCTURALLY excluded from the eye's store — the views project structure, YOU judge it.
 
-    ``view`` picks the projection (each is budgeted; content is NEVER inlined — every view
-    returns node ids + labels + edge tuples so you zoom with the other eye tools):
+    ONE STABLE VERB: ``penumbra_graph(view, args)``. ``view`` names the projection; ``args`` is that
+    view's OWN parameter dict (the views are an open family, their params disjoint per view, so the
+    ABI is (view, args), not a flat union). THE SCHEMA IS FROZEN: future views and future per-view
+    parameters change NOTHING in this signature; a no-view call returns the live view catalog (the
+    surface is self-describing), and content is NEVER inlined (every view returns node ids + labels
+    + edge tuples, so you zoom with the other eye tools).
 
-    • view="find" (label_query; optional kind) -> the ENTRY POINT. A node id is minted by the
-      backend that knows it, so a NAME ("Siva Reddy") is not a node until you resolve it: find
-      does the mechanical token/substring match over node labels and returns candidate ids +
-      kinds. Every other view takes an ``anchor`` id; find is how you get one.
-    • view="stats" -> counts by kind / type / tier. The cheap orientation call (also the
+    • view="find", args={"label_query": ..., "kind"?: ...} -> the ENTRY POINT. A node id is minted
+      by the backend that knows it, so a NAME ("Siva Reddy") is not a node until you resolve it: find
+      does the mechanical token/substring match over node labels and returns candidate ids + kinds.
+      Every other view takes an ``anchor`` id; find is how you get one.
+    • view="stats", args={} -> counts by kind / type / tier. The cheap orientation call (also the
       cold-start check: see below).
-    • view="neighborhood" (anchor; optional depth<=2, types, policy, max_nodes) -> the bounded
-      subgraph around a node.
-    • view="between" (anchor, other; optional types, policy, max_nodes) -> bounded connection paths
-      between two anchors, the "how do these relate" question. Bidirectional BFS, <=2 hops per side,
-      up to 8 shortest paths; ``capped`` when more existed. No path -> paths:[] (honest empty).
-    • view="voices" (doc_ids) -> collapse a doc set to distinct upstream VOICES via same_as +
-      authored; the independence counter (mirrors collapse, shared-speaker docs merge, docs with
-      zero evidence land in ``unresolved`` and are NEVER counted as a voice). Input capped at 64 doc
-      ids by explicit error; non-``doc:`` ids come back in ``skipped``.
-    • view="since" (anchor, date; optional types, max_nodes) -> the accretion log: what accreted
-      around an anchor after a date (``YYYY-MM-DD`` or full ISO), STORED edges only, tier + method
-      shown on every row, NO collapsing (accretion is a fact stream, not an identity question).
-      Derived edges carry no timestamps and are structurally absent. The sensor consumer ("what
-      changed around this person / lab / query").
-    • view="similar" (anchor doc, k) -> vector-nearest doc CANDIDATES for an anchor doc, method
-      align:embed, by RANK (k is a budget, never a score threshold). PROPOSALS only, never collapsed
-      by any policy; verify, then ratify with penumbra_ruling. Coverage: vector-indexed docs only (a thin
-      row is not embedded -> an error naming that line). NO cosine scores (rank is the honest unit),
-      NO edges (a listing, not graph structure).
+    • view="neighborhood", args={"anchor": ..., "depth"?<=2, "types"?, "policy"?, "max_nodes"?} ->
+      the bounded subgraph around a node.
+    • view="between", args={"a": ..., "b": ..., "types"?, "policy"?, "max_nodes"?} -> bounded
+      connection paths between two anchors, the "how do these relate" question. Bidirectional BFS,
+      <=2 hops per side, up to 8 shortest paths; ``capped`` when more existed. No path -> paths:[].
+    • view="voices", args={"doc_ids": [...], "policy"?: ...} -> collapse a doc set to distinct
+      upstream VOICES via same_as + authored; the independence counter (mirror collapse, shared-speaker
+      docs merge, docs with zero evidence land in ``unresolved`` and are NEVER counted as a voice).
+      Input capped at 64 doc ids by explicit error; non-``doc:`` ids come back in ``skipped``.
+    • view="since", args={"anchor": ..., "date": ..., "types"?, "max_nodes"?} -> the accretion log:
+      what accreted around an anchor after a date (``YYYY-MM-DD`` or full ISO), STORED edges only,
+      tier + method shown on every row, NO collapsing (accretion is a fact stream, not an identity
+      question). Derived edges carry no timestamps and are structurally absent. The sensor consumer.
+    • view="similar", args={"anchor": <doc>, "k"?: ...} -> vector-nearest doc CANDIDATES for an
+      anchor doc, method align:embed, by RANK (k is a budget, never a score threshold). PROPOSALS
+      only, never collapsed by any policy; verify, then ratify with penumbra_ruling. Coverage: any doc with
+      an embedded title, ranked across the UNION of the indexed vec matrix AND the thin-title vec_thin
+      matrix (P7), so a thin arXiv original and an indexed post rank in ONE space; candidates may be
+      thin docs. A doc with no vector in either store (un-embedded yet) -> an error naming that.
+      NON-GOAL: vec_thin does NOT feed search's recall arm (similar + future P5 consumers only).
+    A no-view call (view="") returns the live view catalog: each view's params + one-line blurb,
+    DERIVED from the registry, so new views appear here without a client restart.
     Identity rulings are WRITTEN via penumbra_ruling (this tool stays read-only, hence gather-safe).
 
-    ``policy`` = conservative | working | exploratory: NAMED METHOD-SETS for how far to trust
-    identity (same_as) edges when collapsing, NOT numeric thresholds (a hand-picked constant is
-    pseudo-precision; the METHOD is the honest epistemic unit, as recall fuses by rank only):
+    ``policy`` (an arg on the collapsing views) = conservative | working | exploratory: NAMED
+    METHOD-SETS for how far to trust identity (same_as) edges when collapsing, NOT numeric thresholds
+    (a hand-picked constant is pseudo-precision; the METHOD is the honest epistemic unit, as recall
+    fuses by rank only):
       - conservative: collapse on exact-id equality only (DOI / OpenAlex / ORCID / arXiv; default)
       - working: conservative + agent identity rulings from graph_rulings.json
       - exploratory: working + title-fingerprint / fuzzy-name alignment CANDIDATES
@@ -1566,39 +1573,13 @@ def penumbra_graph(view: str, anchor: str = "", label_query: str = "", kind: str
 
     BUDGETS (the no-silent-caps discipline): depth is clamped to <=2, max_nodes caps the node
     count, and any capped result stamps ``capped: true`` so a bounded view never reads as
-    complete. Schema lives in penumbra.core.recall.graph.
+    complete. Schema + the view registry live in penumbra.core.recall.graph.
 
     FAIL-OPEN: a graph failure returns an error dict, never an exception — the graph is memory,
     it must NEVER break search or recall.
     """
-    v = (view or "").strip().lower()
-    valid_views = ("find", "stats", "neighborhood", "between", "voices", "since", "similar")
-    if v not in valid_views:
-        return {"error": f"unknown view {view!r}; valid: {' | '.join(valid_views)}"}
-
-    valid_policies = ("conservative", "working", "exploratory")
-    p = (policy or "conservative").strip().lower()
-    if p not in valid_policies:
-        return {"error": f"unknown policy {policy!r}; valid: {' | '.join(valid_policies)}"}
-
-    try:
-        from penumbra.core import recall
-        if v == "find":
-            return recall.graph.find(label_query, kind)
-        if v == "stats":
-            return recall.graph.stats()
-        if v == "voices":
-            return recall.graph.voices(doc_ids or [], p)
-        if v == "between":
-            return recall.graph.between(anchor, other, types, p, int(max_nodes or 40))
-        if v == "since":
-            return recall.graph.since(anchor, date, types, int(max_nodes or 40))
-        if v == "similar":
-            return recall.graph.similar(anchor, int(k or 10))
-        d = min(int(depth or 1), 2)  # depth cap enforced at the surface (budget discipline)
-        return recall.graph.neighborhood(anchor, d, types, p, int(max_nodes or 40))
-    except Exception as exc:  # noqa: BLE001 — a graph failure NEVER breaks the caller (fail-open)
-        return {"error": f"graph {v} failed: {str(exc)[:300]}"}
+    from penumbra.core import recall
+    return recall.graph.dispatch_view(view, args)
 
 
 # The gather whitelist, as explicit DATA (mechanism demoted from the old regex scan): the TWELVE
@@ -1630,15 +1611,16 @@ def penumbra_sensor(action: str, query: str = "", sources: Optional[list[str]] =
     source_id) fingerprint diff against baseline). Each action's REQUIRED args:
 
     • action="create" (query; optional sources, schedule, notify) -> register a standing query that
-      detects NEW results over time. Pre-warms the recall index for its query on a schedule (initially
-      disabled; use action="run" to trigger manually). Returns the created sensor with its id.
-      notify=True means the (currently disabled) cron Barks when new results appear.
+      detects NEW results over time. Sensors run on their schedule automatically in the live service
+      (hourly | daily | weekly; unknown = daily); use action="run" to trigger one manually. Returns
+      the created sensor with its id. notify=True means the scheduler Barks when a scheduled run finds
+      new results.
     • action="list" -> all registered sensors with last-run stats {id, query, sources, schedule,
       last_run_at, last_new_count, total_runs, baseline_size}.
     • action="delete" (sensor_id) -> delete a sensor by id. Returns {deleted: true/false}.
-    • action="run" (sensor_id) -> manually trigger one sensor NOW (no cron): runs its query, diffs
-      against baseline, updates state, returns a summary with new_count + new_titles. Tests a sensor
-      without enabling the cron job.
+    • action="run" (sensor_id) -> manually trigger one sensor NOW (the manual path beside the
+      automatic scheduler): runs its query, diffs against baseline, updates state, returns a summary
+      with new_count + new_titles. Tests a sensor on demand without waiting for its schedule.
 
     Unknown action, or a missing required arg, returns {"error": ...}.
     """
@@ -1770,7 +1752,7 @@ def investigate(target: str, shape: str = "person", context: str = "") -> list[d
             f"WAVE 2 (penumbra_gather, informed by Phase A):\n"
             f"  - penumbra_coauthors(authors=[<resolved_id>]) if identity resolved\n"
             f"  - penumbra_paper_enrich(ids=[<top DOIs from handles.enrichable>])\n"
-            f"  - penumbra_graph(view=\"voices\", doc_ids=[<doc ids from wave 1>]) to count independent voices\n"
+            f"  - penumbra_graph(view=\"voices\", args={{\"doc_ids\": [<doc ids from wave 1>]}}) to count independent voices\n"
             f"  - penumbra_search(query=\"{target}\", sources=[<top excluded_relevant>], wait_s=30)\n"
             f"  - penumbra_transcribe(url=<handles.transcribable URL>) if found\n\n"
             f"Build your J-tier graph overlay (GraphNode/GraphEdge) from your findings."
