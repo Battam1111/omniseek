@@ -103,8 +103,10 @@ _PENUMBRA_INSTRUCTIONS = (
     "document figures / video frames; auto-routes). penumbra_transcribe (spoken audio -> text). "
     "penumbra_gather (run several read-only calls in ONE round-trip; wait_s budget, stragglers "
     "keep warming). penumbra_sensor (standing queries with novelty detection; action=create/list/"
-    "delete/run). penumbra_graph (the memory of relations: find -> stats -> neighborhood; policies "
-    "conservative|working|exploratory). Scholarly depth: penumbra_field_skeleton / "
+    "delete/run). penumbra_ruling (record/list/retract your identity rulings same_as|not_same_as; "
+    "action=create/list/delete — the one judgment channel the graph's working policy applies). "
+    "penumbra_graph (the memory of relations: find -> stats -> neighborhood -> between -> voices; "
+    "policies conservative|working|exploratory). Scholarly depth: penumbra_field_skeleton / "
     "penumbra_paper_recommend / penumbra_paper_enrich / penumbra_resolve_identity / penumbra_coauthors / "
     "penumbra_institution_cohort (per-tool contracts in their docstrings). Curator (source "
     "lifecycle): penumbra_curator_view + penumbra_curator_act. "
@@ -154,7 +156,8 @@ _PENUMBRA_INSTRUCTIONS = (
     "absent_perspectives inform gap GraphNodes). "
     "Identity rulings (same_as / not_same_as) persist in ~/.penumbra/state/graph_rulings.json "
     "(the sensors.json precedent: the eye stores your judgment as declarative state, never makes "
-    "one) and are applied at read time under the working policy."
+    "one); write them via penumbra_ruling(action=create) and they are applied at read time under the "
+    "working policy."
     "\n\n"
     "(7) WALLED SOURCES: explicit_only sources (zhihu, xiaohongshu, yipinsanfendi, xiaomuchong, "
     "...) are deadline-dropped from the broad sweep. Name them BY DOMAIN match only; naming the "
@@ -1500,7 +1503,8 @@ def penumbra_gather(calls: list[dict], wait_s: LenientInt = 60) -> dict:
 @_threaded
 def penumbra_graph(view: str, anchor: str = "", label_query: str = "", kind: str = "",
               depth: LenientInt = 1, types: Optional[list[str]] = None,
-              policy: str = "conservative", max_nodes: LenientInt = 40) -> dict:
+              policy: str = "conservative", max_nodes: LenientInt = 40,
+              other: str = "", doc_ids: Optional[list[str]] = None) -> dict:
     """The eye's MEMORY OF RELATIONS — read-only, budgeted projections of ONE graph.
 
     Everything the eye perceives is a statement with provenance ("X relates to Y, per Z");
@@ -1522,6 +1526,14 @@ def penumbra_graph(view: str, anchor: str = "", label_query: str = "", kind: str
       cold-start check: see below).
     • view="neighborhood" (anchor; optional depth<=2, types, policy, max_nodes) -> the bounded
       subgraph around a node.
+    • view="between" (anchor, other; optional types, policy, max_nodes) -> bounded connection paths
+      between two anchors, the "how do these relate" question. Bidirectional BFS, <=2 hops per side,
+      up to 8 shortest paths; ``capped`` when more existed. No path -> paths:[] (honest empty).
+    • view="voices" (doc_ids) -> collapse a doc set to distinct upstream VOICES via same_as +
+      authored; the independence counter (mirrors collapse, shared-speaker docs merge, docs with
+      zero evidence land in ``unresolved`` and are NEVER counted as a voice). Input capped at 64 doc
+      ids by explicit error; non-``doc:`` ids come back in ``skipped``.
+    Identity rulings are WRITTEN via penumbra_ruling (this tool stays read-only, hence gather-safe).
 
     ``policy`` = conservative | working | exploratory: NAMED METHOD-SETS for how far to trust
     identity (same_as) edges when collapsing, NOT numeric thresholds (a hand-picked constant is
@@ -1549,7 +1561,7 @@ def penumbra_graph(view: str, anchor: str = "", label_query: str = "", kind: str
     it must NEVER break search or recall.
     """
     v = (view or "").strip().lower()
-    valid_views = ("find", "stats", "neighborhood")
+    valid_views = ("find", "stats", "neighborhood", "between", "voices")
     if v not in valid_views:
         return {"error": f"unknown view {view!r}; valid: {' | '.join(valid_views)}"}
 
@@ -1564,6 +1576,10 @@ def penumbra_graph(view: str, anchor: str = "", label_query: str = "", kind: str
             return recall.graph.find(label_query, kind)
         if v == "stats":
             return recall.graph.stats()
+        if v == "voices":
+            return recall.graph.voices(doc_ids or [], p)
+        if v == "between":
+            return recall.graph.between(anchor, other, types, p, int(max_nodes or 40))
         d = min(int(depth or 1), 2)  # depth cap enforced at the surface (budget discipline)
         return recall.graph.neighborhood(anchor, d, types, p, int(max_nodes or 40))
     except Exception as exc:  # noqa: BLE001 — a graph failure NEVER breaks the caller (fail-open)
@@ -1653,9 +1669,54 @@ def penumbra_sensor(action: str, query: str = "", sources: Optional[list[str]] =
     return {"error": f"unknown action {action!r}; valid: create | list | delete | run"}
 
 
+@mcp.tool()
+@_threaded
+def penumbra_ruling(action: str, src: str = "", dst: str = "", verdict: str = "", note: str = "") -> dict:
+    """Record / list / retract your identity RULINGS (same_as | not_same_as) — the one judgment channel the graph's working policy applies.
+
+    The eye never MAKES a ruling; it STORES yours as declarative state and APPLIES it at read time
+    (the sensors.json precedent: judgment persisted as config the eye executes mechanically). A ruling
+    says "these two graph nodes ARE / are NOT the same entity"; penumbra_graph's ``working`` and
+    ``exploratory`` policies then collapse (or reject) that pair when projecting a view. The pair is
+    the KEY: it normalizes to src < dst, re-creating a pair REPLACES the prior verdict (declarative
+    state, not a log; git history is the audit trail).
+
+    ``action`` picks what to do:
+    • action="create" (src, dst, verdict="same"|"not_same"; optional note) -> record the ruling.
+      Returns {created: true, ruling, replaced} (replaced=true if it overwrote a prior verdict for the
+      pair). A bad verdict / empty or identical endpoints -> {"error": ...}.
+    • action="list" -> {rulings: [{src, dst, verdict, note, ruled_at}], count}.
+    • action="delete" (src, dst) -> {deleted: true/false} (false if no ruling existed for the pair).
+
+    This is a SEPARATE tool from penumbra_graph (not an penumbra_graph action) because penumbra_graph is batchable in
+    penumbra_gather ONLY because it is read-only; folding a write into it would let the gather whitelist
+    write. Unknown action -> {"error": ...}.
+    """
+    from penumbra.core.recall import graph
+    a = (action or "").strip().lower()
+
+    if a == "create":
+        try:
+            res = graph.save_ruling(src, dst, verdict, note)
+        except ValueError as exc:
+            return {"error": str(exc)}
+        return {"created": True, "ruling": res["ruling"], "replaced": res["replaced"]}
+
+    if a == "list":
+        rulings = graph.load_rulings()
+        return {"rulings": rulings, "count": len(rulings)}
+
+    if a == "delete":
+        if not src or not dst:
+            return {"error": "action=delete requires src and dst"}
+        return {"deleted": graph.delete_ruling(src, dst)}
+
+    return {"error": f"unknown action {action!r}; valid: create | list | delete"}
+
+
 # The capability index penumbra_sources hands back on its orient call, DERIVED (mechanism demoted to data,
 # the same move as _GATHER_TOOLS above): each entry is a registered tool's name -> its docstring's
-# FIRST LINE, over an EXPLICIT tuple of ALL SIXTEEN tools. A hand-written dict drifted once already
+# FIRST LINE, over an EXPLICIT tuple of ALL SEVENTEEN tools. A hand-written dict drifted once already
 # (a fixpoint rescan caught penumbra_graph missing); derivation cannot. Each tool's first docstring line
 # is written to READ as a capability blurb; the __wrapped__ unwrap reaches the underlying sync body
 # where the source docstring lives (past @_threaded's functools.wraps async wrapper).
@@ -1665,7 +1726,7 @@ _PENUMBRA_VERBS: dict[str, str] = {
         penumbra_sources, penumbra_search, penumbra_read, penumbra_view,
         penumbra_field_skeleton, penumbra_paper_recommend, penumbra_paper_enrich,
         penumbra_resolve_identity, penumbra_coauthors, penumbra_institution_cohort,
-        penumbra_transcribe, penumbra_graph, penumbra_gather, penumbra_sensor,
+        penumbra_transcribe, penumbra_graph, penumbra_gather, penumbra_sensor, penumbra_ruling,
         penumbra_curator_view, penumbra_curator_act,
     )
 }
@@ -1694,6 +1755,7 @@ def investigate(target: str, shape: str = "person", context: str = "") -> list[d
             f"WAVE 2 (penumbra_gather, informed by Phase A):\n"
             f"  - penumbra_coauthors(authors=[<resolved_id>]) if identity resolved\n"
             f"  - penumbra_paper_enrich(ids=[<top DOIs from handles.enrichable>])\n"
+            f"  - penumbra_graph(view=\"voices\", doc_ids=[<doc ids from wave 1>]) to count independent voices\n"
             f"  - penumbra_search(query=\"{target}\", sources=[<top excluded_relevant>], wait_s=30)\n"
             f"  - penumbra_transcribe(url=<handles.transcribable URL>) if found\n\n"
             f"Build your J-tier graph overlay (GraphNode/GraphEdge) from your findings."

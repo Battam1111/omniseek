@@ -38,6 +38,16 @@ call; that only serializes them against each other for no gain.
 underlying item. Count **independent upstreams**, not hits: a paper mirrored across five indexes is
 one corroborating source, not five.
 
+`penumbra_graph` view=`voices` is the tool-layer form of this count: hand it the doc ids from a
+search (`doc:{source}:{source_id}`) and it collapses them to distinct upstream voices via same-work
+identity and shared authorship, so "five sources agree" becomes "N independent voices agree" (or
+fewer). Docs with zero connecting evidence come back in `unresolved` and are never counted as
+voices; counting unknowns as independent would fabricate corroboration.
+
+When the `exploratory` policy surfaces a same-work candidate you then verify yourself, record the
+judgment with `penumbra_ruling(action="create")`; the `working` policy applies it from then on.
+The graph projects candidates mechanically; whether two things are the same is always your call.
+
 When sources disagree, that disagreement is the finding. Surface it (who said what, which is the
 first-party source vs. a reblog) rather than averaging it away.
 

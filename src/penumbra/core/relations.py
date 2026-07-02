@@ -62,6 +62,26 @@ _WORKS_TTL = 6 * 3600     # per-author work lists: the heavy fetch; a person's r
 _RESOLVE_TTL = 3600       # name -> id map: stable, but short so a fresh ingestion is picked up within the hour
 _COHORT_TTL = 6 * 3600    # institution roster: an org's publishing cohort shifts slowly
 
+from penumbra.core.recall import graph  # noqa: E402 — the graph write verb + mint registry
+
+# Vocabulary this tap MINTS (vocabulary-by-minting, design section 3): declared on the tap itself,
+# registered at import, folded into ``graph.declared_vocabulary`` as the computed union; the smoke
+# tripwire bounds ACTUAL graph data to that union. relations owns the PERSON layer the cartographer
+# deferred (P3 taps table row): person/institution nodes, and the coauthored / affiliated / same_as
+# edges from the three clean-structured layers. THE MINT RULE (design "Mint the product"): a tap
+# mints what its tool RETURNS, never its internal fetch material — coauthors pulls up to 200 works
+# per author as COUNTING material and mints none of it; the returned top_coauthors / bridges /
+# pairwise edges (the product) are what mint. same_as here is the A-tier name_match candidate from
+# resolve_identity's likely_same_person groups (the agent ratifies via penumbra_ruling); institution
+# affiliation is api:openalex; the align:name_match method is declared here.
+GRAPH_MINTS = {
+    "kinds": ["person", "institution"],
+    "edge_types": ["coauthored", "affiliated", "same_as"],
+    "methods": ["api:openalex", "api:s2", "align:name_match"],
+}
+graph.register_mints("relations", kinds=GRAPH_MINTS["kinds"],
+                     edge_types=GRAPH_MINTS["edge_types"], methods=GRAPH_MINTS["methods"])
+
 
 # ── name matching (the disambiguation gate) ──────────────────────────────────
 # OpenAlex /authors?search is FUZZY: "Zhennan Shen" returns a prolific "Zhi-Qiang
@@ -198,6 +218,179 @@ def _likely_same_person(candidates: list[dict]) -> list[dict]:
     return out
 
 
+# ── graph write tap (design section 6 + P3 taps row): mint the PRODUCT the three layers return ──
+# THE MINT RULE (design "Mint the product, not the intermediate"): a tap mints what its tool RETURNS,
+# never its internal fetch material. coauthors pulls up to _MAX_WORKS works PER author purely as
+# counting material for the ranking — none of that mints; the returned top_coauthors / bridges /
+# pairwise edges (the product) do. resolve candidates' institution STRINGS mint nothing ("no external
+# id, no node"); cohort's id-bearing institution does. The three builders below are PURE (take the
+# tool's OUT dict, return (nodes, edges) in the writer's dict shapes) so the smoke can golden-test
+# them with zero network; _tap wraps enqueue_graph fail-open (a tap failure must NEVER break the
+# read the agent gets). person node ids namespace by the candidate/result's own backend
+# (person:openalex:A… / person:s2:…); institution is inst:openalex:I….
+
+def _person_nid(source: Optional[str], pid: Optional[str]) -> Optional[str]:
+    """``person:{backend}:{native_id}`` — None when either half is missing (a person with no id
+    mints no node, the S2-display-name-only lesson generalized). ``source`` is the candidate's own
+    backend field (``openalex`` / ``s2``)."""
+    src = (source or "").strip()
+    pid = (pid or "").strip()
+    if not src or not pid:
+        return None
+    return f"person:{src}:{pid}"
+
+
+def _resolve_mints(out: dict) -> tuple[list[dict], list[dict]]:
+    """From a resolve_identity RESULT dict: person nodes for every returned candidate carrying an id
+    (they are real persons OpenAlex/S2 retrieved), plus A-tier same_as candidate edges for every PAIR
+    within each ``likely_same_person`` group (one real person split across same-backend ids; the agent
+    ratifies via penumbra_ruling). Institution STRINGS on candidates mint nothing (no id). Pure."""
+    nodes: list[dict] = []
+    edges: list[dict] = []
+    for c in (out.get("candidates") or []):
+        if not isinstance(c, dict):
+            continue
+        nid = _person_nid(c.get("source"), c.get("id"))
+        if not nid:
+            continue
+        # attrs carry the two numeric facts the candidate returned (as returned — 0 is a real value
+        # the tool emits; the reader distinguishes 0 from absent). Institution string is deliberately
+        # NOT an attr edge target (no id → the mint rule forbids a node), but is harmless as prose.
+        nodes.append({"id": nid, "kind": "person", "label": c.get("name") or None,
+                      "attrs": {"works_count": c.get("works_count"), "cited_by": c.get("cited_by")}})
+    # same_as A candidates: ALL PAIRS inside each likely_same_person group (2-4 same-backend ids of
+    # ONE person). The writer normalizes symmetric src < dst, so do NOT pre-sort here.
+    for group in (out.get("likely_same_person") or []):
+        if not isinstance(group, dict):
+            continue
+        gsrc = group.get("source")
+        gids = [i for i in (group.get("ids") or []) if i]
+        for i in range(len(gids)):
+            for j in range(i + 1, len(gids)):
+                a_nid = _person_nid(gsrc, gids[i])
+                b_nid = _person_nid(gsrc, gids[j])
+                if a_nid and b_nid and a_nid != b_nid:
+                    edges.append({"src": a_nid, "dst": b_nid, "type": "same_as",
+                                  "tier": "A", "method": "align:name_match"})
+    return nodes, edges
+
+
+def _coauthors_mints(out: dict) -> tuple[list[dict], list[dict]]:
+    """From a coauthors RESULT dict: person nodes for every RESOLVED input (one node per id in its
+    ``ids``), every ``top_coauthors`` entry, and every ``bridges`` entry; coauthored M-edges input ->
+    top_coauthor (joint/papers attrs), input -> input per pairwise ``edges`` entry (joint_count attr,
+    endpoints = each input's PRIMARY id ids[0]), and input -> bridge (total_joint attr) for each input
+    in the bridge's ``shared_by``. The per-author works pool + ``cooc`` (name-collapsed, no stable
+    ids) mint NOTHING; unresolved inputs mint nothing. Pure. Namespace by ``out['source']``."""
+    source = (out.get("source") or "").strip()
+    ns = source or "openalex"
+    method = f"api:{ns}"
+    nodes: list[dict] = []
+    edges: list[dict] = []
+    # Map each input node's query string -> its PRIMARY resolved id (ids[0]); the pairwise edges and
+    # bridge.shared_by reference inputs by their query string, so this resolves them back to a node id.
+    query_to_primary: dict[str, str] = {}
+    input_nodes = out.get("nodes") or []
+    for n in input_nodes:
+        if not isinstance(n, dict):
+            continue
+        resolved = n.get("resolved")
+        if not isinstance(resolved, dict):
+            continue  # unresolved input -> mints nothing
+        rname = resolved.get("name")
+        ids = [i for i in (resolved.get("ids") or ([resolved.get("id")] if resolved.get("id") else [])) if i]
+        if not ids:
+            continue
+        # a node per id in the input's id set (split ids of ONE person), label = the resolved name.
+        for pid in ids:
+            nid = _person_nid(ns, pid)
+            if nid:
+                nodes.append({"id": nid, "kind": "person", "label": rname or None, "attrs": None})
+        primary = _person_nid(ns, ids[0])
+        if primary and n.get("query"):
+            query_to_primary[str(n.get("query"))] = primary
+        # coauthored: input's PRIMARY id -> each top_coauthor (their own id + name).
+        if primary:
+            for tc in (n.get("top_coauthors") or []):
+                if not isinstance(tc, dict):
+                    continue
+                co_nid = _person_nid(ns, tc.get("id"))
+                if not co_nid or co_nid == primary:
+                    continue
+                nodes.append({"id": co_nid, "kind": "person", "label": tc.get("name") or None,
+                              "attrs": None})
+                edges.append({"src": primary, "dst": co_nid, "type": "coauthored", "tier": "M",
+                              "method": method,
+                              "attrs": {"joint": tc.get("joint"), "papers": tc.get("papers")}})
+    # input -> input pairwise edges (endpoints resolved from the query strings to primary ids).
+    for e in (out.get("edges") or []):
+        if not isinstance(e, dict):
+            continue
+        a_nid = query_to_primary.get(str(e.get("a")))
+        b_nid = query_to_primary.get(str(e.get("b")))
+        if a_nid and b_nid and a_nid != b_nid:
+            edges.append({"src": a_nid, "dst": b_nid, "type": "coauthored", "tier": "M",
+                          "method": method, "attrs": {"joint_count": e.get("joint_count")}})
+    # input -> bridge for every input the bridge is shared_by (bridge is an external person with an id).
+    for b in (out.get("bridges") or []):
+        if not isinstance(b, dict):
+            continue
+        br_nid = _person_nid(ns, b.get("id"))
+        if not br_nid:
+            continue
+        nodes.append({"id": br_nid, "kind": "person", "label": b.get("name") or None, "attrs": None})
+        for q in (b.get("shared_by") or []):
+            in_nid = query_to_primary.get(str(q))
+            if in_nid and in_nid != br_nid:
+                edges.append({"src": in_nid, "dst": br_nid, "type": "coauthored", "tier": "M",
+                              "method": method, "attrs": {"total_joint": b.get("total_joint")}})
+    return nodes, edges
+
+
+def _cohort_mints(out: dict) -> tuple[list[dict], list[dict]]:
+    """From an institution_cohort RESULT dict: the institution node (``inst:openalex:I…``, when
+    ``out['institution']`` is real), a person node per ``people`` entry, and affiliated M-edges
+    person -> institution (attrs works + concept, the concept key only when the filter had one).
+    The no-match miss dict (institution None) mints nothing. Pure. Cohort people ids are OpenAlex
+    author ids -> ``person:openalex:…``; institutions are OpenAlex -> api:openalex."""
+    inst = out.get("institution")
+    if not isinstance(inst, dict) or not inst.get("id"):
+        return [], []
+    inst_nid = f"inst:openalex:{inst['id']}"
+    concept_id = ((out.get("filters") or {}).get("concept_id"))
+    nodes: list[dict] = [{"id": inst_nid, "kind": "institution",
+                          "label": inst.get("name") or None, "attrs": None}]
+    edges: list[dict] = []
+    for p in (out.get("people") or []):
+        if not isinstance(p, dict):
+            continue
+        p_nid = _person_nid("openalex", p.get("id"))
+        if not p_nid:
+            continue
+        nodes.append({"id": p_nid, "kind": "person", "label": p.get("name") or None, "attrs": None})
+        attrs: dict = {"works": p.get("works_at_institution_in_field")}
+        if concept_id:
+            attrs["concept"] = concept_id
+        edges.append({"src": p_nid, "dst": inst_nid, "type": "affiliated", "tier": "M",
+                      "method": "api:openalex", "attrs": attrs})
+    return nodes, edges
+
+
+def _tap(builder, out: dict) -> None:
+    """FAIL-OPEN wrapper (the cartographer idiom): run one PURE builder on the tool's result, enqueue
+    the (nodes, edges) through the single-writer queue. Never raises (a tap failure must NEVER break
+    the read the agent gets); NO-OP when writes are disabled (cron) or the batch is empty. Import the
+    writer INSIDE the try so an import hiccup degrades to a swallow, never a broken relations call."""
+    try:
+        nodes, edges = builder(out)
+        if not nodes and not edges:
+            return
+        from penumbra.core.recall import writer
+        writer.enqueue_graph(nodes, edges)
+    except Exception as exc:  # noqa: BLE001 — a tap failure must NEVER break a relations call
+        logger.debug("relations graph tap swallowed: %s", exc)
+
+
 def resolve_identity(name: str, hint: str = "", source: str = "auto", paper: str = "",
                      limit: int = 5, fresh: bool = False) -> dict:
     """name -> ranked candidate author ids. NEVER silently picks, and NEVER promotes a
@@ -225,6 +418,7 @@ def resolve_identity(name: str, hint: str = "", source: str = "auto", paper: str
     if not fresh:
         cached = cache.get(key)
         if cached is not None:
+            _tap(_resolve_mints, cached)   # a cache hit is still a real resolution → honest re-mint
             return cached
     anchored = _resolve_by_paper(name, paper) if paper else []
     cands: list[dict] = []
@@ -260,6 +454,7 @@ def resolve_identity(name: str, hint: str = "", source: str = "auto", paper: str
         # tail is blind, so do not freeze a partially-degraded view for the whole TTL.
         if not oa_failed:
             cache.set(key, anchored_out, ttl=_RESOLVE_TTL)
+        _tap(_resolve_mints, anchored_out)   # mint the returned candidates + any same_as group
         return anchored_out
     strong = [c for c in matched if c["works_count"] >= 2]
     ambiguous = len(strong) >= 2 and strong[1]["works_count"] * 2 >= strong[0]["works_count"]
@@ -294,6 +489,7 @@ def resolve_identity(name: str, hint: str = "", source: str = "auto", paper: str
     # freezing it for the whole TTL would turn a transient outage into a stale "no match" all hour.
     if not oa_failed:
         cache.set(key, out, ttl=_RESOLVE_TTL)
+    _tap(_resolve_mints, out)   # mint person nodes + likely_same_person same_as candidates (fail-open)
     return out
 
 
@@ -576,6 +772,9 @@ def coauthors(authors: list[str], source: str = "openalex", hints: Optional[list
     degraded = {n["query"]: n["degraded"] for n in nodes if n.get("degraded")}
     if degraded:
         out["degraded"] = degraded
+    # FAIL-OPEN graph tap: mint the PRODUCT (resolved persons + top_coauthors + bridges + pairwise
+    # coauthored edges); the per-author works pool + cooc mint nothing (the mint-the-product rule).
+    _tap(_coauthors_mints, out)
     return out
 
 
@@ -605,6 +804,7 @@ def institution_cohort(institution: str, concept: str = "", year_from: Optional[
     if not fresh:
         cached = cache.get(key)
         if cached is not None:
+            _tap(_cohort_mints, cached)   # a cache hit is a real cohort → honest re-mint (a miss mints nothing)
             return cached
     inst = oa.get_json("/institutions", {"search": institution, "per-page": 1})
     res = inst.get("results") or []
@@ -641,4 +841,5 @@ def institution_cohort(institution: str, concept: str = "", year_from: Optional[
                     "no field filter — all fields at this institution; pass concept= to "
                     "scope to a cohort")}
     cache.set(key, out, ttl=_COHORT_TTL)
+    _tap(_cohort_mints, out)   # mint the institution + people nodes + affiliated edges (fail-open)
     return out
