@@ -1,6 +1,6 @@
 # Penumbra — one-command self-host.   docker compose up -d   then point your MCP client at
 # http://127.0.0.1:8765/mcp  with  Authorization: Bearer <token>  (the token is printed on first
-# start; see `docker compose logs penumbra`, or read ./.penumbra/credentials/http.json).
+# start; see `docker compose logs penumbra`, or read ./.penumbra/credentials/penumbra_http.json).
 services:
   penumbra:
     build:

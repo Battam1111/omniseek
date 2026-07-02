@@ -14,7 +14,7 @@ python -m playwright install chromium || python -m playwright install --with-dep
 echo "==> 3/4  Bearer token (so the HTTP transport never serves open)."
 python - <<'PY'
 import json, os, pathlib, secrets
-p = pathlib.Path(os.path.expanduser("~/.penumbra/credentials/http.json"))
+p = pathlib.Path(os.path.expanduser("~/.penumbra/credentials/penumbra_http.json"))
 if p.exists():
     print(f"    token already present at {p} (leaving it)")
 else:

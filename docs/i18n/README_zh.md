@@ -85,7 +85,7 @@ curl -s http://127.0.0.1:8765/healthz
 
 将你的 MCP 客户端指向 `http://127.0.0.1:8765/mcp`,携带请求头
 `Authorization: Bearer <token>`。token 在首次启动时自动生成,
-存储在 `~/.penumbra/credentials/http.json`(Docker 下挂载为 `./.penumbra/credentials/http.json`)。
+存储在 `~/.penumbra/credentials/penumbra_http.json`(Docker 下挂载为 `./.penumbra/credentials/penumbra_http.json`)。
 
 可选扩展(你需接受其许可,参见 [NOTICE](../../NOTICE)):
 在 `docker-compose.yml` 中设置 `EXTRAS="[pdf,asr,walled]"`。

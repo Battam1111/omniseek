@@ -5464,6 +5464,19 @@ check("sensor: penumbra_sensor_list is registered", callable(penumbra_sensor_lis
 check("sensor: penumbra_sensor_delete is registered", callable(penumbra_sensor_delete))
 check("sensor: penumbra_sensor_run is registered", callable(penumbra_sensor_run))
 
+# ---------------------------------------------------------------------------
+# 46. Deploy seam: native deploy files must provision the SAME artifacts the
+#     synced code reads (the 2026-06-28 naming round renamed the token file;
+#     this seam broke penumbra's docker CI when the full sync arrived).
+# ---------------------------------------------------------------------------
+_ep_path = ROOT / "deploy" / "docker-entrypoint.sh"
+_sh_path = ROOT / "src" / "penumbra" / "serve_http.py"
+if _ep_path.exists() and _sh_path.exists():
+    _tok_name = "penumbra_http.json"
+    check("deploy seam: serve_http reads the token file the docker entrypoint writes",
+          _tok_name in _sh_path.read_text(encoding="utf-8")
+          and _tok_name in _ep_path.read_text(encoding="utf-8"))
+
 
 print()
 if FAIL:
