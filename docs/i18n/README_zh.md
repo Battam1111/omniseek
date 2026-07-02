@@ -70,7 +70,7 @@
   </picture>
 </div>
 
-你的 agent 经 MCP 接入。入口是 **`penumbra_search_ranked`**;`penumbra_list_sources()` 展示可用能力。目录开放且持续生长:每个源靠胜过普通搜索来赢得席位。完整工具清单见 **[tools](../tools.md)**。
+你的 agent 经 MCP 接入。入口是 **`penumbra_search`**;`penumbra_sources()` 展示可用能力。目录开放且持续生长:每个源靠胜过普通搜索来赢得席位。完整工具清单见 **[tools](../tools.md)**。
 
 ## 快速开始
 

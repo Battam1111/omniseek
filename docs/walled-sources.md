@@ -36,7 +36,7 @@ opening a tab: Penumbra perceives only what you, the account holder, are already
    your account                  a Chrome you run                    Penumbra
   ─────────────       log in     ───────────────       CDP        ─────────────
   xiaohongshu.com  ──────────▶   --remote-debugging   ◀────────   walled adapter
-  (your session)   (you, once)   --port=9223          connect     (penumbra_fetch)
+  (your session)   (you, once)   --port=9223          connect     (the penumbra_search drill)
                                   (session on disk)
 ```
 
@@ -114,7 +114,7 @@ Walled sources are `explicit_only`: they never join the broad fan-out (they are 
 account-rate-sensitive). Name one directly:
 
 ```
-penumbra_fetch(source="xiaohongshu", query="深圳 租房 经验")
+penumbra_search(query="深圳 租房 经验", sources=["xiaohongshu"], raw=True, full=True)
 ```
 
 ---
@@ -131,7 +131,7 @@ Platforms watch for automation. Penumbra is conservative by design, and you shou
 - **Keep it human-paced.** The defaults already insert human-like delays. Don't lower them to chase
   throughput on a sensitive account.
 - **Session expiry.** If a source starts returning empty, your login probably expired: bring the
-  browser to the foreground and log back in. `penumbra_health_check` reports CDP reachability per
+  browser to the foreground and log back in. `penumbra_sources(check_health=True)` reports CDP reachability per
   source.
 
 Advanced: set `PENUMBRA_CDP_POOL=1` to keep a persistent CDP connection per browser (lower per-call

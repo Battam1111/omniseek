@@ -39,7 +39,7 @@ default.
 | **walled** | content behind a login you are entitled to | **off** | your own logged-in browser |
 | **circumvention** | requires defeating an access control | **off**; none in the default pack | your own adapter + legal judgment |
 
-Route at call time with `penumbra_list_sources(domain=..., query=...)`; each source reports its
+Route at call time with `penumbra_sources(domain=..., query=...)`; each source reports its
 `access_tier`, so an agent can filter by legal posture instead of memorizing the set.
 
 ## Keyed sources
@@ -148,7 +148,7 @@ the classification framework and the opt-in gate; the legal judgment is yours. S
 | `PENUMBRA_CONTACT_EMAIL` | (placeholder) | polite-pool contact for OpenAlex / Crossref / SEC / Unpaywall |
 | `PENUMBRA_CDP_POOL` | off | keep a persistent CDP connection per walled browser |
 | `PENUMBRA_ALLOW_NETS` | (none) | extra CIDRs the SSRF guard may reach (advanced) |
-| `PENUMBRA_DOC_ROOTS` | inbox only | additional roots `penumbra_read_document` may read |
+| `PENUMBRA_DOC_ROOTS` | inbox only | additional roots `penumbra_read` (document branch) may read |
 
 </details>
 

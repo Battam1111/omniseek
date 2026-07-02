@@ -70,7 +70,7 @@ Not secret. A blind spot:
   </picture>
 </div>
 
-Your agent connects over MCP. Start with **`penumbra_search_ranked`**; `penumbra_list_sources()`
+Your agent connects over MCP. Start with **`penumbra_search`**; `penumbra_sources()`
 shows what's available. The catalog is open and growing: each source earns its place by beating
 plain search. Full tool list in **[tools](docs/tools.md)**.
 
