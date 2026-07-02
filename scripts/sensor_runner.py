@@ -27,6 +27,15 @@ def main() -> None:
         log.info("no sensors registered, exiting")
         return
 
+    # This process runs with recall writes DISABLED (single-writer discipline: only the eye-http
+    # process writes). Runs below still detect novelty and Bark, but mint NO memory: no thin rows,
+    # no observed edges, no seen_before stamps. Announce it on every run so enabling the launchd
+    # schedule can never silently produce a memory-less sensor fleet; the structural fix (routing
+    # runs through the live service, or scheduling in-process) is a design decision to make WHEN
+    # the schedule is actually enabled (see graph-unified-model.md open items).
+    log.warning("writes are DISABLED in this process: sensor runs will detect novelty "
+                "but mint no memory (no observed edges / thin rows / seen_before); "
+                "route runs through the eye-http service when enabling the schedule")
     log.info("running %d sensor(s)", len(sensors))
     for raw in sensors:
         s = store.get(raw["id"])
