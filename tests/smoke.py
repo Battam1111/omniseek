@@ -5971,6 +5971,253 @@ check("graph: server instructions mention recall.graph (the guidance-layer point
       "recall.graph" in _srv47._PENUMBRA_INSTRUCTIONS)
 
 
+# ---------------------------------------------------------------------------
+# 48. P2.0 — retrieval-anchored THIN memory + the seen_before stamp (design §"P2.0", the thesis-gap
+#     fix). Everything the eye RETRIEVES arrives placed, not just the ~40 recall-allowlisted sources:
+#     the Path A hook writes a THIN document node (graph_nodes, title + url + fp + external_ids ONLY,
+#     never content) for every retrieved doc from a NON-indexed source; walled/circumvention docs stay
+#     opt-in (operator privacy). Corollary: every search stamps per-doc first_seen so the agent knows
+#     instantly which results are NEW to this deployment. Same FRESH temp-db pattern as §47 (repoint
+#     store.DB_PATH etc., restore in finally); drives the writer's real apply path (maybe_ingest ->
+#     drain the queue -> _apply on a temp db, the WRITES_ENABLED pattern §9/§12.5 use) and the real
+#     first_seen lookup helper (fetcher._stamp_seen_before) directly — no live fetch, no network.
+# ---------------------------------------------------------------------------
+import time as _time48  # noqa: E402
+
+_p2_db_prev = _rstore.DB_PATH
+_p2_disabled_prev = _rstore._disabled
+_p2_local_prev = _rstore._local
+_p2_writes_prev = _recall.writer.WRITES_ENABLED
+_p2_iswalled_prev = fetcher.is_walled_source
+_p2_remember_prev = _prof.remember_walled_retrievals
+_p2_prof_in_writer = None  # profile module the writer sees (patched below); restored in finally
+_rstore.DB_PATH = Path(_tf47.mkdtemp()) / "smoke_p2.db"
+_rstore._disabled = False
+_rstore._local = _thr47.local()  # fresh per-thread conn cache -> _read_con() reconnects to THIS db
+try:
+    check("P2.0: index init creates the tables in the temp db", _rstore.init())
+    _p2con = _rstore.connect()
+
+    # Classification is DETERMINISTIC via monkeypatch (this section tests the writer's ROUTING + apply,
+    # NOT the adapter tier-derivation §46 covers): a chosen "walled_src" is walled, everything else is
+    # not. maybe_ingest imports `fetcher` + `profile` locally, so patch on those exact modules.
+    _WALLED = {"walled_src"}
+    fetcher.is_walled_source = lambda name: name in _WALLED
+    from penumbra.core import profile as _p2prof  # the SAME module object maybe_ingest imports
+    _p2_prof_in_writer = _p2prof.remember_walled_retrievals
+    _p2prof.remember_walled_retrievals = lambda: False   # opt-in OFF by default (walled stays private)
+
+    # Drain the writer queue into ONE _apply call against the temp-db connection — the real apply path
+    # (maybe_ingest enqueues; the daemon would drain+_apply; here we drain synchronously, no thread).
+    def _p2_drain_apply():
+        items = []
+        while not _recall.writer._queue.empty():
+            try:
+                items.append(_recall.writer._queue.get_nowait())
+            except Exception:  # noqa: BLE001
+                break
+        if items:
+            _recall.writer._apply(_p2con, items)
+
+    _recall.writer.WRITES_ENABLED = True
+
+    # (1) THREE lanes through the writer's classify+apply path:
+    #   (a) an INDEXABLE-source doc -> a full docs row, NO thin graph_nodes row.
+    #   (b) a NON-indexable NON-walled doc -> a thin graph_nodes row (fp + url in attrs), NO content.
+    #   (c) a WALLED-tier doc -> NO row by default; with the profile opt-in monkeypatched ON -> thin row.
+    _P2_A_TITLE = "Indexable Lane Full Row Perception Memory Retrieval Study"
+    _p2_a = _doc("hf_daily_papers", _P2_A_TITLE, "http://hf/p2a")   # in _SINGLETONS -> indexable
+    _p2_a.source_id = "p2_a"
+    _p2_a.content = "indexable lane keeps full content"
+    _P2_B_TITLE = "Retrieval Anchored Thin Memory Non Indexed Arxiv Original Long Title"
+    _p2_b = _doc("arxiv", _P2_B_TITLE, "http://arxiv.org/abs/p2b")  # not indexable, not walled -> thin
+    _p2_b.source_id = "p2_b"
+    _p2_b.content = "this content must NEVER reach graph_nodes"
+    _p2_c = _doc("walled_src", "Walled Tier Operator Privacy Doc Long Title Here", "http://walled/p2c")
+    _p2_c.source_id = "p2_c"
+
+    _recall.maybe_ingest([_p2_a, _p2_b, _p2_c])
+    _p2_drain_apply()
+
+    _a_nid = _graph.doc_node_id("hf_daily_papers", "p2_a")
+    _b_nid = _graph.doc_node_id("arxiv", "p2_b")
+    _c_nid = _graph.doc_node_id("walled_src", "p2_c")
+
+    # (a) indexable -> docs row, and NO thin row for it.
+    _a_docrow = _p2con.execute("SELECT count(*) FROM docs WHERE source='hf_daily_papers' "
+                               "AND source_id='p2_a'").fetchone()[0]
+    _a_thin = _p2con.execute("SELECT count(*) FROM graph_nodes WHERE id=?", (_a_nid,)).fetchone()[0]
+    check("P2.0 (a): an indexable-source doc -> a full docs row and NO thin graph_nodes row",
+          _a_docrow == 1 and _a_thin == 0)
+
+    # (b) non-indexable non-walled -> thin graph_nodes row (kind='document'), fp + url in attrs, and
+    #     the CONTENT is nowhere in the graph node (title + url + fp + external_ids ONLY).
+    _b_row = _p2con.execute("SELECT kind, label, attrs_json FROM graph_nodes WHERE id=?",
+                            (_b_nid,)).fetchone()
+    _b_attrs = json.loads(_b_row[2]) if _b_row else {}
+    _b_no_docrow = _p2con.execute("SELECT count(*) FROM docs WHERE source='arxiv' "
+                                  "AND source_id='p2_b'").fetchone()[0] == 0
+    check("P2.0 (b): a non-indexable non-walled doc -> a thin graph_nodes row (kind='document')",
+          _b_row is not None and _b_row[0] == "document" and _b_no_docrow)
+    check("P2.0 (b): the thin row carries fp + url in attrs, and NO content anywhere in the node",
+          _b_attrs.get("url") == "http://arxiv.org/abs/p2b"
+          and str(_b_attrs.get("fp", "")).startswith("title:")
+          and "this content must NEVER reach graph_nodes" not in (_b_row[2] or "")
+          and "content" not in _b_attrs)
+
+    # (c) walled -> NO row while the opt-in is OFF.
+    _c_off = _p2con.execute("SELECT count(*) FROM graph_nodes WHERE id=?", (_c_nid,)).fetchone()[0]
+    check("P2.0 (c): a walled-tier doc leaves NO row by default (operator privacy; opt-in OFF)",
+          _c_off == 0)
+
+    # (c) flip the profile opt-in ON (the deployment flag) -> re-push the walled doc -> a thin row appears.
+    _p2prof.remember_walled_retrievals = lambda: True
+    _recall.maybe_ingest([_p2_c])
+    _p2_drain_apply()
+    _c_on = _p2con.execute("SELECT kind FROM graph_nodes WHERE id=?", (_c_nid,)).fetchone()
+    check("P2.0 (c): with walled.remember_retrievals opt-in ON, the walled doc gets a thin row",
+          _c_on is not None and _c_on[0] == "document")
+    _p2prof.remember_walled_retrievals = lambda: False   # restore the default-private posture
+
+    # (2) UPSERT semantics: re-pushing (b) bumps last_seen, keeps first_seen immutable, row count stable.
+    _b_first_before, _b_last_before = _p2con.execute(
+        "SELECT first_seen, last_seen FROM graph_nodes WHERE id=?", (_b_nid,)).fetchone()
+    _b_count_before = _p2con.execute("SELECT count(*) FROM graph_nodes WHERE kind='document'").fetchone()[0]
+    # _apply stamps `now = time.time()`; force a strictly-later wall clock by advancing the row's stored
+    # last_seen is not how the writer works — instead re-push and rely on time.time() moving forward. To
+    # make the bump observable deterministically (sub-ms runs), directly re-upsert with an explicit later
+    # `now` via the same _upsert_thin the apply path calls (identical code path, controlled clock).
+    _b_later = _b_last_before + 100.0
+    _recall.writer._upsert_thin(_p2con, rank, _p2_b, _b_later)
+    _p2con.commit()
+    _b_first_after, _b_last_after = _p2con.execute(
+        "SELECT first_seen, last_seen FROM graph_nodes WHERE id=?", (_b_nid,)).fetchone()
+    _b_count_after = _p2con.execute("SELECT count(*) FROM graph_nodes WHERE kind='document'").fetchone()[0]
+    check("P2.0 (2): re-upsert bumps last_seen, keeps first_seen immutable, row count stable",
+          _b_first_after == _b_first_before and _b_last_after == _b_later
+          and _b_last_after > _b_last_before and _b_count_after == _b_count_before)
+
+    # (3) ROLL-OFF (_sweep): a thin document row older than the retention cutoff is swept; a NON-document
+    #     graph_nodes row (a fake person entity) SURVIVES (entities persist indefinitely, design §5).
+    _old = _time48.time() - (_recall.writer.RETAIN_DAYS + 30) * 86400   # comfortably past the cutoff
+    _stale_nid = _graph.doc_node_id("arxiv", "p2_stale")
+    _person_nid = "person:openalex:A_p2_survivor"
+    _p2con.execute("BEGIN")
+    _p2con.execute("INSERT INTO graph_nodes(id, kind, label, attrs_json, first_seen, last_seen) "
+                   "VALUES(?, 'document', 'stale thin doc', '{}', ?, ?)", (_stale_nid, _old, _old))
+    _p2con.execute("INSERT INTO graph_nodes(id, kind, label, attrs_json, first_seen, last_seen) "
+                   "VALUES(?, 'person', 'A Survivor Person Entity', '{}', ?, ?)",
+                   (_person_nid, _old, _old))
+    _p2con.commit()
+    _recall.writer._sweep(_p2con)   # the ONLY deletion path; same cutoff for docs + thin document nodes
+    _stale_gone = _p2con.execute("SELECT count(*) FROM graph_nodes WHERE id=?",
+                                 (_stale_nid,)).fetchone()[0] == 0
+    _person_lives = _p2con.execute("SELECT count(*) FROM graph_nodes WHERE id=?",
+                                   (_person_nid,)).fetchone()[0] == 1
+    check("P2.0 (3): roll-off sweeps a stale THIN document row (past the retention cutoff)", _stale_gone)
+    check("P2.0 (3): roll-off EXEMPTS a non-document entity row (person survives; entities persist)",
+          _person_lives)
+    # A control: the fresh thin (b) row (last_seen = now-ish) is NOT swept — only the stale one went.
+    check("P2.0 (3): the fresh thin (b) row survives the sweep (only past-cutoff rows go)",
+          _p2con.execute("SELECT count(*) FROM graph_nodes WHERE id=?", (_b_nid,)).fetchone()[0] == 1)
+
+    # (4) VIEWS over thin memory: find() surfaces the thin doc by a title token; neighborhood() derives
+    #     the doc->work id_eq same_as (id_eq:doi, CONSERVATIVE-tier) from a THIN row's external_ids —
+    #     and a docs-table row carrying the SAME DOI derives the SAME edge, so the two rows meet at one
+    #     work entity (the mechanical "between" link; id_eq shows under conservative AND exploratory,
+    #     since conservative ⊆ exploratory). A thin doc with a DOI + a docs-table doc with that DOI:
+    _P2_DOI = "10.5555/p2thin"
+    _p2_thin_doi = _doc("crossref", "Cross Ref Thin Doc Carrying A Shared DOI Long Enough Title", "http://xref/p2")
+    _p2_thin_doi.source_id = "p2_thin_doi"
+    _p2_thin_doi.metadata = {"doi": _P2_DOI}          # lifted into the thin row's attrs by _upsert_thin
+    _p2_docs_doi = _doc("openalex", "OpenAlex Docs Row Sharing The Same DOI Long Enough Title", "http://oa/p2")
+    _p2_docs_doi.source_id = "p2_docs_doi"
+    _p2_docs_doi.metadata = {"doi": _P2_DOI}          # lands in doc_json.metadata.doi (the docs arm)
+    # crossref is not indexable + not walled -> thin lane; openalex-as-source is indexable -> docs lane.
+    # Drive both through the real classify+apply path (openalex source name is NOT in _SINGLETONS, so
+    # push the docs-row one straight through _upsert to guarantee the docs-table lane deterministically).
+    _recall.maybe_ingest([_p2_thin_doi])
+    _p2_drain_apply()
+    _p2con.execute("BEGIN")
+    _recall.writer._upsert(_p2con, rank, _p2_docs_doi, _time48.time())   # the docs-table row
+    _p2con.commit()
+
+    _thin_doi_nid = _graph.doc_node_id("crossref", "p2_thin_doi")
+    _docs_doi_nid = _graph.doc_node_id("openalex", "p2_docs_doi")
+    _work_doi = f"work:doi:{_P2_DOI.lower()}"
+
+    # find(): the thin doc is discoverable by a title token (the entry point spans thin memory too).
+    _p2_find = _graph.find("Cross Ref Thin")
+    check("P2.0 (4): find() returns the THIN doc by a title token (entry point covers thin memory)",
+          _thin_doi_nid in {n["id"] for n in _p2_find["nodes"]})
+
+    # neighborhood() from the THIN row derives the id_eq:doi same_as to the work entity (conservative).
+    _p2_nb_thin_cons = _graph.neighborhood(_thin_doi_nid, depth=1, policy="conservative")
+    _thin_id_eq = [e for e in _p2_nb_thin_cons["edges"]
+                   if e["type"] == "same_as" and e.get("method") == "id_eq:doi" and e["dst"] == _work_doi]
+    check("P2.0 (4): neighborhood(thin, conservative) derives the doc->work id_eq:doi same_as from attrs",
+          _work_doi in {n["id"] for n in _p2_nb_thin_cons["nodes"]} and bool(_thin_id_eq))
+    # The docs-table row with the SAME DOI derives the SAME edge -> the two rows meet at ONE work node
+    # (the id_eq same_as BETWEEN a thin row and a docs-table row, via the shared world entity).
+    _p2_nb_docs_cons = _graph.neighborhood(_docs_doi_nid, depth=1, policy="conservative")
+    _docs_id_eq = [e for e in _p2_nb_docs_cons["edges"]
+                   if e["type"] == "same_as" and e.get("method") == "id_eq:doi" and e["dst"] == _work_doi]
+    check("P2.0 (4): a docs-table row with the SAME DOI reaches the SAME work node (they meet at one entity)",
+          _work_doi in {n["id"] for n in _p2_nb_docs_cons["nodes"]} and bool(_docs_id_eq))
+    # id_eq is conservative-tier, so it ALSO shows under exploratory (conservative ⊆ exploratory).
+    _p2_nb_thin_expl = _graph.neighborhood(_thin_doi_nid, depth=1, policy="exploratory")
+    check("P2.0 (4): the id_eq:doi same_as also shows under exploratory (conservative ⊆ exploratory)",
+          any(e["type"] == "same_as" and e.get("method") == "id_eq:doi" and e["dst"] == _work_doi
+              for e in _p2_nb_thin_expl["edges"]))
+
+    # (5) seen_before: the wall's novelty stamp. Drive the REAL lookup helper (fetcher._stamp_seen_before)
+    #     against this temp db. A doc first_seen BEFORE t0 -> seen_before True; a doc absent from BOTH
+    #     tables -> NO stamp (absent); a doc whose first_seen is AFTER t0 (this search's own write) ->
+    #     NOT flipped to True (the race-proof-by-construction property: your own writes never self-flag).
+    _t0 = _time48.time()
+    # (i) an OLD doc: a thin row whose first_seen strictly predates t0 (seed it directly, controlled clock).
+    _sb_old = _doc("arxiv", "Seen Before Old Thin Doc Predating This Search Long Title", "http://arxiv/sb_old")
+    _sb_old.source_id = "sb_old"
+    _p2con.execute("INSERT OR REPLACE INTO graph_nodes(id, kind, label, attrs_json, first_seen, last_seen) "
+                   "VALUES(?, 'document', 'sb old', '{}', ?, ?)",
+                   (_graph.doc_node_id("arxiv", "sb_old"), _t0 - 500.0, _t0 - 500.0))
+    _p2con.commit()
+    # (ii) a NEW doc, absent from both tables entirely.
+    _sb_absent = _doc("arxiv", "Seen Before Absent Doc Never Retrieved Here Long Title", "http://arxiv/sb_absent")
+    _sb_absent.source_id = "sb_absent"
+    # (iii) a doc whose first_seen is AFTER t0 (models THIS search's own async ingest write).
+    _sb_future = _doc("arxiv", "Seen Before Future Doc This Searchs Own Write Long Title", "http://arxiv/sb_future")
+    _sb_future.source_id = "sb_future"
+    _p2con.execute("INSERT OR REPLACE INTO graph_nodes(id, kind, label, attrs_json, first_seen, last_seen) "
+                   "VALUES(?, 'document', 'sb future', '{}', ?, ?)",
+                   (_graph.doc_node_id("arxiv", "sb_future"), _t0 + 500.0, _t0 + 500.0))
+    _p2con.commit()
+
+    _sb_ranked = [_sb_old, _sb_absent, _sb_future]
+    fetcher._stamp_seen_before(_sb_ranked, _t0)   # the real batched first_seen lookup, keyed (source,sid)
+    check("P2.0 (5): a doc whose first_seen PREDATES t0 is stamped seen_before=True",
+          _sb_old.metadata.get("seen_before") is True and "first_seen_at" in _sb_old.metadata)
+    check("P2.0 (5): a doc absent from both tables gets NO seen_before stamp (absent, not False-positive)",
+          "seen_before" not in (_sb_absent.metadata or {}))
+    check("P2.0 (5): a doc whose first_seen is AFTER t0 (own write) is NOT flipped to True (seen_before=False)",
+          _sb_future.metadata.get("seen_before") is False)
+finally:
+    _recall.writer.WRITES_ENABLED = _p2_writes_prev
+    fetcher.is_walled_source = _p2_iswalled_prev
+    _prof.remember_walled_retrievals = _p2_remember_prev
+    if _p2_prof_in_writer is not None:
+        _p2prof.remember_walled_retrievals = _p2_prof_in_writer
+    # drain any residue so a later section never inherits our queue items.
+    while not _recall.writer._queue.empty():
+        try:
+            _recall.writer._queue.get_nowait()
+        except Exception:  # noqa: BLE001
+            break
+    _rstore.DB_PATH = _p2_db_prev
+    _rstore._disabled = _p2_disabled_prev
+    _rstore._local = _p2_local_prev
+
+
 print()
 if FAIL:
     print(f"SMOKE FAILED: {len(FAIL)} problem(s)")

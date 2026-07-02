@@ -121,3 +121,12 @@ def rate_knob(name: str, default: Any) -> Any:
     literal). E.g. rate_knob('broad_deadline_s', 11.0)."""
     v = _section("rate").get(name)
     return v if v is not None else default
+
+
+def remember_walled_retrievals() -> bool:
+    """Whether the graph may accrue THIN document rows (title + url only, never content) for
+    docs from WALLED / circumvention-tier sources — OFF by default. What an operator's own
+    logged-in account has retrieved is operator PRIVACY: non-walled retrievals become perception
+    history freely, but walled ones are remembered only on this explicit opt-in (the same shape as
+    the ``walled.enabled`` gate: a boolean the deployer must set). Absent / non-True -> False."""
+    return _section("walled").get("remember_retrievals", False) is True

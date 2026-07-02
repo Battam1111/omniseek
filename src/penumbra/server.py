@@ -122,7 +122,9 @@ _PENUMBRA_INSTRUCTIONS = (
     "freshness_days / freshness_class: breaking (<=1d), recent (<=7d), current (<=30d), "
     "dated (<=365d), archival (>1y), null (no date). "
     "relevance_hook: one extractive sentence from the doc's own text showing why it matched "
-    "(scan this for quick triage, not full content)."
+    "(scan this for quick triage, not full content). "
+    "seen_before / first_seen_at: whether THIS deployment had retrieved the doc before this search "
+    "(the wall's novelty stamp)."
     "\n\n"
     "(4) HANDLES (stamped per-doc, metadata.handles; absent = no affordances detected): "
     "transcribable = URLs the eye can ASR (bilibili/xiaoyuzhou/podcasts/audio extensions). "
@@ -1546,9 +1548,11 @@ def penumbra_graph(view: str, anchor: str = "", label_query: str = "", kind: str
 
     COLD START (set the expectation or the first stats reads as failure): documents and
     same-work edges are LIVE FROM DAY ONE (derived over recall's docs — the wall is born
-    pre-populated by construction). Entity kinds (work / person / institution / venue / topic)
-    fill in as the P2/P3 write taps ship and calls happen; emptiness of those kinds early is
-    CORRECT, not broken.
+    pre-populated by construction). Document THIN rows (title + url only, from NON-indexed sources)
+    now accumulate from EVERY search (stats.node_kinds.document_thin), so the perception history is
+    complete, not just the ~40 enumerable sources. Entity kinds (work / person / institution /
+    venue / topic) still fill in as the P2/P3 write taps ship and calls happen; emptiness of those
+    kinds early is CORRECT, not broken.
 
     BUDGETS (the no-silent-caps discipline): depth is clamped to <=2, max_nodes caps the node
     count, and any capped result stamps ``capped: true`` so a bounded view never reads as
