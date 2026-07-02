@@ -1,8 +1,8 @@
 """PDF full-text adapter — turn a paper's PDF URL into readable full text.
 
-The citation sources give an abstract + (via eye_paper_enrich) the open-access PDF *url*, but
+The citation sources give an abstract + (via penumbra_paper_enrich) the open-access PDF *url*, but
 not the WHOLE paper. This closes that gap: hand it a PDF url (arxiv.org/pdf/..., or any *.pdf)
-via ``eye_add_url`` and it downloads the PDF (size-capped via eye.http) and extracts the text
+via ``penumbra_add_url`` and it downloads the PDF (size-capped via eye.http) and extracts the text
 with PyMuPDF, so the AGENT can read the full paper and synthesize itself. This is the thin
 "read the PDF" primitive we chose INSTEAD of a heavy synthesis engine: minimal code, max agent.
 """
@@ -14,7 +14,7 @@ from typing import Optional
 from urllib.parse import urlparse
 
 from penumbra.core import http
-from penumbra.core.normalize import PolarisDocument
+from penumbra.core.normalize import Document
 
 logger = logging.getLogger(__name__)
 
@@ -26,14 +26,14 @@ class PdfAdapter:
     needs_credentials = False
     description = (
         "PDF full-text — download a paper PDF (arxiv.org/pdf/… or any *.pdf) and extract its text "
-        "so you can read the WHOLE paper, not just the abstract (pair with eye_paper_enrich's pdf_url)"
+        "so you can read the WHOLE paper, not just the abstract (pair with penumbra_paper_enrich's pdf_url)"
     )
 
-    def search(self, query: str, limit: int = 10) -> list[PolarisDocument]:
+    def search(self, query: str, limit: int = 10) -> list[Document]:
         # URL-only adapter: there is no index to search, BUT the description tells the agent
-        # to hand this source a PDF url, and eye_fetch routes the query here (not to fetch_url).
+        # to hand this source a PDF url, and penumbra_fetch routes the query here (not to fetch_url).
         # So when the query IS a PDF url, do exactly what the description promises: download +
-        # extract via the same fetch_url path (and the same fitz engine eye_read_document uses).
+        # extract via the same fetch_url path (and the same fitz engine penumbra_read_document uses).
         # A non-url topic query has nothing to match, so it still correctly returns [].
         path = (urlparse(query).path or "").lower()
         if path.endswith(".pdf") or "/pdf/" in path:
@@ -41,7 +41,7 @@ class PdfAdapter:
             return [doc] if doc is not None else []
         return []
 
-    def fetch_url(self, url: str) -> Optional[PolarisDocument]:
+    def fetch_url(self, url: str) -> Optional[Document]:
         path = (urlparse(url).path or "").lower()
         if not (path.endswith(".pdf") or "/pdf/" in path):
             return None
@@ -80,7 +80,7 @@ class PdfAdapter:
             return None  # scanned / image-only PDF with no extractable text layer
 
         leaf = urlparse(url).path.rstrip("/").split("/")[-1] or url
-        return PolarisDocument(
+        return Document(
             source="pdf",
             source_id=leaf,
             url=url,

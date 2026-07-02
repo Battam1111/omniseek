@@ -21,7 +21,7 @@ reply_count / created_at). URL is the canonical topic permalink
 Built on BaseScrapeAdapter (template method): the cache check / atomic
 set_docs / self-registration ritual lives in the base. We override the two
 hooks (_raw_fetch = the per-instance search fan-out; _to_documents = the
-topic+post → PolarisDocument merge) and fetch_url (claim ``/t/{slug}/{id}`` on
+topic+post → Document merge) and fetch_url (claim ``/t/{slug}/{id}`` on
 a known instance host). We keep ``rank=False`` (the base default) and instead
 rank-then-slice INSIDE _to_documents over the FULL cross-instance pool, using
 the same shared BM25 scorer the base would use: a merged multi-instance result
@@ -40,7 +40,7 @@ from urllib.parse import urlparse
 
 from penumbra.core import http
 from penumbra.core.normalize import (
-    PolarisDocument,
+    Document,
     jsonsafe,
     keyword_score_filter,
     mk_signal,
@@ -111,8 +111,8 @@ class DiscourseForumsAdapter(BaseScrapeAdapter):
                 logger.debug("discourse_forums: %s returned no JSON", host)
         return results or None
 
-    def _to_documents(self, raw: Any, query: str, limit: int) -> list[PolarisDocument]:
-        docs: list[PolarisDocument] = []
+    def _to_documents(self, raw: Any, query: str, limit: int) -> list[Document]:
+        docs: list[Document] = []
         for host, payload in raw:
             base = INSTANCES.get(host, f"https://{host}")
             topics = payload.get("topics") or []
@@ -139,7 +139,7 @@ class DiscourseForumsAdapter(BaseScrapeAdapter):
         docs = keyword_score_filter(docs, query)
         return docs[:limit] if limit and limit > 0 else docs
 
-    def fetch_url(self, url: str) -> Optional[PolarisDocument]:
+    def fetch_url(self, url: str) -> Optional[Document]:
         """Claim a topic permalink ``{base}/t/{slug}/{id}`` (or ``/t/{id}``) on a
         known instance: fetch ``{base}/t/{id}.json`` and build a doc from the
         topic + its first post."""
@@ -198,7 +198,7 @@ class DiscourseForumsAdapter(BaseScrapeAdapter):
     @staticmethod
     def _topic_to_document(
         topic: dict, post: Optional[dict], base: str
-    ) -> Optional[PolarisDocument]:
+    ) -> Optional[Document]:
         topic_id = topic.get("id")
         if topic_id is None:
             return None
@@ -229,7 +229,7 @@ class DiscourseForumsAdapter(BaseScrapeAdapter):
         if not isinstance(tags, list):
             tags = []
 
-        return PolarisDocument(
+        return Document(
             source="discourse_forums",
             source_id=f"{_short_host(base)}:{topic_id}",
             url=url,

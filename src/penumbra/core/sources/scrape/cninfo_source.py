@@ -5,7 +5,7 @@ repository — every listed company's 年报/季报/招股书/ad-hoc 公告 as a
 DIRECT PDF link per hit. Google returns tutorials about CNINFO, never the structured filing
 index or the PDFs themselves. No login, no token (verified 2026-06-18: keyword '数据安全' →
 永信至诚/立思辰/天喻信息 公告 + finalpage/*.PDF links). Each adjunctUrl resolves to a fetchable
-PDF on static.cninfo.com.cn → pair with eye_read_document for full-text filing analysis. Telos
+PDF on static.cninfo.com.cn → pair with penumbra_read_document for full-text filing analysis. Telos
 Chinese 信息差 (authoritative financial disclosure).
 
 SHAPE: a JSON POST endpoint (BaseScrapeAdapter, bespoke curl_cffi). search(query) → keyword
@@ -23,7 +23,7 @@ import re
 from datetime import datetime, timezone
 from typing import Optional
 
-from penumbra.core.normalize import PolarisDocument
+from penumbra.core.normalize import Document
 from penumbra.core.sources.scrape._base import BaseScrapeAdapter
 
 logger = logging.getLogger(__name__)
@@ -46,8 +46,8 @@ def _clean_title(t: Optional[str]) -> str:
     return re.sub(r"</?em>", "", t or "").strip()
 
 
-def _ann_to_doc(a: dict) -> Optional[PolarisDocument]:
-    """One CNINFO announcement dict → PolarisDocument (pure fn → golden-fixture testable)."""
+def _ann_to_doc(a: dict) -> Optional[Document]:
+    """One CNINFO announcement dict → Document (pure fn → golden-fixture testable)."""
     title = _clean_title(a.get("announcementTitle"))
     adj = (a.get("adjunctUrl") or "").lstrip("/")
     if not title or not adj:
@@ -60,10 +60,10 @@ def _ann_to_doc(a: dict) -> Optional[PolarisDocument]:
         except (ValueError, OSError, TypeError):
             date = None
     sec_name, sec_code = a.get("secName"), a.get("secCode")
-    return PolarisDocument(
+    return Document(
         source="cninfo",
         source_id=str(a.get("announcementId") or adj),
-        url=_PDF_BASE + adj,  # the filing PDF — eye_read_document it for the full body
+        url=_PDF_BASE + adj,  # the filing PDF — penumbra_read_document it for the full body
         title=title,
         content=title,  # the index carries no abstract; the PDF at `url` IS the body
         author=sec_name,
@@ -79,7 +79,7 @@ class CninfoAdapter(BaseScrapeAdapter):
     description = (
         "巨潮资讯网 CNINFO — the SSE/SZSE OFFICIAL A-share disclosure repository (the Chinese EDGAR). "
         "Keyword full-text search over every listed-company filing (年报/季报/招股书/ad-hoc 公告), each "
-        "hit a DIRECT PDF link (static.cninfo.com.cn) — pair with eye_read_document for the body. "
+        "hit a DIRECT PDF link (static.cninfo.com.cn) — pair with penumbra_read_document for the body. "
         "Google can't return this structured filing index. No login. Reach for 上市公司/A股 "
         "disclosures / 财报 / 年报 / 公告 / 招股书 on a company or topic."
     )
@@ -109,7 +109,7 @@ class CninfoAdapter(BaseScrapeAdapter):
             logger.warning("cninfo fetch failed: %s", exc)
             return None
 
-    def _to_documents(self, raw, query, limit) -> list[PolarisDocument]:
+    def _to_documents(self, raw, query, limit) -> list[Document]:
         return [d for a in raw[:limit] if (d := _ann_to_doc(a))]
 
     def health_check(self) -> tuple[bool, str]:

@@ -27,13 +27,13 @@ import httpx
 from bs4 import BeautifulSoup
 
 from penumbra.core import cache, http
-from penumbra.core.normalize import PolarisDocument, jsonsafe
+from penumbra.core.normalize import Document, jsonsafe
 
 logger = logging.getLogger(__name__)
 
 BASE = "https://mlcollective.org"
 INDEX_PATHS = ["/events/", "/news/", "/dlct/"]  # the dated content streams (not static nav pages)
-UA = "Mozilla/5.0 (compatible; PolarisEye/0.1; +automated retrieval)"
+UA = "Mozilla/5.0 (compatible; PenumbraEye/0.1; +automated retrieval)"
 
 # Anchor text that is nav/footer/social, never a content item.
 NAV_TEXTS = {
@@ -131,7 +131,7 @@ class MLCollectiveAdapter:
         cache.set(key, items, ttl=6 * 3600)
         return items
 
-    def search(self, query: str, limit: int = 10) -> list[PolarisDocument]:
+    def search(self, query: str, limit: int = 10) -> list[Document]:
         key = cache.make_key("ml_collective", "search2", query, limit)
         cached = cache.get_docs(key)
         if cached is not None:
@@ -150,7 +150,7 @@ class MLCollectiveAdapter:
         # Dated items newest-first; undated (e.g. DLCT talk list) after.
         items.sort(key=lambda it: it["date"] or "", reverse=True)
 
-        docs: list[PolarisDocument] = []
+        docs: list[Document] = []
         for it in items[:limit]:
             is_talk = "/abs/" in it["url"]
             kind = "DLCT reading-group talk" if is_talk else f"ML Collective {it['source_path'].strip('/')}"
@@ -159,7 +159,7 @@ class MLCollectiveAdapter:
             if it["date"]:
                 y, m, d = (int(x) for x in it["date"].split("-"))
                 dt = datetime.datetime(y, m, d, tzinfo=datetime.timezone.utc)
-            docs.append(PolarisDocument(
+            docs.append(Document(
                 source="ml_collective",
                 source_id=it["url"],
                 url=it["url"],
@@ -173,7 +173,7 @@ class MLCollectiveAdapter:
         cache.set_docs(key, docs, ttl=900)
         return docs
 
-    def fetch_url(self, url: str) -> Optional[PolarisDocument]:
+    def fetch_url(self, url: str) -> Optional[Document]:
         host = urlparse(url).hostname or ""
         if "mlcollective.org" not in host:
             return None
@@ -188,7 +188,7 @@ class MLCollectiveAdapter:
         body = main.get_text("\n", strip=True) if main else ""
         body = re.sub(r"\n{3,}", "\n\n", body).strip()
 
-        return PolarisDocument(
+        return Document(
             source="ml_collective",
             source_id=url,
             url=url,

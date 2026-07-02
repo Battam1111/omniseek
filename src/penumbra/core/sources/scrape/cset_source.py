@@ -3,7 +3,7 @@
 The Center for Security and Emerging Technology (cset.georgetown.edu) is the leading
 US think-tank on AI policy, compute / semiconductor export controls, AI safety and
 national-security implications of emerging tech. Its analysis (reports, data briefs,
-blog, expert commentary) is the empty think-tank cell in Polaris-eye: high-signal,
+blog, expert commentary) is the empty think-tank cell in Penumbra: high-signal,
 policy-grade primary analysis the open web buries under news re-prints.
 
 The site runs on WordPress, whose REST API exposes every published post keyless:
@@ -18,7 +18,7 @@ article URL), ``date`` (ISO ``YYYY-MM-DDTHH:MM:SS``), and (with ``_embed``) an
 Thin subclass over BaseScrapeAdapter: the cache check / atomic set_docs /
 self-registration ritual lives in the base; this adapter declares its facets and
 fills the two hooks (_raw_fetch = the /posts search GET; _to_documents = the
-post -> report-PolarisDocument map). ``rank`` stays default-False: the WP search
+post -> report-Document map). ``rank`` stays default-False: the WP search
 endpoint already returns server relevance order, so we keep it byte-faithful and let
 the eye's ranked search re-score across sources when it needs cross-source relevance.
 """
@@ -32,7 +32,7 @@ from datetime import datetime
 from typing import Any, Optional
 
 from penumbra.core import http, relevance
-from penumbra.core.normalize import PolarisDocument, jsonsafe
+from penumbra.core.normalize import Document, jsonsafe
 from penumbra.core.sources.scrape._base import BaseScrapeAdapter
 
 logger = logging.getLogger(__name__)
@@ -67,10 +67,10 @@ class CSETAdapter(BaseScrapeAdapter):
             timeout=TIMEOUT,
         )
 
-    def _to_documents(self, raw: Any, query: str, limit: int) -> list[PolarisDocument]:
+    def _to_documents(self, raw: Any, query: str, limit: int) -> list[Document]:
         if not isinstance(raw, list):
             return []  # WP returns a bare list of posts; an error payload is a dict -> skip
-        docs: list[PolarisDocument] = []
+        docs: list[Document] = []
         for post in raw:  # the WIDE candidate pool (see _raw_fetch); re-ranked + capped below
             if not isinstance(post, dict):
                 continue
@@ -91,7 +91,7 @@ class CSETAdapter(BaseScrapeAdapter):
                     if _s > 0.0]
         return docs[:limit]
 
-    def _post_to_doc(self, post: dict) -> Optional[PolarisDocument]:
+    def _post_to_doc(self, post: dict) -> Optional[Document]:
         title = _clean_text((post.get("title") or {}).get("rendered"))
         if not title:
             return None
@@ -108,7 +108,7 @@ class CSETAdapter(BaseScrapeAdapter):
         author = _embedded_author(post)
         tags = _embedded_terms(post)
 
-        return PolarisDocument(
+        return Document(
             source=self.name,
             source_id=post_id or url or title,
             url=url,

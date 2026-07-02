@@ -3,7 +3,7 @@
 The AIID (responsible-ai-collaborative) is the canonical catalog of AI systems causing real harm:
 1500+ curated incidents (wrongful arrests from facial-recognition, chatbot harms, autonomous-
 vehicle deaths, biased deployments), each with the alleged developer/deployer, harmed parties, and
-the source-report URLs. Polaris-eye's safety-STRUCTURE reinforcement: safety previously rested ONLY
+the source-report URLs. Penumbra's safety-STRUCTURE reinforcement: safety previously rested ONLY
 on cset (Georgetown research/forecasts) — a DIFFERENT facet. AIID is the empirical harm ledger
 (what went wrong, to whom, deployed by whom), structured data web search cannot return cleanly
 (it returns news prose, never the cross-incident ledger with developer/deployer entities).
@@ -21,7 +21,7 @@ runs a case-insensitive REGEX over title+description; incidents are returned new
   filter = {OR: [{title:{REGEX:q, OPTIONS:"i"}}, {description:{REGEX:q, OPTIONS:"i"}}]}
 
 The incident page is https://incidentdatabase.ai/cite/<incident_id>; the per-incident report URLs
-are the drill-in handles (eye_add_url them for the underlying news source). backend="aiid".
+are the drill-in handles (penumbra_add_url them for the underlying news source). backend="aiid".
 
 Recon trail: brain note eye-recon-ai-incidents-2026-06-21 (live-probed schema + origin gate).
 """
@@ -33,7 +33,7 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 
 from penumbra.core import http
-from penumbra.core.normalize import PolarisDocument, jsonsafe, mk_signal
+from penumbra.core.normalize import Document, jsonsafe, mk_signal
 from penumbra.core.sources.scrape._base import BaseScrapeAdapter
 
 API_URL = "https://incidentdatabase.ai/api/graphql"
@@ -85,18 +85,18 @@ class AIIncidentsAdapter(BaseScrapeAdapter):
                            {"description": {"REGEX": w, "OPTIONS": "i"}}]} for w in words]
         return clauses[0] if len(clauses) == 1 else {"AND": clauses}
 
-    def _to_documents(self, raw: Any, query: str, limit: int) -> list[PolarisDocument]:
+    def _to_documents(self, raw: Any, query: str, limit: int) -> list[Document]:
         if not isinstance(raw, dict):
             return []
         incidents = ((raw.get("data") or {}).get("incidents")) or []
-        docs: list[PolarisDocument] = []
+        docs: list[Document] = []
         for inc in incidents[:limit]:
             doc = self._incident_to_doc(inc)
             if doc is not None:
                 docs.append(doc)
         return docs
 
-    def _incident_to_doc(self, inc: Any) -> Optional[PolarisDocument]:
+    def _incident_to_doc(self, inc: Any) -> Optional[Document]:
         if not isinstance(inc, dict):
             return None
         iid = inc.get("incident_id")
@@ -115,7 +115,7 @@ class AIIncidentsAdapter(BaseScrapeAdapter):
         if harmed:
             bits.append("Harmed: " + ", ".join(harmed))
         content = "\n".join(b for b in bits if b).strip()
-        return PolarisDocument(
+        return Document(
             source=self.name,
             source_id=str(iid),
             url=CITE_URL.format(iid=iid),
@@ -130,7 +130,7 @@ class AIIncidentsAdapter(BaseScrapeAdapter):
                 "developers": devs,
                 "deployers": deployers,
                 "harmed_parties": harmed,
-                # drill-in handles: the underlying source articles (eye_add_url them)
+                # drill-in handles: the underlying source articles (penumbra_add_url them)
                 "reports": reports,
                 "raw": jsonsafe(inc),
             },

@@ -178,7 +178,7 @@ def safe_fetch(url: str, *, method: str = "GET", render: bool = False,
     fetch a family adapter makes once a source is live (org_watch / page_watch / news_scraper /
     render) goes through the NORMAL fetcher and is NOT IP-pinned by this guard. That is exactly why
     those families are in apply._NEVER_AUTO_FAMILIES (never auto-applied) and why an admit of one
-    must consciously acknowledge the unguarded recurring fetch (server.eye_curator_decide requires
+    must consciously acknowledge the unguarded recurring fetch (server.penumbra_curator_decide requires
     baseline_ref.recurring_fetch_acknowledged for a first-seen host in that subclass). Routing the
     enrich/OpenAlex resolution hosts through a fixed-API host allowlist is a flagged follow-up
     hardening (the id regexes constrain path injection today), not a P4 blocker.

@@ -19,7 +19,7 @@ from __future__ import annotations
 from typing import Optional
 
 from penumbra.core import http
-from penumbra.core.normalize import PolarisDocument
+from penumbra.core.normalize import Document
 from penumbra.core.sources.api._base import BaseAPIAdapter
 
 _RID = "d_94fd56bdb981f0f966cb487d8247bf1a"  # "Non-Resident Population by Pass Type" (% shares)
@@ -37,9 +37,9 @@ class DataGovSgPassesAdapter(BaseAPIAdapter):
         "新加坡非居民人口按准证类型占比 (data.gov.sg DataStore 官方统计) — Work Permit / S Pass / "
         "Employment Pass / 家属准证 / 学生准证 等占非居民人口的逐年百分比序列. SG 移民/外籍劳动力结构"
         "一手官方数据 (网搜给不出可解析的时间序列). 新加坡移民问题的决策语境: 准证构成 = decision-context. "
-        "命名 eye_fetch."
+        "命名 penumbra_fetch."
     )
-    explicit_only = "data.gov.sg 准证类型占比 (单数据集, 统计 lookup); 命名 eye_fetch"
+    explicit_only = "data.gov.sg 准证类型占比 (单数据集, 统计 lookup); 命名 penumbra_fetch"
     cache_ttl = 86400  # daily: an annual statistic
     rank_locally = True  # small dataset; filter by DataSeries name against the query
     url_host = "data.gov.sg"
@@ -57,7 +57,7 @@ class DataGovSgPassesAdapter(BaseAPIAdapter):
             return []
         return ((data.get("result") or {}).get("records")) or []
 
-    def _to_document(self, raw) -> Optional[PolarisDocument]:
+    def _to_document(self, raw) -> Optional[Document]:
         if not isinstance(raw, dict):
             return None
         series = (raw.get("DataSeries") or raw.get("dataseries") or "").strip()
@@ -67,7 +67,7 @@ class DataGovSgPassesAdapter(BaseAPIAdapter):
         pairs = sorted(years.items(), key=lambda kv: kv[0], reverse=True)
         body = "; ".join(f"{y}: {v}" for y, v in pairs
                          if v not in (None, "", "na", "NA", "-"))
-        return PolarisDocument(
+        return Document(
             source=self.name,
             source_id=f"datagovsg_npass:{series}",
             url=f"https://data.gov.sg/datasets/{_RID}/view",

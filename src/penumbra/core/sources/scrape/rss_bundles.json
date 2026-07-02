@@ -119,7 +119,7 @@
  },
  {
   "name": "chinese_podcasts",
-  "description": "中文 AI / 科技 / PhD 方法论 播客 — 晚点 LateTalk / 硅谷101 / 时差 in-betweenness + 1 (张小珺/OnBoard!/42章经 等走 xiaoyuzhou 原生适配器, 无需 RSSHub; 口语内容配 eye_transcribe)",
+  "description": "中文 AI / 科技 / PhD 方法论 播客 — 晚点 LateTalk / 硅谷101 / 时差 in-betweenness + 1 (张小珺/OnBoard!/42章经 等走 xiaoyuzhou 原生适配器, 无需 RSSHub; 口语内容配 penumbra_transcribe)",
   "feeds": [
    "https://feeds.fireside.fm/latetalk/rss",
    "https://feeds.fireside.fm/sv101/rss",
@@ -137,7 +137,7 @@
   ],
   "cache_ttl": 86400,
   "url_pattern": "distill\\.pub",
-  "explicit_only": "archive: Distill.pub 2021 起无限期停更(自发 Distill Hiatus);命名 eye_fetch 取可解释性经典,不进广搜避免旧文混入近期论文检索"
+  "explicit_only": "archive: Distill.pub 2021 起无限期停更(自发 Distill Hiatus);命名 penumbra_fetch 取可解释性经典,不进广搜避免旧文混入近期论文检索"
  },
  {
   "name": "frontier_labs",
@@ -361,18 +361,18 @@
   ],
   "cache_ttl": 7200,
   "url_pattern": "higheredjobs\\.com",
-  "explicit_only": "US 高校 CS·ML 教职/博后 RSS (HigherEdJobs cat 102). JA3/TLS WAF (PerimeterX) 墙 httpx, 经 tls_impersonate (curl_cffi Chrome 指纹) 取真 feed. 命名 eye_fetch 用于学术 track. 2026-06-22 经 curl_cffi 复活 (此前因 JA3 墙退役)。",
+  "explicit_only": "US 高校 CS·ML 教职/博后 RSS (HigherEdJobs cat 102). JA3/TLS WAF (PerimeterX) 墙 httpx, 经 tls_impersonate (curl_cffi Chrome 指纹) 取真 feed. 命名 penumbra_fetch 用于学术 track. 2026-06-22 经 curl_cffi 复活 (此前因 JA3 墙退役)。",
   "tls_impersonate": true
  },
  {
   "name": "wikicfp_nlp",
-  "description": "WikiCFP 自然语言处理征稿发现 (cat=natural language processing) — NLP 方向会议/研讨会的征稿 (CFP) 条目: 会议名 + 地点 + 日期范围 + 事件页链接. 长尾 CFP 发现, 补 conference_deadlines/ml_conferences 的主榜. 注意: 截稿日不在 feed 里 (feed 只给会议日期), 真截稿需打开事件页看. 命名 eye_fetch.",
+  "description": "WikiCFP 自然语言处理征稿发现 (cat=natural language processing) — NLP 方向会议/研讨会的征稿 (CFP) 条目: 会议名 + 地点 + 日期范围 + 事件页链接. 长尾 CFP 发现, 补 conference_deadlines/ml_conferences 的主榜. 注意: 截稿日不在 feed 里 (feed 只给会议日期), 真截稿需打开事件页看. 命名 penumbra_fetch.",
   "feeds": [
    "http://www.wikicfp.com/cfp/rss?cat=natural+language+processing"
   ],
   "cache_ttl": 21600,
   "url_pattern": "wikicfp\\.com",
-  "explicit_only": "WikiCFP 长尾 CFP 发现 (NLP); 命名 eye_fetch 补会议征稿. http scheme (443 无 TLS)"
+  "explicit_only": "WikiCFP 长尾 CFP 发现 (NLP); 命名 penumbra_fetch 补会议征稿. http scheme (443 无 TLS)"
  },
  {
   "name": "jobrxiv_canada",

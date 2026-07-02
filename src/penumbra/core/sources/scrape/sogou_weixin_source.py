@@ -15,7 +15,7 @@ sources). Result article links are TEMPORARY Sogou redirects (/link?url=...&toke
 bound to the search session's cookie; we resolve each to its PERMANENT
 mp.weixin.qq.com/s?... URL WHILE THE SESSION IS HOT (the redirect page reassembles the url
 from JS `url += '...'` pieces), so every doc carries a stable drill-in handle the agent can
-eye_add_url later (the eye's web fetch reads mp.weixin articles).
+penumbra_add_url later (the eye's web fetch reads mp.weixin articles).
 
 explicit_only: anti-bot + Chinese-only + the per-result resolve fan-out make it unfit for
 the blind broad fan-out; the router still surfaces it as excluded_relevant for thematically
@@ -35,7 +35,7 @@ from datetime import datetime, timezone
 from typing import Optional
 from urllib.parse import quote
 
-from penumbra.core.normalize import PolarisDocument
+from penumbra.core.normalize import Document
 from penumbra.core.sources.scrape._base import BaseScrapeAdapter
 
 logger = logging.getLogger(__name__)
@@ -170,8 +170,8 @@ class SogouWeixinAdapter(BaseScrapeAdapter):
             logger.warning("sogou_weixin fetch failed: %s", exc)
             return None
 
-    def _to_documents(self, raw, query, limit) -> list[PolarisDocument]:
-        docs: list[PolarisDocument] = []
+    def _to_documents(self, raw, query, limit) -> list[Document]:
+        docs: list[Document] = []
         for it in raw:
             if not it.get("title") or not it.get("url"):
                 continue
@@ -181,7 +181,7 @@ class SogouWeixinAdapter(BaseScrapeAdapter):
                     date = datetime.fromtimestamp(int(it["ts"]), tz=timezone.utc)
                 except (ValueError, OSError, TypeError):
                     date = None
-            docs.append(PolarisDocument(
+            docs.append(Document(
                 source="sogou_weixin",
                 source_id=it["url"],
                 url=it["url"],

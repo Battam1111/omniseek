@@ -18,7 +18,7 @@ from urllib.parse import urlparse
 import httpx
 
 from penumbra.core import cache, http
-from penumbra.core.normalize import PolarisDocument, jsonsafe
+from penumbra.core.normalize import Document, jsonsafe
 
 logger = logging.getLogger(__name__)
 
@@ -54,12 +54,12 @@ class GithubAwesomePhDAdapter:
                 return text
         return None
 
-    def search(self, query: str, limit: int = 10) -> list[PolarisDocument]:
+    def search(self, query: str, limit: int = 10) -> list[Document]:
         query_terms = [t.lower() for t in re.findall(r"\w+", query) if len(t) > 1]
         if not query_terms:
             return []
 
-        all_docs: list[tuple[int, PolarisDocument]] = []
+        all_docs: list[tuple[int, Document]] = []
         for owner, repo, desc in AWESOME_REPOS:
             readme = self._fetch_readme(owner, repo)
             if not readme:
@@ -73,7 +73,7 @@ class GithubAwesomePhDAdapter:
                     continue
                 # The link in this bullet is the "primary" URL
                 primary_url = section.get("url") or f"https://github.com/{owner}/{repo}"
-                doc = PolarisDocument(
+                doc = Document(
                     source="github_awesome_phd",
                     source_id=f"{owner}/{repo}#{section.get('anchor', '')}",
                     url=primary_url,
@@ -92,7 +92,7 @@ class GithubAwesomePhDAdapter:
         all_docs.sort(key=lambda x: x[0], reverse=True)
         return [d for _, d in all_docs[:limit]]
 
-    def fetch_url(self, url: str) -> Optional[PolarisDocument]:
+    def fetch_url(self, url: str) -> Optional[Document]:
         # Match repo URLs from our curated set
         host = urlparse(url).hostname or ""
         if "github.com" not in host:
@@ -107,7 +107,7 @@ class GithubAwesomePhDAdapter:
         readme = self._fetch_readme(owner, repo)
         if not readme:
             return None
-        return PolarisDocument(
+        return Document(
             source="github_awesome_phd",
             source_id=f"{owner}/{repo}",
             url=f"https://github.com/{owner}/{repo}",

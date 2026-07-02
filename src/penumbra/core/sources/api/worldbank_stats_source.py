@@ -2,7 +2,7 @@
 
 The World Bank open data API exposes thousands of indicators (GDP, unemployment,
 population, school enrollment, …) for every country as a clean time series, no
-auth and no key. Polaris-eye's macro-statistics STRUCTURE source: a structured
+auth and no key. Penumbra's macro-statistics STRUCTURE source: a structured
 point-lookup the open web can only narrate, not hand back as queryable data
 (one indicator's full year-by-year series for a country, as numbers).
 
@@ -58,7 +58,7 @@ from datetime import datetime
 from typing import Any, Optional
 
 from penumbra.core import http
-from penumbra.core.normalize import PolarisDocument, jsonsafe, mk_signal
+from penumbra.core.normalize import Document, jsonsafe, mk_signal
 from penumbra.core.sources.api._base import BaseAPIAdapter
 
 API_URL = "https://api.worldbank.org/v2/country/{country}/indicator/{indicator}"
@@ -177,7 +177,7 @@ class WorldBankStatsAdapter(BaseAPIAdapter):
             return []
         return [(country, indicator, rows)]
 
-    def _to_document(self, raw) -> Optional[PolarisDocument]:
+    def _to_document(self, raw) -> Optional[Document]:
         """One aggregation unit (country, indicator, rows) -> one time-series doc."""
         if not isinstance(raw, tuple) or len(raw) != 3:
             return None
@@ -196,7 +196,7 @@ class WorldBankStatsAdapter(BaseAPIAdapter):
 
     @classmethod
     def _series_to_doc(cls, country: str, indicator: str,
-                       rows: list) -> Optional[PolarisDocument]:
+                       rows: list) -> Optional[Document]:
         """Build ONE doc for a country x indicator from its row list. Per-row
         decode is guarded so a single malformed row can't sink the series; an
         empty / all-malformed series returns None (no doc on nothing)."""
@@ -247,7 +247,7 @@ class WorldBankStatsAdapter(BaseAPIAdapter):
             v = series[y]
             lines.append(f"{y}: {cls._fmt_num(v)}" + (f" {unit}" if unit else ""))
 
-        return PolarisDocument(
+        return Document(
             source="worldbank_stats",
             source_id=f"{country}/{indicator}",
             url=PAGE_URL.format(indicator=indicator, country=country),

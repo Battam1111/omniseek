@@ -2,12 +2,12 @@
 
 Finds open-web pages by MEANING, not just keyword overlap, closing the gap where keyword
 search drowns the semantically-right page under popular-but-off-target hits. Each result
-carries Exa "highlights" (the relevant excerpts) + a short text snippet; eye_add_url the
+carries Exa "highlights" (the relevant excerpts) + a short text snippet; penumbra_add_url the
 result URL (via cdp_fulltext / pdf / ordinary fetch) for the full page.
 
 Complements ordinary keyword web search + the curated sources: reach for Exa on CONCEPTUAL
 queries ("blogs on the lived experience of X", "essays arguing Y"). explicit_only: every
-call spends an Exa API credit, so it stays OUT of the broad fan-out (name it / eye_fetch).
+call spends an Exa API credit, so it stays OUT of the broad fan-out (name it / penumbra_fetch).
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ import time
 from typing import Optional
 
 from penumbra.core import auth, cache, http
-from penumbra.core.normalize import PolarisDocument
+from penumbra.core.normalize import Document
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +29,7 @@ _TTL = 3600
 # Exa bills a credit per /search call and exposes NO zero-credit liveness endpoint (the only
 # API surface in this client is the billed search), so the health probe MUST be a real search.
 # Cache + single-flight it: before this, health_check fired a fresh billed search on every
-# 6-hourly health sweep AND every agent eye_health_check, spending ~4+ credits/day purely on
+# 6-hourly health sweep AND every agent penumbra_health_check, spending ~4+ credits/day purely on
 # liveness. _health() caches the (ok, msg) verdict for _HEALTH_TTL_S and double-checks under a
 # module lock (mirrors _openalex.health single-flight) so repeated probes within the TTL collapse
 # to ONE billed call, and a concurrent probe storm causes exactly one upstream search.
@@ -67,7 +67,7 @@ class ExaAdapter:
     description = (
         "Exa neural/semantic web search (exa.ai): finds open-web pages by MEANING, not "
         "keywords. Use for conceptual queries where keyword search misses the right page; "
-        "each result carries relevant-excerpt highlights. eye_add_url the URL for the full "
+        "each result carries relevant-excerpt highlights. penumbra_add_url the URL for the full "
         "page. Complements ordinary web search + the curated sources. Add site:domain to a query "
         "to scope to that domain AND return its full page TEXT, a full-text route for IP-blocked / "
         "anti-datacenter sites Exa's crawler can reach but our direct fetch cannot (e.g. HardwareZone)."
@@ -77,13 +77,13 @@ class ExaAdapter:
     def _key() -> Optional[str]:
         return (auth.load("exa") or {}).get("api_key")
 
-    def search(self, query: str, limit: int = 10) -> list[PolarisDocument]:
+    def search(self, query: str, limit: int = 10) -> list[Document]:
         q = (query or "").strip()
         if not q:
             return []
         key = self._key()
         if not key:
-            logger.warning("exa: no api_key configured (~/.polaris/credentials/exa.json)")
+            logger.warning("exa: no api_key configured (~/.penumbra/credentials/exa.json)")
             return []
         # Over-fetch to a stable upper bucket (Exa bills per QUERY, not per result), so the same
         # query at different limits reuses ONE cached search instead of re-billing per limit. Key
@@ -116,7 +116,7 @@ class ExaAdapter:
         if not isinstance(data, dict):
             return []
 
-        docs: list[PolarisDocument] = []
+        docs: list[Document] = []
         for r in (data.get("results") or []):
             url = r.get("url")
             if not url:
@@ -124,7 +124,7 @@ class ExaAdapter:
             highlights = [h.strip() for h in (r.get("highlights") or []) if h and h.strip()]
             text = (r.get("text") or "").strip()
             content = "\n\n".join(highlights) or text or "(no preview; open the URL for full text)"
-            docs.append(PolarisDocument(
+            docs.append(Document(
                 source="exa",
                 source_id=r.get("id") or url,
                 url=url,
@@ -142,15 +142,15 @@ class ExaAdapter:
         cache.set_docs(ck, docs, ttl=_TTL if docs else 600)
         return docs[:limit]
 
-    def fetch_url(self, url: str) -> Optional[PolarisDocument]:
+    def fetch_url(self, url: str) -> Optional[Document]:
         return None  # search-only; use cdp_fulltext / pdf / ordinary fetch for the full page
 
     def health_check(self) -> tuple[bool, str]:
         key = self._key()
         if not key:
-            return False, "no api_key (~/.polaris/credentials/exa.json)"
+            return False, "no api_key (~/.penumbra/credentials/exa.json)"
         # Delegate to the shared TTL-cached single-flight probe so the 6-hourly sweep + every
-        # agent eye_health_check collapse to ONE billed search per window, not one credit each.
+        # agent penumbra_health_check collapse to ONE billed search per window, not one credit each.
         return _health(key)
 
 

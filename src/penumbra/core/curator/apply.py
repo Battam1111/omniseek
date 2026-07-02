@@ -4,7 +4,7 @@ WHY no live apply in P1 (confirmed against the real code): every config family r
 rows ONCE at import (rss_bundles_source._load_and_register, org_watch_source._load,
 page_watch_source, news_scraper_source._load), reading the in-tree JSON via
 Path(__file__).with_name(...). There is NO runtime overlay path, no importlib.reload, no
-file-watch. So a row appended to a ~/.polaris/state overlay is read by NOTHING (a silent no-op
+file-watch. So a row appended to a ~/.penumbra/state overlay is read by NOTHING (a silent no-op
 marked 'applied' would be a lie smoke can't catch), and appending to the in-tree file violates
 the read-only-deploy invariant and vanishes on the next deploy. THEREFORE: every admit stages
 to owner_review with a ready-to-paste config row + a git-patch note; the operator commits, the
@@ -15,7 +15,7 @@ This module provides:
   * _validate_row() : pure, network-free per-family required-field check (mirrors smoke's)
   * _auto_apply_ok(): the GATE (reads policy DATA); built for P1.5 but NEVER drives a mutation
                        in P1 (nothing calls it to write live config)
-  * prepare_owner_case(): what eye_curator_stage_commit returns (render the row + patch note)
+  * prepare_owner_case(): what penumbra_curator_stage_commit returns (render the row + patch note)
 """
 
 from __future__ import annotations
@@ -306,7 +306,7 @@ def _auto_apply_ok(cand: dict) -> bool:
     return True
 
 
-# ── operator-case preparation (what eye_curator_stage_commit returns) ───────────────
+# ── operator-case preparation (what penumbra_curator_stage_commit returns) ───────────────
 def prepare_owner_case(cand: dict) -> dict:
     """P1: PREPARE the operator case (render the ready-to-paste config row + a git-patch note).
     Does NOT mutate live config. Re-checks the row validity. Never auto-applies."""
@@ -320,7 +320,7 @@ def prepare_owner_case(cand: dict) -> dict:
     patch_note = ""
     if row and config_file:
         patch_note = (
-            f"Append this row to organs/eye/src/polaris/eye/sources/{config_file} "
+            f"Append this row to organs/eye/src/penumbra/eye/sources/{config_file} "
             f"(the {family} family loader registers it at the next service restart), commit, "
             f"then redeploy. P1 stages this for the operator; it is NEVER applied automatically."
         )

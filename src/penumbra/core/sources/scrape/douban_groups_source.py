@@ -38,7 +38,7 @@ from typing import Any, Optional
 import httpx
 from bs4 import BeautifulSoup
 
-from penumbra.core.normalize import PolarisDocument, jsonsafe, mk_signal
+from penumbra.core.normalize import Document, jsonsafe, mk_signal
 from penumbra.core.sources.scrape._base import BaseScrapeAdapter
 
 logger = logging.getLogger(__name__)
@@ -145,7 +145,7 @@ class DoubanGroupsAdapter(BaseScrapeAdapter):
             return None
         return {"groups": groups_html, "topics": topics_html}
 
-    def _to_documents(self, raw: dict, query: str, limit: int) -> list[PolarisDocument]:
+    def _to_documents(self, raw: dict, query: str, limit: int) -> list[Document]:
         """Parse both tabs into docs. Groups first (the community structure the agent can join),
         then topics (the discussion content); each side gets roughly half the limit so neither
         starves the other, and the combined list is sliced to ``limit``."""
@@ -153,11 +153,11 @@ class DoubanGroupsAdapter(BaseScrapeAdapter):
             return []
         half = max(1, limit // 2)
 
-        group_docs: list[PolarisDocument] = []
+        group_docs: list[Document] = []
         if raw.get("groups"):
             group_docs = self._parse_groups(raw["groups"], half + (limit - 2 * half))
 
-        topic_docs: list[PolarisDocument] = []
+        topic_docs: list[Document] = []
         if raw.get("topics"):
             topic_docs = self._parse_topics(raw["topics"], limit)  # may backfill if few groups
 
@@ -165,9 +165,9 @@ class DoubanGroupsAdapter(BaseScrapeAdapter):
         return combined[:limit]
 
     # ------------------------------------------------------------------ parsers
-    def _parse_groups(self, html: str, limit: int) -> list[PolarisDocument]:
+    def _parse_groups(self, html: str, limit: int) -> list[Document]:
         soup = BeautifulSoup(html, "lxml")
-        docs: list[PolarisDocument] = []
+        docs: list[Document] = []
         for result in soup.select("div.groups div.result"):
             try:
                 doc = self._group_to_doc(result)
@@ -180,9 +180,9 @@ class DoubanGroupsAdapter(BaseScrapeAdapter):
                 break
         return docs
 
-    def _parse_topics(self, html: str, limit: int) -> list[PolarisDocument]:
+    def _parse_topics(self, html: str, limit: int) -> list[Document]:
         soup = BeautifulSoup(html, "lxml")
-        docs: list[PolarisDocument] = []
+        docs: list[Document] = []
         for row in soup.select("table.olt tr.pl"):
             try:
                 doc = self._topic_to_doc(row)
@@ -196,7 +196,7 @@ class DoubanGroupsAdapter(BaseScrapeAdapter):
         return docs
 
     # ------------------------------------------------------------------ field mapping
-    def _group_to_doc(self, result) -> Optional[PolarisDocument]:
+    def _group_to_doc(self, result) -> Optional[Document]:
         link = result.select_one("div.title h3 a") or result.select_one("div.pic a")
         if link is None:
             return None
@@ -227,7 +227,7 @@ class DoubanGroupsAdapter(BaseScrapeAdapter):
         if img_src.startswith("http"):
             media.append(img_src)
 
-        return PolarisDocument(
+        return Document(
             source=self.name,
             source_id=f"g{gid}",
             url=url,
@@ -244,7 +244,7 @@ class DoubanGroupsAdapter(BaseScrapeAdapter):
             },
         )
 
-    def _topic_to_doc(self, row) -> Optional[PolarisDocument]:
+    def _topic_to_doc(self, row) -> Optional[Document]:
         subj = row.select_one("td.td-subject a")
         if subj is None:
             return None
@@ -275,7 +275,7 @@ class DoubanGroupsAdapter(BaseScrapeAdapter):
         content_lines.append(f"Topic page: {clean_url}")
         content = "\n\n".join(content_lines)
 
-        return PolarisDocument(
+        return Document(
             source=self.name,
             source_id=f"t{tid}",
             url=clean_url,

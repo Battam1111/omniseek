@@ -37,7 +37,7 @@ from typing import Optional
 import httpx
 
 from penumbra.core import cache, diag
-from penumbra.core.normalize import PolarisDocument, jsonsafe, mk_signal
+from penumbra.core.normalize import Document, jsonsafe, mk_signal
 
 logger = logging.getLogger(__name__)
 
@@ -192,7 +192,7 @@ def _next_data_pageprops(html: str) -> Optional[dict]:
         return None
 
 
-def _build_doc(slug: str, url: str, pp: dict) -> Optional[PolarisDocument]:
+def _build_doc(slug: str, url: str, pp: dict) -> Optional[Document]:
     """COMPANY path: build a doc from the company page __NEXT_DATA__ pageProps (US/USD benchmark)."""
     co = pp.get("company") or {}
     name = co.get("name") or slug.replace("-", " ").title()
@@ -249,7 +249,7 @@ def _build_doc(slug: str, url: str, pp: dict) -> Optional[PolarisDocument]:
     content = "\n".join(lines).strip()
     if not content:
         return None
-    return PolarisDocument(
+    return Document(
         source="levels_fyi",
         source_id=slug,
         url=url,
@@ -274,7 +274,7 @@ class LevelsFyiAdapter:
     )
 
     # ---- ROLE path (the fix): /t/ pages, location-accurate median+range from og:description ----
-    def _role_search(self, query: str, role: tuple, country: Optional[str]) -> list[PolarisDocument]:
+    def _role_search(self, query: str, role: tuple, country: Optional[str]) -> list[Document]:
         cat, sub = role
         loc = country or "united-states"  # /t/ pages need a location; default to the US benchmark
         url = (SUBTITLE_URL.format(cat=cat, sub=sub, loc=loc) if sub
@@ -305,7 +305,7 @@ class LevelsFyiAdapter:
         return docs
 
     @staticmethod
-    def _role_doc(query, cat, sub, loc, url, desc, comp) -> Optional[PolarisDocument]:
+    def _role_doc(query, cat, sub, loc, url, desc, comp) -> Optional[Document]:
         role_disp = (sub or cat).replace("-", " ").title()
         loc_disp = loc.replace("-", " ").title()
         cur = comp.get("currency") or ""
@@ -320,7 +320,7 @@ class LevelsFyiAdapter:
         med_n = _num(comp.get("median") or comp.get("low") or "")
         sig = (mk_signal("median_total_comp", med_n, kind="other",
                          by="levels_fyi/og:description", unit=cur) if med_n else {})
-        return PolarisDocument(
+        return Document(
             source="levels_fyi",
             source_id=f"{cat}/{sub or '-'}/{loc}",
             url=url,
@@ -336,7 +336,7 @@ class LevelsFyiAdapter:
         )
 
     # ---- COMPANY path (unchanged): /companies/{slug}/salaries __NEXT_DATA__ (US/USD) ----
-    def _company_search(self, query: str) -> list[PolarisDocument]:
+    def _company_search(self, query: str) -> list[Document]:
         slug = self._resolve_company(query)
         key = cache.make_key("levels_fyi", "nextdata", slug)
         cached = cache.get_docs(key)
@@ -372,7 +372,7 @@ class LevelsFyiAdapter:
                     q = re.sub(re.escape(p), "", q, flags=re.IGNORECASE).strip(" ,")
         return _slug(q or "google")
 
-    def search(self, query: str, limit: int = 10) -> list[PolarisDocument]:
+    def search(self, query: str, limit: int = 10) -> list[Document]:
         if not (query or "").strip():
             return []
         role = _role(query)
@@ -380,7 +380,7 @@ class LevelsFyiAdapter:
             return self._role_search(query, role, _location(query))
         return self._company_search(query)  # else treat as a company name (US/USD benchmark)
 
-    def fetch_url(self, url: str) -> Optional[PolarisDocument]:
+    def fetch_url(self, url: str) -> Optional[Document]:
         return None  # search-only
 
     def health_check(self) -> tuple[bool, str]:

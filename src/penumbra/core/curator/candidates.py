@@ -3,7 +3,7 @@
 The eye otherwise forgets (fetch-live, TTL-cache). The Curator must NOT: a candidate
 source submitted, probed, and awaiting a verdict has to survive a redeploy / restart /
 crash, or the work is lost (a prior bug lost candidates held only in transient task
-output). So this module owns ONE JSON file under ``~/.polaris/state/curator/`` (the same
+output). So this module owns ONE JSON file under ``~/.penumbra/state/curator/`` (the same
 tree as ``health-watchdog-state.json``; survives redeploys, rides the weekly state-backup
 launchd, keeps the read-only deploy tree pristine).
 
@@ -32,10 +32,10 @@ logger = logging.getLogger(__name__)
 # the builtin under a private alias for the type checks inside this module.
 _builtin_list = list
 
-# Runtime state lives under ~/.polaris/state/curator/ (NOT in the repo). Created on first
+# Runtime state lives under ~/.penumbra/state/curator/ (NOT in the repo). Created on first
 # write. Survives redeploys + rides the state-backup launchd. The deploy SMOKE must touch
 # NO write path here (smoke imports the module read-only; see smoke §12 invariant 5).
-STATE_DIR = Path.home() / ".polaris" / "state" / "curator"
+STATE_DIR = Path.home() / ".penumbra" / "state" / "curator"
 CANDIDATES_PATH = STATE_DIR / "candidates.json"
 SEEN_HOSTS_PATH = STATE_DIR / "seen_hosts.json"
 # P4 anti-rediscovery: the canonical-host TERMINAL ledger. A host that ever reached a terminal

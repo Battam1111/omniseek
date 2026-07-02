@@ -32,7 +32,7 @@ from urllib.parse import urlparse
 
 from penumbra.core import _openalex as oa
 from penumbra.core import cache
-from penumbra.core.normalize import PolarisDocument, keyword_score_filter, mk_signal
+from penumbra.core.normalize import Document, keyword_score_filter, mk_signal
 
 logger = logging.getLogger(__name__)
 
@@ -156,7 +156,7 @@ class _OrgWatchAdapter:
                 return stale, True
         return out, False
 
-    def search(self, query: str, limit: int = 10) -> list[PolarisDocument]:
+    def search(self, query: str, limit: int = 10) -> list[Document]:
         works, stale = self._fetch()
         docs = [d for d in (self._to_doc(w) for w in works) if d]
         docs = keyword_score_filter(docs, (query or "").strip())[:limit]
@@ -166,7 +166,7 @@ class _OrgWatchAdapter:
                                        "缓存快照 (最多约 1 天旧), 非实时")
         return docs
 
-    def fetch_url(self, url: str) -> Optional[PolarisDocument]:
+    def fetch_url(self, url: str) -> Optional[Document]:
         host = (urlparse(url).hostname or "").lower()
         if "openalex.org" not in host:
             return None
@@ -186,7 +186,7 @@ class _OrgWatchAdapter:
         # per-affiliation validity is a config-time concern (curator / source-audit), not an uptime probe.
         return oa.health()
 
-    def _to_doc(self, work: dict) -> Optional[PolarisDocument]:
+    def _to_doc(self, work: dict) -> Optional[Document]:
         p = oa.parse_work(work)
         if not p["title"]:
             return None
@@ -197,7 +197,7 @@ class _OrgWatchAdapter:
             parts.append("Authors: " + ", ".join(p["authors"][:8]))
         if p["abstract"]:
             parts.append("\n" + p["abstract"][:3000])
-        return PolarisDocument(
+        return Document(
             source=self.name,
             source_id=p["work_id"] or p["url"],
             url=p["url"],

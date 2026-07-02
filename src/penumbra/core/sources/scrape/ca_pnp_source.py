@@ -9,7 +9,7 @@ monitor or query by stream/score.
 Why: the PNPs (esp. their graduate/PhD + tech streams) are a primary Canada PR route alongside
 federal Express Entry, and the score-cutoff history is decision-critical. NOT the federal system —
 keep these SEPARATE from ``ircc_ee_rounds`` (federal CRS): Ontario uses its own OINP score, BC uses
-SIRS (0-200), Alberta its own. explicit_only: named via eye_fetch after routing to the immigration
+SIRS (0-200), Alberta its own. explicit_only: named via penumbra_fetch after routing to the immigration
 domain (slower HTML scrapes, not the broad sweep).
 
 Structures verified live 2026-06-22:
@@ -34,7 +34,7 @@ from typing import Optional
 
 from bs4 import BeautifulSoup
 
-from penumbra.core.normalize import PolarisDocument
+from penumbra.core.normalize import Document
 from penumbra.core.sources.scrape._base import BaseScrapeAdapter
 
 logger = logging.getLogger(__name__)
@@ -72,7 +72,7 @@ def _heading_before(tbl) -> str:
     return ""
 
 
-def _finish(docs: list[PolarisDocument], limit: int) -> list[PolarisDocument]:
+def _finish(docs: list[Document], limit: int) -> list[Document]:
     """Sort newest-first (None dates last), cap to the recent window."""
     docs.sort(key=lambda d: (d.date is not None, d.date or datetime.min), reverse=True)
     return docs[:max(limit, _RECENT_CAP)]
@@ -100,15 +100,15 @@ class OinpInvitationsAdapter(_CaPnpBase):
         "安省提名 OINP 抽签历史 — Ontario Immigrant Nominee Program 各 stream (雇主担保/硕士毕业生/"
         "博士毕业生/企业家等) 的逐次抽签: 日期 + 邀请数 + 分数线 (Score range) + EOI 窗口 + 备注. "
         "省提名, 用 OINP 自有分数, 别与联邦 EE (ircc_ee_rounds, CRS) 混. 博士/硕士 stream 2026-05-30 "
-        "改版后已停, 旧行为历史参考; 页面继续发新 stream 抽签, 故仍是活的 monitor. 命名 eye_fetch."
+        "改版后已停, 旧行为历史参考; 页面继续发新 stream 抽签, 故仍是活的 monitor. 命名 penumbra_fetch."
     )
-    explicit_only = "OINP 安省提名抽签历史 (HTML 抓取, 命名 eye_fetch); 省提名非联邦 EE"
+    explicit_only = "OINP 安省提名抽签历史 (HTML 抓取, 命名 penumbra_fetch); 省提名非联邦 EE"
     search_url = "https://www.ontario.ca/page/ontario-immigrant-nominee-program-oinp-invitations-apply"
     url_host = "ontario.ca"
 
-    def _to_documents(self, raw, query, limit) -> list[PolarisDocument]:
+    def _to_documents(self, raw, query, limit) -> list[Document]:
         soup = BeautifulSoup(self._html(raw) or "", "lxml")
-        docs: list[PolarisDocument] = []
+        docs: list[Document] = []
         for tbl in soup.find_all("table"):
             hdr = _header(tbl)
             if not (any("date issued" in h for h in hdr) and any("score range" in h for h in hdr)):
@@ -119,7 +119,7 @@ class OinpInvitationsAdapter(_CaPnpBase):
                 if len(c) < 5 or not c[0].strip():
                     continue
                 date_issued, invitations, window, score, notes = c[:5]
-                docs.append(PolarisDocument(
+                docs.append(Document(
                     source=self.name,
                     source_id=f"oinp:{stream}:{date_issued}:{score}",
                     url=self.search_url,
@@ -139,15 +139,15 @@ class BcpnpInvitationsAdapter(_CaPnpBase):
     description = (
         "BC 省提名 BCPNP 抽签 — Skills Immigration (技术移民, 按 ITA type + 分数线 SIRS + 邀请数) 与 "
         "Entrepreneur Immigration 的逐次抽签, 外加 registration pool 的 SIRS 分数分布快照. BC 用 SIRS "
-        "(0-200 注册分), 不是联邦 CRS, 别混. 分数/人数可能是 'N/A' 或 '<5' 字符串. 命名 eye_fetch."
+        "(0-200 注册分), 不是联邦 CRS, 别混. 分数/人数可能是 'N/A' 或 '<5' 字符串. 命名 penumbra_fetch."
     )
-    explicit_only = "BCPNP BC 省提名抽签 + SIRS 分布 (HTML 抓取, 命名 eye_fetch); SIRS 非联邦 CRS"
+    explicit_only = "BCPNP BC 省提名抽签 + SIRS 分布 (HTML 抓取, 命名 penumbra_fetch); SIRS 非联邦 CRS"
     search_url = "https://www.welcomebc.ca/immigrate-to-b-c/about-the-bc-provincial-nominee-program/invitations-to-apply"
     url_host = "welcomebc.ca"
 
-    def _to_documents(self, raw, query, limit) -> list[PolarisDocument]:
+    def _to_documents(self, raw, query, limit) -> list[Document]:
         soup = BeautifulSoup(self._html(raw) or "", "lxml")
-        docs: list[PolarisDocument] = []
+        docs: list[Document] = []
         for tbl in soup.find_all("table"):
             hdr = _header(tbl)
             rows = tbl.find_all("tr")[1:]
@@ -156,7 +156,7 @@ class BcpnpInvitationsAdapter(_CaPnpBase):
                 bands = [(c[0], c[1]) for tr in rows if len(c := _cells(tr)) >= 2]
                 total = next((v for k, v in bands if k.lower().strip() in ("total", "total:")), "")
                 body = "; ".join(f"{k}: {v}" for k, v in bands)
-                docs.append(PolarisDocument(
+                docs.append(Document(
                     source=self.name,
                     source_id=f"bcpnp_pool:{total or len(bands)}",
                     url=self.search_url,
@@ -181,7 +181,7 @@ class BcpnpInvitationsAdapter(_CaPnpBase):
                 else:          # Date | Stream | Min Score | Invitations
                     date_s, stream, score, inv = c[:4]
                     extra = ""
-                docs.append(PolarisDocument(
+                docs.append(Document(
                     source=self.name,
                     source_id=f"bcpnp:{kind}:{stream}:{date_s}:{score}",
                     url=self.search_url,
@@ -202,15 +202,15 @@ class AaipDrawsAdapter(_CaPnpBase):
         "阿尔伯塔省提名 AAIP 抽签历史 — Alberta Advantage Immigration Program 的 'Draw information' 表: "
         "逐次抽签日期 + Worker stream/pathway (Alberta Opportunity / Rural Renewal / Tourism / "
         "Dedicated Health Care / Alberta Express Entry 各 priority sector 等) + 最低分 + 邀请数. "
-        "省提名自有分, 非联邦 CRS. 命名 eye_fetch."
+        "省提名自有分, 非联邦 CRS. 命名 penumbra_fetch."
     )
-    explicit_only = "AAIP 阿省提名抽签历史 (HTML 抓取, 命名 eye_fetch); 省提名非联邦 EE"
+    explicit_only = "AAIP 阿省提名抽签历史 (HTML 抓取, 命名 penumbra_fetch); 省提名非联邦 EE"
     search_url = "https://www.alberta.ca/aaip-processing-information"
     url_host = "alberta.ca"
 
-    def _to_documents(self, raw, query, limit) -> list[PolarisDocument]:
+    def _to_documents(self, raw, query, limit) -> list[Document]:
         soup = BeautifulSoup(self._html(raw) or "", "lxml")
-        docs: list[PolarisDocument] = []
+        docs: list[Document] = []
         for tbl in soup.find_all("table"):
             hdr = _header(tbl)
             if not (any("draw date" in h for h in hdr)
@@ -221,7 +221,7 @@ class AaipDrawsAdapter(_CaPnpBase):
                 if len(c) < 4 or not c[0].strip():
                     continue
                 draw_date, stream, score, inv = c[:4]
-                docs.append(PolarisDocument(
+                docs.append(Document(
                     source=self.name,
                     source_id=f"aaip:{draw_date}:{stream}:{score}",
                     url=self.search_url,

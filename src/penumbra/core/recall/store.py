@@ -27,11 +27,11 @@ from pathlib import Path
 from typing import Optional
 
 from penumbra.core import relevance
-from penumbra.core.normalize import PolarisDocument
+from penumbra.core.normalize import Document
 
 logger = logging.getLogger(__name__)
 
-DB_PATH = Path.home() / ".polaris" / "state" / "index.db"
+DB_PATH = Path.home() / ".penumbra" / "state" / "index.db"
 _SCHEMA_VERSION = "2"  # 2 = + vec table (Phase-2 vector layer; additive, CREATE IF NOT EXISTS)
 # Tokenizer/segment version: bumped when the seg-column DERIVATION changes (NOT the tokenizer
 # itself), so the writer RE-SEGMENTS an existing doc whose stored seg_version != this on the next
@@ -51,7 +51,7 @@ CREATE TABLE IF NOT EXISTS docs(
   source_id    TEXT NOT NULL,
   fp           TEXT,                      -- rank.fingerprint (read-time cross-source dedup aid)
   url TEXT, title TEXT, content TEXT, author TEXT, date TEXT, score INTEGER,
-  doc_json     TEXT NOT NULL,            -- PolarisDocument model_dump(json) MINUS metadata['raw']
+  doc_json     TEXT NOT NULL,            -- Document model_dump(json) MINUS metadata['raw']
   seg          TEXT NOT NULL,            -- relevance.tokenize(title+content+tags) joined (CJK shadow)
   seg_version  INTEGER DEFAULT 1,        -- SEG_VERSION at last write; a mismatch forces re-segment
   content_hash TEXT,                     -- change detection (sha256 of title+content+tags)
@@ -136,21 +136,21 @@ def segment(text: str) -> str:
     return " ".join(relevance.tokenize(text or ""))
 
 
-def _tags_text(doc: PolarisDocument) -> str:
+def _tags_text(doc: Document) -> str:
     """A doc's tags as one space-joined string (e.g. ircc's 'express-entry'), or '' when none.
     Byte-identical-when-no-tags: an empty/absent tags list contributes nothing."""
     tags = getattr(doc, "tags", None) or []
     return " ".join(str(t) for t in tags if t)
 
 
-def segment_doc(doc: PolarisDocument) -> str:
+def segment_doc(doc: Document) -> str:
     """Segment a doc's full searchable surface: title + content + TAGS (SEG_VERSION 2). The tags
     join makes a doc recallable by its tag terms (the missing 'express entry' → ircc hit). Falls
     back to title+content alone when there are no tags (so the seg is byte-identical to v1)."""
     return segment(((doc.title or "") + " " + (doc.content or "") + " " + _tags_text(doc)).strip())
 
 
-def content_hash(doc: PolarisDocument) -> str:
+def content_hash(doc: Document) -> str:
     """Change-detection hash over the full seg surface (title + content + TAGS): a tags-only edit
     (no title/content change) now counts as a change, so the doc re-indexes its new tag terms."""
     h = hashlib.sha256()
@@ -168,7 +168,7 @@ def _match_expr(query: str) -> Optional[str]:
     return " OR ".join(parts) if parts else None
 
 
-def search(query: str, k: int = 60) -> list[PolarisDocument]:
+def search(query: str, k: int = 60) -> list[Document]:
     """Recall up to ``k`` candidate docs whose seg matches any query term. PURE RECALL — ``bm25``
     only bounds the pool (never surfaced); the caller re-scores via ``rank.merge_rank``. NEVER
     raises: any failure (disabled / missing db / bad row) degrades to ``[]``."""
@@ -189,11 +189,11 @@ def search(query: str, k: int = 60) -> list[PolarisDocument]:
     except Exception as exc:  # noqa: BLE001
         logger.debug("recall search failed: %s", exc)
         return []
-    out: list[PolarisDocument] = []
+    out: list[Document] = []
     now = time.time()
     for doc_json, last_seen, source in rows:
         try:
-            d = PolarisDocument.model_validate(json.loads(doc_json))
+            d = Document.model_validate(json.loads(doc_json))
         except Exception:  # noqa: BLE001 — skip a corrupt row, never fail the whole recall
             continue
         ran = _ran_at(con, source)
@@ -333,7 +333,7 @@ def vector_search(qvec, k: int = 60) -> list:
 
 def _hydrate_one(con, doc_json, last_seen, source, recall_via, now=None):
     try:
-        d = PolarisDocument.model_validate(json.loads(doc_json))
+        d = Document.model_validate(json.loads(doc_json))
     except Exception:  # noqa: BLE001
         return None
     now = now if now is not None else time.time()
@@ -348,7 +348,7 @@ def _hydrate_one(con, doc_json, last_seen, source, recall_via, now=None):
 
 
 def _hydrate_rowids(con, rowids, recall_via: str) -> list:
-    """Reconstruct PolarisDocuments by rowid, preserving the given (cosine-rank) order."""
+    """Reconstruct Documents by rowid, preserving the given (cosine-rank) order."""
     if not rowids:
         return []
     qmarks = ",".join("?" * len(rowids))

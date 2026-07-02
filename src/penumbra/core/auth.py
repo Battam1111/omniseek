@@ -1,6 +1,6 @@
-"""Credentials loader for Polaris eye source adapters.
+"""Credentials loader for Penumbra eye source adapters.
 
-Credentials live in ~/.polaris/credentials/<source>.json (outside the
+Credentials live in ~/.penumbra/credentials/<source>.json (outside the
 project directory, so they are never accidentally committed). Each
 adapter that needs credentials calls load(<source>) and gets back a
 dict — or None if the file doesn't exist.
@@ -16,7 +16,7 @@ import os
 from pathlib import Path
 from typing import Optional
 
-CREDS_DIR = Path.home() / ".polaris" / "credentials"
+CREDS_DIR = Path.home() / ".penumbra" / "credentials"
 
 
 def ensure_dir() -> Path:
@@ -38,20 +38,20 @@ def load(source: str) -> Optional[dict]:
 
 # A contact email for polite-pool / fair-access User-Agents (OpenAlex, SEC, Unpaywall, Crossref).
 # This is PII and must never be hardcoded in the tree. The real address lives only on the host
-# (~/.polaris/credentials/contact.json -> {"email": "..."} or the POLARIS_CONTACT_EMAIL env var);
+# (~/.penumbra/credentials/contact.json -> {"email": "..."} or the PENUMBRA_CONTACT_EMAIL env var);
 # unconfigured it degrades to an RFC-2606 reserved placeholder, so a cold checkout still forms a
 # valid UA and the tree ships with no personal data.
-_CONTACT_DEFAULT = "polaris-eye@example.com"
+_CONTACT_DEFAULT = "penumbra@example.com"
 
 
 def contact_email() -> str:
     """The contact email the eye puts in its outbound User-Agents. Host-injected, never committed."""
     creds = load("contact") or {}
-    return creds.get("email") or os.environ.get("POLARIS_CONTACT_EMAIL") or _CONTACT_DEFAULT
+    return creds.get("email") or os.environ.get("PENUMBRA_CONTACT_EMAIL") or _CONTACT_DEFAULT
 
 
 def write_template(source: str, template: dict, force: bool = False) -> Path:
-    """Drop a credential template at ~/.polaris/credentials/<source>.json.template
+    """Drop a credential template at ~/.penumbra/credentials/<source>.json.template
 
     Templates are NEVER overwritten if they already exist (unless force=True).
     Real credentials at <source>.json are never touched.

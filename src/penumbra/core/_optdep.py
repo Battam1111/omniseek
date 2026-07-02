@@ -3,7 +3,7 @@ instead of a raw ImportError / ModuleNotFoundError.
 
 The lean core install (`pip install -e .`) is Apache-clean and omits the heavy / AGPL / walled
 deps (see pyproject [project.optional-dependencies]). A feature whose extra is absent should fail
-OPEN with "install polaris-mcp[<extra>]" the FIRST TIME a deployer actually calls it — never on
+OPEN with "install penumbra-mcp[<extra>]" the FIRST TIME a deployer actually calls it — never on
 server import (so the engine always boots). Call this at the lazy import site inside the feature."""
 from __future__ import annotations
 
@@ -17,4 +17,4 @@ def require(module_name: str, extra: str) -> ModuleType:
     except ImportError as exc:
         raise RuntimeError(
             f"this feature needs the optional '{extra}' dependencies (missing "
-            f"'{module_name}'): pip install 'polaris-mcp[{extra}]'") from exc
+            f"'{module_name}'): pip install 'penumbra-mcp[{extra}]'") from exc

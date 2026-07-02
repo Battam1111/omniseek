@@ -11,7 +11,7 @@ A bot can ONLY read servers it has been **added to**, and adding a bot requires
   ✅ servers the operator owns / is admin of (own server, lab/课题组 server)
   ❌ big public communities (EleutherAI / HuggingFace / Nous / LAION / Cohere
      For AI) — the operator is a normal member, cannot add a bot → unreachable here.
-For those, the research output already flows through Polaris via arXiv /
+For those, the research output already flows through Penumbra via arXiv /
 hf_daily_papers / frontier_labs / youtube_channels and the labs' blog RSS.
 
 ## ⚠️ The #1 config gotcha
@@ -27,7 +27,7 @@ OFF). With it off you get message metadata but blank text.
    (66560 = View Channel + Read Message History — no manage perms needed)
 4. Discord → enable Developer Mode → right-click each channel → Copy Channel ID
    (optionally also Copy Server ID for clean message links).
-5. Write ~/.polaris/credentials/discord.json:
+5. Write ~/.penumbra/credentials/discord.json:
    {
      "bot_token": "MT...",
      "channels": [
@@ -45,7 +45,7 @@ from typing import Optional
 import httpx
 
 from penumbra.core import auth, cache
-from penumbra.core.normalize import PolarisDocument, jsonsafe, keyword_score_filter
+from penumbra.core.normalize import Document, jsonsafe, keyword_score_filter
 
 logger = logging.getLogger(__name__)
 
@@ -69,11 +69,11 @@ auth.write_template(
 class DiscordCommunitiesAdapter:
     name = "discord_communities"
     needs_credentials = True
-    explicit_only = "walled(需 bot 凭证);命名 eye_fetch 才调,不进广搜"
+    explicit_only = "walled(需 bot 凭证);命名 penumbra_fetch 才调,不进广搜"
     description = (
         "Discord 研究/peer/求职 频道 (REST bot) — 仅能读 部署者有管理员权限、"
         "已邀请 bot 的 server (大社区加不进 bot, 走其他源). 配 "
-        "~/.polaris/credentials/discord.json + 开 Message Content Intent"
+        "~/.penumbra/credentials/discord.json + 开 Message Content Intent"
     )
 
     def _config(self) -> tuple[Optional[str], list[dict]]:
@@ -135,7 +135,7 @@ class DiscordCommunitiesAdapter:
             logger.warning("discord channel %s pull failed: %s", channel_id, exc)
             return []
 
-    def search(self, query: str, limit: int = 10) -> list[PolarisDocument]:
+    def search(self, query: str, limit: int = 10) -> list[Document]:
         token, channels = self._config()
         if not token:
             return []
@@ -147,7 +147,7 @@ class DiscordCommunitiesAdapter:
         key = cache.make_key("discord_communities", "all")
         cached = cache.get(key)
         if cached is not None:
-            docs = [PolarisDocument.model_validate(d) for d in cached]
+            docs = [Document.model_validate(d) for d in cached]
         else:
             docs = []
             for ch in channels:
@@ -164,13 +164,13 @@ class DiscordCommunitiesAdapter:
             cache.set(key, [d.model_dump(mode="json") for d in docs], ttl=CACHE_TTL)
         return keyword_score_filter(docs, query)[:limit]
 
-    def fetch_url(self, url: str) -> Optional[PolarisDocument]:
+    def fetch_url(self, url: str) -> Optional[Document]:
         return None
 
     def health_check(self) -> tuple[bool, str]:
         token, channels = self._config()
         if not token:
-            return False, "no bot_token (see ~/.polaris/credentials/discord.json.template)"
+            return False, "no bot_token (see ~/.penumbra/credentials/discord.json.template)"
         try:
             r = httpx.get(f"{API}/users/@me", headers={"Authorization": f"Bot {token}"}, timeout=15)
             if r.status_code != 200:
@@ -183,7 +183,7 @@ class DiscordCommunitiesAdapter:
         return True, f"OK (bot @{who}; {n} channels, {mode})"
 
     @staticmethod
-    def _to_doc(m: dict, ch: dict) -> Optional[PolarisDocument]:
+    def _to_doc(m: dict, ch: dict) -> Optional[Document]:
         content = m.get("content") or ""
         if not content and m.get("embeds"):
             content = " | ".join(
@@ -207,7 +207,7 @@ class DiscordCommunitiesAdapter:
         author = (m.get("author") or {}).get("username", "?")
         server = ch.get("server", "?")
         label = ch.get("label", "")
-        return PolarisDocument(
+        return Document(
             source="discord_communities",
             source_id=msg_id,
             url=url,

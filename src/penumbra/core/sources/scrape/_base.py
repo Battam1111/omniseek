@@ -21,7 +21,7 @@ shared-BM25 rank / self-registration); a concrete adapter declares a few class
 attributes and fills TWO hooks:
 
     _raw_fetch(query, limit) -> Any | None     # the network call → parsed payload
-    _to_documents(raw, query, limit) -> list[PolarisDocument]   # payload → docs
+    _to_documents(raw, query, limit) -> list[Document]   # payload → docs
 
 It is a CONVENIENCE, never a mandate. The Protocol (duck-typed
 ``fetcher.SourceAdapter``) stays the contract; a source with bespoke needs
@@ -47,7 +47,7 @@ import logging
 from typing import Any, Optional
 
 from penumbra.core import cache, relevance
-from penumbra.core.normalize import PolarisDocument, schema_extract
+from penumbra.core.normalize import Document, schema_extract
 
 logger = logging.getLogger(__name__)
 _SCRAPE_UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
@@ -78,8 +78,8 @@ class BaseScrapeAdapter:
             BeautifulSoup — whatever ``_to_documents`` wants). Return ``None`` on
             ANY failure: the base turns that into ``[]`` (the adapter contract).
             Default uses ``http.get_json(search_url)`` when ``search_url`` is set.
-        _to_documents(raw, query, limit) -> list[PolarisDocument]
-            Convert the payload into PolarisDocuments. Slice to ``limit`` here if the
+        _to_documents(raw, query, limit) -> list[Document]
+            Convert the payload into Documents. Slice to ``limit`` here if the
             payload can over-return (the base does NOT re-slice, to preserve each
             source's exact "take first N items" semantics).
     """
@@ -145,8 +145,8 @@ class BaseScrapeAdapter:
         from penumbra.core import http
         return http.get_json(url)
 
-    def _to_documents(self, raw: Any, query: str, limit: int) -> list[PolarisDocument]:
-        """Parsed payload → PolarisDocuments. Override, OR set ``extract_schema`` for the
+    def _to_documents(self, raw: Any, query: str, limit: int) -> list[Document]:
+        """Parsed payload → Documents. Override, OR set ``extract_schema`` for the
         declarative path (no per-source code)."""
         if self.extract_schema is not None:
             return self._schema_to_documents(raw, query, limit)
@@ -154,19 +154,19 @@ class BaseScrapeAdapter:
             f"{type(self).__name__} must implement `_to_documents` (or set `extract_schema`)"
         )
 
-    def _schema_to_documents(self, raw: Any, query: str, limit: int) -> list[PolarisDocument]:
+    def _schema_to_documents(self, raw: Any, query: str, limit: int) -> list[Document]:
         """Build docs from ``extract_schema`` (CSS-driven). Field-name convention →
-        PolarisDocument: title / url / content (or summary) / author / id; every other extracted
+        Document: title / url / content (or summary) / author / id; every other extracted
         field lands in metadata. A row with neither title nor url is dropped."""
         html = raw if isinstance(raw, str) else (raw[0] if isinstance(raw, tuple) else str(raw))
         from urllib.parse import urljoin
-        docs: list[PolarisDocument] = []
+        docs: list[Document] = []
         for r in schema_extract(html, self.extract_schema)[:limit]:
             title = (r.get("title") or "").strip()
             url = (r.get("url") or "").strip()
             if not (title or url):
                 continue
-            docs.append(PolarisDocument(
+            docs.append(Document(
                 source=self.name,
                 source_id=str(r.get("id") or url or title),
                 url=urljoin(self.base_url, url) if url else (self.base_url or ""),
@@ -179,7 +179,7 @@ class BaseScrapeAdapter:
         return docs
 
     # ── mechanism (the base owns this; subclasses rarely touch it) ──────────
-    def search(self, query: str, limit: int = 10) -> list[PolarisDocument]:
+    def search(self, query: str, limit: int = 10) -> list[Document]:
         key = cache.make_key(self.name, "search", query, limit)
         cached = cache.get_docs(key)
         if cached is not None:
@@ -202,7 +202,7 @@ class BaseScrapeAdapter:
         return docs
 
     @staticmethod
-    def _rank(docs: list[PolarisDocument], query: str) -> list[PolarisDocument]:
+    def _rank(docs: list[Document], query: str) -> list[Document]:
         """Score via the shared BM25 engine (title 3x + content 1x) — the SAME scorer
         as RSS / search-ranking / keyword_score_filter, so a base source can't drift.
         A term-less query keeps the incoming order; otherwise best-first, matches only."""
@@ -213,7 +213,7 @@ class BaseScrapeAdapter:
         scored.sort(key=lambda x: x[0], reverse=True)
         return [d for _, d in scored]
 
-    def fetch_url(self, url: str) -> Optional[PolarisDocument]:
+    def fetch_url(self, url: str) -> Optional[Document]:
         """Default: this source does not claim arbitrary URLs. Override to claim a
         host + build a doc from a single page (the academia_se / pypi pattern)."""
         return None

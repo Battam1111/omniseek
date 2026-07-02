@@ -19,7 +19,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Optional
 
-from penumbra.core.normalize import PolarisDocument, mk_signal
+from penumbra.core.normalize import Document, mk_signal
 from penumbra.core.sources.scrape._base import BaseScrapeAdapter
 
 logger = logging.getLogger(__name__)
@@ -43,8 +43,8 @@ def _int(v) -> int:
         return 0
 
 
-def _article_to_doc(rm: dict) -> Optional[PolarisDocument]:
-    """One search result_model → PolarisDocument (pure fn → golden-fixture testable). Non-article
+def _article_to_doc(rm: dict) -> Optional[Document]:
+    """One search result_model → Document (pure fn → golden-fixture testable). Non-article
     result types (沸点/课程/…) carry no article_info → None (skipped)."""
     ai = rm.get("article_info") or {}
     au = rm.get("author_user_info") or {}
@@ -59,7 +59,7 @@ def _article_to_doc(rm: dict) -> Optional[PolarisDocument]:
             date = datetime.fromtimestamp(int(ct), tz=timezone.utc)
         except (ValueError, OSError, TypeError):
             date = None
-    return PolarisDocument(
+    return Document(
         source="juejin",
         source_id=str(aid),
         url=f"https://juejin.cn/post/{aid}",
@@ -107,7 +107,7 @@ class JuejinAdapter(BaseScrapeAdapter):
             logger.warning("juejin fetch failed: %s", exc)
             return None
 
-    def _to_documents(self, raw, query, limit) -> list[PolarisDocument]:
+    def _to_documents(self, raw, query, limit) -> list[Document]:
         return [d for it in raw[:limit] if (d := _article_to_doc(it.get("result_model") or {}))]
 
     def health_check(self) -> tuple[bool, str]:

@@ -2,7 +2,7 @@
 
 ORCID is the global researcher-identifier registry: a stable iD per person plus a
 self-asserted, often institution-verified CV (employments, educations, works,
-fundings). Polaris-eye's people-STRUCTURE lookup — given a researcher name it
+fundings). Penumbra's people-STRUCTURE lookup — given a researcher name it
 resolves the iD and hands back the structured career record the open web only
 scatters across faculty pages and CVs.
 
@@ -17,7 +17,7 @@ docs describe OAuth but the public read endpoints answer with a bare
       → a deeply nested CV (see _record_to_doc for the exact field map)
 
 This is a FAN-OUT lookup: one expanded-search, then a polite per-iD GET /record
-for the top ``limit`` hits (one PolarisDocument per researcher). The fan-out lives
+for the top ``limit`` hits (one Document per researcher). The fan-out lives
 in ``_raw_fetch`` (it returns the already-fetched (iD, record) pairs); the per-record
 decode is the pure, golden-fixturable ``_record_to_doc``.
 
@@ -39,7 +39,7 @@ from datetime import datetime
 from typing import Any, Optional
 
 from penumbra.core import http
-from penumbra.core.normalize import PolarisDocument, jsonsafe, mk_signal
+from penumbra.core.normalize import Document, jsonsafe, mk_signal
 from penumbra.core.sources.scrape._base import BaseScrapeAdapter
 
 API_BASE = "https://pub.orcid.org/v3.0"
@@ -96,10 +96,10 @@ class OrcidAdapter(BaseScrapeAdapter):
                 pairs.append((oid, record))
         return pairs
 
-    def _to_documents(self, raw: Any, query: str, limit: int) -> list[PolarisDocument]:
+    def _to_documents(self, raw: Any, query: str, limit: int) -> list[Document]:
         if not isinstance(raw, list):
             return []
-        docs: list[PolarisDocument] = []
+        docs: list[Document] = []
         for pair in raw[:limit]:
             if not (isinstance(pair, (list, tuple)) and len(pair) == 2):
                 continue
@@ -110,8 +110,8 @@ class OrcidAdapter(BaseScrapeAdapter):
         return docs
 
     # ------------------------------------------------------------------ decode
-    def _record_to_doc(self, orcid_id: Any, record: Any) -> Optional[PolarisDocument]:
-        """One ORCID /record payload → one PolarisDocument. Pure + total: returns None
+    def _record_to_doc(self, orcid_id: Any, record: Any) -> Optional[Document]:
+        """One ORCID /record payload → one Document. Pure + total: returns None
         on a missing iD, never raises on the deep nesting (every layer guards None)."""
         if not isinstance(orcid_id, str) or not orcid_id:
             return None  # no stable iD ⇒ no doc
@@ -134,7 +134,7 @@ class OrcidAdapter(BaseScrapeAdapter):
         content = self._compose_content(name, employments, educations, works)
         date = self._latest_date(employments, works)
 
-        return PolarisDocument(
+        return Document(
             source=self.name,
             source_id=orcid_id,
             url=PROFILE_URL.format(orcid=orcid_id),

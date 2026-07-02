@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import re
 
-from penumbra.core.normalize import PolarisDocument, jsonsafe, keyword_score_filter
+from penumbra.core.normalize import Document, jsonsafe, keyword_score_filter
 from penumbra.core.sources.scrape._rss import RSSAdapterBase
 
 # Funding-relevance keyword gate (applied to RSS entries).
@@ -81,9 +81,9 @@ class FellowshipsAdapter(RSSAdapterBase):
         "https://blogs.nvidia.com/feed/",
     ]
 
-    def _static_docs(self) -> list[PolarisDocument]:
+    def _static_docs(self) -> list[Document]:
         return [
-            PolarisDocument(
+            Document(
                 source=self.name,
                 source_id=url,
                 url=url,
@@ -99,7 +99,7 @@ class FellowshipsAdapter(RSSAdapterBase):
             for name, url, note in LINKS
         ]
 
-    def search(self, query: str, limit: int = 10) -> list[PolarisDocument]:
+    def search(self, query: str, limit: int = 10) -> list[Document]:
         # RSS entries, keyword-gated to funding-relevant posts.
         rss = [
             d for d in super().search(query, max(limit * 4, 40))
@@ -114,7 +114,7 @@ class FellowshipsAdapter(RSSAdapterBase):
         # buried under verbose institutional news on raw keyword counts.
         sr = keyword_score_filter(static, query)
         rr = keyword_score_filter(rss, query)
-        out: list[PolarisDocument] = []
+        out: list[Document] = []
         si = ri = 0
         while len(out) < limit and (si < len(sr) or ri < len(rr)):
             if si < len(sr):

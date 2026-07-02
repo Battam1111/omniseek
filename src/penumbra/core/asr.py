@@ -12,7 +12,7 @@ Flow: resolve an audio source (小宇宙 enclosure / bilibili via yt-dlp / direc
 decode to a 16k mono WAV (robust, no PATH/codec-backend reliance) → SenseVoice (funasr, MPS) with VAD
 for long-form → strip the model's audio-event / emotion tags → cache FOREVER (spoken content never
 changes). youtube does NOT route here (its adapter already returns captions). ASR is heavy to load +
-slow-ish on long media, so it is an explicit, agent-driven tool (eye_transcribe), never a broad sweep.
+slow-ish on long media, so it is an explicit, agent-driven tool (penumbra_transcribe), never a broad sweep.
 
 Time-range transcription (2026-06-10): start/duration slice the audio BEFORE ASR (ffmpeg -ss/-t;
 on direct/enclosure URLs -ss uses HTTP range seeking, so only the slice region is even downloaded).
@@ -111,7 +111,7 @@ def _decode_to_wav(src: str, start_s: Optional[float] = None, dur_s: Optional[fl
 
     start_s/dur_s slice the audio: -ss before -i is a fast input seek (HTTP range
     on remote URLs, so a 10-min slice of a 3-hour episode never downloads the rest)."""
-    fd, path = tempfile.mkstemp(suffix=".wav", prefix="polaris-asr-")
+    fd, path = tempfile.mkstemp(suffix=".wav", prefix="penumbra-asr-")
     os.close(fd)
     # Lock ffmpeg's -i protocol surface per source kind: by default ffmpeg honors file:// (local-file
     # read) and http(s):// to ANY host (SSRF) on its input. A remote URL is SSRF-guarded + denied the
@@ -340,7 +340,7 @@ def _bilibili_audio(url: str) -> tuple[Optional[str], dict]:
         logger.warning("bilibili: no audio stream for %s", pl.get("bvid"))
         return None, {}
     lo = min(audio, key=lambda a: a.get("bandwidth", 0))
-    tmpdir = tempfile.mkdtemp(prefix="polaris-asr-dl-")
+    tmpdir = tempfile.mkdtemp(prefix="penumbra-asr-dl-")
     path = os.path.join(tmpdir, "a.m4s")
     if _bili_download(_bili_stream_urls(lo), pl["cookies"], pl["referer"], path):
         return path, {"source": "bilibili", "title": pl.get("title"), "author": pl.get("author")}
@@ -355,7 +355,7 @@ def _ytdlp_download(url: str) -> tuple[Optional[str], dict]:
     A real UA is the difference between working and blocked. Returns (path, meta); caller removes
     the file + its dir."""
     import yt_dlp
-    tmpdir = tempfile.mkdtemp(prefix="polaris-asr-dl-")
+    tmpdir = tempfile.mkdtemp(prefix="penumbra-asr-dl-")
     opts = {"quiet": True, "no_warnings": True, "noplaylist": True,
             "format": "bestaudio/best", "outtmpl": os.path.join(tmpdir, "a.%(ext)s"),
             "postprocessors": [], "http_headers": {"User-Agent": _UA}}
@@ -379,7 +379,7 @@ def _rm(path: Optional[str]) -> None:
     except OSError:
         pass
     d = os.path.dirname(path)
-    if os.path.basename(d).startswith("polaris-asr-dl-"):
+    if os.path.basename(d).startswith("penumbra-asr-dl-"):
         import shutil
         shutil.rmtree(d, ignore_errors=True)
 
@@ -436,7 +436,7 @@ def _douyin_audio(url: str) -> tuple[Optional[str], dict]:
     if not play_url:
         logger.warning("douyin audio: no play_addr captured (9225 logged out / 风控?) for %s", url)
         return None, {}
-    tmpdir = tempfile.mkdtemp(prefix="polaris-asr-dl-")
+    tmpdir = tempfile.mkdtemp(prefix="penumbra-asr-dl-")
     dest = os.path.join(tmpdir, "a.mp4")
     try:
         with httpx.stream("GET", play_url, follow_redirects=True, timeout=120,
@@ -455,7 +455,7 @@ def _douyin_audio(url: str) -> tuple[Optional[str], dict]:
 
 def transcribe_url(url: str, language: Optional[str] = None,
                    start=None, duration=None) -> dict:
-    """Resolve audio for `url` → SenseVoice transcript. Cached forever. See eye_transcribe for fields.
+    """Resolve audio for `url` → SenseVoice transcript. Cached forever. See penumbra_transcribe for fields.
 
     start/duration (seconds or MM:SS / HH:MM:SS) transcribe only that slice — the
     chapter-from-shownotes pattern for long episodes."""

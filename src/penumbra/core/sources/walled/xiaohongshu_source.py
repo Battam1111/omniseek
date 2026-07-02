@@ -46,7 +46,7 @@ from urllib.parse import urlparse
 from bs4 import BeautifulSoup
 
 from penumbra.core import cache, diag
-from penumbra.core.normalize import PolarisDocument, mk_signal
+from penumbra.core.normalize import Document, mk_signal
 from penumbra.core.sources.walled import _human
 from penumbra.core.sources.walled._cdp import cdp_call, cdp_health
 
@@ -59,7 +59,7 @@ logger = logging.getLogger(__name__)
 # avoid the redirect hop.
 HOME_URL = "https://www.rednote.com"
 
-# Isolated xhs-ONLY CDP Chrome — port 9223, fresh ~/.polaris/chrome-xhs profile
+# Isolated xhs-ONLY CDP Chrome — port 9223, fresh ~/.penumbra/chrome-xhs profile
 # (launchd com.penumbra.cdp.xhs). PHYSICALLY separate from the shared 9222 Chrome
 # (zhihu/一亩三分地/大号 residue) so the 小号 gets a fresh b1 and never re-exposes the
 # other CDP sources. See scripts/launch_cdp_xhs.sh + the safety research note.
@@ -75,7 +75,7 @@ _XHS_CDP_URL = "http://127.0.0.1:9223"
 #    大号 + 小号 logged in → device graph linked them. (History; see git/research note.)
 # 🔓 UN-SEALED 2026-06-03 — the operator's INFORMED decision (D), executed the SAFEST way:
 #    a FULLY ISOLATED instance, NOT the shared 9222 profile.
-#    • Dedicated Chrome on port 9223 + fresh ~/.polaris/chrome-xhs profile (NEVER had
+#    • Dedicated Chrome on port 9223 + fresh ~/.penumbra/chrome-xhs profile (NEVER had
 #      the 大号; launchd com.penumbra.cdp.xhs) → fresh b1, and zhihu/一亩三分地 are
 #      NOT re-exposed. The 小号 logs in fresh here via VNC.
 #    • READ-ONLY only — this adapter never likes/follows/comments/posts.
@@ -167,8 +167,8 @@ def _flatten_captured_comments(items: list) -> list[dict]:
     return out
 
 
-def _json_item_to_document(item: dict) -> Optional[PolarisDocument]:
-    """One intercepted /search/notes JSON item → PolarisDocument. Field-aligned with the DOM
+def _json_item_to_document(item: dict) -> Optional[Document]:
+    """One intercepted /search/notes JSON item → Document. Field-aligned with the DOM
     path (_card_to_document) + the xsec_token detail-link contract; the JSON additionally
     carries a full publish date (corner_tag_info) the DOM only had as a short hint."""
     nc = item.get("note_card") or {}
@@ -187,12 +187,12 @@ def _json_item_to_document(item: dict) -> Optional[PolarisDocument]:
         if isinstance(tag, dict) and tag.get("type") == "publish_time":
             time_hint = tag.get("text")
             break
-    return PolarisDocument(
+    return Document(
         source="xiaohongshu",
         source_id=note_id,
         url=url,
         title=title,
-        content="(card preview; call eye_add_url on this url for the full note body)",
+        content="(card preview; call penumbra_add_url on this url for the full note body)",
         author=author,
         signals=mk_signal('likes', score, kind='engagement', by='xiaohongshu/score'),
         metadata={"time_hint": time_hint, "like_count": score},
@@ -491,7 +491,7 @@ class XiaohongshuAdapter:
     # cdp_call timeout below stays under this so CDP cleans up before the bound fires).
     fetch_timeout = 120.0
 
-    def search(self, query: str, limit: int = 10) -> list[PolarisDocument]:
+    def search(self, query: str, limit: int = 10) -> list[Document]:
         if _SEALED:
             logger.warning(_SEALED_MSG)
             return []
@@ -499,7 +499,7 @@ class XiaohongshuAdapter:
         key = cache.make_key("xiaohongshu", "search", query, limit)
         cached = cache.get(key)
         if cached is not None:
-            return [PolarisDocument.model_validate(d) for d in cached]
+            return [Document.model_validate(d) for d in cached]
 
         with _live_slot() as (ok, why):
             if not ok:
@@ -509,7 +509,7 @@ class XiaohongshuAdapter:
                 return []
             return self._search_live(query, limit, key)
 
-    def _search_live(self, query: str, limit: int, key: str) -> list[PolarisDocument]:
+    def _search_live(self, query: str, limit: int, key: str) -> list[Document]:
         """Live (CDP) half of search(), run while holding the single 小号 slot (_live_slot
         serializes + rate-gates it). Split out so the slot's ``with`` auto-releases on EVERY
         return path below — no manual release bookkeeping, so no deadlock."""
@@ -606,7 +606,7 @@ class XiaohongshuAdapter:
         # C: prefer the intercepted XHR JSON (robust + full pagination). Fall back to the DOM
         # parse below if capture is off or yielded nothing usable (schema drift / empty).
         if _USE_XHR_CAPTURE and _xhr_items:
-            jdocs: list[PolarisDocument] = []
+            jdocs: list[Document] = []
             jseen: set[str] = set()
             for it in _xhr_items:
                 d = _json_item_to_document(it)
@@ -622,7 +622,7 @@ class XiaohongshuAdapter:
         soup = BeautifulSoup(html, "lxml")
         cards = soup.select("section.note-item")
 
-        docs: list[PolarisDocument] = []
+        docs: list[Document] = []
         seen: set[str] = set()
         for card in cards:
             try:
@@ -644,7 +644,7 @@ class XiaohongshuAdapter:
         cache.set(key, [d.model_dump(mode="json") for d in docs], ttl=CACHE_TTL)
         return docs
 
-    def fetch_url(self, url: str) -> Optional[PolarisDocument]:
+    def fetch_url(self, url: str) -> Optional[Document]:
         if _SEALED:
             logger.warning(_SEALED_MSG)
             return None
@@ -659,7 +659,7 @@ class XiaohongshuAdapter:
                 return None
             return self._fetch_url_live(url)
 
-    def _fetch_url_live(self, url: str) -> Optional[PolarisDocument]:
+    def _fetch_url_live(self, url: str) -> Optional[Document]:
         """Live (CDP) half of fetch_url(), run while holding the single 小号 slot (see
         _search_live / _live_slot). The ``with`` auto-releases on every return path below."""
         # The 小号 session lives on the international rednote.com; a mainland xiaohongshu.com
@@ -780,7 +780,7 @@ class XiaohongshuAdapter:
             content = body or "(no body extracted; note may require interaction to load)"
 
         # Comments carry the crowd-sourced 经验 — render them into the body so any
-        # eye_add_url consumer sees them, and keep the structured list in metadata.
+        # penumbra_add_url consumer sees them, and keep the structured list in metadata.
         # "取到 N / 共 M" makes an incomplete harvest VISIBLE (honest completeness signal).
         comments = cdata.get("list") or []
         declared = cdata.get("declared")
@@ -793,7 +793,7 @@ class XiaohongshuAdapter:
                 lines.append(f"[{who}{lk}] {c.get('text', '')}")
             content += "\n".join(lines)
 
-        return PolarisDocument(
+        return Document(
             source="xiaohongshu",
             source_id=source_id,
             url=url,
@@ -826,7 +826,7 @@ class XiaohongshuAdapter:
             return False, f"{type(exc).__name__}: {str(exc)[:80]}"
 
     @staticmethod
-    def _card_to_document(card) -> Optional[PolarisDocument]:
+    def _card_to_document(card) -> Optional[Document]:
         # Title from a.title (the visible link in the footer)
         title_el = card.select_one("a.title, .title")
         if not title_el:
@@ -875,12 +875,12 @@ class XiaohongshuAdapter:
         time_el = card.select_one(".time")
         time_hint = time_el.get_text(strip=True) if time_el else None
 
-        return PolarisDocument(
+        return Document(
             source="xiaohongshu",
             source_id=note_id or "",
             url=full_url,
             title=title,
-            content="(card preview; call eye_add_url on this url for the full note body)",
+            content="(card preview; call penumbra_add_url on this url for the full note body)",
             author=author,
             signals=mk_signal('likes', score, kind='engagement', by='xiaohongshu/score'),
             metadata={"time_hint": time_hint, "like_count": score},

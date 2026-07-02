@@ -9,7 +9,7 @@ MODE: STRUCTURE (queryable current scores) + MONITOR (source_id = model slug,
 so every newly listed model surfaces as a new item in the watchtower).
 
 Data by Artificial Analysis (https://artificialanalysis.ai), free API key,
-attribution required. Key: ~/.polaris/credentials/artificial_analysis.json
+attribution required. Key: ~/.penumbra/credentials/artificial_analysis.json
 {"api_key": "..."}. explicit_only: the free tier is rate-limited, so this is a
 named lookup (the full list is cached; local filtering costs no API calls).
 """
@@ -24,7 +24,7 @@ from urllib.parse import urlparse
 import httpx
 
 from penumbra.core import auth, cache
-from penumbra.core.normalize import PolarisDocument
+from penumbra.core.normalize import Document
 
 logger = logging.getLogger(__name__)
 
@@ -91,7 +91,7 @@ class LLMLeaderboardAdapter:
         cache.set(key, slim, ttl=CACHE_TTL)
         return slim
 
-    def search(self, query: str, limit: int = 10) -> list[PolarisDocument]:
+    def search(self, query: str, limit: int = 10) -> list[Document]:
         models = self._models()
         if not models:
             return []
@@ -104,7 +104,7 @@ class LLMLeaderboardAdapter:
                     or -1, reverse=True)
         return [self._to_doc(m) for m in models[:limit]]
 
-    def fetch_url(self, url: str) -> Optional[PolarisDocument]:
+    def fetch_url(self, url: str) -> Optional[Document]:
         host = (urlparse(url).hostname or "").lower()
         if "artificialanalysis.ai" not in host:
             return None
@@ -116,14 +116,14 @@ class LLMLeaderboardAdapter:
 
     def health_check(self) -> tuple[bool, str]:
         if not auth.is_configured("artificial_analysis"):
-            return False, "API key not configured (~/.polaris/credentials/artificial_analysis.json)"
+            return False, "API key not configured (~/.penumbra/credentials/artificial_analysis.json)"
         n = len(self._models())
         if n:
             return True, f"OK ({n} models)"
         return False, "0 models (key invalid / API down)"
 
     @staticmethod
-    def _to_doc(m: dict) -> PolarisDocument:
+    def _to_doc(m: dict) -> Document:
         ev = m["evals"]
         ii = ev.get("artificial_analysis_intelligence_index")
         bits = []
@@ -153,7 +153,7 @@ class LLMLeaderboardAdapter:
                 date = datetime.fromisoformat(m["release_date"]).replace(tzinfo=timezone.utc)
             except (ValueError, TypeError):
                 pass
-        return PolarisDocument(
+        return Document(
             source="llm_leaderboard",
             source_id=m["slug"] or m["name"],
             url=f"https://artificialanalysis.ai/models/{m['slug']}",

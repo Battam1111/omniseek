@@ -34,7 +34,7 @@ from typing import Optional
 from urllib.parse import urlparse
 
 from penumbra.core import _github
-from penumbra.core.normalize import PolarisDocument, jsonsafe, mk_signal
+from penumbra.core.normalize import Document, jsonsafe, mk_signal
 from penumbra.core.sources.api._base import BaseAPIAdapter
 
 logger = logging.getLogger(__name__)
@@ -77,7 +77,7 @@ class GitHubTrendingAdapter(BaseAPIAdapter):
             return []
         return data.get("items") or []
 
-    def fetch_url(self, url: str) -> Optional[PolarisDocument]:
+    def fetch_url(self, url: str) -> Optional[Document]:
         host = (urlparse(url).hostname or "").lower()
         if host != "github.com":
             # Don't claim raw.githubusercontent.com URLs (handled by github_awesome_phd)
@@ -103,7 +103,7 @@ class GitHubTrendingAdapter(BaseAPIAdapter):
         # GitHub-backed sources, token-authenticated, 60s-cached) instead of an own unauth probe.
         return _github.health()
 
-    def _to_document(self, repo: dict) -> Optional[PolarisDocument]:
+    def _to_document(self, repo: dict) -> Optional[Document]:
         full_name = repo.get("full_name") or repo.get("name") or "(unnamed)"
         url = repo.get("html_url") or f"https://github.com/{full_name}"
         description = repo.get("description") or "(no description)"
@@ -125,7 +125,7 @@ class GitHubTrendingAdapter(BaseAPIAdapter):
         if language and language not in tags:
             tags.append(language)
 
-        return PolarisDocument(
+        return Document(
             source="github_trending",
             source_id=str(repo.get("id") or full_name),
             url=url,

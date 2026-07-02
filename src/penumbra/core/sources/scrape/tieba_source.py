@@ -27,11 +27,11 @@ https://tieba.baidu.com/f?kw=<forum_name>.
 
 BaseScrapeAdapter (template method): the cache check / atomic set_docs / self-registration
 ritual lives in the base; this adapter fills the two hooks (_raw_fetch = the two mobile GETs,
-_to_documents = the forum/thread -> PolarisDocument maps). ``rank`` stays default-False:
+_to_documents = the forum/thread -> Document maps). ``rank`` stays default-False:
 search/thread returns server-relevance order for the query, which we keep byte-faithful.
 
 These are public mobile endpoints with a mobile UA, NOT the open-API ``http`` helper's UA
-contract (Baidu gates the PolarisEye UA), so this adapter uses httpx directly with a mobile
+contract (Baidu gates the PenumbraEye UA), so this adapter uses httpx directly with a mobile
 User-Agent. No new dependency: httpx is already a core dep.
 """
 
@@ -44,7 +44,7 @@ from urllib.parse import quote, urlsplit, urlunsplit
 
 import httpx
 
-from penumbra.core.normalize import PolarisDocument, jsonsafe, mk_signal
+from penumbra.core.normalize import Document, jsonsafe, mk_signal
 from penumbra.core.sources.scrape._base import BaseScrapeAdapter
 
 logger = logging.getLogger(__name__)
@@ -56,7 +56,7 @@ FORUM_PAGE = "https://tieba.baidu.com/f?kw="       # +<forum_name>
 TIMEOUT = 15
 
 # A plain mobile User-Agent: the desktop site 403s, the mobile JSON endpoints answer with
-# this. The shared http.USER_AGENT (PolarisEye/0.1) is gated by Baidu, so we cannot route
+# this. The shared http.USER_AGENT (PenumbraEye/0.1) is gated by Baidu, so we cannot route
 # through the open-API helper here (per its module docstring: walled/anti-bot sources keep
 # their own headers).
 _MOBILE_UA = (
@@ -114,10 +114,10 @@ class TiebaAdapter(BaseScrapeAdapter):
         return data
 
     # ── parse ───────────────────────────────────────────────────────────────
-    def _to_documents(self, raw: Any, query: str, limit: int) -> list[PolarisDocument]:
+    def _to_documents(self, raw: Any, query: str, limit: int) -> list[Document]:
         if not isinstance(raw, dict):
             return []
-        docs: list[PolarisDocument] = []
+        docs: list[Document] = []
 
         # 1) the forum doc (community structure) for the exact-name match, if any.
         forum_doc = self._forum_doc(raw.get("forums"))
@@ -136,7 +136,7 @@ class TiebaAdapter(BaseScrapeAdapter):
                 docs.append(doc)
         return docs[:limit]
 
-    def _forum_doc(self, forums_payload: Any) -> Optional[PolarisDocument]:
+    def _forum_doc(self, forums_payload: Any) -> Optional[Document]:
         """The exactMatch forum -> a STRUCTURE doc (size + follower count + blurb)."""
         if not isinstance(forums_payload, dict):
             return None
@@ -168,7 +168,7 @@ class TiebaAdapter(BaseScrapeAdapter):
         signals = mk_signal("posts", post_num_ori, kind="engagement", by="tieba/forum/post_num")
         signals.update(mk_signal("followers", concern, kind="engagement", by="tieba/forum/concern_num"))
 
-        return PolarisDocument(
+        return Document(
             source=self.name,
             source_id=f"forum/{fid}" if fid is not None else f"forum/{name}",
             url=url,
@@ -184,7 +184,7 @@ class TiebaAdapter(BaseScrapeAdapter):
             },
         )
 
-    def _thread_doc(self, t: dict) -> Optional[PolarisDocument]:
+    def _thread_doc(self, t: dict) -> Optional[Document]:
         """One search-matched thread -> a UNWALL doc (title, opening abstract, replies)."""
         tid = t.get("tid")
         if not tid:
@@ -214,7 +214,7 @@ class TiebaAdapter(BaseScrapeAdapter):
         if forum_name:
             tags.append(str(forum_name))
 
-        return PolarisDocument(
+        return Document(
             source=self.name,
             source_id=str(tid),
             url=url,
@@ -234,7 +234,7 @@ class TiebaAdapter(BaseScrapeAdapter):
             },
         )
 
-    def fetch_url(self, url: str) -> Optional[PolarisDocument]:
+    def fetch_url(self, url: str) -> Optional[Document]:
         """This source does not claim arbitrary thread URLs (the search endpoint is the
         entry point; a single thread's full replies need the pb page, out of scope here)."""
         return None

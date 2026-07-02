@@ -2,13 +2,13 @@
 
 Adzuna aggregates job postings across 20+ countries and is one of the few sources that
 returns a structured employer-side salary range per listing (salary_min / salary_max).
-Polaris-eye's careers-STRUCTURE source: a filterable, salaried job feed across many markets
+Penumbra's careers-STRUCTURE source: a filterable, salaried job feed across many markets
 (the default is the deployer-configured country; any supported country code can be passed),
 which web search cannot assemble. Fills the "cross-country jobs + salary" gap (MyCareersFuture
 is SG-only, levels.fyi is self-reported tech comp).
 
 Auth: a FREE registered app_id + app_key (https://developer.adzuna.com/signup, no cost;
-free tier ~250 calls/day). They live ONLY on the host at ~/.polaris/credentials/adzuna.json
+free tier ~250 calls/day). They live ONLY on the host at ~/.penumbra/credentials/adzuna.json
 -> {"app_id": "...", "app_key": "..."} and ride as URL params (no auth header), so this uses
 the shared http helper. needs_credentials=True; no key -> _raw_fetch returns None -> [].
 
@@ -26,7 +26,7 @@ from datetime import datetime
 from typing import Any, Optional
 
 from penumbra.core import auth, http
-from penumbra.core.normalize import PolarisDocument, jsonsafe, mk_signal
+from penumbra.core.normalize import Document, jsonsafe, mk_signal
 from penumbra.core.sources.scrape._base import BaseScrapeAdapter
 
 API_URL = "https://api.adzuna.com/v1/api/jobs/{country}/search/1"
@@ -83,18 +83,18 @@ class AdzunaAdapter(BaseScrapeAdapter):
             timeout=20,
         )
 
-    def _to_documents(self, raw: Any, query: str, limit: int) -> list[PolarisDocument]:
+    def _to_documents(self, raw: Any, query: str, limit: int) -> list[Document]:
         if not isinstance(raw, dict):
             return []
         results = raw.get("results") or []
-        docs: list[PolarisDocument] = []
+        docs: list[Document] = []
         for job in results[:limit]:
             doc = self._job_to_doc(job)
             if doc is not None:
                 docs.append(doc)
         return docs
 
-    def _job_to_doc(self, job: Any) -> Optional[PolarisDocument]:
+    def _job_to_doc(self, job: Any) -> Optional[Document]:
         if not isinstance(job, dict):
             return None
         url = job.get("redirect_url")
@@ -105,7 +105,7 @@ class AdzunaAdapter(BaseScrapeAdapter):
         company = (job.get("company") or {}).get("display_name") if isinstance(job.get("company"), dict) else None
         loc = (job.get("location") or {}).get("display_name") if isinstance(job.get("location"), dict) else None
         cat = (job.get("category") or {}).get("label") if isinstance(job.get("category"), dict) else None
-        return PolarisDocument(
+        return Document(
             source=self.name,
             source_id=str(jid) if jid else url,
             url=url,
@@ -156,7 +156,7 @@ class AdzunaAdapter(BaseScrapeAdapter):
         itself is fine, the host just has no credential yet)."""
         app_id, app_key = self._creds()
         if not app_id or not app_key:
-            return False, "no app_id/app_key (set ~/.polaris/credentials/adzuna.json)"
+            return False, "no app_id/app_key (set ~/.penumbra/credentials/adzuna.json)"
         try:
             raw = http.get_json(API_URL.format(country=_DEFAULT_COUNTRY),
                                 params={"app_id": app_id, "app_key": app_key,

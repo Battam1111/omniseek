@@ -5,7 +5,7 @@
 real-time creator commentary live here in video-native form that zhihu (text Q&A) / xiaohongshu
 (lifestyle notes) / 一亩三分地 (NA tech-immigration forum) do NOT duplicate. UNWALL mode: the web
 search endpoint is login-gated (guest → status_code 2483 "请先登录"), so a disposable 小号 logs in
-ONCE via VNC into an ISOLATED Chrome profile (port 9225, ~/.polaris/chrome-douyin) and the eye
+ONCE via VNC into an ISOLATED Chrome profile (port 9225, ~/.penumbra/chrome-douyin) and the eye
 reuses that session — the SAME pattern as xiaohongshu's 9223.
 
 Mechanism (verified 2026-06-22, decoded from MediaCrawler media_platform/douyin/client.py):
@@ -19,7 +19,7 @@ Mechanism (verified 2026-06-22, decoded from MediaCrawler media_platform/douyin/
     attaches the login cookies automatically — the xhs same-origin-fetch trick.
   * data[] items carry aweme_info (or aweme_mix_info.mix_items[0]); each = one video doc. The
     video's spoken content is NOT in the API — the caption (desc) + creator + engagement are the
-    discovery signal; the agent can then eye_transcribe a promising video's url for the speech.
+    discovery signal; the agent can then penumbra_transcribe a promising video's url for the speech.
 
 Isolation rationale: identical to xiaohongshu (launch_cdp_xhs.sh header) — a disposable
 小号 must not inherit the 大号's device lineage nor re-expose zhihu/一亩三分地 to 抖音's detection
@@ -36,7 +36,7 @@ from typing import Any, Optional
 from urllib.parse import quote, unquote
 
 from penumbra.core import diag
-from penumbra.core.normalize import PolarisDocument, mk_signal
+from penumbra.core.normalize import Document, mk_signal
 from penumbra.core.sources.walled._base import BaseCDPAdapter
 
 logger = logging.getLogger(__name__)
@@ -103,10 +103,10 @@ class DouyinAdapter(BaseCDPAdapter):
         "抖音 — 中国第一短视频平台的登录墙网页搜索 (UNWALL). 一手 留学/移民/海外生活、政务/官方号公告、"
         "创作者实时评论, 视频原生, 与 知乎(文字问答)/小红书(生活笔记)/一亩三分地(北美技术移民) 不重叠. "
         "隔离 小号 会话 (9225 专属 Chrome, 同小红书 9223 模式). 返回视频的标题/文案、作者、互动数 + 视频 URL "
-        "(再对该 url 调 eye_transcribe 可转写语音正文). 命名调用 (eye_fetch), 不进广搜."
+        "(再对该 url 调 penumbra_transcribe 可转写语音正文). 命名调用 (penumbra_fetch), 不进广搜."
     )
     needs_credentials = True
-    explicit_only = "抖音 walled (isolated 9225 小号 session, account-rate-sensitive); named via eye_fetch"
+    explicit_only = "抖音 walled (isolated 9225 小号 session, account-rate-sensitive); named via penumbra_fetch"
     cdp_url = DOUYIN_CDP
     cdp_timeout = 60
     cache_ttl = 1800  # 30 min: balances freshness vs sparing the single 小号 session a retry-storm
@@ -147,7 +147,7 @@ class DouyinAdapter(BaseCDPAdapter):
         except Exception:  # noqa: BLE001
             return ""
 
-    def _to_documents(self, raw: Any, query: str, limit: int) -> list[PolarisDocument]:
+    def _to_documents(self, raw: Any, query: str, limit: int) -> list[Document]:
         if not isinstance(raw, dict):
             return []
         # Login wall (guest/expired session) — an AUTHORITATIVE "needs login", NOT a flood block.
@@ -159,7 +159,7 @@ class DouyinAdapter(BaseCDPAdapter):
         if raw.get("fetch_error") or raw.get("parse_error"):
             diag.note("douyin.fetch_error", body=str(raw)[:200])
             return []
-        docs: list[PolarisDocument] = []
+        docs: list[Document] = []
         for item in (raw.get("data") or []):
             doc = self._doc_from_item(item)
             if doc is not None:
@@ -169,7 +169,7 @@ class DouyinAdapter(BaseCDPAdapter):
         return docs
 
     @staticmethod
-    def _doc_from_item(item: dict) -> Optional[PolarisDocument]:
+    def _doc_from_item(item: dict) -> Optional[Document]:
         """One search data[] item → a video doc. Items can be a single video (aweme_info) or a mix
         card (aweme_mix_info.mix_items[0]); non-video cards (users/live/no aweme_id) are dropped."""
         if not isinstance(item, dict):
@@ -197,18 +197,18 @@ class DouyinAdapter(BaseCDPAdapter):
             except Exception:  # noqa: BLE001
                 date = None
         # Video cover (a vision-capable agent can view it). play_addr is short-lived + token-gated,
-        # so the durable handle stays the canonical /video/<id> page url (also eye_transcribe's target).
+        # so the durable handle stays the canonical /video/<id> page url (also penumbra_transcribe's target).
         media: list[str] = []
         cover = (((info.get("video") or {}).get("cover") or {}).get("url_list") or [])
         if cover:
             media.append(cover[0])
         title = (desc.split("\n", 1)[0][:80] if desc else "") or f"抖音视频 {aweme_id}"
-        return PolarisDocument(
+        return Document(
             source="douyin",
             source_id=aweme_id,
             url=f"https://www.douyin.com/video/{aweme_id}",
             title=title,
-            content=desc or "(无文案; 正文在视频里 — 可对此 url 调 eye_transcribe 转写语音)",
+            content=desc or "(无文案; 正文在视频里 — 可对此 url 调 penumbra_transcribe 转写语音)",
             author=nickname,
             date=date,
             signals=mk_signal("likes", digg, kind="engagement", by="douyin/digg_count"),

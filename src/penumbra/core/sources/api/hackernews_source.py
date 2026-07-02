@@ -1,6 +1,6 @@
 """Hacker News — tech news + community discussion via Algolia search API.
 
-Sub-agent's P0 reflection flagged this as missing from Polaris-eye 的 25 个
+Sub-agent's P0 reflection flagged this as missing from Penumbra 的 25 个
 精选 — HN is the highest-density tech news + threaded community discussion
 aggregator and crucially independent of social media platforms.
 
@@ -36,13 +36,13 @@ import httpx
 from markdownify import markdownify as html_to_md
 
 from penumbra.core import cache, http
-from penumbra.core.normalize import PolarisDocument, jsonsafe, mk_signal
+from penumbra.core.normalize import Document, jsonsafe, mk_signal
 
 logger = logging.getLogger(__name__)
 
 ALGOLIA_BASE = "https://hn.algolia.com/api/v1"
 TIMEOUT = 15
-USER_AGENT = "polaris-eye/0.1 (automated retrieval)"
+USER_AGENT = "penumbra/0.1 (automated retrieval)"
 
 
 class HackerNewsAdapter:
@@ -53,7 +53,7 @@ class HackerNewsAdapter:
         "(full-text comment search), both via the Algolia HN API"
     )
 
-    def search(self, query: str, limit: int = 10) -> list[PolarisDocument]:
+    def search(self, query: str, limit: int = 10) -> list[Document]:
         key = cache.make_key("hackernews", "search", query, limit)
         cached = cache.get_docs(key)
         if cached is not None:
@@ -66,7 +66,7 @@ class HackerNewsAdapter:
         story_budget = max(1, (limit + 1) // 2)   # ceil(limit/2) → stories get the tie
         comment_budget = max(1, limit - story_budget)
 
-        docs: list[PolarisDocument] = []
+        docs: list[Document] = []
 
         story_data = http.get_json(
             f"{ALGOLIA_BASE}/search",
@@ -97,7 +97,7 @@ class HackerNewsAdapter:
         cache.set_docs(key, docs, ttl=900)
         return docs
 
-    def fetch_url(self, url: str) -> Optional[PolarisDocument]:
+    def fetch_url(self, url: str) -> Optional[Document]:
         host = (urlparse(url).hostname or "").lower()
         if "ycombinator.com" not in host:
             return None
@@ -125,7 +125,7 @@ class HackerNewsAdapter:
             return False, f"{type(exc).__name__}: {exc}"
 
     @staticmethod
-    def _hit_to_document(hit: dict) -> PolarisDocument:
+    def _hit_to_document(hit: dict) -> Document:
         story_id = hit.get("objectID")
         title = hit.get("title") or "(no title)"
         external_url = hit.get("url")
@@ -140,7 +140,7 @@ class HackerNewsAdapter:
                 date = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
             except (ValueError, TypeError):
                 pass
-        return PolarisDocument(
+        return Document(
             source="hackernews",
             source_id=str(story_id),
             url=url,
@@ -162,7 +162,7 @@ class HackerNewsAdapter:
         )
 
     @staticmethod
-    def _comment_to_document(hit: dict) -> PolarisDocument:
+    def _comment_to_document(hit: dict) -> Document:
         """A full-text comment match → a doc. Title is the parent story's title (so the
         comment is anchored to what it's about), content is the comment body (HTML→Markdown),
         url points at the comment on news.ycombinator.com. The Algolia comment index exposes
@@ -185,7 +185,7 @@ class HackerNewsAdapter:
             except (ValueError, TypeError):
                 pass
 
-        return PolarisDocument(
+        return Document(
             source="hackernews",
             source_id=str(comment_id),
             url=comments_url,
@@ -211,12 +211,12 @@ class HackerNewsAdapter:
         )
 
     @staticmethod
-    def _item_to_document(item: dict) -> PolarisDocument:
+    def _item_to_document(item: dict) -> Document:
         item_id = item.get("id")
         title = item.get("title") or "(no title)"
         external_url = item.get("url")
         comments_url = f"https://news.ycombinator.com/item?id={item_id}"
-        return PolarisDocument(
+        return Document(
             source="hackernews",
             source_id=str(item_id),
             url=external_url or comments_url,

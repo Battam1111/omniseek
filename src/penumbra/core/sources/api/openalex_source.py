@@ -25,7 +25,7 @@ from urllib.parse import urlparse
 
 from penumbra.core import _openalex as oa
 from penumbra.core import cache
-from penumbra.core.normalize import PolarisDocument, mk_signal
+from penumbra.core.normalize import Document, mk_signal
 
 logger = logging.getLogger(__name__)
 
@@ -90,7 +90,7 @@ class OpenAlexAdapter:
         "institutions + concepts ontology; open alternative to Semantic Scholar)"
     )
 
-    def search(self, query: str, limit: int = 10) -> list[PolarisDocument]:
+    def search(self, query: str, limit: int = 10) -> list[Document]:
         # Pull any allowlisted OpenAlex `key:value` filters out of the query and
         # route them to the API's `filter=` param. No recognized filter →
         # behaviour unchanged (plain `search=` as before).
@@ -123,7 +123,7 @@ class OpenAlexAdapter:
             return []
 
         results = data.get("results") or []
-        docs: list[PolarisDocument] = []
+        docs: list[Document] = []
         for work in results[:limit]:
             try:
                 docs.append(self._work_to_document(work))
@@ -133,7 +133,7 @@ class OpenAlexAdapter:
         cache.set_docs(key, docs, ttl=3600)
         return docs
 
-    def fetch_url(self, url: str) -> Optional[PolarisDocument]:
+    def fetch_url(self, url: str) -> Optional[Document]:
         host = (urlparse(url).hostname or "").lower()
         if "openalex.org" not in host:
             return None
@@ -156,7 +156,7 @@ class OpenAlexAdapter:
         return oa.health()
 
     @staticmethod
-    def _work_to_document(work: dict) -> PolarisDocument:
+    def _work_to_document(work: dict) -> Document:
         p = oa.parse_work(work)
         title = p["title"] or "(untitled)"
         url = p["url"] or f"https://openalex.org/{p['work_id'] or '?'}"
@@ -172,7 +172,7 @@ class OpenAlexAdapter:
             if isinstance(c, dict) and c.get("display_name"):
                 concepts.append(c["display_name"])
 
-        return PolarisDocument(
+        return Document(
             source="openalex",
             source_id=p["work_id"] or "?",
             url=url,
@@ -186,7 +186,7 @@ class OpenAlexAdapter:
             metadata={
                 "openalex_id": p["work_id"],
                 "doi": p["doi"],
-                # The drill-in handle for eye_paper_enrich / eye_paper_recommend. source_id is an
+                # The drill-in handle for penumbra_paper_enrich / penumbra_paper_recommend. source_id is an
                 # OpenAlex W-id those tools REJECT (enrich errors, recommend returned a silent n:0),
                 # so surface the DOI here, named, where a chaining agent looks for "the id to pass".
                 "paper_id": p["doi"] or None,

@@ -12,7 +12,7 @@ from typing import Optional
 from urllib.parse import urlparse
 
 from penumbra.core import _s2, auth, cache
-from penumbra.core.normalize import PolarisDocument, mk_signal
+from penumbra.core.normalize import Document, mk_signal
 
 logger = logging.getLogger(__name__)
 
@@ -86,7 +86,7 @@ class SemanticScholarAdapter:
         "fieldsOfStudy",
     ]
 
-    def search(self, query: str, limit: int = 10) -> list[PolarisDocument]:
+    def search(self, query: str, limit: int = 10) -> list[Document]:
         # Pull allowlisted qualifiers (year / venue / min_citations) out of the
         # query → S2 API params. None → unchanged.
         clean_query, qualifiers = _parse_s2_qualifiers(query or "")
@@ -97,7 +97,7 @@ class SemanticScholarAdapter:
         key = cache.make_key("s2", "search", clean_query, qual_key, limit)
         cached = cache.get(key)
         if cached is not None:
-            return [PolarisDocument.model_validate(d) for d in cached]
+            return [Document.model_validate(d) for d in cached]
 
         # Route through the shared _s2 wrapper: ONE pacer + concurrency cap + breaker for every
         # S2-backed capability. The wrapper is already HARD-BOUNDED to `limit`, honors the ~1 RPS
@@ -107,7 +107,7 @@ class SemanticScholarAdapter:
         # (year / venue / min_citation_count) pass straight through to the S2 search API.
         results = _s2.search_paper(clean_query, limit=limit, fields=self._FIELDS, **qualifiers)
 
-        docs: list[PolarisDocument] = []
+        docs: list[Document] = []
         for paper in results:
             try:
                 docs.append(self._paper_to_document(paper))
@@ -117,7 +117,7 @@ class SemanticScholarAdapter:
         cache.set(key, [d.model_dump(mode="json") for d in docs], ttl=3600)
         return docs
 
-    def fetch_url(self, url: str) -> Optional[PolarisDocument]:
+    def fetch_url(self, url: str) -> Optional[Document]:
         host = urlparse(url).hostname or ""
         if "semanticscholar.org" not in host:
             return None
@@ -146,7 +146,7 @@ class SemanticScholarAdapter:
         return _s2.health()
 
     @staticmethod
-    def _paper_to_document(paper) -> PolarisDocument:
+    def _paper_to_document(paper) -> Document:
         authors = []
         try:
             authors = [a.name for a in (paper.authors or []) if a.name]
@@ -176,7 +176,7 @@ class SemanticScholarAdapter:
         # directly for metadata["raw"] (already a plain, serializable dict).
         raw = getattr(paper, "raw_data", None)
 
-        return PolarisDocument(
+        return Document(
             source="semantic_scholar",
             source_id=paper.paperId or "",
             url=paper.url or f"https://semanticscholar.org/paper/{paper.paperId}",

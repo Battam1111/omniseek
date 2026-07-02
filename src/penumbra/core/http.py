@@ -23,7 +23,7 @@ from penumbra.core import _netguard, cache, diag
 
 logger = logging.getLogger(__name__)
 
-USER_AGENT = "Mozilla/5.0 (compatible; polaris-eye/0.1)"
+USER_AGENT = "Mozilla/5.0 (compatible; penumbra/0.1)"
 DEFAULT_TIMEOUT = 20
 MAX_BYTES = 30 * 1024 * 1024  # 30MB hard cap on a single response body — a feed/JSON
                               # bigger than this is almost certainly a hijack/misconfig;
@@ -77,10 +77,10 @@ def _request_capped(method: str, url: str, *, timeout: int, headers: dict,
     if cache.cache_only():
         return None  # cache-only mode (cache_only=True): do NO live HTTP, the single egress guard
     # SSRF pre-flight: refuse a URL whose host resolves to a private/loopback/link-local/reserved
-    # IP (169.254.169.254 cloud-metadata, 127/10/192.168, ...). Closes the direct eye_add_url ->
+    # IP (169.254.169.254 cloud-metadata, 127/10/192.168, ...). Closes the direct penumbra_add_url ->
     # web_fallback -> http.get attacker path; a 'dns' miss is NOT blocked (the fetch fails on its
     # own). (Redirect-to-private is a residual: the pooled client follows redirects without per-hop
-    # re-validation; the attacker-URL drill path eye_add_url should additionally route through
+    # re-validation; the attacker-URL drill path penumbra_add_url should additionally route through
     # curator.probe.safe_fetch, which IP-pins + re-validates every hop.)
     _blk = _netguard.security_block_reason(url)
     if _blk is not None:
@@ -160,7 +160,7 @@ def get_impersonated(url: str, *, timeout: int = DEFAULT_TIMEOUT,
     HigherEdJobs PerimeterX-walled RSS feed: httpx -> challenge HTML; curl_cffi(chrome) -> the real
     129-item feed.
 
-    NOTE: we do NOT inject our PolarisEye UA here — ``impersonate='chrome'`` sets a Chrome-consistent
+    NOTE: we do NOT inject our PenumbraEye UA here — ``impersonate='chrome'`` sets a Chrome-consistent
     UA + header order, and overriding the UA would desync the very fingerprint we are matching."""
     try:
         from curl_cffi import requests as _creq  # lazy: keep curl_cffi off the hot import path

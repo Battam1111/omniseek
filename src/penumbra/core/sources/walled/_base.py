@@ -13,7 +13,7 @@ through the identical ritual:
             raw = cdp_call(_flow, initial_url=url, cdp_url=...)
         except Exception:
             return []
-        docs = <parse raw into PolarisDocuments>
+        docs = <parse raw into Documents>
         cache.set_docs(key, docs, ttl)
         return docs
 
@@ -29,7 +29,7 @@ attributes and fills two hooks:
 
     _search_url(query) -> str              # the page to navigate to
     _flow(page) -> raw                     # interact with the page, return raw payload
-    _to_documents(raw, query, limit) -> list[PolarisDocument]   # raw → docs
+    _to_documents(raw, query, limit) -> list[Document]   # raw → docs
 
 It is OPT-IN. The bespoke, account-rate-sensitive sources (xiaohongshu's 794-line
 9223-isolated single-flight flow, mokahr's signed ATS requests) stay hand-written
@@ -54,7 +54,7 @@ import logging
 from typing import Any, Optional
 
 from penumbra.core import cache, diag, relevance
-from penumbra.core.normalize import PolarisDocument, is_blocked
+from penumbra.core.normalize import Document, is_blocked
 from penumbra.core.sources.walled import _human
 from penumbra.core.sources.walled._cdp import DEFAULT_CDP_URL, cdp_call, cdp_health
 
@@ -101,9 +101,9 @@ class BaseCDPAdapter:
             Interact with the loaded page (wait_for_selector, scroll, evaluate) and
             return a raw payload (HTML string, or a tuple incl. images_from_page(page)).
             Runs inside cdp_call's worker thread. Must override.
-        _to_documents(raw, query, limit) -> list[PolarisDocument]
+        _to_documents(raw, query, limit) -> list[Document]
             Parse the raw payload into docs (slice to ``limit`` here). Must override.
-        _fetch_flow(page) -> Any  /  _to_document(raw, url) -> Optional[PolarisDocument]
+        _fetch_flow(page) -> Any  /  _to_document(raw, url) -> Optional[Document]
             Optional fetch_url hooks (mirror the search pair). If ``_to_document`` is
             left as the default no-op, fetch_url returns None.
     """
@@ -153,8 +153,8 @@ class BaseCDPAdapter:
             f"{type(self).__name__} must implement `_flow`"
         )
 
-    def _to_documents(self, raw: Any, query: str, limit: int) -> list[PolarisDocument]:
-        """Raw payload → PolarisDocuments (slice to ``limit``). Must override."""
+    def _to_documents(self, raw: Any, query: str, limit: int) -> list[Document]:
+        """Raw payload → Documents (slice to ``limit``). Must override."""
         raise NotImplementedError(
             f"{type(self).__name__} must implement `_to_documents`"
         )
@@ -164,8 +164,8 @@ class BaseCDPAdapter:
         Override to also surface images (return ``page.content(), images_from_page(page)``)."""
         return page.content()
 
-    def _to_document(self, raw: Any, url: str) -> Optional[PolarisDocument]:
-        """Single-page payload → one PolarisDocument. Default no-op (fetch_url disabled).
+    def _to_document(self, raw: Any, url: str) -> Optional[Document]:
+        """Single-page payload → one Document. Default no-op (fetch_url disabled).
         Override (with ``url_host`` set) to claim this source's URLs."""
         return None
 
@@ -177,7 +177,7 @@ class BaseCDPAdapter:
         return cdp_call(cb, initial_url=initial_url,
                         timeout=self.cdp_timeout, cdp_url=self.cdp_url)
 
-    def search(self, query: str, limit: int = 10) -> list[PolarisDocument]:
+    def search(self, query: str, limit: int = 10) -> list[Document]:
         key = cache.make_key(self.name, "search", query, limit)
         cached = cache.get_docs(key)
         if cached is not None:
@@ -213,7 +213,7 @@ class BaseCDPAdapter:
         return docs
 
     @staticmethod
-    def _rank(docs: list[PolarisDocument], query: str) -> list[PolarisDocument]:
+    def _rank(docs: list[Document], query: str) -> list[Document]:
         """Score via the shared BM25 engine (title 3x + content 1x) — the one scorer
         RSS / search-ranking / keyword_score_filter share, so a base source can't drift.
         Term-less query keeps DOM order; else best-first, matches only."""
@@ -224,7 +224,7 @@ class BaseCDPAdapter:
         scored.sort(key=lambda x: x[0], reverse=True)
         return [d for _, d in scored]
 
-    def fetch_url(self, url: str) -> Optional[PolarisDocument]:
+    def fetch_url(self, url: str) -> Optional[Document]:
         """Claim ``url`` if its host contains ``url_host``, then drive the page via
         ``_fetch_flow`` and build a doc via ``_to_document``. Disabled (returns None)
         unless both ``url_host`` is set and ``_to_document`` is overridden."""

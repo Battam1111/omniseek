@@ -1,17 +1,17 @@
 """Semantic Scholar Authors — researcher profiles + citation metrics via the keyless Graph API.
 
 Resolves a researcher NAME to disambiguated author entities with the citation metrics ORCID
-lacks (h-index / citation count / paper count). Polaris-eye's people-STRUCTURE reinforcement:
+lacks (h-index / citation count / paper count). Penumbra's people-STRUCTURE reinforcement:
 the people domain previously rested on ORCID alone (a keyless single point flagged
 coverage_critical); this adds a SECOND, different-backend researcher-identity source, and pairs
-with eye_resolve_identity (OpenAlex) for cross-backend author disambiguation.
+with penumbra_resolve_identity (OpenAlex) for cross-backend author disambiguation.
 
 Access via the public Graph API (no key needed; a free key only raises the rate limit):
   GET https://api.semanticscholar.org/graph/v1/author/search?query=<name>&fields=name,hIndex,paperCount,citationCount
   -> {"total": N, "offset": 0, "data": [{authorId, name, hIndex, paperCount, citationCount}, ...]}
 The author page URL is CONSTRUCTED from authorId (no url field), so this is a thin coded adapter.
 ``affiliations`` is empty in the search projection (S2 populates it on /author/{id} detail), so we
-ship the metrics-and-disambiguation layer; the agent can eye_add_url the author page for more.
+ship the metrics-and-disambiguation layer; the agent can penumbra_add_url the author page for more.
 
 backend="semantic_scholar": shares the S2 graph with the existing `semantic_scholar` paper source
 (honest backend count: it is the same upstream, a different facet). explicit_only: a named
@@ -28,7 +28,7 @@ from typing import Any, Optional
 import httpx
 
 from penumbra.core import http
-from penumbra.core.normalize import PolarisDocument, jsonsafe, mk_signal
+from penumbra.core.normalize import Document, jsonsafe, mk_signal
 from penumbra.core.sources.scrape._base import BaseScrapeAdapter
 
 SEARCH_URL = "https://api.semanticscholar.org/graph/v1/author/search"
@@ -43,7 +43,7 @@ class S2AuthorsAdapter(BaseScrapeAdapter):
     description = ("Semantic Scholar authors — resolve a researcher by NAME to citation metrics "
                    "(h-index / citation count / paper count) + disambiguated candidate entities; "
                    "name a researcher to rank who's who. STRUCTURE, keyless, people-lookup. Pairs "
-                   "with orcid (self-asserted CV) and eye_resolve_identity (OpenAlex).")
+                   "with orcid (self-asserted CV) and penumbra_resolve_identity (OpenAlex).")
     cache_ttl = 86400  # 24h: profiles change slowly + the shared keyless pool is rate-limited
     kind = "lookup"
     domains = ["people"]
@@ -58,18 +58,18 @@ class S2AuthorsAdapter(BaseScrapeAdapter):
             timeout=15,
         )
 
-    def _to_documents(self, raw: Any, query: str, limit: int) -> list[PolarisDocument]:
+    def _to_documents(self, raw: Any, query: str, limit: int) -> list[Document]:
         if not isinstance(raw, dict):
             return []
         data = raw.get("data") or []
-        docs: list[PolarisDocument] = []
+        docs: list[Document] = []
         for author in data[:limit]:
             doc = self._author_to_doc(author)
             if doc is not None:
                 docs.append(doc)
         return docs
 
-    def _author_to_doc(self, author: Any) -> Optional[PolarisDocument]:
+    def _author_to_doc(self, author: Any) -> Optional[Document]:
         if not isinstance(author, dict):
             return None
         aid = author.get("authorId")
@@ -87,7 +87,7 @@ class S2AuthorsAdapter(BaseScrapeAdapter):
         if papers is not None:
             bits.append(f"{papers} papers")
         content = name + ((" — " + ", ".join(bits)) if bits else "")
-        return PolarisDocument(
+        return Document(
             source=self.name,
             source_id=str(aid),
             url=AUTHOR_URL.format(id=aid),

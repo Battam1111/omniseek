@@ -7,7 +7,7 @@ public Apple URL, and crucially the **feedUrl** (the show's RSS).
 
 The VALUE here is TRANSCRIBE, not text. A podcast doc carries almost no body
 the agent can read. The payoff is surfacing the ``feedUrl`` so the agent can
-pull a real episode .mp3 from that feed and run ``eye_transcribe`` on it to get
+pull a real episode .mp3 from that feed and run ``penumbra_transcribe`` on it to get
 the SPOKEN content. To make that one step shorter, for the TOP result we also
 fetch the feed once and surface the latest episode's enclosure .mp3 URL
 (``metadata.latest_episode_mp3``) so the agent can ASR it immediately without a
@@ -32,7 +32,7 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 
 from penumbra.core import http
-from penumbra.core.normalize import PolarisDocument, jsonsafe, mk_signal
+from penumbra.core.normalize import Document, jsonsafe, mk_signal
 from penumbra.core.sources.scrape._base import BaseScrapeAdapter
 
 logger = logging.getLogger(__name__)
@@ -86,7 +86,7 @@ def _latest_episode_mp3(feed_url: str) -> Optional[str]:
 class ApplePodcastsAdapter(BaseScrapeAdapter):
     name = "apple_podcasts"
     needs_credentials = False
-    description = "Apple Podcasts: find a podcast show + its RSS feedUrl (iTunes Search, keyless); pull an episode .mp3 for eye_transcribe"
+    description = "Apple Podcasts: find a podcast show + its RSS feedUrl (iTunes Search, keyless); pull an episode .mp3 for penumbra_transcribe"
     cache_ttl = 900
     kind = "lookup"
     domains = ["podcast"]
@@ -99,12 +99,12 @@ class ApplePodcastsAdapter(BaseScrapeAdapter):
             timeout=15,
         )
 
-    def _to_documents(self, raw: Any, query: str, limit: int) -> list[PolarisDocument]:
+    def _to_documents(self, raw: Any, query: str, limit: int) -> list[Document]:
         results = (raw or {}).get("results") if isinstance(raw, dict) else None
         if not results:
             return []
 
-        docs: list[PolarisDocument] = []
+        docs: list[Document] = []
         for idx, item in enumerate(results[:limit]):
             if not isinstance(item, dict):
                 continue
@@ -121,14 +121,14 @@ class ApplePodcastsAdapter(BaseScrapeAdapter):
             track_count = item.get("trackCount")
 
             # Content is the TRANSCRIBE breadcrumb, not readable body: genres + the
-            # feed the agent pulls an episode .mp3 from to run eye_transcribe.
+            # feed the agent pulls an episode .mp3 from to run penumbra_transcribe.
             content_lines = []
             if genres:
                 content_lines.append("Genres: " + ", ".join(genres))
             if isinstance(track_count, int):
                 content_lines.append(f"Episodes: {track_count}")
             if feed_url:
-                content_lines.append(f"RSS feed (pull an episode .mp3 for eye_transcribe): {feed_url}")
+                content_lines.append(f"RSS feed (pull an episode .mp3 for penumbra_transcribe): {feed_url}")
             else:
                 content_lines.append("No RSS feedUrl exposed by iTunes for this show.")
             content = "\n".join(content_lines)
@@ -143,12 +143,12 @@ class ApplePodcastsAdapter(BaseScrapeAdapter):
             }
 
             # CHEAP one-step-to-ASR: only for the TOP show, resolve the latest episode
-            # enclosure .mp3 so the agent can eye_transcribe it without a second hop.
+            # enclosure .mp3 so the agent can penumbra_transcribe it without a second hop.
             if idx == 0 and feed_url:
                 mp3 = _latest_episode_mp3(feed_url)
                 if mp3:
                     metadata["latest_episode_mp3"] = mp3
-                    content += f"\nLatest episode audio (ready for eye_transcribe): {mp3}"
+                    content += f"\nLatest episode audio (ready for penumbra_transcribe): {mp3}"
 
             signals = {}
             if isinstance(track_count, int):
@@ -159,7 +159,7 @@ class ApplePodcastsAdapter(BaseScrapeAdapter):
                     by="apple_podcasts/trackCount", unit="episodes",
                 )
 
-            docs.append(PolarisDocument(
+            docs.append(Document(
                 source=self.name,
                 source_id=str(item.get("collectionId") or item.get("trackId") or url),
                 url=url,

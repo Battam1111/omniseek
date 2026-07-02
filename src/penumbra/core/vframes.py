@@ -1,6 +1,6 @@
-"""Video keyframes -> in-band images: the VISUAL half of eye_transcribe.
+"""Video keyframes -> in-band images: the VISUAL half of penumbra_transcribe.
 
-eye_transcribe gives the eye a video's spoken WORDS; this gives it the PICTURE -- the slides,
+penumbra_transcribe gives the eye a video's spoken WORDS; this gives it the PICTURE -- the slides,
 diagrams, on-screen code, charts, and UI demos a talk / lecture / explainer carries that audio
 alone drops (the visual-track gap: video used to be audio-only). It mirrors the document image
 path (docreader.view_images): the eye RENDERS the pixels (samples frames), the agent's own
@@ -168,7 +168,7 @@ def video_frames(url: str, start=None, duration=None, n: int = _DEFAULT_N,
         return {"error": str(exc)}
 
     ff = imageio_ffmpeg.get_ffmpeg_exe()
-    tmp = tempfile.mkdtemp(prefix="polaris-vframes-")
+    tmp = tempfile.mkdtemp(prefix="penumbra-vframes-")
     try:
         host = (urlparse(url).hostname or "").lower()
         if "bilibili.com" in host or "b23.tv" in host:

@@ -6,7 +6,7 @@ keyless Apple Podcasts adapter is the Podcasting 2.0 namespace data: per EPISODE
 it reports whether the feed ALREADY ships a ``podcast:transcript`` file. That is
 the routing signal the eye wants: an episode that already publishes a transcript
 needs NO ASR (read the transcript directly), while one with only an audio
-enclosure is the real candidate for ``eye_transcribe``. So this adapter both
+enclosure is the real candidate for ``penumbra_transcribe``. So this adapter both
 discovers a show AND tells the agent which of its recent episodes are
 already-transcribed vs ASR-bound.
 
@@ -30,9 +30,9 @@ item carries ``enclosureUrl`` (the .mp3 for ASR), ``transcriptUrl`` and/or a
 ``transcripts`` array (``{url, type}``: the ``podcast:transcript`` namespace). We
 surface ``metadata.transcript_episodes`` (episodes that already ship a transcript:
 read it, skip ASR) and ``metadata.asr_episodes`` (enclosure-only: candidates for
-eye_transcribe), mirroring apple_podcasts' one-step-to-ASR enrichment.
+penumbra_transcribe), mirroring apple_podcasts' one-step-to-ASR enrichment.
 
-Credentials live in ``~/.polaris/credentials/podcastindex.json`` as
+Credentials live in ``~/.penumbra/credentials/podcastindex.json`` as
 ``{"key": "...", "secret": "..."}`` (a free key registered at the signup URL).
 A ``.json.template`` is dropped on first import for discoverability. Without a key
 the adapter returns ``[]`` (the contract) and ``health_check`` reports the gap.
@@ -50,7 +50,7 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 
 from penumbra.core import auth, http
-from penumbra.core.normalize import PolarisDocument, jsonsafe, mk_signal
+from penumbra.core.normalize import Document, jsonsafe, mk_signal
 from penumbra.core.sources.scrape._base import BaseScrapeAdapter
 
 logger = logging.getLogger(__name__)
@@ -92,7 +92,7 @@ def _auth_headers(key: str, secret: str) -> dict:
 class PodcastIndexAdapter(BaseScrapeAdapter):
     name = "podcast_index"
     needs_credentials = True
-    description = "Podcast Index: cross-network podcast catalog; flags which episodes ship a podcast:transcript (read it, skip ASR) vs which need eye_transcribe (free key/secret)"
+    description = "Podcast Index: cross-network podcast catalog; flags which episodes ship a podcast:transcript (read it, skip ASR) vs which need penumbra_transcribe (free key/secret)"
     cache_ttl = 900
     kind = "lookup"
     domains = ["podcast"]
@@ -100,7 +100,7 @@ class PodcastIndexAdapter(BaseScrapeAdapter):
 
     # ── credentials ─────────────────────────────────────────────────────────
     def _creds(self) -> Optional[tuple[str, str]]:
-        """Return (key, secret) from ~/.polaris/credentials/podcastindex.json, or None."""
+        """Return (key, secret) from ~/.penumbra/credentials/podcastindex.json, or None."""
         creds = auth.load("podcastindex") or {}
         key = (creds.get("key") or "").strip()
         secret = (creds.get("secret") or "").strip()
@@ -113,7 +113,7 @@ class PodcastIndexAdapter(BaseScrapeAdapter):
         creds = self._creds()
         if creds is None:
             logger.info("podcast_index: credentials not configured (see "
-                        "~/.polaris/credentials/podcastindex.json.template)")
+                        "~/.penumbra/credentials/podcastindex.json.template)")
             return None  # → [] (the contract); no key means no live call
         key, secret = creds
         return http.get_json(
@@ -123,13 +123,13 @@ class PodcastIndexAdapter(BaseScrapeAdapter):
             timeout=TIMEOUT,
         )
 
-    def _to_documents(self, raw: Any, query: str, limit: int) -> list[PolarisDocument]:
+    def _to_documents(self, raw: Any, query: str, limit: int) -> list[Document]:
         if not isinstance(raw, dict):
             return []
         feeds = raw.get("feeds") or []
         if not isinstance(feeds, list):
             return []
-        docs: list[PolarisDocument] = []
+        docs: list[Document] = []
         for idx, feed in enumerate(feeds[:limit]):
             if not isinstance(feed, dict):
                 continue
@@ -139,7 +139,7 @@ class PodcastIndexAdapter(BaseScrapeAdapter):
         return docs
 
     # ── feed → doc ────────────────────────────────────────────────────────────
-    def _feed_to_doc(self, feed: dict, *, enrich: bool, limit: int) -> Optional[PolarisDocument]:
+    def _feed_to_doc(self, feed: dict, *, enrich: bool, limit: int) -> Optional[Document]:
         title = (feed.get("title") or "").strip()
         feed_id = feed.get("id")
         if not title and feed_id is None:
@@ -184,16 +184,16 @@ class PodcastIndexAdapter(BaseScrapeAdapter):
 
         # ONE-HOP transcript routing for the TOP show only (cheap, like apple_podcasts'
         # latest-episode enrichment): split recent episodes into already-transcribed
-        # (read the transcript, skip ASR) vs enclosure-only (eye_transcribe candidates).
+        # (read the transcript, skip ASR) vs enclosure-only (penumbra_transcribe candidates).
         if enrich and feed_id is not None:
             routed = self._episode_transcript_routing(feed_id, limit)
             if routed is not None:
                 with_t, asr = routed
                 metadata["transcript_episodes"] = with_t  # already ship podcast:transcript
-                metadata["asr_episodes"] = asr            # enclosure-only → eye_transcribe
+                metadata["asr_episodes"] = asr            # enclosure-only → penumbra_transcribe
                 content_lines.append(
                     f"Recent episodes: {len(with_t)} already ship a transcript "
-                    f"(read it, skip ASR), {len(asr)} are audio-only (eye_transcribe candidates)."
+                    f"(read it, skip ASR), {len(asr)} are audio-only (penumbra_transcribe candidates)."
                 )
                 if with_t:
                     t0 = with_t[0]
@@ -203,7 +203,7 @@ class PodcastIndexAdapter(BaseScrapeAdapter):
                 if asr:
                     a0 = asr[0]
                     content_lines.append(
-                        f"ASR candidate: '{a0.get('title')}' (audio for eye_transcribe) -> {a0.get('enclosure_url')}"
+                        f"ASR candidate: '{a0.get('title')}' (audio for penumbra_transcribe) -> {a0.get('enclosure_url')}"
                     )
 
         content = "\n\n".join(content_lines)
@@ -215,7 +215,7 @@ class PodcastIndexAdapter(BaseScrapeAdapter):
             by="podcast_index/episodeCount", unit="episodes",
         )
 
-        return PolarisDocument(
+        return Document(
             source=self.name,
             source_id=str(feed_id) if feed_id is not None else (rss_url or title),
             url=url,
@@ -278,7 +278,7 @@ class PodcastIndexAdapter(BaseScrapeAdapter):
         if not auth.is_configured("podcastindex"):
             return (False,
                     "credentials not configured (register a free key at "
-                    "https://api.podcastindex.org/signup -> ~/.polaris/credentials/podcastindex.json)")
+                    "https://api.podcastindex.org/signup -> ~/.penumbra/credentials/podcastindex.json)")
         if self._creds() is None:
             return False, "podcastindex.json present but missing key/secret"
         raw = self._raw_fetch("test", 1)

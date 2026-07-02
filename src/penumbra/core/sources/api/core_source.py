@@ -22,7 +22,7 @@ no-registration tier was probed live (this host + a US egress, within the
 documented 5-req/10s pace) and returned 429 / 500 every time: it is not usable
 for an automated client. A free registered key (https://core.ac.uk/services/api,
 no cost) raises the per-key limit to usable. The key lives only on the host at
-~/.polaris/credentials/core.json -> {"api_key": "..."} and is sent as
+~/.penumbra/credentials/core.json -> {"api_key": "..."} and is sent as
 ``Authorization: Bearer <key>``. With no per-call COST, CORE is NOT explicit_only:
 it joins the papers broad fan-out alongside openalex / s2 / crossref.
 
@@ -44,7 +44,7 @@ from urllib.parse import urlparse
 import httpx
 
 from penumbra.core import auth
-from penumbra.core.normalize import PolarisDocument, jsonsafe, mk_signal
+from penumbra.core.normalize import Document, jsonsafe, mk_signal
 from penumbra.core.sources.api._base import BaseAPIAdapter
 
 logger = logging.getLogger(__name__)
@@ -54,7 +54,7 @@ CORE_WORK = "https://api.core.ac.uk/v3/works"            # /{coreId} by-id looku
 TIMEOUT = 30
 # Full body can be large; cap the inline preview so a single result does not blow
 # the tool payload. The TRUE length is stamped in metadata so the agent knows to
-# eye_add_url the PDF (downloadUrl) for the whole document.
+# penumbra_add_url the PDF (downloadUrl) for the whole document.
 _BODY_PREVIEW_CAP = 12000
 
 # Drop a credential template on first import (free registered key, see module docstring).
@@ -105,7 +105,7 @@ class CoreAdapter(BaseAPIAdapter):
         return {
             "Authorization": f"Bearer {key}",
             "Accept": "application/json",
-            "User-Agent": "polaris-eye/0.1 (+https://github.com/cyj/polaris)",
+            "User-Agent": "penumbra/0.1 (+https://github.com/cyj/penumbra)",
         }
 
     # ------------------------------------------------------------------ hooks
@@ -117,7 +117,7 @@ class CoreAdapter(BaseAPIAdapter):
         to empty, surfaced to the agent as 'needs_credentials')."""
         key = self._key()
         if not key:
-            logger.warning("core: no api_key configured (~/.polaris/credentials/core.json)")
+            logger.warning("core: no api_key configured (~/.penumbra/credentials/core.json)")
             return []
         try:
             resp = _core_get(
@@ -136,11 +136,11 @@ class CoreAdapter(BaseAPIAdapter):
         results = data.get("results") if isinstance(data, dict) else None
         return results or []
 
-    def _to_document(self, raw) -> Optional[PolarisDocument]:
+    def _to_document(self, raw) -> Optional[Document]:
         return self._work_to_document(raw)
 
     # --------------------------------------------------------------- fetch_url
-    def fetch_url(self, url: str) -> Optional[PolarisDocument]:
+    def fetch_url(self, url: str) -> Optional[Document]:
         """Claim core.ac.uk/works/{id} (by-id lookup) and doi.org/{doi} URLs."""
         host = (urlparse(url).hostname or "").lower()
         core_id: Optional[str] = None
@@ -172,7 +172,7 @@ class CoreAdapter(BaseAPIAdapter):
     def health_check(self) -> tuple[bool, str]:
         key = self._key()
         if not key:
-            return False, "no api_key (~/.polaris/credentials/core.json)"
+            return False, "no api_key (~/.penumbra/credentials/core.json)"
         try:
             resp = _core_get(CORE_SEARCH, params={"q": "test", "limit": 1},
                              headers=self._headers(key), timeout=10,
@@ -185,7 +185,7 @@ class CoreAdapter(BaseAPIAdapter):
 
     # ----------------------------------------------------------- doc assembly
     @staticmethod
-    def _work_to_document(work: dict) -> Optional[PolarisDocument]:
+    def _work_to_document(work: dict) -> Optional[Document]:
         if not isinstance(work, dict):
             return None
 
@@ -230,7 +230,7 @@ class CoreAdapter(BaseAPIAdapter):
 
         # THE DIFFERENTIATOR: the extracted full-text body. Preview-capped for the
         # tool payload; the TRUE length is stamped so the agent knows there is more
-        # (eye_add_url the PDF for the whole document). Abstract is the fallback.
+        # (penumbra_add_url the PDF for the whole document). Abstract is the fallback.
         full_text = (work.get("fullText") or "").strip()
         abstract = (work.get("abstract") or "").strip()
         full_text_chars = len(full_text)
@@ -253,7 +253,7 @@ class CoreAdapter(BaseAPIAdapter):
                     if isinstance(j, dict) and j.get("title")]
         venue = journals[0] if journals else None
 
-        return PolarisDocument(
+        return Document(
             source="core",
             source_id=core_id or doi or url,
             url=url,

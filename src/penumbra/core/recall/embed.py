@@ -26,7 +26,7 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
-MODEL_PATH = str(Path.home() / ".polaris" / "models" / "qwen3-embedding-0.6b")
+MODEL_PATH = str(Path.home() / ".penumbra" / "models" / "qwen3-embedding-0.6b")
 DIM = 1024
 # Qwen3-Embedding: the instruct prefix goes on the QUERY side only; documents embed raw.
 _QUERY_PREFIX = "Instruct: Given a query, retrieve relevant documents.\nQuery: "

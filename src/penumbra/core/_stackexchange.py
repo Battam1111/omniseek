@@ -15,7 +15,7 @@ params over the SAME api.stackexchange.com endpoint + keyless per-IP quota):
    The gold of a Stack Exchange question is its votes-ranked ACCEPTED answer, not the question
    body. So for every question on the returned page we ALSO fetch its top answers (keyless GET
    /questions/{id}/answers?filter=withbody&sort=votes&order=desc&pagesize=3) and emit EACH answer
-   as its own PolarisDocument (source_id "{qid}a{aid}", title "A: <question title>", content =
+   as its own Document (source_id "{qid}a{aid}", title "A: <question title>", content =
    answer body markdown, signals = answer score, metadata.is_accepted). The question doc is kept
    too. Capped at 3 answers/question and only for the returned page, mindful of the shared per-IP
    quota. All six SE adapters reuse this — they are thin subclasses that only declare site/name/
@@ -37,7 +37,7 @@ from typing import Optional
 from markdownify import markdownify as html_to_md
 
 from penumbra.core import auth, diag, http
-from penumbra.core.normalize import PolarisDocument, jsonsafe, mk_signal
+from penumbra.core.normalize import Document, jsonsafe, mk_signal
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +46,7 @@ TIMEOUT = 15
 ANSWERS_PER_QUESTION = 3  # cap: only the top-3 votes-ranked answers, mindful of the shared per-IP quota
 
 # A FREE registered Stack Apps key raises the per-IP quota 300/day → 10,000/day (33x). It is NOT a
-# secret (per SE docs) but lives host-only at ~/.polaris/credentials/stackexchange.json {"key": "..."}
+# secret (per SE docs) but lives host-only at ~/.penumbra/credentials/stackexchange.json {"key": "..."}
 # (never committed), injected on every SE GET when present. Absent → the cluster runs keyless (300/day)
 # and the breaker below absorbs the exhaustion. Register: https://stackapps.com/apps/oauth/register
 auth.write_template("stackexchange", {
@@ -154,7 +154,7 @@ def health(timeout: float = 10.0) -> tuple[bool, str]:
         return _health["result"]
 
 
-# ── document mapping (question + answers → PolarisDocuments) ──────────────────
+# ── document mapping (question + answers → Documents) ──────────────────
 def _body_md(body_html: str) -> str:
     """Body HTML → Markdown (markdownify), falling back to a crude tag-strip on failure."""
     if not body_html:
@@ -193,14 +193,14 @@ def search(query: str, limit: int, site: str) -> Optional[dict]:
     return data
 
 
-def question_to_document(item: dict, source: str, site_host: str) -> PolarisDocument:
-    """One question item → its PolarisDocument (the question body). ``site_host`` is the public
+def question_to_document(item: dict, source: str, site_host: str) -> Document:
+    """One question item → its Document (the question body). ``site_host`` is the public
     web host (e.g. ``stats.stackexchange.com``) used to synthesize a URL when ``link`` is absent."""
     question_id = item.get("question_id") or 0
     url = item.get("link") or f"https://{site_host}/questions/{question_id}"
     title = item.get("title") or "(no title)"
     owner = (item.get("owner") or {}).get("display_name")
-    return PolarisDocument(
+    return Document(
         source=source,
         source_id=str(question_id),
         url=url,
@@ -220,8 +220,8 @@ def question_to_document(item: dict, source: str, site_host: str) -> PolarisDocu
     )
 
 
-def _answer_to_document(ans: dict, question_item: dict, source: str, site_host: str) -> PolarisDocument:
-    """One answer item → its own PolarisDocument. The actual gold: the votes-ranked answer body,
+def _answer_to_document(ans: dict, question_item: dict, source: str, site_host: str) -> Document:
+    """One answer item → its own Document. The actual gold: the votes-ranked answer body,
     carried under the question's title (``A: <title>``) so triage still reads as a Q&A pair."""
     question_id = question_item.get("question_id") or ans.get("question_id") or 0
     answer_id = ans.get("answer_id") or 0
@@ -232,7 +232,7 @@ def _answer_to_document(ans: dict, question_item: dict, source: str, site_host: 
     )
     owner = (ans.get("owner") or {}).get("display_name")
     is_accepted = bool(ans.get("is_accepted"))
-    return PolarisDocument(
+    return Document(
         source=source,
         source_id=f"{question_id}a{answer_id}",
         url=url,
@@ -253,7 +253,7 @@ def _answer_to_document(ans: dict, question_item: dict, source: str, site_host: 
     )
 
 
-def fetch_answer_documents(question_item: dict, source: str, site: str, site_host: str) -> list[PolarisDocument]:
+def fetch_answer_documents(question_item: dict, source: str, site: str, site_host: str) -> list[Document]:
     """Fetch the top (votes-ranked) answers for ONE question and map each to its own doc.
 
     Keyless GET /questions/{id}/answers?filter=withbody&sort=votes&order=desc&pagesize=3. Returns
@@ -274,7 +274,7 @@ def fetch_answer_documents(question_item: dict, source: str, site: str, site_hos
     )
     if data is None:
         return []
-    docs: list[PolarisDocument] = []
+    docs: list[Document] = []
     for ans in (data.get("items") or [])[:ANSWERS_PER_QUESTION]:
         try:
             docs.append(_answer_to_document(ans, question_item, source, site_host))
@@ -283,12 +283,12 @@ def fetch_answer_documents(question_item: dict, source: str, site: str, site_hos
     return docs
 
 
-def build_documents(raw: dict, limit: int, source: str, site: str, site_host: str) -> list[PolarisDocument]:
+def build_documents(raw: dict, limit: int, source: str, site: str, site_host: str) -> list[Document]:
     """The shared ``_to_documents`` body for every SE adapter: for each of the first ``limit``
     questions emit the question doc AND its top answer docs (the gold). The page is capped at
     ``limit`` QUESTIONS; answers are an extra (bounded) burst per kept question."""
     items = (raw.get("items") or [])[:limit]
-    docs: list[PolarisDocument] = []
+    docs: list[Document] = []
     for item in items:
         try:
             docs.append(question_to_document(item, source, site_host))
@@ -299,7 +299,7 @@ def build_documents(raw: dict, limit: int, source: str, site: str, site_host: st
     return docs
 
 
-def fetch_question_document(url: str, source: str, site: str, site_host: str) -> Optional[PolarisDocument]:
+def fetch_question_document(url: str, source: str, site: str, site_host: str) -> Optional[Document]:
     """Single-URL drill-down (the academia_se / stackoverflow ``fetch_url`` body): claim a
     ``questions/<id>`` URL on ``site_host`` and build the question doc by id. None if not ours."""
     from urllib.parse import urlparse

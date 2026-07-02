@@ -30,7 +30,7 @@ import httpx
 from bs4 import BeautifulSoup
 
 from penumbra.core import cache
-from penumbra.core.normalize import PolarisDocument, jsonsafe
+from penumbra.core.normalize import Document, jsonsafe
 
 logger = logging.getLogger(__name__)
 
@@ -201,7 +201,7 @@ class HKUniversitiesAdapter:
         "CityU CS / PolyU COMP (HTML scrape，HK CS 院系动态信号)"
     )
 
-    def search(self, query: str, limit: int = 10) -> list[PolarisDocument]:
+    def search(self, query: str, limit: int = 10) -> list[Document]:
         key = cache.make_key("hk_universities", "search", query, limit)
         cached_data = cache.get_docs(key)
         if cached_data is not None:
@@ -250,14 +250,14 @@ class HKUniversitiesAdapter:
                     filtered.append(item)
             all_items = filtered
 
-        docs: list[PolarisDocument] = []
+        docs: list[Document] = []
         for item in all_items[:limit]:
             docs.append(self._item_to_document(item))
 
         cache.set_docs(key, docs, ttl=3600)
         return docs
 
-    def fetch_url(self, url: str) -> Optional[PolarisDocument]:
+    def fetch_url(self, url: str) -> Optional[Document]:
         host = (urlparse(url).hostname or "").lower()
         if not any(re.search(host_re, host) for _, _, host_re in UNIS):
             return None
@@ -291,8 +291,8 @@ class HKUniversitiesAdapter:
         return True, f"OK ({len(yields)}/{len(UNIS)} unis yield news: {', '.join(yields)})"
 
     @staticmethod
-    def _item_to_document(item: dict) -> PolarisDocument:
-        return PolarisDocument(
+    def _item_to_document(item: dict) -> Document:
+        return Document(
             source="hk_universities",
             source_id=item["url"],
             url=item["url"],

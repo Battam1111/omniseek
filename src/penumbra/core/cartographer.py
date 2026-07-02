@@ -396,8 +396,8 @@ def recommend(seeds: Optional[list[str]] = None, limit: int = 20, fresh: bool = 
             "date": getattr(p, "publicationDate", None),
             "cited_by": getattr(p, "citationCount", None) or 0,
             "first_author": auths[0] if auths else None,
-            # doi is the directly-passable handle for eye_paper_enrich; for an arXiv-only paper fall
-            # back to the arXiv DOI form (same shape eye_field_skeleton emits) so the chain
+            # doi is the directly-passable handle for penumbra_paper_enrich; for an arXiv-only paper fall
+            # back to the arXiv DOI form (same shape penumbra_field_skeleton emits) so the chain
             # recommend→enrich never needs the agent to string-parse the id out of url.
             "doi": (("https://doi.org/" + doi) if doi
                     else (("https://doi.org/10.48550/arXiv." + arx) if arx else None)),
@@ -406,12 +406,12 @@ def recommend(seeds: Optional[list[str]] = None, limit: int = 20, fresh: bool = 
         })
     result = {"seeds": seeds, "n": len(papers), "papers": papers}
     # A silent n:0 is indistinguishable from 'genuinely no recs'. The common cause is the wrong
-    # handle: an OpenAlex W-id (a paper's source_id from an openalex eye_search result) is NOT a
+    # handle: an OpenAlex W-id (a paper's source_id from an openalex penumbra_search result) is NOT a
     # DOI/arXiv/S2 id, so S2's recommender returns empty. Name that, instead of a silent dead-end.
     _bad = [s for s in seeds if s.startswith("W") and s[1:].isdigit()]
     if _bad and not papers:
         result["_meta"] = {"diagnostic": (
             f"{_bad} look like OpenAlex work-ids — the paper tools do NOT accept them. For an "
-            "openalex eye_search result pass metadata.paper_id (or metadata.doi), not source_id.")}
+            "openalex penumbra_search result pass metadata.paper_id (or metadata.doi), not source_id.")}
     cache.set(key, result, ttl=6 * 3600)
     return result

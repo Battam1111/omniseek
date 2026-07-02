@@ -35,7 +35,7 @@ logger = logging.getLogger(__name__)
 BASE = "https://api.openalex.org"
 _BASE_HOST = "api.openalex.org"
 # Contact is host-injected, never a hardcoded personal address (see auth.contact_email).
-USER_AGENT = f"polaris-eye/0.1 (mailto:{auth.contact_email()}; automated retrieval)"
+USER_AGENT = f"penumbra/0.1 (mailto:{auth.contact_email()}; automated retrieval)"
 TIMEOUT = 20
 
 _BREAK_AFTER = 5      # consecutive failures that open the circuit
@@ -87,7 +87,7 @@ def _load_api_key() -> Optional[str]:
 
 
 # Loaded once at import (mirrors _s2's keyed-client pattern): None when no key file exists, so
-# get_json's injection is a no-op and behavior is unchanged until ~/.polaris/credentials/openalex.json
+# get_json's injection is a no-op and behavior is unchanged until ~/.penumbra/credentials/openalex.json
 # is dropped on the host. Committing the code before the key exists is therefore safe.
 _api_key = _load_api_key()
 
@@ -204,7 +204,7 @@ def _is_budget_429(resp) -> bool:
 # Every budget-spending success is tallied by the eye component that drove it (cartographer /
 # relations / org_watch / the openalex search source / researcher_watch / enrich), with the live
 # per-bucket remaining. In-memory (resets on restart; `window_hours` reports the span). Exposed via
-# eye_health_check so any day's OpenAlex breakdown is INSPECTABLE, not inferred.
+# penumbra_health_check so any day's OpenAlex breakdown is INSPECTABLE, not inferred.
 _usage_lock = threading.Lock()
 _usage: dict = {"since": None, "by_caller": {}, "spilled_to_anon": 0,
                 "remaining": {"keyed": None, "anon": None}}
@@ -248,7 +248,7 @@ def _record_ok(caller: str, bucket: str) -> None:
 
 
 def usage_stats() -> dict:
-    """Snapshot of OpenAlex usage by caller since process start (surfaced by eye_health_check)."""
+    """Snapshot of OpenAlex usage by caller since process start (surfaced by penumbra_health_check)."""
     with _usage_lock:
         by = dict(_usage["by_caller"])
         since = _usage["since"]

@@ -7,7 +7,7 @@ Sensors are background cache warmers with novelty detection. Each sensor:
 4. Updates the baseline and records stats
 
 The cron job (scripts/sensor_runner.py, initially disabled) runs sensors on schedule.
-The MCP tool eye_sensor_run triggers one sensor immediately for testing.
+The MCP tool penumbra_sensor_run triggers one sensor immediately for testing.
 The razor: the agent registers what to monitor (judgment); the diff is mechanical.
 """
 
@@ -24,7 +24,7 @@ from typing import Optional
 
 log = logging.getLogger(__name__)
 
-_DEFAULT_STATE_PATH = Path.home() / ".polaris" / "state" / "sensors.json"
+_DEFAULT_STATE_PATH = Path.home() / ".penumbra" / "state" / "sensors.json"
 
 
 @dataclass

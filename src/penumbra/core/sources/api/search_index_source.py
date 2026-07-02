@@ -3,8 +3,8 @@ via a ``site:``-scoped web search, NOT by scraping the venue itself.
 
 Each row in ``search_index_sites.json`` becomes one adapter. All are ``explicit_only``:
 every call fires an external search-engine query, so they stay OUT of the broad
-fan-out — name them in ``sources=[...]`` (or eye_fetch). The result is the engine's
-indexed title + URL + snippet → PolarisDocument (snippet is the content; the venue
+fan-out — name them in ``sources=[...]`` (or penumbra_fetch). The result is the engine's
+indexed title + URL + snippet → Document (snippet is the content; the venue
 itself is login/JS-walled, so the snippet is the reachable signal).
 
 ToS posture: we read the search engine, never the walled site with our UA — this is
@@ -19,7 +19,7 @@ import re
 from pathlib import Path
 from typing import Optional
 
-from penumbra.core.normalize import PolarisDocument, jsonsafe
+from penumbra.core.normalize import Document, jsonsafe
 from penumbra.core.sources.api._search_backend import backend_ping, search_web
 
 logger = logging.getLogger(__name__)
@@ -69,7 +69,7 @@ class _SearchVenue:
         self.domains = domains or []
         self.regions = regions or []
 
-    def search(self, query: str, limit: int = 10) -> list[PolarisDocument]:
+    def search(self, query: str, limit: int = 10) -> list[Document]:
         from penumbra.core import cache  # local import: avoid import cycle
         q = f"site:{self.site} {(query or '').strip()}".strip()
         if self.extra:
@@ -82,7 +82,7 @@ class _SearchVenue:
         # filters below drop docs — url_filter nav/login shells (e.g. xiaohongshu
         # pro./job. pages) and tombstone shells (moved/removed-page snapshots).
         n = min(max(limit * 3, limit + 5), 20)
-        docs: list[PolarisDocument] = []
+        docs: list[Document] = []
         for r in search_web(q, n=n):
             url = r.get("url")
             if not url:
@@ -92,7 +92,7 @@ class _SearchVenue:
             if _is_tombstone(r.get("snippet") or ""):
                 logger.info("%s: dropped tombstone shell %s", self.name, url)
                 continue
-            docs.append(PolarisDocument(
+            docs.append(Document(
                 source=self.name,
                 source_id=url,
                 url=url,
@@ -109,7 +109,7 @@ class _SearchVenue:
         cache.set_docs(ck, docs, ttl=1800 if docs else 600)
         return docs
 
-    def fetch_url(self, url: str) -> Optional[PolarisDocument]:
+    def fetch_url(self, url: str) -> Optional[Document]:
         # Search-only: the venue itself is login/JS-walled, so we index via search, not direct fetch.
         return None
 
