@@ -2,12 +2,12 @@
 
 Finds open-web pages by MEANING, not just keyword overlap, closing the gap where keyword
 search drowns the semantically-right page under popular-but-off-target hits. Each result
-carries Exa "highlights" (the relevant excerpts) + a short text snippet; penumbra_add_url the
+carries Exa "highlights" (the relevant excerpts) + a short text snippet; penumbra_read the
 result URL (via cdp_fulltext / pdf / ordinary fetch) for the full page.
 
 Complements ordinary keyword web search + the curated sources: reach for Exa on CONCEPTUAL
 queries ("blogs on the lived experience of X", "essays arguing Y"). explicit_only: every
-call spends an Exa API credit, so it stays OUT of the broad fan-out (name it / penumbra_fetch).
+call spends an Exa API credit, so it stays OUT of the broad fan-out (name it / penumbra_search 单源钻取).
 """
 
 from __future__ import annotations
@@ -67,7 +67,7 @@ class ExaAdapter:
     description = (
         "Exa neural/semantic web search (exa.ai): finds open-web pages by MEANING, not "
         "keywords. Use for conceptual queries where keyword search misses the right page; "
-        "each result carries relevant-excerpt highlights. penumbra_add_url the URL for the full "
+        "each result carries relevant-excerpt highlights. penumbra_read the URL for the full "
         "page. Complements ordinary web search + the curated sources. Add site:domain to a query "
         "to scope to that domain AND return its full page TEXT, a full-text route for IP-blocked / "
         "anti-datacenter sites Exa's crawler can reach but our direct fetch cannot (e.g. HardwareZone)."

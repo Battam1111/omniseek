@@ -56,10 +56,10 @@ class NSERCAwardsAdapter:
         "NSERC 是加拿大主科学资助局, 开放数据仅以逐年 bulk CSV 发布 (无查询 API, FY2024 ~56MB/~6 万行). "
         "逐笔奖助: 获奖人 + 机构 + 金额 (CAD) + program + 学科 + 关键词. 博士赴加找实验室/PI/资助方向的"
         "一手结构 (网搜给不出). 仅收 CS 学科 + AI/ML/NLP 关键词的子集 (~3-4k 行, telos 视角, 非全 NSERC). "
-        "命名 penumbra_fetch."
+        "命名钻取 (penumbra_search 单源 raw)."
     )
     needs_credentials = False
-    explicit_only = "NSERC 加拿大经费 CS/AI 切片 (bulk CSV, 命名 penumbra_fetch); 月级刷新"
+    explicit_only = "NSERC 加拿大经费 CS/AI 切片 (bulk CSV, 命名钻取 (penumbra_search 单源 raw)); 月级刷新"
     kind = "lookup"
     domains = ["funding"]
     regions = ["ca"]

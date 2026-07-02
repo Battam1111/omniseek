@@ -2,7 +2,7 @@
 
 The eye's DISCONFIRM + RECALL primitive: when a page changed, vanished, or you need what it said
 BEFORE, query its URL → the available snapshots (each a timestamp + an archived web.archive.org URL
-you can `penumbra_add_url` to read the historical content). Web search only ever shows the LIVE page;
+you can `penumbra_read` to read the historical content). Web search only ever shows the LIVE page;
 this reaches what the open web forgot or deleted. explicit_only named lookup (query = a URL).
 
 Source: the Internet Archive CDX API (keyless):
@@ -62,7 +62,7 @@ def _snap_to_doc(row: list, idx: dict) -> Optional[Document]:
         title=f"{orig} @ {pretty}" + (f" [HTTP {status}]" if status else ""),
         content=(f"Wayback snapshot of {orig}\nCaptured: {pretty}"
                  + (f"  ·  HTTP {status}" if status else "")
-                 + f"\nRead the archived page: penumbra_add_url {snap_url}"),
+                 + f"\nRead the archived page: penumbra_read {snap_url}"),
         date=dt,
         metadata={"timestamp": ts, "original": orig, "status": status, "snapshot_url": snap_url,
                   "provider": "internet_archive_cdx"},
@@ -79,7 +79,7 @@ class WaybackAdapter:
     cache_ttl = 3600
     description = (
         "Wayback Machine 时光机 — 一个 URL 的历史/被删快照 (keyless, Internet Archive CDX). query = "
-        "一个 URL → 该页的存档快照列表(时间戳 + web.archive.org 存档链接,再 penumbra_add_url 读历史正文). "
+        "一个 URL → 该页的存档快照列表(时间戳 + web.archive.org 存档链接,再 penumbra_read 读历史正文). "
         "web 搜只给 LIVE 页;这取开放网已遗忘/已删改的旧版本(对抗检索、读历史、读被删)。命名查询;非 URL 返空."
     )
 

@@ -75,7 +75,7 @@ auth.write_template(
 class WechatAdapter:
     name = "wechat"
     needs_credentials = False  # Layer A needs no creds; Layer B is optional
-    explicit_only = "walled(微信公众号);命名 penumbra_fetch 才调,不进广搜"
+    explicit_only = "walled(微信公众号);命名钻取 (penumbra_search 单源 raw) 才调,不进广搜"
     description = "微信公众号 — single-URL fetch (mp.weixin.qq.com/s/<id>); discovery via wewe-rss (Layer B)"
 
     # ─────────────────────────────────────────────────────────────────

@@ -51,9 +51,9 @@ class CIHRGrantsAdapter(BulkFundingBase):
         "加拿大 CIHR 健康研究经费 — 临床 AI/健康 NLP 切片 (加拿大三大联邦研究局之三: NSERC 理工、SSHRC 人文、"
         "CIHR 健康). NLP/ML 在健康这边以 临床 NLP/医学机器学习/健康数据科学/EHR 预测模型 形式存在, 是另两局"
         "不覆盖的. 开放数据为逐年 bulk XLSX (FY2025-26 ~12MB, 无查询 API; openpyxl 解析). 逐笔奖助: 获奖人 + "
-        "机构/系 + 金额(CAD) + program + 主题/类别 + 标题/摘要/关键词. 仅收 AI/ML/NLP 相关切片. 命名 penumbra_fetch."
+        "机构/系 + 金额(CAD) + program + 主题/类别 + 标题/摘要/关键词. 仅收 AI/ML/NLP 相关切片. 命名钻取 (penumbra_search 单源 raw)."
     )
-    explicit_only = "CIHR 加拿大健康经费 临床-AI/NLP 切片 (bulk XLSX, 命名 penumbra_fetch); 月级刷新"
+    explicit_only = "CIHR 加拿大健康经费 临床-AI/NLP 切片 (bulk XLSX, 命名钻取 (penumbra_search 单源 raw)); 月级刷新"
     domains = ["funding"]
     regions = ["ca"]
     modes = ["STRUCTURE"]

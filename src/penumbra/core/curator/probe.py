@@ -23,34 +23,23 @@ import logging
 import re
 import socket
 from typing import Callable, Optional
-from urllib.parse import urljoin, urlparse, urlsplit
+from urllib.parse import urljoin
 
 import httpx
 
-from penumbra.core import cache, http
+from penumbra.core import _netguard, cache, http
 
 logger = logging.getLogger(__name__)
 
 # The §11 frozen acquisition-mode vocabulary (reused; smoke §12 asserts _PROBES keys == this).
 MODE_VOCAB = {"STRUCTURE", "UNWALL", "TRANSCRIBE", "RECALL", "MONITOR"}
 
-# ── SSRF guard DATA (declared, not hard-coded in logic) ──────────────────────────
-# Host-suffix denylist: literal hostnames that must never be fetched even if they happen to
-# resolve to something that looks public (defense in depth alongside the IP checks).
-_BLOCKED_HOST_SUFFIXES = (
-    "localhost", ".localhost", ".local", ".internal", ".lan",
-    "metadata.google.internal",
-)
-_ALLOWED_SCHEMES = ("http", "https")
-_ALLOWED_PORTS = (80, 443)
-
-# This eye runs on a host whose resolver uses FAKE-IP proxying (Clash-style): PUBLIC domains
-# resolve into 198.18.0.0/15 (a reserved range is_private flags) which the local proxy maps back
-# to the real domain, so CONNECTING to the fake IP routes to the genuine public site. These are
-# NOT real internal hosts, so they are ALLOWED. Every other private/loopback/link-local/reserved
-# range stays blocked, and internal hosts/IPs are NEVER faked (direct IPs + local domains resolve
-# really, so 127/10/169.254/192.168/::1/metadata still hit the block) -> SSRF stays closed.
-_PROXY_FAKE_IP_NETS = (ipaddress.ip_network("198.18.0.0/15"),)
+# ── SSRF guard: DELEGATED to penumbra.core._netguard (ONE guard, shared with the mainline egress) ──
+# The URL-shape (scheme/userinfo/port), IP-block, and host-suffix DECISIONS all live in _netguard;
+# probe used to carry its own byte-identical copy. probe keeps only the RESOLUTION + connect
+# mechanics below (its own socket.getaddrinfo so it can pin the IP literal it connects to), and the
+# thin wrappers here forward to _netguard so the two paths can never drift. The 198.18.0.0/15
+# fake-IP-proxy allowance + every private/loopback/link-local/reserved block now come from there.
 
 # Caps. max_bytes is a DECODED cap (gzip-bomb defense); a separate raw cap refuses a body
 # whose COMPRESSED size already exceeds the budget before we ever decode it.
@@ -58,33 +47,24 @@ _DEFAULT_MAX_BYTES = 5 * 1024 * 1024
 
 
 def _ip_is_blocked(ip: "ipaddress.IPv4Address | ipaddress.IPv6Address") -> bool:
-    """True iff this resolved IP is in a range we must never connect to. Rejects IPv4-mapped
-    IPv6 (e.g. ::ffff:169.254.169.254) by unwrapping it first."""
-    if getattr(ip, "ipv4_mapped", None) is not None:
-        return True  # ::ffff:a.b.c.d: refuse outright (the mapped-address rebind trick)
-    if any(ip in net for net in _PROXY_FAKE_IP_NETS):
-        return False  # the deployment's fake-IP proxy pool = public domains (see _PROXY_FAKE_IP_NETS)
-    return bool(
-        ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved
-        or ip.is_multicast or ip.is_unspecified
-    )
+    """True iff this resolved IP is in a range we must never connect to. Delegates to _netguard
+    (unwraps IPv4-mapped IPv6, allows the fake-IP proxy pool, blocks private/loopback/...)."""
+    return _netguard.ip_is_blocked(ip)
 
 
 def _host_suffix_blocked(host: str) -> bool:
-    h = (host or "").lower().rstrip(".")
-    if not h:
-        return True
-    for suf in _BLOCKED_HOST_SUFFIXES:
-        if h == suf.lstrip(".") or h.endswith(suf):
-            return True
-    return False
+    """True iff ``host`` is on the literal denylist. Delegates to _netguard."""
+    return _netguard.host_suffix_blocked(host)
 
 
 def _resolve_safe_ip(host: str) -> "tuple[Optional[str], Optional[int], Optional[str]]":
     """Resolve ``host`` and validate EVERY returned IP. Returns (safe_ip_literal, family, None)
     on success, or (None, None, blocked_reason) on any failure / a blocked IP. Resolve-once,
     pin-the-IP: the caller CONNECTS to the returned literal IP (not the hostname), which closes
-    the DNS-rebind/TOCTOU window (a 2nd lookup at connect time can't swap in a private IP)."""
+    the DNS-rebind/TOCTOU window (a 2nd lookup at connect time can't swap in a private IP).
+
+    Resolution runs HERE (probe's own socket.getaddrinfo) because probe pins + connects to the
+    literal; the host-suffix + per-IP block DECISIONS delegate to _netguard (the shared guard)."""
     if _host_suffix_blocked(host):
         return None, None, "private_ip"
     try:
@@ -113,25 +93,9 @@ def _resolve_safe_ip(host: str) -> "tuple[Optional[str], Optional[int], Optional
 
 def _validate_url_shape(url: str) -> "tuple[Optional[dict], Optional[str]]":
     """Validate scheme / userinfo / port on a single URL. Returns (parsed_parts, None) or
-    (None, blocked_reason). Checked on EVERY hop (input + each redirect target)."""
-    try:
-        sp = urlsplit(url)
-    except ValueError:
-        return None, "bad_scheme"
-    if sp.scheme.lower() not in _ALLOWED_SCHEMES:
-        return None, "bad_scheme"
-    if sp.username or sp.password:
-        return None, "userinfo"
-    host = sp.hostname
-    if not host:
-        return None, "dns"
-    port = sp.port
-    if port is None:
-        port = 443 if sp.scheme.lower() == "https" else 80
-    if port not in _ALLOWED_PORTS:
-        return None, "bad_port"
-    return {"scheme": sp.scheme.lower(), "host": host, "port": port,
-            "path": sp.path, "query": sp.query}, None
+    (None, blocked_reason). Checked on EVERY hop (input + each redirect target). Delegates to
+    _netguard so the shape rules match the mainline egress guard exactly."""
+    return _netguard.validate_url_shape(url)
 
 
 def _blocked(reason: str, status: Optional[int] = None, chain: Optional[list] = None) -> dict:

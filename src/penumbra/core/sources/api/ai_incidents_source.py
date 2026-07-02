@@ -21,7 +21,7 @@ runs a case-insensitive REGEX over title+description; incidents are returned new
   filter = {OR: [{title:{REGEX:q, OPTIONS:"i"}}, {description:{REGEX:q, OPTIONS:"i"}}]}
 
 The incident page is https://incidentdatabase.ai/cite/<incident_id>; the per-incident report URLs
-are the drill-in handles (penumbra_add_url them for the underlying news source). backend="aiid".
+are the drill-in handles (penumbra_read them for the underlying news source). backend="aiid".
 
 Recon trail: brain note eye-recon-ai-incidents-2026-06-21 (live-probed schema + origin gate).
 """
@@ -130,7 +130,7 @@ class AIIncidentsAdapter(BaseScrapeAdapter):
                 "developers": devs,
                 "deployers": deployers,
                 "harmed_parties": harmed,
-                # drill-in handles: the underlying source articles (penumbra_add_url them)
+                # drill-in handles: the underlying source articles (penumbra_read them)
                 "reports": reports,
                 "raw": jsonsafe(inc),
             },

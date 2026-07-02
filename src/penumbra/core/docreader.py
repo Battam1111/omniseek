@@ -699,7 +699,7 @@ def view_images(src: str, sections=None, names=None, max_images: int = _VIEW_FUL
     if fmt and fmt not in _IMAGE_FORMATS:
         return {"source": src, "format": fmt, "total_images": 0, "images": [],
                 "note": f"{fmt} carries no extractable embedded images "
-                        f"(its meaning is text; use penumbra_read_document)"}
+                        f"(its meaning is text; use penumbra_read)"}
 
     tmp: Optional[Path] = None
     try:
@@ -715,7 +715,7 @@ def view_images(src: str, sections=None, names=None, max_images: int = _VIEW_FUL
                 if fmt not in _IMAGE_FORMATS:
                     return {"source": src, "format": fmt, "total_images": 0, "images": [],
                             "note": f"{fmt} carries no extractable embedded images "
-                                    f"(its meaning is text; use penumbra_read_document)"}
+                                    f"(its meaning is text; use penumbra_read)"}
         else:
             try:
                 path = _resolve_local(src)
@@ -756,7 +756,7 @@ def view_images(src: str, sections=None, names=None, max_images: int = _VIEW_FUL
             cells = items[:_SHEET_MAX]
             if total > _SHEET_MAX:
                 note = (f"contact sheet shows {_SHEET_MAX} of {total}{cap_note}; narrow with "
-                        f"sections=/names= (see penumbra_read_document outline) for the rest")
+                        f"sections=/names= (see the penumbra_read outline) for the rest")
             elif total > max_images and not contact_sheet:
                 note = (f"{total} images selected (> {max_images} full-res cap) → contact sheet; "
                         f"pass names=\"...\" to pull specific ones at full res")

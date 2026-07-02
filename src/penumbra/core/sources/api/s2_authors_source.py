@@ -11,7 +11,7 @@ Access via the public Graph API (no key needed; a free key only raises the rate 
   -> {"total": N, "offset": 0, "data": [{authorId, name, hIndex, paperCount, citationCount}, ...]}
 The author page URL is CONSTRUCTED from authorId (no url field), so this is a thin coded adapter.
 ``affiliations`` is empty in the search projection (S2 populates it on /author/{id} detail), so we
-ship the metrics-and-disambiguation layer; the agent can penumbra_add_url the author page for more.
+ship the metrics-and-disambiguation layer; the agent can penumbra_read the author page for more.
 
 backend="semantic_scholar": shares the S2 graph with the existing `semantic_scholar` paper source
 (honest backend count: it is the same upstream, a different facet). explicit_only: a named

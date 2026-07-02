@@ -321,7 +321,7 @@ class TwitterXAdapter:
             try:
                 with self._lock:
                     tw = _run_async(self._one_tweet(tid), timeout=30)
-            except Exception as exc:  # noqa: BLE001 — bounded: never hang penumbra_add_url
+            except Exception as exc:  # noqa: BLE001 — bounded: never hang penumbra_read
                 logger.warning("twitter_x fetch_url timed out / failed for %s: %s", url, exc)
                 return None
             if tw is None:

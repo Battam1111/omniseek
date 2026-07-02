@@ -33,6 +33,7 @@ class Sensor:
     query: str
     sources: Optional[list[str]] = None
     schedule: str = "daily"
+    notify: bool = False  # when the cron runs a sensor and it has NEW results, push one Bark
     baseline: list[list[str]] = field(default_factory=list)  # [[source, source_id], ...]
     created_at: str = ""
     last_run_at: Optional[str] = None
@@ -75,13 +76,13 @@ class SensorStore:
         return self._load().get(sensor_id)
 
     def create(self, query: str, sources: Optional[list[str]] = None,
-               schedule: str = "daily") -> Sensor:
+               schedule: str = "daily", notify: bool = False) -> Sensor:
         import hashlib
         sensors = self._load()
         sid = "sensor_" + hashlib.sha256(
             f"{query}:{time.time()}".encode()).hexdigest()[:12]
         from datetime import datetime, timezone
-        s = Sensor(id=sid, query=query, sources=sources, schedule=schedule,
+        s = Sensor(id=sid, query=query, sources=sources, schedule=schedule, notify=notify,
                    created_at=datetime.now(timezone.utc).isoformat())
         sensors[sid] = s
         self._save(sensors)

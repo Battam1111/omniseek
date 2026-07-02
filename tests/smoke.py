@@ -589,10 +589,10 @@ check("docreader routes code extensions to the txt (plain-text) reader, not a pa
           for ext in ("py", "ts", "rs", "go", "java", "cpp", "toml", "yaml", "sh")))
 check("docreader rejects unknown formats with a usable error (before any IO)",
       "unsupported" in (docreader.read_document("file.xyz").get("error") or ""))
-check("server exposes penumbra_read_document",
-      hasattr(_srv, "penumbra_read_document") and callable(_srv.penumbra_read_document))
+check("server exposes penumbra_read (auto-routing read tool: url + document)",
+      hasattr(_srv, "penumbra_read") and callable(_srv.penumbra_read))
 
-# --- P39 tier-4: in-band image view (penumbra_view_doc_images) ---
+# --- P39 tier-4: in-band image view (routes through penumbra_view kind=document) ---
 check("docreader._parse_sel parses int + name selections, empty → None",
       docreader._parse_sel("8, 15,25", as_int=True) == {8, 15, 25}
       and docreader._parse_sel([8, 15], as_int=True) == {8, 15}
@@ -605,7 +605,7 @@ check("docreader._clean_stem slugifies + bounds + defaults",
       and len(docreader._clean_stem("x" * 80)) == 40)
 check("docreader view_images: text formats carry no extractable images (honest note)",
       docreader.view_images("notes.txt").get("total_images") == 0
-      and "penumbra_read_document" in (docreader.view_images("notes.txt").get("note") or ""))
+      and "penumbra_read" in (docreader.view_images("notes.txt").get("note") or ""))
 # real image-processing invariants (PIL present in the service venv)
 from io import BytesIO as _BIO  # noqa: E402
 from PIL import Image as _PILImage  # noqa: E402
@@ -620,16 +620,16 @@ _sheet = docreader._contact_sheet(_cells)
 _sim = _PILImage.open(_BIO(_sheet))
 check("docreader._contact_sheet tiles thumbnails into one valid PNG montage",
       _sim.format == "PNG" and _sim.size[0] > 0 and _sim.size[1] > 0)
-check("server exposes penumbra_view_doc_images",
-      hasattr(_srv, "penumbra_view_doc_images") and callable(_srv.penumbra_view_doc_images))
-# --- P41 OCR tier (penumbra_read_document ocr=True) ---
+check("server exposes penumbra_view (auto-routing view tool: document + images + video)",
+      hasattr(_srv, "penumbra_view") and callable(_srv.penumbra_view))
+# --- P41 OCR tier (penumbra_read ocr=True on the document branch) ---
 check("docreader.ocr_image exists + read_document accepts ocr (OCR tier)",
       hasattr(docreader, "ocr_image") and callable(docreader.ocr_image)
       and "ocr" in _insp.signature(docreader.read_document).parameters)
 # --- P42 in-band image-URL view + search-index junk-snippet filter ---
-check("docreader.view_image_urls + server penumbra_view_images (in-band URL image delivery)",
+check("docreader.view_image_urls + server penumbra_view (in-band URL image delivery via kind=images)",
       hasattr(docreader, "view_image_urls") and callable(docreader.view_image_urls)
-      and hasattr(_srv, "penumbra_view_images") and callable(_srv.penumbra_view_images))
+      and hasattr(_srv, "penumbra_view") and callable(_srv.penumbra_view))
 check("search_index drops generic zhihu boilerplate snippet, keeps a real one",
       search_index_source._is_tombstone("知乎，让每一次点击都充满意义 —— 欢迎来到知乎，发现问题背后的世界。")
       and not search_index_source._is_tombstone("罗湖区房租均价2597元，3号线最快到罗湖老街，租金与通勤成本权衡。"))
@@ -881,7 +881,7 @@ check("facets: list_sources surfaces the modes facet (arxiv -> [STRUCTURE])",
 # list_sources surfaces a `backend` (the de-dup key behind the HONEST count): the OpenAlex family
 # (openalex + openalex_cn + researcher_watch + every org_watch slice = one corpus + one API budget +
 # one breaker) collapses to ONE backend so the raw source count stops over-stating coverage; an
-# independent source is its own backend. penumbra_list_sources surfaces backend_count + backend_breakdown.
+# independent source is its own backend. penumbra_sources surfaces backend_count + backend_breakdown.
 _ls_backend = {e["name"]: e.get("backend") for e in fetcher.list_sources()}
 check("backend: OpenAlex family collapses (openalex + researcher_watch -> 'openalex')",
       _ls_backend.get("openalex") == "openalex" and _ls_backend.get("researcher_watch") == "openalex",
@@ -1259,7 +1259,7 @@ _ccand.store_evidence(_dcid, {"evidence_complete": True, "stage0_safety": {"hard
 
 def _decide_raises(**kw):
     try:
-        _srv2.penumbra_curator_decide.__wrapped__(**kw)
+        _srv2.penumbra_curator_act.__wrapped__(verb="decide", **kw)
         return False
     except Exception:  # noqa: BLE001
         return True
@@ -1267,8 +1267,8 @@ def _decide_raises(**kw):
 
 check("curator: decide(admit, baseline_ref={}) RAISES (empty baseline)",
       _decide_raises(candidate_id=_dcid, decision="admit", reasons="x", baseline_ref={}))
-_ok_decide = _srv2.penumbra_curator_decide.__wrapped__(candidate_id=_dcid, decision="admit", reasons="x",
-                                                  baseline_ref={"web": ["result"]})
+_ok_decide = _srv2.penumbra_curator_act.__wrapped__(verb="decide", candidate_id=_dcid, decision="admit",
+                                               reasons="x", baseline_ref={"web": ["result"]})
 check("curator: decide(admit, baseline_ref=...) succeeds -> owner_review in P1",
       _ok_decide.get("state") == "owner_review")
 
@@ -1280,14 +1280,14 @@ _ccand.store_evidence(_hc, {"evidence_complete": True, "stage0_safety": {"hard_r
                       {"hard_redline_ids": ["x"]}, "awaiting_verdict", "ev")
 check("curator: hard_redline_blocked -> decide(admit) RAISES, decide(reject) succeeds",
       _decide_raises(candidate_id=_hc, decision="admit", reasons="x", baseline_ref={"a": 1})
-      and _srv2.penumbra_curator_decide.__wrapped__(candidate_id=_hc, decision="reject", reasons="ToS").get("state") == "rejected")
+      and _srv2.penumbra_curator_act.__wrapped__(verb="decide", candidate_id=_hc, decision="reject", reasons="ToS").get("state") == "rejected")
 _ic = _ccand.add({"name": "Incomplete", "urls": ["https://i.example.com/f"], "proposed_mode": "RECALL",
                   "proposed_domain": "papers", "proposed_family": "rss"})
 _ccand.store_evidence(_ic, {"evidence_complete": False, "stage0_safety": {"hard_redline_blocked": False}},
                       {"hard_redline_ids": []}, "awaiting_verdict", "ev")
 check("curator: evidence_complete=False -> decide(admit) RAISES, decide(reject) succeeds",
       _decide_raises(candidate_id=_ic, decision="admit", reasons="x", baseline_ref={"a": 1})
-      and _srv2.penumbra_curator_decide.__wrapped__(candidate_id=_ic, decision="reject", reasons="thin").get("state") == "rejected")
+      and _srv2.penumbra_curator_act.__wrapped__(verb="decide", candidate_id=_ic, decision="reject", reasons="thin").get("state") == "rejected")
 
 # (12) _live_hosts non-trivial + host-derivation correct (against the REAL roster).
 import importlib as _il  # noqa: E402
@@ -1318,10 +1318,15 @@ check("curator: STRUCTURE present-but-unresolved is visible (resolved == [] whil
       _sres["diff"]["structured_fields_present"] and _sres["diff"]["structured_fields_resolved"] == [],
       f"present={_sres['diff']['structured_fields_present']} resolved={_sres['diff']['structured_fields_resolved']}")
 
-# (14) Server exposes the 5 penumbra_curator_* tools.
-for _t in ("penumbra_curator_submit", "penumbra_curator_probe", "penumbra_curator_packet",
-           "penumbra_curator_decide", "penumbra_curator_list"):
+# (14) Server exposes the two curator dispatch tools (the 12 old penumbra_curator_* collapsed into
+# penumbra_curator_view(what=...) for reads + penumbra_curator_act(verb=...) for writes); each P1 verb still
+# resolves to its impl function behind the dispatcher.
+for _t in ("penumbra_curator_view", "penumbra_curator_act"):
     check(f"curator: server exposes {_t}", hasattr(_srv2, _t) and callable(getattr(_srv2, _t)))
+for _t in ("_curator_submit", "_curator_probe", "_curator_packet",
+           "_curator_decide", "_curator_list"):
+    check(f"curator: server carries the {_t} impl behind the dispatcher",
+          hasattr(_srv2, _t) and callable(getattr(_srv2, _t)))
 
 # ---------------------------------------------------------------------------
 # 13. Curator P2 (yield tap): the 9 invariants that make the FAIL-OPEN, single-writer,
@@ -1843,9 +1848,11 @@ try:
     _sa_gsrc = _insp.getsource(_sa.gather_source_dossier)
     check("curator P3: gather_source_dossier source assigns no banned verdict key literal",
           not any(f'"{k}":' in _sa_gsrc for k in _BANNED_KEYS))
-    # server exposes the two P3 tools.
-    for _t in ("penumbra_curator_audit", "penumbra_curator_source_verdict"):
-        check(f"curator P3: server exposes {_t}", hasattr(_srv2, _t) and callable(getattr(_srv2, _t)))
+    # the two P3 verbs route through the dispatchers (view(what="audit") / act(verb="source_verdict"));
+    # each still resolves to its impl function behind them.
+    for _t in ("_curator_audit", "_curator_source_verdict"):
+        check(f"curator P3: server carries the {_t} impl behind the dispatcher",
+              hasattr(_srv2, _t) and callable(getattr(_srv2, _t)))
 finally:
     fetcher.list_sources = _real_sa_list
     fetcher._watchdog_health = _real_sa_wd
@@ -1890,8 +1897,10 @@ check("curator P4: curator.py source readable", bool(_loop_src), str(_LOOP_PATH)
 _disc_code = _strip_py_noise(_disc_src)
 _loop_code = _strip_py_noise(_loop_src)
 # verdict-writer CALL forms (a bare prose mention without "(" is now also gone with the strings).
-_VERDICT_WRITER_CALLS = ("penumbra_curator_decide(", ".record_verdict(", "record_source_verdict(",
-                         ".record_applied(")
+# The MCP write path is now the penumbra_curator_act dispatcher over the _curator_* impls; the cron must
+# call NEITHER the dispatcher NOR the decide impl behind it.
+_VERDICT_WRITER_CALLS = ("penumbra_curator_act(", "_curator_decide(", ".record_verdict(",
+                         "record_source_verdict(", ".record_applied(")
 _FORBIDDEN_IMPORTS = ("anthropic", "WebSearch", "web_search", "profile", "employer_hits", "relevance")
 _cron_judge_leaks = []
 for _txt, _who in ((_disc_code, "discover"), (_loop_code, "curator")):
@@ -2166,8 +2175,9 @@ _ccand.store_evidence(_ow_cid,
                       {"hard_redline_ids": []}, "awaiting_verdict", "ev")
 check("curator P4 (8b): admit of a first-seen org_watch RAISES without recurring_fetch_acknowledged",
       _decide_raises(candidate_id=_ow_cid, decision="admit", reasons="x", baseline_ref={"web": ["r"]}))
-_ow_ok = _srv2.penumbra_curator_decide.__wrapped__(candidate_id=_ow_cid, decision="admit", reasons="x",
-                                              baseline_ref={"web": ["r"], "recurring_fetch_acknowledged": True})
+_ow_ok = _srv2.penumbra_curator_act.__wrapped__(verb="decide", candidate_id=_ow_cid, decision="admit",
+                                           reasons="x",
+                                           baseline_ref={"web": ["r"], "recurring_fetch_acknowledged": True})
 check("curator P4 (8b): with recurring_fetch_acknowledged=true the admit stages to owner_review",
       _ow_ok.get("state") == "owner_review")
 # the operator case for that family carries the recurring_fetch_harm block (spec 2/8c).
@@ -2477,10 +2487,10 @@ finally:
 _GIT_TOKENS = ("subprocess", "deploy.sh", "kickstart", "launchctl")
 _live_srcs = {
     "apply_live": _insp.getsource(_al),
-    "penumbra_curator_apply_live": _insp.getsource(_srv2.penumbra_curator_apply_live.__wrapped__),
-    "penumbra_curator_rollback_live": _insp.getsource(_srv2.penumbra_curator_rollback_live.__wrapped__),
-    "penumbra_curator_retire_live": _insp.getsource(_srv2.penumbra_curator_retire_live.__wrapped__),
-    "penumbra_curator_stage_commit": _insp.getsource(_srv2.penumbra_curator_stage_commit.__wrapped__),
+    "_curator_apply_live": _insp.getsource(_srv2._curator_apply_live),
+    "_curator_rollback_live": _insp.getsource(_srv2._curator_rollback_live),
+    "_curator_retire_live": _insp.getsource(_srv2._curator_retire_live),
+    "_curator_stage_commit": _insp.getsource(_srv2._curator_stage_commit),
 }
 _live_code = {k: _strip_py_noise(v) for k, v in _live_srcs.items()}
 _git_leaks = [f"{_where}:{_tok}" for _where, _code in _live_code.items()
@@ -2502,8 +2512,8 @@ _il2.reload(_capply)
 _ccand.CANDIDATES_PATH = _altmp / "onetap_candidates.json"
 _nt = _ccand.add({"name": "NotReady", "urls": ["https://feeds.ok.example.com/x"], "proposed_mode": "STRUCTURE",
                   "proposed_domain": "papers", "proposed_family": "rss"})
-check("curator live: penumbra_curator_apply_live RAISES on a candidate not in owner_review",
-      _al_raises(lambda: _srv2.penumbra_curator_apply_live.__wrapped__(candidate_id=_nt)))
+check("curator live: apply_live RAISES on a candidate not in owner_review",
+      _al_raises(lambda: _srv2.penumbra_curator_act.__wrapped__(verb="apply_live", candidate_id=_nt)))
 # defensive: a doctored org_watch in owner_review returns applied:false (never live-applied)
 _ow_live = _ccand.add({"name": "OwLive", "urls": ["https://api.openalex.org/works"], "proposed_mode": "STRUCTURE",
                        "proposed_domain": "papers", "proposed_family": "org_watch"})
@@ -2511,14 +2521,14 @@ _ccand.store_evidence(_ow_live, {"evidence_complete": True, "stage0_safety": {"h
                       {"hard_redline_ids": []}, "awaiting_verdict", "ev")
 _ccand.record_verdict(_ow_live, {"decision": "admit"}, "admitted", "a")
 _ccand.set_state(_ow_live, "owner_review", "stage", by="agent")
-_ow_res = _srv2.penumbra_curator_apply_live.__wrapped__(candidate_id=_ow_live)
-check("curator live: penumbra_curator_apply_live refuses a _NEVER_AUTO family (applied:false, points to git path)",
+_ow_res = _srv2.penumbra_curator_act.__wrapped__(verb="apply_live", candidate_id=_ow_live)
+check("curator live: apply_live refuses a _NEVER_AUTO family (applied:false, points to git path)",
       _ow_res.get("applied") is False and "stage_commit" in (_ow_res.get("must_use") or ""))
 # retire requires an existing agent prune verdict
 _sa.STATE_DIR = _altmp
 _sa.SOURCE_VERDICTS_PATH = _altmp / "live_source_verdicts.json"
-check("curator live: penumbra_curator_retire_live RAISES without an existing agent PRUNE verdict",
-      _al_raises(lambda: _srv2.penumbra_curator_retire_live.__wrapped__(name="no_such_pruned_src", confirm=True)))
+check("curator live: retire_live RAISES without an existing agent PRUNE verdict",
+      _al_raises(lambda: _srv2.penumbra_curator_act.__wrapped__(verb="retire_live", name="no_such_pruned_src", confirm=True)))
 
 # (15) runtime retire round-trip: with a prune on record, confirm=True writes the explicit_only
 #      override so _explicit_only_reason is truthy; rollback drops it -> falsy again.
@@ -2540,10 +2550,11 @@ fetcher.invalidate_explicit_only_overrides()
 check("curator live: unretire_live drops the override -> source rejoins broad fan-out",
       not fetcher._explicit_only_reason(_RetStub()))
 
-# (16) server exposes the live-apply lane tools.
-for _t in ("penumbra_curator_apply_live", "penumbra_curator_rollback_live", "penumbra_curator_stage_commit",
-           "penumbra_curator_retire_live", "penumbra_curator_rollback_retire"):
-    check(f"curator live: server exposes {_t}", hasattr(_srv2, _t) and callable(getattr(_srv2, _t)))
+# (16) the live-apply lane verbs route through penumbra_curator_act; each still resolves to its impl.
+for _t in ("_curator_apply_live", "_curator_rollback_live", "_curator_stage_commit",
+           "_curator_retire_live", "_curator_rollback_retire"):
+    check(f"curator live: server carries the {_t} impl behind the dispatcher",
+          hasattr(_srv2, _t) and callable(getattr(_srv2, _t)))
 
 # (17) P3.1 presumed-dark: a health=='unknown' + silent-past-floor source stops shielding its cell;
 #      an unknown+recently-ingested stays an occupant; a 'down' one is unaffected; coverage_critical
@@ -2772,10 +2783,27 @@ finally:
     _oa2._state["dry_until"] = _save_dry3 or {"keyed": 0.0, "anon": 0.0}
 
 # Usage attribution (2026-06-17): every budget-spending success is tallied by caller + the live
-# per-bucket remaining is captured, exposed via penumbra_health_check, so a heavy OpenAlex day is
-# ITEMIZABLE (a hidden over-consumer can't hide) instead of inferred.
-check("openalex: usage_stats() exists (per-caller budget attribution surfaced by penumbra_health_check)",
+# per-bucket remaining is captured, surfaced by penumbra_sources(check_health=True) in its `system` block,
+# so a heavy OpenAlex day is ITEMIZABLE (a hidden over-consumer can't hide) instead of inferred.
+check("openalex: usage_stats() exists (per-caller budget attribution in the check_health system block)",
       hasattr(_oa2, "usage_stats") and callable(_oa2.usage_stats))
+
+# penumbra_health_check was ABSORBED into penumbra_sources(check_health=True): the live probe now ALSO returns a
+# `system` block carrying the two payloads that tool uniquely built (the recall-index health + the
+# openalex usage attribution). Assert the block's SHAPE only — stub list_sources so check_health does
+# no live per-source probing (the recall + usage stats it folds in are local, no network).
+_hc_real_list = fetcher.list_sources
+try:
+    fetcher.list_sources = lambda *a, **k: []  # no live probe; the system block is built independently
+    _hc_out = _srv2.penumbra_sources.__wrapped__(check_health=True)
+finally:
+    fetcher.list_sources = _hc_real_list
+check("health: penumbra_sources(check_health=True) returns a system block with recall + openalex_usage",
+      isinstance(_hc_out.get("system"), dict)
+      and "recall" in _hc_out["system"] and "openalex_usage" in _hc_out["system"],
+      f"system={_hc_out.get('system')!r}")
+check("health: penumbra_sources without check_health carries NO system block (advisory-only default)",
+      "system" not in _srv2.penumbra_sources.__wrapped__(domain="papers"))
 
 
 class _OkClient:
@@ -2815,6 +2843,24 @@ finally:
 # "40 sources down" when the all-at-once health sweep bursted the shared key).
 check("openalex: rate pacer exists (bounds req/s so a fan-out can't burst the shared key)",
       hasattr(_oa2, "_pace") and callable(_oa2._pace) and getattr(_oa2, "_MIN_INTERVAL_S", 0) > 0)
+# Backend-guard extraction (2026-07-01 parsimony audit P1): the concurrency cap + rate pacer + circuit
+# breaker _openalex / _s2 / _github each carried verbatim now live in ONE _guard.BackendGuard per
+# module; the module reaches its primitives by name. Assert the NEW wiring survived byte-for-byte: the
+# module holds a BackendGuard carrying its ORIGINAL constants (break_after=5, break_for_s=120.0, the
+# per-module max_inflight = _MAX_CONCURRENCY sized the semaphore), AND the module-level _sema / _state /
+# _lock / _pace_state / _pace_lock ARE the guard's own objects (the aliases wire to it, not a copy — so
+# every threshold, sleep, log line and error path stays identical). One helper, reused for s2 + github.
+from penumbra.core._guard import BackendGuard as _BackendGuard  # noqa: E402
+def _guard_wired(mod, name, max_inflight):
+    g = getattr(mod, "_guard", None)
+    return (isinstance(g, _BackendGuard) and g.name == name
+            and g.break_after == 5 and g.break_for_s == 120.0
+            and mod._MAX_CONCURRENCY == max_inflight
+            and g.sema._initial_value == max_inflight  # the cap sized the BoundedSemaphore
+            and mod._sema is g.sema and mod._state is g.state and mod._lock is g.lock
+            and mod._pace_state is g.pace_state and mod._pace_lock is g.pace_lock)
+check("openalex: holds a BackendGuard with its original constants (cap=8, break 5/120.0) + aliases wire to it",
+      _guard_wired(_oa2, "openalex", 8))
 check("openalex: shared single-flight health() probe exists",
       hasattr(_oa2, "health") and callable(_oa2.health))
 _oa2._health["result"] = None
@@ -3226,6 +3272,8 @@ from penumbra.core.sources.api import semantic_scholar_source as _SS
 
 check("s2 has _pace", hasattr(_S2, "_pace"))
 check("s2 _MIN_INTERVAL_S honors ~1 RPS", _S2._MIN_INTERVAL_S == 1.0)
+check("s2: holds a BackendGuard with its original constants (cap=4, break 5/120.0) + aliases wire to it",
+      _guard_wired(_S2, "s2", 4))
 check("s2 _pace_state slot", isinstance(_S2._pace_state, dict) and "next_at" in _S2._pace_state)
 check("s2 _pace spaces request starts >= ~1s", (lambda t0: (_S2._pace(), _S2._pace(), _t.monotonic() - t0)[-1])(_t.monotonic()) >= 0.95)
 # Pace-gate cap: a pathological backlog (next_at far in the future, the 429-storm signature that
@@ -3387,6 +3435,8 @@ check("github: get_json signature carries (path, params, headers) + honors cache
 check("github: pacer ~30/min (Search-sized), concurrency-capped, breaker present",
       _gh._MIN_INTERVAL_S == 2.0 and _gh._MAX_CONCURRENCY == 4
       and _gh._BREAK_AFTER == 5 and hasattr(_gh, "_trip_breaker") and hasattr(_gh, "GitHubDown"))
+check("github: holds a BackendGuard with its original constants (cap=4, break 5/120.0) + aliases wire to it",
+      _guard_wired(_gh, "github", 4))
 _gjsrc = _insp2.getsource(_gh.get_json)
 check("github: get_json retries on 429/secondary-403 honoring retry-after, trips breaker on a survived throttle",
       "_retry_after" in _gjsrc and "_is_secondary_rate" in _gjsrc and "_trip_breaker()" in _gjsrc)
@@ -4064,7 +4114,7 @@ check("xhs_cn: browser path enabled (_BROWSER_OK) + helpers wired",
       _xcn._BROWSER_OK and all(hasattr(_xcn, n) for n in
           ("_browser_alive", "_browser_search", "_browser_fetch", "_note_browser_cdp", "_cn_captcha",
            "_cn_login_wall", "_cn_card_to_document", "_cn_cards_from_html")))
-check("xhs_cn: fetch_timeout >= the 110s browser cdp_call budget (penumbra_add_url backstop must not kill it)",
+check("xhs_cn: fetch_timeout >= the 110s browser cdp_call budget (penumbra_read URL backstop must not kill it)",
       _xcn_a.fetch_timeout >= 120.0, detail=str(_xcn_a.fetch_timeout))
 # PRIMARY mainland search decode = DOM cards (the mainland SSRs results; /search/notes XHR doesn't fire).
 _xcn_card_html = (
@@ -4964,7 +5014,8 @@ check("wikicfp_nlp: registered (rss bundle) + explicit_only + wikicfp http feed"
 # ---------------------------------------------------------------------------
 # 38. CA Provincial Nominee draw scrapers (oinp/bcpnp/aaip): pure HTML-table parse → per-draw docs.
 #     Golden offline with verbatim-shaped table fixtures (structures verified live 2026-06-22).
-#     explicit_only: 省提名, named via penumbra_fetch, kept SEPARATE from federal EE (ircc_ee_rounds).
+#     explicit_only: 省提名, named via the penumbra_search drill (sources=[one], raw=True), kept SEPARATE
+#     from federal EE (ircc_ee_rounds).
 # ---------------------------------------------------------------------------
 from penumbra.core.sources.scrape import ca_pnp_source as _pnp  # noqa: E402
 _oinp_html = ("<h3>PhD Graduate stream</h3><table>"
@@ -5172,26 +5223,10 @@ check("provenance: xhs _flatten comment dict keys == COMMENT_SCHEMA_KEYS (set-eq
 check("provenance: xhs _flatten defaults a missing comment id to '' (never KeyError/None)",
       _xhscn._flatten([{"content": "no id here"}], (_e3 := [])) or _e3[0]["id"] == "")
 
-# --- #7 independence_score (rank.merge_rank stamps it on each survivor; 0.7x discount for a
-#     title-only merge; a singleton gets 0.0). Metadata-only, does NOT touch composite(). ---
+# --- shared imports for the metadata blocks below (merge_rank stamps freshness/relevance_hook;
+#     Document is the fixture type). corroboration/also_in is asserted in the dedup block. ---
 from penumbra.core.rank import merge_rank as _merge_rank  # noqa: E402
 from penumbra.core.normalize import Document as _PDoc  # noqa: E402
-_ind_d1 = _PDoc(source="arxiv", source_id="1", url="http://a",
-                title="A Long Enough Title For Dedup Testing Here", content="x")
-_ind_d2 = _PDoc(source="s2", source_id="2", url="http://b",
-                title="A Long Enough Title For Dedup Testing Here", content="xx")
-_ind_ranked = _merge_rank({"arxiv": [_ind_d1], "s2": [_ind_d2]}, "test", limit=5)
-check("independence: merged doc carries independence_score",
-      "independence_score" in (_ind_ranked[0].metadata or {}))
-check("independence: score is a float in [0,1]",
-      0.0 <= _ind_ranked[0].metadata.get("independence_score", -1) <= 1.0)
-check("independence: a title-only merge is discounted (< 0.5)",
-      _ind_ranked[0].metadata["independence_score"] < 0.5)
-_ind_solo = _merge_rank({"arxiv": [_PDoc(source="arxiv", source_id="3", url="http://c",
-                                         title="Solo Unique Title That Is Long Enough",
-                                         content="y")]}, "test", limit=5)
-check("independence: a singleton (no corroboration) gets exactly 0.0",
-      _ind_solo[0].metadata.get("independence_score") == 0.0)
 
 # --- #8 source_diversity (fetcher._compute_source_diversity: kind-facet distribution of the ranked
 #     list, absent-perspective advisory, unique-source count). Data-driven, not a hardcoded list. ---
@@ -5253,43 +5288,72 @@ _rh_browse = _merge_rank({"test": [_rh_doc]}, "", limit=5)
 check("relevance_hook: '' in browse mode (empty query → no hook)",
       _rh_browse[0].metadata.get("relevance_hook") == "")
 
-# --- #11 conflict_detection (fetcher._detect_conflicts: flags same-named Signal values that
-#     diverge >50% across docs from DIFFERENT sources; capped at 5; key absent when none).
-#     Adversarial fix: compares deduped Signal values, NOT an O(n^2) title-similarity heuristic. ---
+# --- #11 signal_conflicts (rank.dedup stamps same-group cross-source Signal divergence on the
+#     SURVIVOR at merge time — the only place the collapsed members are still visible; post-dedup
+#     any cross-doc comparison compares DIFFERENT works, the 2026-07-01 dogfood noise. fetcher
+#     collects the survivors' stamps into _meta.conflicts, capped 5, key absent when none).
+#     A shared long title (>=20 normalized chars) is what lands two docs in the same group. ---
 from penumbra.core.normalize import Signal as _Signal42  # noqa: E402
-_cf1 = _PDoc(source="s1", source_id="1", url="http://a", title="Company X Revenue Report Long Title",
+from penumbra.core.rank import dedup as _dedup42  # noqa: E402
+# _cf1/_cf2: SAME normalized title → SAME dedup group; different sources; revenue diverges 8M vs 5M
+# (ratio 1.6 > 1.5) → the survivor carries metadata.signal_conflicts.
+_cf_title = "Company X Annual Revenue Filing Report"  # >=20 normalized chars → title: fingerprint
+_cf1 = _PDoc(source="s1", source_id="1", url="http://a", title=_cf_title,
              content="revenue 5M",
              signals={"revenue": _Signal42(value=5000000.0, kind="other",
                                            computed_by="source:s1", unit="USD")})
-_cf2 = _PDoc(source="s2", source_id="2", url="http://b", title="Company X Revenue Report 2025 Long",
+_cf2 = _PDoc(source="s2", source_id="2", url="http://b", title=_cf_title,
              content="revenue 8M",
              signals={"revenue": _Signal42(value=8000000.0, kind="other",
                                            computed_by="source:s2", unit="USD")})
-_conflicts = fetcher._detect_conflicts([_cf1, _cf2])
-check("conflict: a >50%-divergent shared signal across two sources is flagged",
+_cf_out = _dedup42([_cf1, _cf2])
+_conflicts = (_cf_out[0].metadata or {}).get("signal_conflicts", []) if len(_cf_out) == 1 else []
+check("conflict: same-group >50%-divergent signal across two sources stamps the survivor",
       len(_conflicts) >= 1 and _conflicts[0]["topic"] == "revenue"
       and _conflicts[0]["source_a"] != _conflicts[0]["source_b"])
-check("conflict: a singleton (no cross-source pair) produces an empty list",
-      fetcher._detect_conflicts([_PDoc(source="a", source_id="1", url="http://x",
-                                       title="Unique Title Long Enough", content="x")]) == [])
-# Same source → NOT a conflict (the fn skips d1.source == d2.source), even with divergent signals.
-_cf_same_a = _PDoc(source="s1", source_id="1", url="http://a", title="Same Source Doc One Long",
+_cf_solo = _dedup42([_PDoc(source="a", source_id="1", url="http://x",
+                           title="Unique Title Long Enough", content="x")])
+check("conflict: a singleton (no cross-source pair) carries no stamp",
+      "signal_conflicts" not in (_cf_solo[0].metadata or {}))
+# Cross-GROUP → NOT a conflict: two docs with DIFFERENT titles (different fingerprints) are distinct
+# entities; they survive dedup separately and neither carries a stamp.
+_cf_xg_a = _PDoc(source="s1", source_id="1", url="http://a", title="Company X Revenue Filing Report",
+                 content="x", signals={"revenue": _Signal42(value=5000000.0, kind="other",
+                                                            computed_by="source:s1")})
+_cf_xg_b = _PDoc(source="s2", source_id="2", url="http://b", title="Company Y Earnings Summary Page",
+                 content="y", signals={"revenue": _Signal42(value=8000000.0, kind="other",
+                                                            computed_by="source:s2")})
+_cf_xg_out = _dedup42([_cf_xg_a, _cf_xg_b])
+check("conflict: cross-GROUP (distinct titles/fingerprints) divergence is NOT flagged",
+      len(_cf_xg_out) == 2
+      and all("signal_conflicts" not in (d.metadata or {}) for d in _cf_xg_out))
+# Same source → NOT a conflict (same-source pairs are skipped), even for a shared title with
+# divergent signals.
+_cf_same_a = _PDoc(source="s1", source_id="1", url="http://a", title="Same Source Shared Long Title",
                    content="x", signals={"m": _Signal42(value=10.0, kind="other",
                                                         computed_by="source:s1")})
-_cf_same_b = _PDoc(source="s1", source_id="2", url="http://b", title="Same Source Doc Two Long",
+_cf_same_b = _PDoc(source="s1", source_id="2", url="http://b", title="Same Source Shared Long Title",
                    content="y", signals={"m": _Signal42(value=100.0, kind="other",
                                                         computed_by="source:s1")})
+_cf_same_out = _dedup42([_cf_same_a, _cf_same_b])
 check("conflict: two docs from the SAME source are NOT flagged (cross-source only)",
-      fetcher._detect_conflicts([_cf_same_a, _cf_same_b]) == [])
-# A shared signal that agrees (ratio <= 1.5) → no conflict.
-_cf_agree_a = _PDoc(source="s1", source_id="1", url="http://a", title="Agreeing Doc One Long Title",
+      all("signal_conflicts" not in (d.metadata or {}) for d in _cf_same_out))
+# Same group (shared title), cross-source, but the shared signal AGREES (ratio <= 1.5) → no stamp.
+_cf_agree_a = _PDoc(source="s1", source_id="1", url="http://a", title="Agreeing Metric Shared Title",
                     content="x", signals={"m": _Signal42(value=100.0, kind="other",
                                                          computed_by="source:s1")})
-_cf_agree_b = _PDoc(source="s2", source_id="2", url="http://b", title="Agreeing Doc Two Long Title",
+_cf_agree_b = _PDoc(source="s2", source_id="2", url="http://b", title="Agreeing Metric Shared Title",
                     content="y", signals={"m": _Signal42(value=110.0, kind="other",
                                                          computed_by="source:s2")})
-check("conflict: a shared signal within 50% (ratio<=1.5) is NOT flagged",
-      fetcher._detect_conflicts([_cf_agree_a, _cf_agree_b]) == [])
+_cf_agree_out = _dedup42([_cf_agree_a, _cf_agree_b])
+check("conflict: same-group shared signal within 50% (ratio<=1.5) is NOT flagged",
+      all("signal_conflicts" not in (d.metadata or {}) for d in _cf_agree_out))
+# The production wiring: search_ranked COLLECTS the survivors' stamps into _meta.conflicts
+# (the detection itself lives in rank.dedup where the group members exist).
+import inspect as _cf_inspect  # noqa: E402
+_fetch_src42 = _cf_inspect.getsource(fetcher)
+check("conflict: fetcher collects signal_conflicts stamps into _meta.conflicts",
+      'signal_conflicts' in _fetch_src42 and "_detect_conflicts" not in _fetch_src42)
 
 # --- #6 progressive_return (fetcher.search_many classifies fast/slow/pending sources from a
 #     shared _result_times dict and stamps them in _meta). search_many needs live adapters, so
@@ -5342,101 +5406,172 @@ _hnd_pr = _merge_rank({"test": [_hnd_plain]}, "test", limit=5)
 check("handles: absent from metadata when no affordances detected (no noise)",
       "handles" not in _hnd_pr[0].metadata)
 
-# --- evidence.py: EvidenceGraph TypedDict is importable (pure schema, zero logic) ---
-from penumbra.core.evidence import EvidenceGraph as _EG, DocumentNode as _DN  # noqa: E402
-from penumbra.core.evidence import ClaimNode as _CN, GapNode as _GN  # noqa: E402
-from penumbra.core.evidence import EvidenceEdge as _EE, ManifestEntry as _ME  # noqa: E402
-check("evidence: EvidenceGraph is importable", _EG is not None)
-check("evidence: all node types importable (Document, Claim, Gap)", _DN is not None and _CN is not None and _GN is not None)
-check("evidence: EvidenceEdge and ManifestEntry importable", _EE is not None and _ME is not None)
+# --- evidence.py ABSORBED into recall.graph (design section 9): the shared TypedDicts (GraphNode /
+#     GraphEdge / ManifestEntry) now live under ONE name in the graph module; the old evidence module
+#     is GONE (one name, one vocabulary — the agent's J-tier overlay uses the SAME shapes). ---
+from penumbra.core.recall.graph import GraphNode as _GNd, GraphEdge as _GEd  # noqa: E402
+from penumbra.core.recall.graph import ManifestEntry as _ME  # noqa: E402
+check("graph: GraphNode / GraphEdge TypedDicts importable from recall.graph (absorbed evidence.py)",
+      _GNd is not None and _GEd is not None)
+check("graph: ManifestEntry importable from recall.graph", _ME is not None)
+# The absorption is COMPLETE: penumbra.core.evidence must no longer exist (its shapes retired INTO
+# recall.graph). An import attempt must RAISE — the module is deleted, not merely re-exported.
+try:
+    import penumbra.core.evidence as _dead_evidence  # noqa: F401,E402
+    check("graph: penumbra.core.evidence is GONE (absorbed into recall.graph)", False,
+          "penumbra.core.evidence still importable")
+except ImportError:
+    check("graph: penumbra.core.evidence is GONE (absorbed into recall.graph)", True)
 
 # --- overlap_count: each excluded_relevant entry carries an 'overlap' key ---
 _fetch_src = _inspect42.getsource(fetcher.search_many)
 check("overlap: excluded_relevant entries carry 'overlap' key",
       '"overlap": _n' in _fetch_src or "'overlap': _n" in _fetch_src)
 
-# --- penumbra_gather: registered, whitelist excludes curator + gather itself ---
-from penumbra.server import penumbra_gather as _eg, _init_gather_tools, _GATHER_TOOLS  # noqa: E402
+# --- penumbra_gather: registered; the whitelist is now an explicit STATIC dict (mechanism demoted from
+#     the old _init_gather_tools regex scan) of EXACTLY the twelve read-only names ---
+from penumbra.server import penumbra_gather as _eg, _GATHER_TOOLS  # noqa: E402
 check("gather: penumbra_gather is registered as a tool", _eg is not None)
-_GATHER_TOOLS.clear()
-_init_gather_tools()
-check("gather: whitelist has 15+ read-only tools", len(_GATHER_TOOLS) >= 15)
-check("gather: whitelist excludes all curator tools",
-      not any("curator" in k for k in _GATHER_TOOLS))
-check("gather: whitelist excludes sensor tools (sensor_run mutates baselines)",
-      not any(k.startswith("penumbra_sensor_") for k in _GATHER_TOOLS))
-check("gather: whitelist excludes penumbra_gather itself (no recursion)",
-      "penumbra_gather" not in _GATHER_TOOLS)
+# _init_gather_tools is GONE: _GATHER_TOOLS is built once, at import, as explicit data. Assert it is
+# EXACTLY the twelve read-only names (no more, no less) so a new write-tool can't sneak in by pattern.
+# penumbra_graph joined the read-only surface (the unified graph's budgeted projections are pure reads).
+_GATHER_EXPECT = {
+    "penumbra_sources", "penumbra_search", "penumbra_read", "penumbra_view", "penumbra_transcribe",
+    "penumbra_field_skeleton", "penumbra_paper_recommend", "penumbra_paper_enrich",
+    "penumbra_resolve_identity", "penumbra_coauthors", "penumbra_institution_cohort",
+    "penumbra_graph",
+}
+check("gather: whitelist is EXACTLY the twelve read-only tools",
+      set(_GATHER_TOOLS) == _GATHER_EXPECT,
+      f"missing={_GATHER_EXPECT - set(_GATHER_TOOLS)} extra={set(_GATHER_TOOLS) - _GATHER_EXPECT}")
+# The write/orchestration surface is excluded BY OMISSION: the sensor dispatcher (run mutates
+# baselines), both curator dispatchers, and gather itself (no recursion) must NOT appear.
+check("gather: whitelist excludes penumbra_sensor / penumbra_curator_view / penumbra_curator_act / penumbra_gather",
+      not ({"penumbra_sensor", "penumbra_curator_view", "penumbra_curator_act", "penumbra_gather"} & set(_GATHER_TOOLS)))
+
+# --- parsimony tripwires (owner-directive 2026-07-01: 如无必要勿增实体). The FROZEN counts are
+#     deliberate speed bumps: adding a tool/prompt must come with a conscious bump HERE, forcing
+#     the parsimony conversation (does the new entity encode a NEW judgment, or should it fuse
+#     into an existing verb?). Never bump casually. ---
+import penumbra.server as _pt_srv  # noqa: E402
+import inspect as _pt_inspect  # noqa: E402
+_pt_src = _pt_inspect.getsource(_pt_srv)
+_TOOL_COUNT_FROZEN = 16   # 10 core verbs + scholarly transition 6 (the graph arc absorbs those)
+_PROMPT_COUNT_FROZEN = 1  # investigate(target, shape): the ONE recipe channel
+check("parsimony tripwire: MCP tool count == frozen 16 (bump consciously or fuse)",
+      _pt_src.count(chr(10) + "@mcp.tool()") == _TOOL_COUNT_FROZEN,
+      f"found {_pt_src.count(chr(10) + '@mcp.tool()')}")
+check("parsimony tripwire: MCP prompt count == frozen 1 (the one recipe channel)",
+      _pt_src.count(chr(10) + "@mcp.prompt()") == _PROMPT_COUNT_FROZEN)
 check("gather: rejects empty calls",
-      _eg.__wrapped__(calls=[], timeout_s=10).get("error") is not None)
+      _eg.__wrapped__(calls=[], wait_s=10).get("error") is not None)
 check("gather: rejects >10 calls",
-      _eg.__wrapped__(calls=[{"tool": "x"}] * 11, timeout_s=10).get("error") is not None)
-# A call to an unknown tool returns status=error per-call (fail-open, not crash)
-_g_unk = _eg.__wrapped__(calls=[{"tool": "no_such_tool", "args": {}}], timeout_s=5)
+      _eg.__wrapped__(calls=[{"tool": "x"}] * 11, wait_s=10).get("error") is not None)
+# A call to an unknown tool returns status="errored" per-call (fail-open, not crash)
+_g_unk = _eg.__wrapped__(calls=[{"tool": "no_such_tool", "args": {}}], wait_s=5)
 check("gather: unknown tool returns per-call error (fail-open)",
-      _g_unk["results"][0]["status"] == "error" and _g_unk["completed"] == 0)
-# A call to penumbra_list_sources (the simplest real tool) works inside gather
-_g_ls = _eg.__wrapped__(calls=[{"tool": "penumbra_list_sources", "args": {}}], timeout_s=30)
-check("gather: penumbra_list_sources works inside gather",
+      _g_unk["results"][0]["status"] == "errored" and _g_unk["completed"] == 0)
+# A call to penumbra_sources (the simplest real tool) works inside gather
+_g_ls = _eg.__wrapped__(calls=[{"tool": "penumbra_sources", "args": {}}], wait_s=30)
+check("gather: penumbra_sources works inside gather",
       _g_ls["results"][0]["status"] == "ok" and "sources" in _g_ls["results"][0].get("result", {}))
 
 # --- MCP prompts: registered on the server ---
 from penumbra.server import mcp as _mcp43  # noqa: E402
 # FastMCP stores prompts in _prompt_manager; check via the prompt functions themselves
-from penumbra.server import investigate_person, investigate_lab  # noqa: E402
-from penumbra.server import investigate_field, investigate_product, saturation_chase  # noqa: E402
-check("prompt: investigate_person is callable", callable(investigate_person))
-check("prompt: investigate_lab is callable", callable(investigate_lab))
-check("prompt: investigate_field is callable", callable(investigate_field))
-check("prompt: investigate_product is callable", callable(investigate_product))
-check("prompt: saturation_chase is callable", callable(saturation_chase))
-_p_person = investigate_person(target="Test Person", context="RL researcher")
-check("prompt: investigate_person returns a list of message dicts",
+# The five per-shape prompts collapsed into ONE parameterized investigate(target, shape).
+from penumbra.server import investigate  # noqa: E402
+check("prompt: investigate is callable", callable(investigate))
+_p_person = investigate(target="Test Person", shape="person", context="RL researcher")
+check("prompt: investigate(shape='person') returns a list of message dicts",
       isinstance(_p_person, list) and len(_p_person) > 0
       and _p_person[0].get("role") == "user" and "Test Person" in _p_person[0].get("content", ""))
+_p_chase = investigate(target="Test Person", shape="chase")
+check("prompt: investigate(shape='chase') returns a list of message dicts",
+      isinstance(_p_chase, list) and len(_p_chase) > 0
+      and _p_chase[0].get("role") == "user" and "Test Person" in _p_chase[0].get("content", ""))
+_p_unknown = investigate(target="Test Person", shape="nonsense")
+check("prompt: investigate(unknown shape) still returns a list (falls back)",
+      isinstance(_p_unknown, list) and len(_p_unknown) > 0
+      and _p_unknown[0].get("role") == "user")
 
 # ---------------------------------------------------------------------------
-# 44. Feature 1: return_after_s on gather (streaming perception)
+# 44. Feature 1: wait_s early-return on gather (streaming perception). The old timeout_s /
+#     return_after_s split collapsed into ONE wait_s patience budget: gather returns when all calls
+#     finish OR wait_s elapses; still-running calls come back status="warming".
 # ---------------------------------------------------------------------------
 
-# return_after_s=0 should return immediately; all calls get status="warming"
-_g_early = _eg.__wrapped__(calls=[{"tool": "penumbra_list_sources", "args": {}}],
-                           timeout_s=30, return_after_s=0)
-check("early-return: return_after_s=0 returns a valid result dict",
+# wait_s=0 should return immediately; the call gets status="warming" (its background thread keeps going)
+_g_early = _eg.__wrapped__(calls=[{"tool": "penumbra_sources", "args": {}}], wait_s=0)
+check("early-return: wait_s=0 returns a valid result dict",
       "results" in _g_early and "warming" in _g_early)
-# With return_after_s=0, the call may or may not finish in time (race), but the
-# result must have either status=ok OR status=warming (never error from early-return).
+# With wait_s=0, the call may or may not finish in time (race), but the result must be either
+# status=ok OR status=warming (never "errored" from an early return).
 _er_status = _g_early["results"][0]["status"]
-check("early-return: result status is 'ok' or 'warming' (never error for a valid call)",
+check("early-return: result status is 'ok' or 'warming' (never errored for a valid call)",
       _er_status in ("ok", "warming"))
 check("early-return: completed + warming + failed == total",
       _g_early["completed"] + _g_early["warming"] + _g_early["failed"] == _g_early["total"])
 
-# Standard mode (no return_after_s) still works as before
-_g_std = _eg.__wrapped__(calls=[{"tool": "penumbra_list_sources", "args": {}}], timeout_s=30)
-check("standard-gather: no return_after_s still works",
+# A generous wait_s still lets a fast call finish (warming drains to 0)
+_g_std = _eg.__wrapped__(calls=[{"tool": "penumbra_sources", "args": {}}], wait_s=30)
+check("standard-gather: a generous wait_s completes the fast call",
       _g_std["results"][0]["status"] == "ok" and _g_std["warming"] == 0)
 
 # ---------------------------------------------------------------------------
-# 45. Feature 2: Sensor CRUD + diff logic
+# 45. Feature 2: Sensor CRUD + diff logic. The four penumbra_sensor_* CRUD tools collapsed into ONE
+#     penumbra_sensor(action=...) dispatcher; route the create/list/delete lifecycle through it (against a
+#     temp-path store, so no real state is touched), then the pure diff logic direct on the store.
 # ---------------------------------------------------------------------------
 import tempfile as _tempfile44  # noqa: E402
 from pathlib import Path as _Path44  # noqa: E402
-from penumbra.core.sensor import SensorStore as _SS, compute_diff as _sdiff  # noqa: E402
+import penumbra.core.sensor as _sensmod  # noqa: E402
+from penumbra.core.sensor import compute_diff as _sdiff  # noqa: E402
+from penumbra.server import penumbra_sensor as _esensor  # noqa: E402
 
 _tmp_sensor = _Path44(_tempfile44.mktemp(suffix=".json"))
+_sens_real_default = _sensmod._DEFAULT_STATE_PATH
 try:
-    _store = _SS(path=_tmp_sensor)
-    _s1 = _store.create(query="test query alpha", sources=["arxiv"])
-    check("sensor: create returns a sensor with an id", _s1.id.startswith("sensor_"))
-    check("sensor: list shows the created sensor",
-          len(_store.list_all()) == 1 and _store.list_all()[0]["id"] == _s1.id)
-    _s2 = _store.create(query="test query beta")
-    check("sensor: two sensors created", len(_store.list_all()) == 2)
-    _store.delete(_s1.id)
-    check("sensor: delete removes the sensor", len(_store.list_all()) == 1)
-    _store.delete(_s2.id)
-    check("sensor: delete all leaves empty", len(_store.list_all()) == 0)
+    # penumbra_sensor's dispatcher builds SensorStore() with the module-default path; point it at the temp
+    # file so the CRUD lifecycle runs through the real tool without touching ~/.penumbra state.
+    _sensmod._DEFAULT_STATE_PATH = _tmp_sensor
+    _c1 = _esensor.__wrapped__(action="create", query="test query alpha", sources=["arxiv"])
+    check("sensor: action=create returns a sensor with an id",
+          _c1.get("created") is True and _c1["sensor"]["id"].startswith("sensor_"))
+    _s1_id = _c1["sensor"]["id"]
+    _lst1 = _esensor.__wrapped__(action="list")
+    check("sensor: action=list shows the created sensor",
+          _lst1.get("count") == 1 and _lst1["sensors"][0]["id"] == _s1_id)
+    _esensor.__wrapped__(action="create", query="test query beta")
+    check("sensor: two sensors created", _esensor.__wrapped__(action="list").get("count") == 2)
+    _del1 = _esensor.__wrapped__(action="delete", sensor_id=_s1_id)
+    check("sensor: action=delete removes the sensor",
+          _del1.get("deleted") is True and _esensor.__wrapped__(action="list").get("count") == 1)
+    # A missing required arg is a mechanical error dict, not a crash (delete/run need sensor_id;
+    # run also errors on an unknown id — both short-circuit before any network work).
+    check("sensor: action=run without sensor_id returns an error dict",
+          isinstance(_esensor.__wrapped__(action="run").get("error"), str))
+    check("sensor: action=delete without sensor_id returns an error dict",
+          isinstance(_esensor.__wrapped__(action="delete").get("error"), str))
+    check("sensor: unknown action returns an error dict",
+          isinstance(_esensor.__wrapped__(action="frobnicate").get("error"), str))
+
+    # notify field end-to-end: action="create" with notify=True must PERSIST notify in the store row
+    # (the cron Barks on new results only when this flag is set). Assert it round-trips: the create
+    # response carries it AND it is re-read from the on-disk store (not just echoed back).
+    _cn = _esensor.__wrapped__(action="create", query="notify me query", notify=True)
+    check("sensor: action=create with notify=True echoes notify in the created sensor",
+          _cn.get("created") is True and _cn["sensor"]["notify"] is True)
+    _cn_id = _cn["sensor"]["id"]
+    _cn_row = _sensmod.SensorStore(_tmp_sensor).get(_cn_id)
+    check("sensor: notify=True persists in the store row (read back from disk)",
+          _cn_row is not None and _cn_row.notify is True)
+    # A create WITHOUT notify defaults it off, so the flag is opt-in (no accidental Barks).
+    _cn2 = _esensor.__wrapped__(action="create", query="quiet query")
+    check("sensor: create without notify defaults notify=False in the store row",
+          _sensmod.SensorStore(_tmp_sensor).get(_cn2["sensor"]["id"]).notify is False)
+    _esensor.__wrapped__(action="delete", sensor_id=_cn_id)
+    _esensor.__wrapped__(action="delete", sensor_id=_cn2["sensor"]["id"])
 
     # Diff logic (pure function, no network)
     _diff_baseline = [["arxiv", "123"], ["s2", "456"]]
@@ -5454,15 +5589,142 @@ try:
     check("sensor-diff: empty baseline = all results are new",
           len(_sdiff(_diff_results, [])) == 2)
 finally:
+    _sensmod._DEFAULT_STATE_PATH = _sens_real_default
     _tmp_sensor.unlink(missing_ok=True)
 
-# Sensor MCP tools are registered
-from penumbra.server import penumbra_sensor_create, penumbra_sensor_list  # noqa: E402
-from penumbra.server import penumbra_sensor_delete, penumbra_sensor_run  # noqa: E402
-check("sensor: penumbra_sensor_create is registered", callable(penumbra_sensor_create))
-check("sensor: penumbra_sensor_list is registered", callable(penumbra_sensor_list))
-check("sensor: penumbra_sensor_delete is registered", callable(penumbra_sensor_delete))
-check("sensor: penumbra_sensor_run is registered", callable(penumbra_sensor_run))
+# The sensor MCP surface is the single penumbra_sensor dispatcher.
+check("sensor: penumbra_sensor dispatcher is registered", callable(_esensor))
+
+# ---------------------------------------------------------------------------
+# 45b. Dispatch routing (wave-2 surface): penumbra_search / penumbra_read / penumbra_view each collapsed several
+#      old tools into ONE verb that auto-routes. Prove the ROUTING (which internal path fires) with
+#      source-level monkeypatches, never a live fetch — the old per-tool entry points are gone, so the
+#      only guarantee left is that the dispatch args reproduce each old path.
+# ---------------------------------------------------------------------------
+
+# --- penumbra_search: raw buckets vs the drill idiom vs the default ranked list, + staleness translation ---
+_srch_real = {
+    "search_ranked": fetcher.search_ranked,
+    "search_many": fetcher.search_many,
+    "fetch_one_with_diag": fetcher.fetch_one_with_diag,
+    "is_enabled_by_profile": fetcher.is_enabled_by_profile,
+}
+_srch_seen: dict = {}
+try:
+    # Each fake records that its path fired + the kwargs the server translated, and returns that
+    # path's real shape (ranked/drill -> (docs, meta/diag); buckets -> (results_dict, meta)).
+    def _fake_ranked(query, sources, limit, deadline_s=None, fresh=False, semantic=None, cache_only=False):
+        _srch_seen["path"] = "ranked"
+        _srch_seen["fresh"] = fresh
+        _srch_seen["cache_only"] = cache_only
+        _srch_seen["deadline_s"] = deadline_s
+        return [], {"searched": []}
+
+    def _fake_many(query, sources, limit, deadline_s=None, fresh=False):
+        _srch_seen["path"] = "buckets"
+        _srch_seen["deadline_s"] = deadline_s
+        return {}, {"searched": []}
+
+    def _fake_drill(source, query, limit, fresh=False, **kw):
+        _srch_seen["path"] = "drill"
+        _srch_seen["deadline_s"] = kw.get("deadline_s", "unset")
+        return [], None
+
+    fetcher.search_ranked = _fake_ranked
+    fetcher.search_many = _fake_many
+    fetcher.fetch_one_with_diag = _fake_drill
+    fetcher.is_enabled_by_profile = lambda s: True  # the drill checks the profile first
+
+    _srch_seen.clear()
+    _r_default = _srv2.penumbra_search.__wrapped__(query="q")
+    check("search route: default (raw=False) -> the ranked path (dedup+rank into one list)",
+          _srch_seen.get("path") == "ranked" and "documents" in _r_default)
+
+    _srch_seen.clear()
+    _r_buckets = _srv2.penumbra_search.__wrapped__(query="q", raw=True, sources=["a", "b"])
+    check("search route: raw=True + many sources -> the per-source buckets path",
+          _srch_seen.get("path") == "buckets" and "results" in _r_buckets)
+
+    _srch_seen.clear()
+    _r_drill = _srv2.penumbra_search.__wrapped__(query="q", raw=True, sources=["only"], full=True)
+    check("search route: raw=True + exactly one source -> the drill (old penumbra_fetch) path",
+          _srch_seen.get("path") == "drill" and _r_drill.get("source") == "only")
+
+    # staleness enum -> engine fresh / cache_only booleans (the MCP-surface translation).
+    _srch_seen.clear()
+    _srv2.penumbra_search.__wrapped__(query="q", staleness="fresh")
+    check("search staleness: 'fresh' -> fresh=True, cache_only=False",
+          _srch_seen.get("fresh") is True and _srch_seen.get("cache_only") is False)
+    _srch_seen.clear()
+    _srv2.penumbra_search.__wrapped__(query="q", staleness="cache_only")
+    check("search staleness: 'cache_only' -> fresh=False, cache_only=True",
+          _srch_seen.get("fresh") is False and _srch_seen.get("cache_only") is True)
+    _srch_seen.clear()
+    _r_unknown = _srv2.penumbra_search.__wrapped__(query="q", staleness="bogus")
+    check("search staleness: an unknown value falls back to cached_ok + adds a note",
+          _srch_seen.get("fresh") is False and _srch_seen.get("cache_only") is False
+          and "bogus" in (_r_unknown.get("note") or ""))
+finally:
+    fetcher.search_ranked = _srch_real["search_ranked"]
+    fetcher.search_many = _srch_real["search_many"]
+    fetcher.fetch_one_with_diag = _srch_real["fetch_one_with_diag"]
+    fetcher.is_enabled_by_profile = _srch_real["is_enabled_by_profile"]
+
+# --- penumbra_read: a document target routes to docreader; a plain URL routes to the URL reader ---
+_read_real = {"read_document": docreader.read_document, "fetch_url": fetcher.fetch_url}
+_read_seen: dict = {}
+try:
+    docreader.read_document = (lambda target, **kw: (_read_seen.__setitem__("path", "document")
+                                                     or {"source": "doc", "text": "stub"}))
+    fetcher.fetch_url = (lambda target: (_read_seen.__setitem__("path", "url") or None))
+
+    _read_seen.clear()
+    _rd_doc = _srv2.penumbra_read.__wrapped__(target="penumbra-inbox/deck.pptx")
+    check("read route: a .pptx target routes to the document reader",
+          _read_seen.get("path") == "document" and _rd_doc.get("source") == "doc")
+    _read_seen.clear()
+    _rd_pdf = _srv2.penumbra_read.__wrapped__(target="https://x.example.com/paper.pdf?dl=1")
+    check("read route: a .pdf URL (even with ?query) routes to the document reader",
+          _read_seen.get("path") == "document")
+    _read_seen.clear()
+    _rd_url = _srv2.penumbra_read.__wrapped__(target="https://example.com/some/article")
+    check("read route: a plain (non-document) URL routes to the URL reader",
+          _read_seen.get("path") == "url" and _rd_url.get("url") == "https://example.com/some/article")
+finally:
+    docreader.read_document = _read_real["read_document"]
+    fetcher.fetch_url = _read_real["fetch_url"]
+
+# --- penumbra_view: kind="auto" routes .pdf->document, a video URL->video, a plain image list->images ---
+from penumbra.core import vframes as _vframes  # noqa: E402
+_view_real = {"view_images": docreader.view_images, "view_image_urls": docreader.view_image_urls,
+              "video_frames": _vframes.video_frames}
+_view_seen: dict = {}
+try:
+    # Each fake returns a dict with NO images/sheet, so penumbra_view returns it verbatim (its post-call
+    # guard is `if error or not (images or sheet): return r`) -> the marker proves which branch fired.
+    docreader.view_images = (lambda target, **kw: (_view_seen.__setitem__("path", "document")
+                                                   or {"branch": "document"}))
+    docreader.view_image_urls = (lambda target, **kw: (_view_seen.__setitem__("path", "images")
+                                                       or {"branch": "images"}))
+    _vframes.video_frames = (lambda target, **kw: (_view_seen.__setitem__("path", "video")
+                                                   or {"branch": "video"}))
+
+    _view_seen.clear()
+    _v_doc = _srv2.penumbra_view.__wrapped__(target="penumbra-inbox/slides.pdf")
+    check("view route: a .pdf target routes to the document (figures) branch",
+          _view_seen.get("path") == "document" and _v_doc.get("branch") == "document")
+    _view_seen.clear()
+    _v_vid = _srv2.penumbra_view.__wrapped__(target="https://www.youtube.com/watch?v=abc123")
+    check("view route: a youtube URL routes to the video (frames) branch",
+          _view_seen.get("path") == "video" and _v_vid.get("branch") == "video")
+    _view_seen.clear()
+    _v_img = _srv2.penumbra_view.__wrapped__(target="https://cdn.example.com/a.jpg, https://cdn.example.com/b.png")
+    check("view route: a plain image-URL list routes to the images branch",
+          _view_seen.get("path") == "images" and _v_img.get("branch") == "images")
+finally:
+    docreader.view_images = _view_real["view_images"]
+    docreader.view_image_urls = _view_real["view_image_urls"]
+    _vframes.video_frames = _view_real["video_frames"]
 
 # ---------------------------------------------------------------------------
 # 46. Deploy seam: native deploy files must provision the SAME artifacts the
@@ -5476,6 +5738,216 @@ if _ep_path.exists() and _sh_path.exists():
     check("deploy seam: serve_http reads the token file the docker entrypoint writes",
           _tok_name in _sh_path.read_text(encoding="utf-8")
           and _tok_name in _ep_path.read_text(encoding="utf-8"))
+
+# ---------------------------------------------------------------------------
+# 46b. plist-drift tripwire: scripts/services.py is the SINGLE source of truth for every launchd
+#      service; its gen-plists regenerates every committed .plist from the registry and the committed
+#      files are what the mini installs (deploy.sh does NOT ship plists). Run that generation logic
+#      IN-PROCESS (import, not subprocess) and assert every .plist under scripts/ is byte-identical to
+#      the registry — so a hand-edited plist or a registry row that forgot to regenerate FAILS the
+#      gate. Also assert the four retired sentinel plists + their scripts are GONE and their labels are
+#      absent from the registry (the 2026-07-01 sweep: immigration / invest / research / residency).
+# ---------------------------------------------------------------------------
+_SCRIPTS_DIR = ROOT / "scripts"
+_SCRIPTS_DIR = _SCRIPTS_DIR if _SCRIPTS_DIR.exists() else (ROOT.parent.parent / "scripts")
+_SERVICES_PATH = _SCRIPTS_DIR / "services.py"
+if _SERVICES_PATH.exists():
+    import importlib.util as _il_svc  # noqa: E402
+    import io as _io_svc  # noqa: E402
+    import contextlib as _ctx_svc  # noqa: E402
+    _svc_spec = _il_svc.spec_from_file_location("penumbra_services_smoke", _SERVICES_PATH)
+    _svc = _il_svc.module_from_spec(_svc_spec)
+    _svc_spec.loader.exec_module(_svc)  # top-level code is guarded by __main__, so import is a no-op
+    # gen_plists(write=False) diffs every committed plist against build_plist(row) and returns 0 iff
+    # all are byte-clean (no orphan plist, no registry row missing its plist). Swallow its verbose
+    # per-file stdout so the smoke log stays readable; only the return code is the tripwire.
+    with _ctx_svc.redirect_stdout(_io_svc.StringIO()):
+        _plist_rc = _svc.gen_plists(write=False)
+    _committed_plists = sorted(_SCRIPTS_DIR.glob("com.penumbra.*.plist"))
+    check("plist-drift: every committed .plist is byte-identical to services.py's registry (gen-plists clean)",
+          _plist_rc == 0 and len(_committed_plists) > 0,
+          f"gen_plists rc={_plist_rc}, {len(_committed_plists)} plist(s)")
+    # The four retired sentinels: plists + scripts GONE from scripts/, labels GONE from the registry.
+    _SENTINEL_LABELS = ["com.penumbra.sentinel.immigration", "com.penumbra.sentinel.invest",
+                        "com.penumbra.sentinel.research", "com.penumbra.sentinel.residency"]
+    _SENTINEL_SCRIPTS = ["signpost_sentinel.py", "invest_sentinel.py",
+                        "research_sentinel.py", "residency_sentinel.py"]
+    _live_plists = {p.name for p in _committed_plists}
+    _stray_plists = [f"{lab}.plist" for lab in _SENTINEL_LABELS if f"{lab}.plist" in _live_plists]
+    check("plist-drift: the four retired sentinel plists are gone from scripts/",
+          not _stray_plists, f"still present: {_stray_plists}")
+    _stray_scripts = [s for s in _SENTINEL_SCRIPTS if (_SCRIPTS_DIR / s).exists()]
+    check("plist-drift: the four retired sentinel scripts are gone from scripts/",
+          not _stray_scripts, f"still present: {_stray_scripts}")
+    _reg_labels = {r["label"] for r in _svc.REGISTRY}
+    _stray_rows = [lab for lab in _SENTINEL_LABELS if lab in _reg_labels]
+    check("plist-drift: no retired sentinel labels remain in the services.py registry",
+          not _stray_rows, f"still in registry: {_stray_rows}")
+    # publish_prepare.sh + PRIVACY.md were removed in the same sweep — assert they did not come back.
+    check("plist-drift: retired publish_prepare.sh + PRIVACY.md stay gone",
+          not (_SCRIPTS_DIR / "publish_prepare.sh").exists() and not (ROOT / "PRIVACY.md").exists())
+
+# ---------------------------------------------------------------------------
+# 47. The unified graph P1 (docs/design/graph-unified-model.md v2.0): recall's RELATION index —
+#     ONE store surfaced through N indexes, storing FACTS (tier M) + labeled CANDIDATES (tier A),
+#     NEVER verdicts. Tier J is STRUCTURALLY excluded by a SQL CHECK. Everything runs against a FRESH
+#     temp-db (the sensor section's temp-path pattern, applied to store.DB_PATH), so no real state is
+#     touched and the cold-start counts are deterministic. Exercises: the CHECK as the organ boundary,
+#     the derived doc-doc same_as views (title_fp + doc->work id_eq, never stored), the find entry
+#     point + its cap, cold-start stats correctness, the policy method-sets on neighborhood, and a
+#     not_same ruling suppressing an exploratory candidate.
+# ---------------------------------------------------------------------------
+import sqlite3 as _sqlite47  # noqa: E402
+import tempfile as _tf47  # noqa: E402
+import threading as _thr47  # noqa: E402
+from penumbra.core.recall import graph as _graph  # noqa: E402
+
+# Point store.DB_PATH at a FRESH temp db (a new dir so it never collides with §34's index), re-enable
+# the layer, and DROP the main thread's cached read-connection so store._read_con() reconnects to THIS
+# db (the graph reads go through that cache, primed against §34's path earlier this run).
+_g_db_prev = _rstore.DB_PATH
+_g_disabled_prev = _rstore._disabled
+_g_local_prev = _rstore._local
+_g_rulings_prev = _graph.RULINGS_PATH
+_rstore.DB_PATH = Path(_tf47.mkdtemp()) / "smoke_graph.db"
+_rstore._disabled = False
+_rstore._local = _thr47.local()  # fresh per-thread conn cache -> _read_con() reconnects to THIS db
+try:
+    check("graph: index init creates the graph tables in the temp db", _rstore.init())
+    _gcon = _rstore.connect()
+    # (a) the graph tables exist after init (graph_nodes + graph_edges).
+    _gtabs = {r[0] for r in _gcon.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'graph_%'").fetchall()}
+    check("graph: graph_nodes + graph_edges tables exist after init",
+          {"graph_nodes", "graph_edges"} <= _gtabs)
+
+    # (b) THE ORGAN BOUNDARY as a CHECK constraint: tier 'J' (agent judgment) cannot physically enter
+    #     the store. An INSERT with tier='J' must RAISE (眼是感知不是认知). M/A are the only legal tiers.
+    _j_raised = False
+    try:
+        _gcon.execute("BEGIN")
+        _gcon.execute("INSERT INTO graph_edges(src, dst, type, tier, method, first_seen, last_seen) "
+                      "VALUES('a', 'b', 'same_as', 'J', 'ruling', 1.0, 1.0)")
+        _gcon.commit()
+    except _sqlite47.IntegrityError:
+        _j_raised = True
+        _gcon.rollback()
+    check("graph: INSERTing tier='J' into graph_edges RAISES (the razor as a SQL CHECK; J is excluded)",
+          _j_raised)
+    # A control: tier='M' inserts fine (the CHECK admits the mechanical tiers), then clean it back out.
+    _gcon.execute("BEGIN")
+    _gcon.execute("INSERT INTO graph_edges(src, dst, type, tier, method, first_seen, last_seen) "
+                  "VALUES('a', 'b', 'cites', 'M', 'api:openalex', 1.0, 1.0)")
+    _gcon.commit()
+    check("graph: tier='M' inserts fine (the CHECK admits mechanical tiers)",
+          _gcon.execute("SELECT count(*) FROM graph_edges WHERE tier='M'").fetchone()[0] == 1)
+    _gcon.execute("DELETE FROM graph_edges")
+    _gcon.commit()
+
+    # NOTE (symmetric-normalization, design section 4): the writer stores symmetric edges once with
+    # src < dst; the DDL does NOT enforce that in P1 because NO writers exist yet (P1 writes nothing
+    # new — doc-doc same_as is derived views). SKIP per spec: nothing to assert until a tap ships.
+
+    # (c) Seed the docs table via the store's upsert path (as §34 does): TWO docs with the SAME long
+    #     normalized title (>=20 alnum chars -> fp = "title:{norm}", the derived same_as substrate) from
+    #     DIFFERENT sources, plus ONE doc carrying a DOI in doc_json.metadata (the doc->work id_eq view).
+    _GTITLE = "Unified Graph Retrieval Memory For Deep Structured Search"  # long -> title-fp key
+    _gd_a = _doc("arxiv", _GTITLE, "http://arxiv.org/abs/2507.00001")
+    _gd_a.source_id = "graph_twin_a"
+    _gd_b = _doc("openalex", _GTITLE, "https://doi.org/10.9/graphtwin")
+    _gd_b.source_id = "graph_twin_b"
+    _gd_doi = _doc("s2", "Graph Doc Carrying A DOI External Identifier Long Title", "http://s2/g1")
+    _gd_doi.source_id = "graph_doi"
+    _gd_doi.metadata = {"doi": "10.1234/graphdoi"}
+    _gcon.execute("BEGIN")
+    for _gd in (_gd_a, _gd_b, _gd_doi):
+        _recall.writer._upsert(_gcon, rank, _gd, 1.0)
+    _gcon.commit()
+    # Both twins must share the SAME title: fp (the derived edge fires only off a matching fp).
+    _gfp_a = _gcon.execute("SELECT fp FROM docs WHERE source_id='graph_twin_a'").fetchone()[0]
+    _gfp_b = _gcon.execute("SELECT fp FROM docs WHERE source_id='graph_twin_b'").fetchone()[0]
+    check("graph: the two twin docs share one 'title:' fingerprint (the derived same_as substrate)",
+          _gfp_a == _gfp_b and _gfp_a.startswith("title:"))
+
+    _nid_a = _graph.doc_node_id("arxiv", "graph_twin_a")
+    _nid_b = _graph.doc_node_id("openalex", "graph_twin_b")
+
+    # (d) find(): the ENTRY POINT — turn a title token into candidate virtual doc nodes.
+    _gfind = _graph.find("Unified Graph Retrieval")
+    _gfind_ids = {n["id"] for n in _gfind["nodes"]}
+    check("graph: find('...title token...') returns the virtual doc nodes for both twins",
+          _nid_a in _gfind_ids and _nid_b in _gfind_ids)
+    check("graph: find results are virtual document nodes (kind='document', label=title)",
+          all(n["kind"] == "document" for n in _gfind["nodes"] if n["id"] in (_nid_a, _nid_b)))
+    # capped: a tiny limit must stamp capped=true and return exactly `limit` nodes (no silent caps).
+    _gfind_cap = _graph.find("Unified Graph Retrieval", limit=1)
+    check("graph: find caps to a tiny limit and stamps capped=true (no silent caps)",
+          _gfind_cap["capped"] is True and len(_gfind_cap["nodes"]) == 1)
+
+    # (e) stats(): the cold-start orientation call. docs count reflects the seeded rows; entity kinds
+    #     are EMPTY (P1 writes no entity nodes) — emptiness here is CORRECT, not broken (design §10).
+    _gstats = _graph.stats()
+    check("graph: stats() reports the docs count (virtual document nodes over the docs table)",
+          _gstats["node_kinds"].get("document") == 3)
+    _gentity_kinds = {"work", "person", "institution", "venue", "topic"}
+    check("graph: stats() shows ZERO entity kinds at cold start (P1 correctness, not breakage)",
+          not (_gentity_kinds & set(_gstats["node_kinds"].keys()))
+          and _gstats["edge_types"] == {} and _gstats["edge_tiers"] == {})
+
+    # (f) neighborhood() + the policy METHOD-SETS: exploratory admits align:title_fp, so it traverses
+    #     the DERIVED title_fp same_as edge to the twin; conservative (id_eq only) does NOT.
+    _gnb_expl = _graph.neighborhood(_nid_a, depth=1, policy="exploratory")
+    _gnb_expl_ids = {n["id"] for n in _gnb_expl["nodes"]}
+    _gnb_expl_titlefp = [e for e in _gnb_expl["edges"]
+                         if e["type"] == "same_as" and e.get("method") == "align:title_fp"]
+    check("graph: neighborhood(policy='exploratory') traverses the DERIVED title_fp same_as to the twin",
+          _nid_b in _gnb_expl_ids and any(
+              {e["src"], e["dst"]} == {_nid_a, _nid_b} for e in _gnb_expl_titlefp))
+    _gnb_cons = _graph.neighborhood(_nid_a, depth=1, policy="conservative")
+    check("graph: neighborhood(policy='conservative') does NOT reach the twin (title_fp excluded)",
+          _nid_b not in {n["id"] for n in _gnb_cons["nodes"]})
+    # The doc->work id_eq view: the DOI doc reaches its world entity under conservative (id_eq:doi).
+    _nid_doi = _graph.doc_node_id("s2", "graph_doi")
+    _gnb_doi = _graph.neighborhood(_nid_doi, depth=1, policy="conservative")
+    check("graph: neighborhood reaches the derived doc->work id_eq same_as (DOI, conservative policy)",
+          any(e["type"] == "same_as" and e.get("method") == "id_eq:doi"
+              and e["dst"] == "work:doi:10.1234/graphdoi" for e in _gnb_doi["edges"]))
+
+    # (g) a not_same RULING (the one J exception; persisted as config, applied by views) suppresses the
+    #     exploratory title_fp candidate for that pair. Load it via a monkeypatched RULINGS_PATH (temp
+    #     file), so no real ~/.penumbra state is touched. not_same_as (J) beats same_as (A).
+    _grulings = Path(_tf47.mkdtemp()) / "graph_rulings.json"
+    _lo, _hi = sorted((_nid_a, _nid_b))
+    _grulings.write_text(json.dumps(
+        [{"src": _lo, "dst": _hi, "verdict": "not_same", "note": "smoke", "ruled_at": 1.0}]),
+        encoding="utf-8")
+    _graph.RULINGS_PATH = _grulings
+    _gnb_ruled = _graph.neighborhood(_nid_a, depth=1, policy="exploratory")
+    check("graph: a not_same ruling suppresses the exploratory title_fp edge (J beats A; applied by views)",
+          _nid_b not in {n["id"] for n in _gnb_ruled["nodes"]}
+          and not any(e["type"] == "same_as" and {e["src"], e["dst"]} == {_nid_a, _nid_b}
+                      for e in _gnb_ruled["edges"]))
+    # working policy sees the ruling too (rulings load under working+exploratory); its stats count it.
+    _graph.RULINGS_PATH = _grulings
+    check("graph: stats() counts the loaded ruling (rulings persist as config the eye applies)",
+          _graph.stats()["rulings"] == 1)
+finally:
+    _graph.RULINGS_PATH = _g_rulings_prev
+    _rstore.DB_PATH = _g_db_prev
+    _rstore._disabled = _g_disabled_prev
+    _rstore._local = _g_local_prev
+
+# (h) penumbra_graph is registered as a tool AND present in the gather whitelist (the 12th read-only tool);
+#     the whitelist exactness was already asserted above — here confirm membership + registration.
+from penumbra.server import penumbra_graph as _eye_graph47  # noqa: E402
+check("graph: penumbra_graph is registered as a tool", callable(_eye_graph47))
+check("graph: penumbra_graph is present in _GATHER_TOOLS (the 12th read-only tool)",
+      "penumbra_graph" in _GATHER_TOOLS and len(_GATHER_TOOLS) == 12)
+# (i) guidance layer (built != discoverable): the server instructions must point the agent at the
+#     schema's real home — a source-inspect string check that 'recall.graph' is named in the brief.
+import penumbra.server as _srv47  # noqa: E402
+check("graph: server instructions mention recall.graph (the guidance-layer pointer to the schema)",
+      "recall.graph" in _srv47._PENUMBRA_INSTRUCTIONS)
 
 
 print()

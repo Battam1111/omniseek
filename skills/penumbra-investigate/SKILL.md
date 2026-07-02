@@ -44,7 +44,7 @@ Key judgment: identify consensus core (high in_degree), frontier (recent, citing
 ### Product / tool / company assessment
 WAVE 1: `penumbra_search_ranked(query="<product> review")` + `penumbra_search_ranked(query="<product> alternative")`.
 WAVE 2: walled community sources + `penumbra_add_url` for official + critical pages.
-Key judgment: independence_score, conflicts, source_diversity (vendor-only = one-sided).
+Key judgment: corroboration + also_in, conflicts, source_diversity (vendor-only = one-sided).
 
 ## 3. Saturation chase (walled-source depth pursuit)
 
@@ -65,7 +65,7 @@ If a xiaohongshu note URL appears, `penumbra_add_url(url)` retrieves full note +
 
 ## 5. Triangulation and disconfirmation
 
-- **Count INDEPENDENT corroboration**: independence_score counts source names, not backends.
+- **Count INDEPENDENT corroboration**: corroboration counts source NAMES, not backends.
   Cross-reference also_in to dedup mirrors.
 - **Flag conflicts, don't average**: when _meta.conflicts appears, present the divergence,
   don't pick a winner.

@@ -37,6 +37,7 @@ from typing import Optional
 from markdownify import markdownify as html_to_md
 
 from penumbra.core import auth, diag, http
+from penumbra.core._guard import BackendGuard
 from penumbra.core.normalize import Document, jsonsafe, mk_signal
 
 logger = logging.getLogger(__name__)
@@ -76,8 +77,10 @@ _SE_COOLDOWN = 300.0   # seconds to skip the shared API once tripped (de-storms;
 # the CONCURRENT request storm that spends it. This semaphore (held only around the egress in _se_get)
 # caps in-flight SE requests so a broad-fan-out burst paces through instead of cascading into 429s,
 # mirroring _s2 / _openalex / _github / reddit. 4 = low end of the proven-safe band (the quota is tight).
+# Only the in-flight cap is shared machinery (via BackendGuard.sema); SE's quota/backoff breaker above
+# is a genuinely different shape (streak + cooldown, not fails + open_until) and stays module-local.
 _SE_MAX_INFLIGHT = 4
-_se_sema = threading.BoundedSemaphore(_SE_MAX_INFLIGHT)
+_se_sema = BackendGuard("stackexchange", _SE_MAX_INFLIGHT).sema
 
 
 def _se_cooling() -> bool:

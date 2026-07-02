@@ -5,7 +5,7 @@ WHY (STRUCTURE + UNWALL + MONITOR): sousuo.www.gov.cn's 政策库 is the AUTHORI
 vehicle (国发/国办发/国令) / theme. Google indexes individual gov.cn pages but cannot return a
 faceted, structured policy index keyed to 文号 + issuing-org + publish-date. No login, no token
 (verified 2026-06-18: q=数据安全 → 《网络数据安全管理条例》国令第790号 国务院 + the gov.cn 原文 url).
-Each hit's url is the full policy text on gov.cn → penumbra_add_url it for the body. Strongest telos
+Each hit's url is the full policy text on gov.cn → penumbra_read it for the body. Strongest telos
 fit for Chinese-policy 信息差 / policy-trend (RECALL) work.
 
 SHAPE: a JSON GET endpoint (BaseScrapeAdapter, bespoke curl_cffi). search(query) → the 国务院
@@ -83,7 +83,7 @@ class GovPolicyAdapter(BaseScrapeAdapter):
     name = "gov_policy"
     description = (
         "中国政府网 政策文件库 (gov.cn) — the AUTHORITATIVE 国务院/国办 policy-document corpus (法规/条例/"
-        "通知/国令), keyword search with each hit linking the FULL policy text on gov.cn (penumbra_add_url it). "
+        "通知/国令), keyword search with each hit linking the FULL policy text on gov.cn (penumbra_read it). "
         "Google can't return this faceted policy index keyed to 文号 + issuing-org + date. No login. Reach "
         "for Chinese central-government policy / 政策 on a topic (incl. policy-trend / longitudinal work)."
     )

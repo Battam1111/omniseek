@@ -45,6 +45,7 @@ import time
 from typing import Iterable, Optional
 
 from penumbra.core import diag
+from penumbra.core._guard import BackendGuard
 
 logger = logging.getLogger(__name__)
 
@@ -56,8 +57,6 @@ TIMEOUT = 15  # per-call ceiling. S2 single-call responses are normally <5s; a c
 
 _BREAK_AFTER = 5      # consecutive failures that open the circuit
 _BREAK_FOR_S = 120.0  # seconds the circuit stays open
-_state = {"fails": 0, "open_until": 0.0, "last_429": 0.0}
-_lock = threading.Lock()
 
 # Global politeness cap: at most _MAX_CONCURRENCY in-flight S2 calls across ALL callers
 # (cartographer's per-seed reference/citation fan-out + relations' parallel per-author
@@ -67,7 +66,6 @@ _lock = threading.Lock()
 # degrade every S2-backed capability at once. Lower than _openalex's 8 because S2 throttles
 # far harder than OpenAlex's polite pool.
 _MAX_CONCURRENCY = 4
-_sema = threading.BoundedSemaphore(_MAX_CONCURRENCY)
 
 # Rate cap: space S2 request STARTS at least _MIN_INTERVAL_S apart so a fan-out across the S2-backed
 # capabilities (the field_skeleton/recommend cartographer burst + the relations per-author fetch + the
@@ -83,8 +81,18 @@ _MIN_INTERVAL_S = 1.0
 # cap the queue is pathological (S2 storming) → fail fast (raise S2Down → the wrapper degrades to
 # []/None) instead of hanging, AND do not reserve a slot so the backlog drains rather than growing.
 _PACE_MAX_WAIT_S = 15.0
-_pace_state = {"next_at": 0.0}
-_pace_lock = threading.Lock()
+
+# The shared load-guard (concurrency cap + rate pacer + circuit breaker): the byte-identical machinery
+# _openalex / _s2 / _github each carried, extracted to _guard (2026-07-01 parsimony audit P1). The
+# breaker state dict + its lock, the semaphore and the pace lock/state now live on the guard; the
+# module reaches them by name below so every threshold, sleep, log message and error path is unchanged.
+_guard = BackendGuard("s2", _MAX_CONCURRENCY, break_after=_BREAK_AFTER,
+                      break_for_s=_BREAK_FOR_S, min_interval_s=_MIN_INTERVAL_S, log=logger)
+_state = _guard.state   # health / recently_throttled read fails / open_until / last_429
+_lock = _guard.lock
+_sema = _guard.sema
+_pace_state = _guard.pace_state   # the slot reservation _pace() reads/reserves (aliases the guard)
+_pace_lock = _guard.pace_lock
 
 
 def _pace() -> None:
@@ -93,16 +101,11 @@ def _pace() -> None:
     itself, only on the wire-rate. Bounds S2 requests/second across all callers + threads. Raises
     ``S2Down`` (without reserving) when the backlog would make this caller wait > _PACE_MAX_WAIT_S, so
     a 429-storm sheds load + fails fast instead of stacking an unbounded multi-minute gate wait."""
-    with _pace_lock:
-        now = time.monotonic()
-        start = max(now, _pace_state["next_at"])
-        wait = start - now
-        if wait > _PACE_MAX_WAIT_S:
-            # Do NOT reserve (leave next_at) so the backlog drains; signal the caller to degrade.
-            raise S2Down(f"rate-gate backlog {wait:.0f}s > {_PACE_MAX_WAIT_S:.0f}s; S2 storming, degrade")
-        _pace_state["next_at"] = start + _MIN_INTERVAL_S
-    if wait > 0:
-        time.sleep(wait)
+    # on_backlog runs under the guard's pace lock with this caller's would-be wait: over the cap it
+    # raises S2Down WITHOUT reserving a slot (the backlog drains), exactly as the inline check did.
+    _guard.pace(on_backlog=lambda wait: (
+        S2Down(f"rate-gate backlog {wait:.0f}s > {_PACE_MAX_WAIT_S:.0f}s; S2 storming, degrade")
+        if wait > _PACE_MAX_WAIT_S else None))
 
 
 # Eye-owned bounded retry on a 429, REPLACING the lib's (now-disabled) 10x/250s tenacity backoff.
@@ -201,8 +204,7 @@ def _check_open() -> None:
 
 
 def _record_ok() -> None:
-    with _lock:
-        _state["fails"] = 0
+    _guard.record_ok()
 
 
 def _is_rate_limit(exc: Exception) -> bool:
@@ -217,14 +219,10 @@ def _is_rate_limit(exc: Exception) -> bool:
 
 
 def _record_fail(exc: Optional[Exception] = None) -> None:
-    with _lock:
-        if exc is not None and _is_rate_limit(exc):  # stamp it so health() can surface it honestly
+    if exc is not None and _is_rate_limit(exc):  # stamp it so health() can surface it honestly
+        with _lock:
             _state["last_429"] = time.time()
-        _state["fails"] += 1
-        if _state["fails"] >= _BREAK_AFTER:
-            _state["open_until"] = time.time() + _BREAK_FOR_S
-            _state["fails"] = 0
-            logger.warning("s2 circuit OPEN for %.0fs (consecutive failures)", _BREAK_FOR_S)
+    _guard.record_fail()  # bump the streak; opens the circuit at _BREAK_AFTER consecutive (logs on open)
 
 
 def _retry_rl(do):

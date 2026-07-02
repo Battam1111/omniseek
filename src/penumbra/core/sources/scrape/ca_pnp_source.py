@@ -9,7 +9,7 @@ monitor or query by stream/score.
 Why: the PNPs (esp. their graduate/PhD + tech streams) are a primary Canada PR route alongside
 federal Express Entry, and the score-cutoff history is decision-critical. NOT the federal system —
 keep these SEPARATE from ``ircc_ee_rounds`` (federal CRS): Ontario uses its own OINP score, BC uses
-SIRS (0-200), Alberta its own. explicit_only: named via penumbra_fetch after routing to the immigration
+SIRS (0-200), Alberta its own. explicit_only: named via penumbra_search 单源钻取 after routing to the immigration
 domain (slower HTML scrapes, not the broad sweep).
 
 Structures verified live 2026-06-22:
@@ -100,9 +100,9 @@ class OinpInvitationsAdapter(_CaPnpBase):
         "安省提名 OINP 抽签历史 — Ontario Immigrant Nominee Program 各 stream (雇主担保/硕士毕业生/"
         "博士毕业生/企业家等) 的逐次抽签: 日期 + 邀请数 + 分数线 (Score range) + EOI 窗口 + 备注. "
         "省提名, 用 OINP 自有分数, 别与联邦 EE (ircc_ee_rounds, CRS) 混. 博士/硕士 stream 2026-05-30 "
-        "改版后已停, 旧行为历史参考; 页面继续发新 stream 抽签, 故仍是活的 monitor. 命名 penumbra_fetch."
+        "改版后已停, 旧行为历史参考; 页面继续发新 stream 抽签, 故仍是活的 monitor. 命名钻取 (penumbra_search 单源 raw)."
     )
-    explicit_only = "OINP 安省提名抽签历史 (HTML 抓取, 命名 penumbra_fetch); 省提名非联邦 EE"
+    explicit_only = "OINP 安省提名抽签历史 (HTML 抓取, 命名钻取 (penumbra_search 单源 raw)); 省提名非联邦 EE"
     search_url = "https://www.ontario.ca/page/ontario-immigrant-nominee-program-oinp-invitations-apply"
     url_host = "ontario.ca"
 
@@ -139,9 +139,9 @@ class BcpnpInvitationsAdapter(_CaPnpBase):
     description = (
         "BC 省提名 BCPNP 抽签 — Skills Immigration (技术移民, 按 ITA type + 分数线 SIRS + 邀请数) 与 "
         "Entrepreneur Immigration 的逐次抽签, 外加 registration pool 的 SIRS 分数分布快照. BC 用 SIRS "
-        "(0-200 注册分), 不是联邦 CRS, 别混. 分数/人数可能是 'N/A' 或 '<5' 字符串. 命名 penumbra_fetch."
+        "(0-200 注册分), 不是联邦 CRS, 别混. 分数/人数可能是 'N/A' 或 '<5' 字符串. 命名钻取 (penumbra_search 单源 raw)."
     )
-    explicit_only = "BCPNP BC 省提名抽签 + SIRS 分布 (HTML 抓取, 命名 penumbra_fetch); SIRS 非联邦 CRS"
+    explicit_only = "BCPNP BC 省提名抽签 + SIRS 分布 (HTML 抓取, 命名钻取 (penumbra_search 单源 raw)); SIRS 非联邦 CRS"
     search_url = "https://www.welcomebc.ca/immigrate-to-b-c/about-the-bc-provincial-nominee-program/invitations-to-apply"
     url_host = "welcomebc.ca"
 
@@ -202,9 +202,9 @@ class AaipDrawsAdapter(_CaPnpBase):
         "阿尔伯塔省提名 AAIP 抽签历史 — Alberta Advantage Immigration Program 的 'Draw information' 表: "
         "逐次抽签日期 + Worker stream/pathway (Alberta Opportunity / Rural Renewal / Tourism / "
         "Dedicated Health Care / Alberta Express Entry 各 priority sector 等) + 最低分 + 邀请数. "
-        "省提名自有分, 非联邦 CRS. 命名 penumbra_fetch."
+        "省提名自有分, 非联邦 CRS. 命名钻取 (penumbra_search 单源 raw)."
     )
-    explicit_only = "AAIP 阿省提名抽签历史 (HTML 抓取, 命名 penumbra_fetch); 省提名非联邦 EE"
+    explicit_only = "AAIP 阿省提名抽签历史 (HTML 抓取, 命名钻取 (penumbra_search 单源 raw)); 省提名非联邦 EE"
     search_url = "https://www.alberta.ca/aaip-processing-information"
     url_host = "alberta.ca"
 
