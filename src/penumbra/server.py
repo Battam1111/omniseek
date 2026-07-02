@@ -137,7 +137,7 @@ _PENUMBRA_INSTRUCTIONS = (
     "excluded_relevant: walled/slow sources thematically matching the query but excluded from the "
     "broad sweep; each has overlap (query-token match count) + sources=[...] re-run hint. "
     "empty / timed_out / errored: per-source outcome reasons. "
-    "progressive: fast_sources (<3s), slow_sources (>=3s), pending_sources (timed out). "
+    "progressive: fast_sources (<3s), slow_sources (>=3s), timed_out lists what never returned. "
     "Outcome vocabulary is ONE enum everywhere: ok | partial | degraded | empty | timed_out "
     "| errored | excluded | warming."
     "\n\n"
@@ -233,6 +233,7 @@ _PENUMBRA_VERBS = {
     "penumbra_institution_cohort": "who is at a lab / dept in a field",
     "penumbra_transcribe": "local ASR for the SPOKEN content of podcasts / bilibili / audio URLs you cannot hear",
     "penumbra_gather": "run N independent eye tools IN PARALLEL, one round-trip (sweep+zoom investigation pattern)",
+    "penumbra_graph": "the memory of relations: find -> stats -> neighborhood; policies conservative|working|exploratory",
 }
 
 

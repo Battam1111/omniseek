@@ -714,18 +714,17 @@ def search_many(
         executor.shutdown(wait=False)  # stragglers finish detached + warm the cache
 
     # Progressive-return facets (#6, fail-open): partition the sources that responded within the
-    # deadline into fast (< 3s) vs slow (>= 3s) by their stamped completion time, and re-expose
-    # the already-computed timeouts under a 'pending_sources' name (they keep running detached).
+    # deadline into fast (< 3s) vs slow (>= 3s) by their stamped completion time. Timed-out
+    # sources keep running detached and land in _meta["timed_out"] (the 2026-07-01 fixpoint
+    # rescan deleted a byte-identical alias key that used to mirror that list).
     # Advisory metadata only — NO control-flow / ranking impact (the razor).
     fast_sources: list[str] = []
     slow_sources: list[str] = []
-    pending_sources: list[str] = []
     try:
         fast_sources = sorted(s for s, t in _result_times.items() if t - t0 < 3.0)
         slow_sources = sorted(s for s, t in _result_times.items() if t - t0 >= 3.0)
-        pending_sources = sorted(timed_out)  # same data as timed_out, progressive-return semantics
     except Exception:  # noqa: BLE001 — a timing-facet failure must never corrupt the search return
-        fast_sources, slow_sources, pending_sources = [], [], []
+        fast_sources, slow_sources = [], []
 
     meta = {
         "searched": len(target_sources),
@@ -739,7 +738,6 @@ def search_many(
         "truncated": sorted(truncated),
         "fast_sources": fast_sources,
         "slow_sources": slow_sources,
-        "pending_sources": pending_sources,
     }
     if diagnostics:  # named search only, and only when a named source was empty / errored / slow
         meta["diagnostics"] = diagnostics

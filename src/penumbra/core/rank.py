@@ -142,13 +142,11 @@ def dedup(docs: list[Document]) -> list[Document]:
         # singletons included, so the yield tap can TRUST field presence rather than infer absence).
         # live_sources: group members that were LIVE this run (a recall-index rehydration carries
         #   metadata.from_index=True and is NOT live: the live feed went quiet, recall carries it).
-        # index_only: the WHOLE group came from recall (no live member this run).
         # merge_basis: did this group collapse on a STRONG id (doi/arxiv/url) or only a shared long
         #   TITLE? A title-only merge across sources is WEAK corroboration (two distinct same-titled
         #   jobs merge; see fingerprint caveat) and must NOT strip a sole-contributor credit.
         live_srcs = sorted({d.source for d in grp if not (d.metadata or {}).get("from_index")})
         add["live_sources"] = live_srcs
-        add["index_only"] = (len(live_srcs) == 0)
         add["merge_basis"] = "title" if fp.startswith("title:") else "id"
         # Preserve the recall RRF prior + via across the collapsed group: _pick_best may keep a
         # member WITHOUT the stamp (a richer LIVE doc collapsing a vector-found index doc), and that

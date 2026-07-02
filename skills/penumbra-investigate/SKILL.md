@@ -10,7 +10,7 @@ not here. This skill teaches HOW to use those facts well.
 Every deep investigation follows the same beat:
 
 **WAVE 1 (sweep)**: fire several independent tools in parallel via `penumbra_gather`.
-A broad `penumbra_search_ranked` plus any tools whose results you need to make your
+A broad `penumbra_search` plus any tools whose results you need to make your
 first judgment call (e.g. `penumbra_resolve_identity` for a person question,
 `penumbra_field_skeleton` for a field question). One round-trip, all results at once.
 
@@ -27,23 +27,23 @@ identities to map, which papers to enrich, which talks to transcribe.
 These are STARTING POINTS. Adapt, skip, extend based on what you find.
 
 ### Person due-diligence
-WAVE 1: `penumbra_search_ranked` + `penumbra_resolve_identity`.
+WAVE 1: `penumbra_search` + `penumbra_resolve_identity`.
 WAVE 2: `penumbra_coauthors` + `penumbra_paper_enrich` + walled chase + `penumbra_transcribe`.
 Key judgment: coauthor network reveals structural position; walled sources reveal candid views.
 
 ### Lab / research group evaluation
-WAVE 1: `penumbra_search_ranked` + `penumbra_institution_cohort`.
+WAVE 1: `penumbra_search` + `penumbra_institution_cohort`.
 WAVE 2: `penumbra_field_skeleton` + `penumbra_coauthors(top PI)` + `penumbra_paper_enrich` + walled chase.
 Key judgment: cohort shows who publishes there; citation neighborhood shows where they sit.
 
 ### Field / topic mapping
-WAVE 1: `penumbra_search_ranked` + `penumbra_field_skeleton`.
+WAVE 1: `penumbra_search` + `penumbra_field_skeleton`.
 WAVE 2: `penumbra_paper_recommend` + `penumbra_paper_enrich` + `penumbra_transcribe`.
 Key judgment: identify consensus core (high in_degree), frontier (recent, citing core), controversy.
 
 ### Product / tool / company assessment
-WAVE 1: `penumbra_search_ranked(query="<product> review")` + `penumbra_search_ranked(query="<product> alternative")`.
-WAVE 2: walled community sources + `penumbra_add_url` for official + critical pages.
+WAVE 1: `penumbra_search(query="<product> review")` + `penumbra_search(query="<product> alternative")`.
+WAVE 2: walled community sources + `penumbra_read` for official + critical pages.
 Key judgment: corroboration + also_in, conflicts, source_diversity (vendor-only = one-sided).
 
 ## 3. Saturation chase (walled-source depth pursuit)
@@ -53,14 +53,14 @@ match count) and a sources=[...] re-run hint. Chase when: domain matches + overl
 budget allows. Top 2-3, not all.
 
 Fire-then-collect (per server instructions section 7) for parallel walled retrieval.
-If a xiaohongshu note URL appears, `penumbra_add_url(url)` retrieves full note + comment thread.
+If a xiaohongshu note URL appears, `penumbra_read(url)` retrieves full note + comment thread.
 
 ## 4. Budget discipline
 
 - Surface (fast): 1 gather with 2-3 tools
 - Standard: 2 gathers (sweep + zoom)
 - Deep: 2-3 gathers + transcription
-- Max 3 `penumbra_search_ranked` per gather (each fans out to many sources)
+- Max 3 `penumbra_search` per gather (each fans out to many sources)
 - Failed/empty/timed-out calls still count; do NOT infinite-retry
 
 ## 5. Triangulation and disconfirmation
