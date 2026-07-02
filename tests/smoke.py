@@ -6833,6 +6833,417 @@ check("p3 docs-drift (presence): penumbra_ruling is named in _PENUMBRA_INSTRUCTI
       "penumbra_ruling" in _srv._PENUMBRA_INSTRUCTIONS)
 
 
+# ---------------------------------------------------------------------------
+# 51. P4 — the EVENT layer (design "P4 shipped 2026-07-03"): the sensor observed tap + the conflicts
+#     tap + the since view. observed edges (sensor -> doc, M, sensor:diff) mint from the RUN DIFF
+#     only (the baseline is state, mints nothing; a no-news run mints nothing); conflicts edges
+#     (doc <-> doc, A, signal:divergence) mint where dedup already found same-work signal divergence,
+#     carrying the signal's KIND so consumers filter the engagement-count noise class; since projects
+#     the accretion log (stored edges only, first_seen >= T, tier + method visible, NO collapsing).
+#     The builder + tripwire checks are PURE; the run_sensor integration monkeypatches search_ranked
+#     + captures enqueue_graph; the since checks use a FRESH temp-db (the §47/§49 pattern, restore in
+#     finally). The agent-visible signal_conflicts stamp must stay BYTE-IDENTICAL (the STABILITY
+#     contract): the tap rides a PRIVATE _conflict_pairs key the fetcher pops.
+# ---------------------------------------------------------------------------
+import penumbra.core.sensor as _sen51  # noqa: E402 — importing the tap registers its mints
+from penumbra.core.sensor import Sensor as _Sensor51  # noqa: E402
+
+# (1) OBSERVED BUILDER golden fixture (PURE, no network): a fake sensor + 3 new (source, source_id)
+#     pairs -> ONE sensor node + 3 observed edges (M, sensor:diff, attrs run_at). An EMPTY diff mints
+#     NOTHING (not even the sensor node — a no-news run is not an accretion event).
+_s51_sensor = _Sensor51(id="s51abc", query="grpo reinforcement learning")
+_s51_pairs = [("arxiv", "2501.111"), ("openreview", "note42"), ("zhihu", "q99")]
+_s51_run_at = "2026-07-03T12:00:00+00:00"
+_s51_n, _s51_e = _sen51._observed_mints(_s51_sensor, _s51_pairs, _s51_run_at)
+check("p4 observed builder: ONE sensor node (sensor:{id}, label=query) for a non-empty diff",
+      _s51_n == [{"id": "sensor:s51abc", "kind": "sensor",
+                  "label": "grpo reinforcement learning", "attrs": None}])
+_s51_e_set = {(e["src"], e["dst"], e["type"], e["tier"], e["method"],
+               tuple(sorted((e.get("attrs") or {}).items()))) for e in _s51_e}
+check("p4 observed builder: one observed M-edge sensor -> doc per new pair, method sensor:diff, attrs run_at",
+      _s51_e_set == {
+          ("sensor:s51abc", "doc:arxiv:2501.111", "observed", "M", "sensor:diff",
+           (("run_at", _s51_run_at),)),
+          ("sensor:s51abc", "doc:openreview:note42", "observed", "M", "sensor:diff",
+           (("run_at", _s51_run_at),)),
+          ("sensor:s51abc", "doc:zhihu:q99", "observed", "M", "sensor:diff",
+           (("run_at", _s51_run_at),)),
+      })
+check("p4 observed builder: an EMPTY diff mints NOTHING (no sensor node, no edges: no-news is not accretion)",
+      _sen51._observed_mints(_s51_sensor, [], _s51_run_at) == ([], []))
+
+# (2) run_sensor INTEGRATION: a monkeypatched search_ranked returning 2 NEW docs -> the tap enqueues
+#     the observed batch (captured by monkeypatching writer.enqueue_graph). Then a tap failure
+#     (enqueue raising) NEVER breaks the run summary (fail-open). Uses a temp SensorStore path so no
+#     real ~/.penumbra/state is touched; WRITES_ENABLED forced True so the tap actually fires.
+_s51_fetch_prev = _fetcher51 = None
+import penumbra.core.fetcher as _fetcher51  # noqa: E402
+_s51_search_prev = _fetcher51.search_ranked
+_s51_enq_prev = _recall.writer.enqueue_graph
+_s51_writes_prev = _recall.writer.WRITES_ENABLED
+_s51_store_default_prev = _sen51._DEFAULT_STATE_PATH
+_s51_captured: list = []
+try:
+    _recall.writer.WRITES_ENABLED = True
+    _s51_store = _sen51.SensorStore(Path(_tf47.mkdtemp()) / "s51_sensors.json")
+    _s51_run_sensor_obj = _Sensor51(id="s51run", query="run integration query")
+    _s51_store.update(_s51_run_sensor_obj)
+
+    # search_ranked returns 2 docs THIS RUN; the baseline is empty, so BOTH are new.
+    _s51_d1 = _doc("arxiv", "Observed Integration Doc One Long Title", "http://a/o1")
+    _s51_d1.source_id = "o1"
+    _s51_d2 = _doc("openreview", "Observed Integration Doc Two Long Title", "http://a/o2")
+    _s51_d2.source_id = "o2"
+    _fetcher51.search_ranked = lambda q, sources=None, limit=15: ([_s51_d1, _s51_d2], {})
+    _recall.writer.enqueue_graph = lambda nodes, edges: _s51_captured.append((nodes, edges))
+
+    _s51_summary = _sen51.run_sensor(_s51_store.get("s51run"), _s51_store)
+    check("p4 run_sensor integration: 2 new docs -> the summary reports new_count == 2",
+          _s51_summary.get("new_count") == 2)
+    # the tap enqueued ONE graph batch: 1 sensor node + 2 observed edges to the two new docs.
+    _s51_cap_nodes = [n for (ns, _es) in _s51_captured for n in ns]
+    _s51_cap_edges = [e for (_ns, es) in _s51_captured for e in es]
+    _s51_cap_dsts = {e["dst"] for e in _s51_cap_edges if e.get("type") == "observed"}
+    check("p4 run_sensor integration: the tap enqueued the observed batch (sensor node + 2 observed edges)",
+          any(n["id"] == "sensor:s51run" and n["kind"] == "sensor" for n in _s51_cap_nodes)
+          and _s51_cap_dsts == {"doc:arxiv:o1", "doc:openreview:o2"}
+          and all(e["tier"] == "M" and e["method"] == "sensor:diff"
+                  for e in _s51_cap_edges if e.get("type") == "observed"))
+
+    # tap failure never breaks the run: a SECOND run with enqueue_graph RAISING still returns a
+    # normal summary (the diff is empty this run since the baseline now holds both -> but force a
+    # fresh sensor so there IS a diff, and make enqueue raise).
+    _s51_boom = _Sensor51(id="s51boom", query="boom query")
+    _s51_store.update(_s51_boom)
+    _s51_d3 = _doc("zhihu", "Observed Boom Doc Long Title Here", "http://a/b1"); _s51_d3.source_id = "b1"
+    _fetcher51.search_ranked = lambda q, sources=None, limit=15: ([_s51_d3], {})
+    def _s51_raise(nodes, edges):
+        raise RuntimeError("enqueue boom")
+    _recall.writer.enqueue_graph = _s51_raise
+    _s51_boom_summary = _sen51.run_sensor(_s51_store.get("s51boom"), _s51_store)
+    check("p4 run_sensor integration: a tap failure (enqueue raising) NEVER breaks the run summary (fail-open)",
+          _s51_boom_summary.get("new_count") == 1 and _s51_boom_summary.get("sensor_id") == "s51boom")
+finally:
+    _fetcher51.search_ranked = _s51_search_prev
+    _recall.writer.enqueue_graph = _s51_enq_prev
+    _recall.writer.WRITES_ENABLED = _s51_writes_prev
+    _sen51._DEFAULT_STATE_PATH = _s51_store_default_prev
+
+# (3) CONFLICTS BUILDER golden fixture (PURE): a record pair with an ENGAGEMENT signal -> ONE A-tier
+#     conflicts edge doc <-> doc (method signal:divergence, attrs {signal, kind, values}), NO nodes.
+_s51_conf_rec = [{"a": ("reddit", "rr1"), "b": ("hackernews", "hh1"), "signal": "score",
+                  "kind": "engagement", "values": {"reddit": 120, "hackernews": 900}}]
+_s51_cn, _s51_ce = rank._conflict_mints(_s51_conf_rec)
+check("p4 conflicts builder: a divergence record -> ONE A-tier conflicts edge, attrs {signal, kind, values}, NO nodes",
+      _s51_cn == [] and len(_s51_ce) == 1
+      and _s51_ce[0]["type"] == "conflicts" and _s51_ce[0]["tier"] == "A"
+      and _s51_ce[0]["method"] == "signal:divergence"
+      and {_s51_ce[0]["src"], _s51_ce[0]["dst"]} == {"doc:reddit:rr1", "doc:hackernews:hh1"}
+      and _s51_ce[0]["attrs"] == {"signal": "score", "kind": "engagement",
+                                  "values": {"reddit": 120, "hackernews": 900}})
+# the STABILITY contract: dedup's agent-visible signal_conflicts stamp is BYTE-IDENTICAL to pre-P4.
+# Reuse the §42 fixture shape: two same-title docs, different sources, one signal diverging >50%.
+from penumbra.core.normalize import Signal as _Sig51  # noqa: E402
+_s51_ct = "Conflict Stability Shared Long Normalized Title For P Four Contract"
+_s51_ca = _PDoc(source="s1", source_id="c1", url="http://a", title=_s51_ct, content="x",
+                signals={"revenue": _Sig51(value=5000000.0, kind="other", computed_by="source:s1",
+                                           unit="USD")})
+_s51_cb = _PDoc(source="s2", source_id="c2", url="http://b", title=_s51_ct, content="y",
+                signals={"revenue": _Sig51(value=8000000.0, kind="other", computed_by="source:s2",
+                                           unit="USD")})
+_s51_dd = _dedup42([_s51_ca, _s51_cb])
+_s51_sc = (_s51_dd[0].metadata or {}).get("signal_conflicts", []) if len(_s51_dd) == 1 else []
+check("p4 conflicts STABILITY: the agent-visible signal_conflicts stamp is byte-identical to pre-P4 (topic/source/claim only)",
+      _s51_sc == [{"topic": "revenue", "source_a": "s1", "claim_a": "revenue=5000000.0 (USD)",
+                   "source_b": "s2", "claim_b": "revenue=8000000.0 (USD)"}])
+# and the PRIVATE _conflict_pairs key carries the tap record beside it (the fetcher pops it; dedup
+# alone leaves it, which is the internal contract the tap reads).
+_s51_cp = (_s51_dd[0].metadata or {}).get("_conflict_pairs", [])
+check("p4 conflicts: the private _conflict_pairs record carries full identities + kind + values (fetcher pops it)",
+      len(_s51_cp) == 1 and _s51_cp[0]["a"] == ("s1", "c1") and _s51_cp[0]["b"] == ("s2", "c2")
+      and _s51_cp[0]["signal"] == "revenue" and _s51_cp[0]["kind"] == "other"
+      and _s51_cp[0]["values"] == {"s1": 5000000.0, "s2": 8000000.0})
+
+# (4) CONFLICTS SYMMETRIC: the writer normalizes the pair src < dst (reuse the §49 idiom) so a
+#     re-detected pair (either order) upserts the SAME row. Drive the writer's _upsert_edge directly.
+_s51_sym_db_prev = _rstore.DB_PATH
+_s51_sym_disabled_prev = _rstore._disabled
+_s51_sym_local_prev = _rstore._local
+_rstore.DB_PATH = Path(_tf47.mkdtemp()) / "smoke_p4_sym.db"
+_rstore._disabled = False
+_rstore._local = _thr47.local()
+try:
+    check("p4 conflicts symmetric: index init creates the tables in the temp db", _rstore.init())
+    _s51symcon = _rstore.connect()
+    _s51_A, _s51_B = "doc:zzz:late", "doc:aaa:early"   # A > B lexicographically on purpose
+    _s51_lo, _s51_hi = sorted((_s51_A, _s51_B))
+    _s51symcon.execute("BEGIN")
+    _recall.writer._upsert_edge(_s51symcon, {"src": _s51_A, "dst": _s51_B, "type": "conflicts",
+                                             "tier": "A", "method": "signal:divergence"}, 10.0)
+    _recall.writer._upsert_edge(_s51symcon, {"src": _s51_B, "dst": _s51_A, "type": "conflicts",
+                                             "tier": "A", "method": "signal:divergence"}, 20.0)
+    _s51symcon.commit()
+    _s51_sym_rows = _s51symcon.execute(
+        "SELECT src, dst FROM graph_edges WHERE type='conflicts' AND method='signal:divergence'"
+    ).fetchall()
+    check("p4 conflicts symmetric: a reversed conflicts write lands on ONE row, stored src < dst",
+          _s51_sym_rows == [(_s51_lo, _s51_hi)] and _s51_lo < _s51_hi)
+finally:
+    _rstore.DB_PATH = _s51_sym_db_prev
+    _rstore._disabled = _s51_sym_disabled_prev
+    _rstore._local = _s51_sym_local_prev
+
+# (5) SINCE: synthetic stored edges with first_seen straddling a cutoff -> only >= cutoff returned,
+#     tier + method present on every row, date parsing (bare / full ISO / garbage), fail-open, cap +
+#     truncation stamp. FRESH temp-db (the §47/§49 pattern).
+_s51_db_prev = _rstore.DB_PATH
+_s51_disabled_prev = _rstore._disabled
+_s51_local_prev = _rstore._local
+_rstore.DB_PATH = Path(_tf47.mkdtemp()) / "smoke_p4_since.db"
+_rstore._disabled = False
+_rstore._local = _thr47.local()
+try:
+    check("p4 since: index init creates the tables in the temp db", _rstore.init())
+    _s51scon = _rstore.connect()
+    # three observed edges off ONE sensor, first_seen 1000 / 2000 / 3000 (before / after / after cut).
+    _s51scon.execute("BEGIN")
+    for _fs, _sid in ((1000.0, "before"), (2000.0, "mid"), (3000.0, "after")):
+        _s51scon.execute(
+            "INSERT INTO graph_edges(src, dst, type, tier, method, first_seen, last_seen) "
+            "VALUES('sensor:since1', ?, 'observed', 'M', 'sensor:diff', ?, ?)",
+            (_graph.doc_node_id("arxiv", _sid), _fs, _fs))
+    _s51scon.commit()
+    # cutoff = epoch 1500 (full ISO). Only first_seen 2000 + 3000 pass; ordered recency DESC.
+    from datetime import datetime as _dt51, timezone as _tz51  # noqa: E402
+    _s51_cut_iso = _dt51.fromtimestamp(1500, _tz51.utc).isoformat()
+    _s51_since = _graph.since("sensor:since1", _s51_cut_iso)
+    _s51_since_dsts = [e["dst"] for e in _s51_since["edges"]]
+    check("p4 since: only stored edges with first_seen >= the cutoff are returned, ordered recency DESC",
+          _s51_since_dsts == [_graph.doc_node_id("arxiv", "after"),
+                              _graph.doc_node_id("arxiv", "mid")])
+    check("p4 since: every returned edge row carries tier + method + first_seen (honest epistemics, no collapsing)",
+          all("tier" in e and e["tier"] == "M" and e["method"] == "sensor:diff" and "first_seen" in e
+              for e in _s51_since["edges"]))
+    # date parsing: a BARE date (midnight UTC) admits all three (epoch 1000 > 1970-01-01 midnight).
+    _s51_since_bare = _graph.since("sensor:since1", "1970-01-01")
+    check("p4 since: a bare YYYY-MM-DD date parses (midnight UTC) and admits the older rows",
+          len(_s51_since_bare["edges"]) == 3)
+    # garbage / empty date -> the coverage error (never a crash, never a silent all-pass).
+    check("p4 since: an unparseable date returns an explicit error",
+          "error" in _graph.since("sensor:since1", "not-a-date")
+          and "error" in _graph.since("sensor:since1", ""))
+    # types filter: restricting to a type the sensor never minted -> zero edges (honest empty).
+    _s51_since_typed = _graph.since("sensor:since1", "1970-01-01", types=["cites"])
+    check("p4 since: a types filter excluding observed returns zero edges (honest empty)",
+          _s51_since_typed["edges"] == [])
+    # cap + truncation stamp: seed MANY observed edges off one sensor, cap to a tiny max_nodes.
+    _s51scon.execute("BEGIN")
+    for _i in range(30):
+        _s51scon.execute(
+            "INSERT INTO graph_edges(src, dst, type, tier, method, first_seen, last_seen) "
+            "VALUES('sensor:sincebig', ?, 'observed', 'M', 'sensor:diff', ?, ?)",
+            (_graph.doc_node_id("arxiv", f"big{_i}"), 5000.0 + _i, 5000.0 + _i))
+    _s51scon.commit()
+    _s51_since_cap = _graph.since("sensor:sincebig", "1970-01-01", max_nodes=5)
+    check("p4 since: a tiny max_nodes caps the nodes + stamps capped=true with the truncation order (no silent caps)",
+          _s51_since_cap["capped"] is True and len(_s51_since_cap["nodes"]) == 5
+          and _s51_since_cap["truncation"] == "recency-then-degree")
+    # fail-open: a non-existent anchor -> empty edges (never an error; a since with no accretion is
+    # a valid empty answer, distinct from the date-parse error above).
+    _s51_since_empty = _graph.since("sensor:nonesuch", "1970-01-01")
+    check("p4 since: an anchor with no stored edges -> an empty accretion log (fail-open, not an error)",
+          _s51_since_empty["edges"] == [] and "error" not in _s51_since_empty)
+finally:
+    _rstore.DB_PATH = _s51_db_prev
+    _rstore._disabled = _s51_disabled_prev
+    _rstore._local = _s51_local_prev
+
+# (6) MINT TRIPWIRES: importing sensor + rank registered the P4 taps, so declared_vocabulary now
+#     carries sensor/observed/sensor:diff and conflicts/signal:divergence. The actual-data-subset
+#     invariant (the §49 tripwire) still holds for the P4 vocabulary against a fresh minted db.
+_s51_vocab = _graph.declared_vocabulary()
+check("p4 mint tripwire: declared_vocabulary includes the sensor kind + observed type + sensor:diff method",
+      "sensor" in _s51_vocab["kinds"] and "observed" in _s51_vocab["edge_types"]
+      and "sensor:diff" in _s51_vocab["methods"] and "sensor" in _graph._MINT_REGISTRY)
+check("p4 mint tripwire: declared_vocabulary includes the conflicts type + signal:divergence method",
+      "conflicts" in _s51_vocab["edge_types"] and "signal:divergence" in _s51_vocab["methods"]
+      and "conflicts" in _graph._MINT_REGISTRY)
+# actual-data subset: mint an observed + a conflicts edge into a fresh db, then assert the DISTINCT
+# kinds/types/methods present are a subset of the declared union (a tap writing undeclared vocab is
+# the bug this catches; here it must stay green with the P4 taps declared).
+_s51_sub_db_prev = _rstore.DB_PATH
+_s51_sub_disabled_prev = _rstore._disabled
+_s51_sub_local_prev = _rstore._local
+_rstore.DB_PATH = Path(_tf47.mkdtemp()) / "smoke_p4_subset.db"
+_rstore._disabled = False
+_rstore._local = _thr47.local()
+try:
+    _rstore.init()
+    _s51subcon = _rstore.connect()
+    _s51subcon.execute("BEGIN")
+    _recall.writer._apply_graph(
+        _s51subcon,
+        [{"id": "sensor:sub", "kind": "sensor", "label": "q", "attrs": None}],
+        [{"src": "sensor:sub", "dst": "doc:arxiv:z1", "type": "observed", "tier": "M",
+          "method": "sensor:diff", "attrs": {"run_at": _s51_run_at}},
+         {"src": "doc:reddit:z2", "dst": "doc:hn:z3", "type": "conflicts", "tier": "A",
+          "method": "signal:divergence", "attrs": {"signal": "score", "kind": "engagement"}}],
+        1.0)
+    _s51subcon.commit()
+    _s51_sub_kinds = {r[0] for r in _s51subcon.execute("SELECT DISTINCT kind FROM graph_nodes").fetchall()}
+    _s51_sub_types = {r[0] for r in _s51subcon.execute("SELECT DISTINCT type FROM graph_edges").fetchall()}
+    _s51_sub_methods = {r[0] for r in _s51subcon.execute("SELECT DISTINCT method FROM graph_edges").fetchall()}
+    check("p4 mint tripwire: DISTINCT P4 kinds/types/methods present in the db ⊆ declared_vocabulary (no silent vocab)",
+          bool(_s51_sub_types) and _s51_sub_kinds <= _s51_vocab["kinds"]
+          and _s51_sub_types <= _s51_vocab["edge_types"]
+          and _s51_sub_methods <= _s51_vocab["methods"],
+          f"undeclared: kinds={sorted(_s51_sub_kinds - _s51_vocab['kinds'])} "
+          f"types={sorted(_s51_sub_types - _s51_vocab['edge_types'])} "
+          f"methods={sorted(_s51_sub_methods - _s51_vocab['methods'])}")
+finally:
+    _rstore.DB_PATH = _s51_sub_db_prev
+    _rstore._disabled = _s51_sub_disabled_prev
+    _rstore._local = _s51_sub_local_prev
+
+
+# ---------------------------------------------------------------------------
+# 52. P5 — similar, the alignment CANDIDATES view (design "P5 shipped 2026-07-03", the P5 sketch
+#     overturned). A ZERO-WRITE view: candidates are DERIVED at query time from the live vec index
+#     (durability — storing embedding neighbors would freeze one model's judgment into the wall), and
+#     NO collapse policy includes align:embed (the razor — "similar" vs "same" is a judgment). The
+#     ladder is view=similar PROPOSES (top-k by RANK) -> the agent verifies -> penumbra_ruling records ->
+#     the working policy collapses.
+#
+#     VEC FIXTURE (stated honestly per the spec): the real embedding path is NOT offline-viable on a
+#     bare checkout (embed.embed_passage returns None — the qwen3 weights are not on disk), so this
+#     builds the smallest honest fixture by HAND-SEEDING the vec table with tiny float32 vectors and
+#     exercising the REAL matrix/cosine machinery (store._ensure_matrix + similar_by_rowid). It stubs
+#     NOTHING in the ranking path — only the weights-load step is bypassed, and the cosine ranking
+#     itself is the production code. FRESH temp-db (the §47/§49 pattern, restore in finally).
+# ---------------------------------------------------------------------------
+import numpy as _np52  # noqa: E402
+
+_s52_db_prev = _rstore.DB_PATH
+_s52_disabled_prev = _rstore._disabled
+_s52_local_prev = _rstore._local
+# reset the module-level vec matrix cache so _ensure_matrix rebuilds against THIS temp db (a prior
+# section may have primed it; the cache keys on model_version + vec-count, but be explicit).
+_s52_vecM_prev = _rstore._vec_M
+_s52_vecids_prev = _rstore._vec_ids
+_s52_vecgen_prev = _rstore._vec_built_gen
+_s52_vecmv_prev = _rstore._vec_built_mv
+_rstore.DB_PATH = Path(_tf47.mkdtemp()) / "smoke_p5_similar.db"
+_rstore._disabled = False
+_rstore._local = _thr47.local()
+_rstore._vec_M = None
+_rstore._vec_ids = None
+_rstore._vec_built_gen = -1
+_rstore._vec_built_mv = ""
+try:
+    check("p5 similar: index init creates the tables in the temp db", _rstore.init())
+    _s52con = _rstore.connect()
+    # Four indexed docs (real docs rows via the writer's _upsert), then hand-seed 3-dim vectors:
+    #   A = anchor [1,0,0]; B = [0.9,0.1,0] (nearest); C = [0.5,0.5,0]; D = [0,0,1] (farthest).
+    for _sid, _t in (("A", "Similar Anchor Doc Alpha Long Title"),
+                     ("B", "Similar Near Doc Beta Long Title"),
+                     ("C", "Similar Mid Doc Gamma Long Title"),
+                     ("D", "Similar Far Doc Delta Long Title")):
+        _s52con.execute("BEGIN")
+        _recall.writer._upsert(_s52con, rank, _doc("arxiv", _t, "http://a/" + _sid), 1.0)
+        # the _upsert above set source_id = url; override to a clean id for the doc node.
+        _s52con.execute("UPDATE docs SET source_id = ? WHERE url = ?", (_sid, "http://a/" + _sid))
+        _s52con.commit()
+    _s52_mv = _recall.embed.MODEL_VERSION
+    _s52_vecs = {"A": [1.0, 0.0, 0.0], "B": [0.9, 0.1, 0.0], "C": [0.5, 0.5, 0.0], "D": [0.0, 0.0, 1.0]}
+    _s52con.execute("BEGIN")
+    for _sid, _v in _s52_vecs.items():
+        _rid = _s52con.execute("SELECT rowid FROM docs WHERE source_id = ?", (_sid,)).fetchone()[0]
+        _arr = _np52.array(_v, dtype=_np52.float32)
+        _s52con.execute("INSERT OR REPLACE INTO vec(rowid, model_version, dim, v) VALUES(?,?,?,?)",
+                        (_rid, _s52_mv, 3, _arr.tobytes()))
+    _s52con.commit()
+
+    _s52_na = _graph.doc_node_id("arxiv", "A")
+    _s52_nb = _graph.doc_node_id("arxiv", "B")
+    _s52_nc = _graph.doc_node_id("arxiv", "C")
+
+    # (7) similar top-k BY RANK: anchor A, k=2 -> [B (rank 1), C (rank 2)] by cosine; D excluded; the
+    #     anchor self-excluded. method align:embed, coverage line named, capped when k candidates.
+    _s52_sim = _graph.similar(_s52_na, k=2)
+    check("p5 similar: top-k by RANK returns the nearest candidates (B then C), anchor + far D excluded",
+          [c["id"] for c in _s52_sim.get("candidates", [])] == [_s52_nb, _s52_nc]
+          and [c["rank"] for c in _s52_sim["candidates"]] == [1, 2]
+          and all(c["kind"] == "document" for c in _s52_sim["candidates"]))
+    check("p5 similar: the view carries method align:embed + the coverage line, and is capped at k candidates",
+          _s52_sim.get("method") == "align:embed" and _s52_sim.get("anchor") == _s52_na
+          and _s52_sim.get("coverage") == "vector-indexed docs only" and _s52_sim.get("capped") is True)
+    # NO cosine scores anywhere in the output (rank is the honest unit; a score invites pseudo-precision).
+    check("p5 similar: NO cosine scores in the output (rank is the honest unit) and NO edges (a listing, not structure)",
+          all(("score" not in c and "cosine" not in c and "sim" not in c)
+              for c in _s52_sim["candidates"])
+          and "edges" not in _s52_sim)
+    # k respected: k=1 -> exactly one candidate (the single nearest, B).
+    _s52_sim_k1 = _graph.similar(_s52_na, k=1)
+    check("p5 similar: k is a resource budget, respected exactly (k=1 -> the single nearest candidate)",
+          len(_s52_sim_k1["candidates"]) == 1 and _s52_sim_k1["candidates"][0]["id"] == _s52_nb)
+    # anchor NOT in the vector index (a doc id with no docs row / no vector) -> error NAMING coverage.
+    _s52_sim_miss = _graph.similar("doc:arxiv:NOT_INDEXED", k=2)
+    check("p5 similar: an anchor not in the vector index returns an error naming the coverage line",
+          "error" in _s52_sim_miss and "vector-indexed docs only" in _s52_sim_miss["error"])
+    # a non-doc anchor (an entity id) -> error (similar is doc-anchored only).
+    _s52_sim_nondoc = _graph.similar("work:openalex:W1", k=2)
+    check("p5 similar: a non-doc anchor (entity id) returns an error (similar is doc-anchored only)",
+          "error" in _s52_sim_nondoc)
+
+    # (8) TRIPWIRE part B: NO graph_edges row anywhere carries method align:embed (similar is a
+    #     zero-write VIEW; it minted nothing into this db despite the queries above).
+    _s52_embed_rows = _s52con.execute(
+        "SELECT count(*) FROM graph_edges WHERE method = 'align:embed'").fetchone()[0]
+    check("p5 tripwire: similar wrote NOTHING — no graph_edges row carries method align:embed (zero-write view)",
+          _s52_embed_rows == 0)
+finally:
+    _rstore.DB_PATH = _s52_db_prev
+    _rstore._disabled = _s52_disabled_prev
+    _rstore._local = _s52_local_prev
+    _rstore._vec_M = _s52_vecM_prev
+    _rstore._vec_ids = _s52_vecids_prev
+    _rstore._vec_built_gen = _s52_vecgen_prev
+    _rstore._vec_built_mv = _s52_vecmv_prev
+
+# (8) TRIPWIRE part A (pure, no db): align:embed appears in NO collapse policy method-set — not
+#     CONSERVATIVE, not WORKING, not EXPLORATORY. It exists ONLY as a proposal label (the razor:
+#     embedding proximity in a collapse would fabricate identity out of topicality, corrupting voices).
+check("p5 tripwire: align:embed is in NO policy method-set (CONSERVATIVE / WORKING / EXPLORATORY)",
+      "align:embed" not in _graph.CONSERVATIVE and "align:embed" not in _graph.WORKING
+      and "align:embed" not in _graph.EXPLORATORY)
+# and align:embed is NOT a declared tap method (it is a view-only proposal label, never minted). The
+# conflicts tap declared signal:divergence; no tap declares align:embed.
+check("p5 tripwire: align:embed is NOT a declared tap method (a view-only proposal label, never minted)",
+      "align:embed" not in _graph.declared_vocabulary()["methods"])
+
+# (9) SURFACE: penumbra_graph now exposes the 7 views; the unknown-view error names all 7; the connect-time
+#     brief carries the 7-view chain; the tool count + verbs are UNCHANGED (no new tool: 17 stays 17).
+_s52_eg = _srv.penumbra_graph.__wrapped__ if hasattr(_srv.penumbra_graph, "__wrapped__") else _srv.penumbra_graph
+_S52_VIEWS = ("find", "stats", "neighborhood", "between", "voices", "since", "similar")
+_s52_unknown = _s52_eg(view="frobnicate")
+check("p5 surface: an unknown view error names all SEVEN views (find..similar)",
+      "error" in _s52_unknown and all(_v in _s52_unknown["error"] for _v in _S52_VIEWS))
+# dispatch reaches the two new views (a garbage since date + a non-doc similar anchor each return the
+# view's OWN error, proving the dispatch routed there rather than the unknown-view error).
+check("p5 surface: view=since routes to the since view (its date-parse error, not unknown-view)",
+      "error" in _s52_eg(view="since", anchor="sensor:x", date="garbage")
+      and "since requires date" in _s52_eg(view="since", anchor="sensor:x", date="garbage")["error"])
+check("p5 surface: view=similar routes to the similar view (its anchor error, not unknown-view)",
+      "error" in _s52_eg(view="similar", anchor="work:openalex:W1"))
+check("p5 surface: _PENUMBRA_INSTRUCTIONS carries the 7-view chain (find -> ... -> since -> similar)",
+      "find -> stats -> neighborhood -> between -> voices -> since -> similar" in _srv._PENUMBRA_INSTRUCTIONS)
+# tool count UNCHANGED: no new tool (the two views are penumbra_graph actions). _PENUMBRA_VERBS stays 17,
+# the gather whitelist stays 12, and penumbra_graph is still a registered read-only tool.
+from penumbra.server import _PENUMBRA_VERBS as _s52_verbs  # noqa: E402
+check("p5 surface: the tool count is UNCHANGED (17) — since/similar are penumbra_graph views, not new tools",
+      len(_s52_verbs) == 17 and len(_GATHER_TOOLS) == 12 and "penumbra_graph" in _GATHER_TOOLS)
+
+
 print()
 if FAIL:
     print(f"SMOKE FAILED: {len(FAIL)} problem(s)")
