@@ -4,12 +4,12 @@
 set -e
 
 POLDIR="${HOME:-/root}/.penumbra"
-TOK="$POLDIR/credentials/http.json"
+TOK="$POLDIR/credentials/penumbra_http.json"
 if [ ! -f "$TOK" ]; then
   mkdir -p "$POLDIR/credentials"
   python - <<'PY'
 import json, os, pathlib, secrets
-p = pathlib.Path(os.path.expanduser("~/.penumbra/credentials/http.json"))
+p = pathlib.Path(os.path.expanduser("~/.penumbra/credentials/penumbra_http.json"))
 p.parent.mkdir(parents=True, exist_ok=True)
 tok = secrets.token_urlsafe(32)
 p.write_text(json.dumps({"token": tok}))

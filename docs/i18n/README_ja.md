@@ -85,7 +85,7 @@ curl -s http://127.0.0.1:8765/healthz
 
 MCPクライアントを `http://127.0.0.1:8765/mcp` に向け、ヘッダー
 `Authorization: Bearer <token>` を付与する。トークンは初回起動時に自動生成され、
-`~/.penumbra/credentials/http.json` に保存される(Docker では `./.penumbra/credentials/http.json` にマウントされる)。
+`~/.penumbra/credentials/penumbra_http.json` に保存される(Docker では `./.penumbra/credentials/penumbra_http.json` にマウントされる)。
 
 オプション拡張(ライセンスへの同意が必要、[NOTICE](../../NOTICE) 参照):
 `docker-compose.yml` で `EXTRAS="[pdf,asr,walled]"` をビルド引数に指定。

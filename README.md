@@ -87,7 +87,7 @@ curl -s http://127.0.0.1:8765/healthz
 
 Point your MCP client at `http://127.0.0.1:8765/mcp` with header
 `Authorization: Bearer <token>`. The token is generated on first start and stored in
-`~/.penumbra/credentials/http.json` (mounted as `./.penumbra/credentials/http.json` under Docker).
+`~/.penumbra/credentials/penumbra_http.json` (mounted as `./.penumbra/credentials/penumbra_http.json` under Docker).
 
 Optional extras (their licenses apply; see [NOTICE](NOTICE)):
 set `EXTRAS="[pdf,asr,walled]"` as a build arg in `docker-compose.yml`.
