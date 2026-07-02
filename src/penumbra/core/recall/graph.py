@@ -95,6 +95,51 @@ class ManifestEntry(TypedDict, total=False):
     elapsed_s: float
 
 
+# ── Vocabulary-by-minting (design section 3, "Vocabulary-by-minting") ────────────────────────────
+# The FIRST exercise of the rule that replaces the old central kind/edge-type enum + the grant
+# ceremony + the gap-ledger-as-debt. NOTHING mechanical depends on a central enum: kind and type are
+# TEXT columns, views filter by string. A kind/edge-type is not a central decision — it is a property
+# of the MINTING act (OpenAlex mints person/work ids; HF would mint model ids with lineage edges).
+# So each WRITE TAP declares, on itself, the kinds + edge types + methods it mints (the same pattern
+# as adapters declaring facets as class attrs); the GLOBAL vocabulary is the COMPUTED UNION of those
+# declarations (mechanism demoted to data). The ONLY governance gate is the one that already exists:
+# tap admission (shipping the tap IS the grant). A smoke tripwire then bounds ACTUAL data: the
+# kinds/edge-types PRESENT in graph_nodes / graph_edges must be a subset of ``declared_vocabulary``
+# (no silent vocabulary). J-tier vocabulary is the AGENT'S — fixed by the GraphNode/GraphEdge schema
+# and versioned with it, NEVER tap-minted — so it lives in those TypedDicts above, not here.
+
+_MINT_REGISTRY: dict[str, dict] = {}
+
+
+def register_mints(tap: str, kinds: list[str], edge_types: list[str], methods: list[str]) -> None:
+    """Declare, on a WRITE TAP, the node kinds / edge types / methods it mints. Idempotent UPSERT
+    keyed by ``tap`` name: re-registering the same tap (e.g. a module re-imported in a test, or a
+    declaration edited) REPLACES that tap's entry rather than accreting duplicates. Called at each
+    tap module's import time (``cartographer``, ``enrich``, ``thin_memory``, ... register from day
+    one). This is data, not ceremony: the union of all registered taps IS the graph's vocabulary."""
+    _MINT_REGISTRY[tap] = {
+        "kinds": list(kinds or []),
+        "edge_types": list(edge_types or []),
+        "methods": list(methods or []),
+    }
+
+
+def declared_vocabulary() -> dict:
+    """The COMPUTED UNION of every registered tap's declaration: ``{"kinds": set, "edge_types": set,
+    "methods": set}``. This replaces any central enum — there is no canonical list to lag reality,
+    only the sum of what the shipped taps actually mint. The smoke tripwire asserts the vocabulary
+    ACTUALLY present in graph_nodes / graph_edges is a SUBSET of this union (a tap writing an
+    undeclared kind/type is the bug the tripwire catches). Empty until the first tap registers."""
+    kinds: set = set()
+    edge_types: set = set()
+    methods: set = set()
+    for decl in _MINT_REGISTRY.values():
+        kinds.update(decl.get("kinds") or [])
+        edge_types.update(decl.get("edge_types") or [])
+        methods.update(decl.get("methods") or [])
+    return {"kinds": kinds, "edge_types": edge_types, "methods": methods}
+
+
 # ── Node-id helpers (design section 3) ──────────────────────────────────────────────────────────
 
 def doc_node_id(source: str, source_id: str) -> str:

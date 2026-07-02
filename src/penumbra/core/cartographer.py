@@ -30,7 +30,10 @@ from penumbra.core import cache
 logger = logging.getLogger(__name__)
 
 _TIMEOUT = 25
-_SELECT = "id,doi,title,publication_year,publication_date,cited_by_count,referenced_works,concepts,authorships"
+# primary_location added (design section 11 open item): it carries the venue {id, display_name} the
+# graph's ``published_in`` edge needs (work -> venue:openalex:S…). The other fields are unchanged.
+_SELECT = ("id,doi,title,publication_year,publication_date,cited_by_count,referenced_works,"
+           "concepts,authorships,primary_location")
 _S2_REF_CAP = 100  # hard cap on S2 references fetched per seed (page-bounded; refs are naturally small)
 # OVERALL wall-clock budget for one assemble. Each S2/OA call is individually bounded (timeout +
 # breaker), but the ~13 SERIAL calls of an assemble have no aggregate cap, so a slow/throttling
@@ -43,6 +46,23 @@ _ASSEMBLE_DEADLINE_S = 25.0
 # _norm_s2_id now lives in _s2.norm_s2_id (single source of truth, shared with relations).
 # Kept as a module-level alias so the smoke gate + any external caller keep working.
 _norm_s2_id = _s2.norm_s2_id
+
+from penumbra.core.recall import graph  # noqa: E402 — the graph write verb + mint registry
+
+# Vocabulary this tap MINTS (vocabulary-by-minting, design section 3): declared on the tap itself,
+# registered at import, and folded into ``graph.declared_vocabulary`` as the computed union. The
+# smoke tripwire bounds ACTUAL graph data to that union. cartographer mints the CITATION-graph core:
+# work/person/topic/venue nodes and cites/authored/about/published_in edges, over the two academic
+# backends (api:openalex, api:s2). authored/person and about/topic are OpenAlex-only in the tap (the
+# S2 path has display-name-only authorships and id-less fields → mints NO person/topic there; the
+# relations tap owns persons properly at P3), but the DECLARATION is the tap's full vocabulary.
+GRAPH_MINTS = {
+    "kinds": ["work", "person", "topic", "venue"],
+    "edge_types": ["cites", "authored", "about", "published_in"],
+    "methods": ["api:openalex", "api:s2"],
+}
+graph.register_mints("cartographer", kinds=GRAPH_MINTS["kinds"],
+                     edge_types=GRAPH_MINTS["edge_types"], methods=GRAPH_MINTS["methods"])
 
 
 def _wid(full: str) -> str:
@@ -73,6 +93,19 @@ def _oa_cited_by(work_id: str, cap: int, sort: str = "cited_by_count:desc") -> l
                                 "per-page": min(cap, 200), "select": "id"}))
 
 
+def _oa_venue(work: dict) -> Optional[dict]:
+    """The venue {id, display_name} off an OpenAlex work's ``primary_location.source`` (added to
+    _SELECT), with the source id reduced to the bare ``S…`` (``_wid``) so the tap mints
+    ``venue:openalex:S…`` directly. None when the work has no primary_location source (e.g. a
+    preprint with no indexed venue) — ``published_in`` simply isn't minted for it. No judgment: this
+    only reshapes what OpenAlex already returned."""
+    loc = work.get("primary_location") or {}
+    src = loc.get("source") if isinstance(loc, dict) else None
+    if not isinstance(src, dict) or not src.get("id"):
+        return None
+    return {"id": _wid(src.get("id", "")), "display_name": src.get("display_name")}
+
+
 def _oa_fetch(ids: list[str]) -> dict[str, dict]:
     out: dict[str, dict] = {}
     for i in range(0, len(ids), 50):
@@ -82,6 +115,11 @@ def _oa_fetch(ids: list[str]) -> dict[str, dict]:
         data = _get("/works", {"filter": "openalex_id:" + "|".join(chunk),
                                "per-page": 50, "select": _SELECT})
         for w in ((data or {}).get("results") or []):
+            # Carry the venue {id, display_name} through the works dict when present (the SAME shape
+            # the tap reads for published_in). The S2 path has no venue id, so it stays absent there.
+            venue = _oa_venue(w)
+            if venue:
+                w["venue"] = venue
             out[_wid(w.get("id", ""))] = w
     return out
 
@@ -283,6 +321,115 @@ def _build(seed_ids: list[str], works: dict, max_nodes: int) -> dict:
             "nodes": nodes[:max_nodes]}
 
 
+def _graph_tap(source: str, works: dict) -> None:
+    """FAIL-OPEN graph write tap (design section 6): mint the citation-graph facts from the assembled
+    ``works`` dict into the graph via the single-writer queue. Runs AFTER ``_build`` at the one exit
+    point both backends share; a failure here NEVER touches the field_skeleton result the agent gets
+    (the whole body is wrapped + ``enqueue_graph`` never raises). Volume is bounded by the assemble's
+    existing max_nodes/caps (we mint only from what ``works`` already holds); upserts are idempotent
+    so a cache-hit re-call re-mints = an honest last_seen bump.
+
+    What it mints (per the P2 row of the taps table + the vocabulary this tap declared):
+      • work nodes   — ``work:openalex:W…`` / ``work:s2:{id}`` per backend; label=title; attrs
+                       {doi, year, cited_by}.
+      • cites edges  — work→work for the IN-CORPUS referenced_works ``_build`` already intersects
+                       (``_wid(r) in works``); tier M, method ``api:{backend}``; attrs
+                       intents/influential/contexts ONLY as the existing extraction already capped
+                       them (node-level S2 edge semantics; caps never expanded).
+      • authored     — OpenAlex authorships that carry an author id → ``person:openalex:A…`` nodes
+                       (label=display_name) + work→person edges (M, api:openalex). The S2 path has
+                       display-name-only authorships: mint NOTHING for those (the relations tap owns
+                       persons properly at P3; no label-persons here).
+      • about        — concepts WITH an OpenAlex id → ``topic:openalex:C…`` + work→topic (M). Concepts
+                       without an id are SKIPPED (no label-topic pollution from this tap).
+      • published_in — work→``venue:openalex:S…`` when primary_location carried a source id.
+    """
+    try:
+        from penumbra.core.recall import writer
+        ns = "s2" if source == "s2" else "openalex"
+        method = "api:s2" if source == "s2" else "api:openalex"
+        is_oa = ns == "openalex"
+
+        def work_nid(wid_: str) -> str:
+            return f"work:{ns}:{wid_}"
+
+        nodes: list[dict] = []
+        edges: list[dict] = []
+        for wid_, w in works.items():
+            if not wid_:
+                continue
+            src_nid = work_nid(wid_)
+            # work node: label=title, attrs {doi (when present), year, cited_by}. doi is stored as
+            # the work dict already carries it (the canonical https://doi.org/… form, matching _build).
+            attrs: dict = {"year": w.get("publication_year"), "cited_by": w.get("cited_by_count") or 0}
+            if w.get("doi"):
+                attrs["doi"] = w.get("doi")
+            nodes.append({"id": src_nid, "kind": "work",
+                          "label": (w.get("title") or None), "attrs": attrs})
+
+            # cites edges: work -> in-corpus referenced work. The intents/influential/contexts are the
+            # CITING node's S2 edge semantics (present on S2 works only), carried as-is (already capped
+            # by add()'s _CTX_CAP / the deduped intents set — never expanded here).
+            cite_attrs: dict = {}
+            if w.get("_intents"):
+                cite_attrs["intents"] = w["_intents"]
+            if "_influential" in w:
+                cite_attrs["influential"] = bool(w.get("_influential"))
+            if w.get("_contexts"):
+                cite_attrs["contexts"] = w["_contexts"]
+            for r in (w.get("referenced_works") or []):
+                t = _wid(r)
+                if t and t in works and t != wid_:
+                    edge = {"src": src_nid, "dst": work_nid(t), "type": "cites",
+                            "tier": "M", "method": method}
+                    if cite_attrs:
+                        edge["attrs"] = dict(cite_attrs)
+                    edges.append(edge)
+
+            if is_oa:
+                # authored: OpenAlex authorships WITH an author id (S2 has display-name-only → skipped).
+                for a in (w.get("authorships") or []):
+                    if not isinstance(a, dict):
+                        continue
+                    au = a.get("author")
+                    if not isinstance(au, dict) or not au.get("id"):
+                        continue
+                    pid = _wid(au.get("id", ""))
+                    if not pid:
+                        continue
+                    person_nid = f"person:openalex:{pid}"
+                    nodes.append({"id": person_nid, "kind": "person",
+                                  "label": au.get("display_name") or None, "attrs": None})
+                    edges.append({"src": src_nid, "dst": person_nid, "type": "authored",
+                                  "tier": "M", "method": "api:openalex"})
+
+                # about: concepts WITH an OpenAlex id (id-less concepts skipped → no label-topics).
+                for c in (w.get("concepts") or []):
+                    if not isinstance(c, dict) or not c.get("id"):
+                        continue
+                    cid = _wid(c.get("id", ""))
+                    if not cid:
+                        continue
+                    topic_nid = f"topic:openalex:{cid}"
+                    nodes.append({"id": topic_nid, "kind": "topic",
+                                  "label": c.get("display_name") or None, "attrs": None})
+                    edges.append({"src": src_nid, "dst": topic_nid, "type": "about",
+                                  "tier": "M", "method": "api:openalex"})
+
+                # published_in: work -> venue when primary_location carried a source id (see _oa_venue).
+                venue = w.get("venue")
+                if isinstance(venue, dict) and venue.get("id"):
+                    venue_nid = f"venue:openalex:{venue['id']}"
+                    nodes.append({"id": venue_nid, "kind": "venue",
+                                  "label": venue.get("display_name") or None, "attrs": None})
+                    edges.append({"src": src_nid, "dst": venue_nid, "type": "published_in",
+                                  "tier": "M", "method": "api:openalex"})
+
+        writer.enqueue_graph(nodes, edges)
+    except Exception as exc:  # noqa: BLE001 — a tap failure must NEVER break field_skeleton
+        logger.debug("cartographer graph tap swallowed: %s", exc)
+
+
 def field_skeleton(query: Optional[str] = None, seeds: Optional[list[str]] = None,
                    n_seeds: int = 4, citers_per_seed: int = 30, source: str = "openalex",
                    max_nodes: int = 250, fresh: bool = False,
@@ -321,6 +468,10 @@ def field_skeleton(query: Optional[str] = None, seeds: Optional[list[str]] = Non
                           "partial": True}}
     result = _build(seed_ids, works, max_nodes)
     result["source"] = source
+    # FAIL-OPEN graph tap: the single exit point both backends share. Mints work/person/topic/venue
+    # nodes + cites/authored/about/published_in edges from the assembled works dict through the
+    # single-writer queue. Never raises, never changes the result (additive; the STABILITY contract).
+    _graph_tap(source, works)
     nodes_capped = len(works) > max_nodes  # _build truncated the assembled corpus to max_nodes
     # The seed TITLES drive the whole map; when seeds were AUTO-picked from a query they can drift
     # off-field (a 'mechanistic interpretability' query once auto-seeded protein-LM SAE papers,

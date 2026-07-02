@@ -38,6 +38,18 @@ _start_lock = threading.Lock()
 _last_write_ts: float = 0.0
 _IMMUTABLE = frozenset({"acl_anthology", "openreview", "ircc_ee_rounds"})
 
+# The P2.0 retrieval-anchored thin-memory lane IS a write tap, so it declares its vocabulary from day
+# one like every other tap (vocabulary-by-minting, design section 3): it mints ``document`` nodes
+# ONLY — no edge types (doc-doc same_as is a DERIVED view over docs.fp + external_ids, never a stored
+# edge), no methods (nodes carry no edge method). Registered at import so ``declared_vocabulary``
+# includes it whenever writer is loaded; guarded fail-open (a registration hiccup must never break
+# the import of the writer that search depends on).
+try:
+    from penumbra.core.recall import graph as _graph
+    _graph.register_mints("thin_memory", kinds=["document"], edge_types=[], methods=[])
+except Exception as _exc:  # noqa: BLE001 — declaration is best-effort; never break writer import
+    logger.debug("thin_memory register_mints skipped: %s", _exc)
+
 
 def last_write_ts() -> float:
     return _last_write_ts
@@ -105,6 +117,26 @@ def mark_run(source: str, count: int) -> None:
         pass
 
 
+def enqueue_graph(nodes: list[dict], edges: list[dict]) -> None:
+    """The GENERAL graph write verb (design section 6): the write taps (cartographer, enrich, ...)
+    hand mechanical FACTS + labeled ALIGNMENT candidates here as node + edge dicts. Generalizes the
+    P2.0 thin-document lane to entity nodes + M/A edges over the SAME single-writer daemon (same WAL
+    connection, same ``WRITES_ENABLED`` gate) — zero new concurrency surface. ENQUEUE-ONLY and NEVER
+    raises into the caller (a tap sits on an EXISTING data path; a raised exception here would break
+    field_skeleton / enrich / search — the fail-open razor). NO-OP unless writes are enabled (a cron
+    process leaves ``WRITES_ENABLED`` False, so its tap writes nothing: no second writer). The heavy
+    work (validation, symmetric normalization, upserts) all happens on the writer thread in
+    ``_apply_graph``; this side only classifies + enqueues. An empty batch is a cheap no-op."""
+    if not WRITES_ENABLED or store._disabled:
+        return
+    if not nodes and not edges:
+        return
+    try:
+        _enqueue(("__graph__", list(nodes or []), list(edges or [])))
+    except Exception as exc:  # noqa: BLE001 — never propagate into the tap's data path
+        logger.debug("enqueue_graph swallowed: %s", exc)
+
+
 def start_writer() -> None:
     """Start the single writer daemon (idempotent). Called once from serve_http.main()."""
     global _writer_started
@@ -160,6 +192,7 @@ def _apply(con, items) -> None:
     marks: list[tuple] = []
     doc_batches: list[list] = []
     thin_docs: list = []
+    graph_batches: list[tuple] = []   # ('__graph__', nodes, edges) from enqueue_graph (the taps)
     do_backfill = False
     for it in items:
         if isinstance(it, tuple) and it:
@@ -169,6 +202,8 @@ def _apply(con, items) -> None:
                 do_backfill = True
             elif it[0] == "__thin__":
                 thin_docs.append(it[1])   # a thin document-node upsert (title/url/fp only)
+            elif it[0] == "__graph__":
+                graph_batches.append(it)  # entity nodes + M/A edges (cartographer / enrich taps)
             else:
                 doc_batches.append(it)
         else:
@@ -188,6 +223,11 @@ def _apply(con, items) -> None:
             _upsert_thin(con, rank, d, now)   # graph_nodes document node, NEVER content
         except Exception as exc:  # noqa: BLE001 — one bad thin doc never aborts the batch
             logger.debug("recall thin upsert skipped one doc: %s", exc)
+    for _tag, gnodes, gedges in graph_batches:
+        try:
+            _apply_graph(con, gnodes, gedges, now)   # entity nodes + M/A edges, same transaction
+        except Exception as exc:  # noqa: BLE001 — one bad graph batch never aborts the write
+            logger.debug("recall graph apply skipped one batch: %s", exc)
     for _tag, source, count, ts in marks:
         try:
             con.execute("INSERT OR REPLACE INTO ingest_runs(source, ran_at, doc_count) VALUES(?,?,?)",
@@ -299,6 +339,23 @@ _THIN_LABEL_CAP = 200               # title cap for a thin document node's label
 _THIN_ID_KEYS = ("doi", "arxiv_id", "openalex_id")
 
 
+def _upsert_node(con, nid: str, kind: str, label: Optional[str], attrs_json: Optional[str],
+                 now: float) -> None:
+    """The ONE graph_nodes upsert (extracted from the P2.0 thin lane so the thin-document lane and the
+    generalized entity lane share ONE code path, not two). ``first_seen`` is IMMUTABLE on conflict:
+    the INSERT-supplied first_seen is ``excluded.first_seen`` = the new ``now``, and the DO UPDATE
+    clause simply does NOT touch first_seen, so the original survives (docs' immutable-first_seen /
+    bumped-last_seen DNA). ``last_seen`` is bumped; label + attrs are refreshed last-write-wins. A
+    re-observation (cache-hit re-mint) is an HONEST last_seen bump, never a duplicate row."""
+    con.execute(
+        "INSERT INTO graph_nodes(id, kind, label, attrs_json, first_seen, last_seen) "
+        "VALUES(?, ?, ?, ?, ?, ?) "
+        "ON CONFLICT(id) DO UPDATE SET label=excluded.label, attrs_json=excluded.attrs_json, "
+        "last_seen=excluded.last_seen",
+        (nid, kind, label, attrs_json, now, now),
+    )
+
+
 def _upsert_thin(con, rank, d: Document, now: float) -> None:
     """Upsert one THIN document node into ``graph_nodes`` (P2.0 retrieval-anchored perception).
 
@@ -326,16 +383,86 @@ def _upsert_thin(con, rank, d: Document, now: float) -> None:
         if val:
             attrs[key] = val
     attrs_json = json.dumps(attrs, ensure_ascii=False, default=str)
-    # first_seen preserved on conflict, last_seen bumped; label/attrs refreshed (last write wins).
-    # The COALESCE keeps the ORIGINAL first_seen (excluded.first_seen is the new `now`, ignored when
-    # a row already exists), mirroring docs' immutable-first_seen / bumped-last_seen semantics.
+    # The shared node upsert: first_seen preserved on conflict, last_seen bumped, label/attrs
+    # refreshed (last write wins) — the P2.0 semantics, now one code path for thin + entity lanes.
+    _upsert_node(con, nid, "document", label, attrs_json, now)
+
+
+# ── Graph lanes (design sections 4-6): generalize the P2.0 thin lane to entity nodes + M/A edges ──
+# The symmetric-relation set (design section 4): these types express an UNORDERED pair, so the writer
+# stores each ONCE with src < dst (lexicographic). Otherwise (A,B) and (B,A) are distinct rows under
+# the UNIQUE(src,dst,type,method) key and duplicates accrete. P2's minted types (cites/authored/
+# about/published_in) are all DIRECTED, so this fires on none of them yet — but P3's ``coauthored``
+# will, so the helper lands NOW (built with the model, not retrofitted).
+_SYMMETRIC_EDGE_TYPES = frozenset({"same_as", "not_same_as", "coauthored", "conflicts"})
+_LEGAL_TIERS = frozenset({"M", "A"})   # J is STRUCTURALLY excluded (the SQL CHECK; validate early too)
+
+
+def _normalize_edge_endpoints(src: str, dst: str, etype: str) -> tuple[str, str]:
+    """Symmetric-edge normalization (design section 4): for a SYMMETRIC type, return the endpoints
+    reordered so ``src < dst`` (lexicographic) — so a reversed write (B,A) lands on the SAME row as
+    (A,B) under the UNIQUE key instead of accreting a duplicate. DIRECTED types pass through as-is.
+    P3's ``coauthored`` is the first real consumer; implemented now per the spec (the model is
+    complete now even though assembly is incremental)."""
+    if etype in _SYMMETRIC_EDGE_TYPES and dst < src:
+        return dst, src
+    return src, dst
+
+
+def _upsert_edge(con, edge: dict, now: float) -> None:
+    """Upsert one M/A edge into ``graph_edges`` on the UNIQUE(src, dst, type, method) key. ``tier``
+    must be 'M' or 'A' (validated here AND enforced by the SQL CHECK); a bad/absent tier or a missing
+    endpoint/type/method DROPS the item with a debug log (fail-open — a bad edge never aborts the
+    batch). ``first_seen`` is immutable on conflict (the DO UPDATE omits it); ``last_seen`` is bumped;
+    ``attrs`` is last-write-wins. Symmetric types are normalized to src < dst before the write."""
+    src = (edge.get("src") or "").strip()
+    dst = (edge.get("dst") or "").strip()
+    etype = (edge.get("type") or "").strip()
+    method = (edge.get("method") or "").strip()
+    tier = (edge.get("tier") or "").strip()
+    if not src or not dst or not etype or not method:
+        logger.debug("graph edge dropped (missing src/dst/type/method): %r", edge)
+        return
+    if tier not in _LEGAL_TIERS:
+        logger.debug("graph edge dropped (illegal tier %r; only M/A may enter the eye's store): %r",
+                     tier, edge)
+        return
+    src, dst = _normalize_edge_endpoints(src, dst, etype)
+    attrs = edge.get("attrs")
+    attrs_json = json.dumps(attrs, ensure_ascii=False, default=str) if attrs else None
     con.execute(
-        "INSERT INTO graph_nodes(id, kind, label, attrs_json, first_seen, last_seen) "
-        "VALUES(?, 'document', ?, ?, ?, ?) "
-        "ON CONFLICT(id) DO UPDATE SET label=excluded.label, attrs_json=excluded.attrs_json, "
+        "INSERT INTO graph_edges(src, dst, type, tier, method, attrs_json, first_seen, last_seen) "
+        "VALUES(?, ?, ?, ?, ?, ?, ?, ?) "
+        "ON CONFLICT(src, dst, type, method) DO UPDATE SET attrs_json=excluded.attrs_json, "
         "last_seen=excluded.last_seen",
-        (nid, label, attrs_json, now, now),
+        (src, dst, etype, tier, method, attrs_json, now, now),
     )
+
+
+def _apply_graph(con, nodes: list, edges: list, now: float) -> None:
+    """Apply a batch of graph nodes + edges in the CALLER's transaction (``_apply`` opened one BEGIN
+    for the whole write, so node rows, edge rows, doc rows and vectors all commit atomically). Each
+    node/edge is upserted defensively: one bad item is dropped + logged, never aborting the batch
+    (the recall-ingest fail-open discipline). Nodes carry ``{id, kind, label, attrs}``; edges carry
+    ``{src, dst, type, tier, method, attrs}``."""
+    for n in (nodes or []):
+        try:
+            nid = (n.get("id") or "").strip()
+            kind = (n.get("kind") or "").strip()
+            if not nid or not kind:
+                logger.debug("graph node dropped (missing id/kind): %r", n)
+                continue
+            label = n.get("label")
+            attrs = n.get("attrs")
+            attrs_json = json.dumps(attrs, ensure_ascii=False, default=str) if attrs else None
+            _upsert_node(con, nid, kind, label, attrs_json, now)
+        except Exception as exc:  # noqa: BLE001 — one bad node never aborts the batch
+            logger.debug("graph node upsert skipped one: %s", exc)
+    for e in (edges or []):
+        try:
+            _upsert_edge(con, e, now)
+        except Exception as exc:  # noqa: BLE001 — one bad edge never aborts the batch
+            logger.debug("graph edge upsert skipped one: %s", exc)
 
 
 def _upsert(con, rank, d: Document, now: float):
