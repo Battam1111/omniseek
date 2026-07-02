@@ -26,7 +26,7 @@ import httpx
 from bs4 import BeautifulSoup
 
 from penumbra.core import cache
-from penumbra.core.normalize import PolarisDocument, jsonsafe, keyword_score_filter
+from penumbra.core.normalize import Document, jsonsafe, keyword_score_filter
 
 logger = logging.getLogger(__name__)
 
@@ -154,9 +154,9 @@ class _ScrapeSite:
             cache.set(key, items, ttl=self.cache_ttl)
         return items
 
-    def search(self, query: str, limit: int = 10) -> list[PolarisDocument]:
+    def search(self, query: str, limit: int = 10) -> list[Document]:
         docs = [
-            PolarisDocument(
+            Document(
                 source=self.name, source_id=it["url"], url=it["url"], title=it["title"],
                 content="(scraped index item — click URL for full content)",
                 tags=[self.name], metadata={"raw": jsonsafe(it)},
@@ -168,7 +168,7 @@ class _ScrapeSite:
             return keyword_score_filter(docs, q)[:limit]
         return docs[:limit]
 
-    def fetch_url(self, url: str) -> Optional[PolarisDocument]:
+    def fetch_url(self, url: str) -> Optional[Document]:
         if not self.url_pattern:
             return None
         host = urlparse(url).hostname or ""
@@ -182,7 +182,7 @@ class _ScrapeSite:
         title = title_el.get_text(strip=True) if title_el else "(untitled)"
         main = soup.find("main") or soup.find("article") or soup.body
         body = re.sub(r"\n{3,}", "\n\n", main.get_text("\n", strip=True)).strip() if main else ""
-        return PolarisDocument(
+        return Document(
             source=self.name, source_id=url, url=url, title=title, content=body or "(no content)",
             tags=[self.name], metadata={"raw": jsonsafe({"url": url, "title": title, "body": body})},
         )

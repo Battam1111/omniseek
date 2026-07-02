@@ -22,13 +22,13 @@ from typing import Optional
 
 import httpx
 
-from penumbra.core.normalize import PolarisDocument, mk_signal
+from penumbra.core.normalize import Document, mk_signal
 
 logger = logging.getLogger(__name__)
 
 CSV_URL = "https://raw.githubusercontent.com/the-full-stack/website/main/docs/cloud-gpus/cloud-gpus.csv"
 TIMEOUT = 20
-USER_AGENT = "polaris-eye/0.1 (automated retrieval)"
+USER_AGENT = "penumbra/0.1 (automated retrieval)"
 
 _ROWS: Optional[list[dict]] = None
 
@@ -73,7 +73,7 @@ class GPUPricingAdapter:
         "配 reference/compute-access-map.md (现在能申的免费额度)."
     )
 
-    def search(self, query: str, limit: int = 12) -> list[PolarisDocument]:
+    def search(self, query: str, limit: int = 12) -> list[Document]:
         rows = _load()
         if not rows:
             return []
@@ -93,7 +93,7 @@ class GPUPricingAdapter:
         sel.sort(key=keyf)
         return [d for d in (self._to_doc(r) for r in sel[:limit]) if d]
 
-    def fetch_url(self, url: str) -> Optional[PolarisDocument]:
+    def fetch_url(self, url: str) -> Optional[Document]:
         return None
 
     def health_check(self) -> tuple[bool, str]:
@@ -105,7 +105,7 @@ class GPUPricingAdapter:
             return False, f"{type(exc).__name__}: {exc}"
 
     @staticmethod
-    def _to_doc(r: dict) -> Optional[PolarisDocument]:
+    def _to_doc(r: dict) -> Optional[Document]:
         cloud, gpu = r.get("Cloud", ""), r.get("GPU Type", "")
         if not cloud and not gpu:
             return None
@@ -125,7 +125,7 @@ class GPUPricingAdapter:
         price = _price(per) or _price(od) or _price(spot)
         signals = mk_signal("price_per_gpu_hr", price, kind="other",
                             by="cloud-gpus/on-demand", unit="USD")
-        return PolarisDocument(
+        return Document(
             source="gpu_pricing",
             source_id=f"{cloud}|{gpu}|{r.get('Name', '')}",
             url="https://cloud-gpus.com/",

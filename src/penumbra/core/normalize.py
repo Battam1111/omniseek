@@ -1,6 +1,6 @@
-"""Unified document model for all Polaris eye sources.
+"""Unified document model for all Penumbra eye sources.
 
-Every adapter returns content normalized to PolarisDocument so downstream
+Every adapter returns content normalized to Document so downstream
 processing doesn't care whether content came from Reddit, Zhihu, or arXiv.
 """
 
@@ -127,8 +127,8 @@ class Signal(BaseModel):
 _ATTENTION_KINDS = frozenset({'engagement', 'citation'})
 
 
-class PolarisDocument(BaseModel):
-    """Normalized representation of content from any Polaris eye source."""
+class Document(BaseModel):
+    """Normalized representation of content from any Penumbra eye source."""
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
@@ -198,18 +198,18 @@ class PolarisDocument(BaseModel):
         return max(vals) if vals else None
 
     def to_tool_dict(self, *, full: bool = False, content_cap: int = 2000) -> dict:
-        """Agent-facing serialization for the MCP eye_* tools — the single lean projection.
+        """Agent-facing serialization for the MCP penumbra_* tools — the single lean projection.
 
         ALWAYS drops ``metadata['raw']``: that lossless escape-hatch is write-only (no code
         path consumes it — every useful field is already parsed out of it), so it is pure
         token weight in a tool response (~65% of a ranked-search payload). It stays on the
         cached document; it just isn't sent to the agent.
 
-        ``full=False`` (DISCOVERY — eye_search / eye_search_ranked, where the agent triages
+        ``full=False`` (DISCOVERY — penumbra_search / penumbra_search_ranked, where the agent triages
         many results) caps ``content`` to a ``content_cap``-char preview and sets
         ``content_truncated`` + ``content_full_chars`` so the agent knows to drill in
-        (``eye_add_url`` on this doc's ``url``) for the whole text. ``full=True`` (DRILL-DOWN —
-        eye_fetch / eye_add_url, a source/URL the agent already chose) keeps content whole.
+        (``penumbra_add_url`` on this doc's ``url``) for the whole text. ``full=True`` (DRILL-DOWN —
+        penumbra_fetch / penumbra_add_url, a source/URL the agent already chose) keeps content whole.
         """
         d = self.model_dump(mode="json")
         meta = d.get("metadata")
@@ -254,7 +254,7 @@ def jsonsafe(obj, _depth: int = 0):
     return str(obj)
 
 
-def keyword_score_filter(docs: list[PolarisDocument], query: str) -> list[PolarisDocument]:
+def keyword_score_filter(docs: list[Document], query: str) -> list[Document]:
     """Filter + rank docs by lexical relevance to ``query`` (title weighted 3x over content).
 
     Delegates to ``penumbra.core.relevance`` (BM25-shaped: tf saturation + length

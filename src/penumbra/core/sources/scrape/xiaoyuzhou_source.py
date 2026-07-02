@@ -7,7 +7,7 @@ episodes straight from xiaoyuzhoufm.com — the Next.js page embeds the full
 episode list (title, shownotes, audio enclosure, cover, pubDate) in its
 ``__NEXT_DATA__`` JSON, so no API auth is needed.
 
-Configure via ``~/.polaris/credentials/xiaoyuzhou.json``:
+Configure via ``~/.penumbra/credentials/xiaoyuzhou.json``:
     {"podcasts": [{"id": "<24-hex>", "name": "..."}]}   (id = the /podcast/<id> id)
 """
 
@@ -23,7 +23,7 @@ from urllib.parse import urlparse
 import httpx
 
 from penumbra.core import auth, cache
-from penumbra.core.normalize import PolarisDocument, jsonsafe, keyword_score_filter
+from penumbra.core.normalize import Document, jsonsafe, keyword_score_filter
 
 logger = logging.getLogger(__name__)
 
@@ -78,7 +78,7 @@ class XiaoyuzhouAdapter:
     needs_credentials = False
     description = (
         "小宇宙播客 — 张小珺商业访谈录 / OnBoard! / 42章经 等中文 AI/科技/创投深度访谈 "
-        "(原生抓 xiaoyuzhoufm __NEXT_DATA__, 无需 RSSHub; 可配 ~/.polaris/credentials/xiaoyuzhou.json)"
+        "(原生抓 xiaoyuzhoufm __NEXT_DATA__, 无需 RSSHub; 可配 ~/.penumbra/credentials/xiaoyuzhou.json)"
     )
 
     def _podcasts(self) -> list[dict]:
@@ -87,7 +87,7 @@ class XiaoyuzhouAdapter:
             return creds["podcasts"]
         return DEFAULT_PODCASTS
 
-    def _fetch_podcast(self, pid: str, name: str) -> list[PolarisDocument]:
+    def _fetch_podcast(self, pid: str, name: str) -> list[Document]:
         key = cache.make_key("xiaoyuzhou", "podcast", pid)
         cached = cache.get_docs(key)
         if cached is not None:
@@ -105,14 +105,14 @@ class XiaoyuzhouAdapter:
             cache.set_docs(key, docs, ttl=CACHE_TTL)
         return docs
 
-    def _ep_to_doc(self, e: dict, podcast_title: str) -> PolarisDocument:
+    def _ep_to_doc(self, e: dict, podcast_title: str) -> Document:
         eid = e.get("eid")
         body = e.get("shownotes") or e.get("description") or ""
         content = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", body)).strip() or "(no shownotes)"
-        content += "\n\n[完整口语内容在音频里(shownotes 仅摘要)→ eye_transcribe 取本地 Whisper 全文转写]"
+        content += "\n\n[完整口语内容在音频里(shownotes 仅摘要)→ penumbra_transcribe 取本地 Whisper 全文转写]"
         img = _img(e.get("image"))
         enc = e.get("enclosure")
-        return PolarisDocument(
+        return Document(
             source="xiaoyuzhou",
             source_id=str(eid),
             url=f"{BASE}/episode/{eid}",
@@ -131,8 +131,8 @@ class XiaoyuzhouAdapter:
             },
         )
 
-    def search(self, query: str, limit: int = 10) -> list[PolarisDocument]:
-        docs: list[PolarisDocument] = []
+    def search(self, query: str, limit: int = 10) -> list[Document]:
+        docs: list[Document] = []
         for p in self._podcasts():
             pid = p.get("id")
             if pid:
@@ -143,7 +143,7 @@ class XiaoyuzhouAdapter:
         docs.sort(key=lambda d: d.date or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
         return docs[:limit]
 
-    def fetch_url(self, url: str) -> Optional[PolarisDocument]:
+    def fetch_url(self, url: str) -> Optional[Document]:
         host = (urlparse(url).hostname or "").lower()
         if "xiaoyuzhoufm.com" not in host:
             return None

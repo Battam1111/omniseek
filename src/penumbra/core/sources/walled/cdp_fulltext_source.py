@@ -13,7 +13,7 @@ Verified by direct CDP test 2026-06-07 (NO login required for any of these):
 NOT usable from our datacenter egress IP (served a login/gateway page): HardwareZone
 (forums.hardwarezone.com.sg) -> keep using its search-index source.
 
-Workflow: DISCOVER via the matching search-index source, then eye_add_url the result
+Workflow: DISCOVER via the matching search-index source, then penumbra_add_url the result
 URL here for the full text. READ-ONLY, no login, URL-only (search() is []).
 """
 
@@ -26,7 +26,7 @@ from urllib.parse import urlparse
 
 from bs4 import BeautifulSoup
 
-from penumbra.core.normalize import PolarisDocument
+from penumbra.core.normalize import Document
 from penumbra.core.sources.walled._cdp import cdp_call, cdp_health, content_with_media, images_from_page
 
 logger = logging.getLogger(__name__)
@@ -60,10 +60,10 @@ class CdpFulltextAdapter:
         "READ-ONLY, no login. LinkedIn limited to /posts/ (public Track A only)."
     )
 
-    def search(self, query: str, limit: int = 10) -> list[PolarisDocument]:
+    def search(self, query: str, limit: int = 10) -> list[Document]:
         return []  # discovery is the search-index sources' job; this adapter is URL-only
 
-    def fetch_url(self, url: str) -> Optional[PolarisDocument]:
+    def fetch_url(self, url: str) -> Optional[Document]:
         parsed = urlparse(url)
         host = parsed.hostname or ""
         if not any(h in host for h in _HOSTS):
@@ -108,7 +108,7 @@ class CdpFulltextAdapter:
         body = main.get_text("\n", strip=True) if main else ""
         body = re.sub(r"\n{3,}", "\n\n", body).strip()[:_MAX_CHARS]
 
-        return PolarisDocument(
+        return Document(
             source="cdp_fulltext", source_id=url, url=r["url"],
             title=(r["title"] or "(untitled)").strip()[:200],
             content=content_with_media(body, r.get("images") or []) or "(no text extracted)",

@@ -22,7 +22,7 @@ import re
 from typing import Optional
 
 from penumbra.core import cache, http
-from penumbra.core.normalize import PolarisDocument, jsonsafe
+from penumbra.core.normalize import Document, jsonsafe
 
 logger = logging.getLogger(__name__)
 
@@ -89,7 +89,7 @@ def _resolve_latest_resource() -> Optional[tuple[str, int]]:
     return (rid, best_year)
 
 
-def _build_doc(rec: dict, year: int) -> Optional[PolarisDocument]:
+def _build_doc(rec: dict, year: int) -> Optional[Document]:
     last = _f(rec, "Last name", "Last Name")
     first = _f(rec, "First name", "First Name")
     name = f"{first} {last}".strip()
@@ -101,7 +101,7 @@ def _build_doc(rec: dict, year: int) -> Optional[PolarisDocument]:
     salary = _f(rec, "Salary", "Salary Paid")
     benefits = _f(rec, "Benefits", "Taxable Benefits")
     yr = _f(rec, "Year", "Calendar Year") or str(year)
-    return PolarisDocument(
+    return Document(
         source="ontario_sunshine",
         source_id=f"{year}|{rec.get('_id')}",
         url="https://www.ontario.ca/page/public-sector-salary-disclosure",
@@ -134,7 +134,7 @@ class OntarioSunshineAdapter:
         "传人名或机构名 (如 'University of Toronto')."
     )
 
-    def search(self, query: str, limit: int = 10) -> list[PolarisDocument]:
+    def search(self, query: str, limit: int = 10) -> list[Document]:
         q = (query or "").strip()
         if not q:
             return []  # targeted lookup: empty query must NEVER trigger a bulk pull
@@ -161,7 +161,7 @@ class OntarioSunshineAdapter:
         cache.set_docs(key, docs, ttl=CACHE_TTL)
         return docs
 
-    def fetch_url(self, url: str) -> Optional[PolarisDocument]:
+    def fetch_url(self, url: str) -> Optional[Document]:
         return None  # structured lookup; reach via search (no arbitrary-URL fan-in)
 
     def health_check(self) -> tuple[bool, str]:

@@ -39,7 +39,7 @@ from urllib.parse import urlparse
 import httpx
 
 from penumbra.core import auth
-from penumbra.core.normalize import PolarisDocument, jsonsafe, mk_signal
+from penumbra.core.normalize import Document, jsonsafe, mk_signal
 from penumbra.core.sources.api._base import BaseAPIAdapter
 
 logger = logging.getLogger(__name__)
@@ -47,7 +47,7 @@ logger = logging.getLogger(__name__)
 CROSSREF_BASE = "https://api.crossref.org"
 TIMEOUT = 20
 # Polite-pool contact is the DEPLOYER's, host-injected via auth.contact_email(), never in-tree.
-USER_AGENT = f"polaris-eye/0.1 (mailto:{auth.contact_email()}; automated retrieval)"
+USER_AGENT = f"penumbra/0.1 (mailto:{auth.contact_email()}; automated retrieval)"
 
 
 class CrossrefAdapter(BaseAPIAdapter):
@@ -82,11 +82,11 @@ class CrossrefAdapter(BaseAPIAdapter):
 
         return ((data.get("message") or {}).get("items")) or []
 
-    def _to_document(self, raw) -> Optional[PolarisDocument]:
+    def _to_document(self, raw) -> Optional[Document]:
         return self._item_to_document(raw)
 
     # --------------------------------------------------------------- fetch_url
-    def fetch_url(self, url: str) -> Optional[PolarisDocument]:
+    def fetch_url(self, url: str) -> Optional[Document]:
         host = (urlparse(url).hostname or "").lower()
         # Crossref handles DOI URLs (doi.org/...) and direct api.crossref.org/works/DOI
         doi: Optional[str] = None
@@ -131,7 +131,7 @@ class CrossrefAdapter(BaseAPIAdapter):
             return False, f"{type(exc).__name__}: {exc}"
 
     @staticmethod
-    def _item_to_document(item: dict) -> PolarisDocument:
+    def _item_to_document(item: dict) -> Document:
         doi = item.get("DOI") or ""
         url = item.get("URL") or (f"https://doi.org/{doi}" if doi else "")
 
@@ -182,7 +182,7 @@ class CrossrefAdapter(BaseAPIAdapter):
         if not abstract:
             abstract = f"{venue or 'Crossref-indexed work'} • {item.get('type', 'work')}"
 
-        return PolarisDocument(
+        return Document(
             source="crossref",
             source_id=doi or url,
             url=url,

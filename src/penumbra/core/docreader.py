@@ -1,7 +1,7 @@
 """Document digestion — turn a document FILE (pptx/docx/xlsx/pdf/txt/md, local
 path or URL) into readable, structured text + an HONEST media inventory.
 
-The third perception primitive: web pages (eye_add_url), speech (eye_transcribe),
+The third perception primitive: web pages (penumbra_add_url), speech (penumbra_transcribe),
 and now documents-as-files. Built P39 (2026-06-10) from a real 颜色框.pptx
 (a 28-slide, 66-image figure-style reference deck): the eye digests uploads the
 way it transcribes audio.
@@ -29,9 +29,9 @@ image half is delivered to the agent's own vision two ways:
     the fabrication trap). eye = render + structure; agent = see + judge.
 
 Transport: the eye runs on the host; the user's files live on client machines.
-Convention: ``scp "<file>" <eye-host>:polaris-inbox/`` (any window can),
-then call with ``polaris-inbox/<name>`` — relative paths resolve against the
-service user's HOME. Exports land in ``polaris-inbox/.exports/<stem>/``.
+Convention: ``scp "<file>" <eye-host>:penumbra-inbox/`` (any window can),
+then call with ``penumbra-inbox/<name>`` — relative paths resolve against the
+service user's HOME. Exports land in ``penumbra-inbox/.exports/<stem>/``.
 """
 from __future__ import annotations
 
@@ -54,8 +54,8 @@ def _fitz():
     return _optdep.require("fitz", "pdf")
 
 # Code + config source files are just plain text, routed to the txt reader (no parser): a
-# read returns the file's text + the honest "no extractable images" note. Lets eye_read_document /
-# eye_add_url digest a raw repo file (roadmap-④ engineering-craft prereq).
+# read returns the file's text + the honest "no extractable images" note. Lets penumbra_read_document /
+# penumbra_add_url digest a raw repo file (roadmap-④ engineering-craft prereq).
 _CODE_EXTS = ("py", "pyi", "ts", "tsx", "js", "jsx", "mjs", "cjs", "rs", "go", "java", "kt",
               "c", "h", "cpp", "cc", "hpp", "cs", "rb", "php", "swift", "scala", "lua", "r",
               "sh", "bash", "zsh", "sql", "toml", "cfg", "ini", "conf", "yaml", "yml",
@@ -69,7 +69,7 @@ _MEDIA_LIST_CAP = 100               # inventory entries returned (export writes 
 _TTL = 3600                         # parsed-doc cache; local mtime+size in the key
 _UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0 Safari/537.36"
 
-# Image-view (eye_view_doc_images) tuning.
+# Image-view (penumbra_view_doc_images) tuning.
 _IMAGE_FORMATS = ("pptx", "pdf", "docx")  # formats that carry extractable embedded images
 _VIEW_MAX_DIM = 1456                # full-res long-edge cap (Claude vision downsamples ~here anyway)
 _VIEW_FULL_CAP = 12                 # max full-res images per call (beyond → contact sheet)
@@ -79,7 +79,7 @@ _SHEET_COLS = 4
 _SHEET_CELL = 260                   # thumbnail box (px)
 _SHEET_PAD = 8
 _SHEET_LABEL = 18                   # caption strip height under each thumbnail (px)
-# OCR (eye_read_document ocr=True) — text-in-pixels (scanned pages, baked-in labels, HEX codes).
+# OCR (penumbra_read_document ocr=True) — text-in-pixels (scanned pages, baked-in labels, HEX codes).
 _OCR_MAX_IMAGES = 60                # OCR is per-image work; cap per document for sanity
 _OCR_MAX_DIM = 1800                 # downscale before OCR (speed; OCR gains nothing from huge images)
 _ocr_engine = None                  # lazy RapidOCR singleton (load is expensive; keep warm)
@@ -134,10 +134,10 @@ def _fmt_from_response(content_type: Optional[str], cd_filename: Optional[str]) 
 
 
 def _allowed_doc_roots() -> list[Path]:
-    """Directories eye_read_document / view_images may read from. Default: the inbox only.
-    A deployer adds roots via POLARIS_DOC_ROOTS (',' or ':' separated absolute paths)."""
-    roots = [(Path.home() / "polaris-inbox").resolve()]
-    for r in re.split(r"[:,]", os.environ.get("POLARIS_DOC_ROOTS", "")):
+    """Directories penumbra_read_document / view_images may read from. Default: the inbox only.
+    A deployer adds roots via PENUMBRA_DOC_ROOTS (',' or ':' separated absolute paths)."""
+    roots = [(Path.home() / "penumbra-inbox").resolve()]
+    for r in re.split(r"[:,]", os.environ.get("PENUMBRA_DOC_ROOTS", "")):
         r = r.strip()
         if r:
             try:
@@ -149,9 +149,9 @@ def _allowed_doc_roots() -> list[Path]:
 
 def _resolve_local(path: str) -> Path:
     """Local-path semantics: ~ expands; a relative path resolves against HOME (so the documented
-    "polaris-inbox/<name>" convention works verbatim). SANDBOXED: the resolved REAL path must sit
-    under an allowed root (default ~/polaris-inbox; extend via POLARIS_DOC_ROOTS), so a caller (or a
-    prompt-injected agent) cannot read arbitrary host files like ~/.polaris/credentials. `..` is
+    "penumbra-inbox/<name>" convention works verbatim). SANDBOXED: the resolved REAL path must sit
+    under an allowed root (default ~/penumbra-inbox; extend via PENUMBRA_DOC_ROOTS), so a caller (or a
+    prompt-injected agent) cannot read arbitrary host files like ~/.penumbra/credentials. `..` is
     collapsed by resolve() before the containment check. Raises PermissionError on escape."""
     p = Path(os.path.expanduser(path))
     if not p.is_absolute():
@@ -161,7 +161,7 @@ def _resolve_local(path: str) -> Path:
     if not any(rp == root or root in rp.parents for root in roots):
         raise PermissionError(
             "path is outside the allowed document roots "
-            f"({', '.join(str(r) for r in roots)}); set POLARIS_DOC_ROOTS to permit more")
+            f"({', '.join(str(r) for r in roots)}); set PENUMBRA_DOC_ROOTS to permit more")
     return rp
 
 
@@ -318,7 +318,7 @@ def _download(url: str, fmt: str) -> tuple[Path, Optional[str], Optional[str]]:
     _blk = _netguard.security_block_reason(url)
     if _blk is not None:
         raise RuntimeError(f"refused SSRF-class url ({_blk}): {url[:120]}")
-    fd, tmp = tempfile.mkstemp(suffix=f".{fmt or 'bin'}", prefix="polaris-doc-")
+    fd, tmp = tempfile.mkstemp(suffix=f".{fmt or 'bin'}", prefix="penumbra-doc-")
     os.close(fd)
     with httpx.stream("GET", url, headers={"User-Agent": _UA}, timeout=90,
                       follow_redirects=True) as r:
@@ -337,7 +337,7 @@ def _download(url: str, fmt: str) -> tuple[Path, Optional[str], Optional[str]]:
 
 def read_document(src: str, start_char: int = 0, max_chars: int = 24000,
                   export_media: bool = False, ocr: bool = False) -> dict:
-    """Parse `src` (local path or URL) → structured readable text. See eye_read_document.
+    """Parse `src` (local path or URL) → structured readable text. See penumbra_read_document.
 
     ocr=True additionally runs OCR over every embedded image (pptx/pdf/docx) and folds the
     recognized text-in-pixels into the body under a '图中文字 (OCR)' section — turns a scanned
@@ -373,7 +373,7 @@ def read_document(src: str, start_char: int = 0, max_chars: int = 24000,
             except PermissionError as exc:
                 return {"source": src, "error": str(exc)}
             if not path.is_file():
-                inbox = Path.home() / "polaris-inbox"
+                inbox = Path.home() / "penumbra-inbox"
                 have = sorted(p.name for p in inbox.glob("*") if p.is_file())[:20] if inbox.is_dir() else []
                 return {"source": src, "error": f"file not found: {path}",
                         "inbox_files": have}
@@ -383,7 +383,7 @@ def read_document(src: str, start_char: int = 0, max_chars: int = 24000,
         export_dir: Optional[Path] = None
         if export_media:
             stem = re.sub(r"[^\w.-]+", "_", Path(unquote(urlparse(src).path if is_url else src)).stem) or "doc"
-            export_dir = Path.home() / "polaris-inbox" / ".exports" / stem
+            export_dir = Path.home() / "penumbra-inbox" / ".exports" / stem
             export_dir.mkdir(parents=True, exist_ok=True)
 
         ck = cache.make_key("docreader", ck_id, fmt, bool(export_media), bool(ocr))
@@ -434,7 +434,7 @@ def read_document(src: str, start_char: int = 0, max_chars: int = 24000,
 
 
 # ===========================================================================
-# Image view (eye_view_doc_images) — deliver embedded images to the agent's
+# Image view (penumbra_view_doc_images) — deliver embedded images to the agent's
 # vision IN-BAND. Tier 4 of the document modality: the eye renders pixels, the
 # agent sees. Returns raw PNG bytes; server.py wraps them as MCP Image content.
 # ===========================================================================
@@ -675,7 +675,7 @@ def _contact_sheet(cells: list[dict]) -> bytes:
 
 def view_images(src: str, sections=None, names=None, max_images: int = _VIEW_FULL_CAP,
                 contact_sheet: bool = False, max_dim: int = _VIEW_MAX_DIM, render_pages=None) -> dict:
-    """Extract embedded images from `src` for in-band delivery. See eye_view_doc_images.
+    """Extract embedded images from `src` for in-band delivery. See penumbra_view_doc_images.
 
     ``render_pages`` (PDF only): instead of extracting embedded rasters, RENDER those page numbers to
     PNG — the way to SEE vector/TikZ figures + architecture diagrams that carry no embedded image.
@@ -699,7 +699,7 @@ def view_images(src: str, sections=None, names=None, max_images: int = _VIEW_FUL
     if fmt and fmt not in _IMAGE_FORMATS:
         return {"source": src, "format": fmt, "total_images": 0, "images": [],
                 "note": f"{fmt} carries no extractable embedded images "
-                        f"(its meaning is text; use eye_read_document)"}
+                        f"(its meaning is text; use penumbra_read_document)"}
 
     tmp: Optional[Path] = None
     try:
@@ -715,14 +715,14 @@ def view_images(src: str, sections=None, names=None, max_images: int = _VIEW_FUL
                 if fmt not in _IMAGE_FORMATS:
                     return {"source": src, "format": fmt, "total_images": 0, "images": [],
                             "note": f"{fmt} carries no extractable embedded images "
-                                    f"(its meaning is text; use eye_read_document)"}
+                                    f"(its meaning is text; use penumbra_read_document)"}
         else:
             try:
                 path = _resolve_local(src)
             except PermissionError as exc:
                 return {"source": src, "error": str(exc)}
             if not path.is_file():
-                inbox = Path.home() / "polaris-inbox"
+                inbox = Path.home() / "penumbra-inbox"
                 have = sorted(p.name for p in inbox.glob("*") if p.is_file())[:20] if inbox.is_dir() else []
                 return {"source": src, "error": f"file not found: {path}", "inbox_files": have}
 
@@ -756,7 +756,7 @@ def view_images(src: str, sections=None, names=None, max_images: int = _VIEW_FUL
             cells = items[:_SHEET_MAX]
             if total > _SHEET_MAX:
                 note = (f"contact sheet shows {_SHEET_MAX} of {total}{cap_note}; narrow with "
-                        f"sections=/names= (see eye_read_document outline) for the rest")
+                        f"sections=/names= (see penumbra_read_document outline) for the rest")
             elif total > max_images and not contact_sheet:
                 note = (f"{total} images selected (> {max_images} full-res cap) → contact sheet; "
                         f"pass names=\"...\" to pull specific ones at full res")

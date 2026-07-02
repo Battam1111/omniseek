@@ -25,7 +25,7 @@ from urllib.parse import quote, urlparse
 
 from bs4 import BeautifulSoup
 
-from penumbra.core.normalize import PolarisDocument, jsonsafe
+from penumbra.core.normalize import Document, jsonsafe
 from penumbra.core.sources.walled._base import BaseCDPAdapter
 from penumbra.core.sources.walled._cdp import (
     cdp_call, cdp_health, content_with_media, images_from_page, wait_through_cloudflare,
@@ -89,13 +89,13 @@ class YipinsanfendiAdapter(BaseCDPAdapter):
                 return page.content()  # genuine no-results / other page — let the parser handle it
         return page.content()
 
-    def _to_documents(self, raw: Any, query: str, limit: int) -> list[PolarisDocument]:
+    def _to_documents(self, raw: Any, query: str, limit: int) -> list[Document]:
         html = raw
         soup = BeautifulSoup(html, "lxml")
         # Discuz search results: results are in .pbw blocks
         results = soup.select(".pbw, li.pbw")
 
-        docs: list[PolarisDocument] = []
+        docs: list[Document] = []
         seen = set()
         for r in results:
             try:
@@ -135,7 +135,7 @@ class YipinsanfendiAdapter(BaseCDPAdapter):
                 tid = (m.group(1) or m.group(2)) if m else full_url
 
                 docs.append(
-                    PolarisDocument(
+                    Document(
                         source="yipinsanfendi",
                         source_id=tid,
                         url=full_url,
@@ -151,7 +151,7 @@ class YipinsanfendiAdapter(BaseCDPAdapter):
                 logger.debug("Skipping 1point3acres result: %s", exc)
         return docs
 
-    def fetch_url(self, url: str) -> Optional[PolarisDocument]:
+    def fetch_url(self, url: str) -> Optional[Document]:
         host = urlparse(url).hostname or ""
         if "1point3acres.com" not in host:
             return None
@@ -177,7 +177,7 @@ class YipinsanfendiAdapter(BaseCDPAdapter):
         m = re.search(r"thread-(\d+)|tid=(\d+)", url)
         tid = (m.group(1) or m.group(2)) if m else url
 
-        return PolarisDocument(
+        return Document(
             source="yipinsanfendi",
             source_id=tid,
             url=url,

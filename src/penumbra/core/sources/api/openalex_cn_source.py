@@ -23,7 +23,7 @@ Recon trail: brain note eye-recon-openalex_cn.
 
 from __future__ import annotations
 
-from penumbra.core.normalize import PolarisDocument
+from penumbra.core.normalize import Document
 from penumbra.core.sources.api.openalex_source import OpenAlexAdapter
 
 
@@ -51,9 +51,9 @@ class OpenAlexCNAdapter(OpenAlexAdapter):
     regions = ["cn"]
     modes = ["STRUCTURE"]
 
-    def search(self, query: str, limit: int = 10) -> list[PolarisDocument]:
+    def search(self, query: str, limit: int = 10) -> list[Document]:
         docs = super().search(_pin_zh(query), limit)
-        # re-stamp source so eye_search results + recall index label them as this facet, not 'openalex'
+        # re-stamp source so penumbra_search results + recall index label them as this facet, not 'openalex'
         return [d.model_copy(update={"source": self.name}) for d in docs]
 
 

@@ -1,12 +1,12 @@
-"""Polaris eye as a shared HTTP MCP service (streamable-http + bearer-token auth).
+"""Penumbra eye as a shared HTTP MCP service (streamable-http + bearer-token auth).
 
 ONE always-on process (launchd com.penumbra.organ.eye-http) that every agent / window connects to
 over the network, instead of each Claude window spawning its own stdio-over-ssh server (N
 heavy processes, a cold 86-adapter load each). Token-gated, because the eye drives
 credentialed + logged-in-browser tools: it must NEVER serve open.
 
-Run:    python -m penumbra.serve_http      (env: POLARIS_HTTP_HOST / POLARIS_HTTP_PORT)
-Token:  ~/.polaris/credentials/eye_http.json  ->  {"token": "..."}  (mode 600)
+Run:    python -m penumbra.serve_http      (env: PENUMBRA_HTTP_HOST / PENUMBRA_HTTP_PORT)
+Token:  ~/.penumbra/credentials/penumbra_http.json  ->  {"token": "..."}  (mode 600)
 Client: send  Authorization: Bearer <token>  on every request. Unauthed -> 401.
         /healthz is open (liveness only, returns no data).
 """
@@ -29,11 +29,11 @@ logger = logging.getLogger("penumbra.serve_http")
 
 # Bind LOOPBACK by default: the eye drives credentialed + logged-in-browser tools, so a stranger's
 # fresh deploy must NOT be reachable off-box. A deployer who wants LAN/tailnet access sets
-# POLARIS_HTTP_HOST=0.0.0.0 explicitly (and owns putting it behind a firewall / reverse proxy).
-HOST = os.environ.get("POLARIS_HTTP_HOST", "127.0.0.1")
+# PENUMBRA_HTTP_HOST=0.0.0.0 explicitly (and owns putting it behind a firewall / reverse proxy).
+HOST = os.environ.get("PENUMBRA_HTTP_HOST", "127.0.0.1")
 _IS_LOOPBACK = HOST in ("127.0.0.1", "::1", "localhost")
-PORT = int(os.environ.get("POLARIS_HTTP_PORT", "8765"))
-_TOKEN_PATH = Path.home() / ".polaris" / "credentials" / "penumbra_http.json"
+PORT = int(os.environ.get("PENUMBRA_HTTP_PORT", "8765"))
+_TOKEN_PATH = Path.home() / ".penumbra" / "credentials" / "penumbra_http.json"
 
 
 def _load_token() -> str:
@@ -74,7 +74,7 @@ mcp.settings.transport_security = TransportSecuritySettings(
     enable_dns_rebinding_protection=_IS_LOOPBACK)
 if not _IS_LOOPBACK:
     logger.warning(
-        "POLARIS_HTTP_HOST=%s binds NON-loopback: the eye is reachable off-box. Ensure a "
+        "PENUMBRA_HTTP_HOST=%s binds NON-loopback: the eye is reachable off-box. Ensure a "
         "firewall / reverse proxy + keep the bearer token secret (it drives credentialed tools).",
         HOST)
 
@@ -119,7 +119,7 @@ def main() -> None:
             logger.info("recall index: writes enabled + ingest loop + vector backfill started")
     except Exception as exc:  # noqa: BLE001 — the index is best-effort; never block boot
         logger.warning("recall index disabled (init failed): %s", exc)
-    logger.info("Polaris eye HTTP service on %s:%s (token-gated; MCP at /mcp)", HOST, PORT)
+    logger.info("Penumbra eye HTTP service on %s:%s (token-gated; MCP at /mcp)", HOST, PORT)
     uvicorn.run(app, host=HOST, port=PORT, log_level="info")
 
 

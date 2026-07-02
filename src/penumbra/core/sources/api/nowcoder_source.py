@@ -6,7 +6,7 @@ a firm leans 八股 vs 重思维/paper-driven, full hiring-loop timelines, live 
 codes. The SPA's gateway endpoint returns full records with NO auth (the older
 RSSHub /discuss/experience/json route is degraded → empty for anonymous callers).
 
-Config (optional) ``~/.polaris/credentials/nowcoder.json``: {"job_ids": [645, ...]}
+Config (optional) ``~/.penumbra/credentials/nowcoder.json``: {"job_ids": [645, ...]}
 — 645 = 算法工程师 (the AI/ML interview position tag).
 """
 
@@ -20,7 +20,7 @@ from typing import Optional
 import httpx
 
 from penumbra.core import auth, cache
-from penumbra.core.normalize import PolarisDocument, jsonsafe, keyword_score_filter, mk_signal
+from penumbra.core.normalize import Document, jsonsafe, keyword_score_filter, mk_signal
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +49,7 @@ class NowcoderAdapter:
     description = (
         "牛客网 面经 + 内推 — 中文 AI/ML 真实面试 bar (八股 vs 重思维 / 全流程时间线 / 内推码), "
         "成于面试后数天. 直连 JSON 已被 Aliyun WAF 墙 → 降级走 site:nowcoder.com Brave 检索 (snippet). "
-        "默认 算法工程师(645), 可配 ~/.polaris/credentials/nowcoder.json job_ids"
+        "默认 算法工程师(645), 可配 ~/.penumbra/credentials/nowcoder.json job_ids"
     )
 
     def _job_ids(self) -> list:
@@ -58,12 +58,12 @@ class NowcoderAdapter:
             return creds["job_ids"]
         return DEFAULT_JOB_IDS
 
-    def _fetch_job(self, job_id, order: int = 3, pages: int = 1) -> list[PolarisDocument]:
+    def _fetch_job(self, job_id, order: int = 3, pages: int = 1) -> list[Document]:
         key = cache.make_key("nowcoder", "job", job_id, order, pages)
         cached = cache.get_docs(key)
         if cached is not None:
             return cached
-        docs: list[PolarisDocument] = []
+        docs: list[Document] = []
         for page in range(1, pages + 1):
             try:
                 r = httpx.post(API, headers=HEADERS,
@@ -82,7 +82,7 @@ class NowcoderAdapter:
             cache.set_docs(key, docs, ttl=CACHE_TTL)
         return docs
 
-    def _to_doc(self, it: dict, cd: dict, job_id) -> PolarisDocument:
+    def _to_doc(self, it: dict, cd: dict, job_id) -> Document:
         uuid = cd.get("uuid")
         body = cd.get("content") or re.sub(r"<[^>]+>", " ", cd.get("richText") or cd.get("newContent") or "")
         body = re.sub(r"\s+", " ", body).strip() or "(no content)"
@@ -94,7 +94,7 @@ class NowcoderAdapter:
             except (ValueError, TypeError, OSError):
                 date = None
         freq = it.get("frequencyData") or {}
-        return PolarisDocument(
+        return Document(
             source="nowcoder",
             source_id=str(uuid),
             url=f"https://www.nowcoder.com/feed/main/detail/{uuid}",
@@ -109,8 +109,8 @@ class NowcoderAdapter:
                       "view_cnt": freq.get("viewCnt"), "raw": jsonsafe(it)},
         )
 
-    def search(self, query: str, limit: int = 10) -> list[PolarisDocument]:
-        docs: list[PolarisDocument] = []
+    def search(self, query: str, limit: int = 10) -> list[Document]:
+        docs: list[Document] = []
         for jid in self._job_ids():
             docs.extend(self._fetch_job(jid))
         q = (query or "").strip()
@@ -122,15 +122,15 @@ class NowcoderAdapter:
         # Direct gateway yielded nothing (Aliyun-WAF-walled) → site:-scoped web search fallback.
         return self._search_fallback(q, limit)
 
-    def _search_fallback(self, query: str, limit: int) -> list[PolarisDocument]:
+    def _search_fallback(self, query: str, limit: int) -> list[Document]:
         from penumbra.core.sources.api._search_backend import search_web
         q = f"site:nowcoder.com/feed {query}".strip() if query else "site:nowcoder.com/feed 面经 算法工程师"
-        docs: list[PolarisDocument] = []
+        docs: list[Document] = []
         for r in search_web(q, n=min(max(limit * 2, 6), 15)):
             url = r.get("url")
             if not url or "nowcoder.com" not in url:
                 continue
-            docs.append(PolarisDocument(
+            docs.append(Document(
                 source="nowcoder", source_id=url, url=url,
                 title=r.get("title") or "(untitled)",
                 content=r.get("snippet") or "(snippet only — open the URL for the full 面经)",
@@ -141,7 +141,7 @@ class NowcoderAdapter:
                 break
         return docs
 
-    def fetch_url(self, url: str) -> Optional[PolarisDocument]:
+    def fetch_url(self, url: str) -> Optional[Document]:
         return None  # search-only; the list endpoint already carries full post content
 
     def health_check(self) -> tuple[bool, str]:

@@ -1,4 +1,4 @@
-"""Source adapters for the Polaris eye.
+"""Source adapters for the Penumbra eye.
 
 Each adapter implements the SourceAdapter protocol defined in fetcher.py.
 Adapters are organized by access mechanism:

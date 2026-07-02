@@ -25,7 +25,7 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
-from penumbra.core.normalize import PolarisDocument, mk_signal
+from penumbra.core.normalize import Document, mk_signal
 from penumbra.core.sources.scrape._base import BaseScrapeAdapter
 
 logger = logging.getLogger(__name__)
@@ -111,8 +111,8 @@ def _parse_tencent_quotes(body: str) -> dict:
 # Tencent `~`-field indices (probed live 2026-06-20, consistent across A-share/HK/US):
 #   1 name · 2 code · 3 price · 4 prev_close · 5 open · 31 change · 32 change% · 33 high · 34 low
 #   · 39 PE · 45 total_market_cap(亿). ([46] is PB for A-share but the English name for HK/US, so unused.)
-def _quote_to_doc(f: list, quoteid: str, code: str) -> Optional[PolarisDocument]:
-    """One Tencent quote field-list → PolarisDocument (pure fn → golden-fixture testable)."""
+def _quote_to_doc(f: list, quoteid: str, code: str) -> Optional[Document]:
+    """One Tencent quote field-list → Document (pure fn → golden-fixture testable)."""
     if len(f) < 40:
         return None
     name = (f[1] or "").strip()
@@ -128,7 +128,7 @@ def _quote_to_doc(f: list, quoteid: str, code: str) -> Optional[PolarisDocument]
     mktcap = _num(f[45]) if len(f) > 45 else None
     summary = (f"{name}（{code}）现价 {price} 涨跌 {chg} ({pct}%) | 今开 {openp} 最高 {high} "
                f"最低 {low} 昨收 {prev} | 总市值 {mktcap}亿 市盈率 {pe}")
-    return PolarisDocument(
+    return Document(
         source="eastmoney",
         source_id=quoteid or code,
         url=_quote_url(quoteid, code),
@@ -205,7 +205,7 @@ class EastMoneyAdapter(BaseScrapeAdapter):
             logger.warning("eastmoney (tencent quote) fetch failed: %s", exc)
             return None
 
-    def _to_documents(self, raw, query, limit) -> list[PolarisDocument]:
+    def _to_documents(self, raw, query, limit) -> list[Document]:
         return [doc for (f, qid, code) in raw[:limit] if (doc := _quote_to_doc(f, qid, code))]
 
     def health_check(self) -> tuple[bool, str]:

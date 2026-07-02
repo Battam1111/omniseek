@@ -25,7 +25,7 @@ signals = favourites_count + reblogs_count via mk_signal.
 
 Built on BaseScrapeAdapter (template method): the cache check / atomic set_docs /
 self-registration ritual lives in the base. We override the two hooks (_raw_fetch = the
-per-instance tag-timeline fan-out; _to_documents = the status -> PolarisDocument merge).
+per-instance tag-timeline fan-out; _to_documents = the status -> Document merge).
 We keep ``rank=False`` (the base default) and instead rank-then-slice INSIDE
 _to_documents over the FULL cross-instance pool with the same shared BM25 scorer the base
 would use: a merged multi-instance result has no single server order, and pre-capping per
@@ -43,7 +43,7 @@ from typing import Any, Optional
 
 from penumbra.core import http
 from penumbra.core.normalize import (
-    PolarisDocument,
+    Document,
     jsonsafe,
     keyword_score_filter,
     mk_signal,
@@ -143,8 +143,8 @@ class MastodonAdapter(BaseScrapeAdapter):
                 logger.debug("mastodon: %s returned no list for #%s", host, tag)
         return results or None
 
-    def _to_documents(self, raw: Any, query: str, limit: int) -> list[PolarisDocument]:
-        docs: list[PolarisDocument] = []
+    def _to_documents(self, raw: Any, query: str, limit: int) -> list[Document]:
+        docs: list[Document] = []
         seen: set[str] = set()  # dedupe a status federated to multiple instances (shared uri)
         for host, statuses in raw:
             base = INSTANCES.get(host, f"https://{host}")
@@ -169,7 +169,7 @@ class MastodonAdapter(BaseScrapeAdapter):
         return docs[:limit] if limit and limit > 0 else docs
 
     @staticmethod
-    def _status_to_document(status: dict, base: str) -> Optional[PolarisDocument]:
+    def _status_to_document(status: dict, base: str) -> Optional[Document]:
         # A reblog (boost) carries the real content under `reblog`; follow it so we index
         # the boosted status, not an empty wrapper.
         reblog = status.get("reblog")
@@ -220,7 +220,7 @@ class MastodonAdapter(BaseScrapeAdapter):
             kind="engagement", by="mastodon/reblogs_count",
         ))
 
-        return PolarisDocument(
+        return Document(
             source="mastodon",
             source_id=src.get("uri") or url or status_id,
             url=url,

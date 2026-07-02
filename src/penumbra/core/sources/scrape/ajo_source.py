@@ -20,7 +20,7 @@ import httpx
 from bs4 import BeautifulSoup
 
 from penumbra.core import cache
-from penumbra.core.normalize import PolarisDocument, keyword_score_filter
+from penumbra.core.normalize import Document, keyword_score_filter
 
 logger = logging.getLogger(__name__)
 
@@ -76,12 +76,12 @@ class AJOAdapter:
         cache.set(key, out, ttl=CACHE_TTL)
         return out
 
-    def search(self, query: str, limit: int = 10) -> list[PolarisDocument]:
+    def search(self, query: str, limit: int = 10) -> list[Document]:
         docs = [self._to_doc(p) for p in self._positions()]
         docs = keyword_score_filter(docs, (query or "").strip())
         return docs[:limit]
 
-    def fetch_url(self, url: str) -> Optional[PolarisDocument]:
+    def fetch_url(self, url: str) -> Optional[Document]:
         host = (urlparse(url).hostname or "").lower()
         if "academicjobsonline.org" not in host:
             return None
@@ -97,9 +97,9 @@ class AJOAdapter:
         return False, "0 positions parsed (layout drift or fetch failure)"
 
     @staticmethod
-    def _to_doc(p: dict) -> PolarisDocument:
+    def _to_doc(p: dict) -> Document:
         title = f"{p['title']}" + (f" ({p['institution']})" if p["institution"] else "")
-        return PolarisDocument(
+        return Document(
             source="ajo",
             source_id=p["url"],
             url=p["url"],

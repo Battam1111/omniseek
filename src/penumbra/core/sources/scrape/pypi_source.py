@@ -23,13 +23,13 @@ from urllib.parse import urlparse
 
 import httpx
 
-from penumbra.core.normalize import PolarisDocument, jsonsafe
+from penumbra.core.normalize import Document, jsonsafe
 from penumbra.core.sources.scrape._rss import RSSAdapterBase
 
 logger = logging.getLogger(__name__)
 
 TIMEOUT = 15
-USER_AGENT = "polaris-eye/0.1 (automated retrieval)"
+USER_AGENT = "penumbra/0.1 (automated retrieval)"
 
 
 class PyPIAdapter(RSSAdapterBase):
@@ -39,7 +39,7 @@ class PyPIAdapter(RSSAdapterBase):
     url_pattern = r"pypi\.org"
     cache_ttl = 1800  # 30 min — PyPI updates frequently
 
-    def fetch_url(self, url: str) -> Optional[PolarisDocument]:
+    def fetch_url(self, url: str) -> Optional[Document]:
         # Pattern: pypi.org/project/<name>/  or  pypi.org/project/<name>/<version>/
         host = (urlparse(url).hostname or "").lower()
         if "pypi.org" not in host:
@@ -82,7 +82,7 @@ class PyPIAdapter(RSSAdapterBase):
                     except (ValueError, TypeError):
                         pass
 
-        return PolarisDocument(
+        return Document(
             source="pypi",
             source_id=package_name,
             url=home,

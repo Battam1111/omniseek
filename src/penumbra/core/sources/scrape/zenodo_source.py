@@ -3,7 +3,7 @@
 Zenodo (CERN-operated, on InvenioRDM) is the catch-all open-access archive for the long
 tail of scholarship that arXiv / OpenAlex / Crossref under-cover: deposited datasets,
 software releases, posters, theses, preprints, and conference material — each with a
-minted DOI. It fills Polaris-eye's gap on RESEARCH ARTIFACTS (the dataset/software half of
+minted DOI. It fills Penumbra's gap on RESEARCH ARTIFACTS (the dataset/software half of
 "papers"), not just the journal article.
 
 Access via the public Zenodo REST API (no auth required for read search):
@@ -33,7 +33,7 @@ from typing import Any, Optional
 from markdownify import markdownify as html_to_md
 
 from penumbra.core import http, relevance
-from penumbra.core.normalize import PolarisDocument, jsonsafe, mk_signal
+from penumbra.core.normalize import Document, jsonsafe, mk_signal
 from penumbra.core.sources.scrape._base import BaseScrapeAdapter
 
 API_URL = "https://zenodo.org/api/records"
@@ -62,11 +62,11 @@ class ZenodoAdapter(BaseScrapeAdapter):
             timeout=15,
         )
 
-    def _to_documents(self, raw: Any, query: str, limit: int) -> list[PolarisDocument]:
+    def _to_documents(self, raw: Any, query: str, limit: int) -> list[Document]:
         if not isinstance(raw, dict):
             return []
         hits = (raw.get("hits") or {}).get("hits") or []
-        docs: list[PolarisDocument] = []
+        docs: list[Document] = []
         for rec in hits:  # the WIDE candidate pool (see _raw_fetch); re-ranked + capped below
             if not isinstance(rec, dict):
                 continue
@@ -82,7 +82,7 @@ class ZenodoAdapter(BaseScrapeAdapter):
                     if _s > 0.0]
         return docs[:limit]
 
-    def _record_to_doc(self, rec: dict) -> Optional[PolarisDocument]:
+    def _record_to_doc(self, rec: dict) -> Optional[Document]:
         meta = rec.get("metadata") or {}
         title = (meta.get("title") or "").strip()
         if not title:
@@ -133,7 +133,7 @@ class ZenodoAdapter(BaseScrapeAdapter):
         if journal:
             metadata["journal"] = jsonsafe(journal)
 
-        return PolarisDocument(
+        return Document(
             source=self.name,
             source_id=rec_id or (doi or title),
             url=url,

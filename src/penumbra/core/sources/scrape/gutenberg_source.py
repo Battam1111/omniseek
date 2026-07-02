@@ -16,7 +16,7 @@ The human-readable book page is ``https://www.gutenberg.org/ebooks/<id>``.
 
 BaseScrapeAdapter (template method): the cache check / atomic set_docs /
 self-registration ritual lives in the base; this adapter fills the two hooks
-(_raw_fetch = the /books/ search GET; _to_documents = the book→PolarisDocument map).
+(_raw_fetch = the /books/ search GET; _to_documents = the book→Document map).
 ``rank`` stays default-False: Gutendex sorts by descending popularity for a search,
 a sane server order, so we keep it byte-faithful rather than re-ranking locally.
 """
@@ -27,7 +27,7 @@ import logging
 from typing import Any, Optional
 
 from penumbra.core import http
-from penumbra.core.normalize import PolarisDocument, jsonsafe, mk_signal
+from penumbra.core.normalize import Document, jsonsafe, mk_signal
 from penumbra.core.sources.scrape._base import BaseScrapeAdapter
 
 logger = logging.getLogger(__name__)
@@ -51,9 +51,9 @@ class GutenbergAdapter(BaseScrapeAdapter):
     def _raw_fetch(self, query: str, limit: int) -> Optional[Any]:
         return http.get_json(API_URL, params={"search": query}, timeout=TIMEOUT)
 
-    def _to_documents(self, raw: Any, query: str, limit: int) -> list[PolarisDocument]:
+    def _to_documents(self, raw: Any, query: str, limit: int) -> list[Document]:
         results = raw.get("results") or []
-        docs: list[PolarisDocument] = []
+        docs: list[Document] = []
         for book in results[:limit]:
             try:
                 docs.append(self._book_to_document(book))
@@ -62,7 +62,7 @@ class GutenbergAdapter(BaseScrapeAdapter):
         return docs
 
     @staticmethod
-    def _book_to_document(book: dict) -> PolarisDocument:
+    def _book_to_document(book: dict) -> Document:
         book_id = book.get("id") or 0
         title = book.get("title") or "(untitled)"
         page_url = f"{PAGE_BASE}/{book_id}"
@@ -98,7 +98,7 @@ class GutenbergAdapter(BaseScrapeAdapter):
         content_lines.append(f"Book page: {page_url}")
         content = "\n\n".join(content_lines)
 
-        return PolarisDocument(
+        return Document(
             source="gutenberg",
             source_id=str(book_id),
             url=page_url,

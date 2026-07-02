@@ -39,10 +39,10 @@ from penumbra.core import cache
 
 logger = logging.getLogger(__name__)
 
-# Runtime state lives under ~/.polaris/state/curator/ (same tree as candidates.json + the
+# Runtime state lives under ~/.penumbra/state/curator/ (same tree as candidates.json + the
 # health-watchdog state; survives redeploys, rides the weekly state-backup launchd, keeps the
 # read-only deploy tree pristine). Created on first flush.
-STATE_DIR = Path.home() / ".polaris" / "state" / "curator"
+STATE_DIR = Path.home() / ".penumbra" / "state" / "curator"
 YIELD_PATH = STATE_DIR / "yield.json"
 
 _VERSION = 1

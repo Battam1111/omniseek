@@ -2,7 +2,7 @@
 
 Kaggle is the largest public catalog of machine-learning DATASETS (plus the notebooks
 and competitions built on them), the place where applied-ML practitioners publish,
-version, and license tabular / image / text corpora. It fills Polaris-eye's gap on
+version, and license tabular / image / text corpora. It fills Penumbra's gap on
 the *data artifact* a researcher wants to actually train on, complementing Zenodo's
 DOI-minted long tail and HuggingFace's model/dataset hub: Kaggle's signal is the
 community vote + download tally, which marks the de-facto canonical dataset for a topic.
@@ -30,7 +30,7 @@ from datetime import datetime
 from typing import Any, Optional
 
 from penumbra.core import http
-from penumbra.core.normalize import PolarisDocument, jsonsafe, mk_signal
+from penumbra.core.normalize import Document, jsonsafe, mk_signal
 from penumbra.core.sources.scrape._base import BaseScrapeAdapter
 
 API_URL = "https://www.kaggle.com/api/v1/datasets/list"
@@ -53,10 +53,10 @@ class KaggleAdapter(BaseScrapeAdapter):
             timeout=15,
         )
 
-    def _to_documents(self, raw: Any, query: str, limit: int) -> list[PolarisDocument]:
+    def _to_documents(self, raw: Any, query: str, limit: int) -> list[Document]:
         if not isinstance(raw, list):
             return []
-        docs: list[PolarisDocument] = []
+        docs: list[Document] = []
         for rec in raw[:limit]:
             if not isinstance(rec, dict):
                 continue
@@ -65,7 +65,7 @@ class KaggleAdapter(BaseScrapeAdapter):
                 docs.append(doc)
         return docs
 
-    def _record_to_doc(self, rec: dict) -> Optional[PolarisDocument]:
+    def _record_to_doc(self, rec: dict) -> Optional[Document]:
         title = (rec.get("title") or "").strip()
         ref = (rec.get("ref") or "").strip()
         if not title and not ref:
@@ -103,7 +103,7 @@ class KaggleAdapter(BaseScrapeAdapter):
             "raw": jsonsafe(rec),
         }
 
-        return PolarisDocument(
+        return Document(
             source=self.name,
             source_id=ref or str(rec.get("id") or title),
             url=url,

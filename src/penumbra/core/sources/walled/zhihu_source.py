@@ -4,7 +4,7 @@ Why CDP and not direct HTTP scraping:
 - 知乎 returns 403 on unauthenticated direct fetch
 - API endpoints are signed (x-zse-93 / x-zse-96 headers) — reverse-engineering is fragile
 - The persistent Chrome already has a logged-in session (the operator logs in once via VNC)
-- CDP lets Polaris drive that browser to perform searches as a real user
+- CDP lets Penumbra drive that browser to perform searches as a real user
 
 Search flow:
 1. Connect to CDP Chrome (opens a new tab in the existing browser)
@@ -25,7 +25,7 @@ from urllib.parse import quote, urlparse
 from bs4 import BeautifulSoup
 
 from penumbra.core import cache
-from penumbra.core.normalize import PolarisDocument, jsonsafe, mk_signal
+from penumbra.core.normalize import Document, jsonsafe, mk_signal
 from penumbra.core.sources.walled._base import EMPTY_TTL
 from penumbra.core.sources.walled._cdp import cdp_call, cdp_health, content_with_media, images_from_page
 
@@ -38,11 +38,11 @@ class ZhihuAdapter:
     explicit_only = "shared CDP Chrome (precious logged-in session)"
     description = "知乎 — long-form PhD methodology discussions (via CDP Chrome session)"
 
-    def search(self, query: str, limit: int = 10) -> list[PolarisDocument]:
+    def search(self, query: str, limit: int = 10) -> list[Document]:
         key = cache.make_key("zhihu", "search", query, limit)
         cached = cache.get(key)
         if cached is not None:
-            return [PolarisDocument.model_validate(d) for d in cached]
+            return [Document.model_validate(d) for d in cached]
 
         url = f"https://www.zhihu.com/search?q={quote(query)}&type=content"
 
@@ -70,7 +70,7 @@ class ZhihuAdapter:
         soup = BeautifulSoup(html, "lxml")
         cards = soup.select(".SearchResult-Card, .List-item")
 
-        docs: list[PolarisDocument] = []
+        docs: list[Document] = []
         seen_urls: set[str] = set()
         for card in cards:
             try:
@@ -91,7 +91,7 @@ class ZhihuAdapter:
         cache.set(key, [d.model_dump(mode="json") for d in docs], ttl=ttl)
         return docs
 
-    def fetch_url(self, url: str) -> Optional[PolarisDocument]:
+    def fetch_url(self, url: str) -> Optional[Document]:
         host = urlparse(url).hostname or ""
         if "zhihu.com" not in host:
             return None
@@ -123,7 +123,7 @@ class ZhihuAdapter:
         m = re.search(r"/(question|answer|p|zhuanlan|column.*?/p)/(\d+)", url)
         source_id = m.group(2) if m else url
 
-        return PolarisDocument(
+        return Document(
             source="zhihu",
             source_id=source_id,
             url=url,
@@ -145,7 +145,7 @@ class ZhihuAdapter:
         except Exception as exc:  # noqa: BLE001
             return False, f"{type(exc).__name__}: {str(exc)[:80]}"
 
-    def _card_to_document(self, card) -> Optional[PolarisDocument]:
+    def _card_to_document(self, card) -> Optional[Document]:
         # Title link
         title_link = card.select_one("h2 a, .ContentItem-title a")
         if not title_link:
@@ -185,7 +185,7 @@ class ZhihuAdapter:
         m = re.search(r"/(question|answer|p|zhuanlan/p)/(\d+)", url)
         source_id = m.group(2) if m else url
 
-        return PolarisDocument(
+        return Document(
             source="zhihu",
             source_id=source_id,
             url=url,

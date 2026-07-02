@@ -49,7 +49,7 @@ from urllib.parse import urlparse
 
 from penumbra.core import cache, http
 from penumbra.core.fetcher import register_adapter
-from penumbra.core.normalize import PolarisDocument, mk_signal
+from penumbra.core.normalize import Document, mk_signal
 
 logger = logging.getLogger(__name__)
 
@@ -476,7 +476,7 @@ class RedditAdapter:
         "中文/非拉丁查询请用知乎/B站."
     )
 
-    def search(self, query: str, limit: int = 10) -> list[PolarisDocument]:
+    def search(self, query: str, limit: int = 10) -> list[Document]:
         # A `comments:`/`comment:` qualifier flips reddit to the COMMENT path (the
         # substantive answer is in the comment tree, not the title). Strip it first;
         # the remaining query is dispatched to _search_comments. Absent → fall through
@@ -564,7 +564,7 @@ class RedditAdapter:
         return docs
 
     # ── comment path (the answers live in comments, not titles) ─────────────────────────────
-    def _search_comments(self, query: str, limit: int = 10) -> list[PolarisDocument]:
+    def _search_comments(self, query: str, limit: int = 10) -> list[Document]:
         """Surface high-signal COMMENTS for ``query`` (the substantive Reddit answer is in the
         comment tree, not the thread title). Reuses the same subreddit resolution + _arctic_get
         retry/backoff as the submission path; ranks the merged comments by score CLIENT-SIDE
@@ -663,7 +663,7 @@ class RedditAdapter:
         # silent 0 — the user still gets the relevant discussions, flagged so the agent knows the
         # comment bodies were unavailable. Transient → not cached (re-fetch once arctic heals).
         if not comments and harvested_threads:
-            fallback: list[PolarisDocument] = []
+            fallback: list[Document] = []
             for t in harvested_threads[:limit]:
                 d = self._submission_to_document(t)
                 d.metadata["comment_path_degraded"] = (
@@ -680,7 +680,7 @@ class RedditAdapter:
             cache.set_docs(key, docs, ttl=_COMMENT_TTL)
         return docs
 
-    def fetch_url(self, url: str) -> Optional[PolarisDocument]:
+    def fetch_url(self, url: str) -> Optional[Document]:
         if "reddit.com" not in (urlparse(url).hostname or ""):
             return None
         parts = urlparse(url).path.strip("/").split("/")
@@ -712,7 +712,7 @@ class RedditAdapter:
         return False, "Arctic Shift unreachable"
 
     @staticmethod
-    def _submission_to_document(payload: dict) -> PolarisDocument:
+    def _submission_to_document(payload: dict) -> Document:
         body = payload.get("selftext") or ""
         url = payload.get("url") or ""
         permalink = payload.get("permalink") or ""
@@ -732,7 +732,7 @@ class RedditAdapter:
         author = payload.get("author") or "[deleted]"
         subreddit = payload.get("subreddit") or ""
 
-        return PolarisDocument(
+        return Document(
             source="reddit",
             source_id=payload.get("id") or "",
             url=canonical_url,
@@ -756,11 +756,11 @@ class RedditAdapter:
         )
 
     @staticmethod
-    def _comment_to_document(payload: dict) -> PolarisDocument:
-        """One Reddit COMMENT → PolarisDocument. content=body (already Markdown — no HTML
+    def _comment_to_document(payload: dict) -> Document:
+        """One Reddit COMMENT → Document. content=body (already Markdown — no HTML
         conversion needed for comments), url from the comment permalink, author=u/…, score
         through mk_signal, tags=[r/sub]. The thread (link_id) + parent are kept in metadata so
-        the agent can drill to the full thread (eye_add_url on the parent submission)."""
+        the agent can drill to the full thread (penumbra_add_url on the parent submission)."""
         body = (payload.get("body") or "").strip()
 
         permalink = payload.get("permalink") or ""
@@ -783,13 +783,13 @@ class RedditAdapter:
         link36 = link_id[3:] if link_id.startswith("t3_") else link_id
 
         # A comment has no title of its own — synthesize a compact, list-view-friendly one so
-        # eye_search summaries read sensibly ("comment by u/X in r/sub" + the body's first line).
+        # penumbra_search summaries read sensibly ("comment by u/X in r/sub" + the body's first line).
         first_line = body.splitlines()[0] if body else ""
         snippet = (first_line[:80] + "…") if len(first_line) > 80 else first_line
         where = f"r/{subreddit}" if subreddit else "reddit"
         title = f"Comment by u/{author} in {where}" + (f": {snippet}" if snippet else "")
 
-        return PolarisDocument(
+        return Document(
             source="reddit",
             source_id=payload.get("id") or "",
             url=url,

@@ -22,12 +22,12 @@ import feedparser
 from markdownify import markdownify as html_to_md
 
 from penumbra.core import cache, http, relevance
-from penumbra.core.normalize import PolarisDocument, jsonsafe
+from penumbra.core.normalize import Document, jsonsafe
 
 logger = logging.getLogger(__name__)
 
 # Reasonable browser-like UA to avoid some basic 403s on RSS endpoints
-DEFAULT_UA = "Mozilla/5.0 (compatible; PolarisEye/0.1; +https://github.com/cyj/polaris)"
+DEFAULT_UA = "Mozilla/5.0 (compatible; PenumbraEye/0.1; +https://github.com/cyj/penumbra)"
 FETCH_TIMEOUT = 15
 
 
@@ -108,8 +108,8 @@ def _rss_media(entry: dict) -> list[str]:
 
 
 def entry_to_document(entry, source_name: str, feed_url: str,
-                      feeds: Optional[list] = None) -> Optional[PolarisDocument]:
-    """Convert a feedparser entry to a PolarisDocument."""
+                      feeds: Optional[list] = None) -> Optional[Document]:
+    """Convert a feedparser entry to a Document."""
     title = (entry.get("title") or "(untitled)").strip()
     link = entry.get("link") or ""
 
@@ -155,7 +155,7 @@ def entry_to_document(entry, source_name: str, feed_url: str,
     # Lossless escape hatch + media — the data-layer guarantee (Phase 2b).
     raw_dict = entry._d if isinstance(entry, _DictAsObj) else dict(entry)
 
-    return PolarisDocument(
+    return Document(
         source=source_name,
         source_id=source_id,
         url=link,
@@ -193,7 +193,7 @@ class RSSAdapterBase:
     tls_impersonate: bool = False  # opt-in: fetch feeds via curl_cffi (Chrome TLS) for JA3-walled hosts
 
     def _fetch_all_docs(self) -> list:
-        """Fetch all feeds, return combined+deduped PolarisDocuments (cached).
+        """Fetch all feeds, return combined+deduped Documents (cached).
 
         HTML→Markdown conversion (entry_to_document) runs ONCE here at fetch time and the
         CONVERTED docs are cached — so a cache hit (every search within the TTL) does zero
@@ -237,7 +237,7 @@ class RSSAdapterBase:
                 by_key[dkey] = {"_feed_url": url, "_entry": ed}
                 order.append(dkey)
         # Convert ONCE here (markdownify happens at fetch time, not on every read).
-        docs: list[PolarisDocument] = []
+        docs: list[Document] = []
         for k in order:
             e = by_key[k]
             doc = entry_to_document(_DictAsObj(e["_entry"]), self.name,
@@ -247,8 +247,8 @@ class RSSAdapterBase:
         cache.set_docs(key, docs, ttl=self.cache_ttl)
         return docs
 
-    def search(self, query: str, limit: int = 10) -> list[PolarisDocument]:
-        docs_all = self._fetch_all_docs()  # already-converted PolarisDocuments (cached)
+    def search(self, query: str, limit: int = 10) -> list[Document]:
+        docs_all = self._fetch_all_docs()  # already-converted Documents (cached)
         if not docs_all:
             return []
 
@@ -264,7 +264,7 @@ class RSSAdapterBase:
         scored.sort(key=lambda x: x[0], reverse=True)
         return [d for _, d in scored[:limit]]
 
-    def fetch_url(self, url: str) -> Optional[PolarisDocument]:
+    def fetch_url(self, url: str) -> Optional[Document]:
         if not self.url_pattern:
             return None
         host = urlparse(url).hostname or ""

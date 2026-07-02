@@ -28,7 +28,7 @@ Fuzzy / behavioral layers (media co-mention, social proximity, business ties,
 advisor-as-meaning, academic siblings, code collaboration) are deliberately NOT
 primitives — there the "edge" is a judgment, so the agent assembles them from a
 dossier + existing eye tools (field_skeleton, github, bluesky, exa, cdp_fulltext,
-eye_add_url). See the capability doc.
+penumbra_add_url). See the capability doc.
 
 Read-only over public scholarly data (OpenAlex / Semantic Scholar), the same
 standard bibliometric substrate the rest of the eye already maps (field_skeleton,
@@ -193,7 +193,7 @@ def _likely_same_person(candidates: list[dict]) -> list[dict]:
             "ids": ids,
             "name": members[0].get("name"),
             "merge_token": _id_merge_token(ids),
-            "note": "same name, same backend → consider +-merging into one eye_coauthors input",
+            "note": "same name, same backend → consider +-merging into one penumbra_coauthors input",
         })
     return out
 
@@ -309,7 +309,7 @@ def _looks_like_id(s: str) -> Optional[str]:
 
 def _oa_author_works(author_id: str, fresh: bool = False) -> list[dict]:
     # Cache the heavy per-author OpenAlex pull (up to _MAX_WORKS works) keyed by the author id, so a
-    # repeated eye_coauthors over the same people reads disk instead of re-spending the shared key. The
+    # repeated penumbra_coauthors over the same people reads disk instead of re-spending the shared key. The
     # normalized work shape below is what gets cached, identical on a hit. (mirrors researcher_watch's
     # _fetch_pi_works + cartographer's fresh-bypass idiom.)
     key = cache.make_key("relations", "works", "openalex", author_id)
@@ -475,7 +475,7 @@ def coauthors(authors: list[str], source: str = "openalex", hints: Optional[list
 
     # per-node neighborhood, keyed by NAME (collapse split author ids; count = papers shared).
     # rep_idc keeps a representative id per name so the agent can DRILL a coauthor (harvest an
-    # id straight from the neighborhood, then eye_coauthors([id])) without re-resolving a
+    # id straight from the neighborhood, then penumbra_coauthors([id])) without re-resolving a
     # common name — the 'anchor + harvest' technique the handbook documents.
     rep: dict[str, str] = {}
     rep_idc: dict[str, Counter] = {}
@@ -591,7 +591,7 @@ def institution_cohort(institution: str, concept: str = "", year_from: Optional[
     WITHOUT a concept this is every field at the institution (very broad). Pass
     concept='natural language processing' / 'machine learning' / 'reinforcement learning'
     to scope to a cohort. ``year_from`` (e.g. 2022) biases toward the CURRENT cohort. The
-    roster is a starting point the agent drills (eye_coauthors / homepages), not a verified
+    roster is a starting point the agent drills (penumbra_coauthors / homepages), not a verified
     lab-member list — OpenAlex has no 'PhD student' flag.
 
     fresh=True bypasses the cache (the same fresh idiom cartographer/field_skeleton uses).

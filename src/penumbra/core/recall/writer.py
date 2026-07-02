@@ -9,7 +9,7 @@ fresh -> ``WRITES_ENABLED`` stays False -> the same ingest hook is a silent no-o
 writer, no cross-process write contention (crons may only ever READ).
 
 ``maybe_ingest`` is the hook spliced into the fetcher return path (the true chokepoint — every
-adapter's ``search`` returns ``list[PolarisDocument]`` there, regardless of its internal cache
+adapter's ``search`` returns ``list[Document]`` there, regardless of its internal cache
 shape). It is ENQUEUE-ONLY and NEVER raises: a hook exception would break every search.
 """
 
@@ -22,7 +22,7 @@ import threading
 import time
 from typing import Optional
 
-from penumbra.core.normalize import PolarisDocument
+from penumbra.core.normalize import Document
 from penumbra.core.recall import store
 
 logger = logging.getLogger(__name__)
@@ -234,7 +234,7 @@ def start_backfill() -> None:
         pass
 
 
-def _doc_json(d: PolarisDocument) -> str:
+def _doc_json(d: Document) -> str:
     data = d.model_dump(mode="json")
     md = data.get("metadata")
     if isinstance(md, dict) and "raw" in md:  # metadata['raw'] is write-only (to_tool_dict drops it)
@@ -251,13 +251,13 @@ def _dt(date) -> Optional[str]:
         return str(date)
 
 
-def _embed_text(d: PolarisDocument) -> str:
+def _embed_text(d: Document) -> str:
     """RAW title+content for the SEMANTIC embedder (NOT docs.seg, which is the lexical bigram
     shadow — feeding that to a semantic model is garbage). Capped so a giant doc can't stall a batch."""
     return ((d.title or "") + "\n" + (d.content or "")).strip()[:2000]
 
 
-def _upsert(con, rank, d: PolarisDocument, now: float):
+def _upsert(con, rank, d: Document, now: float):
     """Upsert one doc. Returns ``(rowid, raw_text)`` when the doc NEEDS (re-)embedding (new doc, or
     content changed), else ``None`` (unchanged → just a last_seen bump, no re-embed)."""
     source = getattr(d, "source", None)

@@ -23,7 +23,7 @@ DEFAULT_TTL = 900  # 15 minutes
 # Per-thread "fresh" flag: when set, get()/get_docs() force a cache MISS (live fetch),
 # while set()/set_docs() still WRITE — so a `fresh=True` request gets live data AND
 # warms the cache for later normal calls. fetcher sets this inside each search worker.
-_fresh_var: contextvars.ContextVar = contextvars.ContextVar("polaris_cache_fresh", default=False)
+_fresh_var: contextvars.ContextVar = contextvars.ContextVar("penumbra_cache_fresh", default=False)
 
 
 def set_fresh(value: bool) -> None:
@@ -40,7 +40,7 @@ def set_fresh(value: bool) -> None:
 # happens inside the same get() the adapter already calls. `fresh` still wins (it forces a
 # miss unconditionally); margin 0 (the default) is a no-op so all normal reads are unchanged.
 _refresh_margin_var: contextvars.ContextVar = contextvars.ContextVar(
-    "polaris_cache_refresh_margin", default=0.0)
+    "penumbra_cache_refresh_margin", default=0.0)
 
 
 def set_refresh_margin(seconds: float) -> None:
@@ -53,7 +53,7 @@ def set_refresh_margin(seconds: float) -> None:
 # WITHOUT re-firing a still-cold source (no extra CDP nav / account traffic; poll-safe). The
 # adapter always checks the cache BEFORE an egress, so a warm source returns normally; only a
 # cache MISS hits the guarded egress and degrades to empty. fetcher sets this in each worker.
-_cache_only_var: contextvars.ContextVar = contextvars.ContextVar("polaris_cache_only", default=False)
+_cache_only_var: contextvars.ContextVar = contextvars.ContextVar("penumbra_cache_only", default=False)
 
 
 def set_cache_only(value: bool) -> None:
@@ -179,22 +179,22 @@ def seconds_until_expiry(key: str) -> Optional[float]:
 
 
 # -----------------------------------------------------------------------------
-# PolarisDocument convenience — the list[PolarisDocument] round-trip that ~38
+# Document convenience — the list[Document] round-trip that ~38
 # adapters were re-implementing inline (cache.get → model_validate / cache.set →
 # model_dump(mode="json")). Behavior is identical; this just removes the boilerplate.
 # -----------------------------------------------------------------------------
 
 
 def get_docs(key: str):
-    """Return a cached ``list[PolarisDocument]`` if present + fresh, else None."""
-    from penumbra.core.normalize import PolarisDocument  # local import: avoid import cycle
+    """Return a cached ``list[Document]`` if present + fresh, else None."""
+    from penumbra.core.normalize import Document  # local import: avoid import cycle
 
     cached = get(key)
     if cached is None:
         return None
-    return [PolarisDocument.model_validate(d) for d in cached]
+    return [Document.model_validate(d) for d in cached]
 
 
 def set_docs(key: str, docs, ttl: Optional[int] = None) -> None:
-    """Cache a ``list[PolarisDocument]`` (JSON round-trip), with TTL."""
+    """Cache a ``list[Document]`` (JSON round-trip), with TTL."""
     set(key, [d.model_dump(mode="json") for d in docs], ttl=ttl)

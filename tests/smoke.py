@@ -32,7 +32,7 @@ def check(name: str, ok: bool, detail: str = "") -> None:
 # ---------------------------------------------------------------------------
 # 1. Config files: parse, required fields, in-file + cross-file name uniqueness
 # ---------------------------------------------------------------------------
-SOURCES = ROOT / "src" / "penumbra" / "eye" / "sources"
+SOURCES = ROOT / "src" / "penumbra" / "core" / "sources"
 CONFIGS = [
     ("scrape/rss_bundles.json", ("name", "description", "feeds")),
     ("scrape/scrape_sites.json", ("name", "description", "sites")),
@@ -147,7 +147,7 @@ contextual nous databricks_mosaic scale_ai liquid_ai astar_cfar vector_institute
 mila amii rbc_borealis servicenow_research
 gpu_pricing blind glassdoor x_search maimai linkedin_posts agent_tooling_radar
 zhihu_search quora yipin_search hardwarezone xiaohongshu_search nowcoder
-polyu cdp_fulltext exa ircc_ee_rounds page_watch llm_leaderboard gter
+cdp_fulltext exa ircc_ee_rounds page_watch llm_leaderboard gter
 ontario_sunshine higheredjobs_cs scrape_hongkong scrape_canada distill_pub
 google_patents
 market_quote market_crypto wayback sec_financials
@@ -207,13 +207,13 @@ def _dr_escapes(p):
         _dr._resolve_local(p); return False
     except PermissionError:
         return True
-check("docreader sandbox refuses reading outside the inbox (e.g. ~/.polaris/credentials)",
-      _dr_escapes("~/.polaris/credentials/eye_http.json") and _dr_escapes("/etc/passwd")
-      and _dr_escapes("polaris-inbox/../.polaris/credentials/eye_http.json"),
+check("docreader sandbox refuses reading outside the inbox (e.g. ~/.penumbra/credentials)",
+      _dr_escapes("~/.penumbra/credentials/penumbra_http.json") and _dr_escapes("/etc/passwd")
+      and _dr_escapes("penumbra-inbox/../.penumbra/credentials/penumbra_http.json"),
       "a disallowed path was NOT refused")
-check("docreader sandbox still allows the documented polaris-inbox/<name> path",
-      _dr._resolve_local("polaris-inbox/x.pdf") == (_pl.Path.home() / "polaris-inbox" / "x.pdf").resolve(),
-      str(_dr._resolve_local("polaris-inbox/x.pdf")))
+check("docreader sandbox still allows the documented penumbra-inbox/<name> path",
+      _dr._resolve_local("penumbra-inbox/x.pdf") == (_pl.Path.home() / "penumbra-inbox" / "x.pdf").resolve(),
+      str(_dr._resolve_local("penumbra-inbox/x.pdf")))
 
 # Deployment-profile gate (P1): no profile -> all sources on (pre-profile/backward-compat); a
 # profile subtracts. Walled-tier off keys off DERIVED stability (the robust mokahr-leak fix).
@@ -245,11 +245,11 @@ check("profile.example.json parses as a dict (when shipped)",
 # 4. rank: dedup fingerprint + merge invariants (the cross-source collapse)
 # ---------------------------------------------------------------------------
 from penumbra.core import rank  # noqa: E402
-from penumbra.core.normalize import PolarisDocument  # noqa: E402
+from penumbra.core.normalize import Document  # noqa: E402
 
 
-def _doc(src: str, title: str, url: str = "") -> PolarisDocument:
-    return PolarisDocument(source=src, source_id=url or title, url=url, title=title, content="")
+def _doc(src: str, title: str, url: str = "") -> Document:
+    return Document(source=src, source_id=url or title, url=url, title=title, content="")
 
 
 a = _doc("arxiv", "Scaling Laws for Neural Language Models", "http://arxiv.org/abs/2001.08361")
@@ -574,9 +574,9 @@ check("docreader._window slices and flags truncation",
       docreader._window("abcdefgh", 0, 5) == ("abcde", True)
       and docreader._window("abcdefgh", 5, 5) == ("fgh", False)
       and docreader._window("abc", 0, 60000) == ("abc", False))
-_rp = docreader._resolve_local("polaris-inbox/x.pptx")
+_rp = docreader._resolve_local("penumbra-inbox/x.pptx")
 check("docreader._resolve_local resolves relative paths against HOME",
-      _rp.is_absolute() and _rp.parts[-2:] == ("polaris-inbox", "x.pptx"))
+      _rp.is_absolute() and _rp.parts[-2:] == ("penumbra-inbox", "x.pptx"))
 check("docreader covers the office trio + pdf + plain text",
       {"pptx", "docx", "xlsx", "pdf", "txt", "md"} <= set(docreader._READERS))
 # roadmap-④: code/config source files are readable, routed to the PLAIN-TEXT reader (no parser).
@@ -589,10 +589,10 @@ check("docreader routes code extensions to the txt (plain-text) reader, not a pa
           for ext in ("py", "ts", "rs", "go", "java", "cpp", "toml", "yaml", "sh")))
 check("docreader rejects unknown formats with a usable error (before any IO)",
       "unsupported" in (docreader.read_document("file.xyz").get("error") or ""))
-check("server exposes eye_read_document",
-      hasattr(_srv, "penumbra_read_document") and callable(_srv.eye_read_document))
+check("server exposes penumbra_read_document",
+      hasattr(_srv, "penumbra_read_document") and callable(_srv.penumbra_read_document))
 
-# --- P39 tier-4: in-band image view (eye_view_doc_images) ---
+# --- P39 tier-4: in-band image view (penumbra_view_doc_images) ---
 check("docreader._parse_sel parses int + name selections, empty → None",
       docreader._parse_sel("8, 15,25", as_int=True) == {8, 15, 25}
       and docreader._parse_sel([8, 15], as_int=True) == {8, 15}
@@ -620,16 +620,16 @@ _sheet = docreader._contact_sheet(_cells)
 _sim = _PILImage.open(_BIO(_sheet))
 check("docreader._contact_sheet tiles thumbnails into one valid PNG montage",
       _sim.format == "PNG" and _sim.size[0] > 0 and _sim.size[1] > 0)
-check("server exposes eye_view_doc_images",
-      hasattr(_srv, "penumbra_view_doc_images") and callable(_srv.eye_view_doc_images))
-# --- P41 OCR tier (eye_read_document ocr=True) ---
+check("server exposes penumbra_view_doc_images",
+      hasattr(_srv, "penumbra_view_doc_images") and callable(_srv.penumbra_view_doc_images))
+# --- P41 OCR tier (penumbra_read_document ocr=True) ---
 check("docreader.ocr_image exists + read_document accepts ocr (OCR tier)",
       hasattr(docreader, "ocr_image") and callable(docreader.ocr_image)
       and "ocr" in _insp.signature(docreader.read_document).parameters)
 # --- P42 in-band image-URL view + search-index junk-snippet filter ---
-check("docreader.view_image_urls + server eye_view_images (in-band URL image delivery)",
+check("docreader.view_image_urls + server penumbra_view_images (in-band URL image delivery)",
       hasattr(docreader, "view_image_urls") and callable(docreader.view_image_urls)
-      and hasattr(_srv, "penumbra_view_images") and callable(_srv.eye_view_images))
+      and hasattr(_srv, "penumbra_view_images") and callable(_srv.penumbra_view_images))
 check("search_index drops generic zhihu boilerplate snippet, keeps a real one",
       search_index_source._is_tombstone("知乎，让每一次点击都充满意义 —— 欢迎来到知乎，发现问题背后的世界。")
       and not search_index_source._is_tombstone("罗湖区房租均价2597元，3号线最快到罗湖老街，租金与通勤成本权衡。"))
@@ -853,7 +853,7 @@ finally:
 #     drifted vocab or an again-missing modes field would silently skew coverage. (Pure
 #     structural invariant; the per-source mode JUDGEMENT lives in facets.json itself.)
 # ---------------------------------------------------------------------------
-_FACETS = ROOT / "src" / "penumbra" / "eye" / "facets.json"
+_FACETS = ROOT / "src" / "penumbra" / "core" / "facets.json"
 MODE_VOCAB = {"STRUCTURE", "UNWALL", "TRANSCRIBE", "RECALL", "MONITOR"}
 # Sources with NO acquisition edge over plain web search (modes:[]) — Curator prune candidates.
 # FROZEN: adding a name here is a deliberate "this source earns its keep no longer" call.
@@ -881,7 +881,7 @@ check("facets: list_sources surfaces the modes facet (arxiv -> [STRUCTURE])",
 # list_sources surfaces a `backend` (the de-dup key behind the HONEST count): the OpenAlex family
 # (openalex + openalex_cn + researcher_watch + every org_watch slice = one corpus + one API budget +
 # one breaker) collapses to ONE backend so the raw source count stops over-stating coverage; an
-# independent source is its own backend. eye_list_sources surfaces backend_count + backend_breakdown.
+# independent source is its own backend. penumbra_list_sources surfaces backend_count + backend_breakdown.
 _ls_backend = {e["name"]: e.get("backend") for e in fetcher.list_sources()}
 check("backend: OpenAlex family collapses (openalex + researcher_watch -> 'openalex')",
       _ls_backend.get("openalex") == "openalex" and _ls_backend.get("researcher_watch") == "openalex",
@@ -1259,7 +1259,7 @@ _ccand.store_evidence(_dcid, {"evidence_complete": True, "stage0_safety": {"hard
 
 def _decide_raises(**kw):
     try:
-        _srv2.eye_curator_decide.__wrapped__(**kw)
+        _srv2.penumbra_curator_decide.__wrapped__(**kw)
         return False
     except Exception:  # noqa: BLE001
         return True
@@ -1267,7 +1267,7 @@ def _decide_raises(**kw):
 
 check("curator: decide(admit, baseline_ref={}) RAISES (empty baseline)",
       _decide_raises(candidate_id=_dcid, decision="admit", reasons="x", baseline_ref={}))
-_ok_decide = _srv2.eye_curator_decide.__wrapped__(candidate_id=_dcid, decision="admit", reasons="x",
+_ok_decide = _srv2.penumbra_curator_decide.__wrapped__(candidate_id=_dcid, decision="admit", reasons="x",
                                                   baseline_ref={"web": ["result"]})
 check("curator: decide(admit, baseline_ref=...) succeeds -> owner_review in P1",
       _ok_decide.get("state") == "owner_review")
@@ -1280,14 +1280,14 @@ _ccand.store_evidence(_hc, {"evidence_complete": True, "stage0_safety": {"hard_r
                       {"hard_redline_ids": ["x"]}, "awaiting_verdict", "ev")
 check("curator: hard_redline_blocked -> decide(admit) RAISES, decide(reject) succeeds",
       _decide_raises(candidate_id=_hc, decision="admit", reasons="x", baseline_ref={"a": 1})
-      and _srv2.eye_curator_decide.__wrapped__(candidate_id=_hc, decision="reject", reasons="ToS").get("state") == "rejected")
+      and _srv2.penumbra_curator_decide.__wrapped__(candidate_id=_hc, decision="reject", reasons="ToS").get("state") == "rejected")
 _ic = _ccand.add({"name": "Incomplete", "urls": ["https://i.example.com/f"], "proposed_mode": "RECALL",
                   "proposed_domain": "papers", "proposed_family": "rss"})
 _ccand.store_evidence(_ic, {"evidence_complete": False, "stage0_safety": {"hard_redline_blocked": False}},
                       {"hard_redline_ids": []}, "awaiting_verdict", "ev")
 check("curator: evidence_complete=False -> decide(admit) RAISES, decide(reject) succeeds",
       _decide_raises(candidate_id=_ic, decision="admit", reasons="x", baseline_ref={"a": 1})
-      and _srv2.eye_curator_decide.__wrapped__(candidate_id=_ic, decision="reject", reasons="thin").get("state") == "rejected")
+      and _srv2.penumbra_curator_decide.__wrapped__(candidate_id=_ic, decision="reject", reasons="thin").get("state") == "rejected")
 
 # (12) _live_hosts non-trivial + host-derivation correct (against the REAL roster).
 import importlib as _il  # noqa: E402
@@ -1318,7 +1318,7 @@ check("curator: STRUCTURE present-but-unresolved is visible (resolved == [] whil
       _sres["diff"]["structured_fields_present"] and _sres["diff"]["structured_fields_resolved"] == [],
       f"present={_sres['diff']['structured_fields_present']} resolved={_sres['diff']['structured_fields_resolved']}")
 
-# (14) Server exposes the 5 eye_curator_* tools.
+# (14) Server exposes the 5 penumbra_curator_* tools.
 for _t in ("penumbra_curator_submit", "penumbra_curator_probe", "penumbra_curator_packet",
            "penumbra_curator_decide", "penumbra_curator_list"):
     check(f"curator: server exposes {_t}", hasattr(_srv2, _t) and callable(getattr(_srv2, _t)))
@@ -1333,7 +1333,7 @@ for _t in ("penumbra_curator_submit", "penumbra_curator_probe", "penumbra_curato
 from penumbra.core.curator import yield_tap as _yt  # noqa: E402
 from penumbra.core.recall import writer as _ytw  # noqa: E402
 
-# point the durable store at a throwaway dir (must touch NO real ~/.polaris path)
+# point the durable store at a throwaway dir (must touch NO real ~/.penumbra path)
 _yttmp = Path(_ctf.mkdtemp())
 _yt.STATE_DIR = _yttmp
 _yt.YIELD_PATH = _yttmp / "yield.json"
@@ -1548,7 +1548,7 @@ check("yield_tap: rank.dedup marks an index-only group (index_only True, live_so
 import time as _satime  # noqa: E402
 from penumbra.core.curator import source_audit as _sa  # noqa: E402
 
-# write-back goes to a throwaway dir (touch NO real ~/.polaris path)
+# write-back goes to a throwaway dir (touch NO real ~/.penumbra path)
 _satmp = Path(_ctf.mkdtemp())
 _sa.STATE_DIR = _satmp
 _sa.SOURCE_VERDICTS_PATH = _satmp / "source_verdicts.json"
@@ -1682,7 +1682,7 @@ try:
           _SA_POLICY_KEYS <= set(_pol)
           and {"searches_floor", "min_age_days"} <= set(_pol.get("min_evidence") or {}))
     # every distinct facets.json domain token has a cadence floor (no silent missing-floor default).
-    _facets_json = json.loads((ROOT / "src" / "penumbra" / "eye" / "facets.json").read_text(encoding="utf-8"))
+    _facets_json = json.loads((ROOT / "src" / "penumbra" / "core" / "facets.json").read_text(encoding="utf-8"))
     _fac_domains = {d for fb in _facets_json.values() for d in (fb.get("domains") or [])}
     _cad_table = set(_pol.get("cadence_floor_days") or {})
     check("curator P3: every facets.json domain token has a cadence floor in audit_policy.json",
@@ -1863,7 +1863,7 @@ import re as _p4re  # noqa: E402
 
 from penumbra.core.curator import discover as _disc  # noqa: E402
 
-_CUR_DIR = ROOT / "src" / "penumbra" / "eye" / "curator"
+_CUR_DIR = ROOT / "src" / "penumbra" / "core" / "curator"
 _LOOP_PATH = ROOT / "scripts" / "curator.py"  # ROOT == organs/eye (smoke ROOT = parents[1])
 
 # (9.1) THE CRON NEVER JUDGES: the loop + discover make NO CALL to a verdict-writer + IMPORT no
@@ -2068,7 +2068,7 @@ check("curator P4: a recorded terminal host is tried under ANY name/URL/scheme v
 check("curator P4: record_tried_host is idempotent (no duplicate ledger entry)",
       (_ccand.record_tried_host("deadhost.com") or len(_ccand._load_tried_hosts())) == 1)
 
-# (9.9) Read-only deploy: the cron writes NO path outside ~/.polaris/state/curator/. Grep the loop
+# (9.9) Read-only deploy: the cron writes NO path outside ~/.penumbra/state/curator/. Grep the loop
 # source for any write to an in-tree sources/*.json config file (must be none).
 check("curator P4: the cron writes no in-tree sources/*.json config file",
       "sources/" not in _loop_src or ".write_text" not in _loop_src,
@@ -2166,7 +2166,7 @@ _ccand.store_evidence(_ow_cid,
                       {"hard_redline_ids": []}, "awaiting_verdict", "ev")
 check("curator P4 (8b): admit of a first-seen org_watch RAISES without recurring_fetch_acknowledged",
       _decide_raises(candidate_id=_ow_cid, decision="admit", reasons="x", baseline_ref={"web": ["r"]}))
-_ow_ok = _srv2.eye_curator_decide.__wrapped__(candidate_id=_ow_cid, decision="admit", reasons="x",
+_ow_ok = _srv2.penumbra_curator_decide.__wrapped__(candidate_id=_ow_cid, decision="admit", reasons="x",
                                               baseline_ref={"web": ["r"], "recurring_fetch_acknowledged": True})
 check("curator P4 (8b): with recurring_fetch_acknowledged=true the admit stages to owner_review",
       _ow_ok.get("state") == "owner_review")
@@ -2376,8 +2376,8 @@ check("curator live: validate_row_typed rejects feeds-as-str, render:true site, 
 
 # (11) CONFIGS join (spec §5): every accumulated overlay row passes its typed check; overlay names
 #      join the cross-file uniqueness; a family not in _KNOWN_FAMILIES or a _NEVER_AUTO row smuggled
-#      into rss_overlay.json fails the deploy. (Validates the REAL ~/.polaris overlay files if any.)
-_REAL_OVERLAY_DIR = Path.home() / ".polaris" / "state" / "curator" / "overlays"
+#      into rss_overlay.json fails the deploy. (Validates the REAL ~/.penumbra overlay files if any.)
+_REAL_OVERLAY_DIR = Path.home() / ".penumbra" / "state" / "curator" / "overlays"
 _overlay_problems = []
 _overlay_names = []
 _overlay_uncommitted = []
@@ -2477,10 +2477,10 @@ finally:
 _GIT_TOKENS = ("subprocess", "deploy.sh", "kickstart", "launchctl")
 _live_srcs = {
     "apply_live": _insp.getsource(_al),
-    "penumbra_curator_apply_live": _insp.getsource(_srv2.eye_curator_apply_live.__wrapped__),
-    "penumbra_curator_rollback_live": _insp.getsource(_srv2.eye_curator_rollback_live.__wrapped__),
-    "penumbra_curator_retire_live": _insp.getsource(_srv2.eye_curator_retire_live.__wrapped__),
-    "penumbra_curator_stage_commit": _insp.getsource(_srv2.eye_curator_stage_commit.__wrapped__),
+    "penumbra_curator_apply_live": _insp.getsource(_srv2.penumbra_curator_apply_live.__wrapped__),
+    "penumbra_curator_rollback_live": _insp.getsource(_srv2.penumbra_curator_rollback_live.__wrapped__),
+    "penumbra_curator_retire_live": _insp.getsource(_srv2.penumbra_curator_retire_live.__wrapped__),
+    "penumbra_curator_stage_commit": _insp.getsource(_srv2.penumbra_curator_stage_commit.__wrapped__),
 }
 _live_code = {k: _strip_py_noise(v) for k, v in _live_srcs.items()}
 _git_leaks = [f"{_where}:{_tok}" for _where, _code in _live_code.items()
@@ -2502,8 +2502,8 @@ _il2.reload(_capply)
 _ccand.CANDIDATES_PATH = _altmp / "onetap_candidates.json"
 _nt = _ccand.add({"name": "NotReady", "urls": ["https://feeds.ok.example.com/x"], "proposed_mode": "STRUCTURE",
                   "proposed_domain": "papers", "proposed_family": "rss"})
-check("curator live: eye_curator_apply_live RAISES on a candidate not in owner_review",
-      _al_raises(lambda: _srv2.eye_curator_apply_live.__wrapped__(candidate_id=_nt)))
+check("curator live: penumbra_curator_apply_live RAISES on a candidate not in owner_review",
+      _al_raises(lambda: _srv2.penumbra_curator_apply_live.__wrapped__(candidate_id=_nt)))
 # defensive: a doctored org_watch in owner_review returns applied:false (never live-applied)
 _ow_live = _ccand.add({"name": "OwLive", "urls": ["https://api.openalex.org/works"], "proposed_mode": "STRUCTURE",
                        "proposed_domain": "papers", "proposed_family": "org_watch"})
@@ -2511,14 +2511,14 @@ _ccand.store_evidence(_ow_live, {"evidence_complete": True, "stage0_safety": {"h
                       {"hard_redline_ids": []}, "awaiting_verdict", "ev")
 _ccand.record_verdict(_ow_live, {"decision": "admit"}, "admitted", "a")
 _ccand.set_state(_ow_live, "owner_review", "stage", by="agent")
-_ow_res = _srv2.eye_curator_apply_live.__wrapped__(candidate_id=_ow_live)
-check("curator live: eye_curator_apply_live refuses a _NEVER_AUTO family (applied:false, points to git path)",
+_ow_res = _srv2.penumbra_curator_apply_live.__wrapped__(candidate_id=_ow_live)
+check("curator live: penumbra_curator_apply_live refuses a _NEVER_AUTO family (applied:false, points to git path)",
       _ow_res.get("applied") is False and "stage_commit" in (_ow_res.get("must_use") or ""))
 # retire requires an existing agent prune verdict
 _sa.STATE_DIR = _altmp
 _sa.SOURCE_VERDICTS_PATH = _altmp / "live_source_verdicts.json"
-check("curator live: eye_curator_retire_live RAISES without an existing agent PRUNE verdict",
-      _al_raises(lambda: _srv2.eye_curator_retire_live.__wrapped__(name="no_such_pruned_src", confirm=True)))
+check("curator live: penumbra_curator_retire_live RAISES without an existing agent PRUNE verdict",
+      _al_raises(lambda: _srv2.penumbra_curator_retire_live.__wrapped__(name="no_such_pruned_src", confirm=True)))
 
 # (15) runtime retire round-trip: with a prune on record, confirm=True writes the explicit_only
 #      override so _explicit_only_reason is truthy; rollback drops it -> falsy again.
@@ -2772,9 +2772,9 @@ finally:
     _oa2._state["dry_until"] = _save_dry3 or {"keyed": 0.0, "anon": 0.0}
 
 # Usage attribution (2026-06-17): every budget-spending success is tallied by caller + the live
-# per-bucket remaining is captured, exposed via eye_health_check, so a heavy OpenAlex day is
+# per-bucket remaining is captured, exposed via penumbra_health_check, so a heavy OpenAlex day is
 # ITEMIZABLE (a hidden over-consumer can't hide) instead of inferred.
-check("openalex: usage_stats() exists (per-caller budget attribution surfaced by eye_health_check)",
+check("openalex: usage_stats() exists (per-caller budget attribution surfaced by penumbra_health_check)",
       hasattr(_oa2, "usage_stats") and callable(_oa2.usage_stats))
 
 
@@ -3131,8 +3131,8 @@ check("relations: _likely_same_person does NOT merge the same name across differ
       relations._likely_same_person(
           [{"id": "A1", "source": "openalex", "name": "Same Name", "name_match": True},
            {"id": "123456", "source": "s2", "name": "Same Name", "name_match": True}]) == [])
-check("server: eye_resolve_identity docstring documents likely_same_person + merge_token",
-      "likely_same_person" in (_srv.eye_resolve_identity.__doc__ or "")
+check("server: penumbra_resolve_identity docstring documents likely_same_person + merge_token",
+      "likely_same_person" in (_srv.penumbra_resolve_identity.__doc__ or "")
       or "likely_same_person" in _insp.getsource(relations.resolve_identity))
 
 # FIX 8 (root-cause, beyond the spec's 7): a FAILED OpenAlex lookup is NOT a confirmed absence. When
@@ -3166,17 +3166,17 @@ finally:
 
 # ---------------------------------------------------------------------------
 # N. named signals migration (COMMITMENT step 2): the fused score scalar is GONE from
-#    PolarisDocument — each source-reported count/rating/salary is its OWN named,
+#    Document — each source-reported count/rating/salary is its OWN named,
 #    provenance-stamped Signal, and the ranker reads attention_value() (a max over the
 #    ATTENTION-class signals: engagement + citation; compensation/other excluded).
 # ---------------------------------------------------------------------------
 from penumbra.core.normalize import Signal, mk_signal  # noqa: E402
 
-check("signals: PolarisDocument has the named signals map, no score / no relevance field",
-      "signals" in PolarisDocument.model_fields
-      and "score" not in PolarisDocument.model_fields
-      and "relevance" not in PolarisDocument.model_fields,
-      str(sorted(PolarisDocument.model_fields)))
+check("signals: Document has the named signals map, no score / no relevance field",
+      "signals" in Document.model_fields
+      and "score" not in Document.model_fields
+      and "relevance" not in Document.model_fields,
+      str(sorted(Document.model_fields)))
 check("signals: a built doc exposes no .score / .relevance attribute (field fully removed)",
       not hasattr(_doc("x", "t"), "score") and not hasattr(_doc("x", "t"), "relevance"))
 check("signals: Signal model exists with value/kind/computed_by/unit",
@@ -3478,7 +3478,7 @@ finally:
     http._client = _saved
 check("enrich._get_json returns parsed JSON dict", _d == {"ok": True})
 check("enrich passes follow_redirects=False to pooled client (SSRF redirect guard)", _cap.get("kwargs", {}).get("follow_redirects") is False)
-check("enrich preserves its mailto _UA over the shared UA", _cap.get("headers", {}).get("User-Agent", "").startswith("polaris-eye/"))
+check("enrich preserves its mailto _UA over the shared UA", _cap.get("headers", {}).get("User-Agent", "").startswith("penumbra/"))
 check("enrich forwards its _TIMEOUT", _cap.get("timeout") == enrich._TIMEOUT)
 check("enrich still pins resolver host to _API_HOSTS", "api.unpaywall.org" in enrich._API_HOSTS and "evil.example.com" not in enrich._API_HOSTS)
 def _off():
@@ -3665,7 +3665,7 @@ check("sec_financials: malformed submissions -> [] (no raise)",
 #     broad fan-out, and no credential leak in a captured URL.
 # ---------------------------------------------------------------------------
 from penumbra.core import diag as _diag  # noqa: E402
-from penumbra.core.normalize import PolarisDocument as _PDoc  # noqa: E402
+from penumbra.core.normalize import Document as _PDoc  # noqa: E402
 
 # -- diag.note is a NO-OP when capture is not enabled (the search_many fan-out path) --
 _diag.drain()  # reset any prior state
@@ -4064,7 +4064,7 @@ check("xhs_cn: browser path enabled (_BROWSER_OK) + helpers wired",
       _xcn._BROWSER_OK and all(hasattr(_xcn, n) for n in
           ("_browser_alive", "_browser_search", "_browser_fetch", "_note_browser_cdp", "_cn_captcha",
            "_cn_login_wall", "_cn_card_to_document", "_cn_cards_from_html")))
-check("xhs_cn: fetch_timeout >= the 110s browser cdp_call budget (eye_add_url backstop must not kill it)",
+check("xhs_cn: fetch_timeout >= the 110s browser cdp_call budget (penumbra_add_url backstop must not kill it)",
       _xcn_a.fetch_timeout >= 120.0, detail=str(_xcn_a.fetch_timeout))
 # PRIMARY mainland search decode = DOM cards (the mainland SSRs results; /search/notes XHR doesn't fire).
 _xcn_card_html = (
@@ -4964,7 +4964,7 @@ check("wikicfp_nlp: registered (rss bundle) + explicit_only + wikicfp http feed"
 # ---------------------------------------------------------------------------
 # 38. CA Provincial Nominee draw scrapers (oinp/bcpnp/aaip): pure HTML-table parse → per-draw docs.
 #     Golden offline with verbatim-shaped table fixtures (structures verified live 2026-06-22).
-#     explicit_only: 省提名, named via eye_fetch, kept SEPARATE from federal EE (ircc_ee_rounds).
+#     explicit_only: 省提名, named via penumbra_fetch, kept SEPARATE from federal EE (ircc_ee_rounds).
 # ---------------------------------------------------------------------------
 from penumbra.core.sources.scrape import ca_pnp_source as _pnp  # noqa: E402
 _oinp_html = ("<h3>PhD Graduate stream</h3><table>"
@@ -5175,7 +5175,7 @@ check("provenance: xhs _flatten defaults a missing comment id to '' (never KeyEr
 # --- #7 independence_score (rank.merge_rank stamps it on each survivor; 0.7x discount for a
 #     title-only merge; a singleton gets 0.0). Metadata-only, does NOT touch composite(). ---
 from penumbra.core.rank import merge_rank as _merge_rank  # noqa: E402
-from penumbra.core.normalize import PolarisDocument as _PDoc  # noqa: E402
+from penumbra.core.normalize import Document as _PDoc  # noqa: E402
 _ind_d1 = _PDoc(source="arxiv", source_id="1", url="http://a",
                 title="A Long Enough Title For Dedup Testing Here", content="x")
 _ind_d2 = _PDoc(source="s2", source_id="2", url="http://b",
@@ -5355,15 +5355,17 @@ _fetch_src = _inspect42.getsource(fetcher.search_many)
 check("overlap: excluded_relevant entries carry 'overlap' key",
       '"overlap": _n' in _fetch_src or "'overlap': _n" in _fetch_src)
 
-# --- eye_gather: registered, whitelist excludes curator + gather itself ---
-from penumbra.server import eye_gather as _eg, _init_gather_tools, _GATHER_TOOLS  # noqa: E402
-check("gather: eye_gather is registered as a tool", _eg is not None)
+# --- penumbra_gather: registered, whitelist excludes curator + gather itself ---
+from penumbra.server import penumbra_gather as _eg, _init_gather_tools, _GATHER_TOOLS  # noqa: E402
+check("gather: penumbra_gather is registered as a tool", _eg is not None)
 _GATHER_TOOLS.clear()
 _init_gather_tools()
 check("gather: whitelist has 15+ read-only tools", len(_GATHER_TOOLS) >= 15)
 check("gather: whitelist excludes all curator tools",
       not any("curator" in k for k in _GATHER_TOOLS))
-check("gather: whitelist excludes eye_gather itself (no recursion)",
+check("gather: whitelist excludes sensor tools (sensor_run mutates baselines)",
+      not any(k.startswith("penumbra_sensor_") for k in _GATHER_TOOLS))
+check("gather: whitelist excludes penumbra_gather itself (no recursion)",
       "penumbra_gather" not in _GATHER_TOOLS)
 check("gather: rejects empty calls",
       _eg.__wrapped__(calls=[], timeout_s=10).get("error") is not None)
@@ -5373,9 +5375,9 @@ check("gather: rejects >10 calls",
 _g_unk = _eg.__wrapped__(calls=[{"tool": "no_such_tool", "args": {}}], timeout_s=5)
 check("gather: unknown tool returns per-call error (fail-open)",
       _g_unk["results"][0]["status"] == "error" and _g_unk["completed"] == 0)
-# A call to eye_list_sources (the simplest real tool) works inside gather
+# A call to penumbra_list_sources (the simplest real tool) works inside gather
 _g_ls = _eg.__wrapped__(calls=[{"tool": "penumbra_list_sources", "args": {}}], timeout_s=30)
-check("gather: eye_list_sources works inside gather",
+check("gather: penumbra_list_sources works inside gather",
       _g_ls["results"][0]["status"] == "ok" and "sources" in _g_ls["results"][0].get("result", {}))
 
 # --- MCP prompts: registered on the server ---
@@ -5455,12 +5457,12 @@ finally:
     _tmp_sensor.unlink(missing_ok=True)
 
 # Sensor MCP tools are registered
-from penumbra.server import eye_sensor_create, eye_sensor_list  # noqa: E402
-from penumbra.server import eye_sensor_delete, eye_sensor_run  # noqa: E402
-check("sensor: eye_sensor_create is registered", callable(eye_sensor_create))
-check("sensor: eye_sensor_list is registered", callable(eye_sensor_list))
-check("sensor: eye_sensor_delete is registered", callable(eye_sensor_delete))
-check("sensor: eye_sensor_run is registered", callable(eye_sensor_run))
+from penumbra.server import penumbra_sensor_create, penumbra_sensor_list  # noqa: E402
+from penumbra.server import penumbra_sensor_delete, penumbra_sensor_run  # noqa: E402
+check("sensor: penumbra_sensor_create is registered", callable(penumbra_sensor_create))
+check("sensor: penumbra_sensor_list is registered", callable(penumbra_sensor_list))
+check("sensor: penumbra_sensor_delete is registered", callable(penumbra_sensor_delete))
+check("sensor: penumbra_sensor_run is registered", callable(penumbra_sensor_run))
 
 
 print()

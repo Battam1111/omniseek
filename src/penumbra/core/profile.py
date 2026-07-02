@@ -1,7 +1,7 @@
 """Per-deployment PROFILE: the thin host-side overlay that turns the shipped engine into THIS
 deployment (which sources are exposed, polite-pool contact, extra red-lines, rate knobs).
 
-Lives at ``~/.polaris/profile.json`` (or ``POLARIS_PROFILE_PATH``), OUTSIDE the source tree — so a
+Lives at ``~/.penumbra/profile.json`` (or ``PENUMBRA_PROFILE_PATH``), OUTSIDE the source tree — so a
 cold ``git clone`` carries ZERO deployer identity. ABSENT or corrupt -> the all-default profile =
 exactly the pre-profile behavior (every registered source usable, today's deadlines/redlines), so
 the engine always boots and an existing host is unaffected until it writes a profile. The shipped
@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 _PATH = Path(os.environ.get(
-    "POLARIS_PROFILE_PATH", str(Path.home() / ".polaris" / "profile.json")))
+    "PENUMBRA_PROFILE_PATH", str(Path.home() / ".penumbra" / "profile.json")))
 
 _cache: "Optional[dict]" = None
 _lock = threading.Lock()
@@ -64,7 +64,7 @@ def _section(name: str) -> dict:
 def is_source_enabled(name: str, *, stability: str = "",
                       domains: "Optional[list]" = None, regions: "Optional[list]" = None,
                       kind: str = "") -> bool:
-    """Whether THIS deployment EXPOSES source ``name`` (broad fan-out + eye_fetch). No profile ->
+    """Whether THIS deployment EXPOSES source ``name`` (broad fan-out + penumbra_fetch). No profile ->
     True (pre-profile behavior). With a profile, most-specific-wins:
       sources.enable (explicit on)  >  sources.disable (explicit off)  >  walled tier gate
       (walled.enabled + walled.bring_your_own[name])  >  groups.disable_{stability,kinds,domains,

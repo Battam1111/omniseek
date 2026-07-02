@@ -29,7 +29,7 @@ from typing import Optional
 import httpx
 
 from penumbra.core import http
-from penumbra.core.normalize import PolarisDocument
+from penumbra.core.normalize import Document
 from penumbra.core.sources.api._bulk_funding import UA, BulkFundingBase, is_ai_relevant, year_of
 
 logger = logging.getLogger(__name__)
@@ -46,9 +46,9 @@ class SSHRCAwardsAdapter(BulkFundingBase):
         "加拿大 SSHRC 人文社科经费 — 计算语言学/NLP/数字人文 切片 (加拿大三大联邦研究局之二: NSERC 理工、"
         "SSHRC 人文社科、CIHR 健康). NLP 在人文社科这边以 计算语言学/语言技术/数字人文/语料文本/计算社科 "
         "形式存在, 是 NSERC(理工) 不覆盖的一块. 开放数据为逐年 Payments bulk CSV (FY2024 ~6.9MB, 无查询 API). "
-        "逐笔奖助: 获奖人 + 机构 + 金额(CAD) + program + 学科/方向 + 关键词. 仅收 AI/ML/NLP 相关切片. 命名 eye_fetch."
+        "逐笔奖助: 获奖人 + 机构 + 金额(CAD) + program + 学科/方向 + 关键词. 仅收 AI/ML/NLP 相关切片. 命名 penumbra_fetch."
     )
-    explicit_only = "SSHRC 加拿大人文社科经费 comp-ling/NLP 切片 (bulk CSV, 命名 eye_fetch); 月级刷新"
+    explicit_only = "SSHRC 加拿大人文社科经费 comp-ling/NLP 切片 (bulk CSV, 命名 penumbra_fetch); 月级刷新"
     domains = ["funding"]
     regions = ["ca"]
     modes = ["STRUCTURE"]
@@ -65,7 +65,7 @@ class SSHRCAwardsAdapter(BulkFundingBase):
                 return pays[0]["url"]
         return _FALLBACK_CSV
 
-    def _build_subset_docs(self) -> list[PolarisDocument]:
+    def _build_subset_docs(self) -> list[Document]:
         url = self._resolve_csv_url()
         try:
             r = httpx.get(url, headers={"User-Agent": UA}, timeout=180, follow_redirects=True)
@@ -74,7 +74,7 @@ class SSHRCAwardsAdapter(BulkFundingBase):
         except Exception as exc:  # noqa: BLE001 — failure → [] (the contract); don't cache a miss
             logger.warning("sshrc_awards: CSV fetch failed (%s): %s", url, exc)
             return []
-        docs: list[PolarisDocument] = []
+        docs: list[Document] = []
         for row in csv.DictReader(io.StringIO(text)):
             if is_ai_relevant(row.get("Title-Titre"), row.get("Keywords-Mots-clés"),
                               row.get("SSHRC_Discipline_EN"), row.get("SSHRC_Area_of_Research"),
@@ -85,7 +85,7 @@ class SSHRCAwardsAdapter(BulkFundingBase):
         logger.info("sshrc_awards: built %d comp-ling/NLP docs from FY2024", len(docs))
         return docs
 
-    def _row_to_doc(self, row: dict) -> Optional[PolarisDocument]:
+    def _row_to_doc(self, row: dict) -> Optional[Document]:
         name = (row.get("Name-Nom") or "").strip()
         title = (row.get("Title-Titre") or "").strip()
         if not (name or title):
@@ -108,7 +108,7 @@ class SSHRCAwardsAdapter(BulkFundingBase):
             parts.append(f"金额: CAD {amount}.")
         if keywords:
             parts.append(f"关键词: {keywords}.")
-        return PolarisDocument(
+        return Document(
             source=self.name,
             source_id=f"sshrc:{self._version}:{cle or (name + title)[:48]}",
             url=_DATASET_URL,

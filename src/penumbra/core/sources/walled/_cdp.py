@@ -128,7 +128,7 @@ def _sweep_excess_tabs(ctx, keep_recent: int = 6) -> None:
             pass
 
 
-# ── Lever A: persistent CDP connection pool (opt-in via POLARIS_CDP_POOL=1) ──────────────────
+# ── Lever A: persistent CDP connection pool (opt-in via PENUMBRA_CDP_POOL=1) ──────────────────
 # The default cdp_call() spawns a fresh thread + sync_playwright() + connect_over_cdp() PER call
 # (~1.5-3s of pure driver-startup + CDP-handshake waste, since the browser itself is persistent
 # but the connection is rebuilt every time). This pool keeps N persistent worker threads per
@@ -144,7 +144,7 @@ def _sweep_excess_tabs(ctx, keep_recent: int = 6) -> None:
 # reconnects on the NEXT task (the in-flight one fails exactly as the old per-call path would). The
 # flag defaults OFF → behavior is byte-identical to before unless explicitly enabled, so it ships
 # inert and is reversible by unsetting the env var.
-_POOL_ENV = "POLARIS_CDP_POOL"
+_POOL_ENV = "PENUMBRA_CDP_POOL"
 
 
 def _pool_enabled() -> bool:

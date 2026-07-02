@@ -40,9 +40,9 @@ logger = logging.getLogger(__name__)
 
 BASE = "https://api.github.com"
 _BASE_HOST = "api.github.com"
-USER_AGENT = "polaris-eye/0.1 (automated retrieval)"
+USER_AGENT = "penumbra/0.1 (automated retrieval)"
 TIMEOUT = 20
-CRED = Path.home() / ".polaris" / "credentials" / "github.json"
+CRED = Path.home() / ".penumbra" / "credentials" / "github.json"
 
 _BREAK_AFTER = 5      # consecutive failures that open the circuit
 _BREAK_FOR_S = 120.0  # seconds the circuit stays open
@@ -71,7 +71,7 @@ _pace_lock = threading.Lock()
 
 
 def _load_token() -> Optional[str]:
-    """The GitHub token from ~/.polaris/credentials/github.json (``{"token": "..."}``).
+    """The GitHub token from ~/.penumbra/credentials/github.json (``{"token": "..."}``).
 
     Classic OR fine-grained PAT (both accept ``Authorization: Bearer``). None when the
     file is absent / unreadable, so the Authorization injection is a no-op and behavior
@@ -85,7 +85,7 @@ def _load_token() -> Optional[str]:
 
 # Loaded once at import (mirrors _openalex's keyed-client pattern): None when no key file
 # exists, so the Authorization injection is a no-op and behavior is unchanged until
-# ~/.polaris/credentials/github.json is dropped on the host.
+# ~/.penumbra/credentials/github.json is dropped on the host.
 _token = _load_token()
 
 # Pooled client: reuse one keep-alive connection to api.github.com across the three GitHub-backed

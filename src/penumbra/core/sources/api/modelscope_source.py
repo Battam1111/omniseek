@@ -2,7 +2,7 @@
 
 ModelScope is Alibaba's model/dataset hub: the China-side analog of HuggingFace Hub, indexing
 the Chinese AI ecosystem (Qwen, iic/FunASR, DeepSeek mirrors, Chinese-language models) that HF
-does NOT surface. Polaris-eye's models-STRUCTURE reinforcement: a second, disjoint model hub so
+does NOT surface. Penumbra's models-STRUCTURE reinforcement: a second, disjoint model hub so
 the "what models exist + adoption" facet no longer rests on huggingface_hub alone, with a
 distinct China-AI cut (bilingual task taxonomy, download counts on the China side).
 
@@ -25,7 +25,7 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 
 from penumbra.core import http
-from penumbra.core.normalize import PolarisDocument, jsonsafe, mk_signal
+from penumbra.core.normalize import Document, jsonsafe, mk_signal
 from penumbra.core.sources.scrape._base import BaseScrapeAdapter
 
 API_URL = "https://www.modelscope.cn/api/v1/models"  # no trailing slash (avoids the 307)
@@ -56,18 +56,18 @@ class ModelScopeAdapter(BaseScrapeAdapter):
             body["Name"] = query.strip()
         return http.put_json(API_URL, json=body, timeout=20)
 
-    def _to_documents(self, raw: Any, query: str, limit: int) -> list[PolarisDocument]:
+    def _to_documents(self, raw: Any, query: str, limit: int) -> list[Document]:
         if not isinstance(raw, dict):
             return []
         models = ((raw.get("Data") or {}).get("Models")) or []
-        docs: list[PolarisDocument] = []
+        docs: list[Document] = []
         for model in models[:limit]:
             doc = self._model_to_doc(model)
             if doc is not None:
                 docs.append(doc)
         return docs
 
-    def _model_to_doc(self, model: Any) -> Optional[PolarisDocument]:
+    def _model_to_doc(self, model: Any) -> Optional[Document]:
         if not isinstance(model, dict):
             return None
         name = model.get("Name")
@@ -83,7 +83,7 @@ class ModelScopeAdapter(BaseScrapeAdapter):
             bits.append("Tasks: " + ", ".join(tasks))
         if model.get("License"):
             bits.append(f"License: {model.get('License')}")
-        return PolarisDocument(
+        return Document(
             source=self.name,
             source_id=f"{path}/{name}",
             url=MODEL_URL.format(path=path, name=name),
@@ -108,7 +108,7 @@ class ModelScopeAdapter(BaseScrapeAdapter):
     def _org_name(org: Any) -> Optional[str]:
         """Organization is a dict ({Name, FullName, Path, ...}) on this API, NOT a bare string.
         Pluck a human label (FullName '千问' / Name 'Qwen'); tolerate a plain string or None.
-        Passing the raw dict as a PolarisDocument field raises (author/source must be str)."""
+        Passing the raw dict as a Document field raises (author/source must be str)."""
         if isinstance(org, dict):
             for k in ("FullName", "Name", "Path"):
                 v = org.get(k)

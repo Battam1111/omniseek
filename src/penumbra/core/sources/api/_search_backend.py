@@ -6,7 +6,7 @@ Reaches walled venues WITHOUT scraping them: queries a SEARCH ENGINE with a
 robots.txt block on the target.
 
 Backend is pluggable + keyless-by-default:
-  * Brave Search API (robust) when ``~/.polaris/credentials/brave.json`` has ``api_key``;
+  * Brave Search API (robust) when ``~/.penumbra/credentials/brave.json`` has ``api_key``;
   * else DuckDuckGo HTML (keyless, fragile — soft-rate-limits with HTTP 202, so we
     pace + retry). Drop a Brave key any time to upgrade with zero code change.
 """
@@ -26,7 +26,7 @@ from bs4 import BeautifulSoup
 logger = logging.getLogger(__name__)
 
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0 Safari/537.36"
-_BRAVE_CRED = Path.home() / ".polaris" / "credentials" / "brave.json"
+_BRAVE_CRED = Path.home() / ".penumbra" / "credentials" / "brave.json"
 
 # Brave resilience: a circuit-breaker + a ~1-req/s rate gate (free tier ≈ 1 qps). Without
 # these, a dead/over-quota key is re-hit every call (wasted round-trip that can keep a

@@ -1,7 +1,7 @@
 """Vast.ai — live GPU rental marketplace (spot + on-demand prices) via the keyless v0 API.
 
 Vast.ai is a real-time GPU rental order book: per-offer on-demand and interruptible (spot)
-prices, performance, perf-per-dollar, location and reliability. Polaris-eye's compute-cost
+prices, performance, perf-per-dollar, location and reliability. Penumbra's compute-cost
 STRUCTURE source: the LIVE marketplace depth web search cannot give (it returns vendor pages
 and stale aggregator estimates, never the current order book). Reinforces gpu_pricing, whose
 own description noted that live spot pricing via the vast.ai / runpod API was not yet wired:
@@ -29,7 +29,7 @@ import json as _json
 from typing import Any, Optional
 
 from penumbra.core import http
-from penumbra.core.normalize import PolarisDocument, jsonsafe, mk_signal
+from penumbra.core.normalize import Document, jsonsafe, mk_signal
 from penumbra.core.sources.scrape._base import BaseScrapeAdapter
 
 API_URL = "https://console.vast.ai/api/v0/bundles"
@@ -61,11 +61,11 @@ class VastAIAdapter(BaseScrapeAdapter):
             flt["gpu_name"] = {"eq": query.strip()}
         return http.get_json(API_URL, params={"q": _json.dumps(flt)}, timeout=20)
 
-    def _to_documents(self, raw: Any, query: str, limit: int) -> list[PolarisDocument]:
+    def _to_documents(self, raw: Any, query: str, limit: int) -> list[Document]:
         if not isinstance(raw, dict):
             return []
         offers = raw.get("offers") or []
-        docs: list[PolarisDocument] = []
+        docs: list[Document] = []
         for offer in offers:
             if len(docs) >= limit:
                 break
@@ -76,7 +76,7 @@ class VastAIAdapter(BaseScrapeAdapter):
                 docs.append(doc)
         return docs
 
-    def _offer_to_doc(self, offer: Any) -> Optional[PolarisDocument]:
+    def _offer_to_doc(self, offer: Any) -> Optional[Document]:
         if not isinstance(offer, dict):
             return None
         oid = offer.get("id")
@@ -95,7 +95,7 @@ class VastAIAdapter(BaseScrapeAdapter):
             bits.append(f"{offer.get('gpu_ram')} MB VRAM")
         if loc:
             bits.append(str(loc))
-        return PolarisDocument(
+        return Document(
             source=self.name,
             source_id=str(oid),
             url=MARKET_URL,  # offers are ephemeral; the marketplace is the canonical entry point

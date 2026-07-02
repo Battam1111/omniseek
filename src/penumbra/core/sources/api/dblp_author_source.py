@@ -1,7 +1,7 @@
 """DBLP Authors — CS researcher profiles (name -> canonical PID + affiliation) via the keyless API.
 
 Resolves a researcher NAME to a stable DBLP PID page (the gateway to that author's full,
-already-ingested publication record) plus affiliation + award notes. Polaris-eye's people-STRUCTURE
+already-ingested publication record) plus affiliation + award notes. Penumbra's people-STRUCTURE
 reinforcement, CS-native and high-precision: a third researcher-identity source behind ORCID
 (self-asserted CV) and s2_authors (citation metrics), so the people domain is no longer a single
 point.
@@ -23,7 +23,7 @@ from __future__ import annotations
 from typing import Any, Optional
 
 from penumbra.core import http
-from penumbra.core.normalize import PolarisDocument, jsonsafe
+from penumbra.core.normalize import Document, jsonsafe
 from penumbra.core.sources.scrape._base import BaseScrapeAdapter
 
 SEARCH_URL = "https://dblp.org/search/author/api"
@@ -36,7 +36,7 @@ class DBLPAuthorAdapter(BaseScrapeAdapter):
     description = ("DBLP authors — resolve a CS researcher by NAME to a canonical DBLP PID page "
                    "(gateway to their full publication record) + affiliation + award notes; name a "
                    "researcher to disambiguate them in computer science. STRUCTURE, keyless, "
-                   "people-lookup. CS-native; pairs with orcid / s2_authors / eye_resolve_identity.")
+                   "people-lookup. CS-native; pairs with orcid / s2_authors / penumbra_resolve_identity.")
     cache_ttl = 86400  # 24h: researcher profiles change slowly
     kind = "lookup"
     domains = ["people"]
@@ -51,7 +51,7 @@ class DBLPAuthorAdapter(BaseScrapeAdapter):
             timeout=15,
         )
 
-    def _to_documents(self, raw: Any, query: str, limit: int) -> list[PolarisDocument]:
+    def _to_documents(self, raw: Any, query: str, limit: int) -> list[Document]:
         if not isinstance(raw, dict):
             return []
         hits = (((raw.get("result") or {}).get("hits") or {}).get("hit")) or []
@@ -59,14 +59,14 @@ class DBLPAuthorAdapter(BaseScrapeAdapter):
             hits = [hits]
         if not isinstance(hits, list):
             return []
-        docs: list[PolarisDocument] = []
+        docs: list[Document] = []
         for hit in hits[:limit]:
             doc = self._hit_to_doc(hit)
             if doc is not None:
                 docs.append(doc)
         return docs
 
-    def _hit_to_doc(self, hit: Any) -> Optional[PolarisDocument]:
+    def _hit_to_doc(self, hit: Any) -> Optional[Document]:
         if not isinstance(hit, dict):
             return None
         info = hit.get("info") or {}
@@ -82,7 +82,7 @@ class DBLPAuthorAdapter(BaseScrapeAdapter):
             content += " — " + "; ".join(affils)
         if awards:
             content += " (" + ", ".join(awards) + ")"
-        return PolarisDocument(
+        return Document(
             source=self.name,
             source_id=str(info.get("url")),  # the PID url is the stable id
             url=url,

@@ -65,7 +65,7 @@ def _eye_git_sha() -> Optional[str]:
     flagged as an open risk, non-blocking)."""
     try:
         from pathlib import Path
-        p = Path.home() / ".polaris" / "state" / "penumbra_git_sha.txt"
+        p = Path.home() / ".penumbra" / "state" / "penumbra_git_sha.txt"
         if p.exists():
             return p.read_text(encoding="utf-8").strip()[:64] or None
     except Exception:  # noqa: BLE001
@@ -228,7 +228,7 @@ def _family_dryrun(family: str, row: Optional[dict]) -> str:
 
 def build_packet(candidate_id: str) -> dict:
     """Assemble the neutral evidence packet for a candidate. Pure facts; NO verdict key/value.
-    Stages that need fetching read the candidate's cached probe output (set by eye_curator_probe
+    Stages that need fetching read the candidate's cached probe output (set by penumbra_curator_probe
     via candidate['_probe_cache']); when absent, those stages report empties + an error fact."""
     cand = _cand.get(candidate_id)
     if cand is None:

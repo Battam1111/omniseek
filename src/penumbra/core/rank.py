@@ -32,7 +32,7 @@ import re
 from datetime import datetime, timezone
 
 from penumbra.core import relevance
-from penumbra.core.normalize import PolarisDocument
+from penumbra.core.normalize import Document
 
 _ARXIV_RE = re.compile(r"arxiv\.org/(?:abs|pdf)/(\d{4}\.\d{4,5})", re.I)
 _DOI_RE = re.compile(r"10\.\d{4,9}/[-._;()/:a-z0-9]+", re.I)
@@ -53,7 +53,7 @@ def _norm_doi(s: str) -> str:
     return re.sub(r"^https?://(dx\.)?doi\.org/", "", str(s).lower().strip())
 
 
-def fingerprint(doc: PolarisDocument) -> str:
+def fingerprint(doc: Document) -> str:
     """A key that lands the SAME item on the SAME string across sources.
 
     TITLE FIRST (≥20 alnum chars): it's the only field all paper/article sources
@@ -83,14 +83,14 @@ def fingerprint(doc: PolarisDocument) -> str:
     return f"id:{doc.source}:{doc.source_id}"
 
 
-def _pick_best(group: list[PolarisDocument]) -> PolarisDocument:
+def _pick_best(group: list[Document]) -> Document:
     """Richest representative of a duplicate group: most content, then score."""
     return max(group, key=lambda d: (len(d.content or ""), d.attention_value() or 0))
 
 
-def dedup(docs: list[PolarisDocument]) -> list[PolarisDocument]:
+def dedup(docs: list[Document]) -> list[Document]:
     """Collapse cross-source duplicates; annotate survivors with ``also_in``."""
-    groups: dict[str, list[PolarisDocument]] = {}
+    groups: dict[str, list[Document]] = {}
     order: list[str] = []
     for d in docs:
         fp = fingerprint(d)
@@ -99,7 +99,7 @@ def dedup(docs: list[PolarisDocument]) -> list[PolarisDocument]:
             order.append(fp)
         groups[fp].append(d)
 
-    out: list[PolarisDocument] = []
+    out: list[Document] = []
     for fp in order:
         grp = groups[fp]
         best = _pick_best(grp)
@@ -140,7 +140,7 @@ def dedup(docs: list[PolarisDocument]) -> list[PolarisDocument]:
     return out
 
 
-def _recency(doc: PolarisDocument, now: datetime) -> float:
+def _recency(doc: Document, now: datetime) -> float:
     dt = doc.date
     if not dt:
         return 0.3  # unknown date → neutral-low
@@ -150,14 +150,14 @@ def _recency(doc: PolarisDocument, now: datetime) -> float:
     return 1.0 / (1.0 + age_days / 30.0)  # 1.0 today, 0.5 at ~30d
 
 
-def _engagement(doc: PolarisDocument) -> float:
+def _engagement(doc: Document) -> float:
     s = doc.attention_value() or 0
     if s <= 0:
         return 0.0
     return min(1.0, math.log10(1 + s) / 4.0)  # ~1.0 at score≈10k
 
 
-def _extract_hook(doc: PolarisDocument, terms: list[str], cap: int = 120) -> str:
+def _extract_hook(doc: Document, terms: list[str], cap: int = 120) -> str:
     """Extractive one-liner: the sentence from the doc's own text with the highest
     query-term overlap. Pure substring selection, NOT generative (the eye does not
     editorialize) — the agent reads the hook to decide relevance at a glance."""
@@ -180,10 +180,10 @@ def _extract_hook(doc: PolarisDocument, terms: list[str], cap: int = 120) -> str
     return best[:cap]
 
 
-def merge_rank(results, query: str, limit: int = 15) -> list[PolarisDocument]:
+def merge_rank(results, query: str, limit: int = 15) -> list[Document]:
     """Flatten → dedup → rank. ``results`` is a search_many dict or a flat list."""
     if isinstance(results, dict):
-        docs: list[PolarisDocument] = []
+        docs: list[Document] = []
         for lst in results.values():
             docs.extend(lst)
     else:
@@ -220,7 +220,7 @@ def merge_rank(results, query: str, limit: int = 15) -> list[PolarisDocument]:
         return base * (1.0 + 0.15 * min(1.0, (corrob - 1) / 3.0))
 
     scored.sort(key=lambda s: composite(s[1], s[2], s[3], s[4], s[5]), reverse=True)
-    out: list[PolarisDocument] = []
+    out: list[Document] = []
     for d, rel, rec, eng, corrob, rrf in scored[:limit]:
         d.metadata = {**(d.metadata or {}), "_rank": round(composite(rel, rec, eng, corrob, rrf), 3)}
         # Passive metadata stamps (Phase-A). MECHANICAL measurements the agent interprets;
@@ -230,7 +230,7 @@ def merge_rank(results, query: str, limit: int = 15) -> list[PolarisDocument]:
         # NOTE: corroboration counts source NAMES, not backends. See also_in for
         # the source list; the agent judges backend independence. (~42 org_watch
         # sources share the OpenAlex backend, so corroboration=5 is NOT necessarily
-        # 5 independent upstreams — cross-reference also_in with eye_list_sources.)
+        # 5 independent upstreams — cross-reference also_in with penumbra_list_sources.)
         try:
             _corrob = int((d.metadata or {}).get("corroboration", 1))
             _mb = (d.metadata or {}).get("merge_basis", "id")
