@@ -51,7 +51,22 @@ All notable changes to Penumbra are documented here. The format follows
   index (nothing stored, so an embedding-model upgrade upgrades every answer). Top-k by rank,
   no scores, and no collapse policy ever includes embedding proximity: candidates are
   proposals for your judgment, recorded via `penumbra_ruling`.
-- Sensors: optional `notify` flag pushes on new results (runner-side).
+- **Sensors run in-process (P6)**: the HTTP service ticks its own scheduler (15 min; `hourly` |
+  `daily` | `weekly`, unknown = daily), so sensors run because they exist: no cron to install,
+  no separate runner script (the old standalone cron path is deleted; scheduled runs now
+  accrete memory exactly like manual ones). Optional `notify` pushes on new results.
+- **`penumbra_graph` stable ABI (P6, BREAKING)**: the graph verb is now
+  `penumbra_graph(view, args)`: views live in a registry, per-view arguments are validated by
+  signature introspection (a wrong argument names the view's real parameters), calling with no
+  view returns the live view catalog, and the tool schema never changes again as views grow.
+- **Divergence by rank, not gate (P7)**: the same-work signal-conflict detector no longer
+  applies a 1.5x threshold; it measures every divergence, ranks by ratio (magnitudes; a sign
+  flip or zero-vs-nonzero is unbounded), keeps the top-3 per doc, and carries the ratio in the
+  stamp and the `conflicts` edge. What counts as material is the reader's call.
+- **Thin rows embed their titles (P7)**: docs from non-indexed sources get title embeddings at
+  mint time (plus a bounded self-converging catch-up in the writer's idle cycles), so `similar`
+  ranks across the whole perception history, not just the indexed subset; `stats` reports the
+  coverage gauge (`document_thin_embedded`). The thin vectors never feed search's recall arm.
 
 - PyPI publish (`pip install penumbra-mcp`) planned.
 

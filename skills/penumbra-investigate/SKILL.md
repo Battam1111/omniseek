@@ -66,8 +66,8 @@ If a xiaohongshu note URL appears, `penumbra_read(url)` retrieves full note + co
 ## 5. Triangulation and disconfirmation
 
 - **Count INDEPENDENT corroboration**: corroboration counts source NAMES, not backends.
-  Cross-reference also_in to dedup mirrors. `penumbra_graph` view=voices is the tool-layer
-  realization: hand it the doc ids from a search and it collapses them to distinct upstream voices
+  Cross-reference also_in to dedup mirrors. `penumbra_graph(view="voices", args={"doc_ids": [...]})`
+  is the tool-layer realization: hand it the doc ids from a search and it collapses them to distinct upstream voices
   via same_as + authored, so "5 sources agree" becomes "3 independent voices agree" (or fewer). The
   `unresolved` bucket is the honesty line: docs it could not resolve are returned separately, NEVER
   counted as voices. The other graph views (`find` -> `stats` -> `neighborhood` -> `between` ->

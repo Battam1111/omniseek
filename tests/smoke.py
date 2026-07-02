@@ -5297,7 +5297,8 @@ check("relevance_hook: '' in browse mode (empty query → no hook)",
 from penumbra.core.normalize import Signal as _Signal42  # noqa: E402
 from penumbra.core.rank import dedup as _dedup42  # noqa: E402
 # _cf1/_cf2: SAME normalized title → SAME dedup group; different sources; revenue diverges 8M vs 5M
-# (ratio 1.6 > 1.5) → the survivor carries metadata.signal_conflicts.
+# (ratio 1.6) → the survivor carries metadata.signal_conflicts (P7: any divergence is stamped +
+# RANKED by ratio; there is no threshold gate anymore, so the ratio value, not a cutoff, is the point).
 _cf_title = "Company X Annual Revenue Filing Report"  # >=20 normalized chars → title: fingerprint
 _cf1 = _PDoc(source="s1", source_id="1", url="http://a", title=_cf_title,
              content="revenue 5M",
@@ -5309,9 +5310,10 @@ _cf2 = _PDoc(source="s2", source_id="2", url="http://b", title=_cf_title,
                                            computed_by="source:s2", unit="USD")})
 _cf_out = _dedup42([_cf1, _cf2])
 _conflicts = (_cf_out[0].metadata or {}).get("signal_conflicts", []) if len(_cf_out) == 1 else []
-check("conflict: same-group >50%-divergent signal across two sources stamps the survivor",
+check("conflict: same-group divergent signal across two sources stamps the survivor (with its ratio)",
       len(_conflicts) >= 1 and _conflicts[0]["topic"] == "revenue"
-      and _conflicts[0]["source_a"] != _conflicts[0]["source_b"])
+      and _conflicts[0]["source_a"] != _conflicts[0]["source_b"]
+      and _conflicts[0]["ratio"] == 1.6)
 _cf_solo = _dedup42([_PDoc(source="a", source_id="1", url="http://x",
                            title="Unique Title Long Enough", content="x")])
 check("conflict: a singleton (no cross-source pair) carries no stamp",
@@ -5339,16 +5341,29 @@ _cf_same_b = _PDoc(source="s1", source_id="2", url="http://b", title="Same Sourc
 _cf_same_out = _dedup42([_cf_same_a, _cf_same_b])
 check("conflict: two docs from the SAME source are NOT flagged (cross-source only)",
       all("signal_conflicts" not in (d.metadata or {}) for d in _cf_same_out))
-# Same group (shared title), cross-source, but the shared signal AGREES (ratio <= 1.5) → no stamp.
-_cf_agree_a = _PDoc(source="s1", source_id="1", url="http://a", title="Agreeing Metric Shared Title",
+# P7: the 1.5x GATE is gone. A SMALL-but-nonzero divergence (100 vs 110, ratio 1.1) is now stamped
+# WITH its measured ratio — the detector ranks, it never gates. (Materiality is the reader's; the
+# stamp carries the number so a 1.1 reads as trivially-divergent, not as "notable".)
+_cf_small_a = _PDoc(source="s1", source_id="1", url="http://a", title="Small Divergence Shared Title",
                     content="x", signals={"m": _Signal42(value=100.0, kind="other",
                                                          computed_by="source:s1")})
-_cf_agree_b = _PDoc(source="s2", source_id="2", url="http://b", title="Agreeing Metric Shared Title",
+_cf_small_b = _PDoc(source="s2", source_id="2", url="http://b", title="Small Divergence Shared Title",
                     content="y", signals={"m": _Signal42(value=110.0, kind="other",
                                                          computed_by="source:s2")})
-_cf_agree_out = _dedup42([_cf_agree_a, _cf_agree_b])
-check("conflict: same-group shared signal within 50% (ratio<=1.5) is NOT flagged",
-      all("signal_conflicts" not in (d.metadata or {}) for d in _cf_agree_out))
+_cf_small_out = _dedup42([_cf_small_a, _cf_small_b])
+_cf_small_sc = (_cf_small_out[0].metadata or {}).get("signal_conflicts", []) if len(_cf_small_out) == 1 else []
+check("p7 conflict: a small nonzero divergence (ratio 1.1) IS flagged now (rank, never a gate), carrying the ratio",
+      len(_cf_small_sc) == 1 and _cf_small_sc[0]["topic"] == "m" and _cf_small_sc[0]["ratio"] == 1.1)
+# EQUAL values are NOT a divergence, so they carry NO stamp (the only thing silence now means).
+_cf_eq_a = _PDoc(source="s1", source_id="1", url="http://a", title="Equal Metric Shared Long Title",
+                 content="x", signals={"m": _Signal42(value=100.0, kind="other",
+                                                      computed_by="source:s1")})
+_cf_eq_b = _PDoc(source="s2", source_id="2", url="http://b", title="Equal Metric Shared Long Title",
+                 content="y", signals={"m": _Signal42(value=100.0, kind="other",
+                                                      computed_by="source:s2")})
+_cf_eq_out = _dedup42([_cf_eq_a, _cf_eq_b])
+check("p7 conflict: EQUAL cross-source values are NOT a divergence (no stamp)",
+      all("signal_conflicts" not in (d.metadata or {}) for d in _cf_eq_out))
 # The production wiring: search_ranked COLLECTS the survivors' stamps into _meta.conflicts
 # (the detection itself lives in rank.dedup where the group members exist).
 import inspect as _cf_inspect  # noqa: E402
@@ -6932,15 +6947,15 @@ finally:
 # (3) CONFLICTS BUILDER golden fixture (PURE): a record pair with an ENGAGEMENT signal -> ONE A-tier
 #     conflicts edge doc <-> doc (method signal:divergence, attrs {signal, kind, values}), NO nodes.
 _s51_conf_rec = [{"a": ("reddit", "rr1"), "b": ("hackernews", "hh1"), "signal": "score",
-                  "kind": "engagement", "values": {"reddit": 120, "hackernews": 900}}]
+                  "kind": "engagement", "values": {"reddit": 120, "hackernews": 900}, "ratio": 7.5}]
 _s51_cn, _s51_ce = rank._conflict_mints(_s51_conf_rec)
-check("p4 conflicts builder: a divergence record -> ONE A-tier conflicts edge, attrs {signal, kind, values}, NO nodes",
+check("p7 conflicts builder: a divergence record -> ONE A-tier conflicts edge, attrs {signal, kind, values, ratio}, NO nodes",
       _s51_cn == [] and len(_s51_ce) == 1
       and _s51_ce[0]["type"] == "conflicts" and _s51_ce[0]["tier"] == "A"
       and _s51_ce[0]["method"] == "signal:divergence"
       and {_s51_ce[0]["src"], _s51_ce[0]["dst"]} == {"doc:reddit:rr1", "doc:hackernews:hh1"}
       and _s51_ce[0]["attrs"] == {"signal": "score", "kind": "engagement",
-                                  "values": {"reddit": 120, "hackernews": 900}})
+                                  "values": {"reddit": 120, "hackernews": 900}, "ratio": 7.5})
 # the STABILITY contract: dedup's agent-visible signal_conflicts stamp is BYTE-IDENTICAL to pre-P4.
 # Reuse the §42 fixture shape: two same-title docs, different sources, one signal diverging >50%.
 from penumbra.core.normalize import Signal as _Sig51  # noqa: E402
@@ -6953,16 +6968,28 @@ _s51_cb = _PDoc(source="s2", source_id="c2", url="http://b", title=_s51_ct, cont
                                            unit="USD")})
 _s51_dd = _dedup42([_s51_ca, _s51_cb])
 _s51_sc = (_s51_dd[0].metadata or {}).get("signal_conflicts", []) if len(_s51_dd) == 1 else []
-check("p4 conflicts STABILITY: the agent-visible signal_conflicts stamp is byte-identical to pre-P4 (topic/source/claim only)",
-      _s51_sc == [{"topic": "revenue", "source_a": "s1", "claim_a": "revenue=5000000.0 (USD)",
-                   "source_b": "s2", "claim_b": "revenue=8000000.0 (USD)"}])
+# P7 (2026-07-03): the stamp is ADDITIVE under the STABILITY contract — every pre-P7 key is
+# byte-identical AND exactly ONE new key (``ratio``) is added (the measured max/min divergence; here
+# 8M/5M = 1.6). Assert BOTH halves: the old keys unchanged (drop ratio, compare to the pre-P4 dict)
+# AND the new-keys delta is exactly {"ratio"} carrying 1.6.
+_s51_old_keys = {"topic", "source_a", "claim_a", "source_b", "claim_b"}
+_s51_entry = _s51_sc[0] if _s51_sc else {}
+_s51_new_keys = set(_s51_entry.keys()) - _s51_old_keys
+check("p7 conflicts STABILITY: old signal_conflicts keys byte-identical to pre-P4 (topic/source/claim)",
+      len(_s51_sc) == 1
+      and {k: _s51_entry.get(k) for k in _s51_old_keys} ==
+          {"topic": "revenue", "source_a": "s1", "claim_a": "revenue=5000000.0 (USD)",
+           "source_b": "s2", "claim_b": "revenue=8000000.0 (USD)"})
+check("p7 conflicts STABILITY: exactly ONE new key added (ratio), carrying the measured 8M/5M=1.6",
+      _s51_new_keys == {"ratio"} and _s51_entry.get("ratio") == 1.6)
 # and the PRIVATE _conflict_pairs key carries the tap record beside it (the fetcher pops it; dedup
 # alone leaves it, which is the internal contract the tap reads).
 _s51_cp = (_s51_dd[0].metadata or {}).get("_conflict_pairs", [])
-check("p4 conflicts: the private _conflict_pairs record carries full identities + kind + values (fetcher pops it)",
+check("p7 conflicts: the private _conflict_pairs record carries full identities + kind + values + ratio (fetcher pops it)",
       len(_s51_cp) == 1 and _s51_cp[0]["a"] == ("s1", "c1") and _s51_cp[0]["b"] == ("s2", "c2")
       and _s51_cp[0]["signal"] == "revenue" and _s51_cp[0]["kind"] == "other"
-      and _s51_cp[0]["values"] == {"s1": 5000000.0, "s2": 8000000.0})
+      and _s51_cp[0]["values"] == {"s1": 5000000.0, "s2": 8000000.0}
+      and _s51_cp[0]["ratio"] == 1.6)
 
 # (4) CONFLICTS SYMMETRIC: the writer normalizes the pair src < dst (reuse the §49 idiom) so a
 #     re-detected pair (either order) upserts the SAME row. Drive the writer's _upsert_edge directly.
@@ -7117,7 +7144,8 @@ finally:
 #     VEC FIXTURE (stated honestly per the spec): the real embedding path is NOT offline-viable on a
 #     bare checkout (embed.embed_passage returns None — the qwen3 weights are not on disk), so this
 #     builds the smallest honest fixture by HAND-SEEDING the vec table with tiny float32 vectors and
-#     exercising the REAL matrix/cosine machinery (store._ensure_matrix + similar_by_rowid). It stubs
+#     exercising the REAL matrix/cosine machinery (store._ensure_matrix + the similar view's engine;
+#     P7 migrated similar off similar_by_rowid onto similar_anchor + similar_neighbors). It stubs
 #     NOTHING in the ranking path — only the weights-load step is bypassed, and the cosine ranking
 #     itself is the production code. FRESH temp-db (the §47/§49 pattern, restore in finally).
 # ---------------------------------------------------------------------------
@@ -7176,7 +7204,7 @@ try:
           and all(c["kind"] == "document" for c in _s52_sim["candidates"]))
     check("p5 similar: the view carries method align:embed + the coverage line, and is capped at k candidates",
           _s52_sim.get("method") == "align:embed" and _s52_sim.get("anchor") == _s52_na
-          and _s52_sim.get("coverage") == "vector-indexed docs only" and _s52_sim.get("capped") is True)
+          and "embedded title" in (_s52_sim.get("coverage") or "") and _s52_sim.get("capped") is True)
     # NO cosine scores anywhere in the output (rank is the honest unit; a score invites pseudo-precision).
     check("p5 similar: NO cosine scores in the output (rank is the honest unit) and NO edges (a listing, not structure)",
           all(("score" not in c and "cosine" not in c and "sim" not in c)
@@ -7186,10 +7214,11 @@ try:
     _s52_sim_k1 = _graph.similar(_s52_na, k=1)
     check("p5 similar: k is a resource budget, respected exactly (k=1 -> the single nearest candidate)",
           len(_s52_sim_k1["candidates"]) == 1 and _s52_sim_k1["candidates"][0]["id"] == _s52_nb)
-    # anchor NOT in the vector index (a doc id with no docs row / no vector) -> error NAMING coverage.
+    # anchor with NO vector in EITHER store (no docs row / no vec_thin row) -> error naming the real
+    # condition (P7: the coverage line now spans both stores; the message says "embed").
     _s52_sim_miss = _graph.similar("doc:arxiv:NOT_INDEXED", k=2)
-    check("p5 similar: an anchor not in the vector index returns an error naming the coverage line",
-          "error" in _s52_sim_miss and "vector-indexed docs only" in _s52_sim_miss["error"])
+    check("p5 similar: an anchor with no vector in either store returns an error naming the real condition",
+          "error" in _s52_sim_miss and "embed" in _s52_sim_miss["error"].lower())
     # a non-doc anchor (an entity id) -> error (similar is doc-anchored only).
     _s52_sim_nondoc = _graph.similar("work:openalex:W1", k=2)
     check("p5 similar: a non-doc anchor (entity id) returns an error (similar is doc-anchored only)",
@@ -7229,12 +7258,13 @@ _s52_unknown = _s52_eg(view="frobnicate")
 check("p5 surface: an unknown view error names all SEVEN views (find..similar)",
       "error" in _s52_unknown and all(_v in _s52_unknown["error"] for _v in _S52_VIEWS))
 # dispatch reaches the two new views (a garbage since date + a non-doc similar anchor each return the
-# view's OWN error, proving the dispatch routed there rather than the unknown-view error).
+# view's OWN error, proving the dispatch routed there rather than the unknown-view error). P6: the
+# tool ABI is (view, args), so per-view params ride in args={...} (updated from the old flat kwargs).
 check("p5 surface: view=since routes to the since view (its date-parse error, not unknown-view)",
-      "error" in _s52_eg(view="since", anchor="sensor:x", date="garbage")
-      and "since requires date" in _s52_eg(view="since", anchor="sensor:x", date="garbage")["error"])
+      "error" in _s52_eg(view="since", args={"anchor": "sensor:x", "date": "garbage"})
+      and "since requires date" in _s52_eg(view="since", args={"anchor": "sensor:x", "date": "garbage"})["error"])
 check("p5 surface: view=similar routes to the similar view (its anchor error, not unknown-view)",
-      "error" in _s52_eg(view="similar", anchor="work:openalex:W1"))
+      "error" in _s52_eg(view="similar", args={"anchor": "work:openalex:W1"}))
 check("p5 surface: _PENUMBRA_INSTRUCTIONS carries the 7-view chain (find -> ... -> since -> similar)",
       "find -> stats -> neighborhood -> between -> voices -> since -> similar" in _srv._PENUMBRA_INSTRUCTIONS)
 # tool count UNCHANGED: no new tool (the two views are penumbra_graph actions). _PENUMBRA_VERBS stays 17,
@@ -7242,6 +7272,568 @@ check("p5 surface: _PENUMBRA_INSTRUCTIONS carries the 7-view chain (find -> ... 
 from penumbra.server import _PENUMBRA_VERBS as _s52_verbs  # noqa: E402
 check("p5 surface: the tool count is UNCHANGED (17) — since/similar are penumbra_graph views, not new tools",
       len(_s52_verbs) == 17 and len(_GATHER_TOOLS) == 12 and "penumbra_graph" in _GATHER_TOOLS)
+
+
+# ---------------------------------------------------------------------------
+# 53. P6 (A) — the in-process sensor scheduler (design "P6", the two structural closures): a run is
+#     an act of PERCEPTION and must land on the wall, so execution moved INTO the writer process and
+#     the launchd cron runner (a second, memory-less path) is deleted. Cover the PURE due_sensors
+#     cases, scheduler_tick (runs due + isolates a failure + Barks only on notify+new), the two
+#     start_scheduler guards (WRITES_ENABLED off + double-start), _bark_push fail-open, and the
+#     grep-style tripwire that NO in-repo sensor_runner reference remains.
+# ---------------------------------------------------------------------------
+import penumbra.core.sensor as _sen53  # noqa: E402
+from penumbra.core.sensor import Sensor as _Sensor53, SensorStore as _Store53, due_sensors as _due53  # noqa: E402
+from datetime import datetime as _dt53, timezone as _tz53, timedelta as _td53  # noqa: E402
+
+# _SCHEDULE_SECONDS is the canonical schedule table; unknown degrades to daily.
+check("p6-A schedule: _SCHEDULE_SECONDS maps hourly/daily/weekly to seconds",
+      _sen53._SCHEDULE_SECONDS == {"hourly": 3600, "daily": 86400, "weekly": 604800})
+
+# (1) due_sensors is PURE (unit-testable): drive it against a temp-path store with hand-set
+#     last_run_at values. never-run -> due; a fresh daily -> not due; a stale weekly -> due; an
+#     unknown schedule is treated as daily (a 2-day-old unknown is due, a 1-hour-old unknown is not).
+_tmp_due53 = _Path44(_tempfile44.mktemp(suffix=".json"))
+try:
+    _st53 = _Store53(_tmp_due53)
+    _now53 = _dt53.now(_tz53.utc)
+    def _mk53(sid, schedule, age_seconds):
+        # write a Sensor row directly (bypassing create's id-minting) with a controlled last_run_at.
+        ts = None if age_seconds is None else (_now53 - _td53(seconds=age_seconds)).isoformat()
+        _st53.update(_Sensor53(id=sid, query=f"q {sid}", schedule=schedule, last_run_at=ts))
+    _mk53("s_never", "daily", None)          # never run -> due immediately
+    _mk53("s_fresh_daily", "daily", 3600)    # 1h old, daily interval 24h -> NOT due
+    _mk53("s_stale_weekly", "weekly", 8 * 86400)  # 8d old, weekly interval 7d -> due
+    _mk53("s_unknown_stale", "frobnicate", 2 * 86400)  # unknown -> daily; 2d old -> due
+    _mk53("s_unknown_fresh", "frobnicate", 3600)       # unknown -> daily; 1h old -> NOT due
+    _due_ids53 = {s.id for s in _due53(_st53, _now53.timestamp())}
+    check("p6-A due_sensors: a never-run sensor is due immediately", "s_never" in _due_ids53)
+    check("p6-A due_sensors: a fresh daily sensor is NOT due", "s_fresh_daily" not in _due_ids53)
+    check("p6-A due_sensors: a stale weekly sensor is due", "s_stale_weekly" in _due_ids53)
+    check("p6-A due_sensors: an unknown schedule degrades to daily (2d-old -> due)",
+          "s_unknown_stale" in _due_ids53)
+    check("p6-A due_sensors: an unknown schedule degrades to daily (1h-old -> not due)",
+          "s_unknown_fresh" not in _due_ids53)
+finally:
+    _tmp_due53.unlink(missing_ok=True)
+
+# (2) scheduler_tick: runs every DUE sensor via run_sensor (monkeypatched, zero network), ISOLATES a
+#     failing sensor (one raise never stops the rest), and Barks ONLY when notify AND new_count>0
+#     (monkeypatch _bark_push to record). Two sensors: one notify+new (Barks), one notify but no-new
+#     (silent), plus a third that raises (isolated into "failed").
+_tmp_tick53 = _Path44(_tempfile44.mktemp(suffix=".json"))
+_run_real53 = _sen53.run_sensor
+_bark_real53 = _sen53._bark_push
+try:
+    _st_tick53 = _Store53(_tmp_tick53)
+    _st_tick53.update(_Sensor53(id="s_hit", query="hit query", schedule="daily", notify=True))
+    _st_tick53.update(_Sensor53(id="s_quiet", query="quiet query", schedule="daily", notify=True))
+    _st_tick53.update(_Sensor53(id="s_boom", query="boom query", schedule="daily", notify=True))
+    _barks53: list = []
+    def _fake_bark53(title, body):
+        _barks53.append((title, body))
+    def _fake_run53(sensor, store, limit=15):
+        if sensor.id == "s_boom":
+            raise RuntimeError("simulated sensor failure")
+        new_count = 2 if sensor.id == "s_hit" else 0
+        return {"sensor_id": sensor.id, "query": sensor.query, "new_count": new_count,
+                "new_titles": ["New Title A", "New Title B"][:new_count]}
+    _sen53.run_sensor = _fake_run53
+    _sen53._bark_push = _fake_bark53
+    # all three are never-run -> all due. now() is real; the fakes ignore time.
+    _tick53 = _sen53.scheduler_tick(_st_tick53)
+    check("p6-A scheduler_tick: checked counts all due sensors", _tick53.get("checked") == 3)
+    check("p6-A scheduler_tick: ran the two non-failing sensors",
+          set(_tick53.get("ran", [])) == {"s_hit", "s_quiet"})
+    check("p6-A scheduler_tick: a failing sensor is isolated into failed (never stops the rest)",
+          _tick53.get("failed") == ["s_boom"])
+    check("p6-A scheduler_tick: Barks ONLY on notify+new (one Bark, for the hit sensor)",
+          len(_barks53) == 1 and _barks53[0][0] == "hit query")
+    check("p6-A scheduler_tick: the Bark body carries the new count + titles",
+          "2" in _barks53[0][1] and "New Title A" in _barks53[0][1])
+finally:
+    _sen53.run_sensor = _run_real53
+    _sen53._bark_push = _bark_real53
+    _tmp_tick53.unlink(missing_ok=True)
+
+# (3a) start_scheduler REFUSES to start unless writer.WRITES_ENABLED is truthy (the scheduler only
+#      ever belongs in the writer process). Monkeypatch the gate off + reset the idempotence flag.
+import penumbra.core.recall.writer as _wr53  # noqa: E402
+_writes_real53 = _wr53.WRITES_ENABLED
+_started_real53 = _sen53._scheduler_started
+try:
+    _wr53.WRITES_ENABLED = False
+    _sen53._scheduler_started = False
+    check("p6-A start_scheduler: REFUSES to start when WRITES_ENABLED is off (returns None)",
+          _sen53.start_scheduler() is None)
+    check("p6-A start_scheduler: the refusal does NOT set the started flag",
+          _sen53._scheduler_started is False)
+    # (3b) double-start guard: with writes ON, the FIRST start returns a Thread, the SECOND returns
+    #      None (the module flag prevents a second thread). Clean up the started daemon after.
+    _wr53.WRITES_ENABLED = True
+    _sen53._scheduler_started = False
+    _th53_a = _sen53.start_scheduler(interval_s=3600, initial_delay_s=3600)  # long delays: it just sleeps
+    _th53_b = _sen53.start_scheduler(interval_s=3600, initial_delay_s=3600)
+    check("p6-A start_scheduler: first start (writes on) returns a daemon Thread",
+          _th53_a is not None and _th53_a.daemon is True)
+    check("p6-A start_scheduler: a second start is a no-op (double-start guard returns None)",
+          _th53_b is None)
+finally:
+    _wr53.WRITES_ENABLED = _writes_real53
+    _sen53._scheduler_started = _started_real53  # the started daemon is a harmless sleeping thread
+
+# (4) _bark_push is FAIL-OPEN: an ABSENT credentials file is a silent no-op (never raises), so a
+#     deployment with no bark.json simply pushes nothing. Point the creds path at a missing file.
+_bark_creds_real53 = _sen53._BARK_CREDS_PATH
+try:
+    _sen53._BARK_CREDS_PATH = _Path44(_tempfile44.mktemp(suffix=".json"))  # does not exist
+    check("p6-A _bark_push: fail-open no-op when the credentials file is absent (no raise)",
+          _sen53._bark_push("t", "b") is None)
+finally:
+    _sen53._BARK_CREDS_PATH = _bark_creds_real53
+
+# (5) THE SECOND PATH IS DELETED: scripts/sensor_runner.py is gone, and NO in-repo file references
+#     the token "sensor_runner" (a memory-less cron runner is not fixed, it is removed). Grep-style
+#     scan over the eye tree (py/md/sh/txt/json), EXCLUDING this smoke file itself (it names the token
+#     in this very comment). The scan + the deleted file together are the gate.
+check("p6-A delete: scripts/sensor_runner.py is gone", not (_SCRIPTS_DIR / "sensor_runner.py").exists())
+_sr_refs53: list = []
+for _p53 in ROOT.rglob("*"):
+    if not _p53.is_file() or _p53.suffix not in (".py", ".md", ".sh", ".txt", ".json"):
+        continue
+    if _p53.name == "smoke.py" or ".venv" in _p53.parts or "__pycache__" in _p53.parts:
+        continue
+    try:
+        if "sensor_runner" in _p53.read_text(encoding="utf-8", errors="ignore"):
+            _sr_refs53.append(str(_p53.relative_to(ROOT)))
+    except Exception:  # noqa: BLE001 — an unreadable file is not a reference
+        pass
+check("p6-A delete: no in-repo file references sensor_runner (docs + scripts swept)",
+      not _sr_refs53, f"still referenced in: {_sr_refs53}")
+
+
+# ---------------------------------------------------------------------------
+# 54. P6 (B) — penumbra_graph's stable ABI (design "P6": open families get open ABIs). penumbra_graph is the
+#     eye's ONE open-family verb: its views grow with the model and their params are disjoint, so it
+#     is now (view, args) with the views as a REGISTRY (a decorator; the dispatcher, valid-view list,
+#     per-view arg validation, and the self-description all DERIVE from it). Cover dispatch_view's
+#     gate (empty -> catalog, unknown view, unknown arg, missing required, lenient coercion, each of
+#     the 7 routes), the FROZEN-SCHEMA tripwire (the tool body's params are exactly {view, args}), and
+#     the gather path. The view FUNCTIONS' own behavior is covered by sections 47-52 (unchanged here).
+# ---------------------------------------------------------------------------
+from penumbra.core.recall import graph as _g54  # noqa: E402
+_S54_VIEWS = ("find", "stats", "neighborhood", "between", "voices", "since", "similar")
+
+# (1) the registry IS the valid-view list: exactly the seven decorated functions, each a callable.
+check("p6-B registry: _VIEWS holds exactly the seven view functions",
+      set(_g54._VIEWS.keys()) == set(_S54_VIEWS) and all(callable(f) for f in _g54._VIEWS.values()))
+
+# (2) describe_views is DERIVED via inspect: every view carries its params (name/required/default) +
+#     its docstring FIRST LINE; a no-view dispatch returns this catalog.
+_desc54 = _g54.describe_views()
+check("p6-B describe_views: the catalog covers all seven views",
+      set(_desc54.keys()) == set(_S54_VIEWS))
+check("p6-B describe_views: each view exposes params + a non-empty doc first-line",
+      all(isinstance(_desc54[v]["params"], list) and bool(_desc54[v]["doc"]) for v in _S54_VIEWS))
+# spot-check the per-view contract is the FUNCTION's real signature (between(a, b, ...), not renamed).
+_between_params54 = [p["name"] for p in _desc54["between"]["params"]]
+check("p6-B describe_views: between's params are its real signature a/b/types/policy/max_nodes",
+      _between_params54 == ["a", "b", "types", "policy", "max_nodes"])
+check("p6-B describe_views: a required param (voices.doc_ids) is flagged required, an optional one is not",
+      any(p["name"] == "doc_ids" and p["required"] for p in _desc54["voices"]["params"])
+      and any(p["name"] == "policy" and not p["required"] for p in _desc54["voices"]["params"]))
+
+# (3) dispatch_view — EMPTY view returns the live catalog (self-describing, not an error).
+_empty54 = _g54.dispatch_view("")
+check("p6-B dispatch: an empty view returns the catalog with all seven views + their first lines",
+      "views" in _empty54 and set(_empty54["views"].keys()) == set(_S54_VIEWS)
+      and all(_empty54["views"][v]["doc"] for v in _S54_VIEWS) and "error" not in _empty54)
+
+# (4) UNKNOWN view -> an error naming every valid view (and the catalog rides along).
+_unk54 = _g54.dispatch_view("frobnicate")
+check("p6-B dispatch: an unknown view error names all seven views",
+      "error" in _unk54 and all(v in _unk54["error"] for v in _S54_VIEWS) and "views" in _unk54)
+
+# (5) UNKNOWN arg -> an error naming the view's REAL params + the unexpected key (no silent drop).
+_badarg54 = _g54.dispatch_view("stats", {"bogus": 1})
+check("p6-B dispatch: an unexpected arg errors, naming the view + the unexpected key",
+      "error" in _badarg54 and "bogus" in _badarg54["error"] and "stats" in _badarg54["error"])
+_badarg54b = _g54.dispatch_view("between", {"a": "x", "nonsense": 1})
+check("p6-B dispatch: an unexpected arg names the view's real params (a/b/... present in the message)",
+      "error" in _badarg54b and "nonsense" in _badarg54b["error"] and "'a'" in _badarg54b["error"])
+
+# (6) MISSING REQUIRED -> an error naming the missing param (between needs both a and b).
+_missing54 = _g54.dispatch_view("between", {"a": "x"})
+check("p6-B dispatch: a missing required param is named (between without b)",
+      "error" in _missing54 and "'b'" in _missing54["error"])
+
+# (7) LENIENT COERCION mirroring the server's Lenient* types: a str "40" for an int param becomes 40.
+#     Prove it END-TO-END through dispatch by installing a temp echo-view (restored after), so the
+#     assertion is on dispatch's coercion, not just the helper — "40" (str) must arrive as 40 (int).
+_views_backup54 = dict(_g54._VIEWS)
+try:
+    def _echo_int_view54(n: int = 7):
+        """echo view (smoke-only) -> returns the received n + its type name."""
+        return {"n": n, "type": type(n).__name__}
+    _g54._VIEWS["_echo_int_view54"] = _echo_int_view54
+    _coerced54 = _g54.dispatch_view("_echo_int_view54", {"n": "40"})
+    check("p6-B dispatch: lenient int coercion — a str \"40\" for an int param arrives as int 40",
+          _coerced54.get("n") == 40 and _coerced54.get("type") == "int")
+finally:
+    _g54._VIEWS.clear()
+    _g54._VIEWS.update(_views_backup54)
+check("p6-B dispatch: the temp echo-view was removed (the registry is restored to the seven views)",
+      set(_g54._VIEWS.keys()) == set(_S54_VIEWS))
+
+# (8) EACH of the seven dispatches to ITS function (not the unknown-view error). Drive them against a
+#     disabled store so every view fail-opens to its own empty/own-error shape with zero network; the
+#     point is ROUTING, not data. stats through dispatch must EQUAL stats() called directly.
+import penumbra.core.recall.store as _rstore54  # noqa: E402
+_disabled_prev54 = _rstore54._disabled
+try:
+    _rstore54._disabled = True  # every view's _con() -> None -> fail-open to its empty shape
+    _routes54 = {
+        "find": _g54.dispatch_view("find", {"label_query": "anything"}),
+        "stats": _g54.dispatch_view("stats", {}),
+        "neighborhood": _g54.dispatch_view("neighborhood", {"anchor": "doc:a:1"}),
+        "between": _g54.dispatch_view("between", {"a": "doc:a:1", "b": "doc:b:2"}),
+        "voices": _g54.dispatch_view("voices", {"doc_ids": ["doc:a:1"]}),
+        "since": _g54.dispatch_view("since", {"anchor": "doc:a:1", "date": "2026-01-01"}),
+        "similar": _g54.dispatch_view("similar", {"anchor": "doc:a:1"}),
+    }
+    # a routed call NEVER returns the unknown-view error; each returns its own view's shape.
+    _mis_routed54 = [v for v, r in _routes54.items()
+                     if isinstance(r, dict) and "unknown view" in str(r.get("error", ""))]
+    check("p6-B dispatch: each of the seven views routes to its function (none hit unknown-view)",
+          not _mis_routed54, f"mis-routed: {_mis_routed54}")
+    check("p6-B dispatch: routed shapes are the views' own (find->nodes, stats->node_kinds, between->paths)",
+          "nodes" in _routes54["find"] and "node_kinds" in _routes54["stats"]
+          and "paths" in _routes54["between"] and "voices" in _routes54["voices"])
+    # the concrete spot-check the spec calls out: stats through dispatch == stats() direct.
+    check("p6-B dispatch: stats THROUGH dispatch equals stats() called directly",
+          _g54.dispatch_view("stats", {}) == _g54.stats())
+finally:
+    _rstore54._disabled = _disabled_prev54
+
+# (9) THE FROZEN-SCHEMA TRIPWIRE: the penumbra_graph TOOL body's parameters are EXACTLY {view, args}.
+#     Future views + future per-view params are data growth in the registry, never schema growth here
+#     (a new flat param sneaking onto the tool signature is the regression this catches).
+_eg54 = _srv.penumbra_graph.__wrapped__ if hasattr(_srv.penumbra_graph, "__wrapped__") else _srv.penumbra_graph
+_eg54_params = set(_insp.signature(_eg54).parameters.keys())
+check("p6-B FROZEN SCHEMA: the penumbra_graph tool body's params are exactly {view, args}",
+      _eg54_params == {"view", "args"}, f"got {sorted(_eg54_params)}")
+check("p6-B surface: the tool body just delegates to dispatch_view (view-only call returns the catalog)",
+      "views" in _eg54(view="") and set(_eg54(view="")["views"].keys()) == set(_S54_VIEWS))
+
+# (10) GATHER PATH still reaches penumbra_graph through the (view, args) ABI: the whitelisted body accepts
+#      both a bare {view} and a {view, args} shape (gather spreads **args, incl. a nested args dict).
+_eg_gather54 = _GATHER_TOOLS["penumbra_graph"]
+check("p6-B gather: {view: stats} reaches penumbra_graph through the gather whitelist",
+      "node_kinds" in _eg_gather54(view="stats"))
+check("p6-B gather: {view: voices, args:{...}} reaches penumbra_graph through the gather whitelist",
+      _eg_gather54(view="voices", args={"doc_ids": []}).get("n_voices") == 0)
+
+
+# ---------------------------------------------------------------------------
+# 55. P7 — three closures from the same audit standard (design "P7 shipped 2026-07-03"):
+#     (W1) the divergence detector loses its 1.5x threshold: it MEASURES every same-work numeric
+#          divergence (values + ratio), RANKS by ratio DESC, keeps top-3 per doc (a resource cap),
+#          serializes a zero-vs-nonzero pair as "inf" (ranks first), and equal values are no
+#          divergence; the stamp + the conflicts edge carry the ratio as data. (The STABILITY /
+#          builder / cap checks live in §51 + the §42 block; here: ordering + inf + cap-by-rank.)
+#     (W2) the "no edges, no entity" audit licensed NO taps (products carry only handle strings or
+#          the doc's own id), so there is deliberately NO smoke check for it — the audit lives in the
+#          report + canon, and fabricating a check would be dishonest.
+#     (W3) thin rows embed their TITLES into vec_thin (writer lane, fail-open) + a bounded
+#          self-converging catch-up; similar ranks across BOTH vector stores; stats carries the
+#          coverage gauge; and vec_thin is NOT consulted by the search/recall path.
+#     VEC FIXTURE (honest, per §52): the real qwen weights are not on a bare checkout, so the
+#     writer-lane + catch-up parts STUB embed.embed_passage with a deterministic tiny-vector fn (only
+#     the weights-load step is bypassed), and the similar-union part HAND-SEEDS vec/vec_thin with tiny
+#     float32 vectors and exercises the REAL matrix/cosine machinery. FRESH temp-db, restore in finally.
+# ---------------------------------------------------------------------------
+import numpy as _np55  # noqa: E402
+import penumbra.core.recall.writer as _wr55  # noqa: E402
+import penumbra.core.recall.embed as _emb55  # noqa: E402
+
+# (W1) DIVERGENCE ORDERING + INF + CAP-BY-RANK (pure rank.dedup; no db). One group, cross-source,
+#      several diverging numeric signals: they surface RANKED by ratio DESC, a zero-vs-nonzero pair is
+#      "inf" and ranks FIRST, and the per-doc cap of 3 keeps the THREE HIGHEST ratios (not the first 3
+#      by iteration order). This is the whole point of W1: rank, never a gate.
+_s55_t = "P Seven Divergence Ranked Shared Long Normalized Title Here"
+_s55_a = _PDoc(source="sA", source_id="1", url="http://a", title=_s55_t, content="x",
+               signals={"z": _Signal42(value=0.0, kind="other", computed_by="c"),      # -> inf
+                        "big": _Signal42(value=10.0, kind="other", computed_by="c"),   # -> 5.0
+                        "mid": _Signal42(value=10.0, kind="other", computed_by="c"),   # -> 3.0
+                        "low": _Signal42(value=10.0, kind="other", computed_by="c")})  # -> 1.2 (dropped by cap)
+_s55_b = _PDoc(source="sB", source_id="2", url="http://b", title=_s55_t, content="y",
+               signals={"z": _Signal42(value=7.0, kind="other", computed_by="c"),
+                        "big": _Signal42(value=50.0, kind="other", computed_by="c"),
+                        "mid": _Signal42(value=30.0, kind="other", computed_by="c"),
+                        "low": _Signal42(value=12.0, kind="other", computed_by="c")})
+_s55_dd = _dedup42([_s55_a, _s55_b])
+_s55_sc = (_s55_dd[0].metadata or {}).get("signal_conflicts", []) if len(_s55_dd) == 1 else []
+check("p7 W1: divergences RANK by ratio DESC, zero-vs-nonzero is 'inf' first, per-doc cap keeps the top-3",
+      [(c["topic"], c["ratio"]) for c in _s55_sc] == [("z", "inf"), ("big", 5.0), ("mid", 3.0)])
+# the private tap record mirrors the stamp order + carries the same ratios (the fetcher pops it).
+_s55_cp = (_s55_dd[0].metadata or {}).get("_conflict_pairs", [])
+check("p7 W1: the private _conflict_pairs mirror the ranked order + ratios (fetcher pops it)",
+      [(p["signal"], p["ratio"]) for p in _s55_cp] == [("z", "inf"), ("big", 5.0), ("mid", 3.0)])
+# and the minted conflicts edges carry the ratio in attrs (the edge is data, materiality is the reader's).
+_s55_cn, _s55_ce = rank._conflict_mints(_s55_cp)
+check("p7 W1: minted conflicts edges carry the ratio in attrs ('inf' for the zero-vs-nonzero pair)",
+      _s55_cn == [] and len(_s55_ce) == 3
+      and {e["attrs"]["signal"]: e["attrs"]["ratio"] for e in _s55_ce} ==
+          {"z": "inf", "big": 5.0, "mid": 3.0})
+
+# (W3) VEC_THIN ROUNDTRIP + CATCH-UP + SIMILAR UNION. Fresh temp-db; reset BOTH matrix caches.
+_s55_db_prev = _rstore.DB_PATH
+_s55_disabled_prev = _rstore._disabled
+_s55_local_prev = _rstore._local
+_s55_vecM_prev, _s55_vecids_prev = _rstore._vec_M, _rstore._vec_ids
+_s55_vecgen_prev, _s55_vecmv_prev = _rstore._vec_built_gen, _rstore._vec_built_mv
+_s55_thinM_prev, _s55_thinids_prev = _rstore._thin_M, _rstore._thin_ids
+_s55_thingen_prev, _s55_thinmv_prev = _rstore._thin_built_gen, _rstore._thin_built_mv
+# embed stubs (restore in finally): a deterministic 3-dim tiny-vector fn keyed by the title's 1st char.
+_s55_emb_avail_prev = _emb55.available
+_s55_emb_pass_prev = _emb55.embed_passage
+_s55_emb_mv_prev = _emb55.MODEL_VERSION
+_s55_emb_dim_prev = _emb55.DIM
+_S55_MV = "p7-fake-emb/d3"
+_S55_VMAP = {"a": [1.0, 0.0, 0.0], "b": [0.9, 0.1, 0.0], "c": [0.5, 0.5, 0.0], "d": [0.0, 0.0, 1.0]}
+def _s55_fake_pass(texts):
+    return _np55.array([_S55_VMAP.get((t or "?")[0].lower(), [0.1, 0.1, 0.1]) for t in texts],
+                       dtype=_np55.float32)
+_rstore.DB_PATH = Path(_tf47.mkdtemp()) / "smoke_p7.db"
+_rstore._disabled = False
+_rstore._local = _thr47.local()
+_rstore._vec_M = _rstore._vec_ids = None; _rstore._vec_built_gen = -1; _rstore._vec_built_mv = ""
+_rstore._thin_M = _rstore._thin_ids = None; _rstore._thin_built_gen = -1; _rstore._thin_built_mv = ""
+_emb55.available = lambda: True
+_emb55.embed_passage = _s55_fake_pass
+_emb55.MODEL_VERSION = _S55_MV
+_emb55.DIM = 3
+try:
+    check("p7 W3: index init creates vec_thin in the temp db",
+          _rstore.init()
+          and bool(_rstore.connect().execute(
+              "SELECT name FROM sqlite_master WHERE type='table' AND name='vec_thin'").fetchone()))
+    _s55con = _rstore.connect()
+
+    # (1) thin upsert WITH a title -> _upsert_thin returns (node_id, title); _embed_and_store_thin
+    #     writes ONE vec_thin row. A thin doc with NO title -> returns None, no vec_thin row. The
+    #     embedder returning None -> no row, no error (row-level fail-open).
+    _s55_thin_doc = _PDoc(source="zhihu", source_id="q1", url="http://z/1",
+                          title="Beta Thin Title Long Enough", content="")
+    _s55con.execute("BEGIN")
+    _s55_r = _wr55._upsert_thin(_s55con, rank, _s55_thin_doc, 100.0)
+    check("p7 W3: _upsert_thin returns (node_id, title) for a titled thin row (embed staging)",
+          _s55_r == (_graph.doc_node_id("zhihu", "q1"), "Beta Thin Title Long Enough"))
+    _wr55._embed_and_store_thin(_s55con, [_s55_r])
+    _s55con.commit()
+    check("p7 W3: a titled thin upsert embeds ONE vec_thin row (title -> vector)",
+          _s55con.execute("SELECT count(*) FROM vec_thin").fetchone()[0] == 1)
+    _s55con.execute("BEGIN")
+    _s55_rnt = _wr55._upsert_thin(_s55con, rank,
+                                  _PDoc(source="zhihu", source_id="q2", url="http://z/2",
+                                        title="", content=""), 100.0)
+    _s55con.commit()
+    check("p7 W3: a title-less thin row -> no embed staging (returns None), no vec_thin row",
+          _s55_rnt is None and _s55con.execute("SELECT count(*) FROM vec_thin").fetchone()[0] == 1)
+    # embedder returning None: stage a titled row, force embed_passage -> None; no row, no raise.
+    _emb55.embed_passage = lambda texts: None
+    _s55con.execute("BEGIN")
+    _wr55._embed_and_store_thin(_s55con, [(_graph.doc_node_id("zhihu", "q3"), "Gamma Title")])
+    _s55con.commit()
+    check("p7 W3: embedder returning None -> the thin row is un-embedded (no vec_thin row, no error)",
+          _s55con.execute("SELECT count(*) FROM vec_thin").fetchone()[0] == 1)
+    _emb55.embed_passage = _s55_fake_pass   # restore the working stub for the catch-up below
+
+    # (2) CATCH-UP is bounded at 50 + converges: 60 titled thin nodes with no vec_thin row -> cycle 1
+    #     embeds 50, cycle 2 embeds the remaining 10, cycle 3 embeds 0 (caught up). A title-less node
+    #     is never embedded. (Wipe the 1 pre-existing vec_thin row first so the arithmetic is clean.)
+    _s55con.execute("DELETE FROM vec_thin")
+    _s55con.execute("DELETE FROM graph_nodes")
+    _s55con.commit()   # close the implicit txn the DELETEs opened before the explicit BEGIN below
+    _s55con.execute("BEGIN")
+    for _i in range(60):
+        _wr55._upsert_node(_s55con, _graph.doc_node_id("cu", f"n{_i}"), "document",
+                           f"Catchup Thin Title {_i}", None, 100.0)
+    _wr55._upsert_node(_s55con, _graph.doc_node_id("cu", "notitle"), "document", None, None, 100.0)
+    _s55con.commit()
+    _s55_c1 = _wr55._thin_catchup(_s55con)
+    _s55_c2 = _wr55._thin_catchup(_s55con)
+    _s55_c3 = _wr55._thin_catchup(_s55con)
+    check("p7 W3: the idle catch-up is bounded at 50/cycle and converges (60 rows -> 50, then 10, then 0)",
+          (_s55_c1, _s55_c2, _s55_c3) == (50, 10, 0)
+          and _s55con.execute("SELECT count(*) FROM vec_thin").fetchone()[0] == 60)
+
+    # (3) SIMILAR UNION: hand-seed vec (indexed) + vec_thin (thin) in ONE cosine space and rank across
+    #     BOTH. A=indexed[1,0,0], B=thin[0.9,0.1,0] (nearest to A), C=indexed[0.5,0.5,0], D=thin[0,0,1].
+    #     A thin anchor finds an INDEXED neighbor and an indexed anchor finds a THIN neighbor. Reset
+    #     caches + rewrite from scratch so the arithmetic is exact.
+    _s55con.execute("DELETE FROM vec_thin"); _s55con.execute("DELETE FROM vec")
+    _s55con.execute("DELETE FROM docs"); _s55con.execute("DELETE FROM graph_nodes")
+    _s55con.commit()   # close the implicit txn the DELETEs opened
+    _rstore._vec_M = _rstore._vec_ids = None; _rstore._vec_built_gen = -1; _rstore._vec_built_mv = ""
+    _rstore._thin_M = _rstore._thin_ids = None; _rstore._thin_built_gen = -1; _rstore._thin_built_mv = ""
+    # indexed docs A + C (real docs rows via _upsert, then a clean source_id + a hand-seeded vec row).
+    for _sid in ("A", "C"):
+        _s55con.execute("BEGIN")
+        _wr55._upsert(_s55con, rank, _doc("arxiv", _sid + " indexed doc long title", "http://a/" + _sid), 1.0)
+        _s55con.execute("UPDATE docs SET source_id=? WHERE url=?", (_sid, "http://a/" + _sid))
+        _s55con.commit()
+    for _sid, _v in (("A", [1.0, 0.0, 0.0]), ("C", [0.5, 0.5, 0.0])):
+        _rid = _s55con.execute("SELECT rowid FROM docs WHERE source_id=?", (_sid,)).fetchone()[0]
+        _s55con.execute("INSERT OR REPLACE INTO vec(rowid, model_version, dim, v) VALUES(?,?,?,?)",
+                        (_rid, _S55_MV, 3, _np55.array(_v, dtype=_np55.float32).tobytes()))
+    _s55con.commit()   # commit the vec seed (also closes the implicit txn before the BEGIN below)
+    # thin docs B + D (graph_nodes + a hand-seeded vec_thin row).
+    for _sid, _v, _lbl in (("B", [0.9, 0.1, 0.0], "Beta thin near A"),
+                           ("D", [0.0, 0.0, 1.0], "Delta thin far")):
+        _nid = _graph.doc_node_id("zhihu", _sid)
+        _s55con.execute("BEGIN")
+        _wr55._upsert_node(_s55con, _nid, "document", _lbl, None, 1.0)
+        _s55con.execute("INSERT OR REPLACE INTO vec_thin(node_id, model_version, dim, v) VALUES(?,?,?,?)",
+                        (_nid, _S55_MV, 3, _np55.array(_v, dtype=_np55.float32).tobytes()))
+        _s55con.commit()
+    _s55_iA, _s55_iC = _graph.doc_node_id("arxiv", "A"), _graph.doc_node_id("arxiv", "C")
+    _s55_tB, _s55_tD = _graph.doc_node_id("zhihu", "B"), _graph.doc_node_id("zhihu", "D")
+    # indexed anchor A -> nearest is THIN B (rank1), then indexed C (rank2); thin D excluded (far).
+    _s55_simA = _graph.similar(_s55_iA, k=2)
+    check("p7 W3: similar with an INDEXED anchor finds a THIN neighbor across the union (B rank1, C rank2)",
+          [c["id"] for c in _s55_simA.get("candidates", [])] == [_s55_tB, _s55_iC]
+          and [c["rank"] for c in _s55_simA["candidates"]] == [1, 2]
+          and _s55_simA["candidates"][0]["label"] == "Beta thin near A")
+    # thin anchor B -> nearest is INDEXED A (rank1); the anchor self-excluded; label from docs.
+    _s55_simB = _graph.similar(_s55_tB, k=2)
+    check("p7 W3: similar with a THIN anchor finds an INDEXED neighbor across the union (A rank1)",
+          _s55_simB.get("candidates") and _s55_simB["candidates"][0]["id"] == _s55_iA
+          and "indexed doc" in (_s55_simB["candidates"][0]["label"] or "")
+          and all(c["id"] != _s55_tB for c in _s55_simB["candidates"]))
+    # union ranking is DETERMINISTIC: two neighbors at the SAME cosine tie-break by node_id ASC.
+    #   anchor X=[1,0,0]; two thin rows E,F both =[0,1,0] (cosine 0 to X) -> E before F (node id order).
+    _s55con.execute("DELETE FROM vec_thin"); _s55con.execute("DELETE FROM vec")
+    _s55con.execute("DELETE FROM docs"); _s55con.execute("DELETE FROM graph_nodes")
+    _s55con.commit()   # close the implicit txn the DELETEs opened before the explicit BEGIN below
+    _rstore._vec_M = _rstore._vec_ids = None; _rstore._vec_built_gen = -1; _rstore._vec_built_mv = ""
+    _rstore._thin_M = _rstore._thin_ids = None; _rstore._thin_built_gen = -1; _rstore._thin_built_mv = ""
+    _s55con.execute("BEGIN")
+    _wr55._upsert(_s55con, rank, _doc("arxiv", "X anchor indexed long title", "http://a/X"), 1.0)
+    _s55con.execute("UPDATE docs SET source_id='X' WHERE url='http://a/X'")
+    _s55con.commit()
+    _s55_ridX = _s55con.execute("SELECT rowid FROM docs WHERE source_id='X'").fetchone()[0]
+    _s55con.execute("INSERT OR REPLACE INTO vec(rowid, model_version, dim, v) VALUES(?,?,?,?)",
+                    (_s55_ridX, _S55_MV, 3, _np55.array([1.0, 0.0, 0.0], dtype=_np55.float32).tobytes()))
+    _s55con.commit()   # commit the vec seed (also closes the implicit txn before the BEGIN below)
+    for _sid in ("zE", "zF"):
+        _nid = _graph.doc_node_id("zhihu", _sid)
+        _s55con.execute("BEGIN")
+        _wr55._upsert_node(_s55con, _nid, "document", _sid + " tie", None, 1.0)
+        _s55con.execute("INSERT OR REPLACE INTO vec_thin(node_id, model_version, dim, v) VALUES(?,?,?,?)",
+                        (_nid, _S55_MV, 3, _np55.array([0.0, 1.0, 0.0], dtype=_np55.float32).tobytes()))
+        _s55con.commit()
+    _s55_tie = _graph.similar(_graph.doc_node_id("arxiv", "X"), k=2)
+    check("p7 W3: the union rank is deterministic — equal-cosine neighbors tie-break by node_id ASC",
+          [c["id"] for c in _s55_tie["candidates"]] ==
+          [_graph.doc_node_id("zhihu", "zE"), _graph.doc_node_id("zhihu", "zF")])
+    # (4) the no-vector error names the REAL condition (a doc with no vector in EITHER store).
+    _s55_miss = _graph.similar("doc:zhihu:UN_EMBEDDED", k=2)
+    check("p7 W3: the no-vector error names the real condition (embeds as the writer catches up)",
+          "error" in _s55_miss and "embed" in _s55_miss["error"].lower())
+    # (5) stats.node_kinds.document_thin_embedded == the vec_thin row count (the coverage gauge).
+    _s55_vt = _s55con.execute("SELECT count(*) FROM vec_thin").fetchone()[0]
+    check("p7 W3: stats.node_kinds.document_thin_embedded equals the vec_thin row count (coverage gauge)",
+          _graph.stats()["node_kinds"].get("document_thin_embedded") == _s55_vt and _s55_vt == 2)
+
+    # (6) P7-GATE fixes (adversarial-review catches, verified here):
+    # (6a) ratio math over SIGNED values: magnitudes ratio for same-sign, categorical "inf" for a
+    #      sign flip, zero-vs-negative unbounded, equal negatives skip. (Signals CAN be negative.)
+    check("p7 gate: same-sign negative divergence ranks by MAGNITUDE ratio (-10 vs -2 -> 5.0)",
+          rank._divergence_ratio(-10.0, -2.0) == 5.0)
+    check("p7 gate: opposite signs are a categorical divergence (-5 vs 10 -> 'inf')",
+          rank._divergence_ratio(-5.0, 10.0) == "inf")
+    check("p7 gate: zero vs negative is unbounded ('inf'), never -0.0",
+          rank._divergence_ratio(0.0, -5.0) == "inf")
+    check("p7 gate: equal negatives are not a divergence (None)",
+          rank._divergence_ratio(-7.0, -7.0) is None)
+    # (6b) cross-store dedup: the SAME node id living in BOTH stores (a reclassified source's stale
+    #      vec_thin twin beside a fresh docs/vec row) returns as ONE candidate, best cosine kept.
+    _s55_dupe = _graph.doc_node_id("arxiv", "X")
+    _s55con.execute("BEGIN")
+    _wr55._upsert_node(_s55con, _s55_dupe, "document", "X stale thin twin", None, 1.0)
+    _s55con.execute("INSERT OR REPLACE INTO vec_thin(node_id, model_version, dim, v) VALUES(?,?,?,?)",
+                    (_s55_dupe, _S55_MV, 3, _np55.array([0.9, 0.1, 0.0], dtype=_np55.float32).tobytes()))
+    _s55con.commit()
+    _rstore._thin_M = _rstore._thin_ids = None; _rstore._thin_built_gen = -1; _rstore._thin_built_mv = ""
+    _s55_dd = _rstore.similar_neighbors(_np55.array([1.0, 0.0, 0.0], dtype=_np55.float32),
+                                        "doc:none:none", k=4)
+    check("p7 gate: cross-store dedup, a node id present in BOTH stores returns as ONE candidate",
+          [nid for nid, _t in _s55_dd].count(_s55_dupe) == 1 and len(_s55_dd) >= 3)
+    # (6c) ghost labels: a legacy whitespace-only (nbsp) label survives SQLite's ASCII TRIM but is
+    #      normalized to NULL by the catch-up (true convergence, it leaves the page permanently);
+    #      a FRESH whitespace-only title stores label NULL + stages nothing (stripped at the source).
+    _s55con.execute("BEGIN")
+    _wr55._upsert_node(_s55con, _graph.doc_node_id("gh", "ws"), "document", "\xa0", None, 1.0)
+    _s55con.commit()
+    _wr55._thin_catchup(_s55con)
+    check("p7 gate: a legacy whitespace-only label is normalized to NULL by the catch-up",
+          _s55con.execute("SELECT label FROM graph_nodes WHERE id=?",
+                          (_graph.doc_node_id("gh", "ws"),)).fetchone()[0] is None)
+    _s55con.execute("BEGIN")
+    _s55_ws = _wr55._upsert_thin(_s55con, rank, _PDoc(source="gh", source_id="ws2", url="http://g/2",
+                                                      title="\xa0 ", content=""), 1.0)
+    _s55con.commit()
+    check("p7 gate: a whitespace-only title stores label NULL and stages nothing",
+          _s55_ws is None and _s55con.execute("SELECT label FROM graph_nodes WHERE id=?",
+                          (_graph.doc_node_id("gh", "ws2"),)).fetchone()[0] is None)
+finally:
+    _rstore.DB_PATH = _s55_db_prev
+    _rstore._disabled = _s55_disabled_prev
+    _rstore._local = _s55_local_prev
+    _rstore._vec_M, _rstore._vec_ids = _s55_vecM_prev, _s55_vecids_prev
+    _rstore._vec_built_gen, _rstore._vec_built_mv = _s55_vecgen_prev, _s55_vecmv_prev
+    _rstore._thin_M, _rstore._thin_ids = _s55_thinM_prev, _s55_thinids_prev
+    _rstore._thin_built_gen, _rstore._thin_built_mv = _s55_thingen_prev, _s55_thinmv_prev
+    _emb55.available = _s55_emb_avail_prev
+    _emb55.embed_passage = _s55_emb_pass_prev
+    _emb55.MODEL_VERSION = _s55_emb_mv_prev
+    _emb55.DIM = _s55_emb_dim_prev
+
+# (6) SEARCH-PATH TRIPWIRE: vec_thin is a DELIBERATE NON-GOAL for penumbra_search's recall arm. Assert
+#     STRUCTURALLY that the recall query path (store.vector_search + store.search — the vec consumers
+#     search uses) does not CONSULT vec_thin / the thin matrix; only graph.similar's engine
+#     (similar_neighbors) does. Check the EXECUTABLE code (comments + the docstring stripped), so a
+#     DELIBERATE-NON-GOAL comment naming vec_thin never trips the tripwire — the guarantee is that the
+#     CODE never calls the thin machinery, not that the word is unspeakable.
+import ast as _ast55  # noqa: E402
+def _s55_code_names(fn) -> set:
+    """The set of NAME + ATTRIBUTE-tail identifiers + string literals in a function's EXECUTABLE body
+    (docstring + comments excluded, since ast drops both). This is what the function actually
+    references at runtime — the honest structural surface for the non-goal tripwire."""
+    tree = _ast55.parse(_insp.getsource(fn).lstrip())
+    names: set = set()
+    for node in _ast55.walk(tree):
+        if isinstance(node, _ast55.Name):
+            names.add(node.id)
+        elif isinstance(node, _ast55.Attribute):
+            names.add(node.attr)
+        elif isinstance(node, _ast55.Constant) and isinstance(node.value, str):
+            names.add(node.value)
+    # drop the leading docstring Constant (the module already excludes comments via ast).
+    body = tree.body[0].body if tree.body and hasattr(tree.body[0], "body") else []
+    if body and isinstance(body[0], _ast55.Expr) and isinstance(getattr(body[0], "value", None), _ast55.Constant):
+        names.discard(body[0].value.value)
+    return names
+_s55_vs_names = _s55_code_names(_rstore.vector_search)
+check("p7 W3 tripwire: vector_search's EXECUTABLE code consults _ensure_matrix, never _ensure_thin_matrix",
+      "_ensure_matrix" in _s55_vs_names and "_ensure_thin_matrix" not in _s55_vs_names)
+# neither recall search consumer references the thin table, the thin matrix builder, or the similar
+# engine in executable code (the thin fold lives ONLY in graph.similar's engine).
+_s55_search_names = _s55_code_names(_rstore.search) | _s55_vs_names
+check("p7 W3 tripwire: the recall search arm never references vec_thin / thin matrix / similar_neighbors in code",
+      "similar_neighbors" not in _s55_search_names and "_ensure_thin_matrix" not in _s55_search_names
+      and not any("vec_thin" in n for n in _s55_search_names))
 
 
 print()

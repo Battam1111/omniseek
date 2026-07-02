@@ -119,6 +119,17 @@ def main() -> None:
             logger.info("recall index: writes enabled + ingest loop + vector backfill started")
     except Exception as exc:  # noqa: BLE001 — the index is best-effort; never block boot
         logger.warning("recall index disabled (init failed): %s", exc)
+    # In-process sensor scheduler (P6): a sensor run is an act of PERCEPTION and must land on the
+    # wall, so it executes in the ONE process that writes memory. Start it HERE (the writer process),
+    # AFTER writes are enabled above, so its WRITES_ENABLED guard passes; a cron / smoke / CLI import
+    # never reaches this call site and its guard refuses anyway. Fail-open: a scheduler hiccup must
+    # never block boot. (This replaces the deleted launchd cron runner, which wrote no memory.)
+    try:
+        from penumbra.core import sensor as _sensor
+        if _sensor.start_scheduler() is not None:
+            logger.info("sensor scheduler started (tick 900s)")
+    except Exception as exc:  # noqa: BLE001 — the scheduler is best-effort; never block boot
+        logger.warning("sensor scheduler not started (%s)", exc)
     logger.info("Penumbra eye HTTP service on %s:%s (token-gated; MCP at /mcp)", HOST, PORT)
     uvicorn.run(app, host=HOST, port=PORT, log_level="info")
 

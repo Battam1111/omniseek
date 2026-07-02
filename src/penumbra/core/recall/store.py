@@ -77,6 +77,21 @@ CREATE TABLE IF NOT EXISTS vec(
   v             BLOB NOT NULL
 );
 CREATE INDEX IF NOT EXISTS vec_mv ON vec(model_version);
+-- P7 thin-row title embeddings: one float32 L2-normalized embedding per THIN document node (a doc
+-- from a NON-indexed source, which has a title but no content row in docs). Keyed by the graph
+-- node_id (``doc:{source}:{source_id}``), NOT a docs.rowid (a thin row has none). Mirrors ``vec``'s
+-- format EXACTLY (model_version gates the live matrix; a model swap drops the old space out; the
+-- SAME embedder + MODEL_VERSION produce both), so ``similar`` can rank a thin title against an
+-- indexed doc in ONE cosine space. This lets ``similar`` (P5) see the WHOLE perception history, not
+-- just the indexed subset. DELIBERATE NON-GOAL: vec_thin does NOT feed penumbra_search's recall arm (see
+-- the writer thin lane + the search-path tripwire); similar (and future P5 consumers) only.
+CREATE TABLE IF NOT EXISTS vec_thin(
+  node_id       TEXT PRIMARY KEY,
+  model_version TEXT NOT NULL,
+  dim           INTEGER NOT NULL,
+  v             BLOB NOT NULL
+);
+CREATE INDEX IF NOT EXISTS vec_thin_mv ON vec_thin(model_version);
 -- The unified graph (docs/design/graph-unified-model.md v2.0): recall's RELATION index, additive
 -- inside recall.db (single-writer + join locality). Entity nodes + entity/sensor edges are the ONLY
 -- new persistence; doc-doc same_as stays DERIVED views over docs.fp + doc_json (never stored rows).
@@ -277,6 +292,18 @@ _vec_lock = threading.Lock()
 _VEC_DEBOUNCE = 20.0   # under a burst of ingest, rebuild the matrix at most every 20s and serve
                        # slightly-stale otherwise (it is RECALL; merge_rank re-scores anyway)
 
+# P7 thin matrix: the SAME cache pattern for vec_thin (thin-row title embeddings), a SEPARATE cache
+# with its OWN invalidation (keyed on the vec_thin row-count for the current model_version), so a
+# vec_thin write refreshes this matrix without disturbing the docs vec matrix and vice versa. Same
+# model_version gate (a model swap drops the old space out of BOTH). Rows here key on the graph
+# node_id string (a thin row has no docs.rowid), so ids are an object array of strings, not int64.
+_thin_M = None         # (N, DIM) float32, L2-normalized rows
+_thin_ids = None       # (N,) object array of node_id strings aligned to _thin_M rows
+_thin_built_ts = 0.0
+_thin_built_gen = -1
+_thin_built_mv = ""
+_thin_lock = threading.Lock()
+
 
 def _model_version() -> str:
     from penumbra.core.recall import embed  # local: vector path only
@@ -286,6 +313,14 @@ def _model_version() -> str:
 def _vec_count(con, mv: str) -> int:
     try:
         r = con.execute("SELECT count(*) FROM vec WHERE model_version = ?", (mv,)).fetchone()
+        return r[0] if r else 0
+    except Exception:  # noqa: BLE001
+        return -1
+
+
+def _vec_thin_count(con, mv: str) -> int:
+    try:
+        r = con.execute("SELECT count(*) FROM vec_thin WHERE model_version = ?", (mv,)).fetchone()
         return r[0] if r else 0
     except Exception:  # noqa: BLE001
         return -1
@@ -325,10 +360,55 @@ def _ensure_matrix(con):
         return M, ids
 
 
+def _ensure_thin_matrix(con):
+    """Build/refresh the cached THIN vector matrix for the CURRENT model_version (P7). The exact
+    mirror of ``_ensure_matrix`` for ``vec_thin`` — a SEPARATE cache + SEPARATE invalidation (keyed on
+    the vec_thin row-count for the model_version, plus the same debounce) so a thin write refreshes
+    THIS matrix and a docs-vec write refreshes the OTHER, neither disturbing the other. Rows key on the
+    node_id STRING (a thin row has no docs.rowid), so ``ids`` is an object array of strings. Returns
+    (M, ids) or (None, None); fail-open like the docs matrix (a bad row/space -> no thin matrix)."""
+    global _thin_M, _thin_ids, _thin_built_ts, _thin_built_gen, _thin_built_mv
+    if _np is None:
+        return None, None
+    mv = _model_version()
+    gen = _vec_thin_count(con, mv)
+    now = time.time()
+    with _thin_lock:
+        same_space = (_thin_M is not None and _thin_built_mv == mv)
+        if same_space and _thin_built_gen == gen:
+            return _thin_M, _thin_ids
+        if same_space and (now - _thin_built_ts) < _VEC_DEBOUNCE:
+            return _thin_M, _thin_ids  # serve slightly-stale during an ingest burst
+        try:
+            rows = con.execute(
+                "SELECT node_id, v FROM vec_thin WHERE model_version = ?", (mv,)
+            ).fetchall()
+        except Exception:  # noqa: BLE001
+            return None, None
+        if not rows:
+            _thin_M, _thin_ids, _thin_built_ts, _thin_built_gen, _thin_built_mv = None, None, now, gen, mv
+            return None, None
+        try:
+            ids = _np.array([r[0] for r in rows], dtype=object)
+            M = _np.frombuffer(b"".join(r[1] for r in rows), dtype=_np.float32).reshape(len(rows), -1)
+            nrm = _np.linalg.norm(M, axis=1, keepdims=True)
+            M = (M / _np.where(nrm > 0, nrm, 1.0)).astype(_np.float32)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("recall thin matrix build failed: %s", exc)
+            return None, None
+        _thin_M, _thin_ids, _thin_built_ts, _thin_built_gen, _thin_built_mv = M, ids, now, gen, mv
+        return M, ids
+
+
 def vector_search(qvec, k: int = 60) -> list:
     """Cosine top-k over the cached matrix. PURE RECALL — the cosine is never surfaced; the caller
     re-scores via rank.merge_rank. NEVER raises: disabled / no numpy / no matrix / dim-mismatch
-    (model swap mid-flight) / any failure → []."""
+    (model swap mid-flight) / any failure → [].
+
+    P7 DELIBERATE NON-GOAL: this is penumbra_search's recall arm, and it consults ONLY ``vec`` (the docs
+    matrix) — NOT ``vec_thin``. Folding thin-title embeddings into search recall is a SEPARATE
+    decision with its own dogfood; do not add ``_ensure_thin_matrix`` here (the smoke asserts this
+    structurally). vec_thin feeds ``graph.similar`` (and future P5 consumers) only."""
     if _disabled or qvec is None or _np is None:
         return []
     con = _read_con()
@@ -372,59 +452,149 @@ def anchor_rowid(source: str, source_id: str) -> Optional[int]:
         return None
 
 
-def similar_by_rowid(rowid: int, k: int = 10) -> Optional[list]:
-    """Vector-NEAREST docs to an INDEXED anchor doc, ranked by cosine over the cached matrix, the
-    anchor itself excluded. The P5 ``similar`` view's engine: it reuses the anchor's OWN stored
-    vector (never re-embeds) by its row identity, so a model upgrade upgrades every future answer and
-    nothing rots (the store stays non-thinking). Returns ``[(rowid, source, source_id, title)]`` in
-    cosine-RANK order (top-k BY RANK — k is a resource budget, never a score threshold; the RRF
-    discipline), or:
-      - ``None`` when the anchor is NOT in the current-model vector index (no rowid in the matrix:
-        a thin/un-embedded doc). The caller maps None to the coverage-line error.
-      - ``[]`` when the matrix is unavailable / empty / a failure (fail-open: similar degrades to
-        an empty candidate list, never an exception).
-    PURE RECALL: the cosine is never surfaced (rank is the honest unit); the caller adds no score."""
-    if _disabled or _np is None or rowid is None:
+# ── P7: the generalized anchor/neighbor engine (similar covers the WHOLE perception history) ──────
+# The engine resolves an anchor from EITHER store (docs vec by rowid, vec_thin by node id) and ranks
+# across the UNION of both matrices, so an indexed Chinese post and a thin arXiv original — exactly
+# the cross-boundary pair similar exists for — land in ONE cosine space. Identity is the graph
+# node_id string (``doc:{source}:{source_id}``) in both cases, so the caller never needs to know
+# which store a candidate came from. (The interim docs-only similar_by_rowid engine was deleted at
+# the P7 gate: no caller survived the migration, and dead code earns no slot.)
+
+def _anchor_node_id(source: str, source_id: str) -> str:
+    from penumbra.core.recall.graph import doc_node_id  # local: id scheme lives in graph
+    return doc_node_id(source, source_id)
+
+
+def similar_anchor(source: str, source_id: str):
+    """Resolve the anchor VECTOR for a doc from EITHER store (P7): the docs ``vec`` matrix by its
+    docs.rowid FIRST (an indexed doc), else the ``vec_thin`` matrix by its graph node_id (a thin doc
+    whose title was embedded as the writer caught up). Returns ``(anchor_vec, anchor_node_id)`` with
+    the vector as the store's OWN L2-normalized row (never re-embedded — a model upgrade upgrades every
+    future answer), or ``None`` when the doc has NO vector in EITHER store (un-embedded: the caller
+    maps None to the coverage-line error). Fail-open to None on any failure."""
+    if _disabled or _np is None:
+        return None
+    con = _read_con()
+    if con is None:
+        return None
+    node_id = _anchor_node_id(source, source_id)
+    try:
+        # (a) docs vec by rowid (an indexed doc). anchor_rowid is None for a non-indexed doc.
+        rid = anchor_rowid(source, source_id)
+        if rid is not None:
+            M, ids = _ensure_matrix(con)
+            if M is not None and ids is not None and len(ids) > 0:
+                pos = _np.where(ids == int(rid))[0]
+                if pos.size > 0:
+                    return M[int(pos[0])], node_id
+        # (b) vec_thin by node_id (a thin doc whose title is embedded).
+        Mt, tids = _ensure_thin_matrix(con)
+        if Mt is not None and tids is not None and len(tids) > 0:
+            tpos = _np.where(tids == node_id)[0]
+            if tpos.size > 0:
+                return Mt[int(tpos[0])], node_id
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("similar_anchor failed: %s", exc)
+        return None
+    return None
+
+
+def similar_neighbors(anchor_vec, anchor_node_id: str, k: int = 10):
+    """Vector-NEAREST docs to an anchor VECTOR, ranked by cosine across the UNION of BOTH matrices
+    (docs ``vec`` + ``vec_thin``), the anchor itself excluded, top-k BY RANK (k is a resource budget,
+    never a score threshold — the RRF discipline). Returns ``[(node_id, title)]`` in cosine-rank
+    order, each node_id a canonical ``doc:{source}:{source_id}`` and title from the store the row came
+    from (docs.title for an indexed hit, graph_nodes.label for a thin hit). Deterministic tie order:
+    cosine DESC, then node_id ASC (so equal-cosine neighbors keep a fixed order across runs). Fail-open
+    to ``[]`` on any failure (never an exception). The anchor vector must be L2-normalized (both stores
+    store normalized rows; similar_anchor returns such a row)."""
+    if _disabled or _np is None or anchor_vec is None:
         return []
     con = _read_con()
     if con is None:
         return []
-    M, ids = _ensure_matrix(con)
-    if M is None or ids is None or len(ids) == 0:
-        return []
     try:
-        # locate the anchor's row in the matrix by its docs.rowid; absent -> not vector-indexed.
-        pos = _np.where(ids == int(rowid))[0]
-        if pos.size == 0:
-            return None
-        q = M[int(pos[0])]                     # the anchor's OWN stored (already L2-normalized) vector
-        sims = M @ q
-        sims[int(pos[0])] = -_np.inf           # exclude the anchor itself from its own ranking
-        kk = min(max(1, int(k)), len(ids) - 1) if len(ids) > 1 else 0
-        if kk <= 0:
-            return []
-        top = _np.argpartition(-sims, kk - 1)[:kk]
-        top = top[_np.argsort(-sims[top])]
-        rowids = [int(ids[i]) for i in top]
+        q = _np.asarray(anchor_vec, dtype=_np.float32).ravel()
+        n = _np.linalg.norm(q)
+        if n > 0:
+            q = q / n
+        scored: list = []   # (cosine, node_id) across both stores, self excluded
+        docs_rowids: list = []
+        # (a) docs vec matrix: ids are rowids; map to node_id + title AFTER ranking.
+        M, ids = _ensure_matrix(con)
+        if M is not None and ids is not None and len(ids) > 0 and M.shape[1] == q.shape[0]:
+            sims = M @ q
+            for i in range(len(ids)):
+                docs_rowids.append(int(ids[i]))
+        else:
+            sims = None
+        # (b) thin matrix: ids are node_id strings; self-exclude by node_id here.
+        Mt, tids = _ensure_thin_matrix(con)
+        thin_pairs: list = []
+        if Mt is not None and tids is not None and len(tids) > 0 and Mt.shape[1] == q.shape[0]:
+            tsims = Mt @ q
+            for i in range(len(tids)):
+                nid = str(tids[i])
+                if nid == anchor_node_id:
+                    continue   # exclude the anchor itself
+                thin_pairs.append((float(tsims[i]), nid))
+        else:
+            tsims = None
     except Exception as exc:  # noqa: BLE001
-        logger.debug("similar_by_rowid failed: %s", exc)
+        logger.debug("similar_neighbors ranking failed: %s", exc)
         return []
-    if not rowids:
+    # Resolve docs rowids -> node_id + title in ONE query, self-excluded by node_id.
+    docs_titles: dict = {}
+    docs_nid: dict = {}
+    if docs_rowids:
+        qmarks = ",".join("?" * len(docs_rowids))
+        try:
+            for rid, dsource, dsid, dtitle in con.execute(
+                f"SELECT rowid, source, source_id, title FROM docs WHERE rowid IN ({qmarks})",
+                docs_rowids,
+            ).fetchall():
+                nid = _anchor_node_id(dsource, dsid)
+                docs_nid[int(rid)] = nid
+                docs_titles[nid] = dtitle
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("similar_neighbors docs hydrate failed: %s", exc)
+    if sims is not None:
+        for i, rid in enumerate(docs_rowids):
+            nid = docs_nid.get(rid)
+            if nid is None or nid == anchor_node_id:
+                continue
+            scored.append((float(sims[i]), nid))
+    # thin candidates carry their title from graph_nodes.label.
+    thin_titles: dict = {}
+    if thin_pairs:
+        tmarks = ",".join("?" * len(thin_pairs))
+        tnids = [nid for (_c, nid) in thin_pairs]
+        try:
+            for nid, label in con.execute(
+                f"SELECT id, label FROM graph_nodes WHERE id IN ({tmarks})", tnids
+            ).fetchall():
+                thin_titles[nid] = label
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("similar_neighbors thin hydrate failed: %s", exc)
+        scored.extend(thin_pairs)
+    if not scored:
         return []
-    qmarks = ",".join("?" * len(rowids))
-    try:
-        rows = con.execute(
-            f"SELECT rowid, source, source_id, title FROM docs WHERE rowid IN ({qmarks})", rowids
-        ).fetchall()
-    except Exception as exc:  # noqa: BLE001
-        logger.debug("similar_by_rowid hydrate failed: %s", exc)
-        return []
-    by_id = {r[0]: r for r in rows}
+    # Cross-store dedup by node_id, keeping the best cosine: a doc normally lives in exactly ONE
+    # store (the source-level indexable predicate), but a reclassified source can leave a stale
+    # vec_thin row beside a fresh docs/vec row until roll-off, and the same id must never appear
+    # as two candidates with two ranks.
+    best: dict = {}
+    for cos, nid in scored:
+        if nid not in best or cos > best[nid]:
+            best[nid] = cos
+    deduped = [(cos, nid) for nid, cos in best.items()]
+    # Deterministic UNION rank: cosine DESC, node_id ASC as the stable tie-break.
+    deduped.sort(key=lambda s: (-s[0], s[1]))
+    kk = max(1, int(k))
     out: list = []
-    for rid in rowids:                          # preserve the cosine-rank order
-        r = by_id.get(rid)
-        if r is not None:
-            out.append((r[0], r[1], r[2], r[3]))
+    for _cos, nid in deduped[:kk]:
+        title = docs_titles.get(nid) if nid in docs_titles else thin_titles.get(nid)
+        out.append((nid, title))
     return out
 
 

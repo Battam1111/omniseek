@@ -75,6 +75,35 @@ def _norm_doi(s: str) -> str:
     return re.sub(r"^https?://(dx\.)?doi\.org/", "", str(s).lower().strip())
 
 
+def _divergence_ratio(v1: float, v2: float):
+    """The same-work divergence ratio for two numeric signal values: ``max/min`` of their
+    MAGNITUDES, or the string ``"inf"`` for the two unbounded classes (one side 0 and the other
+    not; opposite SIGNS, where no finite magnitude ratio is meaningful and the disagreement is
+    categorical, e.g. a downvoted vs upvoted score). Returns ``None`` when the two values are
+    EQUAL (equal is not a divergence, so it never ranks). Signals CAN be negative (a reddit
+    score, a net loss), so the ratio is defined over |v|; a bare signed max/min would mis-rank
+    a real 5x divergence like -10 vs -2 as 0.2 and a sign flip as negative. Pure. The P7
+    detector RANKS by this ratio and no longer gates on it (rank, never a score gate)."""
+    if v1 == v2:
+        return None            # equal values are not a divergence
+    if v1 * v2 < 0:
+        return "inf"           # opposite signs: categorical disagreement (ranks first)
+    hi, lo = max(abs(v1), abs(v2)), min(abs(v1), abs(v2))
+    if lo == 0:
+        return "inf"           # one side 0, the other nonzero -> unbounded ratio (ranks first)
+    return hi / lo
+
+
+def _round_sig(x: float, sig: int = 3):
+    """Round ``x`` to ``sig`` significant figures (the stamp's ratio precision). ``"inf"`` and any
+    non-finite/non-numeric value passes through unchanged (the divergence ratio serializes "inf" as a
+    string). Pure."""
+    if not isinstance(x, (int, float)) or x == 0 or not math.isfinite(x):
+        return x
+    from math import floor, log10
+    return round(x, -int(floor(log10(abs(x)))) + (sig - 1))
+
+
 def fingerprint(doc: Document) -> str:
     """A key that lands the SAME item on the SAME string across sources.
 
@@ -133,50 +162,68 @@ def dedup(docs: list[Document]) -> list[Document]:
                 add["also_in"] = others
             if len(srcs) > 1:  # corroboration = how many DISTINCT sources surfaced this work
                 add["corroboration"] = len(srcs)
-            # --- #11 signal_conflicts: same-named Signal values diverging >50% across the
-            #     group's different-source members. Detected HERE because the merge is the
-            #     only place the collapsed members are still visible (post-dedup one survivor
-            #     per group remains, so any later cross-doc comparison compares DIFFERENT
-            #     works — the 2026-07-01 dogfood noise). Mechanical flag; never fed to
-            #     ranking (the razor); fail-open.
+            # --- #11 signal_conflicts: same-named NUMERIC Signal values that DIVERGE across the
+            #     group's different-source members. Detected HERE because the merge is the only
+            #     place the collapsed members are still visible (post-dedup one survivor per group
+            #     remains, so any later cross-doc comparison compares DIFFERENT works — the
+            #     2026-07-01 dogfood noise). Mechanical flag; never fed to ranking (the razor);
+            #     fail-open.
+            #     P7 (2026-07-03): the 1.5x ratio GATE is gone. "How much divergence is worth
+            #     flagging" was the last judgment-shaped constant in the eye; the detector now
+            #     MEASURES every same-work numeric divergence (its max/min ratio), RANKS by that
+            #     ratio DESC, and keeps the top-3 per doc — a RESOURCE cap, not an epistemic line
+            #     (the RRF discipline: rank, never a score gate). Equal values are not a divergence
+            #     (skipped); a zero-vs-nonzero pair is an unbounded "inf" ratio and ranks first.
+            #     Materiality is the reader's judgment; the stamp carries the number.
             try:
-                _confs: list[dict] = []
-                # Parallel to the agent-visible signal_conflicts stamp: the graph tap's RECORDS,
-                # carrying each member's full (source, source_id) identity + the signal's KIND +
-                # the two raw values, so _conflict_mints can build a doc<->doc conflicts edge the
-                # dedup stamp (topic/source/claim strings only) cannot reconstruct. Stamped under a
-                # PRIVATE key (_conflict_pairs) the fetcher POPS before returning — never agent-facing
-                # (the STABILITY contract: signal_conflicts stays byte-identical, the tap rides beside
-                # it). Same comparison, one pass; capped identically at 3.
-                _conf_pairs: list[dict] = []
+                # Collect ALL cross-source same-name numeric divergences first, each with its
+                # measured ratio, THEN rank by ratio DESC and cap — so the survivors are "the most
+                # divergent, with numbers", never "whichever the iteration order reached before a
+                # cap". Each candidate carries both the agent-visible stamp fields AND the private
+                # tap record (full identities + the signal's KIND + the raw values), built in one
+                # pass so the two never drift; the fetcher POPS the private _conflict_pairs key
+                # before returning (the STABILITY contract: signal_conflicts is additive-only).
+                _cands: list[tuple] = []   # (rank_key, seq, conf_entry, pair_record)
+                _seq = 0
                 for _i, _da in enumerate(grp):
                     for _db in grp[_i + 1:]:
-                        if _da.source == _db.source or len(_confs) >= 3:
+                        if _da.source == _db.source:
                             continue
-                        for _nm in set(_da.signals or {}) & set(_db.signals or {}):
+                        # sorted() over the shared signal names so equal-ratio ties (same ratio,
+                        # different signal) fall back to a DETERMINISTIC ``_seq`` (set order is not).
+                        for _nm in sorted(set(_da.signals or {}) & set(_db.signals or {})):
                             _v1, _v2 = _da.signals[_nm].value, _db.signals[_nm].value
-                            if (_v1 is not None and _v2 is not None and _v1 > 0 and _v2 > 0
-                                    and max(_v1, _v2) / min(_v1, _v2) > 1.5):
-                                _confs.append({
-                                    "topic": _nm,
-                                    "source_a": _da.source,
-                                    "claim_a": f"{_nm}={_v1} ({_da.signals[_nm].unit or ''})",
-                                    "source_b": _db.source,
-                                    "claim_b": f"{_nm}={_v2} ({_db.signals[_nm].unit or ''})",
-                                })
-                                # the tap record: full identities + the signal's semantic kind
-                                # (the noise-class filter, e.g. "engagement") + the raw values.
-                                _conf_pairs.append({
-                                    "a": (_da.source, _da.source_id),
-                                    "b": (_db.source, _db.source_id),
-                                    "signal": _nm,
-                                    "kind": getattr(_da.signals[_nm], "kind", None),
-                                    "values": {_da.source: _v1, _db.source: _v2},
-                                })
-                if _confs:
-                    add["signal_conflicts"] = _confs[:3]
-                if _conf_pairs:
-                    add["_conflict_pairs"] = _conf_pairs[:3]   # PRIVATE: fetcher pops before return
+                            if _v1 is None or _v2 is None:
+                                continue
+                            _ratio = _divergence_ratio(_v1, _v2)
+                            if _ratio is None:      # equal values are not a divergence
+                                continue
+                            _r_stamp = "inf" if _ratio == "inf" else _round_sig(_ratio, 3)
+                            # rank key: "inf" sorts above every finite ratio (unbounded divergence).
+                            _rank_key = math.inf if _ratio == "inf" else _ratio
+                            _cands.append((_rank_key, _seq, {
+                                "topic": _nm,
+                                "source_a": _da.source,
+                                "claim_a": f"{_nm}={_v1} ({_da.signals[_nm].unit or ''})",
+                                "source_b": _db.source,
+                                "claim_b": f"{_nm}={_v2} ({_db.signals[_nm].unit or ''})",
+                                "ratio": _r_stamp,
+                            }, {
+                                "a": (_da.source, _da.source_id),
+                                "b": (_db.source, _db.source_id),
+                                "signal": _nm,
+                                "kind": getattr(_da.signals[_nm], "kind", None),
+                                "values": {_da.source: _v1, _db.source: _v2},
+                                "ratio": _r_stamp,
+                            }))
+                            _seq += 1
+                # rank by ratio DESC; ``_seq`` (insertion order) is a stable, deterministic
+                # tie-break so equal-ratio divergences keep a fixed order across runs.
+                _cands.sort(key=lambda c: (-c[0], c[1]))
+                _top = _cands[:3]              # the per-doc RESOURCE cap (unchanged), applied by RANK
+                if _top:
+                    add["signal_conflicts"] = [c[2] for c in _top]
+                    add["_conflict_pairs"] = [c[3] for c in _top]   # PRIVATE: fetcher pops it
             except Exception:  # noqa: BLE001 — one signal's failure never corrupts the merge
                 pass
         # Curator P2 attribution stamps (pure facts, no judgment; stamped on EVERY survivor,
@@ -217,12 +264,13 @@ def dedup(docs: list[Document]) -> list[Document]:
 
 def _conflict_mints(records: list) -> tuple[list[dict], list[dict]]:
     """From dedup's conflict RECORDS (each ``{a: (source, source_id), b: (source, source_id),
-    signal: str, kind: str|None, values: {...}}``): one ``conflicts`` A-tier edge doc <-> doc per
-    record, method ``signal:divergence``, attrs {signal, kind, values}. ``kind`` is the SIGNAL's
-    kind field (e.g. "engagement") lifted from the diverging signals, so views/agents can
-    mechanically filter the engagement-count noise class. No nodes (doc endpoints are virtual/thin).
-    The writer normalizes the symmetric pair to src < dst, so do NOT pre-sort here. A record with a
-    missing endpoint is skipped (fail-open). Pure."""
+    signal: str, kind: str|None, values: {...}, ratio: float|"inf"}``): one ``conflicts`` A-tier edge
+    doc <-> doc per record, method ``signal:divergence``, attrs {signal, kind, values, ratio}. ``kind``
+    is the SIGNAL's kind field (e.g. "engagement") lifted from the diverging signals, so views/agents
+    can mechanically filter the engagement-count noise class; ``ratio`` is the measured max/min
+    divergence (P7: the edge carries the number, materiality is the reader's). No nodes (doc endpoints
+    are virtual/thin). The writer normalizes the symmetric pair to src < dst, so do NOT pre-sort here.
+    A record with a missing endpoint is skipped (fail-open). Pure."""
     edges: list[dict] = []
     for rec in (records or []):
         if not isinstance(rec, dict):
@@ -238,7 +286,7 @@ def _conflict_mints(records: list) -> tuple[list[dict], list[dict]]:
         edges.append({"src": a_nid, "dst": b_nid, "type": "conflicts", "tier": "A",
                       "method": "signal:divergence",
                       "attrs": {"signal": rec.get("signal"), "kind": rec.get("kind"),
-                                "values": rec.get("values")}})
+                                "values": rec.get("values"), "ratio": rec.get("ratio")}})
     return [], edges
 
 
