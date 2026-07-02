@@ -29,6 +29,19 @@ All notable changes to Penumbra are documented here. The format follows
   over the relation memory that rides the recall index; document nodes and same-work identity
   edges are live from day one, entity kinds fill as later phases ship. Identity is an
   evidence-carrying edge under `conservative` | `working` | `exploratory` collapse policies.
+- **Retrieval-anchored thin memory (P2.0)**: every retrieved doc from a non-indexed source
+  leaves a thin graph row (title + url + fingerprint + external ids, never content), so the
+  perception history is complete; every search stamps per-doc `seen_before` / `first_seen_at`.
+  Walled sources stay out by default (`walled.remember_retrievals`, an operator-privacy line).
+- **Academic entities on the wall (P2)**: the citation mapper and paper enrichment become graph
+  write taps minting work / person / topic / venue nodes and cites / authored / about /
+  published_in edges. Vocabulary is declared per tap (vocabulary-by-minting) and a test
+  tripwire bounds actual data to the declared union.
+- **Relations taps + the judgment channel (P3)**: the people tools mint person / institution
+  nodes and coauthored / affiliated edges (plus same-name split candidates as alignment
+  edges); `penumbra_graph` gains `between` (bounded connection paths) and `voices` (the
+  independence counter, with an honest `unresolved` bucket); new `penumbra_ruling` tool
+  records / lists / retracts identity rulings the `working` policy applies at read time.
 - Sensors: optional `notify` flag pushes on new results (runner-side).
 
 - PyPI publish (`pip install penumbra-mcp`) planned.

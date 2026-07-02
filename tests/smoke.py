@@ -5457,9 +5457,11 @@ check("gather: whitelist excludes penumbra_sensor / penumbra_curator_view / penu
 import penumbra.server as _pt_srv  # noqa: E402
 import inspect as _pt_inspect  # noqa: E402
 _pt_src = _pt_inspect.getsource(_pt_srv)
-_TOOL_COUNT_FROZEN = 16   # 10 core verbs + scholarly transition 6 (the graph arc absorbs those)
+_TOOL_COUNT_FROZEN = 17   # 16 + penumbra_ruling (P3: the identity-ruling WRITE verb; the conscious
+#                            16 -> 17 bump the graph design named — a judgment store needs a write
+#                            channel, and a SEPARATE tool keeps penumbra_graph read-only / gather-safe).
 _PROMPT_COUNT_FROZEN = 1  # investigate(target, shape): the ONE recipe channel
-check("parsimony tripwire: MCP tool count == frozen 16 (bump consciously or fuse)",
+check("parsimony tripwire: MCP tool count == frozen 17 (bump consciously or fuse)",
       _pt_src.count(chr(10) + "@mcp.tool()") == _TOOL_COUNT_FROZEN,
       f"found {_pt_src.count(chr(10) + '@mcp.tool()')}")
 check("parsimony tripwire: MCP prompt count == frozen 1 (the one recipe channel)",
@@ -6439,22 +6441,22 @@ finally:
     _rstore._disabled = _t49_disabled_prev
     _rstore._local = _t49_local_prev
 
-# (5) VERBS: _PENUMBRA_VERBS is the capability index penumbra_sources surfaces. It must carry EXACTLY the 16 tool
-#     names, every value NON-EMPTY and DERIVED (== that tool's docstring first line, not hand-written
-#     prose that could drift). It drifted once already (it was a hand-maintained dict); recompute each
-#     tool's docstring first line independently and demand equality, so a docstring edit or a renamed
-#     tool that skips the dict is caught.
+# (5) VERBS: _PENUMBRA_VERBS is the capability index penumbra_sources surfaces. It must carry EXACTLY the 17 tool
+#     names (P3 added penumbra_ruling), every value NON-EMPTY and DERIVED (== that tool's docstring first
+#     line, not hand-written prose that could drift). It drifted once already (it was a hand-maintained
+#     dict); recompute each tool's docstring first line independently and demand equality, so a
+#     docstring edit or a renamed tool that skips the dict is caught.
 from penumbra.server import _PENUMBRA_VERBS as _t49_verbs  # noqa: E402
 _t49_tool_fns = (
     _srv.penumbra_sources, _srv.penumbra_search, _srv.penumbra_read, _srv.penumbra_view,
     _srv.penumbra_field_skeleton, _srv.penumbra_paper_recommend, _srv.penumbra_paper_enrich,
     _srv.penumbra_resolve_identity, _srv.penumbra_coauthors, _srv.penumbra_institution_cohort,
-    _srv.penumbra_transcribe, _srv.penumbra_graph, _srv.penumbra_gather, _srv.penumbra_sensor,
+    _srv.penumbra_transcribe, _srv.penumbra_graph, _srv.penumbra_gather, _srv.penumbra_sensor, _srv.penumbra_ruling,
     _srv.penumbra_curator_view, _srv.penumbra_curator_act,
 )
 _t49_expect_names = {fn.__name__ for fn in _t49_tool_fns}
-check("verbs: _PENUMBRA_VERBS has EXACTLY the 16 tool names",
-      set(_t49_verbs.keys()) == _t49_expect_names and len(_t49_verbs) == 16,
+check("verbs: _PENUMBRA_VERBS has EXACTLY the 17 tool names",
+      set(_t49_verbs.keys()) == _t49_expect_names and len(_t49_verbs) == 17,
       f"missing={_t49_expect_names - set(_t49_verbs)} extra={set(_t49_verbs) - _t49_expect_names}")
 check("verbs: every _PENUMBRA_VERBS value is non-empty",
       all(bool((v or '').strip()) for v in _t49_verbs.values()),
@@ -6485,6 +6487,350 @@ _t49_instr_stale = sorted(_t49_instr_tokens - _t49_dd_registered - _t49_instr_ex
 check("docs-drift (instructions): every penumbra_* token in _PENUMBRA_INSTRUCTIONS is a REGISTERED tool "
       "(or an explicit exemption)",
       not _t49_instr_stale, f"stale: {_t49_instr_stale}")
+
+
+# ---------------------------------------------------------------------------
+# 50. P3 — the ruling verb + the relations tap + voices/between views (design "P3 shipped
+#     2026-07-02"). penumbra_ruling is the identity-ruling WRITE channel (create | list | delete) the
+#     working policy applies; the relations tap mints the PRODUCT the three layers return (never the
+#     200-works counting pool); voices collapses a doc set to distinct upstream voices (the
+#     independence counter, counting EVIDENCE never absence); between traces bounded connection paths.
+#     Rulings-file checks monkeypatch _graph.RULINGS_PATH to a temp file (no real ~/.penumbra state);
+#     the integration + voices + between checks use a FRESH temp-db (the §47/§48/§49 pattern, restore
+#     in finally); the builder + vocabulary + tripwire checks are pure source/registration checks.
+# ---------------------------------------------------------------------------
+import penumbra.core.relations as _rel50  # noqa: E402 — importing the tap registers its mints
+
+# (1-4) RULINGS STORE (save_ruling / load_rulings / delete_ruling) on a monkeypatched temp path.
+_r50_rulings_prev = _graph.RULINGS_PATH
+_graph.RULINGS_PATH = Path(_tf47.mkdtemp()) / "graph_rulings.json"
+try:
+    # (1) save_ruling -> load_rulings roundtrip; the entry normalizes src < dst + stamps ruled_at.
+    _r50_a, _r50_b = "person:openalex:A_ZZZ", "person:openalex:A_AAA"  # a > b on purpose
+    _r50_save = _graph.save_ruling(_r50_a, _r50_b, "same", note="smoke")
+    _r50_loaded = _graph.load_rulings()
+    _r50_e = _r50_loaded[0] if _r50_loaded else {}
+    check("ruling (1): save_ruling -> load_rulings roundtrip, normalized src < dst + ruled_at stamped",
+          len(_r50_loaded) == 1 and _r50_e.get("src") == "person:openalex:A_AAA"
+          and _r50_e.get("dst") == "person:openalex:A_ZZZ" and _r50_e.get("verdict") == "same"
+          and bool(_r50_e.get("ruled_at")) and _r50_save.get("replaced") is False)
+    # (2) re-create the SAME pair (either order) REPLACES: list length stays 1, verdict updated.
+    _r50_save2 = _graph.save_ruling(_r50_b, _r50_a, "not_same")   # reversed order, same pair
+    _r50_loaded2 = _graph.load_rulings()
+    check("ruling (2): re-create the same pair (either order) REPLACES (len stays 1, verdict updated)",
+          len(_r50_loaded2) == 1 and _r50_loaded2[0].get("verdict") == "not_same"
+          and _r50_save2.get("replaced") is True)
+    # (3) delete_ruling removes; returns True then False.
+    _r50_del1 = _graph.delete_ruling(_r50_a, _r50_b)
+    _r50_del2 = _graph.delete_ruling(_r50_a, _r50_b)   # already gone
+    check("ruling (3): delete_ruling removes (True), then a second delete is a no-op (False)",
+          _r50_del1 is True and _r50_del2 is False and _graph.load_rulings() == [])
+    # (4) validation: a bad verdict / src == dst / empty endpoint each RAISES ValueError.
+    _r50_bad_verdict = _r50_same_node = _r50_empty = False
+    try:
+        _graph.save_ruling("a", "b", "maybe")
+    except ValueError:
+        _r50_bad_verdict = True
+    try:
+        _graph.save_ruling("x", "x", "same")
+    except ValueError:
+        _r50_same_node = True
+    try:
+        _graph.save_ruling("", "b", "same")
+    except ValueError:
+        _r50_empty = True
+    check("ruling (4): save_ruling validates (bad verdict / src==dst / empty each raises ValueError)",
+          _r50_bad_verdict and _r50_same_node and _r50_empty)
+finally:
+    _graph.RULINGS_PATH = _r50_rulings_prev
+
+# (6) RELATIONS BUILDERS golden fixtures (PURE, no network): recorded tool OUT-dict -> expected
+#     (nodes, edges). The mint-the-product rule made concrete: the works pool / cooc / unresolved
+#     inputs / institution strings mint NOTHING; only the returned product does.
+# resolve_identity out-dict with a likely_same_person group -> person nodes + ALL-PAIRS same_as A.
+_r50_resolve_out = {"query": "Jane", "source": "openalex", "candidates": [
+    {"id": "A1", "source": "openalex", "name": "Jane Roe", "works_count": 10, "cited_by": 50,
+     "name_match": True, "institution": "MIT"},
+    {"id": "A2", "source": "openalex", "name": "Jane Roe", "works_count": 5, "cited_by": 20,
+     "name_match": True, "institution": None},
+], "likely_same_person": [{"source": "openalex", "ids": ["A1", "A2"], "name": "Jane Roe",
+                          "merge_token": "A1+A2"}]}
+_r50_rn, _r50_re = _rel50._resolve_mints(_r50_resolve_out)
+_r50_rn_ids = {n["id"] for n in _r50_rn}
+_r50_re_norm = {(e["src"], e["dst"], e["type"], e["tier"], e["method"]) for e in _r50_re}
+check("relations builder (resolve): a person node per id-bearing candidate, with works_count/cited_by attrs",
+      _r50_rn_ids == {"person:openalex:A1", "person:openalex:A2"}
+      and any(n["id"] == "person:openalex:A1" and n["attrs"] == {"works_count": 10, "cited_by": 50}
+              for n in _r50_rn))
+check("relations builder (resolve): an ALL-PAIRS same_as A edge (align:name_match) per likely_same_person group",
+      _r50_re_norm == {("person:openalex:A1", "person:openalex:A2", "same_as", "A", "align:name_match")})
+# coauthors out-dict -> person nodes + coauthored edges with attrs; works pool + cooc + unresolved mint nothing.
+_r50_co_out = {"source": "openalex", "n_authors": 2, "nodes": [
+    {"query": "A1", "resolved": {"id": "A1", "ids": ["A1"], "source": "openalex", "name": "Alice"},
+     "top_coauthors": [{"id": "A9", "name": "Carol", "joint": 3.5, "papers": 4}]},
+    {"query": "A2", "resolved": {"id": "A2", "ids": ["A2"], "source": "openalex", "name": "Bob"},
+     "top_coauthors": []},
+    {"query": "Ghost", "resolved": None},   # unresolved input -> mints nothing
+], "edges": [{"a": "A1", "b": "A2", "joint_count": 2}],
+    "bridges": [{"id": "A7", "name": "Dave", "shared_by": ["A1", "A2"], "total_joint": 1.5}],
+    "cooc": [{"a": "x", "b": "y", "n": 3}]}   # cooc mints nothing (name-collapsed, no stable ids)
+_r50_cn, _r50_ce = _rel50._coauthors_mints(_r50_co_out)
+_r50_cn_ids = {n["id"] for n in _r50_cn}
+_r50_ce_set = {(e["src"], e["dst"], e["type"], e["method"], tuple(sorted((e.get("attrs") or {}).items())))
+               for e in _r50_ce}
+check("relations builder (coauthors): person nodes for resolved inputs + top_coauthors + bridges (Ghost minted nothing)",
+      _r50_cn_ids == {"person:openalex:A1", "person:openalex:A2", "person:openalex:A9",
+                      "person:openalex:A7"})
+check("relations builder (coauthors): coauthored edges carry attrs (top_coauthor joint/papers, pairwise joint_count, bridge total_joint)",
+      ("person:openalex:A1", "person:openalex:A9", "coauthored", "api:openalex",
+       (("joint", 3.5), ("papers", 4))) in _r50_ce_set
+      and ("person:openalex:A1", "person:openalex:A2", "coauthored", "api:openalex",
+           (("joint_count", 2),)) in _r50_ce_set
+      and ("person:openalex:A1", "person:openalex:A7", "coauthored", "api:openalex",
+           (("total_joint", 1.5),)) in _r50_ce_set)
+check("relations builder (coauthors): the works pool + cooc mint NOTHING (only the product mints)",
+      all(not n["id"].startswith("person:openalex:x") for n in _r50_cn)
+      and all(e["type"] == "coauthored" for e in _r50_ce))
+# cohort out-dict -> inst node + affiliated edges with works/concept attrs; the miss dict mints nothing.
+_r50_coh_out = {"institution": {"id": "I50", "name": "Example Institute"},
+                "filters": {"concept": "ML", "concept_id": "C10", "year_from": 2022},
+                "n": 1, "people": [{"id": "A5", "name": "Erin", "works_at_institution_in_field": 7}]}
+_r50_hn, _r50_he = _rel50._cohort_mints(_r50_coh_out)
+check("relations builder (cohort): an institution node + a person node + affiliated edge with works/concept attrs",
+      {n["id"] for n in _r50_hn} == {"inst:openalex:I50", "person:openalex:A5"}
+      and _r50_he == [{"src": "person:openalex:A5", "dst": "inst:openalex:I50", "type": "affiliated",
+                       "tier": "M", "method": "api:openalex", "attrs": {"works": 7, "concept": "C10"}}])
+check("relations builder (cohort): the no-match miss dict (institution None) mints NOTHING",
+      _rel50._cohort_mints({"institution": None, "people": [], "note": "x"}) == ([], []))
+
+# (7) GRAPH_MINTS registered: declared_vocabulary() now includes relations' kinds/types/methods
+#     (align:name_match is newly declared). Shipping the tap IS the grant (vocabulary-by-minting).
+_r50_vocab = _graph.declared_vocabulary()
+check("relations (mint tripwire): declared_vocabulary includes relations' person/institution kinds",
+      {"person", "institution"} <= _r50_vocab["kinds"])
+check("relations (mint tripwire): declared_vocabulary includes coauthored/affiliated/same_as edge types",
+      {"coauthored", "affiliated", "same_as"} <= _r50_vocab["edge_types"])
+check("relations (mint tripwire): declared_vocabulary includes align:name_match method",
+      "align:name_match" in _r50_vocab["methods"] and "relations" in _graph._MINT_REGISTRY)
+
+# (5, 8, 9) INTEGRATION + voices + between on a FRESH temp-db (repoint store.DB_PATH etc.; restore).
+_p50_db_prev = _rstore.DB_PATH
+_p50_disabled_prev = _rstore._disabled
+_p50_local_prev = _rstore._local
+_p50_rulings_prev = _graph.RULINGS_PATH
+_rstore.DB_PATH = Path(_tf47.mkdtemp()) / "smoke_p3.db"
+_rstore._disabled = False
+_rstore._local = _thr47.local()  # fresh per-thread conn cache -> _read_con() reconnects to THIS db
+try:
+    check("p3: index init creates the tables in the temp db", _rstore.init())
+    _p50con = _rstore.connect()
+
+    # ---- (5) INTEGRATION: a `same` ruling ADDS a same_as edge under working; a `not_same` ruling
+    #      REMOVES a title_fp candidate under exploratory (not_same beats candidate). ----
+    # Two title-fp TWINS from different sources (the derived same_as substrate), seeded via _upsert.
+    _P50_TWIN = "Ruling Integration Twin Doc Shared Long Normalized Title For P Three"
+    _p50_t1 = _doc("arxiv", _P50_TWIN, "http://arxiv/p50t1"); _p50_t1.source_id = "p50t1"
+    _p50_t2 = _doc("openreview", _P50_TWIN, "http://openreview/p50t2"); _p50_t2.source_id = "p50t2"
+    # Two UNRELATED docs (no shared fp, no ids) for the `same`-ruling ADD test.
+    _p50_s1 = _doc("zhihu", "Ruling Same Add Doc One Alpha Unrelated Long Title", "http://z/p50s1")
+    _p50_s1.source_id = "p50s1"
+    _p50_s2 = _doc("bilibili", "Ruling Same Add Doc Two Beta Unrelated Long Title", "http://b/p50s2")
+    _p50_s2.source_id = "p50s2"
+    _p50con.execute("BEGIN")
+    for _p50d in (_p50_t1, _p50_t2, _p50_s1, _p50_s2):
+        _recall.writer._upsert(_p50con, rank, _p50d, 1.0)
+    _p50con.commit()
+    _p50_n_s1 = _graph.doc_node_id("zhihu", "p50s1")
+    _p50_n_s2 = _graph.doc_node_id("bilibili", "p50s2")
+    _p50_n_t1 = _graph.doc_node_id("arxiv", "p50t1")
+    _p50_n_t2 = _graph.doc_node_id("openreview", "p50t2")
+
+    # A `same` ruling between the two UNRELATED docs (via a monkeypatched temp rulings file) makes a
+    # same_as edge appear under working (the ruling-ADD; there is no other edge between them).
+    _p50_rf = Path(_tf47.mkdtemp()) / "graph_rulings.json"
+    _p50_lo, _p50_hi = sorted((_p50_n_s1, _p50_n_s2))
+    _p50_rf.write_text(json.dumps([{"src": _p50_lo, "dst": _p50_hi, "verdict": "same",
+                                    "note": "smoke", "ruled_at": 1.0}]), encoding="utf-8")
+    _graph.RULINGS_PATH = _p50_rf
+    _p50_nb_working = _graph.neighborhood(_p50_n_s1, depth=1, policy="working")
+    check("ruling integration (5): a `same` ruling ADDS a same_as edge under working (the ruling-ADD)",
+          _p50_n_s2 in {n["id"] for n in _p50_nb_working["nodes"]}
+          and any(e["type"] == "same_as" and e.get("method") == "ruling"
+                  and {e["src"], e["dst"]} == {_p50_n_s1, _p50_n_s2}
+                  for e in _p50_nb_working["edges"]))
+    # Under conservative (rulings NOT applied) the same_as ADD does NOT appear (control).
+    _p50_nb_cons = _graph.neighborhood(_p50_n_s1, depth=1, policy="conservative")
+    check("ruling integration (5): the `same`-ruling ADD is absent under conservative (rulings gated to working/exploratory)",
+          _p50_n_s2 not in {n["id"] for n in _p50_nb_cons["nodes"]})
+
+    # A `not_same` ruling between the TWINS REMOVES the title_fp candidate under exploratory.
+    _p50_rf2 = Path(_tf47.mkdtemp()) / "graph_rulings.json"
+    _p50_tlo, _p50_thi = sorted((_p50_n_t1, _p50_n_t2))
+    _p50_rf2.write_text(json.dumps([{"src": _p50_tlo, "dst": _p50_thi, "verdict": "not_same",
+                                     "note": "smoke", "ruled_at": 1.0}]), encoding="utf-8")
+    _graph.RULINGS_PATH = _p50_rf2
+    _p50_nb_expl_ruled = _graph.neighborhood(_p50_n_t1, depth=1, policy="exploratory")
+    check("ruling integration (5): a `not_same` ruling REMOVES the title_fp candidate under exploratory (not_same beats candidate)",
+          _p50_n_t2 not in {n["id"] for n in _p50_nb_expl_ruled["nodes"]}
+          and not any(e["type"] == "same_as" and {e["src"], e["dst"]} == {_p50_n_t1, _p50_n_t2}
+                      for e in _p50_nb_expl_ruled["edges"]))
+    _graph.RULINGS_PATH = _p50_rulings_prev   # drop the ruling overlay for the voices/between fixtures
+
+    # ---- (8) VOICES: the independence counter over a synthetic doc set. ----
+    # Two docs sharing a work id (id_eq via the SAME doi) = ONE voice; a third with zero ids = unresolved.
+    _v1 = _doc("arxiv", "Voices Doc One Alpha Long Enough Title Here For P3", "http://a/v1")
+    _v1.source_id = "v1"; _v1.metadata = {"doi": "10.9/vshared"}
+    _v2 = _doc("openreview", "Voices Doc Two Beta Different Title Entirely P3", "http://a/v2")
+    _v2.source_id = "v2"; _v2.metadata = {"doi": "10.9/vshared"}
+    _v3 = _doc("zhihu", "Voices Doc Three Gamma No Ids At All Long Title P3", "http://a/v3")
+    _v3.source_id = "v3"
+    _p50con.execute("BEGIN")
+    for _vd in (_v1, _v2, _v3):
+        _recall.writer._upsert(_p50con, rank, _vd, 1.0)
+    _p50con.commit()
+    _nv1 = _graph.doc_node_id("arxiv", "v1"); _nv2 = _graph.doc_node_id("openreview", "v2")
+    _nv3 = _graph.doc_node_id("zhihu", "v3")
+    _vres = _graph.voices([_nv1, _nv2, _nv3], policy="conservative")
+    check("voices (8): two docs sharing a work id (id_eq) collapse to ONE voice; the id-less third is unresolved",
+          _vres["n_voices"] == 1 and _vres["n_unresolved"] == 1
+          and sorted(_vres["voices"][0]["docs"]) == sorted([_nv1, _nv2])
+          and _vres["unresolved"] == [_nv3])
+
+    # Two docs on DIFFERENT works sharing an AUTHORED person = ONE voice, speaker_known True.
+    _va = _doc("arxiv", "Voices Speaker Merge A Distinct Work One Long Title P3", "http://a/va")
+    _va.source_id = "va"; _va.metadata = {"doi": "10.9/vworka"}
+    _vb = _doc("s2", "Voices Speaker Merge B Distinct Work Two Long Title P3", "http://a/vb")
+    _vb.source_id = "vb"; _vb.metadata = {"doi": "10.9/vworkb"}
+    _p50con.execute("BEGIN")
+    for _vd in (_va, _vb):
+        _recall.writer._upsert(_p50con, rank, _vd, 1.0)
+    for _wk in ("work:doi:10.9/vworka", "work:doi:10.9/vworkb"):
+        _p50con.execute("INSERT INTO graph_edges(src, dst, type, tier, method, first_seen, last_seen) "
+                        "VALUES(?, 'person:openalex:A_VMERGE', 'authored', 'M', 'api:openalex', 1.0, 1.0)",
+                        (_wk,))
+    _p50con.commit()
+    _nva = _graph.doc_node_id("arxiv", "va"); _nvb = _graph.doc_node_id("s2", "vb")
+    _vres2 = _graph.voices([_nva, _nvb], policy="conservative")
+    check("voices (8): two docs on different works sharing an authored person = ONE voice, speaker_known True",
+          _vres2["n_voices"] == 1 and _vres2["voices"][0]["speaker_known"] is True
+          and sorted(_vres2["voices"][0]["docs"]) == sorted([_nva, _nvb]))
+
+    # A title_fp-only pair (each with its OWN distinct work id): collapses under exploratory (ONE
+    # voice) but stays TWO voices under conservative (title_fp excluded; each id_eqs its own work).
+    _P50_VFP = "Voices Title Fp Collapse Pair Shared Exact Same Long Normalized Title"
+    _vc = _doc("arxiv", _P50_VFP, "http://a/vc"); _vc.source_id = "vc"; _vc.metadata = {"doi": "10.9/vcc"}
+    _vd2 = _doc("openreview", _P50_VFP, "http://a/vd"); _vd2.source_id = "vd"; _vd2.metadata = {"doi": "10.9/vdd"}
+    _p50con.execute("BEGIN")
+    for _vd in (_vc, _vd2):
+        _recall.writer._upsert(_p50con, rank, _vd, 1.0)
+    _p50con.commit()
+    _nvc = _graph.doc_node_id("arxiv", "vc"); _nvd = _graph.doc_node_id("openreview", "vd")
+    _vres_cons = _graph.voices([_nvc, _nvd], policy="conservative")
+    _vres_expl = _graph.voices([_nvc, _nvd], policy="exploratory")
+    check("voices (8): a title_fp-only pair is TWO voices under conservative, ONE under exploratory",
+          _vres_cons["n_voices"] == 2 and _vres_expl["n_voices"] == 1)
+    # >64 ids -> explicit error (no silent truncation); a non-doc id -> the skipped list.
+    _vres_big = _graph.voices([f"doc:x:{i}" for i in range(65)])
+    _vres_skip = _graph.voices([_nv1, "work:openalex:W999"], policy="conservative")
+    check("voices (8): >64 doc ids returns an explicit error (never a silent truncation)",
+          "error" in _vres_big)
+    check("voices (8): a non-doc id lands in the skipped list, not an error",
+          _vres_skip.get("skipped") == ["work:openalex:W999"])
+
+    # ---- (9) BETWEEN: bounded connection paths. ----
+    # A person-authored-work-authored-person path -> ONE path, length 2 (edge count).
+    for _pnid, _pkind, _plabel in [("person:openalex:A_BA", "person", "Alice"),
+                                   ("person:openalex:A_BB", "person", "Bob"),
+                                   ("work:openalex:W_B1", "work", "Paper")]:
+        _p50con.execute("INSERT INTO graph_nodes(id, kind, label, first_seen, last_seen) "
+                        "VALUES(?, ?, ?, 1.0, 1.0)", (_pnid, _pkind, _plabel))
+    for _pp in ("person:openalex:A_BA", "person:openalex:A_BB"):
+        _p50con.execute("INSERT INTO graph_edges(src, dst, type, tier, method, first_seen, last_seen) "
+                        "VALUES('work:openalex:W_B1', ?, 'authored', 'M', 'api:openalex', 1.0, 1.0)", (_pp,))
+    _p50con.commit()
+    _bres = _graph.between("person:openalex:A_BA", "person:openalex:A_BB", policy="conservative")
+    check("between (9): a person-work-person path is found (one path, length 2, direction preserved)",
+          _bres["paths"] == [["person:openalex:A_BA", "work:openalex:W_B1", "person:openalex:A_BB"]]
+          and any(e["type"] == "authored" for e in _bres["edges"]))
+    # types filter excludes the authored path when types=["cites"].
+    _bres_cites = _graph.between("person:openalex:A_BA", "person:openalex:A_BB",
+                                 types=["cites"], policy="conservative")
+    check("between (9): a types filter (types=['cites']) excludes the authored path -> paths []",
+          _bres_cites["paths"] == [])
+    # a no-path pair -> paths [] (honest empty); a == b -> empty with a note.
+    _bres_none = _graph.between("person:openalex:A_BA", "person:openalex:A_NOPE", policy="conservative")
+    _bres_same = _graph.between("person:openalex:A_BA", "person:openalex:A_BA")
+    check("between (9): a no-path pair -> paths [] (honest empty, not an error)", _bres_none["paths"] == [])
+    check("between (9): a == b -> an empty result with a note", _bres_same["paths"] == []
+          and bool(_bres_same.get("note")))
+    # policy gating: a title_fp-derived link forms a path only under exploratory (excluded under conservative).
+    _P50_BFP = "Between Policy Gate Title Fp Only Link Shared Long Normalized Title P3"
+    _bp = _doc("arxiv", _P50_BFP, "http://a/bp"); _bp.source_id = "bp1"
+    _bq = _doc("openreview", _P50_BFP, "http://a/bq"); _bq.source_id = "bp2"
+    _p50con.execute("BEGIN")
+    for _bd in (_bp, _bq):
+        _recall.writer._upsert(_p50con, rank, _bd, 1.0)
+    _p50con.commit()
+    _nbp = _graph.doc_node_id("arxiv", "bp1"); _nbq = _graph.doc_node_id("openreview", "bp2")
+    _bres_pc = _graph.between(_nbp, _nbq, policy="conservative")
+    _bres_pe = _graph.between(_nbp, _nbq, policy="exploratory")
+    check("between (9): a title_fp-derived link forms a path only under exploratory (gated out under conservative)",
+          _bres_pc["paths"] == [] and _bres_pe["paths"] == [[_nbp, _nbq]])
+finally:
+    _graph.RULINGS_PATH = _p50_rulings_prev
+    _rstore.DB_PATH = _p50_db_prev
+    _rstore._disabled = _p50_disabled_prev
+    _rstore._local = _p50_local_prev
+    # drain any residue so a later section never inherits our queue items.
+    while not _recall.writer._queue.empty():
+        try:
+            _recall.writer._queue.get_nowait()
+        except Exception:  # noqa: BLE001
+            break
+
+# (10) penumbra_ruling TOOL: create/list/delete happy path + unknown action + missing-args errors. Call
+#      the unwrapped body (past @_threaded) like the other server-level checks; monkeypatch a temp
+#      rulings file so no real state is touched.
+_r50_tool_prev = _graph.RULINGS_PATH
+_graph.RULINGS_PATH = Path(_tf47.mkdtemp()) / "graph_rulings.json"
+try:
+    _er = _srv.penumbra_ruling.__wrapped__
+    _er_create = _er(action="create", src="person:openalex:A_T2", dst="person:openalex:A_T1",
+                     verdict="same", note="tool smoke")
+    check("penumbra_ruling (10): action=create records the ruling (created True, normalized src < dst)",
+          _er_create.get("created") is True
+          and _er_create.get("ruling", {}).get("src") == "person:openalex:A_T1"
+          and _er_create.get("ruling", {}).get("dst") == "person:openalex:A_T2")
+    _er_list = _er(action="list")
+    check("penumbra_ruling (10): action=list returns the ruling + count",
+          _er_list.get("count") == 1 and _er_list.get("rulings", [{}])[0].get("verdict") == "same")
+    _er_del = _er(action="delete", src="person:openalex:A_T1", dst="person:openalex:A_T2")
+    check("penumbra_ruling (10): action=delete removes it (deleted True) and the list empties",
+          _er_del.get("deleted") is True and _er(action="list").get("count") == 0)
+    check("penumbra_ruling (10): an unknown action returns an error dict",
+          "error" in _er(action="frobnicate"))
+    check("penumbra_ruling (10): create with a bad verdict returns an error dict (ValueError mapped)",
+          "error" in _er(action="create", src="a", dst="b", verdict="maybe"))
+    check("penumbra_ruling (10): delete without src/dst returns an error dict",
+          "error" in _er(action="delete", src="", dst=""))
+finally:
+    _graph.RULINGS_PATH = _r50_tool_prev
+
+# (11) TRIPWIRES (the conscious 16 -> 17 bump lives in the parsimony + §49 verbs checks above; here
+#      confirm the gather whitelist did NOT gain the write verb, and the docs-drift POSITIVE presence
+#      of penumbra_ruling in the product docs + the instructions).
+check("p3 tripwire: _GATHER_TOOLS is still 12 and EXCLUDES penumbra_ruling (a write verb; gather is read-only)",
+      len(_GATHER_TOOLS) == 12 and "penumbra_ruling" not in _GATHER_TOOLS)
+check("p3 tripwire: penumbra_ruling is a REGISTERED tool", callable(_srv.penumbra_ruling))
+# docs-drift POSITIVE: penumbra_ruling must be NAMED in the product-facing README and in the server
+# instructions (a renamed/removed write verb that skips the docs would otherwise teach a stale
+# surface — the same drift the negative tripwire guards, in the presence direction).
+_r50_readme = (ROOT / "README.md")
+_r50_readme_txt = _r50_readme.read_text(encoding="utf-8") if _r50_readme.exists() else ""
+check("p3 docs-drift (presence): penumbra_ruling is named in README.md (the product-facing tool surface)",
+      "penumbra_ruling" in _r50_readme_txt)
+check("p3 docs-drift (presence): penumbra_ruling is named in _PENUMBRA_INSTRUCTIONS (the connect-time brief)",
+      "penumbra_ruling" in _srv._PENUMBRA_INSTRUCTIONS)
 
 
 print()

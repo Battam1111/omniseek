@@ -23,7 +23,9 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, TypedDict
 
@@ -33,8 +35,13 @@ from penumbra.core.recall import store
 logger = logging.getLogger(__name__)
 
 # Identity rulings live beside sensors.json (the same precedent: agent JUDGMENT persisted as
-# declarative STATE the eye executes mechanically). The eye APPLIES rulings; it never writes one.
+# declarative STATE the eye executes mechanically). The eye APPLIES rulings; it never MAKES one — the
+# agent hands one in via penumbra_ruling(action=create), which calls save_ruling below. The read half
+# (load_rulings) stays fail-open; the WRITE half is serialized under _RULINGS_LOCK + atomic
+# tmp/replace (the SensorStore idiom), so a concurrent create/delete never corrupts the file.
 RULINGS_PATH = Path.home() / ".penumbra" / "state" / "graph_rulings.json"
+_RULINGS_LOCK = threading.Lock()
+_RULING_VERDICTS = frozenset({"same", "not_same"})
 
 
 # ── J-tier overlay (absorbs evidence.py under the unified names; design section 9) ──────────────
@@ -203,6 +210,69 @@ def load_rulings() -> list[dict]:
     except Exception as exc:  # noqa: BLE001 — a bad rulings file must never break a graph read
         logger.debug("graph_rulings.json unreadable (%s) -> []", exc)
         return []
+
+
+def _atomic_write_rulings(rulings: list[dict]) -> None:
+    """Write the whole rulings list atomically (the SensorStore idiom: build the list, write a
+    sibling ``.tmp``, ``tmp.replace(path)`` so a reader never sees a half-written file). Parent dir
+    is created if absent. Caller holds ``_RULINGS_LOCK``."""
+    RULINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    data = json.dumps(rulings, ensure_ascii=False, indent=1)
+    tmp = RULINGS_PATH.with_suffix(".tmp")
+    tmp.write_text(data, encoding="utf-8")
+    tmp.replace(RULINGS_PATH)
+
+
+def save_ruling(src: str, dst: str, verdict: str, note: str = "") -> dict:
+    """Record ONE identity ruling as declarative STATE (the pair is the KEY, not a log entry).
+
+    The eye never MAKES a ruling; this stores the one the AGENT decided (the sensors.json precedent:
+    judgment persisted as config the eye applies mechanically at read time). Normalizes the pair to
+    ``src < dst`` (a ruling is symmetric — the same judgment regardless of direction), validates, then
+    REPLACES any existing entry for that sorted pair (declarative state: re-create overwrites, git
+    history is the audit trail) and atomic-writes the whole list.
+
+    verdict must be ``same`` or ``not_same``; src/dst must be non-empty and distinct. A bad value
+    raises ``ValueError`` (the tool layer maps it to an error dict). Returns
+    ``{"ruling": <entry>, "replaced": <bool>}`` where the entry carries a UTC ISO ``ruled_at``."""
+    src = (src or "").strip()
+    dst = (dst or "").strip()
+    if not src or not dst:
+        raise ValueError("ruling requires non-empty src and dst")
+    src, dst = sorted((src, dst))
+    if src == dst:
+        raise ValueError("ruling src and dst must be different nodes")
+    verdict = (verdict or "").strip().lower()
+    if verdict not in _RULING_VERDICTS:
+        raise ValueError(f"verdict must be one of {sorted(_RULING_VERDICTS)}; got {verdict!r}")
+    entry = {"src": src, "dst": dst, "verdict": verdict, "note": (note or "").strip(),
+             "ruled_at": datetime.now(timezone.utc).isoformat()}
+    with _RULINGS_LOCK:
+        rulings = load_rulings()
+        kept = [r for r in rulings
+                if sorted(((r.get("src") or "").strip(), (r.get("dst") or "").strip())) != [src, dst]]
+        replaced = len(kept) != len(rulings)
+        kept.append(entry)
+        _atomic_write_rulings(kept)
+    return {"ruling": entry, "replaced": replaced}
+
+
+def delete_ruling(src: str, dst: str) -> bool:
+    """Retract the ruling for a pair (the same normalization as ``save_ruling``: the sorted pair is
+    the key). Atomic-writes the surviving list; returns True iff an entry was removed."""
+    src = (src or "").strip()
+    dst = (dst or "").strip()
+    if not src or not dst:
+        return False
+    src, dst = sorted((src, dst))
+    with _RULINGS_LOCK:
+        rulings = load_rulings()
+        kept = [r for r in rulings
+                if sorted(((r.get("src") or "").strip(), (r.get("dst") or "").strip())) != [src, dst]]
+        removed = len(kept) != len(rulings)
+        if removed:
+            _atomic_write_rulings(kept)
+    return removed
 
 
 def _ruling_index(rulings: list[dict]) -> tuple[set, dict]:
@@ -526,6 +596,22 @@ def _apply_policy_and_rulings(edges: list[dict], methods: frozenset,
     return kept
 
 
+def _policy_hop_edges(con, frontier: list[str], types: Optional[list[str]], methods: frozenset,
+                      not_same: set, same: dict, use_rulings: bool) -> list[dict]:
+    """ONE hop of edges off ``frontier``: the UNION of (i) stored graph_edges rows and (ii) the two
+    DERIVED same_as sets (title_fp when the policy admits it; doc-work id_eq when any id_eq method is
+    in the policy), then filtered by ``_apply_policy_and_rulings``. This is the SINGLE per-hop
+    machinery ``neighborhood`` / ``between`` / ``voices`` all share (extracted so the three views can
+    never drift apart), each scoped to the frontier (never a full-table scan)."""
+    hop_edges: list[dict] = []
+    hop_edges += _stored_edges(con, frontier, types)
+    if "align:title_fp" in methods:  # exploratory-only (title_fp is in EXPLORATORY alone)
+        hop_edges += _derived_title_fp_edges(con, frontier)
+    if ("id_eq:doi" in methods) or ("id_eq:arxiv" in methods) or ("id_eq:openalex" in methods):
+        hop_edges += _derived_id_eq_edges(con, frontier)
+    return _apply_policy_and_rulings(hop_edges, methods, not_same, same, use_rulings)
+
+
 def neighborhood(anchor: str, depth: int = 1, types: Optional[list[str]] = None,
                  policy: str = "conservative", max_nodes: int = 40) -> dict:
     """The bounded subgraph around a node: BFS over the UNION of (i) stored graph_edges rows and
@@ -560,15 +646,8 @@ def neighborhood(anchor: str, depth: int = 1, types: Optional[list[str]] = None,
         for _hop in range(depth):
             if not frontier:
                 break
-            hop_edges: list[dict] = []
-            hop_edges += _stored_edges(con, frontier, types)
-            # Derived same_as edges are only relevant when the policy admits their methods.
-            if "align:title_fp" in methods:  # exploratory-only (title_fp is in EXPLORATORY alone)
-                hop_edges += _derived_title_fp_edges(con, frontier)
-            if ("id_eq:doi" in methods) or ("id_eq:arxiv" in methods) or ("id_eq:openalex" in methods):
-                hop_edges += _derived_id_eq_edges(con, frontier)
-            # Filter by policy + apply rulings, then walk to new nodes.
-            hop_edges = _apply_policy_and_rulings(hop_edges, methods, not_same, same, use_rulings)
+            # The shared per-hop machinery (stored + derived same_as, policy-filtered): walk to new nodes.
+            hop_edges = _policy_hop_edges(con, frontier, types, methods, not_same, same, use_rulings)
             next_frontier: list[str] = []
             for e in hop_edges:
                 ekey = (e["src"], e["dst"], e["type"], e.get("method"))
@@ -592,6 +671,310 @@ def neighborhood(anchor: str, depth: int = 1, types: Optional[list[str]] = None,
         all_edges = [e for e in all_edges if e["src"] in kept_ids and e["dst"] in kept_ids]
     result["nodes"] = nodes
     result["edges"] = all_edges
+    result["capped"] = capped
+    return result
+
+
+# ── voices: the independence projection (design section 7 + the P3 amendment) ────────────────────
+# THE ONE independence mechanism (the parsimony audit deleted the derived independence_score that
+# counted source NAMES, not upstream voices). voices collapses a DOC SET to distinct upstream VOICES
+# via same_as + authored, so "N sources agree" becomes "N INDEPENDENT voices agree" (or fewer). It
+# COUNTS EVIDENCE, NEVER ABSENCE: a component with resolution evidence is a voice; a doc with zero
+# connecting evidence lands in ``unresolved`` and is NEVER counted as a voice (counting unknowns as
+# distinct voices would mechanically FABRICATE independence). Two voices sharing a person MERGE
+# (shared speaker = not independent) — which falls out of union-find automatically since persons are
+# in the union. The projection is mechanical; reading it is judgment.
+
+_VOICES_MAX = 64   # explicit input cap: split a larger set, never silently truncate (no-silent-caps)
+
+
+class _UnionFind:
+    """A tiny union-find over string node ids (no external dep; the graph adds zero new tech)."""
+    def __init__(self) -> None:
+        self.parent: dict[str, str] = {}
+
+    def add(self, x: str) -> None:
+        self.parent.setdefault(x, x)
+
+    def find(self, x: str) -> str:
+        self.add(x)
+        root = x
+        while self.parent[root] != root:
+            root = self.parent[root]
+        while self.parent[x] != root:   # path compression
+            self.parent[x], x = root, self.parent[x]
+        return root
+
+    def union(self, a: str, b: str) -> None:
+        ra, rb = self.find(a), self.find(b)
+        if ra != rb:
+            # deterministic root (lexicographically smaller) so component grouping is stable.
+            lo, hi = sorted((ra, rb))
+            self.parent[hi] = lo
+
+
+def voices(doc_ids: list[str], policy: str = "conservative") -> dict:
+    """Collapse a DOC SET to distinct upstream VOICES via same_as + authored — the independence
+    counter. Input: graph doc ids (``doc:{source}:{source_id}``). NON-``doc:``-prefixed entries are
+    collected into ``skipped`` (not an error — the agent may pass a mixed handful). More than 64 ids
+    returns an explicit error (split the set; never a silent truncation).
+
+    Builds the identity/authorship evidence pool SCOPED to the input docs (never a full-table scan):
+    (a) doc->work id_eq same_as, (b) doc<->doc title_fp same_as when the policy admits it, (c) the
+    rulings overlay (working/exploratory: a ``same`` ruling between input docs ADDS a link, a
+    ``not_same`` ruling REMOVES a candidate), (d) work->person ``authored`` edges for the works
+    reached in (a). Union-find over docs ∪ works ∪ persons; each component restricted to the input
+    docs is either a VOICE (>= 1 work link, or >= 2 docs joined by same_as; ``speaker_known`` flags
+    >= 1 person) or, if a lone doc with ZERO evidence, an ``unresolved`` entry. Returns
+    ``{voices, n_voices, unresolved, n_unresolved, policy, skipped?}`` with deterministic ordering.
+    Fail-open to all-unresolved on a connection failure."""
+    ids = [str(d) for d in (doc_ids or [])]
+    if len(ids) > _VOICES_MAX:
+        return {"error": f"voices takes at most {_VOICES_MAX} doc ids; split the set"}
+    docs = [d for d in ids if d.startswith("doc:")]
+    skipped = [d for d in ids if not d.startswith("doc:")]
+    fail_open = {"voices": [], "n_voices": 0, "unresolved": docs,
+                 "n_unresolved": len(docs), "policy": policy}
+    if skipped:
+        fail_open["skipped"] = skipped
+    if not docs:
+        return fail_open
+    con = _con()
+    if con is None:
+        return fail_open
+
+    methods = _policy_methods(policy)
+    use_rulings = policy in ("working", "exploratory")
+    rulings = load_rulings() if use_rulings else []
+    not_same, same = _ruling_index(rulings)
+    doc_set = set(docs)
+
+    try:
+        # (a)+(b)+(c): the same_as evidence among the input docs (id_eq doc->work always; title_fp
+        # doc<->doc only when the policy admits it), policy-filtered + rulings overlaid. Reuse the
+        # SAME per-hop machinery the other views use (scoped to the input docs as the frontier).
+        same_as_edges = _policy_hop_edges(con, docs, ["same_as"], methods, not_same, same, use_rulings)
+        # A same-ruling ADD is only relevant here when it joins two INPUT docs (the overlay is scoped
+        # to the doc set); id_eq / title_fp edges already have an input doc as one endpoint by
+        # construction (they are derived off the input frontier).
+        uf = _UnionFind()
+        for d in docs:
+            uf.add(d)
+        works: set = set()
+        for e in same_as_edges:
+            s, t = e.get("src"), e.get("dst")
+            if not s or not t:
+                continue
+            # a ruling-added same_as must have BOTH endpoints among the input docs to count (scope);
+            # id_eq / title_fp always carry an input doc endpoint already.
+            if e.get("method") == "ruling" and not ({s, t} <= doc_set):
+                continue
+            uf.add(s)
+            uf.add(t)
+            uf.union(s, t)
+            for endpoint in (s, t):
+                if endpoint.startswith("work:"):
+                    works.add(endpoint)
+        # (d): work->person authored edges for the works reached in (a), endpoints IN the work set.
+        persons: set = set()
+        if works:
+            for e in _stored_edges(con, list(works), ["authored"]):
+                if e.get("type") != "authored":
+                    continue
+                s, t = e.get("src"), e.get("dst")
+                if not s or not t:
+                    continue
+                # keep only edges whose work endpoint is one we reached (never pull in foreign works).
+                if s not in works and t not in works:
+                    continue
+                uf.add(s)
+                uf.add(t)
+                uf.union(s, t)
+                for endpoint in (s, t):
+                    if endpoint.startswith("person:"):
+                        persons.add(endpoint)
+
+        # Group the union-find components, then classify each by its INPUT docs' evidence.
+        comps: dict[str, dict] = {}
+        # seed a bucket per input doc's root so a lone doc still forms its own component.
+        for node in list(uf.parent.keys()):
+            root = uf.find(node)
+            b = comps.setdefault(root, {"docs": set(), "works": set(), "persons": set()})
+            if node in doc_set:
+                b["docs"].add(node)
+            elif node.startswith("work:"):
+                b["works"].add(node)
+            elif node.startswith("person:"):
+                b["persons"].add(node)
+
+        voice_list: list[dict] = []
+        unresolved: list[str] = []
+        for b in comps.values():
+            cdocs = b["docs"]
+            if not cdocs:
+                continue  # a component with no input doc (a foreign mirror) is not counted
+            # EVIDENCE (never absence): >= 1 work link OR >= 2 input docs joined by same_as.
+            if b["works"] or len(cdocs) >= 2:
+                voice_list.append({
+                    "docs": sorted(cdocs),
+                    "works": sorted(b["works"]),
+                    "persons": sorted(b["persons"]),
+                    "speaker_known": len(b["persons"]) >= 1,
+                })
+            else:
+                # a lone doc with zero evidence — NEVER a voice (would fabricate independence).
+                unresolved.extend(sorted(cdocs))
+        # Deterministic ordering: voices by their first doc, unresolved sorted.
+        voice_list.sort(key=lambda v: v["docs"][0] if v["docs"] else "")
+        unresolved.sort()
+        result: dict = {"voices": voice_list, "n_voices": len(voice_list),
+                        "unresolved": unresolved, "n_unresolved": len(unresolved),
+                        "policy": policy}
+        if skipped:
+            result["skipped"] = skipped
+        return result
+    except Exception as exc:  # noqa: BLE001 — fail-open: a voices failure never breaks the caller
+        logger.debug("graph.voices failed: %s", exc)
+        return fail_open
+
+
+def between(a: str, b: str, types: Optional[list[str]] = None, policy: str = "conservative",
+            max_nodes: int = 40) -> dict:
+    """Bounded connection PATHS between two anchors — the "how do these relate" question. Bidirectional
+    BFS, at most 2 hops per side (max path length 4), over the SAME per-hop edge machinery as
+    ``neighborhood`` (stored + the two derived same_as arms per the policy + the rulings overlay).
+    Edges are traversed UNDIRECTED for pathfinding but returned as stored/derived (direction
+    preserved). Collects up to 8 SHORTEST paths, ordered (length, path tuple) deterministically.
+    Returns ``{paths: [[node ids]], nodes: [{id, kind, label}] (only nodes on returned paths), edges:
+    [edges on returned paths], capped, truncation}``. ``capped`` is true when more than 8 paths
+    existed or the node budget trimmed paths. ``a == b`` or an empty anchor -> an empty result with a
+    note; no path -> ``{paths: []}`` (an honest empty, not an error). Fail-open like the other views."""
+    max_nodes = max(1, int(max_nodes))
+    methods = _policy_methods(policy)
+    use_rulings = policy in ("working", "exploratory")
+    result: dict = {"paths": [], "nodes": [], "edges": [], "capped": False,
+                    "truncation": "shortest-then-lexicographic"}
+    a = (a or "").strip()
+    b = (b or "").strip()
+    if not a or not b:
+        result["note"] = "between needs two anchors"
+        return result
+    if a == b:
+        result["note"] = "a and b are the same node"
+        return result
+    con = _con()
+    if con is None:
+        return result
+
+    rulings = load_rulings() if use_rulings else []
+    not_same, same = _ruling_index(rulings)
+
+    # Build an UNDIRECTED adjacency out to <=2 hops from EACH side (bidirectional BFS meets in the
+    # middle, so a length-<=4 path is covered), recording the directed edge on each traversed pair so
+    # the returned edges keep their stored/derived direction. Each hop reuses _policy_hop_edges.
+    adj: dict[str, set] = {}
+    edge_by_pair: dict[frozenset, dict] = {}
+
+    def _grow(seed: str) -> None:
+        visited: set = {seed}
+        frontier = [seed]
+        for _hop in range(2):   # <=2 hops per side
+            if not frontier:
+                break
+            hop_edges = _policy_hop_edges(con, frontier, types, methods, not_same, same, use_rulings)
+            nxt: list[str] = []
+            for e in hop_edges:
+                s, t = e.get("src"), e.get("dst")
+                if not s or not t:
+                    continue
+                adj.setdefault(s, set()).add(t)
+                adj.setdefault(t, set()).add(s)   # undirected for pathfinding
+                edge_by_pair.setdefault(frozenset((s, t)), e)   # keep the directed edge as stored
+                for endpoint in (s, t):
+                    if endpoint not in visited:
+                        visited.add(endpoint)
+                        nxt.append(endpoint)
+            frontier = nxt
+
+    try:
+        _grow(a)
+        _grow(b)
+    except Exception as exc:  # noqa: BLE001 — a broken expansion degrades to no paths
+        logger.debug("graph.between expansion failed: %s", exc)
+        return result
+
+    # Enumerate simple paths a..b of length <= 4 over the undirected adjacency, via bounded DFS.
+    all_paths: list[list[str]] = []
+    _PATH_CAP_SCAN = 4000   # a hard ceiling on DFS steps (the adjacency is already hop-bounded)
+    steps = [0]
+
+    def _dfs(node: str, target: str, path: list[str], seen: set) -> None:
+        if steps[0] > _PATH_CAP_SCAN or len(all_paths) > 64:
+            return
+        if len(path) - 1 > 4:   # path length (edge count) cap
+            return
+        if node == target:
+            all_paths.append(list(path))
+            return
+        for nb in sorted(adj.get(node, ())):   # sorted -> deterministic enumeration
+            steps[0] += 1
+            if nb in seen:
+                continue
+            if len(path) - 1 >= 4:
+                continue
+            seen.add(nb)
+            path.append(nb)
+            _dfs(nb, target, path, seen)
+            path.pop()
+            seen.discard(nb)
+
+    try:
+        _dfs(a, b, [a], {a})
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("graph.between DFS failed: %s", exc)
+
+    if not all_paths:
+        return result   # honest empty: no path within the bound (not an error)
+
+    # Deterministic order: shortest first, then lexicographically by the path tuple. Keep up to 8.
+    all_paths.sort(key=lambda p: (len(p), tuple(p)))
+    capped = len(all_paths) > 8
+    kept_paths = all_paths[:8]
+
+    # Collect the nodes + edges that lie on the kept paths; honor the node budget (trim paths that
+    # would blow it, stamping capped).
+    on_path_nodes: list[str] = []
+    seen_nodes: set = set()
+    final_paths: list[list[str]] = []
+    for p in kept_paths:
+        new_nodes = [n for n in p if n not in seen_nodes]
+        if len(seen_nodes) + len(new_nodes) > max_nodes and final_paths:
+            capped = True
+            break   # this path would exceed the node budget; stop (we already have >=1 path)
+        for n in p:
+            if n not in seen_nodes:
+                seen_nodes.add(n)
+                on_path_nodes.append(n)
+        final_paths.append(p)
+
+    # Edges on the final paths (consecutive pairs), returned as the stored/derived directed edge.
+    edges_out: list[dict] = []
+    edge_seen: set = set()
+    for p in final_paths:
+        for i in range(len(p) - 1):
+            key = frozenset((p[i], p[i + 1]))
+            e = edge_by_pair.get(key)
+            if e is None:
+                continue
+            ekey = (e["src"], e["dst"], e.get("type"), e.get("method"))
+            if ekey not in edge_seen:
+                edge_seen.add(ekey)
+                edges_out.append(e)
+
+    nodes_out = _hydrate_nodes(con, set(on_path_nodes), a)
+    result["paths"] = final_paths
+    result["nodes"] = nodes_out
+    result["edges"] = edges_out
     result["capped"] = capped
     return result
 
