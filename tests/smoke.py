@@ -9289,42 +9289,26 @@ check("P11 W4: the zhihu adapter maps no created_time/updated_time (HTML-scrape 
 import logging as _lg61  # noqa: E402
 import penumbra.core.prewarm as _pw61  # noqa: E402
 
-_filt61 = _pw61._PrewarmNoiseFilter()
-_src61 = _pw61._SRC_LOGGER_PREFIX + ".api.researcher_watch_source"
+# The mechanism: raising the SOURCE PACKAGE logger to ERROR silences source WARNING/INFO on ANY
+# thread for the pass (a logger's level is on the logger object, thread-agnostic -- the property
+# that makes it cover org_watch's non-copy_context workers, which the earlier contextvar missed).
+_src_lg61 = _lg61.getLogger(_pw61._SRC_LOGGER)              # the package the sources log under
+_child61 = _lg61.getLogger(_pw61._SRC_LOGGER + ".api.org_watch_source")  # a real source child logger
+_pw_lg61 = _lg61.getLogger(_pw61.__name__)                  # prewarm's OWN logger (not under .sources)
 
-
-def _rec61(name, level):
-    return _lg61.LogRecord(name, level, "f.py", 1, "msg", None, None)
-
-
-check("61 prewarm filter: OUTSIDE a warm pass, a source WARNING is kept (normal signal)",
-      _filt61.filter(_rec61(_src61, _lg61.WARNING)) is True)
-_tok61 = _pw61._PREWARMING.set(True)
-try:
-    check("61 prewarm filter: DURING a warm pass, a source WARNING is dropped (best-effort non-event)",
-          _filt61.filter(_rec61(_src61, _lg61.WARNING)) is False)
-    check("61 prewarm filter: DURING a warm pass, a source INFO is kept (only WARNING is noise)",
-          _filt61.filter(_rec61(_src61, _lg61.INFO)) is True)
-    check("61 prewarm filter: DURING a warm pass, a source ERROR is kept (rarer, left visible)",
-          _filt61.filter(_rec61(_src61, _lg61.ERROR)) is True)
-    check("61 prewarm filter: prewarm's OWN summary warning (not under .sources) survives the pass",
-          _filt61.filter(_rec61(_pw61.__name__, _lg61.WARNING)) is True)
-finally:
-    _pw61._PREWARMING.reset(_tok61)
-check("61 prewarm filter: contextvar reset restores the normal warning flow",
-      _filt61.filter(_rec61(_src61, _lg61.WARNING)) is True)
-
-# idempotent install: two calls add exactly one prewarm filter to a handler
-_h61 = _lg61.StreamHandler()
-_root61 = _lg61.getLogger()
-_root61.addHandler(_h61)
-try:
-    _pw61._ensure_prewarm_log_filter()
-    _pw61._ensure_prewarm_log_filter()
-    check("61 prewarm filter: install is idempotent (exactly one filter per handler)",
-          sum(bool(getattr(f, "_penumbra_prewarm", False)) for f in _h61.filters) == 1)
-finally:
-    _root61.removeHandler(_h61)
+check("61 prewarm quiet: the source-logger name is the .sources package (rename-safe derivation)",
+      _pw61._SRC_LOGGER.endswith(".sources") and _pw61._SRC_LOGGER == _pw61.__name__.rsplit(".", 1)[0] + ".sources")
+check("61 prewarm quiet: OUTSIDE the pass, a source-tree WARNING is enabled (normal signal)",
+      _child61.isEnabledFor(_lg61.WARNING) is True)
+with _pw61._quiet_source_warnings():
+    check("61 prewarm quiet: DURING the pass, a source-tree WARNING is silenced (best-effort non-event)",
+          _child61.isEnabledFor(_lg61.WARNING) is False)
+    check("61 prewarm quiet: DURING the pass, a source-tree ERROR still surfaces (rarer, kept)",
+          _child61.isEnabledFor(_lg61.ERROR) is True)
+    check("61 prewarm quiet: DURING the pass, prewarm's OWN logger (not under .sources) is untouched",
+          _pw_lg61.isEnabledFor(_lg61.WARNING) is True)
+check("61 prewarm quiet: AFTER the pass, the source logger level is restored",
+      _child61.isEnabledFor(_lg61.WARNING) is True and _src_lg61.level == _lg61.NOTSET)
 
 
 print()
