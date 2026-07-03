@@ -157,6 +157,7 @@ remotive grants_gov
 vast_ai modelscope
 crossref_retractions datagovsg_nonresident_pass_types wikicfp_nlp
 oinp_invitations bcpnp_invitations aaip_draws nserc_awards sshrc_awards cihr_grants
+context7
 """.split())
 actual_eo = sorted(n for n in names if fetcher._explicit_only_reason(fetcher.get_adapter(n)))
 # mokahr_ats (access_tier=circumvention) is EXCLUDED from the public release for §1201 reasons, so its
@@ -8299,6 +8300,520 @@ if _SERVICES_PATH.exists():
     check("p9 plist tripwire: SERVICES.md exists (regenerated) + carries the in/out test text",
           (ROOT / "SERVICES.md").exists()
           and "外部只留不能与器官同生死的" in (ROOT / "SERVICES.md").read_text(encoding="utf-8"))
+
+
+# ---------------------------------------------------------------------------
+# 58. P10: the mcp TRANSPORT (a wrapped MCP server is the SAME declarative row, tools/call
+#     instead of a GET) + foundry-grade curator packets (the draft artifact rides the pipeline).
+#     ALL OFFLINE: a stubbed transport replays a recorded initialize + tools/call exchange; the
+#     declarative table ships EMPTY (the first row arrives via foundry -> curator). Structural thesis:
+#     because a wrapped server lands as an ordinary source, every memory/dedup/ranking mechanism
+#     applies to it with zero new code, and each wrapped server earns its slot per SERVER.
+# ---------------------------------------------------------------------------
+import httpx as _httpx58  # noqa: E402
+import json as _json58  # noqa: E402
+import tempfile as _tf58  # noqa: E402
+from pathlib import Path as _Path58  # noqa: E402
+from penumbra.core.sources import _mcp as _mcp58  # noqa: E402
+from penumbra.core.sources import _declarative as _decl58  # noqa: E402
+from penumbra.core import cache as _cache58  # noqa: E402
+
+# A scripted transport stub: monkeypatch _mcp.http._get_client() (the ONE network touchpoint the
+# client uses, via a streaming POST) to REPLAY a recorded JSON-RPC exchange, so the REAL _post
+# (status branching / session capture / SSE / JSON / MAX_BYTES cap / error paths) run against a
+# fake httpx client. `script` maps a JSON-RPC method -> a callable(payload) -> httpx.Response. The
+# SSRF pre-flight + cache-only are neutralized so the smoke stays fully offline (no DNS).
+_mcp58_sent = []  # records (method, headers, payload) of every POST (session reuse + arg interpolation)
+
+
+class _FakeResp58:
+    """A minimal stand-in for the streaming response _mcp._post reads: status_code, a
+    case-insensitive-ish headers dict, and a fresh iter_raw() each call (a real constructed
+    httpx.Response raises StreamConsumed on iter_raw, so we model the stream directly)."""
+
+    def __init__(self, content, status, headers):
+        self.status_code = status
+        self.headers = headers
+        self._content = content
+
+    def iter_raw(self):
+        yield self._content
+
+
+def _mk_resp58(body, *, status=200, ctype="application/json", headers=None):
+    hdrs = {"content-type": ctype}
+    if headers:
+        hdrs.update(headers)
+    content = body if isinstance(body, (bytes, bytearray)) else _json58.dumps(body).encode("utf-8")
+    return _FakeResp58(bytes(content), status, hdrs)
+
+
+class _FakeStreamCtx58:
+    """A context manager mimicking httpx.Client.stream(...): yields a Response exposing
+    status_code / headers / iter_raw(), exactly what _mcp._post reads."""
+
+    def __init__(self, resp):
+        self._resp = resp
+
+    def __enter__(self):
+        return self._resp
+
+    def __exit__(self, *a):
+        return False
+
+
+class _FakeClient58:
+    def __init__(self, script):
+        self._script = script
+
+    def stream(self, method, url, *, timeout=None, headers=None, json=None, **kwargs):
+        payload = json or {}
+        rpc_method = payload.get("method")
+        _mcp58_sent.append((rpc_method, dict(headers or {}), payload))
+        handler = self._script.get(rpc_method)
+        if handler is None:
+            resp = _mk_resp58({"jsonrpc": "2.0", "id": payload.get("id"),
+                               "error": {"code": -32601, "message": f"no stub for {rpc_method}"}})
+        else:
+            resp = handler(payload)
+        # httpx.Response.iter_raw exists on a constructed Response; status_code/headers are set.
+        return _FakeStreamCtx58(resp)
+
+
+def _install_stub58(script):
+    """Point _mcp.http._get_client at a fake client replaying `script`; neutralize the SSRF/cache
+    guards for offline determinism. Returns a restore() callable."""
+    orig_get = _mcp58.http._get_client
+    orig_blk = _mcp58._netguard.security_block_reason
+    orig_co = _mcp58.cache.cache_only
+    _mcp58.http._get_client = lambda: _FakeClient58(script)
+    _mcp58._netguard.security_block_reason = lambda url: None
+    _mcp58.cache.cache_only = lambda: False
+
+    def _restore():
+        _mcp58.http._get_client = orig_get
+        _mcp58._netguard.security_block_reason = orig_blk
+        _mcp58.cache.cache_only = orig_co
+
+    return _restore
+
+
+# --- (1) MCP client offline: the recorded initialize + tools/call exchange -----------------
+# initialize replies with a session id header; notifications/initialized is a 202 no-body; a
+# tools/call returns structuredContent. The client must capture + RESEND the session id.
+def _init_ok58(payload):
+    return _mk_resp58({"jsonrpc": "2.0", "id": payload.get("id"),
+                       "result": {"protocolVersion": _mcp58._PROTOCOL_VERSION,
+                                  "capabilities": {}, "serverInfo": {"name": "stub", "version": "1"}}},
+                      headers={"Mcp-Session-Id": "SESS-1"})
+
+
+def _initialized_ok58(payload):
+    return _mk_resp58(b"", status=202)  # notification: no body
+
+
+_mcp58_sent.clear()
+_stub_script58 = {
+    "initialize": _init_ok58,
+    "notifications/initialized": _initialized_ok58,
+    "tools/call": lambda p: _mk_resp58(
+        {"jsonrpc": "2.0", "id": p.get("id"),
+         "result": {"structuredContent": {"documents": [
+             {"title": "Alpha", "url": "https://x/a", "snippet": "body a"},
+             {"title": "Beta", "url": "https://x/b", "snippet": "body b"}]}, "isError": False}}),
+}
+_restore_rc58 = _install_stub58(_stub_script58)
+try:
+    _mcp58._CLIENTS.clear()
+    _cl58 = _mcp58.MCPClient("https://stub/mcp")
+    _res58 = _cl58.call_tool("search", {"query": "q", "limit": 5})
+    check("58.1 mcp client: tools/call parses structuredContent",
+          _res58.get("documents", [{}])[0].get("title") == "Alpha")
+    check("58.1 mcp client: initialize captured the Mcp-Session-Id header",
+          _cl58.session_id == "SESS-1")
+    # the session id was RESENT on the tools/call POST (the 3rd send: init, initialized, tools/call)
+    _tc_hdrs58 = next((h for (m, h, _p) in _mcp58_sent if m == "tools/call"), {})
+    check("58.1 mcp client: the captured session id is resent on later calls",
+          _tc_hdrs58.get("Mcp-Session-Id") == "SESS-1")
+    check("58.1 mcp client: the handshake sent initialize + notifications/initialized",
+          [m for (m, _h, _p) in _mcp58_sent][:2] == ["initialize", "notifications/initialized"])
+
+    # text-block-JSON parsing: a single text content block that parses as JSON -> the parsed object.
+    _res_tb58 = _mcp58.MCPClient._parse_tool_result(
+        {"content": [{"type": "text", "text": '{"documents": [{"title": "T", "url": "u"}]}'}]})
+    check("58.1 mcp client: a single JSON text block parses to the object",
+          _res_tb58.get("documents", [{}])[0].get("title") == "T")
+    # prose text blocks (not JSON) -> the _text_blocks shape.
+    _res_prose58 = _mcp58.MCPClient._parse_tool_result(
+        {"content": [{"type": "text", "text": "line one"}, {"type": "text", "text": "line two"}]})
+    check("58.1 mcp client: prose blocks return the _text_blocks shape",
+          _res_prose58.get("_text_blocks") == ["line one", "line two"])
+finally:
+    _restore_rc58()
+
+# SSE-framed response parsed: the tools/call reply arrives as text/event-stream with the JSON-RPC
+# response interleaved among other events. The client must accumulate data: lines to the matching id.
+def _tools_call_sse58(payload):
+    body = (
+        ": a heartbeat comment\n\n"
+        'data: {"jsonrpc":"2.0","method":"notifications/message","params":{"level":"info"}}\n\n'
+        'data: {"jsonrpc":"2.0","id":' + str(payload.get("id")) + ',"result":'
+        '{"structuredContent":{"documents":[{"title":"SSE","url":"https://x/sse"}]},"isError":false}}\n\n'
+    )
+    return _mk_resp58(body.encode("utf-8"), ctype="text/event-stream")
+
+
+_restore_rc58b = _install_stub58({"initialize": _init_ok58, "notifications/initialized": _initialized_ok58,
+                               "tools/call": _tools_call_sse58})
+try:
+    _mcp58._CLIENTS.clear()
+    _cl58b = _mcp58.MCPClient("https://stub/mcp")
+    _res_sse58 = _cl58b.call_tool("search", {"query": "q"})
+    check("58.1 mcp client: an SSE-framed tools/call response is parsed (matching-id event picked)",
+          _res_sse58.get("documents", [{}])[0].get("title") == "SSE")
+finally:
+    _restore_rc58b()
+
+# isError:true tool result -> MCPTransportError -> the adapter returns [].
+_restore_rc58c = _install_stub58({
+    "initialize": _init_ok58, "notifications/initialized": _initialized_ok58,
+    "tools/call": lambda p: _mk_resp58({"jsonrpc": "2.0", "id": p.get("id"),
+        "result": {"content": [{"type": "text", "text": "upstream exploded"}], "isError": True}}),
+})
+try:
+    _mcp58._CLIENTS.clear()
+    _cl58c = _mcp58.MCPClient("https://stub/mcp")
+    _raised58 = False
+    try:
+        _cl58c.call_tool("search", {"query": "q"})
+    except _mcp58.MCPTransportError as _e58:
+        _raised58 = "upstream exploded" in str(_e58)
+    check("58.1 mcp client: an isError tool result raises MCPTransportError carrying the text",
+          _raised58)
+finally:
+    _restore_rc58c()
+
+# re-initialize ONCE on session expiry: the FIRST tools/call returns 404 (session gone); the client
+# re-handshakes and the SECOND tools/call succeeds. Assert exactly one re-initialize happened.
+_expiry_state58 = {"tools_calls": 0, "inits": 0}
+
+
+def _init_count58(payload):
+    _expiry_state58["inits"] += 1
+    return _init_ok58(payload)
+
+
+def _tools_expire_then_ok58(payload):
+    _expiry_state58["tools_calls"] += 1
+    if _expiry_state58["tools_calls"] == 1:
+        return _mk_resp58({"error": "gone"}, status=404)  # session expired -> _SessionExpired
+    return _mk_resp58({"jsonrpc": "2.0", "id": payload.get("id"),
+                       "result": {"structuredContent": {"documents": [{"title": "Recovered", "url": "u"}]},
+                                  "isError": False}})
+
+
+_restore_rc58d = _install_stub58({"initialize": _init_count58,
+                               "notifications/initialized": _initialized_ok58,
+                               "tools/call": _tools_expire_then_ok58})
+try:
+    _mcp58._CLIENTS.clear()
+    _cl58d = _mcp58.MCPClient("https://stub/mcp")
+    _res_recov58 = _cl58d.call_tool("search", {"query": "q"})
+    check("58.1 mcp client: a session-expiry (404) triggers exactly ONE re-initialize + retry",
+          _res_recov58.get("documents", [{}])[0].get("title") == "Recovered"
+          and _expiry_state58["inits"] == 2,  # the original handshake + exactly one re-init
+          f"inits={_expiry_state58['inits']} tools_calls={_expiry_state58['tools_calls']}")
+finally:
+    _restore_rc58d()
+
+# --- (2) Declarative mcp row through the adapter with the stubbed client --------------------
+# Neutralize the doc cache so each drive re-fetches through the stub (never a stale cache hit).
+_orig_getdocs58, _orig_setdocs58 = _cache58.get_docs, _cache58.set_docs
+_cache58.get_docs = lambda *a, **k: None
+_cache58.set_docs = lambda *a, **k: None
+try:
+    # A full fixture mcp row (post_filter False so we see the server-order mapping verbatim).
+    _mcp_row58 = {
+        "name": "fix_mcp", "description": "fixture mcp row", "endpoint": "https://stub/mcp",
+        "transport": "mcp", "tool": "search",
+        "params_template": {"query": "{query}", "limit": "{limit}"},
+        "results_path": "documents",
+        "field_map": {"title": "title", "url": "url", "content": "snippet", "id": "id"},
+        "post_filter": False,
+    }
+    _ad_mcp58 = _decl58._row_to_adapter(_mcp_row58)
+
+    _restore_rc58e = _install_stub58({
+        "initialize": _init_ok58, "notifications/initialized": _initialized_ok58,
+        "tools/call": lambda p: _mk_resp58({"jsonrpc": "2.0", "id": p.get("id"), "result": {
+            "structuredContent": {"documents": [
+                {"title": "Doc1", "url": "https://x/1", "snippet": "content one", "id": "id1"},
+                {"title": "Doc2", "url": "https://x/2", "snippet": "content two", "id": "id2"}]},
+            "isError": False}}),
+    })
+    try:
+        _mcp58._CLIENTS.clear()
+        _mcp58_sent.clear()
+        _docs_mcp58 = _ad_mcp58.search("anything", limit=10)
+        check("58.2 declarative mcp row: maps tool result -> Documents with mapped fields",
+              [d.title for d in _docs_mcp58] == ["Doc1", "Doc2"]
+              and _docs_mcp58[0].url == "https://x/1" and _docs_mcp58[0].content == "content one"
+              and _docs_mcp58[0].source_id == "id1" and _docs_mcp58[0].source == "fix_mcp")
+        # the params_template became the tool ARGUMENTS with {query}/{limit} interpolated (the same
+        # interpolation the http transport does to its query params).
+        _tc_payload58 = next((p for (m, _h, p) in _mcp58_sent if m == "tools/call"), {})
+        _tc_call_args58 = (_tc_payload58.get("params") or {}).get("arguments")
+        check("58.2 declarative mcp row: params_template -> tool arguments; exact {limit} renders TYPED (int)",
+              _tc_payload58.get("params", {}).get("name") == "search"
+              and _tc_call_args58 == {"query": "anything", "limit": 10})
+    finally:
+        _restore_rc58e()
+
+    # text_fallback opt-in: a prose-only tool result (no structured object) -> one doc per block.
+    _mcp_row_tf58 = dict(_mcp_row58, name="fix_mcp_tf", text_fallback=True)
+    _ad_tf58 = _decl58._row_to_adapter(_mcp_row_tf58)
+    _restore_rc58f = _install_stub58({
+        "initialize": _init_ok58, "notifications/initialized": _initialized_ok58,
+        "tools/call": lambda p: _mk_resp58({"jsonrpc": "2.0", "id": p.get("id"), "result": {
+            "content": [{"type": "text", "text": "First answer\nwith detail"},
+                        {"type": "text", "text": "Second answer"}], "isError": False}}),
+    })
+    try:
+        _mcp58._CLIENTS.clear()
+        _docs_tf58 = _ad_tf58.search("anything", limit=10)
+        check("58.2 declarative mcp row: text_fallback opt-in synthesizes one doc per prose block",
+              [d.title for d in _docs_tf58] == ["First answer", "Second answer"]
+              and _docs_tf58[0].content == "First answer\nwith detail"
+              and _docs_tf58[0].url == "https://stub/mcp#search")
+    finally:
+        _restore_rc58f()
+
+    # WITHOUT the opt-in a prose-only result yields [] (fail-visible, not soup).
+    _restore_rc58g = _install_stub58({
+        "initialize": _init_ok58, "notifications/initialized": _initialized_ok58,
+        "tools/call": lambda p: _mk_resp58({"jsonrpc": "2.0", "id": p.get("id"), "result": {
+            "content": [{"type": "text", "text": "prose only, no structure"}], "isError": False}}),
+    })
+    try:
+        _mcp58._CLIENTS.clear()
+        _docs_noopt58 = _ad_mcp58.search("anything", limit=10)  # row without text_fallback
+        check("58.2 declarative mcp row: prose-only WITHOUT text_fallback yields [] (fail-visible)",
+              _docs_noopt58 == [])
+    finally:
+        _restore_rc58g()
+
+    # http rows (transport absent) behave byte-identically: a plain http fixture row is the CONTROL
+    # (no declarative http fixture existed before P10; add one now). Monkeypatch http.get_json only.
+    _http_row58 = {
+        "name": "fix_http", "description": "fixture http control row",
+        "endpoint": "https://api.stub/search", "method": "GET",
+        "params_template": {"q": "{query}", "n": "{limit}"}, "results_path": "hits",
+        "field_map": {"title": "title", "url": "url", "content": "body"}, "post_filter": False,
+    }
+    _ad_http58 = _decl58._row_to_adapter(_http_row58)
+    check("58.2 http control: a transport-absent row defaults to transport 'http'",
+          _ad_http58.transport == "http" and _ad_http58.tool is None)
+    _http_captured58 = {}
+    _orig_getjson58 = _decl58.http.get_json
+
+    def _fake_get_json58(url, params=None, timeout=None):
+        _http_captured58["url"] = url
+        _http_captured58["params"] = params
+        return {"hits": [{"title": "H1", "url": "https://a/1", "body": "b1"},
+                         {"title": "H2", "url": "https://a/2", "body": "b2"}]}
+
+    _decl58.http.get_json = _fake_get_json58
+    try:
+        _docs_http58 = _ad_http58.search("cats", limit=5)
+        check("58.2 http control: a plain http row maps identically (typed {limit} encodes the same on the wire)",
+              [d.title for d in _docs_http58] == ["H1", "H2"]
+              and _docs_http58[0].url == "https://a/1" and _docs_http58[0].content == "b1"
+              and _http_captured58["params"] == {"q": "cats", "n": 5})
+    finally:
+        _decl58.http.get_json = _orig_getjson58
+finally:
+    _cache58.get_docs, _cache58.set_docs = _orig_getdocs58, _orig_setdocs58
+
+# --- (3) the declarative table + registration honor mcp rows. The table SHIPS EMPTY: the first
+#     inhabitant arrives through the FRONT DOOR (source-foundry -> curator -> admit -> the
+#     operator's stage_commit), never as a demo row. (The P10 gate removed the self-wrap loopback
+#     demo: the eye's own SSRF guard blocks loopback:8765 unconditionally, so that row could never
+#     return a document; a row that cannot work is a dead inhabitant, not a born-used mechanism.)
+_sources_json58 = _json58.loads((SOURCES / "sources.json").read_text(encoding="utf-8"))
+check("58.3 declarative table: sources.json parses as a list (empty until the foundry's first admit)",
+      isinstance(_sources_json58, list))
+check("58.3 declarative table: no loopback/private endpoint row may ever ship (the SSRF guard would dead-letter it)",
+      all("127.0.0.1" not in str(r.get("endpoint") or "") and "localhost" not in str(r.get("endpoint") or "")
+          for r in _sources_json58))
+# registration honors an mcp row end-to-end (the same row->adapter path 58.2 exercises), with the
+# router-facing attributes intact + the credentials guard inert-without-file, network-proof.
+_reg_row58 = {"name": "mcp_fixture_reg", "description": "fixture", "transport": "mcp",
+              "endpoint": "https://example.com/mcp", "tool": "search",
+              "params_template": {"query": "{query}", "limit": "{limit}"},
+              "results_path": "documents", "field_map": {"title": "title", "url": "url", "id": "id"},
+              "facets": {"kind": "meta", "domains": ["meta"]},
+              "explicit_only": "fixture row (never shipped)", "needs_credentials": True}
+_reg_ad58 = _decl58._row_to_adapter(_reg_row58)
+check("58.3 registration: an mcp row lands with transport/tool/facets/flags intact",
+      getattr(_reg_ad58, "transport", None) == "mcp" and getattr(_reg_ad58, "tool", None) == "search"
+      and getattr(_reg_ad58, "kind", None) == "meta" and getattr(_reg_ad58, "domains", None) == ["meta"]
+      and bool(_reg_ad58.explicit_only) and _reg_ad58.needs_credentials is True)
+# inert without credentials (transport-level guard): [] and NO network (client build explodes if reached).
+_orig_getclient58h = _mcp58.http._get_client
+_net_touched58 = {"n": 0}
+
+def _explode_getclient58():
+    _net_touched58["n"] += 1
+    raise AssertionError("an mcp row must not touch the network without credentials")
+
+_mcp58.http._get_client = _explode_getclient58
+_orig_getdocs58b, _orig_setdocs58b = _cache58.get_docs, _cache58.set_docs
+_cache58.get_docs = lambda *a, **k: None
+_cache58.set_docs = lambda *a, **k: None
+try:
+    _reg_docs58 = _reg_ad58.search("anything", limit=3)
+    check("58.3 registration: a needs_credentials mcp row is inert without credentials ([] + no network)",
+          _reg_docs58 == [] and _net_touched58["n"] == 0)
+finally:
+    _mcp58.http._get_client = _orig_getclient58h
+    _cache58.get_docs, _cache58.set_docs = _orig_getdocs58b, _orig_setdocs58b
+
+# --- (3c) the FIRST FRONT-DOOR inhabitant: context7, forged by the source-foundry, judged in
+#     /curator (admit, baseline_ref on file), staged via stage_commit, committed by the operator.
+#     Golden fixture = the foundry's recorded live payload (2026-07-03), walked through the REAL
+#     adapter offline. Quota honesty: explicit_only reason string (200 req/month/IP) is load-bearing.
+_ctx7_ad58 = fetcher.get_adapter("context7")
+check("58.3c context7: the first front-door row is registered from sources.json",
+      _ctx7_ad58 is not None and getattr(_ctx7_ad58, "kind", None) == "lookup"
+      and getattr(_ctx7_ad58, "domains", None) == ["code"]
+      and bool(_ctx7_ad58.explicit_only) and _ctx7_ad58.needs_credentials is False)
+if _ctx7_ad58 is not None:
+    _ctx7_payload58 = {"results": [
+        {"id": "/fastapi/fastapi", "title": "FastAPI",
+         "description": "FastAPI framework, high performance, easy to learn, fast to code, ready for production",
+         "branch": "master", "lastUpdateDate": "2026-07-02T06:19:26.605Z", "state": "finalized",
+         "totalTokens": 132360, "totalSnippets": 2184, "stars": 84316, "trustScore": 9.9,
+         "benchmarkScore": 83, "versions": ["0.115.13", "0_116_1", "0.118.2", "0.122.0", "0.128.0"],
+         "score": 417.7908630371094, "vip": True, "verified": True},
+        {"id": "/websites/fastapi_tiangolo", "title": "FastAPI",
+         "description": "FastAPI is a modern, high-performance web framework for building APIs with Python, known for its speed, ease of use, and automatic interactive documentation based on OpenAPI standards.",
+         "branch": "main", "lastUpdateDate": "2026-06-16T10:37:46.259Z", "state": "finalized",
+         "totalTokens": 523585, "totalSnippets": 5270, "stars": -1, "trustScore": 9,
+         "benchmarkScore": 86.55, "versions": [], "score": 395.6318359375, "vip": False,
+         "verified": True}], "searchFilterApplied": False}
+    _orig_getjson58c = _decl58.http.get_json
+    _orig_getdocs58c, _orig_setdocs58c = _cache58.get_docs, _cache58.set_docs
+    _decl58.http.get_json = lambda url, params=None, **kw: _ctx7_payload58
+    _cache58.get_docs = lambda *a, **k: None
+    _cache58.set_docs = lambda *a, **k: None
+    try:
+        _ctx7_docs58 = _ctx7_ad58.search("fastapi", limit=5)
+        _c0 = _ctx7_docs58[0] if _ctx7_docs58 else None
+        check("58.3c context7 golden fixture: the shipped row maps the recorded live payload correctly",
+              _c0 is not None and _c0.source == "context7" and _c0.title == "FastAPI"
+              and _c0.source_id == "/fastapi/fastapi" and _c0.url == "/fastapi/fastapi"
+              and (_c0.content or "").startswith("FastAPI framework")
+              and bool(_c0.date)
+              and _c0.signals.get("score") is not None
+              and _c0.signals["score"].value == 83.0)
+    finally:
+        _decl58.http.get_json = _orig_getjson58c
+        _cache58.get_docs, _cache58.set_docs = _orig_getdocs58c, _orig_setdocs58c
+
+# --- (4) Foundry draft: submit -> candidate carries it -> packet surfaces it -> stage_commit ------
+# All against a temp candidates store so no real curator state is touched.
+import penumbra.core.curator.candidates as _cand58  # noqa: E402
+from penumbra.core.curator import apply as _capply58  # noqa: E402
+import penumbra.server as _srv58  # noqa: E402
+_c58_dir = _Path58(_tf58.mkdtemp())
+_c58_real = (_cand58.STATE_DIR, _cand58.CANDIDATES_PATH, _cand58.SEEN_HOSTS_PATH, _cand58.TRIED_HOSTS_PATH)
+try:
+    _cand58.STATE_DIR = _c58_dir
+    _cand58.CANDIDATES_PATH = _c58_dir / "candidates.json"
+    _cand58.SEEN_HOSTS_PATH = _c58_dir / "seen_hosts.json"
+    _cand58.TRIED_HOSTS_PATH = _c58_dir / "tried_hosts.json"
+
+    _draft58 = {
+        "row": {"name": "drafted_mcp", "description": "a drafted mcp source",
+                "endpoint": "https://ext/mcp", "transport": "mcp", "tool": "search",
+                "params_template": {"query": "{query}"}, "results_path": "results",
+                "field_map": {"title": "title", "url": "url"}},
+        "fixture": {"raw": {"results": [{"title": "X", "url": "https://ext/x"}]},
+                    "expect": {"title": "X"}},
+        "probe_summary": "probed live via the stub; 1 doc, fields populated",
+    }
+    _sub58 = _srv58.penumbra_curator_act.__wrapped__(
+        verb="submit", name="drafted_mcp", urls=["https://ext/mcp"], mode="STRUCTURE",
+        domain="meta", family="other", draft=_draft58)
+    _cid58 = _sub58["candidate_id"]
+    _row58 = _cand58.get(_cid58)
+    check("58.4 foundry: submit with draft -> the candidate carries it verbatim",
+          isinstance(_row58.get("draft"), dict)
+          and _row58["draft"]["probe_summary"].startswith("probed live")
+          and _row58["draft"]["row"]["name"] == "drafted_mcp")
+    check("58.4 foundry: submit did NOT change the state transition (still 'new')",
+          _row58.get("state") == "new")
+
+    # packet surfaces the draft verbatim (even before a probe builds the evidence packet).
+    _pkt58 = _srv58.penumbra_curator_view.__wrapped__(what="packet", candidate_id=_cid58)
+    check("58.4 foundry: penumbra_curator_view(packet) surfaces the draft verbatim",
+          _pkt58.get("draft", {}).get("row", {}).get("name") == "drafted_mcp"
+          and _pkt58["draft"]["fixture"]["expect"]["title"] == "X")
+
+    # stage_commit's rendered block IS the draft row (+ provenance naming the submitting session).
+    _case58 = _capply58.prepare_owner_case(_row58)
+    check("58.4 foundry: stage_commit's rendered block IS the draft row",
+          _case58.get("proposed_config_row", {}).get("name") == "drafted_mcp"
+          and _case58.get("from_draft") is True
+          and _case58.get("config_file") == "sources.json")
+    check("58.4 foundry: the staged draft carries a provenance line naming the submitting session",
+          "agent" in (_case58.get("draft_provenance") or "")
+          and _case58.get("row_valid") is True)
+
+    # submit WITHOUT draft is unchanged (the control): no draft field, prepare falls back to the
+    # evidence-derived row (None here, since no probe ran), NOT a draft.
+    _sub58b = _srv58.penumbra_curator_act.__wrapped__(
+        verb="submit", name="plain_rss", urls=["https://feed/x"], mode="MONITOR",
+        domain="news", family="rss")
+    _row58b = _cand58.get(_sub58b["candidate_id"])
+    _pkt58b = _srv58.penumbra_curator_view.__wrapped__(what="packet", candidate_id=_sub58b["candidate_id"])
+    _case58b = _capply58.prepare_owner_case(_row58b)
+    check("58.4 foundry: submit WITHOUT draft is unchanged (no draft key, no from_draft)",
+          _row58b.get("draft") is None and "draft" not in _pkt58b
+          and "from_draft" not in _case58b)
+    # State-transition FSM is untouched: the frozen edge set still has the P1 admit->owner_review edges.
+    check("58.4 foundry: the candidate FSM edge set is untouched by the draft additive",
+          ("awaiting_verdict", "admitted") in _cand58.ALLOWED_TRANSITIONS
+          and ("admitted", "owner_review") in _cand58.ALLOWED_TRANSITIONS)
+finally:
+    (_cand58.STATE_DIR, _cand58.CANDIDATES_PATH, _cand58.SEEN_HOSTS_PATH,
+     _cand58.TRIED_HOSTS_PATH) = _c58_real
+
+# --- (5) Tripwires: tool count still 17; _PENUMBRA_VERBS unchanged; no new deps in pyproject.toml ------
+# tool count: the P10 wave added NO tool (mcp is a transport slot; the draft is an additive param).
+check("58.5 tripwire: MCP tool count still frozen at 17 (mcp transport added no tool)",
+      _pt_src.count(chr(10) + "@mcp.tool()") == 17,
+      f"found {_pt_src.count(chr(10) + '@mcp.tool()')}")
+# _PENUMBRA_VERBS unchanged: exactly the same 17 tool names (re-use §49's derivation).
+check("58.5 tripwire: _PENUMBRA_VERBS still carries EXACTLY the 17 tool names",
+      set(_t49_verbs.keys()) == _t49_expect_names and len(_t49_verbs) == 17)
+# no new deps: the mcp client is httpx-only (already a core dep); assert the core dep set did not
+# grow a P10 entry. The whole point of a hand-rolled client is ZERO new dependencies.
+_pyproj58 = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+_P10_FORBIDDEN_DEPS = ("mcp-client", "httpx-sse", "sseclient", "aiohttp-sse", "fastmcp-client")
+_p10_new_dep58 = [d for d in _P10_FORBIDDEN_DEPS if d in _pyproj58]
+check("58.5 tripwire: no new dependency was added for the mcp client (httpx-only, hand-rolled)",
+      not _p10_new_dep58, f"unexpected dep(s): {_p10_new_dep58}")
+# the _mcp client imports ONLY stdlib + eye.http + eye.auth + the mcp protocol-version constant
+# (all already present): a positive check that no exotic transport lib crept in.
+import penumbra.core.sources._mcp as _mcpmod58  # noqa: E402
+_mcp_src58 = _pt_inspect.getsource(_mcpmod58)
+check("58.5 tripwire: the mcp client is httpx-only (no new transport import)",
+      # httpx itself is a core dep (the P10 gate added a direct import for the response-rebuild
+      # decode idiom, mirroring http._request_capped); what may never creep in is an EXOTIC
+      # transport lib.
+      "aiohttp" not in _mcp_src58 and "websockets" not in _mcp_src58
+      and "sseclient" not in _mcp_src58 and "requests" not in _mcp_src58)
 
 
 print()

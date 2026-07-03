@@ -37,6 +37,38 @@ What a row declares (see ``sources.json`` for the live rows + per-key notes)::
       "needs_credentials": false
     }
 
+TRANSPORT (the meta-source, P10): a row also declares HOW to move bytes. ``transport`` is
+``"http"`` (absent == "http", full back-compat: GET/POST the ``endpoint``, above) OR ``"mcp"``
+(wrap an external MCP server: the SAME row table, a different transport). A wrapped MCP server
+is NOT a new adapter species; it is this same declarative row with ``tools/call`` instead of a
+GET, so every memory/dedup/ranking mechanism the eye has applies to it unchanged, and each
+wrapped server still earns its slot through the curator razor PER SERVER. An ``mcp`` row adds::
+
+      "transport":  "mcp",
+      "endpoint":   "https://host/mcp",       # the streamable-HTTP MCP endpoint
+      "tool":       "search",                 # REQUIRED: the tool name to tools/call
+      "params_template": {"query": "{query}", # becomes the tool ARGUMENTS template (same
+                          "limit": "{limit}"},#   {query}/{limit} interpolation as http)
+      "results_path": "results",              # dot path INTO the tool result object
+      "field_map":  { ... },                  # walks the tool result (structuredContent, or the
+                                              #   parsed JSON of a single text block)
+      "text_fallback": false                  # OPT-IN. When true AND the tool result is only
+                                              #   prose text blocks (no structured object the
+                                              #   field_map can walk), each block -> one doc
+                                              #   (title = first line, content = the block, url =
+                                              #   endpoint#tool). WITHOUT this opt-in a mapping
+                                              #   that stops matching FAILS VISIBLY to [] + a
+                                              #   debug log, never degrades into prose soup.
+
+Netguard posture: an ``mcp`` row's ``endpoint`` is OPERATOR-CONFIG data (the same trust class
+as every ``sources.json`` endpoint) and rides the same pooled client + SSRF guard + deadline
+machinery (``_mcp._post`` re-applies ``http._request_capped``'s exact guards inline: SSRF
+pre-flight, MAX_BYTES cap, response-rebuild decoding). Retrieved tool RESULTS stay
+UNTRUSTED data (instructions §9), exactly like every other source. ``url_host`` works as usual
+for penumbra_read routing when set. Credentials for an ``mcp`` row live at
+``~/.penumbra/credentials/mcp_<name>.json`` (``{"headers": {...}}``); a ``needs_credentials: true``
+row with no file degrades to [] silently at fetch (the podcast_index precedent).
+
 Boundary (when to NOT use this — fall back to a coded adapter / a base class):
   - the param shape is not a flat dict of interpolated strings (signed requests,
     pagination cursors, multi-call fan-out, GraphQL) -> coded adapter;
@@ -238,11 +270,28 @@ class DeclarativeAPIAdapter:
         limit_cap: int = _DEFAULT_LIMIT_CAP,
         timeout: int = http.DEFAULT_TIMEOUT,
         post_filter: bool = True,
+        transport: str = "http",
+        tool: Optional[str] = None,
+        text_fallback: bool = False,
     ) -> None:
         if "title" not in field_map or "url" not in field_map:
             raise ValueError(
                 f"declarative source {name!r}: field_map must map at least 'title' and 'url'"
             )
+        # Transport slot (P10): "http" (default, full back-compat) or "mcp" (wrap an external MCP
+        # server via tools/call). Only the FETCH differs; the field walk / BM25 / cache are shared.
+        self.transport = (transport or "http").lower()
+        if self.transport not in ("http", "mcp"):
+            raise ValueError(
+                f"declarative source {name!r}: transport must be 'http' or 'mcp', got {transport!r}")
+        self.tool = tool
+        if self.transport == "mcp" and not self.tool:
+            raise ValueError(
+                f"declarative source {name!r}: transport 'mcp' requires a 'tool' name")
+        # text_fallback (mcp only): opt-in to synthesize one doc per prose text block when the tool
+        # result carries NO structured object the field_map can walk. Never silent: without this a
+        # prose-only result fails VISIBLY to [] (see _fetch_results / _docs_from_text_blocks).
+        self.text_fallback = bool(text_fallback)
         self.name = name
         self.description = description
         self.endpoint = endpoint
@@ -278,22 +327,64 @@ class DeclarativeAPIAdapter:
         Only these two placeholders exist (a flat string template is the whole point;
         anything fancier is the boundary). A value is rendered only if it is a string
         CONTAINING a placeholder, so literal params (``"tags": "story"``) pass through
-        untouched and numeric/bool literals are preserved verbatim."""
+        untouched and numeric/bool literals are preserved verbatim. A value that is
+        EXACTLY ``"{limit}"`` renders as the INT, not its string form: http query params
+        encode either identically, but an mcp tools/call argument is TYPED, and a wrapped
+        tool whose inputSchema says integer would reject "5" (P10 gate catch)."""
         capped = min(int(limit), self.limit_cap)
         out: dict = {}
         for k, v in self.params_template.items():
-            if isinstance(v, str) and ("{query}" in v or "{limit}" in v):
+            if v == "{limit}":
+                out[k] = capped
+            elif isinstance(v, str) and ("{query}" in v or "{limit}" in v):
                 out[k] = v.replace("{query}", query or "").replace("{limit}", str(capped))
             else:
                 out[k] = v
         return out
 
     def _fetch_results(self, params: dict) -> list[dict]:
-        """One HTTP call -> the list of raw result objects (via ``results_path``)."""
+        """Fetch by the row's transport -> the list of raw result objects (via ``results_path``).
+
+        transport "http" (default): one GET/POST. transport "mcp": one ``tools/call`` on the
+        wrapped server. Both then walk ``results_path`` out of the response the SAME way. The mcp
+        text_fallback (prose-only result -> synthesized docs) is handled in ``search`` (which reads
+        the raw response via ``_fetch_response``); this returns only the mappable ITEM dicts, so it
+        stays the drop-in ``health_check`` probe path too."""
+        data = self._fetch_response(params)
+        return self._results_from(data)
+
+    def _fetch_response(self, params: dict) -> Any:
+        """Transport-specific fetch -> the raw response OBJECT (an http JSON body, or an mcp tool
+        result). None on any failure (the source contract; mcp transport errors are caught here)."""
+        if self.transport == "mcp":
+            return self._mcp_fetch(params)
         if self.method == "POST":
-            data = http.post_json(self.endpoint, json=params, timeout=self.timeout)
-        else:
-            data = http.get_json(self.endpoint, params=params, timeout=self.timeout)
+            return http.post_json(self.endpoint, json=params, timeout=self.timeout)
+        return http.get_json(self.endpoint, params=params, timeout=self.timeout)
+
+    def _mcp_fetch(self, arguments: dict) -> Any:
+        """One ``tools/call`` on the wrapped MCP server -> the parsed tool result object. The
+        rendered params ARE the tool arguments (same {query}/{limit} interpolation as http). A row
+        with ``needs_credentials`` and no credentials file degrades to None BEFORE any network
+        (the podcast_index precedent). Any transport/protocol error (MCPTransportError) -> None so
+        the source contract (failure -> []) holds; isError tool results log at debug and -> None."""
+        from penumbra.core.sources._mcp import MCPTransportError, get_client, load_mcp_headers
+
+        headers, configured = load_mcp_headers(self.name)
+        if self.needs_credentials and not configured:
+            logger.debug("declarative[%s]: mcp row needs credentials (mcp_%s.json); degrading to []",
+                         self.name, self.name)
+            return None
+        try:
+            client = get_client(self.endpoint, headers=headers or None, timeout_s=self.timeout)
+            return client.call_tool(self.tool, arguments)
+        except MCPTransportError as exc:
+            logger.debug("declarative[%s]: mcp transport error on tool %r: %s",
+                         self.name, self.tool, exc)
+            return None
+
+    def _results_from(self, data: Any) -> list[dict]:
+        """Walk ``results_path`` out of a response object -> the list of raw item dicts."""
         if data is None:
             return []
         results = _dig(data, self.results_path)
@@ -347,6 +438,29 @@ class DeclarativeAPIAdapter:
         s = _as_str(v)
         return [s] if s else []
 
+    def _docs_from_text_blocks(self, blocks: list) -> list[Document]:
+        """mcp text_fallback (opt-in): one Document per prose text block. title = the first
+        non-empty line trimmed, content = the whole block, url = ``endpoint#tool`` (a synthetic but
+        stable, source-owned handle; the wrapped server exposed no per-item URL). Only reached when
+        the row set ``text_fallback: true`` AND the field walk found no structured items, so a
+        mapping that stopped matching still fails visibly to [] unless the row consciously opted in."""
+        docs: list[Document] = []
+        base_url = f"{self.endpoint}#{self.tool}"
+        for i, block in enumerate(blocks):
+            text = _as_str(block)
+            if not text:
+                continue
+            first_line = next((ln.strip() for ln in text.splitlines() if ln.strip()), text[:80])
+            docs.append(Document(
+                source=self.name,
+                source_id=f"{base_url}/{i}",
+                url=base_url,
+                title=first_line[:200] or "(no title)",
+                content=text,
+                metadata={"raw": jsonsafe({"_text_block": text})},
+            ))
+        return docs
+
     # -- SourceAdapter protocol ------------------------------------------------
 
     def search(self, query: str, limit: int = 10) -> list[Document]:
@@ -355,19 +469,32 @@ class DeclarativeAPIAdapter:
         if cached is not None:
             return cached
 
-        items = self._fetch_results(self._render_params(query or "", limit))
-        if not self.post_filter:
-            # Server already ranked for this query → keep API order, just truncate
-            # (and truncate BEFORE mapping, exactly as the former coded adapters did).
-            items = items[:limit]
+        response = self._fetch_response(self._render_params(query or "", limit))
+        items = self._results_from(response)
         docs: list[Document] = []
-        for item in items:
-            try:
-                doc = self._to_doc(item)
-                if doc:
-                    docs.append(doc)
-            except Exception as exc:  # noqa: BLE001 — one bad row never sinks the batch
-                logger.debug("declarative[%s]: skipping malformed item: %s", self.name, exc)
+        if items:
+            if not self.post_filter:
+                # Server already ranked for this query → keep API order, just truncate
+                # (and truncate BEFORE mapping, exactly as the former coded adapters did).
+                items = items[:limit]
+            for item in items:
+                try:
+                    doc = self._to_doc(item)
+                    if doc:
+                        docs.append(doc)
+                except Exception as exc:  # noqa: BLE001: one bad row never sinks the batch
+                    logger.debug("declarative[%s]: skipping malformed item: %s", self.name, exc)
+        elif (self.transport == "mcp" and self.text_fallback
+              and isinstance(response, dict) and isinstance(response.get("_text_blocks"), list)):
+            # Prose-only tool result + the row opted into text_fallback: synthesize docs. This is
+            # the ONLY silent-fallback path, and it is opt-in; a structured result whose field walk
+            # simply missed yields [] (fail-visible) instead of falling through to here.
+            docs = self._docs_from_text_blocks(response["_text_blocks"])
+        elif self.transport == "mcp" and response is not None and not items:
+            # A reached-but-unmappable mcp result with NO opt-in: fail VISIBLY (empty + a loud debug
+            # log), never degrade a structured miss into prose soup.
+            logger.debug("declarative[%s]: mcp tool %r returned no mappable items via results_path "
+                         "%r (text_fallback off) -> []", self.name, self.tool, self.results_path)
 
         if self.post_filter:
             # The ONE shared scorer: filter + rank (title 3x), term-less query keeps order.
@@ -420,6 +547,9 @@ def _row_to_adapter(row: dict) -> DeclarativeAPIAdapter:
         limit_cap=row.get("limit_cap", _DEFAULT_LIMIT_CAP),
         timeout=row.get("timeout", http.DEFAULT_TIMEOUT),
         post_filter=row.get("post_filter", True),
+        transport=row.get("transport", "http"),
+        tool=row.get("tool"),
+        text_fallback=row.get("text_fallback", False),
     )
 
 

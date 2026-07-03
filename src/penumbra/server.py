@@ -941,7 +941,7 @@ def penumbra_view(target: str, kind: str = "auto", sections: str = "", names: st
 
 def _curator_submit(name: str, urls: list[str], mode: str, domain: str, family: str,
                     kind: str = "", regions: Optional[list[str]] = None,
-                    rationale: str = "") -> dict:
+                    rationale: str = "", draft: Optional[dict] = None) -> dict:
     """Submit a CANDIDATE source for admission review. Persists immediately (durable backlog).
 
     mode: one of STRUCTURE / UNWALL / TRANSCRIBE / RECALL / MONITOR (the acquisition edge it
@@ -950,6 +950,11 @@ def _curator_submit(name: str, urls: list[str], mode: str, domain: str, family: 
     / search_index / other). rationale: WHY it earns a slot (free prose; treated as UNTRUSTED
     submitter input downstream).
 
+    draft (foundry-grade, optional): a WORKING artifact the submitter already built:
+    {"row": <sources.json-shape dict>, "fixture": {"raw": <recorded payload>, "expect": {...}},
+    "probe_summary": <str>}. Stored verbatim; the packet surfaces it and stage_commit prefers its
+    row as the ready-to-paste block. Absent = today's behavior.
+
     Returns: {"candidate_id", "state"}. Next: penumbra_curator_probe(candidate_id).
     """
     from penumbra.core.curator import candidates
@@ -957,7 +962,7 @@ def _curator_submit(name: str, urls: list[str], mode: str, domain: str, family: 
         "name": name, "urls": urls, "proposed_mode": mode, "proposed_domain": domain,
         "proposed_family": family, "proposed_kind": kind or None,
         "proposed_regions": regions or [], "rationale_text": rationale,
-        "submitted_by": "agent",
+        "submitted_by": "agent", "draft": draft,
     })
     row = candidates.get(cid) or {}
     return {"candidate_id": cid, "state": row.get("state")}
@@ -1017,6 +1022,10 @@ def _curator_probe(candidate_id: str) -> dict:
 def _curator_packet(candidate_id: str) -> dict:
     """Return the last-built evidence packet for a candidate (a fresh agent picks it up cold).
 
+    When the candidate carries a foundry-grade ``draft`` (a WORKING artifact: the ready-to-paste
+    row + its recorded fixture + a probe summary), it is surfaced VERBATIM under the packet's
+    ``draft`` key so the judge reads a working artifact, not just a host description.
+
     Returns the stored packet, or {"error": ...} / {"state": ...} if none has been built yet.
     """
     from penumbra.core.curator import candidates
@@ -1024,9 +1033,16 @@ def _curator_packet(candidate_id: str) -> dict:
     if cand is None:
         return {"error": f"unknown candidate id {candidate_id!r}"}
     pkt = cand.get("evidence")
+    draft = cand.get("draft")
     if pkt is None:
-        return {"candidate_id": candidate_id, "state": cand.get("state"),
-                "error": "no packet built yet: call penumbra_curator_act(verb='probe') first"}
+        out = {"candidate_id": candidate_id, "state": cand.get("state"),
+               "error": "no packet built yet: call penumbra_curator_act(verb='probe') first"}
+        if draft is not None:
+            out["draft"] = draft  # a draft is readable even before the probe builds the packet
+        return out
+    if draft is not None:
+        # Surface verbatim (a shallow copy so we never mutate the stored packet dict in place).
+        pkt = {**pkt, "draft": draft}
     return pkt
 
 
@@ -1343,7 +1359,8 @@ def penumbra_curator_view(what: str, candidate_id: str = "", state: str = "") ->
       redline_blocked / parked_p2 / error). The judging agent's entry point: list awaiting_verdict,
       then view each packet. See the /curator protocol.
     • what="packet" -> the last-built evidence packet for ``candidate_id`` (a fresh agent picks it up
-      cold); {"error": ...}/{"state": ...} if none built yet.
+      cold); {"error": ...}/{"state": ...} if none built yet. A foundry-grade ``draft`` (the
+      submitter's WORKING row + fixture + probe summary) is surfaced verbatim under ``draft``.
     • what="audit" -> the per-source NEUTRAL audit dossier (P3): facts + LABELED descriptive ratios
       + the mechanical safety flags per source, NO verdict key. Read this, then render KEEP / WATCH /
       PRUNE via penumbra_curator_act(verb="source_verdict", ...).
@@ -1368,12 +1385,15 @@ def penumbra_curator_act(verb: str, candidate_id: str = "", name: str = "",
                     baseline_ref: Optional[dict] = None, confirm: LenientBool = False,
                     verdict: str = "", rationale: str = "", kind: str = "",
                     regions: Optional[list[str]] = None, prune_class: str = "",
-                    coverage_impact: Optional[dict] = None) -> dict:
+                    coverage_impact: Optional[dict] = None,
+                    draft: Optional[dict] = None) -> dict:
     """WRITE a curator source-lifecycle action (every safety gate lives in the impl, unchanged). Pick
     the action with ``verb``; each verb's REQUIRED args (see the /curator protocol):
 
-    • submit  (name, urls, mode, domain, family; optional kind, regions, rationale) -> add a CANDIDATE
-      source to the admission backlog. mode ∈ STRUCTURE/UNWALL/TRANSCRIBE/RECALL/MONITOR.
+    • submit  (name, urls, mode, domain, family; optional kind, regions, rationale, draft) -> add a
+      CANDIDATE source to the admission backlog. mode ∈ STRUCTURE/UNWALL/TRANSCRIBE/RECALL/MONITOR.
+      draft (foundry-grade) is a WORKING artifact ({"row", "fixture", "probe_summary"}) surfaced in
+      the packet and preferred as stage_commit's ready-to-paste block.
     • probe   (candidate_id) -> run the MECHANICAL evidence-gatherers, persist + return the packet.
     • decide  (candidate_id, decision, reasons; baseline_ref required to admit) -> record the
       admit/watch/reject verdict. MECHANICALLY REFUSES an admit on hard red-line / incomplete evidence
@@ -1382,7 +1402,8 @@ def penumbra_curator_act(verb: str, candidate_id: str = "", name: str = "",
       overlay row + live re-register, NO git. Non-auto families are refused (use stage_commit).
     • rollback_live   (name, family) -> full revert of a live-applied overlay row (unregister + drop).
     • stage_commit    (candidate_id) -> ONE-TAP STAGED COMMIT for the NON-auto subclass: prepares the
-      git commit text (does NOT apply); the operator does the git add / commit / deploy by hand.
+      git commit text (does NOT apply); the operator does the git add / commit / deploy by hand. When
+      the candidate has a foundry draft, the draft row IS the ready-to-paste block (+ a provenance line).
     • retire_live     (name; confirm) -> ONE-TAP PRUNE (needs an existing PRUNE verdict): confirm=False
       previews; confirm=True writes a reversible runtime explicit_only override + stages the git commit.
     • rollback_retire (name) -> drop the runtime retire override so the source rejoins the fan-out.
@@ -1394,7 +1415,7 @@ def penumbra_curator_act(verb: str, candidate_id: str = "", name: str = "",
     v = (verb or "").strip().lower()
     if v == "submit":
         return _curator_submit(name, urls or [], mode, domain, family,
-                               kind=kind, regions=regions, rationale=rationale)
+                               kind=kind, regions=regions, rationale=rationale, draft=draft)
     if v == "probe":
         return _curator_probe(candidate_id)
     if v == "decide":

@@ -1,1 +1,31 @@
-[]
+[
+  {
+    "name": "context7",
+    "description": "Context7 (Upstash) live library-docs registry. Query a library / framework / SDK name -> ranked registry records: Context7 ID (/org/project, also the docs-fetch key), description, trustScore (0-10), benchmark quality score (0-100), code-snippet + token counts, pinned doc versions, lastUpdateDate. STRUCTURE mode: answers 'which docs corpus exists for X, how fresh, which versions are indexed' with machine-readable quality metadata no page search returns cleanly; corpora update past training cutoff. NOTE: doc.url carries the Context7 ID path (e.g. /fastapi/fastapi; the API returns no absolute URL) — prepend https://context7.com for the browsable page, or pull curated current snippets: GET https://context7.com/api/v1/{id}?type=txt&topic={q}&tokens={n} (same quota). Keyless; 200 requests per calendar month per IP, shared across search + docs endpoints.",
+    "endpoint": "https://context7.com/api/v1/search",
+    "method": "GET",
+    "params_template": {
+      "query": "{query}"
+    },
+    "results_path": "results",
+    "field_map": {
+      "title": "title",
+      "url": "id",
+      "content": "description",
+      "date": "lastUpdateDate",
+      "score": "benchmarkScore",
+      "id": "id"
+    },
+    "post_filter": false,
+    "cache_ttl": 86400,
+    "url_host": "context7.com",
+    "facets": {
+      "kind": "lookup",
+      "domains": [
+        "code"
+      ]
+    },
+    "explicit_only": "anonymous quota is 200 requests per calendar month per IP, shared across Context7 search + docs endpoints; call by name only, keep out of broad sweeps and standing sensors (health probes also spend quota)",
+    "needs_credentials": false
+  }
+]

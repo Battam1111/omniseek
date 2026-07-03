@@ -75,6 +75,19 @@ All notable changes to Penumbra are documented here. The format follows
   rows with per-job wall-clock budgets and a heartbeat file: no cron to install for any of
   it. Jobs can be toggled per deployment via `profile.json` (`jobs: {"<name>": true|false}`).
 
+- **Any MCP server wraps as a source (P10)**: declarative rows gain `transport: "mcp"` (same
+  row table, same field_map / facets / cache / admission vocabulary; `tools/call` instead of
+  GET, via a hand-rolled streamable-HTTP client, httpx-only, zero new dependencies). Because a
+  wrapped server lands as an ordinary source, every memory mechanism (thin rows, seen_before,
+  conflict ratios, similar) applies to it with zero new code, and each wrapped server still
+  earns its slot through the admission razor per server. Auth headers, when needed, live in
+  `~/.penumbra/credentials/mcp_<name>.json`.
+- **Foundry-grade curator packets (P10)**: a candidate submission can carry a working draft
+  artifact ({row, fixture, probe_summary}); the packet surfaces it and `stage_commit` renders
+  the draft as the ready-to-paste row, so the judge reviews a WORKING source instead of a host
+  name. The first row admitted this way ships in the catalog: `context7` (Upstash's live
+  library-docs registry; explicit-only, its anonymous quota honestly encoded in the row).
+
 - PyPI publish (`pip install penumbra-mcp`) planned.
 
 ## [0.1.0]
