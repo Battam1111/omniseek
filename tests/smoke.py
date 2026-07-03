@@ -9289,26 +9289,34 @@ check("P11 W4: the zhihu adapter maps no created_time/updated_time (HTML-scrape 
 import logging as _lg61  # noqa: E402
 import penumbra.core.prewarm as _pw61  # noqa: E402
 
-# The mechanism: raising the SOURCE PACKAGE logger to ERROR silences source WARNING/INFO on ANY
-# thread for the pass (a logger's level is on the logger object, thread-agnostic -- the property
-# that makes it cover org_watch's non-copy_context workers, which the earlier contextvar missed).
-_src_lg61 = _lg61.getLogger(_pw61._SRC_LOGGER)              # the package the sources log under
-_child61 = _lg61.getLogger(_pw61._SRC_LOGGER + ".api.org_watch_source")  # a real source child logger
-_pw_lg61 = _lg61.getLogger(_pw61.__name__)                  # prewarm's OWN logger (not under .sources)
+# The mechanism: raising the loggers a warm EXERCISES (the source adapters + the shared OpenAlex
+# client) to ERROR silences their WARNING/INFO on ANY thread for the pass (a logger's level is on
+# the logger object, thread-agnostic -- the property that covers org_watch's non-copy_context
+# workers, which the earlier contextvar missed). Legit non-warm startup notices (embedder, bind
+# posture) use OTHER loggers and are NOT silenced.
+_pkg61 = _pw61.__name__.rsplit(".", 1)[0]
+_child61 = _lg61.getLogger(_pkg61 + ".sources.api.org_watch_source")  # a real source child logger
+_oa61 = _lg61.getLogger(_pkg61 + "._openalex")             # the shared OpenAlex client (circuit breaker)
+_pw_lg61 = _lg61.getLogger(_pw61.__name__)                 # prewarm's OWN logger (kept)
+_embed61 = _lg61.getLogger(_pkg61 + ".recall.embed")       # a legit startup-notice logger (NOT silenced)
 
-check("61 prewarm quiet: the source-logger name is the .sources package (rename-safe derivation)",
-      _pw61._SRC_LOGGER.endswith(".sources") and _pw61._SRC_LOGGER == _pw61.__name__.rsplit(".", 1)[0] + ".sources")
+check("61 prewarm quiet: the quiet set is the source package + the OpenAlex client (rename-safe)",
+      _pw61._WARM_QUIET_LOGGERS == (_pkg61 + ".sources", _pkg61 + "._openalex"))
 check("61 prewarm quiet: OUTSIDE the pass, a source-tree WARNING is enabled (normal signal)",
       _child61.isEnabledFor(_lg61.WARNING) is True)
-with _pw61._quiet_source_warnings():
+with _pw61._quiet_warm_noise():
     check("61 prewarm quiet: DURING the pass, a source-tree WARNING is silenced (best-effort non-event)",
           _child61.isEnabledFor(_lg61.WARNING) is False)
+    check("61 prewarm quiet: DURING the pass, the OpenAlex circuit WARNING is silenced too",
+          _oa61.isEnabledFor(_lg61.WARNING) is False)
     check("61 prewarm quiet: DURING the pass, a source-tree ERROR still surfaces (rarer, kept)",
           _child61.isEnabledFor(_lg61.ERROR) is True)
-    check("61 prewarm quiet: DURING the pass, prewarm's OWN logger (not under .sources) is untouched",
+    check("61 prewarm quiet: DURING the pass, prewarm's OWN logger is untouched (its summary shows)",
           _pw_lg61.isEnabledFor(_lg61.WARNING) is True)
-check("61 prewarm quiet: AFTER the pass, the source logger level is restored",
-      _child61.isEnabledFor(_lg61.WARNING) is True and _src_lg61.level == _lg61.NOTSET)
+    check("61 prewarm quiet: DURING the pass, a legit non-warm notice logger (embed) is NOT silenced",
+          _embed61.isEnabledFor(_lg61.WARNING) is True)
+check("61 prewarm quiet: AFTER the pass, every silenced logger's level is restored",
+      _child61.isEnabledFor(_lg61.WARNING) is True and _oa61.isEnabledFor(_lg61.WARNING) is True)
 
 
 print()
