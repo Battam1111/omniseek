@@ -101,7 +101,7 @@ the **[case study](docs/case-study.md)**; for the questions people ask first, th
 ```bash
 git clone https://github.com/Battam1111/penumbra.git && cd penumbra
 docker compose up -d
-docker compose logs penumbra        # copy the bearer token printed on first start
+docker compose logs penumbra        # bearer token, printed on first start (else read the credentials file below)
 curl -s http://127.0.0.1:8765/healthz
 ```
 
@@ -111,6 +111,10 @@ Point your MCP client at `http://127.0.0.1:8765/mcp` with header
 
 Optional extras (their licenses apply; see [NOTICE](NOTICE)):
 set `EXTRAS="[pdf,asr,walled]"` as a build arg in `docker-compose.yml`.
+
+Optional but recommended: set `PENUMBRA_CONTACT_EMAIL` in `docker-compose.yml`. A few sources
+(Crossref, SEC, Unpaywall) use it as a courtesy contact for a faster lane, and it quiets the
+first-boot OpenAlex rate-limit warnings a fresh install otherwise logs.
 
 ### Without Docker
 

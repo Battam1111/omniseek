@@ -50,7 +50,7 @@ world rather than a corpus you loaded.
 ## How is it different from agent-memory tools (mem0, Zep, Letta)?
 
 They remember your conversations with the agent (what the user said, what the agent decided
-about the user). Penumbra remembers the world the agent perceived (what it retrieved, and what
+about the user). Penumbra remembers the world your agent reached (what it retrieved, and what
 it judged about that). Different layer, not a competitor. Run both: one is the agent's memory
 of you, the other is the agent's memory of what it has seen out there.
 
@@ -85,7 +85,7 @@ your own compute. See the [README](../README.md) quick start.
 ## Who is it for?
 
 Agent builders in the MCP ecosystem who want their agent to reach deeper and remember; anyone
-doing research who wants a perception memory that compounds; and self-hosters who want to own
+doing research who wants a memory that compounds; and self-hosters who want to own
 the whole stack. Commercial use is entirely yours to make (Apache-2.0); the project sells
 nothing.
 

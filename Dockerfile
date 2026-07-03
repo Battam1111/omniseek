@@ -1,4 +1,4 @@
-# Penumbra — self-hosted deep-retrieval MCP. CORE (Apache-clean) image: no AGPL PDF lib, no
+# Penumbra: self-hosted deep-retrieval MCP. CORE (Apache-clean) image: no AGPL PDF lib, no
 # torch, no circumvention signer. Opt into extras at build time:  --build-arg EXTRAS="[pdf,asr]".
 FROM python:3.11-slim
 
@@ -23,7 +23,7 @@ COPY tests ./tests
 ARG EXTRAS=""
 RUN pip install -e ".${EXTRAS}"
 
-# Chromium for the scrape/render path — playwright does NOT pip-install the browser binary.
+# Chromium for the scrape/render path (playwright does NOT pip-install the browser binary).
 RUN python -m playwright install --with-deps chromium || python -m playwright install chromium
 
 COPY deploy/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh

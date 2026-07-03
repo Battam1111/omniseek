@@ -31,7 +31,7 @@ All notable changes to Penumbra are documented here. The format follows
   evidence-carrying edge under `conservative` | `working` | `exploratory` collapse policies.
 - **Retrieval-anchored thin memory (P2.0)**: every retrieved doc from a non-indexed source
   leaves a thin graph row (title + url + fingerprint + external ids, never content), so the
-  perception history is complete; every search stamps per-doc `seen_before` / `first_seen_at`.
+  retrieval history is complete; every search stamps per-doc `seen_before` / `first_seen_at`.
   Walled sources stay out by default (`walled.remember_retrievals`, an operator-privacy line).
 - **Academic entities on the wall (P2)**: the citation mapper and paper enrichment become graph
   write taps minting work / person / topic / venue nodes and cites / authored / about /
@@ -65,7 +65,7 @@ All notable changes to Penumbra are documented here. The format follows
   stamp and the `conflicts` edge. What counts as material is the reader's call.
 - **Thin rows embed their titles (P7)**: docs from non-indexed sources get title embeddings at
   mint time (plus a bounded self-converging catch-up in the writer's idle cycles), so `similar`
-  ranks across the whole perception history, not just the indexed subset; `stats` reports the
+  ranks across the whole retrieval history, not just the indexed subset; `stats` reports the
   coverage gauge (`document_thin_embedded`). The thin vectors never feed search's recall arm.
 
 - **Self-maintenance runs in-process (P9)**: the sensor scheduler generalized into a job

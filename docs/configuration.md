@@ -72,7 +72,7 @@ the templates together are always the authoritative, up-to-date list.
 
 ### Polite-pool contact
 
-OpenAlex, Crossref, SEC, and Unpaywall give a faster lane to requests that carry a contact email.
+Crossref, SEC, and Unpaywall give a faster lane to requests that carry a contact email (OpenAlex now treats it as a courtesy contact, not a fast lane).
 Set `PENUMBRA_CONTACT_EMAIL`, or write `~/.penumbra/credentials/contact.json` as `{"email": "..."}`.
 Left unset, Penumbra falls back to a reserved placeholder, so a cold checkout still forms a valid
 request.

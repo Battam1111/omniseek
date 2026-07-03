@@ -39,7 +39,7 @@ them locally to act on the operator's behalf and does not export them.
 
 ## 4. Data flow
 
-Penumbra perceives in two ways, and the results go to one place:
+Penumbra reaches in two ways, and the results go to one place:
 
 - It fetches from **public and curated sources** over ordinary requests.
 - For walled sources, it uses the **operator's own logged-in browser session on the host** (the

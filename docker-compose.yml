@@ -1,4 +1,4 @@
-# Penumbra — one-command self-host.   docker compose up -d   then point your MCP client at
+# Penumbra: one-command self-host.   docker compose up -d   then point your MCP client at
 # http://127.0.0.1:8765/mcp  with  Authorization: Bearer <token>  (the token is printed on first
 # start; see `docker compose logs penumbra`, or read ./.penumbra/credentials/penumbra_http.json).
 services:
@@ -7,11 +7,11 @@ services:
       context: .
       args:
         EXTRAS: ""          # set to "[pdf,asr,walled]" to opt into those extras (you accept their
-                            # licenses, incl. AGPL PyMuPDF for [pdf] — see NOTICE)
+                            # licenses, incl. AGPL PyMuPDF for [pdf]; see NOTICE)
     image: penumbra:local
     restart: unless-stopped
     ports:
-      - "127.0.0.1:8765:8765"   # HOST-LOOPBACK ONLY. Penumbra drives credentialed tools — do NOT
+      - "127.0.0.1:8765:8765"   # HOST-LOOPBACK ONLY. Penumbra drives credentialed tools, do NOT
                                 # expose it to the internet; put a reverse proxy + firewall in front
                                 # if you must reach it off-box, and keep the bearer token secret.
     volumes:
@@ -19,5 +19,5 @@ services:
       - ./.penumbra-inbox:/root/penumbra-inbox    # penumbra_read_document inbox (scp/copy files here)
     environment:
       PENUMBRA_HTTP_HOST: "0.0.0.0"   # bind inside the container; the port-map above keeps it host-loopback
-      # PENUMBRA_CONTACT_EMAIL: "you@example.org"   # polite-pool fast lane for OpenAlex/Crossref/etc (recommended)
+      # PENUMBRA_CONTACT_EMAIL: "you@example.org"   # courtesy contact for a faster lane (Crossref/SEC/Unpaywall); also quiets first-boot OpenAlex warnings (recommended)
       # PENUMBRA_ALLOW_NETS: ""                     # extra CIDRs the SSRF guard may reach (advanced)

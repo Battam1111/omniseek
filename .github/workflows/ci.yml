@@ -3,7 +3,7 @@ on:
   push:
     branches: [ main ]
   pull_request:
-  workflow_dispatch:        # manual trigger (Actions tab -> Run workflow) — no local docker needed
+  workflow_dispatch:        # manual trigger (Actions tab -> Run workflow): no local docker needed
 
 jobs:
   smoke:

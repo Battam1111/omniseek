@@ -26,7 +26,7 @@ for you. Instead:
 Your session lives in the browser's own profile directory on your disk. Nothing credential-bearing
 ever enters Penumbra's process, its cache, or this repository. If you close the browser or log out,
 Penumbra simply can't reach that source until you log back in. This is the same posture as a person
-opening a tab: Penumbra perceives only what you, the account holder, are already entitled to see.
+opening a tab: Penumbra reaches only what you, the account holder, are already entitled to see.
 
 ---
 

@@ -20,7 +20,7 @@ RestartSec=5
 # PENUMBRA_HTTP_HOST deliberately (Penumbra warns when it binds a non-loopback address).
 Environment=PENUMBRA_HTTP_HOST=127.0.0.1
 Environment=PENUMBRA_HTTP_PORT=8765
-# Environment=PENUMBRA_CONTACT_EMAIL=you@example.org   # polite-pool fast lane (recommended)
+# Environment=PENUMBRA_CONTACT_EMAIL=you@example.org   # courtesy contact for a faster lane; also quiets first-boot OpenAlex warnings (recommended)
 
 # Hardening: Penumbra only needs to write its own state dir + inbox.
 NoNewPrivileges=true
