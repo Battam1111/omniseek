@@ -75,7 +75,9 @@ If a xiaohongshu note URL appears, `penumbra_read(url)` retrieves full note + co
   a date (stored edges only, tier + method shown, no collapsing), and `similar` lists the
   vector-nearest doc candidates for an anchor doc by rank (proposals only, method `align:embed`). When
   an exploratory view or `similar` surfaces a same_as candidate you verify, record it with
-  `penumbra_ruling(action=create)` so the `working` policy collapses it thereafter.
+  `penumbra_ruling(action=create)` so the `working` policy collapses it thereafter. Relations
+  judged FROM content (a filing says A acquired B) persist via `penumbra_statement` (directed,
+  typed, attributed with note + source doc; identity types stay with `penumbra_ruling`).
 - **Flag conflicts, don't average**: when _meta.conflicts appears, present the divergence,
   don't pick a winner.
 - **Stamp freshness**: carry each key fact's freshness_days.

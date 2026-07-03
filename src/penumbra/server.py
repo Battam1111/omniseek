@@ -106,6 +106,9 @@ _PENUMBRA_INSTRUCTIONS = (
     "delete/run; scheduled runs execute in-process on the live service). penumbra_ruling (record/list/"
     "retract your identity rulings same_as|not_same_as; "
     "action=create/list/delete — the one judgment channel the graph's working policy applies). "
+    "penumbra_statement (record/list/retract your typed, DIRECTED relation statements: free vocabulary, "
+    "the general sibling of penumbra_ruling; identity types are refused, they belong to penumbra_ruling; "
+    "action=create/list/delete — projected at read time under working/exploratory, never conservative). "
     "penumbra_graph (the memory of relations, one stable verb: view= + args={...}; a no-view call lists "
     "the views; find -> stats -> neighborhood -> between -> voices -> "
     "since -> similar; policies conservative|working|exploratory). Scholarly depth: penumbra_field_skeleton / "
@@ -160,7 +163,12 @@ _PENUMBRA_INSTRUCTIONS = (
     "Identity rulings (same_as / not_same_as) persist in ~/.penumbra/state/graph_rulings.json "
     "(the sensors.json precedent: the eye stores your judgment as declarative state, never makes "
     "one); write them via penumbra_ruling(action=create) and they are applied at read time under the "
-    "working policy."
+    "working policy. "
+    "Relations you judge FROM content (typed, directed, attributed: 'X acquired_by Y', 'P refutes Q') "
+    "persist the same way via penumbra_statement, and project at read time under working / exploratory "
+    "(never conservative); identity stays penumbra_ruling (statements refuse same_as / not_same_as). A "
+    "conclusion that reads as PROSE (a lesson, a synthesis) belongs in the driver's own brain, not "
+    "the wall's J channel, which holds graph-shaped relations between wall-addressable ids."
     "\n\n"
     "(7) WALLED SOURCES: explicit_only sources (zhihu, xiaohongshu, yipinsanfendi, xiaomuchong, "
     "...) are deadline-dropped from the broad sweep. Name them BY DOMAIN match only; naming the "
@@ -1732,19 +1740,94 @@ def penumbra_ruling(action: str, src: str = "", dst: str = "", verdict: str = ""
     return {"error": f"unknown action {action!r}; valid: create | list | delete"}
 
 
+@mcp.tool()
+@_threaded
+def penumbra_statement(action: str, src: str = "", dst: str = "", type: str = "",
+                  note: str = "", doc: str = "", about: str = "") -> dict:
+    """Record / list / retract your typed RELATION statements (directed agent judgments the graph's working policy projects) - the general sibling of penumbra_ruling.
+
+    The eye never MAKES a statement; it STORES yours as declarative state and PROJECTS it at read time
+    (the rulings / sensors.json precedent: judgment persisted as config the eye applies mechanically).
+    A statement is a DIRECTED, typed relation between two graph node ids: "openai --acquired_by-->
+    someone", "paper X --refutes--> claim Y". It surfaces in penumbra_graph's neighborhood / between / since
+    under the ``working`` and ``exploratory`` policies (never ``conservative`` — that is the pure
+    mechanical world); the directed triple (src, dst, type) is the KEY, so re-creating it REPLACES the
+    prior note (declarative state, not a log; git history is the audit trail), and direction is YOUR
+    assertion, never normalized.
+
+    ``type`` is FREE agent vocabulary, mechanically slugged (lowercase, spaces -> underscores,
+    ``[a-z0-9_]`` only, <= 40 chars). Two types are REFUSED with a pointer to penumbra_ruling:
+    ``same_as`` / ``not_same_as`` — identity is a pair-keyed, symmetric judgment the collapse machinery
+    consumes, so it keeps exactly ONE judgment source (penumbra_ruling). Endpoints may be ANY node id, even
+    ones no tap ever minted (``inst:label:openai``): a statement may pre-date the wall. The
+    brain-vs-statement boundary: prose understanding (a lesson, a conclusion, context) belongs to the
+    driver's own brain; a statement is a graph-shaped RELATION between wall-addressable ids that views
+    must project.
+
+    ``action`` picks what to do:
+    • action="create" (src, dst, type, note; optional doc) -> record the statement. ``note`` is the
+      REQUIRED reasoning; ``doc`` is the optional provenance node id (usually a ``doc:{source}:{sid}``;
+      strongly encouraged, never validated for existence). Returns {created: true, statement, replaced}
+      (replaced=true if it overwrote a prior note for the triple). A bad type / empty endpoint / empty
+      note / a refused identity type -> {"error": ...}.
+    • action="list" (optional about=node id, optional type) -> {statements, count}, filtered to
+      statements touching ``about`` and/or of ``type`` when given. Capped at 200 with a ``capped`` flag
+      (the no-silent-caps discipline).
+    • action="delete" (src, dst, type) -> {deleted: true/false} (false if no statement existed for the
+      directed triple).
+
+    Like penumbra_ruling this is a SEPARATE tool from penumbra_graph (penumbra_graph stays read-only, hence batchable
+    in penumbra_gather; a write verb folded in would let the gather whitelist write). Unknown action ->
+    {"error": ...}.
+    """
+    from penumbra.core.recall import graph
+    a = (action or "").strip().lower()
+
+    if a == "create":
+        try:
+            res = graph.save_statement(src, dst, type, note, doc)
+        except ValueError as exc:
+            return {"error": str(exc)}
+        return {"created": True, "statement": res["statement"], "replaced": res["replaced"]}
+
+    if a == "list":
+        statements = graph.load_statements()
+        anchor = (about or "").strip()
+        if anchor:
+            statements = [s for s in statements
+                          if anchor in ((s.get("src") or "").strip(), (s.get("dst") or "").strip())]
+        want_type = (type or "").strip()
+        if want_type:
+            try:
+                slug = graph._slug_statement_type(want_type)
+            except ValueError as exc:
+                return {"error": str(exc)}
+            statements = [s for s in statements if (s.get("type") or "").strip() == slug]
+        capped = len(statements) > 200
+        return {"statements": statements[:200], "count": len(statements[:200]), "capped": capped}
+
+    if a == "delete":
+        if not src or not dst or not type:
+            return {"error": "action=delete requires src, dst, and type"}
+        return {"deleted": graph.delete_statement(src, dst, type)}
+
+    return {"error": f"unknown action {action!r}; valid: create | list | delete"}
+
+
 # The capability index penumbra_sources hands back on its orient call, DERIVED (mechanism demoted to data,
 # the same move as _GATHER_TOOLS above): each entry is a registered tool's name -> its docstring's
-# FIRST LINE, over an EXPLICIT tuple of ALL SEVENTEEN tools. A hand-written dict drifted once already
-# (a fixpoint rescan caught penumbra_graph missing); derivation cannot. Each tool's first docstring line
-# is written to READ as a capability blurb; the __wrapped__ unwrap reaches the underlying sync body
-# where the source docstring lives (past @_threaded's functools.wraps async wrapper).
+# FIRST LINE, over an EXPLICIT tuple of ALL EIGHTEEN tools (P8 added penumbra_statement). A hand-written
+# dict drifted once already (a fixpoint rescan caught penumbra_graph missing); derivation cannot. Each
+# tool's first docstring line is written to READ as a capability blurb; the __wrapped__ unwrap reaches
+# the underlying sync body where the source docstring lives (past @_threaded's functools.wraps async
+# wrapper).
 _PENUMBRA_VERBS: dict[str, str] = {
     fn.__name__: ((fn.__wrapped__ if hasattr(fn, "__wrapped__") else fn).__doc__ or "").strip().splitlines()[0]
     for fn in (
         penumbra_sources, penumbra_search, penumbra_read, penumbra_view,
         penumbra_field_skeleton, penumbra_paper_recommend, penumbra_paper_enrich,
         penumbra_resolve_identity, penumbra_coauthors, penumbra_institution_cohort,
-        penumbra_transcribe, penumbra_graph, penumbra_gather, penumbra_sensor, penumbra_ruling,
+        penumbra_transcribe, penumbra_graph, penumbra_gather, penumbra_sensor, penumbra_ruling, penumbra_statement,
         penumbra_curator_view, penumbra_curator_act,
     )
 }

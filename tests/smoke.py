@@ -5477,11 +5477,13 @@ check("gather: whitelist excludes penumbra_sensor / penumbra_curator_view / penu
 import penumbra.server as _pt_srv  # noqa: E402
 import inspect as _pt_inspect  # noqa: E402
 _pt_src = _pt_inspect.getsource(_pt_srv)
-_TOOL_COUNT_FROZEN = 17   # 16 + penumbra_ruling (P3: the identity-ruling WRITE verb; the conscious
-#                            16 -> 17 bump the graph design named — a judgment store needs a write
-#                            channel, and a SEPARATE tool keeps penumbra_graph read-only / gather-safe).
+_TOOL_COUNT_FROZEN = 18   # 17 + penumbra_statement (P8: the typed-statements WRITE verb; the conscious
+#                            17 -> 18 bump the graph design named — a statement is a DIRECTED, typed
+#                            RELATION judgment, the general sibling of penumbra_ruling; a SEPARATE tool
+#                            keeps penumbra_graph read-only / gather-safe, and one verb per key-semantics
+#                            (penumbra_ruling for pair-keyed identity, penumbra_statement for everything else).
 _PROMPT_COUNT_FROZEN = 1  # investigate(target, shape): the ONE recipe channel
-check("parsimony tripwire: MCP tool count == frozen 17 (bump consciously or fuse)",
+check("parsimony tripwire: MCP tool count == frozen 18 (bump consciously or fuse)",
       _pt_src.count(chr(10) + "@mcp.tool()") == _TOOL_COUNT_FROZEN,
       f"found {_pt_src.count(chr(10) + '@mcp.tool()')}")
 check("parsimony tripwire: MCP prompt count == frozen 1 (the one recipe channel)",
@@ -6461,22 +6463,22 @@ finally:
     _rstore._disabled = _t49_disabled_prev
     _rstore._local = _t49_local_prev
 
-# (5) VERBS: _PENUMBRA_VERBS is the capability index penumbra_sources surfaces. It must carry EXACTLY the 17 tool
-#     names (P3 added penumbra_ruling), every value NON-EMPTY and DERIVED (== that tool's docstring first
-#     line, not hand-written prose that could drift). It drifted once already (it was a hand-maintained
-#     dict); recompute each tool's docstring first line independently and demand equality, so a
-#     docstring edit or a renamed tool that skips the dict is caught.
+# (5) VERBS: _PENUMBRA_VERBS is the capability index penumbra_sources surfaces. It must carry EXACTLY the 18 tool
+#     names (P3 added penumbra_ruling; P8 added penumbra_statement), every value NON-EMPTY and DERIVED (== that
+#     tool's docstring first line, not hand-written prose that could drift). It drifted once already (it
+#     was a hand-maintained dict); recompute each tool's docstring first line independently and demand
+#     equality, so a docstring edit or a renamed tool that skips the dict is caught.
 from penumbra.server import _PENUMBRA_VERBS as _t49_verbs  # noqa: E402
 _t49_tool_fns = (
     _srv.penumbra_sources, _srv.penumbra_search, _srv.penumbra_read, _srv.penumbra_view,
     _srv.penumbra_field_skeleton, _srv.penumbra_paper_recommend, _srv.penumbra_paper_enrich,
     _srv.penumbra_resolve_identity, _srv.penumbra_coauthors, _srv.penumbra_institution_cohort,
     _srv.penumbra_transcribe, _srv.penumbra_graph, _srv.penumbra_gather, _srv.penumbra_sensor, _srv.penumbra_ruling,
-    _srv.penumbra_curator_view, _srv.penumbra_curator_act,
+    _srv.penumbra_statement, _srv.penumbra_curator_view, _srv.penumbra_curator_act,
 )
 _t49_expect_names = {fn.__name__ for fn in _t49_tool_fns}
-check("verbs: _PENUMBRA_VERBS has EXACTLY the 17 tool names",
-      set(_t49_verbs.keys()) == _t49_expect_names and len(_t49_verbs) == 17,
+check("verbs: _PENUMBRA_VERBS has EXACTLY the 18 tool names",
+      set(_t49_verbs.keys()) == _t49_expect_names and len(_t49_verbs) == 18,
       f"missing={_t49_expect_names - set(_t49_verbs)} extra={set(_t49_verbs) - _t49_expect_names}")
 check("verbs: every _PENUMBRA_VERBS value is non-empty",
       all(bool((v or '').strip()) for v in _t49_verbs.values()),
@@ -7256,7 +7258,7 @@ check("p5 tripwire: align:embed is NOT a declared tap method (a view-only propos
       "align:embed" not in _graph.declared_vocabulary()["methods"])
 
 # (9) SURFACE: penumbra_graph now exposes the 7 views; the unknown-view error names all 7; the connect-time
-#     brief carries the 7-view chain; the tool count + verbs are UNCHANGED (no new tool: 17 stays 17).
+#     brief carries the 7-view chain; P5 added no tool (the live count below is 18 since P8's penumbra_statement).
 _s52_eg = _srv.penumbra_graph.__wrapped__ if hasattr(_srv.penumbra_graph, "__wrapped__") else _srv.penumbra_graph
 _S52_VIEWS = ("find", "stats", "neighborhood", "between", "voices", "since", "similar")
 _s52_unknown = _s52_eg(view="frobnicate")
@@ -7272,11 +7274,13 @@ check("p5 surface: view=similar routes to the similar view (its anchor error, no
       "error" in _s52_eg(view="similar", args={"anchor": "work:openalex:W1"}))
 check("p5 surface: _PENUMBRA_INSTRUCTIONS carries the 7-view chain (find -> ... -> since -> similar)",
       "find -> stats -> neighborhood -> between -> voices -> since -> similar" in _srv._PENUMBRA_INSTRUCTIONS)
-# tool count UNCHANGED: no new tool (the two views are penumbra_graph actions). _PENUMBRA_VERBS stays 17,
-# the gather whitelist stays 12, and penumbra_graph is still a registered read-only tool.
+# P5 itself added no tool (since/similar are penumbra_graph views, not new tools). The LIVE _PENUMBRA_VERBS count
+# is now 18 (P8 added penumbra_statement, the only wave since to add a verb); the gather whitelist stays 12,
+# and penumbra_graph is still a registered read-only tool.
 from penumbra.server import _PENUMBRA_VERBS as _s52_verbs  # noqa: E402
-check("p5 surface: the tool count is UNCHANGED (17) — since/similar are penumbra_graph views, not new tools",
-      len(_s52_verbs) == 17 and len(_GATHER_TOOLS) == 12 and "penumbra_graph" in _GATHER_TOOLS)
+check("p5 surface: since/similar are penumbra_graph views not new tools (the live verb count is 18, "
+      "unchanged BY P5; the +1 over P3's 17 is P8's penumbra_statement)",
+      len(_s52_verbs) == 18 and len(_GATHER_TOOLS) == 12 and "penumbra_graph" in _GATHER_TOOLS)
 
 
 # ---------------------------------------------------------------------------
@@ -8789,14 +8793,16 @@ finally:
     (_cand58.STATE_DIR, _cand58.CANDIDATES_PATH, _cand58.SEEN_HOSTS_PATH,
      _cand58.TRIED_HOSTS_PATH) = _c58_real
 
-# --- (5) Tripwires: tool count still 17; _PENUMBRA_VERBS unchanged; no new deps in pyproject.toml ------
-# tool count: the P10 wave added NO tool (mcp is a transport slot; the draft is an additive param).
-check("58.5 tripwire: MCP tool count still frozen at 17 (mcp transport added no tool)",
-      _pt_src.count(chr(10) + "@mcp.tool()") == 17,
+# --- (5) Tripwires: live tool count == 18; _PENUMBRA_VERBS matches; no new deps in pyproject.toml --------
+# tool count: the P10 wave added NO tool (mcp is a transport slot; the draft is an additive param); the
+# live count is 18 because P8 (a later wave) added penumbra_statement. The invariant tracks REALITY, so it
+# reads 18 here and in §49's derivation, which now includes penumbra_statement.
+check("58.5 tripwire: MCP tool count == frozen 18 (P10 added no tool; the count is P8's penumbra_statement)",
+      _pt_src.count(chr(10) + "@mcp.tool()") == 18,
       f"found {_pt_src.count(chr(10) + '@mcp.tool()')}")
-# _PENUMBRA_VERBS unchanged: exactly the same 17 tool names (re-use §49's derivation).
-check("58.5 tripwire: _PENUMBRA_VERBS still carries EXACTLY the 17 tool names",
-      set(_t49_verbs.keys()) == _t49_expect_names and len(_t49_verbs) == 17)
+# _PENUMBRA_VERBS carries the same 18 tool names §49 derives (P10 added none; P8 added penumbra_statement).
+check("58.5 tripwire: _PENUMBRA_VERBS carries EXACTLY the 18 tool names",
+      set(_t49_verbs.keys()) == _t49_expect_names and len(_t49_verbs) == 18)
 # no new deps: the mcp client is httpx-only (already a core dep); assert the core dep set did not
 # grow a P10 entry. The whole point of a hand-rolled client is ZERO new dependencies.
 _pyproj58 = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
@@ -8814,6 +8820,279 @@ check("58.5 tripwire: the mcp client is httpx-only (no new transport import)",
       # transport lib.
       "aiohttp" not in _mcp_src58 and "websockets" not in _mcp_src58
       and "sseclient" not in _mcp_src58 and "requests" not in _mcp_src58)
+
+
+# ---------------------------------------------------------------------------
+# 59. P8: penumbra_statement, the typed agent-statements channel (design "P8 shipped 2026-07-04").
+#     The rulings idiom GENERALIZED: an agent-judged RELATION persists as attributed declarative
+#     state and projects at read time. Where a ruling is pair-keyed + symmetric (identity, consumed by
+#     the collapse machinery), a statement is a DIRECTED triple (src, dst, type) with FREE agent
+#     vocabulary. Store checks monkeypatch _graph.STATEMENTS_PATH to a temp file (no real ~/.penumbra
+#     state); the ladder / find / since / voices checks use a FRESH temp-db (the §47/§50 pattern,
+#     restore in finally); the tool + tripwire checks are pure body/registration checks.
+# ---------------------------------------------------------------------------
+
+# (1) STATEMENTS STORE (save_statement / load_statements / delete_statement) on a monkeypatched path.
+_s59_path_prev = _graph.STATEMENTS_PATH
+_graph.STATEMENTS_PATH = Path(_tf47.mkdtemp()) / "graph_statements.json"
+try:
+    # save -> load roundtrip; the type slugs, direction is preserved (NOT normalized), stated_at stamped.
+    _s59_save = _graph.save_statement("inst:label:openai", "inst:label:anthropic", "Acquired By",
+                                      note="rumor smoke", doc="doc:zhihu:z1")
+    _s59_loaded = _graph.load_statements()
+    _s59_e = _s59_loaded[0] if _s59_loaded else {}
+    check("statement (1): save -> load roundtrip, type slugged (Acquired By -> acquired_by) + stated_at stamped",
+          len(_s59_loaded) == 1 and _s59_e.get("src") == "inst:label:openai"
+          and _s59_e.get("dst") == "inst:label:anthropic" and _s59_e.get("type") == "acquired_by"
+          and _s59_e.get("note") == "rumor smoke" and _s59_e.get("doc") == "doc:zhihu:z1"
+          and bool(_s59_e.get("stated_at")) and _s59_save.get("replaced") is False)
+    # DIRECTED key: (A, B, t) and (B, A, t) are DISTINCT (direction is the assertion, never normalized).
+    _s59_rev = _graph.save_statement("inst:label:anthropic", "inst:label:openai", "acquired_by",
+                                     note="reverse direction")
+    check("statement (1): the directed triple is the key, (A,B,t) vs (B,A,t) are DISTINCT (len 2, new key)",
+          _s59_rev.get("replaced") is False and len(_graph.load_statements()) == 2)
+    # re-state the SAME directed triple REPLACES (declarative state, not a log): len stays 2, note updated.
+    _s59_re = _graph.save_statement("inst:label:openai", "inst:label:anthropic", "acquired_by",
+                                    note="updated note")
+    _s59_after = _graph.load_statements()
+    _s59_updated = [s for s in _s59_after if s["src"] == "inst:label:openai"][0]
+    check("statement (1): re-stating the same directed triple REPLACES (len stays 2, note updated)",
+          _s59_re.get("replaced") is True and len(_s59_after) == 2
+          and _s59_updated.get("note") == "updated note")
+    # delete true then false (the directed triple is the key, type re-slugged so a raw type still matches).
+    _s59_del1 = _graph.delete_statement("inst:label:openai", "inst:label:anthropic", "Acquired By")
+    _s59_del2 = _graph.delete_statement("inst:label:openai", "inst:label:anthropic", "acquired_by")
+    check("statement (1): delete removes (True), then a second delete is a no-op (False), keyed on the triple",
+          _s59_del1 is True and _s59_del2 is False and len(_graph.load_statements()) == 1)
+    # validation: empty note / bad type chars / >40 / same_as / not_same_as each raises ValueError, and
+    # the identity-type message POINTS at penumbra_ruling.
+    _s59_empty_note = _s59_bad_type = _s59_long = _s59_same = _s59_notsame = False
+    _s59_same_msg = _s59_notsame_msg = ""
+    try:
+        _graph.save_statement("a", "b", "rel", note="")
+    except ValueError:
+        _s59_empty_note = True
+    try:
+        _graph.save_statement("a", "b", "!!!", note="x")   # slugs to empty -> ValueError
+    except ValueError:
+        _s59_bad_type = True
+    try:
+        _graph.save_statement("a", "b", "x" * 41, note="x")
+    except ValueError:
+        _s59_long = True
+    try:
+        _graph.save_statement("a", "b", "same_as", note="x")
+    except ValueError as _exc:
+        _s59_same = True; _s59_same_msg = str(_exc)
+    try:
+        _graph.save_statement("a", "b", "not_same_as", note="x")
+    except ValueError as _exc:
+        _s59_notsame = True; _s59_notsame_msg = str(_exc)
+    check("statement (1): validation raises ValueError (empty note / bad-type chars / >40 chars)",
+          _s59_empty_note and _s59_bad_type and _s59_long)
+    check("statement (1): same_as / not_same_as are REFUSED with an penumbra_ruling pointer in the message",
+          _s59_same and _s59_notsame
+          and "penumbra_ruling" in _s59_same_msg and "penumbra_ruling" in _s59_notsame_msg)
+finally:
+    _graph.STATEMENTS_PATH = _s59_path_prev
+
+# (2, 3, 4, 5, 6) LADDER + find + since + voices + stats on a FRESH temp-db (the §50 pattern).
+_p59_db_prev = _rstore.DB_PATH
+_p59_disabled_prev = _rstore._disabled
+_p59_local_prev = _rstore._local
+_p59_stmt_prev = _graph.STATEMENTS_PATH
+_rstore.DB_PATH = Path(_tf47.mkdtemp()) / "smoke_p8.db"
+_rstore._disabled = False
+_rstore._local = _thr47.local()   # fresh per-thread conn cache -> _read_con() reconnects to THIS db
+_graph.STATEMENTS_PATH = Path(_tf47.mkdtemp()) / "graph_statements.json"
+try:
+    check("p8: index init creates the tables in the temp db", _rstore.init())
+    _p59con = _rstore.connect()
+
+    # Two synthetic ENTITY nodes so neighborhood / between have real anchors + hydratable labels.
+    for _p59id, _p59kind, _p59label in [("inst:label:openai", "institution", "openai"),
+                                        ("inst:label:anthropic", "institution", "anthropic")]:
+        _p59con.execute("INSERT INTO graph_nodes(id, kind, label, first_seen, last_seen) "
+                        "VALUES(?, ?, ?, 1.0, 1.0)", (_p59id, _p59kind, _p59label))
+    _p59con.commit()
+
+    # ---- (2) LADDER: a statement between two synthetic nodes appears in neighborhood under working
+    #      + exploratory as tier J / method statement; NEVER under conservative; the types filter
+    #      applies; between walks a path THROUGH the statement edge under working. ----
+    _graph.save_statement("inst:label:openai", "inst:label:anthropic", "competes_with",
+                          note="both frontier labs", doc="doc:zhihu:z1")
+    for _p59pol in ("working", "exploratory"):
+        _p59nb = _graph.neighborhood("inst:label:openai", depth=1, policy=_p59pol)
+        _p59ids = {n["id"] for n in _p59nb["nodes"]}
+        _p59has = any(e.get("method") == "statement" and e.get("tier") == "J"
+                      and {e["src"], e["dst"]} == {"inst:label:openai", "inst:label:anthropic"}
+                      for e in _p59nb["edges"])
+        check(f"statement ladder (2): a statement appears under {_p59pol} as tier J / method statement",
+              "inst:label:anthropic" in _p59ids and _p59has)
+    _p59nb_cons = _graph.neighborhood("inst:label:openai", depth=1, policy="conservative")
+    check("statement ladder (2): a statement is ABSENT under conservative (the pure mechanical world)",
+          "inst:label:anthropic" not in {n["id"] for n in _p59nb_cons["nodes"]}
+          and not any(e.get("method") == "statement" for e in _p59nb_cons["edges"]))
+    # the types filter applies (a non-matching type excludes it; the matching type includes it).
+    _p59nb_ft = _graph.neighborhood("inst:label:openai", depth=1, policy="working", types=["cites"])
+    _p59nb_fm = _graph.neighborhood("inst:label:openai", depth=1, policy="working",
+                                    types=["competes_with"])
+    check("statement ladder (2): the types filter applies to statements (excluded off-type, included on-type)",
+          not any(e.get("method") == "statement" for e in _p59nb_ft["edges"])
+          and any(e.get("method") == "statement" for e in _p59nb_fm["edges"]))
+    # between walks a path THROUGH the statement edge under working; conservative finds no path.
+    _p59b_work = _graph.between("inst:label:openai", "inst:label:anthropic", policy="working")
+    _p59b_cons = _graph.between("inst:label:openai", "inst:label:anthropic", policy="conservative")
+    check("statement ladder (2): between walks a path THROUGH the statement edge under working (none under conservative)",
+          _p59b_work["paths"] == [["inst:label:openai", "inst:label:anthropic"]]
+          and any(e.get("method") == "statement" for e in _p59b_work["edges"])
+          and _p59b_cons["paths"] == [])
+
+    # ---- (3) find: a statement endpoint with a LABEL-KEYED id is findable by its label tokens, kind
+    #      from the prefix, deduped, capped discipline; hydration self-describes the label. ----
+    _graph.save_statement("inst:label:openai", "topic:label:agi safety", "works_on",
+                          note="safety agenda")
+    _p59find = _graph.find("agi safety")
+    _p59hit = [n for n in _p59find["nodes"] if n["id"] == "topic:label:agi safety"]
+    check("statement find (3): a label-keyed statement endpoint is findable by its label tokens (via=statement, kind from prefix)",
+          len(_p59hit) == 1 and _p59hit[0].get("via") == "statement"
+          and _p59hit[0].get("kind") == "topic" and _p59hit[0].get("label") == "agi safety"
+          and _p59find["capped"] is False)
+    # a materialized node that is ALSO a statement endpoint is deduped (comes back once, from the node arm).
+    _p59find2 = _graph.find("openai")
+    _p59openai = [n for n in _p59find2["nodes"] if n["id"] == "inst:label:openai"]
+    check("statement find (3): a statement endpoint already materialized is deduped (one entry, not two)",
+          len(_p59openai) == 1 and _p59openai[0].get("via") != "statement")
+    # hydration self-describes the never-minted label-keyed id straight out of the id.
+    _p59nb_hy = _graph.neighborhood("inst:label:openai", depth=1, policy="working")
+    _p59topic = [n for n in _p59nb_hy["nodes"] if n["id"] == "topic:label:agi safety"]
+    check("statement find (3): hydration self-describes a never-minted label-keyed id (label read out of the id)",
+          len(_p59topic) == 1 and _p59topic[0].get("label") == "agi safety"
+          and _p59topic[0].get("kind") == "topic")
+
+    # ---- (4) since: a statement with stated_at >= cutoff appears with stated_at surfaced; older
+    #      filtered. Write the statements file directly to control the timestamps. ----
+    _graph.STATEMENTS_PATH.write_text(json.dumps([
+        {"src": "inst:label:openai", "dst": "inst:label:x", "type": "new_rel", "note": "recent",
+         "doc": "doc:zhihu:z9", "stated_at": "2026-07-02T00:00:00+00:00"},
+        {"src": "inst:label:openai", "dst": "inst:label:y", "type": "old_rel", "note": "old",
+         "doc": "", "stated_at": "2026-06-01T00:00:00+00:00"},
+    ], ensure_ascii=False), encoding="utf-8")
+    _p59since = _graph.since("inst:label:openai", "2026-07-01")
+    _p59srows = [e for e in _p59since["edges"] if e.get("method") == "statement"]
+    check("statement since (4): a statement with stated_at >= cutoff surfaces with stated_at (older filtered, tier J)",
+          len(_p59srows) == 1 and _p59srows[0].get("type") == "new_rel"
+          and _p59srows[0].get("stated_at") == "2026-07-02T00:00:00+00:00"
+          and _p59srows[0].get("first_seen") is None and _p59srows[0].get("tier") == "J"
+          and _p59srows[0].get("doc") == "doc:zhihu:z9")
+
+    # ---- (5) voices: explicitly UNCHANGED by a statement between two docs (the deliberate ignore). ----
+    _graph.STATEMENTS_PATH.write_text("[]", encoding="utf-8")
+    _p59d1 = _doc("arxiv", "Voices P8 Doc One Alpha Long Enough Title For The Section", "http://a/pv1")
+    _p59d1.source_id = "pv1"
+    _p59d2 = _doc("zhihu", "Voices P8 Doc Two Beta No Ids At All Long Title Section", "http://a/pv2")
+    _p59d2.source_id = "pv2"
+    _p59con.execute("BEGIN")
+    for _p59d in (_p59d1, _p59d2):
+        _recall.writer._upsert(_p59con, rank, _p59d, 1.0)
+    _p59con.commit()
+    _p59n1 = _graph.doc_node_id("arxiv", "pv1"); _p59n2 = _graph.doc_node_id("zhihu", "pv2")
+    # a baseline: with NO statement, both docs are unresolved (zero connecting evidence).
+    _p59v_base = _graph.voices([_p59n1, _p59n2], policy="working")
+    _graph.save_statement(_p59n1, _p59n2, "cites", note="a doc-doc typed statement")
+    _p59v_work = _graph.voices([_p59n1, _p59n2], policy="working")
+    _p59v_expl = _graph.voices([_p59n1, _p59n2], policy="exploratory")
+    check("statement voices (5): a statement between two docs leaves voices UNCHANGED (not identity evidence)",
+          _p59v_base["n_voices"] == 0 and _p59v_base["n_unresolved"] == 2
+          and _p59v_work["n_voices"] == 0 and _p59v_work["n_unresolved"] == 2
+          and _p59v_expl["n_voices"] == 0 and _p59v_expl["n_unresolved"] == 2)
+
+    # ---- (6) stats: statements count present and correct (beside rulings). ----
+    _p59stats = _graph.stats()
+    check("statement stats (6): stats.statements is present and correct (== the load_statements count)",
+          _p59stats.get("statements") == len(_graph.load_statements())
+          and _p59stats.get("statements") == 1 and "rulings" in _p59stats)
+finally:
+    _graph.STATEMENTS_PATH = _p59_stmt_prev
+    _rstore.DB_PATH = _p59_db_prev
+    _rstore._disabled = _p59_disabled_prev
+    _rstore._local = _p59_local_prev
+    # drain any residue so a later section never inherits our queue items.
+    while not _recall.writer._queue.empty():
+        try:
+            _recall.writer._queue.get_nowait()
+        except Exception:  # noqa: BLE001
+            break
+
+# (7) penumbra_statement TOOL: create / list (about + type filters, cap 200 + capped) / delete happy paths
+#     + all error paths via the unwrapped body (past @_threaded). Monkeypatch a temp statements file so
+#     no real state is touched.
+_s59_tool_prev = _graph.STATEMENTS_PATH
+_graph.STATEMENTS_PATH = Path(_tf47.mkdtemp()) / "graph_statements.json"
+try:
+    _es = _srv.penumbra_statement.__wrapped__
+    _es_create = _es(action="create", src="inst:label:openai", dst="inst:label:anthropic",
+                     type="Competes With", note="tool smoke", doc="doc:zhihu:z1")
+    check("penumbra_statement (7): action=create records the statement (created True, type slugged, replaced False)",
+          _es_create.get("created") is True
+          and _es_create.get("statement", {}).get("type") == "competes_with"
+          and _es_create.get("replaced") is False)
+    # a second create on the SAME triple replaces (declarative state).
+    _es_recreate = _es(action="create", src="inst:label:openai", dst="inst:label:anthropic",
+                       type="competes_with", note="updated")
+    check("penumbra_statement (7): re-create on the same directed triple replaces (replaced True)",
+          _es_recreate.get("replaced") is True)
+    # a second, distinct statement for the list-filter checks.
+    _es(action="create", src="inst:label:openai", dst="topic:label:agi", type="works_on", note="y")
+    _es_list = _es(action="list")
+    check("penumbra_statement (7): action=list returns statements + count (+ capped flag), unfiltered",
+          _es_list.get("count") == 2 and _es_list.get("capped") is False
+          and len(_es_list.get("statements", [])) == 2)
+    _es_list_about = _es(action="list", about="topic:label:agi")
+    check("penumbra_statement (7): action=list about=<node> filters to statements touching that node",
+          _es_list_about.get("count") == 1
+          and _es_list_about["statements"][0].get("type") == "works_on")
+    _es_list_type = _es(action="list", type="Works On")
+    check("penumbra_statement (7): action=list type=<t> filters (slugged) to that type",
+          _es_list_type.get("count") == 1
+          and _es_list_type["statements"][0].get("dst") == "topic:label:agi")
+    _es_del = _es(action="delete", src="inst:label:openai", dst="inst:label:anthropic",
+                  type="competes_with")
+    check("penumbra_statement (7): action=delete removes it (deleted True); a second delete is False",
+          _es_del.get("deleted") is True
+          and _es(action="delete", src="inst:label:openai", dst="inst:label:anthropic",
+                  type="competes_with").get("deleted") is False)
+    # ERROR PATHS: unknown action / empty note / refused identity type (with pointer) / delete missing type.
+    check("penumbra_statement (7): an unknown action returns an error naming create|list|delete",
+          "error" in _es(action="frobnicate")
+          and all(_w in _es(action="frobnicate")["error"] for _w in ("create", "list", "delete")))
+    check("penumbra_statement (7): create with an empty note returns an error dict (ValueError mapped)",
+          "error" in _es(action="create", src="a", dst="b", type="rel", note=""))
+    _es_refuse = _es(action="create", src="a", dst="b", type="same_as", note="x")
+    check("penumbra_statement (7): create with same_as is refused with an penumbra_ruling pointer",
+          "error" in _es_refuse and "penumbra_ruling" in _es_refuse["error"])
+    check("penumbra_statement (7): delete without a type returns an error dict",
+          "error" in _es(action="delete", src="a", dst="b"))
+finally:
+    _graph.STATEMENTS_PATH = _s59_tool_prev
+
+# (7) TRIPWIRES: tool count == 18; _PENUMBRA_VERBS carries penumbra_statement (18); _GATHER_TOOLS still 12 and
+#     EXCLUDES penumbra_statement (a write verb; gather is read-only); docs-drift POSITIVE presence of
+#     penumbra_statement in the product README + the connect-time instructions.
+check("p8 tripwire: MCP tool count == 18 (the conscious 17 -> 18 bump for penumbra_statement)",
+      _pt_src.count(chr(10) + "@mcp.tool()") == 18,
+      f"found {_pt_src.count(chr(10) + '@mcp.tool()')}")
+check("p8 tripwire: _PENUMBRA_VERBS carries penumbra_statement and totals 18",
+      "penumbra_statement" in _t49_verbs and len(_t49_verbs) == 18)
+check("p8 tripwire: penumbra_statement is a REGISTERED tool", callable(_srv.penumbra_statement))
+check("p8 tripwire: _GATHER_TOOLS is still 12 and EXCLUDES penumbra_statement (a write verb; gather is read-only)",
+      len(_GATHER_TOOLS) == 12 and "penumbra_statement" not in _GATHER_TOOLS)
+_s59_readme = (ROOT / "README.md")
+_s59_readme_txt = _s59_readme.read_text(encoding="utf-8") if _s59_readme.exists() else ""
+check("p8 docs-drift (presence): penumbra_statement is named in README.md (the product-facing tool surface)",
+      "penumbra_statement" in _s59_readme_txt)
+check("p8 docs-drift (presence): penumbra_statement is named in _PENUMBRA_INSTRUCTIONS (the connect-time brief)",
+      "penumbra_statement" in _srv._PENUMBRA_INSTRUCTIONS)
 
 
 print()

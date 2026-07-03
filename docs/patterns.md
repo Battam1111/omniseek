@@ -46,6 +46,9 @@ voices; counting unknowns as independent would fabricate corroboration.
 
 When the `exploratory` policy surfaces a same-work candidate you then verify yourself, record the
 judgment with `penumbra_ruling(action="create")`; the `working` policy applies it from then on.
+Relations you judge FROM content (a filing says A acquired B; a paper introduces a benchmark)
+persist the same way via `penumbra_statement`: directed, typed, attributed with a note and the
+source doc, projected under `working`, never extracted by code.
 For cross-lingual or cross-modal mirrors that share no title characters, `penumbra_graph`
 view=`similar` lists an anchor doc's vector-nearest neighbors as candidates (by rank, no scores,
 never auto-collapsed): the same verify-then-rule loop applies. The graph projects candidates

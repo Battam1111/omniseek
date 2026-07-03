@@ -44,6 +44,21 @@ RULINGS_PATH = Path.home() / ".penumbra" / "state" / "graph_rulings.json"
 _RULINGS_LOCK = threading.Lock()
 _RULING_VERDICTS = frozenset({"same", "not_same"})
 
+# Typed agent STATEMENTS generalize the rulings idiom (P8): where a ruling is a pair-keyed, symmetric
+# IDENTITY judgment (consumed by the collapse machinery), a statement is a DIRECTED triple
+# (src, dst, type) with FREE agent vocabulary — "acquired_by", "advises", "refutes", anything the
+# judge names. Same store shape as rulings (a JSON list beside sensors.json / graph_rulings.json,
+# serialized under _STATEMENTS_LOCK + atomic tmp/replace, fail-open load), same rule that the eye
+# never MAKES one — the agent hands it in via penumbra_statement(action=create), and views PROJECT it at
+# read time under the working/exploratory policies (never conservative). The directed triple is the
+# KEY: re-stating replaces (declarative state, not a log; git history is the audit trail), and the
+# direction is the agent's assertion, NEVER normalized (unlike a ruling's sorted pair). Two types are
+# REFUSED — same_as / not_same_as — so identity keeps exactly ONE judgment source (penumbra_ruling).
+STATEMENTS_PATH = Path.home() / ".penumbra" / "state" / "graph_statements.json"
+_STATEMENTS_LOCK = threading.Lock()
+_STATEMENT_MAX_TYPE_LEN = 40
+_STATEMENT_REFUSED_TYPES = frozenset({"same_as", "not_same_as"})
+
 
 # ── J-tier overlay (absorbs evidence.py under the unified names; design section 9) ──────────────
 # Pure TypedDicts, zero logic. The agent's session overlay uses this SAME vocabulary with tier='J';
@@ -169,11 +184,35 @@ def canon_label(label: str) -> str:
     return (label or "").strip().casefold()
 
 
+def _id_self_label(node_id: str) -> Optional[str]:
+    """The SELF-DESCRIBING label carried IN a ``{kind}:label:{x}`` id (label = x), else None. These
+    label-keyed ids (``inst:label:{norm}``, ``topic:label:{norm}``, ...) are the idiom for entities the
+    wall has never minted a structured row for — the id IS the display name. Used by ``find`` (a
+    statement endpoint matches on its self-described label) and ``_hydrate_nodes`` (a label-keyed id
+    with no graph_nodes row reads its label straight out of the id). A non-label id (``work:openalex:W1``,
+    ``doc:arxiv:2401``) has no self-description here -> None (find substring-matches its raw id instead)."""
+    parts = node_id.split(":", 2)
+    if len(parts) == 3 and parts[1] == "label" and parts[2]:
+        return parts[2]
+    return None
+
+
 # ── Collapse policies as METHOD-SETS (design section 2) ─────────────────────────────────────────
 # Policies are NAMED METHOD-SETS, not numeric thresholds: the METHOD is the honest epistemic unit
 # (a hand-picked 0.8 constant is pseudo-precision), exactly as recall's RRF fuses by rank only.
 # ``conservative`` trusts only exact-ID equality; ``working`` adds the agent's rulings; ``exploratory``
 # adds the fuzzy alignment candidates.
+#
+# THE LADDER, in one line (P8, now that the working tier carries BOTH judgment channels):
+#   conservative = the mechanical world (M facts + exact-id same_as);
+#   working      = + the agent's OWN judgments (rulings AND statements);
+#   exploratory  = + machine candidates (title_fp / name_match alignment).
+# The method-sets below gate IDENTITY (same_as) collapse only. Statements are NOT a same_as method
+# and so are absent from these frozensets: they are DIRECTED, typed FACTS the agent asserts, appended
+# in ``_policy_hop_edges`` on the SAME ``use_rulings`` gate the rulings overlay rides (working /
+# exploratory), never gated by the collapse method-set. conservative NEVER shows a statement (a pure
+# mechanical world); a statement is a judgment, and the working tier is where "add MY OWN judgments"
+# begins.
 
 CONSERVATIVE: frozenset = frozenset({
     "id_eq:doi", "id_eq:arxiv", "id_eq:openalex", "id_eq:orcid",
@@ -313,6 +352,147 @@ def _ruling_index(rulings: list[dict]) -> tuple[set, dict]:
     return not_same, same
 
 
+# ── Statements store (the rulings idiom generalized; P8) ────────────────────────────────────────
+# The DIRECTED, free-vocabulary sibling of the rulings store above. Every function mirrors its
+# rulings twin's shape and voice; the differences are the design's essence: the KEY is the directed
+# triple (src, dst, type) NOT a sorted pair (direction is the assertion, never normalized), endpoints
+# are ANY node id (existing or not — the rulings precedent), and two types are refused so identity
+# stays penumbra_ruling's alone.
+
+def load_statements() -> list[dict]:
+    """Read the agent's typed statements from ``~/.penumbra/state/graph_statements.json`` — a list of
+    ``{src, dst, type, note, doc, stated_at}``. The sensors.json / rulings pattern: fail-OPEN to ``[]``
+    on absent/unreadable/malformed. The writer is ``save_statement``; the eye only APPLIES statements
+    (it stores the judgment as config, it never makes one)."""
+    try:
+        if not STATEMENTS_PATH.exists():
+            return []
+        raw = json.loads(STATEMENTS_PATH.read_text(encoding="utf-8"))
+        if not isinstance(raw, list):
+            return []
+        return [s for s in raw if isinstance(s, dict)]
+    except Exception as exc:  # noqa: BLE001 — a bad statements file must never break a graph read
+        logger.debug("graph_statements.json unreadable (%s) -> []", exc)
+        return []
+
+
+def _atomic_write_statements(statements: list[dict]) -> None:
+    """Write the whole statements list atomically (the SensorStore idiom: build the list, write a
+    sibling ``.tmp``, ``tmp.replace(path)`` so a reader never sees a half-written file). Parent dir is
+    created if absent. Caller holds ``_STATEMENTS_LOCK``."""
+    STATEMENTS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    data = json.dumps(statements, ensure_ascii=False, indent=1)
+    tmp = STATEMENTS_PATH.with_suffix(".tmp")
+    tmp.write_text(data, encoding="utf-8")
+    tmp.replace(STATEMENTS_PATH)
+
+
+def _slug_statement_type(type: str) -> str:
+    """Mechanically slug a free-form statement type: casefold + strip, spaces -> underscores, then
+    keep only ``[a-z0-9_]`` runs collapsed to single underscores, trimmed of edge underscores. The
+    result must be non-empty, <= 40 chars, and not one of the refused identity types; else ValueError
+    (the tool layer maps it to an error dict). This is the ONLY place a type is normalized — the views
+    are OPAQUE to type (no code branches on the vocabulary), so the slug carries all the discipline."""
+    raw = (type or "").strip().casefold().replace(" ", "_")
+    slug = "".join(ch if (ch.isascii() and (ch.isalnum() or ch == "_")) else "_" for ch in raw)
+    while "__" in slug:
+        slug = slug.replace("__", "_")
+    slug = slug.strip("_")
+    if not slug:
+        raise ValueError(f"statement type must slug to non-empty [a-z0-9_]; got {type!r}")
+    if len(slug) > _STATEMENT_MAX_TYPE_LEN:
+        raise ValueError(f"statement type too long ({len(slug)} > {_STATEMENT_MAX_TYPE_LEN}): {slug!r}")
+    if slug in _STATEMENT_REFUSED_TYPES:
+        raise ValueError(f"type {slug!r} is an IDENTITY judgment; record it via penumbra_ruling "
+                         f"(same_as / not_same_as belong to the collapse machinery, not statements)")
+    return slug
+
+
+def save_statement(src: str, dst: str, type: str, note: str, doc: str = "") -> dict:
+    """Record ONE typed, DIRECTED statement as declarative STATE (the directed triple is the KEY, not a
+    log entry).
+
+    The eye never MAKES a statement; this stores the one the AGENT decided (the rulings / sensors.json
+    precedent: judgment persisted as config the eye applies mechanically at read time). The type is
+    mechanically slugged (see ``_slug_statement_type``); direction is the agent's assertion and is
+    NEVER normalized (unlike a ruling's sorted pair — ``(A, B, t)`` and ``(B, A, t)`` are DISTINCT).
+    REPLACES any existing statement for the same directed triple (declarative state: re-create
+    overwrites, git history is the audit trail) and atomic-writes the whole list.
+
+    src/dst must be non-empty (any node id string, existing or not — the rulings precedent: a statement
+    may pre-date the wall); ``note`` is REQUIRED non-empty (the judgment's reasoning); ``doc`` is the
+    optional provenance node id (usually a ``doc:{source}:{sid}``; strongly encouraged, never validated
+    for existence). A bad value raises ``ValueError``. Returns ``{"statement": <entry>, "replaced":
+    <bool>}`` where the entry carries a UTC ISO ``stated_at``."""
+    src = (src or "").strip()
+    dst = (dst or "").strip()
+    if not src or not dst:
+        raise ValueError("statement requires non-empty src and dst")
+    slug = _slug_statement_type(type)
+    note = (note or "").strip()
+    if not note:
+        raise ValueError("statement requires a non-empty note (the judgment's reasoning)")
+    doc = (doc or "").strip()
+    entry = {"src": src, "dst": dst, "type": slug, "note": note, "doc": doc,
+             "stated_at": datetime.now(timezone.utc).isoformat()}
+    with _STATEMENTS_LOCK:
+        statements = load_statements()
+        kept = [s for s in statements
+                if ((s.get("src") or "").strip(), (s.get("dst") or "").strip(),
+                    (s.get("type") or "").strip()) != (src, dst, slug)]
+        replaced = len(kept) != len(statements)
+        kept.append(entry)
+        _atomic_write_statements(kept)
+    return {"statement": entry, "replaced": replaced}
+
+
+def delete_statement(src: str, dst: str, type: str) -> bool:
+    """Retract the statement for a directed triple (the SAME key as ``save_statement``: src, dst, and
+    the slugged type, direction preserved). A bad/empty type slugs the same way it was stored so the
+    key matches; a slug failure (e.g. empty) simply finds nothing. Atomic-writes the surviving list;
+    returns True iff an entry was removed."""
+    src = (src or "").strip()
+    dst = (dst or "").strip()
+    if not src or not dst:
+        return False
+    try:
+        slug = _slug_statement_type(type)
+    except ValueError:
+        return False
+    with _STATEMENTS_LOCK:
+        statements = load_statements()
+        kept = [s for s in statements
+                if ((s.get("src") or "").strip(), (s.get("dst") or "").strip(),
+                    (s.get("type") or "").strip()) != (src, dst, slug)]
+        removed = len(kept) != len(statements)
+        if removed:
+            _atomic_write_statements(kept)
+    return removed
+
+
+def _statement_index(statements: list[dict]) -> dict:
+    """Fold statements into an adjacency ``{node_id: [edge_dict, ...]}`` indexed by BOTH endpoints, so
+    a directed statement edge is queryable from either end (like the stored graph_edges UNION). Each
+    edge dict is ``{src, dst, type, method: "statement", tier: "J", note?, doc?}`` — the same edge
+    shape the views already carry, tier J (the agent's judgment), method "statement" (its provenance
+    channel). note / doc are attached only when present. Direction is preserved as stated."""
+    index: dict[str, list[dict]] = {}
+    for s in statements:
+        src = (s.get("src") or "").strip()
+        dst = (s.get("dst") or "").strip()
+        typ = (s.get("type") or "").strip()
+        if not src or not dst or not typ:
+            continue
+        edge: dict = {"src": src, "dst": dst, "type": typ, "method": "statement", "tier": "J"}
+        if s.get("note"):
+            edge["note"] = s["note"]
+        if s.get("doc"):
+            edge["doc"] = s["doc"]
+        index.setdefault(src, []).append(edge)
+        index.setdefault(dst, []).append(edge)
+    return index
+
+
 # ── The three P1 read functions (read-only over store's DB, fail-open to empty, budgeted) ───────
 
 def _con() -> Optional["object"]:
@@ -383,6 +563,33 @@ def find(label_query: str, kind: str = "", limit: int = 20) -> dict:
                 out.append({"id": nid, "kind": "document", "label": title})
         except Exception as exc:  # noqa: BLE001
             logger.debug("graph.find doc scan failed: %s", exc)
+    # (iii) STATEMENT endpoints (P8): a typed statement may name an id no tap ever minted (a
+    # label-keyed entity, or any id string). Scan both endpoints of every statement; match the query
+    # tokens against the SELF-DESCRIBING part (a ``{kind}:label:{x}`` id matches on its label segment
+    # x; any other id matches on its raw string). Deduped against the node/doc hits above, kind filter
+    # respected (kind from the id prefix), same limit/capped discipline. Fail-open (statements are
+    # judgment config; a bad file must never break find).
+    try:
+        stmt_ids: set = set()
+        for s in load_statements():
+            for endpoint in ((s.get("src") or "").strip(), (s.get("dst") or "").strip()):
+                if endpoint:
+                    stmt_ids.add(endpoint)
+        low_toks = [t.casefold() for t in toks]
+        for nid in sorted(stmt_ids):   # sorted -> deterministic ordering
+            if nid in seen:
+                continue
+            self_label = _id_self_label(nid)
+            hay = (self_label if self_label is not None else nid).casefold()
+            if not all(t in hay for t in low_toks):
+                continue
+            nkind = _node_kind(nid)
+            if kind and nkind != kind:
+                continue
+            seen.add(nid)
+            out.append({"id": nid, "kind": nkind, "label": self_label, "via": "statement"})
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("graph.find statement scan failed: %s", exc)
     capped = len(out) > max(1, limit)
     return {"nodes": out[: max(1, limit)], "capped": capped}
 
@@ -390,18 +597,22 @@ def find(label_query: str, kind: str = "", limit: int = 20) -> dict:
 @graph_view
 def stats() -> dict:
     """The cheap orientation call: counts by node kind (incl. the virtual docs count), edge counts
-    by type and by tier, and the rulings count. Fail-open — any sub-count that fails is simply
-    omitted / zero. NOTE the cold-start expectation (design section 10): at P1 the entity kinds are
-    EMPTY and only document same_as edges exist (derived, so they do not appear in graph_edges
-    either); empty entity kinds here are CORRECT, not broken. ``document`` counts the virtual docs
-    (indexed sources); ``document_thin`` counts the retrieval-anchored thin rows (P2.0 — docs from
-    non-indexed sources, title + url only) SEPARATELY so the cold-start story stays honest.
+    by type and by tier, the rulings count, and the statements count. Fail-open — any sub-count that
+    fails is simply omitted / zero. NOTE the cold-start expectation (design section 10): at P1 the
+    entity kinds are EMPTY and only document same_as edges exist (derived, so they do not appear in
+    graph_edges either); empty entity kinds here are CORRECT, not broken. ``document`` counts the
+    virtual docs (indexed sources); ``document_thin`` counts the retrieval-anchored thin rows (P2.0 —
+    docs from non-indexed sources, title + url only) SEPARATELY so the cold-start story stays honest.
     ``document_thin_embedded`` counts the vec_thin rows (P7 — thin titles that have an embedding, the
-    mechanical coverage gauge for how much of the thin perception history ``similar`` can see)."""
-    result: dict = {"node_kinds": {}, "edge_types": {}, "edge_tiers": {}, "rulings": 0}
+    mechanical coverage gauge for how much of the thin perception history ``similar`` can see).
+    ``statements`` counts the agent's typed statements (P8 — the volume gauge beside ``rulings``, so a
+    migration off the JSON file stays a measured decision, not a pre-emptive one)."""
+    result: dict = {"node_kinds": {}, "edge_types": {}, "edge_tiers": {}, "rulings": 0,
+                    "statements": 0}
     con = _con()
     if con is None:
         result["rulings"] = len(load_rulings())
+        result["statements"] = len(load_statements())
         return result
     try:
         for kind, n in con.execute("SELECT kind, count(*) FROM graph_nodes GROUP BY kind").fetchall():
@@ -428,6 +639,7 @@ def stats() -> dict:
     except Exception as exc:  # noqa: BLE001
         logger.debug("graph.stats edge counts failed: %s", exc)
     result["rulings"] = len(load_rulings())
+    result["statements"] = len(load_statements())
     return result
 
 
@@ -485,6 +697,55 @@ def _stored_edges_since(con, anchor: str, types: Optional[list[str]], cutoff: fl
         return []
     return [{"src": s, "dst": d, "type": t, "tier": ti, "method": m, "first_seen": fs}
             for (s, d, t, ti, m, fs) in rows]
+
+
+def _stated_at_epoch(stated_at: str) -> Optional[float]:
+    """Parse a statement's ``stated_at`` (a full UTC ISO stamp from ``datetime.isoformat``) to an
+    epoch-UTC float for the ``since`` cutoff comparison + ordering. A naive stamp is read as UTC.
+    None on empty/unparseable (that statement is then simply not surfaced — fail-open)."""
+    s = (stated_at or "").strip()
+    if not s:
+        return None
+    try:
+        dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.timestamp()
+    except Exception as exc:  # noqa: BLE001 — an unparseable stamp is skipped, never a crash
+        logger.debug("graph._stated_at_epoch failed for %r: %s", stated_at, exc)
+        return None
+
+
+def _statements_since(anchor: str, types: Optional[list[str]], cutoff: float) -> list[dict]:
+    """The agent's STATEMENTS touching ``anchor`` (either endpoint, one hop) whose ``stated_at`` is
+    >= ``cutoff`` — the statement arm of the ``since`` accretion log (P8: a judgment accreting is an
+    EVENT). Returns the SAME edge-row shape as ``_stored_edges_since`` but with ``stated_at`` surfaced
+    in place of ``first_seen`` (tier "J", method "statement"), respecting the optional ``types`` filter.
+    UNLIKE the collapsing views, since threads NO policy here: a statement is surfaced with its honest
+    tier + method and the reader judges (since never collapses identity). Fail-open to []."""
+    if not anchor:
+        return []
+    type_set = set(types) if types else None
+    out: list[dict] = []
+    for s in load_statements():
+        src = (s.get("src") or "").strip()
+        dst = (s.get("dst") or "").strip()
+        typ = (s.get("type") or "").strip()
+        if not src or not dst or not typ:
+            continue
+        if anchor not in (src, dst):
+            continue
+        if type_set is not None and typ not in type_set:
+            continue
+        epoch = _stated_at_epoch(s.get("stated_at") or "")
+        if epoch is None or epoch < cutoff:
+            continue
+        row: dict = {"src": src, "dst": dst, "type": typ, "tier": "J", "method": "statement",
+                     "stated_at": s.get("stated_at")}
+        if s.get("doc"):
+            row["doc"] = s["doc"]
+        out.append(row)
+    return out
 
 
 def _anchor_fp(con, source: str, source_id: str) -> Optional[str]:
@@ -657,32 +918,67 @@ def _apply_policy_and_rulings(edges: list[dict], methods: frozenset,
     return kept
 
 
+def _statement_hop_edges(stmt_index: dict, frontier: list[str],
+                         types: Optional[list[str]]) -> list[dict]:
+    """The statement edges touching ``frontier`` (either endpoint), from a PRE-LOADED index (loaded
+    ONCE per view call and threaded through, the way rulings are — never re-read per hop). Respects the
+    ``types`` filter (a statement's free type is matched against the same ``types`` list stored edges
+    honor). Deduped on the directed (src, dst, type) key so a frontier carrying both endpoints of one
+    statement yields it once. Statement edges are DIRECTED, typed FACTS (tier J, method "statement");
+    they are never ``same_as`` (those types are refused at write), so ``_apply_policy_and_rulings``
+    passes them through unchanged — the collapse method-set gates identity only."""
+    if not stmt_index:
+        return []
+    type_set = set(types) if types else None
+    out: list[dict] = []
+    seen: set = set()
+    for node in frontier:
+        for e in stmt_index.get(node, ()):
+            if type_set is not None and e.get("type") not in type_set:
+                continue
+            key = (e["src"], e["dst"], e["type"])
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(e)
+    return out
+
+
 def _policy_hop_edges(con, frontier: list[str], types: Optional[list[str]], methods: frozenset,
-                      not_same: set, same: dict, use_rulings: bool) -> list[dict]:
-    """ONE hop of edges off ``frontier``: the UNION of (i) stored graph_edges rows and (ii) the two
+                      not_same: set, same: dict, use_rulings: bool,
+                      stmt_index: Optional[dict] = None) -> list[dict]:
+    """ONE hop of edges off ``frontier``: the UNION of (i) stored graph_edges rows, (ii) the two
     DERIVED same_as sets (title_fp when the policy admits it; doc-work id_eq when any id_eq method is
-    in the policy), then filtered by ``_apply_policy_and_rulings``. This is the SINGLE per-hop
-    machinery ``neighborhood`` / ``between`` / ``voices`` all share (extracted so the three views can
-    never drift apart), each scoped to the frontier (never a full-table scan)."""
+    in the policy), and (iii) the agent's STATEMENTS touching the frontier when ``use_rulings`` is on
+    (working / exploratory: "add MY OWN judgments" — the SAME gate the rulings overlay rides), then
+    filtered by ``_apply_policy_and_rulings``. This is the SINGLE per-hop machinery ``neighborhood`` /
+    ``between`` / ``voices`` all share (extracted so the three views can never drift apart), each
+    scoped to the frontier (never a full-table scan). ``stmt_index`` is the pre-loaded statement
+    adjacency (loaded ONCE per view call and threaded through, never re-read per hop); it is None /
+    empty under conservative, so conservative NEVER shows a statement."""
     hop_edges: list[dict] = []
     hop_edges += _stored_edges(con, frontier, types)
     if "align:title_fp" in methods:  # exploratory-only (title_fp is in EXPLORATORY alone)
         hop_edges += _derived_title_fp_edges(con, frontier)
     if ("id_eq:doi" in methods) or ("id_eq:arxiv" in methods) or ("id_eq:openalex" in methods):
         hop_edges += _derived_id_eq_edges(con, frontier)
+    if use_rulings and stmt_index:  # the agent's typed judgments (working / exploratory only)
+        hop_edges += _statement_hop_edges(stmt_index, frontier, types)
     return _apply_policy_and_rulings(hop_edges, methods, not_same, same, use_rulings)
 
 
 @graph_view
 def neighborhood(anchor: str, depth: int = 1, types: Optional[list[str]] = None,
                  policy: str = "conservative", max_nodes: int = 40) -> dict:
-    """The bounded subgraph around a node: BFS over the UNION of (i) stored graph_edges rows and
-    (ii) the two DERIVED same_as edge sets (title_fp + doc-work id_eq), each scoped to the frontier
-    per hop (never a full-table cross join). The policy method-set filters which same_as candidates
-    count, then the rulings overlay applies (working/exploratory). Returns ``{nodes: [{id, kind,
-    label}], edges: [{src, dst, type, method}], capped, truncation}`` respecting ``max_nodes`` with a
-    MECHANICAL order (recency then degree). depth is capped at 2, max_nodes floored at 1. Fail-open
-    to just the anchor node on any error."""
+    """The bounded subgraph around a node: BFS over the UNION of (i) stored graph_edges rows,
+    (ii) the two DERIVED same_as edge sets (title_fp + doc-work id_eq), and (iii) the agent's typed
+    STATEMENTS touching the frontier (working / exploratory only — conservative stays the pure
+    mechanical world), each scoped to the frontier per hop (never a full-table cross join). The policy
+    method-set filters which same_as candidates count, then the rulings overlay applies
+    (working/exploratory). Returns ``{nodes: [{id, kind, label}], edges: [{src, dst, type, method,
+    ...}], capped, truncation}`` (a statement edge additionally carries tier "J" + its note/doc)
+    respecting ``max_nodes`` with a MECHANICAL order (recency then degree). depth is capped at 2,
+    max_nodes floored at 1. Fail-open to just the anchor node on any error."""
     depth = max(0, min(int(depth), 2))
     max_nodes = max(1, int(max_nodes))
     methods = _policy_methods(policy)
@@ -698,6 +994,9 @@ def neighborhood(anchor: str, depth: int = 1, types: Optional[list[str]] = None,
 
     rulings = load_rulings() if use_rulings else []
     not_same, same = _ruling_index(rulings)
+    # The agent's typed statements, loaded ONCE per call and threaded through every hop (never
+    # re-read per hop, exactly like the rulings overlay). Empty under conservative -> no statements.
+    stmt_index = _statement_index(load_statements()) if use_rulings else None
 
     visited: set = {anchor}
     frontier: list[str] = [anchor]
@@ -708,8 +1007,9 @@ def neighborhood(anchor: str, depth: int = 1, types: Optional[list[str]] = None,
         for _hop in range(depth):
             if not frontier:
                 break
-            # The shared per-hop machinery (stored + derived same_as, policy-filtered): walk to new nodes.
-            hop_edges = _policy_hop_edges(con, frontier, types, methods, not_same, same, use_rulings)
+            # The shared per-hop machinery (stored + derived same_as + statements, policy-filtered).
+            hop_edges = _policy_hop_edges(con, frontier, types, methods, not_same, same, use_rulings,
+                                          stmt_index)
             next_frontier: list[str] = []
             for e in hop_edges:
                 ekey = (e["src"], e["dst"], e["type"], e.get("method"))
@@ -816,6 +1116,9 @@ def voices(doc_ids: list[str], policy: str = "conservative") -> dict:
         # (a)+(b)+(c): the same_as evidence among the input docs (id_eq doc->work always; title_fp
         # doc<->doc only when the policy admits it), policy-filtered + rulings overlaid. Reuse the
         # SAME per-hop machinery the other views use (scoped to the input docs as the frontier).
+        # NO stmt_index is threaded here: voices deliberately IGNORES statements — an arbitrary typed
+        # judgment ("advises", "refutes") is not identity evidence, and independence counting must stay
+        # same_as / authored only (the ["same_as"] filter would drop non-same_as statements anyway).
         same_as_edges = _policy_hop_edges(con, docs, ["same_as"], methods, not_same, same, use_rulings)
         # A same-ruling ADD is only relevant here when it joins two INPUT docs (the overlay is scoped
         # to the doc set); id_eq / title_fp edges already have an input doc as one endpoint by
@@ -906,7 +1209,8 @@ def between(a: str, b: str, types: Optional[list[str]] = None, policy: str = "co
             max_nodes: int = 40) -> dict:
     """Bounded connection PATHS between two anchors — the "how do these relate" question. Bidirectional
     BFS, at most 2 hops per side (max path length 4), over the SAME per-hop edge machinery as
-    ``neighborhood`` (stored + the two derived same_as arms per the policy + the rulings overlay).
+    ``neighborhood`` (stored + the two derived same_as arms per the policy + the rulings overlay + the
+    agent's typed statements under working / exploratory), so a path may walk THROUGH a statement edge.
     Edges are traversed UNDIRECTED for pathfinding but returned as stored/derived (direction
     preserved). Collects up to 8 SHORTEST paths, ordered (length, path tuple) deterministically.
     Returns ``{paths: [[node ids]], nodes: [{id, kind, label}] (only nodes on returned paths), edges:
@@ -932,6 +1236,9 @@ def between(a: str, b: str, types: Optional[list[str]] = None, policy: str = "co
 
     rulings = load_rulings() if use_rulings else []
     not_same, same = _ruling_index(rulings)
+    # The agent's typed statements, loaded ONCE and threaded through both sides' hops (never re-read
+    # per hop). Empty under conservative, so conservative paths stay the pure mechanical world.
+    stmt_index = _statement_index(load_statements()) if use_rulings else None
 
     # Build an UNDIRECTED adjacency out to <=2 hops from EACH side (bidirectional BFS meets in the
     # middle, so a length-<=4 path is covered), recording the directed edge on each traversed pair so
@@ -945,7 +1252,8 @@ def between(a: str, b: str, types: Optional[list[str]] = None, policy: str = "co
         for _hop in range(2):   # <=2 hops per side
             if not frontier:
                 break
-            hop_edges = _policy_hop_edges(con, frontier, types, methods, not_same, same, use_rulings)
+            hop_edges = _policy_hop_edges(con, frontier, types, methods, not_same, same, use_rulings,
+                                          stmt_index)
             nxt: list[str] = []
             for e in hop_edges:
                 s, t = e.get("src"), e.get("dst")
@@ -1074,18 +1382,21 @@ def _parse_since_cutoff(date: str) -> Optional[float]:
 @graph_view
 def since(anchor: str, date: str, types: Optional[list[str]] = None, max_nodes: int = 40) -> dict:
     """The ACCRETION LOG around a node: the STORED edges touching ``anchor`` (one hop, both
-    directions, optional ``types`` filter) whose ``first_seen`` is >= the parsed cutoff. Derived
-    edges (title_fp / doc-work id_eq same_as) are computed live and carry NO timestamps, so this view
-    is STORED-ROWS-ONLY and they are structurally absent. There is NO policy and NO rulings overlay:
-    since projects accretion HISTORY, it does not collapse identity; every edge row returns WITH its
-    ``tier`` and ``method`` visible (honest epistemics — the reader judges).
+    directions, optional ``types`` filter) whose ``first_seen`` is >= the parsed cutoff, PLUS the
+    agent's typed STATEMENTS touching the anchor whose ``stated_at`` is >= the cutoff (P8: a judgment
+    accreting is an event, surfaced with ``stated_at`` in place of ``first_seen``). DERIVED same_as
+    edges (title_fp / doc-work id_eq) are computed live and carry NO timestamps, so they stay
+    structurally absent. There is NO policy and NO rulings/statement COLLAPSE overlay: since projects
+    accretion HISTORY, it does not collapse identity; every row returns WITH its ``tier`` and
+    ``method`` visible (honest epistemics — the reader judges), including the statement rows (tier
+    "J", method "statement").
 
     ``date`` accepts ``YYYY-MM-DD`` (= midnight UTC) or a full ISO timestamp; empty/unparseable ->
-    ``{"error": ...}``. Returns ``{edges: [{src, dst, type, tier, method, first_seen}], nodes:
-    [hydrated endpoints], since: <parsed cutoff, ISO>, capped, truncation}`` with the anchor's
+    ``{"error": ...}``. Returns ``{edges: [{src, dst, type, tier, method, first_seen | stated_at}],
+    nodes: [hydrated endpoints], since: <parsed cutoff, ISO>, capped, truncation}`` with the anchor's
     neighborhood capped at ``max_nodes`` by the same MECHANICAL truncation as neighborhood (recency
-    then degree; edges whose endpoints were dropped are dropped too). Deterministic ordering
-    (first_seen DESC, then the edge tuple). Fail-open to empty on any error."""
+    then degree; edges whose endpoints were dropped are dropped too). Deterministic ordering (recency
+    DESC over both first_seen and stated_at, then the edge tuple). Fail-open to empty on any error."""
     max_nodes = max(1, int(max_nodes))
     anchor = (anchor or "").strip()
     cutoff = _parse_since_cutoff(date)
@@ -1101,8 +1412,18 @@ def since(anchor: str, date: str, types: Optional[list[str]] = None, max_nodes: 
         return result
     try:
         rows = _stored_edges_since(con, anchor, types, cutoff)
+        # The statement arm (P8): the agent's typed statements touching the anchor with stated_at >=
+        # cutoff, surfaced with stated_at in place of first_seen (a judgment accreting is an event).
+        rows += _statements_since(anchor, types, cutoff)
+
+        def _row_epoch(e: dict) -> float:
+            # a stored row carries first_seen (epoch); a statement row carries stated_at (ISO).
+            if e.get("first_seen") is not None:
+                return float(e.get("first_seen") or 0.0)
+            return _stated_at_epoch(e.get("stated_at") or "") or 0.0
+
         # Deterministic order: newest accretion first, then the edge tuple for a stable tie-break.
-        rows.sort(key=lambda e: (-(e.get("first_seen") or 0.0),
+        rows.sort(key=lambda e: (-_row_epoch(e),
                                  e.get("src") or "", e.get("dst") or "",
                                  e.get("type") or "", e.get("method") or ""))
         # Collect the endpoint node set (anchor + every edge endpoint), hydrate, then apply the
@@ -1213,7 +1534,8 @@ def _node_kind(node_id: str) -> str:
 
 def _hydrate_nodes(con, ids: set, anchor: str) -> list[dict]:
     """Attach {id, kind, label} for a set of node ids: entity labels from graph_nodes, document
-    labels (titles) from the docs table, everything else labelled by id. Fail-open per source."""
+    labels (titles) from the docs table, a ``{kind}:label:{x}`` id's SELF-DESCRIBED label read out of
+    the id when no row exists (P8), everything else labelled None. Fail-open per source."""
     labels: dict = {}
     kinds: dict = {}
     id_list = list(ids)
@@ -1247,8 +1569,12 @@ def _hydrate_nodes(con, ids: set, anchor: str) -> list[dict]:
             logger.debug("graph._hydrate_nodes doc failed: %s", exc)
     out: list[dict] = []
     for nid in id_list:
-        out.append({"id": nid, "kind": kinds.get(nid) or _node_kind(nid),
-                    "label": labels.get(nid)})
+        # A ``{kind}:label:{x}`` id with no graph_nodes row is SELF-DESCRIBING (label = x): read the
+        # label straight out of the id (P8 — statement endpoints are often these never-minted ids).
+        label = labels.get(nid)
+        if label is None:
+            label = _id_self_label(nid)
+        out.append({"id": nid, "kind": kinds.get(nid) or _node_kind(nid), "label": label})
     return out
 
 
