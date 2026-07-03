@@ -97,6 +97,17 @@ All notable changes to Penumbra are documented here. The format follows
   self-describing and findable). Nothing is ever extracted by code: the reading agent judges,
   the graph projects.
 
+- **`_meta` goes lean (P11, shape change)**: search `_meta` now carries only THIS query's
+  information. The full excluded-sources reason map (deployment-static, repeated on every
+  search) is replaced by `excluded_count`, with the query-aware `excluded_relevant` unchanged
+  and the full catalog one call away via the roster's `explicit_only_reason`; the fast/slow
+  source name lists become counts inside `progressive` (whose `timed_out` keeps its actionable
+  name list, as do `empty` and `truncated`). Also: every ranked result now ALWAYS carries
+  `seen_before` (true|false, never absent; a first-time doc reads false with a null
+  `first_seen_at`); gather failures caused by a wrong argument now include a hint naming the
+  tool's real parameters; walled sources whose payloads carry no timestamp keep `date: null`
+  honestly (never approximated).
+
 - PyPI publish (`pip install penumbra-mcp`) planned.
 
 ## [0.1.0]

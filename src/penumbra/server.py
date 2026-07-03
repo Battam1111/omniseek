@@ -131,7 +131,8 @@ _PENUMBRA_INSTRUCTIONS = (
     "relevance_hook: one extractive sentence from the doc's own text showing why it matched "
     "(scan this for quick triage, not full content). "
     "seen_before / first_seen_at: whether THIS deployment had retrieved the doc before this search "
-    "(the wall's novelty stamp)."
+    "(the wall's novelty stamp). ALWAYS present on every ranked doc: seen_before=false + "
+    "first_seen_at=null is the honest never-seen-before state (new to this deployment), not a gap."
     "\n\n"
     "(4) HANDLES (stamped per-doc, metadata.handles; absent = no affordances detected): "
     "transcribable = URLs the eye can ASR (bilibili/xiaoyuzhou/podcasts/audio extensions). "
@@ -140,14 +141,18 @@ _PENUMBRA_INSTRUCTIONS = (
     "has_comments = comment thread with per-comment IDs for provenance citation. "
     "Handles tell you WHERE to zoom next, not WHETHER to."
     "\n\n"
-    "(5) _META (per-search, read via _meta.*): "
+    "(5) _META (per-search, read via _meta.*): every field is THIS query's information (a deployment-"
+    "static fact or a non-actionable diagnostic lives in penumbra_sources or logs, not here). "
     "source_diversity: perspectives present/absent (academic/social/audio/walled/news). "
     "conflicts: the most divergent same-work signal pairs by ratio (top-3 per doc), each carrying "
     "the measured ratio; materiality is yours to judge. "
-    "excluded_relevant: walled/slow sources thematically matching the query but excluded from the "
-    "broad sweep; each has overlap (query-token match count) + sources=[...] re-run hint. "
-    "empty / timed_out / errored: per-source outcome reasons. "
-    "progressive: fast_sources (<3s), slow_sources (>=3s), timed_out lists what never returned. "
+    "excluded_count: how many sources the broad sweep excluded (walled/slow); the full name->reason "
+    "MAP is one call away in penumbra_sources (explicit_only + its reason per source), never re-shipped here. "
+    "excluded_relevant: the ACTIONABLE slice (excluded sources thematically matching the query); "
+    "each has reason + overlap (query-token match count) + a sources=[...] re-run hint. "
+    "empty / timed_out / errored: per-source outcome reasons (name lists). "
+    "progressive: {fast, slow, timed_out}, the fan-out fast(<3s)/slow(>=3s) partition as COUNTS, "
+    "plus timed_out, the names that never returned (re-fire or cache_only-collect exactly those). "
     "Outcome vocabulary is ONE enum everywhere: ok | partial | degraded | empty | timed_out "
     "| errored | excluded | warming."
     "\n\n"
@@ -270,8 +275,9 @@ def penumbra_sources(check_health: LenientBool =False, domain: str = "", query: 
     coauthors, transcribe, …) so you discover the whole toolkit here, not only after loading a tool.
 
     Returns: {"sources": [{name, backend, (description if domain/query/verbose), needs_credentials,
-    explicit_only, health, health_as_of, kind?, domains?, regions?, modes?,
-    (healthy, status if check_health)}], "count": N, "backend_count": M, "backend_breakdown": {...},
+    explicit_only, explicit_only_reason? (present only when excluded; the full catalog of why-strings
+    search's _meta.excluded_count no longer re-ships), health, health_as_of, kind?, domains?, regions?,
+    modes?, (healthy, status if check_health)}], "count": N, "backend_count": M, "backend_breakdown": {...},
     (available_domains + available_regions + capabilities on the no-arg call; did_you_mean on a
     domain near-miss; system:{recall, openalex_usage} when check_health)}
 
@@ -373,9 +379,10 @@ def penumbra_search(query: str, sources: Optional[list[str]] = None, limit: Opti
 
     ROUTING (all shapes): sources=None = all non-explicit_only, deadline-bounded — slow ones drop and
     are listed in _meta.timed_out. explicit_only sources (browser/CDP + twitter_x) are excluded from
-    the broad sweep → _meta.excluded / _meta.excluded_relevant (the query-AWARE subset: walled/slow
-    sources whose facets thematically match THIS query, each with a copy-paste sources=[...] re-run
-    hint). Name them to include their (deeper, login-walled) coverage.
+    the broad sweep → _meta.excluded_count (the size; the full name->reason map is in penumbra_sources) +
+    _meta.excluded_relevant (the query-AWARE subset: walled/slow sources whose facets thematically
+    match THIS query, each with a copy-paste sources=[...] re-run hint). Name them to include their
+    (deeper, login-walled) coverage.
 
     TIME + STALENESS: ``wait_s`` = patience budget (None = sensible default; the engine's deadline).
     ``staleness`` ∈ {"fresh","cached_ok","cache_only"} (default cached_ok): "fresh" bypasses the cache
@@ -391,9 +398,9 @@ def penumbra_search(query: str, sources: Optional[list[str]] = None, limit: Opti
     Returns (default): {"query", "count", "documents": [...], "_meta": {..., excluded_relevant,
     "deduped": {in, out}}}. (raw one-source drill): {"source", "query", "count", "documents": [...],
     "_meta": {"diagnostic": {...}}  # only when empty/errored}. (raw buckets): {"query", "results":
-    {source: [...]}, "total_count", "_meta": {searched, empty, timed_out, errored, excluded,
-    excluded_relevant, truncated, ...}}. An unknown staleness value is treated as cached_ok and a
-    "note" is added to the return.
+    {source: [...]}, "total_count", "_meta": {searched, empty, timed_out, errored, excluded_count,
+    excluded_relevant, truncated, progressive:{fast,slow,timed_out}, ...}}. An unknown staleness value
+    is treated as cached_ok and a "note" is added to the return.
     """
     # Boundary translation (MCP surface -> engine): staleness enum -> fresh / cache_only booleans.
     _stale = (staleness or "cached_ok").strip().lower()
@@ -1455,6 +1462,52 @@ _GATHER_TIMEOUT = 120  # defensive ceiling on the wait_s budget (a hung batch ca
 # below — mechanism demoted to data; sensor/curator/gather stay excluded BY OMISSION.
 
 
+# A signature mismatch (a wrong / missing kwarg) raises a TypeError whose message names the offending
+# argument. These are the CPython phrasings for that class of error (unexpected kw / missing required /
+# multiple values / wrong positional count); matching them lets gather answer the "what ARE the real
+# params?" question the caller just failed to guess, instead of echoing an opaque TypeError.
+_SIGNATURE_MISMATCH_MARKERS = (
+    "unexpected keyword argument",
+    "missing 1 required",
+    "missing 2 required",
+    "required positional argument",
+    "required keyword-only argument",
+    "multiple values for argument",
+    "positional argument",  # "...takes N positional arguments but M were given"
+    "takes no arguments",
+)
+
+
+def _gather_signature_hint(tool_name: str) -> str:
+    """The tool's REAL parameter names, MECHANICALLY derived by inspect.signature over the unwrapped
+    body already held in _GATHER_TOOLS (never hand-listed, so it can't drift): e.g.
+    "penumbra_read takes: target, start_char, max_chars, export_media, ocr". "" on any failure or an
+    unknown tool (the caller then just gets the plain error)."""
+    try:
+        import inspect
+        fn = _GATHER_TOOLS.get(tool_name)
+        if fn is None:
+            return ""
+        params = [p.name for p in inspect.signature(fn).parameters.values()
+                  if p.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                                inspect.Parameter.KEYWORD_ONLY,
+                                inspect.Parameter.POSITIONAL_ONLY)]
+        if not params:
+            return f"{tool_name} takes: (no arguments)"
+        return f"{tool_name} takes: " + ", ".join(params)
+    except Exception:  # noqa: BLE001 (a hint is a nicety; never let it mask the real error)
+        return ""
+
+
+def _is_signature_mismatch(exc: Exception) -> bool:
+    """True iff ``exc`` reads as a call-signature mismatch (a wrong/missing argument), the one failure
+    class where naming the real params HELPS. A wrong/missing kwarg raises a ``TypeError`` whose
+    message carries one of the mismatch markers; requiring BOTH the TypeError type AND a marker keeps
+    an ordinary adapter error (which is not a TypeError, or does not carry these specific phrases) from
+    ever being mislabeled a signature problem."""
+    return isinstance(exc, TypeError) and any(m in str(exc) for m in _SIGNATURE_MISMATCH_MARKERS)
+
+
 @mcp.tool()
 @_threaded
 def penumbra_gather(calls: list[dict], wait_s: LenientInt = 60) -> dict:
@@ -1475,6 +1528,8 @@ def penumbra_gather(calls: list[dict], wait_s: LenientInt = 60) -> dict:
 
     Returns: {results: [{index, tool, status, result|error|hint}, ...],
               elapsed_s, completed, warming, failed, total}
+    On an errored call whose failure is a call-signature mismatch (a wrong / missing argument), ``hint``
+    names the tool's REAL parameters (e.g. "penumbra_read takes: target, start_char, max_chars, ...").
     """
     budget = min(int(wait_s or 60), _GATHER_TIMEOUT)
     if not calls or not isinstance(calls, list):
@@ -1497,8 +1552,16 @@ def penumbra_gather(calls: list[dict], wait_s: LenientInt = 60) -> dict:
             result = fn(**args)
             return {"index": idx, "tool": tool_name, "status": "ok", "result": result}
         except Exception as exc:
-            return {"index": idx, "tool": tool_name, "status": "errored",
-                    "error": str(exc)[:500]}
+            out = {"index": idx, "tool": tool_name, "status": "errored",
+                   "error": str(exc)[:500]}
+            # On a call-signature mismatch (a wrong / missing kwarg) fill `hint` with the tool's REAL
+            # parameter names (mechanically derived, never hand-listed) so the caller fixes the call in
+            # one round-trip. Any other failure keeps `hint` absent (no fabricated guidance).
+            if _is_signature_mismatch(exc):
+                _h = _gather_signature_hint(tool_name)
+                if _h:
+                    out["hint"] = _h
+            return out
 
     t0 = time.monotonic()
     results: list[dict] = [None] * len(calls)  # type: ignore[list-item]
