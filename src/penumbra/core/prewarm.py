@@ -50,10 +50,45 @@ one-shot lives beside the loop it warms, with no extra script to keep in sync.)
 
 from __future__ import annotations
 
+import contextvars
 import logging
 import time
 
 log = logging.getLogger(__name__)
+
+# ── prewarm is best-effort: its fetch failures are NON-EVENTS ─────────────────────────────────
+# A warm that fails just leaves that cache cold; the live query path then handles the source
+# exactly as if it had never warmed. So a source-adapter WARNING logged DURING a warm pass is
+# noise, not signal -- most visibly on a FRESH install, where the OpenAlex-backed warmed sources
+# (researcher_watch + the org_watch labs) hit the polite pool with no contact email, get rate-
+# limited, and would otherwise greet a first-time deployer with a screenful of "OpenAlex fetch
+# failed". Fixed structurally in ONE place: warm_sources sets the _PREWARMING contextvar (which
+# propagates into the adapters' copy_context() per-item workers), and a filter on the root handlers
+# drops WARNING records from the source tree WHILE that contextvar is set. Thread-scoped via the
+# contextvar, so a concurrent LIVE query (no _PREWARMING in its context) still warns, and prewarm's
+# OWN per-source summary (this module's logger, not under `.sources`) is untouched.
+_PREWARMING: "contextvars.ContextVar[bool]" = contextvars.ContextVar("penumbra_prewarming", default=False)
+_SRC_LOGGER_PREFIX = __name__.rsplit(".", 1)[0] + ".sources"   # rename-safe (penumbra.core / penumbra.core)
+
+
+class _PrewarmNoiseFilter(logging.Filter):
+    """Drop a source-tree WARNING record while a prewarm pass owns this context (see above). Only
+    exactly WARNING is dropped -- a rarer ERROR/CRITICAL from a source is left visible."""
+    def filter(self, record: logging.LogRecord) -> bool:
+        return not (record.levelno == logging.WARNING
+                    and _PREWARMING.get()
+                    and record.name.startswith(_SRC_LOGGER_PREFIX))
+
+
+def _ensure_prewarm_log_filter() -> None:
+    """Install the noise filter on the root handlers ONCE (idempotent; handlers exist after the
+    service's logging.basicConfig). A filter on the HANDLERS (not a logger) is what sees the
+    propagated child-logger records from every source."""
+    for h in logging.getLogger().handlers:
+        if not any(getattr(f, "_penumbra_prewarm", False) for f in h.filters):
+            filt = _PrewarmNoiseFilter()
+            filt._penumbra_prewarm = True   # idempotence marker
+            h.addFilter(filt)
 
 _BASE = ["researcher_watch", "ai_residencies", "overseas_ai_jobs", "scrape_js_sites", "gter",
          "ircc_ee_rounds", "zhihu_users"]
@@ -89,7 +124,9 @@ def warm_sources() -> tuple[int, int]:
     from penumbra.core import cache, fetcher
     srcs = warm_list()
     failures = 0
+    _ensure_prewarm_log_filter()
     cache.set_refresh_margin(REFRESH_MARGIN_S)
+    _prewarm_tok = _PREWARMING.set(True)  # best-effort context: source WARNINGs are non-events now
     try:
         for src in srcs:
             t0 = time.monotonic()
@@ -101,6 +138,7 @@ def warm_sources() -> tuple[int, int]:
                 log.warning("prewarm %s FAILED in %.1fs: %s", src, time.monotonic() - t0, exc)
     finally:
         cache.set_refresh_margin(0)  # never leak the margin into a later request on this thread
+        _PREWARMING.reset(_prewarm_tok)
     return len(srcs) - failures, len(srcs)
 
 

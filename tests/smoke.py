@@ -9280,6 +9280,53 @@ check("P11 W4: the zhihu adapter maps no created_time/updated_time (HTML-scrape 
       "created_time" not in _p11_zsrc and "updated_time" not in _p11_zsrc)
 
 
+# ---------------------------------------------------------------------------
+# 61. Prewarm best-effort noise filter (the docker-drytest finding 2026-07-04): a source-tree
+#     WARNING logged DURING a prewarm pass is a non-event and is dropped, so a fresh install's
+#     first boot is not a screenful of "OpenAlex fetch failed"; live-context warnings and prewarm's
+#     own per-source summary survive.
+# ---------------------------------------------------------------------------
+import logging as _lg61  # noqa: E402
+import penumbra.core.prewarm as _pw61  # noqa: E402
+
+_filt61 = _pw61._PrewarmNoiseFilter()
+_src61 = _pw61._SRC_LOGGER_PREFIX + ".api.researcher_watch_source"
+
+
+def _rec61(name, level):
+    return _lg61.LogRecord(name, level, "f.py", 1, "msg", None, None)
+
+
+check("61 prewarm filter: OUTSIDE a warm pass, a source WARNING is kept (normal signal)",
+      _filt61.filter(_rec61(_src61, _lg61.WARNING)) is True)
+_tok61 = _pw61._PREWARMING.set(True)
+try:
+    check("61 prewarm filter: DURING a warm pass, a source WARNING is dropped (best-effort non-event)",
+          _filt61.filter(_rec61(_src61, _lg61.WARNING)) is False)
+    check("61 prewarm filter: DURING a warm pass, a source INFO is kept (only WARNING is noise)",
+          _filt61.filter(_rec61(_src61, _lg61.INFO)) is True)
+    check("61 prewarm filter: DURING a warm pass, a source ERROR is kept (rarer, left visible)",
+          _filt61.filter(_rec61(_src61, _lg61.ERROR)) is True)
+    check("61 prewarm filter: prewarm's OWN summary warning (not under .sources) survives the pass",
+          _filt61.filter(_rec61(_pw61.__name__, _lg61.WARNING)) is True)
+finally:
+    _pw61._PREWARMING.reset(_tok61)
+check("61 prewarm filter: contextvar reset restores the normal warning flow",
+      _filt61.filter(_rec61(_src61, _lg61.WARNING)) is True)
+
+# idempotent install: two calls add exactly one prewarm filter to a handler
+_h61 = _lg61.StreamHandler()
+_root61 = _lg61.getLogger()
+_root61.addHandler(_h61)
+try:
+    _pw61._ensure_prewarm_log_filter()
+    _pw61._ensure_prewarm_log_filter()
+    check("61 prewarm filter: install is idempotent (exactly one filter per handler)",
+          sum(bool(getattr(f, "_penumbra_prewarm", False)) for f in _h61.filters) == 1)
+finally:
+    _root61.removeHandler(_h61)
+
+
 print()
 if FAIL:
     print(f"SMOKE FAILED: {len(FAIL)} problem(s)")
