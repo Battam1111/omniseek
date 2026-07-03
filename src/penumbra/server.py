@@ -1997,6 +1997,8 @@ def main() -> None:
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
         stream=sys.stderr,
     )
+    from penumbra.core import _lograte
+    _lograte.install_on_root()  # no single logger may flood the log (fresh-install OpenAlex storm)
     log.info("Penumbra MCP server starting. Loaded %d source modules.", len(loaded_modules))
     log.info("Registered adapters: %s", fetcher.all_adapter_names())
     mcp.run()

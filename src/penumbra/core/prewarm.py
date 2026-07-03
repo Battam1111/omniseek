@@ -50,47 +50,17 @@ one-shot lives beside the loop it warms, with no extra script to keep in sync.)
 
 from __future__ import annotations
 
-import contextlib
 import logging
 import time
 
 log = logging.getLogger(__name__)
 
-# ── prewarm is best-effort: its fetch failures are NON-EVENTS ─────────────────────────────────
-# A warm that fails just leaves that cache cold; the live query path then handles the source
-# exactly as if it had never warmed. So the WARNING chatter a warm pass provokes is noise, not
-# signal -- most visibly on a FRESH install, where the OpenAlex-backed warmed sources
-# (researcher_watch + the ~39 org_watch labs) hit the polite pool with no contact email, get rate-
-# limited, and would otherwise greet a first-time deployer with a screenful of "fetch failed:
-# circuit open" plus the breaker's own "openalex circuit OPEN". Silenced structurally in ONE place:
-# the warm pass raises the loggers it EXERCISES to ERROR for its duration -- the source adapters
-# (`.sources`) and the shared OpenAlex client they drive (`._openalex`) -- so their WARNING / INFO
-# on ANY thread (including the worker threads a source spawns WITHOUT copy_context, e.g. org_watch)
-# are dropped, while a rarer ERROR, prewarm's OWN per-source summary (this module's logger), the
-# recall-embedder / bind-posture startup notices (different loggers, legitimately shown once), and
-# any live query's warnings OUTSIDE the brief pass all survive. The two loggers are NAMED rather
-# than blanket-silencing `penumbra.core` precisely so those legit non-warm notices are not hidden.
-# (A per-context flag was tried first and reached only copy_context workers -- researcher_watch's,
-# not org_watch's; the fresh-docker boot log is the oracle that caught the gap. A logger's LEVEL
-# lives on the logger object, so it is thread-agnostic -- that is why it covers every worker.)
-_pkg = __name__.rsplit(".", 1)[0]                        # rename-safe (penumbra.core / penumbra.core)
-_WARM_QUIET_LOGGERS = (_pkg + ".sources", _pkg + "._openalex")
-
-
-@contextlib.contextmanager
-def _quiet_warm_noise():
-    """Raise each warm-exercised logger to ERROR for a best-effort warm pass, then restore (the
-    codebase's set_refresh_margin try/finally idiom, for logging). Only WARNING / INFO are
-    silenced; a rarer ERROR still surfaces."""
-    saved = [(lg, lg.level) for lg in map(logging.getLogger, _WARM_QUIET_LOGGERS)]
-    for lg, _lvl in saved:
-        lg.setLevel(logging.ERROR)
-    try:
-        yield
-    finally:
-        for lg, lvl in saved:
-            lg.setLevel(lvl)
-
+# prewarm is best-effort: a warm that fails just leaves that cache cold, and the live query path
+# then handles the source exactly as if it never warmed. The WARNING chatter a warm provokes (most
+# visibly on a FRESH no-contact-email install, where the OpenAlex-backed sources hit the polite pool
+# unauthenticated and the breaker opens) is noise, not signal. It is NOT silenced here per-subsystem
+# (that proved fragile — see _lograte): the general per-logger rate-limit filter installed on the
+# root handler at startup caps this and every other warning storm at one place, thread-agnostic.
 _BASE = ["researcher_watch", "ai_residencies", "overseas_ai_jobs", "scrape_js_sites", "gter",
          "ircc_ee_rounds", "zhihu_users"]
 WARM_INTERVAL_S = 1800  # 30 min — well under every warmed source's TTL (2h/3h/6h)
@@ -127,15 +97,14 @@ def warm_sources() -> tuple[int, int]:
     failures = 0
     cache.set_refresh_margin(REFRESH_MARGIN_S)
     try:
-        with _quiet_warm_noise():  # best-effort warm: the WARNINGs it provokes are non-events, not spam
-            for src in srcs:
-                t0 = time.monotonic()
-                try:
-                    docs = fetcher.fetch_one(src, "", limit=50, deadline_s=None)
-                    log.info("prewarm %s: %d docs in %.1fs", src, len(docs), time.monotonic() - t0)
-                except Exception as exc:  # noqa: BLE001 — one bad source never blocks the rest
-                    failures += 1
-                    log.warning("prewarm %s FAILED in %.1fs: %s", src, time.monotonic() - t0, exc)
+        for src in srcs:
+            t0 = time.monotonic()
+            try:
+                docs = fetcher.fetch_one(src, "", limit=50, deadline_s=None)
+                log.info("prewarm %s: %d docs in %.1fs", src, len(docs), time.monotonic() - t0)
+            except Exception as exc:  # noqa: BLE001 — one bad source never blocks the rest
+                failures += 1
+                log.warning("prewarm %s FAILED in %.1fs: %s", src, time.monotonic() - t0, exc)
     finally:
         cache.set_refresh_margin(0)  # never leak the margin into a later request on this thread
     return len(srcs) - failures, len(srcs)
