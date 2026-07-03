@@ -8,12 +8,13 @@ Sensors are background cache warmers with novelty detection. Each sensor:
 
 A sensor is DECLARATIVE STATE the eye executes mechanically; a run is an act of
 PERCEPTION, and perception must land on the wall, so execution belongs in the ONE
-process that can write memory (single-writer). start_scheduler ticks the due sensors
-IN-PROCESS on the eye-http service (WRITES_ENABLED-guarded, so no other context can
-ever start it). The MCP tool penumbra_sensor action=run triggers one sensor immediately for
-testing. The razor: the agent registers what to monitor (judgment); the diff is
-mechanical. (The old launchd cron runner was a second, memory-less perception path with
-writes disabled; it is deleted, not fixed.)
+process that can write memory (single-writer). The sensor tick runs IN-PROCESS on the
+eye-http service; in P9 the daemon loop that drives it lives in penumbra.core.jobs (the
+ONE fleet scheduler, WRITES_ENABLED-guarded, so no other context can ever start it), and
+the sensor tick is registered there as job row #1. The MCP tool penumbra_sensor action=run
+triggers one sensor immediately for testing. The razor: the agent registers what to
+monitor (judgment); the diff is mechanical. (The old launchd cron runner was a second,
+memory-less perception path with writes disabled; it is deleted, not fixed.)
 """
 
 from __future__ import annotations
@@ -230,17 +231,17 @@ def compute_diff(results: list, baseline: list[list[str]]) -> list:
             if (r.source, r.source_id) not in baseline_set]
 
 
-# ── The in-process scheduler (P6): the ONE perception path ───────────────────────────────────────
+# ── The in-process sensor tick (P6 perception; the P9 loop lives in jobs.py) ──────────────────────
 # A run is an act of PERCEPTION and perception must land on the wall, so execution belongs in the
-# ONE process that can write memory. The scheduler ticks every due sensor SERIALLY in the eye-http
-# process (start_scheduler is WRITES_ENABLED-guarded, so no cron / smoke / CLI context can start a
-# second, memory-less path). due_sensors is PURE (unit-testable); scheduler_tick isolates a failing
-# sensor so one bad query never stops the rest. The old launchd cron runner is deleted.
+# ONE process that can write memory. due_sensors is PURE (unit-testable); scheduler_tick runs every
+# due sensor SERIALLY and isolates a failing sensor so one bad query never stops the rest. In P9 the
+# daemon LOOP that drives this tick moved into penumbra.core.jobs (the ONE scheduler for the whole
+# fleet): the sensor tick is now registered there as job row #1 (scheduler_tick_for_sensors), and the
+# WRITES_ENABLED + double-start guards that used to gate the sensor loop now gate jobs.start_scheduler.
+# The old launchd cron runner is deleted. sensor.py keeps only the sensor SEMANTICS (this tick).
 
 _SCHEDULE_SECONDS = {"hourly": 3600, "daily": 86400, "weekly": 604800}
 _UNKNOWN_SCHEDULE_LOGGED: set[str] = set()   # log an unknown schedule once per sensor id (debug)
-_scheduler_started = False                   # idempotence guard: a double call cannot start two threads
-_scheduler_lock = threading.Lock()
 
 
 def _interval_seconds(sensor: "Sensor") -> int:
@@ -264,7 +265,7 @@ def _parse_iso(ts: Optional[str]) -> Optional[float]:
     try:
         dt = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
         return dt.timestamp()
-    except Exception as exc:  # noqa: BLE001 — a bad stamp reads as never-run, never a crash
+    except Exception as exc:  # noqa: BLE001 (a bad stamp reads as never-run, never a crash)
         log.debug("sensor last_run_at unparseable (%r): %s", ts, exc)
         return None
 
@@ -288,7 +289,7 @@ def scheduler_tick(store: SensorStore) -> dict:
     """Run every DUE sensor serially via ``run_sensor`` (each wrapped in try/except so one failing
     sensor never stops the rest), Bark on ``sensor.notify and summary["new_count"] > 0``, and return
     a mechanical summary ``{"checked", "ran", "failed"}``. Logs ONE info line per tick that ran
-    anything; a zero-due tick logs NOTHING (silence there means idle — the launchd service log must
+    anything; a zero-due tick logs NOTHING (silence there means idle; the launchd service log must
     not fill with heartbeats). The tick needs no extra lock: SensorStore is thread-safe and run_sensor
     is reentrant-safe (a concurrent manual run at worst double-searches; the cache absorbs it)."""
     now = time.time()
@@ -301,7 +302,7 @@ def scheduler_tick(store: SensorStore) -> dict:
             ran.append(s.id)
             if s.notify and summary.get("new_count", 0) > 0:
                 _bark_new_results(s, summary)
-        except Exception:  # noqa: BLE001 — one bad sensor must never stop the tick
+        except Exception:  # noqa: BLE001 (one bad sensor must never stop the tick)
             log.exception("sensor %s (%s) failed in scheduler tick", s.id, s.query)
             failed.append(s.id)
     if ran or failed:
@@ -310,80 +311,30 @@ def scheduler_tick(store: SensorStore) -> dict:
     return {"checked": len(due), "ran": ran, "failed": failed}
 
 
-def start_scheduler(interval_s: int = 900, initial_delay_s: int = 120) -> Optional[threading.Thread]:
-    """Start the daemon scheduler thread (loops ``sleep(initial_delay_s); while True: tick;
-    sleep(interval_s)``). The initial delay keeps deploy restarts from firing runs mid-restart-storm.
-
-    Two guards make this the ONE perception path: (1) it REFUSES to start unless
-    ``writer.WRITES_ENABLED`` is truthy (the scheduler only ever belongs in the writer process — a
-    cron / smoke / CLI import leaves it False, so no memory-less path can ever tick); (2) a module
-    idempotence flag so a double call cannot start two threads. Returns the Thread it started, or
-    None when a guard refused. Import the writer INSIDE so a smoke import that never enables writes
-    still sees the refusal, not an import-order surprise."""
-    global _scheduler_started
-    try:
-        from penumbra.core.recall import writer
-        writes_on = bool(writer.WRITES_ENABLED)
-    except Exception as exc:  # noqa: BLE001 — cannot read the gate -> treat as OFF, refuse to start
-        log.warning("sensor scheduler: cannot read WRITES_ENABLED (%s); not starting", exc)
-        return None
-    if not writes_on:
-        log.warning("sensor scheduler: WRITES_ENABLED is off; not starting "
-                    "(the scheduler only ever belongs in the writer process)")
-        return None
-    with _scheduler_lock:
-        if _scheduler_started:
-            return None
-        _scheduler_started = True
-
-    def _loop() -> None:
-        time.sleep(max(0, initial_delay_s))
-        while True:
-            try:
-                scheduler_tick(SensorStore())
-            except Exception:  # noqa: BLE001 — a tick must never kill the loop
-                log.exception("sensor scheduler tick crashed; continuing")
-            time.sleep(max(1, interval_s))
-
-    t = threading.Thread(target=_loop, name="sensor-scheduler", daemon=True)
-    t.start()
-    return t
+def scheduler_tick_for_sensors() -> dict:
+    """JOB-ROW ENTRY POINT (P9): the sensor tick as registered job #1 in penumbra.core.jobs. The P6
+    daemon LOOP moved to jobs.py (the ONE scheduler for the whole fleet), so this is the zero-arg fn
+    the job registry calls every time the "sensors" row is due; it builds a fresh SensorStore and
+    delegates to scheduler_tick. The P6 SEMANTICS are unchanged: due sensors run serially, a failing
+    sensor is isolated, and Bark-on-new stays inside run_sensor/_bark_new_results. The two guards that
+    used to live on the sensor start_scheduler (WRITES_ENABLED + double-start) now live on
+    jobs.start_scheduler, which owns the single daemon thread this row runs under."""
+    return scheduler_tick(SensorStore())
 
 
-# ── Bark push (P6, ported from the deleted runner's _notify) ──────────────────────────────────────
+# ── Bark push (P6, ported from the deleted runner's _notify; the impl moved to notify.py in P9) ────
 # The runner pushed via scripts/_sentinel_common (urllib); in-process we use the eye's EXISTING httpx
-# dependency and read the credential file the auth.py way (fail-open to no-op when absent). The GROUP
-# string is spelled "Penumbra" so the penumbra sync's Penumbra->Penumbra rename lands correctly on both
-# sides. Message shape is the runner's: title = the sensor query, body = new_count + first new titles.
-
-_BARK_CREDS_PATH = Path.home() / ".penumbra" / "credentials" / "bark.json"
-
+# dependency and read the credential file the auth.py way (fail-open to no-op when absent). P9 lifted
+# that impl into penumbra.core.notify so the generalized job registry shares ONE push primitive; this
+# thin alias keeps the P6 call sites (_bark_new_results) unchanged and the same fail-open contract +
+# GROUP "Penumbra" (spelled so the penumbra sync's Penumbra->Penumbra rename lands on both sides).
 
 def _bark_push(title: str, body: str) -> None:
-    """POST one Bark notification (group "Penumbra", ~3s timeout). FAIL-OPEN: an absent credentials
-    file, a missing device_key, or any HTTP/parse failure is a debug log and a silent return, NEVER
-    an exception (a push failure must never break a sensor run). Reads ~/.penumbra/credentials/bark.json
-    ({device_key, api_base}) the way auth.load() reads a source credential file."""
-    try:
-        if not _BARK_CREDS_PATH.exists():
-            log.debug("bark push skipped: no credentials at %s", _BARK_CREDS_PATH)
-            return
-        creds = json.loads(_BARK_CREDS_PATH.read_text(encoding="utf-8"))
-    except Exception as exc:  # noqa: BLE001 — unreadable creds -> no-op, never raise
-        log.debug("bark push skipped: credentials unreadable (%s)", exc)
-        return
-    key = (creds or {}).get("device_key")
-    api = (creds or {}).get("api_base") or "https://api.day.app"
-    if not key:
-        log.debug("bark push skipped: no device_key in credentials")
-        return
-    try:
-        import httpx
-        httpx.post(f"{api.rstrip('/')}/{key}",
-                   json={"title": title, "body": body, "group": "Penumbra"},
-                   timeout=3.0)
-    except Exception as exc:  # noqa: BLE001 — the push is best-effort; a failure never breaks a run
-        log.debug("bark push failed (%s)", exc)
+    """Fail-open Bark push (group "Penumbra"): delegates to notify.bark_push. Kept as a module-local
+    name so the existing _bark_new_results call site is untouched and any monkeypatch of this symbol
+    in a test still works."""
+    from penumbra.core import notify
+    notify.bark_push(title, body, group="Penumbra")
 
 
 def _bark_new_results(sensor: "Sensor", summary: dict) -> None:

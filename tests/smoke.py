@@ -1872,7 +1872,11 @@ import re as _p4re  # noqa: E402
 from penumbra.core.curator import discover as _disc  # noqa: E402
 
 _CUR_DIR = ROOT / "src" / "penumbra" / "core" / "curator"
-_LOOP_PATH = ROOT / "scripts" / "curator.py"  # ROOT == organs/eye (smoke ROOT = parents[1])
+# P9: the monthly curator LOOP moved from scripts/curator.py into the in-process job
+# penumbra.core.infra_jobs.run_curator (the same mechanical-only body, now a scheduler row). The razor
+# invariants below grep that transplanted source, so the "no verdict-writer / sorted digests / streak
+# freeze" guarantees ride along unchanged into the new home.
+_LOOP_PATH = ROOT / "src" / "penumbra" / "core" / "infra_jobs.py"
 
 # (9.1) THE CRON NEVER JUDGES: the loop + discover make NO CALL to a verdict-writer + IMPORT no
 # model / WebSearch / profile. Grep the CODE (docstrings/comments stripped, so the razor's prose
@@ -1894,7 +1898,7 @@ def _strip_py_noise(src: str) -> str:
 
 _disc_src = _insp.getsource(_disc)
 _loop_src = _LOOP_PATH.read_text(encoding="utf-8") if _LOOP_PATH.exists() else ""
-check("curator P4: curator.py source readable", bool(_loop_src), str(_LOOP_PATH))
+check("curator P4: curator job source readable (infra_jobs.run_curator)", bool(_loop_src), str(_LOOP_PATH))
 _disc_code = _strip_py_noise(_disc_src)
 _loop_code = _strip_py_noise(_loop_src)
 # verdict-writer CALL forms (a bare prose mention without "(" is now also gone with the strings).
@@ -2046,11 +2050,11 @@ check("curator P4 (§10): sentinel bark is diff-gated — unchanged single/empty
 _ne1, _ns1 = _sentinel_newly(["aXb", "eXf"], ["cXd", "gXh"], _base)  # one new each
 check("curator P4 (§10): a NEWLY-empty / NEWLY-single cell DOES fire (edge alarm)",
       _ne1 == ["eXf"] and _ns1 == ["gXh"])
-# the sentinel source actually diff-gates (greps for newly_empty/newly_single + the diff op).
-_sent_src = (ROOT / "scripts" / "source_audit.py")
-_sent_src = _sent_src if _sent_src.exists() else (ROOT.parent.parent / "scripts" / "source_audit.py")
+# the audit source actually diff-gates (greps for newly_empty/newly_single + the diff op). P9: the
+# weekly source-audit moved from scripts/source_audit.py into infra_jobs.run_source_audit (same body).
+_sent_src = (ROOT / "src" / "penumbra" / "core" / "infra_jobs.py")
 _sent_txt = _sent_src.read_text(encoding="utf-8") if _sent_src.exists() else ""
-check("curator P4 (§10): sentinel computes newly_empty/newly_single via a set-diff against the baseline",
+check("curator P4 (§10): audit job computes newly_empty/newly_single via a set-diff against the baseline",
       "newly_empty" in _sent_txt and "newly_single" in _sent_txt
       and 'prev.get("single_occupant_cells"' in _sent_txt)
 # the loop's digest list is byte-equal to sorted(...) (HOLE-1: never centrality/yield-ranked).
@@ -7278,9 +7282,11 @@ check("p5 surface: the tool count is UNCHANGED (17) — since/similar are penumb
 # 53. P6 (A) — the in-process sensor scheduler (design "P6", the two structural closures): a run is
 #     an act of PERCEPTION and must land on the wall, so execution moved INTO the writer process and
 #     the launchd cron runner (a second, memory-less path) is deleted. Cover the PURE due_sensors
-#     cases, scheduler_tick (runs due + isolates a failure + Barks only on notify+new), the two
-#     start_scheduler guards (WRITES_ENABLED off + double-start), _bark_push fail-open, and the
-#     grep-style tripwire that NO in-repo sensor_runner reference remains.
+#     cases, scheduler_tick (runs due + isolates a failure + Barks only on notify+new), and the
+#     grep-style tripwire that NO in-repo sensor_runner reference remains. (P9: the daemon LOOP + its
+#     two guards moved to jobs.start_scheduler and _bark_push's impl moved to notify; those guards +
+#     the fail-open push are tested below against their NEW homes, and the full P9 job registry has
+#     its own section §57.)
 # ---------------------------------------------------------------------------
 import penumbra.core.sensor as _sen53  # noqa: E402
 from penumbra.core.sensor import Sensor as _Sensor53, SensorStore as _Store53, due_sensors as _due53  # noqa: E402
@@ -7357,40 +7363,52 @@ finally:
     _tmp_tick53.unlink(missing_ok=True)
 
 # (3a) start_scheduler REFUSES to start unless writer.WRITES_ENABLED is truthy (the scheduler only
-#      ever belongs in the writer process). Monkeypatch the gate off + reset the idempotence flag.
+#      ever belongs in the writer process). P9: the daemon loop + these two guards moved from
+#      sensor.start_scheduler to jobs.start_scheduler (the ONE fleet scheduler; the sensor tick is
+#      now job row #1 there). Test the guards on their new home. Monkeypatch the gate off + reset the
+#      idempotence flag.
+import penumbra.core.jobs as _jobs53  # noqa: E402
 import penumbra.core.recall.writer as _wr53  # noqa: E402
 _writes_real53 = _wr53.WRITES_ENABLED
-_started_real53 = _sen53._scheduler_started
+_started_real53 = _jobs53._scheduler_started
+_shipped_real53 = _jobs53._shipped_registered
 try:
     _wr53.WRITES_ENABLED = False
-    _sen53._scheduler_started = False
+    _jobs53._scheduler_started = False
     check("p6-A start_scheduler: REFUSES to start when WRITES_ENABLED is off (returns None)",
-          _sen53.start_scheduler() is None)
+          _jobs53.start_scheduler() is None)
     check("p6-A start_scheduler: the refusal does NOT set the started flag",
-          _sen53._scheduler_started is False)
+          _jobs53._scheduler_started is False)
     # (3b) double-start guard: with writes ON, the FIRST start returns a Thread, the SECOND returns
-    #      None (the module flag prevents a second thread). Clean up the started daemon after.
+    #      None (the module flag prevents a second thread). Clean up the started daemon after. Guard
+    #      _shipped_registered so register_shipped_jobs (called inside start) does not permanently
+    #      register the live rows into the smoke's process on a re-run.
     _wr53.WRITES_ENABLED = True
-    _sen53._scheduler_started = False
-    _th53_a = _sen53.start_scheduler(interval_s=3600, initial_delay_s=3600)  # long delays: it just sleeps
-    _th53_b = _sen53.start_scheduler(interval_s=3600, initial_delay_s=3600)
+    _jobs53._scheduler_started = False
+    _th53_a = _jobs53.start_scheduler(interval_s=3600, initial_delay_s=3600)  # long delays: it just sleeps
+    _th53_b = _jobs53.start_scheduler(interval_s=3600, initial_delay_s=3600)
     check("p6-A start_scheduler: first start (writes on) returns a daemon Thread",
           _th53_a is not None and _th53_a.daemon is True)
     check("p6-A start_scheduler: a second start is a no-op (double-start guard returns None)",
           _th53_b is None)
 finally:
     _wr53.WRITES_ENABLED = _writes_real53
-    _sen53._scheduler_started = _started_real53  # the started daemon is a harmless sleeping thread
+    _jobs53._scheduler_started = _started_real53  # the started daemon is a harmless sleeping thread
+    _jobs53._shipped_registered = _shipped_real53
 
-# (4) _bark_push is FAIL-OPEN: an ABSENT credentials file is a silent no-op (never raises), so a
-#     deployment with no bark.json simply pushes nothing. Point the creds path at a missing file.
-_bark_creds_real53 = _sen53._BARK_CREDS_PATH
+# (4) the sensor _bark_push is FAIL-OPEN: an ABSENT credentials file is a silent no-op (never raises),
+#     so a deployment with no bark.json simply pushes nothing. P9 lifted the push impl into
+#     penumbra.core.notify (sensor._bark_push now delegates there), so the creds path lives on notify.
+#     Point that path at a missing file and confirm both the notify primitive AND the sensor alias
+#     no-op without raising.
+import penumbra.core.notify as _notify53  # noqa: E402
+_bark_creds_real53 = _notify53._BARK_CREDS_PATH
 try:
-    _sen53._BARK_CREDS_PATH = _Path44(_tempfile44.mktemp(suffix=".json"))  # does not exist
+    _notify53._BARK_CREDS_PATH = _Path44(_tempfile44.mktemp(suffix=".json"))  # does not exist
     check("p6-A _bark_push: fail-open no-op when the credentials file is absent (no raise)",
-          _sen53._bark_push("t", "b") is None)
+          _notify53.bark_push("t", "b") is None and _sen53._bark_push("t", "b") is None)
 finally:
-    _sen53._BARK_CREDS_PATH = _bark_creds_real53
+    _notify53._BARK_CREDS_PATH = _bark_creds_real53
 
 # (5) THE SECOND PATH IS DELETED: scripts/sensor_runner.py is gone, and NO in-repo file references
 #     the token "sensor_runner" (a memory-less cron runner is not fixed, it is removed). Grep-style
@@ -7834,6 +7852,453 @@ _s55_search_names = _s55_code_names(_rstore.search) | _s55_vs_names
 check("p7 W3 tripwire: the recall search arm never references vec_thin / thin matrix / similar_neighbors in code",
       "similar_neighbors" not in _s55_search_names and "_ensure_thin_matrix" not in _s55_search_names
       and not any("vec_thin" in n for n in _s55_search_names))
+
+
+# ---------------------------------------------------------------------------
+# 57. P9 (the fleet rebuild around the in-process scheduler): the P6 sensor scheduler generalized
+#     into a JOB REGISTRY (penumbra.core.jobs) that runs every scheduled piece of the eye's self-
+#     maintenance as a declarative row on ONE daemon loop in the writer process, plus the ONE external
+#     sentinel (scripts/sentinel.py) that restarts the organ + its browsers. The derived architecture:
+#     what stays OUTSIDE the organ is only "must this still run when the organ is dead?" -> the
+#     sentinel, state-backup, and the CDP browsers; everything else became a job row. Cover: the pure
+#     schedule parser (every valid form + garbage) + the calendar due-ness matrix; the registry
+#     (duplicate/unknown refused, profile override, every shipped row shippable); the tick body
+#     (heartbeat touched, failing job isolated + Barked once per cooldown, serial order); the
+#     transplant cores (source-health N_CONSECUTIVE, log rotation, digest no-op, warmer importable);
+#     the sentinel offline (dead healthz -> kickstart, stale heartbeat -> distinct alarm, maintenance
+#     pauses CDP heal, and the ISOLATION tripwire that it imports zero penumbra); and the deletion sweep.
+# ---------------------------------------------------------------------------
+import importlib.util as _il57  # noqa: E402
+import io as _io57  # noqa: E402
+import os as _os57  # noqa: E402
+import contextlib as _ctx57  # noqa: E402
+import tempfile as _tf57  # noqa: E402
+import time as _time57  # noqa: E402
+from datetime import datetime as _dt57  # noqa: E402
+import penumbra.core.jobs as _J57  # noqa: E402
+
+# (1) SCHEDULE PARSER — every valid form parses to the right kind; garbage raises ValueError.
+check("p9 parser: every:900s -> interval(900s)",
+      _J57.parse_schedule("every:900s").kind == "interval" and _J57.parse_schedule("every:900s").seconds == 900)
+_p9_daily = _J57.parse_schedule("daily@09:17,14:17,19:17")
+check("p9 parser: daily@HH:MM,... -> daily with the sorted time tuple",
+      _p9_daily.kind == "daily" and _p9_daily.times == ((9, 17), (14, 17), (19, 17)))
+_p9_wk = _J57.parse_schedule("weekly@sun-06:00")
+check("p9 parser: weekly@ddd-HH:MM -> weekly (Sun=6) at the time",
+      _p9_wk.kind == "weekly" and _p9_wk.weekday == 6 and _p9_wk.times == ((6, 0),))
+_p9_mo = _J57.parse_schedule("monthly@1-06:00")
+check("p9 parser: monthly@<D>-HH:MM -> monthly on day-of-month",
+      _p9_mo.kind == "monthly" and _p9_mo.dom == 1 and _p9_mo.times == ((6, 0),))
+_p9_garbage = ["bogus", "every:0s", "every:900", "every:-5s", "daily@25:00", "daily@", "daily@12:60",
+               "weekly@xxx-06:00", "weekly@sun", "monthly@0-06:00", "monthly@32-06:00", "monthly@1", ""]
+_p9_bad = []
+for _g in _p9_garbage:
+    try:
+        _J57.parse_schedule(_g)
+        _p9_bad.append(_g)  # a garbage spec that did NOT raise is the bug
+    except ValueError:
+        pass
+check("p9 parser: every garbage schedule raises ValueError (loud, never a silent default)",
+      not _p9_bad, f"did not raise for: {_p9_bad}")
+
+# (1b) CALENDAR DUE-NESS MATRIX (pure is_due): before slot / after slot / already-ran-this-slot /
+#      missed TWO slots -> exactly one run. Use a fixed local wall time to make the slots deterministic.
+_d = _J57.parse_schedule("daily@12:00")
+_now13 = _dt57(2026, 7, 3, 13, 0, 0).timestamp()       # 13:00, past today's 12:00 slot
+_slot_today = _dt57(2026, 7, 3, 12, 0, 0).timestamp()
+_ran_prev_slot = _dt57(2026, 7, 2, 12, 30, 0).timestamp()   # ran after yesterday's slot
+_ran_this_slot = _dt57(2026, 7, 3, 12, 30, 0).timestamp()   # ran after today's slot
+_ran_3d_ago = _dt57(2026, 6, 30, 12, 30, 0).timestamp()     # missed 2 full slots
+_now11 = _dt57(2026, 7, 3, 11, 0, 0).timestamp()            # before today's slot
+_ran_10 = _dt57(2026, 7, 3, 10, 0, 0).timestamp()
+check("p9 due: BEFORE today's slot, having run after the previous slot -> NOT due",
+      _J57.is_due(_d, _now11, _ran_10) is False)
+check("p9 due: AFTER the slot, last run was the previous slot -> due",
+      _J57.is_due(_d, _now13, _ran_prev_slot) is True)
+check("p9 due: ALREADY ran this slot -> NOT due (at most one run per slot)",
+      _J57.is_due(_d, _now13, _ran_this_slot) is False)
+check("p9 due: MISSED two slots -> due exactly once (compares only the most-recent slot, no replay)",
+      _J57.is_due(_d, _now13, _ran_3d_ago) is True)
+check("p9 due: never-run calendar job with a past slot -> due",
+      _J57.is_due(_d, _now13, None) is True)
+# interval due-ness: never-run due; fresh not due; elapsed due.
+_iv = _J57.parse_schedule("every:1800s")
+check("p9 due: interval never-run -> due; fresh -> not due; elapsed -> due",
+      _J57.is_due(_iv, 5000.0, None) is True and _J57.is_due(_iv, 1000.0, 999.0) is False
+      and _J57.is_due(_iv, 5000.0, 1000.0) is True)
+# monthly Feb-31 skip: a month with no day-31 contributes no slot (uses the prior month's).
+_m31 = _J57.parse_schedule("monthly@31-06:00")
+_feb15 = _dt57(2026, 2, 15, 10, 0, 0).timestamp()
+_mrs = _J57._most_recent_slot(_m31, _feb15)
+check("p9 due: monthly@31 in a 28-day month falls back to the prior month's day-31 slot (no phantom Feb 31)",
+      _mrs is not None and _dt57.fromtimestamp(_mrs) == _dt57(2026, 1, 31, 6, 0, 0))
+
+# (2) JOB REGISTRY — register + duplicate refused; unknown-schedule refused AT registration; profile
+#     override flips enabled; every SHIPPED row's fn is callable + its schedule parses.
+_reg_real57 = dict(_J57._REGISTRY)  # snapshot; restore after so we don't leak test rows
+try:
+    _J57._REGISTRY.clear()
+    _r = _J57.register_job("t_a", "every:60s", lambda: None)
+    check("p9 registry: register_job returns a JobRow with the parsed schedule + default enabled",
+          _r.name == "t_a" and _r.schedule.kind == "interval" and _r.enabled is True)
+    _dup_raised = False
+    try:
+        _J57.register_job("t_a", "every:60s", lambda: None)
+    except ValueError:
+        _dup_raised = True
+    check("p9 registry: a DUPLICATE job name raises ValueError", _dup_raised)
+    _unk_raised = False
+    try:
+        _J57.register_job("t_bad", "frobnicate", lambda: None)
+    except ValueError:
+        _unk_raised = True
+    check("p9 registry: an UNKNOWN schedule is refused AT registration (never registered silently)",
+          _unk_raised and "t_bad" not in _J57._REGISTRY)
+    # profile override: jobs[name]=False disables a default-enabled row; jobs[name]=True re-enables a
+    # default-disabled row; absent -> shipped default. (job_enabled reads an injected overrides dict.)
+    _row_on = _J57.register_job("t_on", "every:60s", lambda: None, enabled=True)
+    _row_off = _J57.register_job("t_off", "every:60s", lambda: None, enabled=False)
+    check("p9 registry: profile jobs override flips enabled (False disables, True enables, absent=default)",
+          _J57.job_enabled(_row_on, {"t_on": False}) is False
+          and _J57.job_enabled(_row_off, {"t_off": True}) is True
+          and _J57.job_enabled(_row_on, {}) is True and _J57.job_enabled(_row_off, {}) is False)
+finally:
+    _J57._REGISTRY.clear()
+    _J57._REGISTRY.update(_reg_real57)
+
+# (2b) THE REGISTRY TRIPWIRE: every SHIPPED row is registrable, its fn callable, its schedule parses,
+#      and the shipped set is exactly the expected fleet (no row silently added/dropped).
+_shipped_real57 = _J57._shipped_registered
+_reg_real57b = dict(_J57._REGISTRY)
+try:
+    _J57._REGISTRY.clear()
+    _J57._shipped_registered = False
+    _J57.register_shipped_jobs()
+    _EXPECT_ROWS = {"sensors", "source-health", "wewerss-probe", "session-warmer", "log-rotation",
+                    "curator", "source-audit", "digest"}
+    check("p9 registry tripwire: the shipped rows are exactly the P9 fleet",
+          set(_J57._REGISTRY.keys()) == _EXPECT_ROWS)
+    _bad_rows = [n for n, r in _J57._REGISTRY.items()
+                 if not callable(r.fn) or not isinstance(r.schedule, _J57.Schedule)]
+    check("p9 registry tripwire: every shipped row's fn is callable + its schedule parsed",
+          not _bad_rows, str(_bad_rows))
+    check("p9 registry tripwire: curator + source-audit ship ENABLED (ignition), digest ships DISABLED",
+          _J57._REGISTRY["curator"].enabled is True and _J57._REGISTRY["source-audit"].enabled is True
+          and _J57._REGISTRY["digest"].enabled is False)
+    _bad_budgets = [n for n, r in _J57._REGISTRY.items()
+                    if not (0 < r.budget_s <= _J57._MAX_JOB_BUDGET_S)]
+    check("p9 registry tripwire: every shipped budget stays under the sentinel-wedge ceiling",
+          not _bad_budgets, str(_bad_budgets))
+finally:
+    _J57._REGISTRY.clear()
+    _J57._REGISTRY.update(_reg_real57b)
+    _J57._shipped_registered = _shipped_real57
+
+# (3) SCHEDULER LOOP MECHANICS (no thread: call the tick body directly): heartbeat touched; a failing
+#     job is isolated (never stops the rest) + Barked ONCE per cooldown; serial order = registration.
+_st57_dir = _Path44(_tf57.mkdtemp())
+_state_real57, _hb_real57 = _J57.STATE_PATH, _J57.HEARTBEAT_PATH
+_reg_real57c, _shipped_real57c = dict(_J57._REGISTRY), _J57._shipped_registered
+import penumbra.core.notify as _notify57  # noqa: E402
+_bark_real57 = _notify57.bark_push
+try:
+    _J57.STATE_PATH = _st57_dir / "scheduler-state.json"
+    _J57.HEARTBEAT_PATH = _st57_dir / "scheduler-heartbeat"
+    _J57._REGISTRY.clear()
+    _order57 = []
+    _J57.register_job("j_a", "every:1s", lambda: _order57.append("j_a"))
+    def _boom57():
+        _order57.append("j_b")
+        raise RuntimeError("simulated job failure")
+    _J57.register_job("j_b", "every:1s", _boom57)
+    _J57.register_job("j_c", "every:1s", lambda: _order57.append("j_c"))
+    _barks57 = []
+    _notify57.bark_push = lambda title, body, group="Penumbra": _barks57.append(title)
+    _r1 = _J57.run_due_jobs(now=1000.0)
+    check("p9 tick: the heartbeat dead-man file is touched every tick",
+          _J57.HEARTBEAT_PATH.exists())
+    check("p9 tick: a failing job is isolated (ran the rest, failed only the raiser)",
+          _r1["ran"] == ["j_a", "j_c"] and _r1["failed"] == ["j_b"] and _r1["checked"] == 3)
+    check("p9 tick: serial run order is deterministic (registration order)", _order57 == ["j_a", "j_b", "j_c"])
+    check("p9 tick: a job EXCEPTION Barks once", len(_barks57) == 1 and "j_b" in _barks57[0])
+    # a fresh tick 1s later: interval not elapsed (last_run advanced) -> nothing due.
+    check("p9 tick: last_run advances so a not-yet-due interval does not re-fire next tick",
+          _J57.run_due_jobs(now=1000.5)["checked"] == 0)
+    # a later tick where all are due again: j_b re-fails but the 24h Bark cooldown SUPPRESSES a 2nd bark.
+    _order57.clear()
+    _J57.run_due_jobs(now=1002.0)
+    check("p9 tick: the per-job Bark cooldown (24h) suppresses a repeat alarm on the next failure",
+          len(_barks57) == 1)
+
+    # (3b) P9-GATE fixes (adversarial-review catches, verified here):
+    # per-job BUDGET: a job past its wall-clock budget is skipped (the tick moves on, the run
+    # zombies out harmlessly), Barked, and its last_run still advances; the heartbeat is touched
+    # BEFORE every job so staleness is bounded by ONE budget, never the serial sum.
+    _J57._REGISTRY.clear()
+    _barks57.clear()
+    import time as _t57b
+    _J57.register_job("j_slow", "every:1s", lambda: _t57b.sleep(3.0), budget_s=1)
+    _J57.register_job("j_next", "every:1s", lambda: _order57.append("j_next"))
+    _r57b = _J57.run_due_jobs(now=2000.0)
+    check("p9 gate: a job past its budget_s is skipped (tick moves on; later jobs still run)",
+          _r57b["failed"] == ["j_slow"] and _r57b["ran"] == ["j_next"])
+    check("p9 gate: a budget overrun Barks (its own cooldown key)",
+          len(_barks57) == 1 and "j_slow" in _barks57[0])
+    check("p9 gate: an overrun's last_run still advances (schedule governs the retry, no re-fire)",
+          _J57.run_due_jobs(now=2000.5)["checked"] == 0)
+    def _reg_raises57(**kw):
+        try:
+            _J57.register_job("j_z", "every:1s", lambda: None, **kw)
+            return False
+        except ValueError:
+            return True
+    check("p9 gate: register_job refuses a budget of 0 or past the sentinel-wedge ceiling",
+          _reg_raises57(budget_s=0) and _reg_raises57(budget_s=_J57._MAX_JOB_BUDGET_S + 1))
+    # heartbeat BEFORE every job: a job that deletes the file mid-tick finds it re-touched
+    # before the NEXT job runs (bounded staleness), and it exists again at tick end.
+    _J57._REGISTRY.clear()
+    _hb_seen57: list = []
+    _J57.register_job("j_del", "every:1s", lambda: _J57.HEARTBEAT_PATH.unlink())
+    _J57.register_job("j_see", "every:1s",
+                      lambda: _hb_seen57.append(_J57.HEARTBEAT_PATH.exists()))
+    _J57.run_due_jobs(now=3000.0)
+    check("p9 gate: the heartbeat is touched BEFORE every job, not once per tick",
+          _hb_seen57 == [True])
+finally:
+    _notify57.bark_push = _bark_real57
+    _J57.STATE_PATH, _J57.HEARTBEAT_PATH = _state_real57, _hb_real57
+    _J57._REGISTRY.clear(); _J57._REGISTRY.update(_reg_real57c)
+    _J57._shipped_registered = _shipped_real57c
+
+# (4) TRANSPLANT CORES — the hard-won lessons survive the move. Import the transplanted module and
+#     exercise the mechanical halves offline (no live browsing / network).
+import penumbra.core.infra_jobs as _IJ57  # noqa: E402
+# (4a) source-health N_CONSECUTIVE: _health_track only surfaces a source as newly-down at EXACTLY the
+#      threshold-th consecutive fail (a transient single fail never alarms), and a recovery clears it.
+_fails57, _alerts57, _down57, _rec57 = {}, {}, [], []
+_IJ57._health_track("srcX", False, "boom", _fails57, _alerts57, _down57, _rec57)  # fail 1
+check("p9 transplant (source-health): ONE fail does not surface as down (N_CONSECUTIVE guards transients)",
+      _down57 == [] and _fails57["srcX"] == 1)
+_IJ57._health_track("srcX", False, "boom", _fails57, _alerts57, _down57, _rec57)  # fail 2 == threshold
+check("p9 transplant (source-health): the N_CONSECUTIVE-th consecutive fail surfaces as newly-down",
+      _down57 == [("srcX", "boom")] and _IJ57.N_CONSECUTIVE == 2)
+_IJ57._health_track("srcX", True, "ok", _fails57, _alerts57, _down57, _rec57)  # recovery
+check("p9 transplant (source-health): a recovery clears the fail counter + surfaces as recovered",
+      _fails57["srcX"] == 0 and "srcX" in _rec57)
+# (4b) log rotation: a file over the threshold is truncated in place + a .1 tail kept; a small file is
+#      left untouched. Point the log dir at a temp dir with a giant + a tiny file.
+_log57 = _Path44(_tf57.mkdtemp())
+_logdir_real57, _max_real57, _tail_real57 = _IJ57._LOG_DIR, _IJ57._LOG_MAX_BYTES, _IJ57._LOG_KEEP_TAIL
+try:
+    _IJ57._LOG_DIR = _log57
+    _IJ57._LOG_MAX_BYTES = 1000  # tiny threshold for the test
+    _IJ57._LOG_KEEP_TAIL = 500   # keep-tail must be < the test file so the seek-from-end fits
+    _big = _log57 / "eye-http.err"
+    _big.write_bytes(b"X" * 5000)
+    _small = _log57 / "eye-http.log"
+    _small.write_bytes(b"Y" * 100)
+    _rot = _IJ57.rotate_logs()
+    check("p9 transplant (log-rotation): the oversized log is truncated in place + a .1 tail kept",
+          _big.stat().st_size == 0 and (_log57 / "eye-http.err.1").exists()
+          and (_log57 / "eye-http.err.1").stat().st_size == 500 and _rot == 1)
+    check("p9 transplant (log-rotation): a small log is left untouched",
+          _small.stat().st_size == 100 and not (_log57 / "eye-http.log.1").exists())
+finally:
+    _IJ57._LOG_DIR, _IJ57._LOG_MAX_BYTES, _IJ57._LOG_KEEP_TAIL = _logdir_real57, _max_real57, _tail_real57
+# (4c) digest NO-OPS (with a log line) when the themes file is absent -- it never invents a theme list.
+_themes_real57 = _IJ57._DIGEST_THEMES_PATH
+try:
+    _IJ57._DIGEST_THEMES_PATH = _Path44(_tf57.mkdtemp()) / "digest-themes.json"  # does not exist
+    check("p9 transplant (digest): no themes file -> the job no-ops (never invents a theme list)",
+          _IJ57.run_digest() == {"noop": "no-themes"} and _IJ57._load_digest_themes() == [])
+finally:
+    _IJ57._DIGEST_THEMES_PATH = _themes_real57
+# (4d) the warmer core is importable + wired (no live browsing in smoke): the fns + the safety knobs
+#      (active-hours gate, maintenance flag) survived the transplant.
+check("p9 transplant (warmer): run_session_warmer + _warm_one importable; active-hours + maint knobs present",
+      callable(_IJ57.run_session_warmer) and callable(_IJ57._warm_one)
+      and (_IJ57._ACTIVE_START, _IJ57._ACTIVE_END) == (8, 23) and _IJ57._MAINT_FLAG.name == "cdp-maintenance")
+# (4e) the wewe-rss freeze/reachability core is importable + carries its 4 feeds + freeze limit.
+check("p9 transplant (wewerss): check_wechat2rss_feeds importable; 4 feeds + the 3-day freeze limit survive",
+      callable(_IJ57.check_wechat2rss_feeds) and len(_IJ57._WECHAT2RSS_FEEDS) == 4
+      and _IJ57._WECHAT2RSS_FREEZE_LIMIT_S == 3 * 86400)
+
+# (5) THE SENTINEL, OFFLINE. Load scripts/sentinel.py as a module WITH the scripts dir on path (so its
+#     sibling _sentinel_common + services resolve) but stub its probes so nothing touches the network.
+_SENTINEL_PATH = _SCRIPTS_DIR / "sentinel.py"
+if _SENTINEL_PATH.exists():
+    # (5a) ISOLATION TRIPWIRE (the whole reason the sentinel is separate): its AST import list names
+    #      ONLY stdlib + _sentinel_common + services -- NEVER penumbra.* (it must work when the organ's
+    #      code is broken). Assert over the parsed imports, so a future `import penumbra...` fails here.
+    import ast as _ast57
+    _sent_tree = _ast57.parse(_SENTINEL_PATH.read_text(encoding="utf-8"))
+    _sent_imports = set()
+    for _n in _ast57.walk(_sent_tree):
+        if isinstance(_n, _ast57.Import):
+            for _a in _n.names:
+                _sent_imports.add(_a.name.split(".")[0])
+        elif isinstance(_n, _ast57.ImportFrom) and _n.module:
+            _sent_imports.add(_n.module.split(".")[0])
+    _sent_penumbra = sorted(m for m in _sent_imports if m == "penumbra")
+    check("p9 sentinel isolation: it imports ZERO penumbra.* (self-contained: works when the organ is broken)",
+          not _sent_penumbra, f"imports penumbra: {_sent_penumbra}")
+    _ALLOWED_SENTINEL_IMPORTS = {"__future__", "json", "os", "subprocess", "sys", "time",
+                                 "urllib", "pathlib", "_sentinel_common", "services", "ast"}
+    _sent_unexpected = sorted(_sent_imports - _ALLOWED_SENTINEL_IMPORTS)
+    check("p9 sentinel isolation: its import list is exactly stdlib + _sentinel_common + services",
+          not _sent_unexpected, f"unexpected imports: {_sent_unexpected}")
+
+    # Load it as a module (scripts on path). Its ROOT=~/penumbra-mcp bootstrap is harmless here; we
+    # only need the module object to stub + call the duty functions.
+    _sys_path_saved57 = list(sys.path)
+    sys.path.insert(0, str(_SCRIPTS_DIR))
+    try:
+        _sspec = _il57.spec_from_file_location("penumbra_sentinel_smoke", _SENTINEL_PATH)
+        _SENT = _il57.module_from_spec(_sspec)
+        with _ctx57.redirect_stdout(_io57.StringIO()):
+            _sspec.loader.exec_module(_SENT)
+        _sent_loaded = True
+    except Exception as _sent_exc:  # noqa: BLE001
+        _sent_loaded = False
+        check("p9 sentinel: module loads with the scripts dir on path", False, str(_sent_exc))
+    if _sent_loaded:
+        check("p9 sentinel: module loaded + read the CDP instances from services.py",
+              len(_SENT.CDP_INSTANCES) >= 1 and _SENT.EYE_SERVICE == "com.penumbra.organ.eye-http")
+        # NOTE: `penumbra` is already in sys.modules (this IS the penumbra smoke), so a sys.modules
+        # check cannot prove isolation here; the AST import-list tripwire above is the authoritative
+        # guarantee that the sentinel's OWN code imports zero penumbra. What we CAN assert cheaply: the
+        # module exposes the three self-contained duties + reimplements its own CDP probe (not the
+        # eye's cdp_health), i.e. it did not grow a penumbra dependency to do its job.
+        check("p9 sentinel: the three self-contained duties are present + it reimplements its own probes",
+              all(callable(getattr(_SENT, fn, None)) for fn in
+                  ("_check_eye_http", "_check_scheduler", "_check_cdp", "_cdp_alive", "_http_ok")))
+    else:
+        _SENT = None
+    sys.path[:] = _sys_path_saved57
+else:
+    _SENT = None
+    # Repo-adaptive (the 46b convention): the sentinel is eye-side launchd infra. Where the fleet
+    # registry (services.py) exists, its absence is a hard failure; the penumbra mirror ships no
+    # launchd fleet, so there this is a legitimate absence, not a miss.
+    if _SERVICES_PATH.exists():
+        check("p9 sentinel: scripts/sentinel.py exists", False, str(_SENTINEL_PATH))
+
+# (5b) DUTY LOGIC, offline. Stub the sentinel's network probes so we exercise the branch logic only.
+if _SENT is not None:
+    _sent_dir57 = _Path44(_tf57.mkdtemp())
+    _kicks57 = []
+    _sbarks57 = []
+    _real_http57, _real_cdp57, _real_kick57 = _SENT._http_ok, _SENT._cdp_alive, _SENT._kickstart
+    _real_bark57, _real_should57 = _SENT.bark_push, _SENT.should_alert
+    _real_eye_state, _real_sched_state, _real_cdp_state = _SENT.EYE_STATE, _SENT.SCHED_STATE, _SENT.CDP_STATE
+    _real_hb57, _real_maint57 = _SENT.HEARTBEAT_PATH, _SENT.MAINT_FLAG
+    try:
+        _SENT.EYE_STATE = _sent_dir57 / "eye.json"
+        _SENT.SCHED_STATE = _sent_dir57 / "sched.json"
+        _SENT.CDP_STATE = _sent_dir57 / "cdp.json"
+        _SENT.HEARTBEAT_PATH = _sent_dir57 / "heartbeat"
+        _SENT.MAINT_FLAG = _sent_dir57 / "cdp-maintenance"
+        _SENT._kickstart = lambda svc, timeout=15: _kicks57.append(svc)
+        _SENT.bark_push = lambda title, body, **kw: (_sbarks57.append(title) or True)
+        _SENT.should_alert = lambda key, alerts, cd: True  # always past cooldown in the test
+
+        # (i) dead healthz -> the heal path kickstarts the eye (and, still dead, returns down).
+        _SENT._http_ok = lambda url, timeout=8.0: False
+        _kicks57.clear()
+        _rc_eye = _SENT._check_eye_http()
+        check("p9 sentinel: a DEAD /healthz triggers the kickstart heal path for eye-http",
+              _SENT.EYE_SERVICE in _kicks57 and _rc_eye == 1)
+
+        # (ii) healthz OK but the scheduler heartbeat is STALE -> the DISTINCT 'scheduler dead' alarm
+        #      fires + kickstarts the organ (a different alarm than 'organ down').
+        _SENT._http_ok = lambda url, timeout=8.0: True
+        _kicks57.clear(); _sbarks57.clear()
+        _stale = _time57.time() - (_SENT.SCHED_TICK_S * _SENT.SCHED_STALE_FACTOR + 60)
+        _SENT.HEARTBEAT_PATH.write_text("x")
+        _os57.utime(_SENT.HEARTBEAT_PATH, (_stale, _stale))
+        _rc_sched = _SENT._check_scheduler()
+        check("p9 sentinel: healthz OK + a STALE heartbeat fires the DISTINCT 'scheduler dead' alarm + kickstart",
+              _rc_sched == 1 and _SENT.EYE_SERVICE in _kicks57
+              and any("scheduler" in t.lower() for t in _sbarks57))
+        # a FRESH heartbeat while healthz OK -> no alarm (the common healthy case is silent).
+        _kicks57.clear(); _sbarks57.clear()
+        _SENT.HEARTBEAT_PATH.write_text("x")  # mtime = now -> fresh
+        check("p9 sentinel: a FRESH heartbeat while healthz OK is silent (no false scheduler alarm)",
+              _SENT._check_scheduler() == 0 and not _sbarks57)
+        # a MISSING heartbeat is deliberately SILENT (ambiguous with a fresh boot -> never kick/alarm,
+        # which would restart-storm the organ during the normal post-boot window; wait for staleness).
+        _kicks57.clear(); _sbarks57.clear()
+        try:
+            _SENT.HEARTBEAT_PATH.unlink()
+        except OSError:
+            pass
+        check("p9 sentinel: a MISSING heartbeat is silent (no boot-window restart storm; waits for staleness)",
+              _SENT._check_scheduler() == 0 and not _sbarks57 and not _kicks57)
+
+        # (iii) the cdp-maintenance flag PAUSES all CDP heal (never fight a manual VNC login).
+        _SENT.MAINT_FLAG.write_text("")  # touch the pause flag
+        _kicks57.clear()
+        _rc_cdp = _SENT._check_cdp()
+        check("p9 sentinel: the cdp-maintenance flag pauses CDP heal (no kickstart while a login is in progress)",
+              _rc_cdp == 0 and _kicks57 == [])
+    finally:
+        (_SENT._http_ok, _SENT._cdp_alive, _SENT._kickstart) = _real_http57, _real_cdp57, _real_kick57
+        _SENT.bark_push, _SENT.should_alert = _real_bark57, _real_should57
+        _SENT.EYE_STATE, _SENT.SCHED_STATE, _SENT.CDP_STATE = _real_eye_state, _real_sched_state, _real_cdp_state
+        _SENT.HEARTBEAT_PATH, _SENT.MAINT_FLAG = _real_hb57, _real_maint57
+
+# (6) DELETION SWEEP: the 11 deleted scripts are GONE from scripts/, and NO in-repo file references
+#     any of them as a runnable script (a `scripts/<name>.py` path form), excluding this smoke file
+#     itself + provenance/lineage comments (which name the OLD module bare, e.g. "transplanted from
+#     digest.py", exactly as §53 keeps its sensor_runner comment). Also: the plist tripwire now expects
+#     exactly 7 committed plists == exactly 7 registry rows, byte-identical, and SERVICES.md exists.
+_P9_DELETED_SCRIPTS = ["cdp_keepalive.py", "cron_watchdog.py", "penumbra_http_watchdog.py",
+                       "wewerss_watchdog.py", "session_warmer.py", "curator.py", "digest.py",
+                       "source_audit.py", "warm_intro.py", "penumbra_prewarm.py", "rsshub_watchdog.py"]
+_p9_still_there = [s for s in _P9_DELETED_SCRIPTS if (_SCRIPTS_DIR / s).exists()]
+check("p9 deletion: all 11 transplanted/retired scripts are gone from scripts/",
+      not _p9_still_there, f"still present: {_p9_still_there}")
+# path-form references (`scripts/<name>.py`) anywhere in the tree, excluding smoke + venv + pycache.
+_p9_path_refs = []
+for _pp in ROOT.rglob("*"):
+    if not _pp.is_file() or _pp.suffix not in (".py", ".md", ".sh", ".json", ".txt"):
+        continue
+    if _pp.name == "smoke.py" or ".venv" in _pp.parts or "__pycache__" in _pp.parts or ".git" in _pp.parts:
+        continue
+    try:
+        _txt = _pp.read_text(encoding="utf-8", errors="ignore")
+    except Exception:  # noqa: BLE001
+        continue
+    for _s in _P9_DELETED_SCRIPTS:
+        if f"scripts/{_s}" in _txt:
+            _p9_path_refs.append(f"{_pp.relative_to(ROOT)} -> scripts/{_s}")
+check("p9 deletion: no in-repo file invokes a deleted script as scripts/<name>.py (provenance comments allowed)",
+      not _p9_path_refs, f"still referenced: {_p9_path_refs}")
+# the sentinel row's script IS present (the ONE new external script). Repo-adaptive (the 46b
+# convention): only where the fleet registry exists; the penumbra mirror ships no launchd fleet.
+if _SERVICES_PATH.exists():
+    check("p9 deletion: the new external sentinel script (scripts/sentinel.py) IS present",
+          (_SCRIPTS_DIR / "sentinel.py").exists())
+# plist tripwire: exactly 7 committed plists, exactly 7 registry rows, byte-identical, SERVICES.md fresh.
+if _SERVICES_PATH.exists():
+    _p9_committed = sorted(_SCRIPTS_DIR.glob("com.penumbra.*.plist"))
+    with _ctx_svc.redirect_stdout(_io_svc.StringIO()):
+        _p9_plist_rc = _svc.gen_plists(write=False)
+    check("p9 plist tripwire: exactly 7 committed plists == exactly 7 registry rows, all byte-identical",
+          len(_p9_committed) == 7 and len(_svc.REGISTRY) == 7 and _p9_plist_rc == 0,
+          f"{len(_p9_committed)} plists, {len(_svc.REGISTRY)} rows, gen rc={_p9_plist_rc}")
+    # the registry is exactly the 7-row fleet (organ + 4 cdp + sentinel + state-backup); legacy pruned.
+    _p9_labels = {r["label"] for r in _svc.REGISTRY}
+    _EXPECT_LABELS = {"com.penumbra.organ.eye-http", "com.penumbra.cdp.cn-forums", "com.penumbra.cdp.xhs",
+                      "com.penumbra.cdp.xhs-cn", "com.penumbra.cdp.douyin", "com.penumbra.infra.sentinel",
+                      "com.penumbra.infra.state-backup"}
+    check("p9 plist tripwire: the registry is exactly the 7-row fleet (organ + 4 cdp + sentinel + state-backup)",
+          _p9_labels == _EXPECT_LABELS)
+    check("p9 plist tripwire: the pre-migration `legacy` field is pruned from every registry row",
+          not any("legacy" in r for r in _svc.REGISTRY))
+    check("p9 plist tripwire: SERVICES.md exists (regenerated) + carries the in/out test text",
+          (ROOT / "SERVICES.md").exists()
+          and "外部只留不能与器官同生死的" in (ROOT / "SERVICES.md").read_text(encoding="utf-8"))
 
 
 print()

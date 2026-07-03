@@ -852,9 +852,10 @@ class XiaohongshuCNAdapter:
         """Pure STATE read — NO network, so the health SWEEP itself never adds an account touch on the
         warned 9224 account (the sweep is recurring/automated; the safety research's §5 'low-frequency'
         line is about minimizing such automated activity). NOTE: the sweep is not the ONLY automated
-        9224 driver — scripts/session_warmer.py runs an active-hours cookie-warm search on 9224. With the
-        browser path now self-warming cookies on every named call, the operator may want to drop the 大陆号
-        from session_warmer to cut total automated touches (the operator's risk call; flagged, not auto-changed)."""
+        9224 driver — the in-process session-warmer job (penumbra.core.infra_jobs.run_session_warmer) runs
+        an active-hours cookie-warm search on 9224. With the browser path now self-warming cookies on
+        every named call, the operator may want to drop the 大陆号 from the warmer to cut total automated
+        touches (the operator's risk call; flagged, not auto-changed)."""
         if not (_BROWSER_OK or _DEPS_OK):
             return False, "browser deps (bs4/lxml + xiaohongshu_source helpers) AND signed deps (xhshow/curl_cffi) both unavailable"
         if _SEALED:

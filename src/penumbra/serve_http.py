@@ -91,6 +91,12 @@ def main() -> None:
     # Background cache warmer, tied to THIS always-on service (replaces the standalone launchd
     # cron, which was observed to fire only once — see penumbra.core.prewarm): warm the
     # query-independent slow sources on startup + every 30min so Lever B's caches stay hot.
+    # P9 JUDGMENT (prewarm stays its OWN daemon, NOT folded into the jobs scheduler): the warmer is a
+    # continuous WARM LOOP with two properties the calendar/interval job model would break — it warms
+    # ON ENTRY (kills the cold-herd the instant the service (re)starts, before any tick would fire),
+    # and it carries a refresh-margin contextvar that must run on its own thread inline. Folding it
+    # into the 900s serial job tick would delay the boot warm and change its 1800s cadence, so it
+    # stays a dedicated thread; the jobs scheduler owns the CALENDAR/interval self-maintenance instead.
     import threading
     from penumbra.core import prewarm
     threading.Thread(target=prewarm.warm_loop, name="cache-warmer", daemon=True).start()
@@ -119,17 +125,19 @@ def main() -> None:
             logger.info("recall index: writes enabled + ingest loop + vector backfill started")
     except Exception as exc:  # noqa: BLE001 — the index is best-effort; never block boot
         logger.warning("recall index disabled (init failed): %s", exc)
-    # In-process sensor scheduler (P6): a sensor run is an act of PERCEPTION and must land on the
-    # wall, so it executes in the ONE process that writes memory. Start it HERE (the writer process),
-    # AFTER writes are enabled above, so its WRITES_ENABLED guard passes; a cron / smoke / CLI import
-    # never reaches this call site and its guard refuses anyway. Fail-open: a scheduler hiccup must
-    # never block boot. (This replaces the deleted launchd cron runner, which wrote no memory.)
+    # In-process JOB scheduler (P9, generalizing the P6 sensor scheduler): every scheduled piece of
+    # the eye's self-maintenance (the sensor tick + the transplanted watchdogs / curator / audit /
+    # digest) runs as a declarative row on ONE daemon loop in the process that writes memory. Start it
+    # HERE (the writer process), AFTER writes are enabled above, so its WRITES_ENABLED guard passes; a
+    # cron / smoke / CLI import never reaches this call site and its guard refuses anyway. Fail-open: a
+    # scheduler hiccup must never block boot. (This absorbs the deleted launchd crons + the P6 loop.)
     try:
-        from penumbra.core import sensor as _sensor
-        if _sensor.start_scheduler() is not None:
-            logger.info("sensor scheduler started (tick 900s)")
+        from penumbra.core import jobs as _jobs
+        if _jobs.start_scheduler() is not None:
+            logger.info("job scheduler started (tick %ds, %d rows)",
+                        _jobs.TICK_SECONDS, len(_jobs.registry()))
     except Exception as exc:  # noqa: BLE001 — the scheduler is best-effort; never block boot
-        logger.warning("sensor scheduler not started (%s)", exc)
+        logger.warning("job scheduler not started (%s)", exc)
     logger.info("Penumbra eye HTTP service on %s:%s (token-gated; MCP at /mcp)", HOST, PORT)
     uvicorn.run(app, host=HOST, port=PORT, log_level="info")
 
