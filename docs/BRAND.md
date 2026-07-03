@@ -14,7 +14,15 @@ drift as contributors add diagrams, badges, or assets.
 
 ## Wordmark
 
-Always lowercase `penumbra`. Never capitalized, never styled as `Penumbra` in a logo or card.
+The wordmark, logo, README title, and tagline are lowercase `penumbra` (the understated art
+style, matching `the layer beneath the surface`). Never style it as `Penumbra` in a logo or
+card.
+
+But this is a WORDMARK rule, not a spelling rule. In PROSE the product is a proper noun and is
+capitalized, `Penumbra` (as in this file's own first line). The half-lit zone the product is
+named after stays a lowercase common noun, `the penumbra` ("that's the penumbra"), the same way
+`amazon` the rainforest and `Amazon` the company share one word. Code identifiers (the package
+`penumbra`, the `penumbra_*` tools, paths, the docker service) are always lowercase.
 
 ## Tagline
 
