@@ -307,21 +307,68 @@ def _auto_apply_ok(cand: dict) -> bool:
 
 
 # ── operator-case preparation (what penumbra_curator_stage_commit returns) ───────────────
+# A draft row that walks a declarative shape (transport / endpoint / field_map) belongs in
+# sources.json (the declarative table), NOT one of the 5 legacy family files.
+_DECLARATIVE_MARKERS = ("transport", "endpoint", "field_map", "results_path", "tool")
+_DECLARATIVE_CONFIG_FILE = "sources.json"
+
+
+def _looks_declarative(row: dict) -> bool:
+    return isinstance(row, dict) and any(k in row for k in _DECLARATIVE_MARKERS)
+
+
 def prepare_owner_case(cand: dict) -> dict:
     """P1: PREPARE the operator case (render the ready-to-paste config row + a git-patch note).
-    Does NOT mutate live config. Re-checks the row validity. Never auto-applies."""
+    Does NOT mutate live config. Re-checks the row validity. Never auto-applies.
+
+    FOUNDRY-GRADE (P10): when the candidate carries a ``draft`` (a WORKING artifact the submitter
+    built), the ready-to-paste block IS the draft's ``row`` verbatim (with a provenance line naming
+    the submitting session), NOT the thin row re-derived from the candidate fields. A draft
+    declarative row (transport mcp/http) targets sources.json; the rss-safe auto-apply lane is NOT
+    widened here (a draft always stages to the operator's git commit)."""
     evidence = cand.get("evidence") or {}
     rev = evidence.get("reversibility") or {}
     family = (cand.get("proposed_family") or "other").lower()
-    row = rev.get("proposed_config_row")
-    config_file = rev.get("config_file") or _FAMILY_CONFIG_FILE.get(family)
 
-    problems = _validate_row(family, row) if row else ["no proposed_config_row in evidence"]
+    draft = cand.get("draft") if isinstance(cand.get("draft"), dict) else None
+    draft_row = draft.get("row") if isinstance(draft, dict) and isinstance(draft.get("row"), dict) else None
+
+    if draft_row is not None:
+        # The draft row is the ready-to-paste block. A declarative row goes to sources.json; a
+        # legacy-family draft row is validated against that family; otherwise presence-only.
+        row = draft_row
+        provenance = (f"Drafted by the submitting session ({cand.get('submitted_by') or 'agent'}) "
+                      f"and staged verbatim; the fixture + probe_summary rode the packet.")
+        if _looks_declarative(row):
+            config_file = _DECLARATIVE_CONFIG_FILE
+            # A declarative row is valid if it carries at least name + a title/url field_map (the
+            # DeclarativeAPIAdapter's own floor); we do a light presence check, not a full load.
+            problems = []
+            if not row.get("name"):
+                problems.append("missing required field 'name'")
+            fm = row.get("field_map")
+            if not isinstance(fm, dict) or "title" not in fm or "url" not in fm:
+                problems.append("field_map must map at least 'title' and 'url'")
+            if not row.get("endpoint"):
+                problems.append("missing required field 'endpoint'")
+            if (row.get("transport") or "http").lower() == "mcp" and not row.get("tool"):
+                problems.append("transport 'mcp' requires a 'tool' name")
+        else:
+            config_file = _FAMILY_CONFIG_FILE.get(family)
+            problems = _validate_row(family, row)
+    else:
+        row = rev.get("proposed_config_row")
+        config_file = rev.get("config_file") or _FAMILY_CONFIG_FILE.get(family)
+        problems = _validate_row(family, row) if row else ["no proposed_config_row in evidence"]
+        provenance = None
+
     patch_note = ""
     if row and config_file:
+        loader_desc = ("the declarative loader" if config_file == _DECLARATIVE_CONFIG_FILE
+                       else f"the {family} family loader")
         patch_note = (
             f"Append this row to organs/eye/src/penumbra/eye/sources/{config_file} "
-            f"(the {family} family loader registers it at the next service restart), commit, "
+            f"({loader_desc} registers it at the next service restart), commit, "
             f"then redeploy. P1 stages this for the operator; it is NEVER applied automatically."
         )
     case = {
@@ -335,6 +382,9 @@ def prepare_owner_case(cand: dict) -> dict:
         "note": ("P1 has no live auto-apply: config families register once at import. This "
                  "prepares an operator case; the operator commits + the deploy restart picks it up."),
     }
+    if provenance is not None:
+        case["draft_provenance"] = provenance
+        case["from_draft"] = True
     # spec 2 / 8c (Attack-2): a family whose recurring POST-admission fetch BYPASSES safe_fetch
     # carries an explicit harm block in the operator case, so the irreversible commit is made with
     # eyes open: deleting the config row later cannot un-harvest data already indexed.

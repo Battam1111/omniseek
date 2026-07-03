@@ -185,7 +185,12 @@ def _append_history(row: dict, state: str, by: str, note: str) -> None:
 def add(candidate: dict) -> str:
     """Add (or update on resubmit) a candidate row; persist immediately (the loss-of-work
     fix). Returns the row id. A resubmit of the same (name, urls) refreshes the submitted
-    fields but PRESERVES any existing state/evidence/verdict/history (idempotent)."""
+    fields but PRESERVES any existing state/evidence/verdict/history (idempotent).
+
+    A ``draft`` (foundry-grade, P10) is an optional WORKING artifact the submitter built
+    ({"row": <sources.json-shape dict>, "fixture": {"raw", "expect"}, "probe_summary": str}),
+    stored verbatim as a submitted field (additive; absent = today's behavior). The packet
+    surfaces it for the judge and stage_commit prefers its row as the ready-to-paste block."""
     name = candidate.get("name") or ""
     urls = candidate.get("urls") or []
     cid = candidate.get("id") or make_id(name, urls)
@@ -204,6 +209,9 @@ def add(candidate: dict) -> str:
             "rationale_text": candidate.get("rationale_text") or "",
             "submitted_by": candidate.get("submitted_by") or "agent",
             "submitted_at": candidate.get("submitted_at") or _now_iso(),
+            # foundry draft artifact (verbatim, UNTRUSTED submitter input like rationale_text);
+            # stored only when present so a plain submit's row shape is unchanged.
+            "draft": candidate.get("draft") if isinstance(candidate.get("draft"), dict) else None,
         }
         if idx is None:
             row = {
@@ -220,6 +228,10 @@ def add(candidate: dict) -> str:
             rows.append(row)
         else:
             row = rows[idx]
+            # A resubmit with NO new draft must not wipe a draft an earlier submit stored (preserve
+            # it like state/evidence/verdict); a resubmit WITH a draft replaces it.
+            if submitted["draft"] is None and row.get("draft") is not None:
+                submitted["draft"] = row["draft"]
             row.update(submitted)  # refresh the SUBMITTED fields only; keep state/evidence/verdict
             _append_history(row, row.get("state", "new"), submitted["submitted_by"], "resubmitted")
             rows[idx] = row

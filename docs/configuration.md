@@ -77,6 +77,19 @@ Set `PENUMBRA_CONTACT_EMAIL`, or write `~/.penumbra/credentials/contact.json` as
 Left unset, Penumbra falls back to a reserved placeholder, so a cold checkout still forms a valid
 request.
 
+## Wrapping an MCP server as a source
+
+Any external MCP server (streamable HTTP) can become an ordinary source with **one declarative
+row** in `src/penumbra/core/sources/sources.json`: set `"transport": "mcp"`, the server's
+`endpoint`, the retrieval `tool` to call, a `params_template` for its arguments (`{query}` /
+`{limit}` slots; a value that is exactly `"{limit}"` is passed as an integer), and the usual
+`results_path` + `field_map` over the tool's result. Everything else (caching, ranking, facets,
+routing, the memory that accretes from results) works exactly as for an http row. If the server
+needs auth, put its headers in `~/.penumbra/credentials/mcp_<name>.json`
+(`{"headers": {...}}`); a `needs_credentials` row without the file stays silently inert.
+A wrapped server is admitted like any source: it must beat plain search per the contributing
+razor, judged per server. The row schema is documented in `core/sources/_declarative.py`.
+
 ## Walled sources
 
 Xiaohongshu, Zhihu, Douyin, and other login-only platforms are read through a browser **you** run
