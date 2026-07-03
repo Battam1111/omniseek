@@ -58,33 +58,38 @@ log = logging.getLogger(__name__)
 
 # ── prewarm is best-effort: its fetch failures are NON-EVENTS ─────────────────────────────────
 # A warm that fails just leaves that cache cold; the live query path then handles the source
-# exactly as if it had never warmed. So a source-adapter WARNING logged DURING a warm pass is
-# noise, not signal -- most visibly on a FRESH install, where the OpenAlex-backed warmed sources
+# exactly as if it had never warmed. So the WARNING chatter a warm pass provokes is noise, not
+# signal -- most visibly on a FRESH install, where the OpenAlex-backed warmed sources
 # (researcher_watch + the ~39 org_watch labs) hit the polite pool with no contact email, get rate-
 # limited, and would otherwise greet a first-time deployer with a screenful of "fetch failed:
-# circuit open". Silenced structurally in ONE place: the warm pass raises the SOURCE PACKAGE logger
-# to ERROR for its duration, so WARNING / INFO from any source adapter -- on ANY thread, including
-# the worker threads a source spawns WITHOUT copy_context (org_watch) -- are dropped, while a rarer
-# source ERROR, prewarm's OWN per-source summary (this module's logger, not under `.sources`), and
-# any live query's warnings OUTSIDE the brief pass all survive. (A per-context flag was tried first
-# and reached only copy_context workers -- researcher_watch's, not org_watch's; the fresh-docker
-# boot log is the oracle that caught the gap. The logger LEVEL lives on the logger object, so it is
-# thread-agnostic -- that is exactly why it covers every source regardless of how it threads.)
-_SRC_LOGGER = __name__.rsplit(".", 1)[0] + ".sources"   # rename-safe (penumbra.core / penumbra.core)
+# circuit open" plus the breaker's own "openalex circuit OPEN". Silenced structurally in ONE place:
+# the warm pass raises the loggers it EXERCISES to ERROR for its duration -- the source adapters
+# (`.sources`) and the shared OpenAlex client they drive (`._openalex`) -- so their WARNING / INFO
+# on ANY thread (including the worker threads a source spawns WITHOUT copy_context, e.g. org_watch)
+# are dropped, while a rarer ERROR, prewarm's OWN per-source summary (this module's logger), the
+# recall-embedder / bind-posture startup notices (different loggers, legitimately shown once), and
+# any live query's warnings OUTSIDE the brief pass all survive. The two loggers are NAMED rather
+# than blanket-silencing `penumbra.core` precisely so those legit non-warm notices are not hidden.
+# (A per-context flag was tried first and reached only copy_context workers -- researcher_watch's,
+# not org_watch's; the fresh-docker boot log is the oracle that caught the gap. A logger's LEVEL
+# lives on the logger object, so it is thread-agnostic -- that is why it covers every worker.)
+_pkg = __name__.rsplit(".", 1)[0]                        # rename-safe (penumbra.core / penumbra.core)
+_WARM_QUIET_LOGGERS = (_pkg + ".sources", _pkg + "._openalex")
 
 
 @contextlib.contextmanager
-def _quiet_source_warnings():
-    """Raise the source package logger to ERROR for a best-effort warm pass, then restore it (the
+def _quiet_warm_noise():
+    """Raise each warm-exercised logger to ERROR for a best-effort warm pass, then restore (the
     codebase's set_refresh_margin try/finally idiom, for logging). Only WARNING / INFO are
-    silenced; a rarer source ERROR still surfaces."""
-    lg = logging.getLogger(_SRC_LOGGER)
-    prev = lg.level
-    lg.setLevel(logging.ERROR)
+    silenced; a rarer ERROR still surfaces."""
+    saved = [(lg, lg.level) for lg in map(logging.getLogger, _WARM_QUIET_LOGGERS)]
+    for lg, _lvl in saved:
+        lg.setLevel(logging.ERROR)
     try:
         yield
     finally:
-        lg.setLevel(prev)
+        for lg, lvl in saved:
+            lg.setLevel(lvl)
 
 _BASE = ["researcher_watch", "ai_residencies", "overseas_ai_jobs", "scrape_js_sites", "gter",
          "ircc_ee_rounds", "zhihu_users"]
@@ -122,7 +127,7 @@ def warm_sources() -> tuple[int, int]:
     failures = 0
     cache.set_refresh_margin(REFRESH_MARGIN_S)
     try:
-        with _quiet_source_warnings():  # best-effort warm: source WARNINGs are non-events, not spam
+        with _quiet_warm_noise():  # best-effort warm: the WARNINGs it provokes are non-events, not spam
             for src in srcs:
                 t0 = time.monotonic()
                 try:
