@@ -90,7 +90,8 @@ questions of later (`penumbra_graph(view, args)`: `find` / `stats` / `neighborho
 `voices` / `since` / `similar`, one frozen verb whose views grow as data), and its judgments
 are recorded with `penumbra_ruling` (identity) and `penumbra_statement` (typed relations it
 judged from content): the graph applies them at read time, it never judges by itself. Full
-tool list in **[tools](docs/tools.md)**.
+tool list in **[tools](docs/tools.md)**. For a real investigation written up end to end, see
+the **[case study](docs/case-study.md)**.
 
 ## Quick start
 
