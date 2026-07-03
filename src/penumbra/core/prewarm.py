@@ -1,5 +1,5 @@
-"""Cache pre-warmer for the QUERY-INDEPENDENT slow sources — shared by the in-service warmer
-thread (penumbra.serve_http) and the standalone scripts/penumbra_prewarm.py.
+"""Cache pre-warmer for the QUERY-INDEPENDENT slow sources — driven by the in-service warmer
+thread (penumbra.serve_http) and, for a manual one-shot, by ``python -m penumbra.core.prewarm``.
 
 Keeps sources whose EXPENSIVE fetch is cached independently of the query/limit hot, so a broad
 search (for ANY query) hits warm cache instead of paying their live cost under the 78-source
@@ -43,8 +43,9 @@ to fire only ONCE at load and never on its 30-min StartInterval (runs=1 after 14
 warmed caches silently expired (6h TTL) and Lever B's speedup evaporated in production. Tying the
 warmer to the always-on eye-http service (a daemon thread) makes it fire reliably. (That dead plist
 com.penumbra.core-prewarm was never installed on the mini and has since been REMOVED from the repo
-2026-06-16; the in-service daemon is the sole AUTOMATIC warmer. scripts/penumbra_prewarm.py remains only
-as a manual one-shot CLI.)
+2026-06-16; the in-service daemon is the sole AUTOMATIC warmer. The standalone warm CLI moved INTO
+this module's ``__main__`` in the P9 rebuild -- ``python -m penumbra.core.prewarm`` -- so the manual
+one-shot lives beside the loop it warms, with no extra script to keep in sync.)
 """
 
 from __future__ import annotations
@@ -113,3 +114,29 @@ def warm_loop(interval_s: float = WARM_INTERVAL_S) -> None:
         except Exception as exc:  # noqa: BLE001 — never let the warmer thread die
             log.warning("prewarm cycle errored: %s", exc)
         time.sleep(interval_s)
+
+
+def _main() -> int:
+    """Manual one-shot warm (``python -m penumbra.core.prewarm``) — the manual warm CLI, folded in
+    here in the P9 rebuild. The PRODUCTION warmer is the in-service daemon (serve_http starts
+    warm_loop); this is for a MANUAL warm right after a deploy, before the service's first cycle
+    completes. Boots the registry the same way the service does (adapters self-register on import),
+    warms once, and reports how many sources warmed. Exit: 0 all warmed / 1 some failed / 2 import."""
+    import logging
+    from datetime import datetime
+    logging.basicConfig(level=logging.INFO, format="  %(message)s")
+    print(f"[{datetime.now().isoformat(timespec='seconds')}] eye prewarm (manual) starting")
+    try:
+        from penumbra.server import load_sources
+        load_sources()
+    except Exception as exc:  # noqa: BLE001
+        print(f"  FATAL import: {exc}")
+        return 2
+    ok, total = warm_sources()
+    print(f"  done. {ok}/{total} warmed")
+    return 0 if ok == total else 1
+
+
+if __name__ == "__main__":
+    import sys
+    sys.exit(_main())

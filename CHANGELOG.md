@@ -68,6 +68,13 @@ All notable changes to Penumbra are documented here. The format follows
   ranks across the whole perception history, not just the indexed subset; `stats` reports the
   coverage gauge (`document_thin_embedded`). The thin vectors never feed search's recall arm.
 
+- **Self-maintenance runs in-process (P9)**: the sensor scheduler generalized into a job
+  registry (`every:Ns` | `daily@HH:MM` | `weekly@ddd-HH:MM` | `monthly@D-HH:MM`), and the
+  server's own upkeep (source health probing, log rotation, the curator's monthly
+  evidence pass, the weekly source audit, an optional digest) now rides it as declarative
+  rows with per-job wall-clock budgets and a heartbeat file: no cron to install for any of
+  it. Jobs can be toggled per deployment via `profile.json` (`jobs: {"<name>": true|false}`).
+
 - PyPI publish (`pip install penumbra-mcp`) planned.
 
 ## [0.1.0]
