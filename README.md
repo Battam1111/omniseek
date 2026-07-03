@@ -49,11 +49,18 @@ Not secret. A blind spot:
 
 **But a pile of fragments still isn't knowledge.** A hundred scattered findings are noise until they line up: independent angles converging on the same conclusion, none of them telling the whole story alone. Penumbra marks where each fragment came from, when, and whether it's an echo of another, then weaves together what's scattered across different sources: the same name surfacing in three unrelated places, a timeline that only makes sense laid end to end, a relationship hiding in the gaps between records. What's left, your agent assembles into the one map that's yours alone.
 
-**And it compounds.** Everything your agent brings back stays placed on a persistent map:
-the next question starts where the last one ended, mirrors it has already seen collapse into
-one voice, standing queries keep watching after the session ends, and every identity judgment
-your agent records makes the map permanently smarter. Retrieval is a query; Penumbra is a
-memory.
+**And there is a second unfair advantage, and it has nothing to do with reach.** Most knowing
+evaporates: what you found last spring, what you noticed on some Tuesday, what you once worked
+out and were briefly, quietly right about. Everyone around you fades at the same rate, so
+nobody ever feels the loss. Yours doesn't have to.
+
+In a meeting, someone presents this week's discovery; you saw it eight months ago, back when
+it was one engineer complaining in a corner of the internet. A lie comes around a second time
+wearing new clothes; you're the only one in the room who recognizes it. Someone finally asks
+how you always seem to know early, and there is an answer, and the answer has a date on it.
+
+Everyone else starts every morning from zero. You start from everything you've ever seen.
+Reach makes you early once; memory makes early a habit.
 
 **Imagine what becomes answerable.** That product you use every day, stellar reviews everywhere: can you tell how many are actually independent? That piece of insider knowledge everyone in your industry passes around: is it firsthand, or did one person make it up on three different platforms? A risk that directly concerns you, already discussed for two years in a language you couldn't read, and you didn't even know it existed? These are only the questions that came to mind first.
 
