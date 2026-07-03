@@ -80,9 +80,10 @@ Your agent connects over MCP. Start with **`penumbra_search`**; `penumbra_source
 shows what's available. The catalog is open and growing: each source earns its place by beating
 plain search. What your agent retrieves accretes into a persistent relation graph it can ask
 questions of later (`penumbra_graph(view, args)`: `find` / `stats` / `neighborhood` / `between` /
-`voices` / `since` / `similar`, one frozen verb whose views grow as data), and its identity
-judgments are recorded with `penumbra_ruling` (the graph applies them at read time, it never
-judges by itself). Full tool list in **[tools](docs/tools.md)**.
+`voices` / `since` / `similar`, one frozen verb whose views grow as data), and its judgments
+are recorded with `penumbra_ruling` (identity) and `penumbra_statement` (typed relations it
+judged from content): the graph applies them at read time, it never judges by itself. Full
+tool list in **[tools](docs/tools.md)**.
 
 ## Quick start
 

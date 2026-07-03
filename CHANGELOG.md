@@ -88,6 +88,15 @@ All notable changes to Penumbra are documented here. The format follows
   name. The first row admitted this way ships in the catalog: `context7` (Upstash's live
   library-docs registry; explicit-only, its anonymous quota honestly encoded in the row).
 
+- **Typed relation statements (P8)**: `penumbra_statement` records directed agent judgments
+  (`src`, `dst`, free `type`, required `note`, optional provenance `doc`) as declarative state
+  beside the identity rulings; they project in `neighborhood` / `between` / `since` under
+  `working` and `exploratory`, never `conservative`, and never enter the mechanical store.
+  Identity types are refused (that is `penumbra_ruling`'s job), `voices` deliberately ignores
+  statements, and endpoints may name entities no source ever minted (label-keyed ids are
+  self-describing and findable). Nothing is ever extracted by code: the reading agent judges,
+  the graph projects.
+
 - PyPI publish (`pip install penumbra-mcp`) planned.
 
 ## [0.1.0]
