@@ -5376,15 +5376,18 @@ _fetch_src42 = _cf_inspect.getsource(fetcher)
 check("conflict: fetcher collects signal_conflicts stamps into _meta.conflicts",
       'signal_conflicts' in _fetch_src42 and "_detect_conflicts" not in _fetch_src42)
 
-# --- #6 progressive_return (fetcher.search_many classifies fast/slow/pending sources from a
-#     shared _result_times dict and stamps them in _meta). search_many needs live adapters, so
-#     assert the code STRUCTURE (the adversarial fix kept wait(), not as_completed()). ---
+# --- #6 progressive_return (fetcher.search_many classifies fast/slow sources from a shared
+#     _result_times dict and stamps a progressive block in _meta). P11 weight-class: fast/slow are
+#     NON-actionable, so the block carries COUNTS (fast/slow), not the 70+-name lists; the timed_out
+#     NAMES stay (actionable). search_many needs live adapters, so assert the code STRUCTURE (the
+#     adversarial fix kept wait(), not as_completed()). ---
 import inspect as _inspect42  # noqa: E402
 _sm_src = _inspect42.getsource(fetcher.search_many)
-check("progressive: search_many stamps fast_sources in _meta",
-      "fast_sources" in _sm_src)
-check("progressive: search_many stamps slow_sources in _meta",
-      "slow_sources" in _sm_src)
+check("progressive: search_many stamps a progressive block in _meta (P11 weight-class)",
+      '"progressive":' in _sm_src)
+check("progressive: fast/slow are COUNTS now, not name lists (P11: non-actionable → counts)",
+      "fast_count" in _sm_src and "slow_count" in _sm_src
+      and "fast_sources" not in _sm_src and "slow_sources" not in _sm_src)
 check("progressive: pending_sources alias is GONE (byte-duplicate of timed_out, rescan deletion)",
       "pending_sources" not in _sm_src)
 check("progressive: kept the load-tested wait() path (adversarial: did NOT switch to as_completed)",
@@ -6195,9 +6198,12 @@ try:
               for e in _p2_nb_thin_expl["edges"]))
 
     # (5) seen_before: the wall's novelty stamp. Drive the REAL lookup helper (fetcher._stamp_seen_before)
-    #     against this temp db. A doc first_seen BEFORE t0 -> seen_before True; a doc absent from BOTH
-    #     tables -> NO stamp (absent); a doc whose first_seen is AFTER t0 (this search's own write) ->
-    #     NOT flipped to True (the race-proof-by-construction property: your own writes never self-flag).
+    #     against this temp db. P11 W2 COMPLETENESS CONTRACT: EVERY ranked doc carries seen_before
+    #     (true|false) + first_seen_at (value|null), NEVER absent. A doc first_seen BEFORE t0 -> True +
+    #     an ISO first_seen_at; a doc absent from BOTH tables -> the HONEST False + null (never-seen,
+    #     the exact P11 repro: a live-fetched doc used to come back with NO stamp while its siblings
+    #     carried one); a doc whose first_seen is AFTER t0 (this search's own async write) -> NOT flipped
+    #     to True (the race-proof-by-construction property: your own writes never self-flag).
     _t0 = _time48.time()
     # (i) an OLD doc: a thin row whose first_seen strictly predates t0 (seed it directly, controlled clock).
     _sb_old = _doc("arxiv", "Seen Before Old Thin Doc Predating This Search Long Title", "http://arxiv/sb_old")
@@ -6206,9 +6212,17 @@ try:
                    "VALUES(?, 'document', 'sb old', '{}', ?, ?)",
                    (_graph.doc_node_id("arxiv", "sb_old"), _t0 - 500.0, _t0 - 500.0))
     _p2con.commit()
-    # (ii) a NEW doc, absent from both tables entirely.
+    # (ii) a NEW doc, absent from both tables entirely: the P11 W2 root-cause shape (a live-fetched
+    #      doc never yet ingested). It MUST still be stamped, with the honest never-seen values.
     _sb_absent = _doc("arxiv", "Seen Before Absent Doc Never Retrieved Here Long Title", "http://arxiv/sb_absent")
     _sb_absent.source_id = "sb_absent"
+    # (ii-bis) a "straggler-shaped" doc: absent from memory AND carrying a nearly-bare metadata dict
+    #          (the exact recon symptom, no corroboration, no handles), to prove the stamp lands on a
+    #          doc the passive-enrichment path barely touched, not only on richly-merged siblings.
+    _sb_straggler = _PDoc(source="arxiv", source_id="sb_straggler",
+                          url="http://arxiv.org/abs/sb_straggler",
+                          title="Uncertainty Decomposition Straggler Bare Metadata Long Title",
+                          content="x", metadata={})
     # (iii) a doc whose first_seen is AFTER t0 (models THIS search's own async ingest write).
     _sb_future = _doc("arxiv", "Seen Before Future Doc This Searchs Own Write Long Title", "http://arxiv/sb_future")
     _sb_future.source_id = "sb_future"
@@ -6217,14 +6231,30 @@ try:
                    (_graph.doc_node_id("arxiv", "sb_future"), _t0 + 500.0, _t0 + 500.0))
     _p2con.commit()
 
-    _sb_ranked = [_sb_old, _sb_absent, _sb_future]
+    _sb_ranked = [_sb_old, _sb_absent, _sb_straggler, _sb_future]
     fetcher._stamp_seen_before(_sb_ranked, _t0)   # the real batched first_seen lookup, keyed (source,sid)
-    check("P2.0 (5): a doc whose first_seen PREDATES t0 is stamped seen_before=True",
-          _sb_old.metadata.get("seen_before") is True and "first_seen_at" in _sb_old.metadata)
-    check("P2.0 (5): a doc absent from both tables gets NO seen_before stamp (absent, not False-positive)",
-          "seen_before" not in (_sb_absent.metadata or {}))
-    check("P2.0 (5): a doc whose first_seen is AFTER t0 (own write) is NOT flipped to True (seen_before=False)",
-          _sb_future.metadata.get("seen_before") is False)
+    check("P2.0 (5): a doc whose first_seen PREDATES t0 is stamped seen_before=True + an ISO first_seen_at",
+          _sb_old.metadata.get("seen_before") is True
+          and isinstance(_sb_old.metadata.get("first_seen_at"), str)
+          and _sb_old.metadata["first_seen_at"].startswith("20"))
+    # P11 W2: the completeness contract. The absent (first-time-seen) doc is now stamped the HONEST
+    # False + null, NOT left unstamped (the old presence-gated behavior that produced the recon bug).
+    check("P2.0 (5) [W2]: a doc absent from both tables is stamped seen_before=False + first_seen_at=None (not absent)",
+          _sb_absent.metadata.get("seen_before") is False
+          and "seen_before" in _sb_absent.metadata
+          and _sb_absent.metadata.get("first_seen_at") is None
+          and "first_seen_at" in _sb_absent.metadata)
+    check("P2.0 (5) [W2]: a bare-metadata straggler doc ALSO gets the stamp (False + null), not skipped",
+          _sb_straggler.metadata.get("seen_before") is False
+          and _sb_straggler.metadata.get("first_seen_at") is None)
+    check("P2.0 (5): a doc whose first_seen is AFTER t0 (own write) is seen_before=False + first_seen_at=None",
+          _sb_future.metadata.get("seen_before") is False
+          and _sb_future.metadata.get("first_seen_at") is None)
+    # THE CONTRACT, stated directly: EVERY ranked doc carries BOTH keys, no exceptions.
+    check("P2.0 (5) [W2]: completeness, EVERY ranked doc carries seen_before AND first_seen_at",
+          all(("seen_before" in (_d.metadata or {}) and "first_seen_at" in (_d.metadata or {}))
+              for _d in _sb_ranked)
+          and all(isinstance((_d.metadata or {}).get("seen_before"), bool) for _d in _sb_ranked))
 finally:
     _recall.writer.WRITES_ENABLED = _p2_writes_prev
     fetcher.is_walled_source = _p2_iswalled_prev
@@ -9093,6 +9123,161 @@ check("p8 docs-drift (presence): penumbra_statement is named in README.md (the p
       "penumbra_statement" in _s59_readme_txt)
 check("p8 docs-drift (presence): penumbra_statement is named in _PENUMBRA_INSTRUCTIONS (the connect-time brief)",
       "penumbra_statement" in _srv._PENUMBRA_INSTRUCTIONS)
+
+
+# ---------------------------------------------------------------------------
+# 60. P11, the four dogfood findings of the 2026-07-04 field recon:
+#     W1 the _meta weight-class rule (deployment-static + non-actionable facts leave per-query _meta:
+#        the full excluded MAP -> excluded_count; fast/slow name lists -> progressive COUNTS; the
+#        actionable name lists (timed_out/empty/truncated/excluded_relevant) stay; penumbra_sources carries
+#        every source's explicit_only reason so the catalog is one call away).
+#     W2 seen_before is a COMPLETENESS contract (EVERY ranked doc carries seen_before + first_seen_at,
+#        never absent); the regression fixture lives in §48 (5); here we assert the section-60 shape.
+#     W3 gather's hint slot names the tool's REAL params on a signature mismatch (mechanical, generated).
+#     W4 zhihu dates honestly: the adapter's data path is CDP-rendered HTML (no XHR/JSON timestamp
+#        payload), so date stays null (the honest no-date state); no approximate date is fabricated.
+# ---------------------------------------------------------------------------
+
+# --- W1 (a): a real broad search_many _meta, via a temporary synthetic FAST adapter (save/restore the
+#     registry). Broad (sources=None) so the excluded / progressive machinery actually runs. ---
+class _P11FastAdapter:
+    name = "_p11_fast_synthetic"
+    needs_credentials = False
+    description = "p11 smoke synthetic fast source"
+    def search(self, query, limit=10):
+        return []
+    def fetch_url(self, url):
+        return None
+    def health_check(self):
+        return True, "ok"
+
+_p11_reg_prev = dict(fetcher._adapters)
+try:
+    fetcher.register_adapter_live(_P11FastAdapter())
+    _p11_results, _p11_meta = fetcher.search_many("p11 smoke query", sources=None, limit_per_source=3)
+    # excluded_count is an INT; the full excluded MAP is GONE from _meta (it lives in penumbra_sources now).
+    check("P11 W1: broad _meta carries excluded_count (int) and NO excluded map",
+          isinstance(_p11_meta.get("excluded_count"), int) and "excluded" not in _p11_meta)
+    # progressive is {fast: int, slow: int, timed_out: list}; fast/slow are counts, timed_out a name list.
+    _p11_prog = _p11_meta.get("progressive")
+    check("P11 W1: _meta.progressive is {fast:int, slow:int, timed_out:list}",
+          isinstance(_p11_prog, dict)
+          and isinstance(_p11_prog.get("fast"), int) and isinstance(_p11_prog.get("slow"), int)
+          and isinstance(_p11_prog.get("timed_out"), list))
+    # the old flat fast_sources / slow_sources name-list keys are GONE from _meta.
+    check("P11 W1: the flat fast_sources / slow_sources name lists are GONE from _meta",
+          "fast_sources" not in _p11_meta and "slow_sources" not in _p11_meta)
+    # excluded_relevant keeps its shape (a list); empty / truncated stay NAME LISTS; timed_out top-level
+    # stays a name list (the curator yield tap reads it).
+    check("P11 W1: excluded_relevant is a list; empty / truncated / timed_out stay name lists",
+          isinstance(_p11_meta.get("excluded_relevant"), list)
+          and isinstance(_p11_meta.get("empty"), list)
+          and isinstance(_p11_meta.get("truncated"), list)
+          and isinstance(_p11_meta.get("timed_out"), list))
+finally:
+    fetcher._adapters.clear()
+    fetcher._adapters.update(_p11_reg_prev)
+
+# --- W1 (b): the CATALOG guarantee. penumbra_sources' roster carries each excluded source's explicit_only
+#     REASON string (so removing the full map from _meta loses nothing; it is one call away). ---
+_p11_roster = fetcher.list_sources()
+_p11_excluded_entries = [e for e in _p11_roster if e.get("explicit_only")]
+check("P11 W1: penumbra_sources roster exposes explicit_only_reason for excluded sources (catalog one call away)",
+      bool(_p11_excluded_entries)
+      and all(isinstance(e.get("explicit_only_reason"), str) and e["explicit_only_reason"]
+              for e in _p11_excluded_entries))
+# a NON-excluded source carries no reason key (no noise).
+_p11_incl = [e for e in _p11_roster if not e.get("explicit_only")]
+check("P11 W1: a non-excluded source carries NO explicit_only_reason key (no noise)",
+      bool(_p11_incl) and all("explicit_only_reason" not in e for e in _p11_incl))
+
+# --- W1 (c): docs-drift. the connect-time instructions section (5) names excluded_count + progressive,
+#     and NO LONGER re-ships the old fast_sources/slow_sources vocabulary. ---
+_p11_instr = _srv._PENUMBRA_INSTRUCTIONS
+check("P11 W1: _PENUMBRA_INSTRUCTIONS section 5 names excluded_count and progressive (docs-drift)",
+      "excluded_count" in _p11_instr and "progressive:" in _p11_instr)
+check("P11 W1: _PENUMBRA_INSTRUCTIONS no longer advertises fast_sources / slow_sources (weight-class swept)",
+      "fast_sources" not in _p11_instr and "slow_sources" not in _p11_instr)
+
+# --- W2: the COMPLETENESS contract, stated at section-60 level (the driving regression fixture, incl.
+#     the straggler-shaped root-cause doc, is §48 (5) against a real temp recall db). Assert the helper
+#     stamps BOTH keys on EVERY doc even with recall unavailable (the fail-open never-seen path). ---
+_p11_sb_docs = [_doc("arxiv", "P11 W2 Completeness Doc One Long Enough Title Here", "http://arxiv/p11w2a"),
+                _PDoc(source="arxiv", source_id="p11w2b", url="http://arxiv/p11w2b",
+                      title="P11 W2 Bare Metadata Straggler Long Enough Title", content="x", metadata={})]
+_p11_sb_disabled_prev = _rstore._disabled
+try:
+    _rstore._disabled = True   # recall unavailable → the fail-open path must STILL stamp every doc
+    fetcher._stamp_seen_before(_p11_sb_docs, _time48.time())
+    check("P11 W2: with recall disabled, EVERY ranked doc still carries seen_before=False + first_seen_at=None",
+          all(_d.metadata.get("seen_before") is False and _d.metadata.get("first_seen_at") is None
+              and "seen_before" in _d.metadata and "first_seen_at" in _d.metadata
+              for _d in _p11_sb_docs))
+finally:
+    _rstore._disabled = _p11_sb_disabled_prev
+# the contract is documented at the structural point.
+check("P11 W2: fetcher._stamp_seen_before documents the completeness contract (never absent)",
+      "COMPLETENESS CONTRACT" in (fetcher._stamp_seen_before.__doc__ or ""))
+
+# --- W3: a gather call with a WRONG kwarg gets a hint naming the tool's real params; a normal failure
+#     gets no fabricated hint. Drive the REAL penumbra_gather (unwrapped past @_threaded). ---
+_p11_gather = _srv.penumbra_gather.__wrapped__
+# (i) wrong kwarg → status errored + a hint that names the real penumbra_read params.
+_p11_bad = _p11_gather(calls=[{"tool": "penumbra_read", "args": {"nonexistent_arg": "x"}}], wait_s=5)
+_p11_bad_r = _p11_bad["results"][0]
+check("P11 W3: a gather call with a wrong kwarg is errored AND carries a hint naming the real params",
+      _p11_bad_r.get("status") == "errored" and "hint" in _p11_bad_r
+      and "penumbra_read takes:" in _p11_bad_r["hint"]
+      and all(_p in _p11_bad_r["hint"] for _p in ("target", "start_char", "max_chars")))
+# (ii) a NORMAL failure (a real signature, but the body raises a non-TypeError) gets NO fabricated
+#      hint. Inject a synthetic tool that raises a plain ValueError (deterministic + offline), so this
+#      tests the branch (an ordinary adapter failure), not the network. Save/restore the whitelist.
+def _p11_boom(**kwargs):
+    raise ValueError("adapter blew up (not a signature problem)")
+fetcher_gt_prev = dict(_GATHER_TOOLS)
+try:
+    _GATHER_TOOLS["_p11_boom"] = _p11_boom
+    _p11_norm = _p11_gather(calls=[{"tool": "_p11_boom", "args": {}}], wait_s=5)
+    _p11_norm_r = _p11_norm["results"][0]
+    check("P11 W3: a normal (non-signature) failure is errored with NO fabricated hint",
+          _p11_norm_r.get("status") == "errored" and "hint" not in _p11_norm_r)
+finally:
+    _GATHER_TOOLS.clear()
+    _GATHER_TOOLS.update(fetcher_gt_prev)
+# (iii) the helpers themselves: the hint is MECHANICAL (inspect.signature over the unwrapped body).
+check("P11 W3: _gather_signature_hint derives real params mechanically for penumbra_read",
+      _srv._gather_signature_hint("penumbra_read") == "penumbra_read takes: target, start_char, max_chars, export_media, ocr")
+check("P11 W3: _is_signature_mismatch is True for a kwarg TypeError, False for a plain ValueError",
+      _srv._is_signature_mismatch(TypeError("f() got an unexpected keyword argument 'z'"))
+      and not _srv._is_signature_mismatch(ValueError("some positional argument text")))
+
+# --- W4: zhihu dates honestly. The adapter's data path is CDP-rendered HTML (BeautifulSoup over
+#     page.content()), NOT an XHR/JSON payload with created_time/updated_time; there is no timestamp
+#     to map, so date stays null. Golden fixture: a representative rendered search card parses to a
+#     doc with date=None (the honest no-date state), while title/url/source_id/votes ARE extracted.
+#     (No approximate/fabricated date is invented from a localized card string; the spec's red line.) ---
+from penumbra.core.sources.walled.zhihu_source import ZhihuAdapter as _P11Zhihu  # noqa: E402
+from bs4 import BeautifulSoup as _P11Soup  # noqa: E402
+_P11_ZHIHU_CARD = (
+    '<div class="SearchResult-Card"><div class="ContentItem">'
+    '<h2 class="ContentItem-title"><a href="/question/12345/answer/67890">读博期间如何做好方法论</a></h2>'
+    '<div class="RichContent-inner">我的经验是先读综述再动手，阅读全文</div>'
+    '<div class="AuthorInfo-name"><a class="UserLink-link">某研究者</a></div>'
+    '<div class="ContentItem-actions"><button class="VoteButton" aria-label="赞同 128">赞同 128</button></div>'
+    '</div></div>')
+_p11_card = _P11Soup(_P11_ZHIHU_CARD, "lxml").select_one(".SearchResult-Card, .List-item")
+_p11_zdoc = _P11Zhihu()._card_to_document(_p11_card)
+check("P11 W4: zhihu CDP search card parses (title + url + source_id extracted from rendered HTML)",
+      _p11_zdoc is not None and _p11_zdoc.title == "读博期间如何做好方法论"
+      and _p11_zdoc.source_id == "12345"
+      and _p11_zdoc.url == "https://www.zhihu.com/question/12345/answer/67890")
+check("P11 W4: zhihu date is null, the data path carries no timestamp payload (honest no-date state)",
+      _p11_zdoc.date is None)
+# The adapter source itself has no timestamp-field mapping (no created_time/updated_time); locks the
+# finding so a future 'approximate date from a card string' addition trips this gate.
+_p11_zsrc = _insp.getsource(_P11Zhihu)
+check("P11 W4: the zhihu adapter maps no created_time/updated_time (HTML-scrape path, honestly dateless)",
+      "created_time" not in _p11_zsrc and "updated_time" not in _p11_zsrc)
 
 
 print()

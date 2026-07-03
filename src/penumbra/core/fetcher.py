@@ -44,7 +44,8 @@ _EXPLICIT_DEADLINE_S = 45  # When the caller NAMES sources, they chose them → 
                           # this is only a backstop against a genuinely hung source.
 # EXCLUDED from the broad (sources=None) fan-out: slow and/or account/credential/
 # quota-sensitive sources. Each adapter DECLARES itself via an ``explicit_only``
-# attribute (True, or better a short reason string shown in _meta.excluded);
+# attribute (True, or better a short reason string, surfaced in the penumbra_sources roster's
+# explicit_only_reason and in _meta.excluded_relevant when query-relevant);
 # config-driven sources carry it on their row. This dict remains ONLY as an
 # emergency override (name -> reason) for an adapter you cannot edit right now;
 # it is normally EMPTY. The smoke gate freezes the effective set, so it can only
@@ -592,14 +593,18 @@ def search_many(
     warm their cache. ``deadline_s=None`` uses a smart default (broad ~11s, or 16s when
     fresh=True; scoped ~45s); pass a number to override (a large value ≈ wait for all, bounded by each
     source's own internal timeout). ``sources=None`` searches all NON-explicit-only
-    sources (browser/CDP + twitter_x excluded — slow + account-rate-sensitive — and
-    listed in ``_meta.excluded``; name them to include). ``fresh=True`` bypasses cache.
+    sources (browser/CDP + twitter_x excluded, being slow + account-rate-sensitive; counted in
+    ``_meta.excluded_count``; name them to include). ``fresh=True`` bypasses cache.
 
     ``_meta`` explains the ABSENCES (presences are visible in the documents):
-    ``{searched, elapsed_s, empty, timed_out, errored, excluded, excluded_relevant, truncated}``.
-    ``excluded_relevant`` is the query-AWARE subset of ``excluded``: walled/slow sources whose
+    ``{searched, elapsed_s, empty, timed_out, errored, excluded_count, excluded_relevant, truncated,
+    progressive}``. ``excluded_count`` is just the SIZE of the deployment-static excluded set (the
+    full name->reason MAP lives in penumbra_sources, one call away, never re-shipped per query).
+    ``excluded_relevant`` is the query-AWARE slice the agent acts on: walled/slow sources whose
     facets/description thematically match THIS query, each with a copy-paste ``sources=[...]``
-    re-run hint (empty when no excluded source matches). A NAMED search (sources=[...]) also carries
+    re-run hint (empty when no excluded source matches). ``progressive`` = ``{fast, slow, timed_out}``:
+    the fast/slow fan-out partition as COUNTS (non-actionable) plus the timed_out NAMES (actionable).
+    A NAMED search (sources=[...]) also carries
     ``diagnostics`` when present: the same per-source /eye-fix evidence penumbra_fetch emits, for each
     named source that came back empty / errored / timed out (a broad sweep never arms it).
     """
@@ -652,8 +657,9 @@ def search_many(
 
     if not target_sources:
         return {}, {"searched": 0, "elapsed_s": 0.0, "empty": [], "timed_out": [],
-                    "errored": {}, "excluded": excluded, "disabled": sorted(disabled),
-                    "excluded_relevant": excluded_relevant, "truncated": []}
+                    "errored": {}, "excluded_count": len(excluded), "disabled": sorted(disabled),
+                    "excluded_relevant": excluded_relevant, "truncated": [],
+                    "progressive": {"fast": 0, "slow": 0, "timed_out": []}}
 
     # Progressive-return timing (#6): source -> completion monotonic time. Populated inside
     # _one() (closure capture, same pattern as fresh/cache_only/query). Concurrent writes go to
@@ -731,17 +737,19 @@ def search_many(
         executor.shutdown(wait=False)  # stragglers finish detached + warm the cache
 
     # Progressive-return facets (#6, fail-open): partition the sources that responded within the
-    # deadline into fast (< 3s) vs slow (>= 3s) by their stamped completion time. Timed-out
-    # sources keep running detached and land in _meta["timed_out"] (the 2026-07-01 fixpoint
-    # rescan deleted a byte-identical alias key that used to mirror that list).
-    # Advisory metadata only — NO control-flow / ranking impact (the razor).
-    fast_sources: list[str] = []
-    slow_sources: list[str] = []
+    # deadline into fast (< 3s) vs slow (>= 3s) by their stamped completion time. This is a
+    # NON-ACTIONABLE diagnostic (which sources happened to be quick THIS run), so it carries only
+    # COUNTS, not the 70+-name lists it used to: the agent does not act on the fast/slow NAMES for a
+    # query, and the deployment-static / logs channels own those. The timed_out NAMES stay (the
+    # agent may re-fire or cache_only-collect exactly those); they also remain a top-level key that
+    # the curator yield tap reads. Advisory metadata only, NO control-flow / ranking impact (the razor).
+    fast_count = 0
+    slow_count = 0
     try:
-        fast_sources = sorted(s for s, t in _result_times.items() if t - t0 < 3.0)
-        slow_sources = sorted(s for s, t in _result_times.items() if t - t0 >= 3.0)
+        fast_count = sum(1 for _, t in _result_times.items() if t - t0 < 3.0)
+        slow_count = sum(1 for _, t in _result_times.items() if t - t0 >= 3.0)
     except Exception:  # noqa: BLE001 — a timing-facet failure must never corrupt the search return
-        fast_sources, slow_sources = [], []
+        fast_count, slow_count = 0, 0
 
     meta = {
         "searched": len(target_sources),
@@ -749,12 +757,16 @@ def search_many(
         "empty": sorted(empty),
         "timed_out": sorted(timed_out),
         "errored": errored,
-        "excluded": excluded,
+        # The full ~100-entry excluded name->reason MAP is deployment-static (it does not change with
+        # THIS query), so it is not per-query _meta: only its COUNT rides here, and penumbra_sources carries
+        # every source's explicit_only reason so the full catalog stays one call away. The query-AWARE
+        # slice the agent DOES act on is excluded_relevant (name + reason + overlap + re-run hint).
+        "excluded_count": len(excluded),
         "disabled": sorted(disabled),
         "excluded_relevant": excluded_relevant,
         "truncated": sorted(truncated),
-        "fast_sources": fast_sources,
-        "slow_sources": slow_sources,
+        # fast/slow collapsed to counts; timed_out NAMES kept (actionable) inside the one block.
+        "progressive": {"fast": fast_count, "slow": slow_count, "timed_out": sorted(timed_out)},
     }
     if diagnostics:  # named search only, and only when a named source was empty / errored / slow
         meta["diagnostics"] = diagnostics
@@ -811,23 +823,25 @@ def _doc_sid(d: Document) -> str:
     return str(getattr(d, "source_id", None) or getattr(d, "url", None) or "")
 
 
-def _stamp_seen_before(ranked: list[Document], t0_wall: float) -> None:
-    """Stamp ``metadata['seen_before']`` (+ ``first_seen_at`` when known) on each ranked doc: whether
-    THIS deployment had retrieved the doc BEFORE this search (the wall's novelty stamp). ONE batched
-    first_seen lookup across the perception memory — docs UNION thin document nodes (graph_nodes,
-    kind='document') — keyed on (source, source_id). ``seen_before`` is True iff a first_seen exists
-    AND is strictly earlier than ``t0_wall`` (this search's start), so a doc THIS search is the first
-    to see is NOT flagged (its first_seen >= t0_wall). Docs with no persisted first_seen (recall
-    disabled, or a synthetic doc) get NO stamp. Fail-open: any error leaves stamps absent."""
-    if not ranked:
-        return
-    from penumbra.core.recall import store
-    if store._disabled:
-        return
-    con = store._read_con()
-    if con is None:
-        return
-    # (source, sid) for every ranked doc, deduped; keep the doc refs to stamp after the lookup.
+def _seen_before_lookup(ranked: list[Document]) -> dict[tuple[str, str], float]:
+    """The batched first_seen lookup half of the seen_before stamp: for each ranked doc's
+    (source, source_id), the earliest persisted first_seen across the perception memory (docs
+    UNION thin document nodes, graph_nodes kind='document'). A doc the deployment has NEVER
+    retrieved is simply absent from the returned map (the stamp pass reads that as first-time-seen).
+    Fail-open at every step: recall disabled / no connection / a bad row → the (possibly partial)
+    map so far, NEVER an exception into the caller."""
+    first_seen: dict[tuple[str, str], float] = {}
+    try:
+        from penumbra.core.recall import store
+        if store._disabled:
+            return first_seen
+        con = store._read_con()
+        if con is None:
+            return first_seen
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("seen_before store unavailable: %s", exc)
+        return first_seen
+    # (source, sid) for every ranked doc, deduped.
     keys: list[tuple[str, str]] = []
     seen_keys: set = set()
     for d in ranked:
@@ -842,8 +856,7 @@ def _stamp_seen_before(ranked: list[Document], t0_wall: float) -> None:
             seen_keys.add(k)
             keys.append(k)
     if not keys:
-        return
-    first_seen: dict[tuple[str, str], float] = {}
+        return first_seen
     _CHUNK = 400  # bound the SQL variable count per statement (row-value IN over pairs)
     from penumbra.core.recall.graph import doc_node_id
     for i in range(0, len(keys), _CHUNK):
@@ -875,22 +888,46 @@ def _stamp_seen_before(ranked: list[Document], t0_wall: float) -> None:
                     first_seen[key] = float(fs) if prev is None else min(prev, float(fs))
         except Exception as exc:  # noqa: BLE001
             logger.debug("seen_before thin lookup failed: %s", exc)
-    if not first_seen:
+    return first_seen
+
+
+def _stamp_seen_before(ranked: list[Document], t0_wall: float) -> None:
+    """Stamp ``metadata['seen_before']`` (true|false) + ``first_seen_at`` (value|null) on EVERY ranked
+    doc: whether THIS deployment had retrieved the doc BEFORE this search (the wall's novelty stamp).
+
+    COMPLETENESS CONTRACT (P11 W2): every doc in a ranked response carries BOTH keys, NEVER absent. A
+    doc the deployment has retrieved before → ``seen_before=True`` + the ISO first_seen_at; a doc it
+    is seeing for the FIRST time (or recall is disabled, or a synthetic doc with no persisted row) →
+    the HONEST ``seen_before=False`` + ``first_seen_at=None`` (null = never-seen, the true novelty
+    state), not a MISSING key. The bug this fixes: the stamp used to be presence-gated (only docs that
+    already had a persisted first_seen got stamped at all), so a freshly live-fetched doc came back
+    with no seen_before while its previously-seen siblings carried one: a silent, uneven contract.
+
+    ``seen_before`` is True iff a first_seen exists AND is strictly earlier than ``t0_wall`` (this
+    search's start), so a doc THIS search is the first to see is False (its first_seen >= t0_wall, or
+    absent). The lookup is one BATCHED first_seen probe across docs UNION thin graph_nodes; it is
+    fail-open (a lookup failure leaves the map empty, so every doc reads as False, still stamped)."""
+    if not ranked:
         return
+    from datetime import datetime, timezone
+    first_seen = _seen_before_lookup(ranked)
     for d in ranked:
+        fs = None
         source = getattr(d, "source", None)
-        if not source:
-            continue
-        fs = first_seen.get((source, _doc_sid(d)))
-        if fs is None:
-            continue
+        if source:
+            fs = first_seen.get((source, _doc_sid(d)))
         d.metadata = dict(d.metadata or {})
-        d.metadata["seen_before"] = fs < t0_wall
-        try:
-            from datetime import datetime, timezone
-            d.metadata["first_seen_at"] = datetime.fromtimestamp(fs, timezone.utc).isoformat()
-        except Exception:  # noqa: BLE001 — the boolean stamp still stands without the ISO string
-            pass
+        # The contract: BOTH keys, on EVERY doc. Absent first_seen (or first_seen >= t0_wall = this
+        # search's own write) → the honest never-seen-before state, not a missing stamp.
+        if fs is not None and fs < t0_wall:
+            d.metadata["seen_before"] = True
+            try:
+                d.metadata["first_seen_at"] = datetime.fromtimestamp(fs, timezone.utc).isoformat()
+            except Exception:  # noqa: BLE001 (the boolean stamp still stands without the ISO string)
+                d.metadata["first_seen_at"] = None
+        else:
+            d.metadata["seen_before"] = False
+            d.metadata["first_seen_at"] = None
 
 
 def search_ranked(
@@ -945,7 +982,10 @@ def search_ranked(
     meta["deduped"] = {"in": total_in, "out": len(ranked)}
     # ── seen_before stamp (the wall's novelty stamp) ── one BATCHED first_seen lookup across the
     # perception memory (docs UNION thin graph_nodes) marks which ranked results THIS deployment had
-    # retrieved before this search. Fail-open: on any error the stamps are simply absent.
+    # retrieved before this search. COMPLETENESS CONTRACT (P11 W2): EVERY ranked doc carries
+    # seen_before + first_seen_at, never absent (the lookup is fail-open, so a lookup failure just
+    # makes every doc read as never-seen, still stamped). The outer guard keeps a stamp failure from
+    # ever breaking the search.
     try:
         _stamp_seen_before(ranked, t0_wall)
     except Exception:  # noqa: BLE001 — a stamp failure must never break the search
@@ -1017,7 +1057,9 @@ def list_sources(check_health: bool = False, domain: Optional[str] = None,
     """List all registered sources with routing-relevant facts.
 
     Each entry carries: name, the routing FACETS (kind / domains / regions / modes),
-    needs_credentials, ``explicit_only`` (excluded from broad search → name it to include),
+    needs_credentials, ``explicit_only`` (excluded from broad search, name it to include) plus
+    ``explicit_only_reason`` (the WHY string, present only when excluded; the full catalog of
+    exclusion reasons search's _meta.excluded_count no longer re-ships per query),
     a ``stability`` class (stable < keyed < scrape < walled — a neutral fragility FACT, NOT a
     verdict: set expectations + prioritise repairs), and recent ``health`` from the P19 watchdog
     (advisory — never blocks a source). Pass ``check_health=True`` for a fresh LIVE probe (slow).
@@ -1043,11 +1085,17 @@ def list_sources(check_health: bool = False, domain: Optional[str] = None,
             health = "down"     # persistently failing across runs
         else:
             health = "ok"       # healthy, or just a single transient blip
+        _eo_reason = _explicit_only_reason(adapter)
         entry = {
             "name": name,
             "description": adapter.description,
             "needs_credentials": adapter.needs_credentials,
-            "explicit_only": bool(_explicit_only_reason(adapter)),
+            "explicit_only": bool(_eo_reason),
+            # The explicit_only REASON string, present only when excluded. This is the catalog side of
+            # the P11 _meta weight-class rule: search's per-query _meta ships only excluded_COUNT (the
+            # ~100-entry name->reason map is deployment-static, not query info), so the full reason for
+            # any excluded source stays exactly one penumbra_sources call away, never lost.
+            **({"explicit_only_reason": _eo_reason} if _eo_reason else {}),
             # NEUTRAL fragility class (stable < keyed < scrape < walled): a routing/expectations
             # signal + the curator's repair-priority fact, NOT a verdict. Derived centrally.
             "stability": _derive_stability(adapter),
