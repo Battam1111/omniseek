@@ -76,7 +76,7 @@ AIエージェントのための、セルフホスト型ディープ検索MCPサ
   </picture>
 </div>
 
-エージェントはMCPで接続する。エントリポイントは **`penumbra_search`**;`penumbra_sources()` が利用可能な能力を表示する。カタログはオープンかつ成長し続ける:各ソースは通常の検索に勝つことで採用される。エージェントが取得したものは、後から問い直せる永続的な関係グラフに蓄積される(`penumbra_graph(view, args)`:`find` / `stats` / `neighborhood` / `between` / `voices` / `since` / `similar`、凍結されたひとつの動詞のもとでビューがデータとして増える);同一性の判断は `penumbra_ruling` で記録する(グラフは読み取り時にその判断を適用するだけで、自ら判断することはない)。完全なツール一覧は **[tools](../tools.md)** にある。
+エージェントはMCPで接続する。エントリポイントは **`penumbra_search`**;`penumbra_sources()` が利用可能な能力を表示する。カタログはオープンかつ成長し続ける:各ソースは通常の検索に勝つことで採用される。エージェントが取得したものは、後から問い直せる永続的な関係グラフに蓄積される(`penumbra_graph(view, args)`:`find` / `stats` / `neighborhood` / `between` / `voices` / `since` / `similar`、凍結されたひとつの動詞のもとでビューがデータとして増える);同一性の判断は `penumbra_ruling` で、内容から判定した型付き関係は `penumbra_statement` で記録する:グラフは読み取り時にそれらの判断を適用するだけで、自ら判断することはない。完全なツール一覧は **[tools](../tools.md)** にある。エンドツーエンドで書かれた実際の調査は **[ケーススタディ](../case-study.md)**、よくある質問は **[FAQ](../faq.md)** を参照。
 
 ## クイックスタート
 
@@ -95,6 +95,9 @@ MCPクライアントを `http://127.0.0.1:8765/mcp` に向け、ヘッダー
 
 オプション拡張(ライセンスへの同意が必要、[NOTICE](../../NOTICE) 参照):
 `docker-compose.yml` で `EXTRAS="[pdf,asr,walled]"` をビルド引数に指定。
+
+推奨(任意):`docker-compose.yml` で `PENUMBRA_CONTACT_EMAIL` を設定する。いくつかのソース(Crossref、
+SEC、Unpaywall)がこれを礼儀上の連絡先として使い、より速いレーンを与える。新規インストールの初回起動時に出る OpenAlex のレート制限警告も抑えられる。
 
 ### Dockerなし
 

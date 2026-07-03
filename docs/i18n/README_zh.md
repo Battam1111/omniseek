@@ -76,7 +76,7 @@
   </picture>
 </div>
 
-你的 agent 经 MCP 接入。入口是 **`penumbra_search`**;`penumbra_sources()` 展示可用能力。目录开放且持续生长:每个源靠胜过普通搜索来赢得席位。agent 取回的一切会累积成一张可追问的持久关系图(`penumbra_graph(view, args)`:`find` / `stats` / `neighborhood` / `between` / `voices` / `since` / `similar`,一个冻结的动词,视图作为数据生长);它的身份判断用 `penumbra_ruling` 记录(图在读取时应用你的判断,自己绝不判断)。完整工具清单见 **[tools](../tools.md)**。
+你的 agent 经 MCP 接入。入口是 **`penumbra_search`**;`penumbra_sources()` 展示可用能力。目录开放且持续生长:每个源靠胜过普通搜索来赢得席位。agent 取回的一切会累积成一张可追问的持久关系图(`penumbra_graph(view, args)`:`find` / `stats` / `neighborhood` / `between` / `voices` / `since` / `similar`,一个冻结的动词,视图作为数据生长);它的判断用 `penumbra_ruling`(身份)和 `penumbra_statement`(它从内容判定的类型化关系)记录:图在读取时应用这些判断,自己绝不判断。完整工具清单见 **[tools](../tools.md)**。想看一次端到端写就的真实调查,见 **[案例研究](../case-study.md)**;常见问题见 **[FAQ](../faq.md)**。
 
 ## 快速开始
 
@@ -95,6 +95,9 @@ curl -s http://127.0.0.1:8765/healthz
 
 可选扩展(你需接受其许可,参见 [NOTICE](../../NOTICE)):
 在 `docker-compose.yml` 中设置 `EXTRAS="[pdf,asr,walled]"`。
+
+建议(可选):在 `docker-compose.yml` 中设置 `PENUMBRA_CONTACT_EMAIL`。少数源(Crossref、SEC、
+Unpaywall)会把它当作礼节性联系人给一条更快的通道,并且能消掉全新安装首次启动时 OpenAlex 的限流警告。
 
 ### 不使用 Docker
 

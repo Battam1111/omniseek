@@ -47,5 +47,8 @@ echo "Optional: keyed sources (CORE, Adzuna, Podcast Index, …) need an API key
 echo "    Run  python scripts/creds_doctor.py  to see which are set vs missing; each keyed adapter"
 echo "    drops a ~/.penumbra/credentials/<source>.json.template with the sign-up URL inline."
 echo
+echo "Optional: set PENUMBRA_CONTACT_EMAIL=you@example.org (a courtesy contact a few sources use"
+echo "    for a faster lane; it also quiets first-boot OpenAlex rate-limit warnings)."
+echo
 echo "Start Penumbra:   python -m penumbra.serve_http"
 echo "Health check:    curl -s http://127.0.0.1:8765/healthz"
