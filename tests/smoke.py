@@ -9281,42 +9281,63 @@ check("P11 W4: the zhihu adapter maps no created_time/updated_time (HTML-scrape 
 
 
 # ---------------------------------------------------------------------------
-# 61. Prewarm best-effort noise filter (the docker-drytest finding 2026-07-04): a source-tree
-#     WARNING logged DURING a prewarm pass is a non-event and is dropped, so a fresh install's
-#     first boot is not a screenful of "OpenAlex fetch failed"; live-context warnings and prewarm's
-#     own per-source summary survive.
+# 61. Per-logger warning rate-limit (the docker-drytest finding 2026-07-04): no single logger may
+#     flood the log. A fresh no-contact-email install rate-limited OpenAlex -> the breaker opened ->
+#     researcher_watch + ~39 org_watch labs + background backfill ALL spammed "circuit open" across
+#     many threads/subsystems, a screenful that reads as broken. Per-subsystem silencing was fragile
+#     (contextvar missed org_watch's non-copy_context pool; a prewarm-scoped hush missed the same
+#     storm re-emitted seconds later by another subsystem). The fix caps it at the ONE place every
+#     warning passes to render -- the root handler -- so it is thread- AND subsystem-agnostic.
 # ---------------------------------------------------------------------------
 import logging as _lg61  # noqa: E402
-import penumbra.core.prewarm as _pw61  # noqa: E402
+import penumbra.core._lograte as _lograte61  # noqa: E402
 
-# The mechanism: raising the loggers a warm EXERCISES (the source adapters + the shared OpenAlex
-# client) to ERROR silences their WARNING/INFO on ANY thread for the pass (a logger's level is on
-# the logger object, thread-agnostic -- the property that covers org_watch's non-copy_context
-# workers, which the earlier contextvar missed). Legit non-warm startup notices (embedder, bind
-# posture) use OTHER loggers and are NOT silenced.
-_pkg61 = _pw61.__name__.rsplit(".", 1)[0]
-_child61 = _lg61.getLogger(_pkg61 + ".sources.api.org_watch_source")  # a real source child logger
-_oa61 = _lg61.getLogger(_pkg61 + "._openalex")             # the shared OpenAlex client (circuit breaker)
-_pw_lg61 = _lg61.getLogger(_pw61.__name__)                 # prewarm's OWN logger (kept)
-_embed61 = _lg61.getLogger(_pkg61 + ".recall.embed")       # a legit startup-notice logger (NOT silenced)
 
-check("61 prewarm quiet: the quiet set is the source package + the OpenAlex client (rename-safe)",
-      _pw61._WARM_QUIET_LOGGERS == (_pkg61 + ".sources", _pkg61 + "._openalex"))
-check("61 prewarm quiet: OUTSIDE the pass, a source-tree WARNING is enabled (normal signal)",
-      _child61.isEnabledFor(_lg61.WARNING) is True)
-with _pw61._quiet_warm_noise():
-    check("61 prewarm quiet: DURING the pass, a source-tree WARNING is silenced (best-effort non-event)",
-          _child61.isEnabledFor(_lg61.WARNING) is False)
-    check("61 prewarm quiet: DURING the pass, the OpenAlex circuit WARNING is silenced too",
-          _oa61.isEnabledFor(_lg61.WARNING) is False)
-    check("61 prewarm quiet: DURING the pass, a source-tree ERROR still surfaces (rarer, kept)",
-          _child61.isEnabledFor(_lg61.ERROR) is True)
-    check("61 prewarm quiet: DURING the pass, prewarm's OWN logger is untouched (its summary shows)",
-          _pw_lg61.isEnabledFor(_lg61.WARNING) is True)
-    check("61 prewarm quiet: DURING the pass, a legit non-warm notice logger (embed) is NOT silenced",
-          _embed61.isEnabledFor(_lg61.WARNING) is True)
-check("61 prewarm quiet: AFTER the pass, every silenced logger's level is restored",
-      _child61.isEnabledFor(_lg61.WARNING) is True and _oa61.isEnabledFor(_lg61.WARNING) is True)
+def _rec61(name, level=_lg61.WARNING, msg="x"):
+    return _lg61.LogRecord(name, level, "f.py", 1, msg, None, None)
+
+
+_clock61 = [1000.0]
+_flt61 = _lograte61.WarningRateLimit(burst=3, window_s=60.0, clock=lambda: _clock61[0])
+
+# burst: first `burst` WARNINGs from a logger pass; the rest in-window are dropped.
+_passed61 = [_flt61.filter(_rec61("a.src")) for _ in range(5)]
+check("61 rate-limit: first `burst` WARNINGs pass, the flood beyond is dropped",
+      _passed61 == [True, True, True, False, False])
+# a DIFFERENT logger has its own budget (per-logger key, not global).
+check("61 rate-limit: a different logger keeps its own budget (independent key)",
+      _flt61.filter(_rec61("b.src")) is True)
+# below WARNING always passes (INFO/DEBUG are never rate-limited).
+check("61 rate-limit: INFO is never throttled (only WARNING/ERROR are)",
+      all(_flt61.filter(_rec61("a.src", _lg61.INFO)) is True for _ in range(5)))
+# CRITICAL is never throttled, even past a logger's exhausted warning budget.
+check("61 rate-limit: CRITICAL always passes, even past an exhausted budget",
+      _flt61.filter(_rec61("a.src", _lg61.CRITICAL)) is True)
+# window rolls over -> a new record passes AND carries the suppressed count (no silent truncation).
+_clock61[0] = 1000.0 + 61.0
+_next61 = _rec61("a.src", msg="orig")
+check("61 rate-limit: after the window, the next WARNING passes again",
+      _flt61.filter(_next61) is True)
+check("61 rate-limit: that record is annotated with the suppressed count (cap is never silent)",
+      "similar suppressed" in _next61.getMessage() and "+2" in _next61.getMessage())
+
+# install_on_root: attaches exactly one MARKED filter per handler, idempotently. Tested against a
+# throwaway root handler so it never rate-limits the rest of this smoke run; cleaned up after.
+_root61 = _lg61.getLogger()
+_tmph61 = _lg61.NullHandler()
+_root61.addHandler(_tmph61)
+try:
+    _lograte61.install_on_root()
+    _lograte61.install_on_root()  # second call is a no-op (idempotent)
+    _marked61 = [f for f in _tmph61.filters if getattr(f, _lograte61._INSTALLED_MARK, False)]
+    check("61 rate-limit: install_on_root attaches exactly one marked filter, idempotently",
+          len(_marked61) == 1)
+finally:
+    for _h61 in _root61.handlers:  # strip the markers we added to every root handler
+        for _f61 in list(_h61.filters):
+            if getattr(_f61, _lograte61._INSTALLED_MARK, False):
+                _h61.removeFilter(_f61)
+    _root61.removeHandler(_tmph61)
 
 
 print()

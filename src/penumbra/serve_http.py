@@ -85,6 +85,8 @@ app.add_middleware(TokenAuth)
 def main() -> None:
     logging.basicConfig(level=logging.INFO,
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    from penumbra.core import _lograte
+    _lograte.install_on_root()  # no single logger may flood the boot log (fresh-install OpenAlex storm)
     from penumbra.core import cache
     pruned = cache.clear_expired()  # TTL only gates reads; sweep dead files each (re)start
     logger.info("cache: pruned %d expired entries", pruned)
