@@ -91,10 +91,11 @@ _PENUMBRA_INSTRUCTIONS = (
     "facts."
     "\n\n"
     "(1) TOOL ROUTING: penumbra_* tools are deferred; ToolSearch \"penumbra\" to load, then call "
-    "penumbra_sources FIRST to route. No-arg returns available_domains (the full domain vocabulary "
-    "with counts) + capabilities verb-index. domain= narrows by domain; query= substring-matches "
-    "name+description+domains. check_health=True also returns a system block (recall index + "
-    "openalex usage). Do NOT hardcode source lists; the adapter set grows."
+    "penumbra_sources FIRST to route. No-arg returns a BOUNDED orient: available_domains (the full domain "
+    "vocabulary with counts) + capabilities verb-index + source_names (the bare inventory); it does NOT "
+    "dump every source's facets. domain=/region=/query= narrow to the matching sources WITH facets+"
+    "descriptions; verbose=True gives the full facet roster. check_health=True also returns a system "
+    "block (recall index + openalex usage). Do NOT hardcode source lists; the adapter set grows."
     "\n\n"
     "(2) VERBS AND WHEN: penumbra_sources (orient FIRST: roster, facets, capabilities, health). "
     "penumbra_search (sweep: ranked cross-lingual dedup by default; raw=True for per-source "
@@ -252,11 +253,12 @@ def penumbra_sources(check_health: LenientBool =False, domain: str = "", query: 
                 verbose: LenientBool =False, region: str = "") -> dict:
     """List all sources — call this to ROUTE before searching.
 
-    COMPACT BY DEFAULT: each entry carries name + the routing FACETS (kind / domains / regions /
-    modes), needs_credentials, explicit_only (excluded from broad search → name it to include),
-    and recent health (advisory, never blocks). The prose `description` is OMITTED by default
-    (the facets ARE the routing signal; the full prose for every source is a large payload) —
-    reach for it on demand:
+    BOUNDED ORIENT: a bare (no-arg) call does NOT dump every source's facets. It returns the routing
+    VOCABULARY (available_domains / available_regions with counts) + the capabilities verb index +
+    `source_names` (the bare inventory) + counts, so the orient payload stays small no matter how far
+    the roster grows (brain_orient's lesson). The per-source FACETS (kind / domains / regions / modes,
+    needs_credentials, explicit_only, stability, health, ...) plus the prose `description` arrive when
+    you NARROW or ask verbose — reach for them on demand:
     • domain="jobs" / "papers" / … → only sources whose `domains` facet contains it, WITH their
       full descriptions. domain= is the most RELIABLE router; the no-arg call returns
       `available_domains` (the full closed vocabulary + counts) so you can pick a valid token, and a
@@ -274,12 +276,14 @@ def penumbra_sources(check_health: LenientBool =False, domain: str = "", query: 
     The no-arg (orient) call also returns `capabilities`: the non-search VERB index (field_skeleton,
     coauthors, transcribe, …) so you discover the whole toolkit here, not only after loading a tool.
 
-    Returns: {"sources": [{name, backend, (description if domain/query/verbose), needs_credentials,
-    explicit_only, explicit_only_reason? (present only when excluded; the full catalog of why-strings
-    search's _meta.excluded_count no longer re-ships), health, health_as_of, kind?, domains?, regions?,
-    modes?, (healthy, status if check_health)}], "count": N, "backend_count": M, "backend_breakdown": {...},
-    (available_domains + available_regions + capabilities on the no-arg call; did_you_mean on a
-    domain near-miss; system:{recall, openalex_usage} when check_health)}
+    Returns: {"count": N, "backend_count": M, "backend_breakdown": {...}, and EITHER
+    - a BARE ORIENT: "source_names": [...] + "note" + available_domains + available_regions + capabilities; OR
+    - a NARROWED (domain/region/query) or verbose call: "sources": [{name, backend, (description when
+      narrowed/verbose), needs_credentials, explicit_only, explicit_only_reason? (present only when
+      excluded; the full catalog of why-strings search's _meta.excluded_count no longer re-ships),
+      stability, access_tier, health, health_as_of, kind?, domains?, regions?, modes?, (healthy, status
+      if check_health)}].
+    (did_you_mean on a domain/region near-miss; system:{recall, openalex_usage} when check_health.)}
 
     `count` is the RAW source count; it over-states coverage when many logical sources sit on ONE
     upstream. `backend_count` is the distinct UPSTREAMS (the honest figure) and `backend_breakdown`
@@ -290,14 +294,29 @@ def penumbra_sources(check_health: LenientBool =False, domain: str = "", query: 
                                    query=query or None, verbose=verbose, region=region or None)
     from collections import Counter
     _bk = Counter(s.get("backend") for s in sources if s.get("backend"))
-    result = {"sources": sources, "count": len(sources),
+    narrowed = bool(domain or query or region)
+    result = {"count": len(sources),
               "backend_count": len(_bk),
               "backend_breakdown": {k: n for k, n in sorted(_bk.items(), key=lambda kv: -kv[1]) if n > 1}}
+    # BOUNDED ORIENT (brain_orient's lesson: an orient payload must stay bounded no matter how large
+    # the corpus grows). The full per-source facet roster (200+ sources x ~13 facets) is a large
+    # UNCONDITIONAL payload that overflows an agent's per-tool-result budget AND buries the real orient
+    # signal (the domain/region vocabulary + the verb index). So the heavy `sources` facet list ships
+    # ONLY when the caller NARROWED (domain=/region=/query=, a small matching set WITH descriptions) or
+    # asked verbose=True (the whole facet roster on purpose). A bare orient hands back the routing
+    # vocabulary + verbs + the bare source-NAME inventory (bounded) instead.
+    if narrowed or verbose:
+        result["sources"] = sources
+    else:
+        result["source_names"] = sorted(s["name"] for s in sources)
+        result["note"] = ("orient view: per-source facets omitted to stay bounded. Narrow with "
+                          "domain=/region=/query= for the matching sources WITH descriptions + facets, "
+                          "or pass verbose=True for the full facet roster.")
     # Routing aids. On the ORIENT call (no narrowing) hand over the closed domain + region
     # vocabularies + the non-search VERB index in the SAME call the route-first ritual guarantees is
     # hit — so the agent can route by domain=/region= (discoverable tokens, not guesses) AND discover
     # field_skeleton / coauthors / transcribe / … without having to already know to load each tool.
-    if not (domain or query or region):
+    if not narrowed:
         vocab = fetcher.facet_vocabulary()
         result["available_domains"] = vocab["domains"]
         result["available_regions"] = vocab["regions"]
