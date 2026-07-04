@@ -89,6 +89,8 @@ docker compose logs penumbra        # 首次启动时会打印 bearer token,复�
 curl -s http://127.0.0.1:8765/healthz
 ```
 
+首次 `up` 会在本地构建镜像(装依赖 + 一个无头 Chromium),需要几分钟;之后启动是秒开。
+
 将你的 MCP 客户端指向 `http://127.0.0.1:8765/mcp`,携带请求头
 `Authorization: Bearer <token>`。token 在首次启动时自动生成,
 存储在 `~/.penumbra/credentials/penumbra_http.json`(Docker 下挂载为 `./.penumbra/credentials/penumbra_http.json`)。

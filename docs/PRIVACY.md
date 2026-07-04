@@ -1,7 +1,7 @@
 # Privacy Posture
 
-> **Status: RELEASE-PERIOD DRAFT.** This document states the privacy posture of Penumbra / this
-> project (public name TBD) as it prepares for an open-source release. The engine is the published
+> **Status: pre-release.** This document states the privacy posture of Penumbra as it prepares for
+> an open-source release. The engine is the published
 > artifact; an operator's private configuration is not. Where a separation is structural, this says
 > so; where it is an operator's responsibility, this says that too.
 >
@@ -71,7 +71,7 @@ runs.
 
 ## 8. Contact / audit
 
-Questions, audit requests, or privacy concerns: open an issue (link TBD at release).
+Questions, audit requests, or privacy concerns: open an issue on the project's GitHub repository (for security-sensitive reports, use the private channel in [SECURITY.md](../.github/SECURITY.md)).
 
 ---
 
