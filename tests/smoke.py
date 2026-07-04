@@ -2811,6 +2811,24 @@ check("health: penumbra_sources(check_health=True) returns a system block with r
 check("health: penumbra_sources without check_health carries NO system block (advisory-only default)",
       "system" not in _srv2.penumbra_sources.__wrapped__(domain="papers"))
 
+# BOUNDED ORIENT (2026-07-04 dogfood): a bare no-arg call must NOT ship the full per-source facet
+# roster (200+ sources x ~13 facets overflowed an agent's per-tool-result budget AND buried the
+# orient signal). It returns source_names + the routing vocabulary + capabilities; the per-source
+# facets arrive only on a narrow (domain=/region=/query=) or verbose=True. brain_orient's lesson,
+# applied to the eye — the regression lock so a future edit/sync cannot silently re-unbound it.
+_bo = _srv2.penumbra_sources.__wrapped__()
+check("orient: bare penumbra_sources is BOUNDED (source_names + vocab + capabilities, NOT the facet roster)",
+      "source_names" in _bo and "sources" not in _bo
+      and isinstance(_bo.get("available_domains"), dict) and "capabilities" in _bo
+      and isinstance(_bo["source_names"], list) and len(_bo["source_names"]) == _bo["count"])
+_bo_narrow = _srv2.penumbra_sources.__wrapped__(domain="papers")
+check("orient: a NARROWED penumbra_sources returns per-source facets (sources), not source_names",
+      "sources" in _bo_narrow and "source_names" not in _bo_narrow
+      and all("name" in s for s in _bo_narrow["sources"]))
+check("orient: verbose=True forces the full facet roster (sources present, bounded form off)",
+      "sources" in _srv2.penumbra_sources.__wrapped__(verbose=True)
+      and "source_names" not in _srv2.penumbra_sources.__wrapped__(verbose=True))
+
 
 class _OkClient:
     def get(self, url, params=None, timeout=None):
@@ -5522,7 +5540,7 @@ check("gather: unknown tool returns per-call error (fail-open)",
 # A call to penumbra_sources (the simplest real tool) works inside gather
 _g_ls = _eg.__wrapped__(calls=[{"tool": "penumbra_sources", "args": {}}], wait_s=30)
 check("gather: penumbra_sources works inside gather",
-      _g_ls["results"][0]["status"] == "ok" and "sources" in _g_ls["results"][0].get("result", {}))
+      _g_ls["results"][0]["status"] == "ok" and "source_names" in _g_ls["results"][0].get("result", {}))
 
 # --- MCP prompts: registered on the server ---
 from penumbra.server import mcp as _mcp43  # noqa: E402
