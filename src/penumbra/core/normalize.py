@@ -13,6 +13,20 @@ from typing import Annotated, Any, Optional
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
 
 
+# Ranking / recall TELEMETRY that rank.py + recall/ leak into a doc's metadata: read ONLY inside the
+# pipeline that BUILDS a ranked result (to compute _rank / merge / live_sources), never by a consumer
+# of the RETURNED doc (verified 2026-07-04: every read-site is in rank.py / recall / curator ingest /
+# a rank-layer smoke, all UPSTREAM of to_tool_dict). So to_tool_dict drops it from the DEFAULT agent
+# projection (~25% of a ranked doc, the same "write-only weight" principle it already applies to
+# metadata['raw']); debug=True keeps it for the /eye-fix rank-analysis case. NOT listed here (the
+# agent SIGNAL, always kept): _rank (re-sort), also_in (independent-upstream count), seen_before /
+# first_seen_at (memory), and every source-native field (arxiv_id, upvotes, citations, doi, ...).
+_META_TELEMETRY = frozenset({
+    "recall_rrf", "merge_basis", "index_age_days", "still_live", "from_index",
+    "recall_via", "freshness_days", "freshness_class", "relevance_hook", "live_sources",
+})
+
+
 # ── lenient tool-arg coercion (borrowed: exa-mcp validation.ts) ─────────────────────────────────
 def _coerce_int(v: Any) -> Any:
     """Accept '10' / 10.0 for an int param. LLMs routinely pass numbers as strings → a hard
@@ -197,13 +211,17 @@ class Document(BaseModel):
                 if s.kind in _ATTENTION_KINDS and isinstance(s.value, (int, float))]
         return max(vals) if vals else None
 
-    def to_tool_dict(self, *, full: bool = False, content_cap: int = 2000) -> dict:
+    def to_tool_dict(self, *, full: bool = False, content_cap: int = 2000, debug: bool = False) -> dict:
         """Agent-facing serialization for the MCP penumbra_* tools — the single lean projection.
 
-        ALWAYS drops ``metadata['raw']``: that lossless escape-hatch is write-only (no code
-        path consumes it — every useful field is already parsed out of it), so it is pure
-        token weight in a tool response (~65% of a ranked-search payload). It stays on the
-        cached document; it just isn't sent to the agent.
+        DROPS internal metadata WEIGHT from the agent projection (it stays on the cached document,
+        just isn't sent to the agent): ``metadata['raw']`` ALWAYS (the lossless escape-hatch is
+        write-only — no code path consumes it — ~65% of a ranked payload), PLUS the ranking / recall
+        TELEMETRY (``_META_TELEMETRY``: recall_rrf / freshness_class / relevance_hook / ...) unless
+        ``debug=True``. That telemetry is read only inside the pipeline that BUILDS the result (never
+        by a consumer of the returned doc), so dropping it is lossless to the agent (~25% of a ranked
+        doc); the SIGNAL is kept — _rank, also_in, seen_before / first_seen_at, and source-native
+        fields. Pass ``debug=True`` for the /eye-fix rank-analysis case (keeps the full telemetry).
 
         ``full=False`` (DISCOVERY — penumbra_search / penumbra_search_ranked, where the agent triages
         many results) caps ``content`` to a ``content_cap``-char preview and sets
@@ -213,8 +231,10 @@ class Document(BaseModel):
         """
         d = self.model_dump(mode="json")
         meta = d.get("metadata")
-        if isinstance(meta, dict) and "raw" in meta:
-            d["metadata"] = {k: v for k, v in meta.items() if k != "raw"}
+        if isinstance(meta, dict):
+            drop = {"raw"} if debug else ({"raw"} | _META_TELEMETRY)
+            if any(k in meta for k in drop):
+                d["metadata"] = {k: v for k, v in meta.items() if k not in drop}
         if not full:
             content = d.get("content") or ""
             if len(content) > content_cap:

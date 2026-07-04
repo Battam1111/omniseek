@@ -368,7 +368,7 @@ def penumbra_sources(check_health: LenientBool =False, domain: str = "", query: 
 def penumbra_search(query: str, sources: Optional[list[str]] = None, limit: Optional[LenientInt] = None,
                semantic: Optional[LenientBool] = None, raw: LenientBool = False,
                full: Optional[LenientBool] = None, wait_s: Optional[float] = None,
-               staleness: str = "cached_ok") -> dict:
+               staleness: str = "cached_ok", debug: LenientBool = False) -> dict:
     """Search the curated sources. The default for "best/latest on X". ONE verb, three shapes.
 
     DISPATCH (deterministic):
@@ -413,6 +413,10 @@ def penumbra_search(query: str, sources: Optional[list[str]] = None, limit: Opti
     (the cache key includes it; a different limit silently misses). _meta.empty = sources not yet warm.
     vs the open web: searches only the eye's curated sources; pair with WebSearch for open-web breadth
     (orthogonal, often use BOTH).
+
+    PER-DOC METADATA is LEAN by default: internal ranking/recall telemetry (recall_rrf / freshness_class /
+    relevance_hook / merge_basis / ...) is omitted (~25% of a ranked doc); the SIGNAL stays (_rank, also_in,
+    seen_before / first_seen_at, source-native signals). ``debug=True`` keeps the full telemetry (/eye-fix).
 
     Returns (default): {"query", "count", "documents": [...], "_meta": {..., excluded_relevant,
     "deduped": {in, out}}}. (raw one-source drill): {"source", "query", "count", "documents": [...],
@@ -473,7 +477,7 @@ def penumbra_search(query: str, sources: Optional[list[str]] = None, limit: Opti
             "source": source,
             "query": query,
             "count": len(docs),
-            "documents": [d.to_tool_dict(full=full) for d in docs],  # drill-down: full content when asked
+            "documents": [d.to_tool_dict(full=full, debug=debug) for d in docs],  # drill-down: full content when asked
         }
         if diagnostic is not None:  # empty / partial-degrade → attach the failure evidence (else no noise)
             out["_meta"] = {"diagnostic": diagnostic}
@@ -495,7 +499,7 @@ def penumbra_search(query: str, sources: Optional[list[str]] = None, limit: Opti
             # Bucket-triage view across MANY uncollapsed sources: a tight content preview keeps the
             # whole per-source coverage (every bucket + doc identity/signals) inside the MCP per-result
             # cap. Drill a chosen doc with penumbra_read (whole content), or drop raw for the ranked list.
-            "results": {src: [d.to_tool_dict(content_cap=500) for d in docs]
+            "results": {src: [d.to_tool_dict(content_cap=500, debug=debug) for d in docs]
                         for src, docs in results.items()},
             "total_count": total,
             "_meta": meta,
@@ -513,7 +517,7 @@ def penumbra_search(query: str, sources: Optional[list[str]] = None, limit: Opti
     out = {
         "query": query,
         "count": len(docs),
-        "documents": [d.to_tool_dict() for d in docs],
+        "documents": [d.to_tool_dict(debug=debug) for d in docs],
         "_meta": meta,
     }
     if _note:
