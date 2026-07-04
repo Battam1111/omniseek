@@ -836,6 +836,28 @@ check("recall: _rrf_fuse marks shared doc via=both + accumulates rrf",
       and (_fb["https://e.com/2"].metadata or {}).get("recall_rrf", 0)
           > (_fb["https://e.com/1"].metadata or {}).get("recall_rrf", 1))
 
+# to_tool_dict projection (2026-07-04 dogfood): the DEFAULT agent projection drops metadata['raw']
+# AND the ranking/recall TELEMETRY (_META_TELEMETRY), keeping the SIGNAL (_rank, also_in, seen_before,
+# source-native); debug=True keeps the telemetry (still drops write-only raw); the source doc.metadata
+# is NEVER mutated (the projection works on a model_dump copy). ~25% smaller ranked doc, lossless to
+# the agent (every dropped field is read only inside the pipeline that built the result).
+from penumbra.core.normalize import _META_TELEMETRY as _MT_smoke  # noqa: E402
+_td = _doc("arxiv", "a paper", "https://e.com/p")
+_td.metadata = {"raw": {"big": "x" * 999}, "recall_rrf": 0.9, "freshness_class": "recent",
+                "relevance_hook": "why", "_rank": 0.77, "also_in": ["openalex"],
+                "seen_before": True, "arxiv_id": "2401.00001"}
+_lean_md = _td.to_tool_dict()["metadata"]
+_dbg_md = _td.to_tool_dict(debug=True)["metadata"]
+check("to_tool_dict: DEFAULT drops raw + ranking telemetry, keeps the signal + source-native fields",
+      "raw" not in _lean_md and not (_MT_smoke & set(_lean_md))
+      and _lean_md.get("_rank") == 0.77 and _lean_md.get("also_in") == ["openalex"]
+      and _lean_md.get("seen_before") is True and _lean_md.get("arxiv_id") == "2401.00001")
+check("to_tool_dict: debug=True keeps the ranking telemetry (still drops write-only raw)",
+      "raw" not in _dbg_md and _dbg_md.get("recall_rrf") == 0.9
+      and _dbg_md.get("freshness_class") == "recent")
+check("to_tool_dict: the source doc.metadata is NOT mutated (projection works on a copy)",
+      "raw" in _td.metadata and _td.metadata.get("recall_rrf") == 0.9)
+
 # (e) hybrid degenerates to PLAIN lexical (no rrf, no crash) when the embedder is unavailable
 _save_dis = _recall.embed._disabled
 _recall.embed._disabled = True
