@@ -34,7 +34,7 @@ dependencies = [
     "praw>=7.7.0",
     "atproto>=0.0.55",
 
-    # Source adapters (web/scraping) — all permissive
+    # Source adapters (web/scraping): all permissive
     "playwright>=1.40",            # chromium for the render/scrape path (Apache-2.0)
     "httpx>=0.27",
     "beautifulsoup4>=4.12",
@@ -53,21 +53,21 @@ dependencies = [
     "yt-dlp>=2026.6.9",            # video/audio metadata + extractors (Unlicense); rots fast, keep current
     "youtube-transcript-api>=0.6.2",
 
-    # Document digestion (penumbra_read_document) minus PDF — office files are zip+XML; three small pure
+    # Document digestion (penumbra_read_document) minus PDF: office files are zip+XML; three small pure
     # libs beat one convert-everything dep. PDF is the optional [pdf] extra (AGPL, see below).
     "python-pptx>=1.0",
     "python-docx>=1.1",
     "openpyxl>=3.1",
     "pillow>=10.0",               # downscale + contact-sheet montage for penumbra_view_doc_images
 
-    # Perception-memory index (recall): the LEXICAL layer is stdlib (SQLite FTS5). The cross-lingual
+    # Recall (memory) index: the LEXICAL layer is stdlib (SQLite FTS5). The cross-lingual
     # VECTOR layer (sentence-transformers, which pulls torch) is the optional [recall] extra; absent
     # it, recall fail-opens to lexical. numpy stays in core (flat-cosine + light + broadly used).
     "numpy>=1.26",
 ]
 
 [project.optional-dependencies]
-# PDF reading. pymupdf is AGPL-3.0 / Artifex-commercial — kept OUT of core so the default install
+# PDF reading. pymupdf is AGPL-3.0 / Artifex-commercial, kept OUT of core so the default install
 # stays Apache-clean. With it absent, PDF reading (penumbra_read_document on a .pdf, the pdf source)
 # degrades with a clear message; everything else works. (Follow-up: a permissive swap to
 # pypdfium2 / pdfminer would fold PDF back into core.)
@@ -78,7 +78,7 @@ pdf = ["pymupdf>=1.24"]
 asr = ["funasr>=1.0", "imageio-ffmpeg>=0.5"]
 
 # Recall VECTOR layer (cross-lingual semantic search). sentence-transformers pulls torch (large);
-# absent it, recall fail-opens to the stdlib FTS5 lexical index — so this is opt-in.
+# absent it, recall fail-opens to the stdlib FTS5 lexical index, so this is opt-in.
 recall = ["sentence-transformers>=3.0"]
 
 # OCR for penumbra_read_document(ocr=True): text-in-pixels (scanned pages, baked-in labels, CJK+Latin,
@@ -88,7 +88,7 @@ ocr = ["rapidocr-onnxruntime>=1.2"]
 
 # Walled / login-driven + anti-bot-signed sources (the deployer brings their own account/session).
 # patchright = a stealth Playwright fork for the CDP path. xhshow = the xiaohongshu_cn request
-# SIGNER (anti-bot circumvention); OPT-IN ONLY and excluded from the default source pack — see
+# SIGNER (anti-bot circumvention); OPT-IN ONLY and excluded from the default source pack, see
 # SECURITY.md (the circumvention/access-tier posture).
 walled = ["patchright>=1.40", "xhshow>=0.1.0"]
 

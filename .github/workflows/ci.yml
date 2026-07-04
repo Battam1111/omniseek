@@ -18,6 +18,8 @@ jobs:
         run: pip install -e .
       - name: Byte-compile all sources
         run: python -m compileall -q src scripts tests
+      - name: Brand lint (no em-dash / no organ vocabulary on reader-facing surfaces)
+        run: python scripts/brand_lint.py
       - name: Smoke (offline golden fixtures + invariants)
         env:
           PYTHONUTF8: "1"

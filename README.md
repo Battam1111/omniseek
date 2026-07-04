@@ -43,7 +43,7 @@ Not secret. A blind spot:
 
 <br>
 
-**Why can't it reach?** What's spoken, search can't hear; what's on screen, search can't read; what's in another language, you can't read; what you can see when logged in, search can't get to; what was there yesterday, gone today. Plain search hits every wall. Reach it yourself, one at a time? You'd get there eventually. You just don't have that much time.
+**Why can't it reach?** What's spoken, search can't hear; what's on screen, search can't read; what's in another language, you can't read; what you can see when logged in, search can't get to; what was there yesterday, gone today. Plain search runs into every one of them. Reach it yourself, one at a time? You'd get there eventually. You just don't have that much time.
 
 **Penumbra gives your agent that reach:** it transcribes what was spoken into text, reads what flickered across a screen, translates what was written in another language into yours, gets into places you can see when logged in but search can't, pulls back what's been deleted, and threads together what's scattered across hundreds of records. What was out of reach, it brings back in one pass.
 
@@ -104,6 +104,9 @@ docker compose up -d
 docker compose logs penumbra        # bearer token, printed on first start (else read the credentials file below)
 curl -s http://127.0.0.1:8765/healthz
 ```
+
+The first `up` builds the image locally (dependencies plus a headless Chromium), so it takes a
+few minutes; later starts are instant.
 
 Point your MCP client at `http://127.0.0.1:8765/mcp` with header
 `Authorization: Bearer <token>`. The token is generated on first start and stored in
