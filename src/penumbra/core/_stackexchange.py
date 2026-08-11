@@ -37,7 +37,7 @@ from typing import Optional
 from markdownify import markdownify as html_to_md
 
 from penumbra.core import auth, diag, http
-from penumbra.core._guard import BackendGuard
+from penumbra.core._guard import BackendGuard, GateBusy, bounded_async_slot, bounded_slot
 from penumbra.core.normalize import Document, jsonsafe, mk_signal
 
 logger = logging.getLogger(__name__)
@@ -109,9 +109,22 @@ def _se_get(url: str, params: dict, timeout: float = TIMEOUT) -> Optional[dict]:
     so all six SE sources stop hammering a spent per-IP quota (no 429 storm, no per-search latency)."""
     if _se_cooling():
         return None
-    with _se_sema:  # global in-flight cap: bound concurrent SE egress (all 6 sources + all agents) so a
-        # broad-fan-out burst paces through instead of storming the shared per-IP quota into a 429 cascade.
-        data = http.get_json(url, params={**params, "key": _SE_KEY} if _SE_KEY else params, timeout=timeout)
+    try:
+        # The gate wait shares the request's existing wire-time budget. A saturated local queue is
+        # self-load, not an upstream failure, so shed it without feeding the quota breaker.
+        with bounded_slot(
+            _se_sema,
+            timeout,
+            lambda waited: GateBusy(f"Stack Exchange gate busy after {waited:.1f}s"),
+        ):
+            data = http.get_json(
+                url,
+                params={**params, "key": _SE_KEY} if _SE_KEY else params,
+                timeout=timeout,
+            )
+    except GateBusy as exc:
+        diag.note("stackexchange.gate", url=url, exc=exc)
+        return None
     if data is None:  # HTTP failure (429 quota / 5xx / timeout) — http.get_json already logged it
         _se_record(False)
         return None
@@ -135,8 +148,11 @@ def health(timeout: float = 10.0) -> tuple[bool, str]:
     with _health_lock:
         if _health["result"] is not None and now - _health["at"] < _HEALTH_TTL_S:
             return _health["result"]
-        if _se_cooling():  # quota breaker open — report it plainly, do not spend a probe
-            _health["at"], _health["result"] = now, (False, "quota cooldown (keyless per-IP quota spent; resets daily)")
+        if _se_cooling():  # keyless per-IP quota spent (resets daily): the API is UP, we are just
+            # out of free quota for now, a budget state, NOT an outage. Report DEGRADED so all 6 SE
+            # sources don't flip down on the shared daily-quota cooldown (they self-heal at reset;
+            # 2026-07-23 watchdog false-mass-down fix). Do not spend a probe.
+            _health["at"], _health["result"] = now, (True, "degraded (keyless per-IP quota spent; resets daily; upstream up)")
             return _health["result"]
         try:
             data = _se_get(
@@ -324,3 +340,111 @@ def fetch_question_document(url: str, source: str, site: str, site_host: str) ->
     if not items:
         return None
     return question_to_document(items[0], source, site_host)
+
+
+# ── async egress twins (S4d: the 6 SE sources go NATIVE async) ────────────────
+# Pure ADDITIONS mirroring _se_get / search / fetch_answer_documents / build_documents. They REUSE
+# every existing pure-CPU mapper (question_to_document / _answer_to_document / _body_md / _ts) and the
+# SHARED quota breaker + in-flight cap (_se_cooling / _se_record / _se_sema / _SE_KEY / TIMEOUT). The
+# sync fns above are UNTOUCHED (the other callers -- penumbra_gather / sensors / curator via search_many --
+# still use them); async and sync share ONE global cap so the migration cannot double the quota storm.
+async def _ase_get(url, params, timeout=TIMEOUT):
+    """Async twin of `_se_get`: SAME shared quota breaker + SAME `_se_sema` global in-flight cap
+    (NOT a new asyncio.Semaphore -- the cap is shared sync<->async across the migration). The
+    threading.BoundedSemaphore is acquired OFF the loop (a `with _se_sema:` on the loop would freeze
+    the event loop); release on the loop (instant). `_se_record`/`_se_cooling` hold `_se_lock` only for
+    microsecond counter math -> fine on loop. cache_only/5xx/429 -> aget_json None -> record fail
+    (byte-identical to `_se_get`; the pre-existing cache_only false-record is mirrored, NOT fixed --
+    fixing it would diverge from sync)."""
+    if _se_cooling():
+        return None
+    try:
+        async with bounded_async_slot(
+            _se_sema,
+            timeout,
+            lambda waited: GateBusy(f"Stack Exchange gate busy after {waited:.1f}s"),
+        ):
+            data = await http.aget_json(
+                url,
+                params={**params, "key": _SE_KEY} if _SE_KEY else params,
+                timeout=timeout,
+            )
+    except GateBusy as exc:
+        diag.note("stackexchange.gate", url=url, exc=exc)
+        return None
+    if data is None:
+        _se_record(False)
+        return None
+    _se_record(True, backoff=float((isinstance(data, dict) and data.get("backoff")) or 0))
+    return data
+
+
+async def asearch(query: str, limit: int, site: str) -> Optional[dict]:
+    """Async twin of `search` (the /search/advanced GET). Byte-identical params + the SAME no-items
+    diag.note. Returns parsed JSON or None (contract)."""
+    params = {
+        "order": "desc",
+        "sort": "relevance",
+        "q": query,
+        "site": site,
+        "pagesize": min(limit, 30),
+        "filter": "withbody",  # include body text in the response
+    }
+    url = f"{API_BASE}/search/advanced"
+    data = await _ase_get(url, params, timeout=TIMEOUT)
+    # An HTTP failure already noted itself in http.aget_json. The SE-specific empty (a 200 that
+    # carried no items) would otherwise be an invisible [] -> surface it for the fixing agent.
+    if isinstance(data, dict) and not data.get("items"):
+        diag.note("stackexchange.search", url=url,
+                  body=f"site={site!r}: response carried no 'items' "
+                       f"(quota_remaining={data.get('quota_remaining')}, "
+                       f"backoff={data.get('backoff')}, error={data.get('error_message')})")
+    return data
+
+
+async def afetch_answer_documents(question_item: dict, source: str, site: str,
+                                  site_host: str) -> list[Document]:
+    """Async twin of `fetch_answer_documents`: SAME keyless /questions/{id}/answers GET via `_ase_get`,
+    SAME ANSWERS_PER_QUESTION cap, SAME `_answer_to_document` map (pure CPU, on loop). [] on failure."""
+    question_id = question_item.get("question_id")
+    if not question_id:
+        return []
+    data = await _ase_get(
+        f"{API_BASE}/questions/{question_id}/answers",
+        {
+            "site": site,
+            "filter": "withbody",
+            "sort": "votes",
+            "order": "desc",
+            "pagesize": ANSWERS_PER_QUESTION,
+        },
+        timeout=TIMEOUT,
+    )
+    if data is None:
+        return []
+    docs: list[Document] = []
+    for ans in (data.get("items") or [])[:ANSWERS_PER_QUESTION]:
+        try:
+            docs.append(_answer_to_document(ans, question_item, source, site_host))
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("%s: skipping malformed answer: %s", source, exc)
+    return docs
+
+
+async def abuild_documents(raw: dict, limit: int, source: str, site: str,
+                           site_host: str) -> list[Document]:
+    """Async twin of `build_documents` (R1: the answer layer egresses). For each of the first `limit`
+    questions: build the question doc (`question_to_document`, pure CPU on loop) then AWAIT its answer
+    docs (`afetch_answer_documents`). Keep the SAME doc ORDER as sync (q0, *a0, q1, *a1, ...) -> await
+    answers SEQUENTIALLY per question (byte-identical order; no asyncio.gather -- ordering-parity over
+    a marginal latency win, and the sema would serialize a gather at cap 4 anyway)."""
+    items = (raw.get("items") or [])[:limit]
+    docs: list[Document] = []
+    for item in items:
+        try:
+            docs.append(question_to_document(item, source, site_host))
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("%s: skipping malformed question: %s", source, exc)
+            continue
+        docs.extend(await afetch_answer_documents(item, source, site, site_host))
+    return docs

@@ -44,6 +44,7 @@ from urllib.parse import urlparse
 import httpx
 
 from penumbra.core import auth
+from penumbra.core._guard import GateBusy, bounded_async_slot, bounded_slot
 from penumbra.core.normalize import Document, jsonsafe, mk_signal
 from penumbra.core.sources.api._base import BaseAPIAdapter
 
@@ -77,8 +78,59 @@ _core_sema = threading.BoundedSemaphore(_CORE_MAX_INFLIGHT)
 def _core_get(url: str, **kwargs):
     """Single CORE egress chokepoint: all httpx.get to api.core.ac.uk pass through here so the global
     in-flight cap (_core_sema) bounds concurrent requests to the shared key-quota host."""
-    with _core_sema:
+    # Reuse the existing wire timeout as the queue budget. CORE may return large full-text pages, so
+    # the queue is allowed the same patience as the request but can never wait forever.
+    max_wait = float(kwargs.get("timeout", TIMEOUT))
+    with bounded_slot(
+        _core_sema,
+        max_wait,
+        lambda waited: GateBusy(f"CORE gate busy after {waited:.1f}s"),
+    ):
         return httpx.get(url, **kwargs)
+
+
+# ── ASYNC EGRESS TWIN (S4) ───────────────────────────────────────────────────────────────────────
+# CORE's search path goes native async. A DEDICATED module-level AsyncClient, NOT http.aget*, because
+# CORE's full-text search response (a page of whole document bodies — the fullText differentiator this
+# adapter exists for) can exceed http.aget*'s 30MB stream cap, which aborts + returns None -> [] on
+# exactly the large full-text responses CORE is reached for. So mirror the sync raw-httpx egress
+# (uncapped) instead. The fixed api.core.ac.uk host means no SSRF surface, same as the sync path (which
+# also uses raw httpx with no guard). Lazy + double-checked-lock like _openalex._aget_client; per-call
+# follow_redirects / headers / timeout ride in _acore_get's **kwargs, identical to the sync _core_get.
+_acore_client_obj: Optional[httpx.AsyncClient] = None
+_acore_client_lock = threading.Lock()  # construction is sync (no await); double-check like _get_client
+
+
+def _acore_client() -> httpx.AsyncClient:
+    """Lazily build (once) the module-level pooled async client for CORE egress. Double-checked lock so
+    the first concurrent async callers create exactly one. Uncapped (no MAX_BYTES) to match the sync
+    raw-httpx egress: a full-text page is CORE's high-value payload and must not be truncated."""
+    global _acore_client_obj
+    if _acore_client_obj is None:
+        with _acore_client_lock:
+            if _acore_client_obj is None:
+                _acore_client_obj = httpx.AsyncClient(
+                    timeout=TIMEOUT,
+                    limits=httpx.Limits(max_keepalive_connections=4, max_connections=8,
+                                        keepalive_expiry=30.0),
+                )
+    return _acore_client_obj
+
+
+async def _acore_get(url: str, **kwargs):
+    """Async twin of ``_core_get``: the SAME single CORE egress chokepoint, so the SHARED ``_core_sema``
+    in-flight cap bounds sync + async requests TOGETHER against the one shared-key host (the reddit
+    ``_arctic_sema`` precedent — ONE ``threading.BoundedSemaphore``, never a second ``asyncio`` one, so
+    the async migration can never double the CORE burst). ``bounded_async_slot`` acquires it OFF the
+    loop, bounds the queue wait by the existing request timeout, and keeps acquire/release paired under
+    cancellation. Egress uses the module-level uncapped AsyncClient (see ``_acore_client``)."""
+    max_wait = float(kwargs.get("timeout", TIMEOUT))
+    async with bounded_async_slot(
+        _core_sema,
+        max_wait,
+        lambda waited: GateBusy(f"CORE gate busy after {waited:.1f}s"),
+    ):
+        return await _acore_client().get(url, **kwargs)
 
 
 class CoreAdapter(BaseAPIAdapter):
@@ -135,6 +187,44 @@ class CoreAdapter(BaseAPIAdapter):
             return []
         results = data.get("results") if isinstance(data, dict) else None
         return results or []
+
+    async def _araw_fetch(self, query: str, limit: int) -> list:
+        """Async twin of ``_raw_fetch`` (S4): the keyed GET /v3/search/works/ goes native async so the
+        live async penumbra_search awaits it directly instead of parking a pool thread on the CORE round-trip.
+        BYTE-FAITHFUL mirror of ``_raw_fetch`` — same no-key gate + warn, same endpoint / params / auth
+        headers / timeout / follow_redirects, same ``results`` extraction, same failure -> [] contract.
+        ONLY the egress swaps: the sync ``_core_get`` (raw httpx.get under the shared _core_sema) -> the
+        async ``_acore_get`` (await the module-level AsyncClient under the SAME shared _core_sema). The
+        response ``.raise_for_status()`` / ``.json()`` run on the already-read body (pure CPU, on loop)."""
+        key = self._key()
+        if not key:
+            logger.warning("core: no api_key configured (~/.penumbra/credentials/core.json)")
+            return []
+        try:
+            resp = await _acore_get(
+                CORE_SEARCH,
+                params={"q": query, "limit": min(limit, 25), "offset": 0,
+                        "sort": "relevance"},
+                headers=self._headers(key),
+                timeout=TIMEOUT,
+                follow_redirects=True,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        except Exception as exc:  # noqa: BLE001; failure -> empty is the adapter contract
+            logger.warning("CORE search failed: %s", exc)
+            return []
+        results = data.get("results") if isinstance(data, dict) else None
+        return results or []
+
+    async def asearch(self, query: str, limit: int = 10) -> list[Document]:
+        """Native-async twin of ``search`` -> makes CORE AsyncSearchCapable (routed to the fetcher's
+        native async dispatch). Shares the base async cache round-trip (``_aapi_search``: SAME cache key
+        ``(name, search_label, query, limit)`` off-loop, per-record ``_to_document``, ``rank_locally=False``
+        so CORE's server-side relevance order is preserved verbatim, cache-only-if-docs); egress via the
+        native-async ``_araw_fetch``; per-record mapping via the SAME pure-CPU ``_to_document`` /
+        ``_work_to_document`` (byte-identical to ``search``). SAME cache as ``search`` (async + sync share it)."""
+        return await self._aapi_search(query, limit, araw_fetch=lambda: self._araw_fetch(query, limit))
 
     def _to_document(self, raw) -> Optional[Document]:
         return self._work_to_document(raw)

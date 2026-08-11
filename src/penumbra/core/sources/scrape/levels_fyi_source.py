@@ -28,12 +28,15 @@ cities 404.
 
 from __future__ import annotations
 
+import functools
 import html as _html
 import json
 import logging
 import re
+import threading
 from typing import Optional
 
+import anyio
 import httpx
 
 from penumbra.core import cache, diag
@@ -86,6 +89,34 @@ _LOC_RULES = [
 # high); decimals require digits after the dot (so a sentence-ending '.' is not captured).
 _MONEY = re.compile(r"(SGD|CAD|USD|GBP|EUR|INR|AUD|HKD|JPY|CA\$|US\$|S\$|A\$|HK\$|\$|£|€)\s?"
                     r"([0-9][0-9,]*(?:\.[0-9]+)?[KkMm]?)")
+
+# Module-level async client for the native-async twin (asearch). This source does NOT route through
+# the shared http.aget* leaves: those call raise_for_status() internally, collapsing every non-2xx to
+# None — but BOTH sync egresses INSPECT r.status_code WITHOUT raising to emit a status-DIFFERENTIATED
+# legible diag.note (a role-page taxonomy miss vs a company 404 vs a 200-but-structure-changed page;
+# see the module docstring's "never a silent empty" contract, and http.py's docstring naming this the
+# "levels_fyi precedent" for sources that cannot route through the shared leaf). So the async twin
+# keeps its OWN client — lazy, double-checked-lock like _openalex._aget_client / nsfc_awards._aget_client
+# — with the SAME follow_redirects / timeout / browser HEADERS as the sync httpx.get it mirrors, so it
+# returns the raw Response (non-2xx included) for that same status inspection. Only asearch awaits it;
+# the sync search is byte-identical. Posture: a FIXED public host (www.levels.fyi) with the query in
+# the URL PATH (a slugged company / a mapped role+country from a closed lexicon), so no SSRF surface is
+# opened (same as nsfc_awards / nserc_awards keeping their own client).
+_aclient: Optional["httpx.AsyncClient"] = None
+_aclient_lock = threading.Lock()  # construction is sync (no await); double-check like http._aget_client
+
+
+def _aget_client() -> "httpx.AsyncClient":
+    global _aclient
+    if _aclient is None:
+        with _aclient_lock:
+            if _aclient is None:
+                _aclient = httpx.AsyncClient(
+                    headers=HEADERS,
+                    timeout=TIMEOUT,
+                    follow_redirects=True,
+                )
+    return _aclient
 
 
 def _slug(company: str) -> str:
@@ -335,6 +366,45 @@ class LevelsFyiAdapter:
                       "og_description": desc},
         )
 
+    async def _arole_search(self, query: str, role: tuple, country: Optional[str]) -> list[Document]:
+        """Native-async twin of ``_role_search``: BYTE-FAITHFUL mirror, changing ONLY the two blocking
+        legs. The URL build, the status-differentiated diag.notes, and the pure-CPU parse
+        (``_meta_description`` / ``_parse_comp_meta`` / ``_role_doc``) are identical, on the loop.
+          - the disk cache read + write -> ``anyio.to_thread.run_sync`` (get_docs / set_docs do file IO);
+          - the raw ``httpx.get`` -> the module-level AsyncClient's ``get`` (SAME headers/timeout, and
+            follow_redirects carried on the client). It returns the raw Response WITHOUT raising, so the
+            ``r.status_code != 200`` taxonomy-miss branch keeps its exact legible diag.note (a shared
+            http.aget* leaf would raise_for_status and lose that status)."""
+        cat, sub = role
+        loc = country or "united-states"  # /t/ pages need a location; default to the US benchmark
+        url = (SUBTITLE_URL.format(cat=cat, sub=sub, loc=loc) if sub
+               else TITLE_URL.format(cat=cat, loc=loc))
+        key = cache.make_key("levels_fyi", "role", cat, sub or "-", loc)
+        cached = await anyio.to_thread.run_sync(cache.get_docs, key)  # disk read OFF loop
+        if cached is not None:
+            return cached
+        try:
+            r = await _aget_client().get(url, headers=HEADERS, timeout=TIMEOUT)
+        except Exception as exc:  # noqa: BLE001
+            diag.note("levels_fyi", url=url, exc=exc)
+            return []
+        if r.status_code != 200:
+            # Legible, not silent: a taxonomy miss (unmapped subtitle / unknown country) records WHY.
+            diag.note("levels_fyi", url=url, status=r.status_code,
+                      body=f"role page not found (cat={cat} sub={sub} loc={loc}); taxonomy miss")
+            return []
+        desc = _meta_description(r.text)
+        comp = _parse_comp_meta(desc) if desc else {}
+        if not desc or not comp:
+            diag.note("levels_fyi", url=url, status=200,
+                      body="200 but no parseable comp in og:description (page structure changed?)")
+            return []
+        doc = self._role_doc(query, cat, sub, loc, url, desc, comp)
+        docs = [doc] if doc else []
+        await anyio.to_thread.run_sync(  # disk write OFF loop
+            functools.partial(cache.set_docs, key, docs, ttl=CACHE_TTL))
+        return docs
+
     # ---- COMPANY path (unchanged): /companies/{slug}/salaries __NEXT_DATA__ (US/USD) ----
     def _company_search(self, query: str) -> list[Document]:
         slug = self._resolve_company(query)
@@ -362,6 +432,42 @@ class LevelsFyiAdapter:
         cache.set_docs(key, docs, ttl=CACHE_TTL)
         return docs
 
+    async def _acompany_search(self, query: str) -> list[Document]:
+        """Native-async twin of ``_company_search``: BYTE-FAITHFUL mirror, changing ONLY the two blocking
+        legs. The slug resolve, the ``status_code == 404`` legible note THEN ``raise_for_status`` for other
+        non-2xx (caught by the generic except -> its diag.note), and the pure-CPU ``_next_data_pageprops``
+        / ``_build_doc`` are identical, on the loop.
+          - the disk cache read + write -> ``anyio.to_thread.run_sync`` (get_docs / set_docs do file IO);
+          - the raw ``httpx.get`` -> the module-level AsyncClient's ``get`` (SAME headers/timeout, and
+            follow_redirects carried on the client), returning the raw Response so the ``== 404`` branch
+            keeps its exact legible diag.note before ``raise_for_status`` (a shared http.aget* leaf would
+            raise on the 404 and lose that status-specific note)."""
+        slug = self._resolve_company(query)
+        key = cache.make_key("levels_fyi", "nextdata", slug)
+        cached = await anyio.to_thread.run_sync(cache.get_docs, key)  # disk read OFF loop
+        if cached is not None:
+            return cached
+        url = PAGE_URL.format(slug=slug)
+        try:
+            r = await _aget_client().get(url, headers=HEADERS, timeout=TIMEOUT)
+            if r.status_code == 404:
+                diag.note("levels_fyi", url=url, status=404,
+                          body=f"no company page for slug={slug!r} (not a company? try a role+country query)")
+                return []
+            r.raise_for_status()
+            pp = _next_data_pageprops(r.text)
+        except Exception as exc:  # noqa: BLE001
+            diag.note("levels_fyi", url=url, exc=exc)
+            return []
+        if not pp or not pp.get("company"):
+            diag.note("levels_fyi", url=url, status=200, body="200 but no __NEXT_DATA__ company data")
+            return []
+        doc = _build_doc(slug, url, pp)
+        docs = [doc] if doc else []
+        await anyio.to_thread.run_sync(  # disk write OFF loop
+            functools.partial(cache.set_docs, key, docs, ttl=CACHE_TTL))
+        return docs
+
     @staticmethod
     def _resolve_company(query: str) -> str:
         q = (query or "").strip()
@@ -379,6 +485,20 @@ class LevelsFyiAdapter:
         if role:  # role[+country] query -> location-accurate /t/ page (the fix)
             return self._role_search(query, role, _location(query))
         return self._company_search(query)  # else treat as a company name (US/USD benchmark)
+
+    async def asearch(self, query: str, limit: int = 10) -> list[Document]:
+        """Native-async twin of ``search`` (S4b) -> AsyncSearchCapable, so the penumbra_search fan-out awaits
+        this DIRECTLY instead of pushing the sync ``.search`` onto the shared thread pool; the one
+        network wait costs a COROUTINE, not a held pool thread. Mirrors ``search`` line-for-line: the
+        SAME empty guard + the SAME ``_role`` / ``_location`` routing (pure CPU, on the loop), dispatching
+        to the async twin of whichever path ``search`` would take. Behavior-identical to ``search`` given
+        identical egress (the two twins share every pure-CPU helper + the SAME cache keys + CACHE_TTL)."""
+        if not (query or "").strip():
+            return []
+        role = _role(query)
+        if role:  # role[+country] query -> location-accurate /t/ page (the fix)
+            return await self._arole_search(query, role, _location(query))
+        return await self._acompany_search(query)  # else treat as a company name (US/USD benchmark)
 
     def fetch_url(self, url: str) -> Optional[Document]:
         return None  # search-only

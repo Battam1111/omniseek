@@ -86,6 +86,17 @@ class SECEdgarAdapter(BaseScrapeAdapter):
             timeout=TIMEOUT,
         )
 
+    async def _araw_fetch(self, query: str, limit: int) -> Optional[Any]:
+        # Async twin of _raw_fetch: byte-faithful mirror (same URL, params, UA header, timeout);
+        # ONLY the shared-http egress fn is swapped for its async twin (http.aget_json). The UA
+        # override stays mandatory or SEC 403s (see module docstring).
+        return await http.aget_json(
+            API_URL,
+            params={"q": query},
+            headers={"User-Agent": SEC_UA},
+            timeout=TIMEOUT,
+        )
+
     def _to_documents(self, raw: Any, query: str, limit: int) -> list[Document]:
         if not isinstance(raw, dict):
             return []
@@ -112,6 +123,15 @@ class SECEdgarAdapter(BaseScrapeAdapter):
             if doc is not None:
                 docs.append(doc)
         return docs
+
+    async def asearch(self, query: str, limit: int = 10) -> list[Document]:
+        """Native-async twin of BaseScrapeAdapter.search -> AsyncSearchCapable. Shares the base async
+        cache round-trip; egress via `_araw_fetch` (async twin of `_raw_fetch`); mapping via the SAME
+        pure-CPU `_to_documents` (byte-identical to `search`, including the client-side recency sort)."""
+        return await self._asearch_via(
+            query, limit,
+            afetch=lambda: self._araw_fetch(query, limit),
+            abuild=lambda raw: self._to_documents(raw, query, limit))
 
     def _hit_to_document(self, hit: dict) -> Optional[Document]:
         if not isinstance(hit, dict):

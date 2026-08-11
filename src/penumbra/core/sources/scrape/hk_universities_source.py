@@ -18,7 +18,9 @@ CUHK CSE / CityU CS / PolyU COMP 已改 JS/卡片渲染,news 不在静态 anchor
 
 from __future__ import annotations
 
+import asyncio
 import datetime
+import functools
 import logging
 import re
 from concurrent.futures import ThreadPoolExecutor
@@ -26,10 +28,11 @@ from contextvars import copy_context
 from typing import Optional
 from urllib.parse import urljoin, urlparse
 
+import anyio
 import httpx
 from bs4 import BeautifulSoup
 
-from penumbra.core import cache
+from penumbra.core import cache, diag, http
 from penumbra.core.normalize import Document, jsonsafe
 
 logger = logging.getLogger(__name__)
@@ -39,7 +42,10 @@ USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36
 
 # (display_name, url, host_filter_re)
 UNIS = [
-    ("HKU CS", "https://www.cs.hku.hk/news/", r"cs\.hku\.hk"),
+    # HKU CS restructured its site: /news/ now 404s outright (it had been a frozen 2018 archive
+    # before that). The live dept-news surface is /news-events/*, of which in-the-media carries the
+    # dated write-ups this extractor wants (verified 200 + 167KB, 2026-07-25).
+    ("HKU CS", "https://www.cs.hku.hk/news-events/in-the-media", r"cs\.hku\.hk"),
     ("HKUST CSE", "https://cse.hkust.edu.hk/news/", r"cse\.hkust\.edu\.hk"),
     ("CUHK CSE", "https://www.cse.cuhk.edu.hk/news/", r"cse\.cuhk\.edu\.hk"),
     ("CityU CS", "https://www.cs.cityu.edu.hk/news/", r"cs\.cityu\.edu\.hk"),
@@ -110,6 +116,8 @@ def _fetch_html(url: str) -> Optional[str]:
         return resp.text
     except Exception as exc:  # noqa: BLE001
         logger.warning("HK uni HTML fetch failed for %s: %s", url, exc)
+        st = getattr(getattr(exc, "response", None), "status_code", None)
+        diag.note("hk_universities.fetch", url=url, status=st, exc=exc)
         return None
 
 
@@ -254,7 +262,65 @@ class HKUniversitiesAdapter:
         for item in all_items[:limit]:
             docs.append(self._item_to_document(item))
 
-        cache.set_docs(key, docs, ttl=3600)
+        cache.set_docs(key, docs, ttl=3600, empty_ttl=300)  # all-unis-fail empty must not pin 1h
+        return docs
+
+    async def asearch(self, query: str, limit: int = 10) -> list[Document]:
+        """Native-async twin of ``search``: the async penumbra_search fan-out awaits this DIRECTLY (no
+        held pool thread), so the dominant cost — 5 serial-in-sync dept-page downloads (CUHK ~175KB /
+        CityU ~133KB / PolyU ~137KB) — becomes 5 CONCURRENT coroutines on the one loop. Mirrors
+        ``search`` line-for-line, changing ONLY the blocking waits:
+          - the disk cache read + write -> anyio.to_thread.run_sync (SAME cache key as search);
+          - the raw ``httpx.get`` (``_fetch_html``) -> ``http.aget_text`` (shared pool + SSRF guard +
+            cache_only + 30MB cap), keeping the SAME Chrome UA + Accept-Language + timeout, and
+            follow_redirects=True matches the shared async client;
+          - the ThreadPoolExecutor fan-out -> asyncio.gather. Every coroutine runs on the one loop
+            thread, so (unlike the sync worker threads) NO copy_context() is needed: the fresh /
+            cache_only / diag contextvars propagate naturally — and gather preserves UNIS order, so
+            per_uni is identical to ex.map's ordered result.
+        Everything else (round-robin interleave, query filter, [:limit] slice, doc build, and the
+        ttl=3600/empty_ttl=300 cache policy) is pure CPU on the loop, byte-identical to search. The
+        BeautifulSoup parse (_extract_news_items) stays ON the loop, per the pattern (pure CPU)."""
+        key = cache.make_key("hk_universities", "search", query, limit)
+        cached_data = await anyio.to_thread.run_sync(cache.get_docs, key)  # disk read OFF loop
+        if cached_data is not None:
+            return cached_data
+
+        async def _afetch_uni(entry: tuple) -> list[dict]:
+            uni_name, url, _host_re = entry
+            html = await http.aget_text(  # async twin of _fetch_html; same headers/timeout/redirects
+                url, timeout=TIMEOUT,
+                headers={"User-Agent": USER_AGENT, "Accept-Language": "en-US,en;q=0.9,zh;q=0.8"})
+            if not html:
+                return []
+            try:
+                return _extract_news_items(html, url, uni_name)  # pure CPU, on loop
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("HK uni extract failed for %s: %s", uni_name, exc)
+                return []
+
+        per_uni = await asyncio.gather(*[_afetch_uni(e) for e in UNIS])
+        # Round-robin interleave so EVERY uni surfaces within `limit` — not HKU CS (whose page is
+        # itself stale) hogging all the slots. Identical to search's zip_longest interleave.
+        from itertools import zip_longest
+        all_items: list[dict] = [it for tier in zip_longest(*per_uni) for it in tier if it is not None]
+
+        # Filter by query
+        if query:
+            q_lower = query.lower()
+            filtered = []
+            for item in all_items:
+                blob = (item["title"] + " " + item["snippet"]).lower()
+                if q_lower in blob:
+                    filtered.append(item)
+            all_items = filtered
+
+        docs: list[Document] = []
+        for item in all_items[:limit]:
+            docs.append(self._item_to_document(item))
+
+        await anyio.to_thread.run_sync(  # disk write OFF loop
+            functools.partial(cache.set_docs, key, docs, ttl=3600, empty_ttl=300))
         return docs
 
     def fetch_url(self, url: str) -> Optional[Document]:

@@ -170,6 +170,42 @@ class MarketQuoteAdapter:
                 docs.append(doc)
         return docs
 
+    async def asearch(self, query: str, limit: int = 10) -> list[Document]:
+        """Native-async twin of ``search`` (S4b) → AsyncSearchCapable, so the async fan-out awaits
+        this DIRECTLY instead of pushing the sync .search onto the shared thread pool.
+
+        Mirrors ``search`` LINE-FOR-LINE: the ONLY change is the shared-http egress swaps to its async
+        twin (``http.get_json`` → ``await http.aget_json``, same URL/params/headers/timeout). This
+        source's ``search`` keeps NO in-body cache round-trip (unlike the base-class / declarative
+        sources), so there is nothing to hop off-loop and no semaphore to acquire; ``_extract_tickers``
+        / ``_quotes`` / ``_to_doc`` are PURE CPU and stay ON the loop, byte-identical to ``search``."""
+        tickers = _extract_tickers(query)
+        if not tickers:
+            return []
+        tickers = tickers[:limit]
+        payload = await http.aget_json(
+            API_URL,
+            params={
+                "symbols": "|".join(tickers),
+                "requestMethod": "itv",
+                "fund": "1",
+                "exthrs": "1",
+                "output": "json",
+            },
+            headers={"User-Agent": BROWSER_UA},
+            timeout=TIMEOUT,
+        )
+        docs: list[Document] = []
+        for q in _quotes(payload):
+            try:
+                doc = self._to_doc(q)
+            except Exception as exc:  # noqa: BLE001 — one bad quote can't sink the rest
+                logger.debug("market_quote: skipping malformed quote: %s", exc)
+                continue
+            if doc is not None:
+                docs.append(doc)
+        return docs
+
     def fetch_url(self, url: str) -> Optional[Document]:
         return None
 

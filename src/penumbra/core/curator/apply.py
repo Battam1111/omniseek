@@ -90,7 +90,7 @@ def _hosts_of_adapter(adapter) -> set:
                 hosts.add(h.lower())
     # page_watch: rows carry per-page urls (read via the adapter's _rows()).
     rows_fn = getattr(adapter, "_rows", None)
-    if callable(rows_fn):
+    if getattr(adapter, "name", None) == "page_watch" and callable(rows_fn):
         try:
             for r in rows_fn():
                 u = r.get("url") if isinstance(r, dict) else None

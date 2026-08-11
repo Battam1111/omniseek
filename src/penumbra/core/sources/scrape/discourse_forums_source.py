@@ -139,6 +139,33 @@ class DiscourseForumsAdapter(BaseScrapeAdapter):
         docs = keyword_score_filter(docs, query)
         return docs[:limit] if limit and limit > 0 else docs
 
+    async def _araw_fetch(self, query: str, limit: int) -> Optional[Any]:
+        """Async twin of `_raw_fetch`: byte-faithful mirror of the per-instance
+        ``/search.json`` fan-out (same URL, params, timeout, control flow, and
+        None-return contract); ONLY the shared-http egress swaps to its async twin
+        (``http.get_json`` -> ``await http.aget_json``). One GET per instance, gently."""
+        results: list[tuple[str, dict]] = []
+        for host, base in INSTANCES.items():
+            data = await http.aget_json(
+                f"{base}/search.json",
+                params={"q": query},
+                timeout=TIMEOUT,
+            )
+            if isinstance(data, dict):
+                results.append((host, data))
+            else:
+                logger.debug("discourse_forums: %s returned no JSON", host)
+        return results or None
+
+    async def asearch(self, query: str, limit: int = 10) -> list[Document]:
+        """Native-async twin of `search` -> AsyncSearchCapable. Shares the base async
+        cache round-trip; egress via `_araw_fetch`; mapping via the SAME pure-CPU
+        `_to_documents` (byte-identical to `search`)."""
+        return await self._asearch_via(
+            query, limit,
+            afetch=lambda: self._araw_fetch(query, limit),
+            abuild=lambda raw: self._to_documents(raw, query, limit))
+
     def fetch_url(self, url: str) -> Optional[Document]:
         """Claim a topic permalink ``{base}/t/{slug}/{id}`` (or ``/t/{id}``) on a
         known instance: fetch ``{base}/t/{id}.json`` and build a doc from the

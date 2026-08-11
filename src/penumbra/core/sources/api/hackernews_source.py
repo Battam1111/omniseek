@@ -26,12 +26,14 @@ Two layers are retrieved per query and merged into one ranked result set:
 
 from __future__ import annotations
 
+import functools
 import logging
 import re
 from datetime import datetime
 from typing import Optional
 from urllib.parse import parse_qs, urlparse
 
+import anyio
 import httpx
 from markdownify import markdownify as html_to_md
 
@@ -97,6 +99,61 @@ class HackerNewsAdapter:
         cache.set_docs(key, docs, ttl=900)
         return docs
 
+    async def asearch(self, query: str, limit: int = 10) -> list[Document]:
+        """Native-async twin of ``search`` (S4b): mirrors ``search`` line-for-line so the fetcher's
+        native async dispatch (``AsyncSearchCapable``) awaits it DIRECTLY, spending a coroutine on the
+        two Algolia waits instead of a held pool thread. Three changes only vs ``search``:
+          - the disk CACHE read/write go OFF the loop (anyio.to_thread.run_sync: get_docs / set_docs do
+            file IO), keyed IDENTICALLY so async and sync share the cache;
+          - the two Algolia GETs swap to ``await http.aget_json`` (both fan-out calls; the async NETWORK
+            wait stays ON the loop via epoll, no held thread — the SSRF getaddrinfo inside the async leaf
+            is moved off-loop by the http layer);
+          - the PURE-CPU budget math + hit→doc mapping (_hit_to_document / _comment_to_document) stay ON
+            the loop, byte-identical to ``search`` (no drift)."""
+        key = cache.make_key("hackernews", "search", query, limit)
+        cached = await anyio.to_thread.run_sync(cache.get_docs, key)  # disk read OFF loop
+        if cached is not None:
+            return cached
+
+        # Two layers, ONE merged result set: stories (the submission) AND comments
+        # (the actual thread discussion, often HN's highest-signal content). Split the
+        # budget so a small ``limit`` still surfaces both; over-fetch is capped at 30
+        # per layer (Algolia's practical page size) before slicing back to ``limit``.
+        story_budget = max(1, (limit + 1) // 2)   # ceil(limit/2) → stories get the tie
+        comment_budget = max(1, limit - story_budget)
+
+        docs: list[Document] = []
+
+        story_data = await http.aget_json(
+            f"{ALGOLIA_BASE}/search",
+            params={"query": query, "tags": "story", "hitsPerPage": min(story_budget, 30)},
+            timeout=TIMEOUT,
+        )
+        for hit in (story_data or {}).get("hits", [])[:story_budget]:
+            try:
+                docs.append(self._hit_to_document(hit))
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("Skipping malformed HN story hit: %s", exc)
+
+        comment_data = await http.aget_json(
+            f"{ALGOLIA_BASE}/search",
+            params={"query": query, "tags": "comment", "hitsPerPage": min(comment_budget, 30)},
+            timeout=TIMEOUT,
+        )
+        for hit in (comment_data or {}).get("hits", [])[:comment_budget]:
+            try:
+                docs.append(self._comment_to_document(hit))
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("Skipping malformed HN comment hit: %s", exc)
+
+        # Both layers failed (e.g. network) → honest empty, don't cache the miss.
+        if story_data is None and comment_data is None:
+            return []
+
+        await anyio.to_thread.run_sync(  # disk write OFF loop
+            functools.partial(cache.set_docs, key, docs, ttl=900))
+        return docs
+
     def fetch_url(self, url: str) -> Optional[Document]:
         host = (urlparse(url).hostname or "").lower()
         if "ycombinator.com" not in host:
@@ -148,8 +205,13 @@ class HackerNewsAdapter:
             content=hit.get("story_text") or f"HN story • {comment_count} comments • {score} points",
             author=hit.get("author"),
             date=date,
-            signals=mk_signal("points", score,
-                              kind="engagement", by="hackernews/score"),
+            # num_comments was already parsed into metadata; promote it to a SIGNAL so it is
+            # sortable beside points, like every other thread source now (2026-07-25).
+            signals={
+                **mk_signal("points", score, kind="engagement", by="hackernews/score"),
+                **mk_signal("comments", hit.get("num_comments"),
+                            kind="engagement", by="hackernews/num_comments"),
+            },
             tags=hit.get("_tags") or [],
             metadata={
                 "story_id": story_id,

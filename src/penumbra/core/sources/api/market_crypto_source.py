@@ -150,6 +150,37 @@ class MarketCryptoAdapter:
                 docs.append(doc)
         return docs[:limit]
 
+    async def asearch(self, query: str, limit: int = 10) -> list[Document]:
+        """Native-async twin of ``search`` (S4b): mirrors it line-for-line so the fan-out awaits this
+        DIRECTLY instead of pushing the sync ``.search`` onto the shared pool. Only ONE line differs —
+        the network egress swaps ``http.get_json`` -> ``await http.aget_json`` (epoll on the loop, no
+        held thread). No disk-cache round-trip exists in ``search`` (this source caches at the fan-out
+        layer, not internally), so there is nothing to hop OFF the loop; ``_resolve`` + ``_to_doc`` are
+        PURE CPU and stay on the loop UNCHANGED, byte-identical to ``search``, so the two can never drift."""
+        plan = _resolve(query)[:max(limit, 1)]
+        if not plan:
+            return []
+        payload = await http.aget_json(
+            API_URL,
+            params={
+                "ids": ",".join(cid for cid, _ in plan),
+                "vs_currencies": "usd",
+                "include_market_cap": "true",
+                "include_24hr_vol": "true",
+                "include_24hr_change": "true",
+            },
+            headers={"User-Agent": BROWSER_UA, "Accept": "application/json"},
+            timeout=TIMEOUT,
+        )
+        if not isinstance(payload, dict):
+            return []
+        docs: list[Document] = []
+        for cid, sym in plan:
+            doc = _to_doc(cid, sym, payload.get(cid) or {})
+            if doc is not None:
+                docs.append(doc)
+        return docs[:limit]
+
     def fetch_url(self, url: str) -> Optional[Document]:
         return None
 

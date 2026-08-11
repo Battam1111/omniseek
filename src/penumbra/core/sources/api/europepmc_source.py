@@ -94,6 +94,19 @@ class EuropePMCAdapter(BaseScrapeAdapter):
             timeout=20,
         )
 
+    async def _araw_fetch(self, query: str, limit: int) -> Optional[Any]:
+        # Async twin of _raw_fetch: byte-faithful mirror, only http.get_json → await http.aget_json.
+        return await http.aget_json(
+            SEARCH_URL,
+            params={
+                "query": query,
+                "format": "json",
+                "resultType": "core",
+                "pageSize": max(1, int(limit)),
+            },
+            timeout=20,
+        )
+
     def _to_documents(self, raw: Any, query: str, limit: int) -> list[Document]:
         if not isinstance(raw, dict):
             return []
@@ -112,6 +125,40 @@ class EuropePMCAdapter(BaseScrapeAdapter):
                     fulltext_budget -= 1
             docs.append(doc)
         return docs
+
+    async def _ato_documents(self, raw: Any, query: str, limit: int) -> list[Document]:
+        """Async twin of _to_documents (TWO-LAYER: the per-record OA full-text enrichment
+        egresses). Line-for-line mirror of _to_documents, but the bounded fan-out awaits its
+        async twin _amaybe_fulltext (http.get_text → await http.aget_text). SAME _MAX_FULLTEXT
+        budget, SAME eligibility gate, SAME order (sequential awaits ⇒ byte-identical doc list),
+        SAME per-record skip-on-fail (a miss keeps the abstract), SAME pure-CPU _result_to_doc /
+        _strip_jats on the loop."""
+        if not isinstance(raw, dict):
+            return []
+        results = ((raw.get("resultList") or {}).get("result")) or []
+        docs: list[Document] = []
+        fulltext_budget = _MAX_FULLTEXT
+        for result in results[:limit]:
+            doc = self._result_to_doc(result)
+            if doc is None:
+                continue
+            # Bounded OA full-text fan-out: only the first few eligible results pull
+            # the JATS body, and only when there is budget left. A failure inside
+            # _amaybe_fulltext is swallowed there (doc keeps its abstract).
+            if fulltext_budget > 0 and self._fulltext_eligible(result):
+                if await self._amaybe_fulltext(doc, result):
+                    fulltext_budget -= 1
+            docs.append(doc)
+        return docs
+
+    async def asearch(self, query: str, limit: int = 10) -> list[Document]:
+        """Native-async twin of search -> AsyncSearchCapable. Shares the base async cache round-trip;
+        egress via _araw_fetch; mapping via the ASYNC _ato_documents (the enrichment layer egresses,
+        so _asearch_via awaits the async abuild — byte-identical to search's two-layer flow)."""
+        return await self._asearch_via(
+            query, limit,
+            afetch=lambda: self._araw_fetch(query, limit),
+            abuild=lambda raw: self._ato_documents(raw, query, limit))
 
     # ---------------------------------------------------------------- doc builder
     def _result_to_doc(self, result: Any) -> Optional[Document]:
@@ -199,6 +246,24 @@ class EuropePMCAdapter(BaseScrapeAdapter):
         if not src or not pmcid:
             return False
         xml = http.get_text(
+            FULLTEXT_URL.format(pmcid=pmcid), timeout=20,
+        )
+        body = self._strip_jats(xml)
+        if not body:
+            return False
+        doc.content = body[:_BODY_CAP]
+        doc.metadata["full_text"] = "europepmc/fullTextXML"
+        return True
+
+    async def _amaybe_fulltext(self, doc: Document, result: dict) -> bool:
+        """Async twin of _maybe_fulltext: byte-faithful mirror, only http.get_text → await
+        http.aget_text. SAME eligibility guard, SAME _strip_jats (pure CPU, on loop), SAME
+        _BODY_CAP, SAME failure → False fallback (doc keeps its abstract)."""
+        src = result.get("source")
+        pmcid = result.get("pmcid")
+        if not src or not pmcid:
+            return False
+        xml = await http.aget_text(
             FULLTEXT_URL.format(pmcid=pmcid), timeout=20,
         )
         body = self._strip_jats(xml)

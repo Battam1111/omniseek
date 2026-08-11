@@ -56,6 +56,20 @@ class OpenAlexCNAdapter(OpenAlexAdapter):
         # re-stamp source so penumbra_search results + recall index label them as this facet, not 'openalex'
         return [d.model_copy(update={"source": self.name}) for d in docs]
 
+    async def asearch(self, query: str, limit: int = 10) -> list[Document]:
+        # Native-async twin of THIS source's OVERRIDDEN search — it MUST be defined here, never inherited.
+        # openalex_cn subclasses OpenAlexAdapter and overrides search (pins language:zh via _pin_zh, then
+        # re-stamps the source). If it did NOT define its own asearch it would inherit OpenAlexAdapter's,
+        # which reproduces the PARENT search (no zh-pin, source='openalex') → the live async penumbra_search
+        # path would SILENTLY drop this facet's customization (the RSS-fellowships override hazard). So
+        # mirror ITS search line-for-line: delegate to super().asearch — the parent's byte-faithful async
+        # egress (same cache key as super().search + await oa.aget_json), exactly as the sync search above
+        # delegates to super().search — on the zh-pinned query, then re-stamp. No per-item fan-out and no
+        # cache round-trip live here (the parent owns both), so nothing else moves off the loop; the
+        # model_copy re-stamp is pure CPU and stays on the loop, byte-identical to search.
+        docs = await super().asearch(_pin_zh(query), limit)
+        return [d.model_copy(update={"source": self.name}) for d in docs]
+
 
 from penumbra.core.fetcher import register_adapter  # noqa: E402
 

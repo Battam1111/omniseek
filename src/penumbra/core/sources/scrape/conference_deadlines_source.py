@@ -23,14 +23,16 @@ Requires PyYAML (added to pyproject P12).
 
 from __future__ import annotations
 
+import functools
 import logging
 from datetime import datetime, timezone
 from typing import Optional
 
+import anyio
 import httpx
 import yaml
 
-from penumbra.core import cache
+from penumbra.core import cache, diag, http
 from penumbra.core.normalize import Document, jsonsafe, keyword_score_filter
 
 logger = logging.getLogger(__name__)
@@ -86,11 +88,45 @@ class ConferenceDeadlinesAdapter:
             data = yaml.safe_load(resp.content)
         except Exception as exc:  # noqa: BLE001
             logger.warning("conference_deadlines: fetch/parse failed: %s", exc)
+            st = getattr(getattr(exc, "response", None), "status_code", None)
+            diag.note("conference_deadlines.fetch", url=YAML_URL, status=st, exc=exc)
             return []
         if not isinstance(data, list):
             return []
         confs = [c for c in data if c.get("sub") in INCLUDE_SUBS]
         cache.set(key, confs, ttl=CACHE_TTL)
+        return confs
+
+    async def _afetch_confs(self) -> list[dict]:
+        """Async egress twin of ``_fetch_confs`` (S4b). SAME cache key + TTL + INCLUDE_SUBS
+        filter as the sync path; only the two blocking legs change:
+          - the disk cache read + write -> anyio.to_thread.run_sync (get/set do file IO);
+          - the raw ``httpx.get`` -> ``http.aget`` (shared pool + SSRF guard + cache_only + the
+            30MB cap; the ~346KB YAML is far under the cap, so no per-source AsyncClient needed).
+        ``http.aget`` keeps follow_redirects=True (client-level) and takes the SAME PenumbraEye UA
+        + timeout. It handles the HTTP failure branch itself (non-2xx / timeout / SSRF / oversize
+        -> None + its own diag.note under the "http.get" label), so this returns [] on None; a
+        200-but-unparseable YAML is the ONE failure http.aget can't see, so it keeps this source's
+        own diag.note("conference_deadlines.fetch"). Parsing stays byte-identical: ``yaml.safe_load``
+        runs on ``resp.content`` (the same bytes the sync path fed it), on the loop (pure CPU)."""
+        key = cache.make_key("conference_deadlines", "all")
+        cached = await anyio.to_thread.run_sync(cache.get, key)  # disk read OFF loop
+        if cached is not None:
+            return cached
+        resp = await http.aget(YAML_URL, headers={"User-Agent": USER_AGENT}, timeout=TIMEOUT)
+        if resp is None:
+            return []  # http.aget already logged + diag.note'd the egress failure
+        try:
+            data = yaml.safe_load(resp.content)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("conference_deadlines: parse failed: %s", exc)
+            diag.note("conference_deadlines.fetch", url=YAML_URL, status=resp.status_code, exc=exc)
+            return []
+        if not isinstance(data, list):
+            return []
+        confs = [c for c in data if c.get("sub") in INCLUDE_SUBS]
+        await anyio.to_thread.run_sync(  # disk write OFF loop
+            functools.partial(cache.set, key, confs, ttl=CACHE_TTL))
         return confs
 
     def _best_edition(self, conf: dict) -> Optional[tuple[dict, Optional[datetime], bool]]:
@@ -118,6 +154,34 @@ class ConferenceDeadlinesAdapter:
 
     def search(self, query: str, limit: int = 10) -> list[Document]:
         confs = self._fetch_confs()
+        docs: list[Document] = []
+        for conf in confs:
+            best = self._best_edition(conf)
+            if not best:
+                continue
+            ed, dl, is_upcoming = best
+            doc = self._to_document(conf, ed, dl, is_upcoming)
+            if doc:
+                docs.append(doc)
+
+        # Default order: upcoming first (soonest deadline ascending), then past
+        # editions after (also by date — recent past nearest the boundary).
+        far_future = datetime.max.replace(tzinfo=timezone.utc)
+        docs.sort(key=lambda d: (0 if d.metadata.get("is_upcoming") else 1,
+                                 d.date or far_future))
+
+        docs = keyword_score_filter(docs, query)
+        return docs[:limit]
+
+    async def asearch(self, query: str, limit: int = 10) -> list[Document]:
+        """Native-async twin of ``search`` (S4b): the async penumbra_search fan-out awaits this DIRECTLY
+        (no held pool thread), so the dominant NETWORK wait — the one ~346KB YAML fetch — costs a
+        COROUTINE, not a thread. Mirrors ``search`` line-for-line, changing ONLY the egress+cache
+        leg: it awaits ``_afetch_confs`` (shared async leaf + off-loop disk cache, SAME cache key)
+        instead of the sync ``_fetch_confs``. Everything after — the best-edition pick per conf, the
+        doc build, the upcoming-first sort, and the BM25 ``keyword_score_filter`` — is pure CPU and
+        stays ON the loop, byte-identical to ``search`` (a duplicated body the parity golden guards)."""
+        confs = await self._afetch_confs()
         docs: list[Document] = []
         for conf in confs:
             best = self._best_edition(conf)

@@ -62,6 +62,24 @@ class GrantsGovAdapter(BaseScrapeAdapter):
         }
         return http.post_json(API_URL, json=body, timeout=20)
 
+    async def _araw_fetch(self, query: str, limit: int) -> Optional[Any]:
+        # Async twin of _raw_fetch: byte-faithful mirror; only http.post_json -> await http.apost_json.
+        body = {
+            "keyword": query or "",
+            "rows": max(1, min(int(limit), _MAX_ROWS)),
+            "oppStatuses": "posted|forecasted",  # applyable now + upcoming
+            "startRecordNum": 0,
+        }
+        return await http.apost_json(API_URL, json=body, timeout=20)
+
+    async def asearch(self, query: str, limit: int = 10) -> list[Document]:
+        """Native-async twin of search -> AsyncSearchCapable. Shares the base async cache round-trip;
+        egress via _araw_fetch; mapping via the SAME pure-CPU _to_documents (byte-identical to search)."""
+        return await self._asearch_via(
+            query, limit,
+            afetch=lambda: self._araw_fetch(query, limit),
+            abuild=lambda raw: self._to_documents(raw, query, limit))
+
     def _to_documents(self, raw: Any, query: str, limit: int) -> list[Document]:
         if not isinstance(raw, dict):
             return []

@@ -36,8 +36,9 @@ _SCHEMA_VERSION = "2"  # 2 = + vec table (Phase-2 vector layer; additive, CREATE
 # Tokenizer/segment version: bumped when the seg-column DERIVATION changes (NOT the tokenizer
 # itself), so the writer RE-SEGMENTS an existing doc whose stored seg_version != this on the next
 # ingest. 1 = title+content; 2 = title+content+tags (a doc's tags, e.g. ircc's "express-entry",
-# now enter the FTS so "express entry" recalls ircc).
-SEG_VERSION = 2
+# now enter the FTS so "express entry" recalls ircc); 3 = tokenize gains Hangul bigrams + non-Latin
+# letter-run tokens (Korean was invisible to the lexical layer; café-class words were mangled).
+SEG_VERSION = 3
 
 # Fail-OPEN switch: if schema init or a connection ever fails, the whole layer becomes a no-op and
 # the eye runs exactly as it did before (stateless). A bad index file must NEVER take the eye down.
@@ -92,6 +93,24 @@ CREATE TABLE IF NOT EXISTS vec_thin(
   v             BLOB NOT NULL
 );
 CREATE INDEX IF NOT EXISTS vec_thin_mv ON vec_thin(model_version);
+-- Chunk embeddings: ADDITIONAL passage-level vectors for a LONG doc's TAIL (content beyond the first
+-- ~2000 chars that the single ``vec`` row over content[:2000] never reaches). One row per (doc, passage);
+-- ``rowid`` is docs.rowid, ``chunk_idx`` the 0-based passage index. Mirrors ``vec``'s format EXACTLY
+-- (same embedder + MODEL_VERSION -> ONE cosine space; a model swap drops the old space out of ALL three
+-- matrices) so ``vector_search`` can MAX-POOL a doc's head (vec) and tail (vec_chunk) sims into one
+-- per-doc score. Purely ADDITIVE: ``vec`` is untouched, short docs never chunk, and an EMPTY vec_chunk
+-- makes vector_search byte-identical to the doc-only path (the smoke asserts this). Backfilled once for
+-- the pre-existing long docs; new long docs chunk on ingest.
+CREATE TABLE IF NOT EXISTS vec_chunk(
+  rowid         INTEGER NOT NULL,
+  chunk_idx     INTEGER NOT NULL,
+  model_version TEXT NOT NULL,
+  dim           INTEGER NOT NULL,
+  v             BLOB NOT NULL,
+  PRIMARY KEY (rowid, chunk_idx)
+);
+CREATE INDEX IF NOT EXISTS vec_chunk_mv ON vec_chunk(model_version);
+CREATE INDEX IF NOT EXISTS vec_chunk_rowid ON vec_chunk(rowid);
 -- The unified graph (docs/design/graph-unified-model.md v2.0): recall's RELATION index, additive
 -- inside recall.db (single-writer + join locality). Entity nodes + entity/sensor edges are the ONLY
 -- new persistence; doc-doc same_as stays DERIVED views over docs.fp + doc_json (never stored rows).
@@ -207,10 +226,15 @@ def _match_expr(query: str) -> Optional[str]:
     return " OR ".join(parts) if parts else None
 
 
-def search(query: str, k: int = 60) -> list[Document]:
+def search(query: str, k: int = 60, sources: "Optional[frozenset[str]]" = None) -> list[Document]:
     """Recall up to ``k`` candidate docs whose seg matches any query term. PURE RECALL — ``bm25``
     only bounds the pool (never surfaced); the caller re-scores via ``rank.merge_rank``. NEVER
-    raises: any failure (disabled / missing db / bad row) degrades to ``[]``."""
+    raises: any failure (disabled / missing db / bad row) degrades to ``[]``.
+
+    ``sources`` (Wave 2, audit 1.1): when a NON-empty set, the source predicate is pushed INTO this
+    ONE FTS query (``AND d.source IN (...)`` with PARAMETERIZED placeholders, never interpolated
+    values), so the candidate pool is scoped BEFORE bm25 ranks + LIMITs it. ``sources=None`` keeps the
+    exact unfiltered SQL (byte-identical for every existing caller)."""
     if _disabled:
         return []
     expr = _match_expr(query)
@@ -219,11 +243,20 @@ def search(query: str, k: int = 60) -> list[Document]:
     con = _read_con()
     if con is None:
         return []
+    # ONE query, one predicate added: sources=None -> src_pred='' -> the exact pre-Wave-2 SQL.
+    src_pred = ""
+    params: list = [expr]
+    if sources:
+        src_list = list(sources)
+        src_pred = " AND d.source IN (%s)" % ",".join("?" * len(src_list))
+        params.extend(src_list)
+    params.append(k)
     try:
         rows = con.execute(
             "SELECT d.doc_json, d.last_seen, d.source FROM fts "
-            "JOIN docs d ON fts.rowid = d.rowid WHERE fts MATCH ? ORDER BY bm25(fts) LIMIT ?",
-            (expr, k),
+            "JOIN docs d ON fts.rowid = d.rowid WHERE fts MATCH ?" + src_pred
+            + " ORDER BY bm25(fts) LIMIT ?",
+            params,
         ).fetchall()
     except Exception as exc:  # noqa: BLE001
         logger.debug("recall search failed: %s", exc)
@@ -285,6 +318,7 @@ except Exception:  # noqa: BLE001 — no numpy → no vector layer (lexical path
 
 _vec_M = None          # (N, DIM) float32, L2-normalized rows
 _vec_ids = None        # (N,) int64 docs.rowid aligned to _vec_M rows
+_vec_srcs = None       # (N,) object array of docs.source aligned to _vec_M rows (Wave 2 source scope)
 _vec_built_ts = 0.0
 _vec_built_gen = -1
 _vec_built_mv = ""
@@ -293,8 +327,8 @@ _VEC_DEBOUNCE = 20.0   # under a burst of ingest, rebuild the matrix at most eve
                        # slightly-stale otherwise (it is RECALL; merge_rank re-scores anyway)
 
 # P7 thin matrix: the SAME cache pattern for vec_thin (thin-row title embeddings), a SEPARATE cache
-# with its OWN invalidation (keyed on the vec_thin row-count for the current model_version), so a
-# vec_thin write refreshes this matrix without disturbing the docs vec matrix and vice versa. Same
+# with its OWN invalidation (keyed on the _thin_write_gen counter), so a vec_thin write refreshes
+# this matrix without disturbing the docs vec matrix and vice versa. Same
 # model_version gate (a model swap drops the old space out of BOTH). Rows here key on the graph
 # node_id string (a thin row has no docs.rowid), so ids are an object array of strings, not int64.
 _thin_M = None         # (N, DIM) float32, L2-normalized rows
@@ -304,36 +338,67 @@ _thin_built_gen = -1
 _thin_built_mv = ""
 _thin_lock = threading.Lock()
 
+# Chunk matrix: the SAME cache pattern for vec_chunk (a long doc's TAIL passages), a SEPARATE cache
+# with its OWN invalidation (keyed on _chunk_write_gen) so a chunk write refreshes THIS matrix without
+# disturbing the docs / thin matrices. ids are int64 docs.rowid WITH DUPLICATES (N passages per doc);
+# srcs is the per-chunk doc source (masked in lockstep, like _vec_srcs), so vector_search can max-pool
+# a doc's head + tail sims into ONE per-doc score AND source-scope the chunk rows.
+_chunk_M = None        # (N, DIM) float32, L2-normalized rows
+_chunk_ids = None      # (N,) int64 docs.rowid per chunk row (duplicated across a doc's passages)
+_chunk_srcs = None     # (N,) object array of docs.source per chunk row (scope mask)
+_chunk_built_ts = 0.0
+_chunk_built_gen = -1
+_chunk_built_mv = ""
+_chunk_lock = threading.Lock()
+
 
 def _model_version() -> str:
     from penumbra.core.recall import embed  # local: vector path only
     return embed.MODEL_VERSION
 
 
-def _vec_count(con, mv: str) -> int:
-    try:
-        r = con.execute("SELECT count(*) FROM vec WHERE model_version = ?", (mv,)).fetchone()
-        return r[0] if r else 0
-    except Exception:  # noqa: BLE001
-        return -1
+# Monotonic write generations, bumped by the SINGLE recall-writer daemon on any vec / vec_thin
+# write. This REPLACES row-count as the matrix-invalidation key: a RE-EMBED (delete+reinsert the
+# same rowid) leaves count(*) unchanged, so the old count key served a STALE vector until an
+# unrelated INSERT drifted the count. The write-gen bumps on every write, so a re-embed invalidates
+# correctly. Single writer -> a plain int increment is race-free; readers only compare it.
+_vec_write_gen = 0
+_thin_write_gen = 0
+_chunk_write_gen = 0
 
 
-def _vec_thin_count(con, mv: str) -> int:
-    try:
-        r = con.execute("SELECT count(*) FROM vec_thin WHERE model_version = ?", (mv,)).fetchone()
-        return r[0] if r else 0
-    except Exception:  # noqa: BLE001
-        return -1
+def note_vec_write() -> None:
+    """Writer daemon: signal that vec rows changed (insert OR re-embed), invalidating the docs matrix."""
+    global _vec_write_gen
+    _vec_write_gen += 1
+
+
+def note_thin_write() -> None:
+    """Writer daemon: signal that vec_thin rows changed, invalidating the thin matrix."""
+    global _thin_write_gen
+    _thin_write_gen += 1
+
+
+def note_chunk_write() -> None:
+    """Writer daemon: signal that vec_chunk rows changed, invalidating the chunk matrix."""
+    global _chunk_write_gen
+    _chunk_write_gen += 1
 
 
 def _ensure_matrix(con):
     """Build/refresh the cached vector matrix for the CURRENT model_version (debounced). A model
-    change forces a full rebuild and the old space drops out. Returns (M, ids) or (None, None)."""
-    global _vec_M, _vec_ids, _vec_built_ts, _vec_built_gen, _vec_built_mv
+    change forces a full rebuild and the old space drops out. Returns (M, ids) or (None, None).
+
+    Wave 2 (audit 1.1): the same build ALSO caches ``_vec_srcs``, a per-row source array aligned with
+    ``ids`` (docs.source for each vec row), so ``vector_search`` can mask off-scope rows BEFORE the
+    top-k. It is refreshed under the SAME lock / debounce / write-generation invalidation as the
+    matrix (built and swapped in lockstep), and stays a module global so the (M, ids) return signature
+    the other consumers (similar_anchor / similar_neighbors) rely on is unchanged."""
+    global _vec_M, _vec_ids, _vec_srcs, _vec_built_ts, _vec_built_gen, _vec_built_mv
     if _np is None:
         return None, None
     mv = _model_version()
-    gen = _vec_count(con, mv)
+    gen = _vec_write_gen  # write-gen, not row-count: catches re-embeds the count key missed
     now = time.time()
     with _vec_lock:
         same_space = (_vec_M is not None and _vec_built_mv == mv)
@@ -342,36 +407,41 @@ def _ensure_matrix(con):
         if same_space and (now - _vec_built_ts) < _VEC_DEBOUNCE:
             return _vec_M, _vec_ids  # serve slightly-stale during an ingest burst
         try:
-            rows = con.execute("SELECT rowid, v FROM vec WHERE model_version = ?", (mv,)).fetchall()
+            rows = con.execute(
+                "SELECT v.rowid, v.v, d.source FROM vec v JOIN docs d ON v.rowid = d.rowid "
+                "WHERE v.model_version = ?", (mv,)).fetchall()
         except Exception:  # noqa: BLE001
             return None, None
         if not rows:
-            _vec_M, _vec_ids, _vec_built_ts, _vec_built_gen, _vec_built_mv = None, None, now, gen, mv
+            _vec_M, _vec_ids, _vec_srcs, _vec_built_ts, _vec_built_gen, _vec_built_mv = (
+                None, None, None, now, gen, mv)
             return None, None
         try:
             ids = _np.fromiter((r[0] for r in rows), dtype=_np.int64, count=len(rows))
             M = _np.frombuffer(b"".join(r[1] for r in rows), dtype=_np.float32).reshape(len(rows), -1)
+            srcs = _np.array([r[2] for r in rows], dtype=object)  # aligned per-row source (scope mask)
             nrm = _np.linalg.norm(M, axis=1, keepdims=True)
             M = (M / _np.where(nrm > 0, nrm, 1.0)).astype(_np.float32)
         except Exception as exc:  # noqa: BLE001
             logger.debug("recall matrix build failed: %s", exc)
             return None, None
-        _vec_M, _vec_ids, _vec_built_ts, _vec_built_gen, _vec_built_mv = M, ids, now, gen, mv
+        _vec_M, _vec_ids, _vec_srcs, _vec_built_ts, _vec_built_gen, _vec_built_mv = (
+            M, ids, srcs, now, gen, mv)
         return M, ids
 
 
 def _ensure_thin_matrix(con):
     """Build/refresh the cached THIN vector matrix for the CURRENT model_version (P7). The exact
     mirror of ``_ensure_matrix`` for ``vec_thin`` — a SEPARATE cache + SEPARATE invalidation (keyed on
-    the vec_thin row-count for the model_version, plus the same debounce) so a thin write refreshes
-    THIS matrix and a docs-vec write refreshes the OTHER, neither disturbing the other. Rows key on the
+    the ``_thin_write_gen`` counter, plus the same debounce) so a thin write refreshes THIS matrix and
+    a docs-vec write refreshes the OTHER, neither disturbing the other. Rows key on the
     node_id STRING (a thin row has no docs.rowid), so ``ids`` is an object array of strings. Returns
     (M, ids) or (None, None); fail-open like the docs matrix (a bad row/space -> no thin matrix)."""
     global _thin_M, _thin_ids, _thin_built_ts, _thin_built_gen, _thin_built_mv
     if _np is None:
         return None, None
     mv = _model_version()
-    gen = _vec_thin_count(con, mv)
+    gen = _thin_write_gen  # write-gen, not row-count: catches re-embeds the count key missed
     now = time.time()
     with _thin_lock:
         same_space = (_thin_M is not None and _thin_built_mv == mv)
@@ -400,10 +470,58 @@ def _ensure_thin_matrix(con):
         return M, ids
 
 
-def vector_search(qvec, k: int = 60) -> list:
+def _ensure_chunk_matrix(con):
+    """Build/refresh the cached CHUNK vector matrix for the CURRENT model_version. Mirror of
+    ``_ensure_matrix`` for ``vec_chunk``: a SEPARATE cache + SEPARATE invalidation (``_chunk_write_gen``
+    + the same debounce), the SAME model_version gate. ``ids`` are int64 docs.rowid PER CHUNK ROW
+    (duplicated across a doc's passages); ``_chunk_srcs`` is the per-chunk doc source, cached in lockstep
+    for the scope mask. Returns (M, ids) or (None, None); fail-open like the docs matrix."""
+    global _chunk_M, _chunk_ids, _chunk_srcs, _chunk_built_ts, _chunk_built_gen, _chunk_built_mv
+    if _np is None:
+        return None, None
+    mv = _model_version()
+    gen = _chunk_write_gen
+    now = time.time()
+    with _chunk_lock:
+        same_space = (_chunk_M is not None and _chunk_built_mv == mv)
+        if same_space and _chunk_built_gen == gen:
+            return _chunk_M, _chunk_ids
+        if same_space and (now - _chunk_built_ts) < _VEC_DEBOUNCE:
+            return _chunk_M, _chunk_ids  # serve slightly-stale during an ingest burst
+        try:
+            rows = con.execute(
+                "SELECT c.rowid, c.v, d.source FROM vec_chunk c JOIN docs d ON c.rowid = d.rowid "
+                "WHERE c.model_version = ?", (mv,)).fetchall()
+        except Exception:  # noqa: BLE001
+            return None, None
+        if not rows:
+            _chunk_M, _chunk_ids, _chunk_srcs, _chunk_built_ts, _chunk_built_gen, _chunk_built_mv = (
+                None, None, None, now, gen, mv)
+            return None, None
+        try:
+            ids = _np.fromiter((r[0] for r in rows), dtype=_np.int64, count=len(rows))
+            M = _np.frombuffer(b"".join(r[1] for r in rows), dtype=_np.float32).reshape(len(rows), -1)
+            srcs = _np.array([r[2] for r in rows], dtype=object)
+            nrm = _np.linalg.norm(M, axis=1, keepdims=True)
+            M = (M / _np.where(nrm > 0, nrm, 1.0)).astype(_np.float32)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("recall chunk matrix build failed: %s", exc)
+            return None, None
+        _chunk_M, _chunk_ids, _chunk_srcs, _chunk_built_ts, _chunk_built_gen, _chunk_built_mv = (
+            M, ids, srcs, now, gen, mv)
+        return M, ids
+
+
+def vector_search(qvec, k: int = 60, sources: "Optional[frozenset[str]]" = None) -> list:
     """Cosine top-k over the cached matrix. PURE RECALL — the cosine is never surfaced; the caller
     re-scores via rank.merge_rank. NEVER raises: disabled / no numpy / no matrix / dim-mismatch
     (model swap mid-flight) / any failure → [].
+
+    ``sources`` (Wave 2, audit 1.1): when a NON-empty set, off-scope rows are masked to -inf BEFORE
+    the argpartition top-k (using ``_vec_srcs``, the source array cached in lockstep with the matrix),
+    so an in-scope doc that sits DEEPER in the index than k off-scope docs still surfaces; a filter
+    applied AFTER the top-k would miss it. Masked (-inf) survivors are dropped from the final slice, so
+    an all-masked matrix returns []. ``sources=None`` is byte-identical to the pre-Wave-2 path.
 
     P7 DELIBERATE NON-GOAL: this is penumbra_search's recall arm, and it consults ONLY ``vec`` (the docs
     matrix) — NOT ``vec_thin``. Folding thin-title embeddings into search recall is a SEPARATE
@@ -414,7 +532,13 @@ def vector_search(qvec, k: int = 60) -> list:
     con = _read_con()
     if con is None:
         return []
-    M, ids = _ensure_matrix(con)
+    _ensure_matrix(con)  # build/refresh; then read the aligned triple as a UNIT below
+    # Read (M, ids, srcs) TOGETHER under _vec_lock: the three globals are only ever assigned as one
+    # tuple under this lock, so a locked group-read always yields a CONSISTENT triple. Reading srcs
+    # separately after the call left a window where a concurrent rebuild (e.g. a same-count re-embed)
+    # could swap in a differently-aligned array and the mask would scope the WRONG rows silently.
+    with _vec_lock:
+        M, ids, srcs = _vec_M, _vec_ids, _vec_srcs
     if M is None or ids is None or len(ids) == 0:
         return []
     try:
@@ -425,10 +549,48 @@ def vector_search(qvec, k: int = 60) -> list:
         if n > 0:
             q = q / n
         sims = M @ q
-        kk = min(k, len(ids))
-        top = _np.argpartition(-sims, kk - 1)[:kk]
-        top = top[_np.argsort(-sims[top])]
-        rowids = [int(ids[i]) for i in top]
+        if sources:
+            # Scope BEFORE the top-k: any row whose source is not requested is pushed to -inf so
+            # argpartition can never spend a slot on it (the 1.1 recall-bypass fix). srcs is the
+            # per-row source array read in lockstep with M/ids above; a length mismatch (out-of-band
+            # corruption) fails CLOSED here rather than mis-scoping.
+            if srcs is None or len(srcs) != len(ids):
+                return []
+            sims[~_np.isin(srcs, list(sources))] = -_np.inf
+        # CHUNK max-pool (long-doc tail recall): CONCATENATE the chunk rows so a doc surfaces if its
+        # HEAD (vec) OR any TAIL passage (vec_chunk) matches; the per-rowid dedup below keeps the MAX
+        # (a doc's best passage), so passages never flood top-k. When vec_chunk is empty (Mc is None)
+        # all_sims/all_ids are the doc-only arrays -> byte-identical to the pre-chunk path.
+        all_sims, all_ids = sims, ids
+        _ensure_chunk_matrix(con)
+        with _chunk_lock:
+            Mc, ids_c, srcs_c = _chunk_M, _chunk_ids, _chunk_srcs
+        if Mc is not None and ids_c is not None and len(ids_c) and Mc.shape[1] == q.shape[0]:
+            sims_c = Mc @ q
+            if sources and (srcs_c is None or len(srcs_c) != len(ids_c)):
+                sims_c = None  # cannot honestly scope the chunk rows -> fall back to doc-only
+            elif sources:
+                sims_c[~_np.isin(srcs_c, list(sources))] = -_np.inf
+            if sims_c is not None:
+                all_sims = _np.concatenate([sims, sims_c])
+                all_ids = _np.concatenate([ids, ids_c])
+        # Over-fetch (chunks compete for slots, then collapse per doc), sort desc, dedup by rowid keeping
+        # the highest (max-pool), take k. With no chunks this reduces to the original top-k exactly.
+        pool = min(max(k * 4, k), len(all_ids))
+        top = _np.argpartition(-all_sims, pool - 1)[:pool]
+        top = top[_np.argsort(-all_sims[top])]
+        seen: set = set()
+        rowids: list = []
+        for i in top:
+            if all_sims[i] == -_np.inf:  # drop masked-out survivors
+                continue
+            rid = int(all_ids[i])
+            if rid in seen:
+                continue
+            seen.add(rid)
+            rowids.append(rid)
+            if len(rowids) >= k:
+                break
     except Exception as exc:  # noqa: BLE001
         logger.debug("vector_search failed: %s", exc)
         return []

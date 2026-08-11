@@ -168,6 +168,39 @@ class MastodonAdapter(BaseScrapeAdapter):
         docs = keyword_score_filter(docs, query)
         return docs[:limit] if limit and limit > 0 else docs
 
+    async def _araw_fetch(self, query: str, limit: int) -> Optional[Any]:
+        """Async twin of _raw_fetch: byte-faithful mirror (same URLs, params, timeout, control
+        flow, None-return contract); ONLY the shared-http egress swaps to its async twin
+        (http.get_json -> await http.aget_json). Fans the derived hashtag out over each instance's
+        keyless tag timeline (one GET each, gently)."""
+        tag = _derive_tag(query)
+        if not tag:
+            return None
+        # Ask each instance for up to `limit` statuses; Mastodon caps tag-timeline limit at
+        # 40, so clamp into [1, 40] to stay within the documented bound.
+        per = max(1, min(limit or 10, 40))
+        results: list[tuple[str, list]] = []
+        for host, base in INSTANCES.items():
+            data = await http.aget_json(
+                f"{base}/api/v1/timelines/tag/{tag}",
+                params={"limit": per},
+                timeout=TIMEOUT,
+            )
+            if isinstance(data, list):
+                results.append((host, data))
+            else:
+                logger.debug("mastodon: %s returned no list for #%s", host, tag)
+        return results or None
+
+    async def asearch(self, query: str, limit: int = 10) -> list[Document]:
+        """Native-async twin of search -> AsyncSearchCapable. Shares the base async cache
+        round-trip; egress via _araw_fetch; mapping via the SAME pure-CPU _to_documents
+        (byte-identical to search)."""
+        return await self._asearch_via(
+            query, limit,
+            afetch=lambda: self._araw_fetch(query, limit),
+            abuild=lambda raw: self._to_documents(raw, query, limit))
+
     @staticmethod
     def _status_to_document(status: dict, base: str) -> Optional[Document]:
         # A reblog (boost) carries the real content under `reblog`; follow it so we index

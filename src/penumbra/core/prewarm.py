@@ -51,9 +51,15 @@ one-shot lives beside the loop it warms, with no extra script to keep in sync.)
 from __future__ import annotations
 
 import logging
+import threading
 import time
 
 log = logging.getLogger(__name__)
+
+# S2 graceful-shutdown stop Event: set on ASGI-lifespan shutdown so a stop wakes this loop out of its
+# interval wait immediately (see penumbra.core.lifecycle). Additive: the loop behaves identically until
+# this is set, which only happens on shutdown.
+_STOP = threading.Event()
 
 # prewarm is best-effort: a warm that fails just leaves that cache cold, and the live query path
 # then handles the source exactly as if it never warmed. The WARNING chatter a warm provokes (most
@@ -112,14 +118,20 @@ def warm_sources() -> tuple[int, int]:
 
 def warm_loop(interval_s: float = WARM_INTERVAL_S) -> None:
     """Forever: warm on entry (kills the cold-herd right after a service (re)start) then every
-    ``interval_s``. Designed to run as a daemon thread inside the always-on eye-http service."""
-    while True:
+    ``interval_s``. Designed to run as a daemon thread inside the always-on eye-http service.
+
+    S2: registers itself so a graceful shutdown can drain it, and waits on _STOP instead of sleeping
+    so a stop wakes it out of the interval immediately. Purely additive: identical until _STOP is
+    set (only on shutdown)."""
+    from penumbra.core import lifecycle
+    lifecycle.register_loop("cache-warmer", _STOP, threading.current_thread())
+    while not _STOP.is_set():
         try:
             ok, total = warm_sources()
             log.info("prewarm cycle: %d/%d warmed", ok, total)
         except Exception as exc:  # noqa: BLE001 — never let the warmer thread die
             log.warning("prewarm cycle errored: %s", exc)
-        time.sleep(interval_s)
+        _STOP.wait(interval_s)
 
 
 def _main() -> int:

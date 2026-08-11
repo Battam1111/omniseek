@@ -79,7 +79,7 @@
   "name": "xiaohongshu_search",
   "site": "xiaohongshu.com",
   "extra": "",
-  "url_filter": "/(?:explore|discovery/item)/[0-9a-f]|/mobile/question/[0-9]",
+  "url_filter": "/(?:explore|discovery/item)/[0-9a-f]{16,}",
   "explicit_only": "fires a web-search query (engine quota)",
   "domains": ["community", "immigration", "career"],
   "regions": ["cn"],

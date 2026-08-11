@@ -10,11 +10,13 @@ section is returned as a separate document.
 
 from __future__ import annotations
 
+import functools
 import logging
 import re
 from typing import Optional
 from urllib.parse import urlparse
 
+import anyio
 import httpx
 
 from penumbra.core import cache, http
@@ -54,6 +56,24 @@ class GithubAwesomePhDAdapter:
                 return text
         return None
 
+    async def _afetch_readme(self, owner: str, repo: str) -> Optional[str]:
+        """Async egress twin of ``_fetch_readme`` (mirrors it exactly): SAME cache key, the disk
+        cache read/write pushed OFF the loop via anyio.to_thread, and the README egress swapped to
+        its async twin (http.get_text -> await http.aget_text). No CPU work here to keep on-loop."""
+        key = cache.make_key("gh_awesome", owner, repo)
+        cached = await anyio.to_thread.run_sync(cache.get, key)  # disk read OFF loop
+        if cached is not None:
+            return cached
+        # GitHub raw content (try main, then master)
+        for branch in ("main", "master"):
+            url = f"https://raw.githubusercontent.com/{owner}/{repo}/{branch}/README.md"
+            text = await http.aget_text(url, timeout=DEFAULT_TIMEOUT)  # async network, ON loop
+            if text:
+                await anyio.to_thread.run_sync(  # disk write OFF loop
+                    functools.partial(cache.set, key, text, ttl=86400))  # README updates rarely; 24h
+                return text
+        return None
+
     def search(self, query: str, limit: int = 10) -> list[Document]:
         query_terms = [t.lower() for t in re.findall(r"\w+", query) if len(t) > 1]
         if not query_terms:
@@ -62,6 +82,49 @@ class GithubAwesomePhDAdapter:
         all_docs: list[tuple[int, Document]] = []
         for owner, repo, desc in AWESOME_REPOS:
             readme = self._fetch_readme(owner, repo)
+            if not readme:
+                continue
+            # Split README into bullet sections; each bullet often = one resource
+            sections = self._extract_link_items(readme)
+            for section in sections:
+                blob = section["text"].lower()
+                score = sum(blob.count(t) for t in query_terms)
+                if score == 0:
+                    continue
+                # The link in this bullet is the "primary" URL
+                primary_url = section.get("url") or f"https://github.com/{owner}/{repo}"
+                doc = Document(
+                    source="github_awesome_phd",
+                    source_id=f"{owner}/{repo}#{section.get('anchor', '')}",
+                    url=primary_url,
+                    title=section.get("title") or section["text"][:80],
+                    content=section["text"],
+                    author=f"{owner} (Awesome list maintainer)",
+                    tags=[f"awesome-list", f"{owner}/{repo}"],
+                    metadata={
+                        "repo": f"{owner}/{repo}",
+                        "repo_description": desc,
+                        "raw": jsonsafe(section),
+                    },
+                )
+                all_docs.append((score, doc))
+
+        all_docs.sort(key=lambda x: x[0], reverse=True)
+        return [d for _, d in all_docs[:limit]]
+
+    async def asearch(self, query: str, limit: int = 10) -> list[Document]:
+        """Native-async twin of ``search`` (a PURE ADDITION): mirrors it line-for-line, the ONLY
+        change being the per-repo README egress (``self._fetch_readme`` -> ``await self._afetch_readme``,
+        whose cache round-trip + http.aget_text run off/on the loop correctly). The query-term parse,
+        the fixed-repo loop, ``_extract_link_items``, term scoring, doc build and the final sort are
+        PURE CPU and stay ON the loop byte-identical to ``search``, so async and sync can never drift."""
+        query_terms = [t.lower() for t in re.findall(r"\w+", query) if len(t) > 1]
+        if not query_terms:
+            return []
+
+        all_docs: list[tuple[int, Document]] = []
+        for owner, repo, desc in AWESOME_REPOS:
+            readme = await self._afetch_readme(owner, repo)
             if not readme:
                 continue
             # Split README into bullet sections; each bullet often = one resource

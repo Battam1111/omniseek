@@ -1,0 +1,203 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://penumbra.local/schemas/scheduler-heartbeat-v1.json",
+  "title": "Penumbra Eye Scheduler Heartbeat v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "component_id",
+    "producer",
+    "contract",
+    "host_boot_id",
+    "penumbra_pid",
+    "scheduler_generation",
+    "phase",
+    "scheduler_started_at_utc",
+    "scheduler_started_monotonic_ns",
+    "tick_seq",
+    "last_tick_at_utc",
+    "last_tick_monotonic_ns",
+    "emitted_at_utc",
+    "emitted_monotonic_ns",
+    "initial_delay_s",
+    "tick_interval_s",
+    "max_job_budget_s",
+    "startup_grace_s",
+    "stale_after_s"
+  ],
+  "properties": {
+    "schema": {
+      "const": "penumbra.core-scheduler-heartbeat/v1"
+    },
+    "component_id": {
+      "const": "eye-scheduler"
+    },
+    "producer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repo", "build_id"],
+      "properties": {
+        "repo": {
+          "const": "penumbra"
+        },
+        "build_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        }
+      }
+    },
+    "contract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_digest", "policy_digest", "mode"],
+      "properties": {
+        "schema_digest": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "policy_digest": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "mode": {
+          "enum": ["calibration-probe", "enforced"]
+        }
+      }
+    },
+    "host_boot_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "penumbra_pid": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "scheduler_generation": {
+      "type": "string",
+      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+    },
+    "phase": {
+      "enum": ["starting", "running"]
+    },
+    "scheduler_started_at_utc": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "scheduler_started_monotonic_ns": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "tick_seq": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "last_tick_at_utc": {
+      "oneOf": [
+        {"type": "null"},
+        {"type": "string", "format": "date-time"}
+      ]
+    },
+    "last_tick_monotonic_ns": {
+      "oneOf": [
+        {"type": "null"},
+        {"type": "integer", "minimum": 0}
+      ]
+    },
+    "emitted_at_utc": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "emitted_monotonic_ns": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "initial_delay_s": {
+      "type": "number",
+      "minimum": 0
+    },
+    "tick_interval_s": {
+      "type": "number",
+      "exclusiveMinimum": 0
+    },
+    "max_job_budget_s": {
+      "type": "number",
+      "exclusiveMinimum": 0
+    },
+    "startup_grace_s": {
+      "oneOf": [
+        {"type": "null"},
+        {"type": "number", "exclusiveMinimum": 0}
+      ]
+    },
+    "stale_after_s": {
+      "oneOf": [
+        {"type": "null"},
+        {"type": "number", "exclusiveMinimum": 0}
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {"phase": {"const": "starting"}},
+        "required": ["phase"]
+      },
+      "then": {
+        "properties": {
+          "tick_seq": {"const": 0},
+          "last_tick_at_utc": {"type": "null"},
+          "last_tick_monotonic_ns": {"type": "null"}
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {"phase": {"const": "running"}},
+        "required": ["phase"]
+      },
+      "then": {
+        "properties": {
+          "tick_seq": {"type": "integer", "minimum": 1},
+          "last_tick_at_utc": {"type": "string", "format": "date-time"},
+          "last_tick_monotonic_ns": {"type": "integer", "minimum": 0}
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "contract": {
+            "properties": {"mode": {"const": "calibration-probe"}},
+            "required": ["mode"]
+          }
+        },
+        "required": ["contract"]
+      },
+      "then": {
+        "properties": {
+          "startup_grace_s": {"type": "null"},
+          "stale_after_s": {"type": "null"}
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "contract": {
+            "properties": {"mode": {"const": "enforced"}},
+            "required": ["mode"]
+          }
+        },
+        "required": ["contract"]
+      },
+      "then": {
+        "properties": {
+          "startup_grace_s": {"type": "number", "exclusiveMinimum": 0},
+          "stale_after_s": {"type": "number", "exclusiveMinimum": 0}
+        }
+      }
+    }
+  ]
+}

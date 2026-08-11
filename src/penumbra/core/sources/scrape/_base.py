@@ -43,8 +43,12 @@ Design rules it obeys (the moat):
 
 from __future__ import annotations
 
+import functools
+import inspect
 import logging
 from typing import Any, Optional
+
+import anyio
 
 from penumbra.core import cache, relevance
 from penumbra.core.normalize import Document, schema_extract
@@ -52,6 +56,12 @@ from penumbra.core.normalize import Document, schema_extract
 logger = logging.getLogger(__name__)
 _SCRAPE_UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
               "(KHTML, like Gecko) Chrome/121.0 Safari/537.36")
+# A browser-shaped Accept is load-bearing, NOT cosmetic: some WAFs (immigratemanitoba.com's
+# WordPress front, verified 2026-07-25) answer 415 Unsupported Media Type to a request that carries
+# a browser UA but NO Accept header, so mpnp_draws silently returned 0 rows for months. Sending what
+# a real browser sends fixes the whole class. Scoped to the HTML-page path ONLY (never http.get_json)
+# so no JSON API can content-negotiate its way into serving us HTML.
+_SCRAPE_ACCEPT = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
 
 
 class BaseScrapeAdapter:
@@ -136,7 +146,7 @@ class BaseScrapeAdapter:
             import httpx
             try:
                 r = httpx.get(url, timeout=20, follow_redirects=True,
-                              headers={"User-Agent": _SCRAPE_UA})
+                              headers={"User-Agent": _SCRAPE_UA, "Accept": _SCRAPE_ACCEPT})
                 r.raise_for_status()
                 return r.text
             except Exception as exc:  # noqa: BLE001 — failure → None → [] (the contract)
@@ -199,6 +209,35 @@ class BaseScrapeAdapter:
             docs = self._rank(docs, query)
 
         cache.set_docs(key, docs, ttl=self.cache_ttl)
+        return docs
+
+    async def _asearch_via(self, query, limit, afetch, abuild):
+        """Async twin of `search`'s mechanism (cache round-trip + opt-in rank) for a subclass whose
+        egress has gone NATIVE async. `afetch()` -> raw|None (async, off-loop NETWORK). `abuild(raw)`
+        -> list[Document]; POLYMORPHIC: if it returns an awaitable it is awaited (an async
+        ASSEMBLY twin that egresses per-record, e.g. Stack Exchange fetching answers), else it is used
+        directly (a PURE-CPU `_to_documents` that only parses/maps -- the common single-call case, run on
+        the loop). This lets every A-tier source pass its sync `_to_documents` with a one-line `asearch`.
+        This is a `_`-prefixed HELPER, NOT `asearch`, so the base is NOT flagged AsyncSearchCapable (only
+        a subclass that DEFINES `asearch` -> calls this is). Off-loop: cache get/set (disk IO). On loop:
+        `_rank` (shared BM25, pure CPU). BEHAVIOR-IDENTICAL to `search` given identical egress."""
+        key = cache.make_key(self.name, "search", query, limit)
+        cached = await anyio.to_thread.run_sync(cache.get_docs, key)   # disk read OFF loop
+        if cached is not None:
+            return cached
+        raw = await afetch()
+        if raw is None:
+            return []                                                  # failure -> [], NOT cached (mirror)
+        try:
+            built = abuild(raw)                                        # sync _to_documents OR async twin
+            docs = (await built if inspect.isawaitable(built) else built) or []
+        except Exception as exc:  # noqa: BLE001 -- malformed payload -> [] (mirror search)
+            logger.warning("%s: async _to_documents failed: %s", self.name, exc)
+            return []
+        if self.rank and docs:
+            docs = self._rank(docs, query)                             # pure CPU, on loop
+        await anyio.to_thread.run_sync(                                # disk write OFF loop
+            functools.partial(cache.set_docs, key, docs, ttl=self.cache_ttl))
         return docs
 
     @staticmethod

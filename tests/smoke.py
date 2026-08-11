@@ -121,6 +121,7 @@ _bad_tier = sorted(n for n, v in _tier.items() if v not in fetcher._ACCESS_TIERS
 check("every source resolves an access_tier in the four-value set", not _bad_tier, str(_bad_tier))
 _tier_expect = {"mokahr_ats": "circumvention",          # decrypts the platform's encrypted response
                 "arxiv": "free", "openalex": "free",     # public, no key
+                "adzuna": "keyed",                        # 1.10: a free-key public API is KEYED, not walled
                 "xiaohongshu": "walled"}                  # logged-in CDP session
 _tier_miss = {n: (_tier.get(n), want) for n, want in _tier_expect.items()
               if n in _tier and _tier[n] != want}
@@ -136,8 +137,12 @@ check("explicit_only override names all registered (or parked)", not stale, str(
 
 # The effective broad-search exclusion set is FROZEN: changing it must be a
 # deliberate act (edit the adapter/row declaration AND this list together).
+# 2026-07-25: gutenberg / clinicaltrials / podcast_index / kaggle / ai_incidents /
+# federal_register joined it -- each timed out 700+ times across 1986 recorded searches while
+# reaching the ranked top-k ZERO times. Evidence + reasoning live in each adapter's declaration.
 EXPECTED_EXPLICIT_ONLY = sorted("""
-xiaohongshu xiaohongshu_cn sogou_weixin openalex_cn cninfo gov_policy eastmoney juejin zhihu zhihu_users yipinsanfendi xiaomuchong scrape_js_sites douyin
+gutenberg clinicaltrials podcast_index kaggle ai_incidents federal_register
+xiaohongshu xiaohongshu_cn sogou_weixin openalex_cn cninfo gov_policy eastmoney juejin zhihu zhihu_users yipinsanfendi xiaomuchong scrape_js_sites douyin douban_groups
 mokahr_ats bytedance_seed discord_communities feishu_jobs wechat
 sea_ai_lab deepseek qwen moonshot zhipu yi_01ai stepfun baichuan tencent_hunyuan
 shanghai_ai_lab baai bytedance_research ant_ling huawei_noah
@@ -152,12 +157,16 @@ ontario_sunshine higheredjobs_cs scrape_hongkong scrape_canada distill_pub
 google_patents
 market_quote market_crypto wayback sec_financials
 nsf_awards nih_reporter
-europepmc orcid worldbank_stats adzuna s2_authors dblp_author
+europepmc orcid worldbank_stats adzuna s2_authors s2_snippet dblp_author
 remotive grants_gov
 vast_ai modelscope
-crossref_retractions datagovsg_nonresident_pass_types wikicfp_nlp
+crossref_retractions datagovsg_nonresident_pass_types sg_immigration wikicfp_nlp
 oinp_invitations bcpnp_invitations aaip_draws nserc_awards sshrc_awards cihr_grants
 context7
+canada_jobbank_wages ircc_processing_times mpnp_draws
+cordis_eu ukri_gtr uk_companies_house nsfc_awards oecd_ai_policy
+layoffs_tracker statcan_wds wikidata_identity eurostat_stats
+ml_conferences
 """.split())
 actual_eo = sorted(n for n in names if fetcher._explicit_only_reason(fetcher.get_adapter(n)))
 # mokahr_ats (access_tier=circumvention) is EXCLUDED from the public release for §1201 reasons, so its
@@ -167,6 +176,26 @@ _eo_missing = sorted(set(EXPECTED_EXPLICIT_ONLY) - set(actual_eo))
 check("explicit_only set matches the frozen list (mokahr_ats optional: public release excludes it)",
       not _eo_extra and set(_eo_missing) <= {"mokahr_ats"},
       f"extra={_eo_extra} missing={_eo_missing}")
+
+# douban_groups rexxar auth (2026-07-16 fix): rexxar tightened to answer need_login on a bare
+# cookie-only fetch, so the same-origin fetch JS must send X-Requested-With AND carry the ck cookie as
+# a query param (mirroring the real m.douban.com frontend; either alone re-authenticates). Pin it so a
+# refactor cannot silently drop the auth and re-break the source. A live re-run through the logged-in
+# 9222 CDP is the real oracle; this offline golden just guards the two markers.
+from penumbra.core.sources.walled import douban_groups_source as _dbg  # noqa: E402
+check("douban_groups: rexxar fetch sends X-Requested-With + ck param (rexxar 2026-07-16 auth)",
+      "X-Requested-With" in _dbg._JS_FETCH and "'ck='" in _dbg._JS_FETCH and "'&ck='" in _dbg._JS_FETCH)
+
+# yipinsanfendi pace-gate (2026-07-17): a caller-side serialize + >=15s min-gap on the CDP egress leaf
+# (_run) so concurrent/rapid callers can't reset Discuz's ~15s flood-control window (the near-100%
+# flood-block class). Pin the gate + the interval + the _run override (chokepoint), so a refactor can't
+# silently drop the pacing and re-expose the source to flood blocks.
+from penumbra.core.sources.walled import yipinsanfendi_source as _yp  # noqa: E402
+from penumbra.core.sources.walled import _base as _bcdp  # noqa: E402
+check("pace-gate: yipinsanfendi serialize + >=15s min-gap + _run chokepoint (Discuz flood-control)",
+      hasattr(_yp, "_YIPIN_GATE") and hasattr(_yp._YIPIN_GATE, "acquire")
+      and getattr(_yp, "_YIPIN_MIN_GAP_S", 0) >= 15.0
+      and _yp.YipinsanfendiAdapter._run is not _bcdp.BaseCDPAdapter._run)
 
 # org_watch AI-co-author crank filter (a Zenodo/Open-MIND preprint class that lists an AI MODEL as
 # an author + attributes the lab as its affiliation, name-colliding into a lab's stream). Lock the
@@ -199,6 +228,19 @@ check("netguard blocks every SSRF-class / bad-shape URL",
 check("netguard allows the fake-IP proxy net (198.18/15) so split-tunnel deploys still egress",
       _ng.security_block_reason("http://198.18.0.9/") is None,
       _ng.security_block_reason("http://198.18.0.9/") or "")
+# H2 (red-team wall-probe): every IPv6 form that EMBEDS an IPv4 (mapped / 6to4 / Teredo / NAT64 /
+# v4-compatible) must be refused -- each smuggles a private/metadata v4 past a v6-only is_private
+# check (the DNS-rebind-via-v6 trick). A normal global IPv6 must still be allowed. IP-literal URLs
+# resolve to the literal, so these are offline.
+_NG_V6_EMBED = ["http://[::ffff:169.254.169.254]/", "http://[::ffff:127.0.0.1]/",
+                "http://[64:ff9b::a9fe:a9fe]/", "http://[64:ff9b::7f00:1]/",
+                "http://[2002:a9fe:a9fe::]/", "http://[::7f00:1]/"]
+check("netguard blocks every IPv6-embedded-v4 SSRF form (mapped/6to4/Teredo/NAT64/v4-compat) [H2]",
+      all(_ng.security_block_reason(u) is not None for u in _NG_V6_EMBED),
+      str([u for u in _NG_V6_EMBED if _ng.security_block_reason(u) is None]))
+check("netguard still allows a normal global IPv6 (the v6-embed block must not over-block real v6)",
+      _ng.security_block_reason("http://[2606:4700:4700::1111]/") is None,
+      _ng.security_block_reason("http://[2606:4700:4700::1111]/") or "")
 
 # docreader local-file sandbox: arbitrary host paths (credentials!) refused; inbox stays readable.
 from penumbra.core import docreader as _dr  # noqa: E402
@@ -262,6 +304,147 @@ check("dedup collapses duplicate + records also_in",
 s1, s2 = _doc("x", "Hi", "https://e.com/1"), _doc("y", "Hi", "https://f.com/2")
 check("short titles never merge across sources", len(rank.dedup([s1, s2])) == 2)
 check("merge_rank survives empty input", rank.merge_rank({}, "q") == [])
+
+# 1.11a SOCIAL CARDS must expose whether the COMMENT THREAD is worth opening (2026-07-25).
+# Evidence that forced this: a NeurIPS-scores dig where every decisive finding lived in comments (an
+# AC's "今年 bar 是 3 分以上", a SAC's histogram read), while the posts were one line plus a
+# screenshot. Cards showed likes only, so "which to open" could only be sorted by likes -- and a
+# 41-like note with 53 comments beat a 375-like note with a one-line body. Verified live against the
+# real xiaohongshu /search/notes payload: interact_info carries liked_count, comment_count,
+# collected_count AND shared_count; only the first was ever read.
+from penumbra.core.sources.walled import xiaohongshu_source as _xhs_c  # noqa: E402
+_xhs_item = {"id": "abc123", "xsec_token": "tok", "note_card": {
+    "display_title": "NeurIPS 出分了", "user": {"nickname": "someone"},
+    "interact_info": {"liked_count": "41", "comment_count": "53",
+                      "collected_count": "13", "shared_count": "17"}}}
+_xhs_doc = _xhs_c._json_item_to_document(_xhs_item)
+check("xhs card: every interact_info count is surfaced, not just likes",
+      _xhs_doc is not None
+      and {k: int(v.value) for k, v in _xhs_doc.signals.items()}
+          == {"likes": 41, "comments": 53, "collects": 13, "shares": 17},
+      str({k: v.value for k, v in (_xhs_doc.signals or {}).items()}))
+check("xhs card: the placeholder body NAMES the comment count (not just 'full note body')",
+      "53 comments" in (_xhs_doc.content or ""), (_xhs_doc.content or "")[:70])
+check("xhs card: marks that its body needs a separate read (so full= can report the gap honestly)",
+      (_xhs_doc.metadata or {}).get("body_needs_read") is True)
+# The DOM fallback genuinely cannot see a comment count: it must say so, and must NOT report 0.
+_xhs_dom = _xhs_c._card_hint(None)
+check("xhs card: the DOM fallback admits it carries NO comment count (never a fabricated 0)",
+      "NO comment count" in _xhs_dom and "comment thread" in _xhs_dom)
+
+# penumbra_read returned the comment thread TWICE (inline in content + structured in metadata), which
+# measured 68,106 chars for four notes, about half duplicated, overflowing the tool channel. The
+# structured list is kept (richer + machine-readable); content keeps only the completeness pointer.
+import inspect as _xhs_insp  # noqa: E402  (the file-wide alias is imported further down)
+_xhs_src = _xhs_insp.getsource(_xhs_c)
+check("xhs penumbra_read: comments are NOT re-rendered into the body (returned once, structured)",
+      "—— 评论区(取到" not in _xhs_src and "结构化在 metadata.comments" in _xhs_src)
+
+# 1.11b Ranking: the two non-relevance terms are normalized WITHIN THE CANDIDATE SET (2026-07-25).
+# Both used to be absolute, and both silently favoured one kind of source over another:
+#   recency    a fixed 0.3 for an undated doc. Measured on real corpora: 23% of the ranked corpus is
+#              undated (youtube 15/0, pmlr 10/0, transformer_circuits 10/0 -- entirely dateless
+#              sources), while the DATED docs competing with them scored 0.04-0.29. So the "neutral"
+#              floor actually sat near the TOP of the real field: missing metadata was a REWARD.
+#   engagement min(1, log10(1+s)/4) over attention_value, which is views for a video and citations
+#              for a paper. 10k views is unremarkable, 10k citations is legendary. Real searches:
+#              youtube 0.47-0.98 vs semantic_scholar/crossref 0.08-0.35.
+from datetime import datetime as _rk_dt, timedelta as _rk_td, timezone as _rk_tz  # noqa: E402
+from penumbra.core.normalize import mk_signal as _rk_sig  # noqa: E402
+_rk_now = _rk_dt.now(_rk_tz.utc)
+
+
+def _rk_doc(src, title, *, age_days=None, attn=None):
+    d = _doc(src, title, f"https://{src}.example/{abs(hash(title)) % 99999}")
+    d.date = None if age_days is None else _rk_now - _rk_td(days=age_days)
+    if attn is not None:
+        d.signals = _rk_sig("attention", attn, kind="engagement", by="test")  # already a {name: Signal} map
+    return d
+
+
+# recency: an undated doc must NOT outscore a dated one just for being undated. With the old fixed
+# 0.3 floor a dateless doc beat every doc older than ~60 days; now it lands at the field's median.
+check("rank._recency: an undated doc scores the caller's 'unknown', not a fixed floor",
+      rank._recency(_rk_doc("s", "u"), _rk_now, unknown=0.11) == 0.11
+      and rank._recency(_rk_doc("s", "u"), _rk_now) == 0.3)  # default kept for direct callers
+_rk_old = rank._recency(_rk_doc("s", "d", age_days=365), _rk_now)
+check("rank._recency: the old fixed floor really did beat a real dated doc (the bug, pinned)",
+      0.3 > _rk_old, f"undated 0.3 vs 1-year-old {_rk_old:.3f}")
+# engagement: a video's views and a paper's citations are compared to their OWN source only.
+_rk_docs = [_rk_doc("youtube", "vid big", attn=65000), _rk_doc("youtube", "vid small", attn=500),
+            _rk_doc("semantic_scholar", "paper big", attn=40),
+            _rk_doc("semantic_scholar", "paper small", attn=2),
+            _rk_doc("bluesky", "no signal at all"), _rk_doc("lonely_src", "only doc", attn=7)]
+_rk_eng = rank._engagement_ranks(_rk_docs)
+check("rank._engagement_ranks: top-of-its-source video and top-of-its-source paper score EQUAL "
+      "(views are no longer worth more than citations)",
+      _rk_eng[0] == _rk_eng[2], f"video={_rk_eng[0]:.2f} paper={_rk_eng[2]:.2f}")
+check("rank._engagement_ranks: the OLD absolute curve did rank the video far above the paper (the bug)",
+      rank._engagement(_rk_docs[0]) - rank._engagement(_rk_docs[2]) > 0.3,
+      f"old video={rank._engagement(_rk_docs[0]):.2f} old paper={rank._engagement(_rk_docs[2]):.2f}")
+check("rank._engagement_ranks: no attention signal still scores 0.0 (never invent attention)",
+      _rk_eng[4] == 0.0)
+check("rank._engagement_ranks: a source contributing ONE doc gets neutral 0.5, not a free 1.0",
+      _rk_eng[5] == 0.5)
+check("rank._engagement_ranks: within a source, more attention still ranks higher",
+      _rk_eng[0] > _rk_eng[1] and _rk_eng[2] > _rk_eng[3])
+
+# 1.11c dedup must not DESTROY a field a discarded sibling carried (2026-07-25). _pick_best keeps the
+# member with the most CONTENT, which on real corpora is repeatedly the one missing the date (7% of
+# duplicate groups) or any enrich handle (2%). Losing the date costs twice now that recency reads
+# doc.date. Same-work by construction, so the sibling's value is adopted, with provenance stamped.
+_dd_rich = _rk_doc("semantic_scholar", "A Very Long Shared Paper Title About Credit Assignment")
+_dd_rich.content = "x" * 400                       # richest text -> _pick_best keeps THIS one
+_dd_thin = _rk_doc("crossref", "A Very Long Shared Paper Title About Credit Assignment",
+                   age_days=3)                     # thinner, but it has the real date
+_dd_thin.content = "x" * 10
+_dd_thin.metadata = {"doi": "10.1234/real.doi"}
+_dd_out = rank.dedup([_dd_rich, _dd_thin])
+check("rank.dedup: collapses the pair on the shared long title", len(_dd_out) == 1)
+check("rank.dedup: the survivor ADOPTS a date it lacked from its sibling (was destroyed before)",
+      _dd_out[0].date is not None and _dd_out[0].metadata.get("date_from") == "crossref",
+      f"date={_dd_out[0].date} from={_dd_out[0].metadata.get('date_from')}")
+check("rank.dedup: the survivor adopts the enrich handle it lacked (drill-in stays possible)",
+      _dd_out[0].metadata.get("doi") == "10.1234/real.doi"
+      and _dd_out[0].metadata.get("ids_from") == "crossref")
+# ...but a survivor that HAS its own date/handle keeps them: adopt only fills a genuine absence.
+_dd_a = _rk_doc("semantic_scholar", "Another Sufficiently Long Shared Title For Merging Here", age_days=1)
+_dd_a.content = "y" * 400
+_dd_a.metadata = {"doi": "10.1/mine"}
+_dd_b = _rk_doc("crossref", "Another Sufficiently Long Shared Title For Merging Here", age_days=900)
+_dd_b.content = "y" * 10
+_dd_b.metadata = {"doi": "10.2/theirs"}
+_dd_out2 = rank.dedup([_dd_a, _dd_b])
+check("rank.dedup: a survivor with its OWN date/handle keeps them (no sibling stomping)",
+      _dd_out2[0].metadata.get("doi") == "10.1/mine"
+      and "date_from" not in _dd_out2[0].metadata
+      and (_rk_now - _dd_out2[0].date).days <= 2)
+# The handle check must see EVERY form: S2 buries doi under external_ids (flattened only later), so a
+# naive metadata.doi check reports a false loss. This is the bug that made a 25% figure out of a 2% one.
+check("rank._enrich_handle: finds the id under S2's external_ids, not just a flattened metadata.doi",
+      rank._enrich_handle(_rk_doc("semantic_scholar", "t")) is None
+      and rank._enrich_handle(_dd_a) == "10.1/mine")
+_dd_ext = _rk_doc("semantic_scholar", "t2")
+_dd_ext.metadata = {"external_ids": {"DOI": "10.9/buried"}}
+check("rank._enrich_handle: an UNflattened external_ids DOI still counts as a handle (no false loss)",
+      rank._enrich_handle(_dd_ext) == "10.9/buried")
+
+# 1.12 corroboration counts distinct BACKENDS, not source names (the OpenAlex family = ONE voice).
+def _bk(s):  # backend-map fixture: openalex + openalex_cn collapse to one backend, others are their own
+    return {"openalex": "openalex", "openalex_cn": "openalex"}.get(s, s)
+_oa1 = _doc("openalex", "Emergent Abilities of Large Language Models", "https://doi.org/10.1/oa1")
+_oa2 = _doc("openalex_cn", "Emergent Abilities of Large Language Models", "https://doi.org/10.1/oa2")
+_m_same = rank.dedup([_oa1, _oa2], backend_of=_bk)
+check("1.12: same-backend sources (openalex family) are ONE voice -> no corroboration inflation",
+      len(_m_same) == 1 and _m_same[0].metadata.get("corroboration") is None
+      and _m_same[0].metadata.get("also_in") == ["openalex_cn"])  # also_in stays SOURCE names
+_ax = _doc("arxiv", "Emergent Abilities of Large Language Models", "http://arxiv.org/abs/2206.07682")
+_ss = _doc("semantic_scholar", "Emergent Abilities of Large Language Models", "https://s2.org/xyz")
+_m_indep = rank.dedup([_ax, _ss], backend_of=_bk)
+check("1.12: distinct backends corroborate (arxiv + semantic_scholar) -> corroboration=2",
+      len(_m_indep) == 1 and _m_indep[0].metadata.get("corroboration") == 2)
+check("1.12: dedup WITHOUT backend_of keeps the historical source-name count (openalex family = 2 names)",
+      rank.dedup([_oa1, _oa2])[0].metadata.get("corroboration") == 2)
 
 # ---------------------------------------------------------------------------
 # 5. relevance: the bug classes the BM25-lite engine exists to prevent
@@ -382,6 +565,31 @@ check("reddit._with_finance_subs is a byte-identical no-op for a non-financial q
       == list(reddit_source.DEFAULT_SUBREDDITS)
       and "stocks" not in reddit_source._with_finance_subs(list(reddit_source.DEFAULT_SUBREDDITS), "phd advice"))
 
+# reddit CDP full-text search fallback (2026-07-11): when the arctic mirror throttles /posts/search
+# (429 "Too many complex queries" / 500) the adapter falls back to reddit's OWN /search.json via the
+# shared CDP browser (bare HTTP is WAF-403'd; a real browser session passes). _parse_search_json is
+# the pure parse of that body -> native t3 dicts (the _submission_to_document shape). Golden fixture:
+_rd_search_json = (
+    '{"kind": "Listing", "data": {"dist": 2, "children": ['
+    '{"kind": "t3", "data": {"id": "aaa111", "title": "Postdoc burnout", "selftext": "body",'
+    ' "permalink": "/r/PhD/comments/aaa111/postdoc_burnout/", "subreddit": "PhD", "score": 42,'
+    ' "author": "u1", "num_comments": 7}},'
+    '{"kind": "t3", "data": {"id": "bbb222", "title": "Left academia", "subreddit": "labrats"}},'
+    '{"kind": "t1", "data": {"id": "ccc333", "body": "a comment, not a submission"}},'
+    '{"kind": "t3", "data": "malformed-not-a-dict"}'
+    ']}}'
+)
+_rd_parsed = reddit_source._parse_search_json(_rd_search_json)
+check("reddit._parse_search_json extracts only well-formed t3 submissions (drops t1 + malformed)",
+      [d.get("id") for d in _rd_parsed] == ["aaa111", "bbb222"])
+check("reddit._parse_search_json output feeds _submission_to_document (title + canonical url + source)",
+      (lambda doc: doc.title == "Postdoc burnout"
+       and doc.url == "https://www.reddit.com/r/PhD/comments/aaa111/postdoc_burnout/"
+       and doc.source == "reddit")(reddit_source.RedditAdapter._submission_to_document(_rd_parsed[0])))
+check("reddit._parse_search_json degrades a WAF interstitial / non-JSON body to [] (no crash)",
+      reddit_source._parse_search_json("<body class=theme-beta>...</body>") == []
+      and reddit_source._parse_search_json("") == [])
+
 # reddit Arctic Shift 429 circuit breaker (2026-06-20): the mirror rate-limits the 23-sub fan-out
 # HARD (HTTP 429); a per-sub retry amplified it into a 117-line 429 storm + ~20s backoff per broad
 # search. N consecutive sub-failures now trip a global cooldown so _arctic_get skips the mirror
@@ -482,11 +690,74 @@ def _bf_wired(mod, sema, const, cap, helper):
             and hasattr(s, "acquire") and hasattr(s, "release") and callable(getattr(mod, helper, None)))
 check("burst-cap: stackexchange _se_sema cap=4 + _se_get chokepoint", _bf_wired(_bf_se, "_se_sema", "_SE_MAX_INFLIGHT", 4, "_se_get"))
 check("burst-cap: core _core_sema cap=3 + _core_get chokepoint", _bf_wired(_bf_core, "_core_sema", "_CORE_MAX_INFLIGHT", 3, "_core_get"))
-check("burst-cap: arxiv _arxiv_sema cap=4 + _arxiv_get_text chokepoint", _bf_wired(_bf_arxiv, "_arxiv_sema", "_ARXIV_MAX_INFLIGHT", 4, "_arxiv_get_text"))
+check("burst-cap: arxiv rides BackendGuard (sema cap=4 + rate pace + breaker) via _arxiv_get_text chokepoint",
+      _bf_arxiv._ARXIV_MAX_INFLIGHT == 4
+      and _bf_arxiv._guard.min_interval_s == _bf_arxiv._ARXIV_MIN_INTERVAL_S and _bf_arxiv._ARXIV_MIN_INTERVAL_S > 0
+      and hasattr(_bf_arxiv._guard.sema, "acquire") and hasattr(_bf_arxiv._guard.sema, "release")
+      and callable(getattr(_bf_arxiv._guard, "pace", None)) and callable(getattr(_bf_arxiv._guard, "is_open", None))
+      and callable(getattr(_bf_arxiv, "_arxiv_get_text", None)))
 check("burst-cap: sogou _sogou_sema cap=2 + _sogou_get chokepoint", _bf_wired(_bf_sogou, "_sogou_sema", "_SOGOU_MAX_INFLIGHT", 2, "_sogou_get"))
 if _bf_mokahr is not None:
     check("burst-cap: mokahr _mokahr_sema cap=12 + _mokahr_post chokepoint", _bf_wired(_bf_mokahr, "_mokahr_sema", "_MOKAHR_MAX_INFLIGHT", 12, "_mokahr_post"))
 check("burst-cap: feishu _feishu_sema cap=6 + _feishu_post chokepoint", _bf_wired(_bf_feishu, "_feishu_sema", "_FEISHU_MAX_INFLIGHT", 6, "_feishu_post"))
+# guard concurrency-gate: BOUNDED + cancellation-safe. The 2026-07-18 outage: _openalex.aget_json's async
+# sema acquire sat OUTSIDE its try/finally, so a deadline/client-cancel let the worker thread TAKE the
+# permit and then skip the release -> permits leaked one by one -> the shared pool drained -> every OA/S2
+# call blocked forever on an UNBOUNDED acquire (resolve_identity hung the whole 300s MCP window, ~190 stuck
+# threads). _guard.slot/aslot close both holes: the acquire is BOUNDED (raise on_busy past max_wait, like the
+# rate gate shedding a backlog) and the async acquire is SHIELDED so a cancel can't split it from the release.
+import time as _cg_time  # noqa: E402
+import anyio as _cg_anyio  # noqa: E402
+from penumbra.core._guard import BackendGuard as _CGGuard  # noqa: E402
+class _CGBusy(RuntimeError):
+    pass
+# (a) sync slot: a normal use RELEASES (permit reusable); a saturated pool raises on_busy FAST (no hang).
+_cg_g = _CGGuard("smoke-slot", 1)
+with _cg_g.slot(1.0, lambda w: _CGBusy()):
+    pass
+_cg_slot_reuses = _cg_g.sema.acquire(timeout=0)  # permit came back after the with-block; now hold it
+_cg_slot_bounded = False
+if _cg_slot_reuses:  # single permit held -> a second slot must fail-fast, not block unboundedly
+    _cg_t0 = _cg_time.monotonic()
+    try:
+        with _cg_g.slot(0.15, lambda w: _CGBusy()):
+            pass
+    except _CGBusy:
+        _cg_slot_bounded = (_cg_time.monotonic() - _cg_t0) < 2.0
+    _cg_g.sema.release()
+# (b) async aslot: a body cancelled WHILE holding the permit must RELEASE it (no leak); a saturated pool
+#     fails fast (bounded), never an unbounded hang.
+async def _cg_aslot_probe():
+    g = _CGGuard("smoke-aslot", 1)
+    async def _body():
+        async with g.aslot(1.0, lambda w: _CGBusy()):
+            await _cg_anyio.sleep(5)  # cancel lands here (permit held) -> the finally must release it
+    with _cg_anyio.move_on_after(0.15):
+        await _body()
+    noleak = g.sema.acquire(timeout=0)  # permit back after the cancelled body?
+    if noleak:
+        g.sema.release()
+    g.sema.acquire()  # saturate the single permit
+    t0 = _cg_time.monotonic()
+    bounded = False
+    try:
+        async with g.aslot(0.15, lambda w: _CGBusy()):
+            pass
+    except _CGBusy:
+        bounded = (_cg_time.monotonic() - t0) < 3.0
+    g.sema.release()
+    return noleak and bounded
+_cg_aslot_ok = _cg_anyio.run(_cg_aslot_probe)
+check("guard concurrency-gate: BOUNDED + cancellation-safe -- slot/aslot release on exit, fail fast (raise on_busy) when the pool is saturated instead of hanging unboundedly, and a cancelled aslot body does NOT leak its permit (the 2026-07-18 resolve_identity 300s-hang regression)",
+      _cg_slot_reuses and _cg_slot_bounded and _cg_aslot_ok,
+      f"slot_reuses={_cg_slot_reuses} slot_bounded={_cg_slot_bounded} aslot_ok={_cg_aslot_ok}")
+# PROCESS-GLOBAL egress bound: the fan-out leaf (_egress) must gate every source .search through ONE
+# loop-agnostic BoundedSemaphore sized to _EGRESS_CAP, so nested penumbra_gather (N fresh event loops, each
+# with its own per-loop anyio limiter) can never exceed it and exhaust the fd budget (the domain-sweep
+# "Too many open files" root cause). Wiring + sizing golden (a live re-run proves the runtime bound).
+check("egress-cap: fetcher _EGRESS_SEM cap=256 + _egress chokepoint (process-global fan-out bound)",
+      _bf_wired(fetcher, "_EGRESS_SEM", "_EGRESS_CAP", 256, "_egress")
+      and getattr(fetcher._EGRESS_SEM, "_initial_value", None) == 256)
 # Prove the SE cap actually bounds concurrency at its chokepoint _se_get (mirror of the reddit test).
 _bf_se._se_cooldown_until = 0.0; _bf_se._se_fail_streak = 0
 _bf_se_if = {"now": 0, "peak": 0}; _bf_se_ilock = _bf_thr.Lock()
@@ -646,6 +917,13 @@ import tempfile as _tf  # noqa: E402
 import penumbra.core.recall as _recall  # noqa: E402
 from penumbra.core.recall import store as _rstore  # noqa: E402
 
+# Keep the smoke gate hermetic from its first recall call. `maybe_ingest()`
+# lazy-creates the default Journal, so install a temporary Journal before any
+# write-path assertion can touch the mini's live state.
+_smoke_journal_dir = Path(_tf.mkdtemp()) / "smoke_recall_journal"
+_recall.writer._observation_journal = _recall.writer.ObservationJournal(_smoke_journal_dir)
+_recall.writer._JOURNAL_WAKE.clear()
+
 # graceful degrade: a fresh/empty (or unusable) index returns [] — the eye stays stateless
 _rstore.DB_PATH = Path(_tf.mkdtemp()) / "smoke_index.db"
 check("recall.search on a fresh index returns [] (graceful degrade)", _recall.search("大模型", 5) == [])
@@ -774,6 +1052,57 @@ if _mk is not None:
 #     exercised here (smoke is offline); the live path is the standalone functional check. ---
 from penumbra.core.sources.api import ontario_sunshine_source as _onss  # noqa: E402
 _onss_a = fetcher.get_adapter("ontario_sunshine")
+# A health probe must never SPEND the quota it is checking (2026-07-25). Two sources were sitting in
+# watchdog_down for exhaustion the eye itself caused: context7 allows 200 requests per calendar MONTH
+# per IP while the watchdog probes daily + every 6h (~150/mo), and data.ontario.ca 429s this IP for the
+# whole domain while its probe cost ~4-6 retrying requests per cycle. Both now answer WITHOUT egress,
+# and say so; neither reroutes egress to dodge the limit. Same shape the health run already uses to skip
+# RETIRED sources. Verification moves to USE time (both are named-drill only).
+# auth_header (2026-07-25): a declarative row NAMES the header; the secret stays in
+# ~/.penumbra/credentials/<name>.json (the house pattern every keyed source uses), so it never enters
+# sources.json, which the generalization path publishes. No key file = keyless, i.e. byte-identical to
+# the old behaviour, so the row can carry auth_header before any key exists.
+_c7_h = fetcher.get_adapter("context7")
+if _c7_h is not None:
+    # Authorization: Bearer, NOT the CONTEXT7_API_KEY header its README documents: that one is for the
+    # MCP server, and the REST API silently IGNORES it. Verified live 2026-07-25 with a valid key:
+    # CONTEXT7_API_KEY -> 429 "Quota Exceeded" (treated as anonymous); Authorization: Bearer -> 200 +
+    # results. Pinned because the README will keep saying otherwise.
+    check("context7: auth is Authorization + 'Bearer ' prefix (the REST API ignores the README header)",
+          getattr(_c7_h, "auth_header", "") == "Authorization"
+          and getattr(_c7_h, "auth_prefix", "") == "Bearer ")
+    check("declarative auth: no key file -> keyless (None headers), never a header with an empty value",
+          _c7_h._auth_headers() is None or bool(list(_c7_h._auth_headers().values())[0]))
+    check("declarative auth: sources.json carries NO api_key/secret field for context7",
+          not any(k in (_c7_h.__dict__ or {}) and "sk-" in str(_c7_h.__dict__[k])
+                  for k in ("params_template", "endpoint")))
+# ...and every OTHER declarative row stays keyless: pick them by capability, not by name (the first
+# draft of this check named a CODED adapter and blew up, which is exactly what a golden is for).
+_decl_rows = [a for a in (fetcher.get_adapter(n) for n in fetcher.all_adapter_names())
+              if a is not None and hasattr(a, "_auth_headers")]
+_decl_noauth = [a for a in _decl_rows if not getattr(a, "auth_header", "")]
+check("declarative auth: rows without auth_header send no auth header at all",
+      bool(_decl_noauth) and all(a._auth_headers() is None for a in _decl_noauth),
+      f"{len(_decl_noauth)} keyless declarative rows checked")
+
+_c7 = fetcher.get_adapter("context7")
+if _c7 is not None:
+    _c7_ok, _c7_msg = _c7.health_check()
+    check("context7: health_check spends NO quota (declarative no_live_probe) and says it was not probed",
+          _c7_ok is True and "not probed" in _c7_msg, _c7_msg[:70])
+    check("context7: the row carries the no_live_probe REASON (not a bare flag)",
+          isinstance(getattr(_c7, "no_live_probe", False), str))
+_ont_h = fetcher.get_adapter("ontario_sunshine")
+if _ont_h is not None:
+    _o_ok, _o_msg = _ont_h.health_check()
+    check("ontario_sunshine: health_check answers from cache / not-probed, never a live 429-bait call",
+          _o_ok is True and ("not probed" in _o_msg or "from cache" in _o_msg), _o_msg[:70])
+# A NORMAL declarative row must still be probed live, or the watchdog goes blind to real breakage.
+_cd = fetcher.get_adapter("conference_deadlines")
+if _cd is not None:
+    check("declarative rows WITHOUT no_live_probe still probe live (watchdog not blinded)",
+          not getattr(_cd, "no_live_probe", False))
+
 check("ontario_sunshine: registered + explicit_only (named-only, never in broad fan-out)",
       _onss_a is not None and bool(fetcher._explicit_only_reason(_onss_a)))
 check("ontario_sunshine: keyless + faceted compensation/STRUCTURE/ca lookup",
@@ -880,7 +1209,9 @@ _FACETS = ROOT / "src" / "penumbra" / "core" / "facets.json"
 MODE_VOCAB = {"STRUCTURE", "UNWALL", "TRANSCRIBE", "RECALL", "MONITOR"}
 # Sources with NO acquisition edge over plain web search (modes:[]) — Curator prune candidates.
 # FROZEN: adding a name here is a deliberate "this source earns its keep no longer" call.
-REDUNDANT_SOURCES = {"alphaxiv"}
+# alphaxiv left this set 2026-07-14: its keyless REST wiring now surfaces trending buzz (MONITOR)
+# + per-paper community discussion + AI overview (STRUCTURE), a real edge over plain web search.
+REDUNDANT_SOURCES: set = set()
 try:
     _facets = json.loads(_FACETS.read_text(encoding="utf-8"))
 except Exception as exc:  # noqa: BLE001
@@ -989,7 +1320,7 @@ def _build_fixture_packet(mode="RECALL", reached=True, probe_diff=None, family="
     _ccand.host_seen = lambda h: False
     try:
         import penumbra.core.recall as _rc
-        _rc.search = lambda q, k=1: []
+        _rc.search = lambda q, k=1, sources=None: []  # signature mirrors the Wave-2 recall.search API
     except Exception:  # noqa: BLE001
         pass
     diff = probe_diff if probe_diff is not None else {
@@ -1133,6 +1464,28 @@ try:
     _cprobe.httpx.Client = _real_httpx_client
 finally:
     _cprobe.socket.getaddrinfo = _real_gai
+
+# probe_proxy (P2 wall-probe egress filter): the SSRF-pin decision + host allowlist + rate cap.
+# It delegates the whole SSRF decision to _netguard (so it inherits every hardening, incl. the H2
+# embedded-v4 block); these assert the proxy's OWN surface offline (IP-literal hosts resolve to
+# themselves, no network).
+from penumbra.core.curator import probe_proxy as _pp  # noqa: E402
+check("probe_proxy._pin refuses private/metadata/embedded-v4, accepts public, refuses bad port",
+      _pp._pin("127.0.0.1", 80) == (None, "private_ip")
+      and _pp._pin("169.254.169.254", 80) == (None, "private_ip")
+      and _pp._pin("::ffff:127.0.0.1", 443) == (None, "private_ip")
+      and _pp._pin("8.8.8.8", 443) == ("8.8.8.8", None)
+      and _pp._pin("8.8.8.8", 8080) == (None, "bad_port"))
+check("probe_proxy._host_allowed: subdomain+exact pass, off-list+lookalike reject, empty=allow-any",
+      _pp._host_allowed("a.example.com", frozenset({"example.com"}))
+      and _pp._host_allowed("example.com", frozenset({"example.com"}))
+      and not _pp._host_allowed("evil.com", frozenset({"example.com"}))
+      and not _pp._host_allowed("example.com.evil.com", frozenset({"example.com"}))
+      and _pp._host_allowed("anything.com", frozenset()))
+_ppc, _ppb = _pp._Caps(2, 100), _pp._Caps(9, 50)
+check("probe_proxy._Caps bounds request count + total bytes",
+      _ppc.take_request() and _ppc.take_request() and not _ppc.take_request()
+      and _ppb.take_bytes(40) and not _ppb.take_bytes(20))
 # source-inspect: safe_fetch owns its client (no http._get_client), follow_redirects=False, iter_bytes
 _sf_src = _insp.getsource(_cprobe.safe_fetch)
 # It must not CALL the shared pooled client / capped helper (a docstring mention is fine: the
@@ -1237,14 +1590,20 @@ _EXPECTED_EDGES = {
     # P4 additions:
     ("watching", "rejected"), ("error", "probe_dead"), ("new", "probe_dead"),
     ("probed", "probe_dead"), ("probe_dead", "error"),
+    # P2 wall-aware probe: revive a parked_p2 candidate to awaiting_verdict after a jailed render
+    # surfaces its real content (the EXISTING row is re-judged; its host stays in tried_hosts).
+    ("parked_p2", "awaiting_verdict"),
 }
 check("curator: ALLOWED_TRANSITIONS == the frozen edge set", set(_ccand.ALLOWED_TRANSITIONS) == _EXPECTED_EDGES,
       f"extra={set(_ccand.ALLOWED_TRANSITIONS) - _EXPECTED_EDGES} missing={_EXPECTED_EDGES - set(_ccand.ALLOWED_TRANSITIONS)}")
 check("curator: illegal new->admitted raises", not _ccand._can_transition("new", "admitted"))
-check("curator: redline_blocked / parked_p2 / probe_dead terminal (no forward recovery edge)",
+check("curator: redline_blocked / probe_dead terminal (no forward recovery edge)",
       not _ccand._can_transition("redline_blocked", "probed")
-      and not _ccand._can_transition("parked_p2", "awaiting_verdict")
       and not _ccand._can_transition("probe_dead", "probed"))
+check("curator: parked_p2 has ONLY the P2 wall-probe revival forward edge (-> awaiting_verdict)",
+      _ccand._can_transition("parked_p2", "awaiting_verdict")
+      and not _ccand._can_transition("parked_p2", "admitted")
+      and not _ccand._can_transition("parked_p2", "probed"))
 check("curator: error reachable from every state AND error->probed allowed",
       all(_ccand._can_transition(s, "error") for s in _ccand.STATES if s != "error")
       and _ccand._can_transition("error", "probed"))
@@ -2578,6 +2937,66 @@ fetcher.invalidate_explicit_only_overrides()
 check("curator live: unretire_live drops the override -> source rejoins broad fan-out",
       not fetcher._explicit_only_reason(_RetStub()))
 
+# (15b) 1.7 RETIREMENT as a first-class observable fact. One derivation (fetcher.retired_reason) that
+#       every consumer reads, a first-class `retired` field on list_sources, and the PRECEDENCE fix: a
+#       retire WINS over a static explicit_only, so retiring an already explicit_only (walled) source
+#       stays observable rather than being masked by its class reason. Plus the guard the precedence
+#       change requires: access_tier=circumvention is a STATIC legal posture (read off the class attr),
+#       so a retired circumvention source keeps its tier. Overlay written directly (we test the READ
+#       side; the write gate is covered by (14)/(15) above).
+_ret_overlay = _altmp / "explicit_only_overrides.json"
+_ret_overlay.write_text(json.dumps({
+    "walled_and_retired": "retired: parked by the curator 2026-07-12",
+    "circ_and_retired": "retired: parked by the curator 2026-07-12",
+    "openalex": "retired: parked by the curator 2026-07-12",  # a REAL registered source -> list_sources field
+}), encoding="utf-8")
+fetcher._EXPLICIT_ONLY_OVERRIDES_PATH = _ret_overlay
+fetcher.invalidate_explicit_only_overrides()
+
+
+class _WalledRetired:   # BOTH statically explicit_only (a walled class reason) AND retired
+    name = "walled_and_retired"
+    explicit_only = "walled: logged-in CDP session, named-drill only"
+
+
+class _CircRetired:     # circumvention declared via the explicit_only STRING, then retired
+    name = "circ_and_retired"
+    explicit_only = "circumvention 级(逆向解密平台加密响应);高 §1201 风险"
+
+
+class _PlainWalled:     # statically explicit_only, NOT retired (the precedence control)
+    name = "plain_walled_not_retired"
+    explicit_only = "walled: logged-in CDP session"
+
+
+check("1.7: retired_reason is truthy for a retired source, empty for a non-retired one",
+      bool(fetcher.retired_reason(_WalledRetired())) and not fetcher.retired_reason(_PlainWalled()))
+check("1.7: a retire WINS over a static explicit_only (reason surfaces 'retired:', not the class reason)",
+      fetcher._explicit_only_reason(_WalledRetired()).lower().startswith("retired"))
+check("1.7: a non-retired explicit_only source still surfaces its OWN class reason (precedence intact)",
+      fetcher._explicit_only_reason(_PlainWalled()).startswith("walled"))
+check("1.7: circumvention (declared via the explicit_only string) SURVIVES a retire (static-attr read)",
+      fetcher._derive_access_tier(_CircRetired()) == "circumvention")
+_ls17 = {e["name"]: e for e in fetcher.list_sources()}
+check("1.7: list_sources emits a first-class 'retired' bool (True + explicit_only for a retired real source)",
+      _ls17.get("openalex", {}).get("retired") is True and _ls17["openalex"].get("explicit_only") is True)
+check("1.7: 'retired' is False for a live source (arxiv)",
+      _ls17.get("arxiv", {}).get("retired") is False)
+# the two curator consumers now read the FIELD, not a dead isinstance('retired:' prefix) on a bool.
+from penumbra.core.curator import source_audit as _sa17
+from penumbra.core.curator import discover as _disc17
+_roster17 = [
+    {"name": "live_src", "domains": ["papers"], "modes": ["STRUCTURE"], "retired": False},
+    {"name": "retired_src", "domains": ["papers"], "modes": ["STRUCTURE"], "retired": True},
+]
+_cell17 = _sa17._facet_cell("papers", "STRUCTURE")
+check("1.7: placement grid counts the live source, DROPS the retired one (dead isinstance test fixed)",
+      _sa17._build_grid_by_placement(_roster17).get(_cell17) == ["live_src"])
+check("1.7: discover seed picker drops a retired source (reads the first-class field)",
+      _disc17._seed_sources_for_domain("papers", {"sources": _roster17}) == ["live_src"])
+_ret_overlay.write_text("{}", encoding="utf-8")  # clean state for the rest of the run
+fetcher.invalidate_explicit_only_overrides()
+
 # (16) the live-apply lane verbs route through penumbra_curator_act; each still resolves to its impl.
 for _t in ("_curator_apply_live", "_curator_rollback_live", "_curator_stage_commit",
            "_curator_retire_live", "_curator_rollback_retire"):
@@ -2923,6 +3342,18 @@ finally:
     _oa2.get_json = _save_gj_h
     _oa2._health["result"] = None
     _oa2._health["at"] = 0.0
+# 2026-07-23 watchdog false-mass-down fix: health() reports DEGRADED (ok, not down) while the eye
+# SELF-SHEDS (breaker open / pool saturated): a transient breaker-open must NOT flip all 40+
+# OpenAlex-backed sources down. Force the breaker open (open_until far future) so get_json raises
+# OpenAlexDown (self-shed) BEFORE any network, and health() must report ok=True + "degraded".
+_oa2._state["open_until"] = 9e18
+_oa2._health["result"] = None; _oa2._health["at"] = 0.0
+_oa_deg = _oa2.health()
+_oa2._state["open_until"] = 0.0
+_oa2._health["result"] = None; _oa2._health["at"] = 0.0
+check("openalex: health() DEGRADED (ok, not down) while self-shedding, not a false outage",
+      _oa_deg[0] is True)  # breaker forced open: ok=True ONLY via the self-shed degraded branch
+                           # (msg may be the recent-429 variant, so assert the ok invariant, not text)
 
 # FIX 2: cartographer S2 edges. A re-add() preserves prior referenced_works (no wipe), and a
 # tiny synthetic seed+reference set yields n_edges > 0 and at least one in-corpus in_degree > 0.
@@ -2974,6 +3405,19 @@ try:
     # the SEED's referenced_works must survive a re-add() (the no-wipe fix)
     check("cartographer s2: re-add preserves prior referenced_works (no wipe on merge)",
           "REF" in (_works.get("SEED", {}).get("referenced_works") or []))
+    # absorb 2026-07-21 (litstudy): _build exposes the in-corpus citation DAG (edge list), not just n_edges.
+    check("absorb/cartographer: _build exposes the in-corpus edge list [citer,cited]",
+          ["SEED", "REF"] in _built["edges"] and ["CITER", "SEED"] in _built["edges"],
+          f"edges={_built['edges']}")
+    # absorb 2026-07-21 (LCN): seed-relative gap stamps -- REF is a missing foundational ref (a seed cites it),
+    # CITER is a missing frontier citer (it cites a seed); a SEED is never "missing" so it carries no stamp.
+    _absc_by_id = {n["id"]: n for n in _built["nodes"]}
+    check("absorb/cartographer: seed-relative gap stamps (REF=missing-ref, CITER=missing-citer, SEED unstamped)",
+          _absc_by_id["REF"]["seed_ref_freq"] == 1 and _absc_by_id["REF"]["seed_cite_freq"] == 0
+          and _absc_by_id["CITER"]["seed_cite_freq"] == 1 and _absc_by_id["CITER"]["seed_ref_freq"] == 0
+          and "seed_ref_freq" not in _absc_by_id["SEED"],
+          f"REF={_absc_by_id.get('REF',{}).get('seed_ref_freq')}/{_absc_by_id.get('REF',{}).get('seed_cite_freq')} "
+          f"CITER={_absc_by_id.get('CITER',{}).get('seed_ref_freq')}/{_absc_by_id.get('CITER',{}).get('seed_cite_freq')}")
     # citation POLARITY evidence: the raw S2 citing SENTENCE rides onto the node as a FACT
     # ({snippet, intents}); the eye does NOT classify supporting/contrasting/mentioning, the
     # agent reads the snippet and judges. This asserts the pass-through only.
@@ -3176,7 +3620,7 @@ finally:
 
 # enrich imports _s2 lazily inside the arXiv branch; monkeypatch the shared module's get_paper.
 import penumbra.core._s2 as _s2mod  # noqa: E402
-_save_gp = _s2mod.get_paper
+_save_gp, _save_axi = _s2mod.get_paper, _enr2._arxiv_integrity
 try:
     _ecache_save = (_ecache.get, _ecache.set)
     _ecache.get = lambda k: None
@@ -3185,11 +3629,52 @@ try:
     class _AxP:
         citationCount = 99
     _s2mod.get_paper = lambda pid, fields=None: _AxP()
+    _enr2._arxiv_integrity = lambda ax: {
+        "retracted": None,
+        "notices": [],
+        "note": "arxiv: checked (arxiv-only; no journal DOI, no marker)",
+    }
     _ax_rec = _enr2.enrich(["2203.02155"])[0]
     check("enrich: arXiv record carries citation_count from the (mocked) S2 get_paper",
           _ax_rec.get("citation_count") == 99, str(_ax_rec))
 finally:
-    _s2mod.get_paper = _save_gp
+    _s2mod.get_paper, _enr2._arxiv_integrity = _save_gp, _save_axi
+    _ecache.get, _ecache.set = _ecache_save
+
+# FIX 5b (2026-07-10): enrich caches on the CANONICAL paper identity (not the raw string) so every
+# reference form of one paper shares ONE cache row, AND a DEGRADED record (a needed backend was
+# unreachable) caches only briefly (_TTL_DEGRADED) so a transient null SELF-HEALS instead of poisoning
+# the paper for 24h. Root cause of the 2026-07-10 citation-count split (bare-id null vs DOI-form 22344).
+check("enrich: all arXiv reference forms collapse to ONE canonical cache key (doi keys separately)",
+      len({_enr2._canonical_key(x) for x in
+           ["2203.02155", "10.48550/arXiv.2203.02155", "arxiv:2203.02155",
+            "https://arxiv.org/abs/2203.02155", "2203.02155v3"]}) == 1
+      and _enr2._canonical_key("2203.02155") == "arxiv:2203.02155"
+      and _enr2._canonical_key("10.1145/3292500.3330701") == "doi:10.1145/3292500.3330701")
+
+_save_gp2, _save_axi = _s2mod.get_paper, _enr2._arxiv_integrity
+_ttl_seen: dict = {}
+try:
+    _ecache_save = (_ecache.get, _ecache.set)
+    _ecache.get = lambda k: None
+    _ecache.set = lambda k, v, ttl=0: _ttl_seen.__setitem__("ttl", ttl)
+    _enr2._arxiv_integrity = lambda ax: {"retracted": None, "notices": [],
+                                         "note": "arxiv: checked (arxiv-only; no journal DOI, no marker)"}
+    # S2 UNREACHABLE (get_paper -> None): DEGRADED -> short TTL so the null self-heals next call.
+    _s2mod.get_paper = lambda pid, fields=None: None
+    _enr2.enrich(["2203.02155"])
+    check("enrich: an S2-unreachable (degraded) record caches at _TTL_DEGRADED, not 24h",
+          _ttl_seen.get("ttl") == _enr2._TTL_DEGRADED, f"ttl={_ttl_seen.get('ttl')}")
+
+    class _AxP2:
+        citationCount = 7
+    # S2 OK + integrity checked: COMPLETE observation -> durable 24h TTL.
+    _s2mod.get_paper = lambda pid, fields=None: _AxP2()
+    _enr2.enrich(["2203.02155"])
+    check("enrich: a complete record caches at _TTL_OK (24h)",
+          _ttl_seen.get("ttl") == _enr2._TTL_OK, f"ttl={_ttl_seen.get('ttl')}")
+finally:
+    _s2mod.get_paper, _enr2._arxiv_integrity = _save_gp2, _save_axi
     _ecache.get, _ecache.set = _ecache_save
 
 # FIX 6: search_many excluded_relevant. A thematically-matching walled source is surfaced with a hint;
@@ -3203,6 +3688,46 @@ if _blind_a is not None:
           not fetcher._query_overlaps_source("pytorch autograd tensor backward", _blind_a))
 check("fetcher: search_many signature carries the query-aware absence machinery (excluded_relevant)",
       "excluded_relevant" in _insp.getsource(fetcher.search_many))
+
+# excluded_relevant SCORING (2026-07-25). This hint is the ONLY channel through which the ~126
+# broad-excluded sources ever reach the agent, and it was ranking by RAW token overlap, which treats
+# a shared "of" as evidence. Measured failure: 'chain of thought faithfulness evaluation' filled all
+# six slots with sources matched purely on "of" (eastmoney 股票行情 / mpnp_draws 曼省抽签 /
+# nih_reporter US biomedical grants), crowding out anything real. Now: function words are dropped,
+# survivors are ranked by rarity in THIS roster (the same BM25 idf relevance.field_scores uses), and
+# each hint carries the tokens it matched so the agent can judge instead of trusting a bare count.
+_cat_er = fetcher.get_catalog_snapshot()
+_pol_er = fetcher._build_policy_snapshot(_cat_er)
+
+
+def _er(q):
+    return fetcher.build_search_plan(_cat_er, _pol_er, q).excluded_relevant
+
+
+# The regression that motivated this: a pure-function-word match must recommend NOTHING. Saying
+# "nothing hidden is relevant" is the channel's most valuable answer; it could not say it before.
+check("fetcher.excluded_relevant: a function-word-only match recommends nothing (no 'of' slots)",
+      _er("chain of thought faithfulness evaluation") == []
+      and _er("mixture of experts routing collapse") == [])
+# ...while a genuinely thematic query still surfaces its sources, best-matched FIRST. No capability
+# was traded away for the silence above: this is the same query that worked before the change.
+_er_ee = _er("canada express entry CEC cutoff")
+check("fetcher.excluded_relevant: a thematic query still surfaces sources, best match first",
+      bool(_er_ee) and _er_ee[0]["name"] == "ircc_ee_rounds", f"top={_er_ee[0]['name'] if _er_ee else None}")
+# The EVIDENCE, not just its size: every hint names the query tokens it matched on.
+check("fetcher.excluded_relevant: each hint carries its matched tokens (judgeable, not a bare count)",
+      all(d.get("matched") and len(d["matched"]) == d["overlap"] for d in _er_ee)
+      and "cec" in _er_ee[0]["matched"])
+# Rarity beats count: 'cec' (in 1 source) must outweigh a token shared by many. Ordering is the claim.
+_idf_probe = fetcher._route_idf(_cat_er, {"cec", "the"})
+check("fetcher._route_idf: a roster-rare token carries strictly more weight than a common one",
+      _idf_probe["cec"] > _idf_probe["the"],
+      f"cec={_idf_probe['cec']:.2f} the={_idf_probe['the']:.2f}")
+# Scope guard: the stopword drop is ROUTING-ONLY. The document ranker must keep every token, or
+# phrase evidence in real search results would silently degrade.
+check("fetcher: routing stopwords never leak into the document ranker (relevance.query_terms)",
+      "of" in relevance.query_terms("chain of thought")
+      and "of" in fetcher._ROUTE_STOPWORDS)
 
 # FIX 7: resolve_identity likely_same_person. Two same-name same-backend OpenAlex fragments group with
 # an "A1+A2" merge token; no duplicates → no group.
@@ -3367,7 +3892,8 @@ check("s2 detects 429 (message)", _S2._is_rate_limit(RuntimeError("HTTP 429 Too 
 check("s2 non-429 not flagged", _S2._is_rate_limit(RuntimeError("boom")) is False)
 _S2._state["open_until"] = _t.time() + 9999; _S2._health["result"] = None
 _hc = _S2.health()
-check("s2 health fails fast while circuit open", _hc[0] is False and "circuit open" in _hc[1])
+check("s2 health DEGRADED (ok, not down) while circuit open, self-shed is not an outage",
+      _hc[0] is True)  # breaker forced open: ok=True ONLY via the self-shed degraded branch
 _S2._state["open_until"] = 0.0; _S2._health["result"] = None
 
 # S2 retry (2026-06-20): the lib's OWN 10x/250s tenacity backoff is OFF (retry=False); the eye owns a
@@ -3426,7 +3952,7 @@ _AD = _SS.SemanticScholarAdapter()
 check("s2 source dropped private client property", not hasattr(_AD, "client") and not hasattr(_AD, "_client"))
 check("s2 source health_check delegates to _s2.health", _AD.health_check.__qualname__.startswith("SemanticScholarAdapter"))
 _S2._state["open_until"] = _t.time() + 9999; _S2._health["result"] = None
-check("s2 source health_check == shared circuit-open verdict", _AD.health_check()[0] is False)
+check("s2 source health_check DEGRADED (ok) on shared circuit-open, not down", _AD.health_check()[0] is True)
 _S2._state["open_until"] = 0.0; _S2._health["result"] = None
 
 import inspect as _insp
@@ -3467,6 +3993,40 @@ with _TPE(max_workers=2) as _ex:
 check("prewarm: refresh margin propagates through copy_context workers (per-PI / per-row fetches)",
       _got == [{"v": 1}, None])
 cache.set_refresh_margin(0)
+
+# FLOOR (2026-07-10): the structural empty-cache guard lives IN cache.set, so no adapter can pin a
+# failure-derived empty long by omission. An empty value ([], '', {}, None) is capped to EMPTY_TTL_CAP
+# unless the caller vouches authoritative_empty=True; a non-empty value and 0/False (meaningful scalars)
+# are untouched. This is the structural dissolution of the enrich-null-cached-24h class + its 7 siblings.
+cache.set("floor_empty", [], ttl=6 * 3600)
+cache.set("floor_auth", [], ttl=6 * 3600, authoritative_empty=True)
+cache.set("floor_full", [1, 2], ttl=6 * 3600)
+cache.set("floor_str", "", ttl=6 * 3600)
+cache.set("floor_zero", 0, ttl=6 * 3600)
+check("cache FLOOR: an empty value ([]) is capped to EMPTY_TTL_CAP, never pinned long",
+      cache.seconds_until_expiry("floor_empty") is not None
+      and cache.seconds_until_expiry("floor_empty") <= cache.EMPTY_TTL_CAP)
+check("cache FLOOR: authoritative_empty=True keeps the long TTL (a genuine no-result stays remembered)",
+      cache.seconds_until_expiry("floor_auth") > cache.EMPTY_TTL_CAP)
+check("cache FLOOR: a non-empty value is untouched (full TTL)",
+      cache.seconds_until_expiry("floor_full") > cache.EMPTY_TTL_CAP)
+check("cache FLOOR: an empty string '' is capped too (covers youtube's raw-'' sentinel class)",
+      cache.seconds_until_expiry("floor_str") <= cache.EMPTY_TTL_CAP)
+check("cache FLOOR: 0 / False are NOT 'empty' (meaningful scalars keep their TTL)",
+      cache.seconds_until_expiry("floor_zero") > cache.EMPTY_TTL_CAP)
+check("cache FLOOR: _is_empty classifies [] '' {} None as empty; 0 False [1] 'x' as non-empty",
+      all(cache._is_empty(v) for v in ([], "", {}, None))
+      and not any(cache._is_empty(v) for v in (0, False, [1], "x")))
+cache.set_docs("floor_sd", [], ttl=6 * 3600)
+cache.set_docs("floor_sd_auth", [], ttl=6 * 3600, empty_ttl=6 * 3600)
+check("cache FLOOR: set_docs empty + no empty_ttl is floor-capped (the safe default)",
+      cache.seconds_until_expiry("floor_sd") <= cache.EMPTY_TTL_CAP)
+check("cache FLOOR: set_docs explicit empty_ttl is honored past the floor (authoritative)",
+      cache.seconds_until_expiry("floor_sd_auth") > cache.EMPTY_TTL_CAP)
+from penumbra.core import _s2 as _s2n  # noqa: E402
+check("cache A-class: _s2.norm_s2_id collapses arXiv id-forms to ONE seed (cartographer/relations keys can't diverge)",
+      len({_s2n.norm_s2_id(x) for x in ["2203.02155", "ArXiv:2203.02155"]}) == 1
+      and _s2n.norm_s2_id("2203.02155") == "ArXiv:2203.02155")
 
 import inspect as _insp2
 from penumbra.core import _github as _gh
@@ -3509,6 +4069,16 @@ check("github_source _multi_surface stays SERIAL (no concurrency added)",
       "SERIAL on purpose" in _insp2.getsource(_ghs.GitHubAdapter._multi_surface))
 check("github_source _repo_tree tries git/trees/HEAD first (skips the /repos round-trip on the happy path)",
       "git/trees/HEAD" in _insp2.getsource(_ghs.GitHubAdapter._repo_tree))
+# 2026-07-23 watchdog false-mass-down fix: health() reports DEGRADED (ok, not down) while the breaker
+# is open (self-shed), so a transient breaker-open does not flip github + github_trending down. Force
+# the breaker open, hit the early breaker branch -> ok=True + "degraded", no network.
+_gh._state["open_until"] = 9e18
+_gh._health["result"] = None; _gh._health["at"] = 0.0
+_gh_deg = _gh.health()
+_gh._state["open_until"] = 0.0
+_gh._health["result"] = None; _gh._health["at"] = 0.0
+check("github: health() DEGRADED (ok, not down) while circuit open, self-shed is not an outage",
+      _gh_deg[0] is True and "degraded" in _gh_deg[1])
 
 import penumbra.core.sources.api.exa_source as _exa
 check("exa: _health is a callable single-flight probe", callable(_exa._health))
@@ -3629,6 +4199,17 @@ _se._se_cooldown_until = 0.0  # reset so live/later code is unaffected by the te
 _se._se_fail_streak = 0
 check("stackexchange: quota breaker trips after N 429s + skips the shared API while cooling (no network)",
       (not _se_cold0) and _se_tripped and (_se_skip is None) and (len(_se_calls) == 0))
+# 2026-07-23 watchdog false-mass-down fix: health() reports DEGRADED (ok, not down) while the shared
+# keyless per-IP quota is COOLING (a daily budget state, the API is up), so all 6 SE sources don't
+# flip down together. Trip the cooldown, then probe health() (returns early, no network).
+_se._se_cooldown_until = 0.0; _se._se_fail_streak = 0
+for _ in range(_se._SE_TRIP_AFTER):
+    _se._se_record(False)
+_se._health["result"] = None
+_se_deg = _se.health()
+_se._se_cooldown_until = 0.0; _se._se_fail_streak = 0; _se._health["result"] = None
+check("stackexchange: health() DEGRADED (ok, not down) while quota cooling, not an outage",
+      _se_deg[0] is True and "degraded" in _se_deg[1])
 # key injection: a configured free Stack Apps key is sent on every SE GET (quota 300→10k/day)
 _se._SE_KEY = "TESTKEY"
 _se_cap = {}
@@ -3904,9 +4485,11 @@ check("fetch_one: legacy signature unchanged (returns the docs list, not a tuple
 #     fixture payloads are condensed from the LIVE anthropic.com/research head-to-head.
 # ---------------------------------------------------------------------------
 from penumbra.core import web_fallback as wf
-from penumbra.core import cache as _wcache, http as _whttp
+from penumbra.core import cache as _wcache, http as _whttp, safeurl as _wsafe, _netguard as _wng
 _wf_g, _wf_s = _wcache.get, _wcache.set
 _wf_get = _whttp.get
+_wf_sf = _wsafe.safe_fetch            # C2: the plain untrusted read now goes through safeurl.safe_fetch
+_wf_sbr = _wng.security_block_reason  # C2: the Jina guard
 _wf_calls = {"plain": 0, "jina": 0}
 class _WFResp:
     def __init__(self, text, ctype="text/html; charset=utf-8"):
@@ -3914,31 +4497,65 @@ class _WFResp:
 _RICH = "<html><body><main><h1>Real Article</h1>" + ("<p>substantive body sentence. </p>"*60) + "</main></body></html>"
 _THIN = "<html><body><nav>Research Policy Learn News</nav><main><h1>Research</h1><p>Our research teams investigate the safety of AI models.</p></main></body></html>"
 _JMD  = "Title: Research\nURL Source: https://www.anthropic.com/research\nMarkdown Content: Our research teams...\n### Interpretability\n### Alignment\n[Teaching Claude why](https://www.anthropic.com/x)" + (" more real article listing."*40)
-def _wf_fake_get(url, **kw):
-    if url.startswith(wf._JINA_ENDPOINT):
-        _wf_calls["jina"] += 1; return _WFResp(_JMD, "text/plain; charset=utf-8")
+def _wf_ok(url, html):  # a safe_fetch ok-dict carrying an html body (already read + decoded + capped)
+    return {"ok": True, "status": 200, "bytes": len(html), "text": html, "final_url": url,
+            "redirect_chain": [], "content_type": "text/html; charset=utf-8", "blocked_reason": None}
+def _wf_fake_sf(url, **kw):  # C2: the plain read is safe_fetch (pinned per-hop), not http.get
     _wf_calls["plain"] += 1
-    return _WFResp(_RICH) if "rich.example" in url else _WFResp(_THIN)
+    if "rich.example" in url:
+        return _wf_ok(url, _RICH)
+    if "nothing.example" in url:
+        return _wf_ok(url, "<html><body></body></html>")
+    return _wf_ok(url, _THIN)
+def _wf_fake_jina(url, **kw):  # after C2 ONLY the Jina endpoint routes through http.get
+    _wf_calls["jina"] += 1
+    return _WFResp(_JMD, "text/plain; charset=utf-8")
 try:
     _wcache.get = lambda k: None; _wcache.set = lambda *a, **k: None
-    _whttp.get = _wf_fake_get
+    _wsafe.safe_fetch = _wf_fake_sf
+    _whttp.get = _wf_fake_jina
+    _wng.security_block_reason = lambda u: None  # keep the (N) block offline; guard fidelity is the S1: goldens
     _wf_calls.update(plain=0, jina=0)
     _d1 = wf.read_via_fallback("https://rich.example.com/article")
-    check("web_fallback: a RICH server-rendered page returns via plain, Jina NOT called (happy path zero extra call)",
-          _d1 is not None and _d1.source == "web" and _wf_calls["jina"] == 0 and "render:plain" in _d1.tags and len(_d1.content) > 600)
+    check("web_fallback: a RICH server-rendered page returns via plain (safe_fetch), Jina NOT called (happy path zero extra call)",
+          _d1 is not None and _d1.source == "web" and _wf_calls["jina"] == 0 and _wf_calls["plain"] == 1
+          and "render:plain" in _d1.tags and len(_d1.content) > 600)
     _wf_calls.update(plain=0, jina=0)
     _d2 = wf.read_via_fallback("https://www.anthropic.com/research")
     check("web_fallback: a THIN SPA shell escalates to ONE Jina call and returns its markdown",
           _d2 is not None and _wf_calls["jina"] == 1 and "render:jina" in _d2.tags and _d2.title == "Research"
           and "Interpretability" in _d2.content and _d2.metadata["raw"]["rendered_via"] == "jina")
-    _whttp.get = lambda url, **kw: (None if url.startswith(wf._JINA_ENDPOINT) else _WFResp("<html><body></body></html>"))
+    _CHL = ("Title: Just a moment...\nURL Source: https://walled.example.com/t\n"
+            "Warning: This page maybe requiring CAPTCHA, please make sure you are authorized to access this page.\n"
+            "Markdown Content: Performing security verification") + (" waiting for the site to respond."*40)
+    _whttp.get = lambda url, **kw: _WFResp(_CHL, "text/plain; charset=utf-8")  # Jina returns a challenge page
+    check("web_fallback: an anti-bot challenge interstitial is REFUSED (None), never returned as matched=true junk",
+          wf.read_via_fallback("https://walled.example.com/t") is None)
+    _whttp.get = lambda url, **kw: None  # Jina hard-fails -> both plain+jina thin
     check("web_fallback: both plain+jina thin -> None (matched=false preserved, no fake empty doc)",
           wf.read_via_fallback("https://nothing.example.com/x") is None)
     check("web_fallback: a non-http scheme is rejected before any IO",
           wf.read_via_fallback("file:///etc/passwd") is None and wf.read_via_fallback("ftp://x/y") is None)
+
+    # diag._strip_secrets must be LOSSLESS for non-secret query segments: the old parse_qsl +
+    # urlencode round-trip force-decoded legacy-GBK percent-escapes to %EF%BF%BD garbage and
+    # turned %20 into '+', so the diagnostic LIED about the URL actually sent (misled the
+    # 2026-07-09 yipinsanfendi "encoding bug" investigation). Golden: GBK escapes survive
+    # byte-for-byte; secret values still redact; a no-query URL passes through unchanged.
+    from penumbra.core import diag as _diag
+    _gbk_url = "https://www.1point3acres.com/bbs/search.php?mod=forum&searchsubmit=yes&srchtxt=express%20entry%20%B2%A9%BA%F3"
+    check("diag._strip_secrets: legacy-GBK percent-escapes survive VERBATIM (diagnostic never alters evidence)",
+          _diag._strip_secrets(_gbk_url) == _gbk_url)
+    check("diag._strip_secrets: secret query values still redacted, other segments untouched",
+          _diag._strip_secrets("https://x.example/a?token=abc123&srchtxt=%B2%A9%BA%F3")
+          == "https://x.example/a?token=<redacted>&srchtxt=%B2%A9%BA%F3")
+    check("diag._strip_secrets: no-query URL unchanged",
+          _diag._strip_secrets("https://x.example/plain") == "https://x.example/plain")
 finally:
     _wcache.get, _wcache.set = _wf_g, _wf_s
     _whttp.get = _wf_get
+    _wsafe.safe_fetch = _wf_sf
+    _wng.security_block_reason = _wf_sbr
 
 
 # ---------------------------------------------------------------------------
@@ -4120,6 +4737,16 @@ check("xhs_cn: registered + explicit_only (account-rate-sensitive, never in the 
 # the 风控 / warning classifier (_guard) maps each platform signal to the right typed reaction,
 # offline. This is the load-bearing safety logic — a misclassification burns the precious account.
 _xcn._tripped_until = 0.0; _xcn._trip_streak = 0  # clean breaker state for the classification test
+# ISOLATE THE BLACK BOX. _guard() now APPENDS a forensic row on every risk classification, so the
+# checks below would inject fake 461 / session-cap / IP-block incidents into the real
+# ~/.penumbra/state/xhs-cn-incidents.jsonl on every smoke run, poisoning the exact evidence file
+# built to diagnose a real intermittent fault. Third instance in one night of a test dirtying the
+# state it measures; the rule that came out of it: before calling a function in a test, ask what it
+# WRITES, not only what it returns.
+import pathlib as _pl_xcn, tempfile as _tf_xcn  # noqa: E401,E402 -- local to this block
+_xcn_incident_real = _xcn._INCIDENT_PATH
+_xcn_incident_sandbox = _pl_xcn.Path(_tf_xcn.mkdtemp()) / "incidents.jsonl"
+_xcn._INCIDENT_PATH = _xcn_incident_sandbox
 
 
 def _raises(fn, exc):
@@ -4149,6 +4776,13 @@ check("xhs_cn: _guard treats -101 (web_session invalid) as the re-auth-once path
 check("xhs_cn: a 风控 trip OPENED the breaker (_tripped True) -> live entry points go inert",
       _xcn._tripped() is True)
 _xcn._tripped_until = 0.0; _xcn._trip_streak = 0  # leave the breaker clean for the live server
+# The classifications above must have landed in the SANDBOX, and the real black box must be
+# untouched by this gate. Asserting both halves, because "it did not write" and "it wrote nowhere"
+# are different failures and only one of them is acceptable.
+check("xhs_cn black box: risk classifications are recorded (in the sandbox, not production)",
+      _xcn_incident_sandbox.exists()
+      and _xcn_incident_sandbox.read_text(encoding="utf-8").count("signed_http_461") == 1)
+_xcn._INCIDENT_PATH = _xcn_incident_real
 
 # ---------------------------------------------------------------------------
 # 27b. xiaohongshu_cn BROWSER-primary path (2026-06-25 mechanism flip: drive the 9224 browser to
@@ -4872,8 +5506,12 @@ check("ai_incidents: _entities/_reports flatten the nested objects; _incident_to
       and _aii.AIIncidentsAdapter()._incident_to_doc({"title": "x"}) is None
       and _aii.AIIncidentsAdapter()._incident_to_doc({"incident_id": 1}) is None)
 _aii_a = fetcher.get_adapter("ai_incidents")
-check("ai_incidents: registered + fan-out (not explicit_only) + safety/STRUCTURE; backend=aiid",
-      _aii_a is not None and not fetcher._explicit_only_reason(_aii_a)
+# 2026-07-25: this golden used to pin ai_incidents INTO the broad fan-out. Revised on measurement,
+# not taste: across 1986 recorded searches it timed out 760 times and reached the ranked top-k ZERO
+# times, so the fan-out slot bought nothing. It is NOT broken (a named drill returns real rows) and
+# stays fully reachable by name, with excluded_relevant recommending it on a genuine match.
+check("ai_incidents: registered + named-drill-only (explicit_only) + safety/STRUCTURE; backend=aiid",
+      _aii_a is not None and fetcher._explicit_only_reason(_aii_a)
       and _aii_a.domains == ["safety"] and _aii_a.modes == ["STRUCTURE"]
       and getattr(_aii_a, "backend", None) == "aiid")
 
@@ -5292,6 +5930,251 @@ check("source_diversity: empty ranked list → empty distribution, 0 unique, abs
       (lambda z: z["unique_sources"] == 0 and z["distribution"] == {}
        and isinstance(z["absent_perspectives"], list))(fetcher._compute_source_diversity([])))
 
+# --- Phase 0 STRUCTURAL PLACEMENT (fetcher._place_scholarly_fields, 2026-07-15): lift raw.authorships ->
+#     named metadata keys that SURVIVE to_tool_dict, + flatten cross-source ids, so scholarly value arrives
+#     ALREADY PLACED with zero store read / zero live call. Design: ambient-placement-and-selfwarm.md. ---
+_pp_oa = _PDoc(source="openalex", source_id="W1", url="http://w1", title="A Paper", content="x",
+               metadata={"doi": "10.1/x", "raw": {"authorships": [
+                   {"author": {"id": "https://openalex.org/A99", "display_name": "Jane Roe"},
+                    "institutions": [{"display_name": "MIT"}]},
+                   {"author": {"id": "A42", "display_name": "John Doe"},
+                    "institutions": [{"display_name": "MIT"}, {"display_name": "CMU"}]}]}})
+_pp_s2 = _PDoc(source="semantic_scholar", source_id="p1", url="http://p1", title="B Paper", content="y",
+               metadata={"external_ids": {"DOI": "10.2/y", "ArXiv": "2401.00001"}})
+_pp_bare = _PDoc(source="hackernews", source_id="h1", url="http://h1", title="HN", content="z")  # no raw
+fetcher._place_scholarly_fields([_pp_oa, _pp_s2, _pp_bare])
+check("placement: OpenAlex raw.authorships → exact author_ids (bare A-ids) + FULL coauthors + deduped institutions",
+      _pp_oa.metadata["author_ids"] == ["A99", "A42"]
+      and _pp_oa.metadata["coauthors"] == ["Jane Roe", "John Doe"]
+      and _pp_oa.metadata["institutions"] == ["MIT", "CMU"])
+check("placement: S2 external_ids → flat doi/arxiv_id so id_eq ($.metadata.doi) welds it like OpenAlex",
+      _pp_s2.metadata["doi"] == "10.2/y" and _pp_s2.metadata["arxiv_id"] == "2401.00001")
+check("placement: a doc with no raw/external_ids is left untouched (fail-open, no crash)",
+      "author_ids" not in (_pp_bare.metadata or {}) and (_pp_bare.metadata or {}).get("doi") is None)
+check("placement: does NOT clobber a pre-set key + re-run is an idempotent no-op",
+      _pp_oa.metadata["doi"] == "10.1/x"
+      and (fetcher._place_scholarly_fields([_pp_oa]) or _pp_oa.metadata["author_ids"] == ["A99", "A42"]))
+check("placement: the lifted keys SURVIVE to_tool_dict projection (raw dropped, author_ids/institutions kept)",
+      (lambda m: "raw" not in m and m.get("author_ids") == ["A99", "A42"]
+       and m.get("institutions") == ["MIT", "CMU"])(_pp_oa.to_tool_dict()["metadata"]))
+
+# --- author-list UNIFICATION (fetcher._coauthor_names, 2026-07-15): the FULL author list places under ONE
+#     key `coauthors` regardless of the source's native shape (arxiv all_authors / acl authors / s2 raw). ---
+_au_arxiv = _PDoc(source="arxiv", source_id="1", url="http://a", title="P", content="c",
+                  metadata={"all_authors": ["Ann Lee", "Bob Roy", "Cy Xu"]})
+_au_acl = _PDoc(source="acl_anthology", source_id="2", url="http://b", title="P", content="c",
+                metadata={"authors": ["Dee Fox", "Eve Ng"]})
+_au_s2 = _PDoc(source="semantic_scholar", source_id="3", url="http://c", title="P", content="c",
+               metadata={"raw": {"authors": [{"name": "Fay Ip"}, {"name": "Gil Oz"}]}})
+_au_none = _PDoc(source="hackernews", source_id="4", url="http://d", title="HN", content="c")
+fetcher._place_scholarly_fields([_au_arxiv, _au_acl, _au_s2, _au_none])
+check("author-unify: arxiv all_authors → coauthors (ONE key for the full list, all sources)",
+      _au_arxiv.metadata.get("coauthors") == ["Ann Lee", "Bob Roy", "Cy Xu"])
+check("author-unify: acl-style authors (list of strings) → coauthors",
+      _au_acl.metadata.get("coauthors") == ["Dee Fox", "Eve Ng"])
+check("author-unify: s2 raw.authors (list of dicts) → coauthors",
+      _au_s2.metadata.get("coauthors") == ["Fay Ip", "Gil Oz"])
+check("author-unify: a non-scholarly doc (no author list) gets NO coauthors (naturally scoped)",
+      "coauthors" not in (_au_none.metadata or {}))
+
+# --- ① merge-carry (rank.dedup + fetcher._place_scholarly_fields, 2026-07-15): an S2 survivor of an
+#     id-merged work INHERITS the OpenAlex identity — dedup carries the authorships, the lift surfaces
+#     author_ids on the survivor. Closes the "S2 wins dedup -> no identity" coverage gap. ---
+from penumbra.core.rank import dedup as _mc_dedup  # noqa: E402
+from penumbra.core.normalize import mk_signal as _mc_sig  # noqa: E402
+_mc_oa = _PDoc(source="openalex", source_id="W1", url="http://oa", title="Same Paper", content="c",
+               signals=_mc_sig("citations", 5, kind="citation", by="t"),
+               metadata={"doi": "10.z/z", "openalex_id": "W1", "raw": {"authorships": [
+                   {"author": {"id": "https://openalex.org/A7", "display_name": "Grace Hopper"},
+                    "institutions": [{"display_name": "Yale"}]}]}})
+_mc_s2 = _PDoc(source="semantic_scholar", source_id="p1", url="http://s2", title="Same Paper", content="c",
+               signals=_mc_sig("citations", 9000, kind="citation", by="t"),   # higher → S2 wins _pick_best
+               metadata={"doi": "10.z/z", "external_ids": {"DOI": "10.z/z"}})
+_mc_out = _mc_dedup([_mc_s2, _mc_oa])
+_mc_surv = _mc_out[0] if len(_mc_out) == 1 else None
+check("merge-carry: an id-merge collapses to ONE survivor = the higher-cited S2 doc",
+      _mc_surv is not None and _mc_surv.source == "semantic_scholar")
+check("merge-carry: dedup carries the OpenAlex authorships + openalex_id onto the S2 survivor",
+      _mc_surv is not None and (_mc_surv.metadata or {}).get("_merged_authorships")
+      and (_mc_surv.metadata or {}).get("openalex_id") == "W1")
+if _mc_surv is not None:
+    fetcher._place_scholarly_fields([_mc_surv])
+check("merge-carry: the placement lift surfaces author_ids on the S2 survivor + consumes the private key",
+      _mc_surv is not None and (_mc_surv.metadata or {}).get("author_ids") == ["A7"]
+      and (_mc_surv.metadata or {}).get("coauthors") == ["Grace Hopper"]
+      and "_merged_authorships" not in (_mc_surv.metadata or {}))
+# TITLE-based merge (DIFFERENT dois, same long paper title — the COMMON real case: OpenAlex journal-doi vs
+# S2 arXiv-doi): the carry MUST still fire (a long scholarly title collision across distinct papers is
+# negligible, and the merge already treats the group as one work). Guards against re-adding an id-only gate.
+_mc_ttl = "A Distinctly Long Unique Scholarly Paper Title About Widget Alignment"
+_mc_oa2 = _PDoc(source="openalex", source_id="W2", url="http://oa2", title=_mc_ttl, content="c",
+                signals=_mc_sig("citations", 5, kind="citation", by="t"),
+                metadata={"doi": "10.aa/aa", "openalex_id": "W2", "raw": {"authorships": [
+                    {"author": {"id": "A9", "display_name": "Alan Turing"}, "institutions": [{"display_name": "Cambridge"}]}]}})
+_mc_s22 = _PDoc(source="semantic_scholar", source_id="p2", url="http://s22", title=_mc_ttl, content="c",
+                signals=_mc_sig("citations", 9000, kind="citation", by="t"),
+                metadata={"doi": "10.bb/bb", "external_ids": {"DOI": "10.bb/bb"}})
+_mc_out2 = _mc_dedup([_mc_s22, _mc_oa2])
+_mc_surv2 = _mc_out2[0] if len(_mc_out2) == 1 else None
+if _mc_surv2 is not None:
+    fetcher._place_scholarly_fields([_mc_surv2])
+check("merge-carry: a TITLE-based scholarly merge (diff dois, same long title) ALSO carries the identity",
+      _mc_surv2 is not None and _mc_surv2.source == "semantic_scholar"
+      and (_mc_surv2.metadata or {}).get("author_ids") == ["A9"]
+      and (_mc_surv2.metadata or {}).get("institutions") == ["Cambridge"])
+
+# --- field_skeleton BUDGETED PROJECTION (cartographer._build, 2026-07-15): the RAW citing sentences
+#     (`contexts`) are kept only for the top nodes (capped + short); the long tail drops them for a lean
+#     has_contexts flag -- so the field-map never DUMPS 150k chars into the tool channel (dogfood #11). ---
+import penumbra.core.cartographer as _cart  # noqa: E402
+_fs_works = {f"W{_i}": {"title": f"Paper {_i}", "publication_year": 2025, "cited_by_count": 100 - _i,
+                        "_influential": True, "_intents": ["methodology"],
+                        "_contexts": [{"snippet": "S" * 600, "intents": ["m"]},
+                                      {"snippet": "T" * 600, "intents": ["m"]},
+                                      {"snippet": "U" * 600, "intents": ["m"]}]} for _i in range(17)}
+_fs_out = _cart._build([], _fs_works, max_nodes=250)
+_fs_nodes = _fs_out["nodes"]
+check("field_skeleton budget: a TOP node keeps <=2 citing snippets, each <=240 chars (not the full dump)",
+      isinstance(_fs_nodes[0].get("contexts"), list) and len(_fs_nodes[0]["contexts"]) == 2
+      and all(len(_c["snippet"]) <= 240 for _c in _fs_nodes[0]["contexts"]))
+check("field_skeleton budget: a LONG-TAIL node drops contexts for a lean has_contexts flag",
+      _fs_nodes[-1].get("has_contexts") is True and "contexts" not in _fs_nodes[-1])
+check("field_skeleton budget: only the top _CTX_TOP_NODES keep contexts (the rest are flagged)",
+      sum(1 for _n in _fs_nodes if isinstance(_n.get("contexts"), list)) == _cart._CTX_TOP_NODES)
+
+# --- Phase 1 STRUCTURAL PLACEMENT (fetcher._place_graph_presence, 2026-07-15): an OFF-LOOP store read
+#     stamps each scholarly doc with the graph's STORE-MEMORY of its work (edge counts by type), derived
+#     pure-CPU from the doc ids (+ S2 external_ids fallback). Stub the store con + _stored_edges -> offline. ---
+from penumbra.core.recall import store as _g1_store  # noqa: E402
+from penumbra.core.recall import graph as _g1_graph  # noqa: E402
+_g1_rc, _g1_dis, _g1_se, _g1_ls = (_g1_store._read_con, _g1_store._disabled,
+                                   _g1_graph._stored_edges, _g1_graph.load_statements)
+_g1_doc = _PDoc(source="openalex", source_id="W7", url="http://w7", title="Paper 7", content="c",
+                metadata={"openalex_id": "W7", "doi": "10.9/z"})
+_g1_s2 = _PDoc(source="semantic_scholar", source_id="p7", url="http://p7", title="Paper S", content="c",
+               metadata={"external_ids": {"DOI": "10.8/y"}})   # ids NOT flattened yet: external_ids fallback
+_g1_none = _PDoc(source="hackernews", source_id="h7", url="http://h7", title="HN", content="c")  # no scholarly id
+try:
+    _g1_store._disabled = False
+    _g1_store._read_con = lambda: object()   # a non-None connection sentinel
+    _g1_graph.load_statements = lambda: []   # no statements in the base graph-presence goldens (deterministic)
+    _g1_graph._stored_edges = lambda con, frontier, types: (
+        [{"src": "work:openalex:W7", "dst": "work:openalex:WX", "type": "cites", "method": "api:openalex"},
+         {"src": "work:openalex:WA", "dst": "work:openalex:W7", "type": "cites", "method": "api:openalex"},
+         {"src": "person:openalex:A1", "dst": "work:doi:10.8/y", "type": "authored", "method": "api:s2"}]
+        if any(str(f).startswith("work:") for f in frontier) else [])
+    fetcher._place_graph_presence([_g1_doc, _g1_s2, _g1_none])
+    check("graph-presence: OpenAlex doc's work node → stored_edges counts by type (2 cites) + in_graph=True",
+          _g1_doc.metadata["graph"]["in_graph"] is True
+          and _g1_doc.metadata["graph"]["stored_edges"] == {"cites": 2})
+    check("graph-presence: S2 doc welds via external_ids fallback (work:doi:10.8/y) → 1 authored edge placed",
+          _g1_s2.metadata["graph"]["stored_edges"] == {"authored": 1})
+    check("graph-presence: a doc with NO scholarly id gets NO graph stamp (silent when nothing clears)",
+          "graph" not in (_g1_none.metadata or {}))
+    check("graph-presence: the note labels the counts store-memory, not live bibliometrics (honest as-of)",
+          "not live bibliometrics" in _g1_doc.metadata["graph"]["note"])
+    check("graph-presence: an in_graph hit with NO statement stamps judgments: [] (the write-reflex blank cue)",
+          _g1_doc.metadata["graph"].get("judgments") == [])
+    _g1_doc2 = _PDoc(source="openalex", source_id="W8", url="http://w8", title="P8", content="c",
+                     metadata={"openalex_id": "W8"})
+    _g1_store._read_con = lambda: None
+    fetcher._place_graph_presence([_g1_doc2])
+    check("graph-presence: store read UNAVAILABLE (con None) → fail-open, no graph stamp",
+          "graph" not in (_g1_doc2.metadata or {}))
+finally:
+    (_g1_store._read_con, _g1_store._disabled,
+     _g1_graph._stored_edges, _g1_graph.load_statements) = _g1_rc, _g1_dis, _g1_se, _g1_ls
+
+# --- Phase 1 READ-BACK (fetcher._place_graph_presence + _compact_judgments, 2026-07-15): the write-side loop
+#     close -- the driver's OWN tier-J statements surface AMBIENT on penumbra_search hits, matched by the hit's
+#     work: ids AND its doc: id (doc-keyed statements are make-or-break). Stub load_statements + _stored_edges. ---
+_jr_rc, _jr_dis, _jr_se, _jr_ls = (_g1_store._read_con, _g1_store._disabled,
+                                   _g1_graph._stored_edges, _g1_graph.load_statements)
+_jr_work = _PDoc(source="openalex", source_id="W7", url="http://w7", title="P7", content="c",
+                 metadata={"openalex_id": "W7"})              # in_graph + a work-keyed statement
+_jr_arxiv = _PDoc(source="arxiv", source_id="2604.17693", url="http://ax", title="AX", content="c",
+                  metadata={"arxiv_id": "2604.17693"})        # a DOC-keyed statement (make-or-break)
+_jr_plain = _PDoc(source="openalex", source_id="W9", url="http://w9", title="P9", content="c",
+                  metadata={"openalex_id": "W9"})             # in_graph, UNJUDGED -> judgments: []
+_jr_axv = _PDoc(source="arxiv", source_id="2606.15621v1", url="http://axv", title="Refeed", content="c",
+                metadata={"pdf_url": "http://axv.pdf"})   # arxiv hit: v-SUFFIXED source_id, NO clean arxiv_id (real bug case)
+_jr_stmts = [
+    {"src": "work:openalex:W7", "dst": "topic:label:credit assignment", "type": "anchors",
+     "note": "the anchor of the line"},
+    {"src": "doc:arxiv:2604.17693", "dst": "claim:c3_exact_credit_wedge", "type": "attacks_premise_of",
+     "note": "x" * 400},                                       # long note -> exercises the snippet cap
+    {"src": "doc:arxiv:2606.15621", "dst": "claim:refeed_wedge", "type": "validates_premise_of",
+     "note": "version-LESS arxiv statement -> must surface on a v-suffixed hit"},
+]
+try:
+    _g1_store._disabled = False
+    _g1_store._read_con = lambda: object()
+    _g1_graph.load_statements = lambda: _jr_stmts
+    _g1_graph._stored_edges = lambda con, frontier, types: (
+        [{"src": "work:openalex:W7", "dst": "work:openalex:WX", "type": "cites", "method": "api:openalex"},
+         {"src": "work:openalex:W9", "dst": "work:openalex:WY", "type": "cites", "method": "api:openalex"}]
+        if any(str(f).startswith("work:") for f in frontier) else [])
+    fetcher._place_graph_presence([_jr_work, _jr_arxiv, _jr_plain, _jr_axv])
+    check("read-back: a work-keyed statement surfaces in graph.judgments on its hit (type anchors)",
+          any(j.get("type") == "anchors" for j in _jr_work.metadata["graph"].get("judgments", [])))
+    check("read-back: judgments are tier-J ONLY, NEVER merged into the mechanical stored_edges (the razor line)",
+          "anchors" not in _jr_work.metadata["graph"]["stored_edges"]
+          and _jr_work.metadata["graph"]["stored_edges"] == {"cites": 1})
+    check("read-back: a DOC-keyed statement (doc:arxiv:...) surfaces via the doc: id lookup, not just work: (make-or-break)",
+          any(j.get("type") == "attacks_premise_of" for j in _jr_arxiv.metadata["graph"].get("judgments", [])))
+    check("read-back: a statement-only hit (no stored edge) still gets a graph stamp with its judgment",
+          bool(_jr_arxiv.metadata["graph"].get("judgments")) and "stored_edges" not in _jr_arxiv.metadata["graph"])
+    check("read-back: the long note is snippet-capped (<= _JUDG_NOTE_CHARS + ellipsis)",
+          all(len(j.get("note", "")) <= fetcher._JUDG_NOTE_CHARS + 3
+              for j in _jr_arxiv.metadata["graph"]["judgments"]))
+    check("read-back: dst self-label surfaces the claim id readably (claim:c3_exact_credit_wedge)",
+          any("c3_exact_credit_wedge" in str(j.get("dst", "")) for j in _jr_arxiv.metadata["graph"]["judgments"]))
+    check("read-back: an in_graph but UNJUDGED hit stamps judgments: [] (the write-reflex blank cue)",
+          _jr_plain.metadata["graph"].get("judgments") == []
+          and _jr_plain.metadata["graph"]["in_graph"] is True)
+    check("read-back: an arxiv v-SUFFIXED hit (2606.15621v1, no clean arxiv_id) surfaces a version-LESS statement (dogfood 2026-07-15 fix)",
+          any(j.get("type") == "validates_premise_of"
+              for j in _jr_axv.metadata.get("graph", {}).get("judgments", [])))
+finally:
+    (_g1_store._read_con, _g1_store._disabled,
+     _g1_graph._stored_edges, _g1_graph.load_statements) = _jr_rc, _jr_dis, _jr_se, _jr_ls
+
+# --- Phase 2 SELF-WARM decision (fetcher._selfwarm_candidates, 2026-07-15): which RE-TOUCHED authors earn a
+#     bounded live identity refresh. Pure + testable (gates + revisitation), no loop/network. Stub OA gates. ---
+from penumbra.core import _openalex as _g2_oa  # noqa: E402
+_g2_un, _g2_pb = _g2_oa.unavailable, _g2_oa._pace_backlog_s
+def _g2_doc(seen, src="openalex", co=("Ada Lovelace",), extra=None):
+    m = {"seen_before": seen, "coauthors": list(co)}
+    if extra:
+        m.update(extra)
+    return _PDoc(source=src, source_id="x", url="http://x", title="P", content="c", metadata=m)
+try:
+    _g2_oa._pace_backlog_s = lambda: 0.0
+    _g2_oa.unavailable = lambda: True      # SAFETY gate: budget dry / breaker open
+    check("self-warm: OpenAlex unavailable (budget dry / breaker) → NO warm (safety gate, fail-open)",
+          fetcher._selfwarm_candidates([_g2_doc(True)]) == [])
+    _g2_oa.unavailable = lambda: False
+    _g2_oa._pace_backlog_s = lambda: 5.0   # shared rate gate BUSY
+    check("self-warm: shared rate gate BUSY → NO warm (yields to real interactive traffic)",
+          fetcher._selfwarm_candidates([_g2_doc(True)]) == [])
+    _g2_oa._pace_backlog_s = lambda: 0.0
+    check("self-warm: RE-TOUCHED author (no paper id) → ('resolve', name) identity self-warm",
+          fetcher._selfwarm_candidates([_g2_doc(True)]) == [("resolve", "Ada Lovelace")])
+    check("self-warm: RE-TOUCHED paper WITH a doi → ('enrich', doi) FIRST (integrity), then ('resolve', author)",
+          fetcher._selfwarm_candidates([_g2_doc(True, extra={"doi": "10.1/x"})])
+          == [("enrich", "10.1/x"), ("resolve", "Ada Lovelace")])
+    check("self-warm: a NOT-re-touched (seen_before=False) doc is NOT warmed (revisitation is the primary gate)",
+          fetcher._selfwarm_candidates([_g2_doc(False)]) == [])
+    check("self-warm: a non-scholarly source (seen_before=True) is NOT warmed",
+          fetcher._selfwarm_candidates([_g2_doc(True, src="hackernews")]) == [])
+    check("self-warm: capped at _WARM_CAP total warms/search (1 enrich + 1 resolve fills the cap)",
+          len(fetcher._selfwarm_candidates([_g2_doc(True, extra={"doi": "10.a/a"}), _g2_doc(True, co=("B Two",))]))
+          == fetcher._WARM_CAP == 2)
+    check("self-warm: _selfwarm_revisited with no candidates is a safe no-op (no running loop required)",
+          fetcher._selfwarm_revisited([_g2_doc(False)]) is None)
+finally:
+    _g2_oa.unavailable, _g2_oa._pace_backlog_s = _g2_un, _g2_pb
+
 # --- #10 freshness_days + freshness_class (rank.merge_rank stamps a float age + a mechanical
 #     bucket; None/None for a dateless doc; naive dates handled like _recency). Pure metadata. ---
 from datetime import datetime as _dt42, timezone as _tz42, timedelta as _td42  # noqa: E402
@@ -5487,10 +6370,13 @@ try:
 except ImportError:
     check("graph: penumbra.core.evidence is GONE (absorbed into recall.graph)", True)
 
-# --- overlap_count: each excluded_relevant entry carries an 'overlap' key ---
-_fetch_src = _inspect42.getsource(fetcher.search_many)
+# --- overlap_count: each excluded_relevant entry carries an 'overlap' key. The Wave-2 cutover moved
+#     the selection loop OUT of search_many and INTO build_search_plan (the one authoritative choke
+#     point), so the overlap-hint construction now lives there; the byte-exact hint dict (incl. the
+#     overlap key) is behaviorally pinned by the W1 scenario-3 golden below. ---
+_fetch_src = _inspect42.getsource(fetcher.build_search_plan)
 check("overlap: excluded_relevant entries carry 'overlap' key",
-      '"overlap": _n' in _fetch_src or "'overlap': _n" in _fetch_src)
+      '"overlap":' in _fetch_src or "'overlap':" in _fetch_src)
 
 # --- penumbra_gather: registered; the whitelist is now an explicit STATIC dict (mechanism demoted from
 #     the old _init_gather_tools regex scan) of EXACTLY the twelve read-only names ---
@@ -5691,24 +6577,30 @@ check("sensor: penumbra_sensor dispatcher is registered", callable(_esensor))
 # ---------------------------------------------------------------------------
 
 # --- penumbra_search: raw buckets vs the drill idiom vs the default ranked list, + staleness translation ---
+# S4c-2: penumbra_search is now an ASYNC tool body that AWAITS the async twins (asearch_ranked / asearch_many)
+# for the ranked / buckets routes and runs the sync drill (fetch_one_with_diag) OFF the loop. So the
+# route fakes patch the ASYNC twins (+ the sync drill) and the tool is driven the way mcp awaits it
+# (asyncio.run), not via a .__wrapped__ sync body (which no longer exists post-flip).
+import asyncio as _srch_aio  # noqa: E402
 _srch_real = {
-    "search_ranked": fetcher.search_ranked,
-    "search_many": fetcher.search_many,
+    "asearch_ranked": fetcher.asearch_ranked,
+    "asearch_many": fetcher.asearch_many,
     "fetch_one_with_diag": fetcher.fetch_one_with_diag,
     "is_enabled_by_profile": fetcher.is_enabled_by_profile,
 }
 _srch_seen: dict = {}
 try:
     # Each fake records that its path fired + the kwargs the server translated, and returns that
-    # path's real shape (ranked/drill -> (docs, meta/diag); buckets -> (results_dict, meta)).
-    def _fake_ranked(query, sources, limit, deadline_s=None, fresh=False, semantic=None, cache_only=False):
+    # path's real shape (ranked/drill -> (docs, meta/diag); buckets -> (results_dict, meta)). The ranked
+    # + buckets fakes are async (the tool awaits them); the drill fake is sync (run off-loop via to_thread).
+    async def _fake_ranked(query, sources, limit, deadline_s=None, fresh=False, semantic=None, cache_only=False):
         _srch_seen["path"] = "ranked"
         _srch_seen["fresh"] = fresh
         _srch_seen["cache_only"] = cache_only
         _srch_seen["deadline_s"] = deadline_s
         return [], {"searched": []}
 
-    def _fake_many(query, sources, limit, deadline_s=None, fresh=False):
+    async def _fake_many(query, sources, limit, deadline_s=None, fresh=False, cache_only=False):
         _srch_seen["path"] = "buckets"
         _srch_seen["deadline_s"] = deadline_s
         return {}, {"searched": []}
@@ -5718,53 +6610,55 @@ try:
         _srch_seen["deadline_s"] = kw.get("deadline_s", "unset")
         return [], None
 
-    fetcher.search_ranked = _fake_ranked
-    fetcher.search_many = _fake_many
+    fetcher.asearch_ranked = _fake_ranked
+    fetcher.asearch_many = _fake_many
     fetcher.fetch_one_with_diag = _fake_drill
     fetcher.is_enabled_by_profile = lambda s: True  # the drill checks the profile first
 
     _srch_seen.clear()
-    _r_default = _srv2.penumbra_search.__wrapped__(query="q")
+    _r_default = _srch_aio.run(_srv2.penumbra_search(query="q"))
     check("search route: default (raw=False) -> the ranked path (dedup+rank into one list)",
           _srch_seen.get("path") == "ranked" and "documents" in _r_default)
 
     _srch_seen.clear()
-    _r_buckets = _srv2.penumbra_search.__wrapped__(query="q", raw=True, sources=["a", "b"])
+    _r_buckets = _srch_aio.run(_srv2.penumbra_search(query="q", raw=True, sources=["a", "b"]))
     check("search route: raw=True + many sources -> the per-source buckets path",
           _srch_seen.get("path") == "buckets" and "results" in _r_buckets)
 
     _srch_seen.clear()
-    _r_drill = _srv2.penumbra_search.__wrapped__(query="q", raw=True, sources=["only"], full=True)
+    _r_drill = _srch_aio.run(_srv2.penumbra_search(query="q", raw=True, sources=["only"], full=True))
     check("search route: raw=True + exactly one source -> the drill (old penumbra_fetch) path",
           _srch_seen.get("path") == "drill" and _r_drill.get("source") == "only")
 
     # staleness enum -> engine fresh / cache_only booleans (the MCP-surface translation).
     _srch_seen.clear()
-    _srv2.penumbra_search.__wrapped__(query="q", staleness="fresh")
+    _srch_aio.run(_srv2.penumbra_search(query="q", staleness="fresh"))
     check("search staleness: 'fresh' -> fresh=True, cache_only=False",
           _srch_seen.get("fresh") is True and _srch_seen.get("cache_only") is False)
     _srch_seen.clear()
-    _srv2.penumbra_search.__wrapped__(query="q", staleness="cache_only")
+    _srch_aio.run(_srv2.penumbra_search(query="q", staleness="cache_only"))
     check("search staleness: 'cache_only' -> fresh=False, cache_only=True",
           _srch_seen.get("fresh") is False and _srch_seen.get("cache_only") is True)
     _srch_seen.clear()
-    _r_unknown = _srv2.penumbra_search.__wrapped__(query="q", staleness="bogus")
+    _r_unknown = _srch_aio.run(_srv2.penumbra_search(query="q", staleness="bogus"))
     check("search staleness: an unknown value falls back to cached_ok + adds a note",
           _srch_seen.get("fresh") is False and _srch_seen.get("cache_only") is False
           and "bogus" in (_r_unknown.get("note") or ""))
 finally:
-    fetcher.search_ranked = _srch_real["search_ranked"]
-    fetcher.search_many = _srch_real["search_many"]
+    fetcher.asearch_ranked = _srch_real["asearch_ranked"]
+    fetcher.asearch_many = _srch_real["asearch_many"]
     fetcher.fetch_one_with_diag = _srch_real["fetch_one_with_diag"]
     fetcher.is_enabled_by_profile = _srch_real["is_enabled_by_profile"]
 
 # --- penumbra_read: a document target routes to docreader; a plain URL routes to the URL reader ---
-_read_real = {"read_document": docreader.read_document, "fetch_url": fetcher.fetch_url}
+_read_real = {"read_document": docreader.read_document,
+              "fetch_url_with_reason": fetcher.fetch_url_with_reason}
 _read_seen: dict = {}
 try:
     docreader.read_document = (lambda target, **kw: (_read_seen.__setitem__("path", "document")
                                                      or {"source": "doc", "text": "stub"}))
-    fetcher.fetch_url = (lambda target: (_read_seen.__setitem__("path", "url") or None))
+    # penumbra_read's URL branch now calls fetch_url_with_reason -> (doc, reason); the spy returns a tuple.
+    fetcher.fetch_url_with_reason = (lambda target: (_read_seen.__setitem__("path", "url") or (None, None)))
 
     _read_seen.clear()
     _rd_doc = _srv2.penumbra_read.__wrapped__(target="penumbra-inbox/deck.pptx")
@@ -5780,7 +6674,7 @@ try:
           _read_seen.get("path") == "url" and _rd_url.get("url") == "https://example.com/some/article")
 finally:
     docreader.read_document = _read_real["read_document"]
-    fetcher.fetch_url = _read_real["fetch_url"]
+    fetcher.fetch_url_with_reason = _read_real["fetch_url_with_reason"]
 
 # --- penumbra_view: kind="auto" routes .pdf->document, a video URL->video, a plain image list->images ---
 from penumbra.core import vframes as _vframes  # noqa: E402
@@ -5855,6 +6749,14 @@ if _SERVICES_PATH.exists():
     check("plist-drift: every committed .plist is byte-identical to services.py's registry (gen-plists clean)",
           _plist_rc == 0 and len(_committed_plists) > 0,
           f"gen_plists rc={_plist_rc}, {len(_committed_plists)} plist(s)")
+    # StartInterval ban (2026-07-10): no registry row may schedule with StartInterval. Its relative
+    # timer suspends/drifts across the mini's sleep, silently stalling a periodic job (the sentinel
+    # watchdog sat at runs=1 for hours while every name-only check stayed green); we standardize on
+    # StartCalendarInterval (wall-clock, catches up on wake). services.py owns the rule; asserting it
+    # here makes the deploy gate block reintroducing the drifting timer, offline, before any live check.
+    _interval_rows = _svc.registry_start_interval_rows()
+    check("plist-drift: no registry row schedules with StartInterval (banned: drifts across sleep; use start_calendar)",
+          _interval_rows == [], f"rows still using StartInterval: {_interval_rows}")
     # The four retired sentinels: plists + scripts GONE from scripts/, labels GONE from the registry.
     _SENTINEL_LABELS = ["com.penumbra.sentinel.immigration", "com.penumbra.sentinel.invest",
                         "com.penumbra.sentinel.research", "com.penumbra.sentinel.residency"]
@@ -6055,12 +6957,16 @@ _p2_db_prev = _rstore.DB_PATH
 _p2_disabled_prev = _rstore._disabled
 _p2_local_prev = _rstore._local
 _p2_writes_prev = _recall.writer.WRITES_ENABLED
+_p2_journal_prev = getattr(_recall.writer, "_observation_journal", None)
+_p2_wake_prev = _recall.writer._JOURNAL_WAKE.is_set()
 _p2_iswalled_prev = fetcher.is_walled_source
 _p2_remember_prev = _prof.remember_walled_retrievals
 _p2_prof_in_writer = None  # profile module the writer sees (patched below); restored in finally
 _rstore.DB_PATH = Path(_tf47.mkdtemp()) / "smoke_p2.db"
 _rstore._disabled = False
 _rstore._local = _thr47.local()  # fresh per-thread conn cache -> _read_con() reconnects to THIS db
+_recall.writer._observation_journal = _recall.writer.ObservationJournal(Path(_tf47.mkdtemp()) / "smoke_p2_journal")
+_recall.writer._JOURNAL_WAKE.clear()
 try:
     check("P2.0: index init creates the tables in the temp db", _rstore.init())
     _p2con = _rstore.connect()
@@ -6084,7 +6990,7 @@ try:
             except Exception:  # noqa: BLE001
                 break
         if items:
-            _recall.writer._apply(_p2con, items)
+            _recall.writer._process_writer_items(_p2con, items)
 
     _recall.writer.WRITES_ENABLED = True
 
@@ -6310,6 +7216,11 @@ finally:
     _rstore.DB_PATH = _p2_db_prev
     _rstore._disabled = _p2_disabled_prev
     _rstore._local = _p2_local_prev
+    _recall.writer._observation_journal = _p2_journal_prev
+    if _p2_wake_prev:
+        _recall.writer._JOURNAL_WAKE.set()
+    else:
+        _recall.writer._JOURNAL_WAKE.clear()
 
 
 # ---------------------------------------------------------------------------
@@ -6348,7 +7259,7 @@ try:
             except Exception:  # noqa: BLE001
                 break
         if _items:
-            _recall.writer._apply(_t49con, _items)
+            _recall.writer._process_writer_items(_t49con, _items)
 
     # (1) CARTOGRAPHER TAP golden fixture. A ``works`` dict shaped like the field_skeleton _build input
     #     (id -> normalized work). TWO OpenAlex works: W1 carries an author WITH an id, a concept WITH
@@ -7404,7 +8315,7 @@ finally:
 #     (silent), plus a third that raises (isolated into "failed").
 _tmp_tick53 = _Path44(_tempfile44.mktemp(suffix=".json"))
 _run_real53 = _sen53.run_sensor
-_bark_real53 = _sen53._bark_push
+_bark_real53 = _sen53._alert
 try:
     _st_tick53 = _Store53(_tmp_tick53)
     _st_tick53.update(_Sensor53(id="s_hit", query="hit query", schedule="daily", notify=True))
@@ -7420,7 +8331,7 @@ try:
         return {"sensor_id": sensor.id, "query": sensor.query, "new_count": new_count,
                 "new_titles": ["New Title A", "New Title B"][:new_count]}
     _sen53.run_sensor = _fake_run53
-    _sen53._bark_push = _fake_bark53
+    _sen53._alert = _fake_bark53
     # all three are never-run -> all due. now() is real; the fakes ignore time.
     _tick53 = _sen53.scheduler_tick(_st_tick53)
     check("p6-A scheduler_tick: checked counts all due sensors", _tick53.get("checked") == 3)
@@ -7434,7 +8345,7 @@ try:
           "2" in _barks53[0][1] and "New Title A" in _barks53[0][1])
 finally:
     _sen53.run_sensor = _run_real53
-    _sen53._bark_push = _bark_real53
+    _sen53._alert = _bark_real53
     _tmp_tick53.unlink(missing_ok=True)
 
 # (3a) start_scheduler REFUSES to start unless writer.WRITES_ENABLED is truthy (the scheduler only
@@ -7447,6 +8358,34 @@ import penumbra.core.recall.writer as _wr53  # noqa: E402
 _writes_real53 = _wr53.WRITES_ENABLED
 _started_real53 = _jobs53._scheduler_started
 _shipped_real53 = _jobs53._shipped_registered
+_make_real53 = _jobs53._make_scheduler_heartbeat
+_heartbeat_real53 = _jobs53._scheduler_heartbeat
+_contract_error_real53 = _jobs53._scheduler_contract_error
+
+
+class _SmokeHeartbeat53:
+    def __init__(self):
+        self.build_id = "a" * 40
+        self.generation = "12345678-1234-4234-8234-123456789abc"
+        self.tick_seq = 0
+        self.last_emitted_at_utc = None
+        self.artifacts = type("Artifacts", (), {
+            "schema_digest": "b" * 64,
+            "policy_digest": "c" * 64,
+            "mode": "calibration-probe",
+        })()
+
+    def publish_starting(self):
+        return {}
+
+    def begin_tick(self):
+        self.tick_seq += 1
+        return {}
+
+    def publish_running(self):
+        return {}
+
+
 try:
     _wr53.WRITES_ENABLED = False
     _jobs53._scheduler_started = False
@@ -7460,6 +8399,7 @@ try:
     #      register the live rows into the smoke's process on a re-run.
     _wr53.WRITES_ENABLED = True
     _jobs53._scheduler_started = False
+    _jobs53._make_scheduler_heartbeat = lambda **_: _SmokeHeartbeat53()
     _th53_a = _jobs53.start_scheduler(interval_s=3600, initial_delay_s=3600)  # long delays: it just sleeps
     _th53_b = _jobs53.start_scheduler(interval_s=3600, initial_delay_s=3600)
     check("p6-A start_scheduler: first start (writes on) returns a daemon Thread",
@@ -7470,6 +8410,9 @@ finally:
     _wr53.WRITES_ENABLED = _writes_real53
     _jobs53._scheduler_started = _started_real53  # the started daemon is a harmless sleeping thread
     _jobs53._shipped_registered = _shipped_real53
+    _jobs53._make_scheduler_heartbeat = _make_real53
+    _jobs53._scheduler_heartbeat = _heartbeat_real53
+    _jobs53._scheduler_contract_error = _contract_error_real53
 
 # (4) the sensor _bark_push is FAIL-OPEN: an ABSENT credentials file is a silent no-op (never raises),
 #     so a deployment with no bark.json simply pushes nothing. P9 lifted the push impl into
@@ -7477,13 +8420,28 @@ finally:
 #     Point that path at a missing file and confirm both the notify primitive AND the sensor alias
 #     no-op without raising.
 import penumbra.core.notify as _notify53  # noqa: E402
-_bark_creds_real53 = _notify53._BARK_CREDS_PATH
+# 2026-08-12: Bark was DELETED from the fleet (unreachable from the mini while every alarm went to
+# it alone, so alarms were written, counted, and delivered nowhere). WeCom is the one channel, and
+# the push now REPORTS delivery: the alarm lane must be able to tell a dead siren from a live one,
+# which a silent None cannot. The fail-open contract is unchanged and is what this checks.
+# The delivery ledger is isolated too: notify.alert WRITES to it, and this check deliberately
+# provokes an undelivered alarm, so a shared path would have the smoke gate inject a permanent fake
+# fault into the daily audit's production state. A test that dirties what it measures is the same
+# disease this whole lane exists to catch.
+_wecom_creds_real53 = _notify53._WECOM_CREDS_PATH
+_alert_ledger_real53 = _notify53._ALERT_DELIVERY_PATH
 try:
-    _notify53._BARK_CREDS_PATH = _Path44(_tempfile44.mktemp(suffix=".json"))  # does not exist
-    check("p6-A _bark_push: fail-open no-op when the credentials file is absent (no raise)",
-          _notify53.bark_push("t", "b") is None and _sen53._bark_push("t", "b") is None)
+    _notify53._ALERT_DELIVERY_PATH = _Path44(_tempfile44.mktemp(suffix=".json"))
+    _notify53._WECOM_CREDS_PATH = _Path44(_tempfile44.mktemp(suffix=".json"))  # does not exist
+    check("p6-A alarm lane: fail-open when the credentials file is absent (no raise, reports False)",
+          _notify53.wecom_push("t", "b") is False and _sen53._alert("t", "b") is None)
+    check("p6-A alarm lane: an undeliverable alarm returns NO channels (never a pretended success)",
+          _notify53.alert("t", "b") == [])
+    check("p6-A Bark is fully deleted: no push primitive and no creds path survive",
+          not hasattr(_notify53, "bark_push") and not hasattr(_notify53, "_BARK_CREDS_PATH"))
 finally:
-    _notify53._BARK_CREDS_PATH = _bark_creds_real53
+    _notify53._WECOM_CREDS_PATH = _wecom_creds_real53
+    _notify53._ALERT_DELIVERY_PATH = _alert_ledger_real53
 
 # (5) THE SECOND PATH IS DELETED: scripts/sensor_runner.py is gone, and NO in-repo file references
 #     the token "sensor_runner" (a memory-less cron runner is not fixed, it is removed). Grep-style
@@ -7938,7 +8896,7 @@ check("p7 W3 tripwire: the recall search arm never references vec_thin / thin ma
 #     sentinel, state-backup, and the CDP browsers; everything else became a job row. Cover: the pure
 #     schedule parser (every valid form + garbage) + the calendar due-ness matrix; the registry
 #     (duplicate/unknown refused, profile override, every shipped row shippable); the tick body
-#     (heartbeat touched, failing job isolated + Barked once per cooldown, serial order); the
+#     (heartbeat published, failing job isolated + Barked once per cooldown, serial order); the
 #     transplant cores (source-health N_CONSECUTIVE, log rotation, digest no-op, warmer importable);
 #     the sentinel offline (dead healthz -> kickstart, stale heartbeat -> distinct alarm, maintenance
 #     pauses CDP heal, and the ISOLATION tripwire that it imports zero penumbra); and the deletion sweep.
@@ -8049,36 +9007,79 @@ try:
     _J57._REGISTRY.clear()
     _J57._shipped_registered = False
     _J57.register_shipped_jobs()
-    _EXPECT_ROWS = {"sensors", "source-health", "wewerss-probe", "session-warmer", "log-rotation",
-                    "curator", "source-audit", "digest"}
+    # offmachine-audit joined the fleet 2026-08-11: the daily content check on every off-machine
+    # backup destination, added after the brain mirror died silently for fifteen days.
+    _EXPECT_ROWS = {"sensors", "source-health", "source-health-fast", "wewerss-probe",
+                    "session-warmer", "log-rotation", "nserc-prime", "curator", "source-audit",
+                    "digest", "offmachine-audit"}
     check("p9 registry tripwire: the shipped rows are exactly the P9 fleet",
           set(_J57._REGISTRY.keys()) == _EXPECT_ROWS)
     _bad_rows = [n for n, r in _J57._REGISTRY.items()
                  if not callable(r.fn) or not isinstance(r.schedule, _J57.Schedule)]
     check("p9 registry tripwire: every shipped row's fn is callable + its schedule parsed",
           not _bad_rows, str(_bad_rows))
-    check("p9 registry tripwire: curator + source-audit ship ENABLED (ignition), digest ships DISABLED",
+    check("p9 registry tripwire: curator + source-audit + digest ship ENABLED (digest no-ops without a themes file)",
           _J57._REGISTRY["curator"].enabled is True and _J57._REGISTRY["source-audit"].enabled is True
-          and _J57._REGISTRY["digest"].enabled is False)
+          and _J57._REGISTRY["digest"].enabled is True)
     _bad_budgets = [n for n, r in _J57._REGISTRY.items()
                     if not (0 < r.budget_s <= _J57._MAX_JOB_BUDGET_S)]
     check("p9 registry tripwire: every shipped budget stays under the sentinel-wedge ceiling",
           not _bad_budgets, str(_bad_budgets))
+    _np_row = _J57._REGISTRY.get("nserc-prime")
+    check("p9 registry: nserc-prime ships monthly@1-03:30 (fn run_nserc_prime, budget 300s > adapter 240s httpx, enabled)",
+          _np_row is not None and _np_row.schedule.raw == "monthly@1-03:30"
+          and _np_row.budget_s == 300 and _np_row.enabled is True)
 finally:
     _J57._REGISTRY.clear()
     _J57._REGISTRY.update(_reg_real57b)
     _J57._shipped_registered = _shipped_real57
 
-# (3) SCHEDULER LOOP MECHANICS (no thread: call the tick body directly): heartbeat touched; a failing
+# (2c) nserc-prime BEHAVIOR (offline): a successful pull caches the CS/AI subset with a TTL that
+#      OUTLASTS the monthly cadence; an empty/raised pull keeps the existing cache (never caches [],
+#      fail-open). Stub the 56MB fetch + the cache write so the job body is pure + networkless. This
+#      is the job that decouples nserc's ~96s bulk refetch from the 90s-bounded query path.
+import penumbra.core.infra_jobs as _NPj  # noqa: E402
+from penumbra.core.sources.api import nserc_awards_source as _NPsrc  # noqa: E402
+from penumbra.core import cache as _NPcache  # noqa: E402
+_NP_saved: dict = {}
+_NP_of, _NP_os = _NPsrc.NSERCAwardsAdapter._fetch_filter_build, _NPcache.set_docs
+try:
+    _NPsrc.NSERCAwardsAdapter._fetch_filter_build = lambda self: ["D1", "D2", "D3"]
+    _NPcache.set_docs = lambda k, d, ttl=None, **kw: _NP_saved.update({"n": len(d), "ttl": ttl})
+    _NP_ok = _NPj.run_nserc_prime()
+    check("nserc-prime: a successful pull caches the CS/AI subset with a TTL > the monthly cadence (45d)",
+          _NP_ok.get("ok") is True and _NP_ok.get("docs") == 3
+          and _NP_saved.get("n") == 3 and _NP_saved.get("ttl") == 45 * 86400)
+    _NP_saved.clear()
+    _NPsrc.NSERCAwardsAdapter._fetch_filter_build = lambda self: []
+    _NP_empty = _NPj.run_nserc_prime()
+    check("nserc-prime: an empty pull keeps the existing cache (never caches [], fail-open)",
+          _NP_empty.get("ok") is False and not _NP_saved)
+finally:
+    _NPsrc.NSERCAwardsAdapter._fetch_filter_build = _NP_of
+    _NPcache.set_docs = _NP_os
+
+# (3) SCHEDULER LOOP MECHANICS (no thread: call the tick body directly): heartbeat published; a failing
 #     job is isolated (never stops the rest) + Barked ONCE per cooldown; serial order = registration.
 _st57_dir = _Path44(_tf57.mkdtemp())
 _state_real57, _hb_real57 = _J57.STATE_PATH, _J57.HEARTBEAT_PATH
+_hb_producer_real57 = _J57._scheduler_heartbeat
+_hb_error_real57 = _J57._scheduler_contract_error
 _reg_real57c, _shipped_real57c = dict(_J57._REGISTRY), _J57._shipped_registered
 import penumbra.core.notify as _notify57  # noqa: E402
-_bark_real57 = _notify57.bark_push
+_bark_real57 = _notify57.alert
 try:
     _J57.STATE_PATH = _st57_dir / "scheduler-state.json"
     _J57.HEARTBEAT_PATH = _st57_dir / "scheduler-heartbeat"
+    _J57._scheduler_heartbeat = _J57.SchedulerHeartbeat(
+        path=_J57.HEARTBEAT_PATH,
+        artifacts=_J57.load_contract_artifacts(),
+        build_id="a" * 40,
+        host_boot_id="smoke-boot-session",
+        penumbra_pid=123,
+    )
+    _J57._scheduler_contract_error = None
+    _J57._scheduler_heartbeat.publish_starting()
     _J57._REGISTRY.clear()
     _order57 = []
     _J57.register_job("j_a", "every:1s", lambda: _order57.append("j_a"))
@@ -8088,9 +9089,9 @@ try:
     _J57.register_job("j_b", "every:1s", _boom57)
     _J57.register_job("j_c", "every:1s", lambda: _order57.append("j_c"))
     _barks57 = []
-    _notify57.bark_push = lambda title, body, group="Penumbra": _barks57.append(title)
+    _notify57.alert = lambda title, body, **kw: _barks57.append(title)
     _r1 = _J57.run_due_jobs(now=1000.0)
-    check("p9 tick: the heartbeat dead-man file is touched every tick",
+    check("p9 tick: the structured heartbeat is published every tick",
           _J57.HEARTBEAT_PATH.exists())
     check("p9 tick: a failing job is isolated (ran the rest, failed only the raiser)",
           _r1["ran"] == ["j_a", "j_c"] and _r1["failed"] == ["j_b"] and _r1["checked"] == 3)
@@ -8107,7 +9108,7 @@ try:
 
     # (3b) P9-GATE fixes (adversarial-review catches, verified here):
     # per-job BUDGET: a job past its wall-clock budget is skipped (the tick moves on, the run
-    # zombies out harmlessly), Barked, and its last_run still advances; the heartbeat is touched
+    # zombies out harmlessly), Barked, and its last_run still advances; the heartbeat is published
     # BEFORE every job so staleness is bounded by ONE budget, never the serial sum.
     _J57._REGISTRY.clear()
     _barks57.clear()
@@ -8129,7 +9130,7 @@ try:
             return True
     check("p9 gate: register_job refuses a budget of 0 or past the sentinel-wedge ceiling",
           _reg_raises57(budget_s=0) and _reg_raises57(budget_s=_J57._MAX_JOB_BUDGET_S + 1))
-    # heartbeat BEFORE every job: a job that deletes the file mid-tick finds it re-touched
+    # heartbeat BEFORE every job: a job that deletes the file mid-tick finds it republished
     # before the NEXT job runs (bounded staleness), and it exists again at tick end.
     _J57._REGISTRY.clear()
     _hb_seen57: list = []
@@ -8137,11 +9138,13 @@ try:
     _J57.register_job("j_see", "every:1s",
                       lambda: _hb_seen57.append(_J57.HEARTBEAT_PATH.exists()))
     _J57.run_due_jobs(now=3000.0)
-    check("p9 gate: the heartbeat is touched BEFORE every job, not once per tick",
+    check("p9 gate: the heartbeat is published BEFORE every job, not once per tick",
           _hb_seen57 == [True])
 finally:
-    _notify57.bark_push = _bark_real57
+    _notify57.alert = _bark_real57
     _J57.STATE_PATH, _J57.HEARTBEAT_PATH = _state_real57, _hb_real57
+    _J57._scheduler_heartbeat = _hb_producer_real57
+    _J57._scheduler_contract_error = _hb_error_real57
     _J57._REGISTRY.clear(); _J57._REGISTRY.update(_reg_real57c)
     _J57._shipped_registered = _shipped_real57c
 
@@ -8264,7 +9267,10 @@ if _SENT is not None:
     _kicks57 = []
     _sbarks57 = []
     _real_http57, _real_cdp57, _real_kick57 = _SENT._http_ok, _SENT._cdp_alive, _SENT._kickstart
-    _real_bark57, _real_should57 = _SENT.bark_push, _SENT.should_alert
+    _real_bark57, _real_should57 = _SENT.wecom_push, _SENT.should_alert
+    _watchdog_globals57 = _SENT.run_watchdog.__globals__
+    _real_push57 = _watchdog_globals57["push"]
+    _real_watchdog_should57 = _watchdog_globals57["should_alert"]
     _real_eye_state, _real_sched_state, _real_cdp_state = _SENT.EYE_STATE, _SENT.SCHED_STATE, _SENT.CDP_STATE
     _real_hb57, _real_maint57 = _SENT.HEARTBEAT_PATH, _SENT.MAINT_FLAG
     try:
@@ -8274,8 +9280,12 @@ if _SENT is not None:
         _SENT.HEARTBEAT_PATH = _sent_dir57 / "heartbeat"
         _SENT.MAINT_FLAG = _sent_dir57 / "cdp-maintenance"
         _SENT._kickstart = lambda svc, timeout=15: _kicks57.append(svc)
-        _SENT.bark_push = lambda title, body, **kw: (_sbarks57.append(title) or True)
+        _SENT.wecom_push = lambda title, body, **kw: (_sbarks57.append(title) or True)
         _SENT.should_alert = lambda key, alerts, cd: True  # always past cooldown in the test
+        _watchdog_globals57["push"] = (
+            lambda channel, title, body, **kw: (_sbarks57.append(title) or True)
+        )
+        _watchdog_globals57["should_alert"] = lambda key, alerts, cd: True
 
         # (i) dead healthz -> the heal path kickstarts the eye (and, still dead, returns down).
         _SENT._http_ok = lambda url, timeout=8.0: False
@@ -8318,7 +9328,9 @@ if _SENT is not None:
               _rc_cdp == 0 and _kicks57 == [])
     finally:
         (_SENT._http_ok, _SENT._cdp_alive, _SENT._kickstart) = _real_http57, _real_cdp57, _real_kick57
-        _SENT.bark_push, _SENT.should_alert = _real_bark57, _real_should57
+        _SENT.wecom_push, _SENT.should_alert = _real_bark57, _real_should57
+        _watchdog_globals57["push"] = _real_push57
+        _watchdog_globals57["should_alert"] = _real_watchdog_should57
         _SENT.EYE_STATE, _SENT.SCHED_STATE, _SENT.CDP_STATE = _real_eye_state, _real_sched_state, _real_cdp_state
         _SENT.HEARTBEAT_PATH, _SENT.MAINT_FLAG = _real_hb57, _real_maint57
 
@@ -8963,6 +9975,27 @@ try:
     check("statement (1): same_as / not_same_as are REFUSED with an penumbra_ruling pointer in the message",
           _s59_same and _s59_notsame
           and "penumbra_ruling" in _s59_same_msg and "penumbra_ruling" in _s59_notsame_msg)
+    # (1b) ANTI-FRAGMENTATION (2026-07-15): _is_hand_minted / _anchor_tokens / _similar_anchor_ids + the
+    #      penumbra_statement create echo -> surface a near-match hand-minted anchor so a slightly-different mint
+    #      does not silently orphan. Pure helpers first, then the tool wiring on the same temp path.
+    check("statement (1b): _is_hand_minted true for synthetic/label ids, false for deterministic backend ids",
+          _graph._is_hand_minted("claim:c3_exact_credit_wedge") and _graph._is_hand_minted("topic:label:credit assignment")
+          and not _graph._is_hand_minted("work:openalex:W1") and not _graph._is_hand_minted("doc:arxiv:2401"))
+    check("statement (1b): _anchor_tokens takes the local part, drops <3-char noise (c3 dropped)",
+          _graph._anchor_tokens("claim:c3_exact_credit_wedge") == {"exact", "credit", "wedge"})
+    _s59_frag = [{"src": "doc:arxiv:1", "dst": "claim:c3_exact_credit_wedge", "type": "attacks_premise_of", "note": "n"},
+                 {"src": "doc:arxiv:2", "dst": "claim:turn_level_credit", "type": "anchors", "note": "n"}]
+    check("statement (1b): _similar_anchor_ids surfaces the same-kind token-overlap anchor (c3_wedge ~ c3_exact_credit_wedge)",
+          _graph._similar_anchor_ids("claim:c3_wedge", _s59_frag) == ["claim:c3_exact_credit_wedge"])
+    check("statement (1b): a deterministic backend id never fragments -> no echo",
+          _graph._similar_anchor_ids("work:openalex:W1", _s59_frag) == [])
+    # similar_anchors (the create-echo builder the penumbra_statement tool surfaces): a near-duplicate hand-minted
+    # dst echoes the existing anchor; a deterministic src never fragments (no src key).
+    _s59_sim = _graph.similar_anchors("doc:arxiv:10", "claim:c3_credit_wedge", _s59_frag)
+    check("statement (1b): similar_anchors echoes a near-duplicate hand-minted dst, and NEVER the deterministic src",
+          _s59_sim.get("dst") == ["claim:c3_exact_credit_wedge"] and "src" not in _s59_sim)
+    check("statement (1b): similar_anchors is EMPTY when neither endpoint is a fragmenting hand-minted id",
+          _graph.similar_anchors("doc:arxiv:10", "work:openalex:W5", _s59_frag) == {})
 finally:
     _graph.STATEMENTS_PATH = _s59_path_prev
 
@@ -9179,7 +10212,9 @@ check("p8 docs-drift (presence): penumbra_statement is named in _PENUMBRA_INSTRU
 # ---------------------------------------------------------------------------
 
 # --- W1 (a): a real broad search_many _meta, via a temporary synthetic FAST adapter (save/restore the
-#     registry). Broad (sources=None) so the excluded / progressive machinery actually runs. ---
+#     registry). Broad (sources=None) so the excluded / progressive machinery actually runs. The
+#     adapter egress funnel is replaced with a pure empty-result stub: this section tests orchestration
+#     metadata, not 219 upstreams, and the deploy smoke must stay deterministic and offline. ---
 class _P11FastAdapter:
     name = "_p11_fast_synthetic"
     needs_credentials = False
@@ -9191,10 +10226,22 @@ class _P11FastAdapter:
     def health_check(self):
         return True, "ok"
 
-_p11_reg_prev = dict(fetcher._adapters)
+_p11_egress_real = fetcher._egress
+_p11_egress_calls: list[str] = []
+
+
+def _p11_offline_egress(adapter, query, limit):
+    _p11_egress_calls.append(adapter.name)
+    return []
+
+
 try:
+    fetcher._egress = _p11_offline_egress
     fetcher.register_adapter_live(_P11FastAdapter())
     _p11_results, _p11_meta = fetcher.search_many("p11 smoke query", sources=None, limit_per_source=3)
+    check("P11 W1: the broad metadata fixture stays offline while exercising every planned source",
+          "_p11_fast_synthetic" in _p11_egress_calls
+          and len(_p11_egress_calls) == _p11_meta.get("searched"))
     # excluded_count is an INT; the full excluded MAP is GONE from _meta (it lives in penumbra_sources now).
     check("P11 W1: broad _meta carries excluded_count (int) and NO excluded map",
           isinstance(_p11_meta.get("excluded_count"), int) and "excluded" not in _p11_meta)
@@ -9215,8 +10262,12 @@ try:
           and isinstance(_p11_meta.get("truncated"), list)
           and isinstance(_p11_meta.get("timed_out"), list))
 finally:
-    fetcher._adapters.clear()
-    fetcher._adapters.update(_p11_reg_prev)
+    fetcher._egress = _p11_egress_real
+    # Restore through the sanctioned live API (the exact inverse of the register_adapter_live above),
+    # NOT a direct _adapters.clear()/.update(): unregister_adapter fires the Layer-1 catalog hook, so
+    # the materialized snapshot stays coherent with the registry (a bare dict swap would leave the
+    # synthetic stranded in the catalog and false-trip the drift-guard). Idempotent if the register raised.
+    fetcher.unregister_adapter("_p11_fast_synthetic")
 
 # --- W1 (b): the CATALOG guarantee. penumbra_sources' roster carries each excluded source's explicit_only
 #     REASON string (so removing the full map from _meta loses nothing; it is one call away). ---
@@ -9247,10 +10298,12 @@ _p11_sb_docs = [_doc("arxiv", "P11 W2 Completeness Doc One Long Enough Title Her
                       title="P11 W2 Bare Metadata Straggler Long Enough Title", content="x", metadata={})]
 _p11_sb_disabled_prev = _rstore._disabled
 try:
-    _rstore._disabled = True   # recall unavailable → the fail-open path must STILL stamp every doc
+    _rstore._disabled = True   # recall unavailable → the honest UNKNOWN path must STILL stamp every doc
     fetcher._stamp_seen_before(_p11_sb_docs, _time48.time())
-    check("P11 W2: with recall disabled, EVERY ranked doc still carries seen_before=False + first_seen_at=None",
-          all(_d.metadata.get("seen_before") is False and _d.metadata.get("first_seen_at") is None
+    # Wave 3 (1.14) DELIBERATE amendment: recall disabled is "memory UNAVAILABLE" (seen_before=None,
+    # JSON null = UNKNOWN), no longer a False that masqueraded as verified-new. Both keys still present.
+    check("P11 W2: with recall disabled, EVERY ranked doc still carries seen_before=None (memory unavailable) + first_seen_at=None",
+          all(_d.metadata.get("seen_before") is None and _d.metadata.get("first_seen_at") is None
               and "seen_before" in _d.metadata and "first_seen_at" in _d.metadata
               for _d in _p11_sb_docs))
 finally:
@@ -9380,7 +10433,7098 @@ finally:
     _root61.removeHandler(_tmph61)
 
 
+# ---------------------------------------------------------------------------
+# 62. Lexical layer covers every letter script + transcripts enter the memory (2026-07-05).
+#     Live ko probe: hangul was INVISIBLE to tokenize (lexical=0 → the ranker lost its relevance
+#     anchor and freshness/engagement pushed noise to 0.82), while ASR can transcribe Korean audio
+#     into exactly such text; "café" was mangled to "caf"; Cyrillic dropped entirely; and a
+#     transcript lived only in the URL-keyed cache ("which podcast said X" unanswerable).
+#     Fixes: relevance._TOKEN three-class scan + SEG_VERSION 3 + rank._norm_title keeps all
+#     letters + asr._remember_transcript -> recall.writer.ingest_produced (full lane).
+# ---------------------------------------------------------------------------
+from penumbra.core import relevance as _rel62  # noqa: E402
+
+check("62 tokenize: hangul enters the lexical layer as bigrams (was invisible)",
+      _rel62.tokenize("서울에서") == ["서울", "울에", "에서"])
+check("62 tokenize: a lone hangul char stands alone",
+      _rel62.tokenize("손") == ["손"])
+check("62 tokenize: a cyrillic word is one token (was dropped entirely)",
+      _rel62.tokenize("русский") == ["русский"])
+check("62 tokenize: diacritic latin stays whole (was mangled to 'caf'/'ber')",
+      _rel62.tokenize("Café über") == ["café", "über"])
+check("62 tokenize: zh + en behavior unchanged (bigrams + ascii words, now in text order)",
+      _rel62.tokenize("多智能体 credit assignment") == ["多智", "智能", "能体", "credit", "assignment"])
+check("62 query_terms: hangul terms survive query segmentation",
+      "서울" in _rel62.query_terms("서울 손") and "손" in _rel62.query_terms("서울 손"))
+
+import penumbra.core.rank as _rank62  # noqa: E402
+check("62 fingerprint: korean / cyrillic titles no longer normalize to '' (no fp-blind script)",
+      _rank62._norm_title("로봇 손의 내구성") != "" and _rank62._norm_title("Русский заголовок") != ""
+      and _rank62._norm_title("로봇 손의 내구성") != _rank62._norm_title("완전히 다른 제목입니다"))
+check("62 fingerprint: ascii + CJK titles keep their exact old normalization (regression)",
+      _rank62._norm_title("Exact Is Easier: Credit!") == "exactiseasiercredit"
+      and _rank62._norm_title("多智能体, credit") == "多智能体credit")
+
+import penumbra.core.recall.store as _rstore62  # noqa: E402
+check("62 seg: SEG_VERSION bumped to 3 (tokenizer derivation changed -> re-segment on touch)",
+      _rstore62.SEG_VERSION == 3)
+
+# transcript -> memory seam: capture what asr._remember_transcript hands the writer (no real queue).
+import penumbra.core.asr as _asr62  # noqa: E402
+import penumbra.core.recall.writer as _w62  # noqa: E402
+_cap62: list = []
+_ip62 = _w62.ingest_produced
+_w62.ingest_produced = lambda docs: _cap62.extend(docs)
+try:
+    _asr62._remember_transcript({"url": "https://ex.com/ep", "transcript": "开可乐 彩排 不稳定",
+                                 "title": "E217", "start_seconds": 340, "duration_seconds": 210,
+                                 "model": "SenseVoice-Small", "source": "generic", "audio_seconds": 210})
+    _asr62._remember_transcript({"url": "https://ex.com/empty", "transcript": "   ", "title": "E"})
+    _asr62._remember_transcript({"url": "https://ex.com/err", "transcript": "text", "error": "boom", "title": "E"})
+finally:
+    _w62.ingest_produced = _ip62
+check("62 transcript memory: a successful transcript becomes a slice-keyed full-lane 'asr' doc",
+      len(_cap62) == 1 and _cap62[0].source == "asr" and _cap62[0].source_id == "https://ex.com/ep#t=340s+210s"
+      and _cap62[0].content == "开可乐 彩排 不稳定" and "transcript" in _cap62[0].tags
+      and "[transcript 340s+210s]" in _cap62[0].title)
+check("62 transcript memory: empty / errored transcripts never enter memory", len(_cap62) == 1)
+check("62 transcript memory: ingest_produced is a silent no-op off the serving process (cron safety)",
+      _w62.ingest_produced(_cap62) is None)
+
+# ---------------------------------------------------------------------------
+# 63. RSS diagnosability: non-feed bodies refused; diag capture survives the
+#     bundle's ThreadPoolExecutor; all-feeds-failed empties cached only briefly
+#     (the 2026-07-09 sg_immigration misdiagnosis: both walls invisible because
+#     worker-thread notes vanished and the empty was cached for the full TTL).
+# ---------------------------------------------------------------------------
+from penumbra.core import diag as _diag63
+from penumbra.core.sources.scrape import _rss as _r63
+
+_RSS_OK63 = ('<?xml version="1.0"?><rss version="2.0"><channel><title>T</title>'
+             '<item><title>hello world</title><link>https://e.x/1</link></item></channel></rss>')
+_RSS_EMPTY63 = '<?xml version="1.0"?><rss version="2.0"><channel><title>T</title></channel></rss>'
+_CF63 = ('<!DOCTYPE html><html><head><title>Just a moment...</title></head>'
+         '<body>Checking if the site connection is secure</body></html>')
+
+_p63 = _r63._parse_or_refuse(_CF63, "https://walled.example/feed", status=200)
+check("63 rss: a challenge/error page served as 200 is REFUSED (None), not a silent zero-entry feed",
+      _p63 is None)
+_p63b = _r63._parse_or_refuse(_RSS_EMPTY63, "https://ok.example/feed", status=200)
+check("63 rss: a VALID feed with zero entries stays a parsed feed (legitimate empty, not refused)",
+      _p63b is not None and (_p63b.get("version") or "") == "rss20")
+_p63c = _r63._parse_or_refuse(_RSS_OK63, "https://ok.example/feed", status=200)
+check("63 rss: a feed with entries parses untouched", _p63c is not None and len(_p63c.entries) == 1)
+_diag63.enable()
+_r63._parse_or_refuse(_CF63, "https://walled.example/feed", status=200)
+_caps63 = _diag63.drain()
+check("63 rss: the refused non-feed body lands in an armed diag capture (status + body snippet)",
+      len(_caps63) == 1 and _caps63[0]["helper"] == "rss.fetch_feed"
+      and _caps63[0].get("status") == 200 and "Just a moment" in _caps63[0].get("body", ""))
+
+
+class _Resp63:
+    status_code = 200
+    def __init__(self, body): self.content = body.encode()
+
+
+class _Bundle63(_r63.RSSAdapterBase):
+    name = "smoke63_bundle"
+    feeds = ["https://dead.example/a", "https://dead.example/b"]
+    cache_ttl = 7200
+
+
+_set63: dict = {}
+_g63_real, _cget63, _cset63 = _r63.http.get, _r63.cache.get_docs, _r63.cache.set_docs
+def _g63_dead(url, **kw):  # mimic http.get's real failure branch: note from the WORKER thread
+    _diag63.note("http.get", url=url, status=504, body="<html>504 Gateway Time-out</html>")
+    return None
+try:
+    _r63.cache.get_docs = lambda k: None
+    _r63.cache.set_docs = lambda k, docs, ttl=None: _set63.update(ttl=ttl, n=len(docs))
+    _r63.http.get = _g63_dead
+    _diag63.enable()
+    _docs63 = _Bundle63()._fetch_all_docs()
+    _caps63b = _diag63.drain()
+    check("63 rss: worker-thread failure notes SURVIVE the ThreadPoolExecutor into the drill's drain()",
+          _docs63 == [] and len(_caps63b) == 2 and all(c.get("status") == 504 for c in _caps63b))
+    check("63 rss: an ALL-feeds-failed empty is cached with the SHORT ttl (300), not the bundle ttl",
+          _set63.get("ttl") == 300 and _set63.get("n") == 0)
+    _r63.http.get = lambda url, **kw: (_Resp63(_RSS_OK63) if url.endswith("/a") else _g63_dead(url, **kw))
+    _docs63p = _Bundle63()._fetch_all_docs()
+    check("63 rss: a PARTIAL failure keeps the normal ttl and the live feed's docs",
+          _set63.get("ttl") == 7200 and _set63.get("n") == 1 and len(_docs63p) == 1)
+finally:
+    _r63.http.get, _r63.cache.get_docs, _r63.cache.set_docs = _g63_real, _cget63, _cset63
+    _diag63.drain()
+
+# ---------------------------------------------------------------------------
+# 64. Eye architecture-audit batch (2026-07-09): declarative down-detection +
+#     failure-empty TTL; diag exc/url secret redaction; agent-URL SSRF guards;
+#     RSS member-rot naming. All offline + deterministic.
+# ---------------------------------------------------------------------------
+
+# 64a. Declarative health_check must report a DOWN upstream (egress->None) as DOWN, not GREEN,
+#      and search must not pin a failure-empty for the full cache_ttl (the family was invisible
+#      to the watchdog; context7's 24h TTL made the empty-cache acute).
+from penumbra.core.sources._declarative import DeclarativeAPIAdapter as _DA64
+from penumbra.core import http as _http64, cache as _cache64
+_da64 = _DA64(name="smoke64_decl", description="probe", endpoint="https://x.example/api",
+              field_map={"title": "t", "url": "u"}, results_path="items", cache_ttl=86400)
+_gj64 = _http64.get_json
+_set64: dict = {}
+_cget64, _cset64 = _cache64.get_docs, _cache64.set_docs
+try:
+    _http64.get_json = lambda *a, **k: None  # simulate a DOWN / non-2xx upstream (failure->None)
+    _ok64, _msg64 = _da64.health_check()
+    check("64a decl: health_check reports a DOWN upstream (egress None) as DOWN, not a green empty",
+          _ok64 is False and "unreachable" in _msg64.lower())
+    _cache64.get_docs = lambda k: None
+    _cache64.set_docs = lambda k, docs, ttl=None, **kw: _set64.update(ttl=ttl, n=len(docs))
+    _da64.search("q", 5)
+    check("64a decl: a failure-empty is cached at the 300s floor, not the row's full cache_ttl (86400)",
+          _set64.get("ttl") == 300 and _set64.get("n") == 0)
+    # A REACHED-but-empty response (valid miss) keeps the full TTL: authoritative, not transient.
+    _http64.get_json = lambda *a, **k: {"items": []}
+    _set64.clear()
+    _da64.search("q", 5)
+    check("64a decl: a reached-but-empty response keeps the full cache_ttl (not treated as failure)",
+          _set64.get("ttl") == 86400)
+finally:
+    _http64.get_json = _gj64
+    _cache64.get_docs, _cache64.set_docs = _cget64, _cset64
+
+# 64b. diag redaction: the url field AND any URL embedded in the exc/body free text must scrub
+#      credential query values (adzuna app_key/app_id leaked via the httpx exception string).
+_diag64 = _diag63
+_diag64.enable()
+class _E64(Exception):
+    pass
+_leaky = "Client error '403 Forbidden' for url 'https://api.adzuna.com/v1?app_id=IDID9&app_key=KEY7&what=ml'"
+_diag64.note("adzuna.search", url="https://api.adzuna.com/v1?app_key=KEY7&app_id=IDID9", exc=_E64(_leaky))
+_c64 = _diag64.drain()[0]
+check("64b diag: credential query values in the URL field are redacted",
+      "KEY7" not in _c64["url"] and "IDID9" not in _c64["url"] and "app_key=<redacted>" in _c64["url"])
+check("64b diag: credential values in a URL embedded in the exc free text are redacted too",
+      "KEY7" not in _c64["exc"] and "IDID9" not in _c64["exc"] and "app_key=<redacted>" in _c64["exc"])
+
+# 64c. Agent-URL SSRF guards: view_image_urls / transcribe_url refuse a loopback/internal URL
+#      BEFORE any fetch (the way around the netguard loopback block, incl. the CDP 9222 DevTools API).
+from penumbra.core import docreader as _dr64
+_img64 = _dr64.view_image_urls(["http://127.0.0.1:9222/json/version"])
+check("64c ssrf: view_image_urls refuses a loopback URL (no in-band internal-image exfil)",
+      _img64["count"] == 0 and "refused" in (_img64["images"][0].get("error", "")))
+from penumbra.core import asr as _asr64
+_tr64 = _asr64.transcribe_url("http://127.0.0.1:9222/json/new")
+check("64c ssrf: transcribe_url refuses a loopback URL before yt-dlp egress",
+      "refused" in (_tr64.get("error", "")) and _tr64.get("transcript") == "")
+
+# 64d. RSS member-rot: a bundle that loses SOME feeds stays healthy(True) but the message NAMES the
+#      dead feeds with the 'degraded' marker the watchdog keys on for a full->degraded Bark.
+class _Bundle64d(_r63.RSSAdapterBase):
+    name = "smoke64d_bundle"
+    feeds = ["https://alive.example/a", "https://dead.example/b"]
+_ff64 = _r63.fetch_feed
+try:
+    import types as _types64
+    _r63.fetch_feed = lambda u, **k: (_types64.SimpleNamespace(entries=[{"x": 1}], version="rss20")
+                                      if "alive" in u else None)
+    _ok64d, _msg64d = _Bundle64d().health_check()
+    check("64d rss: a partial bundle stays healthy(True) but NAMES the dead feed with 'degraded'",
+          _ok64d is True and "degraded" in _msg64d.lower() and "dead.example" in _msg64d)
+finally:
+    _r63.fetch_feed = _ff64
+
+# ---------------------------------------------------------------------------
+# 65. Eye architecture-audit batch-2 (perf/resilience): cache empty_ttl guard;
+#     vector-matrix write-gen invalidation (catches re-embeds row-count missed);
+#     fast health lane preserves CDP status. Offline + deterministic.
+# ---------------------------------------------------------------------------
+
+# 65a. cache.set_docs empty_ttl: an empty docs list uses empty_ttl (a transient-miss floor); a
+#      non-empty list ignores it (keeps ttl); omitting empty_ttl preserves the old behavior.
+from penumbra.core import cache as _cache65
+from penumbra.core.normalize import Document as _PD65
+_set65: dict = {}
+_realset65 = _cache65.set
+try:
+    # **kw swallows the authoritative_empty= that set_docs now passes on the explicit-empty_ttl branch.
+    _cache65.set = lambda k, v, ttl=None, **kw: _set65.__setitem__("ttl", ttl)
+    _cache65.set_docs("k", [], ttl=1800, empty_ttl=300)
+    check("65a cache: an EMPTY docs list uses empty_ttl (300), not the full ttl (1800)",
+          _set65.get("ttl") == 300)
+    _d65 = _PD65(source="x", source_id="1", url="http://e/1", title="t", content="c")
+    _cache65.set_docs("k", [_d65], ttl=1800, empty_ttl=300)
+    check("65a cache: a NON-EMPTY docs list keeps the full ttl (empty_ttl ignored)",
+          _set65.get("ttl") == 1800)
+    # empty_ttl omitted: set_docs passes ttl THROUGH (it no longer pins the empty itself); the
+    # cache.set empty-FLOOR then caps it to EMPTY_TTL_CAP (tested directly in the FLOOR goldens above).
+    _cache65.set_docs("k", [], ttl=1800)
+    check("65a cache: omitting empty_ttl, set_docs passes ttl through (the cache.set FLOOR then caps the empty)",
+          _set65.get("ttl") == 1800)
+finally:
+    _cache65.set = _realset65
+
+# 65b. recall store: the vector matrix invalidates on a WRITE-GEN bump (a re-embed keeps the row
+#      count identical, which the old count key missed). We assert the generation SOURCE changed:
+#      note_vec_write bumps _vec_write_gen, which _ensure_matrix now reads as the cache key.
+from penumbra.core.recall import store as _store65
+_g0 = _store65._vec_write_gen
+_store65.note_vec_write()
+_store65.note_vec_write()
+_gt0 = _store65._thin_write_gen
+_store65.note_thin_write()
+check("65b recall: note_vec_write / note_thin_write monotonically bump the matrix write-gens",
+      _store65._vec_write_gen == _g0 + 2 and _store65._thin_write_gen == _gt0 + 1)
+check("65b recall: the dead row-count helpers were removed (write-gen is the sole invalidation key)",
+      not hasattr(_store65, "_vec_count") and not hasattr(_store65, "_vec_thin_count"))
+
+# 65c. fast health lane: run_source_health(scope='noncdp') skips CDP heal/probe and MERGES its
+#      snapshot so the CDP last_status entries the daily run owns are preserved (not dropped).
+#      Fully offline: monkeypatch load_sources, the adapter roster, the probe, heal, bark, and state.
+import penumbra.core.infra_jobs as _ij65
+import penumbra.server as _srv65
+_saved65 = {k: getattr(_ij65, k) for k in ("_heal_cdp_chrome", "_health_probe", "_alert",
+            "_load_state", "_save_state")}
+_ls65 = _srv65.load_sources
+_state65: dict = {"fails": {}, "_alerts": {}, "last_status": {"_cdp:9222-shared": True, "zhihu": True}}
+_healed65 = {"called": False}
+import penumbra.core.fetcher as _f65
+_saved_f65 = {k: getattr(_f65, k) for k in ("all_adapter_names", "get_adapter")}
+try:
+    _srv65.load_sources = lambda: None
+    _f65.all_adapter_names = lambda: ["arxiv", "zhihu"]  # one non-CDP, one CDP (zhihu in _CDP_SOURCES)
+    import types as _types65  # a legit adapter stub needs .name/.explicit_only (retired-skip reads them)
+    _f65.get_adapter = lambda n: _types65.SimpleNamespace(name=n, explicit_only=False)
+    _ij65._heal_cdp_chrome = lambda: _healed65.__setitem__("called", True) or []
+    _ij65._health_probe = lambda a: (True, "OK")
+    _ij65._alert = lambda *a, **k: None
+    _ij65._load_state = lambda p: dict(_state65)
+    _saved_snap65 = {}
+    _ij65._save_state = lambda p, s: _saved_snap65.update(s)
+    res65 = _ij65.run_source_health(scope="noncdp")
+    check("65c health-fast: the noncdp lane does NOT heal or probe CDP (no browser touched)",
+          _healed65["called"] is False and res65["probed"] == 1)
+    check("65c health-fast: the merged snapshot PRESERVES the CDP last_status the daily run owns",
+          _saved_snap65.get("last_status", {}).get("_cdp:9222-shared") is True
+          and _saved_snap65["last_status"].get("arxiv") is True)
+finally:
+    for k, v in _saved65.items():
+        setattr(_ij65, k, v)
+    for k, v in _saved_f65.items():
+        setattr(_f65, k, v)
+    _srv65.load_sources = _ls65
+
+# ---------------------------------------------------------------------------
+# 66. launchd liveness parser + judge (scripts/services.py): the 2026-07-03 sentinel bug. Its
+#     renamed plist was dropped into ~/Library/LaunchAgents but launchd NEVER exec-ed it, so it sat
+#     7 days at runs=0 / speculative / last-exit=(never) while the name-only verify stayed green.
+#     services.py now reads launchd's OWN view per job. parse_launchctl_print is PURE (raw text ->
+#     dict) and judge_job_liveness is the PURE decision on top of it, so both are fixture-testable
+#     with NO live launchctl. Cover: not-loaded, malformed + empty (fail closed), runs=0 + speculative
+#     RunAtLoad (FAIL), first successful run (runs>=1 exit 0, PASS), a StartCalendarInterval job
+#     before first fire (runs=0 ALLOWED), and content-drift (a runtime-healthy job whose live plist
+#     bytes drifted still FAILS). Fully offline + deterministic, no launchctl subprocess.
+# ---------------------------------------------------------------------------
+if _SERVICES_PATH.exists():
+    _svc66 = _svc  # loaded in §46b (top-level code is guarded by __main__, so import is a no-op)
+    _rows66 = {r["label"]: r for r in _svc66.REGISTRY}
+    _sentinel_row = _rows66["com.penumbra.infra.sentinel"]     # RunAtLoad (default) + StartInterval
+    _backup_row = _rows66["com.penumbra.infra.state-backup"]   # run_at_load=None + StartCalendarInterval
+    check("66 job-kind: the sentinel is a RunAtLoad job (must reach runs>=1)",
+          _svc66._job_is_run_at_load(_sentinel_row) is True)
+    check("66 job-kind: state-backup is NOT RunAtLoad (calendar-only; runs=0 legal before first fire)",
+          _svc66._job_is_run_at_load(_backup_row) is False)
+
+    # Realistic `launchctl print gui/<uid>/<label>` fixtures (tabs + ` = `, as launchd emits).
+    _F_NOT_LOADED = 'Could not find service "com.penumbra.infra.sentinel" in domain for uid: 501'
+    _F_MALFORMED = "com.penumbra.infra.sentinel\n\t<garbage: connection interrupted>"
+    _F_SPECULATIVE = ("com.penumbra.infra.sentinel = {\n"
+                      "\tactive count = 0\n"
+                      "\tpath = /Users/operator/Library/LaunchAgents/com.penumbra.infra.sentinel.plist\n"
+                      "\ttype = LaunchAgent\n"
+                      "\tstate = not running\n"
+                      "\n"
+                      "\tprogram = /bin/bash\n"
+                      "\targuments = {\n"
+                      "\t\t/bin/bash\n"
+                      "\t\t/Users/operator/penumbra-mcp/scripts/sentinel.py\n"
+                      "\t}\n"
+                      "\n"
+                      "\truns = 0\n"
+                      "\tlast exit code = (never exited)\n"
+                      "\tpended non-demand spawn = speculative\n"
+                      "\n"
+                      "\tdomain = gui/501\n"
+                      "}")
+    _F_FIRST_RUN = ("com.penumbra.infra.sentinel = {\n"
+                    "\tactive count = 1\n"
+                    "\tpath = /Users/operator/Library/LaunchAgents/com.penumbra.infra.sentinel.plist\n"
+                    "\ttype = LaunchAgent\n"
+                    "\tstate = running\n"
+                    "\n"
+                    "\tpid = 54321\n"
+                    "\truns = 1\n"
+                    "\tlast exit code = 0\n"
+                    "\n"
+                    "\tdomain = gui/501\n"
+                    "}")
+    _F_CAL_BEFORE = ("com.penumbra.infra.state-backup = {\n"
+                     "\tactive count = 0\n"
+                     "\tpath = /Users/operator/Library/LaunchAgents/com.penumbra.infra.state-backup.plist\n"
+                     "\ttype = LaunchAgent\n"
+                     "\tstate = not running\n"
+                     "\n"
+                     "\truns = 0\n"
+                     "\tlast exit code = (never exited)\n"
+                     "\n"
+                     "\tdomain = gui/501\n"
+                     "}")
+
+    # --- parse_launchctl_print fixtures ---
+    _p_nl = _svc66.parse_launchctl_print(_F_NOT_LOADED)
+    check("66 parse: a not-loaded message -> loaded=False, no parse_error (a KNOWN state)",
+          _p_nl["loaded"] is False and _p_nl["parse_error"] is None)
+    _p_mal = _svc66.parse_launchctl_print(_F_MALFORMED)
+    check("66 parse: malformed output -> parse_error set + loaded=False (fail closed)",
+          _p_mal["parse_error"] is not None and _p_mal["loaded"] is False)
+    _p_empty = _svc66.parse_launchctl_print("")
+    check("66 parse: empty output -> parse_error set (fail closed)",
+          _p_empty["parse_error"] is not None)
+    _p_spec = _svc66.parse_launchctl_print(_F_SPECULATIVE)
+    check("66 parse: runs=0 + speculative block -> loaded, runs=0, speculative=True, never-exited",
+          _p_spec["loaded"] is True and _p_spec["runs"] == 0 and _p_spec["speculative"] is True
+          and _p_spec["last_exit_code"] is None and _p_spec["last_exit_raw"] == "(never exited)")
+    _p_run = _svc66.parse_launchctl_print(_F_FIRST_RUN)
+    check("66 parse: first successful run -> loaded, runs=1, last_exit_code=0, not speculative",
+          _p_run["loaded"] is True and _p_run["runs"] == 1 and _p_run["last_exit_code"] == 0
+          and _p_run["speculative"] is False)
+    _p_cal = _svc66.parse_launchctl_print(_F_CAL_BEFORE)
+    check("66 parse: calendar job before first fire -> loaded, runs=0, not speculative",
+          _p_cal["loaded"] is True and _p_cal["runs"] == 0 and _p_cal["speculative"] is False)
+    # The REAL healthy idle state of the live sentinel (verified via `launchctl print` on the mini,
+    # 2026-07-10): state=not running, runs>=1, pended nondemand spawn = interval. The "interval"
+    # value must NOT read as speculative (that is a scheduled job between fires, not a dead one).
+    _F_HEALTHY_INTERVAL = ("com.penumbra.infra.sentinel = {\n"
+                           "\tstate = not running\n"
+                           "\truns = 1\n"
+                           "\tpended nondemand spawn = interval\n"
+                           "\tlast exit code = 0\n"
+                           "\tdomain = gui/501\n"
+                           "}")
+    _p_iv = _svc66.parse_launchctl_print(_F_HEALTHY_INTERVAL)
+    check("66 parse: a healthy scheduled job (pended nondemand spawn = interval) is NOT speculative",
+          _p_iv["loaded"] is True and _p_iv["runs"] == 1 and _p_iv["speculative"] is False
+          and _p_iv["last_exit_code"] == 0)
+
+    # --- judge_job_liveness fixtures (the load-bearing decisions) ---
+    _j_spec_ok, _j_spec_probs, _j_spec_hints = _svc66.judge_job_liveness(_sentinel_row, _p_spec, True)
+    check("66 judge: a RunAtLoad job at runs=0 + speculative FAILS (the sentinel bug is caught)",
+          _j_spec_ok is False and any("never run" in p.lower() for p in _j_spec_probs))
+    check("66 judge: the failure hint names the exact bootout/bootstrap/kickstart triad",
+          any("bootout" in h and "bootstrap" in h and "kickstart" in h for h in _j_spec_hints))
+    _j_run_ok, _j_run_probs, _ = _svc66.judge_job_liveness(_sentinel_row, _p_run, True)
+    check("66 judge: the SAME RunAtLoad job at runs=1 exit 0 PASSES",
+          _j_run_ok is True and not _j_run_probs)
+    _j_cal_ok, _j_cal_probs, _ = _svc66.judge_job_liveness(_backup_row, _p_cal, True)
+    check("66 judge: a StartCalendarInterval job at runs=0 before first fire PASSES (not false-failed)",
+          _j_cal_ok is True and not _j_cal_probs)
+    _j_nl_ok, _j_nl_probs, _j_nl_hints = _svc66.judge_job_liveness(_sentinel_row, _p_nl, True)
+    check("66 judge: a not-loaded RunAtLoad job FAILS with a bootstrap hint",
+          _j_nl_ok is False and any("not loaded" in p.lower() for p in _j_nl_probs)
+          and any("bootstrap" in h for h in _j_nl_hints))
+    _j_mal_ok, _j_mal_probs, _ = _svc66.judge_job_liveness(_sentinel_row, _p_mal, True)
+    check("66 judge: unparseable launchctl state FAILS CLOSED (never a silent pass)",
+          _j_mal_ok is False and any("unparseable" in p.lower() for p in _j_mal_probs))
+    _j_drift_ok, _j_drift_probs, _ = _svc66.judge_job_liveness(_sentinel_row, _p_run, False)
+    check("66 judge: a runtime-healthy job whose live plist CONTENT drifted still FAILS (not name-only)",
+          _j_drift_ok is False and any("content" in p.lower() for p in _j_drift_probs))
+
+
+
+# ===========================================================================
+# NEW-SOURCE GOLDEN FIXTURES (2026-07-11 batch): offline parse-contract locks for the
+# +17 coverage-gap sources. Each feeds a REAL recorded payload to the adapter's pure
+# parse method (no network; cvf/openrouter monkeypatch httpx) and asserts the doc fields.
+# ===========================================================================
+
+# --- federal_register: declarative _to_doc / _results_from parse contract (offline, no network) ---
+from penumbra.core.sources._declarative import DeclarativeAPIAdapter as _fx_federal_register_DA
+
+# trimmed REAL results[0], federalregister.gov/api/v1/documents.json, captured 2026-07-10
+_fx_federal_register_item = {
+    "title": "Proposed Information Collection; ATUS Artificial Intelligence (AI) Questions",
+    "type": "Notice",
+    "abstract": "The Department of Labor, as part of its continuing effort to reduce paperwork and respondent burden, conducts a pre-clearance consultation program ...",
+    "document_number": "2026-13928",
+    "html_url": "https://www.federalregister.gov/documents/2026/07/10/2026-13928/proposed-information-collection-atus-artificial-intelligence-ai-questions",
+    "pdf_url": "https://www.govinfo.gov/content/pkg/FR-2026-07-10/pdf/2026-13928.pdf",
+    "publication_date": "2026-07-10",
+    "agencies": [
+        {"raw_name": "DEPARTMENT OF LABOR", "name": "Labor Department", "id": 271, "parent_id": None, "slug": "labor-department"},
+        {"raw_name": "Bureau of Labor Statistics", "name": "Labor Statistics Bureau", "id": 272, "parent_id": 271, "slug": "labor-statistics-bureau"},
+    ],
+    "excerpts": "collection instruments are clearly understood ...",
+}
+_fx_federal_register_ad = _fx_federal_register_DA(
+    name="federal_register", description="probe",
+    endpoint="https://www.federalregister.gov/api/v1/documents.json",
+    field_map={"title": "title", "url": "html_url", "content": ["abstract", "excerpts"],
+               "author": "agencies.0.name", "date": "publication_date",
+               "id": "document_number", "tags": "type"},
+    results_path="results", post_filter=False)
+try:
+    _fx_federal_register_doc = _fx_federal_register_ad._to_doc(_fx_federal_register_item)
+except Exception:
+    _fx_federal_register_doc = None
+
+check("federal_register: item -> doc with document article URL + document_number id",
+      _fx_federal_register_doc is not None
+      and _fx_federal_register_doc.source == "federal_register"
+      and _fx_federal_register_doc.source_id == "2026-13928"
+      and _fx_federal_register_doc.url.endswith("/2026-13928/proposed-information-collection-atus-artificial-intelligence-ai-questions"))
+check("federal_register: title, abstract-as-content, first-agency author, pub date, type tag",
+      _fx_federal_register_doc is not None
+      and _fx_federal_register_doc.title.startswith("Proposed Information Collection")
+      and _fx_federal_register_doc.content.startswith("The Department of Labor")
+      and _fx_federal_register_doc.author == "Labor Department"
+      and _fx_federal_register_doc.date is not None
+      and (_fx_federal_register_doc.date.year, _fx_federal_register_doc.date.month, _fx_federal_register_doc.date.day) == (2026, 7, 10)
+      and _fx_federal_register_doc.tags == ["Notice"])
+check("federal_register: results_from walks the results[] array",
+      _fx_federal_register_ad._results_from({"results": [_fx_federal_register_item]}) == [_fx_federal_register_item])
+
+
+# ---------------------------------------------------------------------------
+# NN. v2ex (V2EX 润学/职场 forum): the per-node topics JSON -> topic doc builder is a pure
+#     function (_to_documents over the merged topic list). Golden-fixture it offline against
+#     one REAL recorded topic (node=career, 2026-07-10; no network).
+# ---------------------------------------------------------------------------
+_fx_v2ex_raw = [{
+    "id": 1226526,
+    "title": "书接上文，确认了是个博彩和区块链的公司，想请教大佬们一些问题",
+    "url": "https://www.v2ex.com/t/1226526",
+    "content": "书接上文。https://www.v2ex.com/t/1225533?p=1#reply65\r\n\r\n说是国内试用期 3 个月远程发 u ，\r\n试用期转正后要去东京。",
+    "created": 1783731847,
+    "last_touched": 1783744064,
+    "replies": 28,
+    "member": {"username": "nanofei"},
+    "node": {"name": "career", "title": "职场话题", "topics": 23827},
+}]
+_fx_v2ex_a = fetcher.get_adapter("v2ex")
+try:
+    _fx_v2ex_docs = _fx_v2ex_a._to_documents(_fx_v2ex_raw, "test", 10)
+    _fx_v2ex_doc = _fx_v2ex_docs[0] if _fx_v2ex_docs else None
+except Exception as _fx_v2ex_exc:  # noqa: BLE001
+    _fx_v2ex_doc = None
+check("v2ex: registered adapter present", _fx_v2ex_a is not None)
+check("v2ex: topic -> doc (source_id + absolute /t/<id> url + title + author)",
+      _fx_v2ex_doc is not None
+      and _fx_v2ex_doc.source == "v2ex"
+      and _fx_v2ex_doc.source_id == "1226526"
+      and _fx_v2ex_doc.url == "https://www.v2ex.com/t/1226526"
+      and _fx_v2ex_doc.title == "书接上文，确认了是个博彩和区块链的公司，想请教大佬们一些问题"
+      and _fx_v2ex_doc.author == "nanofei",
+      detail=(f"id={_fx_v2ex_doc.source_id} url={_fx_v2ex_doc.url}" if _fx_v2ex_doc else "no doc"))
+check("v2ex: created epoch -> tz-aware UTC date + node title tag (职场话题)",
+      _fx_v2ex_doc is not None
+      and _fx_v2ex_doc.date is not None
+      and _fx_v2ex_doc.date.isoformat() == "2026-07-11T01:04:07+00:00"
+      and _fx_v2ex_doc.tags == ["topic", "v2ex", "职场话题"],
+      detail=(f"date={_fx_v2ex_doc.date} tags={_fx_v2ex_doc.tags}" if _fx_v2ex_doc else "no doc"))
+check("v2ex: replies engagement + node_topics structure signals, node metadata",
+      _fx_v2ex_doc is not None
+      and _fx_v2ex_doc.signals["replies"].value == 28.0
+      and _fx_v2ex_doc.signals["node_topics"].value == 23827.0
+      and _fx_v2ex_doc.metadata.get("node_name") == "career"
+      and _fx_v2ex_doc.metadata.get("node_title") == "职场话题"
+      and _fx_v2ex_doc.metadata.get("doc_type") == "topic",
+      detail=(str(list(_fx_v2ex_doc.signals)) if _fx_v2ex_doc else "no doc"))
+
+
+# ---------------------------------------------------------------------------
+# oecd_ai_policy golden fixture (offline, REAL payload captured 2026-07-10 from
+# api.oecdai.org?page=1). Drives _row_to_doc on one data[] record (pure parse;
+# NOT _build_subset_docs, which paginates live). Locks the policy-initiative
+# initiative -> Document contract.
+_fx_oecd_ai_policy_payload = {"data": [{"id": 2448, "englishName": "OMB AI Acquisition Guidance (M-25-22)", "slug": "omb-ai-acquisition-guidance-m-25-22", "description": "An OMB memorandum establishing federal procurement requirements for the efficient and responsible acquisition of AI systems, including a 'Buy American' AI provision, risk management obligations, and interoperability protections.", "website": "https://www.whitehouse.gov/wp-content/uploads/2025/02/M-25-22-Driving-Efficient-Acquisition-of-Artificial-Intelligence-in-Government.pdf", "status": "Active", "category": "Regulations, guidelines and standards", "extentBinding": None, "startYear": 2025, "endYear": None, "updatedAt": "2026-07-03T16:28:47.000Z", "createdAt": "2026-07-03T16:21:03.672Z", "gaiinCountry": {"name": "United States", "code": "USA"}, "initiativeType": {"name": "Guidance document (instructions on how to implement a law, regulation, policy or other rule)"}}], "currentPage": 1, "lastPage": 119, "total": 2364, "perPage": 20}
+_fx_oecd_ai_policy_ad = fetcher.get_adapter("oecd_ai_policy")
+try:
+    _fx_oecd_ai_policy_doc = _fx_oecd_ai_policy_ad._row_to_doc(_fx_oecd_ai_policy_payload["data"][0])
+except Exception as _fx_oecd_ai_policy_exc:  # a parse crash must fail the check, not sink smoke
+    _fx_oecd_ai_policy_doc = None
+_fx_oecd_ai_policy_c = (_fx_oecd_ai_policy_doc.content if _fx_oecd_ai_policy_doc else "")
+_fx_oecd_ai_policy_m = (_fx_oecd_ai_policy_doc.metadata if _fx_oecd_ai_policy_doc else {})
+check("oecd_ai_policy: row -> doc (source_id + url + title suffixed with jurisdiction)",
+      _fx_oecd_ai_policy_doc is not None
+      and _fx_oecd_ai_policy_doc.source == "oecd_ai_policy"
+      and _fx_oecd_ai_policy_doc.source_id == "oecd_ai_policy:2448"
+      and _fx_oecd_ai_policy_doc.url == "https://oecd.ai/en/dashboards/policy-initiatives/omb-ai-acquisition-guidance-m-25-22"
+      and _fx_oecd_ai_policy_doc.title == "OMB AI Acquisition Guidance (M-25-22) (United States)",
+      "" if _fx_oecd_ai_policy_doc else "row -> doc returned None / raised")
+check("oecd_ai_policy: date parses ISO-8601 Z from updatedAt; tags carry country code",
+      _fx_oecd_ai_policy_doc is not None
+      and _fx_oecd_ai_policy_doc.date is not None
+      and _fx_oecd_ai_policy_doc.date.isoformat() == "2026-07-03T16:28:47+00:00"
+      and _fx_oecd_ai_policy_doc.tags == ["policy", "ai-policy", "USA", "oecd"])
+check("oecd_ai_policy: content = clean description + facet line + website; null binding omitted",
+      "An OMB memorandum establishing federal procurement" in _fx_oecd_ai_policy_c
+      and "法域: United States." in _fx_oecd_ai_policy_c
+      and "工具类型: Guidance document" in _fx_oecd_ai_policy_c
+      and "类别: Regulations, guidelines and standards." in _fx_oecd_ai_policy_c
+      and "状态: Active." in _fx_oecd_ai_policy_c
+      and "起始年份: 2025." in _fx_oecd_ai_policy_c
+      and "M-25-22-Driving-Efficient-Acquisition" in _fx_oecd_ai_policy_c
+      and "约束力" not in _fx_oecd_ai_policy_c)
+check("oecd_ai_policy: metadata facets (jurisdiction / code / type / category / status / year / url / id)",
+      _fx_oecd_ai_policy_m.get("jurisdiction") == "United States"
+      and _fx_oecd_ai_policy_m.get("country_code") == "USA"
+      and (_fx_oecd_ai_policy_m.get("initiative_type") or "").startswith("Guidance document")
+      and _fx_oecd_ai_policy_m.get("category") == "Regulations, guidelines and standards"
+      and _fx_oecd_ai_policy_m.get("status") == "Active"
+      and _fx_oecd_ai_policy_m.get("start_year") == 2025
+      and _fx_oecd_ai_policy_m.get("extent_binding") is None
+      and _fx_oecd_ai_policy_m.get("official_url", "").startswith("https://www.whitehouse.gov/")
+      and _fx_oecd_ai_policy_m.get("initiative_id") == 2448)
+
+
+# ---------------------------------------------------------------------------
+# epoch_ai_models golden fixture: keyless bulk-CSV scaling table. Parse a REAL
+# 2-row slice of notable_ai_models.csv the SAME way _load_models does
+# (csv.DictReader trimmed to _FIELDS), then feed a row straight to the pure
+# parse method EpochAIModelsSource._to_doc. No network (_raw_fetch/_load_models
+# skipped: we hand-build the row dict the loader would produce).
+# ---------------------------------------------------------------------------
+import csv as _fx_epoch_csv  # noqa: E402
+import io as _fx_epoch_io  # noqa: E402
+from datetime import datetime as _fx_epoch_dt  # noqa: E402
+from penumbra.core.sources.scrape.epoch_ai_models_source import (  # noqa: E402
+    EpochAIModelsSource as _FxEpoch, _FIELDS as _fx_epoch_FIELDS)
+
+# REAL bytes captured verbatim from notable_ai_models.csv (2 rows, quoted commas intact).
+_fx_epoch_raw = (
+    "Model,Organization,Publication date,Domain,Task,Parameters,"
+    "Training compute (FLOP),Training dataset size (total),Training hardware,"
+    "Country (of organization),Notability criteria,Citations,"
+    "Model accessibility,Base model,Open model weights?,Link\n"
+    "AlphaFold,DeepMind,2020-01-15,Biology,"
+    "\"Protein folding prediction,Proteins\",16340840.0,1e+20,6622252080,,"
+    "United Kingdom of Great Britain and Northern Ireland,"
+    "\"SOTA improvement,Highly cited\",2773.0,Unreleased,,No,"
+    "https://www.nature.com/articles/s41586-019-1923-7\n"
+    "AlphaGo Master,DeepMind,2017-10-19,Games,Go,,3.4100000001e+20,,"
+    "Google TPU v1,United Kingdom of Great Britain and Northern Ireland,"
+    "Highly cited,10021.0,Unreleased,,No,"
+    "https://www.nature.com/articles/nature24270\n")
+
+# Parse exactly like _load_models: DictReader, drop blank Model, trim to _FIELDS.
+_fx_epoch_rows = []
+for _fx_epoch_r in _fx_epoch_csv.DictReader(_fx_epoch_io.StringIO(_fx_epoch_raw)):
+    if (_fx_epoch_r.get("Model") or "").strip():
+        _fx_epoch_rows.append({_fx_epoch_k: (_fx_epoch_r.get(_fx_epoch_k) or "").strip()
+                               for _fx_epoch_k in _fx_epoch_FIELDS})
+
+check("epoch_ai_models: recorded CSV yields 2 rows (blank-Model drop + _FIELDS trim)",
+      len(_fx_epoch_rows) == 2)
+
+# Pure parse: row dict -> Document via the staticmethod (get_adapter also works;
+# _to_doc is static so we call it on the class). Guard so a raise can't sink the run.
+try:
+    _fx_epoch_af = _FxEpoch._to_doc(_fx_epoch_rows[0])   # AlphaFold
+except Exception as _fx_epoch_exc:  # noqa: BLE001
+    _fx_epoch_af = None
+try:
+    _fx_epoch_ago = _FxEpoch._to_doc(_fx_epoch_rows[1])  # AlphaGo Master (no Parameters)
+except Exception as _fx_epoch_exc:  # noqa: BLE001
+    _fx_epoch_ago = None
+
+check("epoch_ai_models: AlphaFold row -> doc (id, title, url, author, date)",
+      _fx_epoch_af is not None
+      and _fx_epoch_af.source == "epoch_ai_models"
+      and _fx_epoch_af.source_id == "AlphaFold|2020-01-15"
+      and _fx_epoch_af.title == "AlphaFold - DeepMind (2020)"
+      and _fx_epoch_af.url == "https://www.nature.com/articles/s41586-019-1923-7"
+      and _fx_epoch_af.author == "DeepMind"
+      and _fx_epoch_af.date == _fx_epoch_dt(2020, 1, 15))
+
+check("epoch_ai_models: AlphaFold scaling facts land in metadata + tags + content",
+      _fx_epoch_af is not None
+      and _fx_epoch_af.metadata.get("parameters") == "16340840.0"
+      and _fx_epoch_af.metadata.get("training_compute_flop") == "1e+20"
+      and _fx_epoch_af.metadata.get("training_dataset_size") == "6622252080"
+      and _fx_epoch_af.metadata.get("citations") == "2773.0"
+      and _fx_epoch_af.metadata.get("accessibility") == "Unreleased"
+      and _fx_epoch_af.tags == ["DeepMind", "Biology", "ai-model"]
+      and "Training compute (FLOP): 1e+20" in _fx_epoch_af.content)
+
+check("epoch_ai_models: a blank scalar (AlphaGo Master has no Parameters) is omitted, not emitted",
+      _fx_epoch_ago is not None
+      and _fx_epoch_ago.source_id == "AlphaGo Master|2017-10-19"
+      and _fx_epoch_ago.metadata.get("parameters") == ""
+      and "Parameters:" not in _fx_epoch_ago.content
+      and _fx_epoch_ago.metadata.get("training_compute_flop") == "3.4100000001e+20")
+
+
+# ---------------------------------------------------------------------------
+# mistral (RSS, joins the frontier_labs bundle): offline parse contract.
+# Real recorded raw RSS -> the SAME path _fetch_all_docs uses: feedparser.parse
+# -> dict(entry) -> _DictAsObj -> entry_to_document. No network, no _fetch_all_docs.
+# ---------------------------------------------------------------------------
+import feedparser as _fx_mistral_fp  # noqa: E402
+from penumbra.core.sources.scrape._rss import entry_to_document as _fx_mistral_e2d, _DictAsObj as _fx_mistral_wrap  # noqa: E402
+
+# REAL raw (captured 2026-07-10), trimmed to 2 items: one full, one description-less.
+_fx_mistral_raw = (
+    '<?xml version="1.0" encoding="UTF-8"?><rss version="2.0"><channel>'
+    '<title>Mistral AI Blog</title><description>Latest news and updates from Mistral AI</description>'
+    '<link>https://mistral.ai/</link>'
+    '<item><title>Your Prompts and Skills need a system of record.</title>'
+    '<link>https://mistral.ai/news/manage-prompts-and-skills-in-studio/</link>'
+    '<guid isPermaLink="true">https://mistral.ai/news/manage-prompts-and-skills-in-studio/</guid>'
+    '<description>Studio provides a system of record for AI prompts and skills-versioned, owned, '
+    'and traceable. Iterate fast, ship with control, and ensure consistent AI behavior.</description>'
+    '<pubDate>Thu, 09 Jul 2026 12:00:00 GMT</pubDate></item>'
+    '<item><title>Leanstral 1.5: Proof Abundance for All</title>'
+    '<link>https://mistral.ai/news/leanstral-1-5/</link>'
+    '<guid isPermaLink="true">https://mistral.ai/news/leanstral-1-5/</guid>'
+    '<pubDate>Thu, 02 Jul 2026 13:55:54 GMT</pubDate></item>'
+    '</channel></rss>'
+)
+_fx_mistral_feed_url = "https://mistral.ai/rss.xml"
+
+_fx_mistral_doc = None
+_fx_mistral_empty = None
+try:
+    _fx_mistral_parsed = _fx_mistral_fp.parse(_fx_mistral_raw)
+    _fx_mistral_entries = list(_fx_mistral_parsed.entries)
+    _fx_mistral_doc = _fx_mistral_e2d(
+        _fx_mistral_wrap(dict(_fx_mistral_entries[0])), "frontier_labs", _fx_mistral_feed_url)
+    _fx_mistral_empty = _fx_mistral_e2d(
+        _fx_mistral_wrap(dict(_fx_mistral_entries[1])), "frontier_labs", _fx_mistral_feed_url)
+except Exception as _fx_mistral_exc:  # noqa: BLE001 — a parse crash must fail the check, not the run
+    _fx_mistral_doc = None
+    _fx_mistral_empty = None
+
+check("mistral: rss item -> doc (title + mistral.ai url + guid as source_id)",
+      _fx_mistral_doc is not None
+      and _fx_mistral_doc.source == "frontier_labs"
+      and _fx_mistral_doc.title == "Your Prompts and Skills need a system of record."
+      and _fx_mistral_doc.url == "https://mistral.ai/news/manage-prompts-and-skills-in-studio/"
+      and _fx_mistral_doc.source_id == "https://mistral.ai/news/manage-prompts-and-skills-in-studio/",
+      "" if _fx_mistral_doc is None else repr((_fx_mistral_doc.title, _fx_mistral_doc.url, _fx_mistral_doc.source_id)))
+
+check("mistral: description -> markdown content + pubDate -> UTC date + feed_url in metadata",
+      _fx_mistral_doc is not None
+      and _fx_mistral_doc.content == ("Studio provides a system of record for AI prompts and skills-versioned, "
+                                      "owned, and traceable. Iterate fast, ship with control, and ensure "
+                                      "consistent AI behavior.")
+      and _fx_mistral_doc.date is not None
+      and _fx_mistral_doc.date.isoformat() == "2026-07-09T12:00:00+00:00"
+      and _fx_mistral_doc.metadata.get("feed_url") == _fx_mistral_feed_url,
+      "" if _fx_mistral_doc is None else repr((_fx_mistral_doc.content[:40],
+                                               None if _fx_mistral_doc.date is None else _fx_mistral_doc.date.isoformat(),
+                                               _fx_mistral_doc.metadata.get("feed_url"))))
+
+check("mistral: feed carries no author/category -> author None, tags []",
+      _fx_mistral_doc is not None
+      and _fx_mistral_doc.author is None
+      and _fx_mistral_doc.tags == [],
+      "" if _fx_mistral_doc is None else repr((_fx_mistral_doc.author, _fx_mistral_doc.tags)))
+
+check("mistral: a description-less item parses with content '(no content)', not dropped",
+      _fx_mistral_empty is not None
+      and _fx_mistral_empty.title == "Leanstral 1.5: Proof Abundance for All"
+      and _fx_mistral_empty.content == "(no content)",
+      "" if _fx_mistral_empty is None else repr((_fx_mistral_empty.title, _fx_mistral_empty.content)))
+
+
+# --- ircc_processing_times: _build_docs parse contract (offline golden fixture) ---
+# REAL trimmed sample of the three canada.ca JSON payloads _tables() combines and hands _build_docs.
+# NO network: _build_docs only does _updated / _has_time / string ops. We drive it directly.
+import html as _fx_ircc_processing_times_html
+
+_fx_ircc_processing_times_tables = {
+    "country": {
+        "study": {"CN": "3 weeks", "IN": "5 weeks", "AD": "No processing time available"},
+        "work": {"IN": "9 weeks"},
+        # refugees_private value is a dict; both sub-values lack a digit so the route drops.
+        "refugees_private": {"AF": {"sponsor": "Not enough data", "refugee": "Not enough data"}},
+    },
+    "noncountry": {
+        "default-update": {"lastupdated": "July 7, 2026"},
+        "pr_card": {"new_pr": "37 days", "existing_pr": "34 days"},
+        "citizenship": {"cit_search": "17 months", "cit_resumption": "Not enough data"},
+    },
+    "names": {
+        "CN": "China (People&rsquo;s Republic of)",
+        "IN": "India",
+        "AD": "Andorra",
+    },
+}
+
+try:
+    _fx_ircc_processing_times_ad = fetcher.get_adapter("ircc_processing_times")
+    _fx_ircc_processing_times_docs = _fx_ircc_processing_times_ad._build_docs(_fx_ircc_processing_times_tables)
+except Exception:
+    _fx_ircc_processing_times_docs = None
+
+_fx_ircc_processing_times_by_id = (
+    {d.source_id: d for d in _fx_ircc_processing_times_docs}
+    if _fx_ircc_processing_times_docs is not None else {}
+)
+
+# (1) exactly the 6 real-valued routes survive _has_time (AD "No processing time available",
+#     citizenship cit_resumption "Not enough data", and refugees_private:AF all-"Not enough data" drop).
+check("ircc_processing_times: _has_time filter keeps 6 routes, drops no-time/not-enough-data",
+      _fx_ircc_processing_times_docs is not None and len(_fx_ircc_processing_times_docs) == 6
+      and set(_fx_ircc_processing_times_by_id) == {
+          "study:CN", "study:IN", "work:IN",
+          "incanada:pr_card:new_pr", "incanada:pr_card:existing_pr",
+          "incanada:citizenship:cit_search"})
+
+# (2) outside-Canada row -> doc: title/source_id/url + country-code/time meta, in_canada False,
+#     and the &rsquo; HTML entity unescaped in the country display name.
+_fx_ircc_processing_times_cn = _fx_ircc_processing_times_by_id.get("study:CN")
+check("ircc_processing_times: study:CN -> title + meta (country_code CN, 3 weeks, entity unescaped)",
+      _fx_ircc_processing_times_cn is not None
+      and _fx_ircc_processing_times_cn.title
+          == "Study permit (from outside Canada), "
+             + _fx_ircc_processing_times_html.unescape("China (People&rsquo;s Republic of)")
+             + ": 3 weeks"
+      and _fx_ircc_processing_times_cn.url
+          == "https://www.canada.ca/en/immigration-refugees-citizenship/services/application/check-processing-times.html"
+      and _fx_ircc_processing_times_cn.source == "ircc_processing_times"
+      and _fx_ircc_processing_times_cn.metadata.get("country_code") == "CN"
+      and _fx_ircc_processing_times_cn.metadata.get("processing_time") == "3 weeks"
+      and _fx_ircc_processing_times_cn.metadata.get("in_canada") is False)
+
+# (3) in-Canada row -> doc: labelled title, incanada source_id, service meta, in_canada True.
+_fx_ircc_processing_times_pr = _fx_ircc_processing_times_by_id.get("incanada:pr_card:new_pr")
+check("ircc_processing_times: incanada:pr_card:new_pr -> label title + service meta, in_canada True",
+      _fx_ircc_processing_times_pr is not None
+      and _fx_ircc_processing_times_pr.title == "New permanent resident (PR) card (in Canada): 37 days"
+      and _fx_ircc_processing_times_pr.metadata.get("service") == "new_pr"
+      and _fx_ircc_processing_times_pr.metadata.get("in_canada") is True)
+
+# (4) every doc carries the publish date parsed from default-update.lastupdated ("July 7, 2026").
+check("ircc_processing_times: all docs share date 2026-07-07 from lastupdated",
+      _fx_ircc_processing_times_docs is not None
+      and all(d.date is not None and (d.date.year, d.date.month, d.date.day) == (2026, 7, 7)
+              for d in _fx_ircc_processing_times_docs))
+
+
+# --- mpnp_draws: golden fixture (offline; real recorded /draws/ <article> block, no network) ---
+# Feeds the trimmed real draw-274 WordPress <article> html straight into the adapter's pure parse
+# method _to_documents(raw, query, limit) (raw is the page text its _raw_fetch returns, i.e. what
+# self._html(raw) receives). Locks: draw-number parse, "%B %d, %Y" date, first-phrasing LAA total,
+# EE subset, and the <li> initiative breakdown (with the "Number of Letters..." total line excluded).
+from datetime import datetime as _fx_mpnp_dt
+
+_fx_mpnp_raw = (
+    '<article class="post-33030 category-draws" id="post-33030" itemscope '
+    'itemtype="https://schema.org/CreativeWork">'
+    '<div class="ast-post-format- ast-no-thumb blog-layout-1 ast-article-inner">'
+    '<div class="post-content ast-grid-common-col">'
+    '<h2 class="entry-title ast-blog-single-element" itemprop="headline">'
+    '<a href="https://immigratemanitoba.com/2026/07/expression-of-interest-draw-274/" '
+    'rel="bookmark" target="_self">Expression of Interest Draw #274</a></h2>'
+    '<header class="entry-header"><div class="entry-meta"><span class="posted-on">'
+    '<span class="published" itemprop="datePublished"> July 2, 2026 </span></span></div></header>'
+    '<div class="ast-excerpt-container ast-blog-single-element">'
+    '<h3 class="wp-block-heading"><strong>Skilled Worker Stream</strong></h3>'
+    '<p class="wp-block-paragraph">Profiles submitted under the Skilled Worker in Manitoba pathway '
+    'or the Skilled Worker Overseas pathway that declared being directly invited by the MPNP under '
+    'a strategic recruitment initiative.</p>'
+    '<ul class="wp-block-list"><li>Number of Letters of Advice to Apply issued:&nbsp;'
+    '<strong>77</strong></li></ul>'
+    '<p class="wp-block-paragraph">The following numbers of Letters of Advice to Apply were issued '
+    'under the strategic recruitment initiatives listed below:</p>'
+    '<ul class="wp-block-list">'
+    '<li>Employer Services:&nbsp;<strong>36</strong></li>'
+    '<li>Francophone Community:&nbsp;<strong>8</strong></li>'
+    '<li>Regional Communities:<strong>&nbsp;2</strong></li>'
+    '<li>Temporary Public Policy to Facilitate Work Permits for Prospective Provincial Nominee '
+    'Program Candidates (TPP):&nbsp;<strong>31</strong></li></ul>'
+    '<p class="wp-block-paragraph">Of the&nbsp;<strong>77 </strong>Letters of Advice to Apply issued '
+    'in this draw,&nbsp;<strong>15</strong> were issued to candidates who declared a valid Express '
+    'Entry profile number.</p>'
+    '</div></div></div></article>'
+)
+
+_fx_mpnp_ad = fetcher.get_adapter("mpnp_draws")
+try:
+    _fx_mpnp_docs = _fx_mpnp_ad._to_documents(_fx_mpnp_raw, "manitoba skilled worker draw", 10)
+    _fx_mpnp_doc = _fx_mpnp_docs[0] if _fx_mpnp_docs else None
+except Exception as _fx_mpnp_e:  # noqa: BLE001
+    _fx_mpnp_doc = None
+
+_fx_mpnp_meta = _fx_mpnp_doc.metadata if _fx_mpnp_doc else {}
+_fx_mpnp_expect_brk = {
+    "Employer Services": "36",
+    "Francophone Community": "8",
+    "Regional Communities": "2",
+    "Temporary Public Policy to Facilitate Work Permits for Prospective Provincial Nominee "
+    "Program Candidates (TPP)": "31",
+}
+
+check("mpnp_draws: article -> doc (source_id mpnp:274, url permalink)",
+      _fx_mpnp_doc is not None
+      and _fx_mpnp_doc.source == "mpnp_draws"
+      and _fx_mpnp_doc.source_id == "mpnp:274"
+      and _fx_mpnp_doc.url == "https://immigratemanitoba.com/2026/07/expression-of-interest-draw-274/",
+      detail=(f"source_id={getattr(_fx_mpnp_doc, 'source_id', None)!r} "
+              f"url={getattr(_fx_mpnp_doc, 'url', None)!r}"))
+
+check("mpnp_draws: title + %B %d, %Y date parse",
+      _fx_mpnp_doc is not None
+      and _fx_mpnp_doc.title == "MPNP EOI Draw #274 · Skilled Worker Stream"
+      and _fx_mpnp_doc.date == _fx_mpnp_dt(2026, 7, 2),
+      detail=(f"title={getattr(_fx_mpnp_doc, 'title', None)!r} "
+              f"date={getattr(_fx_mpnp_doc, 'date', None)!r}"))
+
+check("mpnp_draws: LAA total (77) + Express Entry subset (15) + draw_number/stream",
+      _fx_mpnp_meta.get("draw_number") == "274"
+      and _fx_mpnp_meta.get("stream") == "Skilled Worker Stream"
+      and _fx_mpnp_meta.get("laa_issued") == "77"
+      and _fx_mpnp_meta.get("express_entry_declared") == "15",
+      detail=(f"laa_issued={_fx_mpnp_meta.get('laa_issued')!r} "
+              f"ee={_fx_mpnp_meta.get('express_entry_declared')!r}"))
+
+check("mpnp_draws: li breakdown parsed, total line excluded",
+      _fx_mpnp_meta.get("laa_breakdown") == _fx_mpnp_expect_brk,
+      detail=f"breakdown={_fx_mpnp_meta.get('laa_breakdown')!r}")
+
+# 2026-07-25 eyefix: the parser above was never the problem. The scrape base fetched HTML with a
+# browser UA but NO Accept header, and immigratemanitoba.com's WAF answers that with 415
+# Unsupported Media Type (verified: bare 415, +UA 415, +UA+Accept 200), so mpnp_draws returned 0
+# rows for months while the fixture above kept passing. Assert the header is sent, and that it is
+# scoped to the HTML path only (http.get_json must NOT start advertising text/html).
+import inspect as _insp_sb  # noqa: E402
+import penumbra.core.sources.scrape._base as _sb  # noqa: E402
+_sb_fetch_src = _insp_sb.getsource(_sb.BaseScrapeAdapter._raw_fetch)
+check("scrape base: the fetch_html path sends a browser-shaped Accept (a UA alone gets 415 from real WAFs)",
+      hasattr(_sb, "_SCRAPE_ACCEPT")
+      and "text/html" in _sb._SCRAPE_ACCEPT
+      and '"Accept": _SCRAPE_ACCEPT' in _sb_fetch_src,
+      detail=f"accept={getattr(_sb, '_SCRAPE_ACCEPT', None)!r}")
+check("scrape base: the JSON path is UNTOUCHED by that Accept (no API can negotiate us into HTML)",
+      "http.get_json(url)" in _sb_fetch_src
+      and "_SCRAPE_ACCEPT" not in _sb_fetch_src.split("from penumbra.core import http")[-1])
+
+# 2026-07-25 eyefix: HKU CS restructured; /news/ now 404s (it had been a frozen 2018 archive), so
+# the configured URL must be the live /news-events/* surface. in-the-media is the one that yields
+# dated items through _extract_news_items (verified live: 43 items vs 0 from /events).
+import penumbra.core.sources.scrape.hk_universities_source as _hk  # noqa: E402
+_hk_hku = next((u for n, u, _ in _hk.UNIS if n == "HKU CS"), "")
+check("hk_universities: HKU CS points at the live news-events surface, not the dead /news/ (404)",
+      _hk_hku.endswith("/news-events/in-the-media") and not _hk_hku.rstrip("/").endswith("/news"),
+      detail=f"hku_url={_hk_hku!r}")
+
+# 2026-07-25 eyefix: fixing the Accept header got mpnp past the 415, but the page then served a JS
+# "One moment, please..." interstitial (~11.9KB shell) that no header or TLS tier clears (curl_cffi
+# returned 0 bytes; a cookie-jar retry never got a cookie). Only a real browser runs the challenge,
+# so mpnp_draws now fetches through CDP (verified live: ~240KB, 10 article cards, draws #271-275).
+# The parser is UNCHANGED, which is why the offline fixture above still guards it.
+import penumbra.core.sources.scrape.ca_pnp_source as _capnp  # noqa: E402
+_mpnp_fetch_src = _insp_sb.getsource(_capnp.MpnpDrawsAdapter._raw_fetch)
+check("mpnp_draws: _raw_fetch renders through CDP (a JS interstitial no header/TLS tier can clear)",
+      "cdp_call" in _mpnp_fetch_src
+      and "page.content()" in _mpnp_fetch_src          # HTML, not inner_text: the parser needs tags
+      and "return None" in _mpnp_fetch_src)            # failure -> None -> [] (adapter contract)
+
+# 2026-07-25 eyefix: OpenReview serves a forum from EXACTLY ONE of two live backends, and the adapter
+# only ever asked api2 (v2). Every pre-2023 forum therefore came back as a well-formed EMPTY, which
+# reads as "no such paper" rather than "wrong backend". Measured with the adapter's own auth:
+# BrnlCSqO6n (ICLR2026) 30 notes on v2 / 0 on v1; qGvMv3undNJ (NeurIPS2021) 0 on v2 / 16 on v1;
+# knKJgksd7kA 13, QkljT4mrfs 22, uJGObgFU0lU 19, all v1-only. After the fallback: 29 / 15 / 12 / 21 / 18
+# docs, with decision + meta_review subtypes resolving on BOTH backends.
+import penumbra.core.sources.api.openreview_source as _or  # noqa: E402
+_or_fetch_src = _insp_sb.getsource(_or.OpenReviewAdapter.fetch_reviews)
+_or_search_src = _insp_sb.getsource(_or.OpenReviewAdapter.search)
+_or_note_src = _insp_sb.getsource(_or.OpenReviewAdapter._review_note_to_document)
+check("openreview: the v1 backend is wired (api.openreview.net) and DISTINCT from api2",
+      _or.API_BASE_V1 == "https://api.openreview.net" and _or.API_BASE != _or.API_BASE_V1)
+check("openreview: fetch_reviews falls back to v1 when v2 holds the forum's notes at zero",
+      "base=API_BASE_V1" in _or_fetch_src)
+check("openreview: a forum empty on BOTH backends emits a diagnostic (not a silent well-formed empty)",
+      "BOTH backends" in _or_fetch_src and "diag.note" in _or_fetch_src)
+check("openreview: reviews: lookups floor the limit so the thread tail (responses/meta/decision) survives",
+      _or._REVIEWS_MIN_LIMIT >= 30 and "_REVIEWS_MIN_LIMIT" in _or_search_src)
+check("openreview: note kind reads v1's SINGULAR invitation as well as v2's invitations[]",
+      'note.get("invitation")' in _or_note_src and 'note.get("invitations")' in _or_note_src)
+
+# 2026-07-25 eyefix: LMArena (ex-LMSys) stopped publishing ANY feed (arena.ai/blog/rss/ and every
+# candidate answer with the SPA shell, zero <item>, and the blog declares no rel=alternate), so the
+# RSS row was permanently dark and correctly refused every body as "not a feed". The blog is
+# server-rendered though, so the source moved to the declarative HTML path. Offline fixture: the
+# real card shape (the <a> wraps the <article>, so the permalink is on the ITEM, the title/summary
+# inside), asserted through the same schema_extract the adapter runs.
+import penumbra.core.sources.scrape.lmsys_arena_source as _lma  # noqa: E402
+from penumbra.core.normalize import schema_extract as _sx  # noqa: E402
+_lma_html = (
+    '<div><a href="/blog/autoeval-scores"><article class="group flex">'
+    '<h3>Introducing AutoEval to the Arena leaderboards</h3>'
+    '<p>At Arena, we take a different approach to static fixed benchmarks.</p>'
+    '</article></a>'
+    '<a href="/blog/factuality-in-arena"><article class="group flex">'
+    '<h3>Factuality in the Arena</h3><p>Factuality remains a persistent question.</p>'
+    '</article></a>'
+    '<a href="/careers">no article here, must not match</a></div>'
+)
+_lma_rows = _sx(_lma_html, _lma.LmsysArenaAdapter.extract_schema)
+check("lmsys_arena: declarative schema pulls permalink from the wrapping <a> + title/summary from the card",
+      len(_lma_rows) == 2
+      and _lma_rows[0]["url"] == "/blog/autoeval-scores"
+      and _lma_rows[0]["title"] == "Introducing AutoEval to the Arena leaderboards"
+      and _lma_rows[0]["content"].startswith("At Arena")
+      and _lma_rows[1]["url"] == "/blog/factuality-in-arena",
+      detail=f"rows={len(_lma_rows)}")
+_lma_ad = fetcher.get_adapter("lmsys_arena")
+check("lmsys_arena: registered off the HTML path (fetch_html + base_url), NOT the dead RSS table",
+      _lma_ad is not None and getattr(_lma_ad, "fetch_html", False) is True
+      and getattr(_lma_ad, "base_url", "") == "https://lmarena.ai"
+      and not hasattr(_lma_ad, "feeds"),
+      detail=f"adapter={type(_lma_ad).__name__ if _lma_ad else None}")
+import json as _lma_json  # noqa: E402
+from pathlib import Path as _lma_Path  # noqa: E402
+_lma_rows_json = _lma_json.loads(
+    (_lma_Path(_lma.__file__).with_name("rss_bundles.json")).read_text(encoding="utf-8"))
+check("lmsys_arena: the dead feed row is GONE from rss_bundles.json (no resurrection on the RSS path)",
+      not any(r.get("name") == "lmsys_arena" for r in _lma_rows_json),
+      detail=f"rss rows={len(_lma_rows_json)}")
+
+# 2026-07-25 eyefix: ml_conferences was NOT dead, it was walled. The RSS fetcher's xml-shaped Accept
+# drew 415 from all three venues; a browser Accept drew 200 but ~11.9KB of JS-interstitial shell with
+# zero <item>; curl_cffi did not clear it either. CDP renders the blog fully and the SAME selector
+# yields 10 posts on each venue. Rebuilt on CDP + declarative HTML rather than retired: the coverage
+# (awards, submission policy, keynotes) is NOT what conference_deadlines carries.
+import penumbra.core.sources.scrape.ml_conferences_source as _mlc  # noqa: E402
+_mlc_fetch_src = _insp_sb.getsource(_mlc.MlConferencesAdapter._raw_fetch)
+_mlc_html = (
+    '<div><article><h2><a href="https://blog.icml.cc/2026/07/05/announcing-the-icml-2026-awards/">'
+    'Announcing the ICML 2026 Awards</a></h2></article>'
+    '<article><h2><a href="https://blog.icml.cc/2026/07/02/socials-at-icml-2026/">'
+    'Socials at ICML 2026</a></h2></article>'
+    '<article><h2>no link, must not match</h2></article></div>'
+)
+_mlc_docs = _mlc.MlConferencesAdapter()._to_documents([("ICML", "https://blog.icml.cc/", _mlc_html)], "", 10)
+check("ml_conferences: CDP-rendered blog HTML -> dated docs (permalink date, venue tag, newest first)",
+      len(_mlc_docs) == 2
+      and _mlc_docs[0].title == "[ICML] Announcing the ICML 2026 Awards"
+      and _mlc_docs[0].date == _fx_mpnp_dt(2026, 7, 5)
+      and _mlc_docs[1].date == _fx_mpnp_dt(2026, 7, 2)          # newest first
+      and (_mlc_docs[0].metadata or {}).get("venue") == "ICML",
+      detail=f"docs={len(_mlc_docs)}")
+check("ml_conferences: renders through CDP (the only tier that clears the venues' bot wall)",
+      "cdp_call" in _mlc_fetch_src and "page.content()" in _mlc_fetch_src
+      and len(_mlc._VENUES) == 3)
+check("ml_conferences: the walled feed row is GONE from rss_bundles.json (no dark-RSS resurrection)",
+      not any(r.get("name") == "ml_conferences" for r in _lma_rows_json))
+
+
+# --- canada_jobbank_wages: wage-page HTML -> Document (offline, pure parse) ---
+# REAL trimmed payload captured from /wagereport/occupation/5485 (software engineer):
+# 1 national + 1 province + 1 N/A region row, the exact markup _raw_fetch hands _to_documents.
+# _raw_fetch returns dict {html, concordance_id, noc21_code, noc_code, matched_title};
+# _to_documents(raw, query, limit) -> build_document(raw) (pure, no network).
+_fx_cjw_html = """<h1 property="name" id="wb-cont">Wages for Software engineers and designers</h1>
+<table>
+<tr><th id="header_region">Community/Area</th><th headers="header_region" id="header_min">Low ($/hour)</th><th headers="header_region" id="header_avg">Median ($/hour)</th><th headers="header_region" id="header_max">High ($/hour)</th><th id="header_note">Note</th></tr>
+<tr class="areaGroup wage-national  "><th headers="header_region" id="header_canada"><span class="larger-text"><strong>Canada</strong></span></th><td class="align-center" headers="header_canada header_min">35.00</td><td class="align-center" headers="header_canada header_avg">56.49</td><td class="align-center" headers="header_canada header_max">91.35</td><td class="align-center canada" headers="header3_wages header_canada"><p>Reference period: 2023-2024</p></td></tr>
+<tr class="areaGroup  wage-province "><th headers="header_region" id="header_NL">Newfoundland and Labrador</th><td class="align-center" headers="header_NL header_min">33.48</td><td class="align-center" headers="header_NL header_avg">48.88</td><td class="align-center" headers="header_NL header_max">71.24</td><td>Note</td></tr>
+<tr class="areaGroup   wage-region"><th headers="header_region" id="header_geo26928" class="sub_header"><div class="mrgn-lft-lg"><a href="/marketreport/wages-occupation/5485/geo26928">Notre Dame-Central-Bonavista Bay Region</a></div></th><td class="align-center" headers="header_geo26928 header_min"><abbr title="Not available">N/A</abbr></td><td class="align-center" headers="header_geo26928 header_avg"><abbr title="Not available">N/A</abbr></td><td class="align-center" headers="header_geo26928 header_max"><abbr title="Not available">N/A</abbr></td><td>Note</td></tr>
+</table>"""
+_fx_cjw_raw = {"html": _fx_cjw_html, "concordance_id": "5485",
+               "noc21_code": "21231", "noc_code": "2173", "matched_title": "software engineer"}
+_fx_cjw_ad = fetcher.get_adapter("canada_jobbank_wages")
+try:
+    _fx_cjw_docs = _fx_cjw_ad._to_documents(_fx_cjw_raw, "software engineer", 5)
+    _fx_cjw_doc = _fx_cjw_docs[0] if _fx_cjw_docs else None
+except Exception as _fx_cjw_exc:  # parse must never sink the smoke run
+    _fx_cjw_doc = None
+check("canada_jobbank_wages: html -> exactly one doc (source_id=concordance_id, url on it)",
+      _fx_cjw_doc is not None and _fx_cjw_doc.source == "canada_jobbank_wages"
+      and _fx_cjw_doc.source_id == "5485"
+      and _fx_cjw_doc.url == "https://www.jobbank.gc.ca/wagereport/occupation/5485")
+check("canada_jobbank_wages: title = occupation minus 'Wages for' + NOC 2021 tag",
+      _fx_cjw_doc is not None
+      and _fx_cjw_doc.title == "Job Bank 加拿大时薪: Software engineers and designers（NOC 21231）")
+check("canada_jobbank_wages: national median -> signal (56.49 CAD/hour) + metadata (ref period, national.median)",
+      _fx_cjw_doc is not None
+      and _fx_cjw_doc.signals["median_hourly_wage"].value == 56.49
+      and _fx_cjw_doc.signals["median_hourly_wage"].unit == "CAD/hour"
+      and _fx_cjw_doc.metadata["reference_period"] == "2023-2024"
+      and _fx_cjw_doc.metadata["noc_2021"] == "21231"
+      and _fx_cjw_doc.metadata["national"]["median"] == 56.49)
+check("canada_jobbank_wages: content carries national low/med/high line + a province row (N/A region suppressed)",
+      _fx_cjw_doc is not None
+      and "全国 (Canada): 低 $35.00 · 中位 $56.49 · 高 $91.35" in _fx_cjw_doc.content
+      and "Newfoundland and Labrador: 低 $33.48 / 中 $48.88 / 高 $71.24" in _fx_cjw_doc.content)
+
+
+# ---------------------------------------------------------------------------
+# 41. cordis_eu (the eye's first EU funding source): the bulk-file pattern's pure
+#     halves — the telos filter (is_ai_relevant) + the project row -> doc map,
+#     with the coordinator org joined — golden offline (no ~35MB zip pull in smoke).
+# ---------------------------------------------------------------------------
+from penumbra.core.sources.api import cordis_eu_source as _cordis  # noqa: E402
+_fx_cordis_proj = {
+    "id": "101039090", "acronym": "TOPS", "status": "SIGNED",
+    "title": "Machine-Assisted Teaching for Open-Ended Problem Solving: Foundations and Applications",
+    "startDate": "2022-04-01", "endDate": "2027-03-31",
+    "totalCost": "1495000", "ecMaxContribution": "1495000",
+    "masterCall": "ERC-2021-STG", "frameworkProgramme": "HORIZON", "fundingScheme": "HORIZON-ERC",
+    "grantDoi": "10.3030/101039090",
+    "keywords": "educational technology, artificial intelligence, reinforcement learning, computational thinking, problem solving skills",
+    "objective": "Computational thinking and problem solving skills are essential for everyone in the 21st century...",
+}
+_fx_cordis_coord = {
+    "name": "MAX-PLANCK-GESELLSCHAFT ZUR FORDERUNG DER WISSENSCHAFTEN EV",
+    "country": "DE", "city": "MUNCHEN", "role": "coordinator",
+}
+try:
+    _fx_cordis_doc = _cordis.CordisEuAdapter._row_to_doc(_fx_cordis_proj, _fx_cordis_coord)
+except Exception:
+    _fx_cordis_doc = None
+check("cordis_eu: _row_to_doc maps id -> source_id/url + title + startDate + erc tag",
+      _fx_cordis_doc is not None and _fx_cordis_doc.source == "cordis_eu"
+      and _fx_cordis_doc.source_id == "cordis:101039090"
+      and _fx_cordis_doc.url == "https://cordis.europa.eu/project/id/101039090"
+      and _fx_cordis_doc.title == "Machine-Assisted Teaching for Open-Ended Problem Solving: Foundations and Applications"
+      and _fx_cordis_doc.author is None
+      and _fx_cordis_doc.date is not None and _fx_cordis_doc.date.date().isoformat() == "2022-04-01"
+      and _fx_cordis_doc.tags == ["funding", "eu", "horizon-europe", "erc"])
+check("cordis_eu: _row_to_doc joins coordinator org + EUR contribution + grant DOI into metadata",
+      _fx_cordis_doc is not None
+      and _fx_cordis_doc.metadata["coordinator"] == "MAX-PLANCK-GESELLSCHAFT ZUR FORDERUNG DER WISSENSCHAFTEN EV"
+      and _fx_cordis_doc.metadata["coordinator_country"] == "DE"
+      and _fx_cordis_doc.metadata["ec_contribution_eur"] == "1495000"
+      and _fx_cordis_doc.metadata["grant_doi"] == "10.3030/101039090"
+      and "MAX-PLANCK" in _fx_cordis_doc.content
+      and "Horizon Europe" in _fx_cordis_doc.content
+      and "artificial intelligence" in _fx_cordis_doc.content)
+check("cordis_eu: is_ai_relevant keeps the AI row; _row_to_doc drops a no-id no-title row",
+      _cordis.is_ai_relevant(_fx_cordis_proj["title"], _fx_cordis_proj["objective"], _fx_cordis_proj["keywords"]) is True
+      and _cordis.CordisEuAdapter._row_to_doc({"id": "", "title": ""}, None) is None)
+_fx_cordis_a = fetcher.get_adapter("cordis_eu")
+check("cordis_eu: registered + explicit_only + eu/funding/STRUCTURE facets",
+      _fx_cordis_a is not None and bool(fetcher._explicit_only_reason(_fx_cordis_a))
+      and _fx_cordis_a.domains == ["funding"] and _fx_cordis_a.regions == ["eu"]
+      and _fx_cordis_a.modes == ["STRUCTURE"])
+
+
+# --- ukri_gtr: offline golden fixture (pure _project_to_doc over a REAL trimmed GtR record; no network) ---
+_fx_ukri_gtr_ad = fetcher.get_adapter("ukri_gtr")
+# REAL record (curl q='machine learning' &s=10, 2026-07-10); start set to the real epoch-ms this grant
+# carries in its full projection so the ms->date path is locked (search projection often nulls it).
+_fx_ukri_gtr_rec = {
+    "id": "CD7CC785-DE23-41B6-878A-AFDF8EA41529",
+    "href": "http://gtr.ukri.org/gtr/api/projects/CD7CC785-DE23-41B6-878A-AFDF8EA41529",
+    "identifiers": {"identifier": [{"value": "BB/R008736/1", "type": "RCUK"}]},
+    "title": "Machine Learning for Bird Song Learning",
+    "status": "Closed", "grantCategory": "Research Grant", "leadFunder": "BBSRC",
+    "leadOrganisationDepartment": None,
+    "abstractText": "Songbirds, including familiar species like chaffinches and great tits, share vocal learning with us. We use machine learning inspired by speech recognition to measure song similarity.",
+    "techAbstractText": None,
+    "researchSubjects": {"researchSubject": [{"text": "Animal science"}, {"text": "Unclassified"}]},
+    "researchTopics": {"researchTopic": [{"text": "Behavioural Ecology"}]},
+    "start": 1359676800000, "end": 1375225200000,
+    "participantValues": {"participant": [
+        {"organisationName": "University of X", "role": "LEAD_PARTICIPANT",
+         "projectCost": 300000.0, "grantOffer": 250000.0}]},
+}
+try:
+    _fx_ukri_gtr_doc = _fx_ukri_gtr_ad._project_to_doc(_fx_ukri_gtr_rec)
+except Exception:
+    _fx_ukri_gtr_doc = None
+check("ukri_gtr: _project_to_doc builds a UK funding doc (grant-ref id, ref-page url, org author, ms date, GBP amounts, subjects; 'Unclassified' dropped)",
+      _fx_ukri_gtr_doc is not None
+      and _fx_ukri_gtr_doc.source == "ukri_gtr"
+      and _fx_ukri_gtr_doc.source_id == "BB/R008736/1"
+      and _fx_ukri_gtr_doc.url == "https://gtr.ukri.org/projects?ref=BB%2FR008736%2F1"
+      and _fx_ukri_gtr_doc.title == "Machine Learning for Bird Song Learning"
+      and _fx_ukri_gtr_doc.author == "University of X"
+      and _fx_ukri_gtr_doc.date is not None and _fx_ukri_gtr_doc.date.year == 2013
+      and "Songbirds" in _fx_ukri_gtr_doc.content
+      and "funding" in _fx_ukri_gtr_doc.tags and "uk" in _fx_ukri_gtr_doc.tags
+      and "BBSRC" in _fx_ukri_gtr_doc.tags and "Animal science" in _fx_ukri_gtr_doc.tags
+      and "Unclassified" not in _fx_ukri_gtr_doc.tags
+      and _fx_ukri_gtr_doc.metadata.get("grant_ref") == "BB/R008736/1"
+      and _fx_ukri_gtr_doc.metadata.get("lead_funder") == "BBSRC"
+      and _fx_ukri_gtr_doc.metadata.get("lead_organisation") == "University of X"
+      and _fx_ukri_gtr_doc.metadata.get("project_cost_gbp") == 300000.0
+      and _fx_ukri_gtr_doc.metadata.get("grant_offer_gbp") == 250000.0
+      and _fx_ukri_gtr_doc.metadata.get("research_subjects") == ["Animal science"])
+# lean search projection (no abstract / no participants) -> author falls back to funder, content to header+title, amounts None, date None
+_fx_ukri_gtr_lean_rec = {
+    "id": "X", "identifiers": {"identifier": [{"value": "2403950"}]},
+    "title": "Quantum Machine Learning", "leadFunder": "EPSRC",
+    "grantCategory": "Studentship",
+}
+try:
+    _fx_ukri_gtr_lean = _fx_ukri_gtr_ad._project_to_doc(_fx_ukri_gtr_lean_rec)
+except Exception:
+    _fx_ukri_gtr_lean = None
+check("ukri_gtr: lean projection (no abstract/participants) -> funder author, header+title content, None amounts, None date",
+      _fx_ukri_gtr_lean is not None
+      and _fx_ukri_gtr_lean.source_id == "2403950"
+      and _fx_ukri_gtr_lean.author == "EPSRC"
+      and "Quantum Machine Learning" in _fx_ukri_gtr_lean.content
+      and _fx_ukri_gtr_lean.date is None
+      and _fx_ukri_gtr_lean.metadata.get("project_cost_gbp") is None)
+# an untitled or id-less record drops to None (no crash)
+try:
+    _fx_ukri_gtr_untitled = _fx_ukri_gtr_ad._project_to_doc({"identifiers": {"identifier": [{"value": "Z"}]}})
+    _fx_ukri_gtr_orphan = _fx_ukri_gtr_ad._project_to_doc({"title": "Orphan"})
+except Exception:
+    _fx_ukri_gtr_untitled, _fx_ukri_gtr_orphan = "boom", "boom"
+check("ukri_gtr: an untitled record and an id-less record both drop to None",
+      _fx_ukri_gtr_untitled is None and _fx_ukri_gtr_orphan is None)
+# registered + facets contract (keyless, explicit_only, funding/uk/STRUCTURE/lookup)
+check("ukri_gtr: registered + keyless + explicit_only + funding/uk/STRUCTURE/lookup",
+      _fx_ukri_gtr_ad is not None and _fx_ukri_gtr_ad.needs_credentials is False
+      and bool(fetcher._explicit_only_reason(_fx_ukri_gtr_ad))
+      and _fx_ukri_gtr_ad.kind == "lookup" and _fx_ukri_gtr_ad.domains == ["funding"]
+      and _fx_ukri_gtr_ad.regions == ["uk"] and _fx_ukri_gtr_ad.modes == ["STRUCTURE"])
+
+
+# ---------------------------------------------------------------------------
+# uk_companies_house: PARSE contract (offline golden fixture). Feed REAL-shape
+# tagged records straight into the kind-branched _to_document (bypasses the keyed
+# network _raw_fetch). Locks the three mappers: company search / officer / PSC drill.
+# ---------------------------------------------------------------------------
+from datetime import datetime as _fx_uk_companies_house_dt  # noqa: E402
+_fx_uk_companies_house_ad = fetcher.get_adapter("uk_companies_house")
+
+# RAW A: search/companies item (real CompanySearch schema), tagged _ch=company by _raw_fetch.
+_fx_uk_companies_house_raw_a = {
+    "_ch": "company",
+    "title": "DEEPMIND TECHNOLOGIES LIMITED",
+    "company_number": "07386350",
+    "company_status": "active",
+    "company_type": "ltd",
+    "date_of_creation": "2010-09-23",
+    "address_snippet": "5 New Street Square, London, United Kingdom, EC4A 3TW",
+}
+# RAW B: officers item, _crn attached by _raw_fetch.
+_fx_uk_companies_house_raw_b = {
+    "_ch": "officer", "_crn": "07386350",
+    "name": "HASSABIS, Demis", "officer_role": "director",
+    "appointed_on": "2010-09-23", "nationality": "British",
+    "occupation": "Research Scientist", "date_of_birth": {"month": 7, "year": 1976},
+    "links": {"officer": {"appointments": "/officers/abcDEF123/appointments"}},
+}
+# RAW C: persons-with-significant-control item, _crn attached by _raw_fetch.
+_fx_uk_companies_house_raw_c = {
+    "_ch": "psc", "_crn": "07386350",
+    "name": "Google LLC", "kind": "corporate-entity-person-with-significant-control",
+    "natures_of_control": ["ownership-of-shares-75-to-100-percent"],
+    "notified_on": "2016-04-06",
+    "links": {"self": "/company/07386350/persons-with-significant-control/corporate-entity/xYz"},
+}
+
+try:
+    _fx_uk_companies_house_doc_a = _fx_uk_companies_house_ad._to_document(_fx_uk_companies_house_raw_a)
+except Exception:  # noqa: BLE001
+    _fx_uk_companies_house_doc_a = None
+try:
+    _fx_uk_companies_house_doc_b = _fx_uk_companies_house_ad._to_document(_fx_uk_companies_house_raw_b)
+except Exception:  # noqa: BLE001
+    _fx_uk_companies_house_doc_b = None
+try:
+    _fx_uk_companies_house_doc_c = _fx_uk_companies_house_ad._to_document(_fx_uk_companies_house_raw_c)
+except Exception:  # noqa: BLE001
+    _fx_uk_companies_house_doc_c = None
+
+check("uk_companies_house: company item -> doc (CRN source_id + WEB url + incorporation date + tags)",
+      _fx_uk_companies_house_doc_a is not None
+      and _fx_uk_companies_house_doc_a.source == "uk_companies_house"
+      and _fx_uk_companies_house_doc_a.source_id == "07386350"
+      and _fx_uk_companies_house_doc_a.url == "https://find-and-update.company-information.service.gov.uk/company/07386350"
+      and _fx_uk_companies_house_doc_a.title == "DEEPMIND TECHNOLOGIES LIMITED (07386350)"
+      and _fx_uk_companies_house_doc_a.date == _fx_uk_companies_house_dt(2010, 9, 23)
+      and _fx_uk_companies_house_doc_a.tags == ["active", "ltd", "uk"]
+      and _fx_uk_companies_house_doc_a.metadata.get("company_number") == "07386350")
+
+check("uk_companies_house: officer item -> doc (officer_id from appointments link, author, appointed date, dob redacted)",
+      _fx_uk_companies_house_doc_b is not None
+      and _fx_uk_companies_house_doc_b.source_id == "07386350:officer:abcDEF123"
+      and _fx_uk_companies_house_doc_b.url == "https://find-and-update.company-information.service.gov.uk/officers/abcDEF123/appointments"
+      and _fx_uk_companies_house_doc_b.title == "HASSABIS, Demis - director @ 07386350"
+      and _fx_uk_companies_house_doc_b.author == "HASSABIS, Demis"
+      and _fx_uk_companies_house_doc_b.date == _fx_uk_companies_house_dt(2010, 9, 23)
+      and _fx_uk_companies_house_doc_b.metadata.get("officer_id") == "abcDEF123"
+      and _fx_uk_companies_house_doc_b.metadata.get("date_of_birth") == {"month": 7, "year": 1976})
+
+check("uk_companies_house: psc item -> doc (self-link url, composite source_id, notified date, kind+nature tags)",
+      _fx_uk_companies_house_doc_c is not None
+      and _fx_uk_companies_house_doc_c.source_id == "07386350:psc:Google LLC:2016-04-06"
+      and _fx_uk_companies_house_doc_c.url == "https://find-and-update.company-information.service.gov.uk/company/07386350/persons-with-significant-control/corporate-entity/xYz"
+      and _fx_uk_companies_house_doc_c.title == "Google LLC - PSC of 07386350"
+      and _fx_uk_companies_house_doc_c.author == "Google LLC"
+      and _fx_uk_companies_house_doc_c.date == _fx_uk_companies_house_dt(2016, 4, 6)
+      and _fx_uk_companies_house_doc_c.tags == ["corporate-entity-person-with-significant-control",
+                                                "ownership-of-shares-75-to-100-percent", "uk"])
+
+
+# --- layoffs_tracker: offline golden fixture (parse contract, no network) ---
+from penumbra.core.sources.api import layoffs_tracker_source as _fx_layoffs_tracker_mod
+
+# REAL captured readSharedViewData row (Microsoft, 2026-07-06, view shroKsHx3SdYYOzeh),
+# trimmed to one row + only the columns the asserts touch. Fed straight to _parse (pure).
+_fx_layoffs_tracker_raw = {"msg": "SUCCESS", "data": {"table": {
+    "id": "tblleV7Pnb6AcPCYL", "name": "Shared view table", "columns": [
+        {"id": "fld9AHA9YDoNhrVFQ", "name": "Company", "type": "text", "typeOptions": None},
+        {"id": "fldeoYEol1GhizODE", "name": "Location HQ", "type": "multiSelect",
+         "typeOptions": {"choices": {"selUIARvta4ZrMQ4S": {"id": "selUIARvta4ZrMQ4S", "name": "Seattle"}}}},
+        {"id": "fldH1FcSF7DAaS1EB", "name": "# Laid Off", "type": "number", "typeOptions": None},
+        {"id": "fldaRiRVH3vaD9DRC", "name": "Date", "type": "date", "typeOptions": None},
+        {"id": "fldZRD6CwpFopYqqv", "name": "%", "type": "number", "typeOptions": None},
+        {"id": "fldZxgn3xoVqoHWuj", "name": "Industry", "type": "select",
+         "typeOptions": {"choices": {"selFbYcvIJ3UEiwsU": {"id": "selFbYcvIJ3UEiwsU", "name": "Other"}}}},
+        {"id": "fldpt9Gt8PewUC1Sh", "name": "Source", "type": "text", "typeOptions": None},
+        {"id": "fldoYp88YU5yEaK2P", "name": "Stage", "type": "select",
+         "typeOptions": {"choices": {"sela5OuwQcXOkl5WO": {"id": "sela5OuwQcXOkl5WO", "name": "Post-IPO"}}}},
+        {"id": "fldiT8WOrVKce4LDj", "name": "$ Raised (mm)", "type": "number", "typeOptions": None},
+        {"id": "fldATTnRRO0iX7jr0", "name": "Country", "type": "select",
+         "typeOptions": {"choices": {"seldVNXmT64IJdbP2": {"id": "seldVNXmT64IJdbP2", "name": "United States"}}}},
+        {"id": "fldwGtACkf7IYtRZ6", "name": "Date Added", "type": "formula", "typeOptions": None}],
+    "rows": [{"id": "recnHhh6A6mkmLdng", "createdTime": "2026-07-06T16:32:44.000Z",
+              "cellValuesByColumnId": {
+                  "fld9AHA9YDoNhrVFQ": "Microsoft",
+                  "fldeoYEol1GhizODE": ["selUIARvta4ZrMQ4S"],
+                  "fldH1FcSF7DAaS1EB": 4800,
+                  "fldaRiRVH3vaD9DRC": "2026-07-06T00:00:00.000Z",
+                  "fldZRD6CwpFopYqqv": 0.02,
+                  "fldZxgn3xoVqoHWuj": "selFbYcvIJ3UEiwsU",
+                  "fldpt9Gt8PewUC1Sh": "https://www.cnbc.com/2026/07/06/microsoft-cuts-2point1percent-of-employees-as-xbox-unit-plans-to-spin-studios.html",
+                  "fldoYp88YU5yEaK2P": "sela5OuwQcXOkl5WO",
+                  "fldiT8WOrVKce4LDj": 1,
+                  "fldATTnRRO0iX7jr0": "seldVNXmT64IJdbP2",
+                  "fldwGtACkf7IYtRZ6": "2026-07-06T16:32:44.000Z"}}]}}}
+
+try:
+    _fx_layoffs_tracker_rows = _fx_layoffs_tracker_mod._parse(_fx_layoffs_tracker_raw)
+    _fx_layoffs_tracker_doc = _fx_layoffs_tracker_mod.LayoffsTrackerAdapter._to_doc(_fx_layoffs_tracker_rows[0])
+except Exception as _fx_layoffs_tracker_err:
+    _fx_layoffs_tracker_rows, _fx_layoffs_tracker_doc = [], None
+
+check("layoffs_tracker: _parse keeps one row -> _to_doc (row id -> source_id, cnbc url)",
+      len(_fx_layoffs_tracker_rows) == 1 and _fx_layoffs_tracker_doc is not None
+      and _fx_layoffs_tracker_doc.source == "layoffs_tracker"
+      and _fx_layoffs_tracker_doc.source_id == "recnHhh6A6mkmLdng"
+      and _fx_layoffs_tracker_doc.url.startswith("https://www.cnbc.com/"),
+      f"got {None if _fx_layoffs_tracker_doc is None else _fx_layoffs_tracker_doc.source_id}")
+
+check("layoffs_tracker: select/multiSelect ids resolve to labels + numbers map",
+      _fx_layoffs_tracker_doc is not None
+      and _fx_layoffs_tracker_doc.metadata["company"] == "Microsoft"
+      and _fx_layoffs_tracker_doc.metadata["num_laid_off"] == 4800
+      and _fx_layoffs_tracker_doc.metadata["percent"] == 0.02
+      and _fx_layoffs_tracker_doc.metadata["industry"] == "Other"
+      and _fx_layoffs_tracker_doc.metadata["stage"] == "Post-IPO"
+      and _fx_layoffs_tracker_doc.metadata["country"] == "United States"
+      and _fx_layoffs_tracker_doc.metadata["locations"] == ["Seattle"],
+      f"got {None if _fx_layoffs_tracker_doc is None else _fx_layoffs_tracker_doc.metadata}")
+
+check("layoffs_tracker: title + date built from the row",
+      _fx_layoffs_tracker_doc is not None
+      and _fx_layoffs_tracker_doc.title == "Microsoft: 4800 laid off (2%) · Other, United States"
+      and _fx_layoffs_tracker_doc.date is not None and _fx_layoffs_tracker_doc.date.year == 2026
+      and _fx_layoffs_tracker_doc.date.month == 7 and _fx_layoffs_tracker_doc.date.day == 6,
+      f"got {None if _fx_layoffs_tracker_doc is None else _fx_layoffs_tracker_doc.title}")
+
+
+# ---------------------------------------------------------------------------
+# cvf_openaccess: golden fixture (offline parse lock, REAL captured HTML).
+# The adapter tangles parse with httpx.get (._papers listing / .fetch_url paper),
+# so we rebind ITS module-level `httpx` + `cache` names to offline fakes that
+# serve the recorded HTML, run the adapter's OWN parse path, restore in finally.
+# No network. Locks: listing dt.ptitle -> doc, and paper-page citation_* enrich.
+# ---------------------------------------------------------------------------
+import penumbra.core.sources.scrape.cvf_openaccess_source as _fx_cvf_openaccess_mod
+
+_fx_cvf_openaccess_listing = (
+    '<dl>\n'
+    '<dt class="ptitle"><br><a href="/content/CVPR2024/html/'
+    'Zeng_Unmixing_Diffusion_for_Self-Supervised_Hyperspectral_Image_Denoising_CVPR_2024_paper.html">'
+    'Unmixing Diffusion for Self-Supervised Hyperspectral Image Denoising</a></dt>\n'
+    '<dd>\n'
+    '<form class="authsearch"><input type="hidden" name="query_author" value="Haijin Zeng"></form>\n'
+    '<form class="authsearch"><input type="hidden" name="query_author" value="Jiezhang Cao"></form>\n'
+    '<form class="authsearch"><input type="hidden" name="query_author" value="Kai Zhang"></form>\n'
+    '<form class="authsearch"><input type="hidden" name="query_author" value="Yongyong Chen"></form>\n'
+    '<form class="authsearch"><input type="hidden" name="query_author" value="Hiep Luong"></form>\n'
+    '<form class="authsearch"><input type="hidden" name="query_author" value="Wilfried Philips"></form>\n'
+    '</dd>\n'
+    '<dd>\n'
+    '[<a href="/content/CVPR2024/papers/'
+    'Zeng_Unmixing_Diffusion_for_Self-Supervised_Hyperspectral_Image_Denoising_CVPR_2024_paper.pdf">pdf</a>]\n'
+    '[<a href="/content/CVPR2024/supplemental/'
+    'Zeng_Unmixing_Diffusion_for_CVPR_2024_supplemental.pdf">supp</a>]\n'
+    '<div class="bibref">@InProceedings{Zeng_2024_CVPR, '
+    'title = {Unmixing Diffusion for Self-Supervised Hyperspectral Image Denoising}, year = {2024}}</div>\n'
+    '</dd>\n'
+    '</dl>'
+)
+_fx_cvf_openaccess_paper = (
+    '<html><head>\n'
+    '<meta name="citation_title" content="Unmixing Diffusion for Self-Supervised Hyperspectral Image Denoising">\n'
+    '<meta name="citation_author" content="Zeng, Haijin">\n'
+    '<meta name="citation_author" content="Cao, Jiezhang">\n'
+    '<meta name="citation_publication_date" content="2024">\n'
+    '<meta name="citation_pdf_url" content="https://openaccess.thecvf.com/content/CVPR2024/papers/'
+    'Zeng_Unmixing_Diffusion_for_Self-Supervised_Hyperspectral_Image_Denoising_CVPR_2024_paper.pdf">\n'
+    '</head><body><div id="abstract">Hyperspectral images (HSIs) have extensive applications '
+    '... achieves state-of-the-art performance.</div></body></html>'
+)
+_fx_cvf_openaccess_url = (
+    "https://openaccess.thecvf.com/content/CVPR2024/html/"
+    "Zeng_Unmixing_Diffusion_for_Self-Supervised_Hyperspectral_Image_Denoising_CVPR_2024_paper.html"
+)
+
+_fx_cvf_openaccess_html = {"body": ""}
+
+
+class _FxCvfResp:
+    def __init__(self, text: str) -> None:
+        self.text = text
+        self.status_code = 200
+
+    def raise_for_status(self) -> None:
+        return None
+
+
+class _FxCvfHttpx:
+    @staticmethod
+    def get(*a, **k):  # noqa: ANN002, ANN003
+        return _FxCvfResp(_fx_cvf_openaccess_html["body"])
+
+
+class _FxCvfCache:
+    @staticmethod
+    def make_key(*a, **k):  # noqa: ANN002, ANN003
+        return "fx-cvf"
+
+    @staticmethod
+    def get(*a, **k):  # noqa: ANN002, ANN003
+        return None  # always cold, so the recorded HTML is parsed fresh
+
+    @staticmethod
+    def set(*a, **k):  # noqa: ANN002, ANN003
+        return None
+
+
+_fx_cvf_openaccess_ad = fetcher.get_adapter("cvf_openaccess")
+_fx_cvf_openaccess_docA = None
+_fx_cvf_openaccess_docB = None
+_fx_cvf_openaccess_saved = (_fx_cvf_openaccess_mod.httpx, _fx_cvf_openaccess_mod.cache)
+try:
+    _fx_cvf_openaccess_mod.httpx = _FxCvfHttpx
+    _fx_cvf_openaccess_mod.cache = _FxCvfCache
+    # FIXTURE A: listing dt.ptitle block -> paper dict -> doc (real _papers parse)
+    _fx_cvf_openaccess_html["body"] = _fx_cvf_openaccess_listing
+    _fx_cvf_openaccess_papers = _fx_cvf_openaccess_ad._papers("CVPR2024")
+    if _fx_cvf_openaccess_papers:
+        _fx_cvf_openaccess_docA = _fx_cvf_openaccess_ad._to_doc(_fx_cvf_openaccess_papers[0])
+    # FIXTURE B: paper.html citation_* meta -> enriched doc (real fetch_url parse)
+    _fx_cvf_openaccess_html["body"] = _fx_cvf_openaccess_paper
+    _fx_cvf_openaccess_docB = _fx_cvf_openaccess_ad.fetch_url(_fx_cvf_openaccess_url)
+except Exception as _fx_cvf_openaccess_exc:  # noqa: BLE001
+    _fx_cvf_openaccess_docA = _fx_cvf_openaccess_docA
+    _fx_cvf_openaccess_docB = _fx_cvf_openaccess_docB
+finally:
+    (_fx_cvf_openaccess_mod.httpx, _fx_cvf_openaccess_mod.cache) = _fx_cvf_openaccess_saved
+
+_fx_cvf_openaccess_pdf = (
+    "https://openaccess.thecvf.com/content/CVPR2024/papers/"
+    "Zeng_Unmixing_Diffusion_for_Self-Supervised_Hyperspectral_Image_Denoising_CVPR_2024_paper.pdf"
+)
+check("cvf_openaccess: listing dt.ptitle -> doc (title/url/source_id)",
+      _fx_cvf_openaccess_docA is not None
+      and _fx_cvf_openaccess_docA.title == "Unmixing Diffusion for Self-Supervised Hyperspectral Image Denoising"
+      and _fx_cvf_openaccess_docA.source == "cvf_openaccess"
+      and _fx_cvf_openaccess_docA.url == _fx_cvf_openaccess_url
+      and _fx_cvf_openaccess_docA.source_id == "Zeng_Unmixing_Diffusion_for_Self-Supervised_Hyperspectral_Image_Denoising_CVPR_2024_paper",
+      "" if _fx_cvf_openaccess_docA is None else repr((_fx_cvf_openaccess_docA.source_id, _fx_cvf_openaccess_docA.url)))
+check("cvf_openaccess: listing authors[:4] + pdf_url + CVPR2024 + no-abstract sentinel",
+      _fx_cvf_openaccess_docA is not None
+      and _fx_cvf_openaccess_docA.author == "Haijin Zeng, Jiezhang Cao, Kai Zhang, Yongyong Chen"
+      and _fx_cvf_openaccess_docA.metadata.get("pdf_url") == _fx_cvf_openaccess_pdf
+      and _fx_cvf_openaccess_docA.metadata.get("conference") == "CVPR2024"
+      and _fx_cvf_openaccess_docA.metadata.get("year") == "2024"
+      and _fx_cvf_openaccess_docA.date is not None and _fx_cvf_openaccess_docA.date.year == 2024
+      and "Conference: CVPR2024" in _fx_cvf_openaccess_docA.content
+      and "no abstract in listing" in _fx_cvf_openaccess_docA.content,
+      "" if _fx_cvf_openaccess_docA is None else repr((_fx_cvf_openaccess_docA.author, _fx_cvf_openaccess_docA.metadata.get("pdf_url"))))
+check("cvf_openaccess: paper-page enrich (fetch_url) title/author/year/abstract/conference",
+      _fx_cvf_openaccess_docB is not None
+      and _fx_cvf_openaccess_docB.title == "Unmixing Diffusion for Self-Supervised Hyperspectral Image Denoising"
+      and (_fx_cvf_openaccess_docB.author or "").startswith("Zeng, Haijin")
+      and _fx_cvf_openaccess_docB.metadata.get("year") == "2024"
+      and _fx_cvf_openaccess_docB.metadata.get("conference") == "CVPR2024"
+      and "Hyperspectral images (HSIs) have extensive applications" in _fx_cvf_openaccess_docB.content
+      and "no abstract in listing" not in _fx_cvf_openaccess_docB.content,
+      "" if _fx_cvf_openaccess_docB is None else repr((_fx_cvf_openaccess_docB.author, _fx_cvf_openaccess_docB.metadata.get("conference"))))
+
+
+# --- openrouter_rankings: aggregate-then-rank parse contract (offline, no network) ---
+# Feeds the REAL recorded {"data":[...]} payload (3 daily bins of ONE model, captured
+# 2026-07-10) through the adapter's real aggregation via a monkeypatched module-level
+# httpx.get (nothing leaves the process; cache bypassed), then its real _to_doc.
+from penumbra.core.sources.api import openrouter_rankings_source as _fx_openrouter_rankings_mod
+import httpx as _fx_openrouter_rankings_httpx
+
+_fx_openrouter_rankings_payload = {"data": [
+    {"date": "2026-07-10 00:00:00", "model_permaslug": "anthropic/claude-4.7-opus-20260416",
+     "variant": "standard", "total_prompt_tokens": 300000000000, "total_completion_tokens": 20000000000,
+     "count": 5000000, "variant_permaslug": "anthropic/claude-4.7-opus-20260416", "change": None},
+    {"date": "2026-07-09 00:00:00", "model_permaslug": "anthropic/claude-4.7-opus-20260416",
+     "variant": "standard", "total_prompt_tokens": 150000000000, "total_completion_tokens": 10000000000,
+     "count": 2500000, "variant_permaslug": "anthropic/claude-4.7-opus-20260416", "change": None},
+    {"date": "2026-07-08 00:00:00", "model_permaslug": "anthropic/claude-4.7-opus-20260416",
+     "variant": "standard", "total_prompt_tokens": 50000000000, "total_completion_tokens": 5000000000,
+     "count": 1000000, "variant_permaslug": "anthropic/claude-4.7-opus-20260416", "change": None},
+]}
+
+_fx_openrouter_rankings_ad = fetcher.get_adapter("openrouter_rankings")
+_fx_openrouter_rankings_doc = None
+_fx_openrouter_rankings_save_get = _fx_openrouter_rankings_mod.httpx.get
+_fx_openrouter_rankings_save_cget = _fx_openrouter_rankings_mod.cache.get
+_fx_openrouter_rankings_save_cset = _fx_openrouter_rankings_mod.cache.set
+try:
+    _fx_openrouter_rankings_mod.cache.get = lambda k: None
+    _fx_openrouter_rankings_mod.cache.set = lambda *a, **k: None
+    _fx_openrouter_rankings_mod.httpx.get = (lambda *a, **k:
+        _fx_openrouter_rankings_httpx.Response(200, json=_fx_openrouter_rankings_payload,
+            request=_fx_openrouter_rankings_httpx.Request("GET", "https://openrouter.ai/rankings")))
+    _fx_openrouter_rankings_ranked = _fx_openrouter_rankings_ad._rankings()
+    _fx_openrouter_rankings_doc = _fx_openrouter_rankings_ad._to_doc(_fx_openrouter_rankings_ranked[0])
+except Exception:
+    _fx_openrouter_rankings_doc = None
+finally:
+    _fx_openrouter_rankings_mod.httpx.get = _fx_openrouter_rankings_save_get
+    _fx_openrouter_rankings_mod.cache.get = _fx_openrouter_rankings_save_cget
+    _fx_openrouter_rankings_mod.cache.set = _fx_openrouter_rankings_save_cset
+
+check("openrouter_rankings: 3 daily bins aggregate into ONE ranked model (rank #1, source_id <- model_permaslug, url)",
+      _fx_openrouter_rankings_doc is not None
+      and _fx_openrouter_rankings_doc.source == "openrouter_rankings"
+      and _fx_openrouter_rankings_doc.source_id == "anthropic/claude-4.7-opus-20260416"
+      and _fx_openrouter_rankings_doc.url == "https://openrouter.ai/anthropic/claude-4.7-opus-20260416")
+check("openrouter_rankings: title sums prompt+completion across bins -> 535B tokens/week, author <- slug vendor",
+      _fx_openrouter_rankings_doc is not None
+      and _fx_openrouter_rankings_doc.title == "#1 anthropic/claude-4.7-opus-20260416 · 535B tokens/week"
+      and _fx_openrouter_rankings_doc.author == "anthropic")
+check("openrouter_rankings: usage_tokens + requests signals sum the bins (535B tok, 8.5M req), date <- max UTC",
+      _fx_openrouter_rankings_doc is not None
+      and _fx_openrouter_rankings_doc.signals["usage_tokens"].value == 535000000000.0
+      and _fx_openrouter_rankings_doc.signals["usage_tokens"].unit == "tokens/week"
+      and _fx_openrouter_rankings_doc.signals["requests"].value == 8500000.0
+      and _fx_openrouter_rankings_doc.date is not None
+      and _fx_openrouter_rankings_doc.date.isoformat() == "2026-07-10T00:00:00+00:00")
+check("openrouter_rankings: metadata carries the aggregate total + week window",
+      _fx_openrouter_rankings_doc is not None
+      and _fx_openrouter_rankings_doc.metadata["total_tokens"] == 535000000000
+      and _fx_openrouter_rankings_doc.metadata["window"] == "week")
+
+
+# --- statcan_wds: WDS vector object -> time-series doc (offline parse contract) ---
+_fx_statcan_wds_ad = fetcher.get_adapter("statcan_wds")
+_fx_statcan_wds_entry = {
+    "vector": 2062815,
+    "label": "Canada: Unemployment rate (15 years and over, seasonally adjusted)",
+    "unit": "Percent",
+    "keywords": ["unemployment", "jobless", "labour", "labor", "lfs"],
+}
+# REAL captured getDataFromVectorsAndLatestNPeriods object (v2062815, trimmed to 3 points).
+_fx_statcan_wds_obj = {
+    "responseStatusCode": 0,
+    "productId": 14100287,
+    "coordinate": "1.7.1.1.1.1.0.0.0.0",
+    "vectorId": 2062815,
+    "vectorDataPoint": [
+        {"refPer": "2026-04-01", "value": 6.9, "decimals": 1, "symbolCode": 0,
+         "statusCode": 0, "releaseTime": "2026-07-10T08:30", "frequencyCode": 6},
+        {"refPer": "2026-05-01", "value": 6.6, "decimals": 1, "symbolCode": 0,
+         "statusCode": 0, "releaseTime": "2026-07-10T08:30", "frequencyCode": 6},
+        {"refPer": "2026-06-01", "value": 6.5, "decimals": 1, "symbolCode": 0,
+         "statusCode": 0, "releaseTime": "2026-07-10T08:30", "frequencyCode": 6},
+    ],
+}
+try:
+    _fx_statcan_wds_doc = _fx_statcan_wds_ad._series_to_doc(_fx_statcan_wds_entry, _fx_statcan_wds_obj)
+except Exception:
+    _fx_statcan_wds_doc = None
+check("statcan_wds: object -> doc (source_id vNNN + table url from productId)",
+      _fx_statcan_wds_doc is not None
+      and _fx_statcan_wds_doc.source == "statcan_wds"
+      and _fx_statcan_wds_doc.source_id == "v2062815"
+      and _fx_statcan_wds_doc.title == "Canada: Unemployment rate (15 years and over, seasonally adjusted)"
+      and _fx_statcan_wds_doc.url == "https://www150.statcan.gc.ca/t1/tbl1/en/tv.action?pid=1410028701")
+check("statcan_wds: latest refPer is the doc date + engagement signal (6.5 Percent)",
+      _fx_statcan_wds_doc is not None
+      and _fx_statcan_wds_doc.date is not None
+      and (_fx_statcan_wds_doc.date.year, _fx_statcan_wds_doc.date.month, _fx_statcan_wds_doc.date.day) == (2026, 6, 1)
+      and _fx_statcan_wds_doc.signals["latest_value"].value == 6.5
+      and _fx_statcan_wds_doc.signals["latest_value"].unit == "Percent")
+check("statcan_wds: metadata carries vector/table code + full refPer->value series",
+      _fx_statcan_wds_doc is not None
+      and _fx_statcan_wds_doc.metadata["vector_id"] == 2062815
+      and _fx_statcan_wds_doc.metadata["product_id"] == 14100287
+      and _fx_statcan_wds_doc.metadata["table_code"] == "14-10-0287"
+      and _fx_statcan_wds_doc.metadata["latest_period"] == "2026-06-01"
+      and _fx_statcan_wds_doc.metadata["series"] == {"2026-06-01": 6.5, "2026-05-01": 6.6, "2026-04-01": 6.9}
+      and "Vector: v2062815  ·  Table: 14-10-0287" in _fx_statcan_wds_doc.content)
+# Bad-vector guard: responseStatusCode 4 (empty points) must gate out to None, never a doc.
+_fx_statcan_wds_bad_entry = {"vector": 999999999, "label": "StatCan vector v999999999", "unit": "", "keywords": []}
+_fx_statcan_wds_bad_obj = {"responseStatusCode": 4, "vectorId": 999999999, "vectorDataPoint": []}
+try:
+    _fx_statcan_wds_bad_doc = _fx_statcan_wds_ad._series_to_doc(_fx_statcan_wds_bad_entry, _fx_statcan_wds_bad_obj)
+except Exception:
+    _fx_statcan_wds_bad_doc = "raised"
+check("statcan_wds: bad vector (responseStatusCode 4, empty points) gates out to None",
+      _fx_statcan_wds_bad_doc is None)
+
+
+# --- eurostat_stats: JSON-stat 2.0 cube -> time-series doc (offline parse contract) ---
+_fx_eurostat_stats_ad = fetcher.get_adapter("eurostat_stats")
+_fx_eurostat_stats_entry = {
+    "dataset": "une_rt_a",
+    "filters": {"sex": "T", "age": "Y15-74", "unit": "PC_ACT"},
+    "unit": "% of active population",
+    "label": "Harmonised unemployment rate, annual (age 15-74)",
+    "keywords": ["unemployment"],
+}
+# Hand-built JSON-stat 2.0 fixture: every non-time dim pinned (size 1), time last with 8 positions.
+# The value map is SPARSE (2020 absent, as a status-flagged ":" cell would be), so the decode must
+# skip it, not read a zero. All non-time sizes == 1 so the flat value index equals the time position.
+_fx_eurostat_stats_js = {
+    "version": "2.0", "class": "dataset",
+    "id": ["freq", "geo", "unit", "time"],
+    "size": [1, 1, 1, 8],
+    "value": {"0": 3.2, "1": 3.6, "3": 3.1, "4": 3.1, "5": 3.5, "6": 3.8, "7": 3.8},  # "2" (2020) omitted
+    "dimension": {
+        "geo": {"category": {"index": {"DE": 0}, "label": {"DE": "Germany"}}},
+        "time": {"category": {"index": {
+            "2018": 0, "2019": 1, "2020": 2, "2021": 3, "2022": 4, "2023": 5, "2024": 6, "2025": 7}}},
+    },
+}
+try:
+    _fx_eurostat_stats_doc = _fx_eurostat_stats_ad._series_to_doc(
+        _fx_eurostat_stats_entry, "DE", _fx_eurostat_stats_js)
+except Exception:
+    _fx_eurostat_stats_doc = None
+check("eurostat_stats: cube -> doc (source_id dataset/geo + databrowser url + geo-labelled title)",
+      _fx_eurostat_stats_doc is not None
+      and _fx_eurostat_stats_doc.source == "eurostat_stats"
+      and _fx_eurostat_stats_doc.source_id == "une_rt_a/DE"
+      and _fx_eurostat_stats_doc.title == "Germany: Harmonised unemployment rate, annual (age 15-74)"
+      and _fx_eurostat_stats_doc.url == "https://ec.europa.eu/eurostat/databrowser/view/une_rt_a/default/table?lang=en")
+check("eurostat_stats: latest period is the doc date + engagement signal (3.8 % of active population)",
+      _fx_eurostat_stats_doc is not None
+      and _fx_eurostat_stats_doc.date is not None
+      and (_fx_eurostat_stats_doc.date.year, _fx_eurostat_stats_doc.date.month, _fx_eurostat_stats_doc.date.day) == (2025, 1, 1)
+      and _fx_eurostat_stats_doc.signals["latest_value"].value == 3.8
+      and _fx_eurostat_stats_doc.signals["latest_value"].unit == "% of active population")
+check("eurostat_stats: metadata carries dataset/geo + sparse period->value series (2020 skipped)",
+      _fx_eurostat_stats_doc is not None
+      and _fx_eurostat_stats_doc.metadata["dataset"] == "une_rt_a"
+      and _fx_eurostat_stats_doc.metadata["geo"] == "DE"
+      and _fx_eurostat_stats_doc.metadata["latest_period"] == "2025"
+      and _fx_eurostat_stats_doc.metadata["n_periods"] == 7
+      and "2020" not in _fx_eurostat_stats_doc.metadata["series"]
+      and _fx_eurostat_stats_doc.metadata["series"] == {
+          "2025": 3.8, "2024": 3.8, "2023": 3.5, "2022": 3.1, "2021": 3.1, "2019": 3.6, "2018": 3.2}
+      and "Dataset: une_rt_a  ·  Geo: DE" in _fx_eurostat_stats_doc.content)
+# Wrong/absent pin guard: a non-time dimension left with size > 1 (a multi-series cube) must gate
+# out to None, never a mis-decoded doc (the "empty value / wrong code" gate).
+_fx_eurostat_stats_bad_js = {
+    "id": ["geo", "sex", "time"], "size": [1, 2, 8],
+    "value": {"0": 3.2, "1": 4.1},
+    "dimension": {"time": {"category": {"index": {"2024": 0}}}},
+}
+try:
+    _fx_eurostat_stats_bad_doc = _fx_eurostat_stats_ad._series_to_doc(
+        _fx_eurostat_stats_entry, "DE", _fx_eurostat_stats_bad_js)
+except Exception:
+    _fx_eurostat_stats_bad_doc = "raised"
+check("eurostat_stats: wrong/absent pin (a non-time size > 1) gates out to None",
+      _fx_eurostat_stats_bad_doc is None)
+
+
+# ---------------------------------------------------------------------------
+# wikidata_identity: name -> QID -> external-identifier cluster. Feed the REAL
+# assembled _raw_fetch payload (Yoshua Bengio, Q3572699) straight into the
+# documents hook; no network. Locks the _identity_to_doc parse contract.
+# ---------------------------------------------------------------------------
+# The dict _raw_fetch returns: search hit fields + label-resolved cluster.
+_fx_wikidata_identity_raw = {
+    "qid": "Q3572699",
+    "label": "Yoshua Bengio",
+    "description": "Canadian computer scientist (born 1964)",
+    "is_human": True,
+    "external_ids": {
+        "orcid": {"value": "0000-0002-9322-3515",
+                  "url": "https://orcid.org/0000-0002-9322-3515"},
+        "google_scholar": {"value": "kukA0LcAAAAJ",
+                           "url": "https://scholar.google.com/citations?user=kukA0LcAAAAJ"},
+        "dblp": {"value": "56/953", "url": "https://dblp.org/pid/56/953"},
+        "website": {"value": "http://www.iro.umontreal.ca/~bengioy/yoshua_en/index.html",
+                    "url": "http://www.iro.umontreal.ca/~bengioy/yoshua_en/index.html"},
+    },
+    "tickers": [],
+    "items": {
+        "employers": [{"qid": "Q392189", "label": "Universite de Montreal"}],
+        "affiliations": [{"qid": "Q3044597",
+                          "label": "Departement d'informatique et de recherche operationnelle"}],
+    },
+}
+_fx_wikidata_identity_ad = fetcher.get_adapter("wikidata_identity")
+try:
+    _fx_wikidata_identity_docs = _fx_wikidata_identity_ad._to_documents(
+        _fx_wikidata_identity_raw, "Yoshua Bengio", 5)
+    _fx_wikidata_identity_doc = _fx_wikidata_identity_docs[0] if _fx_wikidata_identity_docs else None
+except Exception:
+    _fx_wikidata_identity_doc = None
+
+_fx_wikidata_identity_d = _fx_wikidata_identity_doc  # short alias
+check("wikidata_identity: raw cluster -> one doc (source/id/url/title)",
+      _fx_wikidata_identity_d is not None
+      and _fx_wikidata_identity_d.source == "wikidata_identity"
+      and _fx_wikidata_identity_d.source_id == "wdid:Q3572699"
+      and _fx_wikidata_identity_d.url == "https://www.wikidata.org/wiki/Q3572699"
+      and _fx_wikidata_identity_d.title == "Yoshua Bengio"
+      and _fx_wikidata_identity_d.tags == ["wikidata", "identity"])
+check("wikidata_identity: identifier_count signal == 4 (4 ext ids, 0 tickers)",
+      _fx_wikidata_identity_d is not None
+      and _fx_wikidata_identity_d.signals["identifier_count"].value == 4)
+check("wikidata_identity: metadata carries flat id map + formatter URLs + org context",
+      _fx_wikidata_identity_d is not None
+      and _fx_wikidata_identity_d.metadata["qid"] == "Q3572699"
+      and _fx_wikidata_identity_d.metadata["is_human"] is True
+      and _fx_wikidata_identity_d.metadata["identifiers"] == {
+          "orcid": "0000-0002-9322-3515", "google_scholar": "kukA0LcAAAAJ",
+          "dblp": "56/953",
+          "website": "http://www.iro.umontreal.ca/~bengioy/yoshua_en/index.html"}
+      and _fx_wikidata_identity_d.metadata["identifier_urls"]["orcid"] == "https://orcid.org/0000-0002-9322-3515"
+      and _fx_wikidata_identity_d.metadata["identifier_urls"]["dblp"] == "https://dblp.org/pid/56/953"
+      and _fx_wikidata_identity_d.metadata["employers"] == ["Universite de Montreal"]
+      and _fx_wikidata_identity_d.metadata["affiliations"] == ["Departement d'informatique et de recherche operationnelle"]
+      and _fx_wikidata_identity_d.metadata["tickers"] is None
+      and _fx_wikidata_identity_d.metadata["industries"] is None
+      and _fx_wikidata_identity_d.metadata["subsidiaries"] is None)
+check("wikidata_identity: content leads with description + renders ORCID/DBLP id lines",
+      _fx_wikidata_identity_d is not None
+      and _fx_wikidata_identity_d.content.startswith("_Canadian computer scientist (born 1964)_")
+      and "- ORCID: https://orcid.org/0000-0002-9322-3515" in _fx_wikidata_identity_d.content
+      and "- DBLP: https://dblp.org/pid/56/953" in _fx_wikidata_identity_d.content)
+
+
+# --- nsfc_awards: offline golden fixture (LetPub NSFC grant table -> Document) ---
+from penumbra.core.sources.scrape import nsfc_awards_source as _fx_nsfc_awards_mod  # noqa: E402
+
+# REAL recorded LetPub result fragment (letpub.com.cn, 2026-07-10, query 机器学习, 1997-2021),
+# trimmed to load-bearing rows. Each grant = a 7-<td> metadata row + a 题目 row. The 2nd grant
+# has an EMPTY 项目类型 cell (a pre-2000 record) to lock that it still parses.
+_fx_nsfc_awards_html = (
+    '<table width="1100" class="table_yjfx">'
+    '<tr style="background:#3b5998;color:white;"><th>负责人</th><th>单位</th><th>金额 (万)</th>'
+    '<th>项目编号</th><th>项目类型</th><th>所属学部</th><th>批准年份</th></tr>'
+    '<tr style="background:#EFEFEF;"><td>周志华</td><td>南京大学</td><td>1000</td><td>61921006</td>'
+    '<td>创新研究群体科学基金</td><td>信息科学部</td><td>2019</td></tr>'
+    '<tr><td>题目</td><td colspan="6">面向开放动态环境的机器学习</td></tr>'
+    '<tr style="background:#EFEFEF;"><td>钟义信</td><td>北京邮电大学</td><td>29.25</td><td>69982001</td>'
+    '<td></td><td>信息科学部</td><td>1999</td></tr>'
+    '<tr><td>题目</td><td colspan="6">面向自然语言智能处理的信息理论</td></tr>'
+    '</table>'
+)
+
+try:
+    _fx_nsfc_awards_grants = _fx_nsfc_awards_mod._parse_grants(_fx_nsfc_awards_html)
+except Exception:
+    _fx_nsfc_awards_grants = []
+check("nsfc_awards: _parse_grants pulls both grants (2-row-per-record table)",
+      len(_fx_nsfc_awards_grants) == 2, detail=str(_fx_nsfc_awards_grants))
+
+try:
+    _fx_nsfc_awards_doc = _fx_nsfc_awards_mod._grant_to_doc(_fx_nsfc_awards_grants[0])
+except Exception:
+    _fx_nsfc_awards_doc = None
+check("nsfc_awards: _grant_to_doc builds doc (title/PI/year/grant_no/amount 万元 + portal url)",
+      _fx_nsfc_awards_doc is not None and _fx_nsfc_awards_doc.source == "nsfc_awards"
+      and _fx_nsfc_awards_doc.title == "面向开放动态环境的机器学习"
+      and _fx_nsfc_awards_doc.author == "周志华"
+      and _fx_nsfc_awards_doc.source_id == "nsfc:61921006"
+      and _fx_nsfc_awards_doc.date is not None and _fx_nsfc_awards_doc.date.year == 2019
+      and _fx_nsfc_awards_doc.metadata.get("amount_wan") == "1000"
+      and _fx_nsfc_awards_doc.metadata.get("institution") == "南京大学"
+      and _fx_nsfc_awards_doc.url == "https://www.letpub.com.cn/index.php?page=grant",
+      detail=str(_fx_nsfc_awards_doc.source_id if _fx_nsfc_awards_doc else None))
+
+check("nsfc_awards: empty 项目类型 grant still parses (grant_no kept)",
+      len(_fx_nsfc_awards_grants) == 2
+      and _fx_nsfc_awards_grants[1]["project_type"] == ""
+      and _fx_nsfc_awards_grants[1]["grant_no"] == "69982001")
+
+check("nsfc_awards: _parse_grants returns [] on a login-wall / non-table fragment",
+      _fx_nsfc_awards_mod._parse_grants("<center>需要先注册登录</center>") == [])
+
+_fx_nsfc_awards_a = fetcher.get_adapter("nsfc_awards")
+check("nsfc_awards: registered + explicit_only + funding/cn/STRUCTURE facets",
+      _fx_nsfc_awards_a is not None
+      and bool(getattr(_fx_nsfc_awards_a, "explicit_only", None))
+      and _fx_nsfc_awards_a.domains == ["funding"]
+      and _fx_nsfc_awards_a.regions == ["cn"]
+      and "STRUCTURE" in (_fx_nsfc_awards_a.modes or []))
+
+
+# --- underline_talks golden fixture (offline; real recorded JSON:API payload, no network) ---
+# Parse entry point: UnderlineTalksAdapter._payload_to_document(payload), where payload is the
+# dict _resolve() returns (the JSON:API body) and _to_documents/_raw_fetch/fetch_url feed it.
+from penumbra.core.sources.scrape import underline_talks_source as _ult  # noqa: E402
+
+# REAL captured payload (lecture 88705, EMNLP 2023 FActScore; app.underline.io JSON:API, 2026-07-11),
+# trimmed to the fields the parser reads.
+_fx_underline_talks_raw = {
+    "data": {
+        "id": "88705",
+        "type": "thin_lectures",
+        "attributes": {
+            "title": "FActScore: Fine-grained Atomic Evaluation of Factual Precision in Long Form Text Generation",
+            "abstract": "Evaluating the factuality of long-form text generated by large language models (LMs) is non-trivial ... FACTSCORE is available for public use via `pip install factscore`.",
+            "held_at": "2023-12-08T08:00:00.000Z",
+            "published_at": "2023-11-19T14:00:00.000Z",
+            "slug": "factscore-fine-grained-atomic-evaluation-of-factual-precision-in-long-form-text-generation",
+            "playlist": "https://assets.underline.io/video/58459/file/abr/4f41f8770966d67648809cc52c73b0e8.m3u8",
+            "paper_url": "https://app.underline.io/downloadable_materials/lectures/88705/paper",
+            "underline_doi": "10.48448/31cp-3t17",
+            "video_doi": "10.48448/31cp-3t17",
+            "event_id": "431",
+            "package": "free",
+            "poster_lecture": False,
+        },
+        "relationships": {
+            "event": {"data": {"id": "431", "type": "thin_events"}},
+            "tag": {"data": {"id": "1", "type": "tags"}},
+        },
+    },
+    "included": [
+        {"id": "1", "type": "tags", "attributes": {"name": "technical paper", "variant": "primary"}},
+        {"id": "431", "type": "thin_events", "attributes": {"name": "EMNLP 2023"}},
+    ],
+}
+
+try:
+    _fx_underline_talks_doc = _ult.UnderlineTalksAdapter._payload_to_document(_fx_underline_talks_raw)
+except Exception as _fx_underline_talks_exc:  # noqa: BLE001 (a parse crash -> None -> the check fails, not the run)
+    _fx_underline_talks_doc = None
+
+_fx_underline_talks_url = ("https://underline.io/lecture/88705-factscore-fine-grained-atomic-"
+                           "evaluation-of-factual-precision-in-long-form-text-generation")
+check("underline_talks: payload -> doc core (source_id 88705 + canonical url + title)",
+      _fx_underline_talks_doc is not None
+      and _fx_underline_talks_doc.source == "underline_talks"
+      and _fx_underline_talks_doc.source_id == "88705"
+      and _fx_underline_talks_doc.url == _fx_underline_talks_url
+      and _fx_underline_talks_doc.title.startswith("FActScore: Fine-grained Atomic Evaluation"))
+check("underline_talks: held_at -> UTC date, author None, tags carry the subject tag",
+      _fx_underline_talks_doc is not None
+      and _fx_underline_talks_doc.date is not None
+      and _fx_underline_talks_doc.date.isoformat() == "2023-12-08T08:00:00+00:00"
+      and _fx_underline_talks_doc.author is None
+      and _fx_underline_talks_doc.tags == ["talk", "conference", "technical paper"])
+check("underline_talks: content is abstract + DOI + TRANSCRIBE pointer",
+      _fx_underline_talks_doc is not None
+      and _fx_underline_talks_doc.content.startswith("Evaluating the factuality of long-form text")
+      and "DOI: 10.48448/31cp-3t17" in _fx_underline_talks_doc.content
+      and "penumbra_transcribe" in _fx_underline_talks_doc.content)
+check("underline_talks: metadata locks event + public video .m3u8 transcribe handle",
+      _fx_underline_talks_doc is not None
+      and _fx_underline_talks_doc.metadata["event"] == "EMNLP 2023"
+      and _fx_underline_talks_doc.metadata["event_id"] == "431"
+      and _fx_underline_talks_doc.metadata["subject_tag"] == "technical paper"
+      and _fx_underline_talks_doc.metadata["package"] == "free"
+      and _fx_underline_talks_doc.metadata["has_video"] is True
+      and _fx_underline_talks_doc.metadata["transcribe_url"]
+          == "https://assets.underline.io/video/58459/file/abr/4f41f8770966d67648809cc52c73b0e8.m3u8")
+# negative path: a keyword query (has a space) or a blank resolves to no lecture id -> [] contract
+check("underline_talks: keyword / blank query is not a lecture id (no public search)",
+      _ult._lecture_id("factscore paper") is None and _ult._lecture_id("  ") is None)
+
+# ---------------------------------------------------------------------------
+# W1. Drift-guard goldens: the SHADOW SearchPlan (Layer 1 catalog + Layer 2 policy + Layer 3 pure
+#     plan) reproduces search_many's broad-branch selection EXACTLY, so the Wave-1 shadow warning
+#     never fires when parity holds. Scenarios 1-6 feed SYNTHETIC catalog+policy (no network, no real
+#     registry); a REAL-registry parity check proves the shadow stays silent on live traffic; scenario
+#     7 exercises the real per-entry catalog rebuild under _registry_lock. See fetcher.py's
+#     "Routing SearchPlan" block + the shadow wiring in search_many.
+# ---------------------------------------------------------------------------
+from penumbra.core import relevance as _w1_rel  # noqa: E402
+import threading as _w1_th  # noqa: E402
+
+
+def _w1_rec(name, index, *, static_eo=False, surface="", route=None):
+    """A synthetic CatalogRecord. `route` sets the query-overlap token set directly; else `surface`
+    is tokenized into it (the SAME relevance.tokenize the real catalog uses)."""
+    rt = frozenset(route) if route is not None else frozenset(_w1_rel.tokenize(surface))
+    return fetcher.CatalogRecord(
+        name=name, registration_index=index, backend=name, stability="scrape", access_tier="free",
+        kind="", domains=(), regions=(), modes=(), static_explicit_only=static_eo,
+        route_tokens=rt, generation=0)
+
+
+def _w1_cat(records):
+    return {r.name: r for r in records}  # insertion order == the list order (== registration order)
+
+
+def _w1_pol(enabled, *, retired=None, overlay=None, emergency=None, down=frozenset()):
+    return fetcher.PolicySnapshot(
+        enabled=frozenset(enabled), retired=dict(retired or {}), overlay=dict(overlay or {}),
+        emergency=dict(emergency or {}), watchdog_down=frozenset(down),
+        watchdog_as_of="2026-07-11T00:00:00")
+
+
+# Scenario 1: broad_live preserves REGISTRATION order (not sort order); a NAMED search does no selection.
+_w1_names = ["c_arxiv", "a_dblp", "b_openalex"]  # deliberately NOT alphabetical
+_w1_c1 = _w1_cat([_w1_rec(n, i) for i, n in enumerate(_w1_names)])
+_w1_p1 = _w1_pol(_w1_names)
+check("W1: broad_live preserves registration order (not sorted)",
+      fetcher.build_search_plan(_w1_c1, _w1_p1, "some query").broad_live == _w1_names
+      and _w1_names != sorted(_w1_names))
+check("W1: a NAMED search yields no selection (broad_live == names verbatim, nothing excluded)",
+      fetcher.build_search_plan(_w1_c1, _w1_p1, "q", sources=["z_named", "a_named"]).broad_live
+      == ["z_named", "a_named"])
+
+# Scenario 2: excluded reason strings EXACT (a static explicit_only str, a True coercion, a plain source).
+_w1_walled = "walled: logged-in CDP session, named-drill only"
+_w1_c2 = _w1_cat([
+    _w1_rec("walled_src", 0, static_eo=_w1_walled),
+    _w1_rec("flag_src", 1, static_eo=True),      # True -> 'explicit-only' coercion (legacy parity)
+    _w1_rec("plain_src", 2, static_eo=False)])
+_w1_plan2 = fetcher.build_search_plan(_w1_c2, _w1_pol(["walled_src", "flag_src", "plain_src"]), "q")
+check("W1: excluded reason is the EXACT static explicit_only string; True coerces to 'explicit-only'",
+      _w1_plan2.excluded == {"walled_src": _w1_walled, "flag_src": "explicit-only"})
+check("W1: a plain (non-excluded) source is the ONLY broad_live member",
+      _w1_plan2.broad_live == ["plain_src"])
+
+# Scenario 3: excluded_relevant ranking (-overlap, name) + 6-item cap + the org_watch skip.
+_w1_q3 = "alpha beta gamma delta epsilon zeta"  # 6 distinct query tokens
+_w1_c3 = _w1_cat([
+    _w1_rec("org_watch_hit", 0, static_eo="org_watch: redundant, reaches broad via arxiv/s2",
+            route=["alpha", "beta", "gamma", "delta", "epsilon", "zeta"]),  # ov6 but MUST be skipped
+    _w1_rec("s5a", 1, static_eo="walled", route=["alpha", "beta", "gamma", "delta", "epsilon"]),
+    _w1_rec("s5b", 2, static_eo="walled", route=["alpha", "beta", "gamma", "delta", "epsilon"]),
+    _w1_rec("s4", 3, static_eo="walled", route=["alpha", "beta", "gamma", "delta"]),
+    _w1_rec("s3", 4, static_eo="walled", route=["alpha", "beta", "gamma"]),
+    _w1_rec("s2", 5, static_eo="walled", route=["alpha", "beta"]),
+    _w1_rec("s1a", 6, static_eo="walled", route=["alpha"]),
+    _w1_rec("s1b", 7, static_eo="walled", route=["alpha"]),
+    _w1_rec("s1c", 8, static_eo="walled", route=["alpha"]),
+    _w1_rec("s0_nomatch", 9, static_eo="walled", route=["omega"])])  # zero overlap -> absent
+_w1_all3 = ["org_watch_hit", "s5a", "s5b", "s4", "s3", "s2", "s1a", "s1b", "s1c", "s0_nomatch"]
+_w1_plan3 = fetcher.build_search_plan(_w1_c3, _w1_pol(_w1_all3), _w1_q3)
+_w1_er_names = [d["name"] for d in _w1_plan3.excluded_relevant]
+check("W1: excluded_relevant ranks by (-overlap, name), caps at 6, skips org_watch + non-matching",
+      _w1_er_names == ["s5a", "s5b", "s4", "s3", "s2", "s1a"])
+check("W1: excluded_relevant entries are the byte-exact hint dicts (name/reason/why/overlap/matched)",
+      _w1_plan3.excluded_relevant[0] == {
+          "name": "s5a", "reason": "walled",
+          "why": "relevant but excluded; re-run naming it: sources=['s5a']", "overlap": 5,
+          "matched": ["alpha", "beta", "delta", "epsilon", "gamma"]})
+check("W1: an org_watch-excluded source never enters excluded_relevant even at max overlap",
+      "org_watch_hit" not in _w1_er_names and "org_watch_hit" in _w1_plan3.excluded)
+
+# Scenario 4: disabled under a profile (a source absent from policy.enabled), incl. a region-style off.
+# cn_off models a groups.disable_regions=['cn'] outcome: _profile_enabled already returned False, so it
+# is simply ABSENT from policy.enabled here (the pure plan consumes the materialized predicate).
+_w1_c4 = _w1_cat([_w1_rec("keep_a", 0), _w1_rec("cn_off", 1), _w1_rec("keep_c", 2)])
+_w1_plan4 = fetcher.build_search_plan(_w1_c4, _w1_pol(["keep_a", "keep_c"]), "q")
+check("W1: a source absent from policy.enabled lands in disabled (registration order), not broad/excluded",
+      _w1_plan4.disabled == ["cn_off"] and _w1_plan4.broad_live == ["keep_a", "keep_c"]
+      and "cn_off" not in _w1_plan4.excluded)
+
+# Scenario 5: static-explicit AND runtime-retired both land in excluded; retire WINS (reason 'retired:').
+_w1_c5 = _w1_cat([
+    _w1_rec("walled_and_retired", 0, static_eo="walled: logged-in CDP session"),
+    _w1_rec("plain_walled", 1, static_eo="walled: logged-in CDP session")])
+_w1_plan5 = fetcher.build_search_plan(
+    _w1_c5, _w1_pol(["walled_and_retired", "plain_walled"],
+                    retired={"walled_and_retired": "retired: parked by the curator 2026-07-12"}), "q")
+check("W1: a retire WINS over a static explicit_only (reason surfaces 'retired:', not the class reason)",
+      _w1_plan5.excluded["walled_and_retired"].startswith("retired:"))
+check("W1: a non-retired static explicit_only keeps its OWN class reason (precedence intact)",
+      _w1_plan5.excluded["plain_walled"] == "walled: logged-in CDP session")
+
+# Scenario 6: watchdog fresh -> a down source is quarantined into skipped_down; stale -> nothing.
+_w1_c6 = _w1_cat([_w1_rec("up_a", 0), _w1_rec("down_src", 1), _w1_rec("up_c", 2)])
+_w1_plan6_fresh = fetcher.build_search_plan(
+    _w1_c6, _w1_pol(["up_a", "down_src", "up_c"], down={"down_src"}), "q")
+check("W1: a fresh watchdog-down source is quarantined out of broad_live into skipped_down",
+      _w1_plan6_fresh.broad_live == ["up_a", "up_c"] and _w1_plan6_fresh.skipped_down == ["down_src"])
+_w1_plan6_stale = fetcher.build_search_plan(
+    _w1_c6, _w1_pol(["up_a", "down_src", "up_c"], down=frozenset()), "q")
+check("W1: a stale watchdog (empty down set) quarantines nothing (down_src rejoins broad_live)",
+      _w1_plan6_stale.broad_live == ["up_a", "down_src", "up_c"] and _w1_plan6_stale.skipped_down == [])
+_w1_wd_real = fetcher._watchdog_health
+try:  # the staleness gate itself: _watchdog_down_set returns EMPTY on stale data (what feeds the policy)
+    fetcher._watchdog_health = lambda: ({"x": 9}, {"x"}, "2000-01-01T00:00:00")  # ancient -> stale
+    check("W1: _watchdog_down_set gates on freshness (ancient as_of -> empty set feeds the policy)",
+          fetcher._watchdog_down_set() == set())
+finally:
+    fetcher._watchdog_health = _w1_wd_real
+
+
+# REAL-registry parity: over the LIVE registry (offline, selection is all local), the plan reproduces
+# the legacy broad selection with ZERO drift -> the shadow warning never fires on real traffic. The
+# legacy projections are recomputed here directly from fetcher's own derivations (mirroring
+# search_many's sources-is-None branch lines 657-694), then compared to build_search_plan.
+def _w1_legacy_broad(query):
+    target, excl, dis, er = [], {}, [], []
+    for s in fetcher.all_adapter_names():
+        a = fetcher.get_adapter(s)
+        if a is None:
+            continue
+        if not fetcher._profile_enabled(s, a):
+            dis.append(s)
+            continue
+        reason = fetcher._explicit_only_reason(a)
+        if reason:
+            excl[s] = reason
+            if not reason.startswith("org_watch"):
+                # Scoring primitives are CALLED, not re-implemented: this reference guards the
+                # SELECTION (who is live / excluded / skipped, the org_watch skip, rank + cap), and
+                # a second hand-copy of the idf formula here would just drift out of sync.
+                _qt = set(_w1_rel.query_terms(query or "")) - fetcher._ROUTE_STOPWORDS
+                _surf = set(_w1_rel.tokenize(" ".join(
+                    [*fetcher._adapter_match_surface(a)[0], *fetcher._adapter_match_surface(a)[1],
+                     fetcher._adapter_match_surface(a)[2]])))
+                hit = _qt & _surf
+                if hit:
+                    _idf = fetcher._route_idf(fetcher.get_catalog_snapshot(), hit)
+                    er.append((sum(_idf[t] for t in hit),
+                               {"name": s, "reason": reason,
+                                "why": f"relevant but excluded; re-run naming it: sources=['{s}']",
+                                "overlap": len(hit), "matched": sorted(hit)}))
+        else:
+            target.append(s)
+    er.sort(key=lambda t: (-t[0], t[1]["name"]))
+    er = [d for _, d in er[:6]]
+    down = fetcher._watchdog_down_set()
+    sk = []
+    if down:
+        sk = sorted(s for s in target if s in down)
+        target = [s for s in target if s not in down]
+    return target, excl, dis, er, sk
+
+
+_w1_q_real = "singapore visa employment pass phd salary machine learning stock filing"
+_w1_leg = _w1_legacy_broad(_w1_q_real)
+_w1_cat_real = fetcher.get_catalog_snapshot()
+_w1_pol_real = fetcher._build_policy_snapshot(_w1_cat_real)
+_w1_plan_real = fetcher.build_search_plan(_w1_cat_real, _w1_pol_real, _w1_q_real, sources=None)
+check("W1: REAL-registry parity - plan reproduces the legacy broad selection with ZERO drift",
+      _w1_plan_real.broad_live == _w1_leg[0] and _w1_plan_real.excluded == _w1_leg[1]
+      and _w1_plan_real.disabled == _w1_leg[2] and _w1_plan_real.excluded_relevant == _w1_leg[3]
+      and _w1_plan_real.skipped_down == _w1_leg[4],
+      f"broad{len(_w1_plan_real.broad_live)}v{len(_w1_leg[0])} "
+      f"excl{len(_w1_plan_real.excluded)}v{len(_w1_leg[1])} "
+      f"dis{len(_w1_plan_real.disabled)}v{len(_w1_leg[2])} "
+      f"er{[d['name'] for d in _w1_plan_real.excluded_relevant]}v{[d['name'] for d in _w1_leg[3]]}")
+
+
+# Scenario 7: live register/unregister rebuilds the REAL catalog per-entry; order stays coherent.
+class _W1Stub:
+    def __init__(self, name):
+        self.name = name
+        self.description = "w1 shadow probe source"
+        self.needs_credentials = False
+
+    def search(self, query, limit=10):
+        return []
+
+    def fetch_url(self, url):
+        return None
+
+    def health_check(self):
+        return (True, "ok")
+
+
+_w1_snap0 = fetcher.get_catalog_snapshot()
+check("W1: catalog snapshot iteration order == all_adapter_names() (registration order)",
+      list(_w1_snap0.keys()) == fetcher.all_adapter_names())
+_w1_probe = "w1_shadow_probe_seq"
+fetcher.register_adapter_live(_W1Stub(_w1_probe))
+try:
+    _w1_snap1 = fetcher.get_catalog_snapshot()
+    _w1_r = _w1_snap1.get(_w1_probe)
+    check("W1: a live register rebuilds ONLY that entry (coherent record, order still == all_adapter_names)",
+          _w1_r is not None and isinstance(_w1_r.route_tokens, frozenset)
+          and _w1_r.stability in ("stable", "keyed", "scrape", "walled")
+          and _w1_r.name == _w1_probe and list(_w1_snap1.keys()) == fetcher.all_adapter_names())
+    check("W1: a live register does NOT mutate a previously-returned snapshot (copy-on-write)",
+          _w1_probe not in _w1_snap0)
+    check("W1: the live register bumped the per-record generation (mutable-family staleness signal)",
+          _w1_r.generation > 0)
+finally:
+    fetcher.unregister_adapter(_w1_probe)
+_w1_snap2 = fetcher.get_catalog_snapshot()
+check("W1: a live unregister drops the entry and keeps order == all_adapter_names()",
+      _w1_probe not in _w1_snap2 and list(_w1_snap2.keys()) == fetcher.all_adapter_names())
+
+_w1_errors = []
+
+
+def _w1_writer(tid):
+    try:
+        for it in range(15):
+            nm = f"w1_shadow_probe_{tid}_{it}"
+            fetcher.register_adapter_live(_W1Stub(nm))
+            fetcher.unregister_adapter(nm)
+    except BaseException as e:  # noqa: BLE001
+        _w1_errors.append(f"writer{tid}: {e!r}")
+
+
+def _w1_reader():
+    try:
+        for _ in range(200):
+            for k, rec in fetcher.get_catalog_snapshot().items():  # a stale-but-coherent snapshot: no raise
+                if rec.name != k or not isinstance(rec.route_tokens, frozenset):
+                    _w1_errors.append(f"incoherent record for {k}")
+                    break
+    except BaseException as e:  # noqa: BLE001 a dict-changed-size RuntimeError would land here
+        _w1_errors.append(f"reader: {e!r}")
+
+
+_w1_threads = ([_w1_th.Thread(target=_w1_writer, args=(i,)) for i in range(4)]
+               + [_w1_th.Thread(target=_w1_reader) for _ in range(2)])
+for _t in _w1_threads:
+    _t.start()
+for _t in _w1_threads:
+    _t.join()
+_w1_final = fetcher.get_catalog_snapshot()
+check("W1: concurrent live register/unregister + reads stay coherent (no raise, no half-built record)",
+      not _w1_errors, "; ".join(_w1_errors[:4]))
+check("W1: after the concurrent burst the snapshot is quiescent and == all_adapter_names()",
+      list(_w1_final.keys()) == fetcher.all_adapter_names()
+      and all(fetcher.get_adapter(k) is not None for k in _w1_final))
+
+
+# ---------------------------------------------------------------------------
+# W2. Wave-2 cutover + source-filtered recall (audit finding 1.1). Two changes proven here:
+#     (2a) search_many now ROUTES through build_search_plan (the shadow machinery is GONE);
+#     (2b) the recall arm carries a SOURCE PREDICATE pushed INTO the FTS query and BEFORE the vector
+#          top-k, so a scoped search never injects off-scope index docs and a broad search never
+#          injects retired/disabled index residue. Offline + deterministic: a TEMP store (the §9
+#          DB_PATH-repoint pattern) with synthetic A/B/C docs, hand-seeded vec rows, and a stubbed
+#          embedder; the search_ranked scope arithmetic is driven through the REAL code with
+#          monkeypatched snapshots. See fetcher.py's "Routing SearchPlan" block + search_ranked's
+#          recall-scope, and recall/store.py's search / _ensure_matrix / vector_search.
+# ---------------------------------------------------------------------------
+import numpy as _w2_np  # noqa: E402
+_w2_emb = _recall.embed
+
+# Save store + embed state (restored in the finally below); the store globals are module-level caches.
+_w2_db_prev = _rstore.DB_PATH
+_w2_dis_prev = _rstore._disabled
+_w2_loc_prev = _rstore._local
+_w2_vm_prev, _w2_vi_prev, _w2_vs_prev = _rstore._vec_M, _rstore._vec_ids, _rstore._vec_srcs
+_w2_vg_prev, _w2_vmv_prev = _rstore._vec_built_gen, _rstore._vec_built_mv
+_w2_emb_av_prev = _w2_emb.available
+_w2_emb_eq_prev = _w2_emb.embed_query
+_w2_emb_mv_prev = _w2_emb.MODEL_VERSION
+# An earlier fixture (_build_fixture_packet) permanently rebinds recall.search to a []-stub; restore the
+# genuine store.search so the hybrid golden below exercises the REAL lexical arm (restored in finally).
+_w2_rsearch_prev = _recall.search
+_W2_MV = "w2-fake-emb/d3"
+
+
+def _w2_reset_vec():
+    # Force _ensure_matrix to REBUILD from the current DB (the matrix is a module cache, not per-DB, so
+    # switching temp DBs at the same model_version would otherwise serve the previous DB's stale rows).
+    _rstore._vec_M = _rstore._vec_ids = _rstore._vec_srcs = None
+    _rstore._vec_built_gen = -1
+    _rstore._vec_built_mv = ""
+
+
+def _w2_fresh_db(nm):
+    _rstore.DB_PATH = Path(_tf.mkdtemp()) / nm
+    _rstore._disabled = False
+    _rstore._local = _w1_th.local()  # fresh per-thread read-conn cache -> reopens against the new DB
+    _w2_reset_vec()
+    _rstore.init()
+    return _rstore.connect()
+
+
+def _w2_seed(con, src, sid, title, content=""):
+    d = _doc(src, title)
+    d.content = content
+    d.source_id = sid
+    con.execute("BEGIN")
+    _r = _recall.writer._upsert(con, rank, d, 1000.0)
+    con.commit()
+    return _r[0] if _r else None
+
+
+def _w2_seed_vec(con, src, sid, title, vec):
+    rid = _w2_seed(con, src, sid, title)
+    con.execute("INSERT OR REPLACE INTO vec(rowid, model_version, dim, v) VALUES(?,?,?,?)",
+                (rid, _W2_MV, 3, _w2_np.array(vec, dtype=_w2_np.float32).tobytes()))
+    con.commit()
+    return rid
+
+
+try:
+    _recall.search = _rstore.search  # genuine lexical recall for the hybrid golden (undo the []-stub)
+    # (1) FTS predicate: scoped to {A} returns ONLY A-docs; sources=None returns the unfiltered set.
+    _w2c1 = _w2_fresh_db("smoke_w2_lex.db")
+    for _s, _sid, _t in (("A", "a1", "widget alpha telemetry"), ("B", "b1", "widget beta telemetry"),
+                         ("C", "c1", "widget gamma telemetry")):
+        _w2_seed(_w2c1, _s, _sid, _t)
+    _w2_scoped_a = _rstore.search("widget telemetry", 50, sources=frozenset({"A"}))
+    _w2_unf = _rstore.search("widget telemetry", 50, sources=None)
+    check("W2: FTS predicate scopes to {A} (only A-docs surface)",
+          {d.source for d in _w2_scoped_a} == {"A"} and {d.source_id for d in _w2_scoped_a} == {"a1"})
+    check("W2: FTS sources=None is the unfiltered set (A+B+C)",
+          {d.source for d in _w2_unf} == {"A", "B", "C"})
+
+    # (2) BEFORE-top-k (LOAD-BEARING): 60 B-docs match strongly + ONE longer A-doc (strictly worse
+    #     bm25 via length normalization), scoped to {A} at small k STILL returns the A-doc because the
+    #     predicate is INSIDE the query (before the LIMIT). A post-filter (top-k first, filter after)
+    #     would return [] here: the unfiltered top-k is all B, the in-scope A-doc sits BELOW k.
+    _w2c2 = _w2_fresh_db("smoke_w2_topk.db")
+    for _i in range(60):
+        _w2_seed(_w2c2, "B", f"bf{_i}", "reactor coolant flow")
+    _w2_seed(_w2c2, "A", "af", "reactor coolant flow " + " ".join(["padding"] * 40))
+    _w2_bt_scoped = _rstore.search("reactor coolant flow", 5, sources=frozenset({"A"}))
+    _w2_bt_unf = _rstore.search("reactor coolant flow", 5, sources=None)
+    check("W2: before-top-k, scoped {A} at small k still returns the deep A-doc (predicate inside the query)",
+          [d.source_id for d in _w2_bt_scoped] == ["af"] and {d.source for d in _w2_bt_scoped} == {"A"})
+    check("W2: before-top-k is load-bearing: the UNFILTERED top-k is all B (a post-filter would return [])",
+          "af" not in {d.source_id for d in _w2_bt_unf} and {d.source for d in _w2_bt_unf} == {"B"})
+
+    # (3) VECTOR arm: the off-scope row is masked to -inf BEFORE argpartition EVEN with a higher cosine;
+    #     an all-masked matrix -> []; sources=None is byte-identical (both rows, higher cosine first).
+    _w2_emb.MODEL_VERSION = _W2_MV  # gate the seeded vec rows into the live matrix
+    _w2c3 = _w2_fresh_db("smoke_w2_vec.db")
+    _w2_seed_vec(_w2c3, "VA", "va1", "vector doc a", [0.8, 0.6, 0.0])  # cosine 0.8 to [1,0,0]
+    _w2_seed_vec(_w2c3, "VB", "vb1", "vector doc b", [1.0, 0.0, 0.0])  # cosine 1.0 (HIGHER, off-scope)
+    _w2_q = _w2_np.array([1.0, 0.0, 0.0], dtype=_w2_np.float32)
+    _w2_reset_vec()
+    _w2_vs_scoped = _rstore.vector_search(_w2_q, 5, sources=frozenset({"VA"}))
+    _w2_reset_vec()
+    _w2_vs_allmask = _rstore.vector_search(_w2_q, 5, sources=frozenset({"NOPE"}))
+    _w2_reset_vec()
+    _w2_vs_unf = _rstore.vector_search(_w2_q, 5, sources=None)
+    check("W2: vector arm masks the off-scope HIGHER-cosine row BEFORE top-k (scope {VA} -> only VA)",
+          [(d.source, d.source_id) for d in _w2_vs_scoped] == [("VA", "va1")])
+    check("W2: vector arm all-masked matrix returns []", _w2_vs_allmask == [])
+    check("W2: vector arm sources=None is byte-identical (both rows, higher cosine first)",
+          [d.source for d in _w2_vs_unf] == ["VB", "VA"])
+    # (3b) alignment fail-CLOSED: vector_search reads (M, ids, srcs) as one locked group, so the only
+    #      way to a mismatched srcs is out-of-band corruption; a scoped call must then return [] (the
+    #      length guard), never mis-scope. The matrix is already built (the calls above), so
+    #      _ensure_matrix early-returns and the corrupted srcs reaches the guard.
+    _rstore._vec_srcs = _w2_np.array(["ZZZ"], dtype=object)  # wrong length (1 vs 2 rows)
+    check("W2: a length-mismatched source array fails CLOSED on a scoped call (returns [], never mis-scopes)",
+          _rstore.vector_search(_w2_q, 5, sources=frozenset({"VA"})) == [])
+    _w2_reset_vec()  # drop the corrupted cache before the hybrid scenario below rebuilds
+
+    # (4) hybrid passthrough: scoped hybrid returns ONLY in-scope docs via BOTH arms; unfiltered keeps both.
+    _w2_emb.available = lambda: True
+    _w2_emb.embed_query = lambda q: _w2_np.array([1.0, 0.0, 0.0], dtype=_w2_np.float32)
+    _w2c4 = _w2_fresh_db("smoke_w2_hybrid.db")
+    _w2_seed_vec(_w2c4, "HA", "ha1", "hybrid probe doc", [0.8, 0.6, 0.0])
+    _w2_seed_vec(_w2c4, "HB", "hb1", "hybrid probe doc", [1.0, 0.0, 0.0])
+    _w2_reset_vec()
+    _w2_hy_scoped, _w2_hy_info = _recall.hybrid("hybrid probe", 5, sources=frozenset({"HA"}))
+    _w2_reset_vec()
+    _w2_hy_all, _ = _recall.hybrid("hybrid probe", 5, sources=None)
+    check("W2: hybrid scoped to {HA} returns only in-scope docs via both arms (mode hybrid, both arms > 0)",
+          {d.source for d in _w2_hy_scoped} == {"HA"} and _w2_hy_info["mode"] == "hybrid"
+          and _w2_hy_info["lexical"] >= 1 and _w2_hy_info["vector"] >= 1)
+    check("W2: hybrid sources=None keeps both sources (proves the scope did the filtering)",
+          {d.source for d in _w2_hy_all} == {"HA", "HB"})
+finally:
+    _rstore.DB_PATH = _w2_db_prev
+    _rstore._disabled = _w2_dis_prev
+    _rstore._local = _w2_loc_prev
+    _rstore._vec_M, _rstore._vec_ids, _rstore._vec_srcs = _w2_vm_prev, _w2_vi_prev, _w2_vs_prev
+    _rstore._vec_built_gen, _rstore._vec_built_mv = _w2_vg_prev, _w2_vmv_prev
+    _w2_emb.available = _w2_emb_av_prev
+    _w2_emb.embed_query = _w2_emb_eq_prev
+    _w2_emb.MODEL_VERSION = _w2_emb_mv_prev
+    _recall.search = _w2_rsearch_prev
+
+# (5)+(6) search_ranked recall-scope, driven through the REAL code with monkeypatched snapshots (no
+#     network, no store): capture the scope search_ranked hands the recall arm, and the scoped-empty skip.
+_w2_sm_prev = fetcher.search_many
+_w2_gc_prev = fetcher.get_catalog_snapshot
+_w2_bp_prev = fetcher._build_policy_snapshot
+_w2_ix_prev = _recall.indexable_set
+_w2_search_prev = _recall.search
+_w2_hybrid_prev = _recall.hybrid
+_w2_cap: dict = {}
+# Synthetic policy: idx_disabled is INDEXABLE but absent from enabled (profile-off); idx_retired is
+# retired; idx_walled is explicit_only (still enabled, not retired); idx_down is watchdog-down (still
+# enabled, not retired). The approved v3 broad recall scope = indexable ∩ enabled − retired, which
+# KEEPS walled + watchdog-down (their cached docs are recall's value) and DROPS retired + disabled.
+_w2_syn_pol = fetcher.PolicySnapshot(
+    enabled=frozenset({"idx_plain", "idx_retired", "idx_walled", "idx_down", "not_indexable"}),
+    retired={"idx_retired": "retired: parked by the curator"}, overlay={}, emergency={},
+    watchdog_down=frozenset({"idx_down"}), watchdog_as_of="2026-07-12T00:00:00")
+try:
+    fetcher.search_many = lambda query, sources, per, **k: (
+        {}, {"searched": 0, "empty": [], "timed_out": [], "errored": {}})
+    fetcher.get_catalog_snapshot = lambda: {}
+    fetcher._build_policy_snapshot = lambda cat: _w2_syn_pol
+    _recall.indexable_set = lambda: frozenset(
+        {"idx_plain", "idx_retired", "idx_disabled", "idx_walled", "idx_down"})
+
+    def _w2_cap_hybrid(query, k=60, sources=None):
+        _w2_cap["hybrid_sources"] = sources
+        return [], {"lexical": 0, "vector": 0, "mode": "hybrid"}
+
+    def _w2_cap_search(query, k=60, sources=None):
+        _w2_cap["search_sources"] = sources
+        return []
+    _recall.hybrid = _w2_cap_hybrid
+    _recall.search = _w2_cap_search
+
+    # (6) broad recall scope = indexable ∩ enabled − retired: KEEP walled + watchdog-down, DROP the
+    #     retired + the profile-disabled + the non-indexable.
+    _w2_cap.clear()
+    fetcher.search_ranked("q", sources=None, limit=5, record_yield=False)
+    check("W2: broad recall scope keeps walled + watchdog-down, drops retired + disabled + non-indexable",
+          _w2_cap.get("hybrid_sources") == frozenset({"idx_plain", "idx_walled", "idx_down"}))
+
+    # (5) scoped naming ONLY a non-indexable source: the recall arm is SKIPPED (never called) and the
+    #     honest-absence index meta is stamped.
+    _w2_cap.clear()
+    _, _w2_m5 = fetcher.search_ranked("q", sources=["not_indexable"], limit=5, record_yield=False)
+    check("W2: a scoped search naming only non-indexable sources SKIPS the recall arm (never called)",
+          _w2_cap == {})
+    check("W2: the skipped arm stamps meta['index'] = {lexical:0, vector:0, mode:'skipped', reason:...}",
+          _w2_m5.get("index") == {"lexical": 0, "vector": 0, "mode": "skipped",
+                                  "reason": "no requested source is indexable"})
+
+    # (5b) scoped naming an indexable + a non-indexable source: scope = requested ∩ allowed = {idx_plain},
+    #      arm RUNS with exactly that intersection.
+    _w2_cap.clear()
+    fetcher.search_ranked("q", sources=["idx_plain", "not_indexable"], limit=5, record_yield=False)
+    check("W2: scoped recall scope is requested ∩ indexable-allowed ({idx_plain}, non-indexable dropped)",
+          _w2_cap.get("hybrid_sources") == frozenset({"idx_plain"}))
+
+    # (5c) BROAD with a DEGENERATE policy (everything indexable is disabled or retired -> empty allowed
+    #      set): the arm must fail CLOSED (skip + honest stamp), never fall through, because an empty
+    #      frozenset is FALSY and would read as sources=None (unfiltered) at the store, the exact 1.1
+    #      bypass class this wave closes.
+    _w2_ix_degenerate_prev = _recall.indexable_set
+    _recall.indexable_set = lambda: frozenset({"idx_retired", "idx_disabled"})
+    _w2_cap.clear()
+    _, _w2_m5c = fetcher.search_ranked("q", sources=None, limit=5, record_yield=False)
+    _recall.indexable_set = _w2_ix_degenerate_prev
+    check("W2: BROAD with an empty allowed set SKIPS the arm (fail-closed, never unfiltered)",
+          _w2_cap == {})
+    check("W2: the broad-skipped arm stamps its own honest reason",
+          _w2_m5c.get("index") == {"lexical": 0, "vector": 0, "mode": "skipped",
+                                   "reason": "no indexable source is enabled"})
+finally:
+    fetcher.search_many = _w2_sm_prev
+    fetcher.get_catalog_snapshot = _w2_gc_prev
+    fetcher._build_policy_snapshot = _w2_bp_prev
+    _recall.indexable_set = _w2_ix_prev
+    _recall.search = _w2_search_prev
+    _recall.hybrid = _w2_hybrid_prev
+
+# (7) Cutover structural: the shadow machinery is GONE from fetcher, and the REAL-registry parity check
+#     still holds (it now guards the AUTHORITATIVE selection path, not a shadow). Mirrors the existing
+#     "retired sentinel absence" structural checks.
+check("W2: the shadow machinery is gone from fetcher (_SHADOW_PLAN / _shadow_check_plan / _plan_projection_diff)",
+      not hasattr(fetcher, "_SHADOW_PLAN") and not hasattr(fetcher, "_shadow_check_plan")
+      and not hasattr(fetcher, "_plan_projection_diff"))
+_w2_q7 = "singapore visa employment pass phd salary machine learning stock filing"
+_w2_leg7 = _w1_legacy_broad(_w2_q7)  # the legacy broad selection recomputed from fetcher's own derivations
+_w2_cat7 = fetcher.get_catalog_snapshot()
+_w2_pol7 = fetcher._build_policy_snapshot(_w2_cat7)
+_w2_plan7 = fetcher.build_search_plan(_w2_cat7, _w2_pol7, _w2_q7, sources=None)
+check("W2: REAL-registry parity still holds: the AUTHORITATIVE plan reproduces the legacy broad selection",
+      _w2_plan7.broad_live == _w2_leg7[0] and _w2_plan7.excluded == _w2_leg7[1]
+      and _w2_plan7.disabled == _w2_leg7[2] and _w2_plan7.excluded_relevant == _w2_leg7[3]
+      and _w2_plan7.skipped_down == _w2_leg7[4])
+
+
+# ===========================================================================
+# W3: AdapterOutcome completeness (fetcher refactor v3; resolves 1.14/1.15/1.16). Offline.
+#   (1) fetch_outcome timeout   (2) fetch_outcome error   (3) full-page complete flag
+#   (4) watermark gating (_ingest_step)   (5) declarative four-state parse   (6) seen_before tri-state
+# ===========================================================================
+import time as _w3_time  # noqa: E402
+from penumbra.core import diag as _w3_diag  # noqa: E402
+
+
+class _W3StubAdapter:
+    """A configurable in-memory adapter: search returns N docs, or sleeps, or raises (no network)."""
+    description = "w3 stub"
+
+    def __init__(self, name, *, n=0, sleep=0.0, raises=None):
+        self.name = name
+        self._n = n
+        self._sleep = sleep
+        self._raises = raises
+
+    def search(self, q, limit=10):
+        if self._sleep:
+            _w3_time.sleep(self._sleep)
+        if self._raises is not None:
+            raise self._raises
+        return [_doc(self.name, f"W3 Stub Doc Number {_i} Long Enough Title Here",
+                     f"http://w3/{self.name}/{_i}") for _i in range(self._n)]
+
+    def fetch_url(self, u):
+        return None
+
+    def health_check(self):
+        return (True, "ok")
+
+
+# --- (1) fetch_outcome timeout: a stub that sleeps past a tiny deadline -----------------------------
+_w3_to_name = "_w3_timeout_stub"
+fetcher.register_adapter_live(_W3StubAdapter(_w3_to_name, sleep=1.0))
+try:
+    _w3_oc_to = fetcher.fetch_outcome(_w3_to_name, "", limit=10, deadline_s=0.2)
+    check("W3 (1): fetch_outcome on a source past deadline -> state='timed_out', complete=False, docs=[] + reason",
+          _w3_oc_to.state == "timed_out" and _w3_oc_to.complete is False
+          and _w3_oc_to.docs == [] and _w3_oc_to.reason != "")
+    _w3_fo_to = fetcher.fetch_one(_w3_to_name, "", limit=10, deadline_s=0.2)
+    check("W3 (1): the fetch_one VIEW on the same timeout still returns [] (public contract preserved)",
+          _w3_fo_to == [])
+finally:
+    fetcher.unregister_adapter(_w3_to_name)
+
+# --- (2) fetch_outcome error: a raising stub -------------------------------------------------------
+_w3_err_name = "_w3_error_stub"
+fetcher.register_adapter_live(_W3StubAdapter(_w3_err_name, raises=RuntimeError("w3 boom")))
+try:
+    _w3_oc_err = fetcher.fetch_outcome(_w3_err_name, "", limit=10, deadline_s=5)
+    check("W3 (2): fetch_outcome on a raising source -> state='errored', reason non-empty, captures present, docs=[]",
+          _w3_oc_err.state == "errored" and bool(_w3_oc_err.reason)
+          and isinstance(_w3_oc_err.captures, list) and len(_w3_oc_err.captures) >= 1
+          and _w3_oc_err.docs == [])
+    _w3_raised = False
+    try:
+        fetcher.fetch_one(_w3_err_name, "", limit=10, deadline_s=5)
+    except RuntimeError:
+        _w3_raised = True
+    check("W3 (2): the fetch_one VIEW on the same error still RAISES (public contract preserved)", _w3_raised)
+finally:
+    fetcher.unregister_adapter(_w3_err_name)
+
+# --- (3) full page vs short page: complete = (completed AND len(docs) < limit) ----------------------
+_w3_full_name = "_w3_full_stub"
+fetcher.register_adapter_live(_W3StubAdapter(_w3_full_name, n=10))
+try:
+    _w3_oc_full = fetcher.fetch_outcome(_w3_full_name, "", limit=10, deadline_s=5)
+    check("W3 (3): a stub returning EXACTLY `limit` docs -> completed but complete=False (page full, maybe more)",
+          _w3_oc_full.state == "completed" and len(_w3_oc_full.docs) == 10 and _w3_oc_full.complete is False)
+    _w3_oc_short = fetcher.fetch_outcome(_w3_full_name, "", limit=20, deadline_s=5)
+    check("W3 (3): the same stub under a LARGER limit -> completed AND complete=True (enumeration fit the page)",
+          _w3_oc_short.state == "completed" and len(_w3_oc_short.docs) == 10 and _w3_oc_short.complete is True)
+finally:
+    fetcher.unregister_adapter(_w3_full_name)
+
+# --- (4) watermark gating: _ingest_step advances the watermark ONLY on completed+complete ------------
+_w3_oc_patch_prev = fetcher.fetch_outcome
+_w3_mark_prev = _recall.mark_run
+_w3_marks = []
+try:
+    _recall.mark_run = lambda src, n: _w3_marks.append((src, n))
+
+    def _w3_mk_oc(state, docs, complete):
+        return fetcher.AdapterOutcome(docs=docs, state=state, complete=complete,
+                                      started=True, reason="", captures=[])
+
+    fetcher.fetch_outcome = lambda *a, **k: _w3_mk_oc("completed", [1, 2, 3], True)
+    _recall._ingest_step("_w3_src_ok")
+    check("W3 (4): _ingest_step ADVANCES the watermark on completed+complete (mark_run called with doc count)",
+          _w3_marks == [("_w3_src_ok", 3)])
+    _w3_marks.clear()
+    fetcher.fetch_outcome = lambda *a, **k: _w3_mk_oc("timed_out", [], False)
+    _recall._ingest_step("_w3_src_timeout")
+    check("W3 (4): _ingest_step HOLDS the watermark on a timed_out sweep (mark_run NOT called)",
+          _w3_marks == [])
+    fetcher.fetch_outcome = lambda *a, **k: _w3_mk_oc("completed", list(range(50)), False)
+    _recall._ingest_step("_w3_src_trunc")
+    check("W3 (4): _ingest_step HOLDS the watermark on a completed-but-truncated full page (mark_run NOT called)",
+          _w3_marks == [])
+finally:
+    fetcher.fetch_outcome = _w3_oc_patch_prev
+    _recall.mark_run = _w3_mark_prev
+
+# --- (5) declarative four-state parse: notes on drift, silent on authoritative-empty -----------------
+from penumbra.core.sources._declarative import DeclarativeAPIAdapter as _W3DAA  # noqa: E402
+from penumbra.core import cache as _w3_cache  # noqa: E402
+
+
+def _w3_run_decl(name, payload, results_path="hits"):
+    _ad = _W3DAA(name=name, description="w3 decl stub", endpoint="http://w3-decl",
+                 field_map={"title": "title", "url": "url"}, results_path=results_path,
+                 post_filter=False)
+    _ad._fetch_response = lambda params: payload  # stub the egress (no network)
+    # set_fresh(True) BYPASSES the persistent disk cache (a warm entry from a prior run would let
+    # search short-circuit BEFORE the parse-classification step, so no note would be emitted).
+    _w3_cache.set_fresh(True)
+    try:
+        _w3_diag.enable()
+        _docs = _ad.search("qq", 10)
+        _caps = _w3_diag.drain()
+    finally:
+        _w3_cache.set_fresh(False)
+    _notes = [c for c in _caps if str(c.get("helper", "")).endswith(".parse")]
+    return _docs, _notes
+
+
+_w3a_docs, _w3a_notes = _w3_run_decl("_w3_decl_empty", {"hits": []})
+check("W3 (5a): a reached present-but-EMPTY list -> [] and NO parse note (authoritative empty stays silent)",
+      _w3a_docs == [] and _w3a_notes == [])
+_w3b_docs, _w3b_notes = _w3_run_decl("_w3_decl_missing", {"other": [{"title": "x", "url": "http://y"}]})
+check("W3 (5b): a MISSING results_path -> [] AND a drained parse note naming the path (schema drift)",
+      _w3b_docs == [] and len(_w3b_notes) == 1
+      and "hits" in _w3b_notes[0].get("body", "") and "absent" in _w3b_notes[0].get("body", ""))
+_w3c_docs, _w3c_notes = _w3_run_decl("_w3_decl_shape", {"hits": "not-a-list"})
+check("W3 (5c): a NON-LIST value at results_path -> [] + a shape note ('resolved to str, expected list')",
+      _w3c_docs == [] and len(_w3c_notes) == 1
+      and "expected list" in _w3c_notes[0].get("body", "") and "str" in _w3c_notes[0].get("body", ""))
+_w3d_docs, _w3d_notes = _w3_run_decl("_w3_decl_allbad", {"hits": [{"foo": 1}, {"bar": 2}]})
+check("W3 (5d): a list where EVERY item fails the field_map -> [] + an 'items parsed' note (field_map drift)",
+      _w3d_docs == [] and len(_w3d_notes) == 1 and "items parsed" in _w3d_notes[0].get("body", ""))
+_w3e_docs, _w3e_notes = _w3_run_decl("_w3_decl_some",
+                                     {"hits": [{"title": "Keep Me", "url": "http://keep"}, {"nope": 1}]})
+check("W3 (5d): a list where SOME items parse -> those docs return AND NO parse note (only all-fail is noteworthy)",
+      len(_w3e_docs) == 1 and _w3e_docs[0].url == "http://keep" and _w3e_notes == [])
+
+# --- (6) seen_before tri-state: None (unavailable) | False (ran, empty) | True (hit before t0) -------
+_w3_sbl_prev = fetcher._seen_before_lookup
+_w3_t0 = _w3_time.time()
+
+
+def _w3_sb_doc():
+    return _doc("arxiv", "W3 Seen Before Tristate Doc Long Enough Title Here", "http://arxiv/w3sb")
+
+
+try:
+    fetcher._seen_before_lookup = lambda ranked: None            # the lookup itself was UNAVAILABLE
+    _w3_da = _w3_sb_doc()
+    fetcher._stamp_seen_before([_w3_da], _w3_t0)
+    check("W3 (6): lookup UNAVAILABLE (None) -> seen_before is None + first_seen_at None (assert `is None`, not falsy)",
+          _w3_da.metadata.get("seen_before") is None and _w3_da.metadata.get("first_seen_at") is None
+          and "seen_before" in _w3_da.metadata and "first_seen_at" in _w3_da.metadata)
+    fetcher._seen_before_lookup = lambda ranked: {}             # the lookup RAN and found nothing
+    _w3_db = _w3_sb_doc()
+    fetcher._stamp_seen_before([_w3_db], _w3_t0)
+    check("W3 (6): lookup RAN but empty ({}) -> seen_before is False (verified never-seen, NOT None)",
+          _w3_db.metadata.get("seen_before") is False and _w3_db.metadata.get("first_seen_at") is None)
+    fetcher._seen_before_lookup = lambda ranked: {("arxiv", "http://arxiv/w3sb"): _w3_t0 - 500.0}  # hit
+    _w3_dc = _w3_sb_doc()
+    fetcher._stamp_seen_before([_w3_dc], _w3_t0)
+    check("W3 (6): lookup HIT (first_seen < t0) -> seen_before is True + an ISO first_seen_at",
+          _w3_dc.metadata.get("seen_before") is True
+          and isinstance(_w3_dc.metadata.get("first_seen_at"), str)
+          and _w3_dc.metadata["first_seen_at"].startswith("20"))
+finally:
+    fetcher._seen_before_lookup = _w3_sbl_prev
+
+
+# ===========================================================================
+# S0. Async-migration stage 0: contracts, the CancelledError tripwire, in-passing fixes.
+#     S0.1 is the ONE deliberate behavior change (P11 seen_before never-absent on a partial stamp
+#     failure); every other S0 golden FREEZES today's behavior as a regression rail. Offline + pure.
+# ===========================================================================
+import ast as _s0_ast       # noqa: E402
+import re as _s0_re         # noqa: E402
+import time as _s0_time     # noqa: E402
+import threading as _s0_th  # noqa: E402
+import penumbra.server as _s0_server  # noqa: E402
+
+
+# --- S0.1: seen_before never-absent: the caller normalizes ranked docs to BOTH keys even if the
+#     stamp raises part-way. Drive the REAL search_ranked caller with a stub source + a stamp that
+#     raises immediately / after the first doc. ---
+class _S0SbAdapter:
+    needs_credentials = False
+    description = "s0 seen_before stub"
+
+    def __init__(self, name, docs):
+        self.name = name
+        self._docs = docs
+
+    def search(self, query, limit=10):
+        return list(self._docs)
+
+    def fetch_url(self, url):
+        return None
+
+    def health_check(self):
+        return True, "ok"
+
+
+_s0_sb_docs = [_doc("_s0_seenbefore", "S0 Seen Before Alpha Long Enough Title Here", "http://s0/sb/a"),
+               _doc("_s0_seenbefore", "S0 Seen Before Bravo Long Enough Title Here", "http://s0/sb/b")]
+_s0_stamp_orig = fetcher._stamp_seen_before
+fetcher.register_adapter_live(_S0SbAdapter("_s0_seenbefore", _s0_sb_docs))
+try:
+    def _s0_raise_immediately(ranked, t0):
+        raise RuntimeError("s0 stamp boom (immediate)")
+
+    fetcher._stamp_seen_before = _s0_raise_immediately
+    _s0_d1, _ = fetcher.search_ranked("S0 Seen Before", sources=["_s0_seenbefore"], limit=15,
+                                      record_yield=False)
+    check("S0.1: a stamp that raises IMMEDIATELY -> EVERY ranked doc still carries seen_before + first_seen_at (null)",
+          len(_s0_d1) >= 1 and all(
+              (d.metadata or {}).get("seen_before") is None and (d.metadata or {}).get("first_seen_at") is None
+              and "seen_before" in (d.metadata or {}) and "first_seen_at" in (d.metadata or {})
+              for d in _s0_d1),
+          f"docs={len(_s0_d1)}")
+
+    def _s0_raise_after_first(ranked, t0):
+        if ranked:  # stamp the FIRST doc for real, then raise -> the rest are un-stamped (partial failure)
+            ranked[0].metadata = dict(ranked[0].metadata or {})
+            ranked[0].metadata["seen_before"] = True
+            ranked[0].metadata["first_seen_at"] = "2020-01-01T00:00:00+00:00"
+        raise RuntimeError("s0 stamp boom (after first)")
+
+    fetcher._stamp_seen_before = _s0_raise_after_first
+    _s0_d2, _ = fetcher.search_ranked("S0 Seen Before", sources=["_s0_seenbefore"], limit=15,
+                                      record_yield=False)
+    check("S0.1: a stamp that raises AFTER the first doc -> ALL docs carry both keys (stamped keeps value, rest null, none absent)",
+          len(_s0_d2) >= 2
+          and all("seen_before" in (d.metadata or {}) and "first_seen_at" in (d.metadata or {}) for d in _s0_d2)
+          and _s0_d2[0].metadata.get("seen_before") is True
+          and _s0_d2[0].metadata.get("first_seen_at") == "2020-01-01T00:00:00+00:00"
+          and any(d.metadata.get("seen_before") is None for d in _s0_d2[1:]),
+          f"docs={len(_s0_d2)}")
+finally:
+    fetcher._stamp_seen_before = _s0_stamp_orig
+    fetcher.unregister_adapter("_s0_seenbefore")
+
+
+# --- S0.2: CancelledError hygiene, proven by an AST tripwire (not a grep). Walk EVERY except handler
+#     in src/penumbra/eye/**.py + src/penumbra/server.py; each handler that catches BaseException (or is
+#     a bare except:) must EITHER re-raise unconditionally (a bare `raise` at the handler's top level)
+#     OR guard cancellation first (`if isinstance(exc, asyncio.CancelledError): raise` as statement 0).
+#     The two thread-marshaling wrappers propagate the exception INDIRECTLY (store it; the parent re-
+#     raises / returns it), verified by reading each, so they carry a documented allowlist entry. ---
+# No allowlist: EVERY BaseException/bare handler must bare-raise or carry the CancelledError guard.
+# (The two thread-marshaling backstops _run_bounded._run / _run_with_budget._call now carry the guard
+# directly, so the tripwire needs no name-keyed exemption, which would over-match a same-named function.)
+
+
+def _s0_type_names(node):
+    out = []
+    for n in _s0_ast.walk(node):
+        if isinstance(n, _s0_ast.Name):
+            out.append(n.id)
+        elif isinstance(n, _s0_ast.Attribute):
+            out.append(n.attr)
+    return out
+
+
+def _s0_handler_reraises(h):
+    # a bare `raise` (re-raise) as a direct top-level statement of the handler body
+    return any(isinstance(s, _s0_ast.Raise) and s.exc is None for s in h.body)
+
+
+def _s0_first_is_cancel_guard(h):
+    if not h.body or not isinstance(h.body[0], _s0_ast.If):
+        return False
+    _if = h.body[0]
+    _t = _if.test
+    if not (isinstance(_t, _s0_ast.Call) and isinstance(_t.func, _s0_ast.Name)
+            and _t.func.id == "isinstance" and len(_t.args) == 2):
+        return False
+    _arg2 = _t.args[1]
+    if not (isinstance(_arg2, _s0_ast.Attribute) and _arg2.attr == "CancelledError"):
+        return False
+    # a BARE `raise` only (re-raise the cancellation); `raise OtherError()` would CONVERT it, not propagate
+    return any(isinstance(b, _s0_ast.Raise) and b.exc is None for b in _if.body)
+
+
+def _s0_func_spans(tree):
+    return [(n.lineno, getattr(n, "end_lineno", n.lineno), n.name) for n in _s0_ast.walk(tree)
+            if isinstance(n, (_s0_ast.FunctionDef, _s0_ast.AsyncFunctionDef))]
+
+
+def _s0_enclosing(spans, lineno):
+    best = None
+    for a, b, name in spans:
+        if a <= lineno <= b and (best is None or a > best[0]):
+            best = (a, b, name)
+    return best[2] if best else "<module>"
+
+
+_s0_py_files = sorted((ROOT / "src" / "penumbra" / "core").rglob("*.py")) + [ROOT / "src" / "penumbra" / "server.py"]
+_s0_offenders = []
+_s0_total_base = 0
+for _p in _s0_py_files:
+    _tree = _s0_ast.parse(_p.read_text(encoding="utf-8"))
+    _spans = _s0_func_spans(_tree)
+    _rel = _p.relative_to(ROOT).as_posix()
+    for _h in _s0_ast.walk(_tree):
+        if not isinstance(_h, _s0_ast.ExceptHandler):
+            continue
+        _catches_base = (_h.type is None) or ("BaseException" in _s0_type_names(_h.type))
+        if not _catches_base:
+            continue
+        _s0_total_base += 1
+        _fn = _s0_enclosing(_spans, _h.lineno)
+        _safe = _s0_handler_reraises(_h) or _s0_first_is_cancel_guard(_h)
+        if not _safe:
+            _s0_offenders.append(f"{_rel}:{_h.lineno} fn={_fn}")
+
+check("S0.2: every BaseException/bare-except handler in eye + server re-raises or guards CancelledError (D11 tripwire)",
+      not _s0_offenders, "unguarded cancellation-swallowing sites: " + "; ".join(_s0_offenders))
+check("S0.2: the AST tripwire actually walked the known BaseException sites (not vacuously green)",
+      _s0_total_base >= 6, f"found {_s0_total_base} base/bare handlers")
+
+
+# --- S0.3: one request snapshot. search_ranked builds catalog+policy ONCE and threads it into
+#     search_many's routing; a live retire between the two former build points can no longer diverge
+#     routing from recall. ---
+class _S0SnapAdapter:
+    needs_credentials = False
+    description = "s0 snapshot stub"
+
+    def __init__(self, name):
+        self.name = name
+
+    def search(self, query, limit=10):
+        return []
+
+    def fetch_url(self, url):
+        return None
+
+    def health_check(self):
+        return True, "ok"
+
+
+for _n in ("_s0_snap_a", "_s0_snap_b"):
+    fetcher.register_adapter_live(_S0SnapAdapter(_n))
+_s0_bps_returns = []
+_s0_bps_orig = fetcher._build_policy_snapshot
+_s0_sm_recv = {}
+_s0_sm_orig = fetcher.search_many
+try:
+    def _s0_count_bps(catalog):
+        _p = _s0_bps_orig(catalog)
+        _s0_bps_returns.append(_p)  # a live retire firing HERE would return a DIFFERENT policy each call
+        return _p
+
+    def _s0_wrap_sm(*a, **kw):
+        _s0_sm_recv["catalog"] = kw.get("_catalog")
+        _s0_sm_recv["policy"] = kw.get("_policy")
+        return _s0_sm_orig(*a, **kw)  # delegate to the REAL search_many (so the build-count stays honest)
+
+    fetcher._build_policy_snapshot = _s0_count_bps
+    fetcher.search_many = _s0_wrap_sm
+    fetcher.search_ranked("s0 snapshot q", sources=["_s0_snap_a", "_s0_snap_b"], limit=5, record_yield=False)
+finally:
+    fetcher._build_policy_snapshot = _s0_bps_orig
+    fetcher.search_many = _s0_sm_orig
+
+check("S0.3: search_ranked builds the policy snapshot ONCE (routing + recall share it; unfixed = two builds)",
+      len(_s0_bps_returns) == 1, f"policy build count = {len(_s0_bps_returns)}")
+check("S0.3: search_ranked threads that SAME snapshot into search_many's routing (identical object, no rebuild)",
+      _s0_bps_returns and _s0_sm_recv.get("policy") is _s0_bps_returns[0]
+      and _s0_sm_recv.get("catalog") is not None)
+
+# byte-identical normal path: an injected snapshot yields the SAME output as the internally-built default.
+_s0_cat0 = fetcher.get_catalog_snapshot()
+_s0_pol0 = fetcher._build_policy_snapshot(_s0_cat0)
+_s0_rd, _s0_md = fetcher.search_many("s0 snapshot q", sources=["_s0_snap_a", "_s0_snap_b"], limit_per_source=2)
+_s0_rp, _s0_mp = fetcher.search_many("s0 snapshot q", sources=["_s0_snap_a", "_s0_snap_b"], limit_per_source=2,
+                                     _catalog=_s0_cat0, _policy=_s0_pol0)
+_s0_md_cmp = {k: v for k, v in _s0_md.items() if k != "elapsed_s"}  # elapsed_s is wall-clock, not routing
+_s0_mp_cmp = {k: v for k, v in _s0_mp.items() if k != "elapsed_s"}
+check("S0.3: search_many with an injected snapshot is byte-identical to the internally-built default",
+      list(_s0_rd.keys()) == list(_s0_rp.keys()) and _s0_md_cmp == _s0_mp_cmp)
+for _n in ("_s0_snap_a", "_s0_snap_b"):
+    fetcher.unregister_adapter(_n)
+
+
+# --- S0.4: contract goldens freezing today's load-bearing behaviors. ---
+# (I1) straggler retention: a source slower than the deadline is reported timed_out but is NOT
+#      cancelled; it finishes in the background and a cache_only re-run collects its now-warmed docs.
+class _S0StragglerAdapter:
+    needs_credentials = False
+    description = "s0 straggler stub"
+
+    def __init__(self, name):
+        self.name = name
+        self.done = _s0_th.Event()
+        self.cached = None
+
+    def search(self, query, limit=10):
+        from penumbra.core import cache
+        if cache.cache_only() and self.cached is not None:
+            return list(self.cached)   # cache_only pickup: instant, no re-egress
+        _s0_time.sleep(0.6)            # slower than the 0.1s request deadline below
+        docs = [_doc(self.name, "S0 Straggler Retained Doc Long Enough Title", "http://s0/straggler")]
+        self.cached = docs             # warm the "cache" (fire-then-collect)
+        self.done.set()
+        return list(docs)
+
+    def fetch_url(self, url):
+        return None
+
+    def health_check(self):
+        return True, "ok"
+
+
+_s0_strag = _S0StragglerAdapter("_s0_straggler")
+fetcher.register_adapter_live(_s0_strag)
+try:
+    _s0_r1, _s0_m1 = fetcher.search_many("s0 straggler q", sources=["_s0_straggler"],
+                                         limit_per_source=3, deadline_s=0.1)
+    check("S0.4 (I1): a source slower than the deadline is reported in _meta.timed_out and dropped from THIS result",
+          "_s0_straggler" in _s0_m1.get("timed_out", []) and _s0_r1.get("_s0_straggler") == [])
+    _s0_fin = _s0_strag.done.wait(timeout=5.0)  # the producer was NOT cancelled: it runs to completion
+    check("S0.4 (I1): the straggler producer was NOT cancelled; it finished detached in the background",
+          _s0_fin and _s0_strag.cached is not None)
+    _s0_r2, _s0_m2 = fetcher.search_many("s0 straggler q", sources=["_s0_straggler"],
+                                         limit_per_source=3, deadline_s=5.0, cache_only=True)
+    check("S0.4 (I1): a cache_only re-run COLLECTS the straggler's now-warmed docs (retention across the deadline)",
+          len(_s0_r2.get("_s0_straggler", [])) == 1)
+finally:
+    fetcher.unregister_adapter("_s0_straggler")
+
+# (I2) deterministic assembly: stubs completing in REVERSED order; results-key order stays == source
+#      iteration order (never completion order) and the _meta name lists stay sorted().
+class _S0AsmAdapter:
+    needs_credentials = False
+    description = "s0 assembly stub"
+
+    def __init__(self, name, docs, sleep):
+        self.name = name
+        self._docs = docs
+        self._sleep = sleep
+
+    def search(self, query, limit=10):
+        _s0_time.sleep(self._sleep)
+        return list(self._docs)
+
+    def fetch_url(self, url):
+        return None
+
+    def health_check(self):
+        return True, "ok"
+
+
+_s0_asm_full = [_doc("_s0_asm_b", "S0 Asm Bravo One Long Enough Title Here", "http://s0/asm/b1"),
+                _doc("_s0_asm_b", "S0 Asm Bravo Two Long Enough Title Here", "http://s0/asm/b2")]
+# iteration order [c, a, b]; completion order reversed (b at 0.05s, a at 0.10s, c at 0.15s).
+for _a in (_S0AsmAdapter("_s0_asm_c", [], 0.15),
+           _S0AsmAdapter("_s0_asm_a", [], 0.10),
+           _S0AsmAdapter("_s0_asm_b", _s0_asm_full, 0.05)):
+    fetcher.register_adapter_live(_a)
+try:
+    _s0_ar, _s0_am = fetcher.search_many("s0 asm q", sources=["_s0_asm_c", "_s0_asm_a", "_s0_asm_b"],
+                                         limit_per_source=2, deadline_s=5.0)
+    check("S0.4 (I2): results dict key order == source iteration order, INDEPENDENT of completion order",
+          list(_s0_ar.keys()) == ["_s0_asm_c", "_s0_asm_a", "_s0_asm_b"], str(list(_s0_ar.keys())))
+    check("S0.4 (I2): _meta.empty is sorted() (deterministic, not the [c, a] completion/iteration order)",
+          _s0_am.get("empty") == ["_s0_asm_a", "_s0_asm_c"]
+          and _s0_am.get("empty") == sorted(_s0_am.get("empty", [])), str(_s0_am.get("empty")))
+    check("S0.4 (I2): _meta.truncated is the full-page source (sorted)",
+          _s0_am.get("truncated") == ["_s0_asm_b"], str(_s0_am.get("truncated")))
+    check("S0.4 (I2): _meta.timed_out is sorted() (empty here; all completed within the deadline)",
+          _s0_am.get("timed_out") == sorted(_s0_am.get("timed_out", [])) and _s0_am.get("timed_out") == [])
+finally:
+    for _n in ("_s0_asm_c", "_s0_asm_a", "_s0_asm_b"):
+        fetcher.unregister_adapter(_n)
+
+# (I4) walled CDP pool per-URL capacities: the REAL _pool_for sizing (9225/douyin falls to the else
+#      branch => 3). Probe the real branch logic without spawning worker threads (stub the pool class).
+from penumbra.core.sources.walled import _cdp as _s0_cdp  # noqa: E402
+
+
+class _S0FakePool:
+    def __init__(self, cdp_url, size):
+        self.cdp_url = cdp_url
+        self.size = size  # capacity only; no worker threads spawned
+
+
+_s0_pool_cls_prev = _s0_cdp._CdpPool
+_s0_pools_prev = dict(_s0_cdp._pools)
+try:
+    _s0_cdp._CdpPool = _S0FakePool
+    _s0_cdp._pools.clear()
+    _s0_caps = {u: _s0_cdp._pool_for(f"http://127.0.0.1:{u}").size for u in ("9222", "9223", "9224", "9225")}
+finally:
+    _s0_cdp._CdpPool = _s0_pool_cls_prev
+    _s0_cdp._pools.clear()
+    _s0_cdp._pools.update(_s0_pools_prev)
+check("S0.4 (I4): walled CDP pool per-URL capacities are 9222=3, 9223=1, 9224=1, 9225=3 (real _pool_for config)",
+      _s0_caps == {"9222": 3, "9223": 1, "9224": 1, "9225": 3}, str(_s0_caps))
+
+
+# (fetch_one) deadline_s=None is the deliberate UNBOUNDED override (guards the prewarm contract).
+class _S0DeadlineAdapter:
+    name = "_s0_deadline_unbounded"
+    needs_credentials = False
+    description = "s0 fetch_one deadline stub"
+
+    def search(self, query, limit=10):
+        _s0_time.sleep(0.6)  # would exceed any short finite deadline we pass below
+        return [_doc(self.name, "S0 Deadline Unbounded Doc Long Enough Title", "http://s0/deadline")]
+
+    def fetch_url(self, url):
+        return None
+
+    def health_check(self):
+        return True, "ok"
+
+
+fetcher.register_adapter_live(_S0DeadlineAdapter())
+# MECHANISM proof (not timing): deadline_s=None must BYPASS _run_bounded (the unbounded _work() path);
+# a finite deadline must route THROUGH it. A 0.6s stub cannot distinguish "unbounded" from a 90s finite
+# default by timing alone, so spy on _run_bounded: None -> 0 calls, finite -> 1 call.
+_s0_rb_real = fetcher._run_bounded
+_s0_rb_calls = []
+
+
+def _s0_rb_spy(fn, timeout):
+    _s0_rb_calls.append(timeout)
+    return _s0_rb_real(fn, timeout)
+
+
+fetcher._run_bounded = _s0_rb_spy
+try:
+    _s0_bounded = fetcher.fetch_one("_s0_deadline_unbounded", "q", deadline_s=0.1)
+    _s0_rb_after_finite = len(_s0_rb_calls)
+    _s0_unbounded = fetcher.fetch_one("_s0_deadline_unbounded", "q", deadline_s=None)
+    _s0_rb_after_none = len(_s0_rb_calls)
+    check("S0.4 (fetch_one): a finite deadline TIMES OUT to [] AND routes through _run_bounded",
+          _s0_bounded == [] and _s0_rb_after_finite == 1)
+    check("S0.4 (fetch_one): deadline_s=None BYPASSES _run_bounded entirely (unbounded mechanism, not timing)",
+          len(_s0_unbounded) == 1 and _s0_unbounded[0].url == "http://s0/deadline"
+          and _s0_rb_after_none == _s0_rb_after_finite)
+finally:
+    fetcher._run_bounded = _s0_rb_real
+    fetcher.unregister_adapter("_s0_deadline_unbounded")
+
+
+# --- S0.5: budget drift-guard. docs/BUDGETS.md binds each of the four clocks to the LIVE constant
+#     SYMBOL; changing a constant without updating the doc (or vice versa) fails here. ---
+_s0_budgets = (ROOT / "docs" / "BUDGETS.md").read_text(encoding="utf-8")
+_s0_dg_block = _s0_budgets.split("DRIFT-GUARD:BEGIN")[1].split("DRIFT-GUARD:END")[0]
+_s0_pairs = _s0_re.findall(r"(\w+)\.(\w+)\s*=\s*([\d.]+)", _s0_dg_block)
+_s0_modmap = {"fetcher": fetcher, "server": _s0_server}
+_s0_drift = []
+for _mod, _sym, _val in _s0_pairs:
+    _live = getattr(_s0_modmap[_mod], _sym)
+    if float(_live) != float(_val):
+        _s0_drift.append(f"{_mod}.{_sym}: doc={_val} live={_live}")
+check("S0.5: docs/BUDGETS.md drift-guard binds to the LIVE constant symbols (no doc/code drift; 9 clocks)",
+      not _s0_drift and len(_s0_pairs) == 9, f"drift={_s0_drift} pairs={len(_s0_pairs)}")
+
+
+# --- S0.6: egress inventory ratchet. The current raw-egress module set (import httpx / curl_cffi /
+#     socket / subprocess / yt_dlp under src/penumbra/eye) must be a SUBSET of the checked-in baseline.
+#     A NEW raw-egress module fails smoke until it is wrapped (S1) or added to the baseline in a commit.
+#     The baseline is READ from the committed file, never recomputed as the reference. ---
+_S0_RAW_EGRESS = ("httpx", "curl_cffi", "socket", "subprocess", "yt_dlp")
+
+
+def _s0_module_top_imports(tree):
+    tops = set()
+    for n in _s0_ast.walk(tree):
+        if isinstance(n, _s0_ast.Import):
+            for a in n.names:
+                tops.add(a.name.split(".")[0])
+        elif isinstance(n, _s0_ast.ImportFrom):
+            if n.module and n.level == 0:
+                tops.add(n.module.split(".")[0])
+    return tops
+
+
+def _s0_current_egress():
+    _src = ROOT / "src"
+    _mods = set()
+    for _p in sorted((_src / "penumbra" / "core").rglob("*.py")):
+        _mod = _p.relative_to(_src).with_suffix("").as_posix().replace("/", ".")
+        if _s0_module_top_imports(_s0_ast.parse(_p.read_text(encoding="utf-8"))) & set(_S0_RAW_EGRESS):
+            _mods.add(_mod)
+    return _mods
+
+
+_s0_baseline = json.loads((ROOT / "tests" / "egress_baseline.json").read_text(encoding="utf-8"))
+_s0_baseline_set = set(_s0_baseline["modules"])
+_s0_current_egress_set = _s0_current_egress()
+_s0_new_egress = sorted(_s0_current_egress_set - _s0_baseline_set)
+check("S0.6: no NEW raw-egress module joined the eye (current set is a SUBSET of the committed baseline)",
+      not _s0_new_egress, f"unbaselined raw-egress modules: {_s0_new_egress}")
+check("S0.6: the egress ratchet baseline is the committed file (read, not recomputed) and covers the current set",
+      len(_s0_baseline_set) > 0 and _s0_current_egress_set <= _s0_baseline_set)
+
+
+# ===========================================================================
+# S1-C1: close the cache_only public promise at the shared funnels + harden get_impersonated. Offline.
+#   Part 1 (get_impersonated triple-fix): (1) cache_only guard  (2) SSRF guard on the initial url
+#     (3) MAX_BYTES cap. Part 2 (raw drill cache_only): (5) real penumbra_search cache_only drill is
+#     zero-egress and drops the misleading note  (6) cache_only threads through _work.
+#   curl_cffi is stubbed via a fake sys.modules entry (the lazy `from curl_cffi import requests`
+#   picks it up), and _netguard's getaddrinfo is host-mapped, so all six run with NO live network.
+# ===========================================================================
+import types as _s1_types  # noqa: E402
+from penumbra.core import http as _s1_http, cache as _s1_cache, _netguard as _s1_ng  # noqa: E402
+
+
+class _S1FakeResp:
+    def __init__(self, content=b"", headers=None, status=200):
+        self.content = content
+        self.headers = headers or {}
+        self.status_code = status
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise RuntimeError(f"HTTP {self.status_code}")
+
+
+class _S1FakeCreq:
+    """Stands in for curl_cffi.requests: records every .get and returns a pre-set fake response."""
+    def __init__(self):
+        self.calls = []
+        self.resp = None
+
+    def get(self, url, **kw):
+        self.calls.append((url, kw))
+        return self.resp
+
+
+_s1_fc = _S1FakeCreq()
+_s1_fake_mod = _s1_types.ModuleType("curl_cffi")
+_s1_fake_mod.requests = _s1_fc  # so `from curl_cffi import requests as _creq` resolves to the stub
+_s1_orig_curl = sys.modules.get("curl_cffi")
+sys.modules["curl_cffi"] = _s1_fake_mod
+_s1_real_gai = _s1_ng.socket.getaddrinfo
+
+
+def _s1_gai(host, *a, **k):
+    # host-mapped, no DNS: the metadata literal stays link-local (blocked), example.com is public (allowed)
+    ip = "169.254.169.254" if host == "169.254.169.254" else "93.184.216.34"
+    return [(_socket.AF_INET, _socket.SOCK_STREAM, 6, "", (ip, 0))]
+
+
+_s1_ng.socket.getaddrinfo = _s1_gai
+try:
+    # (1) cache_only guard: returns None WITHOUT issuing any curl_cffi request.
+    _s1_cache.set_cache_only(True)
+    _s1_fc.calls.clear()
+    _s1_fc.resp = _S1FakeResp(b"should-not-be-read")
+    try:
+        _s1_r1 = _s1_http.get_impersonated("https://example.com")
+    finally:
+        _s1_cache.set_cache_only(False)
+    check("S1: get_impersonated under cache_only returns None WITHOUT egress (no curl_cffi request issued)",
+          _s1_r1 is None and len(_s1_fc.calls) == 0)
+
+    # (2) SSRF guard on the INITIAL url: a blocked/link-local target returns None before any request.
+    _s1_fc.calls.clear()
+    _s1_fc.resp = _S1FakeResp(b"should-not-be-read")
+    _s1_r2 = _s1_http.get_impersonated("http://169.254.169.254/")
+    check("S1: get_impersonated rejects a blocked-IP / private URL (None before any curl_cffi request)",
+          _s1_r2 is None and len(_s1_fc.calls) == 0)
+
+    # (3) MAX_BYTES cap: both the declared Content-Length precheck AND the post-read len cap -> None,
+    #     and the oversize bytes are never returned. MAX_BYTES is patched low so no 30MB is allocated.
+    _s1_mb = _s1_http.MAX_BYTES
+    _s1_http.MAX_BYTES = 16
+    try:
+        _s1_fc.resp = _S1FakeResp(b"tiny-body", headers={"Content-Length": "999999"})
+        _s1_r3a = _s1_http.get_impersonated("https://example.com")  # declared oversize -> reject pre-read
+        _s1_fc.resp = _S1FakeResp(b"X" * 64, headers={})
+        _s1_r3b = _s1_http.get_impersonated("https://example.com")  # actual body over cap -> reject post-read
+    finally:
+        _s1_http.MAX_BYTES = _s1_mb
+    check("S1: get_impersonated caps an oversize body (Content-Length precheck AND post-read len cap) -> None",
+          _s1_r3a is None and _s1_r3b is None)
+
+    # (4) happy path unchanged: a small OK body from an allowed host returns those exact bytes.
+    _s1_fc.calls.clear()
+    _s1_fc.resp = _S1FakeResp(b"<rss>ok</rss>", headers={"Content-Length": "13"})
+    _s1_r4 = _s1_http.get_impersonated("https://example.com")
+    check("S1: get_impersonated happy path unchanged (allowed host, small body -> those bytes returned)",
+          _s1_r4 == b"<rss>ok</rss>" and len(_s1_fc.calls) == 1)
+finally:
+    _s1_ng.socket.getaddrinfo = _s1_real_gai
+    if _s1_orig_curl is None:
+        sys.modules.pop("curl_cffi", None)
+    else:
+        sys.modules["curl_cffi"] = _s1_orig_curl
+
+# (5) raw=True cache_only zero-egress through the REAL penumbra_search drill: a stub whose search attempts a
+#     funnelled egress (_http.get). Under cache_only the funnel short-circuits BEFORE the pooled client,
+#     so the _get_client tripwire never fires; and the drill no longer appends a "has no effect" note.
+_s1_egress_hits = []
+
+
+class _S1EgressStub:
+    description = "s1 egress stub (attempts a funnelled http.get)"
+
+    def __init__(self, name):
+        self.name = name
+
+    def search(self, q, limit=10):
+        _s1_http.get("http://s1-egress-tripwire.invalid/x")  # short-circuits at _request_capped under cache_only
+        return []
+
+    def fetch_url(self, u):
+        return None
+
+    def health_check(self):
+        return (True, "ok")
+
+
+fetcher.register_adapter_live(_S1EgressStub("_s1_egress_stub"))
+_s1_orig_get_client = _s1_http._get_client
+
+
+def _s1_egress_tripwire():
+    _s1_egress_hits.append(1)
+    raise AssertionError("S1 egress tripwire: a live connect was attempted under cache_only")
+
+
+_s1_http._get_client = _s1_egress_tripwire
+import asyncio as _s1_aio  # noqa: E402
+_s1_eye_search = _srv.penumbra_search  # S4c-2: penumbra_search is now an async tool body; drive it the way mcp awaits it (asyncio.run)
+try:
+    _s1_drill = _s1_aio.run(_s1_eye_search(query="q", sources=["_s1_egress_stub"], raw=True,
+                                           full=True, staleness="cache_only"))
+finally:
+    _s1_http._get_client = _s1_orig_get_client
+    fetcher.unregister_adapter("_s1_egress_stub")
+_s1_drill_blob = json.dumps(_s1_drill, default=str, ensure_ascii=False)
+check("S1: raw=True cache_only drill is zero-egress (tripwire untouched) + drops the 'has no effect' note",
+      not _s1_egress_hits and "has no effect" not in _s1_drill_blob and _s1_drill.get("count") == 0)
+
+# (5b) raw BUCKETS (raw=True + >1 source -> the search_many path, NOT the single-source drill): it too
+#      must thread cache_only so a cache_only bucket sweep is zero-egress and carries no "has no effect"
+#      note (the sibling leak of the drill: search_many accepts cache_only, the server just was not
+#      passing it). Two egress stubs force the buckets branch (len(sources) != 1).
+_s1_egress_hits.clear()
+fetcher.register_adapter_live(_S1EgressStub("_s1_egress_stub_a"))
+fetcher.register_adapter_live(_S1EgressStub("_s1_egress_stub_b"))
+_s1_http._get_client = _s1_egress_tripwire
+try:
+    _s1_buckets = _s1_aio.run(_s1_eye_search(query="q", sources=["_s1_egress_stub_a", "_s1_egress_stub_b"],
+                                             raw=True, staleness="cache_only"))
+finally:
+    _s1_http._get_client = _s1_orig_get_client
+    fetcher.unregister_adapter("_s1_egress_stub_a")
+    fetcher.unregister_adapter("_s1_egress_stub_b")
+_s1_buckets_blob = json.dumps(_s1_buckets, default=str, ensure_ascii=False)
+check("S1: raw=True cache_only BUCKETS sweep is zero-egress + drops the 'has no effect' note (sibling of the drill)",
+      not _s1_egress_hits and "has no effect" not in _s1_buckets_blob)
+
+# (6) cache_only propagation: fetch_outcome(..., cache_only=True) sets the contextvar inside _work so a
+#     stub adapter sees cache.cache_only()==True at search time; the default (False) leaves it False, and
+#     the finally reset means no leak into the calling thread afterward.
+_s1_seen = []
+
+
+class _S1CacheOnlyProbe:
+    description = "s1 cache_only probe (records cache.cache_only() at search time)"
+
+    def __init__(self, name):
+        self.name = name
+
+    def search(self, q, limit=10):
+        _s1_seen.append(_s1_cache.cache_only())
+        return []
+
+    def fetch_url(self, u):
+        return None
+
+    def health_check(self):
+        return (True, "ok")
+
+
+fetcher.register_adapter_live(_S1CacheOnlyProbe("_s1_cache_only_probe"))
+try:
+    # deadline_s=None runs _work IN THIS caller thread, so the finally-reset is observable HERE. Capture
+    # cache_only RIGHT AFTER the cache_only=True call (before the second call could mask it): it must be
+    # False, which proves the finally-reset actually ran (a missing reset would leave it True).
+    fetcher.fetch_outcome("_s1_cache_only_probe", "q", limit=5, deadline_s=None, cache_only=True)
+    _s1_after_cacheonly = _s1_cache.cache_only()  # MUST be False iff the _work finally-reset ran in this thread
+    fetcher.fetch_outcome("_s1_cache_only_probe", "q", limit=5, deadline_s=None)  # default False = byte-identical
+finally:
+    fetcher.unregister_adapter("_s1_cache_only_probe")
+check("S1: fetch_outcome threads cache_only into _work (adapter sees True; default False; finally-reset genuinely ran)",
+      _s1_seen == [True, False] and _s1_after_cacheonly is False and _s1_cache.cache_only() is False)
+
+# (7) _netguard ROOT fix (behind the get_impersonated SSRF guard, which is not offline-testable since
+#     curl_cffi is absent): a malformed / out-of-range PORT must be a bad_port BLOCK, never a raised
+#     ValueError (urlsplit DEFERS .port validation; _validate_url_shape now catches it). This is the ONE
+#     choke point, so get_impersonated / http.get / safe_fetch all keep their None-on-failure contract.
+from penumbra.core import _netguard as _s1_ng
+_s1_bad_port_ok = True
+for _u in ("http://x:abc/", "http://x:70000/", "http://x:-1/"):
+    try:
+        if _s1_ng.security_block_reason(_u) is None:  # must RETURN a reason string, never RAISE, never allow
+            _s1_bad_port_ok = False
+    except Exception:  # noqa: BLE001 a raise here is exactly the regression this guards
+        _s1_bad_port_ok = False
+check("S1: a malformed/out-of-range port is a bad_port BLOCK, not a raised ValueError (netguard root fix)",
+      _s1_bad_port_ok and _s1_ng.url_is_allowed("http://x:70000/")[0] is False)
+
+
+# ---------------------------------------------------------------------------
+# S1-C2 (UNTRUSTED_URL per-hop SSRF): safe_fetch PROMOTED to the core-leaf penumbra.core.safeurl, and
+# web_fallback's untrusted read routed through it (IP-pinned per hop) with a Jina guard. Offline via
+# httpx MockTransport + a patched getaddrinfo. The curator path is byte-identical (re-export).
+# ---------------------------------------------------------------------------
+import socket as _c2_socket  # noqa: E402
+from penumbra.core import safeurl as _c2_safeurl, web_fallback as _c2_wf  # noqa: E402
+from penumbra.core import cache as _c2_cache, _netguard as _c2_ng  # noqa: E402
+from penumbra.core.curator import probe as _c2_probe  # noqa: E402
+
+# (4) curator parity: curator.probe.safe_fetch IS safeurl.safe_fetch (same object via re-export), so
+#     every existing curator safe_fetch golden exercises the MOVED impl unchanged (no drift possible).
+check("S1: curator.probe.safe_fetch IS safeurl.safe_fetch (curator path byte-identical via re-export)",
+      _c2_probe.safe_fetch is _c2_safeurl.safe_fetch
+      and _c2_probe._resolve_safe_ip is _c2_safeurl._resolve_safe_ip
+      and _c2_probe._read_capped is _c2_safeurl._read_capped
+      and _c2_probe._blocked is _c2_safeurl._blocked)
+
+# (1) safeurl.safe_fetch BLOCKS a redirect to a private IP: a 302 -> http://169.254.169.254/ is
+#     re-validated at the hop and refused, never followed to the private/metadata target.
+_c2_real_gai = _c2_safeurl.socket.getaddrinfo
+_c2_real_client = _c2_safeurl.httpx.Client
+_c2_hop = {"n": 0}
+def _c2_redir_handler(request):
+    _c2_hop["n"] += 1
+    if _c2_hop["n"] == 1:
+        return _c2_safeurl.httpx.Response(302, headers={"Location": "http://169.254.169.254/"})
+    return _c2_safeurl.httpx.Response(200, content=b"UNREACHED private target body")
+try:
+    _c2_safeurl.socket.getaddrinfo = (lambda h, *a, **k:
+        [(_c2_socket.AF_INET, _c2_socket.SOCK_STREAM, 6, "", ("169.254.169.254", 0))] if "169.254" in h
+        else [(_c2_socket.AF_INET, _c2_socket.SOCK_STREAM, 6, "", ("93.184.216.34", 0))])
+    _c2_safeurl.httpx.Client = (lambda *a, **k:
+        _c2_real_client(*a, transport=_c2_safeurl.httpx.MockTransport(_c2_redir_handler),
+                        **{kk: vv for kk, vv in k.items() if kk != "transport"}))
+    _c2_redir = _c2_safeurl.safe_fetch("http://public.example.com/start")
+    check("S1: safeurl.safe_fetch re-validates a redirect hop (302 -> 169.254.169.254 metadata IP blocked, not followed)",
+          _c2_redir["blocked_reason"] == "private_ip" and _c2_redir["ok"] is False
+          and "UNREACHED" not in (_c2_redir.get("text") or "") and _c2_hop["n"] == 1)
+finally:
+    _c2_safeurl.socket.getaddrinfo = _c2_real_gai
+    _c2_safeurl.httpx.Client = _c2_real_client
+
+# (2) web_fallback REFUSES a private/metadata URL and NEVER calls Jina: safe_fetch returns an
+#     SSRF-class block (private_ip), so read_via_fallback returns None with the Jina tripwire unfired.
+_c2_wf_g, _c2_wf_s = _c2_cache.get, _c2_cache.set
+_c2_real_jina = _c2_wf._jina_markdown
+_c2_jina_fired = {"n": 0}
+def _c2_jina_tripwire(url):
+    _c2_jina_fired["n"] += 1
+    raise AssertionError("Jina must NOT be called for an SSRF-blocked target")
+try:
+    _c2_cache.get = lambda k: None; _c2_cache.set = lambda *a, **k: None
+    _c2_wf._jina_markdown = _c2_jina_tripwire
+    _c2_priv = _c2_wf.read_via_fallback("http://169.254.169.254/")
+    check("S1: web_fallback refuses a private/metadata URL (safe_fetch private_ip) and NEVER escalates to Jina",
+          _c2_priv is None and _c2_jina_fired["n"] == 0)
+finally:
+    _c2_cache.get, _c2_cache.set = _c2_wf_g, _c2_wf_s
+    _c2_wf._jina_markdown = _c2_real_jina
+
+# (3) web_fallback's PLAIN read routes through safeurl.safe_fetch (pinned), NOT http.get: patch
+#     safe_fetch to record the call + return a rich ok html body -> a source='web' doc via plain.
+_c2_sf_seen = {"n": 0, "url": None}
+_c2_rich_html = "<html><body><main><h1>Doc</h1>" + ("<p>a substantive sentence here. </p>" * 60) + "</main></body></html>"
+_c2_real_sf = _c2_safeurl.safe_fetch
+_c2_wf_g2, _c2_wf_s2 = _c2_cache.get, _c2_cache.set
+_c2_real_jina2 = _c2_wf._jina_markdown
+def _c2_rec_sf(url, **kw):
+    _c2_sf_seen["n"] += 1; _c2_sf_seen["url"] = url
+    return {"ok": True, "status": 200, "bytes": len(_c2_rich_html), "text": _c2_rich_html,
+            "final_url": url, "redirect_chain": [], "content_type": "text/html; charset=utf-8",
+            "blocked_reason": None}
+def _c2_jina_tripwire2(url):
+    raise AssertionError("Jina must NOT be called when the plain safe_fetch read is rich")
+try:
+    _c2_cache.get = lambda k: None; _c2_cache.set = lambda *a, **k: None
+    _c2_safeurl.safe_fetch = _c2_rec_sf
+    _c2_wf._jina_markdown = _c2_jina_tripwire2
+    _c2_doc = _c2_wf.read_via_fallback("https://ordinary.example.org/page")
+    check("S1: web_fallback plain read routes through safeurl.safe_fetch (recorded), returns a source='web' plain doc",
+          _c2_sf_seen["n"] == 1 and _c2_sf_seen["url"] == "https://ordinary.example.org/page"
+          and _c2_doc is not None and _c2_doc.source == "web" and "render:plain" in _c2_doc.tags
+          and "substantive sentence" in _c2_doc.content)
+finally:
+    _c2_cache.get, _c2_cache.set = _c2_wf_g2, _c2_wf_s2
+    _c2_safeurl.safe_fetch = _c2_real_sf
+    _c2_wf._jina_markdown = _c2_real_jina2
+
+# (5) cache_only short-circuits BOTH web_fallback (its own guard) and safeurl.safe_fetch (its guard):
+#     zero live egress + no Jina; safe_fetch reports blocked_reason 'cache_only'.
+_c2_wf_g5, _c2_wf_s5 = _c2_cache.get, _c2_cache.set
+_c2_real_jina5 = _c2_wf._jina_markdown
+def _c2_jina_tripwire5(url):
+    raise AssertionError("Jina must NOT be called in cache_only mode")
+try:
+    _c2_cache.get = lambda k: None; _c2_cache.set = lambda *a, **k: None
+    _c2_wf._jina_markdown = _c2_jina_tripwire5
+    _c2_cache.set_cache_only(True)
+    _c2_wf_co = _c2_wf.read_via_fallback("https://ordinary.example.org/page")
+    _c2_sf_co = _c2_safeurl.safe_fetch("https://ordinary.example.org/page")
+    check("S1: cache_only short-circuits web_fallback (None, no Jina) AND safeurl.safe_fetch (blocked_reason cache_only)",
+          _c2_wf_co is None and _c2_sf_co["blocked_reason"] == "cache_only" and _c2_sf_co["ok"] is False)
+finally:
+    _c2_cache.set_cache_only(False)
+    _c2_cache.get, _c2_cache.set = _c2_wf_g5, _c2_wf_s5
+    _c2_wf._jina_markdown = _c2_real_jina5
+
+
+# ---------------------------------------------------------------------------
+# S1-C2 review-fix goldens (R1/R2/R3 regressions + H1/H2 UNTRUSTED_URL SSRF holes).
+# ---------------------------------------------------------------------------
+from penumbra.core import docreader as _c2_dr  # noqa: E402
+
+# (R1) non-2xx now falls THROUGH to Jina like the old raise_for_status path (was: safe_fetch returns
+#      ok=True for a 4xx terminal response, so the 404 error body got extracted + returned as a
+#      source='web' plain doc, never trying Jina). A 404 with a >600-char body + no challenge marker
+#      must NOT return a plain doc; the _jina_markdown recorder proves the escalation fired, and the
+#      404 body text must be absent from the returned (Jina-sourced) content.
+_c2_r1_seen = {"n": 0}
+_c2_404_body = "<html><body><main><h1>Not Found</h1>" + ("<p>this is a long 404 error page body sentence. </p>" * 40) + "</main></body></html>"
+_c2_r1_md = "Title: RealRender\n" + ("real rendered markdown body sentence. " * 40)
+_c2_real_sf_r1 = _c2_safeurl.safe_fetch
+_c2_real_jina_r1 = _c2_wf._jina_markdown
+_c2_wf_g_r1, _c2_wf_s_r1 = _c2_cache.get, _c2_cache.set
+def _c2_sf_404(url, **kw):
+    return {"ok": True, "status": 404, "bytes": len(_c2_404_body), "text": _c2_404_body,
+            "final_url": url, "redirect_chain": [], "content_type": "text/html; charset=utf-8",
+            "blocked_reason": None}
+def _c2_jina_rec(url):
+    _c2_r1_seen["n"] += 1
+    return _c2_r1_md
+try:
+    _c2_cache.get = lambda k: None; _c2_cache.set = lambda *a, **k: None
+    _c2_safeurl.safe_fetch = _c2_sf_404
+    _c2_wf._jina_markdown = _c2_jina_rec
+    _c2_r1_doc = _c2_wf.read_via_fallback("https://err.example.org/missing")
+    check("S1: web_fallback gates plain-extract on 2xx -> a 404 body is NOT returned as a plain doc, escalates to Jina (R1)",
+          _c2_r1_seen["n"] == 1 and _c2_r1_doc is not None and "render:jina" in _c2_r1_doc.tags
+          and "Not Found" not in _c2_r1_doc.content and "404 error page" not in _c2_r1_doc.content)
+finally:
+    _c2_cache.get, _c2_cache.set = _c2_wf_g_r1, _c2_wf_s_r1
+    _c2_safeurl.safe_fetch = _c2_real_sf_r1
+    _c2_wf._jina_markdown = _c2_real_jina_r1
+
+# (R2) web_fallback preserves the OLD http.get redirect ceiling (20) when calling safe_fetch
+#      (safe_fetch's own default is 5); a source-inspect guards the call site against a silent re-tighten.
+_c2_wf_src = _insp.getsource(_c2_wf.read_via_fallback)
+check("S1: web_fallback passes max_redirects=20 to safe_fetch (preserves the old http.get ceiling) (R2)",
+      "max_redirects=20" in _c2_wf_src and "safe_fetch(" in _c2_wf_src)
+
+# (R3) safeurl._resolve_safe_ip is a THIN FORWARD to _netguard._resolve_safe_ip (was a byte-identical
+#      copy): patch the netguard impl and safe_fetch (via safeurl) must SEE it -> the copy can't drift.
+_c2_real_ngr = _c2_ng._resolve_safe_ip
+def _c2_ngr_block(host):
+    return (None, None, "private_ip")  # pretend the shared guard now blocks every host
+try:
+    _c2_ng._resolve_safe_ip = _c2_ngr_block
+    _c2_r3 = _c2_safeurl.safe_fetch("http://forward-probe.example.com/x")
+    check("S1: safeurl._resolve_safe_ip forwards to _netguard._resolve_safe_ip (patch netguard -> safe_fetch sees it, no forked copy) (R3)",
+          _c2_r3["blocked_reason"] == "private_ip" and _c2_r3["ok"] is False
+          and _c2_safeurl._resolve_safe_ip("h.example") == (None, None, "private_ip"))
+finally:
+    _c2_ng._resolve_safe_ip = _c2_real_ngr
+
+# (H1 critical) docreader._download follows redirects MANUALLY now: a 302 -> a private/metadata target
+#      is refused per-hop (raises refused-SSRF) and the private body is NEVER streamed to the temp file.
+_c2_dl_real_gai = _c2_safeurl.socket.getaddrinfo
+_c2_dl_real_client = _c2_safeurl.httpx.Client
+_c2_dl_hop = {"n": 0}
+def _c2_dl_handler(request):
+    _c2_dl_hop["n"] += 1
+    return _c2_safeurl.httpx.Response(302, headers={"Location": "http://169.254.169.254/latest/meta-data/"})
+try:
+    _c2_safeurl.socket.getaddrinfo = (lambda h, *a, **k:
+        [(_c2_socket.AF_INET, _c2_socket.SOCK_STREAM, 6, "", ("169.254.169.254", 0))] if "169.254" in h
+        else [(_c2_socket.AF_INET, _c2_socket.SOCK_STREAM, 6, "", ("93.184.216.34", 0))])
+    _c2_safeurl.httpx.Client = (lambda *a, **k:
+        _c2_dl_real_client(*a, transport=_c2_safeurl.httpx.MockTransport(_c2_dl_handler),
+                           **{kk: vv for kk, vv in k.items() if kk != "transport"}))
+    _c2_dl_err = None
+    try:
+        _c2_dr._download("http://public.example.com/paper.pdf", "pdf")
+    except RuntimeError as _e:
+        _c2_dl_err = str(_e)
+    check("S1: docreader._download refuses a 302 -> 169.254.169.254 (per-hop revalidation raises, private body never streamed) (H1)",
+          _c2_dl_err is not None and "refused SSRF-class" in _c2_dl_err and "private_ip" in _c2_dl_err
+          and _c2_dl_hop["n"] == 1)
+finally:
+    _c2_safeurl.socket.getaddrinfo = _c2_dl_real_gai
+    _c2_safeurl.httpx.Client = _c2_dl_real_client
+
+# (H2 high) penumbra_view image fetch follows redirects MANUALLY now: a 302 -> 127.0.0.1:9222 (the loopback
+#      CDP DevTools API) is refused per-hop -> an error entry, never the private target's bytes.
+_c2_iv_real_gai = _c2_safeurl.socket.getaddrinfo
+_c2_iv_real_client = _c2_safeurl.httpx.Client
+_c2_iv_hop = {"n": 0}
+def _c2_iv_handler(request):
+    _c2_iv_hop["n"] += 1
+    if _c2_iv_hop["n"] == 1:
+        return _c2_safeurl.httpx.Response(302, headers={"Location": "http://127.0.0.1:9222/json/version"})
+    return _c2_safeurl.httpx.Response(200, content=b"X" * 4096)  # UNREACHED private CDP body
+try:
+    _c2_safeurl.socket.getaddrinfo = (lambda h, *a, **k:
+        [(_c2_socket.AF_INET, _c2_socket.SOCK_STREAM, 6, "", ("93.184.216.34", 0))])
+    _c2_safeurl.httpx.Client = (lambda *a, **k:
+        _c2_iv_real_client(*a, transport=_c2_safeurl.httpx.MockTransport(_c2_iv_handler),
+                           **{kk: vv for kk, vv in k.items() if kk != "transport"}))
+    _c2_iv = _c2_dr.view_image_urls(["http://img.example.com/pic.png"])
+    _c2_iv_e = _c2_iv["images"][0] if _c2_iv["images"] else {}
+    check("S1: penumbra_view image fetch refuses a 302 -> 127.0.0.1:9222 (per-hop revalidation -> error entry, private bytes never returned) (H2)",
+          _c2_iv["count"] == 0 and "data" not in _c2_iv_e and "refused" in _c2_iv_e.get("error", "").lower()
+          and _c2_iv_hop["n"] == 1)
+finally:
+    _c2_safeurl.socket.getaddrinfo = _c2_iv_real_gai
+    _c2_safeurl.httpx.Client = _c2_iv_real_client
+
+
+# ---------------------------------------------------------------------------
+# S1-C3 (mainline funnel per-hop SSRF): safeurl.SSRFGuardTransport wraps the shared pooled http client
+# (http._get_client), so EVERY http.get / get_json / post_json caller AND every redirect hop is
+# _netguard-validated at the connection layer. Offline via a real httpx.Client whose INNER transport is
+# a MockTransport wrapped by the REAL SSRFGuardTransport + a patched getaddrinfo. The final-body stream
+# uses httpx.ByteStream (NOT content=) because a constructed content= Response raises StreamConsumed on
+# _request_capped's iter_raw() -- the established _FakeClient/iter_raw precedent earlier in this file.
+# ---------------------------------------------------------------------------
+import socket as _c3_socket  # noqa: E402
+from penumbra.core import http as _c3_http, safeurl as _c3_safeurl, _netguard as _c3_ng  # noqa: E402
+
+_c3_real_gai = _c3_ng.socket.getaddrinfo
+_c3_real_client = _c3_http._client
+
+def _c3_pub_gai(h, *a, **k):
+    return [(_c3_socket.AF_INET, _c3_socket.SOCK_STREAM, 6, "", ("93.184.216.34", 0))]
+def _c3_split_gai(h, *a, **k):
+    return ([(_c3_socket.AF_INET, _c3_socket.SOCK_STREAM, 6, "", ("169.254.169.254", 0))] if "169.254" in h
+            else [(_c3_socket.AF_INET, _c3_socket.SOCK_STREAM, 6, "", ("93.184.216.34", 0))])
+def _c3_ok_resp(body):
+    # httpx.ByteStream (NOT content=) so _request_capped's iter_raw() can stream the body once.
+    return _c3_http.httpx.Response(200, stream=_c3_http.httpx.ByteStream(body),
+                                   headers={"Content-Type": "text/plain"})
+def _c3_install(handler):
+    _c3_http._client = _c3_http.httpx.Client(
+        transport=_c3_safeurl.SSRFGuardTransport(_c3_http.httpx.MockTransport(handler)),
+        headers={"User-Agent": _c3_http.USER_AGENT}, follow_redirects=True,
+        timeout=_c3_http.DEFAULT_TIMEOUT)
+def _c3_restore():
+    try:
+        _c3_http._client.close()
+    except Exception:  # noqa: BLE001
+        pass
+    _c3_http._client = _c3_real_client
+
+# (1) http.get through the guarded client REFUSES a 302 -> 169.254.169.254: the per-hop transport guard
+#     raises on the private hop, so http.get returns None and the private body is never fetched.
+_c3_hop1 = {"n": 0}
+def _c3_redir_priv(request):
+    _c3_hop1["n"] += 1
+    if _c3_hop1["n"] == 1:
+        return _c3_http.httpx.Response(302, headers={"Location": "http://169.254.169.254/"})
+    return _c3_ok_resp(b"UNREACHED private metadata body")
+try:
+    _c3_ng.socket.getaddrinfo = _c3_split_gai
+    _c3_install(_c3_redir_priv)
+    _c3_blocked = _c3_http.get("http://public.example.com/start")
+    check("S1: http.get through the guarded client REFUSES a 302 -> 169.254.169.254 (per-hop SSRFGuardTransport -> None; private body never fetched)",
+          _c3_blocked is None and _c3_hop1["n"] == 1)
+finally:
+    _c3_ng.socket.getaddrinfo = _c3_real_gai
+    _c3_restore()
+
+# (2) http.get of a plain 200 PUBLIC URL still returns the body byte-identically (guard delegates, no
+#     redirect): the non-redirect path is unchanged vs today.
+_c3_hop2 = {"n": 0}
+def _c3_ok_only(request):
+    _c3_hop2["n"] += 1
+    return _c3_ok_resp(b"PUBLIC OK BODY")
+try:
+    _c3_ng.socket.getaddrinfo = _c3_pub_gai
+    _c3_install(_c3_ok_only)
+    _c3_ok = _c3_http.get("http://public.example.com/plain")
+    check("S1: http.get through the guarded client returns a plain 200 public body unchanged (non-redirect byte-identical)",
+          _c3_ok is not None and _c3_ok.content == b"PUBLIC OK BODY" and _c3_hop2["n"] == 1)
+finally:
+    _c3_ng.socket.getaddrinfo = _c3_real_gai
+    _c3_restore()
+
+# (3) a GET 302 -> PUBLIC 200 is still FOLLOWED and returns the final body (public redirect preserved:
+#     both hops pass the guard, httpx follows normally).
+_c3_hop3 = {"n": 0}
+def _c3_pub_redir(request):
+    _c3_hop3["n"] += 1
+    if _c3_hop3["n"] == 1:
+        return _c3_http.httpx.Response(302, headers={"Location": "http://final.example.com/dest"})
+    return _c3_ok_resp(b"FINAL PUBLIC BODY")
+try:
+    _c3_ng.socket.getaddrinfo = _c3_pub_gai
+    _c3_install(_c3_pub_redir)
+    _c3_pub = _c3_http.get("http://start.example.com/go")
+    check("S1: http.get through the guarded client still FOLLOWS a public 302 -> 200 (public redirect works, final body returned)",
+          _c3_pub is not None and _c3_pub.content == b"FINAL PUBLIC BODY" and _c3_hop3["n"] == 2)
+finally:
+    _c3_ng.socket.getaddrinfo = _c3_real_gai
+    _c3_restore()
+
+# (4) unit-level: SSRFGuardTransport.handle_request RAISES ConnectError on a private-IP hop (never
+#     delegates) and DELEGATES a public hop (returns the wrapped 200).
+_c3_deleg = {"n": 0}
+def _c3_unit_handler(request):
+    _c3_deleg["n"] += 1
+    return _c3_ok_resp(b"delegated")
+try:
+    _c3_ng.socket.getaddrinfo = _c3_split_gai
+    _c3_guard = _c3_safeurl.SSRFGuardTransport(_c3_http.httpx.MockTransport(_c3_unit_handler))
+    _c3_raised = None
+    try:
+        _c3_guard.handle_request(_c3_http.httpx.Request("GET", "http://169.254.169.254/latest/meta-data/"))
+    except _c3_http.httpx.ConnectError as _c3_e:
+        _c3_raised = str(_c3_e)
+    _c3_pub_resp = _c3_guard.handle_request(_c3_http.httpx.Request("GET", "http://public.example.com/x"))
+    check("S1: SSRFGuardTransport.handle_request RAISES ConnectError on a private hop (never delegates) and DELEGATES a public hop (200)",
+          _c3_raised is not None and "refused SSRF-class" in _c3_raised
+          and _c3_deleg["n"] == 1 and _c3_pub_resp.status_code == 200)
+    try:
+        _c3_pub_resp.close()
+    except Exception:  # noqa: BLE001
+        pass
+    # (5) the PIN: the wrapped transport connects to the RESOLVED IP LITERAL (not the hostname), with
+    #     the real Host header + SNI preserved -- the DNS-rebind TOCTOU is closed on the mainline too.
+    _c3_seen = {}
+    def _c3_pin_handler(request):
+        _c3_seen.update(host=request.url.host, Host=request.headers.get("Host"),
+                        sni=request.extensions.get("sni_hostname"))
+        return _c3_ok_resp(b"pinned")
+    _c3_pin_guard = _c3_safeurl.SSRFGuardTransport(_c3_http.httpx.MockTransport(_c3_pin_handler))
+    _c3_pin_resp = _c3_pin_guard.handle_request(
+        _c3_http.httpx.Request("GET", "https://public.example.com/x"))
+    _c3_pin_ip = _c3_seen.get("host")
+    check("S1: SSRFGuardTransport PINS the wrapped connection to the resolved IP (Host + SNI stay the real host: rebind TOCTOU closed)",
+          bool(_c3_pin_ip) and _c3_pin_ip != "public.example.com"
+          and _c3_seen.get("Host") == "public.example.com" and _c3_seen.get("sni") == "public.example.com",
+          str(_c3_seen))
+    try:
+        _c3_pin_resp.close()
+    except Exception:  # noqa: BLE001
+        pass
+    # (6) fake-IP passthrough: a Clash/mihomo split-tunnel pool addr (198.18/15) must NOT pin -- pinning
+    #     it keys the shared pooled client by a fake IP the proxy REUSES across hosts, so a pooled
+    #     keep-alive collides onto the wrong host (SNI mismatch -> SSL EOF). resolve_pin returns ip=None
+    #     so the transport connects BY HOSTNAME (the proxy routes; the pool stays per-host). Real public
+    #     IPs still pin (proven above); this is why the mainline pin is safe on a fake-IP deployment.
+    _c3_ng.socket.getaddrinfo = lambda h, *a, **k: [(2, 1, 6, "", ("198.18.0.5", 0))]
+    check("S1: resolve_pin does NOT pin a proxy fake-IP (198.18/15) -> ip=None passthrough (pooled client never collides reused fake-IPs across hosts)",
+          _c3_ng.resolve_pin("https://fake.example.com/x") == (None, "fake.example.com", None))
+finally:
+    _c3_ng.socket.getaddrinfo = _c3_real_gai
+
+
+# ---------------------------------------------------------------------------
+# S2. Graceful shutdown: the stop/drain contract for the background loops + the composed ASGI
+#     lifespan. Offline invariants for the S2 async-core-foundation step: the lifecycle registry
+#     drains registered loops, a loop stops PROMPTLY via wait-not-sleep (not a full interval), the
+#     recall single-writer FINAL-FLUSHES its queue on stop (no lost write), and the composed
+#     lifespan delegates to FastMCP's lifespan (startup unchanged) + is fail-safe on a drain error.
+# ---------------------------------------------------------------------------
+import asyncio as _s2aio  # noqa: E402
+import contextlib as _s2ctx  # noqa: E402
+import threading as _s2thr  # noqa: E402
+import time as _s2time  # noqa: E402
+
+from penumbra.core import lifecycle as _s2lc  # noqa: E402
+
+# S2.1: registry drains BOTH registered loops within budget. Two fake loops each run
+# `while not stop.is_set(): stop.wait(0.01)` (the wait-not-sleep shape); drain_all sets their stops
+# and joins them, and reports both as drained.
+def _s2_fakeloop(ev):
+    while not ev.is_set():
+        ev.wait(0.01)
+_s2_ev_a, _s2_ev_b = _s2thr.Event(), _s2thr.Event()
+_s2_ta = _s2thr.Thread(target=_s2_fakeloop, args=(_s2_ev_a,), name="s2-fake-a", daemon=True)
+_s2_tb = _s2thr.Thread(target=_s2_fakeloop, args=(_s2_ev_b,), name="s2-fake-b", daemon=True)
+_s2_ta.start(); _s2_tb.start()
+_s2lc.register_loop("s2-fake-a", _s2_ev_a, _s2_ta)
+_s2lc.register_loop("s2-fake-b", _s2_ev_b, _s2_tb)
+_s2_res = _s2lc.drain_all(timeout_total=5.0)
+check("S2: lifecycle registry drains BOTH registered loops within budget",
+      (not _s2_ta.is_alive()) and (not _s2_tb.is_alive())
+      and "s2-fake-a" in _s2_res.get("drained", []) and "s2-fake-b" in _s2_res.get("drained", []),
+      f"a_alive={_s2_ta.is_alive()} b_alive={_s2_tb.is_alive()} res={_s2_res}")
+
+# S2.2: a registered loop stops PROMPTLY on request_stop_all, well under its interval. The stub
+# waits on a LONG (5s) interval; if it used time.sleep(5) it could not stop under 5s, so a prompt
+# stop proves the wait-not-sleep change.
+_s2_ev_c = _s2thr.Event()
+def _s2_stubloop(ev):
+    while not ev.is_set():
+        ev.wait(5.0)   # a 5s interval; a stop must wake it immediately, not wait the interval out
+_s2_tc = _s2thr.Thread(target=_s2_stubloop, args=(_s2_ev_c,), name="s2-stub", daemon=True)
+_s2_t0 = _s2time.monotonic()
+_s2_tc.start()
+_s2time.sleep(0.05)   # let it enter the wait
+_s2lc.register_loop("s2-stub", _s2_ev_c, _s2_tc)
+_s2lc.request_stop_all()
+_s2_tc.join(timeout=2.0)
+_s2_elapsed = _s2time.monotonic() - _s2_t0
+check("S2: a registered loop stops promptly on request_stop_all (wait-not-sleep, well under its 5s interval)",
+      (not _s2_tc.is_alive()) and _s2_elapsed < 2.0,
+      f"alive={_s2_tc.is_alive()} elapsed={_s2_elapsed:.3f}s")
+
+# S2.3: the recall writer FINAL-FLUSHES its queue on stop (no lost write). Point the store at a
+# fresh temp DB, enqueue two batches, set _STOP BEFORE starting the loop (so the while body is
+# skipped and the pure final-flush path runs), join, and assert every queued doc landed in the store.
+_s2w = _recall.writer
+_s2_db_prev = _rstore.DB_PATH
+_s2_disabled_prev = _rstore._disabled
+_s2_stop_prev = _s2w._STOP.is_set()
+try:
+    _rstore._disabled = False
+    _rstore.DB_PATH = Path(_tf.mkdtemp()) / "s2_writer_index.db"
+    _rstore.init()
+    while not _s2w._queue.empty():   # start from an empty queue
+        try:
+            _s2w._queue.get_nowait()
+        except Exception:  # noqa: BLE001
+            break
+    _s2w._STOP.clear()
+    _s2_batch1 = []
+    for _i in range(5):
+        _d = _doc("hf_daily_papers", f"s2 final-flush doc {_i}")
+        _d.source_id = f"s2flush{_i}"
+        _s2_batch1.append(_d)
+    _s2_batch2 = [_doc("hf_daily_papers", "s2 final-flush second batch")]
+    _s2_batch2[0].source_id = "s2flush_b"
+    _s2w._enqueue(list(_s2_batch1))   # one full-doc batch
+    _s2w._enqueue(list(_s2_batch2))   # a second, to prove the final drain sweeps the whole queue
+    # WARM the embedder BEFORE the timed final-flush. A COLD qwen3-emb load (the first embed_passage
+    # inside _apply) can exceed the 5s join below, leaving a ZOMBIE writer thread that keeps draining the
+    # SHARED global _queue and then steals docs from the NEXT test (F2), which enqueues to the same queue.
+    # That is the sole root of the flaky S2.3+F2 pair (they failed / passed TOGETHER exactly as the
+    # embedder flipped cold / warm). warm() blocks until loaded, so this assertion now measures the flush
+    # LOGIC (its intent), never one-off model-load time, and the thread joins cleanly with no zombie.
+    from penumbra.core.recall import embed as _s2embed
+    _s2embed.warm()
+    _s2w._STOP.set()                  # stop BEFORE start -> loop body skipped -> pure FINAL FLUSH
+    _s2_tw = _s2thr.Thread(target=_s2w._writer_loop, name="s2-recall-writer", daemon=True)
+    _s2_tw.start()
+    _s2_tw.join(timeout=5.0)
+    _s2_qdrained = _s2w._queue.empty()
+    _s2_con = _rstore.connect()
+    _s2_present = _s2_con.execute(
+        "SELECT COUNT(*) FROM docs WHERE source_id LIKE 's2flush%'").fetchone()[0]
+    try:
+        _s2_con.close()
+    except Exception:  # noqa: BLE001
+        pass
+    check("S2: recall writer FINAL-FLUSHES its queue on stop (no lost write; both batches persisted)",
+          (not _s2_tw.is_alive()) and _s2_qdrained and _s2_present == 6,
+          f"alive={_s2_tw.is_alive()} queue_empty={_s2_qdrained} docs_present={_s2_present}")
+finally:
+    while not _s2w._queue.empty():
+        try:
+            _s2w._queue.get_nowait()
+        except Exception:  # noqa: BLE001
+            break
+    if not _s2_stop_prev:
+        _s2w._STOP.clear()
+    _rstore.DB_PATH = _s2_db_prev
+    _rstore._disabled = _s2_disabled_prev
+
+# S2.4: the composed lifespan delegates to a mock FastMCP lifespan (startup UNCHANGED), drains on
+# shutdown, preserves FastMCP's yielded state, and a RAISING drain does NOT propagate (fail-safe).
+_s2_orig_drain = _s2lc.drain_all
+try:
+    # (a) happy path: order == [fastmcp start, body, drain, fastmcp stop]; the yielded state is
+    #     re-yielded to the caller (Starlette copies it into the lifespan scope).
+    _s2_ev1: list = []
+    @_s2ctx.asynccontextmanager
+    async def _s2_mock_lifespan_ok(app_):
+        _s2_ev1.append("fastmcp-start")
+        try:
+            yield {"mock": "state"}
+        finally:
+            _s2_ev1.append("fastmcp-stop")
+    def _s2_mock_drain_ok(*a, **k):
+        _s2_ev1.append("drain")
+        return {"drained": [], "running": []}
+    _s2lc.drain_all = _s2_mock_drain_ok
+    _s2_composed_ok = _s2lc.compose_lifespan(_s2_mock_lifespan_ok)
+    _s2_seen = {}
+    async def _s2_run_ok():
+        async with _s2_composed_ok("APP") as _st:
+            _s2_ev1.append("body")
+            _s2_seen["state"] = _st
+    _s2aio.run(_s2_run_ok())
+    check("S2: composed lifespan delegates FastMCP startup unchanged, drains before FastMCP shutdown, preserves state",
+          _s2_ev1 == ["fastmcp-start", "body", "drain", "fastmcp-stop"]
+          and _s2_seen.get("state") == {"mock": "state"},
+          f"events={_s2_ev1} state={_s2_seen}")
+
+    # (b) fail-safe: a drain that RAISES must not propagate out of the lifespan, and FastMCP's
+    #     shutdown must still run.
+    _s2_ev2: list = []
+    @_s2ctx.asynccontextmanager
+    async def _s2_mock_lifespan_raise(app_):
+        _s2_ev2.append("fastmcp-start")
+        try:
+            yield None
+        finally:
+            _s2_ev2.append("fastmcp-stop")
+    def _s2_mock_drain_raise(*a, **k):
+        _s2_ev2.append("drain-raise")
+        raise RuntimeError("boom")
+    _s2lc.drain_all = _s2_mock_drain_raise
+    _s2_composed_raise = _s2lc.compose_lifespan(_s2_mock_lifespan_raise)
+    _s2_propagated = None
+    async def _s2_run_raise():
+        async with _s2_composed_raise("APP"):
+            _s2_ev2.append("body")
+    try:
+        _s2aio.run(_s2_run_raise())
+    except Exception as _e:  # noqa: BLE001
+        _s2_propagated = _e
+    check("S2: a raising drain_all does NOT propagate out of the composed lifespan (fail-safe) + FastMCP still shuts down",
+          _s2_propagated is None
+          and _s2_ev2 == ["fastmcp-start", "body", "drain-raise", "fastmcp-stop"],
+          f"propagated={_s2_propagated} events={_s2_ev2}")
+finally:
+    _s2lc.drain_all = _s2_orig_drain
+
+
+# ---------------------------------------------------------------------------
+# S2 review-fix goldens (F1-F4): the drain is genuinely robust, not just claimed.
+# ---------------------------------------------------------------------------
+
+# F1 (part 2): drain_all joins producers FIRST and the drain_last recall-writer LAST, regardless of
+# registration order, so no producer can enqueue after the writer's final flush. Two stub loops, each
+# parked until its own join is invoked (so join is DETERMINISTICALLY called on both); the WRITER is
+# registered FIRST with drain_last=True yet must be joined LAST.
+_f1a_order: list = []
+_f1a_rel_p, _f1a_rel_w = _s2thr.Event(), _s2thr.Event()
+_f1a_stop_p, _f1a_stop_w = _s2thr.Event(), _s2thr.Event()
+def _f1a_loop(stop_ev, rel_ev):
+    stop_ev.wait(10.0)   # parked until request_stop_all wakes it
+    rel_ev.wait(10.0)    # stays ALIVE until its join wrapper releases it (deterministic join order)
+_f1a_tp = _s2thr.Thread(target=_f1a_loop, args=(_f1a_stop_p, _f1a_rel_p), name="s2-producer", daemon=True)
+_f1a_tw = _s2thr.Thread(target=_f1a_loop, args=(_f1a_stop_w, _f1a_rel_w), name="s2-drainlast-writer", daemon=True)
+def _f1a_wrap(thr, label, rel_ev):
+    _real = thr.join
+    def _j(timeout=None):
+        _f1a_order.append(label)
+        rel_ev.set()
+        return _real(timeout)
+    thr.join = _j
+_f1a_wrap(_f1a_tp, "producer", _f1a_rel_p)
+_f1a_wrap(_f1a_tw, "writer", _f1a_rel_w)
+_f1a_tp.start(); _f1a_tw.start()
+_s2time.sleep(0.05)   # let both park in stop.wait
+_s2lc.register_loop("s2-drainlast-writer", _f1a_stop_w, _f1a_tw, drain_last=True)   # registered FIRST
+_s2lc.register_loop("s2-producer", _f1a_stop_p, _f1a_tp)                            # yet joined FIRST
+_f1a_res = _s2lc.drain_all(timeout_total=5.0)
+check("S2: drain_all joins producers before the drain_last recall-writer (F1 writer-drained-last)",
+      _f1a_order == ["producer", "writer"] and (not _f1a_tp.is_alive()) and (not _f1a_tw.is_alive()),
+      f"join_order={_f1a_order} p_alive={_f1a_tp.is_alive()} w_alive={_f1a_tw.is_alive()}")
+with _s2lc._lock:
+    _s2lc._stops[:] = [e for e in _s2lc._stops if e[0] not in ("s2-producer", "s2-drainlast-writer")]
+
+# F1 (part 1): recall.ingest_loop's inner _STOP break stops the sweep MID-list, not after a full
+# enumeration. Patch ingest_list to 100 fake sources and _ingest_step to set _STOP on the 3rd call;
+# without the inner break the sweep would process all 100.
+_f1b_prev_list = _recall.ingest_list
+_f1b_prev_step = _recall._ingest_step
+_f1b_prev_dc = _recall.doc_count
+_f1b_stop_prev = _recall._STOP.is_set()
+try:
+    _recall._STOP.clear()
+    _f1b_seen = {"n": 0}
+    _recall.ingest_list = lambda: [f"s2src{_i}" for _i in range(100)]
+    def _f1b_step(src):
+        _f1b_seen["n"] += 1
+        if _f1b_seen["n"] >= 3:
+            _recall._STOP.set()   # a shutdown arriving mid-sweep
+    _recall._ingest_step = _f1b_step
+    _recall.doc_count = lambda: 0
+    _f1b_t = _s2thr.Thread(target=lambda: _recall.ingest_loop(interval_s=0.01), name="s2-ingest", daemon=True)
+    _f1b_t.start(); _f1b_t.join(timeout=5.0)
+    check("S2: recall ingest_loop inner _STOP break stops the sweep mid-list (F1 ingest inner-stop)",
+          (not _f1b_t.is_alive()) and _f1b_seen["n"] == 3,
+          f"alive={_f1b_t.is_alive()} processed={_f1b_seen['n']} (a full sweep would be 100)")
+finally:
+    _recall.ingest_list = _f1b_prev_list
+    _recall._ingest_step = _f1b_prev_step
+    _recall.doc_count = _f1b_prev_dc
+    if not _f1b_stop_prev:
+        _recall._STOP.clear()
+    with _s2lc._lock:
+        _s2lc._stops[:] = [e for e in _s2lc._stops if e[0] != "recall-ingest"]
+
+# F2: writer._final_flush commits INCREMENTALLY in batches (each _apply its own commit), so a
+# mid-flush abort keeps the already-committed batches. Set _DRAIN=1 (one item per batch), enqueue 4
+# docs, and make the 2nd _apply raise: batches 1,3,4 must persist, batch 2 must not.
+_f2_db_prev = _rstore.DB_PATH
+_f2_disabled_prev = _rstore._disabled
+_f2_drain_prev = _recall.writer._DRAIN
+_f2_apply_prev = _recall.writer._apply
+try:
+    _rstore._disabled = False
+    _rstore.DB_PATH = Path(_tf.mkdtemp()) / "s2_f2_index.db"
+    _rstore.init()
+    while not _recall.writer._queue.empty():
+        try:
+            _recall.writer._queue.get_nowait()
+        except Exception:  # noqa: BLE001
+            break
+    _f2_calls = {"n": 0}
+    def _f2_apply(con, items):
+        _f2_calls["n"] += 1
+        if _f2_calls["n"] == 2:
+            raise RuntimeError("simulated mid-flush abort")   # fail-open: this batch is rolled back + skipped
+        return _f2_apply_prev(con, items)
+    _recall.writer._DRAIN = 1
+    _recall.writer._apply = _f2_apply
+    for _i in range(4):
+        _fd = _doc("hf_daily_papers", f"s2 f2 doc {_i}")
+        _fd.source_id = f"s2f2_{_i}"
+        _recall.writer._enqueue([_fd])
+    _f2_con = _rstore.connect()
+    _recall.writer._final_flush(_f2_con)
+    try:
+        _f2_con.close()
+    except Exception:  # noqa: BLE001
+        pass
+    _f2_chk = _rstore.connect()
+    _f2_present = _f2_chk.execute("SELECT COUNT(*) FROM docs WHERE source_id LIKE 's2f2_%'").fetchone()[0]
+    _f2_has0 = _f2_chk.execute("SELECT COUNT(*) FROM docs WHERE source_id='s2f2_0'").fetchone()[0]
+    _f2_has1 = _f2_chk.execute("SELECT COUNT(*) FROM docs WHERE source_id='s2f2_1'").fetchone()[0]
+    try:
+        _f2_chk.close()
+    except Exception:  # noqa: BLE001
+        pass
+    check("S2: writer final flush commits in batches; a mid-flush abort keeps committed batches (F2)",
+          _f2_calls["n"] == 4 and _f2_present == 3 and _f2_has0 == 1 and _f2_has1 == 0,
+          f"apply_calls={_f2_calls['n']} present={_f2_present} has0={_f2_has0} has1={_f2_has1}")
+finally:
+    _recall.writer._DRAIN = _f2_drain_prev
+    _recall.writer._apply = _f2_apply_prev
+    while not _recall.writer._queue.empty():
+        try:
+            _recall.writer._queue.get_nowait()
+        except Exception:  # noqa: BLE001
+            break
+    _rstore.DB_PATH = _f2_db_prev
+    _rstore._disabled = _f2_disabled_prev
+
+# F3: the yield_tap idle-timeout expression is fixed (not a dead constant 0.5). It shortens below
+# _STOP_POLL_S when a flush is due sooner, caps at _STOP_POLL_S when far off, and stays at the full
+# cadence (no busy-spin) when nothing is pending.
+_f3_now = 100.0
+_f3_soon = _yt._idle_timeout(1, _f3_now - (_yt._FLUSH_SECONDS - 0.2), now=_f3_now)   # flush due in 0.2s
+_f3_far = _yt._idle_timeout(1, _f3_now, now=_f3_now)                                 # flush far off
+_f3_idle = _yt._idle_timeout(0, _f3_now - 10_000.0, now=_f3_now)                     # nothing pending
+check("S2: yield_tap idle-timeout shortens below _STOP_POLL_S when a flush is due sooner (F3 dead-expr fixed)",
+      abs(_f3_soon - 0.2) < 1e-6 and _f3_soon < _yt._STOP_POLL_S
+      and _f3_far == _yt._STOP_POLL_S and _f3_idle == _yt._STOP_POLL_S,
+      f"soon={_f3_soon} far={_f3_far} idle={_f3_idle} cap={_yt._STOP_POLL_S}")
+
+# F4: yield_tap's final flush DRAINS + folds the un-folded queue on stop (not just the already-folded
+# window), symmetric with the recall writer. Point yield.json at a temp dir, enqueue 2 un-folded
+# bundles, set _STOP BEFORE start (while body skipped -> pure final drain+flush), and assert the
+# un-folded bundles were counted into the persisted state.
+_f4_state_prev = (_yt.STATE_DIR, _yt.YIELD_PATH)
+_f4_stop_prev = _yt._STOP.is_set()
+_f4_tmp = Path(_tf.mkdtemp())
+try:
+    _yt.STATE_DIR = _f4_tmp
+    _yt.YIELD_PATH = _f4_tmp / "yield.json"
+    while not _yt._queue.empty():
+        try:
+            _yt._queue.get_nowait()
+        except Exception:  # noqa: BLE001
+            break
+    _yt._STOP.clear()
+    _yt._queue.put_nowait({"topk": {"s2f4src": 2}, "present_live": ["s2f4src"]})
+    _yt._queue.put_nowait({"sole": {"s2f4src": 1}})
+    _yt._STOP.set()   # stop BEFORE start -> while body skipped -> pure final drain + flush path
+    _f4_t = _s2thr.Thread(target=_yt._drain_loop, name="s2-yield-drain", daemon=True)
+    _f4_t.start(); _f4_t.join(timeout=5.0)
+    _f4_path = _f4_tmp / "yield.json"
+    _f4_data = json.loads(_f4_path.read_text(encoding="utf-8")) if _f4_path.exists() else {}
+    _f4_row = (_f4_data.get("sources") or {}).get("s2f4src") or {}
+    check("S2: yield_tap final flush drains + persists UN-FOLDED queued bundles on stop (F4)",
+          (not _f4_t.is_alive()) and _yt._queue.empty()
+          and _f4_row.get("topk_appearances") == 2 and _f4_row.get("sole_contributions") == 1,
+          f"alive={_f4_t.is_alive()} q_empty={_yt._queue.empty()} row={_f4_row}")
+finally:
+    while not _yt._queue.empty():
+        try:
+            _yt._queue.get_nowait()
+        except Exception:  # noqa: BLE001
+            break
+    _yt.STATE_DIR, _yt.YIELD_PATH = _f4_state_prev
+    if not _f4_stop_prev:
+        _yt._STOP.clear()
+    with _s2lc._lock:
+        _s2lc._stops[:] = [e for e in _s2lc._stops if e[0] != "yield-tap-writer"]
+
+# ---------------------------------------------------------------------------
+# S3a. sync->async PORTAL (penumbra.core.portal): the lowest-risk async-method slice. PURE ADDITION --
+#      portal.py is new; the only server edit is a fail-safe, run-once bind + self-test in _threaded's
+#      _runner; NO operation is converted (every tool still runs sync via .__wrapped__ above). These
+#      goldens prove the bridge OFFLINE against a hand-run loop; the REAL FastMCP-loop round-trip is
+#      only provable in production (deploy + a live tool call + the "portal self-test OK" log line).
+# ---------------------------------------------------------------------------
+import asyncio as _s3aio  # noqa: E402
+import threading as _s3thr  # noqa: E402
+from penumbra.core import portal as _portal  # noqa: E402
+from penumbra.core import cache as _s3cache  # noqa: E402
+from penumbra.core import diag as _s3diag  # noqa: E402
+
+# (4b) self_test is FAIL-SAFE while UNBOUND: returns False and never raises. Runs FIRST, before any
+# bind (smoke calls tool bodies via .__wrapped__, so the portal is never bound by earlier tests).
+check("S3: self_test returns False when unbound and NEVER raises (fail-safe)",
+      _portal.is_bound() is False and _portal.self_test(timeout=1.0) is False)
+
+# Start a REAL asyncio loop on a background thread and bind the portal FROM that loop thread (so
+# _loop_thread_ident is the loop thread, exactly as production binds it inside _runner on the loop).
+_s3_loop = _s3aio.new_event_loop()
+_s3_ready = _s3thr.Event()
+def _s3_bind_from_loop():
+    _portal.bind(_s3_loop)   # bind FROM the loop thread -> correct _loop_thread_ident for the guard
+    _s3_ready.set()
+def _s3_loop_main():
+    _s3aio.set_event_loop(_s3_loop)
+    _s3_loop.call_soon(_s3_bind_from_loop)  # runs first thing on the loop thread
+    _s3_loop.run_forever()
+_s3_thread = _s3thr.Thread(target=_s3_loop_main, name="s3-portal-loop", daemon=True)
+_s3_thread.start()
+_s3_ready.wait(5.0)
+try:
+    # (1) round-trip: from the MAIN (sync) thread, submit a coro -> it runs on the bound loop -> 42.
+    async def _s3_answer():
+        return 42
+    _s3_rt = _portal.submit(_s3_answer(), timeout=5.0)
+    check("S3: portal round-trip -- submit a coro from a sync thread runs it on the bound loop -> 42",
+          _s3_rt == 42, f"got {_s3_rt!r}")
+
+    # (2) deadlock guard: submit() called ON the loop thread must RAISE RuntimeError, not hang. Run a
+    # coroutine on the loop that calls submit; .result(5.0) bounds it so a hypothetical hang FAILS.
+    def _s3_deadlock_probe():
+        async def _inner():
+            async def _noop():
+                return 1
+            try:
+                _portal.submit(_noop(), timeout=1.0)
+                return "NO-RAISE"
+            except RuntimeError:
+                return "RAISED"
+            except BaseException as _e:  # noqa: BLE001
+                return "OTHER:" + type(_e).__name__
+        return _s3aio.run_coroutine_threadsafe(_inner(), _s3_loop).result(5.0)
+    _s3_dg = _s3_deadlock_probe()
+    check("S3: deadlock guard -- portal.submit called ON the loop thread raises RuntimeError (no hang)",
+          _s3_dg == "RAISED", f"got {_s3_dg}")
+
+    # (3) contextvar propagation (D9): set the caller's fetch contextvars, submit a coro that READS
+    # them ON the loop -> it must see the CALLER's values (run_coroutine_threadsafe runs coro in the
+    # loop's own context, so this only passes if submit re-applies the captured values inside).
+    _s3cache.set_fresh(True)
+    _s3cache.set_cache_only(True)
+    _s3cache.set_refresh_margin(12.5)
+    _s3diag.enable()  # arms the diag trace var (a fresh list, i.e. active) in THIS caller's context
+    async def _s3_read_ctx():
+        return {
+            "fresh": _s3cache._fresh_var.get(),
+            "cache_only": _s3cache.cache_only(),
+            "margin": _s3cache._refresh_margin_var.get(),
+            "trace_active": _s3diag._trace_var.get() is not None,
+        }
+    _s3_seen = _portal.submit(_s3_read_ctx(), timeout=5.0)
+    check("S3: contextvar propagation -- the coro on the loop sees the caller's fresh/cache_only/margin/trace (D9)",
+          _s3_seen == {"fresh": True, "cache_only": True, "margin": 12.5, "trace_active": True},
+          f"got {_s3_seen}")
+    # no-leak (caller side): submit never mutates the caller's context, so the caller's vars are intact.
+    check("S3: contextvar no-leak -- the caller's own contextvars are unchanged after submit",
+          _s3cache._fresh_var.get() is True and _s3cache.cache_only() is True
+          and _s3cache._refresh_margin_var.get() == 12.5 and _s3diag._trace_var.get() is not None)
+    # no-leak (loop side) + defaults propagate: reset the caller to defaults, submit again -> the loop
+    # coro must see the DEFAULTS. This only passes if the wrapper RESET the loop context after the first
+    # submit (else fresh=True would still linger in the loop's context) AND capture is per-call (not stale).
+    _s3cache.set_fresh(False)
+    _s3cache.set_cache_only(False)
+    _s3cache.set_refresh_margin(0.0)
+    _s3diag._trace_var.set(None)   # back to the default (None = capture off); no public disable helper
+    _s3_seen2 = _portal.submit(_s3_read_ctx(), timeout=5.0)
+    check("S3: contextvar no-leak/defaults -- a later caller with defaults sees defaults (loop context reset, no stale carry)",
+          _s3_seen2 == {"fresh": False, "cache_only": False, "margin": 0.0, "trace_active": False},
+          f"got {_s3_seen2}")
+
+    # (5) exception propagation: a coro that raises surfaces the SAME exception to the sync caller.
+    class _S3Boom(Exception):
+        pass
+    async def _s3_raise():
+        raise _S3Boom("portal exception propagation")
+    _s3_exc_ok = False
+    try:
+        _portal.submit(_s3_raise(), timeout=5.0)
+    except _S3Boom:
+        _s3_exc_ok = True
+    except BaseException:  # noqa: BLE001
+        _s3_exc_ok = False
+    check("S3: exception propagation -- a coro that raises surfaces the SAME exception to the sync caller",
+          _s3_exc_ok)
+
+    # (4a) self_test TRUE against a bound, running loop -- called from the MAIN (non-loop) thread, so
+    # its submit is a real sync-thread -> loop round-trip (the offline analog of the production check).
+    check("S3: self_test returns True against a bound, running loop (real sync-thread -> loop round-trip)",
+          _portal.self_test(timeout=5.0) is True)
+finally:
+    _s3_loop.call_soon_threadsafe(_s3_loop.stop)
+    _s3_thread.join(timeout=5.0)
+    _s3_loop.close()
+    # leave the caller's contextvars at their defaults (already reset above); nothing runs after this.
+
+# (Part 2 wiring) prove OFFLINE, by source inspection, that the server edit is exactly the fail-safe,
+# run-once bind+self-test AND that the sync tool dispatch is unchanged (no operation converted).
+import inspect as _s3insp  # noqa: E402
+import penumbra.server as _s3srv  # noqa: E402
+_s3_runner_src = _s3insp.getsource(_s3srv._threaded)
+_s3_ensure_src = _s3insp.getsource(_s3srv._ensure_portal)
+check("S3: _runner still dispatches the tool body SYNC via anyio.to_thread.run_sync (no operation converted)",
+      "anyio.to_thread.run_sync(functools.partial(fn" in _s3_runner_src)
+check("S3: the portal bind+self-test is FAIL-SAFE (try/except so it can never break a tool call)",
+      "try:" in _s3_ensure_src and "except Exception" in _s3_ensure_src
+      and "portal.bind" in _s3_ensure_src)
+check("S3: the portal self-test is RUN-ONCE (a module flag guards it) + submitted from a WORKER thread",
+      "_portal_bound_once" in _s3_ensure_src
+      and "anyio.to_thread.run_sync(portal.self_test)" in _s3_ensure_src)
+
+
+# ---------------------------------------------------------------------------
+# S3b. MAINLINE async egress leaf: http._arequest_capped + aget/aget_json/aget_text/apost_json/aput_json
+#      + the safeurl.AsyncSSRFGuardTransport twin. The async version of the ONE choke point ~190 adapters
+#      egress through. PURE ADDITION: the sync helpers (_get_client/_request_capped/get/...) are byte-
+#      identical; these goldens prove the async siblings MIRROR every sync guarantee OFFLINE (asyncio.run
+#      drives the coroutines; the network is stubbed with httpx.MockTransport wrapped in the REAL
+#      AsyncSSRFGuardTransport + a patched getaddrinfo, mirroring the S1-C3 sync transport harness). A LIVE
+#      async fetch against a real upstream is NOT provable here (no async caller exists yet; S4's first
+#      converted adapter is the live proof). The final body uses httpx.ByteStream (NOT content=) so
+#      _arequest_capped's aiter_raw() can stream it once (same reason as the C3 harness).
+# ---------------------------------------------------------------------------
+import asyncio as _s3b_aio  # noqa: E402
+import socket as _s3b_socket  # noqa: E402
+from penumbra.core import http as _s3b_http, safeurl as _s3b_safeurl, _netguard as _s3b_ng  # noqa: E402
+from penumbra.core import cache as _s3b_cache, diag as _s3b_diag  # noqa: E402
+
+_s3b_real_gai = _s3b_ng.socket.getaddrinfo
+_s3b_real_aclient = _s3b_http._aclient
+_s3b_real_sclient = _s3b_http._client
+
+def _s3b_pub_gai(h, *a, **k):
+    return [(_s3b_socket.AF_INET, _s3b_socket.SOCK_STREAM, 6, "", ("93.184.216.34", 0))]
+def _s3b_split_gai(h, *a, **k):
+    return ([(_s3b_socket.AF_INET, _s3b_socket.SOCK_STREAM, 6, "", ("169.254.169.254", 0))] if "169.254" in h
+            else [(_s3b_socket.AF_INET, _s3b_socket.SOCK_STREAM, 6, "", ("93.184.216.34", 0))])
+def _s3b_priv_gai(h, *a, **k):
+    return [(_s3b_socket.AF_INET, _s3b_socket.SOCK_STREAM, 6, "", ("10.0.0.5", 0))]
+def _s3b_ok_resp(body):
+    # httpx.ByteStream (NOT content=) so _arequest_capped's aiter_raw() can stream the body once.
+    return _s3b_http.httpx.Response(200, stream=_s3b_http.httpx.ByteStream(body),
+                                    headers={"Content-Type": "text/plain"})
+def _s3b_install(handler):
+    _s3b_http._aclient = _s3b_http.httpx.AsyncClient(
+        transport=_s3b_safeurl.AsyncSSRFGuardTransport(_s3b_http.httpx.MockTransport(handler)),
+        headers={"User-Agent": _s3b_http.USER_AGENT}, follow_redirects=True,
+        timeout=_s3b_http.DEFAULT_TIMEOUT)
+def _s3b_restore():
+    try:
+        _s3b_aio.run(_s3b_http.aclose_client())  # awaits aclose + resets _aclient=None (the built helper)
+    except Exception:  # noqa: BLE001
+        pass
+    _s3b_http._aclient = _s3b_real_aclient
+
+# (1) aget under cache_only -> None WITHOUT egress: the cache_only guard short-circuits BEFORE the pooled
+#     client, so the mock transport is never hit (mirror the sync cache_only egress guard).
+_s3b_hit1 = {"n": 0}
+def _s3b_hit_handler(request):
+    _s3b_hit1["n"] += 1
+    return _s3b_ok_resp(b"SHOULD NOT BE FETCHED")
+try:
+    _s3b_ng.socket.getaddrinfo = _s3b_pub_gai
+    _s3b_install(_s3b_hit_handler)
+    _s3b_cache.set_cache_only(True)
+    _s3b_co = _s3b_aio.run(_s3b_http.aget("http://public.example.com/x"))
+    check("S3b: aget under cache_only returns None WITHOUT egress (mock transport never hit)",
+          _s3b_co is None and _s3b_hit1["n"] == 0)
+finally:
+    _s3b_cache.set_cache_only(False)
+    _s3b_ng.socket.getaddrinfo = _s3b_real_gai
+    _s3b_restore()
+
+# (2) aget SSRF pre-flight -> None + diag.note captured (same predicate + SAME "http.get" label as sync):
+#     a link-local metadata IP (literal) AND a host that RESOLVES to a private IP are both refused before
+#     any egress.
+_s3b_bh = {"n": 0}
+def _s3b_block_handler(request):
+    _s3b_bh["n"] += 1
+    return _s3b_ok_resp(b"UNREACHED")
+try:
+    _s3b_ng.socket.getaddrinfo = _s3b_split_gai
+    _s3b_install(_s3b_block_handler)
+    _s3b_diag.enable()  # arm the trace var first (else note() is a no-op)
+    _s3b_meta = _s3b_aio.run(_s3b_http.aget("http://169.254.169.254/latest/meta-data/"))
+    _s3b_meta_caps = _s3b_diag.drain()
+    check("S3b: aget of a link-local metadata IP -> None + diag.note('http.get', blocked SSRF-class) + zero egress",
+          _s3b_meta is None and _s3b_bh["n"] == 0
+          and any(c.get("helper") == "http.get" and "blocked SSRF-class" in str(c.get("body"))
+                  for c in _s3b_meta_caps))
+    _s3b_ng.socket.getaddrinfo = _s3b_priv_gai
+    _s3b_bh["n"] = 0  # reset: this leg must ALSO block at the pre-flight, before any egress
+    _s3b_diag.enable()
+    _s3b_privh = _s3b_aio.run(_s3b_http.aget("http://metadata.internal/x"))
+    _s3b_privh_caps = _s3b_diag.drain()
+    # Pin the PRE-FLIGHT specifically (not the transport guard): zero egress (mock never hit) AND a
+    # "blocked SSRF-class target" body, which only the pre-flight note carries (the transport-guard
+    # ConnectError path emits body=None), matching the literal-IP twin's tightness.
+    check("S3b: aget of a host resolving to a private IP -> None + diag.note('http.get', blocked SSRF-class) + zero egress (pins the SSRF pre-flight)",
+          _s3b_privh is None and _s3b_bh["n"] == 0
+          and any(c.get("helper") == "http.get" and "blocked SSRF-class" in str(c.get("body"))
+                  for c in _s3b_privh_caps))
+finally:
+    _s3b_ng.socket.getaddrinfo = _s3b_real_gai
+    _s3b_restore()
+
+# (3a) unit-level: AsyncSSRFGuardTransport.handle_async_request RAISES ConnectError on a private hop (never
+#      delegates) and DELEGATES a public hop (returns the wrapped 200). Async twin of the C3 sync unit.
+_s3b_deleg = {"n": 0}
+def _s3b_unit_handler(request):
+    _s3b_deleg["n"] += 1
+    return _s3b_ok_resp(b"delegated")
+async def _s3b_unit_probe():
+    g = _s3b_safeurl.AsyncSSRFGuardTransport(_s3b_http.httpx.MockTransport(_s3b_unit_handler))
+    raised = None
+    try:
+        await g.handle_async_request(_s3b_http.httpx.Request("GET", "http://169.254.169.254/latest/meta-data/"))
+    except _s3b_http.httpx.ConnectError as e:
+        raised = str(e)
+    resp = await g.handle_async_request(_s3b_http.httpx.Request("GET", "http://public.example.com/x"))
+    try:
+        await resp.aclose()
+    except Exception:  # noqa: BLE001
+        pass
+    return raised, resp.status_code
+try:
+    _s3b_ng.socket.getaddrinfo = _s3b_split_gai
+    _s3b_raised, _s3b_unit_st = _s3b_aio.run(_s3b_unit_probe())
+    check("S3b: AsyncSSRFGuardTransport.handle_async_request RAISES ConnectError on a private hop (never delegates) and DELEGATES a public hop (200)",
+          _s3b_raised is not None and "refused SSRF-class" in _s3b_raised
+          and _s3b_deleg["n"] == 1 and _s3b_unit_st == 200)
+finally:
+    _s3b_ng.socket.getaddrinfo = _s3b_real_gai
+
+# (3b) full async client: aget REFUSES a 302 -> 169.254.169.254 (the per-hop AsyncSSRFGuardTransport on the
+#      pooled client raises on the private hop) -> None, and the private body is never fetched (hop==1).
+_s3b_hop = {"n": 0}
+def _s3b_redir_priv(request):
+    _s3b_hop["n"] += 1
+    if _s3b_hop["n"] == 1:
+        return _s3b_http.httpx.Response(302, headers={"Location": "http://169.254.169.254/"})
+    return _s3b_ok_resp(b"UNREACHED private metadata body")
+try:
+    _s3b_ng.socket.getaddrinfo = _s3b_split_gai
+    _s3b_install(_s3b_redir_priv)
+    _s3b_blk = _s3b_aio.run(_s3b_http.aget("http://public.example.com/start"))
+    check("S3b: aget through the guarded async client REFUSES a 302 -> 169.254.169.254 (per-hop AsyncSSRFGuardTransport -> None; private body never fetched)",
+          _s3b_blk is None and _s3b_hop["n"] == 1)
+finally:
+    _s3b_ng.socket.getaddrinfo = _s3b_real_gai
+    _s3b_restore()
+
+# (4) oversize cap: a body over MAX_BYTES (patched low so no 30MB is allocated) aborts MID-STREAM in the
+#     async aiter_raw loop -> aget returns None.
+def _s3b_big_handler(request):
+    return _s3b_ok_resp(b"X" * 64)
+_s3b_mb = _s3b_http.MAX_BYTES
+try:
+    _s3b_ng.socket.getaddrinfo = _s3b_pub_gai
+    _s3b_install(_s3b_big_handler)
+    _s3b_http.MAX_BYTES = 16
+    _s3b_over = _s3b_aio.run(_s3b_http.aget("http://public.example.com/big"))
+    check("S3b: aget aborts mid-stream when the body exceeds MAX_BYTES (async aiter_raw cap fires -> None)",
+          _s3b_over is None)
+finally:
+    _s3b_http.MAX_BYTES = _s3b_mb
+    _s3b_ng.socket.getaddrinfo = _s3b_real_gai
+    _s3b_restore()
+
+# (5) contextvar propagation + ISOLATION across await -- the S4 per-source fan-out contract. A child
+#     coro SEES the caller's values (propagation); and when it rebinds/mutates the vars in its own
+#     awaited context (as each S4 per-source coro will: set_fresh/set_cache_only + diag.enable per
+#     source), those changes do NOT leak back to the caller (asyncio wraps the coro in a Task with a
+#     COPIED context), so concurrent per-source coros cannot cross-pollinate fresh/cache_only or -- the
+#     named concern -- one source's diag trace into another's.
+_s3b_cache.set_fresh(True)
+_s3b_cache.set_cache_only(True)
+_s3b_diag.enable()
+_s3b_diag.note("s3b.caller", url="http://caller", status=None, body="caller-only")  # a note in the CALLER's trace
+async def _s3b_read_ctx():
+    return {"fresh": _s3b_cache._fresh_var.get(), "cache_only": _s3b_cache.cache_only(),
+            "trace_active": _s3b_diag._trace_var.get() is not None}
+_s3b_seen = _s3b_aio.run(_s3b_read_ctx())
+check("S3b: contextvars propagate NATURALLY through await -- the coro sees the caller's fresh/cache_only/trace (no per-thread set/reset)",
+      _s3b_seen == {"fresh": True, "cache_only": True, "trace_active": True}, f"got {_s3b_seen}")
+async def _s3b_mutate_ctx():
+    # A per-source coro rebinds + mutates the vars in ITS OWN copied context (what S4's _aone does).
+    _s3b_cache.set_fresh(False)
+    _s3b_cache.set_cache_only(False)
+    _s3b_diag.enable()  # rebind the trace to a FRESH list here, then note into IT
+    _s3b_diag.note("s3b.child", url="http://child", status=None, body="child-only")
+    return {"fresh": _s3b_cache._fresh_var.get(), "cache_only": _s3b_cache.cache_only(),
+            "child_notes": len(_s3b_diag.drain())}
+_s3b_inside = _s3b_aio.run(_s3b_mutate_ctx())
+check("S3b: a child coro's rebind + note take effect in ITS context (fresh/cache_only cleared, its own 1-note trace)",
+      _s3b_inside == {"fresh": False, "cache_only": False, "child_notes": 1}, f"got {_s3b_inside}")
+_s3b_caller_trace = _s3b_diag.drain()  # the caller's OWN trace, still armed + intact after the child ran
+check("S3b: contextvar NO-LEAK -- the child's rebind/mutations stay in its copied context; the caller's fresh/cache_only + trace are untouched (no child-only note; the S4 per-source isolation contract)",
+      _s3b_cache._fresh_var.get() is True and _s3b_cache.cache_only() is True
+      and _s3b_caller_trace is not None
+      and any("caller-only" in str(c.get("body")) for c in _s3b_caller_trace)
+      and not any("child-only" in str(c.get("body")) for c in _s3b_caller_trace))
+_s3b_cache.set_fresh(False)
+_s3b_cache.set_cache_only(False)
+_s3b_diag.drain()  # idempotent: trace already drained above; ensure disarmed so nothing leaks past S3b
+
+# (6) aget_json: a valid JSON body parses to a dict; an unparseable body -> None + diag.note('http.get_json').
+def _s3b_json_ok(request):
+    return _s3b_http.httpx.Response(200, stream=_s3b_http.httpx.ByteStream(b'{"ok": true, "n": 7}'),
+                                    headers={"Content-Type": "application/json"})
+def _s3b_json_bad(request):
+    return _s3b_ok_resp(b"<<< not json >>>")
+try:
+    _s3b_ng.socket.getaddrinfo = _s3b_pub_gai
+    _s3b_install(_s3b_json_ok)
+    _s3b_j = _s3b_aio.run(_s3b_http.aget_json("http://public.example.com/j"))
+    check("S3b: aget_json parses a valid JSON body -> dict", _s3b_j == {"ok": True, "n": 7}, f"got {_s3b_j!r}")
+    _s3b_restore()
+    _s3b_install(_s3b_json_bad)
+    _s3b_diag.enable()
+    _s3b_jb = _s3b_aio.run(_s3b_http.aget_json("http://public.example.com/jbad"))
+    _s3b_jb_caps = _s3b_diag.drain()
+    check("S3b: aget_json on an unparseable body -> None + diag.note('http.get_json')",
+          _s3b_jb is None and any(c.get("helper") == "http.get_json" for c in _s3b_jb_caps))
+finally:
+    _s3b_ng.socket.getaddrinfo = _s3b_real_gai
+    _s3b_restore()
+
+# (7) sync/async PARITY: for the SAME stubbed inputs, _request_capped and _arequest_capped return the SAME
+#     shape -- both a 200 Response on success, both None on SSRF-block, both None on oversize.
+def _s3b_ok_only(request):
+    return _s3b_ok_resp(b"PARITY")
+_s3b_pmb = _s3b_http.MAX_BYTES
+try:
+    # split_gai: public.example.com -> public (allowed), 169.254.169.254 -> link-local (blocked). Not
+    # pub_gai, which would resolve even the literal metadata host to a public IP and defeat the block leg.
+    _s3b_ng.socket.getaddrinfo = _s3b_split_gai
+    _s3b_http._client = _s3b_http.httpx.Client(
+        transport=_s3b_safeurl.SSRFGuardTransport(_s3b_http.httpx.MockTransport(_s3b_ok_only)),
+        headers={"User-Agent": _s3b_http.USER_AGENT}, follow_redirects=True, timeout=_s3b_http.DEFAULT_TIMEOUT)
+    _s3b_install(_s3b_ok_only)
+    _s3b_hdrs = {"User-Agent": _s3b_http.USER_AGENT}
+    # success
+    _s3b_sync_ok = _s3b_http._request_capped("GET", "http://public.example.com/p",
+                                             timeout=_s3b_http.DEFAULT_TIMEOUT, headers=_s3b_hdrs)
+    _s3b_async_ok = _s3b_aio.run(_s3b_http._arequest_capped("GET", "http://public.example.com/p",
+                                 timeout=_s3b_http.DEFAULT_TIMEOUT, headers=_s3b_hdrs))
+    _s3b_ok_par = (_s3b_sync_ok is not None and _s3b_async_ok is not None
+                   and _s3b_sync_ok.status_code == _s3b_async_ok.status_code == 200
+                   and _s3b_sync_ok.content == _s3b_async_ok.content == b"PARITY")
+    # SSRF block (link-local literal, pre-flight): both None
+    _s3b_sync_blk = _s3b_http._request_capped("GET", "http://169.254.169.254/x",
+                                              timeout=_s3b_http.DEFAULT_TIMEOUT, headers=_s3b_hdrs)
+    _s3b_async_blk = _s3b_aio.run(_s3b_http._arequest_capped("GET", "http://169.254.169.254/x",
+                                  timeout=_s3b_http.DEFAULT_TIMEOUT, headers=_s3b_hdrs))
+    _s3b_blk_par = (_s3b_sync_blk is None and _s3b_async_blk is None)
+    # oversize: both None
+    _s3b_http.MAX_BYTES = 2
+    _s3b_sync_over = _s3b_http._request_capped("GET", "http://public.example.com/p",
+                                               timeout=_s3b_http.DEFAULT_TIMEOUT, headers=_s3b_hdrs)
+    _s3b_async_over = _s3b_aio.run(_s3b_http._arequest_capped("GET", "http://public.example.com/p",
+                                   timeout=_s3b_http.DEFAULT_TIMEOUT, headers=_s3b_hdrs))
+    _s3b_over_par = (_s3b_sync_over is None and _s3b_async_over is None)
+    check("S3b: sync/async PARITY -- _request_capped and _arequest_capped return the SAME shape (success 200 body / SSRF-block None / oversize None)",
+          _s3b_ok_par and _s3b_blk_par and _s3b_over_par,
+          f"ok={_s3b_ok_par} blk={_s3b_blk_par} over={_s3b_over_par}")
+finally:
+    _s3b_http.MAX_BYTES = _s3b_pmb
+    try:
+        _s3b_http._client.close()
+    except Exception:  # noqa: BLE001
+        pass
+    _s3b_http._client = _s3b_real_sclient
+    _s3b_ng.socket.getaddrinfo = _s3b_real_gai
+    _s3b_restore()
+
+
+# ---------------------------------------------------------------------------
+# S4a: the ASYNC FAN-OUT (dormant behind a flag; NO adapter converted). asearch_many is the async twin
+#      of search_many: SAME signature / routing / _meta contract, the ONLY difference being the fan-out
+#      mechanism (one asyncio.Task per source on the ONE bounded shared thread pool via
+#      anyio.to_thread.run_sync, not a private 64-thread ThreadPoolExecutor). These goldens prove parity
+#      OFFLINE against STUB adapters (asyncio.run drives the coroutines; no network). They pin the folded
+#      review fixes: the ORDERED src_to_task assembly (I2 catalog order, NOT the hash-unordered done/
+#      pending sets), the _DETACHED straggler _reap that CONSUMES the outcome (no "exception never
+#      retrieved"), and the empty-target guard (asyncio.wait(set()) would ValueError). The flag
+#      (_ASYNC_FANOUT) stays OFF: production still runs the sync search_many; asearch_many is reached only
+#      here + by the one live shadow probe (S4c owns the flip).
+# ---------------------------------------------------------------------------
+import asyncio as _s4a_aio  # noqa: E402
+import gc as _s4a_gc  # noqa: E402
+import logging as _s4a_logging  # noqa: E402
+import threading as _s4a_threading  # noqa: E402
+import time as _s4a_time  # noqa: E402
+from penumbra.core import fetcher as _s4a_fetcher  # noqa: E402
+
+
+class _S4aStub:
+    """A minimal sync stub adapter for the fan-out goldens. mode: 'docs' returns ndocs docs, 'empty'
+    returns [], 'raise' raises ValueError(msg). Optional sleep (in a worker thread) to scramble the
+    completion order vs the catalog order, and a done-flag callback so a detached straggler's outcome
+    can be observed WITHOUT retrieving its Task."""
+    needs_credentials = False
+    description = "s4a stub"
+
+    def __init__(self, name, mode="docs", ndocs=1, sleep=0.0, msg="boom", on_done=None):
+        self.name = name
+        self._mode = mode
+        self._ndocs = ndocs
+        self._sleep = sleep
+        self._msg = msg
+        self._on_done = on_done
+
+    def search(self, query, limit=10):
+        if self._sleep:
+            _s4a_time.sleep(self._sleep)
+        if self._mode == "raise":
+            if self._on_done:
+                self._on_done()  # record BEFORE the raise (proves the body reached completion)
+            raise ValueError(self._msg)
+        docs = ([_doc(self.name, f"{self.name} doc {i}", f"http://{self.name}/{i}")
+                 for i in range(self._ndocs)] if self._mode == "docs" else [])
+        if self._on_done:
+            self._on_done()
+        return docs
+
+    def fetch_url(self, url):
+        return None
+
+    def health_check(self):
+        return (True, "ok")
+
+
+def _s4a_proj(res):
+    """Deterministic projection of a results dict: source -> list of (source, source_id, url, title)."""
+    return {s: [(d.source, d.source_id, d.url, d.title) for d in docs] for s, docs in res.items()}
+
+
+def _s4a_det(meta):
+    """The DETERMINISTIC _meta fields (drops elapsed_s + progressive.fast/slow VALUES, which are timing
+    advisory + run-to-run nondeterministic; keeps progressive.timed_out, which is actionable)."""
+    d = {k: meta.get(k) for k in ("searched", "empty", "timed_out", "errored", "excluded_count",
+                                  "disabled", "excluded_relevant", "truncated", "skipped_down")}
+    d["diagnostics"] = meta.get("diagnostics")
+    d["progressive_timed_out"] = meta.get("progressive", {}).get("timed_out")
+    return d
+
+
+_s4a_registered = []  # names to unregister in the finally
+
+
+def _s4a_reg(stub):
+    _s4a_fetcher.register_adapter(stub)
+    _s4a_registered.append(stub.name)
+    return stub
+
+
+try:
+    # (0) DORMANT flag: _ASYNC_FANOUT defaults False and is not flipped by S4a (production runs sync).
+    check("S4a: _ASYNC_FANOUT flag defaults OFF (dormant; the live flip is S4c)",
+          _s4a_fetcher._ASYNC_FANOUT is False)
+
+    # (1) PARITY + I2 KEY-ORDER: a multi-source NAMED search with a success (A), two raisers (B, D) and
+    #     an empty (C). Sleeps scramble the COMPLETION order vs the CATALOG order, so errored/diagnostics
+    #     landing in catalog order proves the ORDERED src_to_task walk (not a hash-ordered done-set walk).
+    _s4a_g1 = [
+        _s4a_reg(_S4aStub("s4a_g1_a", "docs", ndocs=2, sleep=0.03)),
+        _s4a_reg(_S4aStub("s4a_g1_b", "raise", sleep=0.13, msg="boomB")),
+        _s4a_reg(_S4aStub("s4a_g1_c", "empty", sleep=0.02)),
+        _s4a_reg(_S4aStub("s4a_g1_d", "raise", sleep=0.07, msg="boomD")),
+    ]
+    _s4a_g1_names = ["s4a_g1_a", "s4a_g1_b", "s4a_g1_c", "s4a_g1_d"]
+    _s4a_sync_res, _s4a_sync_meta = _s4a_fetcher.search_many(
+        "q", sources=_s4a_g1_names, limit_per_source=5, deadline_s=5.0)
+    _s4a_async_res, _s4a_async_meta = _s4a_aio.run(_s4a_fetcher.asearch_many(
+        "q", sources=_s4a_g1_names, limit_per_source=5, deadline_s=5.0))
+    check("S4a: asearch_many == search_many over the SAME stubs (results parity + deterministic _meta)",
+          _s4a_proj(_s4a_async_res) == _s4a_proj(_s4a_sync_res)
+          and _s4a_det(_s4a_async_meta) == _s4a_det(_s4a_sync_meta),
+          f"async_det={_s4a_det(_s4a_async_meta)} sync_det={_s4a_det(_s4a_sync_meta)}")
+    check("S4a: errored KEY ORDER is CATALOG order (I2), matching search_many (not completion/done-set order)",
+          list(_s4a_async_meta["errored"]) == ["s4a_g1_b", "s4a_g1_d"]
+          == list(_s4a_sync_meta["errored"]),
+          f"async={list(_s4a_async_meta['errored'])} sync={list(_s4a_sync_meta['errored'])}")
+    check("S4a: diagnostics KEY ORDER is CATALOG order (I2), matching search_many (proves the ordered src_to_task assembly)",
+          list(_s4a_async_meta.get("diagnostics", {})) == ["s4a_g1_b", "s4a_g1_c", "s4a_g1_d"]
+          == list(_s4a_sync_meta.get("diagnostics", {})),
+          f"async={list(_s4a_async_meta.get('diagnostics', {}))} sync={list(_s4a_sync_meta.get('diagnostics', {}))}")
+    check("S4a: progressive _meta SHAPE present (fast/slow ints + timed_out list), values NOT asserted",
+          isinstance(_s4a_async_meta["progressive"]["fast"], int)
+          and isinstance(_s4a_async_meta["progressive"]["slow"], int)
+          and isinstance(_s4a_async_meta["progressive"]["timed_out"], list))
+
+    # (2) CAPABILITY DISPATCH (D1): a native AsyncSearchCapable takes the asearch branch (its .search is
+    #     NOT called); a plain sync adapter takes the legacy-runner branch (.search via to_thread, OFF the
+    #     loop thread). Tests _dispatch_search directly (no registration needed).
+    class _S4aAsyncStub:
+        name = "s4a_g2_async"
+        needs_credentials = False
+        description = "async stub"
+
+        def __init__(self):
+            self.search_called = False
+            self.asearch_called = False
+
+        def search(self, query, limit=10):
+            self.search_called = True
+            return [_doc(self.name, "SYNC-must-not-run", "http://x")]
+
+        async def asearch(self, query, limit):
+            self.asearch_called = True
+            return [_doc(self.name, "async doc", "http://a")]
+
+        def fetch_url(self, url):
+            return None
+
+        def health_check(self):
+            return (True, "ok")
+
+    _s4a_astub = _S4aAsyncStub()
+    _s4a_sstub = _S4aStub("s4a_g2_sync", "docs", ndocs=1)
+    _s4a_sstub_tid = {"v": None}
+    _s4a_orig_search = _s4a_sstub.search
+
+    def _s4a_sstub_search(query, limit=10):
+        _s4a_sstub_tid["v"] = _s4a_threading.get_ident()
+        return _s4a_orig_search(query, limit)
+    _s4a_sstub.search = _s4a_sstub_search  # type: ignore[assignment]
+
+    check("S4a: a native-async adapter IS AsyncSearchCapable; a plain sync adapter is NOT",
+          isinstance(_s4a_astub, _s4a_fetcher.AsyncSearchCapable)
+          and not isinstance(_s4a_sstub, _s4a_fetcher.AsyncSearchCapable))
+    _s4a_adocs = _s4a_aio.run(_s4a_fetcher._dispatch_search(_s4a_astub, "q", 3))
+    check("S4a: dispatch prefers NATIVE asearch (awaited; .search NOT called)",
+          _s4a_astub.asearch_called and not _s4a_astub.search_called and len(_s4a_adocs) == 1)
+
+    async def _s4a_disp_sync():
+        loop_tid = _s4a_threading.get_ident()
+        docs = await _s4a_fetcher._dispatch_search(_s4a_sstub, "q", 3)
+        return loop_tid, docs
+    _s4a_ltid, _s4a_sdocs = _s4a_aio.run(_s4a_disp_sync())
+    check("S4a: dispatch runs a plain sync adapter via the LEGACY RUNNER (.search on a to_thread worker, off the loop thread)",
+          len(_s4a_sdocs) == 1 and _s4a_sstub_tid["v"] is not None
+          and _s4a_sstub_tid["v"] != _s4a_ltid,
+          f"worker_tid={_s4a_sstub_tid['v']} loop_tid={_s4a_ltid}")
+
+    # (3) PER-SOURCE CONTEXT ISOLATION under the fan-out: two sources each note into THEIR OWN diag trace;
+    #     neither source's diagnostic captures the other's note (create_task copies the context per source).
+    class _S4aIsoStub:
+        needs_credentials = False
+        description = "iso stub"
+
+        def __init__(self, name):
+            self.name = name
+
+        def search(self, query, limit=10):
+            from penumbra.core import diag as _d
+            _d.note(f"{self.name}.probe", url=f"http://{self.name}", status=None,
+                    body=f"note-from-{self.name}")
+            return [_doc(self.name, f"{self.name} doc", f"http://{self.name}/1")]
+
+        def fetch_url(self, url):
+            return None
+
+        def health_check(self):
+            return (True, "ok")
+
+    _s4a_reg(_S4aIsoStub("s4a_g3_a"))
+    _s4a_reg(_S4aIsoStub("s4a_g3_b"))
+    _s4a_iso_res, _s4a_iso_meta = _s4a_aio.run(_s4a_fetcher.asearch_many(
+        "q", sources=["s4a_g3_a", "s4a_g3_b"], limit_per_source=5, deadline_s=5.0))
+    _s4a_diag = _s4a_iso_meta.get("diagnostics", {})
+    _s4a_caps_a = [c.get("helper", "") for c in _s4a_diag.get("s4a_g3_a", {}).get("captures", [])]
+    _s4a_caps_b = [c.get("helper", "") for c in _s4a_diag.get("s4a_g3_b", {}).get("captures", [])]
+    check("S4a: per-source context ISOLATION -- each source's diag trace holds ONLY its own note (no cross-pollination under fan-out)",
+          _s4a_caps_a and all(h.startswith("s4a_g3_a") for h in _s4a_caps_a)
+          and _s4a_caps_b and all(h.startswith("s4a_g3_b") for h in _s4a_caps_b)
+          and not any(h.startswith("s4a_g3_b") for h in _s4a_caps_a)
+          and not any(h.startswith("s4a_g3_a") for h in _s4a_caps_b),
+          f"a={_s4a_caps_a} b={_s4a_caps_b}")
+
+    # (4) CONTEXTVAR PROPAGATION through the legacy runner: a sync adapter reads cache.fresh() inside
+    #     .search (running via to_thread) and sees the value asearch_many set for that source (fresh=True).
+    _s4a_g4_seen = {}
+
+    class _S4aCtxStub:
+        needs_credentials = False
+        description = "ctx stub"
+
+        def __init__(self, name):
+            self.name = name
+
+        def search(self, query, limit=10):
+            from penumbra.core import cache as _c
+            _s4a_g4_seen["fresh"] = _c._fresh_var.get()
+            _s4a_g4_seen["cache_only"] = _c.cache_only()
+            _s4a_g4_seen["tid"] = _s4a_threading.get_ident()
+            return [_doc(self.name, "ctx doc", "http://ctx/1")]
+
+        def fetch_url(self, url):
+            return None
+
+        def health_check(self):
+            return (True, "ok")
+
+    _s4a_reg(_S4aCtxStub("s4a_g4"))
+
+    async def _s4a_drive4():
+        loop_tid = _s4a_threading.get_ident()
+        await _s4a_fetcher.asearch_many("q", sources=["s4a_g4"], limit_per_source=5,
+                                        fresh=True, deadline_s=5.0)
+        return loop_tid
+    _s4a_g4_loop_tid = _s4a_aio.run(_s4a_drive4())
+    check("S4a: contextvars PROPAGATE through the legacy runner -- the sync .search (on a to_thread worker) sees fresh=True set per source",
+          _s4a_g4_seen.get("fresh") is True and _s4a_g4_seen.get("cache_only") is False
+          and _s4a_g4_seen.get("tid") not in (None, _s4a_g4_loop_tid),
+          f"seen={_s4a_g4_seen} loop_tid={_s4a_g4_loop_tid}")
+
+    # (5) DEADLINE + PARTIAL-RETURN, straggler that SUCCEEDS: a fast source returns; a slow source (past
+    #     the deadline) is listed in timed_out, DETACHED (not cancelled), and later COMPLETES + warms.
+    _s4a_g5 = {"done": False}
+    _s4a_reg(_S4aStub("s4a_g5_fast", "docs", ndocs=1))
+    _s4a_reg(_S4aStub("s4a_g5_slow", "docs", ndocs=1, sleep=0.6,
+                      on_done=lambda: _s4a_g5.__setitem__("done", True)))
+
+    async def _s4a_drive5():
+        res, meta = await _s4a_fetcher.asearch_many(
+            "q", sources=["s4a_g5_fast", "s4a_g5_slow"], limit_per_source=5, deadline_s=0.3)
+        await _s4a_aio.sleep(1.2)  # let the detached straggler finish IN-loop (warms), then _reap fires
+        return res, meta
+    _s4a_r5, _s4a_m5 = _s4a_aio.run(_s4a_drive5())
+    check("S4a: deadline PARTIAL-RETURN -- the fast source is in results, the slow one in timed_out; the detached straggler later completes (warms) and is reaped (no leak)",
+          "s4a_g5_fast" in _s4a_r5 and _s4a_r5["s4a_g5_fast"]
+          and _s4a_m5["timed_out"] == ["s4a_g5_slow"] and _s4a_g5["done"] is True
+          and len(_s4a_fetcher._DETACHED) == 0,
+          f"timed_out={_s4a_m5['timed_out']} done={_s4a_g5['done']} detached={len(_s4a_fetcher._DETACHED)}")
+
+    # (6) ERROR ISOLATION: one source raises -> lands in errored with the message; the other still returns.
+    _s4a_reg(_S4aStub("s4a_g6_ok", "docs", ndocs=1))
+    _s4a_reg(_S4aStub("s4a_g6_err", "raise", msg="kaboom"))
+    _s4a_r6, _s4a_m6 = _s4a_aio.run(_s4a_fetcher.asearch_many(
+        "q", sources=["s4a_g6_ok", "s4a_g6_err"], limit_per_source=5, deadline_s=5.0))
+    check("S4a: error ISOLATION -- a raiser lands in errored with its message; the other source still returns",
+          _s4a_r6.get("s4a_g6_ok") and "kaboom" in _s4a_m6["errored"].get("s4a_g6_err", "")
+          and _s4a_r6.get("s4a_g6_err") == [],
+          f"errored={_s4a_m6['errored']}")
+
+    # (7) CACHE_ONLY: asearch_many(cache_only=True) -> each _aone sets cache_only in its context; the
+    #     sync .search (via to_thread) sees cache.cache_only() True.
+    _s4a_g7_seen = {}
+
+    class _S4aCoStub:
+        name = "s4a_g7"
+        needs_credentials = False
+        description = "cache_only stub"
+
+        def search(self, query, limit=10):
+            from penumbra.core import cache as _c
+            _s4a_g7_seen["cache_only"] = _c.cache_only()
+            return [_doc(self.name, "co doc", "http://co/1")]
+
+        def fetch_url(self, url):
+            return None
+
+        def health_check(self):
+            return (True, "ok")
+
+    _s4a_reg(_S4aCoStub())
+    _s4a_aio.run(_s4a_fetcher.asearch_many("q", sources=["s4a_g7"], limit_per_source=5,
+                                           cache_only=True, deadline_s=5.0))
+    check("S4a: cache_only PROPAGATES per source -- the sync .search sees cache.cache_only() True via to_thread",
+          _s4a_g7_seen.get("cache_only") is True, f"seen={_s4a_g7_seen}")
+
+    # (8) STRAGGLER THAT RAISES (the confirmed-finding golden): a slow source sleeps PAST the deadline then
+    #     RAISES. It is listed in timed_out; the detached task later completes by raising; the _reap
+    #     callback CONSUMES the exception so NO asyncio "Task exception was never retrieved" ERROR is
+    #     logged (and the task is not left leaked in _DETACHED).
+    _s4a_g8 = {"raised": False}
+    _s4a_reg(_S4aStub("s4a_g8_fast", "docs", ndocs=1))
+    _s4a_reg(_S4aStub("s4a_g8_slow", "raise", sleep=0.6, msg="late-boom",
+                      on_done=lambda: _s4a_g8.__setitem__("raised", True)))
+
+    class _S4aLogCapture(_s4a_logging.Handler):
+        def __init__(self):
+            super().__init__()
+            self.msgs = []
+
+        def emit(self, record):
+            try:
+                self.msgs.append(record.getMessage())
+            except Exception:  # noqa: BLE001
+                self.msgs.append(str(getattr(record, "msg", "")))
+
+    _s4a_aio_logger = _s4a_logging.getLogger("asyncio")
+    _s4a_cap = _S4aLogCapture()
+    _s4a_aio_logger.addHandler(_s4a_cap)
+    try:
+        async def _s4a_drive8():
+            res, meta = await _s4a_fetcher.asearch_many(
+                "q", sources=["s4a_g8_fast", "s4a_g8_slow"], limit_per_source=5, deadline_s=0.3)
+            await _s4a_aio.sleep(1.2)  # let the straggler finish + RAISE + _reap consume it, in-loop
+            return res, meta
+        _s4a_r8, _s4a_m8 = _s4a_aio.run(_s4a_drive8())
+        _s4a_gc.collect()  # force any Future.__del__ so an UNretrieved exception WOULD log here
+        _s4a_bad_logs = [m for m in _s4a_cap.msgs
+                         if "never retrieved" in m or "was destroyed" in m]
+        check("S4a: straggler-that-RAISES -- slow source in timed_out, detached task raised in background, _reap CONSUMED it (no 'exception never retrieved' log, no leak)",
+              _s4a_m8["timed_out"] == ["s4a_g8_slow"] and _s4a_g8["raised"] is True
+              and not _s4a_bad_logs and len(_s4a_fetcher._DETACHED) == 0,
+              f"timed_out={_s4a_m8['timed_out']} raised={_s4a_g8['raised']} bad_logs={_s4a_bad_logs} detached={len(_s4a_fetcher._DETACHED)}")
+    finally:
+        _s4a_aio_logger.removeHandler(_s4a_cap)
+
+    # (9) EMPTY-TARGET GUARD: an empty target (sources=[]) returns {} + the clean early _meta WITHOUT
+    #     raising (asyncio.wait(set()) would ValueError without the guard); byte-identical to search_many.
+    _s4a_empty_raised = False
+    try:
+        _s4a_e_res, _s4a_e_meta = _s4a_aio.run(_s4a_fetcher.asearch_many(
+            "q", sources=[], limit_per_source=5, deadline_s=5.0))
+    except Exception as _exc:  # noqa: BLE001
+        _s4a_empty_raised = True
+        _s4a_e_res, _s4a_e_meta = None, None
+    _s4a_se_res, _s4a_se_meta = _s4a_fetcher.search_many("q", sources=[], limit_per_source=5,
+                                                         deadline_s=5.0)
+    check("S4a: EMPTY-TARGET guard -- asearch_many(sources=[]) returns {} + clean early _meta WITHOUT raising (matches search_many)",
+          not _s4a_empty_raised and _s4a_e_res == {} == _s4a_se_res
+          and _s4a_det(_s4a_e_meta) == _s4a_det(_s4a_se_meta),
+          f"raised={_s4a_empty_raised} meta={_s4a_e_meta}")
+
+    # (10) SHADOW PROBE (structural, offline): the run-once latch short-circuits a second call; the body
+    #      is fully fail-safe (a raising search_many is swallowed, never re-raised); and server.py
+    #      schedules it OFF the hot path (a background create_task over to_thread, not an awaited call).
+    check("S4a: shadow probe exists (callable)",
+          callable(getattr(_s4a_fetcher, "async_fanout_shadow_probe", None)))
+    _s4a_prev_done = _s4a_fetcher._ASYNC_FANOUT_SHADOW_DONE
+    _s4a_prev_sm = _s4a_fetcher.search_many
+    try:
+        # run-once: with the latch already set, the probe SHORT-CIRCUITS before any search. Spy on
+        # search_many to PROVE the latch returns before touching the network (delete the latch guard
+        # in the probe -> this spy fires -> this check FAILS).
+        _s4a_sm_calls = {"n": 0}
+        def _s4a_spy_sm(*a, **k):
+            _s4a_sm_calls["n"] += 1
+            return {}, {}
+        _s4a_fetcher.search_many = _s4a_spy_sm  # type: ignore[assignment]
+        _s4a_fetcher._ASYNC_FANOUT_SHADOW_DONE = True
+        _s4a_fetcher.async_fanout_shadow_probe()  # latch set -> must return BEFORE calling search_many
+        check("S4a: shadow probe run-once -- with the latch set it short-circuits BEFORE search_many (no network)",
+              _s4a_sm_calls["n"] == 0, f"search_many called {_s4a_sm_calls['n']} times despite the latch")
+        # HAPPY-PATH comparison (the live-caught-bug regression guard): asearch_many returns a
+        # (results, meta) 2-tuple, so the probe MUST unpack `async_res, _ = portal.submit(...)` exactly
+        # like the sync `sync_res, _ = search_many(...)`. It once did NOT, so _idsets(the_tuple) hit
+        # "'tuple' object has no attribute 'items'" and the probe logged "failed" in production. Stub
+        # BOTH sides to return proper 2-tuples + capture the fetcher logger; the probe must reach
+        # "shadow OK", never "shadow probe failed".
+        import logging as _s4a_logging
+        from penumbra.core import portal as _s4a_portal_mod
+        _s4a_doc = type("_S4aProbeDoc", (), {"source_id": "W1"})()
+
+        class _S4aLogCap(_s4a_logging.Handler):
+            def __init__(self):
+                super().__init__()
+                self.msgs = []
+
+            def emit(self, r):
+                self.msgs.append(r.getMessage())
+        _s4a_cap = _S4aLogCap()
+        _s4a_flogger = _s4a_logging.getLogger("penumbra.core.fetcher")
+        _s4a_flogger.addHandler(_s4a_cap)
+        _s4a_prev_submit = _s4a_portal_mod.submit
+        _s4a_prev_sr = _s4a_fetcher.search_ranked
+        try:
+            _s4a_fetcher._ASYNC_FANOUT_SHADOW_DONE = False
+            _s4a_fetcher.search_many = lambda *a, **k: ({"arxiv": [_s4a_doc]}, {})
+            # S4c-1: the probe ALSO shadows the RANKED path (search_ranked vs asearch_ranked), so stub
+            # BOTH sides of THAT comparison too. search_ranked returns a (docs LIST, meta) tuple (meta
+            # carries deduped); the fake submit returns the SAME shape for the asearch_ranked coro and
+            # the results-dict shape for the asearch_many coro (distinguished by the coro's own name).
+            _s4a_fetcher.search_ranked = lambda *a, **k: ([_s4a_doc], {"deduped": {"in": 1, "out": 1}})
+
+            def _s4a_fake_submit(coro, **k):
+                name = (getattr(coro, "__qualname__", "")
+                        or getattr(getattr(coro, "cr_code", None), "co_name", ""))
+                coro.close()  # do not run it (no bound loop here); return a proper (result, meta) tuple
+                if "ranked" in name:  # asearch_ranked -> (ranked docs LIST, meta with deduped)
+                    return ([_s4a_doc], {"deduped": {"in": 1, "out": 1}})
+                return ({"arxiv": [_s4a_doc]}, {})  # asearch_many -> (results DICT, meta)
+            _s4a_portal_mod.submit = _s4a_fake_submit
+            _s4a_fetcher.async_fanout_shadow_probe()
+            check("S4a/S4c: shadow probe HAPPY-PATH -- unpacks BOTH the fan-out (results, meta) tuple AND the ranked (docs, meta) tuple + logs BOTH 'async fan-out shadow OK' and 'async ranked shadow OK' (never 'tuple has no attribute items' / 'shadow probe failed')",
+                  any("async fan-out shadow OK" in m for m in _s4a_cap.msgs)
+                  and any("async ranked shadow OK" in m for m in _s4a_cap.msgs)
+                  and not any("shadow probe failed" in m for m in _s4a_cap.msgs)
+                  and not any("DIVERGENCE" in m for m in _s4a_cap.msgs),
+                  f"msgs={_s4a_cap.msgs}")
+            # S4c order-sensitivity: the RANKED compare is an ORDERED list compare (not a set). Feed a
+            # REVERSED ranked order -> the probe must log 'async ranked shadow DIVERGENCE' (a set compare
+            # would wrongly log OK). Mutate the probe's ordered compare to a set compare -> this FAILS.
+            _s4a_cap.msgs.clear()
+            _s4a_doc_b = type("_S4aProbeDocB", (), {"source_id": "W2"})()
+            _s4a_fetcher._ASYNC_FANOUT_SHADOW_DONE = False
+            _s4a_fetcher.search_ranked = lambda *a, **k: (
+                [_s4a_doc, _s4a_doc_b], {"deduped": {"in": 2, "out": 2}})
+
+            def _s4a_fake_submit_rev(coro, **k):
+                name = (getattr(coro, "__qualname__", "")
+                        or getattr(getattr(coro, "cr_code", None), "co_name", ""))
+                coro.close()
+                if "ranked" in name:  # asearch_ranked -> REVERSED ranked order (same set, different order)
+                    return ([_s4a_doc_b, _s4a_doc], {"deduped": {"in": 2, "out": 2}})
+                return ({"arxiv": [_s4a_doc]}, {})  # asearch_many -> fan-out parity OK
+            _s4a_portal_mod.submit = _s4a_fake_submit_rev
+            _s4a_fetcher.async_fanout_shadow_probe()
+            check("S4c: the RANKED shadow compare is ORDER-SENSITIVE -- a reversed ranked order logs 'async ranked shadow DIVERGENCE' (a set compare would wrongly log OK)",
+                  any("async ranked shadow DIVERGENCE" in m for m in _s4a_cap.msgs)
+                  and not any("async ranked shadow OK" in m for m in _s4a_cap.msgs),
+                  f"msgs={_s4a_cap.msgs}")
+        finally:
+            _s4a_flogger.removeHandler(_s4a_cap)
+            _s4a_portal_mod.submit = _s4a_prev_submit
+            _s4a_fetcher.search_ranked = _s4a_prev_sr
+        # fail-safe: reset the latch, make search_many RAISE; the probe must swallow it (never raise)
+        _s4a_fetcher._ASYNC_FANOUT_SHADOW_DONE = False
+
+        def _s4a_boom_sm(*a, **k):
+            raise RuntimeError("shadow probe fail-safe drill")
+        _s4a_fetcher.search_many = _s4a_boom_sm  # type: ignore[assignment]
+        _s4a_probe_raised = False
+        try:
+            _s4a_fetcher.async_fanout_shadow_probe()
+        except Exception:  # noqa: BLE001
+            _s4a_probe_raised = True
+        check("S4a: shadow probe is FAIL-SAFE -- a raising search_many is swallowed; the probe never raises into its caller",
+              not _s4a_probe_raised)
+    finally:
+        _s4a_fetcher.search_many = _s4a_prev_sm  # type: ignore[assignment]
+        _s4a_fetcher._ASYNC_FANOUT_SHADOW_DONE = _s4a_prev_done
+
+    _s4a_server_src = (ROOT / "src" / "penumbra" / "server.py").read_text(encoding="utf-8")
+    check("S4a: server.py schedules the shadow probe OFF the hot path (background create_task over to_thread, not an awaited blocking call)",
+          "async_fanout_shadow_probe" in _s4a_server_src
+          and "create_task(" in _s4a_server_src
+          and "await anyio.to_thread.run_sync(_fetcher.async_fanout_shadow_probe)" not in _s4a_server_src)
+finally:
+    for _s4a_nm in _s4a_registered:
+        try:
+            _s4a_fetcher.unregister_adapter(_s4a_nm)
+        except Exception:  # noqa: BLE001
+            pass
+
+
+# ---------------------------------------------------------------------------
+# S4b: the FIRST native-async adapter BASE -- DeclarativeAPIAdapter.asearch + the off-loop discipline.
+#      The declarative family (the largest, cleanest source family) goes NATIVE: asearch egresses off
+#      the loop by itself, so the S4a dispatch awaits it DIRECTLY (no held thread). These goldens prove
+#      OFFLINE (asyncio.run drives the coroutines; the network is stubbed with httpx.MockTransport
+#      wrapped in the REAL sync/async SSRFGuardTransport + a patched getaddrinfo, the S3b harness): (1)
+#      asearch == search over the SAME stubbed response (the sync search REFACTOR is behavior-preserving
+#      -- it now shares _assemble_docs + _cache_decision with asearch, and a duplicated orchestration
+#      would drift); (2) the off-loop cache-read short-circuits like sync; (3) the off-loop cache-write
+#      persists (a following sync search HITS); (4) the base IS AsyncSearchCapable; (5) the SSRF resolve
+#      moved OFF the loop thread (same block DECISION as S3b). Still DORMANT (_ASYNC_FANOUT False);
+#      asearch is exercised only by these goldens + the live shadow probe. The native asearch's REAL
+#      network egress on the async side is short-circuited by the sync run's cache warm-up in the shadow
+#      probe (same as the legacy probe), so a truly-live native egress is only provable post-deploy.
+# ---------------------------------------------------------------------------
+import asyncio as _s4b_aio  # noqa: E402
+import socket as _s4b_socket  # noqa: E402
+import threading as _s4b_threading  # noqa: E402
+from penumbra.core.sources._declarative import DeclarativeAPIAdapter as _S4bDA  # noqa: E402
+from penumbra.core import http as _s4b_http, safeurl as _s4b_safeurl, _netguard as _s4b_ng  # noqa: E402
+from penumbra.core import cache as _s4b_cache, fetcher as _s4b_fetcher, diag as _s4b_diag  # noqa: E402
+
+_s4b_real_gai = _s4b_ng.socket.getaddrinfo
+_s4b_real_aclient = _s4b_http._aclient
+_s4b_real_sclient = _s4b_http._client
+_s4b_real_sbr = _s4b_ng.security_block_reason
+
+
+def _s4b_pub_gai(h, *a, **k):
+    return [(_s4b_socket.AF_INET, _s4b_socket.SOCK_STREAM, 6, "", ("93.184.216.34", 0))]
+
+
+def _s4b_priv_gai(h, *a, **k):
+    return [(_s4b_socket.AF_INET, _s4b_socket.SOCK_STREAM, 6, "", ("10.0.0.5", 0))]
+
+
+def _s4b_json_resp(body_bytes):
+    # httpx.ByteStream (NOT content=) so _arequest_capped's aiter_raw() can stream the body once (S3b).
+    return _s4b_http.httpx.Response(200, stream=_s4b_http.httpx.ByteStream(body_bytes),
+                                    headers={"Content-Type": "application/json"})
+
+
+_S4B_PAYLOAD = (b'{"hits":[{"title":"Doc A","url":"https://a.example/1","body":"alpha body"},'
+                b'{"title":"Doc B","url":"https://a.example/2","body":"beta body"}]}')
+_s4b_hits = {"sync": 0, "async": 0}
+
+
+def _s4b_sync_handler(request):
+    _s4b_hits["sync"] += 1
+    return _s4b_json_resp(_S4B_PAYLOAD)
+
+
+def _s4b_async_handler(request):
+    _s4b_hits["async"] += 1
+    return _s4b_json_resp(_S4B_PAYLOAD)
+
+
+def _s4b_install_clients():
+    # Install BOTH the sync and async pooled clients over MockTransport wrapped in the REAL guard
+    # transports (so the sync search and the async asearch flow through the identical leaf mechanics).
+    _s4b_http._client = _s4b_http.httpx.Client(
+        transport=_s4b_safeurl.SSRFGuardTransport(_s4b_http.httpx.MockTransport(_s4b_sync_handler)),
+        headers={"User-Agent": _s4b_http.USER_AGENT}, follow_redirects=True,
+        timeout=_s4b_http.DEFAULT_TIMEOUT)
+    _s4b_http._aclient = _s4b_http.httpx.AsyncClient(
+        transport=_s4b_safeurl.AsyncSSRFGuardTransport(_s4b_http.httpx.MockTransport(_s4b_async_handler)),
+        headers={"User-Agent": _s4b_http.USER_AGENT}, follow_redirects=True,
+        timeout=_s4b_http.DEFAULT_TIMEOUT)
+
+
+def _s4b_restore_clients():
+    try:
+        _s4b_aio.run(_s4b_http.aclose_client())  # awaits aclose + resets _aclient=None
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        _s4b_http._client.close()
+    except Exception:  # noqa: BLE001
+        pass
+    _s4b_http._aclient = _s4b_real_aclient
+    _s4b_http._client = _s4b_real_sclient
+
+
+def _s4b_new_adapter(name, **over):
+    kw = dict(name=name, description="s4b fixture", endpoint="https://public.example.com/search",
+              method="GET", params_template={"q": "{query}", "n": "{limit}"}, results_path="hits",
+              field_map={"title": "title", "url": "url", "content": "body"}, post_filter=False,
+              cache_ttl=1800)
+    kw.update(over)
+    return _S4bDA(**kw)
+
+
+# (4) STRUCTURAL: the declarative base IS AsyncSearchCapable -> the S4a dispatch awaits its asearch.
+check("S4b: DeclarativeAPIAdapter IS AsyncSearchCapable (isinstance) -> the S4a dispatch routes it to the NATIVE asearch branch (no thread)",
+      isinstance(_s4b_new_adapter("s4b_iface"), _s4b_fetcher.AsyncSearchCapable))
+
+# (1) PARITY: asearch == search over the SAME stubbed response. Cache neutralized so BOTH paths hit the
+#     stubbed egress independently (else the sync run would warm the cache the async run then hits). This
+#     is the drift guard for the shared _assemble_docs + the async egress twin (_afetch_response).
+try:
+    _s4b_ng.socket.getaddrinfo = _s4b_pub_gai
+    _s4b_install_clients()
+    _s4b_ad = _s4b_new_adapter("s4b_parity")
+    _s4b_og, _s4b_os = _s4b_cache.get_docs, _s4b_cache.set_docs
+    _s4b_cache.get_docs = lambda k: None
+    _s4b_cache.set_docs = lambda *a, **k: None
+    try:
+        _s4b_hits["sync"] = _s4b_hits["async"] = 0
+        _s4b_sync_docs = _s4b_ad.search("alpha", 5)
+        _s4b_async_docs = _s4b_aio.run(_s4b_ad.asearch("alpha", 5))
+        _s4b_sd = [d.model_dump(mode="json") for d in _s4b_sync_docs]
+        _s4b_adm = [d.model_dump(mode="json") for d in _s4b_async_docs]
+        check("S4b: asearch == search over the SAME stubbed response (IDENTICAL docs: source_ids, order, fields); both hit egress -- shared _assemble_docs + async egress twin do not drift",
+              _s4b_sd == _s4b_adm
+              and [d.title for d in _s4b_sync_docs] == ["Doc A", "Doc B"]
+              and _s4b_hits["sync"] >= 1 and _s4b_hits["async"] >= 1,
+              f"sync={[d.title for d in _s4b_sync_docs]} async={[d.title for d in _s4b_async_docs]} hits={_s4b_hits}")
+    finally:
+        _s4b_cache.get_docs, _s4b_cache.set_docs = _s4b_og, _s4b_os
+finally:
+    _s4b_ng.socket.getaddrinfo = _s4b_real_gai
+    _s4b_restore_clients()
+
+# (2) CACHE HIT: pre-seed the REAL disk cache for a key; asearch returns the cached docs WITHOUT egress
+#     (the mock async transport is never hit) -- proves the off-loop cache-read short-circuits like sync.
+try:
+    _s4b_ng.socket.getaddrinfo = _s4b_pub_gai
+    _s4b_install_clients()
+    _s4b_ad2 = _s4b_new_adapter("s4b_cachehit")
+    _s4b_key2 = _s4b_cache.make_key("s4b_cachehit", "search", "seeded", 5)
+    try:
+        _s4b_cache._key_path(_s4b_key2).unlink()  # clean any stale entry from a prior run
+    except Exception:  # noqa: BLE001
+        pass
+    _s4b_cache.set_docs(_s4b_key2, [_doc("s4b_cachehit", "Seeded Doc", "https://seed/1")], ttl=300)
+    # spy on cache.get_docs to PROVE the disk read ran OFF the loop thread (delete the to_thread wrap in
+    # asearch -> get_docs runs on loop_tid -> this FAILS). Same thread-ident technique as golden (5).
+    _s4b_gdspy = {"tids": [], "loop_tid": None}
+    _s4b_real_gd = _s4b_cache.get_docs
+    def _s4b_spy_gd(key):
+        _s4b_gdspy["tids"].append(_s4b_threading.get_ident())
+        return _s4b_real_gd(key)
+    try:
+        _s4b_hits["async"] = 0
+        _s4b_cache.get_docs = _s4b_spy_gd
+        async def _s4b_drive_hit():
+            _s4b_gdspy["loop_tid"] = _s4b_threading.get_ident()
+            return await _s4b_ad2.asearch("seeded", 5)
+        _s4b_hit_docs = _s4b_aio.run(_s4b_drive_hit())
+        _s4b_hit_offloop = (bool(_s4b_gdspy["tids"]) and _s4b_gdspy["loop_tid"] is not None
+                            and all(t != _s4b_gdspy["loop_tid"] for t in _s4b_gdspy["tids"]))
+        check("S4b: asearch CACHE HIT returns the cached docs WITHOUT egress AND the disk cache-read ran OFF the loop thread (to_thread; mock async transport never hit)",
+              [d.title for d in _s4b_hit_docs] == ["Seeded Doc"] and _s4b_hits["async"] == 0
+              and _s4b_hit_offloop,
+              f"docs={[d.title for d in _s4b_hit_docs]} async_hits={_s4b_hits['async']} tids={_s4b_gdspy['tids']} loop={_s4b_gdspy['loop_tid']}")
+    finally:
+        _s4b_cache.get_docs = _s4b_real_gd
+        try:
+            _s4b_cache._key_path(_s4b_key2).unlink()
+        except Exception:  # noqa: BLE001
+            pass
+finally:
+    _s4b_ng.socket.getaddrinfo = _s4b_real_gai
+    _s4b_restore_clients()
+
+# (3) CACHE WRITE: after a MISS, asearch's off-loop cache-write persists -- a following SYNC search of the
+#     SAME key HITS (no second egress) and returns the SAME docs, at the row's full cache_ttl.
+try:
+    _s4b_ng.socket.getaddrinfo = _s4b_pub_gai
+    _s4b_install_clients()
+    _s4b_ad3 = _s4b_new_adapter("s4b_cachewrite")
+    _s4b_key3 = _s4b_cache.make_key("s4b_cachewrite", "search", "writeq", 4)
+    try:
+        _s4b_cache._key_path(_s4b_key3).unlink()  # ensure a clean MISS to start
+    except Exception:  # noqa: BLE001
+        pass
+    # spy on cache.set_docs to PROVE the disk WRITE ran OFF the loop thread (delete the to_thread wrap in
+    # asearch -> set_docs runs on loop_tid -> this FAILS). Restore the real set_docs BEFORE the sync
+    # search so its (non-)writes never pollute the spy.
+    _s4b_sdspy = {"tids": [], "loop_tid": None}
+    _s4b_real_sd2 = _s4b_cache.set_docs
+    def _s4b_spy_sd(key, docs, **kw):
+        _s4b_sdspy["tids"].append(_s4b_threading.get_ident())
+        return _s4b_real_sd2(key, docs, **kw)
+    try:
+        _s4b_hits["sync"] = _s4b_hits["async"] = 0
+        _s4b_cache.set_docs = _s4b_spy_sd
+        async def _s4b_drive_write():
+            _s4b_sdspy["loop_tid"] = _s4b_threading.get_ident()
+            return await _s4b_ad3.asearch("writeq", 4)  # MISS -> egress -> off-loop write
+        _s4b_w_async = _s4b_aio.run(_s4b_drive_write())
+        _s4b_cache.set_docs = _s4b_real_sd2                             # restore before the sync read
+        _s4b_w_sync = _s4b_ad3.search("writeq", 4)                      # HITS the just-written cache
+        _s4b_w_offloop = (bool(_s4b_sdspy["tids"]) and _s4b_sdspy["loop_tid"] is not None
+                          and all(t != _s4b_sdspy["loop_tid"] for t in _s4b_sdspy["tids"]))
+        check("S4b: asearch CACHE WRITE ran OFF the loop thread (to_thread) AND persists -- a following sync search of the same key HITS (no second egress) and returns the SAME docs",
+              [d.title for d in _s4b_w_async] == ["Doc A", "Doc B"]
+              and [d.model_dump(mode="json") for d in _s4b_w_sync]
+                  == [d.model_dump(mode="json") for d in _s4b_w_async]
+              and _s4b_hits["async"] >= 1 and _s4b_hits["sync"] == 0
+              and _s4b_w_offloop,
+              f"async_hits={_s4b_hits['async']} sync_hits={_s4b_hits['sync']} tids={_s4b_sdspy['tids']} loop={_s4b_sdspy['loop_tid']}")
+    finally:
+        _s4b_cache.set_docs = _s4b_real_sd2
+        try:
+            _s4b_cache._key_path(_s4b_key3).unlink()
+        except Exception:  # noqa: BLE001
+            pass
+finally:
+    _s4b_ng.socket.getaddrinfo = _s4b_real_gai
+    _s4b_restore_clients()
+
+# (5) OFF-LOOP SSRF RESOLVE: aget of a host resolving to a private IP returns None + the SAME diag.note
+#     as S3b (guard DECISION unchanged) AND security_block_reason ran OFF the loop thread (via to_thread).
+#     A spy records the thread ident each resolve runs on; the loop thread ident is captured in-coro; the
+#     pre-flight block fires before any egress, so the resolve is proven off-loop.
+_s4b_spy = {"tids": [], "loop_tid": None}
+
+
+def _s4b_spy_sbr(url):
+    _s4b_spy["tids"].append(_s4b_threading.get_ident())
+    return _s4b_real_sbr(url)
+
+
+try:
+    _s4b_ng.socket.getaddrinfo = _s4b_priv_gai
+    _s4b_install_clients()
+    _s4b_ng.security_block_reason = _s4b_spy_sbr
+    _s4b_diag.enable()
+
+    async def _s4b_drive_ssrf():
+        _s4b_spy["loop_tid"] = _s4b_threading.get_ident()
+        return await _s4b_http.aget("http://metadata.internal/x")
+    _s4b_ssrf_res = _s4b_aio.run(_s4b_drive_ssrf())
+    _s4b_ssrf_caps = _s4b_diag.drain()
+    _s4b_offloop = (bool(_s4b_spy["tids"]) and _s4b_spy["loop_tid"] is not None
+                    and all(t != _s4b_spy["loop_tid"] for t in _s4b_spy["tids"]))
+    check("S4b: off-loop SSRF resolve -- aget of a host resolving to a private IP -> None + diag.note('http.get', blocked SSRF-class) AND security_block_reason ran OFF the loop thread (to_thread; guard DECISION unchanged from S3b)",
+          _s4b_ssrf_res is None
+          and any(c.get("helper") == "http.get" and "blocked SSRF-class" in str(c.get("body"))
+                  for c in _s4b_ssrf_caps)
+          and _s4b_offloop,
+          f"res={_s4b_ssrf_res} tids={_s4b_spy['tids']} loop={_s4b_spy['loop_tid']} caps={len(_s4b_ssrf_caps)}")
+finally:
+    _s4b_ng.security_block_reason = _s4b_real_sbr
+    _s4b_ng.socket.getaddrinfo = _s4b_real_gai
+    _s4b_diag.drain()  # disarm so nothing leaks past S4b
+    _s4b_restore_clients()
+
+
+# ===========================================================================================
+# S4c-1: asearch_ranked -- the ASYNC TWIN of the RANKED path (dedup + rank + recall + seen_before),
+#        penumbra_search's DEFAULT + most-complex path. WIRED into penumbra_search by S4c-2 (the tool body now
+#        awaits it); these goldens still exercise it directly + via the live ranked shadow probe.
+#        search_ranked was REFACTORED to SHARE the parity-critical leaf helpers
+#        (_build_recall_arm / _recall_remaining_budget / _fold_recall_index / _normalize_seen_before /
+#        _apply_ranked_enrichments) with asearch_ranked so ranking / dedup / recall scope / seen_before /
+#        _meta cannot drift; the existing ranked fixtures + these parity goldens prove that refactor is
+#        behavior-preserving. asyncio.run drives the coroutine offline; recall is STUBBED (indexable_set
+#        + hybrid + as_of) so the recall FOLD, the fail-open degrade, and the OFF-LOOP discipline are all
+#        provable without the real FTS/embed/vector stack. The async ranked parity on REAL adapters/real
+#        loop is only fully provable in production (the post-deploy "async ranked shadow OK ... parity=
+#        True" log); NO flip happens here.
+# ---------------------------------------------------------------------------
+import asyncio as _s4c_aio  # noqa: E402
+import threading as _s4c_threading  # noqa: E402
+import time as _s4c_time  # noqa: E402
+from penumbra.core import fetcher as _s4c_fetcher, recall as _s4c_recall  # noqa: E402
+
+
+class _S4cStub:
+    """Sync stub adapter for the ranked goldens: returns ndocs deterministic docs (an optional sleep
+    scrambles the completion order vs the catalog order, so a stable ranked output proves the ordered
+    assembly, not luck)."""
+    needs_credentials = False
+    description = "s4c stub"
+
+    def __init__(self, name, ndocs=2, sleep=0.0):
+        self.name = name
+        self._ndocs = ndocs
+        self._sleep = sleep
+
+    def search(self, query, limit=10):
+        if self._sleep:
+            _s4c_time.sleep(self._sleep)
+        return [_doc(self.name, f"{self.name} live {i}", f"http://{self.name}/{i}")
+                for i in range(self._ndocs)]
+
+    def fetch_url(self, url):
+        return None
+
+    def health_check(self):
+        return (True, "ok")
+
+
+_s4c_registered = []
+
+
+def _s4c_reg(stub):
+    _s4c_fetcher.register_adapter(stub)
+    # The import-path register_adapter does NOT touch the materialized L1 catalog snapshot (only the
+    # live lane does); by smoke-end the snapshot is already built, so a late stub would be ABSENT from
+    # get_catalog_snapshot() -> absent from policy.enabled -> the recall scope would compute EMPTY and
+    # skip the arm. Reflect the stub into the snapshot so the recall scope really includes it.
+    _s4c_fetcher._catalog_note_registered(stub.name)
+    _s4c_registered.append(stub.name)
+    return stub
+
+
+def _s4c_ranked_proj(docs):
+    """Ordered projection of ranked docs (order MATTERS): per doc (source, source_id, url, title, the
+    _rank stamp, the seen_before tri-state, first_seen_at). Proves IDENTICAL ranking + dedup + the
+    seen_before completeness stamp between the two twins."""
+    out = []
+    for d in docs:
+        md = d.metadata or {}
+        out.append((d.source, d.source_id, d.url, d.title, md.get("_rank"),
+                    md.get("seen_before"), md.get("first_seen_at")))
+    return out
+
+
+def _s4c_det(meta):
+    """The DETERMINISTIC fan-out _meta (drops elapsed_s + progressive fast/slow VALUES, run-to-run
+    timing-nondeterministic; keeps the actionable membership fields), mirroring _s4a_det."""
+    d = {k: meta.get(k) for k in ("searched", "empty", "timed_out", "errored", "excluded_count",
+                                  "disabled", "excluded_relevant", "truncated", "skipped_down")}
+    d["diagnostics"] = meta.get("diagnostics")
+    d["progressive_timed_out"] = meta.get("progressive", {}).get("timed_out")
+    return d
+
+
+def _s4c_ranked_meta(meta):
+    """The RANKED-specific _meta (deduped + the index fold + the passive enrichments), with the index
+    as_of DROPPED (a wall-clock timestamp, run-to-run nondeterministic)."""
+    idx = meta.get("index")
+    if isinstance(idx, dict):
+        idx = {k: v for k, v in idx.items() if k != "as_of"}
+    return {"deduped": meta.get("deduped"), "index": idx,
+            "source_diversity": meta.get("source_diversity"), "conflicts": meta.get("conflicts")}
+
+
+# capture the real recall leaves ONCE; each golden restores to these in its finally.
+_S4C_REAL_IX = _s4c_recall.indexable_set
+_S4C_REAL_HY = _s4c_recall.hybrid
+_S4C_REAL_AS = _s4c_recall.as_of
+_S4C_REAL_SEEN = _s4c_fetcher._seen_before_lookup
+
+try:
+    # (0) S4c-2 FLIP LANDED: asearch_ranked EXISTS (async, callable) AND penumbra_search's server body now
+    #     AWAITS it (the sync fetcher.search_ranked call is gone from the tool body); _ASYNC_FANOUT is a
+    #     never-read placeholder kept False. (Pre-flip this asserted the reverse DORMANT state.)
+    _s4c_server_src = (ROOT / "src" / "penumbra" / "server.py").read_text(encoding="utf-8")
+    check("S4c: asearch_ranked exists (coroutine fn) + S4c-2 FLIP LANDED -- penumbra_search's server body now AWAITS fetcher.asearch_ranked and the sync fetcher.search_ranked call is gone; _ASYNC_FANOUT stays a never-read placeholder (False)",
+          _s4c_aio.iscoroutinefunction(_s4c_fetcher.asearch_ranked)
+          and _s4c_fetcher._ASYNC_FANOUT is False
+          and "await fetcher.asearch_ranked(" in _s4c_server_src
+          and "fetcher.search_ranked(" not in _s4c_server_src,
+          f"iscoro={_s4c_aio.iscoroutinefunction(_s4c_fetcher.asearch_ranked)} "
+          f"flag={_s4c_fetcher._ASYNC_FANOUT} awaits_async={'await fetcher.asearch_ranked(' in _s4c_server_src} "
+          f"sync_gone={'fetcher.search_ranked(' not in _s4c_server_src}")
+
+    # (1) PARITY + RECALL FOLD: asearch_ranked == search_ranked over the SAME stubs + a STUBBED recall
+    #     arm that returns an index doc (scope made non-empty by patching indexable_set to the stub
+    #     names; the stubs are really in policy.enabled). IDENTICAL ranked docs (order, source_ids,
+    #     _rank, seen_before) + SAME _meta (deduped, index mode/candidates, enrichments). The drift guard.
+    _s4c_reg(_S4cStub("s4c_g1_a", ndocs=2, sleep=0.02))
+    _s4c_reg(_S4cStub("s4c_g1_b", ndocs=2, sleep=0.05))
+    _s4c_g1_names = ["s4c_g1_a", "s4c_g1_b"]
+    try:
+        _s4c_recall.indexable_set = lambda: frozenset(_s4c_g1_names)
+        _s4c_recall.hybrid = lambda q, k=60, sources=None: (
+            [_doc("s4c_g1_a", "s4c_g1_a recalled", "http://s4c_g1_a/idx0")],  # FRESH doc each call
+            {"lexical": 1, "vector": 0, "mode": "lexical"})
+        _s4c_recall.as_of = lambda: 1234567890.0
+        _s4c_rs_docs, _s4c_rs_meta = _s4c_fetcher.search_ranked(
+            "reasoning", _s4c_g1_names, 5, deadline_s=5.0)
+        _s4c_ra_docs, _s4c_ra_meta = _s4c_aio.run(_s4c_fetcher.asearch_ranked(
+            "reasoning", _s4c_g1_names, 5, deadline_s=5.0))
+        check("S4c: asearch_ranked == search_ranked over the SAME stubs + stubbed recall (IDENTICAL ranked docs: order, source_ids, _rank, seen_before) + SAME _meta (deduped, index mode/candidates, fan-out, enrichments) -- the drift guard",
+              _s4c_ranked_proj(_s4c_ra_docs) == _s4c_ranked_proj(_s4c_rs_docs)
+              and _s4c_det(_s4c_ra_meta) == _s4c_det(_s4c_rs_meta)
+              and _s4c_ranked_meta(_s4c_ra_meta) == _s4c_ranked_meta(_s4c_rs_meta),
+              f"async_proj={_s4c_ranked_proj(_s4c_ra_docs)} sync_proj={_s4c_ranked_proj(_s4c_rs_docs)} "
+              f"async_meta={_s4c_ranked_meta(_s4c_ra_meta)} sync_meta={_s4c_ranked_meta(_s4c_rs_meta)}")
+        check("S4c: the stubbed recall arm FOLDED into asearch_ranked -- the _index-recalled doc is in the ranked output + meta.index mode/candidates present (the fold path exercised, not skipped)",
+              any(d.url == "http://s4c_g1_a/idx0" for d in _s4c_ra_docs)
+              and _s4c_ra_meta.get("index", {}).get("mode") == "lexical"
+              and _s4c_ra_meta.get("index", {}).get("candidates") == 1,
+              f"index_meta={_s4c_ra_meta.get('index')}")
+    finally:
+        _s4c_recall.indexable_set, _s4c_recall.hybrid, _s4c_recall.as_of = (
+            _S4C_REAL_IX, _S4C_REAL_HY, _S4C_REAL_AS)
+
+    # (2) OFF-LOOP DISCIPLINE (the load-bearing rule): a thread-ident spy proves the seen_before DB
+    #     lookup AND the recall arm ran on WORKER threads != the loop thread (delete either to_thread
+    #     wrap -> it runs on loop_tid -> this FAILS). Same technique as the S4b cache goldens.
+    _s4c_reg(_S4cStub("s4c_g2_a", ndocs=2))
+    _s4c_g2_names = ["s4c_g2_a"]
+    _s4c_spy = {"seen_tids": [], "recall_tids": [], "loop_tid": None}
+
+    def _s4c_spy_seen(ranked):
+        _s4c_spy["seen_tids"].append(_s4c_threading.get_ident())
+        return _S4C_REAL_SEEN(ranked)
+
+    def _s4c_spy_hy(q, k=60, sources=None):
+        _s4c_spy["recall_tids"].append(_s4c_threading.get_ident())
+        return ([_doc("s4c_g2_a", "s4c_g2_a recalled", "http://s4c_g2_a/idx")],
+                {"lexical": 1, "vector": 0, "mode": "lexical"})
+
+    try:
+        _s4c_fetcher._seen_before_lookup = _s4c_spy_seen
+        _s4c_recall.hybrid = _s4c_spy_hy
+        _s4c_recall.indexable_set = lambda: frozenset(_s4c_g2_names)
+
+        async def _s4c_drive_offloop():
+            _s4c_spy["loop_tid"] = _s4c_threading.get_ident()
+            return await _s4c_fetcher.asearch_ranked("q", _s4c_g2_names, 5, deadline_s=5.0)
+
+        _s4c_off_docs, _s4c_off_meta = _s4c_aio.run(_s4c_drive_offloop())
+        _s4c_seen_off = (bool(_s4c_spy["seen_tids"]) and _s4c_spy["loop_tid"] is not None
+                         and all(t != _s4c_spy["loop_tid"] for t in _s4c_spy["seen_tids"]))
+        _s4c_recall_off = (bool(_s4c_spy["recall_tids"]) and _s4c_spy["loop_tid"] is not None
+                           and all(t != _s4c_spy["loop_tid"] for t in _s4c_spy["recall_tids"]))
+        check("S4c: OFF-LOOP -- the seen_before DB lookup ran on a WORKER thread != the loop thread (anyio.to_thread; the load-bearing rule)",
+              _s4c_seen_off, f"seen_tids={_s4c_spy['seen_tids']} loop={_s4c_spy['loop_tid']}")
+        check("S4c: OFF-LOOP -- the recall arm (recall.hybrid: FTS+embed+vector) ran on a WORKER thread != the loop thread (create_task over anyio.to_thread, concurrent with the fan-out)",
+              _s4c_recall_off, f"recall_tids={_s4c_spy['recall_tids']} loop={_s4c_spy['loop_tid']}")
+    finally:
+        _s4c_fetcher._seen_before_lookup = _S4C_REAL_SEEN
+        _s4c_recall.hybrid = _S4C_REAL_HY
+        _s4c_recall.indexable_set = _S4C_REAL_IX
+
+    # (3) RECALL FAIL-OPEN: a recall arm that RAISES degrades to no-index (meta has NO 'index' key) +
+    #     returns the live docs WITHOUT breaking asearch_ranked, IDENTICALLY to sync.
+    _s4c_reg(_S4cStub("s4c_g3_a", ndocs=2))
+    _s4c_g3_names = ["s4c_g3_a"]
+
+    def _s4c_boom_hy(q, k=60, sources=None):
+        raise RuntimeError("recall boom")
+
+    try:
+        _s4c_recall.indexable_set = lambda: frozenset(_s4c_g3_names)
+        _s4c_recall.hybrid = _s4c_boom_hy
+        _s4c_r3s_docs, _s4c_r3s_meta = _s4c_fetcher.search_ranked("q", _s4c_g3_names, 5, deadline_s=5.0)
+        _s4c_r3a_docs, _s4c_r3a_meta = _s4c_aio.run(
+            _s4c_fetcher.asearch_ranked("q", _s4c_g3_names, 5, deadline_s=5.0))
+        check("S4c: recall FAIL-OPEN (arm RAISES) -- asearch_ranked degrades to no-index (no meta['index']) + returns the 2 live docs, IDENTICALLY to sync (same ranked docs, both no index key)",
+              "index" not in _s4c_r3a_meta and "index" not in _s4c_r3s_meta
+              and len(_s4c_r3a_docs) == 2
+              and _s4c_ranked_proj(_s4c_r3a_docs) == _s4c_ranked_proj(_s4c_r3s_docs),
+              f"async_meta_keys={sorted(_s4c_r3a_meta)} sync_meta_keys={sorted(_s4c_r3s_meta)} "
+              f"async_docs={len(_s4c_r3a_docs)}")
+    finally:
+        _s4c_recall.indexable_set = _S4C_REAL_IX
+        _s4c_recall.hybrid = _S4C_REAL_HY
+
+    # (4) CACHE_ONLY: asearch_ranked(cache_only=True) SKIPS the recall arm (recall.hybrid NEVER called,
+    #     no embed) + threads cache_only into asearch_many, IDENTICALLY to sync.
+    _s4c_reg(_S4cStub("s4c_g4_a", ndocs=2))
+    _s4c_g4_names = ["s4c_g4_a"]
+    _s4c_hy_calls = {"n": 0}
+
+    def _s4c_count_hy(q, k=60, sources=None):
+        _s4c_hy_calls["n"] += 1
+        return ([], {"lexical": 0, "vector": 0, "mode": "lexical"})
+
+    # spy on the fan-out both sides to PROVE cache_only is THREADED through (delete cache_only= from
+    # asearch_ranked's await asearch_many(...) -> async runs live egress while sync is cache_only, a real
+    # divergence; the stub has no funnel so the projection parity alone cannot catch it -> this FAILS).
+    _s4c_am_seen = {"cache_only": "UNSET"}
+    _s4c_sm_seen = {"cache_only": "UNSET"}
+    _S4C_REAL_AM = _s4c_fetcher.asearch_many
+    _S4C_REAL_SM = _s4c_fetcher.search_many
+
+    async def _s4c_spy_am(*a, **k):
+        _s4c_am_seen["cache_only"] = k.get("cache_only")
+        return await _S4C_REAL_AM(*a, **k)
+
+    def _s4c_spy_sm(*a, **k):
+        _s4c_sm_seen["cache_only"] = k.get("cache_only")
+        return _S4C_REAL_SM(*a, **k)
+    try:
+        _s4c_recall.indexable_set = lambda: frozenset(_s4c_g4_names)
+        _s4c_recall.hybrid = _s4c_count_hy
+        _s4c_fetcher.asearch_many = _s4c_spy_am
+        _s4c_fetcher.search_many = _s4c_spy_sm
+        _s4c_hy_calls["n"] = 0
+        _s4c_c4s_docs, _s4c_c4s_meta = _s4c_fetcher.search_ranked(
+            "q", _s4c_g4_names, 5, cache_only=True, deadline_s=5.0)
+        _s4c_c4a_docs, _s4c_c4a_meta = _s4c_aio.run(_s4c_fetcher.asearch_ranked(
+            "q", _s4c_g4_names, 5, cache_only=True, deadline_s=5.0))
+        check("S4c: cache_only=True SKIPS the recall arm (recall.hybrid NEVER called) + is THREADED into asearch_many (== sync search_many) + no meta['index'], matching sync",
+              _s4c_hy_calls["n"] == 0
+              and _s4c_am_seen["cache_only"] is True and _s4c_sm_seen["cache_only"] is True
+              and "index" not in _s4c_c4a_meta and "index" not in _s4c_c4s_meta
+              and _s4c_ranked_proj(_s4c_c4a_docs) == _s4c_ranked_proj(_s4c_c4s_docs),
+              f"am_cache_only={_s4c_am_seen['cache_only']} sm_cache_only={_s4c_sm_seen['cache_only']} hybrid_calls={_s4c_hy_calls['n']}")
+    finally:
+        _s4c_recall.indexable_set = _S4C_REAL_IX
+        _s4c_recall.hybrid = _S4C_REAL_HY
+        _s4c_fetcher.asearch_many = _S4C_REAL_AM
+        _s4c_fetcher.search_many = _S4C_REAL_SM
+
+    # (5) SHADOW PROBE now covers the RANKED path (structural): the probe body compares search_ranked vs
+    #     asearch_ranked (via portal.submit) + logs "async ranked shadow OK".
+    _s4c_probe_src = _insp.getsource(_s4c_fetcher.async_fanout_shadow_probe)
+    check("S4c: the shadow probe now ALSO shadows the RANKED path (search_ranked vs asearch_ranked via portal.submit, ordered source_id list + deduped) + logs 'async ranked shadow OK'",
+          "asearch_ranked(" in _s4c_probe_src and "search_ranked(" in _s4c_probe_src
+          and "async ranked shadow OK" in _s4c_probe_src and "portal.submit(" in _s4c_probe_src)
+finally:
+    for _s4c_nm in _s4c_registered:
+        try:
+            _s4c_fetcher.unregister_adapter(_s4c_nm)
+        except Exception:  # noqa: BLE001
+            pass
+    _s4c_recall.indexable_set = _S4C_REAL_IX
+    _s4c_recall.hybrid = _S4C_REAL_HY
+    _s4c_recall.as_of = _S4C_REAL_AS
+    _s4c_fetcher._seen_before_lookup = _S4C_REAL_SEEN
+
+
+# ===========================================================================================
+# S4c-2: THE FLIP (the go/no-go live change). penumbra_search's tool body is now `async def` (dropped
+#        @_threaded) and AWAITS the parity-validated async twins ON the loop: the default RANKED path
+#        awaits asearch_ranked, the RAW BUCKETS path awaits asearch_many, and the single-source DRILL
+#        runs OFF the loop via anyio.to_thread.run_sync(_eye_search_drill). These goldens prove the
+#        flip SHAPE, that each path awaits the async twin (not the sync one), that the drill runs off
+#        the loop thread, and that each path's out-dict SHAPE is byte-identical to the pre-flip tool --
+#        driven the way mcp 1.27 awaits an async @mcp.tool body (asyncio.run(penumbra_search(...)), which is
+#        exactly func_metadata.call_fn_with_arg_validation's `if fn_is_async: return await fn(...)`).
+#        FR1: the tool body holds NO worker token during the fan-out (it is a loop coroutine; the
+#        fan-out children draw the shared pool inside _dispatch_search's to_thread), and NO path does a
+#        sync-body -> portal.submit nesting. The LIVE correctness (real adapters, real loop, loop not
+#        blocked, healthz OK) is only fully provable in production after deploy.
+# ---------------------------------------------------------------------------
+import asyncio as _s4c2_aio  # noqa: E402
+import inspect as _s4c2_insp  # noqa: E402
+import threading as _s4c2_threading  # noqa: E402
+import penumbra.server as _s4c2_server  # noqa: E402
+from penumbra.core import fetcher as _s4c2_fetcher, recall as _s4c2_recall  # noqa: E402
+
+_s4c2_registered: list = []
+
+
+def _s4c2_reg(stub):
+    _s4c2_fetcher.register_adapter(stub)
+    _s4c2_fetcher._catalog_note_registered(stub.name)  # reflect into the materialized snapshot (routing)
+    _s4c2_registered.append(stub.name)
+    return stub
+
+
+_S4C2_REAL_IX = _s4c2_recall.indexable_set
+_S4C2_REAL_AM = _s4c2_fetcher.asearch_many
+_S4C2_REAL_AR = _s4c2_fetcher.asearch_ranked
+_S4C2_REAL_SM = _s4c2_fetcher.search_many
+_S4C2_REAL_SR = _s4c2_fetcher.search_ranked
+_S4C2_REAL_DRILL = _s4c2_server._eye_search_drill
+
+try:
+    # (1) FLIP SHAPE: penumbra_search is now a COROUTINE tool body (iscoroutinefunction True), its source is
+    #     `async def penumbra_search` that AWAITS both async twins, and @_threaded is DROPPED (not a sync body
+    #     run on a worker thread). inspect.getsource on the @mcp.tool()-returned fn includes its decorators.
+    _s4c2_src = _s4c2_insp.getsource(_s4c2_server.penumbra_search)
+    check("S4c2 (1): penumbra_search flipped to an ASYNC tool body -- iscoroutinefunction True; source is `async def penumbra_search` awaiting fetcher.asearch_ranked + fetcher.asearch_many; @_threaded DROPPED (the flip shape)",
+          _s4c2_aio.iscoroutinefunction(_s4c2_server.penumbra_search)
+          and "async def penumbra_search" in _s4c2_src
+          and "@_threaded" not in _s4c2_src
+          and "await fetcher.asearch_ranked(" in _s4c2_src
+          and "await fetcher.asearch_many(" in _s4c2_src,
+          f"iscoro={_s4c2_aio.iscoroutinefunction(_s4c2_server.penumbra_search)} "
+          f"threaded={'@_threaded' in _s4c2_src} awaits_ranked={'await fetcher.asearch_ranked(' in _s4c2_src} "
+          f"awaits_many={'await fetcher.asearch_many(' in _s4c2_src}")
+
+    # (2) RANKED path (default) AWAITS asearch_ranked (spy hit) NOT the sync search_ranked, and returns
+    #     the ranked out-dict shape {query, count, documents, _meta}. indexable_set -> empty skips the
+    #     recall arm so the path is deterministic without the real FTS/embed stack.
+    _s4c2_reg(_S4cStub("s4c2_rk_a", ndocs=2))
+    _s4c2_rk_names = ["s4c2_rk_a"]
+    _s4c2_ar_calls = {"n": 0}
+    _s4c2_sr_calls = {"n": 0}
+
+    async def _s4c2_spy_ar(*a, **k):
+        _s4c2_ar_calls["n"] += 1
+        return await _S4C2_REAL_AR(*a, **k)
+
+    def _s4c2_spy_sr(*a, **k):
+        _s4c2_sr_calls["n"] += 1
+        return _S4C2_REAL_SR(*a, **k)
+    try:
+        _s4c2_recall.indexable_set = lambda: frozenset()
+        _s4c2_fetcher.asearch_ranked = _s4c2_spy_ar
+        _s4c2_fetcher.search_ranked = _s4c2_spy_sr
+        _s4c2_rk_out = _s4c2_aio.run(
+            _s4c2_server.penumbra_search("q", sources=_s4c2_rk_names, limit=5, wait_s=5.0))
+        check("S4c2 (2): penumbra_search RANKED (default) path AWAITS asearch_ranked (spy hit=1) NOT the sync search_ranked (hit=0), returns {query,count,documents,_meta} with count==len(documents)",
+              _s4c2_ar_calls["n"] == 1 and _s4c2_sr_calls["n"] == 0
+              and set(_s4c2_rk_out) >= {"query", "count", "documents", "_meta"}
+              and _s4c2_rk_out["query"] == "q"
+              and isinstance(_s4c2_rk_out["documents"], list)
+              and _s4c2_rk_out["count"] == len(_s4c2_rk_out["documents"]),
+              f"ar={_s4c2_ar_calls['n']} sr={_s4c2_sr_calls['n']} keys={sorted(_s4c2_rk_out)}")
+    finally:
+        _s4c2_fetcher.asearch_ranked = _S4C2_REAL_AR
+        _s4c2_fetcher.search_ranked = _S4C2_REAL_SR
+        _s4c2_recall.indexable_set = _S4C2_REAL_IX
+
+    # (3) RAW BUCKETS path (raw=True + >1 source so it is NOT the drill) AWAITS asearch_many (spy hit)
+    #     NOT the sync search_many, and returns the buckets shape {query, results, total_count, _meta}.
+    _s4c2_reg(_S4cStub("s4c2_rw_a", ndocs=2))
+    _s4c2_reg(_S4cStub("s4c2_rw_b", ndocs=2))
+    _s4c2_rw_names = ["s4c2_rw_a", "s4c2_rw_b"]
+    _s4c2_am_calls = {"n": 0}
+    _s4c2_sm_calls = {"n": 0}
+
+    async def _s4c2_spy_am(*a, **k):
+        _s4c2_am_calls["n"] += 1
+        return await _S4C2_REAL_AM(*a, **k)
+
+    def _s4c2_spy_sm(*a, **k):
+        _s4c2_sm_calls["n"] += 1
+        return _S4C2_REAL_SM(*a, **k)
+    try:
+        _s4c2_fetcher.asearch_many = _s4c2_spy_am
+        _s4c2_fetcher.search_many = _s4c2_spy_sm
+        _s4c2_rw_out = _s4c2_aio.run(
+            _s4c2_server.penumbra_search("q", sources=_s4c2_rw_names, limit=5, raw=True, wait_s=5.0))
+        check("S4c2 (3): penumbra_search RAW BUCKETS path AWAITS asearch_many (spy hit=1) NOT the sync search_many (hit=0), returns {query,results,total_count,_meta} with results a dict",
+              _s4c2_am_calls["n"] == 1 and _s4c2_sm_calls["n"] == 0
+              and set(_s4c2_rw_out) >= {"query", "results", "total_count", "_meta"}
+              and isinstance(_s4c2_rw_out["results"], dict)
+              and _s4c2_rw_out["query"] == "q",
+              f"am={_s4c2_am_calls['n']} sm={_s4c2_sm_calls['n']} keys={sorted(_s4c2_rw_out)}")
+    finally:
+        _s4c2_fetcher.asearch_many = _S4C2_REAL_AM
+        _s4c2_fetcher.search_many = _S4C2_REAL_SM
+
+    # (4) DRILL path (raw=True + exactly 1 source) runs _eye_search_drill via anyio.to_thread OFF the
+    #     loop thread (a thread-ident spy proves drill_tid != loop_tid) + returns the drill shape
+    #     {source, query, count, documents}. Delete the to_thread wrap -> drill runs on the loop -> FAILS.
+    _s4c2_reg(_S4cStub("s4c2_dr_a", ndocs=2))
+    _s4c2_dr_names = ["s4c2_dr_a"]
+    _s4c2_dr_spy = {"tid": None, "loop_tid": None}
+
+    def _s4c2_spy_drill(*a, **k):
+        _s4c2_dr_spy["tid"] = _s4c2_threading.get_ident()
+        return _S4C2_REAL_DRILL(*a, **k)
+    try:
+        _s4c2_server._eye_search_drill = _s4c2_spy_drill
+
+        async def _s4c2_drive_drill():
+            _s4c2_dr_spy["loop_tid"] = _s4c2_threading.get_ident()
+            return await _s4c2_server.penumbra_search(
+                "q", sources=_s4c2_dr_names, raw=True, full=True, wait_s=5.0)
+
+        _s4c2_dr_out = _s4c2_aio.run(_s4c2_drive_drill())
+        _s4c2_dr_off = (_s4c2_dr_spy["tid"] is not None and _s4c2_dr_spy["loop_tid"] is not None
+                        and _s4c2_dr_spy["tid"] != _s4c2_dr_spy["loop_tid"])
+        check("S4c2 (4): penumbra_search DRILL path (raw=True + 1 source) runs _eye_search_drill via anyio.to_thread OFF the loop thread (drill_tid != loop_tid) + returns {source,query,count,documents} with count==len(documents)",
+              _s4c2_dr_off
+              and set(_s4c2_dr_out) >= {"source", "query", "count", "documents"}
+              and _s4c2_dr_out["source"] == "s4c2_dr_a"
+              and _s4c2_dr_out["query"] == "q"
+              and _s4c2_dr_out["count"] == len(_s4c2_dr_out["documents"]),
+              f"drill_tid={_s4c2_dr_spy['tid']} loop_tid={_s4c2_dr_spy['loop_tid']} keys={sorted(_s4c2_dr_out)}")
+    finally:
+        _s4c2_server._eye_search_drill = _S4C2_REAL_DRILL
+
+    # (5) END-TO-END the way mcp awaits it (asyncio.run over the REAL async twins on stubs): ranked +
+    #     raw buckets + drill each return a well-formed result whose SHAPE is byte-identical to the
+    #     pre-flip tool (ranked {query,count,documents,_meta}; buckets {query,results,total_count,_meta};
+    #     drill {source,query,count,documents}).
+    _s4c2_reg(_S4cStub("s4c2_e2e_a", ndocs=2))
+    _s4c2_reg(_S4cStub("s4c2_e2e_b", ndocs=2))
+    _s4c2_e2e = ["s4c2_e2e_a", "s4c2_e2e_b"]
+    try:
+        _s4c2_recall.indexable_set = lambda: frozenset()
+        _s4c2_e_rk = _s4c2_aio.run(_s4c2_server.penumbra_search("q", sources=_s4c2_e2e, limit=5, wait_s=5.0))
+        _s4c2_e_rw = _s4c2_aio.run(
+            _s4c2_server.penumbra_search("q", sources=_s4c2_e2e, limit=5, raw=True, wait_s=5.0))
+        _s4c2_e_dr = _s4c2_aio.run(
+            _s4c2_server.penumbra_search("q", sources=["s4c2_e2e_a"], raw=True, full=True, wait_s=5.0))
+        check("S4c2 (5): end-to-end asyncio.run (the mcp async-await path) over the REAL async twins -- ranked + raw buckets + drill all well-formed, SHAPE byte-identical to the pre-flip tool",
+              set(_s4c2_e_rk) >= {"query", "count", "documents", "_meta"}
+              and _s4c2_e_rk["count"] == len(_s4c2_e_rk["documents"])
+              and set(_s4c2_e_rw) >= {"query", "results", "total_count", "_meta"}
+              and isinstance(_s4c2_e_rw["results"], dict)
+              and set(_s4c2_e_dr) >= {"source", "query", "count", "documents"}
+              and _s4c2_e_dr["source"] == "s4c2_e2e_a"
+              and _s4c2_e_dr["count"] == len(_s4c2_e_dr["documents"]),
+              f"rk={sorted(_s4c2_e_rk)} rw={sorted(_s4c2_e_rw)} dr={sorted(_s4c2_e_dr)}")
+    finally:
+        _s4c2_recall.indexable_set = _S4C2_REAL_IX
+
+    # (6) BLAST RADIUS: the flip touched penumbra_search ONLY. search_ranked / search_many /
+    #     fetch_one_with_diag are still SYNC (not coroutines) so penumbra_gather / sensors / curator / the
+    #     shadow probe are unaffected, and the shadow probe still shadows sync-vs-async.
+    _s4c2_probe_src = _s4c2_insp.getsource(_s4c2_fetcher.async_fanout_shadow_probe)
+    check("S4c2 (6): blast radius -- search_ranked / search_many / fetch_one_with_diag stay SYNC (not coroutines; other callers untouched) + the shadow probe still compares sync search_many vs asearch_many",
+          not _s4c2_aio.iscoroutinefunction(_s4c2_fetcher.search_ranked)
+          and not _s4c2_aio.iscoroutinefunction(_s4c2_fetcher.search_many)
+          and not _s4c2_aio.iscoroutinefunction(_s4c2_fetcher.fetch_one_with_diag)
+          and "search_many(" in _s4c2_probe_src and "asearch_many(" in _s4c2_probe_src,
+          f"sr_async={_s4c2_aio.iscoroutinefunction(_s4c2_fetcher.search_ranked)} "
+          f"sm_async={_s4c2_aio.iscoroutinefunction(_s4c2_fetcher.search_many)} "
+          f"fd_async={_s4c2_aio.iscoroutinefunction(_s4c2_fetcher.fetch_one_with_diag)}")
+
+    # (7) penumbra_gather DISPATCH of the now-async penumbra_search: penumbra_search is in _GATHER_TOOLS and gather's
+    #     _run_one drives a coroutine tool via asyncio.run on its worker thread. Prove an penumbra_search call
+    #     THROUGH penumbra_gather returns status='ok' with a well-formed ranked dict (NOT an un-awaited coroutine).
+    _s4c2_reg(_S4cStub("s4c2_gth_a", ndocs=2))
+    try:
+        _s4c2_recall.indexable_set = lambda: frozenset()
+        _s4c2_gth = _s4c2_server.penumbra_gather.__wrapped__(
+            calls=[{"tool": "penumbra_search",
+                    "args": {"query": "q", "sources": ["s4c2_gth_a"], "limit": 5, "wait_s": 5}}],
+            wait_s=30)
+        _s4c2_gr0 = (_s4c2_gth.get("results") or [{}])[0]
+        _s4c2_gres = _s4c2_gr0.get("result")
+        check("S4c2 (7): penumbra_search dispatched THROUGH penumbra_gather (async tool driven via asyncio.run on the gather-pool worker thread) returns status='ok' + a well-formed ranked dict, NOT an un-awaited coroutine",
+              _s4c2_gr0.get("status") == "ok"
+              and isinstance(_s4c2_gres, dict)
+              and not _s4c2_aio.iscoroutine(_s4c2_gres)
+              and set(_s4c2_gres) >= {"query", "count", "documents", "_meta"}
+              and _s4c2_gres["count"] == len(_s4c2_gres["documents"]),
+              f"status={_s4c2_gr0.get('status')} result_type={type(_s4c2_gres).__name__} "
+              f"keys={sorted(_s4c2_gres) if isinstance(_s4c2_gres, dict) else _s4c2_gres}")
+    finally:
+        _s4c2_recall.indexable_set = _S4C2_REAL_IX
+finally:
+    _s4c2_recall.indexable_set = _S4C2_REAL_IX
+    _s4c2_fetcher.asearch_many = _S4C2_REAL_AM
+    _s4c2_fetcher.asearch_ranked = _S4C2_REAL_AR
+    _s4c2_fetcher.search_many = _S4C2_REAL_SM
+    _s4c2_fetcher.search_ranked = _S4C2_REAL_SR
+    _s4c2_server._eye_search_drill = _S4C2_REAL_DRILL
+    for _s4c2_nm in _s4c2_registered:
+        try:
+            _s4c2_fetcher.unregister_adapter(_s4c2_nm)
+        except Exception:  # noqa: BLE001
+            pass
+
+
+# ===========================================================================================
+# ANYSEARCH-DERIVED ROUTING AIDS (2026-07-14): the dogfood of AnySearch (a "search-for-agents"
+#   product) exposed two eye gaps that are ROUTING, not coverage: a vertical source the eye HAS
+#   (eastmoney) sat unnoticed in excluded_relevant while a broad sweep returned noise, and a named
+#   vertical call had no typed-param guidance. Two razor-clean aids close them, both PURE / OFFLINE:
+#   #2 param_hint (a vertical source's structured-query hint, the eye's idiom for a typed per-vertical
+#      param schema; a central _PARAM_HINTS map beside _ROUTING_KEYWORDS, precedence class-attr >
+#      central > facets), and #1 routing_hint (server.penumbra_search promotes build_search_plan's
+#      already-overlap-ranked excluded_relevant, overlap>=2 — the chase-guidance salience line, NOT a
+#      new threshold — to a TOP-LEVEL actionable hint, folding in each source's param_hint). Neither
+#      touches build_search_plan, so the W1 byte-exact excluded_relevant goldens still hold.
+# ---------------------------------------------------------------------------
+import inspect as _ph_insp  # noqa: E402
+from penumbra.core import fetcher as _ph_fetcher  # noqa: E402
+from penumbra.server import _routing_hint as _rh_fn  # noqa: E402
+
+# --- #2 param_hint: central seed + precedence (class attr > central map > facets) + '' for free text.
+check("param_hint: _PARAM_HINTS seeds the 5 vertical sources with non-empty (source-derived) hints",
+      all(_ph_fetcher._PARAM_HINTS.get(_n) for _n in
+          ("eastmoney", "market_quote", "sec_financials", "cninfo", "dblp_author")))
+check("param_hint: _param_hint resolves by name (no adapter) via the central map; unknown/free-text -> ''",
+      _ph_fetcher._param_hint("eastmoney") == _ph_fetcher._PARAM_HINTS["eastmoney"]
+      and _ph_fetcher._param_hint("__no_such_source__") == "")
+check("param_hint: a source's OWN param_hint class attr WINS over the central map",
+      _ph_fetcher._param_hint("eastmoney", type("_A", (), {"param_hint": "OWN"})()) == "OWN")
+_ph_fac_key = "__ph_fac_probe__"
+_ph_fetcher._FACETS[_ph_fac_key] = {"param_hint": "FAC"}
+try:
+    check("param_hint: facets.json param_hint is the LAST fallback (name absent from the central map)",
+          _ph_fetcher._param_hint(_ph_fac_key) == "FAC")
+finally:
+    _ph_fetcher._FACETS.pop(_ph_fac_key, None)
+check("param_hint: public param_hint(name) resolves via the registry + central map; unknown -> ''",
+      bool(_ph_fetcher.param_hint("eastmoney")) and _ph_fetcher.param_hint("__no_such_source__") == "")
+_ph_ls_src = _ph_insp.getsource(_ph_fetcher.list_sources)
+check("param_hint: list_sources wires it in (calls _param_hint(name, adapter) + sets entry['param_hint'])",
+      "_param_hint(name, adapter)" in _ph_ls_src and 'entry["param_hint"]' in _ph_ls_src)
+
+# --- #1 routing_hint: promote overlap>=2 excluded_relevant to top-level, fold in param_hint, drop weak.
+check("routing_hint: empty / no excluded_relevant -> None (no noise; also never on a named search)",
+      _rh_fn({}) is None and _rh_fn({"excluded_relevant": []}) is None)
+_rh_meta = {"excluded_relevant": [
+    {"name": "eastmoney", "reason": "quotes", "why": "...", "overlap": 6},
+    {"name": "zhihu_search", "reason": "walled", "why": "...", "overlap": 3},
+    {"name": "weak_src", "reason": "walled", "why": "...", "overlap": 1}]}
+_rh_out = _rh_fn(_rh_meta)
+check("routing_hint: promotes overlap>=2 to {note, sources:[...]} in rank order, drops the weak (overlap 1)",
+      isinstance(_rh_out, dict) and set(_rh_out) == {"note", "sources"}
+      and [_s["name"] for _s in _rh_out["sources"]] == ["eastmoney", "zhihu_search"])
+check("routing_hint: a structured source folds in param_hint as 'expects'; a walled one without a hint omits it",
+      _rh_out["sources"][0] == {"name": "eastmoney", "overlap": 6,
+                                "expects": _ph_fetcher._PARAM_HINTS["eastmoney"]}
+      and "expects" not in _rh_out["sources"][1])
+check("routing_hint: overlap==2 is the INCLUSIVE salience boundary (mirrors the chase-guidance '>=2')",
+      [_s["name"] for _s in (_rh_fn({"excluded_relevant": [{"name": "boundary", "overlap": 2}]})
+                             or {"sources": []})["sources"]] == ["boundary"])
+# The matched TOKENS ride up with the count (2026-07-25). This surface is more prominent than
+# _meta.excluded_relevant, so promoting a bare "overlap: 2" here would re-create the unjudgeable
+# number the routing scorer was fixed to remove: the agent must see WHY a source was promoted.
+_rh_m = _rh_fn({"excluded_relevant": [
+    {"name": "ircc_ee_rounds", "overlap": 3, "matched": ["cec", "entry", "express"]}]})
+check("routing_hint: carries the matched tokens up with the count (judgeable promotion)",
+      _rh_m["sources"][0]["matched"] == ["cec", "entry", "express"])
+
+
+# ===========================================================================================
+# S4d-SE: the 6 Stack Exchange sources go NATIVE async (asearch). Each SE class now defines an
+#         `asearch` -> BaseScrapeAdapter._asearch_via (the shared async cache round-trip) whose egress
+#         is _stackexchange's async twins (_ase_get / asearch / afetch_answer_documents /
+#         abuild_documents), sharing the SAME quota breaker + _se_sema in-flight cap as the sync path.
+#         These goldens prove OFFLINE (asyncio.run drives the coroutines; egress stubbed at
+#         http.get_json / http.aget_json, keyed by URL so /search/advanced vs /questions/{id}/answers
+#         return the right body): (R3) all 6 SE classes ARE AsyncSearchCapable, the base + a non-SE
+#         subclass are NOT; (parity) asearch == search BYTE-IDENTICAL over the SAME payload WITH the R1
+#         answer layer exercised; (R2) cache get/set + _se_sema.acquire run OFF the loop, the network
+#         await runs ON it; (contract) a None egress -> [] not cached; (R2 shared-cap) the acquire fires
+#         on the MODULE _se_sema object (not a fresh asyncio.Semaphore). Still DORMANT for the sync
+#         callers (penumbra_gather / sensors / curator keep the sync .search); asearch is reached by the S4a
+#         native dispatch + these goldens. A truly-live native egress is only provable post-deploy (a
+#         real penumbra_search naming an SE source).
+# ---------------------------------------------------------------------------
+import asyncio as _s4d_aio  # noqa: E402
+import threading as _s4d_threading  # noqa: E402
+from penumbra.core import _stackexchange as _s4d_se, http as _s4d_http, cache as _s4d_cache  # noqa: E402
+from penumbra.core import fetcher as _s4d_fetcher  # noqa: E402
+from penumbra.core.sources.scrape.stackoverflow_source import StackOverflowAdapter as _S4dSO  # noqa: E402
+from penumbra.core.sources.scrape.academia_se_source import AcademiaSEAdapter as _S4dAcad  # noqa: E402
+from penumbra.core.sources.scrape.crossvalidated_source import CrossValidatedAdapter as _S4dCV  # noqa: E402
+from penumbra.core.sources.scrape.cs_se_source import CSStackExchangeAdapter as _S4dCS  # noqa: E402
+from penumbra.core.sources.scrape.datascience_se_source import DataScienceSEAdapter as _S4dDS  # noqa: E402
+from penumbra.core.sources.scrape.ai_se_source import AIStackExchangeAdapter as _S4dAI  # noqa: E402
+from penumbra.core.sources.scrape._base import BaseScrapeAdapter as _S4dBase  # noqa: E402
+
+# Recorded SE payloads: a /search/advanced page with ONE question that HAS an accepted answer, plus the
+# matching /questions/{id}/answers page (two answers, one accepted). Keyed by URL substring so ONE stub
+# serves search vs answers. This EXERCISES the R1 answer layer (the happy path, not just an edge).
+_S4D_QID = 424242
+_S4D_SEARCH_PAGE = {"items": [{
+    "question_id": _S4D_QID,
+    "title": "How do I tune a learning-rate schedule?",
+    "link": f"https://stackoverflow.com/questions/{_S4D_QID}/tune-lr",
+    "body": "<p>question body with <b>html</b></p>",
+    "owner": {"display_name": "asker"},
+    "creation_date": 1600000000,
+    "score": 42,
+    "tags": ["python", "machine-learning"],
+    "answer_count": 2, "view_count": 1234, "is_answered": True,
+    "accepted_answer_id": 555001,
+}], "quota_remaining": 9000}
+_S4D_ANSWERS_PAGE = {"items": [
+    {"answer_id": 555001, "question_id": _S4D_QID, "body": "<p>accepted answer body</p>",
+     "owner": {"display_name": "answerer"}, "creation_date": 1600000100, "score": 99, "is_accepted": True},
+    {"answer_id": 555002, "question_id": _S4D_QID, "body": "<p>runner-up answer</p>",
+     "owner": {"display_name": "answerer2"}, "creation_date": 1600000200, "score": 12, "is_accepted": False},
+], "quota_remaining": 8999}
+
+
+def _s4d_payload_for(url):
+    if "/search/advanced" in url:
+        return _S4D_SEARCH_PAGE
+    if "/answers" in url:
+        return _S4D_ANSWERS_PAGE
+    return None
+
+
+_s4d_hits = {"sync": 0, "async": 0}
+_s4d_net_tids: list = []  # thread idents the async NETWORK egress ran on (golden 3c)
+
+
+def _s4d_sync_get_json(url, **kwargs):
+    _s4d_hits["sync"] += 1
+    return _s4d_payload_for(url)
+
+
+async def _s4d_aget_json(url, **kwargs):
+    _s4d_hits["async"] += 1
+    _s4d_net_tids.append(_s4d_threading.get_ident())
+    return _s4d_payload_for(url)
+
+
+_s4d_real_gj = _s4d_http.get_json
+_s4d_real_agj = _s4d_http.aget_json
+_s4d_real_gd = _s4d_cache.get_docs
+_s4d_real_sd = _s4d_cache.set_docs
+
+
+def _s4d_reset_breaker():
+    # A clean shared breaker so an earlier golden's stubbed None-fail cannot trip a cooldown mid-run.
+    _s4d_se._se_fail_streak = 0
+    _s4d_se._se_cooldown_until = 0.0
+
+
+# (1) STRUCTURAL / GATING (R3): all 6 SE classes ARE AsyncSearchCapable; a plain BaseScrapeAdapter
+#     subclass with NO asearch is STILL NOT, and the base defines _asearch_via but NOT asearch. The
+#     negative control is a THROWAWAY local subclass (not a real source: real sources like gutenberg now
+#     get a native asearch in the A2 cohort, so they are no longer valid controls). NEGATIVE-VERIFY: if
+#     `asearch` were on BaseScrapeAdapter, the @runtime_checkable AsyncSearchCapable Protocol (an attribute
+#     check) would flag EVERY subclass -> the throwaway control's `plain_not` term would go False. (Stated,
+#     not planted: the base is deliberately left untouched -- the whole point of the _-prefixed helper.)
+_s4d_se_adapters = [_S4dSO(), _S4dAcad(), _S4dCV(), _S4dCS(), _S4dDS(), _S4dAI()]
+_s4d_all_se_async = all(isinstance(a, _s4d_fetcher.AsyncSearchCapable) for a in _s4d_se_adapters)
+# A throwaway BaseScrapeAdapter subclass with NO asearch is the STABLE negative control (register=False +
+# empty name keep it out of the live registry). A real source is no longer usable here once it converts.
+class _S4dPlainScrape(_S4dBase, register=False):
+    pass
+_s4d_plain_not_async = not isinstance(_S4dPlainScrape(), _s4d_fetcher.AsyncSearchCapable)
+_s4d_plain_lacks = not hasattr(_S4dPlainScrape, "asearch")
+_s4d_base_ok = (not isinstance(_S4dBase(), _s4d_fetcher.AsyncSearchCapable)
+                and not hasattr(_S4dBase, "asearch") and hasattr(_S4dBase, "_asearch_via"))
+check("S4d-SE: R3 GATING -- all 6 SE classes ARE AsyncSearchCapable; a plain BaseScrapeAdapter subclass with no asearch is NOT; the base defines _asearch_via but NOT asearch (so the base is never mis-flagged async)",
+      _s4d_all_se_async and _s4d_plain_not_async and _s4d_plain_lacks and _s4d_base_ok,
+      f"all_se={_s4d_all_se_async} plain_not={_s4d_plain_not_async} plain_lacks={_s4d_plain_lacks} base_ok={_s4d_base_ok}")
+
+# (2) PARITY (the core): asyncio.run(asearch) == search BYTE-IDENTICAL over the SAME stubbed payload, for
+#     stackoverflow AND crossvalidated. Cache neutralized so BOTH paths hit the stubbed egress. The
+#     payload carries an ACCEPTED answer, so this EXERCISES the R1 answer layer. NEGATIVE-VERIFY: a
+#     divergent async mapper/param (e.g. asearch dropping the answer layer, or a different cache key)
+#     would make the model_dump lists differ -> False. (Confirmed live during build against the real
+#     twins; guaranteed structurally by the SHARED mappers + shared cache key.)
+try:
+    _s4d_http.get_json = _s4d_sync_get_json
+    _s4d_http.aget_json = _s4d_aget_json
+    _s4d_cache.get_docs = lambda k: None
+    _s4d_cache.set_docs = lambda *a, **k: None
+    _s4d_parity_ok = True
+    _s4d_parity_detail = []
+    for _s4d_ad in (_S4dSO(), _S4dCV()):
+        _s4d_reset_breaker()
+        _s4d_hits["sync"] = _s4d_hits["async"] = 0
+        _s4d_sync_docs = _s4d_ad.search("tune", 5)
+        _s4d_async_docs = _s4d_aio.run(_s4d_ad.asearch("tune", 5))
+        _s4d_sj = [d.model_dump(mode="json") for d in _s4d_sync_docs]
+        _s4d_aj = [d.model_dump(mode="json") for d in _s4d_async_docs]
+        _s4d_answer_docs = [d for d in _s4d_async_docs if d.title.startswith("A: ")]
+        _s4d_accepted = [d.metadata.get("is_accepted") for d in _s4d_answer_docs]
+        _s4d_one = (_s4d_sj == _s4d_aj and bool(_s4d_sync_docs) and bool(_s4d_answer_docs)
+                    and True in _s4d_accepted and _s4d_hits["sync"] >= 2 and _s4d_hits["async"] >= 2)
+        _s4d_parity_ok = _s4d_parity_ok and _s4d_one
+        _s4d_parity_detail.append(
+            f"{_s4d_ad.name}: n={len(_s4d_async_docs)} answers={len(_s4d_answer_docs)} "
+            f"accepted={_s4d_accepted} hits={dict(_s4d_hits)} eq={_s4d_sj == _s4d_aj}")
+    check("S4d-SE: PARITY -- asyncio.run(asearch)==search BYTE-IDENTICAL (ordered source_ids/titles/is_accepted/signals) for stackoverflow + crossvalidated over the SAME payload, WITH the R1 answer layer exercised (>=1 accepted answer doc)",
+          _s4d_parity_ok, " | ".join(_s4d_parity_detail))
+finally:
+    _s4d_cache.get_docs = _s4d_real_gd
+    _s4d_cache.set_docs = _s4d_real_sd
+    _s4d_http.get_json = _s4d_real_gj
+    _s4d_http.aget_json = _s4d_real_agj
+
+# (3) OFF-LOOP DISCIPLINE (R2): drive ONE asearch MISS with thread-ident spies on cache.get_docs +
+#     cache.set_docs + _se_sema.acquire (must run OFF the loop) and http.aget_json (must run ON the loop).
+#     NEGATIVE-VERIFY (3a): removing the `to_thread.run_sync` wrap in _asearch_via -> get_docs/set_docs
+#     run on loop_tid -> 3a FAILS (planted + observed during build; reverted). NEGATIVE-VERIFY (3b):
+#     replacing `await to_thread.run_sync(_se_sema.acquire)` with `_se_sema.acquire()` on the loop ->
+#     acq tid == loop_tid -> 3b FAILS (planted + observed; reverted). NEGATIVE-VERIFY (3c): pushing the
+#     network via to_thread would make net tid != loop_tid -> 3c FAILS.
+_s4d_gd_tids: list = []
+_s4d_sd_tids: list = []
+_s4d_acq_tids: list = []
+_s4d_off = {"loop": None}
+_s4d_sema = _s4d_se._se_sema
+_s4d_real_acq = _s4d_sema.acquire
+try:
+    _s4d_http.get_json = _s4d_sync_get_json
+    _s4d_http.aget_json = _s4d_aget_json
+    _s4d_reset_breaker()
+    _s4d_net_tids.clear()
+
+    def _s4d_spy_gd(key):
+        _s4d_gd_tids.append(_s4d_threading.get_ident())
+        return None  # force a MISS so the egress + set_docs both run
+
+    def _s4d_spy_sd(key, docs, **kw):
+        _s4d_sd_tids.append(_s4d_threading.get_ident())
+
+    def _s4d_spy_acq(*a, **k):
+        _s4d_acq_tids.append(_s4d_threading.get_ident())
+        return _s4d_real_acq(*a, **k)
+
+    _s4d_cache.get_docs = _s4d_spy_gd
+    _s4d_cache.set_docs = _s4d_spy_sd
+    _s4d_sema.acquire = _s4d_spy_acq  # instance shadow: _ase_get's `_se_sema.acquire` picks this up
+
+    async def _s4d_drive_off():
+        _s4d_off["loop"] = _s4d_threading.get_ident()
+        return await _S4dSO().asearch("offloopq", 3)
+    _s4d_off_docs = _s4d_aio.run(_s4d_drive_off())
+finally:
+    _s4d_cache.get_docs = _s4d_real_gd
+    _s4d_cache.set_docs = _s4d_real_sd
+    try:
+        del _s4d_sema.acquire  # drop the instance shadow -> the class method resurfaces
+    except Exception:  # noqa: BLE001
+        pass
+    _s4d_http.get_json = _s4d_real_gj
+    _s4d_http.aget_json = _s4d_real_agj
+
+_s4d_lt = _s4d_off["loop"]
+_s4d_cache_offloop = (bool(_s4d_gd_tids) and bool(_s4d_sd_tids) and _s4d_lt is not None
+                      and all(t != _s4d_lt for t in _s4d_gd_tids + _s4d_sd_tids))
+_s4d_sema_offloop = (bool(_s4d_acq_tids) and _s4d_lt is not None
+                     and all(t != _s4d_lt for t in _s4d_acq_tids))
+_s4d_net_onloop = (bool(_s4d_net_tids) and _s4d_lt is not None
+                   and all(t == _s4d_lt for t in _s4d_net_tids))
+check("S4d-SE: OFF-LOOP R2/3a -- cache.get_docs + cache.set_docs BOTH ran OFF the loop thread during asearch (disk IO off-loop via to_thread; dropping that wrap would run them on the loop -> fail)",
+      _s4d_cache_offloop, f"loop={_s4d_lt} gd={_s4d_gd_tids} sd={_s4d_sd_tids}")
+check("S4d-SE: OFF-LOOP R2/3b -- _se_sema.acquire ran OFF the loop thread (the SE-specific pin; a `with _se_sema` back on the loop would fail this; acquired twice: the search GET + the answers GET)",
+      _s4d_sema_offloop, f"loop={_s4d_lt} acq={_s4d_acq_tids}")
+check("S4d-SE: OFF-LOOP R2/3c -- http.aget_json was awaited ON the loop thread (the NETWORK wait holds no pool thread; awaited directly, not via to_thread)",
+      _s4d_net_onloop, f"loop={_s4d_lt} net={_s4d_net_tids}")
+
+# (4) FAILURE CONTRACT: stub aget_json -> None; asearch returns [] and does NOT write cache (mirror
+#     search's raw-None branch: failure -> [], NOT cached). NEGATIVE-VERIFY: if _asearch_via cached the
+#     None-miss (set_docs on the raw-None path), set_calls would be > 0 -> this FAILS.
+_s4d_set_calls = {"n": 0}
+try:
+    async def _s4d_aget_none(url, **kw):
+        return None
+    _s4d_http.aget_json = _s4d_aget_none
+    _s4d_reset_breaker()
+    _s4d_cache.get_docs = lambda k: None
+
+    def _s4d_count_sd(key, docs, **kw):
+        _s4d_set_calls["n"] += 1
+    _s4d_cache.set_docs = _s4d_count_sd
+    _s4d_fail_docs = _s4d_aio.run(_S4dSO().asearch("failq", 3))
+finally:
+    _s4d_cache.get_docs = _s4d_real_gd
+    _s4d_cache.set_docs = _s4d_real_sd
+    _s4d_http.aget_json = _s4d_real_agj
+check("S4d-SE: FAILURE CONTRACT -- aget_json -> None => asearch returns [] AND does NOT write cache (set_docs NOT called), mirroring search's raw-None branch",
+      _s4d_fail_docs == [] and _s4d_set_calls["n"] == 0,
+      f"docs={_s4d_fail_docs} set_calls={_s4d_set_calls['n']}")
+
+# (5) SHARED-CAP (R2): the async egress acquires the MODULE _stackexchange._se_sema (same object the sync
+#     _se_get uses), a threading.BoundedSemaphore, NOT a fresh asyncio.Semaphore. Proven by the golden-3b
+#     acquire spy firing on THIS object + identity/type checks. NEGATIVE-VERIFY: a future "just use an
+#     asyncio.Semaphore" split would make `_s4d_sema is _se_sema` False (a new object) and/or flip the
+#     asyncio-instance check -> this FAILS, catching the cap-doubling regression.
+_s4d_is_threading_prim = type(_s4d_se._se_sema).__module__ == "threading"
+_s4d_not_asyncio_sema = not isinstance(_s4d_se._se_sema, _s4d_aio.Semaphore)
+_s4d_shared_cap = (_s4d_sema is _s4d_se._se_sema and _s4d_is_threading_prim
+                   and _s4d_not_asyncio_sema and bool(_s4d_acq_tids))
+check("S4d-SE: SHARED-CAP R2 -- the async egress acquires the MODULE _stackexchange._se_sema (same identity as sync _se_get; a threading.BoundedSemaphore, NOT a new asyncio.Semaphore); the golden-3b acquire spy fired on THIS object",
+      _s4d_shared_cap,
+      f"same_identity={_s4d_sema is _s4d_se._se_sema} threading_prim={_s4d_is_threading_prim} "
+      f"not_asyncio={_s4d_not_asyncio_sema} acq_fired={bool(_s4d_acq_tids)}")
+
+
+# ===========================================================================================
+# S4e-A2: the mechanical BaseScrapeAdapter cohort goes NATIVE async. 22 sources gained a native
+#         `asearch` (via a per-source `_araw_fetch` async mirror + the shared BaseScrapeAdapter
+#         `_asearch_via`, now POLYMORPHIC: it awaits an async assembly twin OR runs a pure-CPU
+#         `_to_documents` directly). 3 sources (apple_podcasts / europepmc / podcast_index) were
+#         correctly LEFT SYNC because their `_to_documents` itself egresses (two-layer, needs a
+#         bespoke assembly twin like SE, a later slice). These goldens prove (GATE) the exact
+#         22-async / 3-still-sync split, and (POLYMORPHIC PARITY) that `_asearch_via`'s new
+#         sync-abuild branch (inspect.isawaitable False) runs the pure-CPU mapper on the loop and
+#         returns docs byte-identical to `search`. Faithfulness of each `_araw_fetch` mirror was
+#         diff-reviewed + adversarially verified per source; true-live egress is proven post-deploy
+#         by a broad penumbra_search naming these sources.
+# ---------------------------------------------------------------------------
+from penumbra.core import fetcher as _s4e_fetcher  # noqa: E402
+from penumbra.core import http as _s4e_http, cache as _s4e_cache  # noqa: E402
+import asyncio as _s4e_aio  # noqa: E402
+
+_S4E_CONVERTED = [
+    "ai_incidents", "adzuna", "books_openlibrary_ia", "clinicaltrials", "cset",
+    "discourse_forums", "dblp_author", "grants_gov", "gov_open_data", "gutenberg", "kaggle",
+    "mastodon", "modelscope", "nih_reporter", "nsf_awards", "orcid", "remotive", "sec_edgar",
+    "s2_authors", "ukri_gtr", "vast_ai", "zenodo"]
+# NOTE apple_podcasts / europepmc / podcast_index were the two-layer sources A2 left sync; they are now
+# converted in the S4k two-layer slice (their async-ness is asserted by the S4k GATE), so they are no
+# longer checked here as sync controls.
+
+# (1) GATE: NEGATIVE-VERIFY: dropping asearch from a converted A2 source flips a name into _bad -> FAILS.
+_s4e_async_ok, _s4e_async_bad = [], []
+for _n in _S4E_CONVERTED:
+    _a = _s4e_fetcher.get_adapter(_n)
+    (_s4e_async_ok if (_a is not None and isinstance(_a, _s4e_fetcher.AsyncSearchCapable))
+     else _s4e_async_bad).append(_n)
+check("S4e-A2: GATE -- all 22 converted A2 sources ARE AsyncSearchCapable",
+      (len(_s4e_async_ok) == 22 and not _s4e_async_bad),
+      f"async_ok={len(_s4e_async_ok)}/22 async_bad={_s4e_async_bad}")
+
+# (2) POLYMORPHIC PARITY: gutenberg (single get_json, pure-CPU mapper) -- asearch == search byte-identical
+#     over the SAME stubbed payload, proving _asearch_via's sync-abuild branch (inspect.isawaitable False)
+#     runs _to_documents on the loop and returns docs. NEGATIVE-VERIFY: if the polymorphic branch awaited a
+#     non-awaitable (the pre-change always-await), asearch would raise -> parity False.
+_s4e_book = {"id": 1342, "title": "Pride and Prejudice", "authors": [{"name": "Austen, Jane"}],
+             "subjects": ["Fiction"], "languages": ["en"],
+             "formats": {"text/plain; charset=utf-8": "https://example.invalid/1342.txt"}}
+_s4e_payload = {"results": [_s4e_book]}
+_s4e_gut = _s4e_fetcher.get_adapter("gutenberg")
+_s4e_r_gj, _s4e_r_agj = _s4e_http.get_json, _s4e_http.aget_json
+_s4e_r_gd, _s4e_r_sd = _s4e_cache.get_docs, _s4e_cache.set_docs
+_s4e_parity = _s4e_nonempty = False
+try:
+    _s4e_http.get_json = lambda *a, **k: _s4e_payload
+
+    async def _s4e_agj(*a, **k):
+        return _s4e_payload
+    _s4e_http.aget_json = _s4e_agj
+    _s4e_cache.get_docs = lambda k: None
+    _s4e_cache.set_docs = lambda *a, **k: None
+    _s4e_sdocs = _s4e_gut.search("austen", 5)
+    _s4e_adocs = _s4e_aio.run(_s4e_gut.asearch("austen", 5))
+    _s4e_parity = ([d.model_dump(mode="json") for d in _s4e_sdocs]
+                   == [d.model_dump(mode="json") for d in _s4e_adocs])
+    _s4e_nonempty = bool(_s4e_adocs)
+finally:
+    _s4e_http.get_json, _s4e_http.aget_json = _s4e_r_gj, _s4e_r_agj
+    _s4e_cache.get_docs, _s4e_cache.set_docs = _s4e_r_gd, _s4e_r_sd
+check("S4e-A2: POLYMORPHIC PARITY -- gutenberg.asearch == .search BYTE-IDENTICAL over the same stubbed payload; proves _asearch_via's sync-abuild branch (inspect.isawaitable False) runs the pure-CPU _to_documents on the loop and returns docs",
+      _s4e_parity and _s4e_nonempty,
+      f"parity={_s4e_parity} n_async={len(_s4e_adocs) if _s4e_nonempty else 0}")
+
+
+# ===========================================================================================
+# S4f-RSS: RSSAdapterBase gains a native-async asearch, so EVERY plain RSS subclass (rss_bundles' rows,
+#          pypi) is AsyncSearchCapable at once (feeds fetched as concurrent coroutines, not a held thread
+#          pool). The LOAD-BEARING subtlety: a subclass that OVERRIDES search (fellowships keyword-gates
+#          + appends a curated static shelf) INHERITS the base asearch and is flagged AsyncSearchCapable,
+#          so the live async penumbra_search path would route to the base asearch and SILENTLY DROP that
+#          customization. The base asearch has a GUARD: if the subclass overrode search or _fetch_all_docs,
+#          it runs that subclass's OWN sync search off-loop instead (correct, not native). Goldens: GATE
+#          (RSS subclasses async), SAFETY GUARD (an override's custom search survives on the async path),
+#          NATIVE PARITY (a plain subclass asearch == search over a real stubbed feed).
+# ---------------------------------------------------------------------------
+from penumbra.core.sources.scrape._rss import RSSAdapterBase as _S4fRSS  # noqa: E402
+from penumbra.core.normalize import Document as _S4fDoc  # noqa: E402
+
+# (1) GATE
+_s4f_pypi = _s4e_fetcher.get_adapter("pypi")
+_s4f_fellows = _s4e_fetcher.get_adapter("fellowships")
+_s4f_pypi_async = _s4f_pypi is not None and isinstance(_s4f_pypi, _s4e_fetcher.AsyncSearchCapable)
+_s4f_fellows_async = _s4f_fellows is not None and isinstance(_s4f_fellows, _s4e_fetcher.AsyncSearchCapable)
+check("S4f-RSS: GATE -- a plain RSS subclass (pypi) is AsyncSearchCapable via the inherited base asearch; fellowships (a search-override) is too (its asearch delegates to its sync search via the guard)",
+      _s4f_pypi_async and _s4f_fellows_async,
+      f"pypi_async={_s4f_pypi_async} fellows_async={_s4f_fellows_async}")
+
+# (2) SAFETY GUARD (load-bearing): a search-overriding RSS subclass's asearch must return its CUSTOM search
+#     result (the guard runs the subclass sync search off-loop), NOT the base native path. NEGATIVE-VERIFY:
+#     without the guard, asearch runs the base _afetch_all_docs (empty feeds -> []) -> [] != sentinel -> FAIL.
+_s4f_sentinel = _S4fDoc(source="_probe", source_id="SENTINEL-OVERRIDE",
+                        url="https://example.invalid/sentinel", title="sentinel", content="x")
+
+
+class _S4fOverride(_S4fRSS):  # RSSAdapterBase has no __init_subclass__ -> no register kwarg, no auto-register
+    name = ""
+    feeds = []
+
+    def search(self, query, limit=10):
+        return [_s4f_sentinel]
+
+
+_s4f_ov_res = _s4e_aio.run(_S4fOverride().asearch("q", 5))
+_s4f_guard_ok = (len(_s4f_ov_res) == 1 and _s4f_ov_res[0].source_id == "SENTINEL-OVERRIDE")
+check("S4f-RSS: SAFETY GUARD -- a search-overriding RSS subclass's asearch returns its CUSTOM search result (guard delegates to sync search off-loop), NOT the base native path -- protects fellowships-class sources from silently dropping their keyword gate + curated shelf",
+      _s4f_guard_ok, f"got={[d.source_id for d in _s4f_ov_res]}")
+
+# (3) NATIVE PARITY: a plain RSS subclass asearch == search over the SAME stubbed RSS feed (real feedparser),
+#     proving _afetch_feed (native http.aget) + _afetch_all_docs (off-loop convert) work end-to-end == sync.
+_s4f_rss_xml = (b'<?xml version="1.0"?><rss version="2.0"><channel><title>T</title>'
+                b'<item><title>Neural networks in practice</title><link>https://ex.invalid/1</link>'
+                b'<guid>ex1</guid><description>a post about neural networks</description></item>'
+                b'</channel></rss>')
+
+
+class _S4fResp:
+    def __init__(self, content):
+        self.content = content
+        self.status_code = 200
+
+
+class _S4fPlain(_S4fRSS):
+    name = "_s4f_plain"
+    feeds = ["https://example.invalid/feed"]
+
+
+_s4f_r_get, _s4f_r_aget = _s4e_http.get, _s4e_http.aget
+_s4f_r_gd, _s4f_r_sd = _s4e_cache.get_docs, _s4e_cache.set_docs
+_s4f_native_ok = False
+_s4f_adocs = []
+try:
+    _s4e_http.get = lambda *a, **k: _S4fResp(_s4f_rss_xml)
+
+    async def _s4f_aget(*a, **k):
+        return _S4fResp(_s4f_rss_xml)
+    _s4e_http.aget = _s4f_aget
+    _s4e_cache.get_docs = lambda k: None
+    _s4e_cache.set_docs = lambda *a, **k: None
+    _s4f_sdocs = _S4fPlain().search("neural", 5)
+    _s4f_adocs = _s4e_aio.run(_S4fPlain().asearch("neural", 5))
+    _s4f_native_ok = (bool(_s4f_adocs)
+                      and [d.model_dump(mode="json") for d in _s4f_sdocs]
+                      == [d.model_dump(mode="json") for d in _s4f_adocs])
+finally:
+    _s4e_http.get, _s4e_http.aget = _s4f_r_get, _s4f_r_aget
+    _s4e_cache.get_docs, _s4e_cache.set_docs = _s4f_r_gd, _s4f_r_sd
+check("S4f-RSS: NATIVE PARITY -- a plain RSS subclass asearch == search over the same stubbed RSS feed (native http.aget + off-loop convert), byte-identical + non-empty",
+      _s4f_native_ok, f"native_ok={_s4f_native_ok} n={len(_s4f_adocs)}")
+
+
+# ===========================================================================================
+# S4g-A1: the 7 BaseAPIAdapter (A1) sources go native async. Each gained a per-source `_araw_fetch`
+#         (byte-faithful async mirror of `_raw_fetch`) + a one-line `asearch` calling the NEW base helper
+#         `BaseAPIAdapter._aapi_search` (mirrors `search`: search_label cache key, per-record _to_document,
+#         rank_locally, cache-only-if-docs, off-loop cache). arxiv's egress keeps its shared threading
+#         in-flight cap `_guard.sema`, acquired OFF the loop (like _stackexchange._ase_get). Goldens: GATE
+#         (7 async), _aapi_search PARITY+OFF-LOOP (a probe: asearch==search + cache off-loop), arxiv SEMA
+#         (off-loop + shared, not a split asyncio.Semaphore). Faithfulness diff-reviewed + adversarially
+#         verified per source; true-live proof is a post-deploy penumbra_search naming these.
+# ---------------------------------------------------------------------------
+from penumbra.core.sources.api._base import BaseAPIAdapter as _S4gBase  # noqa: E402
+from penumbra.core.sources.api import arxiv_source as _s4g_arxiv  # noqa: E402
+
+# (1) GATE
+_S4G_A1 = ["arxiv", "crossref_retractions", "datagovsg_nonresident_pass_types", "worldbank_stats",
+           "statcan_wds", "uk_companies_house", "huggingface_hub"]
+_s4g_ok, _s4g_bad = [], []
+for _n in _S4G_A1:
+    _a = _s4e_fetcher.get_adapter(_n)
+    (_s4g_ok if (_a is not None and isinstance(_a, _s4e_fetcher.AsyncSearchCapable))
+     else _s4g_bad).append(_n)
+check("S4g-A1: GATE -- all 7 BaseAPIAdapter (A1) sources are AsyncSearchCapable via their new asearch (base _aapi_search)",
+      len(_s4g_ok) == 7 and not _s4g_bad, f"ok={len(_s4g_ok)}/7 bad={_s4g_bad}")
+
+
+# (2) _aapi_search PARITY + OFF-LOOP: a throwaway BaseAPIAdapter probe -- asearch == search byte-identical
+#     AND cache get/set run OFF the loop. NEGATIVE-VERIFY: if _aapi_search ran cache on the loop, the async
+#     tids would equal the loop tid -> offloop False; if it diverged from search, parity False.
+class _S4gProbe(_S4gBase, register=False):
+    name = "_s4g_probe"
+    rank_locally = False
+
+    def _raw_fetch(self, query, limit):
+        return [{"t": "alpha"}, {"t": "beta"}]
+
+    async def _araw_fetch(self, query, limit):
+        return [{"t": "alpha"}, {"t": "beta"}]
+
+    def _to_document(self, raw):
+        return _S4fDoc(source=self.name, source_id=raw["t"],
+                       url="https://example.invalid/" + raw["t"], title=raw["t"], content=raw["t"])
+
+    async def asearch(self, query, limit=10):
+        return await self._aapi_search(query, limit, araw_fetch=lambda: self._araw_fetch(query, limit))
+
+
+_s4g_gd_tids, _s4g_sd_tids, _s4g_loop = [], [], {"tid": None}
+_s4g_r_gd, _s4g_r_sd = _s4e_cache.get_docs, _s4e_cache.set_docs
+_s4g_parity = _s4g_offloop = False
+_s4g_adocs = []
+try:
+    def _s4g_spy_gd(key):
+        _s4g_gd_tids.append(_s4d_threading.get_ident())
+        return None
+
+    def _s4g_spy_sd(key, docs, **kw):
+        _s4g_sd_tids.append(_s4d_threading.get_ident())
+    _s4e_cache.get_docs = _s4g_spy_gd
+    _s4e_cache.set_docs = _s4g_spy_sd
+    _s4g_probe = _S4gProbe()
+    _s4g_sdocs = _s4g_probe.search("q", 5)
+    _s4g_gd_tids.clear()
+    _s4g_sd_tids.clear()  # measure ONLY the async path's cache tids
+
+    async def _s4g_drive():
+        _s4g_loop["tid"] = _s4d_threading.get_ident()
+        return await _s4g_probe.asearch("q", 5)
+    _s4g_adocs = _s4e_aio.run(_s4g_drive())
+    _s4g_parity = (bool(_s4g_adocs)
+                   and [d.model_dump(mode="json") for d in _s4g_sdocs]
+                   == [d.model_dump(mode="json") for d in _s4g_adocs])
+    _s4g_lt = _s4g_loop["tid"]
+    _s4g_offloop = (bool(_s4g_gd_tids) and bool(_s4g_sd_tids) and _s4g_lt is not None
+                    and all(t != _s4g_lt for t in _s4g_gd_tids + _s4g_sd_tids))
+finally:
+    _s4e_cache.get_docs, _s4e_cache.set_docs = _s4g_r_gd, _s4g_r_sd
+check("S4g-A1: _aapi_search PARITY + OFF-LOOP -- a BaseAPIAdapter probe asearch == search byte-identical AND its cache get/set ran OFF the loop (the new base helper mirrors search with off-loop cache)",
+      _s4g_parity and _s4g_offloop,
+      f"parity={_s4g_parity} offloop={_s4g_offloop} gd={_s4g_gd_tids} sd={_s4g_sd_tids} loop={_s4g_loop['tid']}")
+
+
+# (3) arxiv SEMA OFF-LOOP + SHARED: _arxiv_aget_text acquires the MODULE _guard.sema OFF the loop, and it
+#     is the SAME threading BoundedSemaphore the sync path uses (NOT a split asyncio.Semaphore).
+#     NEGATIVE-VERIFY: a `with _guard.sema` on the loop -> acquire tid == loop tid -> offloop False; a new
+#     asyncio.Semaphore -> the isinstance flips + the module-object spy would not fire.
+_s4g_sema = _s4g_arxiv._guard.sema
+_s4g_ax = _s4e_fetcher.get_adapter("arxiv")
+_s4g_acq_tids, _s4g_ax_loop = [], {"tid": None}
+_s4g_r_acq = _s4g_sema.acquire
+_s4g_r_agt = _s4e_http.aget_text
+_s4g_ax_offloop = _s4g_ax_shared = False
+try:
+    def _s4g_spy_acq(*a, **k):
+        _s4g_acq_tids.append(_s4d_threading.get_ident())
+        return _s4g_r_acq(*a, **k)
+    _s4g_sema.acquire = _s4g_spy_acq
+
+    async def _s4g_stub_agt(*a, **k):
+        return None  # egress returns nothing; we only assert the sema fired off-loop before it
+    _s4e_http.aget_text = _s4g_stub_agt
+
+    async def _s4g_ax_drive():
+        _s4g_ax_loop["tid"] = _s4d_threading.get_ident()
+        return await _s4g_ax._araw_fetch("q", 3)
+    _s4e_aio.run(_s4g_ax_drive())
+    _s4g_ax_lt = _s4g_ax_loop["tid"]
+    _s4g_ax_offloop = (bool(_s4g_acq_tids) and _s4g_ax_lt is not None
+                       and all(t != _s4g_ax_lt for t in _s4g_acq_tids))
+    _s4g_ax_shared = (_s4g_sema is _s4g_arxiv._guard.sema
+                      and not isinstance(_s4g_sema, _s4e_aio.Semaphore))
+finally:
+    try:
+        del _s4g_sema.acquire
+    except Exception:  # noqa: BLE001
+        pass
+    _s4e_http.aget_text = _s4g_r_agt
+check("S4g-A1: arxiv SEMA OFF-LOOP + SHARED -- _arxiv_aget_text acquires the MODULE _guard.sema OFF the loop (a threading BoundedSemaphore, NOT a split asyncio.Semaphore; the in-flight cap stays shared sync<->async)",
+      _s4g_ax_offloop and _s4g_ax_shared,
+      f"offloop={_s4g_ax_offloop} shared={_s4g_ax_shared} acq={_s4g_acq_tids} loop={_s4g_ax_loop['tid']}")
+
+
+# ===========================================================================================
+# S4h-A4: the 12 standalone (duck-typed) A4 sources go native async. Each has its OWN full asearch
+#         mirroring its bespoke search (off-loop cache round-trip + async egress + pure-CPU map), since
+#         they share no base helper. Wrinkles handled + spot-reviewed: hackernews (2-layer stories+comments
+#         fan-out), reddit (Arctic submission fan-out native via _aarctic_get sharing _arctic_sema off-loop
+#         + anyio.sleep backoff; comment path / _discover_subreddits / CDP fallback all off-loop; fan-out
+#         WIDTH via a local asyncio.Semaphore), sec_financials (_aload_ticker_map shares _MAP_LOCK off-loop),
+#         exa (billed apost_json). Faithfulness diff-reviewed (the complex ones) + adversarially verified
+#         per source. layoffs_tracker (multi-step handshake) + pdf (URL-only search, no keyword index) were
+#         NOT converted -> a later slice; they stay on the sync legacy runner. GATE proves the 12-async split.
+# ---------------------------------------------------------------------------
+_S4H_A4 = ["exa", "hf_daily_papers", "ontario_sunshine", "market_quote", "market_crypto",
+           "sec_financials", "wayback", "oecd_ai_policy", "github_awesome_phd", "ml_collective",
+           "hackernews", "reddit"]
+_s4h_ok, _s4h_bad = [], []
+for _n in _S4H_A4:
+    _a = _s4e_fetcher.get_adapter(_n)
+    (_s4h_ok if (_a is not None and isinstance(_a, _s4e_fetcher.AsyncSearchCapable))
+     else _s4h_bad).append(_n)
+check("S4h-A4: GATE -- all 12 converted A4 standalone sources are AsyncSearchCapable via their own native asearch (hackernews/reddit/sec_financials/exa wrinkles spot-reviewed; layoffs_tracker + pdf deferred, stay sync)",
+      len(_s4h_ok) == 12 and not _s4h_bad, f"ok={len(_s4h_ok)}/12 bad={_s4h_bad}")
+
+
+# ===========================================================================================
+# S4i-OA: the 42 OpenAlex-backed sources go native async via _openalex.aget_json (the byte-faithful
+#         async twin of get_json: SAME host-pin, breaker, rate pacer [reserve_pace_slot + anyio.sleep],
+#         concurrency sema [OFF-loop acquire], 2-lane budget, retry [anyio.sleep]; the network is a
+#         coroutine on the shared AsyncClient). openalex (single /works), openalex_cn (subclass, its OWN
+#         asearch), researcher_watch + org_watch (ThreadPoolExecutor fan-out -> asyncio.gather). Goldens:
+#         GATE; the SUBCLASS-GUARD FIX (openalex_cn.asearch reaches the parent NATIVE egress, not bounced
+#         to sync search which would double-apply _pin_zh; a plain override-search-no-asearch subclass IS
+#         guarded); aget_json OFF-LOOP (the shared _sema off-loop).
+# ---------------------------------------------------------------------------
+from penumbra.core import _openalex as _s4i_oa  # noqa: E402
+from penumbra.core.sources.api.openalex_source import OpenAlexAdapter as _S4iOA  # noqa: E402
+from penumbra.core.sources.api.openalex_cn_source import OpenAlexCNAdapter as _S4iCN  # noqa: E402
+
+# (1) GATE (deepseek = one org_watch row; the ONE _OrgWatchAdapter class converts all 39)
+_S4I = ["openalex", "openalex_cn", "researcher_watch", "deepseek"]
+_s4i_ok, _s4i_bad = [], []
+for _n in _S4I:
+    _a = _s4e_fetcher.get_adapter(_n)
+    (_s4i_ok if (_a is not None and isinstance(_a, _s4e_fetcher.AsyncSearchCapable))
+     else _s4i_bad).append(_n)
+check("S4i-OA: GATE -- openalex + openalex_cn + researcher_watch + an org_watch row (the class covers all 39) are AsyncSearchCapable",
+      len(_s4i_ok) == 4 and not _s4i_bad, f"ok={len(_s4i_ok)}/4 bad={_s4i_bad}")
+
+# (2) SUBCLASS-GUARD FIX (the caught double-pin bug): openalex_cn defines its OWN asearch calling
+#     super().asearch for the parent NATIVE egress; the parent guard must NOT misfire (which would bounce
+#     it to sync search + double-apply _pin_zh). So cn.asearch must reach NATIVE aget_json, NOT sync
+#     get_json. AND a throwaway override-search-no-asearch subclass MUST still be guarded to sync search.
+#     NEGATIVE-VERIFY: with the pre-fix guard (search-only), cn.asearch would call get_json -> cn_native False.
+_s4i_works = {"results": [{"id": "https://openalex.org/W1", "title": "Test", "publication_date": "2024-01-01"}]}
+_s4i_calls = {"get_json": 0, "aget_json": 0}
+_s4i_r_gj, _s4i_r_agj = _s4i_oa.get_json, _s4i_oa.aget_json
+_s4i_r_gd2, _s4i_r_sd2 = _s4e_cache.get_docs, _s4e_cache.set_docs
+_s4i_cn_native = _s4i_guard_protects = False
+try:
+    def _s4i_gj(path, params=None, timeout=None):
+        _s4i_calls["get_json"] += 1
+        return _s4i_works
+
+    async def _s4i_agj(path, params=None, timeout=None):
+        _s4i_calls["aget_json"] += 1
+        return _s4i_works
+    _s4i_oa.get_json = _s4i_gj
+    _s4i_oa.aget_json = _s4i_agj
+    _s4e_cache.get_docs = lambda k: None
+    _s4e_cache.set_docs = lambda *a, **k: None
+
+    _s4i_calls["get_json"] = _s4i_calls["aget_json"] = 0
+    _s4e_aio.run(_S4iCN().asearch("machine learning", 3))
+    _s4i_cn_native = (_s4i_calls["aget_json"] >= 1 and _s4i_calls["get_json"] == 0)
+
+    class _S4iOverride(_S4iOA):
+        def search(self, query, limit=10):
+            return _S4iOA.search(self, query, limit)  # overrides search, defines NO own asearch
+    _s4i_calls["get_json"] = _s4i_calls["aget_json"] = 0
+    _s4e_aio.run(_S4iOverride().asearch("x", 3))
+    _s4i_guard_protects = (_s4i_calls["get_json"] >= 1)  # guard delegated to its sync search
+finally:
+    _s4i_oa.get_json, _s4i_oa.aget_json = _s4i_r_gj, _s4i_r_agj
+    _s4e_cache.get_docs, _s4e_cache.set_docs = _s4i_r_gd2, _s4i_r_sd2
+check("S4i-OA: SUBCLASS-GUARD FIX -- openalex_cn.asearch reaches the NATIVE aget_json (parent guard does NOT misfire on a subclass with its OWN asearch, so no double _pin_zh); a plain override-search-no-asearch subclass IS guarded to its sync search",
+      _s4i_cn_native and _s4i_guard_protects,
+      f"cn_native={_s4i_cn_native} guard_protects={_s4i_guard_protects} calls={_s4i_calls}")
+
+# (3) aget_json OFF-LOOP: the shared _openalex _sema is acquired OFF the loop (threading BoundedSemaphore,
+#     shared sync<->async cap), stubbing the async client so no real network fires.
+class _S4iFakeResp:
+    status_code = 200
+    headers: dict = {}
+
+    def json(self):
+        return _s4i_works
+
+    def raise_for_status(self):
+        pass
+
+
+class _S4iFakeClient:
+    async def get(self, url, params=None, timeout=None):
+        return _S4iFakeResp()
+
+
+_s4i_sema = _s4i_oa._sema
+_s4i_acq_tids, _s4i_oa_loop = [], {"tid": None}
+_s4i_r_acq = _s4i_sema.acquire
+_s4i_r_aclient = _s4i_oa._aget_client
+# The OFF-LOOP test drives aget_json with a FAKE client. Isolate every mutable guard state that can
+# reject or delay the call BEFORE that client: circuit, daily-budget lanes, and the shared rate pacer.
+# Save + restore the complete state so an earlier smoke check or a deploy host's live breaker cannot
+# leak into this thread-placement check, and this check cannot leak its successful probe into later ones.
+with _s4i_oa._lock:
+    _s4i_r_state = {
+        key: dict(value) if isinstance(value, dict) else value
+        for key, value in _s4i_oa._state.items()
+    }
+    _s4i_oa._state.update({
+        "fails": 0,
+        "open_until": 0.0,
+        "last_429": 0.0,
+        "dry_until": {"keyed": 0.0, "anon": 0.0},
+    })
+with _s4i_oa._pace_lock:
+    _s4i_r_next_at = _s4i_oa._pace_state["next_at"]
+    _s4i_oa._pace_state["next_at"] = 0.0
+_s4i_oa_offloop = False
+try:
+    def _s4i_spy_acq(*a, **k):
+        _s4i_acq_tids.append(_s4d_threading.get_ident())
+        return _s4i_r_acq(*a, **k)
+    _s4i_sema.acquire = _s4i_spy_acq
+    _s4i_oa._aget_client = lambda: _S4iFakeClient()
+
+    async def _s4i_oa_drive():
+        _s4i_oa_loop["tid"] = _s4d_threading.get_ident()
+        return await _s4i_oa.aget_json("/works", {"per-page": 1})
+    _s4i_oa_res = _s4e_aio.run(_s4i_oa_drive())
+    _s4i_olt = _s4i_oa_loop["tid"]
+    _s4i_oa_offloop = (bool(_s4i_acq_tids) and _s4i_olt is not None
+                       and all(t != _s4i_olt for t in _s4i_acq_tids) and _s4i_oa_res == _s4i_works)
+finally:
+    try:
+        del _s4i_sema.acquire
+    except Exception:  # noqa: BLE001
+        pass
+    _s4i_oa._aget_client = _s4i_r_aclient
+    with _s4i_oa._pace_lock:
+        _s4i_oa._pace_state["next_at"] = _s4i_r_next_at
+    with _s4i_oa._lock:
+        _s4i_oa._state.clear()
+        _s4i_oa._state.update(_s4i_r_state)
+check("S4i-OA: aget_json OFF-LOOP -- the shared _openalex _sema is acquired OFF the loop (a threading BoundedSemaphore, the cap stays shared sync<->async) and aget_json returns the parsed body via the async client",
+      _s4i_oa_offloop, f"offloop={_s4i_oa_offloop} acq={_s4i_acq_tids} loop={_s4i_oa_loop['tid']}")
+
+
+# ===========================================================================================
+# S4j-GH/SB: the GitHub + search-backend TIER-B sources go native async. _github gains aget_json (async
+#            twin of get_json, shared breaker/pacer/sema); _search_backend gains asearch_web (async twin of
+#            search_web, shared Brave 1qps gate + cooldown). Wired: github (standalone, serial multi-surface
+#            via aget_json + apost_json), github_trending (BaseAPIAdapter via _aapi_search + aget_json),
+#            search_index (config-driven _SearchVenue class, 10 rows, via asearch_web). nowcoder stays SYNC
+#            (CDP-primary; search_web only a fallback). Goldens: GATE + _github.aget_json off-loop sema +
+#            asearch_web async Brave path.
+# ---------------------------------------------------------------------------
+from penumbra.core import _github as _s4j_gh  # noqa: E402
+from penumbra.core.sources.api import _search_backend as _s4j_sb  # noqa: E402
+
+# (1) GATE (blind = one search_index row; the ONE _SearchVenue class converts all 10)
+_S4J = ["github", "github_trending", "blind"]
+_s4j_ok, _s4j_bad = [], []
+for _n in _S4J:
+    _a = _s4e_fetcher.get_adapter(_n)
+    (_s4j_ok if (_a is not None and isinstance(_a, _s4e_fetcher.AsyncSearchCapable))
+     else _s4j_bad).append(_n)
+check("S4j-GH/SB: GATE -- github + github_trending + a search_index row (the class covers all 10) are AsyncSearchCapable",
+      len(_s4j_ok) == 3 and not _s4j_bad, f"ok={len(_s4j_ok)}/3 bad={_s4j_bad}")
+
+
+# (2) _github.aget_json OFF-LOOP: the shared _github _sema is acquired OFF the loop (threading
+#     BoundedSemaphore, cap shared sync<->async), stubbing the async client.
+class _S4jGhResp:
+    status_code = 200
+    headers: dict = {}
+    text = ""
+
+    def json(self):
+        return {"ok": True}
+
+    def raise_for_status(self):
+        pass
+
+
+class _S4jGhClient:
+    async def get(self, url, params=None, headers=None, timeout=None):
+        return _S4jGhResp()
+
+
+_s4j_sema = _s4j_gh._sema
+_s4j_acq, _s4j_loop = [], {"tid": None}
+_s4j_r_acq, _s4j_r_ac = _s4j_sema.acquire, _s4j_gh._aget_client
+_s4j_gh_offloop = False
+try:
+    def _s4j_spy(*a, **k):
+        _s4j_acq.append(_s4d_threading.get_ident())
+        return _s4j_r_acq(*a, **k)
+    _s4j_sema.acquire = _s4j_spy
+    _s4j_gh._aget_client = lambda: _S4jGhClient()
+
+    async def _s4j_drive():
+        _s4j_loop["tid"] = _s4d_threading.get_ident()
+        return await _s4j_gh.aget_json("/rate_limit")
+    _s4j_res = _s4e_aio.run(_s4j_drive())
+    _s4j_glt = _s4j_loop["tid"]
+    _s4j_gh_offloop = (bool(_s4j_acq) and _s4j_glt is not None
+                       and all(t != _s4j_glt for t in _s4j_acq) and _s4j_res == {"ok": True})
+finally:
+    try:
+        del _s4j_sema.acquire
+    except Exception:  # noqa: BLE001
+        pass
+    _s4j_gh._aget_client = _s4j_r_ac
+check("S4j-GH/SB: _github.aget_json OFF-LOOP -- the shared _github _sema is acquired OFF the loop (threading BoundedSemaphore, cap shared sync<->async) and aget_json returns the parsed body via the async client",
+      _s4j_gh_offloop, f"offloop={_s4j_gh_offloop} acq={_s4j_acq} loop={_s4j_loop['tid']}")
+
+
+# (3) _search_backend.asearch_web -- the async Brave path returns [{title,url,snippet}] via the async
+#     client (the rate gate reserves the slot then anyio.sleeps OFF the lock, never a time.sleep on the loop).
+class _S4jBraveResp:
+    status_code = 200
+    headers: dict = {}
+
+    def json(self):
+        return {"web": {"results": [{"title": "T", "url": "https://x.invalid", "description": "snip"}]}}
+
+    def raise_for_status(self):
+        pass
+
+
+class _S4jBraveClient:
+    async def get(self, url, params=None, headers=None, timeout=None):
+        return _S4jBraveResp()
+
+    async def post(self, *a, **k):
+        return _S4jBraveResp()
+
+
+_s4j_r_key, _s4j_r_ac2 = _s4j_sb._brave_key, _s4j_sb._aget_client
+_s4j_sb_ok = False
+_s4j_web = []
+try:
+    _s4j_sb._brave_key = lambda: "fakekey"  # take the Brave path
+    _s4j_sb._aget_client = lambda: _S4jBraveClient()
+    _s4j_sb._brave_cooldown_until = 0.0
+    _s4j_web = _s4e_aio.run(_s4j_sb.asearch_web("site:x.invalid test", 3))
+    _s4j_sb_ok = (isinstance(_s4j_web, list) and len(_s4j_web) == 1
+                  and _s4j_web[0].get("url") == "https://x.invalid")
+finally:
+    _s4j_sb._brave_key = _s4j_r_key
+    _s4j_sb._aget_client = _s4j_r_ac2
+check("S4j-GH/SB: _search_backend.asearch_web -- the async Brave path returns [{title,url,snippet}] via the async client (rate gate reserves + anyio.sleep off the lock, not time.sleep on the loop)",
+      _s4j_sb_ok, f"ok={_s4j_sb_ok} n={len(_s4j_web)}")
+
+
+# ===========================================================================================
+# S4k: the FINAL async cohorts -- the two-layer slice + the bespoke raw-httpx tail. TWO-LAYER
+#      (apple_podcasts / europepmc / podcast_index / wikidata) got SE-style async assembly twins (an
+#      async _ato_documents that awaits the per-record enrichment egress, handed to the polymorphic
+#      _asearch_via). RAW-HTTPX (~30 bespoke: dblp/crossref/core/cordis_eu[35MB CSV via a per-source
+#      httpx.AsyncClient]/csrankings/nserc/cvf/v2ex/tieba/bilibili[per-call AsyncClient cookie jar]/mlrc/
+#      openreview/xiaoyuzhou/levels_fyi/...) got asearch via http.aget* or a per-source httpx.AsyncClient.
+#      Deferred (stay SYNC/legacy, correctly): nowcoder + news_scraper (CDP-primary). alphaxiv left
+#      this deferred set 2026-07-14: its keyless REST search/trending wiring made it AsyncSearchCapable
+#      (it now has real egress, so it joins the converted set). Built + adversarially verified (the verify caught an
+#      openreview inline auth.load off-loop gap, since fixed) + diff-reviewed (the CSV-cap / cookie-jar /
+#      login wrinkles spot-checked). GATE proves the async/sync split; the openreview off-loop fix is
+#      pinned by its own check.
+# ---------------------------------------------------------------------------
+# (1) TWO-LAYER GATE
+_S4K_TWOLAYER = ["apple_podcasts", "europepmc", "podcast_index", "wikidata_wikipedia", "wikidata_identity"]
+_s4k_tl_ok, _s4k_tl_bad = [], []
+for _n in _S4K_TWOLAYER:
+    _a = _s4e_fetcher.get_adapter(_n)
+    (_s4k_tl_ok if (_a is not None and isinstance(_a, _s4e_fetcher.AsyncSearchCapable))
+     else _s4k_tl_bad).append(_n)
+check("S4k: TWO-LAYER GATE -- apple_podcasts/europepmc/podcast_index/wikidata (both classes) are AsyncSearchCapable via their SE-style async assembly twins",
+      len(_s4k_tl_ok) == 5 and not _s4k_tl_bad, f"ok={len(_s4k_tl_ok)}/5 bad={_s4k_tl_bad}")
+
+# (2) RAW-HTTPX GATE (a representative confident-named subset of the ~30 converted) + DEFERRED still-sync
+_S4K_RAW = ["dblp", "crossref", "core", "cordis_eu", "cvf_openaccess", "v2ex", "tieba", "bilibili",
+            "mlrc", "openreview", "csrankings", "nserc_awards", "xiaoyuzhou", "levels_fyi", "alphaxiv"]
+_S4K_DEFERRED = ["nowcoder"]  # correctly NOT converted (CDP-primary) -> stays sync
+_s4k_raw_ok, _s4k_raw_bad = [], []
+for _n in _S4K_RAW:
+    _a = _s4e_fetcher.get_adapter(_n)
+    (_s4k_raw_ok if (_a is not None and isinstance(_a, _s4e_fetcher.AsyncSearchCapable))
+     else _s4k_raw_bad).append(_n)
+_s4k_def_ok, _s4k_def_bad = [], []
+for _n in _S4K_DEFERRED:
+    _a = _s4e_fetcher.get_adapter(_n)
+    (_s4k_def_ok if (_a is not None and not isinstance(_a, _s4e_fetcher.AsyncSearchCapable))
+     else _s4k_def_bad).append(_n)
+check("S4k: RAW-HTTPX GATE -- a representative 15 of the converted raw-httpx sources are AsyncSearchCapable (incl. alphaxiv, now keyless-REST wired); the deferred nowcoder (CDP-primary) stays SYNC",
+      (len(_s4k_raw_ok) == 15 and not _s4k_raw_bad and len(_s4k_def_ok) == 1 and not _s4k_def_bad),
+      f"raw_ok={len(_s4k_raw_ok)}/15 raw_bad={_s4k_raw_bad} def_ok={len(_s4k_def_ok)}/1 def_bad={_s4k_def_bad}")
+
+
+# ---------------------------------------------------------------------------
+# slideslive-search: _parse_search_fragment is a PURE parse (no network) of the SlidesLive
+# library-search HTML -> {id,url,title,thumbnail?,duration?}. Golden it offline on a SMALL
+# recorded 2-card fragment (real ids/titles/thumbnails/durations captured 2026-07-14 from
+# /search/presentations?query=reinforcement+learning), mirroring the real DOM: a <turbo-frame>
+# wrapping cards, each with a thumbnail anchor (img alt + a sibling MM:SS badge) AND an <h4>
+# title anchor sharing the ?ref=search-presentations href. Locks turbo-frame narrowing, per-id
+# dedup of the twin anchors, title/thumbnail/duration extraction, and the ?ref-stripped url.
+# ---------------------------------------------------------------------------
+from penumbra.core.sources.scrape.slideslive_talks_source import (  # noqa: E402
+    _parse_search_fragment as _fx_sl_parse)
+
+_fx_sl_html = """<turbo-frame id="search_presentations_results">
+  <div class="tw-group">
+    <div class="tw-relative tw-pb-9/16">
+      <a data-turbo-frame="_top" href="https://slideslive.com/39044466/beyond-data-driven-the-rise-of-self-improving-computer-agents?ref=search-presentations">
+        <img src="https://ma.slideslive.com/library/presentations/39044466/thumbnail/x_QYiE2e_small.jpg" alt="Beyond Data  Driven: The Rise of Self - Improving Computer Agents" loading="lazy"></img>
+      </a>
+      <div class="tw-absolute tw-bottom-2 tw-right-2"><div class="tw-bg-dark/89">22:59</div></div>
+    </div>
+    <h4><a data-turbo-frame="_top" href="https://slideslive.com/39044466/beyond-data-driven-the-rise-of-self-improving-computer-agents?ref=search-presentations">Beyond Data  Driven: The Rise of Self - Improving Computer Agents</a></h4>
+  </div>
+  <div class="tw-group">
+    <div class="tw-relative tw-pb-9/16">
+      <a data-turbo-frame="_top" href="https://slideslive.com/39044449/empowerment-gain-and-causal-learning?ref=search-presentations">
+        <img src="https://ma.slideslive.com/library/presentations/39044449/thumbnail/y_6HSTZR_small.png" alt="Empowerment Gain and Causal Learning" loading="lazy"></img>
+      </a>
+      <div class="tw-absolute tw-bottom-2 tw-right-2"><div class="tw-bg-dark/89">30:02</div></div>
+    </div>
+    <h4><a data-turbo-frame="_top" href="https://slideslive.com/39044449/empowerment-gain-and-causal-learning?ref=search-presentations">Empowerment Gain and Causal Learning</a></h4>
+  </div>
+</turbo-frame>"""
+
+try:
+    _fx_sl_out = _fx_sl_parse(_fx_sl_html)
+except Exception as _fx_sl_exc:  # a parse crash must fail the check, not sink smoke
+    _fx_sl_out = []
+_fx_sl_by = {r.get("id"): r for r in _fx_sl_out}
+check("slideslive-search: _parse_search_fragment extracts >=1 hit with {id,url,title} (2-card recorded fragment; twin anchors deduped per id; title/thumb/duration + ?ref-stripped url)",
+      len(_fx_sl_out) == 2
+      and all(r.get("id") and r.get("url") and r.get("title") for r in _fx_sl_out)
+      and _fx_sl_by.get("39044466", {}).get("url") == "https://slideslive.com/39044466/beyond-data-driven-the-rise-of-self-improving-computer-agents"
+      and _fx_sl_by.get("39044466", {}).get("title") == "Beyond Data Driven: The Rise of Self - Improving Computer Agents"
+      and _fx_sl_by.get("39044466", {}).get("duration") == "22:59"
+      and (_fx_sl_by.get("39044466", {}).get("thumbnail") or "").endswith("_small.jpg")
+      and _fx_sl_by.get("39044449", {}).get("title") == "Empowerment Gain and Causal Learning",
+      f"n={len(_fx_sl_out)} out={_fx_sl_out}")
+
+
+# ---------------------------------------------------------------------------
+# alphaxiv: the keyless-REST wiring (2026-07-14). Trending feed + minimal search + the
+# fetch_url community/AI-overview enrich are exercised offline against captured JSON
+# fixtures (http.get_json stubbed; the arxiv delegation stubbed with a fake adapter).
+# ---------------------------------------------------------------------------
+import penumbra.core.sources.api.alphaxiv_source as _ax  # noqa: E402
+
+# Captured-shape fixtures (the endpoint payload shapes verified keyless 2026-07-14).
+_ax_feed = {"papers": [
+    {"universal_paper_id": "2110.02711", "title": "StyleCLIP: Text-Driven Manipulation",
+     "abstract": "We present StyleCLIP, a method for text-driven image manipulation.",
+     "authors": ["Or Patashnik", "Zongze Wu"],
+     "topics": ["Computer Vision", "Generative Models"],
+     "metrics": {"visits_count": {"all": 4821}, "public_total_votes": 37},
+     "first_publication_date": "2021-10-06",
+     "github_url": "https://github.com/orpatashnik/StyleCLIP",
+     "organization_info": [{"name": "Tel Aviv University"}]},
+    {"universal_paper_id": "2203.02155", "title": "Training LMs to follow instructions",
+     "abstract": "InstructGPT: aligning language models with human feedback.",
+     "authors": [{"name": "Long Ouyang"}],  # authors may be dicts too
+     "topics": ["NLP"],
+     "metrics": {"visits_count": {"all": 9002}, "public_total_votes": 121},
+     "first_publication_date": "2022-03-04T00:00:00Z",
+     "organization_info": [{"name": "OpenAI"}]},
+    {"title": "no universal_paper_id -> must be dropped, not invented", "abstract": "x"},
+]}
+_ax_search = [
+    {"link": "/abs/2110.02711", "paperId": "p1", "title": "StyleCLIP", "snippet": "text-driven manipulation"},
+    {"link": "/abs/2203.02155", "paperId": "p2", "title": "InstructGPT", "snippet": "instruction following"},
+]
+_ax_legacy = {
+    "paper": {"paper_version": {"id": "ver-uuid-123", "title": "StyleCLIP",
+                                "abstract": "...", "publication_date": "2021-10-06"}},
+    "comments": [
+        {"id": "c1", "title": "Great method",
+         "body": "The CLIP-guided latent optimization is elegant. " * 20,  # >300 -> compact truncates
+         "upvotes": 12, "author": {"username": "reviewer_a"}, "responses": []},
+        {"id": "c2", "title": "Question on runtime",
+         "body": "How long does one edit take on a single GPU?",
+         "upvotes": 3, "author": {"username": "reader_b"}},
+    ],
+}
+_ax_overview = {"overview": "This paper introduces StyleCLIP, combining StyleGAN with CLIP for "
+                           "text-driven edits without per-manipulation supervision. " * 8}  # >500 -> excerpt
+
+
+def _ax_stub(url, params=None, timeout=None, **k):
+    if "/papers/v3/feed" in url:
+        return _ax_feed
+    if "/search/v2/paper/fast" in url:
+        return _ax_search
+    if "/papers/v3/legacy/" in url:
+        return _ax_legacy
+    if url.endswith("/overview/en"):
+        return _ax_overview
+    return None
+
+
+_ax_a = fetcher.get_adapter("alphaxiv")
+check("alphaxiv: registered + keyless (needs_credentials False) + AsyncSearchCapable",
+      _ax_a is not None and _ax_a.needs_credentials is False
+      and isinstance(_ax_a, fetcher.AsyncSearchCapable))
+
+# -- trending feed (search("") -> the unique buzz docs) + minimal keyword search --
+# Bypass the disk cache so the stub is authoritative and the run is deterministic.
+_ax_gd, _ax_sd, _ax_gj = _ax.cache.get_docs, _ax.cache.set_docs, _ax.http.get_json
+_ax.cache.get_docs = lambda *a, **k: None
+_ax.cache.set_docs = lambda *a, **k: None
+_ax.http.get_json = _ax_stub
+try:
+    _ax_trend = _ax_a.search("")            # empty query -> trending feed
+    _ax_srch = _ax_a.search("styleclip")    # non-empty -> minimal search branch
+finally:
+    _ax.cache.get_docs, _ax.cache.set_docs, _ax.http.get_json = _ax_gd, _ax_sd, _ax_gj
+
+_ax_t0 = _ax_trend[0] if _ax_trend else None
+check("alphaxiv: search('') -> trending docs carrying views+votes engagement signals + the alphaxiv url "
+      "(no-id paper dropped, dict-author coerced, ISO + date-only both parse)",
+      len(_ax_trend) == 2 and _ax_t0 is not None
+      and _ax_t0.source == "alphaxiv" and _ax_t0.source_id == "2110.02711"
+      and _ax_t0.url == "https://www.alphaxiv.org/abs/2110.02711"
+      and _ax_t0.signals["views"].value == 4821.0 and _ax_t0.signals["views"].kind == "engagement"
+      and _ax_t0.signals["votes"].value == 37.0 and _ax_t0.signals["votes"].kind == "engagement"
+      and _ax_t0.author == "Or Patashnik, Zongze Wu"
+      and "Computer Vision" in _ax_t0.tags and "Tel Aviv University" in _ax_t0.tags
+      and _ax_t0.date is not None
+      and _ax_trend[1].author == "Long Ouyang" and _ax_trend[1].date is not None,
+      detail=f"n={len(_ax_trend)}")
+check("alphaxiv: search(query) -> minimal search docs on the alphaxiv.org url + snippet content",
+      len(_ax_srch) == 2 and _ax_srch[0].source == "alphaxiv"
+      and _ax_srch[0].url == "https://www.alphaxiv.org/abs/2110.02711"
+      and _ax_srch[0].content == "text-driven manipulation" and _ax_srch[0].source_id == "p1")
+
+# -- fetch_url enrich: keep the arxiv base doc, then fold in community + AI overview --
+class _AxFakeArxiv:  # stands in for the real arxiv adapter (no network in smoke)
+    def fetch_url(self, url):
+        return Document(
+            source="arxiv", source_id="2110.02711", url=url,
+            title="StyleCLIP: Text-Driven Manipulation of StyleGAN Imagery",
+            content="StyleCLIP is a text-driven image manipulation method using CLIP.",
+            author="Or Patashnik", tags=["cs.CV"])
+
+
+_ax_orig_ga, _ax_gj2 = fetcher.get_adapter, _ax.http.get_json
+fetcher.get_adapter = lambda n: _AxFakeArxiv() if n == "arxiv" else _ax_orig_ga(n)
+_ax.http.get_json = _ax_stub
+try:
+    _ax_enr = _ax_a.fetch_url("https://www.alphaxiv.org/abs/2110.02711")
+    # best-effort: a legacy failure (get_json -> None) skips enrich but keeps the base doc intact
+    _ax.http.get_json = lambda *a, **k: None
+    _ax_bare = _ax_a.fetch_url("https://www.alphaxiv.org/abs/2110.02711")
+finally:
+    fetcher.get_adapter, _ax.http.get_json = _ax_orig_ga, _ax_gj2
+
+_ax_cmts = (_ax_enr.metadata.get("alphaxiv_comments") if _ax_enr else None) or []
+check("alphaxiv: fetch_url keeps the arxiv base doc AND folds community discussion + AI overview "
+      "into content + metadata (best-effort enrich, base abstract preserved)",
+      _ax_enr is not None and _ax_enr.source == "alphaxiv"
+      and _ax_enr.url == "https://www.alphaxiv.org/abs/2110.02711"
+      and _ax_enr.metadata.get("arxiv_id") == "2110.02711"
+      and "StyleCLIP is a text-driven image manipulation method" in _ax_enr.content  # base preserved
+      and len(_ax_cmts) == 2 and _ax_cmts[0]["author"] == "reviewer_a"
+      and len(_ax_cmts[0]["body"]) <= 300  # compact truncation
+      and "Community discussion (2 threads)" in _ax_enr.content
+      and (_ax_enr.metadata.get("alphaxiv_overview") or "").startswith("This paper introduces StyleCLIP")
+      and "alphaXiv AI overview:" in _ax_enr.content,
+      detail=f"comments={len(_ax_cmts)}")
+check("alphaxiv: fetch_url enrich is best-effort -- a legacy failure yields the base doc unchanged (no crash)",
+      _ax_bare is not None and _ax_bare.source == "alphaxiv"
+      and "alphaxiv_comments" not in _ax_bare.metadata
+      and "alphaxiv_overview" not in _ax_bare.metadata
+      and _ax_bare.content == "StyleCLIP is a text-driven image manipulation method using CLIP.")
+# 2026-07-23 false-down fix: /papers/v3/feed 400s WITHOUT pageNum, so the health probe (which omitted
+# it) reported HTTP 400 -> down while search + trending both work. The probe must send pageNum=0.
+import inspect as _insp_ax  # noqa: E402
+check("alphaxiv: health_check probes /papers/v3/feed WITH pageNum (required param; omitting it 400s = false-down)",
+      "pageNum" in _insp_ax.getsource(_ax.AlphaXivAdapter.health_check))
+
+
 print()
+# ===========================================================================================
+# JOB FLEET DASHBOARD + WECOM DIGEST (2026-07-14): a readable control-panel for the background-job
+#   fleet (folded into penumbra_sources check_health's system.jobs) + the weekly digest push routed to
+#   企业微信 (WeCom) instead of Bark. All PURE / OFFLINE.
+# ---------------------------------------------------------------------------
+from penumbra.core import jobs as _fj_jobs  # noqa: E402
+
+# --- _next_slot: forward-looking next firing (the dashboard's next_run), never raises.
+_fj_now = 1_000_000.0
+check("fleet _next_slot(interval) = (last_run or now) + period, floored at now",
+      _fj_jobs._next_slot(_fj_jobs.parse_schedule("every:3600s"), _fj_now, _fj_now - 600) == _fj_now + 3000)
+_fj_daily_ns = _fj_jobs._next_slot(_fj_jobs.parse_schedule("daily@23:59"), _fj_now, None)
+check("fleet _next_slot(calendar) returns a strictly-future epoch",
+      isinstance(_fj_daily_ns, float) and _fj_daily_ns > _fj_now)
+_fj_m31 = _fj_jobs._next_slot(_fj_jobs.parse_schedule("monthly@31-06:00"), _fj_now, None)
+check("fleet _next_slot(monthly@31) returns float-or-None (skips a nonexistent day, never raises)",
+      _fj_m31 is None or isinstance(_fj_m31, float))
+
+# --- fleet_status: one row per shipped job, the dashboard keys, a non-empty desc, schedule matches;
+#     the digest row's desc carries WHY it is off (the themes-file requirement -- the observability win).
+_fj_reg0, _fj_ship0 = dict(_fj_jobs._REGISTRY), _fj_jobs._shipped_registered
+try:
+    _fj_jobs._REGISTRY.clear(); _fj_jobs._shipped_registered = False
+    _fj_all = _fj_jobs.fleet_status()  # registers the shipped fleet, then reports it
+    _FJ_KEYS = {"name", "schedule", "enabled", "last_run", "next_run", "budget_s", "desc"}
+    check("fleet_status: one row per registered job, each with the dashboard keys + non-empty desc + matching schedule",
+          len(_fj_all) == len(_fj_jobs.registry()) and all(set(r) == _FJ_KEYS for r in _fj_all)
+          and all(r["desc"] and r["schedule"] == _fj_jobs.registry()[r["name"]].schedule.raw
+                  for r in _fj_all))
+    check("fleet_status: the digest row's desc names WHY it is off (the digest-themes.json requirement)",
+          "digest-themes.json" in next(r for r in _fj_all if r["name"] == "digest")["desc"])
+finally:
+    _fj_jobs._REGISTRY.clear(); _fj_jobs._REGISTRY.update(_fj_reg0)
+    _fj_jobs._shipped_registered = _fj_ship0
+
+# --- fleet_status: an ENABLED job reports a next_run; a DISABLED one reports next_run=None.
+_fj_reg1, _fj_state1, _fj_ship1 = dict(_fj_jobs._REGISTRY), _fj_jobs.STATE_PATH, _fj_jobs._shipped_registered
+try:
+    _fj_jobs.STATE_PATH = _Path44(_tf57.mkdtemp()) / "s.json"  # empty state -> last_run None
+    _fj_jobs._REGISTRY.clear(); _fj_jobs._shipped_registered = True  # skip re-register; use our 2 rows
+    _fj_jobs.register_job("fj_on", "every:60s", lambda: None, enabled=True, description="on")
+    _fj_jobs.register_job("fj_off", "every:60s", lambda: None, enabled=False, description="off")
+    _fj_rows = {r["name"]: r for r in _fj_jobs.fleet_status()}
+    check("fleet_status: ENABLED -> a next_run, DISABLED -> next_run None",
+          _fj_rows["fj_on"]["next_run"] is not None and _fj_rows["fj_off"]["next_run"] is None)
+finally:
+    _fj_jobs.STATE_PATH = _fj_state1
+    _fj_jobs._REGISTRY.clear(); _fj_jobs._REGISTRY.update(_fj_reg1)
+    _fj_jobs._shipped_registered = _fj_ship1
+
+# --- wecom_push: fail-open (absent creds -> no-op) + the WeCom markdown payload shape.
+from penumbra.core import notify as _fj_notify  # noqa: E402
+import httpx as _fj_httpx  # noqa: E402
+_fj_posts: list = []
+_fj_post_save, _fj_creds_save = _fj_httpx.post, _fj_notify._WECOM_CREDS_PATH
+_fj_cred_dir = _Path44(_tf57.mkdtemp())
+try:
+    _fj_httpx.post = lambda url, **kw: _fj_posts.append((url, kw))
+    _fj_notify._WECOM_CREDS_PATH = _fj_cred_dir / "absent.json"
+    _fj_notify.wecom_push("t", "b")
+    check("wecom_push: an absent creds file is a fail-open no-op (never posts, never raises)",
+          _fj_posts == [])
+    _fj_wc = _fj_cred_dir / "wecom.json"
+    _fj_wc.write_text('{"webhook_url": "https://qyapi.weixin.qq.com/x?key=K"}', encoding="utf-8")
+    _fj_notify._WECOM_CREDS_PATH = _fj_wc
+    _fj_notify.wecom_push("周报", "- a\n- b")
+    check("wecom_push: POSTs a WeCom markdown message ({msgtype:markdown, markdown.content}) to the webhook",
+          len(_fj_posts) == 1 and _fj_posts[0][0] == "https://qyapi.weixin.qq.com/x?key=K"
+          and _fj_posts[0][1]["json"]["msgtype"] == "markdown"
+          and "周报" in _fj_posts[0][1]["json"]["markdown"]["content"])
+finally:
+    _fj_httpx.post, _fj_notify._WECOM_CREDS_PATH = _fj_post_save, _fj_creds_save
+
+# --- run_digest: routes to WeCom ONLY (not Bark), agent-first with a mechanical LINK fallback. Stub
+#     the briefing agent -> None (force the fallback, and never hit the real frontier API in smoke).
+import penumbra.core.infra_jobs as _fj_ij  # noqa: E402
+import penumbra.core.fetcher as _fj_fetcher  # noqa: E402
+import penumbra.core.briefing as _fj_brief  # noqa: E402
+_fj_wecom_calls, _fj_bark_calls = [], []
+_fj_themes_save, _fj_dig_save = _fj_ij._load_digest_themes, _fj_ij._DIGEST_DIR
+_fj_wpush_save, _fj_bpush_save = _fj_notify.wecom_push, _fj_notify.alert
+_fj_sr_save, _fj_bb_save = _fj_fetcher.search_ranked, _fj_brief.build_briefing
+try:
+    _fj_ij._DIGEST_DIR = _Path44(_tf57.mkdtemp())
+    _fj_ij._load_digest_themes = lambda: [{"label": "T", "query": "q", "sources": None}]
+    _fj_notify.wecom_push = lambda title, body: _fj_wecom_calls.append(title)
+    _fj_notify.alert = lambda *a, **k: _fj_bark_calls.append(a)
+    _fj_brief.build_briefing = lambda themes: None            # agent unavailable -> mechanical fallback
+    _fj_fetcher.search_ranked = lambda *a, **k: ([], {})       # empty digest, still pushes the note
+    _fj_dout = _fj_ij.run_digest()
+    check("digest: agent-None falls back to the LINK digest, pushes WeCom ONLY (bark NOT) + writes latest.md",
+          len(_fj_wecom_calls) == 1 and _fj_bark_calls == []
+          and (_fj_ij._DIGEST_DIR / "latest.md").exists()
+          and _fj_dout.get("themes") == 1 and _fj_dout.get("mode") == "links")
+finally:
+    _fj_ij._load_digest_themes, _fj_ij._DIGEST_DIR = _fj_themes_save, _fj_dig_save
+    _fj_notify.wecom_push, _fj_notify.alert = _fj_wpush_save, _fj_bpush_save
+    _fj_fetcher.search_ranked, _fj_brief.build_briefing = _fj_sr_save, _fj_bb_save
+
+# --- briefing AGENT (Phase 1): the read-only SANDBOX (only whitelisted tools run) + fail-open + loop.
+from penumbra.core import briefing as _bfa  # noqa: E402
+check("briefing sandbox: the tool whitelist is exactly READ-ONLY penumbra_search + brain_read (no write/shell tool)",
+      set(_bfa._TOOLS) == {"penumbra_search", "brain_read"})
+check("briefing sandbox: a non-whitelisted tool name is REFUSED (error, never executed) -- the structural gate",
+      "not available" in _bfa._exec_tool("brain_note", "{}")
+      and "not available" in _bfa._exec_tool("os.system", '{"cmd":"rm -rf /"}'))
+check("briefing sandbox: brain_read sanitizes the id so a tool arg cannot escape the notes dir",
+      "not found" in _bfa._read_brain_note("../../etc/passwd"))
+# EGRESS BOUNDARY (adversarial audit 2026-07-15, the one confirmed hole): the read-only search must
+# NEVER fetch a CALLER-chosen URL -- else the untrusted model names a URL-drill source ('pdf') with an
+# attacker URL and turns penumbra_search into arbitrary external egress (exfil of the preloaded context). A
+# URL query is refused BEFORE search_ranked; a normal keyword query + a NAMED source still reaches it
+# unchanged (zero capability loss -- the fix is at the QUERY layer, not a source denylist).
+import penumbra.core.fetcher as _bf_fetch  # noqa: E402
+_bf_sr_save = _bf_fetch.search_ranked
+_bf_sr_calls = []
+try:
+    _bf_fetch.search_ranked = lambda q, s, l, **k: (_bf_sr_calls.append((q, s)) or ([], {}))
+    _bf_url_res = _bfa._t_eye_search({"query": "https://attacker.example/pdf/LEAK", "sources": ["pdf"]})
+    check("briefing egress: a URL query is REFUSED before search_ranked (no caller-URL fetch, no exfil channel)",
+          "URL" in _bf_url_res and _bf_sr_calls == [])
+    _bfa._t_eye_search({"query": "canada nlp postdoc", "sources": ["arxiv"], "limit": 5})
+    check("briefing egress: a keyword query + NAMED source still reaches search_ranked unchanged (capability kept)",
+          len(_bf_sr_calls) == 1 and _bf_sr_calls[0][0] == "canada nlp postdoc" and _bf_sr_calls[0][1] == ["arxiv"])
+finally:
+    _bf_fetch.search_ranked = _bf_sr_save
+_bf_cred_save = _bfa._FRONTIER_CREDS
+try:
+    _bfa._FRONTIER_CREDS = _Path44(_tf57.mkdtemp()) / "absent.json"
+    check("briefing: no frontier creds -> build_briefing returns None (fail-open to the link digest)",
+          _bfa.build_briefing([{"label": "T", "query": "q"}]) is None)
+finally:
+    _bfa._FRONTIER_CREDS = _bf_cred_save
+# stateless tool loop: function_call -> our mediated executor -> function_call_output -> final message.
+_bf_post_save, _bf_creds_save2, _bf_exec_save = _bfa._post_responses, _bfa._load_creds, _bfa._exec_tool
+_bf_spy = {"n": 0, "name": None}
+try:
+    _bfa._load_creds = lambda: {"api_key": "k", "base_url": "http://x", "model": "m"}
+    _bf_turns = iter([
+        (200, {"output": [{"type": "function_call", "call_id": "c1", "name": "penumbra_search",
+                           "arguments": '{"query":"x"}'}]}),
+        (200, {"output": [{"type": "message", "content": [{"text": "本周简报 OK"}]}]})])
+    _bfa._post_responses = lambda client, creds, inp, tools: next(_bf_turns)
+    def _bf_spy_exec(name, arguments):
+        _bf_spy["n"] += 1
+        _bf_spy["name"] = name
+        return "stub result"
+    _bfa._exec_tool = _bf_spy_exec
+    _bf_out = _bfa.build_briefing([{"label": "T", "query": "q"}])
+    check("briefing tool loop: function_call routes through the mediated executor, then a final message is returned",
+          _bf_out == "本周简报 OK" and _bf_spy["n"] == 1 and _bf_spy["name"] == "penumbra_search")
+finally:
+    _bfa._post_responses, _bfa._load_creds, _bfa._exec_tool = _bf_post_save, _bf_creds_save2, _bf_exec_save
+
+
+# ── ABSORB 2026-07-21: architecture-peer deep-dive landings (7 zero-dep gems) ────────────────────
+# Golden fixtures for the gems absorbed from tldw_server / PaSa-OpenScholar / Scrapling. Each is an
+# offline, pure-or-monkeypatched invariant; the source-substring checks pin behavior with no import.
+import ipaddress as _abs_ipa
+import socket as _abs_sock
+import tempfile as _abs_tmp
+import time as _abs_time
+from pathlib import Path as _abs_Path
+
+# (1) _netguard: cloud-metadata + CGNAT denylist (closes the Py3.13 is_private drift leak).
+from penumbra.core import _netguard as _abs_ng
+check("absorb/netguard: cloud-metadata + CGNAT IPs blocked; public + fake-IP still allowed",
+      all(_abs_ng.ip_is_blocked(_abs_ipa.ip_address(s)) for s in
+          ("169.254.169.254", "169.254.170.2", "100.100.100.200", "168.63.129.16", "fd00:ec2::254", "100.64.1.1"))
+      and not any(_abs_ng.ip_is_blocked(_abs_ipa.ip_address(s)) for s in ("8.8.8.8", "1.1.1.1", "198.18.0.5")),
+      "metadata/CGNAT must block; 8.8.8.8 / 198.18.0.5 must pass")
+
+# (2) _netguard: bounded getaddrinfo -- a slow resolver returns within budget, fail-closed to 'dns'.
+_abs_gai_save = _abs_sock.getaddrinfo
+_abs_dns_save = _abs_ng._DNS_TIMEOUT_S
+_abs_ng._DNS_TIMEOUT_S = 0.5
+_abs_sock.getaddrinfo = lambda *a, **k: (_abs_time.sleep(5), _abs_gai_save(*a, **k))[1]
+try:
+    _abs_t0 = _abs_time.time()
+    _abs_ip, _abs_fam, _abs_reason = _abs_ng._resolve_safe_ip("smoke-bounded.invalid.example")
+    _abs_dt = _abs_time.time() - _abs_t0
+finally:
+    _abs_sock.getaddrinfo = _abs_gai_save
+    _abs_ng._DNS_TIMEOUT_S = _abs_dns_save
+check("absorb/netguard: slow resolver bounded to timeout, fail-closed to 'dns'",
+      _abs_reason == "dns" and _abs_ip is None and _abs_dt < 2.5, f"dt={_abs_dt:.2f}s reason={_abs_reason}")
+
+# (3)+(4) sensor: baseline stays bounded over fast-moving runs; notify_if filters the Bark.
+from penumbra.core import sensor as _abs_sen, fetcher as _abs_fet
+
+
+class _AbsDoc:
+    def __init__(self, source, sid, title, content=""):
+        self.source, self.source_id, self.title, self.content = source, sid, title, content
+
+
+_abs_store = _abs_sen.SensorStore(_abs_Path(_abs_tmp.mkdtemp()) / "abs_sensors.json")
+_abs_store.update(_abs_sen.Sensor(id="abs_cap", query="q"))
+_abs_sr_save = _abs_fet.search_ranked
+_abs_run = {"i": 0}
+
+
+def _abs_fake_sr(query, sources=None, limit=15, **k):
+    base = _abs_run["i"] * 1000  # every run returns `limit` FRESH keys (worst case for growth)
+    _abs_run["i"] += 1
+    return [_AbsDoc("src", str(base + j), f"title {base + j}") for j in range(limit)], {}
+
+
+_abs_fet.search_ranked = _abs_fake_sr
+try:
+    _abs_sizes, _abs_news = [], []
+    for _ in range(20):
+        _abs_sum = _abs_sen.run_sensor(_abs_store.get("abs_cap"), _abs_store, limit=15)
+        _abs_sizes.append(_abs_sum["baseline_size"])
+        _abs_news.append(_abs_sum["new_count"])
+    _abs_cap = max(15 * 10, 200)
+    check("absorb/sensor: baseline bounded (<= cap) over 20 all-fresh runs (was a monotonic union)",
+          max(_abs_sizes) <= _abs_cap, f"max baseline {max(_abs_sizes)} > cap {_abs_cap}")
+    check("absorb/sensor: novelty still detected every run (all-fresh -> new_count == limit)",
+          all(n == 15 for n in _abs_news), f"new_counts head={_abs_news[:4]}")
+
+    _abs_store2 = _abs_sen.SensorStore(_abs_Path(_abs_tmp.mkdtemp()) / "abs_sensors2.json")
+    _abs_store2.update(_abs_sen.Sensor(id="abs_notify", query="q2", notify=True, notify_if=["h-1b"]))
+    _abs_fet.search_ranked = lambda query, sources=None, limit=15, **k: (
+        [_AbsDoc("src", "n1", "New H-1B visa cap update"), _AbsDoc("src", "n2", "Unrelated GPU pricing")], {})
+    _abs_sum2 = _abs_sen.run_sensor(_abs_store2.get("abs_notify"), _abs_store2, limit=15)
+    check("absorb/sensor: notify_if narrows the Bark to matching new docs only (any-new stays default)",
+          _abs_sum2["notify_new_count"] == 1 and _abs_sum2["new_count"] == 2
+          and _abs_sum2["notify_titles"] == ["New H-1B visa cap update"],
+          f"notify_new_count={_abs_sum2.get('notify_new_count')} titles={_abs_sum2.get('notify_titles')}")
+finally:
+    _abs_fet.search_ranked = _abs_sr_save
+
+# (5) cartographer: field_skeleton query_relevance stamp (passive metadata, never re-sorts).
+from penumbra.core import cartographer as _abs_cart
+
+_abs_works = {
+    "W1": {"title": "reinforcement learning reward model shaping", "concepts": [],
+           "referenced_works": [], "cited_by_count": 5, "publication_year": 2024},
+    "W2": {"title": "convolutional image segmentation networks", "concepts": [],
+           "referenced_works": [], "cited_by_count": 5, "publication_year": 2024},
+}
+_abs_bq = _abs_cart._build(["W1"], _abs_works, 250, query="reward model")
+_abs_bn = _abs_cart._build(["W1"], _abs_works, 250)
+_abs_qr = {n["id"]: n.get("query_relevance") for n in _abs_bq["nodes"]}
+check("absorb/cartographer: query_relevance stamps neighborhood (on-query > off-query), absent w/o query",
+      (_abs_qr.get("W1") or 0) > (_abs_qr.get("W2") or 0)
+      and all("query_relevance" not in n for n in _abs_bn["nodes"]), f"qr={_abs_qr}")
+
+# (6) normalize: selector_drift_hint names the drifted cluster; None on a healthy page; never substitutes.
+from penumbra.core import normalize as _abs_norm
+
+_abs_healthy = '<div class="feeds">' + '<section class="note-item"><div>card</div></section>' * 3 + '</div>'
+_abs_drifted = _abs_healthy.replace("note-item", "note-card-v2")
+check("absorb/normalize: selector_drift_hint names the drifted cluster, None on a healthy page",
+      _abs_norm.selector_drift_hint(_abs_healthy, "section.note-item") is None
+      and (_abs_norm.selector_drift_hint(_abs_drifted, "section.note-item") or "").startswith("note-card-v2"),
+      f"drift={_abs_norm.selector_drift_hint(_abs_drifted, 'section.note-item')}")
+
+# (7) _cdp: cdp_health surfaces the active engine + the vanilla-playwright fallback warns (source-substring, offline).
+_abs_cdp_src = (ROOT / "src" / "penumbra" / "core" / "sources" / "walled" / "_cdp.py").read_text(encoding="utf-8")
+_abs_cdp_health = _abs_cdp_src.split("def cdp_health")[1] if "def cdp_health" in _abs_cdp_src else ""
+check("absorb/_cdp: cdp_health interpolates the active engine (via {_CDP_ENGINE})",
+      "_CDP_ENGINE" in _abs_cdp_health and "via {" in _abs_cdp_health, "cdp_health must surface _CDP_ENGINE")
+check("absorb/_cdp: the vanilla-playwright fallback warns about degraded stealth",
+      "patchright unavailable" in _abs_cdp_src and '_CDP_ENGINE = "playwright"' in _abs_cdp_src,
+      "the fallback must warn + set the engine")
+
+# (8)+(9) sensor absence/disappearance detection (Huginn GapDetectorAgent, stable-source-scoped).
+check("absorb/sensor: absence_diff -> went-dark yes; content-change (new fp, same prefix) no; churny source ignored",
+      _abs_sen.absence_diff([["page_watch", "mom_ep:abc"]], set()) == {"page_watch:mom_ep"}
+      and _abs_sen.absence_diff([["page_watch", "mom_ep:abc"]], {("page_watch", "mom_ep:def")}) == set()
+      and _abs_sen.absence_diff([["arxiv", "2301.1"]], set()) == set(),
+      "went-dark -> gone; fp-change -> not gone; non-stable source -> ignored")
+
+_abs_store3 = _abs_sen.SensorStore(_abs_Path(_abs_tmp.mkdtemp()) / "abs_sensors3.json")
+_abs_store3.update(_abs_sen.Sensor(id="abs_gone", query="policy", sources=["page_watch"],
+                                   notify=True, detect_absence=True))
+_abs_pw = {"i": 0}
+_abs_sr_save3 = _abs_fet.search_ranked
+
+
+def _abs_pw_sr(query, sources=None, limit=15, **k):
+    docs = [_AbsDoc("page_watch", "mom_ep:aaa", "MOM EP")] if _abs_pw["i"] == 0 else []  # run 0 present, then gone
+    _abs_pw["i"] += 1
+    return docs, {}
+
+
+_abs_fet.search_ranked = _abs_pw_sr
+try:
+    _abs_r0 = _abs_sen.run_sensor(_abs_store3.get("abs_gone"), _abs_store3, limit=15)  # present -> new, no gone
+    _abs_r1 = _abs_sen.run_sensor(_abs_store3.get("abs_gone"), _abs_store3, limit=15)  # vanished -> fire once
+    _abs_r2 = _abs_sen.run_sensor(_abs_store3.get("abs_gone"), _abs_store3, limit=15)  # still gone -> latched, 0
+finally:
+    _abs_fet.search_ranked = _abs_sr_save3
+check("absorb/sensor: detect_absence fires once on disappearance, then latches (no repeat-Bark), default off elsewhere",
+      _abs_r0["gone_count"] == 0 and _abs_r1["gone_count"] == 1
+      and _abs_r1["gone_titles"] == ["page_watch:mom_ep"] and _abs_r2["gone_count"] == 0,
+      f"r0={_abs_r0.get('gone_count')} r1={_abs_r1.get('gone_count')} r2={_abs_r2.get('gone_count')}")
+
+# ── ABSORB 2026-07-21 (cont'd): litstudy / LCN / ArchiveBox citation + web-read gems ──────────────
+# (litstudy) rank id-union: same strong id (DOI) merges same-work-diff-title twins the title-first
+# fingerprint misses; a title-only merge still reports merge_basis='title'; different ids never merge.
+_r1_a = Document(source="arxiv", source_id="r1a", url="https://arxiv.org/abs/2301.00001",
+                        title="Deep Reinforcement Learning Credit Assignment Language Models",
+                        content="", metadata={"doi": "10.1234/abc.5678"})
+_r1_b = Document(source="openalex", source_id="r1b", url="https://openalex.org/W1",
+                        title="Preprint Reward Modeling Credit Assignment Study Draft Version",
+                        content="", metadata={"doi": "10.1234/ABC.5678"})  # same DOI (diff case), diff title
+_r1_id = rank.dedup([_r1_a, _r1_b])
+_r1_ta = Document(source="arxiv", source_id="rta", url="",
+                         title="Same Long Shared Title For Two Distinct Items Here", content="")
+_r1_tb = Document(source="reddit", source_id="rtb", url="",
+                         title="Same Long Shared Title For Two Distinct Items Here", content="")
+_r1_title = rank.dedup([_r1_ta, _r1_tb])
+_r1_ca = Document(source="arxiv", source_id="rca", url="",
+                         title="Distinct Paper One Alpha Beta Gamma Methods Study", content="", metadata={"doi": "10.1/x"})
+_r1_cb = Document(source="openalex", source_id="rcb", url="",
+                         title="Distinct Paper Two Delta Epsilon Zeta Methods Study", content="", metadata={"doi": "10.2/y"})
+_r1_diff = rank.dedup([_r1_ca, _r1_cb])
+check("absorb/rank: same-DOI diff-long-title merge (merge_basis=id + also_in); title-only stays title; diff-id stays split",
+      len(_r1_id) == 1 and _r1_id[0].metadata.get("merge_basis") == "id" and bool(_r1_id[0].metadata.get("also_in"))
+      and len(_r1_title) == 1 and _r1_title[0].metadata.get("merge_basis") == "title"
+      and len(_r1_diff) == 2,
+      f"id={len(_r1_id)}/{_r1_id[0].metadata.get('merge_basis')} title={len(_r1_title)}/{_r1_title[0].metadata.get('merge_basis')} diff={len(_r1_diff)}")
+
+# (ArchiveBox) web_fallback boilerplate strip: in-main nav/footer chrome removed so a JS shell drops
+# below the thin-trigger (-> correct jina escalation) while a real article stays above it.
+from penumbra.core import web_fallback as _wf_mod
+_wf_shell = '<html><body><main><nav>' + ('Home About Careers Blog Press ' * 30) + '</nav><footer>' + ('Terms Privacy Contact ' * 20) + '</footer></main></body></html>'
+_wf_article = '<html><body><main><h1>T</h1><p>' + ('Real article body sentence with actual content. ' * 40) + '</p></main></body></html>'
+_, _wf_shell_txt = _wf_mod._extract_text(_wf_shell)
+_, _wf_art_txt = _wf_mod._extract_text(_wf_article)
+check("absorb/web_fallback: in-main nav/footer stripped -> boilerplate shell < thin-trigger, real article stays above",
+      len(_wf_shell_txt) < _wf_mod._THIN_CHARS and len(_wf_art_txt) >= _wf_mod._THIN_CHARS,
+      f"shell={len(_wf_shell_txt)} article={len(_wf_art_txt)} thin={_wf_mod._THIN_CHARS}")
+
+# (ArchiveBox) fetch_url reason taxonomy: a failed generic web read surfaces WHY (walled/empty/blocked)
+# via diag armed ONLY around web_fallback; the fetch_url wrapper stays doc-only (byte-identical callers).
+from penumbra.core import fetcher as _fr_fetcher, web_fallback as _fr_wf, diag as _fr_diag
+_fr_rvf_save = _fr_wf.read_via_fallback
+_fr_ad_save = _fr_fetcher._fetch_url_via_adapters
+
+
+def _fr_fake_rvf(url):
+    _fr_diag.note("web_fallback", url=url, body="refused anti-bot challenge page (via=plain)")
+    return None
+
+
+_fr_fetcher._fetch_url_via_adapters = lambda url: None  # no adapter claims it
+_fr_wf.read_via_fallback = _fr_fake_rvf
+try:
+    _fr_doc, _fr_reason = _fr_fetcher.fetch_url_with_reason("https://walled.example.com/x")
+    _fr_plain = _fr_fetcher.fetch_url("https://walled.example.com/x")  # wrapper drops the reason
+finally:
+    _fr_wf.read_via_fallback = _fr_rvf_save
+    _fr_fetcher._fetch_url_via_adapters = _fr_ad_save
+check("absorb/fetcher: fetch_url_with_reason surfaces the walled reason; fetch_url wrapper stays doc-only",
+      _fr_doc is None and _fr_reason and "anti-bot challenge" in _fr_reason and _fr_plain is None,
+      f"reason={_fr_reason!r}")
+
+# ── ABSORB 2026-07-21 (cont'd): Steel/browser-use content-extraction hygiene gems ────────────────
+# (Steel) strip_base64_images: an inline data-URI base64 blob in markdown becomes a placeholder; a real
+# http image + the alt text survive; a base64-free string is returned unchanged (fast path).
+_b64_in = "![diagram](data:image/png;base64,iVBORw0KGgoAAAANSUhEUg==) then ![logo](https://cdn.example.com/logo.png)"
+_b64_out = _abs_norm.strip_base64_images(_b64_in)
+check("absorb/normalize: strip_base64_images defuses the data-URI blob, keeps http image + alt + non-image text",
+      "<base64-image-removed>" in _b64_out and "![diagram]" in _b64_out
+      and "https://cdn.example.com/logo.png" in _b64_out and "base64," not in _b64_out
+      and _abs_norm.strip_base64_images("no images here") == "no images here",
+      _b64_out)
+
+# (browser-use) web_fallback._extract_text now emits Markdown (heading + table structure preserved), honoring
+# the Document.content Markdown contract instead of a flattened get_text.
+_, _wf_md = _wf_mod._extract_text(
+    "<html><body><main><h2>Section Head</h2><ul><li>alpha</li></ul>"
+    "<table><tr><td>c1</td><td>c2</td></tr></table></main></body></html>")
+check("absorb/web_fallback: _extract_text returns Markdown (## heading + | table structure preserved)",
+      "## Section Head" in _wf_md and "|" in _wf_md, _wf_md[:120])
+
+# (browser-use) docreader._window snaps the char-window to a line boundary, paginates losslessly, and a
+# no-newline window still makes progress (the start+1 clamp guarantees a non-empty chunk).
+from penumbra.core import docreader as _dr_mod
+_dr_text = "line one\nline two here\nline three longer content\nline four\n" * 3
+_dr_chunk, _dr_trunc = _dr_mod._window(_dr_text, 0, 20)
+_dr_start, _dr_parts = 0, []
+for _ in range(500):  # bounded: a paging-stall bug fails fast instead of hanging the smoke
+    _c, _t = _dr_mod._window(_dr_text, _dr_start, 20)
+    if not _c:
+        break
+    _dr_parts.append(_c)
+    _dr_start += len(_c)
+    if not _t:
+        break
+_dr_join = "".join(_dr_parts)
+_dr_nc, _ = _dr_mod._window("x" * 500, 0, 100)  # no newline in 400-char lookback -> raw cut, still progresses
+check("absorb/docreader: _window snaps to line boundary, paginates losslessly, no-newline still progresses",
+      _dr_chunk.endswith("\n") and _dr_chunk == _dr_text[:len(_dr_chunk)]
+      and _dr_join == _dr_text and len(_dr_nc) == 100,
+      f"chunk={_dr_chunk!r} joinok={_dr_join == _dr_text} nc={len(_dr_nc)}")
+
+# ── ABSORB 2026-07-21 (cont'd): scholar-mcp/ScholarQA -> s2_snippet source (passage-level S2 full-text) ──
+# Golden built from a REAL captured /graph/v1/snippet/search response (default fields: string authors,
+# no publicationDate/citationCount). Monkeypatch the wrapper so the adapter's assembly is tested offline.
+from penumbra.core import _s2 as _s2snip
+from penumbra.core.sources.api.s2_snippet_source import S2SnippetAdapter as _S2Snip
+_S2SNIP_FIXTURE = [
+    {"score": 0.9688, "paper": {"corpusId": "197545408",
+        "title": "Credit Assignment as a Proxy for Transfer in Reinforcement Learning",
+        "authors": ["Johan Ferret", "Raphaël Marinier", "M. Geist", "O. Pietquin"],
+        "openAccessInfo": {"disclaimer": "...arxiv.org/abs/1907.08027..."}},
+     "snippet": {"text": "Credit Assignment as a Proxy for Transfer in Reinforcement Learning",
+        "snippetKind": "title", "section": None, "snippetOffset": {"start": 0, "end": 67}}},
+    {"score": 0.71, "paper": {"corpusId": "228215123",
+        "title": "An Information-Theoretic Perspective on Credit Assignment in RL",
+        "authors": [{"authorId": "1", "name": "Dilip Arumugam"}]},  # object-author form (with fields)
+     "snippet": {"text": "We frame credit assignment as an information-theoretic problem.",
+        "snippetKind": "body", "section": "Introduction", "snippetOffset": {"start": 512, "end": 573}}},
+]
+_s2snip_save = _s2snip.snippet_search
+_s2snip.snippet_search = lambda query, limit=20: _S2SNIP_FIXTURE
+try:
+    _s2snip_docs = _S2Snip().search("credit assignment reinforcement learning", limit=20)
+finally:
+    _s2snip.snippet_search = _s2snip_save
+_d0, _d1 = (_s2snip_docs + [None, None])[:2]
+check("absorb/s2_snippet: title snippet -> doc (source_id=corpus#kind#offset, S2 paper url, joined authors)",
+      _d0 is not None and _d0.source == "s2_snippet" and _d0.source_id == "197545408#title#0"
+      and _d0.url == "https://www.semanticscholar.org/paper/197545408"
+      and _d0.content == "Credit Assignment as a Proxy for Transfer in Reinforcement Learning"
+      and "Johan Ferret" in (_d0.author or "") and _d0.metadata.get("corpus_id") == "197545408",
+      f"d0={_d0}")
+check("absorb/s2_snippet: body snippet -> passage doc (object-author.name, section, kind tag)",
+      _d1 is not None and _d1.source_id == "228215123#body#512" and "body" in _d1.tags
+      and _d1.author == "Dilip Arumugam" and _d1.metadata.get("section") == "Introduction"
+      and _d1.content.startswith("We frame credit assignment"),
+      f"d1={_d1}")
+
+# ── ABSORB 2026-07-21 (cont'd): transcription -> opt-in per-VAD-segment timestamps (asr) ──────────
+# Pure assembler test (offline, no model): fsmn-vad spans [[start_ms,end_ms],...] + per-span texts ->
+# [{start,end,text}] in seconds, cleaned, empty-text spans dropped, count-mismatch degrades safely.
+from penumbra.core import asr as _asrseg
+_seg_ok = _asrseg._segments_from([[0, 4200], [4200, 9000], [9000, 9100]], ["开可乐 彩排", "  不稳定  ", ""])
+_seg_mismatch = _asrseg._segments_from([[0, 1000]], ["a", "b"])  # more texts than spans -> zip stops at 1
+check("absorb/asr: _segments_from zips VAD spans+texts to {start,end,text}s, cleans, drops empty, degrades on mismatch",
+      _seg_ok == [{"start": 0.0, "end": 4.2, "text": "开可乐 彩排"}, {"start": 4.2, "end": 9.0, "text": "不稳定"}]
+      and _seg_mismatch == [{"start": 0.0, "end": 1.0, "text": "a"}],
+      f"seg_ok={_seg_ok} mismatch={_seg_mismatch}")
+
+# ── ABSORB 2026-07-21 (cont'd): diarization -> WHO-said-what (asr, Paraformer+cam++) ──────────────
+# Pure assembler test (offline, no model): funasr sentence_info [{start,end,text/sentence,spk}] ->
+# [{start,end,text,speaker}] in seconds, cleaned, empty-text sentences dropped, non-dict rows skipped.
+_diar_ok = _asrseg._diarized_from([
+    {"start": 170, "end": 830, "sentence": "也不容易，", "spk": 0},
+    {"start": 3870, "end": 4050, "text": "  嗯，  ", "spk": 1},
+    {"start": 4050, "end": 7930, "text": "", "spk": 2},          # empty text -> dropped
+    "garbage", {"start": None, "end": 9000, "text": "x", "spk": 0},  # non-dict + missing start -> skipped
+])
+check("absorb/asr: _diarized_from maps sentence_info to {start,end,text,speaker}s, cleans, drops empty/malformed",
+      _diar_ok == [{"start": 0.17, "end": 0.83, "text": "也不容易，", "speaker": 0},
+                   {"start": 3.87, "end": 4.05, "text": "嗯，", "speaker": 1}],
+      f"diar_ok={_diar_ok}")
+
+# ── EYE-FIX 2026-07-22: penumbra_transcribe on US-CDN audio (anchor/cloudfront) failed — the bundled
+# ffmpeg's TLS (macOS SecureTransport) intermittently -9806s + hangs, AND this deployment's egress
+# mangles openssl TLS (httpx UNEXPECTED_EOF). Fix: -rw_timeout kills the hang; on empty/failed remote
+# decode, fall back to a curl_cffi (libcurl+Chrome-fingerprint, the tier that gets through) download +
+# LOCAL decode. Structural golden (offline): the fallback + rw_timeout are wired, and it's curl_cffi.
+import inspect as _fxinsp
+from penumbra.core import http as _fxhttp
+_fx_dl = _fxinsp.getsource(_fxhttp.download_to_file)
+_fx_dec = _fxinsp.getsource(_asrseg._decode_to_wav)
+check("eyefix/asr: _decode_to_wav bounds reads (-rw_timeout) + falls back to robust download on empty/failed remote",
+      "-rw_timeout" in _fx_dec and "download_to_file" in _fx_dec and "_MIN_WAV_BYTES" in _fx_dec,
+      "decode must add -rw_timeout AND fall back to http.download_to_file when the wav is empty")
+check("eyefix/http: download_to_file uses curl_cffi (NOT httpx) — the TLS tier that gets through this egress",
+      "curl_cffi" in _fx_dl and "stream=True" in _fx_dl and "max_bytes" in _fx_dl and "iter_bytes" not in _fx_dl,
+      "download_to_file must stream via curl_cffi with a size cap, not the openssl httpx client")
+
+# ── ABSORB 2026-07-21 (cont'd): chunk embeddings (long-doc tail recall, tldw/SurfSense) ──────────
+# (1) _chunk_passages (pure): short doc -> []; long doc -> tail passages w/ title breadcrumb; capped.
+from penumbra.core.recall import writer as _absw
+from penumbra.core.recall import store as _abss
+_ck_short = _absw._chunk_passages("T", "x" * 1500)
+_ck_long = _absw._chunk_passages("MyTitle", "H" * 2000 + "A" * 2000 + "B" * 500)  # head 2000 + 2 tail chunks
+_ck_huge = _absw._chunk_passages("T", "z" * (2000 + 2000 * 40))                    # 40 tail chunks -> capped
+check("absorb/recall: _chunk_passages skips short docs, chunks the tail with title breadcrumb, caps count",
+      _ck_short == []
+      and len(_ck_long) == 2 and _ck_long[0].startswith("MyTitle\n") and _ck_long[0].endswith("A")
+      and len(_ck_huge) == _absw._CHUNK_MAX,
+      f"short={_ck_short} nlong={len(_ck_long)} nhuge={len(_ck_huge)}")
+# (2) vector_search now MAX-POOLS chunk rows (consults _ensure_chunk_matrix) while still NOT folding thin.
+import inspect as _absinsp
+_ck_vs = _absinsp.getsource(_abss.vector_search)
+check("absorb/recall: vector_search folds vec_chunk (max-pool) via _ensure_chunk_matrix",
+      "_ensure_chunk_matrix(con)" in _ck_vs and "_chunk_M" in _ck_vs,
+      "vector_search must CALL _ensure_chunk_matrix + read the chunk matrix")
+# (3) the single-writer-safe backfill: _chunk_catchup is WIRED into the writer idle loop + queries vec_chunk.
+_ck_loop = _absinsp.getsource(_absw._writer_loop)
+_ck_cu = _absinsp.getsource(_absw._chunk_catchup)
+check("absorb/recall: _chunk_catchup is wired into the writer idle loop + backfills long docs missing vec_chunk",
+      "_chunk_catchup(con)" in _ck_loop
+      and "vec_chunk" in _ck_cu and "_embed_and_store_chunk" in _ck_cu and "length(d.content) >" in _ck_cu,
+      "the chunk backfill must run in the single writer, not a second process")
+
+# ---------------------------------------------------------------------------
+# 69. Maintenance boundaries: launchd lifecycle and probes are derived from the registry/plists.
+# ---------------------------------------------------------------------------
+# Repo-adaptive, the 46b convention: services.py + penumbra_doctor.py are DEPLOYMENT-side scripts
+# (a launchd fleet manager and a macOS probe). Where no fleet registry exists there is nothing
+# for this section to assert about, and the public mirror ships neither script.
+if _SERVICES_PATH.exists():
+    _maint_home = str(Path.home())   # the assertion is about which ORGAN owns a plist, not whose machine
+    import importlib.util as _maint_importlib
+    import sys as _maint_sys
+
+    _maint_scripts = ROOT / "scripts"
+    _maint_sys.path.insert(0, str(_maint_scripts))
+    _svc_path = _maint_scripts / "services.py"
+    _svc_spec = _maint_importlib.spec_from_file_location(
+        "penumbra_services_maintenance_smoke", _svc_path)
+    _svc_maint = _maint_importlib.module_from_spec(_svc_spec)
+    _svc_spec.loader.exec_module(_svc_maint)
+    _doc_path = _maint_scripts / "penumbra_doctor.py"
+    _doc_spec = _maint_importlib.spec_from_file_location(
+        "penumbra_eye_doctor_maintenance_smoke", _doc_path)
+    _doc_maint = _maint_importlib.module_from_spec(_doc_spec)
+    _doc_spec.loader.exec_module(_doc_maint)
+
+    check("maintenance: KeepAlive bool and dict are resident, calendar/interval are interval",
+          _doc_maint.classify_launchd_plist({"KeepAlive": True}) == "resident"
+          and _doc_maint.classify_launchd_plist({"KeepAlive": {"Crashed": True}}) == "resident"
+          and _doc_maint.classify_launchd_plist({"StartInterval": 600}) == "interval"
+          and _doc_maint.classify_launchd_plist({"StartCalendarInterval": {"Minute": 0}}) == "interval")
+    _expected_cdp = {int(r["port"]) for r in _svc_maint.by_layer("cdp") if r.get("port") is not None}
+    check("maintenance: every registry CDP port is doctor-probed",
+          {port for port, _, _ in _doc_maint.CDP_PORTS} == _expected_cdp,
+          f"doctor={sorted(port for port, _, _ in _doc_maint.CDP_PORTS)} "
+          f"registry={sorted(_expected_cdp)}")
+    check("maintenance: launchd plist ownership ignores independent organs",
+          _svc_maint.plist_owned_by_root(
+              {"ProgramArguments": [f"{_maint_home}/penumbra-mcp/.venv/bin/python"]})
+          and not _svc_maint.plist_owned_by_root(
+              {"ProgramArguments": [f"{_maint_home}/penumbra-brain/.venv/bin/python"]}))
+
+
+
 if FAIL:
     print(f"SMOKE FAILED: {len(FAIL)} problem(s)")
     sys.exit(1)

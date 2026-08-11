@@ -18,10 +18,13 @@ Polite-pool: include `mailto:` in User-Agent for higher rate limit.
 
 from __future__ import annotations
 
+import functools
 import logging
 import re
 from typing import Optional
 from urllib.parse import urlparse
+
+import anyio
 
 from penumbra.core import _openalex as oa
 from penumbra.core import cache
@@ -131,6 +134,77 @@ class OpenAlexAdapter:
                 logger.debug("Skipping malformed OpenAlex work: %s", exc)
 
         cache.set_docs(key, docs, ttl=3600)
+        return docs
+
+    async def asearch(self, query: str, limit: int = 10) -> list[Document]:
+        """Native-async twin of ``search`` (the OpenAlex sources go native async), so the live async
+        penumbra_search path awaits it DIRECTLY instead of parking a pool thread on the ``/works`` call. It
+        mirrors ``search`` step-for-step; only the BLOCKING work moves:
+          • the disk cache read/write → ``anyio.to_thread.run_sync`` (get_docs / set_docs do file IO);
+          • the single OpenAlex egress ``oa.get_json`` → ``await oa.aget_json`` (the byte-faithful async
+            twin sharing the SAME breaker / rate pacer / concurrency cap / 2-lane budget — same path + params).
+        There is NO per-item fan-out here (openalex is ONE ``/works`` call), so no asyncio.gather is
+        needed. The pure-CPU parse/map (``_work_to_document`` → ``oa.parse_work``) stays ON the loop,
+        byte-identical to ``search``. SAME cache KEY as ``search`` (async and sync share the cache).
+
+        SUBCLASS GUARD (the load-bearing rule, same shape as ``RSSAdapterBase.asearch``): ``openalex_cn``
+        SUBCLASSES this adapter and OVERRIDES ``search`` (it pins ``language:zh`` and re-stamps the doc
+        source). ``AsyncSearchCapable`` is a runtime-checkable Protocol keyed on method PRESENCE, so a
+        subclass that only inherits THIS ``asearch`` is still flagged async-capable — the live async path
+        would route here and SILENTLY DROP the override. So when ``search`` is overridden, run the
+        subclass's OWN sync ``search`` OFF the loop instead (correct + faithful; that one explicit_only
+        facet just does not go native async, which is fine). This auto-protects every present/future
+        subclass with no per-subclass ``asearch`` needed, resolving the hazard in this one file.
+        """
+        # Fire ONLY for a subclass that overrode search but did NOT define its OWN asearch: then the
+        # inherited async path would silently drop the override, so run its sync search off-loop. A
+        # subclass that DEFINES its own asearch (openalex_cn) is EXCLUDED -- it calls super().asearch on
+        # purpose to reuse the parent's native egress, and must NOT be bounced back to its sync search
+        # (that would double-apply its query transform, e.g. _pin_zh twice). The type(self).asearch
+        # check distinguishes "inherited this asearch" (guard) from "has its own asearch" (proceed).
+        if (type(self).search is not OpenAlexAdapter.search
+                and type(self).asearch is OpenAlexAdapter.asearch):
+            return await anyio.to_thread.run_sync(functools.partial(self.search, query, limit))
+
+        # Pull any allowlisted OpenAlex `key:value` filters out of the query and route them to the
+        # API's `filter=` param. No recognized filter → behaviour unchanged (plain `search=` as before).
+        search_text, filter_str = _parse_filters(query or "")
+
+        # CRITICAL: the resolved filter is part of the cache identity (same as search) — otherwise
+        # `from_publication_date:2024-01-01 x` and `...:2020-01-01 x` (same search text) would collide.
+        # This is the SAME key as search() — async and sync share the cache.
+        key = cache.make_key("openalex", "search", search_text, filter_str or "", limit)
+        cached = await anyio.to_thread.run_sync(cache.get_docs, key)  # disk read OFF loop
+        if cached is not None:
+            return cached
+
+        params: dict = {
+            "per-page": min(limit, 25),
+            "sort": "relevance_score:desc",
+        }
+        # Only send `search` when there's actual free text — a filter-only query is valid on its own,
+        # and an empty `search=` would needlessly skew relevance ranking.
+        if search_text:
+            params["search"] = search_text
+        if filter_str:
+            params["filter"] = filter_str
+
+        try:
+            data = await oa.aget_json("/works", params)  # native-async egress twin (same path + params)
+        except Exception as exc:  # noqa: BLE001 — incl. the shared circuit breaker
+            logger.warning("OpenAlex search failed: %s", exc)
+            return []
+
+        results = data.get("results") or []
+        docs: list[Document] = []
+        for work in results[:limit]:
+            try:
+                docs.append(self._work_to_document(work))  # pure CPU parse/map — stays ON the loop
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("Skipping malformed OpenAlex work: %s", exc)
+
+        await anyio.to_thread.run_sync(  # disk write OFF loop
+            functools.partial(cache.set_docs, key, docs, ttl=3600))
         return docs
 
     def fetch_url(self, url: str) -> Optional[Document]:

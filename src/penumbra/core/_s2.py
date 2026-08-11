@@ -81,6 +81,11 @@ _MIN_INTERVAL_S = 1.0
 # cap the queue is pathological (S2 storming) → fail fast (raise S2Down → the wrapper degrades to
 # []/None) instead of hanging, AND do not reserve a slot so the backlog drains rather than growing.
 _PACE_MAX_WAIT_S = 15.0
+# Hard cap on how long ONE caller may wait for a CONCURRENCY permit (the sema), the sibling of the
+# rate gate's _PACE_MAX_WAIT_S. A raw unbounded acquire hangs a caller for the whole MCP idle window
+# when the pool is saturated or a permit leaked (the 300s resolve_identity outage, 2026-07-18); past
+# this the pool is treated as unavailable -> raise S2Down -> the wrapper degrades to []/None.
+_ACQUIRE_MAX_WAIT_S = 20.0
 
 # The shared load-guard (concurrency cap + rate pacer + circuit breaker): the byte-identical machinery
 # _openalex / _s2 / _github each carried, extracted to _guard (2026-07-01 parsimony audit P1). The
@@ -119,6 +124,12 @@ _RL_BACKOFF_S = (1.5, 3.0)   # waits between attempts (rate-limit only); added b
 
 class S2Down(RuntimeError):
     """Raised immediately while the circuit is open (recent consecutive failures)."""
+
+
+def _slot_busy(wait: float) -> S2Down:
+    """Concurrency-permit exhaustion -> the same degrade-to-[]/None path as breaker-open / a
+    pathological rate backlog. Handed to _guard.slot as its on_busy factory."""
+    return S2Down(f"concurrency pool saturated (no slot in {wait:.0f}s); degrade")
 
 
 def breaker_open() -> bool:
@@ -253,7 +264,7 @@ def _call(label: str, fn):
 
     def _attempt():
         _pace()  # rate cap: bounds req/s so a fan-out across the S2-backed sources can't burst the key
-        with _sema:  # global concurrency cap
+        with _guard.slot(_ACQUIRE_MAX_WAIT_S, _slot_busy):  # concurrency cap, BOUNDED (degrade, don't hang)
             return fn()
 
     try:
@@ -285,7 +296,7 @@ def _bounded(label: str, make_iter, cap: int) -> list:
 
         def _attempt():
             _pace()  # rate cap: bounds req/s so a fan-out across the S2-backed sources can't burst the key
-            with _sema:  # global concurrency cap
+            with _guard.slot(_ACQUIRE_MAX_WAIT_S, _slot_busy):  # concurrency cap, BOUNDED (degrade, don't hang)
                 it = make_iter()
                 # islice pulls EXACTLY ``cap`` items and stops; the prior ``for i,item: if i>=cap: break``
                 # pulled one item PAST cap, which advances the lazy PaginatedResults into its next-page
@@ -333,6 +344,32 @@ def search_paper(query: str, limit: int = 10, fields: Optional[list[str]] = None
     return _bounded("search_paper",
                     lambda: get_client().search_paper(query or "", limit=page, **fkw, **kwargs),
                     limit)
+
+
+def snippet_search(query: str, limit: int = 20) -> list:
+    """Passage-level full-text retrieval via S2 ``/graph/v1/snippet/search`` — the exact SENTENCES /
+    sections across S2's open-access full-text corpus that match ``query`` (not just papers/abstracts).
+    The ``semanticscholar`` lib does NOT expose this endpoint, so it is a raw ``http.get_json`` wrapped
+    in ``_call`` for the SAME pace/semaphore/breaker guard every S2 caller shares (never hit S2 outside
+    ``_call``). Returns the raw ``data`` list of ``{score, paper, snippet}`` records; degrades to [] on
+    error (a 429 surfaces as get_json -> None -> [], so the pace+concurrency guard still bounds it even
+    though the breaker cannot see the swallowed 429)."""
+    def _go():
+        from penumbra.core import http
+        key = _load_api_key()
+        headers = {"x-api-key": key} if key else {}
+        # S2's snippet/search default response already carries paper.{corpusId,title,authors,
+        # openAccessInfo} + snippet.{text,snippetKind,section,snippetOffset}; a custom ``fields`` param
+        # 400s on this endpoint (its field grammar differs from /paper/search), so we take the default
+        # shape. publicationDate / citationCount are simply absent (never fabricated).
+        params = {"query": query or "", "limit": max(1, min(int(limit or 20), 1000))}
+        data = http.get_json("https://api.semanticscholar.org/graph/v1/snippet/search",
+                             params=params, headers=headers, timeout=TIMEOUT)
+        return (data or {}).get("data", []) or []
+    try:
+        return _call("snippet_search", _go) or []
+    except Exception:  # noqa: BLE001 — degrade to [] like the other wrappers (breaker already tripped upstream)
+        return []
 
 
 def get_paper_references(paper_id: str, limit: int, fields: Optional[list[str]] = None) -> list:
@@ -447,7 +484,10 @@ def health(timeout: float = 8.0) -> tuple[bool, str]:
                 "machine learning", limit=1, fields=["title"]))
             ok, msg = True, "OK (shared S2 upstream reachable)"
         except S2Down as exc:
-            ok, msg = False, f"circuit open ({exc}); recent consecutive failures, backing off"
+            # Self-shed (breaker / pool), NOT upstream-down: a genuine outage raises the raw
+            # exception below (a 429 is handled there as UP). Don't flip every S2-backed source down
+            # on a transient breaker-open; report DEGRADED (self-heals when the breaker closes).
+            ok, msg = True, f"degraded (eye backing off, upstream not probed this cycle): {exc}"
         except Exception as exc:  # noqa: BLE001
             # A 429 means S2 is UP and merely throttling us -> report healthy (cache covers the data
             # path); any other exception is a genuine outage.

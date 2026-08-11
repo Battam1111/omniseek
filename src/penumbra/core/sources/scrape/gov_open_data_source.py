@@ -38,6 +38,8 @@ use) for a coherent best-first result.
 from __future__ import annotations
 
 import logging
+from concurrent.futures import ThreadPoolExecutor
+from contextvars import copy_context
 from typing import Any, Optional
 
 from penumbra.core import http
@@ -95,17 +97,35 @@ class GovOpenDataAdapter(BaseScrapeAdapter):
     rank = True
 
     def _raw_fetch(self, query: str, limit: int) -> Optional[Any]:
-        """Fan out over every portal; collect (portal, record) pairs. One portal failing
+        """Fan out over every portal CONCURRENTLY; collect (portal, record) pairs. One portal failing
         (None / exception) is skipped, not fatal: the others still answer. Returns None
-        only if EVERY portal failed (so the base degrades to [] honestly)."""
+        only if EVERY portal failed (so the base degrades to [] honestly).
+
+        PARALLEL since 2026-07-25, which is what this docstring always claimed. It was a sequential
+        loop, so this source's wall clock was the SUM of every portal: measured 21.3s over 8 requests,
+        which blew the broad-search deadline on 62% of searches (1231 of 1986 recorded) and left its
+        contribution to the ranked output at exactly ZERO. Yet no portal is actually slow: each answers
+        in ~1-3s (open.canada.ca measured 1.7 / 3.8 / 1.7s). Summing them was the entire problem, so
+        the wall clock is now the SLOWEST portal instead, not the total.
+
+        Each task runs under a COPIED contextvars Context (the house pattern, cf. researcher_watch):
+        the per-request cache flags (fresh / cache_only) ride contextvars, so a bare thread would
+        silently drop them and read stale cache on a fresh search. Result ORDER is unchanged, since
+        ex.map preserves input order and the zip below re-pairs against PORTALS."""
         pairs: list[tuple[dict, dict]] = []
         any_ok = False
-        for portal in PORTALS:
+
+        def _one(portal: dict) -> Optional[list[dict]]:
             try:
-                records = self._fetch_portal(portal, query, limit)
+                return self._fetch_portal(portal, query, limit)
             except Exception as exc:  # noqa: BLE001 — a single portal hiccup is non-fatal
                 logger.warning("%s: portal %s failed: %s", self.name, portal["id"], exc)
-                continue
+                return None
+
+        contexts = [copy_context() for _ in PORTALS]
+        with ThreadPoolExecutor(max_workers=min(len(PORTALS), 8)) as ex:
+            per_portal = list(ex.map(lambda ctx, p: ctx.run(_one, p), contexts, PORTALS))
+        for portal, records in zip(PORTALS, per_portal):
             if records is None:
                 continue
             any_ok = True
@@ -164,6 +184,86 @@ class GovOpenDataAdapter(BaseScrapeAdapter):
         if not saw_any_page:
             return None  # could not read even one page -> a real failure for this portal
         return hits[:limit]
+
+    # ── native-async egress twins (byte-faithful mirror of the sync fan-out) ─
+    async def _araw_fetch(self, query: str, limit: int) -> Optional[Any]:
+        """Async twin of _raw_fetch: byte-faithful mirror of the multi-portal fan-out. The ONLY
+        change down the whole chain is the shared-http egress fn (http.get_json -> await
+        http.aget_json) inside _afetch_portal / _afetch_sg; same control flow, same per-portal
+        skip-on-failure, same all-portals-failed -> None contract."""
+        pairs: list[tuple[dict, dict]] = []
+        any_ok = False
+        for portal in PORTALS:
+            try:
+                records = await self._afetch_portal(portal, query, limit)
+            except Exception as exc:  # noqa: BLE001 — a single portal hiccup is non-fatal
+                logger.warning("%s: portal %s failed: %s", self.name, portal["id"], exc)
+                continue
+            if records is None:
+                continue
+            any_ok = True
+            for rec in records:
+                pairs.append((portal, rec))
+        if not any_ok:
+            return None  # every portal failed -> base turns this into []
+        return pairs
+
+    async def _afetch_portal(self, portal: dict, query: str, limit: int) -> Optional[list[dict]]:
+        """Async twin of _fetch_portal: same URL / params / timeout, egress swapped to http.aget_json."""
+        kind = portal["kind"]
+        if kind == "ckan":
+            raw = await http.aget_json(
+                portal["search_url"],
+                params={"q": query, "rows": limit},
+                timeout=TIMEOUT,
+            )
+            if not isinstance(raw, dict):
+                return None
+            results = ((raw.get("result") or {}).get("results")) or []
+            return [r for r in results if isinstance(r, dict)][:limit]
+        if kind == "sg_v2":
+            return await self._afetch_sg(portal, query, limit)
+        logger.warning("%s: unknown portal kind %r", self.name, kind)
+        return None
+
+    async def _afetch_sg(self, portal: dict, query: str, limit: int) -> Optional[list[dict]]:
+        """Async twin of _fetch_sg: same SG_MAX_PAGES bound / local AND-filter / stop conditions,
+        egress swapped to http.aget_json."""
+        terms = [t for t in query.lower().split() if t]
+        hits: list[dict] = []
+        saw_any_page = False
+        page = 1
+        while page <= SG_MAX_PAGES:
+            raw = await http.aget_json(portal["list_url"], params={"page": page}, timeout=TIMEOUT)
+            if not isinstance(raw, dict):
+                break
+            data = raw.get("data") or {}
+            datasets = data.get("datasets") or []
+            if not datasets:
+                break
+            saw_any_page = True
+            for ds in datasets:
+                if not isinstance(ds, dict):
+                    continue
+                if _sg_matches(ds, terms):
+                    hits.append(ds)
+                    if len(hits) >= limit:
+                        return hits
+            total_pages = data.get("pages")
+            if isinstance(total_pages, int) and page >= total_pages:
+                break
+            page += 1
+        if not saw_any_page:
+            return None  # could not read even one page -> a real failure for this portal
+        return hits[:limit]
+
+    async def asearch(self, query: str, limit: int = 10) -> list[Document]:
+        """Native-async twin of search -> AsyncSearchCapable. Shares the base async cache round-trip;
+        egress via _araw_fetch; mapping via the SAME pure-CPU _to_documents (byte-identical to search)."""
+        return await self._asearch_via(
+            query, limit,
+            afetch=lambda: self._araw_fetch(query, limit),
+            abuild=lambda raw: self._to_documents(raw, query, limit))
 
     def _to_documents(self, raw: Any, query: str, limit: int) -> list[Document]:
         """Merged (portal, record) pairs -> dataset docs. The base re-ranks (rank=True) and

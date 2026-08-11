@@ -113,11 +113,41 @@ def _atomic_write_text(path: Path, text: str) -> None:
         raise
 
 
-def set(key: str, value: Any, ttl: Optional[int] = None) -> None:  # noqa: A001 (shadows built-in)
-    """Store a value with the given TTL (seconds)."""
+# The failure-empty FLOOR (structural, 2026-07-10). An EMPTY value ([], '', {}, None) is capped to a
+# short TTL BY DEFAULT, because an empty result is almost always a TRANSIENT miss (a down / rate-limited
+# / breaker-open / all-rows-failed upstream) that must NOT be pinned for a long ttl: a later drill would
+# then get a cache HIT with zero egress and the outage is masked (the enrich-null-cached-24h bug + its 7
+# siblings). This lives in the ONE primitive every write funnels through, so no adapter can reintroduce
+# the bug BY OMISSION. A caller with a GENUINELY authoritative empty it wants remembered long passes
+# authoritative_empty=True: explicit, greppable, reviewable — the shift from patch to structure.
+EMPTY_TTL_CAP = 300
+
+
+def _is_empty(value: Any) -> bool:
+    """Values that must not be pinned long unless vouched: None, or an empty list/tuple/dict/str.
+    NOT 0 / False / 0.0 — those are MEANINGFUL scalars (a real count of zero, a flag), not 'no result'.
+    (set/frozenset are intentionally omitted: they are not JSON-serializable so never reach this cache;
+    also the module's own ``set`` name shadows the builtin, so naming it here would be the function.)"""
+    if value is None:
+        return True
+    if isinstance(value, (list, tuple, dict, str)):
+        return len(value) == 0
+    return False
+
+
+def set(key: str, value: Any, ttl: Optional[int] = None, *,  # noqa: A001 (shadows built-in)
+        authoritative_empty: bool = False) -> None:
+    """Store a value with the given TTL (seconds).
+
+    FLOOR: an EMPTY value (see _is_empty) is capped to EMPTY_TTL_CAP unless ``authoritative_empty=True``.
+    The safe default is that an un-vouched empty self-heals fast rather than masking a transient outage;
+    pass authoritative_empty=True only for a GENUINE no-result answer you want remembered long."""
+    eff_ttl = ttl or DEFAULT_TTL
+    if _is_empty(value) and not authoritative_empty:
+        eff_ttl = min(eff_ttl, EMPTY_TTL_CAP)
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     path = _key_path(key)
-    payload = {"expires_at": time.time() + (ttl or DEFAULT_TTL), "value": value}
+    payload = {"expires_at": time.time() + eff_ttl, "value": value}
     _atomic_write_text(path, json.dumps(payload, default=str, ensure_ascii=False))
 
 
@@ -195,6 +225,18 @@ def get_docs(key: str):
     return [Document.model_validate(d) for d in cached]
 
 
-def set_docs(key: str, docs, ttl: Optional[int] = None) -> None:
-    """Cache a ``list[Document]`` (JSON round-trip), with TTL."""
-    set(key, [d.model_dump(mode="json") for d in docs], ttl=ttl)
+def set_docs(key: str, docs, ttl: Optional[int] = None, empty_ttl: Optional[int] = None, *,
+             authoritative_empty: bool = False) -> None:
+    """Cache a ``list[Document]`` (JSON round-trip), with TTL.
+
+    An empty result is capped by the cache.set FLOOR (EMPTY_TTL_CAP) BY DEFAULT, so a transient upstream
+    miss self-heals no matter what — the ``empty_ttl=X if docs else Y`` discipline is now the primitive's
+    job, not each adapter's. Two opt-in ways to VOUCH that an empty is a genuine no-result (kept long):
+    ``empty_ttl`` names the empty TTL explicitly (honored authoritatively); ``authoritative_empty=True``
+    vouches the given ``ttl`` for an empty, for a source that computes ttl itself (e.g. the declarative
+    family's reached-vs-failed split). Omit both for the safe default (the floor caps an empty)."""
+    payload = [d.model_dump(mode="json") for d in docs]
+    if not docs and empty_ttl is not None:
+        set(key, payload, ttl=empty_ttl, authoritative_empty=True)  # caller explicitly chose the empty TTL
+    else:
+        set(key, payload, ttl=ttl, authoritative_empty=authoritative_empty)

@@ -40,6 +40,16 @@ class AIStackExchangeAdapter(BaseScrapeAdapter):
     def _to_documents(self, raw: Any, query: str, limit: int) -> list[Document]:
         return _stackexchange.build_documents(raw, limit, self.name, SITE, SITE_HOST)
 
+    async def asearch(self, query: str, limit: int = 10) -> list[Document]:
+        """Native-async twin of BaseScrapeAdapter.search -> AsyncSearchCapable (the S4a fan-out awaits this
+        directly; the SE-API search + per-question answer GETs cost COROUTINES, not held pool threads).
+        Shares the base async cache round-trip; egress via `_stackexchange` async twins (same breaker/cap
+        as sync). BEHAVIOR-IDENTICAL to `search`: same shared mappers, same cache key."""
+        return await self._asearch_via(
+            query, limit,
+            afetch=lambda: _stackexchange.asearch(query, limit, SITE),
+            abuild=lambda raw: _stackexchange.abuild_documents(raw, limit, self.name, SITE, SITE_HOST))
+
     def fetch_url(self, url: str) -> Optional[Document]:
         return _stackexchange.fetch_question_document(url, self.name, SITE, SITE_HOST)
 

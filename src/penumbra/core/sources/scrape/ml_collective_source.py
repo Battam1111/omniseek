@@ -18,11 +18,13 @@ newest-first — the same card-aware + date-anchored shape used across the HTML 
 from __future__ import annotations
 
 import datetime
+import functools
 import logging
 import re
 from typing import Optional
 from urllib.parse import urljoin, urlparse
 
+import anyio
 import httpx
 from bs4 import BeautifulSoup
 
@@ -131,6 +133,58 @@ class MLCollectiveAdapter:
         cache.set(key, items, ttl=6 * 3600)
         return items
 
+    async def _ascrape_index(self, path: str) -> list[dict]:
+        """Async twin of ``_scrape_index`` (mirrors it line-for-line): the disk cache round-trip goes
+        OFF the loop, the ``http.get_text`` egress swaps to ``http.aget_text``, and the BeautifulSoup
+        parse / link-filter / ``_parse_date`` map stays ON the loop UNCHANGED (pure CPU). SAME cache key
+        (``"index2"``) so async and sync share the per-index cache."""
+        key = cache.make_key("ml_collective", "index2", path)
+        cached = await anyio.to_thread.run_sync(cache.get, key)  # disk read OFF loop
+        if cached is not None:
+            return cached
+
+        html = await http.aget_text(urljoin(BASE, path), timeout=20)  # async network egress
+        if html is None:
+            return []
+
+        soup = BeautifulSoup(html, "lxml")
+        base_seg = path.rstrip("/")  # e.g. "/events"
+        items: list[dict] = []
+        seen: set[str] = set()
+        for a in soup.find_all("a", href=True):
+            href = a["href"].strip()
+            text = a.get_text(" ", strip=True)
+            if not text or len(text) < 8 or href.startswith(("#", "mailto:", "javascript:")):
+                continue
+            if text.lower() in NAV_TEXTS:
+                continue
+            host = urlparse(href).hostname or ""
+            if any(bad in host for bad in EXTERNAL_BAD_HOSTS):
+                continue
+            full = urljoin(BASE + path, href)
+            pu = urlparse(full)
+            if "mlcollective.org" not in (pu.hostname or ""):
+                continue
+            p = pu.path.rstrip("/")
+            # Real item = a slug deeper than the section index, or a /abs/ talk link.
+            is_item = (p.startswith(base_seg + "/") and p != base_seg) or p.startswith("/abs/")
+            if not is_item or full in seen:
+                continue
+            seen.add(full)
+            parent = a.find_parent(["article", "div", "li", "tr", "section", "td", "p"])
+            ctx = parent.get_text(" ", strip=True) if parent else text
+            d = _parse_date(ctx)
+            items.append({
+                "url": full,
+                "title": text[:160],
+                "date": d.isoformat() if d else None,
+                "source_path": path,
+            })
+
+        await anyio.to_thread.run_sync(  # disk write OFF loop
+            functools.partial(cache.set, key, items, ttl=6 * 3600))
+        return items
+
     def search(self, query: str, limit: int = 10) -> list[Document]:
         key = cache.make_key("ml_collective", "search2", query, limit)
         cached = cache.get_docs(key)
@@ -171,6 +225,54 @@ class MLCollectiveAdapter:
             ))
 
         cache.set_docs(key, docs, ttl=900)
+        return docs
+
+    async def asearch(self, query: str, limit: int = 10) -> list[Document]:
+        """Native-async twin of ``search`` (mirrors it line-for-line): the disk cache round-trip goes
+        OFF the loop, the 3 index fetches AWAIT the async ``_ascrape_index`` (fan-out kept SEQUENTIAL so
+        the ``uniq.setdefault`` dedup order is byte-identical to sync), and the pure-CPU keyword filter /
+        newest-first sort / doc build stay ON the loop UNCHANGED. SAME ``"search2"`` cache key as
+        ``search`` so async and sync share the cache."""
+        key = cache.make_key("ml_collective", "search2", query, limit)
+        cached = await anyio.to_thread.run_sync(cache.get_docs, key)  # disk read OFF loop
+        if cached is not None:
+            return cached
+
+        uniq: dict[str, dict] = {}
+        for path in INDEX_PATHS:
+            for it in await self._ascrape_index(path):
+                uniq.setdefault(it["url"], it)
+        items = list(uniq.values())
+
+        terms = [t.lower() for t in re.findall(r"\w+", query) if len(t) > 1]
+        if terms:
+            items = [it for it in items if any(t in it["title"].lower() for t in terms)]
+
+        # Dated items newest-first; undated (e.g. DLCT talk list) after.
+        items.sort(key=lambda it: it["date"] or "", reverse=True)
+
+        docs: list[Document] = []
+        for it in items[:limit]:
+            is_talk = "/abs/" in it["url"]
+            kind = "DLCT reading-group talk" if is_talk else f"ML Collective {it['source_path'].strip('/')}"
+            when = f" ({it['date']})" if it["date"] else ""
+            dt = None
+            if it["date"]:
+                y, m, d = (int(x) for x in it["date"].split("-"))
+                dt = datetime.datetime(y, m, d, tzinfo=datetime.timezone.utc)
+            docs.append(Document(
+                source="ml_collective",
+                source_id=it["url"],
+                url=it["url"],
+                title=it["title"],
+                content=f"{kind}{when}",
+                date=dt,
+                tags=["ml-collective", it["source_path"].strip("/")] + (["dlct-talk"] if is_talk else []),
+                metadata={"index_path": it["source_path"], "date_str": it["date"], "raw": jsonsafe(it)},
+            ))
+
+        await anyio.to_thread.run_sync(  # disk write OFF loop
+            functools.partial(cache.set_docs, key, docs, ttl=900))
         return docs
 
     def fetch_url(self, url: str) -> Optional[Document]:

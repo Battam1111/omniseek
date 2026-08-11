@@ -17,13 +17,15 @@ API (verified 2026-05-30):
 
 from __future__ import annotations
 
+import functools
 import logging
 from datetime import datetime, timezone
 from typing import Optional
 
+import anyio
 import httpx
 
-from penumbra.core import cache
+from penumbra.core import cache, diag, http
 from penumbra.core.normalize import Document, jsonsafe, mk_signal
 
 logger = logging.getLogger(__name__)
@@ -64,6 +66,8 @@ class MyCareersFutureAdapter:
             results = r.json().get("results", []) or []
         except Exception as exc:  # noqa: BLE001
             logger.warning("MyCareersFuture search failed: %s", exc)
+            st = getattr(getattr(exc, "response", None), "status_code", None)
+            diag.note("mycareersfuture.search", url=API, status=st, exc=exc)
             return []
 
         docs: list[Document] = []
@@ -74,6 +78,53 @@ class MyCareersFutureAdapter:
             if len(docs) >= limit:
                 break
         cache.set_docs(key, docs, ttl=CACHE_TTL)
+        return docs
+
+    async def asearch(self, query: str, limit: int = 10) -> list[Document]:
+        """Native-async twin of ``search`` (S4b): mirrors ``search`` line-for-line so the fetcher's
+        native async dispatch (``AsyncSearchCapable``) awaits it DIRECTLY, spending a coroutine on the
+        MCF POST wait instead of a held pool thread. Three changes only vs ``search``:
+          - the disk CACHE read/write go OFF the loop (anyio.to_thread.run_sync: get_docs / set_docs do
+            file IO), keyed IDENTICALLY (same ``q``-normalized key) so async and sync share the cache;
+          - the raw ``httpx.post`` + ``.json()`` swaps to the shared async leaf ``await http.apost_json``
+            (a standard JSON POST: it gives the shared pool + SSRF guard + cache_only + 30MB cap for
+            free, and emits its own failure diag.note under the ``http.post`` label). The source's own
+            try/except + ``diag.note("mycareersfuture.search", ...)`` therefore collapse into
+            ``apost_json`` returning None on any egress/parse failure; a non-dict body is treated the
+            same. In either failure case we return [] WITHOUT caching — exactly as ``search``'s
+            except-branch ``return []`` did (never pinning a transient miss);
+          - the PURE-CPU result→doc mapping (``_to_doc``, the limit cap) stays ON the loop,
+            byte-identical to ``search`` (no drift)."""
+        q = (query or "").strip() or DEFAULT_QUERY
+        key = cache.make_key("mycareersfuture", "search", q, limit)
+        cached = await anyio.to_thread.run_sync(cache.get_docs, key)  # disk read OFF loop
+        if cached is not None:
+            return cached
+
+        n = min(max(limit, 5), 30)
+        body = {
+            "sessionId": "",
+            "search": q,
+            "sortBy": ["new_posting_date"],
+            "limit": n,
+            "page": 0,
+        }
+        data = await http.apost_json(f"{API}?limit={n}&page=0", json=body, headers=HEADERS, timeout=TIMEOUT)
+        if not isinstance(data, dict):
+            # egress/parse failure (None) or non-object body → honest empty, don't cache the miss
+            # (mirrors search's except-branch return []; apost_json already logged + diag.note'd it).
+            return []
+        results = data.get("results", []) or []
+
+        docs: list[Document] = []
+        for j in results:
+            doc = self._to_doc(j)
+            if doc:
+                docs.append(doc)
+            if len(docs) >= limit:
+                break
+        await anyio.to_thread.run_sync(  # disk write OFF loop
+            functools.partial(cache.set_docs, key, docs, ttl=CACHE_TTL))
         return docs
 
     def fetch_url(self, url: str) -> Optional[Document]:

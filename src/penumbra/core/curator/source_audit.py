@@ -222,9 +222,8 @@ def _build_grid_by_placement(roster: list) -> dict:
         name = s.get("name")
         if not name or name == "_index":
             continue
-        eo = s.get("explicit_only")
-        if isinstance(eo, str) and eo.startswith("retired:"):
-            continue  # a retired source un-declares its cells (no longer a placement occupant)
+        if s.get("retired"):  # a retired source un-declares its cells (no longer a placement occupant)
+            continue
         for dom in (s.get("domains") or []):
             for mode in (s.get("modes") or []):
                 grid.setdefault(_facet_cell(dom, mode), []).append(name)
@@ -415,6 +414,9 @@ def gather_source_dossier() -> dict:
             "regions": s.get("regions") or [],
             "needs_credentials": needs_credentials,
             "explicit_only": explicit_only,
+            # first-class RETIREMENT fact (reversible curator retire overlay), carried straight off the
+            # roster so the placement grid + seed picker read a boolean, not a 'retired:' string prefix.
+            "retired": bool(s.get("retired")),
             # NEUTRAL fragility class (stable < keyed < scrape < walled), straight off the roster.
             # A fact for prioritising repairs (fix the brittle first), NOT a verdict — carries no
             # verdict token, so the dossier still passes the §14 banned-key / verdict-token walk.

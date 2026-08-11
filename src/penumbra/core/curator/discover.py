@@ -123,7 +123,7 @@ def _cold_start_stub(cell: str, reason: str) -> dict:
     """A URL-less STUB candidate for a cold-start cell (no in-domain source the citation graph
     can reach). Cell-keyed make_id so a re-emitted stub for the same cell collapses to the same
     row and is never re-counted (HOLE-5). urls=[] -> the cron's 'probe only new rows' loop skips
-    it cleanly (probe needs a URL); it surfaces in the Bark as an unfilled cell for the agent to
+    it cleanly (probe needs a URL); it surfaces in the alert as an unfilled cell for the agent to
     expand. Carries NO verdict/score key."""
     domain, mode = _split_cell(cell)
     family = _proposed_family_for(mode)
@@ -192,8 +192,7 @@ def _seed_sources_for_domain(domain: str, dossier: dict) -> list:
     for s in dossier.get("sources") or []:
         if s.get("name") == "_index":
             continue
-        eo = s.get("explicit_only")
-        if isinstance(eo, str) and eo.startswith("retired:"):
+        if s.get("retired"):  # a retired source is no longer a valid inner-engine seed
             continue
         if domain in (s.get("domains") or []) and "STRUCTURE" in (s.get("modes") or []):
             out.append(s.get("name"))

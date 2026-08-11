@@ -13,6 +13,8 @@ Configure via ``~/.penumbra/credentials/xiaoyuzhou.json``:
 
 from __future__ import annotations
 
+import asyncio
+import functools
 import json
 import logging
 import re
@@ -20,9 +22,10 @@ from datetime import datetime, timezone
 from typing import Optional
 from urllib.parse import urlparse
 
+import anyio
 import httpx
 
-from penumbra.core import auth, cache
+from penumbra.core import auth, cache, http
 from penumbra.core.normalize import Document, jsonsafe, keyword_score_filter
 
 logger = logging.getLogger(__name__)
@@ -105,6 +108,39 @@ class XiaoyuzhouAdapter:
             cache.set_docs(key, docs, ttl=CACHE_TTL)
         return docs
 
+    async def _afetch_podcast(self, pid: str, name: str) -> list[Document]:
+        """Native-async twin of ``_fetch_podcast`` (mirrored line-for-line). Changes ONLY the two
+        blocking waits per the conversion pattern:
+          - the per-podcast disk cache read + write -> ``anyio.to_thread.run_sync`` (SAME cache key
+            ``xiaoyuzhou/podcast/<pid>``, SAME ttl), so the file IO never runs on the event loop;
+          - the raw ``httpx.get(...).text`` -> ``await http.aget_text`` (the shared async leaf: pooled
+            client + SSRF guard + cache_only honoring + 30MB cap), keeping the SAME Chrome UA + 20s
+            timeout, and follow_redirects=True is the shared async client's default so it matches.
+        ``http.aget_text`` returns None on any failure (already logged + diag.note'd, which the raw
+        egress was NOT), so a None mirrors the sync try/except's return-[] branch. The ``_next_data``
+        JSON walk + ``_ep_to_doc`` mapping are pure CPU and stay ON the loop, byte-identical to
+        ``_fetch_podcast``."""
+        key = cache.make_key("xiaoyuzhou", "podcast", pid)
+        cached = await anyio.to_thread.run_sync(cache.get_docs, key)  # disk read OFF loop
+        if cached is not None:
+            return cached
+        try:
+            html = await http.aget_text(
+                f"{BASE}/podcast/{pid}", headers={"User-Agent": UA}, timeout=20)
+            if html is None:
+                return []  # egress failed (http.aget_text already logged + diag.note'd) -> [] like sync
+            pod = _next_data(html).get("podcast", {}) or {}
+            title = pod.get("title") or name
+            eps = pod.get("episodes") or []
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("xiaoyuzhou fetch failed for %s (%s): %s", name, pid, exc)
+            return []
+        docs = [self._ep_to_doc(e, title) for e in eps if isinstance(e, dict) and e.get("eid")]
+        if docs:
+            await anyio.to_thread.run_sync(  # disk write OFF loop
+                functools.partial(cache.set_docs, key, docs, ttl=CACHE_TTL))
+        return docs
+
     def _ep_to_doc(self, e: dict, podcast_title: str) -> Document:
         eid = e.get("eid")
         body = e.get("shownotes") or e.get("description") or ""
@@ -137,6 +173,31 @@ class XiaoyuzhouAdapter:
             pid = p.get("id")
             if pid:
                 docs.extend(self._fetch_podcast(pid, p.get("name", pid)))
+        q = (query or "").strip()
+        if q:
+            return keyword_score_filter(docs, q)[:limit]
+        docs.sort(key=lambda d: d.date or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
+        return docs[:limit]
+
+    async def asearch(self, query: str, limit: int = 10) -> list[Document]:
+        """Native-async twin of ``search`` (mirrors it line-for-line). The async penumbra_search fan-out
+        awaits this DIRECTLY (no held pool thread), and the per-podcast egresses that ``search`` runs
+        one after another become CONCURRENT coroutines on the one loop. Changes ONLY:
+          - the per-podcast fetch loop -> ``asyncio.gather`` over ``_afetch_podcast`` (each does its
+            own off-loop cache round-trip + async egress). gather PRESERVES the podcasts' order, so
+            ``docs`` is assembled in the exact order ``search`` produced (podcast order, episodes
+            within), keeping the keyword_score_filter / date-sort inputs byte-identical.
+        Everything after the fetch (the ``keyword_score_filter`` on a non-empty query, else the
+        date-desc sort, then ``[:limit]``) is pure CPU on the loop, byte-identical to ``search``."""
+        tasks = []
+        for p in self._podcasts():
+            pid = p.get("id")
+            if pid:
+                tasks.append(self._afetch_podcast(pid, p.get("name", pid)))
+        per_pod = await asyncio.gather(*tasks)
+        docs: list[Document] = []
+        for lst in per_pod:
+            docs.extend(lst)
         q = (query or "").strip()
         if q:
             return keyword_score_filter(docs, q)[:limit]

@@ -44,6 +44,9 @@ _MODEL = "iic/SenseVoiceSmall"
 _VAD = "fsmn-vad"
 _SR = 16000
 _MAX_SECONDS = 4 * 3600          # safety cap (4h of audio)
+_FFMPEG_RW_TIMEOUT_US = 30_000_000    # 30s: abort a STALLED network read (no infinite ffmpeg hang)
+_MIN_WAV_BYTES = 2000                 # a decode yielding < this (~header only) = a failed remote fetch
+_AUDIO_DL_MAX_BYTES = 500 * 1024 * 1024   # cap for the robust-download fallback (podcasts run large)
 _TTL = 365 * 24 * 3600           # transcripts never change → cache ~forever
 _UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0 Safari/537.36"
 # bilibili's gaia WAF cross-checks the UA against the fingerprint it activates, so the bilibili
@@ -136,12 +139,32 @@ def _decode_to_wav(src: str, start_s: Optional[float] = None, dur_s: Optional[fl
             pass
         raise RuntimeError(f"refused ffmpeg input scheme: {scheme or '?'}")
     cmd = [_ffmpeg_exe(), "-nostdin", "-hide_banner", "-loglevel", "error",
+           "-rw_timeout", str(_FFMPEG_RW_TIMEOUT_US),  # bound a STALLED network read: no infinite hang
            "-protocol_whitelist", _proto]
     if start_s:
         cmd += ["-ss", str(start_s)]
     cmd += ["-i", src, "-t", str(min(dur_s, _MAX_SECONDS) if dur_s else _MAX_SECONDS),
             "-ac", "1", "-ar", str(_SR), "-y", path]
     proc = subprocess.run(cmd, capture_output=True)
+    # The bundled ffmpeg's TLS (macOS SecureTransport) intermittently fails to negotiate with some CDNs
+    # (-9806 on cloudfront / anchor), surfacing two ways: a non-zero exit, OR exit 0 with an empty /
+    # near-empty WAV. On a REMOTE url either way, fall back to a robust httpx (openssl) download of the
+    # whole file, then decode it LOCALLY (file protocol, ffmpeg never touches TLS). The fast ffmpeg
+    # range-seek stays the default for CDNs it handles fine (e.g. xyzcdn), so slice efficiency is kept.
+    if scheme in ("http", "https") and (proc.returncode != 0 or os.path.getsize(path) < _MIN_WAV_BYTES):
+        _rm(path)
+        dl = None
+        try:
+            fd2, dl = tempfile.mkstemp(suffix=".audio", prefix="penumbra-asr-dl-")
+            os.close(fd2)
+            from penumbra.core import http as _http  # lazy: asr stays import-light
+            _http.download_to_file(src, dl, max_bytes=_AUDIO_DL_MAX_BYTES)
+            return _decode_to_wav(dl, start_s, dur_s)  # local path -> "file" proto, no ffmpeg TLS
+        except Exception as exc:  # noqa: BLE001
+            raise RuntimeError(
+                f"ffmpeg direct decode failed and robust-download fallback failed: {exc}") from exc
+        finally:
+            _rm(dl)
     if proc.returncode != 0:
         try:
             os.remove(path)
@@ -163,6 +186,135 @@ def _transcribe_wav(wav_path: str, language: Optional[str]) -> str:
     res = m.generate(input=wav_path, cache={}, language=(language or "auto"),
                      use_itn=True, batch_size_s=300, merge_vad=True, merge_length_s=15)
     return _clean(" ".join(r.get("text", "") for r in (res or [])))
+
+
+# ── segment timestamps (opt-in): SenseVoice emits NO per-segment offsets and the combined model's
+# merge_vad=False surfaces text but not timestamps (verified on the mini, funasr 1.3.9). So we run
+# fsmn-vad STANDALONE for the [start_ms,end_ms] spans, slice the audio per span, and batch-transcribe
+# the slices in ONE generate call. This is the scaffold a --diarize turn hangs speaker labels on, and
+# on its own makes a no-shownote transcript navigable / time-citable. The default flat transcript path
+# (above) is untouched, so segments carries zero cost / zero regression when not requested. ────────
+_vad_model = None  # lazy standalone fsmn-vad singleton (segment offsets)
+
+
+def _get_vad_model():
+    global _vad_model
+    if _vad_model is None:
+        AutoModel = _optdep.require("funasr", "asr").AutoModel
+        last = None
+        for dev in ("mps", "cpu"):
+            try:
+                _vad_model = AutoModel(model=_VAD, device=dev, disable_update=True)
+                logger.info("fsmn-vad (segments) loaded on %s", dev)
+                break
+            except Exception as exc:  # noqa: BLE001
+                last = exc
+        if _vad_model is None:
+            raise RuntimeError(f"could not load fsmn-vad (mps/cpu): {last}")
+    return _vad_model
+
+
+def _segments_from(spans: list, texts: list) -> list[dict]:
+    """PURE assembler (the smoke-golden target): zip VAD spans ``[[start_ms,end_ms],...]`` with the
+    per-span transcribed texts into ``[{start,end,text}]`` (seconds, cleaned). Zips to the shorter
+    length so a count mismatch degrades gracefully instead of misaligning; drops empty-text spans."""
+    out = []
+    for span, t in zip(spans or [], texts or []):
+        if not (isinstance(span, (list, tuple)) and len(span) >= 2):
+            continue
+        txt = _clean(t or "")
+        if txt:
+            out.append({"start": round(span[0] / 1000.0, 2),
+                        "end": round(span[1] / 1000.0, 2), "text": txt})
+    return out
+
+
+def _transcribe_segments(wav_path: str, language: Optional[str]) -> list[dict]:
+    """Per-VAD-segment ``{start,end,text}`` for a wav. fsmn-vad standalone for the offsets -> slice per
+    span -> ONE batched generate for the texts -> zip. Returns [] on any hiccup (the caller keeps the
+    flat transcript regardless; segments are opt-in extra, never load-bearing)."""
+    try:
+        import soundfile as sf
+        audio, sr = sf.read(wav_path, dtype="float32")
+        if getattr(audio, "ndim", 1) > 1:
+            audio = audio[:, 0]  # mono (decode is already mono; belt-and-suspenders)
+        vres = _get_vad_model().generate(input=audio, fs=sr)
+        spans = ((vres[0].get("value") if vres else None) or [])
+        if not spans:
+            return []
+        slices = [audio[int(s * sr / 1000): int(e * sr / 1000)] for s, e in spans]
+        res = _get_model().generate(input=slices, fs=sr, cache={}, language=(language or "auto"),
+                                    use_itn=True, merge_vad=False)
+        return _segments_from(spans, [r.get("text", "") for r in (res or [])])
+    except Exception as exc:  # noqa: BLE001 — segments are opt-in; never break the transcript
+        logger.warning("asr segments failed %s: %s", wav_path, exc)
+        return []
+
+
+# ── speaker diarization (opt-in --diarize): WHO-said-what. funasr's timestamp-based speaker attribution
+# needs a TIMESTAMPED ASR, and SenseVoice emits none (it crashes distribute_spk), so the diarize path
+# uses Paraformer-zh + fsmn-vad + cam++ (speaker embed + cluster) + ct-punc (sentence boundaries), ALL
+# from modelscope (NO HuggingFace token, NO gated terms), lazy-loaded ONLY when --diarize is requested
+# (zero steady-state footprint on the mini). funasr does VAD + embed + cluster + attribution internally;
+# we read sentence_info. zh-focused (Paraformer-zh); the flat transcript path keeps SenseVoice. ───────
+_diar_model = None
+
+
+def _get_diar_model():
+    global _diar_model
+    if _diar_model is None:
+        AutoModel = _optdep.require("funasr", "asr").AutoModel
+        last = None
+        for dev in ("mps", "cpu"):
+            try:
+                _diar_model = AutoModel(model="paraformer-zh", vad_model=_VAD, spk_model="cam++",
+                                        punc_model="ct-punc", device=dev, disable_update=True)
+                logger.info("diarization model (paraformer-zh+cam++) loaded on %s", dev)
+                break
+            except Exception as exc:  # noqa: BLE001
+                last = exc
+        if _diar_model is None:
+            raise RuntimeError(f"could not load diarization model (mps/cpu): {last}")
+    return _diar_model
+
+
+def _diarized_from(sentence_info: list) -> list[dict]:
+    """PURE assembler (the smoke-golden target): funasr ``sentence_info`` [{start,end,text/sentence,spk}]
+    -> ``[{start,end,text,speaker}]`` (seconds, cleaned, empty-text sentences dropped). ``speaker`` is the
+    raw cluster index funasr assigned (the agent reads 'speaker 0 said X, speaker 1 said Y')."""
+    out = []
+    for s in (sentence_info or []):
+        if not isinstance(s, dict):
+            continue
+        txt = _clean(s.get("text") or s.get("sentence") or "")
+        st, en = s.get("start"), s.get("end")
+        if not txt or st is None or en is None:
+            continue
+        out.append({"start": round(st / 1000.0, 2), "end": round(en / 1000.0, 2),
+                    "text": txt, "speaker": s.get("spk")})
+    return out
+
+
+def _transcribe_diarized(wav_path: str, speakers: Optional[int] = None) -> tuple:
+    """(flat_text, segments, n_speakers) via the diarization model. funasr does the whole pipeline; we
+    read sentence_info -> per-sentence {start,end,text,speaker}. ("", [], 0) on any hiccup (the caller
+    keeps degrading honestly, never a false transcript).
+
+    speakers>0 pins cam++'s cluster count to that oracle number (preset_spk_num); the eigengap
+    auto-estimate is unstable on short / noisy audio (it over- or under-splits), so passing the known
+    count (a 1-on-1 = 2, a solo = 1) is what makes the labels track the real turns."""
+    preset = speakers if (speakers and speakers > 0) else None
+    try:
+        res = _get_diar_model().generate(input=wav_path, cache={}, use_itn=True, batch_size_s=300,
+                                         preset_spk_num=preset)
+        si = ((res[0] if isinstance(res, list) and res else {}) or {}).get("sentence_info") or []
+        segs = _diarized_from(si)
+        flat = _clean(" ".join(s["text"] for s in segs))
+        n_spk = len({s["speaker"] for s in segs if s["speaker"] is not None})
+        return flat, segs, n_spk
+    except Exception as exc:  # noqa: BLE001 — diarize is opt-in; never break the caller
+        logger.warning("asr diarization failed %s: %s", wav_path, exc)
+        return "", [], 0
 
 
 def _xiaoyuzhou_audio(url: str) -> tuple[Optional[str], dict]:
@@ -453,12 +605,57 @@ def _douyin_audio(url: str) -> tuple[Optional[str], dict]:
     return dest, {"source": "Douyin", "title": r.get("title"), "author": r.get("author")}
 
 
+def _remember_transcript(rec: dict) -> None:
+    """Perception-produced text enters the eye's MEMORY (2026-07-05): a transcript is text the eye
+    itself produced, so it must be findable later ("which podcast said X") exactly like fetched
+    text — before this, a transcript lived only in the URL-keyed cache, unreachable by content.
+    Full-lane ingest via recall.writer.ingest_produced (same single-writer queue; WRITES_ENABLED /
+    fail-open gates keep cron processes writing nothing). Fires on BOTH fresh and cached returns:
+    the upsert is idempotent on (source, source_id), and a repeat call heals pre-fix transcripts
+    into the index (re-segmenting them on a SEG_VERSION bump). Slices are keyed AND titled
+    per-slice so two slices of one episode stay distinct docs (same bare title would title-
+    fingerprint-merge at read time). Best-effort: memory must never break perception."""
+    try:
+        text = (rec.get("transcript") or "").strip()
+        url = rec.get("url") or ""
+        if not text or not url or rec.get("error"):
+            return
+        s0, dur = rec.get("start_seconds"), rec.get("duration_seconds")
+        if s0 or dur:
+            slice_tag = f"{int(s0 or 0)}s+{int(dur)}s" if dur else f"{int(s0 or 0)}s+"
+            sid = f"{url}#t={slice_tag}"
+            title = f"{rec.get('title') or url} [transcript {slice_tag}]"
+        else:
+            sid = url
+            title = f"{rec.get('title') or url} [transcript]"
+        from penumbra.core.normalize import Document
+        from penumbra.core.recall import writer
+        writer.ingest_produced([Document(
+            source="asr", source_id=sid, url=url, title=title, content=text,
+            tags=["transcript"],
+            metadata={"asr_model": rec.get("model"), "audio_seconds": rec.get("audio_seconds"),
+                      "media_source": rec.get("source")},
+        )])
+    except Exception as exc:  # noqa: BLE001 — memory must never break perception
+        logger.debug("transcript memory ingest skipped: %s", exc)
+
+
 def transcribe_url(url: str, language: Optional[str] = None,
-                   start=None, duration=None) -> dict:
+                   start=None, duration=None, segments: bool = False, diarize: bool = False,
+                   speakers: Optional[int] = None) -> dict:
     """Resolve audio for `url` → SenseVoice transcript. Cached forever. See penumbra_transcribe for fields.
 
     start/duration (seconds or MM:SS / HH:MM:SS) transcribe only that slice — the
-    chapter-from-shownotes pattern for long episodes."""
+    chapter-from-shownotes pattern for long episodes. segments=True ALSO returns a per-VAD-segment
+    [{start,end,text}] list (seconds) so a no-shownote transcript is navigable / time-citable; the flat
+    ``transcript`` is unchanged either way.
+
+    diarize=True switches to the WHO-said-what path (Paraformer-zh + cam++, zh-focused): ``segments``
+    become [{start,end,text,speaker}] and ``speakers`` carries the distinct-speaker count. It is a
+    SEPARATE ASR pass (Paraformer, not SenseVoice) so the flat ``transcript`` is the diarized text
+    joined; use it for interviews / multi-host podcasts where speaker turns matter. Pass ``speakers=N``
+    (the known head-count) to pin cam++'s cluster count; leaving it None auto-estimates (unstable on
+    short audio)."""
     url = (url or "").strip()
     if not url:
         return {"url": url, "error": "empty url", "transcript": ""}
@@ -467,26 +664,42 @@ def transcribe_url(url: str, language: Optional[str] = None,
     except ValueError as exc:
         return {"url": url, "error": str(exc), "transcript": ""}
     ck = cache.make_key("asr", _MODEL, url, language or "auto",
-                        f"{start_s or 0}-{dur_s or 'full'}")
+                        f"{start_s or 0}-{dur_s or 'full'}", f"seg{int(bool(segments))}",
+                        f"diar{int(bool(diarize))}", f"spk{int(speakers or 0)}")
     cached = cache.get(ck)
     if cached is not None:
-        return {**cached, "cached": True}
+        rec = {**cached, "cached": True}
+        _remember_transcript(rec)  # heal: pre-fix transcripts enter the memory too (idempotent)
+        return rec
 
+    scheme = (urlparse(url).scheme or "").lower()
     host = (urlparse(url).hostname or "").lower()
+    # SSRF guard: transcribe_url takes an AGENT-controlled URL and the yt-dlp else-branch below
+    # hands it straight to yt-dlp (a SEPARATE egress from the ffmpeg _decode_to_wav guard). Refuse
+    # an SSRF-class http(s) URL here so no branch can reach a loopback/private host (127.0.0.1:9222
+    # CDP). Non-http schemes are already rejected by _decode_to_wav's own guard.
+    if scheme in ("http", "https"):
+        _blk = _netguard.security_block_reason(url)
+        if _blk:
+            return {"url": url, "error": f"refused: {_blk}", "transcript": ""}
+
+    def _host_is(domain: str) -> bool:  # SUFFIX match, not substring: xiaoyuzhoufm.com.evil.net must NOT route
+        return host == domain or host.endswith("." + domain)
+
     t0 = time.time()
     ytmp = wav = None
     try:
-        if "xiaoyuzhoufm.com" in host:
+        if _host_is("xiaoyuzhoufm.com"):
             au, meta = _xiaoyuzhou_audio(url)
             if not au:
                 return {"url": url, "error": "could not resolve 小宇宙 audio", "transcript": ""}
             wav = _decode_to_wav(au, start_s, dur_s)
-        elif "bilibili.com" in host or "b23.tv" in host:
+        elif _host_is("bilibili.com") or _host_is("b23.tv"):
             ytmp, meta = _bilibili_audio(url)  # own activated session — yt-dlp 412s on bilibili
             if not ytmp:
                 return {"url": url, "error": "could not resolve bilibili audio (anti-crawler 412?)", "transcript": ""}
             wav = _decode_to_wav(ytmp, start_s, dur_s)
-        elif "douyin.com" in host:
+        elif _host_is("douyin.com"):
             ytmp, meta = _douyin_audio(url)  # yt-dlp's Douyin extractor is broken; capture play_addr via 9225
             if not ytmp:
                 return {"url": url, "error": "could not resolve douyin audio (9225 session down / play_addr miss)", "transcript": ""}
@@ -500,7 +713,12 @@ def transcribe_url(url: str, language: Optional[str] = None,
                 return {"url": url, "error": "no audio stream resolved (unsupported host?)", "transcript": ""}
             wav = _decode_to_wav(ytmp, start_s, dur_s)
         audio_secs = round(os.path.getsize(wav) / (_SR * 2))  # 16-bit mono
-        text = _transcribe_wav(wav, language)
+        diar_segs, n_spk, seg = [], 0, None
+        if diarize:  # WHO-said-what: the Paraformer diarization model gives BOTH the flat text + speaker segments
+            text, diar_segs, n_spk = _transcribe_diarized(wav, speakers)
+        else:
+            text = _transcribe_wav(wav, language)
+            seg = _transcribe_segments(wav, language) if segments else None  # compute while the wav still exists
     except Exception as exc:  # noqa: BLE001
         logger.warning("asr failed %s: %s", url, exc)
         return {"url": url, "error": f"{type(exc).__name__}: {str(exc)[:200]}", "transcript": ""}
@@ -510,10 +728,16 @@ def transcribe_url(url: str, language: Optional[str] = None,
 
     rec = {"url": url, "transcript": text, "chars": len(text),
            "audio_seconds": audio_secs, "asr_seconds": round(time.time() - t0, 1),
-           "model": "SenseVoice-Small", "source": meta.get("source"),
+           "model": "paraformer-zh+cam++" if diarize else "SenseVoice-Small", "source": meta.get("source"),
            "title": meta.get("title"), "cached": False}
+    if diarize:
+        rec["segments"] = diar_segs  # [{start,end,text,speaker}]; WHO-said-what turns
+        rec["speakers"] = n_spk      # distinct-speaker count funasr's cam++ clustered
+    elif segments:
+        rec["segments"] = seg or []  # per-VAD-segment [{start,end,text}]; opt-in navigable view
     if start_s or dur_s:
         rec["start_seconds"] = start_s or 0
         rec["duration_seconds"] = dur_s
     cache.set(ck, rec, ttl=_TTL)
+    _remember_transcript(rec)
     return rec

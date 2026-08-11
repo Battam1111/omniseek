@@ -177,6 +177,31 @@ class WorldBankStatsAdapter(BaseAPIAdapter):
             return []
         return [(country, indicator, rows)]
 
+    async def _araw_fetch(self, query: str, limit: int) -> list:
+        """Async twin of ``_raw_fetch``: byte-faithful mirror (same query parse, same URL / params /
+        timeout, same ``_rows`` decode, same None/[] contract). ONLY the shared-http egress is swapped
+        for its async twin (``http.get_json`` -> ``await http.aget_json``)."""
+        parsed = _parse_query(query)
+        if parsed is None:
+            return []
+        country, indicator = parsed
+        raw = await http.aget_json(
+            API_URL.format(country=country, indicator=indicator),
+            params={"format": "json", "date": _DATE_RANGE, "per_page": _PER_PAGE},
+            timeout=15,
+        )
+        rows = self._rows(raw)
+        if not rows:
+            return []
+        return [(country, indicator, rows)]
+
+    async def asearch(self, query: str, limit: int = 10) -> list[Document]:
+        """Native-async twin of ``search`` -> AsyncSearchCapable. Shares the base async cache round-trip
+        (``_aapi_search``); egress via ``_araw_fetch``; mapping via the SAME pure-CPU ``_to_document``
+        (byte-identical to ``search``)."""
+        return await self._aapi_search(
+            query, limit, araw_fetch=lambda: self._araw_fetch(query, limit))
+
     def _to_document(self, raw) -> Optional[Document]:
         """One aggregation unit (country, indicator, rows) -> one time-series doc."""
         if not isinstance(raw, tuple) or len(raw) != 3:

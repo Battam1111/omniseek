@@ -91,6 +91,43 @@ class HuggingFaceHubAdapter(BaseAPIAdapter):
         pairs.sort(key=lambda p: (p[0].get("downloads") or 0), reverse=True)
         return pairs[:limit]
 
+    async def _araw_fetch(self, query: str, limit: int) -> list:
+        """Async twin of ``_raw_fetch``: BYTE-FAITHFUL mirror of the bounded 3-listing fan-out.
+
+        Same per-category budget, same three categories in the same order, same URL / params /
+        timeout, same None → warn+continue contract, same merge + downloads-desc stable sort, same
+        ``pairs[:limit]`` truncation. ONLY the shared-http egress is swapped: ``http.get_json`` ->
+        ``await http.aget_json`` for EACH of the three listing calls (sequential awaits, same order).
+        The per-model detail fetch lives in ``fetch_url`` (not here), so nothing else egresses.
+        """
+        per_cat = max(2, (limit // 3) + 1)
+        pairs: list[tuple[dict, str]] = []
+        for kind in ("models", "datasets", "spaces"):
+            items = await http.aget_json(
+                f"{HF_API_BASE}/{kind}",
+                params={
+                    "search": query,
+                    "limit": per_cat,
+                    "sort": "downloads",
+                    "direction": -1,
+                },
+                timeout=TIMEOUT,
+            )
+            if items is None:
+                logger.warning("HF %s search failed", kind)
+                continue
+            for item in items[:per_cat]:
+                pairs.append((item, kind))
+
+        pairs.sort(key=lambda p: (p[0].get("downloads") or 0), reverse=True)
+        return pairs[:limit]
+
+    async def asearch(self, query: str, limit: int = 10) -> list[Document]:
+        """Native-async twin of ``search`` -> AsyncSearchCapable. Shares the base async cache
+        round-trip (``_aapi_search``); egress via ``_araw_fetch``; mapping via the SAME pure-CPU
+        ``_to_document`` (byte-identical to ``search``)."""
+        return await self._aapi_search(query, limit, araw_fetch=lambda: self._araw_fetch(query, limit))
+
     def _to_document(self, raw) -> Optional[Document]:
         item, kind = raw
         return self._item_to_document(item, kind)

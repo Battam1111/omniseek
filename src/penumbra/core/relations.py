@@ -414,7 +414,11 @@ def resolve_identity(name: str, hint: str = "", source: str = "auto", paper: str
     # calls). limit is in the key so a wider request is a distinct entry, never a truncated hit. Short
     # TTL (~1h) so a brand-new ingestion is still picked up promptly. A DEGRADED lookup is NOT cached
     # (see below): caching a transport failure would freeze a recoverable 429 for the whole TTL.
-    key = cache.make_key("relations", "resolve", name, hint, source, paper, limit)
+    # A-class canonical key: fold the name to lowercase (author search is case-insensitive, so
+    # "Wenjie Li" / "wenjie li" are ONE query) and normalize the paper id via the shared _s2 normalizer
+    # (bare arXiv / ArXiv: / DOI: forms collapse), so equivalent lookups share one cache row.
+    key = cache.make_key("relations", "resolve", name.lower(), hint, source,
+                         _s2.norm_s2_id(paper) if paper else "", limit)
     if not fresh:
         cached = cache.get(key)
         if cached is not None:

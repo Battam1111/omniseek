@@ -1,407 +1,389 @@
 [
- {
-  "name": "agent_tooling_radar",
-  "explicit_only": "tooling/skill radar; watchtower + named only, kept out of research search",
-  "description": "Agent/Skill 生态雷达 — Claude Code/MCP/Agent SDK 发布 + 研究加速工具(paper-qa/paper-search-mcp/context7/serena)+ eval/observability(inspect/phoenix/langfuse)发布 + awesome-lists(agent-papers/agent-skills/superpowers)+ Latent Space/Simon Willison。盯'存在哪些好工具'的信息差(2026-06-05 基线扫描产物;explicit_only,看门狗/点名才查)",
-  "feeds": [
-   "https://github.com/anthropics/claude-code/releases.atom",
-   "https://github.com/modelcontextprotocol/modelcontextprotocol/releases.atom",
-   "https://github.com/anthropics/skills/commits/main.atom",
-   "https://github.com/upstash/context7/releases.atom",
-   "https://github.com/oraios/serena/releases.atom",
-   "https://github.com/Future-House/paper-qa/releases.atom",
-   "https://github.com/openags/paper-search-mcp/commits/main.atom",
-   "https://github.com/Arize-ai/phoenix/releases.atom",
-   "https://github.com/langfuse/langfuse/releases.atom",
-   "https://github.com/UKGovernmentBEIS/inspect_ai/releases.atom",
-   "https://github.com/VoltAgent/awesome-ai-agent-papers/commits/main.atom",
-   "https://github.com/VoltAgent/awesome-agent-skills/commits/main.atom",
-   "https://github.com/obra/superpowers/releases.atom",
-   "https://www.latent.space/feed",
-   "https://simonwillison.net/tags/llms.atom",
-   "https://simonwillison.net/tags/model-context-protocol.atom"
-  ],
-  "cache_ttl": 3600,
-  "url_pattern": null
- },
- {
-  "name": "a_happy_phd",
-  "description": "A Happy PhD — PhD wellbeing + productivity (Luis P. Prieto, ed. psychology lens)",
-  "feeds": [
-   "https://ahappyphd.org/index.xml"
-  ],
-  "cache_ttl": 3600,
-  "url_pattern": "ahappyphd\\.org"
- },
- {
-  "name": "academic_ai_labs",
-  "description": "Top academic AI lab blogs — Stanford CRFM / Berkeley BAIR / MIT CSAIL. Methodology-heavy counterpart to frontier_labs (industry).",
-  "feeds": [
-   "https://crfm.stanford.edu/feed.xml",
-   "https://bair.berkeley.edu/blog/feed.xml",
-   "https://news.mit.edu/topic/mitcomputer-science-and-artificial-intelligence-laboratory-csail-rss.xml"
-  ],
-  "cache_ttl": 7200,
-  "url_pattern": null
- },
- {
-  "name": "academic_jobs",
-  "description": "Academic faculty / postdoc / staff scientist job RSS — Nature Careers per-country (Singapore / Canada / Hong Kong + UK / US / Australia backup). HK PhD → overseas placement signal.",
-  "feeds": [
-   "https://www.nature.com/naturecareers/jobsrss/?countrycode=SG",
-   "https://www.nature.com/naturecareers/jobsrss/?countrycode=CA",
-   "https://www.nature.com/naturecareers/jobsrss/?countrycode=HK",
-   "https://www.nature.com/naturecareers/jobsrss/?countrycode=GB",
-   "https://www.nature.com/naturecareers/jobsrss/?countrycode=US",
-   "https://www.nature.com/naturecareers/jobsrss/?countrycode=AU"
-  ],
-  "cache_ttl": 7200,
-  "url_pattern": null
- },
- {
-  "name": "ai_newsletters",
-  "description": "AI newsletter / long-form recap matrix — The Sequence / Last Week in AI / The Gradient / Nicholas Carlini. Periodical ML research + security digest.",
-  "feeds": [
-   "https://thesequence.substack.com/feed",
-   "https://lastweekin.ai/feed",
-   "https://thegradient.pub/rss/",
-   "https://nicholas.carlini.com/writing/feed.xml"
-  ],
-  "cache_ttl": 7200,
-  "url_pattern": null
- },
- {
-  "name": "alignment_forum",
-  "description": "AI Alignment Forum — alignment / safety / interpretability research (complement to lesswrong adapter; AF-filtered view)",
-  "feeds": [
-   "https://www.alignmentforum.org/feed.xml"
-  ],
-  "cache_ttl": 3600,
-  "url_pattern": "alignmentforum\\.org"
- },
- {
-  "name": "biorxiv",
-  "description": "bioRxiv preprints — ML/AI cross-disciplinary applications (bioinformatics + computational neuroscience subjects)",
-  "feeds": [
-   "https://connect.biorxiv.org/biorxiv_xml.php?subject=bioinformatics",
-   "https://connect.biorxiv.org/biorxiv_xml.php?subject=neuroscience"
-  ],
-  "cache_ttl": 7200,
-  "url_pattern": null
- },
- {
-  "name": "canada_ai_research",
-  "description": "加拿大 AI 研究所 + tech ecosystem — Vector / CIFAR / UWaterloo CS / Layer 6 / BetaKit / Globe and Mail Tech / Mila / UofT Schwartz Reisman (Amii 经 scrape_js_sites; IVADO 经 ivado_news 源)",
-  "feeds": [
-   "https://vectorinstitute.ai/feed/",
-   "https://cifar.ca/feed/",
-   "https://uwaterloo.ca/computer-science/news/news.xml",
-   "https://layer6.ai/feed/",
-   "https://betakit.com/feed/",
-   "https://www.theglobeandmail.com/arc/outboundfeeds/rss/category/business/technology/",
-   "https://mila.quebec/rss.xml",
-   "https://srinstitute.utoronto.ca/news?format=rss"
-  ],
-  "cache_ttl": 7200,
-  "url_pattern": null
- },
- {
-  "name": "canada_immigration",
-  "description": "加拿大移民信号 — IRCC 官方 + CIC Times + immigration.ca + Moving2Canada + Express Entry (每周 EE draws / Tech Talent / GTS / PNP 重组 / STEM 优先策略)",
-  "feeds": [
-   "https://api.io.canada.ca/io-server/gc/news/en/v2?dept=departmentofcitizenshipandimmigration&sort=publishedDate&orderBy=desc&pick=50&format=atom",
-   "https://www.cictimes.com/feed/",
-   "https://www.immigration.ca/feed/",
-   "https://moving2canada.com/feed/"
-  ],
-  "cache_ttl": 3600,
-  "url_pattern": null
- },
- {
-  "name": "chinese_podcasts",
-  "description": "中文 AI / 科技 / PhD 方法论 播客 — 晚点 LateTalk / 硅谷101 / 时差 in-betweenness + 1 (张小珺/OnBoard!/42章经 等走 xiaoyuzhou 原生适配器, 无需 RSSHub; 口语内容配 penumbra_transcribe)",
-  "feeds": [
-   "https://feeds.fireside.fm/latetalk/rss",
-   "https://feeds.fireside.fm/sv101/rss",
-   "https://rss.buzzsprout.com/1171871.rss",
-   "https://anchor.fm/s/60d1fed8/podcast/rss"
-  ],
-  "cache_ttl": 21600,
-  "url_pattern": null
- },
- {
-  "name": "distill_pub",
-  "description": "Distill.pub — ML visualization & interpretability archive (Chris Olah et al., 2016-2021, ~40 articles, canonical reference)",
-  "feeds": [
-   "https://distill.pub/rss.xml"
-  ],
-  "cache_ttl": 86400,
-  "url_pattern": "distill\\.pub",
-  "explicit_only": "archive: Distill.pub 2021 起无限期停更(自发 Distill Hiatus);命名 penumbra_fetch 取可解释性经典,不进广搜避免旧文混入近期论文检索"
- },
- {
-  "name": "frontier_labs",
-  "description": "Frontier AI research labs — Anthropic / DeepMind / Hugging Face / OpenAI / Meta FAIR / Microsoft Research / MSRA / Google Research / Apple ML / Ai2 / Sakana / EleutherAI / Character.AI / PyTorch",
-  "feeds": [
-   "https://raw.githubusercontent.com/taobojlen/anthropic-rss-feed/main/anthropic_news_rss.xml",
-   "https://deepmind.google/blog/rss.xml",
-   "https://huggingface.co/blog/feed.xml",
-   "https://openai.com/news/rss.xml",
-   "https://research.facebook.com/feed/",
-   "https://www.microsoft.com/en-us/research/feed/",
-   "https://www.microsoft.com/en-us/research/lab/microsoft-research-asia/feed/",
-   "https://research.google/blog/rss/",
-   "https://machinelearning.apple.com/rss.xml",
-   "https://www.together.ai/blog/rss.xml",
-   "https://blogs.nvidia.com/feed/",
-   "https://aws.amazon.com/blogs/machine-learning/feed/",
-   "https://allenai.org/rss.xml",
-   "https://sakana.ai/feed.xml",
-   "https://blog.eleuther.ai/index.xml",
-   "https://blog.character.ai/rss/",
-   "https://pytorch.org/blog/feed/"
-  ],
-  "cache_ttl": 3600,
-  "url_pattern": null
- },
- {
-  "name": "github_releases",
-  "description": "GitHub release events for ML infra stack — vLLM / transformers / SGLang / llama.cpp / PyTorch / Unsloth / OpenCompass. Engineering delivery stream (complement to github_trending).",
-  "feeds": [
-   "https://github.com/vllm-project/vllm/releases.atom",
-   "https://github.com/huggingface/transformers/releases.atom",
-   "https://github.com/sgl-project/sglang/releases.atom",
-   "https://github.com/ggerganov/llama.cpp/releases.atom",
-   "https://github.com/pytorch/pytorch/releases.atom",
-   "https://github.com/unslothai/unsloth/releases.atom",
-   "https://github.com/open-compass/opencompass/releases.atom"
-  ],
-  "cache_ttl": 7200,
-  "url_pattern": null
- },
- {
-  "name": "hk_career_research",
-  "description": "Hong Kong AI / career / 媒体信号 — SCMP News + HKFP + ASTRI (R&D 院所) + info.gov.hk (SenseTime 经 scrape_js_sites). HK PhD 出海+本地路径专用",
-  "feeds": [
-   "https://www.scmp.com/rss/91/feed",
-   "https://hongkongfp.com/feed/",
-   "https://www.astri.org/tag/press-release/feed/",
-   "https://www.info.gov.hk/gia/rss/general_en.xml",
-   "https://www.news.gov.hk/en/common/html/topstories.rss.xml"
-  ],
-  "cache_ttl": 7200,
-  "url_pattern": null
- },
- {
-  "name": "kexue_fm",
-  "description": "科学空间 kexue.fm — 苏剑林（月之暗面）中文 NLP/LLM 数学派旗手个人博客",
-  "feeds": [
-   "https://kexue.fm/feed"
-  ],
-  "cache_ttl": 7200,
-  "url_pattern": "kexue\\.fm"
- },
- {
-  "name": "lesswrong",
-  "description": "LessWrong + Alignment Forum — research methodology meta-reflection (RSS, recent posts only)",
-  "feeds": [
-   "https://www.lesswrong.com/feed.xml",
-   "https://www.alignmentforum.org/feed.xml"
-  ],
-  "cache_ttl": 1800,
-  "url_pattern": "(lesswrong|alignmentforum)\\.(com|org)"
- },
- {
-  "name": "lmsys_arena",
-  "description": "LMSys / LMArena Blog — Chatbot Arena Elo methodology + LLM eval deep-dives + red-teaming reports (canonical LLM evaluation methodology source)",
-  "feeds": [
-   "https://arena.ai/blog/rss/"
-  ],
-  "cache_ttl": 7200,
-  "url_pattern": "(lmarena|lmsys|arena)\\.ai"
- },
- {
-  "name": "lobsters",
-  "description": "Lobste.rs — invite-only tech link aggregator (smaller than HN, higher SNR; ai/ml tag feeds curated by mods)",
-  "feeds": [
-   "https://lobste.rs/rss",
-   "https://lobste.rs/t/ai.rss",
-   "https://lobste.rs/t/ml.rss"
-  ],
-  "cache_ttl": 1800,
-  "url_pattern": "lobste\\.rs"
- },
- {
-  "name": "ml_conferences",
-  "description": "NeurIPS / ICML / ICLR official blogs — deadlines, best papers, affinity events, blog track",
-  "feeds": [
-   "https://blog.neurips.cc/feed/",
-   "https://blog.icml.cc/feed/",
-   "https://blog.iclr.cc/feed/"
-  ],
-  "cache_ttl": 7200,
-  "url_pattern": null
- },
- {
-  "name": "nature_careers",
-  "description": "Nature Careers — authoritative PhD survey data + career articles",
-  "feeds": [
-   "https://www.nature.com/subjects/careers.rss",
-   "https://www.nature.com/nature.rss"
-  ],
-  "cache_ttl": 3600,
-  "url_pattern": "nature\\.com"
- },
- {
-  "name": "pmlr",
-  "description": "PMLR — Proceedings of Machine Learning Research (ICML / AISTATS / COLT / NeurIPS comp / UAI / IJCAI / CoRL / AutoML / MIDL + 等; 232 volumes)",
-  "feeds": [
-   "https://proceedings.mlr.press/feed.xml"
-  ],
-  "cache_ttl": 7200,
-  "url_pattern": "proceedings\\.mlr\\.press"
- },
- {
-  "name": "singapore_ai_research",
-  "description": "新加坡 AI 学术 + tech ecosystem — NUS News + AI Singapore + HardwareZone + Grab Eng + Vulcan Post + Tech in Asia (A*STAR/SMU/SEA-LION 经 scrape_singapore; NTU 经 scrape_js_sites)",
-  "feeds": [
-   "https://news.nus.edu.sg/feed/",
-   "https://aisingapore.org/feed/",
-   "https://feeds.feedburner.com/hardwarezone/news",
-   "https://engineering.grab.com/feed.xml",
-   "https://vulcanpost.com/feed/",
-   "https://www.techinasia.com/feed"
-  ],
-  "cache_ttl": 7200,
-  "url_pattern": null
- },
- {
-  "name": "substack_matrix",
-  "description": "Newsletter & individual researcher/career blogs — ML methodology / PhD career / LLM tools / Bayesian stats / China AI / career impact",
-  "feeds": [
-   "https://magazine.sebastianraschka.com/feed",
-   "https://importai.substack.com/feed",
-   "https://lilianweng.github.io/index.xml",
-   "https://eugeneyan.com/rss/",
-   "https://www.interconnects.ai/feed",
-   "https://simonwillison.net/atom/everything/",
-   "https://theprofessorisin.com/feed/",
-   "https://www.dwarkesh.com/feed",
-   "https://www.astralcodexten.com/feed",
-   "https://statmodeling.stat.columbia.edu/feed/",
-   "https://chinai.substack.com/feed",
-   "https://www.aisnakeoil.com/feed",
-   "https://thealgorithmicbridge.substack.com/feed",
-   "https://benjamintodd.substack.com/feed",
-   "https://tridao.me/feed.xml",
-   "https://www.argmin.net/feed",
-   "https://timdettmers.com/feed/",
-   "https://lemire.me/blog/feed/",
-   "https://calnewport.com/blog/feed/",
-   "https://blog.ezyang.com/feed.xml",
-   "https://newsletter.pragmaticengineer.com/feed"
-  ],
-  "cache_ttl": 1800,
-  "url_pattern": null
- },
- {
-  "name": "thesis_whisperer",
-  "description": "The Thesis Whisperer — Inger Mewburn's authoritative PhD blog",
-  "feeds": [
-   "https://thesiswhisperer.com/feed/"
-  ],
-  "cache_ttl": 3600,
-  "url_pattern": "thesiswhisperer\\.com"
- },
- {
-  "name": "chinese_ai_media",
-  "description": "中文 AI 媒体 + 个人博客 — 量子位 QbitAI (直取) + 李博杰 01.me (agent/career 长文) + PaperWeekly (社区 wechat2rss 镜像). 机器之心/新智元 已移交 wechat 适配器 (经 wechat2rss, 比已死的 AnyFeeder 桥可靠)",
-  "feeds": [
-   "https://www.qbitai.com/feed",
-   "https://01.me/atom.xml",
-   "https://decemberpei.cyou/rssbox/wechat-paperweekly.xml"
-  ],
-  "cache_ttl": 3600,
-  "url_pattern": null
- },
- {
-  "name": "ml_eval_safety",
-  "description": "LLM 评测 + AI 安全/威胁评估 机构 — METR (前沿危险能力/autonomy 评估 + Frontier Risk Report) + Epoch AI (基准 DB + 算力/数据/成本趋势量化). 评测/安全职业线信号, 区别于 lmsys_arena(实时 Elo) 与 alignment_forum(社区)",
-  "feeds": [
-   "https://metr.substack.com/feed",
-   "https://epochai.substack.com/feed"
-  ],
-  "cache_ttl": 7200,
-  "url_pattern": null
- },
- {
-  "name": "sg_immigration",
-  "description": "新加坡移民/工准证落地信号 — Immigration@SG (IASG 独立咨询: EP/PR 路径 + MOM/EDB 解读) + Singapore Expats Forum (申请人真实 EP/PR 审批时间线/COMPASS 结果). 政策解读+地面实情两层 (官方 MOM newsroom 无有效 RSS; Fragomen 经 scrape_singapore)",
-  "feeds": [
-   "https://iasg.com.sg/feed/",
-   "https://www.singaporeexpats.com/rss/expat-forum.xml"
-  ],
-  "cache_ttl": 7200,
-  "url_pattern": null
- },
- {
-  "name": "vector_talent_hub",
-  "description": "Vector Institute Talent Hub — 加拿大顶尖 AI 研究所策展的 AI 职位板 (research + industry, 多伦多/加拿大). 落地加拿大主信号; 与 overseas_ai_jobs(跨 lab ATS)/academic_jobs(Nature 教职) 互补",
-  "feeds": [
-   "https://talenthub.vectorinstitute.ai/jobs/search.rss"
-  ],
-  "cache_ttl": 7200,
-  "url_pattern": "talenthub\\.vectorinstitute\\.ai"
- },
- {
-  "name": "higheredjobs_cs",
-  "description": "HigherEdJobs CS/IT — 美国/北美 高校 CS·ML 教职 + 博后 + 研究岗 RSS (category 102). 学术 track 落地板, 补 academic_jobs(Nature Careers per-country)",
-  "feeds": [
-   "https://www.higheredjobs.com/rss/categoryFeed.cfm?catID=102"
-  ],
-  "cache_ttl": 7200,
-  "url_pattern": "higheredjobs\\.com",
-  "explicit_only": "US 高校 CS·ML 教职/博后 RSS (HigherEdJobs cat 102). JA3/TLS WAF (PerimeterX) 墙 httpx, 经 tls_impersonate (curl_cffi Chrome 指纹) 取真 feed. 命名 penumbra_fetch 用于学术 track. 2026-06-22 经 curl_cffi 复活 (此前因 JA3 墙退役)。",
-  "tls_impersonate": true
- },
- {
-  "name": "wikicfp_nlp",
-  "description": "WikiCFP 自然语言处理征稿发现 (cat=natural language processing) — NLP 方向会议/研讨会的征稿 (CFP) 条目: 会议名 + 地点 + 日期范围 + 事件页链接. 长尾 CFP 发现, 补 conference_deadlines/ml_conferences 的主榜. 注意: 截稿日不在 feed 里 (feed 只给会议日期), 真截稿需打开事件页看. 命名 penumbra_fetch.",
-  "feeds": [
-   "http://www.wikicfp.com/cfp/rss?cat=natural+language+processing"
-  ],
-  "cache_ttl": 21600,
-  "url_pattern": "wikicfp\\.com",
-  "explicit_only": "WikiCFP 长尾 CFP 发现 (NLP); 命名 penumbra_fetch 补会议征稿. http scheme (443 无 TLS)"
- },
- {
-  "name": "jobrxiv_canada",
-  "description": "jobRxiv (加拿大) — 学术研究岗位板 (博后/研究科学家/教职), 按地区过滤加拿大. 补 academic_jobs/vector_talent_hub 的加拿大研究岗覆盖",
-  "feeds": [
-   "https://jobrxiv.org/job-region/canada/feed/"
-  ],
-  "cache_ttl": 7200,
-  "url_pattern": "jobrxiv\\.org"
- },
- {
-  "name": "rl_llm_frameworks",
-  "description": "RL-on-LLM 训练框架发布流 — OpenRLHF / verl(volcengine) / TRL(HuggingFace) / LLaMA-Factory. Captain 正方向(RL/reasoning)的工程交付层; github_releases(推理栈 vLLM/SGLang/...)未覆盖的训练框架补充",
-  "feeds": [
-   "https://github.com/OpenRLHF/OpenRLHF/releases.atom",
-   "https://github.com/volcengine/verl/releases.atom",
-   "https://github.com/huggingface/trl/releases.atom",
-   "https://github.com/hiyouga/LLaMA-Factory/releases.atom"
-  ],
-  "cache_ttl": 7200,
-  "url_pattern": null
- },
- {
-  "name": "ml_cmu_blog",
-  "description": "ML@CMU 博客 — CMU 机器学习系学生/教师撰写的 RL/LLM/reasoning/agent 深读 (低传播、不会自己上 HN/Twitter 的高信号源, 正方向). 补 academic_ai_labs(CRFM/BAIR/CSAIL)",
-  "feeds": [
-   "https://blog.ml.cmu.edu/feed/"
-  ],
-  "cache_ttl": 7200,
-  "url_pattern": "blog\\.ml\\.cmu\\.edu"
- }
+  {
+    "name": "agent_tooling_radar",
+    "explicit_only": "tooling/skill radar; watchtower + named only, kept out of research search",
+    "description": "Agent/Skill 生态雷达 — Claude Code/MCP/Agent SDK 发布 + 研究加速工具(paper-qa/paper-search-mcp/context7/serena)+ eval/observability(inspect/phoenix/langfuse)发布 + awesome-lists(agent-papers/agent-skills/superpowers)+ Latent Space/Simon Willison。盯'存在哪些好工具'的信息差(2026-06-05 基线扫描产物;explicit_only,看门狗/点名才查)",
+    "feeds": [
+      "https://github.com/anthropics/claude-code/releases.atom",
+      "https://github.com/modelcontextprotocol/modelcontextprotocol/releases.atom",
+      "https://github.com/anthropics/skills/commits/main.atom",
+      "https://github.com/upstash/context7/releases.atom",
+      "https://github.com/oraios/serena/releases.atom",
+      "https://github.com/Future-House/paper-qa/releases.atom",
+      "https://github.com/openags/paper-search-mcp/commits/main.atom",
+      "https://github.com/Arize-ai/phoenix/releases.atom",
+      "https://github.com/langfuse/langfuse/releases.atom",
+      "https://github.com/UKGovernmentBEIS/inspect_ai/releases.atom",
+      "https://github.com/VoltAgent/awesome-ai-agent-papers/commits/main.atom",
+      "https://github.com/VoltAgent/awesome-agent-skills/commits/main.atom",
+      "https://github.com/obra/superpowers/releases.atom",
+      "https://www.latent.space/feed",
+      "https://simonwillison.net/tags/llms.atom",
+      "https://simonwillison.net/tags/model-context-protocol.atom"
+    ],
+    "cache_ttl": 3600,
+    "url_pattern": null
+  },
+  {
+    "name": "a_happy_phd",
+    "description": "A Happy PhD — PhD wellbeing + productivity (Luis P. Prieto, ed. psychology lens)",
+    "feeds": [
+      "https://ahappyphd.org/index.xml"
+    ],
+    "cache_ttl": 3600,
+    "url_pattern": "ahappyphd\\.org"
+  },
+  {
+    "name": "academic_ai_labs",
+    "description": "Top academic AI lab blogs — Stanford CRFM / Berkeley BAIR / MIT CSAIL. Methodology-heavy counterpart to frontier_labs (industry).",
+    "feeds": [
+      "https://crfm.stanford.edu/feed.xml",
+      "https://bair.berkeley.edu/blog/feed.xml",
+      "https://news.mit.edu/topic/mitcomputer-science-and-artificial-intelligence-laboratory-csail-rss.xml"
+    ],
+    "cache_ttl": 7200,
+    "url_pattern": null
+  },
+  {
+    "name": "academic_jobs",
+    "description": "Academic faculty / postdoc / staff scientist job RSS — Nature Careers per-country (Singapore / Canada / Hong Kong + UK / US / Australia backup). HK PhD → overseas placement signal.",
+    "feeds": [
+      "https://www.nature.com/naturecareers/jobsrss/?countrycode=SG",
+      "https://www.nature.com/naturecareers/jobsrss/?countrycode=CA",
+      "https://www.nature.com/naturecareers/jobsrss/?countrycode=HK",
+      "https://www.nature.com/naturecareers/jobsrss/?countrycode=GB",
+      "https://www.nature.com/naturecareers/jobsrss/?countrycode=US",
+      "https://www.nature.com/naturecareers/jobsrss/?countrycode=AU"
+    ],
+    "cache_ttl": 7200,
+    "url_pattern": null
+  },
+  {
+    "name": "ai_newsletters",
+    "description": "AI newsletter / long-form recap matrix — The Sequence / Last Week in AI / The Gradient / Nicholas Carlini. Periodical ML research + security digest.",
+    "feeds": [
+      "https://thesequence.substack.com/feed",
+      "https://lastweekin.ai/feed",
+      "https://thegradient.pub/rss/",
+      "https://nicholas.carlini.com/writing/feed.xml"
+    ],
+    "cache_ttl": 7200,
+    "url_pattern": null
+  },
+  {
+    "name": "alignment_forum",
+    "description": "AI Alignment Forum — alignment / safety / interpretability research (complement to lesswrong adapter; AF-filtered view)",
+    "feeds": [
+      "https://www.alignmentforum.org/feed.xml"
+    ],
+    "cache_ttl": 3600,
+    "url_pattern": "alignmentforum\\.org"
+  },
+  {
+    "name": "biorxiv",
+    "description": "bioRxiv preprints — ML/AI cross-disciplinary applications (bioinformatics + computational neuroscience subjects)",
+    "feeds": [
+      "https://connect.biorxiv.org/biorxiv_xml.php?subject=bioinformatics",
+      "https://connect.biorxiv.org/biorxiv_xml.php?subject=neuroscience"
+    ],
+    "cache_ttl": 7200,
+    "url_pattern": null
+  },
+  {
+    "name": "canada_ai_research",
+    "description": "加拿大 AI 研究所 + tech ecosystem — Vector / CIFAR / UWaterloo CS / Layer 6 / BetaKit / Globe and Mail Tech / Mila / UofT Schwartz Reisman (Amii 经 scrape_js_sites; IVADO 经 ivado_news 源)",
+    "feeds": [
+      "https://vectorinstitute.ai/feed/",
+      "https://cifar.ca/feed/",
+      "https://uwaterloo.ca/computer-science/news/news.xml",
+      "https://layer6.ai/feed/",
+      "https://betakit.com/feed/",
+      "https://www.theglobeandmail.com/arc/outboundfeeds/rss/category/business/technology/",
+      "https://mila.quebec/rss.xml",
+      "https://srinstitute.utoronto.ca/news?format=rss"
+    ],
+    "cache_ttl": 7200,
+    "url_pattern": null
+  },
+  {
+    "name": "canada_immigration",
+    "description": "加拿大移民信号 — IRCC 官方 + CIC Times + immigration.ca + Moving2Canada + Express Entry (每周 EE draws / Tech Talent / GTS / PNP 重组 / STEM 优先策略)",
+    "feeds": [
+      "https://api.io.canada.ca/io-server/gc/news/en/v2?dept=departmentofcitizenshipandimmigration&sort=publishedDate&orderBy=desc&pick=50&format=atom",
+      "https://www.cictimes.com/feed/",
+      "https://www.immigration.ca/feed/",
+      "https://moving2canada.com/feed/"
+    ],
+    "cache_ttl": 3600,
+    "url_pattern": null
+  },
+  {
+    "name": "chinese_podcasts",
+    "description": "中文 AI / 科技 / PhD 方法论 播客 — 晚点 LateTalk / 硅谷101 / 时差 in-betweenness + 1 (张小珺/OnBoard!/42章经 等走 xiaoyuzhou 原生适配器, 无需 RSSHub; 口语内容配 penumbra_transcribe)",
+    "feeds": [
+      "https://feeds.fireside.fm/latetalk/rss",
+      "https://feeds.fireside.fm/sv101/rss",
+      "https://rss.buzzsprout.com/1171871.rss",
+      "https://anchor.fm/s/60d1fed8/podcast/rss"
+    ],
+    "cache_ttl": 21600,
+    "url_pattern": null
+  },
+  {
+    "name": "distill_pub",
+    "description": "Distill.pub — ML visualization & interpretability archive (Chris Olah et al., 2016-2021, ~40 articles, canonical reference)",
+    "feeds": [
+      "https://distill.pub/rss.xml"
+    ],
+    "cache_ttl": 86400,
+    "url_pattern": "distill\\.pub",
+    "explicit_only": "archive: Distill.pub 2021 起无限期停更(自发 Distill Hiatus);命名 penumbra_fetch 取可解释性经典,不进广搜避免旧文混入近期论文检索"
+  },
+  {
+    "name": "frontier_labs",
+    "description": "Frontier AI research labs — Anthropic / DeepMind / Hugging Face / OpenAI / Mistral / Meta FAIR / Microsoft Research / MSRA / Google Research / Apple ML / Ai2 / Sakana / EleutherAI / Character.AI / PyTorch",
+    "feeds": [
+      "https://raw.githubusercontent.com/taobojlen/anthropic-rss-feed/main/anthropic_news_rss.xml",
+      "https://deepmind.google/blog/rss.xml",
+      "https://huggingface.co/blog/feed.xml",
+      "https://openai.com/news/rss.xml",
+      "https://mistral.ai/rss.xml",
+      "https://research.facebook.com/feed/",
+      "https://www.microsoft.com/en-us/research/feed/",
+      "https://www.microsoft.com/en-us/research/lab/microsoft-research-asia/feed/",
+      "https://research.google/blog/rss/",
+      "https://machinelearning.apple.com/rss.xml",
+      "https://www.together.ai/blog/rss.xml",
+      "https://blogs.nvidia.com/feed/",
+      "https://aws.amazon.com/blogs/machine-learning/feed/",
+      "https://allenai.org/rss.xml",
+      "https://sakana.ai/feed.xml",
+      "https://blog.eleuther.ai/index.xml",
+      "https://blog.character.ai/rss/",
+      "https://pytorch.org/blog/feed/"
+    ],
+    "cache_ttl": 3600,
+    "url_pattern": null
+  },
+  {
+    "name": "github_releases",
+    "description": "GitHub release events for ML infra stack — vLLM / transformers / SGLang / llama.cpp / PyTorch / Unsloth / OpenCompass. Engineering delivery stream (complement to github_trending).",
+    "feeds": [
+      "https://github.com/vllm-project/vllm/releases.atom",
+      "https://github.com/huggingface/transformers/releases.atom",
+      "https://github.com/sgl-project/sglang/releases.atom",
+      "https://github.com/ggerganov/llama.cpp/releases.atom",
+      "https://github.com/pytorch/pytorch/releases.atom",
+      "https://github.com/unslothai/unsloth/releases.atom",
+      "https://github.com/open-compass/opencompass/releases.atom"
+    ],
+    "cache_ttl": 7200,
+    "url_pattern": null
+  },
+  {
+    "name": "hk_career_research",
+    "description": "Hong Kong AI / career / 媒体信号 — SCMP News + HKFP + ASTRI (R&D 院所) + info.gov.hk (SenseTime 经 scrape_js_sites). HK PhD 出海+本地路径专用",
+    "feeds": [
+      "https://www.scmp.com/rss/91/feed",
+      "https://hongkongfp.com/feed/",
+      "https://www.astri.org/tag/press-release/feed/",
+      "https://www.info.gov.hk/gia/rss/general_en.xml",
+      "https://www.news.gov.hk/en/common/html/topstories.rss.xml"
+    ],
+    "cache_ttl": 7200,
+    "url_pattern": null
+  },
+  {
+    "name": "kexue_fm",
+    "description": "科学空间 kexue.fm — 苏剑林（月之暗面）中文 NLP/LLM 数学派旗手个人博客",
+    "feeds": [
+      "https://kexue.fm/feed"
+    ],
+    "cache_ttl": 7200,
+    "url_pattern": "kexue\\.fm"
+  },
+  {
+    "name": "lesswrong",
+    "description": "LessWrong + Alignment Forum — research methodology meta-reflection (RSS, recent posts only)",
+    "feeds": [
+      "https://www.lesswrong.com/feed.xml",
+      "https://www.alignmentforum.org/feed.xml"
+    ],
+    "cache_ttl": 1800,
+    "url_pattern": "(lesswrong|alignmentforum)\\.(com|org)"
+  },
+  {
+    "name": "lobsters",
+    "description": "Lobste.rs — invite-only tech link aggregator (smaller than HN, higher SNR; ai/ml tag feeds curated by mods)",
+    "feeds": [
+      "https://lobste.rs/rss",
+      "https://lobste.rs/t/ai.rss",
+      "https://lobste.rs/t/ml.rss"
+    ],
+    "cache_ttl": 1800,
+    "url_pattern": "lobste\\.rs"
+  },
+  {
+    "name": "nature_careers",
+    "description": "Nature Careers — authoritative PhD survey data + career articles",
+    "feeds": [
+      "https://www.nature.com/subjects/careers.rss",
+      "https://www.nature.com/nature.rss"
+    ],
+    "cache_ttl": 3600,
+    "url_pattern": "nature\\.com"
+  },
+  {
+    "name": "pmlr",
+    "description": "PMLR — Proceedings of Machine Learning Research (ICML / AISTATS / COLT / NeurIPS comp / UAI / IJCAI / CoRL / AutoML / MIDL + 等; 232 volumes)",
+    "feeds": [
+      "https://proceedings.mlr.press/feed.xml"
+    ],
+    "cache_ttl": 7200,
+    "url_pattern": "proceedings\\.mlr\\.press"
+  },
+  {
+    "name": "singapore_ai_research",
+    "description": "新加坡 AI 学术 + tech ecosystem — NUS News + AI Singapore + HardwareZone + Grab Eng + Vulcan Post + Tech in Asia (A*STAR/SMU/SEA-LION 经 scrape_singapore; NTU 经 scrape_js_sites)",
+    "feeds": [
+      "https://news.nus.edu.sg/feed/",
+      "https://aisingapore.org/feed/",
+      "https://feeds.feedburner.com/hardwarezone/news",
+      "https://engineering.grab.com/feed.xml",
+      "https://vulcanpost.com/feed/",
+      "https://www.techinasia.com/feed"
+    ],
+    "cache_ttl": 7200,
+    "url_pattern": null
+  },
+  {
+    "name": "substack_matrix",
+    "description": "Newsletter & individual researcher/career blogs — ML methodology / PhD career / LLM tools / Bayesian stats / China AI / career impact",
+    "feeds": [
+      "https://magazine.sebastianraschka.com/feed",
+      "https://importai.substack.com/feed",
+      "https://lilianweng.github.io/index.xml",
+      "https://eugeneyan.com/rss/",
+      "https://www.interconnects.ai/feed",
+      "https://simonwillison.net/atom/everything/",
+      "https://theprofessorisin.com/feed/",
+      "https://www.dwarkesh.com/feed",
+      "https://www.astralcodexten.com/feed",
+      "https://statmodeling.stat.columbia.edu/feed/",
+      "https://chinai.substack.com/feed",
+      "https://www.aisnakeoil.com/feed",
+      "https://thealgorithmicbridge.substack.com/feed",
+      "https://benjamintodd.substack.com/feed",
+      "https://tridao.me/feed.xml",
+      "https://www.argmin.net/feed",
+      "https://timdettmers.com/feed/",
+      "https://lemire.me/blog/feed/",
+      "https://calnewport.com/blog/feed/",
+      "https://blog.ezyang.com/feed.xml",
+      "https://newsletter.pragmaticengineer.com/feed"
+    ],
+    "cache_ttl": 1800,
+    "url_pattern": null
+  },
+  {
+    "name": "thesis_whisperer",
+    "description": "The Thesis Whisperer — Inger Mewburn's authoritative PhD blog",
+    "feeds": [
+      "https://thesiswhisperer.com/feed/"
+    ],
+    "cache_ttl": 3600,
+    "url_pattern": "thesiswhisperer\\.com"
+  },
+  {
+    "name": "chinese_ai_media",
+    "description": "中文 AI 媒体 + 个人博客 — 量子位 QbitAI (直取) + 李博杰 01.me (agent/career 长文) + PaperWeekly (社区 wechat2rss 镜像). 机器之心/新智元 已移交 wechat 适配器 (经 wechat2rss, 比已死的 AnyFeeder 桥可靠)",
+    "feeds": [
+      "https://www.qbitai.com/feed",
+      "https://01.me/atom.xml",
+      "https://decemberpei.cyou/rssbox/wechat-paperweekly.xml"
+    ],
+    "cache_ttl": 3600,
+    "url_pattern": null
+  },
+  {
+    "name": "ml_eval_safety",
+    "description": "LLM 评测 + AI 安全/威胁评估 机构 — METR (前沿危险能力/autonomy 评估 + Frontier Risk Report) + Epoch AI (基准 DB + 算力/数据/成本趋势量化). 评测/安全职业线信号, 区别于 lmsys_arena(实时 Elo) 与 alignment_forum(社区)",
+    "feeds": [
+      "https://metr.substack.com/feed",
+      "https://epochai.substack.com/feed"
+    ],
+    "cache_ttl": 7200,
+    "url_pattern": null
+  },
+  {
+    "name": "sg_immigration",
+    "explicit_only": "retired 2026-07-10: 两个 RSS 成员均上游死亡 (iasg.com.sg/feed 504 then connection-dead; singaporeexpats expat-forum RSS 403 walled)。无干净 SG 移民 RSS 替代 (probed 8; rikvin=incorporation/tax, incorp=ESG, sbr=broad business, MOM/ICA 无 RSS)。可逆: 命名 penumbra_search 仍可钻取 + 已索引可恢复; iasg 恢复或找到聚焦源即回滚。residual: scrape_singapore (Fragomen) + reddit + hardwarezone + datagovsg",
+    "description": "新加坡移民/工准证落地信号 — Immigration@SG (IASG 独立咨询: EP/PR 路径 + MOM/EDB 解读) + Singapore Expats Forum (申请人真实 EP/PR 审批时间线/COMPASS 结果). 政策解读+地面实情两层 (官方 MOM newsroom 无有效 RSS; Fragomen 经 scrape_singapore)",
+    "feeds": [
+      "https://iasg.com.sg/feed/",
+      "https://www.singaporeexpats.com/rss/expat-forum.xml"
+    ],
+    "cache_ttl": 7200,
+    "url_pattern": null
+  },
+  {
+    "name": "vector_talent_hub",
+    "description": "Vector Institute Talent Hub — 加拿大顶尖 AI 研究所策展的 AI 职位板 (research + industry, 多伦多/加拿大). 落地加拿大主信号; 与 overseas_ai_jobs(跨 lab ATS)/academic_jobs(Nature 教职) 互补",
+    "feeds": [
+      "https://talenthub.vectorinstitute.ai/jobs/search.rss"
+    ],
+    "cache_ttl": 7200,
+    "url_pattern": "talenthub\\.vectorinstitute\\.ai"
+  },
+  {
+    "name": "higheredjobs_cs",
+    "description": "HigherEdJobs CS/IT — 美国/北美 高校 CS·ML 教职 + 博后 + 研究岗 RSS (category 102). 学术 track 落地板, 补 academic_jobs(Nature Careers per-country)",
+    "feeds": [
+      "https://www.higheredjobs.com/rss/categoryFeed.cfm?catID=102"
+    ],
+    "cache_ttl": 7200,
+    "url_pattern": "higheredjobs\\.com",
+    "explicit_only": "US 高校 CS·ML 教职/博后 RSS (HigherEdJobs cat 102). JA3/TLS WAF (PerimeterX) 墙 httpx, 经 tls_impersonate (curl_cffi Chrome 指纹) 取真 feed. 命名 penumbra_fetch 用于学术 track. 2026-06-22 经 curl_cffi 复活 (此前因 JA3 墙退役)。",
+    "tls_impersonate": true
+  },
+  {
+    "name": "wikicfp_nlp",
+    "description": "WikiCFP 自然语言处理征稿发现 (cat=natural language processing) — NLP 方向会议/研讨会的征稿 (CFP) 条目: 会议名 + 地点 + 日期范围 + 事件页链接. 长尾 CFP 发现, 补 conference_deadlines/ml_conferences 的主榜. 注意: 截稿日不在 feed 里 (feed 只给会议日期), 真截稿需打开事件页看. 命名 penumbra_fetch.",
+    "feeds": [
+      "http://www.wikicfp.com/cfp/rss?cat=natural+language+processing"
+    ],
+    "cache_ttl": 21600,
+    "url_pattern": "wikicfp\\.com",
+    "explicit_only": "WikiCFP 长尾 CFP 发现 (NLP); 命名 penumbra_fetch 补会议征稿. http scheme (443 无 TLS)"
+  },
+  {
+    "name": "jobrxiv_canada",
+    "description": "jobRxiv (加拿大) — 学术研究岗位板 (博后/研究科学家/教职), 按地区过滤加拿大. 补 academic_jobs/vector_talent_hub 的加拿大研究岗覆盖",
+    "feeds": [
+      "https://jobrxiv.org/job-region/canada/feed/"
+    ],
+    "cache_ttl": 7200,
+    "url_pattern": "jobrxiv\\.org"
+  },
+  {
+    "name": "rl_llm_frameworks",
+    "description": "RL-on-LLM 训练框架发布流 — OpenRLHF / verl(volcengine) / TRL(HuggingFace) / LLaMA-Factory. Captain 正方向(RL/reasoning)的工程交付层; github_releases(推理栈 vLLM/SGLang/...)未覆盖的训练框架补充",
+    "feeds": [
+      "https://github.com/OpenRLHF/OpenRLHF/releases.atom",
+      "https://github.com/volcengine/verl/releases.atom",
+      "https://github.com/huggingface/trl/releases.atom",
+      "https://github.com/hiyouga/LLaMA-Factory/releases.atom"
+    ],
+    "cache_ttl": 7200,
+    "url_pattern": null
+  },
+  {
+    "name": "ml_cmu_blog",
+    "description": "ML@CMU 博客 — CMU 机器学习系学生/教师撰写的 RL/LLM/reasoning/agent 深读 (低传播、不会自己上 HN/Twitter 的高信号源, 正方向). 补 academic_ai_labs(CRFM/BAIR/CSAIL)",
+    "feeds": [
+      "https://blog.ml.cmu.edu/feed/"
+    ],
+    "cache_ttl": 7200,
+    "url_pattern": "blog\\.ml\\.cmu\\.edu"
+  }
 ]

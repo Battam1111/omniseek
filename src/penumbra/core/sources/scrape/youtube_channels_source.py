@@ -17,8 +17,6 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
-import yt_dlp
-
 from penumbra.core import cache
 from penumbra.core.normalize import Document, jsonsafe, keyword_score_filter, mk_signal
 
@@ -59,6 +57,7 @@ class YoutubeChannelsAdapter:
         if cached is not None:
             return cached
         url = f"https://www.youtube.com/channel/{channel_id}/videos"
+        import yt_dlp  # lazy: heavy lib off the startup import path (this adapter self-registers at boot)
         out: list[dict] = []
         try:
             with yt_dlp.YoutubeDL(_YDL_OPTS) as ydl:

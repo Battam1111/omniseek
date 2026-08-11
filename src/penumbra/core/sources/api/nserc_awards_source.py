@@ -28,10 +28,13 @@ Header verified live 2026-06-22 (39 cols, utf-8-sig, Range-capable; total 56,525
 from __future__ import annotations
 
 import csv
+import functools
 import io
 import logging
+import threading
 from typing import Optional
 
+import anyio
 import httpx
 
 from penumbra.core import cache
@@ -47,6 +50,27 @@ _AI_TERMS = (
     "computer vision", "speech recognition", "reinforcement learning",
     "information retrieval", "data mining", "text mining", " nlp ",
 )
+
+# Module-level async client for the bulk CSV pull (S4b native-async twin). The 56MB body is LARGER
+# than http.aget*'s 30MB MAX_BYTES cap, so this source (like its sync path) canNOT route through the
+# shared async leaf; it keeps its OWN async client — lazy, double-checked-lock like
+# _openalex._aget_client — with the SAME follow_redirects / User-Agent / timeout as the sync
+# httpx.get egress it mirrors. Only asearch awaits it; the sync search is byte-identical.
+_aclient: Optional["httpx.AsyncClient"] = None
+_aclient_lock = threading.Lock()  # construction is sync (no await); double-check like http._aget_client
+
+
+def _aget_client() -> "httpx.AsyncClient":
+    global _aclient
+    if _aclient is None:
+        with _aclient_lock:
+            if _aclient is None:
+                _aclient = httpx.AsyncClient(
+                    headers={"User-Agent": _UA},
+                    timeout=240,
+                    follow_redirects=True,
+                )
+    return _aclient
 
 
 class NSERCAwardsAdapter:
@@ -147,9 +171,59 @@ class NSERCAwardsAdapter:
         logger.info("nserc_awards: built %d CS/AI docs from FY%d (of the full CSV)", len(docs), self._YEAR)
         return docs
 
+    # ── native-async twins (S4b) ────────────────────────────────────────────
+    async def _afetch_filter_build(self) -> list[Document]:
+        """Async egress twin of ``_fetch_filter_build``: the bulk CSV pull goes async (its OWN
+        module-level AsyncClient, since 56MB > http.aget*'s 30MB cap, mirroring the sync httpx.get's
+        headers / timeout / follow_redirects); the utf-8-sig decode + csv parse + telos filter + doc
+        build stay ON the loop (pure CPU, byte-identical to the sync path — rule: parse stays on the
+        loop). This whole path runs only on a monthly cache MISS, so the on-loop parse is rare."""
+        try:
+            r = await _aget_client().get(self._CSV_URL)
+            r.raise_for_status()
+            text = r.content.decode("utf-8-sig", errors="replace")
+        except Exception as exc:  # noqa: BLE001 — failure → [] (the contract); don't cache a miss
+            logger.warning("nserc_awards: CSV fetch failed: %s", exc)
+            return []
+        docs: list[Document] = []
+        for row in csv.DictReader(io.StringIO(text)):
+            if self._is_cs_ai(row):
+                d = self._row_to_doc(row)
+                if d is not None:
+                    docs.append(d)
+        logger.info("nserc_awards: built %d CS/AI docs from FY%d (of the full CSV)", len(docs), self._YEAR)
+        return docs
+
+    async def _asubset_docs(self) -> list[Document]:
+        """Async twin of ``_subset_docs``: the disk cache read + write go OFF the loop
+        (anyio.to_thread.run_sync; the SAME cache key as ``_subset_docs``); the fetch+filter+build
+        uses the async egress twin. Behavior-identical to ``_subset_docs``."""
+        key = cache.make_key(self.name, "subset", self._YEAR)
+        cached = await anyio.to_thread.run_sync(cache.get_docs, key)  # disk read OFF loop
+        if cached is not None:
+            return cached
+        docs = await self._afetch_filter_build()
+        if docs:
+            await anyio.to_thread.run_sync(  # disk write OFF loop
+                functools.partial(cache.set_docs, key, docs, ttl=self._CACHE_TTL))
+        return docs
+
     # ── Protocol surface ────────────────────────────────────────────────────
     def search(self, query: str, limit: int = 10) -> list[Document]:
         docs = self._subset_docs()
+        if not docs:
+            return []
+        q = (query or "").strip()
+        if not q:
+            return docs[:limit]
+        return keyword_score_filter(docs, q)[:limit]
+
+    async def asearch(self, query: str, limit: int = 10) -> list[Document]:
+        """Native-async twin of ``search`` (S4b): mirrors it line-for-line — the query-independent
+        cached subset, then the ONE shared BM25 scorer. The subset cache round-trip + the bulk CSV
+        egress go async in ``_asubset_docs``; the term filter is pure CPU on the loop. Being
+        AsyncSearchCapable routes this source to the fetcher's native async dispatch branch."""
+        docs = await self._asubset_docs()
         if not docs:
             return []
         q = (query or "").strip()

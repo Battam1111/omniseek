@@ -17,6 +17,9 @@
       "id": "id"
     },
     "post_filter": false,
+    "no_live_probe": "200 requests per calendar MONTH per IP, shared across search + docs. The watchdog probes daily (~30/mo) plus every 6h (~120/mo), which would burn ~150 of the 200 on health checks alone and mark the source down for an exhaustion the eye itself caused. Measured 2026-07-25: context7 was in watchdog_down for exactly this. Breakage now surfaces at use time (this row is named-drill only, and a named drill emits the /eye-fix diagnostic).",
+    "auth_header": "Authorization",
+    "auth_prefix": "Bearer ",
     "cache_ttl": 86400,
     "url_host": "context7.com",
     "facets": {
@@ -26,6 +29,44 @@
       ]
     },
     "explicit_only": "anonymous quota is 200 requests per calendar month per IP, shared across Context7 search + docs endpoints; call by name only, keep out of broad sweeps and standing sensors (health probes also spend quota)",
+    "needs_credentials": false
+  },
+  {
+    "name": "federal_register",
+    "description": "US Federal Register keyless JSON API (federalregister.gov/api/v1). Full-text term search over the daily journal of the US government: proposed and final Rules, Notices, and Presidential Documents (executive orders, proclamations). Each hit carries title, document type (Rule / Proposed Rule / Notice / Presidential Document), abstract, the issuing agency, publication_date, the federalregister.gov article URL, and a govinfo PDF. order=newest, so an empty query browses the latest documents and a term query returns the newest matching ones. POLICY / MONITOR: the primary-source US rulemaking record (AI executive orders, BIS export-control rules, NIST and Commerce actions, agency AI notices). Keyless and public; keep pages small and be polite. Complements open web search with the structured, faceted rulemaking record no page scrape returns cleanly.",
+    "endpoint": "https://www.federalregister.gov/api/v1/documents.json",
+    "method": "GET",
+    "params_template": {
+      "per_page": "{limit}",
+      "conditions[term]": "{query}",
+      "order": "newest"
+    },
+    "results_path": "results",
+    "field_map": {
+      "title": "title",
+      "url": "html_url",
+      "content": [
+        "abstract",
+        "excerpts"
+      ],
+      "author": "agencies.0.name",
+      "date": "publication_date",
+      "id": "document_number",
+      "tags": "type"
+    },
+    "post_filter": false,
+    "cache_ttl": 3600,
+    "url_host": "federalregister.gov",
+    "facets": {
+      "kind": "stream",
+      "domains": [
+        "policy"
+      ],
+      "regions": [
+        "us"
+      ]
+    },
+    "explicit_only": "federal_register: named drill only. MEASURED 2026-07-25 over 1986 recorded searches: timed out 727 times (37% of all searches) and reached the ranked top-k ZERO times, sole-contributed ZERO times. US federal regulatory filings sit outside the CA/SG/HK + AI-research queries this eye serves, and cset / oecd_ai_policy already carry AI policy. Kept fully reachable by name; excluded_relevant still recommends it on a real match. Captain's call 2026-07-25.",
     "needs_credentials": false
   }
 ]

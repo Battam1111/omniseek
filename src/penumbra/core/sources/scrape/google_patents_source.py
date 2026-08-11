@@ -77,7 +77,14 @@ _TAG_RE = re.compile(r"<[^>]+>")  # strip <b>...</b> highlight tags (and any str
 class GooglePatentsAdapter(BaseScrapeAdapter):
     name = "google_patents"
     needs_credentials = False
-    description = "Google Patents: patent / prior-art search (publication, assignee, inventor, abstract) via the keyless XHR endpoint"
+    description = (
+        "Google Patents: patent / prior-art search (publication, assignee, inventor, abstract) via the "
+        "keyless XHR endpoint. Google's query operators pass straight through in the query string, e.g. "
+        "assignee:\"NVIDIA Corporation\" (verified to narrow + rank toward that assignee); inventor:/"
+        "before:priority:YYYYMMDD/after:/country:/language: are Google's own syntax. NOTE they are a "
+        "LOOSE boost, not a hard exclusive filter (results are dominated-by, not limited-to, the assignee), "
+        "and this endpoint reports NO citation/engagement counts."
+    )
     cache_ttl = 900
     # patents.google.com anti-automation 503s a bare HTTP request from our datacenter IP, so the
     # data path falls back to the shared CDP Chrome (a same-origin in-page fetch that the

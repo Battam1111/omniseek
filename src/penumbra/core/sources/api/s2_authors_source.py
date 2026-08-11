@@ -58,6 +58,24 @@ class S2AuthorsAdapter(BaseScrapeAdapter):
             timeout=15,
         )
 
+    async def _araw_fetch(self, query: str, limit: int) -> Optional[Any]:
+        """Async twin of _raw_fetch: same URL, same params, same timeout; ONLY the shared-http
+        egress swaps http.get_json -> await http.aget_json. Everything else verbatim."""
+        return await http.aget_json(
+            SEARCH_URL,
+            params={"query": query, "fields": _FIELDS, "limit": max(1, min(int(limit), 20))},
+            timeout=15,
+        )
+
+    async def asearch(self, query: str, limit: int = 10) -> list[Document]:
+        """Native-async twin of BaseScrapeAdapter.search -> AsyncSearchCapable. Shares the base
+        async cache round-trip; egress via _araw_fetch; mapping via the SAME pure-CPU
+        _to_documents (byte-identical to search)."""
+        return await self._asearch_via(
+            query, limit,
+            afetch=lambda: self._araw_fetch(query, limit),
+            abuild=lambda raw: self._to_documents(raw, query, limit))
+
     def _to_documents(self, raw: Any, query: str, limit: int) -> list[Document]:
         if not isinstance(raw, dict):
             return []

@@ -36,12 +36,14 @@ They surface in TWO shapes, both bounded to the top ~_MAX_COMMENTS by likes:
 
 from __future__ import annotations
 
+import functools
 import logging
 import re
 from datetime import datetime, timezone
 from typing import Optional
 from urllib.parse import urlparse
 
+import anyio
 import httpx
 
 from penumbra.core import cache
@@ -78,6 +80,22 @@ def _bili_request(url: str, params: dict, timeout: int = DEFAULT_TIMEOUT) -> htt
         except Exception as exc:  # noqa: BLE001
             logger.debug("bilibili cookie bootstrap failed (continuing): %s", exc)
         return client.get(url, params=params)
+
+
+async def _abili_request(url: str, params: dict, timeout: int = DEFAULT_TIMEOUT) -> httpx.Response:
+    """Async twin of ``_bili_request``: byte-faithful mirror of the two-GET buvid handshake in a FRESH
+    per-call ``httpx.AsyncClient`` (fresh client = fresh cookie jar per call, exactly like the sync
+    ``with httpx.Client(...)``). ONLY the two ``client.get`` egresses go async; the bootstrap-then-fetch
+    order, the browser UA + Referer HEADERS, follow_redirects, timeout, and the best-effort bootstrap
+    ``try/except`` are identical. This source keeps its OWN async client (not the shared ``http.aget*``
+    pool) because the buvid cookie bootstrap + browser headers are precisely what the shared pool cannot
+    provide, and bilibili's buvid cookies must not leak into the pool every other source shares."""
+    async with httpx.AsyncClient(headers=HEADERS, timeout=timeout, follow_redirects=True) as client:
+        try:
+            await client.get("https://www.bilibili.com/")  # sets buvid3 / buvid4 cookies
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("bilibili cookie bootstrap failed (continuing): %s", exc)
+        return await client.get(url, params=params)
 
 
 # ── BV-ref detection + comment fetch (the comment layer; see module docstring) ──────────
@@ -127,6 +145,32 @@ def _bvid_to_aid(bvid: str) -> Optional[int]:
     return None
 
 
+async def _abvid_to_aid(bvid: str) -> Optional[int]:
+    """Async twin of ``_bvid_to_aid``: byte-faithful mirror (SAME cache key + 24h ttl, the ``code != 0``
+    guard, the ``aid > 0`` check, the failure -> None contract). The disk cache get/set go OFF the loop
+    (``anyio.to_thread.run_sync``); the egress swaps to ``_abili_request``; ``resp.json()`` /
+    ``raise_for_status`` are pure CPU on an already-read Response, so they stay on the loop."""
+    key = cache.make_key("bilibili", "bvid_aid", bvid)
+    cached = await anyio.to_thread.run_sync(cache.get, key)
+    if cached is not None:
+        return cached or None  # cached 0/None memo means "could not resolve"
+    try:
+        resp = await _abili_request(VIEW_API, {"bvid": bvid})
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("bilibili bvid→aid view fetch failed for %s: %s", bvid, exc)
+        return None
+    if data.get("code") != 0:
+        logger.debug("bilibili view code %s for %s: %s", data.get("code"), bvid, data.get("message"))
+        return None
+    aid = (data.get("data") or {}).get("aid")
+    if isinstance(aid, int) and aid > 0:
+        await anyio.to_thread.run_sync(functools.partial(cache.set, key, aid, ttl=86400))
+        return aid
+    return None
+
+
 def _fetch_comments(aid: int, limit: int = _MAX_COMMENTS) -> list[dict]:
     """Pull up to ``limit`` (capped at _MAX_COMMENTS) top comments for a video via the
     LEGACY reply endpoint (sort=2 = by likes). Returns the raw reply dicts
@@ -155,6 +199,36 @@ def _fetch_comments(aid: int, limit: int = _MAX_COMMENTS) -> list[dict]:
     # The endpoint already returns highest-liked first (sort=2); just take the cap.
     ranked = [r for r in replies if isinstance(r, dict)][:cap]
     cache.set(key, ranked, ttl=6 * 3600)
+    return ranked
+
+
+async def _afetch_comments(aid: int, limit: int = _MAX_COMMENTS) -> list[dict]:
+    """Async twin of ``_fetch_comments``: byte-faithful mirror (SAME cap, SAME cache key + 6h ttl, the
+    ``code != 0`` guard, the ``replies`` list-guard, the ``[:cap]`` slice, and the ``[]``-on-failure
+    memo). The disk cache get/set go OFF the loop; the legacy reply egress swaps to ``_abili_request``."""
+    cap = max(1, min(limit, _MAX_COMMENTS))
+    key = cache.make_key("bilibili", "comments", str(aid), cap)
+    cached = await anyio.to_thread.run_sync(cache.get, key)
+    if cached is not None:
+        return cached  # may be [] — a known "no comments / disabled" memo
+    try:
+        resp = await _abili_request(REPLY_API, {"type": 1, "oid": aid, "sort": 2})
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("bilibili comment fetch failed for aid %s: %s", aid, exc)
+        return []
+    if data.get("code") != 0:
+        # code 12022 = comments closed; -404 = not found; etc. Treat as "no comments".
+        logger.debug("bilibili reply code %s for aid %s: %s",
+                     data.get("code"), aid, data.get("message"))
+        return []
+    replies = (data.get("data") or {}).get("replies") or []
+    if not isinstance(replies, list):
+        replies = []
+    # The endpoint already returns highest-liked first (sort=2); just take the cap.
+    ranked = [r for r in replies if isinstance(r, dict)][:cap]
+    await anyio.to_thread.run_sync(functools.partial(cache.set, key, ranked, ttl=6 * 3600))
     return ranked
 
 
@@ -218,6 +292,20 @@ class BilibiliAdapter(BaseScrapeAdapter):
             return self._comments_search(bvid, limit)
         return super().search(query, limit)
 
+    async def asearch(self, query: str, limit: int = 10) -> list[Document]:
+        """Native-async twin of ``search`` -> AsyncSearchCapable. SAME routing: a bare BV-id / bilibili
+        video URL query returns that video's top comments as docs (async ``_acomments_search``); any other
+        query goes the base async template path (``_asearch_via``: cache round-trip OFF the loop with the
+        SAME cache key as ``search``, opt-in rank on the loop). Egress via ``_araw_fetch``; mapping via the
+        SAME pure-CPU ``_to_documents``, so this is behavior-identical to ``search`` on both branches."""
+        bvid = _looks_like_video_ref(query)
+        if bvid:
+            return await self._acomments_search(bvid, limit)
+        return await self._asearch_via(
+            query, limit,
+            afetch=lambda: self._araw_fetch(query, limit),
+            abuild=lambda raw: self._to_documents(raw, query, limit))
+
     def _comments_search(self, bvid: str, limit: int) -> list[Document]:
         """Return up to ``limit`` top comments (by likes) for one video, each as a doc."""
         aid = _bvid_to_aid(bvid)
@@ -225,6 +313,24 @@ class BilibiliAdapter(BaseScrapeAdapter):
             return []
         video_url = f"https://www.bilibili.com/video/{bvid}"
         replies = _fetch_comments(aid, limit=min(max(limit, 1), _MAX_COMMENTS))
+        docs: list[Document] = []
+        for r in replies[:limit]:
+            try:
+                docs.append(_comment_to_document(r, bvid, aid, video_url))
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("Skipping bilibili comment: %s", exc)
+        return docs
+
+    async def _acomments_search(self, bvid: str, limit: int) -> list[Document]:
+        """Async twin of ``_comments_search``: resolve the aid (async ``_abvid_to_aid``) then fetch the top
+        comments (async ``_afetch_comments``, off-loop cache); the ``min(max(limit, 1), _MAX_COMMENTS)``
+        cap, the ``replies[:limit]`` slice, and the per-comment ``_comment_to_document`` map (pure CPU, on
+        the loop) are byte-identical to sync."""
+        aid = await _abvid_to_aid(bvid)
+        if not aid:
+            return []
+        video_url = f"https://www.bilibili.com/video/{bvid}"
+        replies = await _afetch_comments(aid, limit=min(max(limit, 1), _MAX_COMMENTS))
         docs: list[Document] = []
         for r in replies[:limit]:
             try:
@@ -243,6 +349,34 @@ class BilibiliAdapter(BaseScrapeAdapter):
         or None on any failure / non-zero code so the base returns [] without caching."""
         try:
             resp = _bili_request(
+                SEARCH_API,
+                {
+                    "search_type": "video",
+                    "keyword": query,
+                    "page": 1,
+                    "page_size": min(limit, 42),
+                    "order": "totalrank",  # relevance + popularity hybrid
+                },
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Bilibili search failed: %s", exc)
+            return None
+
+        if data.get("code") != 0:
+            logger.warning("Bilibili API error: %s", data.get("message"))
+            return None
+
+        return (data.get("data") or {}).get("result") or []
+
+    async def _araw_fetch(self, query: str, limit: int) -> Optional[list]:
+        """Async twin of ``_raw_fetch``: byte-faithful mirror of the anti-bot search call — the SAME params
+        (``search_type``/``keyword``/``page``/``page_size=min(limit, 42)``/``order=totalrank``), the
+        raise_for_status, the ``code != 0`` guard, and the failure/error -> None contract (so the base
+        caches a success list but not a miss). ONLY the ``_bili_request`` egress swaps to ``_abili_request``."""
+        try:
+            resp = await _abili_request(
                 SEARCH_API,
                 {
                     "search_type": "video",
@@ -349,8 +483,15 @@ class BilibiliAdapter(BaseScrapeAdapter):
             content=content,
             author=(d.get("owner") or {}).get("name"),
             date=date,
-            signals=mk_signal("views", (d.get("stat") or {}).get("view"),
-                              kind="engagement", by="bilibili/view"),
+            # views alone cannot say whether the comment section holds anything; stat.reply can.
+            # mk_signal is None-safe, so a payload without it yields an honest None-valued signal
+            # rather than a fabricated 0 (2026-07-25).
+            signals={
+                **mk_signal("views", (d.get("stat") or {}).get("view"),
+                            kind="engagement", by="bilibili/view"),
+                **mk_signal("comments", (d.get("stat") or {}).get("reply"),
+                            kind="engagement", by="bilibili/stat.reply"),
+            },
             media=media,
             metadata=metadata,
         )
@@ -414,8 +555,11 @@ class BilibiliAdapter(BaseScrapeAdapter):
             content=v.get("description") or "(no description)",
             author=v.get("author"),
             date=date,
-            signals=mk_signal("views", v.get("play"),
-                              kind="engagement", by="bilibili/play"),  # view count as engagement signal
+            signals={   # play = views; video_review = the danmaku/comment count on a search hit
+                **mk_signal("views", v.get("play"), kind="engagement", by="bilibili/play"),
+                **mk_signal("comments", v.get("review") or v.get("video_review"),
+                            kind="engagement", by="bilibili/review"),
+            },
             tags=(v.get("tag") or "").split(",") if v.get("tag") else [],
             media=media,
             metadata={

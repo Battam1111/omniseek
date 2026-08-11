@@ -57,6 +57,20 @@ class DataGovSgPassesAdapter(BaseAPIAdapter):
             return []
         return ((data.get("result") or {}).get("records")) or []
 
+    async def _araw_fetch(self, query: str, limit: int) -> list:
+        """Async twin of _raw_fetch: byte-faithful mirror (same URL, same None/[]-guard control flow),
+        only the shared-http egress swapped for its async twin (http.get_json -> await http.aget_json)."""
+        url = f"{_ENDPOINT}?resource_id={_RID}&limit=100"
+        data = await http.aget_json(url)
+        if not isinstance(data, dict):
+            return []
+        return ((data.get("result") or {}).get("records")) or []
+
+    async def asearch(self, query: str, limit: int = 10) -> list[Document]:
+        """Native-async twin of search -> AsyncSearchCapable. Base async cache round-trip; egress via
+        _araw_fetch; mapping via the SAME pure-CPU _to_document (byte-identical to search)."""
+        return await self._aapi_search(query, limit, araw_fetch=lambda: self._araw_fetch(query, limit))
+
     def _to_document(self, raw) -> Optional[Document]:
         if not isinstance(raw, dict):
             return None

@@ -35,6 +35,8 @@ https://openalex.org/works?search=<name> or api.openalex.org/authors?search=<nam
 
 from __future__ import annotations
 
+import asyncio
+import functools
 import json
 import logging
 import re
@@ -45,6 +47,7 @@ from pathlib import Path
 from typing import Optional
 from urllib.parse import urlparse
 
+import anyio
 import platformdirs
 
 from penumbra.core import _openalex as oa
@@ -177,6 +180,49 @@ class ResearcherWatchAdapter:
                 return stale, True
         return works, False
 
+    async def _afetch_pi_works(self, oaid: str) -> "tuple[list[dict], bool]":
+        """Native-async twin of ``_fetch_pi_works`` (byte-faithful): SAME cache keys + last-good
+        logic, only the two BLOCKING primitives move off the loop —
+          • the disk cache read/write → ``anyio.to_thread.run_sync`` (cache.get / cache.set do file IO;
+            anyio copies the current context into the worker thread, so the ``fresh`` contextvar the
+            caller may have set still forces a live fetch, exactly like the sync path);
+          • the OpenAlex egress → ``await oa.aget_json`` (same path + params, same SHARED breaker / rate
+            pacer / concurrency cap / 2-lane budget as ``oa.get_json`` — one load guard, one ledger).
+        The pure-CPU control flow (key build, the ``if works`` branch, the ``oa.unavailable()`` brief-lock
+        check, the last-good fallback) is identical to ``_fetch_pi_works``. ``stale`` True iff OpenAlex
+        was DOWN and we served this PI's last-good snapshot instead of live results."""
+        key = cache.make_key("researcher_watch", "pi", oaid)
+        lg_key = cache.make_key("researcher_watch", "pi_lastgood", oaid)
+        cached = await anyio.to_thread.run_sync(cache.get, key)  # disk read OFF loop
+        if cached is not None:
+            return cached, False
+        try:
+            works = (await oa.aget_json("/works", {
+                "filter": f"author.id:{oaid}",
+                "sort": "publication_date:desc",
+                "per-page": WORKS_PER_PI,
+                # NB: no `host_venue` (removed from the OpenAlex API, 400s);
+                # venue comes from primary_location.source instead.
+                "select": "id,doi,title,publication_date,abstract_inverted_index,"
+                          "primary_location,authorships,cited_by_count",
+            })).get("results", [])
+        except Exception as exc:  # noqa: BLE001 — incl. the shared circuit breaker
+            logger.warning("researcher_watch: OpenAlex fetch failed for %s: %s", oaid, exc)
+            works = []
+        if works:
+            await anyio.to_thread.run_sync(  # disk writes OFF loop
+                functools.partial(cache.set, key, works, ttl=CACHE_TTL))
+            await anyio.to_thread.run_sync(
+                functools.partial(cache.set, lg_key, works, ttl=_LASTGOOD_TTL))
+            return works, False
+        # OpenAlex DOWN → serve this PI's last-good snapshot (real papers, <=~1d stale) instead of a
+        # blind [] (which also poisoned the 6h key on failure). Genuine empty (OpenAlex up) → [].
+        if oa.unavailable():
+            stale = await anyio.to_thread.run_sync(cache.get, lg_key)  # disk read OFF loop
+            if stale:
+                return stale, True
+        return works, False
+
     def search(self, query: str, limit: int = 10) -> list[Document]:
         # An OpenAlex author ID in the query (e.g. `A5086198262` or
         # `openalex.org/A5086198262`) pins the watch to THAT author, overriding
@@ -204,6 +250,69 @@ class ResearcherWatchAdapter:
                 works_per_pi = list(ex.map(
                     lambda ctx, item: ctx.run(self._fetch_pi_works, item[2]),
                     contexts, watch))
+            for (name, institution, oaid), (works, stale) in zip(watch, works_per_pi):
+                for work in works:
+                    doc = self._work_to_document(work, name, institution, oaid)
+                    if doc:
+                        if stale:  # served from last-good while OpenAlex budget is exhausted
+                            doc.metadata["stale"] = ("OpenAlex 日预算耗尽 (午夜 UTC 重置); 本条来自上次"
+                                                     "成功抓取的缓存快照 (最多约 1 天旧), 非实时")
+                        all_docs.append(doc)
+
+        # Default order: newest first across all PIs
+        all_docs.sort(key=lambda d: d.date or datetime.min.replace(tzinfo=timezone.utc),
+                      reverse=True)
+
+        # Dedup by normalized title: the same paper shows up twice when two
+        # watched PIs co-author it, or when OpenAlex has preprint + published
+        # records. Keep the first (most-recent-sorted); fold the other PI's name
+        # into tags so co-authorship stays visible.
+        seen: dict[str, Document] = {}
+        deduped: list[Document] = []
+        for d in all_docs:
+            norm = " ".join((d.title.split("] ", 1)[-1]).lower().split())
+            if norm in seen:
+                prior = seen[norm]
+                pi = d.metadata.get("pi_name")
+                if pi and pi not in prior.tags:
+                    prior.tags.append(pi)
+                continue
+            seen[norm] = d
+            deduped.append(d)
+        all_docs = deduped
+        # Keyword filter (empty query keeps the date-sorted order)
+        all_docs = keyword_score_filter(all_docs, query)
+        return all_docs[:limit]
+
+    async def asearch(self, query: str, limit: int = 10) -> list[Document]:
+        """Native-async twin of ``search`` (researcher_watch's per-PI OpenAlex fan-out goes native
+        async), so the live async penumbra_search path awaits it DIRECTLY instead of parking a pool thread
+        on the whole PI fan-out. It mirrors ``search`` step-for-step; only the BLOCKING work moves:
+          • the per-PI OpenAlex round-trips (and their per-PI disk cache IO) → concurrent coroutines
+            awaiting ``_afetch_pi_works`` (the native twin) gathered with ``asyncio.gather``, replacing
+            the sync ``ThreadPoolExecutor(max_workers=…)`` + ``ex.map``;
+        The pure-CPU parse/sort/dedup/filter (_work_to_document → oa.parse_work, the date sort, the
+        title-dedup, keyword_score_filter) stays ON the loop, byte-identical to ``search``.
+
+        On the ONE loop thread NO ``copy_context()`` is needed: the sync path copies a context PER PI
+        because each ThreadPoolExecutor worker starts with an EMPTY context (so a ``fresh`` contextvar
+        would be lost); here every ``_afetch_pi_works`` coroutine runs on the loop where that contextvar
+        is already set, so it propagates naturally (including into each off-loop cache.get via
+        ``anyio.to_thread``, which copies the context into its worker thread). The width-8 pool cap
+        drops out: the fan-out's actual egress is bounded GLOBALLY by the SHARED _openalex concurrency
+        sema + rate pacer (inside ``oa.aget_json``), the same guard that bounded the sync pool. The PI
+        set, per-PI WORKS_PER_PI, sort, dedup and keyword filter are UNCHANGED → identical result set."""
+        # An OpenAlex author ID in the query pins the watch to THAT author, overriding the default seed
+        # (ID-only by design — no runtime name resolution). Stripped from the keyword part. Mirrors search.
+        query, override_watch = _parse_author_ids(query or "")
+        watch = override_watch if override_watch is not None else _load_watch_list()
+        # Fetch every PI's newest works CONCURRENTLY on the loop (mirrors the sync ThreadPoolExecutor
+        # fan-out). No copy_context() — contextvars propagate naturally on the single loop thread; the
+        # shared _openalex guard keeps the fan-out polite (no 429 storm), same as the sync pool.
+        all_docs: list[Document] = []
+        if watch:
+            works_per_pi = await asyncio.gather(
+                *[self._afetch_pi_works(oaid) for (_name, _inst, oaid) in watch])
             for (name, institution, oaid), (works, stale) in zip(watch, works_per_pi):
                 for work in works:
                     doc = self._work_to_document(work, name, institution, oaid)

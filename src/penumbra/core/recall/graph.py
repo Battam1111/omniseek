@@ -493,6 +493,71 @@ def _statement_index(statements: list[dict]) -> dict:
     return index
 
 
+def _is_hand_minted(node_id: str) -> bool:
+    """True for a HAND-MINTED anchor id (one the driver typed, which can fragment across sessions): a short
+    synthetic id (``{kind}:{x}`` with no backend namespace, e.g. ``claim:c3_wedge`` / ``org:acme``) or a
+    label-keyed id (``{kind}:label:{x}``). False for a DETERMINISTIC backend id (``work:openalex:W1``,
+    ``doc:arxiv:2401``): those never fragment, so they never need the near-duplicate echo."""
+    parts = (node_id or "").split(":")
+    if len(parts) < 2 or not parts[0]:
+        return False
+    if len(parts) == 2:
+        return True                      # claim:foo, org:acme -> no backend namespace
+    return parts[1] == "label"           # topic:label:x hand-minted; work:openalex:W1 deterministic
+
+
+def _anchor_tokens(node_id: str) -> set:
+    """The significant tokens of an id's LOCAL part (after the kind[:label] prefix), for near-duplicate
+    detection: split on whitespace / _ - /, casefold, drop <3-char noise. ``claim:c3_exact_credit_wedge``
+    -> {exact, credit, wedge} (``c3`` dropped as 2-char)."""
+    import re
+    local = (node_id or "").split(":")[-1]
+    return {t for t in re.split(r"[\s_\-/]+", local.casefold()) if len(t) >= 3}
+
+
+def _similar_anchor_ids(target: str, statements: list[dict], limit: int = 5) -> list[str]:
+    """Existing statement-endpoint ids that MAY be the SAME hand-minted anchor as ``target``: same kind
+    prefix, and one token-set CONTAINED in the other (a near-duplicate is one id minus/plus a few tokens,
+    ``claim:c3_wedge`` vs ``claim:c3_exact_credit_wedge`` -> {wedge} ⊂ {exact,credit,wedge}). Containment,
+    not bare overlap, so a DIFFERENT claim merely sharing one word (``claim:turn_level_credit``) is not
+    surfaced. Ranked by shared-token count. The mechanical half of anti-fragmentation: a create surfaces
+    these so the driver REUSES an id instead of silently orphaning the edge. Only hand-minted targets fire
+    (deterministic backend ids never fragment). NEVER an identity verdict (that is penumbra_ruling's): the eye
+    ranks by overlap, the driver decides."""
+    t = (target or "").strip()
+    if not _is_hand_minted(t):
+        return []
+    ttoks = _anchor_tokens(t)
+    if not ttoks:
+        return []
+    kind = t.split(":", 1)[0]
+    scored: dict = {}
+    for s in statements:
+        for ep in ((s.get("src") or "").strip(), (s.get("dst") or "").strip()):
+            if not ep or ep == t or ep in scored or ep.split(":", 1)[0] != kind:
+                continue
+            ctoks = _anchor_tokens(ep)
+            shared = len(ttoks & ctoks)
+            if shared and shared >= min(len(ttoks), len(ctoks)):   # smaller set contained in the larger
+                scored[ep] = shared
+    return [ep for ep, _ in sorted(scored.items(), key=lambda kv: (-kv[1], kv[0]))[:limit]]
+
+
+def similar_anchors(src: str, dst: str, statements: Optional[list] = None) -> dict:
+    """The anti-fragmentation echo for a create: ``{role: [near-match hand-minted ids]}`` for whichever of
+    src / dst is a hand-minted id with an existing near-duplicate endpoint (empty when neither fragments).
+    The tool surfaces this so the driver REUSES an anchor id instead of orphaning the edge on a
+    slightly-different mint; it is mechanical overlap, NEVER an identity verdict (that is penumbra_ruling's)."""
+    if statements is None:
+        statements = load_statements()
+    out: dict = {}
+    for role, nid in (("src", src), ("dst", dst)):
+        near = _similar_anchor_ids(nid, statements)
+        if near:
+            out[role] = near
+    return out
+
+
 # ── The three P1 read functions (read-only over store's DB, fail-open to empty, budgeted) ───────
 
 def _con() -> Optional["object"]:

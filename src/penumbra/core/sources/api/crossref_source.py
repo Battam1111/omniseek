@@ -38,7 +38,7 @@ from urllib.parse import urlparse
 
 import httpx
 
-from penumbra.core import auth
+from penumbra.core import auth, diag, http
 from penumbra.core.normalize import Document, jsonsafe, mk_signal
 from penumbra.core.sources.api._base import BaseAPIAdapter
 
@@ -78,12 +78,39 @@ class CrossrefAdapter(BaseAPIAdapter):
             data = resp.json()
         except Exception as exc:  # noqa: BLE001
             logger.warning("Crossref search failed: %s", exc)
+            st = getattr(getattr(exc, "response", None), "status_code", None)
+            diag.note("crossref.search", url=f"{CROSSREF_BASE}/works", status=st, exc=exc)
             return []
 
         return ((data.get("message") or {}).get("items")) or []
 
     def _to_document(self, raw) -> Optional[Document]:
         return self._item_to_document(raw)
+
+    # ------------------------------------------------------------- async hooks
+    async def _araw_fetch(self, query: str, limit: int) -> list:
+        """Async twin of _raw_fetch: BYTE-FAITHFUL mirror — same endpoint/params/headers/timeout and the
+        same ``message.items`` walk + []-on-failure contract; ONLY the egress swaps (RAW
+        ``httpx.get(...).json()`` -> ``await http.aget_json``, which buys the shared async pool + SSRF
+        guard + cache_only + the 30MB cap for free). ``http.aget_json`` returns None on any failure /
+        unparseable body, so the isinstance guard collapses that to [] exactly as the sync path's
+        try/except does. The shared leaf emits its own ``http.get`` diag note on failure, so the bespoke
+        ``crossref.search`` diag.note (kept verbatim on the sync path) is not re-issued here."""
+        data = await http.aget_json(
+            f"{CROSSREF_BASE}/works",
+            params={"query": query, "rows": min(limit, 25)},
+            headers={"User-Agent": USER_AGENT},
+            timeout=TIMEOUT,
+        )
+        if not isinstance(data, dict):
+            return []
+        return ((data.get("message") or {}).get("items")) or []
+
+    async def asearch(self, query: str, limit: int = 10) -> list[Document]:
+        """Native-async twin of search -> AsyncSearchCapable. Shares the base async cache round-trip
+        (_aapi_search: same cache key, per-record _to_document, rank_locally=False, cache-only-if-docs);
+        egress via _araw_fetch; mapping via the SAME pure-CPU _item_to_document (byte-identical to search)."""
+        return await self._aapi_search(query, limit, araw_fetch=lambda: self._araw_fetch(query, limit))
 
     # --------------------------------------------------------------- fetch_url
     def fetch_url(self, url: str) -> Optional[Document]:
@@ -114,6 +141,8 @@ class CrossrefAdapter(BaseAPIAdapter):
                 return None
         except Exception as exc:  # noqa: BLE001
             logger.warning("Crossref fetch_url failed: %s", exc)
+            st = getattr(getattr(exc, "response", None), "status_code", None)
+            diag.note("crossref.fetch", url=f"{CROSSREF_BASE}/works/{doi}", status=st, exc=exc)
             return None
         return self._item_to_document(item)
 

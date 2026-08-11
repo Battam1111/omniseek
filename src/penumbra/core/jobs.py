@@ -20,15 +20,20 @@ WHAT they do is judgment expressed in code + the profile override, never inferre
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
-import tempfile
+import os
+import subprocess
 import threading
 import time
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 from typing import Callable, Optional
+
+from penumbra.core.contracts.build_identity import current_build_id
+from penumbra.core.contracts.heartbeat import SchedulerHeartbeat, load_contract_artifacts
 
 log = logging.getLogger(__name__)
 
@@ -205,10 +210,44 @@ def is_due(sched: Schedule, now: float, last_run: Optional[float]) -> bool:
     return last_run < slot
 
 
+def _next_slot(sched: Schedule, now: float, last_run: Optional[float] = None) -> Optional[float]:
+    """The epoch of the NEXT firing STRICTLY AFTER ``now`` (the forward twin of _most_recent_slot),
+    for the fleet-status DISPLAY only (never a control decision). Interval: (last_run or now) + period,
+    floored at now if already overdue. Calendar: the earliest future matching slot, or None if none in
+    the next-month/8-day window. PURE except reading the local timezone via datetime."""
+    if sched.kind == "interval":
+        base = last_run if isinstance(last_run, (int, float)) else now
+        return max(base + sched.seconds, now)
+    now_dt = datetime.fromtimestamp(now)
+    cands: list[float] = []
+    if sched.kind == "daily":
+        for day_off in (0, 1):
+            base = datetime.fromtimestamp(
+                now_dt.replace(hour=0, minute=0, second=0, microsecond=0).timestamp() + day_off * 86400)
+            cands += [base.replace(hour=h, minute=m).timestamp() for (h, m) in sched.times]
+    elif sched.kind == "weekly":
+        h, m = sched.times[0]
+        for day_off in range(0, 8):
+            d = datetime.fromtimestamp(now_dt.timestamp() + day_off * 86400)
+            if d.weekday() == sched.weekday:
+                cands.append(d.replace(hour=h, minute=m, second=0, microsecond=0).timestamp())
+    elif sched.kind == "monthly":
+        h, m = sched.times[0]
+        y, mo = now_dt.year, now_dt.month
+        for (yy, mm) in ((y, mo), (y + 1, 1) if mo == 12 else (y, mo + 1)):
+            try:
+                cands.append(datetime(yy, mm, sched.dom, h, m).timestamp())
+            except ValueError:
+                continue  # e.g. day 31 in a 30-day month -> no slot
+    future = [c for c in cands if c > now]
+    return min(future) if future else None
+
+
 # ── the registry (the register_mints DNA: a dict populated by register_job at import) ──────────────
 # Per-job wall-clock budget ceiling. The external sentinel declares the scheduler WEDGED when the
-# heartbeat goes stale past its threshold (2x the 900s tick = 1800s); the tick touches the heartbeat
-# before EVERY job, so worst-case staleness is ONE job's budget, and every budget must therefore
+# heartbeat goes stale past its threshold (2x the 900s tick = 1800s); the tick publishes the
+# heartbeat before and after EVERY job, so worst-case staleness is ONE job's budget, and every
+# budget must therefore
 # stay under that threshold with margin. A budget is a resource cap (the max_nodes class), never a
 # judgment.
 _MAX_JOB_BUDGET_S = 1500
@@ -221,6 +260,7 @@ class JobRow:
     fn: Callable[[], object]
     enabled: bool = True     # the shipped default; the profile override can flip it
     budget_s: int = 600      # wall-clock cap per run; a job past it is skipped, never waited on
+    description: str = ""     # one-line human label for the fleet-status view (observability, no logic)
     needs: None = None       # reserved (spec: needs: none) -- no dependency edges in P9
 
 
@@ -228,7 +268,7 @@ _REGISTRY: "dict[str, JobRow]" = {}
 
 
 def register_job(name: str, schedule: str, fn: Callable[[], object], enabled: bool = True,
-                 budget_s: int = 600) -> JobRow:
+                 budget_s: int = 600, description: str = "") -> JobRow:
     """Register one job row. Parses ``schedule`` NOW so an unknown/malformed spec raises ValueError
     AT REGISTRATION (import time), never a silent default. A duplicate ``name`` also raises (two
     rows fighting over one last-run key is a bug), as does a budget outside (0, _MAX_JOB_BUDGET_S]
@@ -241,7 +281,8 @@ def register_job(name: str, schedule: str, fn: Callable[[], object], enabled: bo
     if not (0 < int(budget_s) <= _MAX_JOB_BUDGET_S):
         raise ValueError(f"job {name!r} budget_s={budget_s} outside (0, {_MAX_JOB_BUDGET_S}]")
     sched = parse_schedule(schedule)   # raises ValueError on garbage -> loud at registration
-    row = JobRow(name=name, schedule=sched, fn=fn, enabled=enabled, budget_s=int(budget_s))
+    row = JobRow(name=name, schedule=sched, fn=fn, enabled=enabled, budget_s=int(budget_s),
+                 description=description)
     _REGISTRY[name] = row
     return row
 
@@ -301,14 +342,30 @@ def _save_state(state: dict) -> None:
     tmp.replace(STATE_PATH)
 
 
-def _touch_heartbeat() -> None:
-    """Bump the dead-man file's mtime (create it if absent). The external sentinel compares its age
-    to 2x the tick interval to detect a wedged scheduler while /healthz still answers."""
+def _publish_running_heartbeat() -> None:
+    global _scheduler_contract_error
+    heartbeat = _scheduler_heartbeat
+    if heartbeat is None:
+        return
     try:
-        HEARTBEAT_PATH.parent.mkdir(parents=True, exist_ok=True)
-        HEARTBEAT_PATH.write_text(datetime.now(timezone.utc).isoformat(), encoding="utf-8")
-    except Exception as exc:  # noqa: BLE001 -- a heartbeat write failure must never kill the tick
-        log.debug("heartbeat touch failed (%s)", exc)
+        heartbeat.publish_running()
+        _scheduler_contract_error = None
+    except Exception as exc:  # noqa: BLE001 -- later heartbeat failure must not abort a job
+        _scheduler_contract_error = type(exc).__name__
+        log.warning("scheduler heartbeat publication failed (%s)", exc)
+
+
+def _begin_heartbeat_tick() -> None:
+    global _scheduler_contract_error
+    heartbeat = _scheduler_heartbeat
+    if heartbeat is None:
+        return
+    try:
+        heartbeat.begin_tick()
+        _scheduler_contract_error = None
+    except Exception as exc:  # noqa: BLE001 -- later heartbeat failure must not abort the tick
+        _scheduler_contract_error = type(exc).__name__
+        log.warning("scheduler heartbeat tick publication failed (%s)", exc)
 
 
 def due_jobs(now: float, state: dict, overrides: Optional[dict] = None) -> list[JobRow]:
@@ -326,14 +383,49 @@ def due_jobs(now: float, state: dict, overrides: Optional[dict] = None) -> list[
     return out
 
 
-def run_due_jobs(now: Optional[float] = None) -> dict:
-    """The tick BODY (call it directly in tests; the loop calls it every TICK_SECONDS): touch the
-    heartbeat, then run every due enabled job SERIALLY. Each job runs in its own try/except with a
-    per-job elapsed log line; a failing job NEVER stops the rest and Barks on exception (24h cooldown
-    per job, cooldown state in scheduler-state.json). Records each run's last_run only on the jobs
-    that RAN (attempted). Returns {"checked", "ran", "failed"}."""
+def fleet_status(now: Optional[float] = None) -> list[dict]:
+    """The ONE observability surface for the background-job fleet: every shipped job with its
+    schedule, EFFECTIVE enabled state (profile override honored), last-run + next-run (local ISO to
+    the minute), budget, and one-line description. CHEAP (reads the registry + the last-run state file
+    + the profile; NO live probe), so it can ride any diagnostics call. Answers 'what jobs exist, are
+    they on, when did / do they run, what do they do' at a glance -- the thing a raw scheduler-state.json
+    dump does NOT. A disabled job reports next_run=None (it will not fire). Registration order."""
     now = time.time() if now is None else now
-    _touch_heartbeat()
+    register_shipped_jobs()  # idempotent: ensure the shipped rows are present even on a cold import
+    with _STATE_LOCK:
+        state = _load_state()
+    overrides = _profile_jobs()
+
+    def _iso(ep) -> Optional[str]:
+        return (datetime.fromtimestamp(ep).isoformat(timespec="minutes")
+                if isinstance(ep, (int, float)) else None)
+
+    out: list[dict] = []
+    for name, row in _REGISTRY.items():
+        en = job_enabled(row, overrides)
+        last = (state.get(name) or {}).get("last_run")
+        last_f = float(last) if isinstance(last, (int, float)) else None
+        nxt = _next_slot(row.schedule, now, last_f) if en else None
+        out.append({
+            "name": name,
+            "schedule": row.schedule.raw,
+            "enabled": en,
+            "last_run": _iso(last_f),
+            "next_run": _iso(nxt),
+            "budget_s": row.budget_s,
+            "desc": row.description,
+        })
+    return out
+
+
+def run_due_jobs(now: Optional[float] = None) -> dict:
+    """The tick BODY (call it directly in tests; the loop calls it every TICK_SECONDS): publish the
+    structured heartbeat, then run every due enabled job SERIALLY. Each job runs in its own
+    try/except with a per-job elapsed log line; a failing job NEVER stops the rest and Barks on
+    exception (24h cooldown per job, cooldown state in scheduler-state.json). Records each run's
+    last_run only on the jobs that RAN (attempted). Returns {"checked", "ran", "failed"}."""
+    now = time.time() if now is None else now
+    _begin_heartbeat_tick()
     with _STATE_LOCK:
         state = _load_state()
     overrides = _profile_jobs()
@@ -344,10 +436,11 @@ def run_due_jobs(now: Optional[float] = None) -> dict:
         # Heartbeat BEFORE every job: the dead-man staleness is bounded by ONE job's budget, never
         # the serial sum of a whole tick (else a legitimately long tick reads as a wedged scheduler
         # and the sentinel kickstarts the organ mid-run).
-        _touch_heartbeat()
+        _publish_running_heartbeat()
         t0 = time.monotonic()
         outcome, exc = _run_with_budget(row)
         elapsed = time.monotonic() - t0
+        _publish_running_heartbeat()
         # last_run advances on EVERY outcome: a job that raises or overruns each run must not
         # re-fire on every 900s tick (spam + starvation); its own schedule governs the retry, and
         # the Bark (cooldown-gated) surfaces the breakage.
@@ -373,6 +466,7 @@ def run_due_jobs(now: Optional[float] = None) -> dict:
                 disk.setdefault(name, {}).update(state.get(name, {}))
             _save_state(disk)
         log.info("scheduler tick: checked %d, ran %d, failed %d", len(due), len(ran), len(failed))
+    _publish_running_heartbeat()
     return {"checked": len(due), "ran": ran, "failed": failed}
 
 
@@ -387,6 +481,8 @@ def _run_with_budget(row: JobRow) -> "tuple[str, object]":
         try:
             row.fn()
         except BaseException as exc:  # noqa: BLE001 -- carried to the caller across the thread
+            if isinstance(exc, asyncio.CancelledError):
+                raise  # D11: never eat a cancellation
             holder.append(exc)
     t = threading.Thread(target=_call, name=f"job-{row.name}", daemon=True)
     t.start()
@@ -400,14 +496,14 @@ def _run_with_budget(row: JobRow) -> "tuple[str, object]":
 
 def _bark_job_failure(row: JobRow, state: dict, now: float, kind: str = "raised") -> None:
     """Bark ONE alert that a job raised/overran, at most once per JOB_BARK_COOLDOWN_S per job (the
-    cooldown stamp lives in scheduler-state.json beside last_run). Fail-open via notify.bark_push."""
+    cooldown stamp lives in scheduler-state.json beside last_run). Fail-open via notify.alert."""
     last_bark = (state.get(row.name) or {}).get("last_bark")
     if isinstance(last_bark, (int, float)) and (now - last_bark) < JOB_BARK_COOLDOWN_S:
         return
     state.setdefault(row.name, {})["last_bark"] = now
     try:
         from penumbra.core import notify
-        notify.bark_push(f"eye job failed: {row.name}",
+        notify.alert(f"eye job failed: {row.name}",
                          f"job '{row.name}' ({row.schedule.raw}) {kind} in the in-process "
                          f"scheduler; check the eye-http log.", group="Penumbra")
     except Exception as exc:  # noqa: BLE001 -- the alert is best-effort; never break the tick
@@ -417,6 +513,70 @@ def _bark_job_failure(row: JobRow, state: dict, now: float, kind: str = "raised"
 # ── the ONE daemon loop (absorbs the P6 sensors-only loop; same two guards) ───────────────────────
 _scheduler_started = False
 _scheduler_lock = threading.Lock()
+_scheduler_heartbeat: Optional[SchedulerHeartbeat] = None
+_scheduler_contract_error: Optional[str] = None
+# S2 graceful-shutdown stop Event: set on ASGI-lifespan shutdown so the scheduler wakes out of its
+# initial-delay / tick wait immediately (see penumbra.core.lifecycle). Additive: the loop behaves
+# identically until this is set, which only happens on shutdown.
+_STOP = threading.Event()
+
+
+def scheduler_contract_status() -> dict:
+    heartbeat = _scheduler_heartbeat
+    if heartbeat is None:
+        return {
+            "state": "not_started",
+            "error_class": _scheduler_contract_error,
+            "last_emitted_at_utc": None,
+            "build_id": None,
+            "schema_digest": None,
+            "policy_digest": None,
+            "mode": None,
+            "phase": None,
+            "scheduler_generation": None,
+        }
+    phase = "running" if heartbeat.tick_seq >= 1 else "starting"
+    return {
+        "state": phase,
+        "error_class": _scheduler_contract_error,
+        "last_emitted_at_utc": heartbeat.last_emitted_at_utc,
+        "build_id": heartbeat.build_id,
+        "schema_digest": heartbeat.artifacts.schema_digest,
+        "policy_digest": heartbeat.artifacts.policy_digest,
+        "mode": heartbeat.artifacts.mode,
+        "phase": phase,
+        "scheduler_generation": heartbeat.generation,
+    }
+
+
+def _read_host_boot_id() -> str:
+    result = subprocess.run(
+        ["/usr/sbin/sysctl", "-n", "kern.bootsessionuuid"],
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+    boot_id = result.stdout.strip()
+    if result.returncode != 0 or not boot_id:
+        raise RuntimeError("cannot read macOS boot session identity")
+    return boot_id
+
+
+def _make_scheduler_heartbeat(*, interval_s: int, initial_delay_s: int) -> SchedulerHeartbeat:
+    artifacts = load_contract_artifacts()
+    if float(interval_s) != artifacts.tick_interval_s:
+        raise ValueError("scheduler tick interval differs from packaged policy")
+    if float(initial_delay_s) != artifacts.initial_delay_s:
+        raise ValueError("scheduler initial delay differs from packaged policy")
+    if float(_MAX_JOB_BUDGET_S) != artifacts.max_job_budget_s:
+        raise ValueError("scheduler maximum job budget differs from packaged policy")
+    return SchedulerHeartbeat(
+        path=HEARTBEAT_PATH,
+        artifacts=artifacts,
+        build_id=current_build_id(),
+        host_boot_id=_read_host_boot_id(),
+        penumbra_pid=os.getpid(),
+    )
 
 
 def start_scheduler(interval_s: int = TICK_SECONDS,
@@ -430,7 +590,7 @@ def start_scheduler(interval_s: int = TICK_SECONDS,
     module idempotence flag so a double call cannot start two threads. Returns the Thread it started,
     or None when a guard refused. Import the writer INSIDE so a smoke import that never enables writes
     still sees the refusal, not an import-order surprise."""
-    global _scheduler_started
+    global _scheduler_contract_error, _scheduler_heartbeat, _scheduler_started
     try:
         from penumbra.core.recall import writer
         writes_on = bool(writer.WRITES_ENABLED)
@@ -444,22 +604,37 @@ def start_scheduler(interval_s: int = TICK_SECONDS,
     with _scheduler_lock:
         if _scheduler_started:
             return None
+        register_shipped_jobs()
+        try:
+            heartbeat = _make_scheduler_heartbeat(
+                interval_s=interval_s,
+                initial_delay_s=initial_delay_s,
+            )
+            heartbeat.publish_starting()
+            _scheduler_contract_error = None
+        except Exception as exc:
+            _scheduler_contract_error = type(exc).__name__
+            raise
+
+        def _loop() -> None:
+            # S2: register so a graceful shutdown can drain this loop; wait on _STOP instead of sleeping
+            # so a stop wakes it out of the initial delay / tick immediately. Additive: identical until
+            # _STOP is set (only on shutdown).
+            from penumbra.core import lifecycle
+            lifecycle.register_loop("job-scheduler", _STOP, threading.current_thread())
+            _STOP.wait(max(0, initial_delay_s))
+            while not _STOP.is_set():
+                try:
+                    run_due_jobs()
+                except Exception:  # noqa: BLE001 -- a tick must never kill the loop
+                    log.exception("job scheduler tick crashed; continuing")
+                _STOP.wait(max(1, interval_s))
+
+        t = threading.Thread(target=_loop, name="job-scheduler", daemon=True)
+        _scheduler_heartbeat = heartbeat
         _scheduler_started = True
-
-    register_shipped_jobs()
-
-    def _loop() -> None:
-        time.sleep(max(0, initial_delay_s))
-        while True:
-            try:
-                run_due_jobs()
-            except Exception:  # noqa: BLE001 -- a tick must never kill the loop
-                log.exception("job scheduler tick crashed; continuing")
-            time.sleep(max(1, interval_s))
-
-    t = threading.Thread(target=_loop, name="job-scheduler", daemon=True)
-    t.start()
-    return t
+        t.start()
+        return t
 
 
 _shipped_registered = False
@@ -479,17 +654,41 @@ def register_shipped_jobs() -> None:
     from penumbra.core import infra_jobs
 
     # Row #1: the P6 sensor scheduler tick, now a job row (semantics unchanged).
-    register_job("sensors", "every:900s", sensor.scheduler_tick_for_sensors)
+    register_job("sensors", "every:900s", sensor.scheduler_tick_for_sensors,
+                 description="标准查询 + novelty 监控(当前 0 个 sensor)")
 
     # Transplanted infra rows (see infra_jobs.py for each core's transplanted rationale + state).
-    register_job("source-health", "daily@05:00", infra_jobs.run_source_health, budget_s=900)
-    register_job("wewerss-probe", "every:1800s", infra_jobs.run_wewerss_probe)
+    register_job("source-health", "daily@05:00", infra_jobs.run_source_health, budget_s=900,
+                 description="每日探全源健康,标 down / 恢复(watchdog down 的来源)")
+    # Fast non-CDP lane: cheap health probes every 6h so a dead open-API/RSS source surfaces in
+    # ~6-12h (N_CONSECUTIVE=2) instead of the daily lane's worst-case ~48h. CDP stays daily/serial.
+    register_job("source-health-fast", "every:21600s", infra_jobs.run_source_health_fast,
+                 budget_s=300, description="每 6h 快探非 CDP 源健康")
+    register_job("wewerss-probe", "every:1800s", infra_jobs.run_wewerss_probe,
+                 description="每 30min 探 wechat2rss 公益 feed")
     register_job("session-warmer", "daily@09:17,14:17,19:17", infra_jobs.run_session_warmer,
-                 budget_s=900)
-    register_job("log-rotation", "daily@04:50", infra_jobs.run_log_rotation)
+                 budget_s=900, description="每日暖 CDP 登录态(小红书 / 抖音 / 9222 论坛)")
+    register_job("log-rotation", "daily@04:50", infra_jobs.run_log_rotation,
+                 description="每日转超大日志")
+    # The 2026-08-11 answer to a backup that ran on time, failed on time, and told nobody: audit
+    # the CONTENT at every off-machine destination (mirror heartbeats + the external drive) and
+    # Bark on any shortfall. Read-only and cheap, so it runs daily just after the 04:30 wall copy.
+    register_job("offmachine-audit", "daily@06:30", infra_jobs.run_offmachine_audit,
+                 budget_s=300,
+                 description="每日核机外备份的真实内容(镜像心跳 + 外置盘),不看跑没跑")
+    # Keep the nserc bulk-CSV cache warm OFF the query path (the ~96s cold pull would blow the 90s
+    # single-source deadline if a query triggered it). budget 300s > the adapter's 240s httpx timeout.
+    register_job("nserc-prime", "monthly@1-03:30", infra_jobs.run_nserc_prime, budget_s=300,
+                 description="月度给 nserc 56MB CSV 缓存保温(避开查询死线)")
     register_job("curator", "monthly@1-06:00", infra_jobs.run_curator, enabled=True,
-                 budget_s=1500)
+                 budget_s=1500, description="月度发现候选源,推中性事实(admit/reject 归 agent)")
     register_job("source-audit", "weekly@sun-06:00", infra_jobs.run_source_audit, enabled=True,
-                 budget_s=900)
-    register_job("digest", "weekly@mon-09:00", infra_jobs.run_digest, enabled=False,
-                 budget_s=900)
+                 budget_s=900, description="周度源审计(冗余 / 死 / 空格),推中性事实")
+    # ENABLED per Captain (2026-07-14). Safe on ANY deployment: run_digest NO-OPS (a log line) when
+    # ~/.penumbra/state/digest-themes.json is absent, so a fresh deploy without themes pushes nothing.
+    # Enabled in CODE (not a profile override) because the profile file, once present, gates walled
+    # sources OFF by default -- so enabling a JOB via the profile would silently disable the walled
+    # source fleet (the mini runs profile-less on purpose). See profile.is_source_enabled.
+    register_job("digest", "weekly@mon-09:00", infra_jobs.run_digest, enabled=True,
+                 budget_s=1200,  # the agent briefing (frontier LLM + eye/brain tool loop) needs headroom
+                 description="周度跨源精选阅读单(agent 合成,只读眼+脑)→ 企业微信;主题在 ~/.penumbra/state/digest-themes.json(可编辑,无主题则空跑)")

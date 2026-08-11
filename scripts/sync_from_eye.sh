@@ -75,12 +75,52 @@ RENAME=(
 )
 find "$PEN_SRC" \( -name "*.py" -o -name "*.json" \) -exec sed -i "${RENAME[@]}" {} +
 
-# --- 3. smoke tests: same renames + drop polyu from the frozen explicit_only list
-#     (the public mirror has no polyu source; mokahr_ats is already tolerated
-#      at the source: "<= {mokahr_ats}") ---
-echo "  [3/6] syncing smoke tests ..."
-cp "$EYE_ROOT/tests/smoke.py" "$PEN_ROOT/tests/smoke.py"
-sed -i "${RENAME[@]}" "$PEN_ROOT/tests/smoke.py"
+# 2b. RE-PIN the one content digest the rename invalidates. The scheduler-heartbeat POLICY pins the
+#     sha256 of its SCHEMA file; the rename pass just rewrote that schema's bytes (polaris ->
+#     penumbra inside the JSON), so the pin no longer matches the schema sitting next to it and
+#     load_contract_artifacts refuses to start ("schema digest mismatch"). The pin's job is to bind
+#     a policy to the exact schema it was written against, so recomputing it for the MIRROR'S OWN
+#     pair preserves that invariant; shipping the eye's hex would ship a self-inconsistent pair.
+#     Targeted hex swap, never a json round-trip, so nothing else in the file moves.
+"$PYBIN" - "$PEN_SRC/core/contracts" <<'PYEOF'
+import hashlib, json, sys
+from pathlib import Path
+
+d = Path(sys.argv[1])
+schema, policy = d / "scheduler-heartbeat-v1.json", d / "scheduler-heartbeat-policy-v1.json"
+want = hashlib.sha256(schema.read_bytes()).hexdigest()
+text = policy.read_text(encoding="utf-8")
+have = json.loads(text)["heartbeat_schema_digest"]
+if have == want:
+    print("    heartbeat schema digest already matches")
+else:
+    assert text.count(have) == 1, f"pin appears {text.count(have)} times, refusing to guess"
+    policy.write_text(text.replace(have, want, 1), encoding="utf-8")
+    print(f"    re-pinned heartbeat schema digest {have[:12]}.. -> {want[:12]}..")
+PYEOF
+
+# --- 3. smoke tests + the repo ARTIFACTS the suite reads: same renames + drop polyu from the
+#     frozen explicit_only list (the public mirror has no polyu source; mokahr_ats is already
+#     tolerated at the source: "<= {mokahr_ats}").
+#
+#     ONE list, used by both the copy below and the residue gate in step 5, so a newly synced
+#     artifact can never slip past the gate that is supposed to cover it.
+#
+#     WHAT BELONGS HERE: artifacts bound to the CODE, whose meaning transfers to the mirror intact.
+#     docs/BUDGETS.md is a doc-vs-code drift rail (S0.5 imports each live constant and compares);
+#     tests/egress_baseline.json is the egress ratchet baseline (S0.6). Both guard code the mirror
+#     ships, so a mirror without them has a gate with holes in it.
+#     WHAT DOES NOT: artifacts bound to the DEPLOYMENT. SERVICES.md and the launchd plists describe
+#     one operator's live fleet; the mirror ships no fleet, and those checks are already written
+#     repo-adaptive at the source (`if _SERVICES_PATH.exists():`), so they skip cleanly here. ---
+SYNCED_ARTIFACTS=("tests/smoke.py" "tests/egress_baseline.json" "docs/BUDGETS.md")
+echo "  [3/6] syncing smoke tests + the repo artifacts they read ..."
+for rel in "${SYNCED_ARTIFACTS[@]}"; do
+  [ -f "$EYE_ROOT/$rel" ] || { echo "FATAL: $rel missing at the eye" >&2; exit 1; }
+  mkdir -p "$PEN_ROOT/$(dirname "$rel")"
+  cp "$EYE_ROOT/$rel" "$PEN_ROOT/$rel"
+  sed -i "${RENAME[@]}" "$PEN_ROOT/$rel"
+done
 sed -i 's/\bpolyu\b *//g' "$PEN_ROOT/tests/smoke.py"
 
 # --- 4. (retired) the standalone cron runner script was DELETED at the eye (P6, 2026-07-03):
@@ -91,15 +131,20 @@ echo "  [4/6] (retired step: the cron runner is gone; scheduler is in-process) .
 
 # --- 5. RESIDUE GATE (hard fail) ---
 echo "  [5/6] residue gate ..."
+# Gate EVERYTHING this script wrote: the renamed src tree plus every synced artifact, off the same
+# list step 3 copied from. A file that gets synced but not gated is exactly how a namespace leak
+# reaches a public repo.
+GATE_PATHS=("$PEN_SRC")
+for rel in "${SYNCED_ARTIFACTS[@]}"; do GATE_PATHS+=("$PEN_ROOT/$rel"); done
 FAILED=0
-if grep -rniq 'polaris' "$PEN_SRC" "$PEN_ROOT/tests/smoke.py"; then
+if grep -rniq 'polaris' "${GATE_PATHS[@]}"; then
   echo "  GATE FAIL: 'polaris' residue:"
-  grep -rni 'polaris' "$PEN_SRC" "$PEN_ROOT/tests/smoke.py" | head -10
+  grep -rni 'polaris' "${GATE_PATHS[@]}" | head -10
   FAILED=1
 fi
-if grep -rnqE '\beye_' "$PEN_SRC" "$PEN_ROOT/tests/smoke.py"; then
+if grep -rnqE '\beye_' "${GATE_PATHS[@]}"; then
   echo "  GATE FAIL: 'eye_' tool-name residue:"
-  grep -rnE '\beye_' "$PEN_SRC" "$PEN_ROOT/tests/smoke.py" | head -10
+  grep -rnE '\beye_' "${GATE_PATHS[@]}" | head -10
   FAILED=1
 fi
 # prose "the eye" is kept by design; report count for awareness only

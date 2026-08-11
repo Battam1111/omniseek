@@ -51,6 +51,13 @@ class PdfAdapter:
             logger.warning("pdf adapter: PyMuPDF unavailable: %s", exc)
             return None
 
+        # C3 CLOSED (review finding H3): this CLAIMING adapter fetches an agent-controlled URL (any
+        # /pdf/ path) through the MAINLINE http.get. Redirect-SSRF on that lane is now closed by
+        # safeurl.SSRFGuardTransport on the shared pooled client (S1-C3): the transport revalidates
+        # EVERY redirect hop via _netguard, so a /pdf/ URL that 302s to 169.254.169.254 / a private IP
+        # is refused at the connection layer for this and every other http.get caller at once (the
+        # structural choke-point fix, not a one-off manual walk here). C2 closed the arbitrary-user-URL
+        # lanes that use their own httpx (web_fallback, docreader); C3 closes the shared-client lane.
         resp = http.get(url)  # shared UA + redirects + 30MB cap; None on failure
         if resp is None:
             return None

@@ -32,6 +32,7 @@ from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import urlsplit
 
+import anyio
 import httpx
 
 from penumbra.core import cache, diag
@@ -258,6 +259,113 @@ def _trip_breaker() -> None:
     _guard.record_fail()
 
 
+# --- native-async twin of get_json (github + github_trending go native async) --------------------
+# Byte-faithful mirror of get_json sharing the SAME _guard (breaker + rate pacer + concurrency sema).
+# Only the BLOCKING waits go async (no thread held during them); a pure addition callers opt into.
+_aclient: Optional["httpx.AsyncClient"] = None
+_aclient_lock = threading.Lock()
+
+
+def _aget_client() -> "httpx.AsyncClient":
+    global _aclient
+    if _aclient is None:
+        with _aclient_lock:
+            if _aclient is None:
+                _aclient = httpx.AsyncClient(
+                    headers={"User-Agent": USER_AGENT},
+                    timeout=TIMEOUT,
+                    http2=_http2_ok(),
+                    follow_redirects=False,  # same SSRF hardening as _get_client
+                    limits=httpx.Limits(max_keepalive_connections=8, max_connections=16,
+                                        keepalive_expiry=30.0),
+                )
+    return _aclient
+
+
+# Hard cap on how long ONE caller may wait for a CONCURRENCY permit (sibling of the rate gate's
+# fast-fail). A raw unbounded acquire hangs the caller when the pool is saturated or a permit leaked;
+# past this the pool is unavailable -> raise (caught by the retry loop -> degrade to None). Sized
+# ~one in-flight call's timeout so brief legitimate contention never trips it.
+_ACQUIRE_MAX_WAIT_S = 20.0
+
+
+def _slot_busy(wait: float) -> RuntimeError:
+    """Concurrency-permit exhaustion -> the retry loop catches it and degrades to None, the same as any
+    other transient failure. Handed to _guard.aslot as its on_busy factory."""
+    return RuntimeError(f"github concurrency pool saturated (no slot in {wait:.0f}s); degrade")
+
+
+async def aget_json(path: str, params: Optional[dict] = None, headers: Optional[dict] = None,
+                    timeout: float = TIMEOUT) -> Optional[Any]:
+    """Native-async twin of ``get_json`` (byte-faithful): SAME cache_only guard, host-pin, shared
+    breaker / rate pacer / concurrency cap, token auth, throttle/retry, failure->None contract, so
+    async and sync egress share ONE load guard. Only the BLOCKING waits go async so no thread is held:
+    the rate gate via ``_guard.reserve_pace_slot()`` + ``await anyio.sleep``; the SAME ``_sema`` acquired
+    OFF the loop (held only around the async network call); the network via ``await _aget_client().get``;
+    the retry backoffs via ``await anyio.sleep``. Everything else is brief-lock / pure CPU, byte-identical
+    to get_json. The _sema acquire sits OUTSIDE the inner try (mirror _stackexchange._ase_get; the eye
+    async fan-out detaches stragglers, never cancels an in-flight leaf, so it cannot leak a slot today)."""
+    if cache.cache_only():
+        return None
+
+    if (urlsplit(f"{BASE}{path}").hostname or "").lower() != _BASE_HOST:
+        logger.warning("github aget_json refused: path %r resolves off %s", path, _BASE_HOST)
+        return None
+
+    with _lock:
+        if time.time() < _state["open_until"]:
+            logger.debug("github circuit open %.0fs more; skipping %s",
+                         _state["open_until"] - time.time(), path)
+            return None
+
+    hdrs = {"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"}
+    if headers:
+        hdrs.update(headers)
+    if _token:
+        hdrs["Authorization"] = f"Bearer {_token}"
+
+    last_exc: Optional[Exception] = None
+    for attempt in (1, 2):
+        try:
+            wait = _guard.reserve_pace_slot()  # rate cap: reserve the slot (sync, brief)...
+            if wait > 0:
+                await anyio.sleep(wait)         # ...then wait WITHOUT holding a thread
+            # concurrency cap, OFF-loop + SHIELDED + BOUNDED: a deadline/client cancel can't take the
+            # permit then skip the release (the leak); a saturated pool degrades. Released before the
+            # retry sleep below (mirror get_json).
+            async with _guard.aslot(_ACQUIRE_MAX_WAIT_S, _slot_busy):
+                resp = await _aget_client().get(f"{BASE}{path}", params=params, headers=hdrs, timeout=timeout)
+            throttled = resp.status_code == 429 or _is_secondary_rate(resp)
+            if throttled:
+                with _lock:
+                    _state["last_429"] = time.time()
+            if (throttled or resp.status_code in (500, 502, 503)) and attempt == 1:
+                await anyio.sleep(_retry_after(resp))
+                continue
+            if throttled:
+                _trip_breaker()
+                diag.note("github.get_json", url=f"{BASE}{path}", status=resp.status_code,
+                          body="rate / secondary-rate limited (survived one retry)")
+                return None
+            resp.raise_for_status()
+            _guard.record_ok()
+            try:
+                return resp.json()
+            except Exception as exc:  # noqa: BLE001 — unparseable body is a failure, degrade to None
+                logger.warning("github aget_json parse failed (%s): %s", path, exc)
+                diag.note("github.get_json", url=f"{BASE}{path}", status=resp.status_code,
+                          body=resp.text, exc=exc)
+                return None
+        except Exception as exc:  # noqa: BLE001
+            last_exc = exc
+            if attempt == 1:
+                await anyio.sleep(1.0)
+    _trip_breaker()
+    logger.warning("github aget_json failed (%s): %s", path, last_exc)
+    diag.note("github.get_json", url=f"{BASE}{path}", exc=last_exc)
+    return None
+
+
 _HEALTH_TTL_S = 60.0
 _health: dict = {"at": 0.0, "result": None}
 _health_lock = threading.Lock()
@@ -280,8 +388,12 @@ def health(timeout: float = 8.0) -> tuple[bool, str]:
             return _health["result"]
         with _lock:
             if time.time() < _state["open_until"]:
-                ok, msg = False, (f"circuit open ({_state['open_until'] - time.time():.0f}s more); "
-                                  "recent consecutive failures, backing off")
+                # Self-shed (breaker open after consecutive failures), NOT GitHub-unreachable:
+                # report DEGRADED so a transient breaker-open does not flip github + github_trending
+                # down (they self-heal when the breaker closes). A genuine outage surfaces as a
+                # failed /rate_limit probe below (2026-07-23 watchdog false-mass-down fix).
+                ok, msg = True, (f"degraded (eye backing off, {_state['open_until'] - time.time():.0f}s "
+                                 "more; upstream not probed this cycle)")
                 _health["at"] = time.monotonic()
                 _health["result"] = (ok, msg)
                 return _health["result"]

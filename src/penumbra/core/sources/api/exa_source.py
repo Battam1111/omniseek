@@ -12,11 +12,14 @@ call spends an Exa API credit, so it stays OUT of the broad fan-out (name it / p
 
 from __future__ import annotations
 
+import functools
 import logging
 import re
 import threading
 import time
 from typing import Optional
+
+import anyio
 
 from penumbra.core import auth, cache, http
 from penumbra.core.normalize import Document
@@ -140,6 +143,78 @@ class ExaAdapter:
         # Cache the full bucket (keyed on the bucket, not limit), then slice to the caller's
         # limit: a later call at a smaller/larger limit (up to the bucket) reuses this search.
         cache.set_docs(ck, docs, ttl=_TTL if docs else 600)
+        return docs[:limit]
+
+    async def asearch(self, query: str, limit: int = 10) -> list[Document]:
+        """Native-async twin of ``search`` (mirrors it line-for-line): the fan-out awaits this
+        DIRECTLY so Exa's billed POST costs a COROUTINE, not a held pool thread. Three changes only:
+          - the disk CACHE read + write go OFF the loop (anyio.to_thread.run_sync: get_docs/set_docs
+            do file IO), with the SAME cache key as search so async + sync share one cached bucket;
+          - the NETWORK egress swaps to its async twin (await http.apost_json, epoll not a thread);
+          - the PURE-CPU result map stays ON the loop, byte-identical to search.
+        Exa's search has NO egress semaphore/lock (``_health_lock`` guards only the separate liveness
+        probe), so there is nothing to acquire off-loop here."""
+        q = (query or "").strip()
+        if not q:
+            return []
+        key = self._key()
+        if not key:
+            logger.warning("exa: no api_key configured (~/.penumbra/credentials/exa.json)")
+            return []
+        # Same bucket + cache key as search (Exa bills per QUERY): async and sync reuse ONE search.
+        bucket = min(25, max(limit, 10))
+        ck = cache.make_key("exa", "search", q, bucket)
+        cached = await anyio.to_thread.run_sync(cache.get_docs, ck)  # disk read OFF loop
+        if cached is not None:
+            return cached[:limit]
+
+        # `site:domain` tokens -> Exa includeDomains. This doubles as a full-text route for
+        # IP-blocked / anti-datacenter sites (e.g. HardwareZone): Exa's own crawler reaches them
+        # and returns the page TEXT, so we get content our direct fetch (datacenter egress) cannot.
+        sites = re.findall(r"site:(\S+)", q)
+        q_clean = re.sub(r"site:\S+", "", q).strip() or q
+        body = {
+            "query": q_clean,
+            "numResults": bucket,
+            "type": "auto",  # let Exa pick neural vs keyword per query
+        }
+        if sites:
+            body["includeDomains"] = sites
+            body["contents"] = {"text": {"maxCharacters": 6000}}  # scoped: return real page text
+        else:
+            body["contents"] = {
+                "highlights": {"numSentences": 3, "highlightsPerUrl": 2},
+                "text": {"maxCharacters": 800},
+            }
+        data = await http.apost_json(_API, json=body, headers={"x-api-key": key}, timeout=30)  # async network
+        if not isinstance(data, dict):
+            return []
+
+        docs: list[Document] = []
+        for r in (data.get("results") or []):
+            url = r.get("url")
+            if not url:
+                continue
+            highlights = [h.strip() for h in (r.get("highlights") or []) if h and h.strip()]
+            text = (r.get("text") or "").strip()
+            content = "\n\n".join(highlights) or text or "(no preview; open the URL for full text)"
+            docs.append(Document(
+                source="exa",
+                source_id=r.get("id") or url,
+                url=url,
+                title=(r.get("title") or "(untitled)")[:300],
+                content=content[:6000],
+                author=r.get("author") or None,
+                metadata={"via": "exa-neural", "published": r.get("publishedDate"),
+                          "score": r.get("score")},
+            ))
+            if len(docs) >= bucket:
+                break
+
+        # Cache the full bucket (keyed on the bucket, not limit), then slice to the caller's
+        # limit: a later call at a smaller/larger limit (up to the bucket) reuses this search.
+        await anyio.to_thread.run_sync(  # disk write OFF loop
+            functools.partial(cache.set_docs, ck, docs, ttl=_TTL if docs else 600))
         return docs[:limit]
 
     def fetch_url(self, url: str) -> Optional[Document]:

@@ -53,11 +53,38 @@ from penumbra.core.sources.walled._cdp import cdp_call, cdp_health
 logger = logging.getLogger(__name__)
 
 # The operator's account is served the international **RedNote** site; the
-# logged-in session lives on rednote.com (xiaohongshu.com 302s here for this
-# region/account — verified 2026-05-29). The note-card DOM is identical
-# (section.note-item / a.title / .name / .count). Target rednote.com directly to
-# avoid the redirect hop.
+# logged-in session lives on rednote.com ONLY. Re-verified 2026-08-11: the old
+# "xiaohongshu.com 302s here" behavior is gone — www.xiaohongshu.com now serves
+# this profile directly, but as a GUEST (search there is login-walled; only
+# tokened note pages are guest-readable). So the search flow MUST ride
+# rednote.com, while fetch_url may fall back to xiaohongshu.com for the note
+# body when the mini's egress blackholes rednote.com alone (a proxy MATCH-lane
+# exit node dying takes rednote.com with it while xiaohongshu.com rides the
+# direct lane — the 2026-08-11 outage). The note DOM is identical on both hosts.
 HOME_URL = "https://www.rednote.com"
+
+
+def _goto_note_dual_host(page, url: str) -> None:
+    """Navigate to a tokened note URL with a sibling-host fallback. A note page
+    with its xsec_token is guest-readable on www.xiaohongshu.com too (verified
+    2026-08-11: same URL, host swapped, renders the full body in this Chrome),
+    so when rednote.com fails at the NETWORK layer the note is retried once on
+    the sibling host instead of losing the read. Non-network errors, and
+    failures on non-rednote URLs, re-raise unchanged. Search deliberately has
+    no such fallback: the logged session does not ride to xiaohongshu.com, and
+    guest search is login-walled there (probed 2026-08-11)."""
+    try:
+        page.goto(url, wait_until="domcontentloaded", timeout=30000)
+        return
+    except Exception as exc:  # noqa: BLE001 — classified below; only net-layer failures earn the retry
+        text = f"{type(exc).__name__}: {exc}"
+        fallback = url.replace("://www.rednote.com/", "://www.xiaohongshu.com/", 1)
+        if fallback == url or ("net::ERR_" not in text and "Timeout" not in text):
+            raise
+        logger.warning("xiaohongshu fetch_url: rednote.com unreachable (%s) — retrying note on xiaohongshu.com", text[:90])
+        diag.note("xiaohongshu.nav_fallback", url=url, exc=exc,
+                  body="rednote.com goto failed at the network layer; retrying the tokened note on xiaohongshu.com (guest-readable)")
+    page.goto(fallback, wait_until="domcontentloaded", timeout=30000)
 
 # Isolated xhs-ONLY CDP Chrome — port 9223, fresh ~/.penumbra/chrome-xhs profile
 # (launchd com.penumbra.cdp.xhs). PHYSICALLY separate from the shared 9222 Chrome
@@ -167,6 +194,37 @@ def _flatten_captured_comments(items: list) -> list[dict]:
     return out
 
 
+def _card_hint(comment_count: Optional[int]) -> str:
+    """The card's placeholder body, naming what is MISSING, including the comment thread.
+
+    On this platform the post is the hook and the COMMENTS are the dataset: a note whose body is one
+    line plus a screenshot routinely carries the actual numbers in 50+ replies. The old text only
+    promised a "full note body", so an agent that skipped penumbra_read believed it had merely lost some
+    prose, when it had lost the substance. Naming the count (when the card carries one) also lets the
+    agent pick WHICH notes to open instead of opening in like-order."""
+    if comment_count is None:
+        return ("(card preview; call penumbra_read on this url for the full note body AND its comment "
+                "thread — this card path carries NO comment count, so likes are not the whole story)")
+    return (f"(card preview; call penumbra_read on this url for the full note body AND its "
+            f"{comment_count} comments)")
+
+
+def _detail_has_substance(title: str, body: str, images: list, comments: list) -> bool:
+    """Return whether a detail response contains anything from the note itself.
+
+    A login/home/error shell can still produce valid HTML and a successful CDP navigation. It is
+    not a readable document. The caller must reject that shell instead of manufacturing a
+    ``matched=True`` placeholder.
+    """
+    clean_title = (title or "").strip()
+    return bool(
+        (body or "").strip()
+        or images
+        or comments
+        or (clean_title and clean_title != "(untitled)")
+    )
+
+
 def _json_item_to_document(item: dict) -> Optional[Document]:
     """One intercepted /search/notes JSON item → Document. Field-aligned with the DOM
     path (_card_to_document) + the xsec_token detail-link contract; the JSON additionally
@@ -181,7 +239,17 @@ def _json_item_to_document(item: dict) -> Optional[Document]:
     url = f"https://www.rednote.com/search_result/{note_id}?xsec_token={token}&xsec_source="
     user = nc.get("user") or {}
     author = user.get("nickname") or user.get("nick_name")
-    score = _parse_count((nc.get("interact_info") or {}).get("liked_count"))
+    # interact_info carries FOUR counts, not one. Verified live 2026-07-25 against the real
+    # /search/notes payload: {liked_count, comment_count, collected_count, shared_count, ...}. Only
+    # liked_count was ever read, so the card exposed likes as if they were the whole picture while the
+    # eye already held the rest. That mattered: on this platform a 41-like note with 53 comments beats
+    # a 375-like note with a one-line body, and an agent sorting by the only number it could see picked
+    # the wrong one. Now every count the source reports is surfaced.
+    inter = nc.get("interact_info") or {}
+    score = _parse_count(inter.get("liked_count"))
+    comments = _parse_count(inter.get("comment_count"))
+    collects = _parse_count(inter.get("collected_count"))
+    shares = _parse_count(inter.get("shared_count"))
     time_hint = None
     for tag in (nc.get("corner_tag_info") or []):
         if isinstance(tag, dict) and tag.get("type") == "publish_time":
@@ -192,10 +260,20 @@ def _json_item_to_document(item: dict) -> Optional[Document]:
         source_id=note_id,
         url=url,
         title=title,
-        content="(card preview; call penumbra_read on this url for the full note body)",
+        content=_card_hint(comments),
         author=author,
-        signals=mk_signal('likes', score, kind='engagement', by='xiaohongshu/score'),
-        metadata={"time_hint": time_hint, "like_count": score},
+        signals={
+            **mk_signal('likes', score, kind='engagement', by='xiaohongshu/liked_count'),
+            **mk_signal('comments', comments, kind='engagement', by='xiaohongshu/comment_count'),
+            **mk_signal('collects', collects, kind='engagement', by='xiaohongshu/collected_count'),
+            **mk_signal('shares', shares, kind='engagement', by='xiaohongshu/shared_count'),
+        },
+        metadata={"time_hint": time_hint, "like_count": score, "comment_count": comments,
+                  "collected_count": collects, "shared_count": shares,
+                  # This doc is a CARD, not the note: full=True cannot conjure a body the
+                  # search response never contained. The server reads this to say so out
+                  # loud instead of returning the placeholder as if it were the article.
+                  "body_needs_read": True},
     )
 # Jittered min-interval between LIVE calls (burst guard). A FIXED interval is itself a bot
 # signature (humans aren't metronomic), so roll a fresh value per call. The operator set the 5-11s
@@ -649,7 +727,9 @@ class XiaohongshuAdapter:
             logger.warning(_SEALED_MSG)
             return None
         host = urlparse(url).hostname or ""
-        if not ("rednote.com" in host or "xiaohongshu.com" in host):
+        # URL ownership is explicit: mainland xiaohongshu.com notes belong to the 9224 adapter.
+        # Claiming both hosts here made registration order decide which account read the note.
+        if "rednote.com" not in host:
             return None
 
         with _live_slot() as (ok, why):
@@ -662,10 +742,10 @@ class XiaohongshuAdapter:
     def _fetch_url_live(self, url: str) -> Optional[Document]:
         """Live (CDP) half of fetch_url(), run while holding the single 小号 slot (see
         _search_live / _live_slot). The ``with`` auto-releases on every return path below."""
-        # The 小号 session lives on the international rednote.com; a mainland xiaohongshu.com
-        # share link does NOT share that login (shows a guest overlay) and doesn't redirect —
-        # so rewrite to rednote.com to get FULL logged-in access instead of a guest read.
-        nav_url = url.replace("xiaohongshu.com", "rednote.com")
+        # This adapter owns rednote.com URLs. Mainland xiaohongshu.com URLs are handled by the
+        # separate 9224 adapter, so never silently cross accounts here. (The dual-host retry
+        # inside _goto_note_dual_host is NAVIGATION-internal — ownership stays rednote-only.)
+        nav_url = url
 
         _cmt: list = []  # captured /comment/page comments (the listener appends from the CDP thread;
         #                  cdp_call's join() flushes the writes before we read it below)
@@ -681,7 +761,7 @@ class XiaohongshuAdapter:
                     except Exception:  # noqa: BLE001 — one unparseable XHR never breaks the fetch
                         pass
                 page.on("response", _on_cmt)
-            page.goto(nav_url, wait_until="domcontentloaded", timeout=30000)
+            _goto_note_dual_host(page, nav_url)
             _human.read_dwell()
             # A note page renders #detail-title / #detail-desc even when a login-NUDGE
             # overlay is shown to guests (share links with xsec_token are guest-readable).
@@ -772,6 +852,13 @@ class XiaohongshuAdapter:
         source_id = m.group(1) if m else url
 
         # Substance is often in the images: surface them (media) + flag it when the text is thin.
+        comments = cdata.get("list") or []
+        declared = cdata.get("declared")
+        if not _detail_has_substance(title, body, images, comments):
+            diag.note("xiaohongshu.empty_detail", url=url,
+                      body="detail navigation succeeded but returned no title/body/media/comments")
+            return None
+
         if images and len(body) < 200:
             note = (f"[正文主要在 {len(images)} 张图里(小红书常把干货放图中):图片 URL 见 media 字段,"
                     f"下载后用视觉读图中文字]")
@@ -779,19 +866,19 @@ class XiaohongshuAdapter:
         else:
             content = body or "(no body extracted; note may require interaction to load)"
 
-        # Comments carry the crowd-sourced 经验 — render them into the body so any
-        # penumbra_read consumer sees them, and keep the structured list in metadata.
-        # "取到 N / 共 M" makes an incomplete harvest VISIBLE (honest completeness signal).
-        comments = cdata.get("list") or []
-        declared = cdata.get("declared")
+        # Comments carry the crowd-sourced 经验, and they are returned ONCE: structured, in
+        # metadata.comments. They used to ALSO be rendered into the body, so every note shipped its
+        # whole comment thread twice; a 4-note penumbra_gather measured 68,106 chars, about half of it the
+        # same text again, which overflowed the tool channel and effectively halved how many notes a
+        # call could carry. Nothing is lost by dropping the inline copy: the structured list is
+        # strictly richer (per-comment author / text / likes, machine-readable), and this path does
+        # NOT feed the recall index (only adapter.search results are ingested), so comment text stays
+        # exactly as searchable as before. The "取到 N / 共 M" completeness signal survives here,
+        # because an incomplete harvest must stay VISIBLE.
         if comments:
             short = f" / 共 {declared} 条" if declared else ""
-            lines = [f"\n\n—— 评论区(取到 {len(comments)} 条{short})——"]
-            for c in comments:
-                who = c.get("author") or "匿名"
-                lk = f" ·赞{c['likes']}" if c.get("likes") else ""
-                lines.append(f"[{who}{lk}] {c.get('text', '')}")
-            content += "\n".join(lines)
+            content += (f"\n\n(评论 {len(comments)} 条{short},结构化在 metadata.comments:"
+                        f" 每条含 author / text / likes)")
 
         return Document(
             source="xiaohongshu",
@@ -806,24 +893,21 @@ class XiaohongshuAdapter:
         )
 
     def health_check(self) -> tuple[bool, str]:
+        """Probe transport state only, without touching the account session.
+
+        The old probe navigated the international homepage, waited like a human, and then
+        inspected the login wall. That is a capability probe with a 60s CDP budget, while the
+        source-health fan-out has a 25s hard deadline. It therefore reported ``timeout`` even
+        when named search/read calls were healthy, and it added an unnecessary account touch to
+        every health sweep. Named search/read remains the capability oracle; this probe only
+        answers whether the isolated CDP transport is reachable.
+        """
         if _SEALED:
             return False, "SEALED (小红书封号风险): disabled until CDP is undetectable"
         cdp_ok, cdp_msg = cdp_health(_XHS_CDP_URL)
         if not cdp_ok:
             return False, f"CDP not reachable: {cdp_msg}"
-
-        def _check(page) -> bool:
-            page.goto(HOME_URL, wait_until="domcontentloaded", timeout=20000)
-            _human.read_dwell()
-            return _login_wall(page)
-
-        try:
-            has_login_wall = cdp_call(_check, initial_url=None, timeout=60, cdp_url=_XHS_CDP_URL)
-            if has_login_wall:
-                return False, "CDP Chrome not logged into Xiaohongshu (the operator needs to log in)"
-            return True, "OK (CDP + Xiaohongshu session)"
-        except Exception as exc:  # noqa: BLE001
-            return False, f"{type(exc).__name__}: {str(exc)[:80]}"
+        return True, "ok (CDP reachable; named search/read is the content-capability probe)"
 
     @staticmethod
     def _card_to_document(card) -> Optional[Document]:
@@ -880,10 +964,14 @@ class XiaohongshuAdapter:
             source_id=note_id or "",
             url=full_url,
             title=title,
-            content="(card preview; call penumbra_read on this url for the full note body)",
+            content=_card_hint(None),   # the DOM card exposes only .count (likes); no comment number
             author=author,
             signals=mk_signal('likes', score, kind='engagement', by='xiaohongshu/score'),
-            metadata={"time_hint": time_hint, "like_count": score},
+            # comment_count is None, NOT 0: this fallback path genuinely cannot see it (the rendered
+            # card shows a like count only), and reporting 0 would read as "no discussion" on exactly
+            # the notes worth opening. The JSON path above carries the real number; this one says so.
+            metadata={"time_hint": time_hint, "like_count": score, "comment_count": None,
+                      "body_needs_read": True},
         )
 
 

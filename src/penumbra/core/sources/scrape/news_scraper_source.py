@@ -25,7 +25,7 @@ from urllib.parse import urljoin, urlparse
 import httpx
 from bs4 import BeautifulSoup
 
-from penumbra.core import cache
+from penumbra.core import cache, diag
 from penumbra.core.normalize import Document, jsonsafe, keyword_score_filter
 
 logger = logging.getLogger(__name__)
@@ -69,6 +69,8 @@ def _get(url: str) -> Optional[str]:
             return r.text
     except Exception as exc:  # noqa: BLE001
         logger.warning("scrape GET failed %s: %s", url, exc)
+        st = getattr(getattr(exc, "response", None), "status_code", None)
+        diag.note("news_scraper.fetch", url=url, status=st, exc=exc)
     return None
 
 

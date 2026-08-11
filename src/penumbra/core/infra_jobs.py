@@ -11,7 +11,7 @@ and safe. The push path changes from scripts/_sentinel_common (urllib, out-of-pr
 penumbra.core.notify (httpx, in-process), keeping the same fail-open contract.
 
 Each job runs INSIDE the writer process on the ONE scheduler thread, wrapped by jobs.run_due_jobs in
-its own try/except (a failing job never stops the rest, and the scheduler Barks on an unhandled
+its own try/except (a failing job never stops the rest, and the scheduler alerts on an unhandled
 exception with a 24h cooldown). The state files these jobs keep are the SAME paths the old crons
 used, so the mini's existing state carries across the migration unchanged.
 """
@@ -22,6 +22,8 @@ import json
 import logging
 import os
 import random
+import subprocess
+import sys
 import time
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
@@ -75,15 +77,21 @@ def _should_alert(key: str, alerts: dict, cooldown: int) -> bool:
     return True
 
 
-def _bark(title: str, body: str, *, group: str = "Penumbra", level: str = "active") -> None:
-    """Fail-open in-process Bark (via notify). The old crons pushed through _sentinel_common; the
-    contract (never raise) is identical, including the level hint: health alarms stay "active",
-    the periodic report pushes (digest / audit / curator) keep their old quiet "passive" lane."""
+def _alert(title: str, body: str, **_ignored) -> None:
+    """Fail-open in-process ALARM. Retired Bark's group/level hints are absorbed and ignored.
+
+    2026-08-12: Bark was deleted from the fleet. It had been unreachable from the mini (three
+    probes, the connection never establishing, 20s timeouts, nine "push failed" lines across the
+    logs) while EVERY infra alarm pushed to it and to nothing else. Alarms were written, counted,
+    logged as pushed, and delivered nowhere, which is worse than having no alarms because the quiet
+    reads as calm. One channel now, WeCom, which answers in 0.06s and is where Captain actually
+    reads. The contract is unchanged: never raise, a broken alarm must not break the job that
+    raised it."""
     try:
         from penumbra.core import notify
-        notify.bark_push(title, body, group=group, level=level)
+        notify.alert(title, body)
     except Exception as exc:  # noqa: BLE001 -- a push failure never breaks a job
-        log.debug("infra_jobs bark swallowed (%s)", exc)
+        log.debug("infra_jobs alert swallowed (%s)", exc)
 
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
@@ -99,7 +107,7 @@ def _bark(title: str, body: str, *, group: str = "Penumbra", level: str = "activ
 # CDP login-state monitoring: CDP sources are probed INDIVIDUALLY + SERIALLY via their health_check
 # (a low-key homepage / login-wall check, NOT a search), so login expiry becomes visible WITHOUT
 # account-risky activity. A DEAD CDP Chrome is relaunched (its launchd KeepAlive is
-# SuccessfulExit=false, so a clean quit is not auto-relaunched); a FAILED self-heal escalates to Bark
+# SuccessfulExit=false, so a clean quit is not auto-relaunched); a FAILED self-heal escalates to an alert
 # (the CDP safety net itself is down).
 # State: ~/.penumbra/state/health-watchdog-state.json (unchanged path -> the mini's state carries).
 _HEALTH_STATE = _STATE / "health-watchdog-state.json"
@@ -168,7 +176,7 @@ def _heal_cdp_chrome() -> list[str]:
     """Relaunch any DEAD CDP Chrome BEFORE probing, so the probes see live browsers (the chrome
     launchd agents don't auto-relaunch a clean exit). Returns the launchd services it FAILED to bring
     back -- a failed self-heal means the CDP safety net itself is down, so the caller escalates those
-    to a Bark alert (otherwise the failure is silent)."""
+    to an alert (otherwise the failure is silent)."""
     import subprocess
     from penumbra.core.sources.walled._cdp import cdp_health
     launchd = _cdp_label_map()
@@ -202,20 +210,45 @@ def _heal_cdp_chrome() -> list[str]:
     return failed
 
 
-def run_source_health() -> dict:
+def run_source_health_fast() -> dict:
+    """The fast lane: probe ONLY the non-CDP sources (cheap, no browser), scheduled every 6h so a
+    dead source surfaces in ~6-12h instead of the daily lane's worst-case ~48h. Shares the watchdog
+    state + consecutive-fail counter with the full daily run; CDP heal/probe stays daily + serial
+    (gentle + account-safe). See run_source_health(scope=...)."""
+    return run_source_health(scope="noncdp")
+
+
+def run_source_health(scope: str = "all") -> dict:
     """One source-health run (the cron_watchdog 源体检 half, minus the dissolved cron-liveness half):
     heal dead CDP Chrome, probe every source's health_check (non-CDP concurrent, CDP serial), track
-    consecutive fails, and Bark newly-down / recovered (cooldown-gated). Returns a small summary."""
+    consecutive fails, and alert newly-down / recovered (cooldown-gated). Returns a small summary.
+
+    scope="all" (daily): the full run (heal CDP, probe non-CDP + CDP + infra). scope="noncdp" (the
+    6h fast lane): probe ONLY non-CDP sources, skip the CDP heal/probe/infra entirely, and MERGE the
+    result into the stored last_status (never dropping the CDP entries the daily run owns)."""
     from penumbra.server import load_sources
     from concurrent.futures import ThreadPoolExecutor
     load_sources()
     from penumbra.core import fetcher
 
-    heal_failed = _heal_cdp_chrome()  # relaunch dead CDP Chrome (KeepAlive won't); collect failures
+    full = (scope != "noncdp")
+    heal_failed = _heal_cdp_chrome() if full else []  # CDP heal is daily-only (needs a browser)
 
     names = sorted(fetcher.all_adapter_names())
-    noncdp = [n for n in names if n not in _CDP_SOURCES and n not in _SEALED_SOURCES]
-    cdp = [n for n in names if n in _CDP_SOURCES]
+    # Skip RETIRED sources: a curator retire (reversible overlay, reason begins "retired...") parks a
+    # source as intentionally dead. Probing it just re-confirms "down" every run -- a standing false
+    # alarm on something we deliberately retired. The retire IS the decision; health-probing it is noise.
+    # Reversible: a rollback clears the overlay and the source is probed again next run.
+    def _is_retired(n: str) -> bool:
+        # fetcher.retired_reason is the ONE retire derivation. get_adapter may return None if a
+        # concurrent unregister raced the all_adapter_names snapshot; with no adapter to read, a
+        # vanished source is simply not-probed this run (not "retired").
+        a = fetcher.get_adapter(n)
+        return bool(fetcher.retired_reason(a)) if a is not None else False
+    retired = {n for n in names if _is_retired(n)}
+    live = [n for n in names if n not in retired]
+    noncdp = [n for n in live if n not in _CDP_SOURCES and n not in _SEALED_SOURCES]
+    cdp = [n for n in live if n in _CDP_SOURCES] if full else []
 
     def probe_named(n):
         return n, _health_probe(fetcher.get_adapter(n))
@@ -227,13 +260,14 @@ def run_source_health() -> dict:
     for n in cdp:  # CDP: SERIAL (one browser tab at a time -- gentle + account-safe)
         results[n] = _health_probe(fetcher.get_adapter(n))
 
-    from penumbra.core.sources.walled._cdp import cdp_health
     infra: dict[str, tuple[bool, str]] = {}
-    for label, url in _CDP_INSTANCES.items():
-        try:
-            infra[label] = cdp_health(url) if url else cdp_health()
-        except Exception as exc:  # noqa: BLE001
-            infra[label] = (False, f"{type(exc).__name__}: {exc}")
+    if full:
+        from penumbra.core.sources.walled._cdp import cdp_health
+        for label, url in _CDP_INSTANCES.items():
+            try:
+                infra[label] = cdp_health(url) if url else cdp_health()
+            except Exception as exc:  # noqa: BLE001
+                infra[label] = (False, f"{type(exc).__name__}: {exc}")
 
     state = _load_state(_HEALTH_STATE)
     alerts = state.get("_alerts", {})
@@ -244,7 +278,7 @@ def run_source_health() -> dict:
     # stays silently offline until the operator intervenes.
     for svc in heal_failed:
         if _should_alert(f"heal_fail:{svc}", alerts, REALERT_COOLDOWN_S):
-            _bark(f"CDP 自愈失败 · {svc}",
+            _alert(f"CDP 自愈失败 · {svc}",
                   f"launchctl 无法拉起 {svc} -- 该实例所有 CDP 源静默离线,需登录 Mac mini 检查",
                   group="Penumbra-Health")
             pushed += 1
@@ -260,26 +294,48 @@ def run_source_health() -> dict:
 
     if newly_down:
         body = "\n".join(f"- {n}: {msg[:48]}" for n, msg in newly_down)
-        _bark(f"源故障 · {len(newly_down)}", body, group="Penumbra-Health")
+        _alert(f"源故障 · {len(newly_down)}", body)
         pushed += 1
     if recovered:
-        _bark(f"源恢复 · {len(recovered)}", "\n".join(f"- {n}" for n in recovered), group="Penumbra-Health")
+        _alert(f"源恢复 · {len(recovered)}", "\n".join(f"- {n}" for n in recovered))
         pushed += 1
+
+    # DEGRADED transition: a multi-feed bundle can be healthy (ok=True) yet have lost members. Those
+    # never enter newly_down, so member rot was invisible until ALL feeds died. Track the degraded set
+    # across runs and alert on a source's full->degraded transition once (a bundle names its dead feeds in
+    # the health message via the "degraded" marker). Recovery to full clears it silently.
+    degraded_now = {n for n in probed if results[n][0] and "degraded" in results[n][1].lower()}
+    prev_degraded = set(state.get("degraded", []))
+    newly_degraded = [n for n in sorted(degraded_now) if n not in prev_degraded]
+    if newly_degraded:
+        body = "\n".join(f"- {n}: {results[n][1][:64]}" for n in newly_degraded)
+        _alert(f"源降级 · {len(newly_degraded)}", body)
+        pushed += 1
+    state["degraded"] = sorted(degraded_now)
 
     state["fails"] = fails
     state["_alerts"] = alerts
     state["last_run"] = datetime.now().isoformat(timespec="seconds")
-    snap = {n: results[n][0] for n in probed}
+    # Full run rebuilds the snapshot; the fast (noncdp) lane MERGES so the CDP + infra entries the
+    # daily run owns are preserved (a from-scratch snap would drop them -> list_sources 'unknown').
+    snap = dict(state.get("last_status", {})) if not full else {}
+    snap.update({n: results[n][0] for n in probed})
     for label, (ok, _msg) in infra.items():
         snap[f"_cdp:{label}"] = ok
     state["last_status"] = snap
+    # A retired source is no longer probed -> drop its stale fail / status / alert entries so a parked
+    # source self-cleans instead of freezing at a stale "down" (no manual state edit ever needed).
+    for r in retired:
+        fails.pop(r, None)
+        snap.pop(r, None)
+        alerts.pop(f"down:{r}", None)
     _save_state(_HEALTH_STATE, state)
 
     n_green = sum(1 for n in probed if results[n][0])
-    log.info("source-health: %d/%d healthy (%d CDP); newly_down=%d recovered=%d bark=%d",
-             n_green, len(probed), len(cdp), len(newly_down), len(recovered), pushed)
+    log.info("source-health[%s]: %d/%d healthy (%d CDP); newly_down=%d recovered=%d alert=%d",
+             scope, n_green, len(probed), len(cdp), len(newly_down), len(recovered), pushed)
     return {"healthy": n_green, "probed": len(probed), "newly_down": len(newly_down),
-            "recovered": len(recovered), "bark": pushed}
+            "recovered": len(recovered), "alert": pushed}
 
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
@@ -287,7 +343,7 @@ def run_source_health() -> dict:
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
 # wechat2rss feed health check. (原 wewe-rss 双轨监控; 2026-06-06 弃用 AI寒武纪、退役 wewe-rss 自建后,
 # 只剩这一轨。) Monitors 4 free wechat2rss.xlab.app feeds (no SLA): each reachable + whether the whole
-# service froze. Any anomaly -> Bark. A 6h cooldown prevents a 30-min re-alert flood. There is no
+# service froze. Any anomaly -> an alert. A 6h cooldown prevents a 30-min re-alert flood. There is no
 # heal (a free public source has no local process to relaunch).
 _WEWERSS_STATE = _STATE / "wewerss-last-alert.json"
 _WEWERSS_COOLDOWN_S = 6 * 3600
@@ -301,6 +357,11 @@ _WECHAT2RSS_FEEDS = [
 # All 4 are among China's most active AI媒体, so if NONE posted in this long the service froze (one
 # quiet account will not trip it: we test the NEWEST across all feeds).
 _WECHAT2RSS_FREEZE_LIMIT_S = 3 * 86400
+# The probe reads a PREFIX and only needs the newest <pubDate>; 256 KB covers many
+# entries even on the chattiest of these accounts. The timeout then bounds a genuinely
+# unreachable host rather than a large-but-healthy one.
+_WECHAT2RSS_PREFIX_BYTES = 256 * 1024
+_WECHAT2RSS_TIMEOUT_S = 25
 
 
 def check_wechat2rss_feeds() -> tuple[bool, str]:
@@ -314,8 +375,14 @@ def check_wechat2rss_feeds() -> tuple[bool, str]:
     for name, url in _WECHAT2RSS_FEEDS:
         try:
             req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-            with urllib.request.urlopen(req, timeout=12) as resp:
-                body = resp.read().decode("utf-8", "ignore")
+            with urllib.request.urlopen(req, timeout=_WECHAT2RSS_TIMEOUT_S) as resp:
+                # BOUNDED PREFIX, not the whole feed (2026-08-11). These feeds run 1-2.4 MB and the
+                # probe only needs the NEWEST pubDate, which RSS puts near the top. Reading the whole
+                # body made the probe's cost scale with the publisher's backlog: measured the same
+                # night, one feed took 16.8s against a 12s budget, so the probe raised URLError and
+                # raised "unreachable" about a feed that was serving fine. A liveness check whose
+                # own cost can exceed its own timeout manufactures its own false alarms.
+                body = resp.read(_WECHAT2RSS_PREFIX_BYTES).decode("utf-8", "ignore")
         except Exception as exc:  # noqa: BLE001
             unreachable.append(f"{name}({type(exc).__name__})")
             continue
@@ -342,20 +409,277 @@ def check_wechat2rss_feeds() -> tuple[bool, str]:
 
 
 def run_wewerss_probe() -> dict:
-    """One wewe-rss run: probe the 4 feeds, Bark on anomaly (6h cooldown). No heal."""
+    """One wewe-rss run: probe the 4 feeds, alert on anomaly (6h cooldown). No heal."""
     ok, msg = check_wechat2rss_feeds()
     log.info("wewerss: %s : %s", "OK" if ok else "FAIL", msg)
     state = _load_state(_WEWERSS_STATE)
     alerts = state.get("_alerts", {})
     pushed = 0
     if not ok and _should_alert("wechat2rss_down", alerts, _WEWERSS_COOLDOWN_S):
-        _bark("wechat2rss feed 异常",
+        _alert("wechat2rss feed 异常",
               f"{msg}。免费第三方源, 可能要换源或换号, 检查 wechat2rss.xlab.app。", group="Penumbra")
         pushed = 1
     state["_alerts"] = alerts
     state["last_run"] = datetime.now().isoformat(timespec="seconds")
     _save_state(_WEWERSS_STATE, state)
-    return {"ok": ok, "bark": pushed}
+    return {"ok": ok, "alert": pushed}
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+# JOB: off-machine backup AUDIT   (daily@06:30)
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+# WHY THIS EXISTS (2026-08-11): the brain's off-machine mirror was dead for FIFTEEN DAYS and nothing
+# noticed. Its Windows scheduled task ran on time, failed on time (its remote pinned a LAN alias that
+# stopped resolving when the fleet moved to Tailscale), and told nobody, because its exit code had no
+# reader. A backup in that state is worse than no backup: it manufactures exactly the confidence that
+# stops anyone from checking by hand. 79 notes sat on a single disk while the ledger said "mirrored".
+#
+# THE ONLY CRITERION THAT SURVIVES THAT FAILURE IS CONTENT AT THE DESTINATION. Not "the task ran",
+# not "no error was raised", not "it looked fine last time": every one of those stayed TRUE straight
+# through the outage. So this job measures what is actually there:
+#   * MIRRORS -- the Windows side writes a heartbeat here after each run carrying every mirror's HEAD
+#     and item count. Mini then asks its OWN repo how far behind that HEAD is (ancestor check +
+#     rev-list count), which is exact rather than a guess from file counts. A STALE heartbeat is
+#     itself an alarm, so a Windows box that simply stops running cannot fail silently either:
+#     absence of news is news.
+#   * EXTERNAL DRIVE -- read directly (newest wall-*.db.gz under /Volumes/*/penumbra-backups versus
+#     the newest local one), because that lane needs no second machine to report on it.
+# Read-only and fail-visible: this job never repairs, it only measures and alerts. Every helper
+# swallows its own errors, because an audit that can crash is an audit that quietly stops running.
+_OFFMACHINE_STATE = _STATE / "offmachine-audit.json"
+_OFFMACHINE_HEARTBEAT = _STATE / "offmachine-mirror-heartbeat.json"
+_OFFMACHINE_COOLDOWN_S = 6 * 3600
+_HEARTBEAT_STALE_S = 3 * 24 * 3600   # the mirror task is daily; 3 quiet days is a fault, not jitter
+_WALL_STALE_S = 3 * 24 * 3600        # the wall backup is daily
+_MIRROR_LAG_MAX_COMMITS = 60         # a busy writing day stays well under this; 15 days did not
+_BACKUPS = Path.home() / ".penumbra" / "backups"
+_VOLUMES = Path("/Volumes")
+_BACKUP_LOG = Path.home() / ".penumbra" / "logs" / "infra.state-backup.log"
+_ALERT_DELIVERY_PATH = _STATE / "alert-delivery.json"
+# name -> the LIVE repo each off-machine mirror is supposed to be a copy of.
+_MIRROR_TARGETS = {
+    "brain": Path.home() / "penumbra-brain",
+    "core": Path.home() / "penumbra-mcp-maintenance",
+}
+
+
+def _git(root: Path, *args: str, timeout: int = 60) -> tuple[int, str]:
+    try:
+        p = subprocess.run(["git", "-C", str(root), *args],
+                           capture_output=True, text=True, timeout=timeout)
+        return p.returncode, (p.stdout or "").strip()
+    except Exception:  # noqa: BLE001 -- an audit that raises is an audit nobody runs
+        return 1, ""
+
+
+def _mirror_lag(root: Path, mirror_head: str) -> tuple[str, int]:
+    """How far the mirror trails the live repo: ("", n) behind by n commits, or (fault, -1).
+
+    An ancestor check comes FIRST: a mirror head the live repo does not contain means divergence or
+    corruption, which is a different (and worse) problem than being behind."""
+    if not mirror_head:
+        return ("心跳没带 HEAD", -1)
+    rc, _ = _git(root, "cat-file", "-e", f"{mirror_head}^{{commit}}")
+    if rc != 0:
+        return (f"镜像 HEAD {mirror_head[:8]} 在活仓里不存在(分叉或损坏)", -1)
+    rc, _ = _git(root, "merge-base", "--is-ancestor", mirror_head, "HEAD")
+    if rc != 0:
+        return (f"镜像 HEAD {mirror_head[:8]} 不是活仓 HEAD 的祖先(分叉)", -1)
+    rc, out = _git(root, "rev-list", "--count", f"{mirror_head}..HEAD")
+    if rc != 0:
+        return ("", 0)
+    try:
+        return ("", int(out))
+    except ValueError:
+        return ("", 0)
+
+
+def _audit_mirrors(now: float) -> list[str]:
+    """Every off-machine git mirror, judged by content rather than by a run log."""
+    hb = _load_state(_OFFMACHINE_HEARTBEAT)
+    if not hb:
+        return ["镜像心跳缺失:Windows 侧镜像任务从未成功写回过"]
+    faults: list[str] = []
+    stamp = str(hb.get("at") or "")
+    try:
+        age = now - datetime.fromisoformat(stamp).timestamp()
+    except ValueError:
+        return [f"镜像心跳时间戳无法解析:{stamp!r}"]
+    if age > _HEARTBEAT_STALE_S:
+        faults.append(f"镜像心跳已 {age / 86400:.1f} 天未更新(Windows 侧镜像任务可能已死)")
+    rows = hb.get("mirrors") or {}
+    for name, root in _MIRROR_TARGETS.items():
+        row = rows.get(name) or {}
+        if not row:
+            faults.append(f"{name}:心跳里没有这面镜子")
+            continue
+        if not row.get("ok"):
+            faults.append(f"{name}:上次镜像更新失败({str(row.get('error') or '')[:90]})")
+            continue
+        fault, behind = _mirror_lag(root, str(row.get("head") or ""))
+        if fault:
+            faults.append(f"{name}:{fault}")
+        elif behind > _MIRROR_LAG_MAX_COMMITS:
+            faults.append(f"{name}:镜像落后活仓 {behind} 个 commit")
+    return faults
+
+
+def _newest_mtime(paths) -> float:
+    best = 0.0
+    for p in paths:
+        try:
+            best = max(best, p.stat().st_mtime)
+        except OSError:
+            continue
+    return best
+
+
+def _removable_volumes_visible() -> bool:
+    """Can THIS process see removable volumes at all?
+
+    macOS gates /Volumes/* behind a privacy grant (Files and Folders -> Removable Volumes, or Full
+    Disk Access) that a launchd-spawned process does not inherit from an interactive shell. When the
+    grant is missing the directory reads as EMPTY rather than raising, so a naive check concludes
+    "there is no backup on the drive" when the truth is "I am not allowed to look". Measured
+    2026-08-11 with the same script a minute apart: under launchd off-machine=NONE, over ssh
+    off-machine=ext:PenumbraRecovery. Distinguishing the two is the whole point, because they need
+    opposite responses (grant a permission vs plug in a drive)."""
+    try:
+        return any(p.name != "Macintosh HD" and p.is_dir() for p in _VOLUMES.iterdir())
+    except OSError:
+        return False
+
+
+def _scheduled_offmachine_verdict() -> str:
+    """What the BACKUP ITSELF last recorded about its off-machine destination ("" if unknown).
+
+    This is not "did the task run" (the thing this whole job exists to distrust): it is the lane's
+    own verdict about the DESTINATION, written by the process that has the same view of the disk as
+    the scheduled run. That makes it the one honest signal available from inside a blinded process."""
+    try:
+        lines = _BACKUP_LOG.read_text(encoding="utf-8", errors="ignore").strip().splitlines()
+    except OSError:
+        return ""
+    for line in reversed(lines):
+        if "off-machine=" in line:
+            return line.rsplit("off-machine=", 1)[1].strip()
+    return ""
+
+
+def _declared_resident_labels() -> list[str]:
+    """The launchd labels the service REGISTRY says must be resident (status="running").
+
+    scripts/services.py is the single declaration of the fleet and is deliberately importable
+    without penumbra (the external sentinel depends on that), so the registry is read rather than
+    duplicated: a hardcoded copy here would drift from the thing it is supposed to guard, which is
+    the exact failure this check exists to catch."""
+    try:
+        scripts_dir = Path(__file__).resolve().parents[3] / "scripts"
+        if str(scripts_dir) not in sys.path:
+            sys.path.insert(0, str(scripts_dir))
+        import services  # noqa: PLC0415 -- deliberately late + guarded
+        rows = []
+        for layer in ("organ", "cdp", "infra"):
+            rows.extend(services.by_layer(layer))
+        return [r["label"] for r in rows
+                if r.get("status") == "running" and r.get("repo") == "core"]
+    except Exception as exc:  # noqa: BLE001 -- an unreadable registry must not break the audit
+        log.debug("fleet check: registry unreadable (%s)", exc)
+        return []
+
+
+def _loaded_labels() -> set:
+    try:
+        out = subprocess.run(["launchctl", "list"], capture_output=True, text=True, timeout=30)
+        if out.returncode != 0:
+            return set()
+        return {line.split("\t")[-1].strip() for line in out.stdout.splitlines()[1:] if line.strip()}
+    except Exception:  # noqa: BLE001
+        return set()
+
+
+def _audit_launchd_fleet() -> list[str]:
+    """Is every service the registry declares resident actually LOADED?
+
+    WHY (2026-08-12): com.penumbra.infra.sentinel, the ONE external watchdog (the hands that restart
+    the organ and its browsers when the organ's own code is broken), was absent from launchd for
+    FOUR DAYS. Its plist sat on disk, the registry declared it resident, its log simply stopped, and
+    nothing noticed, because the thing that would have noticed IS the watchdog. Its two alarm state
+    files still carried timestamps from eight days earlier, which read as "no incidents" rather than
+    "no observer". A guard that can silently cease to exist needs an outside check on its EXISTENCE,
+    not just on its verdicts."""
+    declared = _declared_resident_labels()
+    if not declared:
+        return []          # registry unreadable: say nothing rather than cry wolf
+    loaded = _loaded_labels()
+    if not loaded:
+        return []          # launchctl unavailable (not macOS, or sandboxed): unauditable, not broken
+    missing = [lbl for lbl in declared if lbl not in loaded]
+    if missing:
+        return [f"launchd 舰队缺员:{', '.join(missing)} 在注册表里声明常驻,但没有加载"]
+    return []
+
+
+def _audit_alert_delivery() -> list[str]:
+    """Is the siren connected? An alarm nobody receives is the failure mode this whole job exists
+    for, one level up: every other check here reports through the very lane being checked."""
+    try:
+        row = json.loads(_ALERT_DELIVERY_PATH.read_text(encoding="utf-8"))
+    except OSError:
+        return []          # nothing has alarmed yet; silence here is honest
+    except Exception:      # noqa: BLE001
+        return ["告警投递台账无法解析"]
+    streak = int(row.get("undelivered_streak") or 0)
+    if streak:
+        return [f"最近 {streak} 条告警一条都没送达(所有通道都失败),最后一条:{str(row.get('title'))[:60]}"]
+    return []
+
+
+def _audit_external_drive(now: float) -> list[str]:
+    """The wall's external-drive lane, read at the destination."""
+    local_newest = _newest_mtime(_BACKUPS.glob("wall-*.db.gz"))
+    if not local_newest:
+        return ["本地一个 wall 备份都没有(state_backup 可能没在跑)"]
+    faults: list[str] = []
+    if now - local_newest > _WALL_STALE_S:
+        faults.append(f"本地最新 wall 备份已是 {(now - local_newest) / 86400:.1f} 天前")
+    verdict = _scheduled_offmachine_verdict()
+    if verdict == "NONE":
+        faults.append("上一次 state_backup 报 off-machine=NONE:计划路径下没有任何机外目的地"
+                      "(launchd 进程若无「可移动卷」授权,/Volumes 对它是空的)")
+    offsite_newest = _newest_mtime(_VOLUMES.glob("*/penumbra-backups/wall-*.db.gz"))
+    if not offsite_newest:
+        if not _removable_volumes_visible():
+            faults.append("本进程看不到可移动卷(macOS 隐私授权),外置盘这条 lane 无法从这里核对;"
+                          "要么给 launchd 服务授权,要么以此为准信上面那条 state_backup 的判决")
+        else:
+            faults.append("外置盘上没有任何 wall 备份(盘没挂上,或 off-machine lane 没跑成)")
+        return faults
+    lag_days = (local_newest - offsite_newest) / 86400.0
+    if lag_days > 2.0:
+        faults.append(f"外置盘最新 wall 比本地旧 {lag_days:.1f} 天")
+    return faults
+
+
+def run_offmachine_audit() -> dict:
+    """Audit every off-machine copy by measuring the destination, never by trusting a run log."""
+    now = time.time()
+    # The siren is audited FIRST and separately: every other check here reports through the very
+    # lane being checked, so if it is disconnected none of the rest can reach anyone anyway.
+    faults = (_audit_alert_delivery() + _audit_launchd_fleet()
+              + _audit_mirrors(now) + _audit_external_drive(now))
+    log.info("offmachine-audit: %s", " / ".join(faults) if faults else "所有机外目的地内容已核对")
+    state = _load_state(_OFFMACHINE_STATE)
+    alerts = state.get("_alerts", {})
+    pushed = 0
+    if faults and _should_alert("offmachine_degraded", alerts, _OFFMACHINE_COOLDOWN_S):
+        _alert("机外备份异常", " / ".join(faults)[:400])
+        pushed = 1
+    state["_alerts"] = alerts
+    state["last_run"] = datetime.now().isoformat(timespec="seconds")
+    state["faults"] = faults
+    _save_state(_OFFMACHINE_STATE, state)
+    return {"ok": not faults, "faults": faults, "alert": pushed}
 
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
@@ -367,7 +691,7 @@ def run_wewerss_probe() -> dict:
 # and are only re-minted by actual browser navigation. Once they lapse the eye goes DARK on those
 # sources. This warmer drives each Chrome through light, READ-ONLY human-like activity (home ->
 # scroll -> one search), which re-mints the security cookies + keeps search-auth alive. It ALSO
-# doubles as the health probe: a genuinely degraded session Bark-alerts the operator.
+# doubles as the health probe: a genuinely degraded session alerts the operator.
 #
 # SAFETY (byte-preserved): read-only (navigation + scroll only -- never like/follow/comment, the
 # 风控 write-risk path), jitter-paced, active-hours only (08-23 mini local), and it honours the same
@@ -515,6 +839,48 @@ def _warm_one(p, label: str, cdp: str, home: str, search_tpl: str, key: str, pro
         return res
 
 
+# The 9222 shared-Chrome FORUM sources (cn-forums Chrome) had NO proactive maintenance: only the
+# xhs/douyin Chromes were warmed above, so a silently-expired 一亩三分地 / zhihu session stayed dark
+# until a user query hit it (the root cause of the 2026-07-06 mis-diagnosis). Warm them the SAME way
+# the reactive path heals: a benign search THROUGH the adapter. An autofill-backed source (login_url
+# set, e.g. yipinsanfendi) self-heals inside search() and alerts on its own if that relogin fails; a
+# non-autofill source (zhihu: QR/SMS login, cannot auto-heal) treats a 0-result warm as its proactive
+# fail-loud signal, and the alert below is the operator's cue to VNC re-login. (label, source, query.)
+_FORUM_WARMERS = [
+    ("一亩三分地", "yipinsanfendi", "实习"),
+    ("知乎", "zhihu", "读博"),
+    # douban: non-autofill (account/password login, no login_url) like zhihu, so a 0-result warm is its
+    # proactive fail-loud signal and the Bark below is the cue to VNC re-login the 9222 douban session.
+    ("豆瓣小组", "douban_groups", "上海租房"),
+]
+
+
+def _warm_forum_one(source_name: str, label: str, query: str) -> dict:
+    """Health-probe + warm ONE 9222 forum source by running a benign search through its adapter
+    (which self-heals if it is autofill-backed). Returns a status dict shaped like _warm_one's, so it
+    flows through the same log / Bark / state machinery: ``notes`` reuses the result count, and
+    ``self_heals`` marks a source whose reactive search path already Barks (so the warmer skips a
+    duplicate Bark for it). Never raises (per-instance isolation)."""
+    from penumbra.core.fetcher import get_adapter
+    res = {"label": label, "ok": False, "reason": "", "notes": 0,
+           "acw_tc": False, "web_session": False, "self_heals": False}
+    ad = get_adapter(source_name)
+    if ad is None:
+        res["reason"] = f"adapter '{source_name}' not registered"
+        return res
+    res["self_heals"] = bool(getattr(ad, "login_url", ""))
+    try:
+        docs = ad.search(query, 3) or []
+    except Exception as exc:  # noqa: BLE001 -- per-instance isolation
+        res["reason"] = f"search raised: {exc!r}"
+        return res
+    res["notes"] = len(docs)
+    res["ok"] = len(docs) > 0
+    if not res["ok"]:
+        res["reason"] = f"degraded: {source_name} search returned 0 (logged out / blocked / empty)"
+    return res
+
+
 def run_session_warmer() -> dict:
     """One warm run across the walled CDP Chromes: skip outside active hours or under the
     cdp-maintenance flag; else warm each account (home -> scroll -> one search) + Bark any degraded
@@ -554,10 +920,35 @@ def run_session_warmer() -> dict:
                      ("| " + r["reason"]) if r["reason"] else "")
             _jsleep(3.0, 6.0)  # space the accounts apart
 
+    # 9222 forum sources: warm + health-probe via each adapter's OWN search (self-heals if
+    # autofill-backed). OUTSIDE the sync_playwright block above -- search() drives its own cdp_call
+    # worker thread, which must not nest inside this thread's playwright context. get_adapter needs
+    # the source modules imported, so bootstrap the registry first (idempotent; how every other job
+    # populates it) instead of relying on the ambient service-startup load.
+    try:
+        from penumbra.server import load_sources
+        load_sources()
+        forum_ready = True
+    except Exception as exc:  # noqa: BLE001 -- forum-warm is best-effort; never crash the XHS warm
+        log.warning("session-warmer: load_sources failed (%s) -> skip forum warm", exc)
+        forum_ready = False
+    if forum_ready:
+        for label, source_name, q in _FORUM_WARMERS:
+            if only and not (label in only or source_name in only):
+                continue
+            r = _warm_forum_one(source_name, label, q)
+            results.append(r)
+            log.info("session-warmer %s: ok=%s notes=%s self_heals=%s %s",
+                     label, r["ok"], r["notes"], r["self_heals"],
+                     ("| " + r["reason"]) if r["reason"] else "")
+            _jsleep(3.0, 6.0)
+
     degraded = [r for r in results if not r["ok"]]
     for r in degraded:
+        if r.get("self_heals"):
+            continue  # autofill-backed: the reactive search path already Barked on relogin failure
         if _should_alert(f"session_degraded:{r['label']}", alerts, _WARMER_COOLDOWN_S):
-            _bark(f"{r['label']} session 退化",
+            _alert(f"{r['label']} session 退化",
                   f"暖号验证失败:{r['reason']}。登录态可能已失效,需 VNC 进 mini 重新扫码登录该账号"
                   f"({r['label']} 的 Chrome 窗口)。", group="Penumbra-Health")
 
@@ -610,6 +1001,42 @@ def rotate_logs() -> int:
 
 def run_log_rotation() -> dict:
     return {"rotated": rotate_logs()}
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+# JOB: nserc cache prime   (monthly@1-03:30; keep the bulk-CSV source warm OFF the query path)
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+# WHY (2026-07-14, approved by Captain as a standing job): nserc_awards is a BULK source — its data is
+# one ~56MB annual CSV, pulled at most monthly and cached (the CS/AI subset, ~3.6k docs) so queries
+# are zero-network. The catch: the cold 56MB pull takes ~96s (routed via a fast node in the mini's
+# mihomo, since the mainland-direct link throttles bulk to ~116KB/s), which BLOWS the eye's 90s
+# single-source deadline. So if the cache ever expires and a QUERY triggers the refetch, it times out
+# mid-pull, never caches, and stays stuck. This job DECOUPLES the refetch from the query path: it runs
+# the pull in the background monthly and caches with a TTL that OUTLASTS the cadence, so an eye query
+# always hits a warm cache and never waits. Fail-open: a failed pull logs + leaves the existing cache
+# intact (a stale-but-present cache beats a broken query). Structurally the right shape for any future
+# bulk source (a big file that must not be pulled on the synchronous query path).
+_NSERC_PRIME_TTL_S = 45 * 86400   # 45d > the monthly cadence, so each monthly refresh always overlaps
+
+
+def run_nserc_prime() -> dict:
+    """Prime the nserc_awards cache OFF the query path: pull the FY bulk CSV, build the CS/AI subset,
+    and cache it with a TTL that outlasts the monthly cadence. Fail-open: a raised/empty pull keeps
+    the existing cache (never caches an empty) and never crashes the tick. Returns a small summary."""
+    from penumbra.core.sources.api.nserc_awards_source import NSERCAwardsAdapter
+    from penumbra.core import cache
+    a = NSERCAwardsAdapter()
+    try:
+        docs = a._fetch_filter_build()   # always fetches the 56MB CSV (no cache short-circuit)
+    except Exception as exc:  # noqa: BLE001 -- a pull failure keeps the existing cache, never kills the tick
+        log.warning("nserc-prime: fetch raised (%s) -> kept existing cache", exc)
+        return {"ok": False, "reason": str(exc)[:80]}
+    if not docs:
+        log.warning("nserc-prime: fetch returned no docs -> kept existing cache")
+        return {"ok": False, "docs": 0}
+    cache.set_docs(cache.make_key(a.name, "subset", a._YEAR), docs, ttl=_NSERC_PRIME_TTL_S)
+    log.info("nserc-prime: cached %d CS/AI docs (ttl %dd)", len(docs), _NSERC_PRIME_TTL_S // 86400)
+    return {"ok": True, "docs": len(docs)}
 
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
@@ -868,7 +1295,7 @@ def run_curator() -> dict:
         log.info("curator: first run -> SILENT baseline (no push); signals recorded for next diff")
     elif lines:
         title = f"源采集巡查 · {len(newly_awaiting)} 新候选 / {len(newly_empty)} 新空格"
-        _bark(title, body + "\n\n(中性事实; admit/watch/reject 由采集 agent 判,本巡查不裁决)",
+        _alert(title, body + "\n\n(中性事实; admit/watch/reject 由采集 agent 判,本巡查不裁决)",
               group="Penumbra-Curator", level="passive")
         pushed += 1
 
@@ -1030,7 +1457,7 @@ def run_source_audit() -> dict:
     elif lines:
         title = (f"源审计周报 · {len(redundant)+len(dead)+len(silent)} 候选 / "
                  f"{len(newly_empty)} 新空格 / {len(newly_stale)} 待复检")
-        _bark(title, body + "\n\n(中性事实; KEEP/WATCH/PRUNE 由审计 agent 判,本哨兵不裁决)",
+        _alert(title, body + "\n\n(中性事实; KEEP/WATCH/PRUNE 由审计 agent 判,本哨兵不裁决)",
               group="Penumbra-Curator", level="passive")
         pushed += 1
 
@@ -1055,12 +1482,15 @@ def run_source_audit() -> dict:
 # across the relevant sources -> cross-source dedup + unified ranking -> the top items. Output: a
 # Markdown digest (saved + archived) + a condensed Bark push. The synthesis is STRUCTURAL (dedup +
 # rank + theme grouping), not LLM prose -- the Markdown is the substrate a session turns into prose
-# on demand.
+# on demand. PUSH CHANNEL: 企业微信 (WeCom) ONLY, per Captain (2026-07-14) -- notify.wecom_push, not Bark.
 #
 # THE THEMES LIST LEFT THE CODE (P9): it is now DATA at ~/.penumbra/state/digest-themes.json (seeding
 # that file on the mini is the CEO's migration step). When the file is ABSENT the job NO-OPS with a
-# log line -- it never invents a theme list. Row ships DISABLED; enabling is a profile jobs override
-# once the themes file exists.
+# log line -- it never invents a theme list. Row ships ENABLED (Captain 2026-07-14) but is SAFE on any
+# deployment BECAUSE of that no-op: a fresh deploy without themes pushes nothing. It is enabled in CODE
+# (not a profile override) on purpose -- a profile file, once present, gates the walled source fleet
+# OFF by default (profile.is_source_enabled), so enabling a JOB via the profile would silently disable
+# the walled sources; the mini runs profile-less.
 # State: ~/.penumbra/state/digests/ (Markdown out) + the themes file (in).
 _DIGEST_DIR = _STATE / "digests"
 _DIGEST_THEMES_PATH = _STATE / "digest-themes.json"
@@ -1102,7 +1532,8 @@ def _digest_theme_section(fetcher, theme: dict) -> tuple[list, "str | None"]:
 
 def run_digest() -> dict:
     """One weekly digest pass (digest.py main() transplanted). NO-OPS (with a log line) when the
-    themes file is absent; else builds the Markdown + a condensed Bark. Row ships DISABLED."""
+    themes file is absent; else builds the Markdown + a condensed WeCom (企业微信) push. Row ships
+    ENABLED (the no-op makes that safe without a themes file)."""
     themes = _load_digest_themes()
     if not themes:
         log.info("digest: no themes file at %s -> no-op (seed it on the mini to enable)",
@@ -1111,29 +1542,48 @@ def run_digest() -> dict:
 
     from penumbra.server import load_sources
     load_sources()
-    from penumbra.core import fetcher
-
     ts = datetime.now()
-    md = [f"# Penumbra 周报 · {ts.date().isoformat()}", "",
-          f"_跨源去重 + 统一排序 · {len(themes)} 个主题 · 每主题 top {_DIGEST_PER_THEME}_", ""]
-    highlights: list = []
-    for theme in themes:
-        try:
-            sec, top = _digest_theme_section(fetcher, theme)
-        except Exception as exc:  # noqa: BLE001 -- one theme must not kill the digest
-            sec, top = [f"## {theme.get('label', '?')}", "", f"_(error: {exc})_", ""], None
-        md += sec
-        if top:
-            highlights.append(f"{theme.get('label', '?')}: {top}")
-        log.info("digest: %s: %s", theme.get("label", "?"), "ok" if top else "empty")
+
+    # PRIMARY: an AGENT-synthesized briefing (a frontier LLM with READ-ONLY use of the eye + brain ->
+    # insight tied to Captain's goals, not a link list). Fail-open by contract: None -> the mechanical
+    # ranked-link digest below (the agent is an enrichment, never a hard dependency).
+    mode = "agent"
+    try:
+        from penumbra.core import briefing
+        agent_md = briefing.build_briefing(themes)
+    except Exception as exc:  # noqa: BLE001 -- the briefing agent must never crash the job
+        log.warning("digest: briefing agent raised (%s) -> link fallback", exc)
+        agent_md = None
+
+    if agent_md:
+        body = f"# Penumbra 周报 · {ts.date().isoformat()}\n\n{agent_md}"
+        push_body = agent_md  # already concise markdown; wecom_push byte-caps it defensively
+    else:
+        # FALLBACK: the mechanical cross-source dedup+rank link list (the pre-agent behaviour).
+        mode = "links"
+        from penumbra.core import fetcher
+        md = [f"# Penumbra 周报 · {ts.date().isoformat()}", "",
+              f"_跨源去重 + 统一排序 · {len(themes)} 个主题 · 每主题 top {_DIGEST_PER_THEME}_", ""]
+        highlights: list = []
+        for theme in themes:
+            try:
+                sec, top = _digest_theme_section(fetcher, theme)
+            except Exception as exc:  # noqa: BLE001 -- one theme must not kill the digest
+                sec, top = [f"## {theme.get('label', '?')}", "", f"_(error: {exc})_", ""], None
+            md += sec
+            if top:
+                highlights.append(f"{theme.get('label', '?')}: {top}")
+            log.info("digest: %s: %s", theme.get("label", "?"), "ok" if top else "empty")
+        body = "\n".join(md)
+        push_body = "\n".join(f"- {h}" for h in highlights[:5]) or "本期无新内容"
 
     _DIGEST_DIR.mkdir(parents=True, exist_ok=True)
-    body = "\n".join(md)
     (_DIGEST_DIR / "latest.md").write_text(body, encoding="utf-8")
     (_DIGEST_DIR / f"digest-{ts.strftime('%Y%m%d')}.md").write_text(body, encoding="utf-8")
 
-    bark_body = "\n".join(f"- {h}" for h in highlights[:5]) or "本期无新内容"
-    _bark(f"Penumbra 周报 · {ts.date().isoformat()}", bark_body, group="Penumbra-Digest",
-          level="passive")
-    log.info("digest: wrote %s (%d themes); bark sent", _DIGEST_DIR / "latest.md", len(themes))
-    return {"themes": len(themes), "highlights": len(highlights)}
+    # Push to 企业微信 (WeCom, Captain's MAIN channel) ONLY -- NOT Bark (Captain 2026-07-14). The full
+    # Markdown is saved above; WeCom carries the briefing (agent) or the top-5 highlights (fallback).
+    from penumbra.core import notify
+    notify.wecom_push(f"Penumbra 周报 · {ts.date().isoformat()}", push_body)
+    log.info("digest[%s]: wrote %s (%d themes); wecom push sent", mode, _DIGEST_DIR / "latest.md", len(themes))
+    return {"themes": len(themes), "mode": mode}

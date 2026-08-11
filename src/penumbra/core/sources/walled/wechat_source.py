@@ -21,7 +21,7 @@ import logging
 import re
 from datetime import datetime
 from typing import Optional
-from urllib.parse import urlparse
+from urllib.parse import urlparse, parse_qs
 
 import httpx
 from bs4 import BeautifulSoup
@@ -72,6 +72,19 @@ auth.write_template(
 )
 
 
+def _wx_canon(url: str) -> str:
+    """The stable mp.weixin ARTICLE identity of a url, for cache keys + dedup: the /s/<hash> permalink
+    path, or the (__biz,mid,idx,sn) tuple, with tracking params (scene / chksm / sessionid / ...) dropped.
+    A non-wechat / opaque url passes through unchanged, so it is safe to call on any url."""
+    if not url:
+        return url
+    p = urlparse(url)
+    q = parse_qs(p.query)
+    wid = p.path if p.path.startswith("/s/") else "&".join(
+        f"{k}={q.get(k, [''])[0]}" for k in ("__biz", "mid", "idx", "sn") if k in q)
+    return wid or url
+
+
 class WechatAdapter:
     name = "wechat"
     needs_credentials = False  # Layer A needs no creds; Layer B is optional
@@ -88,7 +101,9 @@ class WechatAdapter:
         if "mp.weixin.qq.com" not in host:
             return None
 
-        key = cache.make_key("wechat", "fetch", url)
+        # Canonical article identity (see _wx_canon): the same article under different tracking params
+        # shares ONE cache row instead of re-fetching per variant.
+        key = cache.make_key("wechat", "fetch", _wx_canon(url))
         cached = cache.get(key)
         if cached is not None:
             return Document.model_validate(cached)
@@ -277,6 +292,27 @@ class WechatAdapter:
                 # Override author with the account name (more useful than RSS author field)
                 doc.author = account_name
                 docs.append(doc)
+
+        # "搜更多": the RSS layer only MONITORS a small set of subscribed 公众号, so a broad query yields
+        # few hits. When thin, merge in sogou_weixin's whole-corpus 公众号 article search (deduped by the
+        # canonical mp.weixin article id) so a single `wechat` drill returns BOTH the monitored-account
+        # hits AND the broad index. sogou_weixin is its own explicit_only source; this reuses it as the
+        # breadth layer. Best-effort: if sogou is absent or errors, wechat still returns its RSS hits.
+        if query and len(docs) < limit:
+            try:
+                from penumbra.core.fetcher import get_adapter
+                sog = get_adapter("sogou_weixin")
+                if sog is not None:
+                    seen = {_wx_canon(d.url) for d in docs}
+                    for sd in sog.search(query, limit - len(docs)):
+                        c = _wx_canon(sd.url or "")
+                        if c and c not in seen:
+                            seen.add(c)
+                            docs.append(sd)
+                            if len(docs) >= limit:
+                                break
+            except Exception as exc:  # noqa: BLE001 — breadth is best-effort; the RSS hits still stand
+                logger.debug("wechat sogou-breadth merge failed: %s", exc)
 
         cache.set(key, [d.model_dump(mode="json") for d in docs], ttl=900)
         return docs

@@ -112,7 +112,9 @@ class BlueskyAdapter:
             except Exception as exc:  # noqa: BLE001
                 logger.debug("Skipping malformed Bluesky post: %s", exc)
 
-        cache.set(key, [d.model_dump(mode="json") for d in docs], ttl=900)
+        # An auth-lapse / outage empty must not pin [] for 15m (masks the outage); genuine empties
+        # self-heal in 5m. bluesky is credentialed, so a lapsed session is the likely empty here.
+        cache.set(key, [d.model_dump(mode="json") for d in docs], ttl=900 if docs else 300)
         return docs
 
     def fetch_url(self, url: str) -> Optional[Document]:

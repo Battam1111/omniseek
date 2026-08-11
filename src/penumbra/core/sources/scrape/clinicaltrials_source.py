@@ -43,11 +43,26 @@ class ClinicalTrialsAdapter(BaseScrapeAdapter):
     cache_ttl = 900
     kind = "lookup"
     domains = ["clinical", "health"]
+    explicit_only = (
+        "clinicaltrials: named drill only. MEASURED 2026-07-25 over 1986 recorded searches: timed out "
+        "776 times (39% of all searches) and reached the ranked top-k ZERO times, sole-contributed "
+        "ZERO times. It is not broken (a named drill returns real results), it is simply slower than "
+        "the broad deadline while its domain (clinical trials) sits outside the queries this eye "
+        "actually serves. Kept fully reachable by name, and excluded_relevant still recommends it when "
+        "a query genuinely matches. Captain's call 2026-07-25.")
     modes = ["STRUCTURE"]
 
     def _raw_fetch(self, query: str, limit: int) -> Optional[Any]:
         # pageSize is clamped by the API; ask for the requested count (>=1).
         return http.get_json(
+            API_URL,
+            params={"query.term": query, "pageSize": max(1, int(limit))},
+            timeout=15,
+        )
+
+    async def _araw_fetch(self, query: str, limit: int) -> Optional[Any]:
+        # Async twin of _raw_fetch: byte-faithful mirror, only http.get_json → await http.aget_json.
+        return await http.aget_json(
             API_URL,
             params={"query.term": query, "pageSize": max(1, int(limit))},
             timeout=15,
@@ -63,6 +78,14 @@ class ClinicalTrialsAdapter(BaseScrapeAdapter):
             if doc is not None:
                 docs.append(doc)
         return docs
+
+    async def asearch(self, query: str, limit: int = 10) -> list[Document]:
+        """Native-async twin of search -> AsyncSearchCapable. Shares the base async cache round-trip;
+        egress via _araw_fetch; mapping via the SAME pure-CPU _to_documents (byte-identical to search)."""
+        return await self._asearch_via(
+            query, limit,
+            afetch=lambda: self._araw_fetch(query, limit),
+            abuild=lambda raw: self._to_documents(raw, query, limit))
 
     def _study_to_doc(self, study: Any) -> Optional[Document]:
         if not isinstance(study, dict):

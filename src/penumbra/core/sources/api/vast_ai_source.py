@@ -61,6 +61,14 @@ class VastAIAdapter(BaseScrapeAdapter):
             flt["gpu_name"] = {"eq": query.strip()}
         return http.get_json(API_URL, params={"q": _json.dumps(flt)}, timeout=20)
 
+    async def _araw_fetch(self, query: str, limit: int) -> Optional[Any]:
+        # Async twin of _raw_fetch: byte-faithful mirror (same URL, same q filter, same
+        # timeout); only the shared-http egress swaps to its async twin.
+        flt: dict[str, Any] = {"order": [["dph_total", "asc"]]}
+        if query and query.strip():
+            flt["gpu_name"] = {"eq": query.strip()}
+        return await http.aget_json(API_URL, params={"q": _json.dumps(flt)}, timeout=20)
+
     def _to_documents(self, raw: Any, query: str, limit: int) -> list[Document]:
         if not isinstance(raw, dict):
             return []
@@ -75,6 +83,14 @@ class VastAIAdapter(BaseScrapeAdapter):
             if doc is not None:
                 docs.append(doc)
         return docs
+
+    async def asearch(self, query: str, limit: int = 10) -> list[Document]:
+        """Native-async twin of search -> AsyncSearchCapable. Shares the base async cache
+        round-trip; egress via _araw_fetch; mapping via the SAME pure-CPU _to_documents."""
+        return await self._asearch_via(
+            query, limit,
+            afetch=lambda: self._araw_fetch(query, limit),
+            abuild=lambda raw: self._to_documents(raw, query, limit))
 
     def _offer_to_doc(self, offer: Any) -> Optional[Document]:
         if not isinstance(offer, dict):

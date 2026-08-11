@@ -39,20 +39,23 @@ from typing import Any, Callable, Iterator, Optional
 
 from penumbra.core import cache, diag
 
+logger = logging.getLogger(__name__)
+
 # Prefer patchright — a stealth-patched, API-identical Playwright drop-in that
 # removes the Runtime.enable CDP call + console leaks (P13 anti-detection
 # overhaul, 2026-05-29). Falls back to vanilla playwright if patchright is
 # absent: both are pinned at 1.60.0 and the Runtime.enable leak was empirically
 # absent on our Chrome 148 even with vanilla, so the fallback is safe (it just
-# loses patchright's defense-in-depth, not correctness).
+# loses patchright's defense-in-depth, not correctness). A silent fallback would
+# strip the whole walled cluster's stealth base with no signal, so warn loudly on
+# import AND surface the active engine in cdp_health (see below).
 try:
     from patchright.sync_api import Browser, BrowserContext, Page, sync_playwright
     _CDP_ENGINE = "patchright"
 except ImportError:  # pragma: no cover
     from playwright.sync_api import Browser, BrowserContext, Page, sync_playwright
     _CDP_ENGINE = "playwright"
-
-logger = logging.getLogger(__name__)
+    logger.warning("patchright unavailable; CDP stealth degraded to vanilla playwright")
 
 DEFAULT_CDP_URL = "http://127.0.0.1:9222"
 DEFAULT_THREAD_TIMEOUT = 90  # seconds
@@ -173,17 +176,33 @@ class _CdpPool:
     def __init__(self, cdp_url: str, size: int) -> None:
         self.cdp_url = cdp_url
         self.size = size
+        self._lock = threading.Lock()
         self._q: "queue.Queue" = queue.Queue()
-        for i in range(size):
-            threading.Thread(target=self._worker, name=f"cdp-pool-{cdp_url}-{i}",
-                             daemon=True).start()
+        self._start_workers()
+
+    def _start_workers(self) -> None:
+        """Spawn `size` fresh worker threads bound to the CURRENT queue (at init, and again on
+        recovery). A fresh worker makes a fresh sync_playwright + connect on its first task."""
+        q = self._q
+        for i in range(self.size):
+            threading.Thread(target=self._worker, args=(q,),
+                             name=f"cdp-pool-{self.cdp_url}-{i}", daemon=True).start()
 
     def submit(self, callback: Callable, initial_url: Optional[str], timeout: int) -> Any:
+        with self._lock:
+            q = self._q  # snapshot: a concurrent _recover swap must not split put/get across queues
         reply: "queue.Queue" = queue.Queue(maxsize=1)
-        self._q.put((callback, initial_url, reply))
+        q.put((callback, initial_url, reply))
         try:
             status, payload = reply.get(timeout=timeout)
         except queue.Empty:
+            # The worker did not answer in time. On a serial (size-1) pool this usually means it
+            # WEDGED mid-op on a half-dead persistent connection: the socket still reports connected,
+            # but the CDP command pump stalled, so a no-timeout new_page()/contexts hangs forever. It
+            # cannot recover itself (it never returns to the loop top where is_connected() is checked),
+            # and every later submit would queue behind it, so the whole source jams until eye-http
+            # restarts. Retire the wedged worker + start a fresh one so the NEXT call reconnects.
+            self._recover(q)
             to = TimeoutError(f"CDP call exceeded {timeout}s (pool {self.cdp_url})")
             diag.note("cdp_call", url=initial_url, exc=to)
             raise to
@@ -192,7 +211,18 @@ class _CdpPool:
             raise payload
         return payload
 
-    def _worker(self) -> None:
+    def _recover(self, stale_q: "queue.Queue") -> None:
+        """A submit timed out: swap in a FRESH queue + fresh workers, once per wedge. The retired
+        daemon stays parked on `stale_q` (nothing feeds it now, so it is harmless); it never touches
+        the browser again unless it unwedges and finishes its abandoned op, whose leaked tab
+        _sweep_excess_tabs reaps. Size is unchanged, so the serial anti-ban invariant holds."""
+        with self._lock:
+            if self._q is not stale_q:
+                return  # another timeout already recovered this pool
+            self._q = queue.Queue()
+            self._start_workers()
+
+    def _worker(self, q: "queue.Queue") -> None:
         global _inflight_cdp
         pw = None
         browser: Optional[Browser] = None
@@ -203,7 +233,7 @@ class _CdpPool:
             browser = pw.chromium.connect_over_cdp(self.cdp_url, timeout=10000)
 
         while True:
-            callback, initial_url, reply = self._q.get()
+            callback, initial_url, reply = q.get()
             try:
                 # (Re)connect if this is the first task or the Chrome was restarted (keepalive).
                 if browser is None or not browser.is_connected():
@@ -334,6 +364,70 @@ def cdp_call(callback: Callable[[Page], Any], *,
     return payload
 
 
+def cdp_render(callback: Callable[[Page], Any], *,
+               initial_url: str,
+               timeout: int = DEFAULT_THREAD_TIMEOUT,
+               cdp_url: str = DEFAULT_CDP_URL,
+               wait_cloudflare: bool = True) -> Any:
+    """Render an ATTACKER-INFLUENCEABLE url in a FRESH, EPHEMERAL incognito context, then run
+    ``callback(page)`` on the settled page. The wall-aware probe (P2) lane.
+
+    Unlike ``cdp_call`` (which reuses the persistent logged-in DEFAULT context of the credentialed
+    cluster), this opens a NEW context per call and tears it DOWN after, so a hostile candidate page
+    leaves no cookie / localStorage bleed into the next probe (the red-team's per-probe ephemerality).
+    It targets the JAILED Chromium (a network-isolated colima container whose only egress is the
+    SSRF-pin proxy, reached via the socat CDP bridge, e.g. cdp_url=http://127.0.0.1:9444), NEVER the
+    credentialed cluster. Same fresh-thread pattern as cdp_call (no asyncio loop on the worker
+    thread) + the per-cdp_url serialization gate; honors cache.cache_only(). Returns the callback's
+    result; raises TimeoutError / the CDP exception on failure (the caller degrades to a blocked
+    fetch)."""
+    if cache.cache_only():
+        miss = CacheOnlyMiss("cache-only mode: live CDP render suppressed")
+        diag.note("cdp_render", url=initial_url, exc=miss)
+        raise miss
+
+    result_queue: queue.Queue = queue.Queue(maxsize=1)
+
+    def worker() -> None:
+        global _inflight_cdp
+        with _inflight_lock:
+            _inflight_cdp += 1
+        try:
+            with sync_playwright() as pw:
+                browser: Browser = pw.chromium.connect_over_cdp(cdp_url, timeout=10000)
+                ctx: BrowserContext = browser.new_context()  # FRESH incognito; torn down below
+                try:
+                    page = ctx.new_page()
+                    page.goto(initial_url, wait_until="domcontentloaded", timeout=30000)
+                    if wait_cloudflare:
+                        wait_through_cloudflare(page)
+                    result_queue.put(("ok", callback(page)))
+                finally:
+                    try:
+                        ctx.close()  # drops the page + ALL cookies/storage for THIS probe
+                    except Exception:  # noqa: BLE001
+                        pass
+        except Exception as exc:  # noqa: BLE001
+            result_queue.put(("err", exc))
+        finally:
+            with _inflight_lock:
+                _inflight_cdp -= 1
+
+    with _gate_for(cdp_url):
+        t = threading.Thread(target=worker, daemon=True)
+        t.start()
+        t.join(timeout=timeout)
+        if t.is_alive():
+            to = TimeoutError(f"CDP render exceeded {timeout}s")
+            diag.note("cdp_render", url=initial_url, exc=to)
+            raise to
+        status, payload = result_queue.get_nowait()
+    if status == "err":
+        diag.note("cdp_render", url=initial_url, exc=payload)
+        raise payload
+    return payload
+
+
 @contextmanager
 def cdp_page(initial_url: Optional[str] = None) -> Iterator[Page]:
     """Yield a Playwright Page connected to the persistent Chrome.
@@ -411,7 +505,7 @@ def cdp_health(cdp_url: str = DEFAULT_CDP_URL) -> tuple[bool, str]:
         resp = httpx.get(f"{cdp_url}/json/version", timeout=3)
         if resp.status_code == 200:
             data = resp.json()
-            return True, f"OK ({data.get('Browser', 'Chrome')})"
+            return True, f"OK ({data.get('Browser', 'Chrome')} via {_CDP_ENGINE})"
         return False, f"HTTP {resp.status_code}"
     except Exception as exc:  # noqa: BLE001
         return False, f"{type(exc).__name__}: {exc}"

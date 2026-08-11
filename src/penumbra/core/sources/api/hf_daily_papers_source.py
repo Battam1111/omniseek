@@ -28,11 +28,13 @@ Distinct from huggingface_hub adapter which surfaces models/datasets/spaces
 
 from __future__ import annotations
 
+import functools
 import logging
 from datetime import datetime
 from typing import Optional
 from urllib.parse import urlparse
 
+import anyio
 import httpx
 
 from penumbra.core import cache, http
@@ -65,8 +67,57 @@ class HFDailyPapersAdapter:
         cache.set(key, data, ttl=CACHE_TTL)
         return data
 
+    async def _afetch_all(self) -> list[dict]:
+        """Async twin of ``_fetch_all`` (S4b): SAME cache key (async + sync share the disk cache),
+        the disk read/write pushed OFF the loop (cache.get/set do file IO), the ONE network egress
+        swapped to its async twin (http.get_json -> await http.aget_json, epoll not a held thread).
+        Byte-identical logic to ``_fetch_all``; only the blocking syscalls move off-loop."""
+        key = cache.make_key(self.name, "all")
+        cached = await anyio.to_thread.run_sync(cache.get, key)  # disk read OFF loop
+        if cached is not None:
+            return cached
+        data = await http.aget_json(API_URL, timeout=TIMEOUT)  # async network, on loop
+        if data is None:
+            return []
+        await anyio.to_thread.run_sync(  # disk write OFF loop
+            functools.partial(cache.set, key, data, ttl=CACHE_TTL))
+        return data
+
     def search(self, query: str, limit: int = 10) -> list[Document]:
         items = self._fetch_all()
+        if not items:
+            return []
+        q_terms = [t.lower() for t in query.split() if len(t) > 1]
+        scored: list[tuple[int, dict]] = []
+        if not q_terms:
+            scored = [(0, it) for it in items[:limit]]
+        else:
+            for it in items:
+                paper = it.get("paper") or {}
+                title = (it.get("title") or paper.get("title") or "").lower()
+                summary = (it.get("summary") or paper.get("summary") or "").lower()
+                ai_sum = (paper.get("ai_summary") or "").lower()
+                kws = " ".join(paper.get("ai_keywords") or []).lower()
+                blob = " ".join([title, summary, ai_sum, kws])
+                score = sum(blob.count(t) for t in q_terms)
+                # Title hits 3x weight
+                score += 3 * sum(title.count(t) for t in q_terms)
+                if score > 0:
+                    scored.append((score, it))
+        scored.sort(key=lambda x: x[0], reverse=True)
+        docs: list[Document] = []
+        for sc, it in scored[:limit]:
+            doc = self._item_to_document(it)
+            if doc:
+                docs.append(doc)
+        return docs
+
+    async def asearch(self, query: str, limit: int = 10) -> list[Document]:
+        """Native-async twin of ``search`` (S4b): the fan-out awaits this DIRECTLY (no pool thread),
+        so this source's dominant NETWORK wait costs a coroutine, not a held thread. Mirrors ``search``
+        line-for-line: only the cached fetch swaps to the async ``_afetch_all`` (async egress + off-loop
+        cache); the keyword score / sort / map below is PURE CPU and stays ON the loop, byte-identical."""
+        items = await self._afetch_all()
         if not items:
             return []
         q_terms = [t.lower() for t in query.split() if len(t) > 1]

@@ -67,6 +67,15 @@ class CSETAdapter(BaseScrapeAdapter):
             timeout=TIMEOUT,
         )
 
+    async def _araw_fetch(self, query: str, limit: int) -> Optional[Any]:
+        # Byte-faithful async twin of _raw_fetch: same URL/params/timeout, only the shared-http
+        # egress swaps get_json -> aget_json (single call, so a single mirror).
+        return await http.aget_json(
+            API_URL,
+            params={"search": query, "per_page": max(limit, _CANDIDATE_POOL), "_embed": "1"},
+            timeout=TIMEOUT,
+        )
+
     def _to_documents(self, raw: Any, query: str, limit: int) -> list[Document]:
         if not isinstance(raw, list):
             return []  # WP returns a bare list of posts; an error payload is a dict -> skip
@@ -90,6 +99,16 @@ class CSETAdapter(BaseScrapeAdapter):
             docs = [d for _s, d in sorted(zip(scores, docs), key=lambda x: x[0], reverse=True)
                     if _s > 0.0]
         return docs[:limit]
+
+    async def asearch(self, query: str, limit: int = 10) -> list[Document]:
+        """Native-async twin of BaseScrapeAdapter.search -> AsyncSearchCapable (the S4a fan-out awaits
+        this directly; the WP /posts GET costs a COROUTINE, not a held pool thread). Shares the base async
+        cache round-trip; egress via `_araw_fetch`; mapping via the SAME pure-CPU `_to_documents`
+        (BM25 re-rank included) -> byte-identical to `search`."""
+        return await self._asearch_via(
+            query, limit,
+            afetch=lambda: self._araw_fetch(query, limit),
+            abuild=lambda raw: self._to_documents(raw, query, limit))
 
     def _post_to_doc(self, post: dict) -> Optional[Document]:
         title = _clean_text((post.get("title") or {}).get("rendered"))

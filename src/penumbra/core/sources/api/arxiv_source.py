@@ -26,15 +26,16 @@ as the hand-written form did). ``fetch_url`` (id_list by-id lookup) and ``health
 from __future__ import annotations
 
 import logging
-import threading
 from datetime import datetime, timezone
 from typing import Optional
 from urllib.parse import urlparse
 
+import anyio
 import feedparser
 import httpx
 
 from penumbra.core import http
+from penumbra.core._guard import BackendGuard
 from penumbra.core.normalize import Document
 from penumbra.core.sources.api._base import BaseAPIAdapter
 
@@ -42,20 +43,70 @@ logger = logging.getLogger(__name__)
 
 _API = "https://export.arxiv.org/api/query"
 
-# Global in-flight cap on the arXiv host (export.arxiv.org), which rate-limits aggressively (this
-# adapter migrated off the arxiv lib for exactly that). arXiv rides the shared http helper, which has
-# NO per-host cap, so under the 64-worker broad fan-out / many agents it storms one throttled host.
-# This semaphore (held only around the egress) caps concurrent arXiv requests so a burst paces through
-# instead of cascading into 429s, mirroring _s2 / _openalex / reddit.
+# arXiv load-guard: the shared BackendGuard (the concurrency cap + rate pacer + circuit breaker that
+# _s2 / _openalex / _github already ride). arXiv rate-limits the export host aggressively (this adapter
+# migrated off the arxiv lib for exactly that). The OLD sema bounded CONCURRENCY but NOT req/s, so 4
+# concurrent workers could still burst past arXiv's ~3/s politeness line into a 429, and a throttled/dead
+# host made every request eat the full timeout. The guard adds a min-interval RATE pacer (spaces request
+# STARTS so a fan-out can't spike the rate), a breaker (consecutive failures -> fail fast + serve cache
+# instead of hammering), and backlog fail-fast. _MAX_INFLIGHT stays 4 (concurrency unchanged);
+# _MIN_INTERVAL_S ~= 3/s balances politeness vs the broad fan-out (too wide would get arXiv deadline-
+# dropped in the ~95-source sweep). SHARED sync<->async so the async path cannot double the concurrency
+# OR the rate. Mirrors _s2's _call (breaker -> pace -> sema -> record ok/fail).
 _ARXIV_MAX_INFLIGHT = 4
-_arxiv_sema = threading.BoundedSemaphore(_ARXIV_MAX_INFLIGHT)
+_ARXIV_MIN_INTERVAL_S = 0.35     # ~3 req/s across ALL callers + threads (arXiv's politeness rate)
+_ARXIV_PACE_MAX_WAIT_S = 12.0    # a caller waiting > this on the rate gate fails fast (< the 15s deadline)
+_ARXIV_ACQUIRE_MAX_WAIT_S = 20.0  # a caller waiting > this for a CONCURRENCY permit sheds load (degrade to None)
+_guard = BackendGuard("arxiv", _ARXIV_MAX_INFLIGHT, break_after=5, break_for_s=120.0,
+                      min_interval_s=_ARXIV_MIN_INTERVAL_S, log=logger)
+
+
+class _ArxivBusy(RuntimeError):
+    """Internal signal: the rate-gate backlog is pathological (> _ARXIV_PACE_MAX_WAIT_S), so shed load +
+    degrade to None (the caller returns []) instead of stacking an unbounded gate wait."""
 
 
 def _arxiv_get_text(url: str, **kwargs):
-    """Single arXiv egress chokepoint: both http.get_text calls (search + by-id) pass through here so
-    the global in-flight cap (_arxiv_sema) bounds concurrent requests to the throttled arXiv host."""
-    with _arxiv_sema:
-        return http.get_text(url, **kwargs)
+    """Single arXiv egress chokepoint (sync): pass through the shared guard so the throttled arXiv host
+    sees bounded concurrency (sema) + a bounded rate (pace) + a breaker. Returns None on breaker-open or
+    a pathological rate-gate backlog (callers degrade to []); a falsy http result feeds the breaker as a
+    failure so a sustained outage opens the circuit and fails fast."""
+    if _guard.is_open():
+        return None  # breaker open: skip the throttled host — no request, no wait, caller degrades to []
+    try:
+        _guard.pace(on_backlog=lambda w: _ArxivBusy() if w > _ARXIV_PACE_MAX_WAIT_S else None)
+        with _guard.slot(_ARXIV_ACQUIRE_MAX_WAIT_S, lambda w: _ArxivBusy()):  # bounded: degrade, don't hang
+            r = http.get_text(url, **kwargs)
+    except _ArxivBusy:
+        return None
+    _guard.record_ok() if r else _guard.record_fail()
+    return r
+
+
+async def _arxiv_aget_text(url: str, **kwargs):
+    """Async twin of _arxiv_get_text: SAME guard (breaker -> pace -> sema -> record), but the two blocking
+    waits go OFF the loop — the rate-gate wait via ``await anyio.sleep`` (reserve_pace_slot is loop-safe
+    arithmetic under a brief lock), the sema acquire via to_thread (a `with _guard.sema:` on the loop would
+    freeze it). The guard is SHARED sync<->async so the async migration cannot double the concurrency OR
+    the rate. Mirrors _s2's async pace path."""
+    if _guard.is_open():
+        return None
+    try:
+        wait = _guard.reserve_pace_slot(
+            on_backlog=lambda w: _ArxivBusy() if w > _ARXIV_PACE_MAX_WAIT_S else None)
+    except _ArxivBusy:
+        return None
+    if wait > 0:
+        await anyio.sleep(wait)                           # rate gate, OFF-loop wait
+    try:
+        # shared cap, OFF-loop + SHIELDED + BOUNDED: a cancel can't take the permit then skip the
+        # release (the leak that drained the pool); a saturated pool sheds load like the rate gate.
+        async with _guard.aslot(_ARXIV_ACQUIRE_MAX_WAIT_S, lambda w: _ArxivBusy()):
+            r = await http.aget_text(url, **kwargs)
+    except _ArxivBusy:
+        return None
+    _guard.record_ok() if r else _guard.record_fail()
+    return r
 
 
 class ArxivAdapter(BaseAPIAdapter):
@@ -85,6 +136,30 @@ class ArxivAdapter(BaseAPIAdapter):
     def _to_document(self, raw) -> Document:
         return self._entry_to_document(raw)
 
+    # ------------------------------------------------------------- async twins
+    async def _araw_fetch(self, query: str, limit: int) -> list:
+        """Async twin of _raw_fetch: BYTE-FAITHFUL mirror — same URL, same params (search_query,
+        the max(1,min(limit,100)) clamp, sortBy=relevance, sortOrder=descending), same not-xml -> []
+        contract, same feedparser.parse. ONLY the shared-http egress is swapped for its async twin:
+        _arxiv_get_text -> await _arxiv_aget_text (both ride the SAME shared _guard: sema + pace + breaker)."""
+        xml = await _arxiv_aget_text(_API, params={
+            "search_query": query,
+            "max_results": max(1, min(limit, 100)),
+            "sortBy": "relevance",
+            "sortOrder": "descending",
+        })
+        if not xml:
+            return []  # network failure / timeout / oversize → empty (do NOT cache)
+        feed = feedparser.parse(xml)
+        return feed.entries
+
+    async def asearch(self, query: str, limit: int = 10) -> list[Document]:
+        """Native-async twin of search -> AsyncSearchCapable. Shares the base async cache round-trip
+        (_aapi_search); egress via _araw_fetch; mapping via the SAME pure-CPU _to_document, so it is
+        behavior-identical to search (same cache key, per-record skip, rank_locally=False verbatim
+        server order, cache-only-if-docs). The arXiv guard (_guard: sema + pace + breaker) stays shared with sync."""
+        return await self._aapi_search(query, limit, araw_fetch=lambda: self._araw_fetch(query, limit))
+
     # --------------------------------------------------------------- fetch_url
     def fetch_url(self, url: str) -> Optional[Document]:
         # arXiv URLs: arxiv.org/abs/XXXX.YYYYY or arxiv.org/pdf/XXXX.YYYYY
@@ -110,7 +185,7 @@ class ArxivAdapter(BaseAPIAdapter):
         # Light DIRECT probe with its OWN short timeout. A 429 means the API is UP and
         # merely throttling us → report healthy (search falls back to cache / degrades).
         try:
-            with _arxiv_sema:  # count the health probe against the same global arXiv in-flight cap
+            with _guard.sema:  # count the health probe against the same global arXiv in-flight cap
                 resp = httpx.get(
                     _API,
                     params={"search_query": "all:machine learning", "max_results": 1},

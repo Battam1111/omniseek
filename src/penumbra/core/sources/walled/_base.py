@@ -68,6 +68,17 @@ logger = logging.getLogger(__name__)
 # call. Shared by the base AND the hand-written zhihu adapter so the policy lives in one place.
 EMPTY_TTL = 60
 
+# ── auth self-healing state (module-level; resets on service restart, which is fine) ──
+# A logged-out shared-Chrome session returns a results-less page that is NOT authoritative-empty
+# (this whole class of silent-false-empty misled a diagnosis 2026-07-06). The base detects it, drives
+# Chrome's OWN saved-credential autofill to re-login (the eye stores no password), and retries ONCE.
+# These cooldowns keep a persistently-failing login from hammering the site (anti-ban): at most one
+# relogin attempt, and one "needs VNC" alert, per source per window.
+_AUTH_RELOGIN_LAST: dict = {}
+_AUTH_BARK_LAST: dict = {}
+_AUTH_RELOGIN_COOLDOWN_S = 600      # 10 min between relogin attempts per source
+_AUTH_ALERT_COOLDOWN_S = 6 * 3600   # 6h between "needs VNC" alerts per source
+
 
 class BaseCDPAdapter:
     """Template-method base for regular shared-Chrome CDP adapters.
@@ -127,6 +138,15 @@ class BaseCDPAdapter:
     rank: bool = False
     url_host: str = ""
 
+    # ── auth self-healing (opt-in) ─────────────────────────────────────────
+    # Set these on a source whose login is AUTOFILL-backed (Chrome remembers the password) to make
+    # its shared-Chrome session self-heal: on a logged-out search the base drives login_url + Chrome's
+    # own credential autofill + the invisible CF/reCAPTCHA auto-solve, then retries. A source whose
+    # login needs interaction (QR / SMS / a visible captcha) leaves login_url empty and simply fails
+    # LOUD (a typed diagnostic + an alert) instead of silently returning [].
+    login_url: str = ""
+    logged_out_markers: tuple = ()   # HTML substrings unique to the logged-out page (NOT flood-control)
+
     # --------------------------------------------------------- auto-registration
     def __init_subclass__(cls, *, register: bool = True, **kwargs) -> None:
         """Register a fresh instance of every concrete subclass on definition (same
@@ -177,6 +197,95 @@ class BaseCDPAdapter:
         return cdp_call(cb, initial_url=initial_url,
                         timeout=self.cdp_timeout, cdp_url=self.cdp_url)
 
+    # ── auth self-healing ──────────────────────────────────────────────────
+    def _is_logged_out(self, raw: Any) -> bool:
+        """Does this raw payload look like a LOGGED-OUT page (auth expired) rather than a
+        flood-control BLOCK (``is_blocked``) or a genuine empty? Default: any ``logged_out_markers``
+        substring in the HTML. A source with no markers never triggers self-heal (returns False)."""
+        if not self.logged_out_markers:
+            return False
+        html = raw[0] if isinstance(raw, tuple) else raw
+        return isinstance(html, str) and any(m in html for m in self.logged_out_markers)
+
+    def _relogin(self, page) -> bool:
+        """Re-authenticate the shared Chrome via ``login_url`` + Chrome's OWN saved-credential
+        autofill (the eye stores no password; Chrome decrypts and fills, and the invisible
+        CF/reCAPTCHA auto-solves for a trusted browser). Returns True iff the post-submit page is no
+        longer logged-out. A source with no Chrome-saved credential (fields do not autofill) returns
+        False, which routes to fail-loud. Generic across autofill-backed logins; override for a
+        bespoke flow. Assumes the caller navigated the page to ``login_url``."""
+        from penumbra.core.sources.walled._cdp import wait_through_cloudflare
+        try:
+            page.goto(self.login_url, wait_until="domcontentloaded", timeout=30000)
+            wait_through_cloudflare(page)
+            page.wait_for_timeout(4500)  # Chrome autofills + the invisible captcha auto-executes
+            pw = page.query_selector("input[type='password'], input[name='password']")
+            if not pw or not (pw.input_value() or ""):
+                return False  # no autofilled credential present, cannot self-heal (fail loud)
+            btn = page.query_selector(
+                "button[type='submit'], input[type='submit'], input[name='submit']")
+            if btn:
+                btn.click()
+            else:
+                pw.press("Enter")
+            page.wait_for_timeout(6500)  # redirect / session establish
+            wait_through_cloudflare(page)
+            html = page.content() or ""
+            return not (any(m in html for m in self.logged_out_markers)
+                        or "/login" in (page.url or ""))
+        except Exception:  # noqa: BLE001 — any relogin failure routes to fail-loud
+            return False
+
+    def _auth_heal(self, search_url: str) -> Any:
+        """A logged-out search was detected. Try ONE autofill relogin (cooldown-guarded, serialized
+        by the per-Chrome gate), then re-run the flow. Returns the FRESH raw on success, or None on
+        failure (the caller keeps the logged-out raw, which parses to []). Fails LOUD either way: a
+        typed diagnostic (so a [] is never mis-read as 'nothing there' again) plus an alert when the
+        relogin genuinely fails and a human VNC login is needed."""
+        import time as _t
+        now = _t.time()
+        if now - _AUTH_RELOGIN_LAST.get(self.name, 0.0) < _AUTH_RELOGIN_COOLDOWN_S:
+            diag.note(f"{self.name}.auth_expired", url=search_url, body=(
+                "AUTH_EXPIRED: shared-Chrome session logged out; a relogin was attempted recently "
+                "(cooldown active). NOT authoritative-empty. Retry shortly, or VNC re-login if it persists."))
+            return None
+        _AUTH_RELOGIN_LAST[self.name] = now
+
+        def _relogin_then_reflow(page):
+            if not self._relogin(page):
+                return None
+            page.goto(search_url, wait_until="domcontentloaded", timeout=30000)
+            return self._flow(page)
+
+        try:
+            fresh = self._run(_relogin_then_reflow, initial_url=self.login_url)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("%s auth-heal raised: %s", self.name, exc)
+            fresh = None
+        if fresh is None:
+            diag.note(f"{self.name}.auth_expired", url=search_url, body=(
+                "AUTH_EXPIRED: shared-Chrome session logged out and autofill-relogin FAILED. Needs a "
+                "VNC re-login on the mini (the 9222 Chrome). NOT authoritative-empty."))
+            self._alert_auth_fail()
+            return None
+        logger.info("%s: auth self-healed via autofill relogin", self.name)
+        return fresh
+
+    def _alert_auth_fail(self) -> None:
+        """Best-effort push: tell the operator a source needs a manual VNC re-login (once per 6h)."""
+        import time as _t
+        now = _t.time()
+        if now - _AUTH_BARK_LAST.get(self.name, 0.0) < _AUTH_ALERT_COOLDOWN_S:
+            return
+        _AUTH_BARK_LAST[self.name] = now
+        try:
+            from penumbra.core.infra_jobs import _alert
+            _alert(f"{self.name} 登录态失效",
+                  f"{self.name} 的共享 Chrome (9222) 会话登出，且 autofill 自动重登失败，需 VNC 进 mini "
+                  f"手动登录该站点。", group="Penumbra-Health")
+        except Exception:  # noqa: BLE001 — the alert is best-effort; the typed diagnostic already fails loud
+            pass
+
     def search(self, query: str, limit: int = 10) -> list[Document]:
         key = cache.make_key(self.name, "search", query, limit)
         cached = cache.get_docs(key)
@@ -189,6 +298,15 @@ class BaseCDPAdapter:
         except Exception as exc:  # noqa: BLE001 — CDP/network failure → empty (the contract)
             logger.warning("%s search failed: %s", self.name, exc)
             return []
+
+        # AUTH SELF-HEAL: a logged-out shared session returns a results-less page that is NOT
+        # authoritative-empty (this class of silent-false-empty misled a diagnosis 2026-07-06). If the
+        # source is autofill-backed, drive Chrome's own credential autofill to relogin + retry once;
+        # either way fail LOUD (typed diagnostic) so a [] is never read as 'nothing there'.
+        if self.login_url and self._is_logged_out(raw):
+            healed = self._auth_heal(url)
+            if healed is not None:
+                raw = healed
 
         try:
             docs = self._to_documents(raw, query, limit) or []

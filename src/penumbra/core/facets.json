@@ -1,6 +1,6 @@
 {
   "arxiv": {"kind": "lookup", "domains": ["papers"], "modes": ["STRUCTURE"]},
-  "alphaxiv": {"kind": "lookup", "domains": ["papers", "community"], "modes": []},
+  "alphaxiv": {"kind": "lookup", "domains": ["papers", "community"], "modes": ["STRUCTURE", "MONITOR"]},
   "semantic_scholar": {"kind": "lookup", "domains": ["papers"], "modes": ["STRUCTURE"]},
   "openalex": {"kind": "lookup", "domains": ["papers"], "modes": ["STRUCTURE"]},
   "dblp": {"kind": "lookup", "domains": ["papers"], "modes": ["STRUCTURE"]},

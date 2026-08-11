@@ -56,6 +56,22 @@ class RemotiveAdapter(BaseScrapeAdapter):
             params["search"] = query.strip()
         return http.get_json(API_URL, params=params, timeout=20)
 
+    async def _araw_fetch(self, query: str, limit: int) -> Optional[Any]:
+        """Async twin of _raw_fetch: byte-faithful mirror (same URL, params, timeout, control
+        flow); only the shared-http egress swaps to its async twin (get_json -> aget_json)."""
+        params = {"limit": max(1, min(int(limit), 50))}
+        if query and query.strip():
+            params["search"] = query.strip()
+        return await http.aget_json(API_URL, params=params, timeout=20)
+
+    async def asearch(self, query: str, limit: int = 10) -> list[Document]:
+        """Native-async twin of search -> AsyncSearchCapable. Shares the base async cache round-trip;
+        egress via _araw_fetch; mapping via the SAME pure-CPU _to_documents (byte-identical to search)."""
+        return await self._asearch_via(
+            query, limit,
+            afetch=lambda: self._araw_fetch(query, limit),
+            abuild=lambda raw: self._to_documents(raw, query, limit))
+
     def _to_documents(self, raw: Any, query: str, limit: int) -> list[Document]:
         if not isinstance(raw, dict):
             return []

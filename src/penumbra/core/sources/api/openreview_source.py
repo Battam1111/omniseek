@@ -13,6 +13,7 @@ rebuttals, and meta-reviews — irreplaceable methodology learning material.
 
 from __future__ import annotations
 
+import functools
 import logging
 import re
 import time
@@ -20,14 +21,26 @@ from datetime import datetime, timezone
 from typing import Optional
 from urllib.parse import urlparse
 
+import anyio
 import httpx
 
-from penumbra.core import auth, cache
+from penumbra.core import auth, cache, diag, http
 from penumbra.core.normalize import Document, jsonsafe
 
 logger = logging.getLogger(__name__)
 
 API_BASE = "https://api2.openreview.net"
+# OpenReview runs TWO live backends and a forum lives on exactly ONE of them: api2 (v2) holds the
+# newer venues, api (v1) still serves everything from roughly pre-2023. Measured 2026-07-25 with the
+# adapter's own auth: BrnlCSqO6n (ICLR 2026) -> 30 notes on v2 / 0 on v1; qGvMv3undNJ (NeurIPS 2021)
+# -> 0 on v2 / 16 on v1; likewise knKJgksd7kA 13, QkljT4mrfs 22, uJGObgFU0lU 19, all v1-only. Querying
+# v2 alone therefore returned a well-formed EMPTY for every older forum, which reads as "no such
+# paper" instead of "wrong backend". fetch_reviews now tries v2 then falls back to v1.
+API_BASE_V1 = "https://api.openreview.net"
+# A busy forum carries 15-30 notes (reviews + author responses + meta-review + decision). The caller's
+# default limit of 10 silently dropped the author responses and the decision, which is exactly the
+# half a rebuttal study needs, so the reviews path floors the limit here instead.
+_REVIEWS_MIN_LIMIT = 60
 DEFAULT_TIMEOUT = 30
 
 auth.write_template(
@@ -125,16 +138,44 @@ class OpenReviewAdapter:
             return self._token
         except Exception as exc:  # noqa: BLE001
             logger.warning("OpenReview login failed: %s", exc)
+            st = getattr(getattr(exc, "response", None), "status_code", None)
+            diag.note("openreview.login", url=f"{API_BASE}/login", status=st, exc=exc)
             return None
 
-    def _api_get(self, path: str, params: dict) -> Optional[dict]:
-        # Public notes are readable WITHOUT auth (verified live), so a missing or
-        # broken login degrades to keyless access instead of returning nothing.
+    async def _aget_token(self) -> Optional[str]:
+        """Async twin of ``_get_token`` (S4b): same 12h-token reuse + login POST, only the raw
+        ``httpx.post`` egress swaps for the shared async leaf ``http.apost_json`` (raise_for_status +
+        JSON parse + failure->None, already logged + diag.note'd under its own label). Instance token
+        state (``_token`` / ``_token_expires_at``) is shared with the sync path — same benign no-lock
+        race as sync (a redundant login at worst)."""
+        if self._token and time.time() < self._token_expires_at - 600:
+            return self._token
+        creds = await anyio.to_thread.run_sync(auth.load, "openreview")  # cred-file read OFF loop
+        if not creds or not creds.get("username") or not creds.get("password"):
+            logger.info("OpenReview credentials not configured.")
+            return None
+        data = await http.apost_json(
+            f"{API_BASE}/login",
+            json={"id": creds["username"], "password": creds["password"]},
+            timeout=DEFAULT_TIMEOUT,
+        )
+        if data is None:
+            return None  # login failed (http.apost_json already logged + diag.note'd)
+        self._token = data.get("token")
+        # OpenReview tokens last ~12h; we set expiry conservatively
+        self._token_expires_at = time.time() + 11 * 3600
+        return self._token
+
+    def _api_get(self, path: str, params: dict, base: str = API_BASE) -> Optional[dict]:
+        # Auth is now REQUIRED on both backends: a keyless GET of /notes returns 403 for every forum,
+        # public ones included (measured 2026-07-25; the older "public notes are readable WITHOUT
+        # auth" behaviour is gone). The login degrade is kept so a broken token still egresses and
+        # surfaces the real upstream status rather than failing silently here.
         token = self._get_token()
         headers = {"Authorization": f"Bearer {token}"} if token else {}
         try:
             resp = httpx.get(
-                f"{API_BASE}{path}",
+                f"{base}{path}",
                 params=params,
                 headers=headers,
                 timeout=DEFAULT_TIMEOUT,
@@ -143,12 +184,31 @@ class OpenReviewAdapter:
             return resp.json()
         except Exception as exc:  # noqa: BLE001
             logger.warning("OpenReview API call failed: %s", exc)
+            st = getattr(getattr(exc, "response", None), "status_code", None)
+            diag.note("openreview.api", url=f"{base}{path}", status=st, exc=exc)
             return None
+
+    async def _aapi_get(self, path: str, params: dict) -> Optional[dict]:
+        """Async twin of ``_api_get`` (S4b): same keyless-degrading Bearer-header logic (a missing/broken
+        login still egresses without auth), only the raw ``httpx.get`` swaps for the shared async leaf
+        ``http.aget_json`` (shared pool + SSRF guard + cache_only + 30MB cap + failure->None)."""
+        # Public notes are readable WITHOUT auth (verified live), so a missing or
+        # broken login degrades to keyless access instead of returning nothing.
+        token = await self._aget_token()
+        headers = {"Authorization": f"Bearer {token}"} if token else {}
+        return await http.aget_json(
+            f"{API_BASE}{path}",
+            params=params,
+            headers=headers,
+            timeout=DEFAULT_TIMEOUT,
+        )
 
     def search(self, query: str, limit: int = 10) -> list[Document]:
         forum = _parse_reviews(query)
         if forum:
-            return self.fetch_reviews(forum, limit)
+            # Floor the limit: a reviews: lookup wants the WHOLE thread, and the generic default of
+            # 10 cuts the tail (author responses / meta-review / decision) on any busy forum.
+            return self.fetch_reviews(forum, max(limit, _REVIEWS_MIN_LIMIT))
         terms, venueid = _parse_venue(query)
         key = cache.make_key("openreview", "search", venueid or "-", terms, limit)
         cached = cache.get(key)
@@ -186,6 +246,59 @@ class OpenReviewAdapter:
         cache.set(key, [d.model_dump(mode="json") for d in docs], ttl=1800)
         return docs
 
+    async def asearch(self, query: str, limit: int = 10) -> list[Document]:
+        """Native-async twin of ``search`` (S4b) -> AsyncSearchCapable. Mirrors ``search`` line-for-line;
+        only the BLOCKING work moves off the loop:
+          - the disk cache read/write -> ``anyio.to_thread.run_sync`` (SAME cache key + raw value shape);
+          - the raw ``httpx`` egress (login POST + notes GET) -> the shared async leaf via
+            ``_aget_token`` / ``_aapi_get`` (await ``http.apost_json`` / ``http.aget_json``);
+          - the ``reviews:`` branch delegates to the sync ``fetch_reviews`` OFF-loop in a worker thread
+            (its own cache round-trip + egress run byte-identically, just not on the loop — the reddit
+            comment-mode precedent), keeping only the DOMINANT notes-search egress native.
+        Pure-CPU parse/filter (``_note_to_document`` / ``keyword_score_filter``) stays ON the loop,
+        byte-identical to ``search``."""
+        forum = _parse_reviews(query)
+        if forum:
+            return await anyio.to_thread.run_sync(  # same limit floor as sync (whole thread, not 10)
+                functools.partial(self.fetch_reviews, forum, max(limit, _REVIEWS_MIN_LIMIT)))
+        terms, venueid = _parse_venue(query)
+        key = cache.make_key("openreview", "search", venueid or "-", terms, limit)
+        cached = await anyio.to_thread.run_sync(cache.get, key)  # disk read OFF loop
+        if cached is not None:
+            return [Document.model_validate(d) for d in cached]
+
+        if venueid:
+            # Venue browse: newest notes of one venue; remaining terms filter within.
+            data = await self._aapi_get(
+                "/notes",
+                {"content.venueid": venueid, "limit": 100, "sort": "cdate:desc"},
+            )
+        else:
+            # OpenReview v2 search API: simplest invocation with just `term` works.
+            # The `type` and `source` params from v1 are no longer accepted and
+            # cause 400 Bad Request.
+            data = await self._aapi_get(
+                "/notes/search",
+                {"term": terms, "limit": min(limit, 100)},
+            )
+        if not data or "notes" not in data:
+            return []
+
+        docs: list[Document] = []
+        for note in data["notes"]:
+            try:
+                docs.append(self._note_to_document(note))
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("Skipping malformed OpenReview note: %s", exc)
+        if venueid and terms:
+            from penumbra.core.normalize import keyword_score_filter
+            docs = keyword_score_filter(docs, terms)
+        docs = docs[:limit]
+
+        await anyio.to_thread.run_sync(  # disk write OFF loop
+            functools.partial(cache.set, key, [d.model_dump(mode="json") for d in docs], ttl=1800))
+        return docs
+
     def fetch_reviews(self, forum_id: str, limit: int = 20) -> list[Document]:
         """Fetch the actual peer reviews / rebuttals / meta-reviews of one submission. The reply
         notes of a forum (``/notes?forum=<id>``) carry the reviewer ratings + text; we keep the
@@ -198,8 +311,24 @@ class OpenReviewAdapter:
         cached = cache.get(key)
         if cached is not None:
             return [Document.model_validate(d) for d in cached]
-        data = self._api_get("/notes", {"forum": forum_id, "limit": 200, "sort": "cdate:asc"})
+        params = {"forum": forum_id, "limit": 200, "sort": "cdate:asc"}
+        data = self._api_get("/notes", params)
+        backend = "v2"
+        if not (data or {}).get("notes"):
+            # Empty on v2 means "not this backend" far more often than "no reviews": try v1, where
+            # every pre-2023 venue still lives. Costs one extra GET only on a forum v2 does not hold.
+            v1 = self._api_get("/notes", params, base=API_BASE_V1)
+            if (v1 or {}).get("notes"):
+                data, backend = v1, "v1"
         if not data or "notes" not in data:
+            return []
+        if not data["notes"]:
+            # Genuinely on NEITHER backend: say so, so the drill does not read a wrong-backend miss
+            # (the old failure mode) or a dead forum id as a well-formed "this paper has no reviews".
+            diag.note("openreview.reviews",
+                      url=f"{API_BASE}/notes?forum={forum_id}",
+                      body=(f"forum {forum_id!r} returned 0 notes on BOTH backends "
+                            f"(api2 v2 + api v1): the id is wrong, withdrawn, or non-public"))
             return []
         docs: list[Document] = []
         for note in data["notes"]:
@@ -212,6 +341,14 @@ class OpenReviewAdapter:
                 continue
             if doc is not None:
                 docs.append(doc)
+        if len(docs) > limit:
+            # Truncation on a forum is LOSSY in a specific way: the notes arrive cdate:asc, so what
+            # gets cut is the tail, i.e. the author responses, meta-review and decision. Say it.
+            diag.note("openreview.reviews",
+                      url=f"{API_BASE if backend == 'v2' else API_BASE_V1}/notes?forum={forum_id}",
+                      body=(f"forum {forum_id} ({backend}) has {len(docs)} review notes, returning "
+                            f"{limit}: the tail (author responses / meta-review / decision) is cut, "
+                            f"pass a larger limit to get the whole thread"))
         docs = docs[:limit]
         cache.set(key, [d.model_dump(mode="json") for d in docs], ttl=1800)
         return docs
@@ -229,7 +366,12 @@ class OpenReviewAdapter:
         present = [f for f in _REVIEW_FIELDS if _val(f) not in (None, "")]
         if not present:
             return None  # not a review/meta-review/rebuttal, skip
+        # v2 carries invitations[] (a list); v1 carries invitation (a single string, e.g.
+        # ".../Paper10022/-/Official_Review"). Read both, or every v1 note loses its kind signal and
+        # falls back to content sniffing alone.
         invitations = note.get("invitations") or []
+        if not invitations and note.get("invitation"):
+            invitations = [str(note["invitation"])]
         kind = "review"
         inv_blob = " ".join(invitations).lower()
         if "meta" in inv_blob or _val("metareview") or _val("meta_review"):

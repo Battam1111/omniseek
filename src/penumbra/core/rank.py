@@ -31,6 +31,7 @@ import logging
 import math
 import re
 from datetime import datetime, timezone
+from typing import Callable, Optional
 
 from penumbra.core import relevance
 from penumbra.core.normalize import Document
@@ -62,8 +63,11 @@ _TITLE_MIN = 20  # min normalized-title length to use it as a merge key
 
 
 def _norm_title(t: str) -> str:
-    # keep alnum + CJK ideographs, drop everything else; lowercase
-    return re.sub(r"[^a-z0-9㐀-䶿一-鿿぀-ヿ]+", "", (t or "").lower())  # CJK class == relevance._CJK (anti-drift)
+    # keep EVERY Unicode letter + digit, drop the rest; lowercase. Superset of relevance.tokenize's
+    # letter coverage (anti-drift: no script the tokenizer can see may be fingerprint-blind). The old
+    # class kept only ascii+CJK, so a Korean / Cyrillic title normalized to "" and could never act
+    # as a merge key (guarded from wrong-merging only by _TITLE_MIN).
+    return re.sub(r"[\W_]+", "", (t or "").lower())
 
 
 def _norm_url(u: str) -> str:
@@ -134,13 +138,55 @@ def fingerprint(doc: Document) -> str:
     return f"id:{doc.source}:{doc.source_id}"
 
 
+def _strong_ids(doc: Document) -> set:
+    """The STRONG work ids (DOI / arXiv only) a doc exposes, for id-reconciliation. A DOI or arXiv id is
+    a UNIQUE work identity, so two docs sharing one ARE the same work even when their long titles differ
+    (a bilingual CN/EN rename, a preprint-vs-published retitle) -- exactly the case title-first
+    fingerprinting structurally misses. Restricted to doi/arxiv (never a generic external_ids key). Pure."""
+    ids: set = set()
+    meta = doc.metadata or {}
+    ext = meta.get("external_ids")
+    ext = ext if isinstance(ext, dict) else {}
+    for _d in (meta.get("doi"), ext.get("doi")):
+        if _d:
+            ids.add("doi:" + _norm_doi(_d))
+    if ext.get("arxiv"):
+        ids.add("arxiv:" + str(ext["arxiv"]).strip())
+    m = _ARXIV_RE.search(doc.url or "")
+    if m:
+        ids.add("arxiv:" + m.group(1))
+    m = _DOI_RE.search(doc.url or "")
+    if m:
+        ids.add("doi:" + _norm_doi(m.group(0)))
+    return ids
+
+
 def _pick_best(group: list[Document]) -> Document:
     """Richest representative of a duplicate group: most content, then score."""
     return max(group, key=lambda d: (len(d.content or ""), d.attention_value() or 0))
 
 
-def dedup(docs: list[Document]) -> list[Document]:
-    """Collapse cross-source duplicates; annotate survivors with ``also_in``."""
+def _enrich_handle(doc: Document):
+    """The id penumbra_paper_enrich needs (OA PDF / retraction / citation count), in ANY form it may be
+    carried. S2 buries doi + arxiv under metadata.external_ids and fetcher._place_scholarly_fields
+    flattens them AFTER ranking, so a check that looks only at metadata.doi reports a handle missing
+    when it is merely not yet flattened (that false reading measured 25% of groups 'losing' a handle;
+    the true figure, counting every form, is 2%). Returns None only when the doc really has none."""
+    m = doc.metadata or {}
+    ext = m.get("external_ids")
+    ext = ext if isinstance(ext, dict) else {}
+    return (m.get("doi") or m.get("arxiv_id") or m.get("paper_id")
+            or ext.get("DOI") or ext.get("ArXiv") or None)
+
+
+def dedup(docs: list[Document],
+          backend_of: Optional[Callable[[str], str]] = None) -> list[Document]:
+    """Collapse cross-source duplicates; annotate survivors with ``also_in``.
+
+    ``backend_of`` (injected by the caller to avoid a rank->fetcher import cycle) maps a source name
+    to its upstream BACKEND, so ``corroboration`` counts DISTINCT backends rather than source names —
+    the OpenAlex family (openalex + openalex_cn + org_watch slices) is ONE independent voice, not
+    four. Absent → the historical source-name count (byte-identical for callers that do not inject it)."""
     groups: dict[str, list[Document]] = {}
     order: list[str] = []
     for d in docs:
@@ -149,6 +195,45 @@ def dedup(docs: list[Document]) -> list[Document]:
             groups[fp] = []
             order.append(fp)
         groups[fp].append(d)
+
+    # ID-RECONCILIATION (litstudy DocumentIdentifier.matches): TITLE-first fingerprinting never reaches
+    # the DOI/arXiv id for a long title, so two docs with the SAME exact DOI but DIFFERENT long titles (a
+    # bilingual CN/EN rename, a preprint-vs-published retitle) land on distinct 'title:' keys and never
+    # merge. Union any fingerprint GROUPS that share a strong id. ADDITIVE: it can only MERGE, never split
+    # (title-first is preserved), and an exact-id merge is SAFER than a title merge (a DOI is a unique work
+    # id; it cannot false-merge two distinct same-titled items the way a shared long title can).
+    _fp_ids = {fp: set().union(*(_strong_ids(d) for d in grp)) for fp, grp in groups.items()}
+    _parent = {fp: fp for fp in order}
+
+    def _find(x: str) -> str:
+        while _parent[x] != x:
+            _parent[x] = _parent[_parent[x]]
+            x = _parent[x]
+        return x
+
+    _seen_id: dict[str, str] = {}
+    for fp in order:
+        for _sid in _fp_ids[fp]:
+            if _sid in _seen_id:
+                _a, _b = _find(_seen_id[_sid]), _find(fp)
+                if _a != _b:
+                    _parent[_b] = _a
+            else:
+                _seen_id[_sid] = fp
+    id_union_fps: set = set()
+    if any(_find(fp) != fp for fp in order):  # at least one id-union happened -> rebuild groups
+        _rep_members: dict[str, list[Document]] = {}
+        _merged_order: list[str] = []
+        _rep_count: dict[str, int] = {}
+        for fp in order:  # first-seen order preserved; the union anchor is the earliest fp in each union
+            root = _find(fp)
+            _rep_count[root] = _rep_count.get(root, 0) + 1
+            if root not in _rep_members:
+                _rep_members[root] = []
+                _merged_order.append(root)
+            _rep_members[root].extend(groups[fp])
+        id_union_fps = {root for root, c in _rep_count.items() if c > 1}  # reps that absorbed >1 fp
+        groups, order = _rep_members, _merged_order
 
     out: list[Document] = []
     for fp in order:
@@ -159,9 +244,37 @@ def dedup(docs: list[Document]) -> list[Document]:
             srcs = {d.source for d in grp}
             others = sorted(srcs - {best.source})
             if others:
-                add["also_in"] = others
-            if len(srcs) > 1:  # corroboration = how many DISTINCT sources surfaced this work
-                add["corroboration"] = len(srcs)
+                add["also_in"] = others  # provenance stays SOURCE names (the agent reads these)
+            # Corroboration = distinct independent BACKENDS, not source names: the OpenAlex family
+            # (openalex + openalex_cn + org_watch slices) shares one corpus + budget + breaker, so a
+            # work surfaced by 4 of its slices is ONE independent voice, not four — counting names
+            # inflates the independence signal the agent triangulates on. Absent backend_of → the
+            # historical source-name count.
+            backends = {backend_of(d.source) for d in grp} if backend_of else srcs
+            if len(backends) > 1:
+                add["corroboration"] = len(backends)
+            # ① carry the RICHEST scholarly IDENTITY across the merge (2026-07-15): if the survivor is NOT
+            #    the OpenAlex member but a collapsed OpenAlex duplicate carries structured authorships (exact
+            #    person ids + institutions), preserve them so the placement lift
+            #    (fetcher._place_scholarly_fields) surfaces the identity layer on the survivor -- else an S2 /
+            #    other-source survivor loses the OpenAlex identity at dedup (its doi often differs from
+            #    OpenAlex's, so the collapse is TITLE-based). Safe on a title merge HERE: only an OpenAlex doc
+            #    carries raw.authorships, so this is always a SCHOLARLY merge on a LONG paper title (distinct
+            #    papers do not share a long title -- unlike short generic JOB titles), AND the merge already
+            #    treats the group as ONE work (also_in / corroboration / citation-conflict); the carry only
+            #    rides that existing same-work judgment, adding no new merge risk.
+            _best_raw = (best.metadata or {}).get("raw")
+            if not (isinstance(_best_raw, dict) and _best_raw.get("authorships")):
+                for _m in grp:
+                    if _m is best:
+                        continue
+                    _mm = _m.metadata or {}
+                    _mraw = _mm.get("raw")
+                    if isinstance(_mraw, dict) and isinstance(_mraw.get("authorships"), list) and _mraw["authorships"]:
+                        add["_merged_authorships"] = _mraw["authorships"]
+                        if not (best.metadata or {}).get("openalex_id") and _mm.get("openalex_id"):
+                            add["openalex_id"] = _mm.get("openalex_id")
+                        break
             # --- #11 signal_conflicts: same-named NUMERIC Signal values that DIVERGE across the
             #     group's different-source members. Detected HERE because the merge is the only
             #     place the collapsed members are still visible (post-dedup one survivor per group
@@ -235,7 +348,7 @@ def dedup(docs: list[Document]) -> list[Document]:
         #   jobs merge; see fingerprint caveat) and must NOT strip a sole-contributor credit.
         live_srcs = sorted({d.source for d in grp if not (d.metadata or {}).get("from_index")})
         add["live_sources"] = live_srcs
-        add["merge_basis"] = "title" if fp.startswith("title:") else "id"
+        add["merge_basis"] = "id" if (fp in id_union_fps or not fp.startswith("title:")) else "title"
         # Preserve the recall RRF prior + via across the collapsed group: _pick_best may keep a
         # member WITHOUT the stamp (a richer LIVE doc collapsing a vector-found index doc), and that
         # stamp is exactly what lifts a semantic-only hit in merge_rank. Take the MAX rrf; via=both
@@ -247,6 +360,32 @@ def dedup(docs: list[Document]) -> list[Document]:
             vias.discard(None)
             add["recall_rrf"] = max(rrfs)
             add["recall_via"] = "both" if (len(vias) > 1 or "both" in vias) else next(iter(vias), None)
+        # Same reason the rrf stamp is preserved just above: _pick_best optimizes for CONTENT LENGTH,
+        # so the richest-TEXT member can be the very one missing a field a sibling carried. Measured
+        # 2026-07-25 over real broad-search corpora (46 duplicate groups): the survivor was UNDATED
+        # while a sibling had a real date in 7% of groups, and carried no enrich handle at all in 2%.
+        # Both are strict information LOSS, not a trade: the eye held the fact one document over and
+        # dropped it. Losing the date now costs twice, since merge_rank scores recency off doc.date,
+        # so a paper published days ago gets ranked as median-aged. The group is the SAME WORK by
+        # construction (that is what this merge already asserts when it carries authorships and mints
+        # conflict edges), so adopting a sibling's value adds no merge risk that is not already taken.
+        # Provenance is stamped rather than implied: a borrowed fact is never presented as native.
+        if best.date is None:
+            for _m in grp:
+                if _m.date is not None:
+                    best.date = _m.date
+                    add["date_from"] = _m.source
+                    break
+        if _enrich_handle(best) is None:
+            for _m in grp:
+                _mh = _enrich_handle(_m)
+                if _mh is not None:
+                    _mmeta = _m.metadata or {}
+                    for _k in ("doi", "arxiv_id"):
+                        if _mmeta.get(_k) and not (best.metadata or {}).get(_k):
+                            add[_k] = _mmeta[_k]
+                    add["ids_from"] = _m.source
+                    break
         if add:
             best.metadata = {**(best.metadata or {}), **add}
         out.append(best)
@@ -305,10 +444,19 @@ def _conflict_tap(records: list) -> None:
         logger.debug("conflicts graph tap swallowed: %s", exc)
 
 
-def _recency(doc: Document, now: datetime) -> float:
+def _recency(doc: Document, now: datetime, unknown: float = 0.3) -> float:
+    """Age score: 1.0 today, 0.5 at ~30d. ``unknown`` is what an UNDATED doc scores.
+
+    The 0.3 default is kept only for direct callers; merge_rank passes the candidate set's MEDIAN
+    instead, because a FIXED floor turned out to reward missing metadata. Measured 2026-07-25 over
+    real broad searches: 23% of the ranked corpus carries no date at all, and the sources concerned
+    are entirely dateless (youtube 15/0, pmlr 10/0, transformer_circuits 10/0, ajo 5/0), while the
+    DATED docs competing with them scored 0.04-0.29, i.e. essentially all BELOW the 0.3 floor. So
+    "neutral-low" was neutral only against an imagined distribution; against the real one it was
+    near the TOP, and an undated video outscored a genuinely 4-month-old paper on recency."""
     dt = doc.date
     if not dt:
-        return 0.3  # unknown date → neutral-low
+        return unknown
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
     age_days = max(0.0, (now - dt).total_seconds() / 86400.0)
@@ -316,10 +464,46 @@ def _recency(doc: Document, now: datetime) -> float:
 
 
 def _engagement(doc: Document) -> float:
+    """Absolute attention on a log scale. Retained for direct callers; merge_rank uses the
+    WITHIN-SOURCE version below, because this one compares incomparable things (see _engagement_ranks)."""
     s = doc.attention_value() or 0
     if s <= 0:
         return 0.0
     return min(1.0, math.log10(1 + s) / 4.0)  # ~1.0 at score≈10k
+
+
+def _engagement_ranks(docs: list[Document]) -> list[float]:
+    """Engagement as a percentile WITHIN THE DOC'S OWN SOURCE, not on one absolute scale.
+
+    WHY (measured 2026-07-25). attention_value() is a max over engagement AND citation signals, so
+    the same number means YouTube views for one doc and citations for another, and the old
+    log10(1+s)/4 put them on ONE curve. 10k views is unremarkable; 10k citations is legendary. The
+    result in real searches: youtube docs scored 0.47-0.98 while semantic_scholar / crossref scored
+    0.08-0.35, a standing ~0.1 advantage (of a 1.0 scale) for video over research, on top of the
+    recency floor above. Three videos with LOWER relevance outranked the best-matching paper.
+
+    Comparing a doc only to its OWN source's docs makes the number mean something again: "more
+    watched than the other videos here" / "more cited than the other papers here". Scale-free, so no
+    per-source constants are introduced, and it follows the same within-candidate-set normalization
+    the relevance term already uses (max_rel).
+
+    No attention signal at all still scores 0.0 (never invent attention), and a source contributing a
+    single doc gets 0.5 (neutral, since it has no peers to beat) rather than a free 1.0."""
+    vals = [(d.attention_value() or 0.0) for d in docs]
+    peers: dict[str, list[float]] = {}
+    for d, v in zip(docs, vals):
+        if v > 0:
+            peers.setdefault(d.source, []).append(v)
+    out: list[float] = []
+    for d, v in zip(docs, vals):
+        if v <= 0:
+            out.append(0.0)
+            continue
+        group = peers.get(d.source) or [v]
+        below = sum(1 for p in group if p < v)
+        equal = sum(1 for p in group if p == v)
+        out.append((below + 0.5 * equal) / len(group))
+    return out
 
 
 def _extract_hook(doc: Document, terms: list[str], cap: int = 120) -> str:
@@ -345,8 +529,11 @@ def _extract_hook(doc: Document, terms: list[str], cap: int = 120) -> str:
     return best[:cap]
 
 
-def merge_rank(results, query: str, limit: int = 15) -> list[Document]:
-    """Flatten → dedup → rank. ``results`` is a search_many dict or a flat list."""
+def merge_rank(results, query: str, limit: int = 15,
+               backend_of: Optional[Callable[[str], str]] = None) -> list[Document]:
+    """Flatten → dedup → rank. ``results`` is a search_many dict or a flat list. ``backend_of`` is
+    passed through to ``dedup`` so corroboration counts distinct BACKENDS (injected by the caller to
+    avoid a rank->fetcher import cycle; absent → the historical source-name count)."""
     if isinstance(results, dict):
         docs: list[Document] = []
         for lst in results.values():
@@ -354,7 +541,7 @@ def merge_rank(results, query: str, limit: int = 15) -> list[Document]:
     else:
         docs = list(results)
 
-    docs = dedup(docs)
+    docs = dedup(docs, backend_of=backend_of)
     # Lexical relevance comes from the shared engine (penumbra.core.relevance:
     # BM25-shaped, CJK-bigram-aware) so ranking and adapter-side filtering can
     # never drift apart; the transparent blend below is unchanged.
@@ -362,10 +549,16 @@ def merge_rank(results, query: str, limit: int = 15) -> list[Document]:
     now = datetime.now(timezone.utc)
 
     rels = relevance.doc_scores(docs, query or "")
-    scored = [[d, rel, _recency(d, now), _engagement(d),
+    # Both non-relevance terms are normalized WITHIN THE CANDIDATE SET, exactly as max_rel already
+    # normalizes relevance. A fixed unknown-date floor and an absolute attention curve both silently
+    # favoured whichever sources omit dates and count cheap units (see _recency / _engagement_ranks).
+    _dated = [_recency(d, now) for d in docs if d.date]
+    _unknown_rec = sorted(_dated)[len(_dated) // 2] if _dated else 0.3
+    engs = _engagement_ranks(docs)
+    scored = [[d, rel, _recency(d, now, unknown=_unknown_rec), eng,
                int((d.metadata or {}).get("corroboration", 1)),
                float((d.metadata or {}).get("recall_rrf") or 0.0)]
-              for d, rel in zip(docs, rels)]
+              for d, rel, eng in zip(docs, rels, engs)]
     max_rel = max((s[1] for s in scored), default=0.0) or 1.0
     # The Phase-2 vector-recall prior (RRF). Only the perception-memory hybrid path stamps it; live
     # docs never carry it, so max_rrf=0 ⇒ rel_term below is EXACTLY today's rel/max_rel (Phase-1

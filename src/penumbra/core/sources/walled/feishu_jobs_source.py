@@ -45,6 +45,7 @@ from __future__ import annotations
 
 import logging
 import time
+import contextvars
 from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
 from urllib.parse import urlparse
@@ -52,8 +53,10 @@ import threading
 
 import httpx
 
-from penumbra.core import cache
+from penumbra.core import cache, diag
 from penumbra.core.normalize import Document, jsonsafe, keyword_score_filter
+
+EMPTY_TTL = 300  # a transient all-portals-fail must not pin [] for the full 1800s (masks the outage)
 
 logger = logging.getLogger(__name__)
 
@@ -148,6 +151,8 @@ def _list_portal_jobs(subdomain: str, website_path: str) -> list[dict]:
         except httpx.HTTPError as exc:
             logger.warning("feishu portal %s page %d failed: %s",
                            subdomain, page_idx, exc)
+            st = getattr(getattr(exc, "response", None), "status_code", None)
+            diag.note("feishu.post", url=url, status=st, exc=exc)
             break
 
         payload = resp.json() if resp.headers.get("content-type", "").startswith("application/json") else {}
@@ -270,8 +275,12 @@ class FeishuJobsAdapter:
                     out.append(doc)
             return out
         all_docs: list[Document] = []
+        # Run each portal in a COPY of the caller's context so an armed diag capture (a drill's
+        # contextvar) reaches the worker threads: a plain ex.map loses worker-thread failure notes,
+        # so an all-portals-down drill used to report captures: [] (the RSS diag-loss class).
+        portals = [(s, contextvars.copy_context()) for s in SITES]
         with ThreadPoolExecutor(max_workers=len(SITES)) as ex:
-            for docs in ex.map(_one, SITES):
+            for docs in ex.map(lambda p: p[1].run(_one, p[0]), portals):
                 all_docs.extend(docs)
 
         # Default order: tier 1 first, then by org label (used when query empty
@@ -284,7 +293,8 @@ class FeishuJobsAdapter:
         all_docs = keyword_score_filter(all_docs, query)
         all_docs = all_docs[:limit]
 
-        cache.set(key, [d.model_dump(mode="json") for d in all_docs], ttl=1800)
+        cache.set(key, [d.model_dump(mode="json") for d in all_docs],
+                  ttl=1800 if all_docs else EMPTY_TTL)
         return all_docs
 
     def fetch_url(self, url: str) -> Optional[Document]:

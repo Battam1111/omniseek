@@ -46,10 +46,30 @@ class GutenbergAdapter(BaseScrapeAdapter):
     # routing facets (the router reads these class attrs; do NOT touch facets.json)
     kind = "lookup"
     domains = ["books"]
+    explicit_only = (
+        "gutenberg: named drill only. MEASURED 2026-07-25 over 1986 recorded searches: timed out 959 "
+        "times (48% of all searches) and reached the ranked top-k ZERO times, sole-contributed ZERO "
+        "times. It is not broken (a named drill returns real results), it is simply slower than the "
+        "broad deadline while its domain (public-domain books) sits outside the queries this eye "
+        "actually serves. Kept fully reachable by name, and excluded_relevant still recommends it when "
+        "a query genuinely matches. Captain's call 2026-07-25.")
     modes = ["STRUCTURE", "UNWALL"]
 
     def _raw_fetch(self, query: str, limit: int) -> Optional[Any]:
         return http.get_json(API_URL, params={"search": query}, timeout=TIMEOUT)
+
+    async def _araw_fetch(self, query: str, limit: int) -> Optional[Any]:
+        """Async twin of _raw_fetch: byte-faithful mirror (same URL/params/timeout), only the
+        shared-http egress swapped for its async twin (http.get_json -> await http.aget_json)."""
+        return await http.aget_json(API_URL, params={"search": query}, timeout=TIMEOUT)
+
+    async def asearch(self, query: str, limit: int = 10) -> list[Document]:
+        """Native-async twin of search -> AsyncSearchCapable. Shares the base async cache round-trip;
+        egress via _araw_fetch; mapping via the SAME pure-CPU _to_documents (byte-identical to search)."""
+        return await self._asearch_via(
+            query, limit,
+            afetch=lambda: self._araw_fetch(query, limit),
+            abuild=lambda raw: self._to_documents(raw, query, limit))
 
     def _to_documents(self, raw: Any, query: str, limit: int) -> list[Document]:
         results = raw.get("results") or []

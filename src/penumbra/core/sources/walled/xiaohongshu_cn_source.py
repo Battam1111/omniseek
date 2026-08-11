@@ -55,12 +55,16 @@ import re
 import threading
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Optional
 from urllib.parse import parse_qs, quote, urlparse
 
 from penumbra.core import cache, diag
-from penumbra.core.normalize import Document, mk_signal
+from penumbra.core.normalize import Document, is_blocked, mk_signal, selector_drift_hint
 from penumbra.core.sources.walled._cdp import cdp_call
+from penumbra.core.sources.walled.xiaohongshu_source import (
+    _detail_has_substance as _xhs_detail_has_substance,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -181,10 +185,24 @@ class _SessionExpired(Exception):
 # Body text that means throttle / risk-control notice (any → hard stop).
 _RISK_TEXTS = ("访问频次异常", "当前笔记暂时无法浏览", "访问链接异常", "检测到非正常操作", "账号异常")
 
+# BREAKER SCOPES (2026-08-11). A 风控 signal is not one thing, and treating it as one is what
+# turned a fallback-only defect into hours of total blackout:
+#   ACCOUNT — a visible slider / login wall in the REAL browser, an IP block (300012), the #769
+#     session cap (code:-1), an explicit 风控 text, the daily volume cap, session churn. Each is a
+#     statement about the ACCOUNT or the IP, so it must darken BOTH paths.
+#   SIGNED  — an HTTP 461/471 verification challenge on our SELF-SIGNED edith call. That is a
+#     statement about OUR forged request posture (host-scoped cookie / signature), NOT about the
+#     account: measured 2026-08-11, edith answered 461 while the same account's real browser was
+#     being served normally (browser path ok, 5 cards, 13.7s, no captcha). Under the old single
+#     breaker that 461 darkened the healthy PRIMARY path for 1h/4h/24h, so one broken fallback
+#     request took the whole source down. It now opens the SIGNED breaker only.
 _breaker_lock = threading.Lock()
-_tripped_until = 0.0
+_tripped_until = 0.0          # ACCOUNT scope: darkens the browser path AND the signed fallback
+_signed_tripped_until = 0.0   # SIGNED scope: darkens the self-signed fallback only
 _trip_streak = 0
+_signed_trip_streak = 0
 _last_signal = ""
+_last_signed_signal = ""
 _daily_count = 0
 _daily_key = ""
 
@@ -194,19 +212,39 @@ def _today() -> str:
 
 
 def _tripped() -> bool:
+    """ACCOUNT-scope breaker: the whole source (browser + signed) is dark."""
     return time.time() < _tripped_until
 
 
-def _trip(signal: str) -> None:
+def _signed_tripped() -> bool:
+    """The self-signed fallback is dark — either scope closes it (an account-level signal
+    darkens everything; a signed-level one darkens only this path)."""
+    return _tripped() or time.time() < _signed_tripped_until
+
+
+def _trip(signal: str, scope: str = "account") -> None:
     """Open the breaker for an EXPONENTIAL window per consecutive trip; record the signal so
-    health_check can surface it to the operator. While tripped, every entry point returns empty."""
+    health_check can surface it to the operator. scope="account" (the default, and every
+    account/IP-level signal) makes every entry point return empty; scope="signed" darkens only
+    the self-signed fallback and leaves the primary browser path serving (see the scope note)."""
     global _tripped_until, _trip_streak, _last_signal
+    global _signed_tripped_until, _signed_trip_streak, _last_signed_signal
     with _breaker_lock:
-        cooldown = _COOLDOWN_LADDER[min(_trip_streak, len(_COOLDOWN_LADDER) - 1)]
-        _tripped_until = time.time() + cooldown
-        _trip_streak += 1
-        _last_signal = f"{signal} @ {datetime.now().isoformat(timespec='seconds')} (cooldown {cooldown}s)"
-    logger.warning("xhs_cn 风控 BREAKER TRIPPED: %s", _last_signal)
+        if scope == "signed":
+            cooldown = _COOLDOWN_LADDER[min(_signed_trip_streak, len(_COOLDOWN_LADDER) - 1)]
+            _signed_tripped_until = time.time() + cooldown
+            _signed_trip_streak += 1
+            _last_signed_signal = (f"{signal} @ {datetime.now().isoformat(timespec='seconds')} "
+                                   f"(cooldown {cooldown}s)")
+            shown = _last_signed_signal
+        else:
+            cooldown = _COOLDOWN_LADDER[min(_trip_streak, len(_COOLDOWN_LADDER) - 1)]
+            _tripped_until = time.time() + cooldown
+            _trip_streak += 1
+            _last_signal = f"{signal} @ {datetime.now().isoformat(timespec='seconds')} (cooldown {cooldown}s)"
+            shown = _last_signal
+    diag.note("xiaohongshu_cn.breaker", body=f"风控 breaker OPEN [{scope}]: {shown}")
+    logger.warning("xhs_cn 风控 BREAKER TRIPPED [%s]: %s", scope, shown)
 
 
 def _clear_streak() -> None:
@@ -215,36 +253,209 @@ def _clear_streak() -> None:
     _trip_streak = 0
 
 
+def _clear_signed_streak() -> None:
+    """A clean SIGNED run resets that path's own escalation. Kept separate from _clear_streak:
+    a healthy browser flow says nothing about whether our forged edith posture is accepted."""
+    global _signed_trip_streak
+    _signed_trip_streak = 0
+
+
+# ── the daily volume ledger, DURABLE (2026-08-11) ─────────────────────────────
+# #769's load-bearing finding is that cumulative VOLUME, not per-request rate, is the binding
+# constraint for this WARNED account, which makes _DAILY_REQ_CAP the most important guard in the
+# module. It used to live only in process memory, so every eye-http turnover (launchd KeepAlive,
+# a deploy, a crash) silently handed the account a fresh 150-touch budget: the guard that mattered
+# most was the one that worked least. It now lands on disk, so a calendar day stays a calendar day
+# however many times the process turns over.
+#
+# This is deliberately NOT done for the 风控 breaker / _backoff_until, which are COOLDOWNS: there,
+# restart-clears is a documented repair path (INFRA gotcha #13 clears a wedged-Chrome backoff
+# exactly that way). A cumulative budget has no such excuse, because forgetting IS its failure.
+_DAILY_STATE_PATH = Path.home() / ".penumbra" / "state" / "xhs-cn-daily-budget.json"
+_daily_ledger_warned = False
+
+
+def _read_daily_ledger() -> tuple[str, int]:
+    """The persisted (date, count), or ("", 0) when there is none or it will not parse.
+    FAIL-OPEN and quiet after the first complaint: a broken ledger must degrade the cap to
+    in-memory counting, never break retrieval (the module's standing posture)."""
+    global _daily_ledger_warned
+    try:
+        row = json.loads(_DAILY_STATE_PATH.read_text(encoding="utf-8"))
+        return str(row.get("date") or ""), max(0, int(row.get("count") or 0))
+    except FileNotFoundError:
+        return "", 0
+    except Exception as exc:  # noqa: BLE001 — corrupt/unreadable ledger must not dark the source
+        if not _daily_ledger_warned:
+            _daily_ledger_warned = True
+            logger.warning("xhs_cn: daily ledger unreadable (%s) — the volume cap falls back to "
+                           "in-memory counting until this clears", exc)
+        return "", 0
+
+
+def _write_daily_ledger() -> None:
+    """Persist the ledger atomically (cache._atomic_write_text: tmp-in-same-dir + os.replace, so a
+    kill mid-write leaves a .tmp and never a corrupt final file). Cheap enough for the hot path:
+    a ~90-byte write per LIVE account touch, and every such touch is already seconds of
+    human-paced browser work. MUST be called under _breaker_lock. FAIL-OPEN."""
+    try:
+        _DAILY_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        cache._atomic_write_text(_DAILY_STATE_PATH, json.dumps(
+            {"date": _daily_key, "count": _daily_count, "cap": _DAILY_REQ_CAP,
+             "at": datetime.now().isoformat(timespec="seconds")}, ensure_ascii=False))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("xhs_cn: daily ledger NOT persisted (%s) — this process is counting in "
+                       "memory only, so a restart would re-grant the budget", exc)
+
+
+def _daily_spent() -> int:
+    """Touches already spent TODAY, reconciling memory with disk. Used by health_check so a
+    freshly restarted process reports the real remaining budget instead of a flattering 0."""
+    disk_key, disk_count = _read_daily_ledger()
+    mem = _daily_count if _daily_key == _today() else 0
+    return max(mem, disk_count if disk_key == _today() else 0)
+
+
 def _bump_daily() -> None:
-    """Count one signed request against the daily budget; hard-stop (trip until tomorrow) on breach.
-    The cumulative-volume cap is the real binding constraint (#769), so this gate matters most."""
+    """Count one LIVE account touch against the daily budget; hard-stop (trip until tomorrow) on
+    breach. The cumulative-volume cap is the real binding constraint (#769), so this gate matters
+    most, and it is DURABLE: the ledger is re-read on every bump, so neither a restart nor a
+    second process touching this account can re-grant spent budget."""
     global _daily_count, _daily_key
     with _breaker_lock:
-        if _today() != _daily_key:
-            _daily_key, _daily_count = _today(), 0
+        today = _today()
+        disk_key, disk_count = _read_daily_ledger()
+        if _daily_key != today:
+            _daily_key, _daily_count = today, 0
+        if disk_key == today:
+            # MAX, never assignment: whichever of (this process, the ledger) has seen more touches
+            # today is the truth. Monotone in both directions, so a stale reader and a stale file
+            # can each only ever be corrected upward, and spent budget is never handed back.
+            _daily_count = max(_daily_count, disk_count)
         _daily_count += 1
         over = _daily_count > _DAILY_REQ_CAP
+        _write_daily_ledger()
     if over:
         _trip(f"daily_cap_{_DAILY_REQ_CAP}_exceeded")
         raise XhsRiskSignal("daily_cap")
 
 
-def _guard(status: int, body: dict) -> dict:
+# ── the black box (2026-08-12) ────────────────────────────────────────────────
+# Two failures survived three fix attempts unexplained: the recurring HTTP 461 on the signed path,
+# and the browser path silently returning "error" and falling through to it. BOTH survived for the
+# same reason, and it is not that they are hard: the evidence was never written down. diag.note()
+# captures are per-call and in-memory, surfaced only if someone happens to be running an armed
+# single-source drill at that exact moment, so a fault that strikes at 00:34 leaves nothing behind
+# and the next person theorises instead of reading. Two rounds of my own theories about the 461
+# (wrong-host cookie, expired token) were both falsified by a recurrence that had neither.
+#
+# So stop guessing and record the scene: enough to NAME the cause on the next occurrence.
+#
+# CREDENTIAL DISCIPLINE, absolute: cookie and token VALUES never enter this file. Names, presence,
+# host scope, remaining TTL and lengths already separate "wrong cookie" from "stale cookie" from
+# "missing xsec_token" from "signature rejected"; the values would only turn a diagnostic into a
+# credential leak. Same reason the response body is truncated and the URL is never logged whole.
+_INCIDENT_PATH = Path.home() / ".penumbra" / "state" / "xhs-cn-incidents.jsonl"
+_INCIDENT_MAX_BYTES = 512 * 1024
+_INCIDENT_KEEP_LINES = 400
+# Response headers worth keeping: 小红书 signals a challenge through these, and which ones are
+# PRESENT is itself the discriminator between an anti-bot verdict and an ordinary rejection.
+_INCIDENT_HEADERS = ("content-type", "server", "set-cookie", "x-verify", "verifytype",
+                     "verifyuuid", "x-request-id", "trace-id", "www-authenticate")
+
+
+def _cookie_posture() -> dict:
+    """What we SENT, described without secrets. This is our half of the 461 question."""
+    try:
+        with _cookie_lock:
+            names = sorted(_cookies)
+            exp = _cookie_exp.get("acw_tc", -1)
+            present = bool(_cookies.get("acw_tc"))
+        ttl = int(exp - time.time()) if (exp and exp > 0) else None
+        return {"cookie_names": names, "n_cookies": len(names),
+                "acw_tc_present": present, "acw_tc_ttl_s": ttl,
+                "cookie_age_s": int(time.time() - _cookies_at) if _cookies_at else None}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _record_incident(kind: str, **fields) -> None:
+    """Append one forensic line. Fail-open and size-bounded: a black box that can break the flight
+    it is recording would be worse than no black box."""
+    try:
+        row = {"at": datetime.now().isoformat(timespec="seconds"), "kind": kind}
+        row.update(fields)
+        _INCIDENT_PATH.parent.mkdir(parents=True, exist_ok=True)
+        if _INCIDENT_PATH.exists() and _INCIDENT_PATH.stat().st_size > _INCIDENT_MAX_BYTES:
+            kept = _INCIDENT_PATH.read_text(encoding="utf-8", errors="ignore").splitlines()
+            _INCIDENT_PATH.write_text("\n".join(kept[-_INCIDENT_KEEP_LINES:]) + "\n", encoding="utf-8")
+        with _INCIDENT_PATH.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(row, ensure_ascii=False, default=str) + "\n")
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("xhs_cn incident not recorded (%s)", exc)
+
+
+# The class deliberately EXCLUDES "=" so a `name=value` pair keeps its NAME: which cookie edith
+# is re-issuing on a challenge is itself a discriminator, and the name is not the secret.
+_SECRETISH = re.compile(r"[A-Za-z0-9_+/-]{16,}")
+
+
+def _redact(text: str) -> str:
+    """Blank every long opaque run. A challenge page's PROSE is the diagnostic value (a 风控 phrase,
+    a "please verify"); any 16+ character blob in it is a token, a signature or a cookie, and the
+    black box has no business carrying those. Applied to the body AND to set-cookie, which is where
+    a real leak was caught in review: the header NAMES are the signal, the values are the secret."""
+    try:
+        return _SECRETISH.sub("<redacted>", text or "")
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _response_evidence(r, path: str, method: str, params: dict) -> dict:
+    """The request/response scene, secrets stripped. `params` is read for SHAPE only (which keys
+    were present, whether an xsec_token rode along), never for values: on the note-detail endpoints
+    the xsec_token IS the secret, and whether it was present at all is the discriminating fact."""
+    try:
+        headers = {}
+        for k in _INCIDENT_HEADERS:
+            v = (r.headers or {}).get(k)
+            if v:
+                headers[k] = _redact(str(v))[:160]
+        body = _redact((getattr(r, "text", "") or "")[:400]).replace("\n", " ")
+        return {"path": path, "method": method,
+                "param_keys": sorted(params or {}),
+                "has_xsec_token": bool((params or {}).get("xsec_token")),
+                "status": getattr(r, "status_code", None),
+                "resp_headers": headers, "body_head": body,
+                "cookies": _cookie_posture()}
+    except Exception:  # noqa: BLE001
+        return {"path": path, "method": method}
+
+
+def _guard(status: int, body: dict, evidence: dict | None = None) -> dict:
     """Classify a signed-API response → return the body on success, else raise a typed signal.
-    Status is checked FIRST: a 461/471 challenge page is often non-JSON and lacks Verifytype."""
+    Status is checked FIRST: a 461/471 challenge page is often non-JSON and lacks Verifytype.
+    `evidence` is the secret-free request/response scene, written to the black box on any trip
+    so the NEXT occurrence of an intermittent signal can be diagnosed instead of theorised."""
     if status in (461, 471):
-        _trip(f"http_{status}_captcha")
+        _record_incident(f"signed_http_{status}", **(evidence or {}))
+        # SIGNED scope, not account: edith challenges the forged REQUEST (host-scoped cookie /
+        # signature), and the same account's real browser keeps being served. Darkening the
+        # primary path here is what produced the 2026-08-10/11 blackouts.
+        _trip(f"http_{status}_captcha", scope="signed")
         raise XhsRiskSignal(f"http_{status}")
     if status != 200:
         raise XhsNoteGone(f"http_{status}")  # transient/other 4xx-5xx → skip, do not trip the breaker
     code = body.get("code")
     msg = body.get("msg") or ""
     if code == 300012:                                   # IP blocked — severe on the single residential IP
+        _record_incident("signed_ip_block_300012", **(evidence or {}))
         _trip("ip_block_300012")
         raise XhsRiskSignal("ip_block_300012")
     if code in (-510001, -510000):                       # note abnormal / not found — skip, not 风控
         raise XhsNoteGone(f"note_{code}")
     if code == -1 and body.get("success") is False:      # the #769 session/account cumulative cap
+        _record_incident("signed_session_cap", **(evidence or {}))
         _trip("code_-1_session_cap")
         raise XhsRiskSignal("code_-1_session_cap")
     if code in (-101, -100) and "登录" in msg:            # web_session invalid → re-auth once
@@ -256,35 +467,91 @@ def _guard(status: int, body: dict) -> dict:
 
 
 # ── cookie provider (pull from the live 9224 browser, cached) ─────────────────
+# HOST SCOPE MATTERS (root cause of the 2026-08-10/11 HTTP 461s). The signed API lives on a
+# DIFFERENT host (edith.xiaohongshu.com) from the pages the browser drives (www / so), and
+# 小红书 mints a PER-HOST anti-crawl token: the live jar carries THREE distinct `acw_tc`
+# cookies at once (measured 2026-08-11: edith / www / so, three different values). The old
+# provider flattened the whole jar with {c["name"]: c["value"]}, so which acw_tc reached edith
+# depended on the ORDER Playwright happened to return the jar in — observed varying between
+# consecutive reads. A www/so-scoped token presented to edith is exactly the mismatch edith
+# answers with a 461 verification challenge; with the edith-scoped one the SAME call returned
+# 200 / code:0 / 22 items. So select cookies the way a browser's own jar does: domain-match the
+# target host, most specific wins. Expiries ride along so the caller can refuse to fire a
+# request whose precondition is already dead.
 _cookie_lock = threading.Lock()
 _cookies: dict = {}
+_cookie_exp: dict = {}
 _cookies_at = 0.0
 
-
-def _xhs_cookie(c: dict) -> bool:
-    dom = (c.get("domain") or "")
-    return "xiaohongshu" in dom or dom.startswith(".")
+_SIGNED_HOST = "edith.xiaohongshu.com"   # every signed call in this module targets EDITH
+_ACW_MIN_TTL = 90.0                      # required remaining life of the edith acw_tc (seconds)
 
 
-def _pull_cookies_live() -> dict:
+def _domain_matches(domain: str, host: str) -> bool:
+    """RFC 6265 §5.1.3 domain-match: an exact host cookie, or a parent-domain cookie."""
+    d = (domain or "").lstrip(".")
+    return bool(d) and (host == d or host.endswith("." + d))
+
+
+def _cookies_for_host(jar: list, host: str) -> tuple[dict, dict]:
+    """The cookies a real browser would send to `host`, name collisions resolved by SPECIFICITY
+    (an exact host cookie beats a parent-domain one; a longer parent beats a shorter). Returns
+    ({name: value}, {name: expires_epoch})."""
+    best: dict = {}   # name -> (rank, value, expires)
+    for c in jar:
+        name = c.get("name")
+        dom = c.get("domain") or ""
+        if not name or not _domain_matches(dom, host):
+            continue
+        bare = dom.lstrip(".")
+        rank = (1 if bare == host else 0, len(bare))
+        prev = best.get(name)
+        if prev is None or rank > prev[0]:
+            best[name] = (rank, c.get("value") or "", c.get("expires", -1))
+    return ({n: v for n, (_r, v, _e) in best.items()},
+            {n: e for n, (_r, _v, e) in best.items()})
+
+
+def _pull_cookies_live(host: str = _SIGNED_HOST) -> tuple[dict, dict]:
     """Read the mainland account's cookies straight from the 9224 browser context (incl httpOnly
-    web_session, which document.cookie can't see). No navigation — context.cookies() returns the
-    whole jar — so it never disturbs the logged-in tab."""
+    web_session, which document.cookie can't see), scoped to `host`. No navigation —
+    context.cookies() returns the whole jar — so it never disturbs the logged-in tab."""
     def _flow(page):
         return json.dumps(page.context.cookies())
     raw = cdp_call(_flow, initial_url=None, timeout=40, cdp_url=_CN_CDP_URL)
     jar = json.loads(raw) if raw else []
-    return {c["name"]: c["value"] for c in jar if _xhs_cookie(c)}
+    return _cookies_for_host(jar, host)
 
 
 def _get_cookies(force: bool = False) -> dict:
-    global _cookies, _cookies_at
+    global _cookies, _cookie_exp, _cookies_at
     with _cookie_lock:
         if force or not _cookies or (time.time() - _cookies_at) > _COOKIE_TTL:
-            fresh = _pull_cookies_live()
+            fresh, exp = _pull_cookies_live()
             if fresh:
-                _cookies, _cookies_at = fresh, time.time()
+                _cookies, _cookie_exp, _cookies_at = fresh, exp, time.time()
         return dict(_cookies)
+
+
+def _signed_ready() -> tuple[bool, str]:
+    """Refuse to fire a signed call whose anti-crawl precondition is ALREADY dead.
+
+    edith mints `acw_tc` with roughly an hour of life and only refreshes it when the browser
+    actually talks to edith. Firing on an expired token does not fail quietly: it draws a 461
+    verification challenge, i.e. we would be announcing ourselves to 风控 to learn something the
+    cookie jar already told us for free. The doctrine is 绝不重试穿透; this applies it one step
+    earlier and never issues the challenge-bait request at all."""
+    _get_cookies()  # refresh the cached jar if it is past _COOKIE_TTL
+    with _cookie_lock:
+        val = _cookies.get("acw_tc")
+        exp = _cookie_exp.get("acw_tc", -1)
+    if not val:
+        return False, f"no {_SIGNED_HOST}-scoped acw_tc in the 9224 jar"
+    if exp and exp > 0:
+        left = exp - time.time()
+        if left < _ACW_MIN_TTL:
+            return False, f"{_SIGNED_HOST} acw_tc has {int(left)}s left (< {int(_ACW_MIN_TTL)}s)"
+    return True, ""
 
 
 # ── signed request helpers ────────────────────────────────────────────────────
@@ -324,7 +591,7 @@ def _signed_get(path: str, params: dict, cookies: dict) -> dict:
     url = _signer.build_url(EDITH + path, params)
     _pace()
     r = _creq.get(url, headers=_base_headers(cookies, signed), impersonate="chrome", timeout=_TIMEOUT)
-    return _guard(r.status_code, _safe_json(r))
+    return _guard(r.status_code, _safe_json(r), _response_evidence(r, path, "GET", params))
 
 
 def _signed_post(path: str, payload: dict, cookies: dict) -> dict:
@@ -335,7 +602,7 @@ def _signed_post(path: str, payload: dict, cookies: dict) -> dict:
     body = _signer.build_json_body(payload)
     _pace()
     r = _creq.post(EDITH + path, data=body, headers=h, impersonate="chrome", timeout=_TIMEOUT)
-    return _guard(r.status_code, _safe_json(r))
+    return _guard(r.status_code, _safe_json(r), _response_evidence(r, path, "POST", payload))
 
 
 def _with_cookie_retry(call):
@@ -695,6 +962,11 @@ def _browser_search(query: str, limit: int) -> tuple[str, list]:
             status, html = cdp_call(_flow, initial_url=None, timeout=85, cdp_url=_CN_CDP_URL)
         except Exception as exc:  # noqa: BLE001
             _note_browser_cdp(False)  # sustained 9224 CDP failures → trip a cooldown (don't re-nav every query)
+            # BLACK BOX: this is the branch that sends a healthy-looking query down the signed
+            # fallback, and until now it recorded nothing durable, which is exactly why the
+            # 2026-08-11 21:46 fall-through was never explained.
+            _record_incident("browser_search_error", exc_type=type(exc).__name__,
+                             exc=str(exc)[:300], flow="search")
             diag.note("xiaohongshu_cn.browser_cdp", exc=exc,
                       body="9224 CDP search flow raised (Chrome wedged / timeout?) — falling back to signed-API")
             return ("error", [])
@@ -707,9 +979,20 @@ def _browser_search(query: str, limit: int) -> tuple[str, list]:
         if status == "login":
             return ("login", [])
         if status != "ok" or not html:
+            _record_incident("browser_search_empty", flow="search", status=str(status),
+                             html_len=len(html or ""))
             return ("error", [])
         # DOM cards are the mainland PRIMARY decode; XHR items (if any fired) are the preferred bonus.
         docs = _cn_items_to_docs(items, limit) if items else _cn_cards_from_html(html, limit)
+        if not docs and not is_blocked(html)[0]:
+            # ok-but-empty AND not an anti-bot shell: a likely selector drift (DOM class rename). Emit a
+            # NAMED candidate cluster into diag for /eye-fix; the fetch still returns honestly empty (we
+            # never substitute a guessed element -> no fabrication).
+            _hint = selector_drift_hint(html, "section.note-item")
+            if _hint:
+                diag.note("xiaohongshu_cn.selector_drift",
+                          body=f"section.note-item matched 0 items but {_hint} is the largest repeated "
+                               f"sibling cluster (candidate selector for /eye-fix)")
         return ("ok", docs)
     finally:
         _browser_slot.release()
@@ -786,6 +1069,8 @@ def _browser_fetch(note_id: str, token: str, url: str) -> tuple[str, Optional["D
                                                     timeout=110, cdp_url=_CN_CDP_URL)
         except Exception as exc:  # noqa: BLE001
             _note_browser_cdp(False)  # sustained 9224 CDP failures → trip a cooldown (don't re-nav every query)
+            _record_incident("browser_fetch_error", exc_type=type(exc).__name__,
+                             exc=str(exc)[:300], flow="fetch", note_id=note_id)
             diag.note("xiaohongshu_cn.browser_cdp", exc=exc, url=url,
                       body="9224 CDP fetch flow raised — falling back to signed-API")
             return ("error", None)
@@ -806,9 +1091,13 @@ def _browser_fetch(note_id: str, token: str, url: str) -> tuple[str, Optional["D
         body = body_el.get_text("\n", strip=True) if body_el else ""
         author_el = soup.select_one(".author-name, .name, .username")
         author = author_el.get_text(strip=True) if author_el else None
-        content = _content_with_media(body or "(no body extracted)", images)
         comments = cdata.get("list") or []
         declared = cdata.get("declared")
+        if not _xhs_detail_has_substance(title, body, images, comments):
+            diag.note("xiaohongshu_cn.empty_detail", url=url,
+                      body="detail navigation succeeded but returned no title/body/media/comments")
+            return ("error", None)
+        content = _content_with_media(body, images)
         if comments:
             short = f" / 共 {declared} 条" if declared else ""
             lines = [f"\n\n—— 评论区(取到 {len(comments)} 条{short})——"]
@@ -863,8 +1152,19 @@ class XiaohongshuCNAdapter:
         if _tripped():
             return False, f"风控 breaker OPEN: {_last_signal}; {int(_tripped_until - time.time())}s cooldown left"
         primary = "browser (9224 自发签名 XHR)" if _BROWSER_OK else "signed-API"
-        return True, (f"ok (primary={primary}; today {_daily_count}/{_DAILY_REQ_CAP} live account-touches "
-                      f"[browser + signed]; sub_comments={'ON' if _FETCH_SUB_COMMENTS else 'off'})")
+        # The SIGNED fallback can be dark on its own without the source being down: report it as
+        # a degraded sub-state, not as a failure, so a 461 on the fallback never reads as "xhs_cn
+        # is broken" when the primary browser path is serving normally.
+        if time.time() < _signed_tripped_until:
+            signed = f"DARK {int(_signed_tripped_until - time.time())}s ({_last_signed_signal})"
+        elif _BROWSER_OK:
+            signed = "armed"
+        else:
+            signed = "PRIMARY (browser deps unavailable)"
+        return True, (f"ok (primary={primary}; signed-fallback={signed}; "
+                      f"today {_daily_spent()}/{_DAILY_REQ_CAP} live account-touches "
+                      f"[browser + signed, durable across restarts]; "
+                      f"sub_comments={'ON' if _FETCH_SUB_COMMENTS else 'off'})")
 
     def search(self, query: str, limit: int = 20) -> list[Document]:
         if _SEALED:
@@ -918,12 +1218,20 @@ class XiaohongshuCNAdapter:
         cached = cache.get(key)
         if cached:  # non-empty hit only; a cached [] is treated as a miss (xhs transient empties
             return [Document.model_validate(d) for d in cached]  # are never authoritative)
-        if _tripped():  # cache above is served regardless; gate LIVE calls only when the 风控 breaker is open
-            reason = f"风控 breaker OPEN: {_last_signal}"
+        if _signed_tripped():  # cache above is served regardless; gate LIVE calls only when a breaker is open
+            reason = f"风控 breaker OPEN: {_last_signal or _last_signed_signal}"
             logger.info("xhs_cn search skip (breaker open): %s", reason)
             diag.note("xiaohongshu_cn.skip", body=(
                 f"NO live API call was made: {reason}. This is NOT an empty/failed API response: the 风控 breaker is "
                 f"open after a risk signal and auto-clears after the cooldown. Daily cap + pacing remain the active guards."))
+            return []
+        ready, why = _signed_ready()
+        if not ready:
+            logger.info("xhs_cn signed search skip (precondition): %s", why)
+            diag.note("xiaohongshu_cn.signed_unready", body=(
+                f"NO live API call was made: {why}. The signed fallback's anti-crawl precondition is dead, so "
+                f"firing would only draw a 461 challenge. NOT a query miss. The edith token is re-minted the "
+                f"next time the 9224 browser talks to edith (any browser-path note read)."))
             return []
         try:
             sid = _signer.get_search_id()
@@ -962,16 +1270,34 @@ class XiaohongshuCNAdapter:
                 title=(nc.get("display_title") or "(untitled)").strip(),
                 content=(nc.get("display_title") or "").strip(),  # search card has no body; drill via fetch_url
                 author=user.get("nickname"),
-                signals=mk_signal("likes", _int(inter.get("liked_count")), kind="engagement",
-                                  by="xhs/liked_count"),
+                # interact_info carries four counts; only liked_count was read. Verified live
+                # 2026-07-25 on the .com sibling's identical payload: {liked_count, comment_count,
+                # collected_count, shared_count}. On this platform the comment thread is the data,
+                # so a card showing likes alone hides the signal that decides what is worth opening.
+                signals={
+                    **mk_signal("likes", _int(inter.get("liked_count")), kind="engagement",
+                                by="xhs/liked_count"),
+                    **mk_signal("comments", _int(inter.get("comment_count")), kind="engagement",
+                                by="xhs/comment_count"),
+                    **mk_signal("collects", _int(inter.get("collected_count")), kind="engagement",
+                                by="xhs/collected_count"),
+                    **mk_signal("shares", _int(inter.get("shared_count")), kind="engagement",
+                                by="xhs/shared_count"),
+                },
                 metadata={"note_id": nid, "xsec_token": token, "type": nc.get("type"),
-                          "liked_count": _int(inter.get("liked_count"))},
+                          # search card carries no body: full=True cannot satisfy it, drill via penumbra_read
+                          "body_needs_read": True,
+                          "liked_count": _int(inter.get("liked_count")),
+                          "comment_count": _int(inter.get("comment_count")),
+                          "collected_count": _int(inter.get("collected_count")),
+                          "shared_count": _int(inter.get("shared_count"))},
             ))
             if len(docs) >= limit:
                 break
         if docs:  # never cache an empty search as authoritative (poisons future identical queries)
             cache.set(key, [d.model_dump(mode="json") for d in docs], ttl=_CACHE_TTL)
-            _clear_streak()  # a clean live run resets the 风控-trip escalation back to the 1h floor
+            _clear_streak()          # a clean live run resets the 风控-trip escalation to the 1h floor
+            _clear_signed_streak()   # ... and an accepted signed call clears THIS path's own ladder
         return docs
 
     def fetch_url(self, url: str) -> Optional[Document]:
@@ -1027,12 +1353,20 @@ class XiaohongshuCNAdapter:
         cached = cache.get(key)
         if cached is not None:
             return Document.model_validate(cached)
-        if _tripped():  # cache above is served regardless; gate LIVE here only when the 风控 breaker is open
-            reason = f"风控 breaker OPEN: {_last_signal}"
+        if _signed_tripped():  # cache above is served regardless; gate LIVE here only when a breaker is open
+            reason = f"风控 breaker OPEN: {_last_signal or _last_signed_signal}"
             logger.info("xhs_cn fetch skip (breaker open): %s", reason)
             diag.note("xiaohongshu_cn.skip", url=url, body=(
                 f"NO live API call was made: {reason}. This is NOT an empty/failed API response: the 风控 breaker is "
                 f"open and auto-clears after the cooldown."))
+            return None
+        ready, why = _signed_ready()
+        if not ready:
+            logger.info("xhs_cn signed fetch skip (precondition): %s", why)
+            diag.note("xiaohongshu_cn.signed_unready", url=url, body=(
+                f"NO live API call was made: {why}. The signed fallback's anti-crawl precondition is dead, so "
+                f"firing would only draw a 461 challenge. NOT a missing note. For a &xhs_full=1 deep drill, read "
+                f"the note once WITHOUT the flag first: that browser read re-mints the edith token."))
             return None
         try:
             doc = self._fetch_note(note_id, token, url, full)
@@ -1043,7 +1377,8 @@ class XiaohongshuCNAdapter:
             return None
         if doc is not None:
             cache.set(key, doc.model_dump(mode="json"), ttl=_CACHE_TTL)
-            _clear_streak()  # a clean live run resets the 风控-trip escalation back to the 1h floor
+            _clear_streak()          # a clean live run resets the 风控-trip escalation to the 1h floor
+            _clear_signed_streak()   # ... and an accepted signed call clears THIS path's own ladder
         return doc
 
     def _fetch_note(self, note_id: str, token: str, url: str, full: bool = False) -> Optional[Document]:
@@ -1073,7 +1408,12 @@ class XiaohongshuCNAdapter:
         # 2) comment thread via signed cursor pagination (deep sub-reply drilling only if full=True)
         comments = fetch_all_comments(note_id, token, fetch_sub=full)
 
-        body = desc or title or "(no body)"
+        if not _xhs_detail_has_substance(title, desc, media, comments):
+            diag.note("xiaohongshu_cn.empty_detail", url=url,
+                      body="signed detail response returned no title/body/media/comments")
+            return None
+
+        body = desc or title
         return Document(
             source="xiaohongshu_cn",
             source_id=note_id,
@@ -1082,8 +1422,16 @@ class XiaohongshuCNAdapter:
             content=body,
             author=user.get("nickname"),
             date=date,
-            signals=mk_signal("likes", _int(inter.get("liked_count")), kind="engagement",
-                              by="xhs/liked_count"),
+            signals={
+                **mk_signal("likes", _int(inter.get("liked_count")), kind="engagement",
+                            by="xhs/liked_count"),
+                **mk_signal("comments", _int(inter.get("comment_count")), kind="engagement",
+                            by="xhs/comment_count"),
+                **mk_signal("collects", _int(inter.get("collected_count")), kind="engagement",
+                            by="xhs/collected_count"),
+                **mk_signal("shares", _int(inter.get("shared_count")), kind="engagement",
+                            by="xhs/shared_count"),
+            },
             media=media,
             metadata={
                 "note_id": note_id,

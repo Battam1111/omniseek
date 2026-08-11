@@ -22,6 +22,9 @@ work parser). Adding a lab = one row in ``org_watch.json``
 
 from __future__ import annotations
 
+import asyncio
+import contextvars
+import functools
 import json
 import logging
 import re
@@ -29,6 +32,8 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Optional
 from urllib.parse import urlparse
+
+import anyio
 
 from penumbra.core import _openalex as oa
 from penumbra.core import cache
@@ -132,8 +137,12 @@ class _OrgWatchAdapter:
         if len(self.affiliations) <= 1:
             results = [_one(a) for a in self.affiliations]
         else:
+            # Per-affiliation COPY of the caller's context so an armed diag capture reaches the
+            # worker threads (oa.get_json notes on OpenAlex-down); a plain ex.map lost those notes,
+            # so a drill on this source during an OpenAlex outage saw captures: [] (RSS diag-loss class).
+            affs = [(a, contextvars.copy_context()) for a in self.affiliations]
             with ThreadPoolExecutor(max_workers=min(len(self.affiliations), 3)) as ex:
-                results = list(ex.map(_one, self.affiliations))
+                results = list(ex.map(lambda p: p[1].run(_one, p[0]), affs))
         merged: dict[str, dict] = {}
         for works in results:
             for w in works:
@@ -156,8 +165,83 @@ class _OrgWatchAdapter:
                 return stale, True
         return out, False
 
+    async def _afetch(self) -> "tuple[list[dict], bool]":
+        """Native-async twin of ``_fetch`` (mirrors it line-for-line, same (works, stale) contract).
+        Only the BLOCKING work moves: the disk cache read/write hops OFF the loop via
+        ``anyio.to_thread.run_sync``, the OpenAlex egress swaps ``oa.get_json`` -> ``await oa.aget_json``,
+        and the per-affiliation ThreadPoolExecutor fan-out becomes an ``asyncio.gather`` over async
+        twins. ``_matches`` / dedup / sort are pure CPU and stay ON the loop, byte-identical. SAME cache
+        keys as ``_fetch`` (async + sync share the cache)."""
+        key = cache.make_key("org_watch", self.name, "works", "|".join(self.affiliations))
+        lg_key = cache.make_key("org_watch", self.name, "lastgood", "|".join(self.affiliations))
+        cached = await anyio.to_thread.run_sync(cache.get, key)  # disk read OFF loop
+        if cached is not None:
+            return cached, False
+
+        async def _aone(aff: str) -> list[dict]:
+            try:
+                data = await oa.aget_json("/works", {
+                    "filter": f'raw_affiliation_strings.search:"{aff}"',
+                    "sort": "publication_date:desc",
+                    "per-page": PER_PAGE,
+                    "select": _SELECT,
+                })
+                return data.get("results", [])
+            except Exception as exc:  # noqa: BLE001 — incl. OpenAlexDown: degrade, never raise
+                logger.warning("org_watch[%s]: fetch failed for %r: %s", self.name, aff, exc)
+                return []
+
+        # Fetch this org's affiliation strings CONCURRENTLY via asyncio.gather — the loop-native twin
+        # of _fetch's ThreadPoolExecutor fan-out. ONE gather covers BOTH sync branches (the <=1 serial
+        # list AND the >1 pool): a gather over 0/1/N coroutines is result-identical with no thread spun
+        # up. On the single loop thread NO contextvars.copy_context() is needed (unlike the sync pool,
+        # which copied the caller's context per affiliation so an armed diag capture reached the worker
+        # threads): a coroutine inherits the caller's context naturally, so oa.aget_json's OpenAlex-down
+        # diag notes are captured with no extra plumbing. The shared _openalex guard (rate pacer +
+        # BoundedSemaphore(8)) still bounds this fan-out GLOBALLY, so the OpenAlex-wide in-flight cap is
+        # unchanged. _matches/dedup/sort below are byte-identical to _fetch (result unchanged).
+        results = await asyncio.gather(*[_aone(a) for a in self.affiliations])
+        merged: dict[str, dict] = {}
+        for works in results:
+            for w in works:
+                if self._matches(w) and not _is_ai_byline_crank(w):
+                    merged[w.get("id") or w.get("doi") or w.get("title")] = w
+        out = sorted(merged.values(),
+                     key=lambda w: w.get("publication_date") or "", reverse=True)
+        if out:
+            await anyio.to_thread.run_sync(  # 6h fresh — disk write OFF loop
+                functools.partial(cache.set, key, out, ttl=CACHE_TTL))
+            await anyio.to_thread.run_sync(  # 7d last-good snapshot for the down-fallback
+                functools.partial(cache.set, lg_key, out, ttl=_LASTGOOD_TTL))
+            return out, False
+        # Empty result: distinguish OpenAlex being DOWN (budget exhausted / circuit open) from a genuine
+        # no-match. If down, serve the last-good snapshot (the org's real recent papers, <=~1d stale) so
+        # the per-lab stream stays useful through a budget outage. NEVER cache an empty over the fresh key.
+        # A genuine empty (OpenAlex up, no matching papers) just returns []. Byte-identical to _fetch.
+        if oa.unavailable():
+            stale = await anyio.to_thread.run_sync(cache.get, lg_key)
+            if stale:
+                return stale, True
+        return out, False
+
     def search(self, query: str, limit: int = 10) -> list[Document]:
         works, stale = self._fetch()
+        docs = [d for d in (self._to_doc(w) for w in works) if d]
+        docs = keyword_score_filter(docs, (query or "").strip())[:limit]
+        if stale:  # mark the served snapshot so the agent knows it is not real-time
+            for d in docs:
+                d.metadata["stale"] = ("OpenAlex 日预算耗尽 (午夜 UTC 重置); 本结果来自上次成功抓取的"
+                                       "缓存快照 (最多约 1 天旧), 非实时")
+        return docs
+
+    async def asearch(self, query: str, limit: int = 10) -> list[Document]:
+        """Native-async twin of ``search`` (all 39 org_watch rows share this ONE _OrgWatchAdapter class,
+        so this converts every row at once; the class is never subclassed, so no override can silently
+        diverge). Awaits ``_afetch`` (native-async egress) instead of parking a pool thread on the whole
+        affiliation fan-out. The parse/map/filter — ``_to_doc`` (oa.parse_work) + keyword_score_filter —
+        is PURE CPU and stays ON the loop, byte-identical to ``search``; only the blocking fetch moved.
+        SAME result as ``search`` (shared cache key + shared _openalex guard)."""
+        works, stale = await self._afetch()
         docs = [d for d in (self._to_doc(w) for w in works) if d]
         docs = keyword_score_filter(docs, (query or "").strip())[:limit]
         if stale:  # mark the served snapshot so the agent knows it is not real-time

@@ -20,6 +20,7 @@ import time
 from pathlib import Path
 from typing import Optional
 
+import anyio
 import httpx
 from bs4 import BeautifulSoup
 
@@ -150,6 +151,110 @@ def search_web(query: str, n: int = 8) -> list[dict]:
         except Exception as exc:  # noqa: BLE001
             logger.warning("brave search failed, falling back to ddg: %s", exc)
     return _ddg(query, n)
+
+
+# --- native-async twins (the search-index venues + nowcoder go native async) ---------------------
+# Byte-faithful mirror of search_web / _brave / _ddg. SAME Brave 1qps rate gate (shared _brave_last_call
+# + _brave_lock) + SAME cooldown breaker (_brave_cooldown_until) so async and sync share ONE rate ledger
+# + ONE circuit. Only the BLOCKING waits go async: the Brave rate gate reserves the slot under the lock
+# (brief, no IO) then `await anyio.sleep` OFF the lock (a `time.sleep` holding _brave_lock on the loop
+# would freeze every coroutine); the network on a shared httpx.AsyncClient; the DDG 202 backoff via
+# anyio.sleep. The BeautifulSoup parse is pure CPU, on the loop. A pure addition; sync is untouched.
+_aclient: Optional[httpx.AsyncClient] = None
+_aclient_init_lock = threading.Lock()
+
+
+def _aget_client() -> httpx.AsyncClient:
+    global _aclient
+    if _aclient is None:
+        with _aclient_init_lock:
+            if _aclient is None:
+                try:
+                    import h2  # noqa: F401
+                    _h2 = True
+                except Exception:  # noqa: BLE001
+                    _h2 = False
+                _aclient = httpx.AsyncClient(timeout=15, http2=_h2, follow_redirects=True,
+                                             limits=httpx.Limits(max_keepalive_connections=8,
+                                                                 max_connections=16, keepalive_expiry=30.0))
+    return _aclient
+
+
+async def _abrave(query: str, n: int, key: str) -> list[dict]:
+    global _brave_last_call
+    # Rate gate: RESERVE the next Brave slot under the lock (brief, no IO), then wait for it OFF the lock
+    # via anyio.sleep -- holding _brave_lock across an await would block the loop. Shares _brave_last_call
+    # with sync _brave so async + sync Brave calls together stay >= _BRAVE_MIN_INTERVAL apart (~1 qps).
+    with _brave_lock:
+        now = time.time()
+        wait = _BRAVE_MIN_INTERVAL - (now - _brave_last_call)
+        if wait < 0:
+            wait = 0.0
+        _brave_last_call = now + wait  # reserve the slot at the reserved start time
+    if wait > 0:
+        await anyio.sleep(wait)
+    r = await _aget_client().get(
+        "https://api.search.brave.com/res/v1/web/search",
+        params={"q": query, "count": min(n, 20)},
+        headers={"X-Subscription-Token": key, "Accept": "application/json"},
+        timeout=15,
+    )
+    if r.status_code in (401, 403):
+        raise _BraveUnavailable(f"brave key rejected ({r.status_code})", 3600)
+    if r.status_code == 429:
+        ra = r.headers.get("Retry-After", "")
+        raise _BraveUnavailable("brave rate-limited (429)", int(ra) if ra.isdigit() else 60)
+    r.raise_for_status()
+    web = (r.json().get("web") or {}).get("results") or []
+    return [{"title": x.get("title", ""), "url": x.get("url", ""), "snippet": x.get("description", "")} for x in web[:n]]
+
+
+async def _addg(query: str, n: int) -> list[dict]:
+    for attempt in range(3):
+        try:
+            r = await _aget_client().post(
+                "https://html.duckduckgo.com/html/",
+                data={"q": query},
+                headers={"User-Agent": UA},
+                timeout=15,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("ddg request failed: %s", exc)
+            return []
+        if r.status_code == 200:
+            soup = BeautifulSoup(r.text, "lxml")  # pure CPU, on the loop
+            out: list[dict] = []
+            for res in soup.select(".result, .web-result"):
+                a = res.select_one(".result__a")
+                sn = res.select_one(".result__snippet")
+                href = a.get("href") if a else None
+                if a and href:
+                    out.append({"title": a.get_text(strip=True), "url": href,
+                                "snippet": sn.get_text(strip=True) if sn else ""})
+                if len(out) >= n:
+                    break
+            return out
+        if r.status_code == 202:  # DDG soft rate-limit — pace and retry
+            await anyio.sleep(2.0 + attempt * 2.0)
+            continue
+        return []
+    return []
+
+
+async def asearch_web(query: str, n: int = 8) -> list[dict]:
+    """Native-async twin of ``search_web``: Brave (if keyed + not cooling) else DDG, SAME cooldown
+    breaker (``_brave_cooldown_until``) shared with the sync path. Byte-identical routing + result shape."""
+    global _brave_cooldown_until
+    key = _brave_key()
+    if key and time.time() >= _brave_cooldown_until:
+        try:
+            return await _abrave(query, n, key)
+        except _BraveUnavailable as exc:
+            _brave_cooldown_until = time.time() + exc.cooldown
+            logger.warning("brave unavailable (%s) → DDG for %.0fs", exc, exc.cooldown)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("brave search failed, falling back to ddg: %s", exc)
+    return await _addg(query, n)
 
 
 _ping = {"t": 0.0, "ok": None, "msg": ""}

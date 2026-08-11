@@ -57,9 +57,12 @@ open.
 
 from __future__ import annotations
 
+import functools
 import logging
 from typing import Optional
 from urllib.parse import urlparse
+
+import anyio
 
 from penumbra.core import cache, http
 from penumbra.core.normalize import Document, keyword_score_filter
@@ -153,6 +156,35 @@ class BaseAPIAdapter:
 
         if docs:
             cache.set_docs(key, docs, ttl=self.cache_ttl)
+        return docs
+
+    async def _aapi_search(self, query, limit, araw_fetch):
+        """Async twin of ``search``'s mechanism (cache round-trip + per-record map + opt-in rank) for a
+        subclass whose egress has gone NATIVE async. ``araw_fetch()`` -> the raw records list (async,
+        off-loop NETWORK). This is a ``_``-prefixed HELPER, NOT ``asearch``, so the base is NOT flagged
+        AsyncSearchCapable; only a subclass that DEFINES ``asearch`` -> calls this is. Off-loop: cache
+        get/set (disk IO). On loop: per-record ``_to_document`` (pure CPU) + ``keyword_score_filter``
+        (BM25). BEHAVIOR-IDENTICAL to ``search`` given identical egress: same cache key (``search_label``),
+        same per-record skip-on-error, same ``rank_locally``, same cache-only-if-docs policy."""
+        key = cache.make_key(self.name, self.search_label, query, limit)
+        cached = await anyio.to_thread.run_sync(cache.get_docs, key)   # disk read OFF loop
+        if cached is not None:
+            return cached
+        raw_items = (await araw_fetch()) or []
+        docs: list[Document] = []
+        for raw in raw_items[:limit]:
+            try:
+                doc = self._to_document(raw)
+            except Exception as exc:  # noqa: BLE001 — one bad record can't sink the rest
+                logger.debug("%s: skipping malformed record: %s", self.name, exc)
+                continue
+            if doc is not None:
+                docs.append(doc)
+        if self.rank_locally:
+            docs = keyword_score_filter(docs, query)
+        if docs:
+            await anyio.to_thread.run_sync(   # disk write OFF loop
+                functools.partial(cache.set_docs, key, docs, ttl=self.cache_ttl))
         return docs
 
     # --------------------------------------------------------------- fetch_url

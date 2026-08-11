@@ -62,6 +62,13 @@ class AIIncidentsAdapter(BaseScrapeAdapter):
     cache_ttl = 43200  # 12h: the catalog accrues slowly (human-curated incidents)
     kind = "lookup"
     domains = ["safety"]
+    explicit_only = (
+        "ai_incidents: named drill only. MEASURED 2026-07-25 over 1986 recorded searches: timed out "
+        "760 times (38% of all searches) and reached the ranked top-k ZERO times, sole-contributed "
+        "ZERO times. It is not broken (a named drill returns real results), it is simply slower than "
+        "the broad deadline while its domain (AI-incident registry) sits outside the queries this eye "
+        "actually serves. Kept fully reachable by name, and excluded_relevant still recommends it when "
+        "a query genuinely matches. Captain's call 2026-07-25.")
     modes = ["STRUCTURE"]
 
     def _raw_fetch(self, query: str, limit: int) -> Optional[Any]:
@@ -70,6 +77,24 @@ class AIIncidentsAdapter(BaseScrapeAdapter):
         body = {"query": _GQL % n, "variables": {"f": flt}}
         return http.post_json(API_URL, json=body,
                               headers={"Origin": ORIGIN, "Referer": ORIGIN + "/"}, timeout=25)
+
+    async def _araw_fetch(self, query: str, limit: int) -> Optional[Any]:
+        """Async twin of _raw_fetch: byte-faithful mirror — same URL, params, headers, timeout, and
+        pure-CPU pre-processing; only the shared-http egress swaps to its async twin
+        (http.post_json -> await http.apost_json)."""
+        n = max(1, min(int(limit), 30))
+        flt = self._filter(query)
+        body = {"query": _GQL % n, "variables": {"f": flt}}
+        return await http.apost_json(API_URL, json=body,
+                                     headers={"Origin": ORIGIN, "Referer": ORIGIN + "/"}, timeout=25)
+
+    async def asearch(self, query: str, limit: int = 10) -> list[Document]:
+        """Native-async twin of search -> AsyncSearchCapable. Shares the base async cache round-trip;
+        egress via _araw_fetch; mapping via the SAME pure-CPU _to_documents (byte-identical to search)."""
+        return await self._asearch_via(
+            query, limit,
+            afetch=lambda: self._araw_fetch(query, limit),
+            abuild=lambda raw: self._to_documents(raw, query, limit))
 
     @staticmethod
     def _filter(query: str) -> dict:

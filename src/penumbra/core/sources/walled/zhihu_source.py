@@ -37,6 +37,12 @@ class ZhihuAdapter:
     needs_credentials = False  # Login happens once via VNC; we just use the session
     explicit_only = "shared CDP Chrome (precious logged-in session)"
     description = "知乎 — long-form PhD methodology discussions (via CDP Chrome session)"
+    # fetch_url reads an answer/article page through the SHARED 9222 CDP pool; under the fetcher's
+    # 30s default cap the adapter gets abandoned mid-flight (URL falls to the generic web fallback,
+    # which hits 知乎's 安全验证 wall) while the orphaned cdp_call occupies the serial pool worker
+    # up to its own 90s — the same wedge-under-load class as yipinsanfendi (observed 2026-07-08).
+    # Budget must CONTAIN cdp_call's 90s default so CDP cleans up before the fetcher bound fires.
+    fetch_timeout = 100.0
 
     def search(self, query: str, limit: int = 10) -> list[Document]:
         key = cache.make_key("zhihu", "search", query, limit)
@@ -56,7 +62,24 @@ class ZhihuAdapter:
             # blocks until at least one result is REALLY present; then a scroll + a generous
             # settle hydrates the rest. A genuine no-result / walled page never produces a title
             # → TimeoutError → the caller's except → uncached [] (retried next call).
-            page.wait_for_selector(".ContentItem-title a, .SearchResult-Card h2 a", timeout=20000)
+            try:
+                page.wait_for_selector(".ContentItem-title a, .SearchResult-Card h2 a", timeout=20000)
+            except Exception:
+                # No result title: genuine-empty OR logged-out (the same silent-false-empty class the
+                # base sources self-heal). zhihu login is QR/SMS, so it CANNOT autofill-relogin like
+                # yipinsanfendi; the best reactive move is to FAIL LOUD (a typed diagnostic) so a []
+                # is never mis-read as 'nothing there', then propagate as before. Failure-path-only:
+                # the success path below is byte-identical, so this cannot break a working search.
+                pu = page.url or ""
+                if ("/signin" in pu or "/login" in pu
+                        or page.query_selector(".SignFlow, .Modal .SignContainer, .signFlow")):
+                    from penumbra.core import diag
+                    diag.note("zhihu.auth_expired", url=url, body=(
+                        "AUTH_EXPIRED: zhihu shared-Chrome session logged out (login wall on search). "
+                        "zhihu login is QR/SMS so it cannot autofill-relogin; needs a VNC re-login on "
+                        "the mini (the 9222 Chrome). The session-warmer also Barks this. NOT "
+                        "authoritative-empty."))
+                raise
             page.evaluate("window.scrollBy(0, 1500)")
             page.wait_for_timeout(1500)
             return page.content()

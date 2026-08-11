@@ -44,7 +44,7 @@ from pathlib import Path
 from typing import Optional
 from urllib.parse import unquote, urlparse
 
-from penumbra.core import _netguard, _optdep, cache
+from penumbra.core import _netguard, _optdep, cache, safeurl
 
 logger = logging.getLogger(__name__)
 
@@ -166,10 +166,20 @@ def _resolve_local(path: str) -> Path:
 
 
 def _window(text: str, start_char: int, max_chars: int) -> tuple[str, bool]:
-    """(chunk, truncated) — mechanical windowing for big docs."""
+    """(chunk, truncated) — mechanical windowing for big docs. When the cut lands mid-stream, snap
+    back to the last newline within a bounded lookback so a page ends on a line boundary (not
+    mid-row/mid-word); returned length stays EXACT so ``start_char += returned_chars`` paginates
+    losslessly. No newline in range -> raw cut (never regresses, never empties)."""
+    _SNAP_LOOKBACK = 400
     start = max(int(start_char or 0), 0)
     n = max(int(max_chars or 0), 1)
-    chunk = text[start:start + n]
+    end = start + n
+    if end < len(text):                          # only snap when actually truncating
+        lo = max(start + 1, end - _SNAP_LOOKBACK)  # start+1 clamp: chunk is NEVER empty (no paging stall)
+        nl = text.rfind("\n", lo, end)
+        if nl != -1:
+            end = nl + 1                          # include the newline; the next page starts fresh
+    chunk = text[start:end]
     return chunk, (start + len(chunk)) < len(text)
 
 
@@ -318,20 +328,38 @@ def _download(url: str, fmt: str) -> tuple[Path, Optional[str], Optional[str]]:
     _blk = _netguard.security_block_reason(url)
     if _blk is not None:
         raise RuntimeError(f"refused SSRF-class url ({_blk}): {url[:120]}")
-    fd, tmp = tempfile.mkstemp(suffix=f".{fmt or 'bin'}", prefix="penumbra-doc-")
-    os.close(fd)
-    with httpx.stream("GET", url, headers={"User-Agent": _UA}, timeout=90,
-                      follow_redirects=True) as r:
-        r.raise_for_status()
-        content_type = r.headers.get("content-type")
-        cd_filename = _cd_filename(r.headers.get("content-disposition"))
-        size = 0
-        with open(tmp, "wb") as f:
-            for chunk in r.iter_bytes():
-                size += len(chunk)
-                if size > _MAX_DOWNLOAD:
-                    raise RuntimeError(f"download exceeds {_MAX_DOWNLOAD // 2**20}MB cap")
-                f.write(chunk)
+    # Follow redirects MANUALLY (follow_redirects=False) and re-validate EVERY hop's Location via
+    # _netguard before connecting (C2 UNTRUSTED_URL close): this URL is agent-controlled and the bytes
+    # come back in-band, so a blind 302 -> 169.254.169.254 was an SSRF oracle. safeurl.walk_redirects_
+    # revalidated centralizes the per-hop guard (one _netguard decision, no forked SSRF logic) and hands
+    # back the FINAL non-3xx response with its body unread so we still STREAM it under _MAX_DOWNLOAD.
+    with httpx.Client(follow_redirects=False, timeout=90,
+                      headers={"User-Agent": _UA}) as client:
+        r = safeurl.walk_redirects_revalidated(client, "GET", url, max_redirects=10)
+        try:
+            r.raise_for_status()
+            content_type = r.headers.get("content-type")
+            cd_filename = _cd_filename(r.headers.get("content-disposition"))
+            # mkstemp only AFTER the final response is validated + 2xx-checked: a refused redirect (raise
+            # above) never leaves an empty temp file behind, unlike the old create-then-stream order.
+            fd, tmp = tempfile.mkstemp(suffix=f".{fmt or 'bin'}", prefix="penumbra-doc-")
+            os.close(fd)
+            try:
+                size = 0
+                with open(tmp, "wb") as f:
+                    for chunk in r.iter_bytes():
+                        size += len(chunk)
+                        if size > _MAX_DOWNLOAD:
+                            raise RuntimeError(f"download exceeds {_MAX_DOWNLOAD // 2**20}MB cap")
+                        f.write(chunk)
+            except BaseException:  # noqa: BLE001 an oversize / stream failure must not orphan the temp file
+                try:
+                    os.remove(tmp)
+                except OSError:
+                    pass
+                raise
+        finally:
+            r.close()
     return Path(tmp), content_type, cd_filename
 
 
@@ -586,12 +614,28 @@ def view_image_urls(urls, max_images: int = 8, max_dim: int = _VIEW_MAX_DIM) -> 
             "Accept": "image/avif,image/webp,image/*,*/*"}
     out: list[dict] = []
     for u in items:
+        # SSRF guard: this fetch takes AGENT-controlled URLs and returns the bytes IN-BAND, so an
+        # unguarded internal URL is an exfil oracle (and reaches the loopback CDP DevTools API on
+        # 127.0.0.1:9222). The document-download path (this file) already guards; this one must too.
+        _blk = _netguard.security_block_reason(u)
+        if _blk:
+            out.append({"url": u, "error": f"refused: {_blk}"})
+            continue
         try:
-            r = httpx.get(u, headers=hdrs, timeout=25, follow_redirects=True)
-            if r.status_code == 200 and len(r.content) > 500:
-                out.append({"url": u, "data": _downscale_png(r.content, max_dim), "format": "png"})
-            else:
-                out.append({"url": u, "error": f"HTTP {r.status_code} ({len(r.content)}B)"})
+            # Follow redirects MANUALLY + re-validate each hop via _netguard (C2 UNTRUSTED_URL close):
+            # follow_redirects=True let a 302 -> 127.0.0.1:9222 reach the loopback CDP DevTools API and
+            # exfil its bytes in-band. safeurl.walk_redirects_revalidated raises refused-SSRF on a blocked
+            # hop (caught below -> error entry); the FINAL non-3xx response's bytes are used as before.
+            with httpx.Client(follow_redirects=False, timeout=25, headers=hdrs) as client:
+                r = safeurl.walk_redirects_revalidated(client, "GET", u, max_redirects=10)
+                try:
+                    r.read()  # buffer the final body (stream=True response) before touching .content
+                    if r.status_code == 200 and len(r.content) > 500:
+                        out.append({"url": u, "data": _downscale_png(r.content, max_dim), "format": "png"})
+                    else:
+                        out.append({"url": u, "error": f"HTTP {r.status_code} ({len(r.content)}B)"})
+                finally:
+                    r.close()
         except Exception as exc:  # noqa: BLE001
             out.append({"url": u, "error": f"{type(exc).__name__}: {str(exc)[:80]}"})
     return {"images": out, "count": sum(1 for o in out if o.get("data"))}

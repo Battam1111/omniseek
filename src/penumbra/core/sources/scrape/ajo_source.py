@@ -11,15 +11,17 @@ Listing: https://academicjobsonline.org/ajo/jobs (the old ajo?joblist URL is 410
 
 from __future__ import annotations
 
+import functools
 import logging
 import re
 from typing import Optional
 from urllib.parse import urlparse
 
+import anyio
 import httpx
 from bs4 import BeautifulSoup
 
-from penumbra.core import cache
+from penumbra.core import cache, diag, http
 from penumbra.core.normalize import Document, keyword_score_filter
 
 logger = logging.getLogger(__name__)
@@ -56,6 +58,8 @@ class AJOAdapter:
             resp.raise_for_status()
         except Exception as exc:  # noqa: BLE001
             logger.warning("ajo: listing fetch failed: %s", exc)
+            st = getattr(getattr(exc, "response", None), "status_code", None)
+            diag.note("ajo.fetch", url=LIST_URL, status=st, exc=exc)
             return []
         soup = BeautifulSoup(resp.text, "lxml")
         out: list[dict] = []
@@ -76,8 +80,58 @@ class AJOAdapter:
         cache.set(key, out, ttl=CACHE_TTL)
         return out
 
+    async def _apositions(self) -> list[dict]:
+        """Async twin of ``_positions`` (S4b): BYTE-FAITHFUL mirror changing ONLY the blocking parts.
+          - the disk cache read + write -> ``anyio.to_thread.run_sync`` (SAME cache key "ajo/positions/v1",
+            so the sync and async paths share one warmed listing entry);
+          - the raw ``httpx.get`` listing fetch -> the shared async leaf ``http.aget_text`` (shared pool +
+            SSRF guard + 30MB cap; the AJO listing HTML is well under the cap). It keeps the sync client's
+            browser UA (a bare non-browser UA risks AJO's anti-bot) + timeout + follow_redirects
+            (client-level), returns the decoded ``.text`` byte-identically to ``_positions``' ``resp.text``,
+            and degrades to None on any failure (already logged + ``diag.note``'d as "http.get"), mirroring
+            ``_positions``' fetch-fail -> [];
+          - the span#j{ID} title / preceding-h3 institution parse (BeautifulSoup + the anchor walk) is pure
+            CPU, byte-identical, stays ON the loop (OUTSIDE any try/except, exactly as ``_positions``).
+        On fetch failure returns [] WITHOUT caching, exactly as ``_positions`` does."""
+        key = cache.make_key("ajo", "positions", "v1")
+        cached = await anyio.to_thread.run_sync(cache.get, key)  # disk read OFF loop
+        if cached is not None:
+            return cached
+        text = await http.aget_text(LIST_URL, headers={"User-Agent": UA},
+                                    timeout=TIMEOUT)  # async network, ON loop
+        if text is None:
+            return []  # egress failed (http.aget_text logged + diag.note'd as "http.get"); mirror -> []
+        soup = BeautifulSoup(text, "lxml")
+        out: list[dict] = []
+        for a in soup.find_all("a", href=_JOB_HREF):
+            jid = _JOB_HREF.match(a["href"]).group(1)
+            title_el = soup.find("span", id=f"j{jid}")
+            title = title_el.get_text(" ", strip=True) if title_el else ""
+            if not title or len(title) < 8:
+                continue  # no real title rendered for this row
+            inst = ""
+            h3 = a.find_previous("h3", class_="x1")
+            if h3 is not None:
+                inst = h3.get_text(" ", strip=True)
+            li = a.find_parent("li")
+            extra = li.get_text(" ", strip=True)[:400] if li is not None else ""
+            out.append({"id": jid, "title": title, "institution": inst, "extra": extra,
+                        "url": f"{BASE}/ajo/jobs/{jid}"})
+        await anyio.to_thread.run_sync(  # disk write OFF loop
+            functools.partial(cache.set, key, out, ttl=CACHE_TTL))
+        return out
+
     def search(self, query: str, limit: int = 10) -> list[Document]:
         docs = [self._to_doc(p) for p in self._positions()]
+        docs = keyword_score_filter(docs, (query or "").strip())
+        return docs[:limit]
+
+    async def asearch(self, query: str, limit: int = 10) -> list[Document]:
+        """Native-async twin of ``search`` -> AsyncSearchCapable. Mirrors ``search`` line-for-line,
+        awaiting ``_apositions`` (disk cache OFF the loop, listing fetch via the async leaf) instead of
+        the sync ``_positions``. The ``_to_doc`` mapping + ``keyword_score_filter`` are pure CPU, so this
+        is behavior-identical to ``search`` (same parse, same BM25 filter, same limit)."""
+        docs = [self._to_doc(p) for p in await self._apositions()]
         docs = keyword_score_filter(docs, (query or "").strip())
         return docs[:limit]
 

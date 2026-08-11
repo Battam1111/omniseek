@@ -24,8 +24,9 @@ is passed through best-effort. The capture is a luxury; the retrieval is the pro
 from __future__ import annotations
 
 import contextvars
+import re
 from typing import Optional
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+from urllib.parse import unquote, urlsplit, urlunsplit
 
 # None = capture OFF (the default, and the broad-search state). A list = capture ON; note()
 # appends to it. The default is shared, but enable() always sets a FRESH list, so two
@@ -40,7 +41,17 @@ _MAX_CAPTURES = 50    # an upper bound on captures per run, so a retry storm can
 _SECRET_KEYS = frozenset({
     "api_key", "apikey", "key", "token", "access_token", "auth", "authorization",
     "password", "passwd", "secret", "client_secret", "session", "sig", "signature",
+    # credential params that ride in the URL query on real adapters (adzuna app_key/app_id,
+    # etc.): both the request URL AND any URL embedded in an exception string must scrub these.
+    "app_key", "app_id", "appkey", "appid", "client_id", "subscription_key",
+    "private_token", "x_api_key", "access_key", "secret_key",
 })
+
+# A URL embedded in FREE TEXT (an httpx exception message is literally
+# "... for url 'https://api.adzuna.com/...?app_key=SECRET'"), so a body/exc field leaks the
+# secret the url field already scrubs. Redact every http(s) URL inside such text through the
+# same _strip_secrets before it enters a capture.
+_URL_IN_TEXT = re.compile(r"https?://[^\s'\"<>]+")
 
 
 def enable() -> None:
@@ -62,20 +73,51 @@ def active() -> bool:
 
 
 def _strip_secrets(url: Optional[str]) -> Optional[str]:
-    """Return ``url`` with any credential-bearing query-string values replaced by ``<redacted>``.
-    Best-effort: a URL that will not parse is returned unchanged (better a raw URL in the trace
-    than a dropped capture). Never raises."""
+    """Return ``url`` with any credential-bearing query-string VALUES replaced by ``<redacted>``,
+    keeping every other byte of the query VERBATIM. LOSSLESS by design: the old parse_qsl +
+    urlencode round-trip force-decoded percent-escapes as UTF-8 (errors=replace) and re-encoded
+    form-style, so a legacy-GBK query (Discuz srchtxt=%B2%A9%BA%F3) was displayed as %EF%BF%BD
+    garbage with + spaces: the diagnostic then LIED about the URL actually sent and misled a
+    2026-07-09 investigation into a nonexistent adapter "encoding bug". A diagnostic must never
+    alter the evidence it reports; only the secret VALUES are substituted. Best-effort: a URL
+    that will not parse is returned unchanged (better a raw URL in the trace than a dropped
+    capture). Never raises."""
     if not url:
         return url
     try:
         parts = urlsplit(url)
         if not parts.query:
             return url
-        pairs = parse_qsl(parts.query, keep_blank_values=True)
-        cleaned = [(k, "<redacted>" if k.lower() in _SECRET_KEYS else v) for k, v in pairs]
-        return urlunsplit(parts._replace(query=urlencode(cleaned)))
+        segs: list[str] = []
+        changed = False
+        for seg in parts.query.split("&"):
+            k, sep, _v = seg.partition("=")
+            try:
+                key = unquote(k).lower()
+            except Exception:  # noqa: BLE001
+                key = k.lower()
+            if sep and key in _SECRET_KEYS:
+                segs.append(f"{k}=<redacted>")
+                changed = True
+            else:
+                segs.append(seg)  # verbatim: no decode/re-encode of non-secret segments
+        if not changed:
+            return url
+        return urlunsplit(parts._replace(query="&".join(segs)))
     except Exception:  # noqa: BLE001
         return url
+
+
+def _redact_text(text: Optional[str]) -> Optional[str]:
+    """Scrub credential query values from any http(s) URL embedded in FREE TEXT (exc/body),
+    reusing _strip_secrets per match. Best-effort: returns the text unchanged on any error, so
+    a redaction bug can never drop a capture. Never raises."""
+    if not text:
+        return text
+    try:
+        return _URL_IN_TEXT.sub(lambda m: _strip_secrets(m.group(0)) or m.group(0), text)
+    except Exception:  # noqa: BLE001
+        return text
 
 
 def note(helper: str, *, url: Optional[str] = None, status: Optional[int] = None,
@@ -102,9 +144,10 @@ def note(helper: str, *, url: Optional[str] = None, status: Optional[int] = None
             except Exception:  # noqa: BLE001 (an object whose __str__ raises is just dropped)
                 text = None
             if text:
+                text = _redact_text(text)
                 rec["body"] = text[:_MAX_BODY] + ("…(truncated)" if len(text) > _MAX_BODY else "")
         if exc is not None:
-            rec["exc"] = f"{type(exc).__name__}: {exc}"[:_MAX_BODY]
+            rec["exc"] = (_redact_text(f"{type(exc).__name__}: {exc}") or "")[:_MAX_BODY]
         trace.append(rec)
     except Exception:  # noqa: BLE001 (capture must never raise into a live retrieval)
         pass

@@ -9,18 +9,19 @@ unlocks them: yt-dlp (already a dep, with a maintained ``slideslive`` extractor)
 resolves a talk's audio stream, which ``penumbra_transcribe`` then feeds to local
 SenseVoice ASR. This adapter is the discovery + resolve layer in front of that.
 
-SCOPE (be honest): this is a URL-RESOLVE adapter, not a full search engine.
-  * Given a SlidesLive talk URL or a bare numeric talk id, it returns that talk's
-    metadata (title / duration / upload date / per-slide chapters / thumbnail) and,
-    crucially, surfaces the audio-stream handle so the agent can TRANSCRIBE it.
-  * If the talk ships SlidesLive captions (often ``en``), they are folded inline,
-    so STRUCTURE mode already has text without paying for ASR.
-  * A free-text keyword query returns ``[]``. A real search-discovery layer
-    (conference virtual-portal scrape -> embed ids) is a deliberate FOLLOW-UP, not
-    shipped here: the portals are JS-rendered, per-conference, and frequently
-    login-gated, which is its own unit. The honest contract: the agent finds the
-    SlidesLive URL (from a paper page, a conference schedule, or web search) and
-    hands it here; the eye resolves + transcribes it.
+SCOPE: two entry points, one for discovery and one for depth.
+  * KEYWORD SEARCH (discovery): a free-text query hits SlidesLive's PUBLIC, unauthenticated
+    global library search (``/search/presentations``, server-rendered HTML, 20 results/page,
+    ``&page=N`` pagination; verified 2026-07-14) and returns LIGHTWEIGHT hits (talk id / url /
+    title / thumbnail / duration badge) in server-relevance order. The agent then drills a
+    specific hit for full metadata (penumbra_read / the URL-resolve path below) or transcribes it
+    (penumbra_transcribe). This indexes the SlidesLive LIBRARY; talks that live only behind a
+    conference virtual-portal and never publish to that library still need a URL handed in.
+  * URL / ID RESOLVE (depth): given a SlidesLive talk URL or a bare numeric talk id, it
+    returns that talk's full metadata (title / duration / upload date / per-slide chapters /
+    thumbnail) and, crucially, surfaces the audio-stream handle so the agent can TRANSCRIBE it.
+    If the talk ships SlidesLive captions (often ``en``), they are folded inline, so STRUCTURE
+    mode already has text without paying for ASR.
 
 yt-dlp valid-url shape (verified 2026-06-17, yt-dlp 2026.06.09):
     https?://slideslive.com/(embed/(presentation/)?)?<numeric-id>
@@ -44,10 +45,8 @@ import re
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-import yt_dlp
-
 from penumbra.core.normalize import Document, mk_signal
-from penumbra.core.sources.scrape._base import BaseScrapeAdapter
+from penumbra.core.sources.scrape._base import BaseScrapeAdapter, _SCRAPE_UA
 
 logger = logging.getLogger(__name__)
 
@@ -67,12 +66,22 @@ _URL_RE = re.compile(
 )
 _BARE_ID_RE = re.compile(r"^\d{4,}$")  # >=4 digits: a SlidesLive id, not a stray small int
 
+# Public, unauthenticated global LIBRARY search (verified 2026-07-14): a server-rendered HTML
+# page whose <turbo-frame id="search_presentations_results"> holds up to 20 result cards, with
+# ``&page=N`` pagination. Each card carries a canonical talk anchor (``?ref=search-presentations``),
+# an <img> thumbnail (+ alt title), an <h4> title anchor, and a MM:SS duration badge beside the thumb.
+_SEARCH_URL = "https://slideslive.com/search/presentations?query={query}&page={page}"
+_RESULTS_PER_PAGE = 20
+# A result-card talk link: slideslive.com/<numeric-id>/<slug>?ref=search-presentations.
+_SEARCH_HREF_RE = re.compile(r"slideslive\.com/(\d+)/[^\"?]+\?ref=search-presentations")
+_DURATION_RE = re.compile(r"^\d{1,2}:\d{2}(?::\d{2})?$")  # a talk-length badge (MM:SS or H:MM:SS)
+
 
 def _talk_id(s: str) -> Optional[str]:
     """Return a SlidesLive numeric talk id IFF ``s`` is a SlidesLive talk URL or a
     bare numeric id on its own (a single-token reference, never a keyword query).
-    A query with whitespace, or any non-SlidesLive token, returns None -> [] (the
-    "search-discovery is a follow-up" contract; see module docstring)."""
+    A query with whitespace, or any non-SlidesLive token, returns None: that routes
+    to the keyword LIBRARY search instead of the URL-resolve path (see _raw_fetch)."""
     s = (s or "").strip()
     if not s or any(c.isspace() for c in s):
         return None
@@ -88,13 +97,57 @@ def _canonical_url(talk_id: str) -> str:
     return f"https://slideslive.com/{talk_id}"
 
 
+def _parse_search_fragment(html: str) -> list[dict]:
+    """Pure parse (NO network, golden-testable) of a SlidesLive library-search page/fragment
+    into result dicts ``{id, url, title, thumbnail?, duration?}`` in server-relevance order,
+    deduped by id. Each talk surfaces TWICE per card (a thumbnail anchor + an <h4> title anchor
+    sharing one ``?ref=search-presentations`` href); we merge them by id, taking the title from
+    whichever anchor carries text (or the thumbnail's alt), the thumbnail from the card's <img>,
+    and the MM:SS badge sitting beside the thumbnail. An empty page (no result cards) yields
+    ``[]`` -- the pagination stop signal."""
+    from bs4 import BeautifulSoup
+    soup = BeautifulSoup(html, "html.parser")
+    # Narrow to the results turbo-frame when present so unrelated links can never leak in; fall
+    # back to the whole document (a bare inner fragment has no wrapping <turbo-frame>).
+    root = soup.find("turbo-frame", id="search_presentations_results") or soup
+    results: dict[str, dict] = {}
+    order: list[str] = []
+    for a in root.find_all("a", href=_SEARCH_HREF_RE):
+        m = _SEARCH_HREF_RE.search(a.get("href") or "")
+        if not m:
+            continue
+        tid = m.group(1)
+        rec = results.get(tid)
+        if rec is None:
+            rec = {"id": tid, "url": (a.get("href") or "").split("?", 1)[0]}
+            results[tid] = rec
+            order.append(tid)
+        text = re.sub(r"\s+", " ", a.get_text(" ", strip=True)).strip()
+        if text and not rec.get("title"):
+            rec["title"] = text
+        img = a.find("img")
+        if img is not None:
+            src = img.get("src")
+            if src and not rec.get("thumbnail"):
+                rec["thumbnail"] = src
+            alt = re.sub(r"\s+", " ", img.get("alt") or "").strip()
+            if alt and not rec.get("title"):
+                rec["title"] = alt
+            parent = a.parent  # the thumbnail anchor's box also holds the duration badge
+            if parent is not None and not rec.get("duration"):
+                badge = parent.find(string=_DURATION_RE)
+                if badge:
+                    rec["duration"] = badge.strip()
+    return [results[t] for t in order]
+
+
 class SlidesLiveTalksAdapter(BaseScrapeAdapter):
     name = "slideslive_talks"
     needs_credentials = False
     description = (
         "SlidesLive: recorded conference talks (NeurIPS/ICML/ICLR/ACL) absent from "
-        "YouTube and untranscribed; pass a slideslive.com talk URL or numeric id to "
-        "resolve its audio for TRANSCRIBE (keyword search-discovery is a follow-up)"
+        "YouTube and untranscribed. Keyword-search the SlidesLive library for talks, or "
+        "pass a talk URL / numeric id to resolve its audio for TRANSCRIBE (local ASR)"
     )
     cache_ttl = 6 * 3600  # talk metadata is static; cache 6h (yt-dlp resolve is not free)
 
@@ -104,16 +157,22 @@ class SlidesLiveTalksAdapter(BaseScrapeAdapter):
     modes = ["TRANSCRIBE", "STRUCTURE"]
 
     # --------------------------------------------------------------- hooks
-    def _raw_fetch(self, query: str, limit: int) -> Optional[dict]:
-        """Resolve query -> talk id -> yt-dlp info dict. A non-URL/non-id keyword
-        query returns None (search-discovery is a deliberate follow-up, see module
-        docstring), which the base turns into []."""
+    def _raw_fetch(self, query: str, limit: int) -> Optional[Any]:
+        """Route the query. A SlidesLive URL / bare numeric id -> the yt-dlp resolve path (full
+        metadata for that one talk, a dict). Any other non-empty keyword -> the PUBLIC library
+        search (a list of lightweight hit dicts). Empty query -> None. Returning None ⇒ [] (the
+        adapter contract); an empty search list is collapsed to None so no miss is cached."""
         talk_id = _talk_id(query)
-        if not talk_id:
-            return None
-        return self._extract_info(_canonical_url(talk_id))
+        if talk_id:
+            return self._extract_info(_canonical_url(talk_id))
+        if query and query.strip():
+            return self._search_presentations(query, limit) or None
+        return None
 
     def _to_documents(self, raw: Any, query: str, limit: int) -> list[Document]:
+        if isinstance(raw, list):  # keyword-search hits -> lightweight docs (drill the URL for depth)
+            docs = [self._search_result_to_document(r) for r in raw[:limit]]
+            return [d for d in docs if d is not None]
         if not isinstance(raw, dict):
             return []
         doc = self._info_to_document(raw)
@@ -145,12 +204,88 @@ class SlidesLiveTalksAdapter(BaseScrapeAdapter):
         """yt-dlp metadata-only resolve of one SlidesLive talk. None on any failure
         (network, the occasional 'Unable to extract player token' edge case, etc.) ->
         the base turns it into [] (the adapter contract)."""
+        import yt_dlp  # lazy: heavy lib off the startup import path (this adapter self-registers at boot)
         try:
             with yt_dlp.YoutubeDL(_YDL_OPTS) as ydl:
                 return ydl.extract_info(url, download=False)
         except Exception as exc:  # noqa: BLE001 (failure -> None -> [], the adapter contract)
             logger.warning("slideslive resolve failed for %s: %s", url, exc)
             return None
+
+    @staticmethod
+    def _search_presentations(query: str, limit: int) -> list[dict]:
+        """Page through the PUBLIC SlidesLive library search (``/search/presentations``), parse
+        each 20-result page, and return up to ``limit`` result dicts (deduped by id, in
+        server-relevance order). Stops at ``limit`` or the first empty page; a page fetch failure
+        just ends the walk (returning what we have). Routes through the shared ``http`` helper so
+        the search inherits the SSRF guard + pooled client + /eye-fix diagnostic tap; a browser UA
+        is sent because SlidesLive gates the penumbra default UA."""
+        from urllib.parse import quote
+        from penumbra.core import http
+        pages = max(1, (limit + _RESULTS_PER_PAGE - 1) // _RESULTS_PER_PAGE)
+        results: list[dict] = []
+        seen: set[str] = set()
+        for page in range(1, pages + 1):
+            url = _SEARCH_URL.format(query=quote(query), page=page)
+            html = http.get_text(url, timeout=20,
+                                  headers={"User-Agent": _SCRAPE_UA, "Accept": "text/html"})
+            if not html:
+                break  # fetch failed (None) or empty body -> stop; return what we have so far
+            page_items = _parse_search_fragment(html)
+            if not page_items:
+                break  # first empty page -> no more library results
+            for item in page_items:
+                if item["id"] in seen:
+                    continue
+                seen.add(item["id"])
+                results.append(item)
+                if len(results) >= limit:
+                    return results
+        return results
+
+    @staticmethod
+    def _search_result_to_document(r: dict) -> Optional[Document]:
+        """Map ONE lightweight search hit ``{id, url, title, thumbnail?, duration?}`` to a
+        Document. Deliberately shallow (no yt-dlp resolve, so no audio/caption/chapter
+        metadata): the agent drills a specific hit via penumbra_read / the URL-resolve path for full
+        metadata, or penumbra_transcribe for a transcript. ``None`` if the hit carries no id."""
+        talk_id = str(r.get("id") or "")
+        if not talk_id:
+            return None
+        url = r.get("url") or _canonical_url(talk_id)
+        title = r.get("title") or "(untitled talk)"
+        duration = r.get("duration")
+
+        media: list[str] = []
+        thumb = r.get("thumbnail")
+        if isinstance(thumb, str) and thumb.startswith("http"):
+            media.append(thumb)
+
+        lines = [f"Recorded conference talk ({duration})." if duration
+                 else "Recorded conference talk."]
+        lines.append(
+            "SlidesLive library search hit (lightweight). Pass this talk's URL to penumbra_read for "
+            "full metadata (slide outline / captions / audio), or to penumbra_transcribe to resolve "
+            "its audio and transcribe it with local ASR (the TRANSCRIBE unlock)."
+        )
+        lines.append(f"Talk page: {url}")
+
+        return Document(
+            source="slideslive_talks",
+            source_id=talk_id,
+            url=url,
+            title=title,
+            content="\n\n".join(lines),
+            tags=["talk", "conference"],
+            media=media,
+            metadata={
+                "talk_id": talk_id,
+                "duration": duration,   # the search badge string (MM:SS); resolve the URL for seconds
+                "thumbnail": thumb,
+                "search_result": True,  # lightweight hit: drill the URL for full metadata
+                "transcribe_url": url,  # the durable handle to pass to penumbra_transcribe
+            },
+        )
 
     @staticmethod
     def _info_to_document(info: dict) -> Optional[Document]:

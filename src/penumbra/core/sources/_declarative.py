@@ -34,6 +34,12 @@ What a row declares (see ``sources.json`` for the live rows + per-key notes)::
       "url_host":          "ycombinator.com", # substring test for fetch_url ownership
       "facets":            {"kind": "stream", "domains": ["news"]},
       "explicit_only":     false,             # True | reason-string | absent
+      "auth_prefix":       "",                # prepended to the key, e.g. "Bearer " (RFC-style auth)
+      "auth_header":       "",                # header NAME to send the key under; the VALUE is read
+                                             #   from ~/.penumbra/credentials/<name>.json -> api_key.
+                                             #   Absent file = keyless, unchanged behaviour.
+      "no_live_probe":     false,             # True | reason-string | absent: skip the health
+                                             #   probe when probing SPENDS the quota it checks
       "needs_credentials": false
     }
 
@@ -90,13 +96,16 @@ every row — same two-part shape as ``rss_bundles_source.py`` + ``scrape/_rss.p
 
 from __future__ import annotations
 
+import functools
 import json
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
-from penumbra.core import cache, http
+import anyio
+
+from penumbra.core import cache, diag, http
 from penumbra.core.normalize import Document, jsonsafe, keyword_score_filter, mk_signal
 
 logger = logging.getLogger(__name__)
@@ -266,6 +275,9 @@ class DeclarativeAPIAdapter:
         url_host: Optional[str] = None,
         facets: Optional[dict] = None,
         explicit_only: Any = False,
+        no_live_probe: Any = False,
+        auth_header: str = "",
+        auth_prefix: str = "",
         needs_credentials: bool = False,
         limit_cap: int = _DEFAULT_LIMIT_CAP,
         timeout: int = http.DEFAULT_TIMEOUT,
@@ -302,6 +314,10 @@ class DeclarativeAPIAdapter:
         self.cache_ttl = cache_ttl
         self.url_host = (url_host or "").lower()
         self.explicit_only = explicit_only  # True | reason string | False/absent
+        self.no_live_probe = no_live_probe  # True | reason string | False/absent
+        self.auth_header = auth_header or ""  # header NAME; value comes from the credentials file
+        self.auth_prefix = auth_prefix or ""  # e.g. "Bearer " for an Authorization header
+        self._auth_hdrs: Optional[dict] = None   # lazily resolved once per process
         self.needs_credentials = bool(needs_credentials)
         self.limit_cap = limit_cap
         self.timeout = timeout
@@ -358,9 +374,33 @@ class DeclarativeAPIAdapter:
         result). None on any failure (the source contract; mcp transport errors are caught here)."""
         if self.transport == "mcp":
             return self._mcp_fetch(params)
+        hdrs = self._auth_headers()
         if self.method == "POST":
-            return http.post_json(self.endpoint, json=params, timeout=self.timeout)
-        return http.get_json(self.endpoint, params=params, timeout=self.timeout)
+            return http.post_json(self.endpoint, json=params, timeout=self.timeout,
+                                  **({"headers": hdrs} if hdrs else {}))
+        return http.get_json(self.endpoint, params=params, timeout=self.timeout,
+                             **({"headers": hdrs} if hdrs else {}))
+
+    def _auth_headers(self) -> Optional[dict]:
+        """{header_name: key} from ~/.penumbra/credentials/<name>.json, or None when keyless.
+
+        The row names the HEADER (``auth_header``); the SECRET stays in the credentials file, which is
+        the house pattern for every keyed source (adzuna / core / semantic_scholar / ... all ship a
+        <name>.json.template beside it) and keeps the key out of sources.json, a file the eye's
+        generalization path publishes. Absent / unreadable / empty file = keyless, i.e. EXACTLY the
+        previous behaviour, so a row can carry auth_header before any key exists and simply upgrades
+        itself the moment the file appears. Resolved once per process (a restart picks up a new key)."""
+        if not self.auth_header:
+            return None
+        if self._auth_hdrs is None:
+            key = ""
+            try:
+                path = Path.home() / ".penumbra" / "credentials" / f"{self.name}.json"
+                key = str((json.loads(path.read_text(encoding="utf-8")) or {}).get("api_key") or "")
+            except Exception:  # noqa: BLE001 — no key is a normal state, never an error
+                key = ""
+            self._auth_hdrs = {self.auth_header: f"{self.auth_prefix}{key}"} if key else {}
+        return self._auth_hdrs or None
 
     def _mcp_fetch(self, arguments: dict) -> Any:
         """One ``tools/call`` on the wrapped MCP server -> the parsed tool result object. The
@@ -383,16 +423,47 @@ class DeclarativeAPIAdapter:
                          self.name, self.tool, exc)
             return None
 
-    def _results_from(self, data: Any) -> list[dict]:
-        """Walk ``results_path`` out of a response object -> the list of raw item dicts."""
+    async def _afetch_response(self, params: dict) -> Any:
+        """Async egress twin of ``_fetch_response`` -> the raw response OBJECT (an http JSON body, or an
+        mcp tool result), None on any failure. Off-loop discipline: the async NETWORK wait stays ON the
+        loop (await http.aget_json / apost_json use epoll, no held thread); the SYNC mcp transport is
+        pushed OFF the loop via to_thread (a native-async mcp client is a later slice). The SSRF
+        getaddrinfo inside the async leaf (http._arequest_capped + AsyncSSRFGuardTransport) is moved off
+        the loop by S4b Part 1, so this whole path holds no blocking syscall on the loop."""
+        if self.transport == "mcp":
+            return await anyio.to_thread.run_sync(self._mcp_fetch, params)  # sync MCP off-loop
+        if self.method == "POST":
+            return await http.apost_json(self.endpoint, json=params, timeout=self.timeout)
+        return await http.aget_json(self.endpoint, params=params, timeout=self.timeout)
+
+    def _results_from(self, data: Any, *, classify: bool = False) -> list[dict]:
+        """Walk ``results_path`` out of a response object -> the list of raw item dicts.
+
+        ``classify=True`` (the ``search`` parse path, Wave 3 / 1.16) adds FOUR-STATE drift detection
+        so a schema drift stops masquerading as an authoritative empty day. It emits ONE ``diag.note``
+        (a no-op unless an /eye-fix drill armed capture, so the broad fan-out pays nothing) when:
+          - the ``results_path`` is ABSENT (``_dig`` returned None, whether a segment was missing or a
+            JSON null sat at the path: both are shape drift) -> "results_path <p> absent"; or
+          - the value at the path is a NON-list, NON-dict scalar -> "resolved to <type>, expected list".
+        A reached-but-empty LIST stays SILENT (authoritative empty is a legitimate quiet day), and a
+        dict is still tolerated as a ``{id: {...}}`` map -> values (the historical behavior). The hot
+        success path is unchanged either way: the note f-strings build only on the drift branches.
+        The default (``classify=False``: the health probe and ``_fetch_results``) stays byte-silent."""
         if data is None:
             return []
         results = _dig(data, self.results_path)
         if results is None:
+            if classify:
+                diag.note(f"{self.name}.parse",
+                          body=f"results_path {self.results_path!r} absent from response (schema drift?)")
             return []
         if isinstance(results, dict):  # tolerate {"id": {...}, ...} maps -> values
             results = list(results.values())
         if not isinstance(results, list):
+            if classify:
+                diag.note(f"{self.name}.parse",
+                          body=(f"results_path {self.results_path!r} resolved to "
+                                f"{type(results).__name__}, expected list"))
             return []
         return [r for r in results if isinstance(r, dict)]
 
@@ -463,14 +534,16 @@ class DeclarativeAPIAdapter:
 
     # -- SourceAdapter protocol ------------------------------------------------
 
-    def search(self, query: str, limit: int = 10) -> list[Document]:
-        key = cache.make_key(self.name, "search", query, limit)
-        cached = cache.get_docs(key)
-        if cached is not None:
-            return cached
+    def _assemble_docs(self, response: Any, query: str, limit: int) -> list[Document]:
+        """PURE assembly: a raw response -> the ranked ``list[Document]``. No cache, no egress.
 
-        response = self._fetch_response(self._render_params(query or "", limit))
-        items = self._results_from(response)
+        Extracted VERBATIM from ``search``'s former body so BOTH the sync ``search`` and the native
+        async ``asearch`` share it: a duplicated parse/map/rank would DRIFT (the parity golden guards
+        this). Runs entirely on the CPU (safe to keep on the event loop in the async path)."""
+        # classify=True: the parse step notes a missing / wrong-shape results_path (1.16) so a schema
+        # drift is not silently indistinguishable from an authoritative empty day (no-op unless a drill
+        # armed diag capture).
+        items = self._results_from(response, classify=True)
         docs: list[Document] = []
         if items:
             if not self.post_filter:
@@ -484,6 +557,12 @@ class DeclarativeAPIAdapter:
                         docs.append(doc)
                 except Exception as exc:  # noqa: BLE001: one bad row never sinks the batch
                     logger.debug("declarative[%s]: skipping malformed item: %s", self.name, exc)
+            # Item-level fourth state (1.16): the list had items but the field_map extracted NONE (no
+            # title/url from any row = field_map drift). The docs that DID parse still return above;
+            # only an ALL-fail is noteworthy. Silent when at least one parsed. No-op unless armed.
+            if not docs:
+                diag.note(f"{self.name}.parse",
+                          body=f"0/{len(items)} items parsed (field_map drift? no title/url extractable)")
         elif (self.transport == "mcp" and self.text_fallback
               and isinstance(response, dict) and isinstance(response.get("_text_blocks"), list)):
             # Prose-only tool result + the row opted into text_fallback: synthesize docs. This is
@@ -499,7 +578,59 @@ class DeclarativeAPIAdapter:
         if self.post_filter:
             # The ONE shared scorer: filter + rank (title 3x), term-less query keeps order.
             docs = keyword_score_filter(docs, (query or "").strip())[:limit]
-        cache.set_docs(key, docs, ttl=self.cache_ttl)
+        return docs
+
+    def _cache_decision(self, response: Any, docs: list[Document]) -> tuple[int, bool]:
+        """The ``(ttl, authoritative_empty)`` the cache write uses, computed EXACTLY as ``search``
+        did (shared by search + asearch so the write policy can never drift between the two paths).
+
+        A failure-empty (egress returned None) must NOT pin [] for the full cache_ttl: that blinds
+        a later /eye-fix drill (cache HIT -> zero egress -> empty diag) and masks the wall from real
+        queries, exactly the RSS all-feeds-failed case fixed in _rss.py. Only an egress FAILURE gets
+        the short floor; a reached-but-empty response (genuine miss / unmappable mcp result) keeps
+        the full TTL because it is authoritative, not transient. context7's 24h TTL made this acute.
+        authoritative_empty vouches the reached-but-empty (not failed) case so the cache.set FLOOR
+        keeps its full cache_ttl (a genuine miss is authoritative, not transient); a failure-empty
+        (egress None) gets the short floor. Without this, the FLOOR would cap even the genuine miss."""
+        failed = response is None
+        ttl = self.cache_ttl if (docs or not failed) else min(300, self.cache_ttl)
+        return ttl, (not failed)
+
+    def search(self, query: str, limit: int = 10) -> list[Document]:
+        key = cache.make_key(self.name, "search", query, limit)
+        cached = cache.get_docs(key)
+        if cached is not None:
+            return cached
+
+        response = self._fetch_response(self._render_params(query or "", limit))
+        docs = self._assemble_docs(response, query, limit)
+        ttl, auth = self._cache_decision(response, docs)
+        cache.set_docs(key, docs, ttl=ttl, authoritative_empty=auth)
+        return docs
+
+    async def asearch(self, query: str, limit: int = 10) -> list[Document]:
+        """Native-async twin of ``search`` (S4b): the S4a fan-out awaits this DIRECTLY (no thread), so a
+        declarative source's dominant NETWORK wait costs a COROUTINE, not a held pool thread. This makes
+        EVERY declarative row AsyncSearchCapable, routing it to the fetcher's native dispatch branch.
+
+        OFF-LOOP DISCIPLINE (the load-bearing rule): a native async method runs ON the loop, so every
+        BLOCKING syscall must go OFF it or one slow call freezes every coroutine.
+          - the disk cache read + write -> anyio.to_thread.run_sync (get_docs / set_docs do file IO);
+          - the SSRF getaddrinfo inside the async egress leaf -> moved off-loop by S4b Part 1;
+          - the async NETWORK egress stays ON the loop (await _afetch_response, epoll not a thread);
+          - PURE CPU (_assemble_docs: parse/map/BM25) + the (ttl, auth) decision stay ON the loop (fast).
+        The fresh / cache_only / refresh_margin contextvars propagate into the worker thread via anyio.
+        BEHAVIOR-IDENTICAL to search: the SHARED _assemble_docs + _cache_decision guarantee no drift."""
+        key = cache.make_key(self.name, "search", query, limit)
+        cached = await anyio.to_thread.run_sync(cache.get_docs, key)  # disk read OFF loop
+        if cached is not None:
+            return cached
+
+        response = await self._afetch_response(self._render_params(query or "", limit))  # async network
+        docs = self._assemble_docs(response, query, limit)  # pure, on loop
+        ttl, auth = self._cache_decision(response, docs)
+        await anyio.to_thread.run_sync(  # disk write OFF loop
+            functools.partial(cache.set_docs, key, docs, ttl=ttl, authoritative_empty=auth))
         return docs
 
     def fetch_url(self, url: str) -> Optional[Document]:
@@ -516,12 +647,33 @@ class DeclarativeAPIAdapter:
         return None
 
     def health_check(self) -> tuple[bool, str]:
-        """Probe with a tiny live request; healthy if the results list is reachable."""
+        """Probe with a tiny live request; healthy if the results list is reachable.
+
+        Probes ``_fetch_response`` (not ``_fetch_results``) so a DOWN upstream is caught: the egress
+        contract is failure->None WITHOUT raising, so the old ``_fetch_results`` path turned a 403 /
+        404 / 500 / timeout into an empty list and reported GREEN, making the entire declarative family
+        (the largest source family) invisible to the watchdog. None response = down; a reached
+        response with an empty result list for a junk query is still "endpoint + shape OK"."""
+        # A probe that SPENDS the thing it is checking must not run. Some rows are metered so tightly
+        # that health-probing them is self-destructive: context7 allows 200 requests per calendar MONTH
+        # per IP, while the watchdog probes daily (~30/mo) plus every 6h (~120/mo), i.e. ~150 of the 200
+        # burned answering "are you up?". The source then reports DOWN for a quota exhaustion the eye
+        # itself caused. Same reasoning the health run already uses to skip RETIRED sources ("the retire
+        # IS the decision; probing it is noise"), except here it is worse than noise.
+        # Reporting True keeps the source USABLE (a False would park it in watchdog_down and hide it);
+        # the message is explicit that nothing was verified, mirroring the "degraded, not probed this
+        # cycle" semantics the shared-upstream probes adopted 2026-07-25. Breakage still surfaces at USE
+        # time: a named drill emits the per-source /eye-fix diagnostic, and these rows are named-only.
+        if getattr(self, "no_live_probe", False):
+            _why = self.no_live_probe if isinstance(self.no_live_probe, str) else "quota too scarce to probe"
+            return True, f"not probed (would spend the metered quota): {_why}"
         try:
-            items = self._fetch_results(self._render_params("test", 1))
+            response = self._fetch_response(self._render_params("test", 1))
         except Exception as exc:  # noqa: BLE001
             return False, f"{type(exc).__name__}: {exc}"
-        # An empty list for a junk query is still "endpoint + shape OK".
+        if response is None:
+            return False, "endpoint unreachable / non-2xx (egress returned None)"
+        items = self._results_from(response)
         return True, f"OK (endpoint reachable; {len(items)} result(s) for probe)"
 
 
@@ -543,6 +695,9 @@ def _row_to_adapter(row: dict) -> DeclarativeAPIAdapter:
         url_host=row.get("url_host"),
         facets=row.get("facets"),
         explicit_only=row.get("explicit_only", False),
+        no_live_probe=row.get("no_live_probe", False),
+        auth_header=row.get("auth_header", ""),
+        auth_prefix=row.get("auth_prefix", ""),
         needs_credentials=row.get("needs_credentials", False),
         limit_cap=row.get("limit_cap", _DEFAULT_LIMIT_CAP),
         timeout=row.get("timeout", http.DEFAULT_TIMEOUT),

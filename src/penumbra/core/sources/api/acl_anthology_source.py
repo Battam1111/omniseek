@@ -16,6 +16,7 @@ Supported acronyms: acl, emnlp, naacl, eacl, aacl, coling, tacl, cl, conll.
 
 from __future__ import annotations
 
+import functools
 import logging
 import re
 import xml.etree.ElementTree as ET
@@ -23,9 +24,10 @@ from datetime import datetime, timezone
 from typing import Optional
 from urllib.parse import urlparse
 
+import anyio
 import httpx
 
-from penumbra.core import cache
+from penumbra.core import cache, diag, http
 from penumbra.core.normalize import Document, keyword_score_filter
 
 logger = logging.getLogger(__name__)
@@ -80,6 +82,8 @@ class ACLAnthologyAdapter:
             root = ET.fromstring(resp.content)
         except Exception as exc:  # noqa: BLE001
             logger.warning("acl_anthology: fetch/parse failed for %s: %s", coll, exc)
+            st = getattr(getattr(exc, "response", None), "status_code", None)
+            diag.note("acl_anthology.fetch", url=f"{RAW}/{coll}.xml", status=st, exc=exc)
             return []
         year = coll.split(".", 1)[0]
         papers: list[dict] = []
@@ -111,11 +115,78 @@ class ACLAnthologyAdapter:
         cache.set(key, papers, ttl=CACHE_TTL)
         return papers
 
+    async def _apapers(self, coll: str) -> list[dict]:
+        """Async twin of ``_papers`` (S4b): BYTE-FAITHFUL mirror changing ONLY the blocking parts.
+          - the disk cache read + write -> ``anyio.to_thread.run_sync`` (SAME cache key, so sync +
+            async share one warmed collection entry);
+          - the raw ``httpx.get`` XML fetch -> the shared async leaf ``http.aget`` (shared pool +
+            SSRF guard + 30MB cap). ``http.aget`` returns the Response so ``resp.content`` (BYTES)
+            stays byte-identical to ``_papers`` — ``aget_text`` would hand ``ET.fromstring`` a str,
+            which raises on the XML's ``encoding=`` declaration; and it degrades to None on failure
+            (already logged + ``diag.note``'d as "http.get"), mirroring ``_papers``' fetch-fail -> [];
+          - the XML parse (ET + the volume/paper walk) is pure CPU, byte-identical, stays ON the loop.
+        A fetch failure returns [] WITHOUT caching, exactly as ``_papers`` does."""
+        key = cache.make_key("acl_anthology", "coll", coll)
+        cached = await anyio.to_thread.run_sync(cache.get, key)  # disk read OFF loop
+        if cached is not None:
+            return cached
+        resp = await http.aget(f"{RAW}/{coll}.xml", timeout=TIMEOUT)  # async network, ON loop
+        if resp is None:
+            return []  # egress failed (http.aget logged + diag.note'd); mirror _papers' fetch-fail -> []
+        try:
+            root = ET.fromstring(resp.content)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("acl_anthology: parse failed for %s: %s", coll, exc)
+            diag.note("acl_anthology.fetch", url=f"{RAW}/{coll}.xml", exc=exc)
+            return []
+        year = coll.split(".", 1)[0]
+        papers: list[dict] = []
+        for vol in root.iter("volume"):
+            vol_id = vol.get("id") or ""
+            for p in vol.iter("paper"):
+                title = _text(p.find("title"))
+                if not title or len(title) < 4:
+                    continue  # frontmatter / malformed
+                authors = []
+                for a in p.findall("author"):
+                    nm = " ".join(x for x in (_text(a.find("first")), _text(a.find("last"))) if x)
+                    if not nm:
+                        nm = _text(a)
+                    if nm:
+                        authors.append(nm)
+                anth_id = _text(p.find("url")) or ""
+                url = (f"https://aclanthology.org/{anth_id}/"
+                       if anth_id and not anth_id.startswith("http") else anth_id)
+                papers.append({
+                    "title": title,
+                    "authors": authors[:8],
+                    "abstract": _text(p.find("abstract"))[:1200],
+                    "url": url,
+                    "volume": vol_id,
+                    "year": year,
+                    "id": anth_id or f"{coll}-{vol_id}-{p.get('id', '?')}",
+                })
+        await anyio.to_thread.run_sync(  # disk write OFF loop
+            functools.partial(cache.set, key, papers, ttl=CACHE_TTL))
+        return papers
+
     def search(self, query: str, limit: int = 10) -> list[Document]:
         terms, coll = _parse_collection(query)
         if not coll:
             return []  # no volume token: not this source's job (see description)
         docs = [self._to_doc(p, coll) for p in self._papers(coll)]
+        docs = keyword_score_filter(docs, terms)
+        return docs[:limit]
+
+    async def asearch(self, query: str, limit: int = 10) -> list[Document]:
+        """Native-async twin of ``search`` -> AsyncSearchCapable. Mirrors ``search`` line-for-line,
+        awaiting ``_apapers`` (disk cache OFF the loop, XML fetch via the async leaf) instead of the
+        sync ``_papers``. The ``_to_doc`` mapping + ``keyword_score_filter`` are pure CPU, so this is
+        behavior-identical to ``search`` (same collection parse, same BM25 filter, same limit)."""
+        terms, coll = _parse_collection(query)
+        if not coll:
+            return []  # no volume token: not this source's job (see description)
+        docs = [self._to_doc(p, coll) for p in await self._apapers(coll)]
         docs = keyword_score_filter(docs, terms)
         return docs[:limit]
 

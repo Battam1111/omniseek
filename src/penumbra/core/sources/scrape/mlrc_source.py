@@ -32,7 +32,7 @@ from urllib.parse import urlparse
 
 import httpx
 
-from penumbra.core import auth
+from penumbra.core import auth, http
 from penumbra.core.normalize import Document, jsonsafe
 from penumbra.core.sources.scrape._base import BaseScrapeAdapter
 
@@ -84,6 +84,28 @@ class MLRCAdapter(BaseScrapeAdapter):
             logger.warning("OpenReview MLRC API call failed: %s", exc)
             return None
 
+    async def _aapi_get(self, path: str, params: dict) -> Optional[dict]:
+        """Async twin of ``_api_get`` (S4b): SAME optional-login-then-GET logic (a missing/broken login
+        still egresses to the public endpoint), only the raw ``httpx`` egress swaps for the shared async
+        leaves — the login ``httpx.post`` → ``await http.apost_json`` and the data ``httpx.get`` →
+        ``await http.aget_json`` (shared pool + SSRF guard + cache_only + 30MB cap + failure→None, each
+        already logged + diag.note'd under its own label). Mirrors the sibling openreview_source._aapi_get."""
+        # Use openreview creds if available (better rate limit)
+        creds = auth.load("openreview")
+        headers = {}
+        if creds and creds.get("username") and creds.get("password"):
+            login = await http.apost_json(
+                f"{API_BASE}/login",
+                json={"id": creds["username"], "password": creds["password"]},
+                timeout=DEFAULT_TIMEOUT,
+            )
+            token = login.get("token") if login else None  # login failed → apost_json→None → public GET
+            if token:
+                headers["Authorization"] = f"Bearer {token}"
+        return await http.aget_json(
+            f"{API_BASE}{path}", params=params, headers=headers, timeout=DEFAULT_TIMEOUT
+        )
+
     # ------------------------------------------------------------------ hooks
     def _raw_fetch(self, query: str, limit: int) -> Optional[Any]:
         """Compose query + OpenReview /notes/search. None on no-data → base → []."""
@@ -92,6 +114,21 @@ class MLRCAdapter(BaseScrapeAdapter):
         # Over-fetch heavily — OpenReview search returns mostly review/decision
         # notes (no title), so we need a big pool to filter from. Use API max.
         data = self._api_get(
+            "/notes/search",
+            {"term": composite_query, "limit": 100},
+        )
+        if not data or "notes" not in data:
+            return None
+        return data["notes"]
+
+    async def _araw_fetch(self, query: str, limit: int) -> Optional[Any]:
+        """Async twin of ``_raw_fetch``: SAME composite ``"{query} reproducibility"`` term + /notes/search
+        over-fetch (limit=100), only the egress goes async via ``_aapi_get``. None on no-data (base → [])."""
+        # Compose query: user's terms + "reproducibility" as a sticky hook
+        composite_query = f"{query} reproducibility"
+        # Over-fetch heavily — OpenReview search returns mostly review/decision
+        # notes (no title), so we need a big pool to filter from. Use API max.
+        data = await self._aapi_get(
             "/notes/search",
             {"term": composite_query, "limit": 100},
         )
@@ -127,6 +164,20 @@ class MLRCAdapter(BaseScrapeAdapter):
             except Exception as exc:  # noqa: BLE001
                 logger.debug("Skipping MLRC note: %s", exc)
         return docs
+
+    async def asearch(self, query: str, limit: int = 10) -> list[Document]:
+        """Native-async twin of the base ``search`` (S4b) → AsyncSearchCapable. Delegates to the base's
+        ``_asearch_via`` (the async twin of ``search``'s mechanism: SAME cache key, cache get/set OFF the
+        loop, opt-in ``rank`` on it) so parse/cache can never drift from ``search``. Only this source's
+        egress goes async: ``afetch`` = the async ``_araw_fetch`` (login POST + /notes/search GET via the
+        shared async leaves); ``abuild`` = the SYNC pure-CPU ``_to_documents`` (the deterministic
+        trusted-venue + has-title filter, no network in it) used verbatim on the loop."""
+        return await self._asearch_via(
+            query,
+            limit,
+            afetch=lambda: self._araw_fetch(query, limit),
+            abuild=lambda raw: self._to_documents(raw, query, limit),
+        )
 
     # --------------------------------------------------------------- fetch_url
     def fetch_url(self, url: str) -> Optional[Document]:

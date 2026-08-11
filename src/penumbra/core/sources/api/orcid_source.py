@@ -96,6 +96,36 @@ class OrcidAdapter(BaseScrapeAdapter):
                 pairs.append((oid, record))
         return pairs
 
+    async def _araw_fetch(self, query: str, limit: int) -> Optional[list[tuple[str, dict]]]:
+        """Async twin of _raw_fetch: BYTE-FAITHFUL mirror (same URLs, params, headers, timeouts,
+        control flow, fan-out cap, None-return contract) with the two shared-http egress calls swapped
+        for their async twins (http.get_json -> await http.aget_json). Same per-record miss-skip."""
+        search = await http.aget_json(SEARCH_URL, params={"q": query},
+                                      headers=_ACCEPT, timeout=15)
+        if not isinstance(search, dict):
+            return None  # search endpoint unreachable / unparseable ⇒ [] upstream
+        results = search.get("expanded-result") or []
+        if not isinstance(results, list):
+            return None
+
+        n = max(1, min(int(limit), _MAX_FANOUT))
+        pairs: list[tuple[str, dict]] = []
+        seen: set[str] = set()
+        for item in results:
+            if len(pairs) >= n:
+                break
+            if not isinstance(item, dict):
+                continue
+            oid = item.get("orcid-id")
+            if not isinstance(oid, str) or not oid or oid in seen:
+                continue
+            seen.add(oid)
+            record = await http.aget_json(f"{API_BASE}/{oid}/record",
+                                          headers=_ACCEPT, timeout=15)
+            if isinstance(record, dict):
+                pairs.append((oid, record))
+        return pairs
+
     def _to_documents(self, raw: Any, query: str, limit: int) -> list[Document]:
         if not isinstance(raw, list):
             return []
@@ -108,6 +138,16 @@ class OrcidAdapter(BaseScrapeAdapter):
             if doc is not None:
                 docs.append(doc)
         return docs
+
+    async def asearch(self, query: str, limit: int = 10) -> list[Document]:
+        """Native-async twin of search -> AsyncSearchCapable (the fan-out awaits this directly; the
+        expanded-search + polite per-iD /record GETs cost COROUTINES, not held pool threads). Shares the
+        base async cache round-trip; egress via _araw_fetch; mapping via the SAME pure-CPU _to_documents
+        (byte-identical to search: same mappers, same cache key)."""
+        return await self._asearch_via(
+            query, limit,
+            afetch=lambda: self._araw_fetch(query, limit),
+            abuild=lambda raw: self._to_documents(raw, query, limit))
 
     # ------------------------------------------------------------------ decode
     def _record_to_doc(self, orcid_id: Any, record: Any) -> Optional[Document]:

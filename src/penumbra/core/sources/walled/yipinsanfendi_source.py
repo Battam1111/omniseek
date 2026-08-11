@@ -20,6 +20,8 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
+import time
 from typing import Any, Optional
 from urllib.parse import quote, urlparse
 
@@ -50,15 +52,60 @@ def _gbk_url_encode(s: str) -> str:
         return quote(s)
 
 
+# Caller-side pace/serialize gate (2026-07-17). Discuz enforces a ~15s PER-SESSION flood-control
+# window, and each reload COUNTS AS A NEW SEARCH that RESETS that window, so concurrent / rapid
+# callers (a fleet of agents drilling at once) reset each other and see near-100% flood blocks
+# (observed 2026-06/07; a whole session's worth of yipin probes came back blocked). The in-flow
+# 16s/24s backoff in _flow only helps a SINGLE caller re-clear ITS window; it cannot stop a second
+# caller from resetting it. This gate is the cross-caller fix: at most ONE yipin egress runs at a
+# time, and consecutive egresses are >= _YIPIN_MIN_GAP_S apart PROCESS-WIDE, so the window is never
+# reset out from under an in-flight search. It wraps _run (the CDP egress leaf) ONLY, so cache HITS
+# (which return before _run) are never paced.
+_YIPIN_GATE = threading.Lock()
+_YIPIN_LAST = [0.0]        # monotonic time the last egress completed
+_YIPIN_MIN_GAP_S = 16.0    # > Discuz's ~15s per-session flood window
+
+
 class YipinsanfendiAdapter(BaseCDPAdapter):
     name = "yipinsanfendi"
-    needs_credentials = False  # Login via VNC; we use the session
+    needs_credentials = False  # Login via VNC once; the session persists + now self-heals (below)
     explicit_only = "shared CDP Chrome (precious logged-in session)"
     description = "一亩三分地 — North America CS PhD application + grad school community"
     url_host = "1point3acres.com"
+    # Auth self-heal (2026-07-06): the 9222 session logged out -> 游客 cannot search -> silent [].
+    # The SSO login (auth.1point3acres.com) is autofill-backed (Chrome remembers the password) and
+    # its Cloudflare Turnstile / reCAPTCHA auto-solve invisibly for the trusted profile, so the base
+    # can relogin headlessly. logged_out_markers are the guest-block error strings (distinct from the
+    # flood-control markers is_blocked catches), so a normal or genuinely-empty result never triggers.
+    login_url = "https://www.1point3acres.com/bbs/member.php?mod=logging&action=login"
+    logged_out_markers = ("无法进行此操作", "用户组(游客)")
+    # fetch_url reads a thread page through the SHARED 9222 CDP pool: Cloudflare wait + a 20s
+    # selector wait + serial-pool queueing legitimately outlast the fetcher's 30s default cap.
+    # Under that default the fetcher abandons this adapter mid-flight (the URL then falls to the
+    # generic web fallback, which CANNOT pass Cloudflare) while the orphaned cdp_call keeps
+    # occupying the pool worker up to its own 90s — cascading into the "deep reads wedge under
+    # load" class (observed 2026-07-08 under an 11-agent fleet). Declare a budget that CONTAINS
+    # cdp_call's 90s default so CDP cleans up before the fetcher bound fires (same convention as
+    # xiaohongshu's fetch_timeout=120 > cdp timeout=110).
+    fetch_timeout = 100.0
 
     def _search_url(self, query: str) -> str:
         return SEARCH_URL_TEMPLATE.format(q=_gbk_url_encode(query))
+
+    def _run(self, callback, initial_url):
+        # Serialize + pace at the CDP-egress leaf (see _YIPIN_GATE above). Concurrent / back-to-back
+        # callers would otherwise reset Discuz's ~15s flood window and get blocked; here at most one
+        # yipin egress runs at a time and consecutive ones are >= _YIPIN_MIN_GAP_S apart. Cache hits
+        # skip this entirely (the base returns before _run), so only real searches pay the gap. Covers
+        # BOTH the search flow and the auth-heal re-flow (both route through _run).
+        with _YIPIN_GATE:
+            wait = _YIPIN_MIN_GAP_S - (time.monotonic() - _YIPIN_LAST[0])
+            if wait > 0:
+                time.sleep(wait)
+            try:
+                return super()._run(callback, initial_url)
+            finally:
+                _YIPIN_LAST[0] = time.monotonic()
 
     def _flow(self, page) -> str:
         wait_through_cloudflare(page)  # CF 'Just a moment' auto-solves in ~2s; don't read before it clears
@@ -69,7 +116,7 @@ class YipinsanfendiAdapter(BaseCDPAdapter):
         # Detect the interstitial on EVERY attempt (not just the first) and retry with ESCALATING
         # backoff: a single 6s retry was not enough headroom under load. (Still pace/serialize
         # callers: a [] from a walled CDP source is never authoritative-empty.)
-        for attempt in range(4):
+        for attempt in range(3):
             try:
                 page.wait_for_selector(".pbw, li.pbw, .nopost", timeout=12000)
                 return page.content()
@@ -79,8 +126,14 @@ class YipinsanfendiAdapter(BaseCDPAdapter):
                     body = page.inner_text("body") or ""
                 except Exception:  # noqa: BLE001
                     pass
-                if attempt < 3 and any(k in body for k in ("间隔", "太快", "频繁", "稍候", "稍后")):
-                    page.wait_for_timeout(5000 + attempt * 4000)  # 5s, 9s, 13s escalating
+                if attempt < 2 and any(k in body for k in ("间隔", "太快", "频繁", "稍候", "稍后")):
+                    # Discuz guest search enforces a ~15s interval, and each reload COUNTS AS A NEW
+                    # SEARCH (resets the window). So each single wait must itself exceed 15s: the old
+                    # 5/9/13s ladder could mathematically never clear the gate (proven 2026-07-09:
+                    # burst sessions saw near-100% flood blocks). 16s/24s puts the FIRST retry outside
+                    # the window; 3 attempts total keeps worst-case (~76s incl. selector waits) inside
+                    # cdp_call's 90s budget.
+                    page.wait_for_timeout(16000 + attempt * 8000)  # 16s, 24s escalating
                     try:
                         page.reload(wait_until="domcontentloaded")
                     except Exception:  # noqa: BLE001
@@ -170,9 +223,18 @@ class YipinsanfendiAdapter(BaseCDPAdapter):
         title_el = soup.select_one("#thread_subject, h1.ts, h1")
         title = title_el.get_text(strip=True) if title_el else "(untitled)"
 
-        # First post body
-        body_el = soup.select_one("td.t_f, .t_fsz, div.t_f")
-        body = body_el.get_text("\n", strip=True) if body_el else ""
+        # A Discuz thread page carries ~10 posts as td.t_f blocks; in a 请教/复盘 thread the
+        # substance lives in the REPLIES, so read every post on the page, not just floor #1.
+        # (.t_fsz wraps td.t_f on some skins → text-dedup collapses the wrapper duplicates.
+        # Multi-page threads: page N is addressable as thread-<tid>-N-1.html, caller paginates.)
+        parts: list[str] = []
+        seen_texts = set()
+        for el in soup.select("td.t_f, .t_fsz, div.t_f"):
+            t = el.get_text("\n", strip=True)
+            if t and t not in seen_texts:
+                seen_texts.add(t)
+                parts.append(t)
+        body = "\n\n---\n\n".join(parts)
 
         m = re.search(r"thread-(\d+)|tid=(\d+)", url)
         tid = (m.group(1) or m.group(2)) if m else url

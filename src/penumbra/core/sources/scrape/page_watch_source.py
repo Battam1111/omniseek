@@ -16,6 +16,8 @@ flap rate is seen to be low. Rows live in ``page_watch.json``
 
 from __future__ import annotations
 
+import asyncio
+import functools
 import hashlib
 import json
 import logging
@@ -24,10 +26,11 @@ from pathlib import Path
 from typing import Optional
 from urllib.parse import urlparse
 
+import anyio
 import httpx
 from bs4 import BeautifulSoup
 
-from penumbra.core import cache
+from penumbra.core import cache, http
 from penumbra.core.normalize import Document, keyword_score_filter
 
 logger = logging.getLogger(__name__)
@@ -91,6 +94,23 @@ def _page_text(url: str, render: bool = False) -> str:
     return _strip_to_text(resp.text)
 
 
+async def _apage_text(url: str, render: bool = False) -> str:
+    """Native-async twin of ``_page_text``. A NORMAL page goes native async through the shared leaf
+    (``http.aget_text``: pooled client + SSRF guard + 30MB cap + cache_only, no thread held during the
+    network wait); a ``render`` page runs the sync CDP ``_render_html`` OFF the loop (cdp_call has no
+    async API and is serialized/gated — the _rss impersonate/guard_ip precedent). ``_strip_to_text``
+    is pure CPU and stays ON the loop. Empty string on failure, the SAME contract as ``_page_text``."""
+    if render:
+        html = await anyio.to_thread.run_sync(_render_html, url)  # sync CDP OFF the loop
+        return _strip_to_text(html) if html else ""
+    # http.aget_text passes our headers through (a passed UA WINS over the shared UA), so the bespoke
+    # browser UA is preserved; the shared async client already follow_redirects=True (matching the sync
+    # httpx branch). The leaf returns None on any failure (already logged + diag.note'd) -> "" here,
+    # mirroring the sync except branch's failure->"" contract.
+    text = await http.aget_text(url, headers={"User-Agent": UA}, timeout=TIMEOUT)
+    return _strip_to_text(text) if text else ""
+
+
 class PageWatchAdapter:
     name = "page_watch"
     needs_credentials = False
@@ -151,8 +171,47 @@ class PageWatchAdapter:
                       "note": row.get("note", "")},
         )
 
+    async def _adoc_for(self, row: dict) -> Optional[Document]:
+        """Native-async twin of ``_doc_for``: the SAME per-row TEXT cache (SAME key + TTL) read/written
+        OFF the loop, the egress via the async ``_apage_text``, then the pure-CPU fingerprint +
+        Document build kept ON the loop, byte-identical to ``_doc_for`` (a shared helper would
+        have to touch sync code, so this small build is duplicated verbatim instead)."""
+        key = cache.make_key("page_watch", "text", row["url"])
+        text = await anyio.to_thread.run_sync(cache.get, key)  # disk read OFF loop, SAME key as _doc_for
+        if text is None:
+            text = await _apage_text(row["url"], render=bool(row.get("render")))
+            if text:
+                await anyio.to_thread.run_sync(  # disk write OFF loop
+                    functools.partial(cache.set, key, text, ttl=CACHE_TTL))
+        if not text or len(text) < 200:
+            return None  # JS shell or fetch failure: no honest fingerprint possible
+        fp = hashlib.sha256(text.encode("utf-8")).hexdigest()[:10]
+        return Document(
+            source="page_watch",
+            source_id=f"{row['name']}:{fp}",
+            url=row["url"],
+            title=f"{row['label']} · 内容指纹 {fp}",
+            content=(text[:1200] + ("…" if len(text) > 1200 else "")
+                     + "\n\n(此文档代表该页当前内容版本; 指纹变化 = 页面已被改动, 打开 URL 看现行规则)"),
+            tags=["page-watch"] + (row.get("regions") or []),
+            metadata={"page": row["name"], "fingerprint": fp, "chars": len(text),
+                      "note": row.get("note", "")},
+        )
+
     def search(self, query: str, limit: int = 10) -> list[Document]:
         docs = [d for d in (self._doc_for(r) for r in self._rows()) if d]
+        docs = keyword_score_filter(docs, (query or "").strip())
+        return docs[:limit]
+
+    async def asearch(self, query: str, limit: int = 10) -> list[Document]:
+        """Native-async twin of ``search`` -> AsyncSearchCapable (the fetcher awaits this directly
+        instead of pushing ``.search`` onto the shared thread pool). ``_rows`` (disk read + overlay
+        import/validate) runs OFF the loop; the per-row docs are fetched as CONCURRENT coroutines
+        (``asyncio.gather``, order-preserving so the result is byte-identical to search's sequential
+        build — the _rss/hk_universities fan-out precedent); the shared BM25 filter + truncate stay
+        ON the loop, the SAME calls as ``search``."""
+        rows = await anyio.to_thread.run_sync(self._rows)  # disk read + overlay OFF loop
+        docs = [d for d in await asyncio.gather(*(self._adoc_for(r) for r in rows)) if d]
         docs = keyword_score_filter(docs, (query or "").strip())
         return docs[:limit]
 

@@ -1,256 +1,50 @@
-"""Mechanical mode-probes + the SSRF-hardened fetcher for attacker-influenceable candidate URLs.
+"""Mechanical mode-probes over the SSRF-hardened fetcher for attacker-influenceable candidate URLs.
 
-This is the eye's FIRST fetcher pointed at hosts an adversary chose (a candidate-source URL).
+This is the eye's FIRST pass pointed at hosts an adversary chose (a candidate-source URL).
 Everything here is MECHANICAL: it fetches / measures / counts / resolves / matches and returns
 FACTS. It renders NO verdict. There is no key or string-value naming score/verdict/passes/
 recommend/admit/reject/good/quality/rating/confidence/decision/beats_web_search anywhere in a
 probe's output: only counts, lists, lengths, dates, booleans-of-fact, each with a provenance
 tag. The AGENT reads these facts and judges; the code never does.
 
-``safe_fetch`` is the crux of safety (build + test it FIRST). It OWNS its httpx client
-(cookieless, redirect-disabled, trust_env=False) instead of wrapping http._request_capped
-(which forces the shared pool + follow_redirects=True + a COMPRESSED-bytes cap: all wrong for
-an attacker host). It scheme-allowlists http/https, rejects userinfo + non-80/443 ports on the
-FINAL pinned connection, resolves the host and validates EVERY resolved IP, then CONNECTS TO
-THE PINNED IP literal (defeating DNS-rebind), walks redirects manually re-validating each hop,
-caps on DECODED bytes (defeating a gzip bomb) AND a raw cap, and honors cache.cache_only().
+``safe_fetch`` (the crux of safety: IP-pinned, redirect-revalidated, decode-capped) was PROMOTED
+to the core-leaf module ``penumbra.core.safeurl`` so the untrusted web_fallback read can share the
+EXACT same pinned-per-hop fetcher. It is RE-EXPORTED at the top of this module (with its helpers)
+so every probe below + the smoke goldens exercise the moved impl through the same names; the
+mechanics + rationale now live in safeurl's docstring.
 """
 
 from __future__ import annotations
 
-import ipaddress
 import logging
+import os
 import re
-import socket
+import socket  # kept so the moved-fetcher goldens' probe.socket.getaddrinfo monkeypatch resolves
+import subprocess  # P2 wall-probe: cold-start the jail launcher (scripts/probe_jail.sh up) on demand
+from pathlib import Path
 from typing import Callable, Optional
-from urllib.parse import urljoin
 
-import httpx
+import httpx  # kept so the moved-fetcher goldens' probe.httpx.Client / .MockTransport patch resolves
 
-from penumbra.core import _netguard, cache, http
+# safe_fetch + its SSRF helpers were PROMOTED to the core-leaf module penumbra.core.safeurl so the
+# untrusted web_fallback read can share the EXACT pinned-per-hop fetcher (safeurl imports only core,
+# so no curator import cycle). They are RE-EXPORTED here so probe's callers (mode_probe + the mode
+# probes below) and its smoke goldens stay byte-identical: they exercise the MOVED impl through
+# these names (curator.probe.safe_fetch IS safeurl.safe_fetch).
+from penumbra.core.safeurl import (  # noqa: F401
+    _DEFAULT_MAX_BYTES, _blocked, _host_suffix_blocked, _ip_is_blocked, _read_capped,
+    _resolve_safe_ip, _validate_url_shape, safe_fetch,
+)
 
 logger = logging.getLogger(__name__)
 
 # The §11 frozen acquisition-mode vocabulary (reused; smoke §12 asserts _PROBES keys == this).
 MODE_VOCAB = {"STRUCTURE", "UNWALL", "TRANSCRIBE", "RECALL", "MONITOR"}
 
-# ── SSRF guard: DELEGATED to penumbra.core._netguard (ONE guard, shared with the mainline egress) ──
-# The URL-shape (scheme/userinfo/port), IP-block, and host-suffix DECISIONS all live in _netguard;
-# probe used to carry its own byte-identical copy. probe keeps only the RESOLUTION + connect
-# mechanics below (its own socket.getaddrinfo so it can pin the IP literal it connects to), and the
-# thin wrappers here forward to _netguard so the two paths can never drift. The 198.18.0.0/15
-# fake-IP-proxy allowance + every private/loopback/link-local/reserved block now come from there.
-
-# Caps. max_bytes is a DECODED cap (gzip-bomb defense); a separate raw cap refuses a body
-# whose COMPRESSED size already exceeds the budget before we ever decode it.
-_DEFAULT_MAX_BYTES = 5 * 1024 * 1024
-
-
-def _ip_is_blocked(ip: "ipaddress.IPv4Address | ipaddress.IPv6Address") -> bool:
-    """True iff this resolved IP is in a range we must never connect to. Delegates to _netguard
-    (unwraps IPv4-mapped IPv6, allows the fake-IP proxy pool, blocks private/loopback/...)."""
-    return _netguard.ip_is_blocked(ip)
-
-
-def _host_suffix_blocked(host: str) -> bool:
-    """True iff ``host`` is on the literal denylist. Delegates to _netguard."""
-    return _netguard.host_suffix_blocked(host)
-
-
-def _resolve_safe_ip(host: str) -> "tuple[Optional[str], Optional[int], Optional[str]]":
-    """Resolve ``host`` and validate EVERY returned IP. Returns (safe_ip_literal, family, None)
-    on success, or (None, None, blocked_reason) on any failure / a blocked IP. Resolve-once,
-    pin-the-IP: the caller CONNECTS to the returned literal IP (not the hostname), which closes
-    the DNS-rebind/TOCTOU window (a 2nd lookup at connect time can't swap in a private IP).
-
-    Resolution runs HERE (probe's own socket.getaddrinfo) because probe pins + connects to the
-    literal; the host-suffix + per-IP block DECISIONS delegate to _netguard (the shared guard)."""
-    if _host_suffix_blocked(host):
-        return None, None, "private_ip"
-    try:
-        infos = socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
-    except (socket.gaierror, OSError, UnicodeError):
-        return None, None, "dns"
-    if not infos:
-        return None, None, "dns"
-    safe_ip = None
-    safe_family = None
-    for family, _type, _proto, _canon, sockaddr in infos:
-        addr = sockaddr[0]
-        try:
-            ip = ipaddress.ip_address(addr)
-        except ValueError:
-            return None, None, "private_ip"  # unparseable address -> fail closed
-        if _ip_is_blocked(ip):
-            return None, None, "private_ip"  # ANY blocked IP in the set aborts (no cherry-pick)
-        if safe_ip is None:
-            safe_ip = addr
-            safe_family = family
-    if safe_ip is None:
-        return None, None, "dns"
-    return safe_ip, safe_family, None
-
-
-def _validate_url_shape(url: str) -> "tuple[Optional[dict], Optional[str]]":
-    """Validate scheme / userinfo / port on a single URL. Returns (parsed_parts, None) or
-    (None, blocked_reason). Checked on EVERY hop (input + each redirect target). Delegates to
-    _netguard so the shape rules match the mainline egress guard exactly."""
-    return _netguard.validate_url_shape(url)
-
-
-def _blocked(reason: str, status: Optional[int] = None, chain: Optional[list] = None) -> dict:
-    return {"ok": False, "status": status, "bytes": 0, "text": "", "final_url": "",
-            "redirect_chain": chain or [], "content_type": None, "blocked_reason": reason}
-
-
-def _read_capped(resp: httpx.Response, max_bytes: int) -> "tuple[Optional[bytes], Optional[str]]":
-    """Read the body, aborting on EITHER cap: DECODED bytes (iter_bytes handles gzip/deflate/
-    br/zstd) > max_bytes (gzip-bomb defense), OR raw compressed bytes > max_bytes (refuse a body
-    whose compressed size alone already blows the budget). Returns (decoded_bytes, None) or
-    (None, 'oversize')."""
-    decoded = bytearray()
-    raw_total = 0
-    # raw_total tracks compressed wire bytes; if the COMPRESSED stream already exceeds the cap we
-    # never finish decoding. httpx exposes the raw stream length via num_bytes_downloaded.
-    try:
-        for chunk in resp.iter_bytes():
-            decoded += chunk
-            if len(decoded) > max_bytes:
-                return None, "oversize"
-            raw_total = resp.num_bytes_downloaded
-            if raw_total > max_bytes:
-                return None, "oversize"
-    except Exception:  # noqa: BLE001: a stream error mid-read is a failed fetch, not a body
-        return None, "oversize"
-    return bytes(decoded), None
-
-
-def safe_fetch(url: str, *, method: str = "GET", render: bool = False,
-               timeout_total: float = 20.0, max_bytes: int = _DEFAULT_MAX_BYTES,
-               max_redirects: int = 5) -> dict:
-    """Fetch an ATTACKER-INFLUENCEABLE candidate URL and return FACTS, fail-closed.
-
-    Owns its client (NOT http._request_capped/_get_client). Returns:
-        {"ok", "status", "bytes", "text", "final_url", "redirect_chain", "content_type",
-         "blocked_reason": one of private_ip|bad_scheme|oversize|timeout|dns|userinfo|
-                           bad_port|redirect_loop|cache_only|fetch_error|None}
-    A blocked fetch is RECORDED; it never silently judges the candidate. ``render`` is accepted
-    for signature parity but P1 NEVER drives a browser here (anonymous stranger only, no CDP).
-
-    SAFE_FETCH BOUNDARY (spec 8c, SSRF pass): safe_fetch hardens the PROBE-TIME fetch ONLY -- the
-    one fetch the eye makes at a candidate URL before any verdict. The POST-ADMISSION recurring
-    fetch a family adapter makes once a source is live (org_watch / page_watch / news_scraper /
-    render) goes through the NORMAL fetcher and is NOT IP-pinned by this guard. That is exactly why
-    those families are in apply._NEVER_AUTO_FAMILIES (never auto-applied) and why an admit of one
-    must consciously acknowledge the unguarded recurring fetch (server.penumbra_curator_decide requires
-    baseline_ref.recurring_fetch_acknowledged for a first-seen host in that subclass). Routing the
-    enrich/OpenAlex resolution hosts through a fixed-API host allowlist is a flagged follow-up
-    hardening (the id regexes constrain path injection today), not a P4 blocker.
-    """
-    # cache.cache_only() (cache_only=True): do ZERO live egress.
-    if cache.cache_only():
-        return _blocked("cache_only")
-
-    parts, reason = _validate_url_shape(url)
-    if reason is not None:
-        return _blocked(reason)
-
-    chain: list = []
-    current_url = url
-    seen: set = set()
-
-    client = httpx.Client(
-        follow_redirects=False,           # we walk redirects MANUALLY, re-validating each hop
-        cookies={},                       # no cookies, ever
-        headers={"User-Agent": http.USER_AGENT},
-        timeout=httpx.Timeout(connect=5.0, read=10.0, write=5.0, pool=5.0),
-        trust_env=False,                  # no env proxies / no Authorization from netrc / etc.
-        max_redirects=0,
-    )
-    try:
-        for _hop in range(max_redirects + 1):
-            parts, reason = _validate_url_shape(current_url)
-            if reason is not None:
-                return _blocked(reason, chain=chain)
-            host = parts["host"]
-            port = parts["port"]
-            scheme = parts["scheme"]
-
-            safe_ip, _family, reason = _resolve_safe_ip(host)
-            if reason is not None:
-                return _blocked(reason, chain=chain)
-
-            # Pin the connection to the validated IP literal; carry the Host header + (for TLS)
-            # the SNI hostname so the server still routes correctly. This defeats DNS-rebind:
-            # the guard validated THIS ip, and THIS ip is exactly what we connect to.
-            if ":" in safe_ip:  # IPv6 literal needs brackets in a URL authority
-                authority = f"[{safe_ip}]:{port}"
-            else:
-                authority = f"{safe_ip}:{port}"
-            pinned_url = f"{scheme}://{authority}{parts['path'] or '/'}"
-            if parts["query"]:
-                pinned_url += "?" + parts["query"]
-
-            req_headers = {"Host": host}
-            extensions = {}
-            if scheme == "https":
-                # sni_hostname makes the TLS handshake present the real host while we connect to
-                # the pinned IP: required for SNI-based virtual hosts + cert validation.
-                extensions = {"sni_hostname": host}
-
-            try:
-                with client.stream(method, pinned_url, headers=req_headers,
-                                   extensions=extensions, timeout=timeout_total) as resp:
-                    status = resp.status_code
-                    # Redirect? re-validate the Location target as a brand-new untrusted URL.
-                    if status in (301, 302, 303, 307, 308) and "location" in resp.headers:
-                        loc = resp.headers["location"]
-                        nxt = urljoin(current_url, loc)  # resolve relative against the CURRENT url
-                        if nxt in seen:
-                            return _blocked("redirect_loop", status=status, chain=chain)
-                        seen.add(nxt)
-                        chain.append({"from": current_url, "to": nxt, "status": status})
-                        current_url = nxt
-                        continue  # next hop re-runs the FULL guard at the top of the loop
-                    # Terminal response: read the body under both caps.
-                    body, oversize = _read_capped(resp, max_bytes)
-                    if oversize is not None:
-                        return _blocked(oversize, status=status, chain=chain)
-                    ctype = resp.headers.get("content-type")
-                    text = ""
-                    if method.upper() != "HEAD" and body:
-                        try:
-                            enc = resp.encoding or "utf-8"
-                            text = body.decode(enc, errors="replace")
-                        except (LookupError, ValueError):
-                            text = body.decode("utf-8", errors="replace")
-                    return {
-                        "ok": True,
-                        "status": status,
-                        "bytes": len(body or b""),
-                        "text": text[:max_bytes],         # length-bounded attacker string
-                        "final_url": current_url[:2048],
-                        "redirect_chain": chain,
-                        "content_type": (ctype[:200] if ctype else None),
-                        "blocked_reason": None,
-                    }
-            except httpx.TimeoutException:
-                return _blocked("timeout", chain=chain)
-            except httpx.HTTPError:
-                return _blocked("fetch_error", chain=chain)
-        # Exhausted max_redirects without a terminal response.
-        return _blocked("redirect_loop", chain=chain)
-    finally:
-        try:
-            client.close()
-        except Exception:  # noqa: BLE001
-            pass
-
-
 # ─────────────────────────────────────────────────────────────────────────────────
-# Mode probes: each FETCHES candidate URLs via safe_fetch and returns provenance-tagged
-# FACTS only. Provenance tags: 'verified' (eye independently confirmed), 'claimed' (parsed
-# straight from publisher bytes), 'derived' (computed by the eye over fetched content).
+# Mode probes: each FETCHES candidate URLs via safe_fetch (re-exported from safeurl) and returns
+# provenance-tagged FACTS only. Provenance tags: 'verified' (eye independently confirmed), 'claimed'
+# (parsed straight from publisher bytes), 'derived' (computed by the eye over fetched content).
 # ─────────────────────────────────────────────────────────────────────────────────
 
 _PASSWORD_INPUT_RE = re.compile(r'<input[^>]*type=["\']?password', re.IGNORECASE)
@@ -583,11 +377,18 @@ _PROBES: "dict[str, Callable]" = {
 }
 
 
-def mode_probe(candidate: dict, *, deadline_s: float = 25.0) -> dict:
-    """Dispatch on candidate['mode'] -> the per-mode probe over a safe_fetch of the candidate's
-    first URL. Returns provenance-tagged FACTS + reachability. NO verdict key/value. Fail-closed:
-    an unfetchable list / unknown mode / probe exception -> probe_reached=False + probe_error,
-    never an admit-shaped result."""
+def mode_probe(candidate: dict, *, deadline_s: float = 25.0, walled: bool = False) -> dict:
+    """Dispatch on candidate['mode'] -> the per-mode probe over a fetch of the candidate's first URL.
+    Returns provenance-tagged FACTS + reachability. NO verdict key/value. Fail-closed: an unfetchable
+    list / unknown mode / probe exception -> probe_reached=False + probe_error, never an admit-shaped
+    result.
+
+    ``walled`` selects the FETCH: False (P1) uses the anonymous ``safe_fetch`` (IP-pinned plain HTTP);
+    True (P2, the wall-aware re-probe) uses ``render_walled`` (the JAILED browser render), so a
+    candidate that was ``parked_p2`` because it is structurally invisible to plain HTTP (anti-bot /
+    SPA / soft-login-wall) is measured on its REAL rendered content by the SAME per-mode probes. The
+    wall-rendered facts are DERIVED FROM ATTACKER BYTES (a honeypot could author the DOM), so a single
+    render NEVER admits: probe_via='wall_probe_jail' flags this so the judge weights it as such (M7)."""
     mode = (candidate.get("mode") or candidate.get("proposed_mode") or "").strip().upper()
     url = _first_url(candidate)
     base = {
@@ -606,7 +407,11 @@ def mode_probe(candidate: dict, *, deadline_s: float = 25.0) -> dict:
         base["probe_error"] = "no candidate url to probe"
         return base
 
-    fetch = safe_fetch(url, timeout_total=min(deadline_s, 20.0))
+    if walled:
+        fetch = render_walled(url, deadline_s=max(deadline_s, 45.0))
+        base["probe_via"] = "wall_probe_jail"  # facts are render-derived (attacker bytes): weight per M7
+    else:
+        fetch = safe_fetch(url, timeout_total=min(deadline_s, 20.0))
     base["probe_fetch_meta"] = {
         "ok": fetch.get("ok"),
         "status": fetch.get("status"),
@@ -631,3 +436,87 @@ def mode_probe(candidate: dict, *, deadline_s: float = 25.0) -> dict:
     base["web_baseline_request"] = result.get(
         "web_baseline_request", {"suggested_queries": _baseline_queries([])})
     return base
+
+
+# ── P2: the wall-aware render (jailed browser) ─────────────────────────────────────
+# render_walled is the P2 FETCH: it swaps the anonymous plain-HTTP safe_fetch for a render in the
+# network-isolated jail (a colima container whose ONLY egress is the SSRF-pin proxy), so a candidate
+# structurally invisible to plain HTTP yields its REAL rendered content. It returns a safe_fetch-
+# SHAPED dict so the per-mode probes + build_packet consume it byte-identically.
+
+def _jail_cdp_url() -> str:
+    """Host-side CDP endpoint of the wall-probe jail (the socat bridge port colima forwards)."""
+    return f"http://127.0.0.1:{os.environ.get('PENUMBRA_PROBE_CDP_PORT', '9444')}"
+
+
+def _jail_script() -> Optional[Path]:
+    s = Path(__file__).resolve().parents[4] / "scripts" / "probe_jail.sh"
+    return s if s.exists() else None
+
+
+def _ensure_jail_up() -> bool:
+    """Idempotently ensure the wall-probe jail is running; return True once its CDP endpoint answers.
+    The rare parked_p2 case pays a few-seconds cold start (``probe_jail.sh up``) rather than keeping
+    three containers idle on the 16GB mini. Best-effort: any failure returns False (render_walled then
+    fails closed), never raises."""
+    cdp = _jail_cdp_url()
+    try:
+        if httpx.get(f"{cdp}/json/version", timeout=4).status_code == 200:
+            return True
+    except Exception:  # noqa: BLE001
+        pass
+    script = _jail_script()
+    if script is None:
+        logger.warning("wall-probe jail launcher not found (scripts/probe_jail.sh)")
+        return False
+    try:
+        subprocess.run(["bash", str(script), "up"], timeout=120,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return httpx.get(f"{cdp}/json/version", timeout=6).status_code == 200
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("wall-probe jail cold-start failed: %s", exc)
+        return False
+
+
+def render_walled(url: str, *, deadline_s: float = 45.0) -> dict:
+    """Render a WALLED candidate url in the jailed Chromium and return a ``safe_fetch``-SHAPED dict.
+
+    The P2 fetch: it executes the candidate's JS (passing anti-bot / SPA / soft-login-wall) in a
+    FRESH incognito context whose ONLY egress is the SSRF-pin proxy, so a page near-empty to
+    ``safe_fetch`` yields its real rendered HTML here. Fail-closed: bad-shape url / jail down / render
+    error / timeout -> a ``_blocked()`` dict (never a fabricated body). ``fetch['text']`` is the
+    RENDERED HTML (``page.content()``) so the per-mode probes (which regex the HTML for __NEXT_DATA__ /
+    DOI / password-input / tombstone and measure text_len) read it exactly as a safe_fetch body."""
+    _parts, reason = _validate_url_shape(url)   # refuse a bad-shape / nonstandard-port target up front
+    if reason is not None:
+        return _blocked(reason)
+    if not _ensure_jail_up():
+        return _blocked("jail_unavailable")
+    from penumbra.core.sources.walled import _cdp
+
+    def _extract(page) -> dict:
+        try:
+            page.wait_for_load_state("networkidle", timeout=8000)
+        except Exception:  # noqa: BLE001: networkidle can time out on a chatty page; the render is still usable
+            pass
+        page.wait_for_timeout(1200)   # let late client-render settle
+        return {"html": page.content() or "", "url": page.url}
+
+    try:
+        r = _cdp.cdp_render(_extract, initial_url=url, cdp_url=_jail_cdp_url(),
+                            timeout=int(min(max(deadline_s, 20.0), 90.0)))
+    except Exception as exc:  # noqa: BLE001: a render failure is a blocked fetch, not a body
+        logger.info("wall-probe render failed for %s: %s", url[:120], type(exc).__name__)
+        return _blocked("render_error")
+    html = (r.get("html") or "")[:_DEFAULT_MAX_BYTES]
+    return {
+        "ok": bool(html),
+        "status": 200 if html else None,
+        "bytes": len(html.encode("utf-8", "ignore")),
+        "text": html,                       # per-mode probes read fetch['text']: hand them the RENDERED HTML
+        "final_url": (r.get("url") or url)[:2048],
+        "redirect_chain": [],
+        "content_type": "text/html",
+        "blocked_reason": None if html else "render_empty",
+        "rendered_via": "wall_probe_jail",  # provenance: DERIVED FROM ATTACKER BYTES via a jailed render
+    }

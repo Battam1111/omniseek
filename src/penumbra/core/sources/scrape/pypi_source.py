@@ -23,6 +23,7 @@ from urllib.parse import urlparse
 
 import httpx
 
+from penumbra.core import diag
 from penumbra.core.normalize import Document, jsonsafe
 from penumbra.core.sources.scrape._rss import RSSAdapterBase
 
@@ -60,6 +61,8 @@ class PyPIAdapter(RSSAdapterBase):
             data = resp.json()
         except Exception as exc:  # noqa: BLE001
             logger.warning("PyPI fetch_url failed (%s): %s", package_name, exc)
+            st = getattr(getattr(exc, "response", None), "status_code", None)
+            diag.note("pypi.fetch", url=f"https://pypi.org/pypi/{package_name}/json", status=st, exc=exc)
             return None
 
         info = data.get("info") or {}

@@ -90,6 +90,52 @@ def is_blocked(text: str) -> tuple[bool, str]:
     return False, ""
 
 
+# ── base64-image hygiene (borrowed: Steel stripBase64Images) ──────────────────────────────────
+_DATA_IMG_MD = re.compile(r"(!\[[^\]]*\])\(\s*data:image/[^)]*?;base64,[^)]*\)", re.IGNORECASE)
+
+
+def strip_base64_images(md: str) -> str:
+    """Replace an inline base64 data-URI image in markdown -- ``![alt](data:image/...;base64,<blob>)``
+    -- with a placeholder, so a hundreds-of-KB blob never inlines into content (it would eat the
+    content[:2000] preview + poison the recall vector). Alt text is preserved. Pure, no I/O."""
+    if not md or "base64," not in md:
+        return md
+    return _DATA_IMG_MD.sub(r"\1(<base64-image-removed>)", md)
+
+
+# ── selector-drift DIAGNOSTIC (borrowed idea: Scrapling adaptive relocation, STRIPPED of the silent
+# auto-substitution that would fabricate a result). NEVER returns an element, only a candidate NAME,
+# so a caller can annotate /eye-fix without ever changing what it returns (honest-empty preserved). ──
+def selector_drift_hint(html: str, expected_item_selector: str) -> Optional[str]:
+    """When ``expected_item_selector`` matches nothing on an ok-but-empty page, name the LARGEST
+    repeated sibling-cluster's class as a candidate replacement selector (e.g. ``"note-card-v2 (23
+    siblings)"``), else None. Returns None when the selector still matches (no drift) or when no
+    repeated cluster (>=3 siblings) exists. Pure, stateless; names a candidate for a human to verify
+    in /eye-fix, and CANNOT drive a substitution (it returns a string, never an element)."""
+    try:
+        from bs4 import BeautifulSoup
+    except Exception:  # noqa: BLE001 -- a diagnostic must never break the caller
+        return None
+    try:
+        soup = BeautifulSoup(html or "", "lxml")
+        if soup.select(expected_item_selector):
+            return None  # the expected selector still matches -> no drift
+        from collections import Counter
+        best_cls: Optional[str] = None
+        best_cnt = 0
+        for parent in soup.find_all(True):
+            by_class: Counter = Counter()
+            for child in parent.find_all(["section", "article", "div", "li"], recursive=False):
+                for cls in (child.get("class") or []):
+                    by_class[cls] += 1
+            for cls, cnt in by_class.items():
+                if cnt >= 3 and cnt > best_cnt:  # a repeated sibling cluster = a likely card list
+                    best_cls, best_cnt = cls, cnt
+        return f"{best_cls} ({best_cnt} siblings)" if best_cls else None
+    except Exception:  # noqa: BLE001 -- best-effort hint, never raises into the fetch path
+        return None
+
+
 # ── declarative HTML extraction (borrowed: crawl4ai JsonCssExtractionStrategy, MINUS eval/LLM) ──
 def schema_extract(html: str, schema: dict) -> list[dict]:
     """Declarative HTML → list[dict] via CSS selectors. ``schema`` =

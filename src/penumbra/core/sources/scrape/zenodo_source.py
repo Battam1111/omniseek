@@ -62,6 +62,14 @@ class ZenodoAdapter(BaseScrapeAdapter):
             timeout=15,
         )
 
+    async def _araw_fetch(self, query: str, limit: int) -> Optional[Any]:
+        # Async twin of _raw_fetch: byte-faithful mirror, only http.get_json → await http.aget_json.
+        return await http.aget_json(
+            API_URL,
+            params={"q": query, "size": min(max(limit, _CANDIDATE_POOL), _ZENODO_MAX_SIZE)},
+            timeout=15,
+        )
+
     def _to_documents(self, raw: Any, query: str, limit: int) -> list[Document]:
         if not isinstance(raw, dict):
             return []
@@ -81,6 +89,14 @@ class ZenodoAdapter(BaseScrapeAdapter):
             docs = [d for _s, d in sorted(zip(scores, docs), key=lambda x: x[0], reverse=True)
                     if _s > 0.0]
         return docs[:limit]
+
+    async def asearch(self, query: str, limit: int = 10) -> list[Document]:
+        """Native-async twin of search -> AsyncSearchCapable. Shares the base async cache round-trip;
+        egress via _araw_fetch; mapping via the SAME pure-CPU _to_documents (byte-identical to search)."""
+        return await self._asearch_via(
+            query, limit,
+            afetch=lambda: self._araw_fetch(query, limit),
+            abuild=lambda raw: self._to_documents(raw, query, limit))
 
     def _record_to_doc(self, rec: dict) -> Optional[Document]:
         meta = rec.get("metadata") or {}

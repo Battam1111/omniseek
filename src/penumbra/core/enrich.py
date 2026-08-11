@@ -53,6 +53,14 @@ _UA = f"penumbra/0.1 (mailto:{_MAIL}; paper enrichment)"
 _TIMEOUT = 20
 _MAX_IDS = 50
 
+# Cache TTLs. A COMPLETE observation (every backend answered) is durable for a day; a DEGRADED one (a
+# backend was UNREACHABLE, so a None means "not fetched", NOT "genuinely absent") caches only briefly,
+# so a transient S2 / Crossref / Unpaywall blip SELF-HEALS on the next call instead of poisoning the
+# paper's count / OA / integrity for 24h. _TTL_DEGRADED aligns with the S2 breaker window (_s2 = 120s):
+# while a backend is down the breaker short-circuits the re-fetch, so this never hammers it.
+_TTL_OK = 24 * 3600
+_TTL_DEGRADED = 120
+
 # arXiv Atom API (the SAME endpoint arxiv_source uses): one id_list lookup yields both the
 # published-journal DOI (arxiv_doi) and the withdrawal marker (arxiv_comment / title / abstract).
 _ARXIV_API = "https://export.arxiv.org/api/query"
@@ -95,6 +103,22 @@ def _arxiv_id(s: str) -> str | None:
 def _doi(s: str) -> str | None:
     s = re.sub(r"^https?://(?:dx\.)?doi\.org/", "", (s or "").strip(), flags=re.I)
     return s if s.startswith("10.") else None
+
+
+def _canonical_key(raw: str) -> str:
+    """The CANONICAL cache identity of a paper, so every reference form collapses to ONE cache row.
+    A bare arXiv id, its arXiv-DOI (10.48550/arXiv.<id>), an /abs//pdf/ url and "arxiv:<id>" all
+    denote the SAME paper and MUST share a row: keying on the raw string let a transient-null cached
+    under one form coexist with a real value under another (the 2026-07-10 citation-count split) and
+    re-fetched the same paper N times. arXiv is resolved BEFORE DOI because _arxiv_id already treats
+    the arXiv-DOI as arXiv (the enrich arXiv branch does the same), so both map to arxiv:<id>."""
+    ax = _arxiv_id(raw)
+    if ax:
+        return f"arxiv:{ax}"
+    doi = _doi(raw)
+    if doi:
+        return f"doi:{doi.lower()}"
+    return f"raw:{(raw or '').strip().lower()}"
 
 
 def _get_json(url: str) -> dict:
@@ -216,6 +240,8 @@ def _graph_tap(rec: dict) -> None:
             attrs["retracted"] = integ.get("retracted")
         if rec.get("is_oa") is not None:
             attrs["is_oa"] = rec.get("is_oa")
+        if rec.get("pdf_url"):
+            attrs["pdf_url"] = rec.get("pdf_url")   # Phase 2b: the OA full-text handle, placed by id once warmed
         if rec.get("doi"):
             attrs["doi"] = rec.get("doi")
         if rec.get("citation_count") is not None:
@@ -240,14 +266,21 @@ def _graph_tap(rec: dict) -> None:
 
 
 def enrich(ids: list[str]) -> list[dict]:
-    """For each DOI / arXiv id: open-access PDF + integrity. Keyless, cached 24h."""
+    """For each DOI / arXiv id: open-access PDF + integrity + citation count. Keyless.
+
+    Cache keys on the CANONICAL paper identity (_canonical_key), NOT the raw string, so every
+    reference form of one paper shares one row (no per-form divergence, no duplicate upstream calls).
+    A COMPLETE record caches _TTL_OK (24h); a DEGRADED record (a needed backend was unreachable, so a
+    None is "not fetched") caches _TTL_DEGRADED so a transient failure self-heals instead of persisting
+    a false null for a day (the 2026-07-10 citation-count bug: a transient S2 None cached 24h)."""
     out: list[dict] = []
     for raw in (ids or [])[:_MAX_IDS]:
-        key = cache.make_key("enrich", raw)
+        key = cache.make_key("enrich", _canonical_key(raw))
         cached = cache.get(key)
         if cached is not None:
-            out.append(cached)
-            _graph_tap(cached)   # a cache hit is still a successful enrich → honest re-observation
+            rec = {**cached, "id": raw}  # share the resolved facts; echo the caller's own id form
+            out.append(rec)
+            _graph_tap(rec)   # a cache hit is still a successful enrich → honest re-observation
             continue
         ax = _arxiv_id(raw)
         if ax:
@@ -256,26 +289,38 @@ def enrich(ids: list[str]) -> list[dict]:
             # the breaker + semaphore; it degrades to None, so the count is None when S2 is unreachable.
             from penumbra.core import _s2
             p = _s2.get_paper(ax, fields=["citationCount"])
+            # Withdrawal marker (author-announced on arXiv) + the journal DOI, if any, routed through
+            # the SAME Crossref / Retraction-Watch path the DOI branch uses.
+            integ = _arxiv_integrity(ax)
             rec = {"id": raw, "kind": "arxiv", "doi": f"10.48550/arXiv.{ax}",
                    # .pdf suffix so penumbra_read_document/_fmt_of routes it to the PDF reader (a bare
                    # /pdf/<id> has no extension → was rejected as "unsupported"). arXiv serves both.
                    "is_oa": True, "pdf_url": f"https://arxiv.org/pdf/{ax}.pdf",
                    "oa_url": f"https://arxiv.org/abs/{ax}",
                    "citation_count": getattr(p, "citationCount", None) if p else None,
-                   # Withdrawal marker (author-announced on arXiv) + the journal DOI, if any,
-                   # routed through the SAME Crossref / Retraction-Watch path the DOI branch uses.
-                   "integrity": _arxiv_integrity(ax)}
+                   "integrity": integ}
+            # DEGRADED iff a backend we NEEDED could not answer: S2 returned no record (p is None -> the
+            # count is "not fetched", not a real absent 0), or the arXiv Atom integrity check could not
+            # run ("not checked"). retracted=None is NORMAL for an arXiv-only paper (no journal DOI), so
+            # it is NOT a degrade signal here; the note carries the honest checked/not-checked fact.
+            degraded = (p is None) or ("not checked" in (integ.get("note") or ""))
         else:
             doi = _doi(raw)
             if not doi:
                 rec = {"id": raw, "error": "not a DOI or arXiv id"}
+                degraded = False  # a malformed id is a stable, deterministic fact — cache normally
             else:
                 integrity = _integrity(doi)
+                oa = _unpaywall(doi)
                 # Surface the count Crossref returned inside _integrity at the record top level.
                 rec = {"id": raw, "kind": "doi", "doi": doi,
-                       **_unpaywall(doi), "citation_count": integrity.get("citation_count"),
+                       **oa, "citation_count": integrity.get("citation_count"),
                        "integrity": integrity}
-        cache.set(key, rec, ttl=24 * 3600)
+                # DEGRADED iff a backend was unreachable: a LIVE Crossref message ALWAYS yields
+                # retracted as a bool, so retracted=None means the Crossref call errored; is_oa=None
+                # means the Unpaywall call errored. Either -> cache briefly so it self-heals.
+                degraded = (integrity.get("retracted") is None) or (oa.get("is_oa") is None)
+        cache.set(key, rec, ttl=_TTL_DEGRADED if degraded else _TTL_OK)
         out.append(rec)
         _graph_tap(rec)          # mint the work node's integrity/OA facts (fail-open, enqueue-only)
     return out

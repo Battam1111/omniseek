@@ -54,6 +54,13 @@ _RANK_BUCKETS = ("0-2", "3-5", "6-9", "10+")
 _queue: "queue.Queue" = queue.Queue(maxsize=_QUEUE_MAX)
 _writer_started = False
 _start_lock = threading.Lock()
+# S2 graceful-shutdown stop Event for the single drain loop: set on ASGI-lifespan shutdown so it
+# stops and runs a FINAL FLUSH of the un-persisted counter window (see penumbra.core.lifecycle).
+# _STOP_POLL_S caps the idle queue-get so a stop is noticed within it; the wall-time flush check is
+# unchanged, so flush cadence is unaffected beyond the sub-second poll granularity. Additive:
+# behavior is identical until _STOP is set, which only happens on shutdown.
+_STOP = threading.Event()
+_STOP_POLL_S = 0.5
 # Guards ONLY the atomic write of yield.json (so a future P3/curator reader can never read a torn
 # file). The counters dict needs no lock: the single drain thread is its only mutator.
 _LOCK = threading.Lock()
@@ -274,6 +281,26 @@ def _fold(state: dict, bundle: dict) -> None:
                 rh[b] += int(c)
 
 
+def _idle_timeout(pending: int, last_flush: float, now: "float | None" = None) -> float:
+    """The idle queue-get wait for the drain loop: the SMALLER of the stop-poll cadence and the time
+    left until the pending window's time-based flush is due, floored at 0. Capped at ``_STOP_POLL_S``
+    so a stop is always noticed within that cadence; shortened BELOW it when a flush is due sooner (so
+    the loop wakes in time to fire the time-based flush instead of overshooting it). When nothing is
+    pending there is no scheduled flush, so it waits the full cadence (never a busy-spin).
+
+    F3: the pre-fix expression was ``min(_STOP_POLL_S, max(0.5, _FLUSH_SECONDS - elapsed))``. Since
+    ``_STOP_POLL_S == 0.5`` the inner ``max(0.5, ...)`` floor equalled the outer ``min`` cap, pinning
+    the result to a constant 0.5 and making the wall-time term dead. The floor is now 0.0 so the
+    wall-time term can shorten the wait, gated on ``pending`` so an idle loop still waits the full
+    cadence rather than spinning at a zero timeout."""
+    if now is None:
+        now = time.monotonic()
+    if pending <= 0:
+        return _STOP_POLL_S
+    remaining = _FLUSH_SECONDS - (now - last_flush)
+    return min(_STOP_POLL_S, max(0.0, remaining))
+
+
 def start_writer() -> None:
     """Start the single drain daemon (idempotent). Called ONCE from serve_http.main() under the
     WRITES_ENABLED guard, never from a cron/smoke import."""
@@ -288,13 +315,21 @@ def start_writer() -> None:
 def _drain_loop() -> None:
     """Forever: own the counter state + yield.json exclusively. Batch-flush on >=_FLUSH_ITEMS
     queued OR >=_FLUSH_SECONDS elapsed, each flush one atomic _save_all. A crash loses at most the
-    un-flushed window (acceptable for advisory statistics). Never dies (every cycle guarded)."""
+    un-flushed window (acceptable for advisory statistics). Never dies (every cycle guarded).
+
+    S2: registers itself so a graceful shutdown can drain it; the idle queue-get is capped at
+    _STOP_POLL_S so a stop is noticed promptly, and on stop a FINAL FLUSH persists the last window.
+    Additive: the wall-time flush check is unchanged, so flush cadence is unaffected beyond the
+    sub-second poll granularity."""
+    from penumbra.core import lifecycle
+    lifecycle.register_loop("yield-tap-writer", _STOP, threading.current_thread())
     state = _load_all()
     pending = 0
     last_flush = time.monotonic()
-    while True:
+    while not _STOP.is_set():
         try:
-            timeout = max(0.5, _FLUSH_SECONDS - (time.monotonic() - last_flush))
+            timeout = _idle_timeout(pending, last_flush)   # F3: capped at the stop cadence, shortened
+                                                           # when a flush is due sooner (not a dead 0.5)
             try:
                 bundle = _queue.get(timeout=timeout)
                 _fold(state, bundle)
@@ -318,3 +353,24 @@ def _drain_loop() -> None:
         except Exception as exc:  # noqa: BLE001 never let the drain thread die
             logger.warning("yield_tap drain cycle errored: %s", exc)
             time.sleep(1.0)
+    # STOP requested (graceful shutdown): first DRAIN any un-folded bundles still queued and fold them
+    # (symmetric with recall.writer._final_flush draining its queue tail), then FINAL FLUSH so a
+    # graceful restart loses no counted window (advisory stats, but free to persist on the way out).
+    # FAIL-OPEN: one bad bundle never blocks the drain, and a flush error never crashes shutdown.
+    while True:
+        try:
+            bundle = _queue.get_nowait()
+        except queue.Empty:
+            break
+        try:
+            _fold(state, bundle)
+            pending += 1
+        except Exception as exc:  # noqa: BLE001 -- one bad bundle never blocks the final drain
+            logger.debug("yield_tap final drain skipped one bundle: %s", exc)
+    if pending > 0:
+        try:
+            state["updated_at"] = _now_iso()
+            with _LOCK:
+                _save_all(state)
+        except Exception as exc:  # noqa: BLE001 -- a final-flush error must not crash shutdown
+            logger.warning("yield_tap final flush errored: %s", exc)

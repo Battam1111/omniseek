@@ -29,7 +29,7 @@ from urllib.parse import urlparse
 
 from bs4 import BeautifulSoup
 
-from penumbra.core import auth, cache, relevance
+from penumbra.core import auth, cache, diag, relevance
 from penumbra.core.normalize import Document, jsonsafe
 from penumbra.core.sources.walled._cdp import cdp_call, cdp_health
 
@@ -118,7 +118,7 @@ class ZhihuUsersAdapter:
         all_docs.sort(key=sort_key, reverse=True)
         all_docs = all_docs[:limit]
 
-        cache.set_docs(key, all_docs, ttl=1800)
+        cache.set_docs(key, all_docs, ttl=1800, empty_ttl=300)  # session/selector empty must not pin 30m
         return all_docs
 
     def _fetch_user_posts(self, handle: str, display_name: str) -> list[Document]:
@@ -133,7 +133,7 @@ class ZhihuUsersAdapter:
 
         url = f"https://www.zhihu.com/people/{handle}/posts"
 
-        def navigate_and_extract(page) -> str:
+        def navigate_and_extract(page):
             page.wait_for_load_state("domcontentloaded", timeout=20000)
             # SPA hydration — wait for the stable title hook. The list/card container
             # class names drift (2026-06: .List-item/.ContentItem no longer match), but
@@ -148,12 +148,23 @@ class ZhihuUsersAdapter:
             for _ in range(3):
                 page.evaluate("window.scrollBy(0, 3000)")
                 page.wait_for_timeout(1000)
-            return page.content()
+            return page.content(), (page.url or "")
 
         try:
-            html = cdp_call(navigate_and_extract, initial_url=url)
+            html, final_url = cdp_call(navigate_and_extract, initial_url=url)
         except Exception as exc:  # noqa: BLE001
             logger.warning("CDP fetch failed for %s: %s", handle, exc)
+            return []
+
+        # Logged-out shared 9222 session bounces /people/<handle>/posts to /signin: the page loads
+        # cleanly (no exception) but yields zero anchors, so the old code cached [] as "no posts,"
+        # mis-reading an auth outage as an empty researcher. Fail LOUD like zhihu_source (typed diag,
+        # NO cache-poison), so /eye-fix and the shared session heal see the real cause. zhihu login is
+        # QR/SMS (no autofill relogin), so surfacing it is the correct reactive move.
+        if "/signin" in final_url or "/login" in final_url:
+            diag.note("zhihu_users.auth_expired", url=final_url, body=(
+                "AUTH_EXPIRED: zhihu shared-Chrome session logged out (login wall on /people posts). "
+                "Needs a VNC re-login on the Mac mini; QR/SMS login cannot autofill-relogin."))
             return []
 
         soup = BeautifulSoup(html, "lxml")
@@ -176,7 +187,7 @@ class ZhihuUsersAdapter:
                 docs.append(doc)
                 if len(docs) >= POSTS_PER_HANDLE:
                     break
-        cache.set_docs(pkey, docs, ttl=POSTS_TTL)
+        cache.set_docs(pkey, docs, ttl=POSTS_TTL, empty_ttl=300)  # a selector-drift empty must not pin 1h
         return docs
 
     def fetch_url(self, url: str) -> Optional[Document]:

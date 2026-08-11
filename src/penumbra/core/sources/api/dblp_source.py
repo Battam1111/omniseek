@@ -34,6 +34,7 @@ from urllib.parse import urlparse
 
 import httpx
 
+from penumbra.core import diag, http
 from penumbra.core.normalize import Document, jsonsafe
 from penumbra.core.sources.api._base import BaseAPIAdapter
 
@@ -79,9 +80,45 @@ class DBLPAdapter(BaseAPIAdapter):
                 data = self._publ_search(sanitized, limit)
             except Exception as exc2:  # noqa: BLE001
                 logger.warning("DBLP retry also failed: %s", exc2)
+                st = getattr(getattr(exc2, "response", None), "status_code", None)
+                diag.note("dblp.search", url=f"{DBLP_BASE}/search/publ/api", status=st, exc=exc2)
                 return []
 
         return (((data.get("result") or {}).get("hits") or {}).get("hit")) or []
+
+    async def _araw_fetch(self, query: str, limit: int) -> list:
+        """Async twin of ``_raw_fetch`` (verbatim port of the retry logic). Mirrors the sync
+        control flow, only keying the sanitized-query retry off ``_apubl_search`` returning
+        ``None`` (``http.aget_json``'s failure→None contract) exactly where the sync path keys off
+        a raised exception: the SAME failure set (non-2xx / timeout / connection / bad JSON) fires
+        the retry, and a reached-but-empty 200 does NOT (``data`` is a dict, not None). Each failed
+        attempt already emits an ``http.get`` diag capture (with status + body) via the shared leaf;
+        the ``dblp.search`` note is kept as the source-labeled breadcrumb on the double failure,
+        mirroring the sync call site."""
+        data = await self._apubl_search(query, limit)
+        if data is None:
+            logger.warning("DBLP first attempt failed; retrying with sanitized query")
+            sanitized = " ".join(part for part in query.split() if part.isalnum())
+            if not sanitized:
+                return []
+            data = await self._apubl_search(sanitized, limit)
+            if data is None:
+                logger.warning("DBLP retry also failed")
+                diag.note("dblp.search", url=f"{DBLP_BASE}/search/publ/api",
+                          body="both attempts returned None (see the http.get capture for status/body)")
+                return []
+
+        return (((data.get("result") or {}).get("hits") or {}).get("hit")) or []
+
+    async def asearch(self, query: str, limit: int = 10) -> list[Document]:
+        """Native-async twin of ``search`` → AsyncSearchCapable (the async fan-out awaits this
+        directly, so DBLP's network wait costs a coroutine, not a held pool thread). Shares the
+        base async cache round-trip ``_aapi_search`` (SAME cache key ``(name, "publ_search", query,
+        limit)``, per-record ``_to_document``, ``rank_locally=False`` so DBLP's server order is kept
+        verbatim, cache-only-if-docs); egress via the native-async ``_araw_fetch``; per-record
+        mapping via the SAME pure-CPU ``_to_document`` — BEHAVIOR-IDENTICAL to ``search`` given
+        identical egress."""
+        return await self._aapi_search(query, limit, araw_fetch=lambda: self._araw_fetch(query, limit))
 
     def _to_document(self, raw) -> Document:
         """One publ-search hit → Document (delegates to the verbatim mapper)."""
@@ -97,6 +134,22 @@ class DBLPAdapter(BaseAPIAdapter):
         )
         resp.raise_for_status()
         return resp.json()
+
+    async def _apubl_search(self, query: str, limit: int) -> Optional[dict]:
+        """Async twin of ``_publ_search``: byte-faithful mirror (same endpoint / params / headers /
+        timeout), egress swapped from the raw ``httpx.get`` for the shared async leaf
+        ``http.aget_json``. Returns the parsed JSON dict, or ``None`` on any failure INSTEAD of
+        raising (aget_json's failure→None contract) — the retry in ``_araw_fetch`` keys off that
+        None where the sync retry keys off the exception. Routing through the leaf earns the shared
+        async pool + SSRF guard + 30MB cap; NOTE it also honours cache_only (returns None with no
+        live HTTP), so in cache-only mode the async path correctly does no network, a benign,
+        intended divergence from the raw sync egress (which never had that guard)."""
+        return await http.aget_json(
+            f"{DBLP_BASE}/search/publ/api",
+            params={"q": query, "format": "json", "h": min(limit, 50)},
+            headers={"User-Agent": USER_AGENT, "Accept": "application/json"},
+            timeout=TIMEOUT,
+        )
 
     # --------------------------------------------------------------- fetch_url
     def fetch_url(self, url: str) -> Optional[Document]:

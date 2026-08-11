@@ -56,6 +56,18 @@ class ModelScopeAdapter(BaseScrapeAdapter):
             body["Name"] = query.strip()
         return http.put_json(API_URL, json=body, timeout=20)
 
+    async def _araw_fetch(self, query: str, limit: int) -> Optional[Any]:
+        """Async twin of _raw_fetch: byte-faithful mirror -- same PUT, same body, same timeout;
+        only the shared-http egress swaps to its async twin (http.put_json -> await http.aput_json)."""
+        body: dict[str, Any] = {
+            "PageNumber": 1,
+            "PageSize": max(1, min(int(limit), 50)),
+            "SortBy": "DownloadsCount",
+        }
+        if query and query.strip():
+            body["Name"] = query.strip()
+        return await http.aput_json(API_URL, json=body, timeout=20)
+
     def _to_documents(self, raw: Any, query: str, limit: int) -> list[Document]:
         if not isinstance(raw, dict):
             return []
@@ -66,6 +78,14 @@ class ModelScopeAdapter(BaseScrapeAdapter):
             if doc is not None:
                 docs.append(doc)
         return docs
+
+    async def asearch(self, query: str, limit: int = 10) -> list[Document]:
+        """Native-async twin of search -> AsyncSearchCapable. Shares the base async cache round-trip;
+        egress via _araw_fetch; mapping via the SAME pure-CPU _to_documents (byte-identical to search)."""
+        return await self._asearch_via(
+            query, limit,
+            afetch=lambda: self._araw_fetch(query, limit),
+            abuild=lambda raw: self._to_documents(raw, query, limit))
 
     def _model_to_doc(self, model: Any) -> Optional[Document]:
         if not isinstance(model, dict):

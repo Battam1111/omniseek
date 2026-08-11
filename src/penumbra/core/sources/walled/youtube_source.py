@@ -34,7 +34,6 @@ from datetime import datetime, timezone
 from typing import Optional
 from urllib.parse import urlparse, parse_qs
 
-import yt_dlp
 from youtube_transcript_api import (
     YouTubeTranscriptApi,
     TranscriptsDisabled,
@@ -49,6 +48,13 @@ from penumbra.core.normalize import Document, jsonsafe, mk_signal
 _TRANSCRIPT_API = YouTubeTranscriptApi()
 
 logger = logging.getLogger(__name__)
+
+
+def _ytdlp():
+    """Lazy yt_dlp handle: keeps the heavy lib off the startup import path (this adapter
+    self-registers at boot, so a module-level import loaded yt_dlp on every service start)."""
+    import yt_dlp
+    return yt_dlp
 
 # Top-N comments cap — keep comment extraction bounded (yt-dlp would otherwise
 # page the WHOLE thread, which on a popular video is thousands of round trips).
@@ -140,7 +146,7 @@ def _fetch_comments(video_id: str, limit: int = _MAX_COMMENTS) -> list[dict]:
     opts = dict(_YDL_COMMENTS_OPTS)
     opts["extractor_args"] = {"youtube": {"max_comments": [str(cap)]}}
     try:
-        with yt_dlp.YoutubeDL(opts) as ydl:
+        with _ytdlp().YoutubeDL(opts) as ydl:
             info = ydl.extract_info(
                 f"https://www.youtube.com/watch?v={video_id}", download=False
             )
@@ -225,7 +231,10 @@ def _fetch_transcript(video_id: str, prefer_languages=("en", "zh-CN", "zh-Hans",
     try:
         fetched = _TRANSCRIPT_API.fetch(video_id, languages=list(prefer_languages))
     except (TranscriptsDisabled, VideoUnavailable):
-        cache.set(key, "", ttl=86400)
+        # AUTHORITATIVE no-transcript (captions genuinely disabled / video unavailable): a durable fact,
+        # so keep the 24h '' sentinel past the empty-FLOOR (re-checking every 5min would only hammer the
+        # transcript API for something that will not change).
+        cache.set(key, "", ttl=86400, authoritative_empty=True)
         return None
     except NoTranscriptFound:
         # None of preferred languages found — try any available
@@ -237,10 +246,15 @@ def _fetch_transcript(video_id: str, prefer_languages=("en", "zh-CN", "zh-Hans",
                 chosen = t
                 break
             if chosen is None:
-                cache.set(key, "", ttl=86400)
+                # AUTHORITATIVE: listed transcripts successfully, there are none → durable fact, keep 24h.
+                cache.set(key, "", ttl=86400, authoritative_empty=True)
                 return None
             fetched = chosen.fetch()
         except Exception as exc:  # noqa: BLE001
+            # TRANSIENT: the list()/fetch() fallback RAISED (network / API error), NOT a proven
+            # no-transcript. Leave this to the cache.set empty-FLOOR: the '' self-heals in EMPTY_TTL_CAP
+            # instead of masking a transient failure as "no transcript" for 24h (the sibling of the
+            # enrich-null-cached-24h bug). Do NOT pass authoritative_empty here.
             logger.debug("Transcript fallback failed for %s: %s", video_id, exc)
             cache.set(key, "", ttl=86400)
             return None
@@ -284,7 +298,7 @@ class YouTubeAdapter:
         # ytsearch<N>:<query> tells yt-dlp to do a YouTube search and return N results
         search_url = f"ytsearch{min(limit, 25)}:{query}"
         try:
-            with yt_dlp.YoutubeDL(_YDL_SEARCH_OPTS) as ydl:
+            with _ytdlp().YoutubeDL(_YDL_SEARCH_OPTS) as ydl:
                 info = ydl.extract_info(search_url, download=False)
         except Exception as exc:  # noqa: BLE001
             logger.warning("YouTube search failed: %s", exc)
@@ -300,7 +314,9 @@ class YouTubeAdapter:
             except Exception as exc:  # noqa: BLE001
                 logger.debug("Skipping YouTube entry: %s", exc)
 
-        cache.set(key, [d.model_dump(mode="json") for d in docs], ttl=1800)
+        # A yt-dlp/network-failure empty must not pin [] for 30m (masks the outage); a genuine empty
+        # re-checks in 5m. (The "" transcript sentinels above are deliberate negative caches, untouched.)
+        cache.set(key, [d.model_dump(mode="json") for d in docs], ttl=1800 if docs else 300)
         return docs
 
     def _comments_search(self, video_id: str, limit: int) -> list[Document]:
@@ -322,7 +338,7 @@ class YouTubeAdapter:
 
         # Pull full video info + transcript
         try:
-            with yt_dlp.YoutubeDL(_YDL_INFO_OPTS) as ydl:
+            with _ytdlp().YoutubeDL(_YDL_INFO_OPTS) as ydl:
                 info = ydl.extract_info(
                     f"https://www.youtube.com/watch?v={video_id}", download=False
                 )
@@ -371,7 +387,7 @@ class YouTubeAdapter:
     def health_check(self) -> tuple[bool, str]:
         # Probe with a tiny search
         try:
-            with yt_dlp.YoutubeDL(_YDL_SEARCH_OPTS) as ydl:
+            with _ytdlp().YoutubeDL(_YDL_SEARCH_OPTS) as ydl:
                 info = ydl.extract_info("ytsearch1:research methodology", download=False)
             if info and info.get("entries"):
                 return True, "OK"

@@ -167,11 +167,21 @@ def video_frames(url: str, start=None, duration=None, n: int = _DEFAULT_N,
     except ValueError as exc:
         return {"error": str(exc)}
 
+    # SSRF guard: video_frames takes an AGENT-controlled URL and hands it to yt-dlp / a session
+    # helper, a separate egress from the mainline http guard. Refuse an SSRF-class http(s) URL so
+    # no branch can reach a loopback/private host (127.0.0.1:9222 CDP).
+    from penumbra.core import _netguard
+    if (urlparse(url).scheme or "").lower() in ("http", "https"):
+        _blk = _netguard.security_block_reason(url)
+        if _blk:
+            return {"error": f"refused: {_blk}"}
+
     ff = imageio_ffmpeg.get_ffmpeg_exe()
     tmp = tempfile.mkdtemp(prefix="penumbra-vframes-")
     try:
         host = (urlparse(url).hostname or "").lower()
-        if "bilibili.com" in host or "b23.tv" in host:
+        if host == "bilibili.com" or host.endswith(".bilibili.com") \
+                or host == "b23.tv" or host.endswith(".b23.tv"):
             res = _bilibili_video_file(url, tmp)
             if not res:
                 return {"error": "bilibili video resolve failed (activation / anti-crawler / no video stream?)"}

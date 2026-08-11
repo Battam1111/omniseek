@@ -16,14 +16,16 @@ named lookup (the full list is cached; local filtering costs no API calls).
 
 from __future__ import annotations
 
+import functools
 import logging
 from datetime import datetime, timezone
 from typing import Optional
 from urllib.parse import urlparse
 
+import anyio
 import httpx
 
-from penumbra.core import auth, cache
+from penumbra.core import auth, cache, diag, http
 from penumbra.core.normalize import Document
 
 logger = logging.getLogger(__name__)
@@ -72,6 +74,8 @@ class LLMLeaderboardAdapter:
             raw = resp.json().get("data", [])
         except Exception as exc:  # noqa: BLE001
             logger.warning("llm_leaderboard: fetch failed: %s", exc)
+            st = getattr(getattr(exc, "response", None), "status_code", None)
+            diag.note("llm_leaderboard.fetch", url=API, status=st, exc=exc)
             return []
         slim = []
         for m in raw:
@@ -91,8 +95,72 @@ class LLMLeaderboardAdapter:
         cache.set(key, slim, ttl=CACHE_TTL)
         return slim
 
+    async def _amodels(self) -> list[dict]:
+        """Native-async twin of ``_models`` (S4b): SAME cache key (async + sync share the disk
+        cache), the disk read/write pushed OFF the loop (cache.get/set do file IO), and the RAW
+        ``httpx.get`` egress swapped to the shared async leaf (``await http.aget_json`` → the shared
+        pool + SSRF guard + cache_only + 30MB cap). Byte-identical logic to ``_models`` (same key,
+        same credential check, same slim projection); only the blocking syscalls move off-loop and
+        the egress goes async. ``auth.load`` stays inline — a tiny credential read on the loop, like
+        ``exa.asearch`` (the disk-CACHE round-trip is what earns the thread, not the creds file).
+
+        The one shape difference from ``_models``: ``http.aget_json`` returns the PARSED body (or None
+        on any request/parse failure, already logged + diag.note'd by the shared leaf), so we pull
+        ``.get("data", [])`` off that here — where ``_models`` did ``resp.json().get("data", [])`` inside
+        its own try/except. A None (fetch failed) returns [] WITHOUT caching, exactly as ``_models``'s
+        except branch does (a transient miss is not pinned for the full TTL)."""
+        key = cache.make_key("llm_leaderboard", "models", "v2")
+        cached = await anyio.to_thread.run_sync(cache.get, key)  # disk read OFF loop
+        if cached is not None:
+            return cached
+        creds = auth.load("artificial_analysis") or {}
+        api_key = creds.get("api_key")
+        if not api_key:
+            logger.info("llm_leaderboard: API key not configured")
+            return []
+        data = await http.aget_json(API, headers={"x-api-key": api_key}, timeout=TIMEOUT)  # async network
+        if data is None:
+            return []  # fetch failed (aget_json logged + diag.note'd); don't cache a transient miss
+        raw = data.get("data", []) if isinstance(data, dict) else []
+        slim = []
+        for m in raw:
+            ev = m.get("evaluations") or {}
+            pr = m.get("pricing") or {}
+            slim.append({
+                "name": m.get("name"),
+                "slug": m.get("slug"),
+                "creator": ((m.get("model_creator") or {}).get("name")) or "",
+                "release_date": m.get("release_date"),
+                "tps": m.get("median_output_tokens_per_second"),
+                "ttft": m.get("median_time_to_first_token_seconds"),
+                "price_in": pr.get("price_1m_input_tokens"),
+                "price_out": pr.get("price_1m_output_tokens"),
+                "evals": {k: ev.get(k) for k in _EVAL_KEYS if ev.get(k) is not None},
+            })
+        await anyio.to_thread.run_sync(  # disk write OFF loop
+            functools.partial(cache.set, key, slim, ttl=CACHE_TTL))
+        return slim
+
     def search(self, query: str, limit: int = 10) -> list[Document]:
         models = self._models()
+        if not models:
+            return []
+        terms = [t for t in (query or "").lower().split() if t]
+        if terms:
+            models = [m for m in models
+                      if all(t in f"{m['name']} {m['creator']} {m['slug']}".lower()
+                             for t in terms)]
+        models.sort(key=lambda m: m["evals"].get("artificial_analysis_intelligence_index")
+                    or -1, reverse=True)
+        return [self._to_doc(m) for m in models[:limit]]
+
+    async def asearch(self, query: str, limit: int = 10) -> list[Document]:
+        """Native-async twin of ``search`` (S4b): the fan-out awaits this DIRECTLY (no pool thread),
+        so this source's dominant NETWORK wait costs a coroutine, not a held thread. Mirrors ``search``
+        line-for-line: only the cached fetch swaps to the async ``_amodels`` (async egress + off-loop
+        cache); the term filter / intelligence-index sort / ``_to_doc`` map below is PURE CPU and stays
+        ON the loop, byte-identical to ``search``."""
+        models = await self._amodels()
         if not models:
             return []
         terms = [t for t in (query or "").lower().split() if t]

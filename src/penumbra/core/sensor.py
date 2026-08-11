@@ -59,6 +59,10 @@ class Sensor:
     sources: Optional[list[str]] = None
     schedule: str = "daily"
     notify: bool = False  # when a SCHEDULED run finds NEW results, push one Bark (in-process scheduler)
+    notify_if: Optional[list[str]] = None  # keyword filter: Bark ONLY when a new result matches (None = any-new)
+    notify_if_match: str = "any"           # "any" (default) | "all" of the notify_if substrings must appear
+    detect_absence: bool = False           # opt-in: also alert when a tracked STABLE-source item DISAPPEARS
+    gone_since: dict = field(default_factory=dict)  # identity -> iso first-seen-gone (the absence latch)
     baseline: list[list[str]] = field(default_factory=list)  # [[source, source_id], ...]
     created_at: str = ""
     last_run_at: Optional[str] = None
@@ -111,7 +115,9 @@ class SensorStore:
         return self._load().get(sensor_id)
 
     def create(self, query: str, sources: Optional[list[str]] = None,
-               schedule: str = "daily", notify: bool = False) -> Sensor:
+               schedule: str = "daily", notify: bool = False,
+               notify_if: Optional[list[str]] = None, notify_if_match: str = "any",
+               detect_absence: bool = False) -> Sensor:
         import hashlib
         with _STORE_LOCK:
             sensors = self._load()
@@ -119,6 +125,8 @@ class SensorStore:
                 f"{query}:{time.time()}".encode()).hexdigest()[:12]
             from datetime import datetime, timezone
             s = Sensor(id=sid, query=query, sources=sources, schedule=schedule, notify=notify,
+                       notify_if=notify_if, notify_if_match=notify_if_match,
+                       detect_absence=detect_absence,
                        created_at=datetime.now(timezone.utc).isoformat())
             sensors[sid] = s
             self._save(sensors)
@@ -202,8 +210,42 @@ def run_sensor(sensor: Sensor, store: SensorStore, limit: int = 15) -> dict:
     new_keys = current_keys - baseline_set
     new_docs = [d for d in ranked if (d.source, d.source_id) in new_keys]
 
-    sensor.baseline = [list(k) for k in (baseline_set | current_keys)]
-    sensor.last_run_at = datetime.now(timezone.utc).isoformat()
+    # notify_if content predicate (MONITOR precision): when set, only the NEW docs whose title/content
+    # match the keyword condition count toward a Bark. notify_if=None reproduces the exact any-new path.
+    # Pure in-process substring match (no regex -> no dependency, no ReDoS surface).
+    if sensor.notify_if:
+        _needles = [n.lower() for n in sensor.notify_if if n]
+        _all = (sensor.notify_if_match or "any").lower() == "all"
+        def _matches(d) -> bool:
+            hay = f"{d.title or ''} {getattr(d, 'content', '') or ''}".lower()
+            return (all(n in hay for n in _needles) if _all else any(n in hay for n in _needles)) if _needles else True
+        notify_docs = [d for d in new_docs if _matches(d)]
+    else:
+        notify_docs = new_docs
+
+    # Absence/disappearance detection (opt-in, stable-source-scoped): a tracked page_watch item whose
+    # identity vanished from the results = went dark/removed. Computed from the OLD baseline HERE, before
+    # the cap rebuild below replaces it. Latched via gone_since so a gone episode Barks ONCE and clears
+    # when the item returns; detect_absence=False -> fresh_gone stays empty (byte-identical to today).
+    _now_iso = datetime.now(timezone.utc).isoformat()
+    if sensor.detect_absence:
+        gone_now = absence_diff(sensor.baseline, current_keys)
+        for _id in set(sensor.gone_since) - gone_now:      # returned -> clear the latch
+            sensor.gone_since.pop(_id, None)
+        fresh_gone = sorted(gone_now - set(sensor.gone_since))
+        for _id in fresh_gone:
+            sensor.gone_since[_id] = _now_iso
+    else:
+        fresh_gone = []
+
+    # Bound the baseline (a fully-rewritten-every-tick list on an always-on service): current keys
+    # ALWAYS survive at the front, so a still-visible item is never dropped (no false re-report); only
+    # keys that have scrolled out of the result window tail off past the cap. Replaces the old monotonic
+    # (baseline_set | current_keys) union that grew forever.
+    cap = max(limit * 10, 200)  # ~10 result windows of headroom before a still-visible key could fall out
+    _ordered = list(current_keys) + [tuple(b) for b in sensor.baseline if tuple(b) not in current_keys]
+    sensor.baseline = [list(k) for k in _ordered[:cap]]
+    sensor.last_run_at = _now_iso
     sensor.last_new_count = len(new_keys)
     sensor.total_runs += 1
     store.update(sensor)
@@ -219,6 +261,10 @@ def run_sensor(sensor: Sensor, store: SensorStore, limit: int = 15) -> dict:
         "total_results": len(ranked),
         "new_count": len(new_keys),
         "new_titles": [d.title for d in new_docs[:5]],
+        "notify_new_count": len(notify_docs),
+        "notify_titles": [d.title for d in notify_docs[:5]],
+        "gone_count": len(fresh_gone),
+        "gone_titles": fresh_gone[:5],
         "baseline_size": len(sensor.baseline),
         "run_at": sensor.last_run_at,
     }
@@ -229,6 +275,34 @@ def compute_diff(results: list, baseline: list[list[str]]) -> list:
     baseline_set = {tuple(b) for b in baseline}
     return [(r.source, r.source_id) for r in results
             if (r.source, r.source_id) not in baseline_set]
+
+
+# ── absence / disappearance detection (borrowed idea: Huginn GapDetectorAgent, scoped noise-safe) ──
+# The sensor's default diff is APPEARANCE-only (new = current - baseline); a tracked item that goes
+# DARK (a watched policy page 404s -> page_watch emits no doc -> its key silently vanishes) never
+# surfaces, a silent failure on the eye's honest-empty-over-silent-wrong contract. Absence is sound
+# ONLY for STABLE-identity sources (page_watch's source_id is "{name}:{fp}", a fixed membership set);
+# on a churny ranked query the reverse diff is dominated by rank-window churn, so this is gated to a
+# stable-source allowlist + an opt-in flag (detect_absence) and NEVER runs for a general query sensor.
+_ABSENCE_STABLE_SOURCES = frozenset({"page_watch"})
+
+
+def _absence_identity(source: str, source_id: str) -> str:
+    """The change-INVARIANT identity of a stable-source key: source + the source_id prefix before the
+    first ':' (page_watch's '{name}:{fp}' -> 'page_watch:{name}'), so a CONTENT change (new fp, same
+    prefix) is NOT absence -- only a truly gone prefix is."""
+    return f"{source}:{(source_id or '').split(':', 1)[0]}"
+
+
+def absence_diff(baseline: list[list[str]], current_keys: set,
+                 stable_sources: frozenset = _ABSENCE_STABLE_SOURCES) -> set:
+    """Stable-source identities present in the OLD baseline but whose prefix has NO key in the current
+    result set = a tracked item that went dark/removed. Scoped to stable_sources (a churny query has no
+    stable identity). Pure."""
+    base_ids = {_absence_identity(b[0], b[1]) for b in baseline
+                if len(b) >= 2 and b[0] in stable_sources}
+    cur_ids = {_absence_identity(s, sid) for (s, sid) in current_keys if s in stable_sources}
+    return base_ids - cur_ids
 
 
 # ── The in-process sensor tick (P6 perception; the P9 loop lives in jobs.py) ──────────────────────
@@ -300,7 +374,8 @@ def scheduler_tick(store: SensorStore) -> dict:
         try:
             summary = run_sensor(s, store)
             ran.append(s.id)
-            if s.notify and summary.get("new_count", 0) > 0:
+            if s.notify and (summary.get("notify_new_count", summary.get("new_count", 0)) > 0
+                             or summary.get("gone_count", 0) > 0):
                 _bark_new_results(s, summary)
         except Exception:  # noqa: BLE001 (one bad sensor must never stop the tick)
             log.exception("sensor %s (%s) failed in scheduler tick", s.id, s.query)
@@ -329,17 +404,23 @@ def scheduler_tick_for_sensors() -> dict:
 # thin alias keeps the P6 call sites (_bark_new_results) unchanged and the same fail-open contract +
 # GROUP "Penumbra" (spelled so the penumbra sync's Penumbra->Penumbra rename lands on both sides).
 
-def _bark_push(title: str, body: str) -> None:
-    """Fail-open Bark push (group "Penumbra"): delegates to notify.bark_push. Kept as a module-local
+def _alert(title: str, body: str) -> None:
+    """Fail-open alarm: delegates to notify.alert (WeCom; Bark was deleted 2026-08-12). Kept as a module-local
     name so the existing _bark_new_results call site is untouched and any monkeypatch of this symbol
     in a test still works."""
     from penumbra.core import notify
-    notify.bark_push(title, body, group="Penumbra")
+    notify.alert(title, body)
 
 
 def _bark_new_results(sensor: "Sensor", summary: dict) -> None:
     """Shape the runner's message for a notify=True sensor that turned up new results and push it:
-    title = the sensor query, body = the new count + the first new titles. Fail-open via _bark_push."""
-    titles = summary.get("new_titles") or []
-    body = f"{summary.get('new_count', 0)} 条新结果" + ("\n" + "\n".join(titles) if titles else "")
-    _bark_push(sensor.query, body)
+    title = the sensor query, body = the new count + the first new titles. Fail-open via _alert."""
+    titles = summary.get("notify_titles") or summary.get("new_titles") or []
+    count = summary.get("notify_new_count", summary.get("new_count", 0))
+    parts = []
+    if count > 0:
+        parts.append(f"{count} 条新结果" + ("\n" + "\n".join(titles) if titles else ""))
+    if summary.get("gone_count", 0) > 0:
+        parts.append(f"⚠️ {summary['gone_count']} 个被盯项已消失: " + ", ".join(summary.get("gone_titles") or []))
+    body = "\n".join(parts) if parts else f"{count} 条新结果"
+    _alert(sensor.query, body)

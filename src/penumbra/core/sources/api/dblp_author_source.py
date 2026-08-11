@@ -51,6 +51,15 @@ class DBLPAuthorAdapter(BaseScrapeAdapter):
             timeout=15,
         )
 
+    async def _araw_fetch(self, query: str, limit: int) -> Optional[Any]:
+        """Async twin of _raw_fetch: byte-faithful mirror (same URL, params, timeout);
+        only the shared-http egress fn is swapped for its async twin."""
+        return await http.aget_json(
+            SEARCH_URL,
+            params={"q": query, "format": "json", "h": max(1, min(int(limit), 30))},
+            timeout=15,
+        )
+
     def _to_documents(self, raw: Any, query: str, limit: int) -> list[Document]:
         if not isinstance(raw, dict):
             return []
@@ -65,6 +74,14 @@ class DBLPAuthorAdapter(BaseScrapeAdapter):
             if doc is not None:
                 docs.append(doc)
         return docs
+
+    async def asearch(self, query: str, limit: int = 10) -> list[Document]:
+        """Native-async twin of search -> AsyncSearchCapable. Shares the base async cache
+        round-trip; egress via _araw_fetch; mapping via the SAME pure-CPU _to_documents."""
+        return await self._asearch_via(
+            query, limit,
+            afetch=lambda: self._araw_fetch(query, limit),
+            abuild=lambda raw: self._to_documents(raw, query, limit))
 
     def _hit_to_doc(self, hit: Any) -> Optional[Document]:
         if not isinstance(hit, dict):

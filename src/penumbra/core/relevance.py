@@ -30,21 +30,36 @@ import re
 _K1 = 1.2
 _B = 0.75
 
-_ASCII = re.compile(r"[a-z0-9]+")
-# CJK unified ideographs (+ ext A) and kana. Hangul intentionally out of scope
-# until a real query needs it.
-_CJK = re.compile(r"[㐀-䶿一-鿿぀-ヿ]+")
+# Scriptio-continua scripts, sliced into OVERLAPPING BIGRAMS (no word spaces to split on):
+# CJK unified ideographs (+ ext A), kana, and Hangul syllables. Hangul joined 2026-07-05: a live
+# ko probe showed Korean text was fully INVISIBLE to the lexical layer (lexical=0, so the ranker
+# lost its relevance anchor and freshness/engagement pushed noise to the top) while the ASR can
+# transcribe Korean audio into exactly such text — perception could produce text memory could not find.
+_CJK = re.compile(r"[㐀-䶿一-鿿぀-ヿ가-힣]+")
+# One linear scan, three classes, first match at each position wins:
+#   continua (above) → bigrams; Latin letters (incl. diacritics) + digits → one word token ("café"
+#   was mangled to "caf", "über" to "ber"); ANY other Unicode letter run (Cyrillic, Greek, Arabic,
+#   Thai, ...) → one word token (previously dropped entirely). Space-separated scripts match their
+#   own word forms; Thai-class continua degrade to run-tokens (findable, coarser) — accepted.
+_TOKEN = re.compile(
+    r"([㐀-䶿一-鿿぀-ヿ가-힣]+)"
+    r"|([a-z0-9À-ÖØ-öø-ɏ]+)"
+    r"|([^\W\d_]+)")
 
 
 def tokenize(text: str) -> list[str]:
-    """ASCII word tokens + CJK bigrams (a lone CJK char stands alone)."""
+    """Word tokens for every letter script + overlapping bigrams for scriptio-continua runs
+    (a lone continua char stands alone). Tokens return in TEXT ORDER (one linear scan)."""
     text = (text or "").lower()
-    toks = _ASCII.findall(text)
-    for run in _CJK.findall(text):
-        if len(run) == 1:
-            toks.append(run)
+    toks: list[str] = []
+    for cjk, word, other in _TOKEN.findall(text):
+        if cjk:
+            if len(cjk) == 1:
+                toks.append(cjk)
+            else:
+                toks.extend(cjk[i:i + 2] for i in range(len(cjk) - 1))
         else:
-            toks.extend(run[i:i + 2] for i in range(len(run) - 1))
+            toks.append(word or other)
     return toks
 
 

@@ -22,6 +22,8 @@ import time
 from datetime import datetime
 from typing import Optional
 
+import anyio
+
 from penumbra.core import http
 from penumbra.core.normalize import Document
 
@@ -102,6 +104,53 @@ class WaybackAdapter:
             except Exception as exc:  # noqa: BLE001 — IA load → retry, then degrade to []
                 if attempt < 2:
                     time.sleep(2 * (attempt + 1))
+                    continue
+                logger.warning("wayback CDX failed after retries: %s", exc)
+                return []
+        if not isinstance(payload, list) or len(payload) < 2:
+            return []
+        idx = {name: i for i, name in enumerate(payload[0])}
+        docs: list[Document] = []
+        for row in payload[1:]:
+            try:
+                doc = _snap_to_doc(row, idx)
+            except Exception:  # noqa: BLE001 — one bad row can't sink the rest
+                continue
+            if doc is not None:
+                docs.append(doc)
+        docs.sort(key=lambda d: d.metadata.get("timestamp", ""), reverse=True)  # newest first
+        return docs[:limit]
+
+    async def asearch(self, query: str, limit: int = 10) -> list[Document]:
+        """Native-async twin of ``search`` (S4b): the fan-out awaits this DIRECTLY, so a wayback
+        lookup's dominant NETWORK wait (CDX is legitimately slow, ~15-20s) costs a COROUTINE, not a
+        held pool thread. Mirrors ``search`` line-for-line with exactly two async swaps and NOTHING
+        else:
+          - the CDX egress -> its async twin (``await http.aget_json``), on EVERY retry attempt;
+          - the inter-retry backoff -> ``await anyio.sleep`` (NEVER ``time.sleep``: a blocking sleep
+            ON the loop would freeze every coroutine for 2-4s per attempt).
+        The URL guard + the row->doc map (_snap_to_doc, a pure fn) + the sort stay PURE CPU on the
+        loop, byte-identical to ``search``. ``search`` keeps NO disk cache round-trip, so there is
+        none to move off-loop and async<->sync stay behavior-identical. A PURE ADDITION: the sync
+        ``search`` above is untouched."""
+        q = (query or "").strip()
+        if not _looks_like_url(q):
+            return []  # not a URL — do not guess
+        # CDX 503s under Internet Archive load; retry a couple times before degrading to [].
+        payload = None
+        for attempt in range(3):
+            try:
+                payload = await http.aget_json(
+                    CDX_URL,
+                    params={"url": q, "output": "json", "collapse": "digest",
+                            "limit": str(-max(limit, 1)), "fl": "timestamp,original,statuscode"},
+                    headers={"User-Agent": _UA},
+                    timeout=TIMEOUT,
+                )
+                break
+            except Exception as exc:  # noqa: BLE001 — IA load → retry, then degrade to []
+                if attempt < 2:
+                    await anyio.sleep(2 * (attempt + 1))
                     continue
                 logger.warning("wayback CDX failed after retries: %s", exc)
                 return []

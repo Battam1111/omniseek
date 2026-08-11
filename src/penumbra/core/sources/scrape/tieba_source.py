@@ -44,6 +44,7 @@ from urllib.parse import quote, urlsplit, urlunsplit
 
 import httpx
 
+from penumbra.core import http
 from penumbra.core.normalize import Document, jsonsafe, mk_signal
 from penumbra.core.sources.scrape._base import BaseScrapeAdapter
 
@@ -112,6 +113,47 @@ class TiebaAdapter(BaseScrapeAdapter):
             logger.warning("tieba: %s returned error envelope no=%s", url, data.get("no") if isinstance(data, dict) else "?")
             return None
         return data
+
+    # ── native async (S4) ────────────────────────────────────────────────────
+    @staticmethod
+    async def _aget_json(url: str, params: dict) -> Optional[dict]:
+        """Async twin of ``_get_json``: byte-faithful mirror (SAME quote()-built query string, mobile-UA
+        header, timeout, the ``no != 0`` envelope check, and the failure -> None contract). ONLY the raw
+        ``httpx.get(...).json()`` egress swaps to the shared async leaf ``await http.aget_json`` (this is a
+        standard keyless JSON GET, so it needs nothing httpx.aget cannot do; the leaf adds the shared pool +
+        SSRF guard + cache_only + 30MB cap + diag.note evidence tap for free, and its pooled async client
+        already carries follow_redirects=True). The mobile UA overrides the shared PenumbraEye UA via the
+        headers kwarg (Baidu gates the shared UA)."""
+        qs = "&".join(f"{k}={quote(str(v))}" for k, v in params.items())
+        full = f"{url}?{qs}"
+        data = await http.aget_json(full, headers={"User-Agent": _MOBILE_UA}, timeout=TIMEOUT)
+        if data is None:
+            return None  # request/parse failure (http owns the log + diag.note evidence tap)
+        # Tieba envelope: {"no":0,"error":"success","data":{...}}; no != 0 is an API error.
+        if not isinstance(data, dict) or data.get("no") not in (0, "0", None):
+            logger.warning("tieba: %s returned error envelope no=%s", url, data.get("no") if isinstance(data, dict) else "?")
+            return None
+        return data
+
+    async def _araw_fetch(self, query: str, limit: int) -> Optional[dict]:
+        """Async twin of ``_raw_fetch``: byte-faithful mirror of the two mobile GETs (thread search then
+        forum search) and the both-failed -> None contract; each egress swaps to ``_aget_json``. Sequential
+        awaits mirror the sync order (there is no ThreadPoolExecutor here to convert to gather): the same
+        two GETs the sync path issues, gently."""
+        threads = await self._aget_json(THREAD_URL, {"word": query, "pn": 1})
+        forums = await self._aget_json(FORUM_URL, {"word": query})
+        if threads is None and forums is None:
+            return None
+        return {"threads": threads, "forums": forums}
+
+    async def asearch(self, query: str, limit: int = 10) -> list[Document]:
+        """Native-async twin of ``search`` -> AsyncSearchCapable. Shares the base async cache round-trip
+        (``_asearch_via``: cache get/set off the loop, SAME cache key as ``search``); egress via
+        ``_araw_fetch``; mapping via the SAME pure-CPU ``_to_documents`` (byte-identical to ``search``)."""
+        return await self._asearch_via(
+            query, limit,
+            afetch=lambda: self._araw_fetch(query, limit),
+            abuild=lambda raw: self._to_documents(raw, query, limit))
 
     # ── parse ───────────────────────────────────────────────────────────────
     def _to_documents(self, raw: Any, query: str, limit: int) -> list[Document]:

@@ -1,4 +1,4 @@
-"""Canada Provincial Nominee Program (PNP) draw histories — Ontario / BC / Alberta.
+"""Canada Provincial Nominee Program (PNP) draw histories — Ontario / BC / Alberta / Manitoba.
 
 Each province runs its OWN nominee program with its OWN draw cadence + scoring system, published as
 HTML tables on a gov page (no feed, no API). These adapters parse those tables into per-draw
@@ -29,6 +29,7 @@ Structures verified live 2026-06-22:
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime
 from typing import Optional
 
@@ -232,4 +233,110 @@ class AaipDrawsAdapter(_CaPnpBase):
                     metadata={"stream": stream, "draw_date": draw_date,
                               "min_score": score, "invitations": inv},
                 ))
+        return _finish(docs, limit)
+
+
+# MPNP publishes each EOI draw as a WordPress blog post; the /draws/ archive lists the ~10 most
+# recent as <article> excerpts (NO html table, unlike the three provinces above), each carrying the
+# draw number, publish date, a stream heading, and the Letters of Advice to Apply (LAA) counts. The
+# 2022 NOC-2021 redesign dropped the single "minimum ranking score" cutoff those draws used to
+# publish, so this parses what the current model actually reports: LAA total + per-initiative
+# breakdown + the Express-Entry-declared subset, and keeps the excerpt as content so no signal is lost.
+_MPNP_LAA_HEAD = re.compile(r"Number of Letters of Advice to Apply issued[:\s]*([0-9][0-9,]*)")
+_MPNP_LAA_OFTHE = re.compile(r"Of the\s+([0-9][0-9,]*)\s+Letters of Advice to Apply")
+_MPNP_EE = re.compile(r"([0-9][0-9,]*)\s+were issued to candidates who declared a valid Express Entry")
+_MPNP_LI = re.compile(r"^(.+?):\s*([0-9][0-9,]*)\s*$")
+_MPNP_NUM = re.compile(r"#\s*([0-9]+)")
+
+
+class MpnpDrawsAdapter(_CaPnpBase):
+    name = "mpnp_draws"
+    description = (
+        "曼省提名 MPNP EOI 抽签历史 - Manitoba Provincial Nominee Program 的 Expression of Interest 逐次抽签: "
+        "抽签号 + 日期 + stream (Skilled Worker in Manitoba / Skilled Worker Overseas / 职业定向 occupation-specific / "
+        "战略招募 strategic recruitment) + 发出的 Letters of Advice to Apply (LAA) 总数与按招募渠道 (Employer Services / "
+        "Francophone / Regional / Ethnocultural / TPP) 的细分, 以及其中声明持有效 Express Entry profile 的人数. "
+        "曼省 EOI 用自有排序分, 非联邦 CRS; 2022 NOC-2021 改版后不再公布单一分数线, 故本源采当前模型实报的 LAA 结构. "
+        "命名钻取 (penumbra_search 单源 raw)."
+    )
+    explicit_only = "MPNP 曼省提名 EOI 抽签历史 (HTML 抓取, 命名钻取 (penumbra_search 单源 raw)); 省提名非联邦 EE"
+    search_url = "https://immigratemanitoba.com/draws/"
+    url_host = "immigratemanitoba.com"
+
+    def _raw_fetch(self, query: str, limit: int) -> Optional[str]:
+        """Rendered /draws/ HTML via the shared CDP browser — the contingency this adapter always
+        documented, now the live path (2026-07-25).
+
+        The WordPress front went behind a JS interstitial ("One moment, please..." + a self-reload
+        after ~5s). Measured, in order: a bare GET -> 415; +browser UA -> still 415; +Accept -> 200
+        but ~11.9KB of pure challenge shell; a 3-hit cookie-jar retry -> same shell, no cookie ever
+        set; curl_cffi Chrome-TLS -> 0 bytes. So no header or fingerprint tier reaches the archive:
+        it needs a browser that RUNS the challenge. CDP returns the real page (~240KB, 10 article
+        cards, draws #271-275 verified), handed to _to_documents UNCHANGED. Same pattern as
+        ircc_ee_rounds. explicit_only already keeps this off the broad fan-out, so the serialized
+        CDP cost is paid only by a named drill."""
+        from penumbra.core.sources.walled._cdp import cdp_call
+
+        def _nav(page):
+            page.wait_for_load_state("domcontentloaded", timeout=30000)
+            try:  # the interstitial reloads itself into the archive; wait for a real post card
+                page.wait_for_selector("article", timeout=20000)
+            except Exception:  # noqa: BLE001 — no card: fall through, _to_documents then yields []
+                page.wait_for_timeout(6000)
+            return page.content()
+
+        try:
+            return cdp_call(_nav, initial_url=self.search_url, timeout=75)
+        except Exception as exc:  # noqa: BLE001 — failure → None → [] (the adapter contract)
+            logger.warning("%s: CDP fetch failed: %s", self.name, exc)
+            return None
+
+    def _to_documents(self, raw, query, limit) -> list[Document]:
+        soup = BeautifulSoup(self._html(raw) or "", "lxml")
+        docs: list[Document] = []
+        for art in soup.find_all("article"):
+            title_el = art.find(class_="entry-title")
+            link = title_el.find("a") if title_el else None
+            if not link:
+                continue
+            num_m = _MPNP_NUM.search(link.get_text(" ", strip=True))
+            if not num_m:
+                continue
+            draw_no = num_m.group(1)
+            url = link.get("href") or self.search_url
+            dt = art.find(attrs={"itemprop": "datePublished"})
+            draw_date = dt.get_text(" ", strip=True) if dt else ""
+            exc = art.find(class_="ast-excerpt-container") or art
+            h3 = exc.find(["h3", "h2"])
+            stream = h3.get_text(" ", strip=True) if h3 else "Skilled Worker Stream"
+            text = re.sub(r"\s+", " ",
+                          exc.get_text(" ", strip=True).replace("\xa0", " ").replace("�", " ")).strip()
+            head = _MPNP_LAA_HEAD.search(text)
+            of_the = _MPNP_LAA_OFTHE.search(text)
+            laa = (head.group(1) if head else (of_the.group(1) if of_the else "")).replace(",", "")
+            ee_m = _MPNP_EE.search(text)
+            express_entry = ee_m.group(1).replace(",", "") if ee_m else ""
+            breakdown: dict[str, str] = {}
+            for li in exc.find_all("li"):
+                lt = re.sub(r"\s+", " ",
+                            li.get_text(" ", strip=True).replace("\xa0", " ").replace("�", " "))
+                m = _MPNP_LI.match(lt)
+                if m and not m.group(1).lower().startswith("number of letters"):
+                    breakdown[m.group(1).strip()] = m.group(2).replace(",", "")
+            brk_txt = ("招募渠道细分: " + ", ".join(f"{k} {v}" for k, v in breakdown.items()) + ". "
+                       ) if breakdown else ""
+            ee_txt = f"其中 {express_entry} 人声明持有效 Express Entry profile." if express_entry else ""
+            docs.append(Document(
+                source=self.name,
+                source_id=f"mpnp:{draw_no}",
+                url=url,
+                title=f"MPNP EOI Draw #{draw_no} · {stream}",
+                content=(f"曼省提名 MPNP EOI 抽签 #{draw_no} - {stream}. 发出 {laa or '?'} 份 "
+                         f"Letters of Advice to Apply (LAA). {brk_txt}{ee_txt}").strip(),
+                date=_parse_date(draw_date),
+                tags=["canada", "immigration", "pnp", "manitoba"],
+                metadata={"draw_number": draw_no, "draw_date": draw_date, "stream": stream,
+                          "laa_issued": laa, "laa_breakdown": breakdown,
+                          "express_entry_declared": express_entry},
+            ))
         return _finish(docs, limit)

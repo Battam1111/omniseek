@@ -40,8 +40,11 @@ _S2_REF_CAP = 100  # hard cap on S2 references fetched per seed (page-bounded; r
 # upstream could grind for MINUTES before the 5-consecutive-failure breaker trips (the field_skeleton
 # "hung for minutes" symptom). This caps the whole operation: the assemble loop checks it between
 # calls and bails early with whatever it has (a partial map, flagged), never hanging the agent. The
-# happy path (~12s) is well under it; an agent mapping a huge field can raise deadline_s.
-_ASSEMBLE_DEADLINE_S = 25.0
+# happy path (~12s) is well under it; an agent mapping a huge field can raise deadline_s. Set to 45s
+# (was 25s): a genuinely broad field (4 seeds x 25 citers) does ~13 calls paced at S2's ~1 RPS, so
+# 25s could bail a NORMAL broad map partial before its edges finished; 45s covers the paced serial
+# cost with margin while still bounding a truly-stuck upstream (the bail is a safety net, not a target).
+_ASSEMBLE_DEADLINE_S = 45.0
 
 # _norm_s2_id now lives in _s2.norm_s2_id (single source of truth, shared with relations).
 # Kept as a module-level alias so the smoke gate + any external caller keep working.
@@ -276,14 +279,38 @@ def _s2_assemble(query: Optional[str], seeds: Optional[list[str]],
 
 
 # ── shared node-building (source-agnostic; reads the normalized work shape) ──────
-def _build(seed_ids: list[str], works: dict, max_nodes: int) -> dict:
+# Budgeted-projection caps for the S2 citing-sentence evidence (`contexts`), so the field-map stays within
+# the tool channel instead of dumping every node's full sentences (dogfood friction #11).
+_CTX_TOP_NODES = 15          # only the top nodes (by in_degree order) keep their citing sentences
+_CTX_SNIPPETS_PER_NODE = 2   # citing sentences kept per such node
+_CTX_SNIPPET_CHARS = 240     # per-sentence character cap
+
+
+_EDGES_CAP = 2000  # cap the in-corpus edge list _build returns (2-elem short-id pairs; ~120KB worst case)
+
+
+def _build(seed_ids: list[str], works: dict, max_nodes: int, query: Optional[str] = None) -> dict:
     seed_set = set(seed_ids)
     indeg: Counter = Counter()  # in-field in-degree (only where referenced_works are present)
-    for w in works.values():
-        for r in (w.get("referenced_works") or []):
+    edges: list[list[str]] = []          # in-corpus [citer_id, cited_id] pairs (the citation DAG)
+    seed_ref_freq: Counter = Counter()   # non-seed work -> # SEEDS that reference it (missing foundational refs)
+    seed_cite_freq: Counter = Counter()  # non-seed work -> # SEEDS it cites (missing frontier citers)
+    for wid_, w in works.items():
+        raw_refs = w.get("referenced_works") or []
+        for r in raw_refs:
             t = _wid(r)
             if t in works:
-                indeg[t] += 1
+                indeg[t] += 1              # in_degree semantics UNCHANGED (self-cite still counted as before)
+                if t != wid_:
+                    edges.append([wid_, t])  # no self-loop in the exposed edge list
+        # Seed-relative gap frequencies (LCN Top-Cited / Top-Citing, ranked by # DISTINCT seeds).
+        refs = {_wid(r) for r in raw_refs}
+        if wid_ in seed_set:
+            for t in refs:
+                if t in works and t not in seed_set:
+                    seed_ref_freq[t] += 1    # a seed references t -> t is a candidate MISSING foundational ref
+        else:
+            seed_cite_freq[wid_] = len(refs & seed_set)  # a non-seed work citing N seeds -> a MISSING frontier citer
     nodes = []
     for wid_, w in works.items():
         cs = [c for c in (w.get("concepts") or []) if isinstance(c, dict) and c.get("display_name")]
@@ -304,6 +331,9 @@ def _build(seed_ids: list[str], works: dict, max_nodes: int) -> dict:
             "url": doi or w.get("_url") or f"https://openalex.org/{wid_}",
             "is_seed": wid_ in seed_set,
         }
+        if wid_ not in seed_set:  # seed-relative gap stamps (a seed is never "missing"); passive, no re-sort
+            node["seed_ref_freq"] = seed_ref_freq.get(wid_, 0)    # # seeds referencing this (missing foundational ref)
+            node["seed_cite_freq"] = seed_cite_freq.get(wid_, 0)  # # seeds this cites (missing frontier citer)
         if "_influential" in w:  # S2 channel only: surface the citation-edge semantics
             node["influential"] = bool(w.get("_influential"))
             if w.get("_intents"):
@@ -317,8 +347,47 @@ def _build(seed_ids: list[str], works: dict, max_nodes: int) -> dict:
                 node["contexts"] = w["_contexts"]
         nodes.append(node)
     nodes.sort(key=lambda x: (x["in_degree"], x["cited_by"]), reverse=True)  # default view; agent re-judges
+    nodes = nodes[:max_nodes]
+    # Expose the in-corpus citation DAG (the edges _build already walked to derive in_degree) so the agent
+    # can build the citation / co-citation / bibliographic-coupling networks itself (measure, don't rank).
+    # Filter to SURVIVING nodes (no dangling endpoint after truncation) + cap the payload.
+    _kept = {n["id"] for n in nodes}
+    edges = [e for e in edges if e[0] in _kept and e[1] in _kept]
+    edges_capped = len(edges) > _EDGES_CAP
+    edges = edges[:_EDGES_CAP]
+    # BUDGETED PROJECTION (dogfood friction #11): the RAW citing sentences (`contexts`) are heavy polarity
+    # evidence -- field_skeleton used to inline EVERY node's full contexts, a ~150k-char dump that overflowed
+    # the tool channel, violating the eye's "budgeted projections, never dump" discipline. Keep the citing
+    # sentences ONLY for the top nodes worth reading (by in_degree order, seeds first), capped in count + length;
+    # for the rest, drop them for a lean `has_contexts` flag (drill THAT paper for its full citing sentences).
+    for _i, _n in enumerate(nodes):
+        _ctx = _n.get("contexts")
+        if not _ctx:
+            continue
+        if _i < _CTX_TOP_NODES:
+            _n["contexts"] = [{"snippet": str(_c.get("snippet") or "")[:_CTX_SNIPPET_CHARS],
+                               "intents": _c.get("intents")}
+                              for _c in _ctx[:_CTX_SNIPPETS_PER_NODE] if isinstance(_c, dict)]
+        else:
+            _n.pop("contexts", None)
+            _n["has_contexts"] = True
+    # PASSIVE query-relevance stamp (mirrors rank.py's "measure, don't rank by them"): when a query
+    # is given, score each node's lexical relevance to it and attach as metadata WITHOUT touching the
+    # (in_degree, cited_by) sort above. field_skeleton computes relevance only to pick seeds, then
+    # discards it for the neighborhood; this hands back that one thrown-away signal so the agent can
+    # re-sort a hub-heavy field's frontier by on-query relevance. Titles-only (thinner than merge_rank),
+    # in-process + CJK-aware, zero new dependency. Fail-open: a scoring hiccup never breaks the map.
+    if query:
+        try:
+            from penumbra.core import relevance
+            _scores = relevance.field_scores(
+                [[(_n["title"] or "", 1.0), (_n.get("concept") or "", 0.3)] for _n in nodes], query)
+            for _n, _s in zip(nodes, _scores):
+                _n["query_relevance"] = round(_s, 3)
+        except Exception:  # noqa: BLE001 -- a relevance hiccup must never break the neighborhood map
+            pass
     return {"seeds": seed_ids, "n_nodes": len(nodes), "n_edges": sum(indeg.values()),
-            "nodes": nodes[:max_nodes]}
+            "edges": edges, "edges_capped": edges_capped, "nodes": nodes}
 
 
 def _graph_tap(source: str, works: dict) -> None:
@@ -440,8 +509,14 @@ def field_skeleton(query: Optional[str] = None, seeds: Optional[list[str]] = Non
     ``deadline_s`` (default ~25s) is the OVERALL wall-clock budget: on a slow/throttling upstream
     the assemble bails early with a PARTIAL map (``_meta.deadline_hit``) instead of hanging — raise
     it to map a large field more completely."""
+    # A-class canonical key: normalize + sort the seeds so every id-FORM (bare arXiv / ArXiv: / DOI:)
+    # and ORDERING of one seed SET collapses to a single cache row (a set defines the neighborhood;
+    # order does not). Reuses the s2 normalizer _s2_assemble applies downstream; oa seeds are already
+    # canonical W-ids, so just sort them for order-stability.
+    _seed_norm = _s2.norm_s2_id if source == "s2" else (lambda s: s)
+    seed_key = ",".join(sorted(_seed_norm(s) for s in (seeds or [])))
     key = cache.make_key("cartographer", "nbhd", source, query or "",
-                         ",".join(seeds or []), n_seeds, citers_per_seed)
+                         seed_key, n_seeds, citers_per_seed)
     if not fresh:
         cached = cache.get(key)
         if cached is not None:
@@ -460,13 +535,13 @@ def field_skeleton(query: Optional[str] = None, seeds: Optional[list[str]] = Non
         if throttled:
             note = ("no seeds resolved: Semantic Scholar is rate-limiting (HTTP 429). Retry shortly, "
                     "or pass source=openalex for the same citation structure.")
-        return {"seeds": [], "n_nodes": 0, "n_edges": 0, "nodes": [], "source": source,
+        return {"seeds": [], "n_nodes": 0, "n_edges": 0, "edges": [], "nodes": [], "source": source,
                 "note": note,
                 "_meta": {"backend": source, "elapsed_s": round(time.monotonic() - t0, 1),
                           "seeds_requested": seeds_requested, "seeds_resolved": 0,
                           "nodes_capped": False, "degraded": bool(degraded or throttled),
                           "partial": True}}
-    result = _build(seed_ids, works, max_nodes)
+    result = _build(seed_ids, works, max_nodes, query=query)
     result["source"] = source
     # FAIL-OPEN graph tap: the single exit point both backends share. Mints work/person/topic/venue
     # nodes + cites/authored/about/published_in edges from the assembled works dict through the
@@ -502,9 +577,14 @@ def field_skeleton(query: Optional[str] = None, seeds: Optional[list[str]] = Non
         result["note"] = (f"partial map: the {round(deadline_at - t0)}s budget blew before all seeds' "
                           "edges were fetched (slow/throttling upstream). Retry shortly, raise "
                           "deadline_s, or pass source=openalex.")
-    # Do NOT cache a time-truncated map (the throttle is transient): a retry when the upstream is
-    # healthy should be able to build the FULL neighborhood, not get served this partial for 6h.
-    if not deadline_hit:
+    # Do NOT cache a TRANSIENT-partial map: time-truncated (deadline_hit) OR breaker-degraded (degraded:
+    # some assemble calls silently fell to []/None while S2's circuit was open). Both are incomplete
+    # because the UPSTREAM was unhealthy, not because the field is small, so a retry when it recovers
+    # should build the FULL neighborhood, not get served this partial for 6h. The result is a truthy
+    # dict, so the cache.set empty-FLOOR cannot catch it — this is the local guard for that truthy-
+    # partial case, using the health signal _s2/oa already expose. nodes_capped / fewer-seeds are
+    # LEGITIMATE partials (the map is as complete as the field allows) and DO cache.
+    if not deadline_hit and not degraded:
         cache.set(key, result, ttl=6 * 3600)
     return result
 
@@ -518,7 +598,10 @@ def recommend(seeds: Optional[list[str]] = None, limit: int = 20, fresh: bool = 
     seeds = [s for s in (seeds or []) if s]
     if not seeds:
         return {"seeds": [], "n": 0, "papers": []}
-    key = cache.make_key("cartographer", "recommend", ",".join(seeds), limit)
+    # A-class canonical key: normalize + sort seeds (positives; order is not meaningful) so every
+    # id-form / ordering collapses to one row. Reuses _s2.norm_s2_id (recommend is s2-only).
+    key = cache.make_key("cartographer", "recommend",
+                         ",".join(sorted(_s2.norm_s2_id(s) for s in seeds)), limit)
     if not fresh:
         cached = cache.get(key)
         if cached is not None:
@@ -564,5 +647,12 @@ def recommend(seeds: Optional[list[str]] = None, limit: int = 20, fresh: bool = 
         result["_meta"] = {"diagnostic": (
             f"{_bad} look like OpenAlex work-ids — the paper tools do NOT accept them. For an "
             "openalex penumbra_search result pass metadata.paper_id (or metadata.doi), not source_id.")}
-    cache.set(key, result, ttl=6 * 3600)
+    # Truthy-partial guard (the empty-FLOOR can't see an empty list INSIDE a truthy dict): when there
+    # are NO recs AND S2 was unreachable (breaker-open / throttled), the empty is a FAILURE artifact,
+    # not a genuine 'no recs' — cache it briefly so it self-heals instead of pinning 6h. A non-empty
+    # result, or a genuine empty from a HEALTHY S2, keeps the 6h TTL.
+    if papers or not (_s2.breaker_open() or _s2.recently_throttled()):
+        cache.set(key, result, ttl=6 * 3600)
+    else:
+        cache.set(key, result, ttl=cache.EMPTY_TTL_CAP)
     return result

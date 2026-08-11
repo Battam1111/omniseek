@@ -58,8 +58,11 @@ STATES = frozenset({
     "owner_review", "redline_blocked", "parked_p2", "error", "probe_dead",
 })
 
-# Terminal states: no outgoing edge (rejected/redline_blocked/parked_p2/probe_dead keep their
-# rationale so the loop never re-surfaces them; applied is a P1.5 terminal, unused in P1).
+# Terminal states: no FORWARD recovery edge (rejected/redline_blocked/parked_p2/probe_dead keep their
+# rationale so the loop never re-surfaces them; applied is a P1.5 terminal, unused in P1). parked_p2
+# is terminal for ANTI-REDISCOVERY (its host joins tried_hosts) yet has ONE forward edge, the P2
+# wall-aware revival (parked_p2 -> awaiting_verdict) that re-judges the existing row after a jailed
+# render; the others keep only the universal "-> error" escape.
 # probe_dead (P4): a candidate whose probe failed K consecutive times (dead host / persistent
 # SSRF block / always-timeout). Distinct from rejected (no agent judged it) and from an error
 # zombie re-probed forever; its canonical host joins tried_hosts.json.
@@ -103,6 +106,11 @@ ALLOWED_TRANSITIONS = frozenset({
     # so the frozen set is total and smoke can assert it exactly.
     ("redline_blocked", "error"),
     ("parked_p2", "error"),
+    # P2 wall-aware probe: a parked_p2 candidate (structurally invisible to the plain-HTTP probe)
+    # is REVIVED to awaiting_verdict once the jailed-browser render (mode_probe walled=True) surfaces
+    # its real content. parked_p2 stays the terminal anti-rediscovery marker (its canonical host joins
+    # tried_hosts so discovery never re-ADDS it); this edge revives the EXISTING row, not a re-find.
+    ("parked_p2", "awaiting_verdict"),
     ("rejected", "error"),
     # error recovery: a re-probe lifts a stranded candidate back into the pipeline.
     ("error", "probed"),

@@ -25,8 +25,9 @@ from typing import Optional
 from urllib.parse import urlparse
 
 from bs4 import BeautifulSoup
+from markdownify import markdownify as html_to_md
 
-from penumbra.core.normalize import Document
+from penumbra.core.normalize import Document, strip_base64_images
 from penumbra.core.sources.walled._cdp import cdp_call, cdp_health, content_with_media, images_from_page
 
 logger = logging.getLogger(__name__)
@@ -105,7 +106,17 @@ class CdpFulltextAdapter:
         for tag in soup(["script", "style", "noscript", "svg", "nav", "header", "footer", "aside"]):
             tag.decompose()
         main = soup.find("main") or soup.body
-        body = main.get_text("\n", strip=True) if main else ""
+        # Emit MARKDOWN (Document.content contract) not flattened text, mirroring the eye's other
+        # markdownify paths (wechat/_rss/_stackexchange); try/except falls back to the old get_text on
+        # pathological HTML, and strip_base64_images defuses inline data-URI blobs.
+        if main:
+            try:
+                body = html_to_md(str(main), heading_style="ATX").strip()
+            except Exception:  # noqa: BLE001 — markdownify can be picky on weird HTML
+                body = main.get_text("\n", strip=True)
+            body = strip_base64_images(body)
+        else:
+            body = ""
         body = re.sub(r"\n{3,}", "\n\n", body).strip()[:_MAX_CHARS]
 
         return Document(

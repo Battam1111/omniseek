@@ -36,6 +36,7 @@ from urllib.parse import quote, urlparse
 
 import httpx
 
+from penumbra.core import diag, http
 from penumbra.core.normalize import Document
 
 logger = logging.getLogger(__name__)
@@ -81,9 +82,43 @@ def _load_faculty() -> list[dict]:
         resp.raise_for_status()
     except Exception as exc:  # noqa: BLE001 — leave _FACULTY None so we retry next call
         logger.warning("csrankings: faculty CSV fetch failed: %s", exc)
+        st = getattr(getattr(exc, "response", None), "status_code", None)
+        diag.note("csrankings.csv", url=FACULTY_CSV, status=st, exc=exc)
         return []
     rows: list[dict] = []
     for r in csv.DictReader(io.StringIO(resp.text)):
+        name = (r.get("name") or "").strip()
+        aff = (r.get("affiliation") or "").strip()
+        if not name or not aff:
+            continue
+        rows.append({
+            "name": name,
+            "affiliation": aff,
+            "homepage": (r.get("homepage") or "").strip(),
+            "scholarid": (r.get("scholarid") or "").strip(),
+            "orcid": (r.get("orcid") or "").strip(),
+        })
+    _FACULTY = rows
+    logger.info("csrankings: loaded %d faculty rows", len(rows))
+    return rows
+
+
+async def _aload_faculty() -> list[dict]:
+    """Native-async twin of ``_load_faculty`` (a PURE ADDITION): shares the SAME process-local
+    ``_FACULTY`` cache (loaded once per process; last-writer-wins on a cold-start race, exactly like the
+    lock-free sync twin), the ONLY change being the lone raw-httpx CSV GET -> ``await http.aget_text``
+    (the shared pool + SSRF guard + cache_only + a 30MB cap for free; the ~4MB roster sits well under the
+    cap). The ``csv.DictReader`` walk is pure CPU and stays ON the loop, byte-identical to the sync path.
+    On a fetch failure ``aget_text`` returns None (already logged + diag.note'd via the http.get tap):
+    return [] and leave ``_FACULTY`` None so the next call retries, mirroring the sync except/return-[]."""
+    global _FACULTY
+    if _FACULTY is not None:
+        return _FACULTY
+    text = await http.aget_text(FACULTY_CSV, headers={"User-Agent": USER_AGENT}, timeout=TIMEOUT)
+    if text is None:
+        return []
+    rows: list[dict] = []
+    for r in csv.DictReader(io.StringIO(text)):
         name = (r.get("name") or "").strip()
         aff = (r.get("affiliation") or "").strip()
         if not name or not aff:
@@ -116,6 +151,56 @@ class CSRankingsAdapter:
 
     def search(self, query: str, limit: int = 10) -> list[Document]:
         faculty = _load_faculty()
+        if not faculty:
+            return []
+        q = (query or "").strip().lower()
+
+        # Detect a region word anywhere in the query; strip it, leaving any extra
+        # term (an institution narrowing or, often, an area we can't filter on).
+        region_patterns: Optional[list[str]] = None
+        for rk, pats in _REGIONS.items():
+            if rk in q:
+                region_patterns = pats
+                q = q.replace(rk, "").strip()
+                break
+
+        if region_patterns is not None:
+            pool = [f for f in faculty
+                    if any(p in f["affiliation"].lower() for p in region_patterns)]
+            if q:
+                narrowed = [f for f in pool
+                            if q in f["affiliation"].lower() or q in f["name"].lower()]
+                matched = narrowed or pool  # unrecognised extra word (area) → full roster
+            else:
+                matched = pool
+        elif q:
+            # No region word → treat the whole query as an institution / name substring.
+            matched = [f for f in faculty
+                       if q in f["affiliation"].lower() or q in f["name"].lower()]
+        else:
+            return []  # empty + no region → nothing to roster (this is a lookup source)
+
+        matched.sort(key=lambda f: (f["affiliation"].lower(), f["name"].lower()))
+        # CSRankings lists several name-spellings per person (same homepage / scholar
+        # id) — collapse to one record so a roster isn't three rows of one professor.
+        deduped, seen_people = [], set()
+        for f in matched:
+            sid = f["scholarid"]
+            pid = sid if sid and sid != "NOSCHOLARPAGE" else (f["homepage"] or f["name"])
+            if pid in seen_people:
+                continue
+            seen_people.add(pid)
+            deduped.append(f)
+        return [self._to_doc(f) for f in deduped[:limit]]
+
+    async def asearch(self, query: str, limit: int = 10) -> list[Document]:
+        """Native-async twin of ``search`` (a PURE ADDITION): mirrors it line-for-line, the ONLY change
+        being the roster egress (``_load_faculty`` -> ``await _aload_faculty``, whose lone raw-httpx CSV
+        GET became ``await http.aget_text``). CSRankings keeps its roster in a process-local ``_FACULTY``
+        global shared by both paths, NOT a disk cache, so there is no cache round-trip to push off the
+        loop; the region-detection, substring filter, sort, person-dedup and ``_to_doc`` mapping are all
+        pure CPU and stay ON the loop byte-identical to ``search``, so async and sync can never drift."""
+        faculty = await _aload_faculty()
         if not faculty:
             return []
         q = (query or "").strip().lower()

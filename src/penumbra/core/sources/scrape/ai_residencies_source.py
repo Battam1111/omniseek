@@ -21,6 +21,8 @@ A separate monitor script reuses this adapter to detect changes and Bark-notify.
 
 from __future__ import annotations
 
+import asyncio
+import functools
 import json
 import logging
 import re
@@ -33,10 +35,12 @@ from pathlib import Path
 from typing import Optional
 from urllib.parse import urlparse
 
+import anyio
 import httpx
 from bs4 import BeautifulSoup
 
-from penumbra.core import cache, relevance
+from penumbra.core import cache, diag, http, relevance
+from penumbra.core._guard import GateBusy, bounded_async_slot, bounded_slot
 from penumbra.core.normalize import Document, jsonsafe
 
 logger = logging.getLogger(__name__)
@@ -122,7 +126,11 @@ def _sema_for(url: str) -> threading.BoundedSemaphore:
 
 def _http_get(url: str, *, timeout: int = TIMEOUT, **kwargs) -> Optional[httpx.Response]:
     try:
-        with _sema_for(url):  # per-host in-flight cap: bound concurrent requests to each shared ATS host
+        with bounded_slot(
+            _sema_for(url),
+            timeout,
+            lambda waited: GateBusy(f"ATS gate busy after {waited:.1f}s for {urlparse(url).hostname}"),
+        ):
             resp = httpx.get(
                 url,
                 headers={"User-Agent": USER_AGENT, "Accept-Language": "en-US,en;q=0.9,zh;q=0.8"},
@@ -134,6 +142,44 @@ def _http_get(url: str, *, timeout: int = TIMEOUT, **kwargs) -> Optional[httpx.R
         return resp
     except Exception as exc:  # noqa: BLE001
         logger.warning("HTTP GET failed for %s: %s", url, exc)
+        st = getattr(getattr(exc, "response", None), "status_code", None)
+        diag.note("ai_residencies.fetch", url=url, status=st, exc=exc)
+        return None
+
+
+async def _ahttp_get(url: str, *, timeout: int = TIMEOUT, **kwargs) -> Optional[httpx.Response]:
+    """Native-async twin of ``_http_get`` (S4b): the async egress leaf for asearch's per-row fan-out.
+    Mirrors ``_http_get`` faithfully, moving ONLY the blocking waits off the loop so no thread is held:
+
+      - the per-host in-flight cap -> the SAME ``_sema_for`` threading BoundedSemaphore, acquired by
+        the shared bounded, cancellation-safe async gate helper with the request timeout as its queue
+        budget;
+      - the raw ``httpx.get`` -> ``http.aget`` (shared async pool + SSRF guard + cache_only + 30MB cap),
+        keeping the SAME User-Agent + Accept-Language + timeout; follow_redirects=True is the shared
+        async client's default, matching _http_get's explicit follow_redirects=True.
+
+    http.aget already logs + diag.notes the failure->None (label ``http.get`` not ``ai_residencies.fetch``,
+    same trade the hk_universities async twin makes) and applies raise_for_status, so this returns
+    Optional[Response] with _http_get's exact None-on-failure contract; the fetchers' ``.json()`` /
+    ``.text`` bodies stay byte-identical. cache_only now short-circuits to None here (http.aget's egress
+    guard) — a strict improvement the raw sync httpx.get lacked."""
+    sema = _sema_for(url)
+    try:
+        async with bounded_async_slot(
+            sema,
+            timeout,
+            lambda waited: GateBusy(f"ATS gate busy after {waited:.1f}s for {urlparse(url).hostname}"),
+        ):
+            return await http.aget(
+                url,
+                headers={"User-Agent": USER_AGENT, "Accept-Language": "en-US,en;q=0.9,zh;q=0.8"},
+                timeout=timeout,
+                **kwargs,
+            )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("HTTP GET failed for %s: %s", url, exc)
+        st = getattr(getattr(exc, "response", None), "status_code", None)
+        diag.note("ai_residencies.fetch", url=url, status=st, exc=exc)
         return None
 
 
@@ -429,6 +475,154 @@ _KIND_FETCHERS = {
 }
 
 
+# ---------------------------------------------------------------------------
+# Native-async fetcher twins (S4b) — one per row ``kind``, awaited by asearch's
+# asyncio.gather fan-out. Each mirrors its sync twin above LINE-FOR-LINE, changing
+# ONLY the egress: ``_http_get(...)`` -> ``await _ahttp_get(...)``. The response
+# parse (json walk / BeautifulSoup) is pure CPU and stays ON the loop, byte-identical.
+# ---------------------------------------------------------------------------
+
+
+async def _afetch_greenhouse(row: dict) -> list[ResidencyPosition]:
+    """Native-async twin of ``_fetch_greenhouse`` (egress via ``_ahttp_get``; parse identical)."""
+    resp = await _ahttp_get(f"https://boards-api.greenhouse.io/v1/boards/{row['slug']}/jobs?content=true")
+    if resp is None:
+        return []
+    try:
+        jobs = resp.json().get("jobs") or []
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Greenhouse JSON parse failed (%s): %s", row["slug"], exc)
+        return []
+    filter_re = re.compile(row["title_filter"], re.IGNORECASE) if row.get("title_filter") else None
+    out = []
+    for job in jobs:
+        title = (job.get("title") or "").strip()
+        url = job.get("absolute_url") or ""
+        if not url or (filter_re and not filter_re.search(title)):
+            continue
+        loc = job.get("location") or {}
+        summary = _strip_html(job.get("content") or "")
+        out.append(_row_common(row, title=title, url=url, status="open",  # Greenhouse lists open only
+                               summary=summary, location=loc.get("name") if isinstance(loc, dict) else None,
+                               deadline=_extract_deadline_from_text(summary), raw=job, program=title))
+    return out
+
+
+async def _afetch_ashby(row: dict) -> list[ResidencyPosition]:
+    """Native-async twin of ``_fetch_ashby`` (egress via ``_ahttp_get``; parse identical)."""
+    resp = await _ahttp_get(f"https://api.ashbyhq.com/posting-api/job-board/{row['slug']}", timeout=30)
+    if resp is None:
+        return []
+    try:
+        jobs = resp.json().get("jobs") or []
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Ashby JSON parse failed (%s): %s", row["slug"], exc)
+        return []
+    filter_re = re.compile(row["title_filter"], re.IGNORECASE) if row.get("title_filter") else None
+    out = []
+    for job in jobs:
+        title = (job.get("title") or "").strip()
+        url = job.get("jobUrl") or job.get("applyUrl") or ""
+        if not url or (filter_re and not filter_re.search(title)):
+            continue
+        summary = _strip_html(job.get("descriptionHtml") or "")
+        out.append(_row_common(row, title=title, url=url, status="open",
+                               summary=summary, location=job.get("location") or job.get("locationName"),
+                               deadline=_extract_deadline_from_text(summary), raw=job))
+    return out
+
+
+async def _afetch_lever(row: dict) -> list[ResidencyPosition]:
+    """Native-async twin of ``_fetch_lever`` (egress via ``_ahttp_get``; parse identical)."""
+    resp = await _ahttp_get(f"https://api.lever.co/v0/postings/{row['slug']}?mode=json", timeout=30)
+    if resp is None:
+        return []
+    try:
+        postings = resp.json()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Lever JSON parse failed (%s): %s", row["slug"], exc)
+        return []
+    filter_re = re.compile(row["title_filter"], re.IGNORECASE) if row.get("title_filter") else None
+    out = []
+    for posting in postings:
+        title = (posting.get("text") or "").strip()
+        url = posting.get("hostedUrl") or posting.get("applyUrl") or ""
+        if not url or (filter_re and not filter_re.search(title)):
+            continue
+        body = posting.get("descriptionBodyPlain") or posting.get("descriptionPlain") or ""
+        summary = re.sub(r"\s+", " ", body).strip()
+        out.append(_row_common(row, title=title, url=url, status="open",
+                               summary=summary, location=(posting.get("categories") or {}).get("location"),
+                               deadline=_extract_deadline_from_text(summary), raw=posting))
+    return out
+
+
+async def _afetch_workable(row: dict) -> list[ResidencyPosition]:
+    """Native-async twin of ``_fetch_workable`` (egress via ``_ahttp_get``; parse identical)."""
+    resp = await _ahttp_get(f"https://apply.workable.com/api/v1/widget/accounts/{row['slug']}", timeout=20)
+    if resp is None:
+        return []
+    try:
+        data = resp.json()
+    except Exception:  # noqa: BLE001
+        return []
+    jobs: list = []
+    if isinstance(data.get("jobs"), list):
+        jobs = data["jobs"]
+    elif isinstance(data.get("widget"), dict) and isinstance(data["widget"].get("jobs"), list):
+        jobs = data["widget"]["jobs"]
+    elif isinstance(data.get("results"), list):
+        jobs = data["results"]
+
+    out = []
+    for job in jobs:
+        if not isinstance(job, dict):
+            continue
+        title = job.get("title") or job.get("name") or job.get("shortcode")
+        if not title:
+            continue
+        url = job.get("url") or job.get("application_url") or job.get("apply_url")
+        if not url and job.get("shortcode"):
+            url = f"https://apply.workable.com/{row['slug']}/j/{job['shortcode']}/"
+        if not url:
+            continue
+        loc = job.get("location") or job.get("city")
+        if isinstance(loc, dict):
+            location = loc.get("city") or loc.get("country") or loc.get("location_str") or ""
+        else:
+            location = loc or ""
+        location = location or row.get("default_location") or ""
+        summary = _strip_html(str(job.get("description") or job.get("requirements") or ""))
+        out.append(_row_common(row, title=title, url=url, status="open",
+                               summary=summary or f"{row['lab']}: {title}",
+                               location=location, deadline=None, raw=job, program=title))
+    return out
+
+
+async def _afetch_static(row: dict) -> list[ResidencyPosition]:
+    """Native-async twin of ``_fetch_static`` (egress via ``_ahttp_get``; BeautifulSoup parse on loop)."""
+    resp = await _ahttp_get(row["url"])
+    if resp is None:
+        return []
+    body_text = BeautifulSoup(resp.text, "lxml").get_text(" ", strip=True)
+    status = _detect_open_closed_status(body_text, cn=bool(row.get("cn_status")))
+    if status == "unknown" and row.get("default_status"):
+        status = row["default_status"]
+    return [_row_common(row, title=row["title"], url=row["url"], status=status,
+                        summary=body_text[:500], location=row.get("location"),
+                        deadline=_extract_deadline_from_text(body_text),
+                        raw={"url": row["url"], "page_text": body_text})]
+
+
+_AKIND_FETCHERS = {
+    "greenhouse": _afetch_greenhouse,
+    "ashby": _afetch_ashby,
+    "lever": _afetch_lever,
+    "workable": _afetch_workable,
+    "static": _afetch_static,
+}
+
+
 def _rows() -> list[dict]:
     return json.loads(_DATA.read_text(encoding="utf-8"))
 
@@ -494,6 +688,83 @@ class AIResidenciesAdapter:
 
     def search(self, query: str, limit: int = 10) -> list[Document]:
         positions = self._fetch_all_positions()
+        if not positions:
+            return []
+
+        # Lexical match via the shared engine; tier/status/deadline stay primary.
+        has_terms = bool(relevance.query_terms(query or ""))
+        if has_terms:
+            fields = [[(f"{p.title} {p.lab} {p.program}", 3.0), (p.summary, 1.0)]
+                      for p in positions]
+            q_scores = relevance.field_scores(fields, query)
+        else:
+            q_scores = [0.0] * len(positions)
+
+        status_priority = {"open": 0, "rolling": 1, "upcoming": 2, "unknown": 3, "closed": 4}
+        scored = []
+        for p, q in zip(positions, q_scores):
+            if has_terms and q == 0.0:
+                continue  # query given but nothing matched: honest skip
+            sort_key = (
+                p.tier,
+                status_priority.get(p.status, 5),
+                p.deadline or datetime.max.replace(tzinfo=timezone.utc),
+                -q,
+            )
+            scored.append((sort_key, p))
+        scored.sort(key=lambda x: x[0])
+        return [p.to_penumbra_doc() for _, p in scored[:limit]]
+
+    async def _afetch_all_positions(self) -> list[ResidencyPosition]:
+        """Native-async twin of ``_fetch_all_positions`` (S4b): the per-row fan-out becomes CONCURRENT
+        coroutines on the one loop instead of ThreadPoolExecutor worker threads, and each row's raw-httpx
+        egress goes native async (``_ahttp_get``). Mirrors ``_fetch_all_positions`` line-for-line,
+        changing ONLY the blocking waits:
+          - the disk cache read + write -> anyio.to_thread.run_sync (SAME cache key as the sync path);
+          - the ai_residencies.json row read (``_rows``, a file read) -> off-loop too;
+          - the per-row raw egress -> ``_ahttp_get`` (off-loop per-host sema + http.aget), inside the
+            per-kind async fetchers;
+          - the ThreadPoolExecutor fan-out -> asyncio.gather. Every coroutine runs on the one loop
+            thread, so (unlike the sync worker threads) NO copy_context() is needed: fresh / cache_only /
+            diag contextvars propagate naturally through await, and gather preserves ROW ORDER, so
+            ``positions`` is assembled identically to ex.map's ordered result.
+        The single-row failure isolation + unknown-kind warning (``_afetch_row``) and the 2h cache.set are
+        byte-identical to the sync path; _position_to_dict / _position_from_dict (pure CPU) stay on the loop."""
+        key = cache.make_key("ai_residencies", "all_positions", "v1")
+        cached_payload = await anyio.to_thread.run_sync(cache.get, key)  # disk read OFF loop
+        if cached_payload is not None:
+            return [_position_from_dict(d) for d in cached_payload]
+
+        positions: list[ResidencyPosition] = []
+        rows = await anyio.to_thread.run_sync(_rows)  # ai_residencies.json read OFF loop
+
+        async def _afetch_row(row: dict) -> list[ResidencyPosition]:
+            fetcher_fn = _AKIND_FETCHERS.get(row.get("kind"))
+            if fetcher_fn is None:
+                logger.warning("ai_residencies: unknown kind %r (row %s)", row.get("kind"), row.get("lab"))
+                return []
+            try:
+                return await fetcher_fn(row)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Residency fetcher %s/%s raised: %s",
+                               row.get("kind"), row.get("lab"), exc)
+                return []
+
+        row_positions = await asyncio.gather(*[_afetch_row(r) for r in rows])
+        for plist in row_positions:
+            positions.extend(plist)
+
+        payload = [_position_to_dict(p) for p in positions]  # pure CPU, on loop
+        await anyio.to_thread.run_sync(  # disk write OFF loop
+            functools.partial(cache.set, key, payload, ttl=7200))  # 2h cache
+        return positions
+
+    async def asearch(self, query: str, limit: int = 10) -> list[Document]:
+        """Native-async twin of ``search`` (S4b): awaits the async ``_afetch_all_positions`` (concurrent
+        per-row egress) then runs the SAME tier/status/deadline scoring + lexical match, all pure CPU on
+        the loop. Byte-identical to ``search`` below the fetch: the shared _afetch_all_positions and the
+        pure-CPU relevance.query_terms / field_scores + sort guarantee no drift between the two paths."""
+        positions = await self._afetch_all_positions()
         if not positions:
             return []
 

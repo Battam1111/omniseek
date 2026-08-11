@@ -67,6 +67,30 @@ class CrossrefRetractionsAdapter(BaseAPIAdapter):
             return []
         return ((data.get("message") or {}).get("items")) or []
 
+    async def _araw_fetch(self, query: str, limit: int) -> list:
+        """Async twin of _raw_fetch: BYTE-FAITHFUL mirror — same URL/params/headers, same isinstance
+        guard + None/[] contract; ONLY the shared-http egress is swapped (http.get_json -> await
+        http.aget_json). Single get_json call, so nothing else changes."""
+        params = {
+            "filter": "update-type:retraction",
+            "rows": max(1, min(limit, 50)),
+            "sort": "created", "order": "desc",
+            "mailto": auth.contact_email(),
+        }
+        if (query or "").strip():
+            params["query"] = query.strip()  # server-side full-text filter within the retraction set
+        url = f"{_ENDPOINT}?{urlencode(params)}"
+        data = await http.aget_json(url, headers={"User-Agent": f"PenumbraEye/1.0 (mailto:{auth.contact_email()})"})
+        if not isinstance(data, dict):
+            return []
+        return ((data.get("message") or {}).get("items")) or []
+
+    async def asearch(self, query: str, limit: int = 10) -> list[Document]:
+        """Native-async twin of search -> AsyncSearchCapable. Shares the base async cache round-trip
+        (_aapi_search: same cache key, per-record _to_document, rank_locally, cache-only-if-docs);
+        egress via _araw_fetch; mapping via the SAME pure-CPU _to_document (byte-identical to search)."""
+        return await self._aapi_search(query, limit, araw_fetch=lambda: self._araw_fetch(query, limit))
+
     def _to_document(self, raw) -> Optional[Document]:
         if not isinstance(raw, dict):
             return None

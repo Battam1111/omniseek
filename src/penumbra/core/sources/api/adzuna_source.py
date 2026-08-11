@@ -83,6 +83,28 @@ class AdzunaAdapter(BaseScrapeAdapter):
             timeout=20,
         )
 
+    async def _araw_fetch(self, query: str, limit: int) -> Optional[Any]:
+        """Async twin of _raw_fetch: byte-faithful mirror (same URL / params / timeout / None
+        contract); only the shared-http egress swaps get_json -> await aget_json."""
+        app_id, app_key = self._creds()
+        if not app_id or not app_key:
+            return None  # no key -> [] (the contract); the template names where to put it
+        country, what = self._split_country(query)
+        return await http.aget_json(
+            API_URL.format(country=country),
+            params={"app_id": app_id, "app_key": app_key, "what": what,
+                    "results_per_page": max(1, min(int(limit), 50))},
+            timeout=20,
+        )
+
+    async def asearch(self, query: str, limit: int = 10) -> list[Document]:
+        """Native-async twin of search -> AsyncSearchCapable. Shares the base async cache
+        round-trip; egress via _araw_fetch; mapping via the SAME pure-CPU _to_documents."""
+        return await self._asearch_via(
+            query, limit,
+            afetch=lambda: self._araw_fetch(query, limit),
+            abuild=lambda raw: self._to_documents(raw, query, limit))
+
     def _to_documents(self, raw: Any, query: str, limit: int) -> list[Document]:
         if not isinstance(raw, dict):
             return []
