@@ -33,6 +33,7 @@ import asyncio
 import logging
 import os
 import queue
+import re
 import threading
 from contextlib import contextmanager
 from typing import Any, Callable, Iterator, Optional
@@ -567,3 +568,76 @@ def content_with_media(text: str, images: list) -> str:
                 f"下载后用视觉读图(eye 不做 OCR)]")
         return (text + "\n\n" + hint) if text else hint
     return text
+
+
+# ── video notes ───────────────────────────────────────────────────────────────────────────────
+# A video note's substance is SPOKEN. The eye does not transcribe here; it hands the agent a URL
+# penumbra_transcribe can fetch, which means the URL has to be a real one.
+_VIDEO_SRC_JS = (
+    "()=>{"
+    "const v=document.querySelector('video');"
+    "if(!v)return '';"
+    "const s=v.currentSrc||v.src||'';"
+    "if(s&&s.indexOf('blob:')!==0)return s;"
+    "const el=v.querySelector('source');"
+    "const t=(el&&el.src)||'';"
+    "return t.indexOf('blob:')===0?'':t;}"
+)
+
+# Direct media on the wire. Deliberately NOT anchored to one CDN host: the point is the response
+# being a playable stream, and a host allowlist would go stale the first time the CDN is renamed.
+_VIDEO_WIRE_RE = re.compile(r"https?://[^\s\"'<>]+?\.(?:mp4|m3u8)(?:\?[^\s\"'<>]*)?", re.I)
+
+# Player markers. Their PRESENCE is content: a video note can legitimately carry no body text, and
+# a content gate that only looks for text reads such a note as an empty page (or, worse, as a login
+# wall) and drops something perfectly readable.
+VIDEO_PLAYER_SELECTORS = ("video", "xg-video-player", "[class*='player-container']")
+
+
+def video_from_page(page) -> "Optional[str]":
+    """A DIRECT video URL for the page's main <video>, or None.
+
+    `blob:` is rejected rather than returned: it is a MediaSource handle valid only inside that
+    Chrome process, so passing one to a transcriber fails later and further from the cause than
+    returning None does. When this returns None on a page that clearly has a player, the URL is on
+    the wire instead: see attach_video_sniffer()."""
+    try:
+        return (page.evaluate(_VIDEO_SRC_JS) or "").strip() or None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def attach_video_sniffer(page) -> list:
+    """Register a response listener that records direct video URLs as the page loads, and return
+    the list it fills (ordered, deduped). Attach BEFORE navigating.
+
+    This is the blob: case's only answer. The handler swallows everything: it runs on the page's
+    event loop, where a raise would take down the navigation it is only observing."""
+    seen: list = []
+
+    def _on_video_resp(resp) -> None:
+        try:
+            u = resp.url or ""
+            if _VIDEO_WIRE_RE.fullmatch(u) and u not in seen:
+                seen.append(u)
+        except Exception:  # noqa: BLE001
+            pass
+
+    try:
+        page.on("response", _on_video_resp)
+    except Exception:  # noqa: BLE001
+        pass
+    return seen
+
+
+def content_with_video(text: str, video_url: "Optional[str]", *, has_player: bool) -> str:
+    """Append the video-note hint when the page is a video note. Says which of the two states we
+    are in, because they need different things from the agent: with a URL it can transcribe; with
+    a blob-only player it cannot, and saying so is more useful than silence."""
+    text = (text or "").strip()
+    if not (video_url or has_player):
+        return text
+    hint = ("[视频笔记:干货在视频口述中,可把 metadata.video_url 传给 penumbra_transcribe 取出内容]"
+            if video_url else
+            "[视频笔记:干货在视频口述中,但播放器只给出 blob: 地址,取不到可转写的直链]")
+    return (text + "\n\n" + hint) if text else hint

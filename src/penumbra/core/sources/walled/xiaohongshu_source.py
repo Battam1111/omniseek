@@ -48,7 +48,14 @@ from bs4 import BeautifulSoup
 from penumbra.core import cache, diag
 from penumbra.core.normalize import Document, mk_signal
 from penumbra.core.sources.walled import _human
-from penumbra.core.sources.walled._cdp import cdp_call, cdp_health
+from penumbra.core.sources.walled._cdp import (
+    VIDEO_PLAYER_SELECTORS,
+    attach_video_sniffer,
+    cdp_call,
+    cdp_health,
+    content_with_video,
+    video_from_page,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -761,23 +768,37 @@ class XiaohongshuAdapter:
                     except Exception:  # noqa: BLE001 — one unparseable XHR never breaks the fetch
                         pass
                 page.on("response", _on_cmt)
+            # Attach BEFORE navigating: on a video note the player often gets a blob: URL,
+            # and then the only place the real CDN URL ever appears is the response stream.
+            seen_video = attach_video_sniffer(page)
             _goto_note_dual_host(page, nav_url)
             _human.read_dwell()
             # A note page renders #detail-title / #detail-desc even when a login-NUDGE
             # overlay is shown to guests (share links with xsec_token are guest-readable).
             # Prefer the content: only call it a wall if the note body is genuinely absent,
             # else _login_wall false-positives on the overlay and drops a readable note.
+            # A VIDEO note legitimately carries no body text, so a text-only gate reads it as
+            # an empty page and _login_wall then drops a perfectly readable note. The PRESENCE
+            # of a player is itself content: for those selectors, existence is the test.
             has_content = False
             try:
-                for sel in ("#detail-title", "#detail-desc"):
+                for sel in ("#detail-title", "#detail-desc") + VIDEO_PLAYER_SELECTORS:
                     loc = page.locator(sel).first
-                    if loc.count() > 0 and loc.inner_text().strip():
+                    if loc.count() <= 0:
+                        continue
+                    if sel in VIDEO_PLAYER_SELECTORS:
                         has_content = True
                         break
+                    try:
+                        if loc.inner_text().strip():
+                            has_content = True
+                            break
+                    except Exception:  # noqa: BLE001 -- an unreadable node is not a wall
+                        pass
             except Exception:  # noqa: BLE001
                 has_content = False
             if not has_content and _login_wall(page):
-                return ("login", None, [], {})
+                return ("login", None, [], {}, None)
             _human.scroll_like_reading(page, screens=random.randint(1, 2))
             _human.read_dwell()
             # 小红书 puts the substance in CAROUSEL IMAGES (large, on the note-image CDN), not
@@ -795,6 +816,9 @@ class XiaohongshuAdapter:
                     "return out.slice(0,12);}")
             except Exception:  # noqa: BLE001
                 images = []
+            # DOM first; the wire sniffer is the answer for a blob:-fed player. Either way the
+            # eye hands over a URL a transcriber can fetch, and never a process-local handle.
+            video_url = video_from_page(page) or (seen_video[0] if seen_video else None)
             # Comments carry the 经验. MAX-COMPLETENESS path (completeness is non-negotiable): run
             # the EXHAUSTIVE _load_comments (scroll the comment container + click every 展开 expander
             # until stable) so the page loads ALL comments + replies, WHILE _on_cmt above PASSIVELY
@@ -815,12 +839,13 @@ class XiaohongshuAdapter:
                 pass
             cap_list = _flatten_captured_comments(_cmt) if _USE_XHR_COMMENTS else []
             cdata["list"] = cap_list if len(cap_list) >= len(dom_list) else dom_list
-            return ("ok", page.content(), images, cdata)
+            return ("ok", page.content(), images, cdata, video_url)
 
         try:
             # fast profile (operator-cleared); _load_comments keeps its OWN settle sleeps
             # (comment lazy-load window, NOT a human delay) so comment recall is unchanged.
-            status, html, images, cdata = cdp_call(_human.fast(_flow), initial_url=None, timeout=110, cdp_url=_XHS_CDP_URL)
+            status, html, images, cdata, video_url = cdp_call(
+                _human.fast(_flow), initial_url=None, timeout=110, cdp_url=_XHS_CDP_URL)
             _note_cdp_result(True)
         except Exception as exc:  # noqa: BLE001
             _note_cdp_result(False)  # sustained CDP failures trip backoff (don't hammer 小号)
@@ -859,7 +884,10 @@ class XiaohongshuAdapter:
                       body="detail navigation succeeded but returned no title/body/media/comments")
             return None
 
-        if images and len(body) < 200:
+        is_video = bool(video_url) or bool(soup.select_one("video, xg-video-player"))
+        if is_video:
+            content = content_with_video(body, video_url, has_player=True)
+        elif images and len(body) < 200:
             note = (f"[正文主要在 {len(images)} 张图里(小红书常把干货放图中):图片 URL 见 media 字段,"
                     f"下载后用视觉读图中文字]")
             content = (body + "\n\n" + note) if body else note
@@ -887,9 +915,10 @@ class XiaohongshuAdapter:
             title=title,
             content=content,
             author=author,
-            media=images,
+            media=([video_url] + images) if video_url else images,
             metadata={"comments": comments, "comment_count": len(comments),
-                      "comments_declared": declared},
+                      "comments_declared": declared,
+                      **({"video_url": video_url} if video_url else {})},
         )
 
     def health_check(self) -> tuple[bool, str]:
