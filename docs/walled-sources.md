@@ -106,7 +106,17 @@ Walled sources are off until you opt in. In `~/.penumbra/profile.json`:
 
 `enabled: true` is your explicit acknowledgment that you accept operator responsibility for these
 sources (see [SECURITY.md](../.github/SECURITY.md)). List under `bring_your_own` the sources you have logged
-in for; the rest stay dark.
+in for; the rest stay dark. If you have logged in for all of them and want the whole tier, write
+`"bring_your_own": true` instead of the map.
+
+**Where "off by default" is enforced.** Not by this document: by
+`profile.is_source_enabled()` in `src/penumbra/core/profile.py`, which denies any source of
+`walled` stability unless it finds both `walled.enabled` and a `bring_your_own` opt-in. The deny
+applies **with or without a profile file**, so a fresh clone that has configured nothing reaches
+no walled source at all. Until 2026-08-12 the no-profile path returned "enabled" for everything,
+which meant this page described a gate the default path did not run; the smoke suite now pins both
+halves (`profile: with NO profile the WALLED tier is DENIED`, and the two `bring_your_own` forms),
+so the claim on this page is checkable rather than asserted.
 
 ### 6. Use it
 

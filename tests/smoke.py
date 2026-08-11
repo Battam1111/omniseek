@@ -258,13 +258,27 @@ check("docreader sandbox still allows the documented penumbra-inbox/<name> path"
       _dr._resolve_local("penumbra-inbox/x.pdf") == (_pl.Path.home() / "penumbra-inbox" / "x.pdf").resolve(),
       str(_dr._resolve_local("penumbra-inbox/x.pdf")))
 
-# Deployment-profile gate (P1): no profile -> all sources on (pre-profile/backward-compat); a
-# profile subtracts. Walled-tier off keys off DERIVED stability (the robust mokahr-leak fix).
+# Deployment-profile gate (P1): a profile subtracts, and the WALLED tier is deny-by-default with
+# or without one (2026-08-12). Walled-tier off keys off DERIVED stability (the robust mokahr-leak
+# fix). The no-profile state is CONSTRUCTED here, never inherited from whatever this host has on
+# disk: the old version of this block only exercised that branch because the mini happened to have
+# no profile file, and the mini has one now, so it would have quietly started measuring the real
+# deployment's config instead of the contract.
 from penumbra.core import profile as _prof  # noqa: E402
-_prof.invalidate()
-check("profile: absent profile leaves every source enabled (backward-compat)",
-      _prof.is_source_enabled("arxiv") and _prof.is_source_enabled("zhihu", stability="walled"),
-      "a source was disabled with NO profile present")
+_prof._cache = {}
+check("profile: with NO profile every NON-walled source stays enabled (backward-compat)",
+      _prof.is_source_enabled("arxiv"), "a non-walled source was disabled with no profile present")
+check("profile: with NO profile the WALLED tier is DENIED (a fresh clone drives nobody's account)",
+      not _prof.is_source_enabled("zhihu", stability="walled"),
+      "a walled source was reachable although no deployment ever opted in")
+_prof._cache = {"walled": {"enabled": True, "bring_your_own": True}}
+check("profile: walled.bring_your_own=true opts the WHOLE tier in (no hand enumeration to get wrong)",
+      _prof.is_source_enabled("zhihu", stability="walled")
+      and _prof.is_source_enabled("douyin", stability="walled"), "")
+_prof._cache = {"walled": {"enabled": True, "bring_your_own": {"zhihu": True}}}
+check("profile: the bring_your_own MAP still narrows to exactly the named sources",
+      _prof.is_source_enabled("zhihu", stability="walled")
+      and not _prof.is_source_enabled("douyin", stability="walled"), "")
 _prof._cache = {"sources": {"default_enabled": True, "disable": ["glassdoor"], "enable": ["mokahr_ats"]},
                 "groups": {"disable_regions": ["cn"], "disable_stability": ["walled"]},
                 "walled": {"enabled": False, "bring_your_own": {}}}

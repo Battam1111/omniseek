@@ -64,15 +64,14 @@ def _section(name: str) -> dict:
 def is_source_enabled(name: str, *, stability: str = "",
                       domains: "Optional[list]" = None, regions: "Optional[list]" = None,
                       kind: str = "") -> bool:
-    """Whether THIS deployment EXPOSES source ``name`` (broad fan-out + penumbra_fetch). No profile ->
-    True (pre-profile behavior). With a profile, most-specific-wins:
+    """Whether THIS deployment EXPOSES source ``name`` (broad fan-out + penumbra_fetch). Most-specific-wins:
       sources.enable (explicit on)  >  sources.disable (explicit off)  >  walled tier gate
-      (walled.enabled + walled.bring_your_own[name])  >  groups.disable_{stability,kinds,domains,
+      (walled.enabled + walled.bring_your_own)  >  groups.disable_{stability,kinds,domains,
       regions}  >  sources.default_enabled (default True).
+    NO PROFILE -> True for every NON-walled source (pre-profile behavior; an existing host is
+    unaffected), and False for the walled tier.
     Facets are passed in by the caller (fetcher derives them) so this module stays eye-import-free."""
     p = _load()
-    if not p:
-        return True
 
     src = _section("sources")
     if name in set(src.get("enable", []) or []):
@@ -80,14 +79,29 @@ def is_source_enabled(name: str, *, stability: str = "",
     if name in set(src.get("disable", []) or []):
         return False
 
-    # Walled/login tier: OFF unless the deployer turned it on AND opted in for this source. Derived
-    # from the adapter's STABILITY (not its per-adapter flag), so a new walled source can't leak in.
+    # Walled/login tier: OFF unless the deployer turned it on AND opted in. Derived from the
+    # adapter's STABILITY (not its per-adapter flag), so a new walled source can't leak in.
+    #
+    # DENY-BY-DEFAULT, profile or not (2026-08-12). The old code returned True for EVERYTHING when
+    # no profile file existed, which is precisely the state of a fresh clone: the public mirror
+    # therefore shipped walled adapters that would drive logged-in sessions without any deployment
+    # having decided to. profile.example.json has always documented the opposite, so the doc was
+    # describing a gate the default path did not run. Reaching a walled source means using somebody's
+    # account, and that is a decision a deployment makes explicitly; it must never be inherited from
+    # the absence of a config file. Non-walled sources keep the old no-profile behaviour exactly.
+    #
+    # bring_your_own accepts `true` (every walled source here) as well as the per-source map. The map
+    # alone would force a host that wants its existing reach to enumerate all of them by hand, where
+    # one omission silently darkens one source: an enumeration whose failure mode is invisible.
     if stability == "walled":
         w = _section("walled")
         if not w.get("enabled", False):
             return False
-        if not (w.get("bring_your_own") or {}).get(name, False):
+        byo = w.get("bring_your_own")
+        if byo is not True and not (byo or {}).get(name, False):
             return False
+    elif not p:
+        return True
 
     groups = _section("groups")
     if stability and stability in set(groups.get("disable_stability", []) or []):
