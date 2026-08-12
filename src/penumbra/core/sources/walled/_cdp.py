@@ -631,13 +631,21 @@ def attach_video_sniffer(page) -> list:
 
 
 def content_with_video(text: str, video_url: "Optional[str]", *, has_player: bool) -> str:
-    """Append the video-note hint when the page is a video note. Says which of the two states we
-    are in, because they need different things from the agent: with a URL it can transcribe; with
-    a blob-only player it cannot, and saying so is more useful than silence."""
+    """Append the video-note hint when the page is a video note.
+
+    Names BOTH readers, because a video note carries content on two tracks and either one alone
+    silently loses the other. Measured on the first real note this shipped for: the audio was
+    background music and every fact was burned into the frames (a schedule, 思考中, working...).
+    A hint naming only the transcriber sends the agent to read the music, come back empty, and
+    conclude the note has nothing, which is worse than no hint because it reads as a check that
+    was performed. The blob: case says so plainly: without a URL neither reader can be used."""
     text = (text or "").strip()
     if not (video_url or has_player):
         return text
-    hint = ("[视频笔记:干货在视频口述中,可把 metadata.video_url 传给 penumbra_transcribe 取出内容]"
+    hint = ("[视频笔记:干货在视频里,两条轨都要看。metadata.video_url 可直接喂两件工具:"
+            "penumbra_view(kind=video)读画面(字幕 / 屏幕内容 / 演示),penumbra_transcribe 取口述。"
+            "只做其一会漏内容:不少笔记的音轨只是背景音乐,事实全在画面上]"
             if video_url else
-            "[视频笔记:干货在视频口述中,但播放器只给出 blob: 地址,取不到可转写的直链]")
+            "[视频笔记:干货在视频里,但播放器只给出 blob: 地址,取不到直链,"
+            "penumbra_view 与 penumbra_transcribe 都用不上]")
     return (text + "\n\n" + hint) if text else hint
