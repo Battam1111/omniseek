@@ -32,8 +32,12 @@ boundaries it enforces:
 ## Operator responsibility
 
 Penumbra fetches as the operator's own agent. The operator is responsible for using it within the law
-and each site's terms of service in their jurisdiction. Login-walled sources are **off by default**;
-sources that defeat an access control (the circumvention tier) are off by default and absent from
-the shipped catalog. The framework supports both as opt-in categories; enabling them is a deliberate
-operator choice, and the legal judgment belongs to the operator. See [NOTICE](../NOTICE) and
+and each site's terms of service in their jurisdiction. Login-walled sources are **off by default**,
+on a fresh clone as well as a configured one; sources that defeat an access control (the
+circumvention tier) are **absent from the shipped catalog**, and the mirror script refuses to publish
+one that declares that tier. Enabling a walled source is a deliberate operator choice, and the legal
+judgment belongs to the operator.
+
+The full statement, with each claim tied to the code that enforces it, is in
+**[LEGAL-POSTURE.md](../docs/LEGAL-POSTURE.md)**. See also [NOTICE](../NOTICE) and
 [configuration](../docs/configuration.md).

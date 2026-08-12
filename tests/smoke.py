@@ -6441,7 +6441,11 @@ check("parsimony tripwire: MCP prompt count == frozen 1 (the one recipe channel)
 import re as _dd_re_mod  # noqa: E402
 _dd_registered = {n for n in dir(_pt_srv) if n.startswith("penumbra_")}
 _dd_docs = [ROOT / "README.md", ROOT / "docs" / "tools.md", ROOT / "docs" / "patterns.md",
-            ROOT / "docs" / "configuration.md", ROOT / "docs" / "walled-sources.md"]
+            ROOT / "docs" / "configuration.md", ROOT / "docs" / "walled-sources.md",
+            # public-mirror only (absent upstream, skipped by the exists() check below): the legal
+            # posture is a product doc like the rest, so it rides the same rail. A public doc that
+            # is not on this list is a surface nothing checks.
+            ROOT / "docs" / "LEGAL-POSTURE.md"]
 _dd_stale: list = []
 for _dd_p in _dd_docs:
     if not _dd_p.exists():

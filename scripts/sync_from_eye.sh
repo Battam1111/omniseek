@@ -150,6 +150,25 @@ fi
 # prose "the eye" is kept by design; report count for awareness only
 EYE_PROSE=$(grep -rnoE '\beye\b' "$PEN_SRC" | wc -l || true)
 echo "  (info: $EYE_PROSE prose 'eye' mentions kept, matching the hand-made mirror)"
+
+# LEGAL GATE: no shipped adapter may declare the CIRCUMVENTION access tier.
+#
+# This is the load-bearing factual claim of LEGAL-POSTURE.md and of SECURITY.md ("sources that
+# defeat an access control are absent from the shipped catalog"). Until now it was true only by
+# coincidence: the one source that declares it (mokahr_ats) happens to be deleted by name in step 1
+# as a PERSONAL source. Delete that line, or add a second circumvention-tier source upstream, and a
+# public repo would start making a claim its own code contradicts, with nothing to catch it.
+#
+# The detector is the engine's own: fetcher.py classifies the tier by matching this pattern against
+# a source's explicit_only reason string. Gating on the same pattern means the document and the code
+# cannot drift apart without this failing.
+if grep -rniE 'explicit_only.*(circumvention|§?[[:space:]]*1201|decrypt|defeat)' "$PEN_SRC" >/dev/null 2>&1; then
+  echo "  GATE FAIL: a shipped source declares the CIRCUMVENTION access tier."
+  echo "  LEGAL-POSTURE.md and SECURITY.md both state the public catalog carries none. Either drop"
+  echo "  the source from the mirror (step 1) or change what those documents claim. Offenders:"
+  grep -rniE 'explicit_only.*(circumvention|§?[[:space:]]*1201|decrypt|defeat)' "$PEN_SRC" | head -5
+  FAILED=1
+fi
 [ "$FAILED" -eq 0 ] || { echo "=== SYNC ABORTED: residue gate failed ==="; exit 1; }
 
 # --- 6. SMOKE GATE (hard fail) ---

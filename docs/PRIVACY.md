@@ -53,8 +53,9 @@ sources themselves, **data does not leave the host.** There is no intermediate c
 Penumbra's wall-crossing (UNWALL) is bounded to **credentialed access the operator is themselves
 entitled to**. The engine blesses the operator using their own credentials for what those credentials
 already grant them. It does **not** host, broker, or authenticate any access that bypasses a control
-the operator is not entitled to be on the far side of. (The full legal posture is in
-[SECURITY.md](../.github/SECURITY.md).)
+the operator is not entitled to be on the far side of. (The full legal posture, including the access
+tiers and the two places this line is mechanically enforced, is in
+[LEGAL-POSTURE.md](LEGAL-POSTURE.md).)
 
 ## 6. Open source
 
