@@ -114,7 +114,42 @@ PYEOF
 #     one operator's live fleet; the mirror ships no fleet, and those checks are already written
 #     repo-adaptive at the source (`if _SERVICES_PATH.exists():`), so they skip cleanly here. ---
 SYNCED_ARTIFACTS=("tests/smoke.py" "tests/egress_baseline.json" "docs/BUDGETS.md")
-echo "  [3/6] syncing smoke tests + the repo artifacts they read ..."
+
+# The CONTRACT SUITES, added 2026-08-12. smoke.py grew a gate that runs every tests/test_*.py suite,
+# and the mirror carried none of them, so the first sync after that change aborted with
+# "0 suites, 0 tests" -- correctly: the gate refuses to report green when there is nothing to check.
+# The fix is the one this list's own rule already prescribes (code-bound artifacts ride along, or the
+# mirror ships a gate with holes in it), and it is the better answer anyway: a public engine that
+# carries its own 23 suites is a stronger artifact than one that asks you to trust it.
+#
+# DISCOVERED, not enumerated. A hand-list is a second place to forget a file, which is the exact
+# defect class this script keeps finding elsewhere; globbing means a suite written tomorrow is
+# carried, renamed and residue-gated with no edit here.
+# _repo_only.py rides too: it is what lets the three repo-hygiene suites SKIP cleanly in a tree with
+# no deploy.sh (which the mirror is) instead of failing on an absence that is correct.
+# EXCEPT the deployment-bound ones, and that exclusion is DERIVED too: a suite that imports from
+# `scripts.` is testing release machinery (release_layout / release_transaction / bridges) which the
+# mirror does not ship by the same rule that keeps SERVICES.md out. Carried anyway they do not fail
+# meaningfully, they fail at IMPORT, which is a worse signal: it looks like the mirror is broken
+# rather than like the suite does not apply. A deployment suite written tomorrow is excluded with no
+# edit here.
+while IFS= read -r _suite; do
+  [ -n "$_suite" ] || continue
+  if grep -qE '^\s*(from|import)\s+scripts[.[:space:]]' "$_suite"; then
+    echo "    (skipping $(basename "$_suite"): deployment-bound, the mirror ships no release machinery)"
+    continue
+  fi
+  SYNCED_ARTIFACTS+=("tests/$(basename "$_suite")")
+done < <(ls "$EYE_ROOT"/tests/test_*.py "$EYE_ROOT"/tests/_repo_only.py 2>/dev/null || true)
+
+echo "  [3/6] syncing smoke tests + ${#SYNCED_ARTIFACTS[@]} code-bound artifacts ..."
+# PRUNE FIRST. A mirror that only ever ADDS is a mirror that drifts: a suite deleted upstream, or
+# newly excluded here, would sit in the public repo forever, still running, still being believed.
+# Found the hard way: the run that first carried the suites also carried three deployment-bound ones,
+# and after they were excluded they kept failing at import because nothing removes a file. Every
+# tests/test_*.py in the mirror comes from this loop, so clearing them is safe and makes the copy
+# authoritative rather than additive.
+rm -f "$PEN_ROOT"/tests/test_*.py "$PEN_ROOT"/tests/_repo_only.py
 for rel in "${SYNCED_ARTIFACTS[@]}"; do
   [ -f "$EYE_ROOT/$rel" ] || { echo "FATAL: $rel missing at the eye" >&2; exit 1; }
   mkdir -p "$PEN_ROOT/$(dirname "$rel")"

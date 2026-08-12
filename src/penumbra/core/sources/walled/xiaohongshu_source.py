@@ -54,7 +54,8 @@ from penumbra.core.sources.walled._cdp import (
     cdp_call,
     cdp_health,
     content_with_video,
-    video_from_page,
+    video_metadata,
+    video_with_origin,
 )
 
 logger = logging.getLogger(__name__)
@@ -798,7 +799,7 @@ class XiaohongshuAdapter:
             except Exception:  # noqa: BLE001
                 has_content = False
             if not has_content and _login_wall(page):
-                return ("login", None, [], {}, None)
+                return ("login", None, [], {}, (None, None))
             _human.scroll_like_reading(page, screens=random.randint(1, 2))
             _human.read_dwell()
             # 小红书 puts the substance in CAROUSEL IMAGES (large, on the note-image CDN), not
@@ -818,7 +819,7 @@ class XiaohongshuAdapter:
                 images = []
             # DOM first; the wire sniffer is the answer for a blob:-fed player. Either way the
             # eye hands over a URL a transcriber can fetch, and never a process-local handle.
-            video_url = video_from_page(page) or (seen_video[0] if seen_video else None)
+            video = video_with_origin(page, seen_video)  # (url, "dom"|"wire"|"unresolved")
             # Comments carry the 经验. MAX-COMPLETENESS path (completeness is non-negotiable): run
             # the EXHAUSTIVE _load_comments (scroll the comment container + click every 展开 expander
             # until stable) so the page loads ALL comments + replies, WHILE _on_cmt above PASSIVELY
@@ -839,12 +840,12 @@ class XiaohongshuAdapter:
                 pass
             cap_list = _flatten_captured_comments(_cmt) if _USE_XHR_COMMENTS else []
             cdata["list"] = cap_list if len(cap_list) >= len(dom_list) else dom_list
-            return ("ok", page.content(), images, cdata, video_url)
+            return ("ok", page.content(), images, cdata, video)
 
         try:
             # fast profile (operator-cleared); _load_comments keeps its OWN settle sleeps
             # (comment lazy-load window, NOT a human delay) so comment recall is unchanged.
-            status, html, images, cdata, video_url = cdp_call(
+            flow_result = cdp_call(
                 _human.fast(_flow), initial_url=None, timeout=110, cdp_url=_XHS_CDP_URL)
             _note_cdp_result(True)
         except Exception as exc:  # noqa: BLE001
@@ -852,6 +853,13 @@ class XiaohongshuAdapter:
             logger.warning("Xiaohongshu fetch_url failed: %s", exc)
             diag.note("xiaohongshu.cdp", exc=exc, body="CDP fetch_url flow raised (9223 Chrome wedged / timeout?)")
             return None
+
+        # Unpacked OUTSIDE the CDP try on purpose. The shape of our own return tuple is OUR bug;
+        # inside that try a ValueError here is charged to the browser -- it trips the 小号 backoff
+        # and files a diagnostic blaming a wedged Chrome. Out here it surfaces as an adapter error
+        # the fetcher records with a real traceback.
+        status, html, images, cdata, video = flow_result
+        video_url, video_src = video
 
         if status == "login":
             _trip_backoff("login wall during fetch_url")
@@ -880,8 +888,28 @@ class XiaohongshuAdapter:
         comments = cdata.get("list") or []
         declared = cdata.get("declared")
         if not _detail_has_substance(title, body, images, comments):
+            # NAME THE CAUSE. The old message ("navigation succeeded but returned nothing") is true
+            # and useless: it tells the caller a page was blank, not why or what to do instead, so
+            # a real caller spent a long session hunting the wrong layer and nearly patched the MCP
+            # handler. The dominant cause is a URL with no xsec_token: 小红书 note pages are only
+            # readable through the tokened SHARE link, and a bare /explore/<id> renders an empty
+            # shell. Controlled A/B (2026-08-12, same tool, same session, minutes apart): the same
+            # note id read fine WITH its token and produced exactly this branch WITHOUT it.
+            # Reported as the LIKELY cause rather than a refusal: two observations plus the
+            # documented mechanism justify pointing, not asserting an impossibility, and a hard
+            # pre-flight refusal would remove capability the day the platform changes.
+            if "xsec_token=" not in url:
+                diag.note(
+                    "xiaohongshu.missing_xsec_token", url=url,
+                    body="note page returned an empty shell, and this URL carries no xsec_token. "
+                         "小红书 note pages are readable only via the tokened share link; a bare "
+                         "/explore/<id> renders nothing. Use the URL as returned by penumbra_search "
+                         "(it already carries xsec_token), or append the token from a share link.")
+                return None
             diag.note("xiaohongshu.empty_detail", url=url,
-                      body="detail navigation succeeded but returned no title/body/media/comments")
+                      body="detail navigation succeeded but returned no title/body/media/comments "
+                           "(the URL DOES carry an xsec_token, so this is not the token case: the "
+                           "note may be deleted, private, or the session may have lost its login)")
             return None
 
         is_video = bool(video_url) or bool(soup.select_one("video, xg-video-player"))
@@ -918,7 +946,7 @@ class XiaohongshuAdapter:
             media=([video_url] + images) if video_url else images,
             metadata={"comments": comments, "comment_count": len(comments),
                       "comments_declared": declared,
-                      **({"video_url": video_url} if video_url else {})},
+                      **video_metadata(video_url, video_src, has_player=is_video)},
         )
 
     def health_check(self) -> tuple[bool, str]:

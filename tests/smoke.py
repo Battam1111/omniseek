@@ -4798,6 +4798,27 @@ check("xhs_cn black box: risk classifications are recorded (in the sandbox, not 
       and _xcn_incident_sandbox.read_text(encoding="utf-8").count("signed_http_461") == 1)
 _xcn._INCIDENT_PATH = _xcn_incident_real
 
+# CONVENTION TRIPWIRE (2026-08-12). Sandboxing the incident path has been added per-file three
+# times and missed a fourth, which then wrote four rows into the real black box, one of them an
+# injected arity error from a red proof. A poisoned evidence file is worse than an empty one: the
+# forged rows are shaped exactly like real ones, so the first genuine 461 arrives already
+# surrounded by noise it cannot be told apart from. Check the CONVENTION mechanically instead of
+# trusting the next author to remember it: a test file that drives the guard must redirect the log.
+_xcn_tests_dir = _pl.Path(__file__).resolve().parent
+_xcn_unisolated = []
+for _xcn_tf in sorted(_xcn_tests_dir.glob("test_*.py")):
+    _tt = _xcn_tf.read_text(encoding="utf-8", errors="ignore")
+    # Key on an IMPORT of the adapter, not a mention of it. A suite that only reads the adapter's
+    # SOURCE TEXT (an AST contract check) names the module as a filename string and can never
+    # reach the guard, so flagging it would train the reader to ignore this line.
+    _xcn_imports = any(("import" in _ln and "xiaohongshu_cn_source" in _ln)
+                       for _ln in _tt.splitlines())
+    if _xcn_imports and "_INCIDENT_PATH" not in _tt:
+        _xcn_unisolated.append(_xcn_tf.name)
+check("xhs_cn black box: every test that drives the guard redirects _INCIDENT_PATH (no forged evidence)",
+      not _xcn_unisolated,
+      f"these write into the REAL incident log: {_xcn_unisolated}")
+
 # ---------------------------------------------------------------------------
 # 27b. xiaohongshu_cn BROWSER-primary path (2026-06-25 mechanism flip: drive the 9224 browser to
 #      issue its own signed XHR, like the rednote 小号). The captured /search/notes decode
@@ -6442,7 +6463,7 @@ import re as _dd_re_mod  # noqa: E402
 _dd_registered = {n for n in dir(_pt_srv) if n.startswith("penumbra_")}
 _dd_docs = [ROOT / "README.md", ROOT / "docs" / "tools.md", ROOT / "docs" / "patterns.md",
             ROOT / "docs" / "configuration.md", ROOT / "docs" / "walled-sources.md",
-            # public-mirror only (absent upstream, skipped by the exists() check below): the legal
+            # public-mirror only (absent here, skipped by the exists() check below): the legal
             # posture is a product doc like the rest, so it rides the same rail. A public doc that
             # is not on this list is a surface nothing checks.
             ROOT / "docs" / "LEGAL-POSTURE.md"]
@@ -17542,6 +17563,79 @@ if _SERVICES_PATH.exists():
               {"ProgramArguments": [f"{_maint_home}/penumbra-brain/.venv/bin/python"]}))
 
 
+
+# ---------------------------------------------------------------------------
+# 70. THE GATE RUNS THE GUARDS. deploy.sh executes this file and nothing else, so until 2026-08-12
+#     every tests/test_*.py suite was unenforced: the contract tests pinning tuple arity, incident
+#     isolation, health-state scope, the alarm lane and the observation journal could all go red
+#     without blocking a release. A guard that does not run at the gate is not a guard, it is a
+#     document.
+#
+#     The first attempt was withdrawn on a WRONG diagnosis of its own failure ("the release does not
+#     package tests/"). It does: scripts/deploy_payload.sh ships tests/ and always has. What actually
+#     failed is that three suites read deploy.sh / public_prepare.sh / the git tree, none of which a
+#     release contains BY DESIGN. Those now declare that dependency (tests/_repo_only.py) and skip
+#     with one shared reason instead of failing on a correct absence. The lesson is worth more than
+#     the block: when a gate fails in staging, read the staging failure, do not infer it.
+#
+#     In a SUBPROCESS on purpose: this file monkeypatches modules globally and at length, and
+#     importing the suites into the same interpreter would let the two interfere in both directions.
+#     It costs one process and a few seconds.
+#
+#     TWO derived floors, no magic numbers:
+#       - at least one test per suite FILE, so a suite that silently stops being discovered fails
+#         here instead of quietly leaving the gate;
+#       - every SKIP reason must be declared below. Mass-skipping is the way this check would go
+#         green while enforcing nothing (a swallowed import, a guard that disables itself), and a
+#         count cannot tell that from a legitimate environment skip. A new reason fails until
+#         someone writes it down.
+# ---------------------------------------------------------------------------
+import os as _gate_os  # noqa: E402
+import subprocess as _gate_sub  # noqa: E402
+
+# Verbatim skip reasons this gate accepts. Keep in sync with tests/_repo_only.REASON.
+_GATE_DECLARED_SKIPS = {
+    "source-repo suite: deploy.sh absent, so this is a packaged release and not a checkout",
+    "Survival sibling checkout is not present",
+    # PLATFORM gates. These never fire on the mini, so the first version of this list (written from
+    # one macOS run) did not know they existed; the public mirror's sync, run from Windows, found
+    # them immediately. A list built by observing ONE environment describes that environment, not
+    # the rule, which is the same mistake as a fixture that differs from production.
+    "macOS path resolution is the target behavior",
+    "concurrent replace is a macOS target-platform gate",
+    "directory fsync is POSIX-only",
+}
+
+# BOUNDED. The battery measures ~6s; 300 is a wide multiple, so only a genuine hang trips it and
+# never a loaded machine. Without a bound, one test that waits on a socket wedges the DEPLOY, with
+# no output and nothing to read: the worst failure shape this file can have.
+_GATE_TIMEOUT_S = 300
+
+_gate_files = sorted((ROOT / "tests").glob("test_*.py"))
+try:
+    _gate_run = _gate_sub.run(
+        [sys.executable, "-m", "unittest", "discover", "-s", "tests", "-p", "test_*.py", "-v"],
+        cwd=str(ROOT), capture_output=True, text=True, timeout=_GATE_TIMEOUT_S,
+        env={**_gate_os.environ, "PYTHONPATH": str(ROOT / "src")})
+    _gate_rc = _gate_run.returncode
+    _gate_out = (_gate_run.stderr or "") + (_gate_run.stdout or "")
+except _gate_sub.TimeoutExpired as _gate_exc:
+    _gate_rc = 124
+    _gate_out = (f"the suite battery TIMED OUT after {_GATE_TIMEOUT_S}s (normally ~6s), so a test "
+                 f"is hanging; partial output follows\n"
+                 + (_gate_exc.stderr or b"").decode("utf-8", "replace")
+                 + (_gate_exc.stdout or b"").decode("utf-8", "replace"))
+_gate_m = _s0_re.search(r"Ran (\d+) test", _gate_out)
+_gate_n = int(_gate_m.group(1)) if _gate_m else 0
+_gate_skips = set(_s0_re.findall(r"skipped ['\"](.+?)['\"]", _gate_out))
+_gate_undeclared = sorted(_gate_skips - _GATE_DECLARED_SKIPS)
+check(f"gate: all {len(_gate_files)} unittest suites pass ({_gate_n} tests) — the guards run at deploy",
+      _gate_rc == 0 and _gate_files and _gate_n >= len(_gate_files),
+      f"rc={_gate_rc} ran={_gate_n} files={len(_gate_files)} "
+      f"tail={_gate_out.strip().splitlines()[-4:]}")
+check("gate: every skipped test skipped for a DECLARED reason (else a suite could opt itself out)",
+      not _gate_undeclared,
+      f"undeclared skip reasons: {_gate_undeclared}")
 
 if FAIL:
     print(f"SMOKE FAILED: {len(FAIL)} problem(s)")

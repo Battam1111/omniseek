@@ -630,6 +630,45 @@ def attach_video_sniffer(page) -> list:
     return seen
 
 
+def video_with_origin(page, sniffed: "Optional[list]" = None) -> "tuple[Optional[str], Optional[str]]":
+    """A direct video URL for this page AND the path that produced it: ``(url, origin)``.
+
+    origin is "dom" (read off the <video> element), "wire" (only the response sniffer ever saw a
+    direct stream -- the single answer for a blob:-fed player), or "unresolved" (url is None: it
+    looks like a video note and NEITHER path yielded anything a transcriber can fetch).
+
+    The DOM wins when both have something: it is the element the page is actually playing, while
+    the wire may also have carried a preview or a neighbouring card's stream.
+
+    This is ONE helper rather than an ``or`` in each adapter because the ORIGIN is the only way to
+    learn, from production output, WHICH path actually fires. Before this stamp existed the two were
+    indistinguishable in every document the eye had ever returned, which is how a success once got
+    attributed to the DOM path on no evidence at all. Do not write a verdict here from memory: read
+    ``metadata.video_src`` off real notes."""
+    url = video_from_page(page)
+    if url:
+        return url, "dom"
+    for candidate in (sniffed or []):
+        if candidate:
+            return candidate, "wire"
+    return None, "unresolved"
+
+
+def video_metadata(url: "Optional[str]", origin: "Optional[str]", *, has_player: bool) -> dict:
+    """The video keys a document should carry; ``{}`` when the note has no video at all.
+
+    A note WITH a player but WITHOUT a URL still gets ``video_src: "unresolved"``, and that row is
+    the point: it is the denominator for "does the wire path ever fire". Emitting nothing there
+    would make a video note we could not read look exactly like an image note, and a traffic sample
+    could then never separate "the sniffer never fires" from "no blob-only note ever came through".
+
+    A URL handed over with no origin is stamped "unknown" rather than assumed: a wrong label is
+    worse than a visibly missing one, because the whole purpose of the field is measurement."""
+    if url:
+        return {"video_url": url, "video_src": origin or "unknown"}
+    return {"video_src": "unresolved"} if has_player else {}
+
+
 def content_with_video(text: str, video_url: "Optional[str]", *, has_player: bool) -> str:
     """Append the video-note hint when the page is a video note.
 

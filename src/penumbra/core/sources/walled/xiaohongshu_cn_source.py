@@ -88,7 +88,8 @@ try:
         VIDEO_PLAYER_SELECTORS as _VIDEO_PLAYER_SELECTORS,
         attach_video_sniffer as _attach_video_sniffer,
         content_with_video as _content_with_video,
-        video_from_page as _video_from_page,
+        video_metadata as _video_metadata,
+        video_with_origin as _video_with_origin,
         content_with_media as _content_with_media,
     )
     from penumbra.core.sources.walled.xiaohongshu_source import (
@@ -703,6 +704,50 @@ def _int(v) -> int:
         return 0
 
 
+def _signed_video(nc: dict) -> "tuple[Optional[str], bool]":
+    """``(direct mp4 URL or None, is_video_note)`` from a signed feed ``note_card``.
+
+    SHAPE OBSERVED LIVE 2026-08-12 against a real video note, not inferred from memory (the whole
+    reason this went in as a gap marker first):
+
+        note_card["type"] == "video"
+        note_card["video"]["media"]["stream"] = {"EF4": [entry], "EF5": [entry, entry], "EF6|EF7": []}
+        entry = {master_url, backup_urls[2], format: "mp4", height, width, size,
+                 quality_type: "HD", default_stream: 0, weight: 62, ...}
+
+    SELECTION, derived from that measurement rather than picked:
+      - honour ``default_stream`` when the site marks one. On the observed note NOTHING was marked
+        (all 0) and every ``weight`` was identical (62), so neither field can discriminate here;
+        both are still consulted because when the site does express a preference it should win.
+      - otherwise take the tallest stream. The eye's own video hint tells the agent to read the
+        FRAMES (facts are routinely burned into the picture, not spoken), and legibility scales with
+        resolution: on this note that is 1920 over two 1280s, for 14MB against 9-12MB.
+      - accept only an mp4 with a fetchable URL, since both readers downstream must fetch it;
+        ``backup_urls[0]`` covers an entry whose master is missing.
+
+    is_video is reported from ``type``, INDEPENDENTLY of whether a URL was found: a video note we
+    could not read must still be countable, else it is indistinguishable from an image note and the
+    video_src denominator lies by omission.
+    """
+    is_video = (nc.get("type") == "video")
+    stream = (((nc.get("video") or {}).get("media") or {}).get("stream") or {})
+    best, best_key = None, None
+    for entries in stream.values():
+        for e in (entries or []):
+            if not isinstance(e, dict):
+                continue
+            url = e.get("master_url") or next(
+                (u for u in (e.get("backup_urls") or []) if isinstance(u, str) and u), None)
+            if not url or (e.get("format") or "mp4") != "mp4":
+                continue
+            key = (1 if e.get("default_stream") else 0, _int(e.get("weight")), _int(e.get("height")))
+            if best_key is None or key > best_key:
+                best, best_key = url, key
+    if best and not is_video:
+        is_video = True  # a stream present without type=="video" is still a video note
+    return best, is_video
+
+
 def _note_url(note_id: str, token: str) -> str:
     return f"https://www.xiaohongshu.com/explore/{note_id}?xsec_token={token}&xsec_source=pc_search"
 
@@ -1041,7 +1086,7 @@ def _browser_fetch(note_id: str, token: str, url: str) -> tuple[str, Optional["D
             page.goto(nav_url, wait_until="domcontentloaded", timeout=30000)
             _human.read_dwell()
             if _cn_captcha(page):  # UNCONDITIONAL: a visible slider means 风控 regardless of body — 刹车
-                return ("login", None, [], {}, None)
+                return ("login", None, [], {}, (None, None))
             # A VIDEO note carries no body text, so a text-only gate reads it as an empty page
             # and _cn_login_wall then throws away a readable note. A player IS content.
             has_content = False
@@ -1062,11 +1107,11 @@ def _browser_fetch(note_id: str, token: str, url: str) -> tuple[str, Optional["D
             except Exception:  # noqa: BLE001
                 has_content = False
             if not has_content and _cn_login_wall(page):
-                return ("login", None, [], {}, None)
+                return ("login", None, [], {}, (None, None))
             _human.scroll_like_reading(page, screens=random.randint(1, 2))
             _human.read_dwell()
             images = _images_from_page(page)
-            video_url = _video_from_page(page) or (seen_video[0] if seen_video else None)
+            video = _video_with_origin(page, seen_video)  # (url, "dom"|"wire"|"unresolved")
             cdata = {"list": [], "declared": None}
             dom_list: list = []
             try:
@@ -1077,13 +1122,13 @@ def _browser_fetch(note_id: str, token: str, url: str) -> tuple[str, Optional["D
                 pass
             cap_list = _xhs_flatten_comments(cmt)
             cdata["list"] = cap_list if len(cap_list) >= len(dom_list) else dom_list
-            return ("ok", page.content(), images, cdata, video_url)
+            return ("ok", page.content(), images, cdata, video)
 
         # 'safe' (default) human profile — NOT _human.fast (fast is cleared only for the international
         # 小号). timeout 110s < fetch_timeout (120) so cdp_call cleans up before the fetcher backstop.
         try:
-            status, html, images, cdata, video_url = cdp_call(_flow, initial_url=None,
-                                                              timeout=110, cdp_url=_CN_CDP_URL)
+            flow_result = cdp_call(_flow, initial_url=None,
+                                   timeout=110, cdp_url=_CN_CDP_URL)
         except Exception as exc:  # noqa: BLE001
             _note_browser_cdp(False)  # sustained 9224 CDP failures → trip a cooldown (don't re-nav every query)
             _record_incident("browser_fetch_error", exc_type=type(exc).__name__,
@@ -1097,6 +1142,12 @@ def _browser_fetch(note_id: str, token: str, url: str) -> tuple[str, Optional["D
                 _extra = max(0.0, min(_BROWSER_GAP_EXTRA_MAX, random.lognormvariate(0.4, 0.7)))
                 _browser_next_gap = random.uniform(_BROWSER_GAP_LO, _BROWSER_GAP_HI) + _extra
         _note_browser_cdp(True)
+        # Unpacked OUTSIDE the try above on purpose. The shape of our own return tuple is OUR bug;
+        # inside that try a ValueError here is charged to the browser -- it trips the CDP cooldown
+        # AND writes a forged `browser_fetch_error` row into the incident black box, which is the
+        # exact evidence-poisoning this file's incident convention exists to prevent.
+        status, html, images, cdata, video = flow_result
+        video_url, video_src = video
         if status == "login":
             return ("login", None)
         if status != "ok" or not html:
@@ -1111,8 +1162,21 @@ def _browser_fetch(note_id: str, token: str, url: str) -> tuple[str, Optional["D
         comments = cdata.get("list") or []
         declared = cdata.get("declared")
         if not _xhs_detail_has_substance(title, body, images, comments):
+            # Same treatment as the international adapter: name the cause instead of reporting a
+            # blank page. A bare /explore/<id> with no xsec_token renders an empty shell, and the
+            # old message sent a real caller hunting the wrong layer entirely.
+            if "xsec_token=" not in (url or ""):
+                diag.note(
+                    "xiaohongshu_cn.missing_xsec_token", url=url,
+                    body="note page returned an empty shell, and this URL carries no xsec_token. "
+                         "小红书 note pages are readable only via the tokened share link; a bare "
+                         "/explore/<id> renders nothing. Use the URL as returned by penumbra_search "
+                         "(it already carries xsec_token), or append the token from a share link.")
+                return ("error", None)
             diag.note("xiaohongshu_cn.empty_detail", url=url,
-                      body="detail navigation succeeded but returned no title/body/media/comments")
+                      body="detail navigation succeeded but returned no title/body/media/comments "
+                           "(the URL DOES carry an xsec_token, so this is not the token case: the "
+                           "note may be deleted, private, or the 9224 session may have lost login)")
             return ("error", None)
         is_video = bool(video_url) or bool(soup.select_one("video, xg-video-player"))
         content = (_content_with_video(body, video_url, has_player=True) if is_video
@@ -1135,7 +1199,7 @@ def _browser_fetch(note_id: str, token: str, url: str) -> tuple[str, Optional["D
             media=([video_url] + images) if video_url else images,
             metadata={"note_id": note_id, "xsec_token": token, "comments": comments,
                       "comments_fetched": len(comments), "comments_declared": declared, "via": "browser",
-                      **({"video_url": video_url} if video_url else {})},
+                      **_video_metadata(video_url, video_src, has_player=is_video)},
         )
         return ("ok", doc)
     finally:
@@ -1415,8 +1479,15 @@ class XiaohongshuCNAdapter:
         desc = (nc.get("desc") or "").strip()
         user = nc.get("user") or {}
         inter = nc.get("interact_info") or {}
+        # image_list on a VIDEO note is just the cover frame, so this path used to hand back a note
+        # that looked exactly like an image note: no stream, no hint, and nothing to tell a later
+        # reader it had been a video at all. Shape observed live 2026-08-12 (not inferred), see
+        # _signed_video.
         media = [im.get("url_default") for im in (nc.get("image_list") or [])
                  if isinstance(im, dict) and im.get("url_default")]
+        video_url, is_video = _signed_video(nc)
+        if video_url:
+            media = [video_url] + media
         date = None
         ts = nc.get("time")
         if ts:
@@ -1434,6 +1505,8 @@ class XiaohongshuCNAdapter:
             return None
 
         body = desc or title
+        if is_video:
+            body = _content_with_video(body, video_url, has_player=True)
         return Document(
             source="xiaohongshu_cn",
             source_id=note_id,
@@ -1462,6 +1535,7 @@ class XiaohongshuCNAdapter:
                 "comments_fetched": len(comments),
                 "sub_comments_drilled": full,  # False = top+inline only (~82%); True (&xhs_full=1) = deep
                 "comments": comments,  # [{author, text, likes}] — sub-replies prefixed '↳ '
+                **_video_metadata(video_url, "signed", has_player=is_video),
             },
         )
 

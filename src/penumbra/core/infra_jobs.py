@@ -122,6 +122,52 @@ _CDP_SOURCES = {"xiaohongshu", "xiaomuchong", "zhihu", "zhihu_users", "yipinsanf
 _CDP_INSTANCES = {"9222-shared": None, "9223-xhs": "http://127.0.0.1:9223"}
 _SEALED_SOURCES: set[str] = set()
 
+# Rows in the watchdog state that are NOT sources. _health_track writes one "_cdp:<label>" row per
+# CDP-Chrome instance alongside the per-source rows, so the state file mixes two namespaces in one
+# flat dict. The leading "_" is the RESERVED infra namespace (no adapter name starts with one), which
+# is why the prune below is a NAMESPACE rule and not a hand-kept literal list that rots the next time
+# a CDP instance is added -- and why an unknown infra row fails SAFE (kept, and reported).
+_INFRA_ROW_PREFIX = "_"
+
+
+def _prune_stale_health_rows(state: dict, live: set) -> dict:
+    """Drop the watchdog rows of sources that are NO LONGER REGISTERED. Returns what it saw.
+
+    THE KEY IS REGISTRATION, deliberately -- not enablement, and not "was probed this run":
+      - run_source_health probes fetcher.all_adapter_names() with NO profile filter, so a source the
+        deployer's profile DISABLES is still registered, still probed, and still rewrites its row
+        every run. Pruning by enablement would delete a counter the same run re-creates, and would
+        throw away the fail history of every source a profile happens to gate (on the mini today the
+        walled tier is deny-by-default and the profile re-enables it: 0 sources are profile-disabled,
+        so that prune would look harmless right up until a profile changed).
+      - the 6h fast lane probes only the non-CDP sources. Pruning by "probed" would delete every CDP
+        source's row twice a day and hand the daily lane a blank slate.
+    A "_"-prefixed row is infrastructure and is never a prune candidate.
+
+    Fail-safe: an EMPTY ``live`` means the registry did not load, not that every source vanished, so
+    it prunes nothing and says so. PURE: mutates ``state`` in place, no IO, no clock, no network.
+
+    Returns {"pruned": [names dropped], "orphan_infra": [infra rows no current job writes],
+             "skipped": "" | reason}.
+    """
+    def _d(key: str) -> dict:
+        v = state.get(key)
+        return v if isinstance(v, dict) else {}
+
+    fails, status, alerts = _d("fails"), _d("last_status"), _d("_alerts")
+    rows = set(fails) | set(status)
+    written_infra = {f"_cdp:{label}" for label in _CDP_INSTANCES}
+    orphan_infra = sorted(r for r in rows
+                          if r.startswith(_INFRA_ROW_PREFIX) and r not in written_infra)
+    if not live:
+        return {"pruned": [], "orphan_infra": orphan_infra, "skipped": "empty-registry"}
+    stale = sorted(r for r in rows if not r.startswith(_INFRA_ROW_PREFIX) and r not in live)
+    for n in stale:
+        fails.pop(n, None)
+        status.pop(n, None)
+        alerts.pop(f"down:{n}", None)
+    return {"pruned": stale, "orphan_infra": orphan_infra, "skipped": ""}
+
 
 def _health_probe(adapter) -> tuple[bool, str]:
     """BOUNDED health_check (per-source hard timeout -> can never hang the loop) with one in-run
@@ -274,6 +320,27 @@ def run_source_health(scope: str = "all") -> dict:
     fails = state.get("fails", {})  # name -> consecutive fail count
     pushed = 0
 
+    # PRUNE the rows of sources that are no longer registered. Placed HERE, at the top of the state
+    # phase: `alerts` / `fails` above are bound to the very dicts inside `state`, and `last_status`
+    # is copied into `snap` further down, so pruning any later would be silently overwritten by this
+    # run's own writes. VISIBLE by construction -- a run that quietly drops rows is exactly how state
+    # disappears without anyone learning, and the job's return value is discarded by the scheduler
+    # (jobs._run_with_budget calls row.fn() and throws the result away), so the log line alone would
+    # reach nobody. It fires ONCE per removal: the next run has nothing left to prune.
+    _pr = _prune_stale_health_rows(state, set(names))
+    if _pr["pruned"]:
+        log.warning("source-health[%s]: pruned %d watchdog row(s), source no longer registered: %s",
+                    scope, len(_pr["pruned"]), ", ".join(_pr["pruned"]))
+        _alert(f"体检状态清理 · {len(_pr['pruned'])}",
+               "已从 health-watchdog-state 移除(源已不在注册表):\n"
+               + "\n".join(f"- {n}" for n in _pr["pruned"]))
+        pushed += 1
+    if _pr["skipped"]:
+        log.warning("source-health[%s]: prune SKIPPED (%s) -- every row kept", scope, _pr["skipped"])
+    if _pr["orphan_infra"]:  # kept (reserved namespace), but surfaced so a fossil row cannot hide
+        log.warning("source-health[%s]: %d infra row(s) kept that no current job writes: %s",
+                    scope, len(_pr["orphan_infra"]), ", ".join(_pr["orphan_infra"]))
+
     # Escalate a FAILED self-heal -- the CDP safety net is down; every CDP source on that instance
     # stays silently offline until the operator intervenes.
     for svc in heal_failed:
@@ -311,7 +378,16 @@ def run_source_health(scope: str = "all") -> dict:
         body = "\n".join(f"- {n}: {results[n][1][:64]}" for n in newly_degraded)
         _alert(f"源降级 · {len(newly_degraded)}", body)
         pushed += 1
-    state["degraded"] = sorted(degraded_now)
+    # SCOPE-AWARE, by the same rule the snapshot below already follows: a scoped run may only speak
+    # about what it PROBED. The 6h fast lane never probes the CDP sources, so replacing the whole set
+    # from it dropped every CDP source out of `degraded`; the next daily run re-added them, they read
+    # as NEWLY degraded, and 源降级 re-fired twice a day forever. The set is a partial observation
+    # being written as if it were a total one, which is exactly the defect the last_status merge
+    # fixes one block down. This key was simply left behind.
+    # Full run rebuilds (and thereby self-cleans a source that left the registry); the fast lane
+    # keeps what it could not see.
+    state["degraded"] = sorted(degraded_now if full
+                               else (prev_degraded - set(probed)) | degraded_now)
 
     state["fails"] = fails
     state["_alerts"] = alerts
@@ -335,7 +411,7 @@ def run_source_health(scope: str = "all") -> dict:
     log.info("source-health[%s]: %d/%d healthy (%d CDP); newly_down=%d recovered=%d alert=%d",
              scope, n_green, len(probed), len(cdp), len(newly_down), len(recovered), pushed)
     return {"healthy": n_green, "probed": len(probed), "newly_down": len(newly_down),
-            "recovered": len(recovered), "alert": pushed}
+            "recovered": len(recovered), "alert": pushed, "pruned": _pr["pruned"]}
 
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
