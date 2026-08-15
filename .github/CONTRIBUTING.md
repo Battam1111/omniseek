@@ -8,7 +8,7 @@ purpose (see below); the bar for fixing a decayed one is low (please do).
 
 ```bash
 python -m venv .venv && . .venv/bin/activate    # Windows: .venv\Scripts\activate
-./bootstrap.sh                                   # install + chromium + token + profile
+scripts/bootstrap.sh                             # install + chromium + token + profile
 python tests/smoke.py                            # must pass before you push
 python -m omniseek.serve_http                      # run it; curl http://127.0.0.1:8765/healthz
 ```

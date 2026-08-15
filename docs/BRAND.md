@@ -27,7 +27,7 @@ The blue ramp is depth: the further in, the deeper the shade. The single amber p
 
 **The deep O.** Three concentric rings, each with one opening, the openings rotated layer by layer: the way in exists, but it is not a straight line. That is seeking, as opposed to searching. The amber point at the center is the thing found at depth. Read as a whole, the rings and the point are also an iris and a pupil: the mark quietly remains an eye without saying so.
 
-The mark carries the sharpest claim (depth, the way in, the find). The name carries the breadth (Omni). Together the lockup says both; do not try to draw the 220 sources into the mark.
+The mark carries the sharpest claim (depth, the way in, the find). The name carries the breadth (Omni). Together the lockup says both; do not try to draw the whole catalog into the mark, and never put a source count in brand copy (the catalog grows; a number rots).
 
 ### Geometry (canonical, from `assets/logo.svg`)
 

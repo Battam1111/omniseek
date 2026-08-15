@@ -9,7 +9,7 @@
 
 **Your agent seeks what search can't find.**
 
-Self-hosted perception MCP server. 220 curated sources. One connection.
+Self-hosted perception MCP server. Hundreds of curated sources, one connection.
 
 [![CI](https://github.com/Battam1111/omniseek/actions/workflows/ci.yml/badge.svg)](https://github.com/Battam1111/omniseek/actions/workflows/ci.yml)
 &nbsp;[![License](https://img.shields.io/badge/License-Apache_2.0-3B82F6?style=flat-square)](./LICENSE)
@@ -31,16 +31,16 @@ OmniSeek reaches underneath: the podcast someone spoke into but nobody transcrib
 
 <div align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="assets/demo-en-dark.png">
-    <img src="assets/demo-en-light.png" alt="A worked example: OmniSeek returns a transcribed talk, a video-frame reading, cross-language forum posts, and comment-section corrections that plain search misses." width="780">
+    <source media="(prefers-color-scheme: dark)" srcset="assets/demo-dark.png">
+    <img src="assets/demo-light.png" alt="A real investigation: one search fans out and reports which login-walled source holds more; the agent drills through the wall, reads the comment section, and reads the posts whose text lives inside images. Every line is from a live session." width="760">
   </picture>
 </div>
 
 It hears (local bilingual ASR, no cloud), sees (images and video frames, in-band), crosses languages (a Chinese query finds English results and vice versa), reads behind login walls (your credentials, your machine, off by default), and remembers (a persistent relation graph that gets richer with every query).
 
-220 curated sources across 32 domains and 8 language regions. Each earned its place by beating plain search.
+Every source in the catalog earned its place by beating plain search at something, from citation graphs and regulatory filings to login-walled forums and Chinese-language video. And the catalog is built to grow: a curator pipeline probes, judges, and admits new sources, and retires the ones that decay.
 
-**[Five real examples](docs/examples.md)** · **[A full case study](docs/case-study.md)**
+**[Worked examples, real outputs](docs/examples.md)** · **[A full case study](docs/case-study.md)**
 
 ---
 
@@ -63,7 +63,7 @@ The first `up` builds locally (dependencies + headless Chromium); later starts a
 
 ```bash
 python -m venv .venv && . .venv/bin/activate
-./bootstrap.sh
+scripts/bootstrap.sh
 python -m omniseek.serve_http
 ```
 
@@ -75,11 +75,11 @@ OmniSeek binds `127.0.0.1` and requires the bearer token on every request. Do no
 
 ## Tools
 
-One MCP connection, 18 tools. Start with `omniseek_search`; explore what's available with `omniseek_sources`.
+One MCP connection. Start with `omniseek_search`; explore what's available with `omniseek_sources`.
 
 | Tool | What it does |
 |------|-------------|
-| `omniseek_search` | Fan out across 220 sources, deduplicate, rank. Cross-lingual (semantic + lexical). |
+| `omniseek_search` | Fan out across the whole catalog, deduplicate, rank. Cross-lingual (semantic + lexical). |
 | `omniseek_read` | Normalize any URL or document (web page, PDF, arXiv) into clean text. |
 | `omniseek_view` | Read images, document figures, video frames with vision. |
 | `omniseek_transcribe` | Transcribe audio/video locally. Bilingual ASR, sliceable by timestamp. |
@@ -100,11 +100,13 @@ One MCP connection, 18 tools. Start with `omniseek_search`; explore what's avail
 
 Full reference in **[tools.md](docs/tools.md)** · **[FAQ](docs/faq.md)**
 
+Using Claude Code? [`skills/omniseek-investigate`](skills/omniseek-investigate/SKILL.md) ships the investigation methodology (sweep, zoom, structure) as a ready-made skill.
+
 ---
 
 ## Configure
 
-OmniSeek is **catalog-first**: with no config, every benign source is on and login-walled sources are off. Tune in one file, `~/.omniseek/profile.json` ([example](profile.example.json)):
+OmniSeek is **catalog-first**: with no config, every benign source is on and login-walled sources are off. Tune in one file, `~/.omniseek/profile.json` ([example](deploy/profile.example.json)):
 
 | Tier | Default |
 |------|---------|

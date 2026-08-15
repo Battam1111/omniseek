@@ -9,7 +9,7 @@
 
 **你的 agent,找到搜索找不到的东西。**
 
-自托管的感知 MCP 服务器。220 个策展信息源。一条连接。
+自托管的感知 MCP 服务器。数百个策展信息源,一条连接。
 
 [![CI](https://github.com/Battam1111/omniseek/actions/workflows/ci.yml/badge.svg)](https://github.com/Battam1111/omniseek/actions/workflows/ci.yml)
 &nbsp;[![License](https://img.shields.io/badge/License-Apache_2.0-3B82F6?style=flat-square)](../../LICENSE)
@@ -29,16 +29,16 @@ OmniSeek 探到表面之下:有人在播客里说过但从没被转写成文字�
 
 <div align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="../../assets/demo-en-dark.png">
-    <img src="../../assets/demo-en-light.png" alt="一次真实调用:OmniSeek 返回了转写的演讲、视频帧读数、跨语言论坛帖和评论区补充,这些普通搜索一个都拿不到。" width="780">
+    <source media="(prefers-color-scheme: dark)" srcset="../../assets/demo-dark.png">
+    <img src="../../assets/demo-light.png" alt="一次真实调查:一次搜索扇出后自己报告哪个登录墙源里还有更多;agent 钻进墙内、读完评论区、再用视觉读正文藏在图里的帖子。每一行都来自真实会话。" width="760">
   </picture>
 </div>
 
 它能听(本地双语转写,不走云),能看(图片与视频帧,视觉直读),能跨语言(中文查询返回英文结果,反之亦然),能进登录墙(你的凭证,你的机器,默认关闭),还能记住(一张随每次查询增厚的持久关系图谱)。
 
-220 个源横跨 32 个领域、8 个语言区。每一个源都是靠打赢普通搜索才拿到位置的。
+目录里的每一个源,都是靠在某件事上打赢普通搜索才拿到位置的:从引用图谱、监管文件,到登录墙论坛、中文视频。目录生来就会生长:内置的 curator 流水线负责探测、判决、准入新源,并让退化的源退役。
 
-**[五个真实例子](../examples.md)** · **[一次完整调查](../case-study.md)**
+**[真实例子、真实输出](../examples.md)** · **[一次完整调查](../case-study.md)**
 
 ---
 
@@ -61,7 +61,7 @@ curl -s http://127.0.0.1:8765/healthz
 
 ```bash
 python -m venv .venv && . .venv/bin/activate
-./bootstrap.sh
+scripts/bootstrap.sh
 python -m omniseek.serve_http
 ```
 
@@ -73,11 +73,11 @@ OmniSeek 绑定 `127.0.0.1`,每个请求都要 bearer token。没有反向代理
 
 ## 工具
 
-一条 MCP 连接,18 件工具。从 `omniseek_search` 开始;用 `omniseek_sources` 看有什么可用。
+一条 MCP 连接。从 `omniseek_search` 开始;用 `omniseek_sources` 看有什么可用。
 
 | 工具 | 干什么 |
 |------|--------|
-| `omniseek_search` | 220 源扇出、去重、排序。跨语言(语义 + 词面)。 |
+| `omniseek_search` | 全目录扇出、去重、排序。跨语言(语义 + 词面)。 |
 | `omniseek_read` | 把任意 URL 或文档(网页、PDF、arXiv)归一为干净文本。 |
 | `omniseek_view` | 用视觉读图片、文档插图、视频帧。 |
 | `omniseek_transcribe` | 本地转写音视频。双语 ASR,可按时间戳切片。 |
@@ -98,11 +98,13 @@ OmniSeek 绑定 `127.0.0.1`,每个请求都要 bearer token。没有反向代理
 
 完整参考见 **[tools.md](../tools.md)** · **[FAQ](../faq.md)**
 
+在用 Claude Code?[`skills/omniseek-investigate`](../../skills/omniseek-investigate/SKILL.md) 把调查方法论(扫、钻、结构化)打包成了现成的 skill。
+
 ---
 
 ## 配置
 
-OmniSeek 是**目录优先**的:零配置时,每个无害源都开着,登录墙源都关着。全部调节集中在一个文件 `~/.omniseek/profile.json`([示例](../../profile.example.json)):
+OmniSeek 是**目录优先**的:零配置时,每个无害源都开着,登录墙源都关着。全部调节集中在一个文件 `~/.omniseek/profile.json`([示例](../../deploy/profile.example.json)):
 
 | 层级 | 默认 |
 |------|------|

@@ -8,6 +8,25 @@ history and are kept as written.
 
 ## [Unreleased]
 
+### Fixed
+
+- Pinned `mcp[cli]>=1.0.0,<2`. mcp 2.0 (2026-08) removed `mcp.server.fastmcp`, so a FRESH
+  install (docker build, new venv) died at import while every existing venv kept working.
+  CI's docker-boot job caught it on the rename push; reproduced red and verified green in a
+  clean venv before pinning.
+
+### Changed
+
+- README and `docs/examples.md` rebuilt around one real investigation (four walls: language,
+  login, comment depth, pixels) with verbatim outputs, mermaid diagrams for the chase and the
+  coauthor graph, and a demo card re-rendered at a readable aspect ratio.
+- Literal source counts removed from all docs and assets. The catalog grows (and prunes)
+  through the curator pipeline, so any hard number is born stale; the server already computes
+  live counts at startup, and prose now sells the mechanism instead.
+- Root decluttered: `bootstrap.sh` -> `scripts/bootstrap.sh` (now runnable from any CWD),
+  `profile.example.json` -> `deploy/profile.example.json`, every reference updated. The
+  shipped Claude Code skill is linked from the README instead of sitting undiscovered.
+
 ### Changed (BREAKING: the project is renamed penumbra -> OmniSeek)
 
 - Every namespace follows the name: the package is `omniseek`, the tools are `omniseek_*`, the

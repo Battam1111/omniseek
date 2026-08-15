@@ -9,7 +9,7 @@
 
 **検索では届かないものを、あなたのエージェントが探し当てる。**
 
-セルフホスト型の知覚 MCP サーバー。厳選された 220 のソース。接続はひとつ。
+セルフホスト型の知覚 MCP サーバー。数百の厳選ソース、接続はひとつ。
 
 [![CI](https://github.com/Battam1111/omniseek/actions/workflows/ci.yml/badge.svg)](https://github.com/Battam1111/omniseek/actions/workflows/ci.yml)
 &nbsp;[![License](https://img.shields.io/badge/License-Apache_2.0-3B82F6?style=flat-square)](../../LICENSE)
@@ -29,16 +29,16 @@ OmniSeek はその下層に届きます。ポッドキャストで語られた�
 
 <div align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="../../assets/demo-en-dark.png">
-    <img src="../../assets/demo-en-light.png" alt="実際の一回の呼び出し:OmniSeek は書き起こされた講演、動画フレームの読み取り、多言語フォーラムの投稿、コメント欄の訂正を返した。通常の検索ではどれも得られない。" width="780">
+    <source media="(prefers-color-scheme: dark)" srcset="../../assets/demo-dark.png">
+    <img src="../../assets/demo-light.png" alt="実際の調査:一度の検索がファンアウトし、どのログイン制ソースに続きがあるかを自ら報告。エージェントは壁の内側へ進み、コメント欄を読み、本文が画像の中にある投稿を視覚で読む。すべて実セッションの出力。" width="760">
   </picture>
 </div>
 
 聴く(ローカル二言語 ASR、クラウド不使用)、視る(画像と動画フレームを直接読む)、言語をまたぐ(中国語クエリが英語の結果を返し、その逆も)、ログインの壁の内側に届く(あなたの認証情報、あなたのマシン、デフォルトはオフ)、そして記憶する(クエリのたびに厚みを増す永続リレーショングラフ)。
 
-32 分野・8 言語圏にわたる 220 ソース。どのソースも、通常の検索に勝つことで席を得ています。
+カタログのどのソースも、引用グラフや規制当局への提出書類からログイン制フォーラム、中国語動画まで、何かひとつで通常の検索に勝つことで席を得ています。そしてカタログは育つ設計です:内蔵のキュレーター・パイプラインが新ソースを検証・審査・承認し、朽ちたソースを引退させます。
 
-**[実例 5 本](../examples.md)** · **[フル・ケーススタディ](../case-study.md)**
+**[実例と実出力](../examples.md)** · **[フル・ケーススタディ](../case-study.md)**
 
 ---
 
@@ -61,7 +61,7 @@ MCP クライアントを `http://127.0.0.1:8765/mcp` に向け、`Authorization
 
 ```bash
 python -m venv .venv && . .venv/bin/activate
-./bootstrap.sh
+scripts/bootstrap.sh
 python -m omniseek.serve_http
 ```
 
@@ -73,11 +73,11 @@ OmniSeek は `127.0.0.1` にバインドし、全リクエストに bearer token
 
 ## ツール
 
-MCP 接続ひとつ、ツールは 18。まず `omniseek_search` から。何が使えるかは `omniseek_sources` で。
+MCP 接続はひとつ。まず `omniseek_search` から。何が使えるかは `omniseek_sources` で。
 
 | ツール | 何をするか |
 |--------|-----------|
-| `omniseek_search` | 220 ソースへファンアウト、重複排除、ランキング。多言語対応。 |
+| `omniseek_search` | カタログ全体へファンアウト、重複排除、ランキング。多言語対応。 |
 | `omniseek_read` | 任意の URL や文書(ウェブ、PDF、arXiv)をクリーンなテキストに正規化。 |
 | `omniseek_view` | 画像・図版・動画フレームを視覚で読む。 |
 | `omniseek_transcribe` | 音声・動画をローカルで書き起こし。二言語 ASR、タイムスタンプ指定可。 |
@@ -98,11 +98,13 @@ MCP 接続ひとつ、ツールは 18。まず `omniseek_search` から。何が
 
 完全なリファレンスは **[tools.md](../tools.md)** · **[FAQ](../faq.md)**
 
+Claude Code をお使いなら、[`skills/omniseek-investigate`](../../skills/omniseek-investigate/SKILL.md) に調査メソッド(スイープ、ズーム、構造化)が既製スキルとして同梱されています。
+
 ---
 
 ## 設定
 
-OmniSeek は**カタログ・ファースト**:設定ゼロで無害なソースはすべてオン、ログインが必要なソースはすべてオフ。調整は一つのファイル `~/.omniseek/profile.json`([例](../../profile.example.json))で:
+OmniSeek は**カタログ・ファースト**:設定ゼロで無害なソースはすべてオン、ログインが必要なソースはすべてオフ。調整は一つのファイル `~/.omniseek/profile.json`([例](../../deploy/profile.example.json))で:
 
 | 層 | デフォルト |
 |----|-----------|

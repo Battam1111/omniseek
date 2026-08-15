@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
-# OmniSeek: non-Docker first-run provisioning. Run from the repo root, inside your venv.
-# (Docker users don't need this: the container entrypoint does the equivalent.)
+# OmniSeek: non-Docker first-run provisioning. Run inside your venv, from any directory
+# (it locates the repo root itself). Docker users don't need this: the container entrypoint
+# does the equivalent.
 set -euo pipefail
+cd "$(dirname "$0")/.."
 
 echo "==> 1/4  Install the package (CORE, Apache-clean)."
 echo "         For optional extras you accept the license of (see NOTICE):"
@@ -33,10 +35,10 @@ echo "==> 4/4  Default profile (broad benign sources ON, walled login-sources OF
 PROF="$HOME/.omniseek/profile.json"
 if [ -f "$PROF" ]; then
   echo "    profile already present at $PROF (leaving it)"
-elif [ -f profile.example.json ]; then
+elif [ -f deploy/profile.example.json ]; then
   mkdir -p "$(dirname "$PROF")"
-  cp profile.example.json "$PROF"
-  echo "    seeded $PROF from profile.example.json (edit to taste)"
+  cp deploy/profile.example.json "$PROF"
+  echo "    seeded $PROF from deploy/profile.example.json (edit to taste)"
 fi
 
 echo

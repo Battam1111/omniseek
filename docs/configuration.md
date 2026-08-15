@@ -11,7 +11,7 @@ off. None of this page is needed for a first run; it is the full reference for w
 ## The profile
 
 All configuration lives in one file, `~/.omniseek/profile.json`, seeded from
-[`profile.example.json`](../profile.example.json). It is a **sparse delta** over the shipped pack:
+[`profile.example.json`](../deploy/profile.example.json). It is a **sparse delta** over the shipped pack:
 write only what you change. Narrow or widen by source name, domain, region, and access tier.
 
 ```jsonc
