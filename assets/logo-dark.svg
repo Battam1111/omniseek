@@ -1,0 +1,8 @@
+<svg viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="OmniSeek mark, dark-background variant">
+  <title>OmniSeek (dark)</title>
+  <desc>The deep O on a dark field. Identical geometry to logo.svg; the innermost ring lifts from #1D4ED8 to #2563EB so it keeps contrast against a navy background.</desc>
+  <circle cx="100" cy="100" r="78" fill="none" stroke="#93C5FD" stroke-width="16" stroke-linecap="round" stroke-dasharray="416 74" transform="rotate(-55 100 100)"/>
+  <circle cx="100" cy="100" r="50" fill="none" stroke="#3B82F6" stroke-width="16" stroke-linecap="round" stroke-dasharray="267 47" transform="rotate(75 100 100)"/>
+  <circle cx="100" cy="100" r="23" fill="none" stroke="#2563EB" stroke-width="15" stroke-linecap="round" stroke-dasharray="116 28" transform="rotate(195 100 100)"/>
+  <circle cx="100" cy="100" r="8" fill="#F59E0B"/>
+</svg>

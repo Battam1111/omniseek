@@ -1,0 +1,8 @@
+<svg viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="OmniSeek mark: three concentric rings with offset openings and an amber point at the center">
+  <title>OmniSeek</title>
+  <desc>The deep O. Three concentric rings, each with one opening, the openings rotated layer by layer: the way in exists but is not a straight line. The amber point at the center is the thing found at depth. Light-background variant.</desc>
+  <circle cx="100" cy="100" r="78" fill="none" stroke="#93C5FD" stroke-width="16" stroke-linecap="round" stroke-dasharray="416 74" transform="rotate(-55 100 100)"/>
+  <circle cx="100" cy="100" r="50" fill="none" stroke="#3B82F6" stroke-width="16" stroke-linecap="round" stroke-dasharray="267 47" transform="rotate(75 100 100)"/>
+  <circle cx="100" cy="100" r="23" fill="none" stroke="#1D4ED8" stroke-width="15" stroke-linecap="round" stroke-dasharray="116 28" transform="rotate(195 100 100)"/>
+  <circle cx="100" cy="100" r="8" fill="#F59E0B"/>
+</svg>

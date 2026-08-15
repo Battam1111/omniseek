@@ -1,48 +1,62 @@
 # Brand
 
-<sub>[penumbra](../README.md)&nbsp;·&nbsp;[Configuration](configuration.md)&nbsp;·&nbsp;[Tools](tools.md)&nbsp;·&nbsp;[Patterns](patterns.md)&nbsp;·&nbsp;[Walled sources](walled-sources.md)&nbsp;·&nbsp;**Brand**</sub>
+<sub>[OmniSeek](../README.md)&nbsp;·&nbsp;[Configuration](configuration.md)&nbsp;·&nbsp;[Tools](tools.md)&nbsp;·&nbsp;[Patterns](patterns.md)&nbsp;·&nbsp;[Walled sources](walled-sources.md)&nbsp;·&nbsp;**Brand**</sub>
 
-The single canonical reference for Penumbra's visual identity. Keep it locked so the look does not
-drift as contributors add diagrams, badges, or assets.
+The single canonical reference for OmniSeek's visual identity. Keep it locked so the look does not drift as contributors add diagrams, badges, or assets.
 
-## Palette
+## Name
 
-- Navy base: `#0e1330` (the eclipse's field; backgrounds)
-- Amber: `#D4952B` (the lit limb; accents and all badges)
-- Off-white text: `#F5F3EE`
-- Muted slate: `#9AA3B2` (secondary text)
-
-## Wordmark
-
-The wordmark, logo, README title, and tagline are lowercase `penumbra` (the understated art
-style, matching `the layer beneath the surface`). Never style it as `Penumbra` in a logo or
-card.
-
-But this is a WORDMARK rule, not a spelling rule. In PROSE the product is a proper noun and is
-capitalized, `Penumbra` (as in this file's own first line). The half-lit zone the product is
-named after stays a lowercase common noun, `the penumbra` ("that's the penumbra"), the same way
-`amazon` the rainforest and `Amazon` the company share one word. Code identifiers (the package
-`penumbra`, the `penumbra_*` tools, paths, the docker service) are always lowercase.
+**OmniSeek**, capital O and capital S, in prose, wordmark, and titles. Code identifiers are always lowercase: the package `omniseek`, the `omniseek_*` tools, paths, the docker service.
 
 ## Tagline
 
-`the layer beneath the surface` (lowercase).
+`Your agent seeks what search can't find.`
+
+## Palette
+
+The blue ramp is depth: the further in, the deeper the shade. The single amber point is what you found there.
+
+- Shallow blue: `#93C5FD` (outermost ring)
+- Primary blue: `#3B82F6` (middle ring; the accent for badges and links)
+- Deep blue: `#1D4ED8` (innermost ring on light backgrounds)
+- Deep blue, dark-mode: `#2563EB` (innermost ring on dark backgrounds; `#1D4ED8` loses contrast against navy)
+- Navy field: `#0F172A` (dark backgrounds, the hero and social card)
+- Amber find: `#F59E0B` (the center point, and only the center point; a thread of lineage from the amber limb of the penumbra era)
 
 ## Mark
 
-The eclipse sphere: a navy dark side with an amber-lit right limb.
+**The deep O.** Three concentric rings, each with one opening, the openings rotated layer by layer: the way in exists, but it is not a straight line. That is seeking, as opposed to searching. The amber point at the center is the thing found at depth. Read as a whole, the rings and the point are also an iris and a pupil: the mark quietly remains an eye without saying so.
+
+The mark carries the sharpest claim (depth, the way in, the find). The name carries the breadth (Omni). Together the lockup says both; do not try to draw the 220 sources into the mark.
+
+### Geometry (canonical, from `assets/logo.svg`)
+
+ViewBox `0 0 200 200`, center `(100, 100)`, all `stroke-linecap="round"`.
+
+| Ring | Radius | Stroke | Dash (arc gap) | Rotation |
+|------|--------|--------|----------------|----------|
+| Outer | 78 | 16 | `416 74` | `-55°` |
+| Middle | 50 | 16 | `267 47` | `75°` |
+| Inner | 23 | 15 | `116 28` | `195°` |
+| Point | r=8 fill | | | |
+
+The SVG masters are the single source of truth; every raster asset is rendered from them. Edit the SVG, re-render, never retouch a PNG.
 
 ## Asset inventory
 
-- `assets/logo-icon.png`: the sphere on white, used as the light-theme README logo.
-- `assets/logo-hero-dark.png`: the transparent sphere, used as the dark-theme README logo and on the share card.
-- `assets/logo-hero.png`: the sphere on the navy field (source hero render).
-- `assets/social-preview.png`: the 1280x640 link-share card. Upload it under Settings > General > Social preview; it is not applied automatically by committing it.
+- `assets/logo.svg`: the mark, light-background variant. Canonical master.
+- `assets/logo-dark.svg`: the mark, dark-background variant (inner ring lifted one stop).
+- `assets/logo-icon.png`: 1024px render of `logo.svg` on transparent; the light-theme README logo.
+- `assets/logo-hero-dark.png`: 1024px render of `logo-dark.svg` on transparent; the dark-theme README logo.
+- `assets/logo-hero.png`: the dark-variant mark centered on the navy field (source hero render).
+- `assets/social-preview.png`: the 1280x640 link-share card. Upload under Settings > General > Social preview; committing it does not apply it.
 
 ## Rules
 
-- All shields.io badges use color `D4952B` and `style=flat-square`.
+- All shields.io badges use color `3B82F6` and `style=flat-square`.
+- No em-dash on any human-facing surface (CI-enforced by `scripts/brand_lint.py`).
 - No personal information appears in any brand asset.
+- The word "perception" is the product's category (a perception MCP server for agents) and is welcome in prose. The penumbra-era rule that banned it is retired with that brand.
 
 ---
 
