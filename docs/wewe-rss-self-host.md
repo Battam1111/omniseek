@@ -18,10 +18,10 @@
 If 学术志 / 科研圈 are not critical to your automated retrieval, **skip this entire doc**.
 If you really need them, follow the steps below.
 
-## Prerequisites (already on the Mac)
+## Prerequisites
 
-- Node.js v22.20.0+ at `~/.local/node/bin/node`
-- pnpm 11.4.0+
+- Node.js v22+ (the commands below assume a user-local install at `~/.local/node/bin`; adjust to your own PATH)
+- pnpm 11+
 - No Docker required
 - No MySQL required (using SQLite)
 

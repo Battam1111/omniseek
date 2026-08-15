@@ -5,11 +5,12 @@ Two-layer architecture:
   `https://mp.weixin.qq.com/s/<id>` URLs are publicly accessible without
   login. OmniSeek can fetch any specific article a user passes in.
 
-- **Layer B (search/discovery via wewe-rss)**: planned as a separate path
-  inside this same adapter. wewe-rss runs as a launchd service on the Mac;
-  it uses an operator-supplied 微信读书 account to poll subscribed 公众号 and
-  expose them as RSS. This adapter's `search()` reads those RSS feeds.
-  See docs/wewe-rss-setup.md for setup (after Layer B is deployed).
+- **Layer B (search/discovery via an RSS bridge)**: this adapter's `search()`
+  reads RSS feeds produced by a WeChat-reading bridge. The free hosted
+  wechat2rss.xlab.app covers the popular accounts with zero setup and is what
+  the default feed set uses; an operator who needs niche 公众号 can instead
+  self-host wewe-rss with their own 微信读书 account, see
+  docs/wewe-rss-self-host.md.
 
 For OmniSeek use cases, Layer A covers the 80% case (user reads 微信 daily,
 shares interesting article URLs). Layer B adds proactive monitoring.
