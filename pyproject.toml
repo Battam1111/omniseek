@@ -25,8 +25,11 @@ classifiers = [
 # does not pull torch or an AGPL library. (Tools whose extra is absent fail-open with a clear
 # "install omniseek-mcp[<extra>]" message; see asr.py / docreader.py / _cdp.py import guards.)
 dependencies = [
-    # MCP framework
-    "mcp[cli]>=1.0.0",
+    # MCP framework. The <2 cap is load-bearing: mcp 2.0 (2026-08) dropped mcp.server.fastmcp,
+    # so an unpinned FRESH install resolves 2.x and the server dies at import. Local venvs never
+    # see it (already installed); only a stranger's first build does, which is what CI's docker
+    # boot job exists to catch, and did.
+    "mcp[cli]>=1.0.0,<2",
 
     # Source adapters (API-based). arxiv + openreview use the REST API directly via omniseek.core.http, so
     # neither needs a client lib here.
