@@ -9,14 +9,14 @@ from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import patch
 
-from penumbra.core.recall import journal as journal_module
-from penumbra.core.recall.journal import JournalCorrupt, ObservationJournal
-from penumbra.core.normalize import Document
-from penumbra.core import fetcher, profile
-from penumbra.core import recall as recall_package
-from penumbra.core.recall import writer
-from penumbra.core.recall import store
-from penumbra.core.recall import embed
+from omniseek.core.recall import journal as journal_module
+from omniseek.core.recall.journal import JournalCorrupt, ObservationJournal
+from omniseek.core.normalize import Document
+from omniseek.core import fetcher, profile
+from omniseek.core import recall as recall_package
+from omniseek.core.recall import writer
+from omniseek.core.recall import store
+from omniseek.core.recall import embed
 
 
 @contextmanager
@@ -64,7 +64,7 @@ def _seed_full(con, doc: Document) -> None:
 def _seed_thin(con, doc: Document) -> None:
     with patch.object(embed, "available", return_value=False):
         writer._apply(con, [("__thin__", doc)])
-    from penumbra.core.recall.graph import doc_node_id
+    from omniseek.core.recall.graph import doc_node_id
     con.execute("UPDATE graph_nodes SET last_seen = 0 WHERE id = ?", (
         doc_node_id(doc.source, doc.source_id),
     ))
@@ -208,7 +208,7 @@ class ObservationJournalTests(unittest.TestCase):
 
     def test_guarded_tombstone_reuses_latest_privacy_and_skips_pending_identity(self):
         with tempfile.TemporaryDirectory() as td, \
-             patch("penumbra.core.recall.journal._fsync_directory"):
+             patch("omniseek.core.recall.journal._fsync_directory"):
             journal = ObservationJournal(Path(td))
             journal.append_payload(
                 {"title": "private observation"},
@@ -534,7 +534,7 @@ class ObservationJournalTests(unittest.TestCase):
 
     def test_sweep_full_document_is_journaled_then_materialized(self):
         with tempfile.TemporaryDirectory() as td, \
-             patch("penumbra.core.recall.journal._fsync_directory"):
+             patch("omniseek.core.recall.journal._fsync_directory"):
             root = Path(td)
             journal = ObservationJournal(root / "journal")
             doc = _full_doc()
@@ -563,7 +563,7 @@ class ObservationJournalTests(unittest.TestCase):
 
     def test_sweep_thin_document_is_journaled_then_materialized(self):
         with tempfile.TemporaryDirectory() as td, \
-             patch("penumbra.core.recall.journal._fsync_directory"):
+             patch("omniseek.core.recall.journal._fsync_directory"):
             root = Path(td)
             journal = ObservationJournal(root / "journal")
             doc = _full_doc("thin-1")
@@ -575,7 +575,7 @@ class ObservationJournalTests(unittest.TestCase):
                     writer._sweep(con)
 
                     self.assertEqual([event["kind"] for event in journal.events()], ["tombstone"])
-                    from penumbra.core.recall.graph import doc_node_id
+                    from omniseek.core.recall.graph import doc_node_id
                     self.assertEqual(
                         con.execute(
                             "SELECT count(*) FROM graph_nodes WHERE id = ?",
@@ -588,7 +588,7 @@ class ObservationJournalTests(unittest.TestCase):
 
     def test_sweep_deduplicates_full_and_thin_identity(self):
         with tempfile.TemporaryDirectory() as td, \
-             patch("penumbra.core.recall.journal._fsync_directory"):
+             patch("omniseek.core.recall.journal._fsync_directory"):
             root = Path(td)
             journal = ObservationJournal(root / "journal")
             doc = _full_doc("both-1")
@@ -609,7 +609,7 @@ class ObservationJournalTests(unittest.TestCase):
                         ).fetchone()[0],
                         0,
                     )
-                    from penumbra.core.recall.graph import doc_node_id
+                    from omniseek.core.recall.graph import doc_node_id
                     self.assertEqual(
                         con.execute(
                             "SELECT count(*) FROM graph_nodes WHERE id = ?",
@@ -622,7 +622,7 @@ class ObservationJournalTests(unittest.TestCase):
 
     def test_snapshot_plus_sweep_journal_replay_does_not_resurrect(self):
         with tempfile.TemporaryDirectory() as td, \
-             patch("penumbra.core.recall.journal._fsync_directory"):
+             patch("omniseek.core.recall.journal._fsync_directory"):
             root = Path(td)
             journal = ObservationJournal(root / "journal")
             doc = _full_doc("snapshot-1")
@@ -658,7 +658,7 @@ class ObservationJournalTests(unittest.TestCase):
 
     def test_sweep_keeps_rows_when_tombstone_append_fails(self):
         with tempfile.TemporaryDirectory() as td, \
-             patch("penumbra.core.recall.journal._fsync_directory"):
+             patch("omniseek.core.recall.journal._fsync_directory"):
             root = Path(td)
             journal = ObservationJournal(root / "journal")
             doc = _full_doc("disk-full")
@@ -695,7 +695,7 @@ class ObservationJournalTests(unittest.TestCase):
 
     def test_sweep_materializes_durable_prefix_before_a_later_append_failure(self):
         with tempfile.TemporaryDirectory() as td, \
-             patch("penumbra.core.recall.journal._fsync_directory"):
+             patch("omniseek.core.recall.journal._fsync_directory"):
             root = Path(td)
             journal = ObservationJournal(root / "journal")
             first = _full_doc("a-first")
@@ -743,7 +743,7 @@ class ObservationJournalTests(unittest.TestCase):
 
     def test_sweep_does_not_tombstone_a_pending_reobservation(self):
         with tempfile.TemporaryDirectory() as td, \
-             patch("penumbra.core.recall.journal._fsync_directory"):
+             patch("omniseek.core.recall.journal._fsync_directory"):
             root = Path(td)
             journal = ObservationJournal(root / "journal")
             doc = _full_doc("pending-1")

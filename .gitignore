@@ -10,9 +10,13 @@ __pycache__/
 .DS_Store
 Thumbs.db
 
-# Never commit credentials or local state (they live in ~/.penumbra on the host)
+# Never commit credentials or local state (they live in ~/.omniseek on the host)
 *credentials*.json
 *.token
 *.secret
 
 *.stackdump
+
+# Local runtime state mounted by docker-compose
+.omniseek/
+.penumbra/

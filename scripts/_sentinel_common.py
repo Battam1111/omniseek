@@ -1,4 +1,4 @@
-"""Shared helpers for Penumbra sentinels (content watchtower + health watchdog).
+"""Shared helpers for OmniSeek sentinels (content watchtower + health watchdog).
 
 Bark push + JSON state load/save + a cooldown gate. Extracted so the two
 launchd sentinels share one implementation instead of duplicating it.
@@ -12,13 +12,13 @@ import time
 import urllib.request
 from pathlib import Path
 
-BARK_CREDS = Path.home() / ".penumbra" / "credentials" / "bark.json"
-WECOM_CREDS = Path.home() / ".penumbra" / "credentials" / "wecom.json"
+BARK_CREDS = Path.home() / ".omniseek" / "credentials" / "bark.json"
+WECOM_CREDS = Path.home() / ".omniseek" / "credentials" / "wecom.json"
 
 
 def wecom_push(title: str, body: str, **_ignored) -> bool:
     """Push to the 企业微信 group robot (markdown). Returns True on success, False quietly.
-    the operator's primary channel (desktop + phone); webhook_url lives in ~/.penumbra/credentials/wecom.json."""
+    the operator's primary channel (desktop + phone); webhook_url lives in ~/.omniseek/credentials/wecom.json."""
     try:
         url = json.loads(WECOM_CREDS.read_text()).get("webhook_url")
     except Exception:
@@ -46,7 +46,7 @@ def wecom_push(title: str, body: str, **_ignored) -> bool:
     return False
 
 
-def push(channel: str, title: str, body: str, *, group: str = "Penumbra", level: str = "active") -> bool:
+def push(channel: str, title: str, body: str, *, group: str = "OmniSeek", level: str = "active") -> bool:
     """Dispatch a push to a channel: 'bark' | 'wecom' | 'both' | 'wecom+bark'. True if any sent."""
     want_bark = ("bark" in channel) or (channel == "both")
     want_wecom = ("wecom" in channel) or (channel == "both")
@@ -58,7 +58,7 @@ def push(channel: str, title: str, body: str, *, group: str = "Penumbra", level:
     return ok
 
 
-def bark_push(title: str, body: str, *, group: str = "Penumbra", level: str = "active") -> bool:
+def bark_push(title: str, body: str, *, group: str = "OmniSeek", level: str = "active") -> bool:
     """Push a Bark notification. Returns True on success, False (quietly) otherwise."""
     try:
         creds = json.loads(BARK_CREDS.read_text())

@@ -3,7 +3,7 @@
 Run:  python scripts/creds_doctor.py
 
 Scans the live adapter registry for sources with needs_credentials=True and reports whether a
-credential file exists at ~/.penumbra/credentials/<source>.json, plus whether the polite-pool
+credential file exists at ~/.omniseek/credentials/<source>.json, plus whether the polite-pool
 contact email is set. Read-only; NEVER prints secret values, only presence/absence.
 """
 from __future__ import annotations
@@ -14,20 +14,20 @@ from pathlib import Path
 # Allow running as a loose script (not just as a module).
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from penumbra.core import auth, fetcher  # noqa: E402
+from omniseek.core import auth, fetcher  # noqa: E402
 
 
 def main() -> int:
     # Source adapters self-register on import; pull them all in first, else the registry is
     # empty here and every keyed source is silently missed ("nothing to configure").
-    from penumbra import server  # noqa: F401  (importing runs _safe_import_sources)
+    from omniseek import server  # noqa: F401  (importing runs _safe_import_sources)
     server.load_sources()
 
     print(f"credential store : {auth.CREDS_DIR}")
     contact = auth.contact_email()
     placeholder = contact.endswith("example.com") or contact.endswith("example.org")
     print("contact email    : "
-          + ("PLACEHOLDER (set PENUMBRA_CONTACT_EMAIL or ~/.penumbra/credentials/contact.json "
+          + ("PLACEHOLDER (set OMNISEEK_CONTACT_EMAIL or ~/.omniseek/credentials/contact.json "
              "for the OpenAlex/Crossref/SEC polite pool)" if placeholder else "configured"))
 
     names = sorted(fetcher.all_adapter_names())
@@ -49,7 +49,7 @@ def main() -> int:
 
     print()
     if missing:
-        print(f"{len(missing)} missing. For each, create ~/.penumbra/credentials/<source>.json")
+        print(f"{len(missing)} missing. For each, create ~/.omniseek/credentials/<source>.json")
         print("(a <source>.json.template is dropped on that source's first import; copy + fill it).")
         return 1
     print("All credential-needing sources are configured.")

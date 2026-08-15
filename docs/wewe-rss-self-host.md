@@ -1,6 +1,6 @@
 # wewe-rss Self-Host (Optional Layer B Extension)
 
-> Only needed if Penumbra wants to monitor WeChat 公众号 NOT indexed by wechat2rss.xlab.app
+> Only needed if OmniSeek wants to monitor WeChat 公众号 NOT indexed by wechat2rss.xlab.app
 > (e.g., 学术志, 科研圈, or any niche/new account).
 >
 > Default wechat adapter already covers PaperWeekly + 机器之心 + 量子位 via the free
@@ -55,7 +55,7 @@ DATABASE_URL="file:../../data/wewe-rss.db"
 DATABASE_TYPE="sqlite"
 
 # REPLACE THIS with your own strong password
-AUTH_CODE=PenumbraRSS_ChangeMe_2026
+AUTH_CODE=OmniSeekRSS_ChangeMe_2026
 
 MAX_REQUEST_PER_MINUTE=60
 FEED_MODE=fulltext
@@ -88,13 +88,13 @@ export $(grep -v '^#' apps/server/.env | xargs)
 ## launchd Persistence
 
 ```bash
-cat > ~/Library/LaunchAgents/local.penumbra.wewerss.plist <<EOF
+cat > ~/Library/LaunchAgents/local.omniseek.wewerss.plist <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>local.penumbra.wewerss</string>
+    <string>local.omniseek.wewerss</string>
     <key>ProgramArguments</key>
     <array>
         <string>$HOME/.local/node/bin/node</string>
@@ -117,7 +117,7 @@ cat > ~/Library/LaunchAgents/local.penumbra.wewerss.plist <<EOF
         <key>DATABASE_TYPE</key>
         <string>sqlite</string>
         <key>AUTH_CODE</key>
-        <string>PenumbraRSS_ChangeMe_2026</string>
+        <string>OmniSeekRSS_ChangeMe_2026</string>
         <key>FEED_MODE</key>
         <string>fulltext</string>
         <key>SERVER_ORIGIN_URL</key>
@@ -151,8 +151,8 @@ cat > ~/Library/LaunchAgents/local.penumbra.wewerss.plist <<EOF
 EOF
 
 UID_NUM=$(id -u)
-launchctl bootstrap gui/$UID_NUM ~/Library/LaunchAgents/local.penumbra.wewerss.plist
-launchctl kickstart gui/$UID_NUM/local.penumbra.wewerss
+launchctl bootstrap gui/$UID_NUM ~/Library/LaunchAgents/local.omniseek.wewerss.plist
+launchctl kickstart gui/$UID_NUM/local.omniseek.wewerss
 ```
 
 ## One-Time WeChat Read Account Binding
@@ -163,22 +163,22 @@ launchctl kickstart gui/$UID_NUM/local.penumbra.wewerss
 4. 公众号源 → 添加 → paste any `mp.weixin.qq.com/s/<id>` URL from the account you want
 5. **Wait 30-60s between adding accounts** (rapid additions trigger 24h "小黑屋")
 
-## Wire to Penumbra
+## Wire to OmniSeek
 
 After adding feeds, note each account's `MP_WXS_xxxxx` ID from the UI. Then:
 
 ```bash
-ssh <your-host> "cat > ~/.penumbra/credentials/wechat.json <<'EOF'
+ssh <your-host> "cat > ~/.omniseek/credentials/wechat.json <<'EOF'
 {
   \"wewerss_base_url\": \"http://127.0.0.1:4000\",
-  \"wewerss_auth_code\": \"PenumbraRSS_ChangeMe_2026\",
+  \"wewerss_auth_code\": \"OmniSeekRSS_ChangeMe_2026\",
   \"wewerss_subscribed_feed_ids\": [\"MP_WXS_xxxxx\", \"MP_WXS_yyyyy\"]
 }
 EOF
-chmod 600 ~/.penumbra/credentials/wechat.json"
+chmod 600 ~/.omniseek/credentials/wechat.json"
 ```
 
-Penumbra's `wechat` adapter `search()` will automatically include these feeds alongside the default wechat2rss ones.
+OmniSeek's `wechat` adapter `search()` will automatically include these feeds alongside the default wechat2rss ones.
 
 ## Maintenance Reality
 

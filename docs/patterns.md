@@ -1,6 +1,6 @@
 # Patterns
 
-<sub>[penumbra](../README.md)&nbsp;·&nbsp;[Configuration](configuration.md)&nbsp;·&nbsp;[Tools](tools.md)&nbsp;·&nbsp;**Patterns**&nbsp;·&nbsp;[Walled sources](walled-sources.md)&nbsp;·&nbsp;[Brand](BRAND.md)</sub>
+<sub>[omniseek](../README.md)&nbsp;·&nbsp;[Configuration](configuration.md)&nbsp;·&nbsp;[Tools](tools.md)&nbsp;·&nbsp;**Patterns**&nbsp;·&nbsp;[Walled sources](walled-sources.md)&nbsp;·&nbsp;[Brand](BRAND.md)</sub>
 
 This is not a new tool. It is how to get more out of the tools in [Tools](tools.md): how to route a
 query, how to read what came back, and how to notice what didn't.
@@ -10,20 +10,20 @@ query, how to read what came back, and how to notice what didn't.
 ## Route before you search
 
 Don't hardcode a source list from memory: the catalog keeps growing, so read it live.
-`penumbra_sources(domain=..., query=...)` narrows to the sources that actually match, each
+`omniseek_sources(domain=..., query=...)` narrows to the sources that actually match, each
 with a description.
 
 Then pick the simplest call for the intent:
 
 | Call | When |
 |------|------|
-| `penumbra_search` | The default. Deduped, ranked, cross-lingual recall folded into one list. |
-| `penumbra_search(raw=True)` | You want each source's raw bucket separately, to compare source-by-source. |
-| `penumbra_search(sources=["<one>"], raw=True, full=True)` | The drill idiom: ONE named source, unbounded, whole content. The escape hatch for a slow or walled source a broad sweep would drop. |
+| `omniseek_search` | The default. Deduped, ranked, cross-lingual recall folded into one list. |
+| `omniseek_search(raw=True)` | You want each source's raw bucket separately, to compare source-by-source. |
+| `omniseek_search(sources=["<one>"], raw=True, full=True)` | The drill idiom: ONE named source, unbounded, whole content. The escape hatch for a slow or walled source a broad sweep would drop. |
 
 ## Walled sources: name them, don't sweep them
 
-A broad `penumbra_search` sweep is deadline-bounded (`wait_s`) and skips
+A broad `omniseek_search` sweep is deadline-bounded (`wait_s`) and skips
 `explicit_only` sources (slow, login-walled, or otherwise not safe to include in every sweep) so
 one query never hangs on the slowest source.
 
@@ -34,22 +34,22 @@ call; that only serializes them against each other for no gain.
 
 ## Corroboration over hit count
 
-`penumbra_search` results carry `metadata.also_in`: other sources mirroring the same
+`omniseek_search` results carry `metadata.also_in`: other sources mirroring the same
 underlying item. Count **independent upstreams**, not hits: a paper mirrored across five indexes is
 one corroborating source, not five.
 
-`penumbra_graph` view=`voices` is the tool-layer form of this count: hand it the doc ids from a
+`omniseek_graph` view=`voices` is the tool-layer form of this count: hand it the doc ids from a
 search (`doc:{source}:{source_id}`) and it collapses them to distinct upstream voices via same-work
 identity and shared authorship, so "five sources agree" becomes "N independent voices agree" (or
 fewer). Docs with zero connecting evidence come back in `unresolved` and are never counted as
 voices; counting unknowns as independent would fabricate corroboration.
 
 When the `exploratory` policy surfaces a same-work candidate you then verify yourself, record the
-judgment with `penumbra_ruling(action="create")`; the `working` policy applies it from then on.
+judgment with `omniseek_ruling(action="create")`; the `working` policy applies it from then on.
 Relations you judge FROM content (a filing says A acquired B; a paper introduces a benchmark)
-persist the same way via `penumbra_statement`: directed, typed, attributed with a note and the
+persist the same way via `omniseek_statement`: directed, typed, attributed with a note and the
 source doc, projected under `working`, never extracted by code.
-For cross-lingual or cross-modal mirrors that share no title characters, `penumbra_graph`
+For cross-lingual or cross-modal mirrors that share no title characters, `omniseek_graph`
 view=`similar` lists an anchor doc's vector-nearest neighbors as candidates (by rank, no scores,
 never auto-collapsed): the same verify-then-rule loop applies. The graph projects candidates
 mechanically; whether two things are the same is always your call.

@@ -44,7 +44,7 @@ class DeployScriptTests(unittest.TestCase):
     @unittest.skipUnless(os.name != "nt", "macOS path resolution is the target behavior")
     def test_public_prepare_accepts_macos_tmp_alias(self):
         root = self._root()
-        output = Path(tempfile.gettempdir()) / f"penumbra-public-test-{os.getpid()}"
+        output = Path(tempfile.gettempdir()) / f"omniseek-public-test-{os.getpid()}"
         result = subprocess.run(
             [self._bash(), "public_prepare.sh", str(output)],
             cwd=root,
@@ -73,10 +73,10 @@ class DeployScriptTests(unittest.TestCase):
 
     def test_deploy_never_extracts_or_prunes_the_active_flat_tree(self):
         deploy = (self._root() / "deploy.sh").read_text(encoding="utf-8")
-        self.assertNotIn("tar -C penumbra-mcp -x", deploy)
+        self.assertNotIn("tar -C omniseek-mcp -x", deploy)
         self.assertNotIn("find src scripts tests docs", deploy)
         self.assertNotIn("rm -rf", deploy)
-        self.assertNotIn("scp -q \"$TMP_BUNDLE\" \"$MINI:penumbra-mcp/.eye-git.bundle\"", deploy)
+        self.assertNotIn("scp -q \"$TMP_BUNDLE\" \"$MINI:omniseek-mcp/.eye-git.bundle\"", deploy)
 
     def test_deploy_preserves_failed_release_and_durable_receipts(self):
         deploy = (self._root() / "deploy.sh").read_text(encoding="utf-8")

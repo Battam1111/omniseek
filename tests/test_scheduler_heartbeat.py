@@ -5,7 +5,7 @@ import threading
 import unittest
 from pathlib import Path
 
-from penumbra.core.contracts.heartbeat import (
+from omniseek.core.contracts.heartbeat import (
     SchedulerHeartbeat,
     load_contract_artifacts,
 )
@@ -41,7 +41,7 @@ class SchedulerHeartbeatTests(unittest.TestCase):
             artifacts=load_contract_artifacts(),
             build_id="a" * 40,
             host_boot_id="boot-session-1",
-            penumbra_pid=123,
+            omniseek_pid=123,
             generation=GENERATION,
             utc_now=clock.utc_now,
             monotonic_ns=clock.monotonic_ns,
@@ -54,11 +54,11 @@ class SchedulerHeartbeatTests(unittest.TestCase):
 
             record = heartbeat.publish_starting()
 
-            self.assertEqual(record["schema"], "penumbra.core-scheduler-heartbeat/v1")
+            self.assertEqual(record["schema"], "omniseek.core-scheduler-heartbeat/v1")
             self.assertEqual(record["component_id"], "eye-scheduler")
-            self.assertEqual(record["producer"], {"repo": "penumbra", "build_id": "a" * 40})
+            self.assertEqual(record["producer"], {"repo": "omniseek", "build_id": "a" * 40})
             self.assertEqual(record["host_boot_id"], "boot-session-1")
-            self.assertEqual(record["penumbra_pid"], 123)
+            self.assertEqual(record["omniseek_pid"], 123)
             self.assertEqual(record["scheduler_generation"], GENERATION)
             self.assertEqual(record["phase"], "starting")
             self.assertEqual(record["tick_seq"], 0)

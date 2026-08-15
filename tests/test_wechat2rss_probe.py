@@ -5,11 +5,19 @@ the newest <pubDate>, so its own cost scaled with the publisher's backlog. Measu
 feed took 16.8s against a 12s timeout, so the probe raised URLError and Barked "unreachable" about a
 feed that was serving fine. A liveness check whose own cost can exceed its own timeout manufactures
 its own false alarms.
+
+FIXTURE DATES ARE RELATIVE, not literal, and that is load-bearing: the first version hardcoded
+"Mon, 11 Aug 2026" (the day it was written), so four days later the same fixture crossed the
+probe's own frozen threshold and two tests went red at the deploy gate with the code unchanged.
+A freshness test whose fixture carries an absolute date is a time bomb; the date must always be
+"now" at the moment the test runs.
 """
 import unittest
+from datetime import datetime, timedelta, timezone
+from email.utils import format_datetime
 from unittest.mock import patch
 
-from penumbra.core import infra_jobs as J
+from omniseek.core import infra_jobs as J
 
 
 class _Resp:
@@ -31,9 +39,10 @@ class _Resp:
 
 
 def _feed(entries: int) -> str:
+    now = datetime.now(timezone.utc)
     items = "".join(
-        f"<item><pubDate>Mon, 11 Aug 2026 0{i % 10}:00:00 +0000</pubDate><description>{'x' * 4000}"
-        f"</description></item>" for i in range(entries))
+        f"<item><pubDate>{format_datetime(now - timedelta(minutes=i))}</pubDate>"
+        f"<description>{'x' * 4000}</description></item>" for i in range(entries))
     return f"<rss><channel>{items}</channel></rss>"
 
 

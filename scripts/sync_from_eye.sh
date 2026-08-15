@@ -1,19 +1,20 @@
 #!/usr/bin/env bash
-# sync_from_eye.sh: mechanically mirror the eye's code into penumbra.
+# sync_from_eye.sh: mechanically mirror the eye's code into OmniSeek.
 #
-# The eye is canonical. Penumbra is the public mirror: full namespace +
-# branding rename, personal sources excluded. The RENAME rules below were
-# derived by diffing the hand-made mirror state (bb8a4af) against the eye,
-# NOT invented: match that proven-good state exactly.
+# The eye is canonical. OmniSeek is the public mirror: full namespace +
+# branding rename, personal sources excluded. The RENAME rules were first
+# derived by diffing the hand-made penumbra-era mirror state (bb8a4af)
+# against the eye, NOT invented; the 2026-08-15 rebrand re-targeted them
+# penumbra -> omniseek with the same structure.
 #
-# Self-verifying: a residue gate (grep) and a smoke gate (penumbra's own
+# Self-verifying: a residue gate (grep) and a smoke gate (the mirror's own
 # tests) run at the end and FAIL the script loudly. Never push a sync whose
 # gates did not pass.
 #
 # Syncs:  src/  (minus polyu + mokahr_ats), tests/smoke.py
 # Keeps:  skills/, README*, CLAUDE.md, docs/, pyproject.toml, .github/, other scripts/
 #
-# Usage:  cd organs/penumbra && bash scripts/sync_from_eye.sh
+# Usage:  cd the mirror repo root && bash scripts/sync_from_eye.sh
 
 set -euo pipefail
 
@@ -38,7 +39,7 @@ if [ -f "$EYE_ROOT/deploy.sh" ] && grep -q "frozen archive, not a deployable tre
 fi
 [ -d "$EYE_ROOT/src/polaris" ] || { echo "FATAL: no src/polaris under $EYE_ROOT" >&2; exit 1; }
 EYE_SRC="$EYE_ROOT/src/polaris"
-PEN_SRC="$PEN_ROOT/src/penumbra"
+PEN_SRC="$PEN_ROOT/src/omniseek"
 
 PYBIN=""
 for p in python3 python /c/Python313/python.exe /c/Python312/python.exe; do
@@ -62,16 +63,16 @@ find "$PEN_SRC" -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || tru
 #   "the eye" PROSE is deliberately kept (the hand-made mirror kept it too).
 echo "  [2/6] renaming namespace + branding ..."
 RENAME=(
-  -e 's/polaris\.eye/penumbra.core/g'
+  -e 's/polaris\.eye/omniseek.core/g'
   -e 's/PolarisDocument/Document/g'
-  -e 's/Polaris-eye/Penumbra/g'
-  -e 's/polaris-eye/penumbra/g'
-  -e 's/\beye_/penumbra_/g'
+  -e 's/Polaris-eye/OmniSeek/g'
+  -e 's/polaris-eye/omniseek/g'
+  -e 's/\beye_/omniseek_/g'
   -e 's/"eye"/"core"/g'
-  -e 's/_EYE_/_PENUMBRA_/g'
-  -e 's/POLARIS_/PENUMBRA_/g'
-  -e 's/polaris/penumbra/g'
-  -e 's/Polaris/Penumbra/g'
+  -e 's/_EYE_/_OMNISEEK_/g'
+  -e 's/POLARIS_/OMNISEEK_/g'
+  -e 's/polaris/omniseek/g'
+  -e 's/Polaris/OmniSeek/g'
 )
 find "$PEN_SRC" \( -name "*.py" -o -name "*.json" \) -exec sed -i "${RENAME[@]}" {} +
 
@@ -177,6 +178,13 @@ if grep -rniq 'polaris' "${GATE_PATHS[@]}"; then
   grep -rni 'polaris' "${GATE_PATHS[@]}" | head -10
   FAILED=1
 fi
+# The RETIRED brand is residue too (2026-08-15): after the omniseek rebrand, a 'penumbra' token in
+# freshly synced code means a rename rule regressed or a new upstream identifier slipped the table.
+if grep -rniq 'penumbra' "${GATE_PATHS[@]}"; then
+  echo "  GATE FAIL: 'penumbra' residue (retired brand):"
+  grep -rni 'penumbra' "${GATE_PATHS[@]}" | head -10
+  FAILED=1
+fi
 if grep -rnqE '\beye_' "${GATE_PATHS[@]}"; then
   echo "  GATE FAIL: 'eye_' tool-name residue:"
   grep -rnE '\beye_' "${GATE_PATHS[@]}" | head -10
@@ -207,12 +215,12 @@ fi
 [ "$FAILED" -eq 0 ] || { echo "=== SYNC ABORTED: residue gate failed ==="; exit 1; }
 
 # --- 6. SMOKE GATE (hard fail) ---
-echo "  [6/6] smoke gate (penumbra's own tests) ..."
-if ! (cd "$PEN_ROOT" && PYTHONIOENCODING=utf-8 "$PYBIN" tests/smoke.py >/tmp/penumbra_smoke.log 2>&1); then
+echo "  [6/6] smoke gate (the mirror's own tests) ..."
+if ! (cd "$PEN_ROOT" && PYTHONIOENCODING=utf-8 "$PYBIN" tests/smoke.py >/tmp/omniseek_smoke.log 2>&1); then
   echo "=== SYNC ABORTED: smoke gate failed. Tail: ==="
-  tail -20 /tmp/penumbra_smoke.log
+  tail -20 /tmp/omniseek_smoke.log
   exit 1
 fi
-tail -1 /tmp/penumbra_smoke.log
+tail -1 /tmp/omniseek_smoke.log
 
 echo "=== sync complete + gates green. Review the diff, then commit. ==="

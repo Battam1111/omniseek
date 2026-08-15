@@ -2,22 +2,20 @@
 
 <picture>
   <source media="(prefers-color-scheme: light)" srcset="../../assets/logo-icon.png">
-  <img src="../../assets/logo-hero-dark.png" width="320" alt="Penumbra:日食标记,暗蓝球体与琥珀色受光边缘">
+  <img src="../../assets/logo-hero-dark.png" width="320" alt="OmniSeek">
 </picture>
 
-# penumbra
+# OmniSeek
 
-**表层之下。**
+**你的 agent,找到搜索找不到的东西。**
 
-面向 AI agent 的自托管深度检索 MCP 服务器。
+自托管的感知 MCP 服务器。220 个策展信息源。一条连接。
 
-[![CI](https://github.com/Battam1111/penumbra/actions/workflows/ci.yml/badge.svg)](https://github.com/Battam1111/penumbra/actions/workflows/ci.yml)
-&nbsp;[![License](https://img.shields.io/badge/License-Apache_2.0-D4952B?style=flat-square)](../../LICENSE)
-&nbsp;![Python](https://img.shields.io/badge/Python_3.11+-D4952B?style=flat-square)
-&nbsp;![Built for MCP](https://img.shields.io/badge/built_for-MCP-D4952B?style=flat-square)
-&nbsp;![Self-hosted](https://img.shields.io/badge/self--hosted-D4952B?style=flat-square)
-
-[工作原理](#工作原理) · [快速开始](#快速开始) · [配置](#配置) · [贡献](#贡献)
+[![CI](https://github.com/Battam1111/omniseek/actions/workflows/ci.yml/badge.svg)](https://github.com/Battam1111/omniseek/actions/workflows/ci.yml)
+&nbsp;[![License](https://img.shields.io/badge/License-Apache_2.0-3B82F6?style=flat-square)](../../LICENSE)
+&nbsp;![Python](https://img.shields.io/badge/Python_3.11+-3B82F6?style=flat-square)
+&nbsp;![Built for MCP](https://img.shields.io/badge/built_for-MCP-3B82F6?style=flat-square)
+&nbsp;![Self-hosted](https://img.shields.io/badge/self--hosted-3B82F6?style=flat-square)
 
 **Languages:** [English](../../README.md) · 中文 · [日本語](README_ja.md)
 
@@ -25,125 +23,116 @@
 
 ---
 
-你的 agent 再聪明,也只能基于它够得到的东西行动。现成的搜索够得到的,只是表层:写成文字、你看得懂、还留在原地的那一层。
+搜索给你的 agent 的,是已被索引的网页:单一语言,纯文本。那只是表面。
 
-表层之下:你在犹豫要不要加入一家创业公司,所有公开报道都说前景大好;三个月前一档播客第 52 分钟,创始人随口说了句"跑道大概还剩九个月",从没被转写。你在考虑一款评测全五星的产品;演示视频里,一行真实性能数据在屏幕上闪了不到两秒,和宣传差了十倍,没人念出来。你要决定搬不搬去一个城市,旅游博主都说宜居;当地人早就在一个论坛里写清楚了真相,但那是一种你不懂的语言。
-
-都在。无人碰过。
-
-<h3 align="center">这就是半影区。</h3>
-
-<div align="center">
-
-你的 agent 够得到的,和真实存在的,中间那片巨大的、若隐若现的地带。
-不是机密,是盲区:
-**知识就在那里,散落各处,只是对表层不可见。**
-
-</div>
-
-<br>
-
-**为什么够不到?** 说出来的,搜索听不见;画面上的,搜索看不懂;另一种语言写的,你读不了;你登录了才看得到的,搜索进不去;昨天还在的,今天就没了。现成的搜索,每一堵都撞。换你自己一件件去够?够得完,可你没有那么多时间。
-
-**Penumbra 让你的 agent 做到这些:** 把说出来的转写成文字,把画面上一闪而过的读出来,把另一种语言翻成你能读的,进到你登录了才看得到的地方,把已经删掉的拉回来,把散在几百条记录里的线索接上。这些原本够不到的碎片,一趟给你收回来。
-
-**但光有一堆碎片,远远不够。** 一百条散落的发现只是噪声,直到它们对上:多个独立来源指向同一个结论,而没有任何一条说得全。Penumbra 给每块碎片标上出处、时间、和它是不是别处的回声,然后把散落在不同来源的线索编织在一起:同一个名字出现在三个不相关的地方,一条时间线只有拼起来才说得通,一段藏在记录缝隙里的关系。剩下的,才轮到你的 agent,拼出那张只属于你的图。
-
-**还有第二种不公平的优势,和触及无关。** 绝大多数"知道"都会蒸发:你去年春天查到的,某个周二偶然注意到的,你曾想明白、并短暂而安静地正确过的那些。你身边所有人都在以同样的速度淡忘,所以没有人感到损失。你的,不必如此。
-
-会议上,有人展示"本周的新发现",而你八个月前就见过它,那时它还只是互联网某个角落里一个工程师的抱怨。谎言换了身衣服第二次登门,满屋只有你认出它。终于有人问你为什么总是知道得早,而你有一个答案,答案上有日期。
-
-所有人的每个早晨都从零开始。你的早晨,从你见过的一切开始。触及让你早知道一次;记忆让"早知道"成为习惯。
-
-**想象一下,什么问题变得可以回答了。** 那款你天天在用的东西,好评如潮,可你查得到有几条是真正独立的?你行业里所有人都在传的那条内幕,到底是真的,还是同一个人在三个平台上编出来的?一个直接关系到你的风险,在另一种语言的世界里已经被讨论了两年,而你连它的存在都不知道?这些,只是先想到的第一批。
-
-<div align="center">
-
-*半影区一直在那里。*
-
-**现在,够得到了。**
-
-</div>
-
----
-
-## 工作原理
+OmniSeek 探到表面之下:有人在播客里说过但从没被转写成文字的那句话,demo 视频里一闪两秒的真实数字,英文互联网还没跟上的中文论坛帖,评论区第三层里纠正标题的那条回复,还有你登录后能看见、搜索引擎却够不到的帖子。全部在你自己的机器上完成。
 
 <div align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="../../assets/demo-zh-dark.png">
-    <img src="../../assets/demo-zh-light.png" alt="一个实例:你的 agent 问这里到底在发生什么。普通搜索只给表层:官方公告、评测、文档,都干净、一致。Penumbra 探到表层之下,带回四块任何单一搜索都浮不出的碎片:一场它转写的演讲,台上两人争执,暴露了官方通稿抹平的裂缝;一段它从画面读出的演示视频,一个数字闪过又从没说出口;上百条它连起来的记录,浮现出任何单页都没写明的关系;还有一个用你读不懂的语言写的论坛,一个知情者说了那句不该说的。单看,每一块都是噪声;拼起来,就成了只有你能拼出的那张图。Penumbra 的触及横跨音频、视频、图像、语言、关系、被删内容、登录源,以及更多。" width="780">
+    <source media="(prefers-color-scheme: dark)" srcset="../../assets/demo-en-dark.png">
+    <img src="../../assets/demo-en-light.png" alt="一次真实调用:OmniSeek 返回了转写的演讲、视频帧读数、跨语言论坛帖和评论区补充,这些普通搜索一个都拿不到。" width="780">
   </picture>
 </div>
 
-你的 agent 经 MCP 接入。入口是 **`penumbra_search`**;`penumbra_sources()` 展示可用能力。目录开放且持续生长:每个源靠胜过普通搜索来赢得席位。agent 取回的一切会累积成一张可追问的持久关系图(`penumbra_graph(view, args)`:`find` / `stats` / `neighborhood` / `between` / `voices` / `since` / `similar`,一个冻结的动词,视图作为数据生长);它的判断用 `penumbra_ruling`(身份)和 `penumbra_statement`(它从内容判定的类型化关系)记录:图在读取时应用这些判断,自己绝不判断。完整工具清单见 **[tools](../tools.md)**。想看一次端到端写就的真实调查,见 **[案例研究](../case-study.md)**;常见问题见 **[FAQ](../faq.md)**。
+它能听(本地双语转写,不走云),能看(图片与视频帧,视觉直读),能跨语言(中文查询返回英文结果,反之亦然),能进登录墙(你的凭证,你的机器,默认关闭),还能记住(一张随每次查询增厚的持久关系图谱)。
+
+220 个源横跨 32 个领域、8 个语言区。每一个源都是靠打赢普通搜索才拿到位置的。
+
+**[五个真实例子](../examples.md)** · **[一次完整调查](../case-study.md)**
+
+---
 
 ## 快速开始
 
 ### Docker(推荐)
 
 ```bash
-git clone https://github.com/Battam1111/penumbra.git && cd penumbra
+git clone https://github.com/Battam1111/omniseek.git && cd omniseek
 docker compose up -d
-docker compose logs penumbra        # 首次启动时会打印 bearer token,复制它
+docker compose logs omniseek        # 首次启动时打印 bearer token
 curl -s http://127.0.0.1:8765/healthz
 ```
 
-首次 `up` 会在本地构建镜像(装依赖 + 一个无头 Chromium),需要几分钟;之后启动是秒开。
+把你的 MCP 客户端指向 `http://127.0.0.1:8765/mcp`,带上 `Authorization: Bearer <token>`。token 在首次启动时生成,存于 `~/.omniseek/credentials/omniseek_http.json`。
 
-将你的 MCP 客户端指向 `http://127.0.0.1:8765/mcp`,携带请求头
-`Authorization: Bearer <token>`。token 在首次启动时自动生成,
-存储在 `~/.penumbra/credentials/penumbra_http.json`(Docker 下挂载为 `./.penumbra/credentials/penumbra_http.json`)。
+首次 `up` 会本地构建镜像(依赖 + 无头 Chromium),需要几分钟;之后的启动是即时的。可选扩展:构建参数设 `EXTRAS="[pdf,asr,walled]"`。建议同时设置 `OMNISEEK_CONTACT_EMAIL`,Crossref、SEC、Unpaywall 会给礼貌联系方式一条快速通道。
 
-可选扩展(你需接受其许可,参见 [NOTICE](../../NOTICE)):
-在 `docker-compose.yml` 中设置 `EXTRAS="[pdf,asr,walled]"`。
-
-建议(可选):在 `docker-compose.yml` 中设置 `PENUMBRA_CONTACT_EMAIL`。少数源(Crossref、SEC、
-Unpaywall)会把它当作礼节性联系人给一条更快的通道,并且能消掉全新安装首次启动时 OpenAlex 的限流警告。
-
-### 不使用 Docker
+### 不用 Docker
 
 ```bash
-python -m venv .venv && . .venv/bin/activate     # Windows: .venv\Scripts\activate
-./bootstrap.sh                                    # 安装 + chromium + token + 默认 profile
-python -m penumbra.serve_http                      # 启动于 http://127.0.0.1:8765
+python -m venv .venv && . .venv/bin/activate
+./bootstrap.sh
+python -m omniseek.serve_http
 ```
 
-Windows 上请在 Git Bash 或 WSL 里运行 `bootstrap.sh`(它是 POSIX shell 脚本);Docker 是最省事的路径。
+Windows 上请在 Git Bash 或 WSL 里跑 `bootstrap.sh`;Docker 是最省事的路。要挂常驻 Linux 服务,见 [`deploy/omniseek.service`](../../deploy/omniseek.service)。
 
-Linux 常驻服务参见 [`deploy/penumbra.service`](../../deploy/penumbra.service)。
+OmniSeek 绑定 `127.0.0.1`,每个请求都要 bearer token。没有反向代理不要对外暴露([SECURITY.md](../../.github/SECURITY.md))。
 
-Penumbra 绑定 `127.0.0.1`,每个请求都需要 bearer token。
-未经反向代理不要对外暴露([SECURITY.md](../../.github/SECURITY.md))。
+---
+
+## 工具
+
+一条 MCP 连接,18 件工具。从 `omniseek_search` 开始;用 `omniseek_sources` 看有什么可用。
+
+| 工具 | 干什么 |
+|------|--------|
+| `omniseek_search` | 220 源扇出、去重、排序。跨语言(语义 + 词面)。 |
+| `omniseek_read` | 把任意 URL 或文档(网页、PDF、arXiv)归一为干净文本。 |
+| `omniseek_view` | 用视觉读图片、文档插图、视频帧。 |
+| `omniseek_transcribe` | 本地转写音视频。双语 ASR,可按时间戳切片。 |
+| `omniseek_field_skeleton` | 画一个研究领域的引用邻域:根基与前沿。 |
+| `omniseek_resolve_identity` | 把人名解析为跨库的候选作者 ID。 |
+| `omniseek_coauthors` | 按合著篇数画一位研究者的合作网络。 |
+| `omniseek_institution_cohort` | 列出某实验室里活跃发表的人,可按领域收窄。 |
+| `omniseek_paper_enrich` | 一篇论文的开放获取 PDF、撤稿状态、被引数。 |
+| `omniseek_paper_recommend` | 语义相似论文(SPECTER 向量),关键词搜不到的那种。 |
+| `omniseek_graph` | 查累积的关系图谱:find、neighborhood、between、since、similar。 |
+| `omniseek_sensor` | 常驻查询 + 新颖性检测。只在有新东西时告诉你。 |
+| `omniseek_ruling` | 记录同一性裁决(是/不是同一实体),图谱读取时应用。 |
+| `omniseek_statement` | 记录有向关系,图谱带着它走。 |
+| `omniseek_curator_act` | 源的生命周期:提交、探测、判决、准入、退役。 |
+| `omniseek_curator_view` | 读源准入队列或单源审计档案。 |
+| `omniseek_gather` | 多件工具并行跑,一次返回。 |
+| `omniseek_sources` | 列出与路由:领域、地区、能力、健康。 |
+
+完整参考见 **[tools.md](../tools.md)** · **[FAQ](../faq.md)**
+
+---
 
 ## 配置
 
-Penumbra 采用**源目录优先**设计:无配置时,所有良性源开启、登录墙源关闭。全部调节集中在一个文件
-`~/.penumbra/profile.json`(从 [`profile.example.json`](../../profile.example.json) 播种),按源名、领域、地区、访问层级缩放:
+OmniSeek 是**目录优先**的:零配置时,每个无害源都开着,登录墙源都关着。全部调节集中在一个文件 `~/.omniseek/profile.json`([示例](../../profile.example.json)):
 
 | 层级 | 默认 |
 |------|------|
-| **free**(公开,无需密钥) | **开** |
-| **keyed**(你提供的免费/付费 API 密钥) | 配好密钥即开 |
-| **walled**(你有权访问的登录墙) | **关**;自带浏览器 |
-| **circumvention** | **关**;默认包中无此类源 |
+| **free**(公开,无需 key) | **开** |
+| **keyed**(你提供的免费或付费 API key) | key 配好即开 |
+| **walled**(你持有的登录) | **关**;浏览器你自己带 |
+| **circumvention**(绕过访问控制) | **关**;默认包里一个也没有 |
 
-完整参考见 **[configuration](../configuration.md)**;墙内源登录见 **[walled sources](../walled-sources.md)**。
+完整参考:**[configuration](../configuration.md)** · **[walled sources](../walled-sources.md)** · **[legal posture](../LEGAL-POSTURE.md)**
 
-## 贡献
+---
 
-参见 [CONTRIBUTING.md](../../.github/CONTRIBUTING.md)。新源的门槛:必须通过一种模式
-(structure / unwall / transcribe / recall / monitor)胜过普通搜索。
-修复衰变源的门槛:低,欢迎。提交前跑 `python tests/smoke.py`。
+## 为什么自托管
 
-参与即表示你同意遵守[行为准则](../../.github/CODE_OF_CONDUCT.md)。
+你跑的每条查询、agent 攒出的每条关系、你用的每个凭证,都留在你的机器上。没有任何云服务看得见你在研究什么。图谱是你的资产;哪天你不跑 OmniSeek 了,一切都还在你手里。这不是一个功能开关,这是架构本身。
+
+---
+
+## 参与
+
+见 [CONTRIBUTING.md](../../.github/CONTRIBUTING.md)。新源的门槛:必须以某种模式(structure / unwall / transcribe / recall / monitor)打赢普通网页搜索。修一个退化源的门槛:很低,欢迎来修。push 前跑 `python tests/smoke.py`。
+
+参与即同意[行为准则](../../.github/CODE_OF_CONDUCT.md)。
 
 <div align="center">
 
 ---
 
-**表层之下。**
+**你的 agent,找到搜索找不到的东西。**
 
-[Apache-2.0](../../LICENSE) · [NOTICE](../../NOTICE) · [Security](../../.github/SECURITY.md)
+[Apache-2.0](../../LICENSE) · [NOTICE](../../NOTICE) · [Security](../../.github/SECURITY.md) · [引用本项目](../../CITATION.cff)
 
 </div>

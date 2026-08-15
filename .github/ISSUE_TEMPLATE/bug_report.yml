@@ -1,5 +1,5 @@
 name: Bug report
-description: Something in Penumbra is broken (a tool errors, a source returns nothing, the server misbehaves).
+description: Something in OmniSeek is broken (a tool errors, a source returns nothing, the server misbehaves).
 labels: ["bug"]
 body:
   - type: markdown
@@ -19,14 +19,14 @@ body:
     id: repro
     attributes:
       label: Steps to reproduce
-      description: The exact tool call or curl (redact your bearer token). e.g. penumbra_search_ranked("large language model agents").
+      description: The exact tool call or curl (redact your bearer token). e.g. omniseek_search_ranked("large language model agents").
     validations:
       required: true
   - type: input
     id: version
     attributes:
       label: Version / commit
-      description: pip show penumbra-mcp, or the git commit you are on.
+      description: pip show omniseek-mcp, or the git commit you are on.
     validations:
       required: true
   - type: dropdown

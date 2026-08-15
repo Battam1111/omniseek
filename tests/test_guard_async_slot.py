@@ -5,19 +5,19 @@ from pathlib import Path
 
 import anyio
 
-from penumbra.core._guard import GateBusy, bounded_async_slot
+from omniseek.core._guard import GateBusy, bounded_async_slot
 
 
 class AsyncSlotTests(unittest.TestCase):
     def test_async_gate_acquires_are_centralized_in_shared_helper(self):
-        penumbra_root = Path(__file__).parents[1] / "src" / "penumbra" / "core"
+        omniseek_root = Path(__file__).parents[1] / "src" / "omniseek" / "core"
         offenders = []
-        for path in penumbra_root.rglob("*.py"):
+        for path in omniseek_root.rglob("*.py"):
             if path.name == "_guard.py":
                 continue
             for line_no, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
                 if "to_thread.run_sync" in line and ".acquire" in line:
-                    offenders.append(f"{path.relative_to(penumbra_root)}:{line_no}")
+                    offenders.append(f"{path.relative_to(omniseek_root)}:{line_no}")
         self.assertEqual([], offenders)
 
     def test_saturated_slot_fails_within_bound_without_taking_permit(self):

@@ -5,8 +5,8 @@ from unittest.mock import patch
 
 import anyio
 
-from penumbra import server
-from penumbra.core import fetcher
+from omniseek import server
+from omniseek.core import fetcher
 
 
 class _SyncAdapter:
@@ -63,7 +63,7 @@ class ExecutorLaneTests(unittest.IsolatedAsyncioTestCase):
         while not blocker_started.is_set():
             await asyncio.sleep(0)
 
-        orient = asyncio.create_task(server.penumbra_sources())
+        orient = asyncio.create_task(server.omniseek_sources())
         try:
             await asyncio.sleep(0.05)
             self.assertTrue(

@@ -12,8 +12,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from penumbra.core import infra_jobs as J
-from penumbra.core import notify
+from omniseek.core import infra_jobs as J
+from omniseek.core import notify
 
 
 class AlertLaneTests(unittest.TestCase):
@@ -41,7 +41,7 @@ class AlertLaneTests(unittest.TestCase):
         self.assertEqual(self._alert(delivered=True), ["wecom"])
 
     def test_total_delivery_failure_is_warned_and_recorded_not_swallowed(self):
-        with self.assertLogs("penumbra.core.notify", level="WARNING") as cm:
+        with self.assertLogs("omniseek.core.notify", level="WARNING") as cm:
             self.assertEqual(self._alert(delivered=False), [])
         self.assertTrue(any("NOT DELIVERED" in m for m in cm.output), cm.output)
         self.assertEqual(self._ledger()["undelivered_streak"], 1)
@@ -74,8 +74,8 @@ class AlertLaneTests(unittest.TestCase):
 
     def test_retired_bark_hints_are_absorbed_so_old_callers_do_not_crash(self):
         with patch.object(notify, "wecom_push", lambda *a, **k: True):
-            self.assertEqual(notify.alert("t", "b", group="Penumbra-Health", level="active"), ["wecom"])
-        J._alert("t", "b", group="Penumbra")
+            self.assertEqual(notify.alert("t", "b", group="OmniSeek-Health", level="active"), ["wecom"])
+        J._alert("t", "b", group="OmniSeek")
 
     def test_bark_is_gone_from_the_module(self):
         # 全线删除: no code path may reach the retired channel.

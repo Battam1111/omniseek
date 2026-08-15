@@ -2,7 +2,7 @@ import unittest
 from types import SimpleNamespace
 from unittest import mock
 
-from penumbra.core import jobs
+from omniseek.core import jobs
 
 
 class SchedulerContractHealthTests(unittest.TestCase):

@@ -1,15 +1,15 @@
 cff-version: 1.2.0
-message: "If you use Penumbra in your research, please cite it using these metadata."
-title: "Penumbra: self-hosted deep retrieval for AI agents"
+message: "If you use OmniSeek in your research, please cite it using these metadata."
+title: "OmniSeek: self-hosted deep retrieval for AI agents"
 abstract: "A self-hosted deep-retrieval MCP server that reaches beyond the search surface into the half-lit zone where knowledge is real but invisible to plain search (multi-modal, multi-lingual, walled, and temporal), equipping an AI agent with structured, source-traced evidence."
 type: software
 license: Apache-2.0
-repository-code: "https://github.com/Battam1111/penumbra"
-url: "https://github.com/Battam1111/penumbra"
+repository-code: "https://github.com/Battam1111/omniseek"
+url: "https://github.com/Battam1111/omniseek"
 version: "0.1.0"
 authors:
-  - name: "The Penumbra contributors"
-    website: "https://github.com/Battam1111/penumbra"
+  - name: "The OmniSeek contributors"
+    website: "https://github.com/Battam1111/omniseek"
 keywords:
   - mcp
   - deep-retrieval

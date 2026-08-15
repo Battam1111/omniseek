@@ -32,7 +32,7 @@ def check(name: str, ok: bool, detail: str = "") -> None:
 # ---------------------------------------------------------------------------
 # 1. Config files: parse, required fields, in-file + cross-file name uniqueness
 # ---------------------------------------------------------------------------
-SOURCES = ROOT / "src" / "penumbra" / "core" / "sources"
+SOURCES = ROOT / "src" / "omniseek" / "core" / "sources"
 CONFIGS = [
     ("scrape/rss_bundles.json", ("name", "description", "feeds")),
     ("scrape/scrape_sites.json", ("name", "description", "sites")),
@@ -62,10 +62,10 @@ check("config row names unique across config files", not dupes, str(dupes))
 # ---------------------------------------------------------------------------
 # 2. Registry: import every adapter; no silent name collisions; descriptions
 # ---------------------------------------------------------------------------
-from penumbra.server import _SKIP_SOURCES, load_sources  # noqa: E402
+from omniseek.server import _SKIP_SOURCES, load_sources  # noqa: E402
 
 load_sources()
-from penumbra.core import fetcher  # noqa: E402
+from omniseek.core import fetcher  # noqa: E402
 
 names = fetcher.all_adapter_names()
 check(f"registry loaded ({len(names)} sources)", len(names) >= 100, f"only {len(names)}")
@@ -182,7 +182,7 @@ check("explicit_only set matches the frozen list (mokahr_ats optional: public re
 # a query param (mirroring the real m.douban.com frontend; either alone re-authenticates). Pin it so a
 # refactor cannot silently drop the auth and re-break the source. A live re-run through the logged-in
 # 9222 CDP is the real oracle; this offline golden just guards the two markers.
-from penumbra.core.sources.walled import douban_groups_source as _dbg  # noqa: E402
+from omniseek.core.sources.walled import douban_groups_source as _dbg  # noqa: E402
 check("douban_groups: rexxar fetch sends X-Requested-With + ck param (rexxar 2026-07-16 auth)",
       "X-Requested-With" in _dbg._JS_FETCH and "'ck='" in _dbg._JS_FETCH and "'&ck='" in _dbg._JS_FETCH)
 
@@ -190,8 +190,8 @@ check("douban_groups: rexxar fetch sends X-Requested-With + ck param (rexxar 202
 # (_run) so concurrent/rapid callers can't reset Discuz's ~15s flood-control window (the near-100%
 # flood-block class). Pin the gate + the interval + the _run override (chokepoint), so a refactor can't
 # silently drop the pacing and re-expose the source to flood blocks.
-from penumbra.core.sources.walled import yipinsanfendi_source as _yp  # noqa: E402
-from penumbra.core.sources.walled import _base as _bcdp  # noqa: E402
+from omniseek.core.sources.walled import yipinsanfendi_source as _yp  # noqa: E402
+from omniseek.core.sources.walled import _base as _bcdp  # noqa: E402
 check("pace-gate: yipinsanfendi serialize + >=15s min-gap + _run chokepoint (Discuz flood-control)",
       hasattr(_yp, "_YIPIN_GATE") and hasattr(_yp._YIPIN_GATE, "acquire")
       and getattr(_yp, "_YIPIN_MIN_GAP_S", 0) >= 15.0
@@ -200,7 +200,7 @@ check("pace-gate: yipinsanfendi serialize + >=15s min-gap + _run chokepoint (Dis
 # org_watch AI-co-author crank filter (a Zenodo/Open-MIND preprint class that lists an AI MODEL as
 # an author + attributes the lab as its affiliation, name-colliding into a lab's stream). Lock the
 # regression: model bylines drop, real humans (incl. Claude Shannon / Gemma Boleda) survive.
-from penumbra.core.sources.api import org_watch_source as _ow  # noqa: E402
+from omniseek.core.sources.api import org_watch_source as _ow  # noqa: E402
 
 
 def _ow_work(*author_names):
@@ -218,7 +218,7 @@ check("org_watch crank filter keeps every human/team author",
 
 # Egress SSRF guard (open-source hardening): the mainline fetch must refuse private/loopback/
 # link-local/reserved targets + bad scheme/port/userinfo (IP-literal + shape cases are offline).
-from penumbra.core import _netguard as _ng  # noqa: E402
+from omniseek.core import _netguard as _ng  # noqa: E402
 _NG_BLOCK = ["http://169.254.169.254/latest/meta-data/", "http://127.0.0.1/", "http://127.0.0.1:8765/",
              "http://[::1]/", "http://10.0.0.5/", "http://192.168.1.1/", "ftp://x.com/",
              "file:///etc/passwd", "http://u:p@example.com/", "http://example.com:8080/"]
@@ -243,20 +243,20 @@ check("netguard still allows a normal global IPv6 (the v6-embed block must not o
       _ng.security_block_reason("http://[2606:4700:4700::1111]/") or "")
 
 # docreader local-file sandbox: arbitrary host paths (credentials!) refused; inbox stays readable.
-from penumbra.core import docreader as _dr  # noqa: E402
+from omniseek.core import docreader as _dr  # noqa: E402
 import pathlib as _pl  # noqa: E402
 def _dr_escapes(p):
     try:
         _dr._resolve_local(p); return False
     except PermissionError:
         return True
-check("docreader sandbox refuses reading outside the inbox (e.g. ~/.penumbra/credentials)",
-      _dr_escapes("~/.penumbra/credentials/penumbra_http.json") and _dr_escapes("/etc/passwd")
-      and _dr_escapes("penumbra-inbox/../.penumbra/credentials/penumbra_http.json"),
+check("docreader sandbox refuses reading outside the inbox (e.g. ~/.omniseek/credentials)",
+      _dr_escapes("~/.omniseek/credentials/omniseek_http.json") and _dr_escapes("/etc/passwd")
+      and _dr_escapes("omniseek-inbox/../.omniseek/credentials/omniseek_http.json"),
       "a disallowed path was NOT refused")
-check("docreader sandbox still allows the documented penumbra-inbox/<name> path",
-      _dr._resolve_local("penumbra-inbox/x.pdf") == (_pl.Path.home() / "penumbra-inbox" / "x.pdf").resolve(),
-      str(_dr._resolve_local("penumbra-inbox/x.pdf")))
+check("docreader sandbox still allows the documented omniseek-inbox/<name> path",
+      _dr._resolve_local("omniseek-inbox/x.pdf") == (_pl.Path.home() / "omniseek-inbox" / "x.pdf").resolve(),
+      str(_dr._resolve_local("omniseek-inbox/x.pdf")))
 
 # Deployment-profile gate (P1): a profile subtracts, and the WALLED tier is deny-by-default with
 # or without one (2026-08-12). Walled-tier off keys off DERIVED stability (the robust mokahr-leak
@@ -264,7 +264,7 @@ check("docreader sandbox still allows the documented penumbra-inbox/<name> path"
 # disk: the old version of this block only exercised that branch because the mini happened to have
 # no profile file, and the mini has one now, so it would have quietly started measuring the real
 # deployment's config instead of the contract.
-from penumbra.core import profile as _prof  # noqa: E402
+from omniseek.core import profile as _prof  # noqa: E402
 _prof._cache = {}
 check("profile: with NO profile every NON-walled source stays enabled (backward-compat)",
       _prof.is_source_enabled("arxiv"), "a non-walled source was disabled with no profile present")
@@ -301,8 +301,8 @@ check("profile.example.json parses as a dict (when shipped)",
 # ---------------------------------------------------------------------------
 # 4. rank: dedup fingerprint + merge invariants (the cross-source collapse)
 # ---------------------------------------------------------------------------
-from penumbra.core import rank  # noqa: E402
-from penumbra.core.normalize import Document  # noqa: E402
+from omniseek.core import rank  # noqa: E402
+from omniseek.core.normalize import Document  # noqa: E402
 
 
 def _doc(src: str, title: str, url: str = "") -> Document:
@@ -326,7 +326,7 @@ check("merge_rank survives empty input", rank.merge_rank({}, "q") == [])
 # 41-like note with 53 comments beat a 375-like note with a one-line body. Verified live against the
 # real xiaohongshu /search/notes payload: interact_info carries liked_count, comment_count,
 # collected_count AND shared_count; only the first was ever read.
-from penumbra.core.sources.walled import xiaohongshu_source as _xhs_c  # noqa: E402
+from omniseek.core.sources.walled import xiaohongshu_source as _xhs_c  # noqa: E402
 _xhs_item = {"id": "abc123", "xsec_token": "tok", "note_card": {
     "display_title": "NeurIPS 出分了", "user": {"nickname": "someone"},
     "interact_info": {"liked_count": "41", "comment_count": "53",
@@ -346,12 +346,12 @@ _xhs_dom = _xhs_c._card_hint(None)
 check("xhs card: the DOM fallback admits it carries NO comment count (never a fabricated 0)",
       "NO comment count" in _xhs_dom and "comment thread" in _xhs_dom)
 
-# penumbra_read returned the comment thread TWICE (inline in content + structured in metadata), which
+# omniseek_read returned the comment thread TWICE (inline in content + structured in metadata), which
 # measured 68,106 chars for four notes, about half duplicated, overflowing the tool channel. The
 # structured list is kept (richer + machine-readable); content keeps only the completeness pointer.
 import inspect as _xhs_insp  # noqa: E402  (the file-wide alias is imported further down)
 _xhs_src = _xhs_insp.getsource(_xhs_c)
-check("xhs penumbra_read: comments are NOT re-rendered into the body (returned once, structured)",
+check("xhs omniseek_read: comments are NOT re-rendered into the body (returned once, structured)",
       "—— 评论区(取到" not in _xhs_src and "结构化在 metadata.comments" in _xhs_src)
 
 # 1.11b Ranking: the two non-relevance terms are normalized WITHIN THE CANDIDATE SET (2026-07-25).
@@ -364,7 +364,7 @@ check("xhs penumbra_read: comments are NOT re-rendered into the body (returned o
 #              for a paper. 10k views is unremarkable, 10k citations is legendary. Real searches:
 #              youtube 0.47-0.98 vs semantic_scholar/crossref 0.08-0.35.
 from datetime import datetime as _rk_dt, timedelta as _rk_td, timezone as _rk_tz  # noqa: E402
-from penumbra.core.normalize import mk_signal as _rk_sig  # noqa: E402
+from omniseek.core.normalize import mk_signal as _rk_sig  # noqa: E402
 _rk_now = _rk_dt.now(_rk_tz.utc)
 
 
@@ -463,7 +463,7 @@ check("1.12: dedup WITHOUT backend_of keeps the historical source-name count (op
 # ---------------------------------------------------------------------------
 # 5. relevance: the bug classes the BM25-lite engine exists to prevent
 # ---------------------------------------------------------------------------
-from penumbra.core import relevance  # noqa: E402
+from omniseek.core import relevance  # noqa: E402
 
 spam = _doc("x", "Machine learning systems overview",
             "https://e.com/spam")
@@ -492,7 +492,7 @@ check("term-less query keeps caller order",
 # ---------------------------------------------------------------------------
 # 6. relations: the relationship-layer module imports + offline invariants
 # ---------------------------------------------------------------------------
-from penumbra.core import relations  # noqa: E402
+from omniseek.core import relations  # noqa: E402
 
 check("relations._looks_like_id classifies OpenAlex / S2 / name",
       relations._looks_like_id("A5029408111") == "openalex"
@@ -520,21 +520,21 @@ _csrc = _insp.getsource(relations.coauthors)
 check("coauthors top_coauthors carries an id (harvest technique)",
       '"id": rep_idc[k].most_common(1)[0][0], "name": rep[k], "joint"' in _csrc)
 check("coauthors bridges carry an id", _csrc.count('rep_idc[k].most_common(1)[0][0]') >= 2)
-from penumbra.core import cartographer  # noqa: E402
+from omniseek.core import cartographer  # noqa: E402
 check("cartographer._norm_s2_id prefixes bare arXiv ids (recommend/skeleton seeds)",
       cartographer._norm_s2_id("2203.02155") == "ArXiv:2203.02155"
       and cartographer._norm_s2_id("CorpusID:9") == "CorpusID:9")
 # the three relationship tools are registered on the MCP server
-import penumbra.server as _srv  # noqa: E402
-for _t in ("penumbra_resolve_identity", "penumbra_coauthors", "penumbra_institution_cohort"):
+import omniseek.server as _srv  # noqa: E402
+for _t in ("omniseek_resolve_identity", "omniseek_coauthors", "omniseek_institution_cohort"):
     check(f"server exposes {_t}", hasattr(_srv, _t) and callable(getattr(_srv, _t)))
 
 # ---------------------------------------------------------------------------
 # 7. dogfood-audit fixes (2026-06-10): reddit strict-AND ladder, search-index
 #    tombstone filter, ASR time-range slicing
 # ---------------------------------------------------------------------------
-from penumbra.core import asr  # noqa: E402
-from penumbra.core.sources.api import reddit_source, search_index_source  # noqa: E402
+from omniseek.core import asr  # noqa: E402
+from omniseek.core.sources.api import reddit_source, search_index_source  # noqa: E402
 
 check("reddit._relax_tiers caps the AND tier, then falls back to longest tokens",
       reddit_source._relax_tiers("employment pass compass chinese phd")
@@ -609,7 +609,7 @@ check("reddit._parse_search_json degrades a WAF interstitial / non-JSON body to 
 # search. N consecutive sub-failures now trip a global cooldown so _arctic_get skips the mirror
 # entirely (instant None, no network) until it heals. Offline: drive the breaker state directly +
 # monkeypatch http.get_json to PROVE no network call happens while cooling.
-import penumbra.core.http as _rd_http  # noqa: E402
+import omniseek.core.http as _rd_http  # noqa: E402
 reddit_source._arctic_cooldown_until = 0.0
 reddit_source._arctic_fail_streak = 0
 _rd_cold_before = reddit_source._arctic_cooling()
@@ -690,12 +690,12 @@ check("reddit: global Arctic concurrency cap bounds in-flight egress under a 20-
 # it. Assert each cap's constant + sema + egress-chokepoint helper exist and are wired; the acquisition
 # MECHANISM is proven by the reddit 20-way test above + the SE 15-way test below.
 import threading as _bf_thr
-from penumbra.core import _stackexchange as _bf_se
-from penumbra.core.sources.api import core_source as _bf_core, arxiv_source as _bf_arxiv
-from penumbra.core.sources.scrape import sogou_weixin_source as _bf_sogou
-from penumbra.core.sources.walled import feishu_jobs_source as _bf_feishu
+from omniseek.core import _stackexchange as _bf_se
+from omniseek.core.sources.api import core_source as _bf_core, arxiv_source as _bf_arxiv
+from omniseek.core.sources.scrape import sogou_weixin_source as _bf_sogou
+from omniseek.core.sources.walled import feishu_jobs_source as _bf_feishu
 try:  # mokahr_ats is excluded from the PUBLIC release (§1201 decryption code); tolerate its absence.
-    from penumbra.core.sources.walled import mokahr_ats_source as _bf_mokahr
+    from omniseek.core.sources.walled import mokahr_ats_source as _bf_mokahr
 except ImportError:
     _bf_mokahr = None
 def _bf_wired(mod, sema, const, cap, helper):
@@ -722,7 +722,7 @@ check("burst-cap: feishu _feishu_sema cap=6 + _feishu_post chokepoint", _bf_wire
 # rate gate shedding a backlog) and the async acquire is SHIELDED so a cancel can't split it from the release.
 import time as _cg_time  # noqa: E402
 import anyio as _cg_anyio  # noqa: E402
-from penumbra.core._guard import BackendGuard as _CGGuard  # noqa: E402
+from omniseek.core._guard import BackendGuard as _CGGuard  # noqa: E402
 class _CGBusy(RuntimeError):
     pass
 # (a) sync slot: a normal use RELEASES (permit reusable); a saturated pool raises on_busy FAST (no hang).
@@ -766,7 +766,7 @@ check("guard concurrency-gate: BOUNDED + cancellation-safe -- slot/aslot release
       _cg_slot_reuses and _cg_slot_bounded and _cg_aslot_ok,
       f"slot_reuses={_cg_slot_reuses} slot_bounded={_cg_slot_bounded} aslot_ok={_cg_aslot_ok}")
 # PROCESS-GLOBAL egress bound: the fan-out leaf (_egress) must gate every source .search through ONE
-# loop-agnostic BoundedSemaphore sized to _EGRESS_CAP, so nested penumbra_gather (N fresh event loops, each
+# loop-agnostic BoundedSemaphore sized to _EGRESS_CAP, so nested omniseek_gather (N fresh event loops, each
 # with its own per-loop anyio limiter) can never exceed it and exhaust the fd budget (the domain-sweep
 # "Too many open files" root cause). Wiring + sizing golden (a live re-run proves the runtime bound).
 check("egress-cap: fetcher _EGRESS_SEM cap=256 + _egress chokepoint (process-global fan-out bound)",
@@ -775,7 +775,7 @@ check("egress-cap: fetcher _EGRESS_SEM cap=256 + _egress chokepoint (process-glo
 # Prove the SE cap actually bounds concurrency at its chokepoint _se_get (mirror of the reddit test).
 _bf_se._se_cooldown_until = 0.0; _bf_se._se_fail_streak = 0
 _bf_se_if = {"now": 0, "peak": 0}; _bf_se_ilock = _bf_thr.Lock()
-import penumbra.core.http as _bf_http
+import omniseek.core.http as _bf_http
 def _bf_se_probe(*a, **k):
     with _bf_se_ilock:
         _bf_se_if["now"] += 1; _bf_se_if["peak"] = max(_bf_se_if["peak"], _bf_se_if["now"])
@@ -797,7 +797,7 @@ check("burst-cap: stackexchange _se_get bounds in-flight under a 15-way burst (p
 # per-host caps for the ATS-concentrating scrapers (2026-06-21, completing the class): they fan out over
 # rows that collapse onto a few shared ATS hosts (greenhouse/ashby/lever/workable), so the cap is keyed
 # by hostname (distinct hosts -> distinct caps; same host -> one shared cap). Assert the per-host keying.
-from penumbra.core.sources.scrape import overseas_ai_jobs_source as _bf_oaj, ai_residencies_source as _bf_air
+from omniseek.core.sources.scrape import overseas_ai_jobs_source as _bf_oaj, ai_residencies_source as _bf_air
 for _bf_m, _bf_nm in ((_bf_oaj, "overseas_ai_jobs"), (_bf_air, "ai_residencies")):
     _sa = _bf_m._sema_for("https://boards-api.greenhouse.io/x")
     _sb = _bf_m._sema_for("https://api.ashbyhq.com/y")
@@ -810,7 +810,7 @@ for _bf_m, _bf_nm in ((_bf_oaj, "overseas_ai_jobs"), (_bf_air, "ai_residencies")
 # floats decades-old exhibits over the current filing. Probed live: forms=/sort= -> HTTP 500
 # (rejected), startdt/enddt only windows the set (no reorder); so _to_documents reorders the page
 # by file_date DESC client-side. Assert the invariant on an out-of-order fixture (offline).
-from penumbra.core.sources.scrape import sec_edgar_source  # noqa: E402
+from omniseek.core.sources.scrape import sec_edgar_source  # noqa: E402
 _sec_hits = [
     {"_id": "a", "_source": {"file_date": "2003-06-24", "form": "10-K"}},
     {"_id": "b", "_source": {"file_date": "2026-04-29", "form": "8-K"}},
@@ -849,7 +849,7 @@ check("asr.transcribe_url accepts start/duration",
 # ---------------------------------------------------------------------------
 # 8. docreader (P39 document digestion): pure helpers + tool registration
 # ---------------------------------------------------------------------------
-from penumbra.core import docreader  # noqa: E402  (parser imports are lazy — cheap)
+from omniseek.core import docreader  # noqa: E402  (parser imports are lazy — cheap)
 
 check("docreader._fmt_of maps extensions case-insensitively incl. URLs with query",
       docreader._fmt_of("a/b/颜色框.PPTX") == "pptx"
@@ -860,9 +860,9 @@ check("docreader._window slices and flags truncation",
       docreader._window("abcdefgh", 0, 5) == ("abcde", True)
       and docreader._window("abcdefgh", 5, 5) == ("fgh", False)
       and docreader._window("abc", 0, 60000) == ("abc", False))
-_rp = docreader._resolve_local("penumbra-inbox/x.pptx")
+_rp = docreader._resolve_local("omniseek-inbox/x.pptx")
 check("docreader._resolve_local resolves relative paths against HOME",
-      _rp.is_absolute() and _rp.parts[-2:] == ("penumbra-inbox", "x.pptx"))
+      _rp.is_absolute() and _rp.parts[-2:] == ("omniseek-inbox", "x.pptx"))
 check("docreader covers the office trio + pdf + plain text",
       {"pptx", "docx", "xlsx", "pdf", "txt", "md"} <= set(docreader._READERS))
 # roadmap-④: code/config source files are readable, routed to the PLAIN-TEXT reader (no parser).
@@ -875,10 +875,10 @@ check("docreader routes code extensions to the txt (plain-text) reader, not a pa
           for ext in ("py", "ts", "rs", "go", "java", "cpp", "toml", "yaml", "sh")))
 check("docreader rejects unknown formats with a usable error (before any IO)",
       "unsupported" in (docreader.read_document("file.xyz").get("error") or ""))
-check("server exposes penumbra_read (auto-routing read tool: url + document)",
-      hasattr(_srv, "penumbra_read") and callable(_srv.penumbra_read))
+check("server exposes omniseek_read (auto-routing read tool: url + document)",
+      hasattr(_srv, "omniseek_read") and callable(_srv.omniseek_read))
 
-# --- P39 tier-4: in-band image view (routes through penumbra_view kind=document) ---
+# --- P39 tier-4: in-band image view (routes through omniseek_view kind=document) ---
 check("docreader._parse_sel parses int + name selections, empty → None",
       docreader._parse_sel("8, 15,25", as_int=True) == {8, 15, 25}
       and docreader._parse_sel([8, 15], as_int=True) == {8, 15}
@@ -891,7 +891,7 @@ check("docreader._clean_stem slugifies + bounds + defaults",
       and len(docreader._clean_stem("x" * 80)) == 40)
 check("docreader view_images: text formats carry no extractable images (honest note)",
       docreader.view_images("notes.txt").get("total_images") == 0
-      and "penumbra_read" in (docreader.view_images("notes.txt").get("note") or ""))
+      and "omniseek_read" in (docreader.view_images("notes.txt").get("note") or ""))
 # real image-processing invariants (PIL present in the service venv)
 from io import BytesIO as _BIO  # noqa: E402
 from PIL import Image as _PILImage  # noqa: E402
@@ -906,16 +906,16 @@ _sheet = docreader._contact_sheet(_cells)
 _sim = _PILImage.open(_BIO(_sheet))
 check("docreader._contact_sheet tiles thumbnails into one valid PNG montage",
       _sim.format == "PNG" and _sim.size[0] > 0 and _sim.size[1] > 0)
-check("server exposes penumbra_view (auto-routing view tool: document + images + video)",
-      hasattr(_srv, "penumbra_view") and callable(_srv.penumbra_view))
-# --- P41 OCR tier (penumbra_read ocr=True on the document branch) ---
+check("server exposes omniseek_view (auto-routing view tool: document + images + video)",
+      hasattr(_srv, "omniseek_view") and callable(_srv.omniseek_view))
+# --- P41 OCR tier (omniseek_read ocr=True on the document branch) ---
 check("docreader.ocr_image exists + read_document accepts ocr (OCR tier)",
       hasattr(docreader, "ocr_image") and callable(docreader.ocr_image)
       and "ocr" in _insp.signature(docreader.read_document).parameters)
 # --- P42 in-band image-URL view + search-index junk-snippet filter ---
-check("docreader.view_image_urls + server penumbra_view (in-band URL image delivery via kind=images)",
+check("docreader.view_image_urls + server omniseek_view (in-band URL image delivery via kind=images)",
       hasattr(docreader, "view_image_urls") and callable(docreader.view_image_urls)
-      and hasattr(_srv, "penumbra_view") and callable(_srv.penumbra_view))
+      and hasattr(_srv, "omniseek_view") and callable(_srv.omniseek_view))
 check("search_index drops generic zhihu boilerplate snippet, keeps a real one",
       search_index_source._is_tombstone("知乎，让每一次点击都充满意义 —— 欢迎来到知乎，发现问题背后的世界。")
       and not search_index_source._is_tombstone("罗湖区房租均价2597元，3号线最快到罗湖老街，租金与通勤成本权衡。"))
@@ -928,8 +928,8 @@ check("search_index drops generic zhihu boilerplate snippet, keeps a real one",
 # ---------------------------------------------------------------------------
 import tempfile as _tf  # noqa: E402
 
-import penumbra.core.recall as _recall  # noqa: E402
-from penumbra.core.recall import store as _rstore  # noqa: E402
+import omniseek.core.recall as _recall  # noqa: E402
+from omniseek.core.recall import store as _rstore  # noqa: E402
 
 # Keep the smoke gate hermetic from its first recall call. `maybe_ingest()`
 # lazy-creates the default Journal, so install a temporary Journal before any
@@ -1047,9 +1047,9 @@ check("recall: a seg_version bump forces a re-segment of an existing doc (re-ind
 # --- recall (critic #8, deferred): feishu_jobs and mokahr_ats must index DISJOINT orgs, so a future
 #     config edit can't make one silently shadow the other in the index. Compare each adapter's
 #     configured org keys (feishu = subdomain; mokahr = org). ---
-from penumbra.core.sources.walled import feishu_jobs_source as _fj  # noqa: E402
+from omniseek.core.sources.walled import feishu_jobs_source as _fj  # noqa: E402
 try:  # mokahr_ats excluded from the PUBLIC release (§1201); skip the disjoint-org check if absent.
-    from penumbra.core.sources.walled import mokahr_ats_source as _mk  # noqa: E402
+    from omniseek.core.sources.walled import mokahr_ats_source as _mk  # noqa: E402
 except ImportError:
     _mk = None
 if _mk is not None:
@@ -1064,7 +1064,7 @@ if _mk is not None:
 #     compensation x STRUCTURE, region ca. _f() reads per-year column renames defensively (the
 #     'Salary' vs 'Salary Paid' reconciliation) and never raises. Network-bound search() is NOT
 #     exercised here (smoke is offline); the live path is the standalone functional check. ---
-from penumbra.core.sources.api import ontario_sunshine_source as _onss  # noqa: E402
+from omniseek.core.sources.api import ontario_sunshine_source as _onss  # noqa: E402
 _onss_a = fetcher.get_adapter("ontario_sunshine")
 # A health probe must never SPEND the quota it is checking (2026-07-25). Two sources were sitting in
 # watchdog_down for exhaustion the eye itself caused: context7 allows 200 requests per calendar MONTH
@@ -1073,7 +1073,7 @@ _onss_a = fetcher.get_adapter("ontario_sunshine")
 # and say so; neither reroutes egress to dodge the limit. Same shape the health run already uses to skip
 # RETIRED sources. Verification moves to USE time (both are named-drill only).
 # auth_header (2026-07-25): a declarative row NAMES the header; the secret stays in
-# ~/.penumbra/credentials/<name>.json (the house pattern every keyed source uses), so it never enters
+# ~/.omniseek/credentials/<name>.json (the house pattern every keyed source uses), so it never enters
 # sources.json, which the generalization path publishes. No key file = keyless, i.e. byte-identical to
 # the old behaviour, so the row can carry auth_header before any key exists.
 _c7_h = fetcher.get_adapter("context7")
@@ -1184,7 +1184,7 @@ check("recall: _rrf_fuse marks shared doc via=both + accumulates rrf",
 # source-native); debug=True keeps the telemetry (still drops write-only raw); the source doc.metadata
 # is NEVER mutated (the projection works on a model_dump copy). ~25% smaller ranked doc, lossless to
 # the agent (every dropped field is read only inside the pipeline that built the result).
-from penumbra.core.normalize import _META_TELEMETRY as _MT_smoke  # noqa: E402
+from omniseek.core.normalize import _META_TELEMETRY as _MT_smoke  # noqa: E402
 _td = _doc("arxiv", "a paper", "https://e.com/p")
 _td.metadata = {"raw": {"big": "x" * 999}, "recall_rrf": 0.9, "freshness_class": "recent",
                 "relevance_hook": "why", "_rank": 0.77, "also_in": ["openalex"],
@@ -1219,7 +1219,7 @@ finally:
 #     drifted vocab or an again-missing modes field would silently skew coverage. (Pure
 #     structural invariant; the per-source mode JUDGEMENT lives in facets.json itself.)
 # ---------------------------------------------------------------------------
-_FACETS = ROOT / "src" / "penumbra" / "core" / "facets.json"
+_FACETS = ROOT / "src" / "omniseek" / "core" / "facets.json"
 MODE_VOCAB = {"STRUCTURE", "UNWALL", "TRANSCRIBE", "RECALL", "MONITOR"}
 # Sources with NO acquisition edge over plain web search (modes:[]) — Curator prune candidates.
 # FROZEN: adding a name here is a deliberate "this source earns its keep no longer" call.
@@ -1249,7 +1249,7 @@ check("facets: list_sources surfaces the modes facet (arxiv -> [STRUCTURE])",
 # list_sources surfaces a `backend` (the de-dup key behind the HONEST count): the OpenAlex family
 # (openalex + openalex_cn + researcher_watch + every org_watch slice = one corpus + one API budget +
 # one breaker) collapses to ONE backend so the raw source count stops over-stating coverage; an
-# independent source is its own backend. penumbra_sources surfaces backend_count + backend_breakdown.
+# independent source is its own backend. omniseek_sources surfaces backend_count + backend_breakdown.
 _ls_backend = {e["name"]: e.get("backend") for e in fetcher.list_sources()}
 check("backend: OpenAlex family collapses (openalex + researcher_watch -> 'openalex')",
       _ls_backend.get("openalex") == "openalex" and _ls_backend.get("researcher_watch") == "openalex",
@@ -1270,11 +1270,11 @@ check("backend: the OpenAlex family is the dominant multiplexed backend (>=10 sl
 # ---------------------------------------------------------------------------
 import socket as _socket  # noqa: E402
 
-from penumbra.core.curator import apply as _capply  # noqa: E402
-from penumbra.core.curator import candidates as _ccand  # noqa: E402
-from penumbra.core.curator import evidence as _cev  # noqa: E402
-from penumbra.core.curator import probe as _cprobe  # noqa: E402
-from penumbra.core.curator import redlines as _credl  # noqa: E402
+from omniseek.core.curator import apply as _capply  # noqa: E402
+from omniseek.core.curator import candidates as _ccand  # noqa: E402
+from omniseek.core.curator import evidence as _cev  # noqa: E402
+from omniseek.core.curator import probe as _cprobe  # noqa: E402
+from omniseek.core.curator import redlines as _credl  # noqa: E402
 
 # Save the REAL fetcher entry points so the offline fixtures can monkeypatch them and §12.12
 # can restore the live roster (the registry from §2's load_sources()).
@@ -1333,7 +1333,7 @@ def _build_fixture_packet(mode="RECALL", reached=True, probe_diff=None, family="
     fetcher._FACETS = {}
     _ccand.host_seen = lambda h: False
     try:
-        import penumbra.core.recall as _rc
+        import omniseek.core.recall as _rc
         _rc.search = lambda q, k=1, sources=None: []  # signature mirrors the Wave-2 recall.search API
     except Exception:  # noqa: BLE001
         pass
@@ -1483,7 +1483,7 @@ finally:
 # It delegates the whole SSRF decision to _netguard (so it inherits every hardening, incl. the H2
 # embedded-v4 block); these assert the proxy's OWN surface offline (IP-literal hosts resolve to
 # themselves, no network).
-from penumbra.core.curator import probe_proxy as _pp  # noqa: E402
+from omniseek.core.curator import probe_proxy as _pp  # noqa: E402
 check("probe_proxy._pin refuses private/metadata/embedded-v4, accepts public, refuses bad port",
       _pp._pin("127.0.0.1", 80) == (None, "private_ip")
       and _pp._pin("169.254.169.254", 80) == (None, "private_ip")
@@ -1644,7 +1644,7 @@ _qs = _pkt10["web_baseline_request"]["suggested_queries"]
 check("curator: web_baseline non-empty AND >=1 probe-derived query",
       len(_qs) >= 1 and any(q.get("origin") == "probe-derived" for q in _qs))
 # decide on an admit with empty baseline_ref RAISES; with one, succeeds (-> owner_review in P1)
-import penumbra.server as _srv2  # noqa: E402
+import omniseek.server as _srv2  # noqa: E402
 _ccand.STATE_DIR = _ctmp
 _ccand.CANDIDATES_PATH = _ctmp / "candidates_decide.json"
 _dcid = _ccand.add({"name": "Decide Cand", "urls": ["https://d.example.com/f"], "proposed_mode": "RECALL",
@@ -1655,7 +1655,7 @@ _ccand.store_evidence(_dcid, {"evidence_complete": True, "stage0_safety": {"hard
 
 def _decide_raises(**kw):
     try:
-        _srv2.penumbra_curator_act.__wrapped__(verb="decide", **kw)
+        _srv2.omniseek_curator_act.__wrapped__(verb="decide", **kw)
         return False
     except Exception:  # noqa: BLE001
         return True
@@ -1663,7 +1663,7 @@ def _decide_raises(**kw):
 
 check("curator: decide(admit, baseline_ref={}) RAISES (empty baseline)",
       _decide_raises(candidate_id=_dcid, decision="admit", reasons="x", baseline_ref={}))
-_ok_decide = _srv2.penumbra_curator_act.__wrapped__(verb="decide", candidate_id=_dcid, decision="admit",
+_ok_decide = _srv2.omniseek_curator_act.__wrapped__(verb="decide", candidate_id=_dcid, decision="admit",
                                                reasons="x", baseline_ref={"web": ["result"]})
 check("curator: decide(admit, baseline_ref=...) succeeds -> owner_review in P1",
       _ok_decide.get("state") == "owner_review")
@@ -1676,14 +1676,14 @@ _ccand.store_evidence(_hc, {"evidence_complete": True, "stage0_safety": {"hard_r
                       {"hard_redline_ids": ["x"]}, "awaiting_verdict", "ev")
 check("curator: hard_redline_blocked -> decide(admit) RAISES, decide(reject) succeeds",
       _decide_raises(candidate_id=_hc, decision="admit", reasons="x", baseline_ref={"a": 1})
-      and _srv2.penumbra_curator_act.__wrapped__(verb="decide", candidate_id=_hc, decision="reject", reasons="ToS").get("state") == "rejected")
+      and _srv2.omniseek_curator_act.__wrapped__(verb="decide", candidate_id=_hc, decision="reject", reasons="ToS").get("state") == "rejected")
 _ic = _ccand.add({"name": "Incomplete", "urls": ["https://i.example.com/f"], "proposed_mode": "RECALL",
                   "proposed_domain": "papers", "proposed_family": "rss"})
 _ccand.store_evidence(_ic, {"evidence_complete": False, "stage0_safety": {"hard_redline_blocked": False}},
                       {"hard_redline_ids": []}, "awaiting_verdict", "ev")
 check("curator: evidence_complete=False -> decide(admit) RAISES, decide(reject) succeeds",
       _decide_raises(candidate_id=_ic, decision="admit", reasons="x", baseline_ref={"a": 1})
-      and _srv2.penumbra_curator_act.__wrapped__(verb="decide", candidate_id=_ic, decision="reject", reasons="thin").get("state") == "rejected")
+      and _srv2.omniseek_curator_act.__wrapped__(verb="decide", candidate_id=_ic, decision="reject", reasons="thin").get("state") == "rejected")
 
 # (12) _live_hosts non-trivial + host-derivation correct (against the REAL roster).
 import importlib as _il  # noqa: E402
@@ -1700,8 +1700,8 @@ _ow = fetcher.get_adapter("sea_ai_lab") or next(
 check("curator: a host-less org_watch source contributes no host",
       _ow is None or _capply._hosts_of_adapter(_ow) == set())
 # (13) STRUCTURE resolves, not regexes: fabricated id page, resolvers monkeypatched to 'not found'.
-import penumbra.core.enrich as _enr  # noqa: E402
-import penumbra.core._openalex as _oa  # noqa: E402
+import omniseek.core.enrich as _enr  # noqa: E402
+import omniseek.core._openalex as _oa  # noqa: E402
 _orig_enrich, _orig_oa = _enr.enrich, _oa.get_json
 _enr.enrich = lambda ids: [{"id": i, "error": "not a DOI or arXiv id"} for i in ids]
 _oa.get_json = lambda *a, **k: {}
@@ -1714,10 +1714,10 @@ check("curator: STRUCTURE present-but-unresolved is visible (resolved == [] whil
       _sres["diff"]["structured_fields_present"] and _sres["diff"]["structured_fields_resolved"] == [],
       f"present={_sres['diff']['structured_fields_present']} resolved={_sres['diff']['structured_fields_resolved']}")
 
-# (14) Server exposes the two curator dispatch tools (the 12 old penumbra_curator_* collapsed into
-# penumbra_curator_view(what=...) for reads + penumbra_curator_act(verb=...) for writes); each P1 verb still
+# (14) Server exposes the two curator dispatch tools (the 12 old omniseek_curator_* collapsed into
+# omniseek_curator_view(what=...) for reads + omniseek_curator_act(verb=...) for writes); each P1 verb still
 # resolves to its impl function behind the dispatcher.
-for _t in ("penumbra_curator_view", "penumbra_curator_act"):
+for _t in ("omniseek_curator_view", "omniseek_curator_act"):
     check(f"curator: server exposes {_t}", hasattr(_srv2, _t) and callable(getattr(_srv2, _t)))
 for _t in ("_curator_submit", "_curator_probe", "_curator_packet",
            "_curator_decide", "_curator_list"):
@@ -1731,10 +1731,10 @@ for _t in ("_curator_submit", "_curator_probe", "_curator_packet",
 #     key anywhere in the durable store. Attribution (also_in + live_sources + merge_basis) credits
 #     every collapsed source, splits live vs index, and never lets a title-merge strip sole credit.
 # ---------------------------------------------------------------------------
-from penumbra.core.curator import yield_tap as _yt  # noqa: E402
-from penumbra.core.recall import writer as _ytw  # noqa: E402
+from omniseek.core.curator import yield_tap as _yt  # noqa: E402
+from omniseek.core.recall import writer as _ytw  # noqa: E402
 
-# point the durable store at a throwaway dir (must touch NO real ~/.penumbra path)
+# point the durable store at a throwaway dir (must touch NO real ~/.omniseek path)
 _yttmp = Path(_ctf.mkdtemp())
 _yt.STATE_DIR = _yttmp
 _yt.YIELD_PATH = _yttmp / "yield.json"
@@ -1948,9 +1948,9 @@ check("yield_tap: rank.dedup marks an index-only group (live_sources empty = the
 #     the operator's coverage red-lines); a prune stages a reversible operator case, never a live mutation.
 # ---------------------------------------------------------------------------
 import time as _satime  # noqa: E402
-from penumbra.core.curator import source_audit as _sa  # noqa: E402
+from omniseek.core.curator import source_audit as _sa  # noqa: E402
 
-# write-back goes to a throwaway dir (touch NO real ~/.penumbra path)
+# write-back goes to a throwaway dir (touch NO real ~/.omniseek path)
 _satmp = Path(_ctf.mkdtemp())
 _sa.STATE_DIR = _satmp
 _sa.SOURCE_VERDICTS_PATH = _satmp / "source_verdicts.json"
@@ -2084,7 +2084,7 @@ try:
           _SA_POLICY_KEYS <= set(_pol)
           and {"searches_floor", "min_age_days"} <= set(_pol.get("min_evidence") or {}))
     # every distinct facets.json domain token has a cadence floor (no silent missing-floor default).
-    _facets_json = json.loads((ROOT / "src" / "penumbra" / "core" / "facets.json").read_text(encoding="utf-8"))
+    _facets_json = json.loads((ROOT / "src" / "omniseek" / "core" / "facets.json").read_text(encoding="utf-8"))
     _fac_domains = {d for fb in _facets_json.values() for d in (fb.get("domains") or [])}
     _cad_table = set(_pol.get("cadence_floor_days") or {})
     check("curator P3: every facets.json domain token has a cadence floor in audit_policy.json",
@@ -2265,14 +2265,14 @@ finally:
 # ---------------------------------------------------------------------------
 import re as _p4re  # noqa: E402
 
-from penumbra.core.curator import discover as _disc  # noqa: E402
+from omniseek.core.curator import discover as _disc  # noqa: E402
 
-_CUR_DIR = ROOT / "src" / "penumbra" / "core" / "curator"
+_CUR_DIR = ROOT / "src" / "omniseek" / "core" / "curator"
 # P9: the monthly curator LOOP moved from scripts/curator.py into the in-process job
-# penumbra.core.infra_jobs.run_curator (the same mechanical-only body, now a scheduler row). The razor
+# omniseek.core.infra_jobs.run_curator (the same mechanical-only body, now a scheduler row). The razor
 # invariants below grep that transplanted source, so the "no verdict-writer / sorted digests / streak
 # freeze" guarantees ride along unchanged into the new home.
-_LOOP_PATH = ROOT / "src" / "penumbra" / "core" / "infra_jobs.py"
+_LOOP_PATH = ROOT / "src" / "omniseek" / "core" / "infra_jobs.py"
 
 # (9.1) THE CRON NEVER JUDGES: the loop + discover make NO CALL to a verdict-writer + IMPORT no
 # model / WebSearch / profile. Grep the CODE (docstrings/comments stripped, so the razor's prose
@@ -2298,9 +2298,9 @@ check("curator P4: curator job source readable (infra_jobs.run_curator)", bool(_
 _disc_code = _strip_py_noise(_disc_src)
 _loop_code = _strip_py_noise(_loop_src)
 # verdict-writer CALL forms (a bare prose mention without "(" is now also gone with the strings).
-# The MCP write path is now the penumbra_curator_act dispatcher over the _curator_* impls; the cron must
+# The MCP write path is now the omniseek_curator_act dispatcher over the _curator_* impls; the cron must
 # call NEITHER the dispatcher NOR the decide impl behind it.
-_VERDICT_WRITER_CALLS = ("penumbra_curator_act(", "_curator_decide(", ".record_verdict(",
+_VERDICT_WRITER_CALLS = ("omniseek_curator_act(", "_curator_decide(", ".record_verdict(",
                          "record_source_verdict(", ".record_applied(")
 _FORBIDDEN_IMPORTS = ("anthropic", "WebSearch", "web_search", "profile", "employer_hits", "relevance")
 _cron_judge_leaks = []
@@ -2390,7 +2390,7 @@ check("curator P4: any cron 'rejected' write is the mechanical watch-expired GC 
 
 # (9.5) Centrality is rate-limit-not-quality (HOLE-3): a fixture graph records discovery_truncated
 # / dropped_count; we do NOT assert survivors are the highest-centrality.
-import penumbra.core.cartographer as _cartg  # noqa: E402
+import omniseek.core.cartographer as _cartg  # noqa: E402
 _real_skel = _cartg.field_skeleton
 # DISTINCT hosts per node (the engine dedups same-host correctly; the fixture must give it three
 # different hosts to exercise the topn rate-limit, not collapse to one via a shared doi.org host).
@@ -2448,7 +2448,7 @@ check("curator P4 (§10): a NEWLY-empty / NEWLY-single cell DOES fire (edge alar
       _ne1 == ["eXf"] and _ns1 == ["gXh"])
 # the audit source actually diff-gates (greps for newly_empty/newly_single + the diff op). P9: the
 # weekly source-audit moved from scripts/source_audit.py into infra_jobs.run_source_audit (same body).
-_sent_src = (ROOT / "src" / "penumbra" / "core" / "infra_jobs.py")
+_sent_src = (ROOT / "src" / "omniseek" / "core" / "infra_jobs.py")
 _sent_txt = _sent_src.read_text(encoding="utf-8") if _sent_src.exists() else ""
 check("curator P4 (§10): audit job computes newly_empty/newly_single via a set-diff against the baseline",
       "newly_empty" in _sent_txt and "newly_single" in _sent_txt
@@ -2478,7 +2478,7 @@ check("curator P4: a recorded terminal host is tried under ANY name/URL/scheme v
 check("curator P4: record_tried_host is idempotent (no duplicate ledger entry)",
       (_ccand.record_tried_host("deadhost.com") or len(_ccand._load_tried_hosts())) == 1)
 
-# (9.9) Read-only deploy: the cron writes NO path outside ~/.penumbra/state/curator/. Grep the loop
+# (9.9) Read-only deploy: the cron writes NO path outside ~/.omniseek/state/curator/. Grep the loop
 # source for any write to an in-tree sources/*.json config file (must be none).
 check("curator P4: the cron writes no in-tree sources/*.json config file",
       "sources/" not in _loop_src or ".write_text" not in _loop_src,
@@ -2499,7 +2499,7 @@ check("curator P4: the loop freezes the zero-new streak on a degraded round (Att
       'if discovery_health == "degraded"' in _loop_src and "pass  # FREEZE" in _loop_src)
 
 # (9.11) Policy DATA carries the knobs (finite positive ints) + the enabled flags, NO verdict token.
-import penumbra.core.curator as _curpkg  # noqa: E402
+import omniseek.core.curator as _curpkg  # noqa: E402
 _CUR_POLICY = json.loads((_CUR_DIR / "curator_policy.json").read_text(encoding="utf-8"))
 _pos_int = lambda v: isinstance(v, int) and v > 0
 _P4_KNOBS = ("M_zero_new_streak", "discover_topn", "min_cadence_days", "error_retry_budget",
@@ -2576,7 +2576,7 @@ _ccand.store_evidence(_ow_cid,
                       {"hard_redline_ids": []}, "awaiting_verdict", "ev")
 check("curator P4 (8b): admit of a first-seen org_watch RAISES without recurring_fetch_acknowledged",
       _decide_raises(candidate_id=_ow_cid, decision="admit", reasons="x", baseline_ref={"web": ["r"]}))
-_ow_ok = _srv2.penumbra_curator_act.__wrapped__(verb="decide", candidate_id=_ow_cid, decision="admit",
+_ow_ok = _srv2.omniseek_curator_act.__wrapped__(verb="decide", candidate_id=_ow_cid, decision="admit",
                                            reasons="x",
                                            baseline_ref={"web": ["r"], "recurring_fetch_acknowledged": True})
 check("curator P4 (8b): with recurring_fetch_acknowledged=true the admit stages to owner_review",
@@ -2596,7 +2596,7 @@ check("curator P4 (2/8c): prepare_owner_case carries recurring_fetch_harm for a 
 # ---------------------------------------------------------------------------
 import threading as _althr  # noqa: E402
 
-from penumbra.core.curator import apply_live as _al  # noqa: E402
+from omniseek.core.curator import apply_live as _al  # noqa: E402
 
 # (1) overlay IO tolerant: missing/corrupt/non-list -> []; rows missing name / non-dict filtered.
 _altmp = Path(_ctf.mkdtemp())
@@ -2642,9 +2642,9 @@ check("curator live: drop removes the row (idempotent on an absent name)",
       and _al.overlay_rows("rss") == [])
 
 # (3) register_one builds the SAME family class per family (isinstance per family); page_watch->None.
-from penumbra.core.sources.api.org_watch_source import _OrgWatchAdapter as _OWA  # noqa: E402
-from penumbra.core.sources.scrape.news_scraper_source import _ScrapeSite as _SS  # noqa: E402
-from penumbra.core.sources.scrape.rss_bundles_source import _RSSBundle as _RB  # noqa: E402
+from omniseek.core.sources.api.org_watch_source import _OrgWatchAdapter as _OWA  # noqa: E402
+from omniseek.core.sources.scrape.news_scraper_source import _ScrapeSite as _SS  # noqa: E402
+from omniseek.core.sources.scrape.rss_bundles_source import _RSSBundle as _RB  # noqa: E402
 check("curator live: register_one builds the right class per family",
       isinstance(_al.register_one("rss", {"name": "a", "description": "d", "feeds": ["https://x/f"]}), _RB)
       and isinstance(_al.register_one("org_watch", {"name": "a", "affiliations": ["X"], "description": "d"}), _OWA)
@@ -2751,7 +2751,7 @@ check("curator live: register-before-append — a collision aborts with NO overl
 fetcher.unregister_adapter("coll_live")
 
 # (8) recall.invalidate_indexable_cache resets the cache; an rss live-apply enters the index.
-import penumbra.core.recall as _rcl  # noqa: E402
+import omniseek.core.recall as _rcl  # noqa: E402
 _rcl.indexable_set()  # warm
 _rcl.invalidate_indexable_cache()
 check("curator live: invalidate_indexable_cache resets _indexable_cache to None",
@@ -2787,8 +2787,8 @@ check("curator live: validate_row_typed rejects feeds-as-str, render:true site, 
 
 # (11) CONFIGS join (spec §5): every accumulated overlay row passes its typed check; overlay names
 #      join the cross-file uniqueness; a family not in _KNOWN_FAMILIES or a _NEVER_AUTO row smuggled
-#      into rss_overlay.json fails the deploy. (Validates the REAL ~/.penumbra overlay files if any.)
-_REAL_OVERLAY_DIR = Path.home() / ".penumbra" / "state" / "curator" / "overlays"
+#      into rss_overlay.json fails the deploy. (Validates the REAL ~/.omniseek overlay files if any.)
+_REAL_OVERLAY_DIR = Path.home() / ".omniseek" / "state" / "curator" / "overlays"
 _overlay_problems = []
 _overlay_names = []
 _overlay_uncommitted = []
@@ -2860,9 +2860,9 @@ _il2.reload(_capply)  # restore pristine _capply for any later section
 #       allowlist. Overlay-origin _RSSBundle carries guard_ip=True; the 143 base rows do not (their
 #       fetch is byte-identical); a guarded fetch whose host resolves to a blocked IP fails CLOSED
 #       (skip, no http.get) so an agent-auto-admitted feed cannot SSRF on its recurring poll.
-import penumbra.core.sources.scrape.rss_bundles_source as _rssb  # noqa: E402
-import penumbra.core.sources.scrape._rss as _rssmod  # noqa: E402
-from penumbra.core.curator import probe as _gprobe  # noqa: E402
+import omniseek.core.sources.scrape.rss_bundles_source as _rssb  # noqa: E402
+import omniseek.core.sources.scrape._rss as _rssmod  # noqa: E402
+from omniseek.core.curator import probe as _gprobe  # noqa: E402
 check("curator C3: a base (in-tree) rss bundle has guard_ip False (143 sources unchanged)",
       _rssb._RSSBundle(name="b", description="d", feeds=["https://x/f"]).guard_ip is False)
 _ov_b = _al.register_one("rss", {"name": "o", "description": "d", "feeds": ["https://x/f"]})
@@ -2914,7 +2914,7 @@ _ccand.CANDIDATES_PATH = _altmp / "onetap_candidates.json"
 _nt = _ccand.add({"name": "NotReady", "urls": ["https://feeds.ok.example.com/x"], "proposed_mode": "STRUCTURE",
                   "proposed_domain": "papers", "proposed_family": "rss"})
 check("curator live: apply_live RAISES on a candidate not in owner_review",
-      _al_raises(lambda: _srv2.penumbra_curator_act.__wrapped__(verb="apply_live", candidate_id=_nt)))
+      _al_raises(lambda: _srv2.omniseek_curator_act.__wrapped__(verb="apply_live", candidate_id=_nt)))
 # defensive: a doctored org_watch in owner_review returns applied:false (never live-applied)
 _ow_live = _ccand.add({"name": "OwLive", "urls": ["https://api.openalex.org/works"], "proposed_mode": "STRUCTURE",
                        "proposed_domain": "papers", "proposed_family": "org_watch"})
@@ -2922,14 +2922,14 @@ _ccand.store_evidence(_ow_live, {"evidence_complete": True, "stage0_safety": {"h
                       {"hard_redline_ids": []}, "awaiting_verdict", "ev")
 _ccand.record_verdict(_ow_live, {"decision": "admit"}, "admitted", "a")
 _ccand.set_state(_ow_live, "owner_review", "stage", by="agent")
-_ow_res = _srv2.penumbra_curator_act.__wrapped__(verb="apply_live", candidate_id=_ow_live)
+_ow_res = _srv2.omniseek_curator_act.__wrapped__(verb="apply_live", candidate_id=_ow_live)
 check("curator live: apply_live refuses a _NEVER_AUTO family (applied:false, points to git path)",
       _ow_res.get("applied") is False and "stage_commit" in (_ow_res.get("must_use") or ""))
 # retire requires an existing agent prune verdict
 _sa.STATE_DIR = _altmp
 _sa.SOURCE_VERDICTS_PATH = _altmp / "live_source_verdicts.json"
 check("curator live: retire_live RAISES without an existing agent PRUNE verdict",
-      _al_raises(lambda: _srv2.penumbra_curator_act.__wrapped__(verb="retire_live", name="no_such_pruned_src", confirm=True)))
+      _al_raises(lambda: _srv2.omniseek_curator_act.__wrapped__(verb="retire_live", name="no_such_pruned_src", confirm=True)))
 
 # (15) runtime retire round-trip: with a prune on record, confirm=True writes the explicit_only
 #      override so _explicit_only_reason is truthy; rollback drops it -> falsy again.
@@ -2997,8 +2997,8 @@ check("1.7: list_sources emits a first-class 'retired' bool (True + explicit_onl
 check("1.7: 'retired' is False for a live source (arxiv)",
       _ls17.get("arxiv", {}).get("retired") is False)
 # the two curator consumers now read the FIELD, not a dead isinstance('retired:' prefix) on a bool.
-from penumbra.core.curator import source_audit as _sa17
-from penumbra.core.curator import discover as _disc17
+from omniseek.core.curator import source_audit as _sa17
+from omniseek.core.curator import discover as _disc17
 _roster17 = [
     {"name": "live_src", "domains": ["papers"], "modes": ["STRUCTURE"], "retired": False},
     {"name": "retired_src", "domains": ["papers"], "modes": ["STRUCTURE"], "retired": True},
@@ -3011,7 +3011,7 @@ check("1.7: discover seed picker drops a retired source (reads the first-class f
 _ret_overlay.write_text("{}", encoding="utf-8")  # clean state for the rest of the run
 fetcher.invalidate_explicit_only_overrides()
 
-# (16) the live-apply lane verbs route through penumbra_curator_act; each still resolves to its impl.
+# (16) the live-apply lane verbs route through omniseek_curator_act; each still resolves to its impl.
 for _t in ("_curator_apply_live", "_curator_rollback_live", "_curator_stage_commit",
            "_curator_retire_live", "_curator_rollback_retire"):
     check(f"curator live: server carries the {_t} impl behind the dispatcher",
@@ -3075,8 +3075,8 @@ finally:
 
 # (18) resolver host-allowlist (attack-3): enrich._get_json off-allowlist RAISES; allowed hosts pass
 #      shape; the client sets follow_redirects=False; openalex client + host assert.
-import penumbra.core.enrich as _enr2  # noqa: E402
-import penumbra.core._openalex as _oa2  # noqa: E402
+import omniseek.core.enrich as _enr2  # noqa: E402
+import omniseek.core._openalex as _oa2  # noqa: E402
 check("curator live: enrich._get_json RAISES on an off-allowlist host",
       _al_raises(lambda: _enr2._get_json("http://evil.example/x")))
 _enr_src = _insp.getsource(_enr2._get_json)
@@ -3093,7 +3093,7 @@ check("curator live: openalex get_json RAISES on a path that resolves off api.op
 # 17. roadmap-④ + Galleria v1.1 adapter-parse invariants (pure, no live call): github tree-mode
 #     parses a canned git/trees response; openreview review-fetch parses canned reply notes.
 # ---------------------------------------------------------------------------
-from penumbra.core.sources.api.github_source import GitHubAdapter as _GH, _TREE_RE as _GH_TREE_RE  # noqa: E402
+from omniseek.core.sources.api.github_source import GitHubAdapter as _GH, _TREE_RE as _GH_TREE_RE  # noqa: E402
 
 check("github: tree:owner/repo (+@branch) routes to tree-mode, plain query does not",
       bool(_GH_TREE_RE.match("tree:octocat/hello"))
@@ -3117,7 +3117,7 @@ _big_doc = _GH._tree_to_doc("o", "r", "main", _big_tree)
 check("github tree-mode: a huge/truncated tree is bounded to the node cap + flags truncation",
       _big_doc.metadata.get("shown") <= 600 and _big_doc.metadata.get("truncated") is True)
 
-from penumbra.core.sources.api.openreview_source import (  # noqa: E402
+from omniseek.core.sources.api.openreview_source import (  # noqa: E402
     OpenReviewAdapter as _OR, _parse_reviews as _OR_parse_reviews)
 
 check("openreview: reviews: qualifier extracts a forum id (bare id or /forum?id= URL)",
@@ -3244,45 +3244,45 @@ finally:
     _oa2._state["dry_until"] = _save_dry3 or {"keyed": 0.0, "anon": 0.0}
 
 # Usage attribution (2026-06-17): every budget-spending success is tallied by caller + the live
-# per-bucket remaining is captured, surfaced by penumbra_sources(check_health=True) in its `system` block,
+# per-bucket remaining is captured, surfaced by omniseek_sources(check_health=True) in its `system` block,
 # so a heavy OpenAlex day is ITEMIZABLE (a hidden over-consumer can't hide) instead of inferred.
 check("openalex: usage_stats() exists (per-caller budget attribution in the check_health system block)",
       hasattr(_oa2, "usage_stats") and callable(_oa2.usage_stats))
 
-# penumbra_health_check was ABSORBED into penumbra_sources(check_health=True): the live probe now ALSO returns a
+# omniseek_health_check was ABSORBED into omniseek_sources(check_health=True): the live probe now ALSO returns a
 # `system` block carrying the two payloads that tool uniquely built (the recall-index health + the
 # openalex usage attribution). Assert the block's SHAPE only — stub list_sources so check_health does
 # no live per-source probing (the recall + usage stats it folds in are local, no network).
 _hc_real_list = fetcher.list_sources
 try:
     fetcher.list_sources = lambda *a, **k: []  # no live probe; the system block is built independently
-    _hc_out = _srv2.penumbra_sources.__wrapped__(check_health=True)
+    _hc_out = _srv2.omniseek_sources.__wrapped__(check_health=True)
 finally:
     fetcher.list_sources = _hc_real_list
-check("health: penumbra_sources(check_health=True) returns a system block with recall + openalex_usage",
+check("health: omniseek_sources(check_health=True) returns a system block with recall + openalex_usage",
       isinstance(_hc_out.get("system"), dict)
       and "recall" in _hc_out["system"] and "openalex_usage" in _hc_out["system"],
       f"system={_hc_out.get('system')!r}")
-check("health: penumbra_sources without check_health carries NO system block (advisory-only default)",
-      "system" not in _srv2.penumbra_sources.__wrapped__(domain="papers"))
+check("health: omniseek_sources without check_health carries NO system block (advisory-only default)",
+      "system" not in _srv2.omniseek_sources.__wrapped__(domain="papers"))
 
 # BOUNDED ORIENT (2026-07-04 dogfood): a bare no-arg call must NOT ship the full per-source facet
 # roster (200+ sources x ~13 facets overflowed an agent's per-tool-result budget AND buried the
 # orient signal). It returns source_names + the routing vocabulary + capabilities; the per-source
 # facets arrive only on a narrow (domain=/region=/query=) or verbose=True. brain_orient's lesson,
 # applied to the eye — the regression lock so a future edit/sync cannot silently re-unbound it.
-_bo = _srv2.penumbra_sources.__wrapped__()
-check("orient: bare penumbra_sources is BOUNDED (source_names + vocab + capabilities, NOT the facet roster)",
+_bo = _srv2.omniseek_sources.__wrapped__()
+check("orient: bare omniseek_sources is BOUNDED (source_names + vocab + capabilities, NOT the facet roster)",
       "source_names" in _bo and "sources" not in _bo
       and isinstance(_bo.get("available_domains"), dict) and "capabilities" in _bo
       and isinstance(_bo["source_names"], list) and len(_bo["source_names"]) == _bo["count"])
-_bo_narrow = _srv2.penumbra_sources.__wrapped__(domain="papers")
-check("orient: a NARROWED penumbra_sources returns per-source facets (sources), not source_names",
+_bo_narrow = _srv2.omniseek_sources.__wrapped__(domain="papers")
+check("orient: a NARROWED omniseek_sources returns per-source facets (sources), not source_names",
       "sources" in _bo_narrow and "source_names" not in _bo_narrow
       and all("name" in s for s in _bo_narrow["sources"]))
 check("orient: verbose=True forces the full facet roster (sources present, bounded form off)",
-      "sources" in _srv2.penumbra_sources.__wrapped__(verbose=True)
-      and "source_names" not in _srv2.penumbra_sources.__wrapped__(verbose=True))
+      "sources" in _srv2.omniseek_sources.__wrapped__(verbose=True)
+      and "source_names" not in _srv2.omniseek_sources.__wrapped__(verbose=True))
 
 
 class _OkClient:
@@ -3329,7 +3329,7 @@ check("openalex: rate pacer exists (bounds req/s so a fan-out can't burst the sh
 # per-module max_inflight = _MAX_CONCURRENCY sized the semaphore), AND the module-level _sema / _state /
 # _lock / _pace_state / _pace_lock ARE the guard's own objects (the aliases wire to it, not a copy — so
 # every threshold, sleep, log line and error path stays identical). One helper, reused for s2 + github.
-from penumbra.core._guard import BackendGuard as _BackendGuard  # noqa: E402
+from omniseek.core._guard import BackendGuard as _BackendGuard  # noqa: E402
 def _guard_wired(mod, name, max_inflight):
     g = getattr(mod, "_guard", None)
     return (isinstance(g, _BackendGuard) and g.name == name
@@ -3616,7 +3616,7 @@ def _fake_getjson(url):
     return {"message": {"is-referenced-by-count": 4321, "updated-by": []}}
 
 
-from penumbra.core import cache as _ecache  # noqa: E402
+from omniseek.core import cache as _ecache  # noqa: E402
 try:
     _ecache_save = (_ecache.get, _ecache.set)       # restore after (no-op cache must not leak)
     _ecache.get = lambda k: None                     # force a fresh compute (skip any warm cache)
@@ -3633,7 +3633,7 @@ finally:
     _ecache.get, _ecache.set = _ecache_save
 
 # enrich imports _s2 lazily inside the arXiv branch; monkeypatch the shared module's get_paper.
-import penumbra.core._s2 as _s2mod  # noqa: E402
+import omniseek.core._s2 as _s2mod  # noqa: E402
 _save_gp, _save_axi = _s2mod.get_paper, _enr2._arxiv_integrity
 try:
     _ecache_save = (_ecache.get, _ecache.set)
@@ -3762,8 +3762,8 @@ check("relations: _likely_same_person does NOT merge the same name across differ
       relations._likely_same_person(
           [{"id": "A1", "source": "openalex", "name": "Same Name", "name_match": True},
            {"id": "123456", "source": "s2", "name": "Same Name", "name_match": True}]) == [])
-check("server: penumbra_resolve_identity docstring documents likely_same_person + merge_token",
-      "likely_same_person" in (_srv.penumbra_resolve_identity.__doc__ or "")
+check("server: omniseek_resolve_identity docstring documents likely_same_person + merge_token",
+      "likely_same_person" in (_srv.omniseek_resolve_identity.__doc__ or "")
       or "likely_same_person" in _insp.getsource(relations.resolve_identity))
 
 # FIX 8 (root-cause, beyond the spec's 7): a FAILED OpenAlex lookup is NOT a confirmed absence. When
@@ -3801,7 +3801,7 @@ finally:
 #    provenance-stamped Signal, and the ranker reads attention_value() (a max over the
 #    ATTENTION-class signals: engagement + citation; compensation/other excluded).
 # ---------------------------------------------------------------------------
-from penumbra.core.normalize import Signal, mk_signal  # noqa: E402
+from omniseek.core.normalize import Signal, mk_signal  # noqa: E402
 
 check("signals: Document has the named signals map, no score / no relevance field",
       "signals" in Document.model_fields
@@ -3834,12 +3834,12 @@ check("signals: attention_value() is None when a doc carries no ATTENTION-class 
       and (lambda d: (d.signals.update(mk_signal("salary", 9000, kind="compensation", by="z/s"))
                       or d.attention_value()))(_doc("z", "comp only")) is None)
 # mycareersfuture's salary MUST be compensation (so it never pollutes the engagement term)
-from penumbra.core.sources.api import mycareersfuture_source as _mcf  # noqa: E402
+from omniseek.core.sources.api import mycareersfuture_source as _mcf  # noqa: E402
 _mcf_src = _insp.getsource(_mcf)
 check("signals: mycareersfuture salary is kind='compensation' (not engagement)",
       "kind='compensation'" in _mcf_src and "salary" in _mcf_src)
 # github_awesome_phd's local keyword-hit count is NOT a source fact: no signal emitted
-from penumbra.core.sources.scrape import github_awesome_phd_source as _gap  # noqa: E402
+from omniseek.core.sources.scrape import github_awesome_phd_source as _gap  # noqa: E402
 check("signals: github_awesome_phd emits NO signal (local keyword-hit count is not a source fact)",
       "mk_signal" not in _insp.getsource(_gap) and "signals=" not in _insp.getsource(_gap))
 
@@ -3848,12 +3848,12 @@ check("signals: github_awesome_phd emits NO signal (local keyword-hit count is n
 # Regression guards from the eye-usage-waste-rootfix workflow: a shared rate pacer + single-flight
 # health() + refresh-if-near-expiry warming + relations caching, mirroring the _openalex fix.
 # ============================================================================
-from penumbra.core import cache as _wcache  # noqa: E402
+from omniseek.core import cache as _wcache  # noqa: E402
 _WASTE_ORIG_CACHE_DIR = _wcache.CACHE_DIR
 
 import time as _t
-from penumbra.core import _s2 as _S2
-from penumbra.core.sources.api import semantic_scholar_source as _SS
+from omniseek.core import _s2 as _S2
+from omniseek.core.sources.api import semantic_scholar_source as _SS
 
 check("s2 has _pace", hasattr(_S2, "_pace"))
 check("s2 _MIN_INTERVAL_S honors ~1 RPS", _S2._MIN_INTERVAL_S == 1.0)
@@ -3881,7 +3881,7 @@ check("s2 _PACE_MAX_WAIT_S is a sane cap (a few-to-tens of seconds, not unbounde
       0 < _S2._PACE_MAX_WAIT_S <= 60)
 # Same unbounded-pace-wait bug class guarded in the OpenAlex twin (40+ OA sources fan through its
 # gate): get_json fast-fails (OpenAlexDown) on a pathological backlog instead of inheriting the queue.
-from penumbra.core import _openalex as _OA
+from omniseek.core import _openalex as _OA
 def _oa_pace_cap_ok():
     _OA._pace_state["next_at"] = _t.monotonic() + 10_000  # pathological backlog
     try:
@@ -3972,7 +3972,7 @@ _S2._state["open_until"] = 0.0; _S2._health["result"] = None
 import inspect as _insp
 check("s2 recommend-from-lists has limit param", "limit" in _insp.signature(_S2.get_recommended_papers_from_lists).parameters)
 
-from penumbra.core import cache, prewarm
+from omniseek.core import cache, prewarm
 import tempfile as _tf
 from pathlib import Path as _P
 from contextvars import copy_context as _copy_context
@@ -4037,15 +4037,15 @@ check("cache FLOOR: set_docs empty + no empty_ttl is floor-capped (the safe defa
       cache.seconds_until_expiry("floor_sd") <= cache.EMPTY_TTL_CAP)
 check("cache FLOOR: set_docs explicit empty_ttl is honored past the floor (authoritative)",
       cache.seconds_until_expiry("floor_sd_auth") > cache.EMPTY_TTL_CAP)
-from penumbra.core import _s2 as _s2n  # noqa: E402
+from omniseek.core import _s2 as _s2n  # noqa: E402
 check("cache A-class: _s2.norm_s2_id collapses arXiv id-forms to ONE seed (cartographer/relations keys can't diverge)",
       len({_s2n.norm_s2_id(x) for x in ["2203.02155", "ArXiv:2203.02155"]}) == 1
       and _s2n.norm_s2_id("2203.02155") == "ArXiv:2203.02155")
 
 import inspect as _insp2
-from penumbra.core import _github as _gh
-from penumbra.core.sources.api import github_source as _ghs
-from penumbra.core.sources.api import github_trending_source as _ght
+from omniseek.core import _github as _gh
+from omniseek.core.sources.api import github_source as _ghs
+from omniseek.core.sources.api import github_trending_source as _ght
 
 check("github: get_json host-pins to api.github.com (off-host path -> None)",
       _gh.get_json("@evil.com/steal") is None and _gh.get_json("https://evil.com/x") is None)
@@ -4094,7 +4094,7 @@ _gh._health["result"] = None; _gh._health["at"] = 0.0
 check("github: health() DEGRADED (ok, not down) while circuit open, self-shed is not an outage",
       _gh_deg[0] is True and "degraded" in _gh_deg[1])
 
-import penumbra.core.sources.api.exa_source as _exa
+import omniseek.core.sources.api.exa_source as _exa
 check("exa: _health is a callable single-flight probe", callable(_exa._health))
 check("exa: _health_cache dict + _health_lock + 600s TTL present",
       isinstance(_exa._health_cache, dict)
@@ -4117,7 +4117,7 @@ check("exa: 5 health_check calls collapse to ONE billed Exa search (single-fligh
 check("exa: search over-fetch bucket is the stable upper bucket min(25,max(limit,10))",
       min(25, max(3, 10)) == 10 and min(25, max(50, 10)) == 25 and min(25, max(10, 10)) == 10)
 
-import penumbra.core.relations as _rel
+import omniseek.core.relations as _rel
 import inspect as _inspect
 check("relations imports cache", getattr(_rel, "cache", None) is not None)
 check("relations _WORKS_TTL is 6h", _rel._WORKS_TTL == 6 * 3600)
@@ -4135,7 +4135,7 @@ check("relations works cache key round-trips",
 _wcache.CACHE_DIR = _WASTE_ORIG_CACHE_DIR
 
 # --- LOW-tier wasteful-usage fixes (enrich pooled client + Stack Exchange shared probe), 2026-06-16 ---
-from penumbra.core import enrich, http, cache
+from omniseek.core import enrich, http, cache
 check("enrich imports shared http module", enrich.http is http)
 check("enrich dropped direct httpx import", not hasattr(enrich, "httpx"))
 _cap = {}
@@ -4158,7 +4158,7 @@ finally:
     http._client = _saved
 check("enrich._get_json returns parsed JSON dict", _d == {"ok": True})
 check("enrich passes follow_redirects=False to pooled client (SSRF redirect guard)", _cap.get("kwargs", {}).get("follow_redirects") is False)
-check("enrich preserves its mailto _UA over the shared UA", _cap.get("headers", {}).get("User-Agent", "").startswith("penumbra/"))
+check("enrich preserves its mailto _UA over the shared UA", _cap.get("headers", {}).get("User-Agent", "").startswith("omniseek/"))
 check("enrich forwards its _TIMEOUT", _cap.get("timeout") == enrich._TIMEOUT)
 check("enrich still pins resolver host to _API_HOSTS", "api.unpaywall.org" in enrich._API_HOSTS and "evil.example.com" not in enrich._API_HOSTS)
 def _off():
@@ -4168,8 +4168,8 @@ def _off():
         return True
 check("enrich._get_json rejects off-allowlist host before any request", _off())
 
-from penumbra.core import _stackexchange as _se
-from penumbra.core.sources.scrape import stackoverflow_source as _so, academia_se_source as _ase
+from omniseek.core import _stackexchange as _se
+from omniseek.core.sources.scrape import stackoverflow_source as _so, academia_se_source as _ase
 import inspect as _inspse
 check("stackexchange: shared single-flight health() exists (60s cache)",
       callable(_se.health) and _se._HEALTH_TTL_S == 60.0 and isinstance(_se._health, dict))
@@ -4196,7 +4196,7 @@ check("stackexchange: health() single-flight cached (2 calls -> 1 upstream probe
 # fetches), so the quota empties fast and 429-storms (51+ log lines + latency + health flap). N
 # consecutive quota-429s now trip a shared cooldown so _se_get skips the API entirely. Offline: drive
 # the breaker state + monkeypatch http.get_json to PROVE no network call happens while cooling.
-import penumbra.core.http as _se_http  # noqa: E402
+import omniseek.core.http as _se_http  # noqa: E402
 _se._se_cooldown_until = 0.0
 _se._se_fail_streak = 0
 _se_cold0 = _se._se_cooling()
@@ -4240,8 +4240,8 @@ check("stackexchange: _se_get injects the configured Stack Apps key (raises quot
 # Finance sources: market_quote (CNBC) + sec_financials (SEC XBRL). Offline:
 # pure helpers + fixtures shaped like the live payloads probed 2026-06-17.
 # ---------------------------------------------------------------------------
-from penumbra.core.sources.api import market_quote_source as _mq
-from penumbra.core.sources.api import sec_financials_source as _sf
+from omniseek.core.sources.api import market_quote_source as _mq
+from omniseek.core.sources.api import sec_financials_source as _sf
 
 # -- market_quote: ticker extraction (positive + negative) --
 check("market_quote: extracts cashtags + bare tickers, order-preserving deduped",
@@ -4355,8 +4355,8 @@ check("sec_financials: malformed submissions -> [] (no raise)",
 #     drained into a diagnostic on empty/error, ZERO cost + ZERO pollution on the
 #     broad fan-out, and no credential leak in a captured URL.
 # ---------------------------------------------------------------------------
-from penumbra.core import diag as _diag  # noqa: E402
-from penumbra.core.normalize import Document as _PDoc  # noqa: E402
+from omniseek.core import diag as _diag  # noqa: E402
+from omniseek.core.normalize import Document as _PDoc  # noqa: E402
 
 # -- diag.note is a NO-OP when capture is not enabled (the search_many fan-out path) --
 _diag.drain()  # reset any prior state
@@ -4498,8 +4498,8 @@ check("fetch_one: legacy signature unchanged (returns the docs list, not a tuple
 #     escalating to a Jina headless render ONLY when the extracted text is thin. The
 #     fixture payloads are condensed from the LIVE anthropic.com/research head-to-head.
 # ---------------------------------------------------------------------------
-from penumbra.core import web_fallback as wf
-from penumbra.core import cache as _wcache, http as _whttp, safeurl as _wsafe, _netguard as _wng
+from omniseek.core import web_fallback as wf
+from omniseek.core import cache as _wcache, http as _whttp, safeurl as _wsafe, _netguard as _wng
 _wf_g, _wf_s = _wcache.get, _wcache.set
 _wf_get = _whttp.get
 _wf_sf = _wsafe.safe_fetch            # C2: the plain untrusted read now goes through safeurl.safe_fetch
@@ -4556,7 +4556,7 @@ try:
     # turned %20 into '+', so the diagnostic LIED about the URL actually sent (misled the
     # 2026-07-09 yipinsanfendi "encoding bug" investigation). Golden: GBK escapes survive
     # byte-for-byte; secret values still redact; a no-query URL passes through unchanged.
-    from penumbra.core import diag as _diag
+    from omniseek.core import diag as _diag
     _gbk_url = "https://www.1point3acres.com/bbs/search.php?mod=forum&searchsubmit=yes&srchtxt=express%20entry%20%B2%A9%BA%F3"
     check("diag._strip_secrets: legacy-GBK percent-escapes survive VERBATIM (diagnostic never alters evidence)",
           _diag._strip_secrets(_gbk_url) == _gbk_url)
@@ -4580,9 +4580,9 @@ finally:
 #     match a vendor row, so the two watches were merged into one (query=""). Locks the load-
 #     bearing facts: fingerprint-on-change + the row stays name-queryable by "检索基建".
 # ---------------------------------------------------------------------------
-from penumbra.core.sources.scrape import page_watch_source as _pws  # noqa: E402
-from penumbra.core.normalize import keyword_score_filter as _pw_kwf  # noqa: E402
-from penumbra.core import cache as _pwcache  # noqa: E402
+from omniseek.core.sources.scrape import page_watch_source as _pws  # noqa: E402
+from omniseek.core.normalize import keyword_score_filter as _pw_kwf  # noqa: E402
+from omniseek.core import cache as _pwcache  # noqa: E402
 _pw_g, _pw_s = _pwcache.get, _pwcache.set
 _pw_pt = _pws._page_text
 _pw_text = "免费档 pricing free tier 1000 credits per month " * 8  # >=200 chars, has free/pricing
@@ -4625,7 +4625,7 @@ finally:
 # Declarative schema-extraction engine (BaseScrapeAdapter.extract_schema; borrowed crawl4ai
 # JsonCssExtractionStrategy minus eval): a source declared as a JSON schema parses HTML → docs
 # with ZERO per-source parsing code.
-from penumbra.core.sources.scrape._base import BaseScrapeAdapter as _BSA  # noqa: E402
+from omniseek.core.sources.scrape._base import BaseScrapeAdapter as _BSA  # noqa: E402
 class _SchemaProbe(_BSA, register=False):
     name = "_schema_probe"; description = "schema-engine smoke"
     base_url = "https://ex.com"
@@ -4647,7 +4647,7 @@ check("scrape schema engine: extract_schema builds docs from HTML (CSS-driven, z
 #    text body (not just an abstract), stamps full_text_chars, surfaces the OA PDF,
 #    prefers the DOI url, and reads citations as a citation signal. Pure / offline.
 # ---------------------------------------------------------------------------
-from penumbra.core.sources.api import core_source  # noqa: E402
+from omniseek.core.sources.api import core_source  # noqa: E402
 
 check("core: registered as a keyed papers source",
       "core" in names and fetcher.get_adapter("core").needs_credentials is True)
@@ -4704,7 +4704,7 @@ check("core: facets.json declares papers / STRUCTURE+RECALL",
 #     /api/sns/web/v2/comment/page comment dicts into the [{author,text,likes}] doc-build shape,
 #     incl. inline sub_comments as "↳ " lines, deduped by comment id. Pure decode, no network.
 # ---------------------------------------------------------------------------
-from penumbra.core.sources.walled import xiaohongshu_source as _xhs2  # noqa: E402
+from omniseek.core.sources.walled import xiaohongshu_source as _xhs2  # noqa: E402
 _xhs_cap = [
     {"id": "c1", "content": "评论区分享学习材料", "like_count": "3",
      "user_info": {"nickname": "猛猿"},
@@ -4727,7 +4727,7 @@ check("xhs: _flatten_captured_comments flattens comments + inline sub_comments, 
 #     functions (no network / no signing) — test them offline. The signed fetch itself is
 #     account-live and verified on the mini, not here.
 # ---------------------------------------------------------------------------
-from penumbra.core.sources.walled import xiaohongshu_cn_source as _xcn  # noqa: E402
+from omniseek.core.sources.walled import xiaohongshu_cn_source as _xcn  # noqa: E402
 _nid, _tok = _xcn._parse_note_url(
     "https://www.xiaohongshu.com/explore/6a2a504f000000002202bf1d?xsec_token=ABxyz=&xsec_source=")
 check("xhs_cn: _parse_note_url extracts note_id + xsec_token from a mainland note URL",
@@ -4753,7 +4753,7 @@ check("xhs_cn: registered + explicit_only (account-rate-sensitive, never in the 
 _xcn._tripped_until = 0.0; _xcn._trip_streak = 0  # clean breaker state for the classification test
 # ISOLATE THE BLACK BOX. _guard() now APPENDS a forensic row on every risk classification, so the
 # checks below would inject fake 461 / session-cap / IP-block incidents into the real
-# ~/.penumbra/state/xhs-cn-incidents.jsonl on every smoke run, poisoning the exact evidence file
+# ~/.omniseek/state/xhs-cn-incidents.jsonl on every smoke run, poisoning the exact evidence file
 # built to diagnose a real intermittent fault. Third instance in one night of a test dirtying the
 # state it measures; the rule that came out of it: before calling a function in a test, ask what it
 # WRITES, not only what it returns.
@@ -4829,7 +4829,7 @@ check("xhs_cn: browser path enabled (_BROWSER_OK) + helpers wired",
       _xcn._BROWSER_OK and all(hasattr(_xcn, n) for n in
           ("_browser_alive", "_browser_search", "_browser_fetch", "_note_browser_cdp", "_cn_captcha",
            "_cn_login_wall", "_cn_card_to_document", "_cn_cards_from_html")))
-check("xhs_cn: fetch_timeout >= the 110s browser cdp_call budget (penumbra_read URL backstop must not kill it)",
+check("xhs_cn: fetch_timeout >= the 110s browser cdp_call budget (omniseek_read URL backstop must not kill it)",
       _xcn_a.fetch_timeout >= 120.0, detail=str(_xcn_a.fetch_timeout))
 # PRIMARY mainland search decode = DOM cards (the mainland SSRs results; /search/notes XHR doesn't fire).
 _xcn_card_html = (
@@ -4867,7 +4867,7 @@ check("xhs_cn: _items_to_docs (XHR-bonus) — dedups, drops note_card-less rows,
 # 28. sogou_weixin (微信公众号 search): the HTML parser + doc builder are pure functions —
 #     golden-fixture them offline against a recorded Sogou result block (no network).
 # ---------------------------------------------------------------------------
-from penumbra.core.sources.scrape import sogou_weixin_source as _sgw  # noqa: E402
+from omniseek.core.sources.scrape import sogou_weixin_source as _sgw  # noqa: E402
 _sgw_html = ("<ul class=\"news-list\">"
              "<li id=\"sogou_vr_11002601_box_0\"><div class=\"txt-box\">"
              "<h3><a target=\"_blank\" href=\"/link?url=AAA\">强化学习入门</a></h3>"
@@ -4907,7 +4907,7 @@ check("sogou_weixin: registered + explicit_only (anti-bot scrape, named-only)",
 # 29. openalex_cn (中文学术 facet over the existing OpenAlex wrap): the language-pin is a pure
 #     fn (offline); plus registration / explicit_only / cn-papers facets. (No live OpenAlex call.)
 # ---------------------------------------------------------------------------
-from penumbra.core.sources.api import openalex_cn_source as _oac  # noqa: E402
+from omniseek.core.sources.api import openalex_cn_source as _oac  # noqa: E402
 check("openalex_cn: _pin_zh appends language:zh, but respects a caller's explicit language filter",
       _oac._pin_zh("深度学习") == "深度学习 language:zh"
       and _oac._pin_zh("  x  ") == "x language:zh"
@@ -4923,7 +4923,7 @@ check("openalex_cn: registered, explicit_only, subclasses OpenAlex, cn/papers/ST
 # 30. cninfo (巨潮 A-share filings): the JSON announcement → doc builder is a pure fn — golden
 #     fixture it offline (title <em>-strip, PDF url, company author, ms-ts date), + registration.
 # ---------------------------------------------------------------------------
-from penumbra.core.sources.scrape import cninfo_source as _cni  # noqa: E402
+from omniseek.core.sources.scrape import cninfo_source as _cni  # noqa: E402
 check("cninfo: _clean_title strips the <em> keyword-highlight tags",
       _cni._clean_title("关于公司<em>数据安全</em>管控产品的公告") == "关于公司数据安全管控产品的公告")
 _cni_doc = _cni._ann_to_doc({
@@ -4948,7 +4948,7 @@ check("cninfo: registered + explicit_only + finance/cn/STRUCTURE+UNWALL facets",
 # 31. gov_policy (中国政府网 政策库): the JSON list-extract + policy→doc builder are pure fns —
 #     golden fixture them offline (nested listVO path, <em>-strip, 文号/issuing-org, gov.cn url).
 # ---------------------------------------------------------------------------
-from penumbra.core.sources.scrape import gov_policy_source as _gp  # noqa: E402
+from omniseek.core.sources.scrape import gov_policy_source as _gp  # noqa: E402
 check("gov_policy: _list_of finds listVO under searchVO AND under data.searchVO",
       _gp._list_of({"searchVO": {"listVO": [{"a": 1}]}}) == [{"a": 1}]
       and _gp._list_of({"data": {"searchVO": {"listVO": [{"b": 2}]}}}) == [{"b": 2}]
@@ -4975,7 +4975,7 @@ check("gov_policy: registered + explicit_only + cn / STRUCTURE+UNWALL+MONITOR fa
 #     (2026-06-20, push2 dropped the mini under multi-agent burst). The GBK `~`-parse + symbol map +
 #     quote→doc are pure fns — golden fixture them offline (real values, NOT ×100; market→url; doc).
 # ---------------------------------------------------------------------------
-from penumbra.core.sources.scrape import eastmoney_source as _em  # noqa: E402
+from omniseek.core.sources.scrape import eastmoney_source as _em  # noqa: E402
 check("eastmoney: _num parses REAL Tencent values (no ÷100) + tolerates '-'/''/None",
       _em._num("1215.00") == 1215.0 and _em._num("-2.02") == -2.02
       and _em._num("-") is None and _em._num("") is None and _em._num(None) is None)
@@ -5024,7 +5024,7 @@ check("eastmoney: registered + explicit_only + finance/cn/STRUCTURE",
 # 32b. market_crypto (CoinGecko spot): _resolve (symbol map + id passthrough, NO guessing a coin
 #      from a bare word) + _to_doc are pure fns → golden fixture offline.
 # ---------------------------------------------------------------------------
-from penumbra.core.sources.api import market_crypto_source as _mc  # noqa: E402
+from omniseek.core.sources.api import market_crypto_source as _mc  # noqa: E402
 check("market_crypto: _resolve maps majors + id passthrough, drops bare unknown words/tickers",
       _mc._resolve("BTC $ETH solana") == [("bitcoin", "BTC"), ("ethereum", "ETH"), ("solana", "SOL")]
       and _mc._resolve("avalanche-2") == [("avalanche-2", "AVAX")]
@@ -5044,7 +5044,7 @@ check("market_crypto: registered + explicit_only + finance/STRUCTURE",
       _mc_a is not None and bool(fetcher._explicit_only_reason(_mc_a)) and _mc_a.domains == ["finance"])
 
 # 32c. wayback (Internet Archive CDX archive lookup): _looks_like_url + _snap_to_doc pure fns.
-from penumbra.core.sources.api import wayback_source as _wb  # noqa: E402
+from omniseek.core.sources.api import wayback_source as _wb  # noqa: E402
 check("wayback: _looks_like_url accepts URL/bare-domain, rejects prose/empty",
       _wb._looks_like_url("https://example.com/page") and _wb._looks_like_url("example.com")
       and not _wb._looks_like_url("what is the capital of france") and not _wb._looks_like_url(""))
@@ -5064,7 +5064,7 @@ check("wayback: registered + explicit_only + RECALL/UNWALL",
 # 33. juejin (Chinese dev articles): the result_model → doc builder is a pure fn — golden fixture
 #     it offline (article url, author, engagement signal; non-article rows drop to None).
 # ---------------------------------------------------------------------------
-from penumbra.core.sources.scrape import juejin_source as _jj  # noqa: E402
+from omniseek.core.sources.scrape import juejin_source as _jj  # noqa: E402
 _jj_doc = _jj._article_to_doc({
     "article_info": {"article_id": "7180", "title": "向量数据库实战", "brief_content": "从0到1",
                      "ctime": "1700000000", "view_count": "6298", "digg_count": "12"},
@@ -5083,7 +5083,7 @@ check("juejin: registered + explicit_only + community/cn/STRUCTURE",
 # 33b. nsf_awards (US NSF research grants): _award_to_doc is a pure fn — golden fixture it
 #      offline (constructed award URL, PI author, $ amount signal; rows missing id/title drop).
 # ---------------------------------------------------------------------------
-from penumbra.core.sources.scrape import nsf_awards_source as _nsf  # noqa: E402
+from omniseek.core.sources.scrape import nsf_awards_source as _nsf  # noqa: E402
 _nsf_doc = _nsf.NSFAwardsAdapter()._award_to_doc({
     "id": "2537281", "title": "Machine Learning for X", "abstractText": "This project develops...",
     "pdPIName": "Jane Roe", "awardeeName": "University Enterprises", "awardeeStateCode": "CA",
@@ -5106,7 +5106,7 @@ check("nsf_awards: registered + explicit_only + funding/us/STRUCTURE",
 #      amount signal, org tag; the no-appl_id row falls back to the projnum URL; a row with
 #      neither appl_id nor project_num drops to None).
 # ---------------------------------------------------------------------------
-from penumbra.core.sources.api import nih_reporter_source as _nih  # noqa: E402
+from omniseek.core.sources.api import nih_reporter_source as _nih  # noqa: E402
 _nih_doc = _nih.NIHReporterAdapter()._project_to_doc({
     "appl_id": 10704321, "project_num": "5R01AI123456-03",
     "project_title": "Mechanisms of Viral Latency",
@@ -5142,7 +5142,7 @@ check("nih_reporter: registered + explicit_only + funding/us/STRUCTURE",
 #      row drops to None). The OA full-text JATS strip is exercised on a tiny inline document
 #      (no network). The fan-out fetch itself (network) is verified live post-deploy.
 # ---------------------------------------------------------------------------
-from penumbra.core.sources.api import europepmc_source as _epmc  # noqa: E402
+from omniseek.core.sources.api import europepmc_source as _epmc  # noqa: E402
 _epmc_ad = _epmc.EuropePMCAdapter()
 _epmc_doc = _epmc_ad._result_to_doc({
     "id": "37001234", "source": "MED", "pmid": "37001234", "pmcid": "PMC10000001",
@@ -5216,7 +5216,7 @@ check("europepmc: registered + keyless + explicit_only + papers/STRUCTURE/lookup
 #      /record payload — golden fixture it offline (name+org title, works signal,
 #      latest date from the deep {"value":...} nesting; a record with no iD drops).
 # ---------------------------------------------------------------------------
-from penumbra.core.sources.api import orcid_source as _orc  # noqa: E402
+from omniseek.core.sources.api import orcid_source as _orc  # noqa: E402
 _orc_rec = {
     "person": {"name": {"given-names": {"value": "Yoshua"},
                         "family-name": {"value": "Bengio"}}},
@@ -5263,7 +5263,7 @@ check("orcid: registered + explicit_only + people/STRUCTURE keyless lookup",
 #      convention (keyword map OR raw WB code, no guess on junk); _series_to_doc
 #      folds one country x indicator series into ONE time-series doc. Pure fns.
 # ---------------------------------------------------------------------------
-from penumbra.core.sources.api import worldbank_stats_source as _wb  # noqa: E402
+from omniseek.core.sources.api import worldbank_stats_source as _wb  # noqa: E402
 check("worldbank_stats: _parse_query maps a keyword + accepts a raw WB code, country first",
       _wb._parse_query("CN unemployment") == ("CN", "SL.UEM.TOTL.ZS")
       and _wb._parse_query("USA NY.GDP.MKTP.CD") == ("USA", "NY.GDP.MKTP.CD")
@@ -5306,7 +5306,7 @@ check("worldbank_stats: registered + explicit_only + keyless data/STRUCTURE look
 #      are pure fns — golden fixture them offline (redirect_url, company author, salary midpoint
 #      signal, location tag; the country-prefix convention; a titleless / urlless row drops).
 # ---------------------------------------------------------------------------
-from penumbra.core.sources.api import adzuna_source as _adz  # noqa: E402
+from omniseek.core.sources.api import adzuna_source as _adz  # noqa: E402
 check("adzuna: _split_country picks a leading country code else defaults to Canada",
       _adz.AdzunaAdapter._split_country("sg data scientist") == ("sg", "data scientist")
       and _adz.AdzunaAdapter._split_country("machine learning") == ("ca", "machine learning")
@@ -5339,7 +5339,7 @@ check("adzuna: registered + keyed + explicit_only + jobs/STRUCTURE lookup",
 #      fixture it offline (constructed author URL, citation signal, h-index metadata; a row
 #      with no authorId/name drops). backend=semantic_scholar (same upstream as the paper source).
 # ---------------------------------------------------------------------------
-from penumbra.core.sources.api import s2_authors_source as _s2a  # noqa: E402
+from omniseek.core.sources.api import s2_authors_source as _s2a  # noqa: E402
 _s2a_doc = _s2a.S2AuthorsAdapter()._author_to_doc({
     "authorId": "1751762", "name": "Yoshua Bengio",
     "hIndex": 213, "paperCount": 812, "citationCount": 576845})
@@ -5364,7 +5364,7 @@ check("s2_authors: registered + explicit_only + people/STRUCTURE; backend=semant
 #      golden fixture them offline (PID url is canonical, affiliation/award split from the
 #      dict|list notes shape; a hit with no name/url drops). backend=dblp.
 # ---------------------------------------------------------------------------
-from penumbra.core.sources.api import dblp_author_source as _dba  # noqa: E402
+from omniseek.core.sources.api import dblp_author_source as _dba  # noqa: E402
 _dba_doc = _dba.DBLPAuthorAdapter()._hit_to_doc({"@score": "9", "@id": "56/953", "info": {
     "author": "Yoshua Bengio", "url": "https://dblp.org/pid/56/953",
     "notes": {"note": [{"@type": "affiliation", "text": "University of Montreal, QC, Canada"},
@@ -5391,7 +5391,7 @@ check("dblp_author: registered + explicit_only + people/STRUCTURE; backend=dblp"
 #      golden fixture them offline (real url, company author, HTML stripped to plain content,
 #      category/location tags; a titleless / urlless row drops).
 # ---------------------------------------------------------------------------
-from penumbra.core.sources.scrape import remotive_source as _rmt  # noqa: E402
+from omniseek.core.sources.scrape import remotive_source as _rmt  # noqa: E402
 _rmt_doc = _rmt.RemotiveAdapter()._job_to_doc({
     "id": 2090887, "title": "Senior ML Engineer", "company_name": "EverAI",
     "category": "Artificial Intelligence", "candidate_required_location": "Worldwide",
@@ -5421,7 +5421,7 @@ check("remotive: registered + explicit_only + jobs/STRUCTURE keyless lookup",
 #      golden fixture it offline (constructed detail URL, closeDate as the deadline date, agency
 #      author, agencyCode/status/cfda tags; a row with no id/title drops; openDate fallback).
 # ---------------------------------------------------------------------------
-from penumbra.core.sources.api import grants_gov_source as _gg  # noqa: E402
+from omniseek.core.sources.api import grants_gov_source as _gg  # noqa: E402
 _gg_doc = _gg.GrantsGovAdapter()._opp_to_doc({
     "id": "358001", "number": "NSF-26-500", "title": "AI Research Institutes",
     "agency": "National Science Foundation", "agencyCode": "NSF",
@@ -5448,7 +5448,7 @@ check("grants_gov: registered + explicit_only + funding/us/STRUCTURE",
 #      golden fixture them offline (price title, perf/$ signal, specs metadata; non-rentable /
 #      priceless rows drop). gpu_pricing now shares the compute cell (no islet).
 # ---------------------------------------------------------------------------
-from penumbra.core.sources.api import vast_ai_source as _vast  # noqa: E402
+from omniseek.core.sources.api import vast_ai_source as _vast  # noqa: E402
 _vast_doc = _vast.VastAIAdapter()._offer_to_doc({
     "id": 32668912, "gpu_name": "RTX 4090", "num_gpus": 1, "gpu_ram": 24576,
     "dph_total": 0.13556, "min_bid": 0.13333, "dlperf": 30.0, "dlperf_per_dphtotal": 221.0,
@@ -5476,7 +5476,7 @@ check("gpu_pricing: now declares compute/STRUCTURE (shares the cell with vast_ai
 #      golden fixture them offline (constructed model url, downloads signal, task tags from the
 #      nested Tasks[] objects, epoch date; a row with no owner/name drops).
 # ---------------------------------------------------------------------------
-from penumbra.core.sources.api import modelscope_source as _ms  # noqa: E402
+from omniseek.core.sources.api import modelscope_source as _ms  # noqa: E402
 # Organization is a DICT on the live API ({FullName, Name, Path, ...}), NOT a bare string — the
 # earlier string fixture masked a real bug: passing the dict as `author` raised pydantic and the
 # adapter returned 0 docs (the modelscope count=0 incident, 2026-06-21). Fixture now matches reality.
@@ -5510,7 +5510,7 @@ check("modelscope: registered + explicit_only + models/STRUCTURE keyless lookup"
 #      flatteners are pure fns — golden fixture them offline (cite url from incident_id, reports
 #      signal, developer/deployer tags, report drill-in handles, ISO date; a row w/o id|title drops).
 # ---------------------------------------------------------------------------
-from penumbra.core.sources.api import ai_incidents_source as _aii  # noqa: E402
+from omniseek.core.sources.api import ai_incidents_source as _aii  # noqa: E402
 _aii_doc = _aii.AIIncidentsAdapter()._incident_to_doc({
     "incident_id": 1535, "title": "Chatbot allegedly harmed a user",
     "date": "2025-07-02", "description": "An AI chatbot reportedly failed to intervene.",
@@ -5557,7 +5557,7 @@ check("ai_incidents: registered + named-drill-only (explicit_only) + safety/STRU
 #      the location-aware median/range from og:description (the public, non-paywalled surface). These
 #      are pure fns golden-fixtured offline on the REAL og:description strings.
 # ---------------------------------------------------------------------------
-from penumbra.core.sources.scrape import levels_fyi_source as _lv  # noqa: E402
+from omniseek.core.sources.scrape import levels_fyi_source as _lv  # noqa: E402
 check("levels_fyi: a role query is detected (not mis-slugged as a company) + country extracted",
       _lv._role("Singapore machine learning engineer total compensation") == ("software-engineer", "machine-learning-engineer")
       and _lv._role("data scientist canada") == ("data-scientist", None)
@@ -5610,7 +5610,7 @@ check("fetcher: _query_overlaps_source matches a CHINESE query to a CHINESE sour
 #     is the whole risk surface. Covers: aweme_info video → doc (title/desc/author/digg/date/cover),
 #     the aweme_mix_info.mix_items[0] path, dropping a non-video card, and the 2483 login-wall → [].
 # ---------------------------------------------------------------------------
-from penumbra.core.sources.walled import douyin_source as _dy  # noqa: E402
+from omniseek.core.sources.walled import douyin_source as _dy  # noqa: E402
 _dy_resp = {"status_code": 0, "status_msg": "", "data": [
     {"type": 1, "aweme_info": {
         "aweme_id": "7378810571505847586",
@@ -5659,10 +5659,10 @@ check("douyin: registered + explicit_only + needs_credentials + cn/UNWALL facets
 #     tls_impersonate (default OFF ⇒ the 143 in-tree sources are byte-identical); a BASE row honors
 #     it but an OVERLAY row (guard_ip, agent-admitted) is FORCED off — the evasive tier is in-tree only.
 # ---------------------------------------------------------------------------
-from penumbra.core import http as _http  # noqa: E402
+from omniseek.core import http as _http  # noqa: E402
 check("http.get_impersonated exists (curl_cffi Chrome-TLS fetch tier, opt-in)",
       callable(getattr(_http, "get_impersonated", None)))
-from penumbra.core.sources.scrape import rss_bundles_source as _rb  # noqa: E402
+from omniseek.core.sources.scrape import rss_bundles_source as _rb  # noqa: E402
 check("rss base: tls_impersonate defaults OFF (existing feeds byte-identical) + a base row can set it",
       _rb.RSSAdapterBase.tls_impersonate is False
       and _rb._RSSBundle("x", "d", ["http://e/f"], tls_impersonate=True).tls_impersonate is True)
@@ -5691,7 +5691,7 @@ check("higheredjobs_cs: un-retired (not the 'retired:' marker), still explicit_o
 #     integrity MONITOR), datagovsg_nonresident_pass_types (SG immigration STRUCTURE), wikicfp_nlp
 #     (NLP CFP discovery, RSS). The parse fns are pure → golden them offline; all explicit_only.
 # ---------------------------------------------------------------------------
-from penumbra.core.sources.api import crossref_retractions_source as _cr  # noqa: E402
+from omniseek.core.sources.api import crossref_retractions_source as _cr  # noqa: E402
 _cr_doc = _cr.CrossrefRetractionsAdapter()._to_document({
     "DOI": "10.1038/s41598-026-59182-7", "title": ["Retraction Note: Deep learning for X"],
     "update-to": [{"DOI": "10.1038/orig-123", "type": "retraction"}],
@@ -5711,7 +5711,7 @@ _cr_a = fetcher.get_adapter("crossref_retractions")
 check("crossref_retractions: registered + explicit_only + STRUCTURE/MONITOR",
       _cr_a is not None and bool(fetcher._explicit_only_reason(_cr_a))
       and "MONITOR" in (_cr_a.modes or []))
-from penumbra.core.sources.api import datagovsg_passes_source as _dg  # noqa: E402
+from omniseek.core.sources.api import datagovsg_passes_source as _dg  # noqa: E402
 _dg_doc = _dg.DataGovSgPassesAdapter()._to_document({
     "_id": 3, "DataSeries": "Employment Pass", "2010": "9.0", "2020": "12.5", "2021": "13.1"})
 check("datagovsg_nonresident_pass_types: _to_document flattens year columns into a per-series doc, latest-first",
@@ -5733,10 +5733,10 @@ check("wikicfp_nlp: registered (rss bundle) + explicit_only + wikicfp http feed"
 # ---------------------------------------------------------------------------
 # 38. CA Provincial Nominee draw scrapers (oinp/bcpnp/aaip): pure HTML-table parse → per-draw docs.
 #     Golden offline with verbatim-shaped table fixtures (structures verified live 2026-06-22).
-#     explicit_only: 省提名, named via the penumbra_search drill (sources=[one], raw=True), kept SEPARATE
+#     explicit_only: 省提名, named via the omniseek_search drill (sources=[one], raw=True), kept SEPARATE
 #     from federal EE (ircc_ee_rounds).
 # ---------------------------------------------------------------------------
-from penumbra.core.sources.scrape import ca_pnp_source as _pnp  # noqa: E402
+from omniseek.core.sources.scrape import ca_pnp_source as _pnp  # noqa: E402
 _oinp_html = ("<h3>PhD Graduate stream</h3><table>"
               "<tr><th>Date issued</th><th>Number of invitations issued</th>"
               "<th>Date profiles created</th><th>Score range</th><th>Notes</th></tr>"
@@ -5784,7 +5784,7 @@ for _pn in ("oinp_invitations", "bcpnp_invitations", "aaip_draws"):
 # 39. nserc_awards (the eye's first CANADIAN funding source): the bulk-CSV pattern's pure halves —
 #     the telos filter (_is_cs_ai) + the row->doc map — golden offline (no 56MB pull in smoke).
 # ---------------------------------------------------------------------------
-from penumbra.core.sources.api import nserc_awards_source as _ns  # noqa: E402
+from omniseek.core.sources.api import nserc_awards_source as _ns  # noqa: E402
 _NS = _ns.NSERCAwardsAdapter()
 _ns_cs = {"ApplicationID": "123", "Name-Nom": "Smith, Jane",
           "Institution-Établissement": "University of Toronto", "ProvinceEN": "Ontario",
@@ -5818,11 +5818,11 @@ check("nserc_awards: registered + explicit_only + ca/funding/STRUCTURE",
 #     (NSERC sciences + SSHRC humanities/comp-ling + CIHR health-AI). The pure halves (the shared AI
 #     filter + each row->doc map; CIHR's long-bilingual-column _pick + _clean) golden offline.
 # ---------------------------------------------------------------------------
-from penumbra.core.sources.api import _bulk_funding as _bf  # noqa: E402
+from omniseek.core.sources.api import _bulk_funding as _bf  # noqa: E402
 check("_bulk_funding.is_ai_relevant: matches an NLP/ML text, rejects an unrelated one",
       _bf.is_ai_relevant("A study of natural language models", "", "") is True
       and _bf.is_ai_relevant("Coral reef biodiversity", "marine ecology", "") is False)
-from penumbra.core.sources.api import sshrc_awards_source as _ss  # noqa: E402
+from omniseek.core.sources.api import sshrc_awards_source as _ss  # noqa: E402
 _ss_doc = _ss.SSHRCAwardsAdapter()._row_to_doc({
     "cle": "9", "Name-Nom": "Doe, Jane", "Role-Rôle": "Applicant", "Amount-Montant": "60000",
     "Fiscal_Year-Exercice_financier": "2024", "Institution": "McGill University",
@@ -5840,7 +5840,7 @@ _ss_a = fetcher.get_adapter("sshrc_awards")
 check("sshrc_awards: registered + explicit_only + ca/funding/STRUCTURE",
       _ss_a is not None and bool(fetcher._explicit_only_reason(_ss_a))
       and _ss_a.regions == ["ca"] and "STRUCTURE" in (_ss_a.modes or []))
-from penumbra.core.sources.api import cihr_grants_source as _ci  # noqa: E402
+from omniseek.core.sources.api import cihr_grants_source as _ci  # noqa: E402
 _ci_row = {"FundingReferenceNumber_NumeroReferenceFinancement": "148379_1",
            "FamilyName_NomFamille": "Nemer", "FirstName_Prenom": "Mona",
            "InstitutionPaidNameEN_NomEtablissementPayeAN": "University of Ottawa",
@@ -5875,7 +5875,7 @@ check("cihr_grants: registered + explicit_only + ca/funding/STRUCTURE",
 #     non-probingly (circuit open OR both daily budgets dry); org_watch / researcher_watch then serve a
 #     stale last-good snapshot (real papers, <=~1d old) instead of a blind [] when OpenAlex is exhausted.
 # ---------------------------------------------------------------------------
-from penumbra.core import _openalex as _oa  # noqa: E402
+from omniseek.core import _openalex as _oa  # noqa: E402
 import time as _t41  # noqa: E402
 _oa_save = {k: (dict(v) if isinstance(v, dict) else v) for k, v in _oa._state.items()}
 try:
@@ -5892,8 +5892,8 @@ finally:
     _oa._state.clear(); _oa._state.update(_oa_save)
 check("openalex.unavailable(): True when both budgets dry, True when circuit open, False otherwise",
       _u_dry is True and _u_circuit is True and _u_ok is False)
-from penumbra.core.sources.api import org_watch_source as _ow  # noqa: E402
-from penumbra.core import cache as _c41  # noqa: E402
+from omniseek.core.sources.api import org_watch_source as _ow  # noqa: E402
+from omniseek.core import cache as _c41  # noqa: E402
 _ow_a = _ow._OrgWatchAdapter("ow_test_lab_x", ["TestLab Unique Phrase"], "t", regions=["global"])
 _c41.set(_c41.make_key("org_watch", "ow_test_lab_x", "lastgood", "TestLab Unique Phrase"),
          [{"id": "https://openalex.org/W777", "title": "Stale Lab Paper",
@@ -5918,8 +5918,8 @@ check("org_watch: OpenAlex DOWN + a last-good snapshot → serve it stamped stal
 
 # --- #3 comment/paragraph-level provenance (normalize.comment_anchor + COMMENT_SCHEMA_KEYS,
 #     and the xhs _flatten emitting a per-comment 'id'). Pure string builder + pure flattener. ---
-from penumbra.core.normalize import comment_anchor as _comment_anchor  # noqa: E402
-from penumbra.core.normalize import COMMENT_SCHEMA_KEYS as _COMMENT_SCHEMA_KEYS  # noqa: E402
+from omniseek.core.normalize import comment_anchor as _comment_anchor  # noqa: E402
+from omniseek.core.normalize import COMMENT_SCHEMA_KEYS as _COMMENT_SCHEMA_KEYS  # noqa: E402
 check("provenance: comment_anchor builds stable URI",
       _comment_anchor("xiaohongshu_cn", "note123", "cmt456") == "xiaohongshu_cn:note123#comment-cmt456")
 check("provenance: comment_anchor with empty id",
@@ -5928,7 +5928,7 @@ check("provenance: COMMENT_SCHEMA_KEYS has id but not ts (adversarial: ts delibe
       "id" in _COMMENT_SCHEMA_KEYS and "ts" not in _COMMENT_SCHEMA_KEYS)
 # xhs _flatten is a pure fn: golden-fixture it offline — the top-level + inline-reply dicts must now
 # carry an 'id' matching COMMENT_SCHEMA_KEYS, and the reply text is '↳'-prefixed.
-from penumbra.core.sources.walled import xiaohongshu_cn_source as _xhscn  # noqa: E402
+from omniseek.core.sources.walled import xiaohongshu_cn_source as _xhscn  # noqa: E402
 _xhs_out: list = []
 _xhscn._flatten([{"user_info": {"nickname": "Ann"}, "content": "top comment", "like_count": 12,
                   "id": "c1", "sub_comments": [
@@ -5944,8 +5944,8 @@ check("provenance: xhs _flatten defaults a missing comment id to '' (never KeyEr
 
 # --- shared imports for the metadata blocks below (merge_rank stamps freshness/relevance_hook;
 #     Document is the fixture type). corroboration/also_in is asserted in the dedup block. ---
-from penumbra.core.rank import merge_rank as _merge_rank  # noqa: E402
-from penumbra.core.normalize import Document as _PDoc  # noqa: E402
+from omniseek.core.rank import merge_rank as _merge_rank  # noqa: E402
+from omniseek.core.normalize import Document as _PDoc  # noqa: E402
 
 # --- #8 source_diversity (fetcher._compute_source_diversity: kind-facet distribution of the ranked
 #     list, absent-perspective advisory, unique-source count). Data-driven, not a hardcoded list. ---
@@ -6015,8 +6015,8 @@ check("author-unify: a non-scholarly doc (no author list) gets NO coauthors (nat
 # --- ① merge-carry (rank.dedup + fetcher._place_scholarly_fields, 2026-07-15): an S2 survivor of an
 #     id-merged work INHERITS the OpenAlex identity — dedup carries the authorships, the lift surfaces
 #     author_ids on the survivor. Closes the "S2 wins dedup -> no identity" coverage gap. ---
-from penumbra.core.rank import dedup as _mc_dedup  # noqa: E402
-from penumbra.core.normalize import mk_signal as _mc_sig  # noqa: E402
+from omniseek.core.rank import dedup as _mc_dedup  # noqa: E402
+from omniseek.core.normalize import mk_signal as _mc_sig  # noqa: E402
 _mc_oa = _PDoc(source="openalex", source_id="W1", url="http://oa", title="Same Paper", content="c",
                signals=_mc_sig("citations", 5, kind="citation", by="t"),
                metadata={"doi": "10.z/z", "openalex_id": "W1", "raw": {"authorships": [
@@ -6061,7 +6061,7 @@ check("merge-carry: a TITLE-based scholarly merge (diff dois, same long title) A
 # --- field_skeleton BUDGETED PROJECTION (cartographer._build, 2026-07-15): the RAW citing sentences
 #     (`contexts`) are kept only for the top nodes (capped + short); the long tail drops them for a lean
 #     has_contexts flag -- so the field-map never DUMPS 150k chars into the tool channel (dogfood #11). ---
-import penumbra.core.cartographer as _cart  # noqa: E402
+import omniseek.core.cartographer as _cart  # noqa: E402
 _fs_works = {f"W{_i}": {"title": f"Paper {_i}", "publication_year": 2025, "cited_by_count": 100 - _i,
                         "_influential": True, "_intents": ["methodology"],
                         "_contexts": [{"snippet": "S" * 600, "intents": ["m"]},
@@ -6080,8 +6080,8 @@ check("field_skeleton budget: only the top _CTX_TOP_NODES keep contexts (the res
 # --- Phase 1 STRUCTURAL PLACEMENT (fetcher._place_graph_presence, 2026-07-15): an OFF-LOOP store read
 #     stamps each scholarly doc with the graph's STORE-MEMORY of its work (edge counts by type), derived
 #     pure-CPU from the doc ids (+ S2 external_ids fallback). Stub the store con + _stored_edges -> offline. ---
-from penumbra.core.recall import store as _g1_store  # noqa: E402
-from penumbra.core.recall import graph as _g1_graph  # noqa: E402
+from omniseek.core.recall import store as _g1_store  # noqa: E402
+from omniseek.core.recall import graph as _g1_graph  # noqa: E402
 _g1_rc, _g1_dis, _g1_se, _g1_ls = (_g1_store._read_con, _g1_store._disabled,
                                    _g1_graph._stored_edges, _g1_graph.load_statements)
 _g1_doc = _PDoc(source="openalex", source_id="W7", url="http://w7", title="Paper 7", content="c",
@@ -6121,7 +6121,7 @@ finally:
      _g1_graph._stored_edges, _g1_graph.load_statements) = _g1_rc, _g1_dis, _g1_se, _g1_ls
 
 # --- Phase 1 READ-BACK (fetcher._place_graph_presence + _compact_judgments, 2026-07-15): the write-side loop
-#     close -- the driver's OWN tier-J statements surface AMBIENT on penumbra_search hits, matched by the hit's
+#     close -- the driver's OWN tier-J statements surface AMBIENT on omniseek_search hits, matched by the hit's
 #     work: ids AND its doc: id (doc-keyed statements are make-or-break). Stub load_statements + _stored_edges. ---
 _jr_rc, _jr_dis, _jr_se, _jr_ls = (_g1_store._read_con, _g1_store._disabled,
                                    _g1_graph._stored_edges, _g1_graph.load_statements)
@@ -6176,7 +6176,7 @@ finally:
 
 # --- Phase 2 SELF-WARM decision (fetcher._selfwarm_candidates, 2026-07-15): which RE-TOUCHED authors earn a
 #     bounded live identity refresh. Pure + testable (gates + revisitation), no loop/network. Stub OA gates. ---
-from penumbra.core import _openalex as _g2_oa  # noqa: E402
+from omniseek.core import _openalex as _g2_oa  # noqa: E402
 _g2_un, _g2_pb = _g2_oa.unavailable, _g2_oa._pace_backlog_s
 def _g2_doc(seen, src="openalex", co=("Ada Lovelace",), extra=None):
     m = {"seen_before": seen, "coauthors": list(co)}
@@ -6257,8 +6257,8 @@ check("relevance_hook: '' in browse mode (empty query → no hook)",
 #     any cross-doc comparison compares DIFFERENT works, the 2026-07-01 dogfood noise. fetcher
 #     collects the survivors' stamps into _meta.conflicts, capped 5, key absent when none).
 #     A shared long title (>=20 normalized chars) is what lands two docs in the same group. ---
-from penumbra.core.normalize import Signal as _Signal42  # noqa: E402
-from penumbra.core.rank import dedup as _dedup42  # noqa: E402
+from omniseek.core.normalize import Signal as _Signal42  # noqa: E402
+from omniseek.core.rank import dedup as _dedup42  # noqa: E402
 # _cf1/_cf2: SAME normalized title → SAME dedup group; different sources; revenue diverges 8M vs 5M
 # (ratio 1.6) → the survivor carries metadata.signal_conflicts (P7: any divergence is stamped +
 # RANKED by ratio; there is no threshold gate anymore, so the ratio value, not a cutoff, is the point).
@@ -6391,19 +6391,19 @@ check("handles: absent from metadata when no affordances detected (no noise)",
 # --- evidence.py ABSORBED into recall.graph (design section 9): the shared TypedDicts (GraphNode /
 #     GraphEdge / ManifestEntry) now live under ONE name in the graph module; the old evidence module
 #     is GONE (one name, one vocabulary — the agent's J-tier overlay uses the SAME shapes). ---
-from penumbra.core.recall.graph import GraphNode as _GNd, GraphEdge as _GEd  # noqa: E402
-from penumbra.core.recall.graph import ManifestEntry as _ME  # noqa: E402
+from omniseek.core.recall.graph import GraphNode as _GNd, GraphEdge as _GEd  # noqa: E402
+from omniseek.core.recall.graph import ManifestEntry as _ME  # noqa: E402
 check("graph: GraphNode / GraphEdge TypedDicts importable from recall.graph (absorbed evidence.py)",
       _GNd is not None and _GEd is not None)
 check("graph: ManifestEntry importable from recall.graph", _ME is not None)
-# The absorption is COMPLETE: penumbra.core.evidence must no longer exist (its shapes retired INTO
+# The absorption is COMPLETE: omniseek.core.evidence must no longer exist (its shapes retired INTO
 # recall.graph). An import attempt must RAISE — the module is deleted, not merely re-exported.
 try:
-    import penumbra.core.evidence as _dead_evidence  # noqa: F401,E402
-    check("graph: penumbra.core.evidence is GONE (absorbed into recall.graph)", False,
-          "penumbra.core.evidence still importable")
+    import omniseek.core.evidence as _dead_evidence  # noqa: F401,E402
+    check("graph: omniseek.core.evidence is GONE (absorbed into recall.graph)", False,
+          "omniseek.core.evidence still importable")
 except ImportError:
-    check("graph: penumbra.core.evidence is GONE (absorbed into recall.graph)", True)
+    check("graph: omniseek.core.evidence is GONE (absorbed into recall.graph)", True)
 
 # --- overlap_count: each excluded_relevant entry carries an 'overlap' key. The Wave-2 cutover moved
 #     the selection loop OUT of search_many and INTO build_search_plan (the one authoritative choke
@@ -6413,39 +6413,39 @@ _fetch_src = _inspect42.getsource(fetcher.build_search_plan)
 check("overlap: excluded_relevant entries carry 'overlap' key",
       '"overlap":' in _fetch_src or "'overlap':" in _fetch_src)
 
-# --- penumbra_gather: registered; the whitelist is now an explicit STATIC dict (mechanism demoted from
+# --- omniseek_gather: registered; the whitelist is now an explicit STATIC dict (mechanism demoted from
 #     the old _init_gather_tools regex scan) of EXACTLY the twelve read-only names ---
-from penumbra.server import penumbra_gather as _eg, _GATHER_TOOLS  # noqa: E402
-check("gather: penumbra_gather is registered as a tool", _eg is not None)
+from omniseek.server import omniseek_gather as _eg, _GATHER_TOOLS  # noqa: E402
+check("gather: omniseek_gather is registered as a tool", _eg is not None)
 # _init_gather_tools is GONE: _GATHER_TOOLS is built once, at import, as explicit data. Assert it is
 # EXACTLY the twelve read-only names (no more, no less) so a new write-tool can't sneak in by pattern.
-# penumbra_graph joined the read-only surface (the unified graph's budgeted projections are pure reads).
+# omniseek_graph joined the read-only surface (the unified graph's budgeted projections are pure reads).
 _GATHER_EXPECT = {
-    "penumbra_sources", "penumbra_search", "penumbra_read", "penumbra_view", "penumbra_transcribe",
-    "penumbra_field_skeleton", "penumbra_paper_recommend", "penumbra_paper_enrich",
-    "penumbra_resolve_identity", "penumbra_coauthors", "penumbra_institution_cohort",
-    "penumbra_graph",
+    "omniseek_sources", "omniseek_search", "omniseek_read", "omniseek_view", "omniseek_transcribe",
+    "omniseek_field_skeleton", "omniseek_paper_recommend", "omniseek_paper_enrich",
+    "omniseek_resolve_identity", "omniseek_coauthors", "omniseek_institution_cohort",
+    "omniseek_graph",
 }
 check("gather: whitelist is EXACTLY the twelve read-only tools",
       set(_GATHER_TOOLS) == _GATHER_EXPECT,
       f"missing={_GATHER_EXPECT - set(_GATHER_TOOLS)} extra={set(_GATHER_TOOLS) - _GATHER_EXPECT}")
 # The write/orchestration surface is excluded BY OMISSION: the sensor dispatcher (run mutates
 # baselines), both curator dispatchers, and gather itself (no recursion) must NOT appear.
-check("gather: whitelist excludes penumbra_sensor / penumbra_curator_view / penumbra_curator_act / penumbra_gather",
-      not ({"penumbra_sensor", "penumbra_curator_view", "penumbra_curator_act", "penumbra_gather"} & set(_GATHER_TOOLS)))
+check("gather: whitelist excludes omniseek_sensor / omniseek_curator_view / omniseek_curator_act / omniseek_gather",
+      not ({"omniseek_sensor", "omniseek_curator_view", "omniseek_curator_act", "omniseek_gather"} & set(_GATHER_TOOLS)))
 
 # --- parsimony tripwires (owner-directive 2026-07-01: 如无必要勿增实体). The FROZEN counts are
 #     deliberate speed bumps: adding a tool/prompt must come with a conscious bump HERE, forcing
 #     the parsimony conversation (does the new entity encode a NEW judgment, or should it fuse
 #     into an existing verb?). Never bump casually. ---
-import penumbra.server as _pt_srv  # noqa: E402
+import omniseek.server as _pt_srv  # noqa: E402
 import inspect as _pt_inspect  # noqa: E402
 _pt_src = _pt_inspect.getsource(_pt_srv)
-_TOOL_COUNT_FROZEN = 18   # 17 + penumbra_statement (P8: the typed-statements WRITE verb; the conscious
+_TOOL_COUNT_FROZEN = 18   # 17 + omniseek_statement (P8: the typed-statements WRITE verb; the conscious
 #                            17 -> 18 bump the graph design named — a statement is a DIRECTED, typed
-#                            RELATION judgment, the general sibling of penumbra_ruling; a SEPARATE tool
-#                            keeps penumbra_graph read-only / gather-safe, and one verb per key-semantics
-#                            (penumbra_ruling for pair-keyed identity, penumbra_statement for everything else).
+#                            RELATION judgment, the general sibling of omniseek_ruling; a SEPARATE tool
+#                            keeps omniseek_graph read-only / gather-safe, and one verb per key-semantics
+#                            (omniseek_ruling for pair-keyed identity, omniseek_statement for everything else).
 _PROMPT_COUNT_FROZEN = 1  # investigate(target, shape): the ONE recipe channel
 check("parsimony tripwire: MCP tool count == frozen 18 (bump consciously or fuse)",
       _pt_src.count(chr(10) + "@mcp.tool()") == _TOOL_COUNT_FROZEN,
@@ -6453,14 +6453,14 @@ check("parsimony tripwire: MCP tool count == frozen 18 (bump consciously or fuse
 check("parsimony tripwire: MCP prompt count == frozen 1 (the one recipe channel)",
       _pt_src.count(chr(10) + "@mcp.prompt()") == _PROMPT_COUNT_FROZEN)
 
-# --- docs-drift tripwire: every penumbra_* token in the PRODUCT-FACING docs must be a REGISTERED tool.
+# --- docs-drift tripwire: every omniseek_* token in the PRODUCT-FACING docs must be a REGISTERED tool.
 #     The native-docs zone is deliberately outside the mirror sync, which is exactly why it needs a
 #     gate: a tool rename that skips the docs otherwise ships stale names to users (caught by hand
 #     2026-07-02 in the mirror's README/tools.md; this makes it mechanical, on BOTH repos since the
 #     mirror sync renames this check's prefix too). CHANGELOG + design/ + recon docs are exempt
 #     (historical narrative is allowed to name retired tools). ---
 import re as _dd_re_mod  # noqa: E402
-_dd_registered = {n for n in dir(_pt_srv) if n.startswith("penumbra_")}
+_dd_registered = {n for n in dir(_pt_srv) if n.startswith("omniseek_")}
 _dd_docs = [ROOT / "README.md", ROOT / "docs" / "tools.md", ROOT / "docs" / "patterns.md",
             ROOT / "docs" / "configuration.md", ROOT / "docs" / "walled-sources.md",
             # public-mirror only (absent here, skipped by the exists() check below): the legal
@@ -6471,7 +6471,7 @@ _dd_stale: list = []
 for _dd_p in _dd_docs:
     if not _dd_p.exists():
         continue
-    for _dd_tok in set(_dd_re_mod.findall(r"penumbra_[a-z_]+", _dd_p.read_text(encoding="utf-8"))):
+    for _dd_tok in set(_dd_re_mod.findall(r"omniseek_[a-z_]+", _dd_p.read_text(encoding="utf-8"))):
         if _dd_tok not in _dd_registered:
             _dd_stale.append(f"{_dd_p.name}:{_dd_tok}")
 check("docs-drift tripwire: product docs name only REGISTERED tools",
@@ -6484,16 +6484,16 @@ check("gather: rejects >10 calls",
 _g_unk = _eg.__wrapped__(calls=[{"tool": "no_such_tool", "args": {}}], wait_s=5)
 check("gather: unknown tool returns per-call error (fail-open)",
       _g_unk["results"][0]["status"] == "errored" and _g_unk["completed"] == 0)
-# A call to penumbra_sources (the simplest real tool) works inside gather
-_g_ls = _eg.__wrapped__(calls=[{"tool": "penumbra_sources", "args": {}}], wait_s=30)
-check("gather: penumbra_sources works inside gather",
+# A call to omniseek_sources (the simplest real tool) works inside gather
+_g_ls = _eg.__wrapped__(calls=[{"tool": "omniseek_sources", "args": {}}], wait_s=30)
+check("gather: omniseek_sources works inside gather",
       _g_ls["results"][0]["status"] == "ok" and "source_names" in _g_ls["results"][0].get("result", {}))
 
 # --- MCP prompts: registered on the server ---
-from penumbra.server import mcp as _mcp43  # noqa: E402
+from omniseek.server import mcp as _mcp43  # noqa: E402
 # FastMCP stores prompts in _prompt_manager; check via the prompt functions themselves
 # The five per-shape prompts collapsed into ONE parameterized investigate(target, shape).
-from penumbra.server import investigate  # noqa: E402
+from omniseek.server import investigate  # noqa: E402
 check("prompt: investigate is callable", callable(investigate))
 _p_person = investigate(target="Test Person", shape="person", context="RL researcher")
 check("prompt: investigate(shape='person') returns a list of message dicts",
@@ -6515,7 +6515,7 @@ check("prompt: investigate(unknown shape) still returns a list (falls back)",
 # ---------------------------------------------------------------------------
 
 # wait_s=0 should return immediately; the call gets status="warming" (its background thread keeps going)
-_g_early = _eg.__wrapped__(calls=[{"tool": "penumbra_sources", "args": {}}], wait_s=0)
+_g_early = _eg.__wrapped__(calls=[{"tool": "omniseek_sources", "args": {}}], wait_s=0)
 check("early-return: wait_s=0 returns a valid result dict",
       "results" in _g_early and "warming" in _g_early)
 # With wait_s=0, the call may or may not finish in time (race), but the result must be either
@@ -6527,26 +6527,26 @@ check("early-return: completed + warming + failed == total",
       _g_early["completed"] + _g_early["warming"] + _g_early["failed"] == _g_early["total"])
 
 # A generous wait_s still lets a fast call finish (warming drains to 0)
-_g_std = _eg.__wrapped__(calls=[{"tool": "penumbra_sources", "args": {}}], wait_s=30)
+_g_std = _eg.__wrapped__(calls=[{"tool": "omniseek_sources", "args": {}}], wait_s=30)
 check("standard-gather: a generous wait_s completes the fast call",
       _g_std["results"][0]["status"] == "ok" and _g_std["warming"] == 0)
 
 # ---------------------------------------------------------------------------
-# 45. Feature 2: Sensor CRUD + diff logic. The four penumbra_sensor_* CRUD tools collapsed into ONE
-#     penumbra_sensor(action=...) dispatcher; route the create/list/delete lifecycle through it (against a
+# 45. Feature 2: Sensor CRUD + diff logic. The four omniseek_sensor_* CRUD tools collapsed into ONE
+#     omniseek_sensor(action=...) dispatcher; route the create/list/delete lifecycle through it (against a
 #     temp-path store, so no real state is touched), then the pure diff logic direct on the store.
 # ---------------------------------------------------------------------------
 import tempfile as _tempfile44  # noqa: E402
 from pathlib import Path as _Path44  # noqa: E402
-import penumbra.core.sensor as _sensmod  # noqa: E402
-from penumbra.core.sensor import compute_diff as _sdiff  # noqa: E402
-from penumbra.server import penumbra_sensor as _esensor  # noqa: E402
+import omniseek.core.sensor as _sensmod  # noqa: E402
+from omniseek.core.sensor import compute_diff as _sdiff  # noqa: E402
+from omniseek.server import omniseek_sensor as _esensor  # noqa: E402
 
 _tmp_sensor = _Path44(_tempfile44.mktemp(suffix=".json"))
 _sens_real_default = _sensmod._DEFAULT_STATE_PATH
 try:
-    # penumbra_sensor's dispatcher builds SensorStore() with the module-default path; point it at the temp
-    # file so the CRUD lifecycle runs through the real tool without touching ~/.penumbra state.
+    # omniseek_sensor's dispatcher builds SensorStore() with the module-default path; point it at the temp
+    # file so the CRUD lifecycle runs through the real tool without touching ~/.omniseek state.
     _sensmod._DEFAULT_STATE_PATH = _tmp_sensor
     _c1 = _esensor.__wrapped__(action="create", query="test query alpha", sources=["arxiv"])
     check("sensor: action=create returns a sensor with an id",
@@ -6605,18 +6605,18 @@ finally:
     _sensmod._DEFAULT_STATE_PATH = _sens_real_default
     _tmp_sensor.unlink(missing_ok=True)
 
-# The sensor MCP surface is the single penumbra_sensor dispatcher.
-check("sensor: penumbra_sensor dispatcher is registered", callable(_esensor))
+# The sensor MCP surface is the single omniseek_sensor dispatcher.
+check("sensor: omniseek_sensor dispatcher is registered", callable(_esensor))
 
 # ---------------------------------------------------------------------------
-# 45b. Dispatch routing (wave-2 surface): penumbra_search / penumbra_read / penumbra_view each collapsed several
+# 45b. Dispatch routing (wave-2 surface): omniseek_search / omniseek_read / omniseek_view each collapsed several
 #      old tools into ONE verb that auto-routes. Prove the ROUTING (which internal path fires) with
 #      source-level monkeypatches, never a live fetch — the old per-tool entry points are gone, so the
 #      only guarantee left is that the dispatch args reproduce each old path.
 # ---------------------------------------------------------------------------
 
-# --- penumbra_search: raw buckets vs the drill idiom vs the default ranked list, + staleness translation ---
-# S4c-2: penumbra_search is now an ASYNC tool body that AWAITS the async twins (asearch_ranked / asearch_many)
+# --- omniseek_search: raw buckets vs the drill idiom vs the default ranked list, + staleness translation ---
+# S4c-2: omniseek_search is now an ASYNC tool body that AWAITS the async twins (asearch_ranked / asearch_many)
 # for the ranked / buckets routes and runs the sync drill (fetch_one_with_diag) OFF the loop. So the
 # route fakes patch the ASYNC twins (+ the sync drill) and the tool is driven the way mcp awaits it
 # (asyncio.run), not via a .__wrapped__ sync body (which no longer exists post-flip).
@@ -6655,31 +6655,31 @@ try:
     fetcher.is_enabled_by_profile = lambda s: True  # the drill checks the profile first
 
     _srch_seen.clear()
-    _r_default = _srch_aio.run(_srv2.penumbra_search(query="q"))
+    _r_default = _srch_aio.run(_srv2.omniseek_search(query="q"))
     check("search route: default (raw=False) -> the ranked path (dedup+rank into one list)",
           _srch_seen.get("path") == "ranked" and "documents" in _r_default)
 
     _srch_seen.clear()
-    _r_buckets = _srch_aio.run(_srv2.penumbra_search(query="q", raw=True, sources=["a", "b"]))
+    _r_buckets = _srch_aio.run(_srv2.omniseek_search(query="q", raw=True, sources=["a", "b"]))
     check("search route: raw=True + many sources -> the per-source buckets path",
           _srch_seen.get("path") == "buckets" and "results" in _r_buckets)
 
     _srch_seen.clear()
-    _r_drill = _srch_aio.run(_srv2.penumbra_search(query="q", raw=True, sources=["only"], full=True))
-    check("search route: raw=True + exactly one source -> the drill (old penumbra_fetch) path",
+    _r_drill = _srch_aio.run(_srv2.omniseek_search(query="q", raw=True, sources=["only"], full=True))
+    check("search route: raw=True + exactly one source -> the drill (old omniseek_fetch) path",
           _srch_seen.get("path") == "drill" and _r_drill.get("source") == "only")
 
     # staleness enum -> engine fresh / cache_only booleans (the MCP-surface translation).
     _srch_seen.clear()
-    _srch_aio.run(_srv2.penumbra_search(query="q", staleness="fresh"))
+    _srch_aio.run(_srv2.omniseek_search(query="q", staleness="fresh"))
     check("search staleness: 'fresh' -> fresh=True, cache_only=False",
           _srch_seen.get("fresh") is True and _srch_seen.get("cache_only") is False)
     _srch_seen.clear()
-    _srch_aio.run(_srv2.penumbra_search(query="q", staleness="cache_only"))
+    _srch_aio.run(_srv2.omniseek_search(query="q", staleness="cache_only"))
     check("search staleness: 'cache_only' -> fresh=False, cache_only=True",
           _srch_seen.get("fresh") is False and _srch_seen.get("cache_only") is True)
     _srch_seen.clear()
-    _r_unknown = _srch_aio.run(_srv2.penumbra_search(query="q", staleness="bogus"))
+    _r_unknown = _srch_aio.run(_srv2.omniseek_search(query="q", staleness="bogus"))
     check("search staleness: an unknown value falls back to cached_ok + adds a note",
           _srch_seen.get("fresh") is False and _srch_seen.get("cache_only") is False
           and "bogus" in (_r_unknown.get("note") or ""))
@@ -6689,39 +6689,39 @@ finally:
     fetcher.fetch_one_with_diag = _srch_real["fetch_one_with_diag"]
     fetcher.is_enabled_by_profile = _srch_real["is_enabled_by_profile"]
 
-# --- penumbra_read: a document target routes to docreader; a plain URL routes to the URL reader ---
+# --- omniseek_read: a document target routes to docreader; a plain URL routes to the URL reader ---
 _read_real = {"read_document": docreader.read_document,
               "fetch_url_with_reason": fetcher.fetch_url_with_reason}
 _read_seen: dict = {}
 try:
     docreader.read_document = (lambda target, **kw: (_read_seen.__setitem__("path", "document")
                                                      or {"source": "doc", "text": "stub"}))
-    # penumbra_read's URL branch now calls fetch_url_with_reason -> (doc, reason); the spy returns a tuple.
+    # omniseek_read's URL branch now calls fetch_url_with_reason -> (doc, reason); the spy returns a tuple.
     fetcher.fetch_url_with_reason = (lambda target: (_read_seen.__setitem__("path", "url") or (None, None)))
 
     _read_seen.clear()
-    _rd_doc = _srv2.penumbra_read.__wrapped__(target="penumbra-inbox/deck.pptx")
+    _rd_doc = _srv2.omniseek_read.__wrapped__(target="omniseek-inbox/deck.pptx")
     check("read route: a .pptx target routes to the document reader",
           _read_seen.get("path") == "document" and _rd_doc.get("source") == "doc")
     _read_seen.clear()
-    _rd_pdf = _srv2.penumbra_read.__wrapped__(target="https://x.example.com/paper.pdf?dl=1")
+    _rd_pdf = _srv2.omniseek_read.__wrapped__(target="https://x.example.com/paper.pdf?dl=1")
     check("read route: a .pdf URL (even with ?query) routes to the document reader",
           _read_seen.get("path") == "document")
     _read_seen.clear()
-    _rd_url = _srv2.penumbra_read.__wrapped__(target="https://example.com/some/article")
+    _rd_url = _srv2.omniseek_read.__wrapped__(target="https://example.com/some/article")
     check("read route: a plain (non-document) URL routes to the URL reader",
           _read_seen.get("path") == "url" and _rd_url.get("url") == "https://example.com/some/article")
 finally:
     docreader.read_document = _read_real["read_document"]
     fetcher.fetch_url_with_reason = _read_real["fetch_url_with_reason"]
 
-# --- penumbra_view: kind="auto" routes .pdf->document, a video URL->video, a plain image list->images ---
-from penumbra.core import vframes as _vframes  # noqa: E402
+# --- omniseek_view: kind="auto" routes .pdf->document, a video URL->video, a plain image list->images ---
+from omniseek.core import vframes as _vframes  # noqa: E402
 _view_real = {"view_images": docreader.view_images, "view_image_urls": docreader.view_image_urls,
               "video_frames": _vframes.video_frames}
 _view_seen: dict = {}
 try:
-    # Each fake returns a dict with NO images/sheet, so penumbra_view returns it verbatim (its post-call
+    # Each fake returns a dict with NO images/sheet, so omniseek_view returns it verbatim (its post-call
     # guard is `if error or not (images or sheet): return r`) -> the marker proves which branch fired.
     docreader.view_images = (lambda target, **kw: (_view_seen.__setitem__("path", "document")
                                                    or {"branch": "document"}))
@@ -6731,15 +6731,15 @@ try:
                                                    or {"branch": "video"}))
 
     _view_seen.clear()
-    _v_doc = _srv2.penumbra_view.__wrapped__(target="penumbra-inbox/slides.pdf")
+    _v_doc = _srv2.omniseek_view.__wrapped__(target="omniseek-inbox/slides.pdf")
     check("view route: a .pdf target routes to the document (figures) branch",
           _view_seen.get("path") == "document" and _v_doc.get("branch") == "document")
     _view_seen.clear()
-    _v_vid = _srv2.penumbra_view.__wrapped__(target="https://www.youtube.com/watch?v=abc123")
+    _v_vid = _srv2.omniseek_view.__wrapped__(target="https://www.youtube.com/watch?v=abc123")
     check("view route: a youtube URL routes to the video (frames) branch",
           _view_seen.get("path") == "video" and _v_vid.get("branch") == "video")
     _view_seen.clear()
-    _v_img = _srv2.penumbra_view.__wrapped__(target="https://cdn.example.com/a.jpg, https://cdn.example.com/b.png")
+    _v_img = _srv2.omniseek_view.__wrapped__(target="https://cdn.example.com/a.jpg, https://cdn.example.com/b.png")
     check("view route: a plain image-URL list routes to the images branch",
           _view_seen.get("path") == "images" and _v_img.get("branch") == "images")
 finally:
@@ -6750,12 +6750,12 @@ finally:
 # ---------------------------------------------------------------------------
 # 46. Deploy seam: native deploy files must provision the SAME artifacts the
 #     synced code reads (the 2026-06-28 naming round renamed the token file;
-#     this seam broke penumbra's docker CI when the full sync arrived).
+#     this seam broke the public mirror's docker CI when the full sync arrived).
 # ---------------------------------------------------------------------------
 _ep_path = ROOT / "deploy" / "docker-entrypoint.sh"
-_sh_path = ROOT / "src" / "penumbra" / "serve_http.py"
+_sh_path = ROOT / "src" / "omniseek" / "serve_http.py"
 if _ep_path.exists() and _sh_path.exists():
-    _tok_name = "penumbra_http.json"
+    _tok_name = "omniseek_http.json"
     check("deploy seam: serve_http reads the token file the docker entrypoint writes",
           _tok_name in _sh_path.read_text(encoding="utf-8")
           and _tok_name in _ep_path.read_text(encoding="utf-8"))
@@ -6776,7 +6776,7 @@ if _SERVICES_PATH.exists():
     import importlib.util as _il_svc  # noqa: E402
     import io as _io_svc  # noqa: E402
     import contextlib as _ctx_svc  # noqa: E402
-    _svc_spec = _il_svc.spec_from_file_location("penumbra_services_smoke", _SERVICES_PATH)
+    _svc_spec = _il_svc.spec_from_file_location("omniseek_services_smoke", _SERVICES_PATH)
     _svc = _il_svc.module_from_spec(_svc_spec)
     _svc_spec.loader.exec_module(_svc)  # top-level code is guarded by __main__, so import is a no-op
     # gen_plists(write=False) diffs every committed plist against build_plist(row) and returns 0 iff
@@ -6784,7 +6784,7 @@ if _SERVICES_PATH.exists():
     # per-file stdout so the smoke log stays readable; only the return code is the tripwire.
     with _ctx_svc.redirect_stdout(_io_svc.StringIO()):
         _plist_rc = _svc.gen_plists(write=False)
-    _committed_plists = sorted(_SCRIPTS_DIR.glob("com.penumbra.*.plist"))
+    _committed_plists = sorted(_SCRIPTS_DIR.glob("com.omniseek.*.plist"))
     check("plist-drift: every committed .plist is byte-identical to services.py's registry (gen-plists clean)",
           _plist_rc == 0 and len(_committed_plists) > 0,
           f"gen_plists rc={_plist_rc}, {len(_committed_plists)} plist(s)")
@@ -6797,8 +6797,8 @@ if _SERVICES_PATH.exists():
     check("plist-drift: no registry row schedules with StartInterval (banned: drifts across sleep; use start_calendar)",
           _interval_rows == [], f"rows still using StartInterval: {_interval_rows}")
     # The four retired sentinels: plists + scripts GONE from scripts/, labels GONE from the registry.
-    _SENTINEL_LABELS = ["com.penumbra.sentinel.immigration", "com.penumbra.sentinel.invest",
-                        "com.penumbra.sentinel.research", "com.penumbra.sentinel.residency"]
+    _SENTINEL_LABELS = ["com.omniseek.sentinel.immigration", "com.omniseek.sentinel.invest",
+                        "com.omniseek.sentinel.research", "com.omniseek.sentinel.residency"]
     _SENTINEL_SCRIPTS = ["signpost_sentinel.py", "invest_sentinel.py",
                         "research_sentinel.py", "residency_sentinel.py"]
     _live_plists = {p.name for p in _committed_plists}
@@ -6829,7 +6829,7 @@ if _SERVICES_PATH.exists():
 import sqlite3 as _sqlite47  # noqa: E402
 import tempfile as _tf47  # noqa: E402
 import threading as _thr47  # noqa: E402
-from penumbra.core.recall import graph as _graph  # noqa: E402
+from omniseek.core.recall import graph as _graph  # noqa: E402
 
 # Point store.DB_PATH at a FRESH temp db (a new dir so it never collides with §34's index), re-enable
 # the layer, and DROP the main thread's cached read-connection so store._read_con() reconnects to THIS
@@ -6944,7 +6944,7 @@ try:
 
     # (g) a not_same RULING (the one J exception; persisted as config, applied by views) suppresses the
     #     exploratory title_fp candidate for that pair. Load it via a monkeypatched RULINGS_PATH (temp
-    #     file), so no real ~/.penumbra state is touched. not_same_as (J) beats same_as (A).
+    #     file), so no real ~/.omniseek state is touched. not_same_as (J) beats same_as (A).
     _grulings = Path(_tf47.mkdtemp()) / "graph_rulings.json"
     _lo, _hi = sorted((_nid_a, _nid_b))
     _grulings.write_text(json.dumps(
@@ -6966,17 +6966,17 @@ finally:
     _rstore._disabled = _g_disabled_prev
     _rstore._local = _g_local_prev
 
-# (h) penumbra_graph is registered as a tool AND present in the gather whitelist (the 12th read-only tool);
+# (h) omniseek_graph is registered as a tool AND present in the gather whitelist (the 12th read-only tool);
 #     the whitelist exactness was already asserted above — here confirm membership + registration.
-from penumbra.server import penumbra_graph as _eye_graph47  # noqa: E402
-check("graph: penumbra_graph is registered as a tool", callable(_eye_graph47))
-check("graph: penumbra_graph is present in _GATHER_TOOLS (the 12th read-only tool)",
-      "penumbra_graph" in _GATHER_TOOLS and len(_GATHER_TOOLS) == 12)
+from omniseek.server import omniseek_graph as _eye_graph47  # noqa: E402
+check("graph: omniseek_graph is registered as a tool", callable(_eye_graph47))
+check("graph: omniseek_graph is present in _GATHER_TOOLS (the 12th read-only tool)",
+      "omniseek_graph" in _GATHER_TOOLS and len(_GATHER_TOOLS) == 12)
 # (i) guidance layer (built != discoverable): the server instructions must point the agent at the
 #     schema's real home — a source-inspect string check that 'recall.graph' is named in the brief.
-import penumbra.server as _srv47  # noqa: E402
+import omniseek.server as _srv47  # noqa: E402
 check("graph: server instructions mention recall.graph (the guidance-layer pointer to the schema)",
-      "recall.graph" in _srv47._PENUMBRA_INSTRUCTIONS)
+      "recall.graph" in _srv47._OMNISEEK_INSTRUCTIONS)
 
 
 # ---------------------------------------------------------------------------
@@ -7015,7 +7015,7 @@ try:
     # not. maybe_ingest imports `fetcher` + `profile` locally, so patch on those exact modules.
     _WALLED = {"walled_src"}
     fetcher.is_walled_source = lambda name: name in _WALLED
-    from penumbra.core import profile as _p2prof  # the SAME module object maybe_ingest imports
+    from omniseek.core import profile as _p2prof  # the SAME module object maybe_ingest imports
     _p2_prof_in_writer = _p2prof.remember_walled_retrievals
     _p2prof.remember_walled_retrievals = lambda: False   # opt-in OFF by default (walled stays private)
 
@@ -7273,8 +7273,8 @@ finally:
 #     taps enqueue and we drain->_apply synchronously on the temp db (no daemon), the §48 idiom.
 #     Verbs + docs-drift (items 5/6) are pure source/registration checks, AFTER the temp-db finally.
 # ---------------------------------------------------------------------------
-import penumbra.core.cartographer as _cartg49  # noqa: E402 — importing the tap registers its mints
-import penumbra.core.enrich as _enr49  # noqa: E402 — importing the tap registers its mints
+import omniseek.core.cartographer as _cartg49  # noqa: E402 — importing the tap registers its mints
+import omniseek.core.enrich as _enr49  # noqa: E402 — importing the tap registers its mints
 
 _t49_db_prev = _rstore.DB_PATH
 _t49_disabled_prev = _rstore._disabled
@@ -7483,24 +7483,24 @@ finally:
     _rstore._disabled = _t49_disabled_prev
     _rstore._local = _t49_local_prev
 
-# (5) VERBS: _PENUMBRA_VERBS is the capability index penumbra_sources surfaces. It must carry EXACTLY the 18 tool
-#     names (P3 added penumbra_ruling; P8 added penumbra_statement), every value NON-EMPTY and DERIVED (== that
+# (5) VERBS: _OMNISEEK_VERBS is the capability index omniseek_sources surfaces. It must carry EXACTLY the 18 tool
+#     names (P3 added omniseek_ruling; P8 added omniseek_statement), every value NON-EMPTY and DERIVED (== that
 #     tool's docstring first line, not hand-written prose that could drift). It drifted once already (it
 #     was a hand-maintained dict); recompute each tool's docstring first line independently and demand
 #     equality, so a docstring edit or a renamed tool that skips the dict is caught.
-from penumbra.server import _PENUMBRA_VERBS as _t49_verbs  # noqa: E402
+from omniseek.server import _OMNISEEK_VERBS as _t49_verbs  # noqa: E402
 _t49_tool_fns = (
-    _srv.penumbra_sources, _srv.penumbra_search, _srv.penumbra_read, _srv.penumbra_view,
-    _srv.penumbra_field_skeleton, _srv.penumbra_paper_recommend, _srv.penumbra_paper_enrich,
-    _srv.penumbra_resolve_identity, _srv.penumbra_coauthors, _srv.penumbra_institution_cohort,
-    _srv.penumbra_transcribe, _srv.penumbra_graph, _srv.penumbra_gather, _srv.penumbra_sensor, _srv.penumbra_ruling,
-    _srv.penumbra_statement, _srv.penumbra_curator_view, _srv.penumbra_curator_act,
+    _srv.omniseek_sources, _srv.omniseek_search, _srv.omniseek_read, _srv.omniseek_view,
+    _srv.omniseek_field_skeleton, _srv.omniseek_paper_recommend, _srv.omniseek_paper_enrich,
+    _srv.omniseek_resolve_identity, _srv.omniseek_coauthors, _srv.omniseek_institution_cohort,
+    _srv.omniseek_transcribe, _srv.omniseek_graph, _srv.omniseek_gather, _srv.omniseek_sensor, _srv.omniseek_ruling,
+    _srv.omniseek_statement, _srv.omniseek_curator_view, _srv.omniseek_curator_act,
 )
 _t49_expect_names = {fn.__name__ for fn in _t49_tool_fns}
-check("verbs: _PENUMBRA_VERBS has EXACTLY the 18 tool names",
+check("verbs: _OMNISEEK_VERBS has EXACTLY the 18 tool names",
       set(_t49_verbs.keys()) == _t49_expect_names and len(_t49_verbs) == 18,
       f"missing={_t49_expect_names - set(_t49_verbs)} extra={set(_t49_verbs) - _t49_expect_names}")
-check("verbs: every _PENUMBRA_VERBS value is non-empty",
+check("verbs: every _OMNISEEK_VERBS value is non-empty",
       all(bool((v or '').strip()) for v in _t49_verbs.values()),
       f"empty: {sorted(k for k, v in _t49_verbs.items() if not (v or '').strip())}")
 _t49_verb_drift = []
@@ -7509,39 +7509,39 @@ for _t49_fn in _t49_tool_fns:
     _t49_first = ((_t49_raw.__doc__ or "").strip().splitlines() or [""])[0]
     if _t49_verbs.get(_t49_fn.__name__) != _t49_first:
         _t49_verb_drift.append(_t49_fn.__name__)
-check("verbs: each _PENUMBRA_VERBS value == that tool's docstring first line (derivation, not prose)",
+check("verbs: each _OMNISEEK_VERBS value == that tool's docstring first line (derivation, not prose)",
       not _t49_verb_drift, f"drifted: {_t49_verb_drift}")
 
 # (6) DOCS-DRIFT EXTENSION: the existing docs-drift tripwire (above) scans the product-facing docs for
-#     penumbra_* tokens against registered tool names. Extend the SAME discipline to the _PENUMBRA_INSTRUCTIONS
+#     omniseek_* tokens against registered tool names. Extend the SAME discipline to the _OMNISEEK_INSTRUCTIONS
 #     string (the brief the server ships to every agent on connect): a renamed tool that updates the
 #     tools but not the instructions would otherwise teach a stale name. One legitimate NON-tool token
 #     is exempted (with justification); anything else undeclared is drift the tripwire must catch.
-# EXEMPTIONS — legitimate penumbra_* tokens in _PENUMBRA_INSTRUCTIONS that are NOT (and should not be) tools:
-#   • penumbra_fetch — a RETIRED tool named on PURPOSE to teach the idiom that replaced it ("the drill
-#     idiom sources=[one]+raw=True+full=True replaces the old penumbra_fetch"). Naming a retired tool in
+# EXEMPTIONS — legitimate omniseek_* tokens in _OMNISEEK_INSTRUCTIONS that are NOT (and should not be) tools:
+#   • omniseek_fetch — a RETIRED tool named on PURPOSE to teach the idiom that replaced it ("the drill
+#     idiom sources=[one]+raw=True+full=True replaces the old omniseek_fetch"). Naming a retired tool in
 #     explanatory narrative is the same carve-out the docs-drift tripwire already grants CHANGELOG/
 #     design/recon docs; the mention is pedagogy, not a live reference.
-_t49_instr_exempt = {"penumbra_fetch"}
-_t49_dd_registered = {n for n in dir(_srv) if n.startswith("penumbra_")}
-_t49_instr_tokens = set(_dd_re_mod.findall(r"penumbra_[a-z_]+", _srv._PENUMBRA_INSTRUCTIONS))
+_t49_instr_exempt = {"omniseek_fetch"}
+_t49_dd_registered = {n for n in dir(_srv) if n.startswith("omniseek_")}
+_t49_instr_tokens = set(_dd_re_mod.findall(r"omniseek_[a-z_]+", _srv._OMNISEEK_INSTRUCTIONS))
 _t49_instr_stale = sorted(_t49_instr_tokens - _t49_dd_registered - _t49_instr_exempt)
-check("docs-drift (instructions): every penumbra_* token in _PENUMBRA_INSTRUCTIONS is a REGISTERED tool "
+check("docs-drift (instructions): every omniseek_* token in _OMNISEEK_INSTRUCTIONS is a REGISTERED tool "
       "(or an explicit exemption)",
       not _t49_instr_stale, f"stale: {_t49_instr_stale}")
 
 
 # ---------------------------------------------------------------------------
 # 50. P3 — the ruling verb + the relations tap + voices/between views (design "P3 shipped
-#     2026-07-02"). penumbra_ruling is the identity-ruling WRITE channel (create | list | delete) the
+#     2026-07-02"). omniseek_ruling is the identity-ruling WRITE channel (create | list | delete) the
 #     working policy applies; the relations tap mints the PRODUCT the three layers return (never the
 #     200-works counting pool); voices collapses a doc set to distinct upstream voices (the
 #     independence counter, counting EVIDENCE never absence); between traces bounded connection paths.
-#     Rulings-file checks monkeypatch _graph.RULINGS_PATH to a temp file (no real ~/.penumbra state);
+#     Rulings-file checks monkeypatch _graph.RULINGS_PATH to a temp file (no real ~/.omniseek state);
 #     the integration + voices + between checks use a FRESH temp-db (the §47/§48/§49 pattern, restore
 #     in finally); the builder + vocabulary + tripwire checks are pure source/registration checks.
 # ---------------------------------------------------------------------------
-import penumbra.core.relations as _rel50  # noqa: E402 — importing the tap registers its mints
+import omniseek.core.relations as _rel50  # noqa: E402 — importing the tap registers its mints
 
 # (1-4) RULINGS STORE (save_ruling / load_rulings / delete_ruling) on a monkeypatched temp path.
 _r50_rulings_prev = _graph.RULINGS_PATH
@@ -7830,49 +7830,49 @@ finally:
         except Exception:  # noqa: BLE001
             break
 
-# (10) penumbra_ruling TOOL: create/list/delete happy path + unknown action + missing-args errors. Call
+# (10) omniseek_ruling TOOL: create/list/delete happy path + unknown action + missing-args errors. Call
 #      the unwrapped body (past @_threaded) like the other server-level checks; monkeypatch a temp
 #      rulings file so no real state is touched.
 _r50_tool_prev = _graph.RULINGS_PATH
 _graph.RULINGS_PATH = Path(_tf47.mkdtemp()) / "graph_rulings.json"
 try:
-    _er = _srv.penumbra_ruling.__wrapped__
+    _er = _srv.omniseek_ruling.__wrapped__
     _er_create = _er(action="create", src="person:openalex:A_T2", dst="person:openalex:A_T1",
                      verdict="same", note="tool smoke")
-    check("penumbra_ruling (10): action=create records the ruling (created True, normalized src < dst)",
+    check("omniseek_ruling (10): action=create records the ruling (created True, normalized src < dst)",
           _er_create.get("created") is True
           and _er_create.get("ruling", {}).get("src") == "person:openalex:A_T1"
           and _er_create.get("ruling", {}).get("dst") == "person:openalex:A_T2")
     _er_list = _er(action="list")
-    check("penumbra_ruling (10): action=list returns the ruling + count",
+    check("omniseek_ruling (10): action=list returns the ruling + count",
           _er_list.get("count") == 1 and _er_list.get("rulings", [{}])[0].get("verdict") == "same")
     _er_del = _er(action="delete", src="person:openalex:A_T1", dst="person:openalex:A_T2")
-    check("penumbra_ruling (10): action=delete removes it (deleted True) and the list empties",
+    check("omniseek_ruling (10): action=delete removes it (deleted True) and the list empties",
           _er_del.get("deleted") is True and _er(action="list").get("count") == 0)
-    check("penumbra_ruling (10): an unknown action returns an error dict",
+    check("omniseek_ruling (10): an unknown action returns an error dict",
           "error" in _er(action="frobnicate"))
-    check("penumbra_ruling (10): create with a bad verdict returns an error dict (ValueError mapped)",
+    check("omniseek_ruling (10): create with a bad verdict returns an error dict (ValueError mapped)",
           "error" in _er(action="create", src="a", dst="b", verdict="maybe"))
-    check("penumbra_ruling (10): delete without src/dst returns an error dict",
+    check("omniseek_ruling (10): delete without src/dst returns an error dict",
           "error" in _er(action="delete", src="", dst=""))
 finally:
     _graph.RULINGS_PATH = _r50_tool_prev
 
 # (11) TRIPWIRES (the conscious 16 -> 17 bump lives in the parsimony + §49 verbs checks above; here
 #      confirm the gather whitelist did NOT gain the write verb, and the docs-drift POSITIVE presence
-#      of penumbra_ruling in the product docs + the instructions).
-check("p3 tripwire: _GATHER_TOOLS is still 12 and EXCLUDES penumbra_ruling (a write verb; gather is read-only)",
-      len(_GATHER_TOOLS) == 12 and "penumbra_ruling" not in _GATHER_TOOLS)
-check("p3 tripwire: penumbra_ruling is a REGISTERED tool", callable(_srv.penumbra_ruling))
-# docs-drift POSITIVE: penumbra_ruling must be NAMED in the product-facing README and in the server
+#      of omniseek_ruling in the product docs + the instructions).
+check("p3 tripwire: _GATHER_TOOLS is still 12 and EXCLUDES omniseek_ruling (a write verb; gather is read-only)",
+      len(_GATHER_TOOLS) == 12 and "omniseek_ruling" not in _GATHER_TOOLS)
+check("p3 tripwire: omniseek_ruling is a REGISTERED tool", callable(_srv.omniseek_ruling))
+# docs-drift POSITIVE: omniseek_ruling must be NAMED in the product-facing README and in the server
 # instructions (a renamed/removed write verb that skips the docs would otherwise teach a stale
 # surface — the same drift the negative tripwire guards, in the presence direction).
 _r50_readme = (ROOT / "README.md")
 _r50_readme_txt = _r50_readme.read_text(encoding="utf-8") if _r50_readme.exists() else ""
-check("p3 docs-drift (presence): penumbra_ruling is named in README.md (the product-facing tool surface)",
-      "penumbra_ruling" in _r50_readme_txt)
-check("p3 docs-drift (presence): penumbra_ruling is named in _PENUMBRA_INSTRUCTIONS (the connect-time brief)",
-      "penumbra_ruling" in _srv._PENUMBRA_INSTRUCTIONS)
+check("p3 docs-drift (presence): omniseek_ruling is named in README.md (the product-facing tool surface)",
+      "omniseek_ruling" in _r50_readme_txt)
+check("p3 docs-drift (presence): omniseek_ruling is named in _OMNISEEK_INSTRUCTIONS (the connect-time brief)",
+      "omniseek_ruling" in _srv._OMNISEEK_INSTRUCTIONS)
 
 
 # ---------------------------------------------------------------------------
@@ -7887,8 +7887,8 @@ check("p3 docs-drift (presence): penumbra_ruling is named in _PENUMBRA_INSTRUCTI
 #     finally). The agent-visible signal_conflicts stamp must stay BYTE-IDENTICAL (the STABILITY
 #     contract): the tap rides a PRIVATE _conflict_pairs key the fetcher pops.
 # ---------------------------------------------------------------------------
-import penumbra.core.sensor as _sen51  # noqa: E402 — importing the tap registers its mints
-from penumbra.core.sensor import Sensor as _Sensor51  # noqa: E402
+import omniseek.core.sensor as _sen51  # noqa: E402 — importing the tap registers its mints
+from omniseek.core.sensor import Sensor as _Sensor51  # noqa: E402
 
 # (1) OBSERVED BUILDER golden fixture (PURE, no network): a fake sensor + 3 new (source, source_id)
 #     pairs -> ONE sensor node + 3 observed edges (M, sensor:diff, attrs run_at). An EMPTY diff mints
@@ -7917,9 +7917,9 @@ check("p4 observed builder: an EMPTY diff mints NOTHING (no sensor node, no edge
 # (2) run_sensor INTEGRATION: a monkeypatched search_ranked returning 2 NEW docs -> the tap enqueues
 #     the observed batch (captured by monkeypatching writer.enqueue_graph). Then a tap failure
 #     (enqueue raising) NEVER breaks the run summary (fail-open). Uses a temp SensorStore path so no
-#     real ~/.penumbra/state is touched; WRITES_ENABLED forced True so the tap actually fires.
+#     real ~/.omniseek/state is touched; WRITES_ENABLED forced True so the tap actually fires.
 _s51_fetch_prev = _fetcher51 = None
-import penumbra.core.fetcher as _fetcher51  # noqa: E402
+import omniseek.core.fetcher as _fetcher51  # noqa: E402
 _s51_search_prev = _fetcher51.search_ranked
 _s51_enq_prev = _recall.writer.enqueue_graph
 _s51_writes_prev = _recall.writer.WRITES_ENABLED
@@ -7985,7 +7985,7 @@ check("p7 conflicts builder: a divergence record -> ONE A-tier conflicts edge, a
                                   "values": {"reddit": 120, "hackernews": 900}, "ratio": 7.5})
 # the STABILITY contract: dedup's agent-visible signal_conflicts stamp is BYTE-IDENTICAL to pre-P4.
 # Reuse the §42 fixture shape: two same-title docs, different sources, one signal diverging >50%.
-from penumbra.core.normalize import Signal as _Sig51  # noqa: E402
+from omniseek.core.normalize import Signal as _Sig51  # noqa: E402
 _s51_ct = "Conflict Stability Shared Long Normalized Title For P Four Contract"
 _s51_ca = _PDoc(source="s1", source_id="c1", url="http://a", title=_s51_ct, content="x",
                 signals={"revenue": _Sig51(value=5000000.0, kind="other", computed_by="source:s1",
@@ -8165,7 +8165,7 @@ finally:
 #     overturned). A ZERO-WRITE view: candidates are DERIVED at query time from the live vec index
 #     (durability — storing embedding neighbors would freeze one model's judgment into the wall), and
 #     NO collapse policy includes align:embed (the razor — "similar" vs "same" is a judgment). The
-#     ladder is view=similar PROPOSES (top-k by RANK) -> the agent verifies -> penumbra_ruling records ->
+#     ladder is view=similar PROPOSES (top-k by RANK) -> the agent verifies -> omniseek_ruling records ->
 #     the working policy collapses.
 #
 #     VEC FIXTURE (stated honestly per the spec): the real embedding path is NOT offline-viable on a
@@ -8277,9 +8277,9 @@ check("p5 tripwire: align:embed is in NO policy method-set (CONSERVATIVE / WORKI
 check("p5 tripwire: align:embed is NOT a declared tap method (a view-only proposal label, never minted)",
       "align:embed" not in _graph.declared_vocabulary()["methods"])
 
-# (9) SURFACE: penumbra_graph now exposes the 7 views; the unknown-view error names all 7; the connect-time
-#     brief carries the 7-view chain; P5 added no tool (the live count below is 18 since P8's penumbra_statement).
-_s52_eg = _srv.penumbra_graph.__wrapped__ if hasattr(_srv.penumbra_graph, "__wrapped__") else _srv.penumbra_graph
+# (9) SURFACE: omniseek_graph now exposes the 7 views; the unknown-view error names all 7; the connect-time
+#     brief carries the 7-view chain; P5 added no tool (the live count below is 18 since P8's omniseek_statement).
+_s52_eg = _srv.omniseek_graph.__wrapped__ if hasattr(_srv.omniseek_graph, "__wrapped__") else _srv.omniseek_graph
 _S52_VIEWS = ("find", "stats", "neighborhood", "between", "voices", "since", "similar")
 _s52_unknown = _s52_eg(view="frobnicate")
 check("p5 surface: an unknown view error names all SEVEN views (find..similar)",
@@ -8292,15 +8292,15 @@ check("p5 surface: view=since routes to the since view (its date-parse error, no
       and "since requires date" in _s52_eg(view="since", args={"anchor": "sensor:x", "date": "garbage"})["error"])
 check("p5 surface: view=similar routes to the similar view (its anchor error, not unknown-view)",
       "error" in _s52_eg(view="similar", args={"anchor": "work:openalex:W1"}))
-check("p5 surface: _PENUMBRA_INSTRUCTIONS carries the 7-view chain (find -> ... -> since -> similar)",
-      "find -> stats -> neighborhood -> between -> voices -> since -> similar" in _srv._PENUMBRA_INSTRUCTIONS)
-# P5 itself added no tool (since/similar are penumbra_graph views, not new tools). The LIVE _PENUMBRA_VERBS count
-# is now 18 (P8 added penumbra_statement, the only wave since to add a verb); the gather whitelist stays 12,
-# and penumbra_graph is still a registered read-only tool.
-from penumbra.server import _PENUMBRA_VERBS as _s52_verbs  # noqa: E402
-check("p5 surface: since/similar are penumbra_graph views not new tools (the live verb count is 18, "
-      "unchanged BY P5; the +1 over P3's 17 is P8's penumbra_statement)",
-      len(_s52_verbs) == 18 and len(_GATHER_TOOLS) == 12 and "penumbra_graph" in _GATHER_TOOLS)
+check("p5 surface: _OMNISEEK_INSTRUCTIONS carries the 7-view chain (find -> ... -> since -> similar)",
+      "find -> stats -> neighborhood -> between -> voices -> since -> similar" in _srv._OMNISEEK_INSTRUCTIONS)
+# P5 itself added no tool (since/similar are omniseek_graph views, not new tools). The LIVE _OMNISEEK_VERBS count
+# is now 18 (P8 added omniseek_statement, the only wave since to add a verb); the gather whitelist stays 12,
+# and omniseek_graph is still a registered read-only tool.
+from omniseek.server import _OMNISEEK_VERBS as _s52_verbs  # noqa: E402
+check("p5 surface: since/similar are omniseek_graph views not new tools (the live verb count is 18, "
+      "unchanged BY P5; the +1 over P3's 17 is P8's omniseek_statement)",
+      len(_s52_verbs) == 18 and len(_GATHER_TOOLS) == 12 and "omniseek_graph" in _GATHER_TOOLS)
 
 
 # ---------------------------------------------------------------------------
@@ -8313,8 +8313,8 @@ check("p5 surface: since/similar are penumbra_graph views not new tools (the liv
 #     the fail-open push are tested below against their NEW homes, and the full P9 job registry has
 #     its own section §57.)
 # ---------------------------------------------------------------------------
-import penumbra.core.sensor as _sen53  # noqa: E402
-from penumbra.core.sensor import Sensor as _Sensor53, SensorStore as _Store53, due_sensors as _due53  # noqa: E402
+import omniseek.core.sensor as _sen53  # noqa: E402
+from omniseek.core.sensor import Sensor as _Sensor53, SensorStore as _Store53, due_sensors as _due53  # noqa: E402
 from datetime import datetime as _dt53, timezone as _tz53, timedelta as _td53  # noqa: E402
 
 # _SCHEDULE_SECONDS is the canonical schedule table; unknown degrades to daily.
@@ -8392,8 +8392,8 @@ finally:
 #      sensor.start_scheduler to jobs.start_scheduler (the ONE fleet scheduler; the sensor tick is
 #      now job row #1 there). Test the guards on their new home. Monkeypatch the gate off + reset the
 #      idempotence flag.
-import penumbra.core.jobs as _jobs53  # noqa: E402
-import penumbra.core.recall.writer as _wr53  # noqa: E402
+import omniseek.core.jobs as _jobs53  # noqa: E402
+import omniseek.core.recall.writer as _wr53  # noqa: E402
 _writes_real53 = _wr53.WRITES_ENABLED
 _started_real53 = _jobs53._scheduler_started
 _shipped_real53 = _jobs53._shipped_registered
@@ -8455,10 +8455,10 @@ finally:
 
 # (4) the sensor _bark_push is FAIL-OPEN: an ABSENT credentials file is a silent no-op (never raises),
 #     so a deployment with no bark.json simply pushes nothing. P9 lifted the push impl into
-#     penumbra.core.notify (sensor._bark_push now delegates there), so the creds path lives on notify.
+#     omniseek.core.notify (sensor._bark_push now delegates there), so the creds path lives on notify.
 #     Point that path at a missing file and confirm both the notify primitive AND the sensor alias
 #     no-op without raising.
-import penumbra.core.notify as _notify53  # noqa: E402
+import omniseek.core.notify as _notify53  # noqa: E402
 # 2026-08-12: Bark was DELETED from the fleet (unreachable from the mini while every alarm went to
 # it alone, so alarms were written, counted, and delivered nowhere). WeCom is the one channel, and
 # the push now REPORTS delivery: the alarm lane must be able to tell a dead siren from a live one,
@@ -8503,7 +8503,7 @@ check("p6-A delete: no in-repo file references sensor_runner (docs + scripts swe
 
 
 # ---------------------------------------------------------------------------
-# 54. P6 (B) — penumbra_graph's stable ABI (design "P6": open families get open ABIs). penumbra_graph is the
+# 54. P6 (B) — omniseek_graph's stable ABI (design "P6": open families get open ABIs). omniseek_graph is the
 #     eye's ONE open-family verb: its views grow with the model and their params are disjoint, so it
 #     is now (view, args) with the views as a REGISTRY (a decorator; the dispatcher, valid-view list,
 #     per-view arg validation, and the self-description all DERIVE from it). Cover dispatch_view's
@@ -8511,7 +8511,7 @@ check("p6-A delete: no in-repo file references sensor_runner (docs + scripts swe
 #     the 7 routes), the FROZEN-SCHEMA tripwire (the tool body's params are exactly {view, args}), and
 #     the gather path. The view FUNCTIONS' own behavior is covered by sections 47-52 (unchanged here).
 # ---------------------------------------------------------------------------
-from penumbra.core.recall import graph as _g54  # noqa: E402
+from omniseek.core.recall import graph as _g54  # noqa: E402
 _S54_VIEWS = ("find", "stats", "neighborhood", "between", "voices", "since", "similar")
 
 # (1) the registry IS the valid-view list: exactly the seven decorated functions, each a callable.
@@ -8578,7 +8578,7 @@ check("p6-B dispatch: the temp echo-view was removed (the registry is restored t
 # (8) EACH of the seven dispatches to ITS function (not the unknown-view error). Drive them against a
 #     disabled store so every view fail-opens to its own empty/own-error shape with zero network; the
 #     point is ROUTING, not data. stats through dispatch must EQUAL stats() called directly.
-import penumbra.core.recall.store as _rstore54  # noqa: E402
+import omniseek.core.recall.store as _rstore54  # noqa: E402
 _disabled_prev54 = _rstore54._disabled
 try:
     _rstore54._disabled = True  # every view's _con() -> None -> fail-open to its empty shape
@@ -8605,22 +8605,22 @@ try:
 finally:
     _rstore54._disabled = _disabled_prev54
 
-# (9) THE FROZEN-SCHEMA TRIPWIRE: the penumbra_graph TOOL body's parameters are EXACTLY {view, args}.
+# (9) THE FROZEN-SCHEMA TRIPWIRE: the omniseek_graph TOOL body's parameters are EXACTLY {view, args}.
 #     Future views + future per-view params are data growth in the registry, never schema growth here
 #     (a new flat param sneaking onto the tool signature is the regression this catches).
-_eg54 = _srv.penumbra_graph.__wrapped__ if hasattr(_srv.penumbra_graph, "__wrapped__") else _srv.penumbra_graph
+_eg54 = _srv.omniseek_graph.__wrapped__ if hasattr(_srv.omniseek_graph, "__wrapped__") else _srv.omniseek_graph
 _eg54_params = set(_insp.signature(_eg54).parameters.keys())
-check("p6-B FROZEN SCHEMA: the penumbra_graph tool body's params are exactly {view, args}",
+check("p6-B FROZEN SCHEMA: the omniseek_graph tool body's params are exactly {view, args}",
       _eg54_params == {"view", "args"}, f"got {sorted(_eg54_params)}")
 check("p6-B surface: the tool body just delegates to dispatch_view (view-only call returns the catalog)",
       "views" in _eg54(view="") and set(_eg54(view="")["views"].keys()) == set(_S54_VIEWS))
 
-# (10) GATHER PATH still reaches penumbra_graph through the (view, args) ABI: the whitelisted body accepts
+# (10) GATHER PATH still reaches omniseek_graph through the (view, args) ABI: the whitelisted body accepts
 #      both a bare {view} and a {view, args} shape (gather spreads **args, incl. a nested args dict).
-_eg_gather54 = _GATHER_TOOLS["penumbra_graph"]
-check("p6-B gather: {view: stats} reaches penumbra_graph through the gather whitelist",
+_eg_gather54 = _GATHER_TOOLS["omniseek_graph"]
+check("p6-B gather: {view: stats} reaches omniseek_graph through the gather whitelist",
       "node_kinds" in _eg_gather54(view="stats"))
-check("p6-B gather: {view: voices, args:{...}} reaches penumbra_graph through the gather whitelist",
+check("p6-B gather: {view: voices, args:{...}} reaches omniseek_graph through the gather whitelist",
       _eg_gather54(view="voices", args={"doc_ids": []}).get("n_voices") == 0)
 
 
@@ -8643,8 +8643,8 @@ check("p6-B gather: {view: voices, args:{...}} reaches penumbra_graph through th
 #     float32 vectors and exercises the REAL matrix/cosine machinery. FRESH temp-db, restore in finally.
 # ---------------------------------------------------------------------------
 import numpy as _np55  # noqa: E402
-import penumbra.core.recall.writer as _wr55  # noqa: E402
-import penumbra.core.recall.embed as _emb55  # noqa: E402
+import omniseek.core.recall.writer as _wr55  # noqa: E402
+import omniseek.core.recall.embed as _emb55  # noqa: E402
 
 # (W1) DIVERGENCE ORDERING + INF + CAP-BY-RANK (pure rank.dedup; no db). One group, cross-source,
 #      several diverging numeric signals: they surface RANKED by ratio DESC, a zero-vs-nonzero pair is
@@ -8890,7 +8890,7 @@ finally:
     _emb55.MODEL_VERSION = _s55_emb_mv_prev
     _emb55.DIM = _s55_emb_dim_prev
 
-# (6) SEARCH-PATH TRIPWIRE: vec_thin is a DELIBERATE NON-GOAL for penumbra_search's recall arm. Assert
+# (6) SEARCH-PATH TRIPWIRE: vec_thin is a DELIBERATE NON-GOAL for omniseek_search's recall arm. Assert
 #     STRUCTURALLY that the recall query path (store.vector_search + store.search — the vec consumers
 #     search uses) does not CONSULT vec_thin / the thin matrix; only graph.similar's engine
 #     (similar_neighbors) does. Check the EXECUTABLE code (comments + the docstring stripped), so a
@@ -8928,7 +8928,7 @@ check("p7 W3 tripwire: the recall search arm never references vec_thin / thin ma
 
 # ---------------------------------------------------------------------------
 # 57. P9 (the fleet rebuild around the in-process scheduler): the P6 sensor scheduler generalized
-#     into a JOB REGISTRY (penumbra.core.jobs) that runs every scheduled piece of the eye's self-
+#     into a JOB REGISTRY (omniseek.core.jobs) that runs every scheduled piece of the eye's self-
 #     maintenance as a declarative row on ONE daemon loop in the writer process, plus the ONE external
 #     sentinel (scripts/sentinel.py) that restarts the organ + its browsers. The derived architecture:
 #     what stays OUTSIDE the organ is only "must this still run when the organ is dead?" -> the
@@ -8938,7 +8938,7 @@ check("p7 W3 tripwire: the recall search arm never references vec_thin / thin ma
 #     (heartbeat published, failing job isolated + Barked once per cooldown, serial order); the
 #     transplant cores (source-health N_CONSECUTIVE, log rotation, digest no-op, warmer importable);
 #     the sentinel offline (dead healthz -> kickstart, stale heartbeat -> distinct alarm, maintenance
-#     pauses CDP heal, and the ISOLATION tripwire that it imports zero penumbra); and the deletion sweep.
+#     pauses CDP heal, and the ISOLATION tripwire that it imports zero omniseek); and the deletion sweep.
 # ---------------------------------------------------------------------------
 import importlib.util as _il57  # noqa: E402
 import io as _io57  # noqa: E402
@@ -8947,7 +8947,7 @@ import contextlib as _ctx57  # noqa: E402
 import tempfile as _tf57  # noqa: E402
 import time as _time57  # noqa: E402
 from datetime import datetime as _dt57  # noqa: E402
-import penumbra.core.jobs as _J57  # noqa: E402
+import omniseek.core.jobs as _J57  # noqa: E402
 
 # (1) SCHEDULE PARSER — every valid form parses to the right kind; garbage raises ValueError.
 check("p9 parser: every:900s -> interval(900s)",
@@ -9048,7 +9048,7 @@ try:
     _J57.register_shipped_jobs()
     # offmachine-audit joined the fleet 2026-08-11: the daily content check on every off-machine
     # backup destination, added after the brain mirror died silently for fifteen days.
-    _EXPECT_ROWS = {"sensors", "source-health", "source-health-fast", "wewerss-probe",
+    _EXPECT_ROWS = {"sensors", "source-health", "source-health-fast", "wechat2rss-probe",
                     "session-warmer", "log-rotation", "nserc-prime", "curator", "source-audit",
                     "digest", "offmachine-audit"}
     check("p9 registry tripwire: the shipped rows are exactly the P9 fleet",
@@ -9077,9 +9077,9 @@ finally:
 #      OUTLASTS the monthly cadence; an empty/raised pull keeps the existing cache (never caches [],
 #      fail-open). Stub the 56MB fetch + the cache write so the job body is pure + networkless. This
 #      is the job that decouples nserc's ~96s bulk refetch from the 90s-bounded query path.
-import penumbra.core.infra_jobs as _NPj  # noqa: E402
-from penumbra.core.sources.api import nserc_awards_source as _NPsrc  # noqa: E402
-from penumbra.core import cache as _NPcache  # noqa: E402
+import omniseek.core.infra_jobs as _NPj  # noqa: E402
+from omniseek.core.sources.api import nserc_awards_source as _NPsrc  # noqa: E402
+from omniseek.core import cache as _NPcache  # noqa: E402
 _NP_saved: dict = {}
 _NP_of, _NP_os = _NPsrc.NSERCAwardsAdapter._fetch_filter_build, _NPcache.set_docs
 try:
@@ -9105,7 +9105,7 @@ _state_real57, _hb_real57 = _J57.STATE_PATH, _J57.HEARTBEAT_PATH
 _hb_producer_real57 = _J57._scheduler_heartbeat
 _hb_error_real57 = _J57._scheduler_contract_error
 _reg_real57c, _shipped_real57c = dict(_J57._REGISTRY), _J57._shipped_registered
-import penumbra.core.notify as _notify57  # noqa: E402
+import omniseek.core.notify as _notify57  # noqa: E402
 _bark_real57 = _notify57.alert
 try:
     _J57.STATE_PATH = _st57_dir / "scheduler-state.json"
@@ -9115,7 +9115,7 @@ try:
         artifacts=_J57.load_contract_artifacts(),
         build_id="a" * 40,
         host_boot_id="smoke-boot-session",
-        penumbra_pid=123,
+        omniseek_pid=123,
     )
     _J57._scheduler_contract_error = None
     _J57._scheduler_heartbeat.publish_starting()
@@ -9189,7 +9189,7 @@ finally:
 
 # (4) TRANSPLANT CORES — the hard-won lessons survive the move. Import the transplanted module and
 #     exercise the mechanical halves offline (no live browsing / network).
-import penumbra.core.infra_jobs as _IJ57  # noqa: E402
+import omniseek.core.infra_jobs as _IJ57  # noqa: E402
 # (4a) source-health N_CONSECUTIVE: _health_track only surfaces a source as newly-down at EXACTLY the
 #      threshold-th consecutive fail (a transient single fail never alarms), and a recovery clears it.
 _fails57, _alerts57, _down57, _rec57 = {}, {}, [], []
@@ -9245,8 +9245,8 @@ check("p9 transplant (wewerss): check_wechat2rss_feeds importable; 4 feeds + the
 _SENTINEL_PATH = _SCRIPTS_DIR / "sentinel.py"
 if _SENTINEL_PATH.exists():
     # (5a) ISOLATION TRIPWIRE (the whole reason the sentinel is separate): its AST import list names
-    #      ONLY stdlib + _sentinel_common + services -- NEVER penumbra.* (it must work when the organ's
-    #      code is broken). Assert over the parsed imports, so a future `import penumbra...` fails here.
+    #      ONLY stdlib + _sentinel_common + services -- NEVER omniseek.* (it must work when the organ's
+    #      code is broken). Assert over the parsed imports, so a future `import omniseek...` fails here.
     import ast as _ast57
     _sent_tree = _ast57.parse(_SENTINEL_PATH.read_text(encoding="utf-8"))
     _sent_imports = set()
@@ -9256,21 +9256,21 @@ if _SENTINEL_PATH.exists():
                 _sent_imports.add(_a.name.split(".")[0])
         elif isinstance(_n, _ast57.ImportFrom) and _n.module:
             _sent_imports.add(_n.module.split(".")[0])
-    _sent_penumbra = sorted(m for m in _sent_imports if m == "penumbra")
-    check("p9 sentinel isolation: it imports ZERO penumbra.* (self-contained: works when the organ is broken)",
-          not _sent_penumbra, f"imports penumbra: {_sent_penumbra}")
+    _sent_omniseek = sorted(m for m in _sent_imports if m == "omniseek")
+    check("p9 sentinel isolation: it imports ZERO omniseek.* (self-contained: works when the organ is broken)",
+          not _sent_omniseek, f"imports omniseek: {_sent_omniseek}")
     _ALLOWED_SENTINEL_IMPORTS = {"__future__", "json", "os", "subprocess", "sys", "time",
                                  "urllib", "pathlib", "_sentinel_common", "services", "ast"}
     _sent_unexpected = sorted(_sent_imports - _ALLOWED_SENTINEL_IMPORTS)
     check("p9 sentinel isolation: its import list is exactly stdlib + _sentinel_common + services",
           not _sent_unexpected, f"unexpected imports: {_sent_unexpected}")
 
-    # Load it as a module (scripts on path). Its ROOT=~/penumbra-mcp bootstrap is harmless here; we
+    # Load it as a module (scripts on path). Its ROOT=~/omniseek-mcp bootstrap is harmless here; we
     # only need the module object to stub + call the duty functions.
     _sys_path_saved57 = list(sys.path)
     sys.path.insert(0, str(_SCRIPTS_DIR))
     try:
-        _sspec = _il57.spec_from_file_location("penumbra_sentinel_smoke", _SENTINEL_PATH)
+        _sspec = _il57.spec_from_file_location("omniseek_sentinel_smoke", _SENTINEL_PATH)
         _SENT = _il57.module_from_spec(_sspec)
         with _ctx57.redirect_stdout(_io57.StringIO()):
             _sspec.loader.exec_module(_SENT)
@@ -9280,12 +9280,12 @@ if _SENTINEL_PATH.exists():
         check("p9 sentinel: module loads with the scripts dir on path", False, str(_sent_exc))
     if _sent_loaded:
         check("p9 sentinel: module loaded + read the CDP instances from services.py",
-              len(_SENT.CDP_INSTANCES) >= 1 and _SENT.EYE_SERVICE == "com.penumbra.organ.eye-http")
-        # NOTE: `penumbra` is already in sys.modules (this IS the penumbra smoke), so a sys.modules
+              len(_SENT.CDP_INSTANCES) >= 1 and _SENT.EYE_SERVICE == "com.omniseek.organ.eye-http")
+        # NOTE: `omniseek` is already in sys.modules (this IS the omniseek smoke), so a sys.modules
         # check cannot prove isolation here; the AST import-list tripwire above is the authoritative
-        # guarantee that the sentinel's OWN code imports zero penumbra. What we CAN assert cheaply: the
+        # guarantee that the sentinel's OWN code imports zero omniseek. What we CAN assert cheaply: the
         # module exposes the three self-contained duties + reimplements its own CDP probe (not the
-        # eye's cdp_health), i.e. it did not grow a penumbra dependency to do its job.
+        # eye's cdp_health), i.e. it did not grow a omniseek dependency to do its job.
         check("p9 sentinel: the three self-contained duties are present + it reimplements its own probes",
               all(callable(getattr(_SENT, fn, None)) for fn in
                   ("_check_eye_http", "_check_scheduler", "_check_cdp", "_cdp_alive", "_http_ok")))
@@ -9295,7 +9295,7 @@ if _SENTINEL_PATH.exists():
 else:
     _SENT = None
     # Repo-adaptive (the 46b convention): the sentinel is eye-side launchd infra. Where the fleet
-    # registry (services.py) exists, its absence is a hard failure; the penumbra mirror ships no
+    # registry (services.py) exists, its absence is a hard failure; the public mirror ships no
     # launchd fleet, so there this is a legitimate absence, not a miss.
     if _SERVICES_PATH.exists():
         check("p9 sentinel: scripts/sentinel.py exists", False, str(_SENTINEL_PATH))
@@ -9378,9 +9378,9 @@ if _SENT is not None:
 #     itself + provenance/lineage comments (which name the OLD module bare, e.g. "transplanted from
 #     digest.py", exactly as §53 keeps its sensor_runner comment). Also: the plist tripwire now expects
 #     exactly 7 committed plists == exactly 7 registry rows, byte-identical, and SERVICES.md exists.
-_P9_DELETED_SCRIPTS = ["cdp_keepalive.py", "cron_watchdog.py", "penumbra_http_watchdog.py",
+_P9_DELETED_SCRIPTS = ["cdp_keepalive.py", "cron_watchdog.py", "omniseek_http_watchdog.py",
                        "wewerss_watchdog.py", "session_warmer.py", "curator.py", "digest.py",
-                       "source_audit.py", "warm_intro.py", "penumbra_prewarm.py", "rsshub_watchdog.py"]
+                       "source_audit.py", "warm_intro.py", "omniseek_prewarm.py", "rsshub_watchdog.py"]
 _p9_still_there = [s for s in _P9_DELETED_SCRIPTS if (_SCRIPTS_DIR / s).exists()]
 check("p9 deletion: all 11 transplanted/retired scripts are gone from scripts/",
       not _p9_still_there, f"still present: {_p9_still_there}")
@@ -9401,13 +9401,13 @@ for _pp in ROOT.rglob("*"):
 check("p9 deletion: no in-repo file invokes a deleted script as scripts/<name>.py (provenance comments allowed)",
       not _p9_path_refs, f"still referenced: {_p9_path_refs}")
 # the sentinel row's script IS present (the ONE new external script). Repo-adaptive (the 46b
-# convention): only where the fleet registry exists; the penumbra mirror ships no launchd fleet.
+# convention): only where the fleet registry exists; the public mirror ships no launchd fleet.
 if _SERVICES_PATH.exists():
     check("p9 deletion: the new external sentinel script (scripts/sentinel.py) IS present",
           (_SCRIPTS_DIR / "sentinel.py").exists())
 # plist tripwire: exactly 7 committed plists, exactly 7 registry rows, byte-identical, SERVICES.md fresh.
 if _SERVICES_PATH.exists():
-    _p9_committed = sorted(_SCRIPTS_DIR.glob("com.penumbra.*.plist"))
+    _p9_committed = sorted(_SCRIPTS_DIR.glob("com.omniseek.*.plist"))
     with _ctx_svc.redirect_stdout(_io_svc.StringIO()):
         _p9_plist_rc = _svc.gen_plists(write=False)
     check("p9 plist tripwire: exactly 7 committed plists == exactly 7 registry rows, all byte-identical",
@@ -9415,9 +9415,9 @@ if _SERVICES_PATH.exists():
           f"{len(_p9_committed)} plists, {len(_svc.REGISTRY)} rows, gen rc={_p9_plist_rc}")
     # the registry is exactly the 7-row fleet (organ + 4 cdp + sentinel + state-backup); legacy pruned.
     _p9_labels = {r["label"] for r in _svc.REGISTRY}
-    _EXPECT_LABELS = {"com.penumbra.organ.eye-http", "com.penumbra.cdp.cn-forums", "com.penumbra.cdp.xhs",
-                      "com.penumbra.cdp.xhs-cn", "com.penumbra.cdp.douyin", "com.penumbra.infra.sentinel",
-                      "com.penumbra.infra.state-backup"}
+    _EXPECT_LABELS = {"com.omniseek.organ.eye-http", "com.omniseek.cdp.cn-forums", "com.omniseek.cdp.xhs",
+                      "com.omniseek.cdp.xhs-cn", "com.omniseek.cdp.douyin", "com.omniseek.infra.sentinel",
+                      "com.omniseek.infra.state-backup"}
     check("p9 plist tripwire: the registry is exactly the 7-row fleet (organ + 4 cdp + sentinel + state-backup)",
           _p9_labels == _EXPECT_LABELS)
     check("p9 plist tripwire: the pre-migration `legacy` field is pruned from every registry row",
@@ -9439,9 +9439,9 @@ import httpx as _httpx58  # noqa: E402
 import json as _json58  # noqa: E402
 import tempfile as _tf58  # noqa: E402
 from pathlib import Path as _Path58  # noqa: E402
-from penumbra.core.sources import _mcp as _mcp58  # noqa: E402
-from penumbra.core.sources import _declarative as _decl58  # noqa: E402
-from penumbra.core import cache as _cache58  # noqa: E402
+from omniseek.core.sources import _mcp as _mcp58  # noqa: E402
+from omniseek.core.sources import _declarative as _decl58  # noqa: E402
+from omniseek.core import cache as _cache58  # noqa: E402
 
 # A scripted transport stub: monkeypatch _mcp.http._get_client() (the ONE network touchpoint the
 # client uses, via a streaming POST) to REPLAY a recorded JSON-RPC exchange, so the REAL _post
@@ -9847,9 +9847,9 @@ if _ctx7_ad58 is not None:
 
 # --- (4) Foundry draft: submit -> candidate carries it -> packet surfaces it -> stage_commit ------
 # All against a temp candidates store so no real curator state is touched.
-import penumbra.core.curator.candidates as _cand58  # noqa: E402
-from penumbra.core.curator import apply as _capply58  # noqa: E402
-import penumbra.server as _srv58  # noqa: E402
+import omniseek.core.curator.candidates as _cand58  # noqa: E402
+from omniseek.core.curator import apply as _capply58  # noqa: E402
+import omniseek.server as _srv58  # noqa: E402
 _c58_dir = _Path58(_tf58.mkdtemp())
 _c58_real = (_cand58.STATE_DIR, _cand58.CANDIDATES_PATH, _cand58.SEEN_HOSTS_PATH, _cand58.TRIED_HOSTS_PATH)
 try:
@@ -9867,7 +9867,7 @@ try:
                     "expect": {"title": "X"}},
         "probe_summary": "probed live via the stub; 1 doc, fields populated",
     }
-    _sub58 = _srv58.penumbra_curator_act.__wrapped__(
+    _sub58 = _srv58.omniseek_curator_act.__wrapped__(
         verb="submit", name="drafted_mcp", urls=["https://ext/mcp"], mode="STRUCTURE",
         domain="meta", family="other", draft=_draft58)
     _cid58 = _sub58["candidate_id"]
@@ -9880,8 +9880,8 @@ try:
           _row58.get("state") == "new")
 
     # packet surfaces the draft verbatim (even before a probe builds the evidence packet).
-    _pkt58 = _srv58.penumbra_curator_view.__wrapped__(what="packet", candidate_id=_cid58)
-    check("58.4 foundry: penumbra_curator_view(packet) surfaces the draft verbatim",
+    _pkt58 = _srv58.omniseek_curator_view.__wrapped__(what="packet", candidate_id=_cid58)
+    check("58.4 foundry: omniseek_curator_view(packet) surfaces the draft verbatim",
           _pkt58.get("draft", {}).get("row", {}).get("name") == "drafted_mcp"
           and _pkt58["draft"]["fixture"]["expect"]["title"] == "X")
 
@@ -9897,11 +9897,11 @@ try:
 
     # submit WITHOUT draft is unchanged (the control): no draft field, prepare falls back to the
     # evidence-derived row (None here, since no probe ran), NOT a draft.
-    _sub58b = _srv58.penumbra_curator_act.__wrapped__(
+    _sub58b = _srv58.omniseek_curator_act.__wrapped__(
         verb="submit", name="plain_rss", urls=["https://feed/x"], mode="MONITOR",
         domain="news", family="rss")
     _row58b = _cand58.get(_sub58b["candidate_id"])
-    _pkt58b = _srv58.penumbra_curator_view.__wrapped__(what="packet", candidate_id=_sub58b["candidate_id"])
+    _pkt58b = _srv58.omniseek_curator_view.__wrapped__(what="packet", candidate_id=_sub58b["candidate_id"])
     _case58b = _capply58.prepare_owner_case(_row58b)
     check("58.4 foundry: submit WITHOUT draft is unchanged (no draft key, no from_draft)",
           _row58b.get("draft") is None and "draft" not in _pkt58b
@@ -9914,15 +9914,15 @@ finally:
     (_cand58.STATE_DIR, _cand58.CANDIDATES_PATH, _cand58.SEEN_HOSTS_PATH,
      _cand58.TRIED_HOSTS_PATH) = _c58_real
 
-# --- (5) Tripwires: live tool count == 18; _PENUMBRA_VERBS matches; no new deps in pyproject.toml --------
+# --- (5) Tripwires: live tool count == 18; _OMNISEEK_VERBS matches; no new deps in pyproject.toml --------
 # tool count: the P10 wave added NO tool (mcp is a transport slot; the draft is an additive param); the
-# live count is 18 because P8 (a later wave) added penumbra_statement. The invariant tracks REALITY, so it
-# reads 18 here and in §49's derivation, which now includes penumbra_statement.
-check("58.5 tripwire: MCP tool count == frozen 18 (P10 added no tool; the count is P8's penumbra_statement)",
+# live count is 18 because P8 (a later wave) added omniseek_statement. The invariant tracks REALITY, so it
+# reads 18 here and in §49's derivation, which now includes omniseek_statement.
+check("58.5 tripwire: MCP tool count == frozen 18 (P10 added no tool; the count is P8's omniseek_statement)",
       _pt_src.count(chr(10) + "@mcp.tool()") == 18,
       f"found {_pt_src.count(chr(10) + '@mcp.tool()')}")
-# _PENUMBRA_VERBS carries the same 18 tool names §49 derives (P10 added none; P8 added penumbra_statement).
-check("58.5 tripwire: _PENUMBRA_VERBS carries EXACTLY the 18 tool names",
+# _OMNISEEK_VERBS carries the same 18 tool names §49 derives (P10 added none; P8 added omniseek_statement).
+check("58.5 tripwire: _OMNISEEK_VERBS carries EXACTLY the 18 tool names",
       set(_t49_verbs.keys()) == _t49_expect_names and len(_t49_verbs) == 18)
 # no new deps: the mcp client is httpx-only (already a core dep); assert the core dep set did not
 # grow a P10 entry. The whole point of a hand-rolled client is ZERO new dependencies.
@@ -9933,7 +9933,7 @@ check("58.5 tripwire: no new dependency was added for the mcp client (httpx-only
       not _p10_new_dep58, f"unexpected dep(s): {_p10_new_dep58}")
 # the _mcp client imports ONLY stdlib + eye.http + eye.auth + the mcp protocol-version constant
 # (all already present): a positive check that no exotic transport lib crept in.
-import penumbra.core.sources._mcp as _mcpmod58  # noqa: E402
+import omniseek.core.sources._mcp as _mcpmod58  # noqa: E402
 _mcp_src58 = _pt_inspect.getsource(_mcpmod58)
 check("58.5 tripwire: the mcp client is httpx-only (no new transport import)",
       # httpx itself is a core dep (the P10 gate added a direct import for the response-rebuild
@@ -9944,11 +9944,11 @@ check("58.5 tripwire: the mcp client is httpx-only (no new transport import)",
 
 
 # ---------------------------------------------------------------------------
-# 59. P8: penumbra_statement, the typed agent-statements channel (design "P8 shipped 2026-07-04").
+# 59. P8: omniseek_statement, the typed agent-statements channel (design "P8 shipped 2026-07-04").
 #     The rulings idiom GENERALIZED: an agent-judged RELATION persists as attributed declarative
 #     state and projects at read time. Where a ruling is pair-keyed + symmetric (identity, consumed by
 #     the collapse machinery), a statement is a DIRECTED triple (src, dst, type) with FREE agent
-#     vocabulary. Store checks monkeypatch _graph.STATEMENTS_PATH to a temp file (no real ~/.penumbra
+#     vocabulary. Store checks monkeypatch _graph.STATEMENTS_PATH to a temp file (no real ~/.omniseek
 #     state); the ladder / find / since / voices checks use a FRESH temp-db (the §47/§50 pattern,
 #     restore in finally); the tool + tripwire checks are pure body/registration checks.
 # ---------------------------------------------------------------------------
@@ -9986,7 +9986,7 @@ try:
     check("statement (1): delete removes (True), then a second delete is a no-op (False), keyed on the triple",
           _s59_del1 is True and _s59_del2 is False and len(_graph.load_statements()) == 1)
     # validation: empty note / bad type chars / >40 / same_as / not_same_as each raises ValueError, and
-    # the identity-type message POINTS at penumbra_ruling.
+    # the identity-type message POINTS at omniseek_ruling.
     _s59_empty_note = _s59_bad_type = _s59_long = _s59_same = _s59_notsame = False
     _s59_same_msg = _s59_notsame_msg = ""
     try:
@@ -10011,11 +10011,11 @@ try:
         _s59_notsame = True; _s59_notsame_msg = str(_exc)
     check("statement (1): validation raises ValueError (empty note / bad-type chars / >40 chars)",
           _s59_empty_note and _s59_bad_type and _s59_long)
-    check("statement (1): same_as / not_same_as are REFUSED with an penumbra_ruling pointer in the message",
+    check("statement (1): same_as / not_same_as are REFUSED with an omniseek_ruling pointer in the message",
           _s59_same and _s59_notsame
-          and "penumbra_ruling" in _s59_same_msg and "penumbra_ruling" in _s59_notsame_msg)
+          and "omniseek_ruling" in _s59_same_msg and "omniseek_ruling" in _s59_notsame_msg)
     # (1b) ANTI-FRAGMENTATION (2026-07-15): _is_hand_minted / _anchor_tokens / _similar_anchor_ids + the
-    #      penumbra_statement create echo -> surface a near-match hand-minted anchor so a slightly-different mint
+    #      omniseek_statement create echo -> surface a near-match hand-minted anchor so a slightly-different mint
     #      does not silently orphan. Pure helpers first, then the tool wiring on the same temp path.
     check("statement (1b): _is_hand_minted true for synthetic/label ids, false for deterministic backend ids",
           _graph._is_hand_minted("claim:c3_exact_credit_wedge") and _graph._is_hand_minted("topic:label:credit assignment")
@@ -10028,7 +10028,7 @@ try:
           _graph._similar_anchor_ids("claim:c3_wedge", _s59_frag) == ["claim:c3_exact_credit_wedge"])
     check("statement (1b): a deterministic backend id never fragments -> no echo",
           _graph._similar_anchor_ids("work:openalex:W1", _s59_frag) == [])
-    # similar_anchors (the create-echo builder the penumbra_statement tool surfaces): a near-duplicate hand-minted
+    # similar_anchors (the create-echo builder the omniseek_statement tool surfaces): a near-duplicate hand-minted
     # dst echoes the existing anchor; a deterministic src never fragments (no src key).
     _s59_sim = _graph.similar_anchors("doc:arxiv:10", "claim:c3_credit_wedge", _s59_frag)
     check("statement (1b): similar_anchors echoes a near-duplicate hand-minted dst, and NEVER the deterministic src",
@@ -10166,82 +10166,82 @@ finally:
         except Exception:  # noqa: BLE001
             break
 
-# (7) penumbra_statement TOOL: create / list (about + type filters, cap 200 + capped) / delete happy paths
+# (7) omniseek_statement TOOL: create / list (about + type filters, cap 200 + capped) / delete happy paths
 #     + all error paths via the unwrapped body (past @_threaded). Monkeypatch a temp statements file so
 #     no real state is touched.
 _s59_tool_prev = _graph.STATEMENTS_PATH
 _graph.STATEMENTS_PATH = Path(_tf47.mkdtemp()) / "graph_statements.json"
 try:
-    _es = _srv.penumbra_statement.__wrapped__
+    _es = _srv.omniseek_statement.__wrapped__
     _es_create = _es(action="create", src="inst:label:openai", dst="inst:label:anthropic",
                      type="Competes With", note="tool smoke", doc="doc:zhihu:z1")
-    check("penumbra_statement (7): action=create records the statement (created True, type slugged, replaced False)",
+    check("omniseek_statement (7): action=create records the statement (created True, type slugged, replaced False)",
           _es_create.get("created") is True
           and _es_create.get("statement", {}).get("type") == "competes_with"
           and _es_create.get("replaced") is False)
     # a second create on the SAME triple replaces (declarative state).
     _es_recreate = _es(action="create", src="inst:label:openai", dst="inst:label:anthropic",
                        type="competes_with", note="updated")
-    check("penumbra_statement (7): re-create on the same directed triple replaces (replaced True)",
+    check("omniseek_statement (7): re-create on the same directed triple replaces (replaced True)",
           _es_recreate.get("replaced") is True)
     # a second, distinct statement for the list-filter checks.
     _es(action="create", src="inst:label:openai", dst="topic:label:agi", type="works_on", note="y")
     _es_list = _es(action="list")
-    check("penumbra_statement (7): action=list returns statements + count (+ capped flag), unfiltered",
+    check("omniseek_statement (7): action=list returns statements + count (+ capped flag), unfiltered",
           _es_list.get("count") == 2 and _es_list.get("capped") is False
           and len(_es_list.get("statements", [])) == 2)
     _es_list_about = _es(action="list", about="topic:label:agi")
-    check("penumbra_statement (7): action=list about=<node> filters to statements touching that node",
+    check("omniseek_statement (7): action=list about=<node> filters to statements touching that node",
           _es_list_about.get("count") == 1
           and _es_list_about["statements"][0].get("type") == "works_on")
     _es_list_type = _es(action="list", type="Works On")
-    check("penumbra_statement (7): action=list type=<t> filters (slugged) to that type",
+    check("omniseek_statement (7): action=list type=<t> filters (slugged) to that type",
           _es_list_type.get("count") == 1
           and _es_list_type["statements"][0].get("dst") == "topic:label:agi")
     _es_del = _es(action="delete", src="inst:label:openai", dst="inst:label:anthropic",
                   type="competes_with")
-    check("penumbra_statement (7): action=delete removes it (deleted True); a second delete is False",
+    check("omniseek_statement (7): action=delete removes it (deleted True); a second delete is False",
           _es_del.get("deleted") is True
           and _es(action="delete", src="inst:label:openai", dst="inst:label:anthropic",
                   type="competes_with").get("deleted") is False)
     # ERROR PATHS: unknown action / empty note / refused identity type (with pointer) / delete missing type.
-    check("penumbra_statement (7): an unknown action returns an error naming create|list|delete",
+    check("omniseek_statement (7): an unknown action returns an error naming create|list|delete",
           "error" in _es(action="frobnicate")
           and all(_w in _es(action="frobnicate")["error"] for _w in ("create", "list", "delete")))
-    check("penumbra_statement (7): create with an empty note returns an error dict (ValueError mapped)",
+    check("omniseek_statement (7): create with an empty note returns an error dict (ValueError mapped)",
           "error" in _es(action="create", src="a", dst="b", type="rel", note=""))
     _es_refuse = _es(action="create", src="a", dst="b", type="same_as", note="x")
-    check("penumbra_statement (7): create with same_as is refused with an penumbra_ruling pointer",
-          "error" in _es_refuse and "penumbra_ruling" in _es_refuse["error"])
-    check("penumbra_statement (7): delete without a type returns an error dict",
+    check("omniseek_statement (7): create with same_as is refused with an omniseek_ruling pointer",
+          "error" in _es_refuse and "omniseek_ruling" in _es_refuse["error"])
+    check("omniseek_statement (7): delete without a type returns an error dict",
           "error" in _es(action="delete", src="a", dst="b"))
 finally:
     _graph.STATEMENTS_PATH = _s59_tool_prev
 
-# (7) TRIPWIRES: tool count == 18; _PENUMBRA_VERBS carries penumbra_statement (18); _GATHER_TOOLS still 12 and
-#     EXCLUDES penumbra_statement (a write verb; gather is read-only); docs-drift POSITIVE presence of
-#     penumbra_statement in the product README + the connect-time instructions.
-check("p8 tripwire: MCP tool count == 18 (the conscious 17 -> 18 bump for penumbra_statement)",
+# (7) TRIPWIRES: tool count == 18; _OMNISEEK_VERBS carries omniseek_statement (18); _GATHER_TOOLS still 12 and
+#     EXCLUDES omniseek_statement (a write verb; gather is read-only); docs-drift POSITIVE presence of
+#     omniseek_statement in the product README + the connect-time instructions.
+check("p8 tripwire: MCP tool count == 18 (the conscious 17 -> 18 bump for omniseek_statement)",
       _pt_src.count(chr(10) + "@mcp.tool()") == 18,
       f"found {_pt_src.count(chr(10) + '@mcp.tool()')}")
-check("p8 tripwire: _PENUMBRA_VERBS carries penumbra_statement and totals 18",
-      "penumbra_statement" in _t49_verbs and len(_t49_verbs) == 18)
-check("p8 tripwire: penumbra_statement is a REGISTERED tool", callable(_srv.penumbra_statement))
-check("p8 tripwire: _GATHER_TOOLS is still 12 and EXCLUDES penumbra_statement (a write verb; gather is read-only)",
-      len(_GATHER_TOOLS) == 12 and "penumbra_statement" not in _GATHER_TOOLS)
+check("p8 tripwire: _OMNISEEK_VERBS carries omniseek_statement and totals 18",
+      "omniseek_statement" in _t49_verbs and len(_t49_verbs) == 18)
+check("p8 tripwire: omniseek_statement is a REGISTERED tool", callable(_srv.omniseek_statement))
+check("p8 tripwire: _GATHER_TOOLS is still 12 and EXCLUDES omniseek_statement (a write verb; gather is read-only)",
+      len(_GATHER_TOOLS) == 12 and "omniseek_statement" not in _GATHER_TOOLS)
 _s59_readme = (ROOT / "README.md")
 _s59_readme_txt = _s59_readme.read_text(encoding="utf-8") if _s59_readme.exists() else ""
-check("p8 docs-drift (presence): penumbra_statement is named in README.md (the product-facing tool surface)",
-      "penumbra_statement" in _s59_readme_txt)
-check("p8 docs-drift (presence): penumbra_statement is named in _PENUMBRA_INSTRUCTIONS (the connect-time brief)",
-      "penumbra_statement" in _srv._PENUMBRA_INSTRUCTIONS)
+check("p8 docs-drift (presence): omniseek_statement is named in README.md (the product-facing tool surface)",
+      "omniseek_statement" in _s59_readme_txt)
+check("p8 docs-drift (presence): omniseek_statement is named in _OMNISEEK_INSTRUCTIONS (the connect-time brief)",
+      "omniseek_statement" in _srv._OMNISEEK_INSTRUCTIONS)
 
 
 # ---------------------------------------------------------------------------
 # 60. P11, the four dogfood findings of the 2026-07-04 field recon:
 #     W1 the _meta weight-class rule (deployment-static + non-actionable facts leave per-query _meta:
 #        the full excluded MAP -> excluded_count; fast/slow name lists -> progressive COUNTS; the
-#        actionable name lists (timed_out/empty/truncated/excluded_relevant) stay; penumbra_sources carries
+#        actionable name lists (timed_out/empty/truncated/excluded_relevant) stay; omniseek_sources carries
 #        every source's explicit_only reason so the catalog is one call away).
 #     W2 seen_before is a COMPLETENESS contract (EVERY ranked doc carries seen_before + first_seen_at,
 #        never absent); the regression fixture lives in §48 (5); here we assert the section-60 shape.
@@ -10281,7 +10281,7 @@ try:
     check("P11 W1: the broad metadata fixture stays offline while exercising every planned source",
           "_p11_fast_synthetic" in _p11_egress_calls
           and len(_p11_egress_calls) == _p11_meta.get("searched"))
-    # excluded_count is an INT; the full excluded MAP is GONE from _meta (it lives in penumbra_sources now).
+    # excluded_count is an INT; the full excluded MAP is GONE from _meta (it lives in omniseek_sources now).
     check("P11 W1: broad _meta carries excluded_count (int) and NO excluded map",
           isinstance(_p11_meta.get("excluded_count"), int) and "excluded" not in _p11_meta)
     # progressive is {fast: int, slow: int, timed_out: list}; fast/slow are counts, timed_out a name list.
@@ -10308,11 +10308,11 @@ finally:
     # synthetic stranded in the catalog and false-trip the drift-guard). Idempotent if the register raised.
     fetcher.unregister_adapter("_p11_fast_synthetic")
 
-# --- W1 (b): the CATALOG guarantee. penumbra_sources' roster carries each excluded source's explicit_only
+# --- W1 (b): the CATALOG guarantee. omniseek_sources' roster carries each excluded source's explicit_only
 #     REASON string (so removing the full map from _meta loses nothing; it is one call away). ---
 _p11_roster = fetcher.list_sources()
 _p11_excluded_entries = [e for e in _p11_roster if e.get("explicit_only")]
-check("P11 W1: penumbra_sources roster exposes explicit_only_reason for excluded sources (catalog one call away)",
+check("P11 W1: omniseek_sources roster exposes explicit_only_reason for excluded sources (catalog one call away)",
       bool(_p11_excluded_entries)
       and all(isinstance(e.get("explicit_only_reason"), str) and e["explicit_only_reason"]
               for e in _p11_excluded_entries))
@@ -10323,10 +10323,10 @@ check("P11 W1: a non-excluded source carries NO explicit_only_reason key (no noi
 
 # --- W1 (c): docs-drift. the connect-time instructions section (5) names excluded_count + progressive,
 #     and NO LONGER re-ships the old fast_sources/slow_sources vocabulary. ---
-_p11_instr = _srv._PENUMBRA_INSTRUCTIONS
-check("P11 W1: _PENUMBRA_INSTRUCTIONS section 5 names excluded_count and progressive (docs-drift)",
+_p11_instr = _srv._OMNISEEK_INSTRUCTIONS
+check("P11 W1: _OMNISEEK_INSTRUCTIONS section 5 names excluded_count and progressive (docs-drift)",
       "excluded_count" in _p11_instr and "progressive:" in _p11_instr)
-check("P11 W1: _PENUMBRA_INSTRUCTIONS no longer advertises fast_sources / slow_sources (weight-class swept)",
+check("P11 W1: _OMNISEEK_INSTRUCTIONS no longer advertises fast_sources / slow_sources (weight-class swept)",
       "fast_sources" not in _p11_instr and "slow_sources" not in _p11_instr)
 
 # --- W2: the COMPLETENESS contract, stated at section-60 level (the driving regression fixture, incl.
@@ -10352,14 +10352,14 @@ check("P11 W2: fetcher._stamp_seen_before documents the completeness contract (n
       "COMPLETENESS CONTRACT" in (fetcher._stamp_seen_before.__doc__ or ""))
 
 # --- W3: a gather call with a WRONG kwarg gets a hint naming the tool's real params; a normal failure
-#     gets no fabricated hint. Drive the REAL penumbra_gather (unwrapped past @_threaded). ---
-_p11_gather = _srv.penumbra_gather.__wrapped__
-# (i) wrong kwarg → status errored + a hint that names the real penumbra_read params.
-_p11_bad = _p11_gather(calls=[{"tool": "penumbra_read", "args": {"nonexistent_arg": "x"}}], wait_s=5)
+#     gets no fabricated hint. Drive the REAL omniseek_gather (unwrapped past @_threaded). ---
+_p11_gather = _srv.omniseek_gather.__wrapped__
+# (i) wrong kwarg → status errored + a hint that names the real omniseek_read params.
+_p11_bad = _p11_gather(calls=[{"tool": "omniseek_read", "args": {"nonexistent_arg": "x"}}], wait_s=5)
 _p11_bad_r = _p11_bad["results"][0]
 check("P11 W3: a gather call with a wrong kwarg is errored AND carries a hint naming the real params",
       _p11_bad_r.get("status") == "errored" and "hint" in _p11_bad_r
-      and "penumbra_read takes:" in _p11_bad_r["hint"]
+      and "omniseek_read takes:" in _p11_bad_r["hint"]
       and all(_p in _p11_bad_r["hint"] for _p in ("target", "start_char", "max_chars")))
 # (ii) a NORMAL failure (a real signature, but the body raises a non-TypeError) gets NO fabricated
 #      hint. Inject a synthetic tool that raises a plain ValueError (deterministic + offline), so this
@@ -10377,8 +10377,8 @@ finally:
     _GATHER_TOOLS.clear()
     _GATHER_TOOLS.update(fetcher_gt_prev)
 # (iii) the helpers themselves: the hint is MECHANICAL (inspect.signature over the unwrapped body).
-check("P11 W3: _gather_signature_hint derives real params mechanically for penumbra_read",
-      _srv._gather_signature_hint("penumbra_read") == "penumbra_read takes: target, start_char, max_chars, export_media, ocr")
+check("P11 W3: _gather_signature_hint derives real params mechanically for omniseek_read",
+      _srv._gather_signature_hint("omniseek_read") == "omniseek_read takes: target, start_char, max_chars, export_media, ocr")
 check("P11 W3: _is_signature_mismatch is True for a kwarg TypeError, False for a plain ValueError",
       _srv._is_signature_mismatch(TypeError("f() got an unexpected keyword argument 'z'"))
       and not _srv._is_signature_mismatch(ValueError("some positional argument text")))
@@ -10388,7 +10388,7 @@ check("P11 W3: _is_signature_mismatch is True for a kwarg TypeError, False for a
 #     to map, so date stays null. Golden fixture: a representative rendered search card parses to a
 #     doc with date=None (the honest no-date state), while title/url/source_id/votes ARE extracted.
 #     (No approximate/fabricated date is invented from a localized card string; the spec's red line.) ---
-from penumbra.core.sources.walled.zhihu_source import ZhihuAdapter as _P11Zhihu  # noqa: E402
+from omniseek.core.sources.walled.zhihu_source import ZhihuAdapter as _P11Zhihu  # noqa: E402
 from bs4 import BeautifulSoup as _P11Soup  # noqa: E402
 _P11_ZHIHU_CARD = (
     '<div class="SearchResult-Card"><div class="ContentItem">'
@@ -10422,7 +10422,7 @@ check("P11 W4: the zhihu adapter maps no created_time/updated_time (HTML-scrape 
 #     warning passes to render -- the root handler -- so it is thread- AND subsystem-agnostic.
 # ---------------------------------------------------------------------------
 import logging as _lg61  # noqa: E402
-import penumbra.core._lograte as _lograte61  # noqa: E402
+import omniseek.core._lograte as _lograte61  # noqa: E402
 
 
 def _rec61(name, level=_lg61.WARNING, msg="x"):
@@ -10481,7 +10481,7 @@ finally:
 #     Fixes: relevance._TOKEN three-class scan + SEG_VERSION 3 + rank._norm_title keeps all
 #     letters + asr._remember_transcript -> recall.writer.ingest_produced (full lane).
 # ---------------------------------------------------------------------------
-from penumbra.core import relevance as _rel62  # noqa: E402
+from omniseek.core import relevance as _rel62  # noqa: E402
 
 check("62 tokenize: hangul enters the lexical layer as bigrams (was invisible)",
       _rel62.tokenize("서울에서") == ["서울", "울에", "에서"])
@@ -10496,7 +10496,7 @@ check("62 tokenize: zh + en behavior unchanged (bigrams + ascii words, now in te
 check("62 query_terms: hangul terms survive query segmentation",
       "서울" in _rel62.query_terms("서울 손") and "손" in _rel62.query_terms("서울 손"))
 
-import penumbra.core.rank as _rank62  # noqa: E402
+import omniseek.core.rank as _rank62  # noqa: E402
 check("62 fingerprint: korean / cyrillic titles no longer normalize to '' (no fp-blind script)",
       _rank62._norm_title("로봇 손의 내구성") != "" and _rank62._norm_title("Русский заголовок") != ""
       and _rank62._norm_title("로봇 손의 내구성") != _rank62._norm_title("완전히 다른 제목입니다"))
@@ -10504,13 +10504,13 @@ check("62 fingerprint: ascii + CJK titles keep their exact old normalization (re
       _rank62._norm_title("Exact Is Easier: Credit!") == "exactiseasiercredit"
       and _rank62._norm_title("多智能体, credit") == "多智能体credit")
 
-import penumbra.core.recall.store as _rstore62  # noqa: E402
+import omniseek.core.recall.store as _rstore62  # noqa: E402
 check("62 seg: SEG_VERSION bumped to 3 (tokenizer derivation changed -> re-segment on touch)",
       _rstore62.SEG_VERSION == 3)
 
 # transcript -> memory seam: capture what asr._remember_transcript hands the writer (no real queue).
-import penumbra.core.asr as _asr62  # noqa: E402
-import penumbra.core.recall.writer as _w62  # noqa: E402
+import omniseek.core.asr as _asr62  # noqa: E402
+import omniseek.core.recall.writer as _w62  # noqa: E402
 _cap62: list = []
 _ip62 = _w62.ingest_produced
 _w62.ingest_produced = lambda docs: _cap62.extend(docs)
@@ -10536,8 +10536,8 @@ check("62 transcript memory: ingest_produced is a silent no-op off the serving p
 #     (the 2026-07-09 sg_immigration misdiagnosis: both walls invisible because
 #     worker-thread notes vanished and the empty was cached for the full TTL).
 # ---------------------------------------------------------------------------
-from penumbra.core import diag as _diag63
-from penumbra.core.sources.scrape import _rss as _r63
+from omniseek.core import diag as _diag63
+from omniseek.core.sources.scrape import _rss as _r63
 
 _RSS_OK63 = ('<?xml version="1.0"?><rss version="2.0"><channel><title>T</title>'
              '<item><title>hello world</title><link>https://e.x/1</link></item></channel></rss>')
@@ -10605,8 +10605,8 @@ finally:
 # 64a. Declarative health_check must report a DOWN upstream (egress->None) as DOWN, not GREEN,
 #      and search must not pin a failure-empty for the full cache_ttl (the family was invisible
 #      to the watchdog; context7's 24h TTL made the empty-cache acute).
-from penumbra.core.sources._declarative import DeclarativeAPIAdapter as _DA64
-from penumbra.core import http as _http64, cache as _cache64
+from omniseek.core.sources._declarative import DeclarativeAPIAdapter as _DA64
+from omniseek.core import http as _http64, cache as _cache64
 _da64 = _DA64(name="smoke64_decl", description="probe", endpoint="https://x.example/api",
               field_map={"title": "t", "url": "u"}, results_path="items", cache_ttl=86400)
 _gj64 = _http64.get_json
@@ -10648,11 +10648,11 @@ check("64b diag: credential values in a URL embedded in the exc free text are re
 
 # 64c. Agent-URL SSRF guards: view_image_urls / transcribe_url refuse a loopback/internal URL
 #      BEFORE any fetch (the way around the netguard loopback block, incl. the CDP 9222 DevTools API).
-from penumbra.core import docreader as _dr64
+from omniseek.core import docreader as _dr64
 _img64 = _dr64.view_image_urls(["http://127.0.0.1:9222/json/version"])
 check("64c ssrf: view_image_urls refuses a loopback URL (no in-band internal-image exfil)",
       _img64["count"] == 0 and "refused" in (_img64["images"][0].get("error", "")))
-from penumbra.core import asr as _asr64
+from omniseek.core import asr as _asr64
 _tr64 = _asr64.transcribe_url("http://127.0.0.1:9222/json/new")
 check("64c ssrf: transcribe_url refuses a loopback URL before yt-dlp egress",
       "refused" in (_tr64.get("error", "")) and _tr64.get("transcript") == "")
@@ -10681,8 +10681,8 @@ finally:
 
 # 65a. cache.set_docs empty_ttl: an empty docs list uses empty_ttl (a transient-miss floor); a
 #      non-empty list ignores it (keeps ttl); omitting empty_ttl preserves the old behavior.
-from penumbra.core import cache as _cache65
-from penumbra.core.normalize import Document as _PD65
+from omniseek.core import cache as _cache65
+from omniseek.core.normalize import Document as _PD65
 _set65: dict = {}
 _realset65 = _cache65.set
 try:
@@ -10706,7 +10706,7 @@ finally:
 # 65b. recall store: the vector matrix invalidates on a WRITE-GEN bump (a re-embed keeps the row
 #      count identical, which the old count key missed). We assert the generation SOURCE changed:
 #      note_vec_write bumps _vec_write_gen, which _ensure_matrix now reads as the cache key.
-from penumbra.core.recall import store as _store65
+from omniseek.core.recall import store as _store65
 _g0 = _store65._vec_write_gen
 _store65.note_vec_write()
 _store65.note_vec_write()
@@ -10720,14 +10720,14 @@ check("65b recall: the dead row-count helpers were removed (write-gen is the sol
 # 65c. fast health lane: run_source_health(scope='noncdp') skips CDP heal/probe and MERGES its
 #      snapshot so the CDP last_status entries the daily run owns are preserved (not dropped).
 #      Fully offline: monkeypatch load_sources, the adapter roster, the probe, heal, bark, and state.
-import penumbra.core.infra_jobs as _ij65
-import penumbra.server as _srv65
+import omniseek.core.infra_jobs as _ij65
+import omniseek.server as _srv65
 _saved65 = {k: getattr(_ij65, k) for k in ("_heal_cdp_chrome", "_health_probe", "_alert",
             "_load_state", "_save_state")}
 _ls65 = _srv65.load_sources
 _state65: dict = {"fails": {}, "_alerts": {}, "last_status": {"_cdp:9222-shared": True, "zhihu": True}}
 _healed65 = {"called": False}
-import penumbra.core.fetcher as _f65
+import omniseek.core.fetcher as _f65
 _saved_f65 = {k: getattr(_f65, k) for k in ("all_adapter_names", "get_adapter")}
 try:
     _srv65.load_sources = lambda: None
@@ -10767,26 +10767,26 @@ finally:
 if _SERVICES_PATH.exists():
     _svc66 = _svc  # loaded in §46b (top-level code is guarded by __main__, so import is a no-op)
     _rows66 = {r["label"]: r for r in _svc66.REGISTRY}
-    _sentinel_row = _rows66["com.penumbra.infra.sentinel"]     # RunAtLoad (default) + StartInterval
-    _backup_row = _rows66["com.penumbra.infra.state-backup"]   # run_at_load=None + StartCalendarInterval
+    _sentinel_row = _rows66["com.omniseek.infra.sentinel"]     # RunAtLoad (default) + StartInterval
+    _backup_row = _rows66["com.omniseek.infra.state-backup"]   # run_at_load=None + StartCalendarInterval
     check("66 job-kind: the sentinel is a RunAtLoad job (must reach runs>=1)",
           _svc66._job_is_run_at_load(_sentinel_row) is True)
     check("66 job-kind: state-backup is NOT RunAtLoad (calendar-only; runs=0 legal before first fire)",
           _svc66._job_is_run_at_load(_backup_row) is False)
 
     # Realistic `launchctl print gui/<uid>/<label>` fixtures (tabs + ` = `, as launchd emits).
-    _F_NOT_LOADED = 'Could not find service "com.penumbra.infra.sentinel" in domain for uid: 501'
-    _F_MALFORMED = "com.penumbra.infra.sentinel\n\t<garbage: connection interrupted>"
-    _F_SPECULATIVE = ("com.penumbra.infra.sentinel = {\n"
+    _F_NOT_LOADED = 'Could not find service "com.omniseek.infra.sentinel" in domain for uid: 501'
+    _F_MALFORMED = "com.omniseek.infra.sentinel\n\t<garbage: connection interrupted>"
+    _F_SPECULATIVE = ("com.omniseek.infra.sentinel = {\n"
                       "\tactive count = 0\n"
-                      "\tpath = /Users/operator/Library/LaunchAgents/com.penumbra.infra.sentinel.plist\n"
+                      "\tpath = /Users/operator/Library/LaunchAgents/com.omniseek.infra.sentinel.plist\n"
                       "\ttype = LaunchAgent\n"
                       "\tstate = not running\n"
                       "\n"
                       "\tprogram = /bin/bash\n"
                       "\targuments = {\n"
                       "\t\t/bin/bash\n"
-                      "\t\t/Users/operator/penumbra-mcp/scripts/sentinel.py\n"
+                      "\t\t/Users/operator/omniseek-mcp/scripts/sentinel.py\n"
                       "\t}\n"
                       "\n"
                       "\truns = 0\n"
@@ -10795,9 +10795,9 @@ if _SERVICES_PATH.exists():
                       "\n"
                       "\tdomain = gui/501\n"
                       "}")
-    _F_FIRST_RUN = ("com.penumbra.infra.sentinel = {\n"
+    _F_FIRST_RUN = ("com.omniseek.infra.sentinel = {\n"
                     "\tactive count = 1\n"
-                    "\tpath = /Users/operator/Library/LaunchAgents/com.penumbra.infra.sentinel.plist\n"
+                    "\tpath = /Users/operator/Library/LaunchAgents/com.omniseek.infra.sentinel.plist\n"
                     "\ttype = LaunchAgent\n"
                     "\tstate = running\n"
                     "\n"
@@ -10807,9 +10807,9 @@ if _SERVICES_PATH.exists():
                     "\n"
                     "\tdomain = gui/501\n"
                     "}")
-    _F_CAL_BEFORE = ("com.penumbra.infra.state-backup = {\n"
+    _F_CAL_BEFORE = ("com.omniseek.infra.state-backup = {\n"
                      "\tactive count = 0\n"
-                     "\tpath = /Users/operator/Library/LaunchAgents/com.penumbra.infra.state-backup.plist\n"
+                     "\tpath = /Users/operator/Library/LaunchAgents/com.omniseek.infra.state-backup.plist\n"
                      "\ttype = LaunchAgent\n"
                      "\tstate = not running\n"
                      "\n"
@@ -10843,7 +10843,7 @@ if _SERVICES_PATH.exists():
     # The REAL healthy idle state of the live sentinel (verified via `launchctl print` on the mini,
     # 2026-07-10): state=not running, runs>=1, pended nondemand spawn = interval. The "interval"
     # value must NOT read as speculative (that is a scheduled job between fires, not a dead one).
-    _F_HEALTHY_INTERVAL = ("com.penumbra.infra.sentinel = {\n"
+    _F_HEALTHY_INTERVAL = ("com.omniseek.infra.sentinel = {\n"
                            "\tstate = not running\n"
                            "\truns = 1\n"
                            "\tpended nondemand spawn = interval\n"
@@ -10887,7 +10887,7 @@ if _SERVICES_PATH.exists():
 # ===========================================================================
 
 # --- federal_register: declarative _to_doc / _results_from parse contract (offline, no network) ---
-from penumbra.core.sources._declarative import DeclarativeAPIAdapter as _fx_federal_register_DA
+from omniseek.core.sources._declarative import DeclarativeAPIAdapter as _fx_federal_register_DA
 
 # trimmed REAL results[0], federalregister.gov/api/v1/documents.json, captured 2026-07-10
 _fx_federal_register_item = {
@@ -11036,7 +11036,7 @@ check("oecd_ai_policy: metadata facets (jurisdiction / code / type / category / 
 import csv as _fx_epoch_csv  # noqa: E402
 import io as _fx_epoch_io  # noqa: E402
 from datetime import datetime as _fx_epoch_dt  # noqa: E402
-from penumbra.core.sources.scrape.epoch_ai_models_source import (  # noqa: E402
+from omniseek.core.sources.scrape.epoch_ai_models_source import (  # noqa: E402
     EpochAIModelsSource as _FxEpoch, _FIELDS as _fx_epoch_FIELDS)
 
 # REAL bytes captured verbatim from notable_ai_models.csv (2 rows, quoted commas intact).
@@ -11109,7 +11109,7 @@ check("epoch_ai_models: a blank scalar (AlphaGo Master has no Parameters) is omi
 # -> dict(entry) -> _DictAsObj -> entry_to_document. No network, no _fetch_all_docs.
 # ---------------------------------------------------------------------------
 import feedparser as _fx_mistral_fp  # noqa: E402
-from penumbra.core.sources.scrape._rss import entry_to_document as _fx_mistral_e2d, _DictAsObj as _fx_mistral_wrap  # noqa: E402
+from omniseek.core.sources.scrape._rss import entry_to_document as _fx_mistral_e2d, _DictAsObj as _fx_mistral_wrap  # noqa: E402
 
 # REAL raw (captured 2026-07-10), trimmed to 2 items: one full, one description-less.
 _fx_mistral_raw = (
@@ -11338,7 +11338,7 @@ check("mpnp_draws: li breakdown parsed, total line excluded",
 # rows for months while the fixture above kept passing. Assert the header is sent, and that it is
 # scoped to the HTML path only (http.get_json must NOT start advertising text/html).
 import inspect as _insp_sb  # noqa: E402
-import penumbra.core.sources.scrape._base as _sb  # noqa: E402
+import omniseek.core.sources.scrape._base as _sb  # noqa: E402
 _sb_fetch_src = _insp_sb.getsource(_sb.BaseScrapeAdapter._raw_fetch)
 check("scrape base: the fetch_html path sends a browser-shaped Accept (a UA alone gets 415 from real WAFs)",
       hasattr(_sb, "_SCRAPE_ACCEPT")
@@ -11347,12 +11347,12 @@ check("scrape base: the fetch_html path sends a browser-shaped Accept (a UA alon
       detail=f"accept={getattr(_sb, '_SCRAPE_ACCEPT', None)!r}")
 check("scrape base: the JSON path is UNTOUCHED by that Accept (no API can negotiate us into HTML)",
       "http.get_json(url)" in _sb_fetch_src
-      and "_SCRAPE_ACCEPT" not in _sb_fetch_src.split("from penumbra.core import http")[-1])
+      and "_SCRAPE_ACCEPT" not in _sb_fetch_src.split("from omniseek.core import http")[-1])
 
 # 2026-07-25 eyefix: HKU CS restructured; /news/ now 404s (it had been a frozen 2018 archive), so
 # the configured URL must be the live /news-events/* surface. in-the-media is the one that yields
 # dated items through _extract_news_items (verified live: 43 items vs 0 from /events).
-import penumbra.core.sources.scrape.hk_universities_source as _hk  # noqa: E402
+import omniseek.core.sources.scrape.hk_universities_source as _hk  # noqa: E402
 _hk_hku = next((u for n, u, _ in _hk.UNIS if n == "HKU CS"), "")
 check("hk_universities: HKU CS points at the live news-events surface, not the dead /news/ (404)",
       _hk_hku.endswith("/news-events/in-the-media") and not _hk_hku.rstrip("/").endswith("/news"),
@@ -11363,7 +11363,7 @@ check("hk_universities: HKU CS points at the live news-events surface, not the d
 # returned 0 bytes; a cookie-jar retry never got a cookie). Only a real browser runs the challenge,
 # so mpnp_draws now fetches through CDP (verified live: ~240KB, 10 article cards, draws #271-275).
 # The parser is UNCHANGED, which is why the offline fixture above still guards it.
-import penumbra.core.sources.scrape.ca_pnp_source as _capnp  # noqa: E402
+import omniseek.core.sources.scrape.ca_pnp_source as _capnp  # noqa: E402
 _mpnp_fetch_src = _insp_sb.getsource(_capnp.MpnpDrawsAdapter._raw_fetch)
 check("mpnp_draws: _raw_fetch renders through CDP (a JS interstitial no header/TLS tier can clear)",
       "cdp_call" in _mpnp_fetch_src
@@ -11376,7 +11376,7 @@ check("mpnp_draws: _raw_fetch renders through CDP (a JS interstitial no header/T
 # BrnlCSqO6n (ICLR2026) 30 notes on v2 / 0 on v1; qGvMv3undNJ (NeurIPS2021) 0 on v2 / 16 on v1;
 # knKJgksd7kA 13, QkljT4mrfs 22, uJGObgFU0lU 19, all v1-only. After the fallback: 29 / 15 / 12 / 21 / 18
 # docs, with decision + meta_review subtypes resolving on BOTH backends.
-import penumbra.core.sources.api.openreview_source as _or  # noqa: E402
+import omniseek.core.sources.api.openreview_source as _or  # noqa: E402
 _or_fetch_src = _insp_sb.getsource(_or.OpenReviewAdapter.fetch_reviews)
 _or_search_src = _insp_sb.getsource(_or.OpenReviewAdapter.search)
 _or_note_src = _insp_sb.getsource(_or.OpenReviewAdapter._review_note_to_document)
@@ -11397,8 +11397,8 @@ check("openreview: note kind reads v1's SINGULAR invitation as well as v2's invi
 # server-rendered though, so the source moved to the declarative HTML path. Offline fixture: the
 # real card shape (the <a> wraps the <article>, so the permalink is on the ITEM, the title/summary
 # inside), asserted through the same schema_extract the adapter runs.
-import penumbra.core.sources.scrape.lmsys_arena_source as _lma  # noqa: E402
-from penumbra.core.normalize import schema_extract as _sx  # noqa: E402
+import omniseek.core.sources.scrape.lmsys_arena_source as _lma  # noqa: E402
+from omniseek.core.normalize import schema_extract as _sx  # noqa: E402
 _lma_html = (
     '<div><a href="/blog/autoeval-scores"><article class="group flex">'
     '<h3>Introducing AutoEval to the Arena leaderboards</h3>'
@@ -11436,7 +11436,7 @@ check("lmsys_arena: the dead feed row is GONE from rss_bundles.json (no resurrec
 # zero <item>; curl_cffi did not clear it either. CDP renders the blog fully and the SAME selector
 # yields 10 posts on each venue. Rebuilt on CDP + declarative HTML rather than retired: the coverage
 # (awards, submission policy, keynotes) is NOT what conference_deadlines carries.
-import penumbra.core.sources.scrape.ml_conferences_source as _mlc  # noqa: E402
+import omniseek.core.sources.scrape.ml_conferences_source as _mlc  # noqa: E402
 _mlc_fetch_src = _insp_sb.getsource(_mlc.MlConferencesAdapter._raw_fetch)
 _mlc_html = (
     '<div><article><h2><a href="https://blog.icml.cc/2026/07/05/announcing-the-icml-2026-awards/">'
@@ -11505,7 +11505,7 @@ check("canada_jobbank_wages: content carries national low/med/high line + a prov
 #     halves — the telos filter (is_ai_relevant) + the project row -> doc map,
 #     with the coordinator org joined — golden offline (no ~35MB zip pull in smoke).
 # ---------------------------------------------------------------------------
-from penumbra.core.sources.api import cordis_eu_source as _cordis  # noqa: E402
+from omniseek.core.sources.api import cordis_eu_source as _cordis  # noqa: E402
 _fx_cordis_proj = {
     "id": "101039090", "acronym": "TOPS", "status": "SIGNED",
     "title": "Machine-Assisted Teaching for Open-Ended Problem Solving: Foundations and Applications",
@@ -11706,7 +11706,7 @@ check("uk_companies_house: psc item -> doc (self-link url, composite source_id, 
 
 
 # --- layoffs_tracker: offline golden fixture (parse contract, no network) ---
-from penumbra.core.sources.api import layoffs_tracker_source as _fx_layoffs_tracker_mod
+from omniseek.core.sources.api import layoffs_tracker_source as _fx_layoffs_tracker_mod
 
 # REAL captured readSharedViewData row (Microsoft, 2026-07-06, view shroKsHx3SdYYOzeh),
 # trimmed to one row + only the columns the asserts touch. Fed straight to _parse (pure).
@@ -11780,7 +11780,7 @@ check("layoffs_tracker: title + date built from the row",
 # serve the recorded HTML, run the adapter's OWN parse path, restore in finally.
 # No network. Locks: listing dt.ptitle -> doc, and paper-page citation_* enrich.
 # ---------------------------------------------------------------------------
-import penumbra.core.sources.scrape.cvf_openaccess_source as _fx_cvf_openaccess_mod
+import omniseek.core.sources.scrape.cvf_openaccess_source as _fx_cvf_openaccess_mod
 
 _fx_cvf_openaccess_listing = (
     '<dl>\n'
@@ -11910,7 +11910,7 @@ check("cvf_openaccess: paper-page enrich (fetch_url) title/author/year/abstract/
 # Feeds the REAL recorded {"data":[...]} payload (3 daily bins of ONE model, captured
 # 2026-07-10) through the adapter's real aggregation via a monkeypatched module-level
 # httpx.get (nothing leaves the process; cache bypassed), then its real _to_doc.
-from penumbra.core.sources.api import openrouter_rankings_source as _fx_openrouter_rankings_mod
+from omniseek.core.sources.api import openrouter_rankings_source as _fx_openrouter_rankings_mod
 import httpx as _fx_openrouter_rankings_httpx
 
 _fx_openrouter_rankings_payload = {"data": [
@@ -12160,7 +12160,7 @@ check("wikidata_identity: content leads with description + renders ORCID/DBLP id
 
 
 # --- nsfc_awards: offline golden fixture (LetPub NSFC grant table -> Document) ---
-from penumbra.core.sources.scrape import nsfc_awards_source as _fx_nsfc_awards_mod  # noqa: E402
+from omniseek.core.sources.scrape import nsfc_awards_source as _fx_nsfc_awards_mod  # noqa: E402
 
 # REAL recorded LetPub result fragment (letpub.com.cn, 2026-07-10, query 机器学习, 1997-2021),
 # trimmed to load-bearing rows. Each grant = a 7-<td> metadata row + a 题目 row. The 2nd grant
@@ -12220,7 +12220,7 @@ check("nsfc_awards: registered + explicit_only + funding/cn/STRUCTURE facets",
 # --- underline_talks golden fixture (offline; real recorded JSON:API payload, no network) ---
 # Parse entry point: UnderlineTalksAdapter._payload_to_document(payload), where payload is the
 # dict _resolve() returns (the JSON:API body) and _to_documents/_raw_fetch/fetch_url feed it.
-from penumbra.core.sources.scrape import underline_talks_source as _ult  # noqa: E402
+from omniseek.core.sources.scrape import underline_talks_source as _ult  # noqa: E402
 
 # REAL captured payload (lecture 88705, EMNLP 2023 FActScore; app.underline.io JSON:API, 2026-07-11),
 # trimmed to the fields the parser reads.
@@ -12276,7 +12276,7 @@ check("underline_talks: content is abstract + DOI + TRANSCRIBE pointer",
       _fx_underline_talks_doc is not None
       and _fx_underline_talks_doc.content.startswith("Evaluating the factuality of long-form text")
       and "DOI: 10.48448/31cp-3t17" in _fx_underline_talks_doc.content
-      and "penumbra_transcribe" in _fx_underline_talks_doc.content)
+      and "omniseek_transcribe" in _fx_underline_talks_doc.content)
 check("underline_talks: metadata locks event + public video .m3u8 transcribe handle",
       _fx_underline_talks_doc is not None
       and _fx_underline_talks_doc.metadata["event"] == "EMNLP 2023"
@@ -12298,7 +12298,7 @@ check("underline_talks: keyword / blank query is not a lecture id (no public sea
 #     7 exercises the real per-entry catalog rebuild under _registry_lock. See fetcher.py's
 #     "Routing SearchPlan" block + the shadow wiring in search_many.
 # ---------------------------------------------------------------------------
-from penumbra.core import relevance as _w1_rel  # noqa: E402
+from omniseek.core import relevance as _w1_rel  # noqa: E402
 import threading as _w1_th  # noqa: E402
 
 
@@ -12798,7 +12798,7 @@ check("W2: REAL-registry parity still holds: the AUTHORITATIVE plan reproduces t
 #   (4) watermark gating (_ingest_step)   (5) declarative four-state parse   (6) seen_before tri-state
 # ===========================================================================
 import time as _w3_time  # noqa: E402
-from penumbra.core import diag as _w3_diag  # noqa: E402
+from omniseek.core import diag as _w3_diag  # noqa: E402
 
 
 class _W3StubAdapter:
@@ -12900,8 +12900,8 @@ finally:
     _recall.mark_run = _w3_mark_prev
 
 # --- (5) declarative four-state parse: notes on drift, silent on authoritative-empty -----------------
-from penumbra.core.sources._declarative import DeclarativeAPIAdapter as _W3DAA  # noqa: E402
-from penumbra.core import cache as _w3_cache  # noqa: E402
+from omniseek.core.sources._declarative import DeclarativeAPIAdapter as _W3DAA  # noqa: E402
+from omniseek.core import cache as _w3_cache  # noqa: E402
 
 
 def _w3_run_decl(name, payload, results_path="hits"):
@@ -12982,7 +12982,7 @@ import ast as _s0_ast       # noqa: E402
 import re as _s0_re         # noqa: E402
 import time as _s0_time     # noqa: E402
 import threading as _s0_th  # noqa: E402
-import penumbra.server as _s0_server  # noqa: E402
+import omniseek.server as _s0_server  # noqa: E402
 
 
 # --- S0.1: seen_before never-absent: the caller normalizes ranked docs to BOTH keys even if the
@@ -13047,7 +13047,7 @@ finally:
 
 
 # --- S0.2: CancelledError hygiene, proven by an AST tripwire (not a grep). Walk EVERY except handler
-#     in src/penumbra/eye/**.py + src/penumbra/server.py; each handler that catches BaseException (or is
+#     in src/omniseek/eye/**.py + src/omniseek/server.py; each handler that catches BaseException (or is
 #     a bare except:) must EITHER re-raise unconditionally (a bare `raise` at the handler's top level)
 #     OR guard cancellation first (`if isinstance(exc, asyncio.CancelledError): raise` as statement 0).
 #     The two thread-marshaling wrappers propagate the exception INDIRECTLY (store it; the parent re-
@@ -13100,7 +13100,7 @@ def _s0_enclosing(spans, lineno):
     return best[2] if best else "<module>"
 
 
-_s0_py_files = sorted((ROOT / "src" / "penumbra" / "core").rglob("*.py")) + [ROOT / "src" / "penumbra" / "server.py"]
+_s0_py_files = sorted((ROOT / "src" / "omniseek" / "core").rglob("*.py")) + [ROOT / "src" / "omniseek" / "server.py"]
 _s0_offenders = []
 _s0_total_base = 0
 for _p in _s0_py_files:
@@ -13202,7 +13202,7 @@ class _S0StragglerAdapter:
         self.cached = None
 
     def search(self, query, limit=10):
-        from penumbra.core import cache
+        from omniseek.core import cache
         if cache.cache_only() and self.cached is not None:
             return list(self.cached)   # cache_only pickup: instant, no re-egress
         _s0_time.sleep(0.6)            # slower than the 0.1s request deadline below
@@ -13282,7 +13282,7 @@ finally:
 
 # (I4) walled CDP pool per-URL capacities: the REAL _pool_for sizing (9225/douyin falls to the else
 #      branch => 3). Probe the real branch logic without spawning worker threads (stub the pool class).
-from penumbra.core.sources.walled import _cdp as _s0_cdp  # noqa: E402
+from omniseek.core.sources.walled import _cdp as _s0_cdp  # noqa: E402
 
 
 class _S0FakePool:
@@ -13367,7 +13367,7 @@ check("S0.5: docs/BUDGETS.md drift-guard binds to the LIVE constant symbols (no 
 
 
 # --- S0.6: egress inventory ratchet. The current raw-egress module set (import httpx / curl_cffi /
-#     socket / subprocess / yt_dlp under src/penumbra/eye) must be a SUBSET of the checked-in baseline.
+#     socket / subprocess / yt_dlp under src/omniseek/eye) must be a SUBSET of the checked-in baseline.
 #     A NEW raw-egress module fails smoke until it is wrapped (S1) or added to the baseline in a commit.
 #     The baseline is READ from the committed file, never recomputed as the reference. ---
 _S0_RAW_EGRESS = ("httpx", "curl_cffi", "socket", "subprocess", "yt_dlp")
@@ -13388,7 +13388,7 @@ def _s0_module_top_imports(tree):
 def _s0_current_egress():
     _src = ROOT / "src"
     _mods = set()
-    for _p in sorted((_src / "penumbra" / "core").rglob("*.py")):
+    for _p in sorted((_src / "omniseek" / "core").rglob("*.py")):
         _mod = _p.relative_to(_src).with_suffix("").as_posix().replace("/", ".")
         if _s0_module_top_imports(_s0_ast.parse(_p.read_text(encoding="utf-8"))) & set(_S0_RAW_EGRESS):
             _mods.add(_mod)
@@ -13408,13 +13408,13 @@ check("S0.6: the egress ratchet baseline is the committed file (read, not recomp
 # ===========================================================================
 # S1-C1: close the cache_only public promise at the shared funnels + harden get_impersonated. Offline.
 #   Part 1 (get_impersonated triple-fix): (1) cache_only guard  (2) SSRF guard on the initial url
-#     (3) MAX_BYTES cap. Part 2 (raw drill cache_only): (5) real penumbra_search cache_only drill is
+#     (3) MAX_BYTES cap. Part 2 (raw drill cache_only): (5) real omniseek_search cache_only drill is
 #     zero-egress and drops the misleading note  (6) cache_only threads through _work.
 #   curl_cffi is stubbed via a fake sys.modules entry (the lazy `from curl_cffi import requests`
 #   picks it up), and _netguard's getaddrinfo is host-mapped, so all six run with NO live network.
 # ===========================================================================
 import types as _s1_types  # noqa: E402
-from penumbra.core import http as _s1_http, cache as _s1_cache, _netguard as _s1_ng  # noqa: E402
+from omniseek.core import http as _s1_http, cache as _s1_cache, _netguard as _s1_ng  # noqa: E402
 
 
 class _S1FakeResp:
@@ -13500,7 +13500,7 @@ finally:
     else:
         sys.modules["curl_cffi"] = _s1_orig_curl
 
-# (5) raw=True cache_only zero-egress through the REAL penumbra_search drill: a stub whose search attempts a
+# (5) raw=True cache_only zero-egress through the REAL omniseek_search drill: a stub whose search attempts a
 #     funnelled egress (_http.get). Under cache_only the funnel short-circuits BEFORE the pooled client,
 #     so the _get_client tripwire never fires; and the drill no longer appends a "has no effect" note.
 _s1_egress_hits = []
@@ -13534,7 +13534,7 @@ def _s1_egress_tripwire():
 
 _s1_http._get_client = _s1_egress_tripwire
 import asyncio as _s1_aio  # noqa: E402
-_s1_eye_search = _srv.penumbra_search  # S4c-2: penumbra_search is now an async tool body; drive it the way mcp awaits it (asyncio.run)
+_s1_eye_search = _srv.omniseek_search  # S4c-2: omniseek_search is now an async tool body; drive it the way mcp awaits it (asyncio.run)
 try:
     _s1_drill = _s1_aio.run(_s1_eye_search(query="q", sources=["_s1_egress_stub"], raw=True,
                                            full=True, staleness="cache_only"))
@@ -13604,7 +13604,7 @@ check("S1: fetch_outcome threads cache_only into _work (adapter sees True; defau
 #     curl_cffi is absent): a malformed / out-of-range PORT must be a bad_port BLOCK, never a raised
 #     ValueError (urlsplit DEFERS .port validation; _validate_url_shape now catches it). This is the ONE
 #     choke point, so get_impersonated / http.get / safe_fetch all keep their None-on-failure contract.
-from penumbra.core import _netguard as _s1_ng
+from omniseek.core import _netguard as _s1_ng
 _s1_bad_port_ok = True
 for _u in ("http://x:abc/", "http://x:70000/", "http://x:-1/"):
     try:
@@ -13617,14 +13617,14 @@ check("S1: a malformed/out-of-range port is a bad_port BLOCK, not a raised Value
 
 
 # ---------------------------------------------------------------------------
-# S1-C2 (UNTRUSTED_URL per-hop SSRF): safe_fetch PROMOTED to the core-leaf penumbra.core.safeurl, and
+# S1-C2 (UNTRUSTED_URL per-hop SSRF): safe_fetch PROMOTED to the core-leaf omniseek.core.safeurl, and
 # web_fallback's untrusted read routed through it (IP-pinned per hop) with a Jina guard. Offline via
 # httpx MockTransport + a patched getaddrinfo. The curator path is byte-identical (re-export).
 # ---------------------------------------------------------------------------
 import socket as _c2_socket  # noqa: E402
-from penumbra.core import safeurl as _c2_safeurl, web_fallback as _c2_wf  # noqa: E402
-from penumbra.core import cache as _c2_cache, _netguard as _c2_ng  # noqa: E402
-from penumbra.core.curator import probe as _c2_probe  # noqa: E402
+from omniseek.core import safeurl as _c2_safeurl, web_fallback as _c2_wf  # noqa: E402
+from omniseek.core import cache as _c2_cache, _netguard as _c2_ng  # noqa: E402
+from omniseek.core.curator import probe as _c2_probe  # noqa: E402
 
 # (4) curator parity: curator.probe.safe_fetch IS safeurl.safe_fetch (same object via re-export), so
 #     every existing curator safe_fetch golden exercises the MOVED impl unchanged (no drift possible).
@@ -13728,7 +13728,7 @@ finally:
 # ---------------------------------------------------------------------------
 # S1-C2 review-fix goldens (R1/R2/R3 regressions + H1/H2 UNTRUSTED_URL SSRF holes).
 # ---------------------------------------------------------------------------
-from penumbra.core import docreader as _c2_dr  # noqa: E402
+from omniseek.core import docreader as _c2_dr  # noqa: E402
 
 # (R1) non-2xx now falls THROUGH to Jina like the old raise_for_status path (was: safe_fetch returns
 #      ok=True for a 4xx terminal response, so the 404 error body got extracted + returned as a
@@ -13808,7 +13808,7 @@ finally:
     _c2_safeurl.socket.getaddrinfo = _c2_dl_real_gai
     _c2_safeurl.httpx.Client = _c2_dl_real_client
 
-# (H2 high) penumbra_view image fetch follows redirects MANUALLY now: a 302 -> 127.0.0.1:9222 (the loopback
+# (H2 high) omniseek_view image fetch follows redirects MANUALLY now: a 302 -> 127.0.0.1:9222 (the loopback
 #      CDP DevTools API) is refused per-hop -> an error entry, never the private target's bytes.
 _c2_iv_real_gai = _c2_safeurl.socket.getaddrinfo
 _c2_iv_real_client = _c2_safeurl.httpx.Client
@@ -13826,7 +13826,7 @@ try:
                            **{kk: vv for kk, vv in k.items() if kk != "transport"}))
     _c2_iv = _c2_dr.view_image_urls(["http://img.example.com/pic.png"])
     _c2_iv_e = _c2_iv["images"][0] if _c2_iv["images"] else {}
-    check("S1: penumbra_view image fetch refuses a 302 -> 127.0.0.1:9222 (per-hop revalidation -> error entry, private bytes never returned) (H2)",
+    check("S1: omniseek_view image fetch refuses a 302 -> 127.0.0.1:9222 (per-hop revalidation -> error entry, private bytes never returned) (H2)",
           _c2_iv["count"] == 0 and "data" not in _c2_iv_e and "refused" in _c2_iv_e.get("error", "").lower()
           and _c2_iv_hop["n"] == 1)
 finally:
@@ -13843,7 +13843,7 @@ finally:
 # _request_capped's iter_raw() -- the established _FakeClient/iter_raw precedent earlier in this file.
 # ---------------------------------------------------------------------------
 import socket as _c3_socket  # noqa: E402
-from penumbra.core import http as _c3_http, safeurl as _c3_safeurl, _netguard as _c3_ng  # noqa: E402
+from omniseek.core import http as _c3_http, safeurl as _c3_safeurl, _netguard as _c3_ng  # noqa: E402
 
 _c3_real_gai = _c3_ng.socket.getaddrinfo
 _c3_real_client = _c3_http._client
@@ -13986,7 +13986,7 @@ import contextlib as _s2ctx  # noqa: E402
 import threading as _s2thr  # noqa: E402
 import time as _s2time  # noqa: E402
 
-from penumbra.core import lifecycle as _s2lc  # noqa: E402
+from omniseek.core import lifecycle as _s2lc  # noqa: E402
 
 # S2.1: registry drains BOTH registered loops within budget. Two fake loops each run
 # `while not stop.is_set(): stop.wait(0.01)` (the wait-not-sleep shape); drain_all sets their stops
@@ -14057,7 +14057,7 @@ try:
     # That is the sole root of the flaky S2.3+F2 pair (they failed / passed TOGETHER exactly as the
     # embedder flipped cold / warm). warm() blocks until loaded, so this assertion now measures the flush
     # LOGIC (its intent), never one-off model-load time, and the thread joins cleanly with no zombie.
-    from penumbra.core.recall import embed as _s2embed
+    from omniseek.core.recall import embed as _s2embed
     _s2embed.warm()
     _s2w._STOP.set()                  # stop BEFORE start -> loop body skipped -> pure FINAL FLUSH
     _s2_tw = _s2thr.Thread(target=_s2w._writer_loop, name="s2-recall-writer", daemon=True)
@@ -14322,7 +14322,7 @@ finally:
         _s2lc._stops[:] = [e for e in _s2lc._stops if e[0] != "yield-tap-writer"]
 
 # ---------------------------------------------------------------------------
-# S3a. sync->async PORTAL (penumbra.core.portal): the lowest-risk async-method slice. PURE ADDITION --
+# S3a. sync->async PORTAL (omniseek.core.portal): the lowest-risk async-method slice. PURE ADDITION --
 #      portal.py is new; the only server edit is a fail-safe, run-once bind + self-test in _threaded's
 #      _runner; NO operation is converted (every tool still runs sync via .__wrapped__ above). These
 #      goldens prove the bridge OFFLINE against a hand-run loop; the REAL FastMCP-loop round-trip is
@@ -14330,9 +14330,9 @@ finally:
 # ---------------------------------------------------------------------------
 import asyncio as _s3aio  # noqa: E402
 import threading as _s3thr  # noqa: E402
-from penumbra.core import portal as _portal  # noqa: E402
-from penumbra.core import cache as _s3cache  # noqa: E402
-from penumbra.core import diag as _s3diag  # noqa: E402
+from omniseek.core import portal as _portal  # noqa: E402
+from omniseek.core import cache as _s3cache  # noqa: E402
+from omniseek.core import diag as _s3diag  # noqa: E402
 
 # (4b) self_test is FAIL-SAFE while UNBOUND: returns False and never raises. Runs FIRST, before any
 # bind (smoke calls tool bodies via .__wrapped__, so the portal is never bound by earlier tests).
@@ -14441,7 +14441,7 @@ finally:
 # (Part 2 wiring) prove OFFLINE, by source inspection, that the server edit is exactly the fail-safe,
 # run-once bind+self-test AND that the sync tool dispatch is unchanged (no operation converted).
 import inspect as _s3insp  # noqa: E402
-import penumbra.server as _s3srv  # noqa: E402
+import omniseek.server as _s3srv  # noqa: E402
 _s3_runner_src = _s3insp.getsource(_s3srv._threaded)
 _s3_ensure_src = _s3insp.getsource(_s3srv._ensure_portal)
 check("S3: _runner still dispatches the tool body SYNC via anyio.to_thread.run_sync (no operation converted)",
@@ -14467,8 +14467,8 @@ check("S3: the portal self-test is RUN-ONCE (a module flag guards it) + submitte
 # ---------------------------------------------------------------------------
 import asyncio as _s3b_aio  # noqa: E402
 import socket as _s3b_socket  # noqa: E402
-from penumbra.core import http as _s3b_http, safeurl as _s3b_safeurl, _netguard as _s3b_ng  # noqa: E402
-from penumbra.core import cache as _s3b_cache, diag as _s3b_diag  # noqa: E402
+from omniseek.core import http as _s3b_http, safeurl as _s3b_safeurl, _netguard as _s3b_ng  # noqa: E402
+from omniseek.core import cache as _s3b_cache, diag as _s3b_diag  # noqa: E402
 
 _s3b_real_gai = _s3b_ng.socket.getaddrinfo
 _s3b_real_aclient = _s3b_http._aclient
@@ -14736,7 +14736,7 @@ import gc as _s4a_gc  # noqa: E402
 import logging as _s4a_logging  # noqa: E402
 import threading as _s4a_threading  # noqa: E402
 import time as _s4a_time  # noqa: E402
-from penumbra.core import fetcher as _s4a_fetcher  # noqa: E402
+from omniseek.core import fetcher as _s4a_fetcher  # noqa: E402
 
 
 class _S4aStub:
@@ -14898,7 +14898,7 @@ try:
             self.name = name
 
         def search(self, query, limit=10):
-            from penumbra.core import diag as _d
+            from omniseek.core import diag as _d
             _d.note(f"{self.name}.probe", url=f"http://{self.name}", status=None,
                     body=f"note-from-{self.name}")
             return [_doc(self.name, f"{self.name} doc", f"http://{self.name}/1")]
@@ -14935,7 +14935,7 @@ try:
             self.name = name
 
         def search(self, query, limit=10):
-            from penumbra.core import cache as _c
+            from omniseek.core import cache as _c
             _s4a_g4_seen["fresh"] = _c._fresh_var.get()
             _s4a_g4_seen["cache_only"] = _c.cache_only()
             _s4a_g4_seen["tid"] = _s4a_threading.get_ident()
@@ -14999,7 +14999,7 @@ try:
         description = "cache_only stub"
 
         def search(self, query, limit=10):
-            from penumbra.core import cache as _c
+            from omniseek.core import cache as _c
             _s4a_g7_seen["cache_only"] = _c.cache_only()
             return [_doc(self.name, "co doc", "http://co/1")]
 
@@ -15098,7 +15098,7 @@ try:
         # BOTH sides to return proper 2-tuples + capture the fetcher logger; the probe must reach
         # "shadow OK", never "shadow probe failed".
         import logging as _s4a_logging
-        from penumbra.core import portal as _s4a_portal_mod
+        from omniseek.core import portal as _s4a_portal_mod
         _s4a_doc = type("_S4aProbeDoc", (), {"source_id": "W1"})()
 
         class _S4aLogCap(_s4a_logging.Handler):
@@ -15109,7 +15109,7 @@ try:
             def emit(self, r):
                 self.msgs.append(r.getMessage())
         _s4a_cap = _S4aLogCap()
-        _s4a_flogger = _s4a_logging.getLogger("penumbra.core.fetcher")
+        _s4a_flogger = _s4a_logging.getLogger("omniseek.core.fetcher")
         _s4a_flogger.addHandler(_s4a_cap)
         _s4a_prev_submit = _s4a_portal_mod.submit
         _s4a_prev_sr = _s4a_fetcher.search_ranked
@@ -15180,7 +15180,7 @@ try:
         _s4a_fetcher.search_many = _s4a_prev_sm  # type: ignore[assignment]
         _s4a_fetcher._ASYNC_FANOUT_SHADOW_DONE = _s4a_prev_done
 
-    _s4a_server_src = (ROOT / "src" / "penumbra" / "server.py").read_text(encoding="utf-8")
+    _s4a_server_src = (ROOT / "src" / "omniseek" / "server.py").read_text(encoding="utf-8")
     check("S4a: server.py schedules the shadow probe OFF the hot path (background create_task over to_thread, not an awaited blocking call)",
           "async_fanout_shadow_probe" in _s4a_server_src
           and "create_task(" in _s4a_server_src
@@ -15211,9 +15211,9 @@ finally:
 import asyncio as _s4b_aio  # noqa: E402
 import socket as _s4b_socket  # noqa: E402
 import threading as _s4b_threading  # noqa: E402
-from penumbra.core.sources._declarative import DeclarativeAPIAdapter as _S4bDA  # noqa: E402
-from penumbra.core import http as _s4b_http, safeurl as _s4b_safeurl, _netguard as _s4b_ng  # noqa: E402
-from penumbra.core import cache as _s4b_cache, fetcher as _s4b_fetcher, diag as _s4b_diag  # noqa: E402
+from omniseek.core.sources._declarative import DeclarativeAPIAdapter as _S4bDA  # noqa: E402
+from omniseek.core import http as _s4b_http, safeurl as _s4b_safeurl, _netguard as _s4b_ng  # noqa: E402
+from omniseek.core import cache as _s4b_cache, fetcher as _s4b_fetcher, diag as _s4b_diag  # noqa: E402
 
 _s4b_real_gai = _s4b_ng.socket.getaddrinfo
 _s4b_real_aclient = _s4b_http._aclient
@@ -15445,7 +15445,7 @@ finally:
 
 # ===========================================================================================
 # S4c-1: asearch_ranked -- the ASYNC TWIN of the RANKED path (dedup + rank + recall + seen_before),
-#        penumbra_search's DEFAULT + most-complex path. WIRED into penumbra_search by S4c-2 (the tool body now
+#        omniseek_search's DEFAULT + most-complex path. WIRED into omniseek_search by S4c-2 (the tool body now
 #        awaits it); these goldens still exercise it directly + via the live ranked shadow probe.
 #        search_ranked was REFACTORED to SHARE the parity-critical leaf helpers
 #        (_build_recall_arm / _recall_remaining_budget / _fold_recall_index / _normalize_seen_before /
@@ -15460,7 +15460,7 @@ finally:
 import asyncio as _s4c_aio  # noqa: E402
 import threading as _s4c_threading  # noqa: E402
 import time as _s4c_time  # noqa: E402
-from penumbra.core import fetcher as _s4c_fetcher, recall as _s4c_recall  # noqa: E402
+from omniseek.core import fetcher as _s4c_fetcher, recall as _s4c_recall  # noqa: E402
 
 
 class _S4cStub:
@@ -15541,11 +15541,11 @@ _S4C_REAL_AS = _s4c_recall.as_of
 _S4C_REAL_SEEN = _s4c_fetcher._seen_before_lookup
 
 try:
-    # (0) S4c-2 FLIP LANDED: asearch_ranked EXISTS (async, callable) AND penumbra_search's server body now
+    # (0) S4c-2 FLIP LANDED: asearch_ranked EXISTS (async, callable) AND omniseek_search's server body now
     #     AWAITS it (the sync fetcher.search_ranked call is gone from the tool body); _ASYNC_FANOUT is a
     #     never-read placeholder kept False. (Pre-flip this asserted the reverse DORMANT state.)
-    _s4c_server_src = (ROOT / "src" / "penumbra" / "server.py").read_text(encoding="utf-8")
-    check("S4c: asearch_ranked exists (coroutine fn) + S4c-2 FLIP LANDED -- penumbra_search's server body now AWAITS fetcher.asearch_ranked and the sync fetcher.search_ranked call is gone; _ASYNC_FANOUT stays a never-read placeholder (False)",
+    _s4c_server_src = (ROOT / "src" / "omniseek" / "server.py").read_text(encoding="utf-8")
+    check("S4c: asearch_ranked exists (coroutine fn) + S4c-2 FLIP LANDED -- omniseek_search's server body now AWAITS fetcher.asearch_ranked and the sync fetcher.search_ranked call is gone; _ASYNC_FANOUT stays a never-read placeholder (False)",
           _s4c_aio.iscoroutinefunction(_s4c_fetcher.asearch_ranked)
           and _s4c_fetcher._ASYNC_FANOUT is False
           and "await fetcher.asearch_ranked(" in _s4c_server_src
@@ -15715,13 +15715,13 @@ finally:
 
 
 # ===========================================================================================
-# S4c-2: THE FLIP (the go/no-go live change). penumbra_search's tool body is now `async def` (dropped
+# S4c-2: THE FLIP (the go/no-go live change). omniseek_search's tool body is now `async def` (dropped
 #        @_threaded) and AWAITS the parity-validated async twins ON the loop: the default RANKED path
 #        awaits asearch_ranked, the RAW BUCKETS path awaits asearch_many, and the single-source DRILL
 #        runs OFF the loop via anyio.to_thread.run_sync(_eye_search_drill). These goldens prove the
 #        flip SHAPE, that each path awaits the async twin (not the sync one), that the drill runs off
 #        the loop thread, and that each path's out-dict SHAPE is byte-identical to the pre-flip tool --
-#        driven the way mcp 1.27 awaits an async @mcp.tool body (asyncio.run(penumbra_search(...)), which is
+#        driven the way mcp 1.27 awaits an async @mcp.tool body (asyncio.run(omniseek_search(...)), which is
 #        exactly func_metadata.call_fn_with_arg_validation's `if fn_is_async: return await fn(...)`).
 #        FR1: the tool body holds NO worker token during the fan-out (it is a loop coroutine; the
 #        fan-out children draw the shared pool inside _dispatch_search's to_thread), and NO path does a
@@ -15731,8 +15731,8 @@ finally:
 import asyncio as _s4c2_aio  # noqa: E402
 import inspect as _s4c2_insp  # noqa: E402
 import threading as _s4c2_threading  # noqa: E402
-import penumbra.server as _s4c2_server  # noqa: E402
-from penumbra.core import fetcher as _s4c2_fetcher, recall as _s4c2_recall  # noqa: E402
+import omniseek.server as _s4c2_server  # noqa: E402
+from omniseek.core import fetcher as _s4c2_fetcher, recall as _s4c2_recall  # noqa: E402
 
 _s4c2_registered: list = []
 
@@ -15752,17 +15752,17 @@ _S4C2_REAL_SR = _s4c2_fetcher.search_ranked
 _S4C2_REAL_DRILL = _s4c2_server._eye_search_drill
 
 try:
-    # (1) FLIP SHAPE: penumbra_search is now a COROUTINE tool body (iscoroutinefunction True), its source is
-    #     `async def penumbra_search` that AWAITS both async twins, and @_threaded is DROPPED (not a sync body
+    # (1) FLIP SHAPE: omniseek_search is now a COROUTINE tool body (iscoroutinefunction True), its source is
+    #     `async def omniseek_search` that AWAITS both async twins, and @_threaded is DROPPED (not a sync body
     #     run on a worker thread). inspect.getsource on the @mcp.tool()-returned fn includes its decorators.
-    _s4c2_src = _s4c2_insp.getsource(_s4c2_server.penumbra_search)
-    check("S4c2 (1): penumbra_search flipped to an ASYNC tool body -- iscoroutinefunction True; source is `async def penumbra_search` awaiting fetcher.asearch_ranked + fetcher.asearch_many; @_threaded DROPPED (the flip shape)",
-          _s4c2_aio.iscoroutinefunction(_s4c2_server.penumbra_search)
-          and "async def penumbra_search" in _s4c2_src
+    _s4c2_src = _s4c2_insp.getsource(_s4c2_server.omniseek_search)
+    check("S4c2 (1): omniseek_search flipped to an ASYNC tool body -- iscoroutinefunction True; source is `async def omniseek_search` awaiting fetcher.asearch_ranked + fetcher.asearch_many; @_threaded DROPPED (the flip shape)",
+          _s4c2_aio.iscoroutinefunction(_s4c2_server.omniseek_search)
+          and "async def omniseek_search" in _s4c2_src
           and "@_threaded" not in _s4c2_src
           and "await fetcher.asearch_ranked(" in _s4c2_src
           and "await fetcher.asearch_many(" in _s4c2_src,
-          f"iscoro={_s4c2_aio.iscoroutinefunction(_s4c2_server.penumbra_search)} "
+          f"iscoro={_s4c2_aio.iscoroutinefunction(_s4c2_server.omniseek_search)} "
           f"threaded={'@_threaded' in _s4c2_src} awaits_ranked={'await fetcher.asearch_ranked(' in _s4c2_src} "
           f"awaits_many={'await fetcher.asearch_many(' in _s4c2_src}")
 
@@ -15786,8 +15786,8 @@ try:
         _s4c2_fetcher.asearch_ranked = _s4c2_spy_ar
         _s4c2_fetcher.search_ranked = _s4c2_spy_sr
         _s4c2_rk_out = _s4c2_aio.run(
-            _s4c2_server.penumbra_search("q", sources=_s4c2_rk_names, limit=5, wait_s=5.0))
-        check("S4c2 (2): penumbra_search RANKED (default) path AWAITS asearch_ranked (spy hit=1) NOT the sync search_ranked (hit=0), returns {query,count,documents,_meta} with count==len(documents)",
+            _s4c2_server.omniseek_search("q", sources=_s4c2_rk_names, limit=5, wait_s=5.0))
+        check("S4c2 (2): omniseek_search RANKED (default) path AWAITS asearch_ranked (spy hit=1) NOT the sync search_ranked (hit=0), returns {query,count,documents,_meta} with count==len(documents)",
               _s4c2_ar_calls["n"] == 1 and _s4c2_sr_calls["n"] == 0
               and set(_s4c2_rk_out) >= {"query", "count", "documents", "_meta"}
               and _s4c2_rk_out["query"] == "q"
@@ -15818,8 +15818,8 @@ try:
         _s4c2_fetcher.asearch_many = _s4c2_spy_am
         _s4c2_fetcher.search_many = _s4c2_spy_sm
         _s4c2_rw_out = _s4c2_aio.run(
-            _s4c2_server.penumbra_search("q", sources=_s4c2_rw_names, limit=5, raw=True, wait_s=5.0))
-        check("S4c2 (3): penumbra_search RAW BUCKETS path AWAITS asearch_many (spy hit=1) NOT the sync search_many (hit=0), returns {query,results,total_count,_meta} with results a dict",
+            _s4c2_server.omniseek_search("q", sources=_s4c2_rw_names, limit=5, raw=True, wait_s=5.0))
+        check("S4c2 (3): omniseek_search RAW BUCKETS path AWAITS asearch_many (spy hit=1) NOT the sync search_many (hit=0), returns {query,results,total_count,_meta} with results a dict",
               _s4c2_am_calls["n"] == 1 and _s4c2_sm_calls["n"] == 0
               and set(_s4c2_rw_out) >= {"query", "results", "total_count", "_meta"}
               and isinstance(_s4c2_rw_out["results"], dict)
@@ -15844,13 +15844,13 @@ try:
 
         async def _s4c2_drive_drill():
             _s4c2_dr_spy["loop_tid"] = _s4c2_threading.get_ident()
-            return await _s4c2_server.penumbra_search(
+            return await _s4c2_server.omniseek_search(
                 "q", sources=_s4c2_dr_names, raw=True, full=True, wait_s=5.0)
 
         _s4c2_dr_out = _s4c2_aio.run(_s4c2_drive_drill())
         _s4c2_dr_off = (_s4c2_dr_spy["tid"] is not None and _s4c2_dr_spy["loop_tid"] is not None
                         and _s4c2_dr_spy["tid"] != _s4c2_dr_spy["loop_tid"])
-        check("S4c2 (4): penumbra_search DRILL path (raw=True + 1 source) runs _eye_search_drill via anyio.to_thread OFF the loop thread (drill_tid != loop_tid) + returns {source,query,count,documents} with count==len(documents)",
+        check("S4c2 (4): omniseek_search DRILL path (raw=True + 1 source) runs _eye_search_drill via anyio.to_thread OFF the loop thread (drill_tid != loop_tid) + returns {source,query,count,documents} with count==len(documents)",
               _s4c2_dr_off
               and set(_s4c2_dr_out) >= {"source", "query", "count", "documents"}
               and _s4c2_dr_out["source"] == "s4c2_dr_a"
@@ -15869,11 +15869,11 @@ try:
     _s4c2_e2e = ["s4c2_e2e_a", "s4c2_e2e_b"]
     try:
         _s4c2_recall.indexable_set = lambda: frozenset()
-        _s4c2_e_rk = _s4c2_aio.run(_s4c2_server.penumbra_search("q", sources=_s4c2_e2e, limit=5, wait_s=5.0))
+        _s4c2_e_rk = _s4c2_aio.run(_s4c2_server.omniseek_search("q", sources=_s4c2_e2e, limit=5, wait_s=5.0))
         _s4c2_e_rw = _s4c2_aio.run(
-            _s4c2_server.penumbra_search("q", sources=_s4c2_e2e, limit=5, raw=True, wait_s=5.0))
+            _s4c2_server.omniseek_search("q", sources=_s4c2_e2e, limit=5, raw=True, wait_s=5.0))
         _s4c2_e_dr = _s4c2_aio.run(
-            _s4c2_server.penumbra_search("q", sources=["s4c2_e2e_a"], raw=True, full=True, wait_s=5.0))
+            _s4c2_server.omniseek_search("q", sources=["s4c2_e2e_a"], raw=True, full=True, wait_s=5.0))
         check("S4c2 (5): end-to-end asyncio.run (the mcp async-await path) over the REAL async twins -- ranked + raw buckets + drill all well-formed, SHAPE byte-identical to the pre-flip tool",
               set(_s4c2_e_rk) >= {"query", "count", "documents", "_meta"}
               and _s4c2_e_rk["count"] == len(_s4c2_e_rk["documents"])
@@ -15886,8 +15886,8 @@ try:
     finally:
         _s4c2_recall.indexable_set = _S4C2_REAL_IX
 
-    # (6) BLAST RADIUS: the flip touched penumbra_search ONLY. search_ranked / search_many /
-    #     fetch_one_with_diag are still SYNC (not coroutines) so penumbra_gather / sensors / curator / the
+    # (6) BLAST RADIUS: the flip touched omniseek_search ONLY. search_ranked / search_many /
+    #     fetch_one_with_diag are still SYNC (not coroutines) so omniseek_gather / sensors / curator / the
     #     shadow probe are unaffected, and the shadow probe still shadows sync-vs-async.
     _s4c2_probe_src = _s4c2_insp.getsource(_s4c2_fetcher.async_fanout_shadow_probe)
     check("S4c2 (6): blast radius -- search_ranked / search_many / fetch_one_with_diag stay SYNC (not coroutines; other callers untouched) + the shadow probe still compares sync search_many vs asearch_many",
@@ -15899,19 +15899,19 @@ try:
           f"sm_async={_s4c2_aio.iscoroutinefunction(_s4c2_fetcher.search_many)} "
           f"fd_async={_s4c2_aio.iscoroutinefunction(_s4c2_fetcher.fetch_one_with_diag)}")
 
-    # (7) penumbra_gather DISPATCH of the now-async penumbra_search: penumbra_search is in _GATHER_TOOLS and gather's
-    #     _run_one drives a coroutine tool via asyncio.run on its worker thread. Prove an penumbra_search call
-    #     THROUGH penumbra_gather returns status='ok' with a well-formed ranked dict (NOT an un-awaited coroutine).
+    # (7) omniseek_gather DISPATCH of the now-async omniseek_search: omniseek_search is in _GATHER_TOOLS and gather's
+    #     _run_one drives a coroutine tool via asyncio.run on its worker thread. Prove an omniseek_search call
+    #     THROUGH omniseek_gather returns status='ok' with a well-formed ranked dict (NOT an un-awaited coroutine).
     _s4c2_reg(_S4cStub("s4c2_gth_a", ndocs=2))
     try:
         _s4c2_recall.indexable_set = lambda: frozenset()
-        _s4c2_gth = _s4c2_server.penumbra_gather.__wrapped__(
-            calls=[{"tool": "penumbra_search",
+        _s4c2_gth = _s4c2_server.omniseek_gather.__wrapped__(
+            calls=[{"tool": "omniseek_search",
                     "args": {"query": "q", "sources": ["s4c2_gth_a"], "limit": 5, "wait_s": 5}}],
             wait_s=30)
         _s4c2_gr0 = (_s4c2_gth.get("results") or [{}])[0]
         _s4c2_gres = _s4c2_gr0.get("result")
-        check("S4c2 (7): penumbra_search dispatched THROUGH penumbra_gather (async tool driven via asyncio.run on the gather-pool worker thread) returns status='ok' + a well-formed ranked dict, NOT an un-awaited coroutine",
+        check("S4c2 (7): omniseek_search dispatched THROUGH omniseek_gather (async tool driven via asyncio.run on the gather-pool worker thread) returns status='ok' + a well-formed ranked dict, NOT an un-awaited coroutine",
               _s4c2_gr0.get("status") == "ok"
               and isinstance(_s4c2_gres, dict)
               and not _s4c2_aio.iscoroutine(_s4c2_gres)
@@ -15942,14 +15942,14 @@ finally:
 #   vertical call had no typed-param guidance. Two razor-clean aids close them, both PURE / OFFLINE:
 #   #2 param_hint (a vertical source's structured-query hint, the eye's idiom for a typed per-vertical
 #      param schema; a central _PARAM_HINTS map beside _ROUTING_KEYWORDS, precedence class-attr >
-#      central > facets), and #1 routing_hint (server.penumbra_search promotes build_search_plan's
+#      central > facets), and #1 routing_hint (server.omniseek_search promotes build_search_plan's
 #      already-overlap-ranked excluded_relevant, overlap>=2 — the chase-guidance salience line, NOT a
 #      new threshold — to a TOP-LEVEL actionable hint, folding in each source's param_hint). Neither
 #      touches build_search_plan, so the W1 byte-exact excluded_relevant goldens still hold.
 # ---------------------------------------------------------------------------
 import inspect as _ph_insp  # noqa: E402
-from penumbra.core import fetcher as _ph_fetcher  # noqa: E402
-from penumbra.server import _routing_hint as _rh_fn  # noqa: E402
+from omniseek.core import fetcher as _ph_fetcher  # noqa: E402
+from omniseek.server import _routing_hint as _rh_fn  # noqa: E402
 
 # --- #2 param_hint: central seed + precedence (class attr > central map > facets) + '' for free text.
 check("param_hint: _PARAM_HINTS seeds the 5 vertical sources with non-empty (source-derived) hints",
@@ -16012,21 +16012,21 @@ check("routing_hint: carries the matched tokens up with the count (judgeable pro
 #         answer layer exercised; (R2) cache get/set + _se_sema.acquire run OFF the loop, the network
 #         await runs ON it; (contract) a None egress -> [] not cached; (R2 shared-cap) the acquire fires
 #         on the MODULE _se_sema object (not a fresh asyncio.Semaphore). Still DORMANT for the sync
-#         callers (penumbra_gather / sensors / curator keep the sync .search); asearch is reached by the S4a
+#         callers (omniseek_gather / sensors / curator keep the sync .search); asearch is reached by the S4a
 #         native dispatch + these goldens. A truly-live native egress is only provable post-deploy (a
-#         real penumbra_search naming an SE source).
+#         real omniseek_search naming an SE source).
 # ---------------------------------------------------------------------------
 import asyncio as _s4d_aio  # noqa: E402
 import threading as _s4d_threading  # noqa: E402
-from penumbra.core import _stackexchange as _s4d_se, http as _s4d_http, cache as _s4d_cache  # noqa: E402
-from penumbra.core import fetcher as _s4d_fetcher  # noqa: E402
-from penumbra.core.sources.scrape.stackoverflow_source import StackOverflowAdapter as _S4dSO  # noqa: E402
-from penumbra.core.sources.scrape.academia_se_source import AcademiaSEAdapter as _S4dAcad  # noqa: E402
-from penumbra.core.sources.scrape.crossvalidated_source import CrossValidatedAdapter as _S4dCV  # noqa: E402
-from penumbra.core.sources.scrape.cs_se_source import CSStackExchangeAdapter as _S4dCS  # noqa: E402
-from penumbra.core.sources.scrape.datascience_se_source import DataScienceSEAdapter as _S4dDS  # noqa: E402
-from penumbra.core.sources.scrape.ai_se_source import AIStackExchangeAdapter as _S4dAI  # noqa: E402
-from penumbra.core.sources.scrape._base import BaseScrapeAdapter as _S4dBase  # noqa: E402
+from omniseek.core import _stackexchange as _s4d_se, http as _s4d_http, cache as _s4d_cache  # noqa: E402
+from omniseek.core import fetcher as _s4d_fetcher  # noqa: E402
+from omniseek.core.sources.scrape.stackoverflow_source import StackOverflowAdapter as _S4dSO  # noqa: E402
+from omniseek.core.sources.scrape.academia_se_source import AcademiaSEAdapter as _S4dAcad  # noqa: E402
+from omniseek.core.sources.scrape.crossvalidated_source import CrossValidatedAdapter as _S4dCV  # noqa: E402
+from omniseek.core.sources.scrape.cs_se_source import CSStackExchangeAdapter as _S4dCS  # noqa: E402
+from omniseek.core.sources.scrape.datascience_se_source import DataScienceSEAdapter as _S4dDS  # noqa: E402
+from omniseek.core.sources.scrape.ai_se_source import AIStackExchangeAdapter as _S4dAI  # noqa: E402
+from omniseek.core.sources.scrape._base import BaseScrapeAdapter as _S4dBase  # noqa: E402
 
 # Recorded SE payloads: a /search/advanced page with ONE question that HAS an accepted answer, plus the
 # matching /questions/{id}/answers page (two answers, one accepted). Keyed by URL substring so ONE stub
@@ -16255,10 +16255,10 @@ check("S4d-SE: SHARED-CAP R2 -- the async egress acquires the MODULE _stackexcha
 #         sync-abuild branch (inspect.isawaitable False) runs the pure-CPU mapper on the loop and
 #         returns docs byte-identical to `search`. Faithfulness of each `_araw_fetch` mirror was
 #         diff-reviewed + adversarially verified per source; true-live egress is proven post-deploy
-#         by a broad penumbra_search naming these sources.
+#         by a broad omniseek_search naming these sources.
 # ---------------------------------------------------------------------------
-from penumbra.core import fetcher as _s4e_fetcher  # noqa: E402
-from penumbra.core import http as _s4e_http, cache as _s4e_cache  # noqa: E402
+from omniseek.core import fetcher as _s4e_fetcher  # noqa: E402
+from omniseek.core import http as _s4e_http, cache as _s4e_cache  # noqa: E402
 import asyncio as _s4e_aio  # noqa: E402
 
 _S4E_CONVERTED = [
@@ -16318,14 +16318,14 @@ check("S4e-A2: POLYMORPHIC PARITY -- gutenberg.asearch == .search BYTE-IDENTICAL
 #          pypi) is AsyncSearchCapable at once (feeds fetched as concurrent coroutines, not a held thread
 #          pool). The LOAD-BEARING subtlety: a subclass that OVERRIDES search (fellowships keyword-gates
 #          + appends a curated static shelf) INHERITS the base asearch and is flagged AsyncSearchCapable,
-#          so the live async penumbra_search path would route to the base asearch and SILENTLY DROP that
+#          so the live async omniseek_search path would route to the base asearch and SILENTLY DROP that
 #          customization. The base asearch has a GUARD: if the subclass overrode search or _fetch_all_docs,
 #          it runs that subclass's OWN sync search off-loop instead (correct, not native). Goldens: GATE
 #          (RSS subclasses async), SAFETY GUARD (an override's custom search survives on the async path),
 #          NATIVE PARITY (a plain subclass asearch == search over a real stubbed feed).
 # ---------------------------------------------------------------------------
-from penumbra.core.sources.scrape._rss import RSSAdapterBase as _S4fRSS  # noqa: E402
-from penumbra.core.normalize import Document as _S4fDoc  # noqa: E402
+from omniseek.core.sources.scrape._rss import RSSAdapterBase as _S4fRSS  # noqa: E402
+from omniseek.core.normalize import Document as _S4fDoc  # noqa: E402
 
 # (1) GATE
 _s4f_pypi = _s4e_fetcher.get_adapter("pypi")
@@ -16407,10 +16407,10 @@ check("S4f-RSS: NATIVE PARITY -- a plain RSS subclass asearch == search over the
 #         in-flight cap `_guard.sema`, acquired OFF the loop (like _stackexchange._ase_get). Goldens: GATE
 #         (7 async), _aapi_search PARITY+OFF-LOOP (a probe: asearch==search + cache off-loop), arxiv SEMA
 #         (off-loop + shared, not a split asyncio.Semaphore). Faithfulness diff-reviewed + adversarially
-#         verified per source; true-live proof is a post-deploy penumbra_search naming these.
+#         verified per source; true-live proof is a post-deploy omniseek_search naming these.
 # ---------------------------------------------------------------------------
-from penumbra.core.sources.api._base import BaseAPIAdapter as _S4gBase  # noqa: E402
-from penumbra.core.sources.api import arxiv_source as _s4g_arxiv  # noqa: E402
+from omniseek.core.sources.api._base import BaseAPIAdapter as _S4gBase  # noqa: E402
+from omniseek.core.sources.api import arxiv_source as _s4g_arxiv  # noqa: E402
 
 # (1) GATE
 _S4G_A1 = ["arxiv", "crossref_retractions", "datagovsg_nonresident_pass_types", "worldbank_stats",
@@ -16553,9 +16553,9 @@ check("S4h-A4: GATE -- all 12 converted A4 standalone sources are AsyncSearchCap
 #         to sync search which would double-apply _pin_zh; a plain override-search-no-asearch subclass IS
 #         guarded); aget_json OFF-LOOP (the shared _sema off-loop).
 # ---------------------------------------------------------------------------
-from penumbra.core import _openalex as _s4i_oa  # noqa: E402
-from penumbra.core.sources.api.openalex_source import OpenAlexAdapter as _S4iOA  # noqa: E402
-from penumbra.core.sources.api.openalex_cn_source import OpenAlexCNAdapter as _S4iCN  # noqa: E402
+from omniseek.core import _openalex as _s4i_oa  # noqa: E402
+from omniseek.core.sources.api.openalex_source import OpenAlexAdapter as _S4iOA  # noqa: E402
+from omniseek.core.sources.api.openalex_cn_source import OpenAlexCNAdapter as _S4iCN  # noqa: E402
 
 # (1) GATE (deepseek = one org_watch row; the ONE _OrgWatchAdapter class converts all 39)
 _S4I = ["openalex", "openalex_cn", "researcher_watch", "deepseek"]
@@ -16686,8 +16686,8 @@ check("S4i-OA: aget_json OFF-LOOP -- the shared _openalex _sema is acquired OFF 
 #            (CDP-primary; search_web only a fallback). Goldens: GATE + _github.aget_json off-loop sema +
 #            asearch_web async Brave path.
 # ---------------------------------------------------------------------------
-from penumbra.core import _github as _s4j_gh  # noqa: E402
-from penumbra.core.sources.api import _search_backend as _s4j_sb  # noqa: E402
+from omniseek.core import _github as _s4j_gh  # noqa: E402
+from omniseek.core.sources.api import _search_backend as _s4j_sb  # noqa: E402
 
 # (1) GATE (blind = one search_index row; the ONE _SearchVenue class converts all 10)
 _S4J = ["github", "github_trending", "blind"]
@@ -16837,7 +16837,7 @@ check("S4k: RAW-HTTPX GATE -- a representative 15 of the converted raw-httpx sou
 # title anchor sharing the ?ref=search-presentations href. Locks turbo-frame narrowing, per-id
 # dedup of the twin anchors, title/thumbnail/duration extraction, and the ?ref-stripped url.
 # ---------------------------------------------------------------------------
-from penumbra.core.sources.scrape.slideslive_talks_source import (  # noqa: E402
+from omniseek.core.sources.scrape.slideslive_talks_source import (  # noqa: E402
     _parse_search_fragment as _fx_sl_parse)
 
 _fx_sl_html = """<turbo-frame id="search_presentations_results">
@@ -16882,7 +16882,7 @@ check("slideslive-search: _parse_search_fragment extracts >=1 hit with {id,url,t
 # fetch_url community/AI-overview enrich are exercised offline against captured JSON
 # fixtures (http.get_json stubbed; the arxiv delegation stubbed with a fake adapter).
 # ---------------------------------------------------------------------------
-import penumbra.core.sources.api.alphaxiv_source as _ax  # noqa: E402
+import omniseek.core.sources.api.alphaxiv_source as _ax  # noqa: E402
 
 # Captured-shape fixtures (the endpoint payload shapes verified keyless 2026-07-14).
 _ax_feed = {"papers": [
@@ -17019,10 +17019,10 @@ check("alphaxiv: health_check probes /papers/v3/feed WITH pageNum (required para
 print()
 # ===========================================================================================
 # JOB FLEET DASHBOARD + WECOM DIGEST (2026-07-14): a readable control-panel for the background-job
-#   fleet (folded into penumbra_sources check_health's system.jobs) + the weekly digest push routed to
+#   fleet (folded into omniseek_sources check_health's system.jobs) + the weekly digest push routed to
 #   企业微信 (WeCom) instead of Bark. All PURE / OFFLINE.
 # ---------------------------------------------------------------------------
-from penumbra.core import jobs as _fj_jobs  # noqa: E402
+from omniseek.core import jobs as _fj_jobs  # noqa: E402
 
 # --- _next_slot: forward-looking next firing (the dashboard's next_run), never raises.
 _fj_now = 1_000_000.0
@@ -17068,7 +17068,7 @@ finally:
     _fj_jobs._shipped_registered = _fj_ship1
 
 # --- wecom_push: fail-open (absent creds -> no-op) + the WeCom markdown payload shape.
-from penumbra.core import notify as _fj_notify  # noqa: E402
+from omniseek.core import notify as _fj_notify  # noqa: E402
 import httpx as _fj_httpx  # noqa: E402
 _fj_posts: list = []
 _fj_post_save, _fj_creds_save = _fj_httpx.post, _fj_notify._WECOM_CREDS_PATH
@@ -17092,9 +17092,9 @@ finally:
 
 # --- run_digest: routes to WeCom ONLY (not Bark), agent-first with a mechanical LINK fallback. Stub
 #     the briefing agent -> None (force the fallback, and never hit the real frontier API in smoke).
-import penumbra.core.infra_jobs as _fj_ij  # noqa: E402
-import penumbra.core.fetcher as _fj_fetcher  # noqa: E402
-import penumbra.core.briefing as _fj_brief  # noqa: E402
+import omniseek.core.infra_jobs as _fj_ij  # noqa: E402
+import omniseek.core.fetcher as _fj_fetcher  # noqa: E402
+import omniseek.core.briefing as _fj_brief  # noqa: E402
 _fj_wecom_calls, _fj_bark_calls = [], []
 _fj_themes_save, _fj_dig_save = _fj_ij._load_digest_themes, _fj_ij._DIGEST_DIR
 _fj_wpush_save, _fj_bpush_save = _fj_notify.wecom_push, _fj_notify.alert
@@ -17117,9 +17117,9 @@ finally:
     _fj_fetcher.search_ranked, _fj_brief.build_briefing = _fj_sr_save, _fj_bb_save
 
 # --- briefing AGENT (Phase 1): the read-only SANDBOX (only whitelisted tools run) + fail-open + loop.
-from penumbra.core import briefing as _bfa  # noqa: E402
-check("briefing sandbox: the tool whitelist is exactly READ-ONLY penumbra_search + brain_read (no write/shell tool)",
-      set(_bfa._TOOLS) == {"penumbra_search", "brain_read"})
+from omniseek.core import briefing as _bfa  # noqa: E402
+check("briefing sandbox: the tool whitelist is exactly READ-ONLY omniseek_search + brain_read (no write/shell tool)",
+      set(_bfa._TOOLS) == {"omniseek_search", "brain_read"})
 check("briefing sandbox: a non-whitelisted tool name is REFUSED (error, never executed) -- the structural gate",
       "not available" in _bfa._exec_tool("brain_note", "{}")
       and "not available" in _bfa._exec_tool("os.system", '{"cmd":"rm -rf /"}'))
@@ -17127,10 +17127,10 @@ check("briefing sandbox: brain_read sanitizes the id so a tool arg cannot escape
       "not found" in _bfa._read_brain_note("../../etc/passwd"))
 # EGRESS BOUNDARY (adversarial audit 2026-07-15, the one confirmed hole): the read-only search must
 # NEVER fetch a CALLER-chosen URL -- else the untrusted model names a URL-drill source ('pdf') with an
-# attacker URL and turns penumbra_search into arbitrary external egress (exfil of the preloaded context). A
+# attacker URL and turns omniseek_search into arbitrary external egress (exfil of the preloaded context). A
 # URL query is refused BEFORE search_ranked; a normal keyword query + a NAMED source still reaches it
 # unchanged (zero capability loss -- the fix is at the QUERY layer, not a source denylist).
-import penumbra.core.fetcher as _bf_fetch  # noqa: E402
+import omniseek.core.fetcher as _bf_fetch  # noqa: E402
 _bf_sr_save = _bf_fetch.search_ranked
 _bf_sr_calls = []
 try:
@@ -17156,7 +17156,7 @@ _bf_spy = {"n": 0, "name": None}
 try:
     _bfa._load_creds = lambda: {"api_key": "k", "base_url": "http://x", "model": "m"}
     _bf_turns = iter([
-        (200, {"output": [{"type": "function_call", "call_id": "c1", "name": "penumbra_search",
+        (200, {"output": [{"type": "function_call", "call_id": "c1", "name": "omniseek_search",
                            "arguments": '{"query":"x"}'}]}),
         (200, {"output": [{"type": "message", "content": [{"text": "本周简报 OK"}]}]})])
     _bfa._post_responses = lambda client, creds, inp, tools: next(_bf_turns)
@@ -17167,7 +17167,7 @@ try:
     _bfa._exec_tool = _bf_spy_exec
     _bf_out = _bfa.build_briefing([{"label": "T", "query": "q"}])
     check("briefing tool loop: function_call routes through the mediated executor, then a final message is returned",
-          _bf_out == "本周简报 OK" and _bf_spy["n"] == 1 and _bf_spy["name"] == "penumbra_search")
+          _bf_out == "本周简报 OK" and _bf_spy["n"] == 1 and _bf_spy["name"] == "omniseek_search")
 finally:
     _bfa._post_responses, _bfa._load_creds, _bfa._exec_tool = _bf_post_save, _bf_creds_save2, _bf_exec_save
 
@@ -17182,7 +17182,7 @@ import time as _abs_time
 from pathlib import Path as _abs_Path
 
 # (1) _netguard: cloud-metadata + CGNAT denylist (closes the Py3.13 is_private drift leak).
-from penumbra.core import _netguard as _abs_ng
+from omniseek.core import _netguard as _abs_ng
 check("absorb/netguard: cloud-metadata + CGNAT IPs blocked; public + fake-IP still allowed",
       all(_abs_ng.ip_is_blocked(_abs_ipa.ip_address(s)) for s in
           ("169.254.169.254", "169.254.170.2", "100.100.100.200", "168.63.129.16", "fd00:ec2::254", "100.64.1.1"))
@@ -17205,7 +17205,7 @@ check("absorb/netguard: slow resolver bounded to timeout, fail-closed to 'dns'",
       _abs_reason == "dns" and _abs_ip is None and _abs_dt < 2.5, f"dt={_abs_dt:.2f}s reason={_abs_reason}")
 
 # (3)+(4) sensor: baseline stays bounded over fast-moving runs; notify_if filters the Bark.
-from penumbra.core import sensor as _abs_sen, fetcher as _abs_fet
+from omniseek.core import sensor as _abs_sen, fetcher as _abs_fet
 
 
 class _AbsDoc:
@@ -17251,7 +17251,7 @@ finally:
     _abs_fet.search_ranked = _abs_sr_save
 
 # (5) cartographer: field_skeleton query_relevance stamp (passive metadata, never re-sorts).
-from penumbra.core import cartographer as _abs_cart
+from omniseek.core import cartographer as _abs_cart
 
 _abs_works = {
     "W1": {"title": "reinforcement learning reward model shaping", "concepts": [],
@@ -17267,7 +17267,7 @@ check("absorb/cartographer: query_relevance stamps neighborhood (on-query > off-
       and all("query_relevance" not in n for n in _abs_bn["nodes"]), f"qr={_abs_qr}")
 
 # (6) normalize: selector_drift_hint names the drifted cluster; None on a healthy page; never substitutes.
-from penumbra.core import normalize as _abs_norm
+from omniseek.core import normalize as _abs_norm
 
 _abs_healthy = '<div class="feeds">' + '<section class="note-item"><div>card</div></section>' * 3 + '</div>'
 _abs_drifted = _abs_healthy.replace("note-item", "note-card-v2")
@@ -17277,7 +17277,7 @@ check("absorb/normalize: selector_drift_hint names the drifted cluster, None on 
       f"drift={_abs_norm.selector_drift_hint(_abs_drifted, 'section.note-item')}")
 
 # (7) _cdp: cdp_health surfaces the active engine + the vanilla-playwright fallback warns (source-substring, offline).
-_abs_cdp_src = (ROOT / "src" / "penumbra" / "core" / "sources" / "walled" / "_cdp.py").read_text(encoding="utf-8")
+_abs_cdp_src = (ROOT / "src" / "omniseek" / "core" / "sources" / "walled" / "_cdp.py").read_text(encoding="utf-8")
 _abs_cdp_health = _abs_cdp_src.split("def cdp_health")[1] if "def cdp_health" in _abs_cdp_src else ""
 check("absorb/_cdp: cdp_health interpolates the active engine (via {_CDP_ENGINE})",
       "_CDP_ENGINE" in _abs_cdp_health and "via {" in _abs_cdp_health, "cdp_health must surface _CDP_ENGINE")
@@ -17345,7 +17345,7 @@ check("absorb/rank: same-DOI diff-long-title merge (merge_basis=id + also_in); t
 
 # (ArchiveBox) web_fallback boilerplate strip: in-main nav/footer chrome removed so a JS shell drops
 # below the thin-trigger (-> correct jina escalation) while a real article stays above it.
-from penumbra.core import web_fallback as _wf_mod
+from omniseek.core import web_fallback as _wf_mod
 _wf_shell = '<html><body><main><nav>' + ('Home About Careers Blog Press ' * 30) + '</nav><footer>' + ('Terms Privacy Contact ' * 20) + '</footer></main></body></html>'
 _wf_article = '<html><body><main><h1>T</h1><p>' + ('Real article body sentence with actual content. ' * 40) + '</p></main></body></html>'
 _, _wf_shell_txt = _wf_mod._extract_text(_wf_shell)
@@ -17356,7 +17356,7 @@ check("absorb/web_fallback: in-main nav/footer stripped -> boilerplate shell < t
 
 # (ArchiveBox) fetch_url reason taxonomy: a failed generic web read surfaces WHY (walled/empty/blocked)
 # via diag armed ONLY around web_fallback; the fetch_url wrapper stays doc-only (byte-identical callers).
-from penumbra.core import fetcher as _fr_fetcher, web_fallback as _fr_wf, diag as _fr_diag
+from omniseek.core import fetcher as _fr_fetcher, web_fallback as _fr_wf, diag as _fr_diag
 _fr_rvf_save = _fr_wf.read_via_fallback
 _fr_ad_save = _fr_fetcher._fetch_url_via_adapters
 
@@ -17399,7 +17399,7 @@ check("absorb/web_fallback: _extract_text returns Markdown (## heading + | table
 
 # (browser-use) docreader._window snaps the char-window to a line boundary, paginates losslessly, and a
 # no-newline window still makes progress (the start+1 clamp guarantees a non-empty chunk).
-from penumbra.core import docreader as _dr_mod
+from omniseek.core import docreader as _dr_mod
 _dr_text = "line one\nline two here\nline three longer content\nline four\n" * 3
 _dr_chunk, _dr_trunc = _dr_mod._window(_dr_text, 0, 20)
 _dr_start, _dr_parts = 0, []
@@ -17421,8 +17421,8 @@ check("absorb/docreader: _window snaps to line boundary, paginates losslessly, n
 # ── ABSORB 2026-07-21 (cont'd): scholar-mcp/ScholarQA -> s2_snippet source (passage-level S2 full-text) ──
 # Golden built from a REAL captured /graph/v1/snippet/search response (default fields: string authors,
 # no publicationDate/citationCount). Monkeypatch the wrapper so the adapter's assembly is tested offline.
-from penumbra.core import _s2 as _s2snip
-from penumbra.core.sources.api.s2_snippet_source import S2SnippetAdapter as _S2Snip
+from omniseek.core import _s2 as _s2snip
+from omniseek.core.sources.api.s2_snippet_source import S2SnippetAdapter as _S2Snip
 _S2SNIP_FIXTURE = [
     {"score": 0.9688, "paper": {"corpusId": "197545408",
         "title": "Credit Assignment as a Proxy for Transfer in Reinforcement Learning",
@@ -17458,7 +17458,7 @@ check("absorb/s2_snippet: body snippet -> passage doc (object-author.name, secti
 # ── ABSORB 2026-07-21 (cont'd): transcription -> opt-in per-VAD-segment timestamps (asr) ──────────
 # Pure assembler test (offline, no model): fsmn-vad spans [[start_ms,end_ms],...] + per-span texts ->
 # [{start,end,text}] in seconds, cleaned, empty-text spans dropped, count-mismatch degrades safely.
-from penumbra.core import asr as _asrseg
+from omniseek.core import asr as _asrseg
 _seg_ok = _asrseg._segments_from([[0, 4200], [4200, 9000], [9000, 9100]], ["开可乐 彩排", "  不稳定  ", ""])
 _seg_mismatch = _asrseg._segments_from([[0, 1000]], ["a", "b"])  # more texts than spans -> zip stops at 1
 check("absorb/asr: _segments_from zips VAD spans+texts to {start,end,text}s, cleans, drops empty, degrades on mismatch",
@@ -17480,13 +17480,13 @@ check("absorb/asr: _diarized_from maps sentence_info to {start,end,text,speaker}
                    {"start": 3.87, "end": 4.05, "text": "嗯，", "speaker": 1}],
       f"diar_ok={_diar_ok}")
 
-# ── EYE-FIX 2026-07-22: penumbra_transcribe on US-CDN audio (anchor/cloudfront) failed — the bundled
+# ── EYE-FIX 2026-07-22: omniseek_transcribe on US-CDN audio (anchor/cloudfront) failed — the bundled
 # ffmpeg's TLS (macOS SecureTransport) intermittently -9806s + hangs, AND this deployment's egress
 # mangles openssl TLS (httpx UNEXPECTED_EOF). Fix: -rw_timeout kills the hang; on empty/failed remote
 # decode, fall back to a curl_cffi (libcurl+Chrome-fingerprint, the tier that gets through) download +
 # LOCAL decode. Structural golden (offline): the fallback + rw_timeout are wired, and it's curl_cffi.
 import inspect as _fxinsp
-from penumbra.core import http as _fxhttp
+from omniseek.core import http as _fxhttp
 _fx_dl = _fxinsp.getsource(_fxhttp.download_to_file)
 _fx_dec = _fxinsp.getsource(_asrseg._decode_to_wav)
 check("eyefix/asr: _decode_to_wav bounds reads (-rw_timeout) + falls back to robust download on empty/failed remote",
@@ -17498,8 +17498,8 @@ check("eyefix/http: download_to_file uses curl_cffi (NOT httpx) — the TLS tier
 
 # ── ABSORB 2026-07-21 (cont'd): chunk embeddings (long-doc tail recall, tldw/SurfSense) ──────────
 # (1) _chunk_passages (pure): short doc -> []; long doc -> tail passages w/ title breadcrumb; capped.
-from penumbra.core.recall import writer as _absw
-from penumbra.core.recall import store as _abss
+from omniseek.core.recall import writer as _absw
+from omniseek.core.recall import store as _abss
 _ck_short = _absw._chunk_passages("T", "x" * 1500)
 _ck_long = _absw._chunk_passages("MyTitle", "H" * 2000 + "A" * 2000 + "B" * 500)  # head 2000 + 2 tail chunks
 _ck_huge = _absw._chunk_passages("T", "z" * (2000 + 2000 * 40))                    # 40 tail chunks -> capped
@@ -17525,7 +17525,7 @@ check("absorb/recall: _chunk_catchup is wired into the writer idle loop + backfi
 # ---------------------------------------------------------------------------
 # 69. Maintenance boundaries: launchd lifecycle and probes are derived from the registry/plists.
 # ---------------------------------------------------------------------------
-# Repo-adaptive, the 46b convention: services.py + penumbra_doctor.py are DEPLOYMENT-side scripts
+# Repo-adaptive, the 46b convention: services.py + omniseek_doctor.py are DEPLOYMENT-side scripts
 # (a launchd fleet manager and a macOS probe). Where no fleet registry exists there is nothing
 # for this section to assert about, and the public mirror ships neither script.
 if _SERVICES_PATH.exists():
@@ -17537,12 +17537,12 @@ if _SERVICES_PATH.exists():
     _maint_sys.path.insert(0, str(_maint_scripts))
     _svc_path = _maint_scripts / "services.py"
     _svc_spec = _maint_importlib.spec_from_file_location(
-        "penumbra_services_maintenance_smoke", _svc_path)
+        "omniseek_services_maintenance_smoke", _svc_path)
     _svc_maint = _maint_importlib.module_from_spec(_svc_spec)
     _svc_spec.loader.exec_module(_svc_maint)
-    _doc_path = _maint_scripts / "penumbra_doctor.py"
+    _doc_path = _maint_scripts / "omniseek_doctor.py"
     _doc_spec = _maint_importlib.spec_from_file_location(
-        "penumbra_eye_doctor_maintenance_smoke", _doc_path)
+        "omniseek_eye_doctor_maintenance_smoke", _doc_path)
     _doc_maint = _maint_importlib.module_from_spec(_doc_spec)
     _doc_spec.loader.exec_module(_doc_maint)
 
@@ -17558,9 +17558,9 @@ if _SERVICES_PATH.exists():
           f"registry={sorted(_expected_cdp)}")
     check("maintenance: launchd plist ownership ignores independent organs",
           _svc_maint.plist_owned_by_root(
-              {"ProgramArguments": [f"{_maint_home}/penumbra-mcp/.venv/bin/python"]})
+              {"ProgramArguments": [f"{_maint_home}/omniseek-mcp/.venv/bin/python"]})
           and not _svc_maint.plist_owned_by_root(
-              {"ProgramArguments": [f"{_maint_home}/penumbra-brain/.venv/bin/python"]}))
+              {"ProgramArguments": [f"{_maint_home}/omniseek-brain/.venv/bin/python"]}))
 
 
 

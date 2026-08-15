@@ -3,7 +3,7 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "penumbra-mcp"
+name = "omniseek-mcp"
 version = "0.1.0"
 description = "Self-hosted deep-retrieval MCP server for AI agents. Reaches what plain search can't: audio, video, logins, other languages."
 requires-python = ">=3.11"
@@ -23,12 +23,12 @@ classifiers = [
 # source, the recall index, document reading (minus PDF), and the shared infra. Heavy / AGPL /
 # circumvention deps are OPT-IN extras below, so a bare `pip install -e .` ships Apache-clean and
 # does not pull torch or an AGPL library. (Tools whose extra is absent fail-open with a clear
-# "install penumbra-mcp[<extra>]" message; see asr.py / docreader.py / _cdp.py import guards.)
+# "install omniseek-mcp[<extra>]" message; see asr.py / docreader.py / _cdp.py import guards.)
 dependencies = [
     # MCP framework
     "mcp[cli]>=1.0.0",
 
-    # Source adapters (API-based). arxiv + openreview use the REST API directly via penumbra.core.http, so
+    # Source adapters (API-based). arxiv + openreview use the REST API directly via omniseek.core.http, so
     # neither needs a client lib here.
     "semanticscholar>=0.10.0",
     "praw>=7.7.0",
@@ -53,12 +53,12 @@ dependencies = [
     "yt-dlp>=2026.6.9",            # video/audio metadata + extractors (Unlicense); rots fast, keep current
     "youtube-transcript-api>=0.6.2",
 
-    # Document digestion (penumbra_read_document) minus PDF: office files are zip+XML; three small pure
+    # Document digestion (omniseek_read_document) minus PDF: office files are zip+XML; three small pure
     # libs beat one convert-everything dep. PDF is the optional [pdf] extra (AGPL, see below).
     "python-pptx>=1.0",
     "python-docx>=1.1",
     "openpyxl>=3.1",
-    "pillow>=10.0",               # downscale + contact-sheet montage for penumbra_view_doc_images
+    "pillow>=10.0",               # downscale + contact-sheet montage for omniseek_view_doc_images
 
     # Recall (memory) index: the LEXICAL layer is stdlib (SQLite FTS5). The cross-lingual
     # VECTOR layer (sentence-transformers, which pulls torch) is the optional [recall] extra; absent
@@ -68,12 +68,12 @@ dependencies = [
 
 [project.optional-dependencies]
 # PDF reading. pymupdf is AGPL-3.0 / Artifex-commercial, kept OUT of core so the default install
-# stays Apache-clean. With it absent, PDF reading (penumbra_read_document on a .pdf, the pdf source)
+# stays Apache-clean. With it absent, PDF reading (omniseek_read_document on a .pdf, the pdf source)
 # degrades with a clear message; everything else works. (Follow-up: a permissive swap to
 # pypdfium2 / pdfminer would fold PDF back into core.)
 pdf = ["pymupdf>=1.24"]
 
-# Audio/video transcription (penumbra_transcribe). funasr pulls torch (large); imageio-ffmpeg vendors
+# Audio/video transcription (omniseek_transcribe). funasr pulls torch (large); imageio-ffmpeg vendors
 # an ffmpeg binary. Opt-in so a retrieval-only deployer is not forced to install torch.
 asr = ["funasr>=1.0", "imageio-ffmpeg>=0.5"]
 
@@ -81,7 +81,7 @@ asr = ["funasr>=1.0", "imageio-ffmpeg>=0.5"]
 # absent it, recall fail-opens to the stdlib FTS5 lexical index, so this is opt-in.
 recall = ["sentence-transformers>=3.0"]
 
-# OCR for penumbra_read_document(ocr=True): text-in-pixels (scanned pages, baked-in labels, CJK+Latin,
+# OCR for omniseek_read_document(ocr=True): text-in-pixels (scanned pages, baked-in labels, CJK+Latin,
 # CPU/keyless). rapidocr-onnxruntime pulls onnxruntime; absent it, OCR degrades with a clear message
 # while the rest of document reading works.
 ocr = ["rapidocr-onnxruntime>=1.2"]
@@ -96,17 +96,17 @@ all = ["pymupdf>=1.24", "funasr>=1.0", "imageio-ffmpeg>=0.5", "patchright>=1.40"
        "sentence-transformers>=3.0", "rapidocr-onnxruntime>=1.2"]
 
 [project.scripts]
-penumbra-mcp = "penumbra.server:main"
+omniseek-mcp = "omniseek.server:main"
 
 [project.urls]
-Homepage = "https://github.com/Battam1111/penumbra"
-Repository = "https://github.com/Battam1111/penumbra"
-Issues = "https://github.com/Battam1111/penumbra/issues"
-Changelog = "https://github.com/Battam1111/penumbra/blob/main/CHANGELOG.md"
-Documentation = "https://github.com/Battam1111/penumbra#readme"
+Homepage = "https://github.com/Battam1111/omniseek"
+Repository = "https://github.com/Battam1111/omniseek"
+Issues = "https://github.com/Battam1111/omniseek/issues"
+Changelog = "https://github.com/Battam1111/omniseek/blob/main/CHANGELOG.md"
+Documentation = "https://github.com/Battam1111/omniseek#readme"
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.setuptools.package-data]
-penumbra = ["**/*.json", "**/*.yaml"]
+omniseek = ["**/*.json", "**/*.yaml"]

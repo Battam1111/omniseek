@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
-# Launch a Chrome/Chromium with remote debugging, so Penumbra can read a walled source through your
+# Launch a Chrome/Chromium with remote debugging, so OmniSeek can read a walled source through your
 # own logged-in session. See docs/walled-sources.md for the full model.
 #
 #   ./scripts/launch_cdp.sh <port> [profile-dir] [url-to-open]
 #
 #   port         the CDP port the adapter expects (9222 shared, 9223/9224 xiaohongshu, 9225 douyin)
-#   profile-dir  persistent browser profile; default ~/.penumbra/chrome-<port>. Keep it stable so
+#   profile-dir  persistent browser profile; default ~/.omniseek/chrome-<port>. Keep it stable so
 #                your login survives restarts.
 #   url          optional page to open (e.g. https://www.xiaohongshu.com) so you can log in directly.
 #
-# After it opens: log into the platform by hand, then leave the browser running. Penumbra connects
+# After it opens: log into the platform by hand, then leave the browser running. OmniSeek connects
 # to http://127.0.0.1:<port>.
 set -euo pipefail
 
@@ -19,7 +19,7 @@ if [ -z "$PORT" ]; then
   echo "  ports: 9222 shared | 9223 xiaohongshu | 9224 xiaohongshu(mainland) | 9225 douyin" >&2
   exit 1
 fi
-PROFILE="${2:-$HOME/.penumbra/chrome-$PORT}"
+PROFILE="${2:-$HOME/.omniseek/chrome-$PORT}"
 URL="${3:-}"
 
 # Locate a Chrome/Chromium binary across macOS and Linux.
@@ -48,7 +48,7 @@ fi
 
 mkdir -p "$PROFILE"
 echo "==> launching $(basename "$CHROME")"
-echo "    port    : $PORT  (Penumbra connects to http://127.0.0.1:$PORT)"
+echo "    port    : $PORT  (OmniSeek connects to http://127.0.0.1:$PORT)"
 echo "    profile : $PROFILE  (your login persists here)"
 [ -n "$URL" ] && echo "    opening : $URL"
 echo "    Log in by hand in the window, then leave this browser running."
@@ -66,7 +66,7 @@ fi
 
 # Flag rationale (all loopback-only, so safe on your own machine):
 #   --remote-allow-origins=*  REQUIRED on Chrome 111+ (Mar 2023). Without it, Chrome rejects the
-#                             CDP WebSocket upgrade and Penumbra cannot attach (the symptom is a
+#                             CDP WebSocket upgrade and OmniSeek cannot attach (the symptom is a
 #                             walled source silently returning empty even though Chrome is running).
 #   --disable-blink-features=AutomationControlled  hides the navigator.webdriver automation tell, so
 #                             the site sees an ordinary Chrome. Do NOT add --enable-automation (it

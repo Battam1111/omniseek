@@ -20,7 +20,7 @@ import re
 import textwrap
 import unittest
 
-from penumbra.core import infra_jobs
+from omniseek.core import infra_jobs
 
 
 # Every `state[...]` key run_source_health writes, and the scope discipline each one has DECLARED.

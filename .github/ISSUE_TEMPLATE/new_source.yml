@@ -1,5 +1,5 @@
 name: New source request
-description: Propose a source for the catalog (a site, API, feed, or walled platform Penumbra should reach).
+description: Propose a source for the catalog (a site, API, feed, or walled platform OmniSeek should reach).
 labels: ["source-request"]
 body:
   - type: markdown

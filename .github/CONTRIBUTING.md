@@ -1,6 +1,6 @@
-# Contributing to Penumbra
+# Contributing to OmniSeek
 
-Thanks for helping grow Penumbra. It is a self-hosted, general deep-retrieval MCP: a catalog of
+Thanks for helping grow OmniSeek. It is a self-hosted, general deep-retrieval MCP: a catalog of
 sources an agent can search for depth the open web can't give. The bar for a new source is high on
 purpose (see below); the bar for fixing a decayed one is low (please do).
 
@@ -10,7 +10,7 @@ purpose (see below); the bar for fixing a decayed one is low (please do).
 python -m venv .venv && . .venv/bin/activate    # Windows: .venv\Scripts\activate
 ./bootstrap.sh                                   # install + chromium + token + profile
 python tests/smoke.py                            # must pass before you push
-python -m penumbra.serve_http                      # run it; curl http://127.0.0.1:8765/healthz
+python -m omniseek.serve_http                      # run it; curl http://127.0.0.1:8765/healthz
 ```
 
 Core install is Apache-clean. Optional extras carry their own licenses (see [NOTICE](../NOTICE)):
@@ -48,9 +48,9 @@ fabricate fields or signals: a field the source doesn't provide is absent, not g
   (decrypting an encrypted response, breaking a paywall you have no right to) is NOT accepted into the
   default pack: keep such adapters `explicit_only` and document the legal posture. See
   [SECURITY.md](SECURITY.md).
-- Penumbra fetches as the OPERATOR's own agent. The deployer is responsible for using it within the law
+- OmniSeek fetches as the OPERATOR's own agent. The deployer is responsible for using it within the law
   and the sites' terms in their jurisdiction.
-- Never commit credentials, tokens, cookies, or personal data. State lives in `~/.penumbra`, never in-tree.
+- Never commit credentials, tokens, cookies, or personal data. State lives in `~/.omniseek`, never in-tree.
 
 ## Pull requests
 
@@ -61,8 +61,8 @@ fabricate fields or signals: a field the source doesn't provide is absent, not g
 ## Layout
 
 ```
-src/penumbra/
-  server.py            MCP tool surface (penumbra_* tools)
+src/omniseek/
+  server.py            MCP tool surface (omniseek_* tools)
   serve_http.py        HTTP transport (token-gated, loopback-default)
   core/                retrieval engine: fetcher · rank · normalize · cache
                        profile · _netguard (SSRF) · enrich · asr · curator

@@ -1,0 +1,33 @@
+# systemd unit for a non-Docker, always-on OmniSeek (Linux). Install:
+#   sudo cp deploy/omniseek.service /etc/systemd/system/
+#   # edit User=, WorkingDirectory=, ExecStart= venv path, and OMNISEEK_CONTACT_EMAIL below
+#   sudo systemctl daemon-reload && sudo systemctl enable --now omniseek
+# Logs:  journalctl -u omniseek -f
+[Unit]
+Description=OmniSeek - self-hosted deep-retrieval MCP
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=omniseek
+WorkingDirectory=/opt/omniseek
+ExecStart=/opt/omniseek/.venv/bin/python -m omniseek.serve_http
+Restart=on-failure
+RestartSec=5
+
+# Loopback-only by default. To reach it off-box, front it with a reverse proxy + firewall and set
+# OMNISEEK_HTTP_HOST deliberately (OmniSeek warns when it binds a non-loopback address).
+Environment=OMNISEEK_HTTP_HOST=127.0.0.1
+Environment=OMNISEEK_HTTP_PORT=8765
+# Environment=OMNISEEK_CONTACT_EMAIL=you@example.org   # courtesy contact for a faster lane; also quiets first-boot OpenAlex warnings (recommended)
+
+# Hardening: OmniSeek only needs to write its own state dir + inbox.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h/.omniseek %h/omniseek-inbox
+
+[Install]
+WantedBy=multi-user.target

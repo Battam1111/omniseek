@@ -5,8 +5,8 @@ import threading
 import unittest
 from unittest.mock import patch
 
-from penumbra.core import fetcher, recall
-from penumbra.core.normalize import Document
+from omniseek.core import fetcher, recall
+from omniseek.core.normalize import Document
 
 
 class _AsyncAdapter:

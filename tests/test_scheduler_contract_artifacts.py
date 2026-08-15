@@ -5,7 +5,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-CONTRACTS = ROOT / "src" / "penumbra" / "core" / "contracts"
+CONTRACTS = ROOT / "src" / "omniseek" / "core" / "contracts"
 SCHEMA_PATH = CONTRACTS / "scheduler-heartbeat-v1.json"
 POLICY_PATH = CONTRACTS / "scheduler-heartbeat-policy-v1.json"
 
@@ -19,10 +19,10 @@ class SchedulerContractArtifactTests(unittest.TestCase):
         self.assertFalse(schema["additionalProperties"])
         self.assertEqual(
             schema["properties"]["schema"]["const"],
-            "penumbra.core-scheduler-heartbeat/v1",
+            "omniseek.core-scheduler-heartbeat/v1",
         )
         self.assertEqual(schema["properties"]["phase"]["enum"], ["starting", "running"])
-        self.assertEqual(policy["schema"], "penumbra.scheduler-heartbeat-policy/v1")
+        self.assertEqual(policy["schema"], "omniseek.scheduler-heartbeat-policy/v1")
         self.assertEqual(policy["mode"], "calibration-probe")
         self.assertEqual(
             policy["heartbeat_schema_digest"], hashlib.sha256(schema_bytes).hexdigest()

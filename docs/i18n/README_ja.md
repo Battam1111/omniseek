@@ -2,22 +2,20 @@
 
 <picture>
   <source media="(prefers-color-scheme: light)" srcset="../../assets/logo-icon.png">
-  <img src="../../assets/logo-hero-dark.png" width="320" alt="Penumbra:日食のマーク、紺色の球体と琥珀色に照らされた縁">
+  <img src="../../assets/logo-hero-dark.png" width="320" alt="OmniSeek">
 </picture>
 
-# penumbra
+# OmniSeek
 
-**表層の、その下へ。**
+**検索では届かないものを、あなたのエージェントが探し当てる。**
 
-AIエージェントのための、セルフホスト型ディープ検索MCPサーバー。
+セルフホスト型の知覚 MCP サーバー。厳選された 220 のソース。接続はひとつ。
 
-[![CI](https://github.com/Battam1111/penumbra/actions/workflows/ci.yml/badge.svg)](https://github.com/Battam1111/penumbra/actions/workflows/ci.yml)
-&nbsp;[![License](https://img.shields.io/badge/License-Apache_2.0-D4952B?style=flat-square)](../../LICENSE)
-&nbsp;![Python](https://img.shields.io/badge/Python_3.11+-D4952B?style=flat-square)
-&nbsp;![Built for MCP](https://img.shields.io/badge/built_for-MCP-D4952B?style=flat-square)
-&nbsp;![Self-hosted](https://img.shields.io/badge/self--hosted-D4952B?style=flat-square)
-
-[仕組み](#仕組み) · [クイックスタート](#クイックスタート) · [設定](#設定) · [コントリビュート](#コントリビュート)
+[![CI](https://github.com/Battam1111/omniseek/actions/workflows/ci.yml/badge.svg)](https://github.com/Battam1111/omniseek/actions/workflows/ci.yml)
+&nbsp;[![License](https://img.shields.io/badge/License-Apache_2.0-3B82F6?style=flat-square)](../../LICENSE)
+&nbsp;![Python](https://img.shields.io/badge/Python_3.11+-3B82F6?style=flat-square)
+&nbsp;![Built for MCP](https://img.shields.io/badge/built_for-MCP-3B82F6?style=flat-square)
+&nbsp;![Self-hosted](https://img.shields.io/badge/self--hosted-3B82F6?style=flat-square)
 
 **Languages:** [English](../../README.md) · [中文](README_zh.md) · 日本語
 
@@ -25,124 +23,116 @@ AIエージェントのための、セルフホスト型ディープ検索MCPサ
 
 ---
 
-あなたのエージェントが届く範囲でしか、動けない。普通の検索が届くのは表層だけだ:文字になっていて、読める言語で書かれていて、まだそこにある、その範囲だけ。
+検索がエージェントに与えるのは、インデックス済みのページ。単一言語のテキストだけ。それは表層にすぎません。
 
-表層の下には:あるスタートアップに入るべきか迷っている、公開情報はどれも好調だと言っている;3ヶ月前のポッドキャスト、52分目で創業者がふと漏らした「ランウェイはあと9ヶ月くらい」、文字起こしされたことはない。レビューが軒並み五つ星の製品を検討している;デモ動画で、実際のパフォーマンス指標が画面に2秒だけ映った、公称値の10倍悪い、誰も声に出さなかった。ある街に引っ越すか決めようとしている、旅行ブロガーは皆住みやすいと言う;地元の人がとっくにフォーラムに本当のことを書いていた、あなたの読めない言語で。
-
-すべて、そこにある。誰も触れていない。
-
-<h3 align="center">それが半影領域(ペナンブラ)だ。</h3>
-
-<div align="center">
-
-あなたのエージェントが届く範囲と、実際に存在するものの間:広大で、半分だけ光が当たっている。
-秘密ではない。死角だ:
-**知識はそこにある、あらゆる場所に散らばっていて、ただ表層からは見えないだけ。**
-
-</div>
-
-<br>
-
-**なぜ届かないのか?** 語られたもの、検索には聞こえない;画面に映ったもの、検索には読めない;別の言語で書かれたもの、あなたには読めない;ログインすれば見えるもの、検索は入れない;昨日あったもの、今日にはもうない。普通の検索は、そのどれにもぶつかる。自分の手で一つずつ取りに行く?いつかは届く。ただ、そんなに時間がない。
-
-**Penumbraは、あなたのエージェントにその届く力を与える:** 語られたものを文字に起こし、画面に一瞬映ったものを読み取り、別の言語で書かれたものをあなたの言葉に置き換え、ログインしなければ見えない場所に入り込み、消されてしまったものを取り戻し、何百もの記録に散らばったものをつなぎ合わせる。届かなかったものを、一度で持ち帰る。
-
-**だが、断片の山だけでは知識にならない。** 百の散らばった発見は、そろうまではただのノイズだ:独立した複数の角度が、同じ結論を指し示す、どの一つも全体を語ってはいない。Penumbraは、それぞれの断片がどこから来たか、いつのものか、どこかの反響かどうかを記し、異なるソースに散らばった線を織り合わせる:同じ名前が無関係な三つの場所に現れる、並べて初めて通る時系列、記録の隙間に隠れた関係。残りは、あなたのエージェントが、あなただけの一枚の地図に組み立てる。
-
-**もうひとつ、届く力とは無関係の、不公平な優位がある。** 「知っている」のほとんどは蒸発していく。去年の春に調べたこと、ある火曜日にふと気づいたこと、一度は考え抜いて、短いあいだ静かに正しかったこと。周りの誰もが同じ速さで忘れていくから、誰も損失に気づかない。あなたのそれは、消えなくていい。
-
-会議で誰かが「今週の発見」を披露する。あなたは8ヶ月前にそれを見ている。まだネットの片隅で、ひとりのエンジニアがこぼした愚痴だったころに。嘘が衣装を替えて二度目にやってくる。部屋の中でそれに気づくのはあなただけだ。なぜいつも早く知っているのかとついに問われたとき、答えがある。その答えには日付が付いている。
-
-ほかの誰もが、毎朝ゼロから始める。あなたは、これまでに見たすべてから始める。届く力は一度だけ早くしてくれる。記憶は「早い」を習慣にする。
-
-**想像してみてほしい、何が答えられるようになるかを。** 毎日使っているあの製品、絶賛の嵐だが、そのうち何件が本当に独立したレビューか確かめられるか?業界で誰もが口にするあの「内部情報」、一次情報なのか、それとも同じ人間が三つのプラットフォームで書いたものなのか?あなたに直接関わるリスクが、読めない言語の世界でもう2年も議論されていて、あなたはその存在すら知らなかった?最初に思いついたのは、これくらいのものだ。
-
-<div align="center">
-
-*半影領域は、ずっとそこにあった。*
-
-**今、届く。**
-
-</div>
-
----
-
-## 仕組み
+OmniSeek はその下層に届きます。ポッドキャストで語られたきり誰も書き起こさなかった一言。デモ動画に 2 秒だけ映った本当の数字。英語圏がまだ追いついていない中国語フォーラムの投稿。見出しを訂正する、3 階層下のコメント。ログインすれば見えるのに検索エンジンには届かないスレッド。すべて、あなた自身のマシンの上で。
 
 <div align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="../../assets/demo-ja-dark.png">
-    <img src="../../assets/demo-ja-light.png" alt="実例:エージェントが、ここで本当は何が起きているのかを尋ねる。通常の検索は表層しか返さない:公式発表、レビュー、ドキュメント、どれも整っていて一貫している。Penumbraは表層の下へ届き、単一の検索では表に出ない4つの断片を持ち帰る:文字起こしした講演では、壇上の二人の言い争いが公式発表の均した亀裂を露わにする;フレームから読み取ったデモ動画では、数字が一瞬映り、口にはされない;つないだ百件の記録は、どのページにも書かれていない結びつきを浮かび上がらせる;そしてあなたの読めない言語のフォーラムでは、内部の誰かが言ってはいけないことを漏らす。単体では、どれもただのノイズ。組み立てれば、あなたにしか描けない地図になる。Penumbraの到達は、音声・動画・画像・言語・つながり・削除済み・ログイン、そしてさらに広がる。" width="780">
+    <source media="(prefers-color-scheme: dark)" srcset="../../assets/demo-en-dark.png">
+    <img src="../../assets/demo-en-light.png" alt="実際の一回の呼び出し:OmniSeek は書き起こされた講演、動画フレームの読み取り、多言語フォーラムの投稿、コメント欄の訂正を返した。通常の検索ではどれも得られない。" width="780">
   </picture>
 </div>
 
-エージェントはMCPで接続する。エントリポイントは **`penumbra_search`**;`penumbra_sources()` が利用可能な能力を表示する。カタログはオープンかつ成長し続ける:各ソースは通常の検索に勝つことで採用される。エージェントが取得したものは、後から問い直せる永続的な関係グラフに蓄積される(`penumbra_graph(view, args)`:`find` / `stats` / `neighborhood` / `between` / `voices` / `since` / `similar`、凍結されたひとつの動詞のもとでビューがデータとして増える);同一性の判断は `penumbra_ruling` で、内容から判定した型付き関係は `penumbra_statement` で記録する:グラフは読み取り時にそれらの判断を適用するだけで、自ら判断することはない。完全なツール一覧は **[tools](../tools.md)** にある。エンドツーエンドで書かれた実際の調査は **[ケーススタディ](../case-study.md)**、よくある質問は **[FAQ](../faq.md)** を参照。
+聴く(ローカル二言語 ASR、クラウド不使用)、視る(画像と動画フレームを直接読む)、言語をまたぐ(中国語クエリが英語の結果を返し、その逆も)、ログインの壁の内側に届く(あなたの認証情報、あなたのマシン、デフォルトはオフ)、そして記憶する(クエリのたびに厚みを増す永続リレーショングラフ)。
+
+32 分野・8 言語圏にわたる 220 ソース。どのソースも、通常の検索に勝つことで席を得ています。
+
+**[実例 5 本](../examples.md)** · **[フル・ケーススタディ](../case-study.md)**
+
+---
 
 ## クイックスタート
 
 ### Docker(推奨)
 
 ```bash
-git clone https://github.com/Battam1111/penumbra.git && cd penumbra
+git clone https://github.com/Battam1111/omniseek.git && cd omniseek
 docker compose up -d
-docker compose logs penumbra        # 初回起動時に表示される bearer token をコピー
+docker compose logs omniseek        # 初回起動時に bearer token を表示
 curl -s http://127.0.0.1:8765/healthz
 ```
 
-初回の `up` はローカルでイメージをビルドする(依存関係とヘッドレス Chromium の取得)ため数分かかる;二回目以降の起動は一瞬だ。
+MCP クライアントを `http://127.0.0.1:8765/mcp` に向け、`Authorization: Bearer <token>` を付けてください。token は初回起動時に生成され、`~/.omniseek/credentials/omniseek_http.json` に保存されます。
 
-MCPクライアントを `http://127.0.0.1:8765/mcp` に向け、ヘッダー
-`Authorization: Bearer <token>` を付与する。トークンは初回起動時に自動生成され、
-`~/.penumbra/credentials/penumbra_http.json` に保存される(Docker では `./.penumbra/credentials/penumbra_http.json` にマウントされる)。
+初回の `up` はローカルでイメージをビルドします(依存関係 + ヘッドレス Chromium)。数分かかりますが、以後の起動は即時です。オプション拡張はビルド引数 `EXTRAS="[pdf,asr,walled]"`。`OMNISEEK_CONTACT_EMAIL` の設定も推奨します(Crossref、SEC、Unpaywall が優先レーンをくれます)。
 
-オプション拡張(ライセンスへの同意が必要、[NOTICE](../../NOTICE) 参照):
-`docker-compose.yml` で `EXTRAS="[pdf,asr,walled]"` をビルド引数に指定。
-
-推奨(任意):`docker-compose.yml` で `PENUMBRA_CONTACT_EMAIL` を設定する。いくつかのソース(Crossref、
-SEC、Unpaywall)がこれを礼儀上の連絡先として使い、より速いレーンを与える。新規インストールの初回起動時に出る OpenAlex のレート制限警告も抑えられる。
-
-### Dockerなし
+### Docker なし
 
 ```bash
-python -m venv .venv && . .venv/bin/activate     # Windows: .venv\Scripts\activate
-./bootstrap.sh                                    # インストール + chromium + token + デフォルトprofile
-python -m penumbra.serve_http                      # http://127.0.0.1:8765 で起動
+python -m venv .venv && . .venv/bin/activate
+./bootstrap.sh
+python -m omniseek.serve_http
 ```
 
-Windows では `bootstrap.sh` を Git Bash または WSL で実行してください(POSIX シェルスクリプトです)。Docker が最も簡単な経路です。
+Windows では `bootstrap.sh` を Git Bash か WSL で実行してください。Docker が最も簡単です。常駐 Linux サービスは [`deploy/omniseek.service`](../../deploy/omniseek.service) を参照。
 
-Linux常駐サービスは [`deploy/penumbra.service`](../../deploy/penumbra.service) を参照。
+OmniSeek は `127.0.0.1` にバインドし、全リクエストに bearer token を要求します。リバースプロキシなしで公開しないでください([SECURITY.md](../../.github/SECURITY.md))。
 
-Penumbra は `127.0.0.1` にバインドし、すべてのリクエストに bearer token を要求する。
-リバースプロキシなしで公開しないこと([SECURITY.md](../../.github/SECURITY.md))。
+---
+
+## ツール
+
+MCP 接続ひとつ、ツールは 18。まず `omniseek_search` から。何が使えるかは `omniseek_sources` で。
+
+| ツール | 何をするか |
+|--------|-----------|
+| `omniseek_search` | 220 ソースへファンアウト、重複排除、ランキング。多言語対応。 |
+| `omniseek_read` | 任意の URL や文書(ウェブ、PDF、arXiv)をクリーンなテキストに正規化。 |
+| `omniseek_view` | 画像・図版・動画フレームを視覚で読む。 |
+| `omniseek_transcribe` | 音声・動画をローカルで書き起こし。二言語 ASR、タイムスタンプ指定可。 |
+| `omniseek_field_skeleton` | 研究分野の引用近傍を地図化:基盤とフロンティア。 |
+| `omniseek_resolve_identity` | 人名を複数データベースの著者 ID 候補に解決。 |
+| `omniseek_coauthors` | 共著論文数で研究者の共同研究ネットワークを描く。 |
+| `omniseek_institution_cohort` | ある研究室で活発に発表している人を分野を絞って列挙。 |
+| `omniseek_paper_enrich` | 論文の OA PDF、撤回状況、被引用数。 |
+| `omniseek_paper_recommend` | 意味的に近い論文(SPECTER 埋め込み)。キーワード検索では出ないもの。 |
+| `omniseek_graph` | 蓄積されたリレーショングラフへの問い合わせ。 |
+| `omniseek_sensor` | 常設クエリ + 新規性検出。新しいものがあるときだけ通知。 |
+| `omniseek_ruling` | 同一性の裁定(same / not-same)を記録。読み取り時に適用。 |
+| `omniseek_statement` | 有向リレーションを記録。グラフが引き継ぐ。 |
+| `omniseek_curator_act` | ソースのライフサイクル:提出、探査、裁定、承認、引退。 |
+| `omniseek_curator_view` | ソース承認キューや監査資料の閲覧。 |
+| `omniseek_gather` | 複数ツールを並列実行、応答はひとつ。 |
+| `omniseek_sources` | 一覧とルーティング:分野、地域、能力、ヘルス。 |
+
+完全なリファレンスは **[tools.md](../tools.md)** · **[FAQ](../faq.md)**
+
+---
 
 ## 設定
 
-Penumbraは**カタログ優先**設計:設定なしでも、すべての安全なソースはオン、ログインウォールソースはオフ。調整はすべて一つのファイル `~/.penumbra/profile.json`([`profile.example.json`](../../profile.example.json) から初期化)で、ソース名・ドメイン・地域・アクセス階層ごとに行う:
+OmniSeek は**カタログ・ファースト**:設定ゼロで無害なソースはすべてオン、ログインが必要なソースはすべてオフ。調整は一つのファイル `~/.omniseek/profile.json`([例](../../profile.example.json))で:
 
-| 階層 | デフォルト |
-|------|-----------|
+| 層 | デフォルト |
+|----|-----------|
 | **free**(公開、キー不要) | **オン** |
-| **keyed**(あなたが用意する無料/有料の API キー) | キー設定でオン |
-| **walled**(あなたが権利を持つログイン) | **オフ**;ブラウザは自前 |
-| **circumvention** | **オフ**;デフォルトパックに含まれない |
+| **keyed**(あなたが用意する API キー) | キー設定後オン |
+| **walled**(あなたが持つログイン) | **オフ**;ブラウザは自前 |
+| **circumvention**(アクセス制御の回避) | **オフ**;デフォルトパックにはひとつも含まれない |
 
-詳細は **[configuration](../configuration.md)** に、ログイン必須ソースへのブラウザログインは **[walled sources](../walled-sources.md)** にある。
+詳細:**[configuration](../configuration.md)** · **[walled sources](../walled-sources.md)** · **[legal posture](../LEGAL-POSTURE.md)**
+
+---
+
+## なぜセルフホストか
+
+実行したクエリも、エージェントが見つけたつながりも、使った認証情報も、すべてあなたのマシンに残ります。あなたが何を調べているか、どのクラウドサービスにも見えません。数ヶ月かけて育てたグラフはあなたの資産です。OmniSeek を止めても、すべて手元に残ります。機能のスイッチではなく、アーキテクチャそのものです。
+
+---
 
 ## コントリビュート
 
-[CONTRIBUTING.md](../../.github/CONTRIBUTING.md) を参照。新しいソースの基準:特定のモード
-(structure / unwall / transcribe / recall / monitor)で通常の検索に勝つこと。
-壊れたソースの修復の基準:低い。ぜひ修復を。プッシュ前に `python tests/smoke.py` を実行。
+[CONTRIBUTING.md](../../.github/CONTRIBUTING.md) を参照。新ソースの基準:いずれかのモード(structure / unwall / transcribe / recall / monitor)で通常のウェブ検索に勝つこと。壊れたソースの修理の基準:低いです、ぜひ。push 前に `python tests/smoke.py` を。
 
-参加することで[行動規範](../../.github/CODE_OF_CONDUCT.md)に同意したものとみなされます。
+参加により[行動規範](../../.github/CODE_OF_CONDUCT.md)に同意したものとみなされます。
 
 <div align="center">
 
 ---
 
-**表層の、その下へ。**
+**検索では届かないものを、あなたのエージェントが探し当てる。**
 
-[Apache-2.0](../../LICENSE) · [NOTICE](../../NOTICE) · [Security](../../.github/SECURITY.md)
+[Apache-2.0](../../LICENSE) · [NOTICE](../../NOTICE) · [Security](../../.github/SECURITY.md) · [Cite](../../CITATION.cff)
 
 </div>

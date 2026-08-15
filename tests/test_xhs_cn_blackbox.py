@@ -11,7 +11,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from penumbra.core.sources.walled import xiaohongshu_cn_source as X
+from omniseek.core.sources.walled import xiaohongshu_cn_source as X
 
 SECRET_COOKIE = "ACW-SECRET-VALUE-0a4ad9c9"
 SECRET_TOKEN = "XSEC-SECRET-VALUE-AB7F1HTM"

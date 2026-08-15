@@ -1,9 +1,21 @@
 # Changelog
 
-All notable changes to Penumbra are documented here. The format follows
+All notable changes to OmniSeek are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning is SemVer.
 
+Entries below the rename note predate it and use the project's former name, penumbra; they are
+history and are kept as written.
+
 ## [Unreleased]
+
+### Changed (BREAKING: the project is renamed penumbra -> OmniSeek)
+
+- Every namespace follows the name: the package is `omniseek`, the tools are `omniseek_*`, the
+  env vars are `OMNISEEK_*`, runtime state lives in `~/.omniseek`, the service and compose files
+  say `omniseek`. No compatibility aliases: the project has never been public, so there is no one
+  to break.
+- New visual identity (the deep O; see `docs/BRAND.md`), new README, and a new real-output
+  examples page (`docs/examples.md`).
 
 ### Changed (BREAKING: the tool surface was re-derived from first principles)
 

@@ -1,11 +1,11 @@
-# Penumbra: self-hosted deep-retrieval MCP. CORE (Apache-clean) image: no AGPL PDF lib, no
+# OmniSeek: self-hosted deep-retrieval MCP. CORE (Apache-clean) image: no AGPL PDF lib, no
 # torch, no circumvention signer. Opt into extras at build time:  --build-arg EXTRAS="[pdf,asr]".
 FROM python:3.11-slim
 
 ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
-    PENUMBRA_HTTP_HOST=0.0.0.0 \
-    PENUMBRA_HTTP_PORT=8765
+    OMNISEEK_HTTP_HOST=0.0.0.0 \
+    OMNISEEK_HTTP_PORT=8765
 
 # System deps for the chromium scrape/render path. ffmpeg is only needed by the optional [asr]
 # extra (imageio-ffmpeg vendors its own binary), so the core image omits it.
@@ -31,13 +31,13 @@ RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
 EXPOSE 8765
 # State (credentials + bearer token + profile + cache + recall index + curator state + downloaded
-# ASR model weights) lives under /root/.penumbra; the penumbra_read_document inbox under
-# /root/penumbra-inbox. Mount both to persist.
-VOLUME ["/root/.penumbra", "/root/penumbra-inbox"]
+# ASR model weights) lives under /root/.omniseek; the omniseek_read_document inbox under
+# /root/omniseek-inbox. Mount both to persist.
+VOLUME ["/root/.omniseek", "/root/omniseek-inbox"]
 
 # Liveness: /healthz is open (no token).
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-    CMD curl -fsS "http://127.0.0.1:${PENUMBRA_HTTP_PORT}/healthz" || exit 1
+    CMD curl -fsS "http://127.0.0.1:${OMNISEEK_HTTP_PORT}/healthz" || exit 1
 
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
-CMD ["python", "-m", "penumbra.serve_http"]
+CMD ["python", "-m", "omniseek.serve_http"]

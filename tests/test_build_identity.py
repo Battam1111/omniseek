@@ -4,7 +4,7 @@ import subprocess
 import tarfile
 from pathlib import Path
 
-from penumbra.core.contracts.build_identity import validate_build_id
+from omniseek.core.contracts.build_identity import validate_build_id
 
 try:  # `discover -s tests` puts tests/ on sys.path; `-m unittest tests.x` puts the repo root there
     from _repo_only import requires_source_repo
@@ -44,14 +44,14 @@ class BuildIdentityTests(unittest.TestCase):
                 "archive",
                 "--format=tar",
                 "HEAD",
-                "src/penumbra/eye/contracts/build_id.py",
+                "src/omniseek/eye/contracts/build_id.py",
             ],
             cwd=ROOT,
             capture_output=True,
             check=True,
         ).stdout
         with tarfile.open(fileobj=io.BytesIO(archive), mode="r:") as payload:
-            source = payload.extractfile("src/penumbra/eye/contracts/build_id.py")
+            source = payload.extractfile("src/omniseek/eye/contracts/build_id.py")
             self.assertIsNotNone(source)
             text = source.read().decode("utf-8")
         self.assertIn(f'EYE_BUILD_ID = "{head}"', text)

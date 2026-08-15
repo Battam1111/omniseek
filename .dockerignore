@@ -16,11 +16,13 @@ scripts/_profile.py
 SERVICES.md
 SOURCE_BACKLOG.md
 deploy/*.plist
-deploy/com.penumbra.*
+deploy/com.omniseek.*
 **/platform-notes*
 **/credentials.md
 **/relationship-reconstruction*
 
 # Local state (mounted at runtime, never baked in)
-.penumbra
-.penumbra-inbox
+.omniseek
+.omniseek-inbox
+.penumbra/
+.penumbra-inbox/

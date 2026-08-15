@@ -15,7 +15,7 @@ from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch
 
-from penumbra.core import infra_jobs as J
+from omniseek.core import infra_jobs as J
 
 
 def _git(root, *args):
@@ -128,13 +128,13 @@ class OffMachineAuditTests(unittest.TestCase):
 
     def test_an_offsite_copy_lagging_the_local_one_is_reported(self):
         self._wall(self.backups, "wall-20260811.db.gz", 0)
-        self._wall(self.volumes / "Drive" / "penumbra-backups", "wall-20260801.db.gz", 10 * 86400)
+        self._wall(self.volumes / "Drive" / "omniseek-backups", "wall-20260801.db.gz", 10 * 86400)
         faults = J._audit_external_drive(time.time())
         self.assertTrue(any("比本地旧" in f for f in faults), faults)
 
     def test_a_current_offsite_copy_is_clean(self):
         self._wall(self.backups, "wall-20260811.db.gz", 0)
-        self._wall(self.volumes / "Drive" / "penumbra-backups", "wall-20260811.db.gz", 60)
+        self._wall(self.volumes / "Drive" / "omniseek-backups", "wall-20260811.db.gz", 60)
         self.assertEqual(J._audit_external_drive(time.time()), [])
 
 
@@ -143,7 +143,7 @@ class DriveVisibilityTests(unittest.TestCase):
 
     macOS gates /Volumes/* behind a privacy grant a launchd process does not inherit, and the
     directory then reads EMPTY rather than raising. Measured 2026-08-11 with the same script a
-    minute apart: under launchd off-machine=NONE, over ssh off-machine=ext:PenumbraRecovery. An
+    minute apart: under launchd off-machine=NONE, over ssh off-machine=ext:OmniSeekRecovery. An
     audit that cannot tell those apart tells you to plug in a drive that is already plugged in.
     """
 
@@ -186,14 +186,14 @@ class DriveVisibilityTests(unittest.TestCase):
         # run records off-machine=NONE. The files must not paper over the lane's own verdict.
         self.log.write_text("backup ok: wall=wall-20260812.db.gz off-machine=NONE\n",
                             encoding="utf-8")
-        d = self.volumes / "Drive" / "penumbra-backups"
+        d = self.volumes / "Drive" / "omniseek-backups"
         d.mkdir(parents=True)
         (d / "wall-20260812.db.gz").write_text("x", encoding="utf-8")
         faults = J._audit_external_drive(time.time())
         self.assertTrue(any("off-machine=NONE" in f for f in faults), faults)
 
     def test_a_healthy_lane_with_a_current_copy_is_clean(self):
-        d = self.volumes / "Drive" / "penumbra-backups"
+        d = self.volumes / "Drive" / "omniseek-backups"
         d.mkdir(parents=True)
         (d / "wall-20260812.db.gz").write_text("x", encoding="utf-8")
         self.assertEqual(J._audit_external_drive(time.time()), [])
@@ -202,7 +202,7 @@ class DriveVisibilityTests(unittest.TestCase):
 class LaunchdFleetTests(unittest.TestCase):
     """A guard can cease to EXIST, and then its silence reads as calm.
 
-    2026-08-12: com.penumbra.infra.sentinel, the one external watchdog, was absent from launchd for
+    2026-08-12: com.omniseek.infra.sentinel, the one external watchdog, was absent from launchd for
     four days. Its plist sat on disk, the registry declared it resident, its log simply stopped, and
     its alarm state files still carried week-old timestamps that looked like "no incidents" rather
     than "no observer". Nothing noticed, because the thing that would notice IS the watchdog.
@@ -210,10 +210,10 @@ class LaunchdFleetTests(unittest.TestCase):
 
     def test_a_declared_resident_service_that_is_not_loaded_is_reported(self):
         with patch.object(J, "_declared_resident_labels",
-                          lambda: ["com.penumbra.organ.eye-http", "com.penumbra.infra.sentinel"]):
-            with patch.object(J, "_loaded_labels", lambda: {"com.penumbra.organ.eye-http"}):
+                          lambda: ["com.omniseek.organ.eye-http", "com.omniseek.infra.sentinel"]):
+            with patch.object(J, "_loaded_labels", lambda: {"com.omniseek.organ.eye-http"}):
                 faults = J._audit_launchd_fleet()
-        self.assertTrue(any("com.penumbra.infra.sentinel" in f for f in faults), faults)
+        self.assertTrue(any("com.omniseek.infra.sentinel" in f for f in faults), faults)
         self.assertTrue(any("舰队缺员" in f for f in faults), faults)
 
     def test_a_complete_fleet_is_clean(self):

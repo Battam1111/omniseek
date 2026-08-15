@@ -4,9 +4,9 @@ import subprocess
 from pathlib import Path
 from unittest import mock
 
-from penumbra.core import jobs
-from penumbra.core.contracts.heartbeat import ContractArtifacts
-from penumbra.core.recall import writer
+from omniseek.core import jobs
+from omniseek.core.contracts.heartbeat import ContractArtifacts
+from omniseek.core.recall import writer
 
 
 class FakeHeartbeat:

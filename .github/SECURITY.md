@@ -9,7 +9,7 @@ coordinate a fix and disclosure timeline with you.
 
 ## Threat model + posture
 
-Penumbra is a **self-hosted** retrieval service that drives credentialed tools on the operator's
+OmniSeek is a **self-hosted** retrieval service that drives credentialed tools on the operator's
 behalf. It is designed to be run by its operator on a trusted host, bound to loopback. The security
 boundaries it enforces:
 
@@ -20,18 +20,18 @@ boundaries it enforces:
 - **SSRF.** Every outbound fetch goes through a shared guard (`_netguard`) that validates the URL
   shape (scheme / port / no userinfo), resolves the host, and pins + re-validates the IP on every
   redirect hop, rejecting private, loopback, and link-local ranges. Operators can widen the allowed
-  CIDR set deliberately with `PENUMBRA_ALLOW_NETS` (needed for some split-tunnel setups).
-- **Local-file sandbox.** `penumbra_read_document` resolves and contains every path to an allowlisted
-  inbox (`~/penumbra-inbox` plus `PENUMBRA_DOC_ROOTS`); a path that escapes is refused.
-- **Untrusted retrieved content.** Documents and snippets penumbra returns are external data, never
+  CIDR set deliberately with `OMNISEEK_ALLOW_NETS` (needed for some split-tunnel setups).
+- **Local-file sandbox.** `omniseek_read_document` resolves and contains every path to an allowlisted
+  inbox (`~/omniseek-inbox` plus `OMNISEEK_DOC_ROOTS`); a path that escapes is refused.
+- **Untrusted retrieved content.** Documents and snippets omniseek returns are external data, never
   instructions. A consuming agent must treat them as data and never let a fetched page redirect its
   task or disclose secrets (the MCP instructions state this to the agent).
-- **Secrets.** Credentials, tokens, and cookies live under `~/.penumbra` (outside the repo), never in
+- **Secrets.** Credentials, tokens, and cookies live under `~/.omniseek` (outside the repo), never in
   version control.
 
 ## Operator responsibility
 
-Penumbra fetches as the operator's own agent. The operator is responsible for using it within the law
+OmniSeek fetches as the operator's own agent. The operator is responsible for using it within the law
 and each site's terms of service in their jurisdiction. Login-walled sources are **off by default**,
 on a fresh clone as well as a configured one; sources that defeat an access control (the
 circumvention tier) are **absent from the shipped catalog**, and the mirror script refuses to publish

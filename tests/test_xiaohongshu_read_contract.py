@@ -15,7 +15,7 @@ from unittest.mock import patch
 _NO_VIDEO = (None, "unresolved")
 
 # STATE ISOLATION (2026-08-12). This suite drives the xhs_cn guard, and the guard APPENDS to the
-# incident black box. Unisolated it wrote into ~/.penumbra/state/xhs-cn-incidents.jsonl on every
+# incident black box. Unisolated it wrote into ~/.omniseek/state/xhs-cn-incidents.jsonl on every
 # run, so the file whose whole job is to answer "what did a real 461 look like" filled up with
 # rows no incident produced. setUpModule redirects it once for everything below; a temp dir per
 # module keeps the check cheap and leaves nothing behind.
@@ -25,14 +25,14 @@ _ISO_REAL = None
 
 def setUpModule():
     global _ISO_TMP, _ISO_REAL
-    from penumbra.core.sources.walled import xiaohongshu_cn_source as _xcn
+    from omniseek.core.sources.walled import xiaohongshu_cn_source as _xcn
     _ISO_TMP = tempfile.TemporaryDirectory()
     _ISO_REAL = _xcn._INCIDENT_PATH
     _xcn._INCIDENT_PATH = Path(_ISO_TMP.name) / "xhs-cn-incidents.jsonl"
 
 
 def tearDownModule():
-    from penumbra.core.sources.walled import xiaohongshu_cn_source as _xcn
+    from omniseek.core.sources.walled import xiaohongshu_cn_source as _xcn
     if _ISO_REAL is not None:
         _xcn._INCIDENT_PATH = _ISO_REAL
     if _ISO_TMP is not None:
@@ -65,7 +65,7 @@ class SignedVideoExtractionTests(unittest.TestCase):
     """
 
     def setUp(self):
-        from penumbra.core.sources.walled import xiaohongshu_cn_source as m
+        from omniseek.core.sources.walled import xiaohongshu_cn_source as m
         self.m = m
 
     def test_picks_the_tallest_stream_when_the_site_marks_no_default(self):
@@ -115,15 +115,15 @@ class SignedVideoExtractionTests(unittest.TestCase):
     def test_the_signed_document_stamps_video_src_signed(self):
         """The origin must say WHICH mechanism produced the URL. dom / wire / signed are three
         different answers and the whole point of the field is that they stay distinguishable."""
-        from penumbra.core.sources.walled import _cdp
+        from omniseek.core.sources.walled import _cdp
         self.assertEqual(_cdp.video_metadata("https://x/a.mp4", "signed", has_player=True),
                          {"video_url": "https://x/a.mp4", "video_src": "signed"})
 
 
 class XiaohongshuReadContractTests(unittest.TestCase):
     def test_search_index_replays_the_cached_snippet_for_eye_read(self):
-        from penumbra.core import cache
-        from penumbra.core.sources.api import search_index_source as module
+        from omniseek.core import cache
+        from omniseek.core.sources.api import search_index_source as module
 
         url = "https://www.xiaohongshu.com/discovery/item/0123456789abcdef01234567"
         row = {
@@ -150,7 +150,7 @@ class XiaohongshuReadContractTests(unittest.TestCase):
         self.assertEqual(reread.metadata["read_depth"], "search-index-snippet")
 
     def test_search_index_drops_non_note_mobile_question_urls(self):
-        from penumbra.core.sources.api import search_index_source as module
+        from omniseek.core.sources.api import search_index_source as module
 
         config_path = Path(module.__file__).with_name("search_index_sites.json")
         rows = json.loads(config_path.read_text(encoding="utf-8"))
@@ -158,9 +158,9 @@ class XiaohongshuReadContractTests(unittest.TestCase):
         self.assertNotRegex(row["url_filter"], r"mobile/question")
 
     def test_search_index_refetches_when_a_cached_snapshot_violates_the_filter(self):
-        from penumbra.core import cache
-        from penumbra.core.normalize import Document
-        from penumbra.core.sources.api import search_index_source as module
+        from omniseek.core import cache
+        from omniseek.core.normalize import Document
+        from omniseek.core.sources.api import search_index_source as module
 
         venue = module._SearchVenue(
             name="xiaohongshu_search",
@@ -185,7 +185,7 @@ class XiaohongshuReadContractTests(unittest.TestCase):
         self.assertEqual(docs[0].url, new_url)
 
     def test_international_detail_rejects_an_empty_shell(self):
-        from penumbra.core.sources.walled import xiaohongshu_source as module
+        from omniseek.core.sources.walled import xiaohongshu_source as module
 
         html = "<html><body><main><div id='detail-title'></div><div id='detail-desc'></div></main></body></html>"
         # FIVE elements, slot five a (url, origin) PAIR. The note flow grew a video slot on
@@ -210,7 +210,7 @@ class XiaohongshuReadContractTests(unittest.TestCase):
                         f"the empty-shell branch was never reached; diag saw {_events}")
 
     def test_international_adapter_does_not_claim_mainland_urls(self):
-        from penumbra.core.sources.walled import xiaohongshu_source as module
+        from omniseek.core.sources.walled import xiaohongshu_source as module
 
         url = "https://www.xiaohongshu.com/search_result/0123456789abcdef01234567"
         with patch.object(module.XiaohongshuAdapter, "_fetch_url_live") as live:
@@ -220,7 +220,7 @@ class XiaohongshuReadContractTests(unittest.TestCase):
         live.assert_not_called()
 
     def test_international_health_is_transport_only_and_does_not_navigate(self):
-        from penumbra.core.sources.walled import xiaohongshu_source as module
+        from omniseek.core.sources.walled import xiaohongshu_source as module
 
         with patch.object(module, "cdp_health", return_value=(True, "ok")), \
              patch.object(module, "cdp_call", side_effect=AssertionError("health must not navigate")):
@@ -230,7 +230,7 @@ class XiaohongshuReadContractTests(unittest.TestCase):
         self.assertIn("CDP reachable", status)
 
     def test_mainland_detail_rejects_an_empty_shell(self):
-        from penumbra.core.sources.walled import xiaohongshu_cn_source as module
+        from omniseek.core.sources.walled import xiaohongshu_cn_source as module
 
         html = "<html><body><main><div id='detail-title'></div><div id='detail-desc'></div></main></body></html>"
         # FIVE elements, slot five a (url, origin) PAIR, for the same reason as the international
@@ -258,8 +258,8 @@ class XiaohongshuReadContractTests(unittest.TestCase):
                         f"the empty-shell branch was never reached; diag saw {_events}")
 
     def test_fallback_rejects_a_known_xiaohongshu_shell(self):
-        from penumbra.core import cache
-        from penumbra.core import web_fallback
+        from omniseek.core import cache
+        from omniseek.core import web_fallback
 
         url = "https://www.xiaohongshu.com/explore/0123456789abcdef01234567"
         html = (
@@ -284,8 +284,8 @@ class XiaohongshuReadContractTests(unittest.TestCase):
         self.assertIsNone(doc)
 
     def test_fallback_never_launders_a_known_xiaohongshu_deep_link(self):
-        from penumbra.core import cache
-        from penumbra.core import web_fallback
+        from omniseek.core import cache
+        from omniseek.core import web_fallback
 
         url = "https://www.xiaohongshu.com/explore/0123456789abcdef01234567"
         response = {
@@ -308,9 +308,9 @@ class XiaohongshuReadContractTests(unittest.TestCase):
         self.assertIsNone(doc)
 
     def test_eye_read_reason_prefers_the_walled_adapter_diagnostic(self):
-        from penumbra.core import diag
-        from penumbra.core import fetcher
-        from penumbra.core import web_fallback
+        from omniseek.core import diag
+        from omniseek.core import fetcher
+        from omniseek.core import web_fallback
 
         class RiskAdapter:
             name = "xiaohongshu_cn"
@@ -344,8 +344,8 @@ class XiaohongshuReadContractTests(unittest.TestCase):
         self.assertNotIn("generic web fallback refused", reason)
 
     def test_mainland_breaker_records_the_first_risk_signal_for_eye_read(self):
-        from penumbra.core import diag
-        from penumbra.core.sources.walled import xiaohongshu_cn_source as module
+        from omniseek.core import diag
+        from omniseek.core.sources.walled import xiaohongshu_cn_source as module
 
         old_state = (module._tripped_until, module._trip_streak, module._last_signal)
         try:
@@ -388,7 +388,7 @@ class XiaohongshuCNSignedPostureTests(unittest.TestCase):
         return jar
 
     def test_edith_scoped_acw_tc_wins_regardless_of_jar_order(self):
-        from penumbra.core.sources.walled import xiaohongshu_cn_source as module
+        from omniseek.core.sources.walled import xiaohongshu_cn_source as module
 
         orders = [
             ["edith.xiaohongshu.com", "www.xiaohongshu.com", "so.xiaohongshu.com"],
@@ -403,7 +403,7 @@ class XiaohongshuCNSignedPostureTests(unittest.TestCase):
             self.assertIn("acw_tc", exp)
 
     def test_host_cookies_for_other_hosts_never_reach_edith(self):
-        from penumbra.core.sources.walled import xiaohongshu_cn_source as module
+        from omniseek.core.sources.walled import xiaohongshu_cn_source as module
 
         jar = [{"name": "acw_tc", "domain": "www.xiaohongshu.com", "value": "acw-WWW", "expires": -1}]
         cookies, _exp = module._cookies_for_host(jar, module._SIGNED_HOST)
@@ -412,7 +412,7 @@ class XiaohongshuCNSignedPostureTests(unittest.TestCase):
     def test_signed_ready_refuses_a_dead_or_missing_anti_crawl_token(self):
         import time
 
-        from penumbra.core.sources.walled import xiaohongshu_cn_source as module
+        from omniseek.core.sources.walled import xiaohongshu_cn_source as module
 
         old = (dict(module._cookies), dict(module._cookie_exp), module._cookies_at)
         try:
@@ -446,7 +446,7 @@ class XiaohongshuCNSignedPostureTests(unittest.TestCase):
         module._last_signed_signal = ""
 
     def test_a_signed_461_darkens_only_the_signed_fallback(self):
-        from penumbra.core.sources.walled import xiaohongshu_cn_source as module
+        from omniseek.core.sources.walled import xiaohongshu_cn_source as module
 
         old = (module._tripped_until, module._signed_tripped_until, module._trip_streak,
                module._signed_trip_streak, module._last_signal, module._last_signed_signal)
@@ -462,7 +462,7 @@ class XiaohongshuCNSignedPostureTests(unittest.TestCase):
              module._signed_trip_streak, module._last_signal, module._last_signed_signal) = old
 
     def test_account_level_signals_still_darken_everything(self):
-        from penumbra.core.sources.walled import xiaohongshu_cn_source as module
+        from omniseek.core.sources.walled import xiaohongshu_cn_source as module
 
         old = (module._tripped_until, module._signed_tripped_until, module._trip_streak,
                module._signed_trip_streak, module._last_signal, module._last_signed_signal)
@@ -488,7 +488,7 @@ class XiaohongshuCNDailyBudgetTests(unittest.TestCase):
     """
 
     def setUp(self):
-        from penumbra.core.sources.walled import xiaohongshu_cn_source as module
+        from omniseek.core.sources.walled import xiaohongshu_cn_source as module
 
         self.module = module
         self._saved = (module._DAILY_STATE_PATH, module._DAILY_REQ_CAP, module._daily_count,
@@ -578,7 +578,7 @@ class XiaohongshuDualHostNavTests(unittest.TestCase):
         return _Page(), calls
 
     def test_net_error_retries_the_same_note_on_the_sibling_host(self):
-        from penumbra.core.sources.walled import xiaohongshu_source as module
+        from omniseek.core.sources.walled import xiaohongshu_source as module
 
         url = "https://www.rednote.com/search_result/0123456789abcdef01234567?xsec_token=tok&xsec_source="
         page, calls = self._page(RuntimeError("Page.goto: net::ERR_CONNECTION_CLOSED at " + url))
@@ -591,7 +591,7 @@ class XiaohongshuDualHostNavTests(unittest.TestCase):
         )
 
     def test_goto_timeout_also_earns_the_retry(self):
-        from penumbra.core.sources.walled import xiaohongshu_source as module
+        from omniseek.core.sources.walled import xiaohongshu_source as module
 
         url = "https://www.rednote.com/search_result/0123456789abcdef01234567?xsec_token=tok&xsec_source="
         page, calls = self._page(RuntimeError("Timeout 30000ms exceeded."))
@@ -601,7 +601,7 @@ class XiaohongshuDualHostNavTests(unittest.TestCase):
         self.assertIn("www.xiaohongshu.com", calls[1])
 
     def test_non_network_errors_reraise_without_a_retry(self):
-        from penumbra.core.sources.walled import xiaohongshu_source as module
+        from omniseek.core.sources.walled import xiaohongshu_source as module
 
         url = "https://www.rednote.com/search_result/0123456789abcdef01234567?xsec_token=tok&xsec_source="
         page, calls = self._page(ValueError("target closed for an unrelated reason"))
@@ -610,7 +610,7 @@ class XiaohongshuDualHostNavTests(unittest.TestCase):
         self.assertEqual(len(calls), 1)
 
     def test_non_rednote_urls_never_cross_hosts(self):
-        from penumbra.core.sources.walled import xiaohongshu_source as module
+        from omniseek.core.sources.walled import xiaohongshu_source as module
 
         url = "https://example.com/whatever"
         page, calls = self._page(RuntimeError("net::ERR_CONNECTION_CLOSED"))
@@ -619,7 +619,7 @@ class XiaohongshuDualHostNavTests(unittest.TestCase):
         self.assertEqual(len(calls), 1)
 
     def test_success_navigates_exactly_once(self):
-        from penumbra.core.sources.walled import xiaohongshu_source as module
+        from omniseek.core.sources.walled import xiaohongshu_source as module
 
         url = "https://www.rednote.com/search_result/0123456789abcdef01234567?xsec_token=tok&xsec_source="
         page, calls = self._page()
@@ -640,7 +640,7 @@ class EmptyDetailDiagnosticTests(unittest.TestCase):
     ADAPTERS = ("xiaohongshu_source.py", "xiaohongshu_cn_source.py")
 
     def _src(self, name):
-        return (Path(__file__).resolve().parents[1] / "src" / "penumbra" / "core" / "sources"
+        return (Path(__file__).resolve().parents[1] / "src" / "omniseek" / "core" / "sources"
                 / "walled" / name).read_text(encoding="utf-8")
 
     def test_the_no_token_case_is_told_apart_and_named(self):
@@ -653,7 +653,7 @@ class EmptyDetailDiagnosticTests(unittest.TestCase):
         """Naming a cause without naming the remedy still leaves the caller guessing."""
         for f in self.ADAPTERS:
             s = self._src(f)
-            self.assertIn("penumbra_search", s, f"{f}: does not tell the caller where a tokened URL comes from")
+            self.assertIn("omniseek_search", s, f"{f}: does not tell the caller where a tokened URL comes from")
 
     def test_the_tokened_failure_says_it_is_NOT_the_token_case(self):
         """A URL that DOES carry a token and still comes back empty is a different problem

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from penumbra.core.curator.apply import _hosts_of_adapter
+from omniseek.core.curator.apply import _hosts_of_adapter
 
 
 class CuratorAdapterHostTests(unittest.TestCase):

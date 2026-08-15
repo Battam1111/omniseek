@@ -1,0 +1,13 @@
+{
+  "schema": "omniseek.scheduler-heartbeat-policy/v1",
+  "mode": "calibration-probe",
+  "heartbeat_schema_digest": "331ed6b81d575a80be716d946ea0d0d79d4f607e5d599d5f5ac8430cb4c08fe5",
+  "initial_delay_s": 120,
+  "tick_interval_s": 900,
+  "max_job_budget_s": 1500,
+  "startup_grace_s": null,
+  "stale_after_s": null,
+  "recovery_deadline_s": null,
+  "probe_timeout_s": null,
+  "calibration_record_digest": null
+}

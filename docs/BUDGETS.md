@@ -20,9 +20,9 @@ How long a `search_many` / `search_ranked` fan-out waits for sources before retu
 
 | Scope | Constant | Provenance |
 | --- | --- | --- |
-| broad, cache-allowed (default) | `fetcher._SOURCE_DEADLINE_S` | `src/penumbra/eye/fetcher.py:43` |
-| broad, `fresh=True` (cold + contended) | `fetcher._SOURCE_DEADLINE_FRESH_S` | `src/penumbra/eye/fetcher.py:44` |
-| named / scoped (`sources=[...]`) | `fetcher._EXPLICIT_DEADLINE_S` | `src/penumbra/eye/fetcher.py:45` |
+| broad, cache-allowed (default) | `fetcher._SOURCE_DEADLINE_S` | `src/omniseek/eye/fetcher.py:43` |
+| broad, `fresh=True` (cold + contended) | `fetcher._SOURCE_DEADLINE_FRESH_S` | `src/omniseek/eye/fetcher.py:44` |
+| named / scoped (`sources=[...]`) | `fetcher._EXPLICIT_DEADLINE_S` | `src/omniseek/eye/fetcher.py:45` |
 
 An explicit `deadline_s=` argument overrides all three; `deadline_s=None` selects the scope default
 above (it does NOT mean unbounded here; that override belongs to `fetch_one`, clock 4).
@@ -33,17 +33,17 @@ bounds the assembly, not real network). No importable symbol -> value inline.
 
 | Budget | Value | Provenance |
 | --- | --- | --- |
-| cache_only ranked ceiling | 8 s | `src/penumbra/server.py:516` (literal `_deadline_s = 8`) |
+| cache_only ranked ceiling | 8 s | `src/omniseek/server.py:516` (literal `_deadline_s = 8`) |
 
-### 3. penumbra_gather batch
+### 3. omniseek_gather batch
 The parallel read-only batch primitive: a per-call `wait_s` default with a hard ceiling so a hung
 batch can never stall the worker.
 
 | Budget | Constant | Provenance |
 | --- | --- | --- |
-| gather `wait_s` default (60 s, no symbol) | (function default) | `src/penumbra/server.py:1561` |
-| gather ceiling | `server._GATHER_TIMEOUT` | `src/penumbra/server.py:1507` |
-| gather max calls | `server._GATHER_MAX` | `src/penumbra/server.py:1506` |
+| gather `wait_s` default (60 s, no symbol) | (function default) | `src/omniseek/server.py:1561` |
+| gather ceiling | `server._GATHER_TIMEOUT` | `src/omniseek/server.py:1507` |
+| gather max calls | `server._GATHER_MAX` | `src/omniseek/server.py:1506` |
 
 ### 4. fetch_one single-source backstop
 The daemon-thread backstop for one named-source fetch; `deadline_s=None` is the deliberate UNBOUNDED
@@ -51,17 +51,17 @@ override (a slow source the caller truly wants complete; guards the prewarm cont
 
 | Budget | Constant | Provenance |
 | --- | --- | --- |
-| fetch_one default backstop | `fetcher._FETCH_ONE_DEADLINE_S` | `src/penumbra/eye/fetcher.py:380` |
-| fetch_one unbounded override | `deadline_s=None` (no clock) | `src/penumbra/eye/fetcher.py` `_derive_outcome` |
+| fetch_one default backstop | `fetcher._FETCH_ONE_DEADLINE_S` | `src/omniseek/eye/fetcher.py:380` |
+| fetch_one unbounded override | `deadline_s=None` (no clock) | `src/omniseek/eye/fetcher.py` `_derive_outcome` |
 
 ## Adjacent clocks (health + fetch_url)
 
 | Budget | Constant | Provenance |
 | --- | --- | --- |
-| health probe, per-source hard cap | `fetcher._HEALTH_TIMEOUT_S` | `src/penumbra/eye/fetcher.py:1765` |
-| health probe, worker fan-out width | `fetcher._HEALTH_WORKERS` | `src/penumbra/eye/fetcher.py:1768` |
-| health probe, aggregate backstop (~35 s, no symbol) | `_HEALTH_TIMEOUT_S + 10` | `src/penumbra/eye/fetcher.py:1800` |
-| fetch_url per-adapter cap (no aggregate) | `fetcher._FETCH_URL_TIMEOUT_S` | `src/penumbra/eye/fetcher.py:382` |
+| health probe, per-source hard cap | `fetcher._HEALTH_TIMEOUT_S` | `src/omniseek/eye/fetcher.py:1765` |
+| health probe, worker fan-out width | `fetcher._HEALTH_WORKERS` | `src/omniseek/eye/fetcher.py:1768` |
+| health probe, aggregate backstop (~35 s, no symbol) | `_HEALTH_TIMEOUT_S + 10` | `src/omniseek/eye/fetcher.py:1800` |
+| fetch_url per-adapter cap (no aggregate) | `fetcher._FETCH_URL_TIMEOUT_S` | `src/omniseek/eye/fetcher.py:382` |
 
 ## Drift-guard bindings (machine-read by the S0.5 golden; the SINGLE source for these values)
 

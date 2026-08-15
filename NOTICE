@@ -1,5 +1,5 @@
-Penumbra
-Copyright 2026 The Penumbra authors
+OmniSeek
+Copyright 2026 The OmniSeek authors
 
 This product is licensed under the Apache License, Version 2.0 (see LICENSE).
 
@@ -16,17 +16,17 @@ rapidocr-onnxruntime.
 OPTIONAL extras pull in heavier or differently-licensed packages; install them
 only if you accept their terms:
 
-  - penumbra-mcp[pdf]  -> PyMuPDF (fitz) is AGPL-3.0 (or a commercial license
+  - omniseek-mcp[pdf]  -> PyMuPDF (fitz) is AGPL-3.0 (or a commercial license
     from Artifex). It is NOT part of the core install precisely so the default
     engine stays Apache-clean. If you install [pdf] AND redistribute a
     network-accessible service built on it, AGPL section 13 may require you to
     offer the corresponding source to your users. Choose this extra knowingly.
 
-  - penumbra-mcp[asr]  -> funasr + imageio-ffmpeg (transcription). funasr pulls
+  - omniseek-mcp[asr]  -> funasr + imageio-ffmpeg (transcription). funasr pulls
     PyTorch (large). imageio-ffmpeg vendors an ffmpeg binary; ffmpeg components
     carry their own (LGPL/GPL) terms depending on build.
 
-  - penumbra-mcp[walled] -> patchright (stealth Playwright fork) + xhshow (an
+  - omniseek-mcp[walled] -> patchright (stealth Playwright fork) + xhshow (an
     anti-bot request signer). The xhshow-backed source is OPT-IN and is NOT in
     the default source pack; see SECURITY.md (access-tier posture)
     and the per-source legal notes before enabling any walled/grey source.

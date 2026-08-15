@@ -26,9 +26,9 @@ import ast
 import unittest
 from pathlib import Path
 
-from penumbra.core.sources.walled import _cdp
+from omniseek.core.sources.walled import _cdp
 
-SRC = Path(__file__).resolve().parents[1] / "src" / "penumbra" / "core" / "sources" / "walled"
+SRC = Path(__file__).resolve().parents[1] / "src" / "omniseek" / "core" / "sources" / "walled"
 
 
 class _StubResponse:
@@ -109,13 +109,13 @@ class VideoHelperTests(unittest.TestCase):
         music-only audio track and every fact burned into the frames, so a hint naming only the
         transcriber sends the agent to read music and report an empty note."""
         with_url = _cdp.content_with_video("", "https://x/a.mp4", has_player=True)
-        self.assertIn("penumbra_transcribe", with_url)
-        self.assertIn("penumbra_view", with_url)
+        self.assertIn("omniseek_transcribe", with_url)
+        self.assertIn("omniseek_view", with_url)
 
     def test_hint_distinguishes_transcribable_from_blob_only(self):
         with_url = _cdp.content_with_video("", "https://x/a.mp4", has_player=True)
         blob_only = _cdp.content_with_video("", None, has_player=True)
-        self.assertIn("penumbra_transcribe", with_url)
+        self.assertIn("omniseek_transcribe", with_url)
         self.assertIn("blob:", blob_only)
         # not a video note -> untouched
         self.assertEqual(_cdp.content_with_video("body", None, has_player=False), "body")

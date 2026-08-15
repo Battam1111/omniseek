@@ -17,7 +17,7 @@ hand). Three properties matter more than the pruning itself, and each has a test
      would reach nobody, and a silent prune is how state disappears without anyone learning.
 
 STATE ISOLATION IS THE POINT OF THE HARNESS, not a detail: tests in this repo have written into
-~/.penumbra/state and poisoned the evidence they measure. The integration case repoints
+~/.omniseek/state and poisoned the evidence they measure. The integration case repoints
 ``_HEALTH_STATE`` into a TemporaryDirectory AND wraps ``_save_state`` in a tripwire that raises if
 any write lands outside it. Pure/offline throughout: no network, no CDP, no launchctl, no clock.
 """
@@ -31,10 +31,10 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
-import penumbra.server as server
-from penumbra.core import fetcher, infra_jobs
+import omniseek.server as server
+from omniseek.core import fetcher, infra_jobs
 
-PROD_STATE = Path.home() / ".penumbra" / "state"
+PROD_STATE = Path.home() / ".omniseek" / "state"
 
 # The non-source rows the live state carried when this guard was written (2026-08-12).
 # _cdp:9222-shared and _cdp:9223-xhs are written every full run by _health_track; _cdp_infra is a
@@ -67,7 +67,7 @@ def seed_state() -> dict:
             "down:gone_source": 1.0,
             "down:zhihu": 2.0,
             "down:walled_but_registered": 3.0,
-            "heal_fail:com.penumbra.cdp.xhs": 4.0,   # a SERVICE label, not a source -- must survive
+            "heal_fail:com.omniseek.cdp.xhs": 4.0,   # a SERVICE label, not a source -- must survive
         },
         "degraded": ["zhihu"],
         "last_run": "2026-08-12T05:00:00",
@@ -110,7 +110,7 @@ class PruneHelperContract(unittest.TestCase):
     def test_a_service_scoped_alert_key_is_not_mistaken_for_a_source(self):
         state = seed_state()
         infra_jobs._prune_stale_health_rows(state, set(REGISTERED))
-        self.assertIn("heal_fail:com.penumbra.cdp.xhs", state["_alerts"])
+        self.assertIn("heal_fail:com.omniseek.cdp.xhs", state["_alerts"])
 
     def test_registered_sources_survive_including_the_ones_no_run_probes(self):
         state = seed_state()
@@ -143,7 +143,7 @@ class PruneThroughRunSourceHealth(unittest.TestCase):
     """End-to-end through run_source_health, against a TEMP state file that is never production."""
 
     def setUp(self):
-        self._tmp = tempfile.TemporaryDirectory(prefix="penumbra-wd-prune-")
+        self._tmp = tempfile.TemporaryDirectory(prefix="omniseek-wd-prune-")
         self.tmpdir = Path(self._tmp.name).resolve()
         self.statefile = self.tmpdir / "health-watchdog-state.json"
         self.statefile.write_text(json.dumps(seed_state()), encoding="utf-8")
