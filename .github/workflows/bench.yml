@@ -23,6 +23,8 @@ jobs:
   run-benchmark:
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v6
@@ -48,6 +50,33 @@ jobs:
           name: omniseek-benchmark-results
           path: bench/results/*.json
           if-no-files-found: error
+      - name: Publish results to the data branch
+        env:
+          PYTHONUTF8: "1"
+          PYTHONIOENCODING: "utf-8"
+        run: |
+          set -euo pipefail
+          result_file=$(ls bench/results/*.json | head -1)
+          python bench/gen_report.py "$result_file" --out "$RUNNER_TEMP/RESULTS.md"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          publish_dir="$RUNNER_TEMP/health-data"
+          if git ls-remote --exit-code --heads origin health-data >/dev/null 2>&1; then
+            git fetch origin health-data
+            git worktree add --detach "$publish_dir" origin/health-data
+            git -C "$publish_dir" switch -C health-data origin/health-data
+          else
+            git worktree add --detach "$publish_dir"
+            git -C "$publish_dir" switch --orphan health-data
+            git -C "$publish_dir" rm -rf --ignore-unmatch .
+          fi
+          mkdir -p "$publish_dir/bench/history"
+          cp "$result_file" "$publish_dir/bench/latest.json"
+          cp "$result_file" "$publish_dir/bench/history/"
+          cp "$RUNNER_TEMP/RESULTS.md" "$publish_dir/bench/RESULTS.md"
+          git -C "$publish_dir" add bench
+          git -C "$publish_dir" commit -m "bench: publish $(basename "$result_file" .json)" || exit 0
+          git -C "$publish_dir" push origin HEAD:health-data
 
   offline-tests:
     runs-on: ubuntu-latest

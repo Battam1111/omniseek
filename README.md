@@ -44,7 +44,7 @@ It hears (local bilingual ASR, no cloud), sees (images and video frames, in-band
 
 Every source in [the catalog](docs/sources.md), the curated roster of everything OmniSeek can reach, earned its place by beating plain search at one of five jobs (structure, unwalling, transcription, recall, monitoring): citation graphs, regulatory filings, login-walled forums, Chinese-language video. And the catalog is built to grow: a curator pipeline probes, judges, and admits new sources, and retires the ones that decay.
 
-**[Worked examples, real outputs](docs/examples.md)** · **[A full case study](docs/case-study.md)**
+**[Worked examples, real outputs](docs/examples.md)** · **[A full case study](docs/case-study.md)** · **[Benchmark](bench/DESIGN.md)** ([latest results](https://github.com/Battam1111/omniseek/blob/health-data/bench/RESULTS.md)) · **[Source health, updated weekly](https://github.com/Battam1111/omniseek/blob/health-data/README.md)**
 
 ---
 

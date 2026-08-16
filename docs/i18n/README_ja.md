@@ -42,7 +42,7 @@ OmniSeek は探索を続けます:言語、ログイン、コメント欄、音�
 
 [カタログ](../sources.md)は OmniSeek が届く先すべての厳選名簿です。どのソースも五つの仕事のいずれか(構造化・壁越え・書き起こし・想起・監視)で通常の検索に勝って席を得ています:引用グラフ、規制当局への提出書類、ログイン制フォーラム、中国語動画。そしてカタログは育つ設計です:内蔵のキュレーター・パイプラインが新ソースを検証・審査・承認し、朽ちたソースを引退させます。
 
-**[実例と実出力](../examples.md)** · **[フル・ケーススタディ](../case-study.md)**
+**[実例と実出力](../examples.md)** · **[フル・ケーススタディ](../case-study.md)** · **[ベンチマーク](../../bench/DESIGN.md)**([最新結果](https://github.com/Battam1111/omniseek/blob/health-data/bench/RESULTS.md))· **[ソースヘルス、毎週更新](https://github.com/Battam1111/omniseek/blob/health-data/README.md)**
 
 ---
 
