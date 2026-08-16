@@ -74,6 +74,8 @@ jobs:
           cp "$result_file" "$publish_dir/bench/latest.json"
           cp "$result_file" "$publish_dir/bench/history/"
           cp "$RUNNER_TEMP/RESULTS.md" "$publish_dir/bench/RESULTS.md"
+          cp "$RUNNER_TEMP/results-light.svg" "$publish_dir/bench/results-light.svg"
+          cp "$RUNNER_TEMP/results-dark.svg" "$publish_dir/bench/results-dark.svg"
           git -C "$publish_dir" add bench
           git -C "$publish_dir" commit -m "bench: publish $(basename "$result_file" .json)" || exit 0
           git -C "$publish_dir" push origin HEAD:health-data

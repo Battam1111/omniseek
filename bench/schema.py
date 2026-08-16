@@ -35,6 +35,37 @@ def _require_mapping(value: Any, path: str) -> Mapping[str, Any]:
     return value
 
 
+def _validate_search_resistance(task: dict[str, Any]) -> None:
+    """Check the recorded search-resistance receipts a task carries.
+
+    The receipts are published verbatim on the results page, so a malformed one is caught
+    here, at load time, rather than at publish time after a whole run has been spent. The
+    field stays OPTIONAL: s5-scholar and s6-memory tasks have no web-search baseline to
+    record, and their absence of a receipt is a scope boundary, not a defect.
+    """
+    if "search_resistance_prefilter" not in task:
+        return
+    receipts = task["search_resistance_prefilter"]
+    if not isinstance(receipts, list) or not receipts:
+        raise TaskValidationError(
+            "search_resistance_prefilter must be a non-empty array when present"
+        )
+    for index, receipt in enumerate(receipts):
+        path = f"search_resistance_prefilter[{index}]"
+        entry = _require_mapping(receipt, path)
+        tool_or_engine = entry.get("tool") or entry.get("engine")
+        if not isinstance(tool_or_engine, str) or not tool_or_engine.strip():
+            raise TaskValidationError(
+                f"{path}.tool or {path}.engine must be a non-empty string"
+            )
+        for field in ("query", "date"):
+            value = entry.get(field)
+            if not isinstance(value, str) or not value.strip():
+                raise TaskValidationError(f"{path}.{field} must be a non-empty string")
+        if not isinstance(entry.get("first_page_hit"), bool):
+            raise TaskValidationError(f"{path}.first_page_hit must be a boolean")
+
+
 def canonicalize_task(raw: Mapping[str, Any]) -> dict[str, Any]:
     """Return a deep-copied, validated task with canonical tool naming."""
     if not isinstance(raw, Mapping):
@@ -85,6 +116,7 @@ def canonicalize_task(raw: Mapping[str, Any]) -> dict[str, Any]:
         raise TaskValidationError("lang must be a string when present")
     if "notes" in task and not isinstance(task["notes"], str):
         raise TaskValidationError("notes must be a string when present")
+    _validate_search_resistance(task)
     return task
 
 

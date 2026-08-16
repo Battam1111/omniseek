@@ -15,6 +15,7 @@ import shutil
 import subprocess
 import sys
 import time
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
@@ -499,6 +500,32 @@ def _majority_status(reps: list[dict[str, Any]]) -> str:
     return "failed"
 
 
+def _dormant_note(missing_extras: list[str]) -> str:
+    """Say WHICH sense is missing when we know, and stay honest when we do not.
+
+    A suite can also go dormant mid-run (the server answers that the extra is absent), in
+    which case the extras detected at load time name nothing, and inventing a name there
+    would be worse than the general statement.
+    """
+    base = "required optional extra missing"
+    return f"{base}: {', '.join(missing_extras)}" if missing_extras else base
+
+
+def _task_record(task: dict[str, Any]) -> dict[str, Any]:
+    record = {
+        "id": task["id"],
+        "suite": task["suite"],
+        "claim": task["claim"],
+        "liveness": None,
+        "passes": [],
+    }
+    if "search_resistance_prefilter" in task:
+        record["search_resistance_prefilter"] = deepcopy(
+            task["search_resistance_prefilter"]
+        )
+    return record
+
+
 async def _run_pass(
     tasks: list[dict[str, Any]],
     stale_ids: set[str],
@@ -513,16 +540,7 @@ async def _run_pass(
     for task in tasks:
         task_id = task["id"]
         suite = task["suite"]
-        record = task_records.setdefault(
-            task_id,
-            {
-                "id": task_id,
-                "suite": suite,
-                "claim": task["claim"],
-                "liveness": None,
-                "passes": [],
-            },
-        )
+        record = task_records.setdefault(task_id, _task_record(task))
         if task_id in stale_ids:
             continue
         rep_records: list[dict[str, Any]] = []
@@ -738,21 +756,24 @@ async def run_benchmark(
         for task in tasks
         if any(not extras.get(extra, False) for extra in _required_extras(task))
     }
+    dormant_reasons = {
+        suite: sorted(
+            {
+                extra
+                for task in tasks
+                if task["suite"] == suite
+                for extra in _required_extras(task)
+                if not extras.get(extra, False)
+            }
+        )
+        for suite in dormant_suites
+    }
     stale_ids: set[str] = set()
     task_records: dict[str, dict[str, Any]] = result["tasks"]
     try:
         with httpx.Client(follow_redirects=True, timeout=20.0) as client:
             for task in tasks:
-                record = task_records.setdefault(
-                    task["id"],
-                    {
-                        "id": task["id"],
-                        "suite": task["suite"],
-                        "claim": task["claim"],
-                        "liveness": None,
-                        "passes": [],
-                    },
-                )
+                record = task_records.setdefault(task["id"], _task_record(task))
                 probe = _liveness_probe(task, client)
                 record["liveness"] = probe
                 if not probe["alive"]:
@@ -894,7 +915,11 @@ async def run_benchmark(
             },
             "stale_count": sum(1 for task in tasks if task["suite"] == suite and task["id"] in stale_ids),
             "dormant": suite in dormant_suites,
-            "dormant_note": "required optional extra missing",
+            "dormant_note": (
+                _dormant_note(dormant_reasons.get(suite, []))
+                if suite in dormant_suites
+                else None
+            ),
         }
 
     result["env"]["warmup_ms"] = (

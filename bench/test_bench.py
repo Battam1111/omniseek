@@ -12,6 +12,7 @@ import sys
 import tempfile
 import time
 import unittest
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from unittest import mock
 
@@ -21,6 +22,7 @@ HERE = Path(__file__).resolve().parent
 if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
 
+import gen_report
 import run as bench_run
 from convert_candidates import convert_candidates
 from gen_report import generate_report
@@ -41,7 +43,12 @@ from run import (
     _run_rep,
     _liveness_probe,
 )
-from schema import TaskValidationError, canonicalize_task, load_task_file
+from schema import (
+    TaskValidationError,
+    canonicalize_task,
+    load_task_file,
+    load_tasks,
+)
 
 
 def _arm_socket_guard() -> None:
@@ -78,6 +85,108 @@ def _good_task(**overrides):
     }
     task.update(overrides)
     return task
+
+
+def _results_fixture():
+    receipt = [
+        {
+            "tool": "WebSearch",
+            "query": "fixture query for baseline receipt",
+            "date": "2026-08-16",
+            "first_page_hit": False,
+        },
+        {
+            "tool": "WebSearch",
+            "query": "second fixture query",
+            "date": "2026-08-15",
+            "first_page_hit": False,
+        },
+    ]
+    return {
+        "schema_version": "bench-v1.0",
+        "run": {
+            "git_sha7": "fixture1",
+            "passes": 1,
+            "reps": 1,
+            "suites": ["s3-crosslingual", "s6-memory"],
+        },
+        "env": {
+            "omniseek_version": "fixture-version",
+            "utc": "2026-08-16T12:00:00+00:00",
+            "vantage": "offline-fixture",
+            "extras_detected": {"recall": True},
+            "python": "3.13.0",
+            "platform": "fixture-platform",
+        },
+        "tasks": {
+            "s3-fixture-001": {
+                "id": "s3-fixture-001",
+                "suite": "s3-crosslingual",
+                "claim": "fixture claim with a recorded receipt",
+                "search_resistance_prefilter": receipt,
+                "liveness": None,
+                "passes": [],
+            },
+            "s6-fixture-001": {
+                "id": "s6-fixture-001",
+                "suite": "s6-memory",
+                "claim": "fixture claim without a web baseline",
+                "liveness": None,
+                "passes": [],
+            },
+        },
+        "suites": {
+            "s3-crosslingual": {
+                "n": 2,
+                "passes": [
+                    {
+                        "successes": 1,
+                        "total": 2,
+                        "rate": 0.5,
+                        "wilson_95": [0.09453120573423058, 0.9054687942657694],
+                    }
+                ],
+                "pooled": {
+                    "successes": 1,
+                    "total": 2,
+                    "rate": 0.5,
+                    "wilson_95": [0.09453120573423058, 0.9054687942657694],
+                },
+                "noise_band": 0.0,
+                "latency_ms": {"p50": 12.0, "p90": 18.0},
+                "stale_count": 1,
+                "dormant": False,
+                "dormant_note": None,
+            },
+            "s6-memory": {
+                "n": 0,
+                "passes": [
+                    {
+                        "successes": 0,
+                        "total": 0,
+                        "rate": 0.0,
+                        "wilson_95": [0.0, 0.0],
+                    }
+                ],
+                "pooled": {
+                    "successes": 0,
+                    "total": 0,
+                    "rate": 0.0,
+                    "wilson_95": [0.0, 0.0],
+                },
+                "noise_band": None,
+                "latency_ms": {"p50": None, "p90": None},
+                "stale_count": 1,
+                "dormant": True,
+                "dormant_note": "required optional extra missing",
+            },
+        },
+        "stale": [
+            {"id": "s3-fixture-001", "class": "dead"},
+            {"id": "s6-fixture-001", "class": "dead"},
+        ],
+        "dormant": ["s6-memory"],
+    }
 
 
 class JudgeTests(unittest.TestCase):
@@ -729,6 +838,333 @@ class ConversionAndReportTests(unittest.TestCase):
             self.assertIn("s6-memory", report)
             self.assertIn("s6-stale-001", report)
             self.assertIn("Conflict of interest", report)
+
+
+class VisualizationContractTests(unittest.TestCase):
+    def test_runner_copies_receipts_verbatim_and_omits_absent_receipts(self):
+        receipt = [
+            {
+                "tool": "WebSearch",
+                "query": "exact fixture query",
+                "date": "2026-08-16",
+                "first_page_hit": False,
+            }
+        ]
+
+        class FakeInvoker:
+            def __init__(self, *_args, **_kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, _exc_type, _exc, _traceback):
+                return None
+
+            async def call(self, _tool, _args, _timeout_s):
+                return {"text": "A phrase"}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tasks_dir = root / "tasks"
+            tasks_dir.mkdir()
+            with_receipt = _good_task(
+                id="s3-receipt-001",
+                search_resistance_prefilter=receipt,
+            )
+            without_receipt = _good_task(
+                id="s6-no-receipt-001",
+                suite="s6-memory",
+            )
+            for task in (with_receipt, without_receipt):
+                task.pop("liveness_probe")
+                (tasks_dir / f"{task['id']}.json").write_text(
+                    json.dumps(task),
+                    encoding="utf-8",
+                )
+            output = root / "result.json"
+            with mock.patch.object(bench_run, "MCPInvoker", FakeInvoker):
+                exit_code = bench_run.main(
+                    [
+                        "--suites",
+                        "s3-crosslingual,s6-memory",
+                        "--reps",
+                        "1",
+                        "--passes",
+                        "1",
+                        "--tasks-dir",
+                        str(tasks_dir),
+                        "--out",
+                        str(output),
+                        "--no-warmup",
+                    ]
+                )
+
+            payload = json.loads(output.read_text(encoding="utf-8"))
+            self.assertEqual(exit_code, 0)
+            receipt_record = payload["tasks"]["s3-receipt-001"]
+            self.assertIn("search_resistance_prefilter", receipt_record)
+            self.assertEqual(
+                receipt_record["search_resistance_prefilter"],
+                receipt,
+            )
+            self.assertNotIn(
+                "search_resistance_prefilter",
+                payload["tasks"]["s6-no-receipt-001"],
+            )
+
+    def test_chart_rejects_a_number_missing_from_results_json(self):
+        renderer = getattr(gen_report, "render_results_svg", None)
+        self.assertIsNotNone(
+            renderer,
+            "gen_report.render_results_svg must exist before chart tests can run",
+        )
+        with mock.patch.object(gen_report, "_json_numbers", return_value=set()):
+            with self.assertRaises(ValueError):
+                renderer(_results_fixture(), theme="light")
+
+    def test_chart_rejects_a_missing_stale_count(self):
+        results = _results_fixture()
+        results["suites"]["s3-crosslingual"].pop("stale_count", None)
+        with self.assertRaises(ValueError):
+            gen_report.render_results_svg(results, theme="light")
+
+    def test_chart_svg_is_well_formed_with_one_suite_group_and_dormant_row(self):
+        renderer = getattr(gen_report, "render_results_svg", None)
+        self.assertIsNotNone(
+            renderer,
+            "gen_report.render_results_svg must exist before chart tests can run",
+        )
+        svg = renderer(_results_fixture(), theme="light")
+        root = ET.fromstring(svg)
+        groups = [
+            element
+            for element in root.iter()
+            if "data-suite" in element.attrib
+        ]
+        self.assertEqual(len(groups), 2)
+        self.assertEqual(
+            {element.attrib["data-suite"] for element in groups},
+            {"s3-crosslingual", "s6-memory"},
+        )
+        live_group = next(
+            element
+            for element in groups
+            if element.attrib["data-suite"] == "s3-crosslingual"
+        )
+        live_text = " ".join(
+            element.text or ""
+            for element in live_group.iter()
+            if element.text
+        )
+        self.assertIn("1/2", live_text)
+        self.assertIn("0.5000", live_text)
+        self.assertIn("stale 1", live_text)
+        dormant_group = next(
+            element
+            for element in groups
+            if element.attrib["data-suite"] == "s6-memory"
+        )
+        text = " ".join(
+            element.text or ""
+            for element in dormant_group.iter()
+            if element.text
+        ).casefold()
+        self.assertIn("sense dormant", text)
+        self.assertIn("stale 1", text)
+        self.assertFalse(
+            any(
+                element.tag.rsplit("}", 1)[-1] == "rect"
+                for element in dormant_group.iter()
+            )
+        )
+
+    def test_report_writes_both_svg_variants_and_embeds_picture(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            result_file = root / "run.json"
+            report_file = root / "RESULTS.md"
+            result_file.write_text(
+                json.dumps(_results_fixture()),
+                encoding="utf-8",
+            )
+            generate_report(result_file, report_file)
+            report = report_file.read_text(encoding="utf-8")
+            self.assertTrue((root / "results-light.svg").exists())
+            self.assertTrue((root / "results-dark.svg").exists())
+            self.assertIn("<picture>", report)
+            self.assertIn("results-light.svg", report)
+            self.assertIn("results-dark.svg", report)
+
+    def test_report_describes_baseline_not_applicable_with_reason(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            result_file = root / "run.json"
+            report_file = root / "RESULTS.md"
+            result_file.write_text(
+                json.dumps(_results_fixture()),
+                encoding="utf-8",
+            )
+            generate_report(result_file, report_file)
+            report = report_file.read_text(encoding="utf-8")
+            self.assertIn("baseline not applicable", report)
+            self.assertIn("s6-memory", report)
+            self.assertIn("server's own memory contract", report)
+            self.assertIn("fixture query for baseline receipt", report)
+            self.assertIn("first-page non-hits", report)
+
+    def test_chart_shows_a_stale_count_on_a_dormant_row(self):
+        results = _results_fixture()
+        results["suites"]["s6-memory"]["stale_count"] = 2
+        results["stale"].append({"id": "s6-fixture-002", "class": "timeout"})
+        svg = gen_report.render_results_svg(results, theme="dark")
+        root = ET.fromstring(svg)
+        dormant_group = next(
+            element
+            for element in root.iter()
+            if element.attrib.get("data-suite") == "s6-memory"
+        )
+        text = " ".join(
+            element.text or "" for element in dormant_group.iter() if element.text
+        )
+        self.assertIn("sense dormant", text)
+        self.assertIn("stale 2", text)
+
+    def test_chart_draws_a_dormant_suite_that_recorded_no_pooled_numbers(self):
+        results = _results_fixture()
+        results["suites"]["s6-memory"].pop("pooled")
+        results["suites"]["s6-memory"].pop("passes")
+        svg = gen_report.render_results_svg(results, theme="light")
+        root = ET.fromstring(svg)
+        dormant_group = next(
+            element
+            for element in root.iter()
+            if element.attrib.get("data-suite") == "s6-memory"
+        )
+        text = " ".join(
+            element.text or "" for element in dormant_group.iter() if element.text
+        )
+        self.assertIn("sense dormant", text)
+
+    def test_table_reports_a_dormant_suite_as_not_scored_rather_than_zero(self):
+        # The chart draws a dormant sense as dormant; the table used to print a pooled
+        # rate of zero for the same suite, which reads as "failed everything" and
+        # contradicts the chart on the same page.
+        scored_with_pooled_zeros = gen_report._suite_values(
+            "s1-audio",
+            {
+                "n": 0,
+                "pooled": {
+                    "successes": 0,
+                    "total": 0,
+                    "rate": 0.0,
+                    "wilson_95": [0.0, 0.0],
+                },
+                "stale_count": 0,
+                "dormant": True,
+                "dormant_note": "required optional extra missing: asr",
+            },
+            {0.0},
+        )
+        self.assertEqual(scored_with_pooled_zeros[1], "not scored")
+
+        # The runner always writes stale_count, but a suite that never ran may carry no
+        # pooled block at all; that must not raise on the way to the table.
+        scored_without_pooled = gen_report._suite_values(
+            "s1-audio",
+            {
+                "stale_count": 0,
+                "dormant": True,
+                "dormant_note": "required optional extra missing: asr",
+            },
+            {0.0},
+        )
+        self.assertEqual(scored_without_pooled[0], "n/a")
+        self.assertEqual(scored_without_pooled[1], "not scored")
+
+    def test_both_svg_themes_are_well_formed_and_free_of_em_dash(self):
+        results = _results_fixture()
+        for theme in ("light", "dark"):
+            svg = gen_report.render_results_svg(results, theme=theme)
+            ET.fromstring(svg)
+            self.assertNotIn("\N{EM DASH}", svg)
+            self.assertNotIn("<script", svg)
+            self.assertIn('width="', svg)
+            self.assertIn('viewBox="', svg)
+        with self.assertRaises(ValueError):
+            gen_report.render_results_svg(results, theme="sepia")
+
+    def test_task_loader_rejects_a_malformed_receipt(self):
+        task = _good_task(
+            id="s3-bad-receipt-001",
+            search_resistance_prefilter=[
+                {"tool": "WebSearch", "query": "q", "date": "2026-08-16"}
+            ],
+        )
+        with self.assertRaises(TaskValidationError):
+            canonicalize_task(task)
+        task["search_resistance_prefilter"][0]["first_page_hit"] = False
+        self.assertEqual(
+            canonicalize_task(task)["search_resistance_prefilter"],
+            task["search_resistance_prefilter"],
+        )
+        engine_task = _good_task(
+            id="s3-engine-receipt-001",
+            search_resistance_prefilter=[
+                {
+                    "engine": "Bing",
+                    "query": "q",
+                    "date": "2026-08-16",
+                    "first_page_hit": False,
+                }
+            ],
+        )
+        self.assertEqual(
+            canonicalize_task(engine_task)["search_resistance_prefilter"],
+            engine_task["search_resistance_prefilter"],
+        )
+
+    def test_published_tasks_all_carry_loadable_receipts(self):
+        tasks = load_tasks(HERE / "tasks")
+        carried = [
+            task for task in tasks if "search_resistance_prefilter" in task
+        ]
+        self.assertTrue(carried, "at least one published task must carry a receipt")
+        for task in carried:
+            for receipt in task["search_resistance_prefilter"]:
+                self.assertIsInstance(receipt["first_page_hit"], bool)
+        for task in tasks:
+            if task["suite"] in {"s5-scholar", "s6-memory"}:
+                self.assertNotIn("search_resistance_prefilter", task)
+
+    def test_workflow_publishes_both_svg_variants(self):
+        workflow = (HERE.parent / ".github" / "workflows" / "bench.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertRegex(
+            workflow,
+            r'cp "\$RUNNER_TEMP/results-light\.svg" "\$publish_dir/bench/results-light\.svg"',
+        )
+        self.assertRegex(
+            workflow,
+            r'cp "\$RUNNER_TEMP/results-dark\.svg" "\$publish_dir/bench/results-dark\.svg"',
+        )
+
+    def test_website_contract_uses_offline_safe_live_results_page(self):
+        website = HERE.parent / "site" / "bench.html"
+        self.assertTrue(website.exists(), "site/bench.html must exist")
+        html = website.read_text(encoding="utf-8")
+        self.assertIn(
+            "https://raw.githubusercontent.com/Battam1111/omniseek/health-data/bench/latest.json",
+            html,
+        )
+        self.assertIn("Unable to load benchmark results", html)
+        self.assertIn("health-data", html)
+        self.assertIn('id="chart"', html)
+        self.assertIn('id="baseline"', html)
+        self.assertNotRegex(html, r"<script[^>]+src=")
+        index = (HERE.parent / "site" / "index.html").read_text(encoding="utf-8")
+        self.assertIn('href="bench.html"', index)
 
 
 if __name__ == "__main__":
