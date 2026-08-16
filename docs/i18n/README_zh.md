@@ -69,6 +69,8 @@ scripts/bootstrap.sh
 python -m omniseek.serve_http
 ```
 
+裸安装即 **Core** 档:全部免钥 API 与静态源、文档阅读(除 PDF)、词面记忆索引。`pip install "omniseek[pdf,asr,recall,ocr]"` 唤醒 **Research** 档(PDF、听觉、跨语言向量、OCR);`omniseek[walled]` 加上登录墙档,不带上你自己的账号它保持关闭;`omniseek[all]` 全要。服务器每次启动都会打印哪些感官在岗、哪些休眠。
+
 Windows 上请在 Git Bash 或 WSL 里跑 `bootstrap.sh`;Docker 是最省事的路。要挂常驻 Linux 服务,见 [`deploy/omniseek.service`](../../deploy/omniseek.service)。
 
 偏好 stdio?安装同时装入 `omniseek` 命令,直接以 stdio 讲 MCP,适合由客户端自行拉起服务器的场景;[`Dockerfile.stdio`](../../Dockerfile.stdio) 是它的容器包装。

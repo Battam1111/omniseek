@@ -71,6 +71,8 @@ scripts/bootstrap.sh
 python -m omniseek.serve_http
 ```
 
+The bare install is the **Core** tier: every keyless API and static source, document reading minus PDF, and the lexical memory index. `pip install "omniseek[pdf,asr,recall,ocr]"` wakes the **Research** tier (PDF, hearing, cross-lingual vectors, OCR); `omniseek[walled]` adds the login-walled tier, which stays off until you bring your own accounts; `omniseek[all]` takes everything. The server prints which senses are online, and which are dormant, at every boot.
+
 On Windows, run `bootstrap.sh` under Git Bash or WSL; Docker is the simplest path. For an always-on Linux service, see [`deploy/omniseek.service`](deploy/omniseek.service).
 
 Prefer stdio? The install also ships an `omniseek` command that speaks MCP over stdio, for clients that launch servers themselves; [`Dockerfile.stdio`](Dockerfile.stdio) wraps the same thing in a container.

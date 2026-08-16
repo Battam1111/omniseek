@@ -69,6 +69,8 @@ scripts/bootstrap.sh
 python -m omniseek.serve_http
 ```
 
+素のインストールは **Core** 層です:キー不要の API と静的ソースすべて、PDF を除く文書読取、字句ベースの記憶インデックス。`pip install "omniseek[pdf,asr,recall,ocr]"` で **Research** 層(PDF・聴覚・多言語ベクトル・OCR)が目覚め、`omniseek[walled]` はログインの壁の層を加えます(自分のアカウントを持ち込むまではオフのまま)。`omniseek[all]` で全部です。サーバーは起動のたびに、どの感覚がオンラインでどれが休眠中かを表示します。
+
 Windows では `bootstrap.sh` を Git Bash か WSL で実行してください。Docker が最も簡単です。常駐 Linux サービスは [`deploy/omniseek.service`](../../deploy/omniseek.service) を参照。
 
 stdio 派には:インストールと同時に入る `omniseek` コマンドが MCP over stdio を話します(クライアントがサーバーを自ら起動する構成向け)。[`Dockerfile.stdio`](../../Dockerfile.stdio) はそのコンテナ版です。
