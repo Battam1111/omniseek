@@ -81,7 +81,8 @@ information.
 ```
 
 (`agent_tooling_radar` is an explicit-only monitor source; its `reason` field is quoted as
-stored in the catalog config.) A ranked list that merely looks complete is the most dangerous
+stored on the day of this session. The catalog has since reworded that entry in plainer
+language; outputs here stay verbatim to their run.) A ranked list that merely looks complete is the most dangerous
 kind of complete. So the router reports which perspectives this pass had none of, and which
 deliberately-excluded sources matched the query anyway, each with the exact parameter that
 reaches it. Coverage becomes something you read, not something you assume.
