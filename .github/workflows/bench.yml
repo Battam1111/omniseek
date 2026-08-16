@@ -1,0 +1,64 @@
+name: benchmark
+
+on:
+  workflow_dispatch:
+    inputs:
+      suites:
+        description: Comma-separated benchmark suites
+        required: true
+        default: s3-crosslingual,s4-depth,s5-scholar,s6-memory
+      reps:
+        description: Repetitions per task
+        required: true
+        default: "3"
+
+  push:
+    paths:
+      - "bench/**"
+  pull_request:
+    paths:
+      - "bench/**"
+
+jobs:
+  run-benchmark:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install package
+        run: pip install .
+      - name: Run benchmark
+        env:
+          PYTHONUTF8: "1"
+          PYTHONIOENCODING: "utf-8"
+        run: >
+          python bench/run.py
+          --suites "${{ inputs.suites }}"
+          --reps "${{ inputs.reps }}"
+          --vantage github-actions
+      - name: Upload benchmark JSON
+        uses: actions/upload-artifact@v5
+        with:
+          name: omniseek-benchmark-results
+          path: bench/results/*.json
+          if-no-files-found: error
+
+  offline-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install package
+        run: pip install .
+      - name: Run offline benchmark tests
+        env:
+          PYTHONUTF8: "1"
+          PYTHONIOENCODING: "utf-8"
+        run: python bench/test_bench.py

@@ -1,0 +1,37 @@
+{
+  "id": "s6-memory-001",
+  "suite": "s6-memory",
+  "claim": "A repeated query in one MCP session exposes the memory contract's seen_before field on the second result set.",
+  "input": {
+    "tool": "omniseek_search",
+    "args": {
+      "query": "On Computable Numbers with an Application to the Entscheidungsproblem",
+      "sources": [
+        "openalex"
+      ],
+      "limit": 5,
+      "wait_s": 15
+    },
+    "repeat": 2
+  },
+  "ground_truth": {
+    "type": "meta_assertion",
+    "assertions": [
+      {
+        "path": "calls[0].documents",
+        "exists": true
+      },
+      {
+        "path": "calls[1].documents",
+        "exists": true
+      },
+      {
+        "path": "calls[1].documents[0].metadata.seen_before",
+        "exists": true
+      }
+    ]
+  },
+  "lang": "en",
+  "added_in": "bench-v1.0",
+  "notes": "The task relies on a sequential pair of calls in one initialized MCP session. In a fresh install, seen_before stayed false across the measured 90-second window; cross-session continuity is demonstrated in docs/case-study.md and is not benchmarkable on a fresh install."
+}

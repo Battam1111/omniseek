@@ -1,0 +1,40 @@
+{
+  "id": "s6-memory-005",
+  "suite": "s6-memory",
+  "claim": "Search metadata names the searched, empty, and excluded source channels.",
+  "input": {
+    "tool": "omniseek_search",
+    "args": {
+      "query": "On Computable Numbers with an Application to the Entscheidungsproblem",
+      "sources": [
+        "openalex"
+      ],
+      "limit": 5,
+      "wait_s": 15
+    }
+  },
+  "ground_truth": {
+    "type": "meta_assertion",
+    "assertions": [
+      {
+        "path": "_meta.searched",
+        "gt": 0
+      },
+      {
+        "path": "_meta.empty",
+        "exists": true
+      },
+      {
+        "path": "_meta.excluded_relevant",
+        "exists": true
+      },
+      {
+        "path": "_meta.excluded_count",
+        "exists": true
+      }
+    ]
+  },
+  "lang": "en",
+  "added_in": "bench-v1.0",
+  "notes": "The current server exposes the excluded channel as a count plus the query-relevant list."
+}

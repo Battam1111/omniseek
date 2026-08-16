@@ -22,3 +22,7 @@ Thumbs.db
 # Local runtime state mounted by docker-compose
 .omniseek/
 .penumbra/
+
+# Benchmark runtime artifacts
+bench/results/
+bench/RESULTS.md
