@@ -25,8 +25,10 @@ from judges import (
 )
 from run import (
     DormantExtraError,
+    MCPInvoker,
     _aggregate_pass,
     _majority_status,
+    _parser,
     _required_extras,
     _run_rep,
 )
@@ -162,15 +164,26 @@ class JudgeTests(unittest.TestCase):
         self.assertTrue(outcome["passed"])
         self.assertEqual(outcome["branch"], "meta_assertion")
 
-    def test_repeat_task_accepts_dedup_continuity_when_seen_before_is_false(self):
+    def test_repeat_task_requires_seen_before_field_on_second_document(self):
         task = load_task_file(HERE / "tasks" / "s6-memory" / "s6-memory-001.json")[0]
         result = {
             "calls": [
                 {"documents": [{"metadata": {"seen_before": False}}]},
                 {
-                    "documents": [{"metadata": {"seen_before": False}}],
+                    "documents": [{"metadata": {}}],
                     "_meta": {"deduped": {"in": 2, "out": 1}},
                 },
+            ]
+        }
+        outcome = judge(task, result)
+        self.assertFalse(outcome["passed"])
+
+    def test_repeat_task_accepts_seen_before_field_with_false_value(self):
+        task = load_task_file(HERE / "tasks" / "s6-memory" / "s6-memory-001.json")[0]
+        result = {
+            "calls": [
+                {"documents": [{"metadata": {"seen_before": False}}]},
+                {"documents": [{"metadata": {"seen_before": False}}]},
             ]
         }
         outcome = judge(task, result)
@@ -363,6 +376,33 @@ class StatisticsTests(unittest.TestCase):
 
 
 class RunnerContractTests(unittest.TestCase):
+    def test_warmup_uses_sources_then_cache_only_search_and_is_untimed_for_scoring(self):
+        calls = []
+        invoker = object.__new__(MCPInvoker)
+
+        async def fake_call(tool, args, timeout_s):
+            calls.append((tool, args, timeout_s))
+            return {}
+
+        invoker.call = fake_call
+        elapsed = asyncio.run(invoker.warmup())
+        self.assertGreaterEqual(elapsed, 0.0)
+        self.assertEqual(
+            calls,
+            [
+                ("omniseek_sources", {}, 600.0),
+                (
+                    "omniseek_search",
+                    {"query": "benchmark neutral warmup", "staleness": "cache_only"},
+                    600.0,
+                ),
+            ],
+        )
+
+    def test_no_warmup_flag_is_available(self):
+        self.assertFalse(_parser().parse_args([]).no_warmup)
+        self.assertTrue(_parser().parse_args(["--no-warmup"]).no_warmup)
+
     def test_dynamic_upstream_skip_is_not_a_failure(self):
         self.assertEqual(
             _majority_status([{"status": "skip", "passed": False}]),

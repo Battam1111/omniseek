@@ -24,6 +24,8 @@ from schema import TaskValidationError, load_tasks
 
 
 DEFAULT_SUITES = "s3-crosslingual,s4-depth,s5-scholar,s6-memory"
+WARMUP_TIMEOUT = 600.0
+WARMUP_QUERY = "benchmark neutral warmup"
 REQUIRED_EXTRAS = {
     "s1-audio": {"asr"},
     "s2-pixels": {"ocr"},
@@ -215,6 +217,18 @@ class MCPInvoker:
         except asyncio.TimeoutError as exc:
             raise TimeoutError(f"MCP call timed out after {timeout_s:.1f}s") from exc
         return _decode_mcp_result(raw)
+
+    async def warmup(self) -> float:
+        # The cold first live call's initialization cost is a documented property of the
+        # server, and this benchmark measures retrieval, not boot.
+        started = time.perf_counter()
+        await self.call("omniseek_sources", {}, WARMUP_TIMEOUT)
+        await self.call(
+            "omniseek_search",
+            {"query": WARMUP_QUERY, "staleness": "cache_only"},
+            WARMUP_TIMEOUT,
+        )
+        return (time.perf_counter() - started) * 1000.0
 
 
 def _liveness_probe(task: dict[str, Any], client: httpx.Client) -> dict[str, Any]:
@@ -473,6 +487,7 @@ async def run_benchmark(args: argparse.Namespace) -> Path:
 
     pass_aggregates: list[dict[str, dict[str, Any]]] = []
     latency_by_suite: dict[str, list[float]] = {}
+    warmup_pass_ms: list[float] = []
     for pass_index in range(1, args.passes + 1):
         async with MCPInvoker(
             args.transport,
@@ -481,6 +496,8 @@ async def run_benchmark(args: argparse.Namespace) -> Path:
             args.init_timeout,
             args.call_timeout,
         ) as invoker:
+            if not getattr(args, "no_warmup", False):
+                warmup_pass_ms.append(await invoker.warmup())
             await _run_pass(
                 tasks,
                 stale_ids,
@@ -570,6 +587,8 @@ async def run_benchmark(args: argparse.Namespace) -> Path:
             "omniseek_version": _package_version(),
             "extras_detected": extras,
             "vantage": args.vantage,
+            "warmup_ms": round(sum(warmup_pass_ms), 3) if warmup_pass_ms else None,
+            "warmup_pass_ms": [round(value, 3) for value in warmup_pass_ms],
         },
         "tasks": task_records,
         "suites": suites_output,
@@ -611,6 +630,11 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--tasks-dir", type=Path, default=Path("bench") / "tasks")
     parser.add_argument("--out", type=Path)
     parser.add_argument("--vantage", default="local")
+    parser.add_argument(
+        "--no-warmup",
+        action="store_true",
+        help="skip the untimed server initialization warmup",
+    )
     return parser
 
 
