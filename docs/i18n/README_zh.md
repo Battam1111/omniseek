@@ -79,7 +79,7 @@ OmniSeek 绑定 `127.0.0.1`,每个请求都要 bearer token。没有反向代理
 
 ## 工具
 
-一条 MCP 连接。从 `omniseek_search` 开始;用 `omniseek_sources` 看有什么可用。
+一条 MCP 连接;里面没有模型,也没有 agent 循环。模型思考,harness 跑循环,OmniSeek 够到。从 `omniseek_search` 开始;用 `omniseek_sources` 看有什么可用。
 
 | 工具 | 干什么 |
 |------|--------|

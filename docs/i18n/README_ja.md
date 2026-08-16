@@ -79,7 +79,7 @@ OmniSeek は `127.0.0.1` にバインドし、全リクエストに bearer token
 
 ## ツール
 
-MCP 接続はひとつ。まず `omniseek_search` から。何が使えるかは `omniseek_sources` で。
+MCP 接続はひとつ。中にモデルはなく、エージェントループもありません。考えるのはモデル、ループを回すのはハーネス、届くのが OmniSeek。まず `omniseek_search` から。何が使えるかは `omniseek_sources` で。
 
 | ツール | 何をするか |
 |--------|-----------|

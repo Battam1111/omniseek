@@ -8,6 +8,14 @@ remembers what it reached, and never thinks for you.**
 
 ---
 
+## Is OmniSeek an agent harness?
+
+No. A harness (Claude Code, Codex CLI, Cursor's agent mode) wraps a model and drives the
+agent loop: prompts, tool dispatch, retries, context. OmniSeek contains no model and no
+loop. It is the perception peripheral a harness mounts over MCP: the model thinks, the
+harness drives the loop, OmniSeek reaches. If "MCP server" reads unfamiliar, think
+peripheral, not framework: you plug it into whatever harness you already use.
+
 ## Is this just a search wrapper?
 
 No. Search is one of the things it does, and the most visible, so it is the one people notice

@@ -81,7 +81,7 @@ OmniSeek binds `127.0.0.1` and requires the bearer token on every request. Do no
 
 ## Tools
 
-One MCP connection. Start with `omniseek_search`; explore what's available with `omniseek_sources`.
+One MCP connection; no model, no agent loop inside. Your model thinks, your harness drives the loop, OmniSeek reaches. Start with `omniseek_search`; explore what's available with `omniseek_sources`.
 
 | Tool | What it does |
 |------|-------------|
