@@ -6,7 +6,9 @@ All notable changes to OmniSeek are documented here. The format follows
 Entries below the rename note predate it and use the project's former name, penumbra; they are
 history and are kept as written.
 
-## [Unreleased]
+## [0.1.0] - 2026-08-16
+
+The first public release.
 
 ### Fixed
 
@@ -159,7 +161,7 @@ history and are kept as written.
 
 - PyPI publish planned (it later landed as `pip install omniseek`).
 
-## [0.1.0]
+## [0.1.0-alpha] (internal; never published)
 
 ### Added
 
