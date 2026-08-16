@@ -9,7 +9,7 @@
 
 **Your agent seeks what search can't find.**
 
-Give your agent ears, eyes, languages, logins, and a memory.
+The answer is sitting in minute 47 of a podcast, three replies deep in a comment thread, behind a login, in another language. Your agent gets it anyway.
 
 <sub>Self-hosted perception MCP server · one connection</sub>
 
@@ -29,7 +29,7 @@ Give your agent ears, eyes, languages, logins, and a memory.
 
 Search gives your agent indexed pages, in one language, in text. That's the surface.
 
-OmniSeek reaches underneath: the podcast someone spoke into but nobody transcribed, the video frame that flashed a real number for two seconds, the Chinese forum post the English web hasn't caught up to, the comment three levels deep where someone corrected the headline, and the login-walled thread your browser can see but search can't. All on your machine.
+OmniSeek is the reach beneath it, and everything it does runs on your machine.
 
 <div align="center">
   <picture>
