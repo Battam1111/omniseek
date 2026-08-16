@@ -42,7 +42,7 @@ OmniSeek is the reach beneath it, and everything it does runs on your machine.
 
 It hears (local bilingual ASR, no cloud), sees (images and video frames, in-band), crosses languages (a Chinese query finds English results and vice versa), reads behind login walls (your credentials, your machine, off by default), and remembers (persistent retrieval memory plus a typed, source-traced evidence graph).
 
-Every source in [the catalog](docs/sources.md) earned its place by beating plain search at something, from citation graphs and regulatory filings to login-walled forums and Chinese-language video. And the catalog is built to grow: a curator pipeline probes, judges, and admits new sources, and retires the ones that decay.
+Every source in [the catalog](docs/sources.md), the curated roster of everything OmniSeek can reach, earned its place by beating plain search at one of five jobs (structure, unwalling, transcription, recall, monitoring): citation graphs, regulatory filings, login-walled forums, Chinese-language video. And the catalog is built to grow: a curator pipeline probes, judges, and admits new sources, and retires the ones that decay.
 
 **[Worked examples, real outputs](docs/examples.md)** · **[A full case study](docs/case-study.md)**
 
@@ -61,7 +61,7 @@ curl -s http://127.0.0.1:8765/healthz
 
 Point your MCP client at `http://127.0.0.1:8765/mcp` with `Authorization: Bearer <token>`. The token is generated on first start and stored in `~/.omniseek/credentials/omniseek_http.json` (with the compose file, that's `./.omniseek/credentials/omniseek_http.json` on the host).
 
-Prefer not to build? A prebuilt core image is on GHCR: `docker pull ghcr.io/battam1111/omniseek` (amd64 + arm64). Otherwise the first `up` builds locally (dependencies + headless Chromium); later starts are instant. The core image is Apache-clean and ships without PDF reading, hearing (ASR + video frames), and login-walled sources; unlock them with the build arg `EXTRAS="[pdf,asr,walled]"`. Optional but recommended: set `OMNISEEK_CONTACT_EMAIL` for a faster lane with Crossref, SEC, and Unpaywall.
+Two paths from here. The prebuilt core image (`docker pull ghcr.io/battam1111/omniseek`, amd64 + arm64) needs no build and carries every core sense; it is Apache-clean and ships without PDF reading, hearing (ASR + video frames), and login-walled sources. Wanting those extras is what triggers a local build: set `EXTRAS="[pdf,asr,walled]"` and run `docker compose build`, then `up -d` (the first build also fetches headless Chromium; later starts are instant). Optional but recommended: set `OMNISEEK_CONTACT_EMAIL` for a faster lane with Crossref, SEC, and Unpaywall.
 
 ### Without Docker
 
@@ -103,6 +103,8 @@ One MCP connection; no model, no agent loop inside. Your model thinks, your harn
 | `omniseek_curator_view` | Read the source-admission queue or a per-source audit dossier. |
 | `omniseek_gather` | Run multiple tools in parallel, one response. |
 | `omniseek_sources` | List and route: domains, regions, capabilities, health. |
+
+The login-walled tier has no tool of its own: once you opt in per source, the same `omniseek_search(..., sources=["xiaohongshu"], raw=True)` runs through your own logged-in browser. See [walled sources](docs/walled-sources.md).
 
 Full reference in **[tools.md](docs/tools.md)** · **[FAQ](docs/faq.md)**
 

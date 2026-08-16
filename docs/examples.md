@@ -42,7 +42,7 @@ One call, 437 raw hits deduplicated into 10: immigration-news explainers of the 
 { "name": "zhihu_search","why": "relevant but excluded; re-run naming it: sources=['zhihu_search']" }
 ```
 
-The broad sweep holds back slow, quota-burning, and login-walled sources, and **says so, with the exact call to reach each one**. The response is a map, not just a list. It also reported which perspectives came back absent (audio, walled). A dimension that returned nothing is a fact, not a gap to paper over.
+The broad sweep holds back slow, quota-burning, and login-walled sources, and **says so, with the exact call to reach each one**. The response is a map, not just a list. The same `_meta` block also names the perspectives that came back absent (`source_diversity.absent_perspectives`: audio and walled, on this run). A dimension that returned nothing is a fact, not a gap to paper over.
 
 ### 2. The same question, in the language the answers live in
 
@@ -73,7 +73,7 @@ That correction was spoken into a camera and never written down. Text search str
 omniseek_search("第三国签证 F1 经验", sources=["xiaohongshu"], raw=True)
 ```
 
-This runs through your own logged-in browser, on your machine (the walled tier is **off** until you enable it with your own account: [how that works](walled-sources.md)). Six first-person accounts came back, one posted the day before this session:
+`raw=True` is the drill switch: fetch this one named source, unbounded, instead of the ranked cross-source merge. It runs through your own logged-in browser, on your machine (the walled tier is **off** until you enable it with your own account: [how that works](walled-sources.md)). Six first-person accounts came back, one posted the day before this session:
 
 | Post | Engagement |
 |------|------------|
@@ -92,7 +92,7 @@ The Bangkok post alone carries what no official page has: the full timeline (app
 omniseek_read("https://www.rednote.com/search_result/64a440eb…")   # the Milan post
 ```
 
-Full body plus all 24 threaded comments. The body is a field report from the slot war: a month of refreshing for an appointment, two paid slot-hunting services that found nothing, the slot finally self-caught at midnight; the observation that only Bosnia always shows open slots (and happens to be visa-free for Chinese passports); an expedite email to the consulate answered with polite nothing. Then, in the comments, the author comes back:
+Full body plus all 24 threaded comments (rednote is xiaohongshu's international name: same source, same login). The body is a field report from the slot war: a month of refreshing for an appointment, two paid slot-hunting services that found nothing, the slot finally self-caught at midnight; the observation that only Bosnia always shows open slots (and happens to be visa-free for Chinese passports); an expedite email to the consulate answered with polite nothing. Then, in the comments, the author comes back:
 
 > **卡利斯托** (the author, returning): "今天还听到一个案例:一个申请 F1 学生签的同学先约到了一个靠后的日期,然后发邮件给大使馆申请加急成功了" *(heard today: book any late slot first, THEN email the consulate to expedite; for one F-1 applicant it worked)*
 
@@ -100,7 +100,7 @@ Also settled in the comments, never in the body: the visa came back valid for 5 
 
 ### 6. The dissenting note, and both of its tracks
 
-The third-country pitfalls note is the counter-voice: its text body warns that a 212(a)(6)(C) refusal in a third country can close the F-1 road almost entirely, and says: don't get cute, apply at home. But the body is four hashtags plus a video, and the read result flags exactly that, in its own words:
+The third-country pitfalls note is the counter-voice: its text body warns that a 212(a)(6)(C) refusal in a third country can close the F-1 road almost entirely, and says: don't get cute, apply at home. But the body is four hashtags plus a video, and the read result flags exactly that, quoting the note itself:
 
 > 干货在视频里,两条轨都要看……不少笔记的音轨只是背景音乐,事实全在画面上 *(the substance is in the video; read BOTH tracks. On many notes the audio is just background music and the facts are on screen)*
 

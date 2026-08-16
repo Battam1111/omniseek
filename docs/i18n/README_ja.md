@@ -40,7 +40,7 @@ OmniSeek はその下層へ届く手です。そして、そのすべてがあ�
 
 聴く(ローカル二言語 ASR、クラウド不使用)、視る(画像と動画フレームを直接読む)、言語をまたぐ(中国語クエリが英語の結果を返し、その逆も)、ログインの壁の内側に届く(あなたの認証情報、あなたのマシン、デフォルトはオフ)、そして記憶する(ローカルに蓄積される永続的な検索メモリと、型付きで出典を辿れるエビデンスグラフ)。
 
-[カタログ](../sources.md)のどのソースも、引用グラフや規制当局への提出書類からログイン制フォーラム、中国語動画まで、何かひとつで通常の検索に勝つことで席を得ています。そしてカタログは育つ設計です:内蔵のキュレーター・パイプラインが新ソースを検証・審査・承認し、朽ちたソースを引退させます。
+[カタログ](../sources.md)は OmniSeek が届く先すべての厳選名簿です。どのソースも五つの仕事のいずれか(構造化・壁越え・書き起こし・想起・監視)で通常の検索に勝って席を得ています:引用グラフ、規制当局への提出書類、ログイン制フォーラム、中国語動画。そしてカタログは育つ設計です:内蔵のキュレーター・パイプラインが新ソースを検証・審査・承認し、朽ちたソースを引退させます。
 
 **[実例と実出力](../examples.md)** · **[フル・ケーススタディ](../case-study.md)**
 
@@ -59,7 +59,7 @@ curl -s http://127.0.0.1:8765/healthz
 
 MCP クライアントを `http://127.0.0.1:8765/mcp` に向け、`Authorization: Bearer <token>` を付けてください。token は初回起動時に生成され、`~/.omniseek/credentials/omniseek_http.json` に保存されます(compose で動かす場合、ホスト側では `./.omniseek/credentials/omniseek_http.json`)。
 
-ビルドしたくない場合、GHCR にビルド済みコアイメージがあります:`docker pull ghcr.io/battam1111/omniseek`(amd64 + arm64)。それ以外は初回の `up` がローカルでビルドし(依存関係 + ヘッドレス Chromium)、以後の起動は即時です。コアイメージは Apache クリーン構成で、PDF 読取・聴覚(ASR + 動画フレーム)・ログイン制ソースは含みません。ビルド引数 `EXTRAS="[pdf,asr,walled]"` で解錠します。`OMNISEEK_CONTACT_EMAIL` の設定も推奨します(Crossref、SEC、Unpaywall が優先レーンをくれます)。
+ここから道は二つ。ビルド済みコアイメージ(`docker pull ghcr.io/battam1111/omniseek`、amd64 + arm64)はビルド不要で、コアの感覚をすべて備えます。Apache クリーン構成のため、PDF 読取・聴覚(ASR + 動画フレーム)・ログイン制ソースは含みません。これらの extras が欲しいときだけローカルビルドになります:`EXTRAS="[pdf,asr,walled]"` を設定して `docker compose build`、その後 `up -d`(初回ビルドはヘッドレス Chromium も取得し、以後の起動は即時)。`OMNISEEK_CONTACT_EMAIL` の設定も推奨します(Crossref、SEC、Unpaywall が優先レーンをくれます)。
 
 ### Docker なし
 
@@ -101,6 +101,8 @@ MCP 接続はひとつ。中にモデルはなく、エージェントループ�
 | `omniseek_curator_view` | ソース承認キューや監査資料の閲覧。 |
 | `omniseek_gather` | 複数ツールを並列実行、応答はひとつ。 |
 | `omniseek_sources` | 一覧とルーティング:分野、地域、能力、ヘルス。 |
+
+ログイン制の層に専用ツールはありません:ソースごとにオプトインした後は、同じ `omniseek_search(..., sources=["xiaohongshu"], raw=True)` があなた自身のログイン済みブラウザを通って実行されます。詳細は [walled sources](../walled-sources.md)。
 
 完全なリファレンスは **[tools.md](../tools.md)** · **[FAQ](../faq.md)**
 

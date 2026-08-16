@@ -40,7 +40,7 @@ OmniSeek 就是探到表面之下的那只手,而且从头到尾都跑在你自�
 
 它能听(本地双语转写,不走云),能看(图片与视频帧,视觉直读),能跨语言(中文查询返回英文结果,反之亦然),能进登录墙(你的凭证,你的机器,默认关闭),还能记住(持久的检索记忆,外加一张带类型、可溯源的证据图谱)。
 
-[目录](../sources.md)里的每一个源,都是靠在某件事上打赢普通搜索才拿到位置的:从引用图谱、监管文件,到登录墙论坛、中文视频。目录生来就会生长:内置的 curator 流水线负责探测、判决、准入新源,并让退化的源退役。
+[目录](../sources.md)是 OmniSeek 所及一切的策展名册;里面的每一个源,都是靠在五件事之一(结构化、进墙、转写、召回、监测)上打赢普通搜索才拿到位置的:引用图谱、监管文件、登录墙论坛、中文视频。目录生来就会生长:内置的 curator 流水线负责探测、判决、准入新源,并让退化的源退役。
 
 **[真实例子、真实输出](../examples.md)** · **[一次完整调查](../case-study.md)**
 
@@ -59,7 +59,7 @@ curl -s http://127.0.0.1:8765/healthz
 
 把你的 MCP 客户端指向 `http://127.0.0.1:8765/mcp`,带上 `Authorization: Bearer <token>`。token 在首次启动时生成,存于 `~/.omniseek/credentials/omniseek_http.json`(用 compose 跑的话,宿主机上就是 `./.omniseek/credentials/omniseek_http.json`)。
 
-不想本地构建?GHCR 上有预构建核心镜像:`docker pull ghcr.io/battam1111/omniseek`(amd64 + arm64)。否则首次 `up` 会本地构建(依赖 + 无头 Chromium),之后的启动是即时的。核心镜像是 Apache 干净版,不含 PDF 阅读、听觉(ASR + 视频帧)与登录墙源;用构建参数 `EXTRAS="[pdf,asr,walled]"` 解锁。建议同时设置 `OMNISEEK_CONTACT_EMAIL`,Crossref、SEC、Unpaywall 会给礼貌联系方式一条快速通道。
+从这里分两条路。预构建核心镜像(`docker pull ghcr.io/battam1111/omniseek`,amd64 + arm64)无需构建,带全部核心感官;它是 Apache 干净版,不含 PDF 阅读、听觉(ASR + 视频帧)与登录墙源。想要这些 extras 才需要本地构建:设好 `EXTRAS="[pdf,asr,walled]"` 跑 `docker compose build`,再 `up -d`(首次构建会一并拉取无头 Chromium,之后启动即时)。建议同时设置 `OMNISEEK_CONTACT_EMAIL`,Crossref、SEC、Unpaywall 会给礼貌联系方式一条快速通道。
 
 ### 不用 Docker
 
@@ -101,6 +101,8 @@ OmniSeek 绑定 `127.0.0.1`,每个请求都要 bearer token。没有反向代理
 | `omniseek_curator_view` | 读源准入队列或单源审计档案。 |
 | `omniseek_gather` | 多件工具并行跑,一次返回。 |
 | `omniseek_sources` | 列出与路由:领域、地区、能力、健康。 |
+
+登录墙层没有专属工具:按源开启后,同一个 `omniseek_search(..., sources=["xiaohongshu"], raw=True)` 会经你自己已登录的浏览器执行。见 [walled sources](../walled-sources.md)。
 
 完整参考见 **[tools.md](../tools.md)** · **[FAQ](../faq.md)**
 

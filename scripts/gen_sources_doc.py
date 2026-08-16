@@ -61,6 +61,10 @@ def main() -> int:
         "`omniseek_sources` tool returns at runtime, truncated for the page. A source files under",
         "its first domain only.",
         "",
+        "Descriptions are quoted in the language of each source's own audience; many are Chinese,",
+        "because that is where those sources live. The always-English routing layer is the domain",
+        "headers, the access tiers, and the flags on every row.",
+        "",
         f"Generated from omniseek {version}: {len(entries)} live sources across "
         f"{len(by_domain)} domains.",
         "",

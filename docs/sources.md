@@ -15,6 +15,10 @@ change the source module it describes. Each description below is the same string
 `omniseek_sources` tool returns at runtime, truncated for the page. A source files under
 its first domain only.
 
+Descriptions are quoted in the language of each source's own audience; many are Chinese,
+because that is where those sources live. The always-English routing layer is the domain
+headers, the access tiers, and the flags on every row.
+
 Generated from omniseek 0.1.3: 218 live sources across 32 domains.
 
 ## papers (65)

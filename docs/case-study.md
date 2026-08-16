@@ -7,7 +7,7 @@ study is about the other half of OmniSeek, the half that compounds. One real ses
 (2026-08-16), one working instrument that has been in daily use for weeks; every block below
 is a verbatim output from that session, trimmed for the page. The question we handed the
 agent is an ordinary one: map where credit assignment for multi-agent LLM systems stands
-this week. What matters is not the topic. It is what the instrument already knew.
+this week. What matters is not the topic. It is what OmniSeek already knew.
 
 ## One call, one ranked list, and a paper trail
 
@@ -30,7 +30,7 @@ different indexes merge into one document that lists who corroborates it. And th
 fused from two recalls, live lexical hits plus the local vector index, so a paraphrase with
 no shared words still surfaces.
 
-## The instrument recognized every result
+## OmniSeek recognized every result
 
 All eight documents came back already stamped. Here is one, trimmed to the stamp:
 
@@ -80,16 +80,19 @@ information.
 }]
 ```
 
-A ranked list that merely looks complete is the most dangerous kind of complete. So the
-router reports which perspectives this pass had none of, and which deliberately-excluded
-sources matched the query anyway, each with the exact parameter that reaches it. Coverage
-becomes something you read, not something you assume.
+(`agent_tooling_radar` is an explicit-only monitor source; its `reason` field is quoted as
+stored in the catalog config.) A ranked list that merely looks complete is the most dangerous
+kind of complete. So the router reports which perspectives this pass had none of, and which
+deliberately-excluded sources matched the query anyway, each with the exact parameter that
+reaches it. Coverage becomes something you read, not something you assume.
 
 ## A judgment, recorded once, inherited forever
 
-The relation graph held two nodes with the same title, "Quantile Credit Assignment". Two
+The evidence graph held two nodes with the same title, "Quantile Credit Assignment". Two
 `omniseek_read` calls settled it: same ICML 2023 paper, same authors, same abstract; one node
-is the conference record, the other the DBLP import of the same forum. So the agent ruled:
+is the conference record, the other the same paper as imported from DBLP, the computer-science
+bibliography. So the agent ruled (a node id is the graph's name for a remembered document:
+source key plus that source's own id):
 
 ```python
 omniseek_ruling(action="create",
@@ -103,9 +106,10 @@ omniseek_ruling(action="create",
     "ruled_at": "2026-08-16T11:11:48.070749+00:00" } }
 ```
 
-From now on, every graph view collapses those two nodes into one. The ruling is attributed,
-dated, and reversible, and the division of labor is strict: the engine never decides that two
-things are the same. It stores what the agent concluded and applies it at read time.
+From now on, the graph's default working view collapses those two nodes into one. The ruling
+is attributed, dated, and reversible, and the division of labor is strict: OmniSeek never
+decides that two things are the same. It stores what the agent concluded and applies it at
+read time.
 
 ## Stand a watch
 
@@ -116,24 +120,23 @@ omniseek_sensor(action="create",
 
 The first manual run returned `"total_results": 15, "new_count": 15`: a fresh baseline, where
 everything is new exactly once. From then on the sensor diffs mechanically and speaks only
-when something changed. [Worked examples](examples.md) shows a seasoned one mid-life: 15 new
-results on the first run, 3 the next day, 0 the day after, which is exactly the shape of a
-watch that is working.
+when something changed. [Worked examples](examples.md) shows the same shape settling in: 15
+new on day one, 3 the next day, then 0, which is exactly what a working watch looks like.
 
 ## The loop
 
 ```mermaid
 flowchart LR
-    A[investigation] -->|first_seen stamps| M[(perception memory)]
+    A[investigation] -->|first_seen stamps| M[(retrieval memory)]
     A -->|rulings + statements| G[(evidence graph)]
     W[standing sensors] -->|scheduled diffs| M
     M -->|seen_before, per document| B[next investigation]
     G -->|duplicates collapsed, judgments applied| B
 ```
 
-Every investigation leaves the instrument sharper than it found it: stamps in the perception
-memory, judgments in the graph, watches on the frontier. The second investigation does not
-start from zero. It starts from everything the first one settled.
+Every investigation leaves OmniSeek sharper than it found it: stamps in the retrieval
+memory, judgments in the evidence graph, watches on the frontier. The second investigation
+does not start from zero. It starts from everything the first one settled.
 
 ## What OmniSeek did not do
 
