@@ -1,0 +1,5 @@
+# MCP-over-stdio wrapper of the core image, for inspectors and clients that launch the server
+# themselves (registry sandboxes, Docker MCP Toolkit, Cline). Same engine, no HTTP port, no
+# bearer token: over stdio the transport IS the parent process, so auth is process ownership.
+FROM ghcr.io/battam1111/omniseek:latest
+CMD ["omniseek"]

@@ -71,6 +71,8 @@ python -m omniseek.serve_http
 
 Windows 上请在 Git Bash 或 WSL 里跑 `bootstrap.sh`;Docker 是最省事的路。要挂常驻 Linux 服务,见 [`deploy/omniseek.service`](../../deploy/omniseek.service)。
 
+偏好 stdio?安装同时装入 `omniseek` 命令,直接以 stdio 讲 MCP,适合由客户端自行拉起服务器的场景;[`Dockerfile.stdio`](../../Dockerfile.stdio) 是它的容器包装。
+
 OmniSeek 绑定 `127.0.0.1`,每个请求都要 bearer token。没有反向代理不要对外暴露([SECURITY.md](../../.github/SECURITY.md))。
 
 ---
