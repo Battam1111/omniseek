@@ -541,7 +541,7 @@ _ALERT_DELIVERY_PATH = _STATE / "alert-delivery.json"
 # name -> the LIVE repo each off-machine mirror is supposed to be a copy of.
 _MIRROR_TARGETS = {
     "brain": Path.home() / "omniseek-brain",
-    "core": Path.home() / "omniseek-mcp-maintenance",
+    "core": Path.home() / "omniseek-maintenance",
 }
 
 

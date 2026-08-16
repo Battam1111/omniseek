@@ -9,7 +9,7 @@
 
 **Your agent seeks what search can't find.**
 
-It hears. It sees. It reads behind logins. It crosses languages. It remembers.
+Give your agent ears, eyes, languages, logins, and a memory.
 
 <sub>Self-hosted perception MCP server · one connection</sub>
 

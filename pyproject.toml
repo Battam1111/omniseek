@@ -3,7 +3,7 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "omniseek-mcp"
+name = "omniseek"
 version = "0.1.0"
 description = "Self-hosted deep-retrieval MCP server for AI agents. Reaches what plain search can't: audio, video, logins, other languages."
 requires-python = ">=3.11"
@@ -23,7 +23,7 @@ classifiers = [
 # source, the recall index, document reading (minus PDF), and the shared infra. Heavy / AGPL /
 # circumvention deps are OPT-IN extras below, so a bare `pip install -e .` ships Apache-clean and
 # does not pull torch or an AGPL library. (Tools whose extra is absent fail-open with a clear
-# "install omniseek-mcp[<extra>]" message; see asr.py / docreader.py / _cdp.py import guards.)
+# "install omniseek[<extra>]" message; see asr.py / docreader.py / _cdp.py import guards.)
 dependencies = [
     # MCP framework. The <2 cap is load-bearing: mcp 2.0 (2026-08) dropped mcp.server.fastmcp,
     # so an unpinned FRESH install resolves 2.x and the server dies at import. Local venvs never
@@ -99,7 +99,7 @@ all = ["pymupdf>=1.24", "funasr>=1.0", "imageio-ffmpeg>=0.5", "patchright>=1.40"
        "sentence-transformers>=3.0", "rapidocr-onnxruntime>=1.2"]
 
 [project.scripts]
-omniseek-mcp = "omniseek.server:main"
+omniseek = "omniseek.server:main"
 
 [project.urls]
 Homepage = "https://github.com/Battam1111/omniseek"

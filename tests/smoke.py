@@ -9265,7 +9265,7 @@ if _SENTINEL_PATH.exists():
     check("p9 sentinel isolation: its import list is exactly stdlib + _sentinel_common + services",
           not _sent_unexpected, f"unexpected imports: {_sent_unexpected}")
 
-    # Load it as a module (scripts on path). Its ROOT=~/omniseek-mcp bootstrap is harmless here; we
+    # Load it as a module (scripts on path). Its ROOT=~/omniseek bootstrap is harmless here; we
     # only need the module object to stub + call the duty functions.
     _sys_path_saved57 = list(sys.path)
     sys.path.insert(0, str(_SCRIPTS_DIR))
@@ -10786,7 +10786,7 @@ if _SERVICES_PATH.exists():
                       "\tprogram = /bin/bash\n"
                       "\targuments = {\n"
                       "\t\t/bin/bash\n"
-                      "\t\t/Users/operator/omniseek-mcp/scripts/sentinel.py\n"
+                      "\t\t/Users/operator/omniseek/scripts/sentinel.py\n"
                       "\t}\n"
                       "\n"
                       "\truns = 0\n"
@@ -17558,7 +17558,7 @@ if _SERVICES_PATH.exists():
           f"registry={sorted(_expected_cdp)}")
     check("maintenance: launchd plist ownership ignores independent organs",
           _svc_maint.plist_owned_by_root(
-              {"ProgramArguments": [f"{_maint_home}/omniseek-mcp/.venv/bin/python"]})
+              {"ProgramArguments": [f"{_maint_home}/omniseek/.venv/bin/python"]})
           and not _svc_maint.plist_owned_by_root(
               {"ProgramArguments": [f"{_maint_home}/omniseek-brain/.venv/bin/python"]}))
 

@@ -9,7 +9,7 @@ Run locally via stdio (default for MCP):
     python -m omniseek.server
 
 Or as an installed script:
-    omniseek-mcp
+    omniseek
 """
 
 from __future__ import annotations

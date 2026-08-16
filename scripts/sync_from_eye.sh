@@ -69,6 +69,10 @@ RENAME=(
   -e 's/PolarisDocument/Document/g'
   -e 's/Polaris-eye/OmniSeek/g'
   -e 's/polaris-eye/omniseek/g'
+  # the eye's DISTRIBUTION name maps to ours (2026-08-16, PyPI name = plain "omniseek"):
+  # runtime hints like "pip install 'polaris-mcp[asr]'" must land as omniseek[asr], not
+  # omniseek-mcp[asr], or a public user pip-installs a name we do not publish.
+  -e 's/polaris-mcp/omniseek/g'
   # "the eye" prose becomes the product name (2026-08-16, Captain's runtime-surface audit).
   # This covers the surfaces an MCP client actually SEES (server instructions + tool
   # descriptions are runtime strings) and harmlessly modernizes comments along the way.
