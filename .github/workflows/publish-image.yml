@@ -1,8 +1,15 @@
 name: publish-image
 
-# Build the CORE image (Apache-clean, no extras) for amd64 + arm64 and push it to GHCR, so a
-# stranger can `docker pull ghcr.io/battam1111/omniseek` instead of building locally. Runs on
-# every release, or by hand from the Actions tab.
+# Two ordered jobs, one release rhythm:
+#   1. push-image: build the CORE image (Apache-clean, no extras) for amd64 + arm64 and push it
+#      to GHCR, so a stranger can `docker pull ghcr.io/battam1111/omniseek` instead of building.
+#   2. publish-registry: publish server.json to the official MCP Registry via GitHub OIDC (no
+#      human login). Ordered AFTER the image because the registry validates the OCI ownership
+#      label on the exact tagged image server.json names; publishing first would race the build.
+# The PyPI upload happens in the local release runbook BEFORE the release is cut, so the PyPI
+# side of that validation is already live by the time this runs. Runs on every release, or by
+# hand from the Actions tab (a hand run rebuilds :main/:latest and re-publishes the server.json
+# committed in the repo, as-is).
 
 on:
   release:
@@ -44,3 +51,36 @@ jobs:
             io.modelcontextprotocol.server.name=io.github.Battam1111/omniseek
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  publish-registry:
+    needs: push-image
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write   # OIDC: proves this workflow runs in Battam1111/omniseek, which grants
+      contents: read    # the io.github.Battam1111/* namespace. No stored token, no device code.
+    steps:
+      - uses: actions/checkout@v7
+      - name: Resolve the release version
+        id: v
+        run: |
+          TAG="${{ github.event.release.tag_name || github.ref_name }}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+      - name: Align server.json to the release
+        # Only on a real vX.Y.Z release: sets the server + package versions and points the OCI
+        # identifier at this release's image tag. A hand dispatch (ref_name=main) skips this and
+        # publishes server.json exactly as committed.
+        if: startsWith(steps.v.outputs.tag, 'v')
+        run: |
+          jq --arg v "${{ steps.v.outputs.version }}" --arg tag "${{ steps.v.outputs.tag }}" '
+            .version = $v
+            | .packages = (.packages | map(
+                .version = $v
+                | if .registryType == "oci" then .identifier = ("ghcr.io/battam1111/omniseek:" + $tag) else . end))
+          ' server.json > server.tmp && mv server.tmp server.json
+      - name: Install mcp-publisher
+        run: curl -sL "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_linux_amd64.tar.gz" | tar xz mcp-publisher
+      - name: Login (GitHub OIDC)
+        run: ./mcp-publisher login github-oidc
+      - name: Publish to the MCP Registry
+        run: ./mcp-publisher publish
