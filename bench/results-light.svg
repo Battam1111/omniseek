@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" role="img" width="1000" height="358" viewBox="0 0 1000 358" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+<title>OmniSeek benchmark: pooled pass rate by suite</title>
+<desc>One row per benchmark suite. The filled bar is that suite's pooled pass rate, drawn on a track that spans a pass rate of zero at its left edge to one at its right edge. The bracket across the bar spans the Wilson interval. The text on the right is passes over attempts and the rate, plus a stale count when tasks were dropped from the denominator. A suite whose required sense is not installed is drawn as a dormant row rather than as a zero bar, because a dormant sense is not a failure.</desc>
+<rect x="0" y="0" width="1000" height="358" fill="#FFFFFF"/>
+<text x="24" y="34" font-size="19" font-weight="600" fill="#0F172A">OmniSeek benchmark: pooled pass rate by suite</text>
+<text x="24" y="58" font-size="13" fill="#64748B">Bar: pooled pass rate. Bracket: Wilson interval. A dormant sense is reported, not scored.</text>
+<g data-suite="s3-crosslingual" data-state="measured">
+<title>s3-crosslingual: pooled pass rate 0.0000, Wilson interval 0.0000 to 0.2153, 0 of 14 attempts passed, stale 1</title>
+<text x="24" y="111.0" font-size="15" fill="#0F172A">s3-crosslingual</text>
+<rect x="232" y="96.0" width="430" height="20" rx="4" fill="#E2E8F0"/>
+<rect x="232" y="96.0" width="0.00" height="20" rx="4" fill="#2563EB"/>
+<line x1="232.00" y1="106.0" x2="324.59" y2="106.0" stroke="#B45309" stroke-width="2"/>
+<line x1="232.00" y1="91.0" x2="232.00" y2="121.0" stroke="#B45309" stroke-width="2"/>
+<line x1="324.59" y1="91.0" x2="324.59" y2="121.0" stroke="#B45309" stroke-width="2"/>
+<text x="686" y="111.0" font-size="14" font-family="Consolas, Menlo, monospace" fill="#0F172A">0/14  0.0000  stale 1</text>
+</g>
+<g data-suite="s4-depth" data-state="measured">
+<title>s4-depth: pooled pass rate 1.0000, Wilson interval 0.8241 to 1.0000, 18 of 18 attempts passed, stale 1</title>
+<text x="24" y="167.0" font-size="15" fill="#0F172A">s4-depth</text>
+<rect x="232" y="152.0" width="430" height="20" rx="4" fill="#E2E8F0"/>
+<rect x="232" y="152.0" width="430.00" height="20" rx="4" fill="#2563EB"/>
+<line x1="586.37" y1="162.0" x2="662.00" y2="162.0" stroke="#B45309" stroke-width="2"/>
+<line x1="586.37" y1="147.0" x2="586.37" y2="177.0" stroke="#B45309" stroke-width="2"/>
+<line x1="662.00" y1="147.0" x2="662.00" y2="177.0" stroke="#B45309" stroke-width="2"/>
+<text x="686" y="167.0" font-size="14" font-family="Consolas, Menlo, monospace" fill="#0F172A">18/18  1.0000  stale 1</text>
+</g>
+<g data-suite="s5-scholar" data-state="measured">
+<title>s5-scholar: pooled pass rate 1.0000, Wilson interval 0.8513 to 1.0000, 22 of 22 attempts passed</title>
+<text x="24" y="223.0" font-size="15" fill="#0F172A">s5-scholar</text>
+<rect x="232" y="208.0" width="430" height="20" rx="4" fill="#E2E8F0"/>
+<rect x="232" y="208.0" width="430.00" height="20" rx="4" fill="#2563EB"/>
+<line x1="598.08" y1="218.0" x2="662.00" y2="218.0" stroke="#B45309" stroke-width="2"/>
+<line x1="598.08" y1="203.0" x2="598.08" y2="233.0" stroke="#B45309" stroke-width="2"/>
+<line x1="662.00" y1="203.0" x2="662.00" y2="233.0" stroke="#B45309" stroke-width="2"/>
+<text x="686" y="223.0" font-size="14" font-family="Consolas, Menlo, monospace" fill="#0F172A">22/22  1.0000</text>
+</g>
+<g data-suite="s6-memory" data-state="measured">
+<title>s6-memory: pooled pass rate 1.0000, Wilson interval 0.7225 to 1.0000, 10 of 10 attempts passed</title>
+<text x="24" y="279.0" font-size="15" fill="#0F172A">s6-memory</text>
+<rect x="232" y="264.0" width="430" height="20" rx="4" fill="#E2E8F0"/>
+<rect x="232" y="264.0" width="430.00" height="20" rx="4" fill="#2563EB"/>
+<line x1="542.66" y1="274.0" x2="662.00" y2="274.0" stroke="#B45309" stroke-width="2"/>
+<line x1="542.66" y1="259.0" x2="542.66" y2="289.0" stroke="#B45309" stroke-width="2"/>
+<line x1="662.00" y1="259.0" x2="662.00" y2="289.0" stroke="#B45309" stroke-width="2"/>
+<text x="686" y="279.0" font-size="14" font-family="Consolas, Menlo, monospace" fill="#0F172A">10/10  1.0000</text>
+</g>
+<line x1="232" y1="314" x2="662" y2="314" stroke="#CBD5E1" stroke-width="1"/>
+<line x1="232" y1="310" x2="232" y2="318" stroke="#CBD5E1" stroke-width="1"/>
+<line x1="662" y1="310" x2="662" y2="318" stroke="#CBD5E1" stroke-width="1"/>
+<text x="232" y="336" font-size="12" fill="#64748B">Track: a pass rate of zero at the left edge, one at the right edge.</text>
+</svg>
