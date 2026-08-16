@@ -1,6 +1,6 @@
 # Case study: what plain search missed
 
-<sub>[omniseek](../README.md)&nbsp;·&nbsp;[Configuration](configuration.md)&nbsp;·&nbsp;[Tools](tools.md)&nbsp;·&nbsp;[Patterns](patterns.md)</sub>
+<sub>[OmniSeek](../README.md)&nbsp;·&nbsp;[Configuration](configuration.md)&nbsp;·&nbsp;[Tools](tools.md)&nbsp;·&nbsp;[Patterns](patterns.md)</sub>
 
 We gave an agent one job: map a fast-moving research frontier, credit assignment in
 multi-agent LLM systems, as it stood that week. It had two ways to reach the world: ordinary

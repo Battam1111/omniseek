@@ -20,7 +20,7 @@ identities to map, which papers to enrich, which talks to transcribe.
 
 **WAVE 2 (zoom)**: fire follow-ups via `omniseek_gather`, informed by WAVE 1 signals.
 
-**Structure**: build an EvidenceGraph from your findings (per server instructions section 6).
+**Structure**: build an evidence graph from your findings (per server instructions section 6).
 
 ## 2. Investigation starting points
 
@@ -87,7 +87,7 @@ If a xiaohongshu note URL appears, `omniseek_read(url)` retrieves full note + co
 
 ## 6. Evidence graph construction
 
-Build an EvidenceGraph (schema in server instructions section 6):
+Build an evidence graph (structure in server instructions section 6):
 - Extract claims conservatively (distinct, testable assertions with scope).
 - Require sourced_from edges for every Claim.
 - Use Phase A signals to inform edge weights and Gap identification.

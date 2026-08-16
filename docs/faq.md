@@ -1,6 +1,6 @@
 # FAQ
 
-<sub>[omniseek](../README.md)&nbsp;·&nbsp;[Configuration](configuration.md)&nbsp;·&nbsp;[Tools](tools.md)&nbsp;·&nbsp;[Patterns](patterns.md)&nbsp;·&nbsp;[Case study](case-study.md)</sub>
+<sub>[OmniSeek](../README.md)&nbsp;·&nbsp;[Configuration](configuration.md)&nbsp;·&nbsp;[Tools](tools.md)&nbsp;·&nbsp;[Patterns](patterns.md)&nbsp;·&nbsp;[Case study](case-study.md)</sub>
 
 Short answers to the questions people ask first. The one-line version of what OmniSeek is:
 **self-hosted reach and memory for your AI agent. It reaches what plain search cannot,
@@ -30,10 +30,10 @@ Two axes: who owns the index, and who does the thinking.
   and it remembers across sessions, which a stateless search API cannot.
 
 OmniSeek does not compete with an open-web search API on breadth: those index billions of
-pages, and OmniSeek curates a couple hundred sources chosen to beat plain search via a mode
-(structure, unwalling, transcription, longitudinal recall, monitoring). It competes on depth,
-memory, and ownership. Use both if you like: reach the open web with a search API, reach the
-half-lit corners with OmniSeek.
+pages, while OmniSeek curates a catalog where every source earned its seat by beating plain
+search via a mode (structure, unwalling, transcription, longitudinal recall, monitoring). It
+competes on depth, memory, and ownership. Use both if you like: reach the open web with a
+search API, and send OmniSeek where search can't follow.
 
 ## How is it different from GraphRAG?
 

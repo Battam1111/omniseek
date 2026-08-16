@@ -1,6 +1,6 @@
 # Legal Posture
 
-<sub>[omniseek](../README.md)&nbsp;·&nbsp;[Configuration](configuration.md)&nbsp;·&nbsp;[Tools](tools.md)&nbsp;·&nbsp;[Patterns](patterns.md)&nbsp;·&nbsp;[Walled sources](walled-sources.md)&nbsp;·&nbsp;[Privacy](PRIVACY.md)&nbsp;·&nbsp;**Legal posture**</sub>
+<sub>[OmniSeek](../README.md)&nbsp;·&nbsp;[Configuration](configuration.md)&nbsp;·&nbsp;[Tools](tools.md)&nbsp;·&nbsp;[Patterns](patterns.md)&nbsp;·&nbsp;[Walled sources](walled-sources.md)&nbsp;·&nbsp;[Privacy](PRIVACY.md)&nbsp;·&nbsp;**Legal posture**</sub>
 
 > **THIS IS NOT LEGAL ADVICE.** It is an engineering description of what the published software does
 > and does not do, written so that an operator, a reviewer, or a source's owner can check each claim

@@ -1,7 +1,7 @@
 cff-version: 1.2.0
 message: "If you use OmniSeek in your research, please cite it using these metadata."
-title: "OmniSeek: self-hosted deep retrieval for AI agents"
-abstract: "A self-hosted deep-retrieval MCP server that reaches beyond the search surface into the half-lit zone where knowledge is real but invisible to plain search (multi-modal, multi-lingual, walled, and temporal), equipping an AI agent with structured, source-traced evidence."
+title: "OmniSeek: a self-hosted perception MCP server for AI agents"
+abstract: "A self-hosted perception MCP server for AI agents: it transcribes speech nobody wrote down, reads images and video frames, crosses languages, reads login-walled pages with the operator's own credentials, and accumulates everything it reaches into a persistent, source-traced relation graph. It returns structured evidence with provenance; it never generates, judges, or phones home."
 type: software
 license: Apache-2.0
 repository-code: "https://github.com/Battam1111/omniseek"
@@ -12,6 +12,7 @@ authors:
     website: "https://github.com/Battam1111/omniseek"
 keywords:
   - mcp
+  - perception
   - deep-retrieval
   - ai-agent
   - citation-graph
