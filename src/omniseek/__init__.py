@@ -5,4 +5,4 @@ service in ``omniseek.serve_http``, and the retrieval engine (sources, ranking,
 relation graph) under ``omniseek.core``.
 """
 
-__version__ = "0.1.2"
+__version__ = "0.1.3"

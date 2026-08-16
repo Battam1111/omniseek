@@ -145,8 +145,12 @@ echo "    re-authored src/omniseek/__init__.py (version $VER from pyproject)"
 # 2d. Regenerate the source-catalog doc from the freshly renamed engine. The catalog is code,
 #     so the doc rides the same sync that changes it and can never drift; hand counts stay out
 #     of prose by mechanism, not memory.
+#     PYTHONDONTWRITEBYTECODE: the generator imports the freshly synced src, and without this
+#     it litters __pycache__ into that tree, whose .pyc embed the ABSOLUTE repo path, which on
+#     this machine contains the private brand, which trips the step-5 residue gate. The gate
+#     was right; the generator must not write bytecode into the tree it documents.
 echo "    regenerating docs/sources.md ..."
-(cd "$PEN_ROOT" && PYTHONIOENCODING=utf-8 "$PYBIN" scripts/gen_sources_doc.py >/dev/null)
+(cd "$PEN_ROOT" && PYTHONDONTWRITEBYTECODE=1 PYTHONIOENCODING=utf-8 "$PYBIN" scripts/gen_sources_doc.py >/dev/null)
 
 # --- 3. smoke tests + the repo ARTIFACTS the suite reads: same renames + drop polyu from the
 #     frozen explicit_only list (the public mirror has no polyu source; mokahr_ats is already

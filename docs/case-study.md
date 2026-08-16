@@ -1,59 +1,145 @@
-# Case study: what plain search missed
+# Case study: the second investigation
 
-<sub>[OmniSeek](../README.md)&nbsp;·&nbsp;[Configuration](configuration.md)&nbsp;·&nbsp;[Tools](tools.md)&nbsp;·&nbsp;[Patterns](patterns.md)</sub>
+<sub>[OmniSeek](../README.md)&nbsp;·&nbsp;[Worked examples](examples.md)&nbsp;·&nbsp;[Tools](tools.md)&nbsp;·&nbsp;[The source catalog](sources.md)</sub>
 
-We gave an agent one job: map a fast-moving research frontier, credit assignment in
-multi-agent LLM systems, as it stood that week. It had two ways to reach the world: ordinary
-web search, and OmniSeek. Here is what the difference looked like. Every fact below is from a
-single real session; nothing is dramatized.
+Search is stateless: ask the same question twice and it starts from zero twice. This case
+study is about the other half of OmniSeek, the half that compounds. One real session
+(2026-08-16), one working instrument that has been in daily use for weeks; every block below
+is a verbatim output from that session, trimmed for the page. The question we handed the
+agent is an ordinary one: map where credit assignment for multi-agent LLM systems stands
+this week. What matters is not the topic. It is what the instrument already knew.
 
-## It already remembered the field
+## One call, one ranked list, and a paper trail
 
-A standing query had been watching this topic for a week before the investigation began, so
-the agent did not start cold. Almost every result came back marked as already seen, with the
-date it first appeared. "Is this paper new?" stopped being a judgment call and became a fact
-the memory could answer. A week of watching the agent never did itself was simply inherited.
+```python
+omniseek_search("credit assignment in multi-agent LLM systems", limit=8)
+```
 
-## The most important find was invisible to English search
+```json
+"_meta": {
+  "searched": 87,
+  "elapsed_s": 11.0,
+  "deduped": { "in": 435, "out": 8 },
+  "index": { "lexical": 50, "vector": 50, "mode": "hybrid" }
+}
+```
 
-The single most valuable document in the whole investigation was a complete survey of the
-field, the first to map the full lineage from reasoning-RL to agentic to multi-agent credit
-assignment. Two separate English-language sweeps did not surface it. It came back through a
-Chinese-language forum, in a highly upvoted explainer post that pointed straight at the paper.
+Eleven seconds, 87 sources in parallel, 435 candidate records collapsed into 8 documents.
+Not eight links: eight distinct claims on the field, because records of the same paper from
+different indexes merge into one document that lists who corroborates it. And the ranking is
+fused from two recalls, live lexical hits plus the local vector index, so a paraphrase with
+no shared words still surfaces.
 
-The same thing happened again with a brand-new method, an unsupervised entropy-based approach
-that the Chinese technical community was discussing before the English index had caught up.
-This is not a story about one lucky query. It is the structural advantage: the knowledge
-existed, in a language the English web had not yet indexed as data, and reaching it was worth
-more than any amount of re-phrasing an English search.
+## The instrument recognized every result
 
-## It counted sources, not hits, and flagged the disagreement
+All eight documents came back already stamped. Here is one, trimmed to the stamp:
 
-Four records of the same paper across four indexes are not four sources. OmniSeek collapsed the
-mirrors and reported the distinct upstream voices, so "everyone agrees" could be checked
-instead of assumed. And when two indexes reported different citation counts for the same paper,
-one said 1, another said 9, the conflict surfaced on its own, carrying the ratio, instead of
-being quietly averaged into a false single number.
+```json
+{
+  "title": "Proximity-Based Multi-Turn Optimization: Practical Credit Assignment for LLM Agent Training",
+  "source": "semantic_scholar",
+  "metadata": {
+    "also_in": ["crossref"],
+    "corroboration": 2,
+    "seen_before": true,
+    "first_seen_at": "2026-07-03T12:27:09.662504+00:00"
+  }
+}
+```
 
-## What did NOT come back was reported too
+This instance first perceived that paper on July 3. Six weeks later, "is this new to us?" is
+not something the agent estimates from vibes; it is a per-document fact with a timestamp. A
+fresh install starts empty. This is what the same install feels like after six weeks of
+ordinary use: nothing you have already seen gets to pretend it is news.
 
-At the end, OmniSeek was explicit about the blind spots: no audio or social perspective in this
-pass, two sources timed out, one author affiliation went unverified. A dimension that returned
-nothing is a fact to act on, not a gap to paper over.
+## Two indexes disagree about the same paper, out loud
 
-## The advantage compounds
+```json
+"conflicts": [{
+  "topic": "citations",
+  "source_a": "crossref",        "claim_a": "citations=0.0 ()",
+  "source_b": "semantic_scholar", "claim_b": "citations=22.0 ()",
+  "ratio": "inf"
+}]
+```
 
-The agent recorded three judgments during the investigation: that two records were the same
-paper, that one work anchors the turn-level line of research, that the Chinese post covers the
-new method. Those are now permanent, attributed, and reversible. The next investigation into
-this field does not start from zero. It starts from everything this one concluded.
+One index says that paper has never been cited; another counts 22. OmniSeek does not average
+the two into a fake number and does not silently pick a winner. The disagreement is handed
+over as data, ratio included, and the agent judges it (here: one index simply lags
+arXiv-first papers). A single confident number would have been wrong; a visible conflict is
+information.
+
+## What it did not search, it says
+
+```json
+"source_diversity": { "absent_perspectives": ["audio", "news", "walled"] },
+"excluded_relevant": [{
+  "name": "agent_tooling_radar",
+  "reason": "tooling/skill radar; watchtower + named only, kept out of research search",
+  "why": "relevant but excluded; re-run naming it: sources=['agent_tooling_radar']"
+}]
+```
+
+A ranked list that merely looks complete is the most dangerous kind of complete. So the
+router reports which perspectives this pass had none of, and which deliberately-excluded
+sources matched the query anyway, each with the exact parameter that reaches it. Coverage
+becomes something you read, not something you assume.
+
+## A judgment, recorded once, inherited forever
+
+The relation graph held two nodes with the same title, "Quantile Credit Assignment". Two
+`omniseek_read` calls settled it: same ICML 2023 paper, same authors, same abstract; one node
+is the conference record, the other the DBLP import of the same forum. So the agent ruled:
+
+```python
+omniseek_ruling(action="create",
+                src="doc:mlrc:4yoLVter71", dst="doc:mlrc:vB9mHaHaHH", verdict="same")
+```
+
+```json
+{ "created": true, "ruling": {
+    "verdict": "same",
+    "note": "same ICML 2023 paper (Mesnard et al., Quantile Credit Assignment): the conference record and the DBLP import of the same forum",
+    "ruled_at": "2026-08-16T11:11:48.070749+00:00" } }
+```
+
+From now on, every graph view collapses those two nodes into one. The ruling is attributed,
+dated, and reversible, and the division of labor is strict: the engine never decides that two
+things are the same. It stores what the agent concluded and applies it at read time.
+
+## Stand a watch
+
+```python
+omniseek_sensor(action="create",
+                query="credit assignment for multi-agent LLM systems", schedule="weekly")
+```
+
+The first manual run returned `"total_results": 15, "new_count": 15`: a fresh baseline, where
+everything is new exactly once. From then on the sensor diffs mechanically and speaks only
+when something changed. [Worked examples](examples.md) shows a seasoned one mid-life: 15 new
+results on the first run, 3 the next day, 0 the day after, which is exactly the shape of a
+watch that is working.
+
+## The loop
+
+```mermaid
+flowchart LR
+    A[investigation] -->|first_seen stamps| M[(perception memory)]
+    A -->|rulings + statements| G[(relation graph)]
+    W[standing sensors] -->|scheduled diffs| M
+    M -->|seen_before, per document| B[next investigation]
+    G -->|duplicates collapsed, judgments applied| B
+```
+
+Every investigation leaves the instrument sharper than it found it: stamps in the perception
+memory, judgments in the graph, watches on the frontier. The second investigation does not
+start from zero. It starts from everything the first one settled.
 
 ## What OmniSeek did not do
 
-It never summarized. It never decided the survey was "the most important", the agent did that.
-It never wrote a word of this. OmniSeek reached, and it remembered; the thinking was the
-agent's, start to finish. That is the whole point: nothing that can hallucinate ever touched
-the data.
+It never summarized. It never decided which paper matters; the agent did. It reached,
+stamped, collapsed, contradicted, and remembered, and the thinking stayed in the agent from
+start to finish. Nothing that can hallucinate ever touched the data.
 
 ---
 

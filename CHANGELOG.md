@@ -6,6 +6,21 @@ All notable changes to OmniSeek are documented here. The format follows
 Entries below the rename note predate it and use the project's former name, penumbra; they are
 history and are kept as written.
 
+## [0.1.3] - 2026-08-16
+
+### Changed
+
+- **Runtime strings no longer speak the private-era operator.** Source descriptions, drill-only
+  rationales, and page-watch notes are strings every client reads; nine of them still carried
+  the original operator's name or deployment geography. They are re-authored in a neutral
+  curation voice at the engine, the mirror's rename table now neutralizes the whole class, and
+  a new residue gate makes it unshippable.
+- `docs/sources.md`: the source catalog as a generated document, rebuilt by the sync pipeline
+  on every engine update so it cannot rot; linked from the README in all three languages.
+- `docs/case-study.md` rebuilt as "The second investigation": verbatim outputs from one real
+  session (memory stamps, dedup and citation-conflict surfacing, router coverage honesty, a
+  live identity ruling, a standing watch), one diagram, and no claim without evidence shown.
+
 ## [0.1.2] - 2026-08-16
 
 ### Fixed
