@@ -7,14 +7,14 @@
     "url": "https://github.com/Battam1111/omniseek",
     "source": "github"
   },
-  "version": "0.1.1",
+  "version": "0.2.0",
   "websiteUrl": "https://battam1111.github.io/omniseek",
   "packages": [
     {
       "registryType": "pypi",
       "registryBaseUrl": "https://pypi.org",
       "identifier": "omniseek",
-      "version": "0.1.1",
+      "version": "0.2.0",
       "runtimeHint": "python",
       "transport": {
         "type": "streamable-http",
@@ -23,7 +23,7 @@
     },
     {
       "registryType": "oci",
-      "identifier": "ghcr.io/battam1111/omniseek:v0.1.1",
+      "identifier": "ghcr.io/battam1111/omniseek:v0.2.0",
       "transport": {
         "type": "streamable-http",
         "url": "http://localhost:8765/mcp"

@@ -6,6 +6,56 @@ All notable changes to OmniSeek are documented here. The format follows
 Entries below the rename note predate it and use the project's former name, penumbra; they are
 history and are kept as written.
 
+## [0.2.0] - 2026-08-17
+
+The alignment and evidence release: every public claim is now measured, printed at boot, or
+tightened to exactly what the code does.
+
+### Added
+
+- **A public benchmark** (`bench/`): six suites mapped one-to-one onto the README's claims,
+  54 admitted tasks, each carrying a real recorded run and dated search-resistance evidence
+  (named engines, no first-page hit); judges are pure computations, no LLM anywhere; every
+  published number ships with a Wilson 95% interval and a two-pass noise band, and there is
+  deliberately no aggregate score and no competitor table (the construction evidence is the
+  baseline). The MCP-stdio runner exercises the real product surface with an untimed warmup.
+  First CI numbers, fresh-install vantage: depth 18/18, scholar graph 21/22, memory contract
+  10/10, cross-lingual 0/14. That zero is the honest floor: the cross-lingual sense rides the
+  accumulated retrieval memory, so it compounds with use; a fresh install has not lived yet.
+- **A weekly source-health feed**, the first per-source health data published by any MCP
+  server: every catalog source probed weekly from CI, classified up / degraded /
+  rate_limited / down / skipped (credentials-gated sources are skipped, never down; budget
+  exhaustion is counted, never silent), published as JSON plus a generated page on the
+  `health-data` branch, vantage-labeled.
+- **A boot senses report**: the server prints which optional senses are online and which are
+  dormant, naming the extra that wakes each. The gap between a bare install and the full
+  product is now printed, not discovered.
+- **Capability tiers named in the install docs** (Core / Research / Walled) in all three
+  languages, with what each extra unlocks.
+
+### Changed
+
+- The privacy promise is strictly verifiable: no OmniSeek cloud, queries travel only as
+  direct requests to the sources you enabled, walled credentials stay in your own browser
+  and are never seen. Rewritten in en/zh/ja.
+- One name per thing, everywhere: persistent retrieval memory plus a typed, source-traced
+  evidence graph (README, site, tool descriptions, case study).
+- The demo infographic was rebuilt after a four-reviewer fresh-eyes audit: the empty
+  "plain search" placeholders became a real surface-answer card sharing the evidence-card
+  grammar, each card carries a capability chip, provenance names platforms, hearsay is
+  labeled against official guidance, CJK punctuation is fullwidth, and the whole canvas
+  now runs on the product's own metaphor: search stops, the seek continues.
+- Twenty-seven audited logic breaks repaired across the README, examples, and case study,
+  including the GHCR-vs-extras contradiction and the walled tier's missing entry point.
+- `server.json` versions now ship aligned in the release commit.
+
+### Fixed
+
+- **The smoke gate is hermetic.** A drifted fixture had let some environments reach the real
+  network mid-suite; the patch points now target the live choke point, and a socket plus
+  curl_cffi guard makes any non-loopback attempt a loud failure with the call named, on
+  every platform, with the guard self-checked at suite start.
+
 ## [0.1.3] - 2026-08-16
 
 ### Changed
