@@ -1,0 +1,81 @@
+name: source health
+
+on:
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+    inputs:
+      limit:
+        description: Optional source limit for a cheap verification run
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+concurrency:
+  group: source-health-publication
+  cancel-in-progress: false
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install package
+        run: pip install .
+      - name: Run source health sweep
+        env:
+          HEALTH_LIMIT: ${{ github.event.inputs.limit || '' }}
+        run: |
+          args=(--out "$RUNNER_TEMP/health-latest.json" --vantage github-actions --budget-seconds 2700)
+          if [[ -n "$HEALTH_LIMIT" ]]; then
+            args+=(--limit "$HEALTH_LIMIT")
+          fi
+          python scripts/health_sweep.py "${args[@]}"
+      - name: Generate health page
+        run: |
+          python scripts/gen_health_page.py \
+            "$RUNNER_TEMP/health-latest.json" \
+            --out "$RUNNER_TEMP/health-README.md"
+      - name: Upload health JSON
+        uses: actions/upload-artifact@v5
+        with:
+          name: omniseek-health-latest
+          path: ${{ runner.temp }}/health-latest.json
+          if-no-files-found: error
+      - name: Publish health data branch
+        env:
+          HEALTH_JSON: ${{ runner.temp }}/health-latest.json
+          HEALTH_README: ${{ runner.temp }}/health-README.md
+        run: |
+          set -euo pipefail
+          publish_dir="$RUNNER_TEMP/health-data"
+          if git ls-remote --exit-code --heads origin health-data >/dev/null 2>&1; then
+            git fetch origin health-data
+            git worktree add --detach "$publish_dir" origin/health-data
+            git -C "$publish_dir" switch -C health-data origin/health-data
+          else
+            git worktree add --detach "$publish_dir"
+            git -C "$publish_dir" switch --orphan health-data
+            git -C "$publish_dir" rm -rf --ignore-unmatch .
+          fi
+
+          stamp="$(python -c 'import json, os; print(json.load(open(os.environ["HEALTH_JSON"], encoding="utf-8"))["generated_utc"][:10].replace("-", ""))')"
+          mkdir -p "$publish_dir/history"
+          cp "$HEALTH_JSON" "$publish_dir/latest.json"
+          cp "$HEALTH_JSON" "$publish_dir/history/$stamp.json"
+          cp "$HEALTH_README" "$publish_dir/README.md"
+
+          git -C "$publish_dir" config user.name "github-actions[bot]"
+          git -C "$publish_dir" config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git -C "$publish_dir" add README.md latest.json "history/$stamp.json"
+          git -C "$publish_dir" commit -m "health: publish $stamp sweep"
+          git -C "$publish_dir" push origin HEAD:health-data
