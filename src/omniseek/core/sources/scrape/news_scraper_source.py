@@ -142,16 +142,44 @@ class _ScrapeSite:
             out.append({"title": title, "url": full})
         return out
 
-    def _items(self) -> list[dict]:
-        key = cache.make_key(self.name, "items", len(self.sites))
-        cached = cache.get(key)
-        if cached is not None:
-            return cached
+    @staticmethod
+    def _dedup(items: list) -> list:
+        """One row per URL. _extract dedups within ONE section, but a thread pinned or
+        cross-posted in several sections came back once PER SECTION (measured on gter
+        2026-08-16: the same /details/ thread three times in one drill). Applied on the
+        cache-READ path too, so a pre-fix cached list is healed instead of served."""
+        seen: set = set()
+        out: list = []
+        for it in items:
+            u = it.get("url")
+            if u in seen:
+                continue
+            seen.add(u)
+            out.append(it)
+        return out
+
+    def _fetch_items_once(self) -> list[dict]:
         items: list[dict] = []
         for s in self.sites:
             html = _render(s["url"]) if s.get("render") else _get(s["url"])
             if html:
                 items.extend(self._extract(html, s["url"], s.get("path_contains")))
+        return items
+
+    def _items(self) -> list[dict]:
+        key = cache.make_key(self.name, "items", len(self.sites))
+        cached = cache.get(key)
+        if cached is not None:
+            return self._dedup(cached)
+        items = self._fetch_items_once()
+        if not items and any(s.get("render") for s in self.sites):
+            # A shared-Chrome render can come back empty on a cold first pass (the browser
+            # is busy or still settling); the drill then reports an honest zero and the
+            # caller walks away. Empties are never cached, so ONE immediate retry is this
+            # call's only second chance; measured on gter 2026-08-16, where the cold drill
+            # returned 0 and the same query against a warm cache returned real hits.
+            items = self._fetch_items_once()
+        items = self._dedup(items)
         if items:
             cache.set(key, items, ttl=self.cache_ttl)
         return items
