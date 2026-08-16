@@ -72,11 +72,14 @@ jobs:
         # publishes server.json exactly as committed.
         if: startsWith(steps.v.outputs.tag, 'v')
         run: |
+          # OCI packages carry their version in the identifier TAG and must not have a
+          # 'version' field (the registry 400s on it); only non-OCI packages get .version.
           jq --arg v "${{ steps.v.outputs.version }}" --arg tag "${{ steps.v.outputs.tag }}" '
             .version = $v
             | .packages = (.packages | map(
-                .version = $v
-                | if .registryType == "oci" then .identifier = ("ghcr.io/battam1111/omniseek:" + $tag) else . end))
+                if .registryType == "oci"
+                then .identifier = ("ghcr.io/battam1111/omniseek:" + $tag)
+                else .version = $v end))
           ' server.json > server.tmp && mv server.tmp server.json
       - name: Install mcp-publisher
         run: curl -sL "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_linux_amd64.tar.gz" | tar xz mcp-publisher

@@ -24,7 +24,6 @@
     {
       "registryType": "oci",
       "identifier": "ghcr.io/battam1111/omniseek:v0.1.1",
-      "version": "0.1.1",
       "transport": {
         "type": "streamable-http",
         "url": "http://localhost:8765/mcp"
