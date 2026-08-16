@@ -6,6 +6,19 @@ All notable changes to OmniSeek are documented here. The format follows
 Entries below the rename note predate it and use the project's former name, penumbra; they are
 history and are kept as written.
 
+## [0.1.2] - 2026-08-16
+
+### Fixed
+
+- **First search on a fresh install could hang forever.** The ranked-search path imported the
+  ranking/recall chain (numpy and the vector stack) lazily, on the event-loop thread, during
+  the first call, racing the startup shadow probe's own first imports on a worker thread. On
+  Windows under MCP-over-stdio that race deadlocked inside numpy's extension init: the call
+  never returned, no deadline applied, nothing was logged. Both entrypoints now warm the
+  import chain at boot, so no call path ever pays or races a first import. Surfaced by a
+  Cline install test; reproduced on a clean venv (faulthandler stack pinned the exact frames)
+  and verified fixed with the same probe (endless hang before, a budgeted return after).
+
 ## [0.1.1] - 2026-08-16
 
 ### Added

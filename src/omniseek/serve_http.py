@@ -209,6 +209,8 @@ def main() -> None:
                         _jobs.TICK_SECONDS, len(_jobs.registry()))
     except Exception as exc:  # noqa: BLE001 — the scheduler is best-effort; never block boot
         logger.warning("job scheduler not started (%s)", exc)
+    from omniseek.server import _warm_heavy_imports
+    _warm_heavy_imports()  # same first-import race exists under HTTP; see the helper's docstring
     logger.info("OmniSeek HTTP service on %s:%s (token-gated; MCP at /mcp)", HOST, PORT)
     uvicorn.run(app, host=HOST, port=PORT, log_level="info")
 

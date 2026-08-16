@@ -2406,6 +2406,20 @@ def investigate(target: str, shape: str = "person", context: str = "") -> list[d
     return [{"role": "user", "content": content}]
 
 
+def _warm_heavy_imports() -> None:
+    """Eagerly import the ranking/recall chain (numpy + the vector stack) BEFORE serving.
+
+    The first ranked search otherwise pays these imports lazily ON the event-loop thread,
+    racing the S4a shadow probe's own first imports on a worker thread. On Windows (a fresh
+    pip-install serving MCP over stdio) that race deadlocked inside numpy's extension-module
+    init and the call never returned: no deadline applied, nothing logged (2026-08-16,
+    reproduced twice on a clean venv; the faulthandler stack pinned the loop thread at
+    recall/embed's ``import numpy`` under ``create_module``, and this warm-up turned the
+    same probe from an endless hang into a 9.5s budgeted return). Standalone the chain
+    imports in ~2s, so boot pays a moment and no call path ever races a first import."""
+    from omniseek.core import rank  # noqa: F401
+
+
 def main() -> None:
     # Log to stderr so it doesn't pollute MCP stdio
     logging.basicConfig(
@@ -2417,6 +2431,8 @@ def main() -> None:
     _lograte.install_on_root()  # no single logger may flood the log (fresh-install OpenAlex storm)
     log.info("OmniSeek MCP server starting. Loaded %d source modules.", len(loaded_modules))
     log.info("Registered adapters: %s", fetcher.all_adapter_names())
+    _warm_heavy_imports()
+    log.info("rank/recall import chain warmed")
     mcp.run()
 
 
