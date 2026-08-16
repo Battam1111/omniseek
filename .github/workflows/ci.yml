@@ -26,6 +26,32 @@ jobs:
           PYTHONIOENCODING: "utf-8"
         run: python tests/smoke.py
 
+  # The stranger's first ten minutes, on machines that are not ours: install the package the
+  # way a fresh user does, boot MCP over stdio, handshake, list tools, and make one cache-only
+  # search call. The only assertion is that every call RETURNS. The 0.1.1 first-search deadlock
+  # (a lazy import racing the startup probe's imports on the event-loop thread) was invisible
+  # to every engine test and fatal exactly here, Windows-flavored, which is why this job has a
+  # Windows leg.
+  stranger:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ ubuntu-latest, windows-latest ]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install like a stranger (real install, not editable)
+        run: pip install .
+      - name: Stdio handshake + first search must return
+        env:
+          PYTHONUTF8: "1"
+          PYTHONIOENCODING: "utf-8"
+        run: python scripts/stdio_stranger_probe.py
+
   # Verifies the Docker quickstart on GitHub's runner (which has Docker preinstalled), so a
   # maintainer without local Docker still gets the image built + booted + smoke-tested on every
   # push to main (and on demand via workflow_dispatch). Skipped on PRs to avoid the chromium-layer
