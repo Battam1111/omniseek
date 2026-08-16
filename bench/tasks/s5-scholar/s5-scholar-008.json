@@ -1,0 +1,31 @@
+{
+  "id": "s5-scholar-008",
+  "suite": "s5-scholar",
+  "kind": "oa_fulltext",
+  "claim": "eye_paper_enrich locates the open-access PDF of the AlphaFold paper: is_oa true with a publisher-hosted pdf_url.",
+  "input": {
+    "args": {
+      "ids": [
+        "10.1038/s41586-021-03819-2"
+      ]
+    },
+    "tool": "omniseek_paper_enrich"
+  },
+  "ground_truth": {
+    "type": "dynamic_structural",
+    "upstream_of_record": {
+      "api": "unpaywall",
+      "field": "best_oa_location.url_for_pdf and is_oa"
+    },
+    "expected_now": "is_oa=true, pdf_url=https://www.nature.com/articles/s41586-021-03819-2.pdf, oa_host=publisher, citation_count=43922"
+  },
+  "verification": {
+    "eye_run_confirmed": true,
+    "evidence_snippet": "{\"is_oa\":true,\"pdf_url\":\"https://www.nature.com/articles/s41586-021-03819-2.pdf\",\"oa_host\":\"publisher\",\"citation_count\":43922}",
+    "margin_evidence": null
+  },
+  "liveness_probe": {
+    "url": "https://api.unpaywall.org/v2/10.1038/s41586-021-03819-2?email=unpaywall@impactstory.org"
+  },
+  "notes": "Probe read directly: best_oa_location.url_for_pdf is byte-identical to the eye's pdf_url, license cc-by, host_type publisher, version publishedVersion. Subject is a Nobel-linked (2024 Chemistry) paper. Sanity contrast for the conflict candidates: here Crossref 43922 vs OpenAlex 46518 = 1.06x, i.e. no disagreement."
+}

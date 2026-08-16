@@ -1,0 +1,43 @@
+{
+  "id": "s4-depth-002",
+  "suite": "s4-depth",
+  "kind": "document",
+  "lang": "en",
+  "claim": "The Pile paper (arXiv:2101.00027v1), Appendix C.1, states that the authors broke the list of Common Crawl WARC-file URLs from 2013 to 2020 into 3679 chunks and processed 22 random chunks.",
+  "input": {
+    "args": {
+      "target": "https://arxiv.org/pdf/2101.00027v1.pdf",
+      "start_char": 73000,
+      "max_chars": 12000
+    },
+    "tool": "omniseek_read"
+  },
+  "ground_truth": {
+    "type": "normalized_containment",
+    "value": "3679"
+  },
+  "depth_evidence": {
+    "page": 22
+  },
+  "verification": {
+    "eye_run_confirmed": true,
+    "evidence_snippet": "we break the list of urls to individual WARC files from 2013 to 2020 into 3679 chunks and process 22 random chunks."
+  },
+  "search_resistance_prefilter": [
+    {
+      "tool": "WebSearch",
+      "query": "The Pile dataset Pile-CC Common Crawl WARC urls \"3679 chunks\" 22 random chunks",
+      "date": "2026-08-16",
+      "first_page_hit": false,
+      "top_hits": [
+        "https://aiwiki.ai/wiki/the_pile",
+        "https://ar5iv.labs.arxiv.org/html/2101.00027",
+        "https://commoncrawl.org/cdxj-index"
+      ]
+    }
+  ],
+  "liveness_probe": {
+    "url": "https://arxiv.org/pdf/2101.00027v1.pdf"
+  },
+  "notes": "Not in the abstract, intro, or any component-size table; buried in the appendix. The search tool explicitly reported it could not find the chunk count or the 22-chunk sample. The .pdf extension routes eye_read to the document reader, which emits Page N markers."
+}

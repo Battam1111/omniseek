@@ -1,0 +1,43 @@
+{
+  "id": "s4-depth-007",
+  "suite": "s4-depth",
+  "kind": "document",
+  "lang": "zh",
+  "claim": "第55次《中国互联网络发展状况统计报告》附录二「附表2 按分配单位IPv4地址数」中，中国教育和科研计算机网的IPv4地址量为16,649,984个（折合254B+16C）。",
+  "input": {
+    "args": {
+      "target": "https://www.cnnic.net.cn/NMediaFile/2025/0220/MAIN1740036167004CKE0DITFO1.pdf",
+      "start_char": 54000,
+      "max_chars": 9000
+    },
+    "tool": "omniseek_read"
+  },
+  "ground_truth": {
+    "type": "normalized_containment",
+    "value": "16,649,984"
+  },
+  "depth_evidence": {
+    "page": 65
+  },
+  "verification": {
+    "eye_run_confirmed": true,
+    "evidence_snippet": "附表 2  按分配单位IPv4 地址数 单位名称 地址量 折合数 ... 中国教育和科研计算机网 16,649,984  254B+16C"
+  },
+  "search_resistance_prefilter": [
+    {
+      "tool": "WebSearch",
+      "query": "CNNIC 第55次 附表 按分配单位IPv4地址数 中国教育和科研计算机网 16,649,984",
+      "date": "2026-08-16",
+      "first_page_hit": false,
+      "top_hits": [
+        "http://doc.sina.cn/?id=comos%3Akftssap2396910",
+        "https://tech.sina.cn/i/gn/2021-08-27/detail-ikqciyzm3762445.d.html",
+        "https://www.cnnic.net.cn/NMediaFile/2025/0220/MAIN1740036167004CKE0DITFO1.pdf"
+      ]
+    }
+  ],
+  "liveness_probe": {
+    "url": "https://www.cnnic.net.cn/NMediaFile/2025/0220/MAIN1740036167004CKE0DITFO1.pdf"
+  },
+  "notes": "eye_read sheet 65 (printed page 59). Media coverage of this report reproduces only the headline figures; the per-allocator appendix rows are not reproduced. Search tool confirmed it could not verify the number and pointed back at the PDF. Entity is an academic network, not a company; figure is a neutral allocation count."
+}

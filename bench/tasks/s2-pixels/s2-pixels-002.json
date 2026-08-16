@@ -1,0 +1,41 @@
+{
+  "id": "s2-pixels-002",
+  "suite": "s2-pixels",
+  "lang": "en",
+  "claim": "the tool reads text baked into pixels: scanned pages, chart labels, poster text",
+  "input": {
+    "args": {
+      "target": "https://www.hko.gov.hk/en/publica/tc/files/tc1968.pdf",
+      "ocr": true,
+      "max_chars": 9000
+    },
+    "tool": "omniseek_read"
+  },
+  "ground_truth": {
+    "type": "normalized_containment",
+    "value": "Mercator Projection-Natural Scale"
+  },
+  "verification": {
+    "eye_run_confirmed": true,
+    "evidence_snippet": "### Page 4 · p04_01.jpeg ... Tracks Uncertain\nDaily Positions\nat00hGMT\nIntermediate\n6hrly Positions\nMercator Projection-Natural Scale\n1 : 15m. at 22yN.",
+    "pixels_only_check": "plain read lacks the string: confirmed"
+  },
+  "search_resistance_prefilter": [
+    {
+      "tool": "WebSearch",
+      "query": "\"Mercator Projection-Natural Scale\" tropical cyclone tracks chart Royal Observatory",
+      "date": "2026-08-16",
+      "first_page_hit": false,
+      "top_hits": [
+        "https://rammb-data.cira.colostate.edu/tc_realtime/about.asp",
+        "https://learningweather.psu.edu/node/59",
+        "https://courses.ems.psu.edu/learningweather/node/12"
+      ]
+    }
+  ],
+  "liveness_probe": {
+    "url": "https://www.hko.gov.hk/en/publica/tc/files/tc1968.pdf"
+  },
+  "notes": "Chart-label variant of the same scan: the marginal legend of the 1968 cyclone track charts. Plain read of pages 3 and 4 yields only '[1 image(s) on this page]' (25 chars each). The string is OCR'd identically from TWO independent images (p03_01.jpeg Jan-Aug plate, p04_01.jpeg Sep-Dec plate), which cross-corroborates the transcription; the adjacent scale figure is NOT stable across the two passes and was deliberately excluded from the ground truth. ReliefWeb's HTML transcription covers only the INTRODUCTION prose and contains no map legend.",
+  "timeout_s": 900.0
+}

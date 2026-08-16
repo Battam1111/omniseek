@@ -1,0 +1,43 @@
+{
+  "id": "s4-depth-004",
+  "suite": "s4-depth",
+  "kind": "document",
+  "lang": "en",
+  "claim": "The Pile paper (arXiv:2101.00027v1), Appendix C.18, states that in the Hacker News component sub-comment chains are delimited by the marker \\n~~~\\n.",
+  "input": {
+    "args": {
+      "target": "https://arxiv.org/pdf/2101.00027v1.pdf",
+      "start_char": 92000,
+      "max_chars": 9000
+    },
+    "tool": "omniseek_read"
+  },
+  "ground_truth": {
+    "type": "normalized_containment",
+    "value": "\\n~~~\\n"
+  },
+  "depth_evidence": {
+    "page": 26
+  },
+  "verification": {
+    "eye_run_confirmed": true,
+    "evidence_snippet": "Top-level comments are delimited by \\n----\\n and sub-comment chains are delimited by \\n~~~\\n. We include author and extracted text for each comment."
+  },
+  "search_resistance_prefilter": [
+    {
+      "tool": "WebSearch",
+      "query": "The Pile Hacker News component top-level comments delimited sub-comment chains delimiter tilde markers dataset format",
+      "date": "2026-08-16",
+      "first_page_hit": false,
+      "top_hits": [
+        "https://gist.github.com/nathancahill/3168225",
+        "https://news.ycombinator.com/item?id=36272365",
+        "https://huggingface.co/datasets/datajuicer/the-pile-hackernews-refined-by-data-juicer"
+      ]
+    }
+  ],
+  "liveness_probe": {
+    "url": "https://arxiv.org/pdf/2101.00027v1.pdf"
+  },
+  "notes": "Search tool explicitly said it could not confirm the delimiter convention and pointed back at the paper. Shares eye_read args with s4-depth-003 (same verified window, different page-26 fact); if arg-uniqueness is required, raise max_chars on one of the two (a larger window is a superset of the verified one)."
+}

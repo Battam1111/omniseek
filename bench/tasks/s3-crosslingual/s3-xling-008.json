@@ -1,0 +1,39 @@
+{
+  "id": "s3-xling-008",
+  "suite": "s3-crosslingual",
+  "direction": "en_query_zh_doc",
+  "claim": "An English question about a general iterative framework for approximating arbitrary matrix functions (generalizing Newton-Schulz beyond rational powers) is decisively answered by a Chinese blog post that proposes exactly such a framework; the English literature only has per-case schemes (p-th roots, hyperpower, MatRL).",
+  "input": {
+    "args": {
+      "query": "a general iterative scheme to approximate arbitrary matrix functions generalizing Newton-Schulz"
+    },
+    "tool": "omniseek_search"
+  },
+  "ground_truth": {
+    "type": "identifier_in_topk",
+    "value": "https://kexue.fm/archives/11787",
+    "k": 5,
+    "observed_rank": 2
+  },
+  "verification": {
+    "eye_run_confirmed": true,
+    "evidence_snippet": "《矩阵函数近似中的暴力美学》(苏剑林, 2026-06-25): '不管是笔者还是Muonp的思路,总的来说都是「能用,但不够通用」...为了克服这些缺陷,本文提出一套理论上可以拟合任意矩阵函数的通用近似框架。'"
+  },
+  "search_resistance_prefilter": [
+    {
+      "tool": "WebSearch",
+      "query": "a general iterative scheme to approximate arbitrary matrix functions generalizing Newton-Schulz",
+      "date": "2026-08-16",
+      "first_page_hit": false,
+      "top_hits": [
+        "https://www.emergentmind.com/topics/iterative-newton-schulz-orthogonalization",
+        "https://arxiv.org/pdf/1703.02456",
+        "https://www.researchgate.net/publication/372502645_Improving_Newton-Schulz_Method_for_Approximating_Matrix_Generalized_Inverse_by_Using_Schemes_with_Memory"
+      ]
+    }
+  ],
+  "liveness_probe": {
+    "url": "https://kexue.fm/archives/11787"
+  },
+  "notes": "Rank 2 on two separate eye runs. WebSearch first page is entirely English (emergentmind, arXiv 1703.02456, MatRL arXiv 2507.03833, ScienceDirect) with no kexue.fm hit. Pure numerical linear algebra: no company/person claims."
+}

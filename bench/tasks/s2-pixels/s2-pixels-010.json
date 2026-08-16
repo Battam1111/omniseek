@@ -1,0 +1,42 @@
+{
+  "id": "s2-pixels-010",
+  "suite": "s2-pixels",
+  "lang": "en",
+  "claim": "the tool reads text baked into pixels: scanned pages, chart labels, poster text",
+  "input": {
+    "args": {
+      "target": "https://aclanthology.org/2022.law-1.11.pdf",
+      "ocr": true,
+      "start_char": 22930,
+      "max_chars": 3000
+    },
+    "tool": "omniseek_read"
+  },
+  "ground_truth": {
+    "type": "normalized_containment",
+    "value": "People.pessoa.n"
+  },
+  "verification": {
+    "eye_run_confirmed": true,
+    "evidence_snippet": "19513\n19534\n780.48\n781.32 Food_service\nEater\nPeople.pessoa.n\nmanual",
+    "pixels_only_check": "plain read lacks the string: confirmed"
+  },
+  "search_resistance_prefilter": [
+    {
+      "tool": "WebSearch",
+      "query": "\"People.pessoa.n\" FrameNet Brasil Charon annotation",
+      "date": "2026-08-16",
+      "first_page_hit": false,
+      "top_hits": [
+        "https://www.researchgate.net/publication/360834159_Charon_a_FrameNet_Annotation_Tool_for_Multimodal_Corpora",
+        "https://www.academia.edu/110961176/Charon_a_FrameNet_Annotation_Tool_for_Multimodal_Corpora",
+        "https://www.semanticscholar.org/paper/Charon:-A-FrameNet-Annotation-Tool-for-Multimodal-Belcavello-Viridiano/37633f9a47adbb8c2b0badda7522682499e706d3"
+      ]
+    }
+  ],
+  "liveness_probe": {
+    "url": "https://aclanthology.org/2022.law-1.11.pdf"
+  },
+  "notes": "A CV_Name cell in the object table of Figure 4 (video annotation module) of Charon, LAW-XVI @ LREC 2022: published, a FrameNet annotation tool, clear of the red-lined topic areas. ocr:true gives ocr_images=5 of 5. Pixels-only check is SCOPED, not whole-document: eye_read with NO ocr covers pages 3-4 (the pages carrying this figure), and the prose there writes the same fact in a different form ('the CV Names chosen were person.n in the People frame'), never the UI's concatenated 'Frame.LU' rendering. The concatenated form exists only as table pixels. Also rejected from this paper: a Flickr30k caption visible in Figure 3 (trivially web-findable) and a string where OCR drops a cedilla (human transcription would differ).",
+  "timeout_s": 600.0
+}

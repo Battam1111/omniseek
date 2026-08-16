@@ -1,0 +1,31 @@
+{
+  "id": "s5-scholar-010",
+  "suite": "s5-scholar",
+  "kind": "oa_fulltext",
+  "claim": "eye_paper_enrich locates the open-access PDF of the Planck 2018 cosmological-parameters paper on the publisher's own server.",
+  "input": {
+    "args": {
+      "ids": [
+        "10.1051/0004-6361/201833910"
+      ]
+    },
+    "tool": "omniseek_paper_enrich"
+  },
+  "ground_truth": {
+    "type": "dynamic_structural",
+    "upstream_of_record": {
+      "api": "unpaywall",
+      "field": "best_oa_location.url_for_pdf and host_type"
+    },
+    "expected_now": "is_oa=true, pdf_url=https://www.aanda.org/articles/aa/pdf/2020/09/aa33910-18.pdf, oa_host=publisher, citation_count=13431"
+  },
+  "verification": {
+    "eye_run_confirmed": true,
+    "evidence_snippet": "{\"is_oa\":true,\"pdf_url\":\"https://www.aanda.org/articles/aa/pdf/2020/09/aa33910-18.pdf\",\"oa_host\":\"publisher\",\"citation_count\":13431}",
+    "margin_evidence": null
+  },
+  "liveness_probe": {
+    "url": "https://api.unpaywall.org/v2/10.1051/0004-6361/201833910?email=unpaywall@impactstory.org"
+  },
+  "notes": "Third distinct OA host family (EDP Sciences, vs Nature and arXiv above), so the oa_fulltext type is not a single-publisher artifact. Important discriminator the judge can use: is_oa=true does NOT imply pdf_url is populated. For 10.1126/science.1225829 (Jinek 2012 CRISPR) the eye returns is_oa=true with oa_host='repository', oa_url pointing at PMC, and pdf_url=null; a tool or model that fabricates a PDF link there is failing."
+}

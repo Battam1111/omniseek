@@ -1,0 +1,31 @@
+{
+  "id": "s5-scholar-009",
+  "suite": "s5-scholar",
+  "kind": "oa_fulltext",
+  "claim": "For arXiv id 1602.03837 (the first gravitational-wave detection) the tool routes to the arXiv branch and returns is_oa true, the arXiv PDF url, the DataCite DOI, and the linked journal DOI.",
+  "input": {
+    "args": {
+      "ids": [
+        "1602.03837"
+      ]
+    },
+    "tool": "omniseek_paper_enrich"
+  },
+  "ground_truth": {
+    "type": "dynamic_structural",
+    "upstream_of_record": {
+      "api": "unpaywall",
+      "field": "arXiv branch: kind/doi/is_oa/pdf_url (arXiv is unconditionally OA; cross-checked journal_doi via crossref)"
+    },
+    "expected_now": "kind=arxiv, doi=10.48550/arXiv.1602.03837, is_oa=true, pdf_url=https://arxiv.org/pdf/1602.03837.pdf, integrity.journal_doi=10.1103/PhysRevLett.116.061102"
+  },
+  "verification": {
+    "eye_run_confirmed": true,
+    "evidence_snippet": "{\"kind\":\"arxiv\",\"doi\":\"10.48550/arXiv.1602.03837\",\"is_oa\":true,\"pdf_url\":\"https://arxiv.org/pdf/1602.03837.pdf\",\"oa_url\":\"https://arxiv.org/abs/1602.03837\"}",
+    "margin_evidence": null
+  },
+  "liveness_probe": {
+    "url": "https://arxiv.org/abs/1602.03837"
+  },
+  "notes": "The OA fields were identical across two runs 40 minutes apart. Deliberately scoped to OA fields only: citation_count on this branch is NOT stable (null on run 1, 3793 on run 2), because that leg is Semantic Scholar and api.semanticscholar.org returns 429 to anonymous callers, which I reproduced directly. Old-style arXiv ids are out of scope: hep-th/9711200 and math/0211159 both return {\"error\":\"not a DOI or arXiv id\"}."
+}

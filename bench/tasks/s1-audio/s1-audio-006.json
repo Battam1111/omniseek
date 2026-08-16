@@ -1,0 +1,54 @@
+{
+  "id": "s1-audio-006",
+  "suite": "s1-audio",
+  "lang": "en",
+  "claim": "eye_transcribe recovers a distinctive spoken sentence about craft standards from Martina Flor's Open Studio episode 'Ken Barber on Style, Inspiration, Practice, and Finding Your Voice as a Lettering Artist' at ~21:56; the show publishes no transcript and the sentence is not indexed.",
+  "input": {
+    "args": {
+      "url": "https://anchor.fm/s/28011b0c/podcast/play/123475172/https%3A%2F%2Fd3ctxlq1ktw2nl.cloudfront.net%2Fstaging%2F2026-6-29%2F428825464-44100-2-4fe0de436b1d2.mp3",
+      "start": "20:00",
+      "duration": "2:20",
+      "language": "en",
+      "segments": true
+    },
+    "tool": "omniseek_transcribe"
+  },
+  "ground_truth": {
+    "type": "normalized_containment",
+    "value": "Sometimes it's good enough to be really good",
+    "timestamp": "21:56"
+  },
+  "verification": {
+    "eye_run_confirmed": true,
+    "evidence_snippet": "not everything has to knock your socks off I think, Sometimes it's good enough to be really good and that's pretty exciting"
+  },
+  "search_resistance_prefilter": [
+    {
+      "tool": "WebSearch",
+      "query": "\"Sometimes it's good enough to be really good\" lettering podcast",
+      "date": "2026-08-16",
+      "first_page_hit": false,
+      "top_hits": [
+        "https://podcasts.apple.com/us/podcast/hand-lettering-podcast/id1055030040",
+        "https://open.spotify.com/show/3SAT5T0X81URSN7I5JrOpk",
+        "https://www.listennotes.com/podcasts/hand-lettering-podcast-tam-love-i4Y3aGblmTZ/"
+      ]
+    },
+    {
+      "tool": "WebSearch",
+      "query": "\"Sometimes it's good enough to be really good\"",
+      "date": "2026-08-16",
+      "first_page_hit": false,
+      "top_hits": [
+        "https://theproductivitypro.com/blog/2017/05/when-good-is-good-enough-five-situations-when-perfection-is-counterproductive/",
+        "https://www.quora.com/Is-good-enough-really-good-enough",
+        "https://www.brainyquote.com/quotes/julie_bowen_455758"
+      ]
+    }
+  ],
+  "liveness_probe": {
+    "url": "https://anchor.fm/s/28011b0c/podcast/play/123475172/https%3A%2F%2Fd3ctxlq1ktw2nl.cloudfront.net%2Fstaging%2F2026-6-29%2F428825464-44100-2-4fe0de436b1d2.mp3"
+  },
+  "notes": "Ambiguity worth flagging: near-variants of the idiom ('sometimes good enough is good enough') are widely written, so a lax fuzzy matcher could false-positive; the exact 8-word string was not found. Episode discusses a life-insurance logo but the chosen phrase names no company and carries no negative claim. Anchor/Spotify auto-transcripts exist in-app but are not web-indexable; feed carries no podcast:transcript tag.",
+  "timeout_s": 900.0
+}

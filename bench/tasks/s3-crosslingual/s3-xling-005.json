@@ -1,0 +1,39 @@
+{
+  "id": "s3-xling-005",
+  "suite": "s3-crosslingual",
+  "direction": "zh_query_en_doc",
+  "claim": "A Chinese single-cell question about whether a differential-expression change reflects transcription or mRNA stability is decisively answered by one English bioRxiv preprint (scATrans) that types the mechanism from unspliced-RNA residuals with no extra experiment; Chinese sources only cover RNA-velocity basics.",
+  "input": {
+    "args": {
+      "query": "单细胞差异表达到底是转录变化还是 mRNA 稳定性变化引起的"
+    },
+    "tool": "omniseek_search"
+  },
+  "ground_truth": {
+    "type": "identifier_in_topk",
+    "value": "10.64898/2026.08.03.740741",
+    "k": 5,
+    "observed_rank": 1
+  },
+  "verification": {
+    "eye_run_confirmed": true,
+    "evidence_snippet": "scATrans: 'Single-cell differential expression (DE) reports changes in mature mRNA abundance, but the same fold-change can reflect faster synthesis or slower decay ... a reference-corrected unspliced residual annotates each change as transcription- or stabilization-weighted, with no additional experiment.'"
+  },
+  "search_resistance_prefilter": [
+    {
+      "tool": "WebSearch",
+      "query": "单细胞差异表达到底是转录变化还是 mRNA 稳定性变化引起的",
+      "date": "2026-08-16",
+      "first_page_hit": false,
+      "top_hits": [
+        "https://zhuanlan.zhihu.com/p/691106249",
+        "https://blog.cellsignal.cn/do-mrna-and-protein-levels-correlate",
+        "https://zhuanlan.zhihu.com/p/564710239"
+      ]
+    }
+  ],
+  "liveness_probe": {
+    "url": "https://doi.org/10.64898/2026.08.03.740741"
+  },
+  "notes": "Rank 1 on two consecutive eye runs (internal _rank 0.79, clear margin over rank 2). WebSearch answers via RNA-velocity and diffGEK (2024) and never reaches the target. Purely methodological single-cell biology: no clinical or treatment claim."
+}

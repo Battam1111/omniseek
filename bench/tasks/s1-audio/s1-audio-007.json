@@ -1,0 +1,54 @@
+{
+  "id": "s1-audio-007",
+  "suite": "s1-audio",
+  "lang": "zh",
+  "claim": "eye_transcribe recovers a distinctive spoken instruction about wetting the paper filter from the bilibili tutorial 手冲咖啡入门到精通，包教包会！ at ~6:00; the wording exists only as speech.",
+  "input": {
+    "args": {
+      "url": "https://www.bilibili.com/video/BV1mzcReZEgA",
+      "start": "5:00",
+      "duration": "2:20",
+      "language": "zh",
+      "segments": true
+    },
+    "tool": "omniseek_transcribe"
+  },
+  "ground_truth": {
+    "type": "normalized_containment",
+    "value": "浸湿这个滤纸，让它跟滤杯固定住的这么一个作用",
+    "timestamp": "06:00"
+  },
+  "verification": {
+    "eye_run_confirmed": true,
+    "evidence_snippet": "浸湿这个滤纸，让它跟滤杯固定住的这么一个作用，先沿着中心去注水，然后再沿着旁边去洗它。"
+  },
+  "search_resistance_prefilter": [
+    {
+      "tool": "WebSearch",
+      "query": "\"浸湿这个滤纸\" \"让它跟滤杯固定住\"",
+      "date": "2026-08-16",
+      "first_page_hit": false,
+      "top_hits": [
+        "https://m.instrument.com.cn/bbs/d-6468546-1.html",
+        "https://edu.iask.sina.com.cn/jy/3i4qCETMkhx.html",
+        "https://jingyan.baidu.com/article/3a2f7c2e73e24f67afd6118b.html"
+      ]
+    },
+    {
+      "tool": "WebSearch",
+      "query": "\"浸湿这个滤纸，让它跟滤杯固定住的这么一个作用\" 手冲咖啡入门到精通",
+      "date": "2026-08-16",
+      "first_page_hit": false,
+      "top_hits": [
+        "https://www.starbucks.com.cn/coffee-blog/pour-over/",
+        "https://k.sina.com.cn/article_7857141524_1d452771401903e0nw.html",
+        "https://zhuanlan.zhihu.com/p/462127868"
+      ]
+    }
+  ],
+  "liveness_probe": {
+    "url": "https://www.bilibili.com/video/BV1mzcReZEgA"
+  },
+  "notes": "Weakest of the Chinese set on lexical distinctiveness: the underlying procedure ('wet the filter so it sticks to the dripper') is written up on many coffee pages, so the exact colloquial wording is what carries the test. Neither prefilter surfaced the string. Deliberately avoided nearby lines with digit strings (225毫升, 15克) and one where flat vs segment ASR disagree (极细粉 / 极器粉).",
+  "timeout_s": 900.0
+}

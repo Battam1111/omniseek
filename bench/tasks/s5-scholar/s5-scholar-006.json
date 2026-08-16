@@ -1,0 +1,31 @@
+{
+  "id": "s5-scholar-006",
+  "suite": "s5-scholar",
+  "kind": "retraction",
+  "claim": "eye_paper_enrich reports integrity.retracted=true with BOTH an expression_of_concern and a retraction notice for the 2005 Science stem-cell paper DOI 10.1126/science.1112286.",
+  "input": {
+    "args": {
+      "ids": [
+        "10.1126/science.1112286"
+      ]
+    },
+    "tool": "omniseek_paper_enrich"
+  },
+  "ground_truth": {
+    "type": "dynamic_structural",
+    "upstream_of_record": {
+      "api": "crossref",
+      "field": "message.updated-by[].type (source: retraction-watch)"
+    },
+    "expected_now": "integrity.retracted=true, integrity.notices=[\"expression_of_concern\",\"retraction\"], citation_count=344"
+  },
+  "verification": {
+    "eye_run_confirmed": true,
+    "evidence_snippet": "{\"id\":\"10.1126/science.1112286\",\"citation_count\":344,\"integrity\":{\"retracted\":true,\"notices\":[\"expression_of_concern\",\"retraction\"]}}",
+    "margin_evidence": null
+  },
+  "liveness_probe": {
+    "url": "https://api.crossref.org/works/10.1126/science.1112286"
+  },
+  "notes": "Distinct notice profile from s5-scholar-005 (EoC+retraction vs correction+retraction), so it tests that the tool returns the real notice list rather than a boolean. Coverage caveat measured, not assumed: I probed four canonical pre-2003 physics retractions (10.1038/35021028, 10.1126/science.1065389, 10.1038/35042545) and the Crossref/Retraction-Watch feed returns retracted=false for all of them, so this feed is biomedical-skewed and pre-2003 physics cases must not be used as specimens."
+}

@@ -1,0 +1,54 @@
+{
+  "id": "s1-audio-004",
+  "suite": "s1-audio",
+  "lang": "en",
+  "claim": "eye_transcribe recovers a distinctive spoken question defining the weasel family from The Wandering Naturalist episode 285 (River Otters - Why they are Special) at ~10:28; the show ships no transcript and the question is not indexed as text anywhere.",
+  "input": {
+    "args": {
+      "url": "https://traffic.libsyn.com/secure/thewanderingnaturalist/Audio_-_The_Wandering_Naturalist_August_2026_-_Otters_Part_1_final.mp3?dest-id=939395",
+      "start": "9:00",
+      "duration": "2:20",
+      "language": "en",
+      "segments": true
+    },
+    "tool": "omniseek_transcribe"
+  },
+  "ground_truth": {
+    "type": "normalized_containment",
+    "value": "what are some things that make a weasel a weasel",
+    "timestamp": "10:28"
+  },
+  "verification": {
+    "eye_run_confirmed": true,
+    "evidence_snippet": "because they are weasels, so what are some things that make a weasel a weasel?"
+  },
+  "search_resistance_prefilter": [
+    {
+      "tool": "WebSearch",
+      "query": "\"what are some things that make a weasel a weasel\"",
+      "date": "2026-08-16",
+      "first_page_hit": false,
+      "top_hits": [
+        "https://www.crittercontrol.com/wildlife/weasel/what-does-a-weasel-look-like/",
+        "https://www.vedantu.com/animal/weasel",
+        "https://animals.net/weasel/"
+      ]
+    },
+    {
+      "tool": "WebSearch",
+      "query": "\"what are some things that make a weasel a weasel\" \"Wandering Naturalist\" otters",
+      "date": "2026-08-16",
+      "first_page_hit": false,
+      "top_hits": [
+        "https://blog.nature.org/2019/09/17/mighty-mustelids-meet-the-worlds-most-epic-weasels/",
+        "https://onthetrailsjuneau.wordpress.com/2021/12/29/the-weasel-family/",
+        "https://www.oreateai.com/blog/weasels-and-otters-related/e6cc14394d19728e2b49848bb732cff7"
+      ]
+    }
+  ],
+  "liveness_probe": {
+    "url": "https://traffic.libsyn.com/secure/thewanderingnaturalist/Audio_-_The_Wandering_Naturalist_August_2026_-_Otters_Part_1_final.mp3?dest-id=939395"
+  },
+  "notes": "Timestamp is the containing VAD segment start (628.86s); the phrase sits at that segment's end, ~10:34. Show page for liveness cross-check: https://www.threeriversparks.org/podcast (RSS https://rss.libsyn.com/shows/147113/destinations/939395.xml, no podcast:transcript tag). Chose this over neighbouring lines containing digit strings (weights, episode numbers).",
+  "timeout_s": 900.0
+}

@@ -1,0 +1,54 @@
+{
+  "id": "s1-audio-003",
+  "suite": "s1-audio",
+  "lang": "zh",
+  "claim": "eye_transcribe recovers a distinctive spoken remark about shooting with intent from the bilibili photography-lighting tutorial 摄影光线 | 学会\"用光\" at ~7:42; no transcript or written copy of the line is indexed.",
+  "input": {
+    "args": {
+      "url": "https://www.bilibili.com/video/BV1xh4y1c77v",
+      "start": "6:00",
+      "duration": "2:20",
+      "language": "zh",
+      "segments": true
+    },
+    "tool": "omniseek_transcribe"
+  },
+  "ground_truth": {
+    "type": "normalized_containment",
+    "value": "但是也一定比你们现在完全漫无目的的在拍要好的很多",
+    "timestamp": "07:42"
+  },
+  "verification": {
+    "eye_run_confirmed": true,
+    "evidence_snippet": "或许拍不到这么好看，但是也一定比你们现在完全漫无目的的在拍要好的很多啊。"
+  },
+  "search_resistance_prefilter": [
+    {
+      "tool": "WebSearch",
+      "query": "\"但是也一定比你们现在完全漫无目的的在拍要好的很多\"",
+      "date": "2026-08-16",
+      "first_page_hit": false,
+      "top_hits": [
+        "https://www.gty.org/sermons/ZHS-52-23/ZHS-52-23",
+        "https://www.wisdomonline.org/teachings/5-mandarin-james/",
+        "https://www.zhihu.com/question/455059370"
+      ]
+    },
+    {
+      "tool": "WebSearch",
+      "query": "\"完全漫无目的的在拍\" 摄影光线 学会用光",
+      "date": "2026-08-16",
+      "first_page_hit": false,
+      "top_hits": [
+        "https://finance.sina.com.cn/tech/2022-12-06/doc-imqmmthc7122254.shtml",
+        "https://sspai.com/post/29325",
+        "https://news.qq.com/rain/a/20230713A00V7J00"
+      ]
+    }
+  ],
+  "liveness_probe": {
+    "url": "https://www.bilibili.com/video/BV1xh4y1c77v"
+  },
+  "notes": "Timestamp is the containing VAD segment start (462.57s); the phrase begins ~8s into that segment, ~7:50. Deliberately avoided the neighbouring sentence which names a photographer (何帆) and a segment where the flat transcript and the per-segment transcript disagree (斋/这). Video's metadata reports an empty subtitle field.",
+  "timeout_s": 900.0
+}

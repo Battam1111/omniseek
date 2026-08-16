@@ -1,0 +1,54 @@
+{
+  "id": "s1-audio-001",
+  "suite": "s1-audio",
+  "lang": "zh",
+  "claim": "eye_transcribe recovers a distinctive spoken sentence about a common graduate-research misconception from the bilibili video 如何做好文献阅读及笔记整理 at ~3:02; the sentence exists only as speech (bilibili ships no transcript for this video and no text copy is indexed).",
+  "input": {
+    "args": {
+      "url": "https://www.bilibili.com/video/BV17W4y167SM",
+      "start": "2:00",
+      "duration": "2:30",
+      "language": "zh",
+      "segments": true
+    },
+    "tool": "omniseek_transcribe"
+  },
+  "ground_truth": {
+    "type": "normalized_containment",
+    "value": "很多硕博生可能会产生一个误区，即课题是规划好的",
+    "timestamp": "03:02"
+  },
+  "verification": {
+    "eye_run_confirmed": true,
+    "evidence_snippet": "很多硕博生可能会产生一个误区，即课题是规划好的，是想出来的。其实不是我们只能通过想象解决基本框架。"
+  },
+  "search_resistance_prefilter": [
+    {
+      "tool": "WebSearch",
+      "query": "\"很多硕博生可能会产生一个误区\" \"课题是规划好的\"",
+      "date": "2026-08-16",
+      "first_page_hit": false,
+      "top_hits": [
+        "https://mrl.hkust.edu.hk/wp-content/uploads/2023/05/%E7%A0%94%E7%A9%B6%E7%94%9F%E5%A6%82%E4%BD%95%E5%A4%AF%E5%AE%9E%E6%88%90%E5%8A%9F%E7%A7%91%E7%A0%94%E7%94%9F%E6%B6%AF%E7%9A%84%E5%9F%BA%E7%A1%80.pdf",
+        "https://grd.bit.edu.cn/pygz/jwyx/bslc_jwyx/dd66392e610a43248216bc65c6dcc675.htm",
+        "https://www.sohu.com/a/494816621_120559073"
+      ]
+    },
+    {
+      "tool": "WebSearch",
+      "query": "\"很多硕博生可能会产生一个误区\" 如何做好文献阅读及笔记整理",
+      "date": "2026-08-16",
+      "first_page_hit": false,
+      "top_hits": [
+        "https://blog.csdn.net/qq_42722197/article/details/117095534",
+        "https://csrc.xmu.edu.cn/index_cn/article_pdf/2021.8.1.pdf",
+        "https://blog.csdn.net/Helenzxc123/article/details/152128986"
+      ]
+    }
+  ],
+  "liveness_probe": {
+    "url": "https://www.bilibili.com/video/BV17W4y167SM"
+  },
+  "notes": "Timestamp is the start of the VAD segment containing the phrase (segment-level precision, not word-level). Phrase spans two adjacent VAD segments (62.06s + 64.51s within the slice) but is contiguous in the flat transcript, so containment must be checked against the flat transcript, not against individual segments. Content-neutral research-habit advice; no company, no named individual.",
+  "timeout_s": 900.0
+}

@@ -1,0 +1,34 @@
+{
+  "id": "s5-scholar-001",
+  "suite": "s5-scholar",
+  "kind": "top_coauthor",
+  "claim": "eye_coauthors resolves Francis Crick to OpenAlex A5109884453 and returns James D. Watson as his #1 collaborator by joint-paper count, with a >2x lead over #2.",
+  "input": {
+    "args": {
+      "authors": [
+        "Francis Crick"
+      ],
+      "hints": [
+        "molecular biology DNA Salk Institute"
+      ]
+    },
+    "tool": "omniseek_coauthors"
+  },
+  "ground_truth": {
+    "type": "dynamic_structural",
+    "upstream_of_record": {
+      "api": "openalex",
+      "field": "meta.count of /works?filter=author.id:A5109884453,author.id:A5014257109 (pairwise joint-work count); ranking key = top_coauthors[].papers"
+    },
+    "expected_now": "#1 = James D. Watson (A5014257109), 21 joint works; #2 = Sydney Brenner (A5111910776), 8 in-sample / 7 at API"
+  },
+  "verification": {
+    "eye_run_confirmed": true,
+    "evidence_snippet": "works_seen=179; top_coauthors[0]={\"name\":\"James D. Watson\",\"joint\":8.79,\"papers\":21}; [1]={\"name\":\"Sydney Brenner\",\"joint\":2.65,\"papers\":8}",
+    "margin_evidence": "#1=21 papers (joint score 8.79), #2=8 papers (joint 2.65) -> 2.63x by papers, 3.32x by the tool's ranking score; upstream API: 21 vs 7 = 3.0x"
+  },
+  "liveness_probe": {
+    "url": "https://api.openalex.org/works?filter=author.id:A5109884453,author.id:A5014257109&per-page=1"
+  },
+  "notes": "works_seen(179) == works_count(179): the eye saw Crick's complete OpenAlex corpus, so the ranking is not sample-limited. Probe was read directly and returned meta.count=21, exactly the eye's number. Crick d.2004; Watson Nobel 1962. Fact is a bibliometric count only."
+}

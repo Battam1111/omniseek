@@ -1,0 +1,43 @@
+{
+  "id": "s4-depth-005",
+  "suite": "s4-depth",
+  "kind": "document",
+  "lang": "en",
+  "claim": "NIST SP 800-90A Rev. 1, Section 10.3.1 (Hash_df), states that no_of_bits_to_return shall be less than or equal to (255 x outlen).",
+  "input": {
+    "args": {
+      "target": "https://nvlpubs.nist.gov/nistpubs/SpecialPublications/NIST.SP.800-90Ar1.pdf",
+      "start_char": 148000,
+      "max_chars": 7000
+    },
+    "tool": "omniseek_read"
+  },
+  "ground_truth": {
+    "type": "normalized_containment",
+    "value": "255 × outlen"
+  },
+  "depth_evidence": {
+    "page": 67
+  },
+  "verification": {
+    "eye_run_confirmed": true,
+    "evidence_snippet": "The maximum length (max_number_of_bits) is implementation dependent, but shall be less than or equal to (255 × outlen). no_of_bits_to_return is represented as a 32-bit integer."
+  },
+  "search_resistance_prefilter": [
+    {
+      "tool": "WebSearch",
+      "query": "NIST SP 800-90A Hash_df max_number_of_bits \"255\" times outlen no_of_bits_to_return 32-bit integer",
+      "date": "2026-08-16",
+      "first_page_hit": false,
+      "top_hits": [
+        "https://arxiv.org/pdf/2512.02082",
+        "https://csrc.nist.gov/files/pubs/sp/800/90/a/r1/final/docs/draft_sp800-90a-rev1.pdf",
+        "https://en.wikipedia.org/wiki/NIST_SP_800-90A"
+      ]
+    }
+  ],
+  "liveness_probe": {
+    "url": "https://nvlpubs.nist.gov/nistpubs/SpecialPublications/NIST.SP.800-90Ar1.pdf"
+  },
+  "notes": "eye_read sheet 67 (printed page 58). The source PDF itself ranks on the first page of results, but no result surfaced the value; the search tool stated the detail was not in the results and told the user to verify against the PDF."
+}

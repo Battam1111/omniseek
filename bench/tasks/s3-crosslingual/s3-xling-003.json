@@ -1,0 +1,39 @@
+{
+  "id": "s3-xling-003",
+  "suite": "s3-crosslingual",
+  "direction": "zh_query_en_doc",
+  "claim": "A Chinese proteomics question about assembling a full protein sequence from redundant de novo peptide reads without a reference is decisively answered by one English bioRxiv preprint on consensus assembly; Chinese search returns only vendor service pages and general de-novo-sequencing explainers.",
+  "input": {
+    "args": {
+      "query": "不靠参考序列,能用大量冗余的 de novo 肽段读段拼出蛋白序列吗"
+    },
+    "tool": "omniseek_search"
+  },
+  "ground_truth": {
+    "type": "identifier_in_topk",
+    "value": "10.64898/2026.08.13.744110",
+    "k": 5,
+    "observed_rank": 1
+  },
+  "verification": {
+    "eye_run_confirmed": true,
+    "evidence_snippet": "Top-ranked eye hit, title verbatim: 'Reference-free protein sequencing by consensus assembly of redundant de novo peptide reads' (bioRxiv, source=biorxiv)."
+  },
+  "search_resistance_prefilter": [
+    {
+      "tool": "WebSearch",
+      "query": "不靠参考序列,能用大量冗余的 de novo 肽段读段拼出蛋白序列吗",
+      "date": "2026-08-16",
+      "first_page_hit": false,
+      "top_hits": [
+        "https://www.pnas.org/doi/10.1073/pnas.1705691114",
+        "https://www.creative-proteomics.com/proteinseq/resource/de-novo-peptide-sequencing-techniques-principles-applications.htm",
+        "https://www.bioinfor.com/de-novo-sequencing/"
+      ]
+    }
+  ],
+  "liveness_probe": {
+    "url": "https://doi.org/10.64898/2026.08.13.744110"
+  },
+  "notes": "Rank 1 on two consecutive eye runs. WebSearch surfaces DeepNovo (PNAS 2017), ALPS, MuCS and Chinese CRO service pages, none of which is the target preprint. Evidence snippet is title-level only: the eye returned the title without an abstract for this record."
+}

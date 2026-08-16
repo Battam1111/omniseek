@@ -1,0 +1,43 @@
+{
+  "id": "s4-depth-008",
+  "suite": "s4-depth",
+  "kind": "document",
+  "lang": "zh",
+  "claim": "第55次《中国互联网络发展状况统计报告》附录二「附表5 分地区IPv4比例」中，北京的IPv4地址占比为25.19%。",
+  "input": {
+    "args": {
+      "target": "https://www.cnnic.net.cn/NMediaFile/2025/0220/MAIN1740036167004CKE0DITFO1.pdf",
+      "start_char": 54000,
+      "max_chars": 9000
+    },
+    "tool": "omniseek_read"
+  },
+  "ground_truth": {
+    "type": "normalized_containment",
+    "value": "25.19%"
+  },
+  "depth_evidence": {
+    "page": 67
+  },
+  "verification": {
+    "eye_run_confirmed": true,
+    "evidence_snippet": "附表 5  分地区IPv4 比例 省份 比例 北京 25.19% 广东 9.43% 浙江 6.39% 山东 4.83% 江苏 4.70% 上海 4.47%"
+  },
+  "search_resistance_prefilter": [
+    {
+      "tool": "WebSearch",
+      "query": "CNNIC 第55次 附表5 分地区IPv4比例 北京 25.19% 西藏 0.13%",
+      "date": "2026-08-16",
+      "first_page_hit": false,
+      "top_hits": [
+        "http://doc.sina.cn/?id=comos%3Akftssap2396910",
+        "https://tech.sina.cn/t/2020-09-29/detail-iivhvpwy9346943.d.html",
+        "https://www.cnnic.net.cn/NMediaFile/2025/0220/MAIN1740036167004CKE0DITFO1.pdf"
+      ]
+    }
+  ],
+  "liveness_probe": {
+    "url": "https://www.cnnic.net.cn/NMediaFile/2025/0220/MAIN1740036167004CKE0DITFO1.pdf"
+  },
+  "notes": "eye_read sheet 67 (printed page 61). Search returned only earlier-edition appendix reprints and the report landing page, not this row. Note the search tool also volunteered that in earlier editions this table was numbered 附表1, which is a distractor, not a hit."
+}

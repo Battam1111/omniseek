@@ -1,0 +1,31 @@
+{
+  "id": "s5-scholar-007",
+  "suite": "s5-scholar",
+  "kind": "retraction",
+  "claim": "For the non-retracted 2001 human-genome paper the tool reports integrity.retracted=false while still surfacing its correction and erratum notices.",
+  "input": {
+    "args": {
+      "ids": [
+        "10.1038/35057062"
+      ]
+    },
+    "tool": "omniseek_paper_enrich"
+  },
+  "ground_truth": {
+    "type": "dynamic_structural",
+    "upstream_of_record": {
+      "api": "crossref",
+      "field": "message.updated-by[].type (correction/erratum, no retraction record)"
+    },
+    "expected_now": "integrity.retracted=false, integrity.notices=[\"correction\",\"erratum\"], is_oa=true, citation_count=18636"
+  },
+  "verification": {
+    "eye_run_confirmed": true,
+    "evidence_snippet": "{\"id\":\"10.1038/35057062\",\"is_oa\":true,\"citation_count\":18636,\"integrity\":{\"retracted\":false,\"notices\":[\"correction\",\"erratum\"]}}",
+    "margin_evidence": null
+  },
+  "liveness_probe": {
+    "url": "https://api.crossref.org/works/10.1038/35057062"
+  },
+  "notes": "Negative control for the integrity channel: a paper that HAS update records but is NOT retracted. Guards against a tool (or a bluffing model) that reports 'retracted' for anything carrying an update, and against one that suppresses non-retraction notices. Maximally neutral subject (a consortium genome paper)."
+}

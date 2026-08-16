@@ -1,0 +1,42 @@
+{
+  "id": "s2-pixels-003",
+  "suite": "s2-pixels",
+  "lang": "zh",
+  "claim": "the tool reads text baked into pixels: scanned pages, chart labels, poster text",
+  "input": {
+    "args": {
+      "target": "https://www.hko.gov.hk/tc/publica/gen_pub/files/windshear_c.pdf",
+      "ocr": true,
+      "start_char": 5300,
+      "max_chars": 4000
+    },
+    "tool": "omniseek_read"
+  },
+  "ground_truth": {
+    "type": "normalized_containment",
+    "value": "離開跑道尾的距離（海里）"
+  },
+  "verification": {
+    "eye_run_confirmed": true,
+    "evidence_snippet": "### Page 1 · p01_09.jpeg\n201510\n持續改變\n逆風（海里/小時）\n風切赞\n-15\n5\n2\n離開跑道尾的距離（海里）",
+    "pixels_only_check": "plain read lacks the string: confirmed"
+  },
+  "search_resistance_prefilter": [
+    {
+      "tool": "WebSearch",
+      "query": "\"離開跑道尾的距離\" 逆風 海里 風切變 香港天文台",
+      "date": "2026-08-16",
+      "first_page_hit": false,
+      "top_hits": [
+        "https://www.hko.gov.hk/tc/education/aviation-and-marine/aviation/00770-Sea-breeze-will-influence-aircraft-takeoff-and-landing-directions.html",
+        "https://www.hko.gov.hk/tc/publica/gen_pub/files/windshear_c.pdf",
+        "https://www.hko.gov.hk/tc/wxinfo/ts/display_element_ff.htm"
+      ]
+    }
+  ],
+  "liveness_probe": {
+    "url": "https://www.hko.gov.hk/tc/publica/gen_pub/files/windshear_c.pdf"
+  },
+  "notes": "X-axis label of the headwind-profile chart in HKO's Chinese windshear/turbulence pamphlet, a born-digital PDF whose diagrams are pasted rasters. Pixels-only check: eye_read with NO ocr returns page 1's COMPLETE text layer (1401 chars, read in full); it contains the surrounding prose but no axis labels. ocr:true gives ocr_images=10 and the label appears on two separate chart images (p01_09.jpeg windshear, p01_12.jpeg turbulence). CAVEAT for the maintainer: the search engine returns windshear_c.pdf itself in the top 3 (indexed via its text layer), but the ground-truth string is not surfaced in any snippet; the indexed text layer provably lacks it, so the answer is still only obtainable from pixels. Note also that a Doppler-radar phrase OCR'd from p01_02.jpeg WAS rejected as a candidate because it does occur in the text layer.",
+  "timeout_s": 600.0
+}

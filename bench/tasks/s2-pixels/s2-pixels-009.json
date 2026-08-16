@@ -1,0 +1,42 @@
+{
+  "id": "s2-pixels-009",
+  "suite": "s2-pixels",
+  "lang": "en",
+  "claim": "the tool reads text baked into pixels: scanned pages, chart labels, poster text",
+  "input": {
+    "args": {
+      "target": "https://www.hko.gov.hk/en/publica/gen_pub/files/outdoor_e.pdf",
+      "ocr": true,
+      "start_char": 11050,
+      "max_chars": 4700
+    },
+    "tool": "omniseek_read"
+  },
+  "ground_truth": {
+    "type": "normalized_containment",
+    "value": "17.2mag/arcsec"
+  },
+  "verification": {
+    "eye_run_confirmed": true,
+    "evidence_snippet": "### Page 1 · p01_06.jpeg\nMap (Astronomical Observation Hot Spots)\nUpdatedat19:20 HKT\n5575\n地图\nTsuen Wal Ho Koon\nAir Temp\n26.9°C\nRH 68%\nNSB\n17.2mag/arcsec",
+    "pixels_only_check": "plain read lacks the string: confirmed"
+  },
+  "search_resistance_prefilter": [
+    {
+      "tool": "WebSearch",
+      "query": "\"17.2mag/arcsec\" night sky brightness Hong Kong Observatory astronomical observation hot spots",
+      "date": "2026-08-16",
+      "first_page_hit": false,
+      "top_hits": [
+        "https://www.sciencedirect.com/science/article/pii/S0022407326001913",
+        "https://arxiv.org/html/2510.18200",
+        "https://www.researchgate.net/publication/51452355_Night-sky_brightness_monitoring_in_Hong_Kong_A_city-wide_light_pollution_assessment"
+      ]
+    }
+  ],
+  "liveness_probe": {
+    "url": "https://www.hko.gov.hk/en/publica/gen_pub/files/outdoor_e.pdf"
+  },
+  "notes": "English edition of the same screenshot as s2-pixels-008, and a useful cross-check: two INDEPENDENT OCR passes over two differently-rendered rasters both return 17.2, plus the matching Air Temp 26.9C / RH 68%, so the numeric ground truth is corroborated, not a single-pass OCR artefact. Pixels-only check: page 1's text layer here is 7068 chars, read IN FULL with no ocr; it names the data channels but contains no value and no 'mag/arcsec'. OCR drops the superscript 2 of arcsec^2, so the ground truth is set to exactly what a reader of the pixels can transcribe unambiguously.",
+  "timeout_s": 600.0
+}

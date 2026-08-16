@@ -1,0 +1,54 @@
+{
+  "id": "s1-audio-011",
+  "suite": "s1-audio",
+  "lang": "en",
+  "claim": "eye_transcribe recovers a distinctive spoken description of the beginner phase of a craft from Martina Flor's Open Studio episode 'The Stages of a Lettering Designer' at ~5:14; the show ships no transcript and the wording is not indexed.",
+  "input": {
+    "args": {
+      "url": "https://anchor.fm/s/28011b0c/podcast/play/117464641/https%3A%2F%2Fd3ctxlq1ktw2nl.cloudfront.net%2Fstaging%2F2026-2-25%2F420749640-44100-2-a2b49ee3b172b.mp3",
+      "start": "4:00",
+      "duration": "2:20",
+      "language": "en",
+      "segments": true
+    },
+    "tool": "omniseek_transcribe"
+  },
+  "ground_truth": {
+    "type": "normalized_containment",
+    "value": "you draw letters for fun, you doodle in notebooks, you experiment with styles",
+    "timestamp": "05:14"
+  },
+  "verification": {
+    "eye_run_confirmed": true,
+    "evidence_snippet": "you are simply enjoying lettering, you draw letters for fun, you doodle in notebooks, you experiment with styles without any pressure"
+  },
+  "search_resistance_prefilter": [
+    {
+      "tool": "WebSearch",
+      "query": "\"you draw letters for fun, you doodle in notebooks, you experiment with styles\"",
+      "date": "2026-08-16",
+      "first_page_hit": false,
+      "top_hits": [
+        "https://www.christinebritton.com/notebook-with-doodles-and-symbols/",
+        "https://www.lemon8-app.com/@heyitslezzz/7351034677324775941?region=us",
+        "https://www.christinebritton.com/drawing-ideas-easy-doodles/"
+      ]
+    },
+    {
+      "tool": "WebSearch",
+      "query": "\"you doodle in notebooks\" \"The Stages of a Lettering Designer\"",
+      "date": "2026-08-16",
+      "first_page_hit": false,
+      "top_hits": [
+        "https://www.udemy.com/course/how-to-doodle-basics-and-lettering/",
+        "https://www.kittl.com/blogs/doodle-art-design-stl/",
+        "https://paperlike.com/blogs/paperlikers-insights/hand-lettering-hub"
+      ]
+    }
+  ],
+  "liveness_probe": {
+    "url": "https://anchor.fm/s/28011b0c/podcast/play/117464641/https%3A%2F%2Fd3ctxlq1ktw2nl.cloudfront.net%2Fstaging%2F2026-2-25%2F420749640-44100-2-a2b49ee3b172b.mp3"
+  },
+  "notes": "Timestamp is the containing VAD segment start (314.54s); this segment is long (74.54s-134.55s) and the phrase begins ~10s into it, ~5:24, so segment-level tolerance is needed. Same show as s1-audio-006 but a different, solo episode. Purely descriptive career-stage language; no company, no named individual.",
+  "timeout_s": 900.0
+}

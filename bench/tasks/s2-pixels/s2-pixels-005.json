@@ -1,0 +1,42 @@
+{
+  "id": "s2-pixels-005",
+  "suite": "s2-pixels",
+  "lang": "en",
+  "claim": "the tool reads text baked into pixels: scanned pages, chart labels, poster text",
+  "input": {
+    "args": {
+      "target": "https://aclanthology.org/2020.coling-demos.3.pdf",
+      "ocr": true,
+      "start_char": 19660,
+      "max_chars": 3000
+    },
+    "tool": "omniseek_read"
+  },
+  "ground_truth": {
+    "type": "normalized_containment",
+    "value": "Mean Segmental TTR: 0.54"
+  },
+  "verification": {
+    "eye_run_confirmed": true,
+    "evidence_snippet": "Type-token ratio (TTR): 0.36\nMean Segmental TTR: 0.54\nSubmit",
+    "pixels_only_check": "plain read lacks the string: confirmed"
+  },
+  "search_resistance_prefilter": [
+    {
+      "tool": "WebSearch",
+      "query": "\"Mean Segmental TTR: 0.54\" DART annotation tool",
+      "date": "2026-08-16",
+      "first_page_hit": false,
+      "top_hits": [
+        "https://www.researchgate.net/publication/348340652_DART_A_Lightweight_Quality-Suggestive_Data-to-Text_Annotation_Tool",
+        "https://www.lucasshen.com/software/lexicalrichness/docstring_docs.html",
+        "https://image-ppubs.uspto.gov/dirsearch-public/print/downloadPdf/12067724"
+      ]
+    }
+  ],
+  "liveness_probe": {
+    "url": "https://aclanthology.org/2020.coling-demos.3.pdf"
+  },
+  "notes": "A live statistics value inside a GUI screenshot (Figure 2, p03_01.png) of the DART data-to-text annotation tool, COLING 2020 demo track (published, not under review; an annotation GUI, not RL-for-LLM-reasoning or credit assignment). Pixels-only check is EXHAUSTIVE for this item: the paper's entire plain text layer (total_chars=19656) was read across four windows with ocr unset. The prose defines TTR/MSTTR and quotes different example values, but the rendered pair ': 0.54' never occurs. The WebSearch assistant stated outright it could not find the exact string. The eye OCR'd 3 of 3 images here (ocr_images=3).",
+  "timeout_s": 600.0
+}

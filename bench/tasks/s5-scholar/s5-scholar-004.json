@@ -1,0 +1,34 @@
+{
+  "id": "s5-scholar-004",
+  "suite": "s5-scholar",
+  "kind": "top_coauthor",
+  "claim": "eye_coauthors returns A. F. Huxley as A. L. Hodgkin's #1 collaborator by joint-paper count, ahead of #2 R. D. Keynes.",
+  "input": {
+    "args": {
+      "authors": [
+        "A. L. Hodgkin"
+      ],
+      "hints": [
+        "Cambridge physiology nerve action potential"
+      ]
+    },
+    "tool": "omniseek_coauthors"
+  },
+  "ground_truth": {
+    "type": "dynamic_structural",
+    "upstream_of_record": {
+      "api": "openalex",
+      "field": "meta.count of /works?filter=author.id:A5030452986,author.id:A5113678219; ranking key = top_coauthors[].papers"
+    },
+    "expected_now": "#1 = A. F. Huxley (A5113678219), 14 joint works; #2 = R. D. Keynes (A5108258126), 9"
+  },
+  "verification": {
+    "eye_run_confirmed": true,
+    "evidence_snippet": "resolved A5030452986 works_seen=106; top_coauthors[0]={\"name\":\"A. F. Huxley\",\"joint\":6.83,\"papers\":14}; [1]={\"name\":\"R. D. Keynes\",\"joint\":3.3,\"papers\":9}",
+    "margin_evidence": "#1=14 papers (joint 6.83), #2=9 papers (joint 3.30) -> 1.56x by papers, 2.07x by ranking score; upstream API confirms 14 vs 9 exactly"
+  },
+  "liveness_probe": {
+    "url": "https://api.openalex.org/works?filter=author.id:A5030452986,author.id:A5113678219&per-page=1"
+  },
+  "notes": "Full-corpus coverage (106/106). Name form is load-bearing: authors=[\"Alan L. Hodgkin\"] returns resolved:null with note 'no NAME-MATCH', while [\"A. L. Hodgkin\"] resolves; use the initialled form. All three named people are deceased (Hodgkin d.1998 and Huxley d.2012 shared the 1963 Nobel; Keynes d.2010 FRS)."
+}

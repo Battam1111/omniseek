@@ -1,0 +1,43 @@
+{
+  "id": "s4-depth-003",
+  "suite": "s4-depth",
+  "kind": "document",
+  "lang": "en",
+  "claim": "The Pile paper (arXiv:2101.00027v1), Appendix C.18, states that its Hacker News component covers story ids from the first Hacker News post through post number 24531712.",
+  "input": {
+    "args": {
+      "target": "https://arxiv.org/pdf/2101.00027v1.pdf",
+      "start_char": 92000,
+      "max_chars": 9000
+    },
+    "tool": "omniseek_read"
+  },
+  "ground_truth": {
+    "type": "normalized_containment",
+    "value": "24531712"
+  },
+  "depth_evidence": {
+    "page": 26
+  },
+  "verification": {
+    "eye_run_confirmed": true,
+    "evidence_snippet": "For the Pile we use the first Hacker News post (1) to post number 24531712. This corresponds to a date range of approximately 10/09/2006 to 09/20/2020."
+  },
+  "search_resistance_prefilter": [
+    {
+      "tool": "WebSearch",
+      "query": "The Pile HackerNews component story ids first post to post number \"24531712\" BigQuery date range",
+      "date": "2026-08-16",
+      "first_page_hit": false,
+      "top_hits": [
+        "https://www.unbrowse.ai/blog/access-hackernews-data-realtime",
+        "https://en.wikipedia.org/wiki/The_Pile_(dataset)",
+        "https://www.kaggle.com/datasets/hacker-news/hacker-news"
+      ]
+    }
+  ],
+  "liveness_probe": {
+    "url": "https://arxiv.org/pdf/2101.00027v1.pdf"
+  },
+  "notes": "Search tool stated outright that results did not contain the cutoff id. Objective, stable, dated configuration value about a dataset build."
+}

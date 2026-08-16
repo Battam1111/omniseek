@@ -1,0 +1,42 @@
+{
+  "id": "s2-pixels-008",
+  "suite": "s2-pixels",
+  "lang": "zh",
+  "claim": "the tool reads text baked into pixels: scanned pages, chart labels, poster text",
+  "input": {
+    "args": {
+      "target": "https://www.hko.gov.hk/tc/publica/gen_pub/files/outdoor_c.pdf",
+      "ocr": true,
+      "start_char": 6120,
+      "max_chars": 3000
+    },
+    "tool": "omniseek_read"
+  },
+  "ground_truth": {
+    "type": "normalized_containment",
+    "value": "17.2等每平方角秒"
+  },
+  "verification": {
+    "eye_run_confirmed": true,
+    "evidence_snippet": "### Page 1 · p01_12.jpeg\n地圖（天文觀测熟點\n香港時間19時20分更新\n5255\n011\n基省可限\n三≥ : 26.9 ℃\n相景度：68%\n17.2等每平方角秒\n3859\n9360\n全天影像助重",
+    "pixels_only_check": "plain read lacks the string: confirmed"
+  },
+  "search_resistance_prefilter": [
+    {
+      "tool": "WebSearch",
+      "query": "\"17.2等每平方角秒\" 夜空光度 香港天文台 天文觀測",
+      "date": "2026-08-16",
+      "first_page_hit": false,
+      "top_hits": [
+        "https://www.hko.gov.hk/sc/gts/astronomy/astro_portal.html",
+        "https://www.hko.gov.hk/tc/gts/astronomy/astro_portal.html",
+        "https://www.weather.gov.hk/tc/gts/astronomy/astro_portal_nclf.html"
+      ]
+    }
+  ],
+  "liveness_probe": {
+    "url": "https://www.hko.gov.hk/tc/publica/gen_pub/files/outdoor_c.pdf"
+  },
+  "notes": "A night-sky-brightness reading frozen inside a webpage screenshot in HKO's Chinese outdoor-activities pamphlet (42 rasters on page 1; ocr:true gives ocr_images=29). Pixels-only check: page 1's COMPLETE 2186-char text layer read in full advertises the data channels but carries no numeric value anywhere. The engine discussed HK night-sky brightness generally and could not surface this specific reading. REJECTED from the same document: a hill elevation, common encyclopedic knowledge that would likely surface on a quoted search.",
+  "timeout_s": 600.0
+}

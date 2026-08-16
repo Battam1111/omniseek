@@ -1,0 +1,41 @@
+{
+  "id": "s2-pixels-001",
+  "suite": "s2-pixels",
+  "lang": "en",
+  "claim": "the tool reads text baked into pixels: scanned pages, chart labels, poster text",
+  "input": {
+    "args": {
+      "target": "https://www.hko.gov.hk/en/publica/tc/files/tc1968.pdf",
+      "ocr": true,
+      "max_chars": 9000
+    },
+    "tool": "omniseek_read"
+  },
+  "ground_truth": {
+    "type": "normalized_containment",
+    "value": "PRINTED AND PUBLISHED BY J.R.LEE, GOVERNMENT PRINTER"
+  },
+  "verification": {
+    "eye_run_confirmed": true,
+    "evidence_snippet": "### Page 1 · p01_01.png\nROYAL OBSERVATORY, HONG KONG\nMETEOROLOGICAL RESULTS\n1968\nPARTIII-TROPICALCYCLONE SUMMARIES\nPRINTED AND PUBLISHED BY J.R.LEE, GOVERNMENT PRINTER",
+    "pixels_only_check": "plain read lacks the string: confirmed"
+  },
+  "search_resistance_prefilter": [
+    {
+      "tool": "WebSearch",
+      "query": "\"PRINTED AND PUBLISHED BY J.R. LEE, GOVERNMENT PRINTER\" Royal Observatory Hong Kong 1968 meteorological results",
+      "date": "2026-08-16",
+      "first_page_hit": false,
+      "top_hits": [
+        "https://reliefweb.int/report/china-hong-kong-special-administrative-region/royal-observatory-hong-kong-meteorological-results-1968-part-iii-tropical-cyclone-summaries",
+        "https://en.wikipedia.org/wiki/Hong_Kong_Observatory",
+        "https://www.hko.gov.hk/en/index.html"
+      ]
+    }
+  ],
+  "liveness_probe": {
+    "url": "https://www.hko.gov.hk/en/publica/tc/files/tc1968.pdf"
+  },
+  "notes": "Purest scanned-page case in the set. eye_read with NO ocr returns total_chars=4506 for a 41-page report and page 1 renders as exactly '## Page 1 [1 image(s) on this page]': the whole book is a raster scan with no text layer. With ocr:true total_chars=61015 and ocr_images=40. Mirror check: ReliefWeb hosts an HTML transcription of this PDF (read via eye_read, total 4875 chars) but it contains ONLY the INTRODUCTION section, no colophon, no title page, no map legends, so the ground truth is not recoverable from that mirror either. The imprint names a 1971 Government Printer in his official institutional role (neutral credit, not a private individual matter).",
+  "timeout_s": 900.0
+}

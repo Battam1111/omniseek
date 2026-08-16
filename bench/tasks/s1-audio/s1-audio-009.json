@@ -1,0 +1,54 @@
+{
+  "id": "s1-audio-009",
+  "suite": "s1-audio",
+  "lang": "zh",
+  "claim": "eye_transcribe recovers a distinctive spoken caution about choosing foreground elements from the bilibili composition tutorial 6分钟让你学会构图 at ~4:01; the line is not written on the video page or on any indexed page.",
+  "input": {
+    "args": {
+      "url": "https://www.bilibili.com/video/BV1Q64y1T7ox",
+      "start": "2:00",
+      "duration": "2:20",
+      "language": "zh",
+      "segments": true
+    },
+    "tool": "omniseek_transcribe"
+  },
+  "ground_truth": {
+    "type": "normalized_containment",
+    "value": "前景最好不要乱找，和画面主题有一定联系的前景更加合适",
+    "timestamp": "04:01"
+  },
+  "verification": {
+    "eye_run_confirmed": true,
+    "evidence_snippet": "但要注意，前景最好不要乱找，和画面主题有一定联系的前景更加合适，不要为了前景构图而刻意加入不合适的前景。"
+  },
+  "search_resistance_prefilter": [
+    {
+      "tool": "WebSearch",
+      "query": "\"前景最好不要乱找，和画面主题有一定联系的前景更加合适\"",
+      "date": "2026-08-16",
+      "first_page_hit": false,
+      "top_hits": [
+        "https://finance.sina.com.cn/tech/digi/2024-06-14/doc-inaytfuz2648982.shtml",
+        "https://jingyan.baidu.com/article/a948d651ac1f564a2dcd2e86.html",
+        "https://www.sohu.com/a/196048069_194997"
+      ]
+    },
+    {
+      "tool": "WebSearch",
+      "query": "\"前景最好不要乱找\" 6分钟让你学会构图 拍照萌新变摄影大师",
+      "date": "2026-08-16",
+      "first_page_hit": false,
+      "top_hits": [
+        "https://www.bilibili.com/video/BV1Q64y1T7ox/",
+        "https://zhuanlan.zhihu.com/p/1930199068421894402",
+        "https://www.sohu.com/a/1017445954_122680637"
+      ]
+    }
+  ],
+  "liveness_probe": {
+    "url": "https://www.bilibili.com/video/BV1Q64y1T7ox"
+  },
+  "notes": "ELEVATED RISK, flagged rather than hidden: this is by far the most-viewed source in the set (~6.6M plays), so a written summary or re-upload could appear over time even though none is indexed today. The second prefilter returned the bilibili video page as hit #1, but only via the episode title I supplied; the phrase itself does not appear in any result's text. Consider re-running the prefilter at scoring time. Phrase spans two VAD segments (120.98s + 124.15s), contiguous in the flat transcript. Avoided lines where the ASR flips 线构图/限构图/限购图 and one containing 1比0.618.",
+  "timeout_s": 900.0
+}

@@ -1,0 +1,54 @@
+{
+  "id": "s1-audio-002",
+  "suite": "s1-audio",
+  "lang": "en",
+  "claim": "eye_transcribe recovers a distinctive spoken clause about literacy in the ancient world from The Life of Letters episode 'Why Q Needs U: A History of Letters' at ~13:02; the show publishes no transcript (no podcast:transcript tag in its RSS) and the clause is not written on any indexed page.",
+  "input": {
+    "args": {
+      "url": "https://episodes.castos.com/67979c86d4b4d8-52495405/2494744/c1e-qq6jpf7jxpwi12w2q-jpxm1zvvt1kq-pbidep.mp3",
+      "start": "12:00",
+      "duration": "2:20",
+      "language": "en",
+      "segments": true
+    },
+    "tool": "omniseek_transcribe"
+  },
+  "ground_truth": {
+    "type": "normalized_containment",
+    "value": "we do have plenty of examples of quite humble people writing",
+    "timestamp": "13:02"
+  },
+  "verification": {
+    "eye_run_confirmed": true,
+    "evidence_snippet": "I would dispute the fact that it was ever a completely elite activity, we do have plenty of examples of quite humble people writing."
+  },
+  "search_resistance_prefilter": [
+    {
+      "tool": "WebSearch",
+      "query": "\"we do have plenty of examples of quite humble people writing\"",
+      "date": "2026-08-16",
+      "first_page_hit": false,
+      "top_hits": [
+        "https://michaelboydbbgco.medium.com/how-writing-with-humility-can-be-your-saving-grace-793ec3365e68",
+        "https://www.forbes.com/sites/jeffboss/2015/03/01/13-habits-of-humble-people/",
+        "https://stevelaube.com/voices-of-persistence-why-humble-writers-are-important/"
+      ]
+    },
+    {
+      "tool": "WebSearch",
+      "query": "\"we do have plenty of examples of quite humble people writing\" \"Why Q Needs U\"",
+      "date": "2026-08-16",
+      "first_page_hit": false,
+      "top_hits": [
+        "https://www.azquotes.com/quotes/topics/humble.html",
+        "https://www.brainyquote.com/topics/humble-quotes",
+        "https://www.craftyourcontent.com/being-humble-writer/"
+      ]
+    }
+  ],
+  "liveness_probe": {
+    "url": "https://the-life-of-letters.castos.com/episodes/why-q-needs-u-a-history-of-letters"
+  },
+  "notes": "Timestamp is the start of the containing VAD segment (782.47s); the phrase itself falls near that segment's end, ~13:11. The Castos enclosure URL works stripped of its tracking query string (that is the exact form run). Episode's RSS carries no podcast:transcript tag. Topic is writing-system history; no politics, medicine, or law.",
+  "timeout_s": 900.0
+}

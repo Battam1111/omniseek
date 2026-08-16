@@ -1,0 +1,54 @@
+{
+  "id": "s1-audio-005",
+  "suite": "s1-audio",
+  "lang": "zh",
+  "claim": "eye_transcribe recovers a distinctive spoken observation about a bird field guide's illustrations from the bilibili video 【书籍分享】观鸟人都看什么\"鸟书\"？ at ~5:43; the line exists only in the audio.",
+  "input": {
+    "args": {
+      "url": "https://www.bilibili.com/video/BV1c547erELX",
+      "start": "4:00",
+      "duration": "2:20",
+      "language": "zh",
+      "segments": true
+    },
+    "tool": "omniseek_transcribe"
+  },
+  "ground_truth": {
+    "type": "normalized_containment",
+    "value": "虽然不多，但是每一种鸟呢都配了这个精美的一个插图",
+    "timestamp": "05:43"
+  },
+  "verification": {
+    "eye_run_confirmed": true,
+    "evidence_snippet": "虽然不多，但是每一种鸟呢都配了这个精美的一个插图，而且有很多官鸟的趣味小知识啊，呃阅读性呢就更加的好。"
+  },
+  "search_resistance_prefilter": [
+    {
+      "tool": "WebSearch",
+      "query": "\"每一种鸟呢都配了这个精美的一个插图\"",
+      "date": "2026-08-16",
+      "first_page_hit": false,
+      "top_hits": [
+        "https://news.qq.com/rain/a/20220813A089PF00",
+        "https://news.sjtu.edu.cn/zhxw/20221219/177891.html",
+        "https://news.qq.com/rain/a/20210412A0EFIJ00"
+      ]
+    },
+    {
+      "tool": "WebSearch",
+      "query": "\"每一种鸟呢都配了这个精美的一个插图\" 观鸟人都看什么鸟书",
+      "date": "2026-08-16",
+      "first_page_hit": false,
+      "top_hits": [
+        "https://book.douban.com/tag/%E8%A7%82%E9%B8%9F",
+        "https://swxjx.ecnu.edu.cn/CN/article/downloadArticleFile.do?attachType=PDF&id=1180",
+        "https://post.smzdm.com/p/a8xmwd70/"
+      ]
+    }
+  ],
+  "liveness_probe": {
+    "url": "https://www.bilibili.com/video/BV1c547erELX"
+  },
+  "notes": "Chosen phrase is clean in both the flat and per-segment transcripts. Deliberately avoided nearby lines where the ASR is unstable (观鸟 rendered as 官鸟, and 这本书这么长 which is likely 这么脏) and lines containing a digit string (148种鸟类). Book-recommendation content, no negative claim about any publisher.",
+  "timeout_s": 900.0
+}

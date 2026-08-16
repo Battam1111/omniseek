@@ -1,0 +1,34 @@
+{
+  "id": "s5-scholar-002",
+  "suite": "s5-scholar",
+  "kind": "top_coauthor",
+  "claim": "eye_coauthors returns Drew Weissman as Katalin Kariko's #1 collaborator by joint-paper count, ahead of #2 Hiromi Muramatsu.",
+  "input": {
+    "args": {
+      "authors": [
+        "Katalin Karikó"
+      ],
+      "hints": [
+        "University of Pennsylvania mRNA vaccine"
+      ]
+    },
+    "tool": "omniseek_coauthors"
+  },
+  "ground_truth": {
+    "type": "dynamic_structural",
+    "upstream_of_record": {
+      "api": "openalex",
+      "field": "meta.count of /works?filter=author.id:A5030598859,author.id:A5068253145; ranking key = top_coauthors[].papers"
+    },
+    "expected_now": "#1 = Drew Weissman (A5068253145), 42 joint works; #2 = Hiromi Muramatsu (A5083166651), 28"
+  },
+  "verification": {
+    "eye_run_confirmed": true,
+    "evidence_snippet": "resolved A5030598859 works_seen=146; top_coauthors[0]={\"name\":\"Drew Weissman\",\"joint\":7.05,\"papers\":42}; [1]={\"name\":\"Hiromi Muramatsu\",\"joint\":3.93,\"papers\":28}",
+    "margin_evidence": "#1=42 papers (joint 7.05), #2=28 papers (joint 3.93) -> 1.50x by papers, 1.79x by ranking score; upstream API confirms 42 vs 28 exactly; #3 G. Boros 22, #4 N. Pardi 17 (both probed)"
+  },
+  "liveness_probe": {
+    "url": "https://api.openalex.org/works?filter=author.id:A5030598859,author.id:A5068253145&per-page=1"
+  },
+  "notes": "Full-corpus coverage (works_seen 146 == works_count 146). Both principals are 2023 Nobel laureates, so the answer names a mega-public figure. Margin sits exactly at the 1.5x floor on raw papers but 1.79x on the key the tool actually ranks by; I probed ranks 3 and 4 upstream (22, 17) to confirm nothing outside the returned list can displace #2."
+}

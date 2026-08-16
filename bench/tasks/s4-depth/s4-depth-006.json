@@ -1,0 +1,43 @@
+{
+  "id": "s4-depth-006",
+  "suite": "s4-depth",
+  "kind": "document",
+  "lang": "en",
+  "claim": "NIST SP 800-90A Rev. 1, Section 10.3.2 (Block_Cipher_df), sets the temporary key K to leftmost(0x00010203...1D1E1F, keylen).",
+  "input": {
+    "args": {
+      "target": "https://nvlpubs.nist.gov/nistpubs/SpecialPublications/NIST.SP.800-90Ar1.pdf",
+      "start_char": 148000,
+      "max_chars": 7000
+    },
+    "tool": "omniseek_read"
+  },
+  "ground_truth": {
+    "type": "normalized_containment",
+    "value": "0x00010203...1D1E1F"
+  },
+  "depth_evidence": {
+    "page": 69
+  },
+  "verification": {
+    "eye_run_confirmed": true,
+    "evidence_snippet": "8. K = leftmost (0x00010203...1D1E1F, keylen). 9. While len (temp) < keylen + outlen, do IV = i || 0outlen - len (i)"
+  },
+  "search_resistance_prefilter": [
+    {
+      "tool": "WebSearch",
+      "query": "NIST SP 800-90A Block_Cipher_df \"0x00010203\" leftmost keylen derivation function constant",
+      "date": "2026-08-16",
+      "first_page_hit": false,
+      "top_hits": [
+        "https://csrc.nist.gov/csrc/media/projects/cryptographic-algorithm-validation-program/documents/drbg/drbgvs.pdf",
+        "https://eprint.iacr.org/2018/349.pdf",
+        "https://nvlpubs.nist.gov/nistpubs/SpecialPublications/NIST.SP.800-90Ar1.pdf"
+      ]
+    }
+  ],
+  "liveness_probe": {
+    "url": "https://nvlpubs.nist.gov/nistpubs/SpecialPublications/NIST.SP.800-90Ar1.pdf"
+  },
+  "notes": "eye_read sheet 69 (printed page 59). Search results covered SP 800-90A generally but none carried the constant; the search tool said it did not surface the specific detail. Shares args with s4-depth-005 (same verified window, different page)."
+}

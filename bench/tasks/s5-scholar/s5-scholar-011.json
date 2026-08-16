@@ -1,0 +1,32 @@
+{
+  "id": "s5-scholar-011",
+  "suite": "s5-scholar",
+  "kind": "citation_conflict",
+  "claim": "One eye_paper_enrich call over the arXiv id and the journal DOI of the SAME ATLAS Higgs-discovery paper surfaces two provenance-distinct citation counts that differ by ~5x, and links the two records via integrity.journal_doi.",
+  "input": {
+    "args": {
+      "ids": [
+        "1207.7214",
+        "10.1016/j.physletb.2012.08.020"
+      ]
+    },
+    "tool": "omniseek_paper_enrich"
+  },
+  "ground_truth": {
+    "type": "dynamic_structural",
+    "upstream_of_record": {
+      "api": "crossref",
+      "field": "message.is-referenced-by-count for 10.1016/j.physletb.2012.08.020, against s2 citationCount for arXiv:1207.7214 (and openalex cited_by_count for the same DOI)"
+    },
+    "expected_now": "arXiv leg (kind=arxiv, Semantic Scholar): 1327; DOI leg (kind=doi, Crossref): 6801 -> 5.1x. Third value from eye_search(sources=['openalex']): cited_by_count=10861 with computed_by='source:openalex/cited_by' -> 8.2x total spread"
+  },
+  "verification": {
+    "eye_run_confirmed": true,
+    "evidence_snippet": "[{\"id\":\"1207.7214\",\"kind\":\"arxiv\",\"citation_count\":1327,\"journal_doi\":\"10.1016/j.physletb.2012.08.020\"},{\"id\":\"10.1016/j.physletb.2012.08.020\",\"kind\":\"doi\",\"citation_count\":6801}]",
+    "margin_evidence": null
+  },
+  "liveness_probe": {
+    "url": "https://api.crossref.org/works/10.1016/j.physletb.2012.08.020"
+  },
+  "notes": "The fact under test is that the disagreement is EXPOSED with provenance, not which number is right; the split is structural (S2 keeps separate preprint and published records). The 1327 value reproduced on two separate runs. Stability caveat, measured: the S2 leg 429s for anonymous callers (I reproduced this on api.semanticscholar.org/graph/v1/paper/arXiv:1207.7214), so that leg can transiently return null and the judge should retry or use a key; the Crossref and OpenAlex legs are keyless and stable. Third value re-fetchable at https://api.openalex.org/works/doi:10.1016/j.physletb.2012.08.020."
+}

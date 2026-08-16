@@ -1,0 +1,39 @@
+{
+  "id": "s3-xling-009",
+  "suite": "s3-crosslingual",
+  "direction": "en_query_zh_doc",
+  "claim": "An English question about MoE gate normalization under loss-free load balancing (sigmoid gate vs softmax with re-normalization after top-k) is decisively answered by a Chinese blog post devoted to exactly that debate; English sources cover the balancing strategy but not the normalization-order comparison as its own subject.",
+  "input": {
+    "args": {
+      "query": "Loss-Free load balancing with a sigmoid MoE gate versus softmax with Re-Norm after top-k"
+    },
+    "tool": "omniseek_search"
+  },
+  "ground_truth": {
+    "type": "identifier_in_topk",
+    "value": "https://kexue.fm/archives/11782",
+    "k": 5,
+    "observed_rank": 2
+  },
+  "verification": {
+    "eye_run_confirmed": true,
+    "evidence_snippet": "《MoE环游记：9、门控归一化之争》(苏剑林, 2026-06-17): '即便在Softmax内讨论,也有着两种略微不同做法:是先Softmax再选Top-k,还是先选Top-k再Softmax呢?后者也可以理解为在选出Top-k后再做一次归一化,即Re-Norm。'"
+  },
+  "search_resistance_prefilter": [
+    {
+      "tool": "WebSearch",
+      "query": "Loss-Free load balancing with a sigmoid MoE gate versus softmax with Re-Norm after top-k",
+      "date": "2026-08-16",
+      "first_page_hit": false,
+      "top_hits": [
+        "https://arxiv.org/pdf/2408.15664",
+        "https://ar5iv.labs.arxiv.org/html/2408.15664",
+        "https://arxiv.org/pdf/2505.19525"
+      ]
+    }
+  ],
+  "liveness_probe": {
+    "url": "https://kexue.fm/archives/11782"
+  },
+  "notes": "Rank 2 on two consecutive eye runs. WebSearch answers from Auxiliary-Loss-Free Balancing (arXiv 2408.15664) and Sigmoid-vs-Softmax gating theory papers; kexue.fm absent. Topic is MoE expert routing/load balance (architecture), NOT RL credit assignment: flagged here explicitly so the red-line check is auditable."
+}

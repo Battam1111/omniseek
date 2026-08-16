@@ -1,0 +1,42 @@
+{
+  "id": "s2-pixels-006",
+  "suite": "s2-pixels",
+  "lang": "en",
+  "claim": "the tool reads text baked into pixels: scanned pages, chart labels, poster text",
+  "input": {
+    "args": {
+      "target": "https://aclanthology.org/2020.coling-demos.3.pdf",
+      "ocr": true,
+      "start_char": 19660,
+      "max_chars": 3000
+    },
+    "tool": "omniseek_read"
+  },
+  "ground_truth": {
+    "type": "normalized_containment",
+    "value": "Parts Broken: rear left propellor"
+  },
+  "verification": {
+    "eye_run_confirmed": true,
+    "evidence_snippet": "almost-out-of-range: true\nNumber of annotations: 4\nNumber of unique tokens: 0\nParts Broken: rear left propellor\nNumber of unique trigrams: 0\nbatter-level: 3%",
+    "pixels_only_check": "plain read lacks the string: confirmed"
+  },
+  "search_resistance_prefilter": [
+    {
+      "tool": "WebSearch",
+      "query": "\"Parts Broken: rear left propellor\" drone annotation interface",
+      "date": "2026-08-16",
+      "first_page_hit": false,
+      "top_hits": [
+        "https://mavicpilots.com/threads/broken-propellor-screw.129875/",
+        "https://mavicpilots.com/threads/mavic-parts-just-how-much-can-your-repair-your-bird.9043/",
+        "https://dronesgator.com/how-to-fix-drone-propellers/"
+      ]
+    }
+  ],
+  "liveness_probe": {
+    "url": "https://aclanthology.org/2020.coling-demos.3.pdf"
+  },
+  "notes": "Second, independent pixel region of the same Figure-2 screenshot: an attribute-value field in the sample data pane (note the source's own misspelling 'propellor', which makes the string highly distinctive). Same exhaustive pixels-only evidence as s2-pixels-005: the full 19,656-char plain text layer was read and the token 'propellor' does not occur anywhere in it. The WebSearch assistant explicitly reported the exact phrase is absent from indexed sources.",
+  "timeout_s": 600.0
+}

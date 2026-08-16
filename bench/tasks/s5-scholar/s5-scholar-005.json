@@ -1,0 +1,31 @@
+{
+  "id": "s5-scholar-005",
+  "suite": "s5-scholar",
+  "kind": "retraction",
+  "claim": "eye_paper_enrich reports integrity.retracted=true and surfaces a retraction notice for the 1998 Lancet MMR paper DOI 10.1016/S0140-6736(97)11096-0.",
+  "input": {
+    "args": {
+      "ids": [
+        "10.1016/S0140-6736(97)11096-0"
+      ]
+    },
+    "tool": "omniseek_paper_enrich"
+  },
+  "ground_truth": {
+    "type": "dynamic_structural",
+    "upstream_of_record": {
+      "api": "crossref",
+      "field": "message.updated-by[].type (source: retraction-watch) and message.is-referenced-by-count"
+    },
+    "expected_now": "integrity.retracted=true, integrity.notices=[\"correction\",\"retraction\"], citation_count=1997, is_oa=false"
+  },
+  "verification": {
+    "eye_run_confirmed": true,
+    "evidence_snippet": "{\"id\":\"10.1016/S0140-6736(97)11096-0\",\"kind\":\"doi\",\"citation_count\":1997,\"integrity\":{\"retracted\":true,\"notices\":[\"correction\",\"retraction\"]}}",
+    "margin_evidence": null
+  },
+  "liveness_probe": {
+    "url": "https://api.crossref.org/works/10.1016/S0140-6736(97)11096-0"
+  },
+  "notes": "Probe read directly: updated-by contains {DOI:10.1016/s0140-6736(10)60175-4, type:'retraction', label:'Retraction', source:'retraction-watch'} plus a 2004 correction, so the eye's notices list maps 1:1 onto updated-by[].type. citation_count is dynamic (grows); judge on the status flag and notice set, and treat the count as a range check."
+}
