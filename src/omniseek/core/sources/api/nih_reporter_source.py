@@ -28,7 +28,7 @@ advanced_text_search). explicit_only: US-only federal biomedical grants are a
 named, deliberate drill (by topic / PI / organization), not broad-fan-out fodder.
 
 Recon trail: the sandbox DNS-blackholes api.reporter.nih.gov, so field names are
-from the spec/probe handed to the source-builder; the eye host live-verifies the
+from the spec/probe handed to the source-builder; OmniSeek host live-verifies the
 POST after deploy.
 """
 

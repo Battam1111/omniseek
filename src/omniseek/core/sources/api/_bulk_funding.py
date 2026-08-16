@@ -1,4 +1,4 @@
-"""Shared helpers for the eye's bulk-file FUNDING sources (the NSERC pattern, reused by SSHRC/CIHR).
+"""Shared helpers for OmniSeek's bulk-file FUNDING sources (the NSERC pattern, reused by SSHRC/CIHR).
 
 A funding council that publishes its awards ONLY as a bulk per-fiscal-year file (CSV/XLSX, no query
 API) gets this treatment: fetch the (static, annual) file at most monthly, keep ONLY the AI/ML/NLP

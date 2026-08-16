@@ -2,7 +2,7 @@
 
 NSERC (Natural Sciences and Engineering Research Council) is Canada's main science-funding body. Its
 open data is published ONLY as bulk per-fiscal-year CSV files (no query API, no DataStore) — FY2024
-Expenditures is ~56MB / ~62k award rows. This is the eye's FIRST Canadian funding source (it had US
+Expenditures is ~56MB / ~62k award rows. This is OmniSeek's FIRST Canadian funding source (it had US
 NSF/NIH but no CA funding): for a PhD heading to a Canadian postdoc/faculty track, knowing which
 Canadian labs/PIs hold NSERC grants in NLP/ML — amounts, institutions, programs, keywords — is direct
 career-targeting intel web search can't return as structured records.
@@ -11,7 +11,7 @@ Razor (STRUCTURE): the per-award record (recipient, institution, amount, program
 beats web search's prose. Telos: Canada-bound NLP researcher; the CS/AI grant landscape = where the
 funded work + hireable labs are.
 
-DESIGN — the eye's bulk-file pattern (reusable for SSHRC/CIHR later):
+DESIGN — OmniSeek's bulk-file pattern (reusable for SSHRC/CIHR later):
   * The 56MB CSV is a STATIC annual snapshot, so we fetch it at most monthly (cache_ttl 30d) and only
     on a cache miss. We never re-fetch per query.
   * On refresh we keep ONLY the telos slice — rows whose ResearchSubjectEN is Computer Science OR whose

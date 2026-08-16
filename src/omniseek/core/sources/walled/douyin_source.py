@@ -5,7 +5,7 @@
 real-time creator commentary live here in video-native form that zhihu (text Q&A) / xiaohongshu
 (lifestyle notes) / 一亩三分地 (NA tech-immigration forum) do NOT duplicate. UNWALL mode: the web
 search endpoint is login-gated (guest → status_code 2483 "请先登录"), so a disposable 小号 logs in
-ONCE via VNC into an ISOLATED Chrome profile (port 9225, ~/.omniseek/chrome-douyin) and the eye
+ONCE via VNC into an ISOLATED Chrome profile (port 9225, ~/.omniseek/chrome-douyin) and OmniSeek
 reuses that session — the SAME pattern as xiaohongshu's 9223.
 
 Mechanism (verified 2026-06-22, decoded from MediaCrawler media_platform/douyin/client.py):

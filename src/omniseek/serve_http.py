@@ -2,7 +2,7 @@
 
 ONE always-on process (launchd com.omniseek.organ.eye-http) that every agent / window connects to
 over the network, instead of each Claude window spawning its own stdio-over-ssh server (N
-heavy processes, a cold 86-adapter load each). Token-gated, because the eye drives
+heavy processes, a cold 86-adapter load each). Token-gated, because OmniSeek drives
 credentialed + logged-in-browser tools: it must NEVER serve open.
 
 Run:    python -m omniseek.serve_http      (env: OMNISEEK_HTTP_HOST / OMNISEEK_HTTP_PORT)
@@ -27,7 +27,7 @@ from omniseek.server import mcp
 
 logger = logging.getLogger("omniseek.serve_http")
 
-# Bind LOOPBACK by default: the eye drives credentialed + logged-in-browser tools, so a stranger's
+# Bind LOOPBACK by default: OmniSeek drives credentialed + logged-in-browser tools, so a stranger's
 # fresh deploy must NOT be reachable off-box. A deployer who wants LAN/tailnet access sets
 # OMNISEEK_HTTP_HOST=0.0.0.0 explicitly (and owns putting it behind a firewall / reverse proxy).
 HOST = os.environ.get("OMNISEEK_HTTP_HOST", "127.0.0.1")
@@ -87,7 +87,7 @@ mcp.settings.transport_security = TransportSecuritySettings(
     enable_dns_rebinding_protection=_IS_LOOPBACK)
 if not _IS_LOOPBACK:
     logger.warning(
-        "OMNISEEK_HTTP_HOST=%s binds NON-loopback: the eye is reachable off-box. Ensure a "
+        "OMNISEEK_HTTP_HOST=%s binds NON-loopback: OmniSeek is reachable off-box. Ensure a "
         "firewall / reverse proxy + keep the bearer token secret (it drives credentialed tools).",
         HOST)
 
@@ -96,7 +96,7 @@ if not _IS_LOOPBACK:
 # invalidates the live agent's session id and the client dies with "Session terminated" for the
 # REST of its window (an agent has no reconnect verb; only the human can re-attach). That is the
 # eye punishing its own improvement: each fix costs the driver the tool.
-# The session bought the eye nothing to begin with. Sessions exist for server-initiated traffic
+# The session bought OmniSeek nothing to begin with. Sessions exist for server-initiated traffic
 # (sampling, elicitation, progress notifications, SSE resumability); every eye tool is a pure
 # request -> response over PROCESS-global state (registry, caches, guards), and not one takes a
 # Context or pushes to the client. So statelessness loses no capability, it only drops the handle
@@ -197,7 +197,7 @@ def main() -> None:
     except Exception as exc:  # noqa: BLE001 — the index is best-effort; never block boot
         logger.warning("recall index disabled (init failed): %s", exc)
     # In-process JOB scheduler (P9, generalizing the P6 sensor scheduler): every scheduled piece of
-    # the eye's self-maintenance (the sensor tick + the transplanted watchdogs / curator / audit /
+    # OmniSeek's self-maintenance (the sensor tick + the transplanted watchdogs / curator / audit /
     # digest) runs as a declarative row on ONE daemon loop in the process that writes memory. Start it
     # HERE (the writer process), AFTER writes are enabled above, so its WRITES_ENABLED guard passes; a
     # cron / smoke / CLI import never reaches this call site and its guard refuses anyway. Fail-open: a
@@ -209,7 +209,7 @@ def main() -> None:
                         _jobs.TICK_SECONDS, len(_jobs.registry()))
     except Exception as exc:  # noqa: BLE001 — the scheduler is best-effort; never block boot
         logger.warning("job scheduler not started (%s)", exc)
-    logger.info("OmniSeek eye HTTP service on %s:%s (token-gated; MCP at /mcp)", HOST, PORT)
+    logger.info("OmniSeek HTTP service on %s:%s (token-gated; MCP at /mcp)", HOST, PORT)
     uvicorn.run(app, host=HOST, port=PORT, log_level="info")
 
 

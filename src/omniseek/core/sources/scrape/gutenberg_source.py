@@ -3,7 +3,7 @@
 Project Gutenberg is the canonical corpus of >70k public-domain books (literature,
 philosophy, history, classics, foundational texts). Gutendex (gutendex.com) is a
 keyless JSON wrapper over the Gutenberg catalog: a single search endpoint returns
-book metadata plus the actual download URLs (incl. plain-text), so the eye can both
+book metadata plus the actual download URLs (incl. plain-text), so OmniSeek can both
 surface a book AND hand the agent the link to UNWALL the full text.
 
 API (keyless, no quota): GET https://gutendex.com/books/?search=<query>

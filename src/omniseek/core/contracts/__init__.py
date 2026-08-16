@@ -1,1 +1,1 @@
-"""Versioned runtime contracts emitted by the Eye."""
+"""Versioned runtime contracts emitted by OmniSeek."""

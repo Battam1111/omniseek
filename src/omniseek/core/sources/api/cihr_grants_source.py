@@ -4,10 +4,10 @@ The third of Canada's three federal research councils (NSERC sciences, SSHRC hum
 CIHR funds health research, where the NLP/ML-relevant work is clinical NLP, medical machine learning,
 health data science, predictive models on EHR/clinical text — a slice the other two councils don't
 cover. Open data is bulk per-fiscal-year XLSX (FY2025-26 ~12MB, no DataStore / query API; openpyxl
-ingest, NEW for the eye). The grant sheet (G&A_S&B) carries ApplicationTitle / Abstract / Keywords /
+ingest, NEW for OmniSeek). The grant sheet (G&A_S&B) carries ApplicationTitle / Abstract / Keywords /
 research categories, so the AI/NLP slice is cleanly extractable.
 
-Acquisition (the eye's bulk-file pattern, shared via _bulk_funding):
+Acquisition (OmniSeek's bulk-file pattern, shared via _bulk_funding):
   * The latest "CIHR Investments YYYY-YY" XLSX url is resolved from CKAN ``package_show`` each refresh
     (read the resource url, never hardcode the UUID).
   * Fetch the static annual XLSX at most monthly (cache_ttl 30d), stream the G&A_S&B sheet (openpyxl

@@ -17,7 +17,7 @@ Topology (why the proxy runs on the trusted host, not inside the jail):
 
 The BROWSER (which executes attacker-controlled JS/WASM) is contained in the colima VM whose
 egress firewall permits only this proxy. The PROXY is trusted eye code that reuses _netguard,
-so it is safe to run host-side; that keeps the eye package out of the jail and the SSRF
+so it is safe to run host-side; that keeps OmniSeek package out of the jail and the SSRF
 decision single-homed. A blocked request is LOGGED (the curator sees what the candidate tried).
 
 Run: ``python -m omniseek.core.curator.probe_proxy --port 8899 [--allow-hosts a.com,b.com]
@@ -32,7 +32,7 @@ import socket
 from typing import Optional
 
 try:
-    from omniseek.core import _netguard  # normal: imported as part of the eye package (host side)
+    from omniseek.core import _netguard  # normal: imported as part of OmniSeek package (host side)
 except ImportError:  # minimal jail container: _netguard.py is mounted flat beside this file
     import _netguard  # type: ignore  # noqa: F401
 

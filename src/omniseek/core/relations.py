@@ -1,7 +1,7 @@
 """Relationship reconstruction — typed, public-artifact-backed EDGE FACTS. No judgment.
 
 A connection between two people is not a scalar; it is a typed, directed, weighted,
-time-stamped, evidence-backed edge, and co-authorship is only ONE type. The eye
+time-stamped, evidence-backed edge, and co-authorship is only ONE type. OmniSeek
 supplies the mechanical edge FACTS per layer; the AGENT overlays the layers and
 decides what a connection MEANS (advisor vs peer, real tie vs list-mate). This
 module is the channel; the agent is the network cartographer (same split as
@@ -31,7 +31,7 @@ dossier + existing eye tools (field_skeleton, github, bluesky, exa, cdp_fulltext
 omniseek_add_url). See the capability doc.
 
 Read-only over public scholarly data (OpenAlex / Semantic Scholar), the same
-standard bibliometric substrate the rest of the eye already maps (field_skeleton,
+standard bibliometric substrate the rest of OmniSeek already maps (field_skeleton,
 researcher_watch, csrankings, org_watch).
 """
 
@@ -714,7 +714,7 @@ def coauthors(authors: list[str], source: str = "openalex", hints: Optional[list
         # joint = 1/n-weighted collaboration strength (the RANK); papers = raw count of shared works.
         # joint = 1/n-author-weighted collaboration strength (the RANK); papers = raw count of
         # shared works. The two together let the reader SEE a big-list-paper artifact (high papers,
-        # low joint) and judge it, so the eye reports the facts and does not editorialize.
+        # low joint) and judge it, so OmniSeek reports the facts and does not editorialize.
         n["top_coauthors"] = [{"id": rep_idc[k].most_common(1)[0][0], "name": rep[k], "joint": round(ct, 2), "papers": cp[k]}
                               for k, ct in c.most_common(12)]
         neigh.append(c)

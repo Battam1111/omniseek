@@ -1,4 +1,4 @@
-"""Lexical relevance: the eye's ONE mechanical text-match scorer.
+"""Lexical relevance: OmniSeek's ONE mechanical text-match scorer.
 
 Replaces raw term-counting (3*title.count(t) + body.count(t)), whose measured
 failure modes were:

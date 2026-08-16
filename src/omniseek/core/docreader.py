@@ -3,7 +3,7 @@ path or URL) into readable, structured text + an HONEST media inventory.
 
 The third perception primitive: web pages (omniseek_add_url), speech (omniseek_transcribe),
 and now documents-as-files. Built P39 (2026-06-10) from a real 颜色框.pptx
-(a 28-slide, 66-image figure-style reference deck): the eye digests uploads the
+(a 28-slide, 66-image figure-style reference deck): OmniSeek digests uploads the
 way it transcribes audio.
 
 Engine choice (tested on THAT real deck, not on benchmarks): python-pptx vs
@@ -24,11 +24,11 @@ image half is delivered to the agent's own vision two ways:
     wraps them as MCP Image content) — no out-of-band scp. The cheap default is a
     CONTACT SHEET (downscaled thumbnails tiled into one labeled montage) so the
     agent triages 30 images for the cost of one, then pulls the few that matter at
-    full res. The eye renders pixels; INTERPRETING them is the agent's vision —
+    full res. OmniSeek renders pixels; INTERPRETING them is the agent's vision —
     never a server-side captioner (a weaker model pre-chewing for the real one is
     the fabrication trap). eye = render + structure; agent = see + judge.
 
-Transport: the eye runs on the host; the user's files live on client machines.
+Transport: OmniSeek runs on the host; the user's files live on client machines.
 Convention: ``scp "<file>" <eye-host>:omniseek-inbox/`` (any window can),
 then call with ``omniseek-inbox/<name>`` — relative paths resolve against the
 service user's HOME. Exports land in ``omniseek-inbox/.exports/<stem>/``.
@@ -463,7 +463,7 @@ def read_document(src: str, start_char: int = 0, max_chars: int = 24000,
 
 # ===========================================================================
 # Image view (omniseek_view_doc_images) — deliver embedded images to the agent's
-# vision IN-BAND. Tier 4 of the document modality: the eye renders pixels, the
+# vision IN-BAND. Tier 4 of the document modality: OmniSeek renders pixels, the
 # agent sees. Returns raw PNG bytes; server.py wraps them as MCP Image content.
 # ===========================================================================
 
@@ -601,7 +601,7 @@ def _pil_open_rgb(data: bytes):
 def view_image_urls(urls, max_images: int = 8, max_dim: int = _VIEW_MAX_DIM) -> dict:
     """Download arbitrary image URLs → downscaled PNG bytes for IN-BAND delivery (server.py wraps
     them as MCP Image content). The URL counterpart of view_images (which works off a parsed
-    document file): for SEEING the post images the eye surfaces in a doc's `media` field
+    document file): for SEEING the post images OmniSeek surfaces in a doc's `media` field
     (xiaohongshu / zhihu / etc. — where the 干货 often lives) WITHOUT a download/scp dance.
     Browser-ish headers + a Referer so image CDNs (rednotecdn / xhscdn) serve us. Returns
     {"images": [{url, data:bytes, format} | {url, error}], "count": N_ok}."""

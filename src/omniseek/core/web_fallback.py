@@ -3,7 +3,7 @@
 ``fetcher.fetch_url`` (the ``omniseek_add_url`` path) tries every registered adapter until one
 CLAIMS the URL. ~167 adapters cover specific sources, but there is NO generic "read any web
 page" adapter, so a URL outside every adapter (a Next.js / SPA marketing page, a JS-walled
-doc, an arbitrary blog) returns ``matched=false`` today: the eye does not reach it at all.
+doc, an arbitrary blog) returns ``matched=false`` today: OmniSeek does not reach it at all.
 
 This is the LAST RESORT, invoked by ``fetch_url`` ONLY after the adapter loop claims nothing,
 so it costs the happy path zero: a claiming adapter returns first and this never runs.

@@ -1,4 +1,4 @@
-"""Durable append-only observation journal for the Eye recall layer.
+"""Durable append-only observation journal for OmniSeek recall layer.
 
 The journal is the durable source of observations. SQLite is a materialized view and may be
 replayed from these events. This module deliberately contains no retrieval or ranking policy.

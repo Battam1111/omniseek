@@ -13,7 +13,7 @@ dedup, raw metadata, one cheap signal (in-field in-degree) — over a CHOSEN gra
 It does NOT judge — no survey filtering, no relevance gating, no title repair, no clustering.
 The AGENT routes (pick the source whose graph has THIS field's data; for a young field, often
 the best "graph" is a human-curated survey/awesome-list it fetches itself) and does ALL the
-cartography. The eye is the channel; the agent is the cartographer.
+cartography. OmniSeek is the channel; the agent is the cartographer.
 """
 
 from __future__ import annotations
@@ -157,7 +157,7 @@ def _s2_assemble(query: Optional[str], seeds: Optional[list[str]],
          "externalIds", "fieldsOfStudy"]
     # edge-level fields, valid ONLY on citation/reference calls. contextsWithIntent carries the
     # RAW citing SENTENCE (+ S2's own per-sentence intents) so the AGENT can judge a citation's
-    # POLARITY (supporting / contrasting / mentioning): a JUDGMENT the eye must NOT make. We fetch
+    # POLARITY (supporting / contrasting / mentioning): a JUDGMENT OmniSeek must NOT make. We fetch
     # contexts too as a fallback for older S2 lib versions that lack the paired field.
     F_EDGE = F + ["intents", "isInfluential", "contextsWithIntent", "contexts"]
     works: dict[str, dict] = {}
@@ -339,8 +339,8 @@ def _build(seed_ids: list[str], works: dict, max_nodes: int, query: Optional[str
             if w.get("_intents"):
                 node["intent"] = w["_intents"]
             # The RAW citing sentence(s): the EVIDENCE for citation POLARITY (supporting /
-            # contrasting / mentioning). The eye exposes the FACT; the AGENT reads the snippet and
-            # judges polarity itself (no classifier in the eye). intents is S2's own per-sentence
+            # contrasting / mentioning). OmniSeek exposes the FACT; the AGENT reads the snippet and
+            # judges polarity itself (no classifier in OmniSeek). intents is S2's own per-sentence
             # label (background/methodology/result), a FACT, NOT a polarity verdict. Often empty
             # when S2 never parsed the citing PDF.
             if w.get("_contexts"):
@@ -357,7 +357,7 @@ def _build(seed_ids: list[str], works: dict, max_nodes: int, query: Optional[str
     edges = edges[:_EDGES_CAP]
     # BUDGETED PROJECTION (dogfood friction #11): the RAW citing sentences (`contexts`) are heavy polarity
     # evidence -- field_skeleton used to inline EVERY node's full contexts, a ~150k-char dump that overflowed
-    # the tool channel, violating the eye's "budgeted projections, never dump" discipline. Keep the citing
+    # the tool channel, violating OmniSeek's "budgeted projections, never dump" discipline. Keep the citing
     # sentences ONLY for the top nodes worth reading (by in_degree order, seeds first), capped in count + length;
     # for the rest, drop them for a lean `has_contexts` flag (drill THAT paper for its full citing sentences).
     for _i, _n in enumerate(nodes):
@@ -593,7 +593,7 @@ def recommend(seeds: Optional[list[str]] = None, limit: int = 20, fresh: bool = 
     """Semantically-similar papers to the seed(s) via Semantic Scholar's recommendation model
     (SPECTER embeddings + co-citation) — discovery BEYOND keyword search + the citation graph,
     including recent work the graph hasn't caught up to. A THIN channel: we build no embeddings;
-    S2 already did. The AGENT re-judges the flat list. (The eye-way of "semantic search": route
+    S2 already did. The AGENT re-judges the flat list. (OmniSeek-way of "semantic search": route
     to a source that already does it, don't reinvent Exa.)"""
     seeds = [s for s in (seeds or []) if s]
     if not seeds:

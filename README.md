@@ -9,7 +9,9 @@
 
 **Your agent seeks what search can't find.**
 
-Self-hosted perception MCP server. Hundreds of curated sources, one connection.
+It hears. It sees. It reads behind logins. It crosses languages. It remembers.
+
+<sub>Self-hosted perception MCP server · one connection</sub>
 
 [![CI](https://github.com/Battam1111/omniseek/actions/workflows/ci.yml/badge.svg)](https://github.com/Battam1111/omniseek/actions/workflows/ci.yml)
 &nbsp;[![License](https://img.shields.io/badge/License-Apache_2.0-3B82F6?style=flat-square)](./LICENSE)
@@ -31,8 +33,8 @@ OmniSeek reaches underneath: the podcast someone spoke into but nobody transcrib
 
 <div align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="assets/demo-dark.png">
-    <img src="assets/demo-light.png" alt="A real investigation: one search fans out and reports which login-walled source holds more; the agent drills through the wall, reads the comment section, and reads the posts whose text lives inside images. Every line is from a live session." width="760">
+    <source media="(prefers-color-scheme: dark)" srcset="assets/demo-en-dark.png">
+    <img src="assets/demo-en-light.png" alt="One real investigation: an English question about a changed rule. The surface quotes the rule; OmniSeek comes back with a Chinese explainer transcribed, login-walled first-person timelines, the workaround buried in a comment thread, and the dissenting video note, each line attributed.">
   </picture>
 </div>
 

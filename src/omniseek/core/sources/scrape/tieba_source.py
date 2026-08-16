@@ -2,7 +2,7 @@
 
 Tieba is the biggest interest-based forum in the Chinese internet: every topic gets a
 "吧" (a forum), and the popular ones are enormous (考研 / postgrad-exam alone is ~43M
-posts, 5.7M followers). It is the long-tail community voice the eye otherwise misses for
+posts, 5.7M followers). It is the long-tail community voice OmniSeek otherwise misses for
 CN-language topics: exam prep, schools, games, fandoms, regional life, niche hobbies.
 
 The DESKTOP site 403s automation, but the MOBILE JSON endpoints answer keylessly with a
@@ -31,7 +31,7 @@ _to_documents = the forum/thread -> Document maps). ``rank`` stays default-False
 search/thread returns server-relevance order for the query, which we keep byte-faithful.
 
 These are public mobile endpoints with a mobile UA, NOT the open-API ``http`` helper's UA
-contract (Baidu gates the OmniSeekEye UA), so this adapter uses httpx directly with a mobile
+contract (Baidu gates the OmniSeek UA), so this adapter uses httpx directly with a mobile
 User-Agent. No new dependency: httpx is already a core dep.
 """
 
@@ -57,7 +57,7 @@ FORUM_PAGE = "https://tieba.baidu.com/f?kw="       # +<forum_name>
 TIMEOUT = 15
 
 # A plain mobile User-Agent: the desktop site 403s, the mobile JSON endpoints answer with
-# this. The shared http.USER_AGENT (OmniSeekEye/0.1) is gated by Baidu, so we cannot route
+# this. The shared http.USER_AGENT (OmniSeek/0.1) is gated by Baidu, so we cannot route
 # through the open-API helper here (per its module docstring: walled/anti-bot sources keep
 # their own headers).
 _MOBILE_UA = (
@@ -122,7 +122,7 @@ class TiebaAdapter(BaseScrapeAdapter):
         ``httpx.get(...).json()`` egress swaps to the shared async leaf ``await http.aget_json`` (this is a
         standard keyless JSON GET, so it needs nothing httpx.aget cannot do; the leaf adds the shared pool +
         SSRF guard + cache_only + 30MB cap + diag.note evidence tap for free, and its pooled async client
-        already carries follow_redirects=True). The mobile UA overrides the shared OmniSeekEye UA via the
+        already carries follow_redirects=True). The mobile UA overrides the shared OmniSeek UA via the
         headers kwarg (Baidu gates the shared UA)."""
         qs = "&".join(f"{k}={quote(str(v))}" for k, v in params.items())
         full = f"{url}?{qs}"

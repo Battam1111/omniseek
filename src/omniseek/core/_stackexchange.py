@@ -60,7 +60,7 @@ _SE_KEY = (auth.load("stackexchange") or {}).get("key") or ""
 
 # ── shared quota / backoff circuit breaker ────────────────────────────────────
 # All six SE sources share api.stackexchange.com's KEYLESS per-IP quota (small: ~300/day, NOT the
-# 10k a registered app key gets). Under the eye's multi-agent broad fan-out, ONE broad search fires
+# 10k a registered app key gets). Under OmniSeek's multi-agent broad fan-out, ONE broad search fires
 # 6 SE searches + per-question answer fetches (build_documents), so the quota empties fast and the
 # API then returns HTTP 429 / a `backoff` throttle. Retried per-source-per-call that became a 429
 # STORM (measured: 51+ log lines + ~20s latency on every later broad search + a health flap). A

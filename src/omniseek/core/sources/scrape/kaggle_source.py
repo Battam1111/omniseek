@@ -21,7 +21,7 @@ so the adapter slices to ``limit``.
 Thin subclass over BaseScrapeAdapter: the cache check / atomic set_docs / self-registration
 ritual lives in the base; this adapter only declares its facets and fills the two hooks.
 ``rank`` stays default-False — the endpoint returns the site's own relevance order for the
-search term, and the eye's ranked search re-scores across sources when it needs to.
+search term, and OmniSeek's ranked search re-scores across sources when it needs to.
 """
 
 from __future__ import annotations

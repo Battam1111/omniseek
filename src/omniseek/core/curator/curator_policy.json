@@ -8,7 +8,7 @@
   "cold_start": {
     "enabled": false,
     "budget": 3,
-    "_doc": "Cold-start web-seeding (a coverage_targets cell whose domain has NO in-corpus source, so the citation graph cannot reach it) is the ONLY non-trust-inherited path. Ships OFF. When on, it is hard-capped at 'budget' seed searches per run, routed through the eye's own bounded fetcher / safe_fetch, and emits URL-less STUBS only -- NEVER an auto-admit (global lesson 4/5: do not trust cold-start from assumption; validate a manual round first)."
+    "_doc": "Cold-start web-seeding (a coverage_targets cell whose domain has NO in-corpus source, so the citation graph cannot reach it) is the ONLY non-trust-inherited path. Ships OFF. When on, it is hard-capped at 'budget' seed searches per run, routed through OmniSeek's own bounded fetcher / safe_fetch, and emits URL-less STUBS only -- NEVER an auto-admit (global lesson 4/5: do not trust cold-start from assumption; validate a manual round first)."
   },
 
   "M_zero_new_streak": 3,

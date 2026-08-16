@@ -1,6 +1,6 @@
 """SSRF-hardened fetch for an ATTACKER-INFLUENCEABLE URL: the core-leaf pinned-per-hop fetcher.
 
-``safe_fetch`` is the eye's ONE hardened fetch primitive for a URL an adversary chose: a
+``safe_fetch`` is OmniSeek's ONE hardened fetch primitive for a URL an adversary chose: a
 candidate-source URL the curator probes, OR an arbitrary user/page URL no adapter claims that
 web_fallback must read. It OWNS its httpx client (cookieless, redirect-disabled, trust_env=False)
 instead of wrapping http._request_capped (which forces the shared pool + follow_redirects=True + a
@@ -118,7 +118,7 @@ def safe_fetch(url: str, *, method: str = "GET", render: bool = False,
     for signature parity but P1 NEVER drives a browser here (anonymous stranger only, no CDP).
 
     SAFE_FETCH BOUNDARY (spec 8c, SSRF pass): safe_fetch hardens the PROBE-TIME fetch ONLY -- the
-    one fetch the eye makes at a candidate URL before any verdict. The POST-ADMISSION recurring
+    one fetch OmniSeek makes at a candidate URL before any verdict. The POST-ADMISSION recurring
     fetch a family adapter makes once a source is live (org_watch / page_watch / news_scraper /
     render) goes through the NORMAL fetcher and is NOT IP-pinned by this guard. That is exactly why
     those families are in apply._NEVER_AUTO_FAMILIES (never auto-applied) and why an admit of one

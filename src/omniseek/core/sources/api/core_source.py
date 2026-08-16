@@ -1,12 +1,12 @@
 """CORE (core.ac.uk): the world's largest aggregator of open-access research,
-and the eye's only source of EXTRACTED FULL-TEXT paper bodies.
+and OmniSeek's only source of EXTRACTED FULL-TEXT paper bodies.
 
 Why this exists, against the existing paper adapters:
 - arxiv / semantic_scholar / openalex / crossref return METADATA only
   (title + abstract + citations + venue). They never carry the paper body.
 - CORE harvests the open-access PDFs themselves and extracts the text, so a
   work returned here carries ``fullText`` (the whole document as plain text)
-  plus a working OA download URL. That body is content the eye gets from NO
+  plus a working OA download URL. That body is content OmniSeek gets from NO
   other source: the differentiator this adapter adds.
 
 API (https://core.ac.uk/documentation/api ; v3):

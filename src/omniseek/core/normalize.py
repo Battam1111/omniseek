@@ -63,7 +63,7 @@ LenientInt = Annotated[int, BeforeValidator(_coerce_int)]
 LenientBool = Annotated[bool, BeforeValidator(_coerce_bool)]
 
 
-# ── block detection (borrowed: crawl4ai antibot_detector + the eye's own 风控 texts) ────────────
+# ── block detection (borrowed: crawl4ai antibot_detector + OmniSeek's own 风控 texts) ────────────
 # A fetch that comes back EMPTY but whose RAW page matches one of these is a BLOCK, not authoritative
 # 'no results'. Lets an adapter LABEL a [] as a block (surface + pace/retry) instead of silently
 # treating it as 'nothing there' — the gap-③ false-empty's detect-half.
@@ -171,7 +171,7 @@ def schema_extract(html: str, schema: dict) -> list[dict]:
 
 class Signal(BaseModel):
     """One named, source-reported mechanical FACT about a document: a count, a rating, a salary.
-    Not a judgment. The eye records what a source asserted (with provenance); the agent / the
+    Not a judgment. OmniSeek records what a source asserted (with provenance); the agent / the
     ranker decide what it is worth. Replaces the old fused score scalar (see docs/PHILOSOPHY.md)."""
 
     model_config = ConfigDict(frozen=True)

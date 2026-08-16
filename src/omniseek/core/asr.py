@@ -606,7 +606,7 @@ def _douyin_audio(url: str) -> tuple[Optional[str], dict]:
 
 
 def _remember_transcript(rec: dict) -> None:
-    """Perception-produced text enters the eye's MEMORY (2026-07-05): a transcript is text the eye
+    """Perception-produced text enters OmniSeek's MEMORY (2026-07-05): a transcript is text OmniSeek
     itself produced, so it must be findable later ("which podcast said X") exactly like fetched
     text — before this, a transcript lived only in the URL-keyed cache, unreachable by content.
     Full-lane ingest via recall.writer.ingest_produced (same single-writer queue; WRITES_ENABLED /

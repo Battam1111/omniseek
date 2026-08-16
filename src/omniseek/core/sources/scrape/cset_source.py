@@ -20,7 +20,7 @@ self-registration ritual lives in the base; this adapter declares its facets and
 fills the two hooks (_raw_fetch = the /posts search GET; _to_documents = the
 post -> report-Document map). ``rank`` stays default-False: the WP search
 endpoint already returns server relevance order, so we keep it byte-faithful and let
-the eye's ranked search re-score across sources when it needs cross-source relevance.
+OmniSeek's ranked search re-score across sources when it needs cross-source relevance.
 """
 
 from __future__ import annotations
@@ -41,7 +41,7 @@ API_URL = "https://cset.georgetown.edu/wp-json/wp/v2/posts"
 TIMEOUT = 15
 # WordPress 'search' relevance is weak (LIKE-based + date-skewed), so a narrow per_page can
 # miss CSET's own on-topic reports while returning off-topic recent posts (proven in a live
-# WebSearch head-to-head). Pull a WIDE candidate pool, then re-rank locally with the eye's
+# WebSearch head-to-head). Pull a WIDE candidate pool, then re-rank locally with OmniSeek's
 # shared BM25 scorer and cap to the caller's limit (see _to_documents).
 _CANDIDATE_POOL = 30
 
@@ -91,7 +91,7 @@ class CSETAdapter(BaseScrapeAdapter):
             if doc is not None:
                 docs.append(doc)
         # WP 'search' is LIKE-based + date-skewed (proven to dump off-topic recent posts while
-        # missing CSET's own on-topic reports). Re-rank the wide pool with the eye's shared BM25
+        # missing CSET's own on-topic reports). Re-rank the wide pool with OmniSeek's shared BM25
         # scorer (title 3x + content 1x), keep only query matches, cap to limit -> a real
         # relevance search. A term-less query keeps WP's own order (relevance.query_terms empty).
         if docs and relevance.query_terms(query):

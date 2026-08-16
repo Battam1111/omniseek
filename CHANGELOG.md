@@ -10,16 +10,33 @@ history and are kept as written.
 
 ### Fixed
 
+- **The job scheduler now starts in docker and any plain checkout.** Two deploy-shaped
+  assumptions silently killed it for public users: the heartbeat identity insisted on a
+  git-archive-substituted commit hash, and the host boot id shelled out to macOS `sysctl`.
+  A stranger's `docker compose up` therefore ran with no sensor schedules, no source-health
+  lane, no curator tick, announced only by one boot warning. Identity now falls back to a
+  deterministic 40-hex fingerprint of the package sources (the strict validator stays for
+  the release path), and the boot id falls back to Linux `/proc/sys/kernel/random/boot_id`.
+  Same frozen heartbeat schema, no contract bump.
 - Pinned `mcp[cli]>=1.0.0,<2`. mcp 2.0 (2026-08) removed `mcp.server.fastmcp`, so a FRESH
   install (docker build, new venv) died at import while every existing venv kept working.
   CI's docker-boot job caught it on the rename push; reproduced red and verified green in a
   clean venv before pinning.
 
+### Changed (brand on runtime surfaces)
+
+- No runtime-visible string speaks the private organ name anymore: "the eye" in server
+  instructions and tool descriptions (strings every MCP client reads) is now OmniSeek, the
+  boot log line says OmniSeek, identity errors dropped their prefix, and the outward
+  User-Agent token is `OmniSeek/1.0`. Bare "eye" survives only in comments and docstrings
+  that never render. The sync residue gate now rejects "the eye" so it cannot come back.
+
 ### Changed
 
-- README and `docs/examples.md` rebuilt around one real investigation (four walls: language,
-  login, comment depth, pixels) with verbatim outputs, mermaid diagrams for the chase and the
-  coauthor graph, and a demo card re-rendered at a readable aspect ratio.
+- README and `docs/examples.md` rebuilt around one real investigation (five walls: language,
+  login, comment depth, audio, pixels; a policy-change question with no company in the blast
+  radius) with verbatim outputs, mermaid diagrams for the chase and the coauthor graph, and a
+  full-column demo figure localized per README language (en/zh/ja), light and dark.
 - Literal source counts removed from all docs and assets. The catalog grows (and prunes)
   through the curator pipeline, so any hard number is born stale; the server already computes
   live counts at startup, and prose now sells the mechanism instead.

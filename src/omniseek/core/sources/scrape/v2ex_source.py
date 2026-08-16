@@ -2,7 +2,7 @@
 
 V2EX is the Chinese-language forum where developers, overseas-job seekers and would-be
 emigrants talk shop: 职场 grievances, 外企 remote gigs, 移民 (润) logistics, 海外留学. It
-is exactly the 润学 / 外企-remote / 润→加拿大 demographic the eye otherwise misses (Reddit
+is exactly the 润学 / 外企-remote / 润→加拿大 demographic OmniSeek otherwise misses (Reddit
 is EN, the CN paper/patent sources are formal, tieba is mass-consumer). This adapter taps
 the community's own words.
 
@@ -56,7 +56,7 @@ TIMEOUT = 15
 # keep the source's identity on-telos; the BM25 filter already handles query relevance.
 NODES: tuple[str, ...] = ("career", "cv", "jobs", "remote", "immigration", "global")
 
-# A plain desktop Chrome UA: the API answers keylessly with this (the shared OmniSeekEye UA is
+# A plain desktop Chrome UA: the API answers keylessly with this (the shared OmniSeek UA is
 # not needed here, but V2EX does gate obviously-empty UAs, so we send a real browser one).
 _UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -137,7 +137,7 @@ class V2exAdapter(BaseScrapeAdapter):
         keyless JSON GET, so it needs nothing httpx.aget cannot do; the leaf adds the shared
         pool + SSRF guard + cache_only + 30MB cap + diag.note evidence tap for free, and the
         pooled async client already carries follow_redirects=True). The Chrome UA overrides the
-        shared OmniSeekEye UA via the headers kwarg (V2EX gates obviously-empty UAs)."""
+        shared OmniSeek UA via the headers kwarg (V2EX gates obviously-empty UAs)."""
         url = f"{SHOW_URL}?node_name={quote(slug)}"
         data = await http.aget_json(url, headers={"User-Agent": _UA}, timeout=TIMEOUT)
         if data is None:

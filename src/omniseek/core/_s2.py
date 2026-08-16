@@ -5,7 +5,7 @@ and the relationship layer (resolve_identity, coauthors, the paper-anchored
 disambiguator). Before this module, FIVE call sites each constructed their own
 ``SemanticScholar(api_key=...)`` client from ``auth.load`` and TWO of them carried
 their own copy of the bare-arXiv-id / DOI → S2-prefix normalizer; nothing shared
-the polite-pool rate limit or protected the eye from S2's frequent 429 storms.
+the polite-pool rate limit or protected OmniSeek from S2's frequent 429 storms.
 This is the symmetric twin of ``_openalex`` for the S2 backend:
 
   get_client()              one shared keyed client (singleton, lazy, thread-safe)
@@ -155,7 +155,7 @@ def recently_throttled(within_s: float = 120.0) -> bool:
 # One ``SemanticScholar`` client reused across the cartographer + relations call sites
 # instead of five fresh constructions. The semanticscholar lib's client is a thin httpx
 # wrapper and is safe to share for concurrent reads; the global _sema still bounds in-flight
-# concurrency. Keyed from auth.load("semantic_scholar") (the eye's API key → un-throttled
+# concurrency. Keyed from auth.load("semantic_scholar") (OmniSeek's API key → un-throttled
 # tier), falling back to the S2_API_KEY env var, then the keyless shared pool.
 _client = None  # type: ignore[var-annotated]
 _client_lock = threading.Lock()
@@ -238,7 +238,7 @@ def _record_fail(exc: Optional[Exception] = None) -> None:
 
 def _retry_rl(do):
     """Run ``do()``, retrying ONLY on a rate-limit (429 -> ConnectionRefusedError; see _is_rate_limit)
-    with the eye's own SHORT bounded backoff. Any other exception propagates on the first occurrence
+    with OmniSeek's own SHORT bounded backoff. Any other exception propagates on the first occurrence
     exactly as before. This is the retry budget the lib used to own (and overspent at ~250s); here it
     is a handful of seconds, after which the caller degrades + the breaker takes over."""
     for _i in range(_RL_RETRIES + 1):

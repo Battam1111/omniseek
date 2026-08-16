@@ -17,7 +17,7 @@
       "id": "id"
     },
     "post_filter": false,
-    "no_live_probe": "200 requests per calendar MONTH per IP, shared across search + docs. The watchdog probes daily (~30/mo) plus every 6h (~120/mo), which would burn ~150 of the 200 on health checks alone and mark the source down for an exhaustion the eye itself caused. Measured 2026-07-25: context7 was in watchdog_down for exactly this. Breakage now surfaces at use time (this row is named-drill only, and a named drill emits the /eye-fix diagnostic).",
+    "no_live_probe": "200 requests per calendar MONTH per IP, shared across search + docs. The watchdog probes daily (~30/mo) plus every 6h (~120/mo), which would burn ~150 of the 200 on health checks alone and mark the source down for an exhaustion OmniSeek itself caused. Measured 2026-07-25: context7 was in watchdog_down for exactly this. Breakage now surfaces at use time (this row is named-drill only, and a named drill emits the /eye-fix diagnostic).",
     "auth_header": "Authorization",
     "auth_prefix": "Bearer ",
     "cache_ttl": 86400,

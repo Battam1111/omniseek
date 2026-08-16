@@ -1,6 +1,6 @@
-"""Perception-memory index — the READ + schema half of the eye's ``recall`` sub-layer.
+"""Perception-memory index — the READ + schema half of OmniSeek's ``recall`` sub-layer.
 
-The eye is otherwise STATELESS (fetch-live, TTL-cache, forget). This sub-layer makes the
+OmniSeek is otherwise STATELESS (fetch-live, TTL-cache, forget). This sub-layer makes the
 ENUMERABLE sources STATEFUL: their docs are continuously ingested into a local SQLite FTS5
 index so a query can recall them sub-second, OFFLINE, cross-source — including items the live
 feeds have since rolled off. It is HYBRID with the live query-keyed sources, never a replacement.
@@ -41,7 +41,7 @@ _SCHEMA_VERSION = "2"  # 2 = + vec table (Phase-2 vector layer; additive, CREATE
 SEG_VERSION = 3
 
 # Fail-OPEN switch: if schema init or a connection ever fails, the whole layer becomes a no-op and
-# the eye runs exactly as it did before (stateless). A bad index file must NEVER take the eye down.
+# OmniSeek runs exactly as it did before (stateless). A bad index file must NEVER take OmniSeek down.
 _disabled = False
 _local = threading.local()  # per-thread read connection (sqlite connections aren't thread-shareable)
 
@@ -114,7 +114,7 @@ CREATE INDEX IF NOT EXISTS vec_chunk_rowid ON vec_chunk(rowid);
 -- The unified graph (docs/design/graph-unified-model.md v2.0): recall's RELATION index, additive
 -- inside recall.db (single-writer + join locality). Entity nodes + entity/sensor edges are the ONLY
 -- new persistence; doc-doc same_as stays DERIVED views over docs.fp + doc_json (never stored rows).
--- The organ boundary is the CHECK: tier J (agent judgment) CANNOT physically enter the eye's store.
+-- The organ boundary is the CHECK: tier J (agent judgment) CANNOT physically enter OmniSeek's store.
 CREATE TABLE IF NOT EXISTS graph_nodes(
   id         TEXT PRIMARY KEY,        -- canonical node id (design section 3), minted by the backend
   kind       TEXT NOT NULL,           -- work|person|institution|venue|topic (frozen kinds, TEXT col)
@@ -189,7 +189,7 @@ def _read_con() -> Optional[sqlite3.Connection]:
 
 
 def segment(text: str) -> str:
-    """The eye's OWN tokenizer (ASCII words + overlapping CJK bigrams), space-joined — so the
+    """OmniSeek's OWN tokenizer (ASCII words + overlapping CJK bigrams), space-joined — so the
     index segments byte-identically to the live BM25 scorer. Stored in docs.seg / fts.seg."""
     return " ".join(relevance.tokenize(text or ""))
 

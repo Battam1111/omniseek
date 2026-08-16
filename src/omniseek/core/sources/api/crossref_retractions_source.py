@@ -62,7 +62,7 @@ class CrossrefRetractionsAdapter(BaseAPIAdapter):
         if (query or "").strip():
             params["query"] = query.strip()  # server-side full-text filter within the retraction set
         url = f"{_ENDPOINT}?{urlencode(params)}"
-        data = http.get_json(url, headers={"User-Agent": f"OmniSeekEye/1.0 (mailto:{auth.contact_email()})"})
+        data = http.get_json(url, headers={"User-Agent": f"OmniSeek/1.0 (mailto:{auth.contact_email()})"})
         if not isinstance(data, dict):
             return []
         return ((data.get("message") or {}).get("items")) or []
@@ -80,7 +80,7 @@ class CrossrefRetractionsAdapter(BaseAPIAdapter):
         if (query or "").strip():
             params["query"] = query.strip()  # server-side full-text filter within the retraction set
         url = f"{_ENDPOINT}?{urlencode(params)}"
-        data = await http.aget_json(url, headers={"User-Agent": f"OmniSeekEye/1.0 (mailto:{auth.contact_email()})"})
+        data = await http.aget_json(url, headers={"User-Agent": f"OmniSeek/1.0 (mailto:{auth.contact_email()})"})
         if not isinstance(data, dict):
             return []
         return ((data.get("message") or {}).get("items")) or []

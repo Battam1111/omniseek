@@ -6,7 +6,7 @@ Sensors are background cache warmers with novelty detection. Each sensor:
 3. Diffs against its baseline to detect new information
 4. Updates the baseline and records stats
 
-A sensor is DECLARATIVE STATE the eye executes mechanically; a run is an act of
+A sensor is DECLARATIVE STATE OmniSeek executes mechanically; a run is an act of
 PERCEPTION, and perception must land on the wall, so execution belongs in the ONE
 process that can write memory (single-writer). The sensor tick runs IN-PROCESS on the
 eye-http service; in P9 the daemon loop that drives it lives in omniseek.core.jobs (the
@@ -154,7 +154,7 @@ class SensorStore:
 # below is PURE (takes the Sensor + the new (source, source_id) pairs + the run timestamp, returns
 # (nodes, edges) in the writer's dict shapes) so the smoke can golden-test it with zero network;
 # ``_tap`` wraps enqueue_graph fail-open (a tap failure must NEVER break the run summary the agent
-# gets). Every run now executes IN the eye-http process (a manual omniseek_sensor action=run, or the
+# gets). Every run now executes IN OmniSeek-http process (a manual omniseek_sensor action=run, or the
 # in-process scheduler below), where ``WRITES_ENABLED`` is on, so observed edges accrue from every
 # run. (The launchd cron runner that ran OUTSIDE the writer process, minting nothing, is deleted:
 # a memory-less perception path was the wrong structure, not a thing to bridge.)
@@ -280,7 +280,7 @@ def compute_diff(results: list, baseline: list[list[str]]) -> list:
 # ── absence / disappearance detection (borrowed idea: Huginn GapDetectorAgent, scoped noise-safe) ──
 # The sensor's default diff is APPEARANCE-only (new = current - baseline); a tracked item that goes
 # DARK (a watched policy page 404s -> page_watch emits no doc -> its key silently vanishes) never
-# surfaces, a silent failure on the eye's honest-empty-over-silent-wrong contract. Absence is sound
+# surfaces, a silent failure on OmniSeek's honest-empty-over-silent-wrong contract. Absence is sound
 # ONLY for STABLE-identity sources (page_watch's source_id is "{name}:{fp}", a fixed membership set);
 # on a churny ranked query the reverse diff is dominated by rank-window churn, so this is gated to a
 # stable-source allowlist + an opt-in flag (detect_absence) and NEVER runs for a general query sensor.
@@ -398,7 +398,7 @@ def scheduler_tick_for_sensors() -> dict:
 
 
 # ── Bark push (P6, ported from the deleted runner's _notify; the impl moved to notify.py in P9) ────
-# The runner pushed via scripts/_sentinel_common (urllib); in-process we use the eye's EXISTING httpx
+# The runner pushed via scripts/_sentinel_common (urllib); in-process we use OmniSeek's EXISTING httpx
 # dependency and read the credential file the auth.py way (fail-open to no-op when absent). P9 lifted
 # that impl into omniseek.core.notify so the generalized job registry shares ONE push primitive; this
 # thin alias keeps the P6 call sites (_bark_new_results) unchanged and the same fail-open contract +

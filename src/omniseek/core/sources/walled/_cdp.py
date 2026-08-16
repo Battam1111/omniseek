@@ -82,7 +82,7 @@ _inflight_lock = threading.Lock()
 # Per-Chrome SERIALIZATION gate. The default cdp_call path spawns a fresh thread PER call with no
 # concurrency bound, so two named walled fetches to the SAME Chrome run truly concurrently: two
 # tabs, two same-site searches on one shared browser → the site's flood-control throttles one and
-# the eye SILENTLY caches the empty as success (the gap-③ false-empty; proven 2026-06-22: two
+# OmniSeek SILENTLY caches the empty as success (the gap-③ false-empty; proven 2026-06-22: two
 # parallel 一亩三分地 fetches false-emptied one, while a serial fetch returned 35). Walled sources
 # are slow + explicit_only (named, never in the broad fan-out), so STRICT serial-per-Chrome is the
 # right trade: correctness over a little queueing latency. (Borrowed from exa-mcp's async job-queue
@@ -533,7 +533,7 @@ def is_logged_in_zhihu(page: Page) -> bool:
 # Many social/forum sources (xiaohongshu carousels, zhihu answer screenshots, Discuz
 # attachments, Quora/X/脉脉 image posts) hide the real content in IMAGES, not the text.
 # These helpers let any CDP source surface the content-image URLs (doc.media) so the
-# consuming agent can VIEW them with its own vision. The eye does NOT OCR (free CJK OCR
+# consuming agent can VIEW them with its own vision. OmniSeek does NOT OCR (free CJK OCR
 # is poor on stylized images; the agent's vision is better + free) — it just surfaces.
 _CONTENT_IMAGES_JS = (
     "()=>{const seen=new Set(),out=[];"
@@ -571,7 +571,7 @@ def content_with_media(text: str, images: list) -> str:
 
 
 # ── video notes ───────────────────────────────────────────────────────────────────────────────
-# A video note's substance is SPOKEN. The eye does not transcribe here; it hands the agent a URL
+# A video note's substance is SPOKEN. OmniSeek does not transcribe here; it hands the agent a URL
 # omniseek_transcribe can fetch, which means the URL has to be a real one.
 _VIDEO_SRC_JS = (
     "()=>{"
@@ -642,7 +642,7 @@ def video_with_origin(page, sniffed: "Optional[list]" = None) -> "tuple[Optional
 
     This is ONE helper rather than an ``or`` in each adapter because the ORIGIN is the only way to
     learn, from production output, WHICH path actually fires. Before this stamp existed the two were
-    indistinguishable in every document the eye had ever returned, which is how a success once got
+    indistinguishable in every document OmniSeek had ever returned, which is how a success once got
     attributed to the DOM path on no evidence at all. Do not write a verdict here from memory: read
     ``metadata.video_src`` off real notes."""
     url = video_from_page(page)

@@ -4,7 +4,7 @@ SlidesLive is the de-facto video host for the big ML/NLP conferences' VIRTUAL
 content. Most of these talks are NOT on YouTube and ship NO machine transcript,
 so they are invisible to ordinary web search and to caption-based tooling: a
 paper's authors explain the work in a 5 to 15 minute talk that exists only as a
-SlidesLive embed behind a conference virtual portal. The eye's TRANSCRIBE mode
+SlidesLive embed behind a conference virtual portal. OmniSeek's TRANSCRIBE mode
 unlocks them: yt-dlp (already a dep, with a maintained ``slideslive`` extractor)
 resolves a talk's audio stream, which ``omniseek_transcribe`` then feeds to local
 SenseVoice ASR. This adapter is the discovery + resolve layer in front of that.

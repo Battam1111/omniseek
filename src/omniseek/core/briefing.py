@@ -1,6 +1,6 @@
 """Agent-synthesized weekly BRIEFING (Phase 1, 2026-07-14): the digest job, instead of a raw ranked
 link list, runs a frontier LLM agent (GPT-5.6 via Captain's private Responses-API proxy) that has
-READ-ONLY use of the eye (deep retrieval) and the brain (Captain's context) to produce a VALUABLE
+READ-ONLY use of OmniSeek (deep retrieval) and the brain (Captain's context) to produce a VALUABLE
 briefing -- insight tied to his goals, not a list of links.
 
 THE SANDBOX (Captain's hard constraint: the agent gets USAGE only, touches nothing else). The
@@ -126,7 +126,7 @@ def _t_brain_read(args: dict) -> str:
 _TOOLS = {
     "omniseek_search": (_t_eye_search, {
         "type": "function", "name": "omniseek_search",
-        "description": "Deep-retrieval search across the eye's 200+ curated sources (papers, jobs, "
+        "description": "Deep-retrieval search across OmniSeek's 200+ curated sources (papers, jobs, "
                        "immigration draws, wages, news, walled/regional CN sources). Stronger than "
                        "open web for depth/recency. Returns ranked, deduped results "
                        "(title/source/date/url/snippet).",

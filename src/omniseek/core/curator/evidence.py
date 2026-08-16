@@ -6,7 +6,7 @@ judging agent reads. It emits NO key in the banned verdict set at ANY depth, AND
 of judge_instructions/note/reason contains a verdict token. The DECISION POSTURE lives in
 admission_policy.json (operator data), surfaced as ``policy_posture``: never a code literal.
 
-The eye assembles facts; the agent renders the verdict. ``evidence_complete`` is a FACT (all
+OmniSeek assembles facts; the agent renders the verdict. ``evidence_complete`` is a FACT (all
 stages reached, no errors), NOT a recommendation.
 """
 

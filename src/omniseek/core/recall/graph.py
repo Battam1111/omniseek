@@ -1,6 +1,6 @@
 """The unified graph — recall's RELATION index ("one memory, N indexes").
 
-recall is the eye's perception memory over ONE substrate (the docs table). It already carries a
+recall is OmniSeek's perception memory over ONE substrate (the docs table). It already carries a
 TEXT index (FTS5) and a VECTOR index (the vec matrix); this module adds the third arm: a RELATION
 index answering "what connects to X" where the other two answer "find docs like / about X". Two
 indexes over one substrate, joined on (source, source_id). Design of record:
@@ -9,7 +9,7 @@ indexes over one substrate, joined on (source, source_id). Design of record:
 THE RAZOR holds structurally, not by convention: the graph stores mechanical FACTS (tier M) and
 labeled ALIGNMENT CANDIDATES (tier A) — NEVER verdicts. Tier J (agent judgment: claims, gaps,
 identity rulings) is excluded by a SQL CHECK on graph_edges (``store``), so it cannot physically
-enter the eye's store. Identity is an EDGE (same_as with tier + method), never a destructive merge;
+enter OmniSeek's store. Identity is an EDGE (same_as with tier + method), never a destructive merge;
 query-time collapse POLICIES (named method-sets, not numeric thresholds) choose how much to trust.
 Views project; the agent judges. No inference rules live here.
 
@@ -36,7 +36,7 @@ from omniseek.core.recall import store
 logger = logging.getLogger(__name__)
 
 # Identity rulings live beside sensors.json (the same precedent: agent JUDGMENT persisted as
-# declarative STATE the eye executes mechanically). The eye APPLIES rulings; it never MAKES one — the
+# declarative STATE OmniSeek executes mechanically). OmniSeek APPLIES rulings; it never MAKES one — the
 # agent hands one in via omniseek_ruling(action=create), which calls save_ruling below. The read half
 # (load_rulings) stays fail-open; the WRITE half is serialized under _RULINGS_LOCK + atomic
 # tmp/replace (the SensorStore idiom), so a concurrent create/delete never corrupts the file.
@@ -48,7 +48,7 @@ _RULING_VERDICTS = frozenset({"same", "not_same"})
 # IDENTITY judgment (consumed by the collapse machinery), a statement is a DIRECTED triple
 # (src, dst, type) with FREE agent vocabulary — "acquired_by", "advises", "refutes", anything the
 # judge names. Same store shape as rulings (a JSON list beside sensors.json / graph_rulings.json,
-# serialized under _STATEMENTS_LOCK + atomic tmp/replace, fail-open load), same rule that the eye
+# serialized under _STATEMENTS_LOCK + atomic tmp/replace, fail-open load), same rule that OmniSeek
 # never MAKES one — the agent hands it in via omniseek_statement(action=create), and views PROJECT it at
 # read time under the working/exploratory policies (never conservative). The directed triple is the
 # KEY: re-stating replaces (declarative state, not a log; git history is the audit trail), and the
@@ -62,7 +62,7 @@ _STATEMENT_REFUSED_TYPES = frozenset({"same_as", "not_same_as"})
 
 # ── J-tier overlay (absorbs evidence.py under the unified names; design section 9) ──────────────
 # Pure TypedDicts, zero logic. The agent's session overlay uses this SAME vocabulary with tier='J';
-# the eye NEVER constructs a J node/edge (that is the agent's act). evidence.py's Document/Claim/Gap
+# OmniSeek NEVER constructs a J node/edge (that is the agent's act). evidence.py's Document/Claim/Gap
 # /EvidenceEdge/ManifestEntry retire INTO these shapes: same fields, one name.
 
 
@@ -233,7 +233,7 @@ def _policy_methods(policy: str) -> frozenset:
 
 
 # ── View registry (design P6: the open family gets an open ABI) ──────────────────────────────────
-# omniseek_graph is the eye's ONE open-family verb: its intents (views) grow with the model and their
+# omniseek_graph is OmniSeek's ONE open-family verb: its intents (views) grow with the model and their
 # parameters are DISJOINT per view, so it gets an open ABI ``(view, args)``, frozen forever, with the
 # views as a REGISTRY (the same mechanism-demoted-to-data move as _GATHER_TOOLS / register_mints).
 # Each view function's OWN python signature is its per-view contract; the dispatcher, the valid-view
@@ -256,7 +256,7 @@ def load_rulings() -> list[dict]:
     """Read the agent's identity rulings from ``~/.omniseek/state/graph_rulings.json`` — a list of
     ``{src, dst, verdict: "same"|"not_same", note, ruled_at}``. The sensors.json pattern: fail-OPEN
     to ``[]`` on absent/unreadable/malformed. There is deliberately NO writer here: the agent writes
-    rulings via its own session tools; the eye only APPLIES them (it stores judgment as config, it
+    rulings via its own session tools; OmniSeek only APPLIES them (it stores judgment as config, it
     never makes a judgment)."""
     try:
         if not RULINGS_PATH.exists():
@@ -284,8 +284,8 @@ def _atomic_write_rulings(rulings: list[dict]) -> None:
 def save_ruling(src: str, dst: str, verdict: str, note: str = "") -> dict:
     """Record ONE identity ruling as declarative STATE (the pair is the KEY, not a log entry).
 
-    The eye never MAKES a ruling; this stores the one the AGENT decided (the sensors.json precedent:
-    judgment persisted as config the eye applies mechanically at read time). Normalizes the pair to
+    OmniSeek never MAKES a ruling; this stores the one the AGENT decided (the sensors.json precedent:
+    judgment persisted as config OmniSeek applies mechanically at read time). Normalizes the pair to
     ``src < dst`` (a ruling is symmetric — the same judgment regardless of direction), validates, then
     REPLACES any existing entry for that sorted pair (declarative state: re-create overwrites, git
     history is the audit trail) and atomic-writes the whole list.
@@ -362,7 +362,7 @@ def _ruling_index(rulings: list[dict]) -> tuple[set, dict]:
 def load_statements() -> list[dict]:
     """Read the agent's typed statements from ``~/.omniseek/state/graph_statements.json`` — a list of
     ``{src, dst, type, note, doc, stated_at}``. The sensors.json / rulings pattern: fail-OPEN to ``[]``
-    on absent/unreadable/malformed. The writer is ``save_statement``; the eye only APPLIES statements
+    on absent/unreadable/malformed. The writer is ``save_statement``; OmniSeek only APPLIES statements
     (it stores the judgment as config, it never makes one)."""
     try:
         if not STATEMENTS_PATH.exists():
@@ -412,8 +412,8 @@ def save_statement(src: str, dst: str, type: str, note: str, doc: str = "") -> d
     """Record ONE typed, DIRECTED statement as declarative STATE (the directed triple is the KEY, not a
     log entry).
 
-    The eye never MAKES a statement; this stores the one the AGENT decided (the rulings / sensors.json
-    precedent: judgment persisted as config the eye applies mechanically at read time). The type is
+    OmniSeek never MAKES a statement; this stores the one the AGENT decided (the rulings / sensors.json
+    precedent: judgment persisted as config OmniSeek applies mechanically at read time). The type is
     mechanically slugged (see ``_slug_statement_type``); direction is the agent's assertion and is
     NEVER normalized (unlike a ruling's sorted pair — ``(A, B, t)`` and ``(B, A, t)`` are DISTINCT).
     REPLACES any existing statement for the same directed triple (declarative state: re-create
@@ -522,7 +522,7 @@ def _similar_anchor_ids(target: str, statements: list[dict], limit: int = 5) -> 
     not bare overlap, so a DIFFERENT claim merely sharing one word (``claim:turn_level_credit``) is not
     surfaced. Ranked by shared-token count. The mechanical half of anti-fragmentation: a create surfaces
     these so the driver REUSES an id instead of silently orphaning the edge. Only hand-minted targets fire
-    (deterministic backend ids never fragment). NEVER an identity verdict (that is omniseek_ruling's): the eye
+    (deterministic backend ids never fragment). NEVER an identity verdict (that is omniseek_ruling's): OmniSeek
     ranks by overlap, the driver decides."""
     t = (target or "").strip()
     if not _is_hand_minted(t):

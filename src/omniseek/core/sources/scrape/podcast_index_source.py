@@ -4,7 +4,7 @@ Podcast Index (podcastindex.org) is the open, cross-network catalog of >4M
 podcast feeds (the index Apple does NOT gatekeep). Its unique value over the
 keyless Apple Podcasts adapter is the Podcasting 2.0 namespace data: per EPISODE
 it reports whether the feed ALREADY ships a ``podcast:transcript`` file. That is
-the routing signal the eye wants: an episode that already publishes a transcript
+the routing signal OmniSeek wants: an episode that already publishes a transcript
 needs NO ASR (read the transcript directly), while one with only an audio
 enclosure is the real candidate for ``omniseek_transcribe``. So this adapter both
 discovers a show AND tells the agent which of its recent episodes are
@@ -38,7 +38,7 @@ A ``.json.template`` is dropped on first import for discoverability. Without a k
 the adapter returns ``[]`` (the contract) and ``health_check`` reports the gap.
 
 rank stays default-False: byterm returns the index's own term-relevance order, and
-the eye's ranked search re-scores across sources when it needs to.
+OmniSeek's ranked search re-scores across sources when it needs to.
 """
 
 from __future__ import annotations

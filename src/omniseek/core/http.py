@@ -80,7 +80,7 @@ def _get_client() -> httpx.Client:
                 # PARITY NOTE: passing an explicit transport= makes httpx skip env/system-proxy
                 # auto-detection (allow_env_proxies = trust_env AND transport is None). This is
                 # HARMLESS for the current deployment, which egresses via transparent fake-IP TUN
-                # (verified 2026-07: no *_proxy env on the eye-http process, empty scutil --proxies,
+                # (verified 2026-07: no *_proxy env on OmniSeek-http process, empty scutil --proxies,
                 # utun interfaces present), so httpx never used a proxy anyway. If this eye is ever
                 # moved to a PROXY-based egress (HTTP_PROXY / system proxy), restore proxy support by
                 # passing proxy= to the wrapped HTTPTransport (or mounts= of SSRFGuardTransport-wrapped
@@ -225,7 +225,7 @@ def get_impersonated(url: str, *, timeout: int = DEFAULT_TIMEOUT,
     HigherEdJobs PerimeterX-walled RSS feed: httpx -> challenge HTML; curl_cffi(chrome) -> the real
     129-item feed.
 
-    NOTE: we do NOT inject our OmniSeekEye UA here — ``impersonate='chrome'`` sets a Chrome-consistent
+    NOTE: we do NOT inject our OmniSeek UA here — ``impersonate='chrome'`` sets a Chrome-consistent
     UA + header order, and overriding the UA would desync the very fingerprint we are matching."""
     try:
         from curl_cffi import requests as _creq  # lazy: keep curl_cffi off the hot import path
@@ -352,7 +352,7 @@ def _aget_client() -> httpx.AsyncClient:
                 # PARITY NOTE: passing an explicit transport= makes httpx skip env/system-proxy
                 # auto-detection (allow_env_proxies = trust_env AND transport is None). This is HARMLESS
                 # for the current deployment, which egresses via transparent fake-IP TUN (verified 2026-07:
-                # no *_proxy env on the eye-http process, empty scutil --proxies, utun interfaces present),
+                # no *_proxy env on OmniSeek-http process, empty scutil --proxies, utun interfaces present),
                 # so httpx never used a proxy anyway. If this eye is ever moved to a PROXY-based egress
                 # (HTTP_PROXY / system proxy), restore proxy support by passing proxy= to the wrapped
                 # AsyncHTTPTransport (or mounts= of AsyncSSRFGuardTransport-wrapped proxied transports) so

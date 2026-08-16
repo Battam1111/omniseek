@@ -1,9 +1,9 @@
 """Perception-memory index — the WRITE half: a single serialized writer (the ONLY writer) + the
 ingest hooks.
 
-SQLite is single-writer; the eye is highly concurrent (one uvicorn worker, a 64-wide fetch pool,
+SQLite is single-writer; OmniSeek is highly concurrent (one uvicorn worker, a 64-wide fetch pool,
 256 anyio threads) and runs SEPARATE cron processes (watchtower / digest / health). So ALL writes
-funnel through ONE daemon thread owning ONE WAL connection, and writes are GATED to the eye-http
+funnel through ONE daemon thread owning ONE WAL connection, and writes are GATED to OmniSeek-http
 process via ``WRITES_ENABLED`` (set once in ``serve_http.main``). A cron process imports this module
 fresh -> ``WRITES_ENABLED`` stays False -> the same ingest hook is a silent no-op there: no second
 writer, no cross-process write contention (crons may only ever READ).
@@ -367,7 +367,7 @@ def _enqueue(item) -> None:
 def ingest_produced(docs) -> None:
     """PERCEPTION-PRODUCED documents (ASR transcripts today) enter the FULL memory lane directly.
     They are not fetchable sources (no adapter; Path C never sweeps them), so they bypass the
-    indexable() classification — the memory contract is: ALL text the eye itself produces must be
+    indexable() classification — the memory contract is: ALL text OmniSeek itself produces must be
     findable later ("which podcast said X"). Same single-writer queue, same upsert (idempotent on
     (source, source_id)), same gates (WRITES_ENABLED / fail-open); journal-first, never raises."""
     if not WRITES_ENABLED or store._disabled or not docs:
@@ -1079,7 +1079,7 @@ def _upsert_edge(con, edge: dict, now: float) -> None:
         logger.debug("graph edge dropped (missing src/dst/type/method): %r", edge)
         return
     if tier not in _LEGAL_TIERS:
-        logger.debug("graph edge dropped (illegal tier %r; only M/A may enter the eye's store): %r",
+        logger.debug("graph edge dropped (illegal tier %r; only M/A may enter OmniSeek's store): %r",
                      tier, edge)
         return
     src, dst = _normalize_edge_endpoints(src, dst, etype)

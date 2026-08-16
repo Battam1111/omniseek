@@ -719,7 +719,7 @@ def _signed_video(nc: dict) -> "tuple[Optional[str], bool]":
       - honour ``default_stream`` when the site marks one. On the observed note NOTHING was marked
         (all 0) and every ``weight`` was identical (62), so neither field can discriminate here;
         both are still consulted because when the site does express a preference it should win.
-      - otherwise take the tallest stream. The eye's own video hint tells the agent to read the
+      - otherwise take the tallest stream. OmniSeek's own video hint tells the agent to read the
         FRAMES (facts are routinely burned into the picture, not spoken), and legibility scales with
         resolution: on this note that is 1920 over two 1280s, for 14MB against 9-12MB.
       - accept only an mp4 with a fetchable URL, since both readers downstream must fetch it;

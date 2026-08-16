@@ -39,7 +39,7 @@ self-registration ritual lives in the base; this adapter declares its facets and
 fills the two hooks. ``_raw_fetch`` does the dual GET (failure of EITHER surface is
 tolerated: a partial payload still yields docs; only a total miss returns None ->
 []). ``rank`` stays default-False: each surface returns its own server order
-(Open Library relevance, IA default), and the eye's ranked search re-scores across
+(Open Library relevance, IA default), and OmniSeek's ranked search re-scores across
 sources when it needs a unified relevance order.
 """
 

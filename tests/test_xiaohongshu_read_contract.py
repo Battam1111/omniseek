@@ -71,7 +71,7 @@ class SignedVideoExtractionTests(unittest.TestCase):
     def test_picks_the_tallest_stream_when_the_site_marks_no_default(self):
         """The observed case exactly: three HD mp4 entries across two buckets, none marked default,
         every weight identical, heights 1280 / 1280 / 1920. Only height can discriminate, and taller
-        is right because the eye's own hint sends the agent to READ THE FRAMES."""
+        is right because OmniSeek's own hint sends the agent to READ THE FRAMES."""
         nc = _video_card({"EF4": [_stream_entry(1280, master="https://x/ef4.mp4")],
                           "EF5": [_stream_entry(1280, master="https://x/ef5a.mp4"),
                                   _stream_entry(1920, master="https://x/ef5b.mp4")],

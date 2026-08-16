@@ -267,7 +267,7 @@ class GovOpenDataAdapter(BaseScrapeAdapter):
 
     def _to_documents(self, raw: Any, query: str, limit: int) -> list[Document]:
         """Merged (portal, record) pairs -> dataset docs. The base re-ranks (rank=True) and
-        the eye's ranked search re-scores across sources, so we do NOT slice to ``limit`` here:
+        OmniSeek's ranked search re-scores across sources, so we do NOT slice to ``limit`` here:
         each portal already capped its own contribution at ``limit``."""
         if not isinstance(raw, list):
             return []

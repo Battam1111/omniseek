@@ -3,7 +3,7 @@
 The Computer Vision Foundation hosts the canonical open-access proceedings for
 CVPR / ICCV / WACV (and older ECCV years) at openaccess.thecvf.com: for every
 accepted paper an author list, the abstract, a watermark-free PDF, the BibTeX,
-and supp/code links. This gives the eye what a keyword search cannot: "list what
+and supp/code links. This gives OmniSeek what a keyword search cannot: "list what
 actually appeared at CVPR 2024", with titles, authors and canonical
 openaccess.thecvf.com links. MODE: STRUCTURE (venue-of-record browse), the
 computer-vision sibling of acl_anthology (NLP).

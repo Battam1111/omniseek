@@ -1,5 +1,5 @@
 """cordis_eu — EU research grants under Horizon Europe (2021-2027), the AI / ML / NLP slice (STRUCTURE).
-The eye's FIRST European funding source (it had US NSF/NIH + Canada NSERC/SSHRC/CIHR, but no EU).
+OmniSeek's FIRST European funding source (it had US NSF/NIH + Canada NSERC/SSHRC/CIHR, but no EU).
 
 CORDIS is the European Commission's research-results service. Its Horizon Europe project data is
 published ONLY as a bulk monthly zip (CSV/JSON, no query API) at cordis.europa.eu/data — the CSV zip
@@ -12,7 +12,7 @@ Razor (STRUCTURE): the per-project record (title, objective, keywords, EC contri
 institution + country, ERC/collaborative scheme) beats web search's prose. Telos: an EU-bound NLP
 researcher; the Horizon/ERC AI grant landscape = where the funded work + hireable labs are.
 
-DESIGN — the eye's bulk-file pattern (shared via _bulk_funding, as NSERC/SSHRC/CIHR):
+DESIGN — OmniSeek's bulk-file pattern (shared via _bulk_funding, as NSERC/SSHRC/CIHR):
   * The CSV zip URL is STABLE (unlike the Canadian per-year filenames) and refreshed monthly in place,
     so we fetch it at most monthly (cache_ttl 30d) and only on a cache miss. Never re-fetch per query.
   * On refresh we read project.csv, keep ONLY the telos slice — rows whose title/objective/keywords

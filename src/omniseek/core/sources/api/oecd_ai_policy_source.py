@@ -13,7 +13,7 @@ search: the dashboard's own search resolves text to ontology ``conceptUris`` fir
 single ``{query}`` GET a declarative row could use. The list is sorted id-descending = newest-added
 first (page 1 = the most recently added / updated initiatives, page 119 = the 2025 launch import).
 
-Full-corpus snapshotting is INFEASIBLE inside the eye's ~90s fetch deadline: each page is ~86KB (the
+Full-corpus snapshotting is INFEASIBLE inside OmniSeek's ~90s fetch deadline: each page is ~86KB (the
 long ``overview`` HTML) at ~3s, so 119 pages would be ~350s. So this adapter takes the NEWEST slice:
 it paginates the first ``_PAGES`` pages (the recently added / updated initiatives across jurisdictions),
 caches those docs query-independent for 30 days, and BM25-filters the cached subset per query (zero

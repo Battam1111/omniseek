@@ -60,13 +60,20 @@ find "$PEN_SRC" -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || tru
 
 # --- 2. rename pass (ORDER MATTERS; semantics = the bb8a4af hand-made mirror) ---
 #   module path first, then compound brands, then token-level, then catch-alls.
-#   "the eye" PROSE is deliberately kept (the hand-made mirror kept it too).
+#   2026-08-16 flip: "the eye" prose is RENAMED to OmniSeek now (Captain's runtime-surface
+#   audit: server instructions and tool descriptions are strings an MCP client SEES, and they
+#   said "the eye" to strangers). Bare standalone "eye" in comments stays: invisible at runtime.
 echo "  [2/6] renaming namespace + branding ..."
 RENAME=(
   -e 's/polaris\.eye/omniseek.core/g'
   -e 's/PolarisDocument/Document/g'
   -e 's/Polaris-eye/OmniSeek/g'
   -e 's/polaris-eye/omniseek/g'
+  # "the eye" prose becomes the product name (2026-08-16, Captain's runtime-surface audit).
+  # This covers the surfaces an MCP client actually SEES (server instructions + tool
+  # descriptions are runtime strings) and harmlessly modernizes comments along the way.
+  # \b keeps eye_read-style identifiers out (underscore is a word char, no boundary).
+  -e 's/[Tt]he [Ee]ye\b/OmniSeek/g'
   -e 's/\beye_/omniseek_/g'
   -e 's/"eye"/"core"/g'
   -e 's/_EYE_/_OMNISEEK_/g'
@@ -190,9 +197,16 @@ if grep -rnqE '\beye_' "${GATE_PATHS[@]}"; then
   grep -rnE '\beye_' "${GATE_PATHS[@]}" | head -10
   FAILED=1
 fi
-# prose "the eye" is kept by design; report count for awareness only
+# "the eye" is renamed to OmniSeek since 2026-08-16 (runtime surfaces must carry the brand);
+# a survivor means the rename rule regressed or an upstream phrasing slipped it.
+if grep -rniqE '\bthe eye\b' "${GATE_PATHS[@]}"; then
+  echo "  GATE FAIL: 'the eye' prose residue (runtime surfaces must say OmniSeek):"
+  grep -rniE '\bthe eye\b' "${GATE_PATHS[@]}" | head -10
+  FAILED=1
+fi
+# bare standalone "eye" in comments is fine (invisible at runtime); count for awareness only
 EYE_PROSE=$(grep -rnoE '\beye\b' "$PEN_SRC" | wc -l || true)
-echo "  (info: $EYE_PROSE prose 'eye' mentions kept, matching the hand-made mirror)"
+echo "  (info: $EYE_PROSE bare 'eye' mentions remain in comments/docstrings)"
 
 # LEGAL GATE: no shipped adapter may declare the CIRCUMVENTION access tier.
 #

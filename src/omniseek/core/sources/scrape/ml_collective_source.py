@@ -35,7 +35,7 @@ logger = logging.getLogger(__name__)
 
 BASE = "https://mlcollective.org"
 INDEX_PATHS = ["/events/", "/news/", "/dlct/"]  # the dated content streams (not static nav pages)
-UA = "Mozilla/5.0 (compatible; OmniSeekEye/0.1; +automated retrieval)"
+UA = "Mozilla/5.0 (compatible; OmniSeek/0.1; +automated retrieval)"
 
 # Anchor text that is nav/footer/social, never a content item.
 NAV_TEXTS = {

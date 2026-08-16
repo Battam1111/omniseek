@@ -1,5 +1,5 @@
 """The in-process JOB REGISTRY + scheduler (P9): the ONE daemon loop that runs every scheduled
-piece of the eye's self-maintenance inside the writer process.
+piece of OmniSeek's self-maintenance inside the writer process.
 
 THE DERIVED ARCHITECTURE (P6 moved the fleet's center of gravity, P9 finishes the move): a run is
 an act of PERCEPTION or self-maintenance and must land inside the ONE process that can write memory,
@@ -32,7 +32,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable, Optional
 
-from omniseek.core.contracts.build_identity import current_build_id
+from omniseek.core.contracts.build_identity import resolve_build_id
 from omniseek.core.contracts.heartbeat import SchedulerHeartbeat, load_contract_artifacts
 
 log = logging.getLogger(__name__)
@@ -505,7 +505,7 @@ def _bark_job_failure(row: JobRow, state: dict, now: float, kind: str = "raised"
         from omniseek.core import notify
         notify.alert(f"eye job failed: {row.name}",
                          f"job '{row.name}' ({row.schedule.raw}) {kind} in the in-process "
-                         f"scheduler; check the eye-http log.", group="OmniSeek")
+                         f"scheduler; check OmniSeek-http log.", group="OmniSeek")
     except Exception as exc:  # noqa: BLE001 -- the alert is best-effort; never break the tick
         log.debug("job-failure bark swallowed (%s)", exc)
 
@@ -550,16 +550,27 @@ def scheduler_contract_status() -> dict:
 
 
 def _read_host_boot_id() -> str:
-    result = subprocess.run(
-        ["/usr/sbin/sysctl", "-n", "kern.bootsessionuuid"],
-        capture_output=True,
-        check=False,
-        text=True,
-    )
-    boot_id = result.stdout.strip()
-    if result.returncode != 0 or not boot_id:
-        raise RuntimeError("cannot read macOS boot session identity")
-    return boot_id
+    """macOS boot-session UUID, else the Linux kernel boot_id (docker / any public checkout)."""
+    try:
+        result = subprocess.run(
+            ["/usr/sbin/sysctl", "-n", "kern.bootsessionuuid"],
+            capture_output=True,
+            check=False,
+            text=True,
+        )
+        boot_id = result.stdout.strip()
+        if result.returncode == 0 and boot_id:
+            return boot_id
+    except OSError:
+        pass
+    try:
+        with open("/proc/sys/kernel/random/boot_id", encoding="ascii") as fh:
+            boot_id = fh.read().strip()
+        if boot_id:
+            return boot_id
+    except OSError:
+        pass
+    raise RuntimeError("cannot read a host boot identity (no macOS sysctl, no Linux boot_id)")
 
 
 def _make_scheduler_heartbeat(*, interval_s: int, initial_delay_s: int) -> SchedulerHeartbeat:
@@ -573,7 +584,7 @@ def _make_scheduler_heartbeat(*, interval_s: int, initial_delay_s: int) -> Sched
     return SchedulerHeartbeat(
         path=HEARTBEAT_PATH,
         artifacts=artifacts,
-        build_id=current_build_id(),
+        build_id=resolve_build_id(),
         host_boot_id=_read_host_boot_id(),
         omniseek_pid=os.getpid(),
     )

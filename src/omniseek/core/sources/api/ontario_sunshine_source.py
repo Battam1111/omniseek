@@ -255,7 +255,7 @@ class OntarioSunshineAdapter:
 
         MEASURED 2026-07-25: data.ontario.ca returns 429 to this IP for the WHOLE domain (even the
         site root, not just the API), and this source sat in watchdog_down because of it. Meanwhile
-        the probe itself was the eye's most frequent caller of that host: it resolved the package
+        the probe itself was OmniSeek's most frequent caller of that host: it resolved the package
         (package_search) AND read the datastore, each through _get_json_retry, i.e. up to ~4-6
         requests per probe, on the daily lane plus the 6h fast lane (~150 probe cycles a month).
         Whatever Ontario's real budget is, that is the one part of the pressure we control, and

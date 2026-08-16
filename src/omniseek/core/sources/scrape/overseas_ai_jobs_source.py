@@ -46,7 +46,7 @@ from omniseek.core.normalize import Document, jsonsafe, keyword_score_filter
 logger = logging.getLogger(__name__)
 
 TIMEOUT = 30
-USER_AGENT = "Mozilla/5.0 (compatible; OmniSeekEye/0.1)"
+USER_AGENT = "Mozilla/5.0 (compatible; OmniSeek/0.1)"
 
 # Per-host in-flight cap. This source fans out (ThreadPoolExecutor below) over rows that COLLAPSE onto
 # a few shared ATS hosts (boards-api.greenhouse.io, api.ashbyhq.com, ...), so one search can put ~7

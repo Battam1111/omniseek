@@ -1,6 +1,6 @@
 """Mechanical mode-probes over the SSRF-hardened fetcher for attacker-influenceable candidate URLs.
 
-This is the eye's FIRST pass pointed at hosts an adversary chose (a candidate-source URL).
+This is OmniSeek's FIRST pass pointed at hosts an adversary chose (a candidate-source URL).
 Everything here is MECHANICAL: it fetches / measures / counts / resolves / matches and returns
 FACTS. It renders NO verdict. There is no key or string-value naming score/verdict/passes/
 recommend/admit/reject/good/quality/rating/confidence/decision/beats_web_search anywhere in a
@@ -44,7 +44,7 @@ MODE_VOCAB = {"STRUCTURE", "UNWALL", "TRANSCRIBE", "RECALL", "MONITOR"}
 # ─────────────────────────────────────────────────────────────────────────────────
 # Mode probes: each FETCHES candidate URLs via safe_fetch (re-exported from safeurl) and returns
 # provenance-tagged FACTS only. Provenance tags: 'verified' (eye independently confirmed), 'claimed'
-# (parsed straight from publisher bytes), 'derived' (computed by the eye over fetched content).
+# (parsed straight from publisher bytes), 'derived' (computed by OmniSeek over fetched content).
 # ─────────────────────────────────────────────────────────────────────────────────
 
 _PASSWORD_INPUT_RE = re.compile(r'<input[^>]*type=["\']?password', re.IGNORECASE)
@@ -87,7 +87,7 @@ def _baseline_queries(sample_titles: list) -> list:
 
 def _probe_structure(candidate: dict, fetch: dict) -> dict:
     """STRUCTURE: report RESOLVED ids, not regex hits (a syntax match is fabrication-prone).
-    structured_fields_present = what the page CLAIMS; structured_fields_resolved = what the eye
+    structured_fields_present = what the page CLAIMS; structured_fields_resolved = what OmniSeek
     VERIFIED against OpenAlex/S2/Crossref. The divergence is the fabrication tell."""
     text = fetch.get("text") or ""
     present: list = []
@@ -107,7 +107,7 @@ def _probe_structure(candidate: dict, fetch: dict) -> dict:
     venue = None
     retracted = None
 
-    # Resolve a DOI / arXiv id through the SAME enrich path the eye already trusts (Crossref/OA).
+    # Resolve a DOI / arXiv id through the SAME enrich path OmniSeek already trusts (Crossref/OA).
     for ident in (dois + arxiv)[:3]:
         try:
             from omniseek.core import enrich

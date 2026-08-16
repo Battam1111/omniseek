@@ -4,7 +4,7 @@ Underline.io is the video host for EMNLP / NAACL / EACL / AACL / *SEM (and SIGIR
 KDD / AAAI in other years). It is the sibling gap of ``slideslive_talks``: those
 NLP venues moved their virtual content to Underline, so a paper's 5 to 15 minute
 author talk exists ONLY as an Underline lecture, invisible to ordinary web search
-and to SlidesLive tooling. The eye's TRANSCRIBE mode unlocks it.
+and to SlidesLive tooling. OmniSeek's TRANSCRIBE mode unlocks it.
 
 WHAT IS PUBLIC vs WALLED (verified live 2026-07-11, event EMNLP 2023):
   * The lecture METADATA is a public JSON:API (app.underline.io/api/v1): title,
@@ -18,14 +18,14 @@ WHAT IS PUBLIC vs WALLED (verified live 2026-07-11, event EMNLP 2023):
     ``downloadable_materials`` route 302s to /log-in). We do NOT claim those: the
     recon lead's "transcript fetchable without auth" was wrong (the LINK renders on
     the page, but the asset redirects to login). The paper itself lives on the ACL
-    Anthology (the eye's ``acl_anthology`` source), so we only surface the DOI.
+    Anthology (OmniSeek's ``acl_anthology`` source), so we only surface the DOI.
 
 SCOPE (be honest, same contract as ``slideslive_talks``): this is a URL-RESOLVE
 adapter, not a search engine. Underline exposes NO public full-text search (the
 ``filter[query]`` / ``filter[title]`` params are ignored, they return the unfiltered
 firehose), so a free-text keyword query returns ``[]``. The agent finds the lecture
 URL (from a paper page, the ACL Anthology, a conference schedule, or web search) and
-hands it here; the eye resolves its metadata + video and TRANSCRIBEs it. Conference
+hands it here; OmniSeek resolves its metadata + video and TRANSCRIBEs it. Conference
 enumeration (all talks for one event via ``filter[event_id]``) is a deliberate
 FOLLOW-UP, not shipped here.
 

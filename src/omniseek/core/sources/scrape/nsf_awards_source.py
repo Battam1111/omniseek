@@ -20,7 +20,7 @@ federal science grants are a named, deliberate drill (by institution / PI / topi
 broad-fan-out fodder.
 
 Recon trail: brain note eye-free-api-probe-2026-06-21 (live-probed; response field names
-confirmed by omniseek_read from the eye host — the Claude sandbox DNS-blackholes api.nsf.gov).
+confirmed by omniseek_read from OmniSeek host — the Claude sandbox DNS-blackholes api.nsf.gov).
 """
 
 from __future__ import annotations

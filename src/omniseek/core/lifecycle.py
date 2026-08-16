@@ -1,4 +1,4 @@
-"""S2 graceful-shutdown contract: a central stop/drain registry for the eye's forever-loops, plus
+"""S2 graceful-shutdown contract: a central stop/drain registry for OmniSeek's forever-loops, plus
 the ASGI-lifespan composition that drains them on shutdown.
 
 LEAF module: it imports ONLY the stdlib (threading / logging / time / contextlib) and nothing from

@@ -2,13 +2,13 @@
 
 Douban hosts China's densest grassroots-community graph: member-run 小组 (groups) where overseas-study,
 immigration, and diaspora-life experience is shared candidly (the lived, unofficial counterpart to the
-institutional sources the eye already covers). It fills a COMMUNITY gap: the first-person "我在德国/加拿大/
+institutional sources OmniSeek already covers). It fills a COMMUNITY gap: the first-person "我在德国/加拿大/
 新加坡的真实生活" thread, the group organized around a destination, the answer to "哪个组在讨论 X".
 
 Why CDP-login (rebuilt 2026-07-10; was a bespoke anonymous httpx scraper):
 - douban.com/group/search now 302-redirects anonymous requests to sec.douban.com (its anti-bot gateway)
   → a 403 login-redirect page ("豆瓣 - 登录跳转页"). The old adapter followed the redirect, got a
-  results-less page, and returned [] SILENTLY (its bespoke httpx was invisible to the eye's diag layer).
+  results-less page, and returned [] SILENTLY (its bespoke httpx was invisible to OmniSeek's diag layer).
   Anonymous group search is gone.
 - The m.douban.com rexxar JSON search API returns structured JSON gated ONLY by the web session cookie
   (dbcl2/ck on .douban.com) — it is NOT request-signed (that is the frodo app API; avoid). So we drive
@@ -23,7 +23,7 @@ return [] with the SHORT floor — so a [] is never mistaken for 'no results' (t
 old adapter had, now killed because every path routes through cdp_call + diag).
 
 Login: the operator logs into douban.com once via VNC on the 9222 Chrome; the dbcl2 cookie covers
-m.douban.com. No password is stored — the eye reuses the browser session, same as zhihu.
+m.douban.com. No password is stored — OmniSeek reuses the browser session, same as zhihu.
 """
 
 from __future__ import annotations

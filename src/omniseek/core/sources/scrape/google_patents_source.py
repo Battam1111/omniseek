@@ -4,7 +4,7 @@ Ordinary web search is weak at prior-art: patents are long, formulaic, and live 
 JS app, so a plain query rarely surfaces the right publication. Google Patents has an
 undocumented keyless XHR JSON endpoint that the patents.google.com front-end itself calls,
 which returns structured hits (publication number, title, assignee, inventor, dates, a
-highlighted snippet) for any query. This adapter wraps that endpoint so the eye can do
+highlighted snippet) for any query. This adapter wraps that endpoint so OmniSeek can do
 patent / prior-art lookup that the open web cannot.
 
 Endpoint (probed live, undocumented):
@@ -13,7 +13,7 @@ Endpoint (probed live, undocumented):
 
 i.e. the ``url`` query-param is itself a URL-encoded ``q=<query>`` string (double-encoded:
 the query is encoded once for the inner ``q=...`` and the whole ``q=...`` is encoded again
-for the outer ``url=...``). A real browser User-Agent is required (the OmniSeekEye UA is
+for the outer ``url=...``). A real browser User-Agent is required (the OmniSeek UA is
 403-gated), so this adapter passes a Chrome UA through the shared http client.
 
 Response shape (confirmed against several live queries):
@@ -64,7 +64,7 @@ logger = logging.getLogger(__name__)
 XHR_URL = "https://patents.google.com/xhr/query"
 PATENT_PAGE_BASE = "https://patents.google.com/patent"
 PDF_BASE = "https://patentimages.storage.googleapis.com"
-# patents.google.com 403s the default OmniSeekEye UA; the XHR endpoint wants a real browser UA.
+# patents.google.com 403s the default OmniSeek UA; the XHR endpoint wants a real browser UA.
 BROWSER_UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"

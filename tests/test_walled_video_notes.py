@@ -9,9 +9,9 @@ The failure this exists to prevent is quiet in four different ways:
     arity raises where the adapter's own except-clause charges it to the browser: the account
     backoff trips and, on the mainland adapter, a forged row lands in the incident black box, so a
     pure code bug gets recorded as an account incident;
-  - and the newest one: the eye reported a video URL without saying WHICH path produced it. The
+  - and the newest one: OmniSeek reported a video URL without saying WHICH path produced it. The
     DOM reader and the wire sniffer are two different mechanisms that answer under opposite
-    conditions, yet unstamped they are indistinguishable in every document the eye has ever
+    conditions, yet unstamped they are indistinguishable in every document OmniSeek has ever
     returned. That is how a live success once got credited to the DOM path with nothing behind the
     claim. metadata.video_src makes the question answerable from real traffic instead of memory.
 Only the third needs a browser to hit in production, and none of these tests needs one.

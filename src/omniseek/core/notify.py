@@ -1,4 +1,4 @@
-"""The ONE fail-open notification primitive the eye's own daemons share.
+"""The ONE fail-open notification primitive OmniSeek's own daemons share.
 
 Extracted from sensor.py's push helper (P6) so the sensor tap and the generalized job registry push
 through ONE implementation instead of duplicating the credential read. The external sentinel keeps

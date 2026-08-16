@@ -2,7 +2,7 @@
 
 WHY (the razor — UNWALL): 公众号 articles are a massive corpus of Chinese first-hand /
 specialist writing (行业号 industry analysis, 学院/官方号, niche expertise, 经验贴) that
-Google does NOT index at all — mp.weixin.qq.com is closed to general crawlers. The eye's
+Google does NOT index at all — mp.weixin.qq.com is closed to general crawlers. OmniSeek's
 other wechat source (wewe-rss) only follows a handful of SUBSCRIBED accounts; it cannot
 SEARCH the whole 公众号 space by keyword. Sogou Weixin (weixin.sogou.com) is the one free,
 no-login index over all 公众号 articles, so this adapter UNWALLs Chinese hidden knowledge
@@ -15,7 +15,7 @@ sources). Result article links are TEMPORARY Sogou redirects (/link?url=...&toke
 bound to the search session's cookie; we resolve each to its PERMANENT
 mp.weixin.qq.com/s?... URL WHILE THE SESSION IS HOT (the redirect page reassembles the url
 from JS `url += '...'` pieces), so every doc carries a stable drill-in handle the agent can
-omniseek_read later (the eye's web fetch reads mp.weixin articles).
+omniseek_read later (OmniSeek's web fetch reads mp.weixin articles).
 
 explicit_only: anti-bot + Chinese-only + the per-result resolve fan-out make it unfit for
 the blind broad fan-out; the router still surfaces it as excluded_relevant for thematically

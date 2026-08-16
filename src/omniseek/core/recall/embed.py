@@ -5,7 +5,7 @@ keep warm. This is the ONLY place the model + its asymmetric prefix scheme live,
 ``MODEL_VERSION`` — a model / dim / prefix change bumps the version, the old vectors simply fall out
 of the live matrix (lexical-only until backfilled), and cross-space cosine is mechanically
 impossible. Import-guarded + FAIL-OPEN at every layer: if sentence-transformers is absent or the
-weights won't load, the whole vector layer disables itself and the eye degrades to Phase-1 lexical
+weights won't load, the whole vector layer disables itself and OmniSeek degrades to Phase-1 lexical
 (never an error, never blocks boot). One forward ``Lock`` so a query-embed and an ingest-embed never
 run two concurrent MPS forwards (the real 16GB peak).
 

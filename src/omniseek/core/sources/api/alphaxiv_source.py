@@ -10,7 +10,7 @@ This adapter reaches that signal through alphaXiv's KEYLESS public REST API
 (api.alphaxiv.org): every endpoint below returns HTTP 200 with only a
 User-Agent, no OAuth / account / key (verified keyless 2026-07-14). The earlier
 "OAuth MCP only" rationale is FALSIFIED: the community layer is plain keyless
-REST, so there is no need to wrap the OAuth+SSE MCP (which the eye cannot refresh
+REST, so there is no need to wrap the OAuth+SSE MCP (which OmniSeek cannot refresh
 tokens for, and which does not even expose the community layer).
 
 Keyless endpoints wired here (base https://api.alphaxiv.org):

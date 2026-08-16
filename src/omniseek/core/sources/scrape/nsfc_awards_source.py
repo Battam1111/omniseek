@@ -6,7 +6,7 @@ returns an ENCRYPTED payload, so it is not scriptable without solving both. The 
 STRUCTURED path is the LetPub third-party grant index (letpub.com.cn/index.php?page=grant), which
 mirrors the approved-project records (PI / institution / amount / grant-number / project-type /
 学部 / year / title) and answers a plain keyword POST with a parseable HTML table, no login for the
-1997-2021 slice. This is the eye's FIRST Chinese funding source (it had US NSF/NIH + Canadian
+1997-2021 slice. This is OmniSeek's FIRST Chinese funding source (it had US NSF/NIH + Canadian
 NSERC/SSHRC/CIHR, no CN): for a CS/AI researcher tracking who in China holds NSFC grants on a topic
 (NLP / ML / vision), the per-award record is direct funding-landscape intel web search can't return.
 

@@ -1,4 +1,4 @@
-"""Shared SSRF / egress guard: validate an attacker-influenceable URL before the eye fetches it.
+"""Shared SSRF / egress guard: validate an attacker-influenceable URL before OmniSeek fetches it.
 
 Extracted from curator/probe.py so BOTH the probe-time fetch AND the mainline egress (http.get,
 omniseek_add_url / web_fallback, docreader URL download, asr ffmpeg / yt-dlp, view_images) share ONE

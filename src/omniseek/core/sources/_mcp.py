@@ -5,7 +5,7 @@ declarative row (``sources.json``) with a different way to move bytes. One row t
 field_map/facets/cache/admission vocabulary, TWO transports: ``"http"`` (GET/POST a JSON
 endpoint, the original ``_declarative`` path) and ``"mcp"`` (JSON-RPC ``tools/call`` over
 streamable HTTP, this client). Because a wrapped server lands as an ordinary source, EVERY
-memory mechanism the eye already has (thin rows, seen_before, conflicts ratios, similar)
+memory mechanism OmniSeek already has (thin rows, seen_before, conflicts ratios, similar)
 applies to it with ZERO new code; and every wrapped server still earns its slot through the
 curator razor PER SERVER (the razor judges the wrapped capability, not the wrapper).
 
@@ -27,7 +27,7 @@ Protocol shape mirrored (streamable HTTP, one endpoint):
     either): SSE is accumulated ``data:`` line by line until the JSON-RPC response with the
     matching id arrives; other events are ignored. Reads are bounded (size + a per-line cap).
 
-FAIL-OPEN contract (the whole point; a wrapped server can never crash the eye or leak):
+FAIL-OPEN contract (the whole point; a wrapped server can never crash OmniSeek or leak):
   * ANY protocol / transport error raises a single ``MCPTransportError``; the adapter layer
     catches it and degrades to ``[]`` (the source contract, like the podcast_index precedent).
   * an ``isError: true`` tool result raises ``MCPTransportError`` carrying the error text; the

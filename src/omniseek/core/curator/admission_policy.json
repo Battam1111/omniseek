@@ -1,6 +1,6 @@
 {
   "default_posture": "reject_if_thin",
-  "rationale": "Captain policy: a candidate source whose evidence is thin (probe did not surface a clear acquisition edge over plain web search) is REJECTED, not admitted-on-doubt. Admission is the exception that must be earned; the eye stays small and high-signal. This posture is DATA, read into the evidence packet's policy_posture; it is NOT a code constant.",
+  "rationale": "Captain policy: a candidate source whose evidence is thin (probe did not surface a clear acquisition edge over plain web search) is REJECTED, not admitted-on-doubt. Admission is the exception that must be earned; OmniSeek stays small and high-signal. This posture is DATA, read into the evidence packet's policy_posture; it is NOT a code constant.",
   "auto_apply": {
     "families": ["rss"],
     "modes": ["STRUCTURE", "UNWALL", "TRANSCRIBE"],

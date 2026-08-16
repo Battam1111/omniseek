@@ -4,7 +4,7 @@ Europe PMC (https://europepmc.org) is EMBL-EBI's index of the biomedical and lif
 sciences literature: ~40M abstracts plus a large open-access full-text corpus
 (PMC articles, Agricola, preprint servers, patents, theses). Its public REST API
 is fully keyless. OmniSeek's biomedical STRUCTURE source — and, via the
-fullTextXML endpoint, the eye's SECOND keyless full-text spine alongside CORE
+fullTextXML endpoint, OmniSeek's SECOND keyless full-text spine alongside CORE
 (core.ac.uk needs a registered key; Europe PMC's OA full text needs none).
 
 Access via the public REST API (no auth, no key):
@@ -35,7 +35,7 @@ pull PubMed-flavoured hits into a general ML retrieval.
 
 Recon trail: field names from the live Europe PMC REST docs + a probe of the
 search + fullTextXML endpoints (the Claude sandbox DNS-blackholes www.ebi.ac.uk;
-the eye host live-verifies post-deploy).
+OmniSeek host live-verifies post-deploy).
 """
 
 from __future__ import annotations
@@ -70,7 +70,7 @@ class EuropePMCAdapter(BaseScrapeAdapter):
     needs_credentials = False
     description = ("Europe PMC — keyless biomedical / life-sciences literature "
                    "(abstracts + citations + open-access JATS full text); name it to "
-                   "drill a clinical / biomedical question. The eye's SECOND keyless "
+                   "drill a clinical / biomedical question. OmniSeek's SECOND keyless "
                    "full-text spine (CORE needs a key, this does not). STRUCTURE, "
                    "keyless www.ebi.ac.uk.")
     cache_ttl = 3600  # literature metadata changes slowly

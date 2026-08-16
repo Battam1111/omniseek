@@ -1,6 +1,6 @@
 """A-share / 港股 / 美股 real-time (delayed) stock quotes (keyless, no login).
 
-WHY (STRUCTURE): the eye's market_quote covers US stocks only; A-share / 港股 quotes were a gap
+WHY (STRUCTURE): OmniSeek's market_quote covers US stocks only; A-share / 港股 quotes were a gap
 (雪球 is now login-walled). This source gives name/code → a structured quote (price / 涨跌 / 市值 /
 高低 / PE) for CN + HK + US, no login — the Chinese analog of market_quote. Google can't return
 clean structured quote numbers.
@@ -10,7 +10,7 @@ SHAPE: 2-step (BaseScrapeAdapter + bespoke curl_cffi). Step 1 — EastMoney sugg
 QUOTE comes from Tencent qt.gtimg.cn (one BATCHED `q=sym,sym,...` call, GBK, `~`-delimited fields).
 
 WHY Tencent for the quote (2026-06-20): the original backend was EastMoney push2.eastmoney.com, but
-push2 has aggressive per-IP anti-abuse — under the eye's MULTI-AGENT burst load (a research workflow
+push2 has aggressive per-IP anti-abuse — under OmniSeek's MULTI-AGENT burst load (a research workflow
 fired many parallel eastmoney calls) push2 began dropping the mini's connections (accept-then-close,
 curl 56/52) for hours, while searchapi stayed fine. Tencent qt.gtimg.cn is the burst-tolerant,
 keyless, industry-standard A-share/HK/US quote endpoint (verified 2026-06-20: 5 rapid hits all 200,

@@ -2,7 +2,7 @@
 
 Some decision-critical pages (MOM EP/COMPASS eligibility, ONE Pass criteria,
 ICA PR application rules) have no feed and change rarely but MATTER when they
-do (salary thresholds, criteria). The eye's watchtower diffs source_ids, so the
+do (salary thresholds, criteria). OmniSeek's watchtower diffs source_ids, so the
 whole "page diff" capability collapses into one dumb trick: each watched page
 becomes ONE document whose source_id embeds the normalized-content FINGERPRINT.
 Page changes → fingerprint changes → a NEW source_id appears → the existing

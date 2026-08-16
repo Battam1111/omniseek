@@ -1,6 +1,6 @@
 """Wayback Machine — archived / historical / deleted versions of a URL (keyless, Internet Archive CDX).
 
-The eye's DISCONFIRM + RECALL primitive: when a page changed, vanished, or you need what it said
+OmniSeek's DISCONFIRM + RECALL primitive: when a page changed, vanished, or you need what it said
 BEFORE, query its URL → the available snapshots (each a timestamp + an archived web.archive.org URL
 you can `omniseek_read` to read the historical content). Web search only ever shows the LIVE page;
 this reaches what the open web forgot or deleted. explicit_only named lookup (query = a URL).
@@ -34,7 +34,7 @@ CDX_URL = "https://web.archive.org/cdx/search/cdx"
 # and intermittently 503s under Internet Archive load. A generous timeout + the 1h cache (a hit
 # caches, repeats are instant) make it usable; a 503/slow miss degrades to [] with a diagnostic.
 TIMEOUT = 30
-_UA = "Mozilla/5.0 (compatible; OmniSeekEye/1.0; +archive lookup)"
+_UA = "Mozilla/5.0 (compatible; OmniSeek/1.0; +archive lookup)"
 # Accept a URL-ish query: starts with http(s), or a bare domain (no spaces, has a dotted host).
 _URLISH = re.compile(r"^(https?://|[\w-]+(\.[\w-]+)+(/|$))", re.I)
 

@@ -1,6 +1,6 @@
 """Declarative REST/JSON sources — a standard search-API source is now ONE table row.
 
-Many of the eye's open-API sources are mechanically identical: GET a JSON endpoint
+Many of OmniSeek's open-API sources are mechanically identical: GET a JSON endpoint
 with the query interpolated into a param template, walk a list of result objects out
 of the response, pluck a handful of fields (title / url / content / date / author /
 score / id) by name, wrap each in a ``Document``, and keyword-filter. The only
@@ -47,7 +47,7 @@ TRANSPORT (the meta-source, P10): a row also declares HOW to move bytes. ``trans
 ``"http"`` (absent == "http", full back-compat: GET/POST the ``endpoint``, above) OR ``"mcp"``
 (wrap an external MCP server: the SAME row table, a different transport). A wrapped MCP server
 is NOT a new adapter species; it is this same declarative row with ``tools/call`` instead of a
-GET, so every memory/dedup/ranking mechanism the eye has applies to it unchanged, and each
+GET, so every memory/dedup/ranking mechanism OmniSeek has applies to it unchanged, and each
 wrapped server still earns its slot through the curator razor PER SERVER. An ``mcp`` row adds::
 
       "transport":  "mcp",
@@ -252,7 +252,7 @@ def _as_date(v: Any) -> Optional[datetime]:
 class DeclarativeAPIAdapter:
     """A standard REST/JSON search source, fully described by a data row.
 
-    Mechanism only (the eye's "code is dumb, agent is smart" rule): fetch via the
+    Mechanism only (OmniSeek's "code is dumb, agent is smart" rule): fetch via the
     shared pooled client, extract fields by dot path, rank with the ONE shared BM25
     scorer (``keyword_score_filter`` -> ``relevance.doc_scores``). It makes NO
     business judgement — no custom sort, no relevance heuristic, no field synthesis.
@@ -321,7 +321,7 @@ class DeclarativeAPIAdapter:
         self.needs_credentials = bool(needs_credentials)
         self.limit_cap = limit_cap
         self.timeout = timeout
-        # post_filter=True (default): re-rank+drop via the shared BM25 scorer (the eye
+        # post_filter=True (default): re-rank+drop via the shared BM25 scorer (OmniSeek
         # canon, like RSSAdapterBase). post_filter=False: the ENDPOINT already ranked
         # server-side for this query (Algolia, Elastic, a relevance API) — keep its
         # order verbatim, just truncate to limit; this is what makes such a source
@@ -386,7 +386,7 @@ class DeclarativeAPIAdapter:
 
         The row names the HEADER (``auth_header``); the SECRET stays in the credentials file, which is
         the house pattern for every keyed source (adzuna / core / semantic_scholar / ... all ship a
-        <name>.json.template beside it) and keeps the key out of sources.json, a file the eye's
+        <name>.json.template beside it) and keeps the key out of sources.json, a file OmniSeek's
         generalization path publishes. Absent / unreadable / empty file = keyless, i.e. EXACTLY the
         previous behaviour, so a row can carry auth_header before any key exists and simply upgrades
         itself the moment the file appears. Resolved once per process (a restart picks up a new key)."""
@@ -657,7 +657,7 @@ class DeclarativeAPIAdapter:
         # A probe that SPENDS the thing it is checking must not run. Some rows are metered so tightly
         # that health-probing them is self-destructive: context7 allows 200 requests per calendar MONTH
         # per IP, while the watchdog probes daily (~30/mo) plus every 6h (~120/mo), i.e. ~150 of the 200
-        # burned answering "are you up?". The source then reports DOWN for a quota exhaustion the eye
+        # burned answering "are you up?". The source then reports DOWN for a quota exhaustion OmniSeek
         # itself caused. Same reasoning the health run already uses to skip RETIRED sources ("the retire
         # IS the decision; probing it is noise"), except here it is worse than noise.
         # Reporting True keeps the source USABLE (a False would park it in watchdog_down and hide it);

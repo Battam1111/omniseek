@@ -39,7 +39,7 @@ logger = logging.getLogger(__name__)
 
 YAML_URL = "https://ccfddl.github.io/conference/allconf.yml"
 TIMEOUT = 25
-USER_AGENT = "Mozilla/5.0 (compatible; OmniSeekEye/0.1)"
+USER_AGENT = "Mozilla/5.0 (compatible; OmniSeek/0.1)"
 CACHE_TTL = 21600  # 6h — deadlines change infrequently
 
 # CCF sub-categories to include. 'AI' = all 55 core ML/AI/CV/NLP/robotics venues.
@@ -103,7 +103,7 @@ class ConferenceDeadlinesAdapter:
           - the disk cache read + write -> anyio.to_thread.run_sync (get/set do file IO);
           - the raw ``httpx.get`` -> ``http.aget`` (shared pool + SSRF guard + cache_only + the
             30MB cap; the ~346KB YAML is far under the cap, so no per-source AsyncClient needed).
-        ``http.aget`` keeps follow_redirects=True (client-level) and takes the SAME OmniSeekEye UA
+        ``http.aget`` keeps follow_redirects=True (client-level) and takes the SAME OmniSeek UA
         + timeout. It handles the HTTP failure branch itself (non-2xx / timeout / SSRF / oversize
         -> None + its own diag.note under the "http.get" label), so this returns [] on None; a
         200-but-unparseable YAML is the ONE failure http.aget can't see, so it keeps this source's

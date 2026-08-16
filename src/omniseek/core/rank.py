@@ -282,7 +282,7 @@ def dedup(docs: list[Document],
             #     2026-07-01 dogfood noise). Mechanical flag; never fed to ranking (the razor);
             #     fail-open.
             #     P7 (2026-07-03): the 1.5x ratio GATE is gone. "How much divergence is worth
-            #     flagging" was the last judgment-shaped constant in the eye; the detector now
+            #     flagging" was the last judgment-shaped constant in OmniSeek; the detector now
             #     MEASURES every same-work numeric divergence (its max/min ratio), RANKS by that
             #     ratio DESC, and keeps the top-3 per doc — a RESOURCE cap, not an epistemic line
             #     (the RRF discipline: rank, never a score gate). Equal values are not a divergence
@@ -364,7 +364,7 @@ def dedup(docs: list[Document],
         # so the richest-TEXT member can be the very one missing a field a sibling carried. Measured
         # 2026-07-25 over real broad-search corpora (46 duplicate groups): the survivor was UNDATED
         # while a sibling had a real date in 7% of groups, and carried no enrich handle at all in 2%.
-        # Both are strict information LOSS, not a trade: the eye held the fact one document over and
+        # Both are strict information LOSS, not a trade: OmniSeek held the fact one document over and
         # dropped it. Losing the date now costs twice, since merge_rank scores recency off doc.date,
         # so a paper published days ago gets ranked as median-aged. The group is the SAME WORK by
         # construction (that is what this merge already asserts when it carries authorships and mints
@@ -508,7 +508,7 @@ def _engagement_ranks(docs: list[Document]) -> list[float]:
 
 def _extract_hook(doc: Document, terms: list[str], cap: int = 120) -> str:
     """Extractive one-liner: the sentence from the doc's own text with the highest
-    query-term overlap. Pure substring selection, NOT generative (the eye does not
+    query-term overlap. Pure substring selection, NOT generative (OmniSeek does not
     editorialize) — the agent reads the hook to decide relevance at a glance."""
     if not terms:
         return ''
@@ -605,7 +605,7 @@ def merge_rank(results, query: str, limit: int = 15,
         except Exception:
             pass
         # --- #14 relevance_hook: EXTRACTIVE substring from the doc's own text matching
-        # the query terms (empty in browse mode). Not generative — the eye does not editorialize.
+        # the query terms (empty in browse mode). Not generative — OmniSeek does not editorialize.
         try:
             d.metadata["relevance_hook"] = _extract_hook(d, terms)
         except Exception:

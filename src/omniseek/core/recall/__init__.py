@@ -1,8 +1,8 @@
-"""The eye's perception-memory index (``recall``): makes the ENUMERABLE sources STATEFUL.
+"""OmniSeek's perception-memory index (``recall``): makes the ENUMERABLE sources STATEFUL.
 
-Public surface for the rest of the eye. See ``store`` (read/schema) and ``writer`` (write/ingest).
+Public surface for the rest of OmniSeek. See ``store`` (read/schema) and ``writer`` (write/ingest).
 
-Design of record: [[eye-recall-index-blueprint-2026-06-14]]. The eye stays a perception organ —
+Design of record: [[eye-recall-index-blueprint-2026-06-14]]. OmniSeek stays a perception organ —
 this sub-layer stores + retrieves + scores MECHANICALLY (FTS5 recall feeds the unchanged
 ``rank.merge_rank``); it never judges. It is an EYE sub-layer, not a 4th organ.
 """

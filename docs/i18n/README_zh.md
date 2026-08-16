@@ -9,7 +9,9 @@
 
 **你的 agent,找到搜索找不到的东西。**
 
-自托管的感知 MCP 服务器。数百个策展信息源,一条连接。
+能听。能看。能进登录墙。能跨语言。还记得住。
+
+<sub>自托管感知 MCP 服务器 · 一条连接</sub>
 
 [![CI](https://github.com/Battam1111/omniseek/actions/workflows/ci.yml/badge.svg)](https://github.com/Battam1111/omniseek/actions/workflows/ci.yml)
 &nbsp;[![License](https://img.shields.io/badge/License-Apache_2.0-3B82F6?style=flat-square)](../../LICENSE)
@@ -29,8 +31,8 @@ OmniSeek 探到表面之下:有人在播客里说过但从没被转写成文字�
 
 <div align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="../../assets/demo-dark.png">
-    <img src="../../assets/demo-light.png" alt="一次真实调查:一次搜索扇出后自己报告哪个登录墙源里还有更多;agent 钻进墙内、读完评论区、再用视觉读正文藏在图里的帖子。每一行都来自真实会话。" width="760">
+    <source media="(prefers-color-scheme: dark)" srcset="../../assets/demo-zh-dark.png">
+    <img src="../../assets/demo-zh-light.png" alt="一次真实调查:英文提问一条规则变化。表面只会复述规则;OmniSeek 带回转写的中文解读视频、登录墙内的第一手时间线、埋在评论区的解法、以及持反方观点的视频笔记,每一行都有出处。">
   </picture>
 </div>
 

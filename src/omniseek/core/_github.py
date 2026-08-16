@@ -51,7 +51,7 @@ _BREAK_FOR_S = 120.0  # seconds the circuit stays open
 
 # GitHub's Search API is the binding constraint: 30 req/min AUTHENTICATED (10/min unauth),
 # far stricter than the 5000/hr (~83/min) core bucket, and a 403 secondary-rate limit triggers
-# on concurrency. The eye egresses ALL GitHub traffic from one host IP across three sources
+# on concurrency. OmniSeek egresses ALL GitHub traffic from one host IP across three sources
 # (github + github_trending in the broad fan-out + by-URL fetch); a workflow's fan-out can spike
 # the Search rate and 429 the shared token, which then trips the breaker below and degrades every
 # GitHub-backed source at once. _load_token authenticates every request (get_json injects the
@@ -303,7 +303,7 @@ async def aget_json(path: str, params: Optional[dict] = None, headers: Optional[
     the rate gate via ``_guard.reserve_pace_slot()`` + ``await anyio.sleep``; the SAME ``_sema`` acquired
     OFF the loop (held only around the async network call); the network via ``await _aget_client().get``;
     the retry backoffs via ``await anyio.sleep``. Everything else is brief-lock / pure CPU, byte-identical
-    to get_json. The _sema acquire sits OUTSIDE the inner try (mirror _stackexchange._ase_get; the eye
+    to get_json. The _sema acquire sits OUTSIDE the inner try (mirror _stackexchange._ase_get; OmniSeek
     async fan-out detaches stragglers, never cancels an in-flight leaf, so it cannot leak a slot today)."""
     if cache.cache_only():
         return None

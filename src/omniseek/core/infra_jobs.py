@@ -770,7 +770,7 @@ def run_offmachine_audit() -> dict:
 # WHY THIS EXISTS (root cause, 2026-06-22): the logged-in xhs sessions silently DEGRADE when the
 # browser sits idle. The cookie that LOOKS like login (web_session, valid ~1yr) stays put, but the
 # SHORT-LIVED anti-bot security cookies (acw_tc ~daily, websectiga, sec_poison_id, xsecappid) EXPIRE
-# and are only re-minted by actual browser navigation. Once they lapse the eye goes DARK on those
+# and are only re-minted by actual browser navigation. Once they lapse OmniSeek goes DARK on those
 # sources. This warmer drives each Chrome through light, READ-ONLY human-like activity (home ->
 # scroll -> one search), which re-mints the security cookies + keeps search-auth alive. It ALSO
 # doubles as the health probe: a genuinely degraded session alerts the operator.
@@ -1091,7 +1091,7 @@ def run_log_rotation() -> dict:
 # WHY (2026-07-14, approved by Captain as a standing job): nserc_awards is a BULK source — its data is
 # one ~56MB annual CSV, pulled at most monthly and cached (the CS/AI subset, ~3.6k docs) so queries
 # are zero-network. The catch: the cold 56MB pull takes ~96s (routed via a fast node in the mini's
-# mihomo, since the mainland-direct link throttles bulk to ~116KB/s), which BLOWS the eye's 90s
+# mihomo, since the mainland-direct link throttles bulk to ~116KB/s), which BLOWS OmniSeek's 90s
 # single-source deadline. So if the cache ever expires and a QUERY triggers the refetch, it times out
 # mid-pull, never caches, and stays stuck. This job DECOUPLES the refetch from the query path: it runs
 # the pull in the background monthly and caches with a TTL that OUTLASTS the cadence, so an eye query
@@ -1626,7 +1626,7 @@ def run_digest() -> dict:
     load_sources()
     ts = datetime.now()
 
-    # PRIMARY: an AGENT-synthesized briefing (a frontier LLM with READ-ONLY use of the eye + brain ->
+    # PRIMARY: an AGENT-synthesized briefing (a frontier LLM with READ-ONLY use of OmniSeek + brain ->
     # insight tied to Captain's goals, not a link list). Fail-open by contract: None -> the mechanical
     # ranked-link digest below (the agent is an enrichment, never a hard dependency).
     mode = "agent"

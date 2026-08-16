@@ -1,6 +1,6 @@
 """S2 snippet search — passage-level full-text retrieval (Semantic Scholar /graph/v1/snippet/search).
 
-The eye's semantic_scholar / openalex adapters search papers by TITLE + ABSTRACT; this one retrieves
+OmniSeek's semantic_scholar / openalex adapters search papers by TITLE + ABSTRACT; this one retrieves
 the exact PASSAGES (sentences / sections) across S2's open-access full-text corpus that match a query
 — "which papers say which sentences about X", not just which papers are about X. That passage layer is
 the STRUCTURE web search cannot cleanly return. explicit_only (named drill): a passage search is a

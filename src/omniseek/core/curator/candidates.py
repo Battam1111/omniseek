@@ -1,6 +1,6 @@
 """Curator candidate backlog: the durable, atomically-persisted source-admission state.
 
-The eye otherwise forgets (fetch-live, TTL-cache). The Curator must NOT: a candidate
+OmniSeek otherwise forgets (fetch-live, TTL-cache). The Curator must NOT: a candidate
 source submitted, probed, and awaiting a verdict has to survive a redeploy / restart /
 crash, or the work is lost (a prior bug lost candidates held only in transient task
 output). So this module owns ONE JSON file under ``~/.omniseek/state/curator/`` (the same
@@ -358,7 +358,7 @@ def _load_seen_hosts() -> set:
 
 
 def host_seen(host: str) -> bool:
-    """True iff this EXACT FQDN is already known to the eye: present in the FRESH live
+    """True iff this EXACT FQDN is already known to OmniSeek: present in the FRESH live
     roster's derived hosts (via apply._live_hosts: never a stale/passed-in list) OR in the
     seen_hosts.json ledger. Matching is exact-FQDN: a shared-suffix host (github.io,
     substack.com, ...) NEVER confers 'seen' to a sibling subdomain (each is its own first-seen

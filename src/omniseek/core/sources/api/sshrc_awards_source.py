@@ -8,7 +8,7 @@ science — a slice NSERC (sciences/engineering) does NOT cover. Open data is bu
 Payments CSV (FY2024 ~6.9MB, no query API). Telos: a CA-bound NLP researcher's funding map, the
 humanities-adjacent half.
 
-Acquisition (the eye's bulk-file pattern, shared via _bulk_funding):
+Acquisition (OmniSeek's bulk-file pattern, shared via _bulk_funding):
   * The Payments CSV URL is resolved from CKAN ``package_show`` each refresh (the per-year filename is
     inconsistent across years, so never hardcode it; fall back to the verified FY2024 URL if the
     catalog call fails).

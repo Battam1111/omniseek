@@ -45,7 +45,7 @@ _CONTACT_DEFAULT = "omniseek@example.com"
 
 
 def contact_email() -> str:
-    """The contact email the eye puts in its outbound User-Agents. Host-injected, never committed."""
+    """The contact email OmniSeek puts in its outbound User-Agents. Host-injected, never committed."""
     creds = load("contact") or {}
     return creds.get("email") or os.environ.get("OMNISEEK_CONTACT_EMAIL") or _CONTACT_DEFAULT
 

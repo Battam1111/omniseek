@@ -31,7 +31,7 @@ from omniseek.core.normalize import Document, jsonsafe, strip_base64_images
 logger = logging.getLogger(__name__)
 
 # Reasonable browser-like UA to avoid some basic 403s on RSS endpoints
-DEFAULT_UA = "Mozilla/5.0 (compatible; OmniSeekEye/0.1; +https://github.com/cyj/omniseek)"
+DEFAULT_UA = "Mozilla/5.0 (compatible; OmniSeek/0.1; +https://github.com/cyj/omniseek)"
 FETCH_TIMEOUT = 15
 
 

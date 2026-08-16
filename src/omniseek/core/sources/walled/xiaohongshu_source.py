@@ -804,7 +804,7 @@ class XiaohongshuAdapter:
             _human.read_dwell()
             # 小红书 puts the substance in CAROUSEL IMAGES (large, on the note-image CDN), not
             # always the text desc. Grab those URLs (skip avatars/icons; dedup) so the agent can
-            # view them. The eye does not OCR; the consuming agent reads the images with vision.
+            # view them. OmniSeek does not OCR; the consuming agent reads the images with vision.
             try:
                 images = page.evaluate(
                     "()=>{const seen=new Set(),out=[];"

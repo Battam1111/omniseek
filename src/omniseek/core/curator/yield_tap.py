@@ -3,7 +3,7 @@ the return of ``search_ranked`` that records, per source, its MARGINAL contribut
 results. It records FACTS ONLY (integer counters + timestamps), NEVER a verdict. A later audit AGENT
 (P3) reads the accumulated facts and decides KEEP / WATCH / PRUNE; this module decides nothing.
 
-THE RAZOR holds here exactly as in recall/writer.py and curator/candidates.py: the eye records /
+THE RAZOR holds here exactly as in recall/writer.py and curator/candidates.py: OmniSeek records /
 counts / measures; every judgment is the agent's. There is NO field named score / verdict /
 redundant / dead / low_yield / passes / recommend anywhere in the durable store; no ratio, no
 threshold. The ratio sole/appeared and any "redundant"/"low-yield" call is the audit agent's at P3.

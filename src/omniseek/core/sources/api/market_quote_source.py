@@ -42,7 +42,7 @@ logger = logging.getLogger(__name__)
 
 API_URL = "https://quote.cnbc.com/quote-html-webservice/restQuote/symbolType/symbol"
 TIMEOUT = 15
-# CNBC serves this backend to browsers; the shared OmniSeekEye UA gets thinner data,
+# CNBC serves this backend to browsers; the shared OmniSeek UA gets thinner data,
 # so we send a browser UA via the http helper's headers= merge (same pattern sec_edgar
 # uses to send its contact UA).
 BROWSER_UA = (

@@ -3,7 +3,7 @@
 OpenAlex backs 40+ named sources (openalex, researcher_watch, every org_watch
 row) plus the cartographer. Before this module, three source files each carried
 their own copy of the HTTP call, the inverted-index abstract reconstruction and
-the work-to-fields parsing; and a dead upstream degraded a third of the eye with
+the work-to-fields parsing; and a dead upstream degraded a third of OmniSeek with
 no shared protection. Here:
 
   get_json()             keyed client (api_key → the raised per-key credit budget),
@@ -46,8 +46,8 @@ _BREAK_FOR_S = 120.0  # seconds the circuit stays open
 # OpenAlex's 2026 credit model (verified 2026-06-17 from the live 429 body + rate headers): every
 # call costs $0.0001 and each IDENTITY gets a $1/day budget = 10,000 calls/day, resetting at midnight
 # UTC. CRUCIALLY the api_key and the anonymous per-IP path are SEPARATE buckets, each $1/day (an
-# api_key does NOT raise the allotment, contra the old belief) -- so the eye's one host has TWO free
-# daily budgets. The eye egresses ALL OpenAlex traffic across 40+ sources (researcher_watch + 39
+# api_key does NOT raise the allotment, contra the old belief) -- so OmniSeek's one host has TWO free
+# daily budgets. OmniSeek egresses ALL OpenAlex traffic across 40+ sources (researcher_watch + 39
 # org_watch + openalex + cartographer/field_skeleton + relations) from that host, and an active day's
 # legitimate fan-out (a single field_skeleton is 100+ calls) exhausts one $1 bucket. get_json
 # therefore uses BOTH buckets: the api_key bucket first, spilling to the anonymous per-IP bucket on a
@@ -217,7 +217,7 @@ def _is_budget_429(resp) -> bool:
 
 
 # --- per-caller OpenAlex usage attribution (lightweight: surface a hidden over-consumer) ---------
-# Every budget-spending success is tallied by the eye component that drove it (cartographer /
+# Every budget-spending success is tallied by OmniSeek component that drove it (cartographer /
 # relations / org_watch / the openalex search source / researcher_watch / enrich), with the live
 # per-bucket remaining. In-memory (resets on restart; `window_hours` reports the span). Exposed via
 # omniseek_health_check so any day's OpenAlex breakdown is INSPECTABLE, not inferred.
@@ -227,7 +227,7 @@ _usage: dict = {"since": None, "by_caller": {}, "spilled_to_anon": 0,
 
 
 def _caller_tag() -> str:
-    """The nearest stack frame OUTSIDE this module = the eye component that drove the call."""
+    """The nearest stack frame OUTSIDE this module = OmniSeek component that drove the call."""
     import sys
     f = sys._getframe(2)  # 0=_caller_tag, 1=get_json, 2=the immediate caller
     for _ in range(15):
@@ -326,7 +326,7 @@ def get_json(path: str, params: Optional[dict] = None, timeout: float = TIMEOUT)
         diag.note("openalex.get_json", url=f"{BASE}{path}", exc=_dry)
         raise _dry
 
-    caller = _caller_tag()  # attribute this call's budget spend to the eye component that drove it
+    caller = _caller_tag()  # attribute this call's budget spend to OmniSeek component that drove it
     last_exc: Optional[Exception] = None
     for lane_name, p in lanes:
         for attempt in (1, 2):
@@ -403,7 +403,7 @@ async def aget_json(path: str, params: Optional[dict] = None, timeout: float = T
       - the retry backoffs -> ``await anyio.sleep`` (a time.sleep on the loop would freeze every coroutine).
     Everything else (host-pin, breaker check, lane selection, budget-429 dry/spill, record_ok/fail,
     _note_remaining, _record_ok, diag labels) is brief-lock / pure CPU, byte-identical to get_json. The
-    _sema acquire sits OUTSIDE the inner try, like _stackexchange._ase_get: the eye async fan-out detaches
+    _sema acquire sits OUTSIDE the inner try, like _stackexchange._ase_get: OmniSeek async fan-out detaches
     stragglers (never cancels an in-flight leaf), so acquire-then-try cannot leak a slot today."""
     if (urlsplit(f"{BASE}{path}").hostname or "").lower() != _BASE_HOST:
         raise ValueError(f"openalex aget_json refused: path {path!r} resolves off {_BASE_HOST}")
@@ -501,7 +501,7 @@ def health(timeout: float = 8.0) -> tuple[bool, str]:
             get_json("/works", {"per-page": 1, "select": "id"}, timeout=timeout)
             ok, msg = True, "OK (shared OpenAlex upstream reachable, key valid)"
         except OpenAlexDown as exc:
-            # Self-shed, NOT upstream-down: get_json raises OpenAlexDown ONLY for the eye's own
+            # Self-shed, NOT upstream-down: get_json raises OpenAlexDown ONLY for OmniSeek's own
             # protective states (breaker open / concurrency pool saturated / rate-gate backlog /
             # daily budget dry) and raises the RAW exception for a genuine upstream failure (caught
             # below). Reporting DOWN here flipped all 40+ OpenAlex-backed sources down on a single

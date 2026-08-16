@@ -78,7 +78,7 @@ _EGRESS_ADMISSION_POLL_S = 0.02
 
 def _egress(adapter, query: str, limit: int) -> list:
     """Run one adapter's blocking .search under the process-global concurrent-egress bound
-    (_EGRESS_SEM). Every fan-out routes its leaf network call through here, so the eye's total
+    (_EGRESS_SEM). Every fan-out routes its leaf network call through here, so OmniSeek's total
     in-flight source connections stay bounded no matter how many event loops or pools stack."""
     with _EGRESS_SEM:
         return adapter.search(query, limit)
@@ -99,7 +99,7 @@ async def _aegress(adapter, query: str, limit: int) -> list:
 
 # BROAD (sources=None) cap. Two values, by freshness:
 #  - default (cache-allowed) path: 11s. MEASURED (2026-06-13, after the L1 slow-source
-#    parallelization + the eye-prewarm cron + the S2 API key): a broad on a NEW query
+#    parallelization + OmniSeek-prewarm cron + the S2 API key): a broad on a NEW query
 #    completes EVERY source except reddit within ~10s — reddit (~25s, host-bound on the
 #    Arctic mirror) is the only straggler, and it is dropped at 16s too, then self-warms.
 #    So 11s drops nothing 16s kept. (The old 16s was set to wait for "semantic_scholar ~12-15s";
@@ -737,8 +737,8 @@ _ROUTING_KEYWORDS: dict[str, str] = {
 
 # The STRUCTURED-QUERY hint for a vertical source: what a NAMED call should put in ``query`` to hit
 # the source's structured lookup on the FIRST try (a stock code, a ticker, an author's full name),
-# instead of the agent guessing and re-firing. This is the eye's answer to a typed per-vertical param
-# schema, in the eye's idiom: a short imperative string DERIVED FROM the source's own query contract
+# instead of the agent guessing and re-firing. This is OmniSeek's answer to a typed per-vertical param
+# schema, in OmniSeek's idiom: a short imperative string DERIVED FROM the source's own query contract
 # (its description / explicit_only reason), never invented. Empty for a free-text source. Kept beside
 # _ROUTING_KEYWORDS (the sibling vertical-routing aid) so the two maps live together; a source may
 # instead declare a ``param_hint`` class attr (co-located, wins) or a facets.json ``param_hint``.
@@ -1367,7 +1367,7 @@ def _reap(t: "asyncio.Task") -> None:
     """Done-callback for a DETACHED straggler: drop the strong ref, then CONSUME the outcome so a
     straggler that RAISES after the deadline (a common late network failure via the legacy runner:
     HTTP 500 / connection reset) does NOT emit asyncio's 'Task exception was never retrieved' ERROR
-    into the eye logs. The sync executor.shutdown(wait=False) path swallows it silently; the async
+    into OmniSeek logs. The sync executor.shutdown(wait=False) path swallows it silently; the async
     twin must too."""
     _DETACHED.discard(t)              # drop the strong ref (else "Task was destroyed but pending")
     if not t.cancelled():
@@ -1664,7 +1664,7 @@ def _compute_source_diversity(ranked: list[Document]) -> dict:
     taxonomy (academic / social / audio / walled / news) mapped from each source's routing
     FACETS (domains + modes + access_tier, data-driven from the adapter attr / facets.json,
     self-maintaining as sources are added) — the agent judges what a one-sided distribution
-    means; the eye only counts. NOTE the ``kind`` facet (stream/lookup/proxy/portal) is HOW a
+    means; OmniSeek only counts. NOTE the ``kind`` facet (stream/lookup/proxy/portal) is HOW a
     source behaves, NOT a perspective, so it is deliberately NOT used here. MULTI-LABEL: a source
     that spans types (e.g. a walled community forum) counts toward EACH perspective it satisfies,
     so ``distribution`` may sum to more than len(ranked). NOT a hardcoded name list. Advisory
@@ -1934,7 +1934,7 @@ def _coauthor_names(meta: dict) -> list:
     """The FULL author-name list from whatever key THIS scholarly source used -- arxiv ``all_authors``,
     acl/cvf ``authors``, s2 ``raw.authors``, an OpenAlex-style ``raw.authorships`` -- normalizing both
     list-of-strings and list-of-dicts ({name | display_name | author:{display_name}}). Returns [] if none.
-    This is the ONE place the eye's many author-list shapes collapse to a single representation, so the
+    This is the ONE place OmniSeek's many author-list shapes collapse to a single representation, so the
     placement can put "who wrote it" under ONE key for every source (dogfood friction #2)."""
     def _names(v) -> list:
         out: list = []
@@ -2081,10 +2081,10 @@ def _place_graph_presence(ranked: list[Document]) -> None:
     id). So both the accreted mechanical relations AND my own recorded judgments arrive ALREADY PLACED in the
     reflexive search, closing the write-side loop with no omniseek_graph verb invoked.
 
-    RAZOR: surfacing my own stored statement is PLACING a recorded judgment, NOT the eye MAKING one -- the
+    RAZOR: surfacing my own stored statement is PLACING a recorded judgment, NOT OmniSeek MAKING one -- the
     same operation ``neighborhood(policy=working)`` already performs over the same ``_statement_index`` (which
     ships razor-clean today); the only differences are the trigger (reflexive vs explicit verb) and the budget
-    (a capped snippet vs max_nodes). The eye still never judges. The J judgments live in their OWN ``judgments``
+    (a capped snippet vs max_nodes). OmniSeek still never judges. The J judgments live in their OWN ``judgments``
     key, NEVER merged into the mechanical ``stored_edges`` counts (the tier line held structurally; a smoke
     golden asserts it). Statements load + fold ONCE per search (``load_statements`` is uncached), then O(1)
     per-hit lookups; J volume stays tiny BY CONSTRUCTION (hand-recorded durable judgments), watched by
@@ -2389,7 +2389,7 @@ def search_ranked(
     total_in = sum(len(v) for v in results.values())  # LIVE bucket count (before index injection)
     # Join the overlapped recall and fold it into the SAME merge_rank/dedup the live path uses: index
     # docs collapse against live twins by fingerprint, rolled-off docs the feeds forgot resurface, and
-    # the eye answers even network-down. Fail-open: a recall failure degrades to no index, never breaks.
+    # OmniSeek answers even network-down. Fail-open: a recall failure degrades to no index, never breaks.
     if _idx_future is not None:
         # Recall runs IN PARALLEL with the fan-out, so it is usually already done — but result() had NO
         # timeout, so a stuck embed / a held _fwd_lock / a vector-matrix rebuild could hang the WHOLE
@@ -2635,7 +2635,7 @@ def list_sources(check_health: bool = False, domain: Optional[str] = None,
             "health_as_of": as_of,
         }
         # Structured-query hint (the vertical param an agent should put in ``query`` on a NAMED call),
-        # present only when the source declares one (see _param_hint). The eye's idiom for a typed
+        # present only when the source declares one (see _param_hint). OmniSeek's idiom for a typed
         # per-vertical param schema: it teaches a one-shot-correct named call (e.g. eastmoney wants a
         # stock code), so a vertical source is not just discoverable but callable right the first try.
         _ph = _param_hint(name, adapter)
@@ -2711,7 +2711,7 @@ def facet_vocabulary() -> dict:
     """The closed routing vocabularies (domain / region / kind → source count), from the live
     registry. Handed to the agent by omniseek_list_sources so domain= becomes a DISCOVERABLE router
     instead of a token the agent must already know (a wrong guess used to return a silent empty
-    that read as 'the eye has nothing here'). Cheap: facet read only, no health probe."""
+    that read as 'OmniSeek has nothing here'). Cheap: facet read only, no health probe."""
     from collections import Counter
     doms, regs, kinds = Counter(), Counter(), Counter()
     with _registry_lock:
@@ -2823,7 +2823,7 @@ def fetch_url_with_reason(url: str) -> "tuple[Optional[Document], Optional[str]]
     ``(None, reason)`` where an adapter-owned diagnostic wins over a generic web-fallback reason.
     This lets a caller act differently on a WALLED challenge (retry via CDP) vs a genuinely empty
     page. The generic web read (plain fetch, then a Jina headless render on a thin JS-wall / SPA shell)
-    is the ONLY way the eye reaches a page outside its ~190 adapters, and runs ONLY after every adapter
+    is the ONLY way OmniSeek reaches a page outside its ~190 adapters, and runs ONLY after every adapter
     declines (zero cost to the happy path). Any failure degrades to ``(None, reason-or-None)``,
     preserving the historical matched=false contract."""
     doc, adapter_reason = _fetch_url_via_adapters_with_reason(url)

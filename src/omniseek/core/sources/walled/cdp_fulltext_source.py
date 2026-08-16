@@ -106,7 +106,7 @@ class CdpFulltextAdapter:
         for tag in soup(["script", "style", "noscript", "svg", "nav", "header", "footer", "aside"]):
             tag.decompose()
         main = soup.find("main") or soup.body
-        # Emit MARKDOWN (Document.content contract) not flattened text, mirroring the eye's other
+        # Emit MARKDOWN (Document.content contract) not flattened text, mirroring OmniSeek's other
         # markdownify paths (wechat/_rss/_stackexchange); try/except falls back to the old get_text on
         # pathological HTML, and strip_base64_images defuses inline data-URI blobs.
         if main:

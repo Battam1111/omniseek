@@ -71,7 +71,7 @@ EMPTY_TTL = 60
 # ── auth self-healing state (module-level; resets on service restart, which is fine) ──
 # A logged-out shared-Chrome session returns a results-less page that is NOT authoritative-empty
 # (this whole class of silent-false-empty misled a diagnosis 2026-07-06). The base detects it, drives
-# Chrome's OWN saved-credential autofill to re-login (the eye stores no password), and retries ONCE.
+# Chrome's OWN saved-credential autofill to re-login (OmniSeek stores no password), and retries ONCE.
 # These cooldowns keep a persistently-failing login from hammering the site (anti-ban): at most one
 # relogin attempt, and one "needs VNC" alert, per source per window.
 _AUTH_RELOGIN_LAST: dict = {}
@@ -209,7 +209,7 @@ class BaseCDPAdapter:
 
     def _relogin(self, page) -> bool:
         """Re-authenticate the shared Chrome via ``login_url`` + Chrome's OWN saved-credential
-        autofill (the eye stores no password; Chrome decrypts and fills, and the invisible
+        autofill (OmniSeek stores no password; Chrome decrypts and fills, and the invisible
         CF/reCAPTCHA auto-solves for a trusted browser). Returns True iff the post-submit page is no
         longer logged-out. A source with no Chrome-saved credential (fields do not autofill) returns
         False, which routes to fail-loud. Generic across autofill-backed logins; override for a

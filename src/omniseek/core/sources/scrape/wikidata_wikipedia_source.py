@@ -1,4 +1,4 @@
-"""Wikipedia + Wikidata — the encyclopedia + structured-fact spine the eye lacked.
+"""Wikipedia + Wikidata — the encyclopedia + structured-fact spine OmniSeek lacked.
 
 Two complementary keyless layers behind one query:
 
@@ -29,7 +29,7 @@ self-registration ritual lives in the base; this adapter fans out across the fou
 endpoints in ``_raw_fetch`` (returning an already-assembled ``{"articles", "entities"}``
 payload) and maps that to docs in ``_to_documents``. ``rank`` stays default-False:
 each endpoint already returns server-relevance order (Wikipedia search relevance +
-Wikidata entity-match order), so we keep the merged order faithful and let the eye's
+Wikidata entity-match order), so we keep the merged order faithful and let OmniSeek's
 ranked search re-score across sources when it needs cross-source relevance.
 """
 

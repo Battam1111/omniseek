@@ -73,7 +73,7 @@ check("no adapter name collisions", not fetcher._collisions, str(fetcher._collis
 no_desc = [n for n in names if not (fetcher.get_adapter(n).description or "").strip()]
 check("every adapter has a description", not no_desc, str(no_desc))
 
-# Read-only invariant: the eye RETRIEVES, it never mutates a remote source. Every adapter must
+# Read-only invariant: OmniSeek RETRIEVES, it never mutates a remote source. Every adapter must
 # implement the read interface (search / fetch_url / health_check) and expose NO public method whose
 # name implies a write, so an open-source operator can trust that enabling a source can never post /
 # delete / act on their behalf. (An internal POST to a search endpoint is fine: this guards the
@@ -938,7 +938,7 @@ _smoke_journal_dir = Path(_tf.mkdtemp()) / "smoke_recall_journal"
 _recall.writer._observation_journal = _recall.writer.ObservationJournal(_smoke_journal_dir)
 _recall.writer._JOURNAL_WAKE.clear()
 
-# graceful degrade: a fresh/empty (or unusable) index returns [] — the eye stays stateless
+# graceful degrade: a fresh/empty (or unusable) index returns [] — OmniSeek stays stateless
 _rstore.DB_PATH = Path(_tf.mkdtemp()) / "smoke_index.db"
 check("recall.search on a fresh index returns [] (graceful degrade)", _recall.search("大模型", 5) == [])
 
@@ -1067,7 +1067,7 @@ if _mk is not None:
 from omniseek.core.sources.api import ontario_sunshine_source as _onss  # noqa: E402
 _onss_a = fetcher.get_adapter("ontario_sunshine")
 # A health probe must never SPEND the quota it is checking (2026-07-25). Two sources were sitting in
-# watchdog_down for exhaustion the eye itself caused: context7 allows 200 requests per calendar MONTH
+# watchdog_down for exhaustion OmniSeek itself caused: context7 allows 200 requests per calendar MONTH
 # per IP while the watchdog probes daily + every 6h (~150/mo), and data.ontario.ca 429s this IP for the
 # whole domain while its probe cost ~4-6 retrying requests per cycle. Both now answer WITHOUT egress,
 # and say so; neither reroutes egress to dodge the limit. Same shape the health run already uses to skip
@@ -1265,7 +1265,7 @@ check("backend: the OpenAlex family is the dominant multiplexed backend (>=10 sl
 # ---------------------------------------------------------------------------
 # 12. Curator P1 (source admission): the 14 invariants that make it safe to ship.
 #     Pure structural / offline / no network / no judgment. The CENTRAL proof is the
-#     no-verdict-in-code walk (the corrected razor): the eye fetches/probes/measures/
+#     no-verdict-in-code walk (the corrected razor): OmniSeek fetches/probes/measures/
 #     persists; EVERY admit/watch/reject verdict is the spawned agent, never code.
 # ---------------------------------------------------------------------------
 import socket as _socket  # noqa: E402
@@ -3270,7 +3270,7 @@ check("health: omniseek_sources without check_health carries NO system block (ad
 # roster (200+ sources x ~13 facets overflowed an agent's per-tool-result budget AND buried the
 # orient signal). It returns source_names + the routing vocabulary + capabilities; the per-source
 # facets arrive only on a narrow (domain=/region=/query=) or verbose=True. brain_orient's lesson,
-# applied to the eye — the regression lock so a future edit/sync cannot silently re-unbound it.
+# applied to OmniSeek — the regression lock so a future edit/sync cannot silently re-unbound it.
 _bo = _srv2.omniseek_sources.__wrapped__()
 check("orient: bare omniseek_sources is BOUNDED (source_names + vocab + capabilities, NOT the facet roster)",
       "source_names" in _bo and "sources" not in _bo
@@ -3356,7 +3356,7 @@ finally:
     _oa2.get_json = _save_gj_h
     _oa2._health["result"] = None
     _oa2._health["at"] = 0.0
-# 2026-07-23 watchdog false-mass-down fix: health() reports DEGRADED (ok, not down) while the eye
+# 2026-07-23 watchdog false-mass-down fix: health() reports DEGRADED (ok, not down) while OmniSeek
 # SELF-SHEDS (breaker open / pool saturated): a transient breaker-open must NOT flip all 40+
 # OpenAlex-backed sources down. Force the breaker open (open_until far future) so get_json raises
 # OpenAlexDown (self-shed) BEFORE any network, and health() must report ok=True + "degraded".
@@ -3390,7 +3390,7 @@ class _FakeEdge:
         self.paper = paper
         self.intents = []
         self.isInfluential = False
-        # S2 edge carries the RAW citing sentence (+ its own intents). The eye passes it through
+        # S2 edge carries the RAW citing sentence (+ its own intents). OmniSeek passes it through
         # verbatim; the AGENT judges polarity. Default to a recorded-shape sample.
         self.contextsWithIntent = (contextsWithIntent if contextsWithIntent is not None
                                    else [{"context": "We adopt the reward model of [SEED], which "
@@ -3433,7 +3433,7 @@ try:
           f"REF={_absc_by_id.get('REF',{}).get('seed_ref_freq')}/{_absc_by_id.get('REF',{}).get('seed_cite_freq')} "
           f"CITER={_absc_by_id.get('CITER',{}).get('seed_ref_freq')}/{_absc_by_id.get('CITER',{}).get('seed_cite_freq')}")
     # citation POLARITY evidence: the raw S2 citing SENTENCE rides onto the node as a FACT
-    # ({snippet, intents}); the eye does NOT classify supporting/contrasting/mentioning, the
+    # ({snippet, intents}); OmniSeek does NOT classify supporting/contrasting/mentioning, the
     # agent reads the snippet and judges. This asserts the pass-through only.
     _ctx_nodes = [n for n in _built["nodes"] if n.get("contexts")]
     check("cartographer s2: citing-sentence contexts surface on a node (polarity evidence)",
@@ -3845,7 +3845,7 @@ check("signals: github_awesome_phd emits NO signal (local keyword-hit count is n
 
 # ============================================================================
 # OpenAlex-class wasteful-usage root-fixes (S2 / prewarm / GitHub / exa / relations), 2026-06-16.
-# Regression guards from the eye-usage-waste-rootfix workflow: a shared rate pacer + single-flight
+# Regression guards from OmniSeek-usage-waste-rootfix workflow: a shared rate pacer + single-flight
 # health() + refresh-if-near-expiry warming + relations caching, mirroring the _openalex fix.
 # ============================================================================
 from omniseek.core import cache as _wcache  # noqa: E402
@@ -3910,7 +3910,7 @@ check("s2 health DEGRADED (ok, not down) while circuit open, self-shed is not an
       _hc[0] is True)  # breaker forced open: ok=True ONLY via the self-shed degraded branch
 _S2._state["open_until"] = 0.0; _S2._health["result"] = None
 
-# S2 retry (2026-06-20): the lib's OWN 10x/250s tenacity backoff is OFF (retry=False); the eye owns a
+# S2 retry (2026-06-20): the lib's OWN 10x/250s tenacity backoff is OFF (retry=False); OmniSeek owns a
 # SHORT bounded retry, so a brief 429 is ridden out but a sustained one fails fast (no 260s fake-hang).
 check("s2 client built with lib retry OFF (no hidden 10x/250s backoff)", _S2.get_client().retry is False)
 _S2._client = None  # drop the singleton built just to assert the flag
@@ -5578,7 +5578,7 @@ check("levels_fyi: _parse_comp_meta pulls median + range from the company+locati
 check("levels_fyi: _num parses comma / K / M / CA$ money to int",
       _lv._num("SGD 162,754") == 162754 and _lv._num("167K") == 167000
       and _lv._num("CA$157,072") == 157072 and _lv._num("1.18M") == 1180000)
-# the role doc builds with a location-aware title + a median signal (the eye's structured comp signal)
+# the role doc builds with a location-aware title + a median signal (OmniSeek's structured comp signal)
 _lv_doc = _lv.LevelsFyiAdapter._role_doc("ml engineer singapore", "software-engineer",
             "machine-learning-engineer", "singapore",
             "https://www.levels.fyi/t/software-engineer/title/machine-learning-engineer/locations/singapore",
@@ -5687,7 +5687,7 @@ check("higheredjobs_cs: un-retired (not the 'retired:' marker), still explicit_o
       and not (fetcher._explicit_only_reason(_hej) or "").strip().lower().startswith("retired"))
 
 # ---------------------------------------------------------------------------
-# 37. gap-hunt WAVE 1 sources (login-free telos gaps the eye lacked): crossref_retractions (research-
+# 37. gap-hunt WAVE 1 sources (login-free telos gaps OmniSeek lacked): crossref_retractions (research-
 #     integrity MONITOR), datagovsg_nonresident_pass_types (SG immigration STRUCTURE), wikicfp_nlp
 #     (NLP CFP discovery, RSS). The parse fns are pure → golden them offline; all explicit_only.
 # ---------------------------------------------------------------------------
@@ -5781,7 +5781,7 @@ for _pn in ("oinp_invitations", "bcpnp_invitations", "aaip_draws"):
           and _pa.regions == ["ca"] and "MONITOR" in (_pa.modes or []))
 
 # ---------------------------------------------------------------------------
-# 39. nserc_awards (the eye's first CANADIAN funding source): the bulk-CSV pattern's pure halves —
+# 39. nserc_awards (OmniSeek's first CANADIAN funding source): the bulk-CSV pattern's pure halves —
 #     the telos filter (_is_cs_ai) + the row->doc map — golden offline (no 56MB pull in smoke).
 # ---------------------------------------------------------------------------
 from omniseek.core.sources.api import nserc_awards_source as _ns  # noqa: E402
@@ -5814,7 +5814,7 @@ check("nserc_awards: registered + explicit_only + ca/funding/STRUCTURE",
       and _ns_a.regions == ["ca"] and "STRUCTURE" in (_ns_a.modes or []))
 
 # ---------------------------------------------------------------------------
-# 40. sshrc_awards + cihr_grants — completing Canada's Tri-Council on the eye's bulk-file pattern
+# 40. sshrc_awards + cihr_grants — completing Canada's Tri-Council on OmniSeek's bulk-file pattern
 #     (NSERC sciences + SSHRC humanities/comp-ling + CIHR health-AI). The pure halves (the shared AI
 #     filter + each row->doc map; CIHR's long-bilingual-column _pick + _clean) golden offline.
 # ---------------------------------------------------------------------------
@@ -6958,7 +6958,7 @@ try:
                       for e in _gnb_ruled["edges"]))
     # working policy sees the ruling too (rulings load under working+exploratory); its stats count it.
     _graph.RULINGS_PATH = _grulings
-    check("graph: stats() counts the loaded ruling (rulings persist as config the eye applies)",
+    check("graph: stats() counts the loaded ruling (rulings persist as config OmniSeek applies)",
           _graph.stats()["rulings"] == 1)
 finally:
     _graph.RULINGS_PATH = _g_rulings_prev
@@ -6981,7 +6981,7 @@ check("graph: server instructions mention recall.graph (the guidance-layer point
 
 # ---------------------------------------------------------------------------
 # 48. P2.0 — retrieval-anchored THIN memory + the seen_before stamp (design §"P2.0", the thesis-gap
-#     fix). Everything the eye RETRIEVES arrives placed, not just the ~40 recall-allowlisted sources:
+#     fix). Everything OmniSeek RETRIEVES arrives placed, not just the ~40 recall-allowlisted sources:
 #     the Path A hook writes a THIN document node (graph_nodes, title + url + fp + external_ids ONLY,
 #     never content) for every retrieved doc from a NON-indexed source; walled/circumvention docs stay
 #     opt-in (operator privacy). Corollary: every search stamps per-doc first_seen so the agent knows
@@ -8484,7 +8484,7 @@ finally:
 
 # (5) THE SECOND PATH IS DELETED: scripts/sensor_runner.py is gone, and NO in-repo file references
 #     the token "sensor_runner" (a memory-less cron runner is not fixed, it is removed). Grep-style
-#     scan over the eye tree (py/md/sh/txt/json), EXCLUDING this smoke file itself (it names the token
+#     scan over OmniSeek tree (py/md/sh/txt/json), EXCLUDING this smoke file itself (it names the token
 #     in this very comment). The scan + the deleted file together are the gate.
 check("p6-A delete: scripts/sensor_runner.py is gone", not (_SCRIPTS_DIR / "sensor_runner.py").exists())
 _sr_refs53: list = []
@@ -8928,7 +8928,7 @@ check("p7 W3 tripwire: the recall search arm never references vec_thin / thin ma
 
 # ---------------------------------------------------------------------------
 # 57. P9 (the fleet rebuild around the in-process scheduler): the P6 sensor scheduler generalized
-#     into a JOB REGISTRY (omniseek.core.jobs) that runs every scheduled piece of the eye's self-
+#     into a JOB REGISTRY (omniseek.core.jobs) that runs every scheduled piece of OmniSeek's self-
 #     maintenance as a declarative row on ONE daemon loop in the writer process, plus the ONE external
 #     sentinel (scripts/sentinel.py) that restarts the organ + its browsers. The derived architecture:
 #     what stays OUTSIDE the organ is only "must this still run when the organ is dead?" -> the
@@ -9326,7 +9326,7 @@ if _SENT is not None:
         )
         _watchdog_globals57["should_alert"] = lambda key, alerts, cd: True
 
-        # (i) dead healthz -> the heal path kickstarts the eye (and, still dead, returns down).
+        # (i) dead healthz -> the heal path kickstarts OmniSeek (and, still dead, returns down).
         _SENT._http_ok = lambda url, timeout=8.0: False
         _kicks57.clear()
         _rc_eye = _SENT._check_eye_http()
@@ -9762,7 +9762,7 @@ finally:
 # --- (3) the declarative table + registration honor mcp rows. The table SHIPS EMPTY: the first
 #     inhabitant arrives through the FRONT DOOR (source-foundry -> curator -> admit -> the
 #     operator's stage_commit), never as a demo row. (The P10 gate removed the self-wrap loopback
-#     demo: the eye's own SSRF guard blocks loopback:8765 unconditionally, so that row could never
+#     demo: OmniSeek's own SSRF guard blocks loopback:8765 unconditionally, so that row could never
 #     return a document; a row that cannot work is a dead inhabitant, not a born-used mechanism.)
 _sources_json58 = _json58.loads((SOURCES / "sources.json").read_text(encoding="utf-8"))
 check("58.3 declarative table: sources.json parses as a list (empty until the foundry's first admit)",
@@ -11501,7 +11501,7 @@ check("canada_jobbank_wages: content carries national low/med/high line + a prov
 
 
 # ---------------------------------------------------------------------------
-# 41. cordis_eu (the eye's first EU funding source): the bulk-file pattern's pure
+# 41. cordis_eu (OmniSeek's first EU funding source): the bulk-file pattern's pure
 #     halves — the telos filter (is_ai_relevant) + the project row -> doc map,
 #     with the coordinator org joined — golden offline (no ~35MB zip pull in smoke).
 # ---------------------------------------------------------------------------
@@ -13399,7 +13399,7 @@ _s0_baseline = json.loads((ROOT / "tests" / "egress_baseline.json").read_text(en
 _s0_baseline_set = set(_s0_baseline["modules"])
 _s0_current_egress_set = _s0_current_egress()
 _s0_new_egress = sorted(_s0_current_egress_set - _s0_baseline_set)
-check("S0.6: no NEW raw-egress module joined the eye (current set is a SUBSET of the committed baseline)",
+check("S0.6: no NEW raw-egress module joined OmniSeek (current set is a SUBSET of the committed baseline)",
       not _s0_new_egress, f"unbaselined raw-egress modules: {_s0_new_egress}")
 check("S0.6: the egress ratchet baseline is the committed file (read, not recomputed) and covers the current set",
       len(_s0_baseline_set) > 0 and _s0_current_egress_set <= _s0_baseline_set)
@@ -15937,10 +15937,10 @@ finally:
 
 # ===========================================================================================
 # ANYSEARCH-DERIVED ROUTING AIDS (2026-07-14): the dogfood of AnySearch (a "search-for-agents"
-#   product) exposed two eye gaps that are ROUTING, not coverage: a vertical source the eye HAS
+#   product) exposed two eye gaps that are ROUTING, not coverage: a vertical source OmniSeek HAS
 #   (eastmoney) sat unnoticed in excluded_relevant while a broad sweep returned noise, and a named
 #   vertical call had no typed-param guidance. Two razor-clean aids close them, both PURE / OFFLINE:
-#   #2 param_hint (a vertical source's structured-query hint, the eye's idiom for a typed per-vertical
+#   #2 param_hint (a vertical source's structured-query hint, OmniSeek's idiom for a typed per-vertical
 #      param schema; a central _PARAM_HINTS map beside _ROUTING_KEYWORDS, precedence class-attr >
 #      central > facets), and #1 routing_hint (server.omniseek_search promotes build_search_plan's
 #      already-overlap-ranked excluded_relevant, overlap>=2 — the chase-guidance salience line, NOT a

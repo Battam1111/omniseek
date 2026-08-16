@@ -9,7 +9,9 @@
 
 **検索では届かないものを、あなたのエージェントが探し当てる。**
 
-セルフホスト型の知覚 MCP サーバー。数百の厳選ソース、接続はひとつ。
+聴く。視る。ログインの内側を読む。言語をまたぐ。憶えている。
+
+<sub>セルフホスト型の知覚 MCP サーバー · 接続はひとつ</sub>
 
 [![CI](https://github.com/Battam1111/omniseek/actions/workflows/ci.yml/badge.svg)](https://github.com/Battam1111/omniseek/actions/workflows/ci.yml)
 &nbsp;[![License](https://img.shields.io/badge/License-Apache_2.0-3B82F6?style=flat-square)](../../LICENSE)
@@ -29,8 +31,8 @@ OmniSeek はその下層に届きます。ポッドキャストで語られた�
 
 <div align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="../../assets/demo-dark.png">
-    <img src="../../assets/demo-light.png" alt="実際の調査:一度の検索がファンアウトし、どのログイン制ソースに続きがあるかを自ら報告。エージェントは壁の内側へ進み、コメント欄を読み、本文が画像の中にある投稿を視覚で読む。すべて実セッションの出力。" width="760">
+    <source media="(prefers-color-scheme: dark)" srcset="../../assets/demo-ja-dark.png">
+    <img src="../../assets/demo-ja-light.png" alt="実際の調査:ルール変更について英語で質問。表面はルールを引用するだけ。OmniSeek は中国語解説動画の書き起こし、ログインの内側の一次体験タイムライン、コメント欄に埋もれた回避策、反対意見の動画ノートまで、出典つきで持ち帰る。">
   </picture>
 </div>
 

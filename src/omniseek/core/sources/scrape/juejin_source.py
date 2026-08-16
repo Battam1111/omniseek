@@ -1,6 +1,6 @@
 """掘金 Juejin — Chinese developer-article search (keyless, no login).
 
-WHY (STRUCTURE): the eye has NO Chinese dev-knowledge source. Juejin (juejin.cn) is a major CN
+WHY (STRUCTURE): OmniSeek has NO Chinese dev-knowledge source. Juejin (juejin.cn) is a major CN
 developer community; its public search API returns a STRUCTURED, engagement-ranked feed of dev
 articles (title / brief / author / 赞 digg / 看 views / 收藏) that Google's blue links don't — for
 "the most-engaged Chinese dev深度 writing on X". No login. (Individual articles ARE Google-indexed,
@@ -77,7 +77,7 @@ class JuejinAdapter(BaseScrapeAdapter):
     name = "juejin"
     description = (
         "掘金 Juejin — Chinese developer-article search (keyless). query → an engagement-ranked feed "
-        "of CN dev深度 articles: title / brief / author / 赞(digg) / 看(views). The eye's source for "
+        "of CN dev深度 articles: title / brief / author / 赞(digg) / 看(views). OmniSeek's source for "
         "Chinese dev/tech writing (前端/后端/AI工程/架构) that web search can't rank or structure. No login."
     )
     explicit_only = "Chinese dev articles (Juejin); name it for 中文技术/开发 topic search"

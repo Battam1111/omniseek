@@ -3,7 +3,7 @@
 The U.S. SEC's EDGAR system holds every public-company filing: 10-K / 10-Q annual and
 quarterly reports, 8-K material events, DEF 14A proxy statements (the canonical source
 for executive compensation), S-1 registrations, 6-K foreign reports, and the rest. The
-full-text search backend indexes the body text of filings since 2001, so the eye can find
+full-text search backend indexes the body text of filings since 2001, so OmniSeek can find
 WHICH companies disclosed a given term (a risk factor, a product, a person, a phrase) and
 hand back the specific filing.
 
@@ -12,7 +12,7 @@ Access via the keyless EDGAR full-text search backend (the JSON API behind efts.
     GET https://efts.sec.gov/LATEST/search-index?q=<query>
 
 SEC REQUIRES a descriptive User-Agent identifying the requester, or it returns 403. We send
-one explicitly via the shared http helper's ``headers=`` pass-through (the default OmniSeekEye
+one explicitly via the shared http helper's ``headers=`` pass-through (the default OmniSeek
 UA is fine for most sources, but SEC wants a contact, so we override it here).
 
 Response shape (verified live 2026-06-17): ``{"hits": {"total": {...}, "hits": [<hit>, ...]}}``

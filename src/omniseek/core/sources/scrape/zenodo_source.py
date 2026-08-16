@@ -20,7 +20,7 @@ Thin subclass over BaseScrapeAdapter: the cache check / atomic set_docs / self-r
 ritual lives in the base; this adapter only declares its facets and fills the two hooks.
 The query path takes Zenodo's default RELEVANCE order (no explicit sort -- q-present defaults to
 relevance) over a WIDE candidate pool (capped at Zenodo's max page size of 25; size>=30 -> HTTP
-400), then re-ranks locally with the eye's shared BM25 scorer and caps to ``limit`` (server
+400), then re-ranks locally with OmniSeek's shared BM25 scorer and caps to ``limit`` (server
 relevance alone leaks off-topic keyword hits, e.g. matching "model" in an unrelated paper --
 caught in a WebSearch head-to-head, 2026-06-17).
 """
@@ -37,7 +37,7 @@ from omniseek.core.normalize import Document, jsonsafe, mk_signal
 from omniseek.core.sources.scrape._base import BaseScrapeAdapter
 
 API_URL = "https://zenodo.org/api/records"
-# Pull a WIDE candidate pool, then re-rank with the eye's shared BM25 scorer + cap to limit
+# Pull a WIDE candidate pool, then re-rank with OmniSeek's shared BM25 scorer + cap to limit
 # (_to_documents). Zenodo CAPS page size at 25 (size>=30 -> HTTP 400), so 25 is the max pool.
 _ZENODO_MAX_SIZE = 25
 _CANDIDATE_POOL = 25
@@ -55,7 +55,7 @@ class ZenodoAdapter(BaseScrapeAdapter):
     def _raw_fetch(self, query: str, limit: int) -> Optional[Any]:
         # NO explicit sort: Zenodo defaults to RELEVANCE order when q is present. Pull a WIDE pool
         # (capped at Zenodo's max page size of 25 -- size>=30 returns HTTP 400); _to_documents
-        # re-ranks it with the eye's shared BM25 + caps to the caller's limit.
+        # re-ranks it with OmniSeek's shared BM25 + caps to the caller's limit.
         return http.get_json(
             API_URL,
             params={"q": query, "size": min(max(limit, _CANDIDATE_POOL), _ZENODO_MAX_SIZE)},
@@ -82,7 +82,7 @@ class ZenodoAdapter(BaseScrapeAdapter):
             if doc is not None:
                 docs.append(doc)
         # Zenodo's server relevance still leaks off-topic keyword hits; re-rank the wide pool with
-        # the eye's shared BM25 scorer (title 3x + content 1x), keep only matches, cap to limit.
+        # OmniSeek's shared BM25 scorer (title 3x + content 1x), keep only matches, cap to limit.
         # A term-less query keeps Zenodo's own order.
         if docs and relevance.query_terms(query):
             scores = relevance.doc_scores(docs, query)

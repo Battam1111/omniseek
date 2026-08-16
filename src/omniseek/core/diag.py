@@ -1,4 +1,4 @@
-"""Opt-in failure-evidence trace: the eye's "what went wrong" capture for a SINGLE source.
+"""Opt-in failure-evidence trace: OmniSeek's "what went wrong" capture for a SINGLE source.
 
 When omniseek_fetch(source, query) comes back empty or errored, the agent that has to FIX
 the source (the /eye-fix skill) needs evidence: which egress helper failed, the HTTP

@@ -2,7 +2,7 @@
 
 The Anthology's own data repo ships one structured XML per collection
 (verified live 2026-06-10: 2025.acl / 2024.emnlp / 2025.naacl all 200 on raw
-.githubusercontent). That gives the eye what dblp keyword search cannot: "list
+.githubusercontent). That gives OmniSeek what dblp keyword search cannot: "list
 what actually appeared at ACL 2025", with titles, authors, abstracts and
 canonical aclanthology.org links. MODE: STRUCTURE (venue-of-record browse).
 
