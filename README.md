@@ -59,7 +59,7 @@ curl -s http://127.0.0.1:8765/healthz
 
 Point your MCP client at `http://127.0.0.1:8765/mcp` with `Authorization: Bearer <token>`. The token is generated on first start and stored in `~/.omniseek/credentials/omniseek_http.json` (with the compose file, that's `./.omniseek/credentials/omniseek_http.json` on the host).
 
-The first `up` builds locally (dependencies + headless Chromium); later starts are instant. The core image is Apache-clean and ships without PDF reading, hearing (ASR + video frames), and login-walled sources; unlock them with the build arg `EXTRAS="[pdf,asr,walled]"`. Optional but recommended: set `OMNISEEK_CONTACT_EMAIL` for a faster lane with Crossref, SEC, and Unpaywall.
+Prefer not to build? A prebuilt core image is on GHCR: `docker pull ghcr.io/battam1111/omniseek` (amd64 + arm64). Otherwise the first `up` builds locally (dependencies + headless Chromium); later starts are instant. The core image is Apache-clean and ships without PDF reading, hearing (ASR + video frames), and login-walled sources; unlock them with the build arg `EXTRAS="[pdf,asr,walled]"`. Optional but recommended: set `OMNISEEK_CONTACT_EMAIL` for a faster lane with Crossref, SEC, and Unpaywall.
 
 ### Without Docker
 

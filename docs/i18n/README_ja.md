@@ -59,7 +59,7 @@ curl -s http://127.0.0.1:8765/healthz
 
 MCP クライアントを `http://127.0.0.1:8765/mcp` に向け、`Authorization: Bearer <token>` を付けてください。token は初回起動時に生成され、`~/.omniseek/credentials/omniseek_http.json` に保存されます(compose で動かす場合、ホスト側では `./.omniseek/credentials/omniseek_http.json`)。
 
-初回の `up` はローカルでイメージをビルドします(依存関係 + ヘッドレス Chromium)。以後の起動は即時です。コアイメージは Apache クリーン構成で、PDF 読取・聴覚(ASR + 動画フレーム)・ログイン制ソースは含みません。ビルド引数 `EXTRAS="[pdf,asr,walled]"` で解錠します。`OMNISEEK_CONTACT_EMAIL` の設定も推奨します(Crossref、SEC、Unpaywall が優先レーンをくれます)。
+ビルドしたくない場合、GHCR にビルド済みコアイメージがあります:`docker pull ghcr.io/battam1111/omniseek`(amd64 + arm64)。それ以外は初回の `up` がローカルでビルドし(依存関係 + ヘッドレス Chromium)、以後の起動は即時です。コアイメージは Apache クリーン構成で、PDF 読取・聴覚(ASR + 動画フレーム)・ログイン制ソースは含みません。ビルド引数 `EXTRAS="[pdf,asr,walled]"` で解錠します。`OMNISEEK_CONTACT_EMAIL` の設定も推奨します(Crossref、SEC、Unpaywall が優先レーンをくれます)。
 
 ### Docker なし
 

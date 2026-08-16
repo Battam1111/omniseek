@@ -59,7 +59,7 @@ curl -s http://127.0.0.1:8765/healthz
 
 把你的 MCP 客户端指向 `http://127.0.0.1:8765/mcp`,带上 `Authorization: Bearer <token>`。token 在首次启动时生成,存于 `~/.omniseek/credentials/omniseek_http.json`(用 compose 跑的话,宿主机上就是 `./.omniseek/credentials/omniseek_http.json`)。
 
-首次 `up` 会本地构建镜像(依赖 + 无头 Chromium);之后的启动是即时的。核心镜像是 Apache 干净版,不含 PDF 阅读、听觉(ASR + 视频帧)与登录墙源;用构建参数 `EXTRAS="[pdf,asr,walled]"` 解锁。建议同时设置 `OMNISEEK_CONTACT_EMAIL`,Crossref、SEC、Unpaywall 会给礼貌联系方式一条快速通道。
+不想本地构建?GHCR 上有预构建核心镜像:`docker pull ghcr.io/battam1111/omniseek`(amd64 + arm64)。否则首次 `up` 会本地构建(依赖 + 无头 Chromium),之后的启动是即时的。核心镜像是 Apache 干净版,不含 PDF 阅读、听觉(ASR + 视频帧)与登录墙源;用构建参数 `EXTRAS="[pdf,asr,walled]"` 解锁。建议同时设置 `OMNISEEK_CONTACT_EMAIL`,Crossref、SEC、Unpaywall 会给礼貌联系方式一条快速通道。
 
 ### 不用 Docker
 
