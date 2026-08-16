@@ -31,9 +31,6 @@
       }
     ]
   },
-  "liveness_probe": {
-    "url": "https://api.openalex.org/works?search=On%20Computable%20Numbers&per-page=1"
-  },
   "lang": "en",
   "added_in": "bench-v1.0",
   "notes": "The task relies on a sequential pair of calls in one initialized MCP session. In a fresh install, seen_before stayed false across the measured 90-second window; cross-session continuity is demonstrated in docs/case-study.md and is not benchmarkable on a fresh install."

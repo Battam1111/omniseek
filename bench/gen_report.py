@@ -134,7 +134,14 @@ def generate_report(
     dormant = results.get("dormant", [])
     if not isinstance(stale, list) or not isinstance(dormant, list):
         raise ValueError("stale and dormant must be lists")
-    stale_lines = "\n".join(f"- `{task_id}`" for task_id in stale) or "- none"
+    stale_lines = "\n".join(
+        (
+            f"- `{entry.get('id')}` ({entry.get('class')})"
+            if isinstance(entry, dict)
+            else f"- `{entry}`"
+        )
+        for entry in stale
+    ) or "- none"
     dormant_lines = "\n".join(f"- `{suite}`" for suite in dormant) or "- none"
     env = json.dumps(results.get("env", {}), ensure_ascii=False, indent=2, sort_keys=True)
     conflict = _conflict_paragraph(design_file)

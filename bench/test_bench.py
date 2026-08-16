@@ -15,6 +15,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+import httpx
+
 HERE = Path(__file__).resolve().parent
 if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
@@ -37,6 +39,7 @@ from run import (
     _parser,
     _required_extras,
     _run_rep,
+    _liveness_probe,
 )
 from schema import TaskValidationError, canonicalize_task, load_task_file
 
@@ -358,9 +361,15 @@ class SchemaTests(unittest.TestCase):
         self.assertEqual(task["input"]["tool"], "omniseek_search")
         self.assertNotIn("eye_tool", task["input"])
 
-    def test_schema_rejects_missing_liveness_probe(self):
+    def test_schema_rejects_invalid_liveness_probe(self):
         with self.assertRaises(TaskValidationError):
             canonicalize_task(_good_task(liveness_probe={}))
+
+    def test_schema_accepts_probe_absent_or_null(self):
+        absent = _good_task()
+        absent.pop("liveness_probe")
+        self.assertNotIn("liveness_probe", canonicalize_task(absent))
+        self.assertIsNone(canonicalize_task(_good_task(liveness_probe=None)).get("liveness_probe"))
 
     def test_schema_loads_single_task_and_array_files(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -477,6 +486,70 @@ class RunnerContractTests(unittest.TestCase):
                     bench_run._resolve_command("omniseek"),
                     str(command.resolve()),
                 )
+
+    def test_probe_absent_task_runs_without_network(self):
+        class FakeInvoker:
+            def __init__(self, *_args, **_kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, _exc_type, _exc, _traceback):
+                return None
+
+            async def call(self, _tool, _args, _timeout_s):
+                return {"text": "A phrase"}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tasks_dir = root / "tasks"
+            tasks_dir.mkdir()
+            task = _good_task()
+            task.pop("liveness_probe")
+            (tasks_dir / "task.json").write_text(json.dumps(task), encoding="utf-8")
+            output = root / "result.json"
+            with mock.patch.object(bench_run, "MCPInvoker", FakeInvoker):
+                exit_code = bench_run.main(
+                    [
+                        "--suites",
+                        "s3-crosslingual",
+                        "--reps",
+                        "1",
+                        "--passes",
+                        "1",
+                        "--tasks-dir",
+                        str(tasks_dir),
+                        "--out",
+                        str(output),
+                        "--no-warmup",
+                    ]
+                )
+            payload = json.loads(output.read_text(encoding="utf-8"))
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(payload["stale"], [])
+            self.assertEqual(payload["suites"]["s3-crosslingual"]["pooled"]["total"], 1)
+
+    def test_liveness_probe_classifies_429_as_rate_limited(self):
+        class Response:
+            status_code = 429
+
+        class Client:
+            def get(self, _url):
+                return Response()
+
+        probe = _liveness_probe(_good_task(), Client())
+        self.assertFalse(probe["alive"])
+        self.assertEqual(probe["class"], "rate_limited")
+
+    def test_liveness_probe_classifies_timeout_separately(self):
+        class Client:
+            def get(self, _url):
+                raise httpx.ReadTimeout("synthetic timeout")
+
+        probe = _liveness_probe(_good_task(), Client())
+        self.assertFalse(probe["alive"])
+        self.assertEqual(probe["class"], "timeout")
 
     def test_absolute_windows_out_path_with_backslashes_is_preserved(self):
         raw = r"C:\Users\bench\AppData\Local\Temp\bench-final.json"

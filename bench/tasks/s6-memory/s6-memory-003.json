@@ -40,9 +40,6 @@
       }
     ]
   },
-  "liveness_probe": {
-    "url": "https://api.openalex.org/works?search=On%20Computable%20Numbers&per-page=1"
-  },
   "lang": "en",
   "added_in": "bench-v1.0",
   "notes": "Verbose mode is intentional because bare orientation omits per-source facets."

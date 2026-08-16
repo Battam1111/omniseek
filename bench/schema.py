@@ -60,10 +60,12 @@ def canonicalize_task(raw: Mapping[str, Any]) -> dict[str, Any]:
         raise TaskValidationError("ground_truth.type must be a non-empty string")
     task["ground_truth"] = truth
 
-    probe = _require_mapping(task.get("liveness_probe"), "liveness_probe")
-    if not isinstance(probe.get("url"), str) or not probe["url"].strip():
-        raise TaskValidationError("liveness_probe.url must be a non-empty string")
-    task["liveness_probe"] = dict(probe)
+    # Probe-less tasks assert the server's own contract and are always live.
+    if "liveness_probe" in task and task["liveness_probe"] is not None:
+        probe = _require_mapping(task["liveness_probe"], "liveness_probe")
+        if not isinstance(probe.get("url"), str) or not probe["url"].strip():
+            raise TaskValidationError("liveness_probe.url must be a non-empty string")
+        task["liveness_probe"] = dict(probe)
 
     if "fallback_similarity" in task:
         value = task["fallback_similarity"]

@@ -72,6 +72,8 @@ One task is one JSON file, versioned in-repo, human-auditable:
 - **Dynamic ground truth (S5 only):** scholarly counts drift, so S5 tasks re-fetch the truth
   from the upstream source of record at judge time and compare structurally (the
   MCP-Universe dynamic-evaluator pattern), rather than freezing a number that will rot.
+- `liveness_probe` is optional. An absent or null probe means the task is self-contained
+  and always live; tasks that depend on an external source may provide a URL probe.
 
 ## Judges
 
@@ -100,9 +102,11 @@ Live sources are noisy, so single runs are noise:
 
 ## Rot policy
 
-- Before scoring, every task's `liveness_probe` runs. A dead upstream marks the task
-  **stale**: excluded from the denominator, counted, and listed by id in the run report.
-  Silent shrinkage of the denominator is forbidden; the stale list is part of the results.
+- Before scoring, every present `liveness_probe` runs. A 2xx or 3xx response is alive;
+  an absent or null probe is self-contained and always live. A non-live upstream marks
+  the task **stale**: excluded from the denominator, counted, and listed with a class such
+  as `dead`, `timeout`, or `rate_limited` in the run report. Silent shrinkage of the
+  denominator is forbidden; the stale list is part of the results.
 - The task set is versioned (`bench-v1.0`, `v1.1`, ...). New tasks enter with the wave that
   authored them; stale tasks are retired by id in the changelog, never edited in place.
 - Tasks are public plaintext by choice. This benchmark measures retrieval reach, not model

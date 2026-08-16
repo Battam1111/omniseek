@@ -381,16 +381,45 @@ class MCPInvoker:
 
 
 def _liveness_probe(task: dict[str, Any], client: httpx.Client) -> dict[str, Any]:
-    url = task["liveness_probe"]["url"]
+    probe = task.get("liveness_probe")
+    if probe is None:
+        return {"alive": True, "class": "self_contained"}
+    url = probe["url"]
     try:
         response = client.get(url)
+        status_code = response.status_code
+        if status_code == 429:
+            probe_class = "rate_limited"
+        elif status_code == 408:
+            probe_class = "timeout"
+        else:
+            probe_class = "alive" if 200 <= status_code < 400 else "dead"
         return {
-            "alive": 200 <= response.status_code < 400,
-            "status_code": response.status_code,
+            "alive": 200 <= status_code < 400,
+            "status_code": status_code,
             "url": url,
+            "class": probe_class,
         }
+    except httpx.TimeoutException as exc:
+        return {"alive": False, "url": url, "class": "timeout", "error": str(exc)}
     except Exception as exc:
-        return {"alive": False, "url": url, "error": str(exc)}
+        return {"alive": False, "url": url, "class": "dead", "error": str(exc)}
+
+
+def _stale_entries(
+    task_records: dict[str, dict[str, Any]],
+    stale_ids: set[str],
+) -> list[dict[str, str]]:
+    entries: list[dict[str, str]] = []
+    for task_id in sorted(stale_ids):
+        liveness = task_records.get(task_id, {}).get("liveness") or {}
+        entries.append(
+            {
+                "id": task_id,
+                "class": str(liveness.get("class") or "dead"),
+            }
+        )
+    return entries
 
 
 async def _run_rep(
@@ -730,7 +759,7 @@ async def run_benchmark(
                     stale_ids.add(task["id"])
     except BaseException as exc:
         raise _phase_error("init", "<liveness>", exc) from None
-    result["stale"] = sorted(stale_ids)
+    result["stale"] = _stale_entries(task_records, stale_ids)
     result["dormant"] = sorted(dormant_suites)
 
     pass_aggregates: list[dict[str, dict[str, Any]]] = []
@@ -875,7 +904,7 @@ async def run_benchmark(
         round(value, 3) for value in warmup_pass_ms
     ]
     result["suites"] = suites_output
-    result["stale"] = sorted(stale_ids)
+    result["stale"] = _stale_entries(task_records, stale_ids)
     result["dormant"] = sorted(dormant_suites)
     result.pop("error", None)
     output = _output_path(args.out, result["run"]["git_sha7"])
