@@ -1,9 +1,9 @@
 {
-  "_doc": "Curator P3 RED-LINE coverage policy as DATA (Captain-owned). The mechanical safety flags in source_audit.py READ these numbers; the agent physically cannot cross them (record_source_verdict raises). Widening any number is a deliberate Captain edit. This file is NEVER read as a verdict: it carries only coverage-floor / cadence / cold-start thresholds, no keep/watch/prune word.",
+  "_doc": "Curator P3 RED-LINE coverage policy as DATA (the operator-owned). The mechanical safety flags in source_audit.py READ these numbers; the agent physically cannot cross them (record_source_verdict raises). Widening any number is a deliberate the operator edit. This file is NEVER read as a verdict: it carries only coverage-floor / cadence / cold-start thresholds, no keep/watch/prune word.",
   "version": 1,
 
   "coverage_floor": 1,
-  "_coverage_floor_doc": "The last-occupant rule: a (domain x mode) cell may never be walked below this many LIVE occupants by a prune. Default 1 = never empty a cell. Captain may raise a critical cell (e.g. immigration, a region-specific cell) by listing it in coverage_floor_overrides; absent an override the default applies.",
+  "_coverage_floor_doc": "The last-occupant rule: a (domain x mode) cell may never be walked below this many LIVE occupants by a prune. Default 1 = never empty a cell. the operator may raise a critical cell (e.g. immigration, a region-specific cell) by listing it in coverage_floor_overrides; absent an override the default applies.",
   "coverage_floor_overrides": {},
 
   "min_evidence": {
@@ -45,5 +45,5 @@
   "_verdict_revalidation_floor_days_doc": "The STALE-JUDGMENT floor (a SEPARATE clock from cadence_floor_days, NOT a reuse): a prior keep/watch/prune the agent recorded grows stale, and the gather flags a source as a revalidation_candidate once its last verdict is older than this many days. Default 90 ~ the monthly curator cron cadence (a quarter of silence on a judgment is a fair window to re-look). This is feed-AGNOSTIC: cadence_floor_days asks 'did the FEED go quiet past its expected silence' (a data-freshness clock); this asks 'did MY last JUDGMENT go stale' (a re-look clock). The gather still emits NO verdict word; this only governs whether a neutral revalidation nudge is raised, and the cold-start gate (min_evidence_met) still applies so a never-measured source is never surfaced as stale.",
 
   "never_retire_a_class": true,
-  "_never_retire_a_class_doc": "The whole-class invariant: a prune may retire individual sources but the agent is instructed (prompt B.5) never to propose retiring an entire source-class (e.g. all immigration sources). Encoded mechanically by coverage_critical: retiring the sole occupant of any cell is un-offerable, so a class with one source per cell can never be fully emptied by safe prunes. coverage_impact (Captain case) surfaces any prune that would leave a cell single-occupant."
+  "_never_retire_a_class_doc": "The whole-class invariant: a prune may retire individual sources but the agent is instructed (prompt B.5) never to propose retiring an entire source-class (e.g. all immigration sources). Encoded mechanically by coverage_critical: retiring the sole occupant of any cell is un-offerable, so a class with one source per cell can never be fully emptied by safe prunes. coverage_impact (the operator case) surfaces any prune that would leave a cell single-occupant."
 }

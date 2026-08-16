@@ -1,9 +1,9 @@
 """Agent-synthesized weekly BRIEFING (Phase 1, 2026-07-14): the digest job, instead of a raw ranked
-link list, runs a frontier LLM agent (GPT-5.6 via Captain's private Responses-API proxy) that has
-READ-ONLY use of OmniSeek (deep retrieval) and the brain (Captain's context) to produce a VALUABLE
+link list, runs a frontier LLM agent (GPT-5.6 via the operator's private Responses-API proxy) that has
+READ-ONLY use of OmniSeek (deep retrieval) and the brain (the operator's context) to produce a VALUABLE
 briefing -- insight tied to his goals, not a list of links.
 
-THE SANDBOX (Captain's hard constraint: the agent gets USAGE only, touches nothing else). The
+THE SANDBOX (the operator's hard constraint: the agent gets USAGE only, touches nothing else). The
 frontier model is a raw text-in/text-out API: it can affect the world ONLY through the function tools
 this module exposes, and this module exposes a WHITELIST of READ-ONLY eye/brain tools (omniseek_search,
 brain_read). Every tool call is executed BY THIS CODE against that whitelist; a call to any name not
@@ -35,7 +35,7 @@ log = logging.getLogger(__name__)
 _FRONTIER_CREDS = Path.home() / ".omniseek" / "credentials" / "frontier.json"
 _BRAIN_NOTES = Path.home() / "omniseek-brain" / "notes"
 
-# Captain-context notes pre-loaded into the agent so the briefing is tied to WHO he is + WHAT he wants.
+# the operator-context notes pre-loaded into the agent so the briefing is tied to WHO he is + WHAT he wants.
 _CONTEXT_NOTES = ("owner-model", "telos", "self-model")
 
 _DEADLINE_S = 900          # total wall-clock budget for one briefing agent run
@@ -70,7 +70,7 @@ def _read_brain_note(note_id: str) -> str:
     return f"(brain note '{nid}' not found)"
 
 
-def _load_captain_context() -> str:
+def _load_operator_context() -> str:
     return "\n\n".join(f"### {n}\n{_read_brain_note(n)[:2500]}" for n in _CONTEXT_NOTES)
 
 
@@ -85,7 +85,7 @@ def _t_eye_search(args: dict) -> str:
     # It must NEVER fetch a CALLER-chosen URL: otherwise the untrusted model could hand a URL-drill
     # adapter (today only 'pdf': it urlparse()s the query and http.get()s it) an attacker URL and turn a
     # whitelisted read-only search into arbitrary EXTERNAL egress -- a blind one-way exfil channel for
-    # the private Captain-context this module preloads. We reject at the QUERY layer (not by denylisting
+    # the private the operator-context this module preloads. We reject at the QUERY layer (not by denylisting
     # a source), using the SAME urlparse the pdf adapter uses, so ANYTHING a URL-drill source would fetch
     # is refused here first -- covering any future such source for free. Zero capability loss: keyword
     # search AND naming a specific source both stay fully available; only a raw-URL query is blocked (a
@@ -138,7 +138,7 @@ _TOOLS = {
             "required": ["query"]}}),
     "brain_read": (_t_brain_read, {
         "type": "function", "name": "brain_read",
-        "description": "Read Captain's brain notes by id (his strategy / context / preferences / "
+        "description": "Read the operator's brain notes by id (his strategy / context / preferences / "
                        "career canon) to ground the briefing in his ACTUAL goals.",
         "parameters": {"type": "object", "properties": {
             "ids": {"type": "array", "items": {"type": "string"}}}, "required": ["ids"]}}),
@@ -163,13 +163,13 @@ def _exec_tool(name: str, arguments) -> str:
         return f"error running {name}: {str(exc)[:140]}"
 
 
-# NO operator identity in this string. Who Captain is (name, programme, situation, strategy) is
-# appended right below it by build_briefing as "## Captain 的画像(brain)" + the full context notes,
+# NO operator identity in this string. Who the operator is (name, programme, situation, strategy) is
+# appended right below it by build_briefing as "## the operator 的画像(brain)" + the full context notes,
 # read from the brain at run time: that is the canonical home for it, and it is both deeper and
 # always current. A parenthetical here was a stale second copy of the same facts compiled into a
 # module that gets mirrored verbatim into a public repository.
 _SYSTEM = (
-    "你是 Captain 的研究"
+    "你是 the operator 的研究"
     "「师兄」。任务:产出一份**本周精选简报** —— 不是链接清单,而是有洞察、贴他目标的判断。\n\n"
     "你有**只读**的两件工具:omniseek_search(深度检索 200+ 策展源,比公网强)、brain_read(读他的 brain 笔记"
     "了解处境/偏好/战略)。主动用它们:每个主题先搜、判断什么是真新真重要,必要时 brain_read 核对他的目标。\n\n"
@@ -250,7 +250,7 @@ def build_briefing(themes: list) -> Optional[str]:
     task = (f"本周主题({len(themes)} 个):\n{theme_lines}\n\n"
             "先用 omniseek_search 逐主题搜(可用建议查询,也可自己调整/追搜),挑出真正值得的,"
             "必要时 brain_read 核对他的目标,然后产出本周简报。")
-    system = _SYSTEM + "\n\n## Captain 的画像(brain)\n" + _load_captain_context()
+    system = _SYSTEM + "\n\n## the operator 的画像(brain)\n" + _load_operator_context()
     inp: list = [{"role": "system", "content": system}, {"role": "user", "content": task}]
     tool_schemas = [v[1] for v in _TOOLS.values()]
     calls, t0 = 0, time.monotonic()

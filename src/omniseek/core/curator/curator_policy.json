@@ -1,5 +1,5 @@
 {
-  "_doc": "Curator P4 self-iterating-loop policy as DATA (Captain-owned). The monthly in-process curator job (omniseek.core.infra_jobs.run_curator) + the discovery engine (discover.py) READ these numbers; they bake in NO admit/reject/keep/prune/pursue threshold (that would violate the razor exactly as a Captain Y/N prompt would). This file carries ONLY anti-runaway knobs + the enabled flags; it contains NO verdict word. Ships INERT (enabled:false, cold_start.enabled:false) so the loop is near-idle until Captain declares coverage_targets.json AND flips enabled:true (spec section 0).",
+  "_doc": "Curator P4 self-iterating-loop policy as DATA (the operator-owned). The monthly in-process curator job (omniseek.core.infra_jobs.run_curator) + the discovery engine (discover.py) READ these numbers; they bake in NO admit/reject/keep/prune/pursue threshold (that would violate the razor exactly as a the operator Y/N prompt would). This file carries ONLY anti-runaway knobs + the enabled flags; it contains NO verdict word. Ships INERT (enabled:false, cold_start.enabled:false) so the loop is near-idle until the operator declares coverage_targets.json AND flips enabled:true (spec section 0).",
   "version": 1,
 
   "enabled": true,

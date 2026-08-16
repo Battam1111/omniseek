@@ -66,7 +66,7 @@
         "us"
       ]
     },
-    "explicit_only": "federal_register: named drill only. MEASURED 2026-07-25 over 1986 recorded searches: timed out 727 times (37% of all searches) and reached the ranked top-k ZERO times, sole-contributed ZERO times. US federal regulatory filings sit outside the CA/SG/HK + AI-research queries this eye serves, and cset / oecd_ai_policy already carry AI policy. Kept fully reachable by name; excluded_relevant still recommends it on a real match. Captain's call 2026-07-25.",
+    "explicit_only": "federal_register: named drill only. MEASURED 2026-07-25 over 1986 recorded searches: timed out 727 times (37% of all searches) and reached the ranked top-k ZERO times, sole-contributed ZERO times. US federal regulatory filings sit outside the research and career queries the default catalog is tuned for, and cset / oecd_ai_policy already carry AI policy. Kept fully reachable by name; excluded_relevant still recommends it on a real match. Standing curation call, 2026-07-25.",
     "needs_credentials": false
   }
 ]

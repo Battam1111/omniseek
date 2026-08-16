@@ -42,7 +42,7 @@ OmniSeek is the reach beneath it, and everything it does runs on your machine.
 
 It hears (local bilingual ASR, no cloud), sees (images and video frames, in-band), crosses languages (a Chinese query finds English results and vice versa), reads behind login walls (your credentials, your machine, off by default), and remembers (a persistent relation graph that gets richer with every query).
 
-Every source in the catalog earned its place by beating plain search at something, from citation graphs and regulatory filings to login-walled forums and Chinese-language video. And the catalog is built to grow: a curator pipeline probes, judges, and admits new sources, and retires the ones that decay.
+Every source in [the catalog](docs/sources.md) earned its place by beating plain search at something, from citation graphs and regulatory filings to login-walled forums and Chinese-language video. And the catalog is built to grow: a curator pipeline probes, judges, and admits new sources, and retires the ones that decay.
 
 **[Worked examples, real outputs](docs/examples.md)** · **[A full case study](docs/case-study.md)**
 

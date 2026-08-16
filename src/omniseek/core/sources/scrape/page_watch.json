@@ -11,7 +11,7 @@
   "label": "ONE Pass 资格标准",
   "url": "https://www.mom.gov.sg/passes-and-permits/overseas-networks-expertise-pass/eligibility",
   "regions": ["sg"],
-  "note": "顶级人才准证标准 (2027-01 将开 AI and Tech Track, 对 Captain 直接相关)"
+  "note": "顶级人才准证标准 (2027-01 将开 AI and Tech Track, 对 AI 人才路线直接相关)"
  },
  {
   "name": "ica_pr_apply",
@@ -46,7 +46,7 @@
   "label": "检索基建·TikHub 价格",
   "url": "https://tikhub.io/pricing",
   "regions": ["retrieval-infra"],
-  "note": "墙内社媒 API; ~50 次注册赠额 + PAYG $0.001/次. 付费决策归 Captain; 雷达只盯价格/免费档变. 2026-06-17 实证 200/3909 chars"
+  "note": "墙内社媒 API; ~50 次注册赠额 + PAYG $0.001/次. 付费与否由使用者决定; 雷达只盯价格/免费档变. 2026-06-17 实证 200/3909 chars"
  },
  {
   "name": "ri_brave_search_api",

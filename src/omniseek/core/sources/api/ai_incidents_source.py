@@ -68,7 +68,7 @@ class AIIncidentsAdapter(BaseScrapeAdapter):
         "ZERO times. It is not broken (a named drill returns real results), it is simply slower than "
         "the broad deadline while its domain (AI-incident registry) sits outside the queries this eye "
         "actually serves. Kept fully reachable by name, and excluded_relevant still recommends it when "
-        "a query genuinely matches. Captain's call 2026-07-25.")
+        "a query genuinely matches. Standing curation call 2026-07-25.")
     modes = ["STRUCTURE"]
 
     def _raw_fetch(self, query: str, limit: int) -> Optional[Any]:

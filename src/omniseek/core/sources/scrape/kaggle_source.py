@@ -50,7 +50,7 @@ class KaggleAdapter(BaseScrapeAdapter):
         "times. It is not broken (a named drill returns real results), it is simply slower than the "
         "broad deadline while its domain (datasets/code; huggingface_hub + github cover it) sits "
         "outside the queries this eye actually serves. Kept fully reachable by name, and "
-        "excluded_relevant still recommends it when a query genuinely matches. Captain's call "
+        "excluded_relevant still recommends it when a query genuinely matches. Standing curation call "
         "2026-07-25.")
     modes = ["STRUCTURE"]
 

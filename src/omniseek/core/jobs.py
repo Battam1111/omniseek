@@ -695,7 +695,7 @@ def register_shipped_jobs() -> None:
                  budget_s=1500, description="月度发现候选源,推中性事实(admit/reject 归 agent)")
     register_job("source-audit", "weekly@sun-06:00", infra_jobs.run_source_audit, enabled=True,
                  budget_s=900, description="周度源审计(冗余 / 死 / 空格),推中性事实")
-    # ENABLED per Captain (2026-07-14). Safe on ANY deployment: run_digest NO-OPS (a log line) when
+    # ENABLED per the operator (2026-07-14). Safe on ANY deployment: run_digest NO-OPS (a log line) when
     # ~/.omniseek/state/digest-themes.json is absent, so a fresh deploy without themes pushes nothing.
     # Enabled in CODE (not a profile override) because the profile file, once present, gates walled
     # sources OFF by default -- so enabling a JOB via the profile would silently disable the walled

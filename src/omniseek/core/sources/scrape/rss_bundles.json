@@ -367,7 +367,7 @@
   },
   {
     "name": "rl_llm_frameworks",
-    "description": "RL-on-LLM 训练框架发布流 — OpenRLHF / verl(volcengine) / TRL(HuggingFace) / LLaMA-Factory. Captain 正方向(RL/reasoning)的工程交付层; github_releases(推理栈 vLLM/SGLang/...)未覆盖的训练框架补充",
+    "description": "RL-on-LLM 训练框架发布流 — OpenRLHF / verl(volcengine) / TRL(HuggingFace) / LLaMA-Factory. RL/reasoning 方向的工程交付层; github_releases(推理栈 vLLM/SGLang/...)未覆盖的训练框架补充",
     "feeds": [
       "https://github.com/OpenRLHF/OpenRLHF/releases.atom",
       "https://github.com/volcengine/verl/releases.atom",

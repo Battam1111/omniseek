@@ -9,7 +9,7 @@ inside the writer process.
 2026-08-12: Bark is RETIRED and deleted from the fleet. It had been unreachable from the mini
 (three probes, the connection never establishing, 20s timeouts) while every infra alarm pushed to
 it and to nothing else, so alarms were written, counted, logged as pushed, and delivered nowhere.
-WeCom answers in 0.06s and is Captain's actual channel (desktop + phone). One channel, and it works.
+WeCom answers in 0.06s and is the operator's actual channel (desktop + phone). One channel, and it works.
 
 FAIL-OPEN contract: an absent credentials file, a missing webhook, or any HTTP/parse failure is a
 log line and a return, NEVER an exception. A push failure must never break the run that emitted it.
@@ -32,7 +32,7 @@ _ALERT_DELIVERY_PATH = Path.home() / ".omniseek" / "state" / "alert-delivery.jso
 
 def wecom_push(title: str, body: str) -> bool:
     """POST one 企业微信 (WeCom) group-robot MARKDOWN message via the webhook in
-    ~/.omniseek/credentials/wecom.json ({webhook_url}). Captain's channel (desktop + phone).
+    ~/.omniseek/credentials/wecom.json ({webhook_url}). the operator's channel (desktop + phone).
     Returns True only if the POST was actually made. qyapi.weixin.qq.com routes DIRECT (mainland)
     through the mini's Clash; the group-robot API rate-limits ~20 msg/min, so a caller pushing more
     than a couple messages a minute must pace itself (a weekly digest is one message, so no pacing

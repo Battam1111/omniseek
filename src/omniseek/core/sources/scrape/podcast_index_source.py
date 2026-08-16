@@ -103,7 +103,7 @@ class PodcastIndexAdapter(BaseScrapeAdapter):
         "the broad deadline while its domain (podcast directory; apple_podcasts / xiaoyuzhou / "
         "chinese_podcasts already cover the modality) sits outside the queries this eye actually "
         "serves. Kept fully reachable by name, and excluded_relevant still recommends it when a query "
-        "genuinely matches. Captain's call 2026-07-25.")
+        "genuinely matches. Standing curation call 2026-07-25.")
     modes = ["STRUCTURE", "TRANSCRIBE"]
 
     # ── credentials ─────────────────────────────────────────────────────────

@@ -162,11 +162,11 @@ def _load_all() -> list:
     if not isinstance(data, _builtin_list):
         logger.warning("curator candidates.json is not a list -> treating as empty []")
         return []
-    # Legacy-state migration: the admit-staging state was renamed captain_review -> owner_review
+    # Legacy-state migration: the admit-staging state was renamed owner_review -> owner_review
     # (open-source de-identification). Normalize any persisted candidate so an in-flight one is not
     # orphaned by the new STATES / ALLOWED_TRANSITIONS.
     for _r in data:
-        if isinstance(_r, dict) and _r.get("state") == "captain_review":
+        if isinstance(_r, dict) and _r.get("state") == "owner_review":
             _r["state"] = "owner_review"
     return data
 

@@ -84,7 +84,7 @@ def _alert(title: str, body: str, **_ignored) -> None:
     probes, the connection never establishing, 20s timeouts, nine "push failed" lines across the
     logs) while EVERY infra alarm pushed to it and to nothing else. Alarms were written, counted,
     logged as pushed, and delivered nowhere, which is worse than having no alarms because the quiet
-    reads as calm. One channel now, WeCom, which answers in 0.06s and is where Captain actually
+    reads as calm. One channel now, WeCom, which answers in 0.06s and is where the operator actually
     reads. The contract is unchanged: never raise, a broken alarm must not break the job that
     raised it."""
     try:
@@ -1088,7 +1088,7 @@ def run_log_rotation() -> dict:
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
 # JOB: nserc cache prime   (monthly@1-03:30; keep the bulk-CSV source warm OFF the query path)
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
-# WHY (2026-07-14, approved by Captain as a standing job): nserc_awards is a BULK source — its data is
+# WHY (2026-07-14, approved by the operator as a standing job): nserc_awards is a BULK source — its data is
 # one ~56MB annual CSV, pulled at most monthly and cached (the CS/AI subset, ~3.6k docs) so queries
 # are zero-network. The catch: the cold 56MB pull takes ~96s (routed via a fast node in the mini's
 # mihomo, since the mainland-direct link throttles bulk to ~116KB/s), which BLOWS OmniSeek's 90s
@@ -1122,11 +1122,11 @@ def run_nserc_prime() -> dict:
 
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
-# JOB: curator monthly pass   (transplanted from curator.py; monthly@1-06:00, ENABLED per Captain)
+# JOB: curator monthly pass   (transplanted from curator.py; monthly@1-06:00, ENABLED per the operator)
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
 # THE ONE-LINE RAZOR (every drift violates it): the pass is mechanical-only. It discovers, probes,
 # persists, counts, and Barks pure FACTS, rendering ZERO editorial judgment. A spawned AGENT renders
-# EVERY verdict (which gap matters, which candidate to pursue, admit/watch/reject). Captain owns only
+# EVERY verdict (which gap matters, which candidate to pursue, admit/watch/reject). the operator owns only
 # red-line/coverage POLICY DATA + the single irreversible sanction (committing an owner_review-staged
 # config row). This code imports NO verdict-writer, NO model/anthropic client, NO WebSearch, NO
 # profile.*/relevance/employer_hits. Every digest list is sorted(...) lexicographic, NEVER
@@ -1141,7 +1141,7 @@ def run_nserc_prime() -> dict:
 # cadence window is a clean no-op, so a deploy restart storm cannot defeat the monthly cadence.
 # State: ~/.omniseek/state/curator/curator-loop-state.json (unchanged path).
 #
-# NOTE (ignition, P9): the ROW is ENABLED per Captain: expect one Bark digest of neutral facts per
+# NOTE (ignition, P9): the ROW is ENABLED per the operator: expect one Bark digest of neutral facts per
 # month (admit/watch/reject verdicts stay the agent's, in the /curator session). Runs in the writer
 # process; discovery's own probe fetches use _run_bounded, and the pass records no yield.
 _CURATOR_STATE = _STATE / "curator" / "curator-loop-state.json"
@@ -1416,7 +1416,7 @@ def run_curator() -> dict:
 
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
-# JOB: source audit   (transplanted from source_audit.py; weekly@sun-06:00, ENABLED per Captain)
+# JOB: source audit   (transplanted from source_audit.py; weekly@sun-06:00, ENABLED per the operator)
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
 # The health watchdog reports a source that DIED; this reports the slow structural question: which
 # sources look like dead weight (yield-measured), which feeds went silent, and -- the inverse of a
@@ -1560,15 +1560,15 @@ def run_source_audit() -> dict:
 # JOB: weekly digest   (transplanted from digest.py; weekly@mon-09:00, DISABLED)
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
 # A cross-source, deduped, ranked reading list. Where the sensors push individual NEW items (event-
-# driven), the digest gives Captain a periodic CURATED view: per theme it runs fetcher.search_ranked
+# driven), the digest gives the operator a periodic CURATED view: per theme it runs fetcher.search_ranked
 # across the relevant sources -> cross-source dedup + unified ranking -> the top items. Output: a
 # Markdown digest (saved + archived) + a condensed Bark push. The synthesis is STRUCTURAL (dedup +
 # rank + theme grouping), not LLM prose -- the Markdown is the substrate a session turns into prose
-# on demand. PUSH CHANNEL: 企业微信 (WeCom) ONLY, per Captain (2026-07-14) -- notify.wecom_push, not Bark.
+# on demand. PUSH CHANNEL: 企业微信 (WeCom) ONLY, per the operator (2026-07-14) -- notify.wecom_push, not Bark.
 #
 # THE THEMES LIST LEFT THE CODE (P9): it is now DATA at ~/.omniseek/state/digest-themes.json (seeding
 # that file on the mini is the CEO's migration step). When the file is ABSENT the job NO-OPS with a
-# log line -- it never invents a theme list. Row ships ENABLED (Captain 2026-07-14) but is SAFE on any
+# log line -- it never invents a theme list. Row ships ENABLED (the operator 2026-07-14) but is SAFE on any
 # deployment BECAUSE of that no-op: a fresh deploy without themes pushes nothing. It is enabled in CODE
 # (not a profile override) on purpose -- a profile file, once present, gates the walled source fleet
 # OFF by default (profile.is_source_enabled), so enabling a JOB via the profile would silently disable
@@ -1582,7 +1582,7 @@ _DIGEST_PER_THEME = 6
 def _load_digest_themes() -> list:
     """The theme rows (each {label, query, sources}) from ~/.omniseek/state/digest-themes.json, or []
     when the file is absent/corrupt. The job no-ops on []. Never a built-in default (the list is
-    Captain's DATA, seeded on the mini)."""
+    the operator's DATA, seeded on the mini)."""
     if not _DIGEST_THEMES_PATH.exists():
         return []
     try:
@@ -1627,7 +1627,7 @@ def run_digest() -> dict:
     ts = datetime.now()
 
     # PRIMARY: an AGENT-synthesized briefing (a frontier LLM with READ-ONLY use of OmniSeek + brain ->
-    # insight tied to Captain's goals, not a link list). Fail-open by contract: None -> the mechanical
+    # insight tied to the operator's goals, not a link list). Fail-open by contract: None -> the mechanical
     # ranked-link digest below (the agent is an enrichment, never a hard dependency).
     mode = "agent"
     try:
@@ -1663,7 +1663,7 @@ def run_digest() -> dict:
     (_DIGEST_DIR / "latest.md").write_text(body, encoding="utf-8")
     (_DIGEST_DIR / f"digest-{ts.strftime('%Y%m%d')}.md").write_text(body, encoding="utf-8")
 
-    # Push to 企业微信 (WeCom, Captain's MAIN channel) ONLY -- NOT Bark (Captain 2026-07-14). The full
+    # Push to 企业微信 (WeCom, the operator's MAIN channel) ONLY -- NOT Bark (the operator 2026-07-14). The full
     # Markdown is saved above; WeCom carries the briefing (agent) or the top-5 highlights (fallback).
     from omniseek.core import notify
     notify.wecom_push(f"OmniSeek 周报 · {ts.date().isoformat()}", push_body)

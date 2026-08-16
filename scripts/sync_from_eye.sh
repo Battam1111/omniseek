@@ -82,6 +82,15 @@ RENAME=(
   # \b keeps eye_read-style identifiers out (underscore is a word char, no boundary).
   -e 's/[Tt]he [Ee]ye\b/OmniSeek/g'
   -e 's/\beye_/omniseek_/g'
+  # The operator's name is a PRIVATE-era token (2026-08-16 sweep: it reached a public runtime
+  # string through a source description). Runtime-visible strings were re-authored at the eye;
+  # these rules neutralize the long tail (comments, prompts, identifiers) and the residue gate
+  # below makes the whole class unshippable. captain_review first: it is a legacy-state literal
+  # in a migration shim (still load-bearing at the eye; vacuous but harmless once renamed here).
+  -e 's/captain_review/owner_review/g'
+  -e "s/Captain's/the operator's/g"
+  -e 's/Captain/the operator/g'
+  -e 's/captain/operator/g'
   -e 's/"eye"/"core"/g'
   -e 's/_EYE_/_OMNISEEK_/g'
   -e 's/POLARIS_/OMNISEEK_/g'
@@ -132,6 +141,12 @@ relation graph) under \`\`omniseek.core\`\`.
 __version__ = "$VER"
 PYEOF
 echo "    re-authored src/omniseek/__init__.py (version $VER from pyproject)"
+
+# 2d. Regenerate the source-catalog doc from the freshly renamed engine. The catalog is code,
+#     so the doc rides the same sync that changes it and can never drift; hand counts stay out
+#     of prose by mechanism, not memory.
+echo "    regenerating docs/sources.md ..."
+(cd "$PEN_ROOT" && PYTHONIOENCODING=utf-8 "$PYBIN" scripts/gen_sources_doc.py >/dev/null)
 
 # --- 3. smoke tests + the repo ARTIFACTS the suite reads: same renames + drop polyu from the
 #     frozen explicit_only list (the public mirror has no polyu source; mokahr_ats is already
@@ -221,6 +236,13 @@ fi
 if grep -rnqE '\beye_' "${GATE_PATHS[@]}"; then
   echo "  GATE FAIL: 'eye_' tool-name residue:"
   grep -rnE '\beye_' "${GATE_PATHS[@]}" | head -10
+  FAILED=1
+fi
+# The operator's name must never reach the public artifact (2026-08-16: one source description
+# shipped with it; the rename rules above neutralize the class, this gate proves it).
+if grep -rniq 'captain' "${GATE_PATHS[@]}"; then
+  echo "  GATE FAIL: operator-identity residue:"
+  grep -rni 'captain' "${GATE_PATHS[@]}" | head -10
   FAILED=1
 fi
 # "the eye" is renamed to OmniSeek since 2026-08-16 (runtime surfaces must carry the brand);

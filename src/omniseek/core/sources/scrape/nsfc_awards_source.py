@@ -21,7 +21,7 @@ whose result table lists each grant as TWO consecutive <tr> rows (a 7-cell metad
 题目/title row). We fetch page-by-page (10 records/page) up to the requested limit.
 
 LIMITS / RISK (flagged prominently):
-  * Third-party ToS is gray (Captain approved the open stance); LetPub is a commercial site and the
+  * Third-party ToS is gray (the operator approved the open stance); LetPub is a commercial site and the
     unauthenticated table is the free tier. STABILITY is the real risk: the HTML layout, the free-tier
     year cap, and the field order are LetPub's to change without notice. If the two-row table shape
     shifts, _parse_grants yields nothing and search degrades to [] (the contract) — a smoke-fixture
