@@ -42,6 +42,8 @@ OmniSeek keeps seeking: through languages, logins, comment threads, audio, and p
 
 It hears (local bilingual ASR, no cloud), sees (images and video frames, in-band), crosses languages (a Chinese query finds English results and vice versa), reads behind login walls (your credentials, your machine, off by default), and remembers (persistent retrieval memory plus a typed, source-traced evidence graph).
 
+Crossing languages draws on the index OmniSeek builds as you use it, so a fresh install starts at a floor. The published benchmark runs on exactly that fresh install, which makes its cross-lingual number the coldest case rather than the typical one.
+
 Every source in [the catalog](docs/sources.md), the curated roster of everything OmniSeek can reach, earned its place by beating plain search at one of five jobs (structure, unwalling, transcription, recall, monitoring): citation graphs, regulatory filings, login-walled forums, Chinese-language video. And the catalog is built to grow: a curator pipeline probes, judges, and admits new sources, and retires the ones that decay.
 
 **[Worked examples, real outputs](docs/examples.md)** · **[A full case study](docs/case-study.md)** · **[Benchmark](bench/DESIGN.md)** ([latest results](https://github.com/Battam1111/omniseek/blob/health-data/bench/RESULTS.md)) · **[Source health, updated weekly](https://github.com/Battam1111/omniseek/blob/health-data/README.md)**

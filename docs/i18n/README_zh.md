@@ -40,6 +40,8 @@ OmniSeek 继续求索:穿过语言、登录墙、评论区、音频与像素,全
 
 它能听(本地双语转写,不走云),能看(图片与视频帧,视觉直读),能跨语言(中文查询返回英文结果,反之亦然),能进登录墙(你的凭证,你的机器,默认关闭),还能记住(持久的检索记忆,外加一张带类型、可溯源的证据图谱)。
 
+跨语言依赖 OmniSeek 随你使用而积累的索引,所以新装的实例是从地板起步。公开 benchmark 跑的正是这样一台新装实例,它那个跨语言数字是最冷的情况,不是常态。
+
 [目录](../sources.md)是 OmniSeek 所及一切的策展名册;里面的每一个源,都是靠在五件事之一(结构化、进墙、转写、召回、监测)上打赢普通搜索才拿到位置的:引用图谱、监管文件、登录墙论坛、中文视频。目录生来就会生长:内置的 curator 流水线负责探测、判决、准入新源,并让退化的源退役。
 
 **[真实例子、真实输出](../examples.md)** · **[一次完整调查](../case-study.md)** · **[Benchmark](../../bench/DESIGN.md)**([最新结果](https://github.com/Battam1111/omniseek/blob/health-data/bench/RESULTS.md))· **[源健康,周更](https://github.com/Battam1111/omniseek/blob/health-data/README.md)**
