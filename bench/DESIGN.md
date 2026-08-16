@@ -33,8 +33,8 @@ claim.**
 |---|---|---|---|
 | S1 audio | transcribes speech nobody wrote down | `omniseek_transcribe` | `asr` |
 | S2 pixels | reads text baked into images and scans | `omniseek_read(ocr=True)` | `ocr` |
-| S3 cross-lingual | crosses languages | `omniseek_search` | core (`recall` strengthens) |
-| S4 depth | evidence deep in threads and long documents | `omniseek_search` / `omniseek_read` | core (`pdf` for PDF tasks) |
+| S3 cross-lingual | crosses languages | `omniseek_search` | `recall` (measured: the first CI run scored 1/14 without it; the vector layer carries this sense, and an accumulated index raises it further) |
+| S4 depth | evidence deep in threads and long documents | `omniseek_search` / `omniseek_read` | `pdf` for the document tasks |
 | S5 scholar graph | structured scholarly evidence | `omniseek_coauthors` / `omniseek_paper_enrich` | core |
 | S6 memory | remembers, deduplicates, traces provenance | `_meta` contract of repeat runs | core |
 

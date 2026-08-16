@@ -30,7 +30,7 @@ jobs:
           python-version: "3.11"
           cache: pip
       - name: Install package
-        run: pip install .
+        run: pip install ".[pdf,recall,ocr]"
       - name: Run benchmark
         env:
           PYTHONUTF8: "1"
