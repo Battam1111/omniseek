@@ -1,7 +1,7 @@
 [
   {
     "name": "agent_tooling_radar",
-    "explicit_only": "tooling/skill radar; watchtower + named only, kept out of research search",
+    "explicit_only": "tooling and skill radar; monitor-style, explicit-only: kept out of the broad research sweep",
     "description": "Agent/Skill 生态雷达 — Claude Code/MCP/Agent SDK 发布 + 研究加速工具(paper-qa/paper-search-mcp/context7/serena)+ eval/observability(inspect/phoenix/langfuse)发布 + awesome-lists(agent-papers/agent-skills/superpowers)+ Latent Space/Simon Willison。盯'存在哪些好工具'的信息差(2026-06-05 基线扫描产物;explicit_only,看门狗/点名才查)",
     "feeds": [
       "https://github.com/anthropics/claude-code/releases.atom",

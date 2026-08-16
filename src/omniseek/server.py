@@ -1963,10 +1963,10 @@ def omniseek_gather(calls: list[dict], wait_s: LenientInt = 60) -> dict:
 @mcp.tool()
 @_threaded
 def omniseek_graph(view: str = "", args: Optional[dict] = None) -> dict:
-    """Use WHEN you want HOW two entities connect, or what OmniSeek already knows AROUND a paper / author / entity — read-only, budgeted projections of its accumulated relation-memory (ONE graph).
+    """Use WHEN you want HOW two entities connect, or what OmniSeek already knows AROUND a paper / author / entity; read-only, budgeted projections of its accumulated evidence graph with typed edges (ONE graph).
 
     Everything OmniSeek perceives is a statement with provenance ("X relates to Y, per Z");
-    the graph is that accumulated relation-memory, ONE store surfaced through N indexes. It
+    the evidence graph accumulates those typed edges in ONE store surfaced through N indexes. It
     stores FACTS + labeled CANDIDATES, never verdicts: mechanical world edges (tier M: cites,
     authored, coauthored, affiliated, published_in, about, observed, exact-id same_as) and
     alignment CANDIDATES (tier A: title-fingerprint / fuzzy-name same_as, name-match authored,
@@ -2420,6 +2420,33 @@ def _warm_heavy_imports() -> None:
     from omniseek.core import rank  # noqa: F401
 
 
+_SENSE_PROBES = (
+    ("pdf", "fitz", "pdf"),
+    ("hearing", "funasr", "asr"),
+    ("vector recall", "sentence_transformers", "recall"),
+    ("ocr", "rapidocr_onnxruntime", "ocr"),
+    ("walled", "patchright.sync_api", "walled"),
+)
+
+
+def _senses_report(probe=importlib.util.find_spec) -> str:
+    online = []
+    dormant = []
+    for sense, module_name, extra in _SENSE_PROBES:
+        try:
+            present = probe(module_name) is not None
+        except Exception:  # noqa: BLE001: an optional-dependency probe must never block boot
+            present = False
+        if present:
+            online.append(sense)
+        else:
+            dormant.append(f"{sense} (install with the [{extra}] extra)")
+    report = f"senses online: {', '.join(online) if online else 'none'}"
+    if dormant:
+        report += f" | dormant: {', '.join(dormant)}"
+    return report
+
+
 def main() -> None:
     # Log to stderr so it doesn't pollute MCP stdio
     logging.basicConfig(
@@ -2432,6 +2459,7 @@ def main() -> None:
     log.info("OmniSeek MCP server starting. Loaded %d source modules.", len(loaded_modules))
     log.info("Registered adapters: %s", fetcher.all_adapter_names())
     _warm_heavy_imports()
+    log.info(_senses_report())
     log.info("rank/recall import chain warmed")
     mcp.run()
 

@@ -14,10 +14,124 @@ Run anywhere with the deps installed: .venv/bin/python tests/smoke.py
 from __future__ import annotations
 
 import json
+import ipaddress
+import os
+import socket as _socket
 import sys
 from pathlib import Path
+from urllib.parse import urlsplit
 
 ROOT = Path(__file__).resolve().parents[1]
+
+_SMOKE_GUARD_OPT_OUT = "OMNISEEK_SMOKE_ALLOW_NON_LOOPBACK"
+_SMOKE_GUARD_DISABLED = os.environ.get(_SMOKE_GUARD_OPT_OUT) == "1"
+_SMOKE_REAL_SOCKET = _socket.socket
+_SMOKE_REAL_CREATE_CONNECTION = _socket.create_connection
+
+
+def _smoke_loopback_target(address, family=None) -> bool:
+    if isinstance(address, str):
+        return family == _socket.AF_UNIX
+    if not isinstance(address, tuple) or not address:
+        return False
+    host = address[0]
+    if isinstance(host, bytes):
+        host = host.decode("ascii", errors="ignore")
+    if not isinstance(host, str):
+        return False
+    normalized = host.strip().lower().rstrip(".")
+    if normalized in {"localhost", "localhost.localdomain"}:
+        return True
+    try:
+        return ipaddress.ip_address(normalized.split("%", 1)[0]).is_loopback
+    except ValueError:
+        return False
+
+
+def _smoke_guard_network_call(call_name: str, address, family=None) -> None:
+    if not _SMOKE_GUARD_DISABLED and not _smoke_loopback_target(address, family):
+        raise RuntimeError(
+            f"smoke socket guard blocked {call_name} to non-loopback address {address!r}"
+        )
+
+
+def _smoke_loopback_url(url) -> bool:
+    try:
+        host = urlsplit(url).hostname
+    except (TypeError, ValueError):
+        return False
+    if not host:
+        return False
+    family = _socket.AF_INET6 if isinstance(host, str) and ":" in host else _socket.AF_INET
+    return _smoke_loopback_target((host, 0), family)
+
+
+def _smoke_guard_curl_url(call_name: str, url) -> None:
+    if not _SMOKE_GUARD_DISABLED and not _smoke_loopback_url(url):
+        raise RuntimeError(
+            f"smoke socket guard blocked {call_name} to non-loopback address {url!r}"
+        )
+
+
+class _SmokeGuardedSocket(_SMOKE_REAL_SOCKET):
+    def connect(self, address):
+        _smoke_guard_network_call("socket.socket.connect", address, getattr(self, "family", None))
+        return _SMOKE_REAL_SOCKET.connect(self, address)
+
+    def connect_ex(self, address):
+        _smoke_guard_network_call("socket.socket.connect_ex", address, getattr(self, "family", None))
+        return _SMOKE_REAL_SOCKET.connect_ex(self, address)
+
+    def sendto(self, data, *args, **kwargs):
+        address = kwargs.get("address", args[-1] if args else None)
+        _smoke_guard_network_call("socket.socket.sendto", address, getattr(self, "family", None))
+        return _SMOKE_REAL_SOCKET.sendto(self, data, *args, **kwargs)
+
+
+def _smoke_create_connection(address, *args, **kwargs):
+    _smoke_guard_network_call("socket.create_connection", address)
+    return _SMOKE_REAL_CREATE_CONNECTION(address, *args, **kwargs)
+
+
+def _arm_smoke_socket_guard() -> None:
+    # Network performed by child processes (headless Chromium, ffmpeg) is outside a Python-level guard's reach by nature; no smoke test may launch such processes.
+    if _SMOKE_GUARD_DISABLED:
+        return
+    _socket.socket = _SmokeGuardedSocket
+    _socket.create_connection = _smoke_create_connection
+    try:
+        from curl_cffi import requests as _curl_requests
+    except Exception:
+        return
+
+    _curl_request = getattr(_curl_requests, "request", None)
+    if callable(_curl_request):
+        def _smoke_curl_request(method, url, *args, **kwargs):
+            _smoke_guard_curl_url("curl_cffi.requests.request", url)
+            return _curl_request(method, url, *args, **kwargs)
+
+        _curl_requests.request = _smoke_curl_request
+
+    _curl_session = getattr(_curl_requests, "Session", None)
+    _curl_session_request = getattr(_curl_session, "request", None)
+    if callable(_curl_session_request):
+        def _smoke_curl_session_request(self, method, url, *args, **kwargs):
+            _smoke_guard_curl_url("curl_cffi.requests.Session.request", url)
+            return _curl_session_request(self, method, url, *args, **kwargs)
+
+        _curl_session.request = _smoke_curl_session_request
+
+    _curl_async_session = getattr(_curl_requests, "AsyncSession", None)
+    _curl_async_session_request = getattr(_curl_async_session, "request", None)
+    if callable(_curl_async_session_request):
+        async def _smoke_curl_async_session_request(self, method, url, *args, **kwargs):
+            _smoke_guard_curl_url("curl_cffi.requests.AsyncSession.request", url)
+            return await _curl_async_session_request(self, method, url, *args, **kwargs)
+
+        _curl_async_session.request = _smoke_curl_async_session_request
+
+
+_arm_smoke_socket_guard()
 sys.path.insert(0, str(ROOT / "src"))
 
 FAIL: list[str] = []
@@ -27,6 +141,54 @@ def check(name: str, ok: bool, detail: str = "") -> None:
     print(("  ok   " if ok else "  FAIL ") + name + (f": {detail}" if (detail and not ok) else ""))
     if not ok:
         FAIL.append(f"{name}: {detail}")
+
+
+if _SMOKE_GUARD_DISABLED:
+    _guard_blocked = True
+    _guard_loopback_allowed = True
+    _curl_guard_blocked = True
+    _curl_guard_detail = f"{_SMOKE_GUARD_OPT_OUT}=1"
+else:
+    try:
+        _socket.socket.connect(object(), ("203.0.113.1", 80))
+    except RuntimeError as _guard_exc:
+        _guard_blocked = (
+            "socket.socket.connect" in str(_guard_exc)
+            and "203.0.113.1" in str(_guard_exc)
+        )
+    else:
+        _guard_blocked = False
+    try:
+        _socket.socket.connect(object(), ("127.0.0.1", 80))
+    except RuntimeError:
+        _guard_loopback_allowed = False
+    except (OSError, TypeError):
+        _guard_loopback_allowed = True
+    else:
+        _guard_loopback_allowed = True
+    try:
+        from curl_cffi import requests as _smoke_curl_requests
+    except Exception:
+        _curl_guard_blocked = True
+        _curl_guard_detail = "curl_cffi absent"
+    else:
+        try:
+            _smoke_curl_requests.request("GET", "https://203.0.113.1:65536/")
+        except RuntimeError as _curl_guard_exc:
+            _curl_guard_blocked = (
+                "curl_cffi.requests.request" in str(_curl_guard_exc)
+                and "203.0.113.1" in str(_curl_guard_exc)
+            )
+            _curl_guard_detail = str(_curl_guard_exc)
+        except Exception as _curl_exc:
+            _curl_guard_blocked = False
+            _curl_guard_detail = f"wrong exception: {type(_curl_exc).__name__}: {_curl_exc}"
+        else:
+            _curl_guard_blocked = False
+            _curl_guard_detail = "request returned without the guard"
+check("socket guard blocks non-loopback connect with call and address", _guard_blocked)
+check("socket guard allows loopback connect", _guard_loopback_allowed)
+check("curl_cffi guard blocks non-loopback request", _curl_guard_blocked, _curl_guard_detail)
 
 
 # ---------------------------------------------------------------------------
@@ -17358,7 +17520,7 @@ check("absorb/web_fallback: in-main nav/footer stripped -> boilerplate shell < t
 # via diag armed ONLY around web_fallback; the fetch_url wrapper stays doc-only (byte-identical callers).
 from omniseek.core import fetcher as _fr_fetcher, web_fallback as _fr_wf, diag as _fr_diag
 _fr_rvf_save = _fr_wf.read_via_fallback
-_fr_ad_save = _fr_fetcher._fetch_url_via_adapters
+_fr_ad_save = _fr_fetcher._fetch_url_via_adapters_with_reason
 
 
 def _fr_fake_rvf(url):
@@ -17366,14 +17528,14 @@ def _fr_fake_rvf(url):
     return None
 
 
-_fr_fetcher._fetch_url_via_adapters = lambda url: None  # no adapter claims it
+_fr_fetcher._fetch_url_via_adapters_with_reason = lambda url: (None, None)  # no adapter claims it
 _fr_wf.read_via_fallback = _fr_fake_rvf
 try:
     _fr_doc, _fr_reason = _fr_fetcher.fetch_url_with_reason("https://walled.example.com/x")
     _fr_plain = _fr_fetcher.fetch_url("https://walled.example.com/x")  # wrapper drops the reason
 finally:
     _fr_wf.read_via_fallback = _fr_rvf_save
-    _fr_fetcher._fetch_url_via_adapters = _fr_ad_save
+    _fr_fetcher._fetch_url_via_adapters_with_reason = _fr_ad_save
 check("absorb/fetcher: fetch_url_with_reason surfaces the walled reason; fetch_url wrapper stays doc-only",
       _fr_doc is None and _fr_reason and "anti-bot challenge" in _fr_reason and _fr_plain is None,
       f"reason={_fr_reason!r}")
@@ -17492,7 +17654,7 @@ _fx_dec = _fxinsp.getsource(_asrseg._decode_to_wav)
 check("eyefix/asr: _decode_to_wav bounds reads (-rw_timeout) + falls back to robust download on empty/failed remote",
       "-rw_timeout" in _fx_dec and "download_to_file" in _fx_dec and "_MIN_WAV_BYTES" in _fx_dec,
       "decode must add -rw_timeout AND fall back to http.download_to_file when the wav is empty")
-check("eyefix/http: download_to_file uses curl_cffi (NOT httpx) — the TLS tier that gets through this egress",
+check("eyefix/http: download_to_file uses curl_cffi (NOT httpx) -- the TLS tier that gets through this egress",
       "curl_cffi" in _fx_dl and "stream=True" in _fx_dl and "max_bytes" in _fx_dl and "iter_bytes" not in _fx_dl,
       "download_to_file must stream via curl_cffi with a size cap, not the openssl httpx client")
 
@@ -17529,7 +17691,6 @@ check("absorb/recall: _chunk_catchup is wired into the writer idle loop + backfi
 # (a launchd fleet manager and a macOS probe). Where no fleet registry exists there is nothing
 # for this section to assert about, and the public mirror ships neither script.
 if _SERVICES_PATH.exists():
-    _maint_home = str(Path.home())   # the assertion is about which ORGAN owns a plist, not whose machine
     import importlib.util as _maint_importlib
     import sys as _maint_sys
 
@@ -17545,6 +17706,7 @@ if _SERVICES_PATH.exists():
         "omniseek_eye_doctor_maintenance_smoke", _doc_path)
     _doc_maint = _maint_importlib.module_from_spec(_doc_spec)
     _doc_spec.loader.exec_module(_doc_maint)
+    _maint_home = _svc_maint._PLIST_HOME
 
     check("maintenance: KeepAlive bool and dict are resident, calendar/interval are interval",
           _doc_maint.classify_launchd_plist({"KeepAlive": True}) == "resident"
@@ -17604,6 +17766,8 @@ _GATE_DECLARED_SKIPS = {
     "macOS path resolution is the target behavior",
     "concurrent replace is a macOS target-platform gate",
     "directory fsync is POSIX-only",
+    "POSIX file modes and shell dispatch only",
+    "Windows cannot atomically replace directory symlinks",
 }
 
 # BOUNDED. The battery measures ~6s; 300 is a wide multiple, so only a genuine hang trips it and
@@ -17629,7 +17793,7 @@ _gate_m = _s0_re.search(r"Ran (\d+) test", _gate_out)
 _gate_n = int(_gate_m.group(1)) if _gate_m else 0
 _gate_skips = set(_s0_re.findall(r"skipped ['\"](.+?)['\"]", _gate_out))
 _gate_undeclared = sorted(_gate_skips - _GATE_DECLARED_SKIPS)
-check(f"gate: all {len(_gate_files)} unittest suites pass ({_gate_n} tests) — the guards run at deploy",
+check(f"gate: all {len(_gate_files)} unittest suites pass ({_gate_n} tests) -- the guards run at deploy",
       _gate_rc == 0 and _gate_files and _gate_n >= len(_gate_files),
       f"rc={_gate_rc} ran={_gate_n} files={len(_gate_files)} "
       f"tail={_gate_out.strip().splitlines()[-4:]}")
