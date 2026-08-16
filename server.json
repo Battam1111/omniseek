@@ -1,0 +1,34 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.Battam1111/omniseek",
+  "title": "OmniSeek",
+  "description": "Your agent seeks what search can't find. A self-hosted perception MCP server that transcribes speech, reads behind logins, sees images and video frames, crosses languages, and remembers.",
+  "repository": {
+    "url": "https://github.com/Battam1111/omniseek",
+    "source": "github"
+  },
+  "version": "0.1.1",
+  "websiteUrl": "https://battam1111.github.io/omniseek",
+  "packages": [
+    {
+      "registryType": "pypi",
+      "registryBaseUrl": "https://pypi.org",
+      "identifier": "omniseek",
+      "version": "0.1.1",
+      "runtimeHint": "python",
+      "transport": {
+        "type": "streamable-http",
+        "url": "http://localhost:8765/mcp"
+      }
+    },
+    {
+      "registryType": "oci",
+      "identifier": "ghcr.io/battam1111/omniseek:v0.1.1",
+      "version": "0.1.1",
+      "transport": {
+        "type": "streamable-http",
+        "url": "http://localhost:8765/mcp"
+      }
+    }
+  ]
+}

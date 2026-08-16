@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "omniseek"
-version = "0.1.0"
+version = "0.1.1"
 description = "Your agent seeks what search can't find. A self-hosted perception MCP server that transcribes speech, reads behind logins, sees images and video frames, crosses languages, and remembers."
 requires-python = ">=3.11"
 readme = "README.md"

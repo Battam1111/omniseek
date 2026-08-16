@@ -1,9 +1,8 @@
-"""OmniSeek — PhD navigation system.
+"""OmniSeek: a self-hosted perception MCP server.
 
-This package exposes OmniSeek's capabilities as an MCP server. The first
-capability is the "core" — multi-source information retrieval. Future
-capabilities (retrospective analysis, methodology query) will live as
-sibling modules under this same namespace.
+The package root. The MCP tool surface lives in ``omniseek.server``, the HTTP
+service in ``omniseek.serve_http``, and the retrieval engine (sources, ranking,
+relation graph) under ``omniseek.core``.
 """
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"

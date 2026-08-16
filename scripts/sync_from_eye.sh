@@ -114,6 +114,25 @@ else:
     print(f"    re-pinned heartbeat schema digest {have[:12]}.. -> {want[:12]}..")
 PYEOF
 
+# 2c. The package ROOT (src/omniseek/__init__.py) is PUBLIC METADATA, not engine code: its
+#     docstring is product positioning and its __version__ is the released PyPI version, and both
+#     belong to the MIRROR (pyproject.toml is kept, not synced). The raw copy in step 1 ships the
+#     eye's private-era docstring and whatever version string the eye last froze, so re-author
+#     this one file from the mirror's own pyproject after every sync; drift is impossible.
+VER="$(sed -n 's/^version = "\(.*\)"$/\1/p' "$PEN_ROOT/pyproject.toml" | head -1)"
+[ -n "$VER" ] || { echo "FATAL: could not read version from pyproject.toml" >&2; exit 1; }
+cat > "$PEN_SRC/__init__.py" <<PYEOF
+"""OmniSeek: a self-hosted perception MCP server.
+
+The package root. The MCP tool surface lives in \`\`omniseek.server\`\`, the HTTP
+service in \`\`omniseek.serve_http\`\`, and the retrieval engine (sources, ranking,
+relation graph) under \`\`omniseek.core\`\`.
+"""
+
+__version__ = "$VER"
+PYEOF
+echo "    re-authored src/omniseek/__init__.py (version $VER from pyproject)"
+
 # --- 3. smoke tests + the repo ARTIFACTS the suite reads: same renames + drop polyu from the
 #     frozen explicit_only list (the public mirror has no polyu source; mokahr_ats is already
 #     tolerated at the source: "<= {mokahr_ats}").

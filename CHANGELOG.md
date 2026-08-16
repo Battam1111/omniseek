@@ -6,6 +6,22 @@ All notable changes to OmniSeek are documented here. The format follows
 Entries below the rename note predate it and use the project's former name, penumbra; they are
 history and are kept as written.
 
+## [0.1.1] - 2026-08-16
+
+### Added
+
+- Official MCP Registry ownership markers, so the server can be published as
+  `io.github.Battam1111/omniseek`: an `mcp-name` marker in the README (which is the PyPI long
+  description) and the `io.modelcontextprotocol.server.name` OCI label on the GHCR image.
+- `server.json` for the registry: PyPI + GHCR packages, streamable HTTP transport at
+  `http://localhost:8765/mcp`.
+
+### Changed
+
+- The package root (`src/omniseek/__init__.py`) now carries the product's own description (the
+  raw sync shipped the pre-brand internal framing), and the sync script re-authors it from
+  `pyproject.toml` on every run, so its `__version__` can never drift from the released version.
+
 ## [0.1.0] - 2026-08-16
 
 The first public release.

@@ -1,5 +1,7 @@
 # Python
 __pycache__/
+dist/
+build/
 *.py[cod]
 *.egg-info/
 .ruff_cache/

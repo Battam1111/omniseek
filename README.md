@@ -1,3 +1,5 @@
+<!-- mcp-name: io.github.Battam1111/omniseek -->
+
 <div align="center">
 
 <picture>
