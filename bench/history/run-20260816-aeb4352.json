@@ -1,0 +1,3718 @@
+{
+  "schema_version": "bench-v1.0",
+  "run": {
+    "git_sha7": "aeb4352",
+    "passes": 2,
+    "reps": 3,
+    "suites": [
+      "s3-crosslingual",
+      "s4-depth",
+      "s5-scholar",
+      "s6-memory"
+    ],
+    "tasks_dir": "bench/tasks",
+    "command": "/opt/hostedtoolcache/Python/3.11.15/x64/bin/omniseek"
+  },
+  "env": {
+    "utc": "2026-08-16T16:45:01.867464+00:00",
+    "platform": "Linux-6.17.0-1022-azure-x86_64-with-glibc2.39",
+    "python": "3.11.15",
+    "omniseek_version": "0.1.3",
+    "extras_detected": {
+      "asr": false,
+      "ocr": true,
+      "pdf": true,
+      "recall": true,
+      "walled": false
+    },
+    "vantage": "github-actions",
+    "warmup_ms": 14466.223,
+    "warmup_pass_ms": [
+      7263.643,
+      7202.58
+    ]
+  },
+  "tasks": {
+    "s3-xling-001": {
+      "id": "s3-xling-001",
+      "suite": "s3-crosslingual",
+      "claim": "A Chinese-language question about whether protein language models alone (without homology/MSA search) can surface new protein families is decisively answered by an English bioRxiv preprint on 'singletons' (unclustered sequences) as the long tail of functional diversity; Chinese-language literature and Chinese web search do not carry this result.",
+      "liveness": {
+        "alive": true,
+        "status_code": 200,
+        "url": "https://doi.org/10.64898/2026.08.14.744703",
+        "class": "alive"
+      },
+      "passes": [
+        {
+          "pass": 1,
+          "status": "failed",
+          "reps": [
+            {
+              "status": "fail",
+              "passed": false,
+              "latency_ms": 11150.275,
+              "call_latencies_ms": [
+                11150.275
+              ],
+              "judge_latency_ms": 0.843,
+              "judge_branch": "identifier_in_topk",
+              "judge_detail": "identifier='10.64898/2026.08.14.744703', k=5",
+              "judge_reason": null,
+              "pass": 1,
+              "rep": 1
+            },
+            {
+              "status": "fail",
+              "passed": false,
+              "latency_ms": 1903.47,
+              "call_latencies_ms": [
+                1903.47
+              ],
+              "judge_latency_ms": 0.249,
+              "judge_branch": "identifier_in_topk",
+              "judge_detail": "identifier='10.64898/2026.08.14.744703', k=5",
+              "judge_reason": null,
+              "pass": 1,
+              "rep": 2
+            },
+            {
+              "status": "fail",
+              "passed": false,
+              "latency_ms": 608.457,
+              "call_latencies_ms": [
+                608.457
+              ],
+              "judge_latency_ms": 0.296,
+              "judge_branch": "identifier_in_topk",
+              "judge_detail": "identifier='10.64898/2026.08.14.744703', k=5",
+              "judge_reason": null,
+              "pass": 1,
+              "rep": 3
+            }
+          ]
+        },
+        {
+          "pass": 2,
+          "status": "failed",
+          "reps": [
+            {
+              "status": "fail",
+              "passed": false,
+              "latency_ms": 6462.112,
+              "call_latencies_ms": [
+                6462.112
+              ],
+              "judge_latency_ms": 0.244,
+              "judge_branch": "identifier_in_topk",
+              "judge_detail": "identifier='10.64898/2026.08.14.744703', k=5",
+              "judge_reason": null,
+              "pass": 2,
+              "rep": 1
+            },
+            {
+              "status": "fail",
+              "passed": false,
+              "latency_ms": 3669.885,
+              "call_latencies_ms": [
+                3669.885
+              ],
+              "judge_latency_ms": 0.239,
+              "judge_branch": "identifier_in_topk",
+              "judge_detail": "identifier='10.64898/2026.08.14.744703', k=5",
+              "judge_reason": null,
+              "pass": 2,
+              "rep": 2
+            },
+            {
+              "status": "fail",
+              "passed": false,
+              "latency_ms": 2400.082,
+              "call_latencies_ms": [
+                2400.082
+              ],
+              "judge_latency_ms": 0.263,
+              "judge_branch": "identifier_in_topk",
+              "judge_detail": "identifier='10.64898/2026.08.14.744703', k=5",
+              "judge_reason": null,
+              "pass": 2,
+              "rep": 3
+            }
+          ]
+        }
+      ]
+    },
+    "s3-xling-002": {
+      "id": "s3-xling-002",
+      "suite": "s3-crosslingual",
+      "claim": "A Chinese methodological question about what covariance non-stationarity means in spatial transcriptomics is decisively answered by one English bioRxiv preprint that actually quantifies it (3%-50% of genes across 13 Visium datasets); the Chinese-language web only has generic spatial-transcriptomics tutorials.",
+      "liveness": {
+        "alive": true,
+        "status_code": 200,
+        "url": "https://doi.org/10.64898/2026.08.10.743911",
+        "class": "alive"
+      },
+      "passes": [
+        {
+          "pass": 1,
+          "status": "failed",
+          "reps": [
+            {
+              "status": "fail",
+              "passed": false,
+              "latency_ms": 5516.935,
+              "call_latencies_ms": [
+                5516.935
+              ],
+              "judge_latency_ms": 0.227,
+              "judge_branch": "identifier_in_topk",
+              "judge_detail": "identifier='10.64898/2026.08.10.743911', k=5",
+              "judge_reason": null,
+              "pass": 1,
+              "rep": 1
+            },
+            {
+              "status": "fail",
+              "passed": false,
+              "latency_ms": 2090.569,
+              "call_latencies_ms": [
+                2090.569
+              ],
+              "judge_latency_ms": 0.224,
+              "judge_branch": "identifier_in_topk",
+              "judge_detail": "identifier='10.64898/2026.08.10.743911', k=5",
+              "judge_reason": null,
+              "pass": 1,
+              "rep": 2
+            },
+            {
+              "status": "fail",
+              "passed": false,
+              "latency_ms": 3223.025,
+              "call_latencies_ms": [
+                3223.025
+              ],
+              "judge_latency_ms": 0.229,
+              "judge_branch": "identifier_in_topk",
+              "judge_detail": "identifier='10.64898/2026.08.10.743911', k=5",
+              "judge_reason": null,
+              "pass": 1,
+              "rep": 3
+            }
+          ]
+        },
+        {
+          "pass": 2,
+          "status": "failed",
+          "reps": [
+            {
+              "status": "fail",
+              "passed": false,
+              "latency_ms": 5270.383,
+              "call_latencies_ms": [
+                5270.383
+              ],
+              "judge_latency_ms": 0.223,
+              "judge_branch": "identifier_in_topk",
+              "judge_detail": "identifier='10.64898/2026.08.10.743911', k=5",
+              "judge_reason": null,
+              "pass": 2,
+              "rep": 1
+            },
+            {
+              "status": "fail",
+              "passed": false,
+              "latency_ms": 4467.616,
+              "call_latencies_ms": [
+                4467.616
+              ],
+              "judge_latency_ms": 0.221,
+              "judge_branch": "identifier_in_topk",
+              "judge_detail": "identifier='10.64898/2026.08.10.743911', k=5",
+              "judge_reason": null,
+              "pass": 2,
+              "rep": 2
+            },
+            {
+              "status": "fail",
+              "passed": false,
+              "latency_ms": 4405.87,
+              "call_latencies_ms": [
+                4405.87
+              ],
+              "judge_latency_ms": 0.221,
+              "judge_branch": "identifier_in_topk",
+              "judge_detail": "identifier='10.64898/2026.08.10.743911', k=5",
+              "judge_reason": null,
+              "pass": 2,
+              "rep": 3
+            }
+          ]
+        }
+      ]
+    },
+    "s3-xling-003": {
+      "id": "s3-xling-003",
+      "suite": "s3-crosslingual",
+      "claim": "A Chinese proteomics question about assembling a full protein sequence from redundant de novo peptide reads without a reference is decisively answered by one English bioRxiv preprint on consensus assembly; Chinese search returns only vendor service pages and general de-novo-sequencing explainers.",
+      "liveness": {
+        "alive": true,
+        "status_code": 200,
+        "url": "https://doi.org/10.64898/2026.08.13.744110",
+        "class": "alive"
+      },
+      "passes": [
+        {
+          "pass": 1,
+          "status": "failed",
+          "reps": [
+            {
+              "status": "fail",
+              "passed": false,
+              "latency_ms": 5411.642,
+              "call_latencies_ms": [
+                5411.642
+              ],
+              "judge_latency_ms": 0.25,
+              "judge_branch": "identifier_in_topk",
+              "judge_detail": "identifier='10.64898/2026.08.13.744110', k=5",
+              "judge_reason": null,
+              "pass": 1,
+              "rep": 1
+            },
+            {
+              "status": "fail",
+              "passed": false,
+              "latency_ms": 1552.556,
+              "call_latencies_ms": [
+                1552.556
+              ],
+              "judge_latency_ms": 0.249,
+              "judge_branch": "identifier_in_topk",
+              "judge_detail": "identifier='10.64898/2026.08.13.744110', k=5",
+              "judge_reason": null,
+              "pass": 1,
+              "rep": 2
+            },
+            {
+              "status": "fail",
+              "passed": false,
+              "latency_ms": 2220.25,
+              "call_latencies_ms": [
+                2220.25
+              ],
+              "judge_latency_ms": 0.243,
+              "judge_branch": "identifier_in_topk",
+              "judge_detail": "identifier='10.64898/2026.08.13.744110', k=5",
+              "judge_reason": null,
+              "pass": 1,
+              "rep": 3
+            }
+          ]
+        },
+        {
+          "pass": 2,
+          "status": "failed",
+          "reps": [
+            {
+              "status": "fail",
+              "passed": false,
+              "latency_ms": 4963.235,
+              "call_latencies_ms": [
+                4963.235
+              ],
+              "judge_latency_ms": 0.241,
+              "judge_branch": "identifier_in_topk",
+              "judge_detail": "identifier='10.64898/2026.08.13.744110', k=5",
+              "judge_reason": null,
+              "pass": 2,
+              "rep": 1
+            },
+            {
+              "status": "fail",
+              "passed": false,
+              "latency_ms": 486.623,
+              "call_latencies_ms": [
+                486.623
+              ],
+              "judge_latency_ms": 0.243,
+              "judge_branch": "identifier_in_topk",
+              "judge_detail": "identifier='10.64898/2026.08.13.744110', k=5",
+              "judge_reason": null,
+              "pass": 2,
+              "rep": 2
+            },
+            {
+              "status": "fail",
+              "passed": false,
+              "latency_ms": 1590.34,
+              "call_latencies_ms": [
+                1590.34
+              ],
+              "judge_latency_ms": 0.237,
+              "judge_branch": "identifier_in_topk",
+              "judge_detail": "identifier='10.64898/2026.08.13.744110', k=5",
+              "judge_reason": null,
+              "pass": 2,
+              "rep": 3
+            }
+          ]
+        }
+      ]
+    },
+    "s3-xling-004": {
+      "id": "s3-xling-004",
+      "suite": "s3-crosslingual",
+      "claim": "A Chinese interpretability question about which layer a protein language model acquires secondary-structure concepts in is decisively answered by an English bioRxiv preprint doing a high-resolution, per-family dissection of concept acquisition.",
+      "liveness": {
+        "alive": true,
+        "status_code": 200,
+        "url": "https://doi.org/10.64898/2026.07.20.739599",
+        "class": "alive"
+      },
+      "passes": [
+        {
+          "pass": 1,
+          "status": "failed",
+          "reps": [
+            {
+              "status": "fail",
+              "passed": false,
+              "latency_ms": 11051.038,
+              "call_latencies_ms": [
+                11051.038
+              ],
+              "judge_latency_ms": 0.255,
+              "judge_branch": "identifier_in_topk",
+              "judge_detail": "identifier='10.64898/2026.07.20.739599', k=5",
+              "judge_reason": null,
+              "pass": 1,
+              "rep": 1
+            },
+            {
+              "status": "fail",
+              "passed": false,
+              "latency_ms": 6299.35,
+              "call_latencies_ms": [
+                6299.35
+              ],
+              "judge_latency_ms": 0.231,
+              "judge_branch": "identifier_in_topk",
+              "judge_detail": "identifier='10.64898/2026.07.20.739599', k=5",
+              "judge_reason": null,
+              "pass": 1,
+              "rep": 2
+            },
+            {
+              "status": "fail",
+              "passed": false,
+              "latency_ms": 2267.944,
+              "call_latencies_ms": [
+                2267.944
+              ],
+              "judge_latency_ms": 0.253,
+              "judge_branch": "identifier_in_topk",
+              "judge_detail": "identifier='10.64898/2026.07.20.739599', k=5",
+              "judge_reason": null,
+              "pass": 1,
+              "rep": 3
+            }
+          ]
+        },
+        {
+          "pass": 2,
+          "status": "failed",
+          "reps": [
+            {
+              "status": "fail",
+              "passed": false,
+              "latency_ms": 5069.429,
+              "call_latencies_ms": [
+                5069.429
+              ],
+              "judge_latency_ms": 0.23,
+              "judge_branch": "identifier_in_topk",
+              "judge_detail": "identifier='10.64898/2026.07.20.739599', k=5",
+              "judge_reason": null,
+              "pass": 2,
+              "rep": 1
+            },
+            {
+              "status": "fail",
+              "passed": false,
+              "latency_ms": 2050.005,
+              "call_latencies_ms": [
+                2050.005
+              ],
+              "judge_latency_ms": 0.227,
+              "judge_branch": "identifier_in_topk",
+              "judge_detail": "identifier='10.64898/2026.07.20.739599', k=5",
+              "judge_reason": null,
+              "pass": 2,
+              "rep": 2
+            },
+            {
+              "status": "fail",
+              "passed": false,
+              "latency_ms": 526.307,
+              "call_latencies_ms": [
+                526.307
+              ],
+              "judge_latency_ms": 0.233,
+              "judge_branch": "identifier_in_topk",
+              "judge_detail": "identifier='10.64898/2026.07.20.739599', k=5",
+              "judge_reason": null,
+              "pass": 2,
+              "rep": 3
+            }
+          ]
+        }
+      ]
+    },
+    "s3-xling-005": {
+      "id": "s3-xling-005",
+      "suite": "s3-crosslingual",
+      "claim": "A Chinese single-cell question about whether a differential-expression change reflects transcription or mRNA stability is decisively answered by one English bioRxiv preprint (scATrans) that types the mechanism from unspliced-RNA residuals with no extra experiment; Chinese sources only cover RNA-velocity basics.",
+      "liveness": {
+        "alive": true,
+        "status_code": 200,
+        "url": "https://doi.org/10.64898/2026.08.03.740741",
+        "class": "alive"
+      },
+      "passes": [
+        {
+          "pass": 1,
+          "status": "failed",
+          "reps": [
+            {
+              "status": "fail",
+              "passed": false,
+              "latency_ms": 11045.115,
+              "call_latencies_ms": [
+                11045.115
+              ],
+              "judge_latency_ms": 0.224,
+              "judge_branch": "identifier_in_topk",
+              "judge_detail": "identifier='10.64898/2026.08.03.740741', k=5",
+              "judge_reason": null,
+              "pass": 1,
+              "rep": 1
+            },
+            {
+              "status": "fail",
+              "passed": false,
+              "latency_ms": 10235.809,
+              "call_latencies_ms": [
+                10235.809
+              ],
+              "judge_latency_ms": 0.222,
+              "judge_branch": "identifier_in_topk",
+              "judge_detail": "identifier='10.64898/2026.08.03.740741', k=5",
+              "judge_reason": null,
+              "pass": 1,
+              "rep": 2
+            },
+            {
+              "status": "fail",
+              "passed": false,
+              "latency_ms": 1630.545,
+              "call_latencies_ms": [
+                1630.545
+              ],
+              "judge_latency_ms": 0.218,
+              "judge_branch": "identifier_in_topk",
+              "judge_detail": "identifier='10.64898/2026.08.03.740741', k=5",
+              "judge_reason": null,
+              "pass": 1,
+              "rep": 3
+            }
+          ]
+        },
+        {
+          "pass": 2,
+          "status": "failed",
+          "reps": [
+            {
+              "status": "fail",
+              "passed": false,
+              "latency_ms": 800.257,
+              "call_latencies_ms": [
+                800.257
+              ],
+              "judge_latency_ms": 0.217,
+              "judge_branch": "identifier_in_topk",
+              "judge_detail": "identifier='10.64898/2026.08.03.740741', k=5",
+              "judge_reason": null,
+              "pass": 2,
+              "rep": 1
+            },
+            {
+              "status": "fail",
+              "passed": false,
+              "latency_ms": 3552.019,
+              "call_latencies_ms": [
+                3552.019
+              ],
+              "judge_latency_ms": 0.216,
+              "judge_branch": "identifier_in_topk",
+              "judge_detail": "identifier='10.64898/2026.08.03.740741', k=5",
+              "judge_reason": null,
+              "pass": 2,
+              "rep": 2
+            },
+            {
+              "status": "fail",
+              "passed": false,
+              "latency_ms": 2853.548,
+              "call_latencies_ms": [
+                2853.548
+              ],
+              "judge_latency_ms": 0.239,
+              "judge_branch": "identifier_in_topk",
+              "judge_detail": "identifier='10.64898/2026.08.03.740741', k=5",
+              "judge_reason": null,
+              "pass": 2,
+              "rep": 3
+            }
+          ]
+        }
+      ]
+    },
+    "s3-xling-007": {
+      "id": "s3-xling-007",
+      "suite": "s3-crosslingual",
+      "claim": "An English question about deriving a gated-delta-rule linear attention as an approximation of softmax attention is decisively answered by a Chinese-language derivation on kexue.fm, which shows the Taylor route lands not on plain DeltaNet but directly on Gated DeltaNet; no English write-up carries that specific derivation.",
+      "liveness": {
+        "alive": false,
+        "status_code": 403,
+        "url": "https://kexue.fm/archives/11823",
+        "class": "dead"
+      },
+      "passes": []
+    },
+    "s3-xling-008": {
+      "id": "s3-xling-008",
+      "suite": "s3-crosslingual",
+      "claim": "An English question about a general iterative framework for approximating arbitrary matrix functions (generalizing Newton-Schulz beyond rational powers) is decisively answered by a Chinese blog post that proposes exactly such a framework; the English literature only has per-case schemes (p-th roots, hyperpower, MatRL).",
+      "liveness": {
+        "alive": true,
+        "status_code": 200,
+        "url": "https://kexue.fm/archives/11787",
+        "class": "alive"
+      },
+      "passes": [
+        {
+          "pass": 1,
+          "status": "failed",
+          "reps": [
+            {
+              "status": "fail",
+              "passed": false,
+              "latency_ms": 11034.052,
+              "call_latencies_ms": [
+                11034.052
+              ],
+              "judge_latency_ms": 0.216,
+              "judge_branch": "identifier_in_topk",
+              "judge_detail": "identifier='https://kexue.fm/archives/11787', k=5",
+              "judge_reason": null,
+              "pass": 1,
+              "rep": 1
+            },
+            {
+              "status": "fail",
+              "passed": false,
+              "latency_ms": 11035.464,
+              "call_latencies_ms": [
+                11035.464
+              ],
+              "judge_latency_ms": 0.222,
+              "judge_branch": "identifier_in_topk",
+              "judge_detail": "identifier='https://kexue.fm/archives/11787', k=5",
+              "judge_reason": null,
+              "pass": 1,
+              "rep": 2
+            },
+            {
+              "status": "fail",
+              "passed": false,
+              "latency_ms": 11035.883,
+              "call_latencies_ms": [
+                11035.883
+              ],
+              "judge_latency_ms": 0.221,
+              "judge_branch": "identifier_in_topk",
+              "judge_detail": "identifier='https://kexue.fm/archives/11787', k=5",
+              "judge_reason": null,
+              "pass": 1,
+              "rep": 3
+            }
+          ]
+        },
+        {
+          "pass": 2,
+          "status": "failed",
+          "reps": [
+            {
+              "status": "fail",
+              "passed": false,
+              "latency_ms": 1108.483,
+              "call_latencies_ms": [
+                1108.483
+              ],
+              "judge_latency_ms": 0.215,
+              "judge_branch": "identifier_in_topk",
+              "judge_detail": "identifier='https://kexue.fm/archives/11787', k=5",
+              "judge_reason": null,
+              "pass": 2,
+              "rep": 1
+            },
+            {
+              "status": "fail",
+              "passed": false,
+              "latency_ms": 1760.076,
+              "call_latencies_ms": [
+                1760.076
+              ],
+              "judge_latency_ms": 0.254,
+              "judge_branch": "identifier_in_topk",
+              "judge_detail": "identifier='https://kexue.fm/archives/11787', k=5",
+              "judge_reason": null,
+              "pass": 2,
+              "rep": 2
+            },
+            {
+              "status": "fail",
+              "passed": false,
+              "latency_ms": 2210.324,
+              "call_latencies_ms": [
+                2210.324
+              ],
+              "judge_latency_ms": 0.214,
+              "judge_branch": "identifier_in_topk",
+              "judge_detail": "identifier='https://kexue.fm/archives/11787', k=5",
+              "judge_reason": null,
+              "pass": 2,
+              "rep": 3
+            }
+          ]
+        }
+      ]
+    },
+    "s3-xling-009": {
+      "id": "s3-xling-009",
+      "suite": "s3-crosslingual",
+      "claim": "An English question about MoE gate normalization under loss-free load balancing (sigmoid gate vs softmax with re-normalization after top-k) is decisively answered by a Chinese blog post devoted to exactly that debate; English sources cover the balancing strategy but not the normalization-order comparison as its own subject.",
+      "liveness": {
+        "alive": true,
+        "status_code": 200,
+        "url": "https://kexue.fm/archives/11782",
+        "class": "alive"
+      },
+      "passes": [
+        {
+          "pass": 1,
+          "status": "failed",
+          "reps": [
+            {
+              "status": "fail",
+              "passed": false,
+              "latency_ms": 11036.106,
+              "call_latencies_ms": [
+                11036.106
+              ],
+              "judge_latency_ms": 0.269,
+              "judge_branch": "identifier_in_topk",
+              "judge_detail": "identifier='https://kexue.fm/archives/11782', k=5",
+              "judge_reason": null,
+              "pass": 1,
+              "rep": 1
+            },
+            {
+              "status": "fail",
+              "passed": false,
+              "latency_ms": 11033.185,
+              "call_latencies_ms": [
+                11033.185
+              ],
+              "judge_latency_ms": 0.166,
+              "judge_branch": "identifier_in_topk",
+              "judge_detail": "identifier='https://kexue.fm/archives/11782', k=5",
+              "judge_reason": null,
+              "pass": 1,
+              "rep": 2
+            },
+            {
+              "status": "fail",
+              "passed": false,
+              "latency_ms": 11033.756,
+              "call_latencies_ms": [
+                11033.756
+              ],
+              "judge_latency_ms": 0.165,
+              "judge_branch": "identifier_in_topk",
+              "judge_detail": "identifier='https://kexue.fm/archives/11782', k=5",
+              "judge_reason": null,
+              "pass": 1,
+              "rep": 3
+            }
+          ]
+        },
+        {
+          "pass": 2,
+          "status": "failed",
+          "reps": [
+            {
+              "status": "fail",
+              "passed": false,
+              "latency_ms": 1920.178,
+              "call_latencies_ms": [
+                1920.178
+              ],
+              "judge_latency_ms": 0.183,
+              "judge_branch": "identifier_in_topk",
+              "judge_detail": "identifier='https://kexue.fm/archives/11782', k=5",
+              "judge_reason": null,
+              "pass": 2,
+              "rep": 1
+            },
+            {
+              "status": "fail",
+              "passed": false,
+              "latency_ms": 6896.978,
+              "call_latencies_ms": [
+                6896.978
+              ],
+              "judge_latency_ms": 0.156,
+              "judge_branch": "identifier_in_topk",
+              "judge_detail": "identifier='https://kexue.fm/archives/11782', k=5",
+              "judge_reason": null,
+              "pass": 2,
+              "rep": 2
+            },
+            {
+              "status": "fail",
+              "passed": false,
+              "latency_ms": 7034.394,
+              "call_latencies_ms": [
+                7034.394
+              ],
+              "judge_latency_ms": 0.163,
+              "judge_branch": "identifier_in_topk",
+              "judge_detail": "identifier='https://kexue.fm/archives/11782', k=5",
+              "judge_reason": null,
+              "pass": 2,
+              "rep": 3
+            }
+          ]
+        }
+      ]
+    },
+    "s4-depth-002": {
+      "id": "s4-depth-002",
+      "suite": "s4-depth",
+      "claim": "The Pile paper (arXiv:2101.00027v1), Appendix C.1, states that the authors broke the list of Common Crawl WARC-file URLs from 2013 to 2020 into 3679 chunks and processed 22 random chunks.",
+      "liveness": {
+        "alive": true,
+        "status_code": 200,
+        "url": "https://arxiv.org/pdf/2101.00027v1.pdf",
+        "class": "alive"
+      },
+      "passes": [
+        {
+          "pass": 1,
+          "status": "passed",
+          "reps": [
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 855.355,
+              "call_latencies_ms": [
+                855.355
+              ],
+              "judge_latency_ms": 1.37,
+              "judge_branch": "normalized_containment",
+              "judge_detail": "normalized needle is contained",
+              "judge_reason": null,
+              "pass": 1,
+              "rep": 1
+            },
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 347.753,
+              "call_latencies_ms": [
+                347.753
+              ],
+              "judge_latency_ms": 1.036,
+              "judge_branch": "normalized_containment",
+              "judge_detail": "normalized needle is contained",
+              "judge_reason": null,
+              "pass": 1,
+              "rep": 2
+            },
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 311.555,
+              "call_latencies_ms": [
+                311.555
+              ],
+              "judge_latency_ms": 1.033,
+              "judge_branch": "normalized_containment",
+              "judge_detail": "normalized needle is contained",
+              "judge_reason": null,
+              "pass": 1,
+              "rep": 3
+            }
+          ]
+        },
+        {
+          "pass": 2,
+          "status": "passed",
+          "reps": [
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 227.616,
+              "call_latencies_ms": [
+                227.616
+              ],
+              "judge_latency_ms": 1.061,
+              "judge_branch": "normalized_containment",
+              "judge_detail": "normalized needle is contained",
+              "judge_reason": null,
+              "pass": 2,
+              "rep": 1
+            },
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 195.465,
+              "call_latencies_ms": [
+                195.465
+              ],
+              "judge_latency_ms": 1.138,
+              "judge_branch": "normalized_containment",
+              "judge_detail": "normalized needle is contained",
+              "judge_reason": null,
+              "pass": 2,
+              "rep": 2
+            },
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 76.539,
+              "call_latencies_ms": [
+                76.539
+              ],
+              "judge_latency_ms": 1.055,
+              "judge_branch": "normalized_containment",
+              "judge_detail": "normalized needle is contained",
+              "judge_reason": null,
+              "pass": 2,
+              "rep": 3
+            }
+          ]
+        }
+      ]
+    },
+    "s4-depth-003": {
+      "id": "s4-depth-003",
+      "suite": "s4-depth",
+      "claim": "The Pile paper (arXiv:2101.00027v1), Appendix C.18, states that its Hacker News component covers story ids from the first Hacker News post through post number 24531712.",
+      "liveness": {
+        "alive": true,
+        "status_code": 200,
+        "url": "https://arxiv.org/pdf/2101.00027v1.pdf",
+        "class": "alive"
+      },
+      "passes": [
+        {
+          "pass": 1,
+          "status": "passed",
+          "reps": [
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 182.876,
+              "call_latencies_ms": [
+                182.876
+              ],
+              "judge_latency_ms": 0.768,
+              "judge_branch": "normalized_containment",
+              "judge_detail": "normalized needle is contained",
+              "judge_reason": null,
+              "pass": 1,
+              "rep": 1
+            },
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 328.082,
+              "call_latencies_ms": [
+                328.082
+              ],
+              "judge_latency_ms": 0.753,
+              "judge_branch": "normalized_containment",
+              "judge_detail": "normalized needle is contained",
+              "judge_reason": null,
+              "pass": 1,
+              "rep": 2
+            },
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 61.279,
+              "call_latencies_ms": [
+                61.279
+              ],
+              "judge_latency_ms": 0.8,
+              "judge_branch": "normalized_containment",
+              "judge_detail": "normalized needle is contained",
+              "judge_reason": null,
+              "pass": 1,
+              "rep": 3
+            }
+          ]
+        },
+        {
+          "pass": 2,
+          "status": "passed",
+          "reps": [
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 243.051,
+              "call_latencies_ms": [
+                243.051
+              ],
+              "judge_latency_ms": 0.813,
+              "judge_branch": "normalized_containment",
+              "judge_detail": "normalized needle is contained",
+              "judge_reason": null,
+              "pass": 2,
+              "rep": 1
+            },
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 237.165,
+              "call_latencies_ms": [
+                237.165
+              ],
+              "judge_latency_ms": 0.797,
+              "judge_branch": "normalized_containment",
+              "judge_detail": "normalized needle is contained",
+              "judge_reason": null,
+              "pass": 2,
+              "rep": 2
+            },
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 85.47,
+              "call_latencies_ms": [
+                85.47
+              ],
+              "judge_latency_ms": 0.758,
+              "judge_branch": "normalized_containment",
+              "judge_detail": "normalized needle is contained",
+              "judge_reason": null,
+              "pass": 2,
+              "rep": 3
+            }
+          ]
+        }
+      ]
+    },
+    "s4-depth-004": {
+      "id": "s4-depth-004",
+      "suite": "s4-depth",
+      "claim": "The Pile paper (arXiv:2101.00027v1), Appendix C.18, states that in the Hacker News component sub-comment chains are delimited by the marker \\n~~~\\n.",
+      "liveness": {
+        "alive": true,
+        "status_code": 200,
+        "url": "https://arxiv.org/pdf/2101.00027v1.pdf",
+        "class": "alive"
+      },
+      "passes": [
+        {
+          "pass": 1,
+          "status": "passed",
+          "reps": [
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 67.392,
+              "call_latencies_ms": [
+                67.392
+              ],
+              "judge_latency_ms": 0.798,
+              "judge_branch": "normalized_containment",
+              "judge_detail": "normalized needle is contained",
+              "judge_reason": null,
+              "pass": 1,
+              "rep": 1
+            },
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 65.055,
+              "call_latencies_ms": [
+                65.055
+              ],
+              "judge_latency_ms": 0.782,
+              "judge_branch": "normalized_containment",
+              "judge_detail": "normalized needle is contained",
+              "judge_reason": null,
+              "pass": 1,
+              "rep": 2
+            },
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 66.783,
+              "call_latencies_ms": [
+                66.783
+              ],
+              "judge_latency_ms": 0.781,
+              "judge_branch": "normalized_containment",
+              "judge_detail": "normalized needle is contained",
+              "judge_reason": null,
+              "pass": 1,
+              "rep": 3
+            }
+          ]
+        },
+        {
+          "pass": 2,
+          "status": "passed",
+          "reps": [
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 64.309,
+              "call_latencies_ms": [
+                64.309
+              ],
+              "judge_latency_ms": 0.783,
+              "judge_branch": "normalized_containment",
+              "judge_detail": "normalized needle is contained",
+              "judge_reason": null,
+              "pass": 2,
+              "rep": 1
+            },
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 64.195,
+              "call_latencies_ms": [
+                64.195
+              ],
+              "judge_latency_ms": 0.774,
+              "judge_branch": "normalized_containment",
+              "judge_detail": "normalized needle is contained",
+              "judge_reason": null,
+              "pass": 2,
+              "rep": 2
+            },
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 401.481,
+              "call_latencies_ms": [
+                401.481
+              ],
+              "judge_latency_ms": 0.8,
+              "judge_branch": "normalized_containment",
+              "judge_detail": "normalized needle is contained",
+              "judge_reason": null,
+              "pass": 2,
+              "rep": 3
+            }
+          ]
+        }
+      ]
+    },
+    "s4-depth-005": {
+      "id": "s4-depth-005",
+      "suite": "s4-depth",
+      "claim": "NIST SP 800-90A Rev. 1, Section 10.3.1 (Hash_df), states that no_of_bits_to_return shall be less than or equal to (255 x outlen).",
+      "liveness": {
+        "alive": true,
+        "status_code": 200,
+        "url": "https://nvlpubs.nist.gov/nistpubs/SpecialPublications/NIST.SP.800-90Ar1.pdf",
+        "class": "alive"
+      },
+      "passes": [
+        {
+          "pass": 1,
+          "status": "passed",
+          "reps": [
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 1213.96,
+              "call_latencies_ms": [
+                1213.96
+              ],
+              "judge_latency_ms": 0.515,
+              "judge_branch": "normalized_containment",
+              "judge_detail": "normalized needle is contained",
+              "judge_reason": null,
+              "pass": 1,
+              "rep": 1
+            },
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 293.621,
+              "call_latencies_ms": [
+                293.621
+              ],
+              "judge_latency_ms": 0.514,
+              "judge_branch": "normalized_containment",
+              "judge_detail": "normalized needle is contained",
+              "judge_reason": null,
+              "pass": 1,
+              "rep": 2
+            },
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 545.654,
+              "call_latencies_ms": [
+                545.654
+              ],
+              "judge_latency_ms": 0.483,
+              "judge_branch": "normalized_containment",
+              "judge_detail": "normalized needle is contained",
+              "judge_reason": null,
+              "pass": 1,
+              "rep": 3
+            }
+          ]
+        },
+        {
+          "pass": 2,
+          "status": "passed",
+          "reps": [
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 1087.843,
+              "call_latencies_ms": [
+                1087.843
+              ],
+              "judge_latency_ms": 0.503,
+              "judge_branch": "normalized_containment",
+              "judge_detail": "normalized needle is contained",
+              "judge_reason": null,
+              "pass": 2,
+              "rep": 1
+            },
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 391.008,
+              "call_latencies_ms": [
+                391.008
+              ],
+              "judge_latency_ms": 0.523,
+              "judge_branch": "normalized_containment",
+              "judge_detail": "normalized needle is contained",
+              "judge_reason": null,
+              "pass": 2,
+              "rep": 2
+            },
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 374.773,
+              "call_latencies_ms": [
+                374.773
+              ],
+              "judge_latency_ms": 0.488,
+              "judge_branch": "normalized_containment",
+              "judge_detail": "normalized needle is contained",
+              "judge_reason": null,
+              "pass": 2,
+              "rep": 3
+            }
+          ]
+        }
+      ]
+    },
+    "s4-depth-006": {
+      "id": "s4-depth-006",
+      "suite": "s4-depth",
+      "claim": "NIST SP 800-90A Rev. 1, Section 10.3.2 (Block_Cipher_df), sets the temporary key K to leftmost(0x00010203...1D1E1F, keylen).",
+      "liveness": {
+        "alive": true,
+        "status_code": 200,
+        "url": "https://nvlpubs.nist.gov/nistpubs/SpecialPublications/NIST.SP.800-90Ar1.pdf",
+        "class": "alive"
+      },
+      "passes": [
+        {
+          "pass": 1,
+          "status": "passed",
+          "reps": [
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 955.611,
+              "call_latencies_ms": [
+                955.611
+              ],
+              "judge_latency_ms": 0.48,
+              "judge_branch": "normalized_containment",
+              "judge_detail": "normalized needle is contained",
+              "judge_reason": null,
+              "pass": 1,
+              "rep": 1
+            },
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 342.593,
+              "call_latencies_ms": [
+                342.593
+              ],
+              "judge_latency_ms": 0.52,
+              "judge_branch": "normalized_containment",
+              "judge_detail": "normalized needle is contained",
+              "judge_reason": null,
+              "pass": 1,
+              "rep": 2
+            },
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 326.956,
+              "call_latencies_ms": [
+                326.956
+              ],
+              "judge_latency_ms": 0.561,
+              "judge_branch": "normalized_containment",
+              "judge_detail": "normalized needle is contained",
+              "judge_reason": null,
+              "pass": 1,
+              "rep": 3
+            }
+          ]
+        },
+        {
+          "pass": 2,
+          "status": "passed",
+          "reps": [
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 1459.984,
+              "call_latencies_ms": [
+                1459.984
+              ],
+              "judge_latency_ms": 0.511,
+              "judge_branch": "normalized_containment",
+              "judge_detail": "normalized needle is contained",
+              "judge_reason": null,
+              "pass": 2,
+              "rep": 1
+            },
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 486.188,
+              "call_latencies_ms": [
+                486.188
+              ],
+              "judge_latency_ms": 0.489,
+              "judge_branch": "normalized_containment",
+              "judge_detail": "normalized needle is contained",
+              "judge_reason": null,
+              "pass": 2,
+              "rep": 2
+            },
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 322.791,
+              "call_latencies_ms": [
+                322.791
+              ],
+              "judge_latency_ms": 0.547,
+              "judge_branch": "normalized_containment",
+              "judge_detail": "normalized needle is contained",
+              "judge_reason": null,
+              "pass": 2,
+              "rep": 3
+            }
+          ]
+        }
+      ]
+    },
+    "s4-depth-007": {
+      "id": "s4-depth-007",
+      "suite": "s4-depth",
+      "claim": "第55次《中国互联网络发展状况统计报告》附录二「附表2 按分配单位IPv4地址数」中，中国教育和科研计算机网的IPv4地址量为16,649,984个（折合254B+16C）。",
+      "liveness": {
+        "alive": true,
+        "status_code": 200,
+        "url": "https://www.cnnic.net.cn/NMediaFile/2025/0220/MAIN1740036167004CKE0DITFO1.pdf",
+        "class": "alive"
+      },
+      "passes": [
+        {
+          "pass": 1,
+          "status": "passed",
+          "reps": [
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 10517.773,
+              "call_latencies_ms": [
+                10517.773
+              ],
+              "judge_latency_ms": 1.376,
+              "judge_branch": "normalized_containment",
+              "judge_detail": "normalized needle is contained",
+              "judge_reason": null,
+              "pass": 1,
+              "rep": 1
+            },
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 10528.989,
+              "call_latencies_ms": [
+                10528.989
+              ],
+              "judge_latency_ms": 1.242,
+              "judge_branch": "normalized_containment",
+              "judge_detail": "normalized needle is contained",
+              "judge_reason": null,
+              "pass": 1,
+              "rep": 2
+            },
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 10401.678,
+              "call_latencies_ms": [
+                10401.678
+              ],
+              "judge_latency_ms": 1.235,
+              "judge_branch": "normalized_containment",
+              "judge_detail": "normalized needle is contained",
+              "judge_reason": null,
+              "pass": 1,
+              "rep": 3
+            }
+          ]
+        },
+        {
+          "pass": 2,
+          "status": "passed",
+          "reps": [
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 10801.163,
+              "call_latencies_ms": [
+                10801.163
+              ],
+              "judge_latency_ms": 1.395,
+              "judge_branch": "normalized_containment",
+              "judge_detail": "normalized needle is contained",
+              "judge_reason": null,
+              "pass": 2,
+              "rep": 1
+            },
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 13941.597,
+              "call_latencies_ms": [
+                13941.597
+              ],
+              "judge_latency_ms": 1.273,
+              "judge_branch": "normalized_containment",
+              "judge_detail": "normalized needle is contained",
+              "judge_reason": null,
+              "pass": 2,
+              "rep": 2
+            },
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 10792.156,
+              "call_latencies_ms": [
+                10792.156
+              ],
+              "judge_latency_ms": 1.325,
+              "judge_branch": "normalized_containment",
+              "judge_detail": "normalized needle is contained",
+              "judge_reason": null,
+              "pass": 2,
+              "rep": 3
+            }
+          ]
+        }
+      ]
+    },
+    "s4-depth-008": {
+      "id": "s4-depth-008",
+      "suite": "s4-depth",
+      "claim": "第55次《中国互联网络发展状况统计报告》附录二「附表5 分地区IPv4比例」中，北京的IPv4地址占比为25.19%。",
+      "liveness": {
+        "alive": true,
+        "status_code": 200,
+        "url": "https://www.cnnic.net.cn/NMediaFile/2025/0220/MAIN1740036167004CKE0DITFO1.pdf",
+        "class": "alive"
+      },
+      "passes": [
+        {
+          "pass": 1,
+          "status": "passed",
+          "reps": [
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 10467.565,
+              "call_latencies_ms": [
+                10467.565
+              ],
+              "judge_latency_ms": 1.248,
+              "judge_branch": "normalized_containment",
+              "judge_detail": "normalized needle is contained",
+              "judge_reason": null,
+              "pass": 1,
+              "rep": 1
+            },
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 10396.821,
+              "call_latencies_ms": [
+                10396.821
+              ],
+              "judge_latency_ms": 1.325,
+              "judge_branch": "normalized_containment",
+              "judge_detail": "normalized needle is contained",
+              "judge_reason": null,
+              "pass": 1,
+              "rep": 2
+            },
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 10386.056,
+              "call_latencies_ms": [
+                10386.056
+              ],
+              "judge_latency_ms": 1.283,
+              "judge_branch": "normalized_containment",
+              "judge_detail": "normalized needle is contained",
+              "judge_reason": null,
+              "pass": 1,
+              "rep": 3
+            }
+          ]
+        },
+        {
+          "pass": 2,
+          "status": "passed",
+          "reps": [
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 11533.561,
+              "call_latencies_ms": [
+                11533.561
+              ],
+              "judge_latency_ms": 1.281,
+              "judge_branch": "normalized_containment",
+              "judge_detail": "normalized needle is contained",
+              "judge_reason": null,
+              "pass": 2,
+              "rep": 1
+            },
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 11866.441,
+              "call_latencies_ms": [
+                11866.441
+              ],
+              "judge_latency_ms": 1.267,
+              "judge_branch": "normalized_containment",
+              "judge_detail": "normalized needle is contained",
+              "judge_reason": null,
+              "pass": 2,
+              "rep": 2
+            },
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 10642.828,
+              "call_latencies_ms": [
+                10642.828
+              ],
+              "judge_latency_ms": 1.259,
+              "judge_branch": "normalized_containment",
+              "judge_detail": "normalized needle is contained",
+              "judge_reason": null,
+              "pass": 2,
+              "rep": 3
+            }
+          ]
+        }
+      ]
+    },
+    "s4-depth-009": {
+      "id": "s4-depth-009",
+      "suite": "s4-depth",
+      "claim": "第55次《中国互联网络发展状况统计报告》附录二「附表7 按后缀形式分类的网页情况」中，html后缀网页占比为52.16%。",
+      "liveness": {
+        "alive": true,
+        "status_code": 200,
+        "url": "https://www.cnnic.net.cn/NMediaFile/2025/0220/MAIN1740036167004CKE0DITFO1.pdf",
+        "class": "alive"
+      },
+      "passes": [
+        {
+          "pass": 1,
+          "status": "passed",
+          "reps": [
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 10381.999,
+              "call_latencies_ms": [
+                10381.999
+              ],
+              "judge_latency_ms": 1.247,
+              "judge_branch": "normalized_containment",
+              "judge_detail": "normalized needle is contained",
+              "judge_reason": null,
+              "pass": 1,
+              "rep": 1
+            },
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 10527.557,
+              "call_latencies_ms": [
+                10527.557
+              ],
+              "judge_latency_ms": 1.363,
+              "judge_branch": "normalized_containment",
+              "judge_detail": "normalized needle is contained",
+              "judge_reason": null,
+              "pass": 1,
+              "rep": 2
+            },
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 10401.467,
+              "call_latencies_ms": [
+                10401.467
+              ],
+              "judge_latency_ms": 1.29,
+              "judge_branch": "normalized_containment",
+              "judge_detail": "normalized needle is contained",
+              "judge_reason": null,
+              "pass": 1,
+              "rep": 3
+            }
+          ]
+        },
+        {
+          "pass": 2,
+          "status": "passed",
+          "reps": [
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 10798.381,
+              "call_latencies_ms": [
+                10798.381
+              ],
+              "judge_latency_ms": 1.262,
+              "judge_branch": "normalized_containment",
+              "judge_detail": "normalized needle is contained",
+              "judge_reason": null,
+              "pass": 2,
+              "rep": 1
+            },
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 10643.62,
+              "call_latencies_ms": [
+                10643.62
+              ],
+              "judge_latency_ms": 1.266,
+              "judge_branch": "normalized_containment",
+              "judge_detail": "normalized needle is contained",
+              "judge_reason": null,
+              "pass": 2,
+              "rep": 2
+            },
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 9895.095,
+              "call_latencies_ms": [
+                9895.095
+              ],
+              "judge_latency_ms": 1.269,
+              "judge_branch": "normalized_containment",
+              "judge_detail": "normalized needle is contained",
+              "judge_reason": null,
+              "pass": 2,
+              "rep": 3
+            }
+          ]
+        }
+      ]
+    },
+    "s4-depth-010": {
+      "id": "s4-depth-010",
+      "suite": "s4-depth",
+      "claim": "第55次《中国互联网络发展状况统计报告》附录二「附表9 分地区网页字节数」中，山西的页面平均大小为209.78 KB。",
+      "liveness": {
+        "alive": true,
+        "status_code": 200,
+        "url": "https://www.cnnic.net.cn/NMediaFile/2025/0220/MAIN1740036167004CKE0DITFO1.pdf",
+        "class": "alive"
+      },
+      "passes": [
+        {
+          "pass": 1,
+          "status": "passed",
+          "reps": [
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 11822.457,
+              "call_latencies_ms": [
+                11822.457
+              ],
+              "judge_latency_ms": 1.283,
+              "judge_branch": "normalized_containment",
+              "judge_detail": "normalized needle is contained",
+              "judge_reason": null,
+              "pass": 1,
+              "rep": 1
+            },
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 10528.949,
+              "call_latencies_ms": [
+                10528.949
+              ],
+              "judge_latency_ms": 1.294,
+              "judge_branch": "normalized_containment",
+              "judge_detail": "normalized needle is contained",
+              "judge_reason": null,
+              "pass": 1,
+              "rep": 2
+            },
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 10382.262,
+              "call_latencies_ms": [
+                10382.262
+              ],
+              "judge_latency_ms": 1.292,
+              "judge_branch": "normalized_containment",
+              "judge_detail": "normalized needle is contained",
+              "judge_reason": null,
+              "pass": 1,
+              "rep": 3
+            }
+          ]
+        },
+        {
+          "pass": 2,
+          "status": "passed",
+          "reps": [
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 10797.404,
+              "call_latencies_ms": [
+                10797.404
+              ],
+              "judge_latency_ms": 1.272,
+              "judge_branch": "normalized_containment",
+              "judge_detail": "normalized needle is contained",
+              "judge_reason": null,
+              "pass": 2,
+              "rep": 1
+            },
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 9898.824,
+              "call_latencies_ms": [
+                9898.824
+              ],
+              "judge_latency_ms": 1.275,
+              "judge_branch": "normalized_containment",
+              "judge_detail": "normalized needle is contained",
+              "judge_reason": null,
+              "pass": 2,
+              "rep": 2
+            },
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 9717.152,
+              "call_latencies_ms": [
+                9717.152
+              ],
+              "judge_latency_ms": 1.316,
+              "judge_branch": "normalized_containment",
+              "judge_detail": "normalized needle is contained",
+              "judge_reason": null,
+              "pass": 2,
+              "rep": 3
+            }
+          ]
+        }
+      ]
+    },
+    "s4-depth-011": {
+      "id": "s4-depth-011",
+      "suite": "s4-depth",
+      "claim": "In the Hacker News thread on Tracing the roots of the 8086 instruction set to the Datapoint 2200 minicomputer, a reply five levels deep states that, expressed in PDP-11 terms, the Datapoint 2200 had only three address modes: register, register deferred via HL, and autoincrement via PC (immediate operands).",
+      "liveness": {
+        "alive": false,
+        "status_code": 429,
+        "url": "https://news.ycombinator.com/item?id=37104173",
+        "class": "rate_limited"
+      },
+      "passes": []
+    },
+    "s5-scholar-001": {
+      "id": "s5-scholar-001",
+      "suite": "s5-scholar",
+      "claim": "eye_coauthors resolves Francis Crick to OpenAlex A5109884453 and returns James D. Watson as his #1 collaborator by joint-paper count, with a >2x lead over #2.",
+      "liveness": {
+        "alive": true,
+        "status_code": 200,
+        "url": "https://api.openalex.org/works?filter=author.id:A5109884453,author.id:A5014257109&per-page=1",
+        "class": "alive"
+      },
+      "passes": [
+        {
+          "pass": 1,
+          "status": "passed",
+          "reps": [
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 803.172,
+              "call_latencies_ms": [
+                803.172
+              ],
+              "judge_latency_ms": 204.202,
+              "judge_branch": "dynamic_structural",
+              "judge_detail": "expected='James D. Watson', actual='James D. Watson', upstream_refetched=True",
+              "judge_reason": null,
+              "pass": 1,
+              "rep": 1
+            },
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 7.734,
+              "call_latencies_ms": [
+                7.734
+              ],
+              "judge_latency_ms": 181.787,
+              "judge_branch": "dynamic_structural",
+              "judge_detail": "expected='James D. Watson', actual='James D. Watson', upstream_refetched=True",
+              "judge_reason": null,
+              "pass": 1,
+              "rep": 2
+            },
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 8.159,
+              "call_latencies_ms": [
+                8.159
+              ],
+              "judge_latency_ms": 171.879,
+              "judge_branch": "dynamic_structural",
+              "judge_detail": "expected='James D. Watson', actual='James D. Watson', upstream_refetched=True",
+              "judge_reason": null,
+              "pass": 1,
+              "rep": 3
+            }
+          ]
+        },
+        {
+          "pass": 2,
+          "status": "passed",
+          "reps": [
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 9.282,
+              "call_latencies_ms": [
+                9.282
+              ],
+              "judge_latency_ms": 220.405,
+              "judge_branch": "dynamic_structural",
+              "judge_detail": "expected='James D. Watson', actual='James D. Watson', upstream_refetched=True",
+              "judge_reason": null,
+              "pass": 2,
+              "rep": 1
+            },
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 13.664,
+              "call_latencies_ms": [
+                13.664
+              ],
+              "judge_latency_ms": 171.992,
+              "judge_branch": "dynamic_structural",
+              "judge_detail": "expected='James D. Watson', actual='James D. Watson', upstream_refetched=True",
+              "judge_reason": null,
+              "pass": 2,
+              "rep": 2
+            },
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 8.753,
+              "call_latencies_ms": [
+                8.753
+              ],
+              "judge_latency_ms": 198.316,
+              "judge_branch": "dynamic_structural",
+              "judge_detail": "expected='James D. Watson', actual='James D. Watson', upstream_refetched=True",
+              "judge_reason": null,
+              "pass": 2,
+              "rep": 3
+            }
+          ]
+        }
+      ]
+    },
+    "s5-scholar-002": {
+      "id": "s5-scholar-002",
+      "suite": "s5-scholar",
+      "claim": "eye_coauthors returns Drew Weissman as Katalin Kariko's #1 collaborator by joint-paper count, ahead of #2 Hiromi Muramatsu.",
+      "liveness": {
+        "alive": true,
+        "status_code": 200,
+        "url": "https://api.openalex.org/works?filter=author.id:A5030598859,author.id:A5068253145&per-page=1",
+        "class": "alive"
+      },
+      "passes": [
+        {
+          "pass": 1,
+          "status": "passed",
+          "reps": [
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 1072.635,
+              "call_latencies_ms": [
+                1072.635
+              ],
+              "judge_latency_ms": 471.515,
+              "judge_branch": "dynamic_structural",
+              "judge_detail": "expected='Drew Weissman', actual='Drew Weissman', upstream_refetched=True",
+              "judge_reason": null,
+              "pass": 1,
+              "rep": 1
+            },
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 14.919,
+              "call_latencies_ms": [
+                14.919
+              ],
+              "judge_latency_ms": 184.255,
+              "judge_branch": "dynamic_structural",
+              "judge_detail": "expected='Drew Weissman', actual='Drew Weissman', upstream_refetched=True",
+              "judge_reason": null,
+              "pass": 1,
+              "rep": 2
+            },
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 14.273,
+              "call_latencies_ms": [
+                14.273
+              ],
+              "judge_latency_ms": 248.337,
+              "judge_branch": "dynamic_structural",
+              "judge_detail": "expected='Drew Weissman', actual='Drew Weissman', upstream_refetched=True",
+              "judge_reason": null,
+              "pass": 1,
+              "rep": 3
+            }
+          ]
+        },
+        {
+          "pass": 2,
+          "status": "passed",
+          "reps": [
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 15.05,
+              "call_latencies_ms": [
+                15.05
+              ],
+              "judge_latency_ms": 284.279,
+              "judge_branch": "dynamic_structural",
+              "judge_detail": "expected='Drew Weissman', actual='Drew Weissman', upstream_refetched=True",
+              "judge_reason": null,
+              "pass": 2,
+              "rep": 1
+            },
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 14.781,
+              "call_latencies_ms": [
+                14.781
+              ],
+              "judge_latency_ms": 266.671,
+              "judge_branch": "dynamic_structural",
+              "judge_detail": "expected='Drew Weissman', actual='Drew Weissman', upstream_refetched=True",
+              "judge_reason": null,
+              "pass": 2,
+              "rep": 2
+            },
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 14.633,
+              "call_latencies_ms": [
+                14.633
+              ],
+              "judge_latency_ms": 260.045,
+              "judge_branch": "dynamic_structural",
+              "judge_detail": "expected='Drew Weissman', actual='Drew Weissman', upstream_refetched=True",
+              "judge_reason": null,
+              "pass": 2,
+              "rep": 3
+            }
+          ]
+        }
+      ]
+    },
+    "s5-scholar-003": {
+      "id": "s5-scholar-003",
+      "suite": "s5-scholar",
+      "claim": "eye_coauthors returns Byrappa Venkatesh as Sydney Brenner's #1 collaborator by joint-paper count, with a >4x lead over #2.",
+      "liveness": {
+        "alive": true,
+        "status_code": 200,
+        "url": "https://api.openalex.org/works?filter=author.id:A5111910776,author.id:A5055376683&per-page=1",
+        "class": "alive"
+      },
+      "passes": [
+        {
+          "pass": 1,
+          "status": "passed",
+          "reps": [
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 964.534,
+              "call_latencies_ms": [
+                964.534
+              ],
+              "judge_latency_ms": 356.082,
+              "judge_branch": "dynamic_structural",
+              "judge_detail": "expected='Byrappa Venkatesh', actual='Byrappa Venkatesh', upstream_refetched=True",
+              "judge_reason": null,
+              "pass": 1,
+              "rep": 1
+            },
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 12.335,
+              "call_latencies_ms": [
+                12.335
+              ],
+              "judge_latency_ms": 299.814,
+              "judge_branch": "dynamic_structural",
+              "judge_detail": "expected='Byrappa Venkatesh', actual='Byrappa Venkatesh', upstream_refetched=True",
+              "judge_reason": null,
+              "pass": 1,
+              "rep": 2
+            },
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 12.067,
+              "call_latencies_ms": [
+                12.067
+              ],
+              "judge_latency_ms": 343.56,
+              "judge_branch": "dynamic_structural",
+              "judge_detail": "expected='Byrappa Venkatesh', actual='Byrappa Venkatesh', upstream_refetched=True",
+              "judge_reason": null,
+              "pass": 1,
+              "rep": 3
+            }
+          ]
+        },
+        {
+          "pass": 2,
+          "status": "passed",
+          "reps": [
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 12.021,
+              "call_latencies_ms": [
+                12.021
+              ],
+              "judge_latency_ms": 360.788,
+              "judge_branch": "dynamic_structural",
+              "judge_detail": "expected='Byrappa Venkatesh', actual='Byrappa Venkatesh', upstream_refetched=True",
+              "judge_reason": null,
+              "pass": 2,
+              "rep": 1
+            },
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 11.984,
+              "call_latencies_ms": [
+                11.984
+              ],
+              "judge_latency_ms": 325.027,
+              "judge_branch": "dynamic_structural",
+              "judge_detail": "expected='Byrappa Venkatesh', actual='Byrappa Venkatesh', upstream_refetched=True",
+              "judge_reason": null,
+              "pass": 2,
+              "rep": 2
+            },
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 11.633,
+              "call_latencies_ms": [
+                11.633
+              ],
+              "judge_latency_ms": 357.294,
+              "judge_branch": "dynamic_structural",
+              "judge_detail": "expected='Byrappa Venkatesh', actual='Byrappa Venkatesh', upstream_refetched=True",
+              "judge_reason": null,
+              "pass": 2,
+              "rep": 3
+            }
+          ]
+        }
+      ]
+    },
+    "s5-scholar-004": {
+      "id": "s5-scholar-004",
+      "suite": "s5-scholar",
+      "claim": "eye_coauthors returns A. F. Huxley as A. L. Hodgkin's #1 collaborator by joint-paper count, ahead of #2 R. D. Keynes.",
+      "liveness": {
+        "alive": true,
+        "status_code": 200,
+        "url": "https://api.openalex.org/works?filter=author.id:A5030452986,author.id:A5113678219&per-page=1",
+        "class": "alive"
+      },
+      "passes": [
+        {
+          "pass": 1,
+          "status": "passed",
+          "reps": [
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 545.351,
+              "call_latencies_ms": [
+                545.351
+              ],
+              "judge_latency_ms": 251.732,
+              "judge_branch": "dynamic_structural",
+              "judge_detail": "expected='A. F. Huxley', actual='A. F. Huxley', upstream_refetched=True",
+              "judge_reason": null,
+              "pass": 1,
+              "rep": 1
+            },
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 5.7,
+              "call_latencies_ms": [
+                5.7
+              ],
+              "judge_latency_ms": 237.064,
+              "judge_branch": "dynamic_structural",
+              "judge_detail": "expected='A. F. Huxley', actual='A. F. Huxley', upstream_refetched=True",
+              "judge_reason": null,
+              "pass": 1,
+              "rep": 2
+            },
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 5.464,
+              "call_latencies_ms": [
+                5.464
+              ],
+              "judge_latency_ms": 252.195,
+              "judge_branch": "dynamic_structural",
+              "judge_detail": "expected='A. F. Huxley', actual='A. F. Huxley', upstream_refetched=True",
+              "judge_reason": null,
+              "pass": 1,
+              "rep": 3
+            }
+          ]
+        },
+        {
+          "pass": 2,
+          "status": "passed",
+          "reps": [
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 5.384,
+              "call_latencies_ms": [
+                5.384
+              ],
+              "judge_latency_ms": 235.625,
+              "judge_branch": "dynamic_structural",
+              "judge_detail": "expected='A. F. Huxley', actual='A. F. Huxley', upstream_refetched=True",
+              "judge_reason": null,
+              "pass": 2,
+              "rep": 1
+            },
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 4.948,
+              "call_latencies_ms": [
+                4.948
+              ],
+              "judge_latency_ms": 245.215,
+              "judge_branch": "dynamic_structural",
+              "judge_detail": "expected='A. F. Huxley', actual='A. F. Huxley', upstream_refetched=True",
+              "judge_reason": null,
+              "pass": 2,
+              "rep": 2
+            },
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 5.216,
+              "call_latencies_ms": [
+                5.216
+              ],
+              "judge_latency_ms": 236.077,
+              "judge_branch": "dynamic_structural",
+              "judge_detail": "expected='A. F. Huxley', actual='A. F. Huxley', upstream_refetched=True",
+              "judge_reason": null,
+              "pass": 2,
+              "rep": 3
+            }
+          ]
+        }
+      ]
+    },
+    "s5-scholar-005": {
+      "id": "s5-scholar-005",
+      "suite": "s5-scholar",
+      "claim": "eye_paper_enrich reports integrity.retracted=true and surfaces a retraction notice for the 1998 Lancet MMR paper DOI 10.1016/S0140-6736(97)11096-0.",
+      "liveness": {
+        "alive": true,
+        "status_code": 200,
+        "url": "https://api.crossref.org/works/10.1016/S0140-6736(97)11096-0",
+        "class": "alive"
+      },
+      "passes": [
+        {
+          "pass": 1,
+          "status": "passed",
+          "reps": [
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 540.754,
+              "call_latencies_ms": [
+                540.754
+              ],
+              "judge_latency_ms": 238.459,
+              "judge_branch": "dynamic_structural",
+              "judge_detail": "expected_retracted=True, actual_retracted=True, expected_notices=['correction', 'retraction'], actual_notices=['correction', 'retraction']",
+              "judge_reason": null,
+              "pass": 1,
+              "rep": 1
+            },
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 3.534,
+              "call_latencies_ms": [
+                3.534
+              ],
+              "judge_latency_ms": 265.023,
+              "judge_branch": "dynamic_structural",
+              "judge_detail": "expected_retracted=True, actual_retracted=True, expected_notices=['correction', 'retraction'], actual_notices=['correction', 'retraction']",
+              "judge_reason": null,
+              "pass": 1,
+              "rep": 2
+            },
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 3.606,
+              "call_latencies_ms": [
+                3.606
+              ],
+              "judge_latency_ms": 358.739,
+              "judge_branch": "dynamic_structural",
+              "judge_detail": "expected_retracted=True, actual_retracted=True, expected_notices=['correction', 'retraction'], actual_notices=['correction', 'retraction']",
+              "judge_reason": null,
+              "pass": 1,
+              "rep": 3
+            }
+          ]
+        },
+        {
+          "pass": 2,
+          "status": "passed",
+          "reps": [
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 3.818,
+              "call_latencies_ms": [
+                3.818
+              ],
+              "judge_latency_ms": 250.341,
+              "judge_branch": "dynamic_structural",
+              "judge_detail": "expected_retracted=True, actual_retracted=True, expected_notices=['correction', 'retraction'], actual_notices=['correction', 'retraction']",
+              "judge_reason": null,
+              "pass": 2,
+              "rep": 1
+            },
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 3.088,
+              "call_latencies_ms": [
+                3.088
+              ],
+              "judge_latency_ms": 238.516,
+              "judge_branch": "dynamic_structural",
+              "judge_detail": "expected_retracted=True, actual_retracted=True, expected_notices=['correction', 'retraction'], actual_notices=['correction', 'retraction']",
+              "judge_reason": null,
+              "pass": 2,
+              "rep": 2
+            },
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 2.809,
+              "call_latencies_ms": [
+                2.809
+              ],
+              "judge_latency_ms": 234.3,
+              "judge_branch": "dynamic_structural",
+              "judge_detail": "expected_retracted=True, actual_retracted=True, expected_notices=['correction', 'retraction'], actual_notices=['correction', 'retraction']",
+              "judge_reason": null,
+              "pass": 2,
+              "rep": 3
+            }
+          ]
+        }
+      ]
+    },
+    "s5-scholar-006": {
+      "id": "s5-scholar-006",
+      "suite": "s5-scholar",
+      "claim": "eye_paper_enrich reports integrity.retracted=true with BOTH an expression_of_concern and a retraction notice for the 2005 Science stem-cell paper DOI 10.1126/science.1112286.",
+      "liveness": {
+        "alive": true,
+        "status_code": 200,
+        "url": "https://api.crossref.org/works/10.1126/science.1112286",
+        "class": "alive"
+      },
+      "passes": [
+        {
+          "pass": 1,
+          "status": "passed",
+          "reps": [
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 470.735,
+              "call_latencies_ms": [
+                470.735
+              ],
+              "judge_latency_ms": 372.446,
+              "judge_branch": "dynamic_structural",
+              "judge_detail": "expected_retracted=True, actual_retracted=True, expected_notices=['expression_of_concern', 'retraction'], actual_notices=['expression_of_concern', 'retraction']",
+              "judge_reason": null,
+              "pass": 1,
+              "rep": 1
+            },
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 3.462,
+              "call_latencies_ms": [
+                3.462
+              ],
+              "judge_latency_ms": 248.875,
+              "judge_branch": "dynamic_structural",
+              "judge_detail": "expected_retracted=True, actual_retracted=True, expected_notices=['expression_of_concern', 'retraction'], actual_notices=['expression_of_concern', 'retraction']",
+              "judge_reason": null,
+              "pass": 1,
+              "rep": 2
+            },
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 3.222,
+              "call_latencies_ms": [
+                3.222
+              ],
+              "judge_latency_ms": 350.299,
+              "judge_branch": "dynamic_structural",
+              "judge_detail": "expected_retracted=True, actual_retracted=True, expected_notices=['expression_of_concern', 'retraction'], actual_notices=['expression_of_concern', 'retraction']",
+              "judge_reason": null,
+              "pass": 1,
+              "rep": 3
+            }
+          ]
+        },
+        {
+          "pass": 2,
+          "status": "passed",
+          "reps": [
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 2.799,
+              "call_latencies_ms": [
+                2.799
+              ],
+              "judge_latency_ms": 247.494,
+              "judge_branch": "dynamic_structural",
+              "judge_detail": "expected_retracted=True, actual_retracted=True, expected_notices=['expression_of_concern', 'retraction'], actual_notices=['expression_of_concern', 'retraction']",
+              "judge_reason": null,
+              "pass": 2,
+              "rep": 1
+            },
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 2.906,
+              "call_latencies_ms": [
+                2.906
+              ],
+              "judge_latency_ms": 251.201,
+              "judge_branch": "dynamic_structural",
+              "judge_detail": "expected_retracted=True, actual_retracted=True, expected_notices=['expression_of_concern', 'retraction'], actual_notices=['expression_of_concern', 'retraction']",
+              "judge_reason": null,
+              "pass": 2,
+              "rep": 2
+            },
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 2.806,
+              "call_latencies_ms": [
+                2.806
+              ],
+              "judge_latency_ms": 253.133,
+              "judge_branch": "dynamic_structural",
+              "judge_detail": "expected_retracted=True, actual_retracted=True, expected_notices=['expression_of_concern', 'retraction'], actual_notices=['expression_of_concern', 'retraction']",
+              "judge_reason": null,
+              "pass": 2,
+              "rep": 3
+            }
+          ]
+        }
+      ]
+    },
+    "s5-scholar-007": {
+      "id": "s5-scholar-007",
+      "suite": "s5-scholar",
+      "claim": "For the non-retracted 2001 human-genome paper the tool reports integrity.retracted=false while still surfacing its correction and erratum notices.",
+      "liveness": {
+        "alive": true,
+        "status_code": 200,
+        "url": "https://api.crossref.org/works/10.1038/35057062",
+        "class": "alive"
+      },
+      "passes": [
+        {
+          "pass": 1,
+          "status": "passed",
+          "reps": [
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 319.925,
+              "call_latencies_ms": [
+                319.925
+              ],
+              "judge_latency_ms": 399.393,
+              "judge_branch": "dynamic_structural",
+              "judge_detail": "expected_retracted=False, actual_retracted=False, expected_notices=['correction', 'erratum'], actual_notices=['correction', 'erratum']",
+              "judge_reason": null,
+              "pass": 1,
+              "rep": 1
+            },
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 3.339,
+              "call_latencies_ms": [
+                3.339
+              ],
+              "judge_latency_ms": 517.351,
+              "judge_branch": "dynamic_structural",
+              "judge_detail": "expected_retracted=False, actual_retracted=False, expected_notices=['correction', 'erratum'], actual_notices=['correction', 'erratum']",
+              "judge_reason": null,
+              "pass": 1,
+              "rep": 2
+            },
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 3.334,
+              "call_latencies_ms": [
+                3.334
+              ],
+              "judge_latency_ms": 411.666,
+              "judge_branch": "dynamic_structural",
+              "judge_detail": "expected_retracted=False, actual_retracted=False, expected_notices=['correction', 'erratum'], actual_notices=['correction', 'erratum']",
+              "judge_reason": null,
+              "pass": 1,
+              "rep": 3
+            }
+          ]
+        },
+        {
+          "pass": 2,
+          "status": "passed",
+          "reps": [
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 2.983,
+              "call_latencies_ms": [
+                2.983
+              ],
+              "judge_latency_ms": 392.045,
+              "judge_branch": "dynamic_structural",
+              "judge_detail": "expected_retracted=False, actual_retracted=False, expected_notices=['correction', 'erratum'], actual_notices=['correction', 'erratum']",
+              "judge_reason": null,
+              "pass": 2,
+              "rep": 1
+            },
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 3.175,
+              "call_latencies_ms": [
+                3.175
+              ],
+              "judge_latency_ms": 386.861,
+              "judge_branch": "dynamic_structural",
+              "judge_detail": "expected_retracted=False, actual_retracted=False, expected_notices=['correction', 'erratum'], actual_notices=['correction', 'erratum']",
+              "judge_reason": null,
+              "pass": 2,
+              "rep": 2
+            },
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 3.186,
+              "call_latencies_ms": [
+                3.186
+              ],
+              "judge_latency_ms": 385.129,
+              "judge_branch": "dynamic_structural",
+              "judge_detail": "expected_retracted=False, actual_retracted=False, expected_notices=['correction', 'erratum'], actual_notices=['correction', 'erratum']",
+              "judge_reason": null,
+              "pass": 2,
+              "rep": 3
+            }
+          ]
+        }
+      ]
+    },
+    "s5-scholar-008": {
+      "id": "s5-scholar-008",
+      "suite": "s5-scholar",
+      "claim": "eye_paper_enrich locates the open-access PDF of the AlphaFold paper: is_oa true with a publisher-hosted pdf_url.",
+      "liveness": {
+        "alive": true,
+        "status_code": 200,
+        "url": "https://api.unpaywall.org/v2/10.1038/s41586-021-03819-2?email=unpaywall@impactstory.org",
+        "class": "alive"
+      },
+      "passes": [
+        {
+          "pass": 1,
+          "status": "passed",
+          "reps": [
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 602.377,
+              "call_latencies_ms": [
+                602.377
+              ],
+              "judge_latency_ms": 224.642,
+              "judge_branch": "dynamic_structural",
+              "judge_detail": "expected_oa=True, expected_pdf=True, actual_pdf=True",
+              "judge_reason": null,
+              "pass": 1,
+              "rep": 1
+            },
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 3.309,
+              "call_latencies_ms": [
+                3.309
+              ],
+              "judge_latency_ms": 218.172,
+              "judge_branch": "dynamic_structural",
+              "judge_detail": "expected_oa=True, expected_pdf=True, actual_pdf=True",
+              "judge_reason": null,
+              "pass": 1,
+              "rep": 2
+            },
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 3.284,
+              "call_latencies_ms": [
+                3.284
+              ],
+              "judge_latency_ms": 219.36,
+              "judge_branch": "dynamic_structural",
+              "judge_detail": "expected_oa=True, expected_pdf=True, actual_pdf=True",
+              "judge_reason": null,
+              "pass": 1,
+              "rep": 3
+            }
+          ]
+        },
+        {
+          "pass": 2,
+          "status": "passed",
+          "reps": [
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 3.436,
+              "call_latencies_ms": [
+                3.436
+              ],
+              "judge_latency_ms": 330.511,
+              "judge_branch": "dynamic_structural",
+              "judge_detail": "expected_oa=True, expected_pdf=True, actual_pdf=True",
+              "judge_reason": null,
+              "pass": 2,
+              "rep": 1
+            },
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 3.121,
+              "call_latencies_ms": [
+                3.121
+              ],
+              "judge_latency_ms": 217.186,
+              "judge_branch": "dynamic_structural",
+              "judge_detail": "expected_oa=True, expected_pdf=True, actual_pdf=True",
+              "judge_reason": null,
+              "pass": 2,
+              "rep": 2
+            },
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 2.861,
+              "call_latencies_ms": [
+                2.861
+              ],
+              "judge_latency_ms": 217.391,
+              "judge_branch": "dynamic_structural",
+              "judge_detail": "expected_oa=True, expected_pdf=True, actual_pdf=True",
+              "judge_reason": null,
+              "pass": 2,
+              "rep": 3
+            }
+          ]
+        }
+      ]
+    },
+    "s5-scholar-009": {
+      "id": "s5-scholar-009",
+      "suite": "s5-scholar",
+      "claim": "For arXiv id 1602.03837 (the first gravitational-wave detection) the tool routes to the arXiv branch and returns is_oa true, the arXiv PDF url, the DataCite DOI, and the linked journal DOI.",
+      "liveness": {
+        "alive": true,
+        "status_code": 200,
+        "url": "https://arxiv.org/abs/1602.03837",
+        "class": "alive"
+      },
+      "passes": [
+        {
+          "pass": 1,
+          "status": "passed",
+          "reps": [
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 5571.455,
+              "call_latencies_ms": [
+                5571.455
+              ],
+              "judge_latency_ms": 161.558,
+              "judge_branch": "dynamic_structural",
+              "judge_detail": "expected_oa=True, expected_pdf=True, actual_pdf=True",
+              "judge_reason": null,
+              "pass": 1,
+              "rep": 1
+            },
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 3.21,
+              "call_latencies_ms": [
+                3.21
+              ],
+              "judge_latency_ms": 76.769,
+              "judge_branch": "dynamic_structural",
+              "judge_detail": "expected_oa=True, expected_pdf=True, actual_pdf=True",
+              "judge_reason": null,
+              "pass": 1,
+              "rep": 2
+            },
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 3.066,
+              "call_latencies_ms": [
+                3.066
+              ],
+              "judge_latency_ms": 95.833,
+              "judge_branch": "dynamic_structural",
+              "judge_detail": "expected_oa=True, expected_pdf=True, actual_pdf=True",
+              "judge_reason": null,
+              "pass": 1,
+              "rep": 3
+            }
+          ]
+        },
+        {
+          "pass": 2,
+          "status": "passed",
+          "reps": [
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 669.088,
+              "call_latencies_ms": [
+                669.088
+              ],
+              "judge_latency_ms": 28.39,
+              "judge_branch": "dynamic_structural",
+              "judge_detail": "expected_oa=True, expected_pdf=True, actual_pdf=True",
+              "judge_reason": null,
+              "pass": 2,
+              "rep": 1
+            },
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 2.954,
+              "call_latencies_ms": [
+                2.954
+              ],
+              "judge_latency_ms": 28.596,
+              "judge_branch": "dynamic_structural",
+              "judge_detail": "expected_oa=True, expected_pdf=True, actual_pdf=True",
+              "judge_reason": null,
+              "pass": 2,
+              "rep": 2
+            },
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 2.579,
+              "call_latencies_ms": [
+                2.579
+              ],
+              "judge_latency_ms": 27.882,
+              "judge_branch": "dynamic_structural",
+              "judge_detail": "expected_oa=True, expected_pdf=True, actual_pdf=True",
+              "judge_reason": null,
+              "pass": 2,
+              "rep": 3
+            }
+          ]
+        }
+      ]
+    },
+    "s5-scholar-010": {
+      "id": "s5-scholar-010",
+      "suite": "s5-scholar",
+      "claim": "eye_paper_enrich locates the open-access PDF of the Planck 2018 cosmological-parameters paper on the publisher's own server.",
+      "liveness": {
+        "alive": true,
+        "status_code": 200,
+        "url": "https://api.unpaywall.org/v2/10.1051/0004-6361/201833910?email=unpaywall@impactstory.org",
+        "class": "alive"
+      },
+      "passes": [
+        {
+          "pass": 1,
+          "status": "passed",
+          "reps": [
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 426.314,
+              "call_latencies_ms": [
+                426.314
+              ],
+              "judge_latency_ms": 222.643,
+              "judge_branch": "dynamic_structural",
+              "judge_detail": "expected_oa=True, expected_pdf=True, actual_pdf=True",
+              "judge_reason": null,
+              "pass": 1,
+              "rep": 1
+            },
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 3.247,
+              "call_latencies_ms": [
+                3.247
+              ],
+              "judge_latency_ms": 258.303,
+              "judge_branch": "dynamic_structural",
+              "judge_detail": "expected_oa=True, expected_pdf=True, actual_pdf=True",
+              "judge_reason": null,
+              "pass": 1,
+              "rep": 2
+            },
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 3.413,
+              "call_latencies_ms": [
+                3.413
+              ],
+              "judge_latency_ms": 213.764,
+              "judge_branch": "dynamic_structural",
+              "judge_detail": "expected_oa=True, expected_pdf=True, actual_pdf=True",
+              "judge_reason": null,
+              "pass": 1,
+              "rep": 3
+            }
+          ]
+        },
+        {
+          "pass": 2,
+          "status": "passed",
+          "reps": [
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 2.553,
+              "call_latencies_ms": [
+                2.553
+              ],
+              "judge_latency_ms": 223.274,
+              "judge_branch": "dynamic_structural",
+              "judge_detail": "expected_oa=True, expected_pdf=True, actual_pdf=True",
+              "judge_reason": null,
+              "pass": 2,
+              "rep": 1
+            },
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 2.93,
+              "call_latencies_ms": [
+                2.93
+              ],
+              "judge_latency_ms": 237.5,
+              "judge_branch": "dynamic_structural",
+              "judge_detail": "expected_oa=True, expected_pdf=True, actual_pdf=True",
+              "judge_reason": null,
+              "pass": 2,
+              "rep": 2
+            },
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 2.834,
+              "call_latencies_ms": [
+                2.834
+              ],
+              "judge_latency_ms": 213.124,
+              "judge_branch": "dynamic_structural",
+              "judge_detail": "expected_oa=True, expected_pdf=True, actual_pdf=True",
+              "judge_reason": null,
+              "pass": 2,
+              "rep": 3
+            }
+          ]
+        }
+      ]
+    },
+    "s5-scholar-011": {
+      "id": "s5-scholar-011",
+      "suite": "s5-scholar",
+      "claim": "One eye_paper_enrich call over the arXiv id and the journal DOI of the SAME ATLAS Higgs-discovery paper surfaces two provenance-distinct citation counts that differ by ~5x, and links the two records via integrity.journal_doi.",
+      "liveness": {
+        "alive": true,
+        "status_code": 200,
+        "url": "https://api.crossref.org/works/10.1016/j.physletb.2012.08.020",
+        "class": "alive"
+      },
+      "passes": [
+        {
+          "pass": 1,
+          "status": "failed",
+          "reps": [
+            {
+              "status": "fail",
+              "passed": false,
+              "latency_ms": 5687.463,
+              "call_latencies_ms": [
+                5687.463
+              ],
+              "judge_latency_ms": 386.6,
+              "judge_branch": "dynamic_structural",
+              "judge_detail": "provenance_values=[(6801.0, 'kind:doi')], ratio=0.0000, floor=5.1000",
+              "judge_reason": null,
+              "pass": 1,
+              "rep": 1
+            },
+            {
+              "status": "fail",
+              "passed": false,
+              "latency_ms": 3.689,
+              "call_latencies_ms": [
+                3.689
+              ],
+              "judge_latency_ms": 383.531,
+              "judge_branch": "dynamic_structural",
+              "judge_detail": "provenance_values=[(6801.0, 'kind:doi')], ratio=0.0000, floor=5.1000",
+              "judge_reason": null,
+              "pass": 1,
+              "rep": 2
+            },
+            {
+              "status": "fail",
+              "passed": false,
+              "latency_ms": 3.561,
+              "call_latencies_ms": [
+                3.561
+              ],
+              "judge_latency_ms": 430.419,
+              "judge_branch": "dynamic_structural",
+              "judge_detail": "provenance_values=[(6801.0, 'kind:doi')], ratio=0.0000, floor=5.1000",
+              "judge_reason": null,
+              "pass": 1,
+              "rep": 3
+            }
+          ]
+        },
+        {
+          "pass": 2,
+          "status": "passed",
+          "reps": [
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 5514.458,
+              "call_latencies_ms": [
+                5514.458
+              ],
+              "judge_latency_ms": 438.237,
+              "judge_branch": "dynamic_structural",
+              "judge_detail": "provenance_values=[(1328.0, 'kind:arxiv'), (6801.0, 'kind:doi')], ratio=5.1212, floor=5.1000",
+              "judge_reason": null,
+              "pass": 2,
+              "rep": 1
+            },
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 3.334,
+              "call_latencies_ms": [
+                3.334
+              ],
+              "judge_latency_ms": 365.889,
+              "judge_branch": "dynamic_structural",
+              "judge_detail": "provenance_values=[(1328.0, 'kind:arxiv'), (6801.0, 'kind:doi')], ratio=5.1212, floor=5.1000",
+              "judge_reason": null,
+              "pass": 2,
+              "rep": 2
+            },
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 3.305,
+              "call_latencies_ms": [
+                3.305
+              ],
+              "judge_latency_ms": 374.482,
+              "judge_branch": "dynamic_structural",
+              "judge_detail": "provenance_values=[(1328.0, 'kind:arxiv'), (6801.0, 'kind:doi')], ratio=5.1212, floor=5.1000",
+              "judge_reason": null,
+              "pass": 2,
+              "rep": 3
+            }
+          ]
+        }
+      ]
+    },
+    "s6-memory-001": {
+      "id": "s6-memory-001",
+      "suite": "s6-memory",
+      "claim": "A repeated query in one MCP session exposes the memory contract's seen_before field on the second result set.",
+      "liveness": {
+        "alive": true,
+        "class": "self_contained"
+      },
+      "passes": [
+        {
+          "pass": 1,
+          "status": "passed",
+          "reps": [
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 489.404,
+              "call_latencies_ms": [
+                482.558,
+                6.846
+              ],
+              "judge_latency_ms": 0.056,
+              "judge_branch": "meta_assertion",
+              "judge_detail": "all assertions passed",
+              "judge_reason": null,
+              "pass": 1,
+              "rep": 1
+            },
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 11.904,
+              "call_latencies_ms": [
+                6.045,
+                5.859
+              ],
+              "judge_latency_ms": 0.045,
+              "judge_branch": "meta_assertion",
+              "judge_detail": "all assertions passed",
+              "judge_reason": null,
+              "pass": 1,
+              "rep": 2
+            },
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 11.721,
+              "call_latencies_ms": [
+                5.854,
+                5.867
+              ],
+              "judge_latency_ms": 0.043,
+              "judge_branch": "meta_assertion",
+              "judge_detail": "all assertions passed",
+              "judge_reason": null,
+              "pass": 1,
+              "rep": 3
+            }
+          ]
+        },
+        {
+          "pass": 2,
+          "status": "passed",
+          "reps": [
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 13.036,
+              "call_latencies_ms": [
+                7.25,
+                5.786
+              ],
+              "judge_latency_ms": 0.037,
+              "judge_branch": "meta_assertion",
+              "judge_detail": "all assertions passed",
+              "judge_reason": null,
+              "pass": 2,
+              "rep": 1
+            },
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 11.288,
+              "call_latencies_ms": [
+                5.628,
+                5.66
+              ],
+              "judge_latency_ms": 0.033,
+              "judge_branch": "meta_assertion",
+              "judge_detail": "all assertions passed",
+              "judge_reason": null,
+              "pass": 2,
+              "rep": 2
+            },
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 11.303,
+              "call_latencies_ms": [
+                5.641,
+                5.662
+              ],
+              "judge_latency_ms": 0.032,
+              "judge_branch": "meta_assertion",
+              "judge_detail": "all assertions passed",
+              "judge_reason": null,
+              "pass": 2,
+              "rep": 3
+            }
+          ]
+        }
+      ]
+    },
+    "s6-memory-002": {
+      "id": "s6-memory-002",
+      "suite": "s6-memory",
+      "claim": "A cross-source classic-paper query reports the input and output of the deduplication stage.",
+      "liveness": {
+        "alive": true,
+        "class": "self_contained"
+      },
+      "passes": [
+        {
+          "pass": 1,
+          "status": "passed",
+          "reps": [
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 439.073,
+              "call_latencies_ms": [
+                439.073
+              ],
+              "judge_latency_ms": 0.071,
+              "judge_branch": "meta_assertion",
+              "judge_detail": "all assertions passed",
+              "judge_reason": null,
+              "pass": 1,
+              "rep": 1
+            },
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 9.531,
+              "call_latencies_ms": [
+                9.531
+              ],
+              "judge_latency_ms": 0.026,
+              "judge_branch": "meta_assertion",
+              "judge_detail": "all assertions passed",
+              "judge_reason": null,
+              "pass": 1,
+              "rep": 2
+            },
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 7.256,
+              "call_latencies_ms": [
+                7.256
+              ],
+              "judge_latency_ms": 0.025,
+              "judge_branch": "meta_assertion",
+              "judge_detail": "all assertions passed",
+              "judge_reason": null,
+              "pass": 1,
+              "rep": 3
+            }
+          ]
+        },
+        {
+          "pass": 2,
+          "status": "passed",
+          "reps": [
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 7.057,
+              "call_latencies_ms": [
+                7.057
+              ],
+              "judge_latency_ms": 0.025,
+              "judge_branch": "meta_assertion",
+              "judge_detail": "all assertions passed",
+              "judge_reason": null,
+              "pass": 2,
+              "rep": 1
+            },
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 6.91,
+              "call_latencies_ms": [
+                6.91
+              ],
+              "judge_latency_ms": 0.026,
+              "judge_branch": "meta_assertion",
+              "judge_detail": "all assertions passed",
+              "judge_reason": null,
+              "pass": 2,
+              "rep": 2
+            },
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 6.773,
+              "call_latencies_ms": [
+                6.773
+              ],
+              "judge_latency_ms": 0.025,
+              "judge_branch": "meta_assertion",
+              "judge_detail": "all assertions passed",
+              "judge_reason": null,
+              "pass": 2,
+              "rep": 3
+            }
+          ]
+        }
+      ]
+    },
+    "s6-memory-003": {
+      "id": "s6-memory-003",
+      "suite": "s6-memory",
+      "claim": "The source roster is live and exposes declared routing facets on every returned source.",
+      "liveness": {
+        "alive": true,
+        "class": "self_contained"
+      },
+      "passes": [
+        {
+          "pass": 1,
+          "status": "passed",
+          "reps": [
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 12.523,
+              "call_latencies_ms": [
+                12.523
+              ],
+              "judge_latency_ms": 0.297,
+              "judge_branch": "meta_assertion",
+              "judge_detail": "all assertions passed",
+              "judge_reason": null,
+              "pass": 1,
+              "rep": 1
+            },
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 11.625,
+              "call_latencies_ms": [
+                11.625
+              ],
+              "judge_latency_ms": 0.287,
+              "judge_branch": "meta_assertion",
+              "judge_detail": "all assertions passed",
+              "judge_reason": null,
+              "pass": 1,
+              "rep": 2
+            },
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 11.239,
+              "call_latencies_ms": [
+                11.239
+              ],
+              "judge_latency_ms": 0.286,
+              "judge_branch": "meta_assertion",
+              "judge_detail": "all assertions passed",
+              "judge_reason": null,
+              "pass": 1,
+              "rep": 3
+            }
+          ]
+        },
+        {
+          "pass": 2,
+          "status": "passed",
+          "reps": [
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 11.707,
+              "call_latencies_ms": [
+                11.707
+              ],
+              "judge_latency_ms": 0.285,
+              "judge_branch": "meta_assertion",
+              "judge_detail": "all assertions passed",
+              "judge_reason": null,
+              "pass": 2,
+              "rep": 1
+            },
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 11.191,
+              "call_latencies_ms": [
+                11.191
+              ],
+              "judge_latency_ms": 0.291,
+              "judge_branch": "meta_assertion",
+              "judge_detail": "all assertions passed",
+              "judge_reason": null,
+              "pass": 2,
+              "rep": 2
+            },
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 11.106,
+              "call_latencies_ms": [
+                11.106
+              ],
+              "judge_latency_ms": 0.286,
+              "judge_branch": "meta_assertion",
+              "judge_detail": "all assertions passed",
+              "judge_reason": null,
+              "pass": 2,
+              "rep": 3
+            }
+          ]
+        }
+      ]
+    },
+    "s6-memory-004": {
+      "id": "s6-memory-004",
+      "suite": "s6-memory",
+      "claim": "Every returned search document carries a source name and a re-checkable URL or identifier.",
+      "liveness": {
+        "alive": true,
+        "class": "self_contained"
+      },
+      "passes": [
+        {
+          "pass": 1,
+          "status": "passed",
+          "reps": [
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 6.449,
+              "call_latencies_ms": [
+                6.449
+              ],
+              "judge_latency_ms": 0.027,
+              "judge_branch": "meta_assertion",
+              "judge_detail": "all assertions passed",
+              "judge_reason": null,
+              "pass": 1,
+              "rep": 1
+            },
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 5.972,
+              "call_latencies_ms": [
+                5.972
+              ],
+              "judge_latency_ms": 0.021,
+              "judge_branch": "meta_assertion",
+              "judge_detail": "all assertions passed",
+              "judge_reason": null,
+              "pass": 1,
+              "rep": 2
+            },
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 5.786,
+              "call_latencies_ms": [
+                5.786
+              ],
+              "judge_latency_ms": 0.02,
+              "judge_branch": "meta_assertion",
+              "judge_detail": "all assertions passed",
+              "judge_reason": null,
+              "pass": 1,
+              "rep": 3
+            }
+          ]
+        },
+        {
+          "pass": 2,
+          "status": "passed",
+          "reps": [
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 5.832,
+              "call_latencies_ms": [
+                5.832
+              ],
+              "judge_latency_ms": 0.02,
+              "judge_branch": "meta_assertion",
+              "judge_detail": "all assertions passed",
+              "judge_reason": null,
+              "pass": 2,
+              "rep": 1
+            },
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 5.702,
+              "call_latencies_ms": [
+                5.702
+              ],
+              "judge_latency_ms": 0.02,
+              "judge_branch": "meta_assertion",
+              "judge_detail": "all assertions passed",
+              "judge_reason": null,
+              "pass": 2,
+              "rep": 2
+            },
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 5.69,
+              "call_latencies_ms": [
+                5.69
+              ],
+              "judge_latency_ms": 0.019,
+              "judge_branch": "meta_assertion",
+              "judge_detail": "all assertions passed",
+              "judge_reason": null,
+              "pass": 2,
+              "rep": 3
+            }
+          ]
+        }
+      ]
+    },
+    "s6-memory-005": {
+      "id": "s6-memory-005",
+      "suite": "s6-memory",
+      "claim": "Search metadata names the searched, empty, and excluded source channels.",
+      "liveness": {
+        "alive": true,
+        "class": "self_contained"
+      },
+      "passes": [
+        {
+          "pass": 1,
+          "status": "passed",
+          "reps": [
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 5.755,
+              "call_latencies_ms": [
+                5.755
+              ],
+              "judge_latency_ms": 0.028,
+              "judge_branch": "meta_assertion",
+              "judge_detail": "all assertions passed",
+              "judge_reason": null,
+              "pass": 1,
+              "rep": 1
+            },
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 5.782,
+              "call_latencies_ms": [
+                5.782
+              ],
+              "judge_latency_ms": 0.027,
+              "judge_branch": "meta_assertion",
+              "judge_detail": "all assertions passed",
+              "judge_reason": null,
+              "pass": 1,
+              "rep": 2
+            },
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 5.824,
+              "call_latencies_ms": [
+                5.824
+              ],
+              "judge_latency_ms": 0.028,
+              "judge_branch": "meta_assertion",
+              "judge_detail": "all assertions passed",
+              "judge_reason": null,
+              "pass": 1,
+              "rep": 3
+            }
+          ]
+        },
+        {
+          "pass": 2,
+          "status": "passed",
+          "reps": [
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 5.641,
+              "call_latencies_ms": [
+                5.641
+              ],
+              "judge_latency_ms": 0.027,
+              "judge_branch": "meta_assertion",
+              "judge_detail": "all assertions passed",
+              "judge_reason": null,
+              "pass": 2,
+              "rep": 1
+            },
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 5.732,
+              "call_latencies_ms": [
+                5.732
+              ],
+              "judge_latency_ms": 0.027,
+              "judge_branch": "meta_assertion",
+              "judge_detail": "all assertions passed",
+              "judge_reason": null,
+              "pass": 2,
+              "rep": 2
+            },
+            {
+              "status": "pass",
+              "passed": true,
+              "latency_ms": 5.748,
+              "call_latencies_ms": [
+                5.748
+              ],
+              "judge_latency_ms": 0.027,
+              "judge_branch": "meta_assertion",
+              "judge_detail": "all assertions passed",
+              "judge_reason": null,
+              "pass": 2,
+              "rep": 3
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "suites": {
+    "s3-crosslingual": {
+      "n": 7,
+      "passes": [
+        {
+          "successes": 0,
+          "total": 7,
+          "rate": 0.0,
+          "wilson_95": [
+            0.0,
+            0.35433884297520657
+          ]
+        },
+        {
+          "successes": 0,
+          "total": 7,
+          "rate": 0.0,
+          "wilson_95": [
+            0.0,
+            0.35433884297520657
+          ]
+        }
+      ],
+      "pooled": {
+        "successes": 0,
+        "total": 14,
+        "rate": 0.0,
+        "wilson_95": [
+          0.0,
+          0.21531701192718142
+        ]
+      },
+      "noise_band": 0.0,
+      "latency_ms": {
+        "p50": null,
+        "p90": null
+      },
+      "stale_count": 1,
+      "dormant": false,
+      "dormant_note": "required optional extra missing"
+    },
+    "s4-depth": {
+      "n": 9,
+      "passes": [
+        {
+          "successes": 9,
+          "total": 9,
+          "rate": 1.0,
+          "wilson_95": [
+            0.7008472464490407,
+            1.0
+          ]
+        },
+        {
+          "successes": 9,
+          "total": 9,
+          "rate": 1.0,
+          "wilson_95": [
+            0.7008472464490407,
+            1.0
+          ]
+        }
+      ],
+      "pooled": {
+        "successes": 18,
+        "total": 18,
+        "rate": 1.0,
+        "wilson_95": [
+          0.8241154494176252,
+          1.0
+        ]
+      },
+      "noise_band": 0.0,
+      "latency_ms": {
+        "p50": 1021.7270000000001,
+        "p90": 10798.0879
+      },
+      "stale_count": 1,
+      "dormant": false,
+      "dormant_note": "required optional extra missing"
+    },
+    "s5-scholar": {
+      "n": 11,
+      "passes": [
+        {
+          "successes": 10,
+          "total": 11,
+          "rate": 0.9090909090909091,
+          "wilson_95": [
+            0.6226353745137962,
+            0.9837682477371741
+          ]
+        },
+        {
+          "successes": 11,
+          "total": 11,
+          "rate": 1.0,
+          "wilson_95": [
+            0.7411599827511859,
+            1.0
+          ]
+        }
+      ],
+      "pooled": {
+        "successes": 21,
+        "total": 22,
+        "rate": 0.9545454545454546,
+        "wilson_95": [
+          0.7820151050048196,
+          0.9919307806988522
+        ]
+      },
+      "noise_band": 0.09090909090909094,
+      "latency_ms": {
+        "p50": 4.948,
+        "p90": 590.9718000000003
+      },
+      "stale_count": 0,
+      "dormant": false,
+      "dormant_note": "required optional extra missing"
+    },
+    "s6-memory": {
+      "n": 5,
+      "passes": [
+        {
+          "successes": 5,
+          "total": 5,
+          "rate": 1.0,
+          "wilson_95": [
+            0.5655085052479191,
+            1.0
+          ]
+        },
+        {
+          "successes": 5,
+          "total": 5,
+          "rate": 1.0,
+          "wilson_95": [
+            0.5655085052479191,
+            1.0
+          ]
+        }
+      ],
+      "pooled": {
+        "successes": 10,
+        "total": 10,
+        "rate": 1.0,
+        "wilson_95": [
+          0.7224598312333834,
+          1.0
+        ]
+      },
+      "noise_band": 0.0,
+      "latency_ms": {
+        "p50": 5.9195,
+        "p90": 11.666
+      },
+      "stale_count": 0,
+      "dormant": false,
+      "dormant_note": "required optional extra missing"
+    }
+  },
+  "stale": [
+    {
+      "id": "s3-xling-007",
+      "class": "dead"
+    },
+    {
+      "id": "s4-depth-011",
+      "class": "rate_limited"
+    }
+  ],
+  "dormant": []
+}
