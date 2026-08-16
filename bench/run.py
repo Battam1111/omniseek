@@ -11,6 +11,7 @@ import importlib.util
 import json
 import os
 import platform
+import shutil
 import subprocess
 import sys
 import time
@@ -20,12 +21,14 @@ from typing import Any
 import httpx
 
 from judges import judge, wilson_interval
-from schema import TaskValidationError, load_tasks
+from schema import load_tasks
 
 
 DEFAULT_SUITES = "s3-crosslingual,s4-depth,s5-scholar,s6-memory"
 WARMUP_TIMEOUT = 600.0
 WARMUP_QUERY = "benchmark neutral warmup"
+TEARDOWN_TIMEOUT = 15.0
+TEARDOWN_KILL_WAIT = 1.0
 REQUIRED_EXTRAS = {
     "s1-audio": {"asr"},
     "s2-pixels": {"ocr"},
@@ -47,12 +50,80 @@ class HarnessError(RuntimeError):
     """Raised for errors in the benchmark harness itself."""
 
 
+class HarnessPhaseError(HarnessError):
+    """A harness failure with a stable phase, tool, and leaf-exception detail."""
+
+    def __init__(self, phase: str, tool: str, exception: str):
+        self.phase = phase
+        self.tool = tool
+        self.exception = exception
+        self.detail = f"phase={phase}; tool={tool}; exception={exception}"
+        super().__init__(self.detail)
+
+
 class MCPCallError(RuntimeError):
     """Raised when the MCP server returns a tool error."""
 
 
 class DormantExtraError(MCPCallError):
     """Raised when the server explicitly reports a missing optional extra."""
+
+
+def _exception_leaves(exc: BaseException) -> list[BaseException]:
+    if isinstance(exc, BaseExceptionGroup):
+        leaves: list[BaseException] = []
+        for child in exc.exceptions:
+            leaves.extend(_exception_leaves(child))
+        return leaves
+    return [exc]
+
+
+def _failure_info(
+    exc: BaseException,
+    fallback_phase: str,
+    fallback_tool: str,
+) -> dict[str, str]:
+    leaves = _exception_leaves(exc)
+    for leaf in leaves:
+        if isinstance(leaf, HarnessPhaseError):
+            return {
+                "phase": leaf.phase,
+                "tool": leaf.tool,
+                "exception": leaf.exception,
+                "detail": leaf.detail,
+            }
+    exception = (
+        repr(leaves[0])
+        if len(leaves) == 1
+        else "[" + ", ".join(repr(leaf) for leaf in leaves) + "]"
+    )
+    detail = f"phase={fallback_phase}; tool={fallback_tool}; exception={exception}"
+    return {
+        "phase": fallback_phase,
+        "tool": fallback_tool,
+        "exception": exception,
+        "detail": detail,
+    }
+
+
+def _phase_error(phase: str, tool: str, exc: BaseException) -> HarnessPhaseError:
+    info = _failure_info(exc, phase, tool)
+    return HarnessPhaseError(info["phase"], info["tool"], info["exception"])
+
+
+def _resolve_command(command: str) -> str:
+    candidate = Path(command)
+    is_bare_omniseek = (
+        candidate.parent == Path(".")
+        and candidate.name.casefold() in {"omniseek", "omniseek.exe"}
+    )
+    if is_bare_omniseek:
+        executable_name = "omniseek.exe" if os.name == "nt" else "omniseek"
+        sibling = Path(sys.executable).resolve().parent / executable_name
+        if sibling.is_file():
+            return str(sibling.resolve())
+    resolved = shutil.which(command)
+    return resolved or command
 
 
 def _git_sha() -> str:
@@ -164,6 +235,10 @@ class MCPInvoker:
         self.init_timeout = init_timeout
         self.call_timeout = call_timeout
         self._stack: contextlib.AsyncExitStack | None = None
+        self._transport_context = None
+        self._process = None
+        self._last_tool = "<session>"
+        self.resolved_command = command
         self.session = None
 
     async def __aenter__(self):
@@ -172,43 +247,111 @@ class MCPInvoker:
         self._stack = contextlib.AsyncExitStack()
         await self._stack.__aenter__()
         if self.transport == "stdio":
+            self.resolved_command = _resolve_command(self.command)
             params = StdioServerParameters(
-                command=self.command,
+                command=self.resolved_command,
                 args=[],
                 cwd=str(Path.cwd()),
                 env=dict(os.environ),
             )
-            streams = await self._stack.enter_async_context(stdio_client(params))
+            self._transport_context = stdio_client(params)
+            streams = await self._stack.enter_async_context(self._transport_context)
+            generator = getattr(self._transport_context, "gen", None)
+            frame = getattr(generator, "ag_frame", None)
+            if frame is not None:
+                self._process = frame.f_locals.get("process")
         else:
             if not self.url:
                 raise HarnessError("--url is required for HTTP transport")
             from mcp.client.streamable_http import streamable_http_client
 
-            streams = await self._stack.enter_async_context(
-                streamable_http_client(
-                    self.url,
-                    timeout=self.call_timeout,
-                    sse_read_timeout=max(self.call_timeout, self.init_timeout),
-                )
+            self._transport_context = streamable_http_client(
+                self.url,
+                timeout=self.call_timeout,
+                sse_read_timeout=max(self.call_timeout, self.init_timeout),
             )
+            streams = await self._stack.enter_async_context(self._transport_context)
         self.session = await self._stack.enter_async_context(
             ClientSession(streams[0], streams[1])
         )
-        try:
-            await asyncio.wait_for(self.session.initialize(), self.init_timeout)
-        except Exception:
-            await self.__aexit__(*sys.exc_info())
-            raise
+        await asyncio.wait_for(self.session.initialize(), self.init_timeout)
         return self
 
     async def __aexit__(self, exc_type, exc, traceback):
-        if self._stack is not None:
-            return await self._stack.__aexit__(exc_type, exc, traceback)
+        await self.close()
         return None
+
+    async def _terminate_process(self) -> None:
+        process = self._process
+        if process is None:
+            return
+        try:
+            from mcp.client.stdio import _terminate_process_tree
+
+            await _terminate_process_tree(process, timeout_seconds=0.5)
+        except Exception:
+            try:
+                process.kill()
+            except Exception:
+                return
+        try:
+            await asyncio.wait_for(process.wait(), timeout=TEARDOWN_KILL_WAIT)
+        except (asyncio.TimeoutError, ProcessLookupError):
+            try:
+                process.kill()
+            except Exception:
+                pass
+
+    async def close(self) -> None:
+        stack = self._stack
+        if stack is None:
+            return
+        self._stack = None
+        owner = asyncio.current_task()
+        state: dict[str, Any] = {
+            "expired": False,
+            "finished": False,
+            "kill_error": None,
+        }
+
+        async def watchdog() -> None:
+            await asyncio.sleep(TEARDOWN_TIMEOUT)
+            state["expired"] = True
+            try:
+                await self._terminate_process()
+            except BaseException as exc:
+                state["kill_error"] = exc
+            await asyncio.sleep(TEARDOWN_KILL_WAIT)
+            if not state["finished"] and owner is not None:
+                owner.cancel()
+
+        watchdog_task = asyncio.create_task(watchdog())
+        try:
+            await stack.__aexit__(None, None, None)
+        except asyncio.CancelledError as exc:
+            if state["expired"]:
+                cause = state["kill_error"] or TimeoutError(
+                    f"MCP teardown exceeded {TEARDOWN_TIMEOUT:.1f}s after forced kill"
+                )
+                raise _phase_error(
+                    "teardown",
+                    self._last_tool,
+                    cause,
+                ) from exc
+            raise
+        except BaseException as exc:
+            raise _phase_error("teardown", self._last_tool, exc) from None
+        finally:
+            state["finished"] = True
+            watchdog_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await watchdog_task
+            self.session = None
 
     async def call(self, tool: str, args: dict[str, Any], timeout_s: float) -> Any:
         if self.session is None:
             raise HarnessError("MCP session is not initialized")
+        self._last_tool = tool
         try:
             raw = await asyncio.wait_for(
                 self.session.call_tool(tool, arguments=args),
@@ -222,12 +365,18 @@ class MCPInvoker:
         # The cold first live call's initialization cost is a documented property of the
         # server, and this benchmark measures retrieval, not boot.
         started = time.perf_counter()
-        await self.call("omniseek_sources", {}, WARMUP_TIMEOUT)
-        await self.call(
-            "omniseek_search",
-            {"query": WARMUP_QUERY, "staleness": "cache_only"},
-            WARMUP_TIMEOUT,
-        )
+        calls = [
+            ("omniseek_sources", {}),
+            (
+                "omniseek_search",
+                {"query": WARMUP_QUERY, "staleness": "cache_only"},
+            ),
+        ]
+        for tool, arguments in calls:
+            try:
+                await self.call(tool, arguments, WARMUP_TIMEOUT)
+            except BaseException as exc:
+                raise _phase_error("warmup", tool, exc) from None
         return (time.perf_counter() - started) * 1000.0
 
 
@@ -381,7 +530,7 @@ async def _run_pass(
                             "error": str(exc),
                         }
                     )
-                except Exception as exc:
+                except (MCPCallError, TimeoutError) as exc:
                     message = str(exc)
                     status = "dormant" if _is_dormant_message(message) else "fail"
                     if status == "dormant":
@@ -398,6 +547,12 @@ async def _run_pass(
                             "error": message,
                         }
                     )
+                except BaseException as exc:
+                    raise _phase_error(
+                        f"task {task_id} rep {rep_index}",
+                        str(task["input"]["tool"]),
+                        exc,
+                    ) from None
         task_status = _majority_status(rep_records)
         record["passes"].append(
             {
@@ -453,61 +608,203 @@ def _aggregate_pass(
     return aggregate
 
 
-async def run_benchmark(args: argparse.Namespace) -> Path:
+def _selected_suites(value: str) -> set[str]:
+    return {item.strip() for item in value.split(",") if item.strip()}
+
+
+def _result_skeleton(args: argparse.Namespace) -> dict[str, Any]:
+    suites = _selected_suites(args.suites)
+    extras = detect_extras()
+    return {
+        "schema_version": "bench-v1.0",
+        "run": {
+            "git_sha7": _git_sha(),
+            "passes": args.passes,
+            "reps": args.reps,
+            "suites": sorted(suites),
+            "tasks_dir": str(Path(args.tasks_dir)),
+            "command": _resolve_command(args.command),
+        },
+        "env": {
+            "utc": dt.datetime.now(dt.timezone.utc).isoformat(),
+            "platform": platform.platform(),
+            "python": sys.version.split()[0],
+            "omniseek_version": _package_version(),
+            "extras_detected": extras,
+            "vantage": args.vantage,
+            "warmup_ms": None,
+            "warmup_pass_ms": [],
+        },
+        "tasks": {},
+        "suites": {},
+        "stale": [],
+        "dormant": [],
+    }
+
+
+def _write_json_result(path: Path, result: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(result, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+
+def _write_partial_result(
+    args: argparse.Namespace,
+    result: dict[str, Any],
+    error: dict[str, str],
+) -> Path:
+    result["error"] = {
+        "phase": error["phase"],
+        "tool": error["tool"],
+        "exception": error["exception"],
+        "detail": error["detail"],
+        "partial": True,
+    }
+    requested = _output_path(args.out, result["run"]["git_sha7"])
+    date = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%d")
+    fallback = (
+        Path("bench")
+        / "results"
+        / f"run-{date}-{result['run']['git_sha7']}-partial.json"
+    )
+    failures: list[BaseException] = []
+    for path in dict.fromkeys((requested, fallback)):
+        try:
+            _write_json_result(path, result)
+            return path
+        except BaseException as exc:
+            failures.extend(_exception_leaves(exc))
+    exception = (
+        repr(failures[0])
+        if len(failures) == 1
+        else "[" + ", ".join(repr(item) for item in failures) + "]"
+    )
+    raise HarnessPhaseError("write-out", "<partial-results>", exception)
+
+
+async def run_benchmark(
+    args: argparse.Namespace,
+    result: dict[str, Any] | None = None,
+) -> Path:
+    if result is None:
+        result = _result_skeleton(args)
     suites = {value.strip() for value in args.suites.split(",") if value.strip()}
-    tasks = load_tasks(args.tasks_dir, suites=suites)
+    try:
+        tasks = load_tasks(args.tasks_dir, suites=suites)
+    except BaseException as exc:
+        raise _phase_error("init", "<task-load>", exc) from None
     if not tasks:
-        raise HarnessError(f"no tasks found for suites: {sorted(suites)}")
+        raise HarnessPhaseError(
+            "init",
+            "<task-load>",
+            repr(HarnessError(f"no tasks found for suites: {sorted(suites)}")),
+        )
     tasks.sort(key=lambda task: (task["suite"], task["id"]))
 
-    extras = detect_extras()
+    extras = result["env"]["extras_detected"]
     dormant_suites = {
         task["suite"]
         for task in tasks
         if any(not extras.get(extra, False) for extra in _required_extras(task))
     }
     stale_ids: set[str] = set()
-    task_records: dict[str, dict[str, Any]] = {}
-    with httpx.Client(follow_redirects=True, timeout=20.0) as client:
-        for task in tasks:
-            record = task_records.setdefault(
-                task["id"],
-                {
-                    "id": task["id"],
-                    "suite": task["suite"],
-                    "claim": task["claim"],
-                    "liveness": None,
-                    "passes": [],
-                },
-            )
-            probe = _liveness_probe(task, client)
-            record["liveness"] = probe
-            if not probe["alive"]:
-                stale_ids.add(task["id"])
+    task_records: dict[str, dict[str, Any]] = result["tasks"]
+    try:
+        with httpx.Client(follow_redirects=True, timeout=20.0) as client:
+            for task in tasks:
+                record = task_records.setdefault(
+                    task["id"],
+                    {
+                        "id": task["id"],
+                        "suite": task["suite"],
+                        "claim": task["claim"],
+                        "liveness": None,
+                        "passes": [],
+                    },
+                )
+                probe = _liveness_probe(task, client)
+                record["liveness"] = probe
+                if not probe["alive"]:
+                    stale_ids.add(task["id"])
+    except BaseException as exc:
+        raise _phase_error("init", "<liveness>", exc) from None
+    result["stale"] = sorted(stale_ids)
+    result["dormant"] = sorted(dormant_suites)
 
     pass_aggregates: list[dict[str, dict[str, Any]]] = []
     latency_by_suite: dict[str, list[float]] = {}
     warmup_pass_ms: list[float] = []
     for pass_index in range(1, args.passes + 1):
-        async with MCPInvoker(
+        manager = MCPInvoker(
             args.transport,
             args.command,
             args.url,
             args.init_timeout,
             args.call_timeout,
-        ) as invoker:
-            if not getattr(args, "no_warmup", False):
-                warmup_pass_ms.append(await invoker.warmup())
-            await _run_pass(
-                tasks,
-                stale_ids,
-                dormant_suites,
-                pass_index,
-                args.reps,
-                invoker,
-                args.call_timeout,
-                task_records,
-            )
+        )
+        primary_error: BaseException | None = None
+        invoker = manager
+        try:
+            try:
+                invoker = await manager.__aenter__()
+            except BaseException as exc:
+                primary_error = _phase_error("init", "<initialize>", exc)
+            if primary_error is None:
+                if not getattr(args, "no_warmup", False):
+                    warmup_pass_ms.append(await invoker.warmup())
+                    result["env"]["warmup_pass_ms"] = [
+                        round(value, 3) for value in warmup_pass_ms
+                    ]
+                    result["env"]["warmup_ms"] = round(
+                        sum(warmup_pass_ms),
+                        3,
+                    )
+                await _run_pass(
+                    tasks,
+                    stale_ids,
+                    dormant_suites,
+                    pass_index,
+                    args.reps,
+                    invoker,
+                    args.call_timeout,
+                    task_records,
+                )
+        except BaseException as exc:
+            primary_error = exc
+        finally:
+            try:
+                await manager.__aexit__(None, None, None)
+            except BaseException as exc:
+                teardown_error = _phase_error(
+                    "teardown",
+                    getattr(manager, "_last_tool", "<session>"),
+                    exc,
+                )
+                if primary_error is None:
+                    primary_error = teardown_error
+                else:
+                    primary = _failure_info(
+                        primary_error,
+                        "init",
+                        "<session>",
+                    )
+                    teardown = _failure_info(
+                        teardown_error,
+                        "teardown",
+                        getattr(manager, "_last_tool", "<session>"),
+                    )
+                    primary_error = HarnessPhaseError(
+                        primary["phase"],
+                        primary["tool"],
+                        (
+                            f"{primary['exception']}; "
+                            f"teardown={teardown['detail']}"
+                        ),
+                    )
+        if primary_error is not None:
+            raise primary_error
         pass_aggregates.append(
             _aggregate_pass(
                 task_records,
@@ -571,34 +868,21 @@ async def run_benchmark(args: argparse.Namespace) -> Path:
             "dormant_note": "required optional extra missing",
         }
 
-    result = {
-        "schema_version": "bench-v1.0",
-        "run": {
-            "git_sha7": _git_sha(),
-            "passes": args.passes,
-            "reps": args.reps,
-            "suites": sorted(suites),
-            "tasks_dir": str(Path(args.tasks_dir)),
-        },
-        "env": {
-            "utc": dt.datetime.now(dt.timezone.utc).isoformat(),
-            "platform": platform.platform(),
-            "python": sys.version.split()[0],
-            "omniseek_version": _package_version(),
-            "extras_detected": extras,
-            "vantage": args.vantage,
-            "warmup_ms": round(sum(warmup_pass_ms), 3) if warmup_pass_ms else None,
-            "warmup_pass_ms": [round(value, 3) for value in warmup_pass_ms],
-        },
-        "tasks": task_records,
-        "suites": suites_output,
-        "stale": sorted(stale_ids),
-        "dormant": sorted(dormant_suites),
-    }
-
+    result["env"]["warmup_ms"] = (
+        round(sum(warmup_pass_ms), 3) if warmup_pass_ms else None
+    )
+    result["env"]["warmup_pass_ms"] = [
+        round(value, 3) for value in warmup_pass_ms
+    ]
+    result["suites"] = suites_output
+    result["stale"] = sorted(stale_ids)
+    result["dormant"] = sorted(dormant_suites)
+    result.pop("error", None)
     output = _output_path(args.out, result["run"]["git_sha7"])
-    output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    try:
+        _write_json_result(output, result)
+    except BaseException as exc:
+        raise _phase_error("write-out", "<results-json>", exc) from None
     return output
 
 
@@ -638,19 +922,81 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _handle_harness_failure(
+    args: argparse.Namespace,
+    result: dict[str, Any],
+    exc: BaseException,
+    fallback_phase: str = "init",
+    fallback_tool: str = "<runner>",
+) -> int:
+    error = _failure_info(exc, fallback_phase, fallback_tool)
+    try:
+        partial = _write_partial_result(args, result, error)
+    except BaseException as write_exc:
+        write_error = _failure_info(
+            write_exc,
+            "write-out",
+            "<partial-results>",
+        )
+        print(f"benchmark harness error: {error['detail']}", file=sys.stderr)
+        print(
+            f"benchmark partial write error: {write_error['detail']}",
+            file=sys.stderr,
+        )
+        return 1
+    print(f"benchmark harness error: {error['detail']}", file=sys.stderr)
+    print(f"partial results: {partial}", file=sys.stderr)
+    return 1
+
+
+def _minimal_result(args: argparse.Namespace) -> dict[str, Any]:
+    return {
+        "schema_version": "bench-v1.0",
+        "run": {
+            "git_sha7": _git_sha(),
+            "passes": args.passes,
+            "reps": args.reps,
+            "suites": _selected_suites(args.suites),
+            "tasks_dir": str(Path(args.tasks_dir)),
+            "command": str(args.command),
+        },
+        "env": {
+            "vantage": args.vantage,
+        },
+        "tasks": {},
+        "suites": {},
+        "stale": [],
+        "dormant": [],
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
-    if args.reps < 1 or args.passes < 1:
-        print("--reps and --passes must be positive", file=sys.stderr)
-        return 1
     try:
-        output = asyncio.run(run_benchmark(args))
-    except (HarnessError, TaskValidationError, OSError, ValueError) as exc:
-        print(f"benchmark harness error: {exc}", file=sys.stderr)
-        return 1
+        result = _result_skeleton(args)
+    except BaseException as exc:
+        result = _minimal_result(args)
+        return _handle_harness_failure(
+            args,
+            result,
+            exc,
+            "init",
+            "<environment>",
+        )
+    if args.reps < 1 or args.passes < 1:
+        return _handle_harness_failure(
+            args,
+            result,
+            ValueError("--reps and --passes must be positive"),
+            "init",
+            "<arguments>",
+        )
+    try:
+        output = asyncio.run(run_benchmark(args, result))
+    except BaseExceptionGroup as exc:
+        return _handle_harness_failure(args, result, exc)
     except Exception as exc:
-        print(f"benchmark harness error: {type(exc).__name__}: {exc}", file=sys.stderr)
-        return 1
+        return _handle_harness_failure(args, result, exc)
     print(output)
     return 0
 

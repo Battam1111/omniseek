@@ -3,17 +3,23 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import io
 import json
+import os
 import socket
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 HERE = Path(__file__).resolve().parent
 if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
 
+import run as bench_run
 from convert_candidates import convert_candidates
 from gen_report import generate_report
 from judges import (
@@ -455,6 +461,135 @@ class RunnerContractTests(unittest.TestCase):
         )
         with self.assertRaises(DormantExtraError):
             asyncio.run(_run_rep(Invoker(), task, 120.0))
+
+    def test_default_command_resolves_next_to_the_active_python(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            scripts = Path(tmp) / ("Scripts" if os.name == "nt" else "bin")
+            scripts.mkdir()
+            python_name = "python.exe" if os.name == "nt" else "python"
+            command_name = "omniseek.exe" if os.name == "nt" else "omniseek"
+            python = scripts / python_name
+            command = scripts / command_name
+            python.touch()
+            command.touch()
+            with mock.patch.object(bench_run.sys, "executable", str(python)):
+                self.assertEqual(
+                    bench_run._resolve_command("omniseek"),
+                    str(command.resolve()),
+                )
+
+    def test_absolute_windows_out_path_with_backslashes_is_preserved(self):
+        raw = r"C:\Users\bench\AppData\Local\Temp\bench-final.json"
+        args = _parser().parse_args(["--out", raw])
+        output = bench_run._output_path(args.out, "abc1234")
+        self.assertEqual(str(output), raw)
+        self.assertEqual(output.suffix.casefold(), ".json")
+        if os.name == "nt":
+            self.assertTrue(output.is_absolute())
+
+    def test_mid_run_client_exception_writes_partial_json_and_exits_quickly(self):
+        class FailingInvoker:
+            def __init__(self, *_args, **_kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, _exc_type, _exc, _traceback):
+                return None
+
+            async def call(self, _tool, _args, _timeout_s):
+                raise ExceptionGroup(
+                    "outer client task group",
+                    [
+                        ExceptionGroup(
+                            "inner client task group",
+                            [RuntimeError("synthetic mid-run failure")],
+                        )
+                    ],
+                )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tasks_dir = root / "tasks"
+            tasks_dir.mkdir()
+            (tasks_dir / "task.json").write_text(
+                json.dumps(_good_task()),
+                encoding="utf-8",
+            )
+            output = root / "partial.json"
+            stderr = io.StringIO()
+            started = time.monotonic()
+            with (
+                mock.patch.object(bench_run, "MCPInvoker", FailingInvoker),
+                mock.patch.object(
+                    bench_run,
+                    "_liveness_probe",
+                    return_value={
+                        "alive": True,
+                        "status_code": 200,
+                        "url": "https://example.test/probe",
+                    },
+                ),
+                contextlib.redirect_stderr(stderr),
+            ):
+                exit_code = bench_run.main(
+                    [
+                        "--suites",
+                        "s3-crosslingual",
+                        "--reps",
+                        "1",
+                        "--passes",
+                        "1",
+                        "--tasks-dir",
+                        str(tasks_dir),
+                        "--out",
+                        str(output),
+                        "--no-warmup",
+                    ]
+                )
+            self.assertLess(time.monotonic() - started, 2.0)
+            self.assertEqual(exit_code, 1)
+            self.assertTrue(output.exists())
+            payload = json.loads(output.read_text(encoding="utf-8"))
+            detail = payload["error"]["detail"]
+            self.assertIn("phase=task s3-test-001 rep 1", detail)
+            self.assertIn("tool=omniseek_search", detail)
+            self.assertIn("RuntimeError('synthetic mid-run failure')", detail)
+            self.assertNotIn("ExceptionGroup", detail)
+            self.assertIn(detail, stderr.getvalue())
+
+    def test_teardown_kills_the_server_after_the_hard_bound(self):
+        released = asyncio.Event()
+
+        class HangingStack:
+            async def __aexit__(self, _exc_type, _exc, _traceback):
+                await released.wait()
+
+        class FakeProcess:
+            killed = False
+
+            def kill(self):
+                self.killed = True
+                released.set()
+
+            async def wait(self):
+                return 0
+
+        invoker = object.__new__(MCPInvoker)
+        invoker._stack = HangingStack()
+        invoker._process = FakeProcess()
+        invoker._last_tool = "omniseek_search"
+
+        async def terminate():
+            invoker._process.kill()
+
+        invoker._terminate_process = terminate
+        started = time.monotonic()
+        with mock.patch.object(bench_run, "TEARDOWN_TIMEOUT", 0.01):
+            asyncio.run(invoker.close())
+        self.assertLess(time.monotonic() - started, 1.0)
+        self.assertTrue(invoker._process.killed)
 
 
 class ConversionAndReportTests(unittest.TestCase):
