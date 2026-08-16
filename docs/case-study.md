@@ -125,7 +125,7 @@ watch that is working.
 ```mermaid
 flowchart LR
     A[investigation] -->|first_seen stamps| M[(perception memory)]
-    A -->|rulings + statements| G[(relation graph)]
+    A -->|rulings + statements| G[(evidence graph)]
     W[standing sensors] -->|scheduled diffs| M
     M -->|seen_before, per document| B[next investigation]
     G -->|duplicates collapsed, judgments applied| B

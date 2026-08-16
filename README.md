@@ -40,7 +40,7 @@ OmniSeek is the reach beneath it, and everything it does runs on your machine.
   </picture>
 </div>
 
-It hears (local bilingual ASR, no cloud), sees (images and video frames, in-band), crosses languages (a Chinese query finds English results and vice versa), reads behind login walls (your credentials, your machine, off by default), and remembers (a persistent relation graph that gets richer with every query).
+It hears (local bilingual ASR, no cloud), sees (images and video frames, in-band), crosses languages (a Chinese query finds English results and vice versa), reads behind login walls (your credentials, your machine, off by default), and remembers (persistent retrieval memory plus a typed, source-traced evidence graph).
 
 Every source in [the catalog](docs/sources.md) earned its place by beating plain search at something, from citation graphs and regulatory filings to login-walled forums and Chinese-language video. And the catalog is built to grow: a curator pipeline probes, judges, and admits new sources, and retires the ones that decay.
 
@@ -95,7 +95,7 @@ One MCP connection. Start with `omniseek_search`; explore what's available with 
 | `omniseek_institution_cohort` | List who actively publishes at a lab, scoped to a field. |
 | `omniseek_paper_enrich` | Open-access PDF, retraction/integrity status, citation count for a paper. |
 | `omniseek_paper_recommend` | Semantically similar papers (SPECTER embeddings) that keyword search misses. |
-| `omniseek_graph` | Query the accumulated relation graph: find, neighborhood, between, since, similar. |
+| `omniseek_graph` | Query the accumulated evidence graph: find, neighborhood, between, since, similar. |
 | `omniseek_sensor` | Standing queries with novelty detection. Only tells you what is new. |
 | `omniseek_ruling` | Record identity judgments (same/not-same) the graph applies at read time. |
 | `omniseek_statement` | Record directed relations the graph carries forward. |
@@ -127,7 +127,7 @@ Full reference: **[configuration](docs/configuration.md)** · **[walled sources]
 
 ## Why self-hosted
 
-Every query you run, every connection your agent finds, every credential you use stays on your machine. No cloud service ever sees what you're researching. The relation graph it builds over months is yours; if you stop running OmniSeek, you keep everything. Not a feature toggle. The architecture.
+There is no OmniSeek cloud. No telemetry, no accounts, no relay: a query leaves your machine only as direct requests to the sources you enabled, and OmniSeek adds no other party to that path. Walled-source credentials stay in your own browser, presented only to the site they belong to; OmniSeek never stores, uploads, or even sees your passwords. The retrieval memory and evidence graph it accumulates over months are local files you own: stop running OmniSeek and you keep everything. Not a feature toggle. The architecture.
 
 ---
 
