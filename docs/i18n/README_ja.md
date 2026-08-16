@@ -19,6 +19,8 @@
 &nbsp;![Built for MCP](https://img.shields.io/badge/built_for-MCP-3B82F6?style=flat-square)
 &nbsp;![Self-hosted](https://img.shields.io/badge/self--hosted-3B82F6?style=flat-square)
 
+[クイックスタート](#クイックスタート) · [ツール](#ツール) · [設定](#設定) · [コントリビュート](#コントリビュート)
+
 **Languages:** [English](../../README.md) · [中文](README_zh.md) · 日本語
 
 </div>
@@ -55,9 +57,9 @@ docker compose logs omniseek        # 初回起動時に bearer token を表示
 curl -s http://127.0.0.1:8765/healthz
 ```
 
-MCP クライアントを `http://127.0.0.1:8765/mcp` に向け、`Authorization: Bearer <token>` を付けてください。token は初回起動時に生成され、`~/.omniseek/credentials/omniseek_http.json` に保存されます。
+MCP クライアントを `http://127.0.0.1:8765/mcp` に向け、`Authorization: Bearer <token>` を付けてください。token は初回起動時に生成され、`~/.omniseek/credentials/omniseek_http.json` に保存されます(compose で動かす場合、ホスト側では `./.omniseek/credentials/omniseek_http.json`)。
 
-初回の `up` はローカルでイメージをビルドします(依存関係 + ヘッドレス Chromium)。数分かかりますが、以後の起動は即時です。オプション拡張はビルド引数 `EXTRAS="[pdf,asr,walled]"`。`OMNISEEK_CONTACT_EMAIL` の設定も推奨します(Crossref、SEC、Unpaywall が優先レーンをくれます)。
+初回の `up` はローカルでイメージをビルドします(依存関係 + ヘッドレス Chromium)。以後の起動は即時です。コアイメージは Apache クリーン構成で、PDF 読取・聴覚(ASR + 動画フレーム)・ログイン制ソースは含みません。ビルド引数 `EXTRAS="[pdf,asr,walled]"` で解錠します。`OMNISEEK_CONTACT_EMAIL` の設定も推奨します(Crossref、SEC、Unpaywall が優先レーンをくれます)。
 
 ### Docker なし
 
@@ -79,7 +81,7 @@ MCP 接続はひとつ。まず `omniseek_search` から。何が使えるかは
 
 | ツール | 何をするか |
 |--------|-----------|
-| `omniseek_search` | カタログ全体へファンアウト、重複排除、ランキング。多言語対応。 |
+| `omniseek_search` | カタログ全体へファンアウト、重複排除、ランキング。クロスリンガル(意味 + 字句)。 |
 | `omniseek_read` | 任意の URL や文書(ウェブ、PDF、arXiv)をクリーンなテキストに正規化。 |
 | `omniseek_view` | 画像・図版・動画フレームを視覚で読む。 |
 | `omniseek_transcribe` | 音声・動画をローカルで書き起こし。二言語 ASR、タイムスタンプ指定可。 |
@@ -89,7 +91,7 @@ MCP 接続はひとつ。まず `omniseek_search` から。何が使えるかは
 | `omniseek_institution_cohort` | ある研究室で活発に発表している人を分野を絞って列挙。 |
 | `omniseek_paper_enrich` | 論文の OA PDF、撤回状況、被引用数。 |
 | `omniseek_paper_recommend` | 意味的に近い論文(SPECTER 埋め込み)。キーワード検索では出ないもの。 |
-| `omniseek_graph` | 蓄積されたリレーショングラフへの問い合わせ。 |
+| `omniseek_graph` | 蓄積されたリレーショングラフへの問い合わせ:find、neighborhood、between、since、similar。 |
 | `omniseek_sensor` | 常設クエリ + 新規性検出。新しいものがあるときだけ通知。 |
 | `omniseek_ruling` | 同一性の裁定(same / not-same)を記録。読み取り時に適用。 |
 | `omniseek_statement` | 有向リレーションを記録。グラフが引き継ぐ。 |

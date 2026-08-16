@@ -1,6 +1,8 @@
-# wewe-rss Self-Host (Optional Layer B Extension)
+# Self-hosting a WeChat RSS bridge (optional)
 
-> Only needed if OmniSeek wants to monitor WeChat 公众号 NOT indexed by wechat2rss.xlab.app
+<sub>[OmniSeek](../README.md)&nbsp;·&nbsp;[Configuration](configuration.md)&nbsp;·&nbsp;[Walled sources](walled-sources.md)</sub>
+
+> Only needed if you want to monitor WeChat 公众号 NOT covered by the free hosted wechat2rss.xlab.app
 > (e.g., 学术志, 科研圈, or any niche/new account).
 >
 > Default wechat adapter already covers PaperWeekly + 机器之心 + 量子位 via the free
@@ -168,14 +170,15 @@ launchctl kickstart gui/$UID_NUM/local.omniseek.wewerss
 After adding feeds, note each account's `MP_WXS_xxxxx` ID from the UI. Then:
 
 ```bash
-ssh <your-host> "cat > ~/.omniseek/credentials/wechat.json <<'EOF'
+# on the machine that runs OmniSeek:
+cat > ~/.omniseek/credentials/wechat.json <<'EOF'
 {
-  \"wewerss_base_url\": \"http://127.0.0.1:4000\",
-  \"wewerss_auth_code\": \"OmniSeekRSS_ChangeMe_2026\",
-  \"wewerss_subscribed_feed_ids\": [\"MP_WXS_xxxxx\", \"MP_WXS_yyyyy\"]
+  "wewerss_base_url": "http://127.0.0.1:4000",
+  "wewerss_auth_code": "OmniSeekRSS_ChangeMe_2026",
+  "wewerss_subscribed_feed_ids": ["MP_WXS_xxxxx", "MP_WXS_yyyyy"]
 }
 EOF
-chmod 600 ~/.omniseek/credentials/wechat.json"
+chmod 600 ~/.omniseek/credentials/wechat.json
 ```
 
 OmniSeek's `wechat` adapter `search()` will automatically include these feeds alongside the default wechat2rss ones.
@@ -202,3 +205,7 @@ curl -s http://127.0.0.1:4000/feeds/all.atom | head -20
 | DNS pollution for default WeRead | Use `PLATFORM_URL=https://weread.965111.xyz` (already in config) |
 | pnpm 11 lockfile warning | `--no-frozen-lockfile` (already in install steps) |
 | launchd can't find node | Use absolute path `$HOME/.local/node/bin/node` (already in plist) |
+
+---
+
+<div align="center"><sub><a href="../README.md">← back to the README</a></sub></div>

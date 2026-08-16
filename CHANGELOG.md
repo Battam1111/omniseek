@@ -25,11 +25,12 @@ history and are kept as written.
 
 ### Changed (brand on runtime surfaces)
 
-- No runtime-visible string speaks the private organ name anymore: "the eye" in server
-  instructions and tool descriptions (strings every MCP client reads) is now OmniSeek, the
-  boot log line says OmniSeek, identity errors dropped their prefix, and the outward
-  User-Agent token is `OmniSeek/1.0`. Bare "eye" survives only in comments and docstrings
-  that never render. The sync residue gate now rejects "the eye" so it cannot come back.
+- No runtime-visible string speaks the project's pre-brand internal vocabulary anymore:
+  server instructions and tool descriptions (strings every MCP client reads) now say
+  OmniSeek, the boot log line says OmniSeek, identity errors dropped their old prefix, and
+  the outward User-Agent token is `OmniSeek/1.0`. The old wording survives only in code
+  comments that never render, and the mirror's residue gate rejects it on any surface a
+  reader sees, so it cannot come back.
 
 ### Changed
 
@@ -156,14 +157,14 @@ history and are kept as written.
   tool's real parameters; walled sources whose payloads carry no timestamp keep `date: null`
   honestly (never approximated).
 
-- PyPI publish (`pip install penumbra-mcp`) planned.
+- PyPI publish planned (it later landed as `pip install omniseek`).
 
 ## [0.1.0]
 
 ### Added
 
 - Initial release: a self-hosted deep-retrieval MCP server.
-- Around 200 curated sources across 157 independent upstreams, classified by access tier (free / keyed / walled / circumvention).
+- A curated source catalog spanning independent upstreams, classified by access tier (free / keyed / walled / circumvention).
 - MCP tool surface: `penumbra_search`, `penumbra_search_ranked`, `penumbra_fetch`, `penumbra_list_sources`, `penumbra_add_url`, paper + citation tools, people + organization tools, document + vision reading, audio transcription, health check, and a self-iterating source curator.
 - Token-gated loopback HTTP transport; SSRF guard; sandboxed document inbox.
 - Apache-clean core install; opt-in extras (`pdf` / `asr` / `recall` / `ocr` / `walled`).

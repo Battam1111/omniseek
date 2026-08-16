@@ -2,13 +2,13 @@
 
 <sub>[OmniSeek](../README.md)&nbsp;·&nbsp;[Configuration](configuration.md)&nbsp;·&nbsp;[Tools](tools.md)&nbsp;·&nbsp;[Patterns](patterns.md)&nbsp;·&nbsp;**Walled sources**&nbsp;·&nbsp;[Brand](BRAND.md)</sub>
 
-Some of the richest corners of the omniseek sit behind a **login**: Xiaohongshu, Zhihu, Douyin,
+Some of the richest corners of the web sit behind a **login**: Xiaohongshu, Zhihu, Douyin,
 WeChat, and other platforms that no search engine indexes and no public API exposes. OmniSeek can
 reach them, but only on **your** behalf, through **your** logged-in browser. This guide explains the
 model and the setup.
 
 > Walled sources are **OFF by default**. They are the advanced, bring-your-own-account tier. You opt
-> in deliberately (see [Enable a walled source](#5-enable-the-source)), and you are responsible for
+> in deliberately (see [Enable the source](#5-enable-the-source)), and you are responsible for
 > using each platform within its Terms of Service in your jurisdiction. See [SECURITY.md](../.github/SECURITY.md).
 
 ---
@@ -61,9 +61,9 @@ python -m playwright install chromium
 
 | Source(s) | Port | Browser profile | Why isolated |
 |-----------|------|-----------------|--------------|
-| The shared majority (Zhihu, Yipin Sanfendi, CN forums, …) | **9222** | default | one main account, reused |
-| Xiaohongshu (secondary account) | **9223** | isolated | per-account anti-ban, strictly serial |
-| Xiaohongshu (mainland account) | **9224** | isolated | a second, independent account |
+| The shared majority (Zhihu, Yipin Sanfendi, CN forums, …) | **9222** | default | one login you reuse across these sources |
+| Xiaohongshu (international) | **9223** | isolated | account-rate-sensitive, strictly serial |
+| Xiaohongshu (mainland) | **9224** | isolated | a second, independent login if you hold one |
 | Douyin | **9225** | `~/.omniseek/chrome-douyin` | account-rate-sensitive, fully isolated |
 
 Sources that are NOT CDP browsers: **Discord** uses a bot token (see its adapter), and **WeChat**
@@ -113,10 +113,9 @@ in for; the rest stay dark. If you have logged in for all of them and want the w
 `profile.is_source_enabled()` in `src/omniseek/core/profile.py`, which denies any source of
 `walled` stability unless it finds both `walled.enabled` and a `bring_your_own` opt-in. The deny
 applies **with or without a profile file**, so a fresh clone that has configured nothing reaches
-no walled source at all. Until 2026-08-12 the no-profile path returned "enabled" for everything,
-which meant this page described a gate the default path did not run; the smoke suite now pins both
-halves (`profile: with NO profile the WALLED tier is DENIED`, and the two `bring_your_own` forms),
-so the claim on this page is checkable rather than asserted.
+no walled source at all. The smoke suite pins both halves (`profile: with NO profile the WALLED
+tier is DENIED`, and the two `bring_your_own` forms), so the claim on this page is checkable
+rather than asserted.
 
 ### 6. Use it
 

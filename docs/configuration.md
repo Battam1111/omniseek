@@ -72,7 +72,7 @@ the templates together are always the authoritative, up-to-date list.
 
 ### Polite-pool contact
 
-Crossref, SEC, and Unpaywall give a faster lane to requests that carry a contact email (OpenAlex now treats it as a courtesy contact, not a fast lane).
+Crossref, SEC, and Unpaywall give a faster lane to requests that carry a contact email (since mid-2026 OpenAlex treats it as a courtesy contact, not a fast lane).
 Set `OMNISEEK_CONTACT_EMAIL`, or write `~/.omniseek/credentials/contact.json` as `{"email": "..."}`.
 Left unset, OmniSeek falls back to a reserved placeholder, so a cold checkout still forms a valid
 request.
@@ -104,7 +104,7 @@ and log into; OmniSeek never sees your password. They are off until you opt in, 
 <br>
 
 Cross-lingual, paraphrase-tolerant recall uses a local embedding model. Install the `recall` extra
-and place the model at `~/.omniseek/models/qwen3-embedding-0.6b`. Without it, recall fail-opens to
+and place the model at `~/.omniseek/models/qwen3-embedding-0.6b` (download `Qwen/Qwen3-Embedding-0.6B` from Hugging Face or ModelScope into that folder). Without it, recall fail-opens to
 the lexical FTS5 index, so search still works, just without the vector layer.
 
 </details>
@@ -133,7 +133,7 @@ The access-tier system classifies every source by legal posture: `free`, `keyed`
 A circumvention source is one that **defeats an access control** (decrypts an encrypted response,
 circumvents a paywall, bypasses a rate-limit enforcement). The engine's tier-detection logic
 (`_CIRCUMVENTION_RE`) auto-classifies any adapter whose `explicit_only` reason mentions these
-patterns. No circumvention-class sources currently ship in the public catalog.
+patterns. No circumvention-class source ships in the public catalog.
 
 **Why it exists as a tier**: the framework is designed so that deployers who choose to build or
 contribute circumvention-class adapters can do so as opt-in `explicit_only` sources, gated behind
@@ -158,7 +158,7 @@ the classification framework and the opt-in gate; the legal judgment is yours. S
 | `OMNISEEK_HTTP_HOST` | `127.0.0.1` | bind address; the container sets `0.0.0.0` behind a loopback port-map |
 | `OMNISEEK_HTTP_PORT` | `8765` | HTTP port |
 | `OMNISEEK_PROFILE_PATH` | `~/.omniseek/profile.json` | relocate the profile |
-| `OMNISEEK_CONTACT_EMAIL` | (placeholder) | polite-pool contact for OpenAlex / Crossref / SEC / Unpaywall |
+| `OMNISEEK_CONTACT_EMAIL` | (placeholder) | polite-pool contact for Crossref / SEC / Unpaywall; courtesy contact for OpenAlex |
 | `OMNISEEK_CDP_POOL` | off | keep a persistent CDP connection per walled browser |
 | `OMNISEEK_ALLOW_NETS` | (none) | extra CIDRs the SSRF guard may reach (advanced) |
 | `OMNISEEK_DOC_ROOTS` | inbox only | additional roots `omniseek_read` (document branch) may read |

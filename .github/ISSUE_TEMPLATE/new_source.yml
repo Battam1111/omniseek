@@ -42,7 +42,8 @@ body:
       description: Does reaching it require a login or defeating an access control?
       options:
         - Open (public API or static page, no login)
-        - Walled (needs a logged-in session the operator owns)
+        - Keyed (a free or paid API key you obtain from the provider)
+        - Walled (needs a logged-in session you own)
         - Anti-bot / signed requests (fingerprint or signature required)
     validations:
       required: true

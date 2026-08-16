@@ -57,9 +57,9 @@ docker compose logs omniseek        # bearer token printed on first start
 curl -s http://127.0.0.1:8765/healthz
 ```
 
-Point your MCP client at `http://127.0.0.1:8765/mcp` with `Authorization: Bearer <token>`. The token is generated on first start and stored in `~/.omniseek/credentials/omniseek_http.json`.
+Point your MCP client at `http://127.0.0.1:8765/mcp` with `Authorization: Bearer <token>`. The token is generated on first start and stored in `~/.omniseek/credentials/omniseek_http.json` (with the compose file, that's `./.omniseek/credentials/omniseek_http.json` on the host).
 
-The first `up` builds locally (dependencies + headless Chromium); later starts are instant. Optional extras: set `EXTRAS="[pdf,asr,walled]"` as a build arg. Optional but recommended: set `OMNISEEK_CONTACT_EMAIL` for a faster lane with Crossref, SEC, and Unpaywall.
+The first `up` builds locally (dependencies + headless Chromium); later starts are instant. The core image is Apache-clean and ships without PDF reading, hearing (ASR + video frames), and login-walled sources; unlock them with the build arg `EXTRAS="[pdf,asr,walled]"`. Optional but recommended: set `OMNISEEK_CONTACT_EMAIL` for a faster lane with Crossref, SEC, and Unpaywall.
 
 ### Without Docker
 
@@ -123,7 +123,7 @@ Full reference: **[configuration](docs/configuration.md)** · **[walled sources]
 
 ## Why self-hosted
 
-Every query you run, every connection your agent finds, every credential you use stays on your machine. The relation graph it builds over months is yours; if you stop running OmniSeek, you keep everything. Not a feature toggle. The architecture.
+Every query you run, every connection your agent finds, every credential you use stays on your machine. No cloud service ever sees what you're researching. The relation graph it builds over months is yours; if you stop running OmniSeek, you keep everything. Not a feature toggle. The architecture.
 
 ---
 

@@ -2,16 +2,16 @@
 """Brand-voice lint: mechanically enforce the brand invariants that hand-authoring keeps leaking,
 so they stop being prose in BRAND.md and start being a CI gate.
 
-One rule, run over the reader- and deployer-facing surfaces (NOT src/, whose comments follow the
-eye's own file style and are mechanically synced from it):
+One rule, run over the reader- and deployer-facing surfaces (NOT src/, whose comments are
+mechanically synced from the private upstream and keep its file style):
 
   1. NO EM-DASH (U+2014) anywhere a human reads the project outside code. It is the single most
      common AI-writing tell, and the project bans it in human-facing text; use a colon, semicolon,
      comma, period, or parentheses instead.
 
 A second rule used to live here and was RETIRED with the OmniSeek rebrand (2026-08-15): the
-penumbra era banned "perceive/perception" on prose surfaces, because penumbra positioned itself as
-a reach utility rather than a perception organ. OmniSeek's positioning is the opposite: perception
+project's earlier brand banned "perceive/perception" on prose surfaces, because it positioned
+itself as a reach utility rather than a perception organ. OmniSeek's positioning is the opposite: perception
 IS the category ("perception MCP server for AI agents"), so the vocabulary is now brand-correct and
 the ban would fail the tagline itself. If a future rebrand flips the positioning again, restore the
 rule from git history rather than rewriting it.
@@ -37,7 +37,7 @@ EM_DASH = "—"
 # Directories never linted: real code (comments follow the eye's synced file style), the synced
 # smoke tests, vendored assets, build caches, local runtime state.
 SKIP_DIRS = {"src", "tests", "assets", ".git", "__pycache__",
-             ".penumbra", ".penumbra-inbox", ".venv", "node_modules"}
+             ".omniseek", ".omniseek-inbox", ".venv", "node_modules"}
 
 # Rule 1 (em-dash) scope: every non-code file a human reads (docs + the deploy / onboarding config
 # a stranger is told to run or edit).

@@ -1,5 +1,5 @@
 {
-  "_doc": "Copy this to ~/.omniseek/profile.json (or point OMNISEEK_PROFILE_PATH at it) and edit. With NO profile present the engine runs all-default = every registered source on (pre-profile behavior). This template is the recommended OPEN-SOURCE starting point: broad-default ON for benign sources, WALLED login-sources OFF (bring your own account), curator idle. The profile is a sparse delta over the shipped source pack: only write what you change. See README.md (Configure) and SECURITY.md.",
+  "_doc": "Copy this to ~/.omniseek/profile.json (or point OMNISEEK_PROFILE_PATH at it) and edit. With NO profile present, every NON-walled source is on and the whole WALLED tier is DENIED (enforced in code by profile.is_source_enabled, with or without this file). This template is the same posture made explicit: broad-default ON for benign sources, walled login-sources OFF until you bring your own account, curator idle. The profile is a sparse delta over the shipped source pack: only write what you change. See README.md (Configure) and SECURITY.md.",
   "schema_version": 1,
   "profile_id": "example",
   "contact_email": null,

@@ -16,7 +16,7 @@ The official pages state the rule. What a person actually needs (which consulate
 
 ```mermaid
 flowchart LR
-    Q(["My F-1 expired abroad.<br/>Renew in a third country?<br/>What changed in 2026?"]) --> S["1 · sweep, in English<br/>437 raw hits → 10, plus a map:<br/>«gter, blind, quora, zhihu:<br/>relevant but excluded»"]
+    Q(["My F-1 expired abroad.<br/>Renew in a third country?<br/>What changed in 2026?"]) --> S["1 · sweep, in English<br/>437 raw hits → 10, plus a map:<br/>«gter, blind, quora, zhihu_search:<br/>relevant but excluded»"]
     S --> S2["2 · the same question,<br/>asked in Chinese<br/>news · forum · video · audio"]
     S2 --> T["3 · transcribe the explainer<br/>the '4-year cap' debunk,<br/>spoken, never written"]
     S2 --> D["4 · drill the login wall<br/>six first-person runs<br/>+ engagement signals"]
@@ -70,10 +70,10 @@ That correction was spoken into a camera and never written down. Text search str
 ### 4. Through the login wall
 
 ```
-omniseek_search("第三国签证 F1 经验", sources=["xiaohongshu"], raw=true)
+omniseek_search("第三国签证 F1 经验", sources=["xiaohongshu"], raw=True)
 ```
 
-This runs through the operator's own logged-in browser, on the operator's machine (the walled tier is **off** until you enable it with your own account: [how that works](walled-sources.md)). Six first-person accounts came back, one posted the day before this session:
+This runs through your own logged-in browser, on your machine (the walled tier is **off** until you enable it with your own account: [how that works](walled-sources.md)). Six first-person accounts came back, one posted the day before this session:
 
 | Post | Engagement |
 |------|------------|
@@ -89,7 +89,7 @@ The Bangkok post alone carries what no official page has: the full timeline (app
 ### 5. Into the comments
 
 ```
-omniseek_read("https://www.rednote.com/search_result/64a440eb…")   # the Italy post
+omniseek_read("https://www.rednote.com/search_result/64a440eb…")   # the Milan post
 ```
 
 Full body plus all 24 threaded comments. The body is a field report from the slot war: a month of refreshing for an appointment, two paid slot-hunting services that found nothing, the slot finally self-caught at midnight; the observation that only Bosnia always shows open slots (and happens to be visa-free for Chinese passports); an expedite email to the consulate answered with polite nothing. Then, in the comments, the author comes back:
@@ -100,7 +100,7 @@ Also settled in the comments, never in the body: the visa came back valid for 5 
 
 ### 6. The dissenting note, and both of its tracks
 
-The pitfalls post is the counter-voice: its text body warns that a 212(a)(6)(C) refusal in a third country can close the F-1 road almost entirely, and says: don't get cute, apply at home. But the body is four hashtags plus a video, and the read result flags exactly that, in its own words:
+The third-country pitfalls note is the counter-voice: its text body warns that a 212(a)(6)(C) refusal in a third country can close the F-1 road almost entirely, and says: don't get cute, apply at home. But the body is four hashtags plus a video, and the read result flags exactly that, in its own words:
 
 > 干货在视频里,两条轨都要看……不少笔记的音轨只是背景音乐,事实全在画面上 *(the substance is in the video; read BOTH tracks. On many notes the audio is just background music and the facts are on screen)*
 
@@ -160,7 +160,7 @@ Now the same call on one of the students:
 omniseek_coauthors(["Ilya Sutskever"])
 ```
 
-107 works, 219,157 citations, and a ranked list that reads like a career in three acts: Hinton 16 and Radford 16 tied at the top, then Zaremba 12, Abbeel 12, Vinyals 11, Le 10. The Toronto years, the Google years, and the OpenAI years, reconstructed from nothing but who he wrote with, in one call.
+107 works, 219,157 citations, and a ranked list that reads like a career in three acts: Hinton 16 and Radford 16 tied at the top, then Zaremba 12, Abbeel 12, Vinyals 11, Le 10. The Toronto years, the Google years, and the OpenAI years, reconstructed from nothing but who he wrote with, in one call. (The Hinton edge reads 13 from Hinton's side and 16 from Sutskever's: each list is counted over its own author's recent-works window, so the two ends of one edge can see slightly different slices. The tool reports what each window contains; it never averages them.)
 
 ### It watches: only what is new
 

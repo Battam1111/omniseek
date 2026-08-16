@@ -61,7 +61,7 @@ _FAMILY_CONFIG_FILE = {
     "search_index": "api/search_index_sites.json",
     "page_watch": "scrape/page_watch.json",
 }
-_SOURCES_DIR = (Path(__file__).resolve().parents[1] / "sources")  # .../omniseek/eye/sources
+_SOURCES_DIR = (Path(__file__).resolve().parents[1] / "sources")  # .../omniseek/core/sources
 
 
 # ── overlay IO (atomic, lock-guarded, corrupt-tolerant; mirrors candidates._load_all) ────────────

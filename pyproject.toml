@@ -1,11 +1,11 @@
 [build-system]
-requires = ["setuptools>=68", "wheel"]
+requires = ["setuptools>=77", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "omniseek"
 version = "0.1.0"
-description = "Self-hosted deep-retrieval MCP server for AI agents. Reaches what plain search can't: audio, video, logins, other languages."
+description = "Self-hosted perception MCP server for AI agents: it hears speech, reads video frames and login-walled pages, crosses languages, and remembers. Your agent seeks what search can't find."
 requires-python = ">=3.11"
 readme = "README.md"
 license = "Apache-2.0"
@@ -56,12 +56,12 @@ dependencies = [
     "yt-dlp>=2026.6.9",            # video/audio metadata + extractors (Unlicense); rots fast, keep current
     "youtube-transcript-api>=0.6.2",
 
-    # Document digestion (omniseek_read_document) minus PDF: office files are zip+XML; three small pure
+    # Document digestion (omniseek_read, document branch) minus PDF: office files are zip+XML; three small pure
     # libs beat one convert-everything dep. PDF is the optional [pdf] extra (AGPL, see below).
     "python-pptx>=1.0",
     "python-docx>=1.1",
     "openpyxl>=3.1",
-    "pillow>=10.0",               # downscale + contact-sheet montage for omniseek_view_doc_images
+    "pillow>=10.0",               # downscale + contact-sheet montage for omniseek_view on documents
 
     # Recall (memory) index: the LEXICAL layer is stdlib (SQLite FTS5). The cross-lingual
     # VECTOR layer (sentence-transformers, which pulls torch) is the optional [recall] extra; absent
@@ -71,7 +71,7 @@ dependencies = [
 
 [project.optional-dependencies]
 # PDF reading. pymupdf is AGPL-3.0 / Artifex-commercial, kept OUT of core so the default install
-# stays Apache-clean. With it absent, PDF reading (omniseek_read_document on a .pdf, the pdf source)
+# stays Apache-clean. With it absent, PDF reading (omniseek_read on a .pdf, the pdf source)
 # degrades with a clear message; everything else works. (Follow-up: a permissive swap to
 # pypdfium2 / pdfminer would fold PDF back into core.)
 pdf = ["pymupdf>=1.24"]
@@ -84,7 +84,7 @@ asr = ["funasr>=1.0", "imageio-ffmpeg>=0.5"]
 # absent it, recall fail-opens to the stdlib FTS5 lexical index, so this is opt-in.
 recall = ["sentence-transformers>=3.0"]
 
-# OCR for omniseek_read_document(ocr=True): text-in-pixels (scanned pages, baked-in labels, CJK+Latin,
+# OCR for omniseek_read(ocr=True): text-in-pixels (scanned pages, baked-in labels, CJK+Latin,
 # CPU/keyless). rapidocr-onnxruntime pulls onnxruntime; absent it, OCR degrades with a clear message
 # while the rest of document reading works.
 ocr = ["rapidocr-onnxruntime>=1.2"]

@@ -367,7 +367,7 @@ def prepare_owner_case(cand: dict) -> dict:
         loader_desc = ("the declarative loader" if config_file == _DECLARATIVE_CONFIG_FILE
                        else f"the {family} family loader")
         patch_note = (
-            f"Append this row to organs/eye/src/omniseek/eye/sources/{config_file} "
+            f"Append this row to organs/eye/src/omniseek/core/sources/{config_file} "
             f"({loader_desc} registers it at the next service restart), commit, "
             f"then redeploy. P1 stages this for the operator; it is NEVER applied automatically."
         )

@@ -41,7 +41,7 @@ Two axes are shared by the retrieval verbs: `wait_s` (the patience budget) and `
 ## The curator
 
 The curator turns source acquisition into a reviewable loop: it gathers neutral evidence
-mechanically and never renders a verdict; the agent judges, and only the operator sanctions an
+mechanically and never renders a verdict; the agent judges, and only you sanction an
 irreversible change. Two dispatchers carry the whole protocol:
 
 | Tool | What it does |
@@ -53,7 +53,7 @@ irreversible change. Two dispatchers carry the whole protocol:
 
 | Prompt | What it does |
 |--------|--------------|
-| `investigate(target, shape)` | A parameterized investigation recipe; `shape` = `person` \| `lab` \| `field` \| `product` \| `chase`. |
+| `investigate(target, shape, context)` | A parameterized investigation recipe (optional `context` narrows the angle); `shape` = `person` \| `lab` \| `field` \| `product` \| `chase`. |
 
 ---
 

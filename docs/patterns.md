@@ -60,7 +60,7 @@ first-party source vs. a reblog) rather than averaging it away.
 ## The gap ledger
 
 `_meta` carries what did NOT come back, not just what did: `empty`, `timed_out`, `errored`,
-`excluded_count`, `excluded_relevant`. A dimension that returned nothing is a fact to act on, not a fact to
+`excluded_count`, `excluded_relevant`. A dimension that returned nothing is a fact to act on, not a gap to
 paper over: sharpen the query and re-run it, or say plainly that this angle wasn't covered. Never
 fill a gap from memory instead.
 

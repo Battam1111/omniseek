@@ -57,4 +57,4 @@ the data.
 
 ---
 
-<div align="center"><sub><a href="../README.md">back to the README</a></sub></div>
+<div align="center"><sub><a href="../README.md">← back to the README</a></sub></div>

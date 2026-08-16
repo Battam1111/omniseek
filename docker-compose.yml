@@ -16,7 +16,7 @@ services:
                                 # if you must reach it off-box, and keep the bearer token secret.
     volumes:
       - ./.omniseek:/root/.omniseek               # credentials + token + profile + cache + recall + curator state + ASR models
-      - ./.omniseek-inbox:/root/omniseek-inbox    # omniseek_read_document inbox (scp/copy files here)
+      - ./.omniseek-inbox:/root/omniseek-inbox    # omniseek_read document inbox (copy files here)
     environment:
       OMNISEEK_HTTP_HOST: "0.0.0.0"   # bind inside the container; the port-map above keeps it host-loopback
       # OMNISEEK_CONTACT_EMAIL: "you@example.org"   # courtesy contact for a faster lane (Crossref/SEC/Unpaywall); also quiets first-boot OpenAlex warnings (recommended)

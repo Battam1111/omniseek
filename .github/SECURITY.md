@@ -21,9 +21,9 @@ boundaries it enforces:
   shape (scheme / port / no userinfo), resolves the host, and pins + re-validates the IP on every
   redirect hop, rejecting private, loopback, and link-local ranges. Operators can widen the allowed
   CIDR set deliberately with `OMNISEEK_ALLOW_NETS` (needed for some split-tunnel setups).
-- **Local-file sandbox.** `omniseek_read_document` resolves and contains every path to an allowlisted
-  inbox (`~/omniseek-inbox` plus `OMNISEEK_DOC_ROOTS`); a path that escapes is refused.
-- **Untrusted retrieved content.** Documents and snippets omniseek returns are external data, never
+- **Local-file sandbox.** `omniseek_read` (its document branch) resolves and contains every path to
+  an allowlisted inbox (`~/omniseek-inbox` plus `OMNISEEK_DOC_ROOTS`); a path that escapes is refused.
+- **Untrusted retrieved content.** Documents and snippets OmniSeek returns are external data, never
   instructions. A consuming agent must treat them as data and never let a fetched page redirect its
   task or disclose secrets (the MCP instructions state this to the agent).
 - **Secrets.** Credentials, tokens, and cookies live under `~/.omniseek` (outside the repo), never in

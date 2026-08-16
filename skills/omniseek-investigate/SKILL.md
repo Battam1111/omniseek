@@ -1,3 +1,8 @@
+---
+name: omniseek-investigate
+description: Deep-investigation methodology for OmniSeek. Sweep in parallel with omniseek_gather, judge the signals, zoom through walled sources, structure the evidence, and close with an explicit gap ledger.
+---
+
 # /omniseek-investigate
 
 Deep investigation METHODOLOGY for OmniSeek. Teaches judgment patterns for composing

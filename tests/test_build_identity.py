@@ -44,14 +44,14 @@ class BuildIdentityTests(unittest.TestCase):
                 "archive",
                 "--format=tar",
                 "HEAD",
-                "src/omniseek/eye/contracts/build_id.py",
+                "src/omniseek/core/contracts/build_id.py",
             ],
             cwd=ROOT,
             capture_output=True,
             check=True,
         ).stdout
         with tarfile.open(fileobj=io.BytesIO(archive), mode="r:") as payload:
-            source = payload.extractfile("src/omniseek/eye/contracts/build_id.py")
+            source = payload.extractfile("src/omniseek/core/contracts/build_id.py")
             self.assertIsNotNone(source)
             text = source.read().decode("utf-8")
         self.assertIn(f'EYE_BUILD_ID = "{head}"', text)

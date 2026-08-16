@@ -5,7 +5,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-echo "==> 1/4  Install the package (CORE, Apache-clean)."
+echo "==> 1/4  Install the package (core install, Apache-clean)."
 echo "         For optional extras you accept the license of (see NOTICE):"
 echo "           pip install -e '.[pdf,asr,walled]'"
 pip install -e .
@@ -43,7 +43,8 @@ fi
 
 echo
 echo "Done. Optional model pre-pull (the recall vector layer fail-opens to lexical without it):"
-echo "    # install the [recall] extra, then place the model at ~/.omniseek/models/qwen3-embedding-0.6b"
+echo "    # install the [recall] extra, then download Qwen/Qwen3-Embedding-0.6B (Hugging Face"
+echo "    # or ModelScope) into ~/.omniseek/models/qwen3-embedding-0.6b"
 echo
 echo "Optional: keyed sources (CORE, Adzuna, Podcast Index, …) need an API key you supply (most free)."
 echo "    Run  python scripts/creds_doctor.py  to see which are set vs missing; each keyed adapter"

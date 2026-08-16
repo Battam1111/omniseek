@@ -25,7 +25,7 @@ Two axes: who owns the index, and who does the thinking.
   conclusion.
 - **Exa / Tavily** rent you reach: their index, your model. You get results to reason over,
   from an index they own and you cannot see.
-- **OmniSeek** is the fourth corner: your index, your judgments, your model's thinking. It
+- **OmniSeek** is the missing corner: your index, your judgments, your model's thinking. It
   returns evidence with provenance, never an answer; the index is yours (a self-hosted file);
   and it remembers across sessions, which a stateless search API cannot.
 
@@ -91,4 +91,4 @@ nothing.
 
 ---
 
-<div align="center"><sub><a href="../README.md">back to the README</a></sub></div>
+<div align="center"><sub><a href="../README.md">← back to the README</a></sub></div>

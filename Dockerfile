@@ -32,7 +32,7 @@ RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
 EXPOSE 8765
 # State (credentials + bearer token + profile + cache + recall index + curator state + downloaded
-# ASR model weights) lives under /root/.omniseek; the omniseek_read_document inbox under
+# ASR model weights) lives under /root/.omniseek; the omniseek_read document inbox under
 # /root/omniseek-inbox. Mount both to persist.
 VOLUME ["/root/.omniseek", "/root/omniseek-inbox"]
 

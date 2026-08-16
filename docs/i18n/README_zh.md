@@ -19,6 +19,8 @@
 &nbsp;![Built for MCP](https://img.shields.io/badge/built_for-MCP-3B82F6?style=flat-square)
 &nbsp;![Self-hosted](https://img.shields.io/badge/self--hosted-3B82F6?style=flat-square)
 
+[快速开始](#快速开始) · [工具](#工具) · [配置](#配置) · [参与](#参与)
+
 **Languages:** [English](../../README.md) · 中文 · [日本語](README_ja.md)
 
 </div>
@@ -55,9 +57,9 @@ docker compose logs omniseek        # 首次启动时打印 bearer token
 curl -s http://127.0.0.1:8765/healthz
 ```
 
-把你的 MCP 客户端指向 `http://127.0.0.1:8765/mcp`,带上 `Authorization: Bearer <token>`。token 在首次启动时生成,存于 `~/.omniseek/credentials/omniseek_http.json`。
+把你的 MCP 客户端指向 `http://127.0.0.1:8765/mcp`,带上 `Authorization: Bearer <token>`。token 在首次启动时生成,存于 `~/.omniseek/credentials/omniseek_http.json`(用 compose 跑的话,宿主机上就是 `./.omniseek/credentials/omniseek_http.json`)。
 
-首次 `up` 会本地构建镜像(依赖 + 无头 Chromium),需要几分钟;之后的启动是即时的。可选扩展:构建参数设 `EXTRAS="[pdf,asr,walled]"`。建议同时设置 `OMNISEEK_CONTACT_EMAIL`,Crossref、SEC、Unpaywall 会给礼貌联系方式一条快速通道。
+首次 `up` 会本地构建镜像(依赖 + 无头 Chromium);之后的启动是即时的。核心镜像是 Apache 干净版,不含 PDF 阅读、听觉(ASR + 视频帧)与登录墙源;用构建参数 `EXTRAS="[pdf,asr,walled]"` 解锁。建议同时设置 `OMNISEEK_CONTACT_EMAIL`,Crossref、SEC、Unpaywall 会给礼貌联系方式一条快速通道。
 
 ### 不用 Docker
 
@@ -121,7 +123,7 @@ OmniSeek 是**目录优先**的:零配置时,每个无害源都开着,登录墙�
 
 ## 为什么自托管
 
-你跑的每条查询、agent 攒出的每条关系、你用的每个凭证,都留在你的机器上。没有任何云服务看得见你在研究什么。图谱是你的资产;哪天你不跑 OmniSeek 了,一切都还在你手里。这不是一个功能开关,这是架构本身。
+你跑的每条查询、agent 攒出的每条关系、你用的每个凭证,都留在你的机器上。没有任何云服务看得见你在研究什么。它经年累月攒出的图谱是你的资产;哪天你不跑 OmniSeek 了,一切都还在你手里。这不是一个功能开关,这是架构本身。
 
 ---
 

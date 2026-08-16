@@ -13047,7 +13047,7 @@ finally:
 
 
 # --- S0.2: CancelledError hygiene, proven by an AST tripwire (not a grep). Walk EVERY except handler
-#     in src/omniseek/eye/**.py + src/omniseek/server.py; each handler that catches BaseException (or is
+#     in src/omniseek/core/**.py + src/omniseek/server.py; each handler that catches BaseException (or is
 #     a bare except:) must EITHER re-raise unconditionally (a bare `raise` at the handler's top level)
 #     OR guard cancellation first (`if isinstance(exc, asyncio.CancelledError): raise` as statement 0).
 #     The two thread-marshaling wrappers propagate the exception INDIRECTLY (store it; the parent re-
