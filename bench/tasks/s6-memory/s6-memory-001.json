@@ -1,0 +1,48 @@
+{
+  "id": "s6-memory-001",
+  "suite": "s6-memory",
+  "claim": "A repeated query in one MCP session exposes seen-before continuity on the second result set.",
+  "input": {
+    "tool": "omniseek_search",
+    "args": {
+      "query": "On Computable Numbers with an Application to the Entscheidungsproblem",
+      "sources": [
+        "openalex"
+      ],
+      "limit": 5,
+      "wait_s": 15
+    },
+    "repeat": 2
+  },
+  "ground_truth": {
+    "type": "meta_assertion",
+    "assertions": [
+      {
+        "path": "calls[0].documents",
+        "exists": true
+      },
+      {
+        "path": "calls[1].documents",
+        "exists": true
+      },
+      {
+        "any_of": [
+          {
+            "path": "calls[1].documents[0].metadata.seen_before",
+            "equals": true
+          },
+          {
+            "path": "calls[1]._meta.deduped",
+            "exists": true
+          }
+        ]
+      }
+    ]
+  },
+  "liveness_probe": {
+    "url": "https://api.openalex.org/works?search=On%20Computable%20Numbers&per-page=1"
+  },
+  "lang": "en",
+  "added_in": "bench-v1.0",
+  "notes": "The task relies on a sequential pair of calls in one initialized MCP session."
+}

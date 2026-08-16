@@ -1,0 +1,40 @@
+{
+  "id": "s6-memory-002",
+  "suite": "s6-memory",
+  "claim": "A cross-source classic-paper query reports the input and output of the deduplication stage.",
+  "input": {
+    "tool": "omniseek_search",
+    "args": {
+      "query": "On Computable Numbers with an Application to the Entscheidungsproblem",
+      "sources": [
+        "openalex",
+        "crossref"
+      ],
+      "limit": 5,
+      "wait_s": 15
+    }
+  },
+  "ground_truth": {
+    "type": "meta_assertion",
+    "assertions": [
+      {
+        "path": "_meta.deduped.in",
+        "gt": 0
+      },
+      {
+        "path": "_meta.deduped.out",
+        "gt": 0
+      },
+      {
+        "path": "_meta.deduped",
+        "reduction": true
+      }
+    ]
+  },
+  "liveness_probe": {
+    "url": "https://api.openalex.org/works?search=On%20Computable%20Numbers&per-page=1"
+  },
+  "lang": "en",
+  "added_in": "bench-v1.0",
+  "notes": "OpenAlex and Crossref provide two named routes for a duplicate-prone scholarly record."
+}

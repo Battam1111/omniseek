@@ -1,0 +1,49 @@
+{
+  "id": "s6-memory-003",
+  "suite": "s6-memory",
+  "claim": "The source roster is live and exposes declared routing facets on every returned source.",
+  "input": {
+    "tool": "omniseek_sources",
+    "args": {
+      "verbose": true
+    }
+  },
+  "ground_truth": {
+    "type": "meta_assertion",
+    "assertions": [
+      {
+        "path": "count",
+        "gt": 0
+      },
+      {
+        "path": "sources",
+        "exists": true
+      },
+      {
+        "path": "sources",
+        "each": {
+          "fields": [
+            "name",
+            "backend"
+          ],
+          "exists_any": [
+            "kind",
+            "domains",
+            "regions",
+            "modes",
+            "needs_credentials",
+            "explicit_only",
+            "stability",
+            "access_tier"
+          ]
+        }
+      }
+    ]
+  },
+  "liveness_probe": {
+    "url": "https://api.openalex.org/works?search=On%20Computable%20Numbers&per-page=1"
+  },
+  "lang": "en",
+  "added_in": "bench-v1.0",
+  "notes": "Verbose mode is intentional because bare orientation omits per-source facets."
+}

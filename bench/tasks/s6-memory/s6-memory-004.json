@@ -1,0 +1,35 @@
+{
+  "id": "s6-memory-004",
+  "suite": "s6-memory",
+  "claim": "Every returned search document carries a source name and a re-checkable URL or identifier.",
+  "input": {
+    "tool": "omniseek_search",
+    "args": {
+      "query": "On Computable Numbers with an Application to the Entscheidungsproblem",
+      "sources": [
+        "openalex"
+      ],
+      "limit": 5,
+      "wait_s": 15
+    }
+  },
+  "ground_truth": {
+    "type": "meta_assertion",
+    "assertions": [
+      {
+        "path": "documents",
+        "exists": true
+      },
+      {
+        "path": "documents",
+        "each_provenance": true
+      }
+    ]
+  },
+  "liveness_probe": {
+    "url": "https://api.openalex.org/works?search=On%20Computable%20Numbers&per-page=1"
+  },
+  "lang": "en",
+  "added_in": "bench-v1.0",
+  "notes": "The judge checks the returned projection, not private adapter payloads."
+}
