@@ -29,14 +29,14 @@ The answer is sitting in minute 47 of a podcast, three replies deep in a comment
 
 ---
 
-Search gives your agent indexed pages, in one language, in text. That's the surface.
+Search gives your agent indexed pages, in one language, in text, and stops there.
 
-OmniSeek is the reach beneath it, and everything it does runs on your machine.
+OmniSeek keeps seeking: through languages, logins, comment threads, audio, and pixels, all on your machine.
 
 <div align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="assets/demo-en-dark.png">
-    <img src="assets/demo-en-light.png" alt="One real investigation: an English question about a changed rule. The surface quotes the rule; OmniSeek comes back with a Chinese explainer transcribed, login-walled first-person timelines, the workaround buried in a comment thread, and the dissenting video note, each line attributed.">
+    <img src="assets/demo-en-light.png" alt="One real investigation: an English question about a changed rule. Search quotes the rule and stops; OmniSeek keeps seeking and comes back with a Chinese explainer transcribed, login-walled first-person timelines, the workaround buried in a comment thread, and the dissenting video note, each line attributed.">
   </picture>
 </div>
 

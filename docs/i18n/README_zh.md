@@ -27,14 +27,14 @@
 
 ---
 
-搜索给你的 agent 的,是已被索引的网页:单一语言,纯文本。那只是表面。
+搜索给你的 agent 的,是已被索引的网页:单一语言、纯文本,到此为止。
 
-OmniSeek 就是探到表面之下的那只手,而且从头到尾都跑在你自己的机器上。
+OmniSeek 继续求索:穿过语言、登录墙、评论区、音频与像素,全程都在你自己的机器上。
 
 <div align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="../../assets/demo-zh-dark.png">
-    <img src="../../assets/demo-zh-light.png" alt="一次真实调查:英文提问一条规则变化。表面只会复述规则;OmniSeek 带回转写的中文解读视频、登录墙内的第一手时间线、埋在评论区的解法、以及持反方观点的视频笔记,每一行都有出处。">
+    <img src="../../assets/demo-zh-light.png" alt="一次真实调查:英文提问一条规则变化。搜索复述规则就停;OmniSeek 继续求索,带回转写的中文解读视频、登录墙内的第一手时间线、埋在评论区的解法、以及持反方观点的视频笔记,每一行都有出处。">
   </picture>
 </div>
 
