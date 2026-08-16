@@ -115,6 +115,14 @@ Live sources are noisy, so single runs are noise:
   tasks, which is exactly why the construction standard and the resistance-evidence format
   are published: anyone can author counter-tasks in the same format and hold us to them.
 
+## Task-set changelog
+
+- **bench-v1.0.1**: retired `s5-scholar-012` (its two-call shape is unsupported by the v1
+  runner, which drove a judge mismatch in CI run 2; citation-conflict coverage stays via
+  the single-call `s5-scholar-011`; multi-call task support is v1.1 backlog). CI runs now
+  identify to polite-pool upstreams via a contact email; run 2 measured the OA-location
+  legs failing without one.
+
 ## Publishing
 
 - Results are dated JSON artifacts (environment, versions, git SHA, per-task outcomes,

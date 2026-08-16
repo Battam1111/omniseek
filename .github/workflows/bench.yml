@@ -31,6 +31,8 @@ jobs:
           cache: pip
       - name: Install package
         run: pip install ".[pdf,recall,ocr]"
+      - name: Identify to polite-pool upstreams
+        run: echo "OMNISEEK_CONTACT_EMAIL=101111615+Battam1111@users.noreply.github.com" >> "$GITHUB_ENV"
       - name: Run benchmark
         env:
           PYTHONUTF8: "1"
