@@ -1221,7 +1221,7 @@ class XiaohongshuCNAdapter:
         # Alive if EITHER path is available: the browser path (primary) or the signed-API (fallback).
         return (_BROWSER_OK or _DEPS_OK) and not _SEALED
 
-    def health_check(self) -> tuple[bool, str]:
+    def health_check(self) -> tuple[Optional[bool], str]:
         """Pure STATE read — NO network, so the health SWEEP itself never adds an account touch on the
         warned 9224 account (the sweep is recurring/automated; the safety research's §5 'low-frequency'
         line is about minimizing such automated activity). NOTE: the sweep is not the ONLY automated
@@ -1230,7 +1230,7 @@ class XiaohongshuCNAdapter:
         every named call, the operator may want to drop the 大陆号 from the warmer to cut total automated
         touches (the operator's risk call; flagged, not auto-changed)."""
         if not (_BROWSER_OK or _DEPS_OK):
-            return False, "browser deps (bs4/lxml + xiaohongshu_source helpers) AND signed deps (xhshow/curl_cffi) both unavailable"
+            return None, "browser deps (bs4/lxml + xiaohongshu_source helpers) AND signed deps (xhshow/curl_cffi) both unavailable"
         if _SEALED:
             return False, "sealed (manual kill-switch)"
         if _tripped():

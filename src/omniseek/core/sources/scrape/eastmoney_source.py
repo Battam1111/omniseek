@@ -208,11 +208,11 @@ class EastMoneyAdapter(BaseScrapeAdapter):
     def _to_documents(self, raw, query, limit) -> list[Document]:
         return [doc for (f, qid, code) in raw[:limit] if (doc := _quote_to_doc(f, qid, code))]
 
-    def health_check(self) -> tuple[bool, str]:
+    def health_check(self) -> tuple[Optional[bool], str]:
         """Probe BOTH steps so a failure self-diagnoses: suggest (searchapi.eastmoney.com, name→code)
         and quote (Tencent qt.gtimg.cn) are different hosts that can fail independently."""
         if not _DEPS_OK:
-            return False, "curl_cffi not installed"
+            return None, "curl_cffi not installed"
         try:
             sess = _creq.Session(impersonate="chrome")
             hits = self._suggest(sess, "贵州茅台")

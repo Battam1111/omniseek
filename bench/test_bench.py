@@ -41,6 +41,7 @@ from run import (
     _parser,
     _required_extras,
     _run_rep,
+    _stale_entries,
     _liveness_probe,
 )
 from schema import (
@@ -651,6 +652,39 @@ class RunnerContractTests(unittest.TestCase):
         self.assertFalse(probe["alive"])
         self.assertEqual(probe["class"], "rate_limited")
 
+    def test_liveness_probe_classifies_403_as_blocked(self):
+        class Response:
+            status_code = 403
+
+        class Client:
+            def get(self, _url):
+                return Response()
+
+        probe = _liveness_probe(_good_task(), Client())
+        self.assertFalse(probe["alive"])
+        self.assertEqual(probe["class"], "blocked")
+        self.assertEqual(probe["status_code"], 403)
+
+    def test_only_dead_liveness_enters_stale_denominator(self):
+        self.assertTrue(bench_run._is_stale_liveness({"class": "dead"}))
+        self.assertFalse(bench_run._is_stale_liveness({"class": "blocked"}))
+        self.assertFalse(bench_run._is_stale_liveness({"class": "probe_error"}))
+
+    def test_stale_entries_include_http_status_code(self):
+        records = {
+            "task-403": {
+                "liveness": {"class": "blocked", "status_code": 403},
+            },
+            "task-404": {
+                "liveness": {"class": "dead", "status_code": 404},
+            },
+        }
+        entries = _stale_entries(records, {"task-404"})
+        self.assertEqual(
+            entries,
+            [{"id": "task-404", "class": "dead", "status_code": 404}],
+        )
+
     def test_liveness_probe_classifies_timeout_separately(self):
         class Client:
             def get(self, _url):
@@ -1012,6 +1046,26 @@ class VisualizationContractTests(unittest.TestCase):
             self.assertIn("server's own memory contract", report)
             self.assertIn("fixture query for baseline receipt", report)
             self.assertIn("first-page non-hits", report)
+
+    def test_report_discloses_non_stale_probe_observations(self):
+        results = _results_fixture()
+        results["probe_observations"] = [
+            {"id": "s3-fixture-003", "class": "blocked", "status_code": 403},
+            {"id": "s3-fixture-004", "class": "probe_error", "error": "DNS failure"},
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            result_file = root / "run.json"
+            report_file = root / "RESULTS.md"
+            result_file.write_text(json.dumps(results), encoding="utf-8")
+            generate_report(result_file, report_file)
+            report = report_file.read_text(encoding="utf-8")
+            self.assertIn("Probe observations not classified as stale", report)
+            self.assertIn("s3-fixture-003", report)
+            self.assertIn("blocked", report)
+            self.assertIn("403", report)
+            self.assertIn("probe_error", report)
+            self.assertIn("DNS failure", report)
 
     def test_chart_shows_a_stale_count_on_a_dormant_row(self):
         results = _results_fixture()

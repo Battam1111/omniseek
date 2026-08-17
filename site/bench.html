@@ -92,10 +92,13 @@
     </section>
 
     <section class="card">
-      <h2>Stale tasks and dormant senses</h2>
+      <h2>Stale tasks, probe observations, and dormant senses</h2>
       <p class="hint">A stale task is dropped from its denominator and named here, so a denominator never shrinks silently. A dormant sense is an optional extra that was not installed on the machine that ran the claim-verification suite, which is a capability fact and not a failed task.</p>
       <h3>Stale tasks</h3>
       <ul id="stale"></ul>
+      <h3>Probe observations not classified as stale</h3>
+      <p class="hint">These outcomes stayed in the scored denominator because they did not show that the upstream document was stale.</p>
+      <ul id="probe-observations"></ul>
       <h3>Dormant suites</h3>
       <ul id="dormant"></ul>
     </section>
@@ -350,7 +353,37 @@
       var item = el(list, "li", null);
       if (entry && typeof entry === "object") {
         el(item, "code", (entry.id === undefined || entry.id === null) ? "unnamed" : entry.id);
-        el(item, "span", ": " + (entry["class"] || "reason not recorded"));
+        var detail = entry["class"] || "reason not recorded";
+        if (entry.status_code !== undefined && entry.status_code !== null) {
+          detail += " (HTTP " + String(entry.status_code) + ")";
+        }
+        if (entry.error) { detail += ": " + String(entry.error); }
+        el(item, "span", ": " + detail);
+      } else {
+        el(item, "code", entry);
+        el(item, "span", ": reason not recorded");
+      }
+    });
+  }
+
+  function renderProbeObservations(data) {
+    var list = byId("probe-observations");
+    list.replaceChildren();
+    var entries = Array.isArray(data.probe_observations) ? data.probe_observations : [];
+    if (!entries.length) {
+      el(list, "li", "No non-stale probe observations were recorded.");
+      return;
+    }
+    entries.forEach(function (entry) {
+      var item = el(list, "li", null);
+      if (entry && typeof entry === "object") {
+        el(item, "code", (entry.id === undefined || entry.id === null) ? "unnamed" : entry.id);
+        var detail = entry["class"] || "reason not recorded";
+        if (entry.status_code !== undefined && entry.status_code !== null) {
+          detail += " (HTTP " + String(entry.status_code) + ")";
+        }
+        if (entry.error) { detail += ": " + String(entry.error); }
+        el(item, "span", ": " + detail);
       } else {
         el(item, "code", entry);
         el(item, "span", ": reason not recorded");
@@ -491,6 +524,7 @@
     renderRunMeta(data);
     renderChart(data);
     renderStale(data);
+    renderProbeObservations(data);
     renderDormant(data);
     renderBaseline(data);
     byId("loading").hidden = true;

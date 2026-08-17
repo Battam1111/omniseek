@@ -20,6 +20,10 @@ sys.path.insert(0, str(ROOT / "src"))
 STATUSES = ("up", "degraded", "rate_limited", "down", "skipped")
 BUDGET_DETAIL = "sweep budget exhausted"
 DETAIL_CAP = 200
+_SKIPPED_POLICY_DETAILS = {
+    "explicit-only",
+    "requires operator credentials",
+}
 _RATE_LIMIT_RE = re.compile(
     r"(?:\b429\b|rate[\s_-]*limit(?:ed|ing)?|throttl(?:e|ed|ing)|too many requests)",
     re.IGNORECASE,
@@ -38,6 +42,8 @@ def _detail_head(message: object) -> str:
 def classify_probe(healthy: Optional[bool], message: object) -> tuple[str, str]:
     """Map the existing health result into the public status taxonomy."""
     detail = _detail_head(message)
+    if healthy is None:
+        return "skipped", detail
     if _RATE_LIMIT_RE.search(detail):
         return "rate_limited", detail
     if healthy is True and "degraded" in detail.lower():
@@ -47,13 +53,29 @@ def classify_probe(healthy: Optional[bool], message: object) -> tuple[str, str]:
     return "down", detail
 
 
+def _skipped_category(detail: object) -> str:
+    detail_text = str(detail or "")
+    if detail_text in _SKIPPED_POLICY_DETAILS:
+        return "policy"
+    if detail_text == BUDGET_DETAIL:
+        return "budget"
+    return "capability"
+
+
 def build_summary(rows: list[dict]) -> dict[str, int]:
     counts = {status: 0 for status in STATUSES}
+    counts.update({
+        "skipped_policy": 0,
+        "skipped_capability": 0,
+        "skipped_budget": 0,
+    })
     for row in rows:
         status = row["status"]
-        if status not in counts:
+        if status not in STATUSES:
             raise ValueError(f"unknown source status: {status}")
         counts[status] += 1
+        if status == "skipped":
+            counts[f"skipped_{_skipped_category(row.get('detail'))}"] += 1
     counts["total"] = len(rows)
     return counts
 

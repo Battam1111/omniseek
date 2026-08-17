@@ -363,7 +363,7 @@ class BaseCDPAdapter:
             logger.warning("%s: _to_document failed: %s", self.name, exc)
             return None
 
-    def health_check(self) -> tuple[bool, str]:
+    def health_check(self) -> tuple[Optional[bool], str]:
         """CDP connectivity + a light liveness probe.
 
         Default: prove the CDP Chrome is reachable (``cdp_health(cdp_url)``) and that
@@ -372,7 +372,7 @@ class BaseCDPAdapter:
         didn't bounce to /signin)."""
         ok, msg = cdp_health(self.cdp_url)
         if not ok:
-            return False, f"CDP not reachable: {msg}"
+            return None, f"CDP not reachable: {msg}"
         try:
             page_url = self._run(lambda p: p.url, self._health_url())
         except Exception as exc:  # noqa: BLE001

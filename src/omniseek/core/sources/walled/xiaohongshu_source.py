@@ -949,7 +949,7 @@ class XiaohongshuAdapter:
                       **video_metadata(video_url, video_src, has_player=is_video)},
         )
 
-    def health_check(self) -> tuple[bool, str]:
+    def health_check(self) -> tuple[Optional[bool], str]:
         """Probe transport state only, without touching the account session.
 
         The old probe navigated the international homepage, waited like a human, and then
@@ -963,7 +963,7 @@ class XiaohongshuAdapter:
             return False, "SEALED (小红书封号风险): disabled until CDP is undetectable"
         cdp_ok, cdp_msg = cdp_health(_XHS_CDP_URL)
         if not cdp_ok:
-            return False, f"CDP not reachable: {cdp_msg}"
+            return None, f"CDP not reachable: {cdp_msg}"
         return True, "ok (CDP reachable; named search/read is the content-capability probe)"
 
     @staticmethod

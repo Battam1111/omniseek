@@ -96,12 +96,12 @@ class PdfAdapter:
             metadata={"pages": n_pages, "extracted_chars": len(text), "truncated": truncated},
         )
 
-    def health_check(self) -> tuple[bool, str]:
+    def health_check(self) -> tuple[Optional[bool], str]:
         try:
             import fitz  # noqa: F401
             return True, "OK (PyMuPDF ready)"
         except Exception as exc:  # noqa: BLE001
-            return False, f"PyMuPDF missing: {exc}"
+            return None, f"PyMuPDF missing: {exc}"
 
 
 from omniseek.core.fetcher import register_adapter

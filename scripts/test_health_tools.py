@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "src"))
 
 
 def _load(name: str, filename: str):
@@ -39,6 +42,28 @@ class HealthSweepTests(unittest.TestCase):
             self.sweep.classify_probe(False, "HTTP 503 upstream unavailable"),
             ("down", "HTTP 503 upstream unavailable"),
         )
+
+    def test_classifies_unavailable_probe_as_skipped(self) -> None:
+        self.assertEqual(
+            self.sweep.classify_probe(None, "PyMuPDF missing: No module named 'fitz'"),
+            ("skipped", "PyMuPDF missing: No module named 'fitz'"),
+        )
+
+    def test_pdf_optional_dependency_absence_is_not_down(self) -> None:
+        from omniseek.core.sources.scrape.pdf_source import PdfAdapter
+
+        real_import = __import__
+
+        def missing_fitz(name, *args, **kwargs):
+            if name == "fitz":
+                raise ModuleNotFoundError("No module named 'fitz'")
+            return real_import(name, *args, **kwargs)
+
+        with mock.patch("builtins.__import__", side_effect=missing_fitz):
+            healthy, detail = PdfAdapter().health_check()
+
+        self.assertIsNone(healthy)
+        self.assertIn("PyMuPDF missing", detail)
 
     def test_classification_caps_detail_at_200_characters(self) -> None:
         status, detail = self.sweep.classify_probe(False, "x" * 250)
@@ -137,8 +162,16 @@ class HealthSweepTests(unittest.TestCase):
         )
 
     def test_summary_has_all_status_counts(self) -> None:
-        rows = [{"status": status} for status in
-                ("up", "degraded", "rate_limited", "down", "skipped", "up")]
+        rows = [
+            {"status": "up"},
+            {"status": "degraded"},
+            {"status": "rate_limited"},
+            {"status": "down"},
+            {"status": "skipped", "detail": "explicit-only"},
+            {"status": "skipped", "detail": "sweep budget exhausted"},
+            {"status": "skipped", "detail": "PyMuPDF missing: No module named 'fitz'"},
+            {"status": "up"},
+        ]
         self.assertEqual(
             self.sweep.build_summary(rows),
             {
@@ -146,8 +179,11 @@ class HealthSweepTests(unittest.TestCase):
                 "degraded": 1,
                 "rate_limited": 1,
                 "down": 1,
-                "skipped": 1,
-                "total": 6,
+                "skipped": 3,
+                "skipped_policy": 1,
+                "skipped_capability": 1,
+                "skipped_budget": 1,
+                "total": 8,
             },
         )
 
@@ -187,6 +223,9 @@ class HealthPageTests(unittest.TestCase):
                 "rate_limited": 0,
                 "down": 1,
                 "skipped": 0,
+                "skipped_policy": 0,
+                "skipped_capability": 0,
+                "skipped_budget": 0,
                 "total": 2,
             },
         }
@@ -205,6 +244,10 @@ class HealthPageTests(unittest.TestCase):
         self.assertIn("Sweep duration: 1.25 seconds", page)
         self.assertIn(
             "Up: 1 | Degraded: 0 | Rate limited: 0 | Down: 1 | Skipped: 0 | Total: 2",
+            page,
+        )
+        self.assertIn(
+            "Skipped breakdown: policy=0 | capability absent=0 | sweep budget=0",
             page,
         )
         self.assertIn("| alpha | free | up | 12 ms |  |", page)

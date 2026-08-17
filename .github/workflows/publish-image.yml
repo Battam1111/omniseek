@@ -48,6 +48,7 @@ jobs:
             org.opencontainers.image.description=Self-hosted perception MCP server for AI agents. Your agent seeks what search can't find.
             org.opencontainers.image.source=https://github.com/Battam1111/omniseek
             org.opencontainers.image.licenses=Apache-2.0
+            org.opencontainers.image.revision=${{ github.sha }}
             io.modelcontextprotocol.server.name=io.github.Battam1111/omniseek
           cache-from: type=gha
           cache-to: type=gha,mode=max
@@ -81,9 +82,35 @@ jobs:
                 then .identifier = ("ghcr.io/battam1111/omniseek:" + $tag)
                 else .version = $v end))
           ' server.json > server.tmp && mv server.tmp server.json
+      - name: Check whether release version is already registered
+        id: registry
+        env:
+          REGISTRY_URL: https://registry.modelcontextprotocol.io
+        run: |
+          set -euo pipefail
+          server_name="$(jq -r '.name' server.json)"
+          server_version="$(jq -r '.version' server.json)"
+          registry_response="$(curl --fail-with-body --silent --show-error --get \
+            --data-urlencode "search=${server_name}" \
+            "${REGISTRY_URL}/v0.1/servers")"
+          if jq -e --arg name "${server_name}" --arg version "${server_version}" \
+              'any(.servers[]?; .server.name == $name and .server.version == $version)' \
+              <<<"${registry_response}" >/dev/null; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "Registry already contains ${server_name} version ${server_version}."
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "Registry does not contain ${server_name} version ${server_version}."
+          fi
+      - name: Skip duplicate registry version
+        if: steps.registry.outputs.exists == 'true'
+        run: echo "Registry publish is a no-op for the existing version."
       - name: Install mcp-publisher
+        if: steps.registry.outputs.exists != 'true'
         run: curl -sL "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_linux_amd64.tar.gz" | tar xz mcp-publisher
       - name: Login (GitHub OIDC)
+        if: steps.registry.outputs.exists != 'true'
         run: ./mcp-publisher login github-oidc
       - name: Publish to the MCP Registry
+        if: steps.registry.outputs.exists != 'true'
         run: ./mcp-publisher publish

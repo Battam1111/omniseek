@@ -159,10 +159,10 @@ class XiaomuchongAdapter(BaseCDPAdapter):
                                        "url": url, "body": body_text})},
         )
 
-    def health_check(self) -> tuple[bool, str]:
+    def health_check(self) -> tuple[Optional[bool], str]:
         cdp_ok, cdp_msg = cdp_health()
         if not cdp_ok:
-            return False, f"CDP not reachable: {cdp_msg}"
+            return None, f"CDP not reachable: {cdp_msg}"
         def _check(page) -> dict:
             page.wait_for_timeout(2000)
             return page.evaluate("""() => {
