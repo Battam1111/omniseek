@@ -107,13 +107,12 @@
 
 **Files:**
 - Modify: `.github/workflows/publish-image.yml`
-- Modify: `Dockerfile`
 
 **Interfaces:**
 - The registry publish step checks the existing version and exits zero with a no-op message when
   the version is already present.
-- The image build passes `${{ github.sha }}` as `OCI_REVISION` and labels
-  `org.opencontainers.image.revision=$OCI_REVISION`.
+- The image build labels `org.opencontainers.image.revision=${{ github.sha }}` alongside the
+  existing OCI labels.
 
 - [ ] Add workflow text tests or static assertions for the no-op guard and revision wiring.
 - [ ] Implement the smallest workflow and Dockerfile changes.

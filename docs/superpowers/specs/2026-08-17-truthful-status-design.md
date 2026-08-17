@@ -30,9 +30,8 @@ status codes included where available.
 - `bench/gen_report.py` and `site/bench.html` render stale status codes and non-stale probe
   observations.
 - `tests/smoke.py` contains three synthetic offline gates for the health and benchmark contracts.
-- `.github/workflows/publish-image.yml` treats an existing registry version as a no-op.
-- `Dockerfile` receives the built commit SHA through a build argument and applies it as the OCI
-  revision label.
+- `.github/workflows/publish-image.yml` treats an existing registry version as a no-op and
+  applies the built commit SHA as the OCI revision label.
 
 ## Error handling
 
