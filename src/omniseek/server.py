@@ -222,6 +222,18 @@ _OMNISEEK_INSTRUCTIONS = (
 )
 
 mcp = FastMCP("omniseek", instructions=_OMNISEEK_INSTRUCTIONS)
+# Announce OUR version, not the SDK's. FastMCP takes no version argument and leaves the lowlevel
+# server at None, whereupon the SDK substitutes its own release number: a real handshake was
+# returning the mcp library's version as ours, which is what every client and every public
+# directory then displays. The lowlevel server does accept one; nothing but this assignment
+# reaches it. Guarded because it touches a private attribute: a future SDK that exposes the
+# version properly, or renames the field, must not break the server over a cosmetic string.
+try:
+    from omniseek import __version__ as _pkg_version
+
+    mcp._mcp_server.version = _pkg_version
+except Exception:  # noqa: BLE001 - an identity string is never worth failing a boot over
+    log.debug("could not set the advertised MCP server version; the SDK default stands")
 
 
 # --- L1: run each sync tool body OFF the single event-loop thread -------------------------

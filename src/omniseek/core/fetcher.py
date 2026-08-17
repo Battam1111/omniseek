@@ -1882,13 +1882,24 @@ def _build_recall_arm(query: str, sources: Optional[list[str]], limit: int,
                                     else "no indexable source is enabled")}
         return _cat, _pol, None, index_skipped
 
+    _armed_at = time.time()
+
     def _recall_task():
         # semantic=False = the exact-token escape hatch (lexical only, byte-identical ranking);
         # None/True = the hybrid (lexical + vector RRF-fused -> cross-lingual + paraphrase recall).
+        # INSTRUMENTED 2026-08-17: queued_ms is submit-to-start, so a starved thread is visible as a
+        # late start rather than being blamed on a slow arm; run_ms is the arm's own wall time.
+        # recall.hybrid supplies the per-phase split inside run_ms.
+        _started = time.time()
         if semantic is False:
             _i = recall.search(query, k=_k, sources=_recall_scope)
-            return _i, {"lexical": len(_i), "vector": 0, "mode": "lexical"}
-        return recall.hybrid(query, k=_k, sources=_recall_scope)
+            _info = {"lexical": len(_i), "vector": 0, "mode": "lexical"}
+        else:
+            _i, _info = recall.hybrid(query, k=_k, sources=_recall_scope)
+        _now = time.time()
+        return _i, {**_info,
+                    "queued_ms": round((_started - _armed_at) * 1000, 1),
+                    "run_ms": round((_now - _started) * 1000, 1)}
 
     return _cat, _pol, _recall_task, None
 
@@ -1907,9 +1918,16 @@ def _recall_remaining_budget(deadline_s: Optional[float], fresh: bool,
 def _fold_recall_index(results: dict, meta: dict, idx: list, info: dict) -> None:
     """Fold the joined recall into the SAME merge_rank/dedup the live path uses: index docs collapse
     against live twins by fingerprint, rolled-off docs resurface. SHARED. No-op on an empty idx (a
-    recall failure/timeout degrades to no-index: meta gets NO 'index' key, exactly as before). Contains
+    recall failure/timeout degrades to no-index, and meta carries an explicit degraded stamp). Contains
     the as_of DB read, so the async caller runs this OFF the loop via anyio.to_thread."""
     if not idx:
+        # The caller already built an honest record of WHY there is no index (mode timeout / error,
+        # or a hybrid that matched nothing). Discarding it here is what made a DEGRADED search
+        # indistinguishable from one that never ran a recall arm at all: the key simply vanished, so
+        # a silent quality collapse read as "search was a bit off today". Stamp it, in the same shape
+        # the empty-scope path already uses.
+        if info:
+            meta["index"] = {**info, "candidates": 0}
         return
     from omniseek.core import recall
     results["_index"] = idx
@@ -2491,7 +2509,7 @@ async def asearch_ranked(
         # executor.shutdown(wait=False): on the budget elapsing, DETACH the task (do NOT cancel) so the
         # recall thread finishes + warms the index; _reap drops the ref + CONSUMES the outcome so a late
         # raise never emits an "exception never retrieved" ERROR. Same fail-open modes as sync (an empty
-        # idx -> no meta["index"] key: the no-index degrade).
+        # idx -> an explicit degraded stamp, never a missing key).
         _remaining = _recall_remaining_budget(deadline_s, fresh, sources, t0_wall)
         _done, _pending = await asyncio.wait({_recall_fut}, timeout=_remaining)
         if _recall_fut in _pending:

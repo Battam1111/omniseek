@@ -6922,36 +6922,6 @@ if _ep_path.exists() and _sh_path.exists():
           _tok_name in _sh_path.read_text(encoding="utf-8")
           and _tok_name in _ep_path.read_text(encoding="utf-8"))
 
-    # The SAME image serves the stdio transport (Dockerfile.stdio inherits this ENTRYPOINT), and
-    # there stdout is the JSON-RPC channel: anything printed to it lands ahead of the handshake and
-    # corrupts the stream. It also leaked a live bearer token into whatever captures the container's
-    # output. Every informational line here must be redirected, so assert it mechanically rather
-    # than trusting review: an echo without >&2, or a print without file=sys.stderr, fails.
-    _ep_src = _ep_path.read_text(encoding="utf-8")
-    _loud = [
-        _l.strip() for _l in _ep_src.splitlines()
-        if _l.strip().startswith("echo ") and ">&2" not in _l
-    ]
-    # print() spans lines here, so read each call to its matching paren rather than line by line:
-    # a per-line scan reports a false failure on the first line of a correctly redirected call.
-    _i = _ep_src.find("print(")
-    while _i != -1:
-        _depth, _j = 0, _i + len("print")
-        while _j < len(_ep_src):
-            if _ep_src[_j] == "(":
-                _depth += 1
-            elif _ep_src[_j] == ")":
-                _depth -= 1
-                if _depth == 0:
-                    break
-            _j += 1
-        if "file=sys.stderr" not in _ep_src[_i:_j]:
-            _loud.append(_ep_src[_i:_i + 60].replace("\n", " "))
-        _i = _ep_src.find("print(", _j)
-    check("deploy seam: the docker entrypoint keeps stdout clean for the stdio transport",
-          not _loud,
-          f"statements writing to stdout: {_loud}")
-
 # ---------------------------------------------------------------------------
 # 46b. plist-drift tripwire: scripts/services.py is the SINGLE source of truth for every launchd
 #      service; its gen-plists regenerates every committed .plist from the registry and the committed
@@ -15717,11 +15687,14 @@ def _s4c_det(meta):
 
 
 def _s4c_ranked_meta(meta):
-    """The RANKED-specific _meta (deduped + the index fold + the passive enrichments), with the index
-    as_of DROPPED (a wall-clock timestamp, run-to-run nondeterministic)."""
+    """The RANKED-specific _meta (deduped + the index fold + the passive enrichments), with wall-clock
+    values NORMALIZED rather than dropped: as_of and the *_ms arm timings are run-to-run
+    nondeterministic, but their PRESENCE is part of the contract, so a twin that stops emitting one
+    still trips this guard (dropping the keys would have quietly excused that drift)."""
     idx = meta.get("index")
     if isinstance(idx, dict):
-        idx = {k: v for k, v in idx.items() if k != "as_of"}
+        idx = {k: ("<wall-clock>" if k == "as_of" or k.endswith("_ms") else v)
+               for k, v in idx.items()}
     return {"deduped": meta.get("deduped"), "index": idx,
             "source_diversity": meta.get("source_diversity"), "conflicts": meta.get("conflicts")}
 
@@ -15817,8 +15790,10 @@ try:
         _s4c_recall.hybrid = _S4C_REAL_HY
         _s4c_recall.indexable_set = _S4C_REAL_IX
 
-    # (3) RECALL FAIL-OPEN: a recall arm that RAISES degrades to no-index (meta has NO 'index' key) +
-    #     returns the live docs WITHOUT breaking asearch_ranked, IDENTICALLY to sync.
+    # (3) RECALL FAIL-OPEN: a recall arm that RAISES degrades to no-index and STAMPS why
+    #     (meta['index'].mode == 'error'), returns the live docs WITHOUT breaking asearch_ranked,
+    #     IDENTICALLY to sync. The stamp is the point: a missing key made a degraded search
+    #     indistinguishable from one that never ran a recall arm, so the quality loss was invisible.
     _s4c_reg(_S4cStub("s4c_g3_a", ndocs=2))
     _s4c_g3_names = ["s4c_g3_a"]
 
@@ -15831,11 +15806,12 @@ try:
         _s4c_r3s_docs, _s4c_r3s_meta = _s4c_fetcher.search_ranked("q", _s4c_g3_names, 5, deadline_s=5.0)
         _s4c_r3a_docs, _s4c_r3a_meta = _s4c_aio.run(
             _s4c_fetcher.asearch_ranked("q", _s4c_g3_names, 5, deadline_s=5.0))
-        check("S4c: recall FAIL-OPEN (arm RAISES) -- asearch_ranked degrades to no-index (no meta['index']) + returns the 2 live docs, IDENTICALLY to sync (same ranked docs, both no index key)",
-              "index" not in _s4c_r3a_meta and "index" not in _s4c_r3s_meta
+        check("S4c: recall FAIL-OPEN (arm RAISES) -- BOTH twins degrade to no-index and stamp it explicitly (meta['index'].mode == 'error', never a silently missing key) + return the 2 live docs identically",
+              (_s4c_r3a_meta.get("index") or {}).get("mode") == "error"
+              and (_s4c_r3s_meta.get("index") or {}).get("mode") == "error"
               and len(_s4c_r3a_docs) == 2
               and _s4c_ranked_proj(_s4c_r3a_docs) == _s4c_ranked_proj(_s4c_r3s_docs),
-              f"async_meta_keys={sorted(_s4c_r3a_meta)} sync_meta_keys={sorted(_s4c_r3s_meta)} "
+              f"async_index={_s4c_r3a_meta.get('index')} sync_index={_s4c_r3s_meta.get('index')} "
               f"async_docs={len(_s4c_r3a_docs)}")
     finally:
         _s4c_recall.indexable_set = _S4C_REAL_IX

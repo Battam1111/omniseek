@@ -177,12 +177,35 @@ def hybrid(query: str, k: int = 60, sources: "frozenset[str] | None" = None) -> 
 
     ``sources`` (Wave 2, audit 1.1): the source scope is passed through to BOTH arms (the FTS predicate
     and the pre-top-k vector mask). ``sources=None`` keeps today's behavior exactly for every caller."""
+    # INSTRUMENTED 2026-08-17: under concurrency this arm silently misses its join deadline and
+    # the search loses cross-lingual recall. A timeout at the caller cannot say WHERE the time went,
+    # so each phase is timed here and reported in ``info``. Measurement only: the control flow and
+    # every return value are unchanged.
+    _t0 = time.perf_counter()
     lex = search(query, k, sources=sources)
+    _t1 = time.perf_counter()
     qv = _query_vector(query)
+    _t2 = time.perf_counter()
+    # embed_ms below is wall time for the whole query-vector step. When it dwarfs the forward, the
+    # query was queued behind another forward (the absorb path embeds documents through the same
+    # lock), which is a scheduling fix, not a model fix. Absent when the vector came from cache.
+    _emb = dict(embed.LAST_TIMING) if getattr(embed, "LAST_TIMING", None) else {}
     vec = vector_search(qv, k, sources=sources) if qv is not None else []
+    _t3 = time.perf_counter()
+    _phases = {
+        "lex_ms": round((_t1 - _t0) * 1000, 1),
+        "embed_ms": round((_t2 - _t1) * 1000, 1),
+        "ann_ms": round((_t3 - _t2) * 1000, 1),
+    }
+    if _emb:
+        _phases["embed_wait_ms"] = _emb.get("wait_ms")
+        _phases["embed_fwd_ms"] = _emb.get("fwd_ms")
+        _phases["embed_batch"] = _emb.get("n")
     if not vec:
-        return lex, {"lexical": len(lex), "vector": 0, "mode": "lexical"}
-    return _rrf_fuse(lex, vec), {"lexical": len(lex), "vector": len(vec), "mode": "hybrid"}
+        return lex, {"lexical": len(lex), "vector": 0, "mode": "lexical", **_phases}
+    _fused = _rrf_fuse(lex, vec)
+    _phases["fuse_ms"] = round((time.perf_counter() - _t3) * 1000, 1)
+    return _fused, {"lexical": len(lex), "vector": len(vec), "mode": "hybrid", **_phases}
 
 
 def _ingest_step(src: str) -> "fetcher.AdapterOutcome":
