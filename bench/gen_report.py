@@ -174,6 +174,19 @@ def _stale_label(
     return "stale " + _emit_integer(count, available, f"{suite_name}.stale_count")
 
 
+def _probe_entry_line(entry: Any) -> str:
+    if not isinstance(entry, dict):
+        return f"- `{entry}`"
+    task_id = entry.get("id")
+    probe_class = entry.get("class") or "reason not recorded"
+    details = [str(probe_class)]
+    if entry.get("status_code") is not None:
+        details.append(f"HTTP {entry['status_code']}")
+    if entry.get("error"):
+        details.append(str(entry["error"]))
+    return f"- `{task_id}` ({'; '.join(details)})"
+
+
 def render_results_svg(results: dict[str, Any], theme: str = "light") -> str:
     """Render the per-suite pass-rate chart as one self-contained SVG string.
 
@@ -608,16 +621,17 @@ def generate_report(
         rows.append(f"| {suite_name} | " + " | ".join(values) + " |")
 
     stale = results.get("stale", [])
+    probe_observations = results.get("probe_observations", [])
     dormant = results.get("dormant", [])
-    if not isinstance(stale, list) or not isinstance(dormant, list):
-        raise ValueError("stale and dormant must be lists")
-    stale_lines = "\n".join(
-        (
-            f"- `{entry.get('id')}` ({entry.get('class')})"
-            if isinstance(entry, dict)
-            else f"- `{entry}`"
-        )
-        for entry in stale
+    if (
+        not isinstance(stale, list)
+        or not isinstance(probe_observations, list)
+        or not isinstance(dormant, list)
+    ):
+        raise ValueError("stale, probe_observations, and dormant must be lists")
+    stale_lines = "\n".join(_probe_entry_line(entry) for entry in stale) or "- none"
+    probe_observation_lines = "\n".join(
+        _probe_entry_line(entry) for entry in probe_observations
     ) or "- none"
     dormant_lines = "\n".join(
         f"- `{suite}` ({_dormant_note(suites.get(suite) or {})})" for suite in dormant
@@ -644,6 +658,15 @@ def generate_report(
             "## Stale task ids",
             "",
             stale_lines,
+            "",
+            "## Probe observations not classified as stale",
+            "",
+            (
+                "These probe outcomes stayed in the scored denominator because they did not "
+                "show that the task's upstream document was stale."
+            ),
+            "",
+            probe_observation_lines,
             "",
             "## Dormant suites",
             "",

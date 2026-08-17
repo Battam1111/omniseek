@@ -396,6 +396,8 @@ def _liveness_probe(task: dict[str, Any], client: httpx.Client) -> dict[str, Any
             probe_class = "rate_limited"
         elif status_code == 408:
             probe_class = "timeout"
+        elif status_code in (401, 403):
+            probe_class = "blocked"
         else:
             probe_class = "alive" if 200 <= status_code < 400 else "dead"
         return {
@@ -407,22 +409,54 @@ def _liveness_probe(task: dict[str, Any], client: httpx.Client) -> dict[str, Any
     except httpx.TimeoutException as exc:
         return {"alive": False, "url": url, "class": "timeout", "error": str(exc)}
     except Exception as exc:
-        return {"alive": False, "url": url, "class": "dead", "error": str(exc)}
+        return {"alive": False, "url": url, "class": "probe_error", "error": str(exc)}
+
+
+def _is_stale_liveness(liveness: dict[str, Any]) -> bool:
+    """Only an observed dead response is evidence that the task itself is stale."""
+    if liveness.get("alive") is True:
+        return False
+    return str(liveness.get("class") or "dead") == "dead"
 
 
 def _stale_entries(
     task_records: dict[str, dict[str, Any]],
     stale_ids: set[str],
-) -> list[dict[str, str]]:
-    entries: list[dict[str, str]] = []
+) -> list[dict[str, Any]]:
+    entries: list[dict[str, Any]] = []
     for task_id in sorted(stale_ids):
         liveness = task_records.get(task_id, {}).get("liveness") or {}
-        entries.append(
-            {
-                "id": task_id,
-                "class": str(liveness.get("class") or "dead"),
-            }
-        )
+        entry: dict[str, Any] = {
+            "id": task_id,
+            "class": str(liveness.get("class") or "dead"),
+        }
+        status_code = liveness.get("status_code")
+        if isinstance(status_code, int) and not isinstance(status_code, bool):
+            entry["status_code"] = status_code
+        entries.append(entry)
+    return entries
+
+
+def _probe_observations(
+    task_records: dict[str, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Expose non-stale liveness outcomes that remain in the scored denominator."""
+    entries: list[dict[str, Any]] = []
+    for task_id in sorted(task_records):
+        liveness = task_records[task_id].get("liveness") or {}
+        if liveness.get("alive") or _is_stale_liveness(liveness):
+            continue
+        entry: dict[str, Any] = {
+            "id": task_id,
+            "class": str(liveness.get("class") or "probe_error"),
+        }
+        status_code = liveness.get("status_code")
+        if isinstance(status_code, int) and not isinstance(status_code, bool):
+            entry["status_code"] = status_code
+        error = liveness.get("error")
+        if error:
+            entry["error"] = str(error)
+        entries.append(entry)
     return entries
 
 
@@ -688,6 +722,7 @@ def _result_skeleton(args: argparse.Namespace) -> dict[str, Any]:
         "tasks": {},
         "suites": {},
         "stale": [],
+        "probe_observations": [],
         "dormant": [],
     }
 
@@ -779,11 +814,12 @@ async def run_benchmark(
                 record = task_records.setdefault(task["id"], _task_record(task))
                 probe = _liveness_probe(task, client)
                 record["liveness"] = probe
-                if not probe["alive"]:
+                if _is_stale_liveness(probe):
                     stale_ids.add(task["id"])
     except BaseException as exc:
         raise _phase_error("init", "<liveness>", exc) from None
     result["stale"] = _stale_entries(task_records, stale_ids)
+    result["probe_observations"] = _probe_observations(task_records)
     result["dormant"] = sorted(dormant_suites)
 
     pass_aggregates: list[dict[str, dict[str, Any]]] = []
@@ -933,6 +969,7 @@ async def run_benchmark(
     ]
     result["suites"] = suites_output
     result["stale"] = _stale_entries(task_records, stale_ids)
+    result["probe_observations"] = _probe_observations(task_records)
     result["dormant"] = sorted(dormant_suites)
     result.pop("error", None)
     output = _output_path(args.out, result["run"]["git_sha7"])
@@ -1023,6 +1060,7 @@ def _minimal_result(args: argparse.Namespace) -> dict[str, Any]:
         "tasks": {},
         "suites": {},
         "stale": [],
+        "probe_observations": [],
         "dormant": [],
     }
 
