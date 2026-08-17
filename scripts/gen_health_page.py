@@ -15,6 +15,15 @@ VANTAGE_SENTENCE = (
     "typically reaches more. One probe per source per run; this is a health signal, "
     "not an availability guarantee."
 )
+_SKIPPED_POLICY_DETAILS = {
+    "explicit-only",
+    "requires operator credentials",
+}
+_SKIPPED_BREAKDOWN_FIELDS = {
+    "policy": "skipped_policy",
+    "capability": "skipped_capability",
+    "budget": "skipped_budget",
+}
 
 
 def _number(value: object, label: str) -> int | float:
@@ -33,6 +42,14 @@ def _text(value: object, label: str) -> str:
     if not isinstance(value, str):
         raise ValueError(f"{label} must be a JSON string")
     return value
+
+
+def _skipped_category(detail: str) -> str:
+    if detail in _SKIPPED_POLICY_DETAILS:
+        return "policy"
+    if detail == "sweep budget exhausted":
+        return "budget"
+    return "capability"
 
 
 def _markdown(value: object) -> str:
@@ -88,6 +105,15 @@ def _validate(payload: dict) -> None:
     total = _count(summary.get("total"), "summary.total")
     if total != len(sources):
         raise ValueError("summary.total does not match sources")
+    skipped_actual = Counter(
+        _skipped_category(row["detail"])
+        for row in sources
+        if row["status"] == "skipped"
+    )
+    for category, field in _SKIPPED_BREAKDOWN_FIELDS.items():
+        count = _count(summary.get(field), f"summary.{field}")
+        if count != skipped_actual[category]:
+            raise ValueError(f"summary.{field} does not match sources")
 
 
 def render_page(payload: dict) -> str:
@@ -100,6 +126,11 @@ def render_page(payload: dict) -> str:
             f"Up: {summary['up']} | Degraded: {summary['degraded']} | "
             f"Rate limited: {summary['rate_limited']} | Down: {summary['down']} | "
             f"Skipped: {summary['skipped']} | Total: {summary['total']}"
+        ),
+        (
+            f"Skipped breakdown: policy={summary['skipped_policy']} | "
+            f"capability absent={summary['skipped_capability']} | "
+            f"sweep budget={summary['skipped_budget']}"
         ),
         "",
         f"Generated UTC: {_markdown(payload['generated_utc'])}",
