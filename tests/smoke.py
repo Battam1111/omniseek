@@ -16,12 +16,16 @@ from __future__ import annotations
 import json
 import ipaddress
 import os
+import re as _re
 import socket as _socket
 import sys
 from pathlib import Path
 from urllib.parse import urlsplit
 
 ROOT = Path(__file__).resolve().parents[1]
+for _smoke_stream in (sys.stdout, sys.stderr):
+    if hasattr(_smoke_stream, "reconfigure"):
+        _smoke_stream.reconfigure(encoding="utf-8", errors="replace")
 
 _SMOKE_GUARD_OPT_OUT = "OMNISEEK_SMOKE_ALLOW_NON_LOOPBACK"
 _SMOKE_GUARD_DISABLED = os.environ.get(_SMOKE_GUARD_OPT_OUT) == "1"
@@ -141,6 +145,63 @@ def check(name: str, ok: bool, detail: str = "") -> None:
     print(("  ok   " if ok else "  FAIL ") + name + (f": {detail}" if (detail and not ok) else ""))
     if not ok:
         FAIL.append(f"{name}: {detail}")
+
+
+# D4 truthful-status gates. These use synthetic in-memory probes only, before the broad
+# registry checks below, so they cannot accidentally depend on the network or a live source.
+sys.path.insert(0, str(ROOT / "scripts"))
+sys.path.insert(0, str(ROOT / "bench"))
+from health_sweep import classify_probe as _truth_classify_probe  # noqa: E402
+from run import _is_stale_liveness as _truth_is_stale_liveness  # noqa: E402
+from run import _liveness_probe as _truth_liveness_probe  # noqa: E402
+
+_truth_dependency_detail = "PyMuPDF missing: No module named 'fitz'"
+_truth_dependency_status, _truth_dependency_text = _truth_classify_probe(
+    None,
+    _truth_dependency_detail,
+)
+_truth_dependency_row = {
+    "status": _truth_dependency_status,
+    "detail": _truth_dependency_text,
+}
+_truth_dependency_fingerprint = _re.compile(
+    r"No module named|ModuleNotFoundError|missing:",
+    _re.IGNORECASE,
+)
+check(
+    "D4 gate 1: dependency absence never publishes a down health row",
+    not (
+        _truth_dependency_row["status"] == "down"
+        and _truth_dependency_fingerprint.search(_truth_dependency_row["detail"])
+    ),
+    f"status={_truth_dependency_row['status']} detail={_truth_dependency_row['detail']}",
+)
+check(
+    "D4 gate 2: classify_probe(None, ...) returns skipped",
+    _truth_classify_probe(None, "capability absent here")[0] == "skipped",
+)
+
+
+class _Truth403Response:
+    status_code = 403
+
+
+class _Truth403Client:
+    def get(self, _url):
+        return _Truth403Response()
+
+
+_truth_liveness = _truth_liveness_probe(
+    {"liveness_probe": {"url": "https://example.invalid/probe"}},
+    _Truth403Client(),
+)
+check(
+    "D4 gate 3: HTTP 403 is blocked and does not enter stale denominator",
+    _truth_liveness["class"] == "blocked"
+    and _truth_liveness["status_code"] == 403
+    and not _truth_is_stale_liveness(_truth_liveness),
+    f"probe={_truth_liveness}",
+)
 
 
 if _SMOKE_GUARD_DISABLED:
