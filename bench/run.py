@@ -25,7 +25,10 @@ from judges import judge, wilson_interval
 from schema import load_tasks
 
 
-DEFAULT_SUITES = "s3-crosslingual,s4-depth,s5-scholar,s6-memory"
+# s3-crosslingual is withdrawn, not merely unlisted: its tasks were constructed in an order that
+# put our own catalog inside the judge. See bench/RETIRED-s3-crosslingual.md. Requesting a suite
+# with no tasks is a HarnessError, so a withdrawn suite has to leave this list too.
+DEFAULT_SUITES = "s4-depth,s5-scholar,s6-memory"
 WARMUP_TIMEOUT = 600.0
 WARMUP_QUERY = "benchmark neutral warmup"
 TEARDOWN_TIMEOUT = 15.0

@@ -6,7 +6,7 @@ on:
       suites:
         description: Comma-separated claim-verification suites
         required: true
-        default: s3-crosslingual,s4-depth,s5-scholar,s6-memory
+        default: s4-depth,s5-scholar,s6-memory
       reps:
         description: Repetitions per task
         required: true
