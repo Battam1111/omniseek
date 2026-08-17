@@ -1,14 +1,14 @@
-# OmniSeek Bench: design charter
+# OmniSeek Claim-Verification Suite: design charter
 
 OmniSeek's README makes a small number of falsifiable claims: it transcribes speech nobody
 wrote down, it reads text baked into pixels, it crosses languages, it reaches evidence buried
 deep in threads and documents, it returns provenance you can re-check, and it remembers what
-it has already seen. This benchmark exists to measure exactly those claims and nothing else.
+it has already seen. This claim-verification suite exists to measure exactly those claims and nothing else.
 Every design choice below follows from one rule: **the judge must test a claim we actually
 made, on a substrate where the effect is measurable, with a metric whose dimensions match the
 claim.**
 
-## What this benchmark is not
+## What this suite is not
 
 - **Not a competitor leaderboard.** Our task suites are constructed, by design, around
   modalities that plain web search does not serve. Scoring third-party search APIs on tasks
@@ -38,7 +38,7 @@ claim.**
 | S5 scholar graph | structured scholarly evidence | `omniseek_coauthors` / `omniseek_paper_enrich` | core |
 | S6 memory | remembers, deduplicates, traces provenance | `_meta` contract of repeat runs | core |
 
-Suites declare their required extras, which makes the benchmark double as an honest
+Suites declare their required extras, which makes the claim-verification suite double as an honest
 capability-tier map: a core-only install is expected to pass core suites and to report the
 others as "sense dormant", not as failures.
 
@@ -82,7 +82,7 @@ match in top-k (k pre-registered per suite, default 5), or field assertions on `
 There is no LLM judge anywhere in the harness. Where ASR output varies, the fallback judge
 is a character-similarity ratio against the target span with a pre-registered threshold,
 which is still a pure computation. Judge code lives beside the tasks and is part of the
-versioned benchmark: changing a judge is a benchmark version bump, never a silent edit.
+versioned claim-verification suite: changing a judge is a suite version bump, never a silent edit.
 
 ## Statistics
 
@@ -109,7 +109,7 @@ Live sources are noisy, so single runs are noise:
   denominator is forbidden; the stale list is part of the results.
 - The task set is versioned (`bench-v1.0`, `v1.1`, ...). New tasks enter with the wave that
   authored them; stale tasks are retired by id in the changelog, never edited in place.
-- Tasks are public plaintext by choice. This benchmark measures retrieval reach, not model
+- Tasks are public plaintext by choice. This claim-verification suite measures retrieval reach, not model
   knowledge, so training-set contamination does not let anyone cheat it; reproducibility is
   worth more here than secrecy. The real overfitting risk is us tuning adapters to our own
   tasks, which is exactly why the construction standard and the resistance-evidence format
@@ -131,15 +131,15 @@ Live sources are noisy, so single runs are noise:
   design makes impossible.
 - The harness runs from a plain checkout: install, run one command, get the same artifact.
   It is not part of the shipped wheel; it lives in the repo.
-- Conflict-of-interest note, printed on the results page: this benchmark is written and run
+- Conflict-of-interest note, printed on the results page: this claim-verification suite is written and run
   by OmniSeek's maintainers. Its queries were selected to demonstrate modality reach. If you
   can break it, or author tasks in this format that OmniSeek fails, we want to see them:
   open an issue with the task file.
 
 ## Relation to the source-health page
 
-The benchmark answers "can the claims be demonstrated on demand". The weekly source-health
+The claim-verification suite answers "can the claims be demonstrated on demand". The weekly source-health
 sweep answers "is the catalog alive this week". They share the vantage-point disclosure and
-the generated-not-hand-written rule, but they are separate artifacts: a benchmark run failing
+the generated-not-hand-written rule, but they are separate artifacts: a claim-verification run failing
 because one upstream was down that hour is a health fact, not a capability fact, and the
 stale/skip taxonomy exists to keep those two ledgers from contaminating each other.

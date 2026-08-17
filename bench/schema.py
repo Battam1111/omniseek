@@ -1,4 +1,4 @@
-"""Validation and canonicalization for published benchmark tasks."""
+"""Validation and canonicalization for published claim-verification tasks."""
 
 from __future__ import annotations
 

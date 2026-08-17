@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       suites:
-        description: Comma-separated benchmark suites
+        description: Comma-separated claim-verification suites
         required: true
         default: s3-crosslingual,s4-depth,s5-scholar,s6-memory
       reps:
@@ -35,7 +35,7 @@ jobs:
         run: pip install ".[pdf,recall,ocr]"
       - name: Identify to polite-pool upstreams
         run: echo "OMNISEEK_CONTACT_EMAIL=101111615+Battam1111@users.noreply.github.com" >> "$GITHUB_ENV"
-      - name: Run benchmark
+      - name: Run claim-verification suite
         env:
           PYTHONUTF8: "1"
           PYTHONIOENCODING: "utf-8"
@@ -44,7 +44,7 @@ jobs:
           --suites "${{ inputs.suites }}"
           --reps "${{ inputs.reps }}"
           --vantage github-actions
-      - name: Upload benchmark JSON
+      - name: Upload claim-verification JSON
         uses: actions/upload-artifact@v5
         with:
           name: omniseek-benchmark-results
@@ -90,7 +90,7 @@ jobs:
           cache: pip
       - name: Install package
         run: pip install .
-      - name: Run offline benchmark tests
+      - name: Run offline claim-verification tests
         env:
           PYTHONUTF8: "1"
           PYTHONIOENCODING: "utf-8"

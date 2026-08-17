@@ -1,4 +1,4 @@
-"""Render the generated benchmark Markdown page from one results JSON file."""
+"""Render the generated claim-verification Markdown page from one results JSON file."""
 
 from __future__ import annotations
 
@@ -198,9 +198,9 @@ def render_results_svg(results: dict[str, Any], theme: str = "light") -> str:
             f'viewBox="0 0 {_CHART_WIDTH} {height}" '
             'font-family="Segoe UI, Helvetica, Arial, sans-serif">'
         ),
-        "<title>OmniSeek benchmark: pooled pass rate by suite</title>",
+        "<title>OmniSeek claim-verification: pooled pass rate by suite</title>",
         (
-            "<desc>One row per benchmark suite. The filled bar is that suite's pooled "
+            "<desc>One row per claim-verification suite. The filled bar is that suite's pooled "
             "pass rate, drawn on a track that spans a pass rate of zero at its left edge "
             "to one at its right edge. The bracket across the bar spans the Wilson "
             "interval. The text on the right is passes over attempts and the rate, plus a "
@@ -214,7 +214,7 @@ def render_results_svg(results: dict[str, Any], theme: str = "light") -> str:
         ),
         (
             f'<text x="{_LABEL_X}" y="34" font-size="19" font-weight="600" '
-            f'fill="{palette["text"]}">OmniSeek benchmark: pooled pass rate by suite</text>'
+            f'fill="{palette["text"]}">OmniSeek claim-verification: pooled pass rate by suite</text>'
         ),
         (
             f'<text x="{_LABEL_X}" y="58" font-size="13" fill="{palette["muted"]}">'
@@ -346,7 +346,7 @@ def render_results_svg(results: dict[str, Any], theme: str = "light") -> str:
 
 
 # Why a suite can carry no web-search receipt at all. These are scope statements from the
-# benchmark charter, not gaps: neither suite has a plain web result that a baseline could
+# claim-verification charter, not gaps: neither suite has a plain web result that a baseline could
 # have been recorded against.
 _NO_RECEIPT_REASONS = {
     "s5-scholar": (
@@ -571,7 +571,7 @@ _CHART_PICTURE = [
     "<picture>",
     '  <source media="(prefers-color-scheme: dark)" srcset="results-dark.svg">',
     (
-        '  <img src="results-light.svg" alt="Horizontal bar chart, one row per benchmark '
+        '  <img src="results-light.svg" alt="Horizontal bar chart, one row per claim-verification '
         "suite: the pooled pass rate as a bar, the Wilson interval as a bracket across it, "
         'and a dormant sense reported as dormant rather than as a zero bar.">'
     ),
@@ -627,7 +627,7 @@ def generate_report(
 
     report = "\n".join(
         [
-            "# OmniSeek benchmark results",
+            "# OmniSeek claim-verification results",
             "",
             *_CHART_PICTURE,
             "",

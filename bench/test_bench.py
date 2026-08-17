@@ -1,4 +1,4 @@
-"""Offline tests for the benchmark harness."""
+"""Offline tests for the claim-verification harness."""
 
 from __future__ import annotations
 
@@ -1158,7 +1158,7 @@ class VisualizationContractTests(unittest.TestCase):
             "https://raw.githubusercontent.com/Battam1111/omniseek/health-data/bench/latest.json",
             html,
         )
-        self.assertIn("Unable to load benchmark results", html)
+        self.assertIn("Unable to load claim-verification results", html)
         self.assertIn("health-data", html)
         self.assertIn('id="chart"', html)
         self.assertIn('id="baseline"', html)

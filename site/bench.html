@@ -3,10 +3,10 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>OmniSeek benchmark results</title>
-<meta name="description" content="The latest published OmniSeek benchmark run: pass rate per suite with its Wilson interval, stale tasks, dormant senses, and the recorded reachability baseline.">
-<meta property="og:title" content="OmniSeek benchmark results">
-<meta property="og:description" content="The latest published OmniSeek benchmark run, rendered live from the published results JSON.">
+<title>OmniSeek claim-verification results</title>
+<meta name="description" content="The latest published OmniSeek claim-verification run: pass rate per suite with its Wilson interval, stale tasks, dormant senses, and the recorded reachability baseline.">
+<meta property="og:title" content="OmniSeek claim-verification results">
+<meta property="og:description" content="The latest published OmniSeek claim-verification run, rendered live from the published results JSON.">
 <meta property="og:type" content="website">
 <link rel="icon" href="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/logo-dark.svg" type="image/svg+xml">
 <style>
@@ -62,7 +62,7 @@
       <circle cx="100" cy="100" r="23" fill="none" stroke="#2563EB" stroke-width="15" stroke-linecap="round" stroke-dasharray="116 28" transform="rotate(195 100 100)"/>
       <circle cx="100" cy="100" r="8" fill="#F59E0B"/>
     </svg>
-    <h1>Benchmark results</h1>
+    <h1>Claim-verification results</h1>
     <p class="lede">Every number on this page is read from the last published run at load time. Nothing here is typed by hand, so when a run has not been published this page says so instead of showing you an old number.</p>
     <div class="btns">
       <a class="btn primary" href="index.html">OmniSeek</a>
@@ -74,7 +74,7 @@
   <p id="loading" class="state">Loading the published results.</p>
 
   <p id="failed" class="state bad" hidden>
-    Unable to load benchmark results, so this page is showing nothing rather than something stale.
+    Unable to load claim-verification results, so this page is showing nothing rather than something stale.
     <a id="failed-link" href="https://github.com/Battam1111/omniseek/tree/health-data/bench">Read the published data branch directly.</a>
   </p>
 
@@ -93,7 +93,7 @@
 
     <section class="card">
       <h2>Stale tasks and dormant senses</h2>
-      <p class="hint">A stale task is dropped from its denominator and named here, so a denominator never shrinks silently. A dormant sense is an optional extra that was not installed on the machine that ran the benchmark, which is a capability fact and not a failed task.</p>
+      <p class="hint">A stale task is dropped from its denominator and named here, so a denominator never shrinks silently. A dormant sense is an optional extra that was not installed on the machine that ran the claim-verification suite, which is a capability fact and not a failed task.</p>
       <h3>Stale tasks</h3>
       <ul id="stale"></ul>
       <h3>Dormant suites</h3>
@@ -236,8 +236,8 @@
     root.setAttribute("width", String(CHART.width));
     root.setAttribute("height", String(height));
     root.setAttribute("font-family", "Segoe UI, Helvetica, Arial, sans-serif");
-    svg(root, "title", {}, "OmniSeek benchmark: pooled pass rate by suite");
-    svg(root, "desc", {}, "One row per benchmark suite. The filled bar is that suite's "
+    svg(root, "title", {}, "OmniSeek claim-verification: pooled pass rate by suite");
+    svg(root, "desc", {}, "One row per claim-verification suite. The filled bar is that suite's "
       + "pooled pass rate, on a track spanning a pass rate of zero at its left edge to one "
       + "at its right edge. The bracket across the bar spans the Wilson interval. A suite "
       + "whose required sense is not installed is drawn as a dormant row rather than as a "
@@ -373,7 +373,7 @@
     });
   }
 
-  // Scope statements from the benchmark charter, kept in step with bench/gen_report.py.
+  // Scope statements from the claim-verification charter, kept in step with bench/gen_report.py.
   var NO_RECEIPT_REASONS = {
     "s5-scholar": "the suite tests structured scholarly evidence, and its ground truth is "
       + "re-fetched from the upstream source of record at judge time, so there is no "

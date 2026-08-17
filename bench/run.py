@@ -1,4 +1,4 @@
-"""Run the OmniSeek benchmark against a real MCP server."""
+"""Run the OmniSeek claim-verification suite against a real MCP server."""
 
 from __future__ import annotations
 
@@ -48,7 +48,7 @@ EXTRA_IMPORTS = {
 
 
 class HarnessError(RuntimeError):
-    """Raised for errors in the benchmark harness itself."""
+    """Raised for errors in the claim-verification harness itself."""
 
 
 class HarnessPhaseError(HarnessError):
@@ -364,7 +364,7 @@ class MCPInvoker:
 
     async def warmup(self) -> float:
         # The cold first live call's initialization cost is a documented property of the
-        # server, and this benchmark measures retrieval, not boot.
+        # server, and this claim-verification suite measures retrieval, not boot.
         started = time.perf_counter()
         calls = [
             ("omniseek_sources", {}),
@@ -992,13 +992,13 @@ def _handle_harness_failure(
             "write-out",
             "<partial-results>",
         )
-        print(f"benchmark harness error: {error['detail']}", file=sys.stderr)
+        print(f"claim-verification harness error: {error['detail']}", file=sys.stderr)
         print(
-            f"benchmark partial write error: {write_error['detail']}",
+            f"claim-verification partial write error: {write_error['detail']}",
             file=sys.stderr,
         )
         return 1
-    print(f"benchmark harness error: {error['detail']}", file=sys.stderr)
+    print(f"claim-verification harness error: {error['detail']}", file=sys.stderr)
     print(f"partial results: {partial}", file=sys.stderr)
     return 1
 

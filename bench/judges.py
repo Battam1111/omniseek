@@ -1,4 +1,4 @@
-"""Pure benchmark judges plus explicitly isolated scholarly refetches."""
+"""Pure claim-verification judges plus explicitly isolated scholarly refetches."""
 
 from __future__ import annotations
 
