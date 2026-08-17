@@ -156,10 +156,10 @@ class ZhihuAdapter:
             media=images,
         )
 
-    def health_check(self) -> tuple[bool, str]:
+    def health_check(self) -> tuple[Optional[bool], str]:
         cdp_ok, cdp_msg = cdp_health()
         if not cdp_ok:
-            return False, f"CDP not reachable: {cdp_msg}"
+            return None, f"CDP not reachable: {cdp_msg}"
         try:
             page_url = cdp_call(lambda p: p.url, initial_url="https://www.zhihu.com/")
             if "/signin" in page_url or "/login" in page_url:

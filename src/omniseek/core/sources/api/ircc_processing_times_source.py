@@ -222,16 +222,16 @@ class IRCCProcessingTimesAdapter:
     def fetch_url(self, url: str) -> Optional[Document]:
         return None  # structured lookup source; reach it via search
 
-    def health_check(self) -> tuple[bool, str]:
+    def health_check(self) -> tuple[Optional[bool], str]:
         # LIGHT: never a full CDP fetch in a health probe (the P19 lesson). Browser
         # liveness + whatever the cache holds is an honest signal.
         try:
             from omniseek.core.sources.walled._cdp import cdp_health
             alive, msg = cdp_health()
         except Exception as exc:  # noqa: BLE001
-            return False, f"CDP unavailable: {exc}"
+            return None, f"CDP unavailable: {exc}"
         if not alive:
-            return False, f"CDP down: {msg}"
+            return None, f"CDP down: {msg}"
         cached = cache.get(cache.make_key("ircc_processing_times", "tables", "v1"))
         if cached:
             n = sum(len(v) for v in (cached.get("country") or {}).values() if isinstance(v, dict))
