@@ -26,7 +26,7 @@ from schema import load_tasks
 
 
 # s3-crosslingual is withdrawn, not merely unlisted: its tasks were constructed in an order that
-# put our own catalog inside the judge. See bench/RETIRED-s3-crosslingual.md. Requesting a suite
+# put our own catalog inside the judge. See bench/RECONSTRUCTION-s3.md. Requesting a suite
 # with no tasks is a HarnessError, so a withdrawn suite has to leave this list too.
 DEFAULT_SUITES = "s4-depth,s5-scholar,s6-memory"
 WARMUP_TIMEOUT = 600.0
