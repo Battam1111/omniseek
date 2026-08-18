@@ -147,6 +147,30 @@ def check(name: str, ok: bool, detail: str = "") -> None:
         FAIL.append(f"{name}: {detail}")
 
 
+def _unpinned_test_imports(root: Path) -> list[str]:
+    """Read test files as text and find omniseek imports that precede the src pin."""
+    import_pattern = _re.compile(r"(?m)^\s*(?:from|import)\s+omniseek\b")
+    pin_text = 'sys.path.insert(0, str(ROOT / "src"))'
+    offenders = []
+    for path in sorted((root / "tests").glob("test_*.py")):
+        text = path.read_text(encoding="utf-8")
+        first_import = import_pattern.search(text)
+        if first_import is None:
+            continue
+        pin_at = text.find(pin_text)
+        if pin_at < 0 or pin_at > first_import.start():
+            offenders.append(str(path.relative_to(root)))
+    return offenders
+
+
+_test_import_pin_offenders = _unpinned_test_imports(ROOT)
+check(
+    "D4 gate 4: every test import pins src before omniseek",
+    not _test_import_pin_offenders,
+    ", ".join(_test_import_pin_offenders),
+)
+
+
 # D4 truthful-status gates. These use synthetic in-memory probes only, before the broad
 # registry checks below, so they cannot accidentally depend on the network or a live source.
 sys.path.insert(0, str(ROOT / "scripts"))

@@ -218,7 +218,7 @@ class BaseAPIAdapter:
         this.
         """
         if not self.health_probe_url:
-            return False, "no health_probe_url configured"
+            return None, "our adapter configuration is missing health_probe_url"
         resp = http.get(self.health_probe_url, timeout=10)
         if resp is None:
             return False, "request failed (timeout / network / oversize)"

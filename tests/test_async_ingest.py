@@ -3,8 +3,12 @@ from __future__ import annotations
 import asyncio
 import threading
 import unittest
+import sys
+from pathlib import Path
 from unittest.mock import patch
 
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "src"))
 from omniseek.core import fetcher, recall
 from omniseek.core.normalize import Document
 

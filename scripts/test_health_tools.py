@@ -42,6 +42,10 @@ class HealthSweepTests(unittest.TestCase):
             self.sweep.classify_probe(False, "HTTP 503 upstream unavailable"),
             ("down", "HTTP 503 upstream unavailable"),
         )
+        self.assertEqual(
+            self.sweep.classify_probe(False, "HTTP 403 Forbidden"),
+            ("blocked", "HTTP 403 Forbidden"),
+        )
 
     def test_classifies_unavailable_probe_as_skipped(self) -> None:
         self.assertEqual(
@@ -178,6 +182,7 @@ class HealthSweepTests(unittest.TestCase):
                 "up": 2,
                 "degraded": 1,
                 "rate_limited": 1,
+                "blocked": 0,
                 "down": 1,
                 "skipped": 3,
                 "skipped_policy": 1,
@@ -221,6 +226,7 @@ class HealthPageTests(unittest.TestCase):
                 "up": 1,
                 "degraded": 0,
                 "rate_limited": 0,
+                "blocked": 0,
                 "down": 1,
                 "skipped": 0,
                 "skipped_policy": 0,
@@ -243,9 +249,10 @@ class HealthPageTests(unittest.TestCase):
         self.assertIn("OmniSeek version: 0.1.3", page)
         self.assertIn("Sweep duration: 1.25 seconds", page)
         self.assertIn(
-            "Up: 1 | Degraded: 0 | Rate limited: 0 | Down: 1 | Skipped: 0 | Total: 2",
+            "Up: 1 | Degraded: 0 | Rate limited: 0 | Blocked: 0 | Down: 1 | Skipped: 0 | Total: 2",
             page,
         )
+        self.assertIn("Blocked means the source answered but refused this vantage or credential", page)
         self.assertIn(
             "Skipped breakdown: policy=0 | capability absent=0 | sweep budget=0",
             page,
