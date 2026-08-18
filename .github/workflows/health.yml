@@ -46,7 +46,7 @@ jobs:
             "$RUNNER_TEMP/health-latest.json" \
             --out "$RUNNER_TEMP/health-README.md"
       - name: Upload health JSON
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: omniseek-health-latest
           path: ${{ runner.temp }}/health-latest.json
