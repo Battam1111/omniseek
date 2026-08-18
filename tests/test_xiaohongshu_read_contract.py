@@ -3,6 +3,10 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+import sys
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "src"))
 
 # The note flow returns FIVE values: (status, html, images, cdata, (video_url, origin)). A stub
 # whose arity or slot-5 SHAPE is wrong does NOT exercise the branch under test: it raises inside

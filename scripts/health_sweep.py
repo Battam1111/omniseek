@@ -17,7 +17,7 @@ from typing import Callable, Optional
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-STATUSES = ("up", "degraded", "rate_limited", "down", "skipped")
+STATUSES = ("up", "degraded", "rate_limited", "blocked", "down", "skipped")
 BUDGET_DETAIL = "sweep budget exhausted"
 DETAIL_CAP = 200
 _SKIPPED_POLICY_DETAILS = {
@@ -28,6 +28,7 @@ _RATE_LIMIT_RE = re.compile(
     r"(?:\b429\b|rate[\s_-]*limit(?:ed|ing)?|throttl(?:e|ed|ing)|too many requests)",
     re.IGNORECASE,
 )
+_BLOCKED_RE = re.compile(r"\b(?:401|403)\b")
 _CREDENTIAL_ALIASES = {
     "discord_communities": ("discord",),
     "llm_leaderboard": ("artificial_analysis",),
@@ -44,6 +45,10 @@ def classify_probe(healthy: Optional[bool], message: object) -> tuple[str, str]:
     detail = _detail_head(message)
     if healthy is None:
         return "skipped", detail
+    # A source cannot be healthy AND refused, so blocked is gated on a failure. rate_limited is
+    # deliberately NOT gated the same way: a source can answer fine while throttling us.
+    if healthy is not True and _BLOCKED_RE.search(detail):
+        return "blocked", detail
     if _RATE_LIMIT_RE.search(detail):
         return "rate_limited", detail
     if healthy is True and "degraded" in detail.lower():

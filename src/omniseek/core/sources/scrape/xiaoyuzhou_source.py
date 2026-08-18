@@ -25,7 +25,7 @@ from urllib.parse import urlparse
 import anyio
 import httpx
 
-from omniseek.core import auth, cache, http
+from omniseek.core import auth, cache, diag, http
 from omniseek.core.normalize import Document, jsonsafe, keyword_score_filter
 
 logger = logging.getLogger(__name__)
@@ -97,12 +97,13 @@ class XiaoyuzhouAdapter:
             return cached
         try:
             r = httpx.get(f"{BASE}/podcast/{pid}", headers={"User-Agent": UA}, timeout=20, follow_redirects=True)
+            r.raise_for_status()
             pod = _next_data(r.text).get("podcast", {}) or {}
             title = pod.get("title") or name
             eps = pod.get("episodes") or []
         except Exception as exc:  # noqa: BLE001
             logger.warning("xiaoyuzhou fetch failed for %s (%s): %s", name, pid, exc)
-            return []
+            raise
         docs = [self._ep_to_doc(e, title) for e in eps if isinstance(e, dict) and e.get("eid")]
         if docs:
             cache.set_docs(key, docs, ttl=CACHE_TTL)
@@ -128,13 +129,13 @@ class XiaoyuzhouAdapter:
             html = await http.aget_text(
                 f"{BASE}/podcast/{pid}", headers={"User-Agent": UA}, timeout=20)
             if html is None:
-                return []  # egress failed (http.aget_text already logged + diag.note'd) -> [] like sync
+                raise RuntimeError(f"xiaoyuzhou request returned no content for {pid}")
             pod = _next_data(html).get("podcast", {}) or {}
             title = pod.get("title") or name
             eps = pod.get("episodes") or []
         except Exception as exc:  # noqa: BLE001
             logger.warning("xiaoyuzhou fetch failed for %s (%s): %s", name, pid, exc)
-            return []
+            raise
         docs = [self._ep_to_doc(e, title) for e in eps if isinstance(e, dict) and e.get("eid")]
         if docs:
             await anyio.to_thread.run_sync(  # disk write OFF loop
@@ -169,10 +170,24 @@ class XiaoyuzhouAdapter:
 
     def search(self, query: str, limit: int = 10) -> list[Document]:
         docs: list[Document] = []
+        failures: list[tuple[str, BaseException]] = []
         for p in self._podcasts():
             pid = p.get("id")
             if pid:
-                docs.extend(self._fetch_podcast(pid, p.get("name", pid)))
+                name = p.get("name", pid)
+                try:
+                    docs.extend(self._fetch_podcast(pid, name))
+                except Exception as exc:  # noqa: BLE001
+                    failures.append((name, exc))
+        if failures and not docs:
+            raise failures[0][1]
+        if failures:
+            diag.note(
+                "xiaoyuzhou.partial",
+                body=f"partial results: {len(docs)} documents; "
+                f"{len(failures)} podcast fetches failed",
+                exc=failures[0][1],
+            )
         q = (query or "").strip()
         if q:
             return keyword_score_filter(docs, q)[:limit]
@@ -189,15 +204,29 @@ class XiaoyuzhouAdapter:
             within), keeping the keyword_score_filter / date-sort inputs byte-identical.
         Everything after the fetch (the ``keyword_score_filter`` on a non-empty query, else the
         date-desc sort, then ``[:limit]``) is pure CPU on the loop, byte-identical to ``search``."""
+        podcasts = self._podcasts()
         tasks = []
-        for p in self._podcasts():
+        for p in podcasts:
             pid = p.get("id")
             if pid:
                 tasks.append(self._afetch_podcast(pid, p.get("name", pid)))
-        per_pod = await asyncio.gather(*tasks)
+        per_pod = await asyncio.gather(*tasks, return_exceptions=True)
         docs: list[Document] = []
-        for lst in per_pod:
-            docs.extend(lst)
+        failures: list[tuple[str, BaseException]] = []
+        for p, result in zip((p for p in podcasts if p.get("id")), per_pod):
+            if isinstance(result, BaseException):
+                failures.append((p.get("name", p.get("id", "?")), result))
+            else:
+                docs.extend(result)
+        if failures and not docs:
+            raise failures[0][1]
+        if failures:
+            diag.note(
+                "xiaoyuzhou.partial",
+                body=f"partial results: {len(docs)} documents; "
+                f"{len(failures)} podcast fetches failed",
+                exc=failures[0][1],
+            )
         q = (query or "").strip()
         if q:
             return keyword_score_filter(docs, q)[:limit]

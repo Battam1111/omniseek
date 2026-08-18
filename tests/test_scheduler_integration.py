@@ -3,7 +3,10 @@ import unittest
 import subprocess
 from pathlib import Path
 from unittest import mock
+import sys
 
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "src"))
 from omniseek.core import jobs
 from omniseek.core.contracts.heartbeat import ContractArtifacts
 from omniseek.core.recall import writer

@@ -25,7 +25,10 @@ loading it keeps this suite outside the hazard entirely.
 import ast
 import unittest
 from pathlib import Path
+import sys
 
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "src"))
 from omniseek.core.sources.walled import _cdp
 
 SRC = Path(__file__).resolve().parents[1] / "src" / "omniseek" / "core" / "sources" / "walled"

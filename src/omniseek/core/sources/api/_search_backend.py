@@ -113,7 +113,7 @@ def _ddg(query: str, n: int) -> list[dict]:
             )
         except Exception as exc:  # noqa: BLE001
             logger.warning("ddg request failed: %s", exc)
-            return []
+            raise RuntimeError(f"DDG request failed: {exc}") from exc
         if r.status_code == 200:
             soup = BeautifulSoup(r.text, "lxml")
             out: list[dict] = []
@@ -130,8 +130,8 @@ def _ddg(query: str, n: int) -> list[dict]:
         if r.status_code == 202:  # DDG soft rate-limit — pace and retry
             time.sleep(2.0 + attempt * 2.0)
             continue
-        return []
-    return []
+        raise RuntimeError(f"DDG request failed: HTTP {r.status_code}")
+    raise RuntimeError("DDG request failed after 3 attempts: HTTP 202")
 
 
 def search_web(query: str, n: int = 8) -> list[dict]:
@@ -220,7 +220,7 @@ async def _addg(query: str, n: int) -> list[dict]:
             )
         except Exception as exc:  # noqa: BLE001
             logger.warning("ddg request failed: %s", exc)
-            return []
+            raise RuntimeError(f"DDG request failed: {exc}") from exc
         if r.status_code == 200:
             soup = BeautifulSoup(r.text, "lxml")  # pure CPU, on the loop
             out: list[dict] = []
@@ -237,8 +237,8 @@ async def _addg(query: str, n: int) -> list[dict]:
         if r.status_code == 202:  # DDG soft rate-limit — pace and retry
             await anyio.sleep(2.0 + attempt * 2.0)
             continue
-        return []
-    return []
+        raise RuntimeError(f"DDG request failed: HTTP {r.status_code}")
+    raise RuntimeError("DDG request failed after 3 attempts: HTTP 202")
 
 
 async def asearch_web(query: str, n: int = 8) -> list[dict]:

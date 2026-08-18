@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Optional
 
 
-STATUSES = ("up", "degraded", "rate_limited", "down", "skipped")
+STATUSES = ("up", "degraded", "rate_limited", "blocked", "down", "skipped")
 VANTAGE_SENTENCE = (
     "Checked from GitHub Actions runners; a residential or maintainer deployment "
     "typically reaches more. One probe per source per run; this is a health signal, "
@@ -124,8 +124,13 @@ def render_page(payload: dict) -> str:
         "",
         (
             f"Up: {summary['up']} | Degraded: {summary['degraded']} | "
-            f"Rate limited: {summary['rate_limited']} | Down: {summary['down']} | "
+            f"Rate limited: {summary['rate_limited']} | Blocked: {summary['blocked']} | "
+            f"Down: {summary['down']} | "
             f"Skipped: {summary['skipped']} | Total: {summary['total']}"
+        ),
+        (
+            "Blocked means the source answered but refused this vantage or credential; "
+            "it is not counted as Down."
         ),
         (
             f"Skipped breakdown: policy={summary['skipped_policy']} | "

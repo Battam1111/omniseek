@@ -2,9 +2,13 @@ import asyncio
 import threading
 import unittest
 from unittest.mock import patch
+import sys
+from pathlib import Path
 
 import anyio
 
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "src"))
 from omniseek import server
 from omniseek.core import fetcher
 
