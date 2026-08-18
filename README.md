@@ -31,14 +31,22 @@ The answer is sitting in minute 47 of a podcast, three replies deep in a comment
 
 Search gives your agent indexed pages, in one language, in text, and stops there.
 
-OmniSeek keeps seeking: through languages, logins, comment threads, audio, and pixels, all on your machine.
+OmniSeek gives it the senses to keep going: through languages, logins, comment threads, audio, and pixels, all on your machine.
 
 <div align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="assets/demo-en-dark.png">
-    <img src="assets/demo-en-light.png" alt="One real investigation: an English question about a changed rule. Search quotes the rule and stops; OmniSeek keeps seeking and comes back with a Chinese explainer transcribed, login-walled first-person timelines, the workaround buried in a comment thread, and the dissenting video note, each line attributed.">
+    <img src="assets/demo-en-light.png" alt="One real investigation, drawn as a descent through three layers. Layer one, written down and in reach: plain search quotes the rule and stops against a buffer stop. Layer two, written down but out of reach: login-walled first-person timelines, and the workaround buried in a comment thread. Layer three, never written down: a Chinese explainer transcribed from audio, and a video note read from pixels. The seek finds a different opening in each layer and arrives at the answer.">
   </picture>
 </div>
+
+What each layer gave back, verbatim:
+
+- **Written down, and in reach.** Headlines, official FAQ, top blogs, all one voice: *"From 2026, F-1 admission is limited to a 4-year initial period; renewal in a third country remains possible."* All quote the same rule. None of them have done it.
+- **Written down, but out of reach.** Three first-person threads on 1point3acres, behind your own login: **Bangkok**, booked to passport in 25 days, interview to approval in 30 minutes; **Milan**, a month-long fight for a slot, visa issued for 5 years; **Tokyo**, *"silky-smooth"*. Under the Milan post the author comes back in the comments: *"Book any late slot first, then email the consulate to expedite. For one F-1 applicant it worked."* One person's experience, not official guidance.
+- **Never written down.** A Chinese explainer video on bilibili, transcribed locally: the *"4-year cap"* in the headlines is the initial period, extensions moved desks rather than vanishing. A rednote video note whose caption is four hashtags, frames and speech read locally: a 212(a)(6)(C) refusal abroad, a misrepresentation finding, can nearly close the F-1 road.
+
+Plain search quoted the rule and stopped. The people who had lived it held the timelines, the workaround, and the risk. OmniSeek also named the sources it held back, each with the exact call to drill it.
 
 It hears (local bilingual ASR, no cloud), sees (images and video frames, in-band), crosses languages (a Chinese query finds English results and vice versa), reads behind login walls (your credentials, your machine, off by default), and remembers (persistent retrieval memory plus a typed, source-traced evidence graph).
 
