@@ -199,10 +199,27 @@ echo "  [3/6] syncing smoke tests + ${#SYNCED_ARTIFACTS[@]} code-bound artifacts
 # PRUNE FIRST. A mirror that only ever ADDS is a mirror that drifts: a suite deleted upstream, or
 # newly excluded here, would sit in the public repo forever, still running, still being believed.
 # Found the hard way: the run that first carried the suites also carried three deployment-bound ones,
-# and after they were excluded they kept failing at import because nothing removes a file. Every
-# tests/test_*.py in the mirror comes from this loop, so clearing them is safe and makes the copy
-# authoritative rather than additive.
+# and after they were excluded they kept failing at import because nothing removes a file.
+#
+# The old comment here claimed "every tests/test_*.py in the mirror comes from this loop, so
+# clearing them is safe". True when written, rotted by 2026-08-19: two suites had been authored
+# DIRECTLY in the mirror, and this prune deleted both. That mattered more than a lost file, because
+# those two suites were the only thing proving the honest-empty behaviour, and the sync had ALSO
+# reverted the engine fixes they cover (they lived in the mirror's src/, which step 1 replaces).
+# Prune first, gate green, work silently undone. The smoke gate below cannot catch it by
+# construction: removing a test makes the suite pass more easily. So the invariant is now declared,
+# and enforced twice: this list survives the prune, and the gate after the copy fails on ANY
+# deleted test file, including one nobody thought to list.
+MIRROR_ONLY_TESTS=(
+  "tests/test_honest_empty.py"     # the honest-empty contract: an empty result cannot mean two things
+  "tests/test_truthful_status.py"  # the public health sweep's classes (healthy/blocked/rate_limited/down)
+)
+for rel in "${MIRROR_ONLY_TESTS[@]}"; do
+  [ -f "$PEN_ROOT/$rel" ] || { echo "FATAL: declared mirror-only test missing: $rel" >&2; exit 1; }
+  cp "$PEN_ROOT/$rel" "$PEN_ROOT/$rel.keep"
+done
 rm -f "$PEN_ROOT"/tests/test_*.py "$PEN_ROOT"/tests/_repo_only.py
+for rel in "${MIRROR_ONLY_TESTS[@]}"; do mv "$PEN_ROOT/$rel.keep" "$PEN_ROOT/$rel"; done
 for rel in "${SYNCED_ARTIFACTS[@]}"; do
   [ -f "$EYE_ROOT/$rel" ] || { echo "FATAL: $rel missing at the eye" >&2; exit 1; }
   mkdir -p "$PEN_ROOT/$(dirname "$rel")"
@@ -210,6 +227,18 @@ for rel in "${SYNCED_ARTIFACTS[@]}"; do
   sed -i "${RENAME[@]}" "$PEN_ROOT/$rel"
 done
 sed -i 's/\bpolyu\b *//g' "$PEN_ROOT/tests/smoke.py"
+
+# DELETION GATE. The smoke gate below proves the surviving tests pass; it says nothing about tests
+# that stopped existing, because a smaller suite passes more easily. This is the only check in the
+# script that can see a test being removed, so it runs before anything is believed.
+_gone="$(git -C "$PEN_ROOT" status --porcelain -- tests/ | sed -n 's/^ *D //p')"
+if [ -n "$_gone" ]; then
+  echo "FATAL: this sync would DELETE tracked test file(s):" >&2
+  echo "$_gone" | sed 's/^/         /' >&2
+  echo "       If a suite is genuinely gone upstream, delete it in its own commit with a reason." >&2
+  echo "       If it is mirror-only, add it to MIRROR_ONLY_TESTS above." >&2
+  exit 1
+fi
 
 # --- 4. (retired) the standalone cron runner script was DELETED at the eye (P6, 2026-07-03):
 #     it was a second, memory-less perception path; the scheduler moved in-process. Its stale
