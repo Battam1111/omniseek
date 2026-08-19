@@ -48,6 +48,9 @@ class VastAIAdapter(BaseScrapeAdapter):
                    "static rates lack.")
     cache_ttl = 1800  # 30m: spot prices move, but not by the second
     kind = "lookup"
+    # Measured 2026-08-19: a healthy probe took 28.3s against the 25s default cap, so it was
+    # recorded as a failure. The offer bundle this endpoint returns is large and slow to build.
+    health_timeout_s = 60
     domains = ["compute"]
     modes = ["STRUCTURE"]
     explicit_only = ("vast_ai: a named compute-price drill (price a GPU / list cheapest offers); "

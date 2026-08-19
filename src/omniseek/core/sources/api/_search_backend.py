@@ -113,6 +113,9 @@ def _ddg(query: str, n: int) -> list[dict]:
             )
         except Exception as exc:  # noqa: BLE001
             logger.warning("ddg request failed: %s", exc)
+            # DDG is the LAST-RESORT backend (search_web falls back to it when Brave is unkeyed),
+            # so its failure is a TOTAL failure of web search. Returning [] published that as
+            # "the web has no such page", which is the one thing a retrieval layer must never say.
             raise RuntimeError(f"DDG request failed: {exc}") from exc
         if r.status_code == 200:
             soup = BeautifulSoup(r.text, "lxml")
@@ -220,6 +223,9 @@ async def _addg(query: str, n: int) -> list[dict]:
             )
         except Exception as exc:  # noqa: BLE001
             logger.warning("ddg request failed: %s", exc)
+            # DDG is the LAST-RESORT backend (search_web falls back to it when Brave is unkeyed),
+            # so its failure is a TOTAL failure of web search. Returning [] published that as
+            # "the web has no such page", which is the one thing a retrieval layer must never say.
             raise RuntimeError(f"DDG request failed: {exc}") from exc
         if r.status_code == 200:
             soup = BeautifulSoup(r.text, "lxml")  # pure CPU, on the loop

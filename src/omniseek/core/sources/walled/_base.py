@@ -19,7 +19,7 @@ through the identical ritual:
 
     def health_check(self):
         ok, msg = cdp_health(cdp_url)
-        if not ok: return False, ...
+        if not ok: return None, ...   # None: CDP absent HERE, so nothing was measured
         <one probe cdp_call>
 
 This base owns that mechanism — the cdp_call wrapping, the try/except→[]
@@ -372,6 +372,11 @@ class BaseCDPAdapter:
         didn't bounce to /signin)."""
         ok, msg = cdp_health(self.cdp_url)
         if not ok:
+            # None, not False. An unreachable CDP Chrome is OUR side being absent: the browser is
+            # not running here, so we never asked the site anything. False published that as
+            # "this source is down", which is how a machine with no CDP reported a dozen live
+            # walled sites as broken. None is the third state, "not measured", and the watchdog
+            # keeps it out of the consecutive-fail counter instead of quarantining them.
             return None, f"CDP not reachable: {msg}"
         try:
             page_url = self._run(lambda p: p.url, self._health_url())

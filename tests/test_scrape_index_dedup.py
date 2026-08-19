@@ -8,11 +8,7 @@ real hits, so the miss looked like a query problem when it was a render flake.
 """
 import unittest
 from unittest.mock import patch
-import sys
-from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "src"))
 from omniseek.core.sources.scrape import news_scraper_source as N
 
 

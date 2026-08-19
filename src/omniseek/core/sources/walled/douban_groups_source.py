@@ -194,10 +194,10 @@ class DoubanGroupsAdapter:
     def fetch_url(self, url: str) -> Optional[Document]:
         return None  # search-only; the topic abstract already carries the gist
 
-    def health_check(self) -> tuple[Optional[bool], str]:
+    def health_check(self) -> tuple[bool, str]:
         cdp_ok, cdp_msg = cdp_health()
         if not cdp_ok:
-            return None, f"CDP not reachable: {cdp_msg}"
+            return False, f"CDP not reachable: {cdp_msg}"
         try:
             docs = self.search("上海租房", limit=3)
             if docs:

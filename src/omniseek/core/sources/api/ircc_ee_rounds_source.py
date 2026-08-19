@@ -86,16 +86,16 @@ class IRCCEERoundsAdapter:
     def fetch_url(self, url: str) -> Optional[Document]:
         return None  # structured lookup source; reach it via search
 
-    def health_check(self) -> tuple[Optional[bool], str]:
+    def health_check(self) -> tuple[bool, str]:
         # LIGHT: never a full CDP fetch in a health probe (the P19 lesson). Browser
         # liveness + whatever the cache holds is an honest signal.
         try:
             from omniseek.core.sources.walled._cdp import cdp_health
             alive, msg = cdp_health()
         except Exception as exc:  # noqa: BLE001
-            return None, f"CDP unavailable: {exc}"
+            return False, f"CDP unavailable: {exc}"
         if not alive:
-            return None, f"CDP down: {msg}"
+            return False, f"CDP down: {msg}"
         cached = cache.get(cache.make_key("ircc_ee_rounds", "rounds", "v1"))
         n = len(cached) if cached else 0
         if n:

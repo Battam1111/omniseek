@@ -4,10 +4,7 @@ import tempfile
 import threading
 import unittest
 from pathlib import Path
-import sys
 
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "src"))
 from omniseek.core.contracts.heartbeat import (
     SchedulerHeartbeat,
     load_contract_artifacts,

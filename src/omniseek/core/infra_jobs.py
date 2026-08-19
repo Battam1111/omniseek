@@ -28,6 +28,7 @@ import time
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from pathlib import Path
+from typing import Optional
 
 log = logging.getLogger(__name__)
 
@@ -155,7 +156,8 @@ def _prune_stale_health_rows(state: dict, live: set) -> dict:
         return v if isinstance(v, dict) else {}
 
     fails, status, alerts = _d("fails"), _d("last_status"), _d("_alerts")
-    rows = set(fails) | set(status)
+    unmeasured = _d("unmeasured")  # the third state gets pruned like the other two, or it fossilizes
+    rows = set(fails) | set(status) | set(unmeasured)
     written_infra = {f"_cdp:{label}" for label in _CDP_INSTANCES}
     orphan_infra = sorted(r for r in rows
                           if r.startswith(_INFRA_ROW_PREFIX) and r not in written_infra)
@@ -165,15 +167,26 @@ def _prune_stale_health_rows(state: dict, live: set) -> dict:
     for n in stale:
         fails.pop(n, None)
         status.pop(n, None)
+        unmeasured.pop(n, None)
         alerts.pop(f"down:{n}", None)
     return {"pruned": stale, "orphan_infra": orphan_infra, "skipped": ""}
 
 
-def _health_probe(adapter) -> tuple[bool, str]:
+def _health_probe(adapter) -> tuple[Optional[bool], str]:
     """BOUNDED health_check (per-source hard timeout -> can never hang the loop) with one in-run
     retry to absorb transient blips. Routes through the same fetcher.health_check_bounded primitive
-    the live MCP probe uses."""
+    the live MCP probe uses.
+
+    THREE states, not two. health_check_bounded returns None when OUR probe hit its hard timeout,
+    which is not the same fact as the source answering with a failure. This function used to
+    declare ``-> tuple[bool, str]`` and flatten None into False on the last line, so a probe we
+    could not complete was recorded as a source that is down. On 2026-08-19 that flattening had
+    ten sources (all six Stack Exchange slices, github, github_trending, github_releases, reddit)
+    soft-skipped out of every broad sweep while a paced re-probe found nine of them healthy.
+    Propagating None keeps "we did not measure" separate from "it failed"; the caller must not
+    move the consecutive-fail counter on None."""
     from omniseek.core import fetcher
+    ok: Optional[bool] = False
     msg = "?"
     for attempt in (1, 2):
         ok, msg = fetcher.health_check_bounded(adapter)
@@ -181,12 +194,19 @@ def _health_probe(adapter) -> tuple[bool, str]:
             return True, str(msg)
         if attempt == 1:
             time.sleep(3)
-    return False, str(msg)
+    return (None if ok is None else False), str(msg)
 
 
-def _health_track(name: str, ok: bool, msg: str, fails: dict, alerts: dict,
+def _health_track(name: str, ok: Optional[bool], msg: str, fails: dict, alerts: dict,
                   newly_down: list, recovered: list) -> None:
-    """Shared consecutive-fail / recovery bookkeeping for one probed entity (cron_watchdog._track)."""
+    """Shared consecutive-fail / recovery bookkeeping for one probed entity (cron_watchdog._track).
+
+    ``ok is None`` means OUR probe timed out, so we learned nothing about this source. The counter
+    must not move in EITHER direction: incrementing it quarantines a healthy source (the 2026-08-19
+    ten-source false-down), and zeroing it would erase a real failure streak on a coincidental
+    timeout. The run body records the name in ``unmeasured`` so the gap stays visible."""
+    if ok is None:
+        return
     prev = fails.get(name, 0)
     if ok:
         if prev >= N_CONSECUTIVE:
@@ -399,11 +419,23 @@ def run_source_health(scope: str = "all") -> dict:
     for label, (ok, _msg) in infra.items():
         snap[f"_cdp:{label}"] = ok
     state["last_status"] = snap
+    # The third state, kept as its OWN map. last_status can hold None, but a consumer reading only
+    # its KEY set (fetcher._watchdog_health does exactly that) cannot tell None from True, which
+    # would turn "we could not measure" into a reported ok: a false green replacing the false red.
+    # Same merge rule as snap so the fast lane does not erase the daily lane's rows.
+    unm = dict(state.get("unmeasured", {})) if not full else {}
+    for n in probed:
+        if results[n][0] is None:
+            unm[n] = str(results[n][1])[:200]
+        else:
+            unm.pop(n, None)
+    state["unmeasured"] = unm
     # A retired source is no longer probed -> drop its stale fail / status / alert entries so a parked
     # source self-cleans instead of freezing at a stale "down" (no manual state edit ever needed).
     for r in retired:
         fails.pop(r, None)
         snap.pop(r, None)
+        unm.pop(r, None)
         alerts.pop(f"down:{r}", None)
     _save_state(_HEALTH_STATE, state)
 

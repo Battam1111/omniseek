@@ -196,11 +196,11 @@ class SogouWeixinAdapter(BaseScrapeAdapter):
             ))
         return docs
 
-    def health_check(self) -> tuple[Optional[bool], str]:
+    def health_check(self) -> tuple[bool, str]:
         """Light liveness: one search request, no link-resolution fan-out. Distinguishes
         answered (200, not anti-bot) from blocked/error."""
         if not _DEPS_OK:
-            return None, "bs4/curl_cffi not installed"
+            return False, "bs4/curl_cffi not installed"
         try:
             r = _sogou_get(self._session(), _SEARCH.format(query=quote("科技")), timeout=15)
         except Exception as exc:  # noqa: BLE001

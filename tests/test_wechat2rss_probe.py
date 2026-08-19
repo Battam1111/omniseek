@@ -16,11 +16,7 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from email.utils import format_datetime
 from unittest.mock import patch
-import sys
-from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "src"))
 from omniseek.core import infra_jobs as J
 
 

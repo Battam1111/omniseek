@@ -225,7 +225,7 @@ class DouyinAdapter(BaseCDPAdapter):
         )
 
     # ── health ─────────────────────────────────────────────────────────────
-    def health_check(self) -> tuple[Optional[bool], str]:
+    def health_check(self) -> tuple[bool, str]:
         """CDP 9225 reachable + the 小号 is actually logged in. Login is probed CHEAPLY (a home
         navigation reading localStorage HasUserLogin / cookie LOGIN_STATUS — the same signal
         client.py pong() uses) so a sweep never spends a real search. Honest by design: an
@@ -234,7 +234,7 @@ class DouyinAdapter(BaseCDPAdapter):
         from omniseek.core.sources.walled._cdp import cdp_health
         ok, msg = cdp_health(self.cdp_url)
         if not ok:
-            return None, f"CDP 9225 down: {msg} (抖音 Chrome; launchd com.omniseek.cdp.douyin)"
+            return False, f"CDP 9225 down: {msg} (抖音 Chrome — launchd com.omniseek.cdp.douyin)"
         try:
             state = self._run(lambda p: p.evaluate(_LOGIN_PROBE_JS), "https://www.douyin.com")
         except Exception as exc:  # noqa: BLE001

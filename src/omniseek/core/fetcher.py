@@ -2568,6 +2568,19 @@ def _watchdog_health() -> tuple[dict, set, Optional[str]]:
         return {}, set(), None
 
 
+def _watchdog_unmeasured() -> dict:
+    """Sources whose LAST watchdog probe did not complete: {name: reason}. A separate map because
+    ``last_status`` is consumed as a KEY SET (see _watchdog_health), where a None value is
+    indistinguishable from True. Without this, "our probe timed out" would report as ``ok`` — the
+    false GREEN that replaces the false RED the None-as-failure bug used to produce. Fail-open:
+    empty on any read/parse error, so a missing file never invents an unmeasured state."""
+    try:
+        data = json.loads(_WATCHDOG_STATE.read_text(encoding="utf-8"))
+        return data.get("unmeasured", {}) or {}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
 _WATCHDOG_FRESH_S = 6 * 3600  # only quarantine on watchdog data no older than this
 
 
@@ -2615,6 +2628,7 @@ def list_sources(check_health: bool = False, domain: Optional[str] = None,
     force descriptions on the full list.
     """
     fails, tracked, as_of = _watchdog_health()
+    unmeasured = _watchdog_unmeasured()
     with _registry_lock:  # snapshot the values under the lock; iterate the copy outside it
         adapters_snapshot = list(_adapters.values())
     live = _probe_all_health(adapters_snapshot) if check_health else {}
@@ -2622,11 +2636,13 @@ def list_sources(check_health: bool = False, domain: Optional[str] = None,
     for adapter in adapters_snapshot:
         name = adapter.name
         if name not in tracked:
-            health = "unknown"  # not probed by the watchdog (e.g. CDP sources)
+            health = "unknown"      # not probed by the watchdog (e.g. CDP sources)
         elif fails.get(name, 0) >= _DOWN_AFTER:
-            health = "down"     # persistently failing across runs
+            health = "down"         # persistently failing across runs
+        elif name in unmeasured:
+            health = "unmeasured"   # OUR last probe did not complete; we know nothing either way
         else:
-            health = "ok"       # healthy, or just a single transient blip
+            health = "ok"           # healthy, or just a single transient blip
         _eo_reason = _explicit_only_reason(adapter)
         entry = {
             "name": name,
@@ -2875,9 +2891,18 @@ def _safe_health(adapter: SourceAdapter) -> tuple[bool, str]:
         return False, f"health_check raised: {type(exc).__name__}: {exc}"
 
 
-_HEALTH_TIMEOUT_S = 25   # per-source hard cap for a LIVE health probe — generous enough
-                         # for thorough multi-feed RSS checks (slowest legit ~18s) yet
-                         # still bounds a genuinely hung source (vs the old ∞ hang).
+_HEALTH_TIMEOUT_S = 25   # DEFAULT per-source hard cap for a LIVE health probe. Bounds a genuinely
+                         # hung source (vs the old ∞ hang) without inflating the whole sweep: the
+                         # daily source-health job has a 900s budget and the fast lane only 300s,
+                         # so raising this globally to cover the few slow probes would risk the
+                         # budget for all ~220. A source that legitimately needs longer declares
+                         # ``health_timeout_s`` on its adapter instead (see _probe_all_health).
+                         #
+                         # This comment used to assert "slowest legit ~18s". MEASURED 2026-08-19,
+                         # sequentially and paced: rl_llm_frameworks 65.6s, github_releases 40.6s,
+                         # vast_ai 28.3s, all answering healthy. The assertion had rotted, and every
+                         # probe over the cap was being recorded as a source failure. Treat any
+                         # number here as a measurement with a date, never as a standing bound.
 _HEALTH_WORKERS = 24     # health checks are I/O-bound — probe many at once
 
 
@@ -2906,15 +2931,22 @@ def health_check_bounded(adapter: SourceAdapter, timeout: float = _HEALTH_TIMEOU
 def _probe_all_health(adapters: list, timeout: float = _HEALTH_TIMEOUT_S) -> dict[str, tuple]:
     """Probe EVERY adapter's health concurrently, each bounded by ``timeout``, with a
     global backstop so the whole call returns in ~``timeout`` even if several block.
-    ``shutdown(wait=False)`` means a still-running probe can't hold us either."""
+    ``shutdown(wait=False)`` means a still-running probe can't hold us either.
+
+    PER-SOURCE cap: an adapter may declare ``health_timeout_s`` when its own probe is legitimately
+    slow (a bundle that walks N feeds serially). Measured 2026-08-19, the slowest HEALTHY probe was
+    65.6s against this 25s default, so those sources were recorded as failures every run. Only the
+    declaring source pays the longer wait; the global backstop follows the largest cap in the batch.
+    """
     results: dict[str, tuple] = {}
     ex = ThreadPoolExecutor(max_workers=min(_HEALTH_WORKERS, len(adapters) or 1))
-    futs = {ex.submit(health_check_bounded, a, timeout): a.name for a in adapters}
-    deadline = time.time() + timeout + 10
+    caps = {a.name: float(getattr(a, "health_timeout_s", None) or timeout) for a in adapters}
+    futs = {ex.submit(health_check_bounded, a, caps[a.name]): a.name for a in adapters}
+    deadline = time.time() + (max(caps.values()) if caps else timeout) + 10
     for fut, name in futs.items():
         try:
             results[name] = fut.result(timeout=max(0.1, deadline - time.time()))
         except Exception:  # noqa: BLE001
-            results[name] = (None, f"timeout (>{int(timeout)}s)")
+            results[name] = (None, f"timeout (>{int(caps.get(name, timeout))}s)")
     ex.shutdown(wait=False)
     return results

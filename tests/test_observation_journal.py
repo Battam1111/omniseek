@@ -8,10 +8,7 @@ import unittest
 from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import patch
-import sys
 
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "src"))
 from omniseek.core.recall import journal as journal_module
 from omniseek.core.recall.journal import JournalCorrupt, ObservationJournal
 from omniseek.core.normalize import Document

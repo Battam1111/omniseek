@@ -19,11 +19,7 @@ import inspect
 import re
 import textwrap
 import unittest
-import sys
-from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "src"))
 from omniseek.core import infra_jobs
 
 
@@ -35,10 +31,15 @@ DECLARED = {
     "last_run":    "scalar, not per-source",
     "last_status": "per-source, scope-aware: rebuilt only on a full run, merged on the fast lane",
     "degraded":    "per-source, scope-aware: rebuilt only on a full run, merged on the fast lane",
+    "unmeasured":  "per-source, scope-aware: rebuilt only on a full run, merged on the fast lane",
 }
 
-# The two that are REBUILT from this run's observations, so each must be gated on `full`.
-MUST_BE_FULL_GATED = ("last_status", "degraded")
+# The ones REBUILT from this run's observations, so each must be gated on `full`.
+# `unmeasured` joined them on 2026-08-19: it names the sources whose probe did not COMPLETE, which
+# is a third state beside healthy and failing. It is exactly as scope-sensitive as the other two, and
+# for the same reason: a fast lane that rebuilt it from scratch would declare every CDP source
+# measured-and-fine purely because it never looked at them.
+MUST_BE_FULL_GATED = ("last_status", "degraded", "unmeasured")
 
 
 class HealthStateScopeTests(unittest.TestCase):

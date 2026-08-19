@@ -10,10 +10,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
-import sys
 
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "src"))
 from omniseek.core.sources.walled import xiaohongshu_cn_source as X
 
 SECRET_COOKIE = "ACW-SECRET-VALUE-0a4ad9c9"

@@ -112,9 +112,9 @@ class CninfoAdapter(BaseScrapeAdapter):
     def _to_documents(self, raw, query, limit) -> list[Document]:
         return [d for a in raw[:limit] if (d := _ann_to_doc(a))]
 
-    def health_check(self) -> tuple[Optional[bool], str]:
+    def health_check(self) -> tuple[bool, str]:
         if not _DEPS_OK:
-            return None, "curl_cffi not installed"
+            return False, "curl_cffi not installed"
         raw = self._raw_fetch("年报", 1)
         if raw is None:
             return False, "fetch failed / blocked"

@@ -3,16 +3,16 @@ import io
 import subprocess
 import tarfile
 from pathlib import Path
-import sys
 
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "src"))
 from omniseek.core.contracts.build_identity import validate_build_id
 
 try:  # `discover -s tests` puts tests/ on sys.path; `-m unittest tests.x` puts the repo root there
     from _repo_only import requires_source_repo
 except ImportError:
     from tests._repo_only import requires_source_repo
+
+ROOT = Path(__file__).resolve().parents[1]
+
 
 class BuildIdentityTests(unittest.TestCase):
     def test_accepts_exact_lowercase_commit(self):

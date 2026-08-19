@@ -34,7 +34,7 @@ import anyio
 import feedparser
 import httpx
 
-from omniseek.core import http
+from omniseek.core import diag, http
 from omniseek.core._guard import BackendGuard
 from omniseek.core.normalize import Document
 from omniseek.core.sources.api._base import BaseAPIAdapter
@@ -49,12 +49,22 @@ _API = "https://export.arxiv.org/api/query"
 # concurrent workers could still burst past arXiv's ~3/s politeness line into a 429, and a throttled/dead
 # host made every request eat the full timeout. The guard adds a min-interval RATE pacer (spaces request
 # STARTS so a fan-out can't spike the rate), a breaker (consecutive failures -> fail fast + serve cache
-# instead of hammering), and backlog fail-fast. _MAX_INFLIGHT stays 4 (concurrency unchanged);
-# _MIN_INTERVAL_S ~= 3/s balances politeness vs the broad fan-out (too wide would get arXiv deadline-
-# dropped in the ~95-source sweep). SHARED sync<->async so the async path cannot double the concurrency
-# OR the rate. Mirrors _s2's _call (breaker -> pace -> sema -> record ok/fail).
+# instead of hammering), and backlog fail-fast. _MAX_INFLIGHT stays 4 (concurrency unchanged).
+# SHARED sync<->async so the async path cannot double the concurrency OR the rate. Mirrors _s2's
+# _call (breaker -> pace -> sema -> record ok/fail).
+#
+# THE RATE IS arXiv's NUMBER, NOT A TUNABLE. arXiv's API terms say ONE request every THREE seconds.
+# This constant read 0.35 until 2026-08-19, with a comment calling that "arXiv's politeness rate":
+# the 3 was read as 3 req/s instead of 1 req/3s, so we ran ~9x over the line. The comment also
+# recorded the reason it was set that wide, "too wide would get arXiv deadline-dropped in the
+# ~95-source sweep", which is the actual root cause: a published rate limit was traded away for
+# sweep coverage. arXiv collected on 2026-08-19 by escalating our egress from slow (17s) to
+# HTTP 429 "Rate exceeded." to no response at all, and because every failure path below degraded
+# to [], every arxiv query returned an EMPTY RESULT instead of an alarm.
+# So: being deadline-dropped in a wide sweep costs the queued callers; being rate-limited costs
+# 100% of arxiv for everyone, for as long as the penalty lasts. Do NOT lower this again.
 _ARXIV_MAX_INFLIGHT = 4
-_ARXIV_MIN_INTERVAL_S = 0.35     # ~3 req/s across ALL callers + threads (arXiv's politeness rate)
+_ARXIV_MIN_INTERVAL_S = 3.0      # arXiv's published limit: 1 request / 3 s, across ALL callers + threads
 _ARXIV_PACE_MAX_WAIT_S = 12.0    # a caller waiting > this on the rate gate fails fast (< the 15s deadline)
 _ARXIV_ACQUIRE_MAX_WAIT_S = 20.0  # a caller waiting > this for a CONCURRENCY permit sheds load (degrade to None)
 _guard = BackendGuard("arxiv", _ARXIV_MAX_INFLIGHT, break_after=5, break_for_s=120.0,
@@ -70,15 +80,33 @@ def _arxiv_get_text(url: str, **kwargs):
     """Single arXiv egress chokepoint (sync): pass through the shared guard so the throttled arXiv host
     sees bounded concurrency (sema) + a bounded rate (pace) + a breaker. Returns None on breaker-open or
     a pathological rate-gate backlog (callers degrade to []); a falsy http result feeds the breaker as a
-    failure so a sustained outage opens the circuit and fails fast."""
+    failure so a sustained outage opens the circuit and fails fast.
+
+    EVERY path that returns None also diag.note's WHY. The base API contract (_base._raw_fetch) makes
+    a failure degrade to [], so without these notes the caller cannot tell "arXiv has no such paper"
+    from "we never asked" — which is exactly how the 2026-08-19 rate-limit outage stayed invisible
+    while health kept reporting ok."""
     if _guard.is_open():
-        return None  # breaker open: skip the throttled host — no request, no wait, caller degrades to []
+        diag.note("arxiv.breaker_open", url=url, body=(
+            "arXiv circuit breaker is OPEN (consecutive failures, typically HTTP 429 rate limiting), "
+            "so NO request was sent. An empty arxiv result right now means we did not ask, not that "
+            "arXiv has nothing."))
+        return None
     try:
         _guard.pace(on_backlog=lambda w: _ArxivBusy() if w > _ARXIV_PACE_MAX_WAIT_S else None)
         with _guard.slot(_ARXIV_ACQUIRE_MAX_WAIT_S, lambda w: _ArxivBusy()):  # bounded: degrade, don't hang
             r = http.get_text(url, **kwargs)
     except _ArxivBusy:
+        diag.note("arxiv.rate_gate_shed", url=url, body=(
+            f"arXiv rate gate backlog exceeded {_ARXIV_PACE_MAX_WAIT_S}s (arXiv's published limit is "
+            f"1 request / {_ARXIV_MIN_INTERVAL_S}s), so this caller was shed to keep the host inside "
+            "its rate. An empty arxiv result here means we did not ask."))
         return None
+    if not r:
+        diag.note("arxiv.egress_failed", url=url, body=(
+            "arXiv returned nothing usable: HTTP 429 'Rate exceeded.', another non-2xx, or a timeout. "
+            "http.get_text collapses all of those to None, so an empty arxiv result here means the "
+            "request FAILED, not that arXiv has no match."))
     _guard.record_ok() if r else _guard.record_fail()
     return r
 
@@ -88,13 +116,20 @@ async def _arxiv_aget_text(url: str, **kwargs):
     waits go OFF the loop — the rate-gate wait via ``await anyio.sleep`` (reserve_pace_slot is loop-safe
     arithmetic under a brief lock), the sema acquire via to_thread (a `with _guard.sema:` on the loop would
     freeze it). The guard is SHARED sync<->async so the async migration cannot double the concurrency OR
-    the rate. Mirrors _s2's async pace path."""
+    the rate. Mirrors _s2's async pace path. Notes the SAME three reasons as the sync twin, so an
+    async caller's empty result is just as self-explaining."""
     if _guard.is_open():
+        diag.note("arxiv.breaker_open", url=url, body=(
+            "arXiv circuit breaker is OPEN (consecutive failures, typically HTTP 429 rate limiting), "
+            "so NO request was sent. An empty arxiv result right now means we did not ask."))
         return None
     try:
         wait = _guard.reserve_pace_slot(
             on_backlog=lambda w: _ArxivBusy() if w > _ARXIV_PACE_MAX_WAIT_S else None)
     except _ArxivBusy:
+        diag.note("arxiv.rate_gate_shed", url=url, body=(
+            f"arXiv rate gate backlog exceeded {_ARXIV_PACE_MAX_WAIT_S}s (published limit is 1 request "
+            f"/ {_ARXIV_MIN_INTERVAL_S}s), so this caller was shed. We did not ask."))
         return None
     if wait > 0:
         await anyio.sleep(wait)                           # rate gate, OFF-loop wait
@@ -104,7 +139,14 @@ async def _arxiv_aget_text(url: str, **kwargs):
         async with _guard.aslot(_ARXIV_ACQUIRE_MAX_WAIT_S, lambda w: _ArxivBusy()):
             r = await http.aget_text(url, **kwargs)
     except _ArxivBusy:
+        diag.note("arxiv.rate_gate_shed", url=url, body=(
+            "arXiv concurrency pool saturated past its bounded wait, so this caller was shed. "
+            "We did not ask."))
         return None
+    if not r:
+        diag.note("arxiv.egress_failed", url=url, body=(
+            "arXiv returned nothing usable: HTTP 429 'Rate exceeded.', another non-2xx, or a timeout. "
+            "An empty arxiv result here means the request FAILED, not that arXiv has no match."))
     _guard.record_ok() if r else _guard.record_fail()
     return r
 
@@ -182,8 +224,20 @@ class ArxivAdapter(BaseAPIAdapter):
         return self._entry_to_document(feed.entries[0])
 
     def health_check(self) -> tuple[bool, str]:
-        # Light DIRECT probe with its OWN short timeout. A 429 means the API is UP and
-        # merely throttling us → report healthy (search falls back to cache / degrades).
+        # Light DIRECT probe with its OWN short timeout.
+        #
+        # A 429 is NOT health, however alive the host is. Until 2026-08-19 this returned True on
+        # 429, reasoning "API alive, merely throttling us -> search falls back to cache / degrades".
+        # But a rate-limited arXiv serves NOTHING live: the guard's breaker opens and every search
+        # returns []. Calling that ok is precisely what let a 9x-over-rate adapter sit green through
+        # a real outage. Same shape as the `blocked` class in the public health sweep: "answered,
+        # but refused us" is its OWN state, not healthy and not down.
+        #
+        # A single probe also cannot see a RATE failure (one request gets through while real traffic
+        # is refused), so check the breaker FIRST: it is the only thing here that reflects load.
+        if _guard.is_open():
+            return False, ("circuit breaker OPEN (consecutive failures, typically HTTP 429): no "
+                           "request is being sent, so live searches are returning empty")
         try:
             with _guard.sema:  # count the health probe against the same global arXiv in-flight cap
                 resp = httpx.get(
@@ -196,7 +250,9 @@ class ArxivAdapter(BaseAPIAdapter):
         if resp.status_code == 200:
             return True, "OK"
         if resp.status_code == 429:
-            return True, "OK (HTTP 429 — API alive, rate-limiting us)"
+            return False, (f"HTTP 429 rate-limited: the host is alive but refusing us, so live "
+                           f"searches return empty. Pacing is 1 request / {_ARXIV_MIN_INTERVAL_S}s; "
+                           f"if this persists, something is bursting past it")
         return False, f"HTTP {resp.status_code}"
 
     # ------------------------------------------------------------------ parse

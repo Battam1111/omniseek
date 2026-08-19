@@ -204,10 +204,10 @@ class ZhihuUsersAdapter:
                 return posts[0]
         return None
 
-    def health_check(self) -> tuple[Optional[bool], str]:
+    def health_check(self) -> tuple[bool, str]:
         cdp_ok, cdp_msg = cdp_health()
         if not cdp_ok:
-            return None, f"CDP not reachable: {cdp_msg}"
+            return False, f"CDP not reachable: {cdp_msg}"
         users = self._load_users()
         if not users:
             return False, "no users configured"

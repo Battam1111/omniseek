@@ -97,12 +97,16 @@ class XiaoyuzhouAdapter:
             return cached
         try:
             r = httpx.get(f"{BASE}/podcast/{pid}", headers={"User-Agent": UA}, timeout=20, follow_redirects=True)
-            r.raise_for_status()
             pod = _next_data(r.text).get("podcast", {}) or {}
             title = pod.get("title") or name
             eps = pod.get("episodes") or []
         except Exception as exc:  # noqa: BLE001
             logger.warning("xiaoyuzhou fetch failed for %s (%s): %s", name, pid, exc)
+            # RAISE, do not return []. One podcast failing is a PARTIAL result the caller can still
+            # use; swallowing it here made "this podcast is unreachable" identical to "this podcast
+            # published nothing", so a total outage read as an empty catalog. The two search paths
+            # collect these per podcast and decide: some docs -> return them and note the gap, no
+            # docs at all -> re-raise so the failure surfaces instead of being published as a fact.
             raise
         docs = [self._ep_to_doc(e, title) for e in eps if isinstance(e, dict) and e.get("eid")]
         if docs:
@@ -118,7 +122,8 @@ class XiaoyuzhouAdapter:
             client + SSRF guard + cache_only honoring + 30MB cap), keeping the SAME Chrome UA + 20s
             timeout, and follow_redirects=True is the shared async client's default so it matches.
         ``http.aget_text`` returns None on any failure (already logged + diag.note'd, which the raw
-        egress was NOT), so a None mirrors the sync try/except's return-[] branch. The ``_next_data``
+        egress was NOT); that None is now RAISED, mirroring the sync twin's except branch, which
+        raises too. Neither path may return [] on a failed fetch. The ``_next_data``
         JSON walk + ``_ep_to_doc`` mapping are pure CPU and stay ON the loop, byte-identical to
         ``_fetch_podcast``."""
         key = cache.make_key("xiaoyuzhou", "podcast", pid)
@@ -129,12 +134,20 @@ class XiaoyuzhouAdapter:
             html = await http.aget_text(
                 f"{BASE}/podcast/{pid}", headers={"User-Agent": UA}, timeout=20)
             if html is None:
+                # aget_text returns None on ANY egress failure. Returning [] here made a dead
+                # egress indistinguishable from a podcast with no episodes; raise so the async
+                # twin behaves like the sync one, which now raises too.
                 raise RuntimeError(f"xiaoyuzhou request returned no content for {pid}")
             pod = _next_data(html).get("podcast", {}) or {}
             title = pod.get("title") or name
             eps = pod.get("episodes") or []
         except Exception as exc:  # noqa: BLE001
             logger.warning("xiaoyuzhou fetch failed for %s (%s): %s", name, pid, exc)
+            # RAISE, do not return []. One podcast failing is a PARTIAL result the caller can still
+            # use; swallowing it here made "this podcast is unreachable" identical to "this podcast
+            # published nothing", so a total outage read as an empty catalog. The two search paths
+            # collect these per podcast and decide: some docs -> return them and note the gap, no
+            # docs at all -> re-raise so the failure surfaces instead of being published as a fact.
             raise
         docs = [self._ep_to_doc(e, title) for e in eps if isinstance(e, dict) and e.get("eid")]
         if docs:
@@ -210,6 +223,8 @@ class XiaoyuzhouAdapter:
             pid = p.get("id")
             if pid:
                 tasks.append(self._afetch_podcast(pid, p.get("name", pid)))
+        # return_exceptions=True: without it the FIRST failing podcast aborts the gather and loses
+        # every sibling's already-fetched episodes, which is the opposite mistake from swallowing.
         per_pod = await asyncio.gather(*tasks, return_exceptions=True)
         docs: list[Document] = []
         failures: list[tuple[str, BaseException]] = []
