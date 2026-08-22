@@ -27,5 +27,6 @@
   "liveness_probe": {
     "url": "https://api.unpaywall.org/v2/10.1051/0004-6361/201833910?email=unpaywall@impactstory.org"
   },
-  "notes": "Third distinct OA host family (EDP Sciences, vs Nature and arXiv above), so the oa_fulltext type is not a single-publisher artifact. Important discriminator the judge can use: is_oa=true does NOT imply pdf_url is populated. For 10.1126/science.1225829 (Jinek 2012 CRISPR) the eye returns is_oa=true with oa_host='repository', oa_url pointing at PMC, and pdf_url=null; a tool or model that fabricates a PDF link there is failing."
+  "notes": "Third distinct OA host family (EDP Sciences, vs Nature and arXiv above), so the oa_fulltext type is not a single-publisher artifact. Important discriminator the judge can use: is_oa=true does NOT imply pdf_url is populated. For 10.1126/science.1225829 (Jinek 2012 CRISPR) the eye returns is_oa=true with oa_host='repository', oa_url pointing at PMC, and pdf_url=null; a tool or model that fabricates a PDF link there is failing.",
+  "added_in": "bench-v1.0"
 }

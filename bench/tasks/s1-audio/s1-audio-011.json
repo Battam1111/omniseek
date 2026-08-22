@@ -50,5 +50,6 @@
     "url": "https://anchor.fm/s/28011b0c/podcast/play/117464641/https%3A%2F%2Fd3ctxlq1ktw2nl.cloudfront.net%2Fstaging%2F2026-2-25%2F420749640-44100-2-a2b49ee3b172b.mp3"
   },
   "notes": "Timestamp is the containing VAD segment start (314.54s); this segment is long (74.54s-134.55s) and the phrase begins ~10s into it, ~5:24, so segment-level tolerance is needed. Same show as s1-audio-006 but a different, solo episode. Purely descriptive career-stage language; no company, no named individual.",
-  "timeout_s": 900.0
+  "timeout_s": 900.0,
+  "added_in": "bench-v1.0"
 }

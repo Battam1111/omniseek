@@ -67,5 +67,6 @@
   },
   "liveness_probe": {
     "url": "https://plos.org/fees/"
-  }
+  },
+  "added_in": "bench-v1.1"
 }

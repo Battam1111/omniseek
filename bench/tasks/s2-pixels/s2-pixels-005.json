@@ -38,5 +38,6 @@
     "url": "https://aclanthology.org/2020.coling-demos.3.pdf"
   },
   "notes": "A live statistics value inside a GUI screenshot (Figure 2, p03_01.png) of the DART data-to-text annotation tool, COLING 2020 demo track (published, not under review; an annotation GUI, not RL-for-LLM-reasoning or credit assignment). Pixels-only check is EXHAUSTIVE for this item: the paper's entire plain text layer (total_chars=19656) was read across four windows with ocr unset. The prose defines TTR/MSTTR and quotes different example values, but the rendered pair ': 0.54' never occurs. The WebSearch assistant stated outright it could not find the exact string. The eye OCR'd 3 of 3 images here (ocr_images=3).",
-  "timeout_s": 600.0
+  "timeout_s": 600.0,
+  "added_in": "bench-v1.0"
 }

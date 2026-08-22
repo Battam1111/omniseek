@@ -27,5 +27,6 @@
   "liveness_probe": {
     "url": "https://api.unpaywall.org/v2/10.1038/s41586-021-03819-2?email=unpaywall@impactstory.org"
   },
-  "notes": "Probe read directly: best_oa_location.url_for_pdf is byte-identical to the eye's pdf_url, license cc-by, host_type publisher, version publishedVersion. Subject is a Nobel-linked (2024 Chemistry) paper. Sanity contrast for the conflict candidates: here Crossref 43922 vs OpenAlex 46518 = 1.06x, i.e. no disagreement."
+  "notes": "Probe read directly: best_oa_location.url_for_pdf is byte-identical to the eye's pdf_url, license cc-by, host_type publisher, version publishedVersion. Subject is a Nobel-linked (2024 Chemistry) paper. Sanity contrast for the conflict candidates: here Crossref 43922 vs OpenAlex 46518 = 1.06x, i.e. no disagreement.",
+  "added_in": "bench-v1.0"
 }

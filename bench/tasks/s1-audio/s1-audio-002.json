@@ -50,5 +50,6 @@
     "url": "https://the-life-of-letters.castos.com/episodes/why-q-needs-u-a-history-of-letters"
   },
   "notes": "Timestamp is the start of the containing VAD segment (782.47s); the phrase itself falls near that segment's end, ~13:11. The Castos enclosure URL works stripped of its tracking query string (that is the exact form run). Episode's RSS carries no podcast:transcript tag. Topic is writing-system history; no politics, medicine, or law.",
-  "timeout_s": 900.0
+  "timeout_s": 900.0,
+  "added_in": "bench-v1.0"
 }

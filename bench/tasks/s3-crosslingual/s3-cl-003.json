@@ -68,5 +68,6 @@
   },
   "liveness_probe": {
     "url": "https://www.osborneclarke.com/insights/six-common-employment-law-pitfalls-us-companies-operating-germany"
-  }
+  },
+  "added_in": "bench-v1.1"
 }

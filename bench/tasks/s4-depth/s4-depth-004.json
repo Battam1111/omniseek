@@ -39,5 +39,6 @@
   "liveness_probe": {
     "url": "https://arxiv.org/pdf/2101.00027v1.pdf"
   },
-  "notes": "Search tool explicitly said it could not confirm the delimiter convention and pointed back at the paper. Shares eye_read args with s4-depth-003 (same verified window, different page-26 fact); if arg-uniqueness is required, raise max_chars on one of the two (a larger window is a superset of the verified one)."
+  "notes": "Search tool explicitly said it could not confirm the delimiter convention and pointed back at the paper. Shares eye_read args with s4-depth-003 (same verified window, different page-26 fact); if arg-uniqueness is required, raise max_chars on one of the two (a larger window is a superset of the verified one).",
+  "added_in": "bench-v1.0"
 }

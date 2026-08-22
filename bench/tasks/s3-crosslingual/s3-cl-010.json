@@ -80,5 +80,6 @@
   },
   "liveness_probe": {
     "url": "https://www.icbc.com/driver-licensing/moving-bc/Proving-your-driving-experience"
-  }
+  },
+  "added_in": "bench-v1.1"
 }

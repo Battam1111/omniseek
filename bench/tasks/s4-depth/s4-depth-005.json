@@ -39,5 +39,6 @@
   "liveness_probe": {
     "url": "https://nvlpubs.nist.gov/nistpubs/SpecialPublications/NIST.SP.800-90Ar1.pdf"
   },
-  "notes": "eye_read sheet 67 (printed page 58). The source PDF itself ranks on the first page of results, but no result surfaced the value; the search tool stated the detail was not in the results and told the user to verify against the PDF."
+  "notes": "eye_read sheet 67 (printed page 58). The source PDF itself ranks on the first page of results, but no result surfaced the value; the search tool stated the detail was not in the results and told the user to verify against the PDF.",
+  "added_in": "bench-v1.0"
 }

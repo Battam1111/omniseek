@@ -27,5 +27,6 @@
   "liveness_probe": {
     "url": "https://api.crossref.org/works/10.1126/science.1112286"
   },
-  "notes": "Distinct notice profile from s5-scholar-005 (EoC+retraction vs correction+retraction), so it tests that the tool returns the real notice list rather than a boolean. Coverage caveat measured, not assumed: I probed four canonical pre-2003 physics retractions (10.1038/35021028, 10.1126/science.1065389, 10.1038/35042545) and the Crossref/Retraction-Watch feed returns retracted=false for all of them, so this feed is biomedical-skewed and pre-2003 physics cases must not be used as specimens."
+  "notes": "Distinct notice profile from s5-scholar-005 (EoC+retraction vs correction+retraction), so it tests that the tool returns the real notice list rather than a boolean. Coverage caveat measured, not assumed: I probed four canonical pre-2003 physics retractions (10.1038/35021028, 10.1126/science.1065389, 10.1038/35042545) and the Crossref/Retraction-Watch feed returns retracted=false for all of them, so this feed is biomedical-skewed and pre-2003 physics cases must not be used as specimens.",
+  "added_in": "bench-v1.0"
 }

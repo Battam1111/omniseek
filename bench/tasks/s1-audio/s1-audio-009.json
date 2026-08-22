@@ -50,5 +50,6 @@
     "url": "https://www.bilibili.com/video/BV1Q64y1T7ox"
   },
   "notes": "ELEVATED RISK, flagged rather than hidden: this is by far the most-viewed source in the set (~6.6M plays), so a written summary or re-upload could appear over time even though none is indexed today. The second prefilter returned the bilibili video page as hit #1, but only via the episode title I supplied; the phrase itself does not appear in any result's text. Consider re-running the prefilter at scoring time. Phrase spans two VAD segments (120.98s + 124.15s), contiguous in the flat transcript. Avoided lines where the ASR flips 线构图/限构图/限购图 and one containing 1比0.618.",
-  "timeout_s": 900.0
+  "timeout_s": 900.0,
+  "added_in": "bench-v1.0"
 }

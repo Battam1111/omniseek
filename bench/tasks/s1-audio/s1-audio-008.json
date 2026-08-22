@@ -50,5 +50,6 @@
     "url": "https://the-life-of-letters.castos.com/episodes/endangered-alphabets-and-what-happens-when-you-write-by-hand"
   },
   "notes": "The phrase straddles two VAD segments (76.42s 'and it migrated' / 81.55s 'Eastward and wound up in Japan'); it is contiguous only in the flat transcript, so containment must be evaluated against the flat transcript. Timestamp is the first segment's start. Only stable-spelling proper nouns (India) are inside the ground-truth string; the ASR-unstable script name (Siddham rendered 'Sidam'/'Siidam') and 'Shingon' were deliberately excluded. Descriptive history of a writing system, not a religious claim.",
-  "timeout_s": 900.0
+  "timeout_s": 900.0,
+  "added_in": "bench-v1.0"
 }

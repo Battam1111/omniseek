@@ -39,5 +39,6 @@
   "liveness_probe": {
     "url": "https://nvlpubs.nist.gov/nistpubs/SpecialPublications/NIST.SP.800-90Ar1.pdf"
   },
-  "notes": "eye_read sheet 69 (printed page 59). Search results covered SP 800-90A generally but none carried the constant; the search tool said it did not surface the specific detail. Shares args with s4-depth-005 (same verified window, different page)."
+  "notes": "eye_read sheet 69 (printed page 59). Search results covered SP 800-90A generally but none carried the constant; the search tool said it did not surface the specific detail. Shares args with s4-depth-005 (same verified window, different page).",
+  "added_in": "bench-v1.0"
 }

@@ -27,5 +27,6 @@
   "liveness_probe": {
     "url": "https://api.crossref.org/works/10.1016/S0140-6736(97)11096-0"
   },
-  "notes": "Probe read directly: updated-by contains {DOI:10.1016/s0140-6736(10)60175-4, type:'retraction', label:'Retraction', source:'retraction-watch'} plus a 2004 correction, so the eye's notices list maps 1:1 onto updated-by[].type. citation_count is dynamic (grows); judge on the status flag and notice set, and treat the count as a range check."
+  "notes": "Probe read directly: updated-by contains {DOI:10.1016/s0140-6736(10)60175-4, type:'retraction', label:'Retraction', source:'retraction-watch'} plus a 2004 correction, so the eye's notices list maps 1:1 onto updated-by[].type. citation_count is dynamic (grows); judge on the status flag and notice set, and treat the count as a range check.",
+  "added_in": "bench-v1.0"
 }

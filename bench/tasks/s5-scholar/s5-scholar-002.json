@@ -30,5 +30,6 @@
   "liveness_probe": {
     "url": "https://api.openalex.org/works?filter=author.id:A5030598859,author.id:A5068253145&per-page=1"
   },
-  "notes": "Full-corpus coverage (works_seen 146 == works_count 146). Both principals are 2023 Nobel laureates, so the answer names a mega-public figure. Margin sits exactly at the 1.5x floor on raw papers but 1.79x on the key the tool actually ranks by; I probed ranks 3 and 4 upstream (22, 17) to confirm nothing outside the returned list can displace #2."
+  "notes": "Full-corpus coverage (works_seen 146 == works_count 146). Both principals are 2023 Nobel laureates, so the answer names a mega-public figure. Margin sits exactly at the 1.5x floor on raw papers but 1.79x on the key the tool actually ranks by; I probed ranks 3 and 4 upstream (22, 17) to confirm nothing outside the returned list can displace #2.",
+  "added_in": "bench-v1.0"
 }

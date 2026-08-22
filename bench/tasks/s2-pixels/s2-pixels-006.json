@@ -38,5 +38,6 @@
     "url": "https://aclanthology.org/2020.coling-demos.3.pdf"
   },
   "notes": "Second, independent pixel region of the same Figure-2 screenshot: an attribute-value field in the sample data pane (note the source's own misspelling 'propellor', which makes the string highly distinctive). Same exhaustive pixels-only evidence as s2-pixels-005: the full 19,656-char plain text layer was read and the token 'propellor' does not occur anywhere in it. The WebSearch assistant explicitly reported the exact phrase is absent from indexed sources.",
-  "timeout_s": 600.0
+  "timeout_s": 600.0,
+  "added_in": "bench-v1.0"
 }

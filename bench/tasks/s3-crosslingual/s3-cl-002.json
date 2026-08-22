@@ -68,5 +68,6 @@
   },
   "liveness_probe": {
     "url": "https://m.thepaper.cn/newsDetail_forward_28039171"
-  }
+  },
+  "added_in": "bench-v1.1"
 }

@@ -39,5 +39,6 @@
   "liveness_probe": {
     "url": "https://www.cnnic.net.cn/NMediaFile/2025/0220/MAIN1740036167004CKE0DITFO1.pdf"
   },
-  "notes": "eye_read sheet 65 (printed page 59). Media coverage of this report reproduces only the headline figures; the per-allocator appendix rows are not reproduced. Search tool confirmed it could not verify the number and pointed back at the PDF. Entity is an academic network, not a company; figure is a neutral allocation count."
+  "notes": "eye_read sheet 65 (printed page 59). Media coverage of this report reproduces only the headline figures; the per-allocator appendix rows are not reproduced. Search tool confirmed it could not verify the number and pointed back at the PDF. Entity is an academic network, not a company; figure is a neutral allocation count.",
+  "added_in": "bench-v1.0"
 }

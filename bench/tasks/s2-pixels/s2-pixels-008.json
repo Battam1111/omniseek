@@ -38,5 +38,6 @@
     "url": "https://www.hko.gov.hk/tc/publica/gen_pub/files/outdoor_c.pdf"
   },
   "notes": "A night-sky-brightness reading frozen inside a webpage screenshot in HKO's Chinese outdoor-activities pamphlet (42 rasters on page 1; ocr:true gives ocr_images=29). Pixels-only check: page 1's COMPLETE 2186-char text layer read in full advertises the data channels but carries no numeric value anywhere. The engine discussed HK night-sky brightness generally and could not surface this specific reading. REJECTED from the same document: a hill elevation, common encyclopedic knowledge that would likely surface on a quoted search.",
-  "timeout_s": 600.0
+  "timeout_s": 600.0,
+  "added_in": "bench-v1.0"
 }

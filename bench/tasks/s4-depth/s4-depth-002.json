@@ -39,5 +39,6 @@
   "liveness_probe": {
     "url": "https://arxiv.org/pdf/2101.00027v1.pdf"
   },
-  "notes": "Not in the abstract, intro, or any component-size table; buried in the appendix. The search tool explicitly reported it could not find the chunk count or the 22-chunk sample. The .pdf extension routes eye_read to the document reader, which emits Page N markers."
+  "notes": "Not in the abstract, intro, or any component-size table; buried in the appendix. The search tool explicitly reported it could not find the chunk count or the 22-chunk sample. The .pdf extension routes eye_read to the document reader, which emits Page N markers.",
+  "added_in": "bench-v1.0"
 }

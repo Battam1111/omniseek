@@ -50,5 +50,6 @@
     "url": "https://www.bilibili.com/video/BV1xh4y1c77v"
   },
   "notes": "Timestamp is the containing VAD segment start (462.57s); the phrase begins ~8s into that segment, ~7:50. Deliberately avoided the neighbouring sentence which names a photographer (何帆) and a segment where the flat transcript and the per-segment transcript disagree (斋/这). Video's metadata reports an empty subtitle field.",
-  "timeout_s": 900.0
+  "timeout_s": 900.0,
+  "added_in": "bench-v1.0"
 }

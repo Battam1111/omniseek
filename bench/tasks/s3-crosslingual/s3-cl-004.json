@@ -68,5 +68,6 @@
   },
   "liveness_probe": {
     "url": "https://www.ontario.ca/document/employment-standard-act-policy-and-interpretation-manual/part-iv-continuity-employment"
-  }
+  },
+  "added_in": "bench-v1.1"
 }

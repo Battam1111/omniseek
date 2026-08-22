@@ -30,5 +30,6 @@
   "liveness_probe": {
     "url": "https://api.openalex.org/works?filter=author.id:A5030452986,author.id:A5113678219&per-page=1"
   },
-  "notes": "Full-corpus coverage (106/106). Name form is load-bearing: authors=[\"Alan L. Hodgkin\"] returns resolved:null with note 'no NAME-MATCH', while [\"A. L. Hodgkin\"] resolves; use the initialled form. All three named people are deceased (Hodgkin d.1998 and Huxley d.2012 shared the 1963 Nobel; Keynes d.2010 FRS)."
+  "notes": "Full-corpus coverage (106/106). Name form is load-bearing: authors=[\"Alan L. Hodgkin\"] returns resolved:null with note 'no NAME-MATCH', while [\"A. L. Hodgkin\"] resolves; use the initialled form. All three named people are deceased (Hodgkin d.1998 and Huxley d.2012 shared the 1963 Nobel; Keynes d.2010 FRS).",
+  "added_in": "bench-v1.0"
 }

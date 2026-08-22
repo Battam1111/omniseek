@@ -70,5 +70,6 @@
   },
   "liveness_probe": {
     "url": "https://withfarra.co.uk/guides/online-gaming-accounts-digital-items-death-uk"
-  }
+  },
+  "added_in": "bench-v1.1"
 }

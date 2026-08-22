@@ -77,5 +77,6 @@
   },
   "liveness_probe": {
     "url": "https://raw.githubusercontent.com/Spearfoot/disk-burnin-and-testing/master/README.md"
-  }
+  },
+  "added_in": "bench-v1.1"
 }

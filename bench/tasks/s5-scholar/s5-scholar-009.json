@@ -27,5 +27,6 @@
   "liveness_probe": {
     "url": "https://arxiv.org/abs/1602.03837"
   },
-  "notes": "The OA fields were identical across two runs 40 minutes apart. Deliberately scoped to OA fields only: citation_count on this branch is NOT stable (null on run 1, 3793 on run 2), because that leg is Semantic Scholar and api.semanticscholar.org returns 429 to anonymous callers, which I reproduced directly. Old-style arXiv ids are out of scope: hep-th/9711200 and math/0211159 both return {\"error\":\"not a DOI or arXiv id\"}."
+  "notes": "The OA fields were identical across two runs 40 minutes apart. Deliberately scoped to OA fields only: citation_count on this branch is NOT stable (null on run 1, 3793 on run 2), because that leg is Semantic Scholar and api.semanticscholar.org returns 429 to anonymous callers, which I reproduced directly. Old-style arXiv ids are out of scope: hep-th/9711200 and math/0211159 both return {\"error\":\"not a DOI or arXiv id\"}.",
+  "added_in": "bench-v1.0"
 }

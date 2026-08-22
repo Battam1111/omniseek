@@ -50,5 +50,6 @@
     "url": "https://www.bilibili.com/video/BV17W4y167SM"
   },
   "notes": "Timestamp is the start of the VAD segment containing the phrase (segment-level precision, not word-level). Phrase spans two adjacent VAD segments (62.06s + 64.51s within the slice) but is contiguous in the flat transcript, so containment must be checked against the flat transcript, not against individual segments. Content-neutral research-habit advice; no company, no named individual.",
-  "timeout_s": 900.0
+  "timeout_s": 900.0,
+  "added_in": "bench-v1.0"
 }

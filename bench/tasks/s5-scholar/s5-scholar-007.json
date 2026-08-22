@@ -27,5 +27,6 @@
   "liveness_probe": {
     "url": "https://api.crossref.org/works/10.1038/35057062"
   },
-  "notes": "Negative control for the integrity channel: a paper that HAS update records but is NOT retracted. Guards against a tool (or a bluffing model) that reports 'retracted' for anything carrying an update, and against one that suppresses non-retraction notices. Maximally neutral subject (a consortium genome paper)."
+  "notes": "Negative control for the integrity channel: a paper that HAS update records but is NOT retracted. Guards against a tool (or a bluffing model) that reports 'retracted' for anything carrying an update, and against one that suppresses non-retraction notices. Maximally neutral subject (a consortium genome paper).",
+  "added_in": "bench-v1.0"
 }

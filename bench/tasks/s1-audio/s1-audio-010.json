@@ -50,5 +50,6 @@
     "url": "https://traffic.libsyn.com/secure/thewanderingnaturalist/Audio_-_The_Wandering_Naturalist_August_2026_-_Otters_Part_2_final.mp3?dest-id=939395"
   },
   "notes": "The 'student' is referred to anonymously by the guest researcher; nothing identifying or embarrassing. Timestamp is the containing VAD segment start (922.28s); the phrase begins ~1s in. Animal-cognition methodology (novel object recognition), unrelated to credit assignment or RL for LLM reasoning. Show page: https://www.threeriversparks.org/podcast.",
-  "timeout_s": 900.0
+  "timeout_s": 900.0,
+  "added_in": "bench-v1.0"
 }

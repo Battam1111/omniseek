@@ -50,5 +50,6 @@
     "url": "https://www.bilibili.com/video/BV1c547erELX"
   },
   "notes": "Chosen phrase is clean in both the flat and per-segment transcripts. Deliberately avoided nearby lines where the ASR is unstable (观鸟 rendered as 官鸟, and 这本书这么长 which is likely 这么脏) and lines containing a digit string (148种鸟类). Book-recommendation content, no negative claim about any publisher.",
-  "timeout_s": 900.0
+  "timeout_s": 900.0,
+  "added_in": "bench-v1.0"
 }

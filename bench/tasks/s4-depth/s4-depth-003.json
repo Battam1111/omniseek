@@ -39,5 +39,6 @@
   "liveness_probe": {
     "url": "https://arxiv.org/pdf/2101.00027v1.pdf"
   },
-  "notes": "Search tool stated outright that results did not contain the cutoff id. Objective, stable, dated configuration value about a dataset build."
+  "notes": "Search tool stated outright that results did not contain the cutoff id. Objective, stable, dated configuration value about a dataset build.",
+  "added_in": "bench-v1.0"
 }

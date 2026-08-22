@@ -67,5 +67,6 @@
   },
   "liveness_probe": {
     "url": "https://docs.oscollective.org/welcome-and-introduction-to-osc/what-is-fiscal-hosting"
-  }
+  },
+  "added_in": "bench-v1.1"
 }

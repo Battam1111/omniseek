@@ -39,5 +39,6 @@
   "liveness_probe": {
     "url": "https://www.cnnic.net.cn/NMediaFile/2025/0220/MAIN1740036167004CKE0DITFO1.pdf"
   },
-  "notes": "eye_read sheet 69 (printed page 63). Search tool stated the table row data was absent from results and told the user to open the PDF appendix. Purely technical web-infrastructure statistic."
+  "notes": "eye_read sheet 69 (printed page 63). Search tool stated the table row data was absent from results and told the user to open the PDF appendix. Purely technical web-infrastructure statistic.",
+  "added_in": "bench-v1.0"
 }

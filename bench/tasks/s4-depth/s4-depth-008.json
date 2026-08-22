@@ -39,5 +39,6 @@
   "liveness_probe": {
     "url": "https://www.cnnic.net.cn/NMediaFile/2025/0220/MAIN1740036167004CKE0DITFO1.pdf"
   },
-  "notes": "eye_read sheet 67 (printed page 61). Search returned only earlier-edition appendix reprints and the report landing page, not this row. Note the search tool also volunteered that in earlier editions this table was numbered 附表1, which is a distractor, not a hit."
+  "notes": "eye_read sheet 67 (printed page 61). Search returned only earlier-edition appendix reprints and the report landing page, not this row. Note the search tool also volunteered that in earlier editions this table was numbered 附表1, which is a distractor, not a hit.",
+  "added_in": "bench-v1.0"
 }

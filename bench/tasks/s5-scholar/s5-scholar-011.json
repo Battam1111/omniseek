@@ -28,5 +28,6 @@
   "liveness_probe": {
     "url": "https://api.crossref.org/works/10.1016/j.physletb.2012.08.020"
   },
-  "notes": "The fact under test is that the disagreement is EXPOSED with provenance, not which number is right; the split is structural (S2 keeps separate preprint and published records). The 1327 value reproduced on two separate runs. Stability caveat, measured: the S2 leg 429s for anonymous callers (I reproduced this on api.semanticscholar.org/graph/v1/paper/arXiv:1207.7214), so that leg can transiently return null and the judge should retry or use a key; the Crossref and OpenAlex legs are keyless and stable. Third value re-fetchable at https://api.openalex.org/works/doi:10.1016/j.physletb.2012.08.020."
+  "notes": "The fact under test is that the disagreement is EXPOSED with provenance, not which number is right; the split is structural (S2 keeps separate preprint and published records). The 1327 value reproduced on two separate runs. Stability caveat, measured: the S2 leg 429s for anonymous callers (I reproduced this on api.semanticscholar.org/graph/v1/paper/arXiv:1207.7214), so that leg can transiently return null and the judge should retry or use a key; the Crossref and OpenAlex legs are keyless and stable. Third value re-fetchable at https://api.openalex.org/works/doi:10.1016/j.physletb.2012.08.020.",
+  "added_in": "bench-v1.0"
 }

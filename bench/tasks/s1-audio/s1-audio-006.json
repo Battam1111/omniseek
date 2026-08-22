@@ -50,5 +50,6 @@
     "url": "https://anchor.fm/s/28011b0c/podcast/play/123475172/https%3A%2F%2Fd3ctxlq1ktw2nl.cloudfront.net%2Fstaging%2F2026-6-29%2F428825464-44100-2-4fe0de436b1d2.mp3"
   },
   "notes": "Ambiguity worth flagging: near-variants of the idiom ('sometimes good enough is good enough') are widely written, so a lax fuzzy matcher could false-positive; the exact 8-word string was not found. Episode discusses a life-insurance logo but the chosen phrase names no company and carries no negative claim. Anchor/Spotify auto-transcripts exist in-app but are not web-indexable; feed carries no podcast:transcript tag.",
-  "timeout_s": 900.0
+  "timeout_s": 900.0,
+  "added_in": "bench-v1.0"
 }

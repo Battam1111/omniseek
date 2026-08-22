@@ -50,5 +50,6 @@
     "url": "https://traffic.libsyn.com/secure/thewanderingnaturalist/Audio_-_The_Wandering_Naturalist_August_2026_-_Otters_Part_1_final.mp3?dest-id=939395"
   },
   "notes": "Timestamp is the containing VAD segment start (628.86s); the phrase sits at that segment's end, ~10:34. Show page for liveness cross-check: https://www.threeriversparks.org/podcast (RSS https://rss.libsyn.com/shows/147113/destinations/939395.xml, no podcast:transcript tag). Chose this over neighbouring lines containing digit strings (weights, episode numbers).",
-  "timeout_s": 900.0
+  "timeout_s": 900.0,
+  "added_in": "bench-v1.0"
 }

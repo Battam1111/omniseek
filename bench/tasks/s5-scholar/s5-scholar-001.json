@@ -30,5 +30,6 @@
   "liveness_probe": {
     "url": "https://api.openalex.org/works?filter=author.id:A5109884453,author.id:A5014257109&per-page=1"
   },
-  "notes": "works_seen(179) == works_count(179): the eye saw Crick's complete OpenAlex corpus, so the ranking is not sample-limited. Probe was read directly and returned meta.count=21, exactly the eye's number. Crick d.2004; Watson Nobel 1962. Fact is a bibliometric count only."
+  "notes": "works_seen(179) == works_count(179): the eye saw Crick's complete OpenAlex corpus, so the ranking is not sample-limited. Probe was read directly and returned meta.count=21, exactly the eye's number. Crick d.2004; Watson Nobel 1962. Fact is a bibliometric count only.",
+  "added_in": "bench-v1.0"
 }

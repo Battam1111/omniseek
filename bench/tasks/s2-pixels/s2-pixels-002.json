@@ -37,5 +37,6 @@
     "url": "https://www.hko.gov.hk/en/publica/tc/files/tc1968.pdf"
   },
   "notes": "Chart-label variant of the same scan: the marginal legend of the 1968 cyclone track charts. Plain read of pages 3 and 4 yields only '[1 image(s) on this page]' (25 chars each). The string is OCR'd identically from TWO independent images (p03_01.jpeg Jan-Aug plate, p04_01.jpeg Sep-Dec plate), which cross-corroborates the transcription; the adjacent scale figure is NOT stable across the two passes and was deliberately excluded from the ground truth. ReliefWeb's HTML transcription covers only the INTRODUCTION prose and contains no map legend.",
-  "timeout_s": 900.0
+  "timeout_s": 900.0,
+  "added_in": "bench-v1.0"
 }

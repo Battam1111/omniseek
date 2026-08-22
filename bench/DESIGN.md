@@ -33,14 +33,20 @@ claim.**
 |---|---|---|---|
 | S1 audio | transcribes speech nobody wrote down | `omniseek_transcribe` | `asr` |
 | S2 pixels | reads text baked into images and scans | `omniseek_read(ocr=True)` | `ocr` |
-| S3 cross-lingual | crosses languages | `omniseek_search` | **withdrawn 2026-08-17**, rebuilt need-first: [RECONSTRUCTION-s3.md](RECONSTRUCTION-s3.md) |
+| S3 cross-lingual | crosses languages | `omniseek_search` | core + the operator's Exa key. Withdrawn 2026-08-17, rebuilt need-first ([RECONSTRUCTION-s3.md](RECONSTRUCTION-s3.md)), readmitted 2026-08-22 with ten tasks and the full published funnel ([FUNNEL-s3.md](FUNNEL-s3.md)) |
 | S4 depth | evidence deep in threads and long documents | `omniseek_search` / `omniseek_read` | `pdf` for the document tasks |
 | S5 scholar graph | structured scholarly evidence | `omniseek_coauthors` / `omniseek_paper_enrich` | core |
 | S6 memory | remembers, deduplicates, traces provenance | `_meta` contract of repeat runs | core |
 
 Suites declare their required extras, which makes the claim-verification suite double as an honest
 capability-tier map: a core-only install is expected to pass core suites and to report the
-others as "sense dormant", not as failures.
+others as "sense dormant", not as failures. S3 declares a source credential the same way: it
+drives the Exa route, so a runner without the operator's Exa key reports the suite dormant
+with a credential-absent reason instead of scoring zeros that would read as capability
+failure. We do not place our own key in this repository's CI: published s3 numbers come from
+a maintainer-instance run, where the key lives only in the operator's local credential file,
+and the workflow's optional secret exists so that any fork can supply its own key and
+reproduce.
 
 ## Task anatomy
 
@@ -53,7 +59,7 @@ One task is one JSON file, versioned in-repo, human-auditable:
   "claim": "the exact phrase is spoken in the episode and written nowhere indexable",
   "input": {"tool": "omniseek_transcribe", "args": {"url": "...", "start": "46:30", "duration": "3:00"}},
   "ground_truth": {"type": "normalized_containment", "value": "...", "normalize": "casefold_strip_cjk"},
-  "search_resistance": [
+  "search_resistance_prefilter": [
     {"engine": "google", "query": "...", "date": "2026-08-16", "first_page_hit": false},
     {"engine": "bing", "query": "...", "date": "2026-08-16", "first_page_hit": false}
   ],
@@ -65,10 +71,14 @@ One task is one JSON file, versioned in-repo, human-auditable:
 - **Ground truth is mechanically verifiable by a human without any model**: a phrase you can
   hear at a timestamp, a number you can see in a figure, a DOI you can click. If verifying a
   task requires trusting an LLM, the task is rejected.
-- **Search resistance is recorded evidence, not an assertion.** Following the BrowseComp
-  construction discipline: a task is admitted only after logged queries on named engines, on
-  a named date, failed to surface the ground truth on the first page. Tasks that fail this
-  gate are discarded, however good they look.
+- **Search resistance is recorded evidence, not an assertion.** Every task records logged
+  queries on named engines, on a named date, with the first-page outcome. For the suites
+  authored before the s3 rebuild this was an admission gate. The rebuilt s3 replaced the
+  gate with honest labeling, for the reason recorded in its spec: a suite composed only of
+  needs plain search fails on would be rigged by selection, so web-answerable tasks are
+  admitted deliberately and the field says only "first page hit or miss under the recorded
+  query and date", never "search cannot find this". The field name is
+  `search_resistance_prefilter` everywhere.
 - **Dynamic ground truth (S5 only):** scholarly counts drift, so S5 tasks re-fetch the truth
   from the upstream source of record at judge time and compare structurally (the
   MCP-Universe dynamic-evaluator pattern), rather than freezing a number that will rot.
@@ -79,6 +89,10 @@ One task is one JSON file, versioned in-repo, human-auditable:
 
 All judges are mechanical: normalized string containment, numeric equality, identifier
 match in top-k (k pre-registered per suite, default 5), or field assertions on `_meta`.
+For the rebuilt s3, identifier matching is retired outright: those tasks judge normalized
+containment of a claim key against a pre-registered accepted-forms list, under the
+normalization documented in `bench/judges.py`, and the schema refuses an s3 task that tries
+to use identifiers.
 There is no LLM judge anywhere in the harness. Where ASR output varies, the fallback judge
 is a character-similarity ratio against the target span with a pre-registered threshold,
 which is still a pure computation. Judge code lives beside the tasks and is part of the
@@ -117,6 +131,12 @@ Live sources are noisy, so single runs are noise:
 
 ## Task-set changelog
 
+- **bench-v1.1**: readmitted s3-crosslingual with ten tasks built under the pre-registered
+  need-first spec; the whole selection funnel, every receipt, and the recorded single-call
+  verification are in [FUNNEL-s3.md](FUNNEL-s3.md). All earlier tasks are retroactively
+  stamped `added_in: bench-v1.0` (only s6 carried the stamp before; the charter always
+  required it). The runner learned credential dormancy (see the suite map note), and the
+  benchmark workflow's default suite list now includes s3.
 - **bench-v1.0.1**: retired `s5-scholar-012` (its two-call shape is unsupported by the v1
   runner, which drove a judge mismatch in CI run 2; citation-conflict coverage stays via
   the single-call `s5-scholar-011`; multi-call task support is v1.1 backlog). CI runs now

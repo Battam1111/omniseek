@@ -50,5 +50,6 @@
     "url": "https://www.bilibili.com/video/BV1mzcReZEgA"
   },
   "notes": "Weakest of the Chinese set on lexical distinctiveness: the underlying procedure ('wet the filter so it sticks to the dripper') is written up on many coffee pages, so the exact colloquial wording is what carries the test. Neither prefilter surfaced the string. Deliberately avoided nearby lines with digit strings (225毫升, 15克) and one where flat vs segment ASR disagree (极细粉 / 极器粉).",
-  "timeout_s": 900.0
+  "timeout_s": 900.0,
+  "added_in": "bench-v1.0"
 }

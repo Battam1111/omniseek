@@ -69,5 +69,6 @@
   },
   "liveness_probe": {
     "url": "https://support.google.com/chrome/a/answer/6220366"
-  }
+  },
+  "added_in": "bench-v1.1"
 }

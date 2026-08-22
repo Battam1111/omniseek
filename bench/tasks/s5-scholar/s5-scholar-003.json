@@ -30,5 +30,6 @@
   "liveness_probe": {
     "url": "https://api.openalex.org/works?filter=author.id:A5111910776,author.id:A5055376683&per-page=1"
   },
-  "notes": "Sampled (200 of 413 works), but the margin is far too large for sampling to flip; I re-checked the true upstream #2 (Alice Tay, 17, not the in-sample Boon Hui Tay, 15) and the lead holds at 4.8x. Counterintuitive answer (not Crick or Jacob), so it tests retrieval rather than recall. Brenner d.2019, Nobel 2002; Venkatesh is a research-director-level lab head at A*STAR IMCB, not a trainee."
+  "notes": "Sampled (200 of 413 works), but the margin is far too large for sampling to flip; I re-checked the true upstream #2 (Alice Tay, 17, not the in-sample Boon Hui Tay, 15) and the lead holds at 4.8x. Counterintuitive answer (not Crick or Jacob), so it tests retrieval rather than recall. Brenner d.2019, Nobel 2002; Venkatesh is a research-director-level lab head at A*STAR IMCB, not a trainee.",
+  "added_in": "bench-v1.0"
 }
