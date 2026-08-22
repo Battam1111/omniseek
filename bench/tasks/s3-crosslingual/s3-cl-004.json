@@ -1,0 +1,72 @@
+{
+  "id": "s3-cl-004",
+  "suite": "s3-crosslingual",
+  "kind": "retrieval",
+  "lang": "en",
+  "domain": "jobs and workplace",
+  "claim": "A single omniseek_search call with the frozen need as the query returns text containing the claim key.",
+  "frozen_need": "Our site is being handed to a third-party logistics contractor next quarter and management keeps repeating that nothing changes for us. I've been here nine years and I need to know what actually happens to my seniority, my accrued vacation and my severance entitlement if the new operator rehires me at day zero, and what people in the same situation in Canada actually walked away with.",
+  "input": {
+    "tool": "omniseek_search",
+    "args": {
+      "query": "Our site is being handed to a third-party logistics contractor next quarter and management keeps repeating that nothing changes for us. I've been here nine years and I need to know what actually happens to my seniority, my accrued vacation and my severance entitlement if the new operator rehires me at day zero, and what people in the same situation in Canada actually walked away with.",
+      "sources": [
+        "exa"
+      ],
+      "raw": true,
+      "limit": 10
+    }
+  },
+  "ground_truth": {
+    "type": "normalized_containment",
+    "value": "the employee’s length or period of employment with their previous employer is treated as if it had been employment with the new employer with respect to rights under the Employment Standards Act, 2000 that are determined by length or period of employment"
+  },
+  "accessibility_tier": "T2",
+  "key_language": "en",
+  "accepted_forms": [
+    "就《2000年就业标准法》中按雇佣年限或期间确定的权利而言，员工在前雇主处的雇佣年限或期间视同其在新雇主处的雇佣年限或期间。"
+  ],
+  "render_routes": [
+    "publisher_html_curl",
+    "publisher_html_curl_wbdisable",
+    "eye_read"
+  ],
+  "funnel_id": "N04",
+  "answering_doc": {
+    "url": "https://www.ontario.ca/document/employment-standard-act-policy-and-interpretation-manual/part-iv-continuity-employment",
+    "title": "Employment Standards Act Policy and Interpretation Manual, Part IV - Continuity of Employment - Government of Ontario"
+  },
+  "admission": {
+    "adjudicated": "2026-08-22",
+    "settles": [
+      "under Ontario's ESA, length of employment with the previous employer is treated as employment with the new employer for rights determined by length of service when a business is sold or a building-services contractor changes"
+    ],
+    "leaves_open": [
+      "common-law notice entitlements outside the ESA",
+      "any negotiated package"
+    ],
+    "note": "Official provincial interpretation manual; the authoritative destination for the frozen need."
+  },
+  "search_resistance_prefilter": [
+    {
+      "tool": "WebSearch",
+      "query": "Ontario ESA section 9 sale of business outsourcing to third party logistics contractor successor employer continuity of service severance vacation",
+      "date": "2026-08-22",
+      "first_page_hit": true,
+      "note": "web-only prospector's recorded query that surfaced the answering document"
+    }
+  ],
+  "verification": {
+    "single_call_run": {
+      "date": "2026-08-22",
+      "args_identical_to_input": true,
+      "answering_doc_in_results": true,
+      "key_contained_in_returned_text": true
+    },
+    "eye_run_confirmed": true,
+    "evidence_snippet": "the employee's length or period of employment with their previous employer is treated as if it had been employment with the new employer with respect to rights under the Employment Standards Act, 2000 that are determined by length or period of employment"
+  },
+  "liveness_probe": {
+    "url": "https://www.ontario.ca/document/employment-standard-act-policy-and-interpretation-manual/part-iv-continuity-employment"
+  }
+}

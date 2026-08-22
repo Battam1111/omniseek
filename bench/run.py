@@ -25,10 +25,11 @@ from judges import judge, wilson_interval
 from schema import load_tasks
 
 
-# s3-crosslingual is withdrawn, not merely unlisted: its tasks were constructed in an order that
-# put our own catalog inside the judge. See bench/RECONSTRUCTION-s3.md. Requesting a suite
-# with no tasks is a HarnessError, so a withdrawn suite has to leave this list too.
-DEFAULT_SUITES = "s4-depth,s5-scholar,s6-memory"
+# s3-crosslingual was withdrawn on 2026-08-17 (its tasks put our own catalog inside the judge)
+# and rebuilt under the pre-registered spec in bench/RECONSTRUCTION-s3.md: needs authored blind,
+# keys are claim strings judged by containment, and the whole funnel is published in
+# bench/FUNNEL-s3.md. Readmitted 2026-08-22 with the tasks in bench/tasks/s3-crosslingual/.
+DEFAULT_SUITES = "s3-crosslingual,s4-depth,s5-scholar,s6-memory"
 WARMUP_TIMEOUT = 600.0
 WARMUP_QUERY = "benchmark neutral warmup"
 TEARDOWN_TIMEOUT = 15.0

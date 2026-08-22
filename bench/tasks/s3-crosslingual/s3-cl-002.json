@@ -1,0 +1,72 @@
+{
+  "id": "s3-cl-002",
+  "suite": "s3-crosslingual",
+  "kind": "retrieval",
+  "lang": "zh",
+  "domain": "jobs and workplace",
+  "claim": "A single omniseek_search call with the frozen need as the query returns text containing the claim key.",
+  "frozen_need": "我是三年前以高层次人才身份进中西部某双一流高校的预聘制青椒，当时领了安家费和科研启动费，学校口头说「干满五年就没事」。现在想跳到另一所学校，人事只丢一句「按协议办」。我想搞清楚这类安家费返还和服务期违约金实际怎么算、有没有人真谈下来过、以及接收方高校愿不愿意接这笔账。",
+  "input": {
+    "tool": "omniseek_search",
+    "args": {
+      "query": "我是三年前以高层次人才身份进中西部某双一流高校的预聘制青椒，当时领了安家费和科研启动费，学校口头说「干满五年就没事」。现在想跳到另一所学校，人事只丢一句「按协议办」。我想搞清楚这类安家费返还和服务期违约金实际怎么算、有没有人真谈下来过、以及接收方高校愿不愿意接这笔账。",
+      "sources": [
+        "exa"
+      ],
+      "raw": true,
+      "limit": 10
+    }
+  },
+  "ground_truth": {
+    "type": "normalized_containment",
+    "value": "曹某返还给某县人民医院安家费112500元，并支付违约金33750元；驳回某县人民医院的其余诉讼请求。"
+  },
+  "accessibility_tier": "T2",
+  "key_language": "zh",
+  "accepted_forms": [
+    "Cao shall return 112500 yuan in settling-in allowance to a county People's Hospital and pay 33750 yuan in liquidated damages; the hospital's remaining claims are dismissed."
+  ],
+  "render_routes": [
+    "publisher_html_mobile_curl",
+    "publisher_html_desktop_curl",
+    "eye_read"
+  ],
+  "funnel_id": "N02",
+  "answering_doc": {
+    "url": "https://m.thepaper.cn/newsDetail_forward_28039171",
+    "title": "海瑞析案丨人才引进中途离职，安家费、违约金如何赔付？（澎湃新闻）"
+  },
+  "admission": {
+    "adjudicated": "2026-08-22",
+    "settles": [
+      "how a real adjudicated case computed settling-in allowance clawback and service-period damages: pro-rated return of 112500 yuan plus 33750 yuan damages, with the hospital's further claims rejected and the appeal dismissed"
+    ],
+    "leaves_open": [
+      "whether a receiving university will assume the debt",
+      "how much room individual negotiation has"
+    ],
+    "note": "The need explicitly asks how these cases actually resolve; the specific adjudicated outcome with amounts is the decisive form. No second equally decisive case report surfaced in either arm or in the adjudicator's probe."
+  },
+  "search_resistance_prefilter": [
+    {
+      "tool": "WebSearch",
+      "query": "高校 人才引进 安家费 返还 服务期 违约金 判决 案例 青年教师 跳槽 预聘制",
+      "date": "2026-08-22",
+      "first_page_hit": true,
+      "note": "web-only prospector's recorded query that surfaced the answering document"
+    }
+  ],
+  "verification": {
+    "single_call_run": {
+      "date": "2026-08-22",
+      "args_identical_to_input": true,
+      "answering_doc_in_results": false,
+      "key_contained_in_returned_text": false
+    },
+    "eye_run_confirmed": false,
+    "note": "the answering document did not surface in the top-10 results"
+  },
+  "liveness_probe": {
+    "url": "https://m.thepaper.cn/newsDetail_forward_28039171"
+  }
+}

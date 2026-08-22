@@ -1,0 +1,84 @@
+{
+  "id": "s3-cl-010",
+  "suite": "s3-crosslingual",
+  "kind": "retrieval",
+  "lang": "en",
+  "domain": "life administration and local services",
+  "claim": "A single omniseek_search call with the frozen need as the query returns text containing the claim key.",
+  "frozen_need": "I moved to Canada on a foreign licence, drove on it for about a year in one province, then relocated to another province before ever converting it. I can't work out whose rules now apply: whether the driving experience I can document from my home country still counts toward skipping the graduated stages in the new province, whether that clock restarted when I moved, and what proof the new province will accept when my home authority won't issue anything in English or French.",
+  "input": {
+    "tool": "omniseek_search",
+    "args": {
+      "query": "I moved to Canada on a foreign licence, drove on it for about a year in one province, then relocated to another province before ever converting it. I can't work out whose rules now apply: whether the driving experience I can document from my home country still counts toward skipping the graduated stages in the new province, whether that clock restarted when I moved, and what proof the new province will accept when my home authority won't issue anything in English or French.",
+      "sources": [
+        "exa"
+      ],
+      "raw": true,
+      "limit": 10
+    }
+  },
+  "ground_truth": {
+    "type": "normalized_containment",
+    "value": "You can combine documents from multiple jurisdictions to reach the two-year requirement."
+  },
+  "accessibility_tier": "T2",
+  "key_language": "en",
+  "accepted_forms": [
+    "你可以合并来自多个辖区的文件，以满足两年的要求。"
+  ],
+  "render_routes": [
+    "publisher_html_curl_www",
+    "publisher_html_curl_canonical",
+    "eye_read"
+  ],
+  "funnel_id": "N32",
+  "answering_doc": {
+    "url": "https://www.icbc.com/driver-licensing/moving-bc/Proving-your-driving-experience",
+    "title": "Proving your driving experience"
+  },
+  "admission": {
+    "adjudicated": "2026-08-22",
+    "settles": [
+      "BC lets an applicant combine documents from multiple jurisdictions to reach the two-year experience requirement, which supports a GLP exemption; non-English documents need an ICBC-approved translation with originals or issuer-certified copies"
+    ],
+    "leaves_open": [
+      "whether the year driven on a foreign licence in the previous province counts toward the two years",
+      "the effect of never converting in the previous province",
+      "how provinces other than BC would treat the same history"
+    ]
+  },
+  "search_resistance_prefilter": [
+    {
+      "tool": "WebSearch",
+      "query": "moved provinces Canada foreign licence driving experience count toward new province licence skip graduated licensing",
+      "date": "2026-08-22",
+      "first_page_hit": false,
+      "top_hits": [
+        "https://translayte.com/blog/foreign-drivers-licence-exchange-in-ontario",
+        "https://drivetest.ca/licences/exchanges-foreign-licences/foreign-licence-experience-credits/",
+        "https://www.liveincanada.ca/posts/drivers-license-exchange"
+      ],
+      "note": "adjudicator's original-language query; the web-only prospector reached this need by fetch navigation after its search budget ran out"
+    },
+    {
+      "tool": "WebSearch",
+      "query": "加拿大 BC省 换驾照 外国驾照 驾龄证明 多个辖区 合并 两年 免 GLP 毕业式驾照",
+      "date": "2026-08-22",
+      "first_page_hit": true,
+      "note": "adjudicator's expert rephrase in the other suite language; the ICBC page was the first organic result"
+    }
+  ],
+  "verification": {
+    "single_call_run": {
+      "date": "2026-08-22",
+      "args_identical_to_input": true,
+      "answering_doc_in_results": false,
+      "key_contained_in_returned_text": false
+    },
+    "eye_run_confirmed": false,
+    "note": "the answering document did not surface in the top-10 results"
+  },
+  "liveness_probe": {
+    "url": "https://www.icbc.com/driver-licensing/moving-bc/Proving-your-driving-experience"
+  }
+}

@@ -1,0 +1,72 @@
+{
+  "id": "s3-cl-003",
+  "suite": "s3-crosslingual",
+  "kind": "retrieval",
+  "lang": "en",
+  "domain": "jobs and workplace",
+  "claim": "A single omniseek_search call with the frozen need as the query returns text containing the claim key.",
+  "frozen_need": "I'm a first-time engineering manager at a US company and I've been told to put one of my reports, who sits in our German entity, on our standard 60-day PIP. HR just says \"follow the same process as everyone else\", but I keep hearing that a US-style PIP is close to useless in Germany and can actively hurt us later. What actually happens in practice, and what do managers there do instead when the performance problem is real?",
+  "input": {
+    "tool": "omniseek_search",
+    "args": {
+      "query": "I'm a first-time engineering manager at a US company and I've been told to put one of my reports, who sits in our German entity, on our standard 60-day PIP. HR just says \"follow the same process as everyone else\", but I keep hearing that a US-style PIP is close to useless in Germany and can actively hurt us later. What actually happens in practice, and what do managers there do instead when the performance problem is real?",
+      "sources": [
+        "exa"
+      ],
+      "raw": true,
+      "limit": 10
+    }
+  },
+  "ground_truth": {
+    "type": "normalized_containment",
+    "value": "performance reviews and performance improvement plans (PiPs) can serve as evidence of low performance in court, but only if conducted according to German standards."
+  },
+  "accessibility_tier": "T2",
+  "key_language": "en",
+  "accepted_forms": [
+    "绩效评估和绩效改进计划（PiP）可以作为法庭上低绩效的证据，但前提是按照德国标准执行。"
+  ],
+  "render_routes": [
+    "publisher_html_curl",
+    "publisher_html_curl_output_1",
+    "eye_read"
+  ],
+  "funnel_id": "N03",
+  "answering_doc": {
+    "url": "https://www.osborneclarke.com/insights/six-common-employment-law-pitfalls-us-companies-operating-germany",
+    "title": "Six common employment law pitfalls for US companies operating in Germany - Osborne Clarke"
+  },
+  "admission": {
+    "adjudicated": "2026-08-22",
+    "settles": [
+      "a US-style PIP has evidentiary value in a German court only if conducted according to German standards, which is the pivot the asker must act on before applying the standard 60-day process"
+    ],
+    "leaves_open": [
+      "the full replacement process design",
+      "the remaining steps under the Protection Against Dismissal Act"
+    ],
+    "note": "The drill also surfaced the same firm's German-domain republication of this article (osborneclarke-arbeitsrecht.de); it is the same work by the same publisher, not a third-party confusable. Our reader returned no text for that mirror, so its exact string carriage is unverified."
+  },
+  "search_resistance_prefilter": [
+    {
+      "tool": "WebSearch",
+      "query": "performance improvement plan does not exist German law employer what to do instead global mobility HR guide \"Germany\" PIP alternative 2025",
+      "date": "2026-08-22",
+      "first_page_hit": true,
+      "note": "web-only prospector's recorded query that surfaced the answering document"
+    }
+  ],
+  "verification": {
+    "single_call_run": {
+      "date": "2026-08-22",
+      "args_identical_to_input": true,
+      "answering_doc_in_results": true,
+      "key_contained_in_returned_text": false
+    },
+    "eye_run_confirmed": false,
+    "note": "the answering document surfaced in the returned results but the query-relevant excerpt did not include the key sentence"
+  },
+  "liveness_probe": {
+    "url": "https://www.osborneclarke.com/insights/six-common-employment-law-pitfalls-us-companies-operating-germany"
+  }
+}

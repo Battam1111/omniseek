@@ -1,0 +1,74 @@
+{
+  "id": "s3-cl-009",
+  "suite": "s3-crosslingual",
+  "kind": "retrieval",
+  "lang": "en",
+  "domain": "games and popular culture",
+  "claim": "A single omniseek_search call with the frozen need as the query returns text containing the claim key.",
+  "frozen_need": "My dad has a large digital game library across two console platforms and a PC storefront, and he's asked me to work out what actually happens to it after he dies. I don't want the boilerplate 'licenses are non-transferable' line: I want to know what families have managed in practice, whether any platform has ever acted on a will or a death certificate, what realistically happens if we just keep using his account, and whether the answer changes by country.",
+  "input": {
+    "tool": "omniseek_search",
+    "args": {
+      "query": "My dad has a large digital game library across two console platforms and a PC storefront, and he's asked me to work out what actually happens to it after he dies. I don't want the boilerplate 'licenses are non-transferable' line: I want to know what families have managed in practice, whether any platform has ever acted on a will or a death certificate, what realistically happens if we just keep using his account, and whether the answer changes by country.",
+      "sources": [
+        "exa"
+      ],
+      "raw": true,
+      "limit": 10
+    }
+  },
+  "ground_truth": {
+    "type": "normalized_containment",
+    "value": "Do not notify gaming platforms of the death unless you have decided to formally close the account."
+  },
+  "accessibility_tier": "T2",
+  "key_language": "en",
+  "accepted_forms": [
+    "除非你已经决定正式关闭账户，否则不要通知游戏平台有人去世。"
+  ],
+  "render_routes": [
+    "publisher_html_curl",
+    "publisher_html_curl_variant",
+    "eye_read"
+  ],
+  "funnel_id": "N28",
+  "answering_doc": {
+    "url": "https://withfarra.co.uk/guides/online-gaming-accounts-digital-items-death-uk",
+    "title": "Online Gaming Accounts After Death: What Happens to Virtual Assets?"
+  },
+  "admission": {
+    "adjudicated": "2026-08-22",
+    "settles": [
+      "if the family's goal is continued informal use of the library, do not notify the platforms: notification can trigger lock or closure and cut existing access"
+    ],
+    "leaves_open": [
+      "per-platform handling beyond those covered",
+      "the legal effect of wills and death certificates on formal transfer",
+      "cross-country enforceability",
+      "verifiable success cases of families keeping accounts"
+    ],
+    "note": "Competing bereavement guides frame the task as closing accounts; none carries this directive sentence."
+  },
+  "search_resistance_prefilter": [
+    {
+      "tool": "WebSearch",
+      "query": "UK digital assets will solicitor Steam games account deceased what executors can actually do 2025",
+      "date": "2026-08-22",
+      "first_page_hit": true,
+      "note": "web-only prospector's recorded query that surfaced the answering document"
+    }
+  ],
+  "verification": {
+    "single_call_run": {
+      "date": "2026-08-22",
+      "args_identical_to_input": true,
+      "answering_doc_in_results": true,
+      "key_contained_in_returned_text": false
+    },
+    "eye_run_confirmed": false,
+    "note": "the answering document surfaced in the returned results but the query-relevant excerpt did not include the key sentence"
+  },
+  "liveness_probe": {
+    "url": "https://withfarra.co.uk/guides/online-gaming-accounts-digital-items-death-uk"
+  }
+}

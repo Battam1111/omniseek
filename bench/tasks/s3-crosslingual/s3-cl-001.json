@@ -1,0 +1,73 @@
+{
+  "id": "s3-cl-001",
+  "suite": "s3-crosslingual",
+  "kind": "retrieval",
+  "lang": "zh",
+  "domain": "jobs and workplace",
+  "claim": "A single omniseek_search call with the frozen need as the query returns text containing the claim key.",
+  "frozen_need": "我人在上海，两年前跟一家新加坡公司签的是「顾问服务协议」，工资走第三方代发，社保公积金也是那家代理公司挂着缴。现在对方要单方面改报酬结构，我想知道真闹起来我到底跟谁存在劳动关系、该向哪一方申请仲裁、在哪个城市立案；还有「挂靠代缴社保」这件事会不会反过来变成我自己的把柄。",
+  "input": {
+    "tool": "omniseek_search",
+    "args": {
+      "query": "我人在上海，两年前跟一家新加坡公司签的是「顾问服务协议」，工资走第三方代发，社保公积金也是那家代理公司挂着缴。现在对方要单方面改报酬结构，我想知道真闹起来我到底跟谁存在劳动关系、该向哪一方申请仲裁、在哪个城市立案；还有「挂靠代缴社保」这件事会不会反过来变成我自己的把柄。",
+      "sources": [
+        "exa"
+      ],
+      "raw": true,
+      "limit": 10
+    }
+  },
+  "ground_truth": {
+    "type": "normalized_containment",
+    "value": "在争议一方不具备用人单位主体资格的情况下，劳动（人事）仲裁委员会可能以争议事项不属于劳动仲裁受案范围为由，作出不予受理决定。"
+  },
+  "accessibility_tier": "T2",
+  "key_language": "zh",
+  "accepted_forms": [
+    "Where one side to the dispute lacks the legal status of an employer, the labor or personnel arbitration commission may refuse to accept the case on the ground that the dispute is outside the scope of labor arbitration."
+  ],
+  "render_routes": [
+    "publisher_html_http_curl",
+    "publisher_html_https_curl",
+    "eye_read"
+  ],
+  "funnel_id": "N01",
+  "answering_doc": {
+    "url": "http://www.sincerepartners.com/2021/xcdt_0923/261.html",
+    "title": "星律说 | 外国企业直接聘用中国员工相关劳动法问题分析 - 广东星辰律师事务所"
+  },
+  "admission": {
+    "adjudicated": "2026-08-22",
+    "settles": [
+      "a foreign company with no PRC entity is not an employer in the Labour Law sense, so the arbitration commission may refuse the case as outside the labour-arbitration scope",
+      "the practical route is therefore a civil contract claim, not labour arbitration against the Singapore company"
+    ],
+    "leaves_open": [
+      "which city or court takes the civil filing",
+      "the asker's own exposure from proxy social-insurance contributions"
+    ],
+    "note": "Both prospecting arms converged on this article as the closest answer to the employer-identification question."
+  },
+  "search_resistance_prefilter": [
+    {
+      "tool": "WebSearch",
+      "query": "中国员工 受雇 境外公司 无境内实体 劳动仲裁 主体不适格 怎么维权 上海 案例 2024",
+      "date": "2026-08-22",
+      "first_page_hit": true,
+      "note": "web-only prospector's recorded query that surfaced the answering document"
+    }
+  ],
+  "verification": {
+    "single_call_run": {
+      "date": "2026-08-22",
+      "args_identical_to_input": true,
+      "answering_doc_in_results": false,
+      "key_contained_in_returned_text": false
+    },
+    "eye_run_confirmed": false,
+    "note": "the answering document did not surface in the top-10 results"
+  },
+  "liveness_probe": {
+    "url": "http://www.sincerepartners.com/2021/xcdt_0923/261.html"
+  }
+}

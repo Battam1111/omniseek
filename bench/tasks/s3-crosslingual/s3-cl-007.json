@@ -1,0 +1,81 @@
+{
+  "id": "s3-cl-007",
+  "suite": "s3-crosslingual",
+  "kind": "retrieval",
+  "lang": "zh",
+  "domain": "consumer electronics and hardware",
+  "claim": "A single omniseek_search call with the frozen need as the query returns text containing the claim key.",
+  "frozen_need": "想给实验室搭一台便宜的备份 NAS，二手平台上一大堆通电三万小时以上的企业级氦气盘，价格只有新盘的三分之一。SMART 里除了重映射扇区，还有哪几项一旦出现就该直接放弃这块盘？通电时间和通电次数，哪个更能说明剩余寿命？刚拿到手，在七天退货期内跑什么测试最容易把有问题的盘暴露出来？",
+  "input": {
+    "tool": "omniseek_search",
+    "args": {
+      "query": "想给实验室搭一台便宜的备份 NAS，二手平台上一大堆通电三万小时以上的企业级氦气盘，价格只有新盘的三分之一。SMART 里除了重映射扇区，还有哪几项一旦出现就该直接放弃这块盘？通电时间和通电次数，哪个更能说明剩余寿命？刚拿到手，在七天退货期内跑什么测试最容易把有问题的盘暴露出来？",
+      "sources": [
+        "exa"
+      ],
+      "raw": true,
+      "limit": 10
+    }
+  },
+  "ground_truth": {
+    "type": "normalized_containment",
+    "value": "You therefore may wish to abort the remaining tests and proceed with an RMA exchange for new drives or discard old ones."
+  },
+  "accessibility_tier": "T2",
+  "key_language": "en",
+  "accepted_forms": [
+    "因此你可以考虑中止剩余测试，改为对新盘申请 RMA 换货，或将旧盘弃置。"
+  ],
+  "render_routes": [
+    "publisher_html_curl",
+    "raw_markdown_curl",
+    "eye_read"
+  ],
+  "funnel_id": "N22",
+  "answering_doc": {
+    "url": "https://raw.githubusercontent.com/Spearfoot/disk-burnin-and-testing/master/README.md",
+    "title": "Spearfoot disk-burnin-and-testing README"
+  },
+  "admission": {
+    "adjudicated": "2026-08-22",
+    "settles": [
+      "the recorded SMART or badblocks error signatures justify aborting remaining tests and going straight to return, exchange or discard within the return window"
+    ],
+    "leaves_open": [
+      "helium-specific SMART 22 interpretation",
+      "whether power-on hours or power cycles better predict remaining life",
+      "whether a used drive's SMART counters were reset or forged",
+      "total test duration and parallel scheduling"
+    ],
+    "note": "Verbatim GitHub forks of the same repository carry the same README; they are the same work at another URL, not third-party confusables. No third-party document carrying the sentence surfaced in either arm's checks or the adjudicator's exact-string probe."
+  },
+  "search_resistance_prefilter": [
+    {
+      "tool": "WebSearch",
+      "query": "二手 企业级 氦气盘 SMART 哪些项 直接放弃 通电时间 通电次数 寿命 退货期 测试 坏道 全盘 检测",
+      "date": "2026-08-22",
+      "first_page_hit": false,
+      "note": "web-only prospector's recorded original query; the admitted answering document was not among its candidates"
+    },
+    {
+      "tool": "WebSearch",
+      "query": "buying used enterprise helium hard drives which SMART attributes are dealbreakers burn-in tests to run within return window",
+      "date": "2026-08-22",
+      "first_page_hit": true,
+      "note": "adjudicator's expert rephrase in the other suite language; the answering repository appeared on the first page"
+    }
+  ],
+  "verification": {
+    "single_call_run": {
+      "date": "2026-08-22",
+      "args_identical_to_input": true,
+      "answering_doc_in_results": false,
+      "key_contained_in_returned_text": false
+    },
+    "eye_run_confirmed": false,
+    "note": "the answering document did not surface in the top-10 results"
+  },
+  "liveness_probe": {
+    "url": "https://raw.githubusercontent.com/Spearfoot/disk-burnin-and-testing/master/README.md"
+  }
+}

@@ -1,0 +1,73 @@
+{
+  "id": "s3-cl-008",
+  "suite": "s3-crosslingual",
+  "kind": "retrieval",
+  "lang": "en",
+  "domain": "consumer electronics and hardware",
+  "claim": "A single omniseek_search call with the frozen need as the query returns text containing the claim key.",
+  "frozen_need": "An after-school program I volunteer for was donated about forty Chromebooks, and a good number of them are already past their auto update expiration date. What actually stops working once a device passes AUE, as opposed to what keeps working for years afterwards? And for the models whose firmware is locked down, what is realistic for someone with no soldering skills to put on them instead so the machines stay usable for basic web work and typing?",
+  "input": {
+    "tool": "omniseek_search",
+    "args": {
+      "query": "An after-school program I volunteer for was donated about forty Chromebooks, and a good number of them are already past their auto update expiration date. What actually stops working once a device passes AUE, as opposed to what keeps working for years afterwards? And for the models whose firmware is locked down, what is realistic for someone with no soldering skills to put on them instead so the machines stay usable for basic web work and typing?",
+      "sources": [
+        "exa"
+      ],
+      "raw": true,
+      "limit": 10
+    }
+  },
+  "ground_truth": {
+    "type": "normalized_containment",
+    "value": "Even if a Chromebook is no longer receiving automatic updates, it still comes with secure mode."
+  },
+  "accessibility_tier": "T2",
+  "key_language": "en",
+  "accepted_forms": [
+    "即使 Chromebook 不再接收自动更新，它仍然具有安全模式。"
+  ],
+  "render_routes": [
+    "publisher_html_curl",
+    "publisher_html_curl_variant",
+    "eye_read"
+  ],
+  "funnel_id": "N24",
+  "answering_doc": {
+    "url": "https://support.google.com/chrome/a/answer/6220366",
+    "title": "Auto Update policy"
+  },
+  "admission": {
+    "adjudicated": "2026-08-22",
+    "settles": [
+      "passing AUE does not strip secure mode: the device still self-checks at boot and remains usable for basic purposes; what ends is automatic updates, future policy support and technical support"
+    ],
+    "leaves_open": [
+      "whether a given model is ARM or x86",
+      "RW_LEGACY or UEFI Full ROM availability per device",
+      "firmware write-protect removal specifics",
+      "whether donated devices remain enrolled in institutional management"
+    ]
+  },
+  "search_resistance_prefilter": [
+    {
+      "tool": "WebSearch",
+      "query": "Chromebook past auto update expiration date what stops working options to keep using it",
+      "date": "2026-08-22",
+      "first_page_hit": true,
+      "note": "adjudicator's original-language query; the web-only prospector exhausted its search budget before this need, so no arm query existed to reuse"
+    }
+  ],
+  "verification": {
+    "single_call_run": {
+      "date": "2026-08-22",
+      "args_identical_to_input": true,
+      "answering_doc_in_results": true,
+      "key_contained_in_returned_text": false
+    },
+    "eye_run_confirmed": false,
+    "note": "the answering document surfaced in the returned results but the query-relevant excerpt did not include the key sentence"
+  },
+  "liveness_probe": {
+    "url": "https://support.google.com/chrome/a/answer/6220366"
+  }
+}

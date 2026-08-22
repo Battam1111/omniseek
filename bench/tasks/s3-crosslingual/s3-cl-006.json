@@ -1,0 +1,71 @@
+{
+  "id": "s3-cl-006",
+  "suite": "s3-crosslingual",
+  "kind": "retrieval",
+  "lang": "en",
+  "domain": "software engineering and open source",
+  "claim": "A single omniseek_search call with the frozen need as the query returns text containing the claim key.",
+  "frozen_need": "We depend on about a dozen small open-source projects and I've been told to \"just pay them,\" except our finance team can't process a donation and procurement needs a vendor with an invoice, a tax form, and a signed contract. I want to hear from companies that actually got money out the door: what legal structure they used, what argument got an unincorporated individual maintainer through vendor onboarding, and roughly what a defensible per-project amount looks like on a budget line. Every write-up I find stops at \"sponsor your dependencies\" and skips the part where procurement says no.",
+  "input": {
+    "tool": "omniseek_search",
+    "args": {
+      "query": "We depend on about a dozen small open-source projects and I've been told to \"just pay them,\" except our finance team can't process a donation and procurement needs a vendor with an invoice, a tax form, and a signed contract. I want to hear from companies that actually got money out the door: what legal structure they used, what argument got an unincorporated individual maintainer through vendor onboarding, and roughly what a defensible per-project amount looks like on a budget line. Every write-up I find stops at \"sponsor your dependencies\" and skips the part where procurement says no.",
+      "sources": [
+        "exa"
+      ],
+      "raw": true,
+      "limit": 10
+    }
+  },
+  "ground_truth": {
+    "type": "normalized_containment",
+    "value": "We are also registered with vendor portals to receive funds from organizations, including Meta, Google, Amazon, Intel, and others, when a donation invoice is required."
+  },
+  "accessibility_tier": "T2",
+  "key_language": "en",
+  "accepted_forms": [
+    "我们还在供应商门户登记，以便在需要捐赠发票时接收包括 Meta、Google、Amazon、Intel 等组织的资金。"
+  ],
+  "render_routes": [
+    "publisher_html_curl",
+    "publisher_markdown_curl",
+    "eye_read"
+  ],
+  "funnel_id": "N16",
+  "answering_doc": {
+    "url": "https://docs.oscollective.org/welcome-and-introduction-to-osc/what-is-fiscal-hosting",
+    "title": "What is Fiscal Hosting?"
+  },
+  "admission": {
+    "adjudicated": "2026-08-22",
+    "settles": [
+      "a fiscal host (Open Source Collective) is registered in corporate vendor portals and can issue donation invoices, which is exactly the procurement shape (vendor, invoice, tax form) the asker's finance team requires"
+    ],
+    "leaves_open": [
+      "how much budget to allocate per project",
+      "specific contract terms legal will want"
+    ]
+  },
+  "search_resistance_prefilter": [
+    {
+      "tool": "WebSearch",
+      "query": "company procurement pay open source maintainer vendor onboarding invoice W-9 fiscal host Open Source Collective Tidelift thanks.dev how we did it",
+      "date": "2026-08-22",
+      "first_page_hit": true,
+      "note": "web-only prospector's recorded query that surfaced the answering document"
+    }
+  ],
+  "verification": {
+    "single_call_run": {
+      "date": "2026-08-22",
+      "args_identical_to_input": true,
+      "answering_doc_in_results": true,
+      "key_contained_in_returned_text": false
+    },
+    "eye_run_confirmed": false,
+    "note": "the answering document surfaced in the returned results but the query-relevant excerpt did not include the key sentence"
+  },
+  "liveness_probe": {
+    "url": "https://docs.oscollective.org/welcome-and-introduction-to-osc/what-is-fiscal-hosting"
+  }
+}

@@ -1,0 +1,17 @@
+# Sanitized author transcript: tool invocations only.
+# Purpose: blindness evidence for the s3 rebuild (bench/RECONSTRUCTION-s3.md, section 2 and
+# the 2026-08-22 domain amendment). The check is that NO invocation of this system's retrieval
+# tools (polaris/eye/omniseek/brain MCP tools) appears anywhere in the author's session,
+# load calls included. Everything except the tool-call sequence is removed: prompts, reasoning
+# and generated text are not part of the blindness claim and are not shipped.
+# Extraction is mechanical from the preserved session log; entries appear in call order.
+# Session: author-batch2; total tool invocations: 8
+
+  1. ToolSearch  query='select:WebSearch,WebFetch'
+  2. WebSearch  query='academia stackexchange unanswered questions co-first author dispute promotion committee'
+  3. WebSearch  query='知乎 博士生 投稿 期刊 转投 姊妹刊 审稿意见 带过去 困惑'
+  4. WebSearch  query='AGPL SaaS compliance headache internal library replace legal team discussion hacker news'
+  5. WebSearch  query='开源项目 维护者 精力不足 归档 还是 交接 社区 反应 讨论'
+  6. WebSearch  query='"reviewer asked me to cite" OR "editor asked us to add citations" what to do complaint COPE forum thread'
+  7. WebSearch  query='一亩三分地 论坛 提问 博后 offer 谈判 startup package 没人回答'
+  8. Write  file_path='C:\\Users\\10350\\Desktop\\ResearchProject\\Polaris\\organs\\omniseek-staging\\s3-rebuild\\needs-batch2.json'

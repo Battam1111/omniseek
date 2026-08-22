@@ -1,0 +1,71 @@
+{
+  "id": "s3-cl-005",
+  "suite": "s3-crosslingual",
+  "kind": "retrieval",
+  "lang": "en",
+  "domain": "academic publishing and research practice",
+  "claim": "A single omniseek_search call with the frozen need as the query returns text containing the claim key.",
+  "frozen_need": "I left my university two years ago and now do research on my own time, with no affiliation and no grant. I keep hitting walls: submission portals that reject non-institutional email, fee waiver policies that seem keyed to the author's country rather than their employment status, and a suspicion that putting \"Independent Researcher\" on the affiliation line changes how desk editors read the manuscript. Which social-science venues genuinely work for unaffiliated authors, and how do people in that position actually cover the fees?",
+  "input": {
+    "tool": "omniseek_search",
+    "args": {
+      "query": "I left my university two years ago and now do research on my own time, with no affiliation and no grant. I keep hitting walls: submission portals that reject non-institutional email, fee waiver policies that seem keyed to the author's country rather than their employment status, and a suspicion that putting \"Independent Researcher\" on the affiliation line changes how desk editors read the manuscript. Which social-science venues genuinely work for unaffiliated authors, and how do people in that position actually cover the fees?",
+      "sources": [
+        "exa"
+      ],
+      "raw": true,
+      "limit": 10
+    }
+  },
+  "ground_truth": {
+    "type": "normalized_containment",
+    "value": "PLOS publication decisions are based solely on editorial criteria. Information about applications for fee assistance are not disclosed to journal editors or reviewers."
+  },
+  "accessibility_tier": "T2",
+  "key_language": "en",
+  "accepted_forms": [
+    "PLOS 的出版决定完全基于编辑标准。费用援助申请信息不会披露给期刊编辑或审稿人。"
+  ],
+  "render_routes": [
+    "publisher_html_curl",
+    "publisher_html_curl_output_1",
+    "eye_read"
+  ],
+  "funnel_id": "N12",
+  "answering_doc": {
+    "url": "https://plos.org/fees/",
+    "title": "PLOS publication fees and Publication Fee Assistance (PFA)"
+  },
+  "admission": {
+    "adjudicated": "2026-08-22",
+    "settles": [
+      "PLOS publication decisions are editorial only and fee-assistance applications are not disclosed to editors or reviewers, which answers the asker's central fear that requesting a waiver prejudices the submission"
+    ],
+    "leaves_open": [
+      "which specific venues accept unaffiliated authors",
+      "policies of publishers other than PLOS"
+    ]
+  },
+  "search_resistance_prefilter": [
+    {
+      "tool": "WebSearch",
+      "query": "PLOS Publication Fee Assistance need-based waiver authors who cannot pay no funding independent researcher apply",
+      "date": "2026-08-22",
+      "first_page_hit": true,
+      "note": "web-only prospector's recorded query that surfaced the answering document"
+    }
+  ],
+  "verification": {
+    "single_call_run": {
+      "date": "2026-08-22",
+      "args_identical_to_input": true,
+      "answering_doc_in_results": false,
+      "key_contained_in_returned_text": false
+    },
+    "eye_run_confirmed": false,
+    "note": "the answering document did not surface in the top-10 results"
+  },
+  "liveness_probe": {
+    "url": "https://plos.org/fees/"
+  }
+}
