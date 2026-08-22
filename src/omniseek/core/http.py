@@ -19,7 +19,9 @@ headers + signing and diag.note by hand — do NOT route those through here.
 from __future__ import annotations
 
 import logging
+import random
 import threading
+import time
 from typing import Any, Optional
 
 import anyio
@@ -34,6 +36,17 @@ DEFAULT_TIMEOUT = 20
 MAX_BYTES = 30 * 1024 * 1024  # 30MB hard cap on a single response body — a feed/JSON
                               # bigger than this is almost certainly a hijack/misconfig;
                               # stream + abort rather than buffer it all and OOM the daemon.
+_TRANSIENT_RETRY_DELAY_S = 0.5
+_TRANSIENT_RETRY_JITTER_S = 0.1
+
+
+def _transient_retry_delay() -> float:
+    return _TRANSIENT_RETRY_DELAY_S + random.uniform(0.0, _TRANSIENT_RETRY_JITTER_S)
+
+
+def _is_transient_connect_error(exc: BaseException) -> bool:
+    return isinstance(exc, httpx.ConnectError) and not str(exc).startswith(
+        "refused SSRF-class url")
 
 # Process-wide pooled client: every open-API helper call reuses ONE httpx.Client, so
 # repeated requests to the same host skip the TCP+TLS handshake (a real cost when the
@@ -95,11 +108,13 @@ def _get_client() -> httpx.Client:
 
 
 def _request_capped(method: str, url: str, *, timeout: int, headers: dict,
+                    retry_transient: bool = True,
                     **kwargs: Any) -> Optional[httpx.Response]:
     """Stream a request, aborting if the body exceeds ``MAX_BYTES`` — the OOM guard shared
     by all helpers. Returns a fully-read ``httpx.Response`` (so ``.text``/``.json()`` work
     exactly as before) or ``None`` on any failure / oversize. Uses the pooled client so the
-    connection is reused (keep-alive) and returned to the pool when the stream context exits."""
+    connection is reused (keep-alive) and returned to the pool when the stream context exits.
+    When enabled, only a first-attempt ``httpx.ConnectError`` gets one bounded retry."""
     if cache.cache_only():
         return None  # cache-only mode (cache_only=True): do NO live HTTP, the single egress guard
     # SSRF pre-flight (belt-and-suspenders): refuse a URL whose host resolves to a private/loopback/
@@ -116,44 +131,57 @@ def _request_capped(method: str, url: str, *, timeout: int, headers: dict,
         logger.warning("http.%s blocked SSRF-class target (%s): %s", method.lower(), url, _blk)
         diag.note(f"http.{method.lower()}", url=url, status=None, body=f"blocked SSRF-class target: {_blk}")
         return None
-    try:
-        with _get_client().stream(method, url, timeout=timeout, headers=headers, **kwargs) as r:
-            r.raise_for_status()
-            raw = bytearray()
-            for chunk in r.iter_raw():
-                raw += chunk
-                if len(raw) > MAX_BYTES:
-                    logger.warning("http.%s refused oversized response (%s): >%d bytes",
-                                   method.lower(), url, MAX_BYTES)
-                    diag.note(f"http.{method.lower()}", url=url, status=r.status_code,
-                              body=f"refused oversized response (>{MAX_BYTES} bytes)")
-                    return None
-        # Rebuild a normal already-read Response from the raw body + original headers, so
-        # content-encoding / charset decoding happens exactly as the buffered path did.
-        return httpx.Response(r.status_code, headers=r.headers, content=bytes(raw),
-                              request=r.request)
-    except Exception as exc:  # noqa: BLE001 — failure → None is the adapter contract
-        logger.warning("http.%s failed (%s): %s", method.lower(), url, exc)
-        # A non-2xx surfaces here as httpx.HTTPStatusError → surface its status + body snippet so
-        # the fixing agent sees the wall (403/412 anti-bot, 404 moved endpoint), not just a string.
-        st = getattr(getattr(exc, "response", None), "status_code", None)
-        bd = None
-        if isinstance(exc, httpx.HTTPStatusError):
-            try:
-                bd = exc.response.text
-            except Exception:  # noqa: BLE001
-                bd = None
-        diag.note(f"http.{method.lower()}", url=url, status=st, body=bd, exc=exc)
-        return None
+    for attempt in range(2):
+        try:
+            with _get_client().stream(method, url, timeout=timeout, headers=headers, **kwargs) as r:
+                r.raise_for_status()
+                raw = bytearray()
+                for chunk in r.iter_raw():
+                    raw += chunk
+                    if len(raw) > MAX_BYTES:
+                        logger.warning("http.%s refused oversized response (%s): >%d bytes",
+                                       method.lower(), url, MAX_BYTES)
+                        diag.note(f"http.{method.lower()}", url=url, status=r.status_code,
+                                  body=f"refused oversized response (>{MAX_BYTES} bytes)")
+                        return None
+            # Rebuild a normal already-read Response from the raw body + original headers, so
+            # content-encoding / charset decoding happens exactly as the buffered path did.
+            return httpx.Response(r.status_code, headers=r.headers, content=bytes(raw),
+                                  request=r.request)
+        except httpx.ConnectError as exc:
+            if attempt == 0 and retry_transient and _is_transient_connect_error(exc):
+                diag.note("http.retry_transient", url=url, exc=exc)
+                time.sleep(_transient_retry_delay())
+                continue
+            logger.warning("http.%s failed (%s): %s", method.lower(), url, exc)
+            diag.note(f"http.{method.lower()}", url=url, exc=exc)
+            return None
+        except Exception as exc:  # noqa: BLE001, failure -> None is the adapter contract
+            logger.warning("http.%s failed (%s): %s", method.lower(), url, exc)
+            # A non-2xx surfaces here as httpx.HTTPStatusError → surface its status + body snippet so
+            # the fixing agent sees the wall (403/412 anti-bot, 404 moved endpoint), not just a string.
+            st = getattr(getattr(exc, "response", None), "status_code", None)
+            bd = None
+            if isinstance(exc, httpx.HTTPStatusError):
+                try:
+                    bd = exc.response.text
+                except Exception:  # noqa: BLE001
+                    bd = None
+            diag.note(f"http.{method.lower()}", url=url, status=st, body=bd, exc=exc)
+            return None
+    return None
 
 
 def get(url: str, *, timeout: int = DEFAULT_TIMEOUT, headers: Optional[dict] = None,
-        params: Optional[dict] = None, **kwargs: Any) -> Optional[httpx.Response]:
-    """GET with the shared UA + redirects + raise_for_status, size-capped. None on failure."""
+        params: Optional[dict] = None, retry_transient: bool = True,
+        **kwargs: Any) -> Optional[httpx.Response]:
+    """GET with the shared UA + redirects + raise_for_status, size-capped. None on failure.
+    ``retry_transient`` retries only one first-attempt connect-phase failure."""
     hdrs = {"User-Agent": USER_AGENT}
     if headers:
         hdrs.update(headers)
-    return _request_capped("GET", url, timeout=timeout, headers=hdrs, params=params, **kwargs)
+    return _request_capped("GET", url, timeout=timeout, headers=hdrs,
+                           retry_transient=retry_transient, params=params, **kwargs)
 
 
 def get_json(url: str, **kwargs: Any) -> Optional[Any]:
@@ -367,10 +395,12 @@ def _aget_client() -> httpx.AsyncClient:
 
 
 async def _arequest_capped(method: str, url: str, *, timeout: int, headers: dict,
+                           retry_transient: bool = True,
                            **kwargs: Any) -> Optional[httpx.Response]:
     """Async twin of _request_capped: stream a request, aborting if the body exceeds ``MAX_BYTES``.
     Returns a fully-read ``httpx.Response`` (so ``.text``/``.json()`` work) or ``None`` on any failure /
-    oversize. Byte-identical guarantees + SAME diag labels as the sync path."""
+    oversize. Byte-identical guarantees + SAME diag labels as the sync path. When enabled, only a
+    first-attempt ``httpx.ConnectError`` gets one bounded retry."""
     if cache.cache_only():
         return None  # cache-only mode (cache_only=True): do NO live HTTP, the single egress guard
     # SSRF pre-flight (belt-and-suspenders): same predicate as the sync twin. Redundant with the per-hop
@@ -386,44 +416,57 @@ async def _arequest_capped(method: str, url: str, *, timeout: int, headers: dict
         logger.warning("http.%s blocked SSRF-class target (%s): %s", method.lower(), url, _blk)
         diag.note(f"http.{method.lower()}", url=url, status=None, body=f"blocked SSRF-class target: {_blk}")
         return None
-    try:
-        async with _aget_client().stream(method, url, timeout=timeout, headers=headers, **kwargs) as r:
-            r.raise_for_status()
-            raw = bytearray()
-            async for chunk in r.aiter_raw():
-                raw += chunk
-                if len(raw) > MAX_BYTES:
-                    logger.warning("http.%s refused oversized response (%s): >%d bytes",
-                                   method.lower(), url, MAX_BYTES)
-                    diag.note(f"http.{method.lower()}", url=url, status=r.status_code,
-                              body=f"refused oversized response (>{MAX_BYTES} bytes)")
-                    return None
-        # Rebuild a normal already-read Response from the raw body + original headers, so
-        # content-encoding / charset decoding happens exactly as the buffered path did.
-        return httpx.Response(r.status_code, headers=r.headers, content=bytes(raw),
-                              request=r.request)
-    except Exception as exc:  # noqa: BLE001 , failure → None is the adapter contract
-        logger.warning("http.%s failed (%s): %s", method.lower(), url, exc)
-        # A non-2xx surfaces here as httpx.HTTPStatusError → surface its status + body snippet so
-        # the fixing agent sees the wall (403/412 anti-bot, 404 moved endpoint), not just a string.
-        st = getattr(getattr(exc, "response", None), "status_code", None)
-        bd = None
-        if isinstance(exc, httpx.HTTPStatusError):
-            try:
-                bd = exc.response.text
-            except Exception:  # noqa: BLE001
-                bd = None
-        diag.note(f"http.{method.lower()}", url=url, status=st, body=bd, exc=exc)
-        return None
+    for attempt in range(2):
+        try:
+            async with _aget_client().stream(method, url, timeout=timeout, headers=headers, **kwargs) as r:
+                r.raise_for_status()
+                raw = bytearray()
+                async for chunk in r.aiter_raw():
+                    raw += chunk
+                    if len(raw) > MAX_BYTES:
+                        logger.warning("http.%s refused oversized response (%s): >%d bytes",
+                                       method.lower(), url, MAX_BYTES)
+                        diag.note(f"http.{method.lower()}", url=url, status=r.status_code,
+                                  body=f"refused oversized response (>{MAX_BYTES} bytes)")
+                        return None
+            # Rebuild a normal already-read Response from the raw body + original headers, so
+            # content-encoding / charset decoding happens exactly as the buffered path did.
+            return httpx.Response(r.status_code, headers=r.headers, content=bytes(raw),
+                                  request=r.request)
+        except httpx.ConnectError as exc:
+            if attempt == 0 and retry_transient and _is_transient_connect_error(exc):
+                diag.note("http.retry_transient", url=url, exc=exc)
+                await anyio.sleep(_transient_retry_delay())
+                continue
+            logger.warning("http.%s failed (%s): %s", method.lower(), url, exc)
+            diag.note(f"http.{method.lower()}", url=url, exc=exc)
+            return None
+        except Exception as exc:  # noqa: BLE001 , failure → None is the adapter contract
+            logger.warning("http.%s failed (%s): %s", method.lower(), url, exc)
+            # A non-2xx surfaces here as httpx.HTTPStatusError → surface its status + body snippet so
+            # the fixing agent sees the wall (403/412 anti-bot, 404 moved endpoint), not just a string.
+            st = getattr(getattr(exc, "response", None), "status_code", None)
+            bd = None
+            if isinstance(exc, httpx.HTTPStatusError):
+                try:
+                    bd = exc.response.text
+                except Exception:  # noqa: BLE001
+                    bd = None
+            diag.note(f"http.{method.lower()}", url=url, status=st, body=bd, exc=exc)
+            return None
+    return None
 
 
 async def aget(url: str, *, timeout: int = DEFAULT_TIMEOUT, headers: Optional[dict] = None,
-               params: Optional[dict] = None, **kwargs: Any) -> Optional[httpx.Response]:
-    """Async GET with the shared UA + redirects + raise_for_status, size-capped. None on failure."""
+               params: Optional[dict] = None, retry_transient: bool = True,
+               **kwargs: Any) -> Optional[httpx.Response]:
+    """Async GET with the shared UA + redirects + raise_for_status, size-capped. None on failure.
+    ``retry_transient`` retries only one first-attempt connect-phase failure."""
     hdrs = {"User-Agent": USER_AGENT}
     if headers:
         hdrs.update(headers)
-    return await _arequest_capped("GET", url, timeout=timeout, headers=hdrs, params=params, **kwargs)
+    return await _arequest_capped("GET", url, timeout=timeout, headers=hdrs,
+                                  retry_transient=retry_transient, params=params, **kwargs)
 
 
 async def aget_json(url: str, **kwargs: Any) -> Optional[Any]:

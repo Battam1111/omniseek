@@ -117,10 +117,12 @@ def _se_get(url: str, params: dict, timeout: float = TIMEOUT) -> Optional[dict]:
             timeout,
             lambda waited: GateBusy(f"Stack Exchange gate busy after {waited:.1f}s"),
         ):
+            # A quota-boxed Stack Exchange host can manifest as connect failures, so an in-slot retry would double one paced request.
             data = http.get_json(
                 url,
                 params={**params, "key": _SE_KEY} if _SE_KEY else params,
                 timeout=timeout,
+                retry_transient=False,
             )
     except GateBusy as exc:
         diag.note("stackexchange.gate", url=url, exc=exc)
@@ -364,10 +366,12 @@ async def _ase_get(url, params, timeout=TIMEOUT):
             timeout,
             lambda waited: GateBusy(f"Stack Exchange gate busy after {waited:.1f}s"),
         ):
+            # A quota-boxed Stack Exchange host can manifest as connect failures, so an in-slot retry would double one paced request.
             data = await http.aget_json(
                 url,
                 params={**params, "key": _SE_KEY} if _SE_KEY else params,
                 timeout=timeout,
+                retry_transient=False,
             )
     except GateBusy as exc:
         diag.note("stackexchange.gate", url=url, exc=exc)

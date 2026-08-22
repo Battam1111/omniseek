@@ -10778,7 +10778,8 @@ try:
     _http64.get_json = lambda *a, **k: None  # simulate a DOWN / non-2xx upstream (failure->None)
     _ok64, _msg64 = _da64.health_check()
     check("64a decl: health_check reports a DOWN upstream (egress None) as DOWN, not a green empty",
-          _ok64 is False and "unreachable" in _msg64.lower())
+          _ok64 is False and "no payload" in _msg64.lower()
+          and "observed egress failure" in _msg64.lower())
     _cache64.get_docs = lambda k: None
     _cache64.set_docs = lambda k, docs, ttl=None, **kw: _set64.update(ttl=ttl, n=len(docs))
     _da64.search("q", 5)

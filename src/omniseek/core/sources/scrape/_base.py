@@ -50,7 +50,7 @@ from typing import Any, Optional
 
 import anyio
 
-from omniseek.core import cache, relevance
+from omniseek.core import cache, diag, relevance
 from omniseek.core.normalize import Document, schema_extract
 
 logger = logging.getLogger(__name__)
@@ -261,10 +261,16 @@ class BaseScrapeAdapter:
         """Default probe: a cheap ``_raw_fetch`` with a trivial query proves the
         endpoint answers. Override for a lighter/different liveness signal (e.g. an
         API ``/info`` endpoint or a quota readout)."""
+        diag.enable()
         try:
             raw = self._raw_fetch("test", 1)
         except Exception as exc:  # noqa: BLE001
+            diag.drain()
             return False, f"{type(exc).__name__}: {str(exc)[:80]}"
+        captures = diag.drain()
         if raw is None:
-            return False, "fetch returned nothing"
+            return False, diag.failure_reason(
+                captures,
+                fallback="no payload without an observed egress failure",
+            )
         return True, "OK"

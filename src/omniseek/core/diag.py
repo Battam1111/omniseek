@@ -164,3 +164,29 @@ def drain() -> list:
         return list(trace) if trace else []
     except Exception:  # noqa: BLE001
         return []
+
+
+def failure_reason(captures: list, *, fallback: str) -> str:
+    """Format the latest captured egress failure for an operator-facing status message.
+
+    A response status is a different fact from no response. The body is already bounded and
+    redacted by ``note``; an exception capture already contains its type and message. This helper
+    only formats those stored facts and never performs I/O or judgment.
+    """
+    try:
+        if not captures:
+            return fallback
+        observed = captures[-1] if isinstance(captures[-1], dict) else {}
+        status = observed.get("status")
+        body = observed.get("body")
+        exc = observed.get("exc")
+        if status is not None:
+            detail = f"HTTP {status}"
+            if body:
+                detail += f": {body}"
+            return detail
+        if exc:
+            return f"request failed ({exc})"
+        return "request failed without an observed response"
+    except Exception:  # noqa: BLE001
+        return fallback

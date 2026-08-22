@@ -667,12 +667,18 @@ class DeclarativeAPIAdapter:
         if getattr(self, "no_live_probe", False):
             _why = self.no_live_probe if isinstance(self.no_live_probe, str) else "quota too scarce to probe"
             return True, f"not probed (would spend the metered quota): {_why}"
+        diag.enable()
         try:
             response = self._fetch_response(self._render_params("test", 1))
         except Exception as exc:  # noqa: BLE001
+            diag.drain()
             return False, f"{type(exc).__name__}: {exc}"
+        captures = diag.drain()
         if response is None:
-            return False, "endpoint unreachable / non-2xx (egress returned None)"
+            return False, diag.failure_reason(
+                captures,
+                fallback="endpoint returned no payload without an observed egress failure",
+            )
         items = self._results_from(response)
         return True, f"OK (endpoint reachable; {len(items)} result(s) for probe)"
 

@@ -99,6 +99,8 @@ class WaybackAdapter:
                             "limit": str(-max(limit, 1)), "fl": "timestamp,original,statuscode"},
                     headers={"User-Agent": _UA},
                     timeout=TIMEOUT,
+                    # Wayback owns a paced retry loop, so a shared connect retry would duplicate its backoff schedule.
+                    retry_transient=False,
                 )
                 break
             except Exception as exc:  # noqa: BLE001 — IA load → retry, then degrade to []
@@ -146,6 +148,8 @@ class WaybackAdapter:
                             "limit": str(-max(limit, 1)), "fl": "timestamp,original,statuscode"},
                     headers={"User-Agent": _UA},
                     timeout=TIMEOUT,
+                    # Wayback owns a paced retry loop, so a shared connect retry would duplicate its backoff schedule.
+                    retry_transient=False,
                 )
                 break
             except Exception as exc:  # noqa: BLE001 — IA load → retry, then degrade to []

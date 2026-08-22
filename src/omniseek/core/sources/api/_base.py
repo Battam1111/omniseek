@@ -64,7 +64,7 @@ from urllib.parse import urlparse
 
 import anyio
 
-from omniseek.core import cache, http
+from omniseek.core import cache, diag, http
 from omniseek.core.normalize import Document, keyword_score_filter
 
 logger = logging.getLogger(__name__)
@@ -104,10 +104,12 @@ class BaseAPIAdapter:
         """Fetch raw records for ``query`` from the source's API.
 
         Return a list of opaque per-record objects (dicts, feedparser entries,
-        anything) — the base passes each to ``_to_document``. Return ``[]`` on any
-        network failure / timeout (the "failure → empty, do not cache" contract);
-        do NOT raise for an ordinary empty result. The base never inspects the
-        items, so their shape is entirely the subclass's business.
+        anything) which the base passes to ``_to_document``. Returning ``[]`` means
+        the source answered successfully and had no matching records. Subclasses
+        SHOULD raise, or leave uncaught, egress failures; ``search`` catches those
+        exceptions, records the adapter failure, and degrades to ``[]`` without
+        caching it. Do NOT raise for an ordinary empty result. The base never
+        inspects the items, so their shape is entirely the subclass's business.
         """
         raise NotImplementedError("subclass must implement _raw_fetch")
 
@@ -136,7 +138,11 @@ class BaseAPIAdapter:
         if cached is not None:
             return cached
 
-        raw_items = self._raw_fetch(query, limit) or []
+        try:
+            raw_items = self._raw_fetch(query, limit) or []
+        except Exception as exc:  # noqa: BLE001, the base owns failure degradation
+            diag.note(f"{self.name}.fetch_failed", exc=exc)
+            raw_items = []
         docs: list[Document] = []
         for raw in raw_items[:limit]:
             try:
@@ -170,7 +176,11 @@ class BaseAPIAdapter:
         cached = await anyio.to_thread.run_sync(cache.get_docs, key)   # disk read OFF loop
         if cached is not None:
             return cached
-        raw_items = (await araw_fetch()) or []
+        try:
+            raw_items = (await araw_fetch()) or []
+        except Exception as exc:  # noqa: BLE001, the base owns failure degradation
+            diag.note(f"{self.name}.fetch_failed", exc=exc)
+            raw_items = []
         docs: list[Document] = []
         for raw in raw_items[:limit]:
             try:

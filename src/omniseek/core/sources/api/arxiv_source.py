@@ -95,7 +95,8 @@ def _arxiv_get_text(url: str, **kwargs):
     try:
         _guard.pace(on_backlog=lambda w: _ArxivBusy() if w > _ARXIV_PACE_MAX_WAIT_S else None)
         with _guard.slot(_ARXIV_ACQUIRE_MAX_WAIT_S, lambda w: _ArxivBusy()):  # bounded: degrade, don't hang
-            r = http.get_text(url, **kwargs)
+            # A penalty-boxed arXiv host manifests as connect failures (measured as http=000), so an in-slot retry would send two requests through one pace slot.
+            r = http.get_text(url, retry_transient=False, **kwargs)
     except _ArxivBusy:
         diag.note("arxiv.rate_gate_shed", url=url, body=(
             f"arXiv rate gate backlog exceeded {_ARXIV_PACE_MAX_WAIT_S}s (arXiv's published limit is "
@@ -137,7 +138,8 @@ async def _arxiv_aget_text(url: str, **kwargs):
         # shared cap, OFF-loop + SHIELDED + BOUNDED: a cancel can't take the permit then skip the
         # release (the leak that drained the pool); a saturated pool sheds load like the rate gate.
         async with _guard.aslot(_ARXIV_ACQUIRE_MAX_WAIT_S, lambda w: _ArxivBusy()):
-            r = await http.aget_text(url, **kwargs)
+            # A penalty-boxed arXiv host manifests as connect failures (measured as http=000), so an in-slot retry would send two requests through one pace slot.
+            r = await http.aget_text(url, retry_transient=False, **kwargs)
     except _ArxivBusy:
         diag.note("arxiv.rate_gate_shed", url=url, body=(
             "arXiv concurrency pool saturated past its bounded wait, so this caller was shed. "

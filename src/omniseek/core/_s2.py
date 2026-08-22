@@ -363,8 +363,10 @@ def snippet_search(query: str, limit: int = 20) -> list:
         # 400s on this endpoint (its field grammar differs from /paper/search), so we take the default
         # shape. publicationDate / citationCount are simply absent (never fabricated).
         params = {"query": query or "", "limit": max(1, min(int(limit or 20), 1000))}
+        # A penalty-boxed S2 host can manifest as connect failures, so an in-slot retry would double one paced request.
         data = http.get_json("https://api.semanticscholar.org/graph/v1/snippet/search",
-                             params=params, headers=headers, timeout=TIMEOUT)
+                             params=params, headers=headers, timeout=TIMEOUT,
+                             retry_transient=False)
         return (data or {}).get("data", []) or []
     try:
         return _call("snippet_search", _go) or []

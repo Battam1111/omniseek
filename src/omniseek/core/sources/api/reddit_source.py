@@ -461,7 +461,9 @@ def _arctic_get(path: str, params: dict, *, retries: int = 1, timeout: int = 20)
                 timeout,
                 lambda waited: GateBusy(f"Arctic Shift gate busy after {waited:.1f}s"),
             ):
-                data = http.get_json(f"{API}{path}", params=params, timeout=timeout)
+                # A penalty-boxed Arctic host can manifest as connect failures, so its own paced retry must not double one slot.
+                data = http.get_json(f"{API}{path}", params=params, timeout=timeout,
+                                     retry_transient=False)
         except GateBusy as exc:
             diag.note("reddit.arctic_gate", url=f"{API}{path}", exc=exc)
             return None
@@ -514,7 +516,9 @@ async def _aarctic_get(path: str, params: dict, *, retries: int = 1, timeout: in
                 timeout,
                 lambda waited: GateBusy(f"Arctic Shift gate busy after {waited:.1f}s"),
             ):
-                data = await http.aget_json(f"{API}{path}", params=params, timeout=timeout)
+                # A penalty-boxed Arctic host can manifest as connect failures, so its own paced retry must not double one slot.
+                data = await http.aget_json(f"{API}{path}", params=params, timeout=timeout,
+                                             retry_transient=False)
         except GateBusy as exc:
             diag.note("reddit.arctic_gate", url=f"{API}{path}", exc=exc)
             return None
@@ -975,7 +979,16 @@ class RedditAdapter:
         # gap the 18-agent concurrency stress test surfaced: reddit was throttled, not broken).
         if _arctic_cooling():
             return True, "OK (Arctic Shift; rate-limited/cooling, reddit serves cache until it clears)"
-        items = _arctic_get("/posts/search", {"subreddit": "PhD", "sort": "desc", "limit": 1})
+        diag.enable()
+        try:
+            items = _arctic_get("/posts/search", {
+                "subreddit": "PhD",
+                "query": "advisor",
+                "sort": "desc",
+                "limit": 1,
+            })
+        finally:
+            captures = diag.drain()
         if items:
             return True, f"OK (Arctic Shift mirror; {len(items)} probe item)"
         if items == []:
@@ -984,7 +997,21 @@ class RedditAdapter:
             # API/shape change that returns nothing) even though the host answered. Liveness alone
             # misses this: require actual content, so health is a data-path check not a reachability ping.
             return False, "Arctic Shift returned 0 items for a bare r/PhD probe (data path degraded)"
-        return False, "Arctic Shift unreachable"
+        if captures:
+            observed = captures[-1]
+            status = observed.get("status")
+            body = observed.get("body")
+            exc = observed.get("exc")
+            if status is not None:
+                detail = f"HTTP {status}"
+                if body:
+                    detail += f": {body}"
+            elif exc:
+                detail = f"request failed ({exc})"
+            else:
+                detail = "request failed without an observed response"
+            return False, f"Arctic Shift {detail}"
+        return False, "Arctic Shift request failed without an observed response"
 
     @staticmethod
     def _submission_to_document(payload: dict) -> Document:
