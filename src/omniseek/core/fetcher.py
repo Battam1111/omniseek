@@ -21,6 +21,7 @@ from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeou
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Protocol, runtime_checkable
+from urllib.parse import urlparse
 
 import anyio
 
@@ -448,10 +449,60 @@ def backend_of(name: str) -> str:
 _FETCH_ONE_DEADLINE_S = 90.0   # default backstop for a single-source fetch — generous for
                                # slow CDP/reddit/RSS yet bounds a genuinely hung source.
 _FETCH_URL_TIMEOUT_S = 30.0    # default per-adapter cap when probing who-claims-this-URL.
-                               # A genuinely slow adapter (e.g. a CDP source that scrolls a
-                               # full comment thread) may declare a larger budget via a
-                               # ``fetch_timeout`` attribute — the default stays tight so a
-                               # STALLED adapter still can't hang omniseek_add_url.
+                                # A genuinely slow adapter (e.g. a CDP source that scrolls a
+                                # full comment thread) may declare a larger budget via a
+                                # ``fetch_timeout`` attribute — the default stays tight so a
+                                # STALLED adapter still can't hang omniseek_add_url.
+_FETCH_URL_CLASS_PRIORITY = {
+    "fulltext": 0,
+    "default": 10,
+    "search-index": 20,
+}
+
+
+def _fetch_url_adapter_class(adapter: "SourceAdapter") -> str:
+    """Read the adapter-declared fetch depth, defaulting unknown classes to the middle tier."""
+    return getattr(adapter, "fetch_url_class", "default")
+
+
+def _fetch_url_adapter_order(adapters: list["SourceAdapter"]) -> list["SourceAdapter"]:
+    """Order URL readers by depth, with registration order as the stable tie-breaker.
+
+    Full-text and walled adapters must get the first opportunity to read a URL. Search-index
+    adapters are snapshots, so they run after a deep route has either produced content or
+    honestly missed. The rule is class-based and applies to every adapter that declares a
+    fetch_url_class, not to a named venue.
+    """
+    return [
+        adapter
+        for _, adapter in sorted(
+            enumerate(adapters),
+            key=lambda pair: (
+                _FETCH_URL_CLASS_PRIORITY.get(_fetch_url_adapter_class(pair[1]), 10),
+                pair[0],
+            ),
+        )
+    ]
+
+
+def _adapter_declares_fetch_url_host(adapter: "SourceAdapter", url: str) -> bool:
+    """Whether an adapter explicitly owns the URL host for generic-fallback exclusion."""
+    declared = getattr(adapter, "fetch_url_hosts", ()) or ()
+    if isinstance(declared, str):
+        declared = (declared,)
+    host = (urlparse(url).hostname or "").lower().rstrip(".")
+    if not host:
+        return False
+    for value in declared:
+        needle = str(value).lower().strip().rstrip(".").split("/", 1)[0]
+        if needle and (host == needle or host.endswith("." + needle)):
+            return True
+    return False
+
+
+def _has_declared_fetch_url_owner(url: str, adapters: list["SourceAdapter"]) -> bool:
+    """Whether any registered adapter has declared ownership of this URL host."""
+    return any(_adapter_declares_fetch_url_host(adapter, url) for adapter in adapters)
 
 
 def _run_bounded(fn, timeout: float):
@@ -2807,14 +2858,32 @@ def _fetch_url_via_adapters_with_reason(url: str) -> tuple[Optional[Document], O
     """
     with _registry_lock:  # snapshot under the lock; iterate (slow per-adapter fetch) on the copy
         adapters_snapshot = list(_adapters.values())
+    adapters_snapshot = _fetch_url_adapter_order(adapters_snapshot)
     adapter_reason: Optional[str] = None
+    fulltext_missed = False
     for adapter in adapters_snapshot:
+        adapter_class = _fetch_url_adapter_class(adapter)
+        fulltext_attempt = (
+            adapter_class == "fulltext"
+            and _adapter_declares_fetch_url_host(adapter, url)
+        )
+        search_index_fallback = adapter_class == "search-index" and fulltext_missed
+
         def _attempt(a=adapter) -> tuple[Optional[Document], list]:
             from omniseek.core import diag
 
             diag.enable()
             try:
                 result = a.fetch_url(url)
+                if result is not None and search_index_fallback:
+                    result.metadata = dict(result.metadata or {})
+                    result.metadata["body_needs_read"] = True
+                    result.metadata["fulltext_fallback"] = True
+                    diag.note(
+                        "fetch_url.walled_fallback",
+                        url=url,
+                        body="full text needs the walled route which was unavailable",
+                    )
             except BaseException as exc:  # noqa: BLE001 - preserve the adapter's historical error contract
                 diag.note(f"{a.name}.fetch_url", url=url, exc=exc)
                 exc._eye_url_diag = diag.drain()  # type: ignore[attr-defined]
@@ -2837,6 +2906,9 @@ def _fetch_url_via_adapters_with_reason(url: str) -> tuple[Optional[Document], O
                 adapter.name, getattr(exc, "_eye_url_diag", [])
             )
             logger.debug("Adapter %s couldn't claim URL %s: %s", adapter.name, url, exc)
+        finally:
+            if fulltext_attempt:
+                fulltext_missed = True
     return None, adapter_reason
 
 
@@ -2863,6 +2935,10 @@ def fetch_url_with_reason(url: str) -> "tuple[Optional[Document], Optional[str]]
     doc, adapter_reason = _fetch_url_via_adapters_with_reason(url)
     if doc is not None:
         return doc, None
+    with _registry_lock:
+        adapters_snapshot = list(_adapters.values())
+    if _has_declared_fetch_url_owner(url, adapters_snapshot):
+        return None, adapter_reason
     # No adapter claimed it. LAST RESORT: a generic web read, diag armed to capture its failure reason.
     # Lazy import keeps bs4 off the hot adapter path.
     try:

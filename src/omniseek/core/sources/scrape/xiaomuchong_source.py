@@ -25,6 +25,7 @@ from urllib.parse import quote, urlparse
 
 from bs4 import BeautifulSoup
 
+from omniseek.core import diag
 from omniseek.core.normalize import Document, jsonsafe
 from omniseek.core.sources.walled._base import BaseCDPAdapter
 from omniseek.core.sources.walled._cdp import cdp_call, cdp_health, content_with_media, images_from_page
@@ -37,6 +38,11 @@ BASE = "https://muchong.com"
 # returned the "正在加载中" skeleton (no search ran) -> 0 results = silent breadth loss. Query
 # stays GBK-encoded (legacy Discuz; UTF-8 is misread as GBK -> off-topic recent posts, not the query).
 SEARCH_URL_TEMPLATE = f"{BASE}/bbs/search.php?wd={{q}}"
+_LOGIN_WALL_MARKERS = (
+    "实名认证",
+    "根据相关法律法规和政策，该内容需要登录查看",
+    "VIP通行码",
+)
 
 
 def _gbk_url_encode(s: str) -> str:
@@ -46,10 +52,18 @@ def _gbk_url_encode(s: str) -> str:
         return quote(s)
 
 
+def _is_login_wall(html: str) -> bool:
+    """Recognize the measured Muchong thread login wall, not ordinary thread prose."""
+    text = BeautifulSoup(html or "", "lxml").get_text(" ", strip=True)
+    return all(marker in text for marker in _LOGIN_WALL_MARKERS)
+
+
 class XiaomuchongAdapter(BaseCDPAdapter):
     name = "xiaomuchong"
     needs_credentials = False  # Public search; no login needed (but JS render needed)
     explicit_only = "shared CDP Chrome (JS render, slow)"
+    fetch_url_class = "fulltext"
+    fetch_url_hosts = ("muchong.com", "emuch.net")
     description = "小木虫 — China's oldest PhD/master's academic forum (since 2001, 5M users)"
     cache_ttl = 1800
 
@@ -136,6 +150,15 @@ class XiaomuchongAdapter(BaseCDPAdapter):
             html, images = cdp_call(_navigate, initial_url=url)
         except Exception as exc:  # noqa: BLE001
             logger.warning("小木虫 fetch_url failed: %s", exc)
+            diag.note("xiaomuchong.fetch_url", url=url, exc=exc)
+            return None
+
+        if _is_login_wall(html):
+            diag.note(
+                "xiaomuchong.login_wall",
+                url=url,
+                body="Muchong thread returned the login wall; full content needs a logged-in CDP session",
+            )
             return None
 
         soup = BeautifulSoup(html, "lxml")

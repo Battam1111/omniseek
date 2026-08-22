@@ -36,6 +36,8 @@ class ZhihuAdapter:
     name = "zhihu"
     needs_credentials = False  # Login happens once via VNC; we just use the session
     explicit_only = "shared CDP Chrome (precious logged-in session)"
+    fetch_url_class = "fulltext"
+    fetch_url_hosts = ("zhihu.com",)
     description = "知乎 — long-form PhD methodology discussions (via CDP Chrome session)"
     # fetch_url reads an answer/article page through the SHARED 9222 CDP pool; under the fetcher's
     # 30s default cap the adapter gets abandoned mid-flight (URL falls to the generic web fallback,

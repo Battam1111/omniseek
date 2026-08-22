@@ -80,6 +80,7 @@ class _SearchVenue:
 
     needs_credentials = False
     kind = "proxy"
+    fetch_url_class = "search-index"
 
     def __init__(self, name: str, description: str, site: str, extra: str = "",
                  url_filter: str = "", explicit_only=False, domains=None, regions=None) -> None:
@@ -91,6 +92,7 @@ class _SearchVenue:
         self.explicit_only = explicit_only  # row-declared: True / reason string / absent
         self.domains = domains or []
         self.regions = regions or []
+        self.fetch_url_hosts = (site.split("/", 1)[0],)
 
     def search(self, query: str, limit: int = 10) -> list[Document]:
         from omniseek.core import cache  # local import: avoid import cycle
@@ -128,7 +130,7 @@ class _SearchVenue:
                 content=r.get("snippet") or "(snippet only — open the URL for the full thread; venue may be login-walled)",
                 tags=[self.name, "search-index"],
                 metadata={"site": self.site, "via": "search-index", "read_depth": "search-index-snippet",
-                          "body_needs_read": False, "raw": jsonsafe(r)},
+                          "body_needs_read": True, "raw": jsonsafe(r)},
             ))
             if len(docs) >= limit:
                 break
@@ -181,7 +183,7 @@ class _SearchVenue:
                 content=r.get("snippet") or "(snippet only — open the URL for the full thread; venue may be login-walled)",
                 tags=[self.name, "search-index"],
                 metadata={"site": self.site, "via": "search-index", "read_depth": "search-index-snippet",
-                          "body_needs_read": False, "raw": jsonsafe(r)},
+                          "body_needs_read": True, "raw": jsonsafe(r)},
             ))
             if len(docs) >= limit:
                 break

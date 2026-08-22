@@ -213,6 +213,7 @@ echo "  [3/6] syncing smoke tests + ${#SYNCED_ARTIFACTS[@]} code-bound artifacts
 MIRROR_ONLY_TESTS=(
   "tests/test_honest_empty.py"     # the honest-empty contract: an empty result cannot mean two things
   "tests/test_truthful_status.py"  # the public health sweep's classes (healthy/blocked/rate_limited/down)
+  "tests/test_s3_rebuild.py"       # the s3 containment judge + schema fixtures (bench-side, no eye twin)
 )
 for rel in "${MIRROR_ONLY_TESTS[@]}"; do
   [ -f "$PEN_ROOT/$rel" ] || { echo "FATAL: declared mirror-only test missing: $rel" >&2; exit 1; }

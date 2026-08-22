@@ -160,6 +160,43 @@ _DISCOVER_TOP = 4            # max topical subs appended per query
 _DISCOVER_MIN_SUBS = 5000    # skip tiny/dead/squatted subs
 _DISCOVER_TTL = 86400        # sub metadata is stable day-to-day → cache discovery a full day
 
+# A live Arctic posts probe on 2026-08-22 took 7.89s. The probe was paced with a 2s
+# inter-request wait, so the request budget treats 9.9s as one conservative paced slot.
+# Reserve time for discovery, cache IO, response mapping, and the Reddit CDP fallback. The
+# resulting cap is a hard upper bound on `subreddits x relaxation tiers` for one search.
+_ARCTIC_SEARCH_DEADLINE_S = 90.0
+_ARCTIC_MEASURED_CALL_S = 7.9
+_ARCTIC_PACE_S = 2.0
+_ARCTIC_SEARCH_RESERVE_S = 15.0
+_ARCTIC_MAX_REQUESTS = (
+    max(1, int((_ARCTIC_SEARCH_DEADLINE_S - _ARCTIC_SEARCH_RESERVE_S)
+               // (_ARCTIC_MEASURED_CALL_S + _ARCTIC_PACE_S)))
+    * _FANOUT_WORKERS
+)
+
+# The curated core is intentionally narrow and explicit. This vocabulary decides whether a
+# query has research, career, or immigration intent, not document relevance.
+_CORE_THEME_TERMS = frozenset("""
+phd academia academic advisor advice admission admissions graduate gradschool university
+college professor faculty postdoc thesis dissertation lab laboratory research researcher
+machinelearning artificialintelligence ai ml compsci computer science software developer
+programming career job jobs employment interview offer salary hiring workplace visa
+immigration immigrant canada canadian singapore singaporepr expressentry workpermit
+pgwp cec lmia pr
+""".split())
+
+# Measured storage route: exact Arctic lookups confirmed these communities exist, and a
+# DataHoarder `helium drives` post search returned enterprise and used-drive evidence. This
+# local route is necessary because prefix discovery cannot find DataHoarder from `helium`.
+_STORAGE_SUBS = ["DataHoarder", "homelab", "sysadmin"]
+_STORAGE_INTENT_TERMS = frozenset("""
+helium drive drives hdd hdds harddrive harddrives storage nas sas sata smart badblocks
+cmr smr burnin
+""".split())
+_STORAGE_STRONG_TERMS = frozenset({
+    "hdd", "hdds", "harddrive", "harddrives", "badblocks", "cmr", "smr",
+})
+
 # (A `fields=` payload trim was tried 2026-06-14 to cut host load, but Arctic Shift REJECTS our
 # field list — every request -> HTTP error -> retry-walk -> 90s timeout -> 0 docs. Isolated live:
 # any fields= with our keys 400s while no-fields works; the README example only covers id/title.
@@ -182,6 +219,103 @@ getting need needs want wants like out up down off no
 def _content_terms(q: str) -> list[str]:
     """Query tokens with stopwords removed (case-insensitive); original order + case preserved."""
     return [t for t in (q or "").split() if t.lower() not in _STOPWORDS]
+
+
+def _latin_content_terms(q: str) -> list[str]:
+    """Return distinct Latin content tokens that Arctic can search without translation."""
+    out: list[str] = []
+    seen: set[str] = set()
+    for token in _content_terms(q):
+        if not re.fullmatch(r"[A-Za-z0-9]+", token):
+            continue
+        key = token.lower()
+        if key not in seen:
+            seen.add(key)
+            out.append(token)
+    return out
+
+
+def _has_core_intent(q: str) -> bool:
+    """Whether the query carries the curated research, career, or immigration intent."""
+    terms = {t.lower() for t in _latin_content_terms(q)}
+    if terms & _CORE_THEME_TERMS:
+        return True
+    return _looks_financial(q)
+
+
+def _looks_storage_intent(q: str) -> bool:
+    """Whether the query carries the measured enterprise-drive/storage topic."""
+    terms = {t.lower() for t in _latin_content_terms(q)}
+    hits = terms & _STORAGE_INTENT_TERMS
+    return bool(hits & _STORAGE_STRONG_TERMS) or len(hits) >= 3
+
+
+def _storage_search_terms(q: str) -> list[str]:
+    """Keep the first two storage terms for a focused Arctic AND tier."""
+    out = []
+    seen = set()
+    for token in _latin_content_terms(q):
+        key = token.lower()
+        if key in _STORAGE_INTENT_TERMS and key not in seen:
+            seen.add(key)
+            out.append(token)
+    return out[:2]
+
+
+def _search_request_cap(q: str) -> int:
+    """Hard total for Arctic `/posts/search` calls in one search invocation."""
+    return _ARCTIC_MAX_REQUESTS
+
+
+def _discovery_anchor_terms(q: str, subreddits: list[str]) -> list[str]:
+    """Terms that directly name a discovered subreddit, ordered by resolved subreddit priority."""
+    terms = _latin_content_terms(q)
+    out: list[str] = []
+    seen: set[str] = set()
+    for subreddit in subreddits:
+        name = subreddit.lower()
+        for term in terms:
+            key = term.lower()
+            if key in seen or term.isupper():
+                continue
+            if name.startswith(key):
+                seen.add(key)
+                out.append(term)
+    return out
+
+
+def _search_tiers(q: str, subreddits: list[str]) -> list[str]:
+    """Try discovered topical anchors before broad single-token relaxation tiers."""
+    base = _relax_tiers(q) if q else [""]
+    if not q:
+        return base
+    storage_terms = _storage_search_terms(q) if _looks_storage_intent(q) else []
+    if storage_terms:
+        storage_tier = " ".join(storage_terms)
+        out = [base[0], storage_tier]
+        out.extend(tier for tier in base[1:] if tier not in out)
+        return out
+    anchors = _discovery_anchor_terms(q, subreddits)
+    if not anchors:
+        return base
+    out = [base[0]]
+    out.extend(anchor for anchor in anchors if anchor not in out)
+    out.extend(tier for tier in base[1:] if tier not in out)
+    return out
+
+
+def _cap_search_subreddits(subreddits: list[str], q: str) -> list[str]:
+    """Keep `len(subreddits) x len(relaxation_tiers)` within the measured hard budget."""
+    tiers = _search_tiers(q, subreddits)
+    max_subs = max(1, _search_request_cap(q) // max(len(tiers), 1))
+    return list(subreddits[:max_subs])
+
+
+def _note_non_latin_query(q: str) -> None:
+    diag.note(
+        "reddit.non_latin_query",
+        body="reddit covers almost no Chinese text; query has no Latin content terms",
+    )
 
 
 def _term_rank(t: str) -> tuple:
@@ -270,13 +404,14 @@ def _discover_subreddits(query: str) -> list[str]:
     cached (_DISCOVER_TTL) so a repeated topic costs no live discovery GETs. Non-Latin queries
     (e.g. "手冲咖啡") yield no tokens → [] → reddit honestly returns ~nothing for content it can't
     serve, instead of forcing it through the research core (those belong on zhihu/bilibili)."""
-    # Probe the query's CONTENT terms ranked by SPECIFICITY (acronyms/proper nouns first), NOT raw
-    # length — the length proxy probed glue words ("without"/"foreign") and discovered GARBAGE subs
-    # (r/ForeignMovies, r/WithoutATrace) that then 422-stormed the mirror (2026-06-21 defect).
+    # Probe every distinct Latin CONTENT term ranked by SPECIFICITY (acronyms/proper nouns first),
+    # NOT raw length. Prefix is the only search primitive Arctic exposes, so probing each content
+    # term is the broadest translation-free discovery available while the result union remains
+    # bounded by _DISCOVER_TOP.
     toks = [t for t in _content_terms(query) if re.fullmatch(r"[A-Za-z0-9]+", t) and len(t) >= 3]
     if not toks:
         return []
-    probes = sorted(set(toks), key=_term_rank, reverse=True)[:2]
+    probes = sorted(set(toks), key=_term_rank, reverse=True)
     core_lower = {s.lower() for s in DEFAULT_SUBREDDITS}
     found: dict[str, tuple[str, int]] = {}  # lower-name -> (display_name, subscribers)
     for tok in probes:
@@ -302,6 +437,30 @@ def _discover_subreddits(query: str) -> list[str]:
                 found[key] = (name, nsubs)
     ranked = sorted(found.values(), key=lambda x: x[1], reverse=True)
     return [name for name, _ in ranked[:_DISCOVER_TOP]]
+
+
+def _resolve_subreddits(query: str, override_subs: Optional[list[str]]) -> list[str]:
+    """Resolve and budget the subreddit set shared by sync and async search."""
+    q = (query or "").strip()
+    if q and not _latin_content_terms(q):
+        _note_non_latin_query(q)
+        return []
+    if override_subs:
+        return _cap_search_subreddits(override_subs, q)
+
+    if _has_core_intent(q):
+        return _cap_search_subreddits(_with_finance_subs(DEFAULT_SUBREDDITS, q), q)
+    if _looks_storage_intent(q):
+        return _cap_search_subreddits(list(_STORAGE_SUBS), q)
+
+    discovered = _discover_subreddits(q)
+    if not discovered:
+        diag.note(
+            "reddit.discovery_empty",
+            body="no topical subreddit was discovered for this off-core Latin query",
+        )
+        return []
+    return _cap_search_subreddits(discovered, q)
 
 
 # ── Finance routing (the curated core is research/career/immigration; it knows nothing about
@@ -621,6 +780,9 @@ class RedditAdapter:
         # to the unchanged submission path (no regression to submissions / auto-route).
         q_comment, want_comments = _parse_comment_mode(query or "")
         if want_comments:
+            if q_comment and not _latin_content_terms(q_comment):
+                _note_non_latin_query(q_comment)
+                return []
             return self._search_comments(q_comment, limit)
 
         # Pull any `subreddit:`/`sub:` qualifier out of the query first. When
@@ -629,13 +791,9 @@ class RedditAdapter:
         # plus any topical subs the query itself discovers (the general-engine route:
         # "pour over coffee" reaches r/Coffee instead of being forced through r/PhD).
         q, override_subs = _parse_subreddits(query or "")
-        if override_subs:
-            subreddits = override_subs  # explicit subreddit: wins outright (no auto-widening)
-        else:
-            # Auto-route: curated core + query-discovered topical subs, then a curated finance set
-            # appended IFF the query looks financial (so "$NVDA earnings" reaches r/stocks instead of
-            # being stranded in the career core). _with_finance_subs is a no-op for any other query.
-            subreddits = _with_finance_subs(DEFAULT_SUBREDDITS + _discover_subreddits(q), q)
+        subreddits = _resolve_subreddits(q, override_subs)
+        if not subreddits:
+            return []
 
         # CRITICAL: the resolved sub set is part of the cache identity — otherwise
         # `subreddit:A foo` and `subreddit:B foo` (same clean q) would collide.
@@ -680,7 +838,7 @@ class RedditAdapter:
         # came back empty — the relaxed rounds replace a useless 0, never real hits.
         merged: list[dict] = []
         sent = q
-        for tq in (_relax_tiers(q) if q else [""]):
+        for tq in _search_tiers(q, subreddits):
             sent = tq
             merged = _one_round(tq)
             if merged:
@@ -748,14 +906,14 @@ class RedditAdapter:
         # Pull any `subreddit:`/`sub:` qualifier out first (mirrors search). When present it OVERRIDES;
         # absent → the curated CORE plus query-discovered topical subs (the general-engine route).
         q, override_subs = _parse_subreddits(query or "")
-        if override_subs:
-            subreddits = override_subs  # explicit subreddit: wins outright (no auto-widening)
-        else:
-            # _discover_subreddits does its OWN egress (_arctic_get) + per-token cache IO → run it OFF the
-            # loop (a self-contained blocking helper, like the CDP fallback below); the DOMINANT egress —
-            # the submission fan-out — is what goes native. Result is byte-identical to the sync call.
-            discovered = await anyio.to_thread.run_sync(_discover_subreddits, q)
-            subreddits = _with_finance_subs(DEFAULT_SUBREDDITS + discovered, q)
+        if q and not _latin_content_terms(q):
+            _note_non_latin_query(q)
+            return []
+        # _resolve_subreddits does its own discovery egress and cache IO. Run it OFF the loop; the
+        # dominant submission fan-out remains native below. Result is shared with the sync path.
+        subreddits = await anyio.to_thread.run_sync(_resolve_subreddits, q, override_subs)
+        if not subreddits:
+            return []
 
         # CRITICAL: the resolved sub set is part of the cache identity, and this is the SAME key as
         # search() — async and sync share the cache.
@@ -803,7 +961,7 @@ class RedditAdapter:
         # came back empty — the relaxed rounds replace a useless 0, never real hits.
         merged: list[dict] = []
         sent = q
-        for tq in (_relax_tiers(q) if q else [""]):
+        for tq in _search_tiers(q, subreddits):
             sent = tq
             merged = await _aone_round(tq)
             if merged:
@@ -859,8 +1017,11 @@ class RedditAdapter:
           2. THREAD-TREE harvest (backfill, only when (1) is thin or query-less) — find the top
              ``_COMMENT_THREADS`` matching threads by num_comments, pull each thread's comment tree by
              ``link_id``. Surfaces answers under the most-discussed threads even when the query words
-             never appear in a reply (the question is in the title, the answer paraphrases it).
+              never appear in a reply (the question is in the title, the answer paraphrases it).
         """
+        if query and not _latin_content_terms(query):
+            _note_non_latin_query(query)
+            return []
         q, override_subs = _parse_subreddits(query or "")
         if override_subs:
             subreddits = override_subs[:_COMMENT_MAX_SUBS]  # explicit subreddit: wins outright

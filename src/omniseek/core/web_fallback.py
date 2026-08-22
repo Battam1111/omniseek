@@ -104,6 +104,8 @@ def _is_known_walled_deep_link(url: str) -> bool:
     except Exception:  # noqa: BLE001
         return False
     host = (parsed.hostname or "").lower().rstrip(".")
+    if host in {"muchong.com", "www.muchong.com", "emuch.net", "www.emuch.net"}:
+        return bool(re.search(r"/t-\d+", parsed.path or ""))
     if host not in {"xiaohongshu.com", "www.xiaohongshu.com", "rednote.com", "www.rednote.com"}:
         return False
     return bool(re.search(r"/(?:explore|discovery/item|search_result|mobile/question)/", parsed.path or ""))
