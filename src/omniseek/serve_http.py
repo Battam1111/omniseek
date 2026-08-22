@@ -188,11 +188,15 @@ def main() -> None:
             from omniseek.core.curator import yield_tap as _yield_tap
             _yield_tap.start_writer()
             logger.info("curator yield tap: drain thread started")
-            # Phase 2 (vector): preload the embedder off the hot path, then page-backfill vectors for
-            # the existing corpus (interleaves with live ingest; fully fail-open if the embedder /
-            # sentence-transformers is absent → the index stays lexical-only).
-            threading.Thread(target=recall.embed.warm, name="recall-embed-warm", daemon=True).start()
+            # Phase 2 (vector): preload the embedder AND the search matrices, in a background
+            # thread, never synchronously. A synchronous warm() here held the listener closed for
+            # the whole ~8-9s warmup, so every restart became a 9-second outage and the deploy
+            # health gate rejected the release outright (measured 2026-08-22: RUNTIME BUILD ID
+            # MISMATCH -> rollback). The thread keeps boot instant; a request that arrives before
+            # warmup finishes takes the same lazy, fail-open path it always did, and once warm()
+            # completes the first hybrid call drops from ~9s to well under a second.
             recall.start_backfill()
+            threading.Thread(target=recall.warm, name="recall-warm", daemon=True).start()
             logger.info("recall index: writes enabled + ingest loop + vector backfill started")
     except Exception as exc:  # noqa: BLE001 — the index is best-effort; never block boot
         logger.warning("recall index disabled (init failed): %s", exc)

@@ -27,6 +27,32 @@ logger = logging.getLogger(__name__)
 # loop behaves identically until this is set, which only happens on shutdown.
 _STOP = threading.Event()
 
+
+def warm() -> None:
+    """Load the vector model and build the matrices used by hybrid search.
+
+    This is a boot-only warmup. It does not write recall state, alter request
+    arguments, or participate in request concurrency. A failed warmup leaves
+    the existing lazy, fail-open search behavior in place.
+    """
+    embed.warm()
+    if not embed.available() or store._disabled:
+        return
+    con = None
+    try:
+        con = store.connect()
+        store._ensure_matrix(con)
+        store._ensure_chunk_matrix(con)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("recall vector warmup skipped: %s", exc)
+    finally:
+        if con is not None:
+            try:
+                con.close()
+            except Exception:
+                pass
+
+
 # ── what enters the corpus — an OPT-IN allow-list (smoke-frozen) ──────────────────────────────
 # Default: a source is NOT indexed. Excluded by design: query-keyed/walled (search-is-crawl, zero
 # recall on novel queries), structured-field sources FTS would flatten (conference_deadlines /
