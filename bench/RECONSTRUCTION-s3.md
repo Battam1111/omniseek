@@ -213,3 +213,27 @@ is not fully controllable, so blindness is enforced by explicit prohibition and 
 auditing each author's full preserved transcript for ANY invocation of this system's retrieval
 tools, load calls included. That check is strictly stronger than the load-call absence described
 in section 2; the section 10 caveat about memory-based reasoning stands unchanged.
+
+## Amendment 2026-08-22b: what "visibly answers the frozen need" means, clarified after two
+## auditors diverged
+
+Phase C ran as two independent auditors over disjoint halves of the funnel. They diverged on one
+criterion: whether a claim key must cover EVERY sub-question of a multi-part need, or must settle
+the need's central actionable question. One auditor applied the maximal reading and returned
+zero candidates across sixteen needs, in several cases while its own recorded measurements
+showed a key that was unique, render-stable, and readable at tier T1 or T2.
+
+The maximal reading is rejected, for a reason internal to this spec: section 4 requires the key
+to be ONE SHORT verbatim fact, and one short fact cannot cover a two- or three-headed need by
+construction, so the maximal reading makes most real needs un-keyable and would push the suite
+back toward single-fact quiz items, which section 2 forbids. The clarified criterion:
+
+- A key must settle the need's CENTRAL question, the one the asker would act on.
+- The admission record must state which sub-questions the key settles and which remain open.
+- A need whose central question itself has no decisive, readable answering document remains
+  `no_viable_key`.
+
+No gate changes. Uniqueness, D1, D2 and D3 are untouched, and every rejection already recorded
+under those gates stands. The affected `no_viable_key` records are being re-audited under this
+clarified criterion, with all gate legs run in full for any newly proposed key; both the original
+and the re-audited records ship in the published funnel.
