@@ -1,0 +1,26 @@
+{
+  "id": "s3-fixture-001",
+  "suite": "s3-crosslingual",
+  "claim": "the returned text contains the registered claim key",
+  "input": {
+    "tool": "omniseek_search",
+    "args": {
+      "query": "fixture retrieval need"
+    }
+  },
+  "ground_truth": {
+    "type": "normalized_containment",
+    "value": "Café 43% of results"
+  },
+  "accessibility_tier": "T2",
+  "key_language": "en",
+  "accepted_forms": [
+    "cafe 43 percent of results"
+  ],
+  "render_routes": [
+    "publisher_html",
+    "pdf_text_extraction",
+    "omniseek_reader"
+  ],
+  "funnel_id": "need-fixture-001"
+}

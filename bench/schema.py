@@ -14,6 +14,15 @@ class TaskValidationError(ValueError):
 
 CANONICAL_TOOL_PREFIX = "omniseek_"
 LEGACY_TOOL_PREFIX = "eye_"
+S3_SUITE = "s3-crosslingual"
+S3_ACCESSIBILITY_TIERS = frozenset({"T1", "T2", "T3"})
+S3_REQUIRED_FIELDS = (
+    "accessibility_tier",
+    "key_language",
+    "accepted_forms",
+    "render_routes",
+    "funnel_id",
+)
 
 
 def canonicalize_tool_name(name: Any) -> str:
@@ -66,6 +75,72 @@ def _validate_search_resistance(task: dict[str, Any]) -> None:
             raise TaskValidationError(f"{path}.first_page_hit must be a boolean")
 
 
+def _validate_non_empty_string_field(task: Mapping[str, Any], field: str) -> None:
+    if field not in task:
+        return
+    value = task[field]
+    if not isinstance(value, str) or not value.strip():
+        raise TaskValidationError(f"{field} must be a non-empty string")
+
+
+def _validate_string_list_field(task: Mapping[str, Any], field: str) -> None:
+    if field not in task:
+        return
+    value = task[field]
+    if not isinstance(value, list):
+        raise TaskValidationError(f"{field} must be a list")
+    for index, item in enumerate(value):
+        if not isinstance(item, str) or not item.strip():
+            raise TaskValidationError(
+                f"{field}[{index}] must be a non-empty string"
+            )
+
+
+def _validate_s3_fields(task: dict[str, Any], truth: Mapping[str, Any]) -> None:
+    for field in S3_REQUIRED_FIELDS:
+        if field not in task:
+            raise TaskValidationError(
+                f"{field} is required for {S3_SUITE} tasks"
+            )
+
+    tier = task["accessibility_tier"]
+    if not isinstance(tier, str) or tier not in S3_ACCESSIBILITY_TIERS:
+        allowed = ", ".join(sorted(S3_ACCESSIBILITY_TIERS))
+        raise TaskValidationError(
+            f"accessibility_tier must be one of {allowed}"
+        )
+    if tier == "T3":
+        raise TaskValidationError(
+            f"{S3_SUITE} retrieval tasks cannot use accessibility_tier T3"
+        )
+
+    _validate_non_empty_string_field(task, "key_language")
+    _validate_string_list_field(task, "accepted_forms")
+    _validate_string_list_field(task, "render_routes")
+    _validate_non_empty_string_field(task, "funnel_id")
+
+    routes = task["render_routes"]
+    if len(set(routes)) < 3:
+        raise TaskValidationError(
+            f"render_routes must contain at least three distinct routes for {S3_SUITE}"
+        )
+
+    truth_type = str(truth.get("type", "")).casefold()
+    if truth_type in {"identifier_in_topk", "identifier"}:
+        raise TaskValidationError(
+            f"identifier_in_topk is retired for {S3_SUITE} tasks"
+        )
+    if truth_type not in {"normalized_containment", "containment"}:
+        raise TaskValidationError(
+            f"{S3_SUITE} tasks must use containment ground truth"
+        )
+    canonical_key = truth.get("value", truth.get("needle"))
+    if not isinstance(canonical_key, str) or not canonical_key.strip():
+        raise TaskValidationError(
+            f"{S3_SUITE} containment ground truth must carry a non-empty canonical key"
+        )
+
+
 def canonicalize_task(raw: Mapping[str, Any]) -> dict[str, Any]:
     """Return a deep-copied, validated task with canonical tool naming."""
     if not isinstance(raw, Mapping):
@@ -90,6 +165,21 @@ def canonicalize_task(raw: Mapping[str, Any]) -> dict[str, Any]:
     if not isinstance(truth.get("type"), str) or not truth["type"].strip():
         raise TaskValidationError("ground_truth.type must be a non-empty string")
     task["ground_truth"] = truth
+
+    tier = task.get("accessibility_tier")
+    if tier is not None and (
+        not isinstance(tier, str) or tier not in S3_ACCESSIBILITY_TIERS
+    ):
+        allowed = ", ".join(sorted(S3_ACCESSIBILITY_TIERS))
+        raise TaskValidationError(
+            f"accessibility_tier must be one of {allowed}"
+        )
+    _validate_non_empty_string_field(task, "key_language")
+    _validate_string_list_field(task, "accepted_forms")
+    _validate_string_list_field(task, "render_routes")
+    _validate_non_empty_string_field(task, "funnel_id")
+    if task["suite"] == S3_SUITE:
+        _validate_s3_fields(task, truth)
 
     # Probe-less tasks assert the server's own contract and are always live.
     if "liveness_probe" in task and task["liveness_probe"] is not None:

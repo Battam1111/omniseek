@@ -85,6 +85,28 @@ def _good_task(**overrides):
         "added_in": "bench-v1.0",
     }
     task.update(overrides)
+    if task["suite"] == "s3-crosslingual":
+        task.update(
+            {
+                "accessibility_tier": task.get("accessibility_tier", "T2"),
+                "key_language": task.get("key_language", "en"),
+                "accepted_forms": task.get("accepted_forms", []),
+                "render_routes": task.get(
+                    "render_routes",
+                    ["publisher_html", "pdf_text_extraction", "omniseek_reader"],
+                ),
+                "funnel_id": task.get("funnel_id", "fixture-need-001"),
+            }
+        )
+    else:
+        for field in (
+            "accessibility_tier",
+            "key_language",
+            "accepted_forms",
+            "render_routes",
+            "funnel_id",
+        ):
+            task.pop(field, None)
     return task
 
 

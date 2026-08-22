@@ -20,13 +20,49 @@ PUNCTUATION_CHARS = frozenset(
 
 _MISSING = object()
 _PATH_TOKEN = re.compile(r"[^.[\]]+|\[(\d+|\*)\]")
+_NUMERIC_SEPARATOR_CHARS = frozenset(",._:/-−")
+
+
+def _is_decimal_digit(value: str) -> bool:
+    return len(value) == 1 and value.isdecimal()
+
+
+def _is_between_decimal_digits(text: str, index: int) -> bool:
+    return (
+        index > 0
+        and index + 1 < len(text)
+        and _is_decimal_digit(text[index - 1])
+        and _is_decimal_digit(text[index + 1])
+    )
 
 
 def _normalize_text(value: Any) -> str:
-    text = unicodedata.normalize("NFKC", str(value)).casefold()
-    return "".join(
-        char for char in text if not char.isspace() and char not in PUNCTUATION_CHARS
-    )
+    # The pre-registered render normalization is deliberately conservative:
+    # 1. literal publisher escapes such as ``43\%`` become ``43%``;
+    # 2. Unicode NFKC makes composed and decomposed accent renderings comparable;
+    # 3. casefold handles case differences;
+    # 4. whitespace runs collapse to one space before comparison;
+    # 5. punctuation and whitespace are ignored except when they sit between decimal
+    #    digits, so an interleaved PDF line-number column is not silently joined and
+    #    distinct numeric claims do not collide merely because separators were erased.
+    text = str(value).replace(r"\%", "%")
+    text = unicodedata.normalize("NFKC", text).casefold()
+    text = re.sub(r"\s+", " ", text).strip()
+    normalized: list[str] = []
+    for index, char in enumerate(text):
+        if char.isspace():
+            if _is_between_decimal_digits(text, index):
+                normalized.append(" ")
+            continue
+        if char in PUNCTUATION_CHARS:
+            if (
+                char in _NUMERIC_SEPARATOR_CHARS
+                and _is_between_decimal_digits(text, index)
+            ):
+                normalized.append(char)
+            continue
+        normalized.append(char)
+    return "".join(normalized)
 
 
 def normalized_containment(needle: Any, haystack: Any) -> bool:
@@ -577,12 +613,18 @@ def _judge_normalized(task: Mapping[str, Any], result: Any) -> dict[str, Any]:
     if needle is None:
         return {"passed": False, "status": "fail", "detail": "ground truth value missing"}
     haystack = _response_text(result)
-    if normalized_containment(needle, haystack):
+    candidates = [needle]
+    accepted_forms = task.get("accepted_forms", [])
+    if isinstance(accepted_forms, Sequence) and not isinstance(
+        accepted_forms, (str, bytes, bytearray)
+    ):
+        candidates.extend(accepted_forms)
+    if any(normalized_containment(candidate, haystack) for candidate in candidates):
         return {
             "passed": True,
             "status": "pass",
             "branch": "normalized_containment",
-            "detail": "normalized needle is contained",
+            "detail": "a normalized registered form is contained",
         }
     threshold = task.get("fallback_similarity", truth.get("fallback_similarity"))
     if threshold is None:
@@ -623,6 +665,16 @@ def judge(task: Mapping[str, Any], result: Any) -> dict[str, Any]:
     """Dispatch a task's pure judge and return a serializable outcome."""
     result = _json_response(result)
     truth_type = str(task.get("ground_truth", {}).get("type", "")).casefold()
+    if task.get("suite") == "s3-crosslingual" and truth_type in {
+        "identifier_in_topk",
+        "identifier",
+    }:
+        return {
+            "passed": False,
+            "status": "fail",
+            "branch": "identifier_in_topk_refused",
+            "detail": "identifier_in_topk is refused for s3-crosslingual tasks",
+        }
     if truth_type in {"normalized_containment", "containment"}:
         return _judge_normalized(task, result)
     if truth_type in {"identifier_in_topk", "identifier"}:

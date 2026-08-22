@@ -1,0 +1,24 @@
+{
+  "id": "s3-fixture-identifier",
+  "suite": "s3-crosslingual",
+  "claim": "the retired identifier judge must not score this task",
+  "input": {
+    "tool": "omniseek_search",
+    "args": {
+      "query": "fixture identifier retrieval need"
+    }
+  },
+  "ground_truth": {
+    "type": "identifier_in_topk",
+    "value": "10.1234/fixture"
+  },
+  "accessibility_tier": "T2",
+  "key_language": "neutral",
+  "accepted_forms": [],
+  "render_routes": [
+    "publisher_html",
+    "pdf_text_extraction",
+    "omniseek_reader"
+  ],
+  "funnel_id": "need-fixture-identifier"
+}

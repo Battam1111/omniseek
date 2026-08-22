@@ -560,6 +560,15 @@ def _task_record(task: dict[str, Any]) -> dict[str, Any]:
         record["search_resistance_prefilter"] = deepcopy(
             task["search_resistance_prefilter"]
         )
+    for field in (
+        "accessibility_tier",
+        "key_language",
+        "accepted_forms",
+        "render_routes",
+        "funnel_id",
+    ):
+        if field in task:
+            record[field] = deepcopy(task[field])
     return record
 
 

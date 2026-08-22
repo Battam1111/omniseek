@@ -1,0 +1,24 @@
+{
+  "id": "s3-fixture-t3",
+  "suite": "s3-crosslingual",
+  "claim": "the returned text contains a gated claim key",
+  "input": {
+    "tool": "omniseek_search",
+    "args": {
+      "query": "fixture gated retrieval need"
+    }
+  },
+  "ground_truth": {
+    "type": "normalized_containment",
+    "value": "gated claim key"
+  },
+  "accessibility_tier": "T3",
+  "key_language": "en",
+  "accepted_forms": [],
+  "render_routes": [
+    "publisher_html",
+    "pdf_text_extraction",
+    "omniseek_reader"
+  ],
+  "funnel_id": "need-fixture-t3"
+}
