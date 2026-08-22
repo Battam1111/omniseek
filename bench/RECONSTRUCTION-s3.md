@@ -187,3 +187,29 @@ still making.
   Recorded as a known weakness rather than claimed away.
 - Search resistance is measured with the engines we can actually drive, on a recorded date. It is
   a snapshot, and the receipts say so.
+
+## Amendment 2026-08-22: domain spread, declared before authoring
+
+Phase A begins after this commit; check this commit's timestamp against the commit that adds the
+authored needs. The 32 needs distribute as four per domain, two Chinese-directional and two
+English-directional in each:
+
+1. jobs and workplace
+2. visas and cross-border status
+3. academic publishing and research practice
+4. software engineering and open source
+5. personal finance and tax
+6. consumer electronics and hardware
+7. games and popular culture
+8. life administration and local services
+
+Domains 7 and 8 are deliberately outside this catalog's strengths, per section 2's
+anti-concentration requirement: a spread chosen only where we expect to win would be selection
+bias moved one level up. Authoring agents receive their domains and direction quotas and nothing
+about this repository's sources.
+
+One enforcement detail recorded honestly: for the authoring agents used here, tool availability
+is not fully controllable, so blindness is enforced by explicit prohibition and verified by
+auditing each author's full preserved transcript for ANY invocation of this system's retrieval
+tools, load calls included. That check is strictly stronger than the load-call absence described
+in section 2; the section 10 caveat about memory-based reasoning stands unchanged.
