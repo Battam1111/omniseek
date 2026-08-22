@@ -603,6 +603,157 @@ class RunnerContractTests(unittest.TestCase):
         with self.assertRaises(DormantExtraError):
             asyncio.run(_run_rep(Invoker(), task, 120.0))
 
+    def test_credential_checker_reports_absent_exa_file(self):
+        checker = getattr(bench_run, "detect_credentials", None)
+        self.assertIsNotNone(
+            checker,
+            "bench.run.detect_credentials must exist before credential dormancy can be checked",
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertFalse(checker(Path(tmp))["exa"])
+
+    def test_credential_checker_reports_present_exa_file(self):
+        checker = getattr(bench_run, "detect_credentials", None)
+        self.assertIsNotNone(
+            checker,
+            "bench.run.detect_credentials must exist before credential dormancy can be checked",
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            credential_file = (
+                Path(tmp) / ".omniseek" / "credentials" / "exa.json"
+            )
+            credential_file.parent.mkdir(parents=True)
+            credential_file.write_text(
+                json.dumps({"api_key": "fixture-key"}),
+                encoding="utf-8",
+            )
+            self.assertTrue(checker(Path(tmp))["exa"])
+
+    def test_credential_dormancy_reason_is_emitted_in_run_record(self):
+        self.assertIsNotNone(
+            getattr(bench_run, "detect_credentials", None),
+            "bench.run.detect_credentials must exist before credential dormancy can be emitted",
+        )
+
+        class FakeInvoker:
+            def __init__(self, *_args, **_kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, _exc_type, _exc, _traceback):
+                return None
+
+            async def call(self, _tool, _args, _timeout_s):
+                return {"text": "A phrase"}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tasks_dir = root / "tasks"
+            tasks_dir.mkdir()
+            task = _good_task()
+            task.pop("liveness_probe")
+            (tasks_dir / f"{task['id']}.json").write_text(
+                json.dumps(task),
+                encoding="utf-8",
+            )
+            output = root / "result.json"
+            with (
+                mock.patch.object(
+                    bench_run,
+                    "detect_credentials",
+                    return_value={"exa": False},
+                ),
+                mock.patch.object(bench_run, "MCPInvoker", FakeInvoker),
+            ):
+                exit_code = bench_run.main(
+                    [
+                        "--suites",
+                        "s3-crosslingual",
+                        "--reps",
+                        "1",
+                        "--passes",
+                        "1",
+                        "--tasks-dir",
+                        str(tasks_dir),
+                        "--out",
+                        str(output),
+                        "--no-warmup",
+                    ]
+                )
+
+            payload = json.loads(output.read_text(encoding="utf-8"))
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(payload["dormant"], ["s3-crosslingual"])
+            self.assertEqual(
+                payload["suites"]["s3-crosslingual"]["dormant_note"],
+                "credential_absent: exa",
+            )
+            self.assertEqual(
+                payload["tasks"]["s3-test-001"]["passes"][0]["reps"][0][
+                    "error_class"
+                ],
+                "credential_absent",
+            )
+
+    def test_suite_is_not_dormant_when_exa_credential_is_present(self):
+        class FakeInvoker:
+            def __init__(self, *_args, **_kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, _exc_type, _exc, _traceback):
+                return None
+
+            async def call(self, _tool, _args, _timeout_s):
+                return {"text": "A phrase"}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tasks_dir = root / "tasks"
+            tasks_dir.mkdir()
+            task = _good_task()
+            task.pop("liveness_probe")
+            (tasks_dir / f"{task['id']}.json").write_text(
+                json.dumps(task),
+                encoding="utf-8",
+            )
+            output = root / "result.json"
+            with (
+                mock.patch.object(
+                    bench_run,
+                    "detect_credentials",
+                    return_value={"exa": True},
+                ),
+                mock.patch.object(bench_run, "MCPInvoker", FakeInvoker),
+            ):
+                exit_code = bench_run.main(
+                    [
+                        "--suites",
+                        "s3-crosslingual",
+                        "--reps",
+                        "1",
+                        "--passes",
+                        "1",
+                        "--tasks-dir",
+                        str(tasks_dir),
+                        "--out",
+                        str(output),
+                        "--no-warmup",
+                    ]
+                )
+
+            payload = json.loads(output.read_text(encoding="utf-8"))
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(payload["dormant"], [])
+            self.assertFalse(payload["suites"]["s3-crosslingual"]["dormant"])
+            self.assertIsNone(
+                payload["suites"]["s3-crosslingual"]["dormant_note"]
+            )
+
     def test_default_command_resolves_next_to_the_active_python(self):
         with tempfile.TemporaryDirectory() as tmp:
             scripts = Path(tmp) / ("Scripts" if os.name == "nt" else "bin")
@@ -637,7 +788,7 @@ class RunnerContractTests(unittest.TestCase):
             root = Path(tmp)
             tasks_dir = root / "tasks"
             tasks_dir.mkdir()
-            task = _good_task()
+            task = _good_task(id="s6-test-001", suite="s6-memory")
             task.pop("liveness_probe")
             (tasks_dir / "task.json").write_text(json.dumps(task), encoding="utf-8")
             output = root / "result.json"
@@ -645,7 +796,7 @@ class RunnerContractTests(unittest.TestCase):
                 exit_code = bench_run.main(
                     [
                         "--suites",
-                        "s3-crosslingual",
+                        "s6-memory",
                         "--reps",
                         "1",
                         "--passes",
@@ -660,7 +811,7 @@ class RunnerContractTests(unittest.TestCase):
             payload = json.loads(output.read_text(encoding="utf-8"))
             self.assertEqual(exit_code, 0)
             self.assertEqual(payload["stale"], [])
-            self.assertEqual(payload["suites"]["s3-crosslingual"]["pooled"]["total"], 1)
+            self.assertEqual(payload["suites"]["s6-memory"]["pooled"]["total"], 1)
 
     def test_liveness_probe_classifies_429_as_rate_limited(self):
         class Response:
@@ -752,7 +903,7 @@ class RunnerContractTests(unittest.TestCase):
             tasks_dir = root / "tasks"
             tasks_dir.mkdir()
             (tasks_dir / "task.json").write_text(
-                json.dumps(_good_task()),
+                json.dumps(_good_task(id="s6-test-001", suite="s6-memory")),
                 encoding="utf-8",
             )
             output = root / "partial.json"
@@ -774,7 +925,7 @@ class RunnerContractTests(unittest.TestCase):
                 exit_code = bench_run.main(
                     [
                         "--suites",
-                        "s3-crosslingual",
+                        "s6-memory",
                         "--reps",
                         "1",
                         "--passes",
@@ -791,7 +942,7 @@ class RunnerContractTests(unittest.TestCase):
             self.assertTrue(output.exists())
             payload = json.loads(output.read_text(encoding="utf-8"))
             detail = payload["error"]["detail"]
-            self.assertIn("phase=task s3-test-001 rep 1", detail)
+            self.assertIn("phase=task s6-test-001 rep 1", detail)
             self.assertIn("tool=omniseek_search", detail)
             self.assertIn("RuntimeError('synthetic mid-run failure')", detail)
             self.assertNotIn("ExceptionGroup", detail)
@@ -894,6 +1045,22 @@ class ConversionAndReportTests(unittest.TestCase):
             self.assertIn("s6-memory", report)
             self.assertIn("s6-stale-001", report)
             self.assertIn("Conflict of interest", report)
+
+    def test_report_renders_credential_dormancy_reason(self):
+        results = _results_fixture()
+        results["suites"]["s3-crosslingual"]["dormant"] = True
+        results["suites"]["s3-crosslingual"][
+            "dormant_note"
+        ] = "credential_absent: exa"
+        results["dormant"] = ["s3-crosslingual", "s6-memory"]
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            result_file = root / "run.json"
+            report_file = root / "RESULTS.md"
+            result_file.write_text(json.dumps(results), encoding="utf-8")
+            generate_report(result_file, report_file)
+            report = report_file.read_text(encoding="utf-8")
+            self.assertIn("credential_absent: exa", report)
 
 
 class VisualizationContractTests(unittest.TestCase):

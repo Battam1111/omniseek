@@ -42,6 +42,9 @@ REQUIRED_EXTRAS = {
     "s5-scholar": set(),
     "s6-memory": set(),
 }
+REQUIRED_CREDENTIALS = {
+    "s3-crosslingual": ("exa",),
+}
 EXTRA_IMPORTS = {
     "asr": ("funasr", "imageio_ffmpeg"),
     "ocr": ("rapidocr_onnxruntime",),
@@ -150,6 +153,21 @@ def detect_extras() -> dict[str, bool]:
     }
 
 
+def detect_credentials(home: Path | None = None) -> dict[str, bool]:
+    """Report whether each configured suite credential file exists under the active home."""
+    home_path = Path.home() if home is None else Path(home)
+    credentials_dir = home_path / ".omniseek" / "credentials"
+    credential_names = {
+        credential
+        for required in REQUIRED_CREDENTIALS.values()
+        for credential in required
+    }
+    return {
+        credential: (credentials_dir / f"{credential}.json").is_file()
+        for credential in sorted(credential_names)
+    }
+
+
 def _required_extras(task: dict[str, Any]) -> set[str]:
     explicit = task.get("required_extras")
     if isinstance(explicit, list):
@@ -168,6 +186,10 @@ def _required_extras(task: dict[str, Any]) -> set[str]:
     if tool == "omniseek_read" and target.endswith(".pdf"):
         required.add("pdf")
     return required
+
+
+def _required_credentials(task: dict[str, Any]) -> set[str]:
+    return set(REQUIRED_CREDENTIALS.get(task["suite"], ()))
 
 
 def _is_dormant_message(message: str) -> bool:
@@ -538,15 +560,22 @@ def _majority_status(reps: list[dict[str, Any]]) -> str:
     return "failed"
 
 
-def _dormant_note(missing_extras: list[str]) -> str:
-    """Say WHICH sense is missing when we know, and stay honest when we do not.
+def _dormant_note(
+    missing_extras: list[str],
+    missing_credentials: list[str] | None = None,
+) -> str:
+    """Say which required capability is absent, and stay honest when we do not know.
 
     A suite can also go dormant mid-run (the server answers that the extra is absent), in
     which case the extras detected at load time name nothing, and inventing a name there
     would be worse than the general statement.
     """
-    base = "required optional extra missing"
-    return f"{base}: {', '.join(missing_extras)}" if missing_extras else base
+    notes = []
+    if missing_extras:
+        notes.append(f"required optional extra missing: {', '.join(missing_extras)}")
+    if missing_credentials:
+        notes.append(f"credential_absent: {', '.join(missing_credentials)}")
+    return "; ".join(notes) if notes else "required optional extra missing"
 
 
 def _task_record(task: dict[str, Any]) -> dict[str, Any]:
@@ -577,6 +606,7 @@ async def _run_pass(
     tasks: list[dict[str, Any]],
     stale_ids: set[str],
     dormant_suites: set[str],
+    dormant_reasons: dict[str, dict[str, list[str]]],
     pass_index: int,
     reps: int,
     invoker: MCPInvoker,
@@ -592,13 +622,24 @@ async def _run_pass(
             continue
         rep_records: list[dict[str, Any]] = []
         if suite in dormant_suites:
+            reason = dormant_reasons.get(suite, {})
+            missing_extras = reason.get("extras", [])
+            missing_credentials = reason.get("credentials", [])
             rep_records = [
                 {
                     "status": "dormant",
                     "passed": False,
                     "latency_ms": 0.0,
                     "judge_branch": None,
-                    "error_class": "missing_extra",
+                    "error_class": (
+                        "credential_absent"
+                        if missing_credentials
+                        else "missing_extra"
+                    ),
+                    "dormant_reason": _dormant_note(
+                        missing_extras,
+                        missing_credentials,
+                    ),
                 }
                 for _ in range(reps)
             ]
@@ -709,6 +750,7 @@ def _selected_suites(value: str) -> set[str]:
 def _result_skeleton(args: argparse.Namespace) -> dict[str, Any]:
     suites = _selected_suites(args.suites)
     extras = detect_extras()
+    credentials = detect_credentials()
     return {
         "schema_version": "bench-v1.0",
         "run": {
@@ -725,6 +767,7 @@ def _result_skeleton(args: argparse.Namespace) -> dict[str, Any]:
             "python": sys.version.split()[0],
             "omniseek_version": _package_version(),
             "extras_detected": extras,
+            "credentials_detected": credentials,
             "vantage": args.vantage,
             "warmup_ms": None,
             "warmup_pass_ms": [],
@@ -799,23 +842,34 @@ async def run_benchmark(
     tasks.sort(key=lambda task: (task["suite"], task["id"]))
 
     extras = result["env"]["extras_detected"]
-    dormant_suites = {
-        task["suite"]
-        for task in tasks
-        if any(not extras.get(extra, False) for extra in _required_extras(task))
-    }
-    dormant_reasons = {
-        suite: sorted(
-            {
-                extra
-                for task in tasks
-                if task["suite"] == suite
-                for extra in _required_extras(task)
-                if not extras.get(extra, False)
-            }
+    credentials = result["env"].get("credentials_detected")
+    if not isinstance(credentials, dict):
+        credentials = detect_credentials()
+        result["env"]["credentials_detected"] = credentials
+    missing_extras_by_suite: dict[str, set[str]] = {}
+    missing_credentials_by_suite: dict[str, set[str]] = {}
+    for task in tasks:
+        suite = task["suite"]
+        missing_extras_by_suite.setdefault(suite, set()).update(
+            extra
+            for extra in _required_extras(task)
+            if not extras.get(extra, False)
         )
-        for suite in dormant_suites
+        missing_credentials_by_suite.setdefault(suite, set()).update(
+            credential
+            for credential in _required_credentials(task)
+            if not credentials.get(credential, False)
+        )
+    dormant_reasons = {
+        suite: {
+            "extras": sorted(missing_extras_by_suite.get(suite, set())),
+            "credentials": sorted(missing_credentials_by_suite.get(suite, set())),
+        }
+        for suite in set(missing_extras_by_suite) | set(missing_credentials_by_suite)
+        if missing_extras_by_suite.get(suite)
+        or missing_credentials_by_suite.get(suite)
     }
+    dormant_suites = set(dormant_reasons)
     stale_ids: set[str] = set()
     task_records: dict[str, dict[str, Any]] = result["tasks"]
     try:
@@ -864,6 +918,7 @@ async def run_benchmark(
                     tasks,
                     stale_ids,
                     dormant_suites,
+                    dormant_reasons,
                     pass_index,
                     args.reps,
                     invoker,
@@ -965,7 +1020,10 @@ async def run_benchmark(
             "stale_count": sum(1 for task in tasks if task["suite"] == suite and task["id"] in stale_ids),
             "dormant": suite in dormant_suites,
             "dormant_note": (
-                _dormant_note(dormant_reasons.get(suite, []))
+                _dormant_note(
+                    dormant_reasons.get(suite, {}).get("extras", []),
+                    dormant_reasons.get(suite, {}).get("credentials", []),
+                )
                 if suite in dormant_suites
                 else None
             ),

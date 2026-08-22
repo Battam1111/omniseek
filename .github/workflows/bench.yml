@@ -6,7 +6,7 @@ on:
       suites:
         description: Comma-separated claim-verification suites
         required: true
-        default: s4-depth,s5-scholar,s6-memory
+        default: s3-crosslingual,s4-depth,s5-scholar,s6-memory
       reps:
         description: Repetitions per task
         required: true
@@ -35,6 +35,16 @@ jobs:
         run: pip install ".[pdf,recall,ocr]"
       - name: Identify to polite-pool upstreams
         run: echo "OMNISEEK_CONTACT_EMAIL=101111615+Battam1111@users.noreply.github.com" >> "$GITHUB_ENV"
+      - name: Provision Exa credentials when configured
+        env:
+          EXA_API_KEY: ${{ secrets.EXA_API_KEY }}
+        run: |
+          if [ -z "$EXA_API_KEY" ]; then
+            exit 0
+          fi
+          mkdir -p "$HOME/.omniseek/credentials"
+          printf '%s\n' '{"api_key":"'"$EXA_API_KEY"'"}' > "$HOME/.omniseek/credentials/exa.json"
+          chmod 600 "$HOME/.omniseek/credentials/exa.json"
       - name: Run claim-verification suite
         env:
           PYTHONUTF8: "1"
