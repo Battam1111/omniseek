@@ -8,6 +8,13 @@ you check the order. The admitted tasks live in `bench/tasks/s3-crosslingual/`, 
 task, each carrying its key, its uniqueness and render receipts, its admission record, its
 search receipts, and its verification result.
 
+<div align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="funnel-s3/funnel-dark.svg">
+    <img src="funnel-s3/funnel-light.svg" width="940" alt="How the 10 cross-lingual test questions were chosen: 33 written blind, 32 with an answer findable on the open web, 13 with one exact provable sentence, 10 admitted. Every drop is counted with its reason, and a ten-square strip records the one verification run per final question.">
+  </picture>
+</div>
+
 ## How the phases ran
 
 - **A. Blind authoring.** Four authoring sessions, eight needs each, domains and language
@@ -21,7 +28,7 @@ search receipts, and its verification result.
 - **C and D. Keys and gates.** Two auditors over disjoint halves, gates run inline. They
   diverged on one criterion; the divergence and its resolution are public as the 2026-08-22b
   amendment, and the thirteen affected records were re-audited under the clarified criterion
-  with every gate unchanged. Rows marked with an asterisk carry both verdicts, original first.
+  with every gate unchanged. Rows whose verdict column shows an arrow carry both verdicts, original first.
 - **E. Admission.** One adjudicator (this repository's maintainer agent) re-verified every
   candidate's uniqueness with an independent exact-string search, applied the clarified
   criterion in both directions, and admitted or discarded with the reasons below.
@@ -80,8 +87,8 @@ receipts are in each task file under `search_resistance_prefilter`.
 
 ## The funnel, all thirty-three records
 
-Directions: zh means the need was authored in Chinese, en in English. Verdicts marked * were
-re-audited under amendment 2026-08-22b; the row shows original then re-audit.
+Directions: zh means the need was authored in Chinese, en in English. Verdicts with an arrow were
+re-audited under amendment 2026-08-22b; the row shows original, then re-audit.
 
 | id | domain | dir | phase C/D verdict | outcome |
 | --- | --- | --- | --- | --- |
@@ -102,22 +109,22 @@ re-audited under amendment 2026-08-22b; the row shows original then re-audit.
 | N14 | software engineering and open source | zh | no viable key | discarded: no readable document reports the asked-for migration percentage and one-year rollback outcome |
 | N15 | software engineering and open source | en | no viable key | discarded: no study reporting the asked-for before/after PR volume with contributor loss was found by either arm |
 | N16 | software engineering and open source | en | candidate | **admitted** (s3-cl-006) |
-| N17 | personal finance and tax | zh | no viable key \* no viable key | discarded: settling the combined tax and foreign-exchange action requires two documents; one-answering-document requirement fails |
+| N17 | personal finance and tax | zh | no viable key -> no viable key | discarded: settling the combined tax and foreign-exchange action requires two documents; one-answering-document requirement fails |
 | N18 | personal finance and tax | zh | no viable key | discarded: the sentence is repeated verbatim in a provincial tax-bureau answer (not unique), and the remaining heads have no single decisive document |
-| N19 | personal finance and tax | en | no viable key \* no viable key | discarded: the readable HMRC sentence is one fact from one worked example; the limbs that decide the action live in other documents |
-| N20 | personal finance and tax | en | no viable key \* rejected: D2 | discarded: the central action is decisively answered, but the publisher blocks two of the three required render routes |
-| N21 | consumer electronics and hardware | zh | no viable key \* no viable key | discarded: the only decisive source now serves a verification challenge; the readable claim is not the central procurement decision |
-| N22 | consumer electronics and hardware | zh | no viable key \* candidate | **admitted** (s3-cl-007) |
-| N23 | consumer electronics and hardware | en | no viable key \* no viable key | discarded: the readable claim is component-level and cannot carry the central new-versus-used decision |
-| N24 | consumer electronics and hardware | en | no viable key \* candidate | **admitted** (s3-cl-008) |
+| N19 | personal finance and tax | en | no viable key -> no viable key | discarded: the readable HMRC sentence is one fact from one worked example; the limbs that decide the action live in other documents |
+| N20 | personal finance and tax | en | no viable key -> rejected: D2 | discarded: the central action is decisively answered, but the publisher blocks two of the three required render routes |
+| N21 | consumer electronics and hardware | zh | no viable key -> no viable key | discarded: the only decisive source now serves a verification challenge; the readable claim is not the central procurement decision |
+| N22 | consumer electronics and hardware | zh | no viable key -> candidate | **admitted** (s3-cl-007) |
+| N23 | consumer electronics and hardware | en | no viable key -> no viable key | discarded: the readable claim is component-level and cannot carry the central new-versus-used decision |
+| N24 | consumer electronics and hardware | en | no viable key -> candidate | **admitted** (s3-cl-008) |
 | N25 | games and popular culture | zh | rejected: D1 | discarded: the key lives behind a walled, render-required source; tier T3 converts a retrieval task into a fetch test |
-| N26 | games and popular culture | zh | no viable key \* no viable key | discarded: the concrete claim covers one title, one merchandise class, an old guideline version; not the central decision |
+| N26 | games and popular culture | zh | no viable key -> no viable key | discarded: the concrete claim covers one title, one merchandise class, an old guideline version; not the central decision |
 | N27 | games and popular culture | en | rejected: uniqueness | discarded: the mandatory confusable-document leg could not be completed (two candidate bodies unreadable), so uniqueness is unproven |
-| N28 | games and popular culture | en | no viable key \* candidate | **admitted** (s3-cl-009) |
-| N29 | life administration and local services | zh | no viable key \* rejected: D2 | discarded: the official notice body was unreadable through every route in this run |
-| N30 | life administration and local services | zh | no viable key \* no viable key | discarded: no official page was readable; the available article is a practice opinion on a different question |
-| N31 | life administration and local services | en | no viable key \* rejected: D2 | discarded: only one of the three required routes yields the key |
-| N32 | life administration and local services | en | no viable key \* candidate | **admitted** (s3-cl-010) |
+| N28 | games and popular culture | en | no viable key -> candidate | **admitted** (s3-cl-009) |
+| N29 | life administration and local services | zh | no viable key -> rejected: D2 | discarded: the official notice body was unreadable through every route in this run |
+| N30 | life administration and local services | zh | no viable key -> no viable key | discarded: no official page was readable; the available article is a practice opinion on a different question |
+| N31 | life administration and local services | en | no viable key -> rejected: D2 | discarded: only one of the three required routes yields the key |
+| N32 | life administration and local services | en | no viable key -> candidate | **admitted** (s3-cl-010) |
 
 Totals: 33 records authored (32 live), 0 discarded at prospecting, 13 candidates out of the
 key audit, 10 admitted, no minimum was targeted and none was needed.

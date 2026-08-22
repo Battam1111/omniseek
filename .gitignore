@@ -26,3 +26,7 @@ Thumbs.db
 # Benchmark runtime artifacts
 bench/results/
 bench/RESULTS.md
+
+# build intermediates of the asset masters; the canonical renders live in assets/
+assets/masters/*.html
+assets/masters/*.png

@@ -1,13 +1,9 @@
 <div align="center">
 
 <picture>
-  <source media="(prefers-color-scheme: light)" srcset="../../assets/logo-icon.png">
-  <img src="../../assets/logo-hero-dark.png" width="320" alt="OmniSeek">
+  <source media="(prefers-color-scheme: light)" srcset="../../assets/hero-ja-light.png">
+  <img src="../../assets/hero-ja-dark.png" width="620" alt="OmniSeek">
 </picture>
-
-# OmniSeek
-
-**検索では届かないものを、あなたのエージェントが探し当てる。**
 
 答えはポッドキャストの 47 分目、コメント欄の三つ下の返信、ログインの向こう、別の言語の中に眠っている。あなたのエージェントは、それでも取ってくる。
 

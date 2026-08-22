@@ -1,13 +1,9 @@
 <div align="center">
 
 <picture>
-  <source media="(prefers-color-scheme: light)" srcset="../../assets/logo-icon.png">
-  <img src="../../assets/logo-hero-dark.png" width="320" alt="OmniSeek">
+  <source media="(prefers-color-scheme: light)" srcset="../../assets/hero-zh-light.png">
+  <img src="../../assets/hero-zh-dark.png" width="620" alt="OmniSeek">
 </picture>
-
-# OmniSeek
-
-**你的 agent,找到搜索找不到的东西。**
 
 答案就躺在某期播客的第 47 分钟、某条评论的第三层回复里、登录墙后面、另一种语言里。你的 agent 照样把它拿回来。
 
@@ -153,7 +149,7 @@ OmniSeek 是**目录优先**的：零配置时，每个无害源都开着，登�
 
 ---
 
-**你的 agent,找到搜索找不到的东西。**
+**让你的 Agent 找到难以触及之物。**
 
 [Apache-2.0](../../LICENSE) · [NOTICE](../../NOTICE) · [Security](../../.github/SECURITY.md) · [引用本项目](../../CITATION.cff)
 

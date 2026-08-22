@@ -3,13 +3,9 @@
 <div align="center">
 
 <picture>
-  <source media="(prefers-color-scheme: light)" srcset="assets/logo-icon.png">
-  <img src="assets/logo-hero-dark.png" width="320" alt="OmniSeek">
+  <source media="(prefers-color-scheme: light)" srcset="assets/hero-en-light.png">
+  <img src="assets/hero-en-dark.png" width="620" alt="OmniSeek">
 </picture>
-
-# OmniSeek
-
-**Your agent seeks what search can't find.**
 
 The answer is sitting in minute 47 of a podcast, three replies deep in a comment thread, behind a login, in another language. Your agent gets it anyway.
 
