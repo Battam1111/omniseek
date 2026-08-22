@@ -20,7 +20,7 @@
     "page": 69
   },
   "verification": {
-    "eye_run_confirmed": true,
+    "omniseek_run_confirmed": true,
     "evidence_snippet": "附表 7  按后缀形式分类的网页情况 网页后缀形式 比例 html 52.16% / 23.51% php 6.26% htm 4.17% shtml 3.52% aspx 2.08%"
   },
   "search_resistance_prefilter": [
@@ -39,6 +39,6 @@
   "liveness_probe": {
     "url": "https://www.cnnic.net.cn/NMediaFile/2025/0220/MAIN1740036167004CKE0DITFO1.pdf"
   },
-  "notes": "eye_read sheet 69 (printed page 63). Search tool stated the table row data was absent from results and told the user to open the PDF appendix. Purely technical web-infrastructure statistic.",
+  "notes": "omniseek_read sheet 69 (printed page 63). Search tool stated the table row data was absent from results and told the user to open the PDF appendix. Purely technical web-infrastructure statistic.",
   "added_in": "bench-v1.0"
 }

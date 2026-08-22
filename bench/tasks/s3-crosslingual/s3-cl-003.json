@@ -29,7 +29,7 @@
   "render_routes": [
     "publisher_html_curl",
     "publisher_html_curl_output_1",
-    "eye_read"
+    "omniseek_reader"
   ],
   "funnel_id": "N03",
   "answering_doc": {
@@ -63,7 +63,7 @@
       "answering_doc_in_results": true,
       "key_contained_in_returned_text": false
     },
-    "eye_run_confirmed": false,
+    "omniseek_run_confirmed": false,
     "note": "the answering document surfaced in the returned results but the query-relevant excerpt did not include the key sentence"
   },
   "liveness_probe": {

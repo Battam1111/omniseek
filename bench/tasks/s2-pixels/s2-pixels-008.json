@@ -17,7 +17,7 @@
     "value": "17.2等每平方角秒"
   },
   "verification": {
-    "eye_run_confirmed": true,
+    "omniseek_run_confirmed": true,
     "evidence_snippet": "### Page 1 · p01_12.jpeg\n地圖（天文觀测熟點\n香港時間19時20分更新\n5255\n011\n基省可限\n三≥ : 26.9 ℃\n相景度：68%\n17.2等每平方角秒\n3859\n9360\n全天影像助重",
     "pixels_only_check": "plain read lacks the string: confirmed"
   },

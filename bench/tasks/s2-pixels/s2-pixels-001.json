@@ -16,7 +16,7 @@
     "value": "PRINTED AND PUBLISHED BY J.R.LEE, GOVERNMENT PRINTER"
   },
   "verification": {
-    "eye_run_confirmed": true,
+    "omniseek_run_confirmed": true,
     "evidence_snippet": "### Page 1 · p01_01.png\nROYAL OBSERVATORY, HONG KONG\nMETEOROLOGICAL RESULTS\n1968\nPARTIII-TROPICALCYCLONE SUMMARIES\nPRINTED AND PUBLISHED BY J.R.LEE, GOVERNMENT PRINTER",
     "pixels_only_check": "plain read lacks the string: confirmed"
   },
@@ -36,7 +36,7 @@
   "liveness_probe": {
     "url": "https://www.hko.gov.hk/en/publica/tc/files/tc1968.pdf"
   },
-  "notes": "Purest scanned-page case in the set. eye_read with NO ocr returns total_chars=4506 for a 41-page report and page 1 renders as exactly '## Page 1 [1 image(s) on this page]': the whole book is a raster scan with no text layer. With ocr:true total_chars=61015 and ocr_images=40. Mirror check: ReliefWeb hosts an HTML transcription of this PDF (read via eye_read, total 4875 chars) but it contains ONLY the INTRODUCTION section, no colophon, no title page, no map legends, so the ground truth is not recoverable from that mirror either. The imprint names a 1971 Government Printer in his official institutional role (neutral credit, not a private individual matter).",
+  "notes": "Purest scanned-page case in the set. omniseek_read with NO ocr returns total_chars=4506 for a 41-page report and page 1 renders as exactly '## Page 1 [1 image(s) on this page]': the whole book is a raster scan with no text layer. With ocr:true total_chars=61015 and ocr_images=40. Mirror check: ReliefWeb hosts an HTML transcription of this PDF (read via omniseek_read, total 4875 chars) but it contains ONLY the INTRODUCTION section, no colophon, no title page, no map legends, so the ground truth is not recoverable from that mirror either. The imprint names a 1971 Government Printer in his official institutional role (neutral credit, not a private individual matter).",
   "timeout_s": 900.0,
   "added_in": "bench-v1.0"
 }

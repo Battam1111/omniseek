@@ -20,7 +20,7 @@
     "page": 22
   },
   "verification": {
-    "eye_run_confirmed": true,
+    "omniseek_run_confirmed": true,
     "evidence_snippet": "we break the list of urls to individual WARC files from 2013 to 2020 into 3679 chunks and process 22 random chunks."
   },
   "search_resistance_prefilter": [
@@ -39,6 +39,6 @@
   "liveness_probe": {
     "url": "https://arxiv.org/pdf/2101.00027v1.pdf"
   },
-  "notes": "Not in the abstract, intro, or any component-size table; buried in the appendix. The search tool explicitly reported it could not find the chunk count or the 22-chunk sample. The .pdf extension routes eye_read to the document reader, which emits Page N markers.",
+  "notes": "Not in the abstract, intro, or any component-size table; buried in the appendix. The search tool explicitly reported it could not find the chunk count or the 22-chunk sample. The .pdf extension routes omniseek_read to the document reader, which emits Page N markers.",
   "added_in": "bench-v1.0"
 }

@@ -20,7 +20,7 @@
     "expected_now": "integrity.retracted=false, integrity.notices=[\"correction\",\"erratum\"], is_oa=true, citation_count=18636"
   },
   "verification": {
-    "eye_run_confirmed": true,
+    "omniseek_run_confirmed": true,
     "evidence_snippet": "{\"id\":\"10.1038/35057062\",\"is_oa\":true,\"citation_count\":18636,\"integrity\":{\"retracted\":false,\"notices\":[\"correction\",\"erratum\"]}}",
     "margin_evidence": null
   },

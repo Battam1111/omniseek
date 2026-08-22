@@ -20,7 +20,7 @@
     "expected_now": "kind=arxiv, doi=10.48550/arXiv.1602.03837, is_oa=true, pdf_url=https://arxiv.org/pdf/1602.03837.pdf, integrity.journal_doi=10.1103/PhysRevLett.116.061102"
   },
   "verification": {
-    "eye_run_confirmed": true,
+    "omniseek_run_confirmed": true,
     "evidence_snippet": "{\"kind\":\"arxiv\",\"doi\":\"10.48550/arXiv.1602.03837\",\"is_oa\":true,\"pdf_url\":\"https://arxiv.org/pdf/1602.03837.pdf\",\"oa_url\":\"https://arxiv.org/abs/1602.03837\"}",
     "margin_evidence": null
   },

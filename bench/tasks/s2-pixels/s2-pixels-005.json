@@ -17,7 +17,7 @@
     "value": "Mean Segmental TTR: 0.54"
   },
   "verification": {
-    "eye_run_confirmed": true,
+    "omniseek_run_confirmed": true,
     "evidence_snippet": "Type-token ratio (TTR): 0.36\nMean Segmental TTR: 0.54\nSubmit",
     "pixels_only_check": "plain read lacks the string: confirmed"
   },

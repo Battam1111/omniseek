@@ -2,7 +2,7 @@
   "id": "s1-audio-009",
   "suite": "s1-audio",
   "lang": "zh",
-  "claim": "eye_transcribe recovers a distinctive spoken caution about choosing foreground elements from the bilibili composition tutorial 6分钟让你学会构图 at ~4:01; the line is not written on the video page or on any indexed page.",
+  "claim": "omniseek_transcribe recovers a distinctive spoken caution about choosing foreground elements from the bilibili composition tutorial 6分钟让你学会构图 at ~4:01; the line is not written on the video page or on any indexed page.",
   "input": {
     "args": {
       "url": "https://www.bilibili.com/video/BV1Q64y1T7ox",
@@ -19,7 +19,7 @@
     "timestamp": "04:01"
   },
   "verification": {
-    "eye_run_confirmed": true,
+    "omniseek_run_confirmed": true,
     "evidence_snippet": "但要注意，前景最好不要乱找，和画面主题有一定联系的前景更加合适，不要为了前景构图而刻意加入不合适的前景。"
   },
   "search_resistance_prefilter": [

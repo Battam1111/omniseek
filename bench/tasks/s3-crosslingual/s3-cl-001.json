@@ -29,7 +29,7 @@
   "render_routes": [
     "publisher_html_http_curl",
     "publisher_html_https_curl",
-    "eye_read"
+    "omniseek_reader"
   ],
   "funnel_id": "N01",
   "answering_doc": {
@@ -64,7 +64,7 @@
       "answering_doc_in_results": false,
       "key_contained_in_returned_text": false
     },
-    "eye_run_confirmed": false,
+    "omniseek_run_confirmed": false,
     "note": "the answering document did not surface in the top-10 results"
   },
   "liveness_probe": {

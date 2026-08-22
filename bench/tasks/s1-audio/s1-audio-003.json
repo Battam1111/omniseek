@@ -2,7 +2,7 @@
   "id": "s1-audio-003",
   "suite": "s1-audio",
   "lang": "zh",
-  "claim": "eye_transcribe recovers a distinctive spoken remark about shooting with intent from the bilibili photography-lighting tutorial 摄影光线 | 学会\"用光\" at ~7:42; no transcript or written copy of the line is indexed.",
+  "claim": "omniseek_transcribe recovers a distinctive spoken remark about shooting with intent from the bilibili photography-lighting tutorial 摄影光线 | 学会\"用光\" at ~7:42; no transcript or written copy of the line is indexed.",
   "input": {
     "args": {
       "url": "https://www.bilibili.com/video/BV1xh4y1c77v",
@@ -19,7 +19,7 @@
     "timestamp": "07:42"
   },
   "verification": {
-    "eye_run_confirmed": true,
+    "omniseek_run_confirmed": true,
     "evidence_snippet": "或许拍不到这么好看，但是也一定比你们现在完全漫无目的的在拍要好的很多啊。"
   },
   "search_resistance_prefilter": [

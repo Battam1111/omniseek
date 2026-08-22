@@ -2,7 +2,7 @@
   "id": "s1-audio-005",
   "suite": "s1-audio",
   "lang": "zh",
-  "claim": "eye_transcribe recovers a distinctive spoken observation about a bird field guide's illustrations from the bilibili video 【书籍分享】观鸟人都看什么\"鸟书\"？ at ~5:43; the line exists only in the audio.",
+  "claim": "omniseek_transcribe recovers a distinctive spoken observation about a bird field guide's illustrations from the bilibili video 【书籍分享】观鸟人都看什么\"鸟书\"？ at ~5:43; the line exists only in the audio.",
   "input": {
     "args": {
       "url": "https://www.bilibili.com/video/BV1c547erELX",
@@ -19,7 +19,7 @@
     "timestamp": "05:43"
   },
   "verification": {
-    "eye_run_confirmed": true,
+    "omniseek_run_confirmed": true,
     "evidence_snippet": "虽然不多，但是每一种鸟呢都配了这个精美的一个插图，而且有很多官鸟的趣味小知识啊，呃阅读性呢就更加的好。"
   },
   "search_resistance_prefilter": [

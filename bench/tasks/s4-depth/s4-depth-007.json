@@ -20,7 +20,7 @@
     "page": 65
   },
   "verification": {
-    "eye_run_confirmed": true,
+    "omniseek_run_confirmed": true,
     "evidence_snippet": "附表 2  按分配单位IPv4 地址数 单位名称 地址量 折合数 ... 中国教育和科研计算机网 16,649,984  254B+16C"
   },
   "search_resistance_prefilter": [
@@ -39,6 +39,6 @@
   "liveness_probe": {
     "url": "https://www.cnnic.net.cn/NMediaFile/2025/0220/MAIN1740036167004CKE0DITFO1.pdf"
   },
-  "notes": "eye_read sheet 65 (printed page 59). Media coverage of this report reproduces only the headline figures; the per-allocator appendix rows are not reproduced. Search tool confirmed it could not verify the number and pointed back at the PDF. Entity is an academic network, not a company; figure is a neutral allocation count.",
+  "notes": "omniseek_read sheet 65 (printed page 59). Media coverage of this report reproduces only the headline figures; the per-allocator appendix rows are not reproduced. Search tool confirmed it could not verify the number and pointed back at the PDF. Entity is an academic network, not a company; figure is a neutral allocation count.",
   "added_in": "bench-v1.0"
 }

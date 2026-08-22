@@ -20,7 +20,7 @@
     "page": 67
   },
   "verification": {
-    "eye_run_confirmed": true,
+    "omniseek_run_confirmed": true,
     "evidence_snippet": "附表 5  分地区IPv4 比例 省份 比例 北京 25.19% 广东 9.43% 浙江 6.39% 山东 4.83% 江苏 4.70% 上海 4.47%"
   },
   "search_resistance_prefilter": [
@@ -39,6 +39,6 @@
   "liveness_probe": {
     "url": "https://www.cnnic.net.cn/NMediaFile/2025/0220/MAIN1740036167004CKE0DITFO1.pdf"
   },
-  "notes": "eye_read sheet 67 (printed page 61). Search returned only earlier-edition appendix reprints and the report landing page, not this row. Note the search tool also volunteered that in earlier editions this table was numbered 附表1, which is a distractor, not a hit.",
+  "notes": "omniseek_read sheet 67 (printed page 61). Search returned only earlier-edition appendix reprints and the report landing page, not this row. Note the search tool also volunteered that in earlier editions this table was numbered 附表1, which is a distractor, not a hit.",
   "added_in": "bench-v1.0"
 }

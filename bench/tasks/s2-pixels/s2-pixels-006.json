@@ -17,7 +17,7 @@
     "value": "Parts Broken: rear left propellor"
   },
   "verification": {
-    "eye_run_confirmed": true,
+    "omniseek_run_confirmed": true,
     "evidence_snippet": "almost-out-of-range: true\nNumber of annotations: 4\nNumber of unique tokens: 0\nParts Broken: rear left propellor\nNumber of unique trigrams: 0\nbatter-level: 3%",
     "pixels_only_check": "plain read lacks the string: confirmed"
   },

@@ -20,7 +20,7 @@
     "page": 71
   },
   "verification": {
-    "eye_run_confirmed": true,
+    "omniseek_run_confirmed": true,
     "evidence_snippet": "附表 9  分地区网页字节数 总页面大小 页面平均大小(KB) 北京 14351318593813  97.03 ... 山西 947616313130  209.78"
   },
   "search_resistance_prefilter": [
@@ -39,6 +39,6 @@
   "liveness_probe": {
     "url": "https://www.cnnic.net.cn/NMediaFile/2025/0220/MAIN1740036167004CKE0DITFO1.pdf"
   },
-  "notes": "eye_read sheet 71 (printed page 65). Search tool said explicitly that search engines do not index this report at the table-cell level and that it could not verify the figure. 山西 is the outlier row (209.78 vs a ~50-110 KB national spread), so the value is distinctive.",
+  "notes": "omniseek_read sheet 71 (printed page 65). Search tool said explicitly that search engines do not index this report at the table-cell level and that it could not verify the figure. 山西 is the outlier row (209.78 vs a ~50-110 KB national spread), so the value is distinctive.",
   "added_in": "bench-v1.0"
 }

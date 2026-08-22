@@ -17,7 +17,7 @@
     "value": "17.2mag/arcsec"
   },
   "verification": {
-    "eye_run_confirmed": true,
+    "omniseek_run_confirmed": true,
     "evidence_snippet": "### Page 1 · p01_06.jpeg\nMap (Astronomical Observation Hot Spots)\nUpdatedat19:20 HKT\n5575\n地图\nTsuen Wal Ho Koon\nAir Temp\n26.9°C\nRH 68%\nNSB\n17.2mag/arcsec",
     "pixels_only_check": "plain read lacks the string: confirmed"
   },

@@ -2,7 +2,7 @@
   "id": "s5-scholar-003",
   "suite": "s5-scholar",
   "kind": "top_coauthor",
-  "claim": "eye_coauthors returns Byrappa Venkatesh as Sydney Brenner's #1 collaborator by joint-paper count, with a >4x lead over #2.",
+  "claim": "omniseek_coauthors returns Byrappa Venkatesh as Sydney Brenner's #1 collaborator by joint-paper count, with a >4x lead over #2.",
   "input": {
     "args": {
       "authors": [
@@ -23,7 +23,7 @@
     "expected_now": "#1 = Byrappa Venkatesh (A5055376683), 79 in-sample / 82 at API; in-sample #2 = Boon Hui Tay, 18; true upstream #2 = Alice Tay (A5109045597), 17"
   },
   "verification": {
-    "eye_run_confirmed": true,
+    "omniseek_run_confirmed": true,
     "evidence_snippet": "works_seen=200/413; top_coauthors[0]={\"name\":\"Byrappa Venkatesh\",\"joint\":14.03,\"papers\":79}; [1]={\"name\":\"Boon Hui Tay\",\"joint\":2.37,\"papers\":18}",
     "margin_evidence": "#1=79 papers (joint 14.03), #2=18 papers (joint 2.37) -> 4.39x by papers, 5.92x by ranking score; upstream API: 82 vs 17 = 4.8x"
   },

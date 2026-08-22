@@ -2,7 +2,7 @@
   "id": "s5-scholar-010",
   "suite": "s5-scholar",
   "kind": "oa_fulltext",
-  "claim": "eye_paper_enrich locates the open-access PDF of the Planck 2018 cosmological-parameters paper on the publisher's own server.",
+  "claim": "omniseek_paper_enrich locates the open-access PDF of the Planck 2018 cosmological-parameters paper on the publisher's own server.",
   "input": {
     "args": {
       "ids": [
@@ -20,7 +20,7 @@
     "expected_now": "is_oa=true, pdf_url=https://www.aanda.org/articles/aa/pdf/2020/09/aa33910-18.pdf, oa_host=publisher, citation_count=13431"
   },
   "verification": {
-    "eye_run_confirmed": true,
+    "omniseek_run_confirmed": true,
     "evidence_snippet": "{\"is_oa\":true,\"pdf_url\":\"https://www.aanda.org/articles/aa/pdf/2020/09/aa33910-18.pdf\",\"oa_host\":\"publisher\",\"citation_count\":13431}",
     "margin_evidence": null
   },

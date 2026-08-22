@@ -2,7 +2,7 @@
   "id": "s5-scholar-006",
   "suite": "s5-scholar",
   "kind": "retraction",
-  "claim": "eye_paper_enrich reports integrity.retracted=true with BOTH an expression_of_concern and a retraction notice for the 2005 Science stem-cell paper DOI 10.1126/science.1112286.",
+  "claim": "omniseek_paper_enrich reports integrity.retracted=true with BOTH an expression_of_concern and a retraction notice for the 2005 Science stem-cell paper DOI 10.1126/science.1112286.",
   "input": {
     "args": {
       "ids": [
@@ -20,7 +20,7 @@
     "expected_now": "integrity.retracted=true, integrity.notices=[\"expression_of_concern\",\"retraction\"], citation_count=344"
   },
   "verification": {
-    "eye_run_confirmed": true,
+    "omniseek_run_confirmed": true,
     "evidence_snippet": "{\"id\":\"10.1126/science.1112286\",\"citation_count\":344,\"integrity\":{\"retracted\":true,\"notices\":[\"expression_of_concern\",\"retraction\"]}}",
     "margin_evidence": null
   },

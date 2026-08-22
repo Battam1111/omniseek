@@ -2,7 +2,7 @@
   "id": "s1-audio-010",
   "suite": "s1-audio",
   "lang": "en",
-  "claim": "eye_transcribe recovers a distinctive spoken sentence about a field-season data-collection constraint from The Wandering Naturalist episode 286 (River Otters - Are they Intelligent?) at ~15:22; the show ships no transcript and the sentence is not indexed.",
+  "claim": "omniseek_transcribe recovers a distinctive spoken sentence about a field-season data-collection constraint from The Wandering Naturalist episode 286 (River Otters - Are they Intelligent?) at ~15:22; the show ships no transcript and the sentence is not indexed.",
   "input": {
     "args": {
       "url": "https://traffic.libsyn.com/secure/thewanderingnaturalist/Audio_-_The_Wandering_Naturalist_August_2026_-_Otters_Part_2_final.mp3?dest-id=939395",
@@ -19,7 +19,7 @@
     "timestamp": "15:22"
   },
   "verification": {
-    "eye_run_confirmed": true,
+    "omniseek_run_confirmed": true,
     "evidence_snippet": "So yeah, I had a student who wanted to try to collect data within one season and we tried this novel object recognition task"
   },
   "search_resistance_prefilter": [

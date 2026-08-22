@@ -17,7 +17,7 @@
     "value": "TWRF_NODP"
   },
   "verification": {
-    "eye_run_confirmed": true,
+    "omniseek_run_confirmed": true,
     "evidence_snippet": "### Page 25 · p25_01.jpeg\n250\n-TWRF_DP\n228\n200\n-TWRF_NODP\n217\n178\n139\nerrors\n150\n168\n104\n130",
     "pixels_only_check": "plain read lacks the string: confirmed"
   },
@@ -37,7 +37,7 @@
   "liveness_probe": {
     "url": "https://www.cwa.gov.tw/Data/service/notice/download/Publish_20230922095829.pdf"
   },
-  "notes": "Legend entry of Fig. 3.2.3 (dropsonde impact on TWRF typhoon track error) in Taiwan CWA's 2022 annual report, a 100-page born-digital PDF with 113 raster figures; ocr:true reports ocr_images=60. Pixels-only check: eye_read on the pages 24-26 text layer discusses TWRF, dropsondes, the 6.2% improvement and even the figure caption, but never the experiment tag 'TWRF_NODP'. The engine confirmed it could not find a source naming this run label. Deliberately NOT used from this document: a stock-photo watermark OCR'd off the cover image, which would be a gratuitous dig at the agency.",
+  "notes": "Legend entry of Fig. 3.2.3 (dropsonde impact on TWRF typhoon track error) in Taiwan CWA's 2022 annual report, a 100-page born-digital PDF with 113 raster figures; ocr:true reports ocr_images=60. Pixels-only check: omniseek_read on the pages 24-26 text layer discusses TWRF, dropsondes, the 6.2% improvement and even the figure caption, but never the experiment tag 'TWRF_NODP'. The engine confirmed it could not find a source naming this run label. Deliberately NOT used from this document: a stock-photo watermark OCR'd off the cover image, which would be a gratuitous dig at the agency.",
   "timeout_s": 600.0,
   "added_in": "bench-v1.0"
 }

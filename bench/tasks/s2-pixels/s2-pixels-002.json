@@ -16,7 +16,7 @@
     "value": "Mercator Projection-Natural Scale"
   },
   "verification": {
-    "eye_run_confirmed": true,
+    "omniseek_run_confirmed": true,
     "evidence_snippet": "### Page 4 · p04_01.jpeg ... Tracks Uncertain\nDaily Positions\nat00hGMT\nIntermediate\n6hrly Positions\nMercator Projection-Natural Scale\n1 : 15m. at 22yN.",
     "pixels_only_check": "plain read lacks the string: confirmed"
   },

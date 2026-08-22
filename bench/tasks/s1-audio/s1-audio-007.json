@@ -2,7 +2,7 @@
   "id": "s1-audio-007",
   "suite": "s1-audio",
   "lang": "zh",
-  "claim": "eye_transcribe recovers a distinctive spoken instruction about wetting the paper filter from the bilibili tutorial 手冲咖啡入门到精通，包教包会！ at ~6:00; the wording exists only as speech.",
+  "claim": "omniseek_transcribe recovers a distinctive spoken instruction about wetting the paper filter from the bilibili tutorial 手冲咖啡入门到精通，包教包会！ at ~6:00; the wording exists only as speech.",
   "input": {
     "args": {
       "url": "https://www.bilibili.com/video/BV1mzcReZEgA",
@@ -19,7 +19,7 @@
     "timestamp": "06:00"
   },
   "verification": {
-    "eye_run_confirmed": true,
+    "omniseek_run_confirmed": true,
     "evidence_snippet": "浸湿这个滤纸，让它跟滤杯固定住的这么一个作用，先沿着中心去注水，然后再沿着旁边去洗它。"
   },
   "search_resistance_prefilter": [

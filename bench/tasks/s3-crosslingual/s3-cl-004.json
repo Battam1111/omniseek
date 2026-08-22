@@ -29,7 +29,7 @@
   "render_routes": [
     "publisher_html_curl",
     "publisher_html_curl_wbdisable",
-    "eye_read"
+    "omniseek_reader"
   ],
   "funnel_id": "N04",
   "answering_doc": {
@@ -63,7 +63,7 @@
       "answering_doc_in_results": true,
       "key_contained_in_returned_text": true
     },
-    "eye_run_confirmed": true,
+    "omniseek_run_confirmed": true,
     "evidence_snippet": "the employee's length or period of employment with their previous employer is treated as if it had been employment with the new employer with respect to rights under the Employment Standards Act, 2000 that are determined by length or period of employment"
   },
   "liveness_probe": {

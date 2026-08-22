@@ -2,7 +2,7 @@
   "id": "s5-scholar-002",
   "suite": "s5-scholar",
   "kind": "top_coauthor",
-  "claim": "eye_coauthors returns Drew Weissman as Katalin Kariko's #1 collaborator by joint-paper count, ahead of #2 Hiromi Muramatsu.",
+  "claim": "omniseek_coauthors returns Drew Weissman as Katalin Kariko's #1 collaborator by joint-paper count, ahead of #2 Hiromi Muramatsu.",
   "input": {
     "args": {
       "authors": [
@@ -23,7 +23,7 @@
     "expected_now": "#1 = Drew Weissman (A5068253145), 42 joint works; #2 = Hiromi Muramatsu (A5083166651), 28"
   },
   "verification": {
-    "eye_run_confirmed": true,
+    "omniseek_run_confirmed": true,
     "evidence_snippet": "resolved A5030598859 works_seen=146; top_coauthors[0]={\"name\":\"Drew Weissman\",\"joint\":7.05,\"papers\":42}; [1]={\"name\":\"Hiromi Muramatsu\",\"joint\":3.93,\"papers\":28}",
     "margin_evidence": "#1=42 papers (joint 7.05), #2=28 papers (joint 3.93) -> 1.50x by papers, 1.79x by ranking score; upstream API confirms 42 vs 28 exactly; #3 G. Boros 22, #4 N. Pardi 17 (both probed)"
   },

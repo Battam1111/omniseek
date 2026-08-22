@@ -2,7 +2,7 @@
   "id": "s1-audio-006",
   "suite": "s1-audio",
   "lang": "en",
-  "claim": "eye_transcribe recovers a distinctive spoken sentence about craft standards from Martina Flor's Open Studio episode 'Ken Barber on Style, Inspiration, Practice, and Finding Your Voice as a Lettering Artist' at ~21:56; the show publishes no transcript and the sentence is not indexed.",
+  "claim": "omniseek_transcribe recovers a distinctive spoken sentence about craft standards from Martina Flor's Open Studio episode 'Ken Barber on Style, Inspiration, Practice, and Finding Your Voice as a Lettering Artist' at ~21:56; the show publishes no transcript and the sentence is not indexed.",
   "input": {
     "args": {
       "url": "https://anchor.fm/s/28011b0c/podcast/play/123475172/https%3A%2F%2Fd3ctxlq1ktw2nl.cloudfront.net%2Fstaging%2F2026-6-29%2F428825464-44100-2-4fe0de436b1d2.mp3",
@@ -19,7 +19,7 @@
     "timestamp": "21:56"
   },
   "verification": {
-    "eye_run_confirmed": true,
+    "omniseek_run_confirmed": true,
     "evidence_snippet": "not everything has to knock your socks off I think, Sometimes it's good enough to be really good and that's pretty exciting"
   },
   "search_resistance_prefilter": [

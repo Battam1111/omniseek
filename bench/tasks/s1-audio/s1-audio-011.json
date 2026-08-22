@@ -2,7 +2,7 @@
   "id": "s1-audio-011",
   "suite": "s1-audio",
   "lang": "en",
-  "claim": "eye_transcribe recovers a distinctive spoken description of the beginner phase of a craft from Martina Flor's Open Studio episode 'The Stages of a Lettering Designer' at ~5:14; the show ships no transcript and the wording is not indexed.",
+  "claim": "omniseek_transcribe recovers a distinctive spoken description of the beginner phase of a craft from Martina Flor's Open Studio episode 'The Stages of a Lettering Designer' at ~5:14; the show ships no transcript and the wording is not indexed.",
   "input": {
     "args": {
       "url": "https://anchor.fm/s/28011b0c/podcast/play/117464641/https%3A%2F%2Fd3ctxlq1ktw2nl.cloudfront.net%2Fstaging%2F2026-2-25%2F420749640-44100-2-a2b49ee3b172b.mp3",
@@ -19,7 +19,7 @@
     "timestamp": "05:14"
   },
   "verification": {
-    "eye_run_confirmed": true,
+    "omniseek_run_confirmed": true,
     "evidence_snippet": "you are simply enjoying lettering, you draw letters for fun, you doodle in notebooks, you experiment with styles without any pressure"
   },
   "search_resistance_prefilter": [

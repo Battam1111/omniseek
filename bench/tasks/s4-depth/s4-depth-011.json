@@ -23,7 +23,7 @@
     "reply_depth": 5
   },
   "verification": {
-    "eye_run_confirmed": true,
+    "omniseek_run_confirmed": true,
     "evidence_snippet": "In PDP-11 terms, the Datapoint 2200 only had these address modes: - register - register deferred via HL - autoincrement via PC (immediate operands)"
   },
   "search_resistance_prefilter": [

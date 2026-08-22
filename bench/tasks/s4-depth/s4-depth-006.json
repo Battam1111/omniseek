@@ -20,7 +20,7 @@
     "page": 69
   },
   "verification": {
-    "eye_run_confirmed": true,
+    "omniseek_run_confirmed": true,
     "evidence_snippet": "8. K = leftmost (0x00010203...1D1E1F, keylen). 9. While len (temp) < keylen + outlen, do IV = i || 0outlen - len (i)"
   },
   "search_resistance_prefilter": [
@@ -39,6 +39,6 @@
   "liveness_probe": {
     "url": "https://nvlpubs.nist.gov/nistpubs/SpecialPublications/NIST.SP.800-90Ar1.pdf"
   },
-  "notes": "eye_read sheet 69 (printed page 59). Search results covered SP 800-90A generally but none carried the constant; the search tool said it did not surface the specific detail. Shares args with s4-depth-005 (same verified window, different page).",
+  "notes": "omniseek_read sheet 69 (printed page 59). Search results covered SP 800-90A generally but none carried the constant; the search tool said it did not surface the specific detail. Shares args with s4-depth-005 (same verified window, different page).",
   "added_in": "bench-v1.0"
 }

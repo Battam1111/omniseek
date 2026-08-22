@@ -2,7 +2,7 @@
   "id": "s1-audio-004",
   "suite": "s1-audio",
   "lang": "en",
-  "claim": "eye_transcribe recovers a distinctive spoken question defining the weasel family from The Wandering Naturalist episode 285 (River Otters - Why they are Special) at ~10:28; the show ships no transcript and the question is not indexed as text anywhere.",
+  "claim": "omniseek_transcribe recovers a distinctive spoken question defining the weasel family from The Wandering Naturalist episode 285 (River Otters - Why they are Special) at ~10:28; the show ships no transcript and the question is not indexed as text anywhere.",
   "input": {
     "args": {
       "url": "https://traffic.libsyn.com/secure/thewanderingnaturalist/Audio_-_The_Wandering_Naturalist_August_2026_-_Otters_Part_1_final.mp3?dest-id=939395",
@@ -19,7 +19,7 @@
     "timestamp": "10:28"
   },
   "verification": {
-    "eye_run_confirmed": true,
+    "omniseek_run_confirmed": true,
     "evidence_snippet": "because they are weasels, so what are some things that make a weasel a weasel?"
   },
   "search_resistance_prefilter": [

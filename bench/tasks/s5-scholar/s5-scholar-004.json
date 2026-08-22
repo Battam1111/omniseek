@@ -2,7 +2,7 @@
   "id": "s5-scholar-004",
   "suite": "s5-scholar",
   "kind": "top_coauthor",
-  "claim": "eye_coauthors returns A. F. Huxley as A. L. Hodgkin's #1 collaborator by joint-paper count, ahead of #2 R. D. Keynes.",
+  "claim": "omniseek_coauthors returns A. F. Huxley as A. L. Hodgkin's #1 collaborator by joint-paper count, ahead of #2 R. D. Keynes.",
   "input": {
     "args": {
       "authors": [
@@ -23,7 +23,7 @@
     "expected_now": "#1 = A. F. Huxley (A5113678219), 14 joint works; #2 = R. D. Keynes (A5108258126), 9"
   },
   "verification": {
-    "eye_run_confirmed": true,
+    "omniseek_run_confirmed": true,
     "evidence_snippet": "resolved A5030452986 works_seen=106; top_coauthors[0]={\"name\":\"A. F. Huxley\",\"joint\":6.83,\"papers\":14}; [1]={\"name\":\"R. D. Keynes\",\"joint\":3.3,\"papers\":9}",
     "margin_evidence": "#1=14 papers (joint 6.83), #2=9 papers (joint 3.30) -> 1.56x by papers, 2.07x by ranking score; upstream API confirms 14 vs 9 exactly"
   },

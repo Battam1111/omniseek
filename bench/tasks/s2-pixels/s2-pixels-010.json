@@ -17,7 +17,7 @@
     "value": "People.pessoa.n"
   },
   "verification": {
-    "eye_run_confirmed": true,
+    "omniseek_run_confirmed": true,
     "evidence_snippet": "19513\n19534\n780.48\n781.32 Food_service\nEater\nPeople.pessoa.n\nmanual",
     "pixels_only_check": "plain read lacks the string: confirmed"
   },
@@ -37,7 +37,7 @@
   "liveness_probe": {
     "url": "https://aclanthology.org/2022.law-1.11.pdf"
   },
-  "notes": "A CV_Name cell in the object table of Figure 4 (video annotation module) of Charon, LAW-XVI @ LREC 2022: published, a FrameNet annotation tool, clear of the red-lined topic areas. ocr:true gives ocr_images=5 of 5. Pixels-only check is SCOPED, not whole-document: eye_read with NO ocr covers pages 3-4 (the pages carrying this figure), and the prose there writes the same fact in a different form ('the CV Names chosen were person.n in the People frame'), never the UI's concatenated 'Frame.LU' rendering. The concatenated form exists only as table pixels. Also rejected from this paper: a Flickr30k caption visible in Figure 3 (trivially web-findable) and a string where OCR drops a cedilla (human transcription would differ).",
+  "notes": "A CV_Name cell in the object table of Figure 4 (video annotation module) of Charon, LAW-XVI @ LREC 2022: published, a FrameNet annotation tool, clear of the red-lined topic areas. ocr:true gives ocr_images=5 of 5. Pixels-only check is SCOPED, not whole-document: omniseek_read with NO ocr covers pages 3-4 (the pages carrying this figure), and the prose there writes the same fact in a different form ('the CV Names chosen were person.n in the People frame'), never the UI's concatenated 'Frame.LU' rendering. The concatenated form exists only as table pixels. Also rejected from this paper: a Flickr30k caption visible in Figure 3 (trivially web-findable) and a string where OCR drops a cedilla (human transcription would differ).",
   "timeout_s": 600.0,
   "added_in": "bench-v1.0"
 }
