@@ -42,6 +42,8 @@ One call, 437 raw hits deduplicated into 10: immigration-news explainers of the 
 { "name": "zhihu_search","why": "relevant but excluded; re-run naming it: sources=['zhihu_search']" }
 ```
 
+These are source identifiers, including the `blind` source, not adjectives.
+
 The broad sweep holds back slow, quota-burning, and login-walled sources, and **says so, with the exact call to reach each one**. The response is a map, not just a list. The same `_meta` block also names the perspectives that came back absent (`source_diversity.absent_perspectives`: audio and walled, on this run). A dimension that returned nothing is a fact, not a gap to paper over.
 
 ### 2. The same question, in the language the answers live in
@@ -50,7 +52,7 @@ The broad sweep holds back slow, quota-burning, and login-walled sources, and **
 omniseek_search("F-1 签证 第三国签证 renewal 经验")
 ```
 
-Same tool, Chinese. The mix flips: a study-abroad forum's visa archive (including a seven-offers-two-gap-years PhD saga with a per-country risk rundown), and a 15-minute Bilibili explainer of the new rules with 2,821 views. The agent did not need to know Chinese to get here; the ranking is cross-lingual, and the next two tools do not care what language a source speaks.
+Same tool, Chinese. The mix flips: a study-abroad forum's visa archive (including a seven-offers-two-gap-years PhD saga with a per-country risk rundown), and a 15-minute Bilibili explainer of the new rules. The agent did not need to know Chinese to get here; the ranking is cross-lingual, and the next two tools do not care what language a source speaks.
 
 ### 3. Hearing the nuance the headlines dropped
 
@@ -75,14 +77,14 @@ omniseek_search("第三国签证 F1 经验", sources=["xiaohongshu"], raw=True)
 
 `raw=True` is the drill switch: fetch this one named source, unbounded, instead of the ranked cross-source merge. It runs through your own logged-in browser, on your machine (the walled tier is **off** until you enable it with your own account: [how that works](walled-sources.md)). Six first-person accounts came back, one posted the day before this session:
 
-| Post | Engagement |
-|------|------------|
-| "Bangkok F-1, approved at light speed!" | 26 comments |
-| "Third-country US visa guide: F-1 in Italy" | 36 likes · 24 comments |
-| "Bangkok B2/F1, shared" | posted **1 day ago** |
-| "US F-1 in a third country: the pitfalls" (video note) | the dissent, see step 6 |
-| "Getting a US F-1 in Germany: pitfalls" | 34 likes · 26 comments |
-| "A silky-smooth F-1 run in Tokyo" | 36 likes · 51 saves |
+| Post | Engagement | Other signal |
+|------|------------|--------------|
+| "Bangkok F-1, approved at light speed!" | 26 comments | |
+| "Third-country US visa guide: F-1 in Italy" | 36 likes · 24 comments | |
+| "Bangkok B2/F1, shared" | not stated | posted **1 day ago** |
+| "US F-1 in a third country: the pitfalls" (video note) | not stated | the dissent, see step 6 |
+| "Getting a US F-1 in Germany: pitfalls" | 34 likes · 26 comments | |
+| "A silky-smooth F-1 run in Tokyo" | 36 likes · 51 saves | |
 
 The Bangkok post alone carries what no official page has: the full timeline (appointment booked June 15, interview July 8 at 8:30, **approved by 9:00**, passport in hand July 10) and live observations from the waiting line, down to which interview windows were refusing a third of B1/B2 applicants that morning.
 
@@ -110,7 +112,7 @@ So the agent feeds the returned `video_url` to `omniseek_view` for the frames an
 
 Not a summary of ten links. A position, with provenance:
 
-- **The rule, corrected**: the "4-year cap" is the initial period, extensions moved desks (spoken by an explainer with 2,821 views; the headlines got it wrong).
+- **The rule, corrected**: the "4-year cap" is the initial period, extensions moved desks (spoken by an explainer; the claim is checked against the explanation, not its audience size).
 - **Three live routes**: Bangkok (booked to passport-in-hand in 25 days, interview to approval in 30 minutes), Milan (a month-long slot war, but doable and yields 5 years), Tokyo ("silky-smooth").
 - **A workaround**: book late, then email to expedite: one confirmed case, from the author's own comment.
 - **A standing risk**: the 212(a)(6)(C) warning, quoted as the dissent it is, not averaged away.
@@ -160,7 +162,7 @@ Now the same call on one of the students:
 omniseek_coauthors(["Ilya Sutskever"])
 ```
 
-107 works, 219,157 citations, and a ranked list that reads like a career in three acts: Hinton 16 and Radford 16 tied at the top, then Zaremba 12, Abbeel 12, Vinyals 11, Le 10. The Toronto years, the Google years, and the OpenAI years, reconstructed from nothing but who he wrote with, in one call. (The Hinton edge reads 13 from Hinton's side and 16 from Sutskever's: each list is counted over its own author's recent-works window, so the two ends of one edge can see slightly different slices. The tool reports what each window contains; it never averages them.)
+107 works, 219,157 citations, and a ranked list that reads like a career in three acts: Hinton 16 and Radford 16 tied at the top, then Zaremba 12, Abbeel 12, Vinyals 11, Le 10. The Toronto years, the Google years, and the OpenAI years, reconstructed from nothing but who he wrote with, in one call. (The Hinton edge reads 13 from Hinton's side and 16 from Sutskever's: each list is counted over its own author's recent-works window. The current window is 200 works per author, set by the `per_author_works` default and bounded by `_MAX_WORKS` in `src/omniseek/core/relations.py`, so the two ends of one edge can see slightly different slices. The tool reports what each window contains; it never averages them.)
 
 ### It watches: only what is new
 
@@ -168,7 +170,7 @@ omniseek_coauthors(["Ilya Sutskever"])
 omniseek_sensor(action="create", query="multi-agent LLM credit assignment")
 ```
 
-A standing query with a memory. Run it three times:
+A standing query with a memory. The rows below are illustrative results from three runs separated by an interval long enough for the asynchronous fan-out to settle. Sensor results are not deterministic, so this is not a guaranteed sequence from three immediate calls:
 
 | Run | Result |
 |-----|--------|

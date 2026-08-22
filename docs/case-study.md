@@ -9,6 +9,9 @@ is a verbatim output from that session, trimmed for the page. The question we ha
 agent is an ordinary one: map where credit assignment for multi-agent LLM systems stands
 this week. What matters is not the topic. It is what OmniSeek already knew.
 
+This is the second investigation in that loop: the first populated retrieval memory and the
+evidence graph, and this one shows how the next investigation starts from those records.
+
 ## One call, one ranked list, and a paper trail
 
 ```python
@@ -24,7 +27,15 @@ omniseek_search("credit assignment in multi-agent LLM systems", limit=8)
 }
 ```
 
-Eleven seconds, 87 sources in parallel, 435 candidate records collapsed into 8 documents.
+Here `lexical` and `vector` are candidate counts, not scores or percentages. For this
+`limit=8` call, the recall arm uses the `k=max(50, 4 * limit)` rule in
+`src/omniseek/core/fetcher.py`, so each arm contributes up to 50 candidates.
+
+The `searched: 87` value is 87 of the configured sources eligible for this broad pass, not
+87 of the full catalog. `src/omniseek/core/fetcher.py` sets it to `len(target_sources)` after
+routing removes explicit-only, disabled, retired, and watchdog-down sources.
+
+Eleven seconds, 87 eligible sources in parallel, 435 candidate records collapsed into 8 documents.
 Not eight links: eight distinct claims on the field, because records of the same paper from
 different indexes merge into one document that lists who corroborates it. And the ranking is
 fused from two recalls, live lexical hits plus the local vector index, so a paraphrase with
@@ -47,6 +58,10 @@ All eight documents came back already stamped. Here is one, trimmed to the stamp
 }
 ```
 
+`corroboration: 2` counts distinct backends, while `also_in` lists additional source names
+beyond the surviving document. One additional source name can therefore represent the second
+independent backend without the two fields being contradictory.
+
 This instance first perceived that paper on July 3. Six weeks later, "is this new to us?" is
 not something the agent estimates from vibes; it is a per-document fact with a timestamp. A
 fresh install starts empty. This is what the same install feels like after six weeks of
@@ -62,6 +77,9 @@ ordinary use: nothing you have already seen gets to pretend it is news.
   "ratio": "inf"
 }]
 ```
+
+The empty parentheses in the two citation claims are the formatter's explicit placeholder for
+a missing source unit. They do not mean the citation values are missing.
 
 One index says that paper has never been cited; another counts 22. OmniSeek does not average
 the two into a fake number and does not silently pick a winner. The disagreement is handed
@@ -79,6 +97,10 @@ information.
   "why": "relevant but excluded; re-run naming it: sources=['agent_tooling_radar']"
 }]
 ```
+
+`absent_perspectives` is computed from the closed set `academic`, `social`, `audio`, `walled`,
+and `news` in `src/omniseek/core/fetcher.py`; it reports which of those fixed perspectives did
+not appear in this pass.
 
 (`agent_tooling_radar` is an explicit-only monitor source; its `reason` field is quoted as
 stored on the day of this session. The catalog has since reworded that entry in plainer

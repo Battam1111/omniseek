@@ -69,6 +69,12 @@ docker compose logs omniseek        # bearer token printed on first start
 curl -s http://127.0.0.1:8765/healthz
 ```
 
+On success, it returns:
+
+```json
+{"ok":true}
+```
+
 Point your MCP client at `http://127.0.0.1:8765/mcp` with `Authorization: Bearer <token>`. The token is generated on first start and stored in `~/.omniseek/credentials/omniseek_http.json` (with the compose file, that's `./.omniseek/credentials/omniseek_http.json` on the host).
 
 Two paths from here. The prebuilt core image (`docker pull ghcr.io/battam1111/omniseek`, amd64 + arm64) needs no build and carries every core sense; it is Apache-clean and ships without PDF reading, hearing (ASR + video frames), and login-walled sources. Wanting those extras is what triggers a local build: set `EXTRAS="[pdf,asr,walled]"` and run `docker compose build`, then `up -d` (the first build also fetches headless Chromium; later starts are instant). Optional but recommended: set `OMNISEEK_CONTACT_EMAIL` for a faster lane with Crossref, SEC, and Unpaywall.
