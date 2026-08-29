@@ -195,6 +195,26 @@ while IFS= read -r _suite; do
   SYNCED_ARTIFACTS+=("tests/$(basename "$_suite")")
 done < <(ls "$EYE_ROOT"/tests/test_*.py "$EYE_ROOT"/tests/_repo_only.py 2>/dev/null || true)
 
+# THE SUITES' OWN DEPENDENCIES, added 2026-08-29. The discovery rule above is a FILENAME rule, so it
+# carries test_job_process_isolation.py and silently leaves behind isolated_job_fixture.py, the module
+# that suite spawns as a subprocess. The mirror then held a test referring to a module that did not
+# exist there. It cost a long hunt because every cheap signal said fine: the copy does not fail, the
+# eye's own macOS deploy is green (the fixture is right there), Windows skips the suite outright, and
+# only Linux CI actually runs it -- where the subprocess cannot start, so nothing times out and the
+# assertion fails with no hint about why.
+#
+# So discovery is now DEPENDENCY-driven, not name-driven: whatever a carried suite references as
+# tests.<module> is carried too. A fixture added tomorrow rides along with no edit here, which is the
+# same reason the suite list itself is globbed rather than hand-written.
+while IFS= read -r _dep; do
+  [ -n "$_dep" ] || continue
+  [ -f "$EYE_ROOT/tests/$_dep.py" ] || continue          # tests.<pkg> that is not a local module
+  case " ${SYNCED_ARTIFACTS[*]} " in *" tests/$_dep.py "*) continue ;; esac
+  echo "    (carrying tests/$_dep.py: referenced by a synced suite)"
+  SYNCED_ARTIFACTS+=("tests/$_dep.py")
+done < <(grep -rhoE 'tests\.[A-Za-z_][A-Za-z0-9_]*' "$EYE_ROOT"/tests/test_*.py 2>/dev/null \
+         | sed 's/^tests\.//' | sort -u)
+
 echo "  [3/6] syncing smoke tests + ${#SYNCED_ARTIFACTS[@]} code-bound artifacts ..."
 # PRUNE FIRST. A mirror that only ever ADDS is a mirror that drifts: a suite deleted upstream, or
 # newly excluded here, would sit in the public repo forever, still running, still being believed.
@@ -228,6 +248,24 @@ for rel in "${SYNCED_ARTIFACTS[@]}"; do
   sed -i "${RENAME[@]}" "$PEN_ROOT/$rel"
 done
 sed -i 's/\bpolyu\b *//g' "$PEN_ROOT/tests/smoke.py"
+
+# DANGLING-REFERENCE GATE. The carry rule above is the fix; this is the check that the fix held.
+# A tests.<module> reference that resolves at the eye and not here is exactly the failure that shipped
+# on 2026-08-29, and it is invisible to everything else in this script: the copy succeeds, and the
+# smoke gate below passes on any platform that skips the affected suite. Cheap, and it fails at sync
+# time with the filename instead of in CI with a bare "failures=1".
+_dangling=""
+while IFS= read -r _ref; do
+  [ -n "$_ref" ] || continue
+  [ -f "$EYE_ROOT/tests/$_ref.py" ] || continue          # not a local module at the eye either
+  [ -f "$PEN_ROOT/tests/$_ref.py" ] || _dangling="$_dangling tests/$_ref.py"
+done < <(grep -rhoE 'tests\.[A-Za-z_][A-Za-z0-9_]*' "$PEN_ROOT"/tests/*.py 2>/dev/null \
+         | sed 's/^tests\.//' | sort -u)
+if [ -n "$_dangling" ]; then
+  echo "FATAL: synced tests reference module(s) that did not come with them:$_dangling" >&2
+  echo "       They exist at the eye, so the carry rule above missed them." >&2
+  exit 1
+fi
 
 # DELETION GATE. The smoke gate below proves the surviving tests pass; it says nothing about tests
 # that stopped existing, because a smaller suite passes more easily. This is the only check in the
