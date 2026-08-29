@@ -17834,9 +17834,17 @@ _gate_m = _s0_re.search(r"Ran (\d+) test", _gate_out)
 _gate_n = int(_gate_m.group(1)) if _gate_m else 0
 _gate_skips = set(_s0_re.findall(r"skipped ['\"](.+?)['\"]", _gate_out))
 _gate_undeclared = sorted(_gate_skips - _GATE_DECLARED_SKIPS)
+# NAME the failures, do not just count them. This gate used to report only rc + the last four
+# lines, i.e. "FAILED (failures=1)" with no way to learn WHICH test. On 2026-08-29 that cost a long
+# blind hunt: OmniSeek's own macOS deploy was green, the public mirror's Linux CI was red, and the
+# one thing needed to tell them apart (the failing test's name) was the one thing the gate threw
+# away. A guard that says something broke without saying what is only half a guard.
+_gate_named = [l.strip() for l in _gate_out.splitlines()
+               if l.startswith(("FAIL:", "ERROR:"))][:6]
 check(f"gate: all {len(_gate_files)} unittest suites pass ({_gate_n} tests) -- the guards run at deploy",
       _gate_rc == 0 and _gate_files and _gate_n >= len(_gate_files),
       f"rc={_gate_rc} ran={_gate_n} files={len(_gate_files)} "
+      f"failing={_gate_named or 'none captured'} "
       f"tail={_gate_out.strip().splitlines()[-4:]}")
 check("gate: every skipped test skipped for a DECLARED reason (else a suite could opt itself out)",
       not _gate_undeclared,

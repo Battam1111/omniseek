@@ -177,6 +177,26 @@ class ReaperDecisionTests(unittest.TestCase):
 
 
 class ReaperJobRowTests(unittest.TestCase):
+    """Registration writes GLOBAL state, so this saves and restores it exactly the way
+    test_job_process_isolation.py does.
+
+    Without the restore, register_shipped_jobs() leaks a fully populated registry into every
+    module that runs after this one, and discover() runs modules in filename order, so that is
+    most of them. Measured 2026-08-29: this file passed on its own and in the mirror's local
+    smoke, then failed inside CI's full run. A test that only passes when run alone is not a
+    passing test, it is a test that has not met the suite yet."""
+
+    def setUp(self):
+        from omniseek.core import jobs
+        self._saved_rows = dict(jobs._REGISTRY)
+        self._saved_flag = jobs._shipped_registered
+
+    def tearDown(self):
+        from omniseek.core import jobs
+        jobs._REGISTRY.clear()
+        jobs._REGISTRY.update(self._saved_rows)
+        jobs._shipped_registered = self._saved_flag  # else a later register_shipped_jobs no-ops
+
     def test_reaper_is_registered_process_isolated(self):
         from omniseek.core import jobs
         jobs.register_shipped_jobs()
