@@ -995,6 +995,67 @@ def _warm_forum_one(source_name: str, label: str, query: str) -> dict:
     return res
 
 
+# ── CDP idle reaper (2026-08-29) ──────────────────────────────────────────────────────────────
+# Stops CDP browsers nobody has used for a while, so a 16 GB machine is not permanently holding
+# 3.1 GB of idle Chrome. Pairs with _cdp.ensure_browser, which brings one back in ~1s on the next
+# call (measured). Runs process-isolated, so it reads last-use stamps off DISK: it has its own
+# interpreter and cannot see any in-process counter.
+#
+# ⚠️ CDP_IDLE_TIMEOUT_S is a PROBE VALUE, not derived from anything. Pre-registered calibration:
+# after two weeks of real traffic, compare the share of calls that had to cold-start against the
+# browsers' average daily uptime. Cold-start share above ~30% means the window is too short
+# (we are closing browsers people are still using) -> lengthen. Average uptime still above ~6h/day
+# means it is too long (we are not getting the memory back) -> shorten. Neither -> graduate it and
+# replace this notice with the measurement. Do NOT let it graduate silently.
+# Cold start costs 1 second, which is why getting this number wrong is cheap.
+CDP_IDLE_TIMEOUT_S = int(os.environ.get("OMNISEEK_CDP_IDLE_S", 30 * 60))
+
+
+def run_cdp_reaper() -> dict:
+    """Stop idle CDP browsers; leave busy ones and already-stopped ones alone."""
+    if sys.platform != "darwin":
+        return {"skipped": "not-darwin"}
+    if _MAINT_FLAG.exists():
+        log.info("cdp-reaper: cdp-maintenance flag present -> skip (rm the flag to resume)")
+        return {"skipped": "maintenance"}
+    from omniseek.core.sources.walled import _cdp
+
+    now = time.time()
+    stopped: list[str] = []
+    kept: list[str] = []
+    already_down: list[str] = []
+    for port, label in _cdp._CDP_SERVICES.items():
+        url = f"http://127.0.0.1:{port}"
+        if not _cdp.cdp_health(url)[0]:
+            already_down.append(port)
+            continue
+        last = _cdp.read_last_use(port)
+        if last is None:
+            # Up but never stamped: either this shipped a moment ago, or something drives this
+            # browser by a path that predates stamping. Seed a stamp instead of reaping, so the
+            # FIRST reaper cycle after a deploy can never kill a browser that is genuinely in use.
+            _cdp.touch_last_use(url)
+            kept.append(f"{port}:seeded")
+            continue
+        idle_min = (now - last) / 60.0
+        if now - last < CDP_IDLE_TIMEOUT_S:
+            kept.append(f"{port}:{idle_min:.0f}m")
+            continue
+        try:
+            subprocess.run(
+                ["launchctl", "kill", "TERM", f"gui/{os.getuid()}/{label}"],
+                check=False, timeout=10,
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+            stopped.append(f"{port}:{idle_min:.0f}m")
+        except (OSError, subprocess.SubprocessError) as exc:  # noqa: BLE001 — one failure must not
+            log.warning("cdp-reaper: could not stop %s: %s", label, exc)  # stop the other three
+    log.info("cdp-reaper: stopped=%s kept=%s already-down=%s",
+             stopped or "-", kept or "-", already_down or "-")
+    return {"stopped": stopped, "kept": kept, "already_down": already_down,
+            "idle_timeout_s": CDP_IDLE_TIMEOUT_S}
+
+
 def run_session_warmer() -> dict:
     """One warm run across the walled CDP Chromes: skip outside active hours or under the
     cdp-maintenance flag; else warm each account (home -> scroll -> one search) + Bark any degraded

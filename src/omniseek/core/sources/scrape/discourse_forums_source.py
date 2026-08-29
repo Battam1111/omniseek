@@ -33,6 +33,7 @@ gives a fair, coherent best-first ordering across all three forums.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime, timezone
 from typing import Any, Optional
@@ -140,21 +141,46 @@ class DiscourseForumsAdapter(BaseScrapeAdapter):
         return docs[:limit] if limit and limit > 0 else docs
 
     async def _araw_fetch(self, query: str, limit: int) -> Optional[Any]:
-        """Async twin of `_raw_fetch`: byte-faithful mirror of the per-instance
-        ``/search.json`` fan-out (same URL, params, timeout, control flow, and
-        None-return contract); ONLY the shared-http egress swaps to its async twin
-        (``http.get_json`` -> ``await http.aget_json``). One GET per instance, gently."""
-        results: list[tuple[str, dict]] = []
-        for host, base in INSTANCES.items():
+        """Async twin of `_raw_fetch`, with ONE deliberate divergence: the instances are fetched
+        CONCURRENTLY instead of one after another.
+
+        "Gently" (the sync docstring's word) means one GET per instance, not one instance at a
+        time. These are three unrelated hosts, so awaiting them in series only adds their latencies
+        together and is gentle to nobody. Measured 2026-08-29 from the mini: fast.ai 1.4 to 6.8s,
+        pytorch 3.0s, huggingface 2.4s, i.e. 7 to 12s serial against roughly the slowest one when
+        concurrent. That sum is the whole reason this source missed the search fan-out deadline and
+        was left as the single timing-out source after that day's memory work.
+
+        Result ORDER is restored to INSTANCES order after the gather, so `_to_documents` and its
+        scorer see exactly what the serial version produced; the only thing that changed is how
+        long it took. A single instance failing (or raising) leaves the others intact, which is the
+        same guarantee the serial loop gave through its per-instance isinstance check."""
+        async def _one(host: str, base: str) -> "tuple[str, dict] | None":
             data = await http.aget_json(
                 f"{base}/search.json",
                 params={"q": query},
                 timeout=TIMEOUT,
             )
             if isinstance(data, dict):
-                results.append((host, data))
-            else:
-                logger.debug("discourse_forums: %s returned no JSON", host)
+                return (host, data)
+            logger.debug("discourse_forums: %s returned no JSON", host)
+            return None
+
+        settled = await asyncio.gather(
+            *(_one(host, base) for host, base in INSTANCES.items()),
+            return_exceptions=True,
+        )
+        answered: dict[str, dict] = {}
+        for item in settled:
+            if isinstance(item, BaseException):
+                # One forum raising must not take the other two down. The serial loop could not
+                # raise here (aget_json returns None on failure), so this only ever fires on
+                # something unexpected, and swallowing it per-instance matches the old contract.
+                logger.debug("discourse_forums: an instance raised: %s", item)
+                continue
+            if item is not None:
+                answered[item[0]] = item[1]
+        results = [(host, answered[host]) for host in INSTANCES if host in answered]
         return results or None
 
     async def asearch(self, query: str, limit: int = 10) -> list[Document]:

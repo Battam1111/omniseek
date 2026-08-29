@@ -24,7 +24,9 @@ import asyncio
 import json
 import logging
 import os
+import signal
 import subprocess
+import sys
 import threading
 import time
 from dataclasses import dataclass
@@ -261,6 +263,7 @@ class JobRow:
     enabled: bool = True     # the shipped default; the profile override can flip it
     budget_s: int = 600      # wall-clock cap per run; a job past it is skipped, never waited on
     description: str = ""     # one-line human label for the fleet-status view (observability, no logic)
+    process_entrypoint: Optional[tuple[str, str]] = None
     needs: None = None       # reserved (spec: needs: none) -- no dependency edges in P9
 
 
@@ -268,7 +271,8 @@ _REGISTRY: "dict[str, JobRow]" = {}
 
 
 def register_job(name: str, schedule: str, fn: Callable[[], object], enabled: bool = True,
-                 budget_s: int = 600, description: str = "") -> JobRow:
+                 budget_s: int = 600, description: str = "",
+                 process_entrypoint: Optional[tuple[str, str]] = None) -> JobRow:
     """Register one job row. Parses ``schedule`` NOW so an unknown/malformed spec raises ValueError
     AT REGISTRATION (import time), never a silent default. A duplicate ``name`` also raises (two
     rows fighting over one last-run key is a bug), as does a budget outside (0, _MAX_JOB_BUDGET_S]
@@ -280,9 +284,13 @@ def register_job(name: str, schedule: str, fn: Callable[[], object], enabled: bo
         raise ValueError(f"duplicate job name {name!r}")
     if not (0 < int(budget_s) <= _MAX_JOB_BUDGET_S):
         raise ValueError(f"job {name!r} budget_s={budget_s} outside (0, {_MAX_JOB_BUDGET_S}]")
+    if process_entrypoint is not None:
+        if (not isinstance(process_entrypoint, tuple) or len(process_entrypoint) != 2
+                or not all(isinstance(part, str) and part for part in process_entrypoint)):
+            raise ValueError(f"job {name!r} process_entrypoint must be (module, callable)")
     sched = parse_schedule(schedule)   # raises ValueError on garbage -> loud at registration
     row = JobRow(name=name, schedule=sched, fn=fn, enabled=enabled, budget_s=int(budget_s),
-                 description=description)
+                 description=description, process_entrypoint=process_entrypoint)
     _REGISTRY[name] = row
     return row
 
@@ -470,12 +478,76 @@ def run_due_jobs(now: Optional[float] = None) -> dict:
     return {"checked": len(due), "ran": ran, "failed": failed}
 
 
+def _terminate_process_group(process: subprocess.Popen) -> None:
+    """Terminate an isolated job and all descendants, escalating after a short grace period."""
+    try:
+        if os.name == "nt":
+            if process.poll() is None:
+                process.terminate()
+        else:
+            os.killpg(process.pid, signal.SIGTERM)
+    except (OSError, ProcessLookupError):
+        pass
+    try:
+        process.wait(timeout=5)
+        return
+    except subprocess.TimeoutExpired:
+        pass
+    try:
+        if os.name == "nt":
+            process.kill()
+        else:
+            os.killpg(process.pid, signal.SIGKILL)
+    except (OSError, ProcessLookupError):
+        pass
+    try:
+        process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        log.error("isolated job process %s did not exit after SIGKILL", process.pid)
+
+
+def _run_isolated_with_budget(row: JobRow) -> "tuple[str, object]":
+    """Run a process-isolated job with a killable wall-clock budget."""
+    if row.process_entrypoint is None:
+        raise ValueError(f"job {row.name!r} has no process entrypoint")
+    module, callable_name = row.process_entrypoint
+    command = [
+        sys.executable,
+        "-m",
+        "omniseek.core.job_runner",
+        module,
+        callable_name,
+    ]
+    try:
+        process = subprocess.Popen(
+            command,
+            cwd=os.getcwd(),
+            stdin=subprocess.DEVNULL,
+            start_new_session=(os.name != "nt"),
+        )
+    except OSError as exc:
+        return "failed", exc
+    try:
+        returncode = process.wait(timeout=row.budget_s)
+    except subprocess.TimeoutExpired:
+        _terminate_process_group(process)
+        return "timeout", None
+    if returncode == 0:
+        return "ok", None
+    return "failed", RuntimeError(
+        f"isolated job {row.name!r} exited with status {returncode}"
+    )
+
+
 def _run_with_budget(row: JobRow) -> "tuple[str, object]":
-    """Run one job on a disposable worker thread, bounded by ``row.budget_s`` wall-clock. Returns
-    ``("ok"|"failed"|"timeout", exc_or_None)``. Python threads cannot be killed, so a timed-out fn
-    keeps running as a daemon ZOMBIE (harmless: every shipped core is fail-open and internally
-    bounded), but the TICK moves on: one slow job degrades to one skipped job, never a frozen
-    fleet, and the heartbeat keeps beating between jobs so the sentinel's dead-man stays quiet."""
+    """Run one job with a bounded wall-clock budget.
+
+    Jobs with ``process_entrypoint`` run in a new process group that can be terminated on timeout.
+    Legacy in-process jobs retain the historical daemon-thread path until they are individually
+    migrated, so one isolated job cannot change the semantics of the rest of the fleet.
+    """
+    if row.process_entrypoint is not None:
+        return _run_isolated_with_budget(row)
     holder: list = []
     def _call() -> None:
         try:
@@ -678,7 +750,14 @@ def register_shipped_jobs() -> None:
     register_job("wechat2rss-probe", "every:1800s", infra_jobs.run_wechat2rss_probe,
                  description="每 30min 探 wechat2rss 公益 feed")
     register_job("session-warmer", "daily@09:17,14:17,19:17", infra_jobs.run_session_warmer,
-                 budget_s=900, description="每日暖 CDP 登录态(小红书 / 抖音 / 9222 论坛)")
+                 budget_s=900, description="每日暖 CDP 登录态(小红书 / 抖音 / 9222 论坛)",
+                 process_entrypoint=("omniseek.core.infra_jobs", "run_session_warmer"))
+    # On-demand CDP lifecycle (2026-08-29): the four browsers used to sit resident forever, holding
+    # 3.1 GB on a 16 GB machine for ~24 calls a day. This row stops the idle ones; _cdp.ensure_browser
+    # brings one back in ~1s on the next call. Process-isolated so it reads last-use stamps off disk.
+    register_job("cdp-reaper", "every:600s", infra_jobs.run_cdp_reaper, budget_s=120,
+                 description="每 10min 停掉空闲的 CDP 浏览器(下次调用 1s 内自动拉起)",
+                 process_entrypoint=("omniseek.core.infra_jobs", "run_cdp_reaper"))
     register_job("log-rotation", "daily@04:50", infra_jobs.run_log_rotation,
                  description="每日转超大日志")
     # The 2026-08-11 answer to a backup that ran on time, failed on time, and told nobody: audit

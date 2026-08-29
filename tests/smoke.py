@@ -9210,9 +9210,13 @@ try:
     _J57.register_shipped_jobs()
     # offmachine-audit joined the fleet 2026-08-11: the daily content check on every off-machine
     # backup destination, added after the brain mirror died silently for fifteen days.
+    # cdp-reaper joined 2026-08-29: the four CDP browsers stopped being resident. They had been
+    # holding 3.1 GB on a 16 GB machine in exchange for ~24 calls a day, which kept swap at 98.3%
+    # and pushed the recall index onto disk. This row stops the idle ones; _cdp.ensure_browser
+    # brings one back in ~1s on the next call.
     _EXPECT_ROWS = {"sensors", "source-health", "source-health-fast", "wechat2rss-probe",
                     "session-warmer", "log-rotation", "nserc-prime", "curator", "source-audit",
-                    "digest", "offmachine-audit"}
+                    "digest", "offmachine-audit", "cdp-reaper"}
     check("p9 registry tripwire: the shipped rows are exactly the P9 fleet",
           set(_J57._REGISTRY.keys()) == _EXPECT_ROWS)
     _bad_rows = [n for n, r in _J57._REGISTRY.items()
@@ -17720,6 +17724,31 @@ if _SERVICES_PATH.exists():
           and _doc_maint.classify_launchd_plist({"KeepAlive": {"Crashed": True}}) == "resident"
           and _doc_maint.classify_launchd_plist({"StartInterval": 600}) == "interval"
           and _doc_maint.classify_launchd_plist({"StartCalendarInterval": {"Minute": 0}}) == "interval")
+
+    # On-demand CDP couples two files that cannot import each other: the reaper (infra_jobs) stops
+    # idle browsers, and the sentinel must NOT heal a browser the reaper stopped on purpose. If the
+    # sentinel's grace ever drops below the reaper's timeout the two ping-pong: reaper stops,
+    # sentinel kickstarts, forever. A comment in each file says "keep these in sync"; this is that
+    # comment as a guard. Both read the same env var, so the invariant is that the DEFAULTS match.
+    # REPO-ADAPTIVE on purpose. The public mirror syncs src/ and this file but NOT scripts/, so
+    # sentinel.py does not exist there. Reading it unconditionally would crash the mirror's smoke,
+    # which is the 2026-08-12 lesson verbatim: a gate is only as real as the things that shipped
+    # with it. The fix belongs HERE (skip cleanly when the deployment-bound half is absent), never
+    # in the mirror as a special case.
+    _od_re = r'os\.environ\.get\(\s*"OMNISEEK_CDP_IDLE_S"\s*,\s*([^)]+?)\s*\)'
+    _od_sentinel_path = ROOT / "scripts/sentinel.py"
+    if _od_sentinel_path.exists():
+        _od_reaper = _re_ro.search(_od_re, (ROOT / "src/omniseek/core/infra_jobs.py").read_text("utf-8"))
+        _od_sentinel = _re_ro.search(_od_re, _od_sentinel_path.read_text("utf-8"))
+        check("cdp on-demand: reaper timeout and sentinel grace share one env var + identical default "
+              "(else the reaper stops a browser and the sentinel kickstarts it right back)",
+              bool(_od_reaper) and bool(_od_sentinel)
+              and _od_reaper.group(1).strip() == _od_sentinel.group(1).strip(),
+              f"reaper={_od_reaper and _od_reaper.group(1)!r} "
+              f"sentinel={_od_sentinel and _od_sentinel.group(1)!r}")
+    else:
+        check("cdp on-demand: sentinel coupling guard skipped (no scripts/sentinel.py in this tree)",
+              True)
     _expected_cdp = {int(r["port"]) for r in _svc_maint.by_layer("cdp") if r.get("port") is not None}
     check("maintenance: every registry CDP port is doctor-probed",
           {port for port, _, _ in _doc_maint.CDP_PORTS} == _expected_cdp,
@@ -17775,6 +17804,11 @@ _GATE_DECLARED_SKIPS = {
     "directory fsync is POSIX-only",
     "POSIX file modes and shell dispatch only",
     "Windows cannot atomically replace directory symlinks",
+    # Arrived 2026-08-29 with the job-process-isolation branch. That branch shipped to production
+    # on 2026-08-25 WITHOUT ever being merged back, so its new platform skip never met this list
+    # until the mirror sync ran it on Windows four days later. Third bill from the same unmerged
+    # branch: first the cancellation tripwire, then the fleet roster, now this.
+    "the production target is POSIX process-group isolation",
 }
 
 # BOUNDED. The battery measures ~6s; 300 is a wide multiple, so only a genuine hang trips it and

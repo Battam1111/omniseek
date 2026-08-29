@@ -32,9 +32,13 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import pathlib
 import queue
 import re
+import subprocess
+import sys
 import threading
+import time
 from contextlib import contextmanager
 from typing import Any, Callable, Iterator, Optional
 
@@ -60,6 +64,120 @@ except ImportError:  # pragma: no cover
 
 DEFAULT_CDP_URL = "http://127.0.0.1:9222"
 DEFAULT_THREAD_TIMEOUT = 90  # seconds
+
+
+# ── on-demand browser lifecycle (2026-08-29) ──────────────────────────────────────────────────
+# Until now the four CDP Chromes were launched at boot by launchd and stayed up forever, because
+# this module only ever CONNECTS (see cdp_page's "Don't close the browser — it's shared,
+# persistent"). Measured cost of that choice on the mini: 3.1 GB of resident memory across 64
+# processes, 11.5 GB of profile directories, and 248,762 lines of error log from browsers retrying
+# an unreachable Google push transport. Measured benefit: about 24 calls a day, each a few seconds.
+#
+# The memory mattered because the machine is a 16 GB M4 mini whose swap was 98.3% full, which
+# pushed the 1.4 GB recall index onto disk and made a cold vector query take 8.8 s out of an 11 s
+# search budget — starving several dozen sources into timeout. Freeing the browsers is the only
+# lever that returns GBs (measured alternatives: capping local retrieval returns nothing, and the
+# unified memory is soldered so it cannot be upgraded).
+#
+# Three facts make on-demand safe, all measured 2026-08-29 on com.omniseek.cdp.xhs-cn:
+#   1. `launchctl kill TERM` does NOT get auto-restarted: KeepAlive is {Crashed, !SuccessfulExit},
+#      so a deliberate stop stays stopped while a crash still self-heals.
+#   2. Cold start to a usable browser takes 1 second (profile and cache are already on disk).
+#   3. The login session survives: after a restart the page returned to xiaohongshu.com/explore,
+#      not the login wall, and the Cookies file kept updating.
+_CDP_STATE_DIR = pathlib.Path.home() / ".omniseek" / "state" / "cdp-lastuse"
+
+# port → launchd label. A port that is NOT here (e.g. the jailed 9444 render Chromium, which is a
+# colima container and not a launchd service) is left completely alone: ensure_browser returns
+# immediately and behaviour is byte-identical to before.
+_CDP_SERVICES = {
+    "9222": "com.omniseek.cdp.cn-forums",
+    "9223": "com.omniseek.cdp.xhs",
+    "9224": "com.omniseek.cdp.xhs-cn",
+    "9225": "com.omniseek.cdp.douyin",
+}
+
+_PORT_RE = re.compile(r":(\d+)")
+_START_LOCK = threading.Lock()
+_START_TIMEOUT_S = 20  # cold start measured at 1s; 20 is a generous ceiling, not an expectation
+
+
+def cdp_port(cdp_url: str) -> Optional[str]:
+    m = _PORT_RE.search(cdp_url or "")
+    return m.group(1) if m else None
+
+
+def cdp_service_for(cdp_url: str) -> Optional[str]:
+    port = cdp_port(cdp_url)
+    return _CDP_SERVICES.get(port) if port else None
+
+
+def touch_last_use(cdp_url: str) -> None:
+    """Stamp 'this browser was used just now' on DISK.
+
+    On disk rather than in a module global because the reaper that stops idle browsers runs as a
+    process-isolated job (its own interpreter, see jobs._run_isolated_with_budget), so it cannot
+    see any in-process counter. A failure to stamp must never break the call that is about to
+    happen, hence the swallow: the worst case is the reaper stopping a browser one cycle early,
+    which costs a 1 second restart."""
+    port = cdp_port(cdp_url)
+    if not port:
+        return
+    try:
+        _CDP_STATE_DIR.mkdir(parents=True, exist_ok=True)
+        (_CDP_STATE_DIR / port).write_text(str(time.time()), encoding="utf-8")
+    except OSError:  # noqa: BLE001 — telemetry, never load-bearing
+        pass
+
+
+def read_last_use(port: str) -> Optional[float]:
+    """Epoch seconds of the last recorded use of this port, or None if never recorded."""
+    try:
+        return float((_CDP_STATE_DIR / port).read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        return None
+
+
+def ensure_browser(cdp_url: str) -> None:
+    """Make sure the CDP Chrome for this url is running, starting it if it is not.
+
+    No-ops on any non-macOS host and on any port outside _CDP_SERVICES, so the only environment
+    whose behaviour changes is the mini's four launchd-managed browsers.
+
+    Raises RuntimeError if the browser cannot be brought up: the caller (cdp_call) already
+    propagates exceptions and every walled adapter degrades a raise to an empty result, so a
+    failed start surfaces as 'this source returned nothing' plus a logged reason, exactly like a
+    dead browser did before this existed."""
+    if sys.platform != "darwin":
+        return
+    label = cdp_service_for(cdp_url)
+    if label is None:
+        return
+    if cdp_health(cdp_url)[0]:
+        touch_last_use(cdp_url)
+        return
+    with _START_LOCK:
+        # Double-check: a concurrent caller may have started it while we waited for the lock.
+        if cdp_health(cdp_url)[0]:
+            touch_last_use(cdp_url)
+            return
+        logger.info("CDP browser %s is down; starting on demand", label)
+        try:
+            subprocess.run(
+                ["launchctl", "kickstart", f"gui/{os.getuid()}/{label}"],
+                check=False, timeout=10,
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise RuntimeError(f"could not launch CDP browser {label}: {exc}") from exc
+        deadline = time.time() + _START_TIMEOUT_S
+        while time.time() < deadline:
+            if cdp_health(cdp_url)[0]:
+                touch_last_use(cdp_url)
+                logger.info("CDP browser %s ready", label)
+                return
+            time.sleep(0.3)
+    raise RuntimeError(f"CDP browser {label} did not become ready within {_START_TIMEOUT_S}s")
 
 
 class CacheOnlyMiss(Exception):
@@ -310,6 +428,10 @@ def cdp_call(callback: Callable[[Page], Any], *,
         miss = CacheOnlyMiss("cache-only mode: live CDP suppressed")
         diag.note("cdp_call", url=initial_url, exc=miss)
         raise miss
+    # On-demand lifecycle: bring the browser up if the idle reaper stopped it (1s cold start,
+    # measured). Deliberately AFTER the cache-only gate — a cache-only poll must not start a
+    # browser — and BEFORE the pool branch, so both the pooled and per-call paths are covered.
+    ensure_browser(cdp_url)
     if _pool_enabled():  # Lever A: route to the persistent connection pool (else per-call below)
         return _pool_for(cdp_url).submit(callback, initial_url, timeout)
 
