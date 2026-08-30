@@ -40,6 +40,8 @@ OmniSeek host live-verifies post-deploy).
 
 from __future__ import annotations
 
+import asyncio
+import logging
 import re
 from datetime import datetime
 from typing import Any, Optional
@@ -58,6 +60,8 @@ ARTICLE_URL = "https://europepmc.org/article/{source}/{id}"
 # Bound the OA full-text fan-out per search: only the first N eligible (OA + in EPMC
 # + pmcid) results pull the JATS body, so a broad search stays one search request +
 # a few small follow-ups, not N slow ones against the shared EBI host.
+logger = logging.getLogger(__name__)
+
 _MAX_FULLTEXT = 3
 # Cap the inlined full-text body so one large article cannot dominate the payload;
 # the agent can omniseek_read the article for the whole thing. (The true length is
@@ -128,27 +132,53 @@ class EuropePMCAdapter(BaseScrapeAdapter):
 
     async def _ato_documents(self, raw: Any, query: str, limit: int) -> list[Document]:
         """Async twin of _to_documents (TWO-LAYER: the per-record OA full-text enrichment
-        egresses). Line-for-line mirror of _to_documents, but the bounded fan-out awaits its
-        async twin _amaybe_fulltext (http.get_text → await http.aget_text). SAME _MAX_FULLTEXT
-        budget, SAME eligibility gate, SAME order (sequential awaits ⇒ byte-identical doc list),
-        SAME per-record skip-on-fail (a miss keeps the abstract), SAME pure-CPU _result_to_doc /
-        _strip_jats on the loop."""
+        egresses). SAME _MAX_FULLTEXT budget, SAME eligibility gate, SAME doc order, SAME
+        per-record skip-on-fail (a miss keeps the abstract), SAME pure-CPU _result_to_doc /
+        _strip_jats on the loop. The full-text pulls run CONCURRENTLY, in batches.
+
+        Why batches rather than one gather: the budget counts SUCCESSES, not attempts (a miss
+        keeps its abstract and does not consume budget). A single gather over every eligible
+        record would either overshoot that budget or fire requests the serial version never
+        would. Asking for exactly the shortfall each round preserves both numbers: the same
+        count of successful full texts, and the same total number of requests as the serial
+        version, since both stop at the attempt that completes the budget. Only the concurrency
+        within a round is new.
+
+        JATS bodies are large, so this is the difference between three sequential body fetches
+        and (usually) one round of three.
+
+        Order is untouched: every doc is built and appended up front, in result order, and
+        _amaybe_fulltext grafts the body onto the doc object in place."""
         if not isinstance(raw, dict):
             return []
         results = ((raw.get("resultList") or {}).get("result")) or []
         docs: list[Document] = []
-        fulltext_budget = _MAX_FULLTEXT
+        pending: list[tuple[Document, dict]] = []  # eligible, in result order
         for result in results[:limit]:
             doc = self._result_to_doc(result)
             if doc is None:
                 continue
-            # Bounded OA full-text fan-out: only the first few eligible results pull
-            # the JATS body, and only when there is budget left. A failure inside
-            # _amaybe_fulltext is swallowed there (doc keeps its abstract).
-            if fulltext_budget > 0 and self._fulltext_eligible(result):
-                if await self._amaybe_fulltext(doc, result):
-                    fulltext_budget -= 1
+            if self._fulltext_eligible(result):
+                pending.append((doc, result))
             docs.append(doc)
+
+        need = _MAX_FULLTEXT
+        i = 0
+        while need > 0 and i < len(pending):
+            batch = pending[i:i + need]
+            i += len(batch)
+            settled = await asyncio.gather(
+                *(self._amaybe_fulltext(d, r) for d, r in batch),
+                return_exceptions=True,
+            )
+            for item in settled:
+                if isinstance(item, BaseException):
+                    # _amaybe_fulltext swallows its own failures and returns False, so this only
+                    # fires on something unexpected. It counts as a miss, exactly as a False would.
+                    logger.debug("europepmc: a full-text pull raised: %s", item)
+                    continue
+                if item:
+                    need -= 1
         return docs
 
     async def asearch(self, query: str, limit: int = 10) -> list[Document]:
