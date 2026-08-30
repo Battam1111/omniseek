@@ -18,6 +18,7 @@ headers + signing and diag.note by hand — do NOT route those through here.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import random
 import threading
@@ -354,15 +355,47 @@ def put_json(url: str, *, json: Any = None, timeout: int = DEFAULT_TIMEOUT,
 # workaround, not needed here. No operation is converted and no adapter awaits these yet (S4 does that).
 _aclient: Optional[httpx.AsyncClient] = None
 _aclient_lock = threading.Lock()  # construction is sync (no await); double-check like _get_client
+# The loop the pooled client was built on. httpx.AsyncClient's connection pool is bound to the
+# event loop that created it: reusing it from a DIFFERENT loop yields either a dead-connection
+# error or a bare "Event loop is closed", both far from the real cause. Nothing in today's call
+# graph creates a second loop (the service runs one), so this has never fired; it is here because
+# the failure it prevents is expensive to diagnose and the check costs one identity comparison.
+_aclient_loop: Optional[Any] = None
 
 
 def _aget_client() -> httpx.AsyncClient:
     """Lazily build (once) the shared pooled async client. Double-checked lock so the first concurrent
-    async callers create exactly one. Async twin of _get_client (same http2 + Limits + UA + timeout)."""
-    global _aclient
+    async callers create exactly one. Async twin of _get_client (same http2 + Limits + UA + timeout).
+
+    REBUILDS, rather than raising, if the running loop is not the one the pooled client was built
+    on. Raising would push a purely internal lifecycle problem onto every caller; rebuilding is
+    transparent and costs one cold pool. It is logged at WARNING because if this ever fires
+    repeatedly, the pool is being thrown away on every call and that is worth seeing."""
+    global _aclient, _aclient_loop
+    try:
+        _loop = asyncio.get_running_loop()
+    except RuntimeError:
+        _loop = None  # called outside a loop (construction only); leave the binding alone
+
+    # `_aclient_loop is not None` is LOAD-BEARING: it means "we built this one and know its loop".
+    # A client someone else installed (the smoke checks and several tests inject a stub straight
+    # into this global) carries no binding, and replacing it would silently undo the injection:
+    # the stub goes away, a real client takes its place, and the request leaves the process. That
+    # is exactly what happened the first time this guard shipped, and it broke six checks at once.
+    # Not knowing which loop a client belongs to is a reason to leave it alone, not to discard it.
+    if (_aclient is not None and _loop is not None
+            and _aclient_loop is not None and _aclient_loop is not _loop):
+        logger.warning("async http client was built on a different event loop; rebuilding "
+                       "(the connection pool cannot cross loops)")
+        with _aclient_lock:
+            if (_aclient is not None
+                    and _aclient_loop is not None and _aclient_loop is not _loop):
+                _aclient = None  # drop the reference; the old pool is bound to a loop we no longer use
+
     if _aclient is None:
         with _aclient_lock:
             if _aclient is None:
+                _aclient_loop = _loop
                 # Lazy import to break the http <-> safeurl cycle (same reason as _get_client): by the
                 # time the first request builds the client, safeurl is fully loaded.
                 from omniseek.core import safeurl  # noqa: PLC0415 (lazy: breaks the import cycle)

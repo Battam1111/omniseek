@@ -37,6 +37,7 @@ use) for a coherent best-first result.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from concurrent.futures import ThreadPoolExecutor
 from contextvars import copy_context
@@ -187,17 +188,35 @@ class GovOpenDataAdapter(BaseScrapeAdapter):
 
     # ── native-async egress twins (byte-faithful mirror of the sync fan-out) ─
     async def _araw_fetch(self, query: str, limit: int) -> Optional[Any]:
-        """Async twin of _raw_fetch: byte-faithful mirror of the multi-portal fan-out. The ONLY
-        change down the whole chain is the shared-http egress fn (http.get_json -> await
-        http.aget_json) inside _afetch_portal / _afetch_sg; same control flow, same per-portal
-        skip-on-failure, same all-portals-failed -> None contract."""
-        pairs: list[tuple[dict, dict]] = []
-        any_ok = False
-        for portal in PORTALS:
+        """Async twin of _raw_fetch: the multi-portal fan-out, CONCURRENT like the sync twin.
+
+        The three portals are unrelated hosts (SG, HK, CA), so a serial loop made this source's
+        latency their SUM. Worse, the sync twin above has always been concurrent (ThreadPoolExecutor,
+        line ~126) while this one was a for-loop, and fetcher dispatches to the ASYNC path whenever
+        an adapter has asearch: the sync fan-out was dead code and the concurrency it bought was
+        silently lost (measured 2026-08-30). The SG portal additionally pages up to SG_MAX_PAGES
+        internally, and that whole chain used to hang off the first link of the serial chain.
+
+        Everything else is unchanged: per-portal failure stays non-fatal, all-portals-failed still
+        returns None, and results are restored in PORTALS order (the sync twin's zip at line ~128
+        already proves that ordering is the contract).
+        """
+        async def _one(portal: dict) -> Optional[list[dict]]:
             try:
-                records = await self._afetch_portal(portal, query, limit)
+                return await self._afetch_portal(portal, query, limit)
             except Exception as exc:  # noqa: BLE001 — a single portal hiccup is non-fatal
                 logger.warning("%s: portal %s failed: %s", self.name, portal["id"], exc)
+                return None
+
+        settled = await asyncio.gather(*(_one(p) for p in PORTALS), return_exceptions=True)
+
+        pairs: list[tuple[dict, dict]] = []
+        any_ok = False
+        for portal, records in zip(PORTALS, settled):
+            if isinstance(records, BaseException):
+                # _one already swallows Exception, so this only fires on something that escapes it
+                # (e.g. cancellation-adjacent BaseExceptions). Per-portal, matching the old contract.
+                logger.warning("%s: portal %s raised: %s", self.name, portal["id"], records)
                 continue
             if records is None:
                 continue

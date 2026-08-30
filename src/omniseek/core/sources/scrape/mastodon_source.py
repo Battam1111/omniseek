@@ -36,6 +36,7 @@ fair best-first ordering across all three instances.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from datetime import datetime, timezone
@@ -179,17 +180,42 @@ class MastodonAdapter(BaseScrapeAdapter):
         # Ask each instance for up to `limit` statuses; Mastodon caps tag-timeline limit at
         # 40, so clamp into [1, 40] to stay within the documented bound.
         per = max(1, min(limit or 10, 40))
-        results: list[tuple[str, list]] = []
-        for host, base in INSTANCES.items():
+
+        # CONCURRENT since 2026-08-30. The three instances are unrelated hosts, so awaiting them
+        # one at a time made this source's latency their SUM for no reason. "one GET each, gently"
+        # means one request per instance, NOT one instance at a time: the politeness budget is
+        # per-host and these are three different hosts. Same fix, same reasoning as
+        # discourse_forums (2026-08-29), whose structure this file mirrors almost line for line.
+        #
+        # Order is restored against INSTANCES afterwards because _to_documents merges across
+        # instances and then scores the whole pool, so a faster instance answering first must not
+        # reshuffle anything.
+        async def _one(host: str, base: str) -> "tuple[str, list] | None":
             data = await http.aget_json(
                 f"{base}/api/v1/timelines/tag/{tag}",
                 params={"limit": per},
                 timeout=TIMEOUT,
             )
             if isinstance(data, list):
-                results.append((host, data))
-            else:
-                logger.debug("mastodon: %s returned no list for #%s", host, tag)
+                return (host, data)
+            logger.debug("mastodon: %s returned no list for #%s", host, tag)
+            return None
+
+        settled = await asyncio.gather(
+            *(_one(host, base) for host, base in INSTANCES.items()),
+            return_exceptions=True,
+        )
+        answered: dict[str, list] = {}
+        for item in settled:
+            if isinstance(item, BaseException):
+                # One instance raising must not take the others down. The serial loop could not
+                # raise here (aget_json returns None on failure), so this only fires on something
+                # unexpected, and swallowing it per-instance matches the old contract.
+                logger.debug("mastodon: an instance raised: %s", item)
+                continue
+            if item is not None:
+                answered[item[0]] = item[1]
+        results = [(host, answered[host]) for host in INSTANCES if host in answered]
         return results or None
 
     async def asearch(self, query: str, limit: int = 10) -> list[Document]:
