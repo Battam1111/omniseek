@@ -27,6 +27,7 @@ lexical filter — the base preserves the downloads-sorted order verbatim.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime
 from typing import Optional
@@ -92,17 +93,22 @@ class HuggingFaceHubAdapter(BaseAPIAdapter):
         return pairs[:limit]
 
     async def _araw_fetch(self, query: str, limit: int) -> list:
-        """Async twin of ``_raw_fetch``: BYTE-FAITHFUL mirror of the bounded 3-listing fan-out.
+        """Async twin of ``_raw_fetch``: the bounded 3-listing fan-out, run CONCURRENTLY.
 
         Same per-category budget, same three categories in the same order, same URL / params /
-        timeout, same None → warn+continue contract, same merge + downloads-desc stable sort, same
-        ``pairs[:limit]`` truncation. ONLY the shared-http egress is swapped: ``http.get_json`` ->
-        ``await http.aget_json`` for EACH of the three listing calls (sequential awaits, same order).
-        The per-model detail fetch lives in ``fetch_url`` (not here), so nothing else egresses.
+        timeout, same None → warn+skip contract, same merge + downloads-desc stable sort, same
+        ``pairs[:limit]`` truncation, and the shared-http egress is ``await http.aget_json`` per
+        listing. What changed on 2026-08-30 is that the three listings are issued CONCURRENTLY
+        instead of one after another: /api/models, /api/datasets and /api/spaces are independent
+        queries whose only meeting point is the sort below, and ``per_cat`` is computed before any
+        of them, so no call reads a previous answer. Results are re-paired against the category
+        order, which the stable sort's models → datasets → spaces tie-break depends on. The
+        per-model detail fetch lives in ``fetch_url`` (not here), so nothing else egresses.
         """
+        kinds = ("models", "datasets", "spaces")
         per_cat = max(2, (limit // 3) + 1)
-        pairs: list[tuple[dict, str]] = []
-        for kind in ("models", "datasets", "spaces"):
+
+        async def _one(kind: str) -> Optional[list]:
             items = await http.aget_json(
                 f"{HF_API_BASE}/{kind}",
                 params={
@@ -115,8 +121,21 @@ class HuggingFaceHubAdapter(BaseAPIAdapter):
             )
             if items is None:
                 logger.warning("HF %s search failed", kind)
+                return None
+            return items[:per_cat]
+
+        settled = await asyncio.gather(*(_one(k) for k in kinds), return_exceptions=True)
+
+        pairs: list[tuple[dict, str]] = []
+        for kind, items in zip(kinds, settled):
+            if isinstance(items, BaseException):
+                # aget_json returns None on failure, so the serial loop could not raise here.
+                # One category blowing up must not cost the other two.
+                logger.warning("HF %s search raised: %s", kind, items)
                 continue
-            for item in items[:per_cat]:
+            if items is None:
+                continue
+            for item in items:
                 pairs.append((item, kind))
 
         pairs.sort(key=lambda p: (p[0].get("downloads") or 0), reverse=True)

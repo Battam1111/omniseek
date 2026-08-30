@@ -26,6 +26,7 @@ Two layers are retrieved per query and merged into one ranked result set:
 
 from __future__ import annotations
 
+import asyncio
 import functools
 import logging
 import re
@@ -107,9 +108,16 @@ class HackerNewsAdapter:
             file IO), keyed IDENTICALLY so async and sync share the cache;
           - the two Algolia GETs swap to ``await http.aget_json`` (both fan-out calls; the async NETWORK
             wait stays ON the loop via epoll, no held thread — the SSRF getaddrinfo inside the async leaf
-            is moved off-loop by the http layer);
+            is moved off-loop by the http layer) and are issued CONCURRENTLY: they are two independent
+            queries against the same index, both budgets are computed before either call, and neither
+            layer reads the other's payload, so awaiting them in series only summed their latencies;
           - the PURE-CPU budget math + hit→doc mapping (_hit_to_document / _comment_to_document) stay ON
-            the loop, byte-identical to ``search`` (no drift)."""
+            the loop, byte-identical to ``search`` (no drift).
+
+        Doc ORDER is untouched: the two mapping loops still run stories-then-comments after the gather,
+        so a fast comment reply cannot jump ahead of the stories. A layer raising is unexpected by
+        construction (``aget_json`` returns None on failure); ``return_exceptions=True`` degrades it to
+        that same None, so one bad layer leaves the other's docs intact."""
         key = cache.make_key("hackernews", "search", query, limit)
         cached = await anyio.to_thread.run_sync(cache.get_docs, key)  # disk read OFF loop
         if cached is not None:
@@ -124,22 +132,35 @@ class HackerNewsAdapter:
 
         docs: list[Document] = []
 
-        story_data = await http.aget_json(
-            f"{ALGOLIA_BASE}/search",
-            params={"query": query, "tags": "story", "hitsPerPage": min(story_budget, 30)},
-            timeout=TIMEOUT,
+        def _settled(layer: str, result):
+            """A gathered result -> the value the serial version would have seen (None on failure)."""
+            if isinstance(result, BaseException):
+                logger.debug("hackernews: the %s layer raised: %s", layer, result)
+                return None
+            return result
+
+        story_res, comment_res = await asyncio.gather(
+            http.aget_json(
+                f"{ALGOLIA_BASE}/search",
+                params={"query": query, "tags": "story", "hitsPerPage": min(story_budget, 30)},
+                timeout=TIMEOUT,
+            ),
+            http.aget_json(
+                f"{ALGOLIA_BASE}/search",
+                params={"query": query, "tags": "comment", "hitsPerPage": min(comment_budget, 30)},
+                timeout=TIMEOUT,
+            ),
+            return_exceptions=True,
         )
+        story_data = _settled("story", story_res)
+        comment_data = _settled("comment", comment_res)
+
         for hit in (story_data or {}).get("hits", [])[:story_budget]:
             try:
                 docs.append(self._hit_to_document(hit))
             except Exception as exc:  # noqa: BLE001
                 logger.debug("Skipping malformed HN story hit: %s", exc)
 
-        comment_data = await http.aget_json(
-            f"{ALGOLIA_BASE}/search",
-            params={"query": query, "tags": "comment", "hitsPerPage": min(comment_budget, 30)},
-            timeout=TIMEOUT,
-        )
         for hit in (comment_data or {}).get("hits", [])[:comment_budget]:
             try:
                 docs.append(self._comment_to_document(hit))

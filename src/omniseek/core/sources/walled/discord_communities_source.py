@@ -39,6 +39,8 @@ OFF). With it off you get message metadata but blank text.
 from __future__ import annotations
 
 import logging
+from concurrent.futures import ThreadPoolExecutor
+from contextvars import copy_context
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -89,7 +91,21 @@ class DiscordCommunitiesAdapter:
 
         Used when discord.json lists no explicit channels — so the operator can Follow
         new announcement channels into the server and they're picked up with zero
-        re-config. Cached briefly (channel topology changes rarely)."""
+        re-config. Cached briefly (channel topology changes rarely).
+
+        The guild list is fetched FIRST and alone: its ids are a REAL dependency, nothing per-guild
+        can be asked for before it lands. The per-guild channel listings that follow are independent
+        of one another, so they run CONCURRENTLY — a serial loop made discovery cost the SUM of every
+        guild the bot is in. There is no asyncio here (this source is sync-only, it has no ``asearch``
+        twin), so the fan-out is a thread pool, the same shape gov_open_data and feishu_jobs use.
+
+        Each task runs under a COPIED contextvars Context (the house pattern): the per-request cache
+        flags (fresh / cache_only) ride contextvars, so a bare thread would silently drop them and
+        serve stale cache to a request that explicitly asked for fresh data.
+
+        Nothing else moves. ``ex.map`` preserves input order, so channels still come back
+        guild-by-guild in guild-list order; a guild that fails is skipped rather than fatal; and an
+        every-guild-failed run still returns (and caches) the empty list exactly as before."""
         ck = cache.make_key("discord_communities", "channels")
         cached = cache.get(ck)
         if cached is not None:
@@ -101,10 +117,24 @@ class DiscordCommunitiesAdapter:
         except Exception as exc:  # noqa: BLE001
             logger.warning("discord guild list failed: %s", exc)
             return out
-        for g in guilds if isinstance(guilds, list) else []:
+        guild_list = list(guilds) if isinstance(guilds, list) else []
+
+        def _one(g):
+            """One guild's channel listing. None on failure (skipped), mirroring the old
+            ``except: continue`` — including a malformed guild row, whose g['id'] raises in here."""
             try:
-                chans = httpx.get(f"{API}/guilds/{g['id']}/channels", headers=hdr, timeout=TIMEOUT).json()
+                return httpx.get(f"{API}/guilds/{g['id']}/channels", headers=hdr, timeout=TIMEOUT).json()
             except Exception:  # noqa: BLE001
+                return None
+
+        per_guild: list = []
+        if guild_list:
+            contexts = [copy_context() for _ in guild_list]
+            with ThreadPoolExecutor(max_workers=min(len(guild_list), 8)) as ex:
+                per_guild = list(ex.map(lambda ctx, g: ctx.run(_one, g), contexts, guild_list))
+
+        for g, chans in zip(guild_list, per_guild):
+            if chans is None:
                 continue
             for c in chans if isinstance(chans, list) else []:
                 if c.get("type") in (0, 5):  # text / announcement
@@ -136,6 +166,23 @@ class DiscordCommunitiesAdapter:
             return []
 
     def search(self, query: str, limit: int = 10) -> list[Document]:
+        """Pull every configured channel and rank the messages against the query.
+
+        The per-channel pulls run CONCURRENTLY, the same shape (and for the same reason) as the
+        guild fan-out in _discover_channels above: the channels are independent routes, so a serial
+        loop made one refresh cost the SUM of every channel, at PER_CHANNEL messages each. This is
+        the LARGER of the two fan-outs in this file — channels outnumber guilds, and discovery only
+        runs when no explicit channels are configured, behind its own 30-minute cache.
+
+        Each pull runs under a COPIED contextvars Context: the per-request cache flags
+        (fresh / cache_only) ride contextvars, so a bare thread would drop them and serve stale
+        cache to a request that explicitly asked for fresh data.
+
+        Only the egress moves. ``ex.map`` preserves input order, so messages are still decoded
+        channel-by-channel in ``channels`` order, which is what the STABLE newest-first sort below
+        falls back on for equal (or absent) timestamps. ``_pull`` already swallows its own failures
+        and returns [], so a dead channel stays non-fatal exactly as before.
+        """
         token, channels = self._config()
         if not token:
             return []
@@ -149,9 +196,15 @@ class DiscordCommunitiesAdapter:
         if cached is not None:
             docs = [Document.model_validate(d) for d in cached]
         else:
+            contexts = [copy_context() for _ in channels]
+            with ThreadPoolExecutor(max_workers=min(len(channels), 8)) as ex:
+                per_channel = list(ex.map(
+                    lambda ctx, c: ctx.run(self._pull, token, c["channel_id"]),
+                    contexts, channels))
+
             docs = []
-            for ch in channels:
-                for msg in self._pull(token, ch["channel_id"]):
+            for ch, msgs in zip(channels, per_channel):
+                for msg in msgs:
                     try:
                         doc = self._to_doc(msg, ch)
                         if doc:

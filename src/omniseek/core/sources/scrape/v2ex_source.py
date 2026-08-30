@@ -32,6 +32,7 @@ directly (no credentials, no CDP).
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime, timezone
 from typing import Any, Optional
@@ -149,15 +150,34 @@ class V2exAdapter(BaseScrapeAdapter):
         return data
 
     async def _araw_fetch(self, query: str, limit: int) -> Optional[list]:
-        """Async twin of ``_raw_fetch``: byte-faithful mirror of the per-node fan-out (same
-        NODES order, id-dedup, order-preserving merge, and any_ok / None-return contract);
-        each node's egress swaps to ``_aget_topics``. Sequential awaits mirror the sync loop
-        (there is no ThreadPoolExecutor here to convert to gather) — one GET per node, gently."""
+        """Async twin of ``_raw_fetch``: the per-node fan-out, fetched CONCURRENTLY (2026-08-30).
+
+        Same NODES order, same id-dedup, same order-preserving merge, same any_ok / None-return
+        contract; each node's egress is still ``_aget_topics``, still exactly one GET per node.
+        The only change is that the six GETs are in flight together instead of end to end. They
+        are six independent node listings, none reads a previous node's answer, and this file
+        carries no rate limit and no politeness interval to honour: the old "there is no
+        ThreadPoolExecutor here to convert to gather" note described the sync twin's shape, it was
+        never a reason the nodes had to be serial. Six is the largest target count of any fan-out
+        in OmniSeek, so serial made this source's latency their SUM.
+
+        The gather results are re-paired against NODES before the merge, so the dedup keeps its
+        first-node-wins order: a topic cross-posted to two nodes is still attributed to whichever
+        node comes earlier in NODES, exactly as the serial loop did."""
+        settled = await asyncio.gather(
+            *(self._aget_topics(slug) for slug in NODES),
+            return_exceptions=True,
+        )
+
         merged: list[dict] = []
         seen: set[Any] = set()
         any_ok = False
-        for slug in NODES:
-            topics = await self._aget_topics(slug)
+        for slug, topics in zip(NODES, settled):
+            if isinstance(topics, BaseException):
+                # _aget_topics returns None on failure, so the serial loop could not raise here.
+                # One node blowing up must not cost the other five.
+                logger.warning("v2ex: node=%s raised: %s", slug, topics)
+                continue
             if topics is None:
                 continue
             any_ok = True

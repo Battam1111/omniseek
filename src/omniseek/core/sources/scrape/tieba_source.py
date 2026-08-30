@@ -37,6 +37,7 @@ User-Agent. No new dependency: httpx is already a core dep.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime, timezone
 from typing import Any, Optional
@@ -136,12 +137,34 @@ class TiebaAdapter(BaseScrapeAdapter):
         return data
 
     async def _araw_fetch(self, query: str, limit: int) -> Optional[dict]:
-        """Async twin of ``_raw_fetch``: byte-faithful mirror of the two mobile GETs (thread search then
-        forum search) and the both-failed -> None contract; each egress swaps to ``_aget_json``. Sequential
-        awaits mirror the sync order (there is no ThreadPoolExecutor here to convert to gather): the same
-        two GETs the sync path issues, gently."""
-        threads = await self._aget_json(THREAD_URL, {"word": query, "pn": 1})
-        forums = await self._aget_json(FORUM_URL, {"word": query})
+        """Async twin of ``_raw_fetch``: the same two mobile GETs (thread search + forum search) and the
+        same both-failed -> None contract, each egress via ``_aget_json``, with ONE deliberate divergence:
+        the two run CONCURRENTLY.
+
+        They are two different endpoints answering two independent questions (which threads match vs how
+        big the 吧 is) and neither reads the other's result: the both-failed check below is the only place
+        they meet. "Gently" is still true, because gently means two GETs per search, which is exactly what
+        this issues; it was never a claim about spacing them out, and there is no rate-limit or
+        politeness-interval anywhere in this adapter.
+
+        Failure handling is unchanged: either search failing alone still yields the other's docs, and only
+        BOTH failing returns None. ``_aget_json`` swallows its own failures into None, so a raise is
+        unexpected by construction; ``return_exceptions=True`` degrades a raising call to that same None
+        instead of losing the healthy one."""
+        def _settled(surface: str, result: Any) -> Optional[dict]:
+            """A gathered result -> the value the serial version would have seen (None on failure)."""
+            if isinstance(result, BaseException):
+                logger.warning("tieba: %s raised: %s", surface, result)
+                return None
+            return result
+
+        threads_res, forums_res = await asyncio.gather(
+            self._aget_json(THREAD_URL, {"word": query, "pn": 1}),
+            self._aget_json(FORUM_URL, {"word": query}),
+            return_exceptions=True,
+        )
+        threads = _settled("thread search", threads_res)
+        forums = _settled("forum search", forums_res)
         if threads is None and forums is None:
             return None
         return {"threads": threads, "forums": forums}

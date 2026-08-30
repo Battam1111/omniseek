@@ -45,6 +45,7 @@ sources when it needs a unified relevance order.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime
 from typing import Any, Optional
@@ -114,28 +115,50 @@ class BooksOpenLibraryIAAdapter(BaseScrapeAdapter):
         return {"ol": ol, "ia": ia, "ol_n": ol_n, "ia_n": ia_n}
 
     async def _araw_fetch(self, query: str, limit: int) -> Optional[dict]:
-        """Async twin of ``_raw_fetch``: byte-faithful mirror. Same dual GET (Open Library +
-        Internet Archive), same URLs, same params, same TIMEOUT, same limit-split, same
-        partial-tolerance / both-miss->None contract; ONLY the shared-http egress swaps to its
-        async twin (``http.get_json`` -> ``await http.aget_json``). Mirrors BOTH calls."""
+        """Async twin of ``_raw_fetch``, with ONE deliberate divergence: the two surfaces are fetched
+        CONCURRENTLY instead of one after another. Same dual GET (Open Library + Internet Archive), same
+        URLs, same params, same TIMEOUT, same limit-split, same partial-tolerance / both-miss->None
+        contract; the shared-http egress is its async twin (``http.get_json`` -> ``await http.aget_json``).
+
+        openlibrary.org and archive.org are UNRELATED hosts and both are slow (the IA advancedsearch
+        especially), and the two calls share nothing: ``ol_n`` / ``ia_n`` are both computed above, before
+        either request, and the both-miss check below reads them independently. Awaiting them in series
+        only added their latencies together for no gain.
+
+        Failure handling is unchanged: either surface returning None still yields a partial payload, and
+        only BOTH missing returns None. A raise is unexpected by construction (``aget_json`` returns None
+        on failure), so ``return_exceptions=True`` degrades a raising surface to that same None rather
+        than letting it take the healthy surface down."""
         ol_n = max(1, (limit + 1) // 2)
         ia_n = max(1, limit // 2)
 
-        ol = await http.aget_json(
-            OL_URL,
-            params={"q": query, "limit": ol_n, "fields": OL_FIELDS},
-            timeout=TIMEOUT,
+        def _settled(surface: str, result: Any) -> Any:
+            """A gathered result -> the value the serial version would have seen (None on failure)."""
+            if isinstance(result, BaseException):
+                logger.debug("books_openlibrary_ia: %s raised: %s", surface, result)
+                return None
+            return result
+
+        ol_res, ia_res = await asyncio.gather(
+            http.aget_json(
+                OL_URL,
+                params={"q": query, "limit": ol_n, "fields": OL_FIELDS},
+                timeout=TIMEOUT,
+            ),
+            http.aget_json(
+                IA_URL,
+                params=[
+                    ("q", f"{query} AND mediatype:texts"),
+                    *[("fl[]", f) for f in IA_FIELDS],
+                    ("rows", ia_n),
+                    ("output", "json"),
+                ],
+                timeout=TIMEOUT,
+            ),
+            return_exceptions=True,
         )
-        ia = await http.aget_json(
-            IA_URL,
-            params=[
-                ("q", f"{query} AND mediatype:texts"),
-                *[("fl[]", f) for f in IA_FIELDS],
-                ("rows", ia_n),
-                ("output", "json"),
-            ],
-            timeout=TIMEOUT,
-        )
+        ol = _settled("openlibrary", ol_res)
+        ia = _settled("internet_archive", ia_res)
         if ol is None and ia is None:
             return None
         return {"ol": ol, "ia": ia, "ol_n": ol_n, "ia_n": ia_n}

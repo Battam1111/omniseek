@@ -10,6 +10,7 @@ section is returned as a separate document.
 
 from __future__ import annotations
 
+import asyncio
 import functools
 import logging
 import re
@@ -113,18 +114,35 @@ class GithubAwesomePhDAdapter:
         return [d for _, d in all_docs[:limit]]
 
     async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async twin of ``search`` (a PURE ADDITION): mirrors it line-for-line, the ONLY
-        change being the per-repo README egress (``self._fetch_readme`` -> ``await self._afetch_readme``,
-        whose cache round-trip + http.aget_text run off/on the loop correctly). The query-term parse,
-        the fixed-repo loop, ``_extract_link_items``, term scoring, doc build and the final sort are
-        PURE CPU and stay ON the loop byte-identical to ``search``, so async and sync can never drift."""
+        """Native-async twin of ``search``, with the six READMEs fetched CONCURRENTLY (2026-08-30).
+
+        The per-repo egress is ``self._afetch_readme`` (its cache round-trip + http.aget_text run
+        off/on the loop correctly). Everything after the fetch is the same PURE CPU code as
+        ``search``, in the same AWESOME_REPOS order: ``_extract_link_items``, term scoring, doc
+        build, and the final sort, which is stable and therefore ties back to that order. The six
+        repos are independent README files and no repo's scoring reads another's text, so awaiting
+        them one after another only added six round-trips together. The 24h disk cache means only
+        a cold start ever paid the full price, which is why this one ranked below v2ex.
+
+        The main-then-master fallback INSIDE ``_afetch_readme`` stays SERIAL: master is only tried
+        because main came back empty, which is a real dependency, not a fan-out."""
         query_terms = [t.lower() for t in re.findall(r"\w+", query) if len(t) > 1]
         if not query_terms:
             return []
 
+        settled = await asyncio.gather(
+            *(self._afetch_readme(owner, repo) for owner, repo, _ in AWESOME_REPOS),
+            return_exceptions=True,
+        )
+
         all_docs: list[tuple[int, Document]] = []
-        for owner, repo, desc in AWESOME_REPOS:
-            readme = await self._afetch_readme(owner, repo)
+        for (owner, repo, desc), readme in zip(AWESOME_REPOS, settled):
+            if isinstance(readme, BaseException):
+                # http.aget_text returns falsy on failure, so the serial loop could not raise
+                # here; one unreadable repo must not cost the other five, which is exactly what
+                # the serial loop's "no README -> skip it" branch already guaranteed.
+                logger.warning("github_awesome_phd: %s/%s failed: %s", owner, repo, readme)
+                continue
             if not readme:
                 continue
             # Split README into bullet sections; each bullet often = one resource

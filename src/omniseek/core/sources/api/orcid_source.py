@@ -35,12 +35,16 @@ relevance order for the name and the fan-out preserves it.
 
 from __future__ import annotations
 
+import asyncio
+import logging
 from datetime import datetime
 from typing import Any, Optional
 
 from omniseek.core import http
 from omniseek.core.normalize import Document, jsonsafe, mk_signal
 from omniseek.core.sources.scrape._base import BaseScrapeAdapter
+
+logger = logging.getLogger(__name__)
 
 API_BASE = "https://pub.orcid.org/v3.0"
 SEARCH_URL = f"{API_BASE}/expanded-search/"
@@ -97,9 +101,22 @@ class OrcidAdapter(BaseScrapeAdapter):
         return pairs
 
     async def _araw_fetch(self, query: str, limit: int) -> Optional[list[tuple[str, dict]]]:
-        """Async twin of _raw_fetch: BYTE-FAITHFUL mirror (same URLs, params, headers, timeouts,
-        control flow, fan-out cap, None-return contract) with the two shared-http egress calls swapped
-        for their async twins (http.get_json -> await http.aget_json). Same per-record miss-skip."""
+        """Async twin of _raw_fetch: same URLs, params, headers, timeouts, fan-out cap and
+        None-return contract, with the per-iD /record GETs run CONCURRENTLY rather than one at a time.
+
+        The expanded-search stays FIRST and alone: its iD list is a REAL dependency, nothing can be
+        fetched before it lands. Only the fan-out over those mutually independent iDs is parallel,
+        which is where the whole cost was (up to _MAX_FANOUT records, latencies summed).
+
+        Why BATCHES and not one gather over every candidate: the fan-out cap counts SUCCESSES, not
+        attempts (a record that fails to fetch is skipped and the walk moves on to the next
+        candidate). One gather over all candidates would fire requests the serial version never
+        would. Asking for exactly the shortfall each round preserves BOTH numbers: the same count of
+        records returned, and the same total number of requests, since serial and batched alike stop
+        at the attempt that fills the cap. Only the concurrency inside a round is new.
+
+        Order and de-duplication are untouched: candidates are pre-filtered in expanded-search order
+        with the SAME first-wins dedup the serial loop did, and pairs are appended in that order."""
         search = await http.aget_json(SEARCH_URL, params={"q": query},
                                       headers=_ACCEPT, timeout=15)
         if not isinstance(search, dict):
@@ -109,21 +126,39 @@ class OrcidAdapter(BaseScrapeAdapter):
             return None
 
         n = max(1, min(int(limit), _MAX_FANOUT))
-        pairs: list[tuple[str, dict]] = []
+        # Pure-CPU pre-pass: the eligible iDs in server order, first-wins deduped — exactly the
+        # sequence the serial loop walked, just computed before any egress instead of during it.
+        candidates: list[str] = []
         seen: set[str] = set()
         for item in results:
-            if len(pairs) >= n:
-                break
             if not isinstance(item, dict):
                 continue
             oid = item.get("orcid-id")
             if not isinstance(oid, str) or not oid or oid in seen:
                 continue
             seen.add(oid)
-            record = await http.aget_json(f"{API_BASE}/{oid}/record",
-                                          headers=_ACCEPT, timeout=15)
-            if isinstance(record, dict):
-                pairs.append((oid, record))
+            candidates.append(oid)
+
+        async def _one(oid: str) -> Any:
+            return await http.aget_json(f"{API_BASE}/{oid}/record",
+                                        headers=_ACCEPT, timeout=15)
+
+        pairs: list[tuple[str, dict]] = []
+        need = n
+        i = 0
+        while need > 0 and i < len(candidates):
+            batch = candidates[i:i + need]
+            i += len(batch)
+            settled = await asyncio.gather(*(_one(o) for o in batch), return_exceptions=True)
+            for oid, record in zip(batch, settled):
+                if isinstance(record, BaseException):
+                    # A record that cannot be fetched is a MISS, exactly like a non-dict body:
+                    # skipped, never fatal to the batch (the module header's stated contract).
+                    logger.debug("orcid: record %s raised: %s", oid, record)
+                    continue
+                if isinstance(record, dict):
+                    pairs.append((oid, record))
+                    need -= 1
         return pairs
 
     def _to_documents(self, raw: Any, query: str, limit: int) -> list[Document]:

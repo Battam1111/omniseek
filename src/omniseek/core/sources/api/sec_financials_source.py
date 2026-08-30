@@ -29,6 +29,7 @@ sent via the http helper's headers= merge. A single lookup makes at most 3 reque
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 import threading
@@ -433,19 +434,38 @@ class SECFinancialsAdapter:
         )
 
     async def _abuild_doc(self, ident: dict) -> Optional[Document]:
-        """Async twin of ``_build_doc``: BYTE-FAITHFUL mirror. The ONLY change is the two
-        shared-http egress calls swap to their async twins (``http.get_json`` ->
-        ``await http.aget_json``, same URLs/headers/timeouts, mirroring BOTH the submissions and the
-        ~4MB companyfacts GET). Everything after the fetch — the both-None guard, the fundamentals
-        walk (``_latest_fact``/``_fmt_usd``/``mk_signal``), ``_recent_filings`` (pure CPU, no egress),
-        and the ``Document`` assembly — is PURE CPU and stays ON the loop, byte-identical to
-        ``_build_doc``."""
+        """Async twin of ``_build_doc``: same URLs/headers/timeouts and the same both-None guard,
+        with the two egress calls swapped to their async twins AND run CONCURRENTLY.
+
+        submissions and companyfacts are two unrelated endpoints on ``data.sec.gov`` that share
+        nothing: line ~449's ``if sub is None and facts is None`` is the proof that neither feeds the
+        other. Awaiting them one after the other made this lookup cost their SUM, and the second is
+        the expensive one (~4MB, its own ``FACTS_TIMEOUT`` of 30s against the other's 20s), so the
+        wall clock is now the SLOWER of the two rather than the total. Two concurrent requests stays
+        far inside SEC fair-access (the header note's "at most 3 requests per lookup" is unchanged —
+        concurrency does not add a request).
+
+        Everything after the fetch — the both-None guard, the fundamentals walk
+        (``_latest_fact``/``_fmt_usd``/``mk_signal``), ``_recent_filings`` (pure CPU, no egress), and
+        the ``Document`` assembly — is PURE CPU and stays ON the loop, byte-identical to
+        ``_build_doc``. An endpoint that RAISES is folded to None, i.e. treated as the failure the
+        both-None guard already handles, so one exploding endpoint no longer discards the other's
+        answer."""
         cik = ident["cik"]
         ticker = ident.get("ticker") or ""
         title = ident.get("title") or ticker or cik
 
-        sub = await http.aget_json(SUBMISSIONS_URL.format(cik=cik), headers=SEC_HEADERS, timeout=TIMEOUT)
-        facts = await http.aget_json(COMPANYFACTS_URL.format(cik=cik), headers=SEC_HEADERS, timeout=FACTS_TIMEOUT)
+        sub, facts = await asyncio.gather(
+            http.aget_json(SUBMISSIONS_URL.format(cik=cik), headers=SEC_HEADERS, timeout=TIMEOUT),
+            http.aget_json(COMPANYFACTS_URL.format(cik=cik), headers=SEC_HEADERS, timeout=FACTS_TIMEOUT),
+            return_exceptions=True,
+        )
+        if isinstance(sub, BaseException):
+            logger.warning("sec_financials: submissions CIK%s raised: %s", cik, sub)
+            sub = None
+        if isinstance(facts, BaseException):
+            logger.warning("sec_financials: companyfacts CIK%s raised: %s", cik, facts)
+            facts = None
         if sub is None and facts is None:
             return None  # both endpoints failed → nothing to report, do not fabricate
 

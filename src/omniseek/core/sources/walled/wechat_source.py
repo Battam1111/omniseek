@@ -20,6 +20,8 @@ from __future__ import annotations
 
 import logging
 import re
+from concurrent.futures import ThreadPoolExecutor
+from contextvars import copy_context
 from datetime import datetime
 from typing import Optional
 from urllib.parse import urlparse, parse_qs
@@ -239,6 +241,22 @@ class WechatAdapter:
         AI accounts (hardcoded defaults), plus any user-added feeds in
         ~/.omniseek/credentials/wechat.json (wechat2rss extras OR wewe-rss
         self-hosted).
+
+        The feeds are pulled CONCURRENTLY. They are independent documents, and once an operator
+        adds a self-hosted wewe-rss base they are not even on the same host as the wechat2rss
+        defaults, so a serial loop made this drill cost the SUM of every feed. There is no asyncio
+        here (this source is sync-only, it has no ``asearch`` twin), so the fan-out is a thread pool,
+        the same shape gov_open_data and feishu_jobs use, and the same one the shared RSS layer
+        already applies to its own feed set.
+
+        Each task runs under a COPIED contextvars Context (the house pattern): the per-request cache
+        flags (fresh / cache_only) ride contextvars, so a bare thread would silently drop them and
+        serve stale cache to a request that explicitly asked for fresh data.
+
+        Order is preserved: ``ex.map`` keeps input order, so entries still enter the pool feed by
+        feed in ``_all_feeds()`` order, which is what the STABLE score sort below falls back on for
+        ties. A feed that fails is still skipped with its partial entries kept, and an
+        every-feed-failed run still falls through to the sogou breadth merge exactly as before.
         """
         key = cache.make_key("wechat", "search", query, limit)
         cached = cache.get(key)
@@ -250,8 +268,9 @@ class WechatAdapter:
 
         query_terms = [t.lower() for t in re.findall(r"\w+", query) if len(t) > 1]
 
-        all_entries: list[tuple[str, str, dict]] = []
-        for account_name, feed_url in self._all_feeds():
+        def _one(feed: tuple[str, str]) -> list[tuple[str, str, dict]]:
+            account_name, feed_url = feed
+            out: list[tuple[str, str, dict]] = []
             try:
                 resp = httpx.get(
                     feed_url,
@@ -272,9 +291,18 @@ class WechatAdapter:
                     if real_title:
                         account_name = real_title
                 for e in parsed.entries:
-                    all_entries.append((account_name, feed_url, dict(e)))
+                    out.append((account_name, feed_url, dict(e)))
             except Exception as exc:  # noqa: BLE001
                 logger.debug("WeChat feed %s (%s) failed: %s", account_name, feed_url, exc)
+            return out
+
+        all_entries: list[tuple[str, str, dict]] = []
+        feeds = self._all_feeds()
+        if feeds:
+            contexts = [copy_context() for _ in feeds]
+            with ThreadPoolExecutor(max_workers=min(len(feeds), 8)) as ex:
+                for entries in ex.map(lambda ctx, f: ctx.run(_one, f), contexts, feeds):
+                    all_entries.extend(entries)
 
         # Rank by query-term occurrence in title + summary
         scored: list[tuple[int, str, str, dict]] = []

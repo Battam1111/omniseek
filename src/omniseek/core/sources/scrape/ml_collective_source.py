@@ -17,6 +17,7 @@ newest-first — the same card-aware + date-anchored shape used across the HTML 
 
 from __future__ import annotations
 
+import asyncio
 import datetime
 import functools
 import logging
@@ -229,18 +230,38 @@ class MLCollectiveAdapter:
 
     async def asearch(self, query: str, limit: int = 10) -> list[Document]:
         """Native-async twin of ``search`` (mirrors it line-for-line): the disk cache round-trip goes
-        OFF the loop, the 3 index fetches AWAIT the async ``_ascrape_index`` (fan-out kept SEQUENTIAL so
-        the ``uniq.setdefault`` dedup order is byte-identical to sync), and the pure-CPU keyword filter /
-        newest-first sort / doc build stay ON the loop UNCHANGED. SAME ``"search2"`` cache key as
-        ``search`` so async and sync share the cache."""
+        OFF the loop, the 3 index fetches run CONCURRENTLY through the async ``_ascrape_index``, and the
+        pure-CPU keyword filter / newest-first sort / doc build stay ON the loop UNCHANGED. SAME
+        ``"search2"`` cache key as ``search`` so async and sync share the cache.
+
+        On the dedup order, which this fan-out used to be kept SEQUENTIAL for: the worry was that
+        ``uniq.setdefault`` gives the FIRST index path that claims a URL, so a reordered fan-out would
+        change which path a shared URL is attributed to. Concurrency does not touch that, because the
+        results are REPLAYED into ``uniq`` in ``INDEX_PATHS`` order after the gather, not in completion
+        order. Only the waiting overlaps; the dedup sequence is byte-identical to the serial version and
+        to ``search``. Awaiting three pages of the same static site one after another bought nothing but
+        their summed latency.
+
+        A path failing is already non-fatal (``_ascrape_index`` returns [] when the page does not load),
+        and one path raising no longer takes the other two down with it."""
         key = cache.make_key("ml_collective", "search2", query, limit)
         cached = await anyio.to_thread.run_sync(cache.get_docs, key)  # disk read OFF loop
         if cached is not None:
             return cached
 
+        settled = await asyncio.gather(
+            *(self._ascrape_index(path) for path in INDEX_PATHS),
+            return_exceptions=True,
+        )
         uniq: dict[str, dict] = {}
-        for path in INDEX_PATHS:
-            for it in await self._ascrape_index(path):
+        for path, rows in zip(INDEX_PATHS, settled):  # INDEX_PATHS order, not completion order
+            if isinstance(rows, BaseException):
+                # _ascrape_index degrades to [] on a dead page, so a raise here is unexpected by
+                # construction; skipping just this path matches what the serial loop would have
+                # produced for an index that yielded nothing.
+                logger.debug("ml_collective: index %s raised: %s", path, rows)
+                continue
+            for it in rows:
                 uniq.setdefault(it["url"], it)
         items = list(uniq.values())
 

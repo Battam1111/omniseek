@@ -35,6 +35,7 @@ ranked search re-score across sources when it needs cross-source relevance.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any, Optional
 from urllib.parse import quote
@@ -324,12 +325,31 @@ class WikidataWikipediaAdapter(BaseScrapeAdapter):
     # not in the doc mapper -- there is no doc-layer egress to make async.
     async def _araw_fetch(self, query: str, limit: int) -> Optional[Any]:
         """Async twin of `_raw_fetch`: SAME budget split, SAME both-empty->None contract; the
-        per-record enrichment egress goes native async via the async helper twins below."""
+        per-record enrichment egress goes native async via the async helper twins below.
+
+        The two layers are fetched CONCURRENTLY (2026-08-30). They are DIFFERENT hosts
+        (en.wikipedia.org for the articles, www.wikidata.org for the entities) and neither reads
+        the other's result: the `if not articles and not entities` test below is the only place
+        they meet, and `_to_documents` maps them in two separate passes. Awaiting them one after
+        the other only added their latencies together. Nothing else moved: the payload still
+        carries articles first, one layer failing still degrades to that layer being empty, and
+        both empty still returns None."""
         n_articles = max(1, limit - limit // 2)
         n_entities = max(1, limit // 2)
 
-        articles = await self._afetch_articles(query, n_articles)
-        entities = await self._afetch_entities(query, n_entities)
+        articles, entities = await asyncio.gather(
+            self._afetch_articles(query, n_articles),
+            self._afetch_entities(query, n_entities),
+            return_exceptions=True,
+        )
+        if isinstance(articles, BaseException):
+            # Both helpers already degrade to [] on a request failure, so a raise here is
+            # unexpected by construction. One layer blowing up must not take the other down.
+            logger.debug("wikidata_wikipedia: the article layer raised: %s", articles)
+            articles = []
+        if isinstance(entities, BaseException):
+            logger.debug("wikidata_wikipedia: the entity layer raised: %s", entities)
+            entities = []
 
         if not articles and not entities:
             return None
@@ -337,7 +357,15 @@ class WikidataWikipediaAdapter(BaseScrapeAdapter):
 
     async def _afetch_articles(self, query: str, n: int) -> list[dict]:
         """Async twin of `_fetch_articles`: Action-API search -> per-title REST summary. SAME
-        srlimit, SAME per-title await order, SAME disambiguation drop + skip-on-fail."""
+        srlimit, SAME result order, SAME disambiguation drop + skip-on-fail.
+
+        The per-title summaries are fetched CONCURRENTLY (2026-08-30). The search call still has
+        to come first, because it is what produces the titles, but the titles it hands back are
+        independent of one another: no summary request reads a previous summary. At limit=10 that
+        was five REST round-trips in series behind the search, the longest serial chain in this
+        source. Exactly one summary GET per title, as before, and the results are restored to the
+        search-hit order, which is the relevance order `_to_documents` and every recorded output
+        were built on."""
         search = await http.aget_json(
             WIKI_API,
             params={
@@ -353,18 +381,29 @@ class WikidataWikipediaAdapter(BaseScrapeAdapter):
             return []
         hits = (search.get("query") or {}).get("search") or []
 
-        out: list[dict] = []
-        for hit in hits[:n]:
-            if not isinstance(hit, dict):
-                continue
-            title = hit.get("title")
-            if not title:
-                continue
+        titles = [
+            hit["title"] for hit in hits[:n]
+            if isinstance(hit, dict) and hit.get("title")
+        ]
+
+        async def _summary(title: str) -> Optional[dict]:
             summary = await http.aget_json(
                 WIKI_REST_SUMMARY + quote(title.replace(" ", "_"), safe=""),
                 timeout=TIMEOUT,
             )
             if isinstance(summary, dict) and summary.get("type") != "disambiguation":
+                return summary
+            return None
+
+        settled = await asyncio.gather(*(_summary(t) for t in titles), return_exceptions=True)
+        out: list[dict] = []
+        for title, summary in zip(titles, settled):
+            if isinstance(summary, BaseException):
+                # aget_json returns None on failure, so the serial loop could not raise here.
+                # Swallowing per title keeps the old "a bad title is just skipped" contract.
+                logger.debug("wikidata_wikipedia: summary for %r raised: %s", title, summary)
+                continue
+            if summary is not None:
                 out.append(summary)
         return out
 
