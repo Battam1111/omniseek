@@ -17818,10 +17818,18 @@ _GATE_TIMEOUT_S = 300
 
 _gate_files = sorted((ROOT / "tests").glob("test_*.py"))
 try:
+    # encoding/errors are LOAD-BEARING, not tidiness. text=True decodes with the locale codec,
+    # which on a zh-CN Windows box is cp1252/cp936; the moment any test prints CJK (a docstring,
+    # a subTest label, a 中文 log line) the decode raises INSIDE subprocess's reader thread, and
+    # the caller silently gets returncode=0 with EMPTY stdout and stderr. This gate then reported
+    # "0 tests" and named no failure, which reads as "the suite collected nothing" when the real
+    # story is "the output could not be read back" (diagnosed 2026-08-30; the same run passed
+    # 262 tests when invoked directly). macOS defaults to UTF-8, so the deploy path never saw it.
     _gate_run = _gate_sub.run(
         [sys.executable, "-m", "unittest", "discover", "-s", "tests", "-p", "test_*.py", "-v"],
         cwd=str(ROOT), capture_output=True, text=True, timeout=_GATE_TIMEOUT_S,
-        env={**_gate_os.environ, "PYTHONPATH": str(ROOT / "src")})
+        encoding="utf-8", errors="replace",
+        env={**_gate_os.environ, "PYTHONPATH": str(ROOT / "src"), "PYTHONIOENCODING": "utf-8"})
     _gate_rc = _gate_run.returncode
     _gate_out = (_gate_run.stderr or "") + (_gate_run.stdout or "")
 except _gate_sub.TimeoutExpired as _gate_exc:
