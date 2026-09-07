@@ -115,6 +115,24 @@ class HonestEmptyTests(unittest.TestCase):
             ("blocked", "HTTP 403 Forbidden"),
         )
 
+    def test_health_sweep_never_publishes_a_latency_for_a_skipped_probe(self) -> None:
+        """A skipped probe has no verdict, so it must carry no latency.
+
+        classify_probe maps healthy=None to "skipped", and the row builder used to pass the
+        measured latency straight through. The page validator rejects that combination, so a
+        single such source failed the whole published sweep (seen 2026-08-24 and 2026-09-07).
+        """
+        sweep = _load_script("honest_empty_health_sweep_latency", "health_sweep.py")
+        entry = {"name": "s", "domains": ["general"], "access_tier": "free"}
+
+        skipped = sweep.probe_row(entry, None, "no opinion", 812.0)
+        self.assertEqual(skipped["status"], "skipped")
+        self.assertIsNone(skipped["latency_ms"])
+
+        measured = sweep.probe_row(entry, True, "", 812.0)
+        self.assertEqual(measured["status"], "up")
+        self.assertEqual(measured["latency_ms"], 812.0)
+
     def test_health_summary_and_page_keep_blocked_out_of_down(self) -> None:
         sweep = _load_script("honest_empty_health_sweep_summary", "health_sweep.py")
         page = _load_script("honest_empty_health_page", "gen_health_page.py")

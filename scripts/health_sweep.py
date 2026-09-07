@@ -103,6 +103,23 @@ def _skipped_row(entry: dict, detail: str) -> dict:
     }
 
 
+def probe_row(entry: dict, healthy: Optional[bool], message: object,
+              latency_ms: Optional[float]) -> dict:
+    """Build one measured row.
+
+    A skipped probe carries no verdict (health_check returned None), so whatever time was spent
+    getting there is not a health reading and must not be published as one. The page contract
+    enforces the same invariant, so letting a latency through here fails the whole sweep.
+    """
+    status, detail = classify_probe(healthy, message)
+    return {
+        **_base_row(entry),
+        "status": status,
+        "latency_ms": None if status == "skipped" else latency_ms,
+        "detail": detail,
+    }
+
+
 def sweep_sources(
     catalog: list[dict],
     *,
@@ -161,13 +178,7 @@ def sweep_sources(
             if latency_ms is None and str(message) == BUDGET_DETAIL:
                 rows_by_name[entry["name"]] = _skipped_row(entry, BUDGET_DETAIL)
                 continue
-            status, detail = classify_probe(healthy, message)
-            rows_by_name[entry["name"]] = {
-                **_base_row(entry),
-                "status": status,
-                "latency_ms": latency_ms,
-                "detail": detail,
-            }
+            rows_by_name[entry["name"]] = probe_row(entry, healthy, message, latency_ms)
         for future in unfinished:
             entry = futures[future]
             rows_by_name[entry["name"]] = _skipped_row(entry, BUDGET_DETAIL)
