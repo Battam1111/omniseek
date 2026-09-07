@@ -57,7 +57,7 @@ jobs:
             echo "exists=false" >> "$GITHUB_OUTPUT"
             echo "Registry does not contain ${server_name} version ${server_version}."
           fi
-      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-qemu-action@v4
         if: steps.registry.outputs.exists != 'true'
       - uses: docker/setup-buildx-action@v3
         if: steps.registry.outputs.exists != 'true'
