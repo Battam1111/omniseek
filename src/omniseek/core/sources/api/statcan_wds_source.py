@@ -248,9 +248,15 @@ class StatCanWdsAdapter(BaseAPIAdapter):
         )
 
     def health_check(self) -> tuple[bool, str]:
-        """POST-only endpoint: probe vector 1 (population) for the latest period; SUCCESS = alive."""
+        """POST-only endpoint: probe vector 1 (population) for the latest period; SUCCESS = alive.
+
+        Same 20s budget the fetch paths use, not a tighter one. WDS is genuinely slow (12.2s for a
+        plain GET, measured 2026-09-09), so a 10s probe declared the source dead while the data path
+        it certifies would have waited and succeeded. A probe stricter than the operation it stands
+        for does not measure the source, it measures the probe.
+        """
         try:
-            raw = http.post_json(DATA_URL, json=[{"vectorId": 1, "latestN": 1}], timeout=10)
+            raw = http.post_json(DATA_URL, json=[{"vectorId": 1, "latestN": 1}], timeout=20)
         except Exception as exc:  # noqa: BLE001
             return False, f"{type(exc).__name__}: {str(exc)[:80]}"
         if isinstance(raw, list) and raw and isinstance(raw[0], dict) and raw[0].get("status") == "SUCCESS":

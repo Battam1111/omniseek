@@ -60,7 +60,7 @@ _CODE_EXTS = ("py", "pyi", "ts", "tsx", "js", "jsx", "mjs", "cjs", "rs", "go", "
               "c", "h", "cpp", "cc", "hpp", "cs", "rb", "php", "swift", "scala", "lua", "r",
               "sh", "bash", "zsh", "sql", "toml", "cfg", "ini", "conf", "yaml", "yml",
               "json", "xml", "html", "css", "tex", "rst", "dockerfile", "makefile")
-_SUPPORTED = ("pptx", "docx", "xlsx", "pdf", "txt", "md", "markdown", "csv") + _CODE_EXTS
+_SUPPORTED = ("pptx", "docx", "xlsx", "pdf", "txt", "md", "markdown", "csv", "htm") + _CODE_EXTS
 _MAX_DOWNLOAD = 100 * 1024 * 1024   # 100MB URL-download cap
 _MAX_TEXT_FILE = 2 * 1024 * 1024    # raw txt/md/csv read cap
 _XLSX_MAX_ROWS = 300                # per sheet — honest truncation, not silence
@@ -301,11 +301,35 @@ def _read_txt(path: Path, export_dir: Optional[Path]) -> tuple[str, list[dict], 
     return path.name, [_sec(path.name, [raw.decode("utf-8", "replace")], 0)], []
 
 
+def _read_html(path: Path, export_dir: Optional[Path]) -> tuple[str, list[dict], list[dict]]:
+    """A local HTML file is read as its CONTENT, not as its markup.
+
+    It goes through the same extractor the URL branch uses (web_fallback._extract_text: script /
+    style stripped, <main>/<article>/<body> preferred), so a page on disk reads exactly like the
+    same page fetched. Raw markup is left to a plain file read: for a real document the tags are
+    almost all of the bytes and none of the meaning (a slide deck is mostly CSS and SVG). When the
+    extractor is unavailable or the file carries no extractable text, the markup is returned
+    verbatim rather than an empty body, and the section label says which happened.
+    """
+    raw = path.read_bytes()[:_MAX_TEXT_FILE].decode("utf-8", "replace")
+    try:
+        from omniseek.core.web_fallback import _extract_text
+        title, text = _extract_text(raw)
+    except Exception as exc:  # noqa: BLE001: a missing parser degrades to markup, never raises
+        logger.warning("docreader: html extraction unavailable for %s: %s", path.name, exc)
+        title, text = "", ""
+    if not (text or "").strip():
+        return path.name, [_sec(f"{path.name} (raw markup: no extractable text)", [raw], 0)], []
+    return (title or path.name), [_sec(title or path.name, [text], 0)], []
+
+
 _READERS = {"pptx": _read_pptx, "docx": _read_docx, "xlsx": _read_xlsx,
             "pdf": _read_pdf, "txt": _read_txt, "md": _read_txt,
             "markdown": _read_txt, "csv": _read_txt}
 # Code/config files reuse the plain-text reader (code IS text — same windowing, no parser).
 _READERS.update({ext: _read_txt for ext in _CODE_EXTS})
+# html/htm override that blanket registration: html is a DOCUMENT, not source to be echoed back.
+_READERS.update({"html": _read_html, "htm": _read_html})
 
 
 def _cd_filename(content_disposition: Optional[str]) -> Optional[str]:

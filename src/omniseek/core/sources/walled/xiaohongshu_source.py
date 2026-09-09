@@ -961,7 +961,7 @@ class XiaohongshuAdapter:
         """
         if _SEALED:
             return False, "SEALED (小红书封号风险): disabled until CDP is undetectable"
-        cdp_ok, cdp_msg = cdp_health(_XHS_CDP_URL)
+        cdp_ok, cdp_msg = cdp_health(_XHS_CDP_URL, ensure=True)
         if not cdp_ok:
             return False, f"CDP not reachable: {cdp_msg}"
         return True, "ok (CDP reachable; named search/read is the content-capability probe)"

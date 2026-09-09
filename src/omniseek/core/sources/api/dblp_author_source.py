@@ -148,7 +148,20 @@ class DBLPAuthorAdapter(BaseScrapeAdapter):
             raw = http.get_json(SEARCH_URL, params={"q": "Bengio", "format": "json", "h": 1}, timeout=15)
         except Exception as exc:  # noqa: BLE001
             return False, f"{type(exc).__name__}: {str(exc)[:80]}"
-        ok = isinstance(raw, dict) and isinstance(raw.get("result"), dict)
-        return ok, "OK" if ok else "no result envelope"
+        if isinstance(raw, dict) and isinstance(raw.get("result"), dict):
+            return True, "OK"
+        # "no result envelope" hid WHICH failure this was. dblp fronts the API with an Anubis
+        # proof-of-work bot wall that answers 200 with a challenge PAGE, and it trips on request
+        # RATE, so the same endpoint serves clean JSON minutes later. Naming it separates a wall
+        # (wait, and do not hammer: no TLS tier gets through a JS proof-of-work) from a real schema
+        # change (fix the parser). Measured 2026-09-09: challenge for plain httpx, for a browser-UA
+        # curl and for the curl_cffi Chrome tier alike, minutes after the same URL returned JSON.
+        if raw is None:
+            body = http.get_text(SEARCH_URL, params={"q": "Bengio", "format": "json", "h": 1},
+                                 timeout=15) or ""
+            if "not a bot" in body or "<!doctype html" in body[:200].lower():
+                return False, "bot wall (dblp Anubis challenge page, not JSON) -- rate-triggered, retries later"
+            return False, "request failed or returned no body (see the http.get diag note)"
+        return False, f"unexpected shape: {type(raw).__name__} without a 'result' object"
 
 # Registration is automatic via BaseScrapeAdapter.__init_subclass__ (no module-tail ceremony).

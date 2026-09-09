@@ -620,10 +620,26 @@ def wait_through_cloudflare(page, timeout: float = 20.0) -> bool:
     return False
 
 
-def cdp_health(cdp_url: str = DEFAULT_CDP_URL) -> tuple[bool, str]:
-    """Quick connectivity check to the CDP Chrome (defaults to the shared 9222)."""
+def cdp_health(cdp_url: str = DEFAULT_CDP_URL, *, ensure: bool = False) -> tuple[bool, str]:
+    """Quick connectivity check to the CDP Chrome (defaults to the shared 9222).
+
+    ``ensure`` picks WHICH question is being asked, and the two callers want opposite answers:
+
+    * ``ensure=False`` (default) asks "is this browser running RIGHT NOW". The infra doctor and the
+      keepalive need exactly that, and must NOT start anything: a probe that starts browsers would
+      fight the reaper, which stops idle ones every 10 minutes by design.
+    * ``ensure=True`` asks "would a real call reach this browser", which is what a SOURCE health
+      check reports on. ``cdp_call`` starts the browser on demand (~1s), so without this a source
+      whose browser is merely idle reads as DOWN: an unobserved state reported as a negative. That
+      false verdict is what kept douyin at a 53-run failure streak while its searches worked fine.
+    """
     import httpx
 
+    if ensure:
+        try:
+            ensure_browser(cdp_url)
+        except Exception as exc:  # noqa: BLE001: a failed start IS the health answer, not a crash
+            return False, f"browser not running and could not be started: {type(exc).__name__}: {exc}"
     try:
         resp = httpx.get(f"{cdp_url}/json/version", timeout=3)
         if resp.status_code == 200:

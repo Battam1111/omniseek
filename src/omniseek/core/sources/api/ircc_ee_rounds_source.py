@@ -91,7 +91,7 @@ class IRCCEERoundsAdapter:
         # liveness + whatever the cache holds is an honest signal.
         try:
             from omniseek.core.sources.walled._cdp import cdp_health
-            alive, msg = cdp_health()
+            alive, msg = cdp_health(ensure=True)
         except Exception as exc:  # noqa: BLE001
             return False, f"CDP unavailable: {exc}"
         if not alive:

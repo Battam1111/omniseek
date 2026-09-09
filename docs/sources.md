@@ -138,7 +138,7 @@ Generated from omniseek 0.2.0: 218 live sources across 32 domains.
 ## news (13)
 
 - **academic_ai_labs** `free` `stream`: Top academic AI lab blogs: Stanford CRFM / Berkeley BAIR / MIT CSAIL. Methodology-heavy counterpart to frontier_labs (industry).
-- **ai_newsletters** `free` `stream`: AI newsletter / long-form recap matrix: The Sequence / Last Week in AI / The Gradient / Nicholas Carlini. Periodical ML research + security digest.
+- **ai_newsletters** `free` `stream`: AI newsletter / long-form recap matrix: The Sequence / Last Week in AI / The Gradient / Nicholas Carlini / AI Weekly. Periodical ML research + security digest.
 - **canada_ai_research** `free` `stream`: 加拿大 AI 研究所 + tech ecosystem: Vector / CIFAR / UWaterloo CS / Layer 6 / BetaKit / Globe and Mail Tech / Mila / UofT Schwartz Reisman (Amii 经 scrape_js_sites; IVADO 经 ivado_news 源)
 - **frontier_labs** `free` `stream`: Frontier AI research labs: Anthropic / DeepMind / Hugging Face / OpenAI / Mistral / Meta FAIR / Microsoft Research / MSRA / Google Research / Apple ML / Ai2 / Sakana / EleutherAI / Character.AI / PyTorch
 - **gov_policy** `free` `explicit-only` `lookup`: 中国政府网 政策文件库 (gov.cn): the AUTHORITATIVE 国务院/国办 policy-document corpus (法规/条例/通知/国令), keyword search with each hit linking the FULL policy text on gov.cn (omniseek_read it). Google can't return this faceted policy index keyed to 文号 + issuing-org + date. No login. Reach for Chinese central-government ...

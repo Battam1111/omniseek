@@ -74,8 +74,10 @@ TERMINAL_STATES = frozenset({"rejected", "redline_blocked", "parked_p2", "probe_
 #   awaiting_verdict -> admitted | watching | rejected | error
 #   admitted -> owner_review        (P1: an admit ALWAYS stages to the operator; no live apply)
 #   watching -> probed                (re-probe on cadence: P4)
-#   error -> probed                   (a transient probe exception must NOT strand a candidate
-#                                       forever: the loss-of-work fix)
+#   parked_p2 -> awaiting_verdict | rejected   (revive on a render, or close it unrendered)
+#   error -> probed | awaiting_verdict | redline_blocked | parked_p2
+#                                     (a re-probe lands where a fresh probe lands; a transient
+#                                      probe exception must NOT strand a candidate forever)
 # "any state -> error" is allowed (a probe/fetch threw): recorded, never silently dropped.
 ALLOWED_TRANSITIONS = frozenset({
     ("new", "probed"),
@@ -108,12 +110,25 @@ ALLOWED_TRANSITIONS = frozenset({
     ("parked_p2", "error"),
     # P2 wall-aware probe: a parked_p2 candidate (structurally invisible to the plain-HTTP probe)
     # is REVIVED to awaiting_verdict once the jailed-browser render (mode_probe walled=True) surfaces
-    # its real content. parked_p2 stays the terminal anti-rediscovery marker (its canonical host joins
+    # its real content. parked_p2 stays the anti-rediscovery marker (its canonical host joins
     # tried_hosts so discovery never re-ADDS it); this edge revives the EXISTING row, not a re-find.
     ("parked_p2", "awaiting_verdict"),
+    # A parked row is HELD, not closed: it waits for a render that may never be worth spending.
+    # Without a close edge the agent cannot record "I read this, it is not worth a render" and the
+    # row sits looking pending forever, inviting someone to burn a jailed render on known junk.
+    # Rejecting is the agent's verdict to make (the razor), so parked_p2 gets the same closing edge
+    # awaiting_verdict has. Admitting from parked stays illegal: nothing was ever surfaced to judge.
+    ("parked_p2", "rejected"),
     ("rejected", "error"),
-    # error recovery: a re-probe lifts a stranded candidate back into the pipeline.
+    # error recovery: a re-probe lifts a stranded candidate back into the pipeline. The probe step
+    # is atomic (mode_probe + build_packet), so it LANDS on whatever a fresh probe would land on,
+    # never on the intermediate "probed". Enumerating only ("error", "probed") made the recovery
+    # edge unreachable: every re-probe of a stranded candidate raised on the transition, so the
+    # loss-of-work fix never fired (found 2026-09-07 while clearing twelve stranded rows).
     ("error", "probed"),
+    ("error", "awaiting_verdict"),
+    ("error", "redline_blocked"),
+    ("error", "parked_p2"),
     # P4 probe_dead (Attack-4): after K consecutive probe failures a candidate dies to the
     # terminal probe_dead state (NOT rejected: no agent judged it). Reachable from error (the
     # K-th retry) and directly from new/probed (the K-th attempt was made in that state). Like the

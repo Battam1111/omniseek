@@ -197,6 +197,21 @@ def _health_probe(adapter) -> tuple[Optional[bool], str]:
     return (None if ok is None else False), str(msg)
 
 
+# "They refuse us" is not "we are broken", and the two were indistinguishable in the alert. A 403
+# from a WAF, a rate-ban, or a proof-of-work bot wall is the far end's decision: no code change here
+# fixes it, and reading it as a defect sends the reader hunting through our own adapter. The public
+# health page has counted `blocked` apart from `down` since 2026-08-18; the internal watchdog had
+# not. Measured 2026-09-09: zenodo "restricted due to unusual traffic from your network", cifar.ca
+# behind Sucuri, dblp behind an Anubis proof-of-work wall, all reported exactly like a real outage.
+_REFUSED_MARKERS = ("403", "401", "forbidden", "unusual traffic", "bot wall", "not a bot",
+                    "captcha", "access denied", "rate limit", "too many requests")
+
+
+def _is_refused(msg: object) -> bool:
+    """True when a health message says the FAR END turned us away rather than that WE broke."""
+    return any(m in str(msg or "").lower() for m in _REFUSED_MARKERS)
+
+
 def _health_track(name: str, ok: Optional[bool], msg: str, fails: dict, alerts: dict,
                   newly_down: list, recovered: list) -> None:
     """Shared consecutive-fail / recovery bookkeeping for one probed entity (cron_watchdog._track).
@@ -373,14 +388,23 @@ def run_source_health(scope: str = "all") -> dict:
     newly_down: list[tuple[str, str]] = []
     recovered: list[str] = []
     probed = noncdp + cdp
+    # A RETIRED source is parked on purpose (the curator's reversible retire overlay), so its probe
+    # failing is the expected state, not news. Counting it as a failure is how sg_immigration, dead
+    # upstream and retired for it on 2026-07-10, kept reporting as a broken source two months later.
+    # It is still PROBED rather than skipped: its retire note asks to roll back if the feeds come
+    # back, and that signal only exists if someone keeps looking.
+    retired = {n for n in probed if fetcher.retired_reason(fetcher.get_adapter(n))}
     for n in probed:
         ok, msg = results[n]
+        if n in retired:
+            continue  # no fail streak, no alarm; the alive-again transition is handled below
         _health_track(n, ok, msg, fails, alerts, newly_down, recovered)
     for label, (ok, msg) in infra.items():
         _health_track(f"_cdp:{label}", ok, msg, fails, alerts, newly_down, recovered)
 
     if newly_down:
-        body = "\n".join(f"- {n}: {msg[:48]}" for n, msg in newly_down)
+        body = "\n".join(f"- {n}{' [对方拒绝]' if _is_refused(msg) else ''}: {msg[:48]}"
+                         for n, msg in newly_down)
         _alert(f"源故障 · {len(newly_down)}", body)
         pushed += 1
     if recovered:
@@ -408,6 +432,29 @@ def run_source_health(scope: str = "all") -> dict:
     # keeps what it could not see.
     state["degraded"] = sorted(degraded_now if full
                                else (prev_degraded - set(probed)) | degraded_now)
+
+    # REFUSED set, same scope rule as `degraded`: which of the failing sources are failing because
+    # the far end turned us away. Purely additive bookkeeping (the fail streaks and the alert
+    # trigger are untouched, since a refused source IS unavailable), so the reader can tell at a
+    # glance which alarms are ours to fix and which are somebody else's decision.
+    refused_now = {n for n in probed if results[n][0] is False and _is_refused(results[n][1])}
+    prev_refused = set(state.get("refused", []))
+    state["refused"] = sorted(refused_now if full
+                              else (prev_refused - set(probed)) | refused_now)
+
+    # A retired source that answers again is the ROLLBACK signal its retire note asks for, and it is
+    # the only reason to keep probing one at all. Alert on the transition once, the same shape as
+    # 源降级: silence when it goes back to failing, so a flapping upstream cannot nag.
+    alive_now = {n for n in retired if results[n][0] is True}
+    prev_alive = set(state.get("retired_alive", []))
+    newly_alive = sorted(alive_now - prev_alive)
+    if newly_alive:
+        _alert(f"已退役源复活 · {len(newly_alive)}",
+               "退役后重新可用,可考虑回滚退役:\n"
+               + "\n".join(f"- {n}: {results[n][1][:56]}" for n in newly_alive))
+        pushed += 1
+    state["retired_alive"] = sorted(alive_now if full
+                                    else (prev_alive - set(probed)) | alive_now)
 
     state["fails"] = fails
     state["_alerts"] = alerts

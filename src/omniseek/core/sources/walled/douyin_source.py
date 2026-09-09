@@ -232,7 +232,7 @@ class DouyinAdapter(BaseCDPAdapter):
         un-logged-in session reports False with the VNC fix, exactly the post-deploy state until
         the operator scan-logs a 小号."""
         from omniseek.core.sources.walled._cdp import cdp_health
-        ok, msg = cdp_health(self.cdp_url)
+        ok, msg = cdp_health(self.cdp_url, ensure=True)
         if not ok:
             return False, f"CDP 9225 down: {msg} (抖音 Chrome — launchd com.omniseek.cdp.douyin)"
         try:

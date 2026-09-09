@@ -957,11 +957,16 @@ def omniseek_institution_cohort(institution: str, concept: str = "", year_from: 
 # Shared routing test: is a target a DOCUMENT FILE (local path or a document-extension URL)?
 # Used by omniseek_read (URL body vs document body) and omniseek_view (kind="auto" document branch).
 _DOC_EXTS = (".pdf", ".pptx", ".docx", ".xlsx", ".txt", ".md", ".csv")
+# LOCAL-ONLY document extensions. A .html URL is a WEB PAGE and has to stay on the URL branch,
+# where the adapters and the fetch live; only a path names a file the document reader can open.
+_LOCAL_DOC_EXTS = (".html", ".htm")
 
 
 def _is_document_target(target: str) -> bool:
     """True when target is a local filesystem path OR a URL ending in a document extension
-    (.pdf/.pptx/.docx/.xlsx/.txt/.md/.csv, case-insensitive, a trailing ?query is tolerated)."""
+    (.pdf/.pptx/.docx/.xlsx/.txt/.md/.csv, case-insensitive, a trailing ?query is tolerated).
+    A local path additionally counts when it ends in .html/.htm, which are documents on disk but
+    web pages over http."""
     t = (target or "").strip()
     if not t:
         return False
@@ -969,8 +974,13 @@ def _is_document_target(target: str) -> bool:
     path_part = t.split("?", 1)[0].split("#", 1)[0].rstrip().lower()
     if path_part.endswith(_DOC_EXTS):
         return True
-    # A local filesystem path (no URL scheme) that actually exists on OmniSeek host.
+    # A local filesystem path (no URL scheme).
     if "://" not in t:
+        # Claim .html/.htm by NAME, not by existence: a path that does not resolve here still
+        # belongs to the document branch, which answers with the reason (outside the allowed
+        # roots, no such file). Falling through to the URL branch made those reads fail silently.
+        if path_part.endswith(_LOCAL_DOC_EXTS):
+            return True
         import os
         if os.path.exists(os.path.expanduser(t)):
             return True
@@ -985,7 +995,9 @@ def omniseek_read(target: str, start_char: LenientInt = 0, max_chars: LenientInt
 
     ROUTING: if ``target`` is a local filesystem path OR ends with a document extension
     (.pdf / .pptx / .docx / .xlsx / .txt / .md / .csv, case-insensitive, a ?query is tolerated) it
-    routes to the DOCUMENT reader (below); otherwise it routes to the URL reader. ``start_char`` /
+    routes to the DOCUMENT reader (below); otherwise it routes to the URL reader. A LOCAL path
+    ending in .html / .htm also routes to the document reader, which returns the page's extracted
+    text; an http(s) .html URL stays on the URL branch, where the adapters live. ``start_char`` /
     ``max_chars`` window the body on BOTH branches (see below); ``export_media`` / ``ocr`` apply only
     to the document branch (a URL read has no image-extraction path) and are IGNORED on the URL branch.
 

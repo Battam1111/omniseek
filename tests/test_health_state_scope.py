@@ -32,6 +32,8 @@ DECLARED = {
     "last_status": "per-source, scope-aware: rebuilt only on a full run, merged on the fast lane",
     "degraded":    "per-source, scope-aware: rebuilt only on a full run, merged on the fast lane",
     "unmeasured":  "per-source, scope-aware: rebuilt only on a full run, merged on the fast lane",
+    "refused":     "per-source, scope-aware: rebuilt only on a full run, merged on the fast lane",
+    "retired_alive": "per-source, scope-aware: rebuilt only on a full run, merged on the fast lane",
 }
 
 # The ones REBUILT from this run's observations, so each must be gated on `full`.
@@ -39,7 +41,12 @@ DECLARED = {
 # is a third state beside healthy and failing. It is exactly as scope-sensitive as the other two, and
 # for the same reason: a fast lane that rebuilt it from scratch would declare every CDP source
 # measured-and-fine purely because it never looked at them.
-MUST_BE_FULL_GATED = ("last_status", "degraded", "unmeasured")
+# `refused` joined them on 2026-09-09: it names the failing sources whose failure is the FAR END
+# turning us away (403 / WAF / bot wall) rather than a defect here. It is rebuilt from this run's
+# observations exactly like `degraded`, so a fast lane that rebuilt it wholesale would drop every
+# CDP source out of it and re-add them on the next daily run, which is the same recurring-lie shape
+# this file was written to stop.
+MUST_BE_FULL_GATED = ("last_status", "degraded", "unmeasured", "refused", "retired_alive")
 
 
 class HealthStateScopeTests(unittest.TestCase):

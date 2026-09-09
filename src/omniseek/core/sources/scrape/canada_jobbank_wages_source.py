@@ -31,8 +31,6 @@ import logging
 import re
 from typing import Any, Optional
 
-import httpx
-
 from omniseek.core import http
 from omniseek.core.normalize import Document, jsonsafe, mk_signal
 from omniseek.core.sources.scrape._base import BaseScrapeAdapter
@@ -252,13 +250,14 @@ class CanadaJobBankWagesAdapter(BaseScrapeAdapter):
             logger.info("canada_jobbank_wages: no occupation match for %r", query)
             return None
         url = PAGE_URL.format(cid=resolved["concordance_id"])
-        try:
-            r = httpx.get(url, headers=HEADERS, timeout=TIMEOUT, follow_redirects=True)
-            r.raise_for_status()
-        except Exception as exc:  # noqa: BLE001 - failure -> None -> [] (the contract)
-            logger.warning("canada_jobbank_wages: wage page fetch failed (%s): %s", url, exc)
-            return None
-        resolved["html"] = r.text
+        # The shared helper, not a bare httpx.get: this host is one the deployment's egress mangles
+        # the openssl handshake to (SSL-EOF through httpx, HTTP 200 through curl seconds later), and
+        # only the shared path carries the libcurl fallback, the SSRF guard and the drill diagnostic.
+        # This makes the sync leg match the async twin below, which already routes through it.
+        html = http.get_text(url, headers=HEADERS, timeout=TIMEOUT)
+        if html is None:
+            return None  # wage page fetch failed (get_text logged + diag.note'd); -> None -> []
+        resolved["html"] = html
         return resolved
 
     async def _araw_fetch(self, query: str, limit: int) -> Optional[dict]:
@@ -311,13 +310,15 @@ class CanadaJobBankWagesAdapter(BaseScrapeAdapter):
             resolved = self._resolve("software engineer")
             if not resolved:
                 return False, "typeahead returned no concordance id (Solr schema changed?)"
-            r = httpx.get(PAGE_URL.format(cid=resolved["concordance_id"]),
-                          headers=HEADERS, timeout=12, follow_redirects=True)
-            rows = parse_wage_table(r.text) if r.status_code == 200 else []
+            html = http.get_text(PAGE_URL.format(cid=resolved["concordance_id"]),
+                                 headers=HEADERS, timeout=12)
+            if html is None:
+                return False, "wage page fetch failed (see the http.get diag note)"
+            rows = parse_wage_table(html)
             nat = next((x for x in rows if x["level"] == "national"), None)
-            if r.status_code == 200 and nat and nat.get("median") is not None:
+            if nat and nat.get("median") is not None:
                 return True, "OK (typeahead resolve + national wage row)"
-            return False, f"status={r.status_code} national_ok={bool(nat)} (page structure changed?)"
+            return False, f"national_ok={bool(nat)} rows={len(rows)} (page structure changed?)"
         except Exception as exc:  # noqa: BLE001
             return False, f"{type(exc).__name__}: {str(exc)[:80]}"
 

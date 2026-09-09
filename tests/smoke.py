@@ -1027,6 +1027,33 @@ check("docreader._resolve_local resolves relative paths against HOME",
       _rp.is_absolute() and _rp.parts[-2:] == ("omniseek-inbox", "x.pptx"))
 check("docreader covers the office trio + pdf + plain text",
       {"pptx", "docx", "xlsx", "pdf", "txt", "md"} <= set(docreader._READERS))
+# A local .html is a DOCUMENT (read for its content); an http .html is a WEB PAGE (URL branch).
+# Before this split a local html path matched neither routing rule and fell through to the URL
+# branch, where nothing claimed it: the read returned matched=false with reason=None, a silent
+# failure instead of the document branch's honest "outside the allowed roots" / "file not found".
+import tempfile as _htf  # noqa: E402
+from omniseek import server as _srv  # noqa: E402
+check("omniseek_read routes a LOCAL .html/.htm to the document branch, by name even if absent",
+      _srv._is_document_target("/Users/x/omniseek-inbox/deck.html")
+      and _srv._is_document_target("/Users/x/report.HTM")
+      and _srv._is_document_target("/no/such/file/anywhere.html"))
+check("omniseek_read keeps an http(s) .html URL on the URL branch (adapters own web pages)",
+      not _srv._is_document_target("https://example.com/article.html")
+      and not _srv._is_document_target("http://example.com/a/b.htm?x=1")
+      and _srv._is_document_target("https://example.com/paper.pdf"))
+_hdir = Path(_htf.mkdtemp())
+(_hdir / "probe.html").write_text(
+    "<html><head><title>T</title><style>.a{color:red}</style>"
+    "<script>var x=1</script></head><body><h1>Hd</h1><p>Body sentence.</p></body></html>",
+    encoding="utf-8")
+_hbody = docreader._read_html(_hdir / "probe.html", None)[1][0]["body"]
+check("docreader reads a local html as extracted CONTENT, not markup (script/style stripped)",
+      "Body sentence." in _hbody and "<p>" not in _hbody
+      and "color:red" not in _hbody and "var x=1" not in _hbody)
+(_hdir / "empty.html").write_text("<html><body><style>.a{}</style></body></html>", encoding="utf-8")
+_hsec2 = docreader._read_html(_hdir / "empty.html", None)[1][0]
+check("docreader falls back to raw markup when an html carries no extractable text (never empty)",
+      "<style>" in _hsec2["body"] and "raw markup" in _hsec2["label"])
 # roadmap-④: code/config source files are readable, routed to the PLAIN-TEXT reader (no parser).
 check("docreader._fmt_of maps code/config extensions (py/ts/rs/go/toml/yaml)",
       docreader._fmt_of("main.py") == "py" and docreader._fmt_of("a/b/app.ts") == "ts"
@@ -1763,12 +1790,16 @@ _EXPECTED_EDGES = {
     ("awaiting_verdict", "error"), ("admitted", "owner_review"), ("admitted", "error"),
     ("watching", "probed"), ("watching", "error"), ("owner_review", "error"),
     ("redline_blocked", "error"), ("parked_p2", "error"), ("rejected", "error"), ("error", "probed"),
+    ("error", "awaiting_verdict"), ("error", "redline_blocked"), ("error", "parked_p2"),
     # P4 additions:
     ("watching", "rejected"), ("error", "probe_dead"), ("new", "probe_dead"),
     ("probed", "probe_dead"), ("probe_dead", "error"),
     # P2 wall-aware probe: revive a parked_p2 candidate to awaiting_verdict after a jailed render
     # surfaces its real content (the EXISTING row is re-judged; its host stays in tried_hosts).
     ("parked_p2", "awaiting_verdict"),
+    # ...and close it unrendered when the agent judges it not worth a render (parked is HELD, not
+    # closed: without this the row sits looking pending and invites a render on known junk).
+    ("parked_p2", "rejected"),
 }
 check("curator: ALLOWED_TRANSITIONS == the frozen edge set", set(_ccand.ALLOWED_TRANSITIONS) == _EXPECTED_EDGES,
       f"extra={set(_ccand.ALLOWED_TRANSITIONS) - _EXPECTED_EDGES} missing={_EXPECTED_EDGES - set(_ccand.ALLOWED_TRANSITIONS)}")
@@ -1776,13 +1807,15 @@ check("curator: illegal new->admitted raises", not _ccand._can_transition("new",
 check("curator: redline_blocked / probe_dead terminal (no forward recovery edge)",
       not _ccand._can_transition("redline_blocked", "probed")
       and not _ccand._can_transition("probe_dead", "probed"))
-check("curator: parked_p2 has ONLY the P2 wall-probe revival forward edge (-> awaiting_verdict)",
+check("curator: parked_p2 can be revived (-> awaiting_verdict) or closed (-> rejected), nothing else",
       _ccand._can_transition("parked_p2", "awaiting_verdict")
+      and _ccand._can_transition("parked_p2", "rejected")
       and not _ccand._can_transition("parked_p2", "admitted")
       and not _ccand._can_transition("parked_p2", "probed"))
 check("curator: error reachable from every state AND error->probed allowed",
       all(_ccand._can_transition(s, "error") for s in _ccand.STATES if s != "error")
-      and _ccand._can_transition("error", "probed"))
+      and all(_ccand._can_transition("error", s)
+              for s in ("probed", "awaiting_verdict", "redline_blocked", "parked_p2")))
 
 # (9) Anti-stale dedup: build_packet calls a FRESH list_sources (sentinel), populates as_of + item_overlap.
 # Build the fixture candidate first (its setup patches the roster), THEN install the sentinel so it
@@ -2507,6 +2540,43 @@ _p4_bad_vals = []
 for _c in _p4_cands:
     _p4_bad_vals += _walk_verdict_values(_c)
 check("curator P4: no verdict token in discover candidate string values", not _p4_bad_vals, str(_p4_bad_vals))
+# (9.2b) The inner ring proposes a HOST, never a paper. A citation node's doi is always a doi.org
+# permalink and its url falls back to openalex.org/<id>, so before 2026-09-07 the ring emitted rows
+# named after the paper title with a single permalink as the "feed" (~30 such rows reached the
+# admission queue, every one of them probing to zero items). A resolver host is skipped outright;
+# anything emitted must be host-shaped.
+_p4_nodes = [
+    {"title": "Proximal Policy Optimization Algorithms", "doi": "https://doi.org/10.48550/arXiv.1707.06347"},
+    {"title": "Some Paper", "url": "https://openalex.org/W123"},
+    {"title": "A Real Venue Paper", "doi": "https://journals.example.org/10.1/xyz"},
+]
+
+
+class _P4Skel:
+    @staticmethod
+    def field_skeleton(**_kw):
+        return {"nodes": _p4_nodes}
+
+
+_p4_real_carto = sys.modules.get("omniseek.core.cartographer")
+sys.modules["omniseek.core.cartographer"] = _P4Skel
+try:
+    _p4_rows, _ = _disc._inner_for_cell("papersxSTRUCTURE", _fixture_dossier(placement={}), _P4_POLICY)
+finally:
+    if _p4_real_carto is not None:
+        sys.modules["omniseek.core.cartographer"] = _p4_real_carto
+    else:
+        sys.modules.pop("omniseek.core.cartographer", None)
+
+_p4_names = [r["name"] for r in _p4_rows]
+_p4_urls = [u for r in _p4_rows for u in r["urls"]]
+check("curator P4: the inner ring proposes a host, never a paper title or a permalink",
+      all(n == _ccand.canonical_host(n) and n for n in _p4_names)
+      and all(u.count("/") == 3 and u.endswith("/") for u in _p4_urls),
+      "names=%s urls=%s" % (_p4_names, _p4_urls))
+check("curator P4: a resolver host (doi.org / openalex.org) is never proposed as a source",
+      not ({"doi.org", "openalex.org"} & set(_p4_names)), str(_p4_names))
+
 # the candidate shape carries only submitted-shaped fields + _discovery (no stray verdict field)
 _ALLOWED_CAND_KEYS = {"id", "name", "urls", "proposed_mode", "proposed_domain", "proposed_family",
                       "proposed_kind", "proposed_regions", "rationale_text", "submitted_by", "_discovery"}
@@ -13596,14 +13666,23 @@ class _S1FakeResp:
 
 
 class _S1FakeCreq:
-    """Stands in for curl_cffi.requests: records every .get and returns a pre-set fake response."""
+    """Stands in for curl_cffi.requests: records every call and returns a pre-set fake response.
+
+    The tier went method-aware on 2026-09-09 (the egress mangles POST endpoints too), so the stub
+    mirrors `.request(method, url, ...)`. `.get` stays so a caller that still uses it is served.
+    """
     def __init__(self):
         self.calls = []
+        self.methods = []
         self.resp = None
 
-    def get(self, url, **kw):
+    def request(self, method, url, **kw):
+        self.methods.append(str(method).upper())
         self.calls.append((url, kw))
         return self.resp
+
+    def get(self, url, **kw):
+        return self.request("GET", url, **kw)
 
 
 _s1_fc = _S1FakeCreq()
@@ -13656,10 +13735,22 @@ try:
 
     # (4) happy path unchanged: a small OK body from an allowed host returns those exact bytes.
     _s1_fc.calls.clear()
+    _s1_fc.methods.clear()
     _s1_fc.resp = _S1FakeResp(b"<rss>ok</rss>", headers={"Content-Length": "13"})
     _s1_r4 = _s1_http.get_impersonated("https://example.com")
     check("S1: get_impersonated happy path unchanged (allowed host, small body -> those bytes returned)",
-          _s1_r4 == b"<rss>ok</rss>" and len(_s1_fc.calls) == 1)
+          _s1_r4 == b"<rss>ok</rss>" and len(_s1_fc.calls) == 1 and _s1_fc.methods == ["GET"])
+
+    # (4b) the same guards hold on the POST verb the transport fallback now uses, and the verb is
+    # actually carried through rather than silently downgraded to a GET.
+    _s1_fc.calls.clear()
+    _s1_fc.methods.clear()
+    _s1_fc.resp = _S1FakeResp(b'{"ok":1}', headers={"Content-Length": "8"})
+    _s1_r5 = _s1_http._impersonated_request("POST", "https://example.com", json_body={"a": 1})
+    _s1_r6 = _s1_http._impersonated_request("POST", "http://169.254.169.254/", json_body={"a": 1})
+    check("S1: the libcurl tier carries POST through and keeps the SSRF guard on it",
+          _s1_r5 == b'{"ok":1}' and _s1_fc.methods == ["POST"]
+          and _s1_r6 is None and len(_s1_fc.calls) == 1)
 finally:
     _s1_ng.socket.getaddrinfo = _s1_real_gai
     if _s1_orig_curl is None:
@@ -17668,6 +17759,46 @@ check("eyefix/asr: _decode_to_wav bounds reads (-rw_timeout) + falls back to rob
 check("eyefix/http: download_to_file uses curl_cffi (NOT httpx) -- the TLS tier that gets through this egress",
       "curl_cffi" in _fx_dl and "stream=True" in _fx_dl and "max_bytes" in _fx_dl and "iter_bytes" not in _fx_dl,
       "download_to_file must stream via curl_cffi with a size cap, not the openssl httpx client")
+# ...and the hot GET path falls back to that SAME tier when the egress mangles the openssl
+# handshake, instead of reporting a reachable host as down (canada_jobbank_wages: httpx SSL-EOF,
+# curl 200 in 2.6s, measured 2026-09-09). The predicate has to stay NARROW: rerouting a timeout, an
+# SSRF refusal or an HTTP status would spend the budget twice and hide a real answer.
+import httpx as _tls_httpx  # noqa: E402
+check("http: the libcurl fallback fires on a mangled TLS handshake and on NOTHING else",
+      _http._is_tls_mangled(_tls_httpx.ConnectError("[SSL: UNEXPECTED_EOF_WHILE_READING] EOF"))
+      and _http._is_tls_mangled(_tls_httpx.RemoteProtocolError(
+          "Server disconnected without sending a response"))
+      and not _http._is_tls_mangled(_tls_httpx.ConnectTimeout("timed out"))
+      and not _http._is_tls_mangled(_tls_httpx.ConnectError("refused SSRF-class url: x"))
+      and not _http._is_tls_mangled(ValueError("unrelated")))
+check("http: the libcurl fallback serves GET and POST, and refuses any other verb",
+      _http._curl_tier_retry("PUT", "https://example.com/", 5, None) is None
+      and _http._curl_tier_retry("DELETE", "https://example.com/", 5, None) is None)
+# Every SOURCE health check must ask cdp_health the REAL-availability question. The reaper stops
+# idle browsers every 10 minutes by design, so the observe-only form reports a working source as
+# down (douyin sat at a 53-run failure streak while its searches returned fine). The infra doctor
+# and keepalive in infra_jobs.py deliberately stay on the observe-only default: a probe that
+# started browsers would fight the reaper.
+import re as _cdph_re  # noqa: E402
+_cdph_offenders = []
+for _cdph_p in sorted((ROOT / "src" / "omniseek" / "core" / "sources").rglob("*_source.py")):
+    _cdph_src = _cdph_p.read_text(encoding="utf-8")
+    for _cdph_m in _cdph_re.finditer(r"cdp_health\(([^)]*)\)", _cdph_src):
+        if "ensure=True" not in _cdph_m.group(1):
+            _cdph_offenders.append(f"{_cdph_p.name}:{_cdph_src[:_cdph_m.start()].count(chr(10)) + 1}")
+check("every source health check asks cdp_health(ensure=True) (an idle browser is not a dead source)",
+      not _cdph_offenders, f"observe-only cdp_health in source health checks: {_cdph_offenders}")
+# "They refuse us" vs "we broke" -- the watchdog reported both as a plain source failure, which
+# sends the reader into our adapter for something no code change here can fix (zenodo rate-ban,
+# cifar.ca behind Sucuri, dblp behind a proof-of-work wall; all measured 2026-09-09). The predicate
+# must not swallow a REAL failure: a timeout, a dead feed set and a mangled handshake stay ours.
+from omniseek.core.infra_jobs import _is_refused as _ir  # noqa: E402
+check("watchdog separates a far-end refusal from a real failure, and only that",
+      _ir("HTTP 403 Forbidden") and _ir("restricted due to unusual traffic from your network")
+      and _ir("bot wall (Anubis challenge page, not JSON)") and _ir("429 Too Many Requests")
+      and not _ir("ReadTimeout: The read operation timed out")
+      and not _ir("all 2 feeds failed") and not _ir("no result envelope")
+      and not _ir("SSL: UNEXPECTED_EOF_WHILE_READING"))
 
 # ── ABSORB 2026-07-21 (cont'd): chunk embeddings (long-doc tail recall, tldw/SurfSense) ──────────
 # (1) _chunk_passages (pure): short doc -> []; long doc -> tail passages w/ title breadcrumb; capped.

@@ -304,7 +304,7 @@ class ZhihuAdapter:
         )
 
     def health_check(self) -> tuple[bool, str]:
-        cdp_ok, cdp_msg = cdp_health()
+        cdp_ok, cdp_msg = cdp_health(ensure=True)
         if not cdp_ok:
             return False, f"CDP not reachable: {cdp_msg}"
         try:

@@ -156,6 +156,16 @@ def _cold_start_stub(cell: str, reason: str) -> dict:
 
 
 # ── inner-engine host derivation (spec 4.3, Attack-2: venue/DOI/roster ONLY) ──────
+# Resolver / registry hosts that are never a publication SOURCE. A citation node's ``doi`` is
+# always a doi.org permalink and its ``url`` falls back to openalex.org/<id>, so without these the
+# inner ring proposes the resolver itself as a source (2026-09-07: ~30 such rows accumulated in the
+# admission queue, each named after the paper whose permalink produced it).
+_NON_SOURCE_HOSTS = frozenset({
+    "doi.org", "dx.doi.org", "openalex.org", "semanticscholar.org", "crossref.org",
+    "api.openalex.org", "api.semanticscholar.org", "api.crossref.org", "api.unpaywall.org",
+})
+
+
 def _host_of(url: Optional[str]) -> str:
     if not isinstance(url, str) or not url.strip():
         return ""
@@ -242,12 +252,20 @@ def _inner_for_cell(cell: str, dossier: dict, policy: dict) -> "tuple[list, int]
         host = _cand.canonical_host(url)
         if not host or host in seen_hosts:
             continue
+        if host in _NON_SOURCE_HOSTS:
+            # The permalink resolves through a registry, so this node carries no publisher host.
+            # Emitting it would propose the resolver as a source. Field-skeleton nodes carry no
+            # venue field, so there is nothing else to derive here: skip rather than invent.
+            continue
         seen_hosts.add(host)
         title = (node.get("title") or "")[:120]
+        # The candidate is the HOST, never the paper: a single permalink is not a source, and a
+        # paper title is not a source name. The node that surfaced the host is provenance only.
+        host_url = "https://%s/" % host
         out.append({
-            "id": _cand.make_id(title or host, [url]),
-            "name": (title or host)[:120],
-            "urls": [url],
+            "id": _cand.make_id(host, [host_url]),
+            "name": host,
+            "urls": [host_url],
             "proposed_mode": mode,
             "proposed_domain": domain,
             "proposed_family": family,
@@ -265,6 +283,7 @@ def _inner_for_cell(cell: str, dossier: dict, policy: dict) -> "tuple[list, int]
                 "truncated": False,   # set on the row below once the cell's dropped_count is known
                 "dropped_count": 0,
                 "note": "host derived from node venue/DOI (relevance hint, not a safety credential)",
+                "via_node_title": title,
                 "discovered_at": _now_iso(),
             },
         })

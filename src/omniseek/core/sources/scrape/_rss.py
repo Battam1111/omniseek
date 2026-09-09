@@ -400,7 +400,12 @@ class RSSAdapterBase:
         n = len(self.feeds)
         ok = n - len(dead)
         if ok == 0:
-            return False, f"all {n} feeds failed"
+            # Name them here too. The degraded branch below already does, and a bundle that is
+            # fully dead is exactly when the reader most needs to know WHICH hosts to go look at:
+            # "all 2 feeds failed" sent the 2026-09-09 sweep hunting through our own adapter for
+            # what turned out to be one unreachable host and one 403.
+            deadhosts = ", ".join(sorted({urlparse(u).hostname or u for u in dead}))
+            return False, f"all {n} feeds failed ({deadhosts})"
         if dead:
             # NAME the dead feeds: a bundle that silently loses a member (sg_immigration lost 1 of 2)
             # otherwise reads healthy forever. The "degraded" marker is what the watchdog keys on to

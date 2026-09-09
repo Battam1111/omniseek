@@ -38,6 +38,14 @@ def bounded_slot(
 ):
     """Acquire a threading gate with a finite wait and guaranteed release."""
     if not gate.acquire(timeout=max_wait):
+        # Record WHY the wait failed. A saturated gate reads the same to the caller whether the
+        # permits are in flight (real load, self-shedding working) or stuck (nothing running, yet
+        # nothing free), and the second case is a bug that only shows up as sources going dark:
+        # six Stack Exchange sources sat unusable behind a gate whose permits never came back
+        # (2026-09-09), and there was nothing in the logs to tell the two apart. _value is CPython's
+        # free-permit counter, read defensively because it is not API.
+        logger.warning("gate saturated: no permit after %.1fs (free=%s)",
+                       max_wait, getattr(gate, "_value", "?"))
         raise on_busy(max_wait)
     try:
         yield

@@ -49,6 +49,54 @@ def _is_transient_connect_error(exc: BaseException) -> bool:
     return isinstance(exc, httpx.ConnectError) and not str(exc).startswith(
         "refused SSRF-class url")
 
+
+# This deployment's egress mangles openssl's handshake to some hosts: httpx dies with
+# UNEXPECTED_EOF_WHILE_READING (or a bare disconnect) while libcurl's handshake goes straight
+# through, on the SAME host, seconds apart. download_to_file and get_impersonated already run on
+# that libcurl tier for exactly this reason; the hot GET path did not, so a source whose host
+# happened to trip the mangling read as DOWN while curl fetched it fine (canada_jobbank_wages:
+# httpx SSL-EOF, curl 200 in 2.6s, measured 2026-09-09).
+_TLS_MANGLED_MARKERS = (
+    "UNEXPECTED_EOF_WHILE_READING",
+    "SSLError",
+    "SSLEOFError",
+    "[SSL:",
+    "Server disconnected without sending a response",
+)
+
+
+def _is_tls_mangled(exc: BaseException) -> bool:
+    """A transport-layer failure of the kind the libcurl tier is known to survive.
+
+    Deliberately narrow: an HTTP status, a timeout, or an SSRF refusal is NOT this. Retrying those
+    on a second transport would only spend the wire budget twice and hide a real answer.
+    """
+    if isinstance(exc, httpx.HTTPStatusError) or isinstance(exc, httpx.TimeoutException):
+        return False
+    if str(exc).startswith("refused SSRF-class url"):
+        return False
+    return any(m in str(exc) for m in _TLS_MANGLED_MARKERS)
+
+
+def _curl_tier_retry(method: str, url: str, timeout: int, headers: Optional[dict],
+                     json_body: Any = None) -> Optional[httpx.Response]:
+    """One retry through the libcurl tier, rebuilt as the Response the caller expects.
+
+    Returns None for anything it cannot serve (a verb outside GET/POST, a missing dep, a non-2xx),
+    so the caller falls through to its normal None. The rebuilt Response carries the body but NOT
+    the upstream headers, which is enough for .text / .json() and is why this stays a fallback
+    rather than the default tier.
+    """
+    if method.upper() not in ("GET", "POST"):
+        return None
+    body = _impersonated_request(method, url, timeout=timeout, headers=headers,
+                                 json_body=json_body)
+    if body is None:
+        return None
+    diag.note("http.curl_tier_retry", url=url, body="httpx transport failed; libcurl tier served it")
+    logger.info("http.get: httpx transport failed, libcurl tier served %s (%d bytes)", url, len(body))
+    return httpx.Response(200, content=body, request=httpx.Request(method, url))
+
 # Process-wide pooled client: every open-API helper call reuses ONE httpx.Client, so
 # repeated requests to the same host skip the TCP+TLS handshake (a real cost when the
 # 64-worker search fan-out + per-source internal fan-out hammer S2/OpenAlex/Arctic/…).
@@ -154,10 +202,20 @@ def _request_capped(method: str, url: str, *, timeout: int, headers: dict,
                 diag.note("http.retry_transient", url=url, exc=exc)
                 time.sleep(_transient_retry_delay())
                 continue
+            if _is_tls_mangled(exc):
+                served = _curl_tier_retry(method, url, timeout, headers,
+                                          kwargs.get("json"))
+                if served is not None:
+                    return served
             logger.warning("http.%s failed (%s): %s", method.lower(), url, exc)
             diag.note(f"http.{method.lower()}", url=url, exc=exc)
             return None
         except Exception as exc:  # noqa: BLE001, failure -> None is the adapter contract
+            if _is_tls_mangled(exc):
+                served = _curl_tier_retry(method, url, timeout, headers,
+                                          kwargs.get("json"))
+                if served is not None:
+                    return served
             logger.warning("http.%s failed (%s): %s", method.lower(), url, exc)
             # A non-2xx surfaces here as httpx.HTTPStatusError → surface its status + body snippet so
             # the fixing agent sees the wall (403/412 anti-bot, 404 moved endpoint), not just a string.
@@ -240,10 +298,15 @@ def download_to_file(url: str, dest: str, *, max_bytes: int,
     return total
 
 
-def get_impersonated(url: str, *, timeout: int = DEFAULT_TIMEOUT,
-                     headers: Optional[dict] = None) -> Optional[bytes]:
-    """GET via curl_cffi with a real-browser TLS/JA3 fingerprint (Chrome impersonation); returns the
-    raw response BYTES. None on failure OR if curl_cffi is unavailable.
+def _impersonated_request(method: str, url: str, *, timeout: int = DEFAULT_TIMEOUT,
+                          headers: Optional[dict] = None,
+                          json_body: Any = None) -> Optional[bytes]:
+    """Request via curl_cffi with a real-browser TLS/JA3 fingerprint (Chrome impersonation); returns
+    the raw response BYTES. None on failure OR if curl_cffi is unavailable.
+
+    Method-aware since 2026-09-09: the egress mangles openssl's handshake on POST endpoints too
+    (statcan_wds POSTs its only data endpoint and read as down for it), and the guards below are
+    method-independent, so keeping this GET-only would have meant a second copy of them.
 
     A SEPARATE fetch tier BETWEEN plain httpx (``get``) and the heavy CDP browser: some hosts wall
     httpx by its TLS/JA3 handshake fingerprint (PerimeterX / HUMAN 'Pardon Our Interruption',
@@ -259,7 +322,7 @@ def get_impersonated(url: str, *, timeout: int = DEFAULT_TIMEOUT,
     try:
         from curl_cffi import requests as _creq  # lazy: keep curl_cffi off the hot import path
     except Exception as exc:  # noqa: BLE001 — missing/broken dep -> degrade, never crash
-        logger.warning("http.get_impersonated unavailable (curl_cffi import failed): %s", exc)
+        logger.warning("http impersonated tier unavailable (curl_cffi import failed): %s", exc)
         return None
     # Mirror the _request_capped discipline at the curl_cffi tier (S1-C1): the single egress guard, the
     # SSRF pre-flight, and a MAX_BYTES cap. All three were absent here (an unbounded ``return r.content``).
@@ -275,12 +338,13 @@ def get_impersonated(url: str, *, timeout: int = DEFAULT_TIMEOUT,
     # IP-pinned per hop); this fixed-host tier keeps allow_redirects=True as a known residual.
     _blk = _netguard.security_block_reason(url)
     if _blk is not None:
-        logger.warning("http.get_impersonated blocked SSRF-class target (%s): %s", url, _blk)
+        logger.warning("http impersonated tier blocked SSRF-class target (%s): %s", url, _blk)
         return None
     try:
-        r = _creq.get(url, impersonate="chrome", timeout=timeout,
-                      headers=dict(headers) if headers else None,
-                      allow_redirects=True)  # per-hop redirect revalidation DEFERRED past C2 (curl_cffi tier; see above)
+        r = _creq.request(method.upper(), url, impersonate="chrome", timeout=timeout,
+                          headers=dict(headers) if headers else None,
+                          json=json_body,
+                          allow_redirects=True)  # per-hop redirect revalidation DEFERRED past C2 (curl_cffi tier; see above)
         r.raise_for_status()
         # DECODED-bytes cap (curl_cffi returns already-decoded content). The curl_cffi streaming API
         # (stream=True + iter_content) is not exercisable in this build (curl_cffi is not importable in the
@@ -295,18 +359,25 @@ def get_impersonated(url: str, *, timeout: int = DEFAULT_TIMEOUT,
         except (TypeError, ValueError):
             _clen = 0
         if _clen > MAX_BYTES:
-            logger.warning("http.get_impersonated refused oversized response (%s): Content-Length %d > %d",
+            logger.warning("http impersonated tier refused oversized response (%s): Content-Length %d > %d",
                            url, _clen, MAX_BYTES)
             return None
         body = r.content
         if len(body) > MAX_BYTES:
-            logger.warning("http.get_impersonated refused oversized response (%s): %d bytes > %d",
+            logger.warning("http impersonated tier refused oversized response (%s): %d bytes > %d",
                            url, len(body), MAX_BYTES)
             return None
         return body
     except Exception as exc:  # noqa: BLE001 — the failure->None contract (same as http.get)
-        logger.warning("http.get_impersonated failed (%s): %s", url, exc)
+        logger.warning("http impersonated tier failed (%s %s): %s", method.upper(), url, exc)
         return None
+
+
+def get_impersonated(url: str, *, timeout: int = DEFAULT_TIMEOUT,
+                     headers: Optional[dict] = None) -> Optional[bytes]:
+    """GET on the curl_cffi tier. The named entry point adapters opt into (higheredjobs); the
+    method-aware internal is what the transport fallback in _request_capped uses."""
+    return _impersonated_request("GET", url, timeout=timeout, headers=headers)
 
 
 def post_json(url: str, *, json: Any = None, timeout: int = DEFAULT_TIMEOUT,

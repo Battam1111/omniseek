@@ -60,12 +60,13 @@
   },
   {
     "name": "ai_newsletters",
-    "description": "AI newsletter / long-form recap matrix — The Sequence / Last Week in AI / The Gradient / Nicholas Carlini. Periodical ML research + security digest.",
+    "description": "AI newsletter / long-form recap matrix — The Sequence / Last Week in AI / The Gradient / Nicholas Carlini / AI Weekly. Periodical ML research + security digest.",
     "feeds": [
       "https://thesequence.substack.com/feed",
       "https://lastweekin.ai/feed",
       "https://thegradient.pub/rss/",
-      "https://nicholas.carlini.com/writing/feed.xml"
+      "https://nicholas.carlini.com/writing/feed.xml",
+      "https://aiweekly.co/feed"
     ],
     "cache_ttl": 7200,
     "url_pattern": null

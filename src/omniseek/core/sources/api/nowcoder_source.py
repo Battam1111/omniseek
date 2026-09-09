@@ -175,7 +175,7 @@ class NowcoderAdapter:
 
     def health_check(self) -> tuple[bool, str]:
         # Native path via CDP: drive the 9222 Chrome to fetch the gateway once and count real posts.
-        cdp_ok, cdp_msg = cdp_health()
+        cdp_ok, cdp_msg = cdp_health(ensure=True)
         if cdp_ok:
             try:
                 docs = self._fetch_job(DEFAULT_JOB_IDS[0], pages=1)
