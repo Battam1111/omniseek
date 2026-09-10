@@ -23,8 +23,10 @@ from urllib.parse import urlparse
 
 import anyio
 
+from omniseek.core import diag
 from omniseek.core.normalize import Document, jsonsafe
-from omniseek.core.sources.api._search_backend import asearch_web, backend_ping, search_web
+from omniseek.core.sources.api._search_backend import (asearch_web, backend_ping, backend_state,
+                                                     search_web)
 
 logger = logging.getLogger(__name__)
 _DATA = Path(__file__).with_name("search_index_sites.json")
@@ -94,6 +96,32 @@ class _SearchVenue:
         self.regions = regions or []
         self.fetch_url_hosts = (site.split("/", 1)[0],)
 
+    def _note_backend(self, q: str, exc: BaseException) -> None:
+        """Failure branch only: the SHARED backend refused (down, or cooling). Carry its whole
+        ledger so the caller reads "wait 84s", not "this venue has nothing"."""
+        diag.note(f"{self.name}.backend", url=q, exc=exc,
+                  body=json.dumps(backend_state(), ensure_ascii=False))
+
+    def _note_empty(self, q: str, raw_n: int, dropped_filter: int, dropped_tombstone: int,
+                    sample: list[str]) -> None:
+        """Failure branch only (kept == 0): say WHICH empty this is.
+
+        "the engine returned 0" and "the engine returned 19 and url_filter dropped every one" are
+        opposite facts — the first is evidence of absence, the second says the venue's indexed pages
+        for this query are all nav/profile shells. They used to collapse into one bare
+        ``captures: []``, and that ambiguity twice got a WORKING source diagnosed as broken."""
+        state = backend_state()
+        if raw_n == 0:
+            diag.note(f"{self.name}.engine_empty", url=q,
+                      body=f"engine returned 0 results (backend={state['active']}); "
+                           "this is an INDEX MISS, not a backend failure")
+            return
+        diag.note(f"{self.name}.filtered_all", url=q,
+                  body=(f"engine returned {raw_n}; url_filter dropped {dropped_filter}, "
+                        f"tombstone dropped {dropped_tombstone}, kept 0 -> the index has NO "
+                        f"content page for this query (only nav/profile/tag shells). "
+                        f"sample dropped: {sample}"))
+
     def search(self, query: str, limit: int = 10) -> list[Document]:
         from omniseek.core import cache  # local import: avoid import cycle
         q = f"site:{self.site} {(query or '').strip()}".strip()
@@ -113,13 +141,27 @@ class _SearchVenue:
         # pro./job. pages) and tombstone shells (moved/removed-page snapshots).
         n = min(max(limit * 3, limit + 5), 20)
         docs: list[Document] = []
-        for r in search_web(q, n=n):
+        dropped_filter = dropped_tombstone = 0
+        sample_dropped: list[str] = []
+        try:
+            hits = search_web(q, n=n)
+        except RuntimeError as exc:
+            self._note_backend(q, exc)
+            raise  # the error contract is unchanged: an empty is never published as "nothing exists"
+        raw_n = len(hits)
+        for r in hits:
             url = r.get("url")
             if not url:
                 continue
             if self.url_filter and not self.url_filter.search(url):
+                dropped_filter += 1
+                if len(sample_dropped) < 3:
+                    sample_dropped.append(url)
                 continue
             if _is_tombstone(r.get("snippet") or ""):
+                dropped_tombstone += 1
+                if len(sample_dropped) < 3:
+                    sample_dropped.append(url)
                 logger.info("%s: dropped tombstone shell %s", self.name, url)
                 continue
             docs.append(Document(
@@ -134,6 +176,8 @@ class _SearchVenue:
             ))
             if len(docs) >= limit:
                 break
+        if not docs:  # failure branch only, per diag.note's contract
+            self._note_empty(q, raw_n, dropped_filter, dropped_tombstone, sample_dropped)
         # Cache results AND empties — an uncached empty re-burns the search backend on
         # every retry (the #1 Brave-quota drain). Empties get a shorter TTL so a
         # transiently-empty venue recovers sooner; walled content is slow-moving.
@@ -166,13 +210,27 @@ class _SearchVenue:
         # pro./job. pages) and tombstone shells (moved/removed-page snapshots).
         n = min(max(limit * 3, limit + 5), 20)
         docs: list[Document] = []
-        for r in await asearch_web(q, n=n):  # async egress; parse below is pure CPU, on the loop
+        dropped_filter = dropped_tombstone = 0
+        sample_dropped: list[str] = []
+        try:
+            hits = await asearch_web(q, n=n)  # async egress; parse below is pure CPU, on the loop
+        except RuntimeError as exc:
+            self._note_backend(q, exc)
+            raise  # the error contract is unchanged: an empty is never published as "nothing exists"
+        raw_n = len(hits)
+        for r in hits:
             url = r.get("url")
             if not url:
                 continue
             if self.url_filter and not self.url_filter.search(url):
+                dropped_filter += 1
+                if len(sample_dropped) < 3:
+                    sample_dropped.append(url)
                 continue
             if _is_tombstone(r.get("snippet") or ""):
+                dropped_tombstone += 1
+                if len(sample_dropped) < 3:
+                    sample_dropped.append(url)
                 logger.info("%s: dropped tombstone shell %s", self.name, url)
                 continue
             docs.append(Document(
@@ -187,6 +245,8 @@ class _SearchVenue:
             ))
             if len(docs) >= limit:
                 break
+        if not docs:  # failure branch only, per diag.note's contract
+            self._note_empty(q, raw_n, dropped_filter, dropped_tombstone, sample_dropped)
         # Cache results AND empties — an uncached empty re-burns the search backend on
         # every retry (the #1 Brave-quota drain). Empties get a shorter TTL so a
         # transiently-empty venue recovers sooner; walled content is slow-moving.

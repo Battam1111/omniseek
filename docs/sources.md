@@ -101,7 +101,7 @@ Generated from omniseek 0.2.0: 218 live sources across 32 domains.
 - **douban_groups** `walled` `explicit-only` `lookup`: 豆瓣小组: China grassroots community graph for overseas-study/immigration/diaspora life (groups + discussion threads via m.douban.com rexxar, logged-in 9222 CDP)
 - **gter** `free` `explicit-only` `stream`: 寄托天下 gter: 中文留学申请/海外生活主社区, 按地区分区 (CDP 渲染: f.gter.net 是 JS 壳, 2026-06-10 实证). 盯 新加坡/加拿大/香港 三区的新帖 (申请经验/签证/录取汇报). 与 yipinsanfendi(北美 CS 重)互补的泛留学层. explicit_only
 - **hackernews** `free` `lookup`: Hacker News: tech news (story submissions) + threaded community discussion (full-text comment search), both via the Algolia HN API
-- **hardwarezone** `free` `explicit-only` `proxy`: HardwareZone/EDMW 经搜索索引 (snippet): 新加坡本地最大论坛, 本地人视角的 EP/外籍人才/薪资/公司/移民讨论 (与 Blind/脉脉的'圈内人'视角互补的'本地人'地面真相). explicit_only (点名即达). 全文: 本站封数据中心 IP、直抓不到 → 用 exa 源 site:hardwarezone.com.sg 借 Exa 爬虫取全文
+- **hardwarezone** `free` `explicit-only` `proxy`: HardwareZone/EDMW 经搜索索引 (snippet): 新加坡本地最大论坛, 本地人视角的 EP/外籍人才/薪资/公司/移民讨论 (与 Blind/脉脉的'圈内人'视角互补的'本地人'地面真相). explicit_only (点名即达). 全文: 本站封数据中心 IP、直抓不到 → 用 exa 源 site:hardwarezone.com.sg 借 Exa 爬虫取全文 薪资/offer 题用当事人晒 offer 的词 (日薪 / package / 总包 / 晒工资 / offer 对比), 别用招聘方的词 (招聘 / 内推 / 岗位).
 - **juejin** `free` `explicit-only` `lookup`: 掘金 Juejin: Chinese developer-article search (keyless). query → an engagement-ranked feed of CN dev深度 articles: title / brief / author / 赞(digg) / 看(views). OmniSeek's source for Chinese dev/tech writing (前端/后端/AI工程/架构) that web search can't rank or structure. No login.
 - **lobsters** `free` `stream`: Lobste.rs: invite-only tech link aggregator (smaller than HN, higher SNR; ai/ml tag feeds curated by mods)
 - **quora** `free` `explicit-only` `proxy`: Quora 经搜索索引: 英文 Q&A: 移民/签证(EP/PR/Express Entry)、读博、公司文化、城市/offer 对比. 与中文源(脉脉/一亩三分地/知乎)互补的英文视角. explicit_only (点名即达)
@@ -113,7 +113,7 @@ Generated from omniseek 0.2.0: 218 live sources across 32 domains.
 - **xiaohongshu** `walled` `explicit-only` `lookup`: 小红书: first-hand PhD daily life + real experience sharing (CDP session)
 - **xiaohongshu_search** `free` `explicit-only` `proxy`: 小红书 经搜索索引 (Brave site: → 笔记 snippet; 永不用账号/CDP 碰站 → 零设备风险, 与封印的 CDP xiaohongshu 完全隔离, ToS 干净): 留学/读博/求职/城市/公司体验的海量一手笔记 (实测出字节面经/HKPFS 攻略). url_filter 只留真实笔记(discovery/item·explore), 滤掉 pro./job. 导航页. explicit_only (点名即达)
 - **xiaomuchong** `free` `explicit-only` `lookup`: 小木虫: China's oldest PhD/master's academic forum (since 2001, 5M users)
-- **yipin_search** `free` `explicit-only` `proxy`: 一亩三分地 经搜索索引 (keyless-via-Brave, CDP yipinsanfendi 的稳健 fallback): 北美/海外 CS PhD 申请+毕业去向+签证核心中文社区. CDP 防灌水间隔挂时此路仍通. explicit_only (点名即达)
+- **yipin_search** `free` `explicit-only` `proxy`: 一亩三分地 经搜索索引 (keyless-via-Brave, CDP yipinsanfendi 的稳健 fallback): 北美/海外 CS PhD 申请+毕业去向+签证核心中文社区. CDP 防灌水间隔挂时此路仍通. explicit_only (点名即达) 薪资/offer 题用当事人晒 offer 的词 (日薪 / package / 总包 / 晒工资 / offer 对比), 别用招聘方的词 (招聘 / 内推 / 岗位).
 - **yipinsanfendi** `walled` `explicit-only` `lookup`: 一亩三分地: North America CS PhD application + grad school community
 - **zhihu** `walled` `explicit-only` `lookup`: 知乎: long-form PhD methodology discussions (via CDP Chrome session)
 - **zhihu_search** `free` `explicit-only` `proxy`: 知乎 经搜索索引 (keyless-via-Brave 稳健补充, 非 CDP): 中文海量一手经验: 读博/求职/公司内幕/签证/城市对比. 与 CDP zhihu 互补 (CDP 取登录全文, 此取引擎索引快照, CDP 挂时仍通). explicit_only (点名即达)
@@ -264,7 +264,7 @@ Generated from omniseek 0.2.0: 218 live sources across 32 domains.
 
 - **linkedin_posts** `free` `explicit-only` `proxy`: LinkedIn 公开招聘帖 经搜索索引 (仅 Track A 公开 /posts; 人脉/档案/国籍属法务封死的 Track B, 不碰): 具名 hiring manager 'we are hiring' = 最暖的当前招聘意图 + 直接暖介绍目标. explicit_only
 - **nature_careers** `free` `stream`: Nature Careers: authoritative PhD survey data + career articles
-- **nowcoder** `free` `explicit-only` `stream`: 牛客网 面经 + 内推: 中文 AI/ML 真实面试 bar (八股 vs 重思维 / 全流程时间线 / 内推码), 成于面试后数天. 直连 JSON 被 Aliyun WAF 墙(指纹闸非登录闸)→ 经共享 9222 CDP Chrome 原生取 (带真实指纹, 无需登录); CDP 挂了才降级走 site:nowcoder.com Brave 检索. 默认 算法工程师(645), 可配 ~/.omniseek/credentials/nowcoder.json job_ids
+- **nowcoder** `free` `explicit-only` `stream`: 牛客网 面经 + 内推: 中文 AI/ML 真实面试 bar (八股 vs 重思维 / 全流程时间线 / 内推码), 成于面试后数天. 两条路: 无 query = 拉最近面经流 (默认岗位 tag 645 算法工程师, 可配 ~/.omniseek/credentials/nowcoder.json job_ids), 经共享 9222 CDP Chrome 原生取 JSON (WAF 是指纹闸非登录闸, 无需登录); 有 query = 在这批最近面经里做关键词筛选, 并合并 site:nowcoder.com 的网页搜索结果 (真正的站内关键词搜索, 走共享搜索后端), 每条 metad ...
 
 ## compensation (3)
 
@@ -274,9 +274,9 @@ Generated from omniseek 0.2.0: 218 live sources across 32 domains.
 
 ## insider (3)
 
-- **blind** `free` `explicit-only` `proxy`: Blind 在职员工匿名爆料 (经搜索索引, 非爬墙): 按国籍的 EP/签证真实结果、firm 真实薪资、招聘冻结、内推渠道. 全 insider 层最高价值生信号 (HK/中国护照 EP 可批性). explicit_only; 查询里带 公司名 + EP/visa/offer/freeze/referral
-- **glassdoor** `free` `explicit-only` `proxy`: Glassdoor 面试经历 + 公司评价 + 文化 (经搜索索引): 按角色的真实面试 bar/流程/红旗 (Cohere/RBC Borealis/Google SG/DBS). 与 levels.fyi(薪酬) 互补, 定位面试 bar+文化. explicit_only
-- **maimai** `free` `explicit-only` `proxy`: 脉脉职言 经搜索索引 (仅 /article/detail 公开层, 评论登录墙不取): CN-HQ 大厂(字节/Sea/Shopee)staffing SG/海外 的内幕: 内推/真实薪资/裁员风声/招聘冻结. CN-HQ-SG 切片最佳. explicit_only
+- **blind** `free` `explicit-only` `proxy`: Blind 在职员工匿名爆料 (经搜索索引, 非爬墙): 按国籍的 EP/签证真实结果、firm 真实薪资、招聘冻结、内推渠道. 全 insider 层最高价值生信号 (HK/中国护照 EP 可批性). explicit_only; 查询里带 公司名 + EP/visa/offer/freeze/referral 薪资/offer 题用当事人晒 offer 的词 (日薪 / package / 总包 / 晒工资 / offer 对比), 别用招聘方的词 (招聘 / 内推 / 岗位).
+- **glassdoor** `free` `explicit-only` `proxy`: Glassdoor 面试经历 + 公司评价 + 文化 (经搜索索引): 按角色的真实面试 bar/流程/红旗 (Cohere/RBC Borealis/Google SG/DBS). 与 levels.fyi(薪酬) 互补, 定位面试 bar+文化. explicit_only 薪资/offer 题用当事人晒 offer 的词 (日薪 / package / 总包 / 晒工资 / offer 对比), 别用招聘方的词 (招聘 / 内推 / 岗位).
+- **maimai** `free` `explicit-only` `proxy`: 脉脉职言 经搜索索引 (仅 /article/detail 公开层, 评论登录墙不取): CN-HQ 大厂(字节/Sea/Shopee)staffing SG/海外 的内幕: 内推/真实薪资/裁员风声/招聘冻结. CN-HQ-SG 切片最佳. explicit_only 薪资/offer 题用当事人晒 offer 的词 (日薪 / package / 总包 / 晒工资 / offer 对比), 别用招聘方的词 (招聘 / 内推 / 岗位).
 
 ## policy (3)
 

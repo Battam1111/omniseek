@@ -1110,6 +1110,508 @@ check("search_index drops generic zhihu boilerplate snippet, keeps a real one",
       and not search_index_source._is_tombstone("罗湖区房租均价2597元，3号线最快到罗湖老街，租金与通勤成本权衡。"))
 
 # ---------------------------------------------------------------------------
+# 8b. Shared web-search backend (2026-09-10). Five search-index venues named in ONE
+#     gather pushed Brave into cooldown, all five fell onto an ungoverned DDG, DDG
+#     soft-limited, and every later call re-hit it blind: ten sources dead, and nothing
+#     in the result said whether the venues were empty or the backend was. So DDG now
+#     carries the SAME rate gate + circuit breaker Brave always had, search_web refuses
+#     to send when both halves are cooling, and an empty search-index drill says WHICH
+#     empty it is (engine_empty vs filtered_all vs backend).
+#     Every check here is OFFLINE: the pooled client is faked, and time.sleep is a
+#     recorder installed ONLY inside _search_backend's namespace (patching the real
+#     time.sleep would hot-spin every other thread in this process). Each block restores
+#     the module globals in finally, so check order cannot leak.
+# ---------------------------------------------------------------------------
+import httpx as _sb_httpx  # noqa: E402
+
+from omniseek.core import cache as _sb_cache  # noqa: E402
+from omniseek.core import diag as _sb_diag  # noqa: E402
+from omniseek.core.sources.api import _search_backend as _sb  # noqa: E402
+from omniseek.core.sources.api import nowcoder_source as _sb_nc  # noqa: E402
+
+
+class _SbResp:
+    """An httpx-Response stand-in carrying only what _ddg / _brave read off it."""
+
+    def __init__(self, status_code, text=""):
+        self.status_code = status_code
+        self.text = text
+        self.headers: dict = {}
+
+
+class _SbClient:
+    """Stand-in for the pooled client: counts calls and replays one scripted response (or raises a
+    scripted exception) per call, holding the last entry once the script runs out. Opens no socket,
+    so "the fake was never called" is a real assertion that nothing went out."""
+
+    def __init__(self, script):
+        self.script = list(script)
+        self.calls = 0
+
+    def _next(self):
+        self.calls += 1
+        item = self.script[min(self.calls - 1, len(self.script) - 1)]
+        if isinstance(item, BaseException):
+            raise item
+        return item
+
+    def post(self, *a, **kw):
+        return self._next()
+
+    def get(self, *a, **kw):
+        return self._next()
+
+
+class _SbClock:
+    """A stand-in for the `time` MODULE inside _search_backend: records sleeps instead of taking
+    them, delegates everything else (time / strftime / localtime) to the real module."""
+
+    def __init__(self, real):
+        self._real = real
+        self.slept: list = []
+
+    def sleep(self, seconds):
+        self.slept.append(seconds)
+
+    def __getattr__(self, name):
+        return getattr(self._real, name)
+
+
+def _sb_reset() -> None:
+    """Zero the shared ledger (both breakers, both pacers, the error line, the ping cache)."""
+    _sb._ddg_cooldown_until = 0.0
+    _sb._ddg_consecutive_trips = 0
+    _sb._ddg_last_call = 0.0
+    _sb._brave_cooldown_until = 0.0
+    _sb._brave_last_call = 0.0
+    _sb._last_error = None
+    _sb._ping.update(t=0.0, ok=None, msg="")
+
+
+_SB_REAL_TIME, _SB_REAL_CLIENT, _SB_REAL_KEY = _sb.time, _sb._get_client, _sb._brave_key
+
+# (1) the breaker itself: three 202s trip it, and a call INSIDE the window sends nothing.
+_sb1: dict = {}
+try:
+    _sb_reset()
+    _sb.time = _SbClock(_SB_REAL_TIME)
+    _sb._brave_key = lambda: None
+    _sb_c1 = _SbClient([_SbResp(202)])
+    _sb._get_client = lambda: _sb_c1
+    try:
+        _sb._ddg("x", 3)
+    except RuntimeError as _exc:
+        _sb1["raised"] = str(_exc)
+    _sb1["state"] = _sb.backend_state()
+    _sb1["calls_after_trip"] = _sb_c1.calls
+    try:
+        _sb._ddg("x", 3)
+    except RuntimeError as _exc:
+        _sb1["raised_cooling"] = str(_exc)
+    _sb1["calls_after_retry"] = _sb_c1.calls
+finally:
+    _sb.time, _sb._get_client, _sb._brave_key = _SB_REAL_TIME, _SB_REAL_CLIENT, _SB_REAL_KEY
+    _sb_reset()
+check("ddg breaker: 3x HTTP 202 trips it (error says 'cooling', cooling_s>0, trips=1) and a retry INSIDE the window sends NOTHING",
+      "cooling" in _sb1.get("raised", "")
+      and _sb1.get("state", {}).get("ddg", {}).get("cooling_s", 0) > 0
+      and _sb1.get("state", {}).get("ddg", {}).get("consecutive_trips") == 1
+      and _sb1.get("calls_after_trip") == 3
+      and _sb1.get("calls_after_retry") == 3
+      and "no request sent" in _sb1.get("raised_cooling", ""),
+      str(_sb1))
+
+# (2) the backoff escalates on CONSECUTIVE trips, and one 200 clears the count.
+_sb2: dict = {}
+try:
+    _sb_reset()
+    _sb.time = _SbClock(_SB_REAL_TIME)
+    _sb._brave_key = lambda: None
+    _sb._get_client = lambda: _SbClient([_SbResp(202)])
+    for _i in range(2):
+        _sb._ddg_cooldown_until = 0.0  # step past the window instead of waiting it out
+        try:
+            _sb._ddg("x", 1)
+        except RuntimeError:
+            pass
+        _sb2[f"cool{_i}"] = _sb.backend_state()["ddg"]["cooling_s"]
+    _sb2["trips"] = _sb.backend_state()["ddg"]["consecutive_trips"]
+    _sb._ddg_cooldown_until = 0.0
+    _sb._get_client = lambda: _SbClient([_SbResp(200, "<html></html>")])
+    _sb2["ok"] = _sb._ddg("x", 1)
+    _sb2["trips_after_200"] = _sb.backend_state()["ddg"]["consecutive_trips"]
+finally:
+    _sb.time, _sb._get_client, _sb._brave_key = _SB_REAL_TIME, _SB_REAL_CLIENT, _SB_REAL_KEY
+    _sb_reset()
+check("ddg breaker escalates on consecutive trips (90s -> 180s) and a single 200 clears the trip count",
+      _sb2.get("cool1", 0) > _sb2.get("cool0", 0) and _sb2.get("trips") == 2
+      and _sb2.get("ok") == [] and _sb2.get("trips_after_200") == 0, str(_sb2))
+
+# (3) both halves cooling -> search_web sends NOTHING and says so.
+_sb3: dict = {}
+try:
+    _sb_reset()
+    _sb.time = _SbClock(_SB_REAL_TIME)
+    _sb._brave_key = lambda: "k"
+    _sb_c3 = _SbClient([_SbResp(200, "")])
+    _sb._get_client = lambda: _sb_c3
+    _sb._brave_cooldown_until = _SB_REAL_TIME.time() + 300
+    _sb._ddg_cooldown_until = _SB_REAL_TIME.time() + 300
+    try:
+        _sb.search_web("x")
+    except RuntimeError as _exc:
+        _sb3["raised"] = str(_exc)
+    _sb3["calls"] = _sb_c3.calls
+finally:
+    _sb.time, _sb._get_client, _sb._brave_key = _SB_REAL_TIME, _SB_REAL_CLIENT, _SB_REAL_KEY
+    _sb_reset()
+check("search_web early-exits when BOTH halves cool: 'no request sent', zero client calls (a fan-out can no longer re-arm the limiter)",
+      "no request sent" in _sb3.get("raised", "") and _sb3.get("calls") == 0, str(_sb3))
+
+# (4) the rate gate: consecutive DDG calls are paced >= _DDG_MIN_INTERVAL apart.
+_sb4: dict = {}
+try:
+    _sb_reset()
+    _sb_clock = _SbClock(_SB_REAL_TIME)
+    _sb.time = _sb_clock
+    _sb._brave_key = lambda: None
+    _sb._get_client = lambda: _SbClient([_SbResp(200, "<html></html>")])
+    _sb._ddg("x", 1)
+    _sb._ddg("y", 1)
+    _sb4["slept"] = sum(_sb_clock.slept)
+finally:
+    _sb.time, _sb._get_client, _sb._brave_key = _SB_REAL_TIME, _SB_REAL_CLIENT, _SB_REAL_KEY
+    _sb_reset()
+check("ddg rate gate paces consecutive calls >= _DDG_MIN_INTERVAL apart (the concurrent fan-out can't soft-limit it)",
+      _sb4.get("slept", 0.0) >= _sb._DDG_MIN_INTERVAL - 0.05, str(_sb4))
+
+# (5) a TRANSIENT transport error is retried, not published as "the web has nothing".
+_sb5: dict = {}
+try:
+    _sb_reset()
+    _sb.time = _SbClock(_SB_REAL_TIME)
+    _sb._brave_key = lambda: None
+    _sb_c5 = _SbClient([_sb_httpx.ConnectError("boom"), _sb_httpx.ConnectError("boom"),
+                        _SbResp(200, "<html></html>")])
+    _sb._get_client = lambda: _sb_c5
+    _sb5["out"] = _sb._ddg("x", 1)
+    _sb5["calls"] = _sb_c5.calls
+except Exception as _exc:  # noqa: BLE001
+    _sb5["exc"] = f"{type(_exc).__name__}: {_exc}"
+finally:
+    _sb.time, _sb._get_client, _sb._brave_key = _SB_REAL_TIME, _SB_REAL_CLIENT, _SB_REAL_KEY
+    _sb_reset()
+check("ddg retries a TRANSIENT transport error twice then succeeds (a blinking link is not a dead web)",
+      _sb5.get("out") == [] and _sb5.get("calls") == 3 and "exc" not in _sb5, str(_sb5))
+
+# (6) backend_state is the caller-facing contract: assert its exact shape.
+_sb6 = _sb.backend_state()
+check("backend_state() shape: exactly {nominal, active, brave, ddg, last_error}, both halves fully described",
+      set(_sb6) == {"nominal", "active", "brave", "ddg", "last_error"}
+      and set(_sb6["brave"]) == {"keyed", "cooling_s", "cooling_until"}
+      and set(_sb6["ddg"]) == {"cooling_s", "cooling_until", "consecutive_trips", "min_interval_s"},
+      f"{sorted(_sb6)} brave={sorted(_sb6.get('brave', {}))} ddg={sorted(_sb6.get('ddg', {}))}")
+
+# (7) the probe must not spend the very thing it is checking.
+_sb7: dict = {}
+try:
+    _sb_reset()
+    _sb.time = _SbClock(_SB_REAL_TIME)
+    _sb._brave_key = lambda: "k"
+    _sb_c7 = _SbClient([_SbResp(200, "")])
+    _sb._get_client = lambda: _sb_c7
+    _sb._brave_cooldown_until = _SB_REAL_TIME.time() + 300
+    _sb._ddg_cooldown_until = _SB_REAL_TIME.time() + 300
+    _sb7["ping"] = _sb.backend_ping()
+    _sb7["calls"] = _sb_c7.calls
+finally:
+    _sb.time, _sb._get_client, _sb._brave_key = _SB_REAL_TIME, _SB_REAL_CLIENT, _SB_REAL_KEY
+    _sb_reset()
+check("backend_ping spends NO request while both halves cool, and stays True (a transient cooldown must not let the watchdog hide ten venues)",
+      _sb7.get("ping", (None, ""))[0] is True and "cooling" in _sb7.get("ping", (None, ""))[1]
+      and _sb7.get("calls") == 0, str(_sb7))
+
+# (8)(9)(10) the three empties a search-index venue can hit, told apart at last. The disk cache is
+# neutralized so a snapshot can never decide these, and every global is restored in finally.
+_sb_venue = search_index_source._SearchVenue(name="t", description="", site="x.com",
+                                             url_filter=r"/item/")
+_SB_REAL_GET_DOCS, _SB_REAL_SET_DOCS, _SB_REAL_SET = _sb_cache.get_docs, _sb_cache.set_docs, _sb_cache.set
+_SB_REAL_SI_WEB = search_index_source.search_web
+_sb_si: dict = {}
+try:
+    _sb_cache.get_docs = lambda k: None
+    _sb_cache.set_docs = lambda *a, **kw: None
+    _sb_cache.set = lambda *a, **kw: None
+    search_index_source.search_web = lambda q, n=8: [
+        {"title": "nav", "url": "https://x.com/pro/1", "snippet": "s"},
+        {"title": "nav", "url": "https://x.com/job/2", "snippet": "s"},
+        {"title": "nav", "url": "https://x.com/tag/3", "snippet": "s"}]
+    _sb_diag.enable()
+    _sb_si["docs_filtered"] = _sb_venue.search("q")
+    _sb_si["caps_filtered"] = _sb_diag.drain()
+    search_index_source.search_web = lambda q, n=8: []
+    _sb_diag.enable()
+    _sb_si["docs_empty"] = _sb_venue.search("q-empty")
+    _sb_si["caps_empty"] = _sb_diag.drain()
+
+    def _sb_boom(q, n=8):
+        raise RuntimeError("web-search backend cooling: brave until 00:00:00 (9s), "
+                           "ddg until 00:00:00 (9s); no request sent")
+
+    search_index_source.search_web = _sb_boom
+    _sb_diag.enable()
+    try:
+        _sb_venue.search("q-backend")
+        _sb_si["reraised"] = False
+    except RuntimeError:
+        _sb_si["reraised"] = True
+    _sb_si["caps_backend"] = _sb_diag.drain()
+finally:
+    search_index_source.search_web = _SB_REAL_SI_WEB
+    _sb_cache.get_docs, _sb_cache.set_docs, _sb_cache.set = (_SB_REAL_GET_DOCS, _SB_REAL_SET_DOCS,
+                                                             _SB_REAL_SET)
+    _sb_diag.drain()
+_sb_hf = [c.get("helper") for c in _sb_si.get("caps_filtered", [])]
+check("search_index: engine returned pages but url_filter dropped ALL -> `filtered_all` (the venue has only nav shells, NOT an index miss)",
+      _sb_si.get("docs_filtered") == [] and "t.filtered_all" in _sb_hf
+      and any("engine returned 3" in (c.get("body") or "") for c in _sb_si.get("caps_filtered", [])),
+      str(_sb_si.get("caps_filtered")))
+_sb_he = [c.get("helper") for c in _sb_si.get("caps_empty", [])]
+check("search_index: engine returned 0 -> `engine_empty` (an INDEX MISS, the one empty that IS evidence of absence)",
+      _sb_si.get("docs_empty") == [] and "t.engine_empty" in _sb_he
+      and any("INDEX MISS" in (c.get("body") or "") for c in _sb_si.get("caps_empty", [])),
+      str(_sb_si.get("caps_empty")))
+_sb_hb = [c.get("helper") for c in _sb_si.get("caps_backend", [])]
+check("search_index: a backend RuntimeError is captured as `backend` (exc + the whole ledger) and STILL propagates",
+      _sb_si.get("reraised") is True and "t.backend" in _sb_hb
+      and any(c.get("exc") for c in _sb_si.get("caps_backend", [])),
+      str(_sb_si.get("caps_backend")))
+
+# (11)(12) nowcoder: `query` now MEANS search everywhere. A query filters the recent feed AND runs
+# the venue's real site search; the merged docs each say which path they came from.
+_SB_REAL_NC = (_sb_nc.NowcoderAdapter._fetch_job, _sb_nc.NowcoderAdapter._search_fallback,
+               _sb_nc.NowcoderAdapter._job_ids)
+_sb_ncad = _sb_nc.NowcoderAdapter()
+_sb_nc_r: dict = {}
+_sb_nc_falls = {"n": 0}
+
+
+def _sb_nc_doc(title: str, content: str, uid: str) -> Document:
+    return Document(source="nowcoder", source_id=uid,
+                           url=f"https://www.nowcoder.com/feed/main/detail/{uid}",
+                           title=title, content=content, tags=["面经"], metadata={})
+
+
+try:
+    _sb_nc.NowcoderAdapter._job_ids = lambda self: [645]
+    _sb_nc.NowcoderAdapter._fetch_job = lambda self, job_id, order=3, pages=2: [
+        _sb_nc_doc("微软 实习 面经", "一面二面流程", "n1"),
+        _sb_nc_doc("字节 后端 笔试", "笔试流程记录", "n2")]
+
+    def _sb_nc_fallback(self, query, limit):
+        _sb_nc_falls["n"] += 1
+        d = _sb_nc_doc("微软 SDE 面经 (site)", "snippet", "s1")
+        d.metadata["via"] = "site-search"
+        return [d]
+
+    _sb_nc.NowcoderAdapter._search_fallback = _sb_nc_fallback
+    _sb_nc_r["merged"] = [dict(d.metadata) for d in _sb_ncad.search("微软 实习", 10)]
+    _sb_nc_r["falls_after_query"] = _sb_nc_falls["n"]
+    _sb_nc_r["feed"] = [dict(d.metadata) for d in _sb_ncad.search("", 10)]
+    _sb_nc_r["falls_after_feed"] = _sb_nc_falls["n"]
+    # both halves empty -> [] plus the no_match capture (the failure branch, never the success one)
+    _sb_nc.NowcoderAdapter._fetch_job = lambda self, job_id, order=3, pages=2: []
+    _sb_nc.NowcoderAdapter._search_fallback = lambda self, query, limit: []
+    _sb_diag.enable()
+    _sb_nc_r["nomatch_docs"] = _sb_ncad.search("紫色 独角兽 面经", 10)
+    _sb_nc_r["nomatch_caps"] = _sb_diag.drain()
+finally:
+    (_sb_nc.NowcoderAdapter._fetch_job, _sb_nc.NowcoderAdapter._search_fallback,
+     _sb_nc.NowcoderAdapter._job_ids) = _SB_REAL_NC
+    _sb_diag.drain()
+_sb_nc_merged = _sb_nc_r.get("merged") or []
+check("nowcoder: a query filters the feed AND merges the site search; every doc says its path (native-feed-filter / site-search) + feed_scanned",
+      len(_sb_nc_merged) == 2
+      and _sb_nc_merged[0].get("via") == "native-feed-filter"
+      and _sb_nc_merged[0].get("feed_scanned") == 2
+      and any(m.get("via") == "site-search" for m in _sb_nc_merged)
+      and _sb_nc_r.get("falls_after_query") == 1, str(_sb_nc_merged))
+check("nowcoder: no query = the native FEED only (via=native-feed, site search NOT fired)",
+      len(_sb_nc_r.get("feed") or []) == 2
+      and all(m.get("via") == "native-feed" for m in (_sb_nc_r.get("feed") or []))
+      and _sb_nc_r.get("falls_after_feed") == 1, str(_sb_nc_r.get("feed")))
+check("nowcoder: BOTH halves empty -> [] plus a `nowcoder.no_match` capture (an empty that names what was scanned)",
+      _sb_nc_r.get("nomatch_docs") == []
+      and "nowcoder.no_match" in [c.get("helper") for c in _sb_nc_r.get("nomatch_caps", [])]
+      and any("site search returned 0" in (c.get("body") or "")
+              for c in _sb_nc_r.get("nomatch_caps", [])),
+      str(_sb_nc_r.get("nomatch_caps")))
+
+# The live 2026-09-10 shape: the recent feed matches only the GENERIC query word (实习), the site hit
+# is the one carrying the company. "Native first" buried it below the cut; the union is RANKED now.
+try:
+    _sb_nc.NowcoderAdapter._job_ids = lambda self: [645]
+    _sb_nc.NowcoderAdapter._fetch_job = lambda self, job_id, order=3, pages=2: [
+        _sb_nc_doc("虾皮 测开 实习 一面", "自我介绍 实习 项目 拷打", "g1"),
+        _sb_nc_doc("深信服 Agent 实习生 一面", "实习 接口 对接 问题", "g2")]
+
+    def _sb_nc_fallback_rank(self, query, limit):
+        d = _sb_nc_doc("微软实习生招聘_牛客网", "微软 实习 招聘 LLM 应用开发", "s9")
+        d.metadata["via"] = "site-search"
+        # the engine's ?urlSource twin of a feed post must NOT duplicate it
+        twin = _sb_nc_doc("虾皮 测开 实习 一面", "snippet", "g1")
+        twin.url = twin.url + "?urlSource=home-api"
+        twin.metadata["via"] = "site-search"
+        return [d, twin]
+
+    _sb_nc.NowcoderAdapter._search_fallback = _sb_nc_fallback_rank
+    _sb_nc_r["ranked"] = [(d.metadata.get("via"), d.source_id) for d in _sb_ncad.search("微软 实习", 10)]
+finally:
+    (_sb_nc.NowcoderAdapter._fetch_job, _sb_nc.NowcoderAdapter._search_fallback,
+     _sb_nc.NowcoderAdapter._job_ids) = _SB_REAL_NC
+check("nowcoder: the merged pool is RANKED by query relevance before the cut (a site hit carrying the company outranks feed posts matching only the generic word) and a ?urlSource twin is deduped",
+      (_sb_nc_r.get("ranked") or [None])[0] == ("site-search", "s9")
+      and len(_sb_nc_r.get("ranked") or []) == 3, str(_sb_nc_r.get("ranked")))
+
+# the real _search_fallback stamps the SAME via as the merge path advertises (no second vocabulary)
+_SB_REAL_SW = _sb.search_web
+_sb_nc_via = ""
+try:
+    _sb.search_web = lambda q, n=8: [{"title": "T", "url": "https://www.nowcoder.com/feed/main/detail/z",
+                                      "snippet": "s"}]
+    _sb_nc_via = (_sb_ncad._search_fallback("微软", 5)[0].metadata or {}).get("via", "")
+finally:
+    _sb.search_web = _SB_REAL_SW
+check("nowcoder._search_fallback stamps via='site-search' (one vocabulary; the old 'brave-fallback' label is gone)",
+      _sb_nc_via == "site-search", _sb_nc_via)
+
+# (13)(14) the wrong-server-name failure: every tool docstring now carries its FULL MCP name, and
+# the server instructions say the name out loud. A sub-agent typed mcp__omniseek__eye_read and
+# reported "OmniSeek is unavailable"; nothing in the surface named the server.
+_sb_fq_bad = []
+for _tname in _srv._OMNISEEK_VERBS:
+    _tfn = getattr(_srv, _tname)
+    _tfn = getattr(_tfn, "__wrapped__", _tfn)
+    # The FQ line is its own PARAGRAPH right after the opening one (whose first LINE feeds _OMNISEEK_VERBS
+    # and may wrap onto a second line): paragraph[1], not "the next non-empty line".
+    _tparas = [pp for pp in _re_ro.split(r"\n[ \t]*\n", (_tfn.__doc__ or "").strip()) if pp.strip()]
+    _tfq = " ".join(_tparas[1].split()) if len(_tparas) > 1 else ""
+    if not (_tfq.startswith(f"Fully-qualified MCP name: mcp__{_srv._MCP_SERVER_NAME}__")
+            and _tfq.split(" (")[0].endswith(_tname)):
+        _sb_fq_bad.append(f"{_tname}: {_tfq[:60]}")
+check(f"every registered tool docstring names itself in full (mcp__omniseek__<tool>), all {len(_srv._OMNISEEK_VERBS)} of them",
+      not _sb_fq_bad, str(_sb_fq_bad))
+check("server instructions name the server + carry section (10) on the shared web-search backend",
+      f"mcp__{_srv._MCP_SERVER_NAME}__{_srv._TOOL_PREFIX}" in _srv._OMNISEEK_INSTRUCTIONS
+      and "(10) SHARED WEB-SEARCH BACKEND" in _srv._OMNISEEK_INSTRUCTIONS)
+# The public mirror is a TOKEN rename (server name -> its brand, tool prefix -> its own); a compound
+# spelled out as a literal has no word boundary for it to bite on and ships a tool name that does not
+# exist there. So the name is GENERATED (_fqn_doc / f-strings over the two constants), and this
+# tripwire keeps the literal out of the source for good.
+import pathlib as _sb_pl  # noqa: E402
+_sb_srv_src = _sb_pl.Path(_srv.__file__).read_text(encoding="utf-8")
+check("server.py never spells the fully-qualified tool name as a literal (built from _MCP_SERVER_NAME + _TOOL_PREFIX; the mirror rename would otherwise ship a non-existent name)",
+      "mcp__omniseek__" not in _sb_srv_src and _sb_srv_src.count("_fqn_doc") >= 19, str(_sb_srv_src.count("_fqn_doc")))
+
+# (15) the explicit_only reason is the routing surface an agent reads BEFORE naming five venues.
+_sb_rows = json.loads((SOURCES / "api/search_index_sites.json").read_text(encoding="utf-8"))
+_sb_eo_bad = [r["name"] for r in _sb_rows if "shared paced backend" not in (r.get("explicit_only") or "")]
+check(f"all {len(_sb_rows)} search_index rows declare the SHARED paced backend in explicit_only (not a private 'engine quota')",
+      not _sb_eo_bad, str(_sb_eo_bad))
+
+# (16) the batch shape that caused this: count it BEFORE the caller repeats it.
+check("_count_shared_backend_targets counts only calls naming a shared-backend venue (registry-derived, never a hand-written list)",
+      _srv._count_shared_backend_targets([
+          {"tool": "omniseek_search", "args": {"sources": ["zhihu_search"]}},
+          {"tool": "omniseek_search", "args": {"sources": ["nowcoder"]}},
+          {"tool": "omniseek_read", "args": {"target": "x"}},
+          {"tool": "omniseek_search", "args": {"sources": ["openalex"]}}]) == 2,
+      str(_srv._count_shared_backend_targets([{"tool": "omniseek_search", "args": {"sources": ["zhihu_search"]}}])))
+
+# nowcoder's site search now runs on EVERY query, so the shared backend's cooldown reaches a path that
+# used to be feed-only. A cooling backend must not DELETE feed matches we already hold; with nothing
+# else to publish the error still propagates (an empty must never read as "nowcoder has no such 面经").
+_sb_nc_deg: dict = {}
+try:
+    _sb_nc.NowcoderAdapter._job_ids = lambda self: [645]
+    _sb_nc.NowcoderAdapter._fetch_job = lambda self, job_id, order=3, pages=2: [
+        _sb_nc_doc("微软 实习 面经", "一面二面流程", "n1")]
+
+    def _sb_nc_cooling(self, query, limit):
+        raise RuntimeError("web-search backend cooling: brave until 00:00:00 (9s), "
+                           "ddg until 00:00:00 (9s); no request sent")
+
+    _sb_nc.NowcoderAdapter._search_fallback = _sb_nc_cooling
+    _sb_diag.enable()
+    _sb_nc_deg["docs"] = [dict(d.metadata) for d in _sb_ncad.search("微软", 10)]
+    _sb_nc_deg["caps"] = _sb_diag.drain()
+    _sb_nc.NowcoderAdapter._fetch_job = lambda self, job_id, order=3, pages=2: []
+    try:
+        _sb_ncad.search("微软", 10)
+        _sb_nc_deg["raised"] = False
+    except RuntimeError:
+        _sb_nc_deg["raised"] = True
+finally:
+    (_sb_nc.NowcoderAdapter._fetch_job, _sb_nc.NowcoderAdapter._search_fallback,
+     _sb_nc.NowcoderAdapter._job_ids) = _SB_REAL_NC
+    _sb_diag.drain()
+check("nowcoder: a COOLING backend degrades to the feed matches (captured as `nowcoder.backend`), and still RAISES when there is nothing else to publish",
+      len(_sb_nc_deg.get("docs") or []) == 1
+      and (_sb_nc_deg.get("docs") or [{}])[0].get("via") == "native-feed-filter"
+      and "nowcoder.backend" in [c.get("helper") for c in _sb_nc_deg.get("caps", [])]
+      and _sb_nc_deg.get("raised") is True, str(_sb_nc_deg))
+
+# the caller-facing half of the ledger: omniseek_search stamps it into _meta for a NAMED shared-backend
+# venue, and ONLY while the backend is not nominal. Silent on the happy path (zero noise), on a source
+# that does not draw on it, and on a broad sweep (those venues are all explicit_only, so sources=None
+# never touches the backend).
+_sb_stamp: dict = {}
+try:
+    _sb_reset()
+    _sb._brave_key = lambda: None
+    _sb._ddg_cooldown_until = _SB_REAL_TIME.time() + 300
+    _sb_stamp = {"venue": {}, "nowcoder": {}, "other": {}, "broad": {}, "nominal": {}}
+    _srv._stamp_backend_state(_sb_stamp["venue"], ["zhihu_search"])
+    _srv._stamp_backend_state(_sb_stamp["nowcoder"], ["nowcoder"])
+    _srv._stamp_backend_state(_sb_stamp["other"], ["openalex"])
+    _srv._stamp_backend_state(_sb_stamp["broad"], None)
+    _sb_reset()
+    _srv._stamp_backend_state(_sb_stamp["nominal"], ["zhihu_search"])
+finally:
+    _sb._brave_key = _SB_REAL_KEY
+    _sb_reset()
+check("omniseek_search stamps _meta.web_search_backend for a NAMED shared-backend venue (or nowcoder) ONLY while it is not nominal -- silent when nominal, on another source, and on a broad sweep",
+      _sb_stamp.get("venue", {}).get("_meta", {}).get("web_search_backend", {}).get("ddg", {}).get("cooling_s", 0) > 0
+      and "web_search_backend" in _sb_stamp.get("nowcoder", {}).get("_meta", {})
+      and _sb_stamp.get("other") == {} and _sb_stamp.get("broad") == {}
+      and _sb_stamp.get("nominal") == {}, str(_sb_stamp))
+
+# the batch shape end to end: >2 shared-backend calls in ONE gather come back carrying the warning that
+# names the cost. Driven through the REAL omniseek_gather over a synthetic no-op tool, so this exercises the
+# emission and not the network; the read-only whitelist is saved and restored.
+from omniseek.server import _GATHER_TOOLS as _sb_gt  # noqa: E402
+_sb_gt_prev = dict(_sb_gt)
+_sb_warn: dict = {}
+try:
+    _sb_gt["_sb_noop"] = lambda **kw: {"ok": True}
+
+    def _sb_call(name: str) -> dict:
+        return {"tool": "_sb_noop", "args": {"sources": [name]}}
+
+    _sb_warn["three"] = _srv.omniseek_gather.__wrapped__(
+        calls=[_sb_call("zhihu_search"), _sb_call("maimai"), _sb_call("nowcoder")], wait_s=5)
+    _sb_warn["two"] = _srv.omniseek_gather.__wrapped__(
+        calls=[_sb_call("zhihu_search"), _sb_call("openalex")], wait_s=5)
+finally:
+    _sb_gt.clear()
+    _sb_gt.update(_sb_gt_prev)
+check("omniseek_gather WARNS when >2 calls target the shared backend, and stays silent at <=2 (the batch shape that burned it is named before the caller repeats it)",
+      bool(_sb_warn.get("three", {}).get("warnings"))
+      and "3 calls target the shared web-search backend" in _sb_warn["three"]["warnings"][0]
+      and "warnings" not in _sb_warn.get("two", {}),
+      str({_k: _v.get("warnings") for _k, _v in _sb_warn.items()}))
+
+# ---------------------------------------------------------------------------
 # 9. recall (perception-memory index): the invariants that make it safe to ship —
 #    graceful degrade, exact CJK recall, OR-recall == doc_scores>0 (anti-drift,
 #    on a fixture-CLOSED corpus), the frozen indexable allow-list + no leak of a
@@ -7756,7 +8258,11 @@ check("verbs: each _OMNISEEK_VERBS value == that tool's docstring first line (de
 #     design/recon docs; the mention is pedagogy, not a live reference.
 _t49_instr_exempt = {"omniseek_fetch"}
 _t49_dd_registered = {n for n in dir(_srv) if n.startswith("omniseek_")}
-_t49_instr_tokens = set(_dd_re_mod.findall(r"omniseek_[a-z_]+", _srv._OMNISEEK_INSTRUCTIONS))
+# Strip the fully-qualified prefix ("mcp__<server>__") BEFORE tokenizing: the leftmost-match regex
+# would otherwise start at the server-name segment wherever the server name and the tool prefix share
+# a stem (the public mirror: mcp__<brand>__<brand>_search read as "<brand>__<brand>_search", 2026-09-10).
+_t49_instr_tokens = set(_dd_re_mod.findall(
+    r"omniseek_[a-z_]+", _srv._OMNISEEK_INSTRUCTIONS.replace(f"mcp__{_srv._MCP_SERVER_NAME}__", "")))
 _t49_instr_stale = sorted(_t49_instr_tokens - _t49_dd_registered - _t49_instr_exempt)
 check("docs-drift (instructions): every omniseek_* token in _OMNISEEK_INSTRUCTIONS is a REGISTERED tool "
       "(or an explicit exemption)",

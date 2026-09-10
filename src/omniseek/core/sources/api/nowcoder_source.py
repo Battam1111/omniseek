@@ -37,14 +37,20 @@ class NowcoderAdapter:
     # The gateway JSON API is Aliyun-WAF-walled for datacenter httpx (an HTML sliding-captcha), but the
     # WAF is FINGERPRINT-gated not login-gated, so the native path is restored by fetching it from inside
     # the shared 9222 CDP Chrome (real fingerprint passes clean, no login — verified 2026-07-10: 200 JSON,
-    # full records with real dates + engagement). Brave site-search is demoted to a fallback for when CDP
-    # is down. explicit_only keeps it OUT of the broad fan-out (the 9222 Chrome is a serial shared resource).
-    explicit_only = "native JSON via shared 9222 CDP Chrome (WAF is fingerprint-gated); Brave fallback if CDP down"
+    # full records with real dates + engagement). The site search is the venue's KEYWORD search and runs
+    # alongside the feed whenever a query is given (it is also the whole answer when CDP is down).
+    # explicit_only keeps it OUT of the broad fan-out (the 9222 Chrome is a serial shared resource).
+    explicit_only = ("native JSON via shared 9222 CDP Chrome (WAF is fingerprint-gated); a query also "
+                     "fires the site search on the shared paced backend (brave->ddg)")
     description = (
         "牛客网 面经 + 内推 — 中文 AI/ML 真实面试 bar (八股 vs 重思维 / 全流程时间线 / 内推码), "
-        "成于面试后数天. 直连 JSON 被 Aliyun WAF 墙(指纹闸非登录闸)→ 经共享 9222 CDP Chrome 原生取 "
-        "(带真实指纹, 无需登录); CDP 挂了才降级走 site:nowcoder.com Brave 检索. "
-        "默认 算法工程师(645), 可配 ~/.omniseek/credentials/nowcoder.json job_ids"
+        "成于面试后数天. 两条路: 无 query = 拉最近面经流 (默认岗位 tag 645 算法工程师, 可配 "
+        "~/.omniseek/credentials/nowcoder.json job_ids), 经共享 9222 CDP Chrome 原生取 JSON "
+        "(WAF 是指纹闸非登录闸, 无需登录); 有 query = 在这批最近面经里做关键词筛选, 并合并 "
+        "site:nowcoder.com 的网页搜索结果 (真正的站内关键词搜索, 走共享搜索后端), 每条 "
+        "metadata.via 标明来路 (native-feed / native-feed-filter / site-search), 两半并集按与 query "
+        "的相关度排序后再截到 limit (含具体公司名的站内结果排在只命中泛词的面经前面). "
+        "泛词 (实习 / 面试) 会命中几乎所有面经, 查具体公司或岗位时用 公司名 + 岗位 + 具体词."
     )
 
     def _job_ids(self) -> list:
@@ -139,19 +145,71 @@ class NowcoderAdapter:
         )
 
     def search(self, query: str, limit: int = 10) -> list[Document]:
-        docs: list[Document] = []
+        """No query = the recent 面经 FEED. A query = keyword search, both ways at once.
+
+        The feed is a STREAM of ~20 recent posts, so filtering it was never a search: a generic word
+        (实习 / 面试) matched nearly every post and a specific one (a company, a role) missed
+        everything older than the window, while the caller read the result as "what nowcoder has on
+        this". So a query now ALSO runs the site search, which is the venue's real keyword search
+        over its archive, and every doc says which path it came from in ``metadata.via``.
+        """
+        feed: list[Document] = []
         for jid in self._job_ids():
-            docs.extend(self._fetch_job(jid))
+            feed.extend(self._fetch_job(jid))
+        scanned = len(feed)
         q = (query or "").strip()
-        if docs:  # direct API alive → full posts
-            if q:
-                return keyword_score_filter(docs, q)[:limit]
-            docs.sort(key=lambda d: d.date or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
-            return docs[:limit]
-        # Direct gateway yielded nothing (Aliyun-WAF-walled) → site:-scoped web search fallback.
-        return self._search_fallback(q, limit)
+        if not q:
+            if not feed:  # gateway yielded nothing (CDP down) → the site search still serves
+                return self._search_fallback("", limit)
+            feed.sort(key=lambda d: d.date or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
+            out = feed[:limit]
+            for d in out:
+                d.metadata["via"] = "native-feed"
+                d.metadata["feed_scanned"] = scanned
+            return out
+        native = keyword_score_filter(feed, q)
+        for d in native:
+            d.metadata["via"] = "native-feed-filter"
+            d.metadata["feed_scanned"] = scanned
+        try:
+            site = self._search_fallback(q, limit)
+        except RuntimeError as exc:
+            # The site search now runs on EVERY query, which puts the SHARED backend's cooldown in
+            # front of a path that used to be feed-only. Re-raise when there is nothing else to hand
+            # back (the error contract: an empty must never be published as "nowcoder has no such
+            # 面经"), but a cooling backend must not DELETE feed matches we already hold — degrade to
+            # them and capture why, so the caller reads a partial degrade instead of a dead source.
+            if not native:
+                raise
+            diag.note("nowcoder.backend", url=API, exc=exc,
+                      body="site search unavailable; returning the native-feed matches only")
+            site = []
+        # Merge, then RANK the union by relevance to the query BEFORE cutting to limit. "Native
+        # first" was wrong in practice (live, 2026-09-10): the generic query word (实习) matched 16 of
+        # the 25 feed posts, none about the company asked for, while the four site hits that WERE
+        # about it sat at positions 17-20, cut off at any normal limit. BM25 over the union puts the
+        # docs carrying the rare query term first wherever they came from; a site hit whose snippet
+        # carries no query token still came from a keyword search, so it stays, after the scored ones.
+        pool: list[Document] = []
+        seen: set = set()
+        for d in native + site:
+            key = (d.url or "").split("?", 1)[0]  # the engine's ?urlSource=... twin is the same post
+            if key in seen:
+                continue
+            seen.add(key)
+            pool.append(d)
+        ranked = keyword_score_filter(pool, q)
+        ranked_ids = {id(d) for d in ranked}
+        docs = (ranked + [d for d in pool if id(d) not in ranked_ids])[:limit]
+        if not docs:  # failure branch only, per diag.note's contract
+            diag.note("nowcoder.no_match", url=API,
+                      body=f"feed scanned {scanned} recent posts (job tags {self._job_ids()}), "
+                           f"none matched {q!r}; site search returned 0")
+        return docs
 
     def _search_fallback(self, query: str, limit: int) -> list[Document]:
+        """site:-scoped web search over nowcoder — the venue's real keyword search (and the whole
+        source when the CDP native path is down)."""
         from omniseek.core.sources.api._search_backend import search_web
         q = f"site:nowcoder.com/feed {query}".strip() if query else "site:nowcoder.com/feed 面经 算法工程师"
         docs: list[Document] = []
@@ -164,7 +222,7 @@ class NowcoderAdapter:
                 title=r.get("title") or "(untitled)",
                 content=r.get("snippet") or "(snippet only — open the URL for the full 面经)",
                 tags=["面经", "search-index-fallback"],
-                metadata={"via": "brave-fallback (direct API WAF-blocked)", "raw": jsonsafe(r)},
+                metadata={"via": "site-search", "raw": jsonsafe(r)},
             ))
             if len(docs) >= limit:
                 break

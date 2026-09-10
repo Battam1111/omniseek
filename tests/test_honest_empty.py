@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import importlib.util
 import sys
 import unittest
@@ -18,6 +19,22 @@ with mock.patch.object(auth, "write_template"):
     from omniseek.core.sources.scrape import xiaoyuzhou_source
 
 
+@contextlib.contextmanager
+def _quiet_backend():
+    """Start the shared web-search backend from a COLD ledger for one test.
+
+    The backend paces and circuit-breaks itself (2026-09-10): its DDG gate sleeps up to
+    _DDG_MIN_INTERVAL after ANY previous call (a call that failed still reserved a slot), and a
+    tripped breaker refuses to send at all. A test about failure SURFACING must neutralize both,
+    or it measures the pacer instead: this suite's third test lost its 2s fetch deadline to the
+    2.5s gate left armed by the two tests before it, and read as 'timed_out' instead of 'errored'.
+    """
+    with contextlib.ExitStack() as stack:
+        for name in ("_ddg_last_call", "_brave_last_call", "_ddg_cooldown_until", "_brave_cooldown_until"):
+            stack.enter_context(mock.patch.object(_search_backend, name, 0.0))
+        yield
+
+
 def _load_script(name: str, filename: str):
     spec = importlib.util.spec_from_file_location(name, ROOT / "scripts" / filename)
     module = importlib.util.module_from_spec(spec)
@@ -28,13 +45,13 @@ def _load_script(name: str, filename: str):
 
 class HonestEmptyTests(unittest.TestCase):
     def test_ddg_sync_total_failure_raises(self) -> None:
-        with mock.patch.object(_search_backend, "_get_client", side_effect=OSError("offline")):
+        with _quiet_backend(), mock.patch.object(_search_backend, "_get_client", side_effect=OSError("offline")):
             with self.assertRaisesRegex(RuntimeError, "DDG request failed"):
                 _search_backend._ddg("query", 1)
 
     def test_ddg_async_total_failure_raises(self) -> None:
         async def run() -> None:
-            with mock.patch.object(_search_backend, "_aget_client", side_effect=OSError("offline")):
+            with _quiet_backend(), mock.patch.object(_search_backend, "_aget_client", side_effect=OSError("offline")):
                 with self.assertRaisesRegex(RuntimeError, "DDG request failed"):
                     await _search_backend._addg("query", 1)
 
@@ -43,6 +60,7 @@ class HonestEmptyTests(unittest.TestCase):
     def test_search_backend_failure_reaches_fetcher_outcome(self) -> None:
         adapter = _search_backend_source()
         with (
+            _quiet_backend(),
             mock.patch.object(fetcher, "get_adapter", return_value=adapter),
             mock.patch.object(_search_backend, "_brave_key", return_value=None),
             mock.patch.object(_search_backend, "_get_client", side_effect=OSError("offline")),

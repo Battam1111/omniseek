@@ -724,6 +724,14 @@ def _build_diagnostic(adapter: "SourceAdapter", *, docs: list, captures: list,
     try:
         if docs and not captures and not timed_out and raised is None:
             return None  # the no-noise success case: results came back, nothing failed → no diagnostic
+        # Captures whose helper ALREADY explains the empty (a search-index venue's engine_empty /
+        # filtered_all / backend, nowcoder's no_match). The generic line below reads as "no evidence
+        # was captured", so writing it OVER a captured explanation is what sent one WORKING source to
+        # the repair loop twice. When such a capture is present, point AT it.
+        explained = sorted({h for h in ((c or {}).get("helper") for c in (captures or [])
+                                        if isinstance(c, dict))
+                            if h and h.rsplit(".", 1)[-1] in
+                            ("engine_empty", "filtered_all", "backend", "no_match")})
         if docs:
             note = "fetch returned documents but an egress failure was captured (partial degrade)"
         else:
@@ -733,6 +741,8 @@ def _build_diagnostic(adapter: "SourceAdapter", *, docs: list, captures: list,
                     "captures could not be drained from the abandoned thread")
         elif raised is not None:
             note = f"adapter raised: {type(raised).__name__}: {raised}"[:300]
+        elif explained and not docs:
+            note = f"empty, and the adapter said WHY — see captures: {', '.join(explained)}"
         elif not captures and not docs:
             note = ("empty with no captured egress failure: the source likely returned a "
                     "well-formed response with zero items (query miss, or a parser/selector "
