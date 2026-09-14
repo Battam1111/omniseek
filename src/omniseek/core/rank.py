@@ -621,6 +621,11 @@ def merge_rank(results, query: str, limit: int = 15,
                       or u.rsplit('.', 1)[-1].lower() in
                       ('mp3', 'm4a', 'wav', 'aac', 'ogg', 'flac', 'opus')]
             _capt = [u for u in _urls if 'youtube.com' in u or 'youtu.be' in u]
+            # A YouTube URL is BOTH: captions when they exist (cheap), ASR when they do not.
+            # Marking it captioned-only asserted a fact nobody checked, and uploaders do turn
+            # captions off; an agent then read 'captioned' and never tried the path that worked.
+            # handles say what you CAN do, so list both and let the caller fall through.
+            _trans = _trans + [u for u in _capt if u not in _trans]
             if _trans:
                 _h['transcribable'] = _trans
             if _capt:

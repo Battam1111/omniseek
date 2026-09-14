@@ -1611,6 +1611,85 @@ check("omniseek_gather WARNS when >2 calls target the shared backend, and stays 
       and "warnings" not in _sb_warn.get("two", {}),
       str({_k: _v.get("warnings") for _k, _v in _sb_warn.items()}))
 
+# (17) cdp_fulltext's host WHITELIST is the whole safety story of that adapter: it drives a REAL
+# logged-in-capable browser, so a host it does not claim must be refused BEFORE any navigation.
+# Offline: stub cdp_call and assert routing, never the network. PropertyGuru + 99.co joined the
+# list on 2026-09-13 (probed against the shared 9222 Chrome first: both render the real listing
+# grid with hundreds of S$ prices and zero anti-bot markers; plain HTTP gets a challenge page).
+from omniseek.core.sources.walled import cdp_fulltext_source as _cf  # noqa: E402
+_CF_REAL_CALL = _cf.cdp_call
+_cf_seen: list = []
+_cf_r: dict = {}
+try:
+    def _cf_stub(flow, initial_url=None, timeout=None):  # noqa: ANN001
+        _cf_seen.append(initial_url)
+        return {"url": initial_url, "title": "t", "html": "<html><body><main>body</main></body></html>",
+                "images": []}
+
+    _cf.cdp_call = _cf_stub
+    _cf_ad = _cf.CdpFulltextAdapter()
+    for _k, _u in (("pg", "https://www.propertyguru.com.sg/property-for-rent/in-tanjong-pagar/room-rental"),
+                   ("n9", "https://www.99.co/singapore/rent/rooms"),
+                   ("quora", "https://www.quora.com/x"),
+                   ("li_post", "https://www.linkedin.com/posts/someone_abc"),
+                   ("li_profile", "https://www.linkedin.com/in/someone"),
+                   ("random", "https://example.com/whatever")):
+        _cf_r[_k] = _cf_ad.fetch_url(_u)
+finally:
+    _cf.cdp_call = _CF_REAL_CALL
+check("cdp_fulltext claims propertyguru.com.sg + 99.co (the private-landlord listing layer that plain HTTP cannot reach)",
+      _cf_r.get("pg") is not None and _cf_r.get("n9") is not None
+      and _cf_r["pg"].source == "cdp_fulltext",
+      str({_k: bool(_v) for _k, _v in _cf_r.items()}))
+check("cdp_fulltext REFUSES an unclaimed host and a LinkedIn non-/posts/ URL without ever driving the browser",
+      _cf_r.get("random") is None and _cf_r.get("li_profile") is None
+      and all("example.com" not in (_u or "") and "/in/someone" not in (_u or "") for _u in _cf_seen),
+      str(_cf_seen))
+check("cdp_fulltext description names the two SG property portals (the router surface agents read)",
+      "propertyguru" in _cf.CdpFulltextAdapter.description.lower()
+      and "99.co" in _cf.CdpFulltextAdapter.description)
+
+# (18) YouTube: a FAILURE MUST NOT WEAR A SUCCESS'S CLOTHES. 2026-09-14, live: yt-dlp went stale,
+# YouTube 403'd the media fetch, this adapter returned None, and the fetcher fell through to the
+# generic renderer, which handed back a page shell with status ok. The reader (an agent) had no
+# way to tell that apart from a real fetch. Three invariants keep that shut, all offline.
+from omniseek.core.sources.walled import youtube_source as _yt  # noqa: E402
+from omniseek.core import fetcher as _ftc  # noqa: E402
+
+check("youtube OWNS its hosts, so the fetcher can tell a decline from a miss (zhihu/xiaomuchong pattern)",
+      _yt.YouTubeAdapter.fetch_url_class == "fulltext"
+      and all(_ftc._adapter_declares_fetch_url_host(_yt.YouTubeAdapter(), _u) for _u in (
+          "https://www.youtube.com/watch?v=x", "https://youtu.be/x", "https://m.youtube.com/watch?v=x"))
+      and not _ftc._adapter_declares_fetch_url_host(_yt.YouTubeAdapter(), "https://notyoutube.com/x"),
+      str(getattr(_yt.YouTubeAdapter, "fetch_url_hosts", None)))
+
+_YT_REAL_DL, _YT_REAL_TX = _yt._ytdlp, _yt._fetch_transcript
+_yt_r = {}
+try:
+    def _yt_boom():  # metadata egress blocked, exactly like a stale yt-dlp 403
+        raise RuntimeError("HTTP Error 403: Forbidden")
+    _yt._ytdlp = _yt_boom
+    _yt._fetch_transcript = lambda vid, prefer_languages=None: "spoken words"
+    _yt_r["captions_survive"] = _yt.YouTubeAdapter().fetch_url("https://www.youtube.com/watch?v=abcdefghijk")
+    _yt._fetch_transcript = lambda vid, prefer_languages=None: None
+    _yt_r["both_dead"] = _yt.YouTubeAdapter().fetch_url("https://www.youtube.com/watch?v=abcdefghijk")
+finally:
+    _yt._ytdlp, _yt._fetch_transcript = _YT_REAL_DL, _YT_REAL_TX
+
+check("youtube keeps the transcript when the METADATA egress dies (two egresses, not one)",
+      _yt_r["captions_survive"] is not None
+      and "spoken words" in (_yt_r["captions_survive"].content or ""),
+      repr(_yt_r["captions_survive"])[:120])
+check("youtube declines only when BOTH egresses come back empty (a real decline, not a shrug)",
+      _yt_r["both_dead"] is None)
+
+# The stamp itself: a generic result returned AFTER the owning adapter missed must say so.
+_ftc_src = __import__("inspect").getsource(_ftc._fetch_url_via_adapters_with_reason)
+check("fetcher stamps owner_adapter_missed when the host owner already failed (no silent degrade)",
+      "fulltext_missed and not fulltext_attempt" in _ftc_src
+      and "owner_adapter_missed" in _ftc_src and "owner_adapter_reason" in _ftc_src)
+
+
 # ---------------------------------------------------------------------------
 # 9. recall (perception-memory index): the invariants that make it safe to ship —
 #    graceful degrade, exact CJK recall, OR-recall == doc_scores>0 (anti-drift,
@@ -7095,8 +7174,10 @@ _hnd_doc = _PDoc(source="youtube", source_id="v1", url="https://www.youtube.com/
                  title="A Talk About RL Sufficient Length Title", content="RL talk",
                  media=["https://www.youtube.com/watch?v=abc"])
 _hnd_r = _merge_rank({"youtube": [_hnd_doc]}, "RL", limit=5)
-check("handles: youtube URL detected as 'captioned' (not transcribable — youtube has captions)",
-      "captioned" in _hnd_r[0].metadata.get("handles", {}))
+check("handles: a youtube URL is BOTH captioned and transcribable (captions can be switched off)",
+      "captioned" in _hnd_r[0].metadata.get("handles", {})
+      and "transcribable" in _hnd_r[0].metadata.get("handles", {}),
+      str(_hnd_r[0].metadata.get("handles", {})))
 _hnd_bili = _PDoc(source="bilibili", source_id="b1", url="https://www.bilibili.com/video/BV1x",
                   title="Bilibili Video Long Title For Dedup Testing", content="x",
                   media=["https://www.bilibili.com/video/BV1x"])

@@ -6,6 +6,38 @@ All notable changes to OmniSeek are documented here. The format follows
 Entries below the rename note predate it and use the project's former name, penumbra; they are
 history and are kept as written.
 
+## [0.2.1] - 2026-09-14
+
+A patch release with one theme: a failure must not come back wearing a success's clothes.
+
+### Fixed
+
+- **A blocked YouTube fetch used to return a page shell with status ok.** The adapter never
+  declared the hosts it owns, so the fetcher could not tell "nobody claimed this URL" apart
+  from "the adapter that owns it failed", and the request fell through to the generic renderer.
+  It now declares them (the same declaration zhihu and xiaomuchong already make), and a generic
+  result returned after the owning adapter missed carries `owner_adapter_missed` plus that
+  adapter's reason. Found live while reading a video that the caller believed had been read.
+- **Captions no longer die with the metadata.** yt-dlp and the captions API are two independent
+  egresses, but one yt-dlp exception returned early and the transcript never ran, though the
+  transcript is the half worth having. Both are tried now, and a decline requires both to be empty.
+- **A YouTube URL is marked both captioned and transcribable.** Marking it captioned-only
+  asserted a fact nobody had checked; uploaders do switch captions off, and an agent reading
+  that handle would never reach for the path that still works. Handles say what you can do.
+- **Transcription no longer guesses at its own failure.** "no audio stream resolved (unsupported
+  host?)" was printed for what was really a 403 from a stale yt-dlp, pointing the reader at a
+  routing bug that did not exist. The downloader now carries the real reason out.
+- **yt-dlp staleness is visible before it breaks something.** The floor moved to 2026.8.19 and
+  the YouTube health check reports the installed build's age once it passes 60 days. The pin was
+  always a floor and the comment always said to keep it current, but nothing upgraded a deployed
+  environment or made its age legible, so it rotted quietly until it failed as an opaque 403.
+
+### Added
+
+- The CDP full-text route now claims `propertyguru.com.sg` and `99.co`, both probed against a
+  real browser before being claimed: they render their listing pages in full while plain HTTP
+  and the text-proxy fallback each receive an anti-bot challenge instead.
+
 ## [0.2.0] - 2026-08-17
 
 The alignment and evidence release: every public claim is now measured, printed at boot, or

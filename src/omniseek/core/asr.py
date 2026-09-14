@@ -520,7 +520,10 @@ def _ytdlp_download(url: str) -> tuple[Optional[str], dict]:
                       "title": info.get("title"), "author": info.get("uploader")}
     except Exception as exc:  # noqa: BLE001
         logger.warning("yt-dlp audio download failed %s: %s", url, exc)
-        return None, {}
+        # Carry the real reason out. Swallowing it forced the caller to GUESS at a cause, and the
+        # guess it printed ("unsupported host?") sent a reader looking for a routing bug when the
+        # actual failure was a 403 from a stale yt-dlp.
+        return None, {"error": str(exc).strip()[:200]}
 
 
 def _rm(path: Optional[str]) -> None:
@@ -710,7 +713,10 @@ def transcribe_url(url: str, language: Optional[str] = None,
         else:  # other video/podcast hosts → yt-dlp download (robust)
             ytmp, meta = _ytdlp_download(url)
             if not ytmp:
-                return {"url": url, "error": "no audio stream resolved (unsupported host?)", "transcript": ""}
+                why = (meta or {}).get("error")
+                return {"url": url, "transcript": "",
+                        "error": f"could not resolve audio for {host or url}: {why}" if why
+                        else f"could not resolve audio for {host or url} (no audio stream found)"}
             wav = _decode_to_wav(ytmp, start_s, dur_s)
         audio_secs = round(os.path.getsize(wav) / (_SR * 2))  # 16-bit mono
         diar_segs, n_spk, seg = [], 0, None

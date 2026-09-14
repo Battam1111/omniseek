@@ -2910,6 +2910,16 @@ def _fetch_url_via_adapters_with_reason(url: str) -> tuple[Optional[Document], O
             result, captures = payload
             adapter_reason = adapter_reason or _adapter_failure_reason(adapter.name, captures)
             if result is not None:
+                if fulltext_missed and not fulltext_attempt:
+                    # The adapter that OWNS this host already tried and failed, so whatever we
+                    # are about to return came from a generic route and may be a login wall or
+                    # a page shell. Returning it bare makes a failure read as a clean fetch;
+                    # say so in the metadata instead. Same principle as the walled_fallback
+                    # stamp above, widened past the search-index class.
+                    result.metadata = dict(result.metadata or {})
+                    result.metadata["owner_adapter_missed"] = True
+                    if adapter_reason:
+                        result.metadata["owner_adapter_reason"] = adapter_reason
                 return result, None
         except Exception as exc:  # noqa: BLE001
             adapter_reason = adapter_reason or _adapter_failure_reason(

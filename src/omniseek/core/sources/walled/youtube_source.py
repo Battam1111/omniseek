@@ -211,6 +211,27 @@ def _comment_to_document(comment: dict, video_id: str, video_url: str) -> Docume
     )
 
 
+def _ytdlp_age_note(stale_days: int = 60) -> str:
+    """Say how old the installed yt-dlp is once it passes the staleness line, else say nothing.
+
+    yt-dlp rots against YouTube faster than any other dependency here (YouTube rotates its player
+    signatures continuously), and a stale build fails as an opaque 403 on the MEDIA fetch while
+    metadata still works, which reads like a network problem and sends the reader hunting in the
+    wrong place. The pin is a floor, not a ceiling, so nothing upgrades the deployed environment
+    on its own: this puts the age on the instrument that already gets read.
+    """
+    try:
+        from yt_dlp import version as _v
+        stamp = str(getattr(_v, "__version__", "")).split(".")
+        released = datetime(int(stamp[0]), int(stamp[1]), int(stamp[2]), tzinfo=timezone.utc)
+        days = (datetime.now(timezone.utc) - released).days
+        if days >= stale_days:
+            return f" (yt-dlp {getattr(_v, '__version__', '?')} is {days} days old; upgrade it)"
+    except Exception:  # noqa: BLE001 - an unreadable version must never fail a health check
+        pass
+    return ""
+
+
 def _fetch_transcript(video_id: str, prefer_languages=("en", "zh-CN", "zh-Hans", "zh")) -> Optional[str]:
     """Try to fetch a transcript in any of the preferred languages.
 
@@ -276,6 +297,12 @@ def _fetch_transcript(video_id: str, prefer_languages=("en", "zh-CN", "zh-Hans",
 class YouTubeAdapter:
     name = "youtube"
     needs_credentials = False
+    # OWN the YouTube hosts (same declaration zhihu/xiaomuchong make). Without it the fetcher
+    # cannot tell "nobody claimed this URL" from "the adapter that owns it failed", so a blocked
+    # YouTube fetch fell through to the generic renderer and came back as a page shell with
+    # status ok: a failure wearing a success's clothes.
+    fetch_url_class = "fulltext"
+    fetch_url_hosts = ("youtube.com", "youtu.be")
     description = (
         "YouTube — video search + transcript + top comments (PhD methodology channels, "
         "lectures, talks; pass a video URL/id as the query to get its comments as docs)"
@@ -336,19 +363,32 @@ class YouTubeAdapter:
         if not video_id:
             return None
 
-        # Pull full video info + transcript
+        # Metadata (yt-dlp) and captions (the transcript API) are two INDEPENDENT egresses. yt-dlp
+        # rots fast against YouTube and gets blocked on its own schedule, so coupling them meant a
+        # yt-dlp block silently took the transcript down too, and the transcript is the half worth
+        # having. Try both; decline only when BOTH come back empty.
+        info = None
         try:
             with _ytdlp().YoutubeDL(_YDL_INFO_OPTS) as ydl:
                 info = ydl.extract_info(
                     f"https://www.youtube.com/watch?v={video_id}", download=False
                 )
         except Exception as exc:  # noqa: BLE001
-            logger.warning("YouTube fetch_url failed for %s: %s", url, exc)
-            return None
+            logger.warning("YouTube metadata fetch failed for %s: %s", url, exc)
 
-        doc = self._entry_to_document(info, include_full_description=True)
-        # Augment with transcript (this is the high-value content) — PRESERVED verbatim.
         transcript = _fetch_transcript(video_id)
+
+        if info is None:
+            if not transcript:
+                return None  # both egresses empty: a real decline, and the fetcher now hears it
+            doc = Document(
+                source="youtube", source_id=video_id,
+                url=f"https://www.youtube.com/watch?v={video_id}",
+                title="(title unavailable)", content="",
+                metadata={"metadata_unavailable": True},
+            )
+        else:
+            doc = self._entry_to_document(info, include_full_description=True)
         if transcript:
             doc.content = doc.content + "\n\n## Transcript\n\n" + transcript
             doc.metadata["has_transcript"] = True
@@ -390,8 +430,8 @@ class YouTubeAdapter:
             with _ytdlp().YoutubeDL(_YDL_SEARCH_OPTS) as ydl:
                 info = ydl.extract_info("ytsearch1:research methodology", download=False)
             if info and info.get("entries"):
-                return True, "OK"
-            return False, "empty response"
+                return True, "OK" + _ytdlp_age_note()
+            return False, "empty response" + _ytdlp_age_note()
         except Exception as exc:  # noqa: BLE001
             return False, f"{type(exc).__name__}: {str(exc)[:100]}"
 

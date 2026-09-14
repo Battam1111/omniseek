@@ -10,6 +10,14 @@ Verified by direct CDP test 2026-06-07 (NO login required for any of these):
   - maimai.cn      full /article/detail body (comments need login)
   - linkedin.com   full public POST body (/posts/ only; profiles/Track B are off-limits)
   - x.com          public profile timeline + tweets (twitter.com alias)
+Added 2026-09-13, same discipline (probed the shared 9222 Chrome directly before claiming
+the host; both render the real listing grid, zero anti-bot markers, no login):
+  - propertyguru.com.sg  room/property search pages (1.4M chars of HTML, 264 S$ prices on
+                         the Tanjong Pagar room-rental page). Plain-HTTP and the jina
+                         fallback both get an anti-bot challenge page instead.
+  - 99.co                same (1.5M chars, 499 S$ prices on /singapore/rent/rooms).
+These two are the private-landlord listing layer: the co-living operators publish their own
+prices, but the cheaper individual rooms only exist on these portals.
 NOT usable from our datacenter egress IP (served a login/gateway page): HardwareZone
 (forums.hardwarezone.com.sg) -> keep using its search-index source.
 
@@ -35,7 +43,8 @@ logger = logging.getLogger(__name__)
 _MAX_CHARS = 200_000
 # Host substrings claimed for full-text CDP fetch (each verified to render for a real browser).
 _HOSTS = ("quora.com", "teamblind.com", "glassdoor.com", "maimai.cn",
-          "linkedin.com", "x.com", "twitter.com")
+          "linkedin.com", "x.com", "twitter.com",
+          "propertyguru.com.sg", "99.co")
 _HEALTH_URL = "https://www.quora.com/"
 
 # Quora truncates long answers behind "Continue Reading"; clicking expands inline (no login).
@@ -56,9 +65,13 @@ class CdpFulltextAdapter:
     description = (
         "Full-text via the CDP real browser for venues that wall/403 headless but render for a "
         "real browser (Quora, Blind/teamblind, Glassdoor, 脉脉/maimai, LinkedIn public posts, "
-        "X/Twitter profiles+tweets). Discover via the matching search-index source, then "
-        "omniseek_read the URL here to turn a snippet into the full post/article/answer. "
-        "READ-ONLY, no login. LinkedIn limited to /posts/ (public Track A only)."
+        "X/Twitter profiles+tweets, PropertyGuru 与 99.co 的新加坡房源页). Discover via the "
+        "matching search-index source, then omniseek_read the URL here to turn a snippet into the "
+        "full post/article/answer. For the two SG property portals just omniseek_read a search-result "
+        "URL directly (e.g. propertyguru.com.sg/property-for-rent/in-<area>/room-rental or "
+        "99.co/singapore/rent/rooms): that is where the individual-landlord rooms live, priced "
+        "well below the co-living operators. READ-ONLY, no login. LinkedIn limited to /posts/ "
+        "(public Track A only)."
     )
 
     def search(self, query: str, limit: int = 10) -> list[Document]:
