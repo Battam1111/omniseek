@@ -52,6 +52,32 @@ for p in python3 python /c/Python313/python.exe /c/Python312/python.exe; do
 done
 [ -n "$PYBIN" ] || { echo "FATAL: no python found (needed for the smoke gate)"; exit 1; }
 
+# to_lf PATH...: turn CRLF line ends into LF in every TEXT file under the given files/directories.
+# A file with a NUL byte is binary and left alone (the same test the OmniSelf sync uses). Byte-level
+# I/O, one python process for the whole tree. Used at every place below that copies files in.
+to_lf() {
+  "$PYBIN" - "$@" <<'PYEOF'
+import os, sys
+changed = 0
+for root in sys.argv[1:]:
+    if os.path.isfile(root):
+        paths = [root]
+    else:
+        paths = [os.path.join(d, n) for d, _, names in os.walk(root) for n in names]
+    for p in paths:
+        with open(p, "rb") as fh:
+            data = fh.read()
+        if b"\0" in data:
+            continue
+        new = data.replace(b"\r\n", b"\n")
+        if new != data:
+            with open(p, "wb") as fh:
+                fh.write(new)
+            changed += 1
+print(f"    line endings: {changed} file(s) converted CRLF -> LF")
+PYEOF
+}
+
 echo "=== sync_from_eye: $EYE_ROOT -> $PEN_ROOT ==="
 
 # --- 1. copy src/ (exclude personal sources + caches) ---
@@ -62,6 +88,14 @@ rm -f "$PEN_SRC/eye/sources/walled/polyu_source.py" \
       "$PEN_SRC/eye/sources/walled/mokahr_ats_source.py"
 find "$PEN_SRC" -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
 [ -d "$PEN_SRC/eye" ] && mv "$PEN_SRC/eye" "$PEN_SRC/core"
+
+# 1b. LINE ENDINGS. The mirror is LF-only (its .gitattributes: `* text=auto eol=lf`). The eye's
+#     repository is LF by the same rule, but this copy reads the eye's Windows WORKING tree, where an
+#     editor can still leave a CRLF file. Left alone, git would normalize it on commit and the working
+#     tree would show a whole-file phantom diff; worse, step 2b pins the sha256 of a schema file, and a
+#     digest taken over CRLF bytes stops matching the moment git stores the file as LF. So convert
+#     here, right after the copy and before anything reads or hashes these bytes.
+to_lf "$PEN_SRC"
 
 # --- 2. rename pass (ORDER MATTERS; semantics = the bb8a4af hand-made mirror) ---
 #   module path first, then compound brands, then token-level, then catch-alls.
@@ -124,7 +158,9 @@ if have == want:
     print("    heartbeat schema digest already matches")
 else:
     assert text.count(have) == 1, f"pin appears {text.count(have)} times, refusing to guess"
-    policy.write_text(text.replace(have, want, 1), encoding="utf-8")
+    # newline="\n": text mode on Windows would otherwise write every line end back as CRLF
+    # (that is how this file came to be the one CRLF file in the mirror's src/).
+    policy.write_text(text.replace(have, want, 1), encoding="utf-8", newline="\n")
     print(f"    re-pinned heartbeat schema digest {have[:12]}.. -> {want[:12]}..")
 PYEOF
 
@@ -253,6 +289,10 @@ for rel in "${SYNCED_ARTIFACTS[@]}"; do
   sed -i "${RENAME[@]}" "$PEN_ROOT/$rel"
 done
 sed -i 's/\bpolyu\b *//g' "$PEN_ROOT/tests/smoke.py"
+# Same line-ending rule as step 1b, for the artifacts this step just copied in.
+_synced_abs=()
+for rel in "${SYNCED_ARTIFACTS[@]}"; do _synced_abs+=("$PEN_ROOT/$rel"); done
+to_lf "${_synced_abs[@]}"
 
 # UNWRITTEN GATE. Every .py under the mirror's tests/ must be one this sync just wrote, or a mirror-owned
 # tests/test_mirror_*.py.

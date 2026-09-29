@@ -1,9 +1,14 @@
-# Bytes as-is: never normalize line endings (the tree is shipped verbatim to a mac via
-# git archive | tar).
-* -text
+# One line ending everywhere: LF in the repository, LF in the working tree, LF in
+# `git archive` output (the tree is shipped to a mac via git archive | tar, and a stray CRLF
+# breaks a shebang). Git enforces it, so nobody has to remember it.
+#
+# The eye this mirror syncs from is LF by the same rule; scripts/sync_from_eye.sh also converts
+# every text file it writes, so a CRLF working copy on the Windows side cannot leak in.
+# No file here needs CRLF (no .bat/.cmd/.ps1; no test reads raw \r\n bytes from a file).
+* text=auto eol=lf
 
-# Shell scripts must stay LF so they run on a fresh Unix clone (a stray CRLF breaks the shebang).
-*.sh text eol=lf
+# Binary types present in the tree (by type, not by guess).
+*.png binary
 
 # Historical one-off debug scripts stay in git but out of deploys.
 scripts/debug/ export-ignore
