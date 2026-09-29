@@ -45,6 +45,7 @@ from typing import Optional
 import httpx
 from bs4 import BeautifulSoup
 
+from omniseek.core import http
 from omniseek.core.normalize import Document
 from omniseek.core.sources.scrape._base import BaseScrapeAdapter
 
@@ -75,7 +76,7 @@ def _aget_client() -> "httpx.AsyncClient":
     if _aclient is None:
         with _aclient_lock:
             if _aclient is None:
-                _aclient = httpx.AsyncClient(
+                _aclient = http.AsyncHopClient(   # the redirect rule on every hop
                     headers={"User-Agent": _UA},
                     timeout=30,
                     follow_redirects=True,
@@ -207,7 +208,8 @@ class NSFCAwardsAdapter(BaseScrapeAdapter):
             "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
         }
         try:
-            r = httpx.post(url, data=data, headers=headers, timeout=30, follow_redirects=True)
+            r = http.direct("POST", url, data=data, headers=headers, timeout=30,
+                            follow_redirects=True)
             r.raise_for_status()
             return r.text
         except Exception as exc:  # noqa: BLE001 — failure -> None -> [] (the adapter contract)

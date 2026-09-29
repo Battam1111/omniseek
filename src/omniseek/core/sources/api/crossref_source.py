@@ -36,9 +36,7 @@ from datetime import datetime, timezone
 from typing import Optional
 from urllib.parse import urlparse
 
-import httpx
-
-from omniseek.core import auth, diag, http
+from omniseek.core import auth, diag, http, upstreams
 from omniseek.core.normalize import Document, jsonsafe, mk_signal
 from omniseek.core.sources.api._base import BaseAPIAdapter
 
@@ -68,12 +66,17 @@ class CrossrefAdapter(BaseAPIAdapter):
     def _raw_fetch(self, query: str, limit: int) -> list:
         """GET /works?query= and return message.items ([] on any failure)."""
         try:
-            resp = httpx.get(
-                f"{CROSSREF_BASE}/works",
-                params={"query": query, "rows": min(limit, 25)},
-                headers={"User-Agent": USER_AGENT},
-                timeout=TIMEOUT,
-            )
+            # The declared Crossref gate (polite pool: 3 in flight, list requests <= 3/s; the SAME guard
+            # the shared http client applies to crossref_retractions and enrich). UpstreamBusy lands
+            # in the except below: not sent, [] like any other failure.
+            with upstreams.egress(f"{CROSSREF_BASE}/works", request_s=TIMEOUT):
+                resp = http.direct(
+                    "GET", f"{CROSSREF_BASE}/works",
+                    params={"query": query, "rows": min(limit, 25)},
+                    headers={"User-Agent": USER_AGENT},
+                    timeout=TIMEOUT,
+                )
+            upstreams.observe_response(CROSSREF_BASE, resp)
             resp.raise_for_status()
             data = resp.json()
         except Exception as exc:  # noqa: BLE001
@@ -128,11 +131,13 @@ class CrossrefAdapter(BaseAPIAdapter):
             return None
 
         try:
-            resp = httpx.get(
-                f"{CROSSREF_BASE}/works/{doi}",
-                headers={"User-Agent": USER_AGENT},
-                timeout=TIMEOUT,
-            )
+            with upstreams.egress(f"{CROSSREF_BASE}/works/{doi}", request_s=TIMEOUT):  # declared Crossref gate
+                resp = http.direct(
+                    "GET", f"{CROSSREF_BASE}/works/{doi}",
+                    headers={"User-Agent": USER_AGENT},
+                    timeout=TIMEOUT,
+                )
+            upstreams.observe_response(CROSSREF_BASE, resp)
             if resp.status_code == 404:
                 return None
             resp.raise_for_status()
@@ -149,13 +154,17 @@ class CrossrefAdapter(BaseAPIAdapter):
     # ------------------------------------------------------------- health_check
     def health_check(self) -> tuple[bool, str]:
         try:
-            resp = httpx.get(
-                f"{CROSSREF_BASE}/works",
-                params={"query": "test", "rows": 1},
-                headers={"User-Agent": USER_AGENT},
-                timeout=8,
-            )
+            with upstreams.egress(f"{CROSSREF_BASE}/works", request_s=8):  # the probe is a list request too
+                resp = http.direct(
+                    "GET", f"{CROSSREF_BASE}/works",
+                    params={"query": "test", "rows": 1},
+                    headers={"User-Agent": USER_AGENT},
+                    timeout=8,
+                )
+            upstreams.observe_response(CROSSREF_BASE, resp)
             return resp.status_code == 200, f"HTTP {resp.status_code}"
+        except upstreams.UpstreamBusy as exc:
+            return True, f"degraded: declared Crossref gate busy, not probed this cycle ({exc})"
         except Exception as exc:  # noqa: BLE001
             return False, f"{type(exc).__name__}: {exc}"
 

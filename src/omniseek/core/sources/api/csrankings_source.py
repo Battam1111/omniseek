@@ -249,8 +249,8 @@ class CSRankingsAdapter:
 
     def health_check(self) -> tuple[bool, str]:
         try:
-            resp = httpx.head(FACULTY_CSV, headers={"User-Agent": USER_AGENT},
-                              timeout=10, follow_redirects=True)
+            resp = http.direct("HEAD", FACULTY_CSV, headers={"User-Agent": USER_AGENT},
+                               timeout=10, follow_redirects=True)
             return resp.status_code == 200, f"HTTP {resp.status_code}"
         except Exception as exc:  # noqa: BLE001
             return False, f"{type(exc).__name__}: {exc}"

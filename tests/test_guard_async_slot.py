@@ -48,6 +48,11 @@ class AsyncSlotTests(unittest.TestCase):
                 await anyio.sleep(0.06)
                 sema.release()
 
+            # The wait is cancelled at 0.03 s; the other holder lets go at 0.06 s. Nothing may be left
+            # taken afterwards. (This used to cancel the releaser too, which only worked while the
+            # wait sat in a shielded worker thread until 0.06 s: the thread that leaked under
+            # asyncio's own cancel, review F1. The wait is now polled in the coroutine and ends at
+            # the cancel, so the releaser is simply allowed to finish.)
             async with anyio.create_task_group() as tg:
                 tg.start_soon(release_initial_permit)
                 with anyio.move_on_after(0.03):
@@ -57,7 +62,6 @@ class AsyncSlotTests(unittest.TestCase):
                         lambda waited: GateBusy(f"busy after {waited:.2f}s"),
                     ):
                         await anyio.sleep(0.1)
-                tg.cancel_scope.cancel()
 
             self.assertTrue(sema.acquire(blocking=False))
             try:

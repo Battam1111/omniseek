@@ -23,7 +23,6 @@ from datetime import datetime, timezone
 from typing import Optional
 from urllib.parse import urljoin, urlparse
 
-import httpx
 from bs4 import BeautifulSoup
 
 from omniseek.core import cache, http
@@ -195,8 +194,8 @@ class TransformerCircuitsAdapter:
 
     def health_check(self) -> tuple[bool, str]:
         try:
-            resp = httpx.get(
-                INDEX_URL,
+            resp = http.direct(
+                "GET", INDEX_URL,
                 headers={"User-Agent": USER_AGENT},
                 timeout=10,
                 follow_redirects=True,

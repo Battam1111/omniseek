@@ -168,9 +168,9 @@ def _get(url: str) -> Optional[httpx.Response]:
             _sema_for(url),
             TIMEOUT,
             lambda waited: GateBusy(f"ATS gate busy after {waited:.1f}s for {urlparse(url).hostname}"),
-        ):
-            r = httpx.get(url, headers={"User-Agent": USER_AGENT}, timeout=TIMEOUT,
-                          follow_redirects=True)
+        ):  # declared host gates of every hop in http.direct (api.lever.co: robots Crawl-delay 1 s)
+            r = http.direct("GET", url, headers={"User-Agent": USER_AGENT}, timeout=TIMEOUT,
+                            follow_redirects=True)
         r.raise_for_status()
         return r
     except Exception as exc:  # noqa: BLE001

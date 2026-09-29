@@ -38,8 +38,6 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 from urllib.parse import quote
 
-import httpx
-
 from omniseek.core import http
 from omniseek.core.normalize import Document, jsonsafe, mk_signal
 from omniseek.core.sources.scrape._base import BaseScrapeAdapter
@@ -112,12 +110,12 @@ class V2exAdapter(BaseScrapeAdapter):
         returns a JSON list on success, or a dict error envelope for an unknown node."""
         url = f"{SHOW_URL}?node_name={quote(slug)}"
         try:
-            resp = httpx.get(
-                url,
-                headers={"User-Agent": _UA},
-                follow_redirects=True,
-                timeout=TIMEOUT,
-            )
+            # Declared V2EX gate: at most 120 API requests per hour per IP (the documented 1.0 quota;
+            # the 2.0 page says 600, the X-Rate-Limit-Limit header recorded here shows which applies).
+            # http.direct: the gate of every hop (the one redirect rule) and the readings; a 429 with
+            # Retry-After defers the whole V2EX gate for the async path too.
+            resp = http.direct("GET", url, headers={"User-Agent": _UA}, follow_redirects=True,
+                               timeout=TIMEOUT)
             resp.raise_for_status()
             data = resp.json()
         except Exception as exc:  # noqa: BLE001 (failure -> None is the adapter contract)

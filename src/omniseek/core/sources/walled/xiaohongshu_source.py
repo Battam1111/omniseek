@@ -233,6 +233,34 @@ def _detail_has_substance(title: str, body: str, images: list, comments: list) -
     )
 
 
+def _refused_landing(page_url: str) -> Optional[str]:
+    """Where a note read ended up when the platform refused the link, or None.
+
+    Measured 2026-09-26 on the mainland account: an App share link (xsec_source=app_share) for a
+    note older than about 60 days opened, and the server redirected it to /404/sec_... and then to
+    /404 (both hops marked as server redirects in that browser's history). That is the platform's
+    verdict on the link's token, not a fault of the read: the same link fails the same way again,
+    and the signed feed call answered it with HTTP 461 / code 300031. So a landing whose path
+    starts with /404 ends the read. Only scheme, host and path are returned: the query of a
+    redirect target can carry a token, and this string goes into a caller-facing diagnostic."""
+    try:
+        parts = urlparse(page_url or "")
+    except Exception:  # noqa: BLE001 (an unparseable url is not a refusal)
+        return None
+    if not parts.path.startswith("/404"):
+        return None
+    return f"{parts.scheme}://{parts.netloc}{parts.path}" if parts.netloc else parts.path
+
+
+def _refused_reason(landed: str) -> str:
+    """The caller-facing reason for a refused note link. The ``refused:`` prefix is the contract:
+    it is how a caller (the nightly digest) tells a platform verdict from a transient failure."""
+    return (f"refused: the platform redirected this note link to {landed}. That is 小红书's "
+            f"final answer for this link's xsec_token (typical for an old note opened from an App "
+            f"share link, xsec_source=app_share), not a transient failure: retrying the same link "
+            f"will not help.")
+
+
 def _json_item_to_document(item: dict) -> Optional[Document]:
     """One intercepted /search/notes JSON item → Document. Field-aligned with the DOM
     path (_card_to_document) + the xsec_token detail-link contract; the JSON additionally
@@ -757,6 +785,7 @@ class XiaohongshuAdapter:
 
         _cmt: list = []  # captured /comment/page comments (the listener appends from the CDP thread;
         #                  cdp_call's join() flushes the writes before we read it below)
+        _nav = {"landed": ""}  # a refused read's /404 address, written from the CDP thread like _cmt
 
         def _flow(page) -> tuple[str, Optional[str]]:
             if _USE_XHR_COMMENTS:
@@ -774,6 +803,13 @@ class XiaohongshuAdapter:
             seen_video = attach_video_sniffer(page)
             _goto_note_dual_host(page, nav_url)
             _human.read_dwell()
+            # A refused link lands on /404 (see _refused_landing). Stop BEFORE the content gate:
+            # the 404 page has no note body, and _login_wall reads a page with no real search box
+            # as a wall, which would trip the 6h account backoff over one link the platform declined.
+            landed = _refused_landing(page.url)
+            if landed:
+                _nav["landed"] = landed
+                return ("refused", None, [], {}, (None, None))
             # A note page renders #detail-title / #detail-desc even when a login-NUDGE
             # overlay is shown to guests (share links with xsec_token are guest-readable).
             # Prefer the content: only call it a wall if the note body is genuinely absent,
@@ -865,6 +901,10 @@ class XiaohongshuAdapter:
             _trip_backoff("login wall during fetch_url")
             diag.note("xiaohongshu.login_wall",
                       body="小号 logged OUT of the 9223 CDP Chrome — re-login via VNC required (note body unreadable until then)")
+            return None
+        if status == "refused":
+            # The platform's word on this link, not on the session: nothing is charged to the 小号.
+            diag.note("xiaohongshu.refused", url=url, body=_refused_reason(_nav["landed"]))
             return None
         if status != "ok" or not html:
             return None

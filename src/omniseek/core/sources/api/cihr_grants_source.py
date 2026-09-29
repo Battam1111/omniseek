@@ -64,7 +64,7 @@ def _aget_client() -> httpx.AsyncClient:
     if _aclient is None:
         with _aclient_lock:
             if _aclient is None:
-                _aclient = httpx.AsyncClient(follow_redirects=True)
+                _aclient = http.AsyncHopClient(follow_redirects=True)   # the redirect rule, every hop
     return _aclient
 
 
@@ -102,7 +102,8 @@ class CIHRGrantsAdapter(BulkFundingBase):
             # 85s < the 90s fetch_one deadline: the old 240s could never elapse on a deadline-bounded
             # call (the outer deadline killed it first, wasting the budget), and 85s is amply generous
             # for a few-MB XLSX. A genuinely larger download should raise the OUTER deadline, not this.
-            r = httpx.get(url, headers={"User-Agent": UA}, timeout=85, follow_redirects=True)
+            r = http.direct("GET", url, headers={"User-Agent": UA}, timeout=85,
+                            follow_redirects=True)
             r.raise_for_status()
             content = r.content
         except Exception as exc:  # noqa: BLE001 — failure → [] (the contract)

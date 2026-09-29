@@ -28,7 +28,7 @@ from urllib.parse import urljoin
 import anyio
 import httpx
 
-from omniseek.core import _netguard, cache, http
+from omniseek.core import _netguard, cache, http, upstreams
 
 # ── SSRF guard: DELEGATED to omniseek.core._netguard (ONE guard, shared with the mainline egress) ──
 # The URL-shape (scheme/userinfo/port), IP-block, and host-suffix DECISIONS all live in _netguard;
@@ -113,7 +113,8 @@ def safe_fetch(url: str, *, method: str = "GET", render: bool = False,
     Owns its client (NOT http._request_capped/_get_client). Returns:
         {"ok", "status", "bytes", "text", "final_url", "redirect_chain", "content_type",
          "blocked_reason": one of private_ip|bad_scheme|oversize|timeout|dns|userinfo|
-                           bad_port|redirect_loop|cache_only|fetch_error|None}
+                           bad_port|redirect_loop|cache_only|fetch_error|rate_gate|None}
+    (rate_gate: a hop to a declared upstream whose gate did not admit it in time; nothing sent)
     A blocked fetch is RECORDED; it never silently judges the candidate. ``render`` is accepted
     for signature parity but P1 NEVER drives a browser here (anonymous stranger only, no CDP).
 
@@ -146,7 +147,12 @@ def safe_fetch(url: str, *, method: str = "GET", render: bool = False,
         timeout=httpx.Timeout(connect=5.0, read=10.0, write=5.0, pool=5.0),
         trust_env=False,                  # no env proxies / no Authorization from netrc / etc.
         max_redirects=0,
+        event_hooks=http.progress_hooks(),  # the body's progress renews the gates' leases
     )
+    # The declared gates of the host this fetch is on (upstreams.HopGates, the ONE redirect rule): a
+    # hop to the same host continues the same visit, a hop to another host lets go of the last host's
+    # gates and takes its own. Held until the fetch returns.
+    gates = upstreams.HopGates(request_s=timeout_total)   # a request's own time, for the leases
     try:
         for _hop in range(max_redirects + 1):
             parts, reason = _validate_url_shape(current_url)
@@ -172,6 +178,9 @@ def safe_fetch(url: str, *, method: str = "GET", render: bool = False,
                 pinned_url += "?" + parts["query"]
 
             req_headers = {"Host": host}
+            _declared_ua = upstreams.user_agent_for(host)   # this hop's host may declare one
+            if _declared_ua:
+                req_headers["User-Agent"] = _declared_ua
             extensions = {}
             if scheme == "https":
                 # sni_hostname makes the TLS handshake present the real host while we connect to
@@ -179,8 +188,18 @@ def safe_fetch(url: str, *, method: str = "GET", render: bool = False,
                 extensions = {"sni_hostname": host}
 
             try:
+                # A hop to a DECLARED upstream takes its gates like any other egress (a no-op for an
+                # undeclared host, i.e. almost every candidate URL, and for a same-host redirect).
+                # Not admitted in time -> blocked_reason "rate_gate": nothing was sent.
+                gates.enter(f"{scheme}://{host}/")
+            except upstreams.UpstreamBusy:
+                return _blocked("rate_gate", chain=chain)
+            try:
                 with client.stream(method, pinned_url, headers=req_headers,
                                    extensions=extensions, timeout=timeout_total) as resp:
+                    # every response on its own host, by its real name (the wire URL is the pinned
+                    # IP): readings, and a Retry-After defers its gates (driver ruling 2026-09-29)
+                    upstreams.observe_response(current_url, resp)
                     status = resp.status_code
                     # Redirect? re-validate the Location target as a brand-new untrusted URL.
                     if status in (301, 302, 303, 307, 308) and "location" in resp.headers:
@@ -214,13 +233,18 @@ def safe_fetch(url: str, *, method: str = "GET", render: bool = False,
                         "content_type": (ctype[:200] if ctype else None),
                         "blocked_reason": None,
                     }
-            except httpx.TimeoutException:
+            except httpx.TimeoutException as exc:
+                if isinstance(exc, httpx.ConnectTimeout):  # never connected: nothing was sent
+                    gates.close(unsent=True)
                 return _blocked("timeout", chain=chain)
-            except httpx.HTTPError:
+            except httpx.HTTPError as exc:
+                if isinstance(exc, httpx.ConnectError):  # never connected: nothing was sent
+                    gates.close(unsent=True)
                 return _blocked("fetch_error", chain=chain)
         # Exhausted max_redirects without a terminal response.
         return _blocked("redirect_loop", chain=chain)
     finally:
+        gates.close()
         try:
             client.close()
         except Exception:  # noqa: BLE001
@@ -229,7 +253,8 @@ def safe_fetch(url: str, *, method: str = "GET", render: bool = False,
 
 def walk_redirects_revalidated(client: "httpx.Client", method: str, url: str, *,
                                max_redirects: int = 10,
-                               headers: Optional[dict] = None) -> "httpx.Response":
+                               headers: Optional[dict] = None,
+                               gates: "Optional[upstreams.HopGates]" = None) -> "httpx.Response":
     """Walk redirects MANUALLY on a follow_redirects=False client, re-validating EVERY hop's target
     via _netguard.security_block_reason BEFORE connecting. Returns the FINAL non-3xx httpx.Response
     with its body still UNREAD (the caller reads/streams then closes it), or RAISES
@@ -245,17 +270,26 @@ def walk_redirects_revalidated(client: "httpx.Client", method: str, url: str, *,
     It deliberately does NOT IP-pin like safe_fetch: those callers never pinned, and per-hop
     security_block_reason matches their existing initial-URL guard and the mainline http egress; the
     arbitrary-user-URL lane that warrants full pinning already goes through safe_fetch. Streamed
-    (H1) vs buffered (H2) final-body handling stays in each caller; only the hop walk is shared."""
+    (H1) vs buffered (H2) final-body handling stays in each caller; only the hop walk is shared.
+
+    ``gates`` (an ``upstreams.HopGates`` the caller holds until it has read the body): every hop goes
+    through the redirect rule, so a hop to a declared host takes that host's gates (raising
+    ``upstreams.UpstreamBusy``, nothing sent, when they cannot admit it in time)."""
     current = url
     for _hop in range(max_redirects + 1):
         blk = _netguard.security_block_reason(current)
         if blk is not None:
             raise RuntimeError(f"refused SSRF-class url ({blk}): {current[:120]}")
-        req = client.build_request(method, current, headers=headers)
+        if gates is not None:
+            gates.enter(current)
+        # a hop to a host whose upstream declares a User-Agent sends that one (upstreams.json)
+        req = client.build_request(method, current,
+                                   headers=upstreams.with_declared_user_agent(current, headers))
         # follow_redirects=False EXPLICITLY: the per-hop _netguard check above is the ONLY redirect
         # authority, so the primitive stays safe even if a future caller hands it a client built with
         # follow_redirects=True (never let httpx auto-follow past the guard).
         resp = client.send(req, stream=True, follow_redirects=False)
+        upstreams.observe_response(current, resp)   # every response on its own host (ruling 2026-09-29)
         if resp.status_code in (301, 302, 303, 307, 308) and "location" in resp.headers:
             loc = resp.headers["location"]
             resp.close()                       # drop the 3xx before connecting to the next hop

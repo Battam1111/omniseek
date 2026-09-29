@@ -1,3 +1,6 @@
+"""A walled source whose browser (CDP) cannot be reached is skipped by the shared health probe, not
+reported down. Written in the public mirror (OmniSeek) and moved here on 2026-09-29, because the code it
+tests is this tree's; the sync carries it back."""
 from __future__ import annotations
 
 import unittest
@@ -33,14 +36,6 @@ class TruthfulStatusTests(unittest.TestCase):
 
         self.assertIsNone(healthy)
         self.assertIn("CDP not reachable", detail)
-
-    def test_publish_workflow_has_duplicate_version_noop_and_revision_label(self):
-        workflow = (
-            ROOT / ".github" / "workflows" / "publish-image.yml"
-        ).read_text(encoding="utf-8")
-        self.assertIn("Check whether release version is already registered", workflow)
-        self.assertIn("steps.registry.outputs.exists", workflow)
-        self.assertIn("org.opencontainers.image.revision=${{ github.sha }}", workflow)
 
 
 if __name__ == "__main__":

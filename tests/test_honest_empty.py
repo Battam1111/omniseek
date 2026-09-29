@@ -1,8 +1,10 @@
+"""The honest-empty contract: an empty result cannot mean two things (a source that failed outright
+raises; a partial one returns what it has, with a note). Written in the public mirror (OmniSeek) and
+moved here on 2026-09-29, because the code it tests is this tree's; the sync carries it back."""
 from __future__ import annotations
 
 import asyncio
 import contextlib
-import importlib.util
 import sys
 import unittest
 from pathlib import Path
@@ -33,14 +35,6 @@ def _quiet_backend():
         for name in ("_ddg_last_call", "_brave_last_call", "_ddg_cooldown_until", "_brave_cooldown_until"):
             stack.enter_context(mock.patch.object(_search_backend, name, 0.0))
         yield
-
-
-def _load_script(name: str, filename: str):
-    spec = importlib.util.spec_from_file_location(name, ROOT / "scripts" / filename)
-    module = importlib.util.module_from_spec(spec)
-    assert spec.loader is not None
-    spec.loader.exec_module(module)
-    return module
 
 
 class HonestEmptyTests(unittest.TestCase):
@@ -81,7 +75,7 @@ class HonestEmptyTests(unittest.TestCase):
         adapter = xiaoyuzhou_source.XiaoyuzhouAdapter()
         with (
             mock.patch.object(adapter, "_podcasts", return_value=[{"id": "pod", "name": "pod"}]),
-            mock.patch.object(xiaoyuzhou_source.httpx, "get", side_effect=OSError("offline")),
+            mock.patch.object(xiaoyuzhou_source.http, "direct", side_effect=OSError("offline")),
         ):
             with self.assertRaisesRegex(OSError, "offline"):
                 adapter.search("query")
@@ -120,88 +114,6 @@ class HonestEmptyTests(unittest.TestCase):
         self.assertIsNone(healthy)
         self.assertIn("our adapter configuration", detail)
         get.assert_not_called()
-
-    def test_health_sweep_classifies_http_401_and_403_as_blocked(self) -> None:
-        sweep = _load_script("honest_empty_health_sweep", "health_sweep.py")
-
-        self.assertEqual(
-            sweep.classify_probe(False, "HTTP 401 Unauthorized"),
-            ("blocked", "HTTP 401 Unauthorized"),
-        )
-        self.assertEqual(
-            sweep.classify_probe(False, "HTTP 403 Forbidden"),
-            ("blocked", "HTTP 403 Forbidden"),
-        )
-
-    def test_health_sweep_never_publishes_a_latency_for_a_skipped_probe(self) -> None:
-        """A skipped probe has no verdict, so it must carry no latency.
-
-        classify_probe maps healthy=None to "skipped", and the row builder used to pass the
-        measured latency straight through. The page validator rejects that combination, so a
-        single such source failed the whole published sweep (seen 2026-08-24 and 2026-09-07).
-        """
-        sweep = _load_script("honest_empty_health_sweep_latency", "health_sweep.py")
-        entry = {"name": "s", "domains": ["general"], "access_tier": "free"}
-
-        skipped = sweep.probe_row(entry, None, "no opinion", 812.0)
-        self.assertEqual(skipped["status"], "skipped")
-        self.assertIsNone(skipped["latency_ms"])
-
-        measured = sweep.probe_row(entry, True, "", 812.0)
-        self.assertEqual(measured["status"], "up")
-        self.assertEqual(measured["latency_ms"], 812.0)
-
-    def test_health_summary_and_page_keep_blocked_out_of_down(self) -> None:
-        sweep = _load_script("honest_empty_health_sweep_summary", "health_sweep.py")
-        page = _load_script("honest_empty_health_page", "gen_health_page.py")
-        rows = [
-            {"status": "blocked", "detail": "HTTP 403 Forbidden"},
-            {"status": "down", "detail": "HTTP 503"},
-        ]
-        summary = sweep.build_summary(rows)
-        self.assertEqual(summary["blocked"], 1)
-        self.assertEqual(summary["down"], 1)
-
-        payload = {
-            "generated_utc": "2026-08-17T00:00:00Z",
-            "vantage": "test",
-            "omniseek_version": "0.2.0",
-            "sweep_seconds": 0,
-            "sources": [
-                {
-                    "name": "blocked-source",
-                    "domain": "general",
-                    "tier": "free",
-                    "status": "blocked",
-                    "latency_ms": 1,
-                    "detail": "HTTP 403 Forbidden",
-                },
-                {
-                    "name": "down-source",
-                    "domain": "general",
-                    "tier": "free",
-                    "status": "down",
-                    "latency_ms": 2,
-                    "detail": "HTTP 503",
-                },
-            ],
-            "summary": {
-                "up": 0,
-                "degraded": 0,
-                "rate_limited": 0,
-                "blocked": 1,
-                "down": 1,
-                "skipped": 0,
-                "skipped_policy": 0,
-                "skipped_capability": 0,
-                "skipped_budget": 0,
-                "total": 2,
-            },
-        }
-        rendered = page.render_page(payload)
-        self.assertIn("Blocked: 1", rendered)
-        self.assertIn("Blocked means", rendered)
-        self.assertIn("| blocked-source | free | blocked | 1 ms | HTTP 403 Forbidden |", rendered)
 
 
 def _search_backend_source():

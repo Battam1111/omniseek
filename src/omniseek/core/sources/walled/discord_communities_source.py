@@ -44,9 +44,7 @@ from contextvars import copy_context
 from datetime import datetime, timezone
 from typing import Optional
 
-import httpx
-
-from omniseek.core import auth, cache
+from omniseek.core import auth, cache, http, upstreams
 from omniseek.core.normalize import Document, jsonsafe, keyword_score_filter
 
 logger = logging.getLogger(__name__)
@@ -113,7 +111,10 @@ class DiscordCommunitiesAdapter:
         out: list[dict] = []
         hdr = {"Authorization": f"Bot {token}"}
         try:
-            guilds = httpx.get(f"{API}/users/@me/guilds", headers=hdr, timeout=TIMEOUT).json()
+            with upstreams.egress(API, request_s=TIMEOUT):  # declared Discord gate (50 requests/s per bot token)
+                resp = http.direct("GET", f"{API}/users/@me/guilds", headers=hdr, timeout=TIMEOUT)
+            upstreams.observe_response(API, resp)  # a Retry-After defers the whole Discord gate
+            guilds = resp.json()
         except Exception as exc:  # noqa: BLE001
             logger.warning("discord guild list failed: %s", exc)
             return out
@@ -123,7 +124,11 @@ class DiscordCommunitiesAdapter:
             """One guild's channel listing. None on failure (skipped), mirroring the old
             ``except: continue`` — including a malformed guild row, whose g['id'] raises in here."""
             try:
-                return httpx.get(f"{API}/guilds/{g['id']}/channels", headers=hdr, timeout=TIMEOUT).json()
+                with upstreams.egress(API, request_s=TIMEOUT):
+                    resp = http.direct("GET", f"{API}/guilds/{g['id']}/channels", headers=hdr,
+                                       timeout=TIMEOUT)
+                upstreams.observe_response(API, resp)  # a Retry-After defers the whole Discord gate
+                return resp.json()
             except Exception:  # noqa: BLE001
                 return None
 
@@ -149,12 +154,14 @@ class DiscordCommunitiesAdapter:
 
     def _pull(self, token: str, channel_id: str) -> list[dict]:
         try:
-            r = httpx.get(
-                f"{API}/channels/{channel_id}/messages",
-                params={"limit": min(PER_CHANNEL, 100)},
-                headers={"Authorization": f"Bot {token}"},
-                timeout=TIMEOUT,
-            )
+            with upstreams.egress(API, request_s=TIMEOUT):
+                r = http.direct(
+                    "GET", f"{API}/channels/{channel_id}/messages",
+                    params={"limit": min(PER_CHANNEL, 100)},
+                    headers={"Authorization": f"Bot {token}"},
+                    timeout=TIMEOUT,
+                )
+            upstreams.observe_response(API, r)
             if r.status_code in (401, 403):
                 logger.warning("discord channel %s: %s (bot not in server / missing perms)",
                                channel_id, r.status_code)
@@ -225,7 +232,9 @@ class DiscordCommunitiesAdapter:
         if not token:
             return False, "no bot_token (see ~/.omniseek/credentials/discord.json.template)"
         try:
-            r = httpx.get(f"{API}/users/@me", headers={"Authorization": f"Bot {token}"}, timeout=15)
+            with upstreams.egress(API, request_s=15):
+                r = http.direct("GET", f"{API}/users/@me", headers={"Authorization": f"Bot {token}"},
+                                timeout=15)
             if r.status_code != 200:
                 return False, f"HTTP {r.status_code} (bad token?)"
             who = r.json().get("username", "?")

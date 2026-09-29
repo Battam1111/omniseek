@@ -27,10 +27,9 @@ from typing import Optional
 from urllib.parse import urlparse
 
 import anyio
-import httpx
 from bs4 import BeautifulSoup
 
-from omniseek.core import cache, http
+from omniseek.core import cache, http, upstreams
 from omniseek.core.normalize import Document, keyword_score_filter
 
 logger = logging.getLogger(__name__)
@@ -71,7 +70,16 @@ def _render_html(url: str) -> str:
             pass
         return page.content()
     try:
-        return cdp_call(_flow, initial_url=url, timeout=45) or ""
+        # a render is a page load on that host: never a host that declares a User-Agent the browser
+        # cannot send (DeclaredUserAgentRefused -> the except below); then the Chrome turn first,
+        # within the time left (no host gate held while queueing, review F9); once it has the turn,
+        # the host's declared gates tried once (no waiting while holding the turn, review P6), on a
+        # lease as long as the render may take (a stuck render gives the host back, review P1).
+        render_s = 45
+        upstreams.check_browser(url)
+        until = upstreams.budget_until(url, default=render_s)
+        return cdp_call(_flow, initial_url=url, timeout=render_s, queue_until=until,
+                        on_turn=lambda: upstreams.browser_turn(url, render_s)) or ""
     except Exception as exc:  # noqa: BLE001
         logger.warning("page_watch: render failed %s: %s", url, exc)
         return ""
@@ -85,8 +93,10 @@ def _page_text(url: str, render: bool = False) -> str:
         html = _render_html(url)
         return _strip_to_text(html) if html else ""
     try:
-        resp = httpx.get(url, headers={"User-Agent": UA}, timeout=TIMEOUT,
-                         follow_redirects=True)
+        # http.direct: the declared gates of every hop (the one redirect rule), the declared
+        # User-Agent, the readings. UpstreamBusy lands in the except below: not sent.
+        resp = http.direct("GET", url, headers={"User-Agent": UA}, timeout=TIMEOUT,
+                           follow_redirects=True)
         resp.raise_for_status()
     except Exception as exc:  # noqa: BLE001
         logger.warning("page_watch: fetch failed %s: %s", url, exc)

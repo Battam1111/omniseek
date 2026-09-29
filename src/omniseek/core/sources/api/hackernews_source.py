@@ -35,10 +35,9 @@ from typing import Optional
 from urllib.parse import parse_qs, urlparse
 
 import anyio
-import httpx
 from markdownify import markdownify as html_to_md
 
-from omniseek.core import cache, http
+from omniseek.core import cache, http, upstreams
 from omniseek.core.normalize import Document, jsonsafe, mk_signal
 
 logger = logging.getLogger(__name__)
@@ -190,15 +189,19 @@ class HackerNewsAdapter:
 
     def health_check(self) -> tuple[bool, str]:
         try:
-            resp = httpx.get(
-                f"{ALGOLIA_BASE}/search",
-                params={"query": "test", "hitsPerPage": 1},
-                headers={"User-Agent": USER_AGENT},
-                timeout=8,
-            )
+            with upstreams.egress(f"{ALGOLIA_BASE}/search", request_s=8):  # declared HN Search gate (10,000/h per IP)
+                resp = http.direct(
+                    "GET", f"{ALGOLIA_BASE}/search",
+                    params={"query": "test", "hitsPerPage": 1},
+                    headers={"User-Agent": USER_AGENT},
+                    timeout=8,
+                )
+            upstreams.observe_response(ALGOLIA_BASE, resp)
             if resp.status_code == 200 and resp.json().get("hits") is not None:
                 return True, "OK"
             return False, f"HTTP {resp.status_code}"
+        except upstreams.UpstreamBusy as exc:
+            return True, f"degraded: declared HN Search gate busy, not probed this cycle ({exc})"
         except Exception as exc:  # noqa: BLE001
             return False, f"{type(exc).__name__}: {exc}"
 

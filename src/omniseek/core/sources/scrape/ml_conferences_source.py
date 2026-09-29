@@ -25,6 +25,7 @@ import re
 from datetime import datetime
 from typing import Any, Optional
 
+from omniseek.core import upstreams
 from omniseek.core.normalize import Document, schema_extract
 from omniseek.core.sources.scrape._base import BaseScrapeAdapter
 
@@ -90,7 +91,15 @@ class MlConferencesAdapter(BaseScrapeAdapter):
         out: list[tuple[str, str, str]] = []
         for venue, url in _VENUES:
             try:
-                html = cdp_call(_nav, initial_url=url, timeout=75)
+                # Declared host gate: each blog's robots.txt sets Crawl-delay 20 s. The three venues
+                # are three hosts, so they never wait on each other; a repeat within 20 s sheds.
+                # Never a host with a declared User-Agent; the Chrome turn first, within the time left
+                # (no host gate held while queueing, review F9); with the turn, the host's declared
+                # gates tried once (review P6), leased for the render's own timeout (review P1).
+                upstreams.check_browser(url)
+                until = upstreams.budget_until(url, default=75)
+                html = cdp_call(_nav, initial_url=url, timeout=75, queue_until=until,
+                                on_turn=lambda u=url: upstreams.browser_turn(u, 75))
                 if html:
                     out.append((venue, url, html))
             except Exception as exc:  # noqa: BLE001 — one venue down must not sink the rest

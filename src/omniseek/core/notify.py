@@ -54,8 +54,14 @@ def wecom_push(title: str, body: str) -> bool:
     if len(enc) > 4000:  # stay safely under WeCom's ~4096-byte markdown cap (byte-safe, not char-safe)
         content = enc[:4000].decode("utf-8", errors="ignore")
     try:
-        import httpx
-        httpx.post(url, json={"msgtype": "markdown", "markdown": {"content": content}}, timeout=5.0)
+        from omniseek.core import http, upstreams
+        # The declared WeCom robot gate: at most 20 messages a minute per robot (qyapi.weixin.qq.com,
+        # developer doc 91770). A burst of alerts past that queues up to the gate's wait, then is
+        # dropped here (returns False) instead of being rejected by WeCom.
+        with upstreams.egress(url, request_s=5.0):
+            r = http.direct("POST", url, json={"msgtype": "markdown", "markdown": {"content": content}},
+                            timeout=5.0)
+        upstreams.observe_response(url, r)
         return True
     except Exception as exc:  # noqa: BLE001 -- best-effort; a push failure never breaks the run
         log.debug("wecom push failed (%s)", exc)

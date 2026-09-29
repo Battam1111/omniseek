@@ -655,8 +655,9 @@ async def _aarctic_get(path: str, params: dict, *, retries: int = 1, timeout: in
         freeze every coroutine).
     The global in-flight cap is the SAME ``_arctic_sema`` threading.BoundedSemaphore shared with the sync
     path (NOT a new asyncio.Semaphore — sync and async MUST share ONE cap so the migration can never
-    double the Arctic storm). ``bounded_async_slot`` acquires it OFF the loop, with the request timeout
-    as the finite queue budget, and shields the acquire/release pairing against cancellation.
+    double the Arctic storm). ``bounded_async_slot`` takes it inside this coroutine by polling a
+    non-blocking acquire (no thread waits), with the request timeout as the finite queue budget, so no
+    cancellation can separate the acquire from the release.
     ``_arctic_record`` / ``_arctic_cooling`` hold ``_arctic_lock`` only for microsecond counter math → fine
     on the loop.
     """
@@ -928,9 +929,9 @@ class RedditAdapter:
             # Bound the per-round fan-out WIDTH to _FANOUT_WORKERS, mirroring the sync
             # ThreadPoolExecutor(max_workers=min(len(subreddits), _FANOUT_WORKERS)). This is the fan-out
             # WIDTH limiter (a local asyncio primitive), NOT the egress guard — the egress guard stays the
-            # shared _arctic_sema threading BoundedSemaphore, acquired OFF the loop inside _aarctic_get.
-            # Bounding the width also keeps at most _FANOUT_WORKERS off-loop acquires alive per search, so
-            # a burst never hogs the shared thread pool with blocked-acquire threads.
+            # shared _arctic_sema threading BoundedSemaphore, taken inside _aarctic_get by polling (no
+            # thread waits). Bounding the width also keeps at most _FANOUT_WORKERS waiting acquires per
+            # search.
             width = asyncio.Semaphore(_FANOUT_WORKERS)
 
             async def _aone(sub: str) -> list:

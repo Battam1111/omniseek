@@ -23,7 +23,6 @@ from typing import Optional
 from urllib.parse import urlparse
 
 import anyio
-import httpx
 
 from omniseek.core import auth, cache, diag, http
 from omniseek.core.normalize import Document, jsonsafe, keyword_score_filter
@@ -96,7 +95,8 @@ class XiaoyuzhouAdapter:
         if cached is not None:
             return cached
         try:
-            r = httpx.get(f"{BASE}/podcast/{pid}", headers={"User-Agent": UA}, timeout=20, follow_redirects=True)
+            r = http.direct("GET", f"{BASE}/podcast/{pid}", headers={"User-Agent": UA}, timeout=20,
+                            follow_redirects=True)
             pod = _next_data(r.text).get("podcast", {}) or {}
             title = pod.get("title") or name
             eps = pod.get("episodes") or []
@@ -255,7 +255,8 @@ class XiaoyuzhouAdapter:
         parts = urlparse(url).path.strip("/").split("/")
         if len(parts) >= 2 and parts[0] == "episode":
             try:
-                r = httpx.get(url, headers={"User-Agent": UA}, timeout=20, follow_redirects=True)
+                r = http.direct("GET", url, headers={"User-Agent": UA}, timeout=20,
+                                follow_redirects=True)
                 ep = _next_data(r.text).get("episode", {}) or {}
                 if ep.get("eid"):
                     pod = ep.get("podcast") or {}

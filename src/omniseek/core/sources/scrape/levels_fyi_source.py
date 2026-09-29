@@ -39,7 +39,7 @@ from typing import Optional
 import anyio
 import httpx
 
-from omniseek.core import cache, diag
+from omniseek.core import cache, diag, http
 from omniseek.core.normalize import Document, jsonsafe, mk_signal
 
 logger = logging.getLogger(__name__)
@@ -111,7 +111,7 @@ def _aget_client() -> "httpx.AsyncClient":
     if _aclient is None:
         with _aclient_lock:
             if _aclient is None:
-                _aclient = httpx.AsyncClient(
+                _aclient = http.AsyncHopClient(   # the redirect rule on every hop
                     headers=HEADERS,
                     timeout=TIMEOUT,
                     follow_redirects=True,
@@ -315,7 +315,7 @@ class LevelsFyiAdapter:
         if cached is not None:
             return cached
         try:
-            r = httpx.get(url, headers=HEADERS, timeout=TIMEOUT, follow_redirects=True)
+            r = http.direct("GET", url, headers=HEADERS, timeout=TIMEOUT, follow_redirects=True)
         except Exception as exc:  # noqa: BLE001
             diag.note("levels_fyi", url=url, exc=exc)
             return []
@@ -414,7 +414,7 @@ class LevelsFyiAdapter:
             return cached
         url = PAGE_URL.format(slug=slug)
         try:
-            r = httpx.get(url, headers=HEADERS, timeout=TIMEOUT, follow_redirects=True)
+            r = http.direct("GET", url, headers=HEADERS, timeout=TIMEOUT, follow_redirects=True)
             if r.status_code == 404:
                 diag.note("levels_fyi", url=url, status=404,
                           body=f"no company page for slug={slug!r} (not a company? try a role+country query)")
@@ -507,9 +507,10 @@ class LevelsFyiAdapter:
         # Probe BOTH paths: a role page (the fixed path) + the company page.
         try:
             ru = SUBTITLE_URL.format(cat="software-engineer", sub="machine-learning-engineer", loc="singapore")
-            rr = httpx.get(ru, headers=HEADERS, timeout=12, follow_redirects=True)
+            rr = http.direct("GET", ru, headers=HEADERS, timeout=12, follow_redirects=True)
             role_ok = rr.status_code == 200 and bool(_parse_comp_meta(_meta_description(rr.text) or ""))
-            cr = httpx.get(PAGE_URL.format(slug="google"), headers=HEADERS, timeout=12, follow_redirects=True)
+            cr = http.direct("GET", PAGE_URL.format(slug="google"), headers=HEADERS, timeout=12,
+                             follow_redirects=True)
             comp_ok = cr.status_code == 200 and bool((_next_data_pageprops(cr.text) or {}).get("company"))
             if role_ok and comp_ok:
                 return True, "OK (role og:description + company __NEXT_DATA__)"

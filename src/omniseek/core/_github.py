@@ -24,6 +24,7 @@ Judgment-free plumbing only; callers keep their own caching + doc assembly.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import threading
@@ -35,8 +36,8 @@ from urllib.parse import urlsplit
 import anyio
 import httpx
 
-from omniseek.core import cache, diag
-from omniseek.core._guard import BackendGuard
+from omniseek.core import _guard as _guard_mod
+from omniseek.core import cache, diag, http, upstreams
 
 logger = logging.getLogger(__name__)
 
@@ -57,21 +58,27 @@ _BREAK_FOR_S = 120.0  # seconds the circuit stays open
 # GitHub-backed source at once. _load_token authenticates every request (get_json injects the
 # Authorization header) to move github_trending off the unauth ceiling onto the shared token; the
 # pacer + concurrency cap are the load bounds, independent of the token.
-_MAX_CONCURRENCY = 4
+# (4 in flight: declared in upstreams.json "github" gate.max_inflight; bound below from the guard.)
 
 # Rate cap: space GitHub request STARTS at least _MIN_INTERVAL_S apart so a fan-out across the three
 # GitHub-backed sources (the health sweep, the watchtower org poll, a workflow's burst) can never
 # spike the per-minute rate and 429 the shared token. The semaphore bounds CONCURRENCY; this bounds
 # RATE; together a burst is impossible by construction. ~1 req / 2s = 30/min, sitting right at the
 # Search ceiling, so the stricter Search bucket (not the laxer core bucket) is what we pace to.
-_MIN_INTERVAL_S = 2.0
+# (2.0 s: declared in upstreams.json "github" gate.min_interval_s; bound below from the guard.) The
+# Search-code endpoint has its OWN stricter published limit (10 per minute, docs.github.com
+# rest/search), which the 2 s spacing alone let OmniSeek exceed whenever code searches were a large
+# share of calls: it gets a second declared gate, "github_code_search" (starts >= 6 s apart), taken
+# before this one for paths under /search/code (_hold_for).
 
-# The shared load-guard (concurrency cap + rate pacer + circuit breaker): the byte-identical machinery
-# _openalex / _s2 / _github each carried, extracted to _guard (2026-07-01 parsimony audit P1). The
-# breaker state dict + its lock, the semaphore and the pace lock/state now live on the guard; the
-# module reaches them by name below so every threshold, sleep, log message and error path is unchanged.
-_guard = BackendGuard("github", _MAX_CONCURRENCY, break_after=_BREAK_AFTER,
-                      break_for_s=_BREAK_FOR_S, min_interval_s=_MIN_INTERVAL_S, log=logger)
+# The shared load-guard (concurrency cap + rate pacer + circuit breaker): the registry's ONE GitHub
+# BackendGuard, built from the declared gate (upstreams.json "github"). The breaker state dict + its
+# lock, the semaphore and the pace lock/state live on the guard; the module reaches them by name below
+# so every threshold, sleep, log message and error path is unchanged.
+_guard = upstreams.guard("github", log=logger)
+_code_guard = upstreams.guard("github_code_search", log=logger)
+_MAX_CONCURRENCY = _guard.max_inflight
+_MIN_INTERVAL_S = _guard.min_interval_s
 _state = _guard.state   # health probe reads fails / open_until / last_429
 _lock = _guard.lock
 _sema = _guard.sema
@@ -130,6 +137,7 @@ def _get_client() -> "httpx.Client":
                     follow_redirects=False,
                     limits=httpx.Limits(max_keepalive_connections=8, max_connections=16,
                                         keepalive_expiry=30.0),
+                    event_hooks=http.progress_hooks(),   # the body's progress renews the leases
                 )
     return _client
 
@@ -218,9 +226,13 @@ def get_json(path: str, params: Optional[dict] = None, headers: Optional[dict] =
     last_exc: Optional[Exception] = None
     for attempt in (1, 2):
         try:
-            _pace()  # rate cap: bounds req/min so a fan-out across the 3 sources can't burst the token
-            with _sema:  # global concurrency cap; released during the retry sleep below
+            # Permit first, then the start slot under it (the declared gate; plus the code-search gate
+            # for /search/code). BOUNDED: the old `with _sema:` could wait forever on a saturated or
+            # leaked pool. Released during the retry sleep below.
+            with _hold_for(path, request_s=timeout):
                 resp = _get_client().get(f"{BASE}{path}", params=params, headers=hdrs, timeout=timeout)
+            # the module honours Retry-After itself (upstreams.SELF_BACKOFF)
+            upstreams.observe_response("github", resp, defer_on_429=False)  # x-ratelimit-* per resource
             throttled = resp.status_code == 429 or _is_secondary_rate(resp)
             if throttled:  # rate/secondary limit: stamp it so health() can surface it honestly
                 with _lock:
@@ -242,6 +254,10 @@ def get_json(path: str, params: Optional[dict] = None, headers: Optional[dict] =
                 diag.note("github.get_json", url=f"{BASE}{path}", status=resp.status_code,
                           body=resp.text, exc=exc)
                 return None
+        except _GitHubShed as exc:  # the gate turned it away: nothing sent, not a GitHub failure
+            diag.note("github.get_json", url=f"{BASE}{path}",
+                      body=f"declared upstream gate, request not sent: {exc}")
+            return None
         except Exception as exc:  # noqa: BLE001
             last_exc = exc
             if attempt == 1:
@@ -278,21 +294,67 @@ def _aget_client() -> "httpx.AsyncClient":
                     follow_redirects=False,  # same SSRF hardening as _get_client
                     limits=httpx.Limits(max_keepalive_connections=8, max_connections=16,
                                         keepalive_expiry=30.0),
+                    event_hooks=http.aprogress_hooks(),
                 )
     return _aclient
 
 
-# Hard cap on how long ONE caller may wait for a CONCURRENCY permit (sibling of the rate gate's
-# fast-fail). A raw unbounded acquire hangs the caller when the pool is saturated or a permit leaked;
-# past this the pool is unavailable -> raise (caught by the retry loop -> degrade to None). Sized
-# ~one in-flight call's timeout so brief legitimate contention never trips it.
-_ACQUIRE_MAX_WAIT_S = 20.0
+class _GitHubShed(RuntimeError):
+    """A declared gate did not admit the request within this caller's budget: nothing was sent. It
+    is self-load, not a GitHub failure, so it is neither retried nor counted by the breaker."""
 
 
-def _slot_busy(wait: float) -> RuntimeError:
-    """Concurrency-permit exhaustion -> the retry loop catches it and degrades to None, the same as any
-    other transient failure. Handed to _guard.aslot as its on_busy factory."""
-    return RuntimeError(f"github concurrency pool saturated (no slot in {wait:.0f}s); degrade")
+# Nothing was sent, so a gate taken before the one that refused (the code-search gate, when the
+# GitHub-wide gate turns a code search away) hands back its reserved start (review N5).
+_guard_mod.register_unsent(_GitHubShed)
+
+
+def _slot_busy(wait: float) -> "_GitHubShed":
+    """Concurrency-permit exhaustion: degrade to None (no retry, no breaker). Handed to the guards'
+    hold/ahold as their on_busy factory."""
+    return _GitHubShed(f"github concurrency pool saturated (no slot in {wait:.0f}s); not sent")
+
+
+def _backlog_shed(wait: float) -> "_GitHubShed":
+    """The error for a start slot past this caller's budget (degrade to None, never queue on)."""
+    return _GitHubShed(f"github rate slot {wait:.0f}s away, past this caller's budget; not sent")
+
+
+def _budget(path: str) -> tuple[float, float]:
+    """ONE budget for every gate of one request (driver ruling 2): the smallest declared max_wait_s
+    of the gates it passes, cut to the caller's deadline. Returns (max_wait, until)."""
+    mw = upstreams.max_wait("github")
+    if (path or "").startswith("/search/code"):
+        mw = min(mw, upstreams.max_wait("github_code_search"))
+    return mw, upstreams.wait_until(mw)
+
+
+@contextlib.contextmanager
+def _hold_for(path: str, request_s: Optional[float] = None):
+    """The declared gates for one request to ``path``: the code-search gate first when the path is
+    under /search/code (10 per minute), then the GitHub-wide gate. One fixed order, so no deadlock;
+    one budget for both."""
+    mw, until = _budget(path)
+    with contextlib.ExitStack() as stack:
+        if (path or "").startswith("/search/code"):
+            stack.enter_context(_code_guard.hold(mw, _slot_busy, _backlog_shed, until=until,
+                                                 request_s=request_s))
+        stack.enter_context(_guard.hold(mw, _slot_busy, _backlog_shed, until=until,
+                                        request_s=request_s))
+        yield
+
+
+@contextlib.asynccontextmanager
+async def _ahold_for(path: str, request_s: Optional[float] = None):
+    """Async twin of _hold_for (same gates, same order, same budget)."""
+    mw, until = _budget(path)
+    async with contextlib.AsyncExitStack() as stack:
+        if (path or "").startswith("/search/code"):
+            await stack.enter_async_context(
+                _code_guard.ahold(mw, _slot_busy, _backlog_shed, until=until, request_s=request_s))
+        await stack.enter_async_context(_guard.ahold(mw, _slot_busy, _backlog_shed, until=until,
+                                                     request_s=request_s))
+        yield
 
 
 async def aget_json(path: str, params: Optional[dict] = None, headers: Optional[dict] = None,
@@ -300,11 +362,11 @@ async def aget_json(path: str, params: Optional[dict] = None, headers: Optional[
     """Native-async twin of ``get_json`` (byte-faithful): SAME cache_only guard, host-pin, shared
     breaker / rate pacer / concurrency cap, token auth, throttle/retry, failure->None contract, so
     async and sync egress share ONE load guard. Only the BLOCKING waits go async so no thread is held:
-    the rate gate via ``_guard.reserve_pace_slot()`` + ``await anyio.sleep``; the SAME ``_sema`` acquired
-    OFF the loop (held only around the async network call); the network via ``await _aget_client().get``;
-    the retry backoffs via ``await anyio.sleep``. Everything else is brief-lock / pure CPU, byte-identical
-    to get_json. The _sema acquire sits OUTSIDE the inner try (mirror _stackexchange._ase_get; OmniSeek
-    async fan-out detaches stragglers, never cancels an in-flight leaf, so it cannot leak a slot today)."""
+    the SAME ``_sema`` waited for in its one line on the loop (no thread; a cancel cannot keep it),
+    then the start slot awaited under it (``_ahold_for``: the permit-first ``ahold`` of the declared
+    gates); the network via
+    ``await _aget_client().get``; the retry backoffs via ``await anyio.sleep``. Everything else is
+    brief-lock / pure CPU, byte-identical to get_json."""
     if cache.cache_only():
         return None
 
@@ -327,14 +389,12 @@ async def aget_json(path: str, params: Optional[dict] = None, headers: Optional[
     last_exc: Optional[Exception] = None
     for attempt in (1, 2):
         try:
-            wait = _guard.reserve_pace_slot()  # rate cap: reserve the slot (sync, brief)...
-            if wait > 0:
-                await anyio.sleep(wait)         # ...then wait WITHOUT holding a thread
-            # concurrency cap, OFF-loop + SHIELDED + BOUNDED: a deadline/client cancel can't take the
-            # permit then skip the release (the leak); a saturated pool degrades. Released before the
-            # retry sleep below (mirror get_json).
-            async with _guard.aslot(_ACQUIRE_MAX_WAIT_S, _slot_busy):
+            # Same gates, same order as get_json: the permit waited for in the gate's line on the
+            # loop (bounded; a cancel cannot keep it), then the start slot awaited under it. Released
+            # before the retry sleep below (mirror get_json).
+            async with _ahold_for(path, request_s=timeout):
                 resp = await _aget_client().get(f"{BASE}{path}", params=params, headers=hdrs, timeout=timeout)
+            upstreams.observe_response("github", resp, defer_on_429=False)  # upstreams.SELF_BACKOFF
             throttled = resp.status_code == 429 or _is_secondary_rate(resp)
             if throttled:
                 with _lock:
@@ -356,6 +416,10 @@ async def aget_json(path: str, params: Optional[dict] = None, headers: Optional[
                 diag.note("github.get_json", url=f"{BASE}{path}", status=resp.status_code,
                           body=resp.text, exc=exc)
                 return None
+        except _GitHubShed as exc:  # the gate turned it away: nothing sent, not a GitHub failure
+            diag.note("github.get_json", url=f"{BASE}{path}",
+                      body=f"declared upstream gate, request not sent: {exc}")
+            return None
         except Exception as exc:  # noqa: BLE001
             last_exc = exc
             if attempt == 1:
@@ -402,6 +466,15 @@ def health(timeout: float = 8.0) -> tuple[bool, str]:
             ok, msg = False, "GET /rate_limit failed (timeout / network / breaker / throttle)"
         else:
             res = (data or {}).get("resources", {})
+            # GET /rate_limit reports EVERY bucket's limit and remaining in one quota-free call: record
+            # them as readings (one lane per resource) so the upstream health block compares core /
+            # search / code_search against the declared 5000 / 30 / 10.
+            for rname in ("core", "search", "code_search"):
+                b = res.get(rname) or {}
+                if b.get("limit") is not None:
+                    upstreams.observe("github", {"x-ratelimit-limit": b.get("limit"),
+                                                 "x-ratelimit-remaining": b.get("remaining"),
+                                                 "x-ratelimit-reset": b.get("reset")}, 200, lane=rname)
             core = res.get("core", {}).get("remaining", "?")
             cs = res.get("search", {}).get("remaining", "?")
             tok = "token" if _token else "NO token (unauth ceiling)"

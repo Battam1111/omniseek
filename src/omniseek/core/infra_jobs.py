@@ -902,12 +902,28 @@ def _warm_one(p, label: str, cdp: str, home: str, search_tpl: str, key: str, pro
     """Drive ONE Chrome through home -> scroll -> one search. Returns a status dict. Never raises
     (per-instance isolation); records why if it could not warm. ``probe`` selects the degradation-
     detection (see _WARMER_INSTANCES): "xhs_search" observes the result XHR/DOM, "douyin_login" reads
-    the login state directly."""
+    the login state directly.
+
+    ``unprobed`` is set when the browser could not be reached at all. That says nothing about the
+    login, so the caller must not turn it into a "session degraded, re-login" alert (2026-09-26: it
+    did, three times a day per account, for browsers the idle reaper had merely stopped)."""
     from urllib.parse import quote
-    res = {"label": label, "ok": False, "reason": "", "notes": 0, "acw_tc": False, "web_session": False}
+    from omniseek.core.sources.walled import _cdp
+    res = {"label": label, "ok": False, "unprobed": False, "reason": "", "notes": 0,
+           "acw_tc": False, "web_session": False}
+    # The idle reaper stops a browser nobody used for CDP_IDLE_TIMEOUT_S, and this job runs only
+    # three times a day, so it usually finds its browser stopped. Start it the way every read does;
+    # ensure_browser also stamps last-use, so the reaper leaves it running for the whole warm.
+    try:
+        _cdp.ensure_browser(cdp)
+    except Exception as exc:  # noqa: BLE001
+        res["unprobed"] = True
+        res["reason"] = f"browser start failed: {exc!r}"
+        return res
     try:
         b = p.chromium.connect_over_cdp(cdp)
     except Exception as exc:  # noqa: BLE001
+        res["unprobed"] = True
         res["reason"] = f"cdp connect failed: {exc!r}"
         return res
     try:
@@ -1103,10 +1119,18 @@ def run_cdp_reaper() -> dict:
             "idle_timeout_s": CDP_IDLE_TIMEOUT_S}
 
 
+def _needs_relogin_alert(r: dict) -> bool:
+    """The "re-login this account" alert is only true of a session the warmer actually LOOKED AT
+    and found bad. Not for one it could not reach (``unprobed``: an unobserved state is not a
+    negative), and not for an autofill-backed forum (``self_heals``: its reactive search path
+    already alerts on a failed re-login)."""
+    return not r["ok"] and not r.get("unprobed") and not r.get("self_heals")
+
+
 def run_session_warmer() -> dict:
     """One warm run across the walled CDP Chromes: skip outside active hours or under the
-    cdp-maintenance flag; else warm each account (home -> scroll -> one search) + Bark any degraded
-    session (6h cooldown). The playwright driver is imported here (available in-process); a run that
+    cdp-maintenance flag; else warm each account (home -> scroll -> one search) + alert any session
+    it looked at and found degraded (6h cooldown; a browser it could not reach is logged, not alerted). The playwright driver is imported here (available in-process); a run that
     cannot import it degrades to a logged no-op rather than crashing the tick."""
     force = os.environ.get("WARMER_FORCE") == "1"   # bypass active-hours gate (testing / manual run)
     only = {s for s in os.environ.get("WARMER_ONLY", "").split(",") if s}  # limit to these labels
@@ -1165,10 +1189,12 @@ def run_session_warmer() -> dict:
                      ("| " + r["reason"]) if r["reason"] else "")
             _jsleep(3.0, 6.0)
 
-    degraded = [r for r in results if not r["ok"]]
-    for r in degraded:
-        if r.get("self_heals"):
-            continue  # autofill-backed: the reactive search path already Barked on relogin failure
+    for r in results:
+        if r.get("unprobed"):
+            log.warning("session-warmer %s: browser unreachable, session NOT probed (no alert): %s",
+                        r["label"], r["reason"])
+        if not _needs_relogin_alert(r):
+            continue
         if _should_alert(f"session_degraded:{r['label']}", alerts, _WARMER_COOLDOWN_S):
             _alert(f"{r['label']} session 退化",
                   f"暖号验证失败:{r['reason']}。登录态可能已失效,需 VNC 进 mini 重新扫码登录该账号"
@@ -1176,12 +1202,17 @@ def run_session_warmer() -> dict:
 
     state["_alerts"] = alerts
     state["last_run"] = time.strftime("%Y-%m-%d %H:%M:%S")
-    state["last_results"] = [{k: r[k] for k in ("label", "ok", "notes", "acw_tc", "reason")} for r in results]
+    state["last_results"] = [
+        {**{k: r[k] for k in ("label", "ok", "notes", "acw_tc", "reason")},
+         "unprobed": bool(r.get("unprobed"))}
+        for r in results]
     _save_state(_WARMER_STATE, state)
-    log.info("session-warmer: warmed=%s degraded=%s",
-             [r["label"] for r in results if r["ok"]], [r["label"] for r in degraded])
+    degraded = [r["label"] for r in results if not r["ok"] and not r.get("unprobed")]
+    unprobed = [r["label"] for r in results if r.get("unprobed")]
+    log.info("session-warmer: warmed=%s degraded=%s unprobed=%s",
+             [r["label"] for r in results if r["ok"]], degraded, unprobed)
     return {"warmed": [r["label"] for r in results if r["ok"]],
-            "degraded": [r["label"] for r in degraded]}
+            "degraded": degraded, "unprobed": unprobed}
 
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════════

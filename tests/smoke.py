@@ -866,12 +866,29 @@ def _bf_wired(mod, sema, const, cap, helper):
             and hasattr(s, "acquire") and hasattr(s, "release") and callable(getattr(mod, helper, None)))
 check("burst-cap: stackexchange _se_sema cap=4 + _se_get chokepoint", _bf_wired(_bf_se, "_se_sema", "_SE_MAX_INFLIGHT", 4, "_se_get"))
 check("burst-cap: core _core_sema cap=3 + _core_get chokepoint", _bf_wired(_bf_core, "_core_sema", "_CORE_MAX_INFLIGHT", 3, "_core_get"))
-check("burst-cap: arxiv rides BackendGuard (sema cap=4 + rate pace + breaker) via _arxiv_get_text chokepoint",
-      _bf_arxiv._ARXIV_MAX_INFLIGHT == 4
-      and _bf_arxiv._guard.min_interval_s == _bf_arxiv._ARXIV_MIN_INTERVAL_S and _bf_arxiv._ARXIV_MIN_INTERVAL_S > 0
+# arXiv's terms (info.arxiv.org/help/api/tou.html, read 2026-09-28): one request every three seconds AND
+# a single connection at a time. The cap was 4 until 2026-09-28; both numbers now come from the
+# declaration (upstreams.json "arxiv") and the registry's ONE arXiv guard. The concurrency + spacing
+# proof (sync + async + plain shared-http at once) is tests/test_upstream_limits.py, run by the gate below.
+check("burst-cap: arxiv rides the declared BackendGuard (1 connection + 1 request / 3 s + breaker) via _arxiv_get_text chokepoint",
+      _bf_arxiv._ARXIV_MAX_INFLIGHT == 1 and _bf_arxiv._ARXIV_MIN_INTERVAL_S == 3.0
+      and _bf_arxiv._guard.min_interval_s == _bf_arxiv._ARXIV_MIN_INTERVAL_S
+      and _bf_arxiv._guard.sema._initial_value == 1
       and hasattr(_bf_arxiv._guard.sema, "acquire") and hasattr(_bf_arxiv._guard.sema, "release")
-      and callable(getattr(_bf_arxiv._guard, "pace", None)) and callable(getattr(_bf_arxiv._guard, "is_open", None))
+      and callable(getattr(_bf_arxiv._guard, "hold", None)) and callable(getattr(_bf_arxiv._guard, "is_open", None))
       and callable(getattr(_bf_arxiv, "_arxiv_get_text", None)))
+# UPSTREAM DECLARATIONS (task R, 2026-09-28): every in-service source is covered by an upstream entry in
+# upstreams.json, every entry passes the mechanical schema (a value or 未公布 + where we looked, a source
+# URL and a check date, a gate never looser than the published terms), and the declaration loads clean.
+from omniseek.core import upstreams as _ups  # noqa: E402
+_ups_live = [n for n in names if not fetcher.retired_reason(fetcher.get_adapter(n))]
+_ups_cov = _ups.coverage(_ups_live, fetcher.backend_of, catalog=names)   # declared names: against every source
+_ups_bad = [p for _u, _e in _ups.declarations().items() for p in _ups.schema_problems(_u, _e)]
+check("upstreams: declarations load clean and every entry passes the schema (value or 未公布, url, date, gate <= terms)",
+      _ups.load_error() is None and not _ups_bad, f"load_error={_ups.load_error()} problems={_ups_bad[:5]}")
+check("upstreams: every in-service source is declared under an upstream (none undeclared, no stale names)",
+      not _ups_cov["undeclared"] and not _ups_cov["unknown_sources"],
+      f"undeclared={_ups_cov['undeclared']} unknown={_ups_cov['unknown_sources'][:5]}")
 check("burst-cap: sogou _sogou_sema cap=2 + _sogou_get chokepoint", _bf_wired(_bf_sogou, "_sogou_sema", "_SOGOU_MAX_INFLIGHT", 2, "_sogou_get"))
 if _bf_mokahr is not None:
     check("burst-cap: mokahr _mokahr_sema cap=12 + _mokahr_post chokepoint", _bf_wired(_bf_mokahr, "_mokahr_sema", "_MOKAHR_MAX_INFLIGHT", 12, "_mokahr_post"))
@@ -1306,10 +1323,12 @@ check("ddg retries a TRANSIENT transport error twice then succeeds (a blinking l
 
 # (6) backend_state is the caller-facing contract: assert its exact shape.
 _sb6 = _sb.backend_state()
-check("backend_state() shape: exactly {nominal, active, brave, ddg, last_error}, both halves fully described",
+check("backend_state() shape: exactly {nominal, active, brave, ddg, last_error}, both halves fully described (ddg.disabled = the reason a declaration switches the fallback off, None while it serves)",
       set(_sb6) == {"nominal", "active", "brave", "ddg", "last_error"}
       and set(_sb6["brave"]) == {"keyed", "cooling_s", "cooling_until"}
-      and set(_sb6["ddg"]) == {"cooling_s", "cooling_until", "consecutive_trips", "min_interval_s"},
+      and set(_sb6["ddg"]) == {"cooling_s", "cooling_until", "consecutive_trips", "min_interval_s",
+                               "disabled"}
+      and _sb6["ddg"]["disabled"] == _ups.disabled_reason("duckduckgo_html"),
       f"{sorted(_sb6)} brave={sorted(_sb6.get('brave', {}))} ddg={sorted(_sb6.get('ddg', {}))}")
 
 # (7) the probe must not spend the very thing it is checking.
@@ -1648,6 +1667,36 @@ check("cdp_fulltext REFUSES an unclaimed host and a LinkedIn non-/posts/ URL wit
 check("cdp_fulltext description names the two SG property portals (the router surface agents read)",
       "propertyguru" in _cf.CdpFulltextAdapter.description.lower()
       and "99.co" in _cf.CdpFulltextAdapter.description)
+# (17b) The whitelist is matched as DOMAINS, not substrings. It used to be `any(h in host ...)`, so
+# "x.com" also matched www.vox.com / www.netflix.com / www.dropbox.com / www.fedex.com and "99.co"
+# matched www.99.com (found by the 2026-09-25 routing audit); any such URL that no earlier adapter
+# claimed was opened in the real browser. Negatives: those five, plus for EVERY listed domain a host
+# that only contains it (a prefix glued on, and another domain after it). Positives: every listed
+# domain bare and under www, plus a trailing-dot spelling of a listed host (the same host). Every
+# URL carries /posts/ so the LinkedIn path rule does not mask the host rule.
+_cf_neg = ["https://www.vox.com/a", "https://www.netflix.com/title/1", "https://www.dropbox.com/s/a",
+           "https://www.fedex.com/en-us/home.html", "https://www.99.com/"]
+_cf_pos = ["https://www.quora.com./x"]
+for _cf_d in _cf._HOSTS:
+    _cf_neg += [f"https://not{_cf_d}/posts/omniseek-smoke",
+                f"https://{_cf_d}.omniseek-smoke.example/posts/omniseek-smoke"]
+    _cf_pos += [f"https://{_cf_d}/posts/omniseek-smoke", f"https://www.{_cf_d}/posts/omniseek-smoke"]
+_cf_seen.clear()
+_cf_hit: dict = {}
+try:
+    _cf.cdp_call = _cf_stub
+    for _cf_u in _cf_neg + _cf_pos:
+        _cf_hit[_cf_u] = _cf_ad.fetch_url(_cf_u) is not None
+finally:
+    _cf.cdp_call = _CF_REAL_CALL
+_cf_neg_claimed = [_cf_u for _cf_u in _cf_neg if _cf_hit.get(_cf_u)]
+_cf_neg_driven = [_cf_u for _cf_u in _cf_seen if _cf_u in _cf_neg]
+check("cdp_fulltext refuses a host that only CONTAINS a listed domain (www.vox.com, www.netflix.com, www.dropbox.com, www.fedex.com vs x.com; www.99.com vs 99.co) and never drives the browser for it",
+      len(_cf_neg) == 5 + 2 * len(_cf._HOSTS) and not _cf_neg_claimed and not _cf_neg_driven,
+      f"claimed={_cf_neg_claimed} driven={_cf_neg_driven}")
+check("cdp_fulltext still claims every listed domain, its www subdomain, and a trailing-dot spelling of a listed host",
+      all(_cf_hit.get(_cf_u) for _cf_u in _cf_pos),
+      str([_cf_u for _cf_u in _cf_pos if not _cf_hit.get(_cf_u)]))
 
 # (18) YouTube: a FAILURE MUST NOT WEAR A SUCCESS'S CLOTHES. 2026-09-14, live: yt-dlp went stale,
 # YouTube 403'd the media fetch, this adapter returned None, and the fetcher fell through to the
@@ -1688,6 +1737,143 @@ _ftc_src = __import__("inspect").getsource(_ftc._fetch_url_via_adapters_with_rea
 check("fetcher stamps owner_adapter_missed when the host owner already failed (no silent degrade)",
       "fulltext_missed and not fulltext_attempt" in _ftc_src
       and "owner_adapter_missed" in _ftc_src and "owner_adapter_reason" in _ftc_src)
+
+# (18a) WeChat: the same rule (a decline must not wear a success's clothes), plus one article, one id.
+# 2026-09-25, live: all nine articles the daily digest could not read came back "refused anti-bot
+# challenge page (via=jina)", yet WeChat had answered three different things: six share links without
+# chksm got its interactive captcha, two articles were privacy-restricted by the author, one was
+# deleted. The adapter declined silently and did not own its host, so every URL fell through to the
+# generic renderer and the renderer's verdict became the only reason. The pages below are cut from
+# the real ones WeChat served the mini that day, keeping only the title, the script sources, the body
+# tag, .weui-msg and #app (no cookies, tokens, share params or inline scripts). Offline: httpx, the
+# cache and the web fallback are stubbed, and only the wechat adapter runs in the claim loop.
+import httpx as _wx_httpx_real  # noqa: E402
+from types import SimpleNamespace as _WxNS  # noqa: E402
+from omniseek.core import fetcher as _wx_ftc, web_fallback as _wx_wf  # noqa: E402
+from omniseek.core.sources.walled import wechat_source as _wx  # noqa: E402
+
+_WX_ID = "__biz=MzAxMTEyMjIzMw==&mid=2247480001&idx=1&sn=0123456789abcdef0123456789abcdef"
+_WX_LONG = "https://mp.weixin.qq.com/s?" + _WX_ID
+_WX_CAPTCHA_AT = "https://mp.weixin.qq.com/mp/wappoc_appmsgcaptcha?poc_token=REDACTED&target_url=REDACTED"
+_WX_CAPTCHA_PAGE = (  # where the 302 lands: Tencent's TCaptcha, the text is drawn by script
+    '<html><head><title></title>'
+    '<script type="text/javascript" src="//res.wx.qq.com/mmbizwap/zh_CN/htmledition/js/lib/wa-helper.min80ec10.js">'
+    '</script><script type="text/javascript" src="//res.wx.qq.com/mmbizwap/zh_CN/htmledition/js/biz_wap/'
+    'moon80ec10.js"></script><script type="text/javascript" src="https://captcha.gtimg.com/TCaptcha.js"></script>'
+    '</head><body class="zh_CN"><div class="weui-msg"> <div class="top_tips warning" id="tips"'
+    ' style="display:none;"></div> </div></body></html>')
+_WX_DELETED_PAGE = (  # HTTP 200, the status text is static
+    '<html><head><title></title>'
+    '<script type="module" src="//res.wx.qq.com/mmbizappmsg/zh_CN/htmledition/js/assets/error.mufgdc191d6c1dcf.js">'
+    '</script><script id="vite-legacy-polyfill" src="//res.wx.qq.com/mmbizappmsg/zh_CN/htmledition/js/assets/'
+    'polyfills-legacy.mufgdc19bf9e1e74.js"></script><script id="vite-legacy-entry" data-src="//res.wx.qq.com/'
+    'mmbizappmsg/zh_CN/htmledition/js/assets/error-legacy.mufgdc19d40b81eb.js"></script></head>'
+    '<body id="activity-detail" class="zh_CN wx_wap_page discuss_tab appmsg_skin_default appmsg_style_default">'
+    '<div class="weui-msg"> <div class="weui-msg__icon-area"> <i class="weui-icon-warn weui-icon_msg-primary">'
+    '</i> </div> <div class="weui-msg__text-area"> <div class="weui-msg__title warn">该内容已被发布者删除</div> </div>'
+    ' <div class="weui-msg__extra-area"> <div class="weui-footer"> <p class="weui-footer__links"> <a'
+    ' class="weui-footer__link" href="https://mp.weixin.qq.com/webpoc/ruleCenter?type=oa">微信公众平台运营中心</a>'
+    ' </p> </div> </div> </div></body></html>')
+_WX_PRIVATE_PAGE = (  # HTTP 200, an empty Vue shell: the sentence lives only in private.*.js
+    '<html><head><title></title>'
+    '<script type="module" src="//res.wx.qq.com/mmbizappmsg/zh_CN/htmledition/js/assets/private.mufgdc19d3f19fd0.js">'
+    '</script><script id="vite-legacy-polyfill" src="//res.wx.qq.com/mmbizappmsg/zh_CN/htmledition/js/assets/'
+    'polyfills-legacy.mufgdc19bf9e1e74.js"></script><script id="vite-legacy-entry" data-src="//res.wx.qq.com/'
+    'mmbizappmsg/zh_CN/htmledition/js/assets/private-legacy.mufgdc19bf402b47.js"></script></head>'
+    '<body id="" class="zh_CN wx_wap_page discuss_tab appmsg_skin_default appmsg_style_default">'
+    '<div id="app"> </div></body></html>')
+
+
+class _WxResp:
+    """httpx-shaped, only what the adapter reads: url, text, raise_for_status."""
+
+    def __init__(self, url, text):
+        self.url, self.text = url, text
+
+    def raise_for_status(self):
+        return None
+
+
+def _wx_read(answers):
+    """fetch_url_with_reason on _WX_LONG with the wechat adapter alone in the claim loop. Each
+    request (http.direct, the redirect rule) takes the next answer (an exception is raised, anything
+    else is returned). Returns (doc, reason, requests, web_fallback calls)."""
+    seen = {"get": 0, "fallback": 0}
+    saved = (_wx.http, _wx.cache, _wx_ftc._fetch_url_adapter_order, _wx_wf.read_via_fallback)
+
+    def _get(method, url, **kwargs):
+        seen["get"] += 1
+        answer = answers.pop(0)
+        if isinstance(answer, BaseException):
+            raise answer
+        return answer
+
+    def _fallback(url):
+        seen["fallback"] += 1
+        return None
+
+    _wx.http = _WxNS(direct=_get)
+    _wx.cache = _WxNS(make_key=saved[1].make_key, get=lambda key: None, set=lambda *a, **k: None)
+    _wx_ftc._fetch_url_adapter_order = lambda adapters: [a for a in adapters if a.name == "wechat"]
+    _wx_wf.read_via_fallback = _fallback
+    try:
+        doc, reason = _wx_ftc.fetch_url_with_reason(_WX_LONG)
+    finally:
+        _wx.http, _wx.cache, _wx_ftc._fetch_url_adapter_order, _wx_wf.read_via_fallback = saved
+    return doc, reason, seen["get"], seen["fallback"]
+
+
+_wx_r = {}
+for _wx_k, _wx_answers in (
+        ("captcha", lambda: [_WxResp(_WX_CAPTCHA_AT, _WX_CAPTCHA_PAGE)]),
+        ("deleted", lambda: [_WxResp(_WX_LONG, _WX_DELETED_PAGE)]),
+        ("private", lambda: [_WxResp(_WX_LONG, _WX_PRIVATE_PAGE)]),
+        ("network", lambda: [_wx_httpx_real.ConnectError("refused"), _wx_httpx_real.ConnectError("refused")])):
+    try:
+        _wx_r[_wx_k] = _wx_read(_wx_answers())
+    except Exception as _wx_exc:  # noqa: BLE001 (a broken stub must fail its check, not the whole smoke)
+        _wx_r[_wx_k] = (None, f"raised {type(_wx_exc).__name__}: {_wx_exc}", -1, -1)
+
+check("wechat OWNS mp.weixin.qq.com, so the fetcher can tell a decline from a miss (youtube/zhihu/xiaomuchong pattern)",
+      _wx.WechatAdapter.fetch_url_class == "fulltext"
+      and all(_wx_ftc._adapter_declares_fetch_url_host(_wx.WechatAdapter(), _u)
+              for _u in ("https://mp.weixin.qq.com/s/AbCdEf", _WX_LONG))
+      and not _wx_ftc._adapter_declares_fetch_url_host(_wx.WechatAdapter(), "https://weixin.qq.com/x"),
+      str(getattr(_wx.WechatAdapter, "fetch_url_hosts", None)))
+check("wechat: a captcha landing reads 'interactive captcha', is asked once and never reaches the web fallback",
+      _wx_r["captcha"][0] is None
+      and (_wx_r["captcha"][1] or "").startswith("wechat: interactive captcha")
+      and _wx_r["captcha"][2:] == (1, 0),
+      repr(_wx_r["captcha"][1:]))
+check("wechat: a deleted article is reported with WeChat's own status text, not as anti-bot",
+      _wx_r["deleted"][0] is None
+      and _wx_r["deleted"][1] == "wechat: article deleted by the publisher (该内容已被发布者删除)"
+      and _wx_r["deleted"][2:] == (1, 0),
+      repr(_wx_r["deleted"][1:]))
+check("wechat: a privacy-restricted article is named by its private.* entry script (WeChat build naming)",
+      _wx_r["private"][0] is None
+      and _wx_r["private"][1] == "wechat: blocked by the author's privacy setting"
+      and _wx_r["private"][2:] == (1, 0),
+      repr(_wx_r["private"][1:]))
+check("wechat: a network error is retried exactly once before it is reported, inside the fetcher's bound",
+      _wx_r["network"][0] is None
+      and _wx_r["network"][1] == "wechat: network error: ConnectError"
+      and _wx_r["network"][2:] == (2, 0)
+      and _wx.WechatAdapter.fetch_timeout >= 2 * _wx.FETCH_TIMEOUT,
+      repr(_wx_r["network"][1:]))
+
+_wx_ids = [_wx._wx_source_id(_u) for _u in (
+    _WX_LONG,
+    _WX_LONG + "&chksm=REDACTED&scene=1&xtrack=1",
+    "https://mp.weixin.qq.com/s?t=REDACTED&scene=1&" + _WX_ID
+    + "&from_masonry=1&sharer_shareinfo_first=REDACTED&sharer_shareinfo=REDACTED")]
+_wx_parse_src = (__import__("inspect").getsource(_wx.WechatAdapter._parse_article)
+                 + __import__("inspect").getsource(_wx.WechatAdapter._parse_short_post))
+check("wechat: a long link's source_id names the ARTICLE (recall upserts on (source, source_id)): not 's', share params do not move it",
+      len(set(_wx_ids)) == 1 and _wx_ids[0] == _WX_ID
+      and _wx._wx_source_id("https://mp.weixin.qq.com/s/AbCdEf") == "AbCdEf"
+      and _wx_parse_src.count("_wx_source_id(url)") == 2,
+      repr(_wx_ids))
 
 
 # ---------------------------------------------------------------------------
@@ -12657,9 +12843,11 @@ class _FxCvfResp:
         return None
 
 
-class _FxCvfHttpx:
+class _FxCvfHttp:
+    """Stands in for the module's ``http`` (its requests go through http.direct, the redirect rule)."""
+
     @staticmethod
-    def get(*a, **k):  # noqa: ANN002, ANN003
+    def direct(*a, **k):  # noqa: ANN002, ANN003
         return _FxCvfResp(_fx_cvf_openaccess_html["body"])
 
 
@@ -12680,9 +12868,9 @@ class _FxCvfCache:
 _fx_cvf_openaccess_ad = fetcher.get_adapter("cvf_openaccess")
 _fx_cvf_openaccess_docA = None
 _fx_cvf_openaccess_docB = None
-_fx_cvf_openaccess_saved = (_fx_cvf_openaccess_mod.httpx, _fx_cvf_openaccess_mod.cache)
+_fx_cvf_openaccess_saved = (_fx_cvf_openaccess_mod.http, _fx_cvf_openaccess_mod.cache)
 try:
-    _fx_cvf_openaccess_mod.httpx = _FxCvfHttpx
+    _fx_cvf_openaccess_mod.http = _FxCvfHttp
     _fx_cvf_openaccess_mod.cache = _FxCvfCache
     # FIXTURE A: listing dt.ptitle block -> paper dict -> doc (real _papers parse)
     _fx_cvf_openaccess_html["body"] = _fx_cvf_openaccess_listing
@@ -12696,7 +12884,7 @@ except Exception as _fx_cvf_openaccess_exc:  # noqa: BLE001
     _fx_cvf_openaccess_docA = _fx_cvf_openaccess_docA
     _fx_cvf_openaccess_docB = _fx_cvf_openaccess_docB
 finally:
-    (_fx_cvf_openaccess_mod.httpx, _fx_cvf_openaccess_mod.cache) = _fx_cvf_openaccess_saved
+    (_fx_cvf_openaccess_mod.http, _fx_cvf_openaccess_mod.cache) = _fx_cvf_openaccess_saved
 
 _fx_cvf_openaccess_pdf = (
     "https://openaccess.thecvf.com/content/CVPR2024/papers/"
@@ -12732,8 +12920,9 @@ check("cvf_openaccess: paper-page enrich (fetch_url) title/author/year/abstract/
 
 # --- openrouter_rankings: aggregate-then-rank parse contract (offline, no network) ---
 # Feeds the REAL recorded {"data":[...]} payload (3 daily bins of ONE model, captured
-# 2026-07-10) through the adapter's real aggregation via a monkeypatched module-level
-# httpx.get (nothing leaves the process; cache bypassed), then its real _to_doc.
+# 2026-07-10) through the adapter's real aggregation via a monkeypatched http.direct (the
+# module's request, under the redirect rule; nothing leaves the process; cache bypassed), then
+# its real _to_doc.
 from omniseek.core.sources.api import openrouter_rankings_source as _fx_openrouter_rankings_mod
 import httpx as _fx_openrouter_rankings_httpx
 
@@ -12751,13 +12940,13 @@ _fx_openrouter_rankings_payload = {"data": [
 
 _fx_openrouter_rankings_ad = fetcher.get_adapter("openrouter_rankings")
 _fx_openrouter_rankings_doc = None
-_fx_openrouter_rankings_save_get = _fx_openrouter_rankings_mod.httpx.get
+_fx_openrouter_rankings_save_get = _fx_openrouter_rankings_mod.http.direct
 _fx_openrouter_rankings_save_cget = _fx_openrouter_rankings_mod.cache.get
 _fx_openrouter_rankings_save_cset = _fx_openrouter_rankings_mod.cache.set
 try:
     _fx_openrouter_rankings_mod.cache.get = lambda k: None
     _fx_openrouter_rankings_mod.cache.set = lambda *a, **k: None
-    _fx_openrouter_rankings_mod.httpx.get = (lambda *a, **k:
+    _fx_openrouter_rankings_mod.http.direct = (lambda *a, **k:
         _fx_openrouter_rankings_httpx.Response(200, json=_fx_openrouter_rankings_payload,
             request=_fx_openrouter_rankings_httpx.Request("GET", "https://openrouter.ai/rankings")))
     _fx_openrouter_rankings_ranked = _fx_openrouter_rankings_ad._rankings()
@@ -12765,7 +12954,7 @@ try:
 except Exception:
     _fx_openrouter_rankings_doc = None
 finally:
-    _fx_openrouter_rankings_mod.httpx.get = _fx_openrouter_rankings_save_get
+    _fx_openrouter_rankings_mod.http.direct = _fx_openrouter_rankings_save_get
     _fx_openrouter_rankings_mod.cache.get = _fx_openrouter_rankings_save_cget
     _fx_openrouter_rankings_mod.cache.set = _fx_openrouter_rankings_save_cset
 
@@ -17008,6 +17197,8 @@ _s4d_acq_tids: list = []
 _s4d_off = {"loop": None}
 _s4d_sema = _s4d_se._se_sema
 _s4d_real_acq = _s4d_sema.acquire
+_s4d_real_atake = _s4d_sema.atake
+_s4d_take_tids: list = []
 try:
     _s4d_http.get_json = _s4d_sync_get_json
     _s4d_http.aget_json = _s4d_aget_json
@@ -17022,12 +17213,17 @@ try:
         _s4d_sd_tids.append(_s4d_threading.get_ident())
 
     def _s4d_spy_acq(*a, **k):
-        _s4d_acq_tids.append(_s4d_threading.get_ident())
+        _s4d_acq_tids.append((_s4d_threading.get_ident(), bool(a[0] if a else k.get("blocking", True))))
         return _s4d_real_acq(*a, **k)
 
     _s4d_cache.get_docs = _s4d_spy_gd
     _s4d_cache.set_docs = _s4d_spy_sd
     _s4d_sema.acquire = _s4d_spy_acq  # instance shadow: _ase_get's `_se_sema.acquire` picks this up
+
+    async def _s4d_spy_atake(*a, **k):
+        _s4d_take_tids.append(_s4d_threading.get_ident())
+        return await _s4d_real_atake(*a, **k)
+    _s4d_sema.atake = _s4d_spy_atake  # the async line (instance shadow, dropped below)
 
     async def _s4d_drive_off():
         _s4d_off["loop"] = _s4d_threading.get_ident()
@@ -17036,24 +17232,26 @@ try:
 finally:
     _s4d_cache.get_docs = _s4d_real_gd
     _s4d_cache.set_docs = _s4d_real_sd
-    try:
-        del _s4d_sema.acquire  # drop the instance shadow -> the class method resurfaces
-    except Exception:  # noqa: BLE001
-        pass
+    for _s4d_attr in ("acquire", "atake"):
+        try:
+            delattr(_s4d_sema, _s4d_attr)  # drop the instance shadow -> the class method resurfaces
+        except Exception:  # noqa: BLE001
+            pass
     _s4d_http.get_json = _s4d_real_gj
     _s4d_http.aget_json = _s4d_real_agj
 
 _s4d_lt = _s4d_off["loop"]
 _s4d_cache_offloop = (bool(_s4d_gd_tids) and bool(_s4d_sd_tids) and _s4d_lt is not None
                       and all(t != _s4d_lt for t in _s4d_gd_tids + _s4d_sd_tids))
-_s4d_sema_offloop = (bool(_s4d_acq_tids) and _s4d_lt is not None
-                     and all(t != _s4d_lt for t in _s4d_acq_tids))
+_s4d_sema_offloop = (bool(_s4d_take_tids) and _s4d_lt is not None
+                     and all(t == _s4d_lt for t in _s4d_take_tids)
+                     and all(t != _s4d_lt or not blocking for t, blocking in _s4d_acq_tids))
 _s4d_net_onloop = (bool(_s4d_net_tids) and _s4d_lt is not None
                    and all(t == _s4d_lt for t in _s4d_net_tids))
 check("S4d-SE: OFF-LOOP R2/3a -- cache.get_docs + cache.set_docs BOTH ran OFF the loop thread during asearch (disk IO off-loop via to_thread; dropping that wrap would run them on the loop -> fail)",
       _s4d_cache_offloop, f"loop={_s4d_lt} gd={_s4d_gd_tids} sd={_s4d_sd_tids}")
-check("S4d-SE: OFF-LOOP R2/3b -- _se_sema.acquire ran OFF the loop thread (the SE-specific pin; a `with _se_sema` back on the loop would fail this; acquired twice: the search GET + the answers GET)",
-      _s4d_sema_offloop, f"loop={_s4d_lt} acq={_s4d_acq_tids}")
+check("S4d-SE: OFF-LOOP R2/3b: _se_sema never BLOCKS the loop: the async permit is waited for in the gate's one line ON the loop thread (atake), and no blocking acquire runs on the loop (the SE-specific pin; taken twice: the search GET + the answers GET) (review N1, task R3 2026-09-29: sync and async callers wait in ONE first-come-first-served line; an async caller waits on a future of its own loop, so no thread waits and no blocking acquire runs on the loop)",
+      _s4d_sema_offloop, f"loop={_s4d_lt} atake={_s4d_take_tids} acq={_s4d_acq_tids}")
 check("S4d-SE: OFF-LOOP R2/3c -- http.aget_json was awaited ON the loop thread (the NETWORK wait holds no pool thread; awaited directly, not via to_thread)",
       _s4d_net_onloop, f"loop={_s4d_lt} net={_s4d_net_tids}")
 
@@ -17085,14 +17283,15 @@ check("S4d-SE: FAILURE CONTRACT -- aget_json -> None => asearch returns [] AND d
 #     acquire spy firing on THIS object + identity/type checks. NEGATIVE-VERIFY: a future "just use an
 #     asyncio.Semaphore" split would make `_s4d_sema is _se_sema` False (a new object) and/or flip the
 #     asyncio-instance check -> this FAILS, catching the cap-doubling regression.
-_s4d_is_threading_prim = type(_s4d_se._se_sema).__module__ == "threading"
+from omniseek.core import _guard as _s4r3_guard  # noqa: E402
+_s4d_is_threading_prim = isinstance(_s4d_se._se_sema, _s4r3_guard.FairPermits)  # the gate's one line
 _s4d_not_asyncio_sema = not isinstance(_s4d_se._se_sema, _s4d_aio.Semaphore)
 _s4d_shared_cap = (_s4d_sema is _s4d_se._se_sema and _s4d_is_threading_prim
-                   and _s4d_not_asyncio_sema and bool(_s4d_acq_tids))
-check("S4d-SE: SHARED-CAP R2 -- the async egress acquires the MODULE _stackexchange._se_sema (same identity as sync _se_get; a threading.BoundedSemaphore, NOT a new asyncio.Semaphore); the golden-3b acquire spy fired on THIS object",
+                   and _s4d_not_asyncio_sema and bool(_s4d_take_tids))
+check("S4d-SE: SHARED-CAP R2: the async egress takes the MODULE _stackexchange._se_sema (same identity as sync _se_get; the gate's FairPermits, one line shared sync<->async, NOT a new asyncio.Semaphore); the golden-3b atake spy fired on THIS object",
       _s4d_shared_cap,
-      f"same_identity={_s4d_sema is _s4d_se._se_sema} threading_prim={_s4d_is_threading_prim} "
-      f"not_asyncio={_s4d_not_asyncio_sema} acq_fired={bool(_s4d_acq_tids)}")
+      f"same_identity={_s4d_sema is _s4d_se._se_sema} gate_permits={_s4d_is_threading_prim} "
+      f"not_asyncio={_s4d_not_asyncio_sema} atake_fired={bool(_s4d_take_tids)}")
 
 
 # ===========================================================================================
@@ -17337,15 +17536,22 @@ check("S4g-A1: _aapi_search PARITY + OFF-LOOP -- a BaseAPIAdapter probe asearch 
 #     asyncio.Semaphore -> the isinstance flips + the module-object spy would not fire.
 _s4g_sema = _s4g_arxiv._guard.sema
 _s4g_ax = _s4e_fetcher.get_adapter("arxiv")
+_s4g_take_tids: list = []
+_s4g_real_atake = _s4g_sema.atake
 _s4g_acq_tids, _s4g_ax_loop = [], {"tid": None}
 _s4g_r_acq = _s4g_sema.acquire
 _s4g_r_agt = _s4e_http.aget_text
 _s4g_ax_offloop = _s4g_ax_shared = False
 try:
     def _s4g_spy_acq(*a, **k):
-        _s4g_acq_tids.append(_s4d_threading.get_ident())
+        _s4g_acq_tids.append((_s4d_threading.get_ident(), bool(a[0] if a else k.get("blocking", True))))
         return _s4g_r_acq(*a, **k)
     _s4g_sema.acquire = _s4g_spy_acq
+
+    async def _s4g_spy_atake(*a, **k):
+        _s4g_take_tids.append(_s4d_threading.get_ident())
+        return await _s4g_real_atake(*a, **k)
+    _s4g_sema.atake = _s4g_spy_atake
 
     async def _s4g_stub_agt(*a, **k):
         return None  # egress returns nothing; we only assert the sema fired off-loop before it
@@ -17356,19 +17562,22 @@ try:
         return await _s4g_ax._araw_fetch("q", 3)
     _s4e_aio.run(_s4g_ax_drive())
     _s4g_ax_lt = _s4g_ax_loop["tid"]
-    _s4g_ax_offloop = (bool(_s4g_acq_tids) and _s4g_ax_lt is not None
-                       and all(t != _s4g_ax_lt for t in _s4g_acq_tids))
+    _s4g_ax_offloop = (bool(_s4g_take_tids) and _s4g_ax_lt is not None
+                       and all(t == _s4g_ax_lt for t in _s4g_take_tids)
+                       and all(t != _s4g_ax_lt or not blocking for t, blocking in _s4g_acq_tids))
     _s4g_ax_shared = (_s4g_sema is _s4g_arxiv._guard.sema
                       and not isinstance(_s4g_sema, _s4e_aio.Semaphore))
 finally:
-    try:
-        del _s4g_sema.acquire
-    except Exception:  # noqa: BLE001
-        pass
+    for _s4g_attr in ("acquire", "atake"):
+        try:
+            delattr(_s4g_sema, _s4g_attr)
+        except Exception:  # noqa: BLE001
+            pass
     _s4e_http.aget_text = _s4g_r_agt
-check("S4g-A1: arxiv SEMA OFF-LOOP + SHARED -- _arxiv_aget_text acquires the MODULE _guard.sema OFF the loop (a threading BoundedSemaphore, NOT a split asyncio.Semaphore; the in-flight cap stays shared sync<->async)",
+check("S4g-A1: arxiv SEMA NEVER BLOCKS THE LOOP + SHARED: _arxiv_aget_text takes the MODULE _guard.sema (the gate's FairPermits, NOT a split asyncio.Semaphore; the in-flight cap stays shared sync<->async), waiting in its one line ON the loop thread (atake) with no blocking acquire on the loop (review N1, task R3 2026-09-29: sync and async callers wait in ONE first-come-first-served line; an async caller waits on a future of its own loop, so no thread waits and no blocking acquire runs on the loop)",
       _s4g_ax_offloop and _s4g_ax_shared,
-      f"offloop={_s4g_ax_offloop} shared={_s4g_ax_shared} acq={_s4g_acq_tids} loop={_s4g_ax_loop['tid']}")
+      f"offloop={_s4g_ax_offloop} shared={_s4g_ax_shared} atake={_s4g_take_tids} acq={_s4g_acq_tids} "
+      f"loop={_s4g_ax_loop['tid']}")
 
 
 # ===========================================================================================
@@ -17477,6 +17686,8 @@ class _S4iFakeClient:
 
 
 _s4i_sema = _s4i_oa._sema
+_s4i_take_tids: list = []
+_s4i_real_atake = _s4i_sema.atake
 _s4i_acq_tids, _s4i_oa_loop = [], {"tid": None}
 _s4i_r_acq = _s4i_sema.acquire
 _s4i_r_aclient = _s4i_oa._aget_client
@@ -17501,9 +17712,14 @@ with _s4i_oa._pace_lock:
 _s4i_oa_offloop = False
 try:
     def _s4i_spy_acq(*a, **k):
-        _s4i_acq_tids.append(_s4d_threading.get_ident())
+        _s4i_acq_tids.append((_s4d_threading.get_ident(), bool(a[0] if a else k.get("blocking", True))))
         return _s4i_r_acq(*a, **k)
     _s4i_sema.acquire = _s4i_spy_acq
+
+    async def _s4i_spy_atake(*a, **k):
+        _s4i_take_tids.append(_s4d_threading.get_ident())
+        return await _s4i_real_atake(*a, **k)
+    _s4i_sema.atake = _s4i_spy_atake
     _s4i_oa._aget_client = lambda: _S4iFakeClient()
 
     async def _s4i_oa_drive():
@@ -17511,21 +17727,25 @@ try:
         return await _s4i_oa.aget_json("/works", {"per-page": 1})
     _s4i_oa_res = _s4e_aio.run(_s4i_oa_drive())
     _s4i_olt = _s4i_oa_loop["tid"]
-    _s4i_oa_offloop = (bool(_s4i_acq_tids) and _s4i_olt is not None
-                       and all(t != _s4i_olt for t in _s4i_acq_tids) and _s4i_oa_res == _s4i_works)
+    _s4i_oa_offloop = (bool(_s4i_take_tids) and _s4i_olt is not None
+                       and all(t == _s4i_olt for t in _s4i_take_tids)
+                       and all(t != _s4i_olt or not blocking for t, blocking in _s4i_acq_tids)
+                       and _s4i_oa_res == _s4i_works)
 finally:
-    try:
-        del _s4i_sema.acquire
-    except Exception:  # noqa: BLE001
-        pass
+    for _s4i_attr in ("acquire", "atake"):
+        try:
+            delattr(_s4i_sema, _s4i_attr)
+        except Exception:  # noqa: BLE001
+            pass
     _s4i_oa._aget_client = _s4i_r_aclient
     with _s4i_oa._pace_lock:
         _s4i_oa._pace_state["next_at"] = _s4i_r_next_at
     with _s4i_oa._lock:
         _s4i_oa._state.clear()
         _s4i_oa._state.update(_s4i_r_state)
-check("S4i-OA: aget_json OFF-LOOP -- the shared _openalex _sema is acquired OFF the loop (a threading BoundedSemaphore, the cap stays shared sync<->async) and aget_json returns the parsed body via the async client",
-      _s4i_oa_offloop, f"offloop={_s4i_oa_offloop} acq={_s4i_acq_tids} loop={_s4i_oa_loop['tid']}")
+check("S4i-OA: aget_json NEVER BLOCKS THE LOOP: the shared _openalex _sema (the gate's FairPermits, the cap stays shared sync<->async) is waited for in its one line ON the loop thread (atake) with no blocking acquire on the loop, and aget_json returns the parsed body via the async client (review N1, task R3 2026-09-29: sync and async callers wait in ONE first-come-first-served line; an async caller waits on a future of its own loop, so no thread waits and no blocking acquire runs on the loop)",
+      _s4i_oa_offloop, f"offloop={_s4i_oa_offloop} atake={_s4i_take_tids} acq={_s4i_acq_tids} "
+                       f"loop={_s4i_oa_loop['tid']}")
 
 
 # ===========================================================================================
@@ -17571,14 +17791,21 @@ class _S4jGhClient:
 
 
 _s4j_sema = _s4j_gh._sema
+_s4j_take_tids: list = []
+_s4j_real_atake = _s4j_sema.atake
 _s4j_acq, _s4j_loop = [], {"tid": None}
 _s4j_r_acq, _s4j_r_ac = _s4j_sema.acquire, _s4j_gh._aget_client
 _s4j_gh_offloop = False
 try:
     def _s4j_spy(*a, **k):
-        _s4j_acq.append(_s4d_threading.get_ident())
+        _s4j_acq.append((_s4d_threading.get_ident(), bool(a[0] if a else k.get("blocking", True))))
         return _s4j_r_acq(*a, **k)
     _s4j_sema.acquire = _s4j_spy
+
+    async def _s4j_spy_atake(*a, **k):
+        _s4j_take_tids.append(_s4d_threading.get_ident())
+        return await _s4j_real_atake(*a, **k)
+    _s4j_sema.atake = _s4j_spy_atake
     _s4j_gh._aget_client = lambda: _S4jGhClient()
 
     async def _s4j_drive():
@@ -17586,16 +17813,20 @@ try:
         return await _s4j_gh.aget_json("/rate_limit")
     _s4j_res = _s4e_aio.run(_s4j_drive())
     _s4j_glt = _s4j_loop["tid"]
-    _s4j_gh_offloop = (bool(_s4j_acq) and _s4j_glt is not None
-                       and all(t != _s4j_glt for t in _s4j_acq) and _s4j_res == {"ok": True})
+    _s4j_gh_offloop = (bool(_s4j_take_tids) and _s4j_glt is not None
+                       and all(t == _s4j_glt for t in _s4j_take_tids)
+                       and all(t != _s4j_glt or not blocking for t, blocking in _s4j_acq)
+                       and _s4j_res == {"ok": True})
 finally:
-    try:
-        del _s4j_sema.acquire
-    except Exception:  # noqa: BLE001
-        pass
+    for _s4j_attr in ("acquire", "atake"):
+        try:
+            delattr(_s4j_sema, _s4j_attr)
+        except Exception:  # noqa: BLE001
+            pass
     _s4j_gh._aget_client = _s4j_r_ac
-check("S4j-GH/SB: _github.aget_json OFF-LOOP -- the shared _github _sema is acquired OFF the loop (threading BoundedSemaphore, cap shared sync<->async) and aget_json returns the parsed body via the async client",
-      _s4j_gh_offloop, f"offloop={_s4j_gh_offloop} acq={_s4j_acq} loop={_s4j_loop['tid']}")
+check("S4j-GH/SB: _github.aget_json NEVER BLOCKS THE LOOP: the shared _github _sema (the gate's FairPermits, cap shared sync<->async) is waited for in its one line ON the loop thread (atake) with no blocking acquire on the loop, and aget_json returns the parsed body via the async client (review N1, task R3 2026-09-29: sync and async callers wait in ONE first-come-first-served line; an async caller waits on a future of its own loop, so no thread waits and no blocking acquire runs on the loop)",
+      _s4j_gh_offloop, f"offloop={_s4j_gh_offloop} atake={_s4j_take_tids} acq={_s4j_acq} "
+                       f"loop={_s4j_loop['tid']}")
 
 
 # (3) _search_backend.asearch_web -- the async Brave path returns [{title,url,snippet}] via the async
@@ -17920,12 +18151,12 @@ finally:
 
 # --- wecom_push: fail-open (absent creds -> no-op) + the WeCom markdown payload shape.
 from omniseek.core import notify as _fj_notify  # noqa: E402
-import httpx as _fj_httpx  # noqa: E402
+from omniseek.core import http as _fj_http  # noqa: E402  (wecom_push sends through http.direct)
 _fj_posts: list = []
-_fj_post_save, _fj_creds_save = _fj_httpx.post, _fj_notify._WECOM_CREDS_PATH
+_fj_post_save, _fj_creds_save = _fj_http.direct, _fj_notify._WECOM_CREDS_PATH
 _fj_cred_dir = _Path44(_tf57.mkdtemp())
 try:
-    _fj_httpx.post = lambda url, **kw: _fj_posts.append((url, kw))
+    _fj_http.direct = lambda method, url, **kw: _fj_posts.append((url, kw))
     _fj_notify._WECOM_CREDS_PATH = _fj_cred_dir / "absent.json"
     _fj_notify.wecom_push("t", "b")
     check("wecom_push: an absent creds file is a fail-open no-op (never posts, never raises)",
@@ -17939,7 +18170,7 @@ try:
           and _fj_posts[0][1]["json"]["msgtype"] == "markdown"
           and "周报" in _fj_posts[0][1]["json"]["markdown"]["content"])
 finally:
-    _fj_httpx.post, _fj_notify._WECOM_CREDS_PATH = _fj_post_save, _fj_creds_save
+    _fj_http.direct, _fj_notify._WECOM_CREDS_PATH = _fj_post_save, _fj_creds_save
 
 # --- run_digest: routes to WeCom ONLY (not Bark), agent-first with a mechanical LINK fallback. Stub
 #     the briefing agent -> None (force the fallback, and never hit the real frontier API in smoke).
@@ -18478,6 +18709,354 @@ if _SERVICES_PATH.exists():
           and not _svc_maint.plist_owned_by_root(
               {"ProgramArguments": [f"{_maint_home}/omniseek-brain/.venv/bin/python"]}))
 
+
+
+# ---------------------------------------------------------------------------
+# 69a. CDP pool: a pooled worker must not reuse its connection to a Chrome that has been replaced.
+# ---------------------------------------------------------------------------
+# The idle reaper stops a browser, then ensure_browser (or the sentinel, or launchd) starts a new
+# one on the same port, while each pool worker still holds its connection to the old process.
+# Playwright refreshes Browser.is_connected() only while a call runs on the worker's thread, so for
+# a worker parked in q.get() it keeps reading True; the fake below reproduces exactly that (True
+# until a real call fails). Before 2026-09-25 the first call after every such restart failed with
+# TargetClosedError and counted toward the adapters' consecutive-failure breakers (seen twice that
+# day: 9224 at 01:13, 9223 at 10:09). The worker now compares /json/version's webSocketDebuggerUrl
+# (new at every Chrome launch) with the one it connected to. That test can send a worker into the
+# reconnect branch holding a handle whose flag still reads True, so a reconnect that fails must not
+# leave that handle behind: after pw.stop() every call on it raises and the flag never changes, so
+# reusing it would fail every later call. Offline: sync_playwright and httpx.get are stubbed for one
+# fake url, so no socket is opened and no browser is started.
+import httpx as _cpi_httpx  # noqa: E402
+from omniseek.core.sources.walled import _cdp as _cpi_cdp  # noqa: E402
+
+_CPI_URL = "http://127.0.0.1:59299"
+_cpi_state = {"live": "A", "connects": 0, "refuse": 0}
+
+
+class _CpiPage:
+    def __init__(self, inst):
+        self.inst = inst
+
+    def goto(self, url, **kw):
+        return None
+
+    def title(self):
+        return self.inst
+
+    def close(self):
+        return None
+
+
+class _CpiContext:
+    def __init__(self, browser):
+        self.browser = browser
+        self.pages = []
+
+    def new_page(self):
+        if self.browser.pw.stopped:  # its driver is gone: raises, and the flag is never refreshed
+            raise RuntimeError("Event loop is closed! Is Playwright already stopped?")
+        if self.browser.inst != _cpi_state["live"]:
+            self.browser.flag = False  # a real call is what finally delivers the disconnect
+            raise RuntimeError("Target page, context or browser has been closed")
+        return _CpiPage(self.browser.inst)
+
+
+class _CpiBrowser:
+    def __init__(self, inst, pw):
+        self.inst = inst
+        self.pw = pw
+        self.flag = True  # Playwright's cached connected flag
+        self.contexts = [_CpiContext(self)]
+
+    def is_connected(self):
+        return self.flag
+
+
+class _CpiChromium:
+    def __init__(self, pw):
+        self.pw = pw
+
+    def connect_over_cdp(self, url, timeout=None):
+        _cpi_state["connects"] += 1
+        if _cpi_state["refuse"]:  # this Chrome answers /json/version but the connect fails
+            _cpi_state["refuse"] -= 1
+            raise RuntimeError("connect_over_cdp: Timeout 10000ms exceeded")
+        return _CpiBrowser(_cpi_state["live"], self.pw)
+
+
+class _CpiPlaywright:
+    def __init__(self):
+        self.stopped = False
+        self.chromium = _CpiChromium(self)
+
+    def stop(self):
+        self.stopped = True
+
+
+class _CpiSyncPlaywright:
+    def start(self):
+        return _CpiPlaywright()
+
+
+def _cpi_get(url, *a, **kw):
+    if str(url).startswith(_CPI_URL):
+        _cpi_ws = f"ws://127.0.0.1:59299/devtools/browser/{_cpi_state['live']}"
+        return _cpi_httpx.Response(200, json={"webSocketDebuggerUrl": _cpi_ws},
+                                   request=_cpi_httpx.Request("GET", str(url)))
+    return _cpi_real_get(url, *a, **kw)
+
+
+_cpi_real_get = _cpi_httpx.get
+_cpi_real_sp = _cpi_cdp.sync_playwright
+_cpi_seen: list = []  # one (title or None, connects so far, error or "") per call
+try:
+    _cpi_httpx.get = _cpi_get
+    _cpi_cdp.sync_playwright = _CpiSyncPlaywright
+    _cpi_pool = _cpi_cdp._CdpPool(_CPI_URL, 1)  # size 1, like 9223/9224; kept out of _pools
+    # two calls on A; A replaced by B, two calls; B replaced by C whose first connect fails, two calls
+    for _cpi_live, _cpi_refuse in (("A", 0), ("A", 0), ("B", 0), ("B", 0), ("C", 1), ("C", 0)):
+        _cpi_state["live"], _cpi_state["refuse"] = _cpi_live, _cpi_refuse
+        try:
+            _cpi_seen.append((_cpi_pool.submit(lambda page: page.title(), "about:blank", 5),
+                              _cpi_state["connects"], ""))
+        except Exception as _cpi_exc:  # noqa: BLE001
+            _cpi_seen.append((None, _cpi_state["connects"], f"{type(_cpi_exc).__name__}: {_cpi_exc}"))
+finally:
+    _cpi_httpx.get = _cpi_real_get
+    _cpi_cdp.sync_playwright = _cpi_real_sp
+check("cdp pool: the first call after the Chrome is replaced (A then B) runs on B, no failed call first",
+      len(_cpi_seen) == 6 and _cpi_seen[2][:2] == ("B", 2) and not any(s[2] for s in _cpi_seen[:4]),
+      f"seen={_cpi_seen}")
+check("cdp pool: an unchanged Chrome keeps its connection (no reconnect on A's second call or B's second)",
+      len(_cpi_seen) == 6 and _cpi_seen[0][:2] == _cpi_seen[1][:2] == ("A", 1)
+      and _cpi_seen[3][:2] == ("B", 2),
+      f"seen={_cpi_seen}")
+check("cdp pool: a reconnect that fails leaves no stale handle behind (the next call reconnects, runs on C)",
+      len(_cpi_seen) == 6 and _cpi_seen[4][0] is None and _cpi_seen[5][0] == "C",
+      f"seen={_cpi_seen}")
+
+
+# ---------------------------------------------------------------------------
+# 69b. ai_residencies claims only its own pages, never another page on the same site.
+# ---------------------------------------------------------------------------
+# Its fetch_url used to follow the exact match with a host match in either subdomain direction and
+# return whichever row matched first. Seen live 2026-09-25: omniseek_read on an openai.com/index article
+# came back matched, as the OpenAI Safety Fellowship row (alignment.openai.com ends with
+# ".openai.com"), so a different page read as a clean fetch. The same fallback handed a MATS page
+# spelled with a trailing slash the FIRST MATS row. The claim is now the page's identity
+# (_url_key). Offline: the positions list is stubbed on one instance and built from the REAL config
+# rows, so neither the cache nor the network is touched.
+from urllib.parse import urlunsplit as _air_urlunsplit  # noqa: E402
+from omniseek.core.sources.scrape import ai_residencies_source as _air  # noqa: E402
+
+_AIR_ARTICLE = "https://openai.com/index/how-two-settings-tripled-our-arc-agi-3-scores/"
+_AIR_POSTING = "https://jobs.ashbyhq.com/openai/00000000-0000-4000-8000-000000000000"
+_air_static = [r for r in _air._rows() if r.get("kind") == "static"]
+_air_positions = [_air._row_common(r, title=r["title"], url=r["url"], status="open", summary="",
+                                   location=None, deadline=None, raw={}) for r in _air_static]
+_air_positions.append(_air._row_common({"lab": "OpenAI", "tier": 1}, title="Residency", url=_AIR_POSTING,
+                                       status="open", summary="", location=None, deadline=None, raw={}))
+_air_reads = {"n": 0}
+
+
+def _air_stub_positions():
+    _air_reads["n"] += 1
+    return list(_air_positions)
+
+
+_air_ad = _air.AIResidenciesAdapter()
+_air_ad._fetch_all_positions = _air_stub_positions  # instance attribute: the class is untouched
+
+
+def _air_claim(url):
+    doc = _air_ad.fetch_url(url)
+    return doc.source_id if doc is not None else None
+
+
+def _air_variants(url):
+    """Other spellings of the SAME page: trailing slash toggled; scheme and host case plus a
+    fragment; the scheme's default port written out."""
+    s = urlsplit(url)
+    toggled = s.path[:-1] if s.path.endswith("/") else s.path + "/"
+    port = _air._DEFAULT_PORTS[s.scheme]
+    return [_air_urlunsplit((s.scheme, s.netloc, toggled, s.query, "")),
+            _air_urlunsplit((s.scheme.upper(), s.netloc.upper(), s.path, s.query, "apply")),
+            _air_urlunsplit((s.scheme, f"{s.netloc}:{port}", s.path, s.query, ""))]
+
+
+def _air_neighbours(url):
+    """Pages that are NOT this one but share its site: a sibling path on the same host, a
+    subdomain, and the parent domain's root (the three shapes the host fallback accepted)."""
+    s = urlsplit(url)
+    host = s.hostname or ""
+    out = [f"{s.scheme}://{host}/omniseek-smoke-not-a-program-page", f"{s.scheme}://sub.{host}/"]
+    if host.count(".") >= 2:
+        out.append(f"{s.scheme}://{host.split('.', 1)[1]}/")
+    return out
+
+
+_air_article = _air_claim(_AIR_ARTICLE)
+check("ai_residencies does NOT claim an openai.com article (the host fallback returned the Safety Fellowship row)",
+      _air_article is None, f"claimed as {_air_article!r}")
+
+_air_own = {_air._url_key(r["url"]) for r in _air_static}
+_air_wrong_own, _air_wrong_variant, _air_wrong_neighbour = {}, {}, {}
+for _air_r in _air_static:
+    _air_got = _air_claim(_air_r["url"])
+    if _air_got != _air_r["url"]:
+        _air_wrong_own[_air_r["url"]] = _air_got
+    for _air_v in _air_variants(_air_r["url"]):
+        _air_got = _air_claim(_air_v)
+        if _air_got != _air_r["url"]:
+            _air_wrong_variant[_air_v] = _air_got
+    for _air_n in _air_neighbours(_air_r["url"]):
+        if _air._url_key(_air_n) in _air_own:
+            continue
+        _air_got = _air_claim(_air_n)
+        if _air_got is not None:
+            _air_wrong_neighbour[_air_n] = _air_got
+check("ai_residencies still claims every configured program page, each as ITSELF",
+      bool(_air_static) and not _air_wrong_own, str(_air_wrong_own))
+check("ai_residencies claims another spelling of a program page as THAT page (slash, case, fragment, default port)",
+      not _air_wrong_variant, str(_air_wrong_variant))
+check("ai_residencies claims no other page on its own sites (sibling path, subdomain, parent domain)",
+      not _air_wrong_neighbour, str(_air_wrong_neighbour))
+
+_air_posting = _air_claim(_AIR_POSTING)
+check("ai_residencies still claims a board posting it returned, as itself",
+      _air_posting == _AIR_POSTING, repr(_air_posting))
+
+_air_reads["n"] = 0
+_air_hostless = [_air_claim(u) for u in ("", "not a url", "https://bad-port.example:99999/")]
+check("ai_residencies declines a URL without a usable host before reading any position",
+      _air_hostless == [None, None, None] and _air_reads["n"] == 0,
+      f"got={_air_hostless} reads={_air_reads['n']}")
+
+
+# ---------------------------------------------------------------------------
+# 69c. ajo claims a posting URL only on a path boundary.
+# ---------------------------------------------------------------------------
+# fetch_url accepted `url.startswith(p["url"])`, and a posting URL ends in its numeric id, so a read
+# of posting 27501 came back as posting 2750 whenever 2750 came first in the listing (found by the
+# 2026-09-25 routing audit). A prefix now counts only when the next character is /, ? or #.
+# Offline: the listing is stubbed on each instance, so neither the cache nor the network is touched.
+from omniseek.core.sources.scrape import ajo_source as _ajo  # noqa: E402
+
+_AJO_2750 = f"{_ajo.BASE}/ajo/jobs/2750"
+_AJO_27501 = f"{_ajo.BASE}/ajo/jobs/27501"
+
+
+def _ajo_row(jid):
+    return {"id": jid, "title": f"Assistant Professor {jid}", "institution": "OmniSeek Smoke University",
+            "extra": "", "url": f"{_ajo.BASE}/ajo/jobs/{jid}"}
+
+
+def _ajo_claim(rows, url):
+    ad = _ajo.AJOAdapter()
+    ad._positions = lambda: list(rows)  # instance attribute: the class is untouched
+    doc = ad.fetch_url(url)
+    return doc.metadata.get("ajo_id") if doc is not None else None
+
+
+_ajo_both = [_ajo_row("2750"), _ajo_row("27501")]
+_ajo_got = {"listing holds 2750 only": _ajo_claim([_ajo_row("2750")], _AJO_27501),
+            "2750 listed before 27501": _ajo_claim(_ajo_both, _AJO_27501)}
+check("ajo does NOT hand back posting 2750 for a read of posting 27501",
+      _ajo_got == {"listing holds 2750 only": None, "2750 listed before 27501": "27501"},
+      str(_ajo_got))
+_ajo_self = {_u: _ajo_claim(_ajo_both, _u) for _u in
+             (_AJO_2750, _AJO_2750 + "/", _AJO_2750 + "?ref=omniseek-smoke", _AJO_2750 + "#apply")}
+check("ajo still claims posting 2750 as itself, also with a trailing slash, a query or a fragment",
+      all(_v == "2750" for _v in _ajo_self.values()), str(_ajo_self))
+
+
+# ---------------------------------------------------------------------------
+# 69d. web_fallback refuses an error screen, and reads the Jina title from its own line only.
+# ---------------------------------------------------------------------------
+# Found by the 2026-09-25 routing audit: a Jina render that came back as an error screen ("This
+# page couldn’t load", the h1 of Next.js's built-in screen, whose document has no <title>) was
+# returned as a clean read and cached for an hour; and with the title empty, the title regex crossed
+# the line break and took "URL Source: ..." as the title. The Jina payloads below use Jina's header
+# layout (fields separated by blank lines). Offline: safe_fetch returns an empty client-rendered
+# shell, so every read escalates to the stubbed Jina call; the SSRF guard and the cache are stubbed
+# and cache writes are recorded.
+from omniseek.core import cache as _wfe_cache, diag as _wfe_diag, http as _wfe_http  # noqa: E402
+from omniseek.core import safeurl as _wfe_safe, web_fallback as _wfe, _netguard as _wfe_ng  # noqa: E402
+
+_WFE_SHELL = '<html><body><div id="__next"></div></body></html>'
+_WFE_ARTICLE = " ".join(["A substantive sentence of the real article body."] * 40)
+_WFE_NEXT_CLIENT = ("This page couldn’t load\n=======================\n\n"
+                    "Reload to try again, or go back.\n\nReload Back")
+_WFE_NEXT_SERVER = ("This page couldn’t load\n=======================\n\n"
+                    "A server error occurred. Reload to try again.\n\nReload\n\nERROR 2896413437")
+_WFE_NEXT_OLD = ("Application error: a client-side exception has occurred (see the browser console "
+                 "for more information).")
+
+
+def _wfe_jina(title, url, body, warning=""):
+    extra = f"Warning: {warning}\n\n" if warning else ""
+    return f"Title: {title}\n\nURL Source: {url}\n\n{extra}Markdown Content:\n{body}"
+
+
+def _wfe_read(url, jina_md):
+    """(doc, the reason the fetcher would report, cache keys written) for one fallback read."""
+    class _Resp:
+        text = jina_md
+    writes = []
+    notes = []
+    saved = (_wfe_safe.safe_fetch, _wfe_http.get, _wfe_ng.security_block_reason,
+             _wfe_cache.get, _wfe_cache.set)
+    try:
+        _wfe_safe.safe_fetch = lambda u, **kw: {
+            "ok": True, "status": 200, "bytes": len(_WFE_SHELL), "text": _WFE_SHELL, "final_url": u,
+            "redirect_chain": [], "content_type": "text/html; charset=utf-8", "blocked_reason": None}
+        _wfe_http.get = lambda u, **kw: _Resp()
+        _wfe_ng.security_block_reason = lambda u: None
+        _wfe_cache.get = lambda k: None
+        _wfe_cache.set = lambda k, *a, **kw: writes.append(k)
+        _wfe_diag.enable()
+        try:
+            doc = _wfe.read_via_fallback(url)
+        finally:
+            notes = _wfe_diag.drain()
+    finally:
+        (_wfe_safe.safe_fetch, _wfe_http.get, _wfe_ng.security_block_reason,
+         _wfe_cache.get, _wfe_cache.set) = saved
+    return doc, (notes[-1].get("body") if notes else None), writes
+
+
+_WFE_U = "https://nextjs-app.example.com/index/some-article/"
+_WFE_LONG_U = "https://nextjs-app.example.com/index/" + "a" * 360 + "?utm_source=omniseek-smoke"
+_wfe_screens = {
+    "next client": _wfe_read(_WFE_U, _wfe_jina("", _WFE_U, _WFE_NEXT_CLIENT)),
+    "next server, long URL + Warning": _wfe_read(_WFE_LONG_U, _wfe_jina(
+        "", _WFE_LONG_U, _WFE_NEXT_SERVER, "Target URL returned error 500: Internal Server Error")),
+    "next <= v14 wording": _wfe_read(_WFE_U, _wfe_jina("", _WFE_U, _WFE_NEXT_OLD)),
+}
+check("web_fallback refuses a Jina render that is an error screen (This page couldn’t load; the older Application error wording), names it as the reason, and caches nothing",
+      all(_d is None and not _w and "error screen" in (_r or "") for _d, _r, _w in _wfe_screens.values()),
+      str({_k: (_d is None, _r, _w) for _k, (_d, _r, _w) in _wfe_screens.items()}))
+
+_WFE_EMPTY_U = "https://empty-title.example.com/post"
+_wfe_empty, _, _wfe_empty_w = _wfe_read(_WFE_EMPTY_U, _wfe_jina("", _WFE_EMPTY_U, _WFE_ARTICLE))
+check("web_fallback: an empty Jina title no longer takes the next line (URL Source: ...) as the title",
+      _wfe_empty is not None and _wfe_empty.title == _WFE_EMPTY_U and len(_wfe_empty_w) == 1,
+      f"title={getattr(_wfe_empty, 'title', None)!r} writes={_wfe_empty_w}")
+
+_WFE_NORMAL_U = "https://normal.example.com/post"
+_WFE_QUOTE_U = "https://quotes-the-error.example.com/post"
+_wfe_normal, _, _wfe_normal_w = _wfe_read(_WFE_NORMAL_U, _wfe_jina("Real Article Title", _WFE_NORMAL_U,
+                                                                   _WFE_ARTICLE))
+_wfe_quote, _, _wfe_quote_w = _wfe_read(_WFE_QUOTE_U, _wfe_jina(
+    "Fixing the This page couldn’t load screen", _WFE_QUOTE_U,
+    "After a deploy our app showed This page couldn’t load on every route. " + _WFE_ARTICLE))
+check("web_fallback: a normal page reads as before (title from its own line, cached once), and so does an article that quotes the error screen",
+      _wfe_normal is not None and _wfe_normal.title == "Real Article Title" and "render:jina" in _wfe_normal.tags
+      and len(_wfe_normal_w) == 1
+      and _wfe_quote is not None and _wfe_quote.title == "Fixing the This page couldn’t load screen"
+      and len(_wfe_quote_w) == 1,
+      f"normal={getattr(_wfe_normal, 'title', None)!r}/{_wfe_normal_w} "
+      f"quote={getattr(_wfe_quote, 'title', None)!r}/{_wfe_quote_w}")
 
 
 # ---------------------------------------------------------------------------

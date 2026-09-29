@@ -72,6 +72,13 @@ def _safe_import_sources() -> list[str]:
 # boot the registry through this, so they never couple to a private name.
 load_sources = _safe_import_sources
 
+# The upstream declarations first (driver ruling 4, 2026-09-29): OmniSeek does not run without them. An
+# unreadable upstreams.json raises upstreams.DeclarationUnreadable HERE, naming the file and the reason,
+# so the server refuses to start, instead of every source that builds its gate at import quietly
+# failing to load and the shared http client running with no gate at all (review F10).
+from omniseek.core import upstreams as _upstreams  # noqa: E402
+_upstreams.declarations()
+
 loaded_modules = _safe_import_sources()
 
 from omniseek.core import fetcher  # noqa: E402 (must follow the side-effect imports above)
@@ -431,7 +438,10 @@ def omniseek_sources(check_health: LenientBool =False, domain: str = "", query: 
     check_health=True does a fresh LIVE probe of every source (slow) AND returns a `system` block:
     the recall-index health (indexed_docs / embedder_available / vec_embed_failures / last_write_age_s)
     plus the observation-journal durability head, materialization cursor, pending count, and failures.
-    and the openalex_usage attribution (which component spent the shared daily budget + remaining).
+    and the openalex_usage attribution (which component spent the shared daily budget + remaining),
+    and `upstreams`: each upstream's declared terms (upstreams.json) beside the gate OmniSeek enforces
+    and the rate-limit readings the upstream last reported, with mismatches flagged and any in-service
+    source that no upstream declares listed.
 
     The no-arg (orient) call also returns `capabilities`: the non-search VERB index (field_skeleton,
     coauthors, transcribe, …) so you discover the whole toolkit here, not only after loading a tool.
@@ -452,7 +462,8 @@ def omniseek_sources(check_health: LenientBool =False, domain: str = "", query: 
       stability, access_tier, health, health_as_of, kind?, domains?, regions?, modes?, (healthy, status
       if check_health)}].
     (did_you_mean on a domain/region near-miss; system:{recall, openalex_usage, jobs:[{name, schedule,
-    enabled, last_run, next_run, budget_s, desc}, ...]} when check_health — the background-job fleet.)}
+    enabled, last_run, next_run, budget_s, desc}, ...], upstreams:{rows, undeclared_sources,
+    flagged_rows, ...}} when check_health: the background-job fleet and the upstream-limit check.)}
 
     `count` is the RAW source count; it over-states coverage when many logical sources sit on ONE
     upstream. `backend_count` is the distinct UPSTREAMS (the honest figure) and `backend_breakdown`
@@ -542,11 +553,25 @@ def omniseek_sources(check_health: LenientBool =False, domain: str = "", query: 
         except Exception as exc:  # noqa: BLE001 -- job status must never break the health call
             jobs_status = [{"error": str(exc)[:80]}]
             scheduler_contract = {"error": str(exc)[:80]}
+        # Upstream terms vs enforcement vs readings (task R, 2026-09-28): every upstream that publishes a
+        # concurrency / interval / window, has a gate, reported rate-limit headers, or has a problem gets
+        # a row (declared terms, the gate's live state, the last readings, mismatch flags); in-service
+        # sources no upstream declares are listed. Pure read of in-process state, no probe.
+        upstream_status: dict = {}
+        try:
+            from omniseek.core import upstreams as _upstreams
+            _in_service = [n for n in fetcher.all_adapter_names()
+                           if not fetcher.retired_reason(fetcher.get_adapter(n))]
+            upstream_status = _upstreams.health_block(_in_service, fetcher.backend_of,
+                                                      catalog=fetcher.all_adapter_names())
+        except Exception as exc:  # noqa: BLE001 (the upstream view must never break the health call)
+            upstream_status = {"error": str(exc)[:120]}
         result["system"] = {
             "recall": recall_status,
             "openalex_usage": oa_usage,
             "jobs": jobs_status,
             "scheduler_contract": scheduler_contract,
+            "upstreams": upstream_status,
         }
     return result
 

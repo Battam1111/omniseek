@@ -11,7 +11,12 @@
 # tests) run at the end and FAIL the script loudly. Never push a sync whose
 # gates did not pass.
 #
-# Syncs:  src/  (minus polyu + mokahr_ats), tests/smoke.py
+# Syncs:  src/  (minus polyu + mokahr_ats); tests/: smoke.py, every test_*.py suite (minus the
+#         deployment-bound ones listed in step 3), __init__.py and the modules the suites use; the
+#         code-bound artifacts listed in step 3. Tests of the eye's code live in the eye: apart from
+#         the mirror-owned tests/test_mirror_*.py, the mirror's tests/ holds no .py this script did
+#         not write (a gate in step 3 aborts on one).
+# Keeps:  tests/test_mirror_*.py: tests of the mirror's own material (bench/, scripts/, .github/).
 # Keeps:  skills/, README*, CLAUDE.md, docs/, pyproject.toml, .github/, other scripts/
 #
 # Usage:  cd the mirror repo root && bash scripts/sync_from_eye.sh
@@ -180,20 +185,37 @@ SYNCED_ARTIFACTS=("tests/smoke.py" "tests/egress_baseline.json" "docs/BUDGETS.md
 # carried, renamed and residue-gated with no edit here.
 # _repo_only.py rides too: it is what lets the three repo-hygiene suites SKIP cleanly in a tree with
 # no deploy.sh (which the mirror is) instead of failing on an absence that is correct.
-# EXCEPT the deployment-bound ones, and that exclusion is DERIVED too: a suite that imports from
-# `scripts.` is testing release machinery (release_layout / release_transaction / bridges) which the
-# mirror does not ship by the same rule that keeps SERVICES.md out. Carried anyway they do not fail
-# meaningfully, they fail at IMPORT, which is a worse signal: it looks like the mirror is broken
-# rather than like the suite does not apply. A deployment suite written tomorrow is excluded with no
-# edit here.
+# EXCEPT the deployment-bound ones, LISTED here with the reason for each (driver ruling of 2026-09-29):
+# they test the eye's release machinery (scripts/release_layout.py, release_transaction.py and the
+# bridges), which the mirror does not ship by the same rule that keeps SERVICES.md out. Carried anyway
+# they do not fail meaningfully, they fail at IMPORT (`from scripts. ...`), which looks like the mirror
+# is broken rather than like the suite does not apply. Every test_*.py NOT on this list is synced.
+DEPLOYMENT_BOUND_SUITES=(
+  "test_release_bridges.py"      # imports scripts.release_layout / release_transaction: the deploy bridges
+  "test_release_layout.py"       # imports scripts.release_layout: the release directory layout
+  "test_release_transaction.py"  # imports scripts.release_transaction: the atomic release switch
+)
+# THE MIRROR-OWNED PREFIX (driver ruling of 2026-09-29). tests/test_mirror_*.py test the mirror's own
+# material (bench/, scripts/, .github/) and belong to the mirror: never written by this sync, never
+# checked by the unwritten gate. The eye must never carry a file with that prefix, or its copy would
+# overwrite the mirror's own; stop before any test file is written.
+_eye_mirror_named="$(ls "$EYE_ROOT"/tests/test_mirror_*.py 2>/dev/null || true)"
+if [ -n "$_eye_mirror_named" ]; then
+  echo "FATAL: the eye carries test file(s) with the mirror-owned prefix test_mirror_:" >&2
+  echo "$_eye_mirror_named" | sed 's/^/         /' >&2
+  echo "       That prefix belongs to the mirror's own tests; rename the file at the eye." >&2
+  exit 1
+fi
 while IFS= read -r _suite; do
   [ -n "$_suite" ] || continue
-  if grep -qE '^\s*(from|import)\s+scripts[.[:space:]]' "$_suite"; then
-    echo "    (skipping $(basename "$_suite"): deployment-bound, the mirror ships no release machinery)"
-    continue
-  fi
+  case " ${DEPLOYMENT_BOUND_SUITES[*]} " in
+    *" $(basename "$_suite") "*)
+      echo "    (skipping $(basename "$_suite"): deployment-bound, the mirror ships no release machinery)"
+      continue ;;
+  esac
   SYNCED_ARTIFACTS+=("tests/$(basename "$_suite")")
-done < <(ls "$EYE_ROOT"/tests/test_*.py "$EYE_ROOT"/tests/_repo_only.py 2>/dev/null || true)
+done < <(ls "$EYE_ROOT"/tests/test_*.py "$EYE_ROOT"/tests/_repo_only.py "$EYE_ROOT"/tests/__init__.py \
+           2>/dev/null || true)
 
 # THE SUITES' OWN DEPENDENCIES, added 2026-08-29. The discovery rule above is a FILENAME rule, so it
 # carries test_job_process_isolation.py and silently leaves behind isolated_job_fixture.py, the module
@@ -216,31 +238,14 @@ done < <(grep -rhoE 'tests\.[A-Za-z_][A-Za-z0-9_]*' "$EYE_ROOT"/tests/test_*.py 
          | sed 's/^tests\.//' | sort -u)
 
 echo "  [3/6] syncing smoke tests + ${#SYNCED_ARTIFACTS[@]} code-bound artifacts ..."
-# PRUNE FIRST. A mirror that only ever ADDS is a mirror that drifts: a suite deleted upstream, or
-# newly excluded here, would sit in the public repo forever, still running, still being believed.
-# Found the hard way: the run that first carried the suites also carried three deployment-bound ones,
-# and after they were excluded they kept failing at import because nothing removes a file.
-#
-# The old comment here claimed "every tests/test_*.py in the mirror comes from this loop, so
-# clearing them is safe". True when written, rotted by 2026-08-19: two suites had been authored
-# DIRECTLY in the mirror, and this prune deleted both. That mattered more than a lost file, because
-# those two suites were the only thing proving the honest-empty behaviour, and the sync had ALSO
-# reverted the engine fixes they cover (they lived in the mirror's src/, which step 1 replaces).
-# Prune first, gate green, work silently undone. The smoke gate below cannot catch it by
-# construction: removing a test makes the suite pass more easily. So the invariant is now declared,
-# and enforced twice: this list survives the prune, and the gate after the copy fails on ANY
-# deleted test file, including one nobody thought to list.
-MIRROR_ONLY_TESTS=(
-  "tests/test_honest_empty.py"     # the honest-empty contract: an empty result cannot mean two things
-  "tests/test_truthful_status.py"  # the public health sweep's classes (healthy/blocked/rate_limited/down)
-  "tests/test_s3_rebuild.py"       # the s3 containment judge + schema fixtures (bench-side, no eye twin)
-)
-for rel in "${MIRROR_ONLY_TESTS[@]}"; do
-  [ -f "$PEN_ROOT/$rel" ] || { echo "FATAL: declared mirror-only test missing: $rel" >&2; exit 1; }
-  cp "$PEN_ROOT/$rel" "$PEN_ROOT/$rel.keep"
-done
-rm -f "$PEN_ROOT"/tests/test_*.py "$PEN_ROOT"/tests/_repo_only.py
-for rel in "${MIRROR_ONLY_TESTS[@]}"; do mv "$PEN_ROOT/$rel.keep" "$PEN_ROOT/$rel"; done
+# NO MIRROR-ONLY TESTS (driver ruling of 2026-09-29). Tests of the eye's code live in the eye and ride
+# this sync; the eye's deploy runs them, which it cannot do for a test that exists only here (three did:
+# test_honest_empty, test_truthful_status, test_s3_rebuild, and a source changed under them without
+# either side noticing until the mirror's smoke failed). So nothing is pruned and nothing is kept aside:
+# every .py under tests/ except the mirror-owned tests/test_mirror_*.py is written by the copy below, and
+# the UNWRITTEN gate after it aborts, naming the files, when the mirror holds one this sync did not write
+# (a suite deleted upstream, or one written here by hand without the prefix). The deletion gate further
+# down still catches a tracked test that disappears.
 for rel in "${SYNCED_ARTIFACTS[@]}"; do
   [ -f "$EYE_ROOT/$rel" ] || { echo "FATAL: $rel missing at the eye" >&2; exit 1; }
   mkdir -p "$PEN_ROOT/$(dirname "$rel")"
@@ -248,6 +253,26 @@ for rel in "${SYNCED_ARTIFACTS[@]}"; do
   sed -i "${RENAME[@]}" "$PEN_ROOT/$rel"
 done
 sed -i 's/\bpolyu\b *//g' "$PEN_ROOT/tests/smoke.py"
+
+# UNWRITTEN GATE. Every .py under the mirror's tests/ must be one this sync just wrote, or a mirror-owned
+# tests/test_mirror_*.py.
+_written=" "
+for rel in "${SYNCED_ARTIFACTS[@]}"; do _written="$_written$rel "; done
+_unwritten=""
+while IFS= read -r _py; do
+  [ -n "$_py" ] || continue
+  _rel="${_py#"$PEN_ROOT"/}"
+  case "$_rel" in tests/test_mirror_*.py) continue ;; esac   # mirror-owned
+  case "$_written" in *" $_rel "*) ;; *) _unwritten="$_unwritten $_rel" ;; esac
+done < <(find "$PEN_ROOT/tests" -name "*.py" -not -path "*/__pycache__/*" | sort)
+if [ -n "$_unwritten" ]; then
+  echo "FATAL: the mirror's tests/ holds .py file(s) this sync did not write:" >&2
+  for _f in $_unwritten; do echo "         $_f" >&2; done
+  echo "       A test of the eye's code belongs in the eye (it rides this sync from there); a test of" >&2
+  echo "       this repository's own material is named tests/test_mirror_*.py; a suite deleted" >&2
+  echo "       upstream is deleted here in its own commit, with a reason." >&2
+  exit 1
+fi
 
 # DANGLING-REFERENCE GATE. The carry rule above is the fix; this is the check that the fix held.
 # A tests.<module> reference that resolves at the eye and not here is exactly the failure that shipped
@@ -275,7 +300,7 @@ if [ -n "$_gone" ]; then
   echo "FATAL: this sync would DELETE tracked test file(s):" >&2
   echo "$_gone" | sed 's/^/         /' >&2
   echo "       If a suite is genuinely gone upstream, delete it in its own commit with a reason." >&2
-  echo "       If it is mirror-only, add it to MIRROR_ONLY_TESTS above." >&2
+  echo "       If it tests this repository's own material, name it tests/test_mirror_*.py." >&2
   exit 1
 fi
 

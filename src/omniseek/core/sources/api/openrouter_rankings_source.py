@@ -25,7 +25,6 @@ from typing import Optional
 from urllib.parse import urlparse
 
 import anyio
-import httpx
 
 from omniseek.core import cache, diag, http
 from omniseek.core.normalize import Document, mk_signal
@@ -72,8 +71,8 @@ class OpenRouterRankingsAdapter:
         if cached is not None:
             return cached
         try:
-            resp = httpx.get(API, headers={"User-Agent": UA}, timeout=TIMEOUT,
-                             follow_redirects=True)
+            resp = http.direct("GET", API, headers={"User-Agent": UA}, timeout=TIMEOUT,
+                               follow_redirects=True)
             resp.raise_for_status()
             rows = resp.json().get("data", [])
         except Exception as exc:  # noqa: BLE001

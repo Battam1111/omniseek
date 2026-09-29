@@ -44,7 +44,7 @@ from pathlib import Path
 from typing import Optional
 from urllib.parse import unquote, urlparse
 
-from omniseek.core import _netguard, _optdep, cache, safeurl
+from omniseek.core import _netguard, _optdep, cache, http, safeurl, upstreams
 
 logger = logging.getLogger(__name__)
 
@@ -357,9 +357,13 @@ def _download(url: str, fmt: str) -> tuple[Path, Optional[str], Optional[str]]:
     # come back in-band, so a blind 302 -> 169.254.169.254 was an SSRF oracle. safeurl.walk_redirects_
     # revalidated centralizes the per-hop guard (one _netguard decision, no forked SSRF logic) and hands
     # back the FINAL non-3xx response with its body unread so we still STREAM it under _MAX_DOWNLOAD.
-    with httpx.Client(follow_redirects=False, timeout=90,
-                      headers={"User-Agent": _UA}) as client:
-        r = safeurl.walk_redirects_revalidated(client, "GET", url, max_redirects=10)
+    # Declared host gates for the URL asked for (e.g. arxiv.org's robots.txt Crawl-delay 15 s), held
+    # for the whole download; UpstreamBusy (a RuntimeError) propagates like any other refusal.
+    with upstreams.hop_gates(request_s=90) as gates, httpx.Client(
+            follow_redirects=False, timeout=90, headers={"User-Agent": _UA},
+            event_hooks=http.progress_hooks()) as client:   # progress renews the gates' leases
+        # every hop through the redirect rule (declared gates), held until the body is written
+        r = safeurl.walk_redirects_revalidated(client, "GET", url, max_redirects=10, gates=gates)
         try:
             r.raise_for_status()
             content_type = r.headers.get("content-type")
@@ -650,8 +654,11 @@ def view_image_urls(urls, max_images: int = 8, max_dim: int = _VIEW_MAX_DIM) -> 
             # follow_redirects=True let a 302 -> 127.0.0.1:9222 reach the loopback CDP DevTools API and
             # exfil its bytes in-band. safeurl.walk_redirects_revalidated raises refused-SSRF on a blocked
             # hop (caught below -> error entry); the FINAL non-3xx response's bytes are used as before.
-            with httpx.Client(follow_redirects=False, timeout=25, headers=hdrs) as client:
-                r = safeurl.walk_redirects_revalidated(client, "GET", u, max_redirects=10)
+            with upstreams.hop_gates(request_s=25) as gates, httpx.Client(
+                    follow_redirects=False, timeout=25, headers=hdrs,
+                    event_hooks=http.progress_hooks()) as client:
+                r = safeurl.walk_redirects_revalidated(client, "GET", u, max_redirects=10,
+                                                       gates=gates)
                 try:
                     r.read()  # buffer the final body (stream=True response) before touching .content
                     if r.status_code == 200 and len(r.content) > 500:

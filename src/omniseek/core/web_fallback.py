@@ -67,6 +67,20 @@ _CHALLENGE_MARKERS = (
     "安全验证 - 知乎",
 )
 
+# Error screens a site's own framework shows when the page failed to load. Seen 2026-09-25 (routing
+# audit): a Jina render came back reading "This page couldn’t load" (U+2019), was returned as a
+# clean read and cached for an hour. That text is the h1 of Next.js's built-in error screen (next.js
+# packages/next/src/client/components/builtin/global-error.tsx), whose document has no <title>.
+# Older Next.js (the v14.2 default GlobalError in error-boundary.tsx) shows "Application error: a
+# client-side / server-side exception has occurred" instead. Refused only when the page body is
+# thin, i.e. the screen IS the page: an article quoting the message keeps its real body and is
+# read as before.
+_ERROR_SCREEN_MARKERS = (
+    "This page couldn’t load",
+    "Application error: a client-side exception has occurred",
+    "Application error: a server-side exception has occurred",
+)
+
 
 def _is_known_walled_shell(url: str, title: str, content: str) -> bool:
     """Recognize verified XHS deep-link shells returned as successful HTML.
@@ -195,6 +209,13 @@ def read_via_fallback(url: str) -> Optional[Document]:
     # own default is 5): each of the 20 hops is still IP-pinned + revalidated, so a longer pinned chain
     # is safe and we do not silently reject a legitimate 6-to-20-hop redirect a real page used to reach.
     res = safeurl.safe_fetch(url, max_bytes=http.MAX_BYTES, max_redirects=20)
+    if not res["ok"] and res["blocked_reason"] == "rate_gate":
+        # A declared upstream's gate (upstreams.json) did not admit the read in time. Escalating to
+        # Jina would fetch the same URL through Jina's servers, around that upstream's published
+        # limit, so stop here: nothing was sent, try again later.
+        diag.note("web_fallback", url=url,
+                  body="declared upstream gate did not admit the read in time; not escalating to Jina")
+        return None
     if not res["ok"] and res["blocked_reason"] in _SSRF_REFUSE:
         # An SSRF-refused target (private_ip / bad_scheme / userinfo / bad_port): return None and do
         # NOT escalate to Jina. A benign failure (timeout / fetch_error / oversize / redirect_loop /
@@ -237,7 +258,9 @@ def read_via_fallback(url: str) -> Optional[Document]:
         if md and len(md) > len(plain_text):
             via, content = "jina", md[:_MAX_CHARS]
             if not title:
-                m = re.match(r"\s*Title:\s*(.+)", md)
+                # Rest of the "Title:" line only: \s* after the colon crossed the line break, so an
+                # empty title took the next header line ("URL Source: ...") as the title.
+                m = re.match(r"\s*Title:(.*)", md)
                 if m:
                     title = m.group(1).strip()
 
@@ -252,6 +275,16 @@ def read_via_fallback(url: str) -> Optional[Document]:
                   body=f"refused anti-bot challenge page (via={via}); if an adapter claims "
                        f"this host, it failed upstream and the URL leaked to the fallback")
         return None  # a challenge wall is a FAILURE, never content (and never cached)
+
+    # A thin page carrying a known error screen IS that screen. For a Jina render the body is what
+    # follows its header block, so a long URL or a Warning line there does not count as body.
+    body = content.split("Markdown Content:", 1)[-1] if via == "jina" else content
+    screen = next((m for m in _ERROR_SCREEN_MARKERS if m in head), None)
+    if screen and len(body.strip()) < _THIN_CHARS:
+        diag.note("web_fallback", url=url,
+                  body=f"refused an error screen, not the page (via={via}, shows {screen!r}): "
+                       f"the page failed to load, so there is no content to return")
+        return None  # a failed load is a FAILURE, never content (and never cached)
 
     doc = Document(
         source="web",

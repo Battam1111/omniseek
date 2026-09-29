@@ -50,7 +50,7 @@ from typing import Any, Optional
 
 import httpx
 
-from omniseek.core import _netguard, auth, cache, http
+from omniseek.core import _netguard, auth, cache, http, upstreams
 
 logger = logging.getLogger(__name__)
 
@@ -144,24 +144,37 @@ class MCPClient:
             headers["Mcp-Session-Id"] = self.session_id
 
         try:
-            with http._get_client().stream("POST", self.endpoint, timeout=self.timeout_s,
-                                           headers=headers, json=payload) as r:
-                status = r.status_code
-                resp_headers = dict(r.headers)
-                # A 404/410 is the session-recycled signal: surface it to the caller BEFORE reading
-                # the body (we re-initialize once and retry).
-                if status in (404, 410):
-                    raise _SessionExpired(f"session expired (HTTP {status})")
-                # Read the body under the SAME MAX_BYTES cap _request_capped enforces.
-                raw = bytearray()
-                for chunk in r.iter_raw():
-                    raw += chunk
-                    if len(raw) > http.MAX_BYTES:
-                        raise MCPTransportError(f"MCP response exceeded {http.MAX_BYTES} bytes")
+            # The declared gates of the endpoint's host, held through the body read, and the redirect
+            # rule on every later hop: exactly as http._request_capped (driver ruling 2026-09-29: no
+            # egress may bypass a declared gate, whether or not an MCP row exists today). The client is
+            # built first, so the start slot is the moment the request goes on the wire.
+            client = http._get_client()
+            with upstreams.hop_gates(request_s=self.timeout_s) as gates:
+                gates.enter(self.endpoint)
+                token = http._hops_var.set(gates)
+                try:
+                    with client.stream("POST", self.endpoint, timeout=self.timeout_s,
+                                       headers=headers, json=payload) as r:
+                        status = r.status_code
+                        resp_headers = dict(r.headers)
+                        # A 404/410 is the session-recycled signal: surface it to the caller BEFORE
+                        # reading the body (we re-initialize once and retry).
+                        if status in (404, 410):
+                            raise _SessionExpired(f"session expired (HTTP {status})")
+                        # Read the body under the SAME MAX_BYTES cap _request_capped enforces.
+                        raw = bytearray()
+                        for chunk in r.iter_raw():
+                            raw += chunk
+                            if len(raw) > http.MAX_BYTES:
+                                raise MCPTransportError(f"MCP response exceeded {http.MAX_BYTES} bytes")
+                finally:
+                    http._hops_var.reset(token)
         except _SessionExpired:
             raise
         except MCPTransportError:
             raise
+        except upstreams.UpstreamBusy as exc:   # nothing was sent
+            raise MCPTransportError(f"declared upstream gate, request not sent: {exc}") from exc
         except Exception as exc:  # noqa: BLE001: any httpx raise is a transport error
             raise MCPTransportError(f"POST failed: {type(exc).__name__}: {exc}") from exc
 

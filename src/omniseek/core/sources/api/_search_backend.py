@@ -10,11 +10,17 @@ Backend is pluggable + keyless-by-default:
   * else DuckDuckGo HTML (keyless, fragile — soft-rate-limits with HTTP 202, so we
     pace, retry, then break the circuit). Drop a Brave key any time to upgrade with
     zero code change.
+  * The fallback's declaration (upstreams.json "duckduckgo_html") can switch it off with a
+    "disabled" entry (the generic switch: reason + source live there, this module only
+    reads it). It is in service: the host it posts to, html.duckduckgo.com, allows / in its
+    robots.txt (checked 2026-09-29, see that entry's notes).
 
 Both halves are paced + circuit-broken over ONE module-global ledger shared by the sync
 and async twins; ``backend_state()`` is the pure read of it, and when neither half can
 serve, ``search_web`` raises instead of sending (a request into a cooling backend buys
-no information and only re-arms the limiter).
+no information and only re-arms the limiter). With the fallback disabled that error is
+``WebSearchUnavailable``: the callers answer it with an EMPTY result whose diagnostic is
+the error's message (Brave's state + the declared reason), and nothing reaches DuckDuckGo.
 """
 
 from __future__ import annotations
@@ -32,6 +38,8 @@ import anyio
 import httpx
 from bs4 import BeautifulSoup
 
+from omniseek.core import http, upstreams
+
 logger = logging.getLogger(__name__)
 
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0 Safari/537.36"
@@ -44,7 +52,10 @@ _BRAVE_CRED = Path.home() / ".omniseek" / "credentials" / "brave.json"
 _brave_lock = threading.Lock()
 _brave_cooldown_until = 0.0   # skip Brave entirely until this wall-clock time
 _brave_last_call = 0.0        # last Brave request time (min-interval pacing)
-_BRAVE_MIN_INTERVAL = 1.1     # seconds between Brave calls
+# seconds between Brave calls: declared in upstreams.json "brave_search" gate.min_interval_s (1.1 s,
+# stricter than both published plans: legacy free 1 query/s, plans since 2026-02-12 50/s). This
+# module's own pacer enforces it (gate.http_gate false: no second limiter for the same upstream).
+_BRAVE_MIN_INTERVAL = float(upstreams.gate_value("brave_search", "min_interval_s"))
 _ping_lock = threading.Lock()
 
 # DDG resilience, the SYMMETRIC half (2026-09-10). DDG was the last-resort backend with NO gate and
@@ -55,7 +66,7 @@ _ping_lock = threading.Lock()
 # under _ddg_lock. 2.5s because DDG's HTML endpoint limits harder than Brave's paid 1 qps.
 _ddg_lock = threading.Lock()
 _ddg_last_call = 0.0          # last DDG request time (min-interval pacing)
-_DDG_MIN_INTERVAL = 2.5       # seconds between DDG calls
+_DDG_MIN_INTERVAL = float(upstreams.gate_value("duckduckgo_html", "min_interval_s"))  # 2.5 s, declared
 _ddg_cooldown_until = 0.0     # skip DDG entirely until this wall-clock time
 _ddg_consecutive_trips = 0    # consecutive breaker trips; a 200 clears it
 _DDG_COOLDOWN_BASE = 90.0     # first trip cools 90s, then 180s, 360s ... (2 ** trips)
@@ -85,18 +96,49 @@ def _get_client() -> httpx.Client:
                     _h2 = True
                 except Exception:  # noqa: BLE001
                     _h2 = False
-                _client = httpx.Client(timeout=15, http2=_h2, follow_redirects=True,
-                                       limits=httpx.Limits(max_keepalive_connections=8,
-                                                           max_connections=16, keepalive_expiry=30.0))
+                # HopClient: the redirect rule on every hop (driver ruling 1); the Brave / DuckDuckGo
+                # upstreams themselves are paced by this module (gate.http_gate false), and it backs
+                # off on Retry-After itself (upstreams.SELF_BACKOFF), so its responses are recorded
+                # with the deferral off
+                _client = http.HopClient(timeout=15, http2=_h2, follow_redirects=True,
+                                         defer_on_429=False,
+                                         limits=httpx.Limits(max_keepalive_connections=8,
+                                                             max_connections=16, keepalive_expiry=30.0))
     return _client
 
 
 class _BraveUnavailable(Exception):
-    """Brave key broken (401/403) or rate-limited (429) — fall back to DDG + back off."""
+    """Brave key broken (401/403) or rate-limited (429): back off (then the fallback, if its
+    declaration allows one)."""
 
     def __init__(self, msg: str, cooldown: float) -> None:
         super().__init__(msg)
         self.cooldown = cooldown
+
+
+class WebSearchUnavailable(RuntimeError):
+    """No half may serve this call and the fallback is disabled by its declaration: Brave is unkeyed,
+    cooling or just failed, and nothing was sent to the fallback. The search-index venues and
+    nowcoder's site search answer it with an EMPTY result whose diagnostic is this message, never
+    with a silent empty."""
+
+
+# The upstream the keyless fallback belongs to (upstreams.json). A "disabled" entry there switches the
+# fallback off (upstreams.disabled_reason); the declaration holds the reason, this module only reads it.
+_FALLBACK_UID = "duckduckgo_html"
+
+
+def _ddg_off() -> Optional[str]:
+    """The declared reason the fallback is out of service, or None when it serves (the usual case)."""
+    return upstreams.disabled_reason(_FALLBACK_UID)
+
+
+def _ddg_refused(off: str) -> "WebSearchUnavailable":
+    """The error ``_ddg`` / ``_addg`` raise when the fallback is disabled: whoever the caller is,
+    nothing is sent."""
+    global _last_error
+    _last_error = f"{off} (upstreams.json {_FALLBACK_UID}.disabled); nothing sent to DuckDuckGo"
+    return WebSearchUnavailable(_last_error)
 
 
 def _brave_key():
@@ -121,6 +163,8 @@ def _brave(query: str, n: int, key: str) -> list[dict]:
         headers={"X-Subscription-Token": key, "Accept": "application/json"},
         timeout=15,
     )
+    # X-RateLimit-* show the key's plan; the backend honours Retry-After itself (upstreams.SELF_BACKOFF)
+    upstreams.observe_response("brave_search", r, defer_on_429=False)
     if r.status_code in (401, 403):
         raise _BraveUnavailable(f"brave key rejected ({r.status_code})", 3600)  # broken → 1h
     if r.status_code == 429:
@@ -207,6 +251,9 @@ def _ddg_parse(html: str, n: int) -> list[dict]:
 
 
 def _ddg(query: str, n: int) -> list[dict]:
+    off = _ddg_off()
+    if off:  # disabled by its declaration: refuse here too, whoever called
+        raise _ddg_refused(off)
     _ddg_guard()  # cooling → raise WITHOUT sending anything
     soft = 0       # consecutive HTTP 202 soft rate-limits this call
     transient = 0  # transient network faults this call
@@ -258,12 +305,39 @@ def _both_cooling(key: Optional[str]) -> RuntimeError:
                  f"({math.ceil(max(0.0, _ddg_cooldown_until - now))}s); no request sent")
 
 
+def _no_backend(key: Optional[str], ddg_off: Optional[str],
+                brave_error: Optional[str] = None) -> RuntimeError:
+    """The error for a call no half may serve. With the fallback in service it is the both-halves-
+    cooling error above; with the fallback disabled by its declaration it is ``WebSearchUnavailable``,
+    naming Brave's state (unkeyed / cooling / this call's failure) and the declared reason."""
+    global _last_error
+    if not ddg_off:
+        return _both_cooling(key)
+    left = _brave_cooldown_until - time.time()
+    cooling = (f"cooling {math.ceil(left)}s until {_clock(_brave_cooldown_until)}"
+               if key and left > 0 else "")
+    if not key:
+        brave = "brave unkeyed"
+    elif brave_error:
+        brave = f"brave failed ({brave_error[:200]})" + (f", {cooling}" if cooling else "")
+    else:
+        brave = f"brave {cooling or 'unavailable'}"
+    sent = "nothing sent to DuckDuckGo" if brave_error else "no request sent"
+    # the declared reason first: a diagnostic capture keeps only the head of a long message
+    _last_error = (f"web-search backend unavailable: {ddg_off} "
+                   f"(upstreams.json {_FALLBACK_UID}.disabled); {brave}; {sent}")
+    return WebSearchUnavailable(_last_error)
+
+
 def search_web(query: str, n: int = 8) -> list[dict]:
-    """``site:``-scoped web search → ``[{title, url, snippet}]``. Brave if keyed, else DDG.
+    """``site:``-scoped web search → ``[{title, url, snippet}]``. Brave if keyed, else the DDG
+    fallback unless its declaration disables it.
 
     Both halves are circuit-broken, so the FIRST thing this does is read the two breakers: when
     neither can serve it raises WITHOUT sending anything (a request into a cooling backend buys no
     information and re-arms the limiter). ``backend_state()`` is the pure read of the same ledger.
+    With the fallback disabled, "neither can serve" means Brave is unkeyed, cooling or failing,
+    and the error is ``WebSearchUnavailable`` carrying the declared reason.
 
     (CN-engine backends rejected 2026-06-03: cn.bing.com IGNORES the ``site:`` operator
     → returns general web junk; Baidu blocks the bot; Sogou's xhs index is sparse. Brave
@@ -272,21 +346,27 @@ def search_web(query: str, n: int = 8) -> list[dict]:
     key = _brave_key()
     now = time.time()
     brave_ok = bool(key) and now >= _brave_cooldown_until
-    ddg_ok = now >= _ddg_cooldown_until
+    ddg_off = _ddg_off()
+    ddg_ok = not ddg_off and now >= _ddg_cooldown_until
     if not brave_ok and not ddg_ok:
-        raise _both_cooling(key)
+        raise _no_backend(key, ddg_off)
     if brave_ok:
+        brave_error = None
         try:
             return _brave(query, n, key)
         except _BraveUnavailable as exc:
             _brave_cooldown_until = time.time() + exc.cooldown  # circuit-breaker: stop hitting it
             _fail(f"brave: {exc}")
-            logger.warning("brave unavailable (%s) → DDG for %.0fs", exc, exc.cooldown)
+            brave_error = str(exc)
+            logger.warning("brave unavailable (%s) → %s for %.0fs", exc,
+                           "no fallback" if ddg_off else "DDG", exc.cooldown)
         except Exception as exc:  # noqa: BLE001
             _fail(f"brave: {type(exc).__name__}: {exc}")
-            logger.warning("brave search failed, falling back to ddg: %s", exc)
-        if not ddg_ok:  # Brave just fell over and DDG is cooling → nothing left to send with
-            raise _both_cooling(key)
+            brave_error = f"{type(exc).__name__}: {exc}"
+            logger.warning("brave search failed, %s: %s",
+                           "no fallback" if ddg_off else "falling back to ddg", exc)
+        if not ddg_ok:  # Brave just fell over and the fallback is cooling or disabled
+            raise _no_backend(key, ddg_off, brave_error)
     return _ddg(query, n)
 
 
@@ -311,9 +391,11 @@ def _aget_client() -> httpx.AsyncClient:
                     _h2 = True
                 except Exception:  # noqa: BLE001
                     _h2 = False
-                _aclient = httpx.AsyncClient(timeout=15, http2=_h2, follow_redirects=True,
-                                             limits=httpx.Limits(max_keepalive_connections=8,
-                                                                 max_connections=16, keepalive_expiry=30.0))
+                _aclient = http.AsyncHopClient(timeout=15, http2=_h2, follow_redirects=True,
+                                               defer_on_429=False,   # upstreams.SELF_BACKOFF
+                                               limits=httpx.Limits(max_keepalive_connections=8,
+                                                                   max_connections=16,
+                                                                   keepalive_expiry=30.0))
     return _aclient
 
 
@@ -336,6 +418,7 @@ async def _abrave(query: str, n: int, key: str) -> list[dict]:
         headers={"X-Subscription-Token": key, "Accept": "application/json"},
         timeout=15,
     )
+    upstreams.observe_response("brave_search", r, defer_on_429=False)  # upstreams.SELF_BACKOFF
     if r.status_code in (401, 403):
         raise _BraveUnavailable(f"brave key rejected ({r.status_code})", 3600)
     if r.status_code == 429:
@@ -362,6 +445,9 @@ async def _addg_gate() -> None:
 
 
 async def _addg(query: str, n: int) -> list[dict]:
+    off = _ddg_off()
+    if off:  # disabled by its declaration: refuse here too, whoever called
+        raise _ddg_refused(off)
     _ddg_guard()  # cooling → raise WITHOUT sending anything (SAME ledger as the sync twin)
     soft = 0       # consecutive HTTP 202 soft rate-limits this call
     transient = 0  # transient network faults this call
@@ -404,28 +490,35 @@ async def _addg(query: str, n: int) -> list[dict]:
 
 
 async def asearch_web(query: str, n: int = 8) -> list[dict]:
-    """Native-async twin of ``search_web``: Brave (if keyed + not cooling) else DDG, SAME cooldown
-    breakers (``_brave_cooldown_until`` / ``_ddg_cooldown_until``) shared with the sync path,
-    including the both-halves-down early exit. Byte-identical routing + result shape."""
+    """Native-async twin of ``search_web``: Brave (if keyed + not cooling) else the DDG fallback unless
+    its declaration disables it, SAME cooldown breakers (``_brave_cooldown_until`` /
+    ``_ddg_cooldown_until``) shared with the sync path, including the no-half-can-serve early exit.
+    Byte-identical routing + result shape."""
     global _brave_cooldown_until
     key = _brave_key()
     now = time.time()
     brave_ok = bool(key) and now >= _brave_cooldown_until
-    ddg_ok = now >= _ddg_cooldown_until
+    ddg_off = _ddg_off()
+    ddg_ok = not ddg_off and now >= _ddg_cooldown_until
     if not brave_ok and not ddg_ok:
-        raise _both_cooling(key)
+        raise _no_backend(key, ddg_off)
     if brave_ok:
+        brave_error = None
         try:
             return await _abrave(query, n, key)
         except _BraveUnavailable as exc:
             _brave_cooldown_until = time.time() + exc.cooldown
             _fail(f"brave: {exc}")
-            logger.warning("brave unavailable (%s) → DDG for %.0fs", exc, exc.cooldown)
+            brave_error = str(exc)
+            logger.warning("brave unavailable (%s) → %s for %.0fs", exc,
+                           "no fallback" if ddg_off else "DDG", exc.cooldown)
         except Exception as exc:  # noqa: BLE001
             _fail(f"brave: {type(exc).__name__}: {exc}")
-            logger.warning("brave search failed, falling back to ddg: %s", exc)
-        if not ddg_ok:  # Brave just fell over and DDG is cooling → nothing left to send with
-            raise _both_cooling(key)
+            brave_error = f"{type(exc).__name__}: {exc}"
+            logger.warning("brave search failed, %s: %s",
+                           "no fallback" if ddg_off else "falling back to ddg", exc)
+        if not ddg_ok:  # Brave just fell over and the fallback is cooling or disabled
+            raise _no_backend(key, ddg_off, brave_error)
     return await _addg(query, n)
 
 
@@ -447,21 +540,26 @@ def backend_state() -> dict:
     tell them apart. omniseek_search stamps this into ``_meta.web_search_backend`` when it is not nominal.
 
     ``active`` is the half a call would use RIGHT NOW ("none" = both closed, so a call sends
-    nothing); ``cooling_s`` is the remaining seconds rounded UP, 0 when that half is open."""
+    nothing); ``cooling_s`` is the remaining seconds rounded UP, 0 when that half is open.
+    ``ddg.disabled`` is the declared reason the fallback is out of service (None when it serves);
+    a disabled fallback is never ``active`` and its cooldown no longer decides ``nominal``."""
     now = time.time()
     brave_left = max(0.0, _brave_cooldown_until - now)
     ddg_left = max(0.0, _ddg_cooldown_until - now)
     keyed = bool(_brave_key())
-    active = "brave" if (keyed and brave_left <= 0) else ("ddg" if ddg_left <= 0 else "none")
+    ddg_off = _ddg_off()
+    active = ("brave" if (keyed and brave_left <= 0)
+              else ("ddg" if (not ddg_off and ddg_left <= 0) else "none"))
     return {
-        "nominal": brave_left <= 0 and ddg_left <= 0,
+        "nominal": active != "none" and brave_left <= 0 and (bool(ddg_off) or ddg_left <= 0),
         "active": active,
         "brave": {"keyed": keyed, "cooling_s": math.ceil(brave_left),
                   "cooling_until": _cooling_until_iso(_brave_cooldown_until)},
         "ddg": {"cooling_s": math.ceil(ddg_left),
                 "cooling_until": _cooling_until_iso(_ddg_cooldown_until),
                 "consecutive_trips": _ddg_consecutive_trips,
-                "min_interval_s": _DDG_MIN_INTERVAL},
+                "min_interval_s": _DDG_MIN_INTERVAL,
+                "disabled": ddg_off},
         "last_error": _last_error,
     }
 
@@ -481,12 +579,22 @@ def backend_ping() -> tuple[bool, str]:
             return _ping["ok"], _ping["msg"]
         state = backend_state()
         if state["active"] == "none":
+            ddg_off = state["ddg"].get("disabled")
+            if ddg_off and not state["brave"]["keyed"]:
+                # Not a cooldown: no engine this eye may use until a Brave key is configured (or the
+                # declaration enables a fallback). Down, and cached like any real probe result.
+                ok, msg = False, (f"no web-search backend: brave unkeyed; {ddg_off} "
+                                  f"(upstreams.json {_FALLBACK_UID}.disabled)")
+                _ping.update(t=now, ok=ok, msg=msg)
+                return ok, msg
             # A probe must not spend the very thing it is checking: both halves are closed, so send
             # NOTHING. True is deliberate — a cooldown is a transient state that self-heals, and a
             # False here would let the watchdog mark all ten venues down and HIDE them for a blip.
             # Deliberately NOT cached either, so the next probe after the cooldown sees the truth.
+            ddg_part = (f"ddg disabled: {ddg_off}" if ddg_off
+                        else f"ddg {state['ddg']['cooling_s']}s")
             return True, (f"OK (backend cooling: brave {state['brave']['cooling_s']}s / "
-                          f"ddg {state['ddg']['cooling_s']}s; will self-heal)")
+                          f"{ddg_part}; will self-heal)")
         backend = "brave" if _brave_key() else "ddg"
         try:
             search_web("site:example.com test", n=1)  # reachable if no exception (empty is fine)

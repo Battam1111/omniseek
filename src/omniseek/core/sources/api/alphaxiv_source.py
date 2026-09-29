@@ -42,7 +42,6 @@ from typing import Optional
 from urllib.parse import urlparse
 
 import anyio
-import httpx
 
 from omniseek.core import cache, http
 from omniseek.core.normalize import Document, jsonsafe, mk_signal
@@ -396,8 +395,8 @@ class AlphaXivAdapter:
 
     def health_check(self) -> tuple[bool, str]:
         try:
-            resp = httpx.get(
-                f"{BASE}/papers/v3/feed",
+            resp = http.direct(
+                "GET", f"{BASE}/papers/v3/feed",
                 # pageNum is REQUIRED by /papers/v3/feed: without it the endpoint 400s (a false
                 # health-down while keyword search + the trending feed both work when pageNum is
                 # present, verified 2026-07-23). Mirror _trending's params exactly.

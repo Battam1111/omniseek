@@ -35,9 +35,8 @@ from typing import Optional
 from urllib.parse import urlparse
 
 import anyio
-import httpx
 
-from omniseek.core import cache, http
+from omniseek.core import cache, http, upstreams
 from omniseek.core.normalize import Document, jsonsafe, mk_signal
 
 logger = logging.getLogger(__name__)
@@ -163,11 +162,15 @@ class HFDailyPapersAdapter:
 
     def health_check(self) -> tuple[bool, str]:
         try:
-            resp = httpx.get(API_URL, headers={"User-Agent": USER_AGENT}, timeout=8)
+            with upstreams.egress(API_URL, request_s=8):  # declared Hugging Face gate (per-IP 5-minute windows)
+                resp = http.direct("GET", API_URL, headers={"User-Agent": USER_AGENT}, timeout=8)
+            upstreams.observe_response(API_URL, resp)
             if resp.status_code != 200:
                 return False, f"HTTP {resp.status_code}"
             d = resp.json()
             return bool(d), f"OK ({len(d)} papers in feed)"
+        except upstreams.UpstreamBusy as exc:
+            return True, f"degraded: declared Hugging Face gate busy, not probed this cycle ({exc})"
         except Exception as exc:  # noqa: BLE001
             return False, f"{type(exc).__name__}: {exc}"
 

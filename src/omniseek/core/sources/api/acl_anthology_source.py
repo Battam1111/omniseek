@@ -25,7 +25,6 @@ from typing import Optional
 from urllib.parse import urlparse
 
 import anyio
-import httpx
 
 from omniseek.core import cache, diag, http
 from omniseek.core.normalize import Document, keyword_score_filter
@@ -76,8 +75,8 @@ class ACLAnthologyAdapter:
         if cached is not None:
             return cached
         try:
-            resp = httpx.get(f"{RAW}/{coll}.xml", headers={"User-Agent": USER_AGENT},
-                             timeout=TIMEOUT, follow_redirects=True)
+            resp = http.direct("GET", f"{RAW}/{coll}.xml", headers={"User-Agent": USER_AGENT},
+                               timeout=TIMEOUT, follow_redirects=True)
             resp.raise_for_status()
             root = ET.fromstring(resp.content)
         except Exception as exc:  # noqa: BLE001
@@ -206,8 +205,8 @@ class ACLAnthologyAdapter:
 
     def health_check(self) -> tuple[bool, str]:
         try:
-            resp = httpx.head(f"{RAW}/2025.acl.xml", headers={"User-Agent": USER_AGENT},
-                              timeout=10, follow_redirects=True)
+            resp = http.direct("HEAD", f"{RAW}/2025.acl.xml", headers={"User-Agent": USER_AGENT},
+                               timeout=10, follow_redirects=True)
             return resp.status_code == 200, f"HTTP {resp.status_code} (2025.acl probe)"
         except Exception as exc:  # noqa: BLE001
             return False, f"{type(exc).__name__}: {exc}"

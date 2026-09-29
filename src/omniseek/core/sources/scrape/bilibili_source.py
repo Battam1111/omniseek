@@ -46,7 +46,7 @@ from urllib.parse import urlparse
 import anyio
 import httpx
 
-from omniseek.core import cache
+from omniseek.core import cache, http
 from omniseek.core.normalize import Document, jsonsafe, mk_signal
 from omniseek.core.sources.scrape._base import BaseScrapeAdapter
 
@@ -74,7 +74,7 @@ def _bili_request(url: str, params: dict, timeout: int = DEFAULT_TIMEOUT) -> htt
     cookies by visiting bilibili.com — the search API returns 412 Precondition Failed
     without them (their anti-crawler gate; verified 2026-06). One extra GET, and search
     results are cached, so the cost is amortized."""
-    with httpx.Client(headers=HEADERS, timeout=timeout, follow_redirects=True) as client:
+    with http.HopClient(headers=HEADERS, timeout=timeout, follow_redirects=True) as client:
         try:
             client.get("https://www.bilibili.com/")  # sets buvid3 / buvid4 cookies
         except Exception as exc:  # noqa: BLE001
@@ -85,12 +85,12 @@ def _bili_request(url: str, params: dict, timeout: int = DEFAULT_TIMEOUT) -> htt
 async def _abili_request(url: str, params: dict, timeout: int = DEFAULT_TIMEOUT) -> httpx.Response:
     """Async twin of ``_bili_request``: byte-faithful mirror of the two-GET buvid handshake in a FRESH
     per-call ``httpx.AsyncClient`` (fresh client = fresh cookie jar per call, exactly like the sync
-    ``with httpx.Client(...)``). ONLY the two ``client.get`` egresses go async; the bootstrap-then-fetch
+    ``with http.HopClient(...)``). ONLY the two ``client.get`` egresses go async; the bootstrap-then-fetch
     order, the browser UA + Referer HEADERS, follow_redirects, timeout, and the best-effort bootstrap
     ``try/except`` are identical. This source keeps its OWN async client (not the shared ``http.aget*``
     pool) because the buvid cookie bootstrap + browser headers are precisely what the shared pool cannot
     provide, and bilibili's buvid cookies must not leak into the pool every other source shares."""
-    async with httpx.AsyncClient(headers=HEADERS, timeout=timeout, follow_redirects=True) as client:
+    async with http.AsyncHopClient(headers=HEADERS, timeout=timeout, follow_redirects=True) as client:
         try:
             await client.get("https://www.bilibili.com/")  # sets buvid3 / buvid4 cookies
         except Exception as exc:  # noqa: BLE001

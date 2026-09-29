@@ -34,8 +34,6 @@ import logging
 from datetime import datetime
 from typing import Optional
 
-import httpx
-
 from omniseek.core import diag, http
 from omniseek.core.normalize import Document, keyword_score_filter
 from omniseek.core.sources.scrape._base import BaseScrapeAdapter
@@ -68,8 +66,8 @@ def _load_models() -> list[dict]:
     if _MODELS is not None:
         return _MODELS
     try:
-        resp = httpx.get(CSV_URL, headers={"User-Agent": USER_AGENT},
-                         timeout=TIMEOUT, follow_redirects=True)
+        resp = http.direct("GET", CSV_URL, headers={"User-Agent": USER_AGENT},
+                           timeout=TIMEOUT, follow_redirects=True)
         resp.raise_for_status()
     except Exception as exc:  # noqa: BLE001 - leave _MODELS None so we retry next call
         logger.warning("epoch_ai_models: CSV fetch failed: %s", exc)
@@ -185,8 +183,8 @@ class EpochAIModelsSource(BaseScrapeAdapter):
     def health_check(self) -> tuple[bool, str]:
         # Cheap liveness: HEAD the CSV, never parse the whole table on a health poll.
         try:
-            resp = httpx.head(CSV_URL, headers={"User-Agent": USER_AGENT},
-                              timeout=10, follow_redirects=True)
+            resp = http.direct("HEAD", CSV_URL, headers={"User-Agent": USER_AGENT},
+                               timeout=10, follow_redirects=True)
             return resp.status_code == 200, f"HTTP {resp.status_code}"
         except Exception as exc:  # noqa: BLE001
             return False, f"{type(exc).__name__}: {exc}"

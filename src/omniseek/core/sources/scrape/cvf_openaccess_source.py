@@ -32,7 +32,6 @@ from typing import Optional
 from urllib.parse import urljoin, urlparse
 
 import anyio
-import httpx
 from bs4 import BeautifulSoup
 
 from omniseek.core import cache, diag, http
@@ -94,8 +93,8 @@ class CVFOpenAccessAdapter:
             return cached
         url = f"{BASE}/{conf}?day=all"
         try:
-            resp = httpx.get(url, headers={"User-Agent": USER_AGENT},
-                             timeout=TIMEOUT, follow_redirects=True)
+            resp = http.direct("GET", url, headers={"User-Agent": USER_AGENT},
+                               timeout=TIMEOUT, follow_redirects=True)
             resp.raise_for_status()
             soup = BeautifulSoup(resp.text, "html.parser")
         except Exception as exc:  # noqa: BLE001 — failure degrades to [] (adapter contract)
@@ -249,8 +248,8 @@ class CVFOpenAccessAdapter:
         if "/html/" not in path or not path.endswith(".html"):
             return None  # only claim per-paper landing pages
         try:
-            resp = httpx.get(url, headers={"User-Agent": USER_AGENT},
-                             timeout=30, follow_redirects=True)
+            resp = http.direct("GET", url, headers={"User-Agent": USER_AGENT},
+                               timeout=30, follow_redirects=True)
             resp.raise_for_status()
             soup = BeautifulSoup(resp.text, "html.parser")
         except Exception as exc:  # noqa: BLE001
@@ -284,8 +283,8 @@ class CVFOpenAccessAdapter:
 
     def health_check(self) -> tuple[bool, str]:
         try:
-            resp = httpx.head(f"{BASE}/CVPR2024", headers={"User-Agent": USER_AGENT},
-                              timeout=10, follow_redirects=True)
+            resp = http.direct("HEAD", f"{BASE}/CVPR2024", headers={"User-Agent": USER_AGENT},
+                               timeout=10, follow_redirects=True)
             return resp.status_code == 200, f"HTTP {resp.status_code} (CVPR2024 probe)"
         except Exception as exc:  # noqa: BLE001
             return False, f"{type(exc).__name__}: {exc}"

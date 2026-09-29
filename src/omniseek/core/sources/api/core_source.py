@@ -43,8 +43,8 @@ from urllib.parse import urlparse
 
 import httpx
 
-from omniseek.core import auth
-from omniseek.core._guard import GateBusy, bounded_async_slot, bounded_slot
+from omniseek.core import auth, http, upstreams
+from omniseek.core._guard import GateBusy
 from omniseek.core.normalize import Document, jsonsafe, mk_signal
 from omniseek.core.sources.api._base import BaseAPIAdapter
 
@@ -71,22 +71,37 @@ auth.write_template(
 # concurrency ceiling; under the broad-fan-out / multi-agent burst that storms the one quota. This
 # module-global semaphore (held only around the egress, in _core_get) caps concurrent requests so a
 # burst paces through instead of cascading into 429s, mirroring _s2 / _openalex / reddit.
-_CORE_MAX_INFLIGHT = 3
-_core_sema = threading.BoundedSemaphore(_CORE_MAX_INFLIGHT)
+#
+# Since 2026-09-28 the cap is the registry's ONE CORE guard, built from the declaration (upstreams.json
+# "core"), and it also enforces CORE's published per-minute ceiling, which nothing enforced before:
+# api.core.ac.uk/docs/v3 gives registered personal keys 1,000 tokens/day at most 25 per minute and
+# registered academic keys 5,000/day at most 10 per minute. Which tier the host's key has is not
+# known here, so the gate takes the stricter: at most 10 request starts in any 60 s (free until the
+# window is full, then callers wait or shed). The X-RateLimit-* headers CORE returns are recorded, so
+# the health block shows the real tier. `_core_sema` stays the guard's own semaphore (same object).
+_core_guard = upstreams.guard("core", log=logger)
+_CORE_MAX_INFLIGHT = _core_guard.max_inflight
+_core_sema = _core_guard.sema
+
+
+def _core_busy(waited: float) -> GateBusy:
+    return GateBusy(f"CORE gate busy after {waited:.1f}s")
+
+
+def _core_late(wait: float) -> GateBusy:
+    return GateBusy(f"CORE start slot {wait:.1f}s away (declared per-minute ceiling), past this "
+                    "caller's budget")
 
 
 def _core_get(url: str, **kwargs):
-    """Single CORE egress chokepoint: all httpx.get to api.core.ac.uk pass through here so the global
-    in-flight cap (_core_sema) bounds concurrent requests to the shared key-quota host."""
-    # Reuse the existing wire timeout as the queue budget. CORE may return large full-text pages, so
-    # the queue is allowed the same patience as the request but can never wait forever.
-    max_wait = float(kwargs.get("timeout", TIMEOUT))
-    with bounded_slot(
-        _core_sema,
-        max_wait,
-        lambda waited: GateBusy(f"CORE gate busy after {waited:.1f}s"),
-    ):
-        return httpx.get(url, **kwargs)
+    """Single CORE egress chokepoint: all requests to api.core.ac.uk pass through here so the global
+    in-flight cap (_core_sema) bounds concurrent requests to the shared key-quota host. The gate wait
+    is the declared max_wait_s cut to the caller's deadline (driver ruling 2); the request itself goes
+    through http.direct, so a redirect follows the one redirect rule and every hop's rate-limit headers
+    are recorded (a Retry-After defers the whole CORE gate)."""
+    with _core_guard.hold(upstreams.max_wait("core"), _core_busy, _core_late,
+                          request_s=http._timeout_s(kwargs.get("timeout"))):
+        return http.direct("GET", url, **kwargs)
 
 
 # ── ASYNC EGRESS TWIN (S4) ───────────────────────────────────────────────────────────────────────
@@ -113,6 +128,7 @@ def _acore_client() -> httpx.AsyncClient:
                     timeout=TIMEOUT,
                     limits=httpx.Limits(max_keepalive_connections=4, max_connections=8,
                                         keepalive_expiry=30.0),
+                    event_hooks=http.ahop_hooks(),   # the redirect rule + declared UA, every hop
                 )
     return _acore_client_obj
 
@@ -121,16 +137,13 @@ async def _acore_get(url: str, **kwargs):
     """Async twin of ``_core_get``: the SAME single CORE egress chokepoint, so the SHARED ``_core_sema``
     in-flight cap bounds sync + async requests TOGETHER against the one shared-key host (the reddit
     ``_arctic_sema`` precedent — ONE ``threading.BoundedSemaphore``, never a second ``asyncio`` one, so
-    the async migration can never double the CORE burst). ``bounded_async_slot`` acquires it OFF the
-    loop, bounds the queue wait by the existing request timeout, and keeps acquire/release paired under
+    the async migration can never double the CORE burst). ``_core_guard.ahold`` waits for it in the
+    gate's one line on the loop (no thread), then for the declared start slot, bounds both waits by the
+    declared max_wait_s cut to the caller's deadline, and keeps acquire/release paired under
     cancellation. Egress uses the module-level uncapped AsyncClient (see ``_acore_client``)."""
-    max_wait = float(kwargs.get("timeout", TIMEOUT))
-    async with bounded_async_slot(
-        _core_sema,
-        max_wait,
-        lambda waited: GateBusy(f"CORE gate busy after {waited:.1f}s"),
-    ):
-        return await _acore_client().get(url, **kwargs)
+    async with _core_guard.ahold(upstreams.max_wait("core"), _core_busy, _core_late,
+                                 request_s=http._timeout_s(kwargs.get("timeout"))):
+        return await http.adirect("GET", url, client=_acore_client(), **kwargs)
 
 
 class CoreAdapter(BaseAPIAdapter):

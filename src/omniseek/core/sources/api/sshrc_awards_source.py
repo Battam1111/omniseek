@@ -28,7 +28,6 @@ import logging
 from typing import Optional
 
 import anyio
-import httpx
 
 from omniseek.core import cache, diag, http
 from omniseek.core.normalize import Document, keyword_score_filter
@@ -73,7 +72,8 @@ class SSHRCAwardsAdapter(BulkFundingBase):
             # 85s < the 90s fetch_one deadline: the old 180s could never elapse on a deadline-bounded
             # call (outer deadline killed it first); 85s is generous for a CSV. Raise the OUTER
             # deadline, not this, if a larger download is ever needed.
-            r = httpx.get(url, headers={"User-Agent": UA}, timeout=85, follow_redirects=True)
+            r = http.direct("GET", url, headers={"User-Agent": UA}, timeout=85,
+                            follow_redirects=True)
             r.raise_for_status()
             text = r.content.decode("utf-8-sig", errors="replace")
         except Exception as exc:  # noqa: BLE001 — failure → [] (the contract); don't cache a miss

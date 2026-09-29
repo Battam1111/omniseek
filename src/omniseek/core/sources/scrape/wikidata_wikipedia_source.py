@@ -40,7 +40,7 @@ import logging
 from typing import Any, Optional
 from urllib.parse import quote
 
-from omniseek.core import http
+from omniseek.core import http, upstreams
 from omniseek.core.normalize import Document, jsonsafe, mk_signal
 from omniseek.core.sources.scrape._base import BaseScrapeAdapter
 
@@ -50,6 +50,27 @@ WIKI_API = "https://en.wikipedia.org/w/api.php"
 WIKI_REST_SUMMARY = "https://en.wikipedia.org/api/rest_v1/page/summary/"
 WIKIDATA_API = "https://www.wikidata.org/w/api.php"
 WIKIDATA_ENTITY_BASE = "https://www.wikidata.org/wiki"
+
+# WIKIMEDIA USER-AGENT (driver decisions, 2026-09-29). The Wikimedia Foundation User-Agent Policy
+# (foundation.wikimedia.org/wiki/Policy:Wikimedia_Foundation_User-Agent_Policy, read 2026-09-28) asks a
+# bot for name/version, a contact, the word "bot", and never a browser's User-Agent. The string lives
+# in ONE place, upstreams.json "wikimedia" -> "user_agent" (contact: the public OmniSeek repo, no
+# personal address); the shared layers send it to these hosts on every hop, and every Wikimedia call
+# here also asks for it explicitly through these two helpers. With it, requests fall in the
+# "User-Agent only" tier of the Wikimedia API rate limits (200 per minute, at most 3 concurrent), the
+# gate declared for the same upstream.
+def _wm_get_json(url, **kwargs):
+    """http.get_json with the User-Agent the declaration gives for this host."""
+    kwargs["headers"] = upstreams.with_declared_user_agent(url, kwargs.get("headers"))
+    return http.get_json(url, **kwargs)
+
+
+async def _wm_aget_json(url, **kwargs):
+    """Async twin of _wm_get_json."""
+    kwargs["headers"] = upstreams.with_declared_user_agent(url, kwargs.get("headers"))
+    return await http.aget_json(url, **kwargs)
+
+
 TIMEOUT = 15
 
 # A few high-signal taxonomy properties to surface on the top entity. Resolved to
@@ -88,7 +109,7 @@ class WikidataWikipediaAdapter(BaseScrapeAdapter):
     def _fetch_articles(self, query: str, n: int) -> list[dict]:
         """Action-API search → per-title REST summary. Each item: the summary dict
         (extract / content_urls / description / wikibase_item / thumbnail)."""
-        search = http.get_json(
+        search = _wm_get_json(
             WIKI_API,
             params={
                 "action": "query",
@@ -110,7 +131,7 @@ class WikidataWikipediaAdapter(BaseScrapeAdapter):
             title = hit.get("title")
             if not title:
                 continue
-            summary = http.get_json(
+            summary = _wm_get_json(
                 WIKI_REST_SUMMARY + quote(title.replace(" ", "_"), safe=""),
                 timeout=TIMEOUT,
             )
@@ -121,7 +142,7 @@ class WikidataWikipediaAdapter(BaseScrapeAdapter):
     def _fetch_entities(self, query: str, n: int) -> list[dict]:
         """wbsearchentities → entity hits (id / label / description / concepturi),
         with the top entity enriched with a couple of resolved key claims."""
-        resp = http.get_json(
+        resp = _wm_get_json(
             WIKIDATA_API,
             params={
                 "action": "wbsearchentities",
@@ -151,7 +172,7 @@ class WikidataWikipediaAdapter(BaseScrapeAdapter):
         """Fetch the entity's claims, keep the KEY_CLAIM_PROPS, and resolve the opaque
         property + value QIDs to human labels in ONE batched follow-up call. Returns a
         list of (property_label, value_label) pairs, best-effort (empty on any failure)."""
-        ent_resp = http.get_json(
+        ent_resp = _wm_get_json(
             WIKIDATA_API,
             params={"action": "wbgetentities", "ids": qid,
                     "languages": "en", "format": "json", "props": "claims"},
@@ -195,7 +216,7 @@ class WikidataWikipediaAdapter(BaseScrapeAdapter):
         """Batch-resolve a mixed list of P-/Q-ids to their English labels in one call."""
         if not ids:
             return {}
-        resp = http.get_json(
+        resp = _wm_get_json(
             WIKIDATA_API,
             params={"action": "wbgetentities", "ids": "|".join(ids[:50]),
                     "languages": "en", "format": "json", "props": "labels"},
@@ -366,7 +387,7 @@ class WikidataWikipediaAdapter(BaseScrapeAdapter):
         source. Exactly one summary GET per title, as before, and the results are restored to the
         search-hit order, which is the relevance order `_to_documents` and every recorded output
         were built on."""
-        search = await http.aget_json(
+        search = await _wm_aget_json(
             WIKI_API,
             params={
                 "action": "query",
@@ -387,7 +408,7 @@ class WikidataWikipediaAdapter(BaseScrapeAdapter):
         ]
 
         async def _summary(title: str) -> Optional[dict]:
-            summary = await http.aget_json(
+            summary = await _wm_aget_json(
                 WIKI_REST_SUMMARY + quote(title.replace(" ", "_"), safe=""),
                 timeout=TIMEOUT,
             )
@@ -410,7 +431,7 @@ class WikidataWikipediaAdapter(BaseScrapeAdapter):
     async def _afetch_entities(self, query: str, n: int) -> list[dict]:
         """Async twin of `_fetch_entities`: wbsearchentities -> hits, top entity enriched with
         resolved key claims (ONE extra graph lookup, not n). Byte-faithful shape + order."""
-        resp = await http.aget_json(
+        resp = await _wm_aget_json(
             WIKIDATA_API,
             params={
                 "action": "wbsearchentities",
@@ -439,7 +460,7 @@ class WikidataWikipediaAdapter(BaseScrapeAdapter):
     async def _afetch_key_claims(self, qid: str) -> list[tuple[str, str]]:
         """Async twin of `_fetch_key_claims`: wbgetentities claims -> keep KEY_CLAIM_PROPS ->
         ONE batched label-resolve follow-up. SAME 3-per-prop cap, SAME order, [] on any failure."""
-        ent_resp = await http.aget_json(
+        ent_resp = await _wm_aget_json(
             WIKIDATA_API,
             params={"action": "wbgetentities", "ids": qid,
                     "languages": "en", "format": "json", "props": "claims"},
@@ -484,7 +505,7 @@ class WikidataWikipediaAdapter(BaseScrapeAdapter):
         in one call."""
         if not ids:
             return {}
-        resp = await http.aget_json(
+        resp = await _wm_aget_json(
             WIKIDATA_API,
             params={"action": "wbgetentities", "ids": "|".join(ids[:50]),
                     "languages": "en", "format": "json", "props": "labels"},
@@ -514,7 +535,7 @@ class WikidataWikipediaAdapter(BaseScrapeAdapter):
         """Cheap probe: a trivial Wikidata entity search proves the keyless API answers.
         (Uses the lighter wbsearchentities rather than the full four-endpoint fan-out.)"""
         try:
-            resp = http.get_json(
+            resp = _wm_get_json(
                 WIKIDATA_API,
                 params={"action": "wbsearchentities", "search": "test",
                         "language": "en", "format": "json", "limit": 1},
@@ -643,7 +664,7 @@ class WikidataIdentityAdapter(BaseScrapeAdapter):
         return None
 
     def _search_entities(self, query: str, n: int) -> list[dict]:
-        resp = http.get_json(
+        resp = _wm_get_json(
             WIKIDATA_API,
             params={"action": "wbsearchentities", "search": query, "language": "en",
                     "uselang": "en", "format": "json", "limit": n, "type": "item"},
@@ -654,7 +675,7 @@ class WikidataIdentityAdapter(BaseScrapeAdapter):
         return [h for h in (resp.get("search") or []) if isinstance(h, dict)]
 
     def _fetch_claims(self, qid: str) -> dict:
-        resp = http.get_json(
+        resp = _wm_get_json(
             WIKIDATA_API,
             params={"action": "wbgetentities", "ids": qid, "languages": "en",
                     "format": "json", "props": "claims"},
@@ -807,7 +828,7 @@ class WikidataIdentityAdapter(BaseScrapeAdapter):
 
     async def _asearch_entities(self, query: str, n: int) -> list[dict]:
         """Async twin of `_search_entities`."""
-        resp = await http.aget_json(
+        resp = await _wm_aget_json(
             WIKIDATA_API,
             params={"action": "wbsearchentities", "search": query, "language": "en",
                     "uselang": "en", "format": "json", "limit": n, "type": "item"},
@@ -819,7 +840,7 @@ class WikidataIdentityAdapter(BaseScrapeAdapter):
 
     async def _afetch_claims(self, qid: str) -> dict:
         """Async twin of `_fetch_claims`."""
-        resp = await http.aget_json(
+        resp = await _wm_aget_json(
             WIKIDATA_API,
             params={"action": "wbgetentities", "ids": qid, "languages": "en",
                     "format": "json", "props": "claims"},
@@ -864,7 +885,7 @@ class WikidataIdentityAdapter(BaseScrapeAdapter):
         """Cheap probe: a trivial entity search proves the keyless API answers (does NOT
         run the full resolve+claims fan-out)."""
         try:
-            resp = http.get_json(
+            resp = _wm_get_json(
                 WIKIDATA_API,
                 params={"action": "wbsearchentities", "search": "test",
                         "language": "en", "format": "json", "limit": 1},
@@ -931,7 +952,7 @@ def _resolve_labels_batch(ids: list[str]) -> dict[str, str]:
     """Batch-resolve a list of Q-/P-ids to their English labels in one call."""
     if not ids:
         return {}
-    resp = http.get_json(
+    resp = _wm_get_json(
         WIKIDATA_API,
         params={"action": "wbgetentities", "ids": "|".join(ids[:50]),
                 "languages": "en", "format": "json", "props": "labels"},
@@ -952,7 +973,7 @@ async def _aresolve_labels_batch(ids: list[str]) -> dict[str, str]:
     labels in one call."""
     if not ids:
         return {}
-    resp = await http.aget_json(
+    resp = await _wm_aget_json(
         WIKIDATA_API,
         params={"action": "wbgetentities", "ids": "|".join(ids[:50]),
                 "languages": "en", "format": "json", "props": "labels"},

@@ -25,8 +25,8 @@ import anyio
 
 from omniseek.core import diag
 from omniseek.core.normalize import Document, jsonsafe
-from omniseek.core.sources.api._search_backend import (asearch_web, backend_ping, backend_state,
-                                                     search_web)
+from omniseek.core.sources.api._search_backend import (WebSearchUnavailable, asearch_web, backend_ping,
+                                                     backend_state, search_web)
 
 logger = logging.getLogger(__name__)
 _DATA = Path(__file__).with_name("search_index_sites.json")
@@ -145,6 +145,12 @@ class _SearchVenue:
         sample_dropped: list[str] = []
         try:
             hits = search_web(q, n=n)
+        except WebSearchUnavailable as exc:
+            # No engine may serve it (Brave unkeyed / cooling / failing, and the fallback switched off
+            # by its declaration): an EMPTY result whose `backend` capture carries the declared reason,
+            # never cached, so every later call says why again.
+            self._note_backend(q, exc)
+            return []
         except RuntimeError as exc:
             self._note_backend(q, exc)
             raise  # the error contract is unchanged: an empty is never published as "nothing exists"
@@ -214,6 +220,9 @@ class _SearchVenue:
         sample_dropped: list[str] = []
         try:
             hits = await asearch_web(q, n=n)  # async egress; parse below is pure CPU, on the loop
+        except WebSearchUnavailable as exc:
+            self._note_backend(q, exc)  # same as the sync twin: empty, captured, never cached
+            return []
         except RuntimeError as exc:
             self._note_backend(q, exc)
             raise  # the error contract is unchanged: an empty is never published as "nothing exists"

@@ -15,8 +15,10 @@ zero-incident track record on the same browser method. The browser flow below ca
 human-behavior layer (_human) + the 风控 breaker + the read-only posture.
 
 ## SIGNED DIRECT-API — now the DEGRADED FALLBACK (was the primary path pre-2026-06-25)
-Used ONLY when the browser path is unavailable / errors. Computes the signature itself and calls
-``edith.xiaohongshu.com`` directly:
+Used ONLY when the browser path is unavailable / errors. For a NOTE read (2026-09-26) that is
+narrower: only when the browser never got the page open, and only for a link that carries its own
+xsec_token and is not an App share link (see fetch_url / _fetch_signed). Computes the signature
+itself and calls ``edith.xiaohongshu.com`` directly:
 
     xhshow (pure-Python x-s / x-s-common / x-t signer)  +  curl_cffi (Chrome-TLS impersonation)
     →  signed GET/POST to edith.xiaohongshu.com  →  cursor pagination
@@ -64,6 +66,8 @@ from omniseek.core.normalize import Document, is_blocked, mk_signal, selector_dr
 from omniseek.core.sources.walled._cdp import cdp_call
 from omniseek.core.sources.walled.xiaohongshu_source import (
     _detail_has_substance as _xhs_detail_has_substance,
+    _refused_landing as _xhs_refused_landing,
+    _refused_reason as _xhs_refused_reason,
 )
 
 logger = logging.getLogger(__name__)
@@ -764,6 +768,13 @@ def _parse_note_url(url: str) -> tuple[Optional[str], str]:
     return note_id, token
 
 
+def _link_xsec_source(url: str) -> str:
+    """The xsec_source the link itself carries, or "" when it is absent or blank. Read for ONE
+    decision only: an App share link (xsec_source=app_share) is never sent to the signed API. The
+    signed request itself always sends pc_feed (see _fetch_note), whatever the link says."""
+    return (parse_qs(urlparse(url).query).get("xsec_source") or [""])[0]
+
+
 def _wants_full(url: str) -> bool:
     """A per-note opt-in (&xhs_full=1 on the note URL) that turns DEEP sub-reply drilling ON for
     THIS fetch only — the override of the safe _FETCH_SUB_COMMENTS=False default. Lets the operator pull
@@ -1051,14 +1062,17 @@ def _browser_fetch(note_id: str, token: str, url: str) -> tuple[str, Optional["D
     """PRIMARY mainland note fetch via the 9224 browser: navigate the note, INTERCEPT the page's OWN
     /comment/page XHR + exhaustively DOM-load the comment thread + surface carousel images. Mirrors
     the rednote 小号's _fetch_url_live. Returns (status, doc): 'login' → caller trips the breaker;
-    'error' → caller falls back to signed-API. READ-ONLY (the expander clicks reveal only what a
-    human reader would; no like / follow / comment)."""
+    'refused' → the platform redirected the note to /404, its verdict on this link (caller stops);
+    'unopened' → the browser never got the page open: it could not start, connect, or timed out
+    (the ONLY status on which the caller may try the signed API); 'error' → the page opened but
+    gave nothing readable, or the flow died after it opened (caller stops). READ-ONLY (the expander
+    clicks reveal only what a human reader would; no like / follow / comment)."""
     global _browser_last_flow, _browser_next_gap
     if not _browser_slot.acquire(timeout=_BROWSER_SLOT_TIMEOUT):
         diag.note("xiaohongshu_cn.browser_gate", url=url,
                   body=f"9224 busy: queued live fetch exceeded {_BROWSER_SLOT_TIMEOUT:.0f}s slot wait "
                        "(returned None — NOT a missing note)")
-        return ("error", None)
+        return ("unopened", None)
     try:
         try:
             _bump_daily()  # count this live account-touch against the SHARED daily volume cap (#769)
@@ -1070,6 +1084,11 @@ def _browser_fetch(note_id: str, token: str, url: str) -> tuple[str, Optional["D
             time.sleep(min(wait, _BROWSER_SLOT_TIMEOUT))
         nav_url = url or _note_url(note_id, token)
         cmt: list = []
+        # How far the navigation got, written from the CDP worker thread (same pattern as cmt).
+        # "opened" flips once goto returns: from then on the platform has answered for this link,
+        # and fetch_url must not ask the signed API about it (every 461 in the black box was such a
+        # fallback after an opened page). "landed" carries a refused read's /404 address.
+        nav = {"opened": False, "landed": ""}
 
         def _flow(page):
             def _on_cmt(resp):
@@ -1084,9 +1103,16 @@ def _browser_fetch(note_id: str, token: str, url: str) -> tuple[str, Optional["D
             # Before navigating: a blob:-fed player never puts the real URL in the DOM.
             seen_video = _attach_video_sniffer(page)
             page.goto(nav_url, wait_until="domcontentloaded", timeout=30000)
+            nav["opened"] = True
             _human.read_dwell()
             if _cn_captcha(page):  # UNCONDITIONAL: a visible slider means 风控 regardless of body — 刹车
                 return ("login", None, [], {}, (None, None))
+            # A refused link is server-redirected to /404 (see _refused_landing): the platform's
+            # verdict on this link's token. Stop here, before any scrolling on that page.
+            landed = _xhs_refused_landing(page.url)
+            if landed:
+                nav["landed"] = landed
+                return ("refused", None, [], {}, (None, None))
             # A VIDEO note carries no body text, so a text-only gate reads it as an empty page
             # and _cn_login_wall then throws away a readable note. A player IS content.
             has_content = False
@@ -1133,9 +1159,15 @@ def _browser_fetch(note_id: str, token: str, url: str) -> tuple[str, Optional["D
             _note_browser_cdp(False)  # sustained 9224 CDP failures → trip a cooldown (don't re-nav every query)
             _record_incident("browser_fetch_error", exc_type=type(exc).__name__,
                              exc=str(exc)[:300], flow="fetch", note_id=note_id)
+            if nav["opened"]:
+                diag.note("xiaohongshu_cn.browser_cdp", exc=exc, url=url,
+                          body="9224 CDP fetch flow raised after the note page opened; NOT falling "
+                               "back to the signed API (the platform had already answered for this link)")
+                return ("error", None)
             diag.note("xiaohongshu_cn.browser_cdp", exc=exc, url=url,
-                      body="9224 CDP fetch flow raised — falling back to signed-API")
-            return ("error", None)
+                      body="9224 CDP fetch flow raised before the note page opened (the browser "
+                           "could not start, connect, or timed out); the signed fallback may run")
+            return ("unopened", None)
         finally:
             with _browser_rate_lock:
                 _browser_last_flow = time.time()
@@ -1150,6 +1182,9 @@ def _browser_fetch(note_id: str, token: str, url: str) -> tuple[str, Optional["D
         video_url, video_src = video
         if status == "login":
             return ("login", None)
+        if status == "refused":
+            diag.note("xiaohongshu_cn.refused", url=url, body=_xhs_refused_reason(nav["landed"]))
+            return ("refused", None)
         if status != "ok" or not html:
             return ("error", None)
         soup = _BS(html, "lxml")
@@ -1419,8 +1454,16 @@ class XiaohongshuCNAdapter:
                 cache.set(key, doc.model_dump(mode="json"), ttl=_CACHE_TTL)
                 _clear_streak()
                 return doc
-            # status == 'error' → fall through to the signed-API fallback below
-        # FALLBACK: signed direct-API (a full deep-drill, or when the browser path errored / is off).
+            if status != "unopened":
+                # 'refused' / 'error': the note page OPENED (a /404 landing, an empty shell, or a
+                # flow that died after goto). The platform has answered for this link already, so
+                # the signed API would only be asked the same question about the same token, and
+                # could only add a risk signal (every 461 in the black box came this way, 2026-09-26).
+                # The browser path left its reason in diag; that is what omniseek_read reports.
+                return None
+            # 'unopened': the browser never got the page open (could not start, connect, or timed
+            # out). That is the one browser outcome the signed fallback below is for.
+        # FALLBACK: signed direct-API (a full deep-drill, or when the browser never opened the page / is off).
         if _DEPS_OK:
             return self._fetch_signed(url)
         return None
@@ -1437,6 +1480,22 @@ class XiaohongshuCNAdapter:
         cached = cache.get(key)
         if cached is not None:
             return Document.model_validate(cached)
+        # Which links may reach the signed API (2026-09-26). A link with no xsec_token never does.
+        # An App share link (xsec_source=app_share) never does either: share links are read through
+        # the browser only, because every 461 in the incident black box came from a share link or
+        # from a link with no token. What is left is links carrying a search-minted token, and that
+        # token with the hardcoded pc_feed in _fetch_note is the combination measured live 2026-06-18.
+        if not token:
+            diag.note("xiaohongshu_cn.signed_skipped", url=url, body=(
+                "NO live API call was made: this link carries no xsec_token. The signed API is only "
+                "sent a link's own token, so this path cannot read the note. NOT a missing note."))
+            return None
+        if _link_xsec_source(url) == "app_share":
+            diag.note("xiaohongshu_cn.signed_skipped", url=url, body=(
+                "NO live API call was made: this is an App share link (xsec_source=app_share), and "
+                "share links are read through the browser only. Every 461 in the incident black box "
+                "came from a share link or from a link with no xsec_token. NOT a missing note."))
+            return None
         if _signed_tripped():  # cache above is served regardless; gate LIVE here only when a breaker is open
             reason = f"风控 breaker OPEN: {_last_signal or _last_signed_signal}"
             logger.info("xhs_cn fetch skip (breaker open): %s", reason)
@@ -1467,6 +1526,8 @@ class XiaohongshuCNAdapter:
 
     def _fetch_note(self, note_id: str, token: str, url: str, full: bool = False) -> Optional[Document]:
         # 1) body via the signed feed API
+        # pc_feed with a search-minted token is the combination measured live (2026-06-18); App share
+        # links never get this far (see _fetch_signed).
         feed_payload = {"source_note_id": note_id, "image_formats": ["jpg", "webp", "avif"],
                         "extra": {"need_body_topic": "1"}, "xsec_source": "pc_feed", "xsec_token": token}
         j = _with_cookie_retry(lambda c: _signed_post(_FEED, feed_payload, c))

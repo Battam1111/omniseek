@@ -34,9 +34,7 @@ import time
 from typing import Optional
 from urllib.parse import urlencode, urlparse
 
-import httpx
-
-from omniseek.core import _netguard, _optdep, cache
+from omniseek.core import _netguard, _optdep, cache, http
 
 logger = logging.getLogger(__name__)
 
@@ -320,7 +318,7 @@ def _transcribe_diarized(wav_path: str, speakers: Optional[int] = None) -> tuple
 def _xiaoyuzhou_audio(url: str) -> tuple[Optional[str], dict]:
     """Resolve a 小宇宙 episode page URL → direct audio enclosure URL (+ meta)."""
     try:
-        r = httpx.get(url, headers={"User-Agent": _UA}, timeout=20, follow_redirects=True)
+        r = http.direct("GET", url, headers={"User-Agent": _UA}, timeout=20, follow_redirects=True)
         pp = json.loads(_NEXT.search(r.text).group(1))["props"]["pageProps"]
         ep = pp.get("episode") or {}
         enc = ep.get("enclosure") or {}
@@ -383,7 +381,7 @@ def bilibili_playurl(url: str) -> Optional[dict]:
         c.cookies.set(name, val, domain=".bilibili.com")
 
     try:
-        with httpx.Client(headers=base_headers, follow_redirects=True, timeout=30) as c:
+        with http.HopClient(headers=base_headers, follow_redirects=True, timeout=30) as c:
             # b23.tv (or any non-BV URL) -> follow to the real video page for its BVID
             if bvid is None:
                 r = c.get(url)
@@ -469,8 +467,8 @@ def _bili_download(urls: list, cookies: dict, referer: str, dest: str) -> bool:
     hdrs = {"User-Agent": _BILI_UA, "Referer": referer}
     for u in urls:
         try:
-            with httpx.stream("GET", u, headers=hdrs, cookies=cookies, timeout=120,
-                              follow_redirects=True) as resp:
+            with http.direct_stream("GET", u, headers=hdrs, cookies=cookies, timeout=120,
+                                    follow_redirects=True) as resp:
                 resp.raise_for_status()
                 with open(dest, "wb") as f:
                     for chunk in resp.iter_bytes(262144):
@@ -594,8 +592,8 @@ def _douyin_audio(url: str) -> tuple[Optional[str], dict]:
     tmpdir = tempfile.mkdtemp(prefix="omniseek-asr-dl-")
     dest = os.path.join(tmpdir, "a.mp4")
     try:
-        with httpx.stream("GET", play_url, follow_redirects=True, timeout=120,
-                          headers={"User-Agent": _UA, "Referer": "https://www.douyin.com/"}) as resp:
+        with http.direct_stream("GET", play_url, follow_redirects=True, timeout=120,
+                                headers={"User-Agent": _UA, "Referer": "https://www.douyin.com/"}) as resp:
             resp.raise_for_status()
             with open(dest, "wb") as f:
                 for chunk in resp.iter_bytes():

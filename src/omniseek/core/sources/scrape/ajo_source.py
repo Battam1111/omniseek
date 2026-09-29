@@ -18,7 +18,6 @@ from typing import Optional
 from urllib.parse import urlparse
 
 import anyio
-import httpx
 from bs4 import BeautifulSoup
 
 from omniseek.core import cache, diag, http
@@ -53,8 +52,10 @@ class AJOAdapter:
         if cached is not None:
             return cached
         try:
-            resp = httpx.get(LIST_URL, headers={"User-Agent": UA}, timeout=TIMEOUT,
-                             follow_redirects=True)
+            # Declared host gate: academicjobsonline.org's robots.txt sets Crawl-delay 5 s (http.direct:
+            # the gates, the declared User-Agent and the readings of every hop).
+            resp = http.direct("GET", LIST_URL, headers={"User-Agent": UA}, timeout=TIMEOUT,
+                               follow_redirects=True)
             resp.raise_for_status()
         except Exception as exc:  # noqa: BLE001
             logger.warning("ajo: listing fetch failed: %s", exc)
@@ -140,7 +141,10 @@ class AJOAdapter:
         if "academicjobsonline.org" not in host:
             return None
         for p in self._positions():
-            if p["url"] == url or url.startswith(p["url"]):
+            # A prefix counts only on a path boundary (/, ? or #): the posting URL ends in its id,
+            # so a bare startswith let /ajo/jobs/2750 claim /ajo/jobs/27501.
+            base = p["url"]
+            if url == base or (url.startswith(base) and url[len(base)] in "/?#"):
                 return self._to_doc(p)
         return None
 

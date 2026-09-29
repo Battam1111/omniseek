@@ -36,8 +36,8 @@ from typing import Optional
 
 from markdownify import markdownify as html_to_md
 
-from omniseek.core import auth, diag, http
-from omniseek.core._guard import BackendGuard, GateBusy, bounded_async_slot, bounded_slot
+from omniseek.core import auth, diag, http, upstreams
+from omniseek.core._guard import GateBusy
 from omniseek.core.normalize import Document, jsonsafe, mk_signal
 
 logger = logging.getLogger(__name__)
@@ -77,10 +77,40 @@ _SE_COOLDOWN = 300.0   # seconds to skip the shared API once tripped (de-storms;
 # the CONCURRENT request storm that spends it. This semaphore (held only around the egress in _se_get)
 # caps in-flight SE requests so a broad-fan-out burst paces through instead of cascading into 429s,
 # mirroring _s2 / _openalex / _github / reddit. 4 = low end of the proven-safe band (the quota is tight).
-# Only the in-flight cap is shared machinery (via BackendGuard.sema); SE's quota/backoff breaker above
-# is a genuinely different shape (streak + cooldown, not fails + open_until) and stays module-local.
-_SE_MAX_INFLIGHT = 4
-_se_sema = BackendGuard("stackexchange", _SE_MAX_INFLIGHT).sema
+# SE's quota/backoff breaker above is a genuinely different shape (streak + cooldown, not fails +
+# open_until) and stays module-local. Since 2026-09-28 the cap AND a start spacing come from the
+# declaration (upstreams.json "stackexchange", read from api.stackexchange.com/docs/throttle: more than
+# 30 requests a second from one IP are dropped): 4 in flight and at most 30 request starts in any
+# second, taken permit-first through the registry's ONE Stack Exchange guard. A response carrying `backoff` defers
+# that guard for EVERY caller (the docs: the app MUST wait that many seconds), where it used to only
+# count toward the cooldown streak. `_se_sema` stays the guard's own semaphore (same object).
+_se_guard = upstreams.guard("stackexchange", log=logger)
+_SE_MAX_INFLIGHT = _se_guard.max_inflight
+_se_sema = _se_guard.sema
+
+
+def _se_busy(waited: float) -> GateBusy:
+    return GateBusy(f"Stack Exchange gate busy after {waited:.1f}s")
+
+
+def _se_late(wait: float) -> GateBusy:
+    """The error for a start slot past this caller's budget (a pending `backoff` or the rate)."""
+    return GateBusy(f"Stack Exchange start slot {wait:.1f}s away (backoff / rate), past this caller's "
+                    "budget")
+
+
+def _se_observe(data) -> None:
+    """Record the quota the API reported in its response wrapper, and honour its `backoff`."""
+    if not isinstance(data, dict):
+        return
+    upstreams.observe("stackexchange", {k: data.get(k) for k in ("quota_max", "quota_remaining")
+                                        if data.get(k) is not None}, 200)
+    try:
+        bo = float(data.get("backoff") or 0)
+    except (TypeError, ValueError):
+        bo = 0.0
+    if bo > 0:
+        _se_guard.defer(bo)
 
 
 def _se_cooling() -> bool:
@@ -110,13 +140,12 @@ def _se_get(url: str, params: dict, timeout: float = TIMEOUT) -> Optional[dict]:
     if _se_cooling():
         return None
     try:
-        # The gate wait shares the request's existing wire-time budget. A saturated local queue is
-        # self-load, not an upstream failure, so shed it without feeding the quota breaker.
-        with bounded_slot(
-            _se_sema,
-            timeout,
-            lambda waited: GateBusy(f"Stack Exchange gate busy after {waited:.1f}s"),
-        ):
+        # ONE budget for the permit and the start slot: the declared max_wait_s, cut to the caller's
+        # deadline (driver ruling 2). A saturated local queue is self-load, not an upstream failure, so
+        # shed it without feeding the quota breaker. Permit first, then the start slot under it (the
+        # declared gate; a pending `backoff` pushes the slot).
+        with _se_guard.hold(upstreams.max_wait("stackexchange"), _se_busy, _se_late,
+                            request_s=timeout):
             # A quota-boxed Stack Exchange host can manifest as connect failures, so an in-slot retry would double one paced request.
             data = http.get_json(
                 url,
@@ -130,6 +159,7 @@ def _se_get(url: str, params: dict, timeout: float = TIMEOUT) -> Optional[dict]:
     if data is None:  # HTTP failure (429 quota / 5xx / timeout) — http.get_json already logged it
         _se_record(False)
         return None
+    _se_observe(data)
     _se_record(True, backoff=float((isinstance(data, dict) and data.get("backoff")) or 0))
     return data
 
@@ -352,20 +382,17 @@ def fetch_question_document(url: str, source: str, site: str, site_host: str) ->
 # still use them); async and sync share ONE global cap so the migration cannot double the quota storm.
 async def _ase_get(url, params, timeout=TIMEOUT):
     """Async twin of `_se_get`: SAME shared quota breaker + SAME `_se_sema` global in-flight cap
-    (NOT a new asyncio.Semaphore -- the cap is shared sync<->async across the migration). The
-    threading.BoundedSemaphore is acquired OFF the loop (a `with _se_sema:` on the loop would freeze
-    the event loop); release on the loop (instant). `_se_record`/`_se_cooling` hold `_se_lock` only for
+    (NOT a new asyncio.Semaphore: the cap is shared sync<->async across the migration). The permit
+    is waited for in the gate's one line on the loop, without blocking it (`_se_guard.ahold`; a `with
+    _se_sema:` on the loop would freeze it). `_se_record`/`_se_cooling` hold `_se_lock` only for
     microsecond counter math -> fine on loop. cache_only/5xx/429 -> aget_json None -> record fail
     (byte-identical to `_se_get`; the pre-existing cache_only false-record is mirrored, NOT fixed --
     fixing it would diverge from sync)."""
     if _se_cooling():
         return None
     try:
-        async with bounded_async_slot(
-            _se_sema,
-            timeout,
-            lambda waited: GateBusy(f"Stack Exchange gate busy after {waited:.1f}s"),
-        ):
+        async with _se_guard.ahold(upstreams.max_wait("stackexchange"), _se_busy, _se_late,
+                                   request_s=timeout):
             # A quota-boxed Stack Exchange host can manifest as connect failures, so an in-slot retry would double one paced request.
             data = await http.aget_json(
                 url,
@@ -379,6 +406,7 @@ async def _ase_get(url, params, timeout=TIMEOUT):
     if data is None:
         _se_record(False)
         return None
+    _se_observe(data)
     _se_record(True, backoff=float((isinstance(data, dict) and data.get("backoff")) or 0))
     return data
 

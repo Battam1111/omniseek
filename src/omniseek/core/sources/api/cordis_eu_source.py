@@ -43,7 +43,7 @@ from typing import Optional
 import anyio
 import httpx
 
-from omniseek.core import cache, diag
+from omniseek.core import cache, diag, http
 from omniseek.core.normalize import Document, keyword_score_filter
 from omniseek.core.sources.api._bulk_funding import UA, BulkFundingBase, is_ai_relevant
 
@@ -66,7 +66,7 @@ def _aget_client() -> "httpx.AsyncClient":
     if _aclient is None:
         with _aclient_lock:
             if _aclient is None:
-                _aclient = httpx.AsyncClient(follow_redirects=True)
+                _aclient = http.AsyncHopClient(follow_redirects=True)   # the redirect rule, every hop
     return _aclient
 
 
@@ -102,7 +102,8 @@ class CordisEuAdapter(BulkFundingBase):
         try:
             # 85s < the 90s fetch_one deadline (the NSERC/SSHRC/CIHR precedent): generous for a ~35MB
             # zip. Raise the OUTER deadline, not this, if a larger download is ever needed.
-            r = httpx.get(_CSV_ZIP, headers={"User-Agent": UA}, timeout=85, follow_redirects=True)
+            r = http.direct("GET", _CSV_ZIP, headers={"User-Agent": UA}, timeout=85,
+                            follow_redirects=True)
             r.raise_for_status()
             content = r.content
         except Exception as exc:  # noqa: BLE001 — failure → [] (the contract); don't cache a miss
@@ -266,8 +267,8 @@ class CordisEuAdapter(BulkFundingBase):
     def health_check(self) -> tuple[bool, str]:
         # Cheap: a 2-byte Range proves the zip is live (PK magic) without the ~35MB pull.
         try:
-            r = httpx.get(_CSV_ZIP, headers={"User-Agent": UA, "Range": "bytes=0-1"},
-                          timeout=20, follow_redirects=True)
+            r = http.direct("GET", _CSV_ZIP, headers={"User-Agent": UA, "Range": "bytes=0-1"},
+                            timeout=20, follow_redirects=True)
             ok = r.status_code in (200, 206) and r.content[:2] == b"PK"
             return ok, f"HTTP {r.status_code}" + ("" if ok else " (not a zip / unreachable)")
         except Exception as exc:  # noqa: BLE001

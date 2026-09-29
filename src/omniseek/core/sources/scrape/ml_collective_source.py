@@ -26,7 +26,6 @@ from typing import Optional
 from urllib.parse import urljoin, urlparse
 
 import anyio
-import httpx
 from bs4 import BeautifulSoup
 
 from omniseek.core import cache, http
@@ -324,7 +323,8 @@ class MLCollectiveAdapter:
     def health_check(self) -> tuple[bool, str]:
         # Honest health = the /events/ stream actually yields real dated items, not just HTTP 200.
         try:
-            resp = httpx.get(BASE, headers={"User-Agent": UA}, timeout=10, follow_redirects=True)
+            resp = http.direct("GET", BASE, headers={"User-Agent": UA}, timeout=10,
+                               follow_redirects=True)
             if resp.status_code != 200:
                 return False, f"HTTP {resp.status_code}"
         except Exception as exc:  # noqa: BLE001

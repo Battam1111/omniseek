@@ -25,9 +25,7 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-import httpx
-
-from omniseek.core import http
+from omniseek.core import http, upstreams
 from omniseek.core.normalize import Document, jsonsafe, mk_signal
 from omniseek.core.sources.scrape._base import BaseScrapeAdapter
 
@@ -137,8 +135,13 @@ class S2AuthorsAdapter(BaseScrapeAdapter):
         down. http.get_json raise_for_status-es a 429 down to None (losing the status), so probe
         with a direct httpx call here that does NOT raise, and read the status itself."""
         try:
-            r = httpx.get(SEARCH_URL, params={"query": "Bengio", "fields": "name", "limit": 1},
-                          headers={"User-Agent": http.USER_AGENT}, timeout=15, follow_redirects=True)
+            # The probe takes the declared S2 gate like every other S2 request (1 RPS shared with
+            # _s2's keyed client and this source's searches through the shared http client).
+            r = http.direct("GET", SEARCH_URL, params={"query": "Bengio", "fields": "name", "limit": 1},
+                            headers={"User-Agent": http.USER_AGENT}, timeout=15,
+                            follow_redirects=True)
+        except upstreams.UpstreamBusy as exc:
+            return True, f"degraded: declared S2 gate busy, not probed this cycle ({exc})"
         except Exception as exc:  # noqa: BLE001
             return False, f"{type(exc).__name__}: {str(exc)[:80]}"
         if r.status_code == 429:

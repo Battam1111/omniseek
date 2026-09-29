@@ -29,7 +29,6 @@ from datetime import datetime, timezone
 from typing import Optional
 
 import anyio
-import httpx
 import yaml
 
 from omniseek.core import cache, diag, http
@@ -82,8 +81,8 @@ class ConferenceDeadlinesAdapter:
         if cached is not None:
             return cached
         try:
-            resp = httpx.get(YAML_URL, headers={"User-Agent": USER_AGENT},
-                             timeout=TIMEOUT, follow_redirects=True)
+            resp = http.direct("GET", YAML_URL, headers={"User-Agent": USER_AGENT},
+                               timeout=TIMEOUT, follow_redirects=True)
             resp.raise_for_status()
             data = yaml.safe_load(resp.content)
         except Exception as exc:  # noqa: BLE001

@@ -19,18 +19,262 @@ headers + signing and diag.note by hand — do NOT route those through here.
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import contextvars
 import logging
 import random
 import threading
 import time
 from typing import Any, Optional
+from urllib.parse import urljoin, urlsplit
 
 import anyio
 import httpx
 
-from omniseek.core import _netguard, cache, diag
+from omniseek.core import _guard, _netguard, cache, diag, upstreams
 
 logger = logging.getLogger(__name__)
+
+# DECLARED UPSTREAM GATE (task R, 2026-09-28). Every request through these helpers first takes the
+# gate of the upstream its host is declared under in upstreams.json (the SAME BackendGuard the owning
+# module uses), per attempt, holding it through the body read; an undeclared or ungated host passes
+# straight through, and a caller already inside that upstream's hold (the owning module) is not gated
+# twice. Rate-limit headers are recorded for the health block, and a 429 carrying Retry-After defers
+# the upstream for every caller. A request the gate cannot admit in time is NOT sent: the helper
+# returns None like any other failure, with a diag note naming the gate.
+
+
+# A connection that was never made is a request that was never sent: the gate hands back its
+# reserved start (review F8).
+_guard.register_unsent(httpx.ConnectError, httpx.ConnectTimeout)
+
+
+def _gate_note(method: str, url: str, exc: BaseException) -> None:
+    logger.info("http.%s: %s", method.lower(), exc)
+    diag.note(f"http.{method.lower()}", url=url, status=None,
+              body=f"declared upstream gate, request not sent: {exc}")
+
+
+# ONE CONNECTION AT A TIME (arXiv's terms: "limit requests to a single connection at a time"). The
+# declared gate already lets only one request to such a host be in flight, but a pooled keep-alive
+# connection would stay open after the response, one per client (sync and async), and HTTP/2 (when h2
+# is installed) keeps its connection open by design. So those hosts get their own transport, mounted
+# on both shared clients: HTTP/1.1 only, at most one connection, no keep-alive (the connection closes
+# when the response is done), and every request to them says "Connection: close". Which hosts: the
+# declared upstreams whose published terms say max_concurrency 1 (upstreams.single_connection_hosts).
+def _one_connection_limits() -> httpx.Limits:
+    return httpx.Limits(max_connections=1, max_keepalive_connections=0, keepalive_expiry=0.0)
+
+
+def _one_connection_transport(asynchronous: bool = False):
+    """The raw transport for a one-connection host (wrapped in the SSRF guard by the clients)."""
+    if asynchronous:
+        return httpx.AsyncHTTPTransport(http2=False, limits=_one_connection_limits())
+    return httpx.HTTPTransport(http2=False, limits=_one_connection_limits())
+
+
+# DECLARED USER-AGENT (driver decision, 2026-09-29): the User-Agent a host's upstream requires lives
+# in upstreams.json ("user_agent"), in one place. The initial request gets it in _request_capped /
+# _arequest_capped; every HOP (redirects included) gets it from these request hooks on both shared
+# clients, and a hop that leaves such a host gets the shared USER_AGENT back.
+def _apply_declared_user_agent(request: "httpx.Request") -> None:
+    ua = upstreams.user_agent_for(str(request.url))
+    if ua:
+        request.headers["User-Agent"] = ua
+    elif request.headers.get("User-Agent") in upstreams.declared_user_agents():
+        request.headers["User-Agent"] = USER_AGENT   # a redirect off a declared host: not theirs
+
+
+async def _aapply_declared_user_agent(request: "httpx.Request") -> None:
+    _apply_declared_user_agent(request)
+
+
+# THE REDIRECT RULE ON EVERY HOP (driver ruling 1, 2026-09-29). The layers that send one request set the
+# request's upstreams.HopGates here for as long as it runs; this request hook, installed on the shared
+# clients and on every client ``direct`` builds, hands each hop httpx sends (redirects included) to it:
+# same host, the same visit; another host, its own gates, taken after the last host's are let go. The
+# rule itself lives in HopGates only.
+_hops_var: contextvars.ContextVar = contextvars.ContextVar("omniseek_eye_hops", default=None)
+
+
+def _apply_hop_gates(request: "httpx.Request") -> None:
+    gates = _hops_var.get()
+    if isinstance(gates, upstreams.HopGates):
+        gates.enter(str(request.url))
+
+
+async def _aapply_hop_gates(request: "httpx.Request") -> None:
+    gates = _hops_var.get()
+    if isinstance(gates, upstreams.AsyncHopGates):
+        await gates.enter(str(request.url))
+
+
+def _timeout_s(timeout: Any) -> Optional[float]:
+    """A request's own timeout in seconds, for the gates' leases (review P1): a number as it is; an
+    ``httpx.Timeout`` (or the dict httpx keeps in a request's extensions) its longest phase, which is
+    per operation, so a long body can outlive it (the lease then ends early and the gate may admit one
+    more request, never fewer); None when unknown (the gate falls back to its declared max_wait_s)."""
+    if timeout is None or timeout is _UNSET:
+        return None
+    if isinstance(timeout, (int, float)) and not isinstance(timeout, bool):
+        return float(timeout)
+    parts = timeout.values() if isinstance(timeout, dict) else (
+        getattr(timeout, k, None) for k in ("connect", "read", "write", "pool"))
+    nums = [float(v) for v in parts if isinstance(v, (int, float)) and not isinstance(v, bool)]
+    return max(nums) if nums else None
+
+
+def _resp_url(resp: Any, fallback: str) -> str:
+    """The URL a response came from (the last hop), or ``fallback`` when a stub response has none."""
+    try:
+        return str(resp.url or fallback)
+    except Exception:  # noqa: BLE001 (httpx raises when no request is attached)
+        return fallback
+
+
+class _ProgressStream(httpx.SyncByteStream):
+    """A response body that renews the leases of its request's holds at every block of data (driver
+    ruling of 2026-09-29 on section 17.5, item 2): a request that is making progress keeps its
+    permits; one that is stuck makes none and is reclaimed when its lease runs out. The holds are the
+    ones running when the response arrived, so the renewal reaches them wherever the body is read
+    (inside httpx for a plain ``get``, or by the caller for a stream)."""
+
+    def __init__(self, inner: Any, handles: tuple) -> None:
+        self._inner, self._handles = inner, handles
+
+    def __iter__(self):
+        for chunk in self._inner:
+            _guard.renew_handles(self._handles)
+            yield chunk
+
+    def close(self) -> None:
+        self._inner.close()
+
+
+class _AProgressStream(httpx.AsyncByteStream):
+    """Async twin of ``_ProgressStream``."""
+
+    def __init__(self, inner: Any, handles: tuple) -> None:
+        self._inner, self._handles = inner, handles
+
+    async def __aiter__(self):
+        async for chunk in self._inner:
+            _guard.renew_handles(self._handles)
+            yield chunk
+
+    async def aclose(self) -> None:
+        await self._inner.aclose()
+
+
+# CONNECTED, SENT, AND THE HEADERS (driver rulings of 2026-09-29 on review X section 12.8, Q1). Before
+# its first byte a request makes progress when its connection is made, when TLS is set up on it, when the
+# whole request has been written and when its response headers arrive. Each renews the leases of the
+# holds it runs under, so a slow connection or a slow first byte inside the request's own timeout keeps
+# the permit. The first three are httpcore's trace events "connection.connect_tcp.complete",
+# "connection.start_tls.complete" and "<http11|http2>.send_request_body.complete", reached through the
+# request's "trace" extension, which the request hook sets; the headers are the response hook.
+_PROGRESS_EVENTS = ("connect_tcp.complete", "start_tls.complete", "send_request_body.complete")
+
+
+def _sent_trace(handles: tuple, prior: Any):
+    def trace(name: str, info: dict) -> None:
+        if name.endswith(_PROGRESS_EVENTS):
+            _guard.renew_handles(handles)
+        if prior is not None:
+            prior(name, info)
+    trace._omniseek_prior = prior   # a redirect hop carries the extensions on: never chain our own
+    return trace
+
+
+def _asent_trace(handles: tuple, prior: Any):
+    async def trace(name: str, info: dict) -> None:
+        if name.endswith(_PROGRESS_EVENTS):
+            _guard.renew_handles(handles)
+        if prior is not None:
+            await prior(name, info)
+    trace._omniseek_prior = prior
+    return trace
+
+
+def _prior_trace(request: "httpx.Request") -> Any:
+    prior = request.extensions.get("trace")
+    return getattr(prior, "_omniseek_prior", prior)
+
+
+def _watch_send(request: "httpx.Request") -> None:
+    """Request hook: when this request's connection is made, when TLS is set up and when the request has
+    been sent, renew the holds it runs under."""
+    handles = _guard.active_handles()
+    if handles:
+        request.extensions["trace"] = _sent_trace(handles, _prior_trace(request))
+
+
+async def _awatch_send(request: "httpx.Request") -> None:
+    """Async twin of ``_watch_send`` (httpcore awaits an async client's trace callback)."""
+    handles = _guard.active_handles()
+    if handles:
+        request.extensions["trace"] = _asent_trace(handles, _prior_trace(request))
+
+
+def _watch_progress(response: "httpx.Response") -> None:
+    handles = _guard.active_handles()
+    if handles:
+        _guard.renew_handles(handles)   # the headers arrived
+        if isinstance(response.stream, httpx.SyncByteStream):
+            response.stream = _ProgressStream(response.stream, handles)
+
+
+def _awatch_progress(response: "httpx.Response") -> None:
+    handles = _guard.active_handles()
+    if handles:
+        _guard.renew_handles(handles)
+        if isinstance(response.stream, httpx.AsyncByteStream):
+            response.stream = _AProgressStream(response.stream, handles)
+
+
+def progress_hooks() -> dict:
+    """The event hooks that give a plain sync ``httpx.Client`` (a module's own, one that takes its gates
+    with ``hold``/``slot``/``egress`` around the request) the lease renewal by progress: when the
+    request has been sent, when its headers arrive, and at every block of its body."""
+    return {"request": [_watch_send], "response": [_watch_progress]}
+
+
+def aprogress_hooks() -> dict:
+    """Async twin of ``progress_hooks``."""
+    async def hook(response: "httpx.Response") -> None:
+        _awatch_progress(response)
+    return {"request": [_awatch_send], "response": [hook]}
+
+
+def _response_hook(defer_on_429: bool = True):
+    """The response hook of every hop-aware client: EVERY response it receives (each redirect hop and
+    the final one) is recorded on its own host, once (driver ruling of 2026-09-29 on section 16.5,
+    item 2); the layer that returns the final response records it as well, which is then a no-op
+    (upstreams.observe_response marks a recorded response). ``defer_on_429=False`` only for the
+    client of a module listed in upstreams.SELF_BACKOFF."""
+    def hook(response: "httpx.Response") -> None:
+        upstreams.observe_response(str(response.request.url), response, defer_on_429=defer_on_429)
+        _watch_progress(response)   # its body renews its holds' leases as it arrives
+    return hook
+
+
+def _aresponse_hook(defer_on_429: bool = True):
+    """Async twin of ``_response_hook``."""
+    async def hook(response: "httpx.Response") -> None:
+        upstreams.observe_response(str(response.request.url), response, defer_on_429=defer_on_429)
+        _awatch_progress(response)
+    return hook
+
+
+_observe_hop = _response_hook()        # the shared clients' response hooks
+_aobserve_hop = _aresponse_hook()
+
+
+def _with_connection_close(url: str, headers: dict) -> dict:
+    """Add ``Connection: close`` for a one-connection host; other hosts are untouched."""
+    if upstreams.is_single_connection_host(url):
+        return {**headers, "Connection": "close"}
+    return headers
 
 USER_AGENT = "Mozilla/5.0 (compatible; omniseek/0.1)"
 DEFAULT_TIMEOUT = 20
@@ -149,6 +393,12 @@ def _get_client() -> httpx.Client:
                 # proxied transports) so the SSRF guard still wraps the proxied connection.
                 _client = httpx.Client(
                     transport=safeurl.SSRFGuardTransport(_wrapped),
+                    # one-connection hosts (see _one_connection_transport): their own transport
+                    mounts={f"all://{h}": safeurl.SSRFGuardTransport(_one_connection_transport())
+                            for h in upstreams.single_connection_hosts()},
+                    # every hop: the redirect rule (declared gates) and the declared User-Agent
+                    event_hooks={"request": [_apply_hop_gates, _apply_declared_user_agent, _watch_send],
+                                 "response": [_observe_hop]},
                     headers={"User-Agent": USER_AGENT},
                     follow_redirects=True,
                     timeout=DEFAULT_TIMEOUT,
@@ -180,23 +430,42 @@ def _request_capped(method: str, url: str, *, timeout: int, headers: dict,
         logger.warning("http.%s blocked SSRF-class target (%s): %s", method.lower(), url, _blk)
         diag.note(f"http.{method.lower()}", url=url, status=None, body=f"blocked SSRF-class target: {_blk}")
         return None
+    headers = upstreams.with_declared_user_agent(url, _with_connection_close(url, headers))
     for attempt in range(2):
         try:
-            with _get_client().stream(method, url, timeout=timeout, headers=headers, **kwargs) as r:
-                r.raise_for_status()
-                raw = bytearray()
-                for chunk in r.iter_raw():
-                    raw += chunk
-                    if len(raw) > MAX_BYTES:
-                        logger.warning("http.%s refused oversized response (%s): >%d bytes",
-                                       method.lower(), url, MAX_BYTES)
-                        diag.note(f"http.{method.lower()}", url=url, status=r.status_code,
-                                  body=f"refused oversized response (>{MAX_BYTES} bytes)")
-                        return None
+            # The client first (building it can take a second the first time), then the gates, so
+            # the start slot the gate grants is the moment the request goes on the wire (a Crawl-delay
+            # host used to see the first two requests closer than its delay).
+            client = _get_client()
+            # Declared gates per attempt, held through the body read. The first hop's gates are taken
+            # here; every later hop (a redirect) goes through the same HopGates from the client's
+            # request hook, so the rule is the same on every hop.
+            with upstreams.hop_gates(request_s=_timeout_s(timeout)) as gates:
+                gates.enter(url)
+                token = _hops_var.set(gates)
+                try:
+                    with client.stream(method, url, timeout=timeout, headers=headers,
+                                       **kwargs) as r:
+                        upstreams.observe_response(_resp_url(r, url), r)
+                        r.raise_for_status()
+                        raw = bytearray()
+                        for chunk in r.iter_raw():
+                            raw += chunk
+                            if len(raw) > MAX_BYTES:
+                                logger.warning("http.%s refused oversized response (%s): >%d bytes",
+                                               method.lower(), url, MAX_BYTES)
+                                diag.note(f"http.{method.lower()}", url=url, status=r.status_code,
+                                          body=f"refused oversized response (>{MAX_BYTES} bytes)")
+                                return None
+                finally:
+                    _hops_var.reset(token)
             # Rebuild a normal already-read Response from the raw body + original headers, so
             # content-encoding / charset decoding happens exactly as the buffered path did.
             return httpx.Response(r.status_code, headers=r.headers, content=bytes(raw),
                                   request=r.request)
+        except upstreams.UpstreamBusy as exc:
+            _gate_note(method, url, exc)
+            return None
         except httpx.ConnectError as exc:
             if attempt == 0 and retry_transient and _is_transient_connect_error(exc):
                 diag.note("http.retry_transient", url=url, exc=exc)
@@ -231,6 +500,244 @@ def _request_capped(method: str, url: str, *, timeout: int, headers: dict,
     return None
 
 
+def _direct_ua_hook(original_ua: Optional[str]):
+    """The declared User-Agent on every hop of a ``direct`` request; a hop that leaves a declared host
+    gets the caller's own User-Agent back (not the shared one)."""
+    def hook(request: "httpx.Request") -> None:
+        ua = upstreams.user_agent_for(str(request.url))
+        if ua:
+            request.headers["User-Agent"] = ua
+        elif original_ua and request.headers.get("User-Agent") in upstreams.declared_user_agents():
+            request.headers["User-Agent"] = original_ua
+    return hook
+
+
+def hop_hooks(original_ua: Optional[str] = None, *, defer_on_429: bool = True) -> dict:
+    """The event hooks that give a caller-built sync ``httpx.Client`` the redirect rule, the declared
+    User-Agent and the recording of every response on its own host, on every hop (pass as
+    ``event_hooks=``; use with ``direct(..., client=...)``). ``defer_on_429=False`` only for a module
+    listed in upstreams.SELF_BACKOFF."""
+    return {"request": [_apply_hop_gates, _direct_ua_hook(original_ua), _watch_send],
+            "response": [_response_hook(defer_on_429)]}
+
+
+def ahop_hooks(original_ua: Optional[str] = None, *, defer_on_429: bool = True) -> dict:
+    """Async twin of ``hop_hooks`` for a caller-built ``httpx.AsyncClient``."""
+    ua_hook = _direct_ua_hook(original_ua)
+
+    async def _aua(request: "httpx.Request") -> None:
+        ua_hook(request)
+    return {"request": [_aapply_hop_gates, _aua, _awatch_send], "response": [_aresponse_hook(defer_on_429)]}
+
+
+_UNSET: Any = object()
+
+
+def direct(method: str, url: str, *, client: Optional[httpx.Client] = None,
+           follow_redirects: bool = False, timeout: Any = _UNSET,
+           **kwargs: Any) -> httpx.Response:
+    """ONE request outside the shared pool, for the modules that keep their own headers or client:
+    ``httpx.request`` with the declared gates on every hop (the redirect rule of
+    ``upstreams.HopGates``), the declared User-Agent on every hop, and each hop's rate-limit headers
+    recorded (a Retry-After defers the upstream). Returns the read response; raises what httpx raises,
+    and ``upstreams.UpstreamBusy`` (nothing sent) when a gate cannot admit a hop in time. ``client``:
+    the module's own client, built with ``event_hooks=hop_hooks(...)``; else a one-shot client."""
+    headers = kwargs.get("headers") or {}
+    ua = next((v for k, v in headers.items() if str(k).lower() == "user-agent"), None)
+    own = client is None
+    if own:
+        c = httpx.Client(event_hooks=hop_hooks(ua),
+                         timeout=DEFAULT_TIMEOUT if timeout is _UNSET else timeout)
+    else:
+        c = client
+        if timeout is not _UNSET:
+            kwargs["timeout"] = timeout
+    try:
+        with upstreams.hop_gates(request_s=_timeout_s(kwargs.get("timeout", c.timeout))) as gates:
+            gates.enter(url)
+            token = _hops_var.set(gates)
+            try:
+                r = c.request(method, url, follow_redirects=follow_redirects, **kwargs)
+            finally:
+                _hops_var.reset(token)
+        upstreams.observe_response(str(r.url), r)
+        return r
+    finally:
+        if own:
+            c.close()
+
+
+async def adirect(method: str, url: str, *, client: Optional[httpx.AsyncClient] = None,
+                  follow_redirects: bool = False, timeout: Any = _UNSET,
+                  **kwargs: Any) -> httpx.Response:
+    """Async twin of ``direct`` (``client`` built with ``event_hooks=ahop_hooks(...)``)."""
+    headers = kwargs.get("headers") or {}
+    ua = next((v for k, v in headers.items() if str(k).lower() == "user-agent"), None)
+    own = client is None
+    if own:
+        c = httpx.AsyncClient(event_hooks=ahop_hooks(ua),
+                              timeout=DEFAULT_TIMEOUT if timeout is _UNSET else timeout)
+    else:
+        c = client
+        if timeout is not _UNSET:
+            kwargs["timeout"] = timeout
+    try:
+        async with upstreams.ahop_gates(request_s=_timeout_s(kwargs.get("timeout", c.timeout))) as gates:
+            await gates.enter(url)
+            token = _hops_var.set(gates)
+            try:
+                r = await c.request(method, url, follow_redirects=follow_redirects, **kwargs)
+            finally:
+                _hops_var.reset(token)
+        upstreams.observe_response(str(r.url), r)
+        return r
+    finally:
+        if own:
+            await c.aclose()
+
+
+# A MODULE'S OWN CLIENT UNDER THE REDIRECT RULE (driver ruling 1, 2026-09-29). A module that keeps its
+# own httpx client (its own headers, cookies, pool or HTTP/2) builds it as HopClient / AsyncHopClient
+# instead of httpx.Client / httpx.AsyncClient, and a one-off streamed download uses direct_stream
+# instead of httpx.stream. Every request such a client sends (get, post, stream, ...) then passes the
+# declared gates of each hop through upstreams.HopGates, gets the declared User-Agent on each hop, and
+# has every response recorded on its own host, the final one included (driver ruling of 2026-09-29 on
+# section 16.5, item 2; a module listed in upstreams.SELF_BACKOFF builds its client with
+# defer_on_429=False). A streamed response keeps its gates until it is closed. Inside ``direct`` /
+# ``adirect``, which carry the request's gates themselves, the client takes no gate of its own.
+class _GatedStream(httpx.SyncByteStream):
+    """A streamed body that lets go of its request's gates when it is closed."""
+
+    def __init__(self, inner: Any, release: Any) -> None:
+        self._inner, self._release = inner, release
+
+    def __iter__(self):
+        yield from self._inner
+
+    def close(self) -> None:
+        try:
+            self._inner.close()
+        finally:
+            release, self._release = self._release, None
+            if release is not None:
+                release()
+
+
+class _AGatedStream(httpx.AsyncByteStream):
+    """Async twin of ``_GatedStream``."""
+
+    def __init__(self, inner: Any, release: Any) -> None:
+        self._inner, self._release = inner, release
+
+    async def __aiter__(self):
+        async for chunk in self._inner:
+            yield chunk
+
+    async def aclose(self) -> None:
+        try:
+            await self._inner.aclose()
+        finally:
+            release, self._release = self._release, None
+            if release is not None:
+                await release()
+
+
+def _hooks_with(rule: dict, extra: Optional[dict]) -> dict:
+    """The redirect-rule hooks first, then any hooks the module passes itself."""
+    out = {k: list(v) for k, v in rule.items()}
+    for k, v in (extra or {}).items():
+        out.setdefault(k, []).extend(v)
+    return out
+
+
+def _ua_in(headers: Any) -> Optional[str]:
+    try:
+        return next((v for k, v in dict(headers or {}).items() if str(k).lower() == "user-agent"), None)
+    except (TypeError, ValueError):
+        return None
+
+
+class HopClient(httpx.Client):
+    """``httpx.Client`` under the one redirect rule (see above); same constructor and methods, plus
+    ``defer_on_429`` (False only for a module listed in upstreams.SELF_BACKOFF)."""
+
+    def __init__(self, *args: Any, event_hooks: Optional[dict] = None, defer_on_429: bool = True,
+                 **kwargs: Any) -> None:
+        self._defer_on_429 = defer_on_429
+        hooks = hop_hooks(_ua_in(kwargs.get("headers")), defer_on_429=defer_on_429)
+        super().__init__(*args, event_hooks=_hooks_with(hooks, event_hooks), **kwargs)
+
+    def _record(self, request: httpx.Request, resp: httpx.Response) -> httpx.Response:
+        # the final response, on its own host (a no-op when the response hook has recorded it)
+        upstreams.observe_response(_resp_url(resp, str(request.url)), resp,
+                                   defer_on_429=self._defer_on_429)
+        return resp
+
+    def send(self, request: httpx.Request, **kwargs: Any) -> httpx.Response:
+        # inside direct, whose sync HopGates carries the gates; any other value (an async request's
+        # AsyncHopGates in the same context) is not this request's, and would take no gate (review P3)
+        if isinstance(_hops_var.get(), upstreams.HopGates):
+            return self._record(request, super().send(request, **kwargs))
+        gates = upstreams.HopGates(request_s=_timeout_s(request.extensions.get("timeout")))
+        token = _hops_var.set(gates)
+        try:
+            gates.enter(str(request.url))
+            resp = super().send(request, **kwargs)
+        except BaseException as exc:
+            gates._abort(exc)
+            raise
+        finally:
+            _hops_var.reset(token)
+        if kwargs.get("stream"):
+            resp.stream = _GatedStream(resp.stream, gates.close)
+        else:
+            gates.close()
+        return self._record(request, resp)
+
+
+class AsyncHopClient(httpx.AsyncClient):
+    """``httpx.AsyncClient`` under the one redirect rule (see above); same constructor and methods,
+    plus ``defer_on_429`` (False only for a module listed in upstreams.SELF_BACKOFF)."""
+
+    def __init__(self, *args: Any, event_hooks: Optional[dict] = None, defer_on_429: bool = True,
+                 **kwargs: Any) -> None:
+        self._defer_on_429 = defer_on_429
+        hooks = ahop_hooks(_ua_in(kwargs.get("headers")), defer_on_429=defer_on_429)
+        super().__init__(*args, event_hooks=_hooks_with(hooks, event_hooks), **kwargs)
+
+    _record = HopClient._record
+
+    async def send(self, request: httpx.Request, **kwargs: Any) -> httpx.Response:
+        if isinstance(_hops_var.get(), upstreams.AsyncHopGates):   # inside adirect (see HopClient.send)
+            return self._record(request, await super().send(request, **kwargs))
+        gates = upstreams.AsyncHopGates(request_s=_timeout_s(request.extensions.get("timeout")))
+        token = _hops_var.set(gates)
+        try:
+            await gates.enter(str(request.url))
+            resp = await super().send(request, **kwargs)
+        except BaseException as exc:
+            await gates._abort(exc)
+            raise
+        finally:
+            _hops_var.reset(token)
+        if kwargs.get("stream"):
+            resp.stream = _AGatedStream(resp.stream, gates.close)
+        else:
+            await gates.close()
+        return self._record(request, resp)
+
+
+@contextlib.contextmanager
+def direct_stream(method: str, url: str, *, cookies: Any = None, timeout: Any = DEFAULT_TIMEOUT,
+                  **kwargs: Any):
+    """``httpx.stream`` under the redirect rule: a one-off ``HopClient`` (``cookies`` and ``timeout``
+    belong to the client, everything else to the request); the response's gates are held until the
+    body is read or the block ends."""
+    with HopClient(cookies=cookies, timeout=timeout) as c:
+        with c.stream(method, url, **kwargs) as resp:
+            yield resp
+
+
 def get(url: str, *, timeout: int = DEFAULT_TIMEOUT, headers: Optional[dict] = None,
         params: Optional[dict] = None, retry_transient: bool = True,
         **kwargs: Any) -> Optional[httpx.Response]:
@@ -262,6 +769,53 @@ def get_text(url: str, **kwargs: Any) -> Optional[str]:
     return resp.text if resp is not None else None
 
 
+_CURL_MAX_REDIRECTS = 20
+_REDIRECT_STATUS = (301, 302, 303, 307, 308)
+
+
+def _curl_hops(creq, method: str, url: str, gates: "upstreams.HopGates", *, headers: Optional[dict],
+               max_redirects: int = _CURL_MAX_REDIRECTS, **kw: Any):
+    """Send ``method url`` through the libcurl tier, following redirects HOP BY HOP (curl's own
+    following is off), so every hop gets the SSRF check, the redirect rule (``gates``: same host
+    continues, another host lets go and takes its own gates) and its host's declared User-Agent.
+    301/302/303 turn a non-GET into GET without a body (what browsers do); 307/308 keep both.
+    Credentials are not carried to another host. Returns the final response (the caller closes it)."""
+    method = method.upper()
+    base_headers = dict(headers) if headers else None
+    host0 = urlsplit(url).hostname
+    for _hop in range(max_redirects + 1):
+        blk = _netguard.security_block_reason(url)
+        if blk is not None:
+            raise RuntimeError(f"refused SSRF-class url ({blk}): {url[:120]}")
+        gates.enter(url)
+        hop_headers = base_headers
+        if upstreams.user_agent_for(url):   # a declared User-Agent replaces Chrome's for that host only
+            hop_headers = upstreams.with_declared_user_agent(url, hop_headers)
+        holds = _guard.active_handles()
+        _guard.renew_handles(holds)   # this hop goes out (libcurl reports no "request written" moment)
+        r = creq.request(method, url, impersonate="chrome", headers=hop_headers,
+                         allow_redirects=False, **kw)
+        _guard.renew_handles(holds)   # its response is back (for a stream: the headers)
+        upstreams.observe(url, r.headers, r.status_code)
+        loc = r.headers.get("location") if r.status_code in _REDIRECT_STATUS else None
+        if not loc:
+            return r
+        try:
+            r.close()
+        except Exception:  # noqa: BLE001
+            pass
+        nxt = urljoin(url, loc)
+        if r.status_code in (301, 302, 303) and method not in ("GET", "HEAD"):
+            method = "GET"
+            kw.pop("json", None)
+            kw.pop("data", None)
+        if base_headers and urlsplit(nxt).hostname != host0:
+            base_headers = {k: v for k, v in base_headers.items()
+                            if str(k).lower() not in ("authorization", "cookie")}
+        url = nxt
+    raise RuntimeError(f"too many redirects (>{max_redirects}): {url[:120]}")
+
+
 def download_to_file(url: str, dest: str, *, max_bytes: int,
                      timeout: int = 600, headers: Optional[dict] = None) -> int:
     """Stream a URL to ``dest`` via curl_cffi (libcurl + Chrome TLS fingerprint), capping at
@@ -281,18 +835,22 @@ def download_to_file(url: str, dest: str, *, max_bytes: int,
     except Exception as exc:  # noqa: BLE001 — missing/broken dep surfaces as a clear raise
         raise RuntimeError(f"curl_cffi unavailable: {exc}") from exc
     total = 0
-    r = _creq.get(url, impersonate="chrome", timeout=timeout, stream=True,
-                  headers=dict(headers) if headers else None, allow_redirects=True)
-    try:
-        r.raise_for_status()
-        with open(dest, "wb") as f:
-            for chunk in r.iter_content(chunk_size=262144):
-                total += len(chunk)
-                if total > max_bytes:
-                    raise RuntimeError(f"download exceeded {max_bytes} bytes")
-                f.write(chunk)
-    finally:
-        r.close()
+    # Declared gates of every hop (UpstreamBusy is a RuntimeError, raised before that hop is sent),
+    # held until the file is written.
+    with upstreams.hop_gates(request_s=_timeout_s(timeout)) as gates:
+        r = _curl_hops(_creq, "GET", url, gates, headers=headers, timeout=timeout, stream=True)
+        holds = _guard.active_handles()   # every block of the body renews their leases
+        try:
+            r.raise_for_status()
+            with open(dest, "wb") as f:
+                for chunk in r.iter_content(chunk_size=262144):
+                    _guard.renew_handles(holds)
+                    total += len(chunk)
+                    if total > max_bytes:
+                        raise RuntimeError(f"download exceeded {max_bytes} bytes")
+                    f.write(chunk)
+        finally:
+            r.close()
     if total == 0:
         raise RuntimeError("download returned 0 bytes")
     return total
@@ -318,7 +876,8 @@ def _impersonated_request(method: str, url: str, *, timeout: int = DEFAULT_TIMEO
     129-item feed.
 
     NOTE: we do NOT inject our OmniSeek UA here — ``impersonate='chrome'`` sets a Chrome-consistent
-    UA + header order, and overriding the UA would desync the very fingerprint we are matching."""
+    UA + header order, and overriding the UA would desync the very fingerprint we are matching. The one
+    exception is a host whose upstream DECLARES a User-Agent (upstreams.json): its policy wins."""
     try:
         from curl_cffi import requests as _creq  # lazy: keep curl_cffi off the hot import path
     except Exception as exc:  # noqa: BLE001 — missing/broken dep -> degrade, never crash
@@ -341,10 +900,11 @@ def _impersonated_request(method: str, url: str, *, timeout: int = DEFAULT_TIMEO
         logger.warning("http impersonated tier blocked SSRF-class target (%s): %s", url, _blk)
         return None
     try:
-        r = _creq.request(method.upper(), url, impersonate="chrome", timeout=timeout,
-                          headers=dict(headers) if headers else None,
-                          json=json_body,
-                          allow_redirects=True)  # per-hop redirect revalidation DEFERRED past C2 (curl_cffi tier; see above)
+        # Redirects are followed hop by hop (_curl_hops): the SSRF check, the declared gates and the
+        # declared User-Agent on every hop; UpstreamBusy -> the except below -> None.
+        with upstreams.hop_gates(request_s=_timeout_s(timeout)) as gates:
+            r = _curl_hops(_creq, method, url, gates, headers=headers, timeout=timeout,
+                           json=json_body)
         r.raise_for_status()
         # DECODED-bytes cap (curl_cffi returns already-decoded content). The curl_cffi streaming API
         # (stream=True + iter_content) is not exercisable in this build (curl_cffi is not importable in the
@@ -491,6 +1051,14 @@ def _aget_client() -> httpx.AsyncClient:
                 # the SSRF guard still wraps the proxied connection.
                 _aclient = httpx.AsyncClient(
                     transport=safeurl.AsyncSSRFGuardTransport(_awrapped),
+                    # one-connection hosts (see _one_connection_transport): their own transport
+                    mounts={f"all://{h}": safeurl.AsyncSSRFGuardTransport(
+                                _one_connection_transport(asynchronous=True))
+                            for h in upstreams.single_connection_hosts()},
+                    # every hop: the redirect rule (declared gates) and the declared User-Agent
+                    event_hooks={"request": [_aapply_hop_gates, _aapply_declared_user_agent,
+                                             _awatch_send],
+                                 "response": [_aobserve_hop]},
                     headers={"User-Agent": USER_AGENT},
                     follow_redirects=True,
                     timeout=DEFAULT_TIMEOUT,
@@ -520,23 +1088,36 @@ async def _arequest_capped(method: str, url: str, *, timeout: int, headers: dict
         logger.warning("http.%s blocked SSRF-class target (%s): %s", method.lower(), url, _blk)
         diag.note(f"http.{method.lower()}", url=url, status=None, body=f"blocked SSRF-class target: {_blk}")
         return None
+    headers = upstreams.with_declared_user_agent(url, _with_connection_close(url, headers))
     for attempt in range(2):
         try:
-            async with _aget_client().stream(method, url, timeout=timeout, headers=headers, **kwargs) as r:
-                r.raise_for_status()
-                raw = bytearray()
-                async for chunk in r.aiter_raw():
-                    raw += chunk
-                    if len(raw) > MAX_BYTES:
-                        logger.warning("http.%s refused oversized response (%s): >%d bytes",
-                                       method.lower(), url, MAX_BYTES)
-                        diag.note(f"http.{method.lower()}", url=url, status=r.status_code,
-                                  body=f"refused oversized response (>{MAX_BYTES} bytes)")
-                        return None
+            client = _aget_client()   # the client first, then the gates (see the sync twin)
+            async with upstreams.ahop_gates(request_s=_timeout_s(timeout)) as gates:  # every hop
+                await gates.enter(url)
+                token = _hops_var.set(gates)
+                try:
+                    async with client.stream(method, url, timeout=timeout, headers=headers,
+                                             **kwargs) as r:
+                        upstreams.observe_response(_resp_url(r, url), r)
+                        r.raise_for_status()
+                        raw = bytearray()
+                        async for chunk in r.aiter_raw():
+                            raw += chunk
+                            if len(raw) > MAX_BYTES:
+                                logger.warning("http.%s refused oversized response (%s): >%d bytes",
+                                               method.lower(), url, MAX_BYTES)
+                                diag.note(f"http.{method.lower()}", url=url, status=r.status_code,
+                                          body=f"refused oversized response (>{MAX_BYTES} bytes)")
+                                return None
+                finally:
+                    _hops_var.reset(token)
             # Rebuild a normal already-read Response from the raw body + original headers, so
             # content-encoding / charset decoding happens exactly as the buffered path did.
             return httpx.Response(r.status_code, headers=r.headers, content=bytes(raw),
                                   request=r.request)
+        except upstreams.UpstreamBusy as exc:
+            _gate_note(method, url, exc)
+            return None
         except httpx.ConnectError as exc:
             if attempt == 0 and retry_transient and _is_transient_connect_error(exc):
                 diag.note("http.retry_transient", url=url, exc=exc)

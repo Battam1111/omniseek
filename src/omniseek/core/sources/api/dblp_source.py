@@ -32,9 +32,7 @@ from datetime import datetime, timezone
 from typing import Optional
 from urllib.parse import urlparse
 
-import httpx
-
-from omniseek.core import diag, http
+from omniseek.core import diag, http, upstreams
 from omniseek.core.normalize import Document, jsonsafe
 from omniseek.core.sources.api._base import BaseAPIAdapter
 
@@ -126,12 +124,16 @@ class DBLPAdapter(BaseAPIAdapter):
 
     # --------------------------------------------------------------- API call
     def _publ_search(self, query: str, limit: int) -> dict:
-        resp = httpx.get(
-            f"{DBLP_BASE}/search/publ/api",
-            params={"q": query, "format": "json", "h": min(limit, 50)},
-            headers={"User-Agent": USER_AGENT, "Accept": "application/json"},
-            timeout=TIMEOUT,
-        )
+        # The declared dblp gate (one request at a time, >= 1 s apart: dblp's FAQ calls one or two
+        # seconds between consecutive requests safe). UpstreamBusy raises like any other failure.
+        with upstreams.egress(f"{DBLP_BASE}/search/publ/api", request_s=TIMEOUT):
+            resp = http.direct(
+                "GET", f"{DBLP_BASE}/search/publ/api",
+                params={"q": query, "format": "json", "h": min(limit, 50)},
+                headers={"User-Agent": USER_AGENT, "Accept": "application/json"},
+                timeout=TIMEOUT,
+            )
+        upstreams.observe_response(DBLP_BASE, resp)
         resp.raise_for_status()
         return resp.json()
 
@@ -170,13 +172,17 @@ class DBLPAdapter(BaseAPIAdapter):
     # ------------------------------------------------------------- health_check
     def health_check(self) -> tuple[bool, str]:
         try:
-            resp = httpx.get(
-                f"{DBLP_BASE}/search/author/api",
-                params={"q": "Yoshua Bengio", "format": "json", "h": 1},
-                headers={"User-Agent": USER_AGENT, "Accept": "application/json"},
-                timeout=10,
-            )
+            with upstreams.egress(f"{DBLP_BASE}/search/author/api", request_s=10):  # the probe queues on the gate too
+                resp = http.direct(
+                    "GET", f"{DBLP_BASE}/search/author/api",
+                    params={"q": "Yoshua Bengio", "format": "json", "h": 1},
+                    headers={"User-Agent": USER_AGENT, "Accept": "application/json"},
+                    timeout=10,
+                )
+            upstreams.observe_response(DBLP_BASE, resp)
             return resp.status_code == 200, f"HTTP {resp.status_code}"
+        except upstreams.UpstreamBusy as exc:
+            return True, f"degraded: declared dblp gate busy, not probed this cycle ({exc})"
         except Exception as exc:  # noqa: BLE001
             return False, f"{type(exc).__name__}: {exc}"
 

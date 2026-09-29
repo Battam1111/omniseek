@@ -37,7 +37,7 @@ from typing import Optional
 import anyio
 import httpx
 
-from omniseek.core import cache
+from omniseek.core import cache, http
 from omniseek.core.normalize import Document, keyword_score_filter
 
 logger = logging.getLogger(__name__)
@@ -65,7 +65,7 @@ def _aget_client() -> "httpx.AsyncClient":
     if _aclient is None:
         with _aclient_lock:
             if _aclient is None:
-                _aclient = httpx.AsyncClient(
+                _aclient = http.AsyncHopClient(   # the redirect rule on every hop
                     headers={"User-Agent": _UA},
                     timeout=240,
                     follow_redirects=True,
@@ -155,8 +155,8 @@ class NSERCAwardsAdapter:
 
     def _fetch_filter_build(self) -> list[Document]:
         try:
-            r = httpx.get(self._CSV_URL, headers={"User-Agent": _UA},
-                          timeout=240, follow_redirects=True)
+            r = http.direct("GET", self._CSV_URL, headers={"User-Agent": _UA},
+                            timeout=240, follow_redirects=True)
             r.raise_for_status()
             text = r.content.decode("utf-8-sig", errors="replace")
         except Exception as exc:  # noqa: BLE001 — failure → [] (the contract); don't cache a miss
@@ -237,8 +237,8 @@ class NSERCAwardsAdapter:
     def health_check(self) -> tuple[bool, str]:
         # Cheap: a Range request for the header proves the file is live without the 56MB pull.
         try:
-            r = httpx.get(self._CSV_URL, headers={"User-Agent": _UA, "Range": "bytes=0-2000"},
-                          timeout=20, follow_redirects=True)
+            r = http.direct("GET", self._CSV_URL, headers={"User-Agent": _UA, "Range": "bytes=0-2000"},
+                            timeout=20, follow_redirects=True)
             ok = r.status_code in (200, 206) and "ApplicationID" in r.text
             return ok, f"HTTP {r.status_code}" + ("" if ok else " (header missing)")
         except Exception as exc:  # noqa: BLE001

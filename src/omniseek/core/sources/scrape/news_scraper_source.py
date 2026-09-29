@@ -22,10 +22,9 @@ from pathlib import Path
 from typing import Optional
 from urllib.parse import urljoin, urlparse
 
-import httpx
 from bs4 import BeautifulSoup
 
-from omniseek.core import cache, diag
+from omniseek.core import cache, diag, http, upstreams
 from omniseek.core.normalize import Document, jsonsafe, keyword_score_filter
 
 logger = logging.getLogger(__name__)
@@ -64,7 +63,11 @@ def _title_from_anchor(a) -> str:
 
 def _get(url: str) -> Optional[str]:
     try:
-        r = httpx.get(url, headers={"User-Agent": UA, "Accept": "text/html,*/*"}, timeout=TIMEOUT, follow_redirects=True)
+        # http.direct: the declared gates of every hop (the robots.txt Crawl-delay and any upstream
+        # gate, the one redirect rule), the declared User-Agent, the readings; a no-op gate for an
+        # undeclared host. UpstreamBusy lands in the except below: not sent.
+        r = http.direct("GET", url, headers={"User-Agent": UA, "Accept": "text/html,*/*"},
+                        timeout=TIMEOUT, follow_redirects=True)
         if r.status_code == 200:
             return r.text
     except Exception as exc:  # noqa: BLE001
@@ -91,7 +94,16 @@ def _render(url: str) -> Optional[str]:
         return page.content()
 
     try:
-        return cdp_call(_nav, initial_url=url)
+        # a render is a page load on that host: never a host that declares a User-Agent the browser
+        # cannot send (DeclaredUserAgentRefused -> the except below); then the Chrome turn first,
+        # within the time left (no host gate held while queueing, review F9); once it has the turn,
+        # the host's declared gates tried once (no waiting while holding the turn, review P6), on a
+        # lease as long as the render may take (a stuck render gives the host back, review P1).
+        render_s = 90
+        upstreams.check_browser(url)
+        until = upstreams.budget_until(url, default=render_s)
+        return cdp_call(_nav, initial_url=url, timeout=render_s, queue_until=until,
+                        on_turn=lambda: upstreams.browser_turn(url, render_s))
     except Exception as exc:  # noqa: BLE001
         logger.warning("CDP render failed %s: %s", url, exc)
         return None

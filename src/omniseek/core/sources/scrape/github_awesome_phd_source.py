@@ -18,7 +18,6 @@ from typing import Optional
 from urllib.parse import urlparse
 
 import anyio
-import httpx
 
 from omniseek.core import cache, http
 from omniseek.core.normalize import Document, jsonsafe
@@ -202,16 +201,16 @@ class GithubAwesomePhDAdapter:
     def health_check(self) -> tuple[bool, str]:
         # Just probe github raw content
         try:
-            resp = httpx.get(
-                "https://raw.githubusercontent.com/pliang279/awesome-phd-advice/main/README.md",
+            resp = http.direct(
+                "GET", "https://raw.githubusercontent.com/pliang279/awesome-phd-advice/main/README.md",
                 timeout=10,
                 follow_redirects=True,
             )
             if resp.status_code == 200:
                 return True, "OK"
             # Try master
-            resp = httpx.get(
-                "https://raw.githubusercontent.com/pliang279/awesome-phd-advice/master/README.md",
+            resp = http.direct(
+                "GET", "https://raw.githubusercontent.com/pliang279/awesome-phd-advice/master/README.md",
                 timeout=10,
                 follow_redirects=True,
             )

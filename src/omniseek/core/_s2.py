@@ -37,6 +37,7 @@ agent-facing shaping. No ranking, no relevance, no doc building here.
 
 from __future__ import annotations
 
+import asyncio
 import itertools
 import logging
 import re
@@ -44,8 +45,8 @@ import threading
 import time
 from typing import Iterable, Optional
 
-from omniseek.core import diag
-from omniseek.core._guard import BackendGuard
+from omniseek.core import _guard as _guard_mod
+from omniseek.core import diag, upstreams
 
 logger = logging.getLogger(__name__)
 
@@ -65,7 +66,7 @@ _BREAK_FOR_S = 120.0  # seconds the circuit stays open
 # parallel fan-out from tripping a 429 storm → which would open the shared breaker and
 # degrade every S2-backed capability at once. Lower than _openalex's 8 because S2 throttles
 # far harder than OpenAlex's polite pool.
-_MAX_CONCURRENCY = 4
+# (the value, 4, is declared in upstreams.json "s2" gate.max_inflight; bound below from the guard)
 
 # Rate cap: space S2 request STARTS at least _MIN_INTERVAL_S apart so a fan-out across the S2-backed
 # capabilities (the field_skeleton/recommend cartographer burst + the relations per-author fetch + the
@@ -74,30 +75,36 @@ _MAX_CONCURRENCY = 4
 # root cause of the 429 storms that trip the shared breaker and degrade every S2 capability at once).
 # 1.0s honors S2's ~1 RPS keyed guarantee exactly (the docstring's "even with the key 1 RPS"); S2
 # throttles far harder than OpenAlex's polite pool, hence the much wider interval than _openalex's 0.2.
-_MIN_INTERVAL_S = 1.0
+# (the value, 1.0 s, is declared in upstreams.json "s2" gate.min_interval_s; bound below)
 # Hard cap on how long ONE caller may wait on the rate gate. Without it, a 429 storm (each failed
 # call retries, and every attempt reserves another 1s-apart slot) grows the backlog unboundedly, and
 # a fresh caller inherits the WHOLE queue: an observed field_skeleton sat 886s on the gate. Past this
 # cap the queue is pathological (S2 storming) → fail fast (raise S2Down → the wrapper degrades to
 # []/None) instead of hanging, AND do not reserve a slot so the backlog drains rather than growing.
-_PACE_MAX_WAIT_S = 15.0
-# Hard cap on how long ONE caller may wait for a CONCURRENCY permit (the sema), the sibling of the
-# rate gate's _PACE_MAX_WAIT_S. A raw unbounded acquire hangs a caller for the whole MCP idle window
-# when the pool is saturated or a permit leaked (the 300s resolve_identity outage, 2026-07-18); past
-# this the pool is treated as unavailable -> raise S2Down -> the wrapper degrades to []/None.
-_ACQUIRE_MAX_WAIT_S = 20.0
+# The value is the declared gate.max_wait_s of "s2" (driver ruling 2, 2026-09-29): ONE budget for the
+# permit wait and the start wait together, cut to the caller's deadline by the guard itself.
+_PACE_MAX_WAIT_S = upstreams.max_wait("s2")
 
-# The shared load-guard (concurrency cap + rate pacer + circuit breaker): the byte-identical machinery
-# _openalex / _s2 / _github each carried, extracted to _guard (2026-07-01 parsimony audit P1). The
-# breaker state dict + its lock, the semaphore and the pace lock/state now live on the guard; the
-# module reaches them by name below so every threshold, sleep, log message and error path is unchanged.
-_guard = BackendGuard("s2", _MAX_CONCURRENCY, break_after=_BREAK_AFTER,
-                      break_for_s=_BREAK_FOR_S, min_interval_s=_MIN_INTERVAL_S, log=logger)
+# The shared load-guard (concurrency cap + rate pacer + circuit breaker): the registry's ONE S2
+# BackendGuard, built from the declared gate (upstreams.json "s2": 4 in flight, starts >= 1.0 s apart
+# for the published keyed 1 RPS), so s2_authors' keyless calls through the shared http client queue on
+# the same object. The breaker state dict + its lock, the semaphore and the pace lock/state live on the
+# guard; the module reaches them by name below so every threshold, sleep, log message and error path is
+# unchanged.
+_guard = upstreams.guard("s2", log=logger)
+_MAX_CONCURRENCY = _guard.max_inflight
+_MIN_INTERVAL_S = _guard.min_interval_s
 _state = _guard.state   # health / recently_throttled read fails / open_until / last_429
 _lock = _guard.lock
 _sema = _guard.sema
 _pace_state = _guard.pace_state   # the slot reservation _pace() reads/reserves (aliases the guard)
 _pace_lock = _guard.pace_lock
+
+
+def _backlog_shed(wait: float) -> S2Down:
+    """The error for a start slot past this caller's budget (used by _pace and the permit-first hold):
+    the caller fails fast with S2Down and nothing is reserved, so the backlog drains."""
+    return S2Down(f"rate-gate backlog {wait:.0f}s, past this caller's budget; S2 storming, degrade")
 
 
 def _pace() -> None:
@@ -108,9 +115,7 @@ def _pace() -> None:
     a 429-storm sheds load + fails fast instead of stacking an unbounded multi-minute gate wait."""
     # on_backlog runs under the guard's pace lock with this caller's would-be wait: over the cap it
     # raises S2Down WITHOUT reserving a slot (the backlog drains), exactly as the inline check did.
-    _guard.pace(on_backlog=lambda wait: (
-        S2Down(f"rate-gate backlog {wait:.0f}s > {_PACE_MAX_WAIT_S:.0f}s; S2 storming, degrade")
-        if wait > _PACE_MAX_WAIT_S else None))
+    _guard.pace(on_backlog=_backlog_shed, max_wait=_PACE_MAX_WAIT_S)
 
 
 # Eye-owned bounded retry on a 429, REPLACING the lib's (now-disabled) 10x/250s tenacity backoff.
@@ -183,7 +188,34 @@ def get_client():
                 # field_skeleton cold-seed symptom). With it off, a 429 surfaces here in ~1s and the
                 # eye owns the short, bounded retry (_retry_rl) instead.
                 _client = SemanticScholar(api_key=_load_api_key(), timeout=TIMEOUT, retry=False)
+                _bound_requests(_client)
     return _client
+
+
+def _bound_requests(client) -> None:
+    """A total deadline on every request the library sends (driver ruling of 2026-09-29 on section
+    17.5, item 2). semanticscholar reads each response inside its own httpx.AsyncClient, where the
+    eye cannot see the body arrive to renew the gate's lease; so each request is cut at TIMEOUT from
+    its start instead (asyncio.wait_for cancels it), which is never past the permit's lease (it ends
+    TIMEOUT after the waiting budget, and the request starts within that budget). One call can send
+    several requests under one hold (a paginated call reads its pages there: an author's 200 works
+    come 100 to a page); a request starts only after the one before it returned, which is the call's
+    progress, so it first renews the holds it runs under to TIMEOUT from now (asyncio.run gives the
+    library's coroutine a copy of the caller's context, where the holds are registered). The
+    requester is the library's own object (semanticscholar 0.12:
+    ``_AsyncSemanticScholar._requester``); a library that keeps it elsewhere is left as it is, and a
+    stuck call is then reclaimed by the lease."""
+    try:
+        requester = client._AsyncSemanticScholar._requester
+        inner = requester.get_data_async
+    except AttributeError:
+        logger.warning("s2: the library's requester is not where expected; no total deadline")
+        return
+
+    async def get_data_async(*args, **kwargs):
+        _guard_mod.renew_handles(_guard_mod.active_handles())   # the lease now ends where this is cut
+        return await asyncio.wait_for(inner(*args, **kwargs), TIMEOUT)
+    requester.get_data_async = get_data_async
 
 
 # ── id normalization (single source of truth) ────────────────────────────────
@@ -263,8 +295,10 @@ def _call(label: str, fn):
     _check_open()
 
     def _attempt():
-        _pace()  # rate cap: bounds req/s so a fan-out across the S2-backed sources can't burst the key
-        with _guard.slot(_ACQUIRE_MAX_WAIT_S, _slot_busy):  # concurrency cap, BOUNDED (degrade, don't hang)
+        # Permit FIRST, then the 1 s start slot while holding it (the declared keyed 1 RPS): pacing
+        # before the permit let slots reserved while all 4 permits were busy fire back to back when
+        # slow calls finished. Both waits bounded: S2Down (degrade), never an unbounded hang.
+        with _guard.hold(_PACE_MAX_WAIT_S, _slot_busy, on_backlog=_backlog_shed, request_s=TIMEOUT):
             return fn()
 
     try:
@@ -295,8 +329,9 @@ def _bounded(label: str, make_iter, cap: int) -> list:
         _check_open()
 
         def _attempt():
-            _pace()  # rate cap: bounds req/s so a fan-out across the S2-backed sources can't burst the key
-            with _guard.slot(_ACQUIRE_MAX_WAIT_S, _slot_busy):  # concurrency cap, BOUNDED (degrade, don't hang)
+            # permit first, then the 1 s start slot under it (see _call); bounded both ways
+            with _guard.hold(_PACE_MAX_WAIT_S, _slot_busy, on_backlog=_backlog_shed,
+                             request_s=TIMEOUT):
                 it = make_iter()
                 # islice pulls EXACTLY ``cap`` items and stops; the prior ``for i,item: if i>=cap: break``
                 # pulled one item PAST cap, which advances the lazy PaginatedResults into its next-page

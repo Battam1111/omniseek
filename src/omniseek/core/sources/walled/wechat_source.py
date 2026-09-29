@@ -30,7 +30,7 @@ import httpx
 from bs4 import BeautifulSoup
 from markdownify import markdownify as html_to_md
 
-from omniseek.core import auth, cache
+from omniseek.core import auth, cache, diag, http
 from omniseek.core.normalize import Document, jsonsafe
 
 logger = logging.getLogger(__name__)
@@ -88,10 +88,59 @@ def _wx_canon(url: str) -> str:
     return wid or url
 
 
+def _wx_source_id(url: str) -> str:
+    """The article's source_id. recall keys documents by (source, source_id) (UNIQUE in
+    recall/store.py), so this must name the ARTICLE, not the URL shape: a /s/<id> link keeps its id,
+    a long /s?__biz=... link takes _wx_canon's __biz/mid/idx/sn key, so one article shared with
+    different tracking params (scene, chksm, sharer_shareinfo, ...) gets one source_id. The old rule
+    took the last path segment, which gave every long link the source_id "s": one shared row."""
+    path = urlparse(url).path
+    if path.startswith("/s/"):
+        return path.split("/")[-1] or url
+    return _wx_canon(url)
+
+
+# Why a fetch declined. The fetcher prefixes the adapter name, so omniseek_read reports "wechat: <reason>";
+# the daily digest keys on these to tell "retry later" from "give up".
+_REASON_CAPTCHA = ("interactive captcha (WeChat demands human verification from this egress; "
+                   "seen on share links without chksm)")
+
+
+def _status_page_reason(html: str) -> str:
+    """Name WeChat's own answer for a page that carries no article body.
+
+    Measured 2026-09-25, all three HTTP 200 with no #js_content and no og:title:
+    - deleted: a static .weui-msg__title reading 该内容已被发布者删除 (entry script error.*.js);
+    - privacy: an EMPTY Vue shell whose entry script is private.*.js. The sentence the reader sees
+      (根据作者隐私设置，无法查看该内容) exists only inside that script, never in the HTML, so the
+      script name is the only handle. That is WeChat's build naming and can change without notice;
+      a renamed bundle falls through to the generic reason below, not to a wrong one;
+    - anything else: the generic reason, carrying the .weui-msg__title text when there is one.
+    """
+    soup = BeautifulSoup(html, "lxml")
+    title_el = soup.select_one(".weui-msg__title")
+    title = title_el.get_text(strip=True) if title_el else ""
+    if "删除" in title:
+        return f"article deleted by the publisher ({title})"
+    if soup.select_one('script[src*="/private."]') is not None:
+        return "blocked by the author's privacy setting"
+    return f"no article body (WeChat status page: {title or 'no title'})"
+
+
 class WechatAdapter:
     name = "wechat"
     needs_credentials = False  # Layer A needs no creds; Layer B is optional
     explicit_only = "walled(微信公众号);命名钻取 (omniseek_search 单源 raw) 才调,不进广搜"
+    # This adapter OWNS mp.weixin.qq.com (the zhihu / xiaomuchong / youtube pattern). Without the
+    # declaration a declined article fell through to the generic web renderer (plain fetch, then
+    # Jina), whose "anti-bot challenge (via=jina)" verdict replaced this adapter's real reason: on
+    # 2026-09-25 a deleted article, two privacy-restricted ones and six captchas all read the same.
+    fetch_url_class = "fulltext"
+    fetch_url_hosts = ("mp.weixin.qq.com",)
+    # A network error is retried once (see fetch_url), so one decline can take two FETCH_TIMEOUTs
+    # plus the parse. The fetcher's default per-adapter bound (30s) would cut the retry off and drop
+    # its reason, so the bound covers both attempts.
+    fetch_timeout = 2 * FETCH_TIMEOUT + 5.0
     description = "微信公众号 — single-URL fetch (mp.weixin.qq.com/s/<id>); discovery via wewe-rss (Layer B)"
 
     # ─────────────────────────────────────────────────────────────────
@@ -111,27 +160,55 @@ class WechatAdapter:
         if cached is not None:
             return Document.model_validate(cached)
 
-        try:
-            resp = httpx.get(
-                url,
-                headers={"User-Agent": DEFAULT_UA, "Accept": "text/html,application/xhtml+xml"},
-                timeout=FETCH_TIMEOUT,
-                follow_redirects=True,
-            )
-            resp.raise_for_status()
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("WeChat fetch failed for %s: %s", url, exc)
+        # Every decline below leaves one diag record; the fetcher turns it into the reason omniseek_read
+        # returns ("wechat: ..."). This adapter owns its host, so that reason is the whole story: the
+        # URL is no longer handed to the generic web fallback.
+        for attempt in (1, 2):
+            try:
+                resp = http.direct(
+                    "GET", url,
+                    headers={"User-Agent": DEFAULT_UA, "Accept": "text/html,application/xhtml+xml"},
+                    timeout=FETCH_TIMEOUT,
+                    follow_redirects=True,
+                )
+                resp.raise_for_status()
+                break
+            except httpx.TransportError as exc:
+                # A network error (timeout, reset, refused) is the one transient failure, so it gets
+                # one retry. A captcha or a status page is WeChat's actual answer and is never retried.
+                logger.warning("WeChat fetch failed for %s: %s", url, exc)
+                if attempt == 2:
+                    diag.note("wechat.fetch_url", url=url, body=f"network error: {type(exc).__name__}")
+                    return None
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("WeChat fetch failed for %s: %s", url, exc)
+                diag.note("wechat.fetch_url", url=url, exc=exc)
+                return None
+
+        # Anti-bot. WeChat has more than one block form and the newer ones do NOT
+        # carry the old in-page markers: a rate-limited fetch is 302'd to
+        # /mp/wappoc_appmsgcaptcha, which returns HTTP 200 and a well-formed page
+        # with ~40 visible characters of page furniture. Checking only the body text
+        # made that land in _parse_article, miss every selector, and return None,
+        # i.e. a block was indistinguishable from a parse failure. The redirect
+        # target is the reliable signal; the in-page markers stay as a fallback.
+        final_url = str(resp.url)
+        if "wappoc_appmsgcaptcha" in final_url or "/mp/verifyuser" in final_url:
+            logger.warning("WeChat anti-bot captcha for %s (landed on %s)", url, final_url)
+            diag.note("wechat.captcha", url=url, body=_REASON_CAPTCHA)
             return None
 
-        # WeChat sometimes returns "环境异常" verification page
         html = resp.text
         if "环境异常" in html or "verify_msg" in html:
             logger.warning("WeChat returned anti-bot verification page for %s", url)
+            diag.note("wechat.captcha", url=url, body=_REASON_CAPTCHA)
             return None
 
         doc = self._parse_article(url, html)
-        if doc:
-            cache.set(key, doc.model_dump(mode="json"), ttl=7 * 86400)
+        if doc is None:
+            diag.note("wechat.status_page", url=url, body=_status_page_reason(html))
+            return None
+        cache.set(key, doc.model_dump(mode="json"), ttl=7 * 86400)
         return doc
 
     @staticmethod
@@ -178,7 +255,13 @@ class WechatAdapter:
         # Article body is in #js_content (the canonical container)
         body_el = soup.select_one("#js_content, .rich_media_content")
         if body_el is None:
-            return None
+            # Not every mp.weixin.qq.com/s/ page is a 图文 article. WeChat's
+            # short-form posts (微信「短内容」) have NO body container at all: the
+            # entire post is carried in og:title, and #activity-name / #js_name /
+            # #publish_time are absent too. Returning None here made omniseek_read fall
+            # through to the generic web fetcher, which yields only page furniture
+            # ("知道了 / 微信扫一扫 / 分享 / 收藏") and no post text.
+            return WechatAdapter._parse_short_post(url, soup)
 
         # Clean up: remove script/style/img placeholders
         for unwanted in body_el.select("script, style, .qr_code_pc_outer, .reward_area"):
@@ -196,9 +279,9 @@ class WechatAdapter:
             body_md = body_el.get_text("\n", strip=True)
 
         # ── Source ID from URL ──
-        # URL: https://mp.weixin.qq.com/s/<id> or with __biz=...&mid=...&idx=...
-        parsed = urlparse(url)
-        source_id = parsed.path.split("/")[-1] or url
+        # URL: https://mp.weixin.qq.com/s/<id> or with __biz=...&mid=...&idx=...; recall's upsert key
+        # is (source, source_id), so one article must map to one id (see _wx_source_id)
+        source_id = _wx_source_id(url)
 
         return Document(
             source="wechat",
@@ -212,6 +295,51 @@ class WechatAdapter:
                 "account_name": account,
                 "author_name": author_name,
                 "raw": jsonsafe(str(body_el)),
+            },
+        )
+
+    @staticmethod
+    def _parse_short_post(url: str, soup: BeautifulSoup) -> Optional[Document]:
+        """Build a document for a WeChat short-form post (微信「短内容」).
+
+        These pages carry no article body: og:title holds the WHOLE post, with
+        paragraph breaks escaped as the two characters backslash-n. The first line
+        doubles as the headline. Anything else on the page is furniture.
+
+        Returns None when og:title is missing or too thin to be a real post, so a
+        genuinely broken page still fails honestly instead of yielding a stub.
+        """
+        og = soup.select_one('meta[property="og:title"]')
+        raw = (og.get("content") or "").strip() if og else ""
+        if not raw:
+            return None
+
+        # og:title escapes newlines literally; restore them so paragraphs survive.
+        text = raw.replace("\\n", "\n").replace("\\x0a", "\n").strip()
+        if len(text) < 40:
+            # Too short to distinguish a real micro-post from a stub/error page.
+            return None
+
+        lines = [ln.strip() for ln in text.split("\n") if ln.strip()]
+        title = lines[0] if lines else "(no title)"
+
+        author_meta = soup.select_one('meta[name="author"]')
+        author = (author_meta.get("content") or "").strip() if author_meta else None
+
+        source_id = _wx_source_id(url)  # one id per article, whatever the share params (recall key)
+
+        return Document(
+            source="wechat",
+            source_id=source_id,
+            url=url,
+            title=title,
+            content=text,
+            author=author or None,
+            date=None,
+            metadata={
+                "account_name": author or None,
+                "author_name": author or None,
+                "post_kind": "short",  # distinguishes 短内容 from a 图文 article
             },
         )
 
@@ -272,8 +400,8 @@ class WechatAdapter:
             account_name, feed_url = feed
             out: list[tuple[str, str, dict]] = []
             try:
-                resp = httpx.get(
-                    feed_url,
+                resp = http.direct(
+                    "GET", feed_url,
                     timeout=20,
                     headers={
                         "User-Agent": DEFAULT_UA,
@@ -363,8 +491,8 @@ class WechatAdapter:
         layer_b_ok = False
         if feeds:
             try:
-                r = httpx.get(feeds[0][1], headers={"User-Agent": DEFAULT_UA}, timeout=8,
-                              follow_redirects=True)
+                r = http.direct("GET", feeds[0][1], headers={"User-Agent": DEFAULT_UA}, timeout=8,
+                                follow_redirects=True)
                 layer_b_ok = r.status_code == 200
             except Exception:  # noqa: BLE001
                 layer_b_ok = False

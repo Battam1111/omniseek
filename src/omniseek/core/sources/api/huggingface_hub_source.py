@@ -33,9 +33,7 @@ from datetime import datetime
 from typing import Optional
 from urllib.parse import urlparse
 
-import httpx
-
-from omniseek.core import http
+from omniseek.core import http, upstreams
 from omniseek.core.normalize import Document, jsonsafe, mk_signal
 from omniseek.core.sources.api._base import BaseAPIAdapter
 
@@ -188,13 +186,17 @@ class HuggingFaceHubAdapter(BaseAPIAdapter):
     # ------------------------------------------------------------- health_check
     def health_check(self) -> tuple[bool, str]:
         try:
-            resp = httpx.get(
-                f"{HF_API_BASE}/models",
-                params={"search": "bert", "limit": 1},
-                headers={"User-Agent": USER_AGENT},
-                timeout=8,
-            )
+            with upstreams.egress(f"{HF_API_BASE}/models", request_s=8):  # declared Hugging Face gate
+                resp = http.direct(
+                    "GET", f"{HF_API_BASE}/models",
+                    params={"search": "bert", "limit": 1},
+                    headers={"User-Agent": USER_AGENT},
+                    timeout=8,
+                )
+            upstreams.observe_response(HF_API_BASE, resp)
             return resp.status_code == 200, f"HTTP {resp.status_code}"
+        except upstreams.UpstreamBusy as exc:
+            return True, f"degraded: declared Hugging Face gate busy, not probed this cycle ({exc})"
         except Exception as exc:  # noqa: BLE001
             return False, f"{type(exc).__name__}: {exc}"
 

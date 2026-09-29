@@ -30,12 +30,9 @@ from datetime import datetime, timezone
 from typing import Optional
 from urllib.parse import urlparse
 
-import anyio
 import feedparser
-import httpx
 
-from omniseek.core import diag, http
-from omniseek.core._guard import BackendGuard
+from omniseek.core import diag, http, upstreams
 from omniseek.core.normalize import Document
 from omniseek.core.sources.api._base import BaseAPIAdapter
 
@@ -49,9 +46,10 @@ _API = "https://export.arxiv.org/api/query"
 # concurrent workers could still burst past arXiv's ~3/s politeness line into a 429, and a throttled/dead
 # host made every request eat the full timeout. The guard adds a min-interval RATE pacer (spaces request
 # STARTS so a fan-out can't spike the rate), a breaker (consecutive failures -> fail fast + serve cache
-# instead of hammering), and backlog fail-fast. _MAX_INFLIGHT stays 4 (concurrency unchanged).
-# SHARED sync<->async so the async path cannot double the concurrency OR the rate. Mirrors _s2's
-# _call (breaker -> pace -> sema -> record ok/fail).
+# instead of hammering), and backlog fail-fast. SHARED sync<->async so the async path cannot double
+# the concurrency OR the rate. Order: breaker -> permit -> start slot -> record ok/fail (the
+# permit-first hold, see _guard.BackendGuard.hold). The in-flight cap was 4 until 2026-09-28 and is
+# now the declared 1 (see below).
 #
 # THE RATE IS arXiv's NUMBER, NOT A TUNABLE. arXiv's API terms say ONE request every THREE seconds.
 # This constant read 0.35 until 2026-08-19, with a comment calling that "arXiv's politeness rate":
@@ -63,17 +61,34 @@ _API = "https://export.arxiv.org/api/query"
 # to [], every arxiv query returned an EMPTY RESULT instead of an alarm.
 # So: being deadline-dropped in a wide sweep costs the queued callers; being rate-limited costs
 # 100% of arxiv for everyone, for as long as the penalty lasts. Do NOT lower this again.
-_ARXIV_MAX_INFLIGHT = 4
-_ARXIV_MIN_INTERVAL_S = 3.0      # arXiv's published limit: 1 request / 3 s, across ALL callers + threads
-_ARXIV_PACE_MAX_WAIT_S = 12.0    # a caller waiting > this on the rate gate fails fast (< the 15s deadline)
-_ARXIV_ACQUIRE_MAX_WAIT_S = 20.0  # a caller waiting > this for a CONCURRENCY permit sheds load (degrade to None)
-_guard = BackendGuard("arxiv", _ARXIV_MAX_INFLIGHT, break_after=5, break_for_s=120.0,
-                      min_interval_s=_ARXIV_MIN_INTERVAL_S, log=logger)
+#
+# THE NUMBERS NOW LIVE IN THE DECLARATION (upstreams.json "arxiv", checked 2026-09-28 against
+# info.arxiv.org/help/api/tou.html): "make no more than one request every three seconds, and limit
+# requests to a single connection at a time". Until 2026-09-28 this module allowed 4 requests in
+# flight, which the 3 s start spacing does not cover: a request slower than 3 s overlaps the next.
+# The guard is the registry's ONE arXiv guard, so arxiv search, fetch_url, the health probe and
+# enrich's integrity lookup (through the shared http client's host gate) all queue on it.
+_guard = upstreams.guard("arxiv", log=logger)
+_ARXIV_MAX_INFLIGHT = _guard.max_inflight        # 1: the declared single connection
+_ARXIV_MIN_INTERVAL_S = _guard.min_interval_s    # 3.0 s between request starts, all callers + threads
+# ONE CONNECTION, not just one request in flight (driver decision, 2026-09-29): every arXiv request says
+# "Connection: close". The shared http clients also route export.arxiv.org to a no-keep-alive HTTP/1.1
+# transport (http._one_connection_transport, because the declared terms say max_concurrency 1), so no
+# idle connection is left open after a response in either the sync or the async pool.
+_CONNECTION_CLOSE = {"Connection": "close"}
+# HOW LONG A CALLER MAY WAIT (driver ruling 2, 2026-09-29): the permit wait and the 3 s start wait
+# together, within the declared max_wait_s of "arxiv" (upstreams.max_wait) cut to the caller's own
+# deadline. The module keeps no wait constant of its own (it had 20 s for the permit plus 12 s for the
+# start, 32 s against an 11 s broad-search deadline, review F2).
 
 
 class _ArxivBusy(RuntimeError):
-    """Internal signal: the rate-gate backlog is pathological (> _ARXIV_PACE_MAX_WAIT_S), so shed load +
-    degrade to None (the caller returns []) instead of stacking an unbounded gate wait."""
+    """Internal signal: the gate had no permit or no start slot within this caller's budget, so shed
+    load + degrade to None (the caller returns []) instead of stacking an unbounded gate wait."""
+
+
+def _busy(_wait: float) -> "_ArxivBusy":
+    return _ArxivBusy()
 
 
 def _arxiv_get_text(url: str, **kwargs):
@@ -93,15 +108,20 @@ def _arxiv_get_text(url: str, **kwargs):
             "arXiv has nothing."))
         return None
     try:
-        _guard.pace(on_backlog=lambda w: _ArxivBusy() if w > _ARXIV_PACE_MAX_WAIT_S else None)
-        with _guard.slot(_ARXIV_ACQUIRE_MAX_WAIT_S, lambda w: _ArxivBusy()):  # bounded: degrade, don't hang
+        # Permit FIRST, then the 3 s start slot while holding it (upstreams/_guard.hold): with the
+        # declared single connection, pacing before the permit let two queued callers start back to
+        # back the moment a slow request finished. Bounded both ways: degrade, don't hang.
+        with _guard.hold(upstreams.max_wait("arxiv"), _busy, on_backlog=_busy,
+                         request_s=kwargs.get("timeout", http.DEFAULT_TIMEOUT)):
             # A penalty-boxed arXiv host manifests as connect failures (measured as http=000), so an in-slot retry would send two requests through one pace slot.
-            r = http.get_text(url, retry_transient=False, **kwargs)
+            r = http.get_text(url, retry_transient=False,
+                              headers={**(kwargs.pop("headers", None) or {}), **_CONNECTION_CLOSE},
+                              **kwargs)
     except _ArxivBusy:
         diag.note("arxiv.rate_gate_shed", url=url, body=(
-            f"arXiv rate gate backlog exceeded {_ARXIV_PACE_MAX_WAIT_S}s (arXiv's published limit is "
-            f"1 request / {_ARXIV_MIN_INTERVAL_S}s), so this caller was shed to keep the host inside "
-            "its rate. An empty arxiv result here means we did not ask."))
+            "declared upstream gate, request not sent: the arXiv gate had no permit or no start slot "
+            f"within this caller's budget (published limit: one connection, 1 request / "
+            f"{_ARXIV_MIN_INTERVAL_S}s). An empty arxiv result here means we did not ask."))
         return None
     if not r:
         diag.note("arxiv.egress_failed", url=url, body=(
@@ -113,37 +133,32 @@ def _arxiv_get_text(url: str, **kwargs):
 
 
 async def _arxiv_aget_text(url: str, **kwargs):
-    """Async twin of _arxiv_get_text: SAME guard (breaker -> pace -> sema -> record), but the two blocking
-    waits go OFF the loop — the rate-gate wait via ``await anyio.sleep`` (reserve_pace_slot is loop-safe
-    arithmetic under a brief lock), the sema acquire via to_thread (a `with _guard.sema:` on the loop would
-    freeze it). The guard is SHARED sync<->async so the async migration cannot double the concurrency OR
-    the rate. Mirrors _s2's async pace path. Notes the SAME three reasons as the sync twin, so an
-    async caller's empty result is just as self-explaining."""
+    """Async twin of _arxiv_get_text: SAME guard (breaker -> permit -> start slot -> record), and no
+    wait blocks the loop: ``_guard.ahold`` waits for the permit in the gate's one line on a future of
+    the loop (a `with _guard.sema:` on the loop would freeze it), then for the start slot via ``await
+    anyio.sleep``. The guard is SHARED sync<->async so the async migration cannot double the
+    concurrency OR the rate. Notes the SAME three reasons as the sync twin, so an async caller's empty
+    result is just as self-explaining."""
     if _guard.is_open():
         diag.note("arxiv.breaker_open", url=url, body=(
             "arXiv circuit breaker is OPEN (consecutive failures, typically HTTP 429 rate limiting), "
             "so NO request was sent. An empty arxiv result right now means we did not ask."))
         return None
     try:
-        wait = _guard.reserve_pace_slot(
-            on_backlog=lambda w: _ArxivBusy() if w > _ARXIV_PACE_MAX_WAIT_S else None)
-    except _ArxivBusy:
-        diag.note("arxiv.rate_gate_shed", url=url, body=(
-            f"arXiv rate gate backlog exceeded {_ARXIV_PACE_MAX_WAIT_S}s (published limit is 1 request "
-            f"/ {_ARXIV_MIN_INTERVAL_S}s), so this caller was shed. We did not ask."))
-        return None
-    if wait > 0:
-        await anyio.sleep(wait)                           # rate gate, OFF-loop wait
-    try:
-        # shared cap, OFF-loop + SHIELDED + BOUNDED: a cancel can't take the permit then skip the
-        # release (the leak that drained the pool); a saturated pool sheds load like the rate gate.
-        async with _guard.aslot(_ARXIV_ACQUIRE_MAX_WAIT_S, lambda w: _ArxivBusy()):
+        # Same order as the sync twin: the permit, waited for in the gate's line on the loop (no
+        # thread; bounded; a cancel cannot keep it), then the start slot awaited while holding it.
+        async with _guard.ahold(upstreams.max_wait("arxiv"), _busy, on_backlog=_busy,
+                                request_s=kwargs.get("timeout", http.DEFAULT_TIMEOUT)):
             # A penalty-boxed arXiv host manifests as connect failures (measured as http=000), so an in-slot retry would send two requests through one pace slot.
-            r = await http.aget_text(url, retry_transient=False, **kwargs)
+            r = await http.aget_text(url, retry_transient=False,
+                                     headers={**(kwargs.pop("headers", None) or {}),
+                                              **_CONNECTION_CLOSE},
+                                     **kwargs)
     except _ArxivBusy:
         diag.note("arxiv.rate_gate_shed", url=url, body=(
-            "arXiv concurrency pool saturated past its bounded wait, so this caller was shed. "
-            "We did not ask."))
+            "declared upstream gate, request not sent: the arXiv gate had no permit or no start slot "
+            f"within this caller's budget (published limit: one connection, 1 request / "
+            f"{_ARXIV_MIN_INTERVAL_S}s). We did not ask."))
         return None
     if not r:
         diag.note("arxiv.egress_failed", url=url, body=(
@@ -241,14 +256,22 @@ class ArxivAdapter(BaseAPIAdapter):
             return False, ("circuit breaker OPEN (consecutive failures, typically HTTP 429): no "
                            "request is being sent, so live searches are returning empty")
         try:
-            with _guard.sema:  # count the health probe against the same global arXiv in-flight cap
-                resp = httpx.get(
-                    _API,
+            # The probe is a real API request: it takes the same permit AND the same 3 s start slot
+            # as a search (it used to take only the in-flight permit, so a health sweep could land
+            # inside another request's 3 s). Bounded: a busy gate reports "not probed", not down.
+            with _guard.hold(upstreams.max_wait("arxiv"), _busy, on_backlog=_busy, request_s=15):
+                resp = http.direct(  # a one-shot client: its connection closes when it returns
+                    "GET", _API,
                     params={"search_query": "all:machine learning", "max_results": 1},
+                    headers=_CONNECTION_CLOSE,
                     timeout=15,
                 )
+        except _ArxivBusy:
+            return True, ("degraded: the arXiv gate (one connection, 3 s spacing) was busy, so this "
+                          "cycle did not probe; searches are queueing, not failing")
         except Exception as exc:  # noqa: BLE001
             return False, f"{type(exc).__name__}: {exc}"
+        upstreams.observe_response("arxiv", resp)
         if resp.status_code == 200:
             return True, "OK"
         if resp.status_code == 429:

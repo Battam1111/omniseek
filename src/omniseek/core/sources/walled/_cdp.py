@@ -39,10 +39,10 @@ import subprocess
 import sys
 import threading
 import time
-from contextlib import contextmanager
-from typing import Any, Callable, Iterator, Optional
+from contextlib import contextmanager, nullcontext
+from typing import Any, Callable, ContextManager, Iterator, Optional
 
-from omniseek.core import cache, diag
+from omniseek.core import cache, diag, upstreams
 
 logger = logging.getLogger(__name__)
 
@@ -262,8 +262,11 @@ def _sweep_excess_tabs(ctx, keep_recent: int = 6) -> None:
 #   * 9222 shared 大号 → size 3 = a few reused connections so concurrent named walled fetches don't
 #     head-of-line block each other (the single Chrome's CDP pump serializes commands anyway, but
 #     page loads/renders still overlap).
-# Self-heals after a Chrome restart (cdp-keepalive relaunch): a task that finds the connection dead
-# reconnects on the NEXT task (the in-flight one fails exactly as the old per-call path would). The
+# Self-heals after a Chrome restart (the reaper stopped it and ensure_browser started a new one, or
+# the sentinel / launchd restarted it): before reusing its connection a worker checks that the
+# Chrome on the port is still the one it connected to (_browser_instance) and reconnects if not, so
+# the first task after a restart already runs on the new browser; only a task in flight at the
+# moment Chrome dies fails, exactly as the old per-call path would. The
 # flag defaults OFF → behavior is byte-identical to before unless explicitly enabled, so it ships
 # inert and is reversible by unsetting the env var.
 _POOL_ENV = "OMNISEEK_CDP_POOL"
@@ -289,6 +292,35 @@ def _pool_for(cdp_url: str) -> "_CdpPool":
     return p
 
 
+def _browser_instance(cdp_url: str) -> Optional[str]:
+    """Which Chrome process is serving this CDP url right now, or None if nothing answers.
+
+    Chrome mints a new browser id at every launch and publishes it as /json/version's
+    webSocketDebuggerUrl, so two reads compare equal only while the same process is up. This is the
+    pool's reuse test. Browser.is_connected() cannot be: Playwright's sync API updates that flag
+    only while a call is running on the connection's thread, so a worker parked in q.get() keeps
+    reading True for a Chrome that exited while it waited, and its next task used to fail with
+    TargetClosedError before the one after it reconnected."""
+    import httpx
+
+    try:
+        resp = httpx.get(f"{cdp_url}/json/version", timeout=3)
+        if resp.status_code == 200:
+            return resp.json().get("webSocketDebuggerUrl") or None
+    except Exception:  # noqa: BLE001: no answer means there is no browser to match
+        pass
+    return None
+
+
+def _note_failure(url: Optional[str], exc: BaseException) -> None:
+    """The diagnostic of a failed call. A host gate that did not admit the render when its turn came
+    (``on_turn`` raised; the turn was given up at once, review P6) reads as what it is."""
+    if isinstance(exc, upstreams.UpstreamBusy):
+        diag.note("cdp_call", url=url, body=f"declared upstream gate, request not sent: {exc}")
+    else:
+        diag.note("cdp_call", url=url, exc=exc)
+
+
 class _CdpPool:
     """A pool of persistent worker threads for ONE Chrome (see block comment)."""
 
@@ -307,11 +339,13 @@ class _CdpPool:
             threading.Thread(target=self._worker, args=(q,),
                              name=f"cdp-pool-{self.cdp_url}-{i}", daemon=True).start()
 
-    def submit(self, callback: Callable, initial_url: Optional[str], timeout: int) -> Any:
+    def submit(self, callback: Callable, initial_url: Optional[str], timeout: int,
+               queue_until: Optional[float] = None,
+               on_turn: Optional[Callable[[], ContextManager]] = None) -> Any:
         with self._lock:
             q = self._q  # snapshot: a concurrent _recover swap must not split put/get across queues
         reply: "queue.Queue" = queue.Queue(maxsize=1)
-        q.put((callback, initial_url, reply))
+        q.put((callback, initial_url, reply, queue_until, on_turn))
         try:
             status, payload = reply.get(timeout=timeout)
         except queue.Empty:
@@ -326,7 +360,7 @@ class _CdpPool:
             diag.note("cdp_call", url=initial_url, exc=to)
             raise to
         if status == "err":
-            diag.note("cdp_call", url=initial_url, exc=payload)
+            _note_failure(initial_url, payload)
             raise payload
         return payload
 
@@ -345,17 +379,33 @@ class _CdpPool:
         global _inflight_cdp
         pw = None
         browser: Optional[Browser] = None
+        instance: Optional[str] = None  # the Chrome `browser` was connected to (_browser_instance)
 
         def _connect() -> None:
-            nonlocal pw, browser
+            nonlocal pw, browser, instance
+            # Drop the old handle first: if connecting fails below, the next task must reconnect
+            # instead of reusing it (after pw.stop() its is_connected() can still read True).
+            browser = None
+            # Read the id BEFORE connecting: if Chrome is replaced in between, the id kept is the
+            # older one, so the next task sees a mismatch and reconnects once more (harmless). The
+            # other order could pair a connection to the dead browser with the new id.
+            instance = _browser_instance(self.cdp_url)
             pw = sync_playwright().start()
             browser = pw.chromium.connect_over_cdp(self.cdp_url, timeout=10000)
 
         while True:
-            callback, initial_url, reply = q.get()
+            callback, initial_url, reply, queue_until, on_turn = q.get()
+            if queue_until is not None and time.monotonic() > queue_until:
+                # Its turn came after the caller's budget ran out: do not load the page at all.
+                reply.put(("err", TimeoutError("CDP queue: the caller's time ran out before its turn; "
+                                               "not rendered")))
+                continue
             try:
-                # (Re)connect if this is the first task or the Chrome was restarted (keepalive).
-                if browser is None or not browser.is_connected():
+                # (Re)connect if this is the first task, the connection is known dead, or the Chrome
+                # on the port is no longer the one we connected to (restarted since the last task).
+                # The last test is the one a restart needs: is_connected() still reads True here.
+                if (browser is None or not browser.is_connected()
+                        or _browser_instance(self.cdp_url) != instance):
                     try:
                         if pw is not None:
                             pw.stop()
@@ -372,9 +422,13 @@ class _CdpPool:
                     _sweep_excess_tabs(ctx)
                     page = ctx.new_page()
                     try:
-                        if initial_url:
-                            page.goto(initial_url, wait_until="domcontentloaded", timeout=30000)
-                        reply.put(("ok", callback(page)))
+                        # the host's gates only now, for the page load itself (review F9), tried
+                        # once: refused, this worker drops the task and takes the next (review P6);
+                        # leased, so a load stuck here gives the host back in time (review P1)
+                        with (on_turn() if on_turn is not None else nullcontext()):
+                            if initial_url:
+                                page.goto(initial_url, wait_until="domcontentloaded", timeout=30000)
+                            reply.put(("ok", callback(page)))
                     finally:
                         try:
                             page.close()
@@ -395,7 +449,9 @@ class _CdpPool:
 def cdp_call(callback: Callable[[Page], Any], *,
              initial_url: Optional[str] = None,
              timeout: int = DEFAULT_THREAD_TIMEOUT,
-             cdp_url: str = DEFAULT_CDP_URL) -> Any:
+             cdp_url: str = DEFAULT_CDP_URL,
+             queue_until: Optional[float] = None,
+             on_turn: Optional[Callable[[], ContextManager]] = None) -> Any:
     """Run a CDP-driven callback in a fresh thread (no asyncio loop).
 
     Use this from any adapter `search` / `fetch_url` / `health_check`
@@ -413,6 +469,11 @@ def cdp_call(callback: Callable[[Page], Any], *,
         callback: function `(page) -> Any`. Runs inside the worker thread.
         initial_url: optional URL to `page.goto(...)` before invoking callback.
         timeout: max seconds for the entire operation (default 90).
+        queue_until: optional monotonic time: the latest this call may wait for its turn at this
+            Chrome (the caller's budget); past it, TimeoutError and nothing is loaded.
+        on_turn: optional context-manager factory entered only once the call HAS its turn, around the
+            page load (the host's declared gates: a render must not hold a host gate while it queues
+            behind other browser calls, review F9).
 
     Returns:
         Whatever the callback returns.
@@ -433,7 +494,7 @@ def cdp_call(callback: Callable[[Page], Any], *,
     # browser — and BEFORE the pool branch, so both the pooled and per-call paths are covered.
     ensure_browser(cdp_url)
     if _pool_enabled():  # Lever A: route to the persistent connection pool (else per-call below)
-        return _pool_for(cdp_url).submit(callback, initial_url, timeout)
+        return _pool_for(cdp_url).submit(callback, initial_url, timeout, queue_until, on_turn)
 
     result_queue: queue.Queue = queue.Queue(maxsize=1)
 
@@ -470,19 +531,36 @@ def cdp_call(callback: Callable[[Page], Any], *,
     # worker's run so two named walled fetches to one browser QUEUE instead of contending (the
     # gap-③ false-empty). Released on the timeout raise too → one stuck call can't block every
     # walled fetch forever (its leaked tab is reaped by _sweep_excess_tabs on the next call).
-    with _gate_for(cdp_url):
-        t = threading.Thread(target=worker, daemon=True)
-        t.start()
-        t.join(timeout=timeout)
-        if t.is_alive():
-            to = TimeoutError(f"CDP call exceeded {timeout}s")
+    gate = _gate_for(cdp_url)
+    if queue_until is None:
+        gate.acquire()
+    else:
+        left = queue_until - time.monotonic()
+        if left <= 0 or not gate.acquire(timeout=left):
+            to = TimeoutError("CDP queue: no turn at this Chrome within the caller's budget; not rendered")
             diag.note("cdp_call", url=initial_url, exc=to)
             raise to
-        status, payload = result_queue.get_nowait()
+    try:
+        # ``on_turn`` tries the host's gates once (upstreams.browser_turn); when it refuses, the
+        # finally below gives the Chrome turn up at once and nothing is loaded (review P6)
+        with (on_turn() if on_turn is not None else nullcontext()):
+            t = threading.Thread(target=worker, daemon=True)
+            t.start()
+            t.join(timeout=timeout)
+            if t.is_alive():
+                to = TimeoutError(f"CDP call exceeded {timeout}s")
+                diag.note("cdp_call", url=initial_url, exc=to)
+                raise to
+            status, payload = result_queue.get_nowait()
+    except upstreams.UpstreamBusy as exc:
+        _note_failure(initial_url, exc)
+        raise
+    finally:
+        gate.release()
     if status == "err":
         # The CDP egress failed (TargetClosedError, a goto timeout, a dead CDP connection, a
         # selector raise inside the callback). Surface it so the fixing agent sees the wall.
-        diag.note("cdp_call", url=initial_url, exc=payload)
+        _note_failure(initial_url, payload)
         raise payload
     return payload
 

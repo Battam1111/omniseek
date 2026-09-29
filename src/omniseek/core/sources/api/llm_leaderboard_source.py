@@ -23,9 +23,8 @@ from typing import Optional
 from urllib.parse import urlparse
 
 import anyio
-import httpx
 
-from omniseek.core import auth, cache, diag, http
+from omniseek.core import auth, cache, diag, http, upstreams
 from omniseek.core.normalize import Document
 
 logger = logging.getLogger(__name__)
@@ -69,7 +68,11 @@ class LLMLeaderboardAdapter:
             logger.info("llm_leaderboard: API key not configured")
             return []
         try:
-            resp = httpx.get(API, headers={"x-api-key": api_key}, timeout=TIMEOUT)
+            # Declared Artificial Analysis gate: 1,000 requests per day (in-process window; the
+            # 24 h cache already keeps this far below). UpstreamBusy lands in the except: not sent.
+            with upstreams.egress(API, request_s=TIMEOUT):
+                resp = http.direct("GET", API, headers={"x-api-key": api_key}, timeout=TIMEOUT)
+            upstreams.observe_response(API, resp)
             resp.raise_for_status()
             raw = resp.json().get("data", [])
         except Exception as exc:  # noqa: BLE001

@@ -1,0 +1,3035 @@
+{
+ "_doc": "One entry per independent upstream OmniSeek sends requests to. terms = what the upstream publishes (a number, or 未公布 plus where_checked saying where we looked; url + checked date always). gate = what OmniSeek enforces through the shared BackendGuard (never looser than terms; http_gate false = enforced by the module's own pacer). terms.robots_crawl_delay_s = the Crawl-delay a host's robots.txt sets for User-agent *; each such host gets its own gate (one request at a time, starts at least the delay apart), taken after the upstream gate so the stricter always holds (driver decision, 2026-09-29). terms.max_concurrency 1 also makes the shared http clients use a no-keep-alive HTTP/1.1 transport and send Connection: close for that upstream's hosts. user_agent = the User-Agent the upstream's policy requires: every shared egress layer sends exactly this string to the entry's hosts (redirect hops included) and the shared browser refuses them; the one place it is written (driver decision, 2026-09-29). hosts = exact host names; an entry that starts with '.' is a domain suffix and matches every subdomain of that domain, not the bare domain (list that on its own); for one host a gated entry wins, then an exact entry, then the longest suffix (driver decision, 2026-09-29). disabled = OmniSeek does not send to this upstream: {reason, source, checked, ...}; the code that would send reads it, sends nothing and reports the reason (driver decision, 2026-09-29). pending = a published value not enforced yet and why. A new source must be listed under an existing upstream's sources (or backends) or get its own entry: tests/test_upstream_limits.py fails otherwise. Terms research: task R, 2026-09-28; robots sweeps 2026-09-28.",
+ "unpublished": "未公布",
+ "optional_sources": {
+  "_doc": "Sources the public mirror build removes (public_prepare.sh); a declaration may name them without the stale-name check failing there.",
+  "names": ["polyu", "mokahr_ats"]
+ },
+ "upstreams": {
+  "arxiv": {
+   "name": "arXiv legacy API",
+   "kind": "api",
+   "hosts": ["export.arxiv.org"],
+   "sources": ["arxiv"],
+   "tools": ["omniseek_paper_enrich: arXiv withdrawal / journal-DOI lookup (enrich._arxiv_integrity)"],
+   "terms": {
+    "max_concurrency": 1,
+    "min_interval_s": 3.0,
+    "windows": [],
+    "daily_quota": "未公布",
+    "auth": "no keys; limits apply to all machines under one operator's control as a whole",
+    "quote": "make no more than one request every three seconds",
+    "url": "https://info.arxiv.org/help/api/tou.html",
+    "checked": "2026-09-28",
+    "where_checked": "daily quota: the terms name none",
+    "notes": "The same sentence also requires a single connection at a time. Also covers OAI-PMH and arXiv RSS (OmniSeek uses neither). Do not circumvent by adding machines."
+   },
+   "gate": {
+    "max_inflight": 1,
+    "min_interval_s": 3.0,
+    "max_wait_s": 12.0,
+    "enforced_in": "sources/api/arxiv_source.py _arxiv_get_text/_arxiv_aget_text/health_check (hold) + http.py host gate (enrich._arxiv_integrity)"
+   }
+  },
+  "arxiv_web": {
+   "name": "arxiv.org web pages and PDFs",
+   "kind": "web",
+   "hosts": ["arxiv.org"],
+   "sources": ["pdf"],
+   "tools": ["omniseek_read on arxiv.org/pdf/<id> (pdf source / docreader)"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "quote": "Indiscriminate automated downloads from this site are not permitted",
+    "url": "https://arxiv.org/robots.txt",
+    "checked": "2026-09-28",
+    "where_checked": "arxiv.org/robots.txt read 2026-09-28: Crawl-delay 15 s for User-agent *, enforced as the arxiv.org host gate (driver decision, 2026-09-29). The API terms (info.arxiv.org/help/api/tou.html) cover the APIs, not /abs or /pdf pages; bulk PDF access is via the S3 bulk data",
+    "robots_crawl_delay_s": {"arxiv.org": 15.0}
+   }
+  },
+  "openalex": {
+   "name": "OpenAlex API",
+   "kind": "api",
+   "hosts": ["api.openalex.org"],
+   "sources": [],
+   "backends": ["openalex"],
+   "tools": [
+     "omniseek_field_skeleton / omniseek_resolve_identity / omniseek_coauthors / omniseek_institution_cohort (cartographer, relations)"
+   ],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": 0.01,
+    "windows": [],
+    "daily_quota": "with a free key $1.00/day (10,000 credits); without a key $0.10/day (1,000 credits); resets midnight UTC. Cost per call: get-by-id free, list+filter $0.0001, search $0.001, content download $0.01",
+    "auth": "a free key raises the daily budget 10x; keyed and keyless budgets are counted apart",
+    "quote": "making more than 100 requests per second",
+    "url": "https://help.openalex.org/api-reference/authentication",
+    "checked": "2026-09-28",
+    "where_checked": "max concurrency: not stated on the authentication, pricing, example-costs or LLM quick reference pages",
+    "notes": "Pricing: help.openalex.org/access/pricing/ (2026-08-11) and /access/example-costs/ (2026-08-09); authentication page updated 2026-08-19. Headers observed 2026-09-28 on a keyless call: x-ratelimit-limit 1000, x-ratelimit-limit-usd 0.1, x-ratelimit-remaining, x-ratelimit-remaining-usd, x-ratelimit-reset (s to midnight UTC), x-ratelimit-cost-usd, x-ratelimit-credits-used. GET /rate-limit needs a key (401 without)."
+   },
+   "gate": {
+    "max_inflight": 8,
+    "min_interval_s": 0.2,
+    "max_wait_s": 15.0,
+    "enforced_in": "_openalex.get_json/aget_json (keyed lane first, keyless lane on a budget 429)"
+   },
+   "observe": {
+    "expect": {
+     "x-ratelimit-limit-usd": {"keyed": 1.0, "anon": 0.1},
+     "x-ratelimit-limit": {"keyed": 10000, "anon": 1000}
+    }
+   }
+  },
+  "s2": {
+   "name": "Semantic Scholar Academic Graph API",
+   "kind": "api",
+   "hosts": ["api.semanticscholar.org"],
+   "sources": ["semantic_scholar", "s2_authors", "s2_snippet"],
+   "backends": ["semantic_scholar"],
+   "tools": ["omniseek_field_skeleton source=s2 / omniseek_paper_recommend / omniseek_paper_enrich (citation count)"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": 1.0,
+    "windows": [],
+    "daily_quota": "未公布",
+    "auth": "without a key: 1000 requests per second shared among ALL unauthenticated users; with a key: introductory 1 RPS on all endpoints",
+    "quote": "The introductory rate limit for an API key is 1 RPS on all endpoints.",
+    "url": "https://www.semanticscholar.org/product/api",
+    "checked": "2026-09-28",
+    "where_checked": "max concurrency and daily quota: not stated on the product/api page",
+    "notes": "s2_authors calls the keyless pool through the shared http client; it shares this gate so OmniSeek never exceeds the keyed 1 RPS either way."
+   },
+   "gate": {
+    "max_inflight": 4,
+    "min_interval_s": 1.0,
+    "max_wait_s": 15.0,
+    "enforced_in": "_s2._call/_bounded (hold) + http.py host gate (s2_authors)"
+   }
+  },
+  "github": {
+   "name": "GitHub REST API",
+   "kind": "api",
+   "hosts": ["api.github.com"],
+   "sources": ["github", "github_trending"],
+   "terms": {
+    "max_concurrency": 100,
+    "min_interval_s": "未公布",
+    "windows": [
+     {"limit": 30, "seconds": 60, "text": "search endpoints, authenticated"},
+     {"limit": 5000, "seconds": 3600, "text": "primary limit, personal access token"},
+     {"limit": 900, "seconds": 60, "text": "secondary limit, REST points (GET = 1 point)"}
+    ],
+    "daily_quota": "未公布",
+    "auth": "unauthenticated: 60 requests/hour and 10 search requests/minute",
+    "quote": "No more than 100 concurrent requests are allowed.",
+    "url": "https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api",
+    "checked": "2026-09-28",
+    "where_checked": "daily quota: none beyond the hourly primary limit",
+    "notes": "Search limits: docs.github.com/en/rest/search/search (code search 10/min is its own entry github_code_search). Declared values assume the host token exists; without it the health block shows x-ratelimit-limit 60 (core) against the declared 5000."
+   },
+   "gate": {
+    "max_inflight": 4,
+    "min_interval_s": 2.0,
+    "max_wait_s": 15.0,
+    "enforced_in": "_github.get_json/aget_json (hold)"
+   },
+   "observe": {
+    "lane_header": "x-ratelimit-resource",
+    "expect": {
+     "x-ratelimit-limit": {"core": 5000, "search": 30, "code_search": 10}
+    }
+   }
+  },
+  "github_code_search": {
+   "name": "GitHub REST API: Search code endpoint",
+   "kind": "api",
+   "hosts": [],
+   "sources": ["github"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": [
+     {"limit": 10, "seconds": 60, "text": "Search code endpoint (authentication required)"}
+    ],
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "quote": "limits you to 10 requests per minute",
+    "url": "https://docs.github.com/en/rest/search/search",
+    "checked": "2026-09-28",
+    "where_checked": "concurrency: see the github entry (100 overall)"
+   },
+   "gate": {
+    "max_inflight": 1,
+    "min_interval_s": 6.0,
+    "max_wait_s": 15.0,
+    "enforced_in": "_github.get_json/aget_json for paths under /search/code (inside the github gate)"
+   }
+  },
+  "stackexchange": {
+   "name": "Stack Exchange API",
+   "kind": "api",
+   "hosts": ["api.stackexchange.com"],
+   "sources": ["academia_se", "ai_se", "crossvalidated", "cs_se", "datascience_se", "stackoverflow"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": [
+     {"limit": 30, "seconds": 1.0, "text": "per IP; more than this is dropped"}
+    ],
+    "daily_quota": "per-IP quota shared by the apps on that IP, the largest daily limit among their keys, 10,000 by default; the page does not state a keyless figure (the response body carries quota_max / quota_remaining)",
+    "auth": "an app key sets the IP quota; an access_token moves to a per user/app quota of 10,000",
+    "quote": "more than 30 requests a second, new requests will be dropped",
+    "url": "https://api.stackexchange.com/docs/throttle",
+    "checked": "2026-09-28",
+    "where_checked": "concurrency and minimum spacing: not stated; keyless daily figure: not stated on the throttle page",
+    "notes": "Also: a response carrying 'backoff' MUST be honoured (wait that many seconds before the same method); identical requests should not repeat within a minute. robots.txt could not be read on 2026-09-28: api.stackexchange.com (400)"
+   },
+   "gate": {
+    "max_inflight": 4,
+    "windows": [[30, 1.0]],
+    "max_wait_s": 15.0,
+    "enforced_in": "_stackexchange._se_get/_ase_get (hold; 'backoff' defers the gate)"
+   }
+  },
+  "core": {
+   "name": "CORE API v3",
+   "kind": "api",
+   "hosts": ["api.core.ac.uk"],
+   "sources": ["core"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": [
+     {
+      "limit": 10,
+      "seconds": 60,
+      "text": "max per minute, strictest registered tier (academic, not a supporting member); registered personal tier allows 25"
+     }
+    ],
+    "daily_quota": "tokens per day by tier: unauthenticated 100; registered personal 1,000; registered academic (not supporting) 5,000; supporting / non-academic organisation about 200,000. A simple query costs 1 token, complex ones 3 to 5",
+    "auth": "OmniSeek sends a registered key (Bearer); which tier it was registered under is not known locally",
+    "quote": "Registered Personal users: 1,000 tokens per day, maximum 25 per minute",
+    "url": "https://api.core.ac.uk/docs/v3",
+    "checked": "2026-09-28",
+    "where_checked": "concurrency: not stated in the v3 rate-limit table",
+    "notes": "core.ac.uk/services/api (marketing page) still says 'One batch request or five single requests per 10 seconds'. Headers: X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Retry-After."
+   },
+   "gate": {
+    "max_inflight": 3,
+    "windows": [[10, 60]],
+    "max_wait_s": 30.0,
+    "enforced_in": "sources/api/core_source.py _core_get/_acore_get (hold)"
+   }
+  },
+  "crossref": {
+   "name": "Crossref REST API (polite pool)",
+   "kind": "api",
+   "hosts": ["api.crossref.org"],
+   "sources": ["crossref", "crossref_retractions"],
+   "tools": ["omniseek_paper_enrich: DOI integrity (Crossref updated-by)"],
+   "terms": {
+    "max_concurrency": 3,
+    "min_interval_s": "未公布",
+    "windows": [
+     {
+      "limit": 3,
+      "seconds": 1.0,
+      "text": "requests returning lists (queries, filters), polite pool, since 2026-07-21"
+     },
+     {"limit": 10, "seconds": 1.0, "text": "single-record requests, polite pool"}
+    ],
+    "daily_quota": "未公布",
+    "auth": "public pool (no mailto): 5/s single, 1/s lists, concurrency 1; polite pool (mailto): 10/s single, 3/s lists, concurrency 3, rate-limited per email address; Metadata Plus 150/s",
+    "quote": "3 requests per second for the polite pool",
+    "url": "https://www.crossref.org/documentation/retrieve-metadata/rest-api/access-and-authentication/",
+    "checked": "2026-09-28",
+    "where_checked": "daily quota: none stated",
+    "notes": "List limits: community.crossref.org/t/16137 (2026-07-21). OmniSeek sends mailto on every path (User-Agent or mailto param), so the polite values apply. Headers: x-rate-limit-limit, x-rate-limit-interval, x-rate-limit-type, x-concurrency-limit, x-api-pool."
+   },
+   "gate": {
+    "max_inflight": 3,
+    "windows": [[3, 1.0]],
+    "max_wait_s": 15.0,
+    "enforced_in": "sources/api/crossref_source.py (egress) + http.py host gate (crossref_retractions, enrich)"
+   },
+   "observe": {
+    "expect": {"x-concurrency-limit": 3}
+   }
+  },
+  "unpaywall": {
+   "name": "Unpaywall REST API",
+   "kind": "api",
+   "hosts": ["api.unpaywall.org"],
+   "sources": [],
+   "tools": ["omniseek_paper_enrich: open-access PDF link (enrich._unpaywall)"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "100,000 calls per day, counted per email",
+    "auth": "no key; an email parameter is required on every call",
+    "quote": "limit use to 100,000 calls per day",
+    "url": "https://unpaywall.org/products/api",
+    "checked": "2026-09-28",
+    "where_checked": "unpaywall.org/products/api renders only with JavaScript (not readable by curl or OmniSeek's Jina render on 2026-09-28); the figure is quoted from it by the University of Calgary and SMU library API guides. help.openalex.org/access/unpaywall/ (2026-09-18) states the DOI API is unchanged and gives no number. Concurrency and interval: not stated",
+    "notes": "robots.txt could not be read on 2026-09-28: api.unpaywall.org (422)"
+   }
+  },
+  "dblp": {
+   "name": "dblp search API",
+   "kind": "api",
+   "hosts": ["dblp.org"],
+   "sources": ["dblp", "dblp_author"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": 1.0,
+    "windows": [],
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "quote": "waiting at least one or two seconds between consecutive requests should always be safe",
+    "url": "https://dblp.org/faq/Am+I+allowed+to+crawl+the+dblp+website.html",
+    "checked": "2026-09-28",
+    "where_checked": "the FAQ page is behind an Anubis proof-of-work page for both this machine and OmniSeek's egress on 2026-09-28; the sentence is quoted from the page as indexed by web search. Over-limit answers are HTTP 429 with Retry-After. No numeric concurrency or daily quota is published",
+    "notes": "dblp asks heavy users to query the XML dump instead."
+   },
+   "gate": {
+    "max_inflight": 1,
+    "min_interval_s": 1.0,
+    "max_wait_s": 15.0,
+    "enforced_in": "sources/api/dblp_source.py (egress) + http.py host gate"
+   }
+  },
+  "europepmc": {
+   "name": "Europe PMC REST API",
+   "kind": "api",
+   "hosts": ["www.ebi.ac.uk"],
+   "sources": ["europepmc"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://europepmc.org/developers",
+    "checked": "2026-09-28",
+    "where_checked": "europepmc.org/developers and the RESTful web service docs state no numeric limit; the developer forum (groups.google.com/a/ebi.ac.uk/g/epmc-webservices) only says limits are per IP. www.ebi.ac.uk/robots.txt sets Crawl-delay 10 s for User-agent *, enforced as that host's gate (driver decision, 2026-09-29)",
+    "robots_crawl_delay_s": {"www.ebi.ac.uk": 10.0}
+   }
+  },
+  "orcid": {
+   "name": "ORCID public API (anonymous)",
+   "kind": "api",
+   "hosts": ["pub.orcid.org"],
+   "sources": ["orcid"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": [
+     {
+      "limit": 12,
+      "seconds": 1.0,
+      "text": "anonymous API, requests per second (40 may queue as burst)"
+     }
+    ],
+    "daily_quota": "anonymous: 25,000 reads/day per IP; registered public client: 100,000 reads/day",
+    "auth": "a registered public client ID raises the daily quota, not the rate",
+    "quote": "Anonymous API: 12 req/sec, 40 burst/sec, 25k reads/day (Per IP address)",
+    "url": "https://info.orcid.org/ufaqs/what-are-the-api-limits/",
+    "checked": "2026-09-28",
+    "where_checked": "concurrency: not stated (bursts above 40 get HTTP 503)"
+   },
+   "gate": {
+    "max_inflight": 8,
+    "windows": [[12, 1.0]],
+    "max_wait_s": 15.0,
+    "enforced_in": "http.py host gate (8 in flight = orcid_source._MAX_FANOUT)"
+   }
+  },
+  "wikimedia": {
+   "name": "Wikimedia sites and APIs (Wikipedia, Wikidata and the rest of the family)",
+   "kind": "api",
+   "hosts": [
+     "www.wikidata.org", "en.wikipedia.org", "wikipedia.org", ".wikipedia.org", "wikimedia.org",
+     ".wikimedia.org", "wikidata.org", ".wikidata.org", "wiktionary.org", ".wiktionary.org",
+     "wikiquote.org", ".wikiquote.org", "wikibooks.org", ".wikibooks.org", "wikisource.org",
+     ".wikisource.org", "wikinews.org", ".wikinews.org", "wikiversity.org", ".wikiversity.org",
+     "wikivoyage.org", ".wikivoyage.org", "mediawiki.org", ".mediawiki.org"
+   ],
+   "sources": ["wikidata_wikipedia", "wikidata_identity"],
+   "user_agent": "omniseek/0.1 (https://github.com/Battam1111/omniseek; retrieval bot) python-httpx/0.28.1",
+   "terms": {
+    "max_concurrency": 3,
+    "min_interval_s": "未公布",
+    "windows": [
+     {
+      "limit": 200,
+      "seconds": 60,
+      "text": "unauthenticated bot with a compliant User-Agent (name, version, contact)"
+     }
+    ],
+    "daily_quota": "未公布",
+    "auth": "OmniSeek sends a policy-compliant User-Agent (this entry's user_agent: name/version, the public OmniSeek repo as contact, 'bot', library), so the 'User-Agent only' tier applies; unidentified clients (only an IP) get 10 requests/minute, authenticated new users 200, established editors 2,000, bot-flagged accounts exempt",
+    "quote": "limit the number of concurrent requests to 3 or fewer",
+    "url": "https://www.mediawiki.org/wiki/Wikimedia_APIs/Rate_limits",
+    "checked": "2026-09-28",
+    "where_checked": "daily quota: none; limits are per minute. robots.txt of both hosts (read 2026-09-28 with the compliant User-Agent; a User-Agent without contact got HTTP 403): no Crawl-delay",
+    "notes": "New in 2026 and enforced on all APIs since June 2026. Respect Retry-After on 429/503, else wait at least 5 s. User-Agent policy: foundation.wikimedia.org/wiki/Policy:Wikimedia_Foundation_User-Agent_Policy (read 2026-09-28). Compliant User-Agent (driver decision, 2026-09-29), declared here as user_agent (driver decision, 2026-09-29). Hosts: the whole Wikimedia family (driver decision, 2026-09-29), because the User-Agent policy covers every Wikimedia site: each listed domain, and through its leading-dot entry every subdomain of it, share this one gate and this one user_agent. robots.txt was read for en.wikipedia.org and www.wikidata.org only."
+   },
+   "gate": {
+    "max_inflight": 3,
+    "windows": [[200, 60]],
+    "max_wait_s": 15.0,
+    "enforced_in": "http.py host gate; the declared user_agent on every request to these hosts"
+   }
+  },
+  "hn_algolia": {
+   "name": "HN Search API (Algolia)",
+   "kind": "api",
+   "hosts": ["hn.algolia.com"],
+   "sources": ["hackernews"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": [
+     {"limit": 10000, "seconds": 3600, "text": "per IP"}
+    ],
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "quote": "from a single IP to 10,000 per hour",
+    "url": "https://hn.algolia.com/api",
+    "checked": "2026-09-28",
+    "where_checked": "concurrency, interval, daily quota: not stated"
+   },
+   "gate": {
+    "max_inflight": 4,
+    "windows": [[10000, 3600]],
+    "max_wait_s": 15.0,
+    "enforced_in": "http.py host gate + hackernews health_check (egress)"
+   }
+  },
+  "bluesky": {
+   "name": "Bluesky PDS / entryway (logged-in atproto client)",
+   "kind": "api",
+   "hosts": ["bsky.social"],
+   "sources": ["bluesky"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": [
+     {"limit": 3000, "seconds": 300, "text": "overall API requests, per IP"}
+    ],
+    "daily_quota": "未公布",
+    "auth": "OmniSeek logs in with an app password, so requests go through the account's PDS",
+    "quote": "Overall API Requests (all endpoints) Rate limited by IP 3000 per 5 minutes",
+    "url": "https://bsky.network/docs/rate-limits/",
+    "checked": "2026-09-28",
+    "where_checked": "concurrency and daily quota: not stated; createSession is 30 per 5 minutes, 300 per day per account"
+   },
+   "gate": {
+    "max_inflight": 2,
+    "windows": [[3000, 300]],
+    "max_wait_s": 15.0,
+    "enforced_in": "sources/api/bluesky_source.py (hold around the atproto client calls)"
+   }
+  },
+  "mastodon_social": {
+   "name": "Mastodon instance mastodon.social",
+   "kind": "api",
+   "hosts": ["mastodon.social"],
+   "sources": ["mastodon"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": [
+     {"limit": 300, "seconds": 300, "text": "per IP (default)"}
+    ],
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "quote": "Per IP address: Any endpoint or method: 300 calls within 5 minutes",
+    "url": "https://docs.joinmastodon.org/api/rate-limits/",
+    "checked": "2026-09-28",
+    "where_checked": "the page gives Mastodon's defaults (2022-11-20); an instance may change them. Concurrency and daily quota: not stated"
+   },
+   "gate": {
+    "max_inflight": 2,
+    "windows": [[300, 300]],
+    "max_wait_s": 15.0,
+    "enforced_in": "http.py host gate"
+   },
+   "observe": {
+    "expect": {"x-ratelimit-limit": 300}
+   }
+  },
+  "fosstodon": {
+   "name": "Mastodon instance fosstodon.org",
+   "kind": "api",
+   "hosts": ["fosstodon.org"],
+   "sources": ["mastodon"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": [
+     {"limit": 300, "seconds": 300, "text": "per IP (default)"}
+    ],
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "quote": "Per IP address: Any endpoint or method: 300 calls within 5 minutes",
+    "url": "https://docs.joinmastodon.org/api/rate-limits/",
+    "checked": "2026-09-28",
+    "where_checked": "the page gives Mastodon's defaults (2022-11-20); an instance may change them. Concurrency and daily quota: not stated"
+   },
+   "gate": {
+    "max_inflight": 2,
+    "windows": [[300, 300]],
+    "max_wait_s": 15.0,
+    "enforced_in": "http.py host gate"
+   },
+   "observe": {
+    "expect": {"x-ratelimit-limit": 300}
+   }
+  },
+  "sigmoid_social": {
+   "name": "Mastodon instance sigmoid.social",
+   "kind": "api",
+   "hosts": ["sigmoid.social"],
+   "sources": ["mastodon"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": [
+     {"limit": 300, "seconds": 300, "text": "per IP (default)"}
+    ],
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "quote": "Per IP address: Any endpoint or method: 300 calls within 5 minutes",
+    "url": "https://docs.joinmastodon.org/api/rate-limits/",
+    "checked": "2026-09-28",
+    "where_checked": "the page gives Mastodon's defaults (2022-11-20); an instance may change them. Concurrency and daily quota: not stated"
+   },
+   "gate": {
+    "max_inflight": 2,
+    "windows": [[300, 300]],
+    "max_wait_s": 15.0,
+    "enforced_in": "http.py host gate"
+   },
+   "observe": {
+    "expect": {"x-ratelimit-limit": 300}
+   }
+  },
+  "arctic_shift": {
+   "name": "Arctic Shift (Reddit archive API)",
+   "kind": "api",
+   "hosts": ["arctic-shift.photon-reddit.com"],
+   "sources": ["reddit"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "quote": "only make a couple requests per second",
+    "url": "https://github.com/ArthurHeitmann/arctic_shift/blob/master/api/README.md",
+    "checked": "2026-09-28",
+    "where_checked": "the README publishes no number; limits vary with server load"
+   }
+  },
+  "reddit_web": {
+   "name": "reddit.com via the logged-in browser (CDP)",
+   "kind": "walled",
+   "hosts": ["www.reddit.com"],
+   "sources": ["reddit"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://support.reddithelp.com/hc/en-us/articles/16160319875092-Reddit-Data-API-Wiki",
+    "checked": "2026-09-28",
+    "where_checked": "the Data API terms cover OAuth API clients; OmniSeek reads www.reddit.com/search.json inside the shared Chrome session, for which reddit publishes no rate"
+   }
+  },
+  "huggingface": {
+   "name": "Hugging Face Hub",
+   "kind": "api",
+   "hosts": ["huggingface.co"],
+   "sources": ["huggingface_hub", "hf_daily_papers"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": [
+     {"limit": 500, "seconds": 300, "text": "anonymous API calls per IP"},
+     {"limit": 100, "seconds": 300, "text": "anonymous page requests per IP"},
+     {"limit": 3000, "seconds": 300, "text": "anonymous resolver (file download) requests per IP"}
+    ],
+    "daily_quota": "未公布",
+    "auth": "a free account token raises these to 1,000 / 200 / 5,000 per 5 minutes",
+    "quote": "Anonymous (per IP address): API 500, Resolvers 3,000, Pages 100 (per 5-minute window)",
+    "url": "https://huggingface.co/docs/hub/rate-limits",
+    "checked": "2026-09-28",
+    "where_checked": "concurrency and daily quota: not stated. OmniSeek calls the Hub keyless",
+    "notes": "The frontier_labs RSS feed on huggingface.co/blog also goes through this gate (same host). Headers: RateLimit, RateLimit-Policy."
+   },
+   "gate": {
+    "max_inflight": 4,
+    "windows": [[100, 300]],
+    "max_wait_s": 15.0,
+    "enforced_in": "hf sources (egress) + http.py host gate"
+   }
+  },
+  "zenodo": {
+   "name": "Zenodo REST API",
+   "kind": "api",
+   "hosts": ["zenodo.org"],
+   "sources": ["zenodo"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": [
+     {"limit": 60, "seconds": 60, "text": "guest users, global"},
+     {"limit": 2000, "seconds": 3600, "text": "guest users, global"},
+     {"limit": 30, "seconds": 60, "text": "search REST API endpoints"}
+    ],
+    "daily_quota": "未公布",
+    "auth": "authenticated users: 100 per minute, 5,000 per hour",
+    "quote": "Search REST API endpoints 30 requests per minute",
+    "url": "https://developers.zenodo.org/",
+    "checked": "2026-09-28",
+    "where_checked": "concurrency and daily quota: not stated. zenodo.org/robots.txt sets Crawl-delay 10 s, enforced as that host's gate on top of these windows (driver decision, 2026-09-29)",
+    "robots_crawl_delay_s": {"zenodo.org": 10.0}
+   },
+   "gate": {
+    "max_inflight": 2,
+    "windows": [[30, 60], [2000, 3600]],
+    "max_wait_s": 15.0,
+    "enforced_in": "http.py host gate"
+   },
+   "observe": {
+    "expect": {
+     "x-ratelimit-limit": [30, 60]
+    }
+   }
+  },
+  "openlibrary": {
+   "name": "Open Library APIs",
+   "kind": "api",
+   "hosts": ["openlibrary.org"],
+   "sources": ["books_openlibrary_ia"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": 1.0,
+    "windows": [],
+    "daily_quota": "未公布",
+    "auth": "requests that identify themselves (User-Agent with app name and contact email) get 3 requests per second",
+    "quote": "1 request per second for requests that don't identify themselves",
+    "url": "https://openlibrary.org/developers/api",
+    "checked": "2026-09-28",
+    "where_checked": "concurrency and daily quota: not stated. OmniSeek sends http.USER_AGENT (no contact), so the unidentified 1/s applies"
+   },
+   "gate": {
+    "max_inflight": 2,
+    "min_interval_s": 1.0,
+    "max_wait_s": 15.0,
+    "enforced_in": "http.py host gate"
+   }
+  },
+  "internet_archive": {
+   "name": "Internet Archive (archive.org search, Wayback CDX)",
+   "kind": "api",
+   "hosts": ["archive.org", "web.archive.org"],
+   "sources": ["books_openlibrary_ia", "wayback"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://archive.org/services/docs/api/",
+    "checked": "2026-09-28",
+    "where_checked": "archive.org API docs publish no numeric rate. Internet Archive staff stated /cdx averages of 60 requests per minute in 2023 (quoted in edgi-govdata-archiving/wayback issue #137, not an official page); the IA blog of 2026-09-15 describes new blocking of high-volume automated traffic without numbers"
+   }
+  },
+  "sec_edgar": {
+   "name": "SEC EDGAR (www.sec.gov, efts, data.sec.gov)",
+   "kind": "api",
+   "hosts": ["www.sec.gov", "efts.sec.gov", "data.sec.gov"],
+   "sources": ["sec_edgar", "sec_financials"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": [
+     {"limit": 10, "seconds": 1.0, "text": "all of one user's machines together"}
+    ],
+    "daily_quota": "未公布",
+    "auth": "no key; a descriptive User-Agent with a contact is required (OmniSeek sends one)",
+    "quote": "current max request rate is 10 requests/second",
+    "url": "https://www.sec.gov/search-filings/edgar-search-assistance/accessing-edgar-data",
+    "checked": "2026-09-28",
+    "where_checked": "concurrency, spacing and daily quota: not stated; the 10/s counts all of a user's machines together",
+    "notes": "robots.txt could not be read on 2026-09-28: efts.sec.gov (403)"
+   },
+   "gate": {
+    "max_inflight": 4,
+    "windows": [[10, 1.0]],
+    "max_wait_s": 15.0,
+    "enforced_in": "http.py host gate"
+   }
+  },
+  "nih_reporter": {
+   "name": "NIH RePORTER API",
+   "kind": "api",
+   "hosts": ["api.reporter.nih.gov"],
+   "sources": ["nih_reporter"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": 1.0,
+    "windows": [],
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "quote": "no more than approximately one request per second",
+    "url": "https://api.reporter.nih.gov/",
+    "checked": "2026-09-28",
+    "where_checked": "concurrency and daily quota: not stated; large jobs off-peak; breaking the policy may get the IP blocked"
+   },
+   "gate": {
+    "max_inflight": 1,
+    "min_interval_s": 1.0,
+    "max_wait_s": 15.0,
+    "enforced_in": "http.py host gate"
+   }
+  },
+  "statcan_wds": {
+   "name": "Statistics Canada Web Data Service",
+   "kind": "api",
+   "hosts": ["www150.statcan.gc.ca"],
+   "sources": ["statcan_wds"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": [
+     {"limit": 25, "seconds": 1.0, "text": "per IP (server-wide 50 per second)"}
+    ],
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "quote": "individual IP address limit of 25 requests per second",
+    "url": "https://www.statcan.gc.ca/en/developers/wds/user-guide",
+    "checked": "2026-09-28",
+    "where_checked": "concurrency and daily quota: not stated. The host's robots.txt sets Crawl-delay 2 s, enforced as that host's gate on top of the 25/s window (driver decision, 2026-09-29)",
+    "robots_crawl_delay_s": {"www150.statcan.gc.ca": 2.0}
+   },
+   "gate": {
+    "max_inflight": 4,
+    "windows": [[25, 1.0]],
+    "max_wait_s": 15.0,
+    "enforced_in": "http.py host gate"
+   }
+  },
+  "companies_house": {
+   "name": "UK Companies House public data API",
+   "kind": "api",
+   "hosts": ["api.company-information.service.gov.uk"],
+   "sources": ["uk_companies_house"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": [
+     {"limit": 600, "seconds": 300, "text": "per application key"}
+    ],
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "quote": "up to 600 requests within a five-minute period",
+    "url": "https://developer-specs.company-information.service.gov.uk/guides/rateLimiting",
+    "checked": "2026-09-28",
+    "where_checked": "concurrency and daily quota: not stated",
+    "notes": "robots.txt could not be read on 2026-09-28: api.company-information.service.gov.uk (401)"
+   },
+   "gate": {
+    "max_inflight": 2,
+    "windows": [[600, 300]],
+    "max_wait_s": 15.0,
+    "enforced_in": "http.py host gate"
+   }
+  },
+  "data_gov_sg": {
+   "name": "data.gov.sg APIs",
+   "kind": "api",
+   "hosts": ["data.gov.sg", "api-production.data.gov.sg"],
+   "sources": ["datagovsg_nonresident_pass_types", "gov_open_data"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": [
+     {
+      "limit": 4,
+      "seconds": 10,
+      "text": "Datastore Search without an API key (per 10-second window)"
+     }
+    ],
+    "daily_quota": "未公布",
+    "auth": "per 10 s: realtime 6 / 12 (dev key) / 30 (prod key); datastore search 4 / 8 / 20; dataset downloads 2 / 4 / 10",
+    "quote": "the number of API calls that can be made every 10 seconds",
+    "url": "https://guide.data.gov.sg/developer-guide/api-overview/api-rate-limits",
+    "checked": "2026-09-28",
+    "where_checked": "concurrency and daily quota: not stated; keys enforced from 2025-12-31. OmniSeek calls keyless"
+   },
+   "gate": {
+    "max_inflight": 2,
+    "windows": [[4, 10]],
+    "max_wait_s": 15.0,
+    "enforced_in": "http.py host gate"
+   }
+  },
+  "adzuna": {
+   "name": "Adzuna API",
+   "kind": "api",
+   "hosts": ["api.adzuna.com"],
+   "sources": ["adzuna"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": [
+     {"limit": 25, "seconds": 60, "text": "per minute"},
+     {"limit": 250, "seconds": 86400, "text": "per day"},
+     {"limit": 1000, "seconds": 604800, "text": "per week"},
+     {"limit": 2500, "seconds": 2592000, "text": "per month"}
+    ],
+    "daily_quota": "250 hits per day (also 1,000 per week, 2,500 per month)",
+    "auth": "未公布",
+    "quote": "25 hits per minute; 250 hits per day",
+    "url": "https://developer.adzuna.com/docs/terms_of_service",
+    "checked": "2026-09-28",
+    "where_checked": "concurrency: not stated. Non-personal use by academic organisations is limited to a 14 day trial"
+   },
+   "gate": {
+    "max_inflight": 2,
+    "windows": [[25, 60], [250, 86400], [1000, 604800], [2500, 2592000]],
+    "max_wait_s": 15.0,
+    "enforced_in": "http.py host gate (in-memory windows reset on restart)"
+   }
+  },
+  "exa": {
+   "name": "Exa API",
+   "kind": "api",
+   "hosts": ["api.exa.ai"],
+   "sources": ["exa"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": [
+     {"limit": 10, "seconds": 1.0, "text": "/search queries per second"}
+    ],
+    "daily_quota": "plan credits: the free plan gets $10 of credits per month (exa.ai/pricing)",
+    "auth": "未公布",
+    "quote": "/search, /answer, /chat/completions: 10 QPS",
+    "url": "https://exa.ai/docs/reference/rate-limits",
+    "checked": "2026-09-28",
+    "where_checked": "concurrency: not stated for /search"
+   },
+   "gate": {
+    "max_inflight": 4,
+    "windows": [[10, 1.0]],
+    "max_wait_s": 15.0,
+    "enforced_in": "http.py host gate"
+   }
+  },
+  "itunes_search": {
+   "name": "iTunes Search API",
+   "kind": "api",
+   "hosts": ["itunes.apple.com"],
+   "sources": ["apple_podcasts"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": [
+     {"limit": 20, "seconds": 60, "text": "approximately, per IP, subject to change"}
+    ],
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "quote": "The Search API is limited to approximately 20 calls per minute (subject to change).",
+    "url": "https://performance-partners.apple.com/search-api",
+    "checked": "2026-09-28",
+    "where_checked": "concurrency and daily quota: not stated"
+   },
+   "gate": {
+    "max_inflight": 2,
+    "windows": [[20, 60]],
+    "max_wait_s": 15.0,
+    "enforced_in": "http.py host gate"
+   }
+  },
+  "jina_reader": {
+   "name": "Jina Reader (r.jina.ai)",
+   "kind": "api",
+   "hosts": ["r.jina.ai"],
+   "sources": [],
+   "tools": ["omniseek_read fallback render (web_fallback)"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": [
+     {"limit": 20, "seconds": 60, "text": "requests per minute without an API key, per IP"}
+    ],
+    "daily_quota": "未公布",
+    "auth": "with a free key 500 requests per minute (older reports 200); OmniSeek sends no key",
+    "quote": "20 RPM without API key",
+    "url": "https://jina.ai/reader/",
+    "checked": "2026-09-28",
+    "where_checked": "the figures are from jina.ai/reader as quoted by several 2026 guides; the page's own table was not rendered for this check. Concurrency and daily quota: not stated"
+   },
+   "gate": {
+    "max_inflight": 2,
+    "windows": [[20, 60]],
+    "max_wait_s": 15.0,
+    "enforced_in": "http.py host gate (web_fallback._jina_markdown)"
+   }
+  },
+  "coingecko": {
+   "name": "CoinGecko public API (keyless)",
+   "kind": "api",
+   "hosts": ["api.coingecko.com"],
+   "sources": ["market_crypto"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": [
+     {
+      "limit": 5,
+      "seconds": 60,
+      "text": "keyless public API, lower end of 5 to 15 calls per minute"
+     }
+    ],
+    "daily_quota": "未公布",
+    "auth": "a free Demo key gives 100 calls per minute and 10,000 per month",
+    "quote": "a rate limit of 5 to 15 calls per minute",
+    "url": "https://www.coingecko.com/en/api/pricing",
+    "checked": "2026-09-28",
+    "where_checked": "concurrency and daily quota: not stated for keyless use"
+   },
+   "gate": {
+    "max_inflight": 1,
+    "windows": [[5, 60]],
+    "max_wait_s": 15.0,
+    "enforced_in": "http.py host gate"
+   }
+  },
+  "artificial_analysis": {
+   "name": "Artificial Analysis API",
+   "kind": "api",
+   "hosts": ["artificialanalysis.ai"],
+   "sources": ["llm_leaderboard"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": [
+     {"limit": 1000, "seconds": 86400, "text": "per day"}
+    ],
+    "daily_quota": "1,000 requests per day",
+    "auth": "未公布",
+    "quote": "The API is rate-limited to 1,000 requests per day.",
+    "url": "https://artificialanalysis.ai/api-reference",
+    "checked": "2026-09-28",
+    "where_checked": "concurrency and interval: not stated"
+   },
+   "gate": {
+    "max_inflight": 1,
+    "windows": [[1000, 86400]],
+    "max_wait_s": 15.0,
+    "enforced_in": "sources/api/llm_leaderboard_source.py (egress)"
+   }
+  },
+  "v2ex": {
+   "name": "V2EX API",
+   "kind": "api",
+   "hosts": ["www.v2ex.com"],
+   "sources": ["v2ex"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": [
+     {"limit": 120, "seconds": 3600, "text": "per IP, API 1.0 (the endpoint OmniSeek uses)"}
+    ],
+    "daily_quota": "未公布",
+    "auth": "the API 2.0 page (updated 2026-08-03) says 600 per hour per IP; OmniSeek calls the keyless 1.0 endpoint /api/topics/show.json, whose documented quota was 120 per hour",
+    "quote": "up to 600 API requests per hour",
+    "url": "https://www.v2ex.com/help/api",
+    "checked": "2026-09-28",
+    "where_checked": "which figure applies to the 1.0 endpoint today is not stated; the response headers X-Rate-Limit-Limit / -Remaining / -Reset show it"
+   },
+   "gate": {
+    "max_inflight": 6,
+    "windows": [[120, 3600]],
+    "max_wait_s": 15.0,
+    "enforced_in": "sources/scrape/v2ex_source.py (egress; 6 in flight = its six nodes)"
+   },
+   "observe": {
+    "expect": {
+     "x-rate-limit-limit": [120, 600]
+    }
+   }
+  },
+  "wecom_webhook": {
+   "name": "WeCom (企业微信) group robot webhook",
+   "kind": "tool",
+   "hosts": ["qyapi.weixin.qq.com"],
+   "sources": [],
+   "tools": ["background job alerts and digest delivery (notify.wecom)"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": [
+     {"limit": 20, "seconds": 60, "text": "messages per robot"}
+    ],
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "quote": "每个机器人发送的消息不能超过20条/分钟",
+    "url": "https://developer.work.weixin.qq.com/document/path/91770",
+    "checked": "2026-09-28",
+    "where_checked": "the concurrency limit mentioned on the developer forum has no published number"
+   },
+   "gate": {
+    "max_inflight": 1,
+    "windows": [[20, 60]],
+    "max_wait_s": 15.0,
+    "enforced_in": "notify.py (egress)"
+   }
+  },
+  "discord": {
+   "name": "Discord API (bot token)",
+   "kind": "walled",
+   "hosts": ["discord.com"],
+   "sources": ["discord_communities"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": [
+     {"limit": 50, "seconds": 1.0, "text": "global, per bot token"}
+    ],
+    "daily_quota": "未公布",
+    "auth": "per-route limits come in X-RateLimit-* headers; 10,000 invalid requests per 10 minutes per IP get the IP blocked",
+    "quote": "global limit is 50 requests per second",
+    "url": "https://docs.discord.com/developers/topics/rate-limits",
+    "checked": "2026-09-28",
+    "where_checked": "daily quota: none. OmniSeek uses a bot token (automating a user account is forbidden)"
+   },
+   "gate": {
+    "max_inflight": 8,
+    "windows": [[50, 1.0]],
+    "max_wait_s": 15.0,
+    "enforced_in": "sources/walled/discord_communities_source.py (egress; 8 in flight = its channel fan-out)"
+   }
+  },
+  "brave_search": {
+   "name": "Brave Search API",
+   "kind": "search",
+   "hosts": ["api.search.brave.com"],
+   "sources": [
+     "blind", "glassdoor", "hardwarezone", "linkedin_posts", "maimai", "quora", "x_search",
+     "xiaohongshu_search", "yipin_search", "zhihu_search", "nowcoder"
+   ],
+   "tools": ["search-index venues and nowcoder site search (shared web-search backend)"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": [
+     {
+      "limit": 1,
+      "seconds": 1.0,
+      "text": "legacy free plan (kept for accounts created before 2026-02-12)"
+     }
+    ],
+    "daily_quota": "legacy free plan 2,000 queries per month; plans since 2026-02-12 include $5 of monthly credit (about 1,000 queries) and allow 50 queries per second",
+    "auth": "which plan OmniSeek's key is on is not known locally (X-RateLimit-Limit shows it)",
+    "quote": "$5 of free credit that renews every month",
+    "url": "https://api-dashboard.search.brave.com/documentation/pricing",
+    "checked": "2026-09-28",
+    "where_checked": "figures from the pricing page as quoted by Brave's 2026-02 announcement and 2026-09 trackers; concurrency not stated",
+    "notes": "robots.txt could not be read on 2026-09-28: api.search.brave.com (403)"
+   },
+   "gate": {
+    "max_inflight": 1,
+    "min_interval_s": 1.1,
+    "http_gate": false,
+    "enforced_in": "sources/api/_search_backend.py own pacer (reads this gate), not BackendGuard"
+   }
+  },
+  "duckduckgo_html": {
+   "name": "DuckDuckGo HTML results (fallback backend)",
+   "kind": "search",
+   "hosts": ["html.duckduckgo.com"],
+   "sources": [
+     "blind", "glassdoor", "hardwarezone", "linkedin_posts", "maimai", "quora", "x_search",
+     "xiaohongshu_search", "yipin_search", "zhihu_search", "nowcoder"
+   ],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://duckduckgo.com/terms",
+    "checked": "2026-09-28",
+    "where_checked": "no API and no published rate. duckduckgo.com/terms and /acceptable-use forbid unauthorised access or interference; robots.txt of both hosts: see notes",
+    "notes": "robots.txt, checked 2026-09-29: duckduckgo.com/robots.txt has User-agent: * with Disallow: /lite and Disallow: /html; html.duckduckgo.com/robots.txt has User-agent: * with Allow: /. The fallback requests html.duckduckgo.com (POST /html/), and robots.txt applies per host (RFC 9309), so the fallback complies with robots.txt (driver decision, 2026-09-29, withdrawing that day's decision to disable it)."
+   },
+   "gate": {
+    "max_inflight": 1,
+    "min_interval_s": 2.5,
+    "http_gate": false,
+    "enforced_in": "sources/api/_search_backend.py own pacer (reads this gate), not BackendGuard"
+   }
+  },
+  "context7": {
+   "name": "Context7 API",
+   "kind": "api",
+   "hosts": ["context7.com"],
+   "sources": ["context7"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://context7.com/docs/api-guide",
+    "checked": "2026-09-28",
+    "where_checked": "the API guide says only 'Without API key: Low rate limits'; a free key gives 1,000 calls per month (context7.com/plans). OmniSeek calls keyless; the keyless monthly figure is not published (the row's 200 per month note dates from 2025)"
+   }
+  },
+  "federal_register": {
+   "name": "Federal Register API",
+   "kind": "api",
+   "hosts": ["www.federalregister.gov"],
+   "sources": ["federal_register"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://www.federalregister.gov/developers/documentation/api/v1",
+    "checked": "2026-09-28",
+    "where_checked": "no published rate; the site says excessive use is throttled without giving thresholds"
+   }
+  },
+  "grants_gov": {
+   "name": "Grants.gov search2 API",
+   "kind": "api",
+   "hosts": ["api.grants.gov"],
+   "sources": ["grants_gov"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://grants.gov/api/terms-conditions",
+    "checked": "2026-09-28",
+    "where_checked": "the terms give no number (the 60 per minute of simpler.grants.gov is a different API with keys)",
+    "notes": "robots.txt could not be read on 2026-09-28: api.grants.gov (403)"
+   }
+  },
+  "nsf_awards": {
+   "name": "NSF Award Search API",
+   "kind": "api",
+   "hosts": ["api.nsf.gov"],
+   "sources": ["nsf_awards"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://resources.research.gov/common/webapi/awardapisearch-v1.htm",
+    "checked": "2026-09-28",
+    "where_checked": "only result caps are published (25 per page, 3,000 per search)"
+   }
+  },
+  "clinicaltrials": {
+   "name": "ClinicalTrials.gov API v2",
+   "kind": "api",
+   "hosts": ["clinicaltrials.gov"],
+   "sources": ["clinicaltrials"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://clinicaltrials.gov/data-api/api",
+    "checked": "2026-09-28",
+    "where_checked": "no published rate (the 50 per minute seen in third-party tools is not from ClinicalTrials.gov); robots.txt Crawl-delay 1 s enforced as the host gate (driver decision, 2026-09-29)",
+    "robots_crawl_delay_s": {"clinicaltrials.gov": 1.0}
+   }
+  },
+  "worldbank": {
+   "name": "World Bank Indicators API",
+   "kind": "api",
+   "hosts": ["api.worldbank.org"],
+   "sources": ["worldbank_stats"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://datahelpdesk.worldbank.org/knowledgebase/articles/889392-about-the-indicators-api-documentation",
+    "checked": "2026-09-28",
+    "where_checked": "only request-size limits are published (60 indicators, URL length)"
+   }
+  },
+  "eurostat": {
+   "name": "Eurostat dissemination API",
+   "kind": "api",
+   "hosts": ["ec.europa.eu"],
+   "sources": ["eurostat_stats"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://ec.europa.eu/eurostat/web/user-guides/data-browser/api-data-access/api-faq",
+    "checked": "2026-09-28",
+    "where_checked": "no published request rate; an extraction above 5,000,000 cells is refused"
+   }
+  },
+  "ukri_gtr": {
+   "name": "UKRI Gateway to Research API",
+   "kind": "api",
+   "hosts": ["gtr.ukri.org"],
+   "sources": ["ukri_gtr"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://gtr.ukri.org/resources/gtrapi2.html",
+    "checked": "2026-09-28",
+    "where_checked": "no number; users are asked not to flood the service"
+   }
+  },
+  "cordis": {
+   "name": "CORDIS",
+   "kind": "api",
+   "hosts": ["cordis.europa.eu"],
+   "sources": ["cordis_eu"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://cordis.europa.eu/about/dataextractions-api",
+    "checked": "2026-09-28",
+    "where_checked": "limits are set at CORDIS's discretion and not published"
+   }
+  },
+  "oecd_ai": {
+   "name": "OECD.AI policy API",
+   "kind": "api",
+   "hosts": ["api.oecdai.org", "oecd.ai"],
+   "sources": ["oecd_ai_policy"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://oecd.ai/en/",
+    "checked": "2026-09-28",
+    "where_checked": "no API documentation or rate is published for oecd.ai"
+   }
+  },
+  "mycareersfuture": {
+   "name": "MyCareersFuture API",
+   "kind": "api",
+   "hosts": ["api.mycareersfuture.gov.sg"],
+   "sources": ["mycareersfuture"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://www.mycareersfuture.gov.sg/",
+    "checked": "2026-09-28",
+    "where_checked": "no public API documentation or rate found"
+   }
+  },
+  "podcast_index": {
+   "name": "Podcast Index API",
+   "kind": "api",
+   "hosts": ["api.podcastindex.org"],
+   "sources": ["podcast_index"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://api.podcastindex.org/tos_v1.0.html",
+    "checked": "2026-09-28",
+    "where_checked": "the terms say limits exist and are enforced at their discretion, without numbers"
+   }
+  },
+  "kaggle": {
+   "name": "Kaggle API",
+   "kind": "api",
+   "hosts": ["www.kaggle.com"],
+   "sources": ["kaggle"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://www.kaggle.com/docs/api",
+    "checked": "2026-09-28",
+    "where_checked": "dynamic rate limiting, no numbers published"
+   }
+  },
+  "openreview": {
+   "name": "OpenReview API",
+   "kind": "api",
+   "hosts": ["api.openreview.net", "api2.openreview.net", "openreview.net"],
+   "sources": ["openreview", "mlrc"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://docs.openreview.net/reference/api-v2",
+    "checked": "2026-09-28",
+    "where_checked": "no published number; over-limit answers state the limit and the wait in the message"
+   }
+  },
+  "alphaxiv": {
+   "name": "alphaXiv API",
+   "kind": "api",
+   "hosts": ["api.alphaxiv.org", "www.alphaxiv.org"],
+   "sources": ["alphaxiv"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://www.alphaxiv.org/",
+    "checked": "2026-09-28",
+    "where_checked": "no public API terms or rate found"
+   }
+  },
+  "modelscope": {
+   "name": "ModelScope",
+   "kind": "api",
+   "hosts": ["www.modelscope.cn"],
+   "sources": ["modelscope"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://www.modelscope.cn/",
+    "checked": "2026-09-28",
+    "where_checked": "no published rate for the model listing endpoint"
+   }
+  },
+  "vast_ai": {
+   "name": "Vast.ai public offers",
+   "kind": "api",
+   "hosts": ["console.vast.ai", "cloud.vast.ai"],
+   "sources": ["vast_ai"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://docs.vast.ai/",
+    "checked": "2026-09-28",
+    "where_checked": "no published rate for the public offer search"
+   }
+  },
+  "pypi": {
+   "name": "PyPI JSON API",
+   "kind": "api",
+   "hosts": ["pypi.org"],
+   "sources": ["pypi"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://docs.pypi.org/api/",
+    "checked": "2026-09-28",
+    "where_checked": "PyPI states there is currently no rate limiting of its APIs at the edge, may block irresponsible use, and asks for an identifying User-Agent"
+   }
+  },
+  "gutendex": {
+   "name": "Gutendex (third-party Project Gutenberg catalog API)",
+   "kind": "api",
+   "hosts": ["gutendex.com"],
+   "sources": ["gutenberg"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://github.com/garethbjohnson/gutendex",
+    "checked": "2026-09-28",
+    "where_checked": "no published rate; the maintainer asks users to run their own server"
+   }
+  },
+  "gutenberg_web": {
+   "name": "Project Gutenberg website",
+   "kind": "web",
+   "hosts": ["www.gutenberg.org"],
+   "sources": ["gutenberg"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://www.gutenberg.org/policy/robot_access.html",
+    "checked": "2026-09-28",
+    "where_checked": "no numeric rate; the site is for human users only, automated access gets the IP blocked, and bulk access must use mirrors or the /robot/harvest endpoint",
+    "notes": "Terms concern: check whether the gutenberg source fetches www.gutenberg.org pages."
+   }
+  },
+  "ats_boards": {
+   "name": "Public job-board APIs (Greenhouse, Lever, Ashby, SmartRecruiters, Workable)",
+   "kind": "api",
+   "hosts": [
+     "boards-api.greenhouse.io", "api.lever.co", "api.ashbyhq.com", "api.smartrecruiters.com",
+     "jobs.smartrecruiters.com", "apply.workable.com"
+   ],
+   "sources": ["ai_residencies", "overseas_ai_jobs"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://developers.greenhouse.io/job-board.html",
+    "checked": "2026-09-28",
+    "where_checked": "no vendor publishes a rate for its public job-board GET endpoints (Lever documents only 2 application POSTs per second; SmartRecruiters 10/s applies to its authenticated Customer API); OmniSeek caps each ATS host at 4 in flight (_HOST_MAX_INFLIGHT)",
+    "robots_crawl_delay_s": {"api.lever.co": 1.0},
+    "notes": "robots.txt could not be read on 2026-09-28: api.ashbyhq.com (401)"
+   }
+  },
+  "airtable_layoffs": {
+   "name": "layoffs.fyi Airtable shared view",
+   "kind": "api",
+   "hosts": ["airtable.com", "layoffs.fyi"],
+   "sources": ["layoffs_tracker"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://support.airtable.com/docs/managing-api-call-limits-in-airtable",
+    "checked": "2026-09-28",
+    "where_checked": "Airtable's Web API allows 5 requests per second per base, but OmniSeek reads a public shared view, which is not the documented API; no rate is published for shared views"
+   }
+  },
+  "canada_ca": {
+   "name": "canada.ca (IRCC JSON feeds and pages)",
+   "kind": "api",
+   "hosts": ["www.canada.ca"],
+   "sources": ["ircc_ee_rounds", "ircc_processing_times"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://www.canada.ca/en/transparency/terms.html",
+    "checked": "2026-09-28",
+    "where_checked": "no rate for the JSON files behind the IRCC pages; canada.ca terms allow non-commercial reuse"
+   }
+  },
+  "open_canada": {
+   "name": "Open Government Canada (CKAN API)",
+   "kind": "api",
+   "hosts": ["open.canada.ca"],
+   "sources": ["nserc_awards", "sshrc_awards", "cihr_grants", "gov_open_data"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://open.canada.ca/data/en/dataset/2d90548d-50ef-4802-91f8-c59c5cf68251",
+    "checked": "2026-09-28",
+    "where_checked": "reads need no key; no published rate"
+   }
+  },
+  "data_gov_hk": {
+   "name": "DATA.GOV.HK",
+   "kind": "api",
+   "hosts": ["data.gov.hk"],
+   "sources": ["gov_open_data"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://data.gov.hk/en/",
+    "checked": "2026-09-28",
+    "where_checked": "no published API rate found"
+   }
+  },
+  "ontario_data": {
+   "name": "Ontario data catalogue / Sunshine list",
+   "kind": "api",
+   "hosts": ["data.ontario.ca", "www.ontario.ca"],
+   "sources": ["ontario_sunshine", "oinp_invitations"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://data.ontario.ca/",
+    "checked": "2026-09-28",
+    "where_checked": "no published API rate; www.ontario.ca/robots.txt Crawl-delay 1 s enforced as that host's gate (driver decision, 2026-09-29)",
+    "robots_crawl_delay_s": {"www.ontario.ca": 1.0},
+    "notes": "robots.txt could not be read on 2026-09-28: data.ontario.ca (429)"
+   }
+  },
+  "frontier_proxy": {
+   "name": "Private Responses-API proxy (weekly briefing agent)",
+   "kind": "tool",
+   "hosts": [],
+   "sources": [],
+   "tools": ["digest job briefing agent (briefing.py)"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "~/.omniseek/credentials/frontier.json (host-only)",
+    "checked": "2026-09-28",
+    "where_checked": "a private proxy; no public terms. Used once a week by the digest job"
+   }
+  },
+  "youtube": {
+   "name": "YouTube (yt-dlp, captions, walled browser)",
+   "kind": "walled",
+   "hosts": ["www.youtube.com", "i.ytimg.com"],
+   "sources": ["youtube", "youtube_channels"],
+   "tools": ["omniseek_transcribe / omniseek_view on YouTube URLs"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://www.youtube.com/static?template=terms",
+    "checked": "2026-09-28",
+    "where_checked": "no published rate for page access; the Terms forbid access by automated means except public search engines under robots.txt or with prior written permission",
+    "notes": "Terms concern, not a rate. Maintainer decision 2026-09-29: keep the current access (yt-dlp and captions, including broad search and the health probe); revisit only on new facts such as throttling, blocking, or a change in the terms or the official API."
+   }
+  },
+  "bilibili": {
+   "name": "bilibili",
+   "kind": "api",
+   "hosts": ["www.bilibili.com", "api.bilibili.com"],
+   "sources": ["bilibili"],
+   "tools": ["omniseek_transcribe on bilibili URLs"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://www.bilibili.com/",
+    "checked": "2026-09-28",
+    "where_checked": "no public API terms or rate (anti-crawl answers 412)"
+   }
+  },
+  "xiaohongshu_web": {
+   "name": "Xiaohongshu / RedNote (logged-in browser)",
+   "kind": "walled",
+   "hosts": ["www.xiaohongshu.com", "www.rednote.com", "edith.xiaohongshu.com"],
+   "sources": ["xiaohongshu", "xiaohongshu_cn"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://www.xiaohongshu.com/",
+    "checked": "2026-09-28",
+    "where_checked": "a website or app front end, not a documented API: no published request rate. OmniSeek's own pacing here: live-slot gate and browser gaps in the adapters"
+   }
+  },
+  "zhihu_web": {
+   "name": "Zhihu (logged-in browser)",
+   "kind": "walled",
+   "hosts": ["www.zhihu.com"],
+   "sources": ["zhihu", "zhihu_users"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://www.zhihu.com/",
+    "checked": "2026-09-28",
+    "where_checked": "a website or app front end, not a documented API: no published request rate. OmniSeek's own pacing here: CDP pool cap (OMNISEEK_CDP_POOL)"
+   }
+  },
+  "douyin_web": {
+   "name": "Douyin (logged-in browser)",
+   "kind": "walled",
+   "hosts": ["www.douyin.com"],
+   "sources": ["douyin"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://www.douyin.com/",
+    "checked": "2026-09-28",
+    "where_checked": "a website or app front end, not a documented API: no published request rate. OmniSeek's own pacing here: dedicated CDP on 9225"
+   }
+  },
+  "douban_web": {
+   "name": "Douban groups",
+   "kind": "walled",
+   "hosts": ["m.douban.com", "www.douban.com"],
+   "sources": ["douban_groups"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://m.douban.com/",
+    "checked": "2026-09-28",
+    "where_checked": "a website or app front end, not a documented API: no published request rate. OmniSeek's own pacing here: CDP pool cap"
+   }
+  },
+  "yipinsanfendi_web": {
+   "name": "1point3acres (logged-in browser)",
+   "kind": "walled",
+   "hosts": ["www.1point3acres.com"],
+   "sources": ["yipinsanfendi"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://www.1point3acres.com/",
+    "checked": "2026-09-28",
+    "where_checked": "a website or app front end, not a documented API: no published request rate. OmniSeek's own pacing here: _YIPIN_MIN_GAP_S = 16 s process-wide serial gate"
+   }
+  },
+  "polyu_portal": {
+   "name": "University portal (the owner's own account, logged-in browser)",
+   "kind": "walled",
+   "hosts": [],
+   "sources": ["polyu"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "n/a (no fixed host)",
+    "checked": "2026-09-28",
+    "where_checked": "a website or app front end, not a documented API: no published request rate. OmniSeek's own pacing here: CDP pool cap"
+   }
+  },
+  "wechat": {
+   "name": "WeChat articles and wechat2rss",
+   "kind": "walled",
+   "hosts": ["mp.weixin.qq.com", "wechat2rss.xlab.app"],
+   "sources": ["wechat"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://mp.weixin.qq.com/",
+    "checked": "2026-09-28",
+    "where_checked": "a website or app front end, not a documented API: no published request rate. OmniSeek's own pacing here: none beyond caching"
+   }
+  },
+  "sogou_weixin": {
+   "name": "Sogou WeChat search",
+   "kind": "walled",
+   "hosts": ["weixin.sogou.com"],
+   "sources": ["sogou_weixin"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://weixin.sogou.com/",
+    "checked": "2026-09-28",
+    "where_checked": "a website or app front end, not a documented API: no published request rate. OmniSeek's own pacing here: _sogou_sema = 2"
+   }
+  },
+  "bytedance_jobs": {
+   "name": "ByteDance careers",
+   "kind": "walled",
+   "hosts": ["jobs.bytedance.com"],
+   "sources": ["bytedance_seed"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://jobs.bytedance.com/",
+    "checked": "2026-09-28",
+    "where_checked": "a website or app front end, not a documented API: no published request rate. OmniSeek's own pacing here: none beyond caching"
+   }
+  },
+  "mokahr": {
+   "name": "MokaHR ATS",
+   "kind": "walled",
+   "hosts": ["app.mokahr.com"],
+   "sources": ["mokahr_ats"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://app.mokahr.com/",
+    "checked": "2026-09-28",
+    "where_checked": "a website or app front end, not a documented API: no published request rate. OmniSeek's own pacing here: _mokahr_sema = 12"
+   }
+  },
+  "feishu_jobs": {
+   "name": "Feishu job portals",
+   "kind": "walled",
+   "hosts": [],
+   "sources": ["feishu_jobs"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "n/a (no fixed host)",
+    "checked": "2026-09-28",
+    "where_checked": "a website or app front end, not a documented API: no published request rate. OmniSeek's own pacing here: _feishu_sema = 6"
+   }
+  },
+  "cdp_fulltext": {
+   "name": "Full-text reads of listed walled domains (CDP)",
+   "kind": "walled",
+   "hosts": ["www.quora.com"],
+   "sources": ["cdp_fulltext"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://www.quora.com/",
+    "checked": "2026-09-28",
+    "where_checked": "a website or app front end, not a documented API: no published request rate. OmniSeek's own pacing here: CDP pool cap"
+   }
+  },
+  "xiaomuchong_web": {
+   "name": "Xiaomuchong forum",
+   "kind": "walled",
+   "hosts": ["muchong.com"],
+   "sources": ["xiaomuchong"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://muchong.com/",
+    "checked": "2026-09-28",
+    "where_checked": "a website or app front end, not a documented API: no published request rate. OmniSeek's own pacing here: none beyond caching"
+   }
+  },
+  "tieba_web": {
+   "name": "Baidu Tieba",
+   "kind": "walled",
+   "hosts": ["tieba.baidu.com"],
+   "sources": ["tieba"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://tieba.baidu.com/",
+    "checked": "2026-09-28",
+    "where_checked": "a website or app front end, not a documented API: no published request rate. OmniSeek's own pacing here: none beyond caching"
+   }
+  },
+  "juejin": {
+   "name": "Juejin",
+   "kind": "walled",
+   "hosts": ["api.juejin.cn", "juejin.cn"],
+   "sources": ["juejin"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://api.juejin.cn/",
+    "checked": "2026-09-28",
+    "where_checked": "a website or app front end, not a documented API: no published request rate. OmniSeek's own pacing here: none beyond caching"
+   }
+  },
+  "nowcoder": {
+   "name": "Nowcoder",
+   "kind": "walled",
+   "hosts": ["www.nowcoder.com", "gw-c.nowcoder.com"],
+   "sources": ["nowcoder"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://www.nowcoder.com/",
+    "checked": "2026-09-28",
+    "where_checked": "a website or app front end, not a documented API: no published request rate. OmniSeek's own pacing here: none beyond caching"
+   }
+  },
+  "eastmoney": {
+   "name": "Eastmoney / Tencent quotes",
+   "kind": "walled",
+   "hosts": ["searchapi.eastmoney.com", "quote.eastmoney.com", "www.eastmoney.com", "qt.gtimg.cn"],
+   "sources": ["eastmoney"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://searchapi.eastmoney.com/",
+    "checked": "2026-09-28",
+    "where_checked": "a website or app front end, not a documented API: no published request rate. OmniSeek's own pacing here: none beyond caching"
+   }
+  },
+  "cninfo": {
+   "name": "CNINFO disclosures",
+   "kind": "walled",
+   "hosts": ["www.cninfo.com.cn", "static.cninfo.com.cn"],
+   "sources": ["cninfo"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://www.cninfo.com.cn/",
+    "checked": "2026-09-28",
+    "where_checked": "a website or app front end, not a documented API: no published request rate. OmniSeek's own pacing here: none beyond caching"
+   }
+  },
+  "cnbc_quote": {
+   "name": "CNBC quote endpoint",
+   "kind": "walled",
+   "hosts": ["quote.cnbc.com"],
+   "sources": ["market_quote"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://quote.cnbc.com/",
+    "checked": "2026-09-28",
+    "where_checked": "a website or app front end, not a documented API: no published request rate. OmniSeek's own pacing here: none beyond caching"
+   }
+  },
+  "letpub": {
+   "name": "LetPub (NSFC awards)",
+   "kind": "walled",
+   "hosts": ["www.letpub.com.cn"],
+   "sources": ["nsfc_awards"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://www.letpub.com.cn/",
+    "checked": "2026-09-28",
+    "where_checked": "a website or app front end, not a documented API: no published request rate. OmniSeek's own pacing here: none beyond caching"
+   }
+  },
+  "xiaoyuzhou": {
+   "name": "Xiaoyuzhou podcasts",
+   "kind": "walled",
+   "hosts": ["www.xiaoyuzhoufm.com"],
+   "sources": ["xiaoyuzhou"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://www.xiaoyuzhoufm.com/",
+    "checked": "2026-09-28",
+    "where_checked": "a website or app front end, not a documented API: no published request rate. OmniSeek's own pacing here: none beyond caching"
+   }
+  },
+  "levels_fyi": {
+   "name": "Levels.fyi",
+   "kind": "walled",
+   "hosts": ["www.levels.fyi"],
+   "sources": ["levels_fyi"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://www.levels.fyi/",
+    "checked": "2026-09-28",
+    "where_checked": "a website or app front end, not a documented API: no published request rate. OmniSeek's own pacing here: none beyond caching"
+   }
+  },
+  "lmarena": {
+   "name": "LMArena leaderboard",
+   "kind": "walled",
+   "hosts": ["lmarena.ai"],
+   "sources": ["lmsys_arena"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://lmarena.ai/",
+    "checked": "2026-09-28",
+    "where_checked": "a website or app front end, not a documented API: no published request rate. OmniSeek's own pacing here: none beyond caching"
+   }
+  },
+  "openrouter_web": {
+   "name": "OpenRouter rankings page",
+   "kind": "walled",
+   "hosts": ["openrouter.ai"],
+   "sources": ["openrouter_rankings"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://openrouter.ai/",
+    "checked": "2026-09-28",
+    "where_checked": "a website or app front end, not a documented API: no published request rate. OmniSeek's own pacing here: none beyond caching"
+   }
+  },
+  "google_patents": {
+   "name": "Google Patents",
+   "kind": "walled",
+   "hosts": ["patents.google.com", "patentimages.storage.googleapis.com"],
+   "sources": ["google_patents"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://patents.google.com/",
+    "checked": "2026-09-28",
+    "where_checked": "a website or app front end, not a documented API: no published request rate. OmniSeek's own pacing here: none beyond caching",
+    "notes": "robots.txt could not be read on 2026-09-28: patentimages.storage.googleapis.com (403)"
+   }
+  },
+  "gov_cn_policy": {
+   "name": "gov.cn policy search",
+   "kind": "walled",
+   "hosts": ["sousuo.www.gov.cn"],
+   "sources": ["gov_policy"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://sousuo.www.gov.cn/",
+    "checked": "2026-09-28",
+    "where_checked": "a website or app front end, not a documented API: no published request rate. OmniSeek's own pacing here: none beyond caching"
+   }
+  },
+  "web:a_happy_phd": {
+   "name": "a_happy_phd (plain web)",
+   "kind": "web",
+   "hosts": ["ahappyphd.org"],
+   "sources": ["a_happy_phd"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://ahappyphd.org/robots.txt",
+    "checked": "2026-09-28",
+    "where_checked": "ordinary web pages / RSS or Atom feeds, not an API: no published request rate or quota. Checked: robots.txt of each host (2026-09-28 sweep); no Crawl-delay for User-agent *"
+   }
+  },
+  "web:aaip_draws": {
+   "name": "aaip_draws (plain web)",
+   "kind": "web",
+   "hosts": ["www.alberta.ca"],
+   "sources": ["aaip_draws"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://www.alberta.ca/robots.txt",
+    "checked": "2026-09-28",
+    "where_checked": "ordinary web pages / RSS or Atom feeds, not an API: no published request rate or quota. Checked: robots.txt of each host (2026-09-28 sweep); no Crawl-delay for User-agent *"
+   }
+  },
+  "web:academic_ai_labs": {
+   "name": "academic_ai_labs (plain web)",
+   "kind": "web",
+   "hosts": ["bair.berkeley.edu", "crfm.stanford.edu", "news.mit.edu"],
+   "sources": ["academic_ai_labs"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://bair.berkeley.edu/robots.txt",
+    "checked": "2026-09-28",
+    "where_checked": "ordinary web pages / RSS or Atom feeds, not an API: no published request rate or quota. Checked: robots.txt of each host (2026-09-28 sweep); no Crawl-delay for User-agent *",
+    "notes": "robots.txt could not be read on 2026-09-28: news.mit.edu (403)"
+   }
+  },
+  "web:academic_job_boards": {
+   "name": "academic_job_boards (plain web)",
+   "kind": "web",
+   "hosts": ["www.jobs.ac.uk"],
+   "sources": ["academic_job_boards"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://www.jobs.ac.uk/robots.txt",
+    "checked": "2026-09-28",
+    "where_checked": "ordinary web pages / RSS or Atom feeds, not an API: no published request rate or quota. Checked: robots.txt of each host (2026-09-28 sweep); no Crawl-delay for User-agent *"
+   }
+  },
+  "web:academic_jobs": {
+   "name": "academic_jobs (plain web)",
+   "kind": "web",
+   "hosts": ["www.nature.com"],
+   "sources": ["academic_jobs"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://www.nature.com/robots.txt",
+    "checked": "2026-09-28",
+    "where_checked": "ordinary web pages / RSS or Atom feeds, not an API: no published request rate or quota. Checked: robots.txt of each host (2026-09-28 sweep); no Crawl-delay for User-agent *"
+   }
+  },
+  "web:acl_anthology": {
+   "name": "acl_anthology (plain web)",
+   "kind": "web",
+   "hosts": ["aclanthology.org", "raw.githubusercontent.com"],
+   "sources": ["acl_anthology"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://aclanthology.org/robots.txt",
+    "checked": "2026-09-28",
+    "where_checked": "ordinary web pages / RSS or Atom feeds, not an API: no published request rate or quota. Checked: robots.txt of each host (2026-09-28 sweep); no Crawl-delay for User-agent *"
+   }
+  },
+  "web:agent_tooling_radar": {
+   "name": "agent_tooling_radar (plain web)",
+   "kind": "web",
+   "hosts": ["github.com", "simonwillison.net", "www.latent.space"],
+   "sources": ["agent_tooling_radar"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://github.com/robots.txt",
+    "checked": "2026-09-28",
+    "where_checked": "ordinary web pages / RSS or Atom feeds, not an API: no published request rate or quota. Checked: robots.txt of each host (2026-09-28 sweep); no Crawl-delay for User-agent *"
+   }
+  },
+  "web:ai_incidents": {
+   "name": "ai_incidents (plain web)",
+   "kind": "web",
+   "hosts": ["incidentdatabase.ai"],
+   "sources": ["ai_incidents"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://incidentdatabase.ai/robots.txt",
+    "checked": "2026-09-28",
+    "where_checked": "ordinary web pages / RSS or Atom feeds, not an API: no published request rate or quota. Checked: robots.txt of each host (2026-09-28 sweep); no Crawl-delay for User-agent *"
+   }
+  },
+  "web:ai_newsletters": {
+   "name": "ai_newsletters (plain web)",
+   "kind": "web",
+   "hosts": [
+     "aiweekly.co", "lastweekin.ai", "nicholas.carlini.com", "thegradient.pub",
+     "thesequence.substack.com"
+   ],
+   "sources": ["ai_newsletters"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://aiweekly.co/robots.txt",
+    "checked": "2026-09-28",
+    "where_checked": "ordinary web pages / RSS or Atom feeds, not an API: no published request rate or quota. Checked: robots.txt of each host (2026-09-28 sweep); no Crawl-delay for User-agent *"
+   }
+  },
+  "web:ajo": {
+   "name": "ajo (plain web)",
+   "kind": "web",
+   "hosts": ["academicjobsonline.org"],
+   "sources": ["ajo"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://academicjobsonline.org/robots.txt",
+    "checked": "2026-09-28",
+    "where_checked": "ordinary web pages / RSS or Atom feeds, not an API: no published request rate or quota. Checked: robots.txt of each host (2026-09-28 sweep); Crawl-delay enforced as host gates (driver decision, 2026-09-29): academicjobsonline.org 5s",
+    "robots_crawl_delay_s": {"academicjobsonline.org": 5.0}
+   }
+  },
+  "web:alignment_forum": {
+   "name": "alignment_forum (plain web)",
+   "kind": "web",
+   "hosts": ["www.alignmentforum.org"],
+   "sources": ["alignment_forum"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://www.alignmentforum.org/robots.txt",
+    "checked": "2026-09-28",
+    "where_checked": "ordinary web pages / RSS or Atom feeds, not an API: no published request rate or quota. Checked: robots.txt of each host (2026-09-28 sweep); Crawl-delay enforced as host gates (driver decision, 2026-09-29): www.alignmentforum.org 3s",
+    "robots_crawl_delay_s": {"www.alignmentforum.org": 3.0}
+   }
+  },
+  "web:bcpnp_invitations": {
+   "name": "bcpnp_invitations (plain web)",
+   "kind": "web",
+   "hosts": ["www.welcomebc.ca"],
+   "sources": ["bcpnp_invitations"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://www.welcomebc.ca/robots.txt",
+    "checked": "2026-09-28",
+    "where_checked": "ordinary web pages / RSS or Atom feeds, not an API: no published request rate or quota. Checked: robots.txt of each host (2026-09-28 sweep); no Crawl-delay for User-agent *"
+   }
+  },
+  "web:biorxiv": {
+   "name": "biorxiv (plain web)",
+   "kind": "web",
+   "hosts": ["connect.biorxiv.org"],
+   "sources": ["biorxiv"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://connect.biorxiv.org/robots.txt",
+    "checked": "2026-09-28",
+    "where_checked": "ordinary web pages / RSS or Atom feeds, not an API: no published request rate or quota. Checked: robots.txt of each host (2026-09-28 sweep); Crawl-delay enforced as host gates (driver decision, 2026-09-29): connect.biorxiv.org 10s",
+    "robots_crawl_delay_s": {"connect.biorxiv.org": 10.0}
+   }
+  },
+  "web:canada_ai_research": {
+   "name": "canada_ai_research (plain web)",
+   "kind": "web",
+   "hosts": [
+     "betakit.com", "cifar.ca", "layer6.ai", "mila.quebec", "srinstitute.utoronto.ca",
+     "uwaterloo.ca", "vectorinstitute.ai", "www.theglobeandmail.com"
+   ],
+   "sources": ["canada_ai_research"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://betakit.com/robots.txt",
+    "checked": "2026-09-28",
+    "where_checked": "ordinary web pages / RSS or Atom feeds, not an API: no published request rate or quota. Checked: robots.txt of each host (2026-09-28 sweep); no Crawl-delay for User-agent *"
+   }
+  },
+  "web:canada_immigration": {
+   "name": "canada_immigration (plain web)",
+   "kind": "web",
+   "hosts": ["api.io.canada.ca", "moving2canada.com", "www.cictimes.com", "www.immigration.ca"],
+   "sources": ["canada_immigration"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://api.io.canada.ca/robots.txt",
+    "checked": "2026-09-28",
+    "where_checked": "ordinary web pages / RSS or Atom feeds, not an API: no published request rate or quota. Checked: robots.txt of each host (2026-09-28 sweep); no Crawl-delay for User-agent *"
+   }
+  },
+  "web:canada_jobbank_wages": {
+   "name": "canada_jobbank_wages (plain web)",
+   "kind": "web",
+   "hosts": ["www.jobbank.gc.ca"],
+   "sources": ["canada_jobbank_wages"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://www.jobbank.gc.ca/robots.txt",
+    "checked": "2026-09-28",
+    "where_checked": "ordinary web pages / RSS or Atom feeds, not an API: no published request rate or quota. Checked: robots.txt of each host (2026-09-28 sweep); Crawl-delay enforced as host gates (driver decision, 2026-09-29): www.jobbank.gc.ca 5s",
+    "robots_crawl_delay_s": {"www.jobbank.gc.ca": 5.0}
+   }
+  },
+  "web:chinese_ai_media": {
+   "name": "chinese_ai_media (plain web)",
+   "kind": "web",
+   "hosts": ["01.me", "decemberpei.cyou", "www.qbitai.com"],
+   "sources": ["chinese_ai_media"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://01.me/robots.txt",
+    "checked": "2026-09-28",
+    "where_checked": "ordinary web pages / RSS or Atom feeds, not an API: no published request rate or quota. Checked: robots.txt of each host (2026-09-28 sweep); no Crawl-delay for User-agent *"
+   }
+  },
+  "web:chinese_podcasts": {
+   "name": "chinese_podcasts (plain web)",
+   "kind": "web",
+   "hosts": ["anchor.fm", "feeds.fireside.fm", "rss.buzzsprout.com"],
+   "sources": ["chinese_podcasts"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://anchor.fm/robots.txt",
+    "checked": "2026-09-28",
+    "where_checked": "ordinary web pages / RSS or Atom feeds, not an API: no published request rate or quota. Checked: robots.txt of each host (2026-09-28 sweep); no Crawl-delay for User-agent *"
+   }
+  },
+  "web:conference_deadlines": {
+   "name": "conference_deadlines (plain web)",
+   "kind": "web",
+   "hosts": ["ccfddl.github.io"],
+   "sources": ["conference_deadlines"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://ccfddl.github.io/robots.txt",
+    "checked": "2026-09-28",
+    "where_checked": "ordinary web pages / RSS or Atom feeds, not an API: no published request rate or quota. Checked: robots.txt of each host (2026-09-28 sweep); no Crawl-delay for User-agent *"
+   }
+  },
+  "web:cset": {
+   "name": "cset (plain web)",
+   "kind": "web",
+   "hosts": ["cset.georgetown.edu"],
+   "sources": ["cset"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://cset.georgetown.edu/robots.txt",
+    "checked": "2026-09-28",
+    "where_checked": "ordinary web pages / RSS or Atom feeds, not an API: no published request rate or quota. Checked: robots.txt of each host (2026-09-28 sweep); no Crawl-delay for User-agent *",
+    "notes": "robots.txt could not be read on 2026-09-28: cset.georgetown.edu (403)"
+   }
+  },
+  "web:csrankings": {
+   "name": "csrankings (plain web)",
+   "kind": "web",
+   "hosts": ["raw.githubusercontent.com"],
+   "sources": ["csrankings"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://raw.githubusercontent.com/robots.txt",
+    "checked": "2026-09-28",
+    "where_checked": "ordinary web pages / RSS or Atom feeds, not an API: no published request rate or quota. Checked: robots.txt of each host (2026-09-28 sweep); no Crawl-delay for User-agent *"
+   }
+  },
+  "web:cvf_openaccess": {
+   "name": "cvf_openaccess (plain web)",
+   "kind": "web",
+   "hosts": ["openaccess.thecvf.com"],
+   "sources": ["cvf_openaccess"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://openaccess.thecvf.com/robots.txt",
+    "checked": "2026-09-28",
+    "where_checked": "ordinary web pages / RSS or Atom feeds, not an API: no published request rate or quota. Checked: robots.txt of each host (2026-09-28 sweep); no Crawl-delay for User-agent *"
+   }
+  },
+  "web:discourse_forums": {
+   "name": "discourse_forums (plain web)",
+   "kind": "web",
+   "hosts": ["discuss.huggingface.co", "discuss.pytorch.org", "forums.fast.ai"],
+   "sources": ["discourse_forums"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://discuss.huggingface.co/robots.txt",
+    "checked": "2026-09-28",
+    "where_checked": "ordinary web pages / RSS or Atom feeds, not an API: no published request rate or quota. Checked: robots.txt of each host (2026-09-28 sweep); no Crawl-delay for User-agent *"
+   }
+  },
+  "web:distill_pub": {
+   "name": "distill_pub (plain web)",
+   "kind": "web",
+   "hosts": ["distill.pub"],
+   "sources": ["distill_pub"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://distill.pub/robots.txt",
+    "checked": "2026-09-28",
+    "where_checked": "ordinary web pages / RSS or Atom feeds, not an API: no published request rate or quota. Checked: robots.txt of each host (2026-09-28 sweep); no Crawl-delay for User-agent *"
+   }
+  },
+  "web:epoch_ai_models": {
+   "name": "epoch_ai_models (plain web)",
+   "kind": "web",
+   "hosts": ["epoch.ai"],
+   "sources": ["epoch_ai_models"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://epoch.ai/robots.txt",
+    "checked": "2026-09-28",
+    "where_checked": "ordinary web pages / RSS or Atom feeds, not an API: no published request rate or quota. Checked: robots.txt of each host (2026-09-28 sweep); no Crawl-delay for User-agent *"
+   }
+  },
+  "web:fellowships": {
+   "name": "fellowships (plain web)",
+   "kind": "web",
+   "hosts": [
+     "aisingapore.org", "blogs.nvidia.com", "brancoweissfellowship.org", "cifar.ca", "foresight.org",
+     "funds.effectivealtruism.org", "ivado.ca", "machinelearning.apple.com", "manifund.org",
+     "metaresearchphdfellowship.smapply.io", "research.google", "schmidtsciencefellows.org",
+     "vectorinstitute.ai", "www.a-star.edu.sg", "www.cooperativeai.com", "www.microsoft.com",
+     "www.nrf.gov.sg", "www.nserc-crsng.canada.ca", "www.ntu.edu.sg", "www.nus.edu.sg",
+     "www.openphilanthropy.org", "www.qualcomm.com"
+   ],
+   "sources": ["fellowships"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://aisingapore.org/robots.txt",
+    "checked": "2026-09-28",
+    "where_checked": "ordinary web pages / RSS or Atom feeds, not an API: no published request rate or quota. Checked: robots.txt of each host (2026-09-28 sweep); Crawl-delay enforced as host gates (driver decision, 2026-09-29): schmidtsciencefellows.org 3s",
+    "robots_crawl_delay_s": {"schmidtsciencefellows.org": 3.0},
+    "notes": "robots.txt could not be read on 2026-09-28: www.nserc-crsng.canada.ca (ConnectError), www.openphilanthropy.org (403)"
+   }
+  },
+  "web:frontier_labs": {
+   "name": "frontier_labs (plain web)",
+   "kind": "web",
+   "hosts": [
+     "allenai.org", "aws.amazon.com", "blog.character.ai", "blog.eleuther.ai", "blogs.nvidia.com",
+     "deepmind.google", "huggingface.co", "machinelearning.apple.com", "mistral.ai", "openai.com",
+     "pytorch.org", "raw.githubusercontent.com", "research.facebook.com", "research.google",
+     "sakana.ai", "www.microsoft.com", "www.together.ai"
+   ],
+   "sources": ["frontier_labs"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://allenai.org/robots.txt",
+    "checked": "2026-09-28",
+    "where_checked": "ordinary web pages / RSS or Atom feeds, not an API: no published request rate or quota. Checked: robots.txt of each host (2026-09-28 sweep); no Crawl-delay for User-agent *",
+    "notes": "robots.txt could not be read on 2026-09-28: pytorch.org (403)"
+   }
+  },
+  "web:github_awesome_phd": {
+   "name": "github_awesome_phd (plain web)",
+   "kind": "web",
+   "hosts": ["github.com", "raw.githubusercontent.com"],
+   "sources": ["github_awesome_phd"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://github.com/robots.txt",
+    "checked": "2026-09-28",
+    "where_checked": "ordinary web pages / RSS or Atom feeds, not an API: no published request rate or quota. Checked: robots.txt of each host (2026-09-28 sweep); no Crawl-delay for User-agent *"
+   }
+  },
+  "web:github_releases": {
+   "name": "github_releases (plain web)",
+   "kind": "web",
+   "hosts": ["github.com"],
+   "sources": ["github_releases"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://github.com/robots.txt",
+    "checked": "2026-09-28",
+    "where_checked": "ordinary web pages / RSS or Atom feeds, not an API: no published request rate or quota. Checked: robots.txt of each host (2026-09-28 sweep); no Crawl-delay for User-agent *"
+   }
+  },
+  "web:gpu_pricing": {
+   "name": "gpu_pricing (plain web)",
+   "kind": "web",
+   "hosts": ["cloud-gpus.com", "raw.githubusercontent.com"],
+   "sources": ["gpu_pricing"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://cloud-gpus.com/robots.txt",
+    "checked": "2026-09-28",
+    "where_checked": "ordinary web pages / RSS or Atom feeds, not an API: no published request rate or quota. Checked: robots.txt of each host (2026-09-28 sweep); no Crawl-delay for User-agent *"
+   }
+  },
+  "web:gter": {
+   "name": "gter (plain web)",
+   "kind": "web",
+   "hosts": ["f.gter.net"],
+   "sources": ["gter"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://f.gter.net/robots.txt",
+    "checked": "2026-09-28",
+    "where_checked": "ordinary web pages / RSS or Atom feeds, not an API: no published request rate or quota. Checked: robots.txt of each host (2026-09-28 sweep); Crawl-delay enforced as host gates (driver decision, 2026-09-29): f.gter.net 10s",
+    "robots_crawl_delay_s": {"f.gter.net": 10.0}
+   }
+  },
+  "web:higheredjobs_cs": {
+   "name": "higheredjobs_cs (plain web)",
+   "kind": "web",
+   "hosts": ["www.higheredjobs.com"],
+   "sources": ["higheredjobs_cs"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://www.higheredjobs.com/robots.txt",
+    "checked": "2026-09-28",
+    "where_checked": "ordinary web pages / RSS or Atom feeds, not an API: no published request rate or quota. Checked: robots.txt of each host (2026-09-28 sweep); no Crawl-delay for User-agent *"
+   }
+  },
+  "web:hk_career_research": {
+   "name": "hk_career_research (plain web)",
+   "kind": "web",
+   "hosts": ["hongkongfp.com", "www.astri.org", "www.info.gov.hk", "www.news.gov.hk", "www.scmp.com"],
+   "sources": ["hk_career_research"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://hongkongfp.com/robots.txt",
+    "checked": "2026-09-28",
+    "where_checked": "ordinary web pages / RSS or Atom feeds, not an API: no published request rate or quota. Checked: robots.txt of each host (2026-09-28 sweep); Crawl-delay enforced as host gates (driver decision, 2026-09-29): www.scmp.com 10s",
+    "robots_crawl_delay_s": {"www.scmp.com": 10.0}
+   }
+  },
+  "web:hk_universities": {
+   "name": "hk_universities (plain web)",
+   "kind": "web",
+   "hosts": [
+     "cse.hkust.edu.hk", "www.cs.cityu.edu.hk", "www.cs.hku.hk", "www.cse.cuhk.edu.hk",
+     "www.polyu.edu.hk"
+   ],
+   "sources": ["hk_universities"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://cse.hkust.edu.hk/robots.txt",
+    "checked": "2026-09-28",
+    "where_checked": "ordinary web pages / RSS or Atom feeds, not an API: no published request rate or quota. Checked: robots.txt of each host (2026-09-28 sweep); no Crawl-delay for User-agent *",
+    "notes": "robots.txt could not be read on 2026-09-28: www.cs.hku.hk (ConnectTimeout)"
+   }
+  },
+  "web:jobrxiv_canada": {
+   "name": "jobrxiv_canada (plain web)",
+   "kind": "web",
+   "hosts": ["jobrxiv.org"],
+   "sources": ["jobrxiv_canada"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://jobrxiv.org/robots.txt",
+    "checked": "2026-09-28",
+    "where_checked": "ordinary web pages / RSS or Atom feeds, not an API: no published request rate or quota. Checked: robots.txt of each host (2026-09-28 sweep); no Crawl-delay for User-agent *"
+   }
+  },
+  "web:kexue_fm": {
+   "name": "kexue_fm (plain web)",
+   "kind": "web",
+   "hosts": ["kexue.fm"],
+   "sources": ["kexue_fm"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://kexue.fm/robots.txt",
+    "checked": "2026-09-28",
+    "where_checked": "ordinary web pages / RSS or Atom feeds, not an API: no published request rate or quota. Checked: robots.txt of each host (2026-09-28 sweep); no Crawl-delay for User-agent *"
+   }
+  },
+  "web:lesswrong": {
+   "name": "lesswrong (plain web)",
+   "kind": "web",
+   "hosts": ["www.alignmentforum.org", "www.lesswrong.com"],
+   "sources": ["lesswrong"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://www.alignmentforum.org/robots.txt",
+    "checked": "2026-09-28",
+    "where_checked": "ordinary web pages / RSS or Atom feeds, not an API: no published request rate or quota. Checked: robots.txt of each host (2026-09-28 sweep); Crawl-delay enforced as host gates (driver decision, 2026-09-29): www.alignmentforum.org 3s, www.lesswrong.com 3s",
+    "robots_crawl_delay_s": {"www.alignmentforum.org": 3.0, "www.lesswrong.com": 3.0}
+   }
+  },
+  "web:lobsters": {
+   "name": "lobsters (plain web)",
+   "kind": "web",
+   "hosts": ["lobste.rs"],
+   "sources": ["lobsters"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://lobste.rs/robots.txt",
+    "checked": "2026-09-28",
+    "where_checked": "ordinary web pages / RSS or Atom feeds, not an API: no published request rate or quota. Checked: robots.txt of each host (2026-09-28 sweep); Crawl-delay enforced as host gates (driver decision, 2026-09-29): lobste.rs 1s",
+    "robots_crawl_delay_s": {"lobste.rs": 1.0}
+   }
+  },
+  "web:ml_cmu_blog": {
+   "name": "ml_cmu_blog (plain web)",
+   "kind": "web",
+   "hosts": ["blog.ml.cmu.edu"],
+   "sources": ["ml_cmu_blog"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://blog.ml.cmu.edu/robots.txt",
+    "checked": "2026-09-28",
+    "where_checked": "ordinary web pages / RSS or Atom feeds, not an API: no published request rate or quota. Checked: robots.txt of each host (2026-09-28 sweep); Crawl-delay enforced as host gates (driver decision, 2026-09-29): blog.ml.cmu.edu 20s",
+    "robots_crawl_delay_s": {"blog.ml.cmu.edu": 20.0}
+   }
+  },
+  "web:ml_collective": {
+   "name": "ml_collective (plain web)",
+   "kind": "web",
+   "hosts": ["mlcollective.org"],
+   "sources": ["ml_collective"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://mlcollective.org/robots.txt",
+    "checked": "2026-09-28",
+    "where_checked": "ordinary web pages / RSS or Atom feeds, not an API: no published request rate or quota. Checked: robots.txt of each host (2026-09-28 sweep); no Crawl-delay for User-agent *"
+   }
+  },
+  "web:ml_conferences": {
+   "name": "ml_conferences (plain web)",
+   "kind": "web",
+   "hosts": ["blog.iclr.cc", "blog.icml.cc", "blog.neurips.cc"],
+   "sources": ["ml_conferences"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://blog.iclr.cc/robots.txt",
+    "checked": "2026-09-28",
+    "where_checked": "ordinary web pages / RSS or Atom feeds, not an API: no published request rate or quota. Checked: robots.txt of each host (2026-09-28 sweep); Crawl-delay enforced as host gates (driver decision, 2026-09-29): blog.iclr.cc 20s, blog.icml.cc 20s, blog.neurips.cc 20s",
+    "robots_crawl_delay_s": {"blog.iclr.cc": 20.0, "blog.icml.cc": 20.0, "blog.neurips.cc": 20.0}
+   }
+  },
+  "web:ml_eval_safety": {
+   "name": "ml_eval_safety (plain web)",
+   "kind": "web",
+   "hosts": ["epochai.substack.com", "metr.substack.com"],
+   "sources": ["ml_eval_safety"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://epochai.substack.com/robots.txt",
+    "checked": "2026-09-28",
+    "where_checked": "ordinary web pages / RSS or Atom feeds, not an API: no published request rate or quota. Checked: robots.txt of each host (2026-09-28 sweep); no Crawl-delay for User-agent *"
+   }
+  },
+  "web:mpnp_draws": {
+   "name": "mpnp_draws (plain web)",
+   "kind": "web",
+   "hosts": ["immigratemanitoba.com"],
+   "sources": ["mpnp_draws"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://immigratemanitoba.com/robots.txt",
+    "checked": "2026-09-28",
+    "where_checked": "ordinary web pages / RSS or Atom feeds, not an API: no published request rate or quota. Checked: robots.txt of each host (2026-09-28 sweep); no Crawl-delay for User-agent *"
+   }
+  },
+  "web:nature_careers": {
+   "name": "nature_careers (plain web)",
+   "kind": "web",
+   "hosts": ["www.nature.com"],
+   "sources": ["nature_careers"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://www.nature.com/robots.txt",
+    "checked": "2026-09-28",
+    "where_checked": "ordinary web pages / RSS or Atom feeds, not an API: no published request rate or quota. Checked: robots.txt of each host (2026-09-28 sweep); no Crawl-delay for User-agent *"
+   }
+  },
+  "web:page_watch": {
+   "name": "page_watch (plain web)",
+   "kind": "web",
+   "hosts": [
+     "brave.com", "brightdata.com", "core.ac.uk", "docs.exa.ai", "docs.valyu.ai", "github.com",
+     "jina.ai", "tavily.com", "tikhub.io", "www.firecrawl.dev", "www.ica.gov.sg", "www.mom.gov.sg",
+     "www.scrapingbee.com"
+   ],
+   "sources": ["page_watch"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://brave.com/robots.txt",
+    "checked": "2026-09-28",
+    "where_checked": "ordinary web pages / RSS or Atom feeds, not an API: no published request rate or quota. Checked: robots.txt of each host (2026-09-28 sweep); Crawl-delay enforced as host gates (driver decision, 2026-09-29): brightdata.com 5s",
+    "robots_crawl_delay_s": {"brightdata.com": 5.0}
+   }
+  },
+  "web:pmlr": {
+   "name": "pmlr (plain web)",
+   "kind": "web",
+   "hosts": ["proceedings.mlr.press"],
+   "sources": ["pmlr"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://proceedings.mlr.press/robots.txt",
+    "checked": "2026-09-28",
+    "where_checked": "ordinary web pages / RSS or Atom feeds, not an API: no published request rate or quota. Checked: robots.txt of each host (2026-09-28 sweep); no Crawl-delay for User-agent *"
+   }
+  },
+  "web:remotive": {
+   "name": "remotive (plain web)",
+   "kind": "web",
+   "hosts": ["remotive.com"],
+   "sources": ["remotive"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://remotive.com/robots.txt",
+    "checked": "2026-09-28",
+    "where_checked": "ordinary web pages / RSS or Atom feeds, not an API: no published request rate or quota. Checked: robots.txt of each host (2026-09-28 sweep); no Crawl-delay for User-agent *"
+   }
+  },
+  "web:rl_llm_frameworks": {
+   "name": "rl_llm_frameworks (plain web)",
+   "kind": "web",
+   "hosts": ["github.com"],
+   "sources": ["rl_llm_frameworks"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://github.com/robots.txt",
+    "checked": "2026-09-28",
+    "where_checked": "ordinary web pages / RSS or Atom feeds, not an API: no published request rate or quota. Checked: robots.txt of each host (2026-09-28 sweep); no Crawl-delay for User-agent *"
+   }
+  },
+  "web:scrape_canada": {
+   "name": "scrape_canada (plain web)",
+   "kind": "web",
+   "hosts": ["rbcborealis.com"],
+   "sources": ["scrape_canada"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://rbcborealis.com/robots.txt",
+    "checked": "2026-09-28",
+    "where_checked": "ordinary web pages / RSS or Atom feeds, not an API: no published request rate or quota. Checked: robots.txt of each host (2026-09-28 sweep); no Crawl-delay for User-agent *"
+   }
+  },
+  "web:scrape_hongkong": {
+   "name": "scrape_hongkong (plain web)",
+   "kind": "web",
+   "hosts": ["www.hkstp.org"],
+   "sources": ["scrape_hongkong"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://www.hkstp.org/robots.txt",
+    "checked": "2026-09-28",
+    "where_checked": "ordinary web pages / RSS or Atom feeds, not an API: no published request rate or quota. Checked: robots.txt of each host (2026-09-28 sweep); no Crawl-delay for User-agent *"
+   }
+  },
+  "web:scrape_js_sites": {
+   "name": "scrape_js_sites (plain web)",
+   "kind": "web",
+   "hosts": [
+     "www.amii.ca", "www.apolloresearch.ai", "www.itib.gov.hk", "www.ntu.edu.sg",
+     "www.sensetime.com"
+   ],
+   "sources": ["scrape_js_sites"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://www.amii.ca/robots.txt",
+    "checked": "2026-09-28",
+    "where_checked": "ordinary web pages / RSS or Atom feeds, not an API: no published request rate or quota. Checked: robots.txt of each host (2026-09-28 sweep); no Crawl-delay for User-agent *"
+   }
+  },
+  "web:scrape_ml_orgs": {
+   "name": "scrape_ml_orgs (plain web)",
+   "kind": "web",
+   "hosts": ["simon.peytonjones.org", "www.aisi.gov.uk", "www.baseten.co"],
+   "sources": ["scrape_ml_orgs"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://simon.peytonjones.org/robots.txt",
+    "checked": "2026-09-28",
+    "where_checked": "ordinary web pages / RSS or Atom feeds, not an API: no published request rate or quota. Checked: robots.txt of each host (2026-09-28 sweep); no Crawl-delay for User-agent *"
+   }
+  },
+  "web:scrape_singapore": {
+   "name": "scrape_singapore (plain web)",
+   "kind": "web",
+   "hosts": [
+     "computing.smu.edu.sg", "sea-lion.ai", "www.a-star.edu.sg", "www.fragomen.com",
+     "www.mom.gov.sg"
+   ],
+   "sources": ["scrape_singapore"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://computing.smu.edu.sg/robots.txt",
+    "checked": "2026-09-28",
+    "where_checked": "ordinary web pages / RSS or Atom feeds, not an API: no published request rate or quota. Checked: robots.txt of each host (2026-09-28 sweep); no Crawl-delay for User-agent *"
+   }
+  },
+  "web:sg_immigration": {
+   "name": "sg_immigration (plain web)",
+   "kind": "web",
+   "hosts": ["iasg.com.sg", "www.singaporeexpats.com"],
+   "sources": ["sg_immigration"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://iasg.com.sg/robots.txt",
+    "checked": "2026-09-28",
+    "where_checked": "ordinary web pages / RSS or Atom feeds, not an API: no published request rate or quota. Checked: robots.txt of each host (2026-09-28 sweep); no Crawl-delay for User-agent *",
+    "notes": "robots.txt could not be read on 2026-09-28: iasg.com.sg (ConnectError)"
+   }
+  },
+  "web:singapore_ai_research": {
+   "name": "singapore_ai_research (plain web)",
+   "kind": "web",
+   "hosts": [
+     "aisingapore.org", "engineering.grab.com", "feeds.feedburner.com", "news.nus.edu.sg",
+     "vulcanpost.com", "www.techinasia.com"
+   ],
+   "sources": ["singapore_ai_research"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://aisingapore.org/robots.txt",
+    "checked": "2026-09-28",
+    "where_checked": "ordinary web pages / RSS or Atom feeds, not an API: no published request rate or quota. Checked: robots.txt of each host (2026-09-28 sweep); Crawl-delay enforced as host gates (driver decision, 2026-09-29): news.nus.edu.sg 5s",
+    "robots_crawl_delay_s": {"news.nus.edu.sg": 5.0}
+   }
+  },
+  "web:slideslive_talks": {
+   "name": "slideslive_talks (plain web)",
+   "kind": "web",
+   "hosts": ["slideslive.com"],
+   "sources": ["slideslive_talks"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://slideslive.com/robots.txt",
+    "checked": "2026-09-28",
+    "where_checked": "ordinary web pages / RSS or Atom feeds, not an API: no published request rate or quota. Checked: robots.txt of each host (2026-09-28 sweep); no Crawl-delay for User-agent *"
+   }
+  },
+  "web:substack_matrix": {
+   "name": "substack_matrix (plain web)",
+   "kind": "web",
+   "hosts": [
+     "benjamintodd.substack.com", "blog.ezyang.com", "calnewport.com", "chinai.substack.com",
+     "eugeneyan.com", "importai.substack.com", "lemire.me", "lilianweng.github.io",
+     "magazine.sebastianraschka.com", "newsletter.pragmaticengineer.com", "simonwillison.net",
+     "statmodeling.stat.columbia.edu", "thealgorithmicbridge.substack.com", "theprofessorisin.com",
+     "timdettmers.com", "tridao.me", "www.aisnakeoil.com", "www.argmin.net",
+     "www.astralcodexten.com", "www.dwarkesh.com", "www.interconnects.ai"
+   ],
+   "sources": ["substack_matrix"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://benjamintodd.substack.com/robots.txt",
+    "checked": "2026-09-28",
+    "where_checked": "ordinary web pages / RSS or Atom feeds, not an API: no published request rate or quota. Checked: robots.txt of each host (2026-09-28 sweep); Crawl-delay enforced as host gates (driver decision, 2026-09-29): lemire.me 10s, statmodeling.stat.columbia.edu 3600s",
+    "robots_crawl_delay_s": {"lemire.me": 10.0, "statmodeling.stat.columbia.edu": 3600.0}
+   }
+  },
+  "web:thesis_whisperer": {
+   "name": "thesis_whisperer (plain web)",
+   "kind": "web",
+   "hosts": ["thesiswhisperer.com"],
+   "sources": ["thesis_whisperer"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://thesiswhisperer.com/robots.txt",
+    "checked": "2026-09-28",
+    "where_checked": "ordinary web pages / RSS or Atom feeds, not an API: no published request rate or quota. Checked: robots.txt of each host (2026-09-28 sweep); no Crawl-delay for User-agent *"
+   }
+  },
+  "web:transformer_circuits": {
+   "name": "transformer_circuits (plain web)",
+   "kind": "web",
+   "hosts": ["transformer-circuits.pub"],
+   "sources": ["transformer_circuits"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://transformer-circuits.pub/robots.txt",
+    "checked": "2026-09-28",
+    "where_checked": "ordinary web pages / RSS or Atom feeds, not an API: no published request rate or quota. Checked: robots.txt of each host (2026-09-28 sweep); no Crawl-delay for User-agent *"
+   }
+  },
+  "web:underline_talks": {
+   "name": "underline_talks (plain web)",
+   "kind": "web",
+   "hosts": ["ai.underline.io", "app.underline.io", "underline.io"],
+   "sources": ["underline_talks"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://ai.underline.io/robots.txt",
+    "checked": "2026-09-28",
+    "where_checked": "ordinary web pages / RSS or Atom feeds, not an API: no published request rate or quota. Checked: robots.txt of each host (2026-09-28 sweep); no Crawl-delay for User-agent *"
+   }
+  },
+  "web:vector_talent_hub": {
+   "name": "vector_talent_hub (plain web)",
+   "kind": "web",
+   "hosts": ["talenthub.vectorinstitute.ai"],
+   "sources": ["vector_talent_hub"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://talenthub.vectorinstitute.ai/robots.txt",
+    "checked": "2026-09-28",
+    "where_checked": "ordinary web pages / RSS or Atom feeds, not an API: no published request rate or quota. Checked: robots.txt of each host (2026-09-28 sweep); no Crawl-delay for User-agent *"
+   }
+  },
+  "web:wikicfp_nlp": {
+   "name": "wikicfp_nlp (plain web)",
+   "kind": "web",
+   "hosts": ["www.wikicfp.com"],
+   "sources": ["wikicfp_nlp"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://www.wikicfp.com/robots.txt",
+    "checked": "2026-09-28",
+    "where_checked": "ordinary web pages / RSS or Atom feeds, not an API: no published request rate or quota. Checked: robots.txt of each host (2026-09-28 sweep); no Crawl-delay for User-agent *",
+    "notes": "robots.txt could not be read on 2026-09-28: www.wikicfp.com (ConnectTimeout)"
+   }
+  }
+ }
+}

@@ -33,7 +33,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlsplit, urlunsplit
 
 import anyio
 import httpx
@@ -130,9 +130,9 @@ def _http_get(url: str, *, timeout: int = TIMEOUT, **kwargs) -> Optional[httpx.R
             _sema_for(url),
             timeout,
             lambda waited: GateBusy(f"ATS gate busy after {waited:.1f}s for {urlparse(url).hostname}"),
-        ):
-            resp = httpx.get(
-                url,
+        ):  # declared host gates of every hop in http.direct (api.lever.co: robots Crawl-delay 1 s)
+            resp = http.direct(
+                "GET", url,
                 headers={"User-Agent": USER_AGENT, "Accept-Language": "en-US,en;q=0.9,zh;q=0.8"},
                 timeout=timeout,
                 follow_redirects=True,
@@ -627,6 +627,30 @@ def _rows() -> list[dict]:
     return json.loads(_DATA.read_text(encoding="utf-8"))
 
 
+_DEFAULT_PORTS = {"http": 80, "https": 443}
+
+
+def _url_key(url: str) -> str:
+    """The identity fetch_url claims by: two spellings of ONE page get the same key.
+
+    Folds scheme and host case, a default port and the #fragment (none of them changes what the
+    server returns), plus a trailing slash, since the config itself spells program pages both
+    ways. The query is kept: on a job board it can carry the posting id. Returns "" for anything
+    without a host."""
+    try:
+        parts = urlsplit((url or "").strip())
+        port = parts.port
+    except ValueError:
+        return ""
+    host = parts.hostname or ""
+    if not host:
+        return ""
+    scheme = parts.scheme.lower()
+    if port is not None and port != _DEFAULT_PORTS.get(scheme):
+        host = f"{host}:{port}"
+    return urlunsplit((scheme, host, parts.path.rstrip("/"), parts.query, ""))
+
+
 # ---------------------------------------------------------------------------
 # Adapter
 # ---------------------------------------------------------------------------
@@ -793,14 +817,17 @@ class AIResidenciesAdapter:
         return [p.to_omniseek_doc() for _, p in scored[:limit]]
 
     def fetch_url(self, url: str) -> Optional[Document]:
-        host = (urlparse(url).hostname or "").lower()
-        positions = self._fetch_all_positions()
-        for p in positions:
-            if p.url == url:
-                return p.to_omniseek_doc()
-        for p in positions:  # no exact match: host match
-            p_host = (urlparse(p.url).hostname or "").lower()
-            if p_host and (p_host == host or p_host.endswith("." + host) or host.endswith("." + p_host)):
+        # Claim a URL only when it IS one of this source's pages (a configured program page, or a
+        # posting a board returned), compared by _url_key. Another page on the same site is not
+        # ours. The host fallback that used to follow the exact match accepted the same host, a
+        # subdomain or a parent domain, and returned whichever row matched first: a link on
+        # openai.com itself came back as the OpenAI Safety Fellowship row (alignment.openai.com
+        # ends with ".openai.com").
+        want = _url_key(url)
+        if not want:
+            return None
+        for p in self._fetch_all_positions():
+            if _url_key(p.url) == want:
                 return p.to_omniseek_doc()
         return None
 

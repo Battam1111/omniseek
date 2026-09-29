@@ -158,9 +158,15 @@ class NowcoderAdapter:
             feed.extend(self._fetch_job(jid))
         scanned = len(feed)
         q = (query or "").strip()
+        from omniseek.core.sources.api._search_backend import WebSearchUnavailable
         if not q:
             if not feed:  # gateway yielded nothing (CDP down) → the site search still serves
-                return self._search_fallback("", limit)
+                try:
+                    return self._search_fallback("", limit)
+                except WebSearchUnavailable as exc:  # no engine may serve it: empty, and say why
+                    diag.note("nowcoder.backend", url=API, exc=exc,
+                              body="native feed empty and the site search has no engine it may use")
+                    return []
             feed.sort(key=lambda d: d.date or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
             out = feed[:limit]
             for d in out:
@@ -171,8 +177,17 @@ class NowcoderAdapter:
         for d in native:
             d.metadata["via"] = "native-feed-filter"
             d.metadata["feed_scanned"] = scanned
+        site_unavailable = False
         try:
             site = self._search_fallback(q, limit)
+        except WebSearchUnavailable as exc:
+            # No engine may serve the site search (Brave unkeyed / cooling / failing, and the fallback
+            # switched off by its declaration): keep the feed matches, otherwise return empty, and say
+            # why either way.
+            diag.note("nowcoder.backend", url=API, exc=exc,
+                      body=("site search unavailable; returning the native-feed matches only" if native
+                            else "site search unavailable and no native-feed match; nothing to return"))
+            site, site_unavailable = [], True
         except RuntimeError as exc:
             # The site search now runs on EVERY query, which puts the SHARED backend's cooldown in
             # front of a path that used to be feed-only. Re-raise when there is nothing else to hand
@@ -201,7 +216,8 @@ class NowcoderAdapter:
         ranked = keyword_score_filter(pool, q)
         ranked_ids = {id(d) for d in ranked}
         docs = (ranked + [d for d in pool if id(d) not in ranked_ids])[:limit]
-        if not docs:  # failure branch only, per diag.note's contract
+        # failure branch only, per diag.note's contract (an unavailable site search is captured above)
+        if not docs and not site_unavailable:
             diag.note("nowcoder.no_match", url=API,
                       body=f"feed scanned {scanned} recent posts (job tags {self._job_ids()}), "
                            f"none matched {q!r}; site search returned 0")

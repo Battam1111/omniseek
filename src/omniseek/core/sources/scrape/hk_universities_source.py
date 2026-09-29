@@ -29,7 +29,6 @@ from typing import Optional
 from urllib.parse import urljoin, urlparse
 
 import anyio
-import httpx
 from bs4 import BeautifulSoup
 
 from omniseek.core import cache, diag, http
@@ -106,8 +105,8 @@ def _parse_news_date(text: str) -> Optional[datetime.date]:
 
 def _fetch_html(url: str) -> Optional[str]:
     try:
-        resp = httpx.get(
-            url,
+        resp = http.direct(
+            "GET", url,
             headers={"User-Agent": USER_AGENT, "Accept-Language": "en-US,en;q=0.9,zh;q=0.8"},
             timeout=TIMEOUT,
             follow_redirects=True,

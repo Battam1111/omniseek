@@ -25,6 +25,7 @@ from urllib.parse import urlparse
 
 import anyio
 
+from omniseek.core import _guard
 from omniseek.core.normalize import Document
 
 logger = logging.getLogger(__name__)
@@ -505,6 +506,19 @@ def _has_declared_fetch_url_owner(url: str, adapters: list["SourceAdapter"]) -> 
     return any(_adapter_declares_fetch_url_host(adapter, url) for adapter in adapters)
 
 
+def _with_deadline(fn, seconds: Optional[float]):
+    """``fn`` run under the caller's deadline ``seconds`` from NOW (driver ruling 2, 2026-09-29): every
+    declared gate inside stops waiting at that moment and the request is not sent, instead of queueing
+    on after the caller has given up. The deadline is fixed when this is called, so a wrapper handed to
+    another thread keeps the caller's clock."""
+    until = None if seconds is None else time.monotonic() + max(0.0, float(seconds))
+
+    def run():
+        with _guard.deadline_until(until):
+            return fn()
+    return run
+
+
 def _run_bounded(fn, timeout: float):
     """Run ``fn()`` in a daemon thread; return ``(True, result)`` if it finished within
     ``timeout``, else ``(False, None)``. Re-raises whatever ``fn`` raised. A still-blocked
@@ -610,7 +624,7 @@ def _derive_outcome(source: str, query: str, limit: int, fresh: bool,
         if deadline_s is None:
             docs, captures = _work()
         else:
-            ok, r = _run_bounded(_work, deadline_s)
+            ok, r = _run_bounded(_with_deadline(_work, deadline_s), deadline_s)
             if not ok:
                 # The bounded thread is still blocked (daemon, so it dies with the process); its
                 # captures never drained. Report the timeout itself as the evidence and the historical [].
@@ -1285,6 +1299,12 @@ def search_many(
     _result_times: dict[str, float] = {}
 
     def _one(source: str) -> tuple[list[Document], list]:
+        # The fan-out's deadline for every gate this source's requests pass (a pool thread keeps no
+        # context of the caller, so it is set here and reset when the source returns).
+        with _guard.deadline_until(_deadline_at):
+            return _one_body(source)
+
+    def _one_body(source: str) -> tuple[list[Document], list]:
         from omniseek.core import cache, diag  # local import: avoid package-init cycle
         cache.set_fresh(fresh)  # set in the worker thread → adapter's cache calls honor it
         cache.set_cache_only(cache_only)  # cache-only (cache_only=True): egresses short-circuit
@@ -1318,6 +1338,7 @@ def search_many(
     workers = min(_SEARCH_WORKERS, len(target_sources))
     executor = ThreadPoolExecutor(max_workers=workers)
     t0 = time.monotonic()
+    _deadline_at = t0 + deadline  # a straggler's gate waits end here: it is not sent after the caller left
     try:
         future_to_source = {executor.submit(_one, s): s for s in target_sources}
         done, not_done = wait(future_to_source, timeout=deadline)
@@ -1516,6 +1537,12 @@ async def asearch_many(
     _result_times: dict[str, float] = {}
 
     async def _aone(source: str) -> tuple[list[Document], list]:
+        # The fan-out's deadline for every gate this source's requests pass, in this task's context
+        # (and, copied by AnyIO, in any worker thread it hands a sync adapter to).
+        with _guard.deadline_until(_deadline_at):
+            return await _aone_body(source)
+
+    async def _aone_body(source: str) -> tuple[list[Document], list]:
         # Async + context-ISOLATED twin of _one. Runs in THIS task's COPIED context (create_task), so
         # the set_fresh / set_cache_only / diag.enable below touch only this source's context and never
         # cross-pollinate another source's (the S3b no-leak contract, now at the fan-out level).
@@ -1556,6 +1583,7 @@ async def asearch_many(
     # diagnostics follow CATALOG order, NOT the hash-unordered asyncio.wait done/pending SETS). Insertion
     # order == target/catalog order; create_task COPIES the context per source (per-source isolation).
     t0 = time.monotonic()
+    _deadline_at = t0 + deadline  # a straggler's gate waits end here: it is not sent after the caller left
     src_to_task: "dict[str, asyncio.Task]" = {
         s: asyncio.create_task(_aone(s)) for s in target_sources}
     # DEADLINE + PARTIAL-RETURN (mirror search_many's wait(timeout=deadline) -> done/not_done). Use
@@ -2902,7 +2930,7 @@ def _fetch_url_via_adapters_with_reason(url: str) -> tuple[Optional[Document], O
 
         try:
             budget = getattr(adapter, "fetch_timeout", _FETCH_URL_TIMEOUT_S)
-            ok, payload = _run_bounded(_attempt, budget)
+            ok, payload = _run_bounded(_with_deadline(_attempt, budget), budget)
             if not ok:
                 logger.warning("fetch_url: adapter %s exceeded %.0fs on %s — skipping",
                                adapter.name, budget, url)
@@ -2964,7 +2992,9 @@ def fetch_url_with_reason(url: str) -> "tuple[Optional[Document], Optional[str]]
     try:
         from omniseek.core import diag, web_fallback
         diag.enable()
-        doc = web_fallback.read_via_fallback(url)
+        # omniseek_read's generic web read waits on declared gates no longer than an adapter attempt may
+        with _guard.deadline_after(_FETCH_URL_TIMEOUT_S):
+            doc = web_fallback.read_via_fallback(url)
         notes = diag.drain()
         if doc is not None:
             return doc, None
@@ -3012,9 +3042,10 @@ def health_check_bounded(adapter: SourceAdapter, timeout: float = _HEALTH_TIMEOU
     all go through here. A still-blocked probe thread is a daemon → dies with the
     process; it never holds the caller."""
     box: dict = {}
+    _probe = _with_deadline(lambda: _safe_health(adapter), timeout)  # the probe's gates stop at its cap
 
     def _run() -> None:
-        box["r"] = _safe_health(adapter)
+        box["r"] = _probe()
 
     t = threading.Thread(target=_run, daemon=True)
     t.start()

@@ -163,10 +163,10 @@ class UnderlineTalksAdapter(BaseScrapeAdapter):
     def _resolve(lecture_id: str) -> Optional[dict]:
         """GET the JSON:API lecture payload. None on any failure (network, 404, a
         non-JSON body) -> the base turns it into [] (the adapter contract)."""
-        import httpx  # lazy: off the boot import path (this adapter self-registers at import)
+        from omniseek.core import http  # lazy: off the boot import path (self-registers at import)
         try:
-            r = httpx.get(
-                _API.format(id=lecture_id),
+            r = http.direct(
+                "GET", _API.format(id=lecture_id),
                 timeout=20,
                 follow_redirects=True,
                 headers={"User-Agent": _UA, "Accept": "application/vnd.api+json"},

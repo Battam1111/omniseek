@@ -363,11 +363,11 @@ class DiscordDiscoveryConcurrencyTests(unittest.TestCase):
         return url.split("/guilds/")[1].split("/channels")[0]
 
     def _mock(self, chan_fn):
-        def route(url, **kwargs):
+        def route(method, url, **kwargs):     # Discord's requests go through http.direct
             if url.endswith("/users/@me/guilds"):
                 return _Resp(payload=_GUILDS)
             return chan_fn(DiscordDiscoveryConcurrencyTests._gid_of(url))
-        return mock.patch.object(disc.httpx, "get", side_effect=route)
+        return mock.patch.object(disc.http, "direct", side_effect=route)
 
     def test_guilds_are_listed_concurrently(self):
         """Four 100ms guilds must finish well under the serial 400ms. A thread pool drops the wall
@@ -403,13 +403,13 @@ class DiscordDiscoveryConcurrencyTests(unittest.TestCase):
         """A real dependency: the per-guild calls need ids that only the guild list carries."""
         seen: list[str] = []
 
-        def route(url, **kwargs):
+        def route(method, url, **kwargs):
             seen.append(url)
             if url.endswith("/users/@me/guilds"):
                 return _Resp(payload=_GUILDS)
             return _Resp(payload=_channels_of(self._gid_of(url)))
 
-        with mock.patch.object(disc.httpx, "get", side_effect=route):
+        with mock.patch.object(disc.http, "direct", side_effect=route):
             self.adapter._discover_channels("tok")
 
         self.assertTrue(seen[0].endswith("/users/@me/guilds"))
@@ -418,10 +418,10 @@ class DiscordDiscoveryConcurrencyTests(unittest.TestCase):
     def test_a_failed_guild_list_returns_empty_without_caching(self):
         """Unchanged: an unreadable guild list is a real failure, and must not pin an empty
         discovery for 30 minutes."""
-        def boom(url, **kwargs):
+        def boom(method, url, **kwargs):
             raise RuntimeError("no route")
 
-        with mock.patch.object(disc.httpx, "get", side_effect=boom):
+        with mock.patch.object(disc.http, "direct", side_effect=boom):
             self.assertEqual(self.adapter._discover_channels("tok"), [])
         self.assertEqual(self.sets, [], "a dead guild list must not write the cache")
 
@@ -513,9 +513,9 @@ class DiscordChannelPullConcurrencyTests(unittest.TestCase):
         return url.split("/channels/")[1].split("/messages")[0]
 
     def _mock(self, pull_fn):
-        def route(url, **kwargs):
+        def route(method, url, **kwargs):     # Discord's requests go through http.direct
             return pull_fn(DiscordChannelPullConcurrencyTests._cid_of(url))
-        return mock.patch.object(disc.httpx, "get", side_effect=route)
+        return mock.patch.object(disc.http, "direct", side_effect=route)
 
     def test_channels_are_pulled_concurrently(self):
         """Five 100ms channels must finish well under the serial 500ms."""
@@ -653,9 +653,9 @@ class WechatFeedConcurrencyTests(unittest.TestCase):
         return next(name for name, u in _FEEDS if u == url)
 
     def _mock(self, feed_fn):
-        def route(url, **kwargs):
+        def route(method, url, **kwargs):     # the feed GETs go through http.direct (redirect rule)
             return feed_fn(WechatFeedConcurrencyTests._tag_of(url))
-        return mock.patch.object(wx.httpx, "get", side_effect=route)
+        return mock.patch.object(wx.http, "direct", side_effect=route)
 
     def test_feeds_are_pulled_concurrently(self):
         """Four 100ms feeds must finish well under the serial 400ms."""

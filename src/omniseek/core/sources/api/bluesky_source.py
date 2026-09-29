@@ -19,7 +19,7 @@ from urllib.parse import urlparse
 
 from atproto import Client
 
-from omniseek.core import auth, cache
+from omniseek.core import auth, cache, http, upstreams
 from omniseek.core.normalize import Document, jsonsafe, mk_signal
 
 logger = logging.getLogger(__name__)
@@ -70,6 +70,25 @@ class BlueskyAdapter:
 
     _client: Optional[Client] = None
     _logged_in: bool = False
+    _request_s: Optional[float] = None   # the client's own timeout, for the gate's lease
+
+    @staticmethod
+    def _wire_progress(client: Client) -> Optional[float]:
+        """atproto (0.0.65) sends through an httpx.Client it keeps at ``client.request._client``: give
+        it the lease renewal by progress (the request sent, its headers and each block of its body renew
+        the Bluesky gate's lease, driver rulings of 2026-09-29 on section 17.5, item 2, and on review Q1)
+        and read its timeout for the lease. None when
+        the library keeps it elsewhere: then the declared max_wait_s bounds the lease."""
+        try:
+            hc = client.request._client
+            hooks = dict(hc.event_hooks)
+            for kind, extra in http.progress_hooks().items():   # sent, headers, every block of the body
+                hooks[kind] = list(hooks.get(kind, [])) + extra
+            hc.event_hooks = hooks
+            return http._timeout_s(hc.timeout)
+        except Exception:  # noqa: BLE001
+            logger.warning("bluesky: atproto's http client is not where expected; no progress renewal")
+            return None
 
     def _ensure_client(self) -> Optional[Client]:
         if self._client is None:
@@ -79,7 +98,11 @@ class BlueskyAdapter:
                 return None
             try:
                 self._client = Client()
-                self._client.login(creds["handle"], creds["app_password"])
+                self._request_s = self._wire_progress(self._client)
+                # Every atproto call takes the declared Bluesky gate (upstreams.json "bluesky": the
+                # PDS / entryway allows 3000 requests per 5 minutes per IP); UpstreamBusy is a failure.
+                with upstreams.hold("bluesky", request_s=self._request_s):
+                    self._client.login(creds["handle"], creds["app_password"])
                 self._logged_in = True
             except Exception as exc:  # noqa: BLE001
                 logger.warning("Bluesky login failed: %s", exc)
@@ -98,9 +121,10 @@ class BlueskyAdapter:
             return [Document.model_validate(d) for d in cached]
 
         try:
-            response = client.app.bsky.feed.search_posts(
-                {"q": query, "limit": min(limit, 100)}
-            )
+            with upstreams.hold("bluesky", request_s=self._request_s):
+                response = client.app.bsky.feed.search_posts(
+                    {"q": query, "limit": min(limit, 100)}
+                )
         except Exception as exc:  # noqa: BLE001
             logger.warning("Bluesky search failed: %s", exc)
             return []
@@ -131,9 +155,11 @@ class BlueskyAdapter:
         if client is None:
             return None
         try:
-            profile = client.get_profile(handle)
+            with upstreams.hold("bluesky", request_s=self._request_s):
+                profile = client.get_profile(handle)
             at_uri = f"at://{profile.did}/app.bsky.feed.post/{rkey}"
-            thread = client.get_post_thread(at_uri)
+            with upstreams.hold("bluesky", request_s=self._request_s):
+                thread = client.get_post_thread(at_uri)
             return self._post_to_document(thread.thread.post)
         except Exception as exc:  # noqa: BLE001
             logger.warning("Bluesky fetch_url failed: %s", exc)

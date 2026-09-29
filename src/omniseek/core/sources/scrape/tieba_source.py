@@ -43,8 +43,6 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 from urllib.parse import quote, urlsplit, urlunsplit
 
-import httpx
-
 from omniseek.core import http
 from omniseek.core.normalize import Document, jsonsafe, mk_signal
 from omniseek.core.sources.scrape._base import BaseScrapeAdapter
@@ -98,8 +96,8 @@ class TiebaAdapter(BaseScrapeAdapter):
         qs = "&".join(f"{k}={quote(str(v))}" for k, v in params.items())
         full = f"{url}?{qs}"
         try:
-            resp = httpx.get(
-                full,
+            resp = http.direct(
+                "GET", full,
                 headers={"User-Agent": _MOBILE_UA},
                 follow_redirects=True,
                 timeout=TIMEOUT,

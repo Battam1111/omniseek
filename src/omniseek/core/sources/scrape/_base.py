@@ -143,10 +143,13 @@ class BaseScrapeAdapter:
         from urllib.parse import quote
         url = self.search_url.format(query=quote(query), limit=limit)
         if self.fetch_html:  # declarative-HTML source: fetch the page text for schema_extract
-            import httpx
+            from omniseek.core import http
             try:
-                r = httpx.get(url, timeout=20, follow_redirects=True,
-                              headers={"User-Agent": _SCRAPE_UA, "Accept": _SCRAPE_ACCEPT})
+                # A declared upstream's gates apply here too, on every hop (http.direct: a no-op for an
+                # undeclared host), so a declarative-HTML row pointed at a rate-limited host cannot
+                # bypass them.
+                r = http.direct("GET", url, timeout=20, follow_redirects=True,
+                                headers={"User-Agent": _SCRAPE_UA, "Accept": _SCRAPE_ACCEPT})
                 r.raise_for_status()
                 return r.text
             except Exception as exc:  # noqa: BLE001 — failure → None → [] (the contract)

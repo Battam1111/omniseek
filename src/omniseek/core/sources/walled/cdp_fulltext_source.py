@@ -41,7 +41,11 @@ from omniseek.core.sources.walled._cdp import cdp_call, cdp_health, content_with
 logger = logging.getLogger(__name__)
 
 _MAX_CHARS = 200_000
-# Host substrings claimed for full-text CDP fetch (each verified to render for a real browser).
+# Domains claimed for full-text CDP fetch (each verified to render for a real browser). A host is
+# claimed only when it IS one of these or a subdomain of one. The old substring test let "x.com"
+# match www.vox.com / www.netflix.com / www.dropbox.com / www.fedex.com and "99.co" match
+# www.99.com, so a URL on those sites that no earlier adapter claimed was opened in the shared
+# CDP browser.
 _HOSTS = ("quora.com", "teamblind.com", "glassdoor.com", "maimai.cn",
           "linkedin.com", "x.com", "twitter.com",
           "propertyguru.com.sg", "99.co")
@@ -79,8 +83,8 @@ class CdpFulltextAdapter:
 
     def fetch_url(self, url: str) -> Optional[Document]:
         parsed = urlparse(url)
-        host = parsed.hostname or ""
-        if not any(h in host for h in _HOSTS):
+        host = (parsed.hostname or "").rstrip(".")  # hostname is lower-cased; a trailing dot is the same host
+        if not any(host == d or host.endswith("." + d) for d in _HOSTS):
             return None
         # LinkedIn: ONLY public posts (Track A). Never profiles / relationship-graph (Track B,
         # legally off-limits per the operator's constraint).
