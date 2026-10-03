@@ -30,15 +30,16 @@ PEN_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 # forked at ba0f524 on 2026-07-25, and the canonical is now 41 commits ahead. Syncing the public
 # mirror from the archive would have quietly published a tree five weeks stale, including missing
 # every guard fix from the 2026-08-11 night. The canonical upstream lives on the
-# maintainer's machine; the Windows working copy and deploy client is the sibling
-# ResearchProject/polaris-eye-maintenance, kept at the same HEAD by `git pull --ff-only`.
-EYE_ROOT="$(cd "${POLARIS_EYE_ROOT:-$PEN_ROOT/../../../polaris-eye-maintenance}" && pwd)"
+# maintainer's machine; the Windows working copy and deploy client was the sibling
+# ResearchProject/polaris-eye-maintenance until 2026-10-03, when it moved next to this mirror
+# as ../03_eye (its own git repo), kept at the same HEAD by `git pull --ff-only`.
+EYE_ROOT="$(cd "${POLARIS_EYE_ROOT:-$PEN_ROOT/../03_eye}" && pwd)"
 
 # REFUSE the archive by construction, not by memory: its deployer was rewritten to say so, and that
 # marker is the cheapest unambiguous fingerprint of the frozen tree.
 if [ -f "$EYE_ROOT/deploy.sh" ] && grep -q "frozen archive, not a deployable tree" "$EYE_ROOT/deploy.sh"; then
   echo "FATAL: $EYE_ROOT is the FROZEN ARCHIVE (Polaris/organs/eye), not the canonical eye." >&2
-  echo "       The public mirror must be built from ResearchProject/polaris-eye-maintenance" >&2
+  echo "       The public mirror must be built from the canonical tree at ../03_eye" >&2
   echo "       (or set POLARIS_EYE_ROOT)." >&2
   exit 1
 fi
