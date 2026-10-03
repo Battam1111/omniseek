@@ -105,7 +105,7 @@ Generated from omniseek 0.2.1: 218 live sources across 32 domains.
 - **juejin** `free` `explicit-only` `lookup`: 掘金 Juejin: Chinese developer-article search (keyless). query → an engagement-ranked feed of CN dev深度 articles: title / brief / author / 赞(digg) / 看(views). OmniSeek's source for Chinese dev/tech writing (前端/后端/AI工程/架构) that web search can't rank or structure. No login.
 - **lobsters** `free` `stream`: Lobste.rs: invite-only tech link aggregator (smaller than HN, higher SNR; ai/ml tag feeds curated by mods)
 - **quora** `free` `explicit-only` `proxy`: Quora 经搜索索引：英文 Q&A: 移民/签证(EP/PR/Express Entry)、读博、公司文化、城市/offer 对比. 与中文源(脉脉/一亩三分地/知乎)互补的英文视角. explicit_only (点名即达)
-- **reddit** `free` `lookup`: Reddit: GENERAL topic search (via Arctic Shift mirror; Reddit's own API is WAF-blocked). 自动按查询路由到对应话题子版 (如 'pour over coffee'→r/Coffee; 含金融信号如 '$NVDA earnings' → 追加 r/stocks·investing·wallstreetbets 等), 同时常驻搜索 r/PhD·AskAcademia·MachineLearning + 移民/求职 核心子版 (科研/职业意图永不丢失). 查询语义=全词 AND、无 OR: 1-3 个词且含一个 ...
+- **reddit** `free` `lookup`: Reddit: GENERAL topic search (via Arctic Shift mirror; Reddit's own API is WAF-blocked). 自动按查询路由到对应话题子版 (如 'pour over coffee'→r/Coffee; 含金融信号如 '$NVDA earnings' → 追加 r/stocks·investing·wallstreetbets 等), 同时常驻搜索 r/PhD·AskAcademia·MachineLearning + 移民/求职 核心子版 (科研/职业意图永不丢失). 查询语义=标题全词 AND、无 OR (按帖子标题匹配) ...
 - **sogou_weixin** `free` `explicit-only` `lookup`: 微信公众号文章关键词搜索 (Sogou Weixin): the only free keyword index over WeChat 公众号 articles, which Google does NOT crawl. Reach for Chinese first-hand / specialist 公众号 writing (industry/行业号, 学院官方号, niche expertise, 经验贴) on a topic. Returns title + snippet + 公众号 name + date + a permanent mp.weixin.qq.com link.
 - **stackoverflow** `free` `lookup`: Stack Overflow: programming Q&A (parallel to academia_se; primary destination for pytorch/CUDA/JAX/data-preprocessing implementation issues)
 - **tieba** `free` `lookup`: Baidu Tieba (百度贴吧): China's largest topical BBS; CN-community threads + forum structure via the keyless mobile JSON endpoints
@@ -149,7 +149,7 @@ Generated from omniseek 0.2.1: 218 live sources across 32 domains.
 - **scrape_js_sites** `free` `explicit-only` `stream`: JS 渲染源 (explicit_only, 经共享 CDP Chrome 渲染, 较慢, 显式点名才查)：Amii (加拿大 AI 研究所) + NTU CCDS (新加坡 CS 院系新闻) + ITIB (香港创新科技及工业局) + Apollo Research (前沿评测/AI safety) + SenseTime 商汤. 这些站初始 HTML 是空壳, 内容靠运行时 JS, 故必须渲染
 - **scrape_singapore** `free` `stream`: 新加坡 AI 机构 + 移民 (scrape, 无 RSS)：SEA-LION (AISG 开源 SEA LLM 产品/发布) + A*STAR press releases + SMU SCIS news + Fragomen-SG 工准证/EP 解读 + MOM newsroom (官方 press releases: EP/COMPASS/工准证政策一手, 实证 2026-06-10 静态可取). 补 singapore_ai_research / sg_immigration
 - **singapore_ai_research** `free` `stream`: 新加坡 AI 学术 + tech ecosystem：NUS News + AI Singapore + Grab Eng + Vulcan Post + Tech in Asia (A*STAR/SMU/SEA-LION 经 scrape_singapore; NTU 经 scrape_js_sites)
-- **wayback** `free` `explicit-only` `lookup`: Wayback Machine 时光机：一个 URL 的历史/被删快照 (keyless, Internet Archive CDX). query = 一个 URL → 该页的存档快照列表(时间戳 + web.archive.org 存档链接,再 omniseek_read 读历史正文). web 搜只给 LIVE 页;这取开放网已遗忘/已删改的旧版本(对抗检索、读历史、读被删)。命名查询;非 URL 返空.
+- **wayback** `free` `explicit-only` `lookup`: Wayback Machine 时光机：一个 URL 的历史/被删快照 (keyless, Internet Archive CDX). query = 一个 URL → 该页的存档快照列表(时间戳 + web.archive.org 存档链接,再 omniseek_read 读历史正文). web 搜只给 LIVE 页;这取开放网已遗忘/已删改的旧版本(对抗检索、读历史、读被删)。命名查询;非 URL 返空. CDX 30 秒内不应答时退到 availability API,只返回最近的一个快照(metadata.partial=true).
 
 ## funding (11)
 

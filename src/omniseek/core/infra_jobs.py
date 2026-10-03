@@ -316,20 +316,21 @@ def run_source_health(scope: str = "all") -> dict:
     heal_failed = _heal_cdp_chrome() if full else []  # CDP heal is daily-only (needs a browser)
 
     names = sorted(fetcher.all_adapter_names())
-    # Skip RETIRED sources: a curator retire (reversible overlay, reason begins "retired...") parks a
-    # source as intentionally dead. Probing it just re-confirms "down" every run -- a standing false
-    # alarm on something we deliberately retired. The retire IS the decision; health-probing it is noise.
-    # Reversible: a rollback clears the overlay and the source is probed again next run.
+    # RETIRED sources are PROBED too (since 2026-10-04), and only watched for coming back: a curator
+    # retire (reversible overlay, reason begins "retired...") parks a source as intentionally dead, so
+    # its failing probe is the expected state and gets no fail streak, alert or status row (handled
+    # after the probes). Its answering probe is the rollback signal its retire note asks for. Skipping
+    # them here, as this used to, made that signal dead code: higheredjobs_cs sat retired by a stale
+    # overlay from 2026-06-18 to 2026-10-04 while healthy, and nothing flagged it.
     def _is_retired(n: str) -> bool:
         # fetcher.retired_reason is the ONE retire derivation. get_adapter may return None if a
         # concurrent unregister raced the all_adapter_names snapshot; with no adapter to read, a
-        # vanished source is simply not-probed this run (not "retired").
+        # vanished source is not "retired".
         a = fetcher.get_adapter(n)
         return bool(fetcher.retired_reason(a)) if a is not None else False
     retired = {n for n in names if _is_retired(n)}
-    live = [n for n in names if n not in retired]
-    noncdp = [n for n in live if n not in _CDP_SOURCES and n not in _SEALED_SOURCES]
-    cdp = [n for n in live if n in _CDP_SOURCES] if full else []
+    noncdp = [n for n in names if n not in _CDP_SOURCES and n not in _SEALED_SOURCES]
+    cdp = [n for n in names if n in _CDP_SOURCES] if full else []  # CDP ones, retired or not: full lane only
 
     def probe_named(n):
         return n, _health_probe(fetcher.get_adapter(n))
@@ -391,9 +392,9 @@ def run_source_health(scope: str = "all") -> dict:
     # A RETIRED source is parked on purpose (the curator's reversible retire overlay), so its probe
     # failing is the expected state, not news. Counting it as a failure is how sg_immigration, dead
     # upstream and retired for it on 2026-07-10, kept reporting as a broken source two months later.
-    # It is still PROBED rather than skipped: its retire note asks to roll back if the feeds come
-    # back, and that signal only exists if someone keeps looking.
-    retired = {n for n in probed if fetcher.retired_reason(fetcher.get_adapter(n))}
+    # It is still PROBED rather than skipped (see the probe list above): its retire note asks to roll
+    # back if the feeds come back, and that signal only exists if someone keeps looking.
+    retired &= set(probed)
     for n in probed:
         ok, msg = results[n]
         if n in retired:
@@ -415,7 +416,8 @@ def run_source_health(scope: str = "all") -> dict:
     # never enter newly_down, so member rot was invisible until ALL feeds died. Track the degraded set
     # across runs and alert on a source's full->degraded transition once (a bundle names its dead feeds in
     # the health message via the "degraded" marker). Recovery to full clears it silently.
-    degraded_now = {n for n in probed if results[n][0] and "degraded" in results[n][1].lower()}
+    degraded_now = {n for n in probed
+                    if n not in retired and results[n][0] and "degraded" in results[n][1].lower()}
     prev_degraded = set(state.get("degraded", []))
     newly_degraded = [n for n in sorted(degraded_now) if n not in prev_degraded]
     if newly_degraded:
@@ -437,7 +439,8 @@ def run_source_health(scope: str = "all") -> dict:
     # the far end turned us away. Purely additive bookkeeping (the fail streaks and the alert
     # trigger are untouched, since a refused source IS unavailable), so the reader can tell at a
     # glance which alarms are ours to fix and which are somebody else's decision.
-    refused_now = {n for n in probed if results[n][0] is False and _is_refused(results[n][1])}
+    refused_now = {n for n in probed
+                   if n not in retired and results[n][0] is False and _is_refused(results[n][1])}
     prev_refused = set(state.get("refused", []))
     state["refused"] = sorted(refused_now if full
                               else (prev_refused - set(probed)) | refused_now)
@@ -477,8 +480,9 @@ def run_source_health(scope: str = "all") -> dict:
         else:
             unm.pop(n, None)
     state["unmeasured"] = unm
-    # A retired source is no longer probed -> drop its stale fail / status / alert entries so a parked
-    # source self-cleans instead of freezing at a stale "down" (no manual state edit ever needed).
+    # A retired source is probed only for the alive-again signal above -> drop its stale fail / status /
+    # alert entries so a parked source self-cleans instead of freezing at a stale "down" (no manual
+    # state edit ever needed), and this run's probe never lands in them.
     for r in retired:
         fails.pop(r, None)
         snap.pop(r, None)

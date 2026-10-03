@@ -3032,7 +3032,7 @@ _HEALTH_TIMEOUT_S = 25   # DEFAULT per-source hard cap for a LIVE health probe. 
 _HEALTH_WORKERS = 24     # health checks are I/O-bound — probe many at once
 
 
-def health_check_bounded(adapter: SourceAdapter, timeout: float = _HEALTH_TIMEOUT_S) -> tuple[Optional[bool], str]:
+def health_check_bounded(adapter: SourceAdapter, timeout: Optional[float] = None) -> tuple[Optional[bool], str]:
     """``adapter.health_check()`` with a HARD timeout, run in a daemon thread.
 
     Returns ``(healthy, status)``; ``(None, 'timeout ...')`` if the check does not
@@ -3040,7 +3040,13 @@ def health_check_bounded(adapter: SourceAdapter, timeout: float = _HEALTH_TIMEOU
     ``health_check`` blocks (no internal timeout) UNABLE to stall its caller — the
     live ``list_sources`` probe, ``health_check()``, and the health-watchdog daemon
     all go through here. A still-blocked probe thread is a daemon → dies with the
-    process; it never holds the caller."""
+    process; it never holds the caller.
+
+    ``timeout`` None means the adapter's declared ``health_timeout_s``, else ``_HEALTH_TIMEOUT_S``.
+    Resolved HERE so every caller honours a declaration: the watchdog's ``_health_probe`` passes no
+    timeout, and until 2026-10-04 it cut every declaring source at the 25 s default."""
+    if timeout is None:
+        timeout = float(getattr(adapter, "health_timeout_s", None) or _HEALTH_TIMEOUT_S)
     box: dict = {}
     _probe = _with_deadline(lambda: _safe_health(adapter), timeout)  # the probe's gates stop at its cap
 

@@ -281,6 +281,9 @@ DEFAULT_TIMEOUT = 20
 MAX_BYTES = 30 * 1024 * 1024  # 30MB hard cap on a single response body — a feed/JSON
                               # bigger than this is almost certainly a hijack/misconfig;
                               # stream + abort rather than buffer it all and OOM the daemon.
+# Bytes of a non-2xx body kept for the diag capture: an error message fits many times over, and a
+# huge or endless error body costs at most this much read.
+_ERROR_BODY_CAP = 64 * 1024
 _TRANSIENT_RETRY_DELAY_S = 0.5
 _TRANSIENT_RETRY_JITTER_S = 0.1
 
@@ -406,6 +409,44 @@ def _get_client() -> httpx.Client:
     return _client
 
 
+def _decode_error_body(r: httpx.Response, data: bytes) -> str:
+    try:
+        return data.decode(r.encoding or "utf-8", errors="replace")
+    except LookupError:  # a charset Python does not know
+        return data.decode("utf-8", errors="replace")
+
+
+def _read_error_body(r: httpx.Response) -> Optional[str]:
+    """At most ``_ERROR_BODY_CAP`` bytes of a non-2xx streamed body, decoded, for the diag capture.
+    Fail-open: a body that cannot be read is None, and the caller still raises on the status."""
+    try:
+        buf = bytearray()
+        for chunk in r.iter_bytes():
+            buf += chunk
+            if len(buf) >= _ERROR_BODY_CAP:
+                break
+        return _decode_error_body(r, bytes(buf[:_ERROR_BODY_CAP]))
+    except Exception:  # noqa: BLE001
+        return None
+
+
+async def _aread_error_body(r: httpx.Response) -> Optional[str]:
+    """Async twin of ``_read_error_body``."""
+    try:
+        buf = bytearray()
+        chunks = r.aiter_bytes()
+        try:
+            async for chunk in chunks:
+                buf += chunk
+                if len(buf) >= _ERROR_BODY_CAP:
+                    break
+        finally:
+            await chunks.aclose()  # stopping early must not leave the generator for the loop to finalize
+        return _decode_error_body(r, bytes(buf[:_ERROR_BODY_CAP]))
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def _request_capped(method: str, url: str, *, timeout: int, headers: dict,
                     retry_transient: bool = True,
                     **kwargs: Any) -> Optional[httpx.Response]:
@@ -432,6 +473,7 @@ def _request_capped(method: str, url: str, *, timeout: int, headers: dict,
         return None
     headers = upstreams.with_declared_user_agent(url, _with_connection_close(url, headers))
     for attempt in range(2):
+        err_body: Optional[str] = None
         try:
             # The client first (building it can take a second the first time), then the gates, so
             # the start slot the gate grants is the moment the request goes on the wire (a Crawl-delay
@@ -447,6 +489,8 @@ def _request_capped(method: str, url: str, *, timeout: int, headers: dict,
                     with client.stream(method, url, timeout=timeout, headers=headers,
                                        **kwargs) as r:
                         upstreams.observe_response(_resp_url(r, url), r)
+                        if getattr(r, "is_error", False):  # getattr: the tests' hand-built responses lack it
+                            err_body = _read_error_body(r)
                         r.raise_for_status()
                         raw = bytearray()
                         for chunk in r.iter_raw():
@@ -488,9 +532,11 @@ def _request_capped(method: str, url: str, *, timeout: int, headers: dict,
             logger.warning("http.%s failed (%s): %s", method.lower(), url, exc)
             # A non-2xx surfaces here as httpx.HTTPStatusError → surface its status + body snippet so
             # the fixing agent sees the wall (403/412 anti-bot, 404 moved endpoint), not just a string.
+            # The body is the bounded copy read before raise_for_status (a streamed response's .text
+            # raises ResponseNotRead); .text stays as the fallback for a response already read.
             st = getattr(getattr(exc, "response", None), "status_code", None)
-            bd = None
-            if isinstance(exc, httpx.HTTPStatusError):
+            bd = err_body
+            if bd is None and isinstance(exc, httpx.HTTPStatusError):
                 try:
                     bd = exc.response.text
                 except Exception:  # noqa: BLE001
@@ -1090,6 +1136,7 @@ async def _arequest_capped(method: str, url: str, *, timeout: int, headers: dict
         return None
     headers = upstreams.with_declared_user_agent(url, _with_connection_close(url, headers))
     for attempt in range(2):
+        err_body: Optional[str] = None
         try:
             client = _aget_client()   # the client first, then the gates (see the sync twin)
             async with upstreams.ahop_gates(request_s=_timeout_s(timeout)) as gates:  # every hop
@@ -1099,6 +1146,8 @@ async def _arequest_capped(method: str, url: str, *, timeout: int, headers: dict
                     async with client.stream(method, url, timeout=timeout, headers=headers,
                                              **kwargs) as r:
                         upstreams.observe_response(_resp_url(r, url), r)
+                        if getattr(r, "is_error", False):  # getattr: as in the sync twin
+                            err_body = await _aread_error_body(r)
                         r.raise_for_status()
                         raw = bytearray()
                         async for chunk in r.aiter_raw():
@@ -1130,9 +1179,10 @@ async def _arequest_capped(method: str, url: str, *, timeout: int, headers: dict
             logger.warning("http.%s failed (%s): %s", method.lower(), url, exc)
             # A non-2xx surfaces here as httpx.HTTPStatusError → surface its status + body snippet so
             # the fixing agent sees the wall (403/412 anti-bot, 404 moved endpoint), not just a string.
+            # The bounded copy read before raise_for_status first, .text as the fallback (sync twin).
             st = getattr(getattr(exc, "response", None), "status_code", None)
-            bd = None
-            if isinstance(exc, httpx.HTTPStatusError):
+            bd = err_body
+            if bd is None and isinstance(exc, httpx.HTTPStatusError):
                 try:
                     bd = exc.response.text
                 except Exception:  # noqa: BLE001

@@ -863,6 +863,388 @@ finally:
     reddit_source._arctic_cooldown_until = 0.0
     reddit_source._arctic_fail_streak = 0
 
+# reddit Arctic keyword search sends `title`, not `query` (2026-10-04). Measured from both machines:
+# /posts/search?subreddit=PhD&query=advisor answers HTTP 422 {"error":"Timeout. Maybe slow down a bit"}
+# in about 1.2 s every time, while title=advisor answers 200 with 25 items in 8 to 9 s. That 422 body is
+# the far end refusing us under load: it is not retried and counts toward the breaker like a 429; a 422
+# with any other body keeps the old retry path. Offline: http.get_json / http.aget_json are stubbed, and
+# a stubbed failure notes its status and body where the real http layer does (diag.note on the failure
+# branch) before returning None. Disk cache, CDP fallback and backoff sleeps are stubbed too.
+import asyncio as _rt_asyncio  # noqa: E402
+import types as _rt_types  # noqa: E402
+from omniseek.core import cache as _rt_cache, diag as _rt_diag  # noqa: E402
+from omniseek.core.infra_jobs import _is_refused as _rt_is_refused  # noqa: E402
+_RT_SLOW = '{"data":null,"error":"Timeout. Maybe slow down a bit"}'
+_RT_OTHER = '{"data":null,"error":"Invalid value for parameter sort"}'
+_rt_calls: list = []
+
+
+def _rt_log(url, k):
+    _rt_calls.append((str(url).rsplit("/api", 1)[-1], dict(k.get("params") or {})))
+
+
+def _rt_gj(url, **k):
+    _rt_log(url, k)
+    if "/comments/search" in str(url):
+        return {"data": []}
+    n = len(_rt_calls)
+    return {"data": [{"id": f"rt{n}", "title": "advisor t", "subreddit": "PhD",
+                      "created_utc": 1700000000 + n, "num_comments": 3}]}
+
+
+async def _rt_agj(url, **k):
+    return _rt_gj(url, **k)
+
+
+def _rt_fail(status, body):
+    def gj(url, **k):
+        _rt_log(url, k)
+        if body is None:  # what the http layer records when it could not read the error body
+            _rt_diag.note("http.get", url=url, status=status,
+                          exc=RuntimeError(f"Client error '{status} Unprocessable Entity'"))
+        else:
+            _rt_diag.note("http.get", url=url, status=status, body=body)
+        return None
+
+    async def agj(url, **k):
+        return gj(url, **k)
+    return gj, agj
+
+
+async def _rt_nosleep(*_a, **_k):
+    return None
+
+
+def _rt_reset():
+    reddit_source._arctic_cooldown_until = 0.0
+    reddit_source._arctic_fail_streak = 0
+    _rt_calls.clear()
+
+
+def _rt_posts():
+    return [p for u, p in _rt_calls if u == "/posts/search"]
+
+
+def _rt_title_only(ps):
+    return bool(ps) and all(p.get("title") == "advisor" and "query" not in p for p in ps)
+
+
+_rt_save = (_rd_http.get_json, _rd_http.aget_json, _rt_cache.get_docs, _rt_cache.set_docs,
+            reddit_source._cdp_search, reddit_source.time, reddit_source.anyio)
+_rt_args = ("/posts/search", {"subreddit": "PhD", "title": "advisor", "sort": "desc", "limit": 25})
+try:
+    _rt_cache.get_docs = lambda *a, **k: None
+    _rt_cache.set_docs = lambda *a, **k: None
+    reddit_source._cdp_search = lambda *a, **k: []
+    reddit_source.time = _rt_types.SimpleNamespace(time=_rt_save[5].time, sleep=lambda *_a: None)
+    _rt_nosleep_anyio = _rt_types.SimpleNamespace(sleep=_rt_nosleep)
+    _rt_ad = reddit_source.RedditAdapter()
+
+    # (a) all three keyword call sites send title and no query
+    _rd_http.get_json, _rd_http.aget_json = _rt_gj, _rt_agj
+    _rt_reset()
+    _rt_ad.search("subreddit:PhD advisor", 5)
+    _rt_a_sync = _rt_posts()
+    _rt_reset()
+    _rt_asyncio.run(_rt_ad.asearch("subreddit:PhD advisor", 5))
+    _rt_a_async = _rt_posts()
+    _rt_reset()
+    _rt_ad.search("comments: subreddit:PhD advisor", 5)
+    _rt_a_harvest = _rt_posts()
+    check("reddit: sync submission search sends the keyword as title, never query",
+          _rt_title_only(_rt_a_sync), str(_rt_a_sync))
+    check("reddit: async submission search sends the keyword as title, never query",
+          _rt_title_only(_rt_a_async), str(_rt_a_async))
+    check("reddit: comment-mode thread harvest sends the keyword as title, never query",
+          _rt_title_only(_rt_a_harvest), str(_rt_a_harvest))
+
+    # (b) a slow-down 422 is not retried and moves the breaker exactly like a 429
+    _rd_http.get_json, _rd_http.aget_json = _rt_fail(422, _RT_SLOW)
+    _rt_reset()
+    _rt_diag.enable()
+    try:
+        _rt_b_res = reddit_source._arctic_get(*_rt_args, retries=2)
+    finally:
+        _rt_b_caps = _rt_diag.drain()
+    _rt_b_sync = (_rt_b_res, len(_rt_calls), reddit_source._arctic_fail_streak)
+    _rt_reset()
+    reddit_source.anyio = _rt_nosleep_anyio
+    try:
+        _rt_b_ares = _rt_asyncio.run(reddit_source._aarctic_get(*_rt_args, retries=2))
+    finally:
+        reddit_source.anyio = _rt_save[6]
+    _rt_b_async = (_rt_b_ares, len(_rt_calls), reddit_source._arctic_fail_streak)
+    _rt_reset()
+    for _ in range(reddit_source._ARCTIC_TRIP_AFTER):
+        reddit_source._arctic_get(*_rt_args, retries=2)
+    _rt_b_trip = (reddit_source._arctic_cooling(), len(_rt_calls))
+    _rd_http.get_json, _rd_http.aget_json = _rt_fail(429, "Too Many Requests")
+    _rt_reset()
+    reddit_source._arctic_get(*_rt_args, retries=2)
+    _rt_b_429 = (len(_rt_calls), reddit_source._arctic_fail_streak)
+    check("reddit: a slow-down 422 is not retried (one request for the sub, sync and async)",
+          _rt_b_sync[:2] == (None, 1) and _rt_b_async[:2] == (None, 1),
+          f"sync={_rt_b_sync} async={_rt_b_async}")
+    check("reddit: a slow-down 422 moves the breaker like a 429 (one streak step per sub, same trip)",
+          _rt_b_sync[2] == _rt_b_async[2] == _rt_b_429[1] == 1 and _rt_b_429[0] == 3
+          and _rt_b_trip == (True, reddit_source._ARCTIC_TRIP_AFTER),
+          f"sync={_rt_b_sync} async={_rt_b_async} 429={_rt_b_429} trip={_rt_b_trip}")
+    _rt_b_reason = [r.get("body", "") for r in _rt_b_caps if r.get("helper") == "reddit.arctic_refused"]
+    check("reddit: a slow-down 422 leaves a plain-words diag reason (refused under load, not retried)",
+          len(_rt_b_reason) == 1 and "refused" in _rt_b_reason[0] and "not retried" in _rt_b_reason[0]
+          and not _DASH.search(_rt_b_reason[0]), str(_rt_b_caps))
+    # Until 2026-10-04 (spec 5) the http layer kept no body for any streamed error (only status + exc);
+    # it now keeps a bounded one, and a 422 whose body still could not be read reads as the refusal.
+    _rd_http.get_json, _rd_http.aget_json = _rt_fail(422, None)
+    _rt_reset()
+    _rt_b2_res = reddit_source._arctic_get(*_rt_args, retries=2)
+    _rt_b2_sync = (_rt_b2_res, len(_rt_calls), reddit_source._arctic_fail_streak)
+    _rt_reset()
+    reddit_source.anyio = _rt_nosleep_anyio
+    try:
+        _rt_b2_ares = _rt_asyncio.run(reddit_source._aarctic_get(*_rt_args, retries=2))
+    finally:
+        reddit_source.anyio = _rt_save[6]
+    _rt_b2_async = (_rt_b2_ares, len(_rt_calls), reddit_source._arctic_fail_streak)
+    check("reddit: a 422 whose body the http layer did not keep reads as the refusal (one request, one step)",
+          _rt_b2_sync == (None, 1, 1) and _rt_b2_async == (None, 1, 1),
+          f"sync={_rt_b2_sync} async={_rt_b2_async}")
+
+    # (c) a 422 with any other body keeps today's handling (retried, one streak step, no refusal note)
+    _rd_http.get_json, _rd_http.aget_json = _rt_fail(422, _RT_OTHER)
+    _rt_reset()
+    _rt_diag.enable()
+    try:
+        _rt_c_res = reddit_source._arctic_get(*_rt_args, retries=2)
+    finally:
+        _rt_c_caps = _rt_diag.drain()
+    _rt_c_sync = (_rt_c_res, len(_rt_calls), reddit_source._arctic_fail_streak)
+    _rt_reset()
+    reddit_source.anyio = _rt_nosleep_anyio
+    try:
+        _rt_c_ares = _rt_asyncio.run(reddit_source._aarctic_get(*_rt_args, retries=2))
+    finally:
+        reddit_source.anyio = _rt_save[6]
+    _rt_c_async = (_rt_c_ares, len(_rt_calls), reddit_source._arctic_fail_streak)
+    check("reddit: a 422 with another body keeps the retry path (3 requests, one streak step, sync and async)",
+          _rt_c_sync == (None, 3, 1) and _rt_c_async == (None, 3, 1)
+          and not any(r.get("helper") == "reddit.arctic_refused" for r in _rt_c_caps),
+          f"sync={_rt_c_sync} async={_rt_c_async} caps={_rt_c_caps}")
+
+    # (d) health probes title=advisor on r/PhD with limit 1 and maps item / empty / slow-down 422
+    _rd_http.get_json = _rt_gj
+    _rt_reset()
+    _rt_d_ok = _rt_ad.health_check()
+    _rt_d_params = _rt_posts()
+    _rd_http.get_json = lambda url, **k: (_rt_log(url, k), {"data": []})[1]
+    _rt_reset()
+    _rt_d_empty = _rt_ad.health_check()
+    _rd_http.get_json = _rt_fail(422, _RT_SLOW)[0]
+    _rt_reset()
+    _rt_d_slow = _rt_ad.health_check()
+    _rt_d_slow_calls = len(_rt_calls)
+    _rd_http.get_json = _rt_fail(422, None)[0]
+    _rt_reset()
+    _rt_d_nobody = _rt_ad.health_check()
+    _rt_d_nobody_calls = len(_rt_calls)
+    check("reddit health: probes title=advisor on r/PhD, limit 1, no query",
+          len(_rt_d_params) == 1 and _rt_d_params[0].get("subreddit") == "PhD"
+          and _rt_d_params[0].get("title") == "advisor" and _rt_d_params[0].get("limit") == 1
+          and "query" not in _rt_d_params[0], str(_rt_d_params))
+    check("reddit health: an item reads healthy, an empty list reads degraded",
+          _rt_d_ok[0] is True and _rt_d_empty[0] is False and "data path" in _rt_d_empty[1],
+          f"ok={_rt_d_ok} empty={_rt_d_empty}")
+    check("reddit health: a slow-down 422 reads as the far end rate-limiting us (one probe, watchdog refusal)",
+          _rt_d_slow[0] is False and "rate-limited" in _rt_d_slow[1] and _rt_is_refused(_rt_d_slow[1])
+          and _rt_d_slow_calls == 1 and not _DASH.search(_rt_d_slow[1]),
+          f"{_rt_d_slow} calls={_rt_d_slow_calls}")
+    check("reddit health: a 422 whose body was not captured also reads as rate-limited, one probe",
+          _rt_d_nobody[0] is False and "rate-limited" in _rt_d_nobody[1]
+          and _rt_is_refused(_rt_d_nobody[1]) and _rt_d_nobody_calls == 1,
+          f"{_rt_d_nobody} calls={_rt_d_nobody_calls}")
+
+    # (e) 2026-10-04, spec 5: http now keeps a bounded error body, so the refusal is read from what
+    # Arctic actually said. The health message and the diag reason quote Arctic's message only when
+    # it was observed, and say the body was not captured when it was not.
+    _RT_OBSERVED = '{"data":null,"error":"Too many requests, please slow down"}'
+    _rt_e_reasons = {}
+    for _rt_e_body in (_RT_OBSERVED, None):
+        _rd_http.get_json = _rt_fail(422, _rt_e_body)[0]
+        _rt_reset()
+        _rt_diag.enable()
+        try:
+            reddit_source._arctic_get(*_rt_args, retries=2)
+        finally:
+            _rt_e_caps = _rt_diag.drain()
+        _rt_e_reasons[_rt_e_body] = " ".join(r.get("body", "") for r in _rt_e_caps
+                                             if r.get("helper") == "reddit.arctic_refused")
+    _rt_e_obs_reason, _rt_e_none_reason = _rt_e_reasons[_RT_OBSERVED], _rt_e_reasons[None]
+    _rd_http.get_json = _rt_fail(422, _RT_OBSERVED)[0]
+    _rt_reset()
+    _rt_e_obs = _rt_ad.health_check()
+    _rd_http.get_json = _rt_fail(422, None)[0]
+    _rt_reset()
+    _rt_e_none = _rt_ad.health_check()
+    check("reddit health: an observed refusal body is quoted as Arctic said it (still a watchdog refusal)",
+          _rt_e_obs[0] is False and "Too many requests, please slow down" in _rt_e_obs[1]
+          and "Maybe slow down a bit" not in _rt_e_obs[1] and "not captured" not in _rt_e_obs[1]
+          and _rt_is_refused(_rt_e_obs[1]) and not _DASH.search(_rt_e_obs[1]), str(_rt_e_obs))
+    check("reddit health: a 422 whose body was not captured says so and quotes no Arctic message",
+          _rt_e_none[0] is False and "not captured" in _rt_e_none[1]
+          and "Maybe slow down" not in _rt_e_none[1] and _rt_is_refused(_rt_e_none[1])
+          and not _DASH.search(_rt_e_none[1]), str(_rt_e_none))
+    check("reddit: the refusal diag reason quotes the observed body, or says it was not captured",
+          "Too many requests, please slow down" in _rt_e_obs_reason
+          and "not captured" in _rt_e_none_reason and "Maybe slow down" not in _rt_e_none_reason
+          and not _DASH.search(_rt_e_obs_reason + _rt_e_none_reason),
+          f"observed={_rt_e_obs_reason!r} none={_rt_e_none_reason!r}")
+
+    # (f) the CDP fallback searches the resolved subreddits (reddit's multireddit search, ONE request),
+    # not all of reddit: a PhD-advisor query used to come back with r/AITAH. No subs: the old global path.
+    _rt_path = getattr(reddit_source, "_cdp_search_path", None)
+    _rt_f_two = _rt_path("advisor", 10, ["A", "B"]) if _rt_path else ""
+    _rt_f_none = _rt_path("advisor", 10, None) if _rt_path else ""
+    check("reddit CDP fallback: two subs build one multireddit search restricted to them",
+          _rt_f_two.startswith("/r/A+B/search.json?") and "restrict_sr=1" in _rt_f_two
+          and "q=advisor" in _rt_f_two and "sort=relevance" in _rt_f_two, repr(_rt_f_two))
+    check("reddit CDP fallback: with no subs the path is the old global search",
+          _rt_f_none == "/search.json?q=advisor&sort=relevance&type=link&limit=10&raw_json=1",
+          repr(_rt_f_none))
+    _rt_f_seen: list = []
+
+    def _rt_f_cdp(query, limit, subreddits=None):
+        _rt_f_seen.append((query, subreddits))
+        return []
+
+    async def _rt_f_agj(url, **k):
+        return {"data": []}
+    _rd_http.get_json, _rd_http.aget_json = (lambda url, **k: {"data": []}), _rt_f_agj
+    reddit_source._cdp_search = _rt_f_cdp
+    _rt_reset()
+    _rt_ad.search("subreddit:PhD advisor", 5)
+    _rt_asyncio.run(_rt_ad.asearch("subreddit:PhD advisor", 5))
+    _rt_f_paths = [(_rt_path(q, 5, s) if _rt_path else "") for q, s in _rt_f_seen]
+    check("reddit CDP fallback: an explicit subreddit: qualifier reaches the fallback (sync and async)",
+          len(_rt_f_seen) == 2 and all(s == ["PhD"] for _q, s in _rt_f_seen)
+          and all(p.startswith("/r/PhD/search.json?") and "restrict_sr=1" in p for p in _rt_f_paths),
+          f"seen={_rt_f_seen} paths={_rt_f_paths}")
+finally:
+    (_rd_http.get_json, _rd_http.aget_json, _rt_cache.get_docs, _rt_cache.set_docs,
+     reddit_source._cdp_search, reddit_source.time, reddit_source.anyio) = _rt_save
+    _rt_reset()
+
+# http keeps a bounded error body for the diag capture (2026-10-04, spec 5). A non-2xx raised inside
+# client.stream(...) before its body was read, so the failure branch's exc.response.text raised
+# ResponseNotRead and every source's capture had body=None (Arctic's 422 refusal was invisible). Offline:
+# the pooled clients are swapped for httpx clients on a MockTransport and the SSRF pre-flight is stubbed.
+import httpx as _eb_httpx  # noqa: E402
+from omniseek.core import http as _eb_http, diag as _eb_diag  # noqa: E402
+_EB_JSON = b'{"data":null,"error":"Timeout. Maybe slow down a bit"}'
+_EB_CAP = getattr(_eb_http, "_ERROR_BODY_CAP", 64 * 1024)
+_eb_pulled: list = []
+_eb_reads: list = []
+
+
+def _eb_chunks(total, chunk=8192, data=None):
+    if data is not None:  # a small body, still streamed the way a network response is
+        yield data
+        return
+    sent = 0
+    while sent < total:
+        n = min(chunk, total - sent)
+        sent += n
+        _eb_pulled.append(n)
+        yield b"x" * n
+
+
+async def _eb_achunks(total, data=None):
+    for c in _eb_chunks(total, data=data):
+        yield c
+
+
+def _eb_response(path, is_async):
+    # Iterator content keeps the body unread until someone reads it, like a real network response
+    # (bytes content would be pre-read by httpx and hide the defect).
+    body = (_eb_achunks if is_async else _eb_chunks)
+    if path == "/422":
+        return _eb_httpx.Response(422, content=body(0, data=_EB_JSON),
+                                  headers={"Content-Type": "application/json"})
+    if path == "/huge":
+        return _eb_httpx.Response(500, content=body(4 * _EB_CAP))
+    return _eb_httpx.Response(200, content=body(0, data=b'{"ok": true}'),
+                              headers={"Content-Type": "application/json"})
+
+
+async def _eb_ahandler(request):
+    return _eb_response(request.url.path, True)
+
+
+def _eb_run(path, is_async):
+    _eb_diag.enable()
+    try:
+        if is_async:
+            async def _go():
+                client = _eb_httpx.AsyncClient(transport=_eb_httpx.MockTransport(_eb_ahandler))
+                _eb_http._aget_client = lambda: client
+                try:
+                    return await _eb_http.aget_json(f"https://errbody.example.test{path}")
+                finally:
+                    await client.aclose()
+            res = _rt_asyncio.run(_go())
+        else:
+            client = _eb_httpx.Client(transport=_eb_httpx.MockTransport(
+                lambda request: _eb_response(request.url.path, False)))
+            _eb_http._get_client = lambda: client
+            try:
+                res = _eb_http.get_json(f"https://errbody.example.test{path}")
+            finally:
+                client.close()
+    finally:
+        caps = _eb_diag.drain()
+    return res, [c.get("body") for c in caps if c.get("status") in (422, 500)]
+
+
+_eb_save = (_eb_http._get_client, _eb_http._aget_client, _eb_http._netguard.security_block_reason,
+            _eb_http.cache.cache_only, _eb_diag._MAX_BODY, getattr(_eb_http, "_read_error_body", None),
+            getattr(_eb_http, "_aread_error_body", None))
+try:
+    _eb_http._netguard.security_block_reason = lambda url: None
+    _eb_http.cache.cache_only = lambda: False
+    if _eb_save[5] is not None:
+        _eb_http._read_error_body = lambda r, _f=_eb_save[5]: (_eb_reads.append("sync"), _f(r))[1]
+    if _eb_save[6] is not None:
+        async def _eb_aread_spy(r, _f=_eb_save[6]):
+            _eb_reads.append("async")
+            return await _f(r)
+        _eb_http._aread_error_body = _eb_aread_spy
+    _eb_422 = {m: _eb_run("/422", m) for m in (False, True)}
+    _eb_reads_before_ok = len(_eb_reads)
+    _eb_ok = {m: _eb_run("/200", m) for m in (False, True)}
+    _eb_reads_on_ok = _eb_reads[_eb_reads_before_ok:]
+    _eb_diag._MAX_BODY = 10 * _EB_CAP  # let the capture show the whole kept body, so the cut is visible
+    _eb_huge = {}
+    for _eb_m in (False, True):
+        _eb_pulled.clear()
+        _eb_huge[_eb_m] = (_eb_run("/huge", _eb_m), sum(_eb_pulled))
+finally:
+    (_eb_http._get_client, _eb_http._aget_client, _eb_http._netguard.security_block_reason,
+     _eb_http.cache.cache_only, _eb_diag._MAX_BODY) = _eb_save[:5]
+    if _eb_save[5] is not None:
+        _eb_http._read_error_body = _eb_save[5]
+    if _eb_save[6] is not None:
+        _eb_http._aread_error_body = _eb_save[6]
+check("http: a 422 error body reaches the diag capture (sync and async)",
+      all(r is None and len(b) == 1 and b[0] and _EB_JSON.decode() in b[0] for r, b in _eb_422.values()),
+      str(_eb_422))
+check("http: an oversized error body is cut at the cap and not read to the end (sync and async)",
+      all(len(b) == 1 and b[0] == "x" * _EB_CAP and pulled < 2 * _EB_CAP
+          for (r, b), pulled in _eb_huge.values()),
+      str({m: (len((b or [""])[0] or ""), pulled) for m, ((r, b), pulled) in _eb_huge.items()}))
+check("http: a 200 is unchanged (same parsed body, no capture, the error reader never runs)",
+      all(r == {"ok": True} and b == [] for r, b in _eb_ok.values())
+      and _eb_reads_on_ok == [],
+      f"ok={_eb_ok} reads={_eb_reads_on_ok}")
+
 # reddit GLOBAL Arctic concurrency cap (2026-06-21, after the 18-agent stress test): _arctic_get holds
 # a process-global semaphore around the egress so N concurrent searches/agents cannot storm the single
 # Arctic host into a 429 cascade (the s2/openalex pattern reddit was missing; caching cannot fix a
@@ -6105,6 +6487,113 @@ check("wayback: _snap_to_doc drops a row missing timestamp/original (no fabricat
 _wb_a = fetcher.get_adapter("wayback")
 check("wayback: registered + explicit_only + RECALL/UNWALL",
       _wb_a is not None and bool(fetcher._explicit_only_reason(_wb_a)) and "RECALL" in (_wb_a.modes or []))
+
+# 32d. wayback: ONE CDX attempt, then the availability API's closest snapshot (2026-10-04, spec 5).
+# Measured 2026-10-04 from both machines: CDX answers in 1.5 s to over 40 s under Internet Archive
+# load, the availability API in about 0.6 s. The old 3-attempt loop only retried on an exception, but
+# http.get_json returns None and never raises, so it never ran. Offline: http.get_json / aget_json are
+# stubbed per endpoint; health's per-source cap is read through the real callers with the probe stubbed.
+import asyncio as _wbx_asyncio  # noqa: E402
+from omniseek.core import diag as _wbx_diag, infra_jobs as _wbx_ij  # noqa: E402
+_WBX_CDX = [["timestamp", "original", "statuscode"],
+            ["20200115123000", "http://example.com/", "200"],
+            ["20210101000000", "http://example.com/", "200"]]
+_WBX_AV = {"url": "example.com", "archived_snapshots": {"closest": {
+    "status": "200", "available": True,
+    "url": "http://web.archive.org/web/20261003103246/https://example.com/",
+    "timestamp": "20261003103246"}}}
+_WBX_AV_NONE = {"url": "example.com", "archived_snapshots": {}}
+_wbx_calls: list = []
+
+
+def _wbx_stub(cdx, av):
+    def gj(url, **k):
+        _wbx_calls.append(("cdx" if "/cdx/" in url else "available", k.get("timeout")))
+        return cdx if "/cdx/" in url else av
+
+    async def agj(url, **k):
+        return gj(url, **k)
+    return gj, agj
+
+
+def _wbx_view(docs):
+    return [(d.title, d.url, d.content, dict(d.metadata)) for d in docs]
+
+
+_wbx_runs: dict = {}
+_wbx_health: dict = {}
+_wbx_save = (_wb.http.get_json, _wb.http.aget_json)
+try:
+    for _wbx_case, (_c, _v) in {"cdx": (_WBX_CDX, _WBX_AV), "avail": (None, _WBX_AV),
+                                "none": (None, _WBX_AV_NONE), "none2": (None, None)}.items():
+        _wb.http.get_json, _wb.http.aget_json = _wbx_stub(_c, _v)
+        _wbx_calls.clear()
+        _wbx_diag.enable()
+        try:
+            _wbx_sync = _wb_a.search("example.com", 10)
+        finally:
+            _wbx_caps = _wbx_diag.drain()
+        _wbx_sync_calls = list(_wbx_calls)
+        _wbx_calls.clear()
+        _wbx_async = _wbx_asyncio.run(_wb_a.asearch("example.com", 10))
+        _wbx_runs[_wbx_case] = (_wbx_sync, _wbx_async, _wbx_sync_calls, list(_wbx_calls), _wbx_caps)
+    for _wbx_case, (_c, _v) in {"ok": (_WBX_CDX, None), "degraded": (None, _WBX_AV_NONE),
+                                "down": (None, None)}.items():
+        _wb.http.get_json = _wbx_stub(_c, _v)[0]
+        _wbx_calls.clear()
+        _wbx_health[_wbx_case] = (_wb_a.health_check(), list(_wbx_calls))
+finally:
+    _wb.http.get_json, _wb.http.aget_json = _wbx_save
+_wbx_c = _wbx_runs["cdx"]
+check("wayback: a CDX list becomes snapshot docs, newest first, without asking the availability API",
+      [d.metadata.get("timestamp") for d in _wbx_c[0]] == ["20210101000000", "20200115123000"]
+      and all(d.metadata.get("provider") == "internet_archive_cdx" for d in _wbx_c[0])
+      and _wbx_c[2] == [("cdx", 30)], f"{_wbx_view(_wbx_c[0])} calls={_wbx_c[2]}")
+_wbx_p = _wbx_runs["avail"]
+_wbx_pd = _wbx_p[0][0] if len(_wbx_p[0]) == 1 else None
+check("wayback: a CDX miss returns exactly one doc from the availability API, marked partial",
+      _wbx_pd is not None and _wbx_pd.metadata.get("partial") is True
+      and _wbx_pd.metadata.get("provider") == "internet_archive_availability"
+      and _wbx_pd.metadata.get("original") == "https://example.com/"
+      and _wbx_pd.metadata.get("timestamp") == "20261003103246"
+      and _wbx_pd.url == "https://web.archive.org/web/20261003103246/https://example.com/"
+      and "closest snapshot" in _wbx_pd.title and "30 s" in _wbx_pd.content
+      and "closest snapshot" in _wbx_pd.content
+      and not _DASH.search(_wbx_pd.title + _wbx_pd.content), str(_wbx_view(_wbx_p[0])))
+check("wayback: one CDX attempt (30 s) then one availability call (15 s), and the CDX miss leaves a diag note",
+      _wbx_p[2] == [("cdx", 30), ("available", 15)]
+      and any(r.get("helper") == "wayback.cdx" for r in _wbx_p[4]), f"calls={_wbx_p[2]} caps={_wbx_p[4]}")
+check("wayback: nothing on either endpoint is [] (no snapshot, or no answer), after asking both",
+      all(_wbx_runs[k][0] == [] and _wbx_runs[k][1] == [] and _wbx_runs[k][2] == [("cdx", 30), ("available", 15)]
+          for k in ("none", "none2")), str({k: _wbx_runs[k][:3] for k in ("none", "none2")}))
+check("wayback: search and asearch agree in every case (docs and calls)",
+      all(_wbx_view(s) == _wbx_view(a) and sc == ac for s, a, sc, ac, _caps in _wbx_runs.values()),
+      str({k: (len(v[0]), len(v[1]), v[2], v[3]) for k, v in _wbx_runs.items()}))
+check("wayback health: CDX answers -> OK, probed with the data path's 30 s",
+      _wbx_health["ok"] == ((True, "OK (Internet Archive CDX)"), [("cdx", 30)]), str(_wbx_health["ok"]))
+check("wayback health: CDX misses but the availability API answers -> healthy, degraded to the closest snapshot",
+      _wbx_health["degraded"][0] == (True, "degraded: CDX did not answer within 30 s (Internet Archive load); "
+                                           "the availability API answered, so reads return the closest "
+                                           "snapshot only")
+      and _wbx_health["degraded"][1] == [("cdx", 30), ("available", 15)], str(_wbx_health["degraded"]))
+check("wayback health: both miss -> unhealthy, no transient claim, no dash",
+      _wbx_health["down"][0] == (False, "neither CDX (30 s) nor the availability API answered")
+      and not _DASH.search(_wbx_health["down"][0][1]), str(_wbx_health["down"]))
+# The declared cap is what EVERY health caller uses: the live probe (_probe_all_health, behind
+# omniseek_sources check_health and fetcher.health_check) and the watchdog (_health_probe through
+# health_check_bounded with no explicit timeout). The probe itself is stubbed at _with_deadline.
+_wbx_caps_seen: list = []
+_wbx_wd = fetcher._with_deadline
+try:
+    fetcher._with_deadline = lambda fn, seconds: (_wbx_caps_seen.append(seconds), lambda: (True, "OK"))[1]
+    fetcher._probe_all_health([_wb_a])
+    _wbx_ij._health_probe(_wb_a)
+    fetcher.health_check_bounded(_wb_a)
+finally:
+    fetcher._with_deadline = _wbx_wd
+check("wayback: declares a 50 s health cap and every health caller uses it (live probe, watchdog, bounded)",
+      getattr(_wb_a, "health_timeout_s", None) == 50 and _wbx_caps_seen == [50.0, 50.0, 50.0],
+      f"declared={getattr(_wb_a, 'health_timeout_s', None)} seen={_wbx_caps_seen}")
 
 # ---------------------------------------------------------------------------
 # 33. juejin (Chinese dev articles): the result_model → doc builder is a pure fn — golden fixture

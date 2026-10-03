@@ -58,7 +58,7 @@ override (a slow source the caller truly wants complete; guards the prewarm cont
 
 | Budget | Constant | Provenance |
 | --- | --- | --- |
-| health probe, per-source hard cap | `fetcher._HEALTH_TIMEOUT_S` | `src/omniseek/core/fetcher.py` |
+| health probe, per-source hard cap (default; an adapter's `health_timeout_s` replaces it for every caller, resolved in `health_check_bounded`) | `fetcher._HEALTH_TIMEOUT_S` | `src/omniseek/core/fetcher.py` |
 | health probe, worker fan-out width | `fetcher._HEALTH_WORKERS` | `src/omniseek/core/fetcher.py` |
 | health probe, aggregate backstop (~35 s, no symbol) | `_HEALTH_TIMEOUT_S + 10` | `src/omniseek/core/fetcher.py` |
 | fetch_url per-adapter cap (no aggregate) | `fetcher._FETCH_URL_TIMEOUT_S` | `src/omniseek/core/fetcher.py` |
