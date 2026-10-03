@@ -1924,6 +1924,8 @@ for _q in ("大模型推理", "reasoning", "强化学习", "language", "蒸馏")
     _scset = {d.source_id for d, s in zip(_fix, relevance.doc_scores(_fix, _q)) if s > 0.0}
     check(f"recall OR-set == doc_scores>0 for {_q!r} (anti-drift, closed corpus)",
           _recset == _scset, f"recall={_recset} scored={_scset}")
+check("recall: a lone bigram fragment of a Chinese run (化学 of 强化学习) no longer recalls (2026-10-03)",
+      {d.source_id for d in _recall.search("强化学习", 50)} == {"fix0"})
 
 # frozen allow-list (a deliberate change must edit both __init__._SINGLETONS AND this list)
 _EXPECTED_SINGLETONS = sorted("""
@@ -19108,10 +19110,13 @@ _GATE_DECLARED_SKIPS = {
     "the production target is POSIX process-group isolation",
 }
 
-# BOUNDED. The battery measures ~6s; 300 is a wide multiple, so only a genuine hang trips it and
-# never a loaded machine. Without a bound, one test that waits on a socket wedges the DEPLOY, with
-# no output and nothing to read: the worst failure shape this file can have.
-_GATE_TIMEOUT_S = 300
+# BOUNDED. The battery once measured ~6s; it has grown: on 2026-10-03 it ran 572 tests in 284s on
+# the Windows tree (unittest's own count), and a loaded machine pushed a smoke run past the old
+# 300s bound, which then reported a hang that was not one. 900 is about three times the measured
+# run, so a genuine hang still trips it and a busy machine does not. Re-measure when the suite
+# grows. Without a bound, one test that waits on a socket wedges the DEPLOY, with no output and
+# nothing to read: the worst failure shape this file can have.
+_GATE_TIMEOUT_S = 900
 
 _gate_files = sorted((ROOT / "tests").glob("test_*.py"))
 try:
@@ -19130,11 +19135,14 @@ try:
     _gate_rc = _gate_run.returncode
     _gate_out = (_gate_run.stderr or "") + (_gate_run.stdout or "")
 except _gate_sub.TimeoutExpired as _gate_exc:
+    # The partial output on the exception is str in text mode on some Python versions and bytes on
+    # others; decoding a str raised AttributeError here and hid the timeout itself (2026-10-03).
+    def _gate_text(part):
+        return part if isinstance(part, str) else (part or b"").decode("utf-8", "replace")
     _gate_rc = 124
-    _gate_out = (f"the suite battery TIMED OUT after {_GATE_TIMEOUT_S}s (normally ~6s), so a test "
+    _gate_out = (f"the suite battery TIMED OUT after {_GATE_TIMEOUT_S}s (measured ~284s on 2026-10-03), so a test "
                  f"is hanging; partial output follows\n"
-                 + (_gate_exc.stderr or b"").decode("utf-8", "replace")
-                 + (_gate_exc.stdout or b"").decode("utf-8", "replace"))
+                 + _gate_text(_gate_exc.stderr) + _gate_text(_gate_exc.stdout))
 _gate_m = _s0_re.search(r"Ran (\d+) test", _gate_out)
 _gate_n = int(_gate_m.group(1)) if _gate_m else 0
 _gate_skips = set(_s0_re.findall(r"skipped ['\"](.+?)['\"]", _gate_out))

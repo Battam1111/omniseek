@@ -16,6 +16,10 @@ This is BM25-shaped math over weighted fields, computed within the candidate set
   length     norm = 1-b + b*(doclen/avg-doclen-of-candidates), b=0.75
   idf        within the candidate set: ln(1 + (N-df+0.5)/(df+0.5))
   fields     each caller passes (text, weight) pairs, e.g. title 3x + body 1x
+  match      a doc scores > 0 only if it matches >= 1 query UNIT (see query_units): a word
+             token matches by itself; a CJK run matches when the doc holds MORE THAN A THIRD of
+             the run's distinct bigrams. Without this, one 2-char fragment of a typed phrase
+             ("模型" of "奖励模型", the cross-word "化学" of "强化学习") admitted any doc.
 
 It is judgment-free: no owner preferences, no learned weights, nothing tunable
 per source. The agent still re-ranks; this layer only stops the funnel from
@@ -65,7 +69,8 @@ def tokenize(text: str) -> list[str]:
 
 def query_terms(query: str) -> list[str]:
     """Unique query tokens worth scoring: 1-char ASCII tokens are dropped (an 'a'
-    matches everything and means nothing); 1-char CJK tokens are kept (real words)."""
+    matches everything and means nothing); 1-char CJK tokens are kept for scoring (whether
+    they can admit a doc on their own is query_units' call)."""
     out = []
     for t in dict.fromkeys(tokenize(query or "")):
         if len(t) > 1 or not t.isascii():
@@ -73,17 +78,57 @@ def query_terms(query: str) -> list[str]:
     return out
 
 
+def query_units(query: str) -> list[tuple[str, ...]]:
+    """The query split into the units a doc must match, each a tuple of distinct tokens.
+
+    A word token (what query_terms keeps outside continua runs) is one unit of itself. A
+    scriptio-continua run the user typed without spaces is ONE unit holding its bigrams: the
+    bigrams are mechanical slices, not words the user chose, so no single one may stand for the
+    whole run. A lone continua char between other tokens ("GPT和Claude") is a unit only when the
+    query has no other unit; otherwise it still scores but never admits a doc by itself."""
+    units: list[tuple[str, ...]] = []
+    lone: list[tuple[str, ...]] = []
+    for cjk, word, other in _TOKEN.findall((query or "").lower()):
+        if cjk:
+            if len(cjk) == 1:
+                lone.append((cjk,))
+            else:
+                units.append(tuple(dict.fromkeys(cjk[i:i + 2] for i in range(len(cjk) - 1))))
+        else:
+            t = word or other
+            if len(t) > 1 or not t.isascii():
+                units.append((t,))
+    units = units or lone
+    return list(dict.fromkeys(units))
+
+
+def _unit_hit(unit: tuple[str, ...], present) -> bool:
+    # 3*hits > n: the strict one-third bound. For a run of 2-char words joined by 1-char particles
+    # (the sparsest shape) a doc holding every word covers w/(3w-2) > 1/3 of the bigrams, so it is
+    # admitted; one 2-char word of a two-word run covers exactly 1/3, so it is not. Single-token
+    # units reduce to "the token is present" (ASCII-only queries keep any-term semantics).
+    return 3 * sum(1 for t in unit if t in present) > len(unit)
+
+
+def matches(tokens, query: str) -> bool:
+    """True iff a doc whose token set is ``tokens`` matches >= 1 unit of ``query``. The ONE
+    match rule: field_scores applies it, the recall index post-filters with it."""
+    present = tokens if isinstance(tokens, (set, frozenset, dict)) else set(tokens)
+    return any(_unit_hit(u, present) for u in query_units(query))
+
+
 def field_scores(items: list[list[tuple[str, float]]], query: str) -> list[float]:
     """BM25-lite score of each item against ``query``.
 
     Each item is a list of (text, weight) fields, e.g. [(title, 3.0), (body, 1.0)].
-    Returns one score per item; 0.0 = no query term matched. A term-less query
-    returns all zeros so callers keep their own pre-sort order.
+    Returns one score per item; 0.0 = the item matches no query unit (see ``matches``).
+    A term-less query returns all zeros so callers keep their own pre-sort order.
     """
     terms = query_terms(query)
     n = len(items)
     if not terms or n == 0:
         return [0.0] * n
+    units = query_units(query)
 
     tfs: list[dict[str, float]] = []
     lens: list[float] = []
@@ -105,6 +150,9 @@ def field_scores(items: list[list[tuple[str, float]]], query: str) -> list[float
 
     out: list[float] = []
     for tf, dl in zip(tfs, lens):
+        if not any(_unit_hit(u, tf) for u in units):
+            out.append(0.0)
+            continue
         norm = 1.0 - _B + _B * (dl / avgdl)
         s = 0.0
         for t in terms:
@@ -124,7 +172,7 @@ def doc_scores(docs, query: str) -> list[float]:
 
 def filter_rank(docs, query: str):
     """keyword_score_filter semantics on this engine: a term-less query returns
-    ``docs`` unchanged; otherwise only docs matching >=1 term, best first
+    ``docs`` unchanged; otherwise only docs matching >=1 query unit, best first
     (stable order on ties)."""
     if not query_terms(query or ""):
         return docs

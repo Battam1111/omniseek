@@ -218,9 +218,10 @@ def content_hash(doc: Document) -> str:
 
 
 def _match_expr(query: str) -> Optional[str]:
-    """OR-of-terms (NOT a phrase): verified to equal the live ``relevance.doc_scores>0`` set on
-    real bilingual content (a phrase match drops valid hits). Each term is a tokenize() unit, so a
-    2-char Chinese term is one bigram token and matches anywhere it occurs."""
+    """OR-of-terms (NOT a phrase): the FTS pre-filter, a SUPERSET of the live
+    ``relevance.doc_scores>0`` set (a phrase match drops valid hits). Each term is a tokenize()
+    unit, so a 2-char Chinese term is one bigram token and matches anywhere it occurs; ``search``
+    then keeps only rows passing ``relevance.matches`` so recall and live scoring share ONE rule."""
     terms = relevance.query_terms(query or "")
     parts = ['"' + t.replace('"', '') + '"' for t in terms if t.strip()]
     return " OR ".join(parts) if parts else None
@@ -268,6 +269,8 @@ def search(query: str, k: int = 60, sources: "Optional[frozenset[str]]" = None) 
             d = Document.model_validate(json.loads(doc_json))
         except Exception:  # noqa: BLE001 — skip a corrupt row, never fail the whole recall
             continue
+        if not relevance.matches(segment_doc(d).split(), query):
+            continue  # an OR-of-bigrams FTS hit on a lone fragment of a Chinese run is not a match
         ran = _ran_at(con, source)
         d.metadata = dict(d.metadata or {})
         d.metadata["from_index"] = True
