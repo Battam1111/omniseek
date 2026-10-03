@@ -6361,31 +6361,414 @@ check("s2_authors: registered + explicit_only + people/STRUCTURE; backend=semant
       and getattr(_s2a_a, "backend", None) == "semantic_scholar")
 
 # ---------------------------------------------------------------------------
-# 33i. dblp_author (CS researcher profiles, keyless): _hit_to_doc + _notes are pure fns —
-#      golden fixture them offline (PID url is canonical, affiliation/award split from the
-#      dict|list notes shape; a hit with no name/url drops). backend=dblp.
+# 33i. dblp + dblp_author through the dblp SPARQL endpoint (2026-10-03). dblp.org is
+#      robots `Disallow: /` and Anubis-walled, so both adapters send every request to
+#      https://sparql.dblp.org/sparql only. Golden fixtures below are REAL SPARQL JSON recorded
+#      2026-10-03 through the adapters themselves (author search: the whole 702-byte answer;
+#      title search "attention transformer": 3 of its 100 bindings, verbatim). Offline: every
+#      egress call is stubbed, and each stub asserts it was asked for the SPARQL URL only.
+#      Negatives: the Anubis HTML page makes both health checks False and both searches [];
+#      a static scan keeps the old dblp.org search endpoints out of the executable code.
+#      Person drill-in (2026-10-03): dblp_author.fetch_url answers dblp.org/pid/<pid> from one
+#      SPARQL request (recorded fixture below), and omniseek_read routing sends pid URLs to dblp_author,
+#      rec URLs to dblp.
 # ---------------------------------------------------------------------------
+import ast as _dblp_ast  # noqa: E402
+import asyncio as _dblp_aio  # noqa: E402
+import contextlib as _dblp_ctx  # noqa: E402
+from unittest import mock as _dblp_mock  # noqa: E402
+import httpx as _dblp_httpx  # noqa: E402
+from omniseek.core import cache as _dblp_cache, upstreams as _dblp_up  # noqa: E402
+from omniseek.core.sources.api import dblp_source as _dbp  # noqa: E402
 from omniseek.core.sources.api import dblp_author_source as _dba  # noqa: E402
-_dba_doc = _dba.DBLPAuthorAdapter()._hit_to_doc({"@score": "9", "@id": "56/953", "info": {
-    "author": "Yoshua Bengio", "url": "https://dblp.org/pid/56/953",
-    "notes": {"note": [{"@type": "affiliation", "text": "University of Montreal, QC, Canada"},
-                       {"@type": "award", "text": "Turing Award"}]}}})
-check("dblp_author: _hit_to_doc builds a doc on the canonical PID url + affiliation + award tags",
+
+_DBA_FIXTURE = ('{"head":{"vars":["person","name","n","primary_affiliation","affiliations","notes"]},'
+                '"results":{"bindings":[{"person":{"type":"uri","value":"https://dblp.org/pid/56/953"},'
+                '"name":{"type":"literal","value":"Yoshua Bengio"},"n":{"datatype":"http://www.w3.org/2001/'
+                'XMLSchema#int","type":"literal","value":"1238"},"primary_affiliation":{"type":"literal",'
+                '"value":"University of Montréal, Department of Computer Science and Operations Research, QC,'
+                ' Canada"},"affiliations":{"type":"literal","value":"University of Montréal, Department of '
+                'Computer Science and Operations Research, QC, Canada"},"notes":{"type":"literal","value":'
+                '"award (2018): Turing Award"}}]},"meta":{"query-time-ms":25,"result-size-total":1}}')
+_DBP_FIXTURE = json.dumps({
+    "head": {"vars": ["pub", "title", "year", "venue", "doi", "type", "authors"]},
+    "results": {"bindings": [
+        {"pub": {"type": "uri", "value": "https://dblp.org/rec/journals/ress/LiZBZY27"},
+         "title": {"type": "literal", "value": "Data uncertainty quantification for non-stationary "
+                   "multivariate sensor forecasting via monotonic full quantile regression and "
+                   "hierarchical attention transformer."},
+         "year": {"datatype": "http://www.w3.org/2001/XMLSchema#gYear", "type": "literal", "value": "2027"},
+         "venue": {"type": "literal", "value": "Reliab. Eng. Syst. Saf."},
+         "doi": {"type": "uri", "value": "https://doi.org/10.1016/J.RESS.2026.113078"},
+         "type": {"type": "uri", "value": "http://purl.org/net/nknouf/ns/bibtex#Article"},
+         "authors": {"type": "literal",
+                     "value": "1 Sheng Li\t5 Wen Yao\t4 Weien Zhou\t3 Yanzheng Bai\t2 Xiaohu Zheng"}},
+        {"pub": {"type": "uri", "value": "https://dblp.org/rec/conf/isnn/ShiLMLL25"},
+         "title": {"type": "literal", "value": "Global Cross Attention Transformer for Image Super-Resolution."},
+         "year": {"datatype": "http://www.w3.org/2001/XMLSchema#gYear", "type": "literal", "value": "2026"},
+         "venue": {"type": "literal", "value": "ISNN"},
+         "doi": {"type": "uri", "value": "https://doi.org/10.1007/978-981-95-1233-1_15"},
+         "type": {"type": "uri", "value": "http://purl.org/net/nknouf/ns/bibtex#Inproceedings"},
+         "authors": {"type": "literal",
+                     "value": "2 Weirong Liu\t3 Jiahao Meng\t1 Changhong Shi\t5 Jie Liu\t4 Zhijun Li"}},
+        {"pub": {"type": "uri", "value": "https://dblp.org/rec/conf/iclr/YuJBYL26"},
+         "title": {"type": "literal", "value": "The Effect of Attention Head Count on Transformer Approximation."},
+         "year": {"datatype": "http://www.w3.org/2001/XMLSchema#gYear", "type": "literal", "value": "2026"},
+         "venue": {"type": "literal", "value": "ICLR"},
+         "type": {"type": "uri", "value": "http://purl.org/net/nknouf/ns/bibtex#Inproceedings"},
+         "authors": {"type": "literal",
+                     "value": "1 Penghao Yu\t2 Haotian Jiang\t3 Zeyu Bao\t4 Ruoxi Yu\t5 Qianxiao Li"}},
+    ]},
+    "meta": {"query-time-ms": 216, "result-size-total": 100}}, ensure_ascii=False)
+_DBLP_EMPTY = '{"head":{"vars":["name"]},"results":{"bindings":[]}}'
+_DBLP_ANUBIS = ('<!doctype html><html lang="en"><head><title>Making sure you&#39;re not a bot!</title>'
+                '<script id="anubis_challenge" type="application/json">{"rules":{"difficulty":4}}</script>'
+                '</head><body><h1 id="title">Making sure you&#39;re not a bot!</h1></body></html>')
+
+
+def _dblp_resp(body: str, ctype: str = "application/sparql-results+json", status: int = 200):
+    return _dblp_httpx.Response(status, headers={"content-type": ctype}, content=body.encode("utf-8"),
+                                request=_dblp_httpx.Request("GET", _dbp.SPARQL_URL))
+
+
+def _dblp_stub(body: str, ctype: str = "application/sparql-results+json", calls: list = None):
+    """A stand-in for http.get / http.aget: records (url, params, headers), answers ``body``."""
+    def fake(url, **kw):
+        if calls is not None:
+            calls.append((url, kw.get("params") or {}, kw.get("headers") or {}))
+        return _dblp_resp(body, ctype)
+
+    async def afake(url, **kw):
+        return fake(url, **kw)
+    return fake, afake
+
+
+@_dblp_ctx.contextmanager
+def _dblp_offline(body: str, ctype: str = "application/sparql-results+json", calls: list = None,
+                  egress=None):
+    fake, afake = _dblp_stub(body, ctype, calls)
+    with _dblp_mock.patch.object(_dbp.http, "get", fake), \
+            _dblp_mock.patch.object(_dbp.http, "aget", afake), \
+            _dblp_mock.patch.object(_dbp.upstreams, "egress",
+                                    egress or (lambda *a, **k: _dblp_ctx.nullcontext())), \
+            _dblp_mock.patch.object(_dblp_cache, "get_docs", lambda *a, **k: None), \
+            _dblp_mock.patch.object(_dblp_cache, "set_docs", lambda *a, **k: None):
+        yield
+
+
+# -- dblp_author: pure mapping on the recorded answer
+_dba_rows = _dbp.sparql_rows(json.loads(_DBA_FIXTURE))
+_dba_doc = _dba.DBLPAuthorAdapter()._binding_to_doc(_dba_rows[0]) if _dba_rows else None
+_dba_aff = "University of Montréal, Department of Computer Science and Operations Research, QC, Canada"
+check("dblp_author: _binding_to_doc builds a doc on the canonical PID url + publication count + "
+      "affiliation + award tags (recorded SPARQL answer)",
       _dba_doc is not None and _dba_doc.source == "dblp_author"
       and _dba_doc.url == "https://dblp.org/pid/56/953"
-      and _dba_doc.author == "Yoshua Bengio"
-      and "University of Montreal, QC, Canada" in _dba_doc.tags
-      and "Turing Award" in _dba_doc.tags
-      and _dba_doc.metadata["affiliations"] == ["University of Montreal, QC, Canada"])
-check("dblp_author: _notes handles a single-note dict; _hit_to_doc drops a hit with no name/url",
-      _dba.DBLPAuthorAdapter._notes({"note": {"@type": "affiliation", "text": "MIT"}}) == (["MIT"], [])
-      and _dba.DBLPAuthorAdapter()._hit_to_doc({"info": {"author": "x"}}) is None
-      and _dba.DBLPAuthorAdapter()._hit_to_doc({"info": {"url": "u"}}) is None)
+      and _dba_doc.source_id == "https://dblp.org/pid/56/953"
+      and _dba_doc.author == "Yoshua Bengio" and _dba_doc.title == "Yoshua Bengio"
+      and _dba_doc.metadata["publication_count"] == 1238
+      and _dba_doc.metadata["pid"] == "56/953"
+      and _dba_doc.metadata["affiliations"] == [_dba_aff]
+      and _dba_doc.metadata["awards"] == ["Turing Award (2018)"]
+      and _dba_doc.tags == [_dba_aff, "Turing Award (2018)"]
+      and "1238 dblp publications" in _dba_doc.content,
+      f"doc={_dba_doc and (_dba_doc.url, _dba_doc.tags, _dba_doc.metadata.get('publication_count'))}")
+check("dblp_author: _split_notes handles a single note string; _binding_to_doc drops a row with no "
+      "name, no person, or a person outside dblp.org/pid/; absent affiliation/award stay absent",
+      _dba.DBLPAuthorAdapter._split_notes("affiliation: MIT") == (["MIT"], [])
+      and _dba.DBLPAuthorAdapter._split_notes(["award (2018): Turing Award", "junk"]) == ([], ["Turing Award (2018)"])
+      and _dba.DBLPAuthorAdapter()._binding_to_doc({"person": "https://dblp.org/pid/1/2"}) is None
+      and _dba.DBLPAuthorAdapter()._binding_to_doc({"name": "x"}) is None
+      and _dba.DBLPAuthorAdapter()._binding_to_doc({"person": "https://example.org/p", "name": "x"}) is None
+      and (_dba.DBLPAuthorAdapter()._binding_to_doc({"person": "https://dblp.org/pid/1/2", "name": "x"}).tags
+           == []))
 _dba_a = fetcher.get_adapter("dblp_author")
 check("dblp_author: registered + explicit_only + people/STRUCTURE; backend=dblp",
       _dba_a is not None and bool(fetcher._explicit_only_reason(_dba_a))
       and _dba_a.domains == ["people"] and _dba_a.modes == ["STRUCTURE"]
       and getattr(_dba_a, "backend", None) == "dblp")
+
+# -- dblp: pure helpers on the recorded title-search answer
+_dbp_rows = _dbp.sparql_rows(json.loads(_DBP_FIXTURE))
+_dbp_docs = [_dbp.DBLPAdapter._row_to_document(r) for r in (_dbp_rows or [])]
+_dbp_d0 = _dbp_docs[0] if _dbp_docs else None
+check("dblp: a recorded SPARQL binding maps to a doc on the dblp record URI with ordered authors, "
+      "bare DOI, venue, year and BibTeX type; a missing DOI stays absent",
+      _dbp_rows is not None and len(_dbp_docs) == 3 and _dbp_d0 is not None
+      and _dbp_d0.source == "dblp" and _dbp_d0.url == "https://dblp.org/rec/journals/ress/LiZBZY27"
+      and _dbp_d0.source_id == "journals/ress/LiZBZY27"
+      and _dbp_d0.author == "Sheng Li, Xiaohu Zheng, Yanzheng Bai, Weien Zhou, Wen Yao"
+      and _dbp_d0.metadata["doi"] == "10.1016/J.RESS.2026.113078"
+      and _dbp_d0.metadata["venue"] == "Reliab. Eng. Syst. Saf." and _dbp_d0.metadata["year"] == "2027"
+      and _dbp_d0.metadata["type"] == "Article" and _dbp_d0.date is not None and _dbp_d0.date.year == 2027
+      and _dbp_docs[2].metadata["doi"] is None and _dbp_docs[2].metadata["type"] == "Inproceedings",
+      f"d0={_dbp_d0 and (_dbp_d0.url, _dbp_d0.author, _dbp_d0.metadata.get('doi'))}")
+check("dblp: query_words lowercases, drops 1-char words + stopwords, de-duplicates; names keep "
+      "every word; the built SPARQL has one ql:contains-word per word and a pool LIMIT",
+      _dbp.query_words("The Attention of a Transformer, attention!") == ["attention", "transformer"]
+      and _dbp.query_words("An Li", drop_stopwords=False) == ["an", "li"]
+      and _dbp.query_words('"; DROP } <x>') == ["drop"]
+      and _dbp.publ_search_query(["attention", "transformer"]).count("ql:contains-word") == 2
+      and f"LIMIT {_dbp.POOL}" in _dbp.publ_search_query(["attention"]))
+check("dblp: record_uri accepts dblp record URLs (suffix dropped) and nothing else",
+      _dbp.record_uri("https://dblp.org/rec/conf/nips/VaswaniSPUJGKP17.html")
+      == "https://dblp.org/rec/conf/nips/VaswaniSPUJGKP17"
+      and _dbp.record_uri("https://dblp.org/rec/journals/corr/abs-1706-03762.bib")
+      == "https://dblp.org/rec/journals/corr/abs-1706-03762"
+      and _dbp.record_uri("https://dblp.org/pid/56/953") is None
+      and _dbp.record_uri("https://dblp.org/rec/a>b") is None
+      and _dbp.record_uri("https://example.org/rec/x") is None)
+
+# -- dblp: search end to end (stubbed egress): SPARQL URL only, Accept header, local rank, cap
+_dbp_calls: list = []
+with _dblp_offline(_DBP_FIXTURE, calls=_dbp_calls):
+    _dbp_out = _dbp.DBLPAdapter().search("attention transformer", 2)
+    _dbp_aout = _dblp_aio.run(_dbp.DBLPAdapter().asearch("attention transformer", 2))
+_dbp_none_calls: list = []
+with _dblp_offline(_DBP_FIXTURE, calls=_dbp_none_calls):
+    _dbp_none = _dbp.DBLPAdapter().search("a ! of", 5)
+check("dblp: search sends one SPARQL GET (Accept sparql-results+json, our User-Agent) to "
+      "sparql.dblp.org only, ranks the pool locally (short exact title first) and caps to limit; "
+      "asearch returns the same docs; a query with no usable word returns [] with NO request",
+      len(_dbp_calls) == 2 and all(c[0] == "https://sparql.dblp.org/sparql" for c in _dbp_calls)
+      and all(c[2].get("Accept") == "application/sparql-results+json"
+              and c[2].get("User-Agent") == _dbp.USER_AGENT for c in _dbp_calls)
+      and all('ql:contains-word "transformer"' in c[1].get("query", "") for c in _dbp_calls)
+      and [d.url for d in _dbp_out] == [d.url for d in _dbp_aout] and len(_dbp_out) == 2
+      and _dbp_out[0].url == "https://dblp.org/rec/conf/isnn/ShiLMLL25"
+      and _dbp_none == [] and _dbp_none_calls == [],
+      f"calls={len(_dbp_calls)} out={[d.url for d in _dbp_out]} none_calls={len(_dbp_none_calls)}")
+_dbp_fu_calls: list = []
+with _dblp_offline(json.dumps({"head": {"vars": []}, "results": {"bindings": [
+        json.loads(_DBP_FIXTURE)["results"]["bindings"][1]]}}), calls=_dbp_fu_calls):
+    _dbp_fu = _dbp.DBLPAdapter().fetch_url("https://dblp.org/rec/conf/isnn/ShiLMLL25.html")
+    _dbp_fu_other = _dbp.DBLPAdapter().fetch_url("https://dblp.org/pid/56/953.xml")
+check("dblp: fetch_url resolves a dblp.org/rec URL by a SPARQL lookup of its record URI (no "
+      "dblp.org request); any other dblp.org URL is not claimed and sends nothing",
+      _dbp_fu is not None and _dbp_fu.url == "https://dblp.org/rec/conf/isnn/ShiLMLL25"
+      and len(_dbp_fu_calls) == 1 and _dbp_fu_calls[0][0] == "https://sparql.dblp.org/sparql"
+      and "<https://dblp.org/rec/conf/isnn/ShiLMLL25>" in _dbp_fu_calls[0][1].get("query", "")
+      and _dbp_fu_other is None,
+      f"fu={_dbp_fu and _dbp_fu.url} calls={len(_dbp_fu_calls)}")
+
+# -- dblp_author: person drill-in (fetch_url on dblp.org/pid/<pid>) from ONE SPARQL request. The
+#    fixture is the person query's REAL answer for pid 56/953, recorded 2026-10-03 through
+#    DBLPAuthorAdapter.fetch_url (cache disabled): head, meta and 8 of its 25 bindings verbatim (the
+#    5 profile rows + the first 3 of the 20 recent publications).
+_DBA_PID_FIXTURE = json.dumps({
+    "head": {"vars": ["name", "n", "pa", "aff", "note", "pub", "title", "y", "v"]},
+    "results": {"bindings": [
+        {"name": {"type": "literal", "value": "Yoshua Bengio"}},
+        {"n": {"datatype": "http://www.w3.org/2001/XMLSchema#int", "type": "literal", "value": "1238"}},
+        {"pa": {"type": "literal", "value": "University of Montréal, Department of Computer Science and "
+                "Operations Research, QC, Canada"}},
+        {"aff": {"type": "literal", "value": "University of Montréal, Department of Computer Science and "
+                 "Operations Research, QC, Canada"}},
+        {"note": {"type": "literal", "value": "award (2018): Turing Award"}},
+        {"pub": {"type": "uri", "value": "https://dblp.org/rec/conf/aaai/ChenHBKNBA26"},
+         "title": {"type": "literal", "value": "Extendable Planning via Multiscale Diffusion."},
+         "y": {"datatype": "http://www.w3.org/2001/XMLSchema#gYear", "type": "literal", "value": "2026"},
+         "v": {"type": "literal", "value": "AAAI"}},
+        {"pub": {"type": "uri", "value": "https://dblp.org/rec/conf/iclr/RehmanAGBT26"},
+         "title": {"type": "literal", "value": "FALCON: Few-step Accurate Likelihoods for Continuous Flows."},
+         "y": {"datatype": "http://www.w3.org/2001/XMLSchema#gYear", "type": "literal", "value": "2026"},
+         "v": {"type": "literal", "value": "ICLR"}},
+        {"pub": {"type": "uri", "value": "https://dblp.org/rec/journals/corr/abs-2601-02383"},
+         "title": {"type": "literal", "value": "The Future of the AI Summit Series."},
+         "y": {"datatype": "http://www.w3.org/2001/XMLSchema#gYear", "type": "literal", "value": "2026"},
+         "v": {"type": "literal", "value": "CoRR"}},
+    ]},
+    "meta": {"query-time-ms": 80, "result-size-total": 25}}, ensure_ascii=False)
+# What the endpoint answers for a pid it does not know: the COUNT branch's lone n = 0 row, no name.
+_DBA_PID_UNKNOWN = ('{"head":{"vars":["name","n","pa","aff","note","pub","title","y","v"]},"results":'
+                    '{"bindings":[{"n":{"datatype":"http://www.w3.org/2001/XMLSchema#int","type":"literal",'
+                    '"value":"0"}}]}}')
+check("dblp_author: person_uri accepts dblp person URLs (.html/.xml/.bib dropped, mirror hosts) and "
+      "nothing else (records, venue pages, one-segment or unsafe pids, other hosts)",
+      _dba.person_uri("https://dblp.org/pid/56/953") == "https://dblp.org/pid/56/953"
+      and _dba.person_uri("https://dblp.org/pid/56/953.html") == "https://dblp.org/pid/56/953"
+      and _dba.person_uri("https://www.dblp.org/pid/56/953.xml") == "https://dblp.org/pid/56/953"
+      and _dba.person_uri("https://dblp.uni-trier.de/pid/56/953-1.bib") == "https://dblp.org/pid/56/953-1"
+      and _dba.person_uri("https://dblp.dagstuhl.de/pid/l/YannLeCun.html?view=by-year")
+      == "https://dblp.org/pid/l/YannLeCun"
+      and _dba.person_uri("https://dblp.org/rec/conf/nips/VaswaniSPUJGKP17") is None
+      and _dba.person_uri("https://dblp.org/db/conf/nips") is None
+      and _dba.person_uri("https://dblp.org/pid/56") is None
+      and _dba.person_uri("https://dblp.org/pid/56/9>53") is None
+      and _dba.person_uri("https://dblp.org/pid/56/953.rss") is None
+      and _dba.person_uri("https://example.org/pid/56/953") is None)
+_dba_pq = _dba.person_query("https://dblp.org/pid/56/953")
+_dba_pq_opts = _re_ro.findall(r"OPTIONAL \{ ([^{}]*) \}", _dba_pq)
+check("dblp_author: person_query is one SELECT over the bound person IRI (name, count, affiliations, "
+      "notes, 20 most recent publications); every OPTIONAL is a single triple pattern",
+      _dba_pq.count("SELECT") == 3 and _dba_pq.count("UNION") == 5
+      and _dba_pq.count("<https://dblp.org/pid/56/953>") == 6
+      and "dblp:primaryCreatorName ?name" in _dba_pq and "COUNT(?p)" in _dba_pq
+      and f"LIMIT {_dba.RECENT}" in _dba_pq and _dba.RECENT == 20
+      and "ORDER BY DESC(?y)" in _dba_pq
+      and len(_dba_pq_opts) == 2 and all(" . " not in o.strip() for o in _dba_pq_opts),
+      f"optionals={_dba_pq_opts}")
+_dba_fu_calls: list = []
+with _dblp_offline(_DBA_PID_FIXTURE, calls=_dba_fu_calls):
+    _dba_fu = _dba.DBLPAuthorAdapter().fetch_url("https://dblp.org/pid/56/953.html")
+_dba_fu_lines = (_dba_fu.content.splitlines() if _dba_fu else [])
+_dba_rev = _dbp.sparql_rows(json.loads(_DBA_PID_FIXTURE))[::-1]
+_dba_fu_rev = _dba.DBLPAuthorAdapter()._profile_to_doc("https://dblp.org/pid/56/953", _dba_rev)
+check("dblp_author: fetch_url on a dblp.org/pid URL sends ONE SPARQL request (no dblp.org request) and "
+      "builds the profile doc on the canonical PID url: name, affiliations, awards, publication count, "
+      "then 'year. title. venue. <record URI>' lines newest first (recorded answer)",
+      _dba_fu is not None and _dba_fu.source == "dblp_author"
+      and _dba_fu.url == "https://dblp.org/pid/56/953" and _dba_fu.source_id == "https://dblp.org/pid/56/953"
+      and _dba_fu.title == "Yoshua Bengio"
+      and len(_dba_fu_calls) == 1 and _dba_fu_calls[0][0] == "https://sparql.dblp.org/sparql"
+      and "<https://dblp.org/pid/56/953>" in _dba_fu_calls[0][1].get("query", "")
+      and _dba_fu_calls[0][2].get("Accept") == "application/sparql-results+json"
+      and f"Affiliations: {_dba_aff}" in _dba_fu_lines
+      and "Awards: Turing Award (2018)" in _dba_fu_lines
+      and "Publications in dblp: 1238" in _dba_fu_lines
+      and "2026. Extendable Planning via Multiscale Diffusion. AAAI. "
+          "https://dblp.org/rec/conf/aaai/ChenHBKNBA26" in _dba_fu_lines
+      and _dba_fu.metadata["publication_count"] == 1238 and _dba_fu.metadata["pid"] == "56/953"
+      and _dba_fu.metadata["affiliations"] == [_dba_aff]
+      and _dba_fu.metadata["awards"] == ["Turing Award (2018)"]
+      and [p["venue"] for p in _dba_fu.metadata["recent_publications"]] == ["AAAI", "ICLR", "CoRR"]
+      and _dba_fu.metadata["recent_publications"][2]["url"]
+      == "https://dblp.org/rec/journals/corr/abs-2601-02383"
+      and _dba_fu_rev is not None and _dba_fu_rev.content == _dba_fu.content,
+      f"doc={_dba_fu and _dba_fu.content[:300]!r} calls={len(_dba_fu_calls)}")
+_dba_nf_calls: list = []
+with _dblp_offline(_DBA_PID_UNKNOWN, calls=_dba_nf_calls):
+    _dba_nf = _dba.DBLPAuthorAdapter().fetch_url("https://dblp.org/pid/00/000000")
+with _dblp_offline(_DBLP_EMPTY):
+    _dba_nf_empty = _dba.DBLPAuthorAdapter().fetch_url("https://dblp.org/pid/00/000000")
+with _dblp_offline(_DBLP_ANUBIS, ctype="text/html; charset=utf-8"):
+    _dba_nf_wall = _dba.DBLPAuthorAdapter().fetch_url("https://dblp.org/pid/56/953")
+_dblp_neg_calls: list = []
+with _dblp_offline(_DBA_PID_FIXTURE, calls=_dblp_neg_calls):
+    _dblp_neg = [a.fetch_url(u) for u in ("https://dblp.org/db/conf/nips", "https://dblp.org/db/conf/nips/")
+                 for a in (_dbp.DBLPAdapter(), _dba.DBLPAuthorAdapter())]
+check("dblp_author: a pid with no primaryCreatorName (the lone n = 0 row), zero bindings or the Anubis "
+      "page give None; a non-person dblp URL (/db/conf/nips) is None from dblp AND dblp_author with no "
+      "request sent",
+      _dba_nf is None and len(_dba_nf_calls) == 1 and _dba_nf_empty is None and _dba_nf_wall is None
+      and _dblp_neg == [None, None, None, None] and _dblp_neg_calls == [],
+      f"nf={_dba_nf} empty={_dba_nf_empty} wall={_dba_nf_wall} neg={_dblp_neg} calls={len(_dblp_neg_calls)}")
+
+# -- omniseek_read routing: fetcher.fetch_url_with_reason tries every adapter's fetch_url in order and the
+#    first doc wins. Over the two dblp adapters (registry order kept, SPARQL stubbed per query kind,
+#    the generic web read stubbed), a pid URL lands on dblp_author and a rec URL on dblp; a venue page
+#    is answered by neither, and because dblp_author declares every dblp host in fetch_url_hosts it
+#    does NOT fall through to the generic read (which would go to dblp.org): it comes back with
+#    dblp_author's reason instead.
+_dblp_rec_body = json.dumps({"head": {"vars": []}, "results": {"bindings": [
+    json.loads(_DBP_FIXTURE)["results"]["bindings"][1]]}})
+_dblp_route_calls: list = []
+
+
+def _dblp_route_get(url, **kw):
+    q = (kw.get("params") or {}).get("query", "")
+    _dblp_route_calls.append((url, q))
+    return _dblp_resp(_DBA_PID_FIXTURE if "dblp:primaryCreatorName" in q else _dblp_rec_body)
+
+
+_dblp_route_reg = {n: a for n, a in fetcher._adapters.items() if n in ("dblp", "dblp_author")}
+_dblp_route_fb: list = []
+from omniseek.core import web_fallback as _dblp_wf  # noqa: E402
+with _dblp_offline(_DBLP_EMPTY), \
+        _dblp_mock.patch.object(_dbp.http, "get", _dblp_route_get), \
+        _dblp_mock.patch.object(fetcher, "_adapters", _dblp_route_reg), \
+        _dblp_mock.patch.object(_dblp_wf, "read_via_fallback",
+                                lambda u: _dblp_route_fb.append(u) or None):
+    _dblp_r_pid = fetcher.fetch_url_with_reason("https://dblp.org/pid/56/953")[0]
+    _dblp_r_rec = fetcher.fetch_url_with_reason("https://dblp.org/rec/conf/isnn/ShiLMLL25")[0]
+    _dblp_r_venue, _dblp_r_venue_why = fetcher.fetch_url_with_reason("https://dblp.org/db/conf/nips")
+check("dblp routing: an omniseek_read of dblp.org/pid/56/953 lands on dblp_author and of dblp.org/rec/... "
+      "on dblp (each one SPARQL request); /db/conf/nips is answered by neither and never reaches the "
+      "generic web read, it returns dblp_author's reason",
+      list(_dblp_route_reg) == ["dblp", "dblp_author"]
+      and _dblp_r_pid is not None and _dblp_r_pid.source == "dblp_author"
+      and _dblp_r_pid.url == "https://dblp.org/pid/56/953"
+      and _dblp_r_rec is not None and _dblp_r_rec.source == "dblp"
+      and _dblp_r_rec.url == "https://dblp.org/rec/conf/isnn/ShiLMLL25"
+      and len(_dblp_route_calls) == 2 and all(c[0] == _dbp.SPARQL_URL for c in _dblp_route_calls)
+      and _dblp_r_venue is None and _dblp_route_fb == []
+      and "dblp.org pages are not read" in (_dblp_r_venue_why or ""),
+      f"pid={_dblp_r_pid and _dblp_r_pid.source} rec={_dblp_r_rec and _dblp_r_rec.source} "
+      f"calls={len(_dblp_route_calls)} fallback={_dblp_route_fb} why={_dblp_r_venue_why!r}")
+
+# -- health: >= 1 binding is healthy; Anubis HTML / zero bindings are False with a reason;
+#    a busy declared gate keeps the degraded-True path
+_dbp_h_calls: list = []
+with _dblp_offline(_DBP_FIXTURE, calls=_dbp_h_calls):
+    _dbp_h_ok = _dbp.DBLPAdapter().health_check()
+with _dblp_offline(_DBA_FIXTURE):
+    _dba_h_ok = _dba.DBLPAuthorAdapter().health_check()
+with _dblp_offline(_DBLP_ANUBIS, ctype="text/html; charset=utf-8"):
+    _dbp_h_wall = _dbp.DBLPAdapter().health_check()
+    _dba_h_wall = _dba.DBLPAuthorAdapter().health_check()
+    _dbp_s_wall = _dbp.DBLPAdapter().search("attention transformer", 5)
+    _dba_s_wall = _dba.DBLPAuthorAdapter().search("Yoshua Bengio", 5)
+with _dblp_offline(_DBLP_EMPTY):
+    _dbp_h_empty = _dbp.DBLPAdapter().health_check()
+    _dba_h_empty = _dba.DBLPAuthorAdapter().health_check()
+
+
+def _dblp_busy(*a, **k):
+    raise _dblp_up.UpstreamBusy("dblp: no permit within 15.0s (gate saturated); not sent")
+
+
+with _dblp_offline(_DBP_FIXTURE, egress=_dblp_busy):
+    _dbp_h_busy = _dbp.DBLPAdapter().health_check()
+    _dba_h_busy = _dba.DBLPAuthorAdapter().health_check()
+check("dblp + dblp_author health: one SPARQL request; healthy only on SPARQL JSON with >= 1 binding",
+      _dbp_h_ok[0] is True and _dba_h_ok[0] is True and len(_dbp_h_calls) == 1
+      and _dbp_h_calls[0][0] == "https://sparql.dblp.org/sparql"
+      and 'ql:contains-word "attention"' in _dbp_h_calls[0][1].get("query", "")
+      and "<https://dblp.org/pid/56/953>" in _dba.HEALTH_QUERY,
+      f"dblp={_dbp_h_ok} author={_dba_h_ok}")
+check("dblp + dblp_author: the Anubis HTML page makes health False ('bot wall') and search []; "
+      "zero bindings make health False ('0 bindings')",
+      _dbp_h_wall[0] is False and "bot wall" in _dbp_h_wall[1]
+      and _dba_h_wall[0] is False and "bot wall" in _dba_h_wall[1]
+      and _dbp_s_wall == [] and _dba_s_wall == []
+      and _dbp_h_empty[0] is False and "0 bindings" in _dbp_h_empty[1]
+      and _dba_h_empty[0] is False and "0 bindings" in _dba_h_empty[1],
+      f"wall={_dbp_h_wall}/{_dba_h_wall} empty={_dbp_h_empty}/{_dba_h_empty} "
+      f"search={len(_dbp_s_wall)}/{len(_dba_s_wall)}")
+check("dblp + dblp_author: an UpstreamBusy from the declared gate stays degraded-True (not probed)",
+      _dbp_h_busy[0] is True and _dbp_h_busy[1].startswith("degraded:")
+      and _dba_h_busy[0] is True and _dba_h_busy[1].startswith("degraded:"),
+      f"{_dbp_h_busy} {_dba_h_busy}")
+_dblp_decl = _dblp_up.entry("dblp")
+check("dblp upstream: declared on sparql.dblp.org only, Crawl-delay 10 enforced as 1 in flight / 10 s",
+      _dblp_decl["hosts"] == ["sparql.dblp.org"]
+      and _dblp_decl["terms"]["min_interval_s"] == 10.0 and _dblp_decl["terms"]["quote"] == "Crawl-delay: 10"
+      and _dblp_decl["gate"]["min_interval_s"] == 10.0 and _dblp_decl["gate"]["max_inflight"] == 1
+      and _dblp_up.gated_uid_for_url("https://sparql.dblp.org/sparql") == "dblp"
+      and _dblp_up.uid_for_host("dblp.org") is None,
+      f"hosts={_dblp_decl.get('hosts')} gate={_dblp_decl.get('gate')}")
+
+
+# -- static: the dblp.org search endpoints are gone from the executable code of both modules
+def _dblp_exec_strings(path: Path) -> list:
+    tree = _dblp_ast.parse(path.read_text(encoding="utf-8"))
+    docstrings = set()
+    for node in _dblp_ast.walk(tree):
+        if isinstance(node, (_dblp_ast.Module, _dblp_ast.ClassDef, _dblp_ast.FunctionDef,
+                             _dblp_ast.AsyncFunctionDef)):
+            first = node.body[0] if node.body else None
+            if (isinstance(first, _dblp_ast.Expr) and isinstance(first.value, _dblp_ast.Constant)
+                    and isinstance(first.value.value, str)):
+                docstrings.add(id(first.value))
+    return [n.value for n in _dblp_ast.walk(tree)
+            if isinstance(n, _dblp_ast.Constant) and isinstance(n.value, str) and id(n) not in docstrings]
+
+
+_dblp_bad = [(p, s) for p in ("dblp_source.py", "dblp_author_source.py")
+             for s in _dblp_exec_strings(ROOT / "src" / "omniseek" / "core" / "sources" / "api" / p)
+             if any(x in s for x in ("dblp.org/search", "/search/author/api", "/search/publ/api"))]
+check("dblp + dblp_author: no 'dblp.org/search', '/search/author/api' or '/search/publ/api' string "
+      "in executable code (docstrings and comments aside)", not _dblp_bad, f"found: {_dblp_bad}")
 
 # ---------------------------------------------------------------------------
 # 33j. remotive (curated remote jobs, keyless): _job_to_doc + _strip_html are pure fns —

@@ -280,27 +280,27 @@
    }
   },
   "dblp": {
-   "name": "dblp search API",
+   "name": "dblp SPARQL endpoint (QLever)",
    "kind": "api",
-   "hosts": ["dblp.org"],
+   "hosts": ["sparql.dblp.org"],
    "sources": ["dblp", "dblp_author"],
    "terms": {
     "max_concurrency": "未公布",
-    "min_interval_s": 1.0,
+    "min_interval_s": 10.0,
     "windows": [],
     "daily_quota": "未公布",
     "auth": "未公布",
-    "quote": "waiting at least one or two seconds between consecutive requests should always be safe",
-    "url": "https://dblp.org/faq/Am+I+allowed+to+crawl+the+dblp+website.html",
-    "checked": "2026-09-28",
-    "where_checked": "the FAQ page is behind an Anubis proof-of-work page for both this machine and OmniSeek's egress on 2026-09-28; the sentence is quoted from the page as indexed by web search. Over-limit answers are HTTP 429 with Retry-After. No numeric concurrency or daily quota is published",
-    "notes": "dblp asks heavy users to query the XML dump instead."
+    "quote": "Crawl-delay: 10",
+    "url": "https://sparql.dblp.org/robots.txt",
+    "checked": "2026-10-03",
+    "where_checked": "sparql.dblp.org/robots.txt read 2026-10-03: User-agent * with Crawl-delay: 10, Allow: /sparql, Allow: /download, Disallow: /, so /sparql is the sanctioned machine entry, one request per 10 s. No concurrency or daily quota is published there. dblp.org itself: its robots.txt is User-agent * / Disallow: / for all agents, and since 2026-09 every dblp.org endpoint (search/publ/api, search/author/api, search/venue/api, pid/*.xml) answers with an Anubis proof-of-work page (HTTP 200, text/html; checked 2026-10-03 from both machines), so OmniSeek no longer sends any request to dblp.org",
+    "notes": "dblp.org record and person URIs (https://dblp.org/rec/..., https://dblp.org/pid/...) appear in SPARQL answers as identifiers only; OmniSeek never fetches them. The earlier dblp.org FAQ figure (one or two seconds between requests) no longer applies: that host is out of use."
    },
    "gate": {
     "max_inflight": 1,
-    "min_interval_s": 1.0,
+    "min_interval_s": 10.0,
     "max_wait_s": 15.0,
-    "enforced_in": "sources/api/dblp_source.py (egress) + http.py host gate"
+    "enforced_in": "sources/api/dblp_source.py sparql_select/asparql_select (http.py host gate) + sparql_probe (egress hold, shared by dblp_author health_check)"
    }
   },
   "europepmc": {

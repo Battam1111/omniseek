@@ -140,7 +140,7 @@ Generated from omniseek 0.2.1: 218 live sources across 32 domains.
 - **academic_ai_labs** `free` `stream`: Top academic AI lab blogs: Stanford CRFM / Berkeley BAIR / MIT CSAIL. Methodology-heavy counterpart to frontier_labs (industry).
 - **ai_newsletters** `free` `stream`: AI newsletter / long-form recap matrix: The Sequence / Last Week in AI / The Gradient / Nicholas Carlini / AI Weekly. Periodical ML research + security digest.
 - **canada_ai_research** `free` `stream`: 加拿大 AI 研究所 + tech ecosystem: Vector / CIFAR / UWaterloo CS / Layer 6 / BetaKit / Globe and Mail Tech / Mila / UofT Schwartz Reisman (Amii 经 scrape_js_sites; IVADO 经 ivado_news 源)
-- **frontier_labs** `free` `stream`: Frontier AI research labs: Anthropic / DeepMind / Hugging Face / OpenAI / Mistral / Meta FAIR / Microsoft Research / MSRA / Google Research / Apple ML / Ai2 / Sakana / EleutherAI / Character.AI / PyTorch
+- **frontier_labs** `free` `stream`: Frontier AI research labs: Anthropic / DeepMind / Hugging Face / OpenAI / Mistral / Meta FAIR / Microsoft Research / MSRA / Google Research / Apple ML / Ai2 / Sakana / Character.AI / PyTorch
 - **gov_policy** `free` `explicit-only` `lookup`: 中国政府网 政策文件库 (gov.cn): the AUTHORITATIVE 国务院/国办 policy-document corpus (法规/条例/通知/国令), keyword search with each hit linking the FULL policy text on gov.cn (omniseek_read it). Google can't return this faceted policy index keyed to 文号 + issuing-org + date. No login. Reach for Chinese central-government ...
 - **hk_career_research** `free` `stream`: Hong Kong AI / career / 媒体信号: SCMP News + HKFP + ASTRI (R&D 院所) + info.gov.hk (SenseTime 经 scrape_js_sites). HK PhD 出海+本地路径专用
 - **hk_universities** `free` `stream`: HK 5 大学 CS/CSE/COMP dept news: HKU CS / HKUST CSE / CUHK CSE / CityU CS / PolyU COMP (HTML scrape，HK CS 院系动态信号)
@@ -148,7 +148,7 @@ Generated from omniseek 0.2.1: 218 live sources across 32 domains.
 - **scrape_hongkong** `free` `explicit-only` `stream`: 香港创新生态 (scrape, 无 RSS): HKSTP 科技园 news & events (AI co-incubation / launchpad, 本地招 ML 的深科技公司). 补 hk_career_research
 - **scrape_js_sites** `free` `explicit-only` `stream`: JS 渲染源 (explicit_only, 经共享 CDP Chrome 渲染, 较慢, 显式点名才查): Amii (加拿大 AI 研究所) + NTU CCDS (新加坡 CS 院系新闻) + ITIB (香港创新科技及工业局) + Apollo Research (前沿评测/AI safety) + SenseTime 商汤. 这些站初始 HTML 是空壳, 内容靠运行时 JS, 故必须渲染
 - **scrape_singapore** `free` `stream`: 新加坡 AI 机构 + 移民 (scrape, 无 RSS): SEA-LION (AISG 开源 SEA LLM 产品/发布) + A*STAR press releases + SMU SCIS news + Fragomen-SG 工准证/EP 解读 + MOM newsroom (官方 press releases: EP/COMPASS/工准证政策一手, 实证 2026-06-10 静态可取). 补 singapore_ai_research / sg_immigration
-- **singapore_ai_research** `free` `stream`: 新加坡 AI 学术 + tech ecosystem: NUS News + AI Singapore + HardwareZone + Grab Eng + Vulcan Post + Tech in Asia (A*STAR/SMU/SEA-LION 经 scrape_singapore; NTU 经 scrape_js_sites)
+- **singapore_ai_research** `free` `stream`: 新加坡 AI 学术 + tech ecosystem: NUS News + AI Singapore + Grab Eng + Vulcan Post + Tech in Asia (A*STAR/SMU/SEA-LION 经 scrape_singapore; NTU 经 scrape_js_sites)
 - **wayback** `free` `explicit-only` `lookup`: Wayback Machine 时光机: 一个 URL 的历史/被删快照 (keyless, Internet Archive CDX). query = 一个 URL → 该页的存档快照列表(时间戳 + web.archive.org 存档链接,再 omniseek_read 读历史正文). web 搜只给 LIVE 页;这取开放网已遗忘/已删改的旧版本(对抗检索、读历史、读被删)。命名查询;非 URL 返空.
 
 ## funding (11)

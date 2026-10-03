@@ -142,7 +142,7 @@
   },
   {
     "name": "frontier_labs",
-    "description": "Frontier AI research labs — Anthropic / DeepMind / Hugging Face / OpenAI / Mistral / Meta FAIR / Microsoft Research / MSRA / Google Research / Apple ML / Ai2 / Sakana / EleutherAI / Character.AI / PyTorch",
+    "description": "Frontier AI research labs — Anthropic / DeepMind / Hugging Face / OpenAI / Mistral / Meta FAIR / Microsoft Research / MSRA / Google Research / Apple ML / Ai2 / Sakana / Character.AI / PyTorch",
     "feeds": [
       "https://raw.githubusercontent.com/taobojlen/anthropic-rss-feed/main/anthropic_news_rss.xml",
       "https://deepmind.google/blog/rss.xml",
@@ -159,7 +159,6 @@
       "https://aws.amazon.com/blogs/machine-learning/feed/",
       "https://allenai.org/rss.xml",
       "https://sakana.ai/feed.xml",
-      "https://blog.eleuther.ai/index.xml",
       "https://blog.character.ai/rss/",
       "https://pytorch.org/blog/feed/"
     ],
@@ -245,11 +244,10 @@
   },
   {
     "name": "singapore_ai_research",
-    "description": "新加坡 AI 学术 + tech ecosystem — NUS News + AI Singapore + HardwareZone + Grab Eng + Vulcan Post + Tech in Asia (A*STAR/SMU/SEA-LION 经 scrape_singapore; NTU 经 scrape_js_sites)",
+    "description": "新加坡 AI 学术 + tech ecosystem — NUS News + AI Singapore + Grab Eng + Vulcan Post + Tech in Asia (A*STAR/SMU/SEA-LION 经 scrape_singapore; NTU 经 scrape_js_sites)",
     "feeds": [
       "https://news.nus.edu.sg/feed/",
       "https://aisingapore.org/feed/",
-      "https://feeds.feedburner.com/hardwarezone/news",
       "https://engineering.grab.com/feed.xml",
       "https://vulcanpost.com/feed/",
       "https://www.techinasia.com/feed"
