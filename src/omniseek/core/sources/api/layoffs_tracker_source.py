@@ -318,7 +318,11 @@ class LayoffsTrackerAdapter:
                 return self._to_doc(r)
         return None
 
-    def health_check(self) -> tuple[bool, str]:
+    def health_check(self) -> tuple[Optional[bool], str]:
+        # SAME key _rows reads: while the dataset is cached, _rows answers from the cache and asks
+        # Airtable nothing, so this check verifies nothing (None).
+        if cache.get(cache.make_key(self.name, "dataset", "v1")) is not None:
+            return None, "not probed (the dataset is still cached; Airtable is asked again when it expires)"
         n = len(self._rows())
         if n:
             return True, f"OK ({n} layoff events)"

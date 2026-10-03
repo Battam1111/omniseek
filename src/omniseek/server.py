@@ -461,6 +461,12 @@ def omniseek_sources(check_health: LenientBool =False, domain: str = "", query: 
       present only when the source declares one, so a named call is filled right the first try),
       stability, access_tier, health, health_as_of, kind?, domains?, regions?, modes?, (healthy, status
       if check_health)}].
+    `health` is the watchdog's last word: ok (verified working) | down (failing across runs) |
+    unmeasured (our probe did not finish) | unverified (our probe finished but by design asked the
+    upstream nothing: a scarce quota, a busy gate or breaker, an answer from cache; neither healthy nor
+    failing) | unknown (no watchdog row). `healthy` (check_health only) is true = verified working,
+    false = verified broken, null = NOT verified by this probe (same reasons, or the probe timed out);
+    `status` says which. Never count a null as healthy or as failed.
     (did_you_mean on a domain/region near-miss; system:{recall, openalex_usage, jobs:[{name, schedule,
     enabled, last_run, next_run, budget_s, desc}, ...], upstreams:{rows, undeclared_sources,
     flagged_rows, ...}} when check_health: the background-job fleet and the upstream-limit check.)}

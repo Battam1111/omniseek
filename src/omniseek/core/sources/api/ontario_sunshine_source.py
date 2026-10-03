@@ -250,7 +250,7 @@ class OntarioSunshineAdapter:
     def fetch_url(self, url: str) -> Optional[Document]:
         return None  # structured lookup; reach via search (no arbitrary-URL fan-in)
 
-    def health_check(self) -> tuple[bool, str]:
+    def health_check(self) -> tuple[Optional[bool], str]:
         """Report from CACHE; never spend requests on a host that rate-limits by IP.
 
         MEASURED 2026-07-25: data.ontario.ca returns 429 to this IP for the WHOLE domain (even the
@@ -262,12 +262,16 @@ class OntarioSunshineAdapter:
         spending it to ask "are you up?" is backwards for a source used only by an occasional named
         drill. So: answer from the already-cached resource when we have one, and otherwise say plainly
         that nothing was verified. We do NOT reroute egress to dodge the 429; a stated rate limit is
-        respected, not evaded. Breakage still surfaces at USE time via the /eye-fix diagnostic."""
+        respected, not evaded. Breakage still surfaces at USE time via the /eye-fix diagnostic.
+
+        Either way nothing is asked of the host, so nothing is verified: None (the watchdog's
+        `unverified`), never True. A cached resource says the last drill worked, not that the host
+        works now."""
         ck = cache.make_key("ontario_sunshine", "latest_resource", "v1")
         hit = cache.get(ck)
         if hit and isinstance(hit, list) and len(hit) == 2:
-            return True, f"OK from cache (resource {hit[0]}, year {hit[1]}); host not probed live"
-        return True, ("not probed (data.ontario.ca rate-limits by IP; a probe costs several requests "
+            return None, f"not probed live (from cache: resource {hit[0]}, year {hit[1]})"
+        return None, ("not probed (data.ontario.ca rate-limits by IP; a probe costs several requests "
                       "of the budget the named drill needs). Verified at use time instead.")
 
 

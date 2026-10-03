@@ -184,7 +184,7 @@ class HuggingFaceHubAdapter(BaseAPIAdapter):
         return self._item_to_document(item, kind)
 
     # ------------------------------------------------------------- health_check
-    def health_check(self) -> tuple[bool, str]:
+    def health_check(self) -> tuple[Optional[bool], str]:
         try:
             with upstreams.egress(f"{HF_API_BASE}/models", request_s=8):  # declared Hugging Face gate
                 resp = http.direct(
@@ -195,8 +195,8 @@ class HuggingFaceHubAdapter(BaseAPIAdapter):
                 )
             upstreams.observe_response(HF_API_BASE, resp)
             return resp.status_code == 200, f"HTTP {resp.status_code}"
-        except upstreams.UpstreamBusy as exc:
-            return True, f"degraded: declared Hugging Face gate busy, not probed this cycle ({exc})"
+        except upstreams.UpstreamBusy as exc:  # nothing sent: not verified (None), not healthy
+            return None, f"degraded: declared Hugging Face gate busy, not probed this cycle ({exc})"
         except Exception as exc:  # noqa: BLE001
             return False, f"{type(exc).__name__}: {exc}"
 

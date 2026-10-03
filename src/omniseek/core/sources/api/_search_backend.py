@@ -567,7 +567,7 @@ def backend_state() -> dict:
 _ping = {"t": 0.0, "ok": None, "msg": ""}
 
 
-def backend_ping() -> tuple[bool, str]:
+def backend_ping() -> tuple[Optional[bool], str]:
     """Cached (10 min) backend reachability — so N venues' health checks cost ~1 real hit
     (avoids a rate-limit storm when the watchdog probes every search-index venue)."""
     now = time.time()
@@ -588,12 +588,14 @@ def backend_ping() -> tuple[bool, str]:
                 _ping.update(t=now, ok=ok, msg=msg)
                 return ok, msg
             # A probe must not spend the very thing it is checking: both halves are closed, so send
-            # NOTHING. True is deliberate — a cooldown is a transient state that self-heals, and a
-            # False here would let the watchdog mark all ten venues down and HIDE them for a blip.
-            # Deliberately NOT cached either, so the next probe after the cooldown sees the truth.
+            # NOTHING. None (not verified), deliberately: a cooldown is a transient state that
+            # self-heals, a False here would let the watchdog mark all ten venues down and HIDE them
+            # for a blip, and the True this used to return claimed a check nobody ran. None moves no
+            # counter and reads as `unverified`. Deliberately NOT cached either, so the next probe
+            # after the cooldown sees the truth.
             ddg_part = (f"ddg disabled: {ddg_off}" if ddg_off
                         else f"ddg {state['ddg']['cooling_s']}s")
-            return True, (f"OK (backend cooling: brave {state['brave']['cooling_s']}s / "
+            return None, (f"not probed (backend cooling: brave {state['brave']['cooling_s']}s / "
                           f"{ddg_part}; will self-heal)")
         backend = "brave" if _brave_key() else "ddg"
         try:

@@ -32,9 +32,9 @@ from omniseek.core import fetcher, infra_jobs
 ALIVE_TITLE = "已退役源复活"
 RETIRED = {"retired_alive": "retired: stale overlay 2026-06-18",
            "retired_dead": "retired: upstream gone 2026-07-10"}
-ANSWERS = {"normal": (True, "OK"),
-           "retired_alive": (True, "OK (feed answers again)"),
-           "retired_dead": (False, "HTTP 503 Service Unavailable")}
+ANSWERS = {"normal": (True, "OK", True),
+           "retired_alive": (True, "OK (feed answers again)", True),
+           "retired_dead": (False, "HTTP 503 Service Unavailable", True)}
 
 
 class RetiredSourcesThroughRunSourceHealth(unittest.TestCase):
@@ -104,6 +104,7 @@ class RetiredSourcesThroughRunSourceHealth(unittest.TestCase):
             self.assertNotIn(name, saved.get("fails", {}), f"{name} got a fail streak")
             self.assertNotIn(name, saved.get("last_status", {}), f"{name} got a last_status row")
             self.assertNotIn(name, saved.get("unmeasured", {}))
+            self.assertNotIn(name, saved.get("unverified", {}))
             self.assertNotIn(f"down:{name}", saved.get("_alerts", {}))
             self.assertNotIn(name, saved.get("degraded", []))
             self.assertNotIn(name, saved.get("refused", []))

@@ -263,7 +263,7 @@ class _OrgWatchAdapter:
             logger.warning("org_watch[%s] fetch_url failed: %s", self.name, exc)
             return None
 
-    def health_check(self) -> tuple[bool, str]:
+    def health_check(self) -> tuple[Optional[bool], str]:
         # Delegate to the shared single-flight upstream probe (see _openalex.health): 39 org_watch
         # rows + openalex + researcher_watch share ONE OpenAlex key + breaker, so probing each row's
         # affiliation separately used to fire ~40 concurrent calls and burst the key into 429. The

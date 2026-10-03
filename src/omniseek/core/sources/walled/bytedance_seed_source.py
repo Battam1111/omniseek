@@ -232,7 +232,11 @@ class BytedanceSeedAdapter:
             return None
         return self._post_to_document(post_detail)
 
-    def health_check(self) -> tuple[bool, str]:
+    def health_check(self) -> tuple[Optional[bool], str]:
+        # SAME key _fetch_filters_meta reads: while the meta is cached (1 h), it answers from the cache
+        # and asks the JSON API nothing, so this check verifies nothing (None).
+        if cache.get(cache.make_key("bytedance_seed", "filters_meta", "v1")) is not None:
+            return None, "not probed (the filters meta is still cached; the JSON API is asked again when it expires)"
         try:
             meta = self._fetch_filters_meta()
             if meta and meta.get("code") == 0:

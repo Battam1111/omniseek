@@ -53,7 +53,7 @@ class DataScienceSEAdapter(BaseScrapeAdapter):
     def fetch_url(self, url: str) -> Optional[Document]:
         return _stackexchange.fetch_question_document(url, self.name, SITE, SITE_HOST)
 
-    def health_check(self) -> tuple[bool, str]:
+    def health_check(self) -> tuple[Optional[bool], str]:
         # Shared single-flight probe — all SE sources share the keyless per-IP quota.
         return _stackexchange.health()
 

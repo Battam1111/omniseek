@@ -240,7 +240,7 @@ class ArxivAdapter(BaseAPIAdapter):
             return None
         return self._entry_to_document(feed.entries[0])
 
-    def health_check(self) -> tuple[bool, str]:
+    def health_check(self) -> tuple[Optional[bool], str]:
         # Light DIRECT probe with its OWN short timeout.
         #
         # A 429 is NOT health, however alive the host is. Until 2026-08-19 this returned True on
@@ -258,7 +258,8 @@ class ArxivAdapter(BaseAPIAdapter):
         try:
             # The probe is a real API request: it takes the same permit AND the same 3 s start slot
             # as a search (it used to take only the in-flight permit, so a health sweep could land
-            # inside another request's 3 s). Bounded: a busy gate reports "not probed", not down.
+            # inside another request's 3 s). Bounded: a busy gate reports "not probed" (None, not
+            # verified), never down and never healthy.
             with _guard.hold(upstreams.max_wait("arxiv"), _busy, on_backlog=_busy, request_s=15):
                 resp = http.direct(  # a one-shot client: its connection closes when it returns
                     "GET", _API,
@@ -267,7 +268,7 @@ class ArxivAdapter(BaseAPIAdapter):
                     timeout=15,
                 )
         except _ArxivBusy:
-            return True, ("degraded: the arXiv gate (one connection, 3 s spacing) was busy, so this "
+            return None, ("degraded: the arXiv gate (one connection, 3 s spacing) was busy, so this "
                           "cycle did not probe; searches are queueing, not failing")
         except Exception as exc:  # noqa: BLE001
             return False, f"{type(exc).__name__}: {exc}"

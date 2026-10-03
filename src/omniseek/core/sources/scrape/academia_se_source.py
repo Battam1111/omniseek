@@ -67,7 +67,7 @@ class AcademiaSEAdapter(BaseScrapeAdapter):
     def fetch_url(self, url: str) -> Optional[Document]:
         return _stackexchange.fetch_question_document(url, self.name, SITE, SITE_HOST)
 
-    def health_check(self) -> tuple[bool, str]:
+    def health_check(self) -> tuple[Optional[bool], str]:
         # Shared single-flight probe (see _stackexchange.health): all SE sources share the
         # api.stackexchange.com keyless per-IP quota, so they delegate to ONE 60s-cached probe
         # instead of each firing its own live /questions GET on every health sweep.

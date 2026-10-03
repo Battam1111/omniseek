@@ -129,11 +129,12 @@ class S2AuthorsAdapter(BaseScrapeAdapter):
             return mk_signal("citations", cites, kind="citation", by="s2_authors/citationCount")
         return {}
 
-    def health_check(self) -> tuple[bool, str]:
+    def health_check(self) -> tuple[Optional[bool], str]:
         """Liveness via a tiny author search. The shared keyless S2 pool 429s under load; a 429
         PROVES the endpoint is alive (it answered), so report healthy-but-throttled rather than
         down. http.get_json raise_for_status-es a 429 down to None (losing the status), so probe
-        with a direct httpx call here that does NOT raise, and read the status itself."""
+        with a direct httpx call here that does NOT raise, and read the status itself. A busy
+        declared gate sends nothing, so that case is None (not verified)."""
         try:
             # The probe takes the declared S2 gate like every other S2 request (1 RPS shared with
             # _s2's keyed client and this source's searches through the shared http client).
@@ -141,7 +142,7 @@ class S2AuthorsAdapter(BaseScrapeAdapter):
                             headers={"User-Agent": http.USER_AGENT}, timeout=15,
                             follow_redirects=True)
         except upstreams.UpstreamBusy as exc:
-            return True, f"degraded: declared S2 gate busy, not probed this cycle ({exc})"
+            return None, f"degraded: declared S2 gate busy, not probed this cycle ({exc})"
         except Exception as exc:  # noqa: BLE001
             return False, f"{type(exc).__name__}: {str(exc)[:80]}"
         if r.status_code == 429:

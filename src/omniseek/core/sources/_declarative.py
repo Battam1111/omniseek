@@ -646,7 +646,7 @@ class DeclarativeAPIAdapter:
         host a row's docs come from."""
         return None
 
-    def health_check(self) -> tuple[bool, str]:
+    def health_check(self) -> tuple[Optional[bool], str]:
         """Probe with a tiny live request; healthy if the results list is reachable.
 
         Probes ``_fetch_response`` (not ``_fetch_results``) so a DOWN upstream is caught: the egress
@@ -660,13 +660,14 @@ class DeclarativeAPIAdapter:
         # burned answering "are you up?". The source then reports DOWN for a quota exhaustion OmniSeek
         # itself caused. Same reasoning the health run already uses to skip RETIRED sources ("the retire
         # IS the decision; probing it is noise"), except here it is worse than noise.
-        # Reporting True keeps the source USABLE (a False would park it in watchdog_down and hide it);
-        # the message is explicit that nothing was verified, mirroring the "degraded, not probed this
-        # cycle" semantics the shared-upstream probes adopted 2026-07-25. Breakage still surfaces at USE
-        # time: a named drill emits the per-source /eye-fix diagnostic, and these rows are named-only.
+        # Reporting None (not verified) keeps the source USABLE and honest: a False would park it in
+        # watchdog_down and hide it, and the True this used to return counted a source OmniSeek never
+        # tests as healthy forever. None is neither: the watchdog moves no counter and shows it as
+        # `unverified`. Breakage still surfaces at USE time: a named drill emits the per-source /eye-fix
+        # diagnostic, and these rows are named-only.
         if getattr(self, "no_live_probe", False):
             _why = self.no_live_probe if isinstance(self.no_live_probe, str) else "quota too scarce to probe"
-            return True, f"not probed (would spend the metered quota): {_why}"
+            return None, f"not probed (would spend the metered quota): {_why}"
         diag.enable()
         try:
             response = self._fetch_response(self._render_params("test", 1))

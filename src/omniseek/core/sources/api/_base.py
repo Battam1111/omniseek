@@ -230,8 +230,8 @@ class BaseAPIAdapter:
         if not self.health_probe_url:
             # None, not False. A missing probe URL is OUR configuration gap, not evidence about the
             # upstream: reporting False published "this source is down" for something we never
-            # asked. None is the third state, "not measured", which the watchdog now leaves out of
-            # the consecutive-fail counter instead of quarantining the source over it.
+            # asked. None is "not verified" (the watchdog's `unverified`), which stays out of the
+            # consecutive-fail counter instead of quarantining the source over it.
             return None, "our adapter configuration is missing health_probe_url"
         resp = http.get(self.health_probe_url, timeout=10)
         if resp is None:

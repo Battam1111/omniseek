@@ -96,10 +96,14 @@ class PdfAdapter:
             metadata={"pages": n_pages, "extracted_chars": len(text), "truncated": truncated},
         )
 
-    def health_check(self) -> tuple[bool, str]:
+    def health_check(self) -> tuple[Optional[bool], str]:
+        # This source has no fixed upstream (it reads whatever PDF URL it is given), so the local
+        # parser IS the whole of what can be verified: a present PyMuPDF is a verified True, not an
+        # unverified None (pilot ruling 2026-10-04; None would leave it unverified forever). A
+        # missing PyMuPDF stays False (the source cannot serve at all).
         try:
             import fitz  # noqa: F401
-            return True, "OK (PyMuPDF ready)"
+            return True, "OK (PyMuPDF ready; no fixed upstream to probe)"
         except Exception as exc:  # noqa: BLE001
             return False, f"PyMuPDF missing: {exc}"
 

@@ -212,7 +212,11 @@ class OpenRouterRankingsAdapter:
                 return self._to_doc(e)
         return None
 
-    def health_check(self) -> tuple[bool, str]:
+    def health_check(self) -> tuple[Optional[bool], str]:
+        # SAME key _rankings reads: while the rankings are cached, _rankings answers from the cache
+        # and asks OpenRouter nothing, so this check verifies nothing (None).
+        if cache.get(cache.make_key("openrouter_rankings", "models", "week")) is not None:
+            return None, "not probed (the rankings are still cached; OpenRouter is asked again when they expire)"
         n = len(self._rankings())
         if n:
             return True, f"OK ({n} models ranked)"

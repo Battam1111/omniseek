@@ -187,7 +187,7 @@ class HackerNewsAdapter:
             return None
         return self._item_to_document(item)
 
-    def health_check(self) -> tuple[bool, str]:
+    def health_check(self) -> tuple[Optional[bool], str]:
         try:
             with upstreams.egress(f"{ALGOLIA_BASE}/search", request_s=8):  # declared HN Search gate (10,000/h per IP)
                 resp = http.direct(
@@ -200,8 +200,8 @@ class HackerNewsAdapter:
             if resp.status_code == 200 and resp.json().get("hits") is not None:
                 return True, "OK"
             return False, f"HTTP {resp.status_code}"
-        except upstreams.UpstreamBusy as exc:
-            return True, f"degraded: declared HN Search gate busy, not probed this cycle ({exc})"
+        except upstreams.UpstreamBusy as exc:  # nothing sent: not verified (None), not healthy
+            return None, f"degraded: declared HN Search gate busy, not probed this cycle ({exc})"
         except Exception as exc:  # noqa: BLE001
             return False, f"{type(exc).__name__}: {exc}"
 

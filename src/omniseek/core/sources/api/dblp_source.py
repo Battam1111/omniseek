@@ -224,15 +224,16 @@ async def asparql_select(query: str, *, timeout: int = TIMEOUT) -> Optional[list
     return rows
 
 
-def sparql_probe(query: str, what: str, *, timeout: int = TIMEOUT) -> tuple[bool, str]:
+def sparql_probe(query: str, what: str, *, timeout: int = TIMEOUT) -> tuple[Optional[bool], str]:
     """Health probe shared by both dblp adapters: ONE gated request for a known entity. Healthy only
     when the answer is SPARQL JSON with at least one binding. The gate is taken here first, so a busy
-    gate surfaces as ``UpstreamBusy`` (degraded, not probed) instead of a failed request."""
+    gate surfaces as ``UpstreamBusy`` (None: degraded, not probed, so not verified) instead of a
+    failed request."""
     try:
         with upstreams.egress(SPARQL_URL, request_s=timeout):
             resp = http.get(SPARQL_URL, params={"query": query}, headers=HEADERS, timeout=timeout)
     except upstreams.UpstreamBusy as exc:
-        return True, f"degraded: declared dblp gate busy, not probed this cycle ({exc})"
+        return None, f"degraded: declared dblp gate busy, not probed this cycle ({exc})"
     except Exception as exc:  # noqa: BLE001
         return False, f"{type(exc).__name__}: {str(exc)[:80]}"
     rows, why = read_response(resp)
@@ -360,7 +361,7 @@ class DBLPAdapter(BaseAPIAdapter):
             return None
 
     # ------------------------------------------------------------- health_check
-    def health_check(self) -> tuple[bool, str]:
+    def health_check(self) -> tuple[Optional[bool], str]:
         return sparql_probe(HEALTH_QUERY, 'title word pair "attention" + "transformer"')
 
     # ------------------------------------------------------------ field mapping

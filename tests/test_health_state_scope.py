@@ -32,6 +32,7 @@ DECLARED = {
     "last_status": "per-source, scope-aware: rebuilt only on a full run, merged on the fast lane",
     "degraded":    "per-source, scope-aware: rebuilt only on a full run, merged on the fast lane",
     "unmeasured":  "per-source, scope-aware: rebuilt only on a full run, merged on the fast lane",
+    "unverified":  "per-source, scope-aware: rebuilt only on a full run, merged on the fast lane",
     "refused":     "per-source, scope-aware: rebuilt only on a full run, merged on the fast lane",
     "retired_alive": "per-source, scope-aware: rebuilt only on a full run, merged on the fast lane",
 }
@@ -46,7 +47,10 @@ DECLARED = {
 # observations exactly like `degraded`, so a fast lane that rebuilt it wholesale would drop every
 # CDP source out of it and re-add them on the next daily run, which is the same recurring-lie shape
 # this file was written to stop.
-MUST_BE_FULL_GATED = ("last_status", "degraded", "unmeasured", "refused", "retired_alive")
+# `unverified` joined them on 2026-10-04: it names the sources whose probe COMPLETED but, by design,
+# asked the upstream nothing (a metered quota, a busy gate, a breaker, an answer from cache). It is
+# rebuilt from this run's observations exactly like `unmeasured`, with the same fast-lane hazard.
+MUST_BE_FULL_GATED = ("last_status", "degraded", "unmeasured", "refused", "retired_alive", "unverified")
 
 
 class HealthStateScopeTests(unittest.TestCase):

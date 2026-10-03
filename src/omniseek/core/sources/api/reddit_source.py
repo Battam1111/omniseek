@@ -1263,14 +1263,15 @@ class RedditAdapter:
                 return self._submission_to_document(items[0])
         return None
 
-    def health_check(self) -> tuple[bool, str]:
+    def health_check(self) -> tuple[Optional[bool], str]:
         # Breaker open = Arctic is THROTTLING us (429), not down: the host is alive and the data path
-        # falls back to cache, so report healthy-with-a-note rather than "unreachable" (mirrors
-        # _s2.health's "429 = API alive, rate-limiting us"). Conflating throttle with down would
-        # false-alarm the health sweep AND hide WHY reddit returns empty during a burst (the legibility
-        # gap the 18-agent concurrency stress test surfaced: reddit was throttled, not broken).
+        # falls back to cache, so this must not read "unreachable" (mirrors _s2.health's "429 = API
+        # alive, rate-limiting us"). Conflating throttle with down would false-alarm the health sweep
+        # AND hide WHY reddit returns empty during a burst (the legibility gap the 18-agent concurrency
+        # stress test surfaced: reddit was throttled, not broken). While cooling no probe is sent, so
+        # nothing is verified: None (the watchdog's `unverified`), neither healthy nor failing.
         if _arctic_cooling():
-            return True, "OK (Arctic Shift; rate-limited/cooling, reddit serves cache until it clears)"
+            return None, "not probed (Arctic Shift rate-limited/cooling; reddit serves cache until it clears)"
         # The probe has the shape the data path uses (title keyword search, 2026-10-04), so health
         # tests what search actually sends.
         diag.enable()

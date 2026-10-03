@@ -148,7 +148,11 @@ class AJOAdapter:
                 return self._to_doc(p)
         return None
 
-    def health_check(self) -> tuple[bool, str]:
+    def health_check(self) -> tuple[Optional[bool], str]:
+        # SAME key _positions reads: while the listing is cached, _positions answers from the cache
+        # and asks the site nothing, so this check verifies nothing (None).
+        if cache.get(cache.make_key("ajo", "positions", "v1")) is not None:
+            return None, "not probed (the listing is still cached; the site is asked again when it expires)"
         n = len(self._positions())
         if n:
             return True, f"OK ({n} positions parsed)"

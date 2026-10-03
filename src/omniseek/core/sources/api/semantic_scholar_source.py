@@ -137,7 +137,7 @@ class SemanticScholarAdapter:
             logger.warning("S2 fetch_url failed for %s: %s", url, exc)
             return None
 
-    def health_check(self) -> tuple[bool, str]:
+    def health_check(self) -> tuple[Optional[bool], str]:
         # Delegate to the ONE shared, single-flighted S2 probe (60s cache). Before this, this
         # adapter probed S2 directly in its own health_check; the all-source health sweep then
         # fired every S2-backed source's probe at once, bursting the shared key into a 429 storm

@@ -194,10 +194,14 @@ class DoubanGroupsAdapter:
     def fetch_url(self, url: str) -> Optional[Document]:
         return None  # search-only; the topic abstract already carries the gist
 
-    def health_check(self) -> tuple[bool, str]:
+    def health_check(self) -> tuple[Optional[bool], str]:
         cdp_ok, cdp_msg = cdp_health(ensure=True)
         if not cdp_ok:
             return False, f"CDP not reachable: {cdp_msg}"
+        # SAME key search() reads for this probe query: while it is cached, search answers from the
+        # cache and asks douban nothing, so this check verifies nothing (None).
+        if cache.get(cache.make_key("douban_groups", "search", "上海租房", 3)) is not None:
+            return None, "not probed (the probe search is still cached; douban is asked again when it expires)"
         try:
             docs = self.search("上海租房", limit=3)
             if docs:

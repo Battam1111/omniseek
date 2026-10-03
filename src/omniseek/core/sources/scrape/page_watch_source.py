@@ -232,10 +232,14 @@ class PageWatchAdapter:
                 return self._doc_for(row)
         return None
 
-    def health_check(self) -> tuple[bool, str]:
+    def health_check(self) -> tuple[Optional[bool], str]:
         rows = self._rows()
         if not rows:
             return False, "no pages configured"
+        # SAME key _doc_for reads: while the page text is cached, _doc_for answers from the cache and
+        # fetches nothing, so this check verifies nothing (None).
+        if cache.get(cache.make_key("page_watch", "text", rows[0]["url"])) is not None:
+            return None, f"not probed (the first page's text is still cached; {rows[0]['url']} is fetched again when it expires)"
         d = self._doc_for(rows[0])
         if d is None:
             return False, f"first page yielded no text ({rows[0]['url']})"

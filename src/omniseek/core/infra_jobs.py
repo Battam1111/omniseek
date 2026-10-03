@@ -157,7 +157,8 @@ def _prune_stale_health_rows(state: dict, live: set) -> dict:
 
     fails, status, alerts = _d("fails"), _d("last_status"), _d("_alerts")
     unmeasured = _d("unmeasured")  # the third state gets pruned like the other two, or it fossilizes
-    rows = set(fails) | set(status) | set(unmeasured)
+    unverified = _d("unverified")  # and the fourth, for the same reason
+    rows = set(fails) | set(status) | set(unmeasured) | set(unverified)
     written_infra = {f"_cdp:{label}" for label in _CDP_INSTANCES}
     orphan_infra = sorted(r for r in rows
                           if r.startswith(_INFRA_ROW_PREFIX) and r not in written_infra)
@@ -168,33 +169,45 @@ def _prune_stale_health_rows(state: dict, live: set) -> dict:
         fails.pop(n, None)
         status.pop(n, None)
         unmeasured.pop(n, None)
+        unverified.pop(n, None)
         alerts.pop(f"down:{n}", None)
     return {"pruned": stale, "orphan_infra": orphan_infra, "skipped": ""}
 
 
-def _health_probe(adapter) -> tuple[Optional[bool], str]:
+def _health_probe(adapter) -> tuple[Optional[bool], str, bool]:
     """BOUNDED health_check (per-source hard timeout -> can never hang the loop) with one in-run
-    retry to absorb transient blips. Routes through the same fetcher.health_check_bounded primitive
-    the live MCP probe uses.
+    retry to absorb transient blips. Routes through the same fetcher.health_check_outcome primitive
+    the live MCP probe uses. Returns ``(ok, msg, completed)``.
 
-    THREE states, not two. health_check_bounded returns None when OUR probe hit its hard timeout,
-    which is not the same fact as the source answering with a failure. This function used to
-    declare ``-> tuple[bool, str]`` and flatten None into False on the last line, so a probe we
-    could not complete was recorded as a source that is down. On 2026-08-19 that flattening had
-    ten sources (all six Stack Exchange slices, github, github_trending, github_releases, reddit)
-    soft-skipped out of every broad sweep while a paced re-probe found nine of them healthy.
-    Propagating None keeps "we did not measure" separate from "it failed"; the caller must not
-    move the consecutive-fail counter on None."""
+    THREE results, and two kinds of None. ``ok`` True = verified working, False = verified broken,
+    None = not verified. ``completed`` tells the two Nones apart: False means OUR probe hit its hard
+    timeout (recorded as ``unmeasured``); True means the adapter finished and reported that, by
+    design, it asked the upstream nothing this run (a metered quota, a busy declared gate, a breaker,
+    an answer from cache; recorded as ``unverified``). Neither is a failure.
+
+    This function used to declare ``-> tuple[bool, str]`` and flatten None into False on the last
+    line, so a probe we could not complete was recorded as a source that is down. On 2026-08-19 that
+    flattening had ten sources (all six Stack Exchange slices, github, github_trending,
+    github_releases, reddit) soft-skipped out of every broad sweep while a paced re-probe found nine
+    of them healthy. Propagating None keeps "we did not measure" separate from "it failed"; the caller
+    must not move the consecutive-fail counter on None.
+
+    An unverified answer is NOT retried: the adapter chose not to ask (a quota it must not spend, a
+    gate that is busy now), so a second call three seconds later would either say the same or spend
+    exactly what the first one declined to spend."""
     from omniseek.core import fetcher
     ok: Optional[bool] = False
     msg = "?"
+    completed = True
     for attempt in (1, 2):
-        ok, msg = fetcher.health_check_bounded(adapter)
+        ok, msg, completed = fetcher.health_check_outcome(adapter)
         if ok:
-            return True, str(msg)
+            return True, str(msg), True
+        if ok is None and completed:
+            return None, str(msg), True
         if attempt == 1:
             time.sleep(3)
-    return (None if ok is None else False), str(msg)
+    return (None if ok is None else False), str(msg), completed
 
 
 # "They refuse us" is not "we are broken", and the two were indistinguishable in the alert. A 403
@@ -216,10 +229,12 @@ def _health_track(name: str, ok: Optional[bool], msg: str, fails: dict, alerts: 
                   newly_down: list, recovered: list) -> None:
     """Shared consecutive-fail / recovery bookkeeping for one probed entity (cron_watchdog._track).
 
-    ``ok is None`` means OUR probe timed out, so we learned nothing about this source. The counter
-    must not move in EITHER direction: incrementing it quarantines a healthy source (the 2026-08-19
-    ten-source false-down), and zeroing it would erase a real failure streak on a coincidental
-    timeout. The run body records the name in ``unmeasured`` so the gap stays visible."""
+    ``ok is None`` means we learned nothing about this source this run: either OUR probe timed out
+    (``unmeasured``) or the probe finished without asking the upstream anything (``unverified``).
+    The counter must not move in EITHER direction: incrementing it quarantines a healthy source (the
+    2026-08-19 ten-source false-down), and zeroing it would erase a real failure streak on a
+    coincidental timeout or a busy gate. No alert either way. The run body records the name in
+    ``unmeasured`` or ``unverified`` so the gap stays visible."""
     if ok is None:
         return
     prev = fails.get(name, 0)
@@ -335,7 +350,8 @@ def run_source_health(scope: str = "all") -> dict:
     def probe_named(n):
         return n, _health_probe(fetcher.get_adapter(n))
 
-    results: dict[str, tuple[bool, str]] = {}
+    # name -> (ok, msg, completed): ok True / False / None, see _health_probe
+    results: dict[str, tuple[Optional[bool], str, bool]] = {}
     with ThreadPoolExecutor(max_workers=PROBE_WORKERS) as ex:
         for n, res in ex.map(probe_named, noncdp):
             results[n] = res
@@ -396,7 +412,7 @@ def run_source_health(scope: str = "all") -> dict:
     # back if the feeds come back, and that signal only exists if someone keeps looking.
     retired &= set(probed)
     for n in probed:
-        ok, msg = results[n]
+        ok, msg, _completed = results[n]
         if n in retired:
             continue  # no fail streak, no alarm; the alive-again transition is handled below
         _health_track(n, ok, msg, fails, alerts, newly_down, recovered)
@@ -415,9 +431,11 @@ def run_source_health(scope: str = "all") -> dict:
     # DEGRADED transition: a multi-feed bundle can be healthy (ok=True) yet have lost members. Those
     # never enter newly_down, so member rot was invisible until ALL feeds died. Track the degraded set
     # across runs and alert on a source's full->degraded transition once (a bundle names its dead feeds in
-    # the health message via the "degraded" marker). Recovery to full clears it silently.
+    # the health message via the "degraded" marker). Recovery to full clears it silently. Only a
+    # VERIFIED True counts: an unverified None whose message says "degraded" (a busy gate, a breaker)
+    # lost no members, and before 2026-10-04 those read True and could fire this alert.
     degraded_now = {n for n in probed
-                    if n not in retired and results[n][0] and "degraded" in results[n][1].lower()}
+                    if n not in retired and results[n][0] is True and "degraded" in results[n][1].lower()}
     prev_degraded = set(state.get("degraded", []))
     newly_degraded = [n for n in sorted(degraded_now) if n not in prev_degraded]
     if newly_degraded:
@@ -475,11 +493,22 @@ def run_source_health(scope: str = "all") -> dict:
     # Same merge rule as snap so the fast lane does not erase the daily lane's rows.
     unm = dict(state.get("unmeasured", {})) if not full else {}
     for n in probed:
-        if results[n][0] is None:
+        if results[n][0] is None and not results[n][2]:
             unm[n] = str(results[n][1])[:200]
         else:
             unm.pop(n, None)
     state["unmeasured"] = unm
+    # The fourth state, also its OWN map for the same key-set reason: the probe COMPLETED, but by
+    # design asked the upstream nothing (a metered quota, a busy declared gate, a breaker, an answer
+    # from cache). Neither healthy nor failing, so it moves no counter above and must not read as ok.
+    # Same merge rule as snap / unm so the fast lane keeps the daily lane's rows.
+    unv = dict(state.get("unverified", {})) if not full else {}
+    for n in probed:
+        if results[n][0] is None and results[n][2]:
+            unv[n] = str(results[n][1])[:200]
+        else:
+            unv.pop(n, None)
+    state["unverified"] = unv
     # A retired source is probed only for the alive-again signal above -> drop its stale fail / status /
     # alert entries so a parked source self-cleans instead of freezing at a stale "down" (no manual
     # state edit ever needed), and this run's probe never lands in them.
@@ -487,13 +516,22 @@ def run_source_health(scope: str = "all") -> dict:
         fails.pop(r, None)
         snap.pop(r, None)
         unm.pop(r, None)
+        unv.pop(r, None)
         alerts.pop(f"down:{r}", None)
     _save_state(_HEALTH_STATE, state)
 
-    n_green = sum(1 for n in probed if results[n][0])
-    log.info("source-health[%s]: %d/%d healthy (%d CDP); newly_down=%d recovered=%d alert=%d",
-             scope, n_green, len(probed), len(cdp), len(newly_down), len(recovered), pushed)
-    return {"healthy": n_green, "probed": len(probed), "newly_down": len(newly_down),
+    # Counted apart, never summed into "healthy": only a VERIFIED True is green, and an unverified or
+    # unmeasured None is neither green nor a failure.
+    n_green = sum(1 for n in probed if results[n][0] is True)
+    n_failed = sum(1 for n in probed if results[n][0] is False)
+    n_unverified = sum(1 for n in probed if results[n][0] is None and results[n][2])
+    n_unmeasured = sum(1 for n in probed if results[n][0] is None and not results[n][2])
+    log.info("source-health[%s]: %d/%d healthy, %d failed, %d unverified, %d unmeasured (%d CDP); "
+             "newly_down=%d recovered=%d alert=%d",
+             scope, n_green, len(probed), n_failed, n_unverified, n_unmeasured, len(cdp),
+             len(newly_down), len(recovered), pushed)
+    return {"healthy": n_green, "failed": n_failed, "unverified": n_unverified,
+            "unmeasured": n_unmeasured, "probed": len(probed), "newly_down": len(newly_down),
             "recovered": len(recovered), "alert": pushed, "pruned": _pr["pruned"]}
 
 

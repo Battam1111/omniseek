@@ -265,11 +265,15 @@ class XiaoyuzhouAdapter:
                 logger.warning("xiaoyuzhou fetch_url failed for %s: %s", url, exc)
         return None
 
-    def health_check(self) -> tuple[bool, str]:
+    def health_check(self) -> tuple[Optional[bool], str]:
         pods = self._podcasts()
         if not pods:
             return False, "no podcasts configured"
         first = pods[0]
+        # SAME key _fetch_podcast reads: while the page is cached, it answers from the cache and asks
+        # xiaoyuzhou nothing, so this check verifies nothing (None).
+        if cache.get_docs(cache.make_key("xiaoyuzhou", "podcast", first.get("id"))) is not None:
+            return None, f"not probed ({first.get('name', '?')} is still cached; the site is asked again when it expires)"
         try:
             docs = self._fetch_podcast(first.get("id"), first.get("name", "?"))
             if docs:

@@ -848,8 +848,8 @@ try:
     _rd_ag_calls = []
     reddit_source._arctic_get = lambda *a, **k: (_rd_ag_calls.append(1), [])[1]
     _h_cool = _rd_ad.health_check()
-    check("reddit health: breaker cooling reads healthy-throttled (not 'unreachable') + skips the probe",
-          _h_cool[0] is True and "cooling" in _h_cool[1] and len(_rd_ag_calls) == 0)
+    check("reddit health: breaker cooling reads NOT VERIFIED (None, not 'unreachable', not healthy) + skips the probe",
+          _h_cool[0] is None and "cooling" in _h_cool[1] and len(_rd_ag_calls) == 0)
     reddit_source._arctic_cooldown_until = 0.0  # breaker closed for the next two cases
     reddit_source._arctic_get = lambda *a, **k: []
     _h_empty = _rd_ad.health_check()
@@ -1773,8 +1773,8 @@ try:
 finally:
     _sb.time, _sb._get_client, _sb._brave_key = _SB_REAL_TIME, _SB_REAL_CLIENT, _SB_REAL_KEY
     _sb_reset()
-check("backend_ping spends NO request while both halves cool, and stays True (a transient cooldown must not let the watchdog hide ten venues)",
-      _sb7.get("ping", (None, ""))[0] is True and "cooling" in _sb7.get("ping", (None, ""))[1]
+check("backend_ping spends NO request while both halves cool, and reads None (not verified: a transient cooldown must not let the watchdog hide ten venues, nor count them healthy)",
+      _sb7.get("ping", (False, ""))[0] is None and "cooling" in _sb7.get("ping", (False, ""))[1]
       and _sb7.get("calls") == 0, str(_sb7))
 
 # (8)(9)(10) the three empties a search-index venue can hit, told apart at last. The disk cache is
@@ -2487,15 +2487,16 @@ check("declarative auth: rows without auth_header send no auth header at all",
 _c7 = fetcher.get_adapter("context7")
 if _c7 is not None:
     _c7_ok, _c7_msg = _c7.health_check()
-    check("context7: health_check spends NO quota (declarative no_live_probe) and says it was not probed",
-          _c7_ok is True and "not probed" in _c7_msg, _c7_msg[:70])
+    check("context7: health_check spends NO quota (declarative no_live_probe), says it was not probed, "
+          "and reads None (not verified), never True",
+          _c7_ok is None and "not probed" in _c7_msg, _c7_msg[:70])
     check("context7: the row carries the no_live_probe REASON (not a bare flag)",
           isinstance(getattr(_c7, "no_live_probe", False), str))
 _ont_h = fetcher.get_adapter("ontario_sunshine")
 if _ont_h is not None:
     _o_ok, _o_msg = _ont_h.health_check()
-    check("ontario_sunshine: health_check answers from cache / not-probed, never a live 429-bait call",
-          _o_ok is True and ("not probed" in _o_msg or "from cache" in _o_msg), _o_msg[:70])
+    check("ontario_sunshine: health_check answers from cache / not-probed (None, not verified), never a live 429-bait call",
+          _o_ok is None and ("not probed" in _o_msg or "from cache" in _o_msg), _o_msg[:70])
 # A NORMAL declarative row must still be probed live, or the watchdog goes blind to real breakage.
 _cd = fetcher.get_adapter("conference_deadlines")
 if _cd is not None:
@@ -4784,18 +4785,18 @@ finally:
     _oa2.get_json = _save_gj_h
     _oa2._health["result"] = None
     _oa2._health["at"] = 0.0
-# 2026-07-23 watchdog false-mass-down fix: health() reports DEGRADED (ok, not down) while OmniSeek
-# SELF-SHEDS (breaker open / pool saturated): a transient breaker-open must NOT flip all 40+
-# OpenAlex-backed sources down. Force the breaker open (open_until far future) so get_json raises
-# OpenAlexDown (self-shed) BEFORE any network, and health() must report ok=True + "degraded".
+# 2026-07-23 watchdog false-mass-down fix: health() must NOT report down while OmniSeek SELF-SHEDS
+# (breaker open / pool saturated): a transient breaker-open must NOT flip all 40+ OpenAlex-backed
+# sources down. Since 2026-10-04 it is not healthy either: nothing was sent, so it is None (not
+# verified). Force the breaker open (open_until far future) so get_json raises OpenAlexDown
+# (self-shed) BEFORE any network, and health() must report ok=None + "degraded".
 _oa2._state["open_until"] = 9e18
 _oa2._health["result"] = None; _oa2._health["at"] = 0.0
 _oa_deg = _oa2.health()
 _oa2._state["open_until"] = 0.0
 _oa2._health["result"] = None; _oa2._health["at"] = 0.0
-check("openalex: health() DEGRADED (ok, not down) while self-shedding, not a false outage",
-      _oa_deg[0] is True)  # breaker forced open: ok=True ONLY via the self-shed degraded branch
-                           # (msg may be the recent-429 variant, so assert the ok invariant, not text)
+check("openalex: health() is None (not verified; neither down nor healthy) while self-shedding",
+      _oa_deg[0] is None and "degraded" in _oa_deg[1], str(_oa_deg))
 
 # FIX 2: cartographer S2 edges. A re-add() preserves prior referenced_works (no wipe), and a
 # tiny synthetic seed+reference set yields n_edges > 0 and at least one in-corpus in_degree > 0.
@@ -5334,8 +5335,8 @@ check("s2 detects 429 (message)", _S2._is_rate_limit(RuntimeError("HTTP 429 Too 
 check("s2 non-429 not flagged", _S2._is_rate_limit(RuntimeError("boom")) is False)
 _S2._state["open_until"] = _t.time() + 9999; _S2._health["result"] = None
 _hc = _S2.health()
-check("s2 health DEGRADED (ok, not down) while circuit open, self-shed is not an outage",
-      _hc[0] is True)  # breaker forced open: ok=True ONLY via the self-shed degraded branch
+check("s2 health is None (not verified; neither down nor healthy) while circuit open, self-shed is not an outage",
+      _hc[0] is None and "degraded" in _hc[1], str(_hc))
 _S2._state["open_until"] = 0.0; _S2._health["result"] = None
 
 # S2 retry (2026-06-20): the lib's OWN 10x/250s tenacity backoff is OFF (retry=False); OmniSeek owns a
@@ -5394,7 +5395,7 @@ _AD = _SS.SemanticScholarAdapter()
 check("s2 source dropped private client property", not hasattr(_AD, "client") and not hasattr(_AD, "_client"))
 check("s2 source health_check delegates to _s2.health", _AD.health_check.__qualname__.startswith("SemanticScholarAdapter"))
 _S2._state["open_until"] = _t.time() + 9999; _S2._health["result"] = None
-check("s2 source health_check DEGRADED (ok) on shared circuit-open, not down", _AD.health_check()[0] is True)
+check("s2 source health_check is None (not verified, not down) on shared circuit-open", _AD.health_check()[0] is None)
 _S2._state["open_until"] = 0.0; _S2._health["result"] = None
 
 import inspect as _insp
@@ -5511,16 +5512,17 @@ check("github_source _multi_surface stays SERIAL (no concurrency added)",
       "SERIAL on purpose" in _insp2.getsource(_ghs.GitHubAdapter._multi_surface))
 check("github_source _repo_tree tries git/trees/HEAD first (skips the /repos round-trip on the happy path)",
       "git/trees/HEAD" in _insp2.getsource(_ghs.GitHubAdapter._repo_tree))
-# 2026-07-23 watchdog false-mass-down fix: health() reports DEGRADED (ok, not down) while the breaker
-# is open (self-shed), so a transient breaker-open does not flip github + github_trending down. Force
-# the breaker open, hit the early breaker branch -> ok=True + "degraded", no network.
+# 2026-07-23 watchdog false-mass-down fix: health() must not report down while the breaker is open
+# (self-shed), so a transient breaker-open does not flip github + github_trending down. Since
+# 2026-10-04 it is None (not verified), not True: no request is sent. Force the breaker open, hit the
+# early breaker branch -> ok=None + "degraded", no network.
 _gh._state["open_until"] = 9e18
 _gh._health["result"] = None; _gh._health["at"] = 0.0
 _gh_deg = _gh.health()
 _gh._state["open_until"] = 0.0
 _gh._health["result"] = None; _gh._health["at"] = 0.0
-check("github: health() DEGRADED (ok, not down) while circuit open, self-shed is not an outage",
-      _gh_deg[0] is True and "degraded" in _gh_deg[1])
+check("github: health() is None (not verified; neither down nor healthy) while circuit open",
+      _gh_deg[0] is None and "degraded" in _gh_deg[1])
 
 import omniseek.core.sources.api.exa_source as _exa
 check("exa: _health is a callable single-flight probe", callable(_exa._health))
@@ -5641,17 +5643,18 @@ _se._se_cooldown_until = 0.0  # reset so live/later code is unaffected by the te
 _se._se_fail_streak = 0
 check("stackexchange: quota breaker trips after N 429s + skips the shared API while cooling (no network)",
       (not _se_cold0) and _se_tripped and (_se_skip is None) and (len(_se_calls) == 0))
-# 2026-07-23 watchdog false-mass-down fix: health() reports DEGRADED (ok, not down) while the shared
-# keyless per-IP quota is COOLING (a daily budget state, the API is up), so all 6 SE sources don't
-# flip down together. Trip the cooldown, then probe health() (returns early, no network).
+# 2026-07-23 watchdog false-mass-down fix: health() must not report down while the shared keyless
+# per-IP quota is COOLING (a daily budget state, the API is up), so all 6 SE sources don't flip down
+# together. Since 2026-10-04 it is None (not verified), not True: no probe is spent. Trip the
+# cooldown, then probe health() (returns early, no network).
 _se._se_cooldown_until = 0.0; _se._se_fail_streak = 0
 for _ in range(_se._SE_TRIP_AFTER):
     _se._se_record(False)
 _se._health["result"] = None
 _se_deg = _se.health()
 _se._se_cooldown_until = 0.0; _se._se_fail_streak = 0; _se._health["result"] = None
-check("stackexchange: health() DEGRADED (ok, not down) while quota cooling, not an outage",
-      _se_deg[0] is True and "degraded" in _se_deg[1])
+check("stackexchange: health() is None (not verified; neither down nor healthy) while quota cooling",
+      _se_deg[0] is None and "degraded" in _se_deg[1])
 # key injection: a configured free Stack Apps key is sent on every SE GET (quota 300→10k/day)
 _se._SE_KEY = "TESTKEY"
 _se_cap = {}
@@ -7245,7 +7248,7 @@ check("dblp routing: an omniseek_read of dblp.org/pid/56/953 lands on dblp_autho
       f"calls={len(_dblp_route_calls)} fallback={_dblp_route_fb} why={_dblp_r_venue_why!r}")
 
 # -- health: >= 1 binding is healthy; Anubis HTML / zero bindings are False with a reason;
-#    a busy declared gate keeps the degraded-True path
+#    a busy declared gate is None (not verified, not probed)
 _dbp_h_calls: list = []
 with _dblp_offline(_DBP_FIXTURE, calls=_dbp_h_calls):
     _dbp_h_ok = _dbp.DBLPAdapter().health_check()
@@ -7283,9 +7286,9 @@ check("dblp + dblp_author: the Anubis HTML page makes health False ('bot wall') 
       and _dba_h_empty[0] is False and "0 bindings" in _dba_h_empty[1],
       f"wall={_dbp_h_wall}/{_dba_h_wall} empty={_dbp_h_empty}/{_dba_h_empty} "
       f"search={len(_dbp_s_wall)}/{len(_dba_s_wall)}")
-check("dblp + dblp_author: an UpstreamBusy from the declared gate stays degraded-True (not probed)",
-      _dbp_h_busy[0] is True and _dbp_h_busy[1].startswith("degraded:")
-      and _dba_h_busy[0] is True and _dba_h_busy[1].startswith("degraded:"),
+check("dblp + dblp_author: an UpstreamBusy from the declared gate is None (not verified, not probed), never True",
+      _dbp_h_busy[0] is None and _dbp_h_busy[1].startswith("degraded:")
+      and _dba_h_busy[0] is None and _dba_h_busy[1].startswith("degraded:"),
       f"{_dbp_h_busy} {_dba_h_busy}")
 _dblp_decl = _dblp_up.entry("dblp")
 check("dblp upstream: declared on sparql.dblp.org only, Crawl-delay 10 enforced as 1 in flight / 10 s",
@@ -12681,7 +12684,7 @@ try:
     import types as _types65  # a legit adapter stub needs .name/.explicit_only (retired-skip reads them)
     _f65.get_adapter = lambda n: _types65.SimpleNamespace(name=n, explicit_only=False)
     _ij65._heal_cdp_chrome = lambda: _healed65.__setitem__("called", True) or []
-    _ij65._health_probe = lambda a: (True, "OK")
+    _ij65._health_probe = lambda a: (True, "OK", True)
     _ij65._alert = lambda *a, **k: None
     _ij65._load_state = lambda p: dict(_state65)
     _saved_snap65 = {}

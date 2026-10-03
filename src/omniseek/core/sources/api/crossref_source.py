@@ -152,7 +152,7 @@ class CrossrefAdapter(BaseAPIAdapter):
         return self._item_to_document(item)
 
     # ------------------------------------------------------------- health_check
-    def health_check(self) -> tuple[bool, str]:
+    def health_check(self) -> tuple[Optional[bool], str]:
         try:
             with upstreams.egress(f"{CROSSREF_BASE}/works", request_s=8):  # the probe is a list request too
                 resp = http.direct(
@@ -163,8 +163,8 @@ class CrossrefAdapter(BaseAPIAdapter):
                 )
             upstreams.observe_response(CROSSREF_BASE, resp)
             return resp.status_code == 200, f"HTTP {resp.status_code}"
-        except upstreams.UpstreamBusy as exc:
-            return True, f"degraded: declared Crossref gate busy, not probed this cycle ({exc})"
+        except upstreams.UpstreamBusy as exc:  # nothing sent: not verified (None), not healthy
+            return None, f"degraded: declared Crossref gate busy, not probed this cycle ({exc})"
         except Exception as exc:  # noqa: BLE001
             return False, f"{type(exc).__name__}: {exc}"
 

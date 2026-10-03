@@ -363,7 +363,7 @@ class ResearcherWatchAdapter:
             return None
         return self._work_to_document(work, "(tracked researcher)", "", "")
 
-    def health_check(self) -> tuple[bool, str]:
+    def health_check(self) -> tuple[Optional[bool], str]:
         if not _load_watch_list():
             return False, "no researchers configured"
         # Shared single-flight upstream probe (see _openalex.health): one OpenAlex call for all 40+

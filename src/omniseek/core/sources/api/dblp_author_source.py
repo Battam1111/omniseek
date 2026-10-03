@@ -330,9 +330,9 @@ class DBLPAuthorAdapter(BaseScrapeAdapter):
             },
         )
 
-    def health_check(self) -> tuple[bool, str]:
+    def health_check(self) -> tuple[Optional[bool], str]:
         # One gated SPARQL request for a known person. The Anubis page (or any non-JSON body) and an
-        # empty answer are failures with their own reasons; a busy gate stays degraded-True.
+        # empty answer are failures with their own reasons; a busy gate is None (not verified).
         return _dblp.sparql_probe(HEALTH_QUERY, f"person pid {HEALTH_PID}", timeout=15)
 
 # Registration is automatic via BaseScrapeAdapter.__init_subclass__ (no module-tail ceremony).

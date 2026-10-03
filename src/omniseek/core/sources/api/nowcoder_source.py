@@ -247,10 +247,14 @@ class NowcoderAdapter:
     def fetch_url(self, url: str) -> Optional[Document]:
         return None  # search-only; the list endpoint already carries full post content
 
-    def health_check(self) -> tuple[bool, str]:
+    def health_check(self) -> tuple[Optional[bool], str]:
         # Native path via CDP: drive the 9222 Chrome to fetch the gateway once and count real posts.
         cdp_ok, cdp_msg = cdp_health(ensure=True)
         if cdp_ok:
+            # SAME key _fetch_job reads: while it is cached, the native fetch below would answer from
+            # the cache and ask nowcoder nothing, so this check verifies nothing (None).
+            if cache.get_docs(cache.make_key("nowcoder", "job", DEFAULT_JOB_IDS[0], 3, 1)) is not None:
+                return None, "not probed (the native probe page is still cached; nowcoder is asked again when it expires)"
             try:
                 docs = self._fetch_job(DEFAULT_JOB_IDS[0], pages=1)
                 if docs:
@@ -260,6 +264,8 @@ class NowcoderAdapter:
         # CDP down / native yielded nothing → the source still works IFF the Brave fallback is alive.
         from omniseek.core.sources.api._search_backend import backend_ping
         ok, msg = backend_ping()
+        if ok is None:  # the fallback was not probed (backend cooling): nothing verified either way
+            return None, f"not verified (native CDP path unavailable [{cdp_msg}]; Brave fallback: {msg})"
         return (True, f"OK (native via CDP unavailable [{cdp_msg}]; Brave fallback: {msg})") if ok \
             else (False, f"native CDP path down [{cdp_msg}] + Brave fallback down: {msg}")
 

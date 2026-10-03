@@ -222,7 +222,7 @@ class OpenAlexAdapter:
             return None
         return self._work_to_document(work)
 
-    def health_check(self) -> tuple[bool, str]:
+    def health_check(self) -> tuple[Optional[bool], str]:
         # Shared single-flight upstream probe (see _openalex.health): all OpenAlex-backed sources
         # delegate here so the health sweep makes ONE OpenAlex call, not one-per-source (which used
         # to burst the shared key into 429 and trip the breaker, degrading all 40 at once). The old

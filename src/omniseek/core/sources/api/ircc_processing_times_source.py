@@ -222,9 +222,10 @@ class IRCCProcessingTimesAdapter:
     def fetch_url(self, url: str) -> Optional[Document]:
         return None  # structured lookup source; reach it via search
 
-    def health_check(self) -> tuple[bool, str]:
-        # LIGHT: never a full CDP fetch in a health probe (the P19 lesson). Browser
-        # liveness + whatever the cache holds is an honest signal.
+    def health_check(self) -> tuple[Optional[bool], str]:
+        # LIGHT: never a full CDP fetch in a health probe (the P19 lesson). Browser liveness is OUR
+        # side and the cache is a past answer: neither asks the IRCC site anything, so a live browser
+        # is None (not verified), not True. A dead browser stays False (the source cannot serve).
         try:
             from omniseek.core.sources.walled._cdp import cdp_health
             alive, msg = cdp_health(ensure=True)
@@ -235,8 +236,8 @@ class IRCCProcessingTimesAdapter:
         cached = cache.get(cache.make_key("ircc_processing_times", "tables", "v1"))
         if cached:
             n = sum(len(v) for v in (cached.get("country") or {}).values() if isinstance(v, dict))
-            return True, f"OK (CDP up; ~{n} country rows cached)"
-        return True, "OK (CDP up; no cache yet)"
+            return None, f"not probed (CDP up; ~{n} country rows cached; the IRCC site is not asked)"
+        return None, "not probed (CDP up; no cache yet; the IRCC site is not asked)"
 
 
 from omniseek.core.fetcher import register_adapter

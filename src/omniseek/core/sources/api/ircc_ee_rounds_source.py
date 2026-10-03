@@ -86,9 +86,10 @@ class IRCCEERoundsAdapter:
     def fetch_url(self, url: str) -> Optional[Document]:
         return None  # structured lookup source; reach it via search
 
-    def health_check(self) -> tuple[bool, str]:
-        # LIGHT: never a full CDP fetch in a health probe (the P19 lesson). Browser
-        # liveness + whatever the cache holds is an honest signal.
+    def health_check(self) -> tuple[Optional[bool], str]:
+        # LIGHT: never a full CDP fetch in a health probe (the P19 lesson). Browser liveness is OUR
+        # side and the cache is a past answer: neither asks the IRCC site anything, so a live browser
+        # is None (not verified), not True. A dead browser stays False (the source cannot serve).
         try:
             from omniseek.core.sources.walled._cdp import cdp_health
             alive, msg = cdp_health(ensure=True)
@@ -99,8 +100,8 @@ class IRCCEERoundsAdapter:
         cached = cache.get(cache.make_key("ircc_ee_rounds", "rounds", "v1"))
         n = len(cached) if cached else 0
         if n:
-            return True, f"OK (CDP up; {n} rounds cached)"
-        return True, "OK (CDP up; no cache yet)"
+            return None, f"not probed (CDP up; {n} rounds cached; the IRCC site is not asked)"
+        return None, "not probed (CDP up; no cache yet; the IRCC site is not asked)"
 
     @staticmethod
     def _to_doc(r: dict) -> Optional[Document]:

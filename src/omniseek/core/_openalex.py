@@ -584,7 +584,7 @@ _health: dict = {"at": 0.0, "result": None}
 _health_lock = threading.Lock()
 
 
-def health(timeout: float = 8.0) -> tuple[bool, str]:
+def health(timeout: float = 8.0) -> tuple[Optional[bool], str]:
     """ONE shared upstream probe for all 40+ OpenAlex-backed sources (single-flight + 60s cache).
 
     Before this, openalex + researcher_watch + every org_watch row each probed OpenAlex in its own
@@ -609,9 +609,10 @@ def health(timeout: float = 8.0) -> tuple[bool, str]:
             # daily budget dry) and raises the RAW exception for a genuine upstream failure (caught
             # below). Reporting DOWN here flipped all 40+ OpenAlex-backed sources down on a single
             # transient breaker-open (the false mass outage the source-health watchdog surfaced
-            # 2026-07-23): report DEGRADED instead, the source is up and self-heals when the breaker
-            # closes / the pool frees. A genuine outage still surfaces as ok=False via the raw branch.
-            ok, msg = True, f"degraded (eye backing off, upstream not probed this cycle): {exc}"
+            # 2026-07-23). Nothing was sent, so nothing was verified: None (the watchdog's
+            # `unverified`), neither healthy nor failing; it self-heals when the breaker closes / the
+            # pool frees. A genuine outage still surfaces as ok=False via the raw branch.
+            ok, msg = None, f"degraded (eye backing off, upstream not probed this cycle): {exc}"
         except Exception as exc:  # noqa: BLE001
             ok, msg = False, f"{type(exc).__name__}: {exc}"
         with _lock:

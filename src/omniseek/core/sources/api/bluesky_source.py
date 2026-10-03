@@ -165,12 +165,17 @@ class BlueskyAdapter:
             logger.warning("Bluesky fetch_url failed: %s", exc)
             return None
 
-    def health_check(self) -> tuple[bool, str]:
+    def health_check(self) -> tuple[Optional[bool], str]:
         if not auth.is_configured("bluesky"):
             return False, "credentials not configured (see ~/.omniseek/credentials/bluesky.json.template)"
+        # Only a fresh login asks Bluesky anything; a session kept from an earlier login is reused
+        # without a request, so it verifies nothing (None), not True.
+        reused = self._client is not None
         client = self._ensure_client()
         if client is None:
             return False, "login failed"
+        if reused:
+            return None, "not probed (reusing the session logged in earlier; Bluesky is not asked)"
         return True, "OK (logged in)"
 
     @staticmethod

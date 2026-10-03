@@ -204,7 +204,7 @@ class ZhihuUsersAdapter:
                 return posts[0]
         return None
 
-    def health_check(self) -> tuple[bool, str]:
+    def health_check(self) -> tuple[Optional[bool], str]:
         cdp_ok, cdp_msg = cdp_health(ensure=True)
         if not cdp_ok:
             return False, f"CDP not reachable: {cdp_msg}"
@@ -213,6 +213,11 @@ class ZhihuUsersAdapter:
             return False, "no users configured"
         # Try fetching the first user
         first = users[0]
+        # SAME key _fetch_user_posts reads: while the posts are cached, it answers from the cache and
+        # asks Zhihu nothing, so this check verifies nothing (None).
+        if cache.get_docs(cache.make_key("zhihu_users", "posts", first["handle"])) is not None:
+            return None, (f"not probed ({first.get('display_name', first['handle'])}'s posts are still "
+                          "cached; Zhihu is asked again when they expire)")
         try:
             posts = self._fetch_user_posts(
                 first["handle"], first.get("display_name", first["handle"])

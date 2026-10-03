@@ -91,11 +91,16 @@ class PruneHelperContract(unittest.TestCase):
 
     def test_a_source_that_no_longer_exists_is_pruned_from_every_container(self):
         state = seed_state()
+        state["unmeasured"] = {"gone_source": "timeout", "arxiv": "timeout"}
+        state["unverified"] = {"gone_source": "not probed", "arxiv": "not probed"}
         report = infra_jobs._prune_stale_health_rows(state, set(REGISTERED))
         self.assertEqual(report["pruned"], ["gone_source"])
         self.assertNotIn("gone_source", state["fails"])
         self.assertNotIn("gone_source", state["last_status"])
         self.assertNotIn("down:gone_source", state["_alerts"])
+        self.assertNotIn("gone_source", state["unmeasured"])
+        self.assertNotIn("gone_source", state["unverified"])
+        self.assertIn("arxiv", state["unverified"], "a registered source's unverified row must survive")
 
     def test_infra_rows_survive_and_an_unwritten_one_is_reported_not_dropped(self):
         state = seed_state()
@@ -170,7 +175,7 @@ class PruneThroughRunSourceHealth(unittest.TestCase):
         with mock.patch.object(infra_jobs, "_HEALTH_STATE", self.statefile), \
              mock.patch.object(infra_jobs, "_save_state",
                                self._guarded_save(infra_jobs._save_state)), \
-             mock.patch.object(infra_jobs, "_health_probe", lambda a: (True, "OK")), \
+             mock.patch.object(infra_jobs, "_health_probe", lambda a: (True, "OK", True)), \
              mock.patch.object(infra_jobs, "_heal_cdp_chrome", lambda: []), \
              mock.patch.object(infra_jobs, "_alert",
                                lambda title, body="", **kw: self.alerts.append((title, body))), \

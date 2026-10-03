@@ -170,7 +170,7 @@ _health: dict = {"at": 0.0, "result": None}
 _health_lock = threading.Lock()
 
 
-def health(timeout: float = 10.0) -> tuple[bool, str]:
+def health(timeout: float = 10.0) -> tuple[Optional[bool], str]:
     """One shared, 60s single-flight cached liveness probe for all Stack Exchange-backed sources.
 
     A minimal /questions GET through the shared pooled http client; every SE adapter delegates here
@@ -181,10 +181,11 @@ def health(timeout: float = 10.0) -> tuple[bool, str]:
         if _health["result"] is not None and now - _health["at"] < _HEALTH_TTL_S:
             return _health["result"]
         if _se_cooling():  # keyless per-IP quota spent (resets daily): the API is UP, we are just
-            # out of free quota for now, a budget state, NOT an outage. Report DEGRADED so all 6 SE
-            # sources don't flip down on the shared daily-quota cooldown (they self-heal at reset;
-            # 2026-07-23 watchdog false-mass-down fix). Do not spend a probe.
-            _health["at"], _health["result"] = now, (True, "degraded (keyless per-IP quota spent; resets daily; upstream up)")
+            # out of free quota for now, a budget state, NOT an outage, so all 6 SE sources must not
+            # flip down on the shared daily-quota cooldown (they self-heal at reset; 2026-07-23
+            # watchdog false-mass-down fix). Do not spend a probe; and since nothing is sent, nothing
+            # is verified: None (the watchdog's `unverified`), neither healthy nor failing.
+            _health["at"], _health["result"] = now, (None, "degraded (keyless per-IP quota spent; resets daily; upstream up)")
             return _health["result"]
         try:
             data = _se_get(

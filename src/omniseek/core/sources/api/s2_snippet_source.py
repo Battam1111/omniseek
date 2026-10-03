@@ -83,7 +83,7 @@ class S2SnippetAdapter:
         # job, not a snippet source's. Claim nothing so omniseek_read routes it to the right adapter.
         return None
 
-    def health_check(self) -> tuple[bool, str]:
+    def health_check(self) -> tuple[Optional[bool], str]:
         # Delegate to the ONE shared, single-flighted S2 probe (60s cache): the all-source health
         # sweep must NOT fire a second live S2 call per S2-backed adapter (that bursts the key into a
         # 429 storm). Mirrors semantic_scholar_source / s2_authors_source.

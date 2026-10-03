@@ -460,12 +460,17 @@ class OpenReviewAdapter:
             return None
         return self._note_to_document(data["notes"][0])
 
-    def health_check(self) -> tuple[bool, str]:
+    def health_check(self) -> tuple[Optional[bool], str]:
         if not auth.is_configured("openreview"):
             return False, "credentials not configured (see ~/.omniseek/credentials/openreview.json.template)"
+        # Only a fresh login asks OpenReview anything; _get_token reuses a still-valid token without a
+        # request, and that verifies nothing (None), not True.
+        reused = bool(self._token and time.time() < self._token_expires_at - 600)
         token = self._get_token()
         if token is None:
             return False, self._login_issue or "login failed"
+        if reused:
+            return None, "not probed (reusing a still-valid login token; OpenReview is not asked)"
         return True, "OK (logged in)"
 
     @staticmethod

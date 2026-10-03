@@ -435,7 +435,7 @@ _health: dict = {"at": 0.0, "result": None}
 _health_lock = threading.Lock()
 
 
-def health(timeout: float = 8.0) -> tuple[bool, str]:
+def health(timeout: float = 8.0) -> tuple[Optional[bool], str]:
     """ONE shared upstream probe for all three GitHub-backed sources (single-flight + 60s cache).
 
     Before this, github + github_trending each probed GET /rate_limit in its own health_check; the
@@ -452,11 +452,12 @@ def health(timeout: float = 8.0) -> tuple[bool, str]:
             return _health["result"]
         with _lock:
             if time.time() < _state["open_until"]:
-                # Self-shed (breaker open after consecutive failures), NOT GitHub-unreachable:
-                # report DEGRADED so a transient breaker-open does not flip github + github_trending
-                # down (they self-heal when the breaker closes). A genuine outage surfaces as a
-                # failed /rate_limit probe below (2026-07-23 watchdog false-mass-down fix).
-                ok, msg = True, (f"degraded (eye backing off, {_state['open_until'] - time.time():.0f}s "
+                # Self-shed (breaker open after consecutive failures), NOT GitHub-unreachable: a
+                # transient breaker-open must not flip github + github_trending down (they self-heal
+                # when the breaker closes). Nothing is sent, so nothing is verified: None (the
+                # watchdog's `unverified`). A genuine outage surfaces as a failed /rate_limit probe
+                # below (2026-07-23 watchdog false-mass-down fix).
+                ok, msg = None, (f"degraded (eye backing off, {_state['open_until'] - time.time():.0f}s "
                                  "more; upstream not probed this cycle)")
                 _health["at"] = time.monotonic()
                 _health["result"] = (ok, msg)

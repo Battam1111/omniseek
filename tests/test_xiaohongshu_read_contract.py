@@ -226,7 +226,9 @@ class XiaohongshuReadContractTests(unittest.TestCase):
              patch.object(module, "cdp_call", side_effect=AssertionError("health must not navigate")):
             healthy, status = module.XiaohongshuAdapter().health_check()
 
-        self.assertTrue(healthy)
+        # A reachable CDP transport is OUR browser, not xiaohongshu: nothing upstream was asked, so
+        # the answer is None (not verified), never True (2026-10-04 tri-state health).
+        self.assertIsNone(healthy)
         self.assertIn("CDP reachable", status)
 
     def test_mainland_detail_rejects_an_empty_shell(self):

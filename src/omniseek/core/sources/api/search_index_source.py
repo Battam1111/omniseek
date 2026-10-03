@@ -280,7 +280,7 @@ class _SearchVenue:
             return Document.model_validate(cached)
         return None
 
-    def health_check(self) -> tuple[bool, str]:
+    def health_check(self) -> tuple[Optional[bool], str]:
         return backend_ping()
 
 

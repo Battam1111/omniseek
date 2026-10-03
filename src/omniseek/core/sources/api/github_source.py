@@ -186,7 +186,7 @@ class GitHubAdapter:
                 return self._discussion_by_number(owner, repo, num)
         return None
 
-    def health_check(self) -> tuple[bool, str]:
+    def health_check(self) -> tuple[Optional[bool], str]:
         # Delegate to the shared single-flight /rate_limit probe (one upstream call for all three
         # GitHub-backed sources, token-authenticated, 60s-cached) instead of an own probe.
         return _github.health()

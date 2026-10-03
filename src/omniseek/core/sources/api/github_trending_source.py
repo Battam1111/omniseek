@@ -129,7 +129,7 @@ class GitHubTrendingAdapter(BaseAPIAdapter):
             return None
         return self._to_document(repo)
 
-    def health_check(self) -> tuple[bool, str]:
+    def health_check(self) -> tuple[Optional[bool], str]:
         # Delegate to the shared single-flight /rate_limit probe (one upstream call for all three
         # GitHub-backed sources, token-authenticated, 60s-cached) instead of an own unauth probe.
         return _github.health()

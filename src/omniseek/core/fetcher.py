@@ -350,8 +350,17 @@ class SourceAdapter(Protocol):
         """Fetch a single URL from this source. Return None if URL doesn't belong."""
         ...
 
-    def health_check(self) -> tuple[bool, str]:
-        """Return (is_healthy, status_message)."""
+    def health_check(self) -> tuple[Optional[bool], str]:
+        """Return ``(healthy, status_message)``, where ``healthy`` has THREE values:
+
+        - ``True``: verified working. This check asked the upstream and the answer shows it serves.
+        - ``False``: verified broken (or unusable here: no credential, a missing dependency).
+        - ``None``: NOT verified. This check sent the upstream no request whose answer could tell
+          good from bad: the answer came from a cache or a stored state, a metered quota is too
+          scarce to spend on a probe, or a declared gate / breaker / back-off held the probe back.
+          The message says which. ``None`` is neither healthy nor failing, so a reader must never
+          collapse it with ``bool()`` or a bare ``if ok:`` (``None`` is falsy and reads as a failure).
+        """
         ...
 
 
@@ -2657,17 +2666,33 @@ def _watchdog_health() -> tuple[dict, set, Optional[str]]:
         return {}, set(), None
 
 
+def _watchdog_side_map(key: str) -> dict:
+    """One per-source side map of the P19 watchdog state ({name: reason}). Fail-open: empty on any
+    read/parse error, so a missing file never invents a state."""
+    try:
+        data = json.loads(_WATCHDOG_STATE.read_text(encoding="utf-8"))
+        return data.get(key, {}) or {}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
 def _watchdog_unmeasured() -> dict:
     """Sources whose LAST watchdog probe did not complete: {name: reason}. A separate map because
     ``last_status`` is consumed as a KEY SET (see _watchdog_health), where a None value is
     indistinguishable from True. Without this, "our probe timed out" would report as ``ok`` — the
     false GREEN that replaces the false RED the None-as-failure bug used to produce. Fail-open:
     empty on any read/parse error, so a missing file never invents an unmeasured state."""
-    try:
-        data = json.loads(_WATCHDOG_STATE.read_text(encoding="utf-8"))
-        return data.get("unmeasured", {}) or {}
-    except Exception:  # noqa: BLE001
-        return {}
+    return _watchdog_side_map("unmeasured")
+
+
+def _watchdog_unverified() -> dict:
+    """Sources whose LAST watchdog probe COMPLETED but verified nothing: {name: reason}. The adapter
+    returned ``None`` because, by design, it asked the upstream nothing this run (a metered quota it
+    must not spend, a declared gate or breaker holding the probe back, an answer served from cache or
+    from stored state). Kept apart from ``unmeasured`` (our probe did not finish) and from ``ok``
+    (verified working): before 2026-10-04 these sources returned True and read as ``ok``, so a source
+    OmniSeek never tests (context7) counted as healthy forever. Fail-open like _watchdog_unmeasured."""
+    return _watchdog_side_map("unverified")
 
 
 _WATCHDOG_FRESH_S = 6 * 3600  # only quarantine on watchdog data no older than this
@@ -2708,6 +2733,19 @@ def list_sources(check_health: bool = False, domain: Optional[str] = None,
     verdict: set expectations + prioritise repairs), and recent ``health`` from the P19 watchdog
     (advisory — never blocks a source). Pass ``check_health=True`` for a fresh LIVE probe (slow).
 
+    ``health`` takes one of five values:
+      - ``ok``: the watchdog's last probe verified the source works (or one transient failure, below
+        the down threshold);
+      - ``down``: failing across consecutive runs;
+      - ``unmeasured``: OUR last probe did not finish (it hit its hard timeout), so nothing is known;
+      - ``unverified``: our last probe finished, but by design it asked the upstream nothing (a quota
+        too scarce to spend, a declared gate or breaker holding the probe back, an answer served from
+        cache or stored state). Neither healthy nor failing;
+      - ``unknown``: the watchdog has no row for the source.
+    With ``check_health=True`` each entry also carries ``healthy``: true (verified working), false
+    (verified broken) or null (not verified by this probe: the adapter asked the upstream nothing, or
+    the probe timed out), plus ``status``, the adapter's own message saying why.
+
     By default the per-source ``description`` prose is OMITTED: the facets are the routing
     signal and the full prose for every source is a large unconditional payload. Pass
     ``domain`` (keep only sources whose ``domains`` facet contains it; general sources lead,
@@ -2718,6 +2756,7 @@ def list_sources(check_health: bool = False, domain: Optional[str] = None,
     """
     fails, tracked, as_of = _watchdog_health()
     unmeasured = _watchdog_unmeasured()
+    unverified = _watchdog_unverified()
     with _registry_lock:  # snapshot the values under the lock; iterate the copy outside it
         adapters_snapshot = list(_adapters.values())
     live = _probe_all_health(adapters_snapshot) if check_health else {}
@@ -2730,6 +2769,8 @@ def list_sources(check_health: bool = False, domain: Optional[str] = None,
             health = "down"         # persistently failing across runs
         elif name in unmeasured:
             health = "unmeasured"   # OUR last probe did not complete; we know nothing either way
+        elif name in unverified:
+            health = "unverified"   # our last probe completed but, by design, asked the upstream nothing
         else:
             health = "ok"           # healthy, or just a single transient blip
         _eo_reason = _explicit_only_reason(adapter)
@@ -2786,7 +2827,8 @@ def list_sources(check_health: bool = False, domain: Optional[str] = None,
         entry["backend"] = backend_of(name)
         if check_health:
             healthy, msg = live.get(name, (None, "not probed"))
-            entry["healthy"] = bool(healthy)
+            # THREE values, never bool(): None (not verified) must not read as a failure.
+            entry["healthy"] = None if healthy is None else bool(healthy)
             entry["status"] = msg
         out.append(entry)
 
@@ -2871,11 +2913,13 @@ def distinct_backend_count() -> int:
 
 def health_check() -> dict[str, dict]:
     """Run health check on every registered adapter — bounded + concurrent, so a
-    source whose own health_check blocks (no internal timeout) can never stall this."""
+    source whose own health_check blocks (no internal timeout) can never stall this.
+    ``healthy`` is True / False / None (None = not verified; see SourceAdapter.health_check)."""
     with _registry_lock:  # snapshot under the lock; the slow probe runs on the copy outside it
         adapters_snapshot = list(_adapters.values())
     live = _probe_all_health(adapters_snapshot)
-    return {name: {"healthy": bool(h), "status": m} for name, (h, m) in live.items()}
+    return {name: {"healthy": None if h is None else bool(h), "status": m}
+            for name, (h, m) in live.items()}
 
 
 def _adapter_failure_reason(name: str, captures: list) -> Optional[str]:
@@ -3010,7 +3054,7 @@ def fetch_url_with_reason(url: str) -> "tuple[Optional[Document], Optional[str]]
 # -----------------------------------------------------------------------------
 
 
-def _safe_health(adapter: SourceAdapter) -> tuple[bool, str]:
+def _safe_health(adapter: SourceAdapter) -> tuple[Optional[bool], str]:
     try:
         return adapter.health_check()
     except Exception as exc:  # noqa: BLE001
@@ -3032,15 +3076,18 @@ _HEALTH_TIMEOUT_S = 25   # DEFAULT per-source hard cap for a LIVE health probe. 
 _HEALTH_WORKERS = 24     # health checks are I/O-bound — probe many at once
 
 
-def health_check_bounded(adapter: SourceAdapter, timeout: Optional[float] = None) -> tuple[Optional[bool], str]:
+def health_check_outcome(adapter: SourceAdapter,
+                         timeout: Optional[float] = None) -> tuple[Optional[bool], str, bool]:
     """``adapter.health_check()`` with a HARD timeout, run in a daemon thread.
 
-    Returns ``(healthy, status)``; ``(None, 'timeout ...')`` if the check does not
-    return within ``timeout``. This is the safety net that makes a source whose own
-    ``health_check`` blocks (no internal timeout) UNABLE to stall its caller — the
-    live ``list_sources`` probe, ``health_check()``, and the health-watchdog daemon
-    all go through here. A still-blocked probe thread is a daemon → dies with the
-    process; it never holds the caller.
+    Returns ``(healthy, status, completed)``. ``completed`` is False only when the check did not
+    return within ``timeout`` (then ``healthy`` is None and ``status`` says so). It is the one place
+    that tells the two kinds of ``None`` apart: OUR probe not finishing (the watchdog's
+    ``unmeasured``) versus the adapter finishing and reporting that, by design, it asked the upstream
+    nothing this time (the watchdog's ``unverified``). This is the safety net that makes a source
+    whose own ``health_check`` blocks (no internal timeout) UNABLE to stall its caller; the live
+    ``list_sources`` probe, ``health_check()``, and the health-watchdog daemon all go through here. A
+    still-blocked probe thread is a daemon, so it dies with the process; it never holds the caller.
 
     ``timeout`` None means the adapter's declared ``health_timeout_s``, else ``_HEALTH_TIMEOUT_S``.
     Resolved HERE so every caller honours a declaration: the watchdog's ``_health_probe`` passes no
@@ -3057,8 +3104,18 @@ def health_check_bounded(adapter: SourceAdapter, timeout: Optional[float] = None
     t.start()
     t.join(timeout)
     if t.is_alive():
-        return None, f"timeout (>{int(timeout)}s) — health_check did not return"
-    return box.get("r", (False, "no result"))
+        return None, f"timeout (>{int(timeout)}s): health_check did not return", False
+    ok, msg = box.get("r", (False, "no result"))
+    return ok, msg, True
+
+
+def health_check_bounded(adapter: SourceAdapter, timeout: Optional[float] = None) -> tuple[Optional[bool], str]:
+    """``(healthy, status)`` of ``health_check_outcome``: True verified working, False verified
+    broken, None not verified (the adapter asked the upstream nothing this time, or the check timed
+    out; ``status`` says which). Callers that must tell those two Nones apart use
+    ``health_check_outcome``."""
+    ok, msg, _completed = health_check_outcome(adapter, timeout)
+    return ok, msg
 
 
 def _probe_all_health(adapters: list, timeout: float = _HEALTH_TIMEOUT_S) -> dict[str, tuple]:

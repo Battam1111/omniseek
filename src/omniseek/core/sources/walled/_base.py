@@ -375,8 +375,8 @@ class BaseCDPAdapter:
             # None, not False. An unreachable CDP Chrome is OUR side being absent: the browser is
             # not running here, so we never asked the site anything. False published that as
             # "this source is down", which is how a machine with no CDP reported a dozen live
-            # walled sites as broken. None is the third state, "not measured", and the watchdog
-            # keeps it out of the consecutive-fail counter instead of quarantining them.
+            # walled sites as broken. None is "not verified" (the watchdog's `unverified`), which
+            # stays out of the consecutive-fail counter instead of quarantining them.
             return None, f"CDP not reachable: {msg}"
         try:
             page_url = self._run(lambda p: p.url, self._health_url())

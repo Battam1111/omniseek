@@ -989,7 +989,7 @@ class XiaohongshuAdapter:
                       **video_metadata(video_url, video_src, has_player=is_video)},
         )
 
-    def health_check(self) -> tuple[bool, str]:
+    def health_check(self) -> tuple[Optional[bool], str]:
         """Probe transport state only, without touching the account session.
 
         The old probe navigated the international homepage, waited like a human, and then
@@ -997,14 +997,15 @@ class XiaohongshuAdapter:
         source-health fan-out has a 25s hard deadline. It therefore reported ``timeout`` even
         when named search/read calls were healthy, and it added an unnecessary account touch to
         every health sweep. Named search/read remains the capability oracle; this probe only
-        answers whether the isolated CDP transport is reachable.
+        answers whether the isolated CDP transport is reachable. That transport is OUR browser,
+        not xiaohongshu, so a reachable one is None (not verified), never True.
         """
         if _SEALED:
             return False, "SEALED (小红书封号风险): disabled until CDP is undetectable"
         cdp_ok, cdp_msg = cdp_health(_XHS_CDP_URL, ensure=True)
         if not cdp_ok:
             return False, f"CDP not reachable: {cdp_msg}"
-        return True, "ok (CDP reachable; named search/read is the content-capability probe)"
+        return None, "not probed (CDP reachable; named search/read is the content-capability probe)"
 
     @staticmethod
     def _card_to_document(card) -> Optional[Document]:

@@ -160,7 +160,7 @@ class HFDailyPapersAdapter:
                 return self._item_to_document(it)
         return None
 
-    def health_check(self) -> tuple[bool, str]:
+    def health_check(self) -> tuple[Optional[bool], str]:
         try:
             with upstreams.egress(API_URL, request_s=8):  # declared Hugging Face gate (per-IP 5-minute windows)
                 resp = http.direct("GET", API_URL, headers={"User-Agent": USER_AGENT}, timeout=8)
@@ -169,8 +169,8 @@ class HFDailyPapersAdapter:
                 return False, f"HTTP {resp.status_code}"
             d = resp.json()
             return bool(d), f"OK ({len(d)} papers in feed)"
-        except upstreams.UpstreamBusy as exc:
-            return True, f"degraded: declared Hugging Face gate busy, not probed this cycle ({exc})"
+        except upstreams.UpstreamBusy as exc:  # nothing sent: not verified (None), not healthy
+            return None, f"degraded: declared Hugging Face gate busy, not probed this cycle ({exc})"
         except Exception as exc:  # noqa: BLE001
             return False, f"{type(exc).__name__}: {exc}"
 

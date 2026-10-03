@@ -185,9 +185,13 @@ class LLMLeaderboardAdapter:
                 return self._to_doc(m)
         return None
 
-    def health_check(self) -> tuple[bool, str]:
+    def health_check(self) -> tuple[Optional[bool], str]:
         if not auth.is_configured("artificial_analysis"):
             return False, "API key not configured (~/.omniseek/credentials/artificial_analysis.json)"
+        # SAME key _models reads: while the list is cached, _models answers from the cache and asks
+        # the API nothing, so this check verifies nothing (None).
+        if cache.get(cache.make_key("llm_leaderboard", "models", "v2")) is not None:
+            return None, "not probed (the model list is still cached; the API is asked again when it expires)"
         n = len(self._models())
         if n:
             return True, f"OK ({n} models)"

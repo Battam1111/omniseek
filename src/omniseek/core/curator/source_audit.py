@@ -165,12 +165,20 @@ def _facet_cell(domain: str, mode: str) -> str:
     return f"{domain}x{mode}"
 
 
+# Watchdog health values that carry NO live evidence either way: 'unknown' (never probed) and
+# 'unverified' (probed, but the probe by design asked the upstream nothing). Only these are eligible
+# for the presumed-dark rule; 'ok' (verified), 'down' and 'unmeasured' keep their old handling.
+_NO_LIVE_EVIDENCE = frozenset({"unknown", "unverified"})
+
+
 def _is_presumed_dark(silent_days, cadence_floor) -> bool:
-    """P3.1: a source whose health is 'unknown' (never probed by the watchdog, e.g. a CDP source)
-    is presumed-dark iff it has an ingest watermark that is SILENT past its cadence floor. A source
-    with NO watermark (silent_days is None) is NOT presumed-dark (fail SAFE: keep shielding its
-    cell). Pure fact: this only ever SHRINKS an occupant list (newly exposes an empty/critical cell),
-    never hides one. The caller restricts this to health=='unknown' (never 'down'/'ok')."""
+    """P3.1: a source whose health is 'unknown' (never probed by the watchdog, e.g. a CDP source) or
+    'unverified' (probed, but by design the probe asks the upstream nothing, so the watchdog holds no
+    live evidence either way) is presumed-dark iff it has an ingest watermark that is SILENT past its
+    cadence floor. A source with NO watermark (silent_days is None) is NOT presumed-dark (fail SAFE:
+    keep shielding its cell). Pure fact: this only ever SHRINKS an occupant list (newly exposes an
+    empty/critical cell), never hides one. The caller restricts this to _NO_LIVE_EVIDENCE (never
+    'down'/'ok')."""
     if silent_days is None or cadence_floor is None:
         return False
     if not isinstance(silent_days, (int, float)) or not isinstance(cadence_floor, (int, float)):
@@ -293,8 +301,9 @@ def gather_source_dossier() -> dict:
     prior_rows = _load_verdicts().get("verdicts") or {}
 
     # P3.1: pre-compute per-source liveness (presumed-dark) so the prune-side grid can drop a
-    # health=='unknown' CDP corpse silent past its cadence floor as a live occupant. A fresh ingest
-    # watermark + cadence floor read per source; restricted to health=='unknown' (never 'down'/'ok').
+    # health=='unknown' CDP corpse (or a health=='unverified' source, equally without live evidence)
+    # silent past its cadence floor as a live occupant. A fresh ingest watermark + cadence floor read
+    # per source; restricted to _NO_LIVE_EVIDENCE (never 'down'/'ok').
     liveness_by_name: dict[str, dict] = {}
     for s in roster:
         nm = s.get("name")
@@ -302,7 +311,7 @@ def gather_source_dossier() -> dict:
             continue
         sd = _ingest_watermark(nm).get("live_feed_silent_days")
         cf = _cadence_floor_days(s.get("domains") or [], policy)
-        pd = (s.get("health") == "unknown") and _is_presumed_dark(sd, cf)
+        pd = (s.get("health") in _NO_LIVE_EVIDENCE) and _is_presumed_dark(sd, cf)
         liveness_by_name[nm] = {"presumed_dark": bool(pd), "silent_days": sd, "cadence_floor": cf}
 
     grid = _build_grid(roster, liveness_by_name)     # prune-side: health-aware + presumed-dark (P3.1)

@@ -121,10 +121,14 @@ class YoutubeChannelsAdapter:
         # transcripts). This source only provides the curated-channel stream.
         return None
 
-    def health_check(self) -> tuple[bool, str]:
+    def health_check(self) -> tuple[Optional[bool], str]:
         # Probe ONE channel (3Blue1Brown) — fast yt-dlp flat extract; the outer
         # bounded-probe primitive caps it regardless.
         cid, disp = CHANNELS[2]
+        # SAME key _fetch_channel reads: while the channel is cached, it answers from the cache and
+        # asks YouTube nothing, so this check verifies nothing (None).
+        if cache.get(cache.make_key("youtube_channels", "chan", cid, PER_CHANNEL)) is not None:
+            return None, f"not probed ({disp} is still cached; YouTube is asked again when it expires)"
         try:
             entries = self._fetch_channel(cid, disp)
         except Exception as exc:  # noqa: BLE001

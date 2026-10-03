@@ -493,7 +493,7 @@ _health: dict = {"at": 0.0, "result": None}
 _health_lock = threading.Lock()
 
 
-def health(timeout: float = 8.0) -> tuple[bool, str]:
+def health(timeout: float = 8.0) -> tuple[Optional[bool], str]:
     """ONE shared upstream probe for every S2-backed capability (single-flight + 60s cache).
 
     Mirror of ``_openalex.health``: the cartographer (field_skeleton/recommend), the relations
@@ -523,8 +523,9 @@ def health(timeout: float = 8.0) -> tuple[bool, str]:
         except S2Down as exc:
             # Self-shed (breaker / pool), NOT upstream-down: a genuine outage raises the raw
             # exception below (a 429 is handled there as UP). Don't flip every S2-backed source down
-            # on a transient breaker-open; report DEGRADED (self-heals when the breaker closes).
-            ok, msg = True, f"degraded (eye backing off, upstream not probed this cycle): {exc}"
+            # on a transient breaker-open. Nothing was sent, so nothing was verified: None (the
+            # watchdog's `unverified`), neither healthy nor failing; it self-heals when the breaker closes.
+            ok, msg = None, f"degraded (eye backing off, upstream not probed this cycle): {exc}"
         except Exception as exc:  # noqa: BLE001
             # A 429 means S2 is UP and merely throttling us -> report healthy (cache covers the data
             # path); any other exception is a genuine outage.

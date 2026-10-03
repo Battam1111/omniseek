@@ -204,7 +204,11 @@ class ConferenceDeadlinesAdapter:
         # Aggregator of conference deadlines — no per-URL resolution.
         return None
 
-    def health_check(self) -> tuple[bool, str]:
+    def health_check(self) -> tuple[Optional[bool], str]:
+        # SAME key _fetch_confs reads: while the YAML is cached, _fetch_confs answers from the cache
+        # and asks ccfddl nothing, so this check verifies nothing (None).
+        if cache.get(cache.make_key("conference_deadlines", "all")) is not None:
+            return None, "not probed (the ccfddl YAML is still cached; it is fetched again when it expires)"
         confs = self._fetch_confs()
         if not confs:
             return False, "no AI conferences parsed from ccfddl YAML"
