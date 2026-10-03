@@ -89,7 +89,7 @@ class OpenAlexAdapter:
     backend = "openalex"  # shared by openalex_cn (subclass) / researcher_watch / 39 org_watch slices
     needs_credentials = False
     description = (
-        "OpenAlex — open academic graph (250M+ scholarly works, "
+        "OpenAlex: open academic graph (250M+ scholarly works, "
         "institutions + concepts ontology; open alternative to Semantic Scholar)"
     )
 

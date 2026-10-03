@@ -248,7 +248,7 @@ class FeishuJobsAdapter:
     needs_credentials = False
     explicit_only = "walled 招聘源(飞书);命名钻取 (omniseek_search 单源 raw) 才调,不进广搜"
     description = (
-        "Feishu 招聘 — 6 个 Tier 1 大模型 startup (MiniMax/智谱/01.AI/生数/"
+        "Feishu 招聘：6 个 Tier 1 大模型 startup (MiniMax/智谱/01.AI/生数/"
         "无问芯穹/百川), 549+ 活跃岗位; 与 mokahr_ats + bytedance_seed 互补"
     )
 

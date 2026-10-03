@@ -82,7 +82,7 @@ def _doc_from_policy(it: dict) -> Optional[Document]:
 class GovPolicyAdapter(BaseScrapeAdapter):
     name = "gov_policy"
     description = (
-        "中国政府网 政策文件库 (gov.cn) — the AUTHORITATIVE 国务院/国办 policy-document corpus (法规/条例/"
+        "中国政府网 政策文件库 (gov.cn): the AUTHORITATIVE 国务院/国办 policy-document corpus (法规/条例/"
         "通知/国令), keyword search with each hit linking the FULL policy text on gov.cn (omniseek_read it). "
         "Google can't return this faceted policy index keyed to 文号 + issuing-org + date. No login. Reach "
         "for Chinese central-government policy / 政策 on a topic (incl. policy-trend / longitudinal work)."

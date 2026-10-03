@@ -1246,7 +1246,7 @@ class XiaohongshuCNAdapter:
     name = "xiaohongshu_cn"
     needs_credentials = False  # cookies come from the logged-in 9224 browser
     explicit_only = "signed API (9224 mainland account, account-rate-sensitive)"
-    description = ("小红书 mainland (xiaohongshu.com) — 真浏览器驱动 (与 rednote 小号同一安全机制; 2026-06-25 由 "
+    description = ("小红书 mainland (xiaohongshu.com)：真浏览器驱动 (与 rednote 小号同一安全机制; 2026-06-25 由 "
                    "self-signed direct-API 切换): search 读 SSR 笔记卡片, 笔记正文 + 完整评论区走拦截+DOM; "
                    "forge nothing. signed direct-API 为 degraded fallback.")
     fetch_timeout = 120.0  # >= the browser path's 110s cdp_call (matches the rednote 小号); the old 90s

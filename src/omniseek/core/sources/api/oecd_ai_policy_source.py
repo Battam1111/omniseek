@@ -54,7 +54,7 @@ _ELAPSED_CAP = 60.0  # stop paginating early if the cumulative fetch runs long (
 class OecdAiPolicyAdapter(BulkFundingBase):
     name = "oecd_ai_policy"
     description = (
-        "OECD.AI Policy Navigator — 全球官方 AI 政策倡议活册 (STRUCTURE/MONITOR). 全世界最大的政府 AI 政策目录: "
+        "OECD.AI Policy Navigator：全球官方 AI 政策倡议活册 (STRUCTURE/MONITOR). 全世界最大的政府 AI 政策目录: "
         "2364 项倡议, 覆盖 80+ 法域与政府间组织, 每项带 法域/工具类型/类别/约束力状态/起止年份 + 原始政策文件链接. "
         "端点无全文检索且 perPage 固定 20 (119 页 × ~3s 无法在抓取窗口内快照全量), 故本源取 最新切片: 抓最新 "
         "~300 项 (按加入时间倒序 = 最近新增/更新的倡议, 跨法域), 缓存 30 天, 逐查询 BM25 过滤. "

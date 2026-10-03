@@ -83,7 +83,7 @@ class WikidataWikipediaAdapter(BaseScrapeAdapter):
     name = "wikidata_wikipedia"
     needs_credentials = False
     description = (
-        "Wikipedia + Wikidata — encyclopedia article summaries plus structured-fact "
+        "Wikipedia + Wikidata: encyclopedia article summaries plus structured-fact "
         "entities (QID handles + key claims) for any topic (keyless MediaWiki/Wikibase APIs)"
     )
     cache_ttl = 900
@@ -626,7 +626,7 @@ class WikidataIdentityAdapter(BaseScrapeAdapter):
         "identity crosswalk: target directly by name (sources=['wikidata_identity'])"
     )
     description = (
-        "Wikidata identity crosswalk — resolve a person or organisation NAME to its "
+        "Wikidata identity crosswalk: resolve a person or organisation NAME to its "
         "cross-platform identifier cluster (ORCID, Google Scholar, DBLP, Semantic Scholar, "
         "GitHub, LinkedIn, X, official site; org stock ticker / subsidiaries / industries), "
         "so an agent can jump straight to the canonical profiles (keyless Wikibase API)"

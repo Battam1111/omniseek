@@ -76,7 +76,7 @@ def _article_to_doc(rm: dict) -> Optional[Document]:
 class JuejinAdapter(BaseScrapeAdapter):
     name = "juejin"
     description = (
-        "掘金 Juejin — Chinese developer-article search (keyless). query → an engagement-ranked feed "
+        "掘金 Juejin: Chinese developer-article search (keyless). query → an engagement-ranked feed "
         "of CN dev深度 articles: title / brief / author / 赞(digg) / 看(views). OmniSeek's source for "
         "Chinese dev/tech writing (前端/后端/AI工程/架构) that web search can't rank or structure. No login."
     )

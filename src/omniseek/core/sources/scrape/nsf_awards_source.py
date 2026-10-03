@@ -43,7 +43,7 @@ _FIELDS = ("id,title,abstractText,pdPIName,awardeeName,awardeeStateCode,"
 class NSFAwardsAdapter(BaseScrapeAdapter):
     name = "nsf_awards"
     needs_credentials = False
-    description = ("NSF Award Search — US National Science Foundation research grants "
+    description = ("NSF Award Search: US National Science Foundation research grants "
                    "(PI / award amount / awardee institution / full abstract); name it to "
                    "drill US federal funding by topic / institution / PI. STRUCTURE, keyless "
                    "api.nsf.gov; fills the grants/funding gap.")
@@ -52,7 +52,7 @@ class NSFAwardsAdapter(BaseScrapeAdapter):
     domains = ["funding"]
     regions = ["us"]
     modes = ["STRUCTURE"]
-    explicit_only = ("nsf_awards: US-only federal science grants — a named drill "
+    explicit_only = ("nsf_awards: US-only federal science grants, a named drill "
                      "(by topic / institution / PI), not broad-fan-out fodder")
 
     def _raw_fetch(self, query: str, limit: int) -> Optional[Any]:

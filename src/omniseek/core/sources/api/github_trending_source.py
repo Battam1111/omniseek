@@ -46,7 +46,7 @@ class GitHubTrendingAdapter(BaseAPIAdapter):
     name = "github_trending"
     needs_credentials = False
     description = (
-        "GitHub Trending — recently active ML/AI repos by stars "
+        "GitHub Trending: recently active ML/AI repos by stars "
         "(via GitHub Search API; complement to github_awesome_phd curated lists)"
     )
     # The GitHub Search API already orders by stars server-side; the base must

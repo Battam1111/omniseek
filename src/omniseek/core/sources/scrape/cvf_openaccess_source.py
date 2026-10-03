@@ -74,7 +74,7 @@ class CVFOpenAccessAdapter:
     regions = ["global"]
     modes = ["STRUCTURE"]
     description = (
-        "CVF Open Access — 计算机视觉 venue-of-record 按会议浏览 (CVPR/ICCV/WACV, "
+        "CVF Open Access：计算机视觉 venue-of-record 按会议浏览 (CVPR/ICCV/WACV, "
         "官方开放获取, keyless). 查某届会议实际收了什么: 'cvpr 2024 diffusion' / "
         "'iccv2023 segmentation' / 'venue:WACV2024'(裸会议 id). 必须带 venue+年份 "
         "token (这是会议浏览器; 跨会关键词搜索请用 dblp / semantic_scholar / arxiv). "

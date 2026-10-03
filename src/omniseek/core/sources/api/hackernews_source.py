@@ -51,7 +51,7 @@ class HackerNewsAdapter:
     name = "hackernews"
     needs_credentials = False
     description = (
-        "Hacker News — tech news (story submissions) + threaded community discussion "
+        "Hacker News: tech news (story submissions) + threaded community discussion "
         "(full-text comment search), both via the Algolia HN API"
     )
 

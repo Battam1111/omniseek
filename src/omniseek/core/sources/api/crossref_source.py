@@ -52,7 +52,7 @@ class CrossrefAdapter(BaseAPIAdapter):
     name = "crossref"
     needs_credentials = False
     description = (
-        "Crossref — DOI registration agency, ~150M formally-published works "
+        "Crossref: DOI registration agency, ~150M formally-published works "
         "(complement to arxiv/openalex/semantic_scholar)"
     )
 

@@ -46,7 +46,7 @@ auth.write_template(
 class AdzunaAdapter(BaseScrapeAdapter):
     name = "adzuna"
     needs_credentials = True
-    description = ("Adzuna — multi-country job listings with employer SALARY ranges "
+    description = ("Adzuna: multi-country job listings with employer SALARY ranges "
                    "(salary_min/max + company / location / contract); name it to drill a job "
                    "market. Query = optional 2-letter country code + role, e.g. 'ca machine "
                    "learning' / 'sg data scientist' (defaults to Canada). STRUCTURE, keyed.")

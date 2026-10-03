@@ -40,7 +40,7 @@ class AJOAdapter:
     kind = "stream"
     domains = ["jobs", "career"]
     description = (
-        "AcademicJobsOnline (AJO) — 北美教职/博后申请主板的最新职位列表 "
+        "AcademicJobsOnline (AJO)：北美教职/博后申请主板的最新职位列表 "
         "(专用解析器: 真标题在 span#j{ID}, 机构在前置 h3; 通用 scraper 在此只会抽出代码碎片). "
         "开放性准则: 学术 track 永久在册. 补 academic_job_boards(jobs.ac.uk) / "
         "higheredjobs_cs / academic_jobs(Nature Careers)"

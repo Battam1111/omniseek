@@ -141,7 +141,7 @@ class WechatAdapter:
     # plus the parse. The fetcher's default per-adapter bound (30s) would cut the retry off and drop
     # its reason, so the bound covers both attempts.
     fetch_timeout = 2 * FETCH_TIMEOUT + 5.0
-    description = "微信公众号 — single-URL fetch (mp.weixin.qq.com/s/<id>); discovery via wewe-rss (Layer B)"
+    description = "微信公众号: single-URL fetch (mp.weixin.qq.com/s/<id>); discovery via wewe-rss (Layer B)"
 
     # ─────────────────────────────────────────────────────────────────
     # Layer A: single-URL fetch (works immediately, no extra setup)

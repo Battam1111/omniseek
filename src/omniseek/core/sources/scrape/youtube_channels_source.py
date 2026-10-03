@@ -47,7 +47,7 @@ class YoutubeChannelsAdapter:
     name = "youtube_channels"
     needs_credentials = False
     description = (
-        "Curated YouTube channels — MLST / Yannic Kilcher / 3Blue1Brown / Dwarkesh / GPU MODE "
+        "Curated YouTube channels: MLST / Yannic Kilcher / 3Blue1Brown / Dwarkesh / GPU MODE "
         "(latest uploads via yt-dlp; the RSS endpoint is IP-blocked for this host)"
     )
 

@@ -77,9 +77,9 @@ def _ann_to_doc(a: dict) -> Optional[Document]:
 class CninfoAdapter(BaseScrapeAdapter):
     name = "cninfo"
     description = (
-        "巨潮资讯网 CNINFO — the SSE/SZSE OFFICIAL A-share disclosure repository (the Chinese EDGAR). "
+        "巨潮资讯网 CNINFO: the SSE/SZSE OFFICIAL A-share disclosure repository (the Chinese EDGAR). "
         "Keyword full-text search over every listed-company filing (年报/季报/招股书/ad-hoc 公告), each "
-        "hit a DIRECT PDF link (static.cninfo.com.cn) — pair with omniseek_read for the body. "
+        "hit a DIRECT PDF link (static.cninfo.com.cn); pair with omniseek_read for the body. "
         "Google can't return this structured filing index. No login. Reach for 上市公司/A股 "
         "disclosures / 财报 / 年报 / 公告 / 招股书 on a company or topic."
     )

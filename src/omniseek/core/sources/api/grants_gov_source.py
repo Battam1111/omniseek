@@ -40,7 +40,7 @@ _MAX_ROWS = 100
 class GrantsGovAdapter(BaseScrapeAdapter):
     name = "grants_gov"
     needs_credentials = False
-    description = ("Grants.gov — OPEN + forecasted US federal funding OPPORTUNITIES you can apply "
+    description = ("Grants.gov: OPEN + forecasted US federal funding OPPORTUNITIES you can apply "
                    "to, across all ~26 grant-making agencies (NSF / DOE / DARPA / NIH / ...); name "
                    "it to find applyable funding by topic. The prospective complement to "
                    "nsf_awards / nih_reporter (which show awards already granted). STRUCTURE, "

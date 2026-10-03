@@ -26,7 +26,7 @@ class AIStackExchangeAdapter(BaseScrapeAdapter):
     name = "ai_se"
     needs_credentials = False
     description = (
-        "Artificial Intelligence Stack Exchange — AI-concepts Q&A (NN architectures, RL, "
+        "Artificial Intelligence Stack Exchange: AI-concepts Q&A (NN architectures, RL, "
         "search/planning, the theory + intuition behind AI techniques); conceptual, not applied pipelines"
     )
     cache_ttl = 900

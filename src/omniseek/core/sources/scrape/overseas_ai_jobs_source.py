@@ -505,7 +505,7 @@ class OverseasAIJobsAdapter:
     name = "overseas_ai_jobs"
     needs_credentials = False
     description = (
-        "海外工业界 AI lab 全职研究岗 (RS/RE/MTS) — Cohere / DeepMind / Reka / "
+        "海外工业界 AI lab 全职研究岗 (RS/RE/MTS)：Cohere / DeepMind / Reka / "
         "Mistral / Anthropic / xAI / Together / Scale + 更多, 跨 Greenhouse/Ashby/"
         "Lever/SmartRecruiters/Workable; 标注 Singapore/Canada/remote (按部署方配置的目标地区)"
     )

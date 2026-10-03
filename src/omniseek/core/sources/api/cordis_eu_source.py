@@ -83,7 +83,7 @@ def _parse_date(s: Optional[str]) -> Optional[datetime]:
 class CordisEuAdapter(BulkFundingBase):
     name = "cordis_eu"
     description = (
-        "欧盟 CORDIS 科研经费 — Horizon Europe (2021-2027) AI/ML/NLP 切片 (眼首个欧盟经费源, 此前有美国 "
+        "欧盟 CORDIS 科研经费：Horizon Europe (2021-2027) AI/ML/NLP 切片 (眼首个欧盟经费源, 此前有美国 "
         "NSF/NIH + 加拿大 NSERC/SSHRC/CIHR, 无欧盟). CORDIS 是欧委会科研成果服务, Horizon Europe 项目数据"
         "仅以逐月 bulk zip 发布 (CSV/JSON, 无查询 API; CSV zip ~35MB, project.csv ~2.25 万项目 + "
         "organization.csv 参与机构含协调方). 逐项目: 标题 + 目标摘要 + 关键词 + EC 出资(EUR) + 协调机构 + "

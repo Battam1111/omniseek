@@ -133,11 +133,11 @@ class MarketQuoteAdapter:
     # Free-vocab domain facet (read off this class attr by the router; facets.json untouched).
     domains = ["finance"]
     modes = ["STRUCTURE"]
-    explicit_only = "stock quote lookup (named lookup only — query must name tickers)"
+    explicit_only = "stock quote lookup (named lookup only; query must name tickers)"
     # Quotes move intraday; a short TTL keeps a repeated lookup cheap without going stale.
     cache_ttl = 300
     description = (
-        "美股行情 — 实时(延迟)股票报价 (keyless, CNBC quote 后端). query 里点名 ticker "
+        "美股行情：实时(延迟)股票报价 (keyless, CNBC quote 后端). query 里点名 ticker "
         "($NVDA / ORCL) → 每个 ticker 一条: 现价/涨跌/涨跌幅/成交量/市值/PE/EPS/股息/日内区间/"
         "52周区间 + 盘前盘后. 多 symbol 一次. 命名查询, 不进广搜; query 无 ticker 返空."
     )

@@ -279,7 +279,7 @@ class DBLPAdapter(BaseAPIAdapter):
     name = "dblp"
     needs_credentials = False
     description = (
-        "DBLP — CS bibliography database (~7M publications + 3M authors, "
+        "DBLP: CS bibliography database (~7M publications + 3M authors, "
         "venue + year + DOI metadata; canonical CS publication lens)"
     )
 

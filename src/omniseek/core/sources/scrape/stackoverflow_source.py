@@ -35,7 +35,7 @@ class StackOverflowAdapter(BaseScrapeAdapter):
     name = "stackoverflow"
     needs_credentials = False
     description = (
-        "Stack Overflow — programming Q&A (parallel to academia_se; "
+        "Stack Overflow: programming Q&A (parallel to academia_se; "
         "primary destination for pytorch/CUDA/JAX/data-preprocessing implementation issues)"
     )
     cache_ttl = 900

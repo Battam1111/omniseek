@@ -41,7 +41,7 @@ MARKET_URL = "https://cloud.vast.ai/"
 class VastAIAdapter(BaseScrapeAdapter):
     name = "vast_ai"
     needs_credentials = False
-    description = ("Vast.ai — LIVE GPU rental marketplace: per-offer on-demand + spot ($/hr), "
+    description = ("Vast.ai: LIVE GPU rental marketplace: per-offer on-demand + spot ($/hr), "
                    "perf-per-dollar, GPU RAM, location, reliability; name it with an EXACT GPU "
                    "label ('RTX 4090', 'H100 SXM') to price a model, or bare to list the cheapest "
                    "offers. STRUCTURE, keyless; the live compute-cost order book gpu_pricing's "

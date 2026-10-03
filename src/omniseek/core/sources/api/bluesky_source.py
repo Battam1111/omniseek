@@ -66,7 +66,7 @@ def _image_media(post) -> list[str]:
 class BlueskyAdapter:
     name = "bluesky"
     needs_credentials = True
-    description = "Bluesky — academic Twitter migration target, AT Protocol open API"
+    description = "Bluesky: academic Twitter migration target, AT Protocol open API"
 
     _client: Optional[Client] = None
     _logged_in: bool = False

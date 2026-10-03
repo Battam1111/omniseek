@@ -86,7 +86,7 @@ class GitHubAdapter:
     name = "github"
     needs_credentials = True
     description = (
-        "GitHub platform — code search + issues/PRs + discussions, plus org/user "
+        "GitHub platform: code search + issues/PRs + discussions, plus org/user "
         "newest-repo activity (query `org:NAME` / `user:NAME`) and repo file-tree "
         "browse (`tree:owner/repo` / `tree:owner/repo@branch`). Complements "
         "github_trending (repo discovery) + github_releases (infra release feeds)."

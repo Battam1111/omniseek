@@ -25,7 +25,7 @@ class PdfAdapter:
     name = "pdf"
     needs_credentials = False
     description = (
-        "PDF full-text — download a paper PDF (arxiv.org/pdf/… or any *.pdf) and extract its text "
+        "PDF full-text: download a paper PDF (arxiv.org/pdf/… or any *.pdf) and extract its text "
         "so you can read the WHOLE paper, not just the abstract (pair with omniseek_paper_enrich's pdf_url)"
     )
 

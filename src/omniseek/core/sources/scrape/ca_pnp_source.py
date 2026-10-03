@@ -98,7 +98,7 @@ class _CaPnpBase(BaseScrapeAdapter, register=False):
 class OinpInvitationsAdapter(_CaPnpBase):
     name = "oinp_invitations"
     description = (
-        "安省提名 OINP 抽签历史 — Ontario Immigrant Nominee Program 各 stream (雇主担保/硕士毕业生/"
+        "安省提名 OINP 抽签历史：Ontario Immigrant Nominee Program 各 stream (雇主担保/硕士毕业生/"
         "博士毕业生/企业家等) 的逐次抽签: 日期 + 邀请数 + 分数线 (Score range) + EOI 窗口 + 备注. "
         "省提名, 用 OINP 自有分数, 别与联邦 EE (ircc_ee_rounds, CRS) 混. 博士/硕士 stream 2026-05-30 "
         "改版后已停, 旧行为历史参考; 页面继续发新 stream 抽签, 故仍是活的 monitor. 命名钻取 (omniseek_search 单源 raw)."
@@ -138,7 +138,7 @@ class OinpInvitationsAdapter(_CaPnpBase):
 class BcpnpInvitationsAdapter(_CaPnpBase):
     name = "bcpnp_invitations"
     description = (
-        "BC 省提名 BCPNP 抽签 — Skills Immigration (技术移民, 按 ITA type + 分数线 SIRS + 邀请数) 与 "
+        "BC 省提名 BCPNP 抽签：Skills Immigration (技术移民, 按 ITA type + 分数线 SIRS + 邀请数) 与 "
         "Entrepreneur Immigration 的逐次抽签, 外加 registration pool 的 SIRS 分数分布快照. BC 用 SIRS "
         "(0-200 注册分), 不是联邦 CRS, 别混. 分数/人数可能是 'N/A' 或 '<5' 字符串. 命名钻取 (omniseek_search 单源 raw)."
     )
@@ -200,7 +200,7 @@ class BcpnpInvitationsAdapter(_CaPnpBase):
 class AaipDrawsAdapter(_CaPnpBase):
     name = "aaip_draws"
     description = (
-        "阿尔伯塔省提名 AAIP 抽签历史 — Alberta Advantage Immigration Program 的 'Draw information' 表: "
+        "阿尔伯塔省提名 AAIP 抽签历史：Alberta Advantage Immigration Program 的 'Draw information' 表: "
         "逐次抽签日期 + Worker stream/pathway (Alberta Opportunity / Rural Renewal / Tourism / "
         "Dedicated Health Care / Alberta Express Entry 各 priority sector 等) + 最低分 + 邀请数. "
         "省提名自有分, 非联邦 CRS. 命名钻取 (omniseek_search 单源 raw)."

@@ -166,7 +166,7 @@ class ZhihuAdapter:
     explicit_only = "shared CDP Chrome (precious logged-in session)"
     fetch_url_class = "fulltext"
     fetch_url_hosts = ("zhihu.com",)
-    description = "知乎 — long-form PhD methodology discussions (via CDP Chrome session)"
+    description = "知乎: long-form PhD methodology discussions (via CDP Chrome session)"
     # fetch_url reads an answer/article page through the SHARED 9222 CDP pool; under the fetcher's
     # 30s default cap the adapter gets abandoned mid-flight (URL falls to the generic web fallback,
     # which hits 知乎's 安全验证 wall) while the orphaned cdp_call occupies the serial pool worker
@@ -310,7 +310,7 @@ class ZhihuAdapter:
         try:
             page_url = cdp_call(lambda p: p.url, initial_url="https://www.zhihu.com/")
             if "/signin" in page_url or "/login" in page_url:
-                return False, "CDP Chrome not logged into Zhihu — the operator needs to VNC + log in"
+                return False, "CDP Chrome not logged into Zhihu: the operator needs to VNC + log in"
             return True, "OK (CDP + Zhihu session)"
         except Exception as exc:  # noqa: BLE001
             return False, f"{type(exc).__name__}: {str(exc)[:80]}"

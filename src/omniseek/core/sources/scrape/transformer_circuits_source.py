@@ -73,7 +73,7 @@ def _parse_date_from_url(href: str) -> Optional[datetime]:
 class TransformerCircuitsAdapter:
     name = "transformer_circuits"
     needs_credentials = False
-    description = "Transformer Circuits Thread — Anthropic mechanistic interpretability research"
+    description = "Transformer Circuits Thread: Anthropic mechanistic interpretability research"
 
     def _fetch_index(self) -> list[dict]:
         key = cache.make_key("transformer_circuits", "index", "v1")

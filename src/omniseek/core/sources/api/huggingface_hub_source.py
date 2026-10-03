@@ -47,7 +47,7 @@ USER_AGENT = "omniseek/0.1 (automated retrieval)"
 class HuggingFaceHubAdapter(BaseAPIAdapter):
     name = "huggingface_hub"
     needs_credentials = False
-    description = "HuggingFace Hub — models / datasets / Spaces unified search (open API)"
+    description = "HuggingFace Hub: models / datasets / Spaces unified search (open API)"
     cache_ttl = 900
     rank_locally = False  # original applied no keyword filter — keep downloads order verbatim
 

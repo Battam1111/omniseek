@@ -290,6 +290,51 @@ _tier_miss = {n: (_tier.get(n), want) for n, want in _tier_expect.items()
 check("access_tier derivation classifies the exemplars right (free/keyed/walled/circumvention)",
       not _tier_miss, str(_tier_miss))
 
+# Runtime prose carries no dash: text a person (or an agent) reads at runtime uses a colon, semicolon,
+# comma, period or parentheses, never an em dash, an en dash, the Chinese double dash, or " -- "
+# standing in for one. Five surfaces: adapter description, string explicit_only, the MCP tool
+# descriptions, the server instructions, and the message every health_check returns. Fixed where the
+# text is authored; these gates keep it fixed.
+import ast as _dash_ast  # noqa: E402
+import asyncio as _dash_asyncio  # noqa: E402
+_DASH = _re_ro.compile("[\u2013\u2014]| -- ")
+_dash_src = []
+for _dash_n in names:
+    _dash_a = fetcher.get_adapter(_dash_n)
+    if _DASH.search(_dash_a.description or ""):
+        _dash_src.append(f"{_dash_n}.description")
+    _dash_eo = getattr(_dash_a, "explicit_only", None)
+    if isinstance(_dash_eo, str) and _DASH.search(_dash_eo):
+        _dash_src.append(f"{_dash_n}.explicit_only")
+check("no registered adapter description / string explicit_only carries a dash",
+      not _dash_src, f"{len(_dash_src)} offending: {_dash_src}")
+
+from omniseek.server import mcp as _dash_mcp, _OMNISEEK_INSTRUCTIONS as _dash_instr  # noqa: E402
+_dash_tools = _dash_asyncio.run(_dash_mcp.list_tools())
+_dash_tool_bad = [t.name for t in _dash_tools if _DASH.search(t.description or "")]
+if _DASH.search(_dash_instr):
+    _dash_tool_bad.insert(0, "<server instructions>")
+check(f"server instructions + all {len(_dash_tools)} MCP tool descriptions carry no dash",
+      len(_dash_tools) > 0 and not _dash_tool_bad, f"{len(_dash_tool_bad)} offending: {_dash_tool_bad}")
+
+_dash_hc_bad = []
+for _dash_p in sorted((ROOT / "src" / "omniseek").rglob("*.py")):
+    _dash_tree = _dash_ast.parse(_dash_p.read_text(encoding="utf-8"))
+    for _dash_fn in _dash_ast.walk(_dash_tree):
+        if not (isinstance(_dash_fn, (_dash_ast.FunctionDef, _dash_ast.AsyncFunctionDef))
+                and _dash_fn.name in ("health_check", "ahealth_check")):
+            continue
+        for _dash_r in _dash_ast.walk(_dash_fn):
+            if not (isinstance(_dash_r, _dash_ast.Return) and isinstance(_dash_r.value, _dash_ast.Tuple)
+                    and len(_dash_r.value.elts) == 2):
+                continue
+            for _dash_c in _dash_ast.walk(_dash_r.value.elts[1]):
+                if (isinstance(_dash_c, _dash_ast.Constant) and isinstance(_dash_c.value, str)
+                        and _DASH.search(_dash_c.value)):
+                    _dash_hc_bad.append(f"{_dash_p.relative_to(ROOT).as_posix()}:{_dash_c.lineno}")
+check("no health_check / ahealth_check message (2nd element of a returned 2-tuple) carries a dash",
+      not _dash_hc_bad, f"{len(_dash_hc_bad)} offending: {_dash_hc_bad}")
+
 # ---------------------------------------------------------------------------
 # 3. explicit_only entries must point at real adapters (parked modules excepted)
 # ---------------------------------------------------------------------------
@@ -6636,6 +6681,20 @@ check("dblp_author: fetch_url on a dblp.org/pid URL sends ONE SPARQL request (no
       == "https://dblp.org/rec/journals/corr/abs-2601-02383"
       and _dba_fu_rev is not None and _dba_fu_rev.content == _dba_fu.content,
       f"doc={_dba_fu and _dba_fu.content[:300]!r} calls={len(_dba_fu_calls)}")
+# A venue that already ends in a period (dblp's journal abbreviations do) must not give two periods
+# in a row: ONE trailing period comes off the venue before the ". " join, as it does for the title.
+_dba_dot = _dba.DBLPAuthorAdapter()._profile_to_doc("https://dblp.org/pid/00/1", [
+    {"name": "Ada Lovelace"},
+    {"pub": "https://dblp.org/rec/journals/cea/Lovelace24", "title": "Crop yield models.", "y": "2024",
+     "v": "Comput. Electron. Agric."}])
+_dba_dot_lines = _dba_dot.content.splitlines() if _dba_dot else []
+check("dblp_author: a venue ending in '.' (Comput. Electron. Agric.) yields no two consecutive periods "
+      "in any profile line; the venue keeps its inner periods and the metadata keeps it whole",
+      _dba_dot is not None and not any(".." in ln for ln in _dba_dot_lines)
+      and "2024. Crop yield models. Comput. Electron. Agric. https://dblp.org/rec/journals/cea/Lovelace24"
+      in _dba_dot_lines
+      and _dba_dot.metadata["recent_publications"][0]["venue"] == "Comput. Electron. Agric.",
+      f"lines={_dba_dot_lines}")
 _dba_nf_calls: list = []
 with _dblp_offline(_DBA_PID_UNKNOWN, calls=_dba_nf_calls):
     _dba_nf = _dba.DBLPAuthorAdapter().fetch_url("https://dblp.org/pid/00/000000")
@@ -12788,6 +12847,79 @@ check("openreview: reviews: lookups floor the limit so the thread tail (response
       _or._REVIEWS_MIN_LIMIT >= 30 and "_REVIEWS_MIN_LIMIT" in _or_search_src)
 check("openreview: note kind reads v1's SINGULAR invitation as well as v2's invitations[]",
       'note.get("invitation")' in _or_note_src and 'note.get("invitations")' in _or_note_src)
+
+# 2026-10-04 eyefix: a keyword search sent only `term`, and OpenReview's default `source` mixes
+# replies (reviews, comments) into the hits; those carry no title and mapped to empty "(no title)"
+# docs. Measured on a credit-assignment query: 2 of 8 hits titled by default, 8 of 8 with
+# source=forum. Separately, an account with multi-factor login answers /login with mfaPending and
+# no token, and health said only "login failed". Both paths run offline here (network stubbed).
+import asyncio as _or_aio  # noqa: E402
+from unittest import mock as _or_mock  # noqa: E402
+_or_calls: list = []
+
+
+def _or_fake_get(self, path, params, base=None):
+    _or_calls.append((path, dict(params)))
+    return {"notes": []}
+
+
+async def _or_fake_aget(self, path, params):
+    _or_calls.append((path, dict(params)))
+    return {"notes": []}
+
+
+with _or_mock.patch.object(_or.OpenReviewAdapter, "_api_get", _or_fake_get), \
+        _or_mock.patch.object(_or.OpenReviewAdapter, "_aapi_get", _or_fake_aget), \
+        _or_mock.patch.object(_or.cache, "get", lambda key: None), \
+        _or_mock.patch.object(_or.cache, "set", lambda *a, **k: None):
+    _or.OpenReviewAdapter().search("counterfactual credit assignment smokeonly", limit=5)
+    _or_aio.run(_or.OpenReviewAdapter().asearch("counterfactual credit assignment smokeonly", limit=5))
+check("openreview: keyword search (sync AND async) asks for papers only (source=forum), not replies",
+      len(_or_calls) == 2
+      and all(p == "/notes/search" and q.get("source") == "forum" for p, q in _or_calls),
+      detail=f"calls={_or_calls}")
+
+
+class _OrLoginResp:
+    status_code = 200
+
+    def __init__(self, payload):
+        self._payload = payload
+
+    def raise_for_status(self):
+        return None
+
+    def json(self):
+        return self._payload
+
+
+_or_posts: list = []
+_OR_MFA = {"mfaPending": True, "mfaPendingToken": "pending", "mfaMethods": ["emailOtp"],
+           "preferredMethod": "emailOtp"}
+
+
+def _or_login_with(payload):
+    def _post(url, **kw):
+        _or_posts.append(url)
+        return _OrLoginResp(payload)
+    return _post
+
+
+with _or_mock.patch.object(_or.auth, "load", lambda name: {"username": "u@example.org", "password": "p"}), \
+        _or_mock.patch.object(_or.auth, "is_configured", lambda name: True):
+    with _or_mock.patch.object(_or.httpx, "post", _or_login_with(_OR_MFA)):
+        _or_mfa_health = _or.OpenReviewAdapter().health_check()
+    _or_mfa_posts = list(_or_posts)
+    with _or_mock.patch.object(_or.httpx, "post", _or_login_with({"token": "t0k"})):
+        _or_ok_health = _or.OpenReviewAdapter().health_check()
+check("openreview: an account with multi-factor login reads as such in health (not a bare 'login "
+      "failed'), and OmniSeek never asks OpenReview to email a code (no /mfa/ call)",
+      _or_mfa_health[0] is False and "multi-factor" in _or_mfa_health[1]
+      and "emailOtp" in _or_mfa_health[1]
+      and _or_mfa_posts == [f"{_or.API_BASE}/login"],
+      detail=f"health={_or_mfa_health} posts={_or_mfa_posts}")
+check("openreview: a login that returns a token is healthy",
+      _or_ok_health == (True, "OK (logged in)"), detail=f"health={_or_ok_health}")
 
 # 2026-07-25 eyefix: LMArena (ex-LMSys) stopped publishing ANY feed (arena.ai/blog/rss/ and every
 # candidate answer with the SPA shell, zero <item>, and the blog declares no rel=alternate), so the

@@ -72,7 +72,7 @@ _BODY_CAP = 20000
 class EuropePMCAdapter(BaseScrapeAdapter):
     name = "europepmc"
     needs_credentials = False
-    description = ("Europe PMC — keyless biomedical / life-sciences literature "
+    description = ("Europe PMC: keyless biomedical / life-sciences literature "
                    "(abstracts + citations + open-access JATS full text); name it to "
                    "drill a clinical / biomedical question. OmniSeek's SECOND keyless "
                    "full-text spine (CORE needs a key, this does not). STRUCTURE, "
@@ -81,7 +81,7 @@ class EuropePMCAdapter(BaseScrapeAdapter):
     kind = "lookup"
     domains = ["papers"]
     modes = ["STRUCTURE"]
-    explicit_only = ("europepmc: biomedical-leaning literature — a NAMED drill (point it at a "
+    explicit_only = ("europepmc: biomedical-leaning literature, a NAMED drill (point it at a "
                      "clinical / life-sciences question), not broad-fan-out fodder that would "
                      "pull PubMed-flavoured hits into general ML retrieval")
 

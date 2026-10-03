@@ -69,7 +69,7 @@ class ZhihuUsersAdapter:
     needs_credentials = False  # CDP login is one-time; this just configures user list
     explicit_only = "shared CDP Chrome (precious logged-in session)"
     description = (
-        "知乎 followed researchers — 张俊林 等 senior 中文 NLP/ML 作者跟踪 "
+        "知乎 followed researchers：张俊林 等 senior 中文 NLP/ML 作者跟踪 "
         "(via CDP, configurable via ~/.omniseek/credentials/zhihu_users.json)"
     )
 
@@ -218,7 +218,7 @@ class ZhihuUsersAdapter:
                 first["handle"], first.get("display_name", first["handle"])
             )
             if not posts:
-                return False, f"fetched 0 posts for {first.get('display_name', '?')} — login expired?"
+                return False, f"fetched 0 posts for {first.get('display_name', '?')}: login expired?"
             return True, f"OK ({len(users)} users configured; first probe returned {len(posts)} posts)"
         except Exception as exc:  # noqa: BLE001
             return False, f"{type(exc).__name__}: {exc}"

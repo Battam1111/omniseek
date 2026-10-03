@@ -39,9 +39,9 @@ class OpenAlexCNAdapter(OpenAlexAdapter):
     needs_credentials = False
     explicit_only = "中文学术 facet over OpenAlex (pins language:zh); name it for Chinese-scholarship search"
     description = (
-        "中文学术 — Chinese-LANGUAGE scholarship via OpenAlex (language:zh): 中文期刊论文 + 学位论文 "
+        "中文学术: Chinese-LANGUAGE scholarship via OpenAlex (language:zh): 中文期刊论文 + 学位论文 "
         "(add inline `type:dissertation`) that OmniSeek's English paper sources (arxiv/s2/crossref) "
-        "miss. Returns structured 题录 — title / authors / 中文期刊 venue / year / citations / OA / "
+        "miss. Returns structured 题录: title / authors / 中文期刊 venue / year / citations / OA / "
         "abstract. Optional inline filters: `type:dissertation`, `institutions.country_code:cn`, "
         "`publication_year:2024`. No login (keyless OpenAlex)."
     )

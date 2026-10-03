@@ -304,7 +304,7 @@ class YouTubeAdapter:
     fetch_url_class = "fulltext"
     fetch_url_hosts = ("youtube.com", "youtu.be")
     description = (
-        "YouTube — video search + transcript + top comments (PhD methodology channels, "
+        "YouTube: video search + transcript + top comments (PhD methodology channels, "
         "lectures, talks; pass a video URL/id as the query to get its comments as docs)"
     )
 

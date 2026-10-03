@@ -128,7 +128,7 @@ class PageWatchAdapter:
     domains = ["immigration", "policy"]
     explicit_only = "page-change sentinel; watchtower + named calls only"
     description = (
-        "规则页变更哨兵 — 盯无 feed 但变了就重要的政策/规则页 (MOM EP/COMPASS 资格、"
+        "规则页变更哨兵：盯无 feed 但变了就重要的政策/规则页 (MOM EP/COMPASS 资格、"
         "ONE Pass 标准、ICA PR 申请). 每页一个文档, source_id 内嵌内容指纹: 页面一变, "
         "指纹即变, watchtower 视为新条目自动报. 加一页 = page_watch.json 加一行. "
         "(指纹可能因页面动态碎片偶发翻动, 故盯哨先 passive 观察)"

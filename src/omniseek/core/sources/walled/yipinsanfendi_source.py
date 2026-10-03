@@ -70,7 +70,7 @@ class YipinsanfendiAdapter(BaseCDPAdapter):
     name = "yipinsanfendi"
     needs_credentials = False  # Login via VNC once; the session persists + now self-heals (below)
     explicit_only = "shared CDP Chrome (precious logged-in session)"
-    description = "一亩三分地 — North America CS PhD application + grad school community"
+    description = "一亩三分地: North America CS PhD application + grad school community"
     url_host = "1point3acres.com"
     # Auth self-heal (2026-07-06): the 9222 session logged out -> 游客 cannot search -> silent [].
     # The SSO login (auth.1point3acres.com) is autofill-backed (Chrome remembers the password) and

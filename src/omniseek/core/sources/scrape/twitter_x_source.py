@@ -332,7 +332,7 @@ class TwitterXAdapter:
 
     def health_check(self) -> tuple[bool, str]:
         if _SEALED:
-            return False, "SEALED (operator, 2026-06-03) — disabled until a fresh burner auth_token is provisioned"
+            return False, "SEALED (operator, 2026-06-03): disabled until a fresh burner auth_token is provisioned"
         if not _config().get("auth_token"):
             return False, "no auth_token in twitter_x.json"
         try:

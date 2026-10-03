@@ -204,7 +204,7 @@ class HKUniversitiesAdapter:
     name = "hk_universities"
     needs_credentials = False
     description = (
-        "HK 5 大学 CS/CSE/COMP dept news — HKU CS / HKUST CSE / CUHK CSE / "
+        "HK 5 大学 CS/CSE/COMP dept news：HKU CS / HKUST CSE / CUHK CSE / "
         "CityU CS / PolyU COMP (HTML scrape，HK CS 院系动态信号)"
     )
 

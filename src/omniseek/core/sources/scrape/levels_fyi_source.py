@@ -298,7 +298,7 @@ class LevelsFyiAdapter:
     name = "levels_fyi"
     needs_credentials = False
     description = (
-        "levels.fyi — 科技公司/岗位薪酬 (TC 黄金标准, keyless). 两种查法: (1) 岗位[+国家] "
+        "levels.fyi：科技公司/岗位薪酬 (TC 黄金标准, keyless). 两种查法: (1) 岗位[+国家] "
         "(\"machine learning engineer singapore\" / \"data scientist canada\") → 该岗位在该国的"
         "中位 + 区间 (本币, location-accurate, 取自页面 og:description); (2) 公司名 (\"bytedance\") "
         "→ 该公司各职位族/级别总包 (US/USD 基准). 用于谈 offer / 比较雇主薪酬参考."

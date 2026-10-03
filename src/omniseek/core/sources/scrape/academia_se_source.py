@@ -42,7 +42,7 @@ SITE_HOST = "academia.stackexchange.com"
 class AcademiaSEAdapter(BaseScrapeAdapter):
     name = "academia_se"
     needs_credentials = False
-    description = "Academia Stack Exchange — English PhD/postdoc/faculty Q&A (Stack Exchange API)"
+    description = "Academia Stack Exchange: English PhD/postdoc/faculty Q&A (Stack Exchange API)"
     cache_ttl = 900
     kind = "lookup"
     domains = ["community", "methodology"]

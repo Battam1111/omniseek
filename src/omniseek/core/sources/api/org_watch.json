@@ -5,7 +5,7 @@
                              "Sea AI Lab"
                          ],
         "regions":  "sg",
-        "description":  "Sea AI Lab (SAIL) — Sea 集团新加坡工业 AI 研究院最新论文 (OpenAlex affiliation 搜 Sea AI Lab, keyless, 无 CDP/无作者消歧). LLM/RL/reasoning/AI-systems, 正中 SG 落地与方向; 无 OpenAlex 机构实体且官网 SPA, 故走 affiliation 文本搜."
+        "description":  "Sea AI Lab (SAIL)：Sea 集团新加坡工业 AI 研究院最新论文 (OpenAlex affiliation 搜 Sea AI Lab, keyless, 无 CDP/无作者消歧). LLM/RL/reasoning/AI-systems, 正中 SG 落地与方向; 无 OpenAlex 机构实体且官网 SPA, 故走 affiliation 文本搜."
     },
     {
         "name":  "deepseek",

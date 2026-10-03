@@ -171,7 +171,7 @@ async def _arxiv_aget_text(url: str, **kwargs):
 class ArxivAdapter(BaseAPIAdapter):
     name = "arxiv"
     needs_credentials = False
-    description = "arXiv preprints — 3M+ papers across physics, math, CS, biology"
+    description = "arXiv preprints: 3M+ papers across physics, math, CS, biology"
 
     # arXiv's API returns relevance-sorted results (sortBy=relevance); keep that
     # server order verbatim — no local re-rank — exactly as the hand form did.

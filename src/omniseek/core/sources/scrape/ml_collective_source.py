@@ -83,7 +83,7 @@ def _parse_date(text: str) -> Optional[datetime.date]:
 class MLCollectiveAdapter:
     name = "ml_collective"
     needs_credentials = False
-    description = "ML Collective — free ML research mentorship + research jams + DLCT reading group"
+    description = "ML Collective: free ML research mentorship + research jams + DLCT reading group"
 
     def _scrape_index(self, path: str) -> list[dict]:
         """Fetch an index page and return REAL item rows (title + url + parsed date)."""

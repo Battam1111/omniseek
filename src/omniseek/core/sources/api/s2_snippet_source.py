@@ -31,7 +31,7 @@ class S2SnippetAdapter:
     domains = ["papers"]
     modes = ["STRUCTURE"]
     description = (
-        "S2 段落级全文检索 (/graph/v1/snippet/search) — 跨 Semantic Scholar 开放获取全文语料, 检索匹配查询的"
+        "S2 段落级全文检索 (/graph/v1/snippet/search)：跨 Semantic Scholar 开放获取全文语料, 检索匹配查询的"
         "具体段落/句子 (不止论文/摘要级). 回答 '哪些论文里的哪些句子在讲 X'. 补 semantic_scholar/openalex "
         "(论文级) 与 omniseek_paper_enrich (单篇全文) 的中间层: passage 级. 英文 CS/AI 语料. 命名钻取 (omniseek_search 单源 raw)."
     )

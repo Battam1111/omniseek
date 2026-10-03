@@ -36,10 +36,10 @@ _ENDPOINT = "https://api.crossref.org/works"
 class CrossrefRetractionsAdapter(BaseAPIAdapter):
     name = "crossref_retractions"
     description = (
-        "Crossref 撤稿通知流 (filter=update-type:retraction) — 最新撤稿的结构化记录: 撤稿通知 DOI + "
+        "Crossref 撤稿通知流 (filter=update-type:retraction)：最新撤稿的结构化记录: 撤稿通知 DOI + "
         "被撤论文 DOI (update-to) + 期刊/出版商/撤稿日期/原作者. MONITOR 研究诚信 + STRUCTURE (网搜只给"
         "撤稿的散文报道, 这里给逐条机读记录, 最新在前). query= 可按主题过滤 (如 'language model'). "
-        "注意整体偏生物医学, AI/NLP 信号稀疏 — 当可过滤的 firehose 用, 非预筛 NLP 榜. 命名钻取 (omniseek_search 单源 raw). "
+        "注意整体偏生物医学, AI/NLP 信号稀疏：当可过滤的 firehose 用, 非预筛 NLP 榜. 命名钻取 (omniseek_search 单源 raw). "
         "补 omniseek_paper_enrich (查单篇论文撤稿/诚信) 的逆向: 给最近撤稿的流."
     )
     explicit_only = "Crossref 撤稿 MONITOR firehose (偏生物医学); 命名钻取 (omniseek_search 单源 raw) 按主题查最近撤稿"

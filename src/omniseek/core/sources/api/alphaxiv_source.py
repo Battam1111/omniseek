@@ -195,7 +195,7 @@ class AlphaXivAdapter:
     name = "alphaxiv"
     needs_credentials = False  # keyless public REST: only a User-Agent, no OAuth/account/key
     description = (
-        "AlphaXiv — trending preprint buzz (Hot feed: visits + votes) + per-paper community "
+        "AlphaXiv: trending preprint buzz (Hot feed: visits + votes) + per-paper community "
         "discussion + AI-generated paper overview, all via the keyless api.alphaxiv.org REST API"
     )
 

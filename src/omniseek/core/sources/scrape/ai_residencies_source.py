@@ -661,7 +661,7 @@ class AIResidenciesAdapter:
     needs_credentials = False
     kind = "stream"
     description = (
-        "AI research residency / fellows / scholars programs — "
+        "AI research residency / fellows / scholars programs: "
         "Anthropic Fellows / MATS / Cohere Scholars + Catalyst Grants / NVIDIA / "
         "OpenAI Safety + Residency / Constellation Astra / EleutherAI SOAR / "
         "Ai2 PYI / 上海 AI Lab / Mistral Intern / Vector Institute (Tier 1-3; "

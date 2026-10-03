@@ -76,7 +76,7 @@ def _aget_client() -> "httpx.AsyncClient":
 class NSERCAwardsAdapter:
     name = "nserc_awards"
     description = (
-        "加拿大 NSERC 科研经费 — 计算机/AI/ML/NLP 切片 (眼首个加拿大经费源, 此前只有美国 NSF/NIH). "
+        "加拿大 NSERC 科研经费：计算机/AI/ML/NLP 切片 (眼首个加拿大经费源, 此前只有美国 NSF/NIH). "
         "NSERC 是加拿大主科学资助局, 开放数据仅以逐年 bulk CSV 发布 (无查询 API, FY2024 ~56MB/~6 万行). "
         "逐笔奖助: 获奖人 + 机构 + 金额 (CAD) + program + 学科 + 关键词. 博士赴加找实验室/PI/资助方向的"
         "一手结构 (网搜给不出). 仅收 CS 学科 + AI/ML/NLP 关键词的子集 (~3-4k 行, telos 视角, 非全 NSERC). "

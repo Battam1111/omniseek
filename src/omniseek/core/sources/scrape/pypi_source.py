@@ -35,7 +35,7 @@ USER_AGENT = "omniseek/0.1 (automated retrieval)"
 
 class PyPIAdapter(RSSAdapterBase):
     name = "pypi"
-    description = "PyPI — Python package update stream (recent releases across all packages)"
+    description = "PyPI: Python package update stream (recent releases across all packages)"
     feeds = ["https://pypi.org/rss/updates.xml"]
     url_pattern = r"pypi\.org"
     cache_ttl = 1800  # 30 min — PyPI updates frequently

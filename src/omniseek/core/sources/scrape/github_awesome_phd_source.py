@@ -40,7 +40,7 @@ DEFAULT_TIMEOUT = 20
 class GithubAwesomePhDAdapter:
     name = "github_awesome_phd"
     needs_credentials = False
-    description = "GitHub Awesome-PhD curated lists — highest SNR PhD resource collections"
+    description = "GitHub Awesome-PhD curated lists: highest SNR PhD resource collections"
 
     def _fetch_readme(self, owner: str, repo: str) -> Optional[str]:
         key = cache.make_key("gh_awesome", owner, repo)

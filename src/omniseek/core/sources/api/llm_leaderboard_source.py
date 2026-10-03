@@ -50,7 +50,7 @@ class LLMLeaderboardAdapter:
     domains = ["eval", "models"]
     explicit_only = "Artificial Analysis API (free key, rate-limited); named lookup + watchtower"
     description = (
-        "LLM 榜单 — Artificial Analysis 全模型实时评测 (500+ 模型: AA 智能/代码/数学指数, "
+        "LLM 榜单：Artificial Analysis 全模型实时评测 (500+ 模型: AA 智能/代码/数学指数, "
         "GPQA/AIME-25/HLE/LiveCodeBench/MMLU-Pro, $/1M tokens, tok/s, 发布日期). "
         "领域脉搏的结构化层: 空 query=按智能指数排序; 关键词过滤模型/厂商 "
         "('claude' / 'deepseek' / 'openai'). 新模型上榜=watchtower 新条目. "

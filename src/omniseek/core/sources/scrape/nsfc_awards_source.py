@@ -170,11 +170,11 @@ def _grant_to_doc(g: dict) -> Optional[Document]:
 class NSFCAwardsAdapter(BaseScrapeAdapter):
     name = "nsfc_awards"
     description = (
-        "国家自然科学基金 NSFC 已批准项目检索 — 中国基础科研主资助局 (美国 NSF 的对位), 眼首个中国经费源 "
+        "国家自然科学基金 NSFC 已批准项目检索：中国基础科研主资助局 (美国 NSF 的对位), 眼首个中国经费源 "
         "(此前只有美国 NSF/NIH + 加拿大 NSERC/SSHRC/CIHR). 官方门户 kd.nsfc.cn 有验证码 + 加密响应不可脚本化, "
         "故走 LetPub 第三方基金索引 (letpub.com.cn) 的免登录切片. 关键词 (题目) 搜索, 逐笔奖助: 负责人 + 单位 "
         "+ 金额 (万元) + 项目批准号 + 项目类型 + 学部 + 批准年份 + 题目. 博士/研究者查某课题 (NLP/ML/视觉) 谁在"
-        "中国拿了基金、在哪家机构、多少钱 — 一手经费格局 (网搜给不出结构记录). 命名钻取 (omniseek_search 单源 raw). "
+        "中国拿了基金、在哪家机构、多少钱：一手经费格局 (网搜给不出结构记录). 命名钻取 (omniseek_search 单源 raw). "
         "免登录切片仅到 2021 年 (第三方站, 布局/年限可能变动)."
     )
     explicit_only = "NSFC 中国经费 (LetPub 第三方索引, 免登录切片 1997-2021); 命名钻取 (omniseek_search 单源 raw)"

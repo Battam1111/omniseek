@@ -219,7 +219,7 @@ class EastMoneyAdapter(BaseScrapeAdapter):
         except Exception as exc:  # noqa: BLE001
             return False, f"suggest host (searchapi) unreachable: {type(exc).__name__}"
         if not hits:
-            return False, "suggest returned 0 (token rotated? — re-grab from eastmoney.com network tab)"
+            return False, "suggest returned 0 (token rotated? re-grab from eastmoney.com network tab)"
         try:
             r = sess.get(_TENCENT_QUOTE + (_tencent_symbol(hits[0]) or "sh600519"),
                          headers={"user-agent": _UA}, timeout=15)

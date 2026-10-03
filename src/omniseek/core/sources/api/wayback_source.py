@@ -77,10 +77,10 @@ class WaybackAdapter:
     kind = "lookup"
     domains = ["news"]
     modes = ["RECALL", "UNWALL"]
-    explicit_only = "archived/historical/deleted versions of a URL (named lookup — query = a URL)"
+    explicit_only = "archived/historical/deleted versions of a URL (named lookup; query = a URL)"
     cache_ttl = 3600
     description = (
-        "Wayback Machine 时光机 — 一个 URL 的历史/被删快照 (keyless, Internet Archive CDX). query = "
+        "Wayback Machine 时光机：一个 URL 的历史/被删快照 (keyless, Internet Archive CDX). query = "
         "一个 URL → 该页的存档快照列表(时间戳 + web.archive.org 存档链接,再 omniseek_read 读历史正文). "
         "web 搜只给 LIVE 页;这取开放网已遗忘/已删改的旧版本(对抗检索、读历史、读被删)。命名查询;非 URL 返空."
     )
@@ -182,7 +182,7 @@ class WaybackAdapter:
         )
         if isinstance(payload, list):
             return True, "OK (Internet Archive CDX)"
-        return False, "CDX slow/503 (Internet Archive load) — transient, source still usable"
+        return False, "CDX slow/503 (Internet Archive load): transient, source still usable"
 
 
 from omniseek.core.fetcher import register_adapter

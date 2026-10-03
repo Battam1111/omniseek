@@ -40,7 +40,7 @@ TIMEOUT = 15
 class GutenbergAdapter(BaseScrapeAdapter):
     name = "gutenberg"
     needs_credentials = False
-    description = "Project Gutenberg — full-text public-domain books (literature/philosophy/classics) via the keyless Gutendex API"
+    description = "Project Gutenberg: full-text public-domain books (literature/philosophy/classics) via the keyless Gutendex API"
     cache_ttl = 900
 
     # routing facets (the router reads these class attrs; do NOT touch facets.json)

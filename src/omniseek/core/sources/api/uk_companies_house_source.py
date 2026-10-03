@@ -70,7 +70,7 @@ class UkCompaniesHouseAdapter(BaseAPIAdapter):
     name = "uk_companies_house"
     needs_credentials = True
     description = (
-        "UK Companies House — the official company register (free key). Name search returns UK "
+        "UK Companies House: the official company register (free key). Name search returns UK "
         "companies (number/status/type/incorporation date/registered office); drill a company by "
         "CRN with 'officers:12345678' (directors/secretaries) or 'psc:12345678' (beneficial owners, "
         "persons with significant control). filings, UK. STRUCTURE, keyed; name it to drill."

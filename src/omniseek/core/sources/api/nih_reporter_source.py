@@ -48,7 +48,7 @@ _MAX_LIMIT = 500  # the API caps `limit` at 500; asking for more is rejected
 class NIHReporterAdapter(BaseScrapeAdapter):
     name = "nih_reporter"
     needs_credentials = False
-    description = ("NIH RePORTER — US NIH biomedical research grants (contact PI / award "
+    description = ("NIH RePORTER: US NIH biomedical research grants (contact PI / award "
                    "amount / awardee organization / full abstract + terms); name it to drill "
                    "US federal biomedical funding by topic / PI / organization. STRUCTURE, "
                    "keyless POST api.reporter.nih.gov; the biomedical sibling of nsf_awards.")
@@ -57,7 +57,7 @@ class NIHReporterAdapter(BaseScrapeAdapter):
     domains = ["funding"]
     regions = ["us"]
     modes = ["STRUCTURE"]
-    explicit_only = ("nih_reporter: US-only federal biomedical grants — a named drill "
+    explicit_only = ("nih_reporter: US-only federal biomedical grants, a named drill "
                      "(by topic / PI / organization), not broad-fan-out fodder")
 
     def _raw_fetch(self, query: str, limit: int) -> Optional[Any]:

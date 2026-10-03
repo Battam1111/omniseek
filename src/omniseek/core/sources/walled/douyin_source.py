@@ -100,7 +100,7 @@ _LOGIN_PROBE_JS = (
 class DouyinAdapter(BaseCDPAdapter):
     name = "douyin"
     description = (
-        "抖音 — 中国第一短视频平台的登录墙网页搜索 (UNWALL). 一手 留学/移民/海外生活、政务/官方号公告、"
+        "抖音：中国第一短视频平台的登录墙网页搜索 (UNWALL). 一手 留学/移民/海外生活、政务/官方号公告、"
         "创作者实时评论, 视频原生, 与 知乎(文字问答)/小红书(生活笔记)/一亩三分地(北美技术移民) 不重叠. "
         "隔离 小号 会话 (9225 专属 Chrome, 同小红书 9223 模式). 返回视频的标题/文案、作者、互动数 + 视频 URL "
         "(再对该 url 调 omniseek_transcribe 可转写语音正文). 命名调用 (omniseek_search 单源钻取), 不进广搜."
@@ -234,12 +234,12 @@ class DouyinAdapter(BaseCDPAdapter):
         from omniseek.core.sources.walled._cdp import cdp_health
         ok, msg = cdp_health(self.cdp_url, ensure=True)
         if not ok:
-            return False, f"CDP 9225 down: {msg} (抖音 Chrome — launchd com.omniseek.cdp.douyin)"
+            return False, f"CDP 9225 down: {msg} (抖音 Chrome: launchd com.omniseek.cdp.douyin)"
         try:
             state = self._run(lambda p: p.evaluate(_LOGIN_PROBE_JS), "https://www.douyin.com")
         except Exception as exc:  # noqa: BLE001
             return False, f"9225 up but login probe failed: {type(exc).__name__}: {str(exc)[:80]}"
         logged_in = (state or {}).get("login") == "1" or (state or {}).get("status") == "1"
         if not logged_in:
-            return False, "9225 up but 抖音 小号 NOT logged in — VNC into the 抖音 Chrome + scan-login a 小号"
+            return False, "9225 up but 抖音 小号 NOT logged in: VNC into the 抖音 Chrome + scan-login a 小号"
         return True, "OK (9225 up, 小号 logged in)"

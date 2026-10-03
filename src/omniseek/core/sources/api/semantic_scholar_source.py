@@ -65,7 +65,7 @@ auth.write_template(
 class SemanticScholarAdapter:
     name = "semantic_scholar"
     needs_credentials = False  # API key is optional, not required
-    description = "Semantic Scholar — 225M+ papers, citation graphs, TLDR summaries"
+    description = "Semantic Scholar: 225M+ papers, citation graphs, TLDR summaries"
 
     # The S2 paper fields this adapter's document assembly reads. Passed verbatim to the
     # shared _s2.search_paper / _s2.get_paper wrappers.

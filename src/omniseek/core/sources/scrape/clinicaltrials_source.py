@@ -39,7 +39,7 @@ STUDY_URL = "https://clinicaltrials.gov/study/{nct}"
 class ClinicalTrialsAdapter(BaseScrapeAdapter):
     name = "clinicaltrials"
     needs_credentials = False
-    description = "ClinicalTrials.gov — registered clinical trials (status/phase/condition/sponsor) via the keyless NIH v2 API"
+    description = "ClinicalTrials.gov: registered clinical trials (status/phase/condition/sponsor) via the keyless NIH v2 API"
     cache_ttl = 900
     kind = "lookup"
     domains = ["clinical", "health"]

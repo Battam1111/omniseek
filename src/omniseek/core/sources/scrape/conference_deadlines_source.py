@@ -70,7 +70,7 @@ class ConferenceDeadlinesAdapter:
     name = "conference_deadlines"
     needs_credentials = False
     description = (
-        "ML/AI conference submission deadlines (ccfddl) — NeurIPS / ICML / ICLR "
+        "ML/AI conference submission deadlines (ccfddl): NeurIPS / ICML / ICLR "
         "/ CVPR / ACL / AAAI / IJCAI / CoRL / ICRA + 47 more AI venues, ranked by "
         "nearest upcoming deadline with CCF/CORE rank + location"
     )

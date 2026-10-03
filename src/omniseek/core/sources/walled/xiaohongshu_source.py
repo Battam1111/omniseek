@@ -599,7 +599,7 @@ class XiaohongshuAdapter:
     name = "xiaohongshu"
     needs_credentials = False  # Login via VNC into persistent Chrome
     explicit_only = "sealed / CDP (isolated 9223 Chrome, account-rate-sensitive)"
-    description = "小红书 — first-hand PhD daily life + real experience sharing (CDP session)"
+    description = "小红书: first-hand PhD daily life + real experience sharing (CDP session)"
     # fetch_url scrolls + expands a FULL comment thread (where the 经验 lives) — that legitimately
     # outlasts the 30s default fetch_url cap, so declare a larger budget (fetcher honours it; the
     # cdp_call timeout below stays under this so CDP cleans up before the bound fires).

@@ -40,7 +40,7 @@ DATASET_BASE = "https://www.kaggle.com/datasets/"
 class KaggleAdapter(BaseScrapeAdapter):
     name = "kaggle"
     needs_credentials = False
-    description = "Kaggle — public ML dataset catalog (vote/download-ranked tabular/image/text corpora, keyless listing API)"
+    description = "Kaggle: public ML dataset catalog (vote/download-ranked tabular/image/text corpora, keyless listing API)"
     cache_ttl = 900
     kind = "lookup"
     domains = ["datasets", "code"]

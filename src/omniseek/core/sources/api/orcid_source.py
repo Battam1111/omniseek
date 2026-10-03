@@ -59,7 +59,7 @@ _MAX_FANOUT = 8
 class OrcidAdapter(BaseScrapeAdapter):
     name = "orcid"
     needs_credentials = False
-    description = ("ORCID — researcher iD + authenticated CV record (employments / educations / "
+    description = ("ORCID: researcher iD + authenticated CV record (employments / educations / "
                    "works / fundings) via the keyless public v3.0 API; name it to resolve a "
                    "researcher by name and pull their structured career record. STRUCTURE, "
                    "people-lookup, pub.orcid.org.")
@@ -67,7 +67,7 @@ class OrcidAdapter(BaseScrapeAdapter):
     kind = "lookup"
     domains = ["people"]
     modes = ["STRUCTURE"]
-    explicit_only = ("orcid: a named drill — look a researcher up BY name to pull their CV; "
+    explicit_only = ("orcid: a named drill (look a researcher up BY name to pull their CV); "
                      "not broad-fan-out fodder (a topic query would waste the polite per-iD fan-out)")
 
     def _raw_fetch(self, query: str, limit: int) -> Optional[list[tuple[str, dict]]]:

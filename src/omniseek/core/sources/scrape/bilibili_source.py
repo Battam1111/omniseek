@@ -273,7 +273,7 @@ def _comment_to_document(reply: dict, bvid: str, aid: int, video_url: str) -> Do
 class BilibiliAdapter(BaseScrapeAdapter):
     name = "bilibili"
     needs_credentials = False
-    description = ("Bilibili — Chinese academic video (论文精读, 科研 vlog, 方法论讲解); "
+    description = ("Bilibili: Chinese academic video (论文精读, 科研 vlog, 方法论讲解); "
                    "pass a BV-id/video URL as the query to get its top comments as docs")
 
     cache_ttl = 1800

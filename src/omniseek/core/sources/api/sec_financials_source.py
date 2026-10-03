@@ -297,10 +297,10 @@ class SECFinancialsAdapter:
     kind = "lookup"
     domains = ["finance"]
     modes = ["STRUCTURE"]
-    explicit_only = "company fundamentals lookup (named lookup only — ticker or company name)"
+    explicit_only = "company fundamentals lookup (named lookup only; ticker or company name)"
     cache_ttl = 3600
     description = (
-        "SEC 结构化财务 — 公司官方基本面 + 最新备案 (keyless, data.sec.gov XBRL). "
+        "SEC 结构化财务：公司官方基本面 + 最新备案 (keyless, data.sec.gov XBRL). "
         "query 给 ticker 或公司名 → 一条: 最新营收/净利/总资产/股东权益/递延收入 (us-gaap XBRL) "
         "+ 最近 10 条备案 (form/日期/直达链接). 命名查询, 不进广搜. web search 给不了干净的结构化数字."
     )

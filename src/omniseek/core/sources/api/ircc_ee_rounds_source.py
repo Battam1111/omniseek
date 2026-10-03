@@ -59,7 +59,7 @@ class IRCCEERoundsAdapter:
     regions = ["ca"]
     explicit_only = "CDP fetch of canada.ca (transport-walled to plain HTTP); named + watchtower only"
     description = (
-        "IRCC Express Entry 抽签轮 (加拿大官方 JSON, 全史 400+ 轮, 经 CDP 真浏览器取) — "
+        "IRCC Express Entry 抽签轮 (加拿大官方 JSON, 全史 400+ 轮, 经 CDP 真浏览器取)："
         "每轮的类别 / CRS 分数线 / 邀请数 / 池内 CRS 分布, 结构化可查 + watchtower 盯新轮. "
         "加拿大 Express Entry 抽签的核心决策信号. 空 query=最近各轮; "
         "关键词过滤类别 (CEC / French / STEM / PNP...)"

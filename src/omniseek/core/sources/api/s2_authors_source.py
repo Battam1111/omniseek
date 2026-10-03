@@ -38,7 +38,7 @@ class S2AuthorsAdapter(BaseScrapeAdapter):
     name = "s2_authors"
     backend = "semantic_scholar"  # same S2 graph as the `semantic_scholar` paper source, different facet
     needs_credentials = False
-    description = ("Semantic Scholar authors — resolve a researcher by NAME to citation metrics "
+    description = ("Semantic Scholar authors: resolve a researcher by NAME to citation metrics "
                    "(h-index / citation count / paper count) + disambiguated candidate entities; "
                    "name a researcher to rank who's who. STRUCTURE, keyless, people-lookup. Pairs "
                    "with orcid (self-asserted CV) and omniseek_resolve_identity (OpenAlex).")

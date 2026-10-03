@@ -39,7 +39,7 @@ _DESC_CAP = 4000
 class RemotiveAdapter(BaseScrapeAdapter):
     name = "remotive"
     needs_credentials = False
-    description = ("Remotive — curated REMOTE job board (category taxonomy, "
+    description = ("Remotive: curated REMOTE job board (category taxonomy, "
                    "candidate-required-location, job type, salary, tags) via the keyless API; "
                    "name it to drill remote AI/ML roles. STRUCTURE, keyless. Rate-limited "
                    "(a few calls/day): a low-frequency curated drill, not a hot path.")

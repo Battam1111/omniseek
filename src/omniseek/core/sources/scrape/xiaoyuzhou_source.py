@@ -79,7 +79,7 @@ class XiaoyuzhouAdapter:
     name = "xiaoyuzhou"
     needs_credentials = False
     description = (
-        "小宇宙播客 — 张小珺商业访谈录 / OnBoard! / 42章经 等中文 AI/科技/创投深度访谈 "
+        "小宇宙播客：张小珺商业访谈录 / OnBoard! / 42章经 等中文 AI/科技/创投深度访谈 "
         "(原生抓 xiaoyuzhoufm __NEXT_DATA__, 无需 RSSHub; 可配 ~/.omniseek/credentials/xiaoyuzhou.json)"
     )
 
@@ -274,7 +274,7 @@ class XiaoyuzhouAdapter:
             docs = self._fetch_podcast(first.get("id"), first.get("name", "?"))
             if docs:
                 return True, f"OK ({len(pods)} podcasts; first returned {len(docs)} episodes)"
-            return False, f"0 episodes for {first.get('name')} — page structure changed?"
+            return False, f"0 episodes for {first.get('name')}: page structure changed?"
         except Exception as exc:  # noqa: BLE001
             return False, f"{type(exc).__name__}: {exc}"
 

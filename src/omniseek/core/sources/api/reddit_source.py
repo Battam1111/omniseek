@@ -763,7 +763,7 @@ class RedditAdapter:
     name = "reddit"
     needs_credentials = False  # Arctic Shift needs no auth
     description = (
-        "Reddit — GENERAL topic search (via Arctic Shift mirror; Reddit's own API is WAF-blocked). "
+        "Reddit: GENERAL topic search (via Arctic Shift mirror; Reddit's own API is WAF-blocked). "
         "自动按查询路由到对应话题子版 (如 'pour over coffee'→r/Coffee; 含金融信号如 '$NVDA earnings' "
         "→ 追加 r/stocks·investing·wallstreetbets 等), 同时常驻搜索 "
         "r/PhD·AskAcademia·MachineLearning + 移民/求职 核心子版 (科研/职业意图永不丢失). "

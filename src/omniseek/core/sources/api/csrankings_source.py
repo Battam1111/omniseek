@@ -140,13 +140,13 @@ class CSRankingsAdapter:
     needs_credentials = False
     kind = "lookup"
     description = (
-        "CSRankings — CS faculty roster by institution/region (keyless, via "
+        "CSRankings: CS faculty roster by institution/region (keyless, via "
         "CSRankings.org GitHub data). Query a REGION (singapore / canada / "
         "hong kong), an INSTITUTION ('National University of Singapore', "
         "'University of Toronto'), or a faculty NAME → faculty with homepage + "
         "Google Scholar + ORCID + a DBLP link. The WHO/WHERE for PI/group/school "
         "targeting; pair with dblp / researcher_watch for their actual papers. "
-        "(No per-area filter — take a name into dblp for that.)"
+        "(No per-area filter; take a name into dblp for that.)"
     )
 
     def search(self, query: str, limit: int = 10) -> list[Document]:

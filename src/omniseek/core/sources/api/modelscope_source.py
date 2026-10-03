@@ -35,7 +35,7 @@ MODEL_URL = "https://www.modelscope.cn/models/{path}/{name}"
 class ModelScopeAdapter(BaseScrapeAdapter):
     name = "modelscope"
     needs_credentials = False
-    description = ("ModelScope (魔搭) — the Chinese model hub (Alibaba): name a model / keyword to "
+    description = ("ModelScope (魔搭): the Chinese model hub (Alibaba): name a model / keyword to "
                    "search China-ecosystem models (Qwen / iic / DeepSeek) by download count, with "
                    "task taxonomy + license + lineage. The China-side analog of huggingface_hub. "
                    "STRUCTURE, keyless.")

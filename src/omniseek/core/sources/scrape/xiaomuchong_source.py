@@ -64,7 +64,7 @@ class XiaomuchongAdapter(BaseCDPAdapter):
     explicit_only = "shared CDP Chrome (JS render, slow)"
     fetch_url_class = "fulltext"
     fetch_url_hosts = ("muchong.com", "emuch.net")
-    description = "小木虫 — China's oldest PhD/master's academic forum (since 2001, 5M users)"
+    description = "小木虫: China's oldest PhD/master's academic forum (since 2001, 5M users)"
     cache_ttl = 1800
 
     # ------------------------------------------------------------------ hooks

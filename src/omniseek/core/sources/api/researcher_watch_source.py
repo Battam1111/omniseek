@@ -142,7 +142,7 @@ class ResearcherWatchAdapter:
     backend = "openalex"  # same OpenAlex corpus + API budget + breaker as openalex / org_watch
     needs_credentials = False
     description = (
-        "Researcher watch — newest papers from tracked PIs via OpenAlex "
+        "Researcher watch: newest papers from tracked PIs via OpenAlex "
         "(default: 10 SG/Canada/HK ML faculty; customize via "
         "~/.omniseek/credentials/researcher_watch.json). Postdoc/collab upstream signal."
     )

@@ -25,7 +25,7 @@ from omniseek.core.sources.scrape._base import BaseScrapeAdapter
 class LmsysArenaAdapter(BaseScrapeAdapter):
     name = "lmsys_arena"
     description = (
-        "LMArena (原 LMSys) 官方博客 — Chatbot Arena Elo 方法论 + LLM 评测深度文章 + red-teaming "
+        "LMArena (原 LMSys) 官方博客：Chatbot Arena Elo 方法论 + LLM 评测深度文章 + red-teaming "
         "报告 (LLM 评测方法论的第一手来源). 站点已不再提供 RSS, 故直接抓其服务端渲染的博客列表."
     )
     kind = "stream"

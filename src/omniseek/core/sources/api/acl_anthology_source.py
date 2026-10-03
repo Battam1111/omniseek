@@ -63,7 +63,7 @@ class ACLAnthologyAdapter:
     kind = "lookup"
     domains = ["papers"]
     description = (
-        "ACL Anthology — NLP venue-of-record 按卷浏览 (官方数据仓 XML, keyless). "
+        "ACL Anthology: NLP venue-of-record 按卷浏览 (官方数据仓 XML, keyless). "
         "查某届会议实际收了什么: 'acl 2025 reasoning' / 'emnlp2024 retrieval' / "
         "'volume:2024.findings-emnlp'(裸集合 id). 必须带 venue+年份 token "
         "(这是卷浏览器; 跨会关键词搜索请用 dblp / semantic_scholar / arxiv)"

@@ -107,7 +107,7 @@ class OpenReviewAdapter:
     name = "openreview"
     needs_credentials = True
     description = (
-        "OpenReview — peer reviews, rebuttals, meta-reviews from ICLR/NeurIPS/ICML; "
+        "OpenReview: peer reviews, rebuttals, meta-reviews from ICLR/NeurIPS/ICML; "
         "venue browse via `venue:` qualifier (venue:colm2025 / venue:iclr2026 / raw "
         "venueid) and a submission's actual reviews via `reviews:` (reviews:<forum_id> "
         "or a /forum?id=… URL); browse a venue's accepted papers via its venueid"
@@ -115,6 +115,26 @@ class OpenReviewAdapter:
 
     _token: Optional[str] = None
     _token_expires_at: float = 0.0
+    _login_issue: Optional[str] = None  # why the last login gave no token, for health_check
+
+    def _accept_login(self, data: dict) -> Optional[str]:
+        """Take a /login answer (shared by the sync and async logins). An account with multi-factor
+        login answers ``mfaPending`` and no token (measured 2026-10-03: methods ["emailOtp"]). An
+        unattended service cannot pass that step, so this records the reason for health_check instead
+        of a bare "login failed". It never calls /mfa/challenge: that call is what emails the account
+        owner a code."""
+        if data.get("mfaPending"):
+            methods = ", ".join(str(m) for m in (data.get("mfaMethods") or [])) or "unknown method"
+            self._login_issue = (f"account requires multi-factor login ({methods}); unattended login "
+                                 "is impossible while it is on")
+            diag.note("openreview.login", url=f"{API_BASE}/login", status=200, body=self._login_issue)
+            self._token = None
+            return None
+        self._token = data.get("token")
+        self._login_issue = None if self._token else "login answered without a token"
+        # OpenReview tokens last ~12h; we set expiry conservatively
+        self._token_expires_at = time.time() + 11 * 3600
+        return self._token
 
     def _get_token(self) -> Optional[str]:
         """Login or reuse token. Tokens last 12h; we refresh well before."""
@@ -124,6 +144,7 @@ class OpenReviewAdapter:
         if not creds or not creds.get("username") or not creds.get("password"):
             logger.info("OpenReview credentials not configured.")
             return None
+        self._login_issue = None
         try:
             resp = httpx.post(
                 f"{API_BASE}/login",
@@ -131,11 +152,7 @@ class OpenReviewAdapter:
                 timeout=DEFAULT_TIMEOUT,
             )
             resp.raise_for_status()
-            data = resp.json()
-            self._token = data.get("token")
-            # OpenReview tokens last ~12h; we set expiry conservatively
-            self._token_expires_at = time.time() + 11 * 3600
-            return self._token
+            return self._accept_login(resp.json())
         except Exception as exc:  # noqa: BLE001
             logger.warning("OpenReview login failed: %s", exc)
             st = getattr(getattr(exc, "response", None), "status_code", None)
@@ -154,6 +171,7 @@ class OpenReviewAdapter:
         if not creds or not creds.get("username") or not creds.get("password"):
             logger.info("OpenReview credentials not configured.")
             return None
+        self._login_issue = None
         data = await http.apost_json(
             f"{API_BASE}/login",
             json={"id": creds["username"], "password": creds["password"]},
@@ -161,10 +179,7 @@ class OpenReviewAdapter:
         )
         if data is None:
             return None  # login failed (http.apost_json already logged + diag.note'd)
-        self._token = data.get("token")
-        # OpenReview tokens last ~12h; we set expiry conservatively
-        self._token_expires_at = time.time() + 11 * 3600
-        return self._token
+        return self._accept_login(data)
 
     def _api_get(self, path: str, params: dict, base: str = API_BASE) -> Optional[dict]:
         # Auth is now REQUIRED on both backends: a keyless GET of /notes returns 403 for every forum,
@@ -210,7 +225,7 @@ class OpenReviewAdapter:
             # 10 cuts the tail (author responses / meta-review / decision) on any busy forum.
             return self.fetch_reviews(forum, max(limit, _REVIEWS_MIN_LIMIT))
         terms, venueid = _parse_venue(query)
-        key = cache.make_key("openreview", "search", venueid or "-", terms, limit)
+        key = cache.make_key("openreview", "search_forum", venueid or "-", terms, limit)
         cached = cache.get(key)
         if cached is not None:
             return [Document.model_validate(d) for d in cached]
@@ -222,12 +237,15 @@ class OpenReviewAdapter:
                 {"content.venueid": venueid, "limit": 100, "sort": "cdate:desc"},
             )
         else:
-            # OpenReview v2 search API: simplest invocation with just `term` works.
-            # The `type` and `source` params from v1 are no longer accepted and
-            # cause 400 Bad Request.
+            # OpenReview v2 search. `source: "forum"` keeps the hits to papers (submissions and
+            # records). Without it the default mixes in replies (reviews, comments), which carry no
+            # title and map to empty docs: measured 2026-10-04 on a credit-assignment query, 2 of 8
+            # hits had a title by default and 8 of 8 with "forum". Accepted values are forum, reply
+            # and all; any other value is a 400 (the older note here said `source` itself was
+            # refused, which no longer holds). A paper's reviews stay reachable via `reviews:`.
             data = self._api_get(
                 "/notes/search",
-                {"term": terms, "limit": min(limit, 100)},
+                {"term": terms, "limit": min(limit, 100), "source": "forum"},
             )
         if not data or "notes" not in data:
             return []
@@ -262,7 +280,7 @@ class OpenReviewAdapter:
             return await anyio.to_thread.run_sync(  # same limit floor as sync (whole thread, not 10)
                 functools.partial(self.fetch_reviews, forum, max(limit, _REVIEWS_MIN_LIMIT)))
         terms, venueid = _parse_venue(query)
-        key = cache.make_key("openreview", "search", venueid or "-", terms, limit)
+        key = cache.make_key("openreview", "search_forum", venueid or "-", terms, limit)
         cached = await anyio.to_thread.run_sync(cache.get, key)  # disk read OFF loop
         if cached is not None:
             return [Document.model_validate(d) for d in cached]
@@ -274,12 +292,15 @@ class OpenReviewAdapter:
                 {"content.venueid": venueid, "limit": 100, "sort": "cdate:desc"},
             )
         else:
-            # OpenReview v2 search API: simplest invocation with just `term` works.
-            # The `type` and `source` params from v1 are no longer accepted and
-            # cause 400 Bad Request.
+            # OpenReview v2 search. `source: "forum"` keeps the hits to papers (submissions and
+            # records). Without it the default mixes in replies (reviews, comments), which carry no
+            # title and map to empty docs: measured 2026-10-04 on a credit-assignment query, 2 of 8
+            # hits had a title by default and 8 of 8 with "forum". Accepted values are forum, reply
+            # and all; any other value is a 400 (the older note here said `source` itself was
+            # refused, which no longer holds). A paper's reviews stay reachable via `reviews:`.
             data = await self._aapi_get(
                 "/notes/search",
-                {"term": terms, "limit": min(limit, 100)},
+                {"term": terms, "limit": min(limit, 100), "source": "forum"},
             )
         if not data or "notes" not in data:
             return []
@@ -444,7 +465,7 @@ class OpenReviewAdapter:
             return False, "credentials not configured (see ~/.omniseek/credentials/openreview.json.template)"
         token = self._get_token()
         if token is None:
-            return False, "login failed"
+            return False, self._login_issue or "login failed"
         return True, "OK (logged in)"
 
     @staticmethod

@@ -44,7 +44,7 @@ _FALLBACK_CSV = "https://www.sshrc-crsh.gc.ca/opendata/SSHRC_FY2024_Expenditures
 class SSHRCAwardsAdapter(BulkFundingBase):
     name = "sshrc_awards"
     description = (
-        "加拿大 SSHRC 人文社科经费 — 计算语言学/NLP/数字人文 切片 (加拿大三大联邦研究局之二: NSERC 理工、"
+        "加拿大 SSHRC 人文社科经费：计算语言学/NLP/数字人文 切片 (加拿大三大联邦研究局之二: NSERC 理工、"
         "SSHRC 人文社科、CIHR 健康). NLP 在人文社科这边以 计算语言学/语言技术/数字人文/语料文本/计算社科 "
         "形式存在, 是 NSERC(理工) 不覆盖的一块. 开放数据为逐年 Payments bulk CSV (FY2024 ~6.9MB, 无查询 API). "
         "逐笔奖助: 获奖人 + 机构 + 金额(CAD) + program + 学科/方向 + 关键词. 仅收 AI/ML/NLP 相关切片. 命名钻取 (omniseek_search 单源 raw)."

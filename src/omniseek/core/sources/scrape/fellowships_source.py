@@ -63,7 +63,7 @@ LINKS: list[tuple[str, str, str]] = [
 class FellowshipsAdapter(RSSAdapterBase):
     name = "fellowships"
     description = (
-        "海外 PhD/postdoc 资助与 Fellowship — Vector/CIFAR/IVADO(加) + AISG/NRF/"
+        "海外 PhD/postdoc 资助与 Fellowship：Vector/CIFAR/IVADO(加) + AISG/NRF/"
         "SINGA(新) + Google/Apple/NVIDIA/Meta/MS PhD Fellowship + Schmidt/OpenPhil/"
         "LTFF(全球 AI). 国际开放 + HK→SG/加拿大路径; RSS 自动 + 静态链接人工核窗口"
     )

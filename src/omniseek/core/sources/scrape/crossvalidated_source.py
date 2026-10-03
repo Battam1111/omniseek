@@ -27,7 +27,7 @@ class CrossValidatedAdapter(BaseScrapeAdapter):
     name = "crossvalidated"
     needs_credentials = False
     description = (
-        "Cross Validated (stats.stackexchange) — statistics/ML/data-analysis Q&A; "
+        "Cross Validated (stats.stackexchange): statistics/ML/data-analysis Q&A; "
         "the canonical English methodology site (model selection, bias-variance, estimators, tests)"
     )
     cache_ttl = 900

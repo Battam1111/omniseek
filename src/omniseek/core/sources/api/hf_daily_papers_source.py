@@ -51,7 +51,7 @@ class HFDailyPapersAdapter:
     name = "hf_daily_papers"
     needs_credentials = False
     description = (
-        "HuggingFace Daily Papers — AK / community-curated daily ML papers, "
+        "HuggingFace Daily Papers: AK / community-curated daily ML papers, "
         "with upvotes, ai_summary, githubRepo links. Curation layer above raw arXiv."
     )
 

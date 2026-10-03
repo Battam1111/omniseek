@@ -117,10 +117,10 @@ class MarketCryptoAdapter:
     kind = "lookup"
     domains = ["finance"]
     modes = ["STRUCTURE"]
-    explicit_only = "crypto spot quote lookup (named lookup only — query must name a coin: BTC / ETH / solana)"
+    explicit_only = "crypto spot quote lookup (named lookup only; query must name a coin: BTC / ETH / solana)"
     cache_ttl = 120  # crypto moves fast; short TTL keeps a repeat lookup cheap without staleness
     description = (
-        "加密现货行情 — BTC/ETH 等币种的实时(秒级)报价 (keyless, CoinGecko 后端). query 点名币种 "
+        "加密现货行情：BTC/ETH 等币种的实时(秒级)报价 (keyless, CoinGecko 后端). query 点名币种 "
         "(BTC / ETH / $SOL / bitcoin) → 每币一条: 美元现价 / 24h 涨跌% / 市值 / 24h 成交额. 多币一次. "
         "命名查询, 不进广搜; 主流币静态映射、未知大写符号不臆测 → query 无币种或无法解析返空."
     )

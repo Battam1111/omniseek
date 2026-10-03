@@ -114,7 +114,7 @@ class DBLPAuthorAdapter(BaseScrapeAdapter):
     name = "dblp_author"
     backend = "dblp"  # same dblp upstream as the `dblp` publication source, a people facet
     needs_credentials = False
-    description = ("DBLP authors — resolve a CS researcher by NAME to a canonical DBLP PID page "
+    description = ("DBLP authors: resolve a CS researcher by NAME to a canonical DBLP PID page "
                    "(gateway to their full publication record) + affiliation + award notes; name a "
                    "researcher to disambiguate them in computer science. STRUCTURE, keyless, "
                    "people-lookup. CS-native; pairs with orcid / s2_authors / omniseek_resolve_identity.")
@@ -303,7 +303,10 @@ class DBLPAuthorAdapter(BaseScrapeAdapter):
         if recent_pubs:
             lines += ["", f"Most recent publications ({len(recent_pubs)}):"]
             for p in recent_pubs:
-                parts = [p["year"], p["title"].rstrip(". "), p["venue"], p["url"]]
+                venue = p["venue"]
+                if venue and venue.endswith("."):
+                    venue = venue[:-1]
+                parts = [p["year"], p["title"].rstrip(". "), venue, p["url"]]
                 lines.append(". ".join(x for x in parts if x))
         return Document(
             source=self.name,

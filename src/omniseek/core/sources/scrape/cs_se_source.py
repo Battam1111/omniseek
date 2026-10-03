@@ -27,7 +27,7 @@ class CSStackExchangeAdapter(BaseScrapeAdapter):
     name = "cs_se"
     needs_credentials = False
     description = (
-        "Computer Science Stack Exchange — CS-theory Q&A (algorithms, complexity, "
+        "Computer Science Stack Exchange: CS-theory Q&A (algorithms, complexity, "
         "computability, automata, the math behind ML); not Stack Overflow's programming/debugging"
     )
     cache_ttl = 900

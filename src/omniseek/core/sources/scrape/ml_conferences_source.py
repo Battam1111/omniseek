@@ -60,7 +60,7 @@ def _date_from_url(url: str) -> Optional[datetime]:
 class MlConferencesAdapter(BaseScrapeAdapter):
     name = "ml_conferences"
     description = (
-        "NeurIPS / ICML / ICLR 官方博客 — 获奖公告 (Outstanding Papers / Test of Time / Awards)、"
+        "NeurIPS / ICML / ICLR 官方博客：获奖公告 (Outstanding Papers / Test of Time / Awards)、"
         "投稿与评审政策变化 (如 NeurIPS 对 AI 生成论文的处理)、注册与容量公告、keynote 名单、"
         "newsletter. 与 conference_deadlines 互补: 那个只给截稿日期, 这个给公告与政策. "
         "站点已把 feed 挡在反爬后, 故经 CDP 真浏览器渲染抓取, 命名钻取 (omniseek_search 单源 raw)."

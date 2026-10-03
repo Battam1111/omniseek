@@ -92,7 +92,7 @@ class GPUPricingAdapter:
     modes = ["STRUCTURE"]
     explicit_only = "GPU price lookup (named lookup only)"
     description = (
-        "GPU 价格对比 — 跨云 GPU $/hr 结构化查询 (keyless, Full Stack DL cloud-gpus 数据). "
+        "GPU 价格对比：跨云 GPU $/hr 结构化查询 (keyless, Full Stack DL cloud-gpus 数据). "
         "compute-bound 时'现在最便宜的 H100/A100/4090 在哪家云'. 查 GPU 型号 (H100/A100/4090) "
         "和/或云 (lambda/runpod/vast) → 报价按便宜优先. 快照非实时; 实时 spot 见 vast.ai/runpod API. "
         "配 reference/compute-access-map.md (现在能申的免费额度)."

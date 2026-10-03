@@ -107,7 +107,7 @@ def _is_blocked(html: str) -> bool:
 class SogouWeixinAdapter(BaseScrapeAdapter):
     name = "sogou_weixin"
     description = (
-        "微信公众号文章关键词搜索 (Sogou Weixin) — the only free keyword index over WeChat "
+        "微信公众号文章关键词搜索 (Sogou Weixin): the only free keyword index over WeChat "
         "公众号 articles, which Google does NOT crawl. Reach for Chinese first-hand / "
         "specialist 公众号 writing (industry/行业号, 学院官方号, niche expertise, 经验贴) on a "
         "topic. Returns title + snippet + 公众号 name + date + a permanent mp.weixin.qq.com link."

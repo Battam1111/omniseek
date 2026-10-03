@@ -43,7 +43,7 @@ class NowcoderAdapter:
     explicit_only = ("native JSON via shared 9222 CDP Chrome (WAF is fingerprint-gated); a query also "
                      "fires the site search on the shared paced backend (brave->ddg)")
     description = (
-        "牛客网 面经 + 内推 — 中文 AI/ML 真实面试 bar (八股 vs 重思维 / 全流程时间线 / 内推码), "
+        "牛客网 面经 + 内推：中文 AI/ML 真实面试 bar (八股 vs 重思维 / 全流程时间线 / 内推码), "
         "成于面试后数天. 两条路: 无 query = 拉最近面经流 (默认岗位 tag 645 算法工程师, 可配 "
         "~/.omniseek/credentials/nowcoder.json job_ids), 经共享 9222 CDP Chrome 原生取 JSON "
         "(WAF 是指纹闸非登录闸, 无需登录); 有 query = 在这批最近面经里做关键词筛选, 并合并 "

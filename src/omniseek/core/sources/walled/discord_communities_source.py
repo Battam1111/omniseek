@@ -71,7 +71,7 @@ class DiscordCommunitiesAdapter:
     needs_credentials = True
     explicit_only = "walled(需 bot 凭证);命名钻取 (omniseek_search 单源 raw) 才调,不进广搜"
     description = (
-        "Discord 研究/peer/求职 频道 (REST bot) — 仅能读 部署者有管理员权限、"
+        "Discord 研究/peer/求职 频道 (REST bot)：仅能读 部署者有管理员权限、"
         "已邀请 bot 的 server (大社区加不进 bot, 走其他源). 配 "
         "~/.omniseek/credentials/discord.json + 开 Message Content Intent"
     )

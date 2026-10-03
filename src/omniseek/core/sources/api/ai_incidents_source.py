@@ -53,7 +53,7 @@ class AIIncidentsAdapter(BaseScrapeAdapter):
     name = "ai_incidents"
     backend = "aiid"
     needs_credentials = False
-    description = ("AI Incident Database (AIID) — the curated ledger of real-world AI HARMS: search "
+    description = ("AI Incident Database (AIID): the curated ledger of real-world AI HARMS: search "
                    "incidents by keyword (facial recognition, chatbot, autonomous vehicle, biased "
                    "hiring) → each with the alleged developer + deployer, harmed parties, date, and "
                    "the source-report URLs to drill into. STRUCTURE, keyless; the empirical harm "

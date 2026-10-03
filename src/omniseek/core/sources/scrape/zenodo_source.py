@@ -46,7 +46,7 @@ _CANDIDATE_POOL = 25
 class ZenodoAdapter(BaseScrapeAdapter):
     name = "zenodo"
     needs_credentials = False
-    description = "Zenodo — open research repository (papers, datasets, software, theses) with minted DOIs (keyless REST API)"
+    description = "Zenodo: open research repository (papers, datasets, software, theses) with minted DOIs (keyless REST API)"
     cache_ttl = 900
     kind = "lookup"
     domains = ["papers", "datasets"]

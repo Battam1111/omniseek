@@ -98,7 +98,7 @@ _TOOL_PREFIX = "omniseek_"
 _OMNISEEK_INSTRUCTIONS = (
     f"OmniSeek is a self-hosted deep-retrieval MCP: {len(fetcher.all_adapter_names())} curated sources "
     f"across {fetcher.distinct_backend_count()} independent upstreams. REACH FOR IT (not web search) whenever "
-    "DEPTH beats breadth -- concretely: sizing up a PERSON / LAB / PAPER (citation graphs, coauthors, "
+    "DEPTH beats breadth; concretely: sizing up a PERSON / LAB / PAPER (citation graphs, coauthors, "
     "institution cohorts, full-text PDFs, retraction / integrity), needing CHINESE / WALLED / REGIONAL "
     "sources the open web cannot reach (zhihu / xiaohongshu / 一亩三分地 behind login; CN + CA + SG job / "
     "immigration / funding / salary feeds), STRUCTURED data (filings, quotes, benchmark boards, conference "
@@ -106,17 +106,17 @@ _OMNISEEK_INSTRUCTIONS = (
     "open-web search STRUCTURALLY cannot, and it NEVER fabricates: when the answer is not in the sources it "
     "says so + names what to ask a human. Use web search for open-web BREADTH (general docs, news, blogs, "
     "vendor pages); often use BOTH. OmniSeek is a RETRIEVAL layer (curated sources + evidence + structure), "
-    "NOT a deep-research agent -- YOU reason over what it returns. Never answer a depth question from stale "
+    "NOT a deep-research agent; YOU reason over what it returns. Never answer a depth question from stale "
     "training memory; get current, verifiable facts."
     "\n\n"
-    "QUICK START -- one call, no setup: omniseek_search(query) does a ranked, cross-lingual, deduped sweep across "
+    "QUICK START (one call, no setup): omniseek_search(query) does a ranked, cross-lingual, deduped sweep across "
     "the curated sources; just call it (a Chinese query surfaces English hits and vice-versa). omniseek_sources() "
     "is the MAP. A broad omniseek_search(query) standalone is fine. But BEFORE any NAMED drill "
     "(sources=[...]) on a topic you have not routed this session, call omniseek_sources(query=<topic words>) "
     "FIRST: one cheap call that returns the matching sources WITH descriptions, facets and query hints. "
     "Guessing source names from memory is the single largest cause of missed sources."
     "\n\n"
-    "(1) TOOL ROUTING: omniseek_search just works -- call it directly. omniseek_sources() is the MAP when you want "
+    "(1) TOOL ROUTING: omniseek_search just works; call it directly. omniseek_sources() is the MAP when you want "
     f"to route to a domain or drill a NAMED source (the tools are named mcp__{_MCP_SERVER_NAME}__{_TOOL_PREFIX}<verb>; "
     f"the MCP server name is \"{_MCP_SERVER_NAME}\", there is NO \"{_MCP_SERVER_NAME}-eye\" server. If they are "
     f"not in your tool list: ToolSearch \"select:mcp__{_MCP_SERVER_NAME}__{_TOOL_PREFIX}search,"
@@ -142,10 +142,10 @@ _OMNISEEK_INSTRUCTIONS = (
     "for a watched item's takedown / disappearance; action=create/list/delete/run; scheduled runs "
     "execute in-process on the live service). omniseek_ruling (record/list/"
     "retract your identity rulings same_as|not_same_as; "
-    "action=create/list/delete — the one judgment channel the graph's working policy applies). "
+    "action=create/list/delete; the one judgment channel the graph's working policy applies). "
     "omniseek_statement (record/list/retract your typed, DIRECTED relation statements: free vocabulary, "
     "the general sibling of omniseek_ruling; identity types are refused, they belong to omniseek_ruling; "
-    "action=create/list/delete — projected at read time under working/exploratory, never conservative). "
+    "action=create/list/delete; projected at read time under working/exploratory, never conservative). "
     "omniseek_graph (the memory of relations, one stable verb: view= + args={...}; a no-view call lists "
     "the views; find -> stats -> neighborhood -> between -> voices -> "
     "since -> similar; policies conservative|working|exploratory). Scholarly depth: omniseek_field_skeleton / "
@@ -417,14 +417,14 @@ def _threaded(fn=None, *, inline_when=None):
 @_threaded(inline_when=lambda kwargs: not bool(kwargs.get("check_health", False)))
 def omniseek_sources(check_health: LenientBool =False, domain: str = "", query: str = "",
                 verbose: LenientBool =False, region: str = "") -> dict:
-    """List all sources — call this to ROUTE before searching.
+    """List all sources: call this to ROUTE before searching.
 
     BOUNDED ORIENT: a bare (no-arg) call does NOT dump every source's facets. It returns the routing
     VOCABULARY (available_domains / available_regions with counts) + the capabilities verb index +
     `source_names` (the bare inventory) + counts, so the orient payload stays small no matter how far
     the roster grows (brain_orient's lesson). The per-source FACETS (kind / domains / regions / modes,
     needs_credentials, explicit_only, stability, health, ...) plus the prose `description` arrive when
-    you NARROW or ask verbose — reach for them on demand:
+    you NARROW or ask verbose; reach for them on demand:
     • domain="jobs" / "papers" / … → only sources whose `domains` facet contains it, WITH their
       full descriptions. domain= is the most RELIABLE router; the no-arg call returns
       `available_domains` (the full closed vocabulary + counts) so you can pick a valid token, and a
@@ -457,8 +457,8 @@ def omniseek_sources(check_health: LenientBool =False, domain: str = "", query: 
     - a NARROWED (domain/region/query) or verbose call: "sources": [{name, backend, (description when
       narrowed/verbose), needs_credentials, explicit_only, explicit_only_reason? (present only when
       excluded; the full catalog of why-strings search's _meta.excluded_count no longer re-ships),
-      param_hint? (the structured query a VERTICAL source wants — a stock code / ticker / author name
-      — present only when the source declares one, so a named call is filled right the first try),
+      param_hint? (the structured query a VERTICAL source wants: a stock code / ticker / author name;
+      present only when the source declares one, so a named call is filled right the first try),
       stability, access_tier, health, health_as_of, kind?, domains?, regions?, modes?, (healthy, status
       if check_health)}].
     (did_you_mean on a domain/region near-miss; system:{recall, openalex_usage, jobs:[{name, schedule,
@@ -702,11 +702,11 @@ async def omniseek_search(query: str, sources: Optional[list[str]] = None, limit
     DISPATCH (deterministic):
     • DEFAULT (raw=False): DEDUP + RANK across sources into ONE list. Cross-source duplicates merge
       (same paper from arxiv + openalex + … → one entry, the others in metadata.also_in); ordered by
-      a relevance+recency+engagement blend (metadata._rank) you may re-sort — each doc's named signals
+      a relevance+recency+engagement blend (metadata._rank) you may re-sort; each doc's named signals
       map (e.g. citations / upvotes / stars, each provenance-stamped) + its date are on the doc.
       CROSS-LINGUAL + SEMANTIC (default on): also runs VECTOR recall over the local perception-memory
       index, so a Chinese query surfaces relevant ENGLISH docs (and vice-versa) and paraphrases match
-      with no shared words — fused with the lexical + live results by the SAME transparent ranker (the
+      with no shared words, fused with the lexical + live results by the SAME transparent ranker (the
       eye still only retrieves + scores mechanically; you judge). ``semantic=False`` forces exact-token
       lexical-only (an arXiv id / exact title); ``semantic=True`` biases toward the vector recall.
       _meta.index reports {lexical, vector, mode}. Empty query ranks by recency (browse mode).
@@ -714,7 +714,7 @@ async def omniseek_search(query: str, sources: Optional[list[str]] = None, limit
       source UNBOUNDED (with wait_s=None the generous single-source backstop; set wait_s to bound it).
       Reach for it BY NAME on a walled/CDP or slow source (xiaohongshu, zhihu, yipinsanfendi,
       xiaomuchong, twitter_x, and the explicit_only set): the broad sweep DEADLINE-DROPS these, so only
-      a named drill waits for them — a broad search that comes back without them is NOT evidence they
+      a named drill waits for them; a broad search that comes back without them is NOT evidence they
       have nothing. full=True returns WHOLE content per doc. A cold walled drill self-warms its cache,
       so an immediate repeat with the SAME query + SAME limit is sub-second (keep limit identical or the
       key differs). On an EMPTY / ERRORED drill the result carries _meta.diagnostic (failed-egress
@@ -724,7 +724,7 @@ async def omniseek_search(query: str, sources: Optional[list[str]] = None, limit
       uncollapsed (each source's raw take separately, a tight content preview per doc). limit acts
       PER SOURCE here. Drill a chosen doc with omniseek_read (whole content), or drop raw for the ranked list.
 
-    ROUTING (all shapes): sources=None = all non-explicit_only, deadline-bounded — slow ones drop and
+    ROUTING (all shapes): sources=None = all non-explicit_only, deadline-bounded; slow ones drop and
     are listed in _meta.timed_out. explicit_only sources (browser/CDP + twitter_x) are excluded from
     the broad sweep → _meta.excluded_count (the size; the full name->reason map is in omniseek_sources) +
     _meta.excluded_relevant (the query-AWARE subset: walled/slow sources whose facets thematically
@@ -737,7 +737,7 @@ async def omniseek_search(query: str, sources: Optional[list[str]] = None, limit
 
     TIME + STALENESS: ``wait_s`` = patience budget (None = sensible default; the engine's deadline).
     ``staleness`` ∈ {"fresh","cached_ok","cache_only"} (default cached_ok): "fresh" bypasses the cache
-    (live data); "cache_only" is the fire-then-collect PICKUP half (ranked shape) — with NO live work it
+    (live data); "cache_only" is the fire-then-collect PICKUP half (ranked shape): with NO live work it
     reads only what has already SELF-WARMED for the NAMED sources and NEVER re-fires a still-cold walled
     source (zero extra CDP / account traffic, poll-safe). Fire-then-collect: FIRE
     omniseek_search(query, sources=[walled...], wait_s=12), then COLLECT
@@ -761,7 +761,7 @@ async def omniseek_search(query: str, sources: Optional[list[str]] = None, limit
 
     Returns (default): {"query", "count", "documents": [...], "_meta": {..., excluded_relevant,
     "deduped": {in, out}}, routing_hint? (TOP-LEVEL: the strongest excluded vertical/walled matches
-    for THIS query, overlap-ranked, each with its param_hint — name one for its authoritative
+    for THIS query, overlap-ranked, each with its param_hint: name one for its authoritative
     coverage; present only on a broad sweep with a strong match)}. (raw one-source drill): {"source", "query", "count", "documents": [...],
     "_meta": {"diagnostic": {...}}  # only when empty/errored}. (raw buckets): {"query", "results":
     {source: [...]}, "total_count", "_meta": {searched, empty, timed_out, errored, excluded_count,
@@ -883,18 +883,18 @@ def omniseek_field_skeleton(query: str = "", seeds: Optional[list[str]] = None, 
                        citers_per_seed: LenientInt =30, source: str = "openalex",
                        max_nodes: LenientInt =250, fresh: LenientBool =False,
                        deadline_s: Optional[float] = None) -> dict:
-    """Map a research field's shape — use WHEN you need its citation neighborhood (foundational core by citations vs frontier by date) to cluster yourself, from a topic or seed papers.
+    """Map a research field's shape: use WHEN you need its citation neighborhood (foundational core by citations vs frontier by date) to cluster yourself, from a topic or seed papers.
 
     A thin graph primitive, NO judgment: given ``query`` (auto-picks top-relevance seeds) or
-    ``seeds`` (OpenAlex work-ids YOU chose as anchors — preferred once you know the field), it
+    ``seeds`` (OpenAlex work-ids YOU chose as anchors, preferred once you know the field), it
     returns the field's complete citation neighborhood: every node with raw metadata, ``date``,
     and ONE signal ``in_degree`` (how many in-field papers cite it).
 
-    YOU are the cartographer — do ALL the intelligence over this raw data:
+    YOU are the cartographer; do ALL the intelligence over this raw data:
     • SEEDS: if the auto-seeds are off (e.g. a generic survey crept in), re-call with
       ``seeds=[...]`` you pick from the nodes.
     • SOURCE: ``source="openalex"`` (default, rich for established fields) or ``source="s2"``
-      (Semantic Scholar — far better arXiv coverage + accurate citation counts; use it for
+      (Semantic Scholar: far better arXiv coverage + accurate citation counts; use it for
       recent/bleeding-edge fields where OpenAlex's graph is sparse). s2 nodes also carry
       ``influential`` (S2 flags the citation link to a seed as substantive, not a drive-by) and
       ``intent`` (methodology/background/result, when S2 classified it): strong cues for what
@@ -905,10 +905,10 @@ def omniseek_field_skeleton(query: str = "", seeds: Optional[list[str]] = None, 
       when S2 never parsed the citing PDF. For a young/hot field the best "graph" is often a
       human-curated survey/awesome-list, fetch that yourself instead.
     • FOUNDATIONAL vs FRONTIER: high ``in_degree`` = the foundational core; recent ``date``
-      (filter it yourself) + your relevance read = the frontier. There is no frontier flag —
+      (filter it yourself) + your relevance read = the frontier. There is no frontier flag;
       you judge it.
     • DATA HYGIENE: OpenAlex occasionally has a poisoned title (e.g. a 14k-citation paper titled
-      "AI Consciousness" by T.B. Brown IS a corrupted GPT-3 record). You recognize these — no
+      "AI Consciousness" by T.B. Brown IS a corrupted GPT-3 record). You recognize these; no
       code does. Use a node's ``url`` to verify / ``omniseek_read`` to read the real paper.
     • Cluster + narrate relevance and sub-fields from titles + ``concept`` + your knowledge.
     • GAP DETECTION (your seed set's blind spots): each non-seed node carries ``seed_ref_freq`` (how many
@@ -918,7 +918,7 @@ def omniseek_field_skeleton(query: str = "", seeds: Optional[list[str]] = None, 
       citation / co-citation / bibliographic-coupling maps yourself (co-authorship: use omniseek_coauthors).
     • BUDGET: there is an overall wall-clock cap (``deadline_s``, ~25s default). On a slow/throttling
       S2 the assemble bails early with a PARTIAL map (``_meta.deadline_hit``: true) rather than
-      hanging — retry shortly, raise ``deadline_s``, or use ``source=openalex``.
+      hanging; retry shortly, raise ``deadline_s``, or use ``source=openalex``.
 
     Returns: {seeds, n_nodes, n_edges, edges:[[citer_id, cited_id]], nodes:[{id, title, year, date,
     cited_by, in_degree, concept, first_author, doi, url, is_seed, seed_ref_freq, seed_cite_freq}]}
@@ -935,15 +935,15 @@ def omniseek_field_skeleton(query: str = "", seeds: Optional[list[str]] = None, 
 @_fqn_doc
 @_threaded
 def omniseek_paper_recommend(ids: list[str], limit: LenientInt =20) -> dict:
-    """Use WHEN you have a paper and want more like it — semantically-similar papers (SPECTER embeddings) that keyword search and the citation graph miss, including very recent work.
+    """Use WHEN you have a paper and want more like it: semantically-similar papers (SPECTER embeddings) that keyword search and the citation graph miss, including very recent work.
     Uses Semantic Scholar's recommendation model (SPECTER embeddings + co-citation),
     so it surfaces conceptually-related work that omniseek_search (keyword) and omniseek_field_skeleton
-    (citations) miss — including very recent papers the citation graph has not caught up to.
+    (citations) miss, including very recent papers the citation graph has not caught up to.
 
-    Pass seed paper ids (arXiv ids / DOIs / S2 ids — a paper you found via omniseek_search or
+    Pass seed paper ids (arXiv ids / DOIs / S2 ids: a paper you found via omniseek_search or
     omniseek_field_skeleton). One seed = "more like this"; several = recommendations from that set. This
     is OmniSeek's "semantic search": it routes to S2's existing embeddings rather than building any.
-    For an openalex omniseek_search result pass metadata.paper_id (or metadata.doi), NOT source_id — the
+    For an openalex omniseek_search result pass metadata.paper_id (or metadata.doi), NOT source_id; the
     OpenAlex W-id is a graph id the paper tools do not accept.
 
     Returns: {"seeds", "n", "papers": [{id, title, year, date, cited_by, first_author, doi, url}]}
@@ -958,25 +958,25 @@ def omniseek_paper_recommend(ids: list[str], limit: LenientInt =20) -> dict:
 @_fqn_doc
 @_threaded
 def omniseek_paper_enrich(ids: list[str]) -> dict:
-    """Use WHEN you need ONE paper's open-access full-text PDF, retraction / integrity status, or citation count — signals omniseek_search / field_skeleton do NOT give cleanly.
+    """Use WHEN you need ONE paper's open-access full-text PDF, retraction / integrity status, or citation count: signals omniseek_search / field_skeleton do NOT give cleanly.
     Keyless, mechanical: YOU decide when + on which papers.
 
     Pass DOIs and/or arXiv ids (e.g. "2306.08543", "10.1145/3292500.3330701"; use a node's
     ``doi`` from omniseek_field_skeleton, or metadata.paper_id/metadata.doi from an openalex omniseek_search
-    result — NOT its source_id, the OpenAlex W-id, which is not a DOI/arXiv id). Enrich only the
+    result, NOT its source_id, the OpenAlex W-id, which is not a DOI/arXiv id). Enrich only the
     handful you care about, not a whole map.
     For each id:
-    • is_oa / pdf_url — the open-access full text (arXiv always OA; real DOIs via Unpaywall). Feed
-      pdf_url to omniseek_read (or read it yourself) to get the WHOLE paper, not just the abstract —
+    • is_oa / pdf_url: the open-access full text (arXiv always OA; real DOIs via Unpaywall). Feed
+      pdf_url to omniseek_read (or read it yourself) to get the WHOLE paper, not just the abstract;
       then YOU synthesize. (This thin PDF primitive is why we did NOT add a synthesis engine.) For
       FIGURES / architecture diagrams / result plots: download the PDF and Read its pages with your
-      own VISION — they render in context with captions, so no figure-extraction channel is needed.
+      own VISION; they render in context with captions, so no figure-extraction channel is needed.
     • integrity.retracted + integrity.notices (retraction / expression_of_concern / correction /
-      …) from Crossref's Retraction Watch feed — check before trusting a high-stakes citation.
+      …) from Crossref's Retraction Watch feed; check before trusting a high-stakes citation.
       (retracted=None means "not checked" / backend unreachable; notices=[] means clean. arXiv
       ids are checked too: an author withdrawal marker plus the journal DOI, when present, run
       through the same Crossref retraction path.)
-    • citation_count — this paper's citation count (DOI: Crossref is-referenced-by-count; arXiv: S2
+    • citation_count: this paper's citation count (DOI: Crossref is-referenced-by-count; arXiv: S2
       citationCount). The single-paper count's home, so you need NOT repurpose omniseek_field_skeleton to
       read one node's count. (None when the backend was unreachable.)
 
@@ -991,23 +991,23 @@ def omniseek_paper_enrich(ids: list[str]) -> dict:
 @_fqn_doc
 @_threaded
 def omniseek_resolve_identity(name: str, hint: str = "", source: str = "auto", paper: str = "") -> dict:
-    """Resolve a PERSON's name to candidate author ids — the shared front door for EVERY
+    """Resolve a PERSON's name to candidate author ids: the shared front door for EVERY
     relationship layer (you must know WHICH person before you can map their connections).
 
     OmniSeek's other tools keyword-search PAPERS; this resolves an AUTHOR. It NEVER silently
-    picks — it returns ranked CANDIDATES so YOU disambiguate (the homonym trap: "Zhennan Shen"
+    picks; it returns ranked CANDIDATES so YOU disambiguate (the homonym trap: "Zhennan Shen"
     is three different people in OpenAlex). ``hint`` (e.g. an institution like "HKUST", or a
     field) only RE-ORDERS candidates, never filters them. ``source``: "auto" (OpenAlex first,
-    pulls in Semantic Scholar when the top OpenAlex hit is sparse — i.e. a likely junior /
+    pulls in Semantic Scholar when the top OpenAlex hit is sparse, i.e. a likely junior /
     arXiv-frontier author OpenAlex hasn't indexed), "openalex", or "s2".
 
     ``paper`` (an arXiv id / DOI / title of a KNOWN paper by this person) is the reliable way
-    to pin a COMMON-NAME JUNIOR — it resolves straight from the paper's author list, where a
+    to pin a COMMON-NAME JUNIOR: it resolves straight from the paper's author list, where a
     bare name search fails (e.g. many distinct researchers share a common name like "Wei Zhang";
     their paper fixes the exact id).
 
     Use the returned id with omniseek_coauthors. ``ambiguous: true`` means two comparable
-    candidates — confirm with a hint / a paper / a known co-author before trusting either.
+    candidates; confirm with a hint / a paper / a known co-author before trusting either.
 
     ``likely_same_person`` (when present) groups same-name same-backend candidates that are likely
     ONE person SPLIT across ids, with a ready-to-paste ``merge_token`` ("A123+A456") you can hand
@@ -1017,7 +1017,7 @@ def omniseek_resolve_identity(name: str, hint: str = "", source: str = "auto", p
     institution, via_paper?}], ambiguous, note, likely_same_person?:[{source, ids, name,
     merge_token, note}], degraded?:{openalex}}. ``degraded`` (when present) means the OpenAlex
     lookup FAILED (rate-limited / upstream down): an empty/thin result is then missing-data, NOT a
-    confirmed "not in the graph" — retry, or pass source='s2' / paper=.
+    confirmed "not in the graph"; retry, or pass source='s2' / paper=.
     """
     from omniseek.core import relations
     return relations.resolve_identity(name, hint=hint, source=source, paper=paper)
@@ -1028,7 +1028,7 @@ def omniseek_resolve_identity(name: str, hint: str = "", source: str = "auto", p
 @_threaded
 def omniseek_coauthors(authors: list[str], source: str = "openalex",
                   hints: Optional[list[str]] = None, papers: Optional[list[str]] = None) -> dict:
-    """Use WHEN you want WHO a researcher collaborates with — advisor + closest collaborators by joint-paper count, or how a paper's author group is connected (WebSearch cannot build this). One LAYER, not the whole graph — co-authorship is one
+    """Use WHEN you want WHO a researcher collaborates with: advisor + closest collaborators by joint-paper count, or how a paper's author group is connected (WebSearch cannot build this). One LAYER, not the whole graph: co-authorship is one
     edge type; YOU overlay the others (advising, institution cohort, citation, code,
     social) and judge what each connection MEANS.
 
@@ -1036,17 +1036,17 @@ def omniseek_coauthors(authors: list[str], source: str = "openalex",
     in the graph yet, so this reconstructs from each author's PRIOR work:
     • N=1 -> that author's frequency-ranked coauthor neighborhood. The advisor + closest
       collaborators surface by joint-paper count (e.g. Yi R. Fung -> Heng Ji ~51x = her PhD
-      advisor, no advisor field needed — YOU read that signal).
+      advisor, no advisor field needed; YOU read that signal).
     • N>1 (e.g. a paper's whole author list) -> additionally the PAIRWISE prior joint-work
       edges among them (with the actual joint paper titles as evidence) + BRIDGE collaborators
       (people who co-authored with >=2 of the inputs but are not in the set). This is the
       "how is this author group actually connected" reconstruction.
 
     Each input may be a NAME, an id, or '+'-joined ids ("id1+id2") for ONE person SPLIT
-    across ids — their works are MERGED (OpenAlex/S2 routinely split a junior's recent papers;
+    across ids: their works are MERGED (OpenAlex/S2 routinely split a junior's recent papers;
     merging recovers the complete network). Each becomes a node with ``resolved``,
     ``ambiguous`` + ``alternatives`` (juniors often need source="s2", a ``paper`` anchor, or an
-    explicit id — the node ``note`` says so when unresolved). The output also carries ``cooc``:
+    explicit id; the node ``note`` says so when unresolved). The output also carries ``cooc``:
     which of the network's top external coauthors co-appear on the same papers, i.e. the
     SUB-COMMUNITY structure (an ego's distinct 'research worlds'). Mechanical throughout:
     "these two share these N papers" is a fact; advisor-vs-peer, what a cluster MEANS, is YOUR
@@ -1072,17 +1072,17 @@ def omniseek_coauthors(authors: list[str], source: str = "openalex",
 @_threaded
 def omniseek_institution_cohort(institution: str, concept: str = "", year_from: LenientInt =0,
                            limit: LenientInt =40) -> dict:
-    """Use WHEN you need the people-ROSTER of a lab / department / university (who actively publishes there, optionally scoped to a field) — the "who's at this lab" question, orthogonal to co-authorship ("same lab, never co-authored" is still a tie,
+    """Use WHEN you need the people-ROSTER of a lab / department / university (who actively publishes there, optionally scoped to a field): the "who's at this lab" question, orthogonal to co-authorship ("same lab, never co-authored" is still a tie,
     and the people-roster of a target lab is exactly the SG/Canada cohort question).
 
     Resolve the institution (+ optional FIELD) -> roster ranked by their output AT that
     institution IN that field (so juniors with a few papers surface, not just senior profs).
     IMPORTANT: without ``concept`` you get the institution's most-prolific people across ALL
     fields (e.g. "Hong Kong University of Science and Technology" -> chemistry/materials profs,
-    not the ML group) — pass concept="machine learning" / "natural language processing" / etc.
+    not the ML group); pass concept="machine learning" / "natural language processing" / etc.
     to scope to a cohort. ``year_from`` (e.g. 2022) biases toward the CURRENT cohort (recent
     publishers). The roster is a STARTING POINT you drill (omniseek_coauthors / omniseek_read on
-    homepages), not a verified lab-member list — OpenAlex has no "PhD student" flag.
+    homepages), not a verified lab-member list; OpenAlex has no "PhD student" flag.
 
     Returns: {institution:{id,name}, filters, n, people:[{id, name,
     works_at_institution_in_field}], note}.
@@ -1130,7 +1130,7 @@ def _is_document_target(target: str) -> bool:
 @_threaded
 def omniseek_read(target: str, start_char: LenientInt = 0, max_chars: LenientInt = 24000,
              export_media: LenientBool = False, ocr: LenientBool = False) -> dict:
-    """Read text from any URL OR document FILE — OmniSeek's single "read this deep" verb. AUTO-ROUTES.
+    """Read text from any URL OR document FILE: OmniSeek's single "read this deep" verb. AUTO-ROUTES.
 
     ROUTING: if ``target`` is a local filesystem path OR ends with a document extension
     (.pdf / .pptx / .docx / .xlsx / .txt / .md / .csv, case-insensitive, a ?query is tolerated) it
@@ -1140,7 +1140,7 @@ def omniseek_read(target: str, start_char: LenientInt = 0, max_chars: LenientInt
     ``max_chars`` window the body on BOTH branches (see below); ``export_media`` / ``ocr`` apply only
     to the document branch (a URL read has no image-extraction path) and are IGNORED on the URL branch.
 
-    URL BRANCH: fetch + normalize ONE URL. Tries each registered adapter until one claims it — a
+    URL BRANCH: fetch + normalize ONE URL. Tries each registered adapter until one claims it: a
     specific article link (a Reddit post, an arXiv paper, a Bluesky post) as a normalized document.
     arXiv is two-tier by design: an ``/abs/<id>`` URL returns abstract-level metadata (title / authors
     / abstract, a fast lookup), while an ``/pdf/<id>`` URL routes to the PDF extractor and returns the
@@ -1151,7 +1151,7 @@ def omniseek_read(target: str, start_char: LenientInt = 0, max_chars: LenientInt
     document branch: a big page (a SEC 10-K/20-F is ~2 MB → ~200k chars, a long article) would otherwise
     return one blob that overflows the tool channel and is unreadable. When ``truncated`` is true, re-call
     with ``start_char`` bumped by ``returned_chars`` to page through the rest. A small page (< max_chars)
-    returns whole, ``truncated=false`` — unchanged from before.
+    returns whole, ``truncated=false``; unchanged from before.
     URL branch returns: {"url", "matched": bool, "document": Document as dict | None,
     "total_chars", "returned_chars", "start_char", "truncated"} (the last four only when matched). On
     matched:false a ``reason`` is added: walled (anti-bot challenge -> retry the source via CDP, e.g.
@@ -1159,25 +1159,25 @@ def omniseek_read(target: str, start_char: LenientInt = 0, max_chars: LenientInt
     another way" from "genuinely nothing there".
 
     DOCUMENT BRANCH (pptx / docx / xlsx / pdf / txt / md / csv): read the FILE into readable,
-    structured text — the document counterpart of omniseek_transcribe (speech). Free, keyless, cached.
+    structured text: the document counterpart of omniseek_transcribe (speech). Free, keyless, cached.
     WHERE THE FILE LIVES:
-    - the operator's machine: scp it to OmniSeek host inbox first —
+    - the operator's machine: scp it to OmniSeek host inbox first:
       scp "<file>" <eye-host>:omniseek-inbox/   then call with "omniseek-inbox/<name>".
     - Anywhere on the web: just pass the URL (conference slide decks, a shared docx, a PDF).
-    WHAT COMES BACK: `outline` = per slide/sheet/page {label, chars, media} — the MAP of the whole
+    WHAT COMES BACK: `outline` = per slide/sheet/page {label, chars, media}: the MAP of the whole
     document, always complete and tiny; `text` = the readable content ("## Slide 3" / "## Sheet:
     budget" / "## Page 5" headers), windowed by start_char/max_chars for big docs (truncated=true +
     total_chars tell you to re-call with start_char to continue); `media`/`media_total` = the image
     inventory per section.
-    THE IMAGE HALF (be honest about it): a figure deck or scanned doc carries its meaning in IMAGES —
+    THE IMAGE HALF (be honest about it): a figure deck or scanned doc carries its meaning in IMAGES:
     text extraction alone is NOT the document. Two ways to read it: omniseek_view delivers the figures to
     your OWN vision in-band (judging the figure is yours); ocr=True here runs OCR over every embedded
     image and folds the recognized text-in-pixels (scanned page body, chart labels, palette HEX/RGB
-    codes) into the body under a '图中文字 (OCR)' section — mechanical text transcription, NOT figure
+    codes) into the body under a '图中文字 (OCR)' section: mechanical text transcription, NOT figure
     interpretation, and labeled as possibly imperfect. Use ocr for text-bearing images (scans, labels);
     use omniseek_view to SEE the figure.
     Document branch returns: {source, format, title, outline, text, total_chars, returned_chars,
-    start_char, truncated, media_total, media, media_dir, ocr_images?, cached} — or {source, error,
+    start_char, truncated, media_total, media, media_dir, ocr_images?, cached}, or {source, error,
     inbox_files?}.
     """
     if _is_document_target(target):
@@ -1217,17 +1217,17 @@ def omniseek_transcribe(url: str, language: str = "", start: str = "", duration:
                    segments: LenientBool = False, diarize: LenientBool = False,
                    speakers: int = 0) -> dict:
     """Transcribe the SPOKEN content of a video / podcast / audio URL via local SenseVoice ASR
-    (free, keyless, private, cached forever; chosen over Whisper after a real-audio benchmark —
+    (free, keyless, private, cached forever; chosen over Whisper after a real-audio benchmark:
     Whisper hallucinates on Chinese podcast intros). For the 干货-in-audio case where the substance
     is in the audio, not any text: bilibili videos (论文精读 / 方法论 / 读博 / 求职 talks), 小宇宙
-    podcasts, or any direct audio-file URL. (youtube already returns its captions via omniseek_read —
+    podcasts, or any direct audio-file URL. (youtube already returns its captions via omniseek_read:
     no ASR needed; use that instead.)
 
     THE LONG-EPISODE PATTERN: do NOT transcribe a 2-3h episode whole (30k+ chars nobody reads).
     Pull the chapter timestamps from the episode's shownotes (小宇宙 episode pages list them; use
     omniseek_search(query, sources=["xiaoyuzhou"], raw=True, full=True) / omniseek_read first), judge WHICH chapter matters, then transcribe just
     that slice: start="1:02:30", duration="12:00". Accepts seconds ("3750") or MM:SS / HH:MM:SS.
-    Slices are also fast to start — on direct/enclosure audio only the slice region is downloaded.
+    Slices are also fast to start: on direct/enclosure audio only the slice region is downloaded.
     The flat ``transcript`` covers [start, start+duration] of the source audio. Pass segments=True to
     ALSO get a per-VAD-segment ``segments: [{start,end,text}]`` list (seconds) so a no-shownote episode
     becomes navigable / time-citable (the flat transcript is unchanged; segments costs an extra VAD +
@@ -1253,7 +1253,7 @@ def omniseek_transcribe(url: str, language: str = "", start: str = "", duration:
     track reality. Leave it 0 (auto) only when the count is genuinely unknown. Ignored unless diarize=True.
 
     Returns: {url, transcript, chars, audio_seconds, asr_seconds, source, title, cached,
-    start_seconds?, duration_seconds?, segments?, speakers?} — or {url, error, transcript:""} if no
+    start_seconds?, duration_seconds?, segments?, speakers?}, or {url, error, transcript:""} if no
     audio resolved.
     """
     from omniseek.core import asr
@@ -1287,7 +1287,7 @@ def omniseek_view(target: str, kind: str = "auto", sections: str = "", names: st
              start: str = "", duration: str = "", n: LenientInt = 12,
              max_images: LenientInt = 8, contact_sheet: LenientBool = False,
              render_pages: str = ""):
-    """SEE with your own vision, IN-BAND — document figures, loose image URLs, or video frames.
+    """SEE with your own vision, IN-BAND: document figures, loose image URLs, or video frames.
     ONE verb; kind="auto" picks the branch (or force it with kind=document|images|video).
 
     ROUTING (kind="auto"): a document path/extension (.pdf/.pptx/.docx/.xlsx/…, as in omniseek_read) →
@@ -1300,7 +1300,7 @@ def omniseek_view(target: str, kind: str = "auto", sections: str = "", names: st
     • document: sections (comma-separated slide/page numbers to pull, "" = all), names (comma-separated
       exact image names from the omniseek_read outline `media[].name`), max_images (full-res cap; a wider
       selection falls back to a contact sheet). THE TWO-STEP: first omniseek_read to get the `outline`
-      (which slides/pages hold images), then call this — with NO sections/names you get a CONTACT SHEET
+      (which slides/pages hold images), then call this: with NO sections/names you get a CONTACT SHEET
       (every image a labeled thumbnail tiled into one montage; triage ~30 for the cost of one), then
       pull the few that matter full-res by sections="8,15" or names="s08_02_image.png". Covers
       pptx / pdf / docx (the image-bearing formats); text formats return a note.
@@ -1308,13 +1308,13 @@ def omniseek_view(target: str, kind: str = "auto", sections: str = "", names: st
       for a page whose substance is VECTOR figures / dense tables / a layout carrying NO embedded raster
       (where sections/names find nothing). This is how you READ a visual page you cannot trust as parsed
       text: route to the doc, omniseek_read for the page you want, then render + see it with your own vision.
-    • images: target = image URLs comma/space/newline separated (paste a walled post's media[] list —
+    • images: target = image URLs comma/space/newline separated (paste a walled post's media[] list:
       xiaohongshu / zhihu note images, where the 干货 often lives). max_images caps per call.
     • video: start / duration (optional slice: "8:30", "90", "1:02:30"; default the whole video, capped
       at 30 min), n (frames to sample, default 12, max 24). The VISUAL half of omniseek_transcribe: its
       on-screen slides / diagrams / code / charts as ONE labeled contact sheet (a timestamp under each
       frame). Pair with omniseek_transcribe on the same slice for BOTH halves. (bilibili frames ride the
-      same activated playurl session as bilibili audio — the ASR path's visual sibling.)
+      same activated playurl session as bilibili audio, the ASR path's visual sibling.)
 
     Returns image content blocks: document = [contact-sheet montage + legend] or [manifest + one block
     per figure]; images = [manifest + one block per URL that loaded]; video = [contact-sheet + timestamp
@@ -1883,7 +1883,7 @@ def _curator_source_verdict(name: str, verdict: str, rationale: str,
 @_fqn_doc
 @_threaded
 def omniseek_curator_view(what: str, candidate_id: str = "", state: str = "") -> dict:
-    """Use WHEN running the source-curation protocol (judge the admission queue or a source audit) — READ curator state: queue | packet | audit. Never mutates. Pick a view with ``what``:
+    """Use WHEN running the source-curation protocol (judge the admission queue or a source audit); READ curator state: queue | packet | audit. Never mutates. Pick a view with ``what``:
 
     • what="queue" -> the candidate-admission backlog (optionally filtered by ``state``:
       new / probed / awaiting_verdict / admitted / watching / rejected / owner_review /
@@ -1919,7 +1919,7 @@ def omniseek_curator_act(verb: str, candidate_id: str = "", name: str = "",
                     regions: Optional[list[str]] = None, prune_class: str = "",
                     coverage_impact: Optional[dict] = None,
                     draft: Optional[dict] = None) -> dict:
-    """Use WHEN acting on the source-curation protocol — WRITE a source-lifecycle action (submit / probe / decide / admit / retire ...); every safety gate lives in the impl, unchanged. Pick
+    """Use WHEN acting on the source-curation protocol: WRITE a source-lifecycle action (submit / probe / decide / admit / retire ...); every safety gate lives in the impl, unchanged. Pick
     the action with ``verb``; each verb's REQUIRED args (see the /curator protocol):
 
     • submit  (name, urls, mode, domain, family; optional kind, regions, rationale, draft) -> add a
@@ -2082,7 +2082,7 @@ def omniseek_gather(calls: list[dict], wait_s: LenientInt = 60) -> dict:
 
     ``wait_s``: the patience budget. gather returns when all calls finish OR wait_s elapses,
     whichever comes first; calls still running are reported with status ``"warming"`` (their
-    background threads keep going and warm the cache — pick them up later with
+    background threads keep going and warm the cache; pick them up later with
     staleness="cache_only" or a second gather).
 
     Returns: {results: [{index, tool, status, result|error|hint}, ...],
@@ -2178,7 +2178,7 @@ def omniseek_graph(view: str = "", args: Optional[dict] = None) -> dict:
     authored, coauthored, affiliated, published_in, about, observed, exact-id same_as) and
     alignment CANDIDATES (tier A: title-fingerprint / fuzzy-name same_as, name-match authored,
     string mentions, signal conflicts). Judgment (claims, gaps, identity rulings) is tier J and
-    is STRUCTURALLY excluded from OmniSeek's store — the views project structure, YOU judge it.
+    is STRUCTURALLY excluded from OmniSeek's store: the views project structure, YOU judge it.
 
     ONE STABLE VERB: ``omniseek_graph(view, args)``. ``view`` names the projection; ``args`` is that
     view's OWN parameter dict (the views are an open family, their params disjoint per view, so the
@@ -2229,7 +2229,7 @@ def omniseek_graph(view: str = "", args: Optional[dict] = None) -> dict:
     never MAKES an identity ruling; it only applies the ones you already recorded.
 
     COLD START (set the expectation or the first stats reads as failure): documents and
-    same-work edges are LIVE FROM DAY ONE (derived over recall's docs — the wall is born
+    same-work edges are LIVE FROM DAY ONE (derived over recall's docs: the wall is born
     pre-populated by construction). Document THIN rows (title + url only, from NON-indexed sources)
     now accumulate from EVERY search (stats.node_kinds.document_thin), so the perception history is
     complete, not just the ~40 enumerable sources. Entity kinds (work / person / institution /
@@ -2240,7 +2240,7 @@ def omniseek_graph(view: str = "", args: Optional[dict] = None) -> dict:
     count, and any capped result stamps ``capped: true`` so a bounded view never reads as
     complete. Schema + the view registry live in omniseek.core.recall.graph.
 
-    FAIL-OPEN: a graph failure returns an error dict, never an exception — the graph is memory,
+    FAIL-OPEN: a graph failure returns an error dict, never an exception: the graph is memory,
     it must NEVER break search or recall.
     """
     from omniseek.core import recall
@@ -2273,7 +2273,7 @@ def omniseek_sensor(action: str, query: str = "", sources: Optional[list[str]] =
                schedule: str = "daily", sensor_id: str = "", notify: LenientBool = False,
                notify_if: Optional[list[str]] = None, notify_if_match: str = "any",
                detect_absence: LenientBool = False) -> dict:
-    """Use WHEN you want to MONITOR a query over time and be told only what's NEW — standing queries with novelty detection. ONE verb; ``action`` picks what to do.
+    """Use WHEN you want to MONITOR a query over time and be told only what's NEW: standing queries with novelty detection. ONE verb; ``action`` picks what to do.
 
     The agent decides WHAT to monitor (judgment); the sensor diffs mechanically (a (source,
     source_id) fingerprint diff against baseline). Each action's REQUIRED args:
@@ -2345,7 +2345,7 @@ def omniseek_sensor(action: str, query: str = "", sources: Optional[list[str]] =
 @_fqn_doc
 @_threaded
 def omniseek_ruling(action: str, src: str = "", dst: str = "", verdict: str = "", note: str = "") -> dict:
-    """Use WHEN two graph nodes ARE (or are NOT) the same person / entity and you want views to collapse them — record / list / retract same_as | not_same_as rulings (the one judgment channel the graph's working policy applies).
+    """Use WHEN two graph nodes ARE (or are NOT) the same person / entity and you want views to collapse them: record / list / retract same_as | not_same_as rulings (the one judgment channel the graph's working policy applies).
 
     OmniSeek never MAKES a ruling; it STORES yours as declarative state and APPLIES it at read time
     (the sensors.json precedent: judgment persisted as config OmniSeek executes mechanically). A ruling
@@ -2392,33 +2392,33 @@ def omniseek_ruling(action: str, src: str = "", dst: str = "", verdict: str = ""
 @_threaded
 def omniseek_statement(action: str, src: str = "", dst: str = "", type: str = "",
                   note: str = "", doc: str = "", about: str = "") -> dict:
-    """Use WHEN you've concluded a DIRECTED, decision-relevant relation OmniSeek does NOT already store mechanically (X acquired_by Y, paper P refutes claim Q, path R requires gate S) and want the graph to carry it forward — record / list / retract typed relation statements (the general sibling of omniseek_ruling; identity types belong to omniseek_ruling).
+    """Use WHEN you've concluded a DIRECTED, decision-relevant relation OmniSeek does NOT already store mechanically (X acquired_by Y, paper P refutes claim Q, path R requires gate S) and want the graph to carry it forward: record / list / retract typed relation statements (the general sibling of omniseek_ruling; identity types belong to omniseek_ruling).
 
     OmniSeek never MAKES a statement; it STORES yours as declarative state and PROJECTS it at read time
     (the rulings / sensors.json precedent: judgment persisted as config OmniSeek applies mechanically).
     A statement is a DIRECTED, typed relation between two graph node ids: "openai --acquired_by-->
     someone", "paper X --refutes--> claim Y". It surfaces in omniseek_graph's neighborhood / between / since
-    under ``working`` / ``exploratory`` (never ``conservative`` — the pure mechanical world) AND, since
+    under ``working`` / ``exploratory`` (never ``conservative``, the pure mechanical world) AND, since
     the write-side read-back, AMBIENT on any future omniseek_search hit of an endpoint (the
-    ``metadata.graph.judgments`` stamp): recording is NOT write-only — your judgment returns to you when
+    ``metadata.graph.judgments`` stamp): recording is NOT write-only: your judgment returns to you when
     you next touch the node. The directed triple (src, dst, type) is the KEY, so re-creating it REPLACES
     the prior note; direction is YOUR assertion, never normalized.
 
-    WHAT EARNS A STATEMENT (the value gate — all three must hold, else it is noise that BURIES the edges
+    WHAT EARNS A STATEMENT (the value gate: all three must hold, else it is noise that BURIES the edges
     carrying a real decision; the graph's value is inverse to its noise density):
-      1. NON-MECHANICAL — a relation OmniSeek does NOT already store as a fact. cites / authored /
+      1. NON-MECHANICAL: a relation OmniSeek does NOT already store as a fact. cites / authored /
          affiliated / coauthored / published_in / about and bare bibliometric counts are the mechanical
          M/A world; re-asserting them here pollutes the judgment channel, which is for what an API cannot
          read off: YOUR read.
-      2. DECISION-RELEVANT — resurfacing it would change a future call (a positioning, a gate, a
+      2. DECISION-RELEVANT: resurfacing it would change a future call (a positioning, a gate, a
          disqualifier, a fit verdict, a trajectory read). A true-but-inert edge (both-about-RAG,
          everyone-at-lab-X-affiliated-with-X) is noise.
-      3. AS-OF-STAMPED IF A SNAPSHOT — a point-in-time relation (leads / rising / froze_hiring) drifts
+      3. AS-OF-STAMPED IF A SNAPSHOT: a point-in-time relation (leads / rising / froze_hiring) drifts
          while its endpoints stay; put the as-of date in the note, or route it to a sensor, so a future
          reader never mistakes a stale snapshot for the present.
 
     ``type`` is FREE agent vocabulary (mechanically slugged: lowercase, spaces -> underscores,
-    ``[a-z0-9_]`` only, <= 40 chars; views never branch on it). An OPEN family, NOT a menu — coin your
+    ``[a-z0-9_]`` only, <= 40 chars; views never branch on it). An OPEN family, NOT a menu; coin your
     own; some exemplars across domains:
       • positioning: attacks_premise_of / near_miss_of / validates_premise_of / does_not_flatten /
         anchors / introduces (map a competitive / thesis landscape around a claim node).
@@ -2428,11 +2428,11 @@ def omniseek_statement(action: str, src: str = "", dst: str = "", type: str = ""
         blocking precondition), disqualified_by / ruled_out_because (an option-eliminator), good_fit_for
         / misaligned_with / froze_hiring / rising (fit + trajectory), reached ... via (a PATH-SAMPLE: how
         someone actually reached an outcome).
-    Two types are REFUSED with a pointer to omniseek_ruling: ``same_as`` / ``not_same_as`` — identity is a
+    Two types are REFUSED with a pointer to omniseek_ruling: ``same_as`` / ``not_same_as``: identity is a
     pair-keyed, symmetric judgment the collapse machinery consumes, kept to omniseek_ruling's one channel.
 
     MEMORY-vs-GRAPH boundary: prose understanding (a lesson, a conclusion, context, confidence, scope) is
-    the ATOM — it lives in YOUR own notes / memory, or in this statement's ``note``. The graph statement
+    the ATOM: it lives in YOUR own notes / memory, or in this statement's ``note``. The graph statement
     is a POINTER, minted only when there is a specific PAIR of wall-addressable nodes whose FUTURE
     retrieval must carry the judgment; its ``note`` / ``doc`` point BACK at the prose rather than
     restating it. Default to prose; the edge is an opt-in index. (Everything is both a thought and an

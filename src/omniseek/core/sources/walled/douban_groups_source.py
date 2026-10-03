@@ -202,7 +202,7 @@ class DoubanGroupsAdapter:
             docs = self.search("上海租房", limit=3)
             if docs:
                 return True, f"OK ({len(docs)} results, rexxar via CDP)"
-            return False, "douban rexxar returned 0 — session logged out? needs a VNC re-login on 9222"
+            return False, "douban rexxar returned 0: session logged out? needs a VNC re-login on 9222"
         except Exception as exc:  # noqa: BLE001
             return False, f"{type(exc).__name__}: {str(exc)[:80]}"
 

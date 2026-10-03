@@ -41,7 +41,7 @@ class MyCareersFutureAdapter:
     name = "mycareersfuture"
     needs_credentials = False
     description = (
-        "MyCareersFuture — 新加坡政府求职板 (开放 API, **强制薪资范围** + 公司 UEN). "
+        "MyCareersFuture：新加坡政府求职板 (开放 API, **强制薪资范围** + 公司 UEN). "
         "SG 全境岗位 (本地/MNC/政府), 自由文本查询; 新加坡求职主板"
     )
 
