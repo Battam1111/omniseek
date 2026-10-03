@@ -10270,7 +10270,7 @@ if _SENTINEL_PATH.exists():
     _sent_omniseek = sorted(m for m in _sent_imports if m == "omniseek")
     check("p9 sentinel isolation: it imports ZERO omniseek.* (self-contained: works when the organ is broken)",
           not _sent_omniseek, f"imports omniseek: {_sent_omniseek}")
-    _ALLOWED_SENTINEL_IMPORTS = {"__future__", "json", "os", "subprocess", "sys", "time",
+    _ALLOWED_SENTINEL_IMPORTS = {"__future__", "json", "os", "plistlib", "subprocess", "sys", "time",
                                  "urllib", "pathlib", "_sentinel_common", "services", "ast"}
     _sent_unexpected = sorted(_sent_imports - _ALLOWED_SENTINEL_IMPORTS)
     check("p9 sentinel isolation: its import list is exactly stdlib + _sentinel_common + services",
@@ -10323,7 +10323,9 @@ if _SENT is not None:
     _real_watchdog_should57 = _watchdog_globals57["should_alert"]
     _real_eye_state, _real_sched_state, _real_cdp_state = _SENT.EYE_STATE, _SENT.SCHED_STATE, _SENT.CDP_STATE
     _real_hb57, _real_maint57 = _SENT.HEARTBEAT_PATH, _SENT.MAINT_FLAG
+    _real_eye_grace57 = _SENT.EYE_DEPLOY_GRACE_S
     try:
+        _SENT.EYE_DEPLOY_GRACE_S = 0  # no deploy-grace re-probes here (tests/test_sentinel_watch.py covers them)
         _SENT.EYE_STATE = _sent_dir57 / "eye.json"
         _SENT.SCHED_STATE = _sent_dir57 / "sched.json"
         _SENT.CDP_STATE = _sent_dir57 / "cdp.json"
@@ -10383,6 +10385,7 @@ if _SENT is not None:
         _watchdog_globals57["should_alert"] = _real_watchdog_should57
         _SENT.EYE_STATE, _SENT.SCHED_STATE, _SENT.CDP_STATE = _real_eye_state, _real_sched_state, _real_cdp_state
         _SENT.HEARTBEAT_PATH, _SENT.MAINT_FLAG = _real_hb57, _real_maint57
+        _SENT.EYE_DEPLOY_GRACE_S = _real_eye_grace57
 
 # (6) DELETION SWEEP: the 11 deleted scripts are GONE from scripts/, and NO in-repo file references
 #     any of them as a runnable script (a `scripts/<name>.py` path form), excluding this smoke file

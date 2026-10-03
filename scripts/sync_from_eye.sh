@@ -224,13 +224,15 @@ SYNCED_ARTIFACTS=("tests/smoke.py" "tests/egress_baseline.json" "docs/BUDGETS.md
 # no deploy.sh (which the mirror is) instead of failing on an absence that is correct.
 # EXCEPT the deployment-bound ones, LISTED here with the reason for each (driver ruling of 2026-09-29):
 # they test the eye's release machinery (scripts/release_layout.py, release_transaction.py and the
-# bridges), which the mirror does not ship by the same rule that keeps SERVICES.md out. Carried anyway
+# bridges) or, since 2026-10-03, its launchd watchdog (scripts/sentinel.py), which the mirror does not
+# ship by the same rule that keeps SERVICES.md out. Carried anyway
 # they do not fail meaningfully, they fail at IMPORT (`from scripts. ...`), which looks like the mirror
 # is broken rather than like the suite does not apply. Every test_*.py NOT on this list is synced.
 DEPLOYMENT_BOUND_SUITES=(
   "test_release_bridges.py"      # imports scripts.release_layout / release_transaction: the deploy bridges
   "test_release_layout.py"       # imports scripts.release_layout: the release directory layout
   "test_release_transaction.py"  # imports scripts.release_transaction: the atomic release switch
+  "test_sentinel_watch.py"       # loads scripts/sentinel.py: the operator's launchd watchdog (2026-10-03)
 )
 # THE MIRROR-OWNED PREFIX (driver ruling of 2026-09-29). tests/test_mirror_*.py test the mirror's own
 # material (bench/, scripts/, .github/) and belong to the mirror: never written by this sync, never
@@ -247,7 +249,7 @@ while IFS= read -r _suite; do
   [ -n "$_suite" ] || continue
   case " ${DEPLOYMENT_BOUND_SUITES[*]} " in
     *" $(basename "$_suite") "*)
-      echo "    (skipping $(basename "$_suite"): deployment-bound, the mirror ships no release machinery)"
+      echo "    (skipping $(basename "$_suite"): deployment-bound, the mirror ships no release machinery or launchd watchdog)"
       continue ;;
   esac
   SYNCED_ARTIFACTS+=("tests/$(basename "$_suite")")
