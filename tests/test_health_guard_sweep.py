@@ -32,6 +32,7 @@ exempt name is no longer registered, so the list cannot rot.
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import subprocess
@@ -72,6 +73,9 @@ EXEMPT: dict[str, str] = {
 LOCAL_ONLY: dict[str, str] = {
     "pdf": "no fixed upstream; the check only imports the local PDF parser (driver ruling 2026-10-04)",
 }
+# The module each LOCAL_ONLY check imports. Where it is not installed (a base install has no [pdf]
+# extra, as in the public mirror's CI) False is the true answer, so the sweep holds it to nothing.
+LOCAL_ONLY_NEEDS: dict[str, str] = {"pdf": "fitz"}
 
 # Modules whose sources sit behind a breaker / back-off of OmniSeek: in the breaker sweep every source
 # they register must say the breaker is open (so its None comes from the breaker branch, not from a
@@ -300,7 +304,7 @@ class EverySourceReadsHoldBackAsNotVerified(unittest.TestCase):
             if not done:
                 bad.append(f"{name}: did not complete ({msg})")
             elif name in LOCAL_ONLY:
-                if ok is False:
+                if ok is False and importlib.util.find_spec(LOCAL_ONLY_NEEDS[name]) is not None:
                     bad.append(f"{name}: False although its check sends nothing ({msg})")
             elif ok is not None:
                 bad.append(f"{name}: {ok!r} ({msg})")
@@ -331,6 +335,7 @@ class EverySourceReadsHoldBackAsNotVerified(unittest.TestCase):
                        if n not in self.results["rate"] and n not in ("polyu", "mokahr_ats"))
         self.assertEqual(stale, [], f"exempt names that are no longer registered: {stale}")
         self.assertTrue(all(isinstance(r, str) and r for r in (*EXEMPT.values(), *LOCAL_ONLY.values())))
+        self.assertEqual(set(LOCAL_ONLY_NEEDS), set(LOCAL_ONLY), "every LOCAL_ONLY row names the module its check imports")
 
 
 if __name__ == "__main__" and sys.argv[1:2] == ["--sweep"]:
