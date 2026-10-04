@@ -11,10 +11,13 @@ suites and nothing real is reachable:
 - HOME / USERPROFILE point at a fresh temp dir before omniseek is imported: no real credential,
   cache or state file is ever read; credentials are fake values handed out by a stubbed ``auth``;
 - every socket connect except to loopback (asyncio's event loop on Windows talks to itself through
-  a loopback socket pair) and every DNS lookup raise, no subprocess can start, the CDP browser
-  helpers report "no browser";
+  a loopback socket pair) and every DNS lookup raise, no subprocess can start;
 - every httpx transport, and every curl_cffi request (sessions, module-level calls, the shared curl
-  tier), answers HTTP 429 (Retry-After: 1) to every request.
+  tier), answers HTTP 429 (Retry-After: 1) to every request;
+- the CDP browser is "up" (its health helper is stubbed: it is our side, not the site's) and every
+  tab it opens answers 429: a stand-in for Playwright under the real ``_cdp.cdp_call`` (gates, pool,
+  response listener all real) gives each page load and each in-page ``fetch(`` a 429 response;
+- every request yt-dlp makes (``YoutubeDL.urlopen``) raises yt-dlp's HTTP Error 429.
 
 Then, with every shared probe cache cleared, it runs every registered source's health check
 through the one funnel all readers use (``fetcher.health_check_outcome``): first as is (every
@@ -26,8 +29,9 @@ answer a 429), then again with every breaker of OmniSeek forced open. The parent
 - breaker sweep: every source not exempt returns None (so neither False nor a True made without a
   request), and every source of a module behind a breaker (BREAKER_MODULES) says the breaker is open.
 
-EXEMPT lists the sources this harness cannot drive, each with its reason; the test also fails when an
-exempt name is no longer registered, so the list cannot rot.
+EXEMPT lists the sources this harness cannot drive, each with its reason (since 2026-10-04 only
+checks that send the site nothing); NEEDS_MODULE the ones it can drive only with a library installed.
+The test also fails when a listed name is no longer registered, so the lists cannot rot.
 """
 
 from __future__ import annotations
@@ -47,26 +51,29 @@ _MARK = "@@HEALTH-GUARD-SWEEP@@ "
 _SWEEP_TIMEOUT_S = 600     # the whole child; measured well under a minute on 2026-10-04 (Windows)
 _PER_SOURCE_S = 40.0       # per health check inside the child
 
-_BROWSER = "drives the CDP browser (no browser in the sandbox; the stub makes it report CDP down)"
-_YTDLP = "sends through yt-dlp's own HTTP stack, not httpx (the sandbox refuses its sockets)"
+_NO_REQUEST = ("its check sends the site nothing: it asks only whether OUR browser is up and reads the "
+               "eye's own cache, so there is no answer to rate-limit; it returns None whenever the browser "
+               "is up")
 
 # name -> why the harness cannot hold it to the contract. Keep each reason true. The curl_cffi
 # sources (cninfo, eastmoney, gov_policy, juejin, sogou_weixin, higheredjobs_cs) left this list on
 # 2026-10-04: libcurl answers 429 here too, and their responses are recorded (omniseek.core.curl, the
-# shared curl tier's _curl_hops).
+# shared curl tier's _curl_hops). Later that day the browser and yt-dlp sources left it too (the
+# browser answers 429 through a stand-in Playwright, yt-dlp's requests raise HTTP Error 429; what the
+# page and yt-dlp got is recorded by _cdp and omniseek.core.ytdlp); what is left sends nothing.
 EXEMPT: dict[str, str] = {
-    "cdp_fulltext": _BROWSER, "douban_groups": _BROWSER, "douyin": _BROWSER,
-    "ircc_ee_rounds": _BROWSER, "ircc_processing_times": _BROWSER, "polyu": _BROWSER,
-    "xiaohongshu": _BROWSER, "xiaomuchong": _BROWSER, "yipinsanfendi": _BROWSER, "zhihu": _BROWSER,
-    "zhihu_users": _BROWSER,
-    "gter": _BROWSER + "; every site of the row is rendered",
-    "scrape_canada": _BROWSER + "; every site of the row is rendered",
-    "scrape_hongkong": _BROWSER + "; every site of the row is rendered",
-    "scrape_js_sites": _BROWSER + "; every site of the row is rendered",
-    "ml_conferences": _BROWSER + "; the conference pages are rendered",
-    "mpnp_draws": _BROWSER + "; the draws page is rendered",
-    "youtube": _YTDLP, "youtube_channels": _YTDLP, "slideslive_talks": _YTDLP,
+    "ircc_ee_rounds": _NO_REQUEST, "ircc_processing_times": _NO_REQUEST,
+    "xiaohongshu": ("its check sends the site nothing: it asks only whether OUR browser is up and returns "
+                    "None when it is (the account is protected; named search / read is its real probe)"),
+    "polyu": ("its check sends nothing: with the browser up and the login file present it returns None "
+              "(the eStudent / Outlook session heals on use; driver ruling 2026-10-04: no real probe)"),
 }
+
+# Sources the sweep can drive only when an optional-looking library is importable: without it the
+# check fails on the import (False is then the true answer), so the sweep holds it to nothing.
+# yt-dlp is a base dependency, so this applies only to a stripped install.
+NEEDS_MODULE: dict[str, str] = {"youtube": "yt_dlp", "youtube_channels": "yt_dlp",
+                                "slideslive_talks": "yt_dlp"}
 
 # Sources whose check sends nothing at all (a local dependency is the whole of what it can verify):
 # the contract only rules out False for them.
@@ -173,6 +180,125 @@ def _sandbox_network() -> None:
         pass
 
 
+def _sandbox_ytdlp() -> None:
+    """yt-dlp's requests answer HTTP 429: ``YoutubeDL.urlopen`` (every request an extractor makes goes
+    through it) raises yt-dlp's own ``HTTPError`` for a 429 response, so an extraction fails with
+    "HTTP Error 429" exactly as it does against a rate-limiting site. Not installed: nothing to answer
+    (NEEDS_MODULE)."""
+    try:
+        import io
+
+        import yt_dlp
+        from yt_dlp.networking.common import Response
+        from yt_dlp.networking.exceptions import HTTPError
+    except Exception:  # noqa: BLE001
+        return
+
+    def _urlopen_429(self, req):
+        url = getattr(req, "url", None) or str(req)
+        raise HTTPError(Response(io.BytesIO(b'{"error": "Too Many Requests"}'), url,
+                                 {"Retry-After": "1", "Content-Type": "application/json"},
+                                 status=429, reason="Too Many Requests"))
+    yt_dlp.YoutubeDL.urlopen = _urlopen_429   # type: ignore[assignment]
+
+
+class _FakeResponse:
+    """What Playwright hands a ``page.on("response")`` listener and returns from ``page.goto``."""
+
+    def __init__(self, url: str, kind: str, frame) -> None:
+        self.url, self.status, self.status_text, self.frame = url, 429, "Too Many Requests", frame
+        self.ok = False
+        self.headers = {"retry-after": "1", "content-type": "text/html"}
+        self.request = type("_Req", (), {"resource_type": kind, "url": url, "frame": frame,
+                                         "is_navigation_request": lambda self_: kind == "document"})()
+
+    def text(self) -> str:
+        return _ERROR_PAGE
+
+    def body(self) -> bytes:
+        return _ERROR_PAGE.encode()
+
+
+_ERROR_PAGE = "<html><head><title>429 Too Many Requests</title></head><body>Too Many Requests</body></html>"
+
+
+class _FakePage:
+    """A browser tab whose site answers every page load and every in-page fetch with HTTP 429. It
+    answers the calls the sources make (goto, content, title, evaluate, waits); anything else returns
+    None. ``evaluate`` of a script that calls ``fetch(`` fires a 429 fetch response, as the browser
+    would."""
+
+    def __init__(self) -> None:
+        self.main_frame = object()
+        self.url = "about:blank"
+        self._listeners: list = []
+
+    def on(self, event, handler) -> None:
+        if event == "response":
+            self._listeners.append(handler)
+
+    def _answer(self, url: str, kind: str, frame) -> _FakeResponse:
+        resp = _FakeResponse(url, kind, frame)
+        for handler in list(self._listeners):
+            handler(resp)
+        return resp
+
+    def goto(self, url, **_k):
+        self.url = url
+        return self._answer(url, "document", self.main_frame)
+
+    def evaluate(self, script, *_a, **_k):
+        if "fetch(" in str(script):
+            self._answer(self.url, "fetch", self.main_frame)
+        return None
+
+    def content(self) -> str:
+        return _ERROR_PAGE
+
+    def title(self) -> str:
+        return "429 Too Many Requests"
+
+    def wait_for_selector(self, *_a, **_k):
+        raise TimeoutError("the sandbox page never shows the element")
+
+    def __getattr__(self, name):
+        return lambda *_a, **_k: None
+
+
+class _FakeBrowser:
+    def __init__(self) -> None:
+        ctx = type("_Ctx", (), {})()
+        ctx.pages = []
+        ctx.new_page = _FakePage
+        ctx.close = lambda: None
+        self.contexts = [ctx]
+        self.new_context = lambda *a, **k: ctx
+
+    def is_connected(self) -> bool:
+        return True
+
+
+class _FakePlaywright:
+    """``sync_playwright()`` of the browser helper (``_cdp``): every connection gets a browser whose
+    tabs are ``_FakePage``. Everything above it (the per-Chrome gates, the pool, the tab bookkeeping,
+    the response listener) is the real code."""
+
+    def __init__(self) -> None:
+        self.chromium = type("_Chromium", (), {"connect_over_cdp": lambda self_, *a, **k: _FakeBrowser()})()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc) -> None:
+        return None
+
+    def start(self):
+        return self
+
+    def stop(self) -> None:
+        return None
+
+
 def _sandbox_after_import() -> None:
     import subprocess as sp
 
@@ -181,19 +307,20 @@ def _sandbox_after_import() -> None:
 
     sp.Popen.__init__ = _no_process            # type: ignore[assignment]
 
-    def _no_cdp(*_a, **_k):
-        return False, "no CDP browser in the health guard sweep"
-
-    def _no_cdp_call(*_a, **_k):
-        raise RuntimeError("no CDP browser in the health guard sweep")
+    # The CDP browser: "up" (its health helper is OUR side, not the site's), and every tab it opens
+    # answers 429 (_FakePlaywright, below the real cdp_call). Nothing here connects anywhere.
+    def _browser_up(*_a, **_k):
+        return True, "a stand-in browser (the health guard sweep)"
 
     for mod in list(sys.modules.values()):
         if not getattr(mod, "__name__", "").startswith("omniseek"):
             continue
         if callable(getattr(mod, "cdp_health", None)):
-            mod.cdp_health = _no_cdp
-        if callable(getattr(mod, "cdp_call", None)):
-            mod.cdp_call = _no_cdp_call
+            mod.cdp_health = _browser_up
+    from omniseek.core.sources.walled import _cdp
+    _cdp.sync_playwright = _FakePlaywright      # type: ignore[assignment]
+    _cdp._browser_instance = lambda cdp_url: "a stand-in browser"   # type: ignore[assignment]
+    _sandbox_ytdlp()
 
     from omniseek.core import auth
     fake = {"api_key": "test-key", "key": "test-key", "app_id": "test-id", "app_key": "test-key",
@@ -301,6 +428,8 @@ class EverySourceReadsHoldBackAsNotVerified(unittest.TestCase):
         for name, (ok, msg, done, _module) in sorted(self.results[sweep].items()):
             if name in EXEMPT:
                 continue
+            if name in NEEDS_MODULE and importlib.util.find_spec(NEEDS_MODULE[name]) is None:
+                continue
             if not done:
                 bad.append(f"{name}: did not complete ({msg})")
             elif name in LOCAL_ONLY:
@@ -331,7 +460,7 @@ class EverySourceReadsHoldBackAsNotVerified(unittest.TestCase):
     def test_d_the_exempt_lists_name_registered_sources(self):
         # polyu and mokahr_ats are personal sources the public mirror's sync removes
         # (sync_from_eye.sh step 1), so there they are absent by design, not stale.
-        stale = sorted(n for n in (*EXEMPT, *LOCAL_ONLY)
+        stale = sorted(n for n in (*EXEMPT, *LOCAL_ONLY, *NEEDS_MODULE)
                        if n not in self.results["rate"] and n not in ("polyu", "mokahr_ats"))
         self.assertEqual(stale, [], f"exempt names that are no longer registered: {stale}")
         self.assertTrue(all(isinstance(r, str) and r for r in (*EXEMPT.values(), *LOCAL_ONLY.values())))

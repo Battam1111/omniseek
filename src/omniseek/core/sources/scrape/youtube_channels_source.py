@@ -57,10 +57,12 @@ class YoutubeChannelsAdapter:
         if cached is not None:
             return cached
         url = f"https://www.youtube.com/channel/{channel_id}/videos"
-        import yt_dlp  # lazy: heavy lib off the startup import path (this adapter self-registers at boot)
+        # lazy: heavy lib off the startup import path (this adapter self-registers at boot); OmniSeek's
+        # yt-dlp entry point notes its HTTP error answers for a running health check
+        from omniseek.core import ytdlp
         out: list[dict] = []
         try:
-            with yt_dlp.YoutubeDL(_YDL_OPTS) as ydl:
+            with ytdlp.YoutubeDL(_YDL_OPTS) as ydl:
                 info = ydl.extract_info(url, download=False)
             for e in (info.get("entries") or []):
                 if not e or not e.get("id"):

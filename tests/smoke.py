@@ -15425,13 +15425,20 @@ def _s0_module_top_imports(tree):
 
 
 def _s0_current_egress():
-    _src = ROOT / "src"
     _mods = set()
-    for _p in sorted((_src / "omniseek" / "core").rglob("*.py")):
-        _mod = _p.relative_to(_src).with_suffix("").as_posix().replace("/", ".")
+    for _p in sorted(_S0_PKG_DIR.rglob("*.py")):
         if _s0_module_top_imports(_s0_ast.parse(_p.read_text(encoding="utf-8"))) & set(_S0_RAW_EGRESS):
-            _mods.add(_mod)
+            _mods.add(_s0_module_of(_p))
     return _mods
+
+
+# The package is read off the imported module, never spelled here (the public mirror renames it).
+_S0_PKG = fetcher.__name__.rpartition(".")[0]
+_S0_PKG_DIR = Path(fetcher.__file__).resolve().parent
+
+
+def _s0_module_of(path):
+    return ".".join([_S0_PKG, *path.relative_to(_S0_PKG_DIR).with_suffix("").parts])
 
 
 _s0_baseline = json.loads((ROOT / "tests" / "egress_baseline.json").read_text(encoding="utf-8"))
@@ -15442,6 +15449,15 @@ check("S0.6: no NEW raw-egress module joined OmniSeek (current set is a SUBSET o
       not _s0_new_egress, f"unbaselined raw-egress modules: {_s0_new_egress}")
 check("S0.6: the egress ratchet baseline is the committed file (read, not recomputed) and covers the current set",
       len(_s0_baseline_set) > 0 and _s0_current_egress_set <= _s0_baseline_set)
+# The other direction (2026-10-04): a module that no longer imports a raw-egress library, or no longer
+# exists, leaves the baseline in the same commit, so the list never stays wider than the code and a
+# module cannot later start calling a raw library again unnoticed. The public mirror's sync drops the
+# personal sources it leaves out from its copy of the list, so the list equals the code there too.
+_s0_stale_egress = sorted(_s0_baseline_set - _s0_current_egress_set)
+check("S0.6: every module in the egress baseline still exists and imports a raw-egress library (the list "
+      "is not wider than the code)", not _s0_stale_egress,
+      f"remove these from tests/egress_baseline.json, they no longer import "
+      f"{'/'.join(_S0_RAW_EGRESS)} or no longer exist: {_s0_stale_egress}")
 
 
 # ===========================================================================

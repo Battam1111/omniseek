@@ -977,6 +977,10 @@ def _impersonated_request(method: str, url: str, *, timeout: int = DEFAULT_TIMEO
         return body
     except Exception as exc:  # noqa: BLE001 — the failure->None contract (same as http.get)
         logger.warning("http impersonated tier failed (%s %s): %s", method.upper(), url, exc)
+        _resp = getattr(exc, "response", None)
+        _st = getattr(_resp, "status_code", None)
+        diag.note(f"http.impersonated_{method.lower()}", url=url,
+                  status=_st if isinstance(_st, int) and _st > 0 else None, exc=exc)
         return None
 
 

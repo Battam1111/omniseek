@@ -299,6 +299,20 @@ for rel in "${SYNCED_ARTIFACTS[@]}"; do
   sed -i "${RENAME[@]}" "$PEN_ROOT/$rel"
 done
 sed -i 's/\bpolyu\b *//g' "$PEN_ROOT/tests/smoke.py"
+# The egress baseline (S0.6) must list exactly the modules this tree has: the eye's smoke check judges a
+# listed module that does not exist as stale. Step 1 left the two personal sources out, so they leave the
+# list here (read and rewritten as JSON, never by line, so the list stays valid wherever they sat).
+"$PYBIN" - "$PEN_ROOT/tests/egress_baseline.json" <<'PY'
+import json, sys
+path = sys.argv[1]
+with open(path, encoding="utf-8") as f:
+    data = json.load(f)
+data["modules"] = [m for m in data["modules"]
+                   if m.rsplit(".", 1)[-1] not in ("polyu_source", "mokahr_ats_source")]
+with open(path, "w", encoding="utf-8", newline="\n") as f:
+    json.dump(data, f, indent=2, ensure_ascii=False)
+    f.write("\n")
+PY
 # Same line-ending rule as step 1b, for the artifacts this step just copied in.
 _synced_abs=()
 for rel in "${SYNCED_ARTIFACTS[@]}"; do _synced_abs+=("$PEN_ROOT/$rel"); done

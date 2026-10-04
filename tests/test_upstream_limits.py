@@ -1,11 +1,19 @@
 """Upstream declarations: declared, enforced by the shared limiter, and checked against readings.
 
-Offline: every network edge is a stub (DNS included), except one curl-tier case that talks to a server
-the test itself runs on 127.0.0.1. The arXiv case measures real time (two 3 s gaps), so this suite adds
-about 7 s to the battery; that is the published limit, not a tunable. The gate-fix cases (task R2, review
-X of 2026-09-29) add a few seconds more: T1 to T15 are named in their test names. The progress cases (task
-R3b) and the first-byte cases (review Q1) add about 60 s: each races a second caller against a request
-that takes a second or more, once for every way OmniSeek reads a response.
+Offline: every network edge is a stub (DNS included), except a few curl-tier and httpcore cases that
+talk to a server the test itself runs on 127.0.0.1. The arXiv case waits real time (two 3 s gaps):
+that is the published limit, not a tunable. The gate-fix cases (task R2, review X of 2026-09-29):
+T1 to T15 are named in their test names. The progress cases (task R3b) and the first-byte cases
+(review Q1) race a second caller against a request that takes a second or more, once for every way
+OmniSeek reads a response.
+
+Busy machines (2026-10-04): what the gates promise is asserted in their own terms, not with the wall
+clock, so a slow thread cannot fail a right gate. Spacing is the start slots the gate reserved plus
+"nothing on the wire before its slot" (``_start_slots`` / ``_assert_paced``); a deferral is the
+absolute moment it pushed the next start to; leases and budgets of the races run on ``_GateClock``,
+a clock only the test moves, and rivals are sequenced by events. What still waits real time is a cut
+made by a library or the OS clock (asyncio.wait_for, libcurl's timeout, a gate wait the event loop
+must survive, the redirect chain's budget), each with a margin a loaded machine stays inside.
 """
 import asyncio
 import bisect
@@ -50,6 +58,97 @@ def _reset_guard(g: BackendGuard) -> None:
     with g.lock:
         g.state["fails"] = 0
         g.state["open_until"] = 0.0
+
+
+# ── timing without the wall clock (2026-10-04) ─────────────────────────────────────────────────────
+# Several cases used to measure gate behaviour with real sub-second time (a start 0.3 s after another,
+# a lease that runs out 0.1 s before a rival asks). On a busy machine a thread is late by more than
+# that, and the pre-deploy gate failed on code that was right. What the gates promise is stated in
+# their OWN terms instead: the start slot a reservation got (computed under the pace lock, the same on
+# a busy machine as on an idle one) and that nothing reaches the wire before its slot; a deferral as
+# the absolute moment it pushed the next start to; leases on a clock only the test moves.
+class _GateClock:
+    """A clock for the gate machinery alone (patched in as ``_guard.time``; ``upstreams`` and ``http``
+    take every gate moment from ``_guard``). ``monotonic`` stands still until the test moves it, so
+    budgets, leases and start slots follow the test's script, however busy the machine is. A gate
+    waiting for its start slot (``sleep``) moves it instead of sleeping. ``time`` stays the wall
+    clock (the breakers read it)."""
+
+    def __init__(self, now: float = 1000.0):
+        self._lock = threading.Lock()
+        self.now = now
+
+    def monotonic(self) -> float:
+        with self._lock:
+            return self.now
+
+    def advance(self, seconds: float) -> float:
+        with self._lock:
+            self.now += max(0.0, seconds)
+            return self.now
+
+    def set(self, at: float) -> float:
+        with self._lock:
+            self.now = max(self.now, at)
+            return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.advance(seconds)
+
+    def __getattr__(self, name):   # time.time and anything else: the real module
+        return getattr(time, name)
+
+
+def _wait_for(cond, what: str, timeout: float = 20.0) -> None:
+    """Wait (really) until ``cond()`` holds: the ORDER a case needs, however long the machine takes."""
+    give_up = time.monotonic() + timeout
+    while not cond():
+        if time.monotonic() > give_up:
+            raise AssertionError(f"timed out after {timeout:.0f}s waiting for {what}")
+        time.sleep(0.002)
+
+
+@contextlib.contextmanager
+def _start_slots(*guards):
+    """Record the start slot (``Reservation.start``) every reservation of ``guards`` got, in the
+    order made; one handed back (``refund``: the request never left) is dropped. Yields
+    {guard: [start, ...]}."""
+    real_reserve, real_refund = BackendGuard.reserve, BackendGuard.refund
+    made = {g: [] for g in guards}
+
+    def reserve(self, *a, **k):
+        res = real_reserve(self, *a, **k)
+        if self in made:
+            made[self].append(res)
+        return res
+
+    def refund(self, res):
+        real_refund(self, res)
+        if self in made:
+            made[self][:] = [r for r in made[self] if r is not res]
+    with mock.patch.object(BackendGuard, "reserve", reserve), \
+            mock.patch.object(BackendGuard, "refund", refund):
+        out = {g: [] for g in guards}
+        try:
+            yield out
+        finally:
+            for g in guards:
+                out[g][:] = [r.start for r in made[g]]
+
+
+def _assert_paced(tc, wire_times, slots, interval, *, what=""):
+    """The gate's promise, stated without the wall clock: the requests that reached the wire had one
+    start slot each, the slots are ``interval`` apart, and no request reached the wire before its slot.
+    (Two starts can still land closer than ``interval`` on the wire when the EARLIER one is late, which
+    a busy machine does; the gate never promised otherwise.)"""
+    wire, starts = sorted(wire_times), sorted(slots)
+    tc.assertEqual(len(wire), len(starts), f"{what}: one start slot per request on the wire "
+                                           f"(wire {wire}, slots {starts})")
+    gaps = [b - a for a, b in zip(starts, starts[1:])]
+    tc.assertTrue(all(gap >= interval - 1e-6 for gap in gaps),
+                  f"{what}: start slots {gaps} apart, the gate says {interval}")
+    early = [(w, s) for w, s in zip(wire, starts) if w < s - 0.002]
+    tc.assertEqual([], early, f"{what}: on the wire before its start slot (wire, slot)")
 
 
 def _in_service_sources():
@@ -376,7 +475,7 @@ class ArxivLimiterTests(unittest.TestCase):
         def plain_http():  # enrich._arxiv_integrity's route: only the shared host gate protects it
             results["http"] = http.get_text("https://export.arxiv.org/api/query?id_list=2401.00001")
 
-        with _stub_http(rec):
+        with _stub_http(rec), _start_slots(g) as slots:
             threads = [threading.Thread(target=f) for f in (sync_source, async_source, plain_http)]
             for t in threads:
                 t.start()
@@ -385,10 +484,7 @@ class ArxivLimiterTests(unittest.TestCase):
         _reset_guard(g)
         self.assertEqual({"sync", "async", "http"}, {k for k, v in results.items() if v})
         self.assertEqual(1, rec.peak, "arXiv allows one connection at a time")
-        starts = sorted(s for s, _ in rec.spans)
-        gaps = [b - a for a, b in zip(starts, starts[1:])]
-        self.assertEqual(2, len(gaps))
-        self.assertGreaterEqual(min(gaps), 3.0 - 0.05, f"start gaps {gaps}")
+        _assert_paced(self, [s for s, _ in rec.spans], slots[g], 3.0, what="arXiv")
 
 
 @contextlib.contextmanager
@@ -412,18 +508,17 @@ def _temp_upstream(uid, host, gate):
 class HttpHostGateTests(unittest.TestCase):
     def test_shared_http_client_paces_a_gated_host_across_threads(self):
         with _temp_upstream("t-http", "gated.test.invalid",
-                            {"max_inflight": 1, "min_interval_s": 0.25, "max_wait_s": 5.0}):
+                            {"max_inflight": 1, "min_interval_s": 0.25, "max_wait_s": 5.0}) as g:
             rec = _Recorder(latency=0.05)
-            with _stub_http(rec):
+            with _stub_http(rec), _start_slots(g) as slots:
                 ts = [threading.Thread(target=lambda: http.get_text("https://gated.test.invalid/a"))
                       for _ in range(3)]
                 for t in ts:
                     t.start()
                 for t in ts:
                     t.join(10)
-            starts = sorted(s for s, _ in rec.spans)
             self.assertEqual(1, rec.peak)
-            self.assertGreaterEqual(min(b - a for a, b in zip(starts, starts[1:])), 0.25 - 0.02)
+            _assert_paced(self, [s for s, _ in rec.spans], slots[g], 0.25, what="gated host")
 
     def test_a_429_with_retry_after_defers_every_caller_and_is_recorded(self):
         with _temp_upstream("t-429", "limited.test.invalid",
@@ -589,46 +684,42 @@ def _temp_host_delay(host, seconds):
         upstreams._host_guards.pop(host, None)
 
 
-def _spacing(rec):
-    starts = sorted(s for s, _ in rec.spans)
-    return [b - a for a, b in zip(starts, starts[1:])]
-
-
 class CrawlDelayGateTests(unittest.TestCase):
     """robots.txt Crawl-delay is enforced as the host's gate: one request at a time, starts at least
     the delay apart; with an upstream gate on the same host the stricter holds (2026-09-29)."""
 
-    def _burst(self, url, n=3):
+    def _burst(self, url, guard, n=3):
+        """``n`` concurrent requests to ``url``: (the recorder, the start slots ``guard`` gave)."""
         rec = _Recorder(latency=0.02)
-        with _stub_http(rec):
+        with _stub_http(rec), _start_slots(guard) as slots:
             ts = [threading.Thread(target=lambda: http.get_text(url)) for _ in range(n)]
             for t in ts:
                 t.start()
             for t in ts:
                 t.join(15)
-        return rec
+        return rec, slots[guard]
 
     def test_a_crawl_delay_host_gets_one_request_at_a_time_delay_apart(self):
-        with _temp_host_delay("delayed.test.invalid", 0.3):
-            rec = self._burst("https://delayed.test.invalid/feed")
+        with _temp_host_delay("delayed.test.invalid", 0.3) as g:
+            rec, slots = self._burst("https://delayed.test.invalid/feed", g)
         self.assertEqual(3, len(rec.spans))
         self.assertEqual(1, rec.peak)
-        self.assertGreaterEqual(min(_spacing(rec)), 0.3 - 0.02, _spacing(rec))
+        _assert_paced(self, [s for s, _ in rec.spans], slots, 0.3, what="Crawl-delay host")
 
     def test_the_stricter_of_crawl_delay_and_upstream_gate_holds(self):
         # the Crawl-delay is the stricter: upstream allows 0.05 s, robots.txt says 0.3 s
         with _temp_upstream("t-both-a", "both-a.test.invalid",
                             {"max_inflight": 4, "min_interval_s": 0.05, "max_wait_s": 5.0}), \
-                _temp_host_delay("both-a.test.invalid", 0.3):
-            rec = self._burst("https://both-a.test.invalid/x")
+                _temp_host_delay("both-a.test.invalid", 0.3) as g:
+            rec, slots = self._burst("https://both-a.test.invalid/x", g)
         self.assertEqual(1, rec.peak)
-        self.assertGreaterEqual(min(_spacing(rec)), 0.3 - 0.02, _spacing(rec))
+        _assert_paced(self, [s for s, _ in rec.spans], slots, 0.3, what="Crawl-delay the stricter")
         # the upstream gate is the stricter: it says 0.4 s, robots.txt only 0.1 s
         with _temp_upstream("t-both-b", "both-b.test.invalid",
-                            {"max_inflight": 1, "min_interval_s": 0.4, "max_wait_s": 5.0}), \
+                            {"max_inflight": 1, "min_interval_s": 0.4, "max_wait_s": 5.0}) as g, \
                 _temp_host_delay("both-b.test.invalid", 0.1):
-            rec = self._burst("https://both-b.test.invalid/x")
-        self.assertGreaterEqual(min(_spacing(rec)), 0.4 - 0.02, _spacing(rec))
+            rec, slots = self._burst("https://both-b.test.invalid/x", g)
+        _assert_paced(self, [s for s, _ in rec.spans], slots, 0.4, what="upstream gate the stricter")
 
     def test_every_declared_crawl_delay_is_a_host_gate(self):
         declared = {}
@@ -1521,7 +1612,10 @@ class AsyncAdmissionTests(unittest.TestCase):
 
     def test_T3_waiting_on_a_gate_holds_no_worker_thread(self):
         """probe_h: four coroutines wait on a full gate while the loop has four worker tokens; any other
-        to_thread call (a DNS lookup, a sync tool body) must still run at once."""
+        to_thread call (a DNS lookup, a sync tool body) must still run at once. The defect this guards
+        against (a gate wait parked in a worker thread) makes that call wait out a whole hold, so the
+        holds are 10 s and the bound is 5 s: the old 2 s hold with a 0.2 s bound failed twice in 20 runs
+        under full load (0.25 s, with nothing parked; 2026-10-05), and the defect still reads about 10 s."""
         async def scenario():
             anyio.to_thread.current_default_thread_limiter().total_tokens = 4
             g = BackendGuard("t-threads", 1)
@@ -1529,7 +1623,7 @@ class AsyncAdmissionTests(unittest.TestCase):
 
             async def waiter():
                 with contextlib.suppress(RuntimeError):
-                    async with g.ahold(2.0, lambda w: RuntimeError("busy")):
+                    async with g.ahold(10.0, lambda w: RuntimeError("busy")):
                         pass
             async with anyio.create_task_group() as tg:
                 for _ in range(4):
@@ -1540,9 +1634,12 @@ class AsyncAdmissionTests(unittest.TestCase):
                 took = time.monotonic() - t0
                 g.sema.release()
             return took
-        self.assertLess(anyio.run(scenario), 0.2)
+        self.assertLess(anyio.run(scenario), 5.0)
 
     def test_T5_a_gate_wait_never_blocks_the_event_loop(self):
+        """A coroutine waiting 2 s at a full gate leaves the loop running: a ticker that sleeps 0.01 s
+        ticks on (a blocked loop would tick once or not at all). The wait is real; 2 s and more than 10
+        ticks leave room for a busy machine, where a 0.01 s sleep was measured taking far longer."""
         async def scenario():
             g = BackendGuard("t-loop", 1)
             self.assertTrue(g.sema.acquire(timeout=0))
@@ -1557,7 +1654,7 @@ class AsyncAdmissionTests(unittest.TestCase):
                 tg.start_soon(ticker)
                 with contextlib.suppress(upstreams.UpstreamBusy):
                     with _temp_upstream("t-loop-up", "loop.test.invalid",
-                                        {"max_inflight": 1, "max_wait_s": 0.5}) as up:
+                                        {"max_inflight": 1, "max_wait_s": 2.0}) as up:
                         self.assertTrue(up.sema.acquire(timeout=0))
                         try:
                             async with upstreams.aegress("https://loop.test.invalid/x"):
@@ -1567,7 +1664,7 @@ class AsyncAdmissionTests(unittest.TestCase):
                 tg.cancel_scope.cancel()
             g.sema.release()
             return ticks
-        self.assertGreater(anyio.run(scenario), 20)
+        self.assertGreater(anyio.run(scenario), 10)
 
     def test_a_child_task_or_thread_is_a_new_request(self):
         """Pending 2: the held-marker names its holder; the same task or thread re-enters freely, a
@@ -1939,15 +2036,16 @@ class GateCoreTests(unittest.TestCase):
                     mock.patch.object(http._netguard, "resolve_pin", _no_pin):
                 _reset_guard(hg)
                 http._get_client()   # built beforehand: the spacing counts from the reserved start
-                self.assertIsNone(http.get_text(f"https://{host}/start", retry_transient=False))
-                self.assertEqual("ok", http.get_text(f"https://{host}/other"))
+                with _start_slots(hg) as slots:
+                    self.assertIsNone(http.get_text(f"https://{host}/start", retry_transient=False))
+                    self.assertEqual("ok", http.get_text(f"https://{host}/other"))
                 _reset_guard(hg)
         finally:
             if http._client is not None:
                 http._client.close()
             http._client = saved
         self.assertEqual(["/start", "/other"], [p for _, p in wire])
-        self.assertGreaterEqual(wire[1][0] - wire[0][0], 0.5 - 0.02)
+        _assert_paced(self, [t for t, _ in wire], slots[hg], 0.5, what="the visit and the next request")
 
     def test_N2_an_outer_hold_keeps_its_slot_when_a_later_hop_is_refused(self):
         """probe_t: CORE answers 302 to export.arxiv.org, whose one permit another caller holds. The
@@ -2194,12 +2292,17 @@ class RedirectRuleTests(unittest.TestCase):
                                   lambda host: ("93.184.216.34", socket.AF_INET, None)):
             t0 = time.monotonic()
             res = safeurl.safe_fetch("https://blog.iclr.cc/2024/05/01/a-post")   # Crawl-delay 20 s
-            took = time.monotonic() - t0
+            t1 = time.monotonic()
         self.assertEqual((True, None), (res["ok"], res["blocked_reason"]))
         self.assertEqual(["blog.iclr.cc", "blog.iclr.cc"], [h for h, _ in seen])
-        self.assertLess(took, 5.0)
-        backlog = upstreams.host_guard("blog.iclr.cc").pace_backlog_s()
-        self.assertTrue(18.0 < backlog <= 20.0, f"one start slot for the visit, got backlog {backlog}")
+        # the redirect hop did not wait the 20 s Crawl-delay (a busy machine is slow, never 20 s slow)
+        self.assertLess(t1 - t0, 15.0)
+        # ONE start slot for the visit: the next start is 20 s after a slot taken during the call (two
+        # slots would put it 40 s out). Read as the absolute moment, not as time left from now.
+        nxt = upstreams.host_guard("blog.iclr.cc").pace_state["next_at"]
+        self.assertTrue(t0 + 20.0 - 1e-6 <= nxt <= t1 + 20.0 + 1e-6,
+                        f"one start slot for the visit: next start {nxt - t0:.2f}s after the call began, "
+                        f"the call took {t1 - t0:.2f}s")
 
     def test_T7_a_redirect_landing_on_a_gated_host_takes_its_gate(self):
         """probe_e: example.org 302s to a host with a 0.3 s Crawl-delay, twice; then that host is read
@@ -2217,10 +2320,11 @@ class RedirectRuleTests(unittest.TestCase):
         saved = http._client
         http._client = None
         try:
-            with _temp_host_delay(landing, 0.3), \
+            with _temp_host_delay(landing, 0.3) as hg, \
                     mock.patch.object(httpx.HTTPTransport, "handle_request", handle), \
                     mock.patch.object(http._netguard, "security_block_reason", lambda url: None), \
-                    mock.patch.object(http._netguard, "resolve_pin", _no_pin):
+                    mock.patch.object(http._netguard, "resolve_pin", _no_pin), \
+                    _start_slots(hg) as slots:
                 for url in ("https://example.org/a", "https://example.org/b",
                             f"https://{landing}/c", f"https://{landing}/d"):
                     self.assertIsNotNone(http.get_text(url))
@@ -2228,9 +2332,8 @@ class RedirectRuleTests(unittest.TestCase):
             if http._client is not None:
                 http._client.close()
             http._client = saved
-        gaps = [b - a for a, b in zip(stamps, stamps[1:])]
         self.assertEqual(4, len(stamps))
-        self.assertGreaterEqual(min(gaps), 0.3 - 0.02, gaps)
+        _assert_paced(self, stamps, slots[hg], 0.3, what="the landing host")
 
     def test_a_cross_host_redirect_never_holds_two_host_gates(self):
         a, b = "a-host.test.invalid", "b-host.test.invalid"
@@ -2266,19 +2369,27 @@ class RedirectRuleTests(unittest.TestCase):
         self.assertEqual([(a, 0, 1), (b, 1, 0)], states)
         self.assertEqual(((0, 1), (1, 0)), (held_a, held_b))
 
+    # The chain's budget is spent by real waiting at the gates, so these cases measure real time. They
+    # run at 4 times the scale the docstrings name (a 0.5 s budget is 2.0 s here): the margins were
+    # 0.1 s, and a busy machine's extra time at a gate was measured past that (2026-10-04).
+    _CHAIN_SCALE = 4.0
+
     def _chain(self, make_gates, first_wait, network, second_wait, deadline=None):
         """Two gated hosts, max_wait_s 0.5 each. The first hop waits ``first_wait`` at its gate (its
         next start is that far away), then ``network`` seconds pass with no waiting (the first
         response), then the second hop has to wait ``second_wait`` at its gate. Returns (admitted,
-        seconds the second hop took or the refusal)."""
+        seconds the second hop took or the refusal). Every number is multiplied by _CHAIN_SCALE;
+        the seconds returned are divided by it, so callers read the docstring's scale."""
+        s = self._CHAIN_SCALE
         a, b = "chain-a.test.invalid", "chain-b.test.invalid"
-        with _temp_upstream("t-chain-a", a, {"max_inflight": 1, "max_wait_s": 0.5}) as ga, \
-                _temp_upstream("t-chain-b", b, {"max_inflight": 1, "max_wait_s": 0.5}) as gb:
+        with _temp_upstream("t-chain-a", a, {"max_inflight": 1, "max_wait_s": 0.5 * s}) as ga, \
+                _temp_upstream("t-chain-b", b, {"max_inflight": 1, "max_wait_s": 0.5 * s}) as gb:
             _reset_guard(ga)
             _reset_guard(gb)
             try:
-                with _deadline(deadline) if deadline is not None else contextlib.nullcontext():
-                    return make_gates(a, b, ga, gb, first_wait, network, second_wait)
+                with _deadline(deadline * s) if deadline is not None else contextlib.nullcontext():
+                    ok, out = make_gates(a, b, ga, gb, first_wait * s, network * s, second_wait * s)
+                    return ok, (out / s if ok else out)
             finally:
                 _reset_guard(ga)
                 _reset_guard(gb)
@@ -2477,7 +2588,8 @@ class ModuleClientRedirectTests(unittest.TestCase):
     def test_a_module_client_and_direct_take_the_landing_hosts_gate(self):
         landing, stamps, held = "landing-sync.test.invalid", [], []
         with _temp_host_delay(landing, 0.3) as g, \
-                mock.patch.object(httpx.HTTPTransport, "handle_request", self._via(landing, stamps, held)):
+                mock.patch.object(httpx.HTTPTransport, "handle_request", self._via(landing, stamps, held)), \
+                _start_slots(g) as slots:
             with http.HopClient(follow_redirects=True, timeout=5) as c:
                 for _ in range(2):
                     self.assertEqual(200, c.get("https://example.org/a").status_code)
@@ -2485,9 +2597,8 @@ class ModuleClientRedirectTests(unittest.TestCase):
                 self.assertEqual(200, http.direct("GET", "https://example.org/b",
                                                   follow_redirects=True).status_code)
             free = g.sema._value
-        gaps = [b - a for a, b in zip(stamps, stamps[1:])]
         self.assertEqual(([True] * 4, 1), (held, free))
-        self.assertGreaterEqual(min(gaps), 0.3 - 0.02, gaps)
+        _assert_paced(self, stamps, slots[g], 0.3, what="the landing host")
 
     def test_the_async_module_client_takes_it_too(self):
         landing, stamps, held = "landing-async.test.invalid", [], []
@@ -2500,12 +2611,12 @@ class ModuleClientRedirectTests(unittest.TestCase):
                                                       follow_redirects=True)).status_code)
         with _temp_host_delay(landing, 0.3) as g, \
                 mock.patch.object(httpx.AsyncHTTPTransport, "handle_async_request",
-                                  _async_of(self._via(landing, stamps, held))):
+                                  _async_of(self._via(landing, stamps, held))), \
+                _start_slots(g) as slots:
             anyio.run(run)
             free = g.sema._value
-        gaps = [b - a for a, b in zip(stamps, stamps[1:])]
         self.assertEqual(([True] * 3, 1), (held, free))
-        self.assertGreaterEqual(min(gaps), 0.3 - 0.02, gaps)
+        _assert_paced(self, stamps, slots[g], 0.3, what="the landing host")
 
     def test_a_streamed_body_keeps_its_gate_until_it_is_closed(self):
         host = "stream.test.invalid"
@@ -2914,11 +3025,16 @@ class DeferralTests(unittest.TestCase):
                         mock.patch.object(http._netguard, "resolve_pin", _no_pin), \
                         mock.patch.object(cache, "get", lambda *a, **k: None), \
                         mock.patch.object(cache, "set", lambda *a, **k: None):
+                    t0 = time.monotonic()
                     with contextlib.suppress(Exception):
                         call()
-                backlog = g.pace_backlog_s()
+                nxt = g.pace_state["next_at"]
                 _reset_guard(g)
-                self.assertGreater(backlog, 25, f"{uid}: Retry-After 30 left a backlog of {backlog:.1f}s")
+                # deferred to at least 30 s after a moment inside the call (absolute, so a slow call
+                # cannot eat into it the way "seconds left from now" did)
+                self.assertGreaterEqual(nxt, t0 + 30.0 - 1e-6,
+                                        f"{uid}: Retry-After 30 deferred the next start only "
+                                        f"{nxt - t0:.1f}s past the call's start")
         if http._client is not None:
             http._client.close()
         http._client, core_source._acore_client_obj = saved
@@ -2953,8 +3069,19 @@ class DeferralTests(unittest.TestCase):
         from omniseek.core import safeurl
         only, both, pinned, byid = ("only.test.invalid", "both.test.invalid", "pinned.test.invalid",
                                     "byid.test.invalid")
-        when = email.utils.format_datetime(datetime.now(timezone.utc) + timedelta(seconds=60),
-                                           usegmt=True)
+        # the HTTP-date form names a wall-clock moment (whole seconds): on the monotonic clock it is
+        # (59, 60] s after this line, however long the rest of the case takes
+        mono_w, wall_w = time.monotonic(), datetime.now(timezone.utc)
+        when = email.utils.format_datetime(wall_w + timedelta(seconds=60), usegmt=True)
+        span = {}
+
+        @contextlib.contextmanager
+        def timed(key):
+            t0 = time.monotonic()
+            try:
+                yield
+            finally:
+                span[key] = (t0, time.monotonic())
 
         def handle(self_, request):
             ra = when if _host_of(request) == pinned else "30"
@@ -2974,15 +3101,20 @@ class DeferralTests(unittest.TestCase):
                                       lambda host: ("93.184.216.34", socket.AF_INET, None)):
                 for g in (g_only, g_pinned, g_byid, g_up, g_both):
                     _reset_guard(g)
-                self.assertIsNone(http.get_text(f"https://{only}/x"))          # the shared client
+                with timed("only"):
+                    self.assertIsNone(http.get_text(f"https://{only}/x"))      # the shared client
                 res = safeurl.safe_fetch(f"https://{pinned}/x")                # omniseek_read's read
-                self.assertIsNone(http.get_text(f"https://{both}/x"))
-                upstreams.observe_response("t-both", httpx.Response(               # an upstream id:
-                    429, headers={"Retry-After": "30"},                             # the response's
-                    request=httpx.Request("GET", f"https://{byid}/y")))            # own host counts
-                backlog = {k: g.pace_backlog_s() for k, g in (("only", g_only), ("pinned", g_pinned),
-                                                              ("byid", g_byid), ("upstream", g_up),
-                                                              ("host", g_both))}
+                with timed("both"):
+                    self.assertIsNone(http.get_text(f"https://{both}/x"))
+                with timed("byid"):
+                    upstreams.observe_response("t-both", httpx.Response(           # an upstream id:
+                        429, headers={"Retry-After": "30"},                         # the response's
+                        request=httpx.Request("GET", f"https://{byid}/y")))        # own host counts
+                # the absolute moment each gate's next start was pushed to (not "seconds left from
+                # now", which a slow machine eats into)
+                nxt = {k: g.pace_state["next_at"] for k, g in (("only", g_only), ("pinned", g_pinned),
+                                                               ("byid", g_byid), ("upstream", g_up),
+                                                               ("host", g_both))}
                 for g in (g_only, g_pinned, g_byid, g_up, g_both):
                     _reset_guard(g)
         finally:
@@ -2990,10 +3122,18 @@ class DeferralTests(unittest.TestCase):
                 http._client.close()
             http._client = saved
         self.assertEqual((True, 429), (res["ok"], res["status"]))
-        self.assertTrue(25 < backlog["only"] <= 30.5, backlog)
-        self.assertTrue(55 < backlog["pinned"] <= 61, backlog)                   # the HTTP-date form
-        self.assertTrue(25 < backlog["upstream"] <= 30.5 and 25 < backlog["host"] <= 30.5, backlog)
-        self.assertTrue(25 < backlog["byid"] <= 30.5, backlog)
+
+        def thirty_after(key, call, last_call=None):
+            t0, t1 = span[call][0], span[last_call or call][1]
+            self.assertTrue(t0 + 30.0 - 1e-6 <= nxt[key] <= t1 + 30.0 + 1e-6,
+                            f"{key}: next start {nxt[key] - t0:.2f}s after its call began "
+                            f"(the call took {t1 - t0:.2f}s); Retry-After said 30 s")
+        thirty_after("only", "only")
+        self.assertTrue(59.0 - 0.05 < nxt["pinned"] - mono_w <= 60.0 + 0.05,     # the HTTP-date form
+                        f"pinned: next start {nxt['pinned'] - mono_w:.2f}s after the date was written")
+        thirty_after("upstream", "both", "byid")   # the upstream id's own 429 deferred it once more
+        thirty_after("host", "both")
+        thirty_after("byid", "byid")
 
     def test_an_exempt_module_still_defers_the_hosts_crawl_delay_gate(self):
         """Driver ruling of 2026-09-29: defer_on_429=False (a module in SELF_BACKOFF) exempts the
@@ -3330,14 +3470,17 @@ class GitHubCodeSearchGateTests(unittest.TestCase):
 
 class _SlowBody(httpx.SyncByteStream):
     """A response body that arrives in ``n`` blocks of 512 bytes, ``gap`` seconds apart (``stall`` seconds
-    instead before block ``stall_at``); ``probe`` (optional) is called just before each block leaves."""
+    instead before block ``stall_at``); ``probe`` (optional) is called just before each block leaves.
+    ``wait`` passes the time before a block (``time.sleep``; a case on the gates' clock moves that clock
+    instead, see ``_GateClock``)."""
 
-    def __init__(self, n=10, gap=0.1, stall_at=None, stall=0.0, probe=None):
+    def __init__(self, n=10, gap=0.1, stall_at=None, stall=0.0, probe=None, wait=None):
         self.n, self.gap, self.stall_at, self.stall, self.probe = n, gap, stall_at, stall, probe
+        self.wait = wait if wait is not None else time.sleep
 
     def __iter__(self):
         for i in range(self.n):
-            time.sleep(self.stall if i == self.stall_at else self.gap)
+            self.wait(self.stall if i == self.stall_at else self.gap)
             if self.probe is not None:
                 self.probe()
             yield b"x" * 512
@@ -3347,14 +3490,20 @@ class _SlowBody(httpx.SyncByteStream):
 
 
 class _ASlowBody(httpx.AsyncByteStream):
-    """Async twin of ``_SlowBody`` (``n`` blocks, ``gap`` seconds apart)."""
+    """Async twin of ``_SlowBody`` (``n`` blocks, ``gap`` seconds apart; ``stall`` before ``stall_at``).
+    A ``wait`` given is called instead of ``asyncio.sleep`` (the gates' clock)."""
 
-    def __init__(self, n=10, gap=0.1):
-        self.n, self.gap = n, gap
+    def __init__(self, n=10, gap=0.1, stall_at=None, stall=0.0, wait=None):
+        self.n, self.gap, self.stall_at, self.stall, self.wait = n, gap, stall_at, stall, wait
 
     async def __aiter__(self):
-        for _ in range(self.n):
-            await asyncio.sleep(self.gap)
+        for i in range(self.n):
+            seconds = self.stall if i == self.stall_at else self.gap
+            if self.wait is None:
+                await asyncio.sleep(seconds)
+            else:
+                self.wait(seconds)
+                await asyncio.sleep(0)
             yield b"x" * 512
 
     async def aclose(self):
@@ -3366,42 +3515,79 @@ class ProgressLeaseTests(unittest.TestCase):
     lease by its progress or has a total deadline no later than the lease. Where OmniSeek reads the body
     itself, every block of it moves the lease to that moment plus the request's own timeout; a holder
     that makes no progress is still reclaimed when its lease runs out; a library that reads the body
-    where OmniSeek cannot see it is cut at a total deadline within the lease."""
+    where OmniSeek cannot see it is cut at a total deadline within the lease.
+
+    The races run on the gates' own clock (``_GateClock``, 2026-10-04): the body's blocks move it, and
+    after every 0.05 s of it the gate looks at its leases the way a caller waiting in line does. So a
+    lease runs out exactly where the script says, never because the machine was busy."""
 
     HOST = "progress.test.invalid"
     SIZE = 10 * 512
+    _STEP = 0.05   # how often (on the gates' clock) the gate looks at its leases during a race
 
-    def _race(self, send):
-        """``send(url)`` makes one request to HOST (its timeout 0.3 s; the body takes about 1 s) under a
-        gate of one permit and a declared 0.3 s waiting budget, so its lease ends 0.6 s after it took the
-        permit unless the body renews it. As soon as the permit is taken, another caller asks for the gate
-        and may wait 3 s. Returns (how long the other caller waited, or what refused it; leases the gate
-        took back)."""
+    def _race(self, send, *, stall_at=None, stall=0.0):
+        """``send(url)`` makes one request to HOST (its timeout 0.3 s; the body takes 1 s on the gates'
+        clock) under a gate of one permit and a declared 0.3 s waiting budget, so its lease ends 0.6 s
+        after it took the permit unless the body renews it. Before the first block arrives another caller
+        is in line for the gate (it may wait 3 s). Returns a dict: ``got_in`` (how long the other caller
+        waited, or what refused it), ``lost_at`` (when the request's permit was taken back while its body
+        was still arriving; None if never), ``reclaimed`` (leases the gate took back), ``leases`` (how
+        many the request held)."""
         url = f"https://{self.HOST}/body"
-        with _temp_upstream("t-progress", self.HOST, {"max_inflight": 1, "max_wait_s": 0.3}) as g:
+        clock = _GateClock()
+        with _temp_upstream("t-progress", self.HOST, {"max_inflight": 1, "max_wait_s": 0.3}) as g, \
+                mock.patch.object(guard_mod, "time", clock):
             _reset_guard(g)
+            st = {"leases": None, "t0": None, "lost_at": None}
+            asked = threading.Event()
             got_in = []
 
             def other_caller():
-                give_up = time.monotonic() + 3.0
-                while g.sema._value > 0 and time.monotonic() < give_up:   # until the request holds it
-                    time.sleep(0.005)
-                t0 = time.monotonic()
+                if not asked.wait(30):
+                    got_in.append("the request never reached its body")
+                    return
+                t0 = clock.monotonic()
                 try:
                     with g.hold(3.0, lambda w: upstreams.UpstreamBusy("busy"),
                                 lambda w: upstreams.UpstreamBusy("late")):
-                        got_in.append(time.monotonic() - t0)
+                        got_in.append(clock.monotonic() - t0)
                 except upstreams.UpstreamBusy as exc:
                     got_in.append(exc)
+
+            def wait(seconds):
+                if st["t0"] is None:   # the first block: the request holds the gate, the rival queues
+                    st["leases"] = list(g.sema._leases)
+                    st["t0"] = clock.monotonic()
+                    asked.set()
+                    _wait_for(lambda: g.sema._waiters or got_in, "the other caller to queue at the gate")
+                for _ in range(int(round(seconds / self._STEP))):
+                    clock.advance(self._STEP)
+                    g.sema.reclaim_expired()   # what a caller waiting in line does when it looks
+                    if st["lost_at"] is None and not all(x.active for x in st["leases"]):
+                        st["lost_at"] = clock.monotonic() - st["t0"]
+            self._script = {"wait": wait, "stall_at": stall_at, "stall": stall}
             t = threading.Thread(target=other_caller)
             t.start()
             try:
                 send(url)
             finally:
-                t.join(5)
-            reclaimed = g.snapshot()["leases_reclaimed"]
+                asked.set()
+                t.join(30)
+                self._script = None
+            reclaimed = g.sema.reclaimed
             _reset_guard(g)
-        return (got_in or ["the other caller never finished"])[0], reclaimed
+        return {"got_in": (got_in or ["the other caller never finished"])[0], "lost_at": st["lost_at"],
+                "reclaimed": reclaimed, "leases": len(st["leases"] or ())}
+
+    _script = None
+
+    def _body(self):
+        s = self._script or {}
+        return _SlowBody(stall_at=s.get("stall_at"), stall=s.get("stall", 0.0), wait=s.get("wait"))
+
+    def _abody(self):
+        s = self._script or {}
+        return _ASlowBody(stall_at=s.get("stall_at"), stall=s.get("stall", 0.0), wait=s.get("wait"))
 
     def _paths(self):
         """(name, send) for every way OmniSeek reads a body itself, each request with a 0.3 s timeout, and
@@ -3409,6 +3595,7 @@ class ProgressLeaseTests(unittest.TestCase):
         import types
         from omniseek.core import safeurl
         size = self.SIZE
+        body_of = self._body
 
         def busy(waited):
             return upstreams.UpstreamBusy("busy")
@@ -3490,7 +3677,7 @@ class ProgressLeaseTests(unittest.TestCase):
                     return None
 
                 def iter_content(self, chunk_size=None):
-                    yield from _SlowBody()
+                    yield from body_of()
 
                 def close(self):
                     return None
@@ -3520,17 +3707,17 @@ class ProgressLeaseTests(unittest.TestCase):
                 ("curl tier download (asr audio download)", curl_download)]
 
     @contextlib.contextmanager
-    def _wire(self, body=_SlowBody):
-        """Every httpx transport answers 200 with a slow body (sync: ``body()``; async: _ASlowBody). No DNS,
-        no socket."""
+    def _wire(self, body=None):
+        """Every httpx transport answers 200 with a slow body (``body()`` when given, else the race's
+        script: ``_body`` / ``_abody``). No DNS, no socket."""
         from omniseek.core import safeurl
 
         def handle(self_, request):
-            return httpx.Response(200, headers={"content-type": "text/plain"}, stream=body(),
-                                  request=request)
+            return httpx.Response(200, headers={"content-type": "text/plain"},
+                                  stream=body() if body is not None else self._body(), request=request)
 
         async def ahandle(self_, request):
-            return httpx.Response(200, headers={"content-type": "text/plain"}, stream=_ASlowBody(),
+            return httpx.Response(200, headers={"content-type": "text/plain"}, stream=self._abody(),
                                   request=request)
         with mock.patch.object(httpx.HTTPTransport, "handle_request", handle), \
                 mock.patch.object(httpx.AsyncHTTPTransport, "handle_async_request", ahandle), \
@@ -3554,29 +3741,34 @@ class ProgressLeaseTests(unittest.TestCase):
 
     def test_a_request_making_progress_keeps_its_lease_on_every_path(self):
         """Every block of the body renews the lease to that moment plus 0.3 s, so the other caller gets in
-        when the transfer is over (about 1 s after it asked), not when the first lease would have run out
-        (0.6 s), and no lease is taken back."""
+        when the transfer is over (1 s after it asked), not when the first lease would have run out
+        (0.6 s): at no look of the gate during the transfer is the request's permit taken back."""
         with self._fresh_clients(), self._wire():
             http._get_client()   # built before the races (a build takes a moment; see the first-request test)
             for name, send in self._paths():
                 with self.subTest(path=name):
-                    got_in, reclaimed = self._race(send)
-                    self.assertIsInstance(got_in, float, f"{name}: {got_in!r}")
-                    self.assertGreater(got_in, 0.85, f"{name}: the other caller got in after {got_in:.2f}s")
-                    self.assertEqual(0, reclaimed, name)
+                    r = self._race(send)
+                    self.assertGreater(r["leases"], 0, f"{name}: the request held no permit of the gate")
+                    self.assertIsNone(r["lost_at"], f"{name}: the permit was taken back {r['lost_at']}s "
+                                                    f"into a transfer that was still arriving")
+                    self.assertEqual(0, r["reclaimed"], name)
+                    self.assertIsInstance(r["got_in"], float, f"{name}: {r['got_in']!r}")
+                    self.assertGreater(r["got_in"], 0.85,
+                                       f"{name}: the other caller got in after {r['got_in']:.2f}s")
 
     def test_a_request_that_stops_making_progress_is_reclaimed(self):
         """The same race, but the body stalls for 1.5 s after its sixth block: those blocks moved the lease
-        to 0.3 s after the last of them (about 0.9 s in), and with no progress after that the lease runs
-        out there and the gate gives the permit to the caller in line."""
-        with self._fresh_clients(), \
-                self._wire(lambda: _SlowBody(n=10, gap=0.1, stall_at=6, stall=1.5)):
+        to 0.3 s after the last of them (0.9 s in), and with no progress after that the lease runs out
+        there and the gate gives the permit to the caller in line."""
+        with self._fresh_clients(), self._wire():
             http._get_client()
-            got_in, reclaimed = self._race(lambda url: http.get_text(url, timeout=0.3))
-        self.assertIsInstance(got_in, float, repr(got_in))
-        self.assertGreater(got_in, 0.8, f"the blocks before the stall did not renew the lease ({got_in:.2f}s)")
-        self.assertLess(got_in, 1.3, f"the stalled holder kept the gate {got_in:.2f}s")
-        self.assertEqual(1, reclaimed)
+            r = self._race(lambda url: http.get_text(url, timeout=0.3), stall_at=6, stall=1.5)
+        lost = r["lost_at"]
+        self.assertIsNotNone(lost, "the stalled holder kept the gate")
+        self.assertGreater(lost, 0.8, f"the blocks before the stall did not renew the lease ({lost:.2f}s)")
+        self.assertLess(lost, 1.3, f"the stalled holder kept the gate {lost:.2f}s")
+        self.assertEqual(1, r["reclaimed"])
+        self.assertIsInstance(r["got_in"], float, repr(r["got_in"]))
 
     def test_a_download_with_a_fixed_timeout_renews_its_lease_as_it_arrives(self):
         """docreader's download (its own client with http.progress_hooks(), a 90 s request): at every block
@@ -3585,13 +3777,15 @@ class ProgressLeaseTests(unittest.TestCase):
         from omniseek.core import docreader
         host = "doc.test.invalid"
         seen = []
-        with _temp_upstream("t-doc", host, {"max_inflight": 1, "max_wait_s": 0.01}) as g:
+        clock = _GateClock()
+        with _temp_upstream("t-doc", host, {"max_inflight": 1, "max_wait_s": 0.01}) as g, \
+                mock.patch.object(guard_mod, "time", clock):
             _reset_guard(g)
 
             def probe():
                 with g.sema._lock:
-                    seen.append((time.monotonic(), max((x.expires_at for x in g.sema._leases), default=None)))
-            with self._wire(lambda: _SlowBody(n=6, gap=0.05, probe=probe)):
+                    seen.append((clock.monotonic(), max((x.expires_at for x in g.sema._leases), default=None)))
+            with self._wire(lambda: _SlowBody(n=6, gap=0.05, probe=probe, wait=clock.advance)):
                 path, _, _ = docreader._download(f"https://{host}/paper.pdf", "pdf")
             path.unlink()
             _reset_guard(g)
@@ -3600,16 +3794,20 @@ class ProgressLeaseTests(unittest.TestCase):
         self.assertNotIn(None, ends)
         self.assertGreater(ends[1], ends[0], "the first block did not move the lease")
         self.assertTrue(all(b > a for a, b in zip(ends[1:], ends[2:])), ends)
-        self.assertAlmostEqual(seen[-2][0] + 90.0, ends[-1], delta=0.03)
+        self.assertAlmostEqual(seen[-2][0] + 90.0, ends[-1], delta=1e-6)   # the gates' clock: exact
 
     def test_a_library_request_is_cut_at_its_total_deadline(self):
         """semanticscholar reads each response inside its own httpx.AsyncClient: OmniSeek cannot see the
         body arrive, so each of its requests is cut at TIMEOUT from its start (here 0.3 s), within the
-        permit's lease; the permit is back at once and nothing is reclaimed."""
+        permit's lease; the permit is back at once and nothing is reclaimed.
+
+        The cut is asyncio.wait_for on the wall clock, so this case measures real time: the request would
+        hang 30 s, and anything under 10 s is the cut (a busy machine was measured taking 2.05 s here
+        against the old 1.5 s bound, 2026-10-04)."""
         from omniseek.core import _s2
 
         async def hang(self_, request):
-            await asyncio.sleep(5)
+            await asyncio.sleep(30)
             return httpx.Response(200, json={}, request=request)
         g = _s2._guard
         saved = _s2._client
@@ -3626,7 +3824,8 @@ class ProgressLeaseTests(unittest.TestCase):
         finally:
             _s2._client = saved
             _reset_guard(g)
-        self.assertLess(took, 1.5, f"the library's request ran {took:.2f}s past a 0.3 s deadline")
+        self.assertLess(took, 10.0, f"the library's request ran {took:.2f}s past a 0.3 s deadline "
+                                    f"(it would hang 30 s)")
         self.assertIsNone(out)
         self.assertEqual((g.max_inflight, 0), (free, reclaimed))
 
@@ -3634,19 +3833,25 @@ class ProgressLeaseTests(unittest.TestCase):
         """A paginated semanticscholar call reads its pages under one hold (an author's 200 works come 100
         to a page). Each request the library sends starts only after the one before it returned: it renews
         the hold's lease to TIMEOUT from its start and is cut there (TIMEOUT 0.3 s here; the library's
-        requester is a stand-in)."""
+        requester is a stand-in). The pages and the leases run on the gates' clock (a page that answers
+        moves it); the cut itself is asyncio.wait_for on the wall clock, so the hanging page would hang
+        30 s and anything under 10 s is the cut."""
         import types
         from omniseek.core import _s2
+        clock = _GateClock()
 
         class _Requester:
             delay = 0.2
+            hang = False
 
             async def get_data_async(self, url, parameters, headers, payload=None):
-                await asyncio.sleep(self.delay)
+                if self.hang:
+                    await asyncio.sleep(30)
+                clock.advance(self.delay)
                 return {"url": url}
         req = _Requester()
         client = types.SimpleNamespace(_AsyncSemanticScholar=types.SimpleNamespace(_requester=req))
-        with mock.patch.object(_s2, "TIMEOUT", 0.3), \
+        with mock.patch.object(_s2, "TIMEOUT", 0.3), mock.patch.object(guard_mod, "time", clock), \
                 _temp_upstream("t-pages", "pages.test.invalid", {"max_inflight": 1, "max_wait_s": 0.05}) as g:
             _s2._bound_requests(client)
             _reset_guard(g)
@@ -3654,23 +3859,25 @@ class ProgressLeaseTests(unittest.TestCase):
                 lease = g.sema._leases[0]
                 first_end = lease.expires_at
                 self.assertEqual({"url": "p1"}, asyncio.run(req.get_data_async("p1", "", {})))
-                started = time.monotonic()
+                started = clock.monotonic()
                 self.assertEqual({"url": "p2"}, asyncio.run(req.get_data_async("p2", "", {})))
                 second_end = lease.expires_at
-                req.delay = 5.0
+                req.hang = True
                 t0 = time.monotonic()
                 with self.assertRaises(TimeoutError):
                     asyncio.run(req.get_data_async("p3", "", {}))
                 took = time.monotonic() - t0
             _reset_guard(g)
         self.assertGreater(second_end, first_end, "the second page did not renew the lease")
-        self.assertAlmostEqual(started + 0.3, second_end, delta=0.05)
-        self.assertLess(took, 0.6, f"a hanging page ran {took:.2f}s past a 0.3 s deadline")
+        self.assertAlmostEqual(started + 0.3, second_end, delta=1e-6)
+        self.assertLess(took, 10.0, f"a hanging page ran {took:.2f}s past a 0.3 s deadline (it would hang 30 s)")
 
     def test_the_curl_tier_cuts_a_trickling_body_at_its_timeout(self):
         """The curl tier reads a non-streamed body inside libcurl, where OmniSeek cannot see it arrive: its
         timeout is the whole request's (curl_cffi sets libcurl's TIMEOUT_MS). A local server that sends
-        one byte every 0.1 s is cut at 0.6 s, within the lease; the gate is free and nothing is reclaimed."""
+        one byte every 0.1 s is cut at 0.6 s, within the lease; the gate is free and nothing is reclaimed.
+        libcurl's timeout is on the wall clock, so this measures real time: the server would trickle for
+        30 s, and anything under 10 s is the cut."""
         try:
             from curl_cffi import requests as _creq  # noqa: F401
         except Exception:  # noqa: BLE001
@@ -3690,7 +3897,7 @@ class ProgressLeaseTests(unittest.TestCase):
             with conn:
                 conn.recv(65536)
                 conn.sendall(b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 100000\r\n\r\n")
-                for _ in range(50):   # one byte every 0.1 s, for at most 5 s
+                for _ in range(300):   # one byte every 0.1 s, for at most 30 s
                     if stop.is_set():
                         return
                     try:
@@ -3714,7 +3921,8 @@ class ProgressLeaseTests(unittest.TestCase):
             srv.close()
             t.join(5)
         self.assertIsNone(out)
-        self.assertLess(took, 2.0, f"the trickling body ran {took:.2f}s past a 0.6 s timeout")
+        self.assertLess(took, 10.0, f"the trickling body ran {took:.2f}s past a 0.6 s timeout "
+                                    f"(it trickles for 30 s)")
         self.assertEqual((1, 0), (free, reclaimed))
 
     def test_the_bluesky_library_client_gets_the_progress_hook(self):
@@ -3737,13 +3945,15 @@ class ProgressLeaseTests(unittest.TestCase):
     def _first_request(self, kind: str) -> "tuple[float, int]":
         """The first request in the process to a Crawl-delay host (0.5 s), while the first build of the
         shared client takes 0.4 s. Returns (how long after its start slot it reached the wire, requests
-        on the wire)."""
+        on the wire). On the gates' clock: the build moves it 0.4 s, nothing else does, so a build inside
+        the gate shows as exactly 0.4 s late and one before it as 0."""
         host = f"first-{kind}.test.invalid"
         url = f"https://{host}/a"
         wire = []
+        clock = _GateClock()
 
         def handle(self_, request):
-            wire.append(time.monotonic())
+            wire.append(clock.monotonic())
             return httpx.Response(200, headers={"content-type": "application/json"},
                                   stream=httpx.ByteStream(b'{"jsonrpc": "2.0", "id": 1, "result": {}}'),
                                   request=request)
@@ -3751,12 +3961,12 @@ class ProgressLeaseTests(unittest.TestCase):
 
         def slow_sync():
             if http._client is None:
-                time.sleep(0.4)
+                clock.advance(0.4)
             return real_sync()
 
         def slow_async():
             if http._aclient is None:
-                time.sleep(0.4)
+                clock.advance(0.4)
             return real_async()
         with self._fresh_clients(), _temp_host_delay(host, 0.5) as hg, \
                 mock.patch.object(httpx.HTTPTransport, "handle_request", handle), \
@@ -3764,7 +3974,8 @@ class ProgressLeaseTests(unittest.TestCase):
                 mock.patch.object(http._netguard, "security_block_reason", lambda url: None), \
                 mock.patch.object(http._netguard, "resolve_pin", _no_pin), \
                 mock.patch.object(http, "_get_client", slow_sync), \
-                mock.patch.object(http, "_aget_client", slow_async):
+                mock.patch.object(http, "_aget_client", slow_async), \
+                mock.patch.object(guard_mod, "time", clock):
             _reset_guard(hg)
             if kind == "async":
                 async def run():
@@ -3867,15 +4078,26 @@ class FirstByteLeaseTests(unittest.TestCase):
 
     HOST = "slow-first-byte.test.invalid"
 
+    _B_ASKS_AT = 1.35   # when (after A took the permit) B asks for the gate
+
     def _first_byte_race(self, send_a, *, sent_at=0.5, headers_at=1.4):
         """X's probe_u as a test. A gate of 1 permit, declared max_wait_s 0.3 s; request A (its timeout
         1.0 s, so its lease ends 1.3 s after it took the permit) is sent ``sent_at`` seconds in (connecting
         and writing) and answered at ``headers_at`` (its first byte), each phase inside its 1.0 s timeout.
         1.35 s after A took the permit, B (a plain http.get) asks for the gate. Returns (the most requests
-        on the wire at once, leases taken back, what B got)."""
+        on the wire at once, leases taken back, what B got).
+
+        On the gates' clock (``_GateClock``, 2026-10-04): A's transport moves it to each moment of the
+        script, and when it reaches 1.35 s B asks and A waits until B has either queued at the gate or
+        got onto the wire, before moving on. So which of the two happens is decided by the leases alone,
+        however late a thread runs."""
         url_a, url_b = f"https://{self.HOST}/a", f"https://{self.HOST}/b"
         wire = {"now": 0, "peak": 0}
         lock = threading.Lock()
+        clock = _GateClock()
+        base = clock.monotonic()
+        b_go = threading.Event()
+        got_b = []
 
         def enter():
             with lock:
@@ -3890,17 +4112,24 @@ class FirstByteLeaseTests(unittest.TestCase):
             return httpx.Response(200, headers={"content-type": "text/plain"}, stream=httpx.ByteStream(b"ok"),
                                   request=request)
 
+        def b_asks(g):
+            """Move the clock to 1.35 s, let B ask, and wait until B queued, is on the wire or is done."""
+            clock.set(base + self._B_ASKS_AT)
+            b_go.set()
+            _wait_for(lambda: g.sema._waiters or wire["now"] >= 2 or got_b, "B to ask for the gate")
+
         def handle(self_, request):   # httpcore's order: connect, send (trace event), wait for the headers
             enter()
             try:
                 if request.url.path != "/a":
-                    time.sleep(0.05)
                     return ok(request)
-                time.sleep(sent_at)
+                clock.set(base + sent_at)
                 trace = request.extensions.get("trace")
                 if trace is not None:
                     trace("http11.send_request_body.complete", {"request": request})
-                time.sleep(headers_at - sent_at)
+                if headers_at > self._B_ASKS_AT:
+                    b_asks(gate[0])
+                clock.set(base + headers_at)
                 return ok(request)
             finally:
                 leave()
@@ -3908,17 +4137,20 @@ class FirstByteLeaseTests(unittest.TestCase):
         async def ahandle(self_, request):
             enter()
             try:
-                await asyncio.sleep(sent_at)
+                clock.set(base + sent_at)
                 trace = request.extensions.get("trace")
                 if trace is not None:
                     await trace("http11.send_request_body.complete", {"request": request})
-                await asyncio.sleep(headers_at - sent_at)
+                if headers_at > self._B_ASKS_AT:
+                    b_asks(gate[0])
+                clock.set(base + headers_at)
                 return ok(request)
             finally:
                 leave()
         from omniseek.core import safeurl
-        got_b = []
+        gate = []
         with _temp_upstream("t-first-byte", self.HOST, {"max_inflight": 1, "max_wait_s": 0.3}) as g, \
+                mock.patch.object(guard_mod, "time", clock), \
                 mock.patch.object(httpx.HTTPTransport, "handle_request", handle), \
                 mock.patch.object(httpx.AsyncHTTPTransport, "handle_async_request", ahandle), \
                 mock.patch.object(http._netguard, "security_block_reason", lambda url: None), \
@@ -3926,20 +4158,21 @@ class FirstByteLeaseTests(unittest.TestCase):
                 mock.patch.object(safeurl, "_resolve_safe_ip",
                                   lambda host: ("93.184.216.34", socket.AF_INET, None)):
             _reset_guard(g)
+            gate.append(g)
 
             def caller_b():
-                give_up = time.monotonic() + 3.0
-                while g.sema._value > 0 and time.monotonic() < give_up:   # until A holds the permit
-                    time.sleep(0.005)
-                time.sleep(1.35)
-                got_b.append(http.get_text(url_b, timeout=1.0))
+                if b_go.wait(60):
+                    got_b.append(http.get_text(url_b, timeout=1.0))
             t = threading.Thread(target=caller_b)
             t.start()
             try:
                 send_a(url_a)
+                if not b_go.is_set():   # A was answered before 1.35 s: B asks after it
+                    b_asks(g)
             finally:
-                t.join(5)
-            reclaimed = g.snapshot()["leases_reclaimed"]
+                b_go.set()
+                t.join(60)
+            reclaimed = g.sema.reclaimed
             _reset_guard(g)
         return wire["peak"], reclaimed, (got_b or ["B never finished"])[0]
 
@@ -4024,7 +4257,9 @@ class FirstByteLeaseTests(unittest.TestCase):
 
         def run(send):
             seen = []
-            with _temp_upstream("t-headers", host, {"max_inflight": 1, "max_wait_s": 0.05}) as g:
+            clock = _GateClock()   # the headers arrive 0.2 s in on the gates' clock (exact)
+            with _temp_upstream("t-headers", host, {"max_inflight": 1, "max_wait_s": 0.05}) as g, \
+                    mock.patch.object(guard_mod, "time", clock):
                 _reset_guard(g)
 
                 def probe():
@@ -4042,13 +4277,11 @@ class FirstByteLeaseTests(unittest.TestCase):
                 headers_at = []
 
                 def handle(self_, request):
-                    time.sleep(0.2)
-                    headers_at.append(time.monotonic())
+                    headers_at.append(clock.advance(0.2))
                     return httpx.Response(200, stream=_Body(), request=request)
 
                 async def ahandle(self_, request):
-                    await asyncio.sleep(0.2)
-                    headers_at.append(time.monotonic())
+                    headers_at.append(clock.advance(0.2))
                     return httpx.Response(200, stream=_ABody(), request=request)
                 with mock.patch.object(httpx.HTTPTransport, "handle_request", handle), \
                         mock.patch.object(httpx.AsyncHTTPTransport, "handle_async_request", ahandle), \
@@ -4086,7 +4319,7 @@ class FirstByteLeaseTests(unittest.TestCase):
                 with self.subTest(path=name):
                     ahead = run(send)
                     self.assertIsNotNone(ahead, name)
-                    self.assertAlmostEqual(1.0, ahead, delta=0.05, msg=f"{name}: lease end minus the headers")
+                    self.assertAlmostEqual(1.0, ahead, delta=1e-6, msg=f"{name}: lease end minus the headers")
 
     def test_Q1_a_slow_connection_with_little_budget_left_keeps_its_permit(self):
         """The permit comes with little of the waiting budget left (declared max_wait_s 0.05 s, timeout 1.0 s:
@@ -4102,29 +4335,51 @@ class FirstByteLeaseTests(unittest.TestCase):
             return httpx.Response(200, stream=httpx.ByteStream(b"ok"), request=request)
 
         def run(send_a):
+            # on the gates' clock: A's transport moves it through the script; B asks at 0.5 s and A goes
+            # on only once B is in line (or, were the lease gone, through the gate)
             wire = {"now": 0, "peak": 0, "live_when_sent": None}
             lock = threading.Lock()
-            with _temp_upstream("t-slow-connect", host, {"max_inflight": 1, "max_wait_s": 0.05}) as g:
+            clock = _GateClock()
+            base = clock.monotonic()
+            b_go = threading.Event()
+            got_b = []
+            with _temp_upstream("t-slow-connect", host, {"max_inflight": 1, "max_wait_s": 0.05}) as g, \
+                    mock.patch.object(guard_mod, "time", clock):
                 _reset_guard(g)
 
                 def mark(name):
                     if name.endswith("send_request_body.complete"):
                         wire["live_when_sent"] = bool(g.sema._leases) and g.sema._leases[0].active
 
+                def b_asks():
+                    clock.set(base + 0.5)
+                    b_go.set()
+                    _wait_for(lambda: g.sema._waiters or got_b, "B to ask for the gate")
+
+                def script():
+                    """Each phase's name, with the clock moved to its moment; then the answer's."""
+                    at = 0.0
+                    for name, wait in steps:
+                        at += wait
+                        clock.set(base + at)
+                        yield name
+                    clock.set(base + at + 0.1)
+
+                def look(name):
+                    g.sema.reclaim_expired()   # what a waiter would do now
+                    mark(name)
+
                 def handle(self_, request):
                     with lock:
                         wire["now"] += 1
                         wire["peak"] = max(wire["peak"], wire["now"])
                     try:
+                        b_asks()
                         trace = request.extensions.get("trace")
-                        for name, wait in steps:
-                            time.sleep(wait)
+                        for name in script():
                             if trace is not None:
                                 trace(name, {})
-                            with g.sema._lock:
-                                g.sema._reclaim_locked(time.monotonic())   # what a waiter would do now
-                            mark(name)
-                        time.sleep(0.1)
+                            look(name)
                         return ok(request)
                     finally:
                         with lock:
@@ -4135,26 +4390,20 @@ class FirstByteLeaseTests(unittest.TestCase):
                         wire["now"] += 1
                         wire["peak"] = max(wire["peak"], wire["now"])
                     try:
+                        b_asks()
                         trace = request.extensions.get("trace")
-                        for name, wait in steps:
-                            await asyncio.sleep(wait)
+                        for name in script():
                             if trace is not None:
                                 await trace(name, {})
-                            with g.sema._lock:
-                                g.sema._reclaim_locked(time.monotonic())
-                            mark(name)
-                        await asyncio.sleep(0.1)
+                            look(name)
                         return ok(request)
                     finally:
                         with lock:
                             wire["now"] -= 1
-                got_b = []
 
                 def caller_b():
-                    give_up = time.monotonic() + 3.0
-                    while g.sema._value > 0 and time.monotonic() < give_up:
-                        time.sleep(0.005)
-                    time.sleep(0.5)
+                    if not b_go.wait(60):
+                        return
                     try:
                         with g.hold(3.0, lambda w: upstreams.UpstreamBusy("busy"),
                                     lambda w: upstreams.UpstreamBusy("late")):
@@ -4171,8 +4420,9 @@ class FirstByteLeaseTests(unittest.TestCase):
                     try:
                         send_a(f"https://{host}/a")
                     finally:
-                        t.join(5)
-                reclaimed = g.snapshot()["leases_reclaimed"]
+                        b_go.set()
+                        t.join(60)
+                reclaimed = g.sema.reclaimed
                 _reset_guard(g)
             return wire["live_when_sent"], reclaimed, (got_b or ["B never finished"])[0]
 
@@ -4197,14 +4447,18 @@ class FirstByteLeaseTests(unittest.TestCase):
                                      f"{name}: (lease live when the request was written, leases taken back, "
                                      f"A on the wire when B got in)")
 
-    def _loopback_renewals(self, run_async: bool) -> "tuple[list, float]":
-        """A real httpx and httpcore against a server on 127.0.0.1 that answers 0.4 s after the request:
-        the moments (after the start) at which the request's holds were renewed, and when it returned."""
+    def _loopback_renewals(self, run_async: bool) -> list:
+        """A real httpx and httpcore against a server on 127.0.0.1 that answers only once the request's
+        holds have been renewed twice (or after 20 s, which fails the case): for each renewal, whether
+        the server had already answered. Ordered by events, not timed, so a busy machine cannot move a
+        renewal to the other side of the answer (2026-10-04)."""
         srv = socket.socket()
         srv.bind(("127.0.0.1", 0))
         srv.listen(2)
-        srv.settimeout(5)
+        srv.settimeout(30)
         port = srv.getsockname()[1]
+        answered, twice = threading.Event(), threading.Event()
+        renewed, real = [], guard_mod.renew_handles
 
         def serve():
             try:
@@ -4213,57 +4467,58 @@ class FirstByteLeaseTests(unittest.TestCase):
                 return
             with conn:
                 conn.recv(65536)
-                time.sleep(0.4)
+                twice.wait(20)
+                answered.set()
                 conn.sendall(b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 2\r\n"
                              b"Connection: close\r\n\r\nok")
         th = threading.Thread(target=serve, daemon=True)
         th.start()
-        renewed, real = [], guard_mod.renew_handles
-        t0 = time.monotonic()
 
         def spy(handles):
             if handles:
-                renewed.append(round(time.monotonic() - t0, 3))
+                renewed.append(answered.is_set())
+                if len(renewed) >= 2:
+                    twice.set()
             real(handles)
         url = f"http://127.0.0.1:{port}/x"
         try:
             with ProgressLeaseTests._fresh_clients(self), \
-                    _temp_upstream("t-loopback", "127.0.0.1", {"max_inflight": 1, "max_wait_s": 1.0}) as g, \
+                    _temp_upstream("t-loopback", "127.0.0.1", {"max_inflight": 1, "max_wait_s": 30.0}) as g, \
                     mock.patch.object(http._netguard, "security_block_reason", lambda url: None), \
                     mock.patch.object(http._netguard, "resolve_pin", _no_pin), \
                     mock.patch.object(guard_mod, "renew_handles", spy):
                 http._get_client()
                 http._aget_client()
                 _reset_guard(g)
-                t0 = time.monotonic()
                 if run_async:
                     async def run():
                         try:
-                            return await http.aget_text(url, timeout=2.0)
+                            return await http.aget_text(url, timeout=30.0)
                         finally:
                             await http.aclose_client()
                     out = anyio.run(run)
                 else:
-                    out = http.get_text(url, timeout=2.0)
-                took = time.monotonic() - t0
+                    out = http.get_text(url, timeout=30.0)
                 _reset_guard(g)
         finally:
+            twice.set()
             srv.close()
             th.join(5)
         self.assertEqual("ok", out)
-        return renewed, took
+        return renewed
 
     def test_Q1_httpcore_reports_the_moment_the_request_is_sent(self):
         """Against a real httpcore (no stubbed transport): the request's holds are renewed when its
-        connection is made and when it has been sent, well before its headers (0.4 s), and again when the
-        headers arrive."""
+        connection is made and when it has been sent, before its headers (the server answers only after
+        those two), and again when the headers arrive."""
         for kind in (False, True):
             with self.subTest(client="async" if kind else "sync"):
-                renewed, took = self._loopback_renewals(kind)
-                self.assertTrue(renewed and renewed[0] < 0.3, f"renewed at {renewed} (answer at 0.4 s)")
-                # connected, then the request written: two renewals before the headers (plain HTTP, no TLS)
-                self.assertGreaterEqual(sum(x < 0.3 for x in renewed), 2, f"renewed at {renewed}")
-                self.assertTrue(any(x >= 0.35 for x in renewed), f"renewed at {renewed}: not at the headers")
+                renewed = self._loopback_renewals(kind)
+                # connected, then the request written: two renewals before the answer (plain HTTP, no TLS)
+                self.assertGreaterEqual(renewed.count(False), 2,
+                                        f"renewals before the answer: {renewed.count(False)} ({renewed})")
+                self.assertTrue(renewed and renewed[0] is False, f"renewed (answered yet?) {renewed}")
+                self.assertIn(True, renewed, f"renewed (answered yet?) {renewed}: not at the headers")
 
     def test_Q1_the_curl_tier_renews_each_hop_when_sent_and_when_answered(self):
         """The curl tier follows redirects hop by hop: a 302 answered 0.3 s in, then the page 0.6 s in
@@ -4272,7 +4527,9 @@ class FirstByteLeaseTests(unittest.TestCase):
         import types
         host = "curl-hops.test.invalid"
         seen = []
-        with _temp_upstream("t-curl-hops", host, {"max_inflight": 1, "max_wait_s": 0.05}) as g:
+        clock = _GateClock()   # each hop takes 0.3 s of the gates' clock (exact on any machine)
+        with _temp_upstream("t-curl-hops", host, {"max_inflight": 1, "max_wait_s": 0.05}) as g, \
+                mock.patch.object(guard_mod, "time", clock):
             _reset_guard(g)
 
             class _Resp:
@@ -4283,8 +4540,8 @@ class FirstByteLeaseTests(unittest.TestCase):
                     return None
 
             def request(method, url, **kw):
-                seen.append((time.monotonic(), g.sema._leases[0].expires_at))
-                time.sleep(0.3)
+                seen.append((clock.monotonic(), g.sema._leases[0].expires_at))
+                clock.advance(0.3)
                 if url.endswith("/a"):
                     return _Resp(302, {"location": f"https://{host}/b"})
                 return _Resp(200, {})
@@ -4292,13 +4549,13 @@ class FirstByteLeaseTests(unittest.TestCase):
             with mock.patch.object(http._netguard, "security_block_reason", lambda url: None), \
                     upstreams.hop_gates(request_s=1.0) as gates:
                 r = http._curl_hops(creq, "GET", f"https://{host}/a", gates, headers=None, timeout=1.0)
-                done, end = time.monotonic(), g.sema._leases[0].expires_at
+                done, end = clock.monotonic(), g.sema._leases[0].expires_at
             _reset_guard(g)
         self.assertEqual(200, r.status_code)
         self.assertEqual(2, len(seen))
         (t1, _), (t2, e2) = seen
-        self.assertAlmostEqual(t2 + 1.0, e2, delta=0.05)     # the first hop's answer, just before hop 2
-        self.assertAlmostEqual(done + 1.0, end, delta=0.05)  # the page's answer
+        self.assertAlmostEqual(t2 + 1.0, e2, delta=1e-6)     # the first hop's answer, just before hop 2
+        self.assertAlmostEqual(done + 1.0, end, delta=1e-6)  # the page's answer
 
 
 if __name__ == "__main__":

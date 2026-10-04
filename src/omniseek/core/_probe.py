@@ -13,7 +13,11 @@ Most adapters cannot tell either case from an outage: the shared http helpers re
 failure. So the egress records them here instead, at the places every request already passes:
 ``upstreams.observe`` sees every response's status, ``upstreams.UpstreamBusy`` and
 ``_guard.GateBusy`` are built only when a gate refuses, and ``http._request_capped`` reads the error
-body. A ledger is open only while a health check runs (``watching``, opened by
+body. Three egress paths that never reach ``upstreams.observe`` record here too (2026-10-04): the
+curl_cffi entry point (``omniseek.core.curl``), the browser helper (``_cdp.cdp_call``: the page's
+main-document answers and its in-page fetches' 429s, kept only while a ledger is open, see
+``active``) and the yt-dlp entry point (``omniseek.core.ytdlp``: every HTTP error answer). A ledger is
+open only while a health check runs (``watching``, opened by
 ``fetcher._safe_health`` and by the shared probes that cache one verdict for many sources); outside
 one, recording is a no-op.
 
@@ -72,6 +76,12 @@ def watching():
 def says_rate_limited(text: Optional[str]) -> bool:
     """True when an error text names a rate limit (for an adapter's own exception messages)."""
     return bool(text) and bool(_RATE_WORDS.search(text))
+
+
+def active() -> bool:
+    """Whether a health check's ledger is open in this context (a recorder that has to set something
+    up first, such as the browser's response listener, does so only then)."""
+    return _current.get() is not None
 
 
 def note_response(status: Optional[int], *, where: str = "", retry_after: Optional[float] = None) -> None:

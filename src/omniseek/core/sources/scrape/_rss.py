@@ -81,6 +81,18 @@ def fetch_feed(url: str, *, guard_ip: bool = False,
     return _parse_or_refuse(resp.content, url, status=resp.status_code)
 
 
+def _dead_hosts(dead: list, captures: list) -> str:
+    """The dead feeds' hosts, each with the HTTP status its last failure capture recorded, if any
+    ("www.higheredjobs.com: HTTP 504"); an exception without a status leaves the bare host."""
+    status: dict[str, int] = {}
+    for rec in captures or ():
+        st, url = rec.get("status"), rec.get("url")
+        if isinstance(st, int) and url:
+            status[urlparse(str(url)).hostname or str(url)] = st
+    hosts = sorted({urlparse(u).hostname or u for u in dead})
+    return ", ".join(f"{h}: HTTP {status[h]}" if h in status else h for h in hosts)
+
+
 def _parse_or_refuse(content, url: str,
                      status: Optional[int] = None) -> Optional[feedparser.FeedParserDict]:
     """Parse feed bytes; REFUSE a body that is not a feed at all (challenge/error page with 200).
@@ -395,10 +407,16 @@ class RSSAdapterBase:
         # so a couple of slow/dead feeds can't time out the whole-bundle health probe. Each task runs
         # in a copy of the caller's context (as in _fetch_all_docs), so the health check's ledger
         # (_probe) sees a feed's 429 and an all-rate-limited bundle reads "not verified", not "down".
-        tasks = [(u, contextvars.copy_context()) for u in self.feeds]
-        with ThreadPoolExecutor(max_workers=min(len(self.feeds), 24)) as ex:
-            parsed_list = list(ex.map(lambda t: (t[0], t[1].run(
-                fetch_feed, t[0], guard_ip=self.guard_ip, impersonate=self.tls_impersonate)), tasks))
+        # An armed failure capture (diag) the copies share: a dead feed is then named with what its
+        # host answered ("HTTP 504"), not only by its host (2026-10-04; the curl tier notes it too).
+        diag.enable()
+        try:
+            tasks = [(u, contextvars.copy_context()) for u in self.feeds]
+            with ThreadPoolExecutor(max_workers=min(len(self.feeds), 24)) as ex:
+                parsed_list = list(ex.map(lambda t: (t[0], t[1].run(
+                    fetch_feed, t[0], guard_ip=self.guard_ip, impersonate=self.tls_impersonate)), tasks))
+        finally:
+            captures = diag.drain()
         dead = [u for u, p in parsed_list if not (p and getattr(p, "entries", None))]
         n = len(self.feeds)
         ok = n - len(dead)
@@ -407,14 +425,12 @@ class RSSAdapterBase:
             # fully dead is exactly when the reader most needs to know WHICH hosts to go look at:
             # "all 2 feeds failed" sent the 2026-09-09 sweep hunting through our own adapter for
             # what turned out to be one unreachable host and one 403.
-            deadhosts = ", ".join(sorted({urlparse(u).hostname or u for u in dead}))
-            return False, f"all {n} feeds failed ({deadhosts})"
+            return False, f"all {n} feeds failed ({_dead_hosts(dead, captures)})"
         if dead:
             # NAME the dead feeds: a bundle that silently loses a member (sg_immigration lost 1 of 2)
             # otherwise reads healthy forever. The "degraded" marker is what the watchdog keys on to
             # Bark a full->degraded transition, so member rot surfaces before ALL feeds die.
-            deadhosts = ", ".join(sorted({urlparse(u).hostname or u for u in dead}))
-            return True, f"{ok}/{n} feeds OK (degraded; dead: {deadhosts})"
+            return True, f"{ok}/{n} feeds OK (degraded; dead: {_dead_hosts(dead, captures)})"
         return True, f"OK ({ok} feeds)"
 
 

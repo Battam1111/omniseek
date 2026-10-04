@@ -118,7 +118,7 @@ class CninfoAdapter(BaseScrapeAdapter):
     def health_check(self) -> tuple[bool, str]:
         if not _DEPS_OK:
             return False, "curl_cffi not installed"
-        raw = self._raw_fetch("年报", 1)
+        raw, why = self._health_fetch("年报", fallback="fetch failed / blocked")
         if raw is None:
-            return False, "fetch failed / blocked"
+            return False, why
         return True, f"OK ({len(raw)} announcements)"

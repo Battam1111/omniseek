@@ -41,8 +41,9 @@ import threading
 import time
 from contextlib import contextmanager, nullcontext
 from typing import Any, Callable, ContextManager, Iterator, Optional
+from urllib.parse import urlsplit
 
-from omniseek.core import cache, diag, upstreams
+from omniseek.core import _probe, cache, diag, upstreams
 
 logger = logging.getLogger(__name__)
 
@@ -342,6 +343,75 @@ def _note_failure(url: Optional[str], exc: BaseException) -> None:
         diag.note("cdp_call", url=url, exc=exc)
 
 
+# ── what the page's own requests got, for a running health check (2026-10-04) ──────────────────
+# A health check whose page load or in-page fetch got HTTP 429 has not verified anything (see
+# omniseek.core._probe): the site answered, but the answer says nothing about whether the path serves.
+# The browser's answers never reached OmniSeek, so such a check could only say "down". Now, while a
+# health check's ledger is open in the calling thread (and only then), the page cdp_call opens gets one
+# listener for its responses: the status of every MAIN-FRAME DOCUMENT (the navigation to initial_url
+# and any the callback makes) and every 429 of a FETCH / XHR (an in-page fetch such as douban's rexxar
+# call; other fetch / XHR answers are the site's own background traffic, not the check's). Back in the
+# calling thread they go into the ledger, so a 429 reads "not verified". Only a listener is added:
+# nothing about the navigation, the waits, the concurrency, the connections or the logins changes, and
+# no request is added. Outside a health check nothing is attached at all.
+#
+# One thing a health check gets back differs: when the page's LAST main-frame document answered 429,
+# cdp_call raises RateLimitedPage instead of handing back what the callback read off the error page.
+# A check that only reads the page (its URL, its title, its HTML) would otherwise call a 429 page
+# working (zhihu read the URL, ml_conferences / mpnp_draws the HTML), and True is never re-read.
+_watched: dict[int, list] = {}
+_watched_lock = threading.Lock()
+
+
+class RateLimitedPage(RuntimeError):
+    """A health check's page: its main document answered HTTP 429 (the message is ``_probe``'s
+    wording). Raised by cdp_call only while a health check's ledger is open."""
+
+
+def _watch(page, seen: Optional[list]) -> None:
+    """Attach the response listener to a fresh page (a no-op when ``seen`` is None: no health check)."""
+    if seen is None:
+        return
+    try:
+        main = page.main_frame
+
+        def on_response(resp) -> None:
+            try:
+                kind, status = resp.request.resource_type, resp.status
+                if kind == "document":
+                    if resp.frame != main:
+                        return
+                elif kind not in ("fetch", "xhr") or status != 429:
+                    return
+                seen.append((status, resp.url, _probe.retry_after_s(resp.headers), kind == "document"))
+            except Exception:  # noqa: BLE001 (recording must never break a page)
+                pass
+        page.on("response", on_response)
+        with _watched_lock:
+            _watched[id(page)] = seen
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _unwatch(page) -> None:
+    with _watched_lock:
+        _watched.pop(id(page), None)
+
+
+def _record_seen(seen: Optional[list]) -> None:
+    """Into the calling thread's health-check ledger (``_probe``) with what the page's requests got."""
+    for status, url, retry_after, _doc in list(seen or ()):
+        _probe.note_response(status, where=urlsplit(url).hostname or url, retry_after=retry_after)
+
+
+def _refuse_rate_limited_page(seen: Optional[list]) -> None:
+    """Raise RateLimitedPage when the page's last main-frame document answered 429 (see above)."""
+    docs = [row for row in list(seen or ()) if row[3]]
+    if docs and docs[-1][0] == 429:
+        _status, url, retry_after, _doc = docs[-1]
+        raise RateLimitedPage(_probe.rate_limited(urlsplit(url).hostname or url, retry_after))
+
+
 class _CdpPool:
     """A pool of persistent worker threads for ONE Chrome (see block comment)."""
 
@@ -362,11 +432,12 @@ class _CdpPool:
 
     def submit(self, callback: Callable, initial_url: Optional[str], timeout: int,
                queue_until: Optional[float] = None,
-               on_turn: Optional[Callable[[], ContextManager]] = None) -> Any:
+               on_turn: Optional[Callable[[], ContextManager]] = None,
+               seen: Optional[list] = None) -> Any:
         with self._lock:
             q = self._q  # snapshot: a concurrent _recover swap must not split put/get across queues
         reply: "queue.Queue" = queue.Queue(maxsize=1)
-        q.put((callback, initial_url, reply, queue_until, on_turn))
+        q.put((callback, initial_url, reply, queue_until, on_turn, seen))
         try:
             status, payload = reply.get(timeout=timeout)
         except queue.Empty:
@@ -415,7 +486,7 @@ class _CdpPool:
             browser = pw.chromium.connect_over_cdp(self.cdp_url, timeout=10000)
 
         while True:
-            callback, initial_url, reply, queue_until, on_turn = q.get()
+            callback, initial_url, reply, queue_until, on_turn, seen = q.get()
             if queue_until is not None and time.monotonic() > queue_until:
                 # Its turn came after the caller's budget ran out: do not load the page at all.
                 reply.put(("err", TimeoutError("CDP queue: the caller's time ran out before its turn; "
@@ -442,6 +513,7 @@ class _CdpPool:
                 try:
                     _sweep_excess_tabs(ctx)
                     page = ctx.new_page()
+                    _watch(page, seen)   # a health check's ledger only (see _watch)
                     try:
                         # the host's gates only now, for the page load itself (review F9), tried
                         # once: refused, this worker drops the task and takes the next (review P6);
@@ -451,6 +523,7 @@ class _CdpPool:
                                 page.goto(initial_url, wait_until="domcontentloaded", timeout=30000)
                             reply.put(("ok", callback(page)))
                     finally:
+                        _unwatch(page)
                         try:
                             page.close()
                         except Exception:  # noqa: BLE001
@@ -514,8 +587,15 @@ def cdp_call(callback: Callable[[Page], Any], *,
     # measured). Deliberately AFTER the cache-only gate — a cache-only poll must not start a
     # browser — and BEFORE the pool branch, so both the pooled and per-call paths are covered.
     ensure_browser(cdp_url)
+    # what the page's requests got, kept only while a health check's ledger is open (see _watch)
+    seen: Optional[list] = [] if _probe.active() else None
     if _pool_enabled():  # Lever A: route to the persistent connection pool (else per-call below)
-        return _pool_for(cdp_url).submit(callback, initial_url, timeout, queue_until, on_turn)
+        try:
+            value = _pool_for(cdp_url).submit(callback, initial_url, timeout, queue_until, on_turn, seen)
+        finally:
+            _record_seen(seen)
+        _refuse_rate_limited_page(seen)
+        return value
 
     result_queue: queue.Queue = queue.Queue(maxsize=1)
 
@@ -532,12 +612,14 @@ def cdp_call(callback: Callable[[Page], Any], *,
                 ctx: BrowserContext = contexts[0]
                 _sweep_excess_tabs(ctx)  # reap tabs leaked by prior timed-out calls (never active ones)
                 page = ctx.new_page()
+                _watch(page, seen)   # a health check's ledger only (see _watch)
                 try:
                     if initial_url:
                         page.goto(initial_url, wait_until="domcontentloaded", timeout=30000)
                     value = callback(page)
                     result_queue.put(("ok", value))
                 finally:
+                    _unwatch(page)
                     try:
                         page.close()
                     except Exception:  # noqa: BLE001
@@ -578,11 +660,13 @@ def cdp_call(callback: Callable[[Page], Any], *,
         raise
     finally:
         gate.release()
+        _record_seen(seen)
     if status == "err":
         # The CDP egress failed (TargetClosedError, a goto timeout, a dead CDP connection, a
         # selector raise inside the callback). Surface it so the fixing agent sees the wall.
         _note_failure(initial_url, payload)
         raise payload
+    _refuse_rate_limited_page(seen)
     return payload
 
 

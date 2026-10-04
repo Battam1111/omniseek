@@ -204,9 +204,11 @@ class SlidesLiveTalksAdapter(BaseScrapeAdapter):
         """yt-dlp metadata-only resolve of one SlidesLive talk. None on any failure
         (network, the occasional 'Unable to extract player token' edge case, etc.) ->
         the base turns it into [] (the adapter contract)."""
-        import yt_dlp  # lazy: heavy lib off the startup import path (this adapter self-registers at boot)
+        # lazy: heavy lib off the startup import path (this adapter self-registers at boot); OmniSeek's
+        # yt-dlp entry point notes its HTTP error answers for a running health check
+        from omniseek.core import ytdlp
         try:
-            with yt_dlp.YoutubeDL(_YDL_OPTS) as ydl:
+            with ytdlp.YoutubeDL(_YDL_OPTS) as ydl:
                 return ydl.extract_info(url, download=False)
         except Exception as exc:  # noqa: BLE001 (failure -> None -> [], the adapter contract)
             logger.warning("slideslive resolve failed for %s: %s", url, exc)

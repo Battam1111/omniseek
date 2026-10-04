@@ -52,9 +52,11 @@ logger = logging.getLogger(__name__)
 
 def _ytdlp():
     """Lazy yt_dlp handle: keeps the heavy lib off the startup import path (this adapter
-    self-registers at boot, so a module-level import loaded yt_dlp on every service start)."""
-    import yt_dlp
-    return yt_dlp
+    self-registers at boot, so a module-level import loaded yt_dlp on every service start). It is the
+    eye's yt-dlp entry point (``omniseek.core.ytdlp``): the same ``YoutubeDL``, with its HTTP error answers
+    noted for a running health check (a 429 reads "not verified", not "down")."""
+    from omniseek.core import ytdlp
+    return ytdlp
 
 # Top-N comments cap — keep comment extraction bounded (yt-dlp would otherwise
 # page the WHOLE thread, which on a popular video is thousands of round trips).

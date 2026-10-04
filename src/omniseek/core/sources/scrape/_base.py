@@ -260,20 +260,25 @@ class BaseScrapeAdapter:
         host + build a doc from a single page (the academia_se / pypi pattern)."""
         return None
 
+    def _health_fetch(self, query: str, *, fallback: str) -> tuple[Any, str]:
+        """``(raw, why)``: one ``_raw_fetch(query, 1)`` under an armed failure capture. When ``raw`` is
+        None, ``why`` is the last egress failure the shared helpers noted (``HTTP 504: <body>``, or the
+        exception), else ``fallback``; an exception from ``_raw_fetch`` propagates."""
+        diag.enable()
+        try:
+            raw = self._raw_fetch(query, 1)
+        finally:
+            captures = diag.drain()
+        return raw, ("" if raw is not None else diag.failure_reason(captures, fallback=fallback))
+
     def health_check(self) -> tuple[bool, str]:
         """Default probe: a cheap ``_raw_fetch`` with a trivial query proves the
         endpoint answers. Override for a lighter/different liveness signal (e.g. an
         API ``/info`` endpoint or a quota readout)."""
-        diag.enable()
         try:
-            raw = self._raw_fetch("test", 1)
+            raw, why = self._health_fetch("test", fallback="no payload without an observed egress failure")
         except Exception as exc:  # noqa: BLE001
-            diag.drain()
             return False, f"{type(exc).__name__}: {str(exc)[:80]}"
-        captures = diag.drain()
         if raw is None:
-            return False, diag.failure_reason(
-                captures,
-                fallback="no payload without an observed egress failure",
-            )
+            return False, why
         return True, "OK"

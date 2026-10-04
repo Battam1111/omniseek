@@ -219,7 +219,7 @@ class EastMoneyAdapter(BaseScrapeAdapter):
             sess = _creq.Session(impersonate="chrome")
             hits = self._suggest(sess, "贵州茅台")
         except Exception as exc:  # noqa: BLE001
-            return False, f"suggest host (searchapi) unreachable: {type(exc).__name__}"
+            return False, f"suggest host (searchapi) failed: {_creq.failure(exc)}"
         if not hits:
             return False, "suggest returned 0 (token rotated? re-grab from eastmoney.com network tab)"
         try:
@@ -228,7 +228,7 @@ class EastMoneyAdapter(BaseScrapeAdapter):
             r.raise_for_status()
             quotes = _parse_tencent_quotes(r.content.decode("gbk", "replace"))
         except Exception as exc:  # noqa: BLE001
-            return False, f"quote host (Tencent qt.gtimg.cn) unreachable: {type(exc).__name__}"
+            return False, f"quote host (Tencent qt.gtimg.cn) failed: {_creq.failure(exc)}"
         if not quotes:
             return False, "quote host reachable but returned no parseable quote"
         return True, "OK (suggest + Tencent quote)"
