@@ -46,7 +46,7 @@ import time
 from typing import Iterable, Optional
 
 from omniseek.core import _guard as _guard_mod
-from omniseek.core import diag, upstreams
+from omniseek.core import _probe, diag, upstreams
 
 logger = logging.getLogger(__name__)
 
@@ -128,7 +128,12 @@ _RL_BACKOFF_S = (1.5, 3.0)   # waits between attempts (rate-limit only); added b
 
 
 class S2Down(RuntimeError):
-    """Raised immediately while the circuit is open (recent consecutive failures)."""
+    """Raised immediately while the circuit is open (recent consecutive failures), and when the pool
+    or the rate backlog sheds the call: nothing was sent."""
+
+    def __init__(self, *args) -> None:
+        super().__init__(*args)
+        _probe.note_held(str(self))   # a running health check records that nothing was sent
 
 
 def _slot_busy(wait: float) -> S2Down:
@@ -502,9 +507,10 @@ def health(timeout: float = 8.0) -> tuple[Optional[bool], str]:
     all at once, bursting the shared key into a 429 storm and tripping the breaker, so one transient
     probe storm read as "every S2 source down". One minimal search call (limit=1, fields=title) tests
     connectivity + key validity + the breaker/rate state, cached 60s and single-flighted (the probe
-    runs under the lock) so N concurrent callers cause exactly ONE upstream call. A 429 means the API
-    is UP and merely throttling us, so it reports healthy (the data path falls back to cache anyway);
-    a recent-429 stamp is surfaced in the message so an active throttle stays legible.
+    runs under the lock) so N concurrent callers cause exactly ONE upstream call. A 429 is S2
+    rate-limiting us: it answered, but not whether search serves, so the verdict is None (not
+    verified, 2026-10-04; it used to read healthy); a recent-429 stamp is surfaced in the message of a
+    healthy verdict so an active throttle stays legible.
 
     NOTE: the ``timeout`` arg is accepted for call-site parity with ``_openalex.health``; the shared
     client's timeout is fixed at construction (TIMEOUT), so it is advisory here, not re-applied.
@@ -522,15 +528,19 @@ def health(timeout: float = 8.0) -> tuple[Optional[bool], str]:
             ok, msg = True, "OK (shared S2 upstream reachable)"
         except S2Down as exc:
             # Self-shed (breaker / pool), NOT upstream-down: a genuine outage raises the raw
-            # exception below (a 429 is handled there as UP). Don't flip every S2-backed source down
-            # on a transient breaker-open. Nothing was sent, so nothing was verified: None (the
-            # watchdog's `unverified`), neither healthy nor failing; it self-heals when the breaker closes.
-            ok, msg = None, f"degraded (eye backing off, upstream not probed this cycle): {exc}"
+            # exception below. Don't flip every S2-backed source down on a transient breaker-open.
+            # Nothing was sent, so nothing was verified: None (the watchdog's `unverified`), neither
+            # healthy nor failing; it self-heals when the breaker closes.
+            with _lock:
+                left = _state["open_until"] - time.time()
+            ok, msg = None, (_probe.breaker_open("Semantic Scholar, eye backing off", left) if left > 0
+                             else f"not verified: OmniSeek shed the probe, nothing sent ({exc})")
         except Exception as exc:  # noqa: BLE001
-            # A 429 means S2 is UP and merely throttling us -> report healthy (cache covers the data
-            # path); any other exception is a genuine outage.
+            # A 429 is S2 rate-limiting us: it answered, but not whether search serves, so it is
+            # NOT verified (None), never healthy (it used to read True here) and never down. Any
+            # other exception is a genuine outage.
             if _is_rate_limit(exc):
-                ok, msg = True, "OK (HTTP 429: API alive, rate-limiting us)"
+                ok, msg = None, f"{_probe.rate_limited('api.semanticscholar.org')}: {type(exc).__name__}"
             else:
                 ok, msg = False, f"{type(exc).__name__}: {exc}"
         with _lock:

@@ -21,7 +21,7 @@ from typing import Optional
 
 import anyio
 
-from omniseek.core import auth, cache, http
+from omniseek.core import _probe, auth, cache, http
 from omniseek.core.normalize import Document
 
 logger = logging.getLogger(__name__)
@@ -41,7 +41,7 @@ _health_cache: dict = {"at": 0.0, "result": None}
 _health_lock = threading.Lock()
 
 
-def _health(key: str, timeout: int = 20) -> tuple[bool, str]:
+def _health(key: str, timeout: int = 20) -> tuple[Optional[bool], str]:
     """ONE shared, TTL-cached Exa liveness probe (single-flight under the module lock).
 
     Exa has no free liveness endpoint, so this spends ONE credit per _HEALTH_TTL_S window
@@ -51,12 +51,14 @@ def _health(key: str, timeout: int = 20) -> tuple[bool, str]:
     with _health_lock:
         if _health_cache["result"] is not None and now - _health_cache["at"] < _HEALTH_TTL_S:
             return _health_cache["result"]
-        data = http.post_json(_API, json={"query": "test", "numResults": 1},
-                              headers={"x-api-key": key}, timeout=timeout)
+        with _probe.watching() as led:
+            data = http.post_json(_API, json={"query": "test", "numResults": 1},
+                                  headers={"x-api-key": key}, timeout=timeout)
         if isinstance(data, dict) and "results" in data:
             result = (True, "OK (Exa API)")
         else:
-            result = (False, "Exa API: no/invalid response (key valid?)")
+            # Cached for the window, so re-read HERE: a 429 (or a refused gate) is not verified.
+            result = _probe.reread(False, "Exa API: no/invalid response (key valid?)", led)
         _health_cache["at"] = time.monotonic()
         _health_cache["result"] = result
         return result
@@ -220,7 +222,7 @@ class ExaAdapter:
     def fetch_url(self, url: str) -> Optional[Document]:
         return None  # search-only; use cdp_fulltext / pdf / ordinary fetch for the full page
 
-    def health_check(self) -> tuple[bool, str]:
+    def health_check(self) -> tuple[Optional[bool], str]:
         key = self._key()
         if not key:
             return False, "no api_key (~/.omniseek/credentials/exa.json)"

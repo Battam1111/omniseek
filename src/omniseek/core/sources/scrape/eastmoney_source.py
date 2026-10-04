@@ -37,7 +37,7 @@ _UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
        "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
 
 try:
-    from curl_cffi import requests as _creq
+    from omniseek.core import curl as _creq  # curl_cffi.requests, every response recorded (upstreams.observe)
     _DEPS_OK = True
 except Exception as exc:  # noqa: BLE001
     logger.warning("eastmoney: curl_cffi unavailable (%s) — adapter inert", exc)
@@ -173,6 +173,7 @@ class EastMoneyAdapter(BaseScrapeAdapter):
     def _suggest(self, sess, name: str) -> list[dict]:
         r = sess.get(_SUGGEST, params={"input": name, "type": "14", "token": _SUGGEST_TOKEN, "count": "8"},
                      headers={"user-agent": _UA, "referer": "https://www.eastmoney.com/"}, timeout=15)
+        r.raise_for_status()  # an error answer is a failure, not "no such stock"
         return ((r.json().get("QuotationCodeTable") or {}).get("Data")) or []
 
     def _raw_fetch(self, query: str, limit: int):
@@ -199,6 +200,7 @@ class EastMoneyAdapter(BaseScrapeAdapter):
             # ONE batched Tencent call for all symbols (fast + gentle vs a per-symbol fan-out)
             r = sess.get(_TENCENT_QUOTE + ",".join(s for s, _, _ in plan),
                          headers={"user-agent": _UA}, timeout=15)
+            r.raise_for_status()  # an error answer is a failure, not "no quotes" (or a cached [])
             quotes = _parse_tencent_quotes(r.content.decode("gbk", "replace"))
             return [(quotes[sym], qid, code) for (sym, qid, code) in plan if sym in quotes]
         except Exception as exc:  # noqa: BLE001 — failure → None → [] (adapter contract)
@@ -223,6 +225,7 @@ class EastMoneyAdapter(BaseScrapeAdapter):
         try:
             r = sess.get(_TENCENT_QUOTE + (_tencent_symbol(hits[0]) or "sh600519"),
                          headers={"user-agent": _UA}, timeout=15)
+            r.raise_for_status()
             quotes = _parse_tencent_quotes(r.content.decode("gbk", "replace"))
         except Exception as exc:  # noqa: BLE001
             return False, f"quote host (Tencent qt.gtimg.cn) unreachable: {type(exc).__name__}"

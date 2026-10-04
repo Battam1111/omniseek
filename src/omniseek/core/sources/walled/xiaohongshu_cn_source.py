@@ -61,7 +61,7 @@ from pathlib import Path
 from typing import Optional
 from urllib.parse import parse_qs, quote, urlparse
 
-from omniseek.core import cache, diag
+from omniseek.core import _probe, cache, diag
 from omniseek.core.normalize import Document, is_blocked, mk_signal, selector_drift_hint
 from omniseek.core.sources.walled._cdp import cdp_call
 from omniseek.core.sources.walled.xiaohongshu_source import (
@@ -1266,13 +1266,14 @@ class XiaohongshuCNAdapter:
         touches (the operator's risk call; flagged, not auto-changed).
 
         Because nothing is asked of xiaohongshu, an armed state is None (not verified), never True;
-        a state that cannot serve (no deps, sealed, breaker open) stays False."""
+        a state that cannot serve (no deps, sealed) stays False. An open 风控 breaker sends nothing
+        by design, so it is None too, with the cooldown left (until 2026-10-04 it read False)."""
         if not (_BROWSER_OK or _DEPS_OK):
             return False, "browser deps (bs4/lxml + xiaohongshu_source helpers) AND signed deps (xhshow/curl_cffi) both unavailable"
         if _SEALED:
             return False, "sealed (manual kill-switch)"
         if _tripped():
-            return False, f"风控 breaker OPEN: {_last_signal}; {int(_tripped_until - time.time())}s cooldown left"
+            return None, _probe.breaker_open(f"风控 breaker: {_last_signal}", _tripped_until - time.time())
         primary = "browser (9224 自发签名 XHR)" if _BROWSER_OK else "signed-API"
         # The SIGNED fallback can be dark on its own without the source being down: report it as
         # a degraded sub-state, not as a failure, so a 461 on the fallback never reads as "xhs_cn

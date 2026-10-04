@@ -35,6 +35,44 @@ class CdpPortMappingTests(unittest.TestCase):
         self.assertIsNone(_cdp.cdp_service_for("http://127.0.0.1:9444"))
 
 
+class CdpConnectionLimitTests(unittest.TestCase):
+    """How many connections OmniSeek may hold to each Chrome at once (2026-10-04): one table,
+    _cdp._CDP_MAX_CONNECTIONS, read by the persistent pool and by the per-call gate alike. Until then
+    the pool used a substring test ("9223" / "9224" in the url -> 1, else 3), so the douyin 小号 on
+    9225 got three connections while its adapter assumed one."""
+
+    def test_every_launchd_browser_port_has_an_explicit_row(self):
+        missing = sorted(set(_cdp._CDP_SERVICES) - set(_cdp._CDP_MAX_CONNECTIONS))
+        self.assertEqual(missing, [], "a browser port with no connection limit written down")
+        for port, n in _cdp._CDP_MAX_CONNECTIONS.items():
+            self.assertIsInstance(n, int, port)
+            self.assertGreaterEqual(n, 1, port)
+
+    def test_the_limits(self):
+        self.assertEqual(_cdp.max_connections("http://127.0.0.1:9225"), 1)   # douyin 小号
+        self.assertEqual(_cdp.max_connections("http://127.0.0.1:9223"), 1)   # xiaohongshu 小号
+        self.assertEqual(_cdp.max_connections("http://127.0.0.1:9224"), 1)   # xiaohongshu 大陆号
+        self.assertEqual(_cdp.max_connections("http://127.0.0.1:9222"), 3)   # the shared browser
+        self.assertEqual(_cdp.max_connections("http://127.0.0.1:9444"), 1)   # a port with no row
+        self.assertEqual(_cdp.max_connections("http://127.0.0.1"), 1)        # no port at all
+        # the port is parsed, not matched as a substring of the url
+        self.assertEqual(_cdp.max_connections("http://host9223.local:9222"), 3)
+
+    def test_the_pool_and_the_per_call_gate_read_the_table(self):
+        class _FakePool:
+            def __init__(self, cdp_url, size):
+                self.size = size
+        urls = {p: f"http://127.0.0.1:{p}" for p in ("9222", "9223", "9224", "9225", "9444")}
+        with mock.patch.object(_cdp, "_CdpPool", _FakePool), \
+                mock.patch.dict(_cdp._pools, {}, clear=True), \
+                mock.patch.dict(_cdp._cdp_gates, {}, clear=True):
+            sizes = {p: _cdp._pool_for(u).size for p, u in urls.items()}
+            gates = {p: _cdp._gate_for(u)._value for p, u in urls.items()}
+        expected = {"9222": 3, "9223": 1, "9224": 1, "9225": 1, "9444": 1}
+        self.assertEqual(sizes, expected)
+        self.assertEqual(gates, expected)
+
+
 class LastUseStampTests(unittest.TestCase):
     def setUp(self):
         self._tmp = TemporaryDirectory()

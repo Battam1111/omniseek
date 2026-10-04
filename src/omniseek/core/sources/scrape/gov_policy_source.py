@@ -34,7 +34,7 @@ _UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
        "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
 
 try:
-    from curl_cffi import requests as _creq
+    from omniseek.core import curl as _creq  # curl_cffi.requests, every response recorded (upstreams.observe)
     _DEPS_OK = True
 except Exception as exc:  # noqa: BLE001 — missing deps must never break server import
     logger.warning("gov_policy: curl_cffi unavailable (%s) — adapter inert", exc)
@@ -103,6 +103,9 @@ class GovPolicyAdapter(BaseScrapeAdapter):
             r = _creq.get(url, headers={"user-agent": _UA, "accept": "application/json",
                           "referer": "https://sousuo.www.gov.cn/sousuo/search-gov.shtml"},
                           impersonate="chrome", timeout=20)
+            if r.status_code != 200:  # an error answer is a failure, not an empty library (or a cached [])
+                logger.warning("gov_policy: HTTP %s", r.status_code)
+                return None
             return _list_of(r.json() or {})
         except Exception as exc:  # noqa: BLE001 — failure → None → [] (adapter contract)
             logger.warning("gov_policy fetch failed: %s", exc)

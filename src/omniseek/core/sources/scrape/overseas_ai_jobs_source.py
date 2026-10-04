@@ -604,10 +604,20 @@ class OverseasAIJobsAdapter:
     def fetch_url(self, url: str) -> Optional[Document]:
         return None
 
-    def health_check(self) -> tuple[bool, str]:
+    def health_check(self) -> tuple[Optional[bool], str]:
+        # The board itself must answer with its jobs list: _gh reads ANY failure as an empty board,
+        # so until 2026-10-04 this read True on a 429, a 5xx or a timeout. A failed GET is False here;
+        # the health funnel re-reads one that failed only on a 429 (or a busy gate) as not verified.
+        url = "https://boards-api.greenhouse.io/v1/boards/anthropic/jobs?content=true"
         try:
-            jobs = _gh("anthropic", "Anthropic")
-            return True, f"OK ({len(SITES)} labs configured; Anthropic board → {len(jobs)} research roles)"
+            r = _get(url)
+            if r is None:
+                return False, "the Anthropic Greenhouse board did not answer (see the overseas_ai_jobs.fetch diag note)"
+            jobs = r.json().get("jobs")
+            if not isinstance(jobs, list):
+                return False, "the Anthropic Greenhouse board answered without a jobs list"
+            n = sum(1 for j in jobs if isinstance(j, dict) and RESEARCH_RE.search((j.get("title") or "").strip()))
+            return True, f"OK ({len(SITES)} labs configured; Anthropic board → {n} research roles)"
         except Exception as exc:  # noqa: BLE001
             return False, f"{type(exc).__name__}: {exc}"
 

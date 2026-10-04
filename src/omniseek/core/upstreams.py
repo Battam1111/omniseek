@@ -68,7 +68,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterable, Optional
 from urllib.parse import urlsplit
 
-from omniseek.core import _guard
+from omniseek.core import _guard, _probe
 from omniseek.core._guard import BackendGuard, deadline_after, deadline_until, wait_until  # noqa: F401
 
 logger = logging.getLogger(__name__)
@@ -90,6 +90,10 @@ _RATE_HEADER = re.compile(r"^(x-)?(rate-?limit|ratelimit)|^x-concurrency-limit$|
 class UpstreamBusy(RuntimeError):
     """A declared upstream's gate had no permit / no start slot within the caller's budget: the
     request was NOT sent. Callers map it to their failure contract (None / [] / degrade)."""
+
+    def __init__(self, *args) -> None:
+        super().__init__(*args)
+        _probe.note_held(str(self))   # a running health check records that nothing was sent
 
 
 class DeclaredUserAgentRefused(RuntimeError):
@@ -729,6 +733,7 @@ def observe(target: str, headers: Any, status: Optional[int] = None, *, lane: Op
                 if status == 429:
                     rec["last_429_at"] = now
         ra = parse_retry_after(fields.get("retry-after"))
+        _probe.note_response(status, where=h or uid or str(target), retry_after=ra)
         if ra and ra > 0:
             secs = min(ra, _DEFER_CAP_S)
             if defer_on_429 and uid is not None and d[uid].get("gate"):

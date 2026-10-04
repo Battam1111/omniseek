@@ -36,7 +36,7 @@ from typing import Optional
 
 from markdownify import markdownify as html_to_md
 
-from omniseek.core import auth, diag, http, upstreams
+from omniseek.core import _probe, auth, diag, http, upstreams
 from omniseek.core._guard import GateBusy
 from omniseek.core.normalize import Document, jsonsafe, mk_signal
 
@@ -185,22 +185,27 @@ def health(timeout: float = 10.0) -> tuple[Optional[bool], str]:
             # flip down on the shared daily-quota cooldown (they self-heal at reset; 2026-07-23
             # watchdog false-mass-down fix). Do not spend a probe; and since nothing is sent, nothing
             # is verified: None (the watchdog's `unverified`), neither healthy nor failing.
-            _health["at"], _health["result"] = now, (None, "degraded (keyless per-IP quota spent; resets daily; upstream up)")
+            _health["at"], _health["result"] = now, (None, _probe.breaker_open(
+                "Stack Exchange keyless per-IP quota spent, cooling", _se_cooldown_until - time.monotonic()))
             return _health["result"]
-        try:
-            data = _se_get(
-                f"{API_BASE}/questions",
-                {"site": "stackoverflow", "pagesize": 1, "order": "desc", "sort": "activity"},
-                timeout=timeout,
-            )
-            if data is None:
-                ok, msg = False, "no response (pooled GET returned None)"
-            elif not data.get("items"):
-                ok, msg = False, "no items returned"
-            else:
-                ok, msg = True, f"OK (quota={data.get('quota_remaining', '?')})"
-        except Exception as exc:  # noqa: BLE001
-            ok, msg = False, f"{type(exc).__name__}: {exc}"
+        # Cached for all six SE sources, so re-read HERE: a probe that failed only on a 429 or a
+        # throttle body ("throttle_violation") is "not verified" for all of them, not "down".
+        with _probe.watching() as led:
+            try:
+                data = _se_get(
+                    f"{API_BASE}/questions",
+                    {"site": "stackoverflow", "pagesize": 1, "order": "desc", "sort": "activity"},
+                    timeout=timeout,
+                )
+                if data is None:
+                    ok, msg = False, "no response (pooled GET returned None)"
+                elif not data.get("items"):
+                    ok, msg = False, "no items returned"
+                else:
+                    ok, msg = True, f"OK (quota={data.get('quota_remaining', '?')})"
+            except Exception as exc:  # noqa: BLE001
+                ok, msg = False, f"{type(exc).__name__}: {exc}"
+        ok, msg = _probe.reread(ok, msg, led)
         _health["at"] = time.monotonic()
         _health["result"] = (ok, msg)
         return _health["result"]

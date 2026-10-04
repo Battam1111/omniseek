@@ -25,7 +25,7 @@ from typing import Optional
 import anyio
 import httpx
 
-from omniseek.core import cache, diag, http
+from omniseek.core import _probe, cache, diag, http
 from omniseek.core.normalize import Document, jsonsafe, mk_signal
 
 logger = logging.getLogger(__name__)
@@ -130,11 +130,13 @@ class MyCareersFutureAdapter:
     def fetch_url(self, url: str) -> Optional[Document]:
         return None
 
-    def health_check(self) -> tuple[bool, str]:
+    def health_check(self) -> tuple[Optional[bool], str]:
         try:
             r = httpx.post(f"{API}?limit=1&page=0",
                            json={"search": "engineer", "limit": 1, "page": 0},
                            headers=HEADERS, timeout=10)
+            if r.status_code == 429:  # it answered, but not whether search serves: not verified
+                return None, _probe.rate_limited("api.mycareersfuture.gov.sg", _probe.retry_after_s(r.headers))
             if r.status_code != 200:
                 return False, f"HTTP {r.status_code}"
             return True, f"OK (total {r.json().get('total', '?')} for 'engineer')"

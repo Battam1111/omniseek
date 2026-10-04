@@ -23,8 +23,10 @@ Mechanism (verified 2026-06-22, decoded from MediaCrawler media_platform/douyin/
 
 Isolation rationale: identical to xiaohongshu (launch_cdp_xhs.sh header) — a disposable
 小号 must not inherit the 大号's device lineage nor re-expose zhihu/一亩三分地 to 抖音's detection
-surface, so it gets its OWN profile + port, never the shared 9222. Single-flight is inherited
-(cdp_call's per-Chrome Semaphore(1) keyed on cdp_url ⇒ 9225 never contends with 9222/9223/9224).
+surface, so it gets its OWN profile + port, never the shared 9222. Single-flight: 9225's row in
+_cdp._CDP_MAX_CONNECTIONS is 1, and both ways into the browser (the persistent pool and the per-call
+gate, both keyed on cdp_url) read that row, so one flow at a time on 9225, which never contends with
+9222/9223/9224. tests/test_cdp_ondemand.py pins the row.
 """
 
 from __future__ import annotations
@@ -120,7 +122,7 @@ class DouyinAdapter(BaseCDPAdapter):
     def _search_url(self, query: str) -> str:
         # Navigate to the REAL search page: correct origin + cookies + a natural Referer context.
         # _flow recovers the keyword from page.url (no per-call instance state → concurrency-safe,
-        # though the 9225 gate already serializes).
+        # though 9225 is held to one connection anyway: its row in _cdp._CDP_MAX_CONNECTIONS).
         return f"https://www.douyin.com/search/{quote(query)}?type=general"
 
     def _flow(self, page) -> Any:

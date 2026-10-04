@@ -26,6 +26,8 @@ from typing import Callable, Iterable, Optional
 
 import anyio
 
+from omniseek.core import _probe
+
 logger = logging.getLogger(__name__)
 
 def _holder():
@@ -399,6 +401,10 @@ def wait_until(max_wait: float) -> float:
 
 class GateBusy(TimeoutError):
     """A shared concurrency gate did not free a permit within its caller budget."""
+
+    def __init__(self, *args) -> None:
+        super().__init__(*args)
+        _probe.note_held(str(self))   # a running health check records that nothing was sent
 
 
 class RequestNotSent(Exception):

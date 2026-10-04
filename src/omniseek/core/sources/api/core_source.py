@@ -43,7 +43,7 @@ from urllib.parse import urlparse
 
 import httpx
 
-from omniseek.core import auth, http, upstreams
+from omniseek.core import _probe, auth, http, upstreams
 from omniseek.core._guard import GateBusy
 from omniseek.core.normalize import Document, jsonsafe, mk_signal
 from omniseek.core.sources.api._base import BaseAPIAdapter
@@ -272,7 +272,7 @@ class CoreAdapter(BaseAPIAdapter):
         return self._work_to_document(work)
 
     # ------------------------------------------------------------- health_check
-    def health_check(self) -> tuple[bool, str]:
+    def health_check(self) -> tuple[Optional[bool], str]:
         key = self._key()
         if not key:
             return False, "no api_key (~/.omniseek/credentials/core.json)"
@@ -280,9 +280,11 @@ class CoreAdapter(BaseAPIAdapter):
             resp = _core_get(CORE_SEARCH, params={"q": "test", "limit": 1},
                              headers=self._headers(key), timeout=10,
                              follow_redirects=True)
-            # 429 = alive but throttling (key valid, just paced); treat as healthy-ish.
-            ok = resp.status_code in (200, 429)
-            return ok, f"HTTP {resp.status_code}"
+            # 429 = CORE rate-limiting us (key valid, just paced): it answered, but not whether
+            # search serves, so it is not verified (None; until 2026-10-04 it read healthy).
+            if resp.status_code == 429:
+                return None, _probe.rate_limited("api.core.ac.uk", _probe.retry_after_s(resp.headers))
+            return resp.status_code == 200, f"HTTP {resp.status_code}"
         except Exception as exc:  # noqa: BLE001
             return False, f"{type(exc).__name__}: {exc}"
 

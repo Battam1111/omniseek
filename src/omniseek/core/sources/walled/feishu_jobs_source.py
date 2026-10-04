@@ -53,7 +53,7 @@ import threading
 
 import httpx
 
-from omniseek.core import cache, diag
+from omniseek.core import _probe, cache, diag
 from omniseek.core.normalize import Document, jsonsafe, keyword_score_filter
 
 EMPTY_TTL = 300  # a transient all-portals-fail must not pin [] for the full 1800s (masks the outage)
@@ -325,7 +325,7 @@ class FeishuJobsAdapter:
             logger.warning("Feishu fetch_url %s failed: %s", url, exc)
         return None
 
-    def health_check(self) -> tuple[bool, str]:
+    def health_check(self) -> tuple[Optional[bool], str]:
         # Smoke test on the first portal only (avoid 6× network calls)
         label, subdomain, website_path, _ = SITES[0]
         url = (
@@ -339,6 +339,9 @@ class FeishuJobsAdapter:
                 url, headers=_make_headers(subdomain, website_path),
                 json=body, timeout=10,
             )
+            if resp.status_code == 429:   # it answered, but not whether the listing serves
+                return None, _probe.rate_limited(f"{subdomain}.jobs.feishu.cn",
+                                                 _probe.retry_after_s(resp.headers))
             if resp.status_code != 200:
                 return False, f"HTTP {resp.status_code}"
             data = (resp.json() or {}).get("data") or {}

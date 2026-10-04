@@ -32,7 +32,7 @@ from urllib.parse import urlparse
 
 import httpx
 
-from omniseek.core import auth, http
+from omniseek.core import _probe, auth, http
 from omniseek.core.normalize import Document, jsonsafe
 from omniseek.core.sources.scrape._base import BaseScrapeAdapter
 
@@ -59,7 +59,8 @@ class MLRCAdapter(BaseScrapeAdapter):
 
     cache_ttl = 3600
 
-    def _api_get(self, path: str, params: dict) -> Optional[dict]:
+    def _api_get(self, path: str, params: dict, _status: Optional[list] = None) -> Optional[dict]:
+        # ``_status``: a list the HTTP status of a failed GET is appended to (health reads a 429).
         # Use openreview creds if available (better rate limit)
         creds = auth.load("openreview")
         headers = {}
@@ -82,6 +83,8 @@ class MLRCAdapter(BaseScrapeAdapter):
             return resp.json()
         except Exception as exc:  # noqa: BLE001
             logger.warning("OpenReview MLRC API call failed: %s", exc)
+            if _status is not None:
+                _status.append(getattr(getattr(exc, "response", None), "status_code", None))
             return None
 
     async def _aapi_get(self, path: str, params: dict) -> Optional[dict]:
@@ -199,9 +202,13 @@ class MLRCAdapter(BaseScrapeAdapter):
         return self._note_to_document(data["notes"][0])
 
     # ------------------------------------------------------------- health_check
-    def health_check(self) -> tuple[bool, str]:
-        data = self._api_get("/notes/search", {"term": "reproducibility methodology", "limit": 1})
+    def health_check(self) -> tuple[Optional[bool], str]:
+        status: list = []
+        data = self._api_get("/notes/search", {"term": "reproducibility methodology", "limit": 1},
+                             _status=status)
         if data is None:
+            if 429 in status:   # it answered, but not whether search serves: not verified
+                return None, _probe.rate_limited("api2.openreview.net")
             return False, "API call failed"
         hits = len(data.get("notes") or [])
         return True, f"OK ({hits} hits on probe)"

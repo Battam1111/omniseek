@@ -26,7 +26,7 @@ from urllib.parse import urlparse
 import anyio
 
 from omniseek import redact as _redact
-from omniseek.core import _guard
+from omniseek.core import _guard, _probe
 from omniseek.core.normalize import Document
 
 logger = logging.getLogger(__name__)
@@ -361,6 +361,20 @@ class SourceAdapter(Protocol):
           scarce to spend on a probe, or a declared gate / breaker / back-off held the probe back.
           The message says which. ``None`` is neither healthy nor failing, so a reader must never
           collapse it with ``bool()`` or a bare ``if ok:`` (``None`` is falsy and reads as a failure).
+
+        Three cases are always ``None`` (2026-10-04, tests/test_health_guard_sweep.py holds every
+        registered source to them):
+
+        - the upstream answered HTTP 429, or an error the adapter knows as its rate limit (a
+          dedicated exception, a body saying "rate limit"): it answered, but not whether the path
+          serves data. The message says so (``_probe.rate_limited``), with Retry-After when given.
+          The health funnel (``_safe_health``) already re-reads a False that came only from a 429
+          or a refused gate on the shared egress; an adapter that reads the status itself, or keeps
+          its own client, must return None for it;
+        - a circuit breaker / back-off of OmniSeek is open and the check therefore sends nothing
+          (``_probe.breaker_open``, with the reopening time when known);
+        - a source that reuses a login must still ask the upstream: reusing a session or token is
+          not evidence. Probe the search path itself with the smallest request instead.
         """
         ...
 
@@ -2689,9 +2703,10 @@ def _watchdog_unmeasured() -> dict:
 
 def _watchdog_unverified() -> dict:
     """Sources whose LAST watchdog probe COMPLETED but verified nothing: {name: reason}. The adapter
-    returned ``None`` because, by design, it asked the upstream nothing this run (a metered quota it
-    must not spend, a declared gate or breaker holding the probe back, an answer served from cache or
-    from stored state). Kept apart from ``unmeasured`` (our probe did not finish) and from ``ok``
+    returned ``None`` because it asked the upstream nothing this run (a metered quota it must not
+    spend, a declared gate or an open breaker holding the probe back, an answer served from cache or
+    from stored state), or the upstream answered only that it is rate-limiting us (HTTP 429). Kept
+    apart from ``unmeasured`` (our probe did not finish) and from ``ok``
     (verified working): before 2026-10-04 these sources returned True and read as ``ok``, so a source
     OmniSeek never tests (context7) counted as healthy forever. Fail-open like _watchdog_unmeasured."""
     return _watchdog_side_map("unverified")
@@ -2740,9 +2755,10 @@ def list_sources(check_health: bool = False, domain: Optional[str] = None,
         the down threshold);
       - ``down``: failing across consecutive runs;
       - ``unmeasured``: OUR last probe did not finish (it hit its hard timeout), so nothing is known;
-      - ``unverified``: our last probe finished, but by design it asked the upstream nothing (a quota
-        too scarce to spend, a declared gate or breaker holding the probe back, an answer served from
-        cache or stored state). Neither healthy nor failing;
+      - ``unverified``: our last probe finished, but by design it asked the upstream nothing, or the
+        answer could not tell good from bad (a quota too scarce to spend, a declared gate or an open
+        breaker holding the probe back, an HTTP 429 or other rate limit, an answer served from cache
+        or stored state). Neither healthy nor failing;
       - ``unknown``: the watchdog has no row for the source.
     With ``check_health=True`` each entry also carries ``healthy``: true (verified working), false
     (verified broken) or null (not verified by this probe: the adapter asked the upstream nothing, or
@@ -3057,10 +3073,20 @@ def fetch_url_with_reason(url: str) -> "tuple[Optional[Document], Optional[str]]
 
 
 def _safe_health(adapter: SourceAdapter) -> tuple[Optional[bool], str]:
-    try:
-        return adapter.health_check()
-    except Exception as exc:  # noqa: BLE001
-        return False, f"health_check raised: {type(exc).__name__}: {exc}"
+    """``adapter.health_check()``, never raising, re-read against what held it back.
+
+    The ONE funnel every reader goes through (``health_check_outcome``). While the check runs a
+    ledger (``_probe.watching``) records what the egress saw: a 429 or rate-limit answer, a gate of
+    OmniSeek refusing to send. A False that comes only from those is turned into None (not verified),
+    with the reason in front of the adapter's own message; a False backed by any other error answer
+    stands, and a True is never touched. So an adapter that reads every failure as "down" (most of
+    them: the shared http helpers return None on a 429) still reports a rate limit as not verified."""
+    with _probe.watching() as led:
+        try:
+            ok, msg = adapter.health_check()
+        except Exception as exc:  # noqa: BLE001
+            ok, msg = False, f"health_check raised: {type(exc).__name__}: {exc}"
+    return _probe.reread(ok, msg, led)
 
 
 _HEALTH_TIMEOUT_S = 25   # DEFAULT per-source hard cap for a LIVE health probe. Bounds a genuinely

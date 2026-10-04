@@ -392,10 +392,13 @@ class RSSAdapterBase:
         if not self.feeds:
             return False, "no feeds configured"
         # Parallel probe (same reason as _fetch_all_entries): total ≈ slowest feed, not the sum,
-        # so a couple of slow/dead feeds can't time out the whole-bundle health probe.
+        # so a couple of slow/dead feeds can't time out the whole-bundle health probe. Each task runs
+        # in a copy of the caller's context (as in _fetch_all_docs), so the health check's ledger
+        # (_probe) sees a feed's 429 and an all-rate-limited bundle reads "not verified", not "down".
+        tasks = [(u, contextvars.copy_context()) for u in self.feeds]
         with ThreadPoolExecutor(max_workers=min(len(self.feeds), 24)) as ex:
-            parsed_list = list(ex.map(lambda u: (u, fetch_feed(
-                u, guard_ip=self.guard_ip, impersonate=self.tls_impersonate)), self.feeds))
+            parsed_list = list(ex.map(lambda t: (t[0], t[1].run(
+                fetch_feed, t[0], guard_ip=self.guard_ip, impersonate=self.tls_impersonate)), tasks))
         dead = [u for u, p in parsed_list if not (p and getattr(p, "entries", None))]
         n = len(self.feeds)
         ok = n - len(dead)

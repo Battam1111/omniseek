@@ -29,7 +29,7 @@ _UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
        "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
 
 try:
-    from curl_cffi import requests as _creq
+    from omniseek.core import curl as _creq  # curl_cffi.requests, every response recorded (upstreams.observe)
     _DEPS_OK = True
 except Exception as exc:  # noqa: BLE001
     logger.warning("juejin: curl_cffi unavailable (%s) — adapter inert", exc)
@@ -98,6 +98,9 @@ class JuejinAdapter(BaseScrapeAdapter):
                            headers={"user-agent": _UA, "referer": "https://juejin.cn/",
                                     "content-type": "application/json"},
                            impersonate="chrome", timeout=15)
+            if r.status_code != 200:  # an error answer is a failure, not an empty search (or a cached [])
+                logger.warning("juejin: HTTP %s", r.status_code)
+                return None
             j = r.json()
             if j.get("err_no") not in (0, None):
                 logger.warning("juejin err_no=%s msg=%s", j.get("err_no"), j.get("err_msg"))

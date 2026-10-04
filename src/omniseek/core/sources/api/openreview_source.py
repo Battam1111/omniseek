@@ -24,7 +24,7 @@ from urllib.parse import urlparse
 import anyio
 import httpx
 
-from omniseek.core import auth, cache, diag, http
+from omniseek.core import _probe, auth, cache, diag, http
 from omniseek.core.normalize import Document, jsonsafe
 
 logger = logging.getLogger(__name__)
@@ -42,6 +42,9 @@ API_BASE_V1 = "https://api.openreview.net"
 # half a rebuttal study needs, so the reviews path floors the limit here instead.
 _REVIEWS_MIN_LIMIT = 60
 DEFAULT_TIMEOUT = 30
+# Health probe: the search path itself, for ONE paper on a term that always has papers.
+_PROBE_TERM = "learning"
+_RELOGIN = object()   # _probe_search's answer when the token itself was refused
 
 auth.write_template(
     "openreview",
@@ -116,6 +119,8 @@ class OpenReviewAdapter:
     _token: Optional[str] = None
     _token_expires_at: float = 0.0
     _login_issue: Optional[str] = None  # why the last login gave no token, for health_check
+    _login_status: Optional[int] = None  # the HTTP status of the last failed login (429: rate-limited)
+    _login_retry_after: Optional[float] = None
 
     def _accept_login(self, data: dict) -> Optional[str]:
         """Take a /login answer (shared by the sync and async logins). An account with multi-factor
@@ -145,6 +150,8 @@ class OpenReviewAdapter:
             logger.info("OpenReview credentials not configured.")
             return None
         self._login_issue = None
+        self._login_status = None
+        self._login_retry_after = None
         try:
             resp = httpx.post(
                 f"{API_BASE}/login",
@@ -156,6 +163,8 @@ class OpenReviewAdapter:
         except Exception as exc:  # noqa: BLE001
             logger.warning("OpenReview login failed: %s", exc)
             st = getattr(getattr(exc, "response", None), "status_code", None)
+            self._login_status = st   # a 429 here is "not verified" for health_check, not "down"
+            self._login_retry_after = _probe.retry_after_s(getattr(getattr(exc, "response", None), "headers", None))
             diag.note("openreview.login", url=f"{API_BASE}/login", status=st, exc=exc)
             return None
 
@@ -461,17 +470,64 @@ class OpenReviewAdapter:
         return self._note_to_document(data["notes"][0])
 
     def health_check(self) -> tuple[Optional[bool], str]:
+        """Ask the search path itself: the same ``/notes/search`` request (``source=forum``) with the
+        same login token, for ONE paper on a term that always has papers. Reusing a still-valid
+        token is not evidence by itself (until 2026-10-04 it read None, so a long-running process
+        never verified this source); the token is reused, never re-made per check (the /login
+        endpoint allows only 3 attempts per window, see OmniSeek-recon-openreview note).
+
+        True: a JSON answer with a ``notes`` list holding at least one note. None: HTTP 429 (from the
+        search or from a needed login). False: any other error, an unparseable answer, zero notes. A
+        kept token the search refuses (401 / 403) is replaced by ONE fresh login; a failed re-login
+        is False."""
         if not auth.is_configured("openreview"):
             return False, "credentials not configured (see ~/.omniseek/credentials/openreview.json.template)"
-        # Only a fresh login asks OpenReview anything; _get_token reuses a still-valid token without a
-        # request, and that verifies nothing (None), not True.
-        reused = bool(self._token and time.time() < self._token_expires_at - 600)
+        kept = bool(self._token and time.time() < self._token_expires_at - 600)
         token = self._get_token()
         if token is None:
-            return False, self._login_issue or "login failed"
-        if reused:
-            return None, "not probed (reusing a still-valid login token; OpenReview is not asked)"
-        return True, "OK (logged in)"
+            return self._login_verdict("login")
+        verdict = self._probe_search(token)
+        if verdict[0] is _RELOGIN and kept:
+            self._token, self._token_expires_at = None, 0.0
+            token = self._get_token()
+            if token is None:
+                return self._login_verdict(f"the kept token was refused ({verdict[1]}); re-login")
+            verdict = self._probe_search(token)
+        if verdict[0] is _RELOGIN:
+            return False, f"search refused a fresh login token ({verdict[1]})"
+        return verdict
+
+    def _login_verdict(self, what: str) -> tuple[Optional[bool], str]:
+        if self._login_status == 429:
+            return None, f"{_probe.rate_limited('api2.openreview.net', self._login_retry_after)} ({what})"
+        return False, f"{what} failed: {self._login_issue or 'no token'}"
+
+    def _probe_search(self, token: str) -> tuple:
+        try:
+            resp = httpx.get(
+                f"{API_BASE}/notes/search",
+                params={"term": _PROBE_TERM, "limit": 1, "source": "forum"},
+                headers={"Authorization": f"Bearer {token}"},
+                timeout=DEFAULT_TIMEOUT,
+            )
+        except Exception as exc:  # noqa: BLE001
+            return False, f"search probe failed: {type(exc).__name__}: {exc}"
+        if resp.status_code == 429:
+            return None, _probe.rate_limited("api2.openreview.net", _probe.retry_after_s(resp.headers))
+        if resp.status_code in (401, 403):
+            return _RELOGIN, f"HTTP {resp.status_code}"
+        if resp.status_code != 200:
+            return False, f"search probe: HTTP {resp.status_code}"
+        try:
+            data = resp.json()
+        except Exception:  # noqa: BLE001
+            return False, "search probe: the answer is not JSON"
+        notes = data.get("notes") if isinstance(data, dict) else None
+        if not isinstance(notes, list):
+            return False, "search answered without a notes list"
+        if not notes:
+            return False, f"search returned 0 papers for {_PROBE_TERM!r}"
+        return True, f"OK (search answered {len(notes)} paper for {_PROBE_TERM!r})"
 
     @staticmethod
     def _note_to_document(note: dict) -> Document:

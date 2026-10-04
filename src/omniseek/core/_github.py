@@ -37,7 +37,7 @@ import anyio
 import httpx
 
 from omniseek.core import _guard as _guard_mod
-from omniseek.core import cache, diag, http, upstreams
+from omniseek.core import _probe, cache, diag, http, upstreams
 
 logger = logging.getLogger(__name__)
 
@@ -303,6 +303,10 @@ class _GitHubShed(RuntimeError):
     """A declared gate did not admit the request within this caller's budget: nothing was sent. It
     is self-load, not a GitHub failure, so it is neither retried nor counted by the breaker."""
 
+    def __init__(self, *args) -> None:
+        super().__init__(*args)
+        _probe.note_held(str(self))   # a running health check records that nothing was sent
+
 
 # Nothing was sent, so a gate taken before the one that refused (the code-search gate, when the
 # GitHub-wide gate turns a code search away) hands back its reserved start (review N5).
@@ -457,14 +461,27 @@ def health(timeout: float = 8.0) -> tuple[Optional[bool], str]:
                 # when the breaker closes). Nothing is sent, so nothing is verified: None (the
                 # watchdog's `unverified`). A genuine outage surfaces as a failed /rate_limit probe
                 # below (2026-07-23 watchdog false-mass-down fix).
-                ok, msg = None, (f"degraded (eye backing off, {_state['open_until'] - time.time():.0f}s "
-                                 "more; upstream not probed this cycle)")
+                ok, msg = None, _probe.breaker_open("GitHub, eye backing off",
+                                                    _state["open_until"] - time.time())
                 _health["at"] = time.monotonic()
                 _health["result"] = (ok, msg)
                 return _health["result"]
-        data = get_json("/rate_limit", timeout=timeout)
+        t0 = time.time()
+        # The verdict is cached for every GitHub-backed source, so it is re-read HERE (not only in
+        # the per-source health funnel): a 429 or a refused gate is "not verified" for all of them.
+        with _probe.watching() as led:
+            data = get_json("/rate_limit", timeout=timeout)
         if data is None:
-            ok, msg = False, "GET /rate_limit failed (timeout / network / breaker / throttle)"
+            with _lock:
+                throttled_at = _state.get("last_429", 0.0)
+            if throttled_at >= t0:
+                # A 429 or a secondary-rate 403 during THIS probe: GitHub answered, but only that it
+                # is throttling us, which says nothing about whether the API serves: not verified.
+                ok, msg = None, (f"{_probe.rate_limited('api.github.com')}: GET /rate_limit hit a "
+                                 "rate or secondary limit")
+            else:
+                ok, msg = _probe.reread(
+                    False, "GET /rate_limit failed (timeout / network / breaker / throttle)", led)
         else:
             res = (data or {}).get("resources", {})
             # GET /rate_limit reports EVERY bucket's limit and remaining in one quota-free call: record

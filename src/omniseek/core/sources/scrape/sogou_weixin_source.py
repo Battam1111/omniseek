@@ -64,7 +64,7 @@ def _sogou_get(sess, url: str, **kwargs):
 
 try:
     from bs4 import BeautifulSoup
-    from curl_cffi import requests as _creq
+    from omniseek.core import curl as _creq  # curl_cffi.requests, every response recorded (upstreams.observe)
     _DEPS_OK = True
 except Exception as exc:  # noqa: BLE001 — missing deps must never break server import
     logger.warning("sogou_weixin: bs4/curl_cffi unavailable (%s) — adapter inert", exc)

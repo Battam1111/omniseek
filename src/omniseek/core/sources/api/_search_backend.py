@@ -38,7 +38,7 @@ import anyio
 import httpx
 from bs4 import BeautifulSoup
 
-from omniseek.core import http, upstreams
+from omniseek.core import _probe, http, upstreams
 
 logger = logging.getLogger(__name__)
 
@@ -571,11 +571,11 @@ def backend_ping() -> tuple[Optional[bool], str]:
     """Cached (10 min) backend reachability — so N venues' health checks cost ~1 real hit
     (avoids a rate-limit storm when the watchdog probes every search-index venue)."""
     now = time.time()
-    if _ping["ok"] is not None and now - _ping["t"] < 600:
+    if _ping["msg"] and now - _ping["t"] < 600:
         return _ping["ok"], _ping["msg"]
     with _ping_lock:  # double-checked: cold/expired cache under concurrent probes → ONE real hit
         now = time.time()
-        if _ping["ok"] is not None and now - _ping["t"] < 600:
+        if _ping["msg"] and now - _ping["t"] < 600:
             return _ping["ok"], _ping["msg"]
         state = backend_state()
         if state["active"] == "none":
@@ -595,14 +595,21 @@ def backend_ping() -> tuple[Optional[bool], str]:
             # after the cooldown sees the truth.
             ddg_part = (f"ddg disabled: {ddg_off}" if ddg_off
                         else f"ddg {state['ddg']['cooling_s']}s")
-            return None, (f"not probed (backend cooling: brave {state['brave']['cooling_s']}s / "
-                          f"{ddg_part}; will self-heal)")
+            return None, _probe.breaker_open(f"web-search backend cooling: brave "
+                                             f"{state['brave']['cooling_s']}s / {ddg_part}; will self-heal")
         backend = "brave" if _brave_key() else "ddg"
-        try:
-            search_web("site:example.com test", n=1)  # reachable if no exception (empty is fine)
-            ok, msg = True, f"OK ({backend} backend)"
-        except Exception as exc:  # noqa: BLE001
-            ok, msg = False, f"{backend}: {type(exc).__name__}: {exc}"
+        with _probe.watching() as led:
+            try:
+                search_web("site:example.com test", n=1)  # reachable if no exception (empty is fine)
+                ok, msg = True, f"OK ({backend} backend)"
+            except Exception as exc:  # noqa: BLE001
+                ok, msg = False, f"{backend}: {type(exc).__name__}: {exc}"
+                if _probe.says_rate_limited(str(exc)):
+                    # The engine's own rate-limit signal (DuckDuckGo's 202 soft limit, Brave's 429):
+                    # it answered, but not whether search serves: not verified. Cached like any probe
+                    # result, so ten venues asking at once cannot re-probe a rate-limited engine.
+                    ok, msg = None, f"not verified: rate-limited ({msg})"
+        ok, msg = _probe.reread(ok, msg, led)
         msg = f"{msg} [active: {backend_state()['active']}]"
         _ping.update(t=now, ok=ok, msg=msg)
         return ok, msg

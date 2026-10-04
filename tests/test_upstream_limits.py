@@ -2610,8 +2610,12 @@ class ModuleClientRedirectTests(unittest.TestCase):
         self.assertEqual([], offenders)
 
     # Egress whose redirects are followed inside another library, so the rule cannot be applied hop by
-    # hop from OmniSeek: listed with the reason, so that a new one is a decision, not an accident.
+    # hop from OmniSeek: listed with the reason, so that a new one is a decision, not an accident. A
+    # module that imports the shared curl_cffi entry point (omniseek.core.curl: the same calls, every
+    # response recorded) still sends through curl_cffi, so it is listed too.
     OTHER_LIBRARIES = {
+        "curl.py": "the shared curl_cffi entry point: records every response (upstreams.observe); "
+                   "redirects followed inside libcurl",
         "sources/scrape/cninfo_source.py": "curl_cffi TLS impersonation (anti-bot); host ungated",
         "sources/scrape/eastmoney_source.py": "curl_cffi session, TLS impersonation; hosts ungated",
         "sources/scrape/gov_policy_source.py": "curl_cffi TLS impersonation (anti-bot); host ungated",
@@ -2623,8 +2627,12 @@ class ModuleClientRedirectTests(unittest.TestCase):
 
     def test_egress_through_other_http_libraries_is_listed(self):
         found = set()
+        # the package name comes from a live import, so the pattern still holds after the public
+        # mirror's sync renames the package
+        pkg = re.escape(guard_mod.__name__.rsplit(".", 1)[0])
         lib = re.compile(r"^\s*(?:from curl_cffi import|import curl_cffi|import urllib\.request"
-                         r"|from urllib\.request import|from urllib import request)", re.M)
+                         r"|from urllib\.request import|from urllib import request"
+                         rf"|from {pkg} import curl\b|import {pkg}\.curl\b)", re.M)
         for path in EYE.rglob("*.py"):
             rel = path.relative_to(EYE).as_posix()
             if rel != "http.py" and lib.search(path.read_text(encoding="utf-8")):
@@ -3088,7 +3096,9 @@ class CdpQueueTests(unittest.TestCase):
         host = upstreams.host_guard("blog.iclr.cc")
         _reset_guard(host)
         chrome = _cdp._gate_for(_cdp.DEFAULT_CDP_URL)
-        self.assertTrue(chrome.acquire(timeout=1))           # another browser call has the turn
+        turns = _cdp.max_connections(_cdp.DEFAULT_CDP_URL)   # every turn this Chrome allows is taken
+        for _ in range(turns):
+            self.assertTrue(chrome.acquire(timeout=1))       # other browser calls have the turns
         during = []
         probe = threading.Timer(0.2, lambda: during.append(host.sema._value))
         try:
@@ -3101,7 +3111,8 @@ class CdpQueueTests(unittest.TestCase):
                 took = time.monotonic() - t0
                 probe.join()
         finally:
-            chrome.release()
+            for _ in range(turns):
+                chrome.release()
             _reset_guard(host)
         self.assertIsNone(out)
         self.assertLess(took, 1.5, f"queued {took:.1f}s past a 0.6 s deadline")

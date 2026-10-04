@@ -223,8 +223,9 @@ class BaseAPIAdapter:
     def health_check(self) -> tuple[Optional[bool], str]:
         """Default probe: GET ``health_probe_url`` through the shared http client
         and report on the status. ``http.get`` returns None on any failure (incl.
-        oversize / timeout), which maps to an unhealthy result. Subclasses with a
-        smarter probe (e.g. treating HTTP 429 as "alive but throttling") override
+        oversize / timeout), which maps to an unhealthy result; one that came only from
+        an HTTP 429 or a busy declared gate is re-read as None (not verified) by the
+        health funnel (``fetcher._safe_health``). Subclasses with a smarter probe override
         this.
         """
         if not self.health_probe_url:

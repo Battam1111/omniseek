@@ -330,11 +330,11 @@ class SECFinancialsAdapter:
     def fetch_url(self, url: str) -> Optional[Document]:
         return None
 
-    def health_check(self) -> tuple[bool, str]:
+    def health_check(self) -> tuple[Optional[bool], str]:
         try:
             by_ticker, _ = _load_ticker_map()
-        except GateBusy as exc:
-            return False, str(exc)
+        except GateBusy as exc:   # the gate sent nothing: not verified (until 2026-10-04 this read False)
+            return None, f"not verified: an eye gate held the request back, nothing sent ({exc})"
         if not by_ticker:
             return False, "ticker map fetch failed (UA gating or endpoint change?)"
         return True, f"OK ({len(by_ticker)} tickers)"

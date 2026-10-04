@@ -26,13 +26,14 @@ as the hand-written form did). ``fetch_url`` (id_list by-id lookup) and ``health
 from __future__ import annotations
 
 import logging
+import time
 from datetime import datetime, timezone
 from typing import Optional
 from urllib.parse import urlparse
 
 import feedparser
 
-from omniseek.core import diag, http, upstreams
+from omniseek.core import _probe, diag, http, upstreams
 from omniseek.core.normalize import Document
 from omniseek.core.sources.api._base import BaseAPIAdapter
 
@@ -251,10 +252,13 @@ class ArxivAdapter(BaseAPIAdapter):
         # but refused us" is its OWN state, not healthy and not down.
         #
         # A single probe also cannot see a RATE failure (one request gets through while real traffic
-        # is refused), so check the breaker FIRST: it is the only thing here that reflects load.
+        # is refused), so check the breaker FIRST: it is the only thing here that reflects load. Open,
+        # it sends nothing, so nothing is verified: None (until 2026-10-04 this read False), with the
+        # reopening time; the searches it holds back return empty meanwhile.
         if _guard.is_open():
-            return False, ("circuit breaker OPEN (consecutive failures, typically HTTP 429): no "
-                           "request is being sent, so live searches are returning empty")
+            return None, (_probe.breaker_open("arXiv, consecutive failures, typically HTTP 429",
+                                              _guard.state["open_until"] - time.time())
+                          + "; live searches return empty until it closes")
         try:
             # The probe is a real API request: it takes the same permit AND the same 3 s start slot
             # as a search (it used to take only the in-flight permit, so a health sweep could land
@@ -276,9 +280,12 @@ class ArxivAdapter(BaseAPIAdapter):
         if resp.status_code == 200:
             return True, "OK"
         if resp.status_code == 429:
-            return False, (f"HTTP 429 rate-limited: the host is alive but refusing us, so live "
-                           f"searches return empty. Pacing is 1 request / {_ARXIV_MIN_INTERVAL_S}s; "
-                           f"if this persists, something is bursting past it")
+            # The host answered, but only that it refuses us now: not verified (None; until
+            # 2026-10-04 this read False). The breaker check above is what reports a sustained rate
+            # failure as it holds searches back.
+            return None, (f"{_probe.rate_limited('export.arxiv.org', _probe.retry_after_s(resp.headers))}: "
+                          f"live searches return empty while it lasts. Pacing is 1 request / "
+                          f"{_ARXIV_MIN_INTERVAL_S}s; if this persists, something is bursting past it")
         return False, f"HTTP {resp.status_code}"
 
     # ------------------------------------------------------------------ parse

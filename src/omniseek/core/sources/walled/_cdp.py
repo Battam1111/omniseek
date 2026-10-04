@@ -97,6 +97,24 @@ _CDP_SERVICES = {
     "9225": "com.omniseek.cdp.douyin",
 }
 
+# port → how many connections OmniSeek may hold to that Chrome at once. The ONE place this is decided,
+# read by both ways in (the persistent pool, _pool_for, and the per-call path's gate, _gate_for):
+#   * 9222, the shared browser (大号 logins: zhihu, 一亩三分地, ...): 3, a few reused connections so
+#     concurrent named walled fetches do not queue behind each other (the Chrome's CDP pump
+#     serializes commands anyway; page loads and renders still overlap);
+#   * 9223 / 9224, the two xiaohongshu 小号, and 9225, the douyin 小号: 1, strictly one flow at a
+#     time (anti-ban: an account that must not look automated).
+# A port that is not here (the jailed 9444 render Chromium, a new browser nobody listed) gets 1: one
+# at a time is the safe side to be wrong on. tests/test_cdp_ondemand.py fails when a port in
+# _CDP_SERVICES has no row here, so a new browser's size is a decision, not a default.
+_CDP_MAX_CONNECTIONS = {
+    "9222": 3,
+    "9223": 1,
+    "9224": 1,
+    "9225": 1,
+}
+_CDP_DEFAULT_CONNECTIONS = 1
+
 _PORT_RE = re.compile(r":(\d+)")
 _START_LOCK = threading.Lock()
 _START_TIMEOUT_S = 20  # cold start measured at 1s; 20 is a generous ceiling, not an expectation
@@ -110,6 +128,13 @@ def cdp_port(cdp_url: str) -> Optional[str]:
 def cdp_service_for(cdp_url: str) -> Optional[str]:
     port = cdp_port(cdp_url)
     return _CDP_SERVICES.get(port) if port else None
+
+
+def max_connections(cdp_url: str) -> int:
+    """How many connections OmniSeek may hold to the Chrome at ``cdp_url`` at once (the port's row of
+    _CDP_MAX_CONNECTIONS; 1 for a port with no row or a url without a port)."""
+    port = cdp_port(cdp_url)
+    return _CDP_MAX_CONNECTIONS.get(port, _CDP_DEFAULT_CONNECTIONS) if port else _CDP_DEFAULT_CONNECTIONS
 
 
 def touch_last_use(cdp_url: str) -> None:
@@ -197,15 +222,15 @@ _inflight_cdp = 0
 _inflight_lock = threading.Lock()
 
 
-# Per-Chrome SERIALIZATION gate. The default cdp_call path spawns a fresh thread PER call with no
-# concurrency bound, so two named walled fetches to the SAME Chrome run truly concurrently: two
-# tabs, two same-site searches on one shared browser → the site's flood-control throttles one and
-# OmniSeek SILENTLY caches the empty as success (the gap-③ false-empty; proven 2026-06-22: two
-# parallel 一亩三分地 fetches false-emptied one, while a serial fetch returned 35). Walled sources
-# are slow + explicit_only (named, never in the broad fan-out), so STRICT serial-per-Chrome is the
-# right trade: correctness over a little queueing latency. (Borrowed from exa-mcp's async job-queue
-# serialization — the minimal stop-bleeding subset.) Keyed by cdp_url so different Chromes
-# (9222 shared / 9223 xhs小号 / 9224 xhs大陆号) never block each other.
+# Per-Chrome gate on the per-call path. The default cdp_call path spawns a fresh thread PER call, so
+# without a bound two named walled fetches to the SAME Chrome run truly concurrently: two tabs, two
+# same-site searches on one shared browser → the site's flood-control throttles one and OmniSeek
+# SILENTLY caches the empty as success (the gap-③ false-empty; proven 2026-06-22: two parallel
+# 一亩三分地 fetches false-emptied one, while a serial fetch returned 35). The gate admits at most the
+# port's row of _CDP_MAX_CONNECTIONS (the same table the pool reads, so both paths hold the same
+# number of connections; until 2026-10-04 this gate was 1 for every port, while the pool gave 9222
+# three). Sites that must not see two flows at once keep their own serialization on top
+# (yipinsanfendi's _run chokepoint). Keyed by cdp_url so different Chromes never block each other.
 _cdp_gates: dict[str, "threading.Semaphore"] = {}
 _cdp_gates_lock = threading.Lock()
 
@@ -216,7 +241,7 @@ def _gate_for(cdp_url: str) -> "threading.Semaphore":
         with _cdp_gates_lock:
             g = _cdp_gates.get(cdp_url)
             if g is None:
-                g = threading.Semaphore(1)
+                g = threading.Semaphore(max_connections(cdp_url))
                 _cdp_gates[cdp_url] = g
     return g
 
@@ -257,11 +282,8 @@ def _sweep_excess_tabs(ctx, keep_recent: int = 6) -> None:
 # Chrome, each holding ONE long-lived sync_playwright + connection for the process lifetime, and
 # runs each callback on a fresh page inside its owning worker thread — which satisfies Playwright
 # sync's thread-affinity (a connection is only ever touched by the one thread that created it).
-#   * 9223 小号 → size 1 = strictly serial (anti-ban: one flow at a time, == the old _gate_serialize
-#     + 9223-pool-of-1 invariant; the pool NEVER widens 9223 concurrency).
-#   * 9222 shared 大号 → size 3 = a few reused connections so concurrent named walled fetches don't
-#     head-of-line block each other (the single Chrome's CDP pump serializes commands anyway, but
-#     page loads/renders still overlap).
+# Its size per Chrome is the port's row of _CDP_MAX_CONNECTIONS (9222 shared 大号: 3; the 小号 on
+# 9223 / 9224 / 9225: 1, strictly serial, the pool never widens them; any other port: 1).
 # Self-heals after a Chrome restart (the reaper stopped it and ensure_browser started a new one, or
 # the sentinel / launchd restarted it): before reusing its connection a worker checks that the
 # Chrome on the port is still the one it connected to (_browser_instance) and reconnects if not, so
@@ -286,8 +308,7 @@ def _pool_for(cdp_url: str) -> "_CdpPool":
         with _pools_lock:
             p = _pools.get(cdp_url)
             if p is None:
-                size = 1 if ("9223" in cdp_url or "9224" in cdp_url) else 3  # 9223/9224 小号 stay serial (anti-ban)
-                p = _CdpPool(cdp_url, size)
+                p = _CdpPool(cdp_url, max_connections(cdp_url))
                 _pools[cdp_url] = p
     return p
 

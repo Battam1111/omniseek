@@ -849,7 +849,7 @@ try:
     reddit_source._arctic_get = lambda *a, **k: (_rd_ag_calls.append(1), [])[1]
     _h_cool = _rd_ad.health_check()
     check("reddit health: breaker cooling reads NOT VERIFIED (None, not 'unreachable', not healthy) + skips the probe",
-          _h_cool[0] is None and "cooling" in _h_cool[1] and len(_rd_ag_calls) == 0)
+          _h_cool[0] is None and "circuit breaker open" in _h_cool[1] and len(_rd_ag_calls) == 0)
     reddit_source._arctic_cooldown_until = 0.0  # breaker closed for the next two cases
     reddit_source._arctic_get = lambda *a, **k: []
     _h_empty = _rd_ad.health_check()
@@ -1054,12 +1054,12 @@ try:
     check("reddit health: an item reads healthy, an empty list reads degraded",
           _rt_d_ok[0] is True and _rt_d_empty[0] is False and "data path" in _rt_d_empty[1],
           f"ok={_rt_d_ok} empty={_rt_d_empty}")
-    check("reddit health: a slow-down 422 reads as the far end rate-limiting us (one probe, watchdog refusal)",
-          _rt_d_slow[0] is False and "rate-limited" in _rt_d_slow[1] and _rt_is_refused(_rt_d_slow[1])
+    check("reddit health: a slow-down 422 reads as the far end rate-limiting us: not verified (None), one probe",
+          _rt_d_slow[0] is None and "rate-limited" in _rt_d_slow[1] and _rt_is_refused(_rt_d_slow[1])
           and _rt_d_slow_calls == 1 and not _DASH.search(_rt_d_slow[1]),
           f"{_rt_d_slow} calls={_rt_d_slow_calls}")
     check("reddit health: a 422 whose body was not captured also reads as rate-limited, one probe",
-          _rt_d_nobody[0] is False and "rate-limited" in _rt_d_nobody[1]
+          _rt_d_nobody[0] is None and "rate-limited" in _rt_d_nobody[1]
           and _rt_is_refused(_rt_d_nobody[1]) and _rt_d_nobody_calls == 1,
           f"{_rt_d_nobody} calls={_rt_d_nobody_calls}")
 
@@ -1085,12 +1085,12 @@ try:
     _rd_http.get_json = _rt_fail(422, None)[0]
     _rt_reset()
     _rt_e_none = _rt_ad.health_check()
-    check("reddit health: an observed refusal body is quoted as Arctic said it (still a watchdog refusal)",
-          _rt_e_obs[0] is False and "Too many requests, please slow down" in _rt_e_obs[1]
+    check("reddit health: an observed refusal body is quoted as Arctic said it (still not verified)",
+          _rt_e_obs[0] is None and "Too many requests, please slow down" in _rt_e_obs[1]
           and "Maybe slow down a bit" not in _rt_e_obs[1] and "not captured" not in _rt_e_obs[1]
           and _rt_is_refused(_rt_e_obs[1]) and not _DASH.search(_rt_e_obs[1]), str(_rt_e_obs))
     check("reddit health: a 422 whose body was not captured says so and quotes no Arctic message",
-          _rt_e_none[0] is False and "not captured" in _rt_e_none[1]
+          _rt_e_none[0] is None and "not captured" in _rt_e_none[1]
           and "Maybe slow down" not in _rt_e_none[1] and _rt_is_refused(_rt_e_none[1])
           and not _DASH.search(_rt_e_none[1]), str(_rt_e_none))
     check("reddit: the refusal diag reason quotes the observed body, or says it was not captured",
@@ -4789,14 +4789,14 @@ finally:
 # (breaker open / pool saturated): a transient breaker-open must NOT flip all 40+ OpenAlex-backed
 # sources down. Since 2026-10-04 it is not healthy either: nothing was sent, so it is None (not
 # verified). Force the breaker open (open_until far future) so get_json raises OpenAlexDown
-# (self-shed) BEFORE any network, and health() must report ok=None + "degraded".
+# (self-shed) BEFORE any network, and health() must report ok=None + "circuit breaker open".
 _oa2._state["open_until"] = 9e18
 _oa2._health["result"] = None; _oa2._health["at"] = 0.0
 _oa_deg = _oa2.health()
 _oa2._state["open_until"] = 0.0
 _oa2._health["result"] = None; _oa2._health["at"] = 0.0
 check("openalex: health() is None (not verified; neither down nor healthy) while self-shedding",
-      _oa_deg[0] is None and "degraded" in _oa_deg[1], str(_oa_deg))
+      _oa_deg[0] is None and "circuit breaker open" in _oa_deg[1], str(_oa_deg))
 
 # FIX 2: cartographer S2 edges. A re-add() preserves prior referenced_works (no wipe), and a
 # tiny synthetic seed+reference set yields n_edges > 0 and at least one in-corpus in_degree > 0.
@@ -5336,7 +5336,7 @@ check("s2 non-429 not flagged", _S2._is_rate_limit(RuntimeError("boom")) is Fals
 _S2._state["open_until"] = _t.time() + 9999; _S2._health["result"] = None
 _hc = _S2.health()
 check("s2 health is None (not verified; neither down nor healthy) while circuit open, self-shed is not an outage",
-      _hc[0] is None and "degraded" in _hc[1], str(_hc))
+      _hc[0] is None and "circuit breaker open" in _hc[1], str(_hc))
 _S2._state["open_until"] = 0.0; _S2._health["result"] = None
 
 # S2 retry (2026-06-20): the lib's OWN 10x/250s tenacity backoff is OFF (retry=False); OmniSeek owns a
@@ -5515,14 +5515,14 @@ check("github_source _repo_tree tries git/trees/HEAD first (skips the /repos rou
 # 2026-07-23 watchdog false-mass-down fix: health() must not report down while the breaker is open
 # (self-shed), so a transient breaker-open does not flip github + github_trending down. Since
 # 2026-10-04 it is None (not verified), not True: no request is sent. Force the breaker open, hit the
-# early breaker branch -> ok=None + "degraded", no network.
+# early breaker branch -> ok=None + "circuit breaker open", no network.
 _gh._state["open_until"] = 9e18
 _gh._health["result"] = None; _gh._health["at"] = 0.0
 _gh_deg = _gh.health()
 _gh._state["open_until"] = 0.0
 _gh._health["result"] = None; _gh._health["at"] = 0.0
 check("github: health() is None (not verified; neither down nor healthy) while circuit open",
-      _gh_deg[0] is None and "degraded" in _gh_deg[1])
+      _gh_deg[0] is None and "circuit breaker open" in _gh_deg[1])
 
 import omniseek.core.sources.api.exa_source as _exa
 check("exa: _health is a callable single-flight probe", callable(_exa._health))
@@ -5654,7 +5654,7 @@ _se._health["result"] = None
 _se_deg = _se.health()
 _se._se_cooldown_until = 0.0; _se._se_fail_streak = 0; _se._health["result"] = None
 check("stackexchange: health() is None (not verified; neither down nor healthy) while quota cooling",
-      _se_deg[0] is None and "degraded" in _se_deg[1])
+      _se_deg[0] is None and "circuit breaker open" in _se_deg[1])
 # key injection: a configured free Stack Apps key is sent on every SE GET (quota 300→10k/day)
 _se._SE_KEY = "TESTKEY"
 _se_cap = {}
@@ -13386,6 +13386,7 @@ class _OrLoginResp:
 
 
 _or_posts: list = []
+_or_gets: list = []
 _OR_MFA = {"mfaPending": True, "mfaPendingToken": "pending", "mfaMethods": ["emailOtp"],
            "preferredMethod": "emailOtp"}
 
@@ -13402,7 +13403,9 @@ with _or_mock.patch.object(_or.auth, "load", lambda name: {"username": "u@exampl
     with _or_mock.patch.object(_or.httpx, "post", _or_login_with(_OR_MFA)):
         _or_mfa_health = _or.OpenReviewAdapter().health_check()
     _or_mfa_posts = list(_or_posts)
-    with _or_mock.patch.object(_or.httpx, "post", _or_login_with({"token": "t0k"})):
+    with _or_mock.patch.object(_or.httpx, "post", _or_login_with({"token": "t0k"})), \
+            _or_mock.patch.object(_or.httpx, "get", lambda url, **kw: (_or_gets.append((url, kw)), _OrLoginResp(
+                {"notes": [{"id": "n1"}]}))[1]):
         _or_ok_health = _or.OpenReviewAdapter().health_check()
 check("openreview: an account with multi-factor login reads as such in health (not a bare 'login "
       "failed'), and OmniSeek never asks OpenReview to email a code (no /mfa/ call)",
@@ -13410,8 +13413,12 @@ check("openreview: an account with multi-factor login reads as such in health (n
       and "emailOtp" in _or_mfa_health[1]
       and _or_mfa_posts == [f"{_or.API_BASE}/login"],
       detail=f"health={_or_mfa_health} posts={_or_mfa_posts}")
-check("openreview: a login that returns a token is healthy",
-      _or_ok_health == (True, "OK (logged in)"), detail=f"health={_or_ok_health}")
+check("openreview: a login that returns a token is healthy once the search path answers a paper "
+      "(the health probe asks /notes/search with source=forum, limit 1)",
+      _or_ok_health[0] is True and _or_ok_health[1].startswith("OK (search answered")
+      and len(_or_gets) == 1 and _or_gets[0][0] == f"{_or.API_BASE}/notes/search"
+      and _or_gets[0][1].get("params", {}).get("source") == "forum",
+      detail=f"health={_or_ok_health} gets={_or_gets}")
 
 # 2026-07-25 eyefix: LMArena (ex-LMSys) stopped publishing ANY feed (arena.ai/blog/rss/ and every
 # candidate answer with the SPA shell, zero <item>, and the blog declares no rel=alternate), so the
@@ -15305,8 +15312,10 @@ finally:
     for _n in ("_s0_asm_c", "_s0_asm_a", "_s0_asm_b"):
         fetcher.unregister_adapter(_n)
 
-# (I4) walled CDP pool per-URL capacities: the REAL _pool_for sizing (9225/douyin falls to the else
-#      branch => 3). Probe the real branch logic without spawning worker threads (stub the pool class).
+# (I4) walled CDP pool per-URL capacities: the REAL _pool_for sizing, read from _cdp._CDP_MAX_CONNECTIONS
+#      (until 2026-10-04 a substring test sent 9225/douyin to the else branch => 3, against the douyin
+#      小号's one-at-a-time rule). Probe the real lookup without spawning worker threads (stub the pool
+#      class); the per-call path's gate reads the same table.
 from omniseek.core.sources.walled import _cdp as _s0_cdp  # noqa: E402
 
 
@@ -15318,16 +15327,21 @@ class _S0FakePool:
 
 _s0_pool_cls_prev = _s0_cdp._CdpPool
 _s0_pools_prev = dict(_s0_cdp._pools)
+_s0_ports = ("9222", "9223", "9224", "9225", "9444")
 try:
     _s0_cdp._CdpPool = _S0FakePool
     _s0_cdp._pools.clear()
-    _s0_caps = {u: _s0_cdp._pool_for(f"http://127.0.0.1:{u}").size for u in ("9222", "9223", "9224", "9225")}
+    _s0_caps = {u: _s0_cdp._pool_for(f"http://127.0.0.1:{u}").size for u in _s0_ports}
 finally:
     _s0_cdp._CdpPool = _s0_pool_cls_prev
     _s0_cdp._pools.clear()
     _s0_cdp._pools.update(_s0_pools_prev)
-check("S0.4 (I4): walled CDP pool per-URL capacities are 9222=3, 9223=1, 9224=1, 9225=3 (real _pool_for config)",
-      _s0_caps == {"9222": 3, "9223": 1, "9224": 1, "9225": 3}, str(_s0_caps))
+_s0_gate_caps = {u: _s0_cdp.max_connections(f"http://127.0.0.1:{u}") for u in _s0_ports}
+check("S0.4 (I4): walled CDP pool per-URL capacities are 9222=3, 9223=1, 9224=1, 9225=1, unlisted 9444=1 "
+      "(real _pool_for config), the per-call gate reads the same, and every launchd port has a row",
+      _s0_caps == {"9222": 3, "9223": 1, "9224": 1, "9225": 1, "9444": 1} and _s0_gate_caps == _s0_caps
+      and set(_s0_cdp._CDP_SERVICES) <= set(_s0_cdp._CDP_MAX_CONNECTIONS),
+      f"pool={_s0_caps} gate={_s0_gate_caps}")
 
 
 # (fetch_one) deadline_s=None is the deliberate UNBOUNDED override (guards the prewarm contract).

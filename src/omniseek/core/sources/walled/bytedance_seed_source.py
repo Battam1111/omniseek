@@ -35,7 +35,7 @@ from urllib.parse import urlparse
 
 import httpx
 
-from omniseek.core import cache
+from omniseek.core import _probe, cache
 from omniseek.core.normalize import Document, jsonsafe
 
 logger = logging.getLogger(__name__)
@@ -71,8 +71,9 @@ class BytedanceSeedAdapter:
         "(httpx 直连 jobs.bytedance.com JSON API, 无需 CDP/auth/sign)"
     )
 
-    def _fetch_filters_meta(self) -> dict:
-        """Get subject ID → name map. Cached aggressively (1h)."""
+    def _fetch_filters_meta(self, _status: Optional[list] = None) -> dict:
+        """Get subject ID → name map. Cached aggressively (1h). ``_status``: a list the HTTP status
+        of a failed fetch is appended to (the health check reads a 429 from it)."""
         key = cache.make_key("bytedance_seed", "filters_meta", "v1")
         cached = cache.get(key)
         if cached is not None:
@@ -88,6 +89,8 @@ class BytedanceSeedAdapter:
             data = resp.json()
         except Exception as exc:  # noqa: BLE001
             logger.warning("bytedance filters meta failed: %s", exc)
+            if _status is not None:
+                _status.append(getattr(getattr(exc, "response", None), "status_code", None))
             return {}
 
         cache.set(key, data, ttl=3600)
@@ -238,9 +241,12 @@ class BytedanceSeedAdapter:
         if cache.get(cache.make_key("bytedance_seed", "filters_meta", "v1")) is not None:
             return None, "not probed (the filters meta is still cached; the JSON API is asked again when it expires)"
         try:
-            meta = self._fetch_filters_meta()
+            status: list = []
+            meta = self._fetch_filters_meta(_status=status)
             if meta and meta.get("code") == 0:
                 return True, "OK (filters meta cached + JSON API reachable)"
+            if 429 in status:   # it answered, but not whether the API serves: not verified
+                return None, _probe.rate_limited("jobs.bytedance.com")
             return False, f"meta code: {meta.get('code') if meta else 'no data'}"
         except Exception as exc:  # noqa: BLE001
             return False, f"{type(exc).__name__}: {exc}"

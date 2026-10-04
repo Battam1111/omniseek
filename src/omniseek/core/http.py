@@ -31,7 +31,7 @@ from urllib.parse import urljoin, urlsplit
 import anyio
 import httpx
 
-from omniseek.core import _guard, _netguard, cache, diag, upstreams
+from omniseek.core import _guard, _netguard, _probe, cache, diag, upstreams
 
 logger = logging.getLogger(__name__)
 
@@ -541,6 +541,7 @@ def _request_capped(method: str, url: str, *, timeout: int, headers: dict,
                     bd = exc.response.text
                 except Exception:  # noqa: BLE001
                     bd = None
+            _probe.note_error_body(st, bd, where=url)
             diag.note(f"http.{method.lower()}", url=url, status=st, body=bd, exc=exc)
             return None
     return None
@@ -1187,6 +1188,7 @@ async def _arequest_capped(method: str, url: str, *, timeout: int, headers: dict
                     bd = exc.response.text
                 except Exception:  # noqa: BLE001
                     bd = None
+            _probe.note_error_body(st, bd, where=url)
             diag.note(f"http.{method.lower()}", url=url, status=st, body=bd, exc=exc)
             return None
     return None

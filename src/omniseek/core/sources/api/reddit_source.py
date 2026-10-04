@@ -64,7 +64,7 @@ from urllib.parse import quote, urlparse
 
 import anyio
 
-from omniseek.core import cache, diag, http
+from omniseek.core import _probe, cache, diag, http
 from omniseek.core._guard import GateBusy, bounded_async_slot, bounded_slot
 from omniseek.core.fetcher import register_adapter
 from omniseek.core.normalize import Document, mk_signal
@@ -1271,7 +1271,9 @@ class RedditAdapter:
         # stress test surfaced: reddit was throttled, not broken). While cooling no probe is sent, so
         # nothing is verified: None (the watchdog's `unverified`), neither healthy nor failing.
         if _arctic_cooling():
-            return None, "not probed (Arctic Shift rate-limited/cooling; reddit serves cache until it clears)"
+            return None, _probe.breaker_open(
+                "Arctic Shift rate-limited, reddit serves cache until it clears",
+                _arctic_cooldown_until - time.time())
         # The probe has the shape the data path uses (title keyword search, 2026-10-04), so health
         # tests what search actually sends.
         diag.enable()
@@ -1293,12 +1295,12 @@ class RedditAdapter:
             # health is a data-path check not a reachability ping.
             return False, "Arctic Shift returned 0 items for the r/PhD title=advisor probe (data path degraded)"
         if _arctic_refused(captures):
-            # The far end refused the probe under load, the same verdict as a 429. The wording carries
-            # "rate limit" so infra_jobs._is_refused reads it as a refusal, not as our defect. Arctic's
-            # message is quoted only when the http layer kept the body.
+            # The far end refused the probe under load, the same verdict as a 429: it answered, but
+            # not whether the mirror serves, so it is not verified (None; until 2026-10-04 this read
+            # False). Arctic's message is quoted only when the http layer kept the body.
             words = _arctic_refusal_words(_arctic_observed_message(captures))
-            return False, (f"Arctic Shift rate-limited us: {words} (the far end's load-based rate limit "
-                           "refused the probe; not retried)")
+            return None, (f"not verified: rate-limited (Arctic Shift: {words}; the far end's load-based "
+                          "rate limit refused the probe; not retried)")
         if captures:
             observed = captures[-1]
             status = observed.get("status")

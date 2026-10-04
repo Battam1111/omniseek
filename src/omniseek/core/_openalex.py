@@ -31,7 +31,7 @@ from urllib.parse import urlsplit
 import anyio
 import httpx
 
-from omniseek.core import auth, diag, http, upstreams
+from omniseek.core import _probe, auth, diag, http, upstreams
 
 logger = logging.getLogger(__name__)
 
@@ -146,7 +146,12 @@ def _get_client() -> "httpx.Client":
 
 
 class OpenAlexDown(RuntimeError):
-    """Raised immediately while the circuit is open (recent consecutive failures)."""
+    """Raised immediately while the circuit is open (recent consecutive failures), and for the other
+    shed states (pool saturated, rate backlog, every daily budget dry): nothing was sent."""
+
+    def __init__(self, *args) -> None:
+        super().__init__(*args)
+        _probe.note_held(str(self))   # a running health check records that nothing was sent
 
 
 def _slot_busy(wait: float) -> OpenAlexDown:
@@ -600,21 +605,28 @@ def health(timeout: float = 8.0) -> tuple[Optional[bool], str]:
     with _health_lock:
         if _health["result"] is not None and now - _health["at"] < _HEALTH_TTL_S:
             return _health["result"]
-        try:
-            get_json("/works", {"per-page": 1, "select": "id"}, timeout=timeout)
-            ok, msg = True, "OK (shared OpenAlex upstream reachable, key valid)"
-        except OpenAlexDown as exc:
-            # Self-shed, NOT upstream-down: get_json raises OpenAlexDown ONLY for OmniSeek's own
-            # protective states (breaker open / concurrency pool saturated / rate-gate backlog /
-            # daily budget dry) and raises the RAW exception for a genuine upstream failure (caught
-            # below). Reporting DOWN here flipped all 40+ OpenAlex-backed sources down on a single
-            # transient breaker-open (the false mass outage the source-health watchdog surfaced
-            # 2026-07-23). Nothing was sent, so nothing was verified: None (the watchdog's
-            # `unverified`), neither healthy nor failing; it self-heals when the breaker closes / the
-            # pool frees. A genuine outage still surfaces as ok=False via the raw branch.
-            ok, msg = None, f"degraded (eye backing off, upstream not probed this cycle): {exc}"
-        except Exception as exc:  # noqa: BLE001
-            ok, msg = False, f"{type(exc).__name__}: {exc}"
+        with _probe.watching() as led:
+            try:
+                get_json("/works", {"per-page": 1, "select": "id"}, timeout=timeout)
+                ok, msg = True, "OK (shared OpenAlex upstream reachable, key valid)"
+            except OpenAlexDown as exc:
+                # Self-shed, NOT upstream-down: get_json raises OpenAlexDown ONLY for OmniSeek's own
+                # protective states (breaker open / concurrency pool saturated / rate-gate backlog /
+                # daily budget dry) and raises the RAW exception for a genuine upstream failure (caught
+                # below). Reporting DOWN here flipped all 40+ OpenAlex-backed sources down on a single
+                # transient breaker-open (the false mass outage the source-health watchdog surfaced
+                # 2026-07-23). Nothing was sent, so nothing was verified: None (the watchdog's
+                # `unverified`), neither healthy nor failing; it self-heals when the breaker closes / the
+                # pool frees. A genuine outage still surfaces as ok=False via the raw branch.
+                with _lock:
+                    left = _state["open_until"] - time.time()
+                ok, msg = None, (_probe.breaker_open("OpenAlex, eye backing off", left) if left > 0
+                                 else f"not verified: OmniSeek shed the probe, nothing sent ({exc})")
+            except Exception as exc:  # noqa: BLE001
+                ok, msg = False, f"{type(exc).__name__}: {exc}"
+        # Cached for every OpenAlex-backed source, so re-read HERE: a probe that failed only on a 429
+        # (both lanes rate-limited) is "not verified" for all of them, not "down".
+        ok, msg = _probe.reread(ok, msg, led)
         with _lock:
             last = _state.get("last_429", 0.0)
         if ok and last and (time.time() - last) < 1800:
