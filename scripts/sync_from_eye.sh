@@ -170,8 +170,12 @@ PYEOF
 #     belong to the MIRROR (pyproject.toml is kept, not synced). The raw copy in step 1 ships the
 #     eye's private-era docstring and whatever version string the eye last froze, so re-author
 #     this one file from the mirror's own pyproject after every sync; drift is impossible.
+#     Only the docstring and __version__ are metadata. CODE after the eye's __version__ line is
+#     engine behaviour and is kept (2026-10-04: the eye installs its credential masking there, and
+#     re-authoring the whole file silently dropped it from the mirror; the smoke gate caught it).
 VER="$(sed -n 's/^version = "\(.*\)"$/\1/p' "$PEN_ROOT/pyproject.toml" | head -1)"
 [ -n "$VER" ] || { echo "FATAL: could not read version from pyproject.toml" >&2; exit 1; }
+INIT_CODE="$(awk 'seen{print} /^__version__ = /{seen=1}' "$PEN_SRC/__init__.py")"
 cat > "$PEN_SRC/__init__.py" <<PYEOF
 """OmniSeek: a self-hosted perception MCP server.
 
@@ -182,7 +186,10 @@ relation graph) under \`\`omniseek.core\`\`.
 
 __version__ = "$VER"
 PYEOF
-echo "    re-authored src/omniseek/__init__.py (version $VER from pyproject)"
+if [ -n "$(printf '%s' "$INIT_CODE" | tr -d '[:space:]')" ]; then
+  printf '%s\n' "$INIT_CODE" >> "$PEN_SRC/__init__.py"
+fi
+echo "    re-authored src/omniseek/__init__.py (version $VER from pyproject; code after __version__ kept)"
 
 # 2d. Regenerate the source-catalog doc from the freshly renamed engine. The catalog is code,
 #     so the doc rides the same sync that changes it and can never drift; hand counts stay out

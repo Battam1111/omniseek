@@ -25,6 +25,7 @@ from urllib.parse import urlparse
 
 import anyio
 
+from omniseek import redact as _redact
 from omniseek.core import _guard
 from omniseek.core.normalize import Document
 
@@ -770,12 +771,13 @@ def _build_diagnostic(adapter: "SourceAdapter", *, docs: list, captures: list,
             note = ("empty with no captured egress failure: the source likely returned a "
                     "well-formed response with zero items (query miss, or a parser/selector "
                     "that silently matched nothing: open the adapter to confirm)")
-        return {
+        # The one place every diagnostic is assembled: mask what an exception or capture carried.
+        return _redact.redact_obj({
             "adapter_path": _adapter_source_path(adapter),
             "returned": len(docs),
             "captures": captures,
             "note": note,
-        }
+        })
     except Exception as exc:  # noqa: BLE001 (diagnostic assembly must never break the retrieval)
         logger.debug("_build_diagnostic failed: %s", exc)
         return None
@@ -3106,7 +3108,9 @@ def health_check_outcome(adapter: SourceAdapter,
     if t.is_alive():
         return None, f"timeout (>{int(timeout)}s): health_check did not return", False
     ok, msg = box.get("r", (False, "no result"))
-    return ok, msg, True
+    # Every health message (the live omniseek_sources probe, the watchdog, its state file and alerts)
+    # passes here; an HTTPStatusError's text carries the full request address, key included.
+    return ok, _redact.redact(msg), True
 
 
 def health_check_bounded(adapter: SourceAdapter, timeout: Optional[float] = None) -> tuple[Optional[bool], str]:

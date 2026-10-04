@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import importlib
 import sys
-import traceback
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -27,7 +26,10 @@ def main(argv: list[str] | None = None) -> int:
         # without ever running the full smoke against the main line.
         if isinstance(exc, asyncio.CancelledError):
             raise
-        traceback.print_exc()
+        # The child's stderr is OmniSeek-http .err log; an HTTPStatusError's text carries the full
+        # request address, so the traceback is masked like every log record (omniseek.redact).
+        from omniseek import redact as _redact
+        sys.stderr.write(_redact.format_exception(type(exc), exc, exc.__traceback__))
         return 1
     return 0
 

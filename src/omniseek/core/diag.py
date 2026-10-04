@@ -24,9 +24,9 @@ is passed through best-effort. The capture is a luxury; the retrieval is the pro
 from __future__ import annotations
 
 import contextvars
-import re
 from typing import Optional
-from urllib.parse import unquote, urlsplit, urlunsplit
+
+from omniseek import redact as _redact
 
 # None = capture OFF (the default, and the broad-search state). A list = capture ON; note()
 # appends to it. The default is shared, but enable() always sets a FRESH list, so two
@@ -38,20 +38,11 @@ _MAX_CAPTURES = 50    # an upper bound on captures per run, so a retry storm can
 
 # Query-string keys whose VALUE is a credential and must be stripped before a capture is shown
 # to the fixing agent (the trace is read by an agent + may be logged). Case-insensitive match.
-_SECRET_KEYS = frozenset({
-    "api_key", "apikey", "key", "token", "access_token", "auth", "authorization",
-    "password", "passwd", "secret", "client_secret", "session", "sig", "signature",
-    # credential params that ride in the URL query on real adapters (adzuna app_key/app_id,
-    # etc.): both the request URL AND any URL embedded in an exception string must scrub these.
-    "app_key", "app_id", "appkey", "appid", "client_id", "subscription_key",
-    "private_token", "x_api_key", "access_key", "secret_key",
-})
+# ONE list for the whole eye: omniseek.redact owns it (logs, tool results and state files use it too).
+_SECRET_KEYS = _redact.SECRET_PARAMS
 
-# A URL embedded in FREE TEXT (an httpx exception message is literally
-# "... for url 'https://api.adzuna.com/...?app_key=SECRET'"), so a body/exc field leaks the
-# secret the url field already scrubs. Redact every http(s) URL inside such text through the
-# same _strip_secrets before it enters a capture.
-_URL_IN_TEXT = re.compile(r"https?://[^\s'\"<>]+")
+# The diagnostic's historical marker for a masked value, kept so existing readers see no change.
+_DIAG_MASK = "<redacted>"
 
 
 def enable() -> None:
@@ -79,45 +70,20 @@ def _strip_secrets(url: Optional[str]) -> Optional[str]:
     form-style, so a legacy-GBK query (Discuz srchtxt=%B2%A9%BA%F3) was displayed as %EF%BF%BD
     garbage with + spaces: the diagnostic then LIED about the URL actually sent and misled a
     2026-07-09 investigation into a nonexistent adapter "encoding bug". A diagnostic must never
-    alter the evidence it reports; only the secret VALUES are substituted. Best-effort: a URL
-    that will not parse is returned unchanged (better a raw URL in the trace than a dropped
-    capture). Never raises."""
+    alter the evidence it reports; only the secret VALUES are substituted. The rule is the shared
+    one in omniseek.redact (it rewrites nothing but the masked values). Never raises."""
     if not url:
         return url
-    try:
-        parts = urlsplit(url)
-        if not parts.query:
-            return url
-        segs: list[str] = []
-        changed = False
-        for seg in parts.query.split("&"):
-            k, sep, _v = seg.partition("=")
-            try:
-                key = unquote(k).lower()
-            except Exception:  # noqa: BLE001
-                key = k.lower()
-            if sep and key in _SECRET_KEYS:
-                segs.append(f"{k}=<redacted>")
-                changed = True
-            else:
-                segs.append(seg)  # verbatim: no decode/re-encode of non-secret segments
-        if not changed:
-            return url
-        return urlunsplit(parts._replace(query="&".join(segs)))
-    except Exception:  # noqa: BLE001
-        return url
+    return _redact.redact(url, mask=_DIAG_MASK)
 
 
 def _redact_text(text: Optional[str]) -> Optional[str]:
-    """Scrub credential query values from any http(s) URL embedded in FREE TEXT (exc/body),
-    reusing _strip_secrets per match. Best-effort: returns the text unchanged on any error, so
-    a redaction bug can never drop a capture. Never raises."""
+    """Scrub credential values from FREE TEXT (exc/body): an httpx exception message is literally
+    "... for url 'https://api.adzuna.com/...?app_key=SECRET'", so a body/exc field would leak the
+    secret the url field already scrubs. Same shared rule as _strip_secrets. Never raises."""
     if not text:
         return text
-    try:
-        return _URL_IN_TEXT.sub(lambda m: _strip_secrets(m.group(0)) or m.group(0), text)
-    except Exception:  # noqa: BLE001
-        return text
+    return _redact.redact(text, mask=_DIAG_MASK)
 
 
 def note(helper: str, *, url: Optional[str] = None, status: Optional[int] = None,

@@ -50,6 +50,8 @@ def wecom_push(title: str, body: str) -> bool:
         log.debug("wecom push skipped: no webhook_url in credentials")
         return False
     content = (f"**{title}**\n\n{body}" if title else body)
+    from omniseek import redact as _redact
+    content = _redact.redact(content)  # every push leaves the machine here; no key rides along
     enc = content.encode("utf-8")
     if len(enc) > 4000:  # stay safely under WeCom's ~4096-byte markdown cap (byte-safe, not char-safe)
         content = enc[:4000].decode("utf-8", errors="ignore")
@@ -78,6 +80,8 @@ def alert(title: str, body: str, **_ignored) -> list:
     the daily off-machine audit can surface a disconnected siren. That marker is the whole reason
     this wrapper exists rather than callers pushing directly: an alarm channel is itself a guard,
     and an unwatched guard is the failure this codebase spent 2026-08-11 learning about."""
+    from omniseek import redact as _redact
+    title, body = _redact.redact(title), _redact.redact(body)
     delivered = ["wecom"] if wecom_push(title, body) else []
     try:
         prev = {}

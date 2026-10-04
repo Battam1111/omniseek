@@ -259,6 +259,52 @@ _OMNISEEK_INSTRUCTIONS = (
 mcp = FastMCP(_MCP_SERVER_NAME, instructions=_OMNISEEK_INSTRUCTIONS)
 
 
+def _is_document(node) -> bool:
+    """A serialized Document (``to_tool_dict``): retrieved evidence, passed through unmasked
+    so a content URL that happens to carry a ``key=`` / ``token=`` parameter still works."""
+    return isinstance(node, dict) and "source_id" in node and "url" in node and "content" in node
+
+
+def _install_result_redaction(server: FastMCP) -> None:
+    """Mask credentials in what every tool hands back, at the one point all tool calls share.
+
+    Error strings, ``_meta.diagnostic``, health messages and nested omniseek_gather results are built in
+    many places; each can quote an exception whose text holds a full request address. The RAW tool
+    result is masked (documents excepted, see ``_is_document``) BEFORE the SDK serializes it, so the
+    structured and the text forms agree; a raised tool error's message is masked the same way.
+    Fail-open: a masking failure returns the result as it was (omniseek.redact never raises)."""
+    from mcp.server.fastmcp.exceptions import ToolError
+    from omniseek import redact as _redact
+
+    manager = server._tool_manager
+    original = manager.call_tool
+    if getattr(original, "_omniseek_redacting", False):
+        return
+
+    async def call_tool(name, arguments, context=None, convert_result=False):
+        try:
+            raw = await original(name, arguments, context=context, convert_result=False)
+        except ToolError as exc:
+            masked = _redact.redact(str(exc))
+            if masked == str(exc):
+                raise
+            raise ToolError(masked) from None
+        raw = _redact.redact_obj(raw, skip=_is_document)
+        if not convert_result:
+            return raw
+        tool = manager.get_tool(name)
+        try:
+            return tool.fn_metadata.convert_result(raw)
+        except Exception as exc:  # noqa: BLE001 -- the SDK's own wrapping, as in Tool.run
+            raise ToolError(_redact.redact(f"Error executing tool {name}: {exc}")) from exc
+
+    call_tool._omniseek_redacting = True
+    manager.call_tool = call_tool
+
+
+_install_result_redaction(mcp)
+
+
 def _fqn_doc(fn):
     """Insert the tool's fully-qualified MCP name as the SECOND paragraph of its docstring.
 

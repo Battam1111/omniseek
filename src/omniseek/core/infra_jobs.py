@@ -56,6 +56,11 @@ def _load_state(path: Path) -> dict:
 
 
 def _save_state(path: Path, data: dict) -> None:
+    # Every infra state file is written here, and their message fields (health "unmeasured" /
+    # "unverified" notes, audit and curator summaries) can quote an exception that carries a full
+    # request address. Mask on the way to disk; the caller's dict is left as it was.
+    from omniseek import redact as _redact
+    data = _redact.redact_obj(data)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + f".{os.getpid()}.tmp")
     try:
