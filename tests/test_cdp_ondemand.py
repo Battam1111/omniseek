@@ -4,6 +4,9 @@ Covers the pure logic: port parsing, service mapping, last-use stamps, and the r
 table. The launchctl calls themselves are mocked -- the real ones were verified by hand on the
 mini (stop stays stopped, cold start 1s, login session survives) and cannot run in CI.
 """
+import json
+import socket
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -165,24 +168,70 @@ class ReaperDecisionTests(unittest.TestCase):
     """The reaper's decision table. Each case pins ONE branch so a future edit that collapses
     them shows up as a named failure rather than as browsers dying mid-call."""
 
-    def _run(self, *, healthy, last_use, idle_s=1800):
+    def _run(self, *, healthy, last_use, idle_s=1800, pid=4321, closed=True, exited=True):
         with mock.patch.object(infra_jobs.sys, "platform", "darwin"), \
              mock.patch.object(infra_jobs, "_MAINT_FLAG", _maint_flag(False)), \
              mock.patch.object(infra_jobs, "CDP_IDLE_TIMEOUT_S", idle_s), \
              mock.patch.object(_cdp, "cdp_health", side_effect=lambda url: (healthy(url), "")), \
              mock.patch.object(_cdp, "read_last_use", side_effect=last_use), \
              mock.patch.object(_cdp, "touch_last_use") as touch, \
+             mock.patch.object(_cdp, "close_browser", return_value=closed) as close, \
+             mock.patch.object(infra_jobs, "_launchd_pid", return_value=pid), \
+             mock.patch.object(infra_jobs, "_wait_exit", return_value=exited), \
              mock.patch.object(infra_jobs.subprocess, "run") as run, \
+             mock.patch.object(infra_jobs, "_sweep_chrome_clones", return_value={}), \
              mock.patch.object(infra_jobs.os, "getuid", return_value=501, create=True):
             result = infra_jobs.run_cdp_reaper()
+        self.close = close
         return result, run, touch
 
-    def test_idle_browser_is_stopped(self):
+    def test_idle_browser_is_closed_via_cdp(self):
+        """Browser.close, not a signal: only a normal shutdown lets Chrome delete the app-bundle clone
+        it made at startup (TERM left it 12 times of 12 on the mini, 2026-10-05)."""
         old = time.time() - 7200
         result, run, _ = self._run(healthy=lambda u: "9224" in u, last_use=lambda p: old)
+        self.assertEqual(result["stopped"], ["9224:120m"])
+        self.close.assert_called_once_with("http://127.0.0.1:9224")
+        run.assert_not_called()
+
+    def _assert_fell_back_to_term(self, result, run):
         self.assertEqual(len(result["stopped"]), 1)
         self.assertTrue(result["stopped"][0].startswith("9224"))
-        self.assertIn("TERM", run.call_args[0][0])
+        self.assertTrue(result["stopped"][0].endswith(":term"))
+        self.assertEqual(run.call_args[0][0], ["launchctl", "kill", "TERM",
+                                               "gui/501/com.omniseek.cdp.xhs-cn"])
+
+    def test_term_when_chrome_does_not_take_browser_close(self):
+        old = time.time() - 7200
+        result, run, _ = self._run(healthy=lambda u: "9224" in u, last_use=lambda p: old,
+                                   closed=False)
+        self._assert_fell_back_to_term(result, run)
+
+    def test_term_when_chrome_is_still_running_after_the_wait(self):
+        old = time.time() - 7200
+        result, run, _ = self._run(healthy=lambda u: "9224" in u, last_use=lambda p: old,
+                                   exited=False)
+        self._assert_fell_back_to_term(result, run)
+
+    def test_term_when_launchd_gives_no_pid(self):
+        old = time.time() - 7200
+        result, run, _ = self._run(healthy=lambda u: "9224" in u, last_use=lambda p: old, pid=None)
+        self._assert_fell_back_to_term(result, run)
+        self.close.assert_not_called()
+
+    def test_term_at_once_when_the_job_is_nearly_out_of_time(self):
+        """The job is killed at its 120 s budget; a stop that could not finish the CDP path in the
+        time left sends TERM straight away."""
+        with mock.patch.object(_cdp, "close_browser") as close, \
+             mock.patch.object(infra_jobs, "_launchd_pid") as pid, \
+             mock.patch.object(infra_jobs.subprocess, "run") as run, \
+             mock.patch.object(infra_jobs.os, "getuid", return_value=501, create=True):
+            how = infra_jobs._stop_browser("http://127.0.0.1:9224", "com.omniseek.cdp.xhs-cn",
+                                           time.monotonic() + infra_jobs.CLOSE_PATH_NEEDS_S - 1)
+        self.assertEqual(how, "term")
+        close.assert_not_called()
+        pid.assert_not_called()
+        self.assertEqual(run.call_args[0][0][:3], ["launchctl", "kill", "TERM"])
 
     def test_recently_used_browser_is_kept(self):
         fresh = time.time() - 60
@@ -212,6 +261,85 @@ class ReaperDecisionTests(unittest.TestCase):
             result = infra_jobs.run_cdp_reaper()
         self.assertEqual(result, {"skipped": "maintenance"})
         run.assert_not_called()
+
+
+class CloseBrowserTests(unittest.TestCase):
+    """_cdp.close_browser speaks just enough WebSocket to send one CDP command. A local fake stands
+    in for Chrome's browser endpoint."""
+
+    def _serve(self, reply_status=b"101 Switching Protocols"):
+        srv = socket.socket()
+        srv.bind(("127.0.0.1", 0))
+        srv.listen(1)
+        self.addCleanup(srv.close)
+        got = {}
+
+        def serve():
+            conn, _ = srv.accept()
+            with conn:
+                data = b""
+                while b"\r\n\r\n" not in data:
+                    data += conn.recv(4096)
+                got["request"] = data
+                conn.sendall(b"HTTP/1.1 " + reply_status + b"\r\nUpgrade: websocket\r\n"
+                             b"Connection: Upgrade\r\n\r\n")
+                if not reply_status.startswith(b"101"):
+                    return
+                hdr = conn.recv(2)
+                n = hdr[1] & 0x7F
+                mask = conn.recv(4)
+                body = b""
+                while len(body) < n:
+                    body += conn.recv(n - len(body))
+                got["opcode"] = hdr[0]
+                got["masked"] = bool(hdr[1] & 0x80)
+                got["payload"] = bytes(b ^ mask[i % 4] for i, b in enumerate(body))
+                conn.sendall(b'\x81\x14{"id":1,"result":{}}')
+
+        t = threading.Thread(target=serve, daemon=True)
+        t.start()
+        ws = "ws://127.0.0.1:%d/devtools/browser/abc" % srv.getsockname()[1]
+        return ws, got, t
+
+    def test_sends_browser_close(self):
+        ws, got, t = self._serve()
+        with mock.patch.object(_cdp, "_browser_instance", return_value=ws):
+            ok = _cdp.close_browser("http://127.0.0.1:9224")
+        t.join(5)
+        self.assertTrue(ok)
+        self.assertEqual(json.loads(got["payload"]), {"id": 1, "method": "Browser.close"})
+        self.assertEqual(got["opcode"], 0x81)   # one final text frame
+        self.assertTrue(got["masked"])          # client frames must be masked
+        self.assertIn(b"GET /devtools/browser/abc HTTP/1.1\r\n", got["request"])
+        self.assertNotIn(b"Origin:", got["request"])   # Chrome refuses unknown origins
+
+    def test_a_refused_handshake_is_false(self):
+        ws, got, t = self._serve(reply_status=b"403 Forbidden")
+        with mock.patch.object(_cdp, "_browser_instance", return_value=ws):
+            ok = _cdp.close_browser("http://127.0.0.1:9224")
+        t.join(5)
+        self.assertFalse(ok)
+
+    def test_nothing_answering_is_false(self):
+        with mock.patch.object(_cdp, "_browser_instance", return_value=None):
+            self.assertFalse(_cdp.close_browser("http://127.0.0.1:9224"))
+
+
+class StopHelpersTests(unittest.TestCase):
+    def test_pid_is_read_from_launchctl_list(self):
+        out = mock.Mock(stdout='{\n\t"LastExitStatus" = 0;\n\t"PID" = 20067;\n};\n')
+        with mock.patch.object(infra_jobs.subprocess, "run", return_value=out):
+            self.assertEqual(infra_jobs._launchd_pid("com.omniseek.cdp.cn-forums"), 20067)
+        out = mock.Mock(stdout='{\n\t"LastExitStatus" = 0;\n};\n')   # loaded, not running
+        with mock.patch.object(infra_jobs.subprocess, "run", return_value=out):
+            self.assertIsNone(infra_jobs._launchd_pid("com.omniseek.cdp.xhs"))
+
+    def test_wait_exit(self):
+        with mock.patch.object(infra_jobs.os, "kill", side_effect=ProcessLookupError):
+            self.assertTrue(infra_jobs._wait_exit(4321, 5))
+        with mock.patch.object(infra_jobs.os, "kill", return_value=None), \
+             mock.patch.object(infra_jobs.time, "sleep"):
+            self.assertFalse(infra_jobs._wait_exit(4321, 0))
 
 
 class ReaperJobRowTests(unittest.TestCase):

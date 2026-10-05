@@ -61,6 +61,12 @@ def _job_fixture_logs_and_raises() -> None:
     raise _status_error()
 
 
+def _job_fixture_logs_info() -> None:
+    """Run by the isolated job child: an ordinary INFO line, carrying a secret, must reach stderr
+    (it was dropped before 2026-10-05) and arrive masked."""
+    logging.getLogger("omniseek.core.infra_jobs").info("job-info-marker fetched %s", URL)
+
+
 def _run_python(code: str, *args: str) -> subprocess.CompletedProcess:
     env = dict(os.environ)
     env["PYTHONPATH"] = os.pathsep.join([str(ROOT / "src"), str(ROOT)])
@@ -193,6 +199,15 @@ class LogsAreMaskedAtEveryEntry(unittest.TestCase):
         self._assert_masked(r.stderr)
         self.assertIn("HTTPStatusError", r.stderr)
         self.assertIn("Traceback", r.stderr)
+
+    def test_isolated_job_child_keeps_its_info_lines(self):
+        r = _run_python("", "-m", "omniseek.core.job_runner", "tests.test_secret_redaction",
+                        "_job_fixture_logs_info")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("job-info-marker", r.stderr)
+        flat = re.sub(r"\s+", "", r.stderr)
+        self.assertNotIn(FAKE, flat)
+        self.assertIn("api_key=***", flat)
 
     def test_in_process_record_keeps_its_shape(self):
         redact.install_log_redaction()

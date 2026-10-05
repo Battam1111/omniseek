@@ -22,6 +22,7 @@ import json
 import logging
 import os
 import random
+import re
 import subprocess
 import sys
 import time
@@ -1120,6 +1121,72 @@ def _warm_forum_one(source_name: str, label: str, query: str) -> dict:
 # Cold start costs 1 second, which is why getting this number wrong is cheap.
 CDP_IDLE_TIMEOUT_S = int(os.environ.get("OMNISEEK_CDP_IDLE_S", 30 * 60))
 
+# How the reaper stops a browser (2026-10-05): the CDP command Browser.close first, then waits for
+# the main process to exit, and only falls back to `launchctl kill TERM` when that does not work.
+# TERM made Chrome skip the end of its shutdown and leave its app-bundle clone behind every time
+# (12 of 12 on the mini; Browser.close: 0 of 13; see _cdp.close_browser). KeepAlive does not
+# restart either way: both exits are clean (last exit code 0).
+# ⚠️ CDP_CLOSE_WAIT_S is PROVISIONAL. Measured: the throwaway Chrome exited 0.3 s after Browser.close,
+# 13 of 13, but it had an empty profile; a logged-in profile writes more on the way out. 15 s is a
+# generous ceiling. Recalibrate from the reaper log: a ":term" suffix in "stopped" means the TERM
+# fallback ran.
+CDP_CLOSE_WAIT_S = 15.0
+# The job runs under a 120 s budget (jobs.py, cdp-reaper row); past it the whole process is killed and
+# the run's result is lost. Everything the reaper starts must end by this many seconds after it
+# began: a browser stop takes the Browser.close path only while CLOSE_PATH_NEEDS_S are left (its
+# worst case: launchctl list 10 s, the CDP exchange about 18 s (/json/version 3 s, then connect,
+# handshake and reply 5 s each), the exit wait, the TERM fallback 10 s; typical total well under
+# 1 s), else it sends TERM at once; the clone sweep gets what is left.
+REAPER_DEADLINE_S = 90.0
+CLOSE_PATH_NEEDS_S = CDP_CLOSE_WAIT_S + 40.0
+
+
+def _launchd_pid(label: str) -> Optional[int]:
+    """PID of the running job ``label`` from `launchctl list <label>`, or None."""
+    try:
+        out = subprocess.run(["launchctl", "list", label], capture_output=True, text=True,
+                             timeout=10).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    m = re.search(r'"PID"\s*=\s*(\d+);', out) if isinstance(out, str) else None
+    return int(m.group(1)) if m else None
+
+
+def _wait_exit(pid: int, limit_s: float) -> bool:
+    """True once process ``pid`` is gone, False if it is still there after ``limit_s`` seconds."""
+    deadline = time.monotonic() + limit_s
+    while True:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return True
+        except PermissionError:
+            pass
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.25)
+
+
+def _stop_browser(url: str, label: str, deadline: Optional[float] = None) -> str:
+    """Stop one CDP browser. Returns "close" when Browser.close did it, else "term" (the fallback:
+    no pid, Chrome did not take the command, it was still running after CDP_CLOSE_WAIT_S, or fewer
+    than CLOSE_PATH_NEEDS_S seconds are left before ``deadline``, a time.monotonic() value)."""
+    from omniseek.core.sources.walled import _cdp
+
+    if deadline is None or deadline - time.monotonic() >= CLOSE_PATH_NEEDS_S:
+        pid = _launchd_pid(label)
+        if pid is not None and _cdp.close_browser(url) and _wait_exit(pid, CDP_CLOSE_WAIT_S):
+            return "close"
+        log.info("cdp-reaper: %s did not close via CDP; sending TERM", label)
+    else:
+        log.info("cdp-reaper: too little time left to close %s via CDP; sending TERM", label)
+    subprocess.run(
+        ["launchctl", "kill", "TERM", f"gui/{os.getuid()}/{label}"],
+        check=False, timeout=10,
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+    return "term"
+
 
 def run_cdp_reaper() -> dict:
     """Stop idle CDP browsers; leave busy ones and already-stopped ones alone."""
@@ -1130,6 +1197,7 @@ def run_cdp_reaper() -> dict:
         return {"skipped": "maintenance"}
     from omniseek.core.sources.walled import _cdp
 
+    deadline = time.monotonic() + REAPER_DEADLINE_S
     now = time.time()
     stopped: list[str] = []
     kept: list[str] = []
@@ -1152,18 +1220,38 @@ def run_cdp_reaper() -> dict:
             kept.append(f"{port}:{idle_min:.0f}m")
             continue
         try:
-            subprocess.run(
-                ["launchctl", "kill", "TERM", f"gui/{os.getuid()}/{label}"],
-                check=False, timeout=10,
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            )
-            stopped.append(f"{port}:{idle_min:.0f}m")
+            how = _stop_browser(url, label, deadline)
+            stopped.append(f"{port}:{idle_min:.0f}m" + ("" if how == "close" else f":{how}"))
         except (OSError, subprocess.SubprocessError) as exc:  # noqa: BLE001 — one failure must not
             log.warning("cdp-reaper: could not stop %s: %s", label, exc)  # stop the other three
     log.info("cdp-reaper: stopped=%s kept=%s already-down=%s",
              stopped or "-", kept or "-", already_down or "-")
+    clones = _sweep_chrome_clones(deadline)
     return {"stopped": stopped, "kept": kept, "already_down": already_down,
-            "idle_timeout_s": CDP_IDLE_TIMEOUT_S}
+            "idle_timeout_s": CDP_IDLE_TIMEOUT_S, "clones": clones}
+
+
+def _sweep_chrome_clones(deadline: Optional[float] = None) -> dict:
+    """Delete the app-bundle clones Chrome leaves behind (omniseek.core.chrome_clones), as part of the
+    reaper's cycle: the reaper is what stops browsers, it runs every 10 minutes in its own process,
+    and it already only acts on macOS. The pass gets the time left before ``deadline`` (a
+    time.monotonic() value). Any failure is logged and reported, never raised, so the reaping above
+    is never undone by it. Returns counts plus the names deleted."""
+    try:
+        from omniseek.core import chrome_clones
+        left = None if deadline is None else deadline - time.monotonic()
+        res = chrome_clones.sweep(time_left_s=left)
+    except Exception as exc:  # noqa: BLE001 -- the cleanup must never fail the reaper
+        log.warning("cdp-reaper: chrome clone cleanup failed: %r", exc)
+        return {"error": repr(exc)}
+    if "deleted" not in res:
+        return res
+    if res["deleted"] or res["errors"]:
+        log.info("cdp-reaper: chrome clones deleted=%d in_use=%d too_new=%d errors=%d",
+                 len(res["deleted"]), len(res["in_use"]), len(res["too_new"]), len(res["errors"]))
+    return {"deleted": res["deleted"], "in_use": len(res["in_use"]),
+            "too_new": len(res["too_new"]), "errors": res["errors"],
+            "left_for_next_pass": len(res["left_for_next_pass"])}
 
 
 def _needs_relogin_alert(r: dict) -> bool:

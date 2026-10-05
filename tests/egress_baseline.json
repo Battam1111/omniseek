@@ -6,6 +6,7 @@
     "omniseek.core._openalex",
     "omniseek.core.asr",
     "omniseek.core.briefing",
+    "omniseek.core.chrome_clones",
     "omniseek.core.curator.probe",
     "omniseek.core.curator.probe_proxy",
     "omniseek.core.curl",

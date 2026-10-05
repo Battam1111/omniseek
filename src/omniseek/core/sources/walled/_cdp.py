@@ -206,6 +206,59 @@ def ensure_browser(cdp_url: str) -> None:
     raise RuntimeError(f"CDP browser {label} did not become ready within {_START_TIMEOUT_S}s")
 
 
+def close_browser(cdp_url: str, timeout: float = 5.0) -> bool:
+    """Ask the Chrome at ``cdp_url`` to shut down the normal way, with the CDP command Browser.close.
+
+    Why not a signal (measured 2026-10-05 on the mini, with a throwaway Chrome run exactly like the
+    four services): at startup Chrome clones its own app bundle into a temp directory, and only the
+    end of a normal shutdown starts the helper that deletes the clone (see omniseek.core.chrome_clones).
+    ``launchctl kill TERM`` left the clone behind 12 times out of 12 (no cleanup helper ever
+    started), and still 10 of 10 with AbandonProcessGroup set; after Browser.close the helper ran
+    and the clone was gone with the browser 13 times out of 13 (3 of them through the reaper's own
+    stop path). Returns True when Chrome took the command (its reply arrived, or it dropped the
+    connection while closing); False when nothing answers on the port or the command could not be
+    sent. Standard library only: one WebSocket handshake and one text frame."""
+    import base64
+    import json
+    import socket
+
+    ws_url = _browser_instance(cdp_url)
+    if not ws_url:
+        return False
+    parts = urlsplit(ws_url)
+    if parts.scheme != "ws" or not parts.hostname or not parts.port:
+        return False
+    payload = json.dumps({"id": 1, "method": "Browser.close"}).encode()
+    mask = os.urandom(4)
+    frame = (bytes([0x81, 0x80 | len(payload)]) + mask
+             + bytes(b ^ mask[i % 4] for i, b in enumerate(payload)))
+    try:
+        with socket.create_connection((parts.hostname, parts.port), timeout=timeout) as s:
+            key = base64.b64encode(os.urandom(16)).decode()
+            s.sendall((f"GET {parts.path} HTTP/1.1\r\nHost: {parts.hostname}:{parts.port}\r\n"
+                       "Upgrade: websocket\r\nConnection: Upgrade\r\n"
+                       f"Sec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n\r\n").encode())
+            head = b""
+            while b"\r\n\r\n" not in head and len(head) < 65536:
+                chunk = s.recv(4096)
+                if not chunk:
+                    return False
+                head += chunk
+            status = head.split(b"\r\n", 1)[0].split(b" ")
+            if len(status) < 2 or status[1] != b"101":
+                logger.info("Browser.close on %s: handshake refused (%r)", cdp_url, head[:80])
+                return False
+            s.sendall(frame)
+            try:
+                s.recv(4096)   # the reply, or b"" when Chrome closes the socket first
+            except OSError:
+                pass
+        return True
+    except OSError as exc:
+        logger.info("Browser.close on %s failed: %s", cdp_url, exc)
+        return False
+
+
 class CacheOnlyMiss(Exception):
     """Raised by cdp_call when cache-only mode (cache_only=True) is active: a cache miss must NOT
     drive the browser. Every cdp_call caller already degrades an exception to [] (the adapter

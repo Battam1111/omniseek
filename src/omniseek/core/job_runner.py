@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib
+import logging
 import sys
 
 
@@ -13,6 +14,15 @@ def main(argv: list[str] | None = None) -> int:
         print("usage: python -m omniseek.core.job_runner MODULE CALLABLE", file=sys.stderr)
         return 2
     module_name, callable_name = args
+    # The child's stderr is OmniSeek-http .err log, but nothing set up logging in this process, so the
+    # root logger stayed at WARNING and every INFO line a job wrote was dropped (found 2026-10-05: the
+    # cdp-reaper had run 598 times with none of its own lines in the log). Same set-up as
+    # serve_http.main, done before the job's module is imported; masking is already on (omniseek
+    # installs it on import).
+    logging.basicConfig(level=logging.INFO,
+                        format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    from omniseek.core import _lograte
+    _lograte.install_on_root()
     try:
         target = getattr(importlib.import_module(module_name), callable_name)
         if not callable(target):

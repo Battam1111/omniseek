@@ -756,7 +756,7 @@ def register_shipped_jobs() -> None:
     # 3.1 GB on a 16 GB machine for ~24 calls a day. This row stops the idle ones; _cdp.ensure_browser
     # brings one back in ~1s on the next call. Process-isolated so it reads last-use stamps off disk.
     register_job("cdp-reaper", "every:600s", infra_jobs.run_cdp_reaper, budget_s=120,
-                 description="每 10min 停掉空闲的 CDP 浏览器(下次调用 1s 内自动拉起)",
+                 description="每 10min 停掉空闲的 CDP 浏览器(下次调用 1s 内自动拉起),并删 Chrome 留下的签名克隆",
                  process_entrypoint=("omniseek.core.infra_jobs", "run_cdp_reaper"))
     register_job("log-rotation", "daily@04:50", infra_jobs.run_log_rotation,
                  description="每日转超大日志")
