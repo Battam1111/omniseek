@@ -25,14 +25,9 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PEN_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-# THE SOURCE MOVED (2026-08-12). This used to read "$PEN_ROOT/../eye", i.e. Polaris/organs/eye,
-# which was FROZEN AS AN ARCHIVE on 2026-08-11: it and the canonical tree are one lineage that
-# forked at ba0f524 on 2026-07-25, and the canonical is now 41 commits ahead. Syncing the public
-# mirror from the archive would have quietly published a tree five weeks stale, including missing
-# every guard fix from the 2026-08-11 night. The canonical upstream lives on the
-# maintainer's machine; the Windows working copy and deploy client was the sibling
-# ResearchProject/polaris-eye-maintenance until 2026-10-03, when it moved next to this mirror
-# as ../03_eye (its own git repo), kept at the same HEAD by `git pull --ff-only`.
+# THE SOURCE MOVED (2026-08-12, and again on 2026-10-03). The mirror now reads the sibling ../03_eye,
+# its own git repo, kept at the same HEAD as the canonical upstream by `git pull --ff-only`. An older
+# copy of the source is a frozen archive; the check below refuses it.
 EYE_ROOT="$(cd "${POLARIS_EYE_ROOT:-$PEN_ROOT/../03_eye}" && pwd)"
 
 # REFUSE the archive by construction, not by memory: its deployer was rewritten to say so, and that

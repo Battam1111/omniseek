@@ -1,7 +1,7 @@
 # Sanitized author transcript: tool invocations only.
 # Purpose: blindness evidence for the s3 rebuild (bench/RECONSTRUCTION-s3.md, section 2 and
 # the 2026-08-22 domain amendment). The check is that NO invocation of this system's retrieval
-# tools (polaris/eye/omniseek/brain MCP tools) appears anywhere in the author's session,
+# tools (the omniseek/eye/brain MCP tools, under any server name) appears anywhere in the author's session,
 # load calls included. Everything except the tool-call sequence is removed: prompts, reasoning
 # and generated text are not part of the blindness claim and are not shipped.
 # Extraction is mechanical from the preserved session log; entries appear in call order.
@@ -12,4 +12,4 @@
   3. WebSearch  query='reddit "does anyone know" obscure question about a canceled TV show unanswered thread'
   4. WebSearch  query='论坛 求助 出租屋 水电费 过户 房东 不配合 户口 居住证 无解'
   5. WebSearch  query='forum thread nobody could answer utility account transfer landlord bureaucracy expat registration'
-  6. Write  file_path='C:\\Users\\10350\\Desktop\\ResearchProject\\Polaris\\organs\\omniseek-staging\\s3-rebuild\\needs-batch4.json'
+  6. Write  file_path='<workdir>\\s3-rebuild\\needs-batch4.json'
