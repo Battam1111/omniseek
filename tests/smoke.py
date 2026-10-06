@@ -20194,11 +20194,33 @@ _gate_undeclared = sorted(_gate_skips - _GATE_DECLARED_SKIPS)
 # away. A guard that says something broke without saying what is only half a guard.
 _gate_named = [l.strip() for l in _gate_out.splitlines()
                if l.startswith(("FAIL:", "ERROR:"))][:6]
+# Keep WHY as well as WHICH. unittest reports each failure as a block that follows a line of 70 "="
+# and runs to the next such line (the last one stops at the dashed line before "Ran N tests").
+# Keeping only the names lost the cause twice: test_health_guard_sweep's setUpClass errored in a
+# full run on 2026-10-05 (mirror sync) and again on 2026-10-06, passed alone both times, and the
+# traceback was gone. The blocks are printed verbatim below so the OmniSeek sync gate's extractor,
+# which looks for the same separator, carries them too. Names come from the blocks when there are
+# any, so a library's log line that happens to start with "ERROR:" is not taken for a failure.
+_GATE_SEP = "=" * 70
+_gate_blocks = [_part.split("\n" + "-" * 70 + "\nRan ")[0].rstrip()
+                for _part in _gate_out.split("\n" + _GATE_SEP + "\n")[1:]
+                if _part.startswith(("FAIL:", "ERROR:"))]
+if _gate_blocks:
+    _gate_named = [_b.splitlines()[0].strip() for _b in _gate_blocks][:6]
 check(f"gate: all {len(_gate_files)} unittest suites pass ({_gate_n} tests) -- the guards run at deploy",
       _gate_rc == 0 and _gate_files and _gate_n >= len(_gate_files),
       f"rc={_gate_rc} ran={_gate_n} files={len(_gate_files)} "
       f"failing={_gate_named or 'none captured'} "
       f"tail={_gate_out.strip().splitlines()[-4:]}")
+if _gate_rc != 0 and _gate_blocks:
+    _gate_detail = []
+    for _b in _gate_blocks:
+        _gate_detail += [_GATE_SEP] + _b.splitlines()
+    print(f"gate failure details: unittest's own report of {len(_gate_blocks)} failure(s), at most 300 lines")
+    for _l in _gate_detail[:300]:
+        print(_l)
+    if len(_gate_detail) > 300:
+        print(f"... {len(_gate_detail) - 300} more lines cut")
 check("gate: every skipped test skipped for a DECLARED reason (else a suite could opt itself out)",
       not _gate_undeclared,
       f"undeclared skip reasons: {_gate_undeclared}")

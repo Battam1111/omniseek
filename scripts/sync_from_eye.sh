@@ -438,12 +438,44 @@ fi
 [ "$FAILED" -eq 0 ] || { echo "=== SYNC ABORTED: residue gate failed ==="; exit 1; }
 
 # --- 6. SMOKE GATE (hard fail) ---
+# On failure, print every failure section of the log in full before the tail: unittest ERROR/FAIL
+# blocks with their tracebacks, bare Python tracebacks, and smoke's own "  FAIL " lines, capped at
+# 400 lines in total. The tail alone lost the cause of the 2026-10-05 intermittent failure, because
+# the error text sat further up the log than its last 20 lines.
+# BEGIN smoke_failure_sections
+smoke_failure_sections() {
+  awk -v cap=400 '
+    function emit(s) {
+      if (n < cap) { print s; n++ }
+      else if (!capped) { print "  ... (failure sections capped at " cap " lines)"; capped = 1 }
+    }
+    inblk {
+      if ($0 ~ /^Ran [0-9]+ tests? in / || $0 ~ /^======+$/) { inblk = 0 }
+      else { emit($0); prev = $0; next }
+    }
+    intb {
+      emit($0)
+      if ($0 !~ /^[ \t]/) { intb = 0 }
+      prev = $0; next
+    }
+    /^(ERROR|FAIL): / && prev ~ /^======+$/ { emit(prev); emit($0); inblk = 1; prev = $0; next }
+    /^Traceback \(most recent call last\):/ { emit($0); intb = 1; prev = $0; next }
+    /^  FAIL / || /^SMOKE FAILED/ { emit($0) }
+    { prev = $0 }
+  ' "$1"
+}
+# END smoke_failure_sections
+SMOKE_LOG=/tmp/omniseek_smoke.log
 echo "  [6/6] smoke gate (the mirror's own tests) ..."
-if ! (cd "$PEN_ROOT" && PYTHONIOENCODING=utf-8 "$PYBIN" tests/smoke.py >/tmp/omniseek_smoke.log 2>&1); then
-  echo "=== SYNC ABORTED: smoke gate failed. Tail: ==="
-  tail -20 /tmp/omniseek_smoke.log
+if ! (cd "$PEN_ROOT" && PYTHONIOENCODING=utf-8 "$PYBIN" tests/smoke.py >"$SMOKE_LOG" 2>&1); then
+  echo "=== SYNC ABORTED: smoke gate failed. Failure sections (full text, at most 400 lines): ==="
+  smoke_failure_sections "$SMOKE_LOG"
+  echo "=== Tail: ==="
+  tail -20 "$SMOKE_LOG"
+  echo "=== Full log: $SMOKE_LOG ==="
+  if command -v cygpath >/dev/null 2>&1; then echo "    (Windows path: $(cygpath -w "$SMOKE_LOG"))"; fi
   exit 1
 fi
-tail -1 /tmp/omniseek_smoke.log
+tail -1 "$SMOKE_LOG"
 
 echo "=== sync complete + gates green. Review the diff, then commit. ==="

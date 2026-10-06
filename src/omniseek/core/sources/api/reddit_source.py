@@ -10,8 +10,9 @@ Endpoints:
     GET /api/posts/search?subreddit=<sub>&title=<q>&sort=desc&limit=<=100
         Title keyword search within ONE subreddit (since 2026-10-04; the full-text
         ``query`` parameter is refused, see below). Multi-subreddit
-        is NOT supported, so we fan out over DEFAULT_SUBREDDITS serially (gentle
-        pacing — bursts trigger a soft "slow down" error) and merge by recency.
+        is NOT supported, so we fan out over the subreddits the query routes to
+        (topic groups, see _topic_subreddits) with gentle pacing (bursts trigger a soft
+        "slow down" error) and merge by recency.
     GET /api/posts/ids?ids=<id[,id...]>
         Fetch posts by base36 id — used by fetch_url.
 
@@ -41,8 +42,10 @@ answers 200 with 25 items in 8 to 9 s on r/PhD, r/MachineLearning and r/GradScho
 Every keyword call therefore sends the same terms (same tiers, same relaxation) as
 ``title``. Recall narrows to post titles (selftext is no longer searched), and the
 docs say title search is not supported for very active subreddits (r/cscareerquestions
-timed out with 422 after about 6 s); such a sub fails like any refused request and the
-CDP fallback covers an all-empty fan-out.
+timed out with 422 after about 6 s). Since 2026-10-05 a sub refused that way while its siblings in
+the same round answered goes on a 24 h cannot-search list and is searched through the browser
+instead (see _settle_round); the CDP fallback still covers an all-empty fan-out. A Latin query that
+routes to no subreddit at all gets one reddit-wide browser search, marked ``sitewide``.
 """
 
 from __future__ import annotations
@@ -89,7 +92,7 @@ _SEARCH_TTL = 900       # 15 min
 # breaker. A hung mirror (no answer at all) still costs one sub at most 3x18s plus backoff, about 58s.
 _SEARCH_TIMEOUT = 18
 # Concurrency over the per-sub fan-out. Arctic Shift can only search ONE sub per
-# request, so 23 default subs are pushed in waves of this width. KEPT AT 5: a measured
+# request, so the routed subs are pushed in waves of this width. KEPT AT 5: a measured
 # bump to 10 made reddit SLOWER (34s vs 25s) — higher concurrency against the single
 # Arctic host raises its soft-throttle (HTTP200+data:null) rate, pushing more subs
 # through the full retries=2 jittered backoff. reddit's latency is HOST-bound, not
@@ -98,7 +101,9 @@ _SEARCH_TIMEOUT = 18
 # retries + relaxation ladder + the full 23-sub set + per-sub limit are all unchanged.
 _FANOUT_WORKERS = 5
 
-# Highest-value subs: PhD methodology + ML/AI + 海外长期落地 (SG/Canada).
+# Highest-value subs: PhD methodology + ML/AI + 海外长期落地 (SG/Canada). Since 2026-10-05 search
+# routing does not read this list (it uses the topic groups below); it stays for the other users of a
+# fixed curated set, and the subs added for routing are not appended here.
 DEFAULT_SUBREDDITS = [
     # PhD methodology (English-world)
     "PhD",
@@ -138,9 +143,9 @@ _SUB_QUALIFIER_RE = re.compile(r"(?:^|\s)(?:subreddit|sub)\s*:\s*([A-Za-z0-9_,]+
 # from the submission path to the COMMENT path: the substantive Reddit answer is almost always in
 # the comment tree, not the thread title/selftext. The token is stripped from the keyword part so
 # the rest is a normal full-text query. Absent → submission path is byte-identical to before (no
-# regression to submissions or the auto-route). The comment path itself still uses _parse_subreddits
-# + _discover_subreddits for its subreddit set, so `comments: subreddit:LocalLLaMA rlhf` works and a
-# bare `comments: pour over coffee` still discovers r/Coffee.
+# regression to submissions or the auto-route). The comment path resolves its subreddits with
+# _parse_subreddits + the same _routed_subreddits rule as submissions, so `comments: subreddit:LocalLLaMA
+# rlhf` works and a bare `comments: pour over coffee` still discovers r/Coffee.
 _COMMENT_QUALIFIER_RE = re.compile(r"(?:^|\s)comments?\s*:", re.IGNORECASE)
 # Arctic's comments endpoint takes full-text via `body` (NOT `query`, which it 400s) and supports a
 # `link_id=t3_<id>` thread filter; `sort` accepts ONLY asc/desc (recency) — there is no server-side
@@ -150,10 +155,10 @@ _COMMENT_THREADS = 3         # top submission threads (by num_comments) to pull 
 _COMMENT_PER_THREAD = 60     # comments fetched per thread before client-side score-ranking
 _COMMENT_PER_SUB = 40        # comments per sub for the direct full-text (body=) comment search
 # Cap the comment-path fan-out width. reddit's latency is HOST-bound (one Arctic host); the
-# submission path already pays a ~23-sub fan-out, and the comment path would otherwise DOUBLE that
+# submission path already pays a fan-out of up to the request cap, and the comment path would otherwise DOUBLE that
 # host pressure (a direct comment search PLUS a thread-harvest search). A query rarely needs more
 # than its few most-relevant communities for COMMENT depth (vs the submission path's monitor breadth),
-# so cap to the top-N subs — explicit/discovered subs lead, the curated core backstops. Keeps the
+# so cap to the top-N subs of the shared route (explicit subs, else the topic groups in priority order). Keeps the
 # comment path a good neighbor to the submission cache-warm instead of triggering the soft-throttle.
 _COMMENT_MAX_SUBS = 6
 # Reddit's sentinel non-content comment bodies — dropped before ranking (they carry no answer).
@@ -163,16 +168,12 @@ _DEAD_BODIES = frozenset({"", "[removed]", "[deleted]", "[ Removed by Reddit ]"}
 # (and the server-side cost) makes 0-hit the norm, so cap the verbatim tier.
 _MAX_AND_TERMS = 4
 
-# ── Query-driven topical-subreddit discovery (the "general engine" route) ────────────────────
-# DEFAULT_SUBREDDITS is a curated research/career/immigration MONITOR core — perfect for "phd
-# advice" or "express entry", useless for "pour over coffee" (which used to be forced through
-# r/PhD and came back as ML noise). This route ADDS the subreddit(s) that actually match the
-# query's topic, so reddit is a GENERAL source: any topic reaches its real community while the
-# curated core still backstops research/career intent (a short topical term like "phd" lives in
-# the core, not in discovery, so research queries never regress). The core is always searched;
-# discovery only widens. Looks up the 2 longest Latin query tokens (length = specificity proxy,
-# same heuristic as _relax_tiers) via Arctic's subreddit_prefix endpoint, keeps public non-NSFW
-# subs above a subscriber floor, ranks by size, adds the top few not already in the core.
+# ── Same-name subreddit discovery (the "general engine" route) ──────────────────────────────
+# For a query no topic group matched ("pour over coffee"), look up subs named after the query's own
+# words via Arctic's subreddit_prefix endpoint, keep public non-NSFW subs above a subscriber floor
+# whose name equals a content word or two adjacent ones run together (plus or minus a final s),
+# rank by size and take the top few. Prefix matches alone brought in noise: "rent" found a German
+# r/rentnerzeigenaufdinge and "draw" sent "express entry draw" to r/drawing (2026-10-05).
 _DISCOVER_TOP = 4            # max topical subs appended per query
 _DISCOVER_MIN_SUBS = 5000    # skip tiny/dead/squatted subs
 _DISCOVER_TTL = 86400        # sub metadata is stable day-to-day → cache discovery a full day
@@ -193,16 +194,187 @@ _ARCTIC_MAX_REQUESTS = (
     * _FANOUT_WORKERS
 )
 
-# The curated core is intentionally narrow and explicit. This vocabulary decides whether a
-# query has research, career, or immigration intent, not document relevance.
-_CORE_THEME_TERMS = frozenset("""
-phd academia academic advisor advice admission admissions graduate gradschool university
-college professor faculty postdoc thesis dissertation lab laboratory research researcher
-machinelearning artificialintelligence ai ml compsci computer science software developer
-programming career job jobs employment interview offer salary hiring workplace visa
-immigration immigrant canada canadian singapore singaporepr expressentry workpermit
-pgwp cec lmia pr
-""".split())
+# ── Topic-group routing (2026-10-05) ─────────────────────────────────────────────────────────
+# Each group has its trigger words and its subreddits. A query searches only the groups it hits,
+# in the fixed priority below, and the request cap then trims from the end. Before this the
+# query searched the whole 23-sub DEFAULT_SUBREDDITS list (research first) whenever any core word
+# appeared, and the cap cut the career, Singapore and Canada subs it actually needed.
+# Triggers are matched case-insensitively on whole words; a two-word trigger matches two adjacent
+# query words. Display names of the subs added on 2026-10-05 (HongKong, canada,
+# PersonalFinanceCanada and the seven cities) were checked against Arctic's subreddit lookup that
+# day: each is public, not adult, and above the discovery subscriber floor.
+def _words(text: str) -> frozenset:
+    return frozenset(" ".join(line.split()) for line in text.strip().splitlines() if line.strip())
+
+
+_CITY_SUBS = [  # (trigger, display name); a city also counts as a hit on the Canada group
+    ("toronto", "toronto"),
+    ("vancouver", "vancouver"),
+    ("montreal", "montreal"),
+    ("edmonton", "Edmonton"),
+    ("ottawa", "ottawa"),
+    ("calgary", "Calgary"),
+    ("waterloo", "waterloo"),
+]
+_SINGAPORE_SUBS = ["askSingapore", "singapore", "singaporefi"]
+_SINGAPORE_TERMS = _words("""
+singapore
+singaporean
+singaporeans
+sg
+sentosa
+hdb
+cpf
+changi
+nus
+employment pass
+""")
+_HONGKONG_SUBS = ["HongKong"]
+_HONGKONG_TERMS = _words("""
+hong kong
+hongkong
+hk
+kowloon
+mtr
+polyu
+hku
+cuhk
+hkust
+""")
+_CANADA_SUBS = ["AskCanada", "canada", "PersonalFinanceCanada"]
+_CANADA_TERMS = _words("""
+canada
+canadian
+canadians
+ontario
+quebec
+alberta
+british columbia
+manitoba
+saskatchewan
+""")
+# (place name, subs, triggers) in priority order; the city group is handled before these.
+_PLACE_GROUPS = [
+    ("singapore", _SINGAPORE_SUBS, _SINGAPORE_TERMS),
+    ("hongkong", _HONGKONG_SUBS, _HONGKONG_TERMS),
+    ("canada", _CANADA_SUBS, _CANADA_TERMS),
+]
+_IMMIGRATION_SUBS = ["IWantOut", "ImmigrationCanada", "CanadaImmigration", "ExpressEntry", "SingaporePR"]
+_IMMIGRATION_TERMS = _words("""
+visa
+visas
+immigration
+immigrant
+immigrants
+expressentry
+express entry
+workpermit
+work permit
+study permit
+pgwp
+cec
+lmia
+pr
+singaporepr
+permanent resident
+permanent residency
+citizenship
+employment pass
+aaip
+oinp
+crs
+""")
+_CAREER_SUBS = ["cscareerquestions", "cscareerquestionsEU", "ExperiencedDevs", "csMajors",
+                "cscareerquestionsCAD"]
+_CAREER_TERMS = _words("""
+career
+careers
+job
+jobs
+employment
+interview
+interviews
+offer
+offers
+salary
+salaries
+hiring
+workplace
+software
+developer
+programming
+resume
+internship
+intern
+layoff
+layoffs
+negotiation
+""")
+_ML_SUBS = ["MachineLearning", "compsci", "ArtificialIntelligence"]
+_ML_TERMS = _words("""
+ai
+ml
+machinelearning
+machine learning
+artificialintelligence
+artificial intelligence
+compsci
+computer science
+deep learning
+llm
+llms
+nlp
+""")
+_ACADEMIC_SUBS = ["PhD", "AskAcademia", "GradSchool", "labrats"]
+_ACADEMIC_TERMS = _words("""
+phd
+academia
+academic
+advisor
+admission
+admissions
+graduate
+gradschool
+grad school
+university
+college
+professor
+faculty
+postdoc
+thesis
+dissertation
+lab
+laboratory
+research
+researcher
+supervisor
+""")
+# Subs in the immigration and career groups that belong to one place. When the query names any
+# place, those two groups keep only the subs of the named places (first) and the subs with no
+# place. cscareerquestionsEU belongs to Europe, which has no group, so a named place drops it.
+_SUB_PLACE = {
+    "immigrationcanada": "canada",
+    "canadaimmigration": "canada",
+    "expressentry": "canada",
+    "cscareerquestionscad": "canada",
+    "singaporepr": "singapore",
+    "cscareerquestionseu": "europe",
+}
+# Immigration terms that only exist in one country's system. They name that place for the filter
+# above without adding its local-life group: "express entry draw" wants r/ExpressEntry ahead of
+# r/IWantOut and no r/SingaporePR, but not r/canada.
+_PLACE_HINT_TERMS = {
+    "expressentry": "canada",
+    "express entry": "canada",
+    "pgwp": "canada",
+    "cec": "canada",
+    "lmia": "canada",
+    "crs": "canada",
+    "aaip": "canada",
+    "oinp": "canada",
+    "singaporepr": "singapore",
+}
+_MAX_TRIGGER_WORDS = 2
 
 # Measured storage route: exact Arctic lookups confirmed these communities exist, and a
 # DataHoarder `helium drives` post search returned enterprise and used-drive evidence. This
@@ -254,12 +426,53 @@ def _latin_content_terms(q: str) -> list[str]:
     return out
 
 
-def _has_core_intent(q: str) -> bool:
-    """Whether the query carries the curated research, career, or immigration intent."""
-    terms = {t.lower() for t in _latin_content_terms(q)}
-    if terms & _CORE_THEME_TERMS:
-        return True
-    return _looks_financial(q)
+def _query_grams(q: str) -> set[str]:
+    """Lowercased query words plus every run of up to _MAX_TRIGGER_WORDS adjacent words."""
+    toks = re.findall(r"[a-z0-9]+", (q or "").lower())
+    grams: set[str] = set()
+    for n in range(1, _MAX_TRIGGER_WORDS + 1):
+        for i in range(len(toks) - n + 1):
+            grams.add(" ".join(toks[i:i + n]))
+    return grams
+
+
+def _keep_place_subs(subs: list[str], places: set[str]) -> list[str]:
+    """With no named place, the group as listed. With named places, the subs of those places first,
+    then the subs that belong to no place; subs of any other place are dropped."""
+    if not places:
+        return list(subs)
+    own = [s for s in subs if _SUB_PLACE.get(s.lower()) in places]
+    neutral = [s for s in subs if s.lower() not in _SUB_PLACE]
+    return own + neutral
+
+
+def _topic_subreddits(q: str) -> list[str]:
+    """The topic-group route: the subs of every group ``q`` hits, in the fixed priority order
+    (cities, places, immigration, career, finance, machine learning, academic), de-duplicated
+    case-insensitively with the first occurrence kept. [] when no group and no finance signal."""
+    grams = _query_grams(q)
+    out = [sub for city, sub in _CITY_SUBS if city in grams]
+    city_hit = bool(out)
+    places: set[str] = set()
+    for place, subs, terms in _PLACE_GROUPS:
+        if grams & terms or (place == "canada" and city_hit):
+            places.add(place)
+            out.extend(subs)
+    places.update(place for term, place in _PLACE_HINT_TERMS.items() if term in grams)
+    for subs, terms in ((_IMMIGRATION_SUBS, _IMMIGRATION_TERMS), (_CAREER_SUBS, _CAREER_TERMS)):
+        if grams & terms:
+            out.extend(_keep_place_subs(subs, places))
+    out = _with_finance_subs(out, q)
+    for subs, terms in ((_ML_SUBS, _ML_TERMS), (_ACADEMIC_SUBS, _ACADEMIC_TERMS)):
+        if grams & terms:
+            out.extend(subs)
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for sub in out:
+        if sub.lower() not in seen:
+            seen.add(sub.lower())
+            deduped.append(sub)
+    return deduped
 
 
 def _looks_storage_intent(q: str) -> bool:
@@ -380,7 +593,7 @@ def _parse_subreddits(query: str) -> tuple[str, Optional[list[str]]]:
     """Split a `subreddit:`/`sub:` qualifier out of the query.
 
     Returns ``(clean_query, subs)`` where ``subs`` is the ordered, de-duplicated
-    list of requested subreddits (overriding ``DEFAULT_SUBREDDITS``) or ``None``
+    list of requested subreddits (overriding the topic route) or ``None``
     when no qualifier is present — in which case the caller's default behaviour
     is completely unchanged.
     """
@@ -413,25 +626,44 @@ def _parse_comment_mode(query: str) -> tuple[str, bool]:
     return _COMMENT_QUALIFIER_RE.sub(" ", q).strip(), True
 
 
-def _discover_subreddits(query: str) -> list[str]:
-    """Topical subreddits matching ``query``, for the query-driven route (best-effort → [] on any
-    failure, so the caller always still has DEFAULT_SUBREDDITS).
+def _name_forms(word: str) -> set[str]:
+    forms = {word, word + "s"}
+    if len(word) > 1 and word.endswith("s"):
+        forms.add(word[:-1])
+    return forms
 
-    Probes the 2 longest Latin tokens via Arctic's ``subreddit_prefix`` endpoint, keeps public,
-    non-NSFW subs above the subscriber floor, ranks the union by subscriber count, and returns the
-    top names NOT already in the curated core (de-duped case-insensitively). Per-term lookups are
-    cached (_DISCOVER_TTL) so a repeated topic costs no live discovery GETs. Non-Latin queries
-    (e.g. "手冲咖啡") yield no tokens → [] → reddit honestly returns ~nothing for content it can't
-    serve, instead of forcing it through the research core (those belong on zhihu/bilibili)."""
+
+def _discovery_names(query: str) -> set[str]:
+    """Lowercased subreddit names discovery may take for ``query``: each content word, the word plus
+    or minus a final s, and each pair of adjacent content words run together, plus or minus s."""
+    terms = [t.lower() for t in _content_terms(query) if re.fullmatch(r"[A-Za-z0-9]+", t)]
+    names: set[str] = set()
+    for t in terms:
+        names |= _name_forms(t)
+    for a, b in zip(terms, terms[1:]):
+        names |= _name_forms(a + b)
+    return names
+
+
+def _discover_subreddits(query: str) -> list[str]:
+    """Subreddits named after ``query``'s own words, for a query no topic group matched
+    (best effort: [] on any failure).
+
+    Probes every distinct Latin content term of 3+ characters via Arctic's ``subreddit_prefix``
+    endpoint, keeps public, non-NSFW subs above the subscriber floor, then keeps only the subs
+    whose name equals a content word or an adjacent pair of them (``_discovery_names``), ranks by
+    subscriber count, and returns the top few. Per-term lookups are cached (_DISCOVER_TTL) so a
+    repeated topic costs no live discovery GETs. Non-Latin queries (e.g. "手冲咖啡") yield no
+    tokens and so []."""
     # Probe every distinct Latin CONTENT term ranked by SPECIFICITY (acronyms/proper nouns first),
     # NOT raw length. Prefix is the only search primitive Arctic exposes, so probing each content
-    # term is the broadest translation-free discovery available while the result union remains
-    # bounded by _DISCOVER_TOP.
+    # term is the broadest translation-free lookup available. The prefix answer is wide (r/drawing
+    # for "draw", a German r/rentnerzeigenaufdinge for "rent"), so only same-name subs are kept.
     toks = [t for t in _content_terms(query) if re.fullmatch(r"[A-Za-z0-9]+", t) and len(t) >= 3]
     if not toks:
         return []
     probes = sorted(set(toks), key=_term_rank, reverse=True)
-    core_lower = {s.lower() for s in DEFAULT_SUBREDDITS}
+    allowed = _discovery_names(query)
     found: dict[str, tuple[str, int]] = {}  # lower-name -> (display_name, subscribers)
     for tok in probes:
         ck = cache.make_key("reddit_arctic", "discover", tok.lower())
@@ -449,13 +681,24 @@ def _discover_subreddits(query: str) -> list[str]:
             cache.set(ck, subs, ttl=_DISCOVER_TTL)
         for name, nsubs in subs:
             key = name.lower()
-            if key in core_lower:
+            if key not in allowed:
                 continue
             prev = found.get(key)
             if prev is None or nsubs > prev[1]:
                 found[key] = (name, nsubs)
     ranked = sorted(found.values(), key=lambda x: x[1], reverse=True)
     return [name for name, _ in ranked[:_DISCOVER_TOP]]
+
+
+def _routed_subreddits(q: str) -> list[str]:
+    """The one routing rule shared by the submission and comment paths, before any width cap:
+    topic groups (finance included), else the measured storage subs, else same-name discovery."""
+    topical = _topic_subreddits(q)
+    if topical:
+        return topical
+    if _looks_storage_intent(q):
+        return list(_STORAGE_SUBS)
+    return _discover_subreddits(q)
 
 
 def _resolve_subreddits(query: str, override_subs: Optional[list[str]]) -> list[str]:
@@ -467,31 +710,52 @@ def _resolve_subreddits(query: str, override_subs: Optional[list[str]]) -> list[
     if override_subs:
         return _cap_search_subreddits(override_subs, q)
 
-    if _has_core_intent(q):
-        return _cap_search_subreddits(_with_finance_subs(DEFAULT_SUBREDDITS, q), q)
-    if _looks_storage_intent(q):
-        return _cap_search_subreddits(list(_STORAGE_SUBS), q)
-
-    discovered = _discover_subreddits(q)
-    if not discovered:
+    routed = _routed_subreddits(q)
+    if not routed:
         diag.note(
             "reddit.discovery_empty",
-            body="no topical subreddit was discovered for this off-core Latin query",
+            body=("no topic group, finance signal or same-name subreddit matched this Latin query, "
+                  "so reddit searches all of reddit through the browser instead (one request)"
+                  if q else "an empty query matched no subreddit"),
         )
         return []
-    return _cap_search_subreddits(discovered, q)
+    return _cap_search_subreddits(routed, q)
 
 
-# ── Finance routing (the curated core is research/career/immigration; it knows nothing about
-#    markets) ───────────────────────────────────────────────────────────────────────────────
-# A finance query ("$NVDA earnings", "Oracle stock buyback") used to land in the career core
-# (r/cscareerquestions / r/csMajors) because _discover_subreddits keys on the longest token and
-# "Oracle"/"earnings" look like generic words, never reaching r/stocks. So when a query carries a
-# FINANCE SIGNAL we ADD a small curated finance set on top of the existing subs (additive, exactly
-# like _discover_subreddits: the research core is never replaced, and a non-financial query is
-# byte-for-byte unchanged: no signal -> no finance subs -> identical fan-out). Kept to 5: reddit is
-# HOST-bound (one Arctic host, see _FANOUT_WORKERS) so fan-out width is the cost, and these 5 are the
-# highest-signal markets/equity-analysis communities.
+def _sitewide_eligible(q: str, override_subs: Optional[list[str]]) -> bool:
+    """A reddit-wide search is for a Latin query with no `subreddit:` qualifier that resolved to no
+    subreddit at all."""
+    return override_subs is None and bool(_latin_content_terms(q))
+
+
+def _sitewide_docs(items: list[dict], limit: int) -> list[Document]:
+    docs = []
+    for it in items[:limit]:
+        doc = RedditAdapter._submission_to_document(it)
+        doc.metadata["search_via"] = "cdp_www_reddit"
+        doc.metadata["search_scope"] = "sitewide"
+        doc.tags.append("sitewide")
+        docs.append(doc)
+    return docs
+
+
+def _note_sitewide_empty() -> None:
+    diag.note("reddit.sitewide_empty",
+              body="the reddit-wide browser search found nothing for this query either")
+
+
+def _sitewide_key(q: str, limit: int) -> str:
+    return cache.make_key("reddit_arctic", "search_sitewide", q, limit)
+
+
+# ── Finance routing (the finance topic group) ────────────────────────────────────────────────
+# A finance query ("$NVDA earnings", "Oracle stock buyback") used to land in the career subs
+# (r/cscareerquestions / r/csMajors) because discovery keyed on generic-looking words and never
+# reached r/stocks. So when a query carries a FINANCE SIGNAL the topic route adds this small
+# curated finance set, after the place, immigration and career groups and before the machine
+# learning and academic groups (_topic_subreddits). Kept to 5: reddit is HOST-bound (one Arctic
+# host, see _FANOUT_WORKERS) so fan-out width is the cost, and these 5 are the highest-signal
+# markets/equity-analysis communities.
 _FINANCE_SUBS = [
     "stocks",
     "investing",
@@ -527,9 +791,8 @@ def _looks_financial(query: str) -> bool:
 
 def _with_finance_subs(subreddits: list[str], query: str) -> list[str]:
     """Append the curated finance subs to ``subreddits`` IFF ``query`` looks financial, de-duped
-    case-insensitively with the finance subs added LAST (the existing core/discovered/explicit subs
-    keep their lead position and priority). Not financial → returns ``subreddits`` unchanged (same
-    list identity contract the caller relies on for the no-regression path)."""
+    case-insensitively with the finance subs added LAST (the groups already in ``subreddits`` keep
+    their lead position). Not financial → returns ``subreddits`` unchanged (same list identity)."""
     if not _looks_financial(query):
         return subreddits
     seen = {s.lower() for s in subreddits}
@@ -698,7 +961,61 @@ def _arctic_record(ok: bool) -> None:
                            _arctic_fail_streak, int(_ARCTIC_COOLDOWN))
 
 
-def _arctic_get(path: str, params: dict, *, retries: int = 1, timeout: int = 20) -> Optional[list]:
+# ── Subs Arctic cannot title-search (2026-10-05) ─────────────────────────────────────────────
+# Arctic's docs say title search is not supported for very active subreddits, and it answers them
+# with the same 422 "Timeout. Maybe slow down a bit" body it uses for a load refusal (measured
+# 2026-10-05: r/singapore 422 in about 1 s while r/askSingapore and r/canada answered 200 in about
+# 8 s; r/cscareerquestions did the same on 2026-10-04). When one fan-out round has a sub answering
+# 200 and another sub refused that way, the refusal is about that sub, not about our load: the
+# sub goes on this list for a day, the refusal is taken back out of the breaker streak, and the
+# list's subs are searched through the browser instead. A round in which nothing answered 200 is
+# the far end throttling us, and counts toward the breaker as before.
+_UNSEARCHABLE_TTL = 86400
+
+
+def _unsearchable_key(sub: str) -> str:
+    return cache.make_key("reddit_arctic", "unsearchable", sub.lower())
+
+
+def _arctic_unsearchable(subreddits: list[str]) -> set[str]:
+    """Lowercased names of the ``subreddits`` currently on the cannot-search list."""
+    return {s.lower() for s in subreddits if cache.get(_unsearchable_key(s))}
+
+
+def _mark_arctic_unsearchable(subreddits: list[str]) -> None:
+    for sub in subreddits:
+        cache.set(_unsearchable_key(sub), True, ttl=_UNSEARCHABLE_TTL)
+
+
+def _arctic_refund(n: int) -> None:
+    """Take ``n`` refusal steps back out of the breaker streak (never below zero)."""
+    global _arctic_fail_streak
+    with _arctic_lock:
+        _arctic_fail_streak = max(0, _arctic_fail_streak - n)
+
+
+def _settle_round(events: list[tuple[str, str]]) -> list[str]:
+    """Read one fan-out round's per-sub outcomes, in completion order ("ok" for any 200 answer,
+    "refused" for the slow-down 422, "failed" otherwise). When some sub answered and some were
+    refused, return the refused subs for the cannot-search list and refund the breaker steps those
+    refusals added after the last answer (an answer already reset the streak before it). Otherwise
+    return [] and leave the breaker as the requests left it."""
+    oks = [i for i, (_, o) in enumerate(events) if o == "ok"]
+    refused = [s for s, o in events if o == "refused"]
+    if not oks or not refused:
+        return []
+    late = sum(1 for _, o in events[oks[-1] + 1:] if o == "refused")
+    if late:
+        _arctic_refund(late)
+    diag.note("reddit.arctic_unsearchable",
+              body=(f"Arctic Shift refused a title search on {', '.join('r/' + s for s in refused)} while "
+                    "other subs in the same round answered, so the refusal is about the sub, not our "
+                    "load: not counted toward the throttle breaker, and the sub goes through the "
+                    "browser search for the next 24 hours"))
+    return refused
+
+def _arctic_get(path: str, params: dict, *, retries: int = 1, timeout: int = 20,
+                outcome: Optional[list] = None) -> Optional[list]:
     """GET an Arctic Shift endpoint → its ``data`` list (or None on failure).
 
     The mirror throttles the per-sub fan-out under burst load TWO ways, both transient:
@@ -734,6 +1051,8 @@ def _arctic_get(path: str, params: dict, *, retries: int = 1, timeout: int = 20)
         if data is None and _arctic_refused(trace):  # the far end refused us under load: no retry
             _note_arctic_refused(path, trace)
             _arctic_record(False)
+            if outcome is not None:
+                outcome.append("refused")
             return None
         if data is None:  # HTTP-level failure (422/429/5xx/timeout) — transient under burst
             if attempt < retries and not _arctic_cooling():
@@ -755,7 +1074,8 @@ def _arctic_get(path: str, params: dict, *, retries: int = 1, timeout: int = 20)
     return None
 
 
-async def _aarctic_get(path: str, params: dict, *, retries: int = 1, timeout: int = 20) -> Optional[list]:
+async def _aarctic_get(path: str, params: dict, *, retries: int = 1, timeout: int = 20,
+                       outcome: Optional[list] = None) -> Optional[list]:
     """Native-async twin of ``_arctic_get`` (reddit's Arctic submission path goes native async).
 
     Byte-identical breaker + retry logic; only the two BLOCKING primitives swap:
@@ -795,6 +1115,8 @@ async def _aarctic_get(path: str, params: dict, *, retries: int = 1, timeout: in
         if data is None and _arctic_refused(trace):  # the far end refused us under load: no retry
             _note_arctic_refused(path, trace)
             _arctic_record(False)
+            if outcome is not None:
+                outcome.append("refused")
             return None
         if data is None:  # HTTP-level failure (422/429/5xx/timeout) — transient under burst
             if attempt < retries and not _arctic_cooling():
@@ -892,13 +1214,21 @@ class RedditAdapter:
     needs_credentials = False  # Arctic Shift needs no auth
     description = (
         "Reddit: GENERAL topic search (via Arctic Shift mirror; Reddit's own API is WAF-blocked). "
-        "自动按查询路由到对应话题子版 (如 'pour over coffee'→r/Coffee; 含金融信号如 '$NVDA earnings' "
-        "→ 追加 r/stocks·investing·wallstreetbets 等), 同时常驻搜索 "
-        "r/PhD·AskAcademia·MachineLearning + 移民/求职 核心子版 (科研/职业意图永不丢失). "
+        "按话题分组路由: 查询命中哪些话题组就只搜那些组的子版 (科研 r/PhD·AskAcademia·GradSchool, "
+        "机器学习 r/MachineLearning·compsci, 求职 r/cscareerquestions·ExperiencedDevs·csMajors, "
+        "移民 r/IWantOut·ImmigrationCanada·ExpressEntry·SingaporePR, 含金融信号如 '$NVDA earnings' "
+        "→ r/stocks·investing·wallstreetbets 等), 含新加坡、香港、加拿大和主要城市的本地生活子版 "
+        "(r/askSingapore·singapore·singaporefi, r/HongKong, r/AskCanada·canada·PersonalFinanceCanada, "
+        "r/toronto·vancouver·montreal·Edmonton·ottawa·Calgary·waterloo). 本地生活问题请在查询里带上地名 "
+        "(如 'Universal Studios Singapore tickets', 'Montreal apartment rent'). "
+        "没有话题组对得上时找与查询词同名的子版 (如 'pour over coffee'→r/Coffee); 什么子版都对不上时改搜 "
+        "reddit 全站 (浏览器, 一次请求), 结果带 'sitewide' tag + metadata.search_scope='sitewide'. "
+        "Arctic 搜不动的大子版 (如 r/singapore) 记名 24 小时, 改走浏览器按子版搜索, 结果带 'cdp-fallback' tag. "
         "查询语义=标题全词 AND、无 OR (按帖子标题匹配): 1-3 个词且含一个生僻词最准 (如 'COMPASS rejected'); "
         "多词 0 命中时自动放宽 (最长 2 词→1 词), 放宽结果带 metadata.query_sent + 'relaxed' tag. "
         "subreddit:NAME[,NAME] 显式限定子版 (覆盖自动路由). "
-        "comments: 前缀切到评论路径 (实质答案在评论而非标题; 如 'comments: imposter syndrome' → 高赞回答, 按 score 排序). "
+        "comments: 前缀切到评论路径 (实质答案在评论而非标题; 如 'comments: imposter syndrome' → 高赞回答, 按 score 排序; "
+        "路由同上, 但不搜全站). "
         "中文/非拉丁查询请用知乎/B站."
     )
 
@@ -916,12 +1246,13 @@ class RedditAdapter:
 
         # Pull any `subreddit:`/`sub:` qualifier out of the query first. When
         # present it OVERRIDES everything (search only those subs) and is stripped
-        # from the keyword part. Absent → search the curated research/career CORE
-        # plus any topical subs the query itself discovers (the general-engine route:
-        # "pour over coffee" reaches r/Coffee instead of being forced through r/PhD).
+        # from the keyword part. Absent → the topic-group route (_routed_subreddits);
+        # a Latin query that resolves to no sub at all searches all of reddit once.
         q, override_subs = _parse_subreddits(query or "")
         subreddits = _resolve_subreddits(q, override_subs)
         if not subreddits:
+            if _sitewide_eligible(q, override_subs):
+                return self._search_sitewide(q, limit)
             return []
 
         # CRITICAL: the resolved sub set is part of the cache identity — otherwise
@@ -932,15 +1263,25 @@ class RedditAdapter:
             return cached
 
         per_sub = min(max(limit, 1), 100)
+        blocked = _arctic_unsearchable(subreddits)  # grows when a round lists a sub (see _settle_round)
 
         def _one_round(tq: str) -> list[dict]:
+            targets = [s for s in subreddits if s.lower() not in blocked]
+            if not targets:
+                return []
+            events: list[tuple[str, str]] = []
+
             def _one(sub: str) -> list:
                 params = {"subreddit": sub, "sort": "desc", "limit": per_sub}
                 if tq:
                     params["title"] = tq  # title keyword search; `query` is refused (module docstring)
                 # search fan-out hammers the mirror hardest → deeper retry budget here, but a SHORT
                 # per-request timeout so a throttled mirror fails fast to the CDP fallback (see _SEARCH_TIMEOUT)
-                return _arctic_get("/posts/search", params, retries=2, timeout=_SEARCH_TIMEOUT) or []
+                outcome: list = []
+                res = _arctic_get("/posts/search", params, retries=2, timeout=_SEARCH_TIMEOUT,
+                                  outcome=outcome)
+                events.append((sub, "refused" if outcome else ("ok" if res is not None else "failed")))
+                return res or []
 
             # Capture the cache `fresh` contextvar HERE on the search thread and
             # hand each worker its own private copy via ctx.run — never copy inside
@@ -949,10 +1290,14 @@ class RedditAdapter:
             # only at the search() top level), so fresh is not currently at risk here;
             # propagating the context anyway matches the verified template and is
             # future-proof if a per-sub cache.get is ever added. Zero effect on results.
-            contexts = [copy_context() for _ in subreddits]
-            with ThreadPoolExecutor(max_workers=min(len(subreddits), _FANOUT_WORKERS)) as ex:
+            contexts = [copy_context() for _ in targets]
+            with ThreadPoolExecutor(max_workers=min(len(targets), _FANOUT_WORKERS)) as ex:
                 batches = list(ex.map(lambda ctx, s: ctx.run(_one, s),
-                                      contexts, subreddits))
+                                      contexts, targets))
+            listed = _settle_round(events)
+            if listed:
+                _mark_arctic_unsearchable(listed)
+                blocked.update(s.lower() for s in listed)
             seen: set[str] = set()
             out: list[dict] = []
             for items in batches:
@@ -979,27 +1324,21 @@ class RedditAdapter:
         # resolved subreddits (see _cdp_search_path). Fires ONLY on
         # an arctic miss, so a healthy mirror never pays the browser cost. Its results are already
         # relevance-ranked, so they KEEP reddit's order (not the arctic newest-first reorder below).
+        # When Arctic did answer but short of `limit` and some resolved subs are on the cannot-search
+        # list, the ONE browser request goes to just those subs and its results follow Arctic's.
         via_cdp = False
+        topup: list[dict] = []
         if not merged and q:
             cdp_items = _cdp_search(q, limit, subreddits)
             if cdp_items:
                 merged = cdp_items
                 via_cdp = True
+        elif q and len(merged) < limit:
+            listed_subs = [s for s in subreddits if s.lower() in blocked]
+            if listed_subs:
+                topup = _cdp_search(q, limit, listed_subs)
 
-        if not via_cdp:
-            # Arctic Shift has no relevance rank → newest matches first.
-            merged.sort(key=lambda d: d.get("created_utc") or 0, reverse=True)
-        docs = []
-        for it in merged[:limit]:
-            doc = self._submission_to_document(it)
-            if via_cdp:  # surface that this came via the browser fallback, not the arctic mirror
-                doc.metadata["search_via"] = "cdp_www_reddit"
-                doc.tags.append("cdp-fallback")
-            elif sent != q:  # capped or relaxed — let the agent see what actually matched
-                doc.metadata["query_sent"] = sent
-                doc.metadata["query_original"] = q
-                doc.tags.append("relaxed")
-            docs.append(doc)
+        docs = self._finish_docs(merged, via_cdp, sent, q, topup, limit)
         # Don't cache a breaker-induced empty (transient throttle): a genuine 0-hit (mirror healthy)
         # IS cached to avoid re-hammering, but a throttled-empty must re-fetch once the mirror heals.
         # A CDP-fallback hit IS cached (real results); an all-empty (arctic cooling + CDP miss) is not.
@@ -1007,10 +1346,71 @@ class RedditAdapter:
             cache.set_docs(key, docs, ttl=_SEARCH_TTL)
         return docs
 
+    @classmethod
+    def _finish_docs(cls, merged: list[dict], via_cdp: bool, sent: str, q: str,
+                     topup: list[dict], limit: int) -> list[Document]:
+        """Map the merged submissions to documents with their provenance marks (shared by search and
+        asearch): Arctic hits newest first, browser hits in reddit's order, and browser top-up hits
+        for the cannot-search subs after Arctic's, de-duplicated by post id, `limit` in total."""
+        if not via_cdp:
+            # Arctic Shift has no relevance rank → newest matches first.
+            merged.sort(key=lambda d: d.get("created_utc") or 0, reverse=True)
+        docs = []
+        for it in merged[:limit]:
+            doc = cls._submission_to_document(it)
+            if via_cdp:  # surface that this came via the browser fallback, not the arctic mirror
+                doc.metadata["search_via"] = "cdp_www_reddit"
+                doc.tags.append("cdp-fallback")
+            elif sent != q:  # capped or relaxed: let the agent see what actually matched
+                doc.metadata["query_sent"] = sent
+                doc.metadata["query_original"] = q
+                doc.tags.append("relaxed")
+            docs.append(doc)
+        seen = {d.source_id for d in docs}
+        for it in topup:
+            if len(docs) >= limit:
+                break
+            pid = it.get("id")
+            if not pid or pid in seen:
+                continue
+            seen.add(pid)
+            doc = cls._submission_to_document(it)
+            doc.metadata["search_via"] = "cdp_www_reddit"
+            doc.tags.append("cdp-fallback")
+            docs.append(doc)
+        return docs
+
+    def _search_sitewide(self, q: str, limit: int) -> list[Document]:
+        """One reddit-wide browser search (/search.json) for a query that resolved to no subreddit."""
+        key = _sitewide_key(q, limit)
+        cached = cache.get_docs(key)
+        if cached is not None:
+            return cached
+        docs = _sitewide_docs(_cdp_search(q, limit, None), limit)
+        if docs:
+            cache.set_docs(key, docs, ttl=_SEARCH_TTL)
+        else:
+            _note_sitewide_empty()
+        return docs
+
+    async def _asearch_sitewide(self, q: str, limit: int) -> list[Document]:
+        """Async twin of ``_search_sitewide``: same key and marks, blocking work off the loop."""
+        key = _sitewide_key(q, limit)
+        cached = await anyio.to_thread.run_sync(cache.get_docs, key)
+        if cached is not None:
+            return cached
+        items = await anyio.to_thread.run_sync(_cdp_search, q, limit, None)
+        docs = _sitewide_docs(items, limit)
+        if docs:
+            await anyio.to_thread.run_sync(functools.partial(cache.set_docs, key, docs, ttl=_SEARCH_TTL))
+        else:
+            _note_sitewide_empty()
+        return docs
+
     async def asearch(self, query: str, limit: int = 10) -> list[Document]:
         """Native-async twin of ``search`` (reddit's Arctic submission fan-out goes native async), so
         the live async omniseek_search path awaits it DIRECTLY instead of parking a pool thread on the whole
-        23-sub fan-out. It mirrors ``search`` step-for-step; only the BLOCKING work moves:
+        fan-out. It mirrors ``search`` step-for-step; only the BLOCKING work moves:
           • the disk cache read/write → ``anyio.to_thread.run_sync`` (get_docs / set_docs do file IO);
           • the Arctic ``/posts/search`` fan-out → concurrent coroutines awaiting ``_aarctic_get`` (the
             native egress twin), the per-round WIDTH bounded to ``_FANOUT_WORKERS`` exactly as the sync
@@ -1034,7 +1434,7 @@ class RedditAdapter:
                 functools.partial(self._search_comments, q_comment, limit))
 
         # Pull any `subreddit:`/`sub:` qualifier out first (mirrors search). When present it OVERRIDES;
-        # absent → the curated CORE plus query-discovered topical subs (the general-engine route).
+        # absent → the topic-group route, and a Latin query with no sub at all searches all of reddit once.
         q, override_subs = _parse_subreddits(query or "")
         if q and not _latin_content_terms(q):
             _note_non_latin_query(q)
@@ -1043,6 +1443,8 @@ class RedditAdapter:
         # dominant submission fan-out remains native below. Result is shared with the sync path.
         subreddits = await anyio.to_thread.run_sync(_resolve_subreddits, q, override_subs)
         if not subreddits:
+            if _sitewide_eligible(q, override_subs):
+                return await self._asearch_sitewide(q, limit)
             return []
 
         # CRITICAL: the resolved sub set is part of the cache identity, and this is the SAME key as
@@ -1053,8 +1455,13 @@ class RedditAdapter:
             return cached
 
         per_sub = min(max(limit, 1), 100)
+        blocked = await anyio.to_thread.run_sync(_arctic_unsearchable, subreddits)  # cache IO OFF loop
 
         async def _aone_round(tq: str) -> list[dict]:
+            targets = [s for s in subreddits if s.lower() not in blocked]
+            if not targets:
+                return []
+            events: list[tuple[str, str]] = []
             # Bound the per-round fan-out WIDTH to _FANOUT_WORKERS, mirroring the sync
             # ThreadPoolExecutor(max_workers=min(len(subreddits), _FANOUT_WORKERS)). This is the fan-out
             # WIDTH limiter (a local asyncio primitive), NOT the egress guard — the egress guard stays the
@@ -1070,13 +1477,21 @@ class RedditAdapter:
                         params["title"] = tq  # title keyword search; `query` is refused (module docstring)
                     # search fan-out hammers the mirror hardest → deeper retry budget here, but a SHORT
                     # per-request timeout so a throttled mirror fails fast to the CDP fallback (see _SEARCH_TIMEOUT)
-                    return await _aarctic_get("/posts/search", params, retries=2, timeout=_SEARCH_TIMEOUT) or []
+                    outcome: list = []
+                    res = await _aarctic_get("/posts/search", params, retries=2, timeout=_SEARCH_TIMEOUT,
+                                             outcome=outcome)
+                    events.append((sub, "refused" if outcome else ("ok" if res is not None else "failed")))
+                    return res or []
 
             # Every coroutine runs on the one loop thread, so (unlike the sync ThreadPoolExecutor) NO
             # copy_context() is needed: the cache `fresh` contextvar propagates naturally. And today
             # _aarctic_get → http.aget_json does not read cache.get anyway (reddit caches only at the
             # asearch top level), so fresh is not at risk here regardless — identical to the sync note.
-            batches = await asyncio.gather(*(_aone(s) for s in subreddits))
+            batches = await asyncio.gather(*(_aone(s) for s in targets))
+            listed = _settle_round(events)
+            if listed:
+                await anyio.to_thread.run_sync(_mark_arctic_unsearchable, listed)  # disk write OFF loop
+                blocked.update(s.lower() for s in listed)
             seen: set[str] = set()
             out: list[dict] = []
             for items in batches:
@@ -1102,28 +1517,21 @@ class RedditAdapter:
         # subreddits as search(). The CDP path is SYNC (curl/cdp)
         # — run it OFF the loop, NEVER on it. Fires ONLY on an arctic miss, so a healthy mirror never pays
         # the browser cost. Its results are already relevance-ranked, so they KEEP reddit's order (not the
-        # arctic newest-first reorder below).
+        # arctic newest-first reorder below). A short Arctic answer with cannot-search subs resolved
+        # sends the ONE browser request to just those subs instead (see search()).
         via_cdp = False
+        topup: list[dict] = []
         if not merged and q:
             cdp_items = await anyio.to_thread.run_sync(_cdp_search, q, limit, subreddits)
             if cdp_items:
                 merged = cdp_items
                 via_cdp = True
+        elif q and len(merged) < limit:
+            listed_subs = [s for s in subreddits if s.lower() in blocked]
+            if listed_subs:
+                topup = await anyio.to_thread.run_sync(_cdp_search, q, limit, listed_subs)
 
-        if not via_cdp:
-            # Arctic Shift has no relevance rank → newest matches first.
-            merged.sort(key=lambda d: d.get("created_utc") or 0, reverse=True)
-        docs = []
-        for it in merged[:limit]:
-            doc = self._submission_to_document(it)
-            if via_cdp:  # surface that this came via the browser fallback, not the arctic mirror
-                doc.metadata["search_via"] = "cdp_www_reddit"
-                doc.tags.append("cdp-fallback")
-            elif sent != q:  # capped or relaxed — let the agent see what actually matched
-                doc.metadata["query_sent"] = sent
-                doc.metadata["query_original"] = q
-                doc.tags.append("relaxed")
-            docs.append(doc)
+        docs = self._finish_docs(merged, via_cdp, sent, q, topup, limit)
         # Don't cache a breaker-induced empty (transient throttle): a genuine 0-hit (mirror healthy) IS
         # cached; a CDP-fallback hit IS cached; an all-empty (arctic cooling + CDP miss) is not.
         if docs or not _arctic_cooling():
@@ -1140,7 +1548,7 @@ class RedditAdapter:
 
         HOST-GENTLE design: reddit's latency is HOST-bound (one Arctic host) and the comment path
         could otherwise double the submission path's already-heavy fan-out. So the sub set is CAPPED
-        to ``_COMMENT_MAX_SUBS`` (explicit/discovered subs lead, curated core backstops) and the two
+        to ``_COMMENT_MAX_SUBS`` (explicit subs, else the shared topic route) and the two
         comment sources are sequenced — the cheaper, more precise one first, the heavier harvest only
         as a backfill — instead of two full parallel fan-outs:
           1. DIRECT full-text comment search per sub (``body=<query>``) — comments whose own text
@@ -1157,15 +1565,15 @@ class RedditAdapter:
         if override_subs:
             subreddits = override_subs[:_COMMENT_MAX_SUBS]  # explicit subreddit: wins outright
         else:
-            # Discovered topical subs (most query-specific) lead, then the curated finance set when the
-            # query looks financial (so a finance comment search reaches r/stocks et al. before being
-            # capped), then the research core backstops; finally cap the width. _with_finance_subs is a
-            # no-op for a non-financial query, so its comment routing is unchanged.
-            discovered = _discover_subreddits(q)
-            lead = _with_finance_subs(discovered, q)  # discovered (+ finance subs if financial)
-            lead_lower = {s.lower() for s in lead}
-            ranked = lead + [s for s in DEFAULT_SUBREDDITS if s.lower() not in lead_lower]
-            subreddits = ranked[:_COMMENT_MAX_SUBS]
+            # The same routing rule as the submission path (_routed_subreddits), capped to the
+            # comment width. No reddit-wide search here: nothing resolved means nothing returned.
+            subreddits = _routed_subreddits(q)[:_COMMENT_MAX_SUBS]
+            if not subreddits:
+                diag.note("reddit.discovery_empty",
+                          body=("no topic group, finance signal or same-name subreddit matched this "
+                                "comment query; the comment path has no reddit-wide search, so it "
+                                "returns nothing"))
+                return []
 
         # Sub set is part of cache identity (mirrors the submission path) + a 'comments' discriminator
         # so a comment search never collides with a submission search over the same clean q / sub set.
