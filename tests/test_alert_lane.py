@@ -73,9 +73,12 @@ class AlertLaneTests(unittest.TestCase):
             J._alert("t", "b")          # must not raise: a broken siren cannot break the job
 
     def test_retired_bark_hints_are_absorbed_so_old_callers_do_not_crash(self):
-        with patch.object(notify, "wecom_push", lambda *a, **k: True):
+        calls = []
+        with patch.object(notify, "wecom_push", lambda *a, **k: calls.append(a) or True):
             self.assertEqual(notify.alert("t", "b", group="OmniSeek-Health", level="active"), ["wecom"])
-        J._alert("t", "b", group="OmniSeek")
+            # Inside the stand-in too: outside it this reached the real WeCom push (a live message).
+            J._alert("t", "b", group="OmniSeek")
+        self.assertEqual(len(calls), 2)
 
     def test_bark_is_gone_from_the_module(self):
         # 全线删除: no code path may reach the retired channel.

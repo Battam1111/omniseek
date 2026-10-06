@@ -272,18 +272,30 @@ class BaseCDPAdapter:
         return fresh
 
     def _alert_auth_fail(self) -> None:
-        """Best-effort push: tell the operator a source needs a manual VNC re-login (once per 6h)."""
+        """Best-effort push: tell the operator a source needs a manual VNC re-login (once per 6h).
+
+        The cooldown check + bookkeeping stay synchronous; the push itself runs on a daemon thread so
+        a slow outlet (worst case ~28.5s of retries) never stalls the omniseek_search that tripped it."""
+        import threading
         import time as _t
         now = _t.time()
         if now - _AUTH_BARK_LAST.get(self.name, 0.0) < _AUTH_ALERT_COOLDOWN_S:
             return
         _AUTH_BARK_LAST[self.name] = now
+        name = self.name
+
+        def _send() -> None:
+            try:
+                from omniseek.core.infra_jobs import _alert
+                _alert(f"{name} 登录态失效",
+                      f"{name} 的共享 Chrome (9222) 会话登出，且 autofill 自动重登失败，需 VNC 进 mini "
+                      f"手动登录该站点。", group="OmniSeek-Health")
+            except Exception:  # noqa: BLE001 — the alert is best-effort; the typed diagnostic already fails loud
+                pass
+
         try:
-            from omniseek.core.infra_jobs import _alert
-            _alert(f"{self.name} 登录态失效",
-                  f"{self.name} 的共享 Chrome (9222) 会话登出，且 autofill 自动重登失败，需 VNC 进 mini "
-                  f"手动登录该站点。", group="OmniSeek-Health")
-        except Exception:  # noqa: BLE001 — the alert is best-effort; the typed diagnostic already fails loud
+            threading.Thread(target=_send, name=f"auth-alert-{name}", daemon=True).start()
+        except Exception:  # noqa: BLE001 — could not even spawn the thread; still best-effort
             pass
 
     def search(self, query: str, limit: int = 10) -> list[Document]:

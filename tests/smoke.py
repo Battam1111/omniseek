@@ -19197,6 +19197,11 @@ from omniseek.core import http as _fj_http  # noqa: E402  (wecom_push sends thro
 _fj_posts: list = []
 _fj_post_save, _fj_creds_save = _fj_http.direct, _fj_notify._WECOM_CREDS_PATH
 _fj_cred_dir = _Path44(_tf57.mkdtemp())
+# The outlet (an external push outlet) reads the REAL credentials, so point it at a missing file: the push
+# then takes the direct fallback that the stub below intercepts, and nothing can leave the machine.
+_fj_outlet_env = os.environ.get("OMNISEEK_NOTIFY_OUTLET")
+os.environ["OMNISEEK_NOTIFY_OUTLET"] = str(_fj_cred_dir / "no-outlet" / "notify.py")
+_fj_notify._OUTLET_CACHE.clear()
 try:
     _fj_http.direct = lambda method, url, **kw: _fj_posts.append((url, kw))
     _fj_notify._WECOM_CREDS_PATH = _fj_cred_dir / "absent.json"
@@ -19213,6 +19218,10 @@ try:
           and "周报" in _fj_posts[0][1]["json"]["markdown"]["content"])
 finally:
     _fj_http.direct, _fj_notify._WECOM_CREDS_PATH = _fj_post_save, _fj_creds_save
+    if _fj_outlet_env is None:
+        os.environ.pop("OMNISEEK_NOTIFY_OUTLET", None)
+    else:
+        os.environ["OMNISEEK_NOTIFY_OUTLET"] = _fj_outlet_env
 
 # --- run_digest: routes to WeCom ONLY (not Bark), agent-first with a mechanical LINK fallback. Stub
 #     the briefing agent -> None (force the fallback, and never hit the real frontier API in smoke).

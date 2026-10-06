@@ -53,6 +53,16 @@ for p in python3 python /c/Python313/python.exe /c/Python312/python.exe; do
 done
 [ -n "$PYBIN" ] || { echo "FATAL: no python found (needed for the smoke gate)"; exit 1; }
 
+# The private half of this sync (2026-10-07). This script is published with the mirror, so a rule here
+# that NAMES one of the operator's private things would publish the very word it removes. Such rules
+# live in the eye's private repository, and the sync stops without them. The file defines PRIVATE_RENAME
+# (sed -e arguments, run before the public rename rules), PRIVATE_TOKENS (words the residue gate
+# refuses) and private_prepass (exact-match rewrites run before the rename pass).
+PRIVATE_OVERLAY="$EYE_ROOT/mirror/omniseek_private.sh"
+[ -f "$PRIVATE_OVERLAY" ] || { echo "FATAL: missing $PRIVATE_OVERLAY (the private half of this sync)" >&2; exit 1; }
+# shellcheck source=/dev/null
+. "$PRIVATE_OVERLAY"
+
 # to_lf PATH...: turn CRLF line ends into LF in every TEXT file under the given files/directories.
 # A file with a NUL byte is binary and left alone (the same test the OmniSelf sync uses). Byte-level
 # I/O, one python process for the whole tree. Used at every place below that copies files in.
@@ -137,6 +147,11 @@ RENAME=(
   -e 's/polaris/omniseek/g'
   -e 's/Polaris/OmniSeek/g'
 )
+# The private rules run first, here and wherever the public rules run (step 3 too).
+RENAME=("${PRIVATE_RENAME[@]}" "${RENAME[@]}")
+# 2a'. The private prepass (PRIVATE_OVERLAY above): exact-match rewrites of lines that carry a private
+# name, done before the rename pass. It stops the sync when a pattern no longer matches exactly once.
+private_prepass "$PEN_SRC"
 find "$PEN_SRC" \( -name "*.py" -o -name "*.json" \) -exec sed -i "${RENAME[@]}" {} +
 
 # 2b. RE-PIN the one content digest the rename invalidates. The scheduler-heartbeat POLICY pins the
@@ -240,6 +255,7 @@ DEPLOYMENT_BOUND_SUITES=(
   "test_release_layout.py"       # imports scripts.release_layout: the release directory layout
   "test_release_transaction.py"  # imports scripts.release_transaction: the atomic release switch
   "test_sentinel_watch.py"       # loads scripts/sentinel.py: the operator's launchd watchdog (2026-10-03)
+  "test_notify_outlet.py"        # loads scripts/_sentinel_common.py and the operator's push outlet (2026-10-06)
 )
 # THE MIRROR-OWNED PREFIX (driver ruling of 2026-09-29). tests/test_mirror_*.py test the mirror's own
 # material (bench/, scripts/, .github/) and belong to the mirror: never written by this sync, never
@@ -381,34 +397,60 @@ echo "  [5/6] residue gate ..."
 # reaches a public repo.
 GATE_PATHS=("$PEN_SRC")
 for rel in "${SYNCED_ARTIFACTS[@]}"; do GATE_PATHS+=("$PEN_ROOT/$rel"); done
+# gate_hit LABEL GREP_ARGS...: run one gate's grep quietly. 0 is a hit and 1 is clean; any other status
+# means grep itself failed, and a checker that failed must never read as a clean tree, so the sync stops.
+# (2026-10-07: Git for Windows' grep 3.0 aborts on -i combined with -F, and the old `if grep -q` form
+# read that crash as "no residue".)
+gate_hit() {
+  local label="$1" rc=0
+  shift
+  grep "$@" >/dev/null 2>&1 || rc=$?
+  case "$rc" in
+    0) return 0 ;;
+    1) return 1 ;;
+    *) echo "  GATE ERROR ($label): grep exited $rc, so this gate checked nothing" >&2
+       echo "=== SYNC ABORTED: residue gate could not run ===" >&2
+       exit 1 ;;
+  esac
+}
 FAILED=0
-if grep -rniq 'polaris' "${GATE_PATHS[@]}"; then
+if gate_hit polaris -rniq 'polaris' "${GATE_PATHS[@]}"; then
   echo "  GATE FAIL: 'polaris' residue:"
   grep -rni 'polaris' "${GATE_PATHS[@]}" | head -10
   FAILED=1
 fi
 # The RETIRED brand is residue too (2026-08-15): after the omniseek rebrand, a 'penumbra' token in
 # freshly synced code means a rename rule regressed or a new upstream identifier slipped the table.
-if grep -rniq 'penumbra' "${GATE_PATHS[@]}"; then
+if gate_hit penumbra -rniq 'penumbra' "${GATE_PATHS[@]}"; then
   echo "  GATE FAIL: 'penumbra' residue (retired brand):"
   grep -rni 'penumbra' "${GATE_PATHS[@]}" | head -10
   FAILED=1
 fi
-if grep -rnqE '\beye_' "${GATE_PATHS[@]}"; then
+# The operator's private words (PRIVATE_TOKENS, from the private half of this sync): a hit means a new
+# mention slipped past the private rules. Only file and line are printed, so the log never carries the word.
+for tok in "${PRIVATE_TOKENS[@]}"; do
+  pat=$(printf '%s' "$tok" | sed 's/[][\.*^$]/\\&/g')   # a literal match without -F (see gate_hit)
+  if gate_hit private-word -rniq -e "$pat" "${GATE_PATHS[@]}"; then
+    echo "  GATE FAIL: private-word residue (a PRIVATE_TOKENS entry in $PRIVATE_OVERLAY):"
+    grep -rni -e "$pat" "${GATE_PATHS[@]}" | cut -d: -f1,2 | head -10
+    FAILED=1
+  fi
+done
+if gate_hit eye_ -rnqE '\beye_' "${GATE_PATHS[@]}"; then
   echo "  GATE FAIL: 'eye_' tool-name residue:"
   grep -rnE '\beye_' "${GATE_PATHS[@]}" | head -10
   FAILED=1
 fi
 # The operator's name must never reach the public artifact (2026-08-16: one source description
 # shipped with it; the rename rules above neutralize the class, this gate proves it).
-if grep -rniq 'captain' "${GATE_PATHS[@]}"; then
+if gate_hit captain -rniq 'captain' "${GATE_PATHS[@]}"; then
   echo "  GATE FAIL: operator-identity residue:"
   grep -rni 'captain' "${GATE_PATHS[@]}" | head -10
   FAILED=1
 fi
 # "the eye" is renamed to OmniSeek since 2026-08-16 (runtime surfaces must carry the brand);
 # a survivor means the rename rule regressed or an upstream phrasing slipped it.
-if grep -rniqE '\bthe eye\b' "${GATE_PATHS[@]}"; then
+if gate_hit 'the eye' -rniqE '\bthe eye\b' "${GATE_PATHS[@]}"; then
   echo "  GATE FAIL: 'the eye' prose residue (runtime surfaces must say OmniSeek):"
   grep -rniE '\bthe eye\b' "${GATE_PATHS[@]}" | head -10
   FAILED=1
@@ -428,7 +470,7 @@ echo "  (info: $EYE_PROSE bare 'eye' mentions remain in comments/docstrings)"
 # The detector is the engine's own: fetcher.py classifies the tier by matching this pattern against
 # a source's explicit_only reason string. Gating on the same pattern means the document and the code
 # cannot drift apart without this failing.
-if grep -rniE 'explicit_only.*(circumvention|§?[[:space:]]*1201|decrypt|defeat)' "$PEN_SRC" >/dev/null 2>&1; then
+if gate_hit legal -rniE 'explicit_only.*(circumvention|§?[[:space:]]*1201|decrypt|defeat)' "$PEN_SRC"; then
   echo "  GATE FAIL: a shipped source declares the CIRCUMVENTION access tier."
   echo "  LEGAL-POSTURE.md and SECURITY.md both state the public catalog carries none. Either drop"
   echo "  the source from the mirror (step 1) or change what those documents claim. Offenders:"
