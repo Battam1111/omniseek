@@ -6,7 +6,7 @@ are **open to international / HK applicants** (many are citizens-only → exclud
 and which are feed-trackable.
 
 Two layers:
-1. **RSS bundle** (Batch A — feeds verified healthy on Mac mini): institutional
+1. **RSS bundle** (Batch A — feeds verified healthy on the host machine): institutional
    blogs that announce calls. Keyword-filtered to funding posts so we don't drown
    in general research news. Vector / CIFAR / IVADO / AI Singapore / Schmidt are
    dedicated; Google Research / Apple ML / NVIDIA blogs are where the big

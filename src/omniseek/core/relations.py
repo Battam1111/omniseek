@@ -95,8 +95,8 @@ def _name_tokens(name: str) -> set[str]:
 
 def _name_matches(query: str, candidate: str) -> bool:
     """True iff every significant query token appears in the candidate name (set
-    subset, order-independent). '{wenjie,li} <= {maggie,wenjie,li}' accepts the
-    advisor 'Maggie Wenjie Li'; '{zhennan,shen}' rejects 'Zhi-Qiang Shen'."""
+    subset, order-independent). '{ruoxi,lin} <= {anna,ruoxi,lin}' accepts
+    'Anna Ruoxi Lin' (one extra given name); '{zhennan,shen}' rejects 'Zhi-Qiang Shen'."""
     q = _name_tokens(query)
     return bool(q) and q <= _name_tokens(candidate)
 
@@ -415,7 +415,7 @@ def resolve_identity(name: str, hint: str = "", source: str = "auto", paper: str
     # TTL (~1h) so a brand-new ingestion is still picked up promptly. A DEGRADED lookup is NOT cached
     # (see below): caching a transport failure would freeze a recoverable 429 for the whole TTL.
     # A-class canonical key: fold the name to lowercase (author search is case-insensitive, so
-    # "Wenjie Li" / "wenjie li" are ONE query) and normalize the paper id via the shared _s2 normalizer
+    # "Ruoxi Lin" / "ruoxi lin" are ONE query) and normalize the paper id via the shared _s2 normalizer
     # (bare arXiv / ArXiv: / DOI: forms collapse), so equivalent lookups share one cache row.
     key = cache.make_key("relations", "resolve", name.lower(), hint, source,
                          _s2.norm_s2_id(paper) if paper else "", limit)

@@ -2,7 +2,7 @@
 
 The ``feed.xyzfm.space`` shortcut host (the RSS several 小宇宙 shows relied on)
 went dead, killing those shows' standard feeds. Rather than stand up a RSSHub
-server on the bare Mac mini (no Docker/Node), this fetches each podcast's recent
+server on the bare host machine (no Docker/Node), this fetches each podcast's recent
 episodes straight from xiaoyuzhoufm.com — the Next.js page embeds the full
 episode list (title, shownotes, audio enclosure, cover, pubDate) in its
 ``__NEXT_DATA__`` JSON, so no API auth is needed.

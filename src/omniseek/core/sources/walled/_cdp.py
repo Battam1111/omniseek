@@ -2,7 +2,7 @@
 
 Connects to the persistent Chrome instance launched by
 `scripts/launch_cdp_cn_forums.sh` (registered as a launchd service on the
-Mac mini). All adapters that need authenticated browser sessions
+host machine). All adapters that need authenticated browser sessions
 (zhihu, yipinsanfendi, xiaohongshu) reuse this connection helper so
 they share one browser, one set of logged-in cookies.
 

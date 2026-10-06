@@ -164,7 +164,7 @@ class ZhihuUsersAdapter:
         if "/signin" in final_url or "/login" in final_url:
             diag.note("zhihu_users.auth_expired", url=final_url, body=(
                 "AUTH_EXPIRED: zhihu shared-Chrome session logged out (login wall on /people posts). "
-                "Needs a VNC re-login on the Mac mini; QR/SMS login cannot autofill-relogin."))
+                "Needs a VNC re-login on the host machine; QR/SMS login cannot autofill-relogin."))
             return []
 
         soup = BeautifulSoup(html, "lxml")

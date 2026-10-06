@@ -404,7 +404,7 @@ def run_source_health(scope: str = "all") -> dict:
     for svc in heal_failed:
         if _should_alert(f"heal_fail:{svc}", alerts, REALERT_COOLDOWN_S):
             _alert(f"CDP 自愈失败 · {svc}",
-                  f"launchctl 无法拉起 {svc} -- 该实例所有 CDP 源静默离线,需登录 Mac mini 检查",
+                  f"launchctl 无法拉起 {svc} -- 该实例所有 CDP 源静默离线,需登录主机检查",
                   group="OmniSeek-Health")
             pushed += 1
 
@@ -639,7 +639,7 @@ def run_wechat2rss_probe() -> dict:
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
 # WHY THIS EXISTS (2026-08-11): the brain's off-machine mirror was dead for FIFTEEN DAYS and nothing
 # noticed. Its Windows scheduled task ran on time, failed on time (its remote pinned a LAN alias that
-# stopped resolving when the fleet moved to Tailscale), and told nobody, because its exit code had no
+# stopped resolving when the fleet moved to a private network), and told nobody, because its exit code had no
 # reader. A backup in that state is worse than no backup: it manufactures exactly the confidence that
 # stops anyone from checking by hand. 79 notes sat on a single disk while the ledger said "mirrored".
 #

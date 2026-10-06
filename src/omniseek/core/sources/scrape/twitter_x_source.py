@@ -10,7 +10,7 @@ the account's real ct0.
 Account safety (the burner must not get banned) — LOW frequency BY DESIGN:
   * 1h result cache → X is hit at most once/hour for the whole handle set;
   * a small random jitter between per-handle fetches (no fixed cadence);
-  * residential IP (the Mac mini); twscrape queues requests respecting X's
+  * residential IP (the host machine); twscrape queues requests respecting X's
     per-endpoint rate windows.
 Treat the burner as disposable — if X flags it the account goes read-only/inactive,
 health_check reports it, and the health watchdog alerts.
