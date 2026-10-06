@@ -1126,10 +1126,11 @@ CDP_IDLE_TIMEOUT_S = int(os.environ.get("OMNISEEK_CDP_IDLE_S", 30 * 60))
 # TERM made Chrome skip the end of its shutdown and leave its app-bundle clone behind every time
 # (12 of 12 on the mini; Browser.close: 0 of 13; see _cdp.close_browser). KeepAlive does not
 # restart either way: both exits are clean (last exit code 0).
-# ⚠️ CDP_CLOSE_WAIT_S is PROVISIONAL. Measured: the throwaway Chrome exited 0.3 s after Browser.close,
-# 13 of 13, but it had an empty profile; a logged-in profile writes more on the way out. 15 s is a
-# generous ceiling. Recalibrate from the reaper log: a ":term" suffix in "stopped" means the TERM
-# fallback ran.
+# CDP_CLOSE_WAIT_S, confirmed 2026-10-06: the throwaway Chrome (empty profile) exited 0.3 s after
+# Browser.close, 13 of 13, and on the mini the reaper's first nine stops of the logged-in browsers
+# (2026-10-05 14:58 to 23:02) all exited within 1 to 2 s with no ":term" fallback, so only a hung
+# browser waits the full 15 s. Recheck from the reaper log: a ":term" suffix in "stopped" means the
+# TERM fallback ran.
 CDP_CLOSE_WAIT_S = 15.0
 # The job runs under a 120 s budget (jobs.py, cdp-reaper row); past it the whole process is killed and
 # the run's result is lost. Everything the reaper starts must end by this many seconds after it

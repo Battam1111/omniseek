@@ -56,11 +56,12 @@ CLONE_PARENT = "com.google.Chrome.code_sign_clone"
 NAME_RE = re.compile(r"^code_sign_clone\.[A-Za-z0-9]{6}$")
 ROOT_PREFIX = "/private/var/folders/"   # Chrome refuses any clone dir outside this (ValidateTempDir)
 MIN_AGE_S = 3600                         # spec: never touch a clone born within the last hour
-# PROVISIONAL: how long before a clone's birth its maker may have started. Measured 0.26 s on the
-# mini (one browser, idle machine); 300 s is a wide allowance for a loaded machine, not derived.
-# Too wide only keeps a leaked clone longer; too narrow could free the clone of a running browser
-# (harmless until Chrome updates while that browser is still up). Recalibrate from the clone-watch
-# data (birth minus browser start) if a pass ever deletes a clone whose maker was alive.
+# How long before a clone's birth its maker may have started. Confirmed 2026-10-06 from the clone
+# watch on the mini (2026-10-05 11:15 to 2026-10-06 04:30, four CDP services): of 11 clones, 10 were
+# born within 3 s of their browser's start and one 19 s after it (that browser's second clone), so
+# 300 s keeps more than ten times the widest gap seen. Too wide only keeps a leaked clone longer; too
+# narrow could free the clone of a running browser (harmless until Chrome updates while that browser
+# is still up). Recheck if a pass ever deletes a clone whose maker was alive.
 MAKER_WINDOW_S = 300
 MAKER_SLACK_S = 2                        # ps start times have 1 s resolution
 TIME_BUDGET_S = 30.0                     # job budget 120 s; one clone took 0.12 s to delete on the mini
