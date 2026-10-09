@@ -101,6 +101,9 @@ class IncidentReplayTests(unittest.TestCase):
             mock.patch.object(infra_jobs, "_MAINT_FLAG", tmp / "cdp-maintenance"),
             mock.patch.object(infra_jobs, "_jsleep", lambda lo, hi: None),
             mock.patch.dict(os.environ, {"WARMER_FORCE": "1", "WARMER_ONLY": ""}),
+            # The incident had three live accounts; replay it with none sealed (the 2026-10-07
+            # mainland seal skips 9224, covered by tests/test_xhs_cn_seal.py).
+            mock.patch.object(infra_jobs, "_warmer_sealed", lambda cdp: ""),
         ]
         for p in self._patches:
             p.start()

@@ -100,6 +100,15 @@ class DeployScriptTests(unittest.TestCase):
         self.assertIn("RUNTIME BUILD ID MISMATCH", deploy)
         self.assertLess(deploy.index("producer.build_id"), deploy.index("remote_tx verify-active"))
 
+    def test_deploy_prunes_old_releases_only_after_verified_activation(self):
+        deploy = (self._root() / "deploy.sh").read_text(encoding="utf-8")
+        self.assertIn("remote_tx prune-releases", deploy)
+        self.assertIn("OMNISEEK_KEEP_RELEASES", deploy)
+        self.assertLess(deploy.index("remote_tx verify-active"), deploy.index("remote_tx prune-releases"))
+        rollback_branch = deploy.split("== health failed, rollback ==", 1)[1].split("fi\n", 1)[0]
+        self.assertNotIn("prune", rollback_branch)
+        self.assertIn("PRUNE WARNING", deploy)
+
 
 if __name__ == "__main__":
     unittest.main()

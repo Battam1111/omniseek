@@ -34,6 +34,7 @@ set `_SEALED = True` (makes every entry point inert, zero CDP / zero network).
 
 from __future__ import annotations
 
+import json
 import logging
 import random
 import re
@@ -50,6 +51,7 @@ from omniseek.core.normalize import Document, mk_signal
 from omniseek.core.sources.walled import _human
 from omniseek.core.sources.walled._cdp import (
     VIDEO_PLAYER_SELECTORS,
+    CacheOnlyMiss,
     attach_video_sniffer,
     cdp_call,
     cdp_health,
@@ -70,6 +72,17 @@ logger = logging.getLogger(__name__)
 # exit node dying takes rednote.com with it while xiaohongshu.com rides the
 # direct lane — the 2026-08-11 outage). The note DOM is identical on both hosts.
 HOME_URL = "https://www.rednote.com"
+
+
+def _mainland_sealed() -> bool:
+    """True while the mainland 9224 adapter is sealed (its module-level _SEALED, the one restore
+    point; docs/platform-notes/xiaohongshu-cn-seal.md). Read lazily so the two modules keep no
+    import-order coupling; an import failure reads as unsealed (ownership stays rednote-only)."""
+    try:
+        from omniseek.core.sources.walled import xiaohongshu_cn_source as _cn
+    except Exception:  # noqa: BLE001
+        return False
+    return bool(getattr(_cn, "_SEALED", False))
 
 
 def _goto_note_dual_host(page, url: str) -> None:
@@ -145,8 +158,10 @@ _USE_XHR_CAPTURE = True
 # _load_comments' expander-click loop + the DOM bs4 harvest. We FORGE nothing (the page fetches its
 # own signed comment pages on scroll; we read the responses, same pattern as the search capture),
 # and we do FEWER interactions than _load_comments (no expander clicks) -> faster AND lighter on the
-# 小号. The body stays a DOM read: rednote SSRs it and exposes NO note-body XHR / __INITIAL_STATE__
-# (probed live 2026-06-18). Set False to fall back to the DOM expand+harvest path.
+# 小号. The body text stays a DOM read (#detail-title / #detail-desc); there is no note-body XHR. The
+# 2026-06-18 probe also said rednote has no __INITIAL_STATE__; that was wrong for the IMAGE list: the
+# note page carries window.__INITIAL_STATE__ with the note's full imageList (2026-10-08, see
+# _state_note). Set False to fall back to the DOM expand+harvest path.
 _USE_XHR_COMMENTS = True
 
 
@@ -169,10 +184,159 @@ def _parse_count(s) -> Optional[int]:
     return int(num)
 
 
+# ── note images: the page's own initial data, not what the page has drawn (2026-10-08) ─────────
+# The old read scanned the DOM <img> tags after one or two screens of scrolling, so a carousel note
+# returned only the slides the page had already rendered (4 of 17 on a real note), capped at 12, and
+# also picked up images posted in the comments. The note page ships its whole note in
+# window.__INITIAL_STATE__.note.noteDetailMap[<note id>].note, and that object's imageList holds
+# every slide in order. Reading it costs no request and no carousel click: it is already in the page.
+_IMAGE_SCENE_DEFAULT = "WB_DFT"  # the full-size scene; WB_PRV is the small preview
+
+
+def _https(url: str) -> str:
+    """The state stores http:// CDN links; the page itself renders the same paths over https."""
+    return "https://" + url[len("http://"):] if url.startswith("http://") else url
+
+
+def _image_url(entry) -> str:
+    """One image entry -> its full-size URL. Reads both spellings the platform uses: the note
+    state's camelCase (urlDefault / infoList / imageScene / urlPre) and the comment API's
+    snake_case (url_default / info_list / image_scene / url_pre). Preference: the default URL,
+    then the WB_DFT scene, then the bare url, then the preview."""
+    if not isinstance(entry, dict):
+        return ""
+    url = entry.get("urlDefault") or entry.get("url_default") or ""
+    if not url:
+        for info in (entry.get("infoList") or entry.get("info_list") or []):
+            if isinstance(info, dict) and \
+                    (info.get("imageScene") or info.get("image_scene")) == _IMAGE_SCENE_DEFAULT:
+                url = info.get("url") or ""
+                if url:
+                    break
+    url = url or entry.get("url") or entry.get("urlPre") or entry.get("url_pre") or ""
+    return _https(url) if isinstance(url, str) else ""
+
+
+def _image_token(url: str) -> str:
+    """The file token of a CDN image URL (last path segment before '!' or '?'): the same picture
+    served at two sizes, or over http and https, has one token."""
+    tail = (url or "").split("?", 1)[0].rstrip("/").rsplit("/", 1)[-1]
+    return tail.split("!", 1)[0]
+
+
+def _image_urls(entries) -> list[str]:
+    """Image entries -> full-size URLs in the given order, deduplicated by file token."""
+    out: list[str] = []
+    seen: set = set()
+    for e in (entries or []):
+        u = _image_url(e)
+        t = _image_token(u)
+        if u and t not in seen:
+            seen.add(t)
+            out.append(u)
+    return out
+
+
+_STATE_RE = re.compile(r"window\.__INITIAL_STATE__\s*=\s*(\{.*?\})\s*;?\s*</script>", re.S)
+# The state is a JS literal, not JSON: it carries bare `undefined` values.
+_UNDEFINED_RE = re.compile(r"(?<=[:\[,])undefined(?=[,\]}])")
+
+
+def _pick_state_note(note_state, note_id: Optional[str]) -> Optional[dict]:
+    """state.note -> the note object for ``note_id`` (else the page's currentNoteId). The entry must
+    carry the same noteId: a page that moved to another note is never read as this one."""
+    if not isinstance(note_state, dict):
+        return None
+    dmap = note_state.get("noteDetailMap")
+    if not isinstance(dmap, dict):
+        return None
+    want = note_id or note_state.get("currentNoteId") or note_state.get("firstNoteId")
+    entry = dmap.get(want) if want else None
+    note = entry.get("note") if isinstance(entry, dict) else None
+    if not isinstance(note, dict) or (note.get("noteId") and note.get("noteId") != want):
+        return None
+    return note
+
+
+def _state_note_from_html(html: str, note_id: Optional[str]) -> Optional[dict]:
+    """The note object from the page HTML's own ``window.__INITIAL_STATE__`` script, or None."""
+    m = _STATE_RE.search(html or "")
+    if not m:
+        return None
+    try:
+        state = json.loads(_UNDEFINED_RE.sub("null", m.group(1)))
+    except ValueError:
+        return None
+    return _pick_state_note(state.get("note") if isinstance(state, dict) else None, note_id)
+
+
+def _state_note_from_live(raw, note_id: Optional[str]) -> Optional[dict]:
+    """The _STATE_NOTE_JS result (a JSON string of the picked note, or null) -> the note object."""
+    if not raw:
+        return None
+    try:
+        note = json.loads(raw) if isinstance(raw, str) else raw
+    except ValueError:
+        return None
+    if not isinstance(note, dict) or (note_id and note.get("noteId") and note.get("noteId") != note_id):
+        return None
+    return note
+
+
+# Read the live page's state object (Vue refs unwrapped). Returns a JSON string of
+# {noteId, type, imageList} for the requested note (or the current one), or null.
+_STATE_NOTE_JS = r"""
+(nid) => {
+  try {
+    const u = x => (x && x.__v_isRef) ? x.value : x;
+    const st = window.__INITIAL_STATE__;
+    const ns = u(st && st.note);
+    const map = u(ns && ns.noteDetailMap);
+    if (!map) return null;
+    const id = nid || u(ns.currentNoteId) || u(ns.firstNoteId);
+    const entry = u(map[id]);
+    const note = u(entry && entry.note);
+    if (!note || !Array.isArray(note.imageList)) return null;
+    return JSON.stringify({noteId: note.noteId, type: note.type, imageList: note.imageList});
+  } catch (e) { return null; }
+}
+"""
+
+# The DOM fallback (no initial state): large note-CDN images, split by where they sit. An image
+# inside the comment area, or served from a /comment/ path, is a comment picture, never note body.
+_DOM_IMAGES_JS = (
+    "()=>{const seen=new Set(),body=[],cmt=[];"
+    "for(const i of document.querySelectorAll('img')){"
+    "const s=i.currentSrc||i.src||'';"
+    "if(!s||s.includes('sns-avatar'))continue;"
+    "const big=i.naturalWidth>=400&&i.naturalHeight>=400;"
+    "const cdn=s.includes('rednotecdn')||s.includes('sns-web')||s.includes('ci.xhscdn');"
+    "if(!(big&&cdn))continue;"
+    "const b=s.split('?')[0];if(seen.has(b))continue;seen.add(b);"
+    "if(i.closest('[class*=\"comment\"]')||b.includes('/comment/'))cmt.push(s);else body.push(s);}"
+    "return {body:body.slice(0,12),comment:cmt};}")
+
+
+def _comment_media(comments: list, dom_comment_images: list, body_media: list) -> list[str]:
+    """Every comment picture once, in thread order (captured pictures first, then any the DOM showed
+    that the capture did not), minus anything that is a note image."""
+    taken = {_image_token(u) for u in body_media}
+    out: list[str] = []
+    for u in [x for c in (comments or []) if isinstance(c, dict) for x in (c.get("images") or [])] \
+            + list(dom_comment_images or []):
+        t = _image_token(u)
+        if u and t not in taken:
+            taken.add(t)
+            out.append(u)
+    return out
+
+
 def _flatten_captured_comments(items: list) -> list[dict]:
     """Captured /api/sns/web/v2/comment/page comment dicts -> the [{author,text,likes}] shape the
     fetch_url doc-build renders, INCLUDING each comment's inline sub_comments (replies) as a "↳ "
-    line. Deduped by comment id (the same page can re-fire on scroll). Pure decode, no judgment."""
+    line. Deduped by comment id (the same page can re-fire on scroll). A comment that posted
+    pictures also carries ``images`` (full-size URLs); a picture-only comment reads "[图片]".
+    Pure decode, no judgment."""
     out: list[dict] = []
     seen: set = set()
     for c in (items or []):
@@ -184,9 +348,13 @@ def _flatten_captured_comments(items: list) -> list[dict]:
         if cid:
             seen.add(cid)
         text = (c.get("content") or "").strip()
-        if text:
-            out.append({"author": (c.get("user_info") or {}).get("nickname") or "匿名",
-                        "text": text, "likes": c.get("like_count") or "", "id": cid or ""})
+        pics = _image_urls(c.get("pictures"))
+        if text or pics:
+            row = {"author": (c.get("user_info") or {}).get("nickname") or "匿名",
+                   "text": text or "[图片]", "likes": c.get("like_count") or "", "id": cid or ""}
+            if pics:
+                row["images"] = pics
+            out.append(row)
         for sc in (c.get("sub_comments") or []):
             if not isinstance(sc, dict):
                 continue
@@ -196,9 +364,14 @@ def _flatten_captured_comments(items: list) -> list[dict]:
             if scid:
                 seen.add(scid)
             stext = (sc.get("content") or "").strip()
-            if stext:
-                out.append({"author": (sc.get("user_info") or {}).get("nickname") or "匿名",
-                            "text": "↳ " + stext, "likes": sc.get("like_count") or "", "id": scid or ""})
+            spics = _image_urls(sc.get("pictures"))
+            if stext or spics:
+                row = {"author": (sc.get("user_info") or {}).get("nickname") or "匿名",
+                       "text": "↳ " + (stext or "[图片]"), "likes": sc.get("like_count") or "",
+                       "id": scid or ""}
+                if spics:
+                    row["images"] = spics
+                out.append(row)
     return out
 
 
@@ -614,6 +787,13 @@ class XiaohongshuAdapter:
         cached = cache.get(key)
         if cached is not None:
             return [Document.model_validate(d) for d in cached]
+        if cache.cache_only():
+            # A cache-only collect that missed is a miss, not a browser failure: stop BEFORE the
+            # live slot. Before 2026-10-07 the miss went on into cdp_call, which raised
+            # CacheOnlyMiss, and the except below counted it as a CDP failure; three such
+            # collects in 20s tripped the 6h 小号 backoff (2026-10-07 17:45 CST).
+            diag.note("xiaohongshu.cache_only", body="cache-only collect: no cached result yet (no live call, not a query miss)")
+            return []
 
         with _live_slot() as (ok, why):
             if not ok:
@@ -699,7 +879,8 @@ class XiaohongshuAdapter:
             status, html = cdp_call(_human.fast(_flow), initial_url=None, timeout=150, cdp_url=_XHS_CDP_URL)
             _note_cdp_result(True)
         except Exception as exc:  # noqa: BLE001
-            _note_cdp_result(False)  # sustained CDP failures trip backoff (don't hammer 小号)
+            if not isinstance(exc, CacheOnlyMiss):  # a suppressed live call says nothing about Chrome
+                _note_cdp_result(False)  # sustained CDP failures trip backoff (don't hammer 小号)
             logger.warning("Xiaohongshu search failed: %s", exc)
             diag.note("xiaohongshu.cdp", exc=exc, body="CDP search flow raised (9223 Chrome wedged / timeout?)")
             return []
@@ -763,9 +944,18 @@ class XiaohongshuAdapter:
             logger.warning(_SEALED_MSG)
             return None
         host = urlparse(url).hostname or ""
-        # URL ownership is explicit: mainland xiaohongshu.com notes belong to the 9224 adapter.
-        # Claiming both hosts here made registration order decide which account read the note.
-        if "rednote.com" not in host:
+        # URL ownership is explicit and decided in ONE place: the mainland adapter's _SEALED.
+        # While the mainland 9224 source is sealed (2026-10-07), this adapter also owns
+        # xiaohongshu.com note links, so every 小红书 read rides the international account.
+        # Unsealed, xiaohongshu.com belongs to the 9224 adapter again (claiming both hosts then
+        # made registration order decide which account read the note).
+        if "rednote.com" not in host and not (
+                host.endswith("xiaohongshu.com") and _mainland_sealed()):
+            return None
+        if cache.cache_only():
+            # Same reason as in search(): a cache-only read never reaches the browser, so it
+            # must not enter the live slot or count against the 小号.
+            diag.note("xiaohongshu.cache_only", url=url, body="cache-only read: no live call")
             return None
 
         with _live_slot() as (ok, why):
@@ -778,10 +968,14 @@ class XiaohongshuAdapter:
     def _fetch_url_live(self, url: str) -> Optional[Document]:
         """Live (CDP) half of fetch_url(), run while holding the single 小号 slot (see
         _search_live / _live_slot). The ``with`` auto-releases on every return path below."""
-        # This adapter owns rednote.com URLs. Mainland xiaohongshu.com URLs are handled by the
-        # separate 9224 adapter, so never silently cross accounts here. (The dual-host retry
-        # inside _goto_note_dual_host is NAVIGATION-internal — ownership stays rednote-only.)
+        # This adapter owns rednote.com URLs, plus xiaohongshu.com URLs while the mainland 9224
+        # adapter is sealed (see fetch_url). A xiaohongshu.com link is navigated as given: a
+        # tokened note there is guest-readable in this Chrome (verified 2026-08-11), and the
+        # dual-host retry inside _goto_note_dual_host only ever goes rednote -> xiaohongshu.
         nav_url = url
+        guest_host = (urlparse(url).hostname or "").endswith("xiaohongshu.com")
+        _id_m = re.search(r"/(?:explore|search_result|discovery/item)/([0-9a-f]{24})", url)
+        nav_note_id = _id_m.group(1) if _id_m else None
 
         _cmt: list = []  # captured /comment/page comments (the listener appends from the CDP thread;
         #                  cdp_call's join() flushes the writes before we read it below)
@@ -793,7 +987,7 @@ class XiaohongshuAdapter:
                     try:
                         if "/api/sns/web/v2/comment/page" in (resp.url or ""):
                             for it in ((resp.json().get("data") or {}).get("comments") or []):
-                                if isinstance(it, dict) and it.get("content"):
+                                if isinstance(it, dict) and (it.get("content") or it.get("pictures")):
                                     _cmt.append(it)
                     except Exception:  # noqa: BLE001 — one unparseable XHR never breaks the fetch
                         pass
@@ -835,24 +1029,23 @@ class XiaohongshuAdapter:
             except Exception:  # noqa: BLE001
                 has_content = False
             if not has_content and _login_wall(page):
+                if guest_host:
+                    # The 小号 session lives on rednote.com; a wall on a xiaohongshu.com page is
+                    # the GUEST view of one link, so it must not trip the 6h account backoff.
+                    return ("guest_wall", None, [], {}, (None, None))
                 return ("login", None, [], {}, (None, None))
             _human.scroll_like_reading(page, screens=random.randint(1, 2))
             _human.read_dwell()
-            # 小红书 puts the substance in CAROUSEL IMAGES (large, on the note-image CDN), not
-            # always the text desc. Grab those URLs (skip avatars/icons; dedup) so the agent can
-            # view them. OmniSeek does not OCR; the consuming agent reads the images with vision.
+            # 小红书 puts the substance in CAROUSEL IMAGES, not always the text desc. The full list
+            # comes from the page's own state (_STATE_NOTE_JS, read after the comment harvest below);
+            # this DOM scan is the fallback for a page without it, split into body and comment
+            # pictures. OmniSeek does not OCR; the consuming agent reads the images with vision.
             try:
-                images = page.evaluate(
-                    "()=>{const seen=new Set(),out=[];"
-                    "for(const i of document.querySelectorAll('img')){"
-                    "const s=i.currentSrc||i.src||'';"
-                    "if(!s||s.includes('sns-avatar'))continue;"
-                    "const big=i.naturalWidth>=400&&i.naturalHeight>=400;"
-                    "const cdn=s.includes('rednotecdn')||s.includes('sns-web')||s.includes('ci.xhscdn');"
-                    "if(big&&cdn){const b=s.split('?')[0];if(!seen.has(b)){seen.add(b);out.push(s);}}}"
-                    "return out.slice(0,12);}")
+                split = page.evaluate(_DOM_IMAGES_JS) or {}
+                images = list(split.get("body") or [])
+                dom_comment_images = list(split.get("comment") or [])
             except Exception:  # noqa: BLE001
-                images = []
+                images, dom_comment_images = [], []
             # DOM first; the wire sniffer is the answer for a blob:-fed player. Either way the
             # eye hands over a URL a transcriber can fetch, and never a process-local handle.
             video = video_with_origin(page, seen_video)  # (url, "dom"|"wire"|"unresolved")
@@ -866,7 +1059,8 @@ class XiaohongshuAdapter:
             # often above it. We forge nothing (the expander clicks reveal only what a human reader
             # would, same READ-ONLY contract). The expander loop is the slow part, kept because full
             # completeness requires it; speed is secondary to completeness here.
-            cdata = {"list": [], "declared": None}
+            cdata = {"list": [], "declared": None, "dom_comment_images": dom_comment_images,
+                     "state_note": None}
             dom_list: list = []
             try:
                 _load_comments(page)  # exhaustive: every expander + container scroll, bounded by its own caps
@@ -876,6 +1070,12 @@ class XiaohongshuAdapter:
                 pass
             cap_list = _flatten_captured_comments(_cmt) if _USE_XHR_COMMENTS else []
             cdata["list"] = cap_list if len(cap_list) >= len(dom_list) else dom_list
+            # Comment pictures ride on the captured comments even when the DOM list wins above.
+            cdata["captured_images"] = [c for c in cap_list if c.get("images")]
+            try:
+                cdata["state_note"] = page.evaluate(_STATE_NOTE_JS, nav_note_id)
+            except Exception:  # noqa: BLE001 -- the HTML copy of the state is read below
+                pass
             return ("ok", page.content(), images, cdata, video)
 
         try:
@@ -885,7 +1085,8 @@ class XiaohongshuAdapter:
                 _human.fast(_flow), initial_url=None, timeout=110, cdp_url=_XHS_CDP_URL)
             _note_cdp_result(True)
         except Exception as exc:  # noqa: BLE001
-            _note_cdp_result(False)  # sustained CDP failures trip backoff (don't hammer 小号)
+            if not isinstance(exc, CacheOnlyMiss):  # a suppressed live call says nothing about Chrome
+                _note_cdp_result(False)  # sustained CDP failures trip backoff (don't hammer 小号)
             logger.warning("Xiaohongshu fetch_url failed: %s", exc)
             diag.note("xiaohongshu.cdp", exc=exc, body="CDP fetch_url flow raised (9223 Chrome wedged / timeout?)")
             return None
@@ -901,6 +1102,12 @@ class XiaohongshuAdapter:
             _trip_backoff("login wall during fetch_url")
             diag.note("xiaohongshu.login_wall",
                       body="小号 logged OUT of the 9223 CDP Chrome — re-login via VNC required (note body unreadable until then)")
+            return None
+        if status == "guest_wall":
+            diag.note("xiaohongshu.guest_wall", url=url,
+                      body="xiaohongshu.com showed this link to a GUEST behind a login wall (the 小号 "
+                           "session lives on rednote.com). Nothing charged to the 小号; re-find the note "
+                           "with omniseek_search(sources=['xiaohongshu']) and read the rednote.com link it returns.")
             return None
         if status == "refused":
             # The platform's word on this link, not on the session: nothing is charged to the 小号.
@@ -924,9 +1131,23 @@ class XiaohongshuAdapter:
         m = re.search(r"/(?:explore|search_result|discovery/item)/([0-9a-f]{24})", url)
         source_id = m.group(1) if m else url
 
+        # The note's images: the page's own state when it has them (every slide, in order), else
+        # the DOM scan. Comment pictures never enter media; they go to metadata.comment_media.
+        state_note = (_state_note_from_live(cdata.get("state_note"), nav_note_id)
+                      or _state_note_from_html(html, nav_note_id))
+        state_video = bool(state_note) and state_note.get("type") == "video"
+        state_images = _image_urls(state_note.get("imageList")) if state_note else []
+        if state_images and not state_video:
+            images, media_source = state_images, "initial_state"
+        else:
+            images, media_source = list(images or []), "dom"
+
         # Substance is often in the images: surface them (media) + flag it when the text is thin.
         comments = cdata.get("list") or []
         declared = cdata.get("declared")
+        comment_media = _comment_media(
+            list(cdata.get("captured_images") or []) + [c for c in comments if isinstance(c, dict)],
+            cdata.get("dom_comment_images") or [], images)
         if not _detail_has_substance(title, body, images, comments):
             # NAME THE CAUSE. The old message ("navigation succeeded but returned nothing") is true
             # and useless: it tells the caller a page was blank, not why or what to do instead, so
@@ -952,7 +1173,7 @@ class XiaohongshuAdapter:
                            "note may be deleted, private, or the session may have lost its login)")
             return None
 
-        is_video = bool(video_url) or bool(soup.select_one("video, xg-video-player"))
+        is_video = bool(video_url) or state_video or bool(soup.select_one("video, xg-video-player"))
         if is_video:
             content = content_with_video(body, video_url, has_player=True)
         elif images and len(body) < 200:
@@ -974,7 +1195,9 @@ class XiaohongshuAdapter:
         if comments:
             short = f" / 共 {declared} 条" if declared else ""
             content += (f"\n\n(评论 {len(comments)} 条{short},结构化在 metadata.comments:"
-                        f" 每条含 author / text / likes)")
+                        f" 每条含 author / text / likes"
+                        + (f"; 评论里的 {len(comment_media)} 张图在 metadata.comment_media"
+                           if comment_media else "") + ")")
 
         return Document(
             source="xiaohongshu",
@@ -985,7 +1208,8 @@ class XiaohongshuAdapter:
             author=author,
             media=([video_url] + images) if video_url else images,
             metadata={"comments": comments, "comment_count": len(comments),
-                      "comments_declared": declared,
+                      "comments_declared": declared, "comment_media": comment_media,
+                      "media_source": media_source,
                       **video_metadata(video_url, video_src, has_player=is_video)},
         )
 

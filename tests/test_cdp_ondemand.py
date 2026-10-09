@@ -104,6 +104,13 @@ class LastUseStampTests(unittest.TestCase):
 
 
 class EnsureBrowserTests(unittest.TestCase):
+    def setUp(self):
+        # These cases test the on-demand start itself, so no port may be sealed here (importing the
+        # sealed mainland adapter elsewhere in the run seals 9224; tests/test_xhs_cn_seal.py covers it).
+        patcher = mock.patch.dict(_cdp._SEALED_PORTS, clear=True)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_noop_off_darwin(self):
         with mock.patch.object(_cdp.sys, "platform", "win32"), \
              mock.patch.object(_cdp, "cdp_health") as health, \

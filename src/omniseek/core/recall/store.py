@@ -21,6 +21,7 @@ import hashlib
 import json
 import logging
 import sqlite3
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -360,6 +361,99 @@ def _model_version() -> str:
     return embed.MODEL_VERSION
 
 
+# Rebuild memory bound (eye-mem-2, measured 2026-10-08 on a copy of the live index: vec 107005 rows,
+# vec_thin 133195, vec_chunk 41750, 1024-d float32 = 1101 MB of matrices). The old one-shot build
+# held, at once, the previous matrix + fetchall()'s one bytes object per row + their b"".join + the
+# normalized quotient + its astype copy: about five times one matrix. Rebuilding thin alone lifted
+# the footprint +1.55 GB, all three together +2.0 GB, and the freed small blocks stayed in the
+# process footprint afterwards. _build_rows streams the cursor in _BUILD_BATCH-row batches into ONE
+# preallocated array, normalizing each batch in place, and the caller drops the old matrix first
+# (every reader takes the same lock, so none reads the globals mid-rebuild; a reader that already
+# holds the old array keeps its own reference until it is done).
+_BUILD_BATCH = 4096
+
+# File-backed matrix rows (eye-mem-3, measured 2026-10-09 with the three live-size matrices, 281239
+# rows x 1024 float32 = 1.15 GB): held in process memory they are about 1.3 GB of the footprint and
+# the part that grows with every embedded document (4 KB per row). The same rows in a shared mapping
+# of a file count about 0 MB toward the footprint (16 MB for a reader process, 37 MB with 1.4 GB
+# freshly written and never flushed), at the same search speed (38.9 ms per query over all three vs
+# 35 to 39 ms in memory) and the same top-60 neighbours. The file is a deleted temporary file beside
+# the index: it has no name, so nothing is left behind by a crash and nothing stale is ever read
+# back; the space returns when the last view of the matrix is dropped. It is written out in full
+# before it is mapped, because writing a mapped page whose disk block was never allocated kills the
+# process (SIGBUS) when the disk is full; a full disk instead fails that write here and the rows go
+# to process memory, as before.
+_FILL_CHUNK = 16 << 20
+
+
+def _alloc_rows(rows: int, dim: int):
+    """A (rows, dim) float32 array backed by a deleted temporary file next to the index, or in
+    process memory when that file cannot be made. Contents are unspecified (like ``np.empty``)."""
+    nbytes = rows * dim * 4
+    if nbytes:
+        try:
+            d = DB_PATH.parent
+            d.mkdir(parents=True, exist_ok=True)
+            with tempfile.TemporaryFile(dir=d, prefix="recall-matrix-") as f:
+                zeros = bytes(min(_FILL_CHUNK, nbytes))
+                left = nbytes
+                while left:
+                    left -= f.write(zeros[:min(left, len(zeros))])
+                f.flush()
+                mm = _np.memmap(f, dtype=_np.float32, mode="r+", shape=(rows, dim))
+            return mm.view(_np.ndarray)
+        except (OSError, ValueError) as e:
+            logger.warning("recall matrix: file-backed rows unavailable (%s); holding %d MB in memory",
+                        e, nbytes >> 20)
+    return _np.empty((rows, dim), dtype=_np.float32)
+
+
+def _build_rows(con, count_sql: str, sql: str, params: tuple, int_ids: bool, with_src: bool,
+                spare: bool = False):
+    """Stream ``sql`` (rows ``(id, blob[, source])``) into (M, ids, srcs) with M L2-normalized float32.
+    The row count is read first to size the arrays; rows the writer added in between grow them, rows
+    it removed are trimmed. M is backed by a deleted temporary file when possible (``_alloc_rows``). Returns (None, None, None) for no rows. Raises on a malformed row.
+    With ``spare``, max(_BUILD_BATCH, count // _HEADROOM_FRAC) extra rows are allocated past the count
+    and left untouched; the returned arrays are then views of the filled rows, so the incremental
+    update (``_apply_deltas``) can append into the rest."""
+    n = int(con.execute(count_sql, params).fetchone()[0] or 0)
+    if spare:
+        n += max(_BUILD_BATCH, n // _HEADROOM_FRAC)
+    cur = con.execute(sql, params)
+    M = ids = srcs = None
+    filled = 0
+    interned: dict = {}
+    while True:
+        batch = cur.fetchmany(_BUILD_BATCH)
+        if not batch:
+            break
+        k = len(batch)
+        block = _np.frombuffer(b"".join(r[1] for r in batch), dtype=_np.float32).reshape(k, -1)
+        if M is None:
+            cap = max(n, k)
+            M = _alloc_rows(cap, block.shape[1])
+            ids = _np.empty(cap, dtype=_np.int64) if int_ids else _np.empty(cap, dtype=object)
+            srcs = _np.empty(cap, dtype=object) if with_src else None
+        if filled + k > M.shape[0]:
+            grow = filled + k + _BUILD_BATCH
+            M2 = _alloc_rows(grow, M.shape[1])
+            M2[:filled] = M[:filled]
+            M = M2
+            ids = _np.concatenate([ids[:filled], _np.empty(grow - filled, dtype=ids.dtype)])
+            if srcs is not None:
+                srcs = _np.concatenate([srcs[:filled], _np.empty(grow - filled, dtype=object)])
+        nrm = _np.linalg.norm(block, axis=1, keepdims=True)
+        _np.divide(block, _np.where(nrm > 0, nrm, 1.0), out=M[filled:filled + k])
+        ids[filled:filled + k] = [r[0] for r in batch]
+        if srcs is not None:
+            srcs[filled:filled + k] = [interned.setdefault(r[2], r[2]) for r in batch]
+        filled += k
+    if M is None or filled == 0:
+        return None, None, None
+    # Always views of the buffers, even when full: ``_MatrixState.adopt`` finds the buffer as ``.base``.
+    return M[:filled], ids[:filled], (srcs[:filled] if srcs is not None else None)
+
+
 # Monotonic write generations, bumped by the SINGLE recall-writer daemon on any vec / vec_thin
 # write. This REPLACES row-count as the matrix-invalidation key: a RE-EMBED (delete+reinsert the
 # same rowid) leaves count(*) unchanged, so the old count key served a STALE vector until an
@@ -371,21 +465,177 @@ _chunk_write_gen = 0
 
 
 def note_vec_write() -> None:
-    """Writer daemon: signal that vec rows changed (insert OR re-embed), invalidating the docs matrix."""
+    """Signal that vec rows changed in a way no staged change describes, so the docs matrix must be
+    rebuilt from SQLite (the writer itself stages its changes instead; see ``stage_vec``)."""
     global _vec_write_gen
     _vec_write_gen += 1
+    _mstate["vec"].unknown_gen = _vec_write_gen
 
 
 def note_thin_write() -> None:
-    """Writer daemon: signal that vec_thin rows changed, invalidating the thin matrix."""
+    """Signal an undescribed vec_thin change: the thin matrix is rebuilt from SQLite."""
     global _thin_write_gen
     _thin_write_gen += 1
+    _mstate["thin"].unknown_gen = _thin_write_gen
 
 
 def note_chunk_write() -> None:
-    """Writer daemon: signal that vec_chunk rows changed, invalidating the chunk matrix."""
+    """Signal an undescribed vec_chunk change: the chunk matrix is rebuilt from SQLite."""
     global _chunk_write_gen
     _chunk_write_gen += 1
+    _mstate["chunk"].unknown_gen = _chunk_write_gen
+
+
+# ── Incremental matrix update (eye-mem-3, 2026-10-09) ────────────────────────────────────────────
+# Measured under a replay of real ingest: after every committed write the writer re-read the WHOLE
+# matrix from SQLite (vec 438 MB, vec_thin 545 MB, vec_chunk 171 MB at the live row counts), at most
+# once per 20 s debounce per matrix. Under memory pressure that re-read was the writer's bottleneck
+# (a native sample showed the writer thread inside a SQLite table scan) and each one moved the whole
+# matrix through memory again. Now the writer STAGES each vector change it makes inside a transaction
+# (``stage_vec`` / ``stage_chunks`` / ``stage_thin``), publishes them after the commit succeeds
+# (``publish_staged``; a rollback calls ``discard_staged``), and the next ``_ensure_*`` applies the
+# published changes to the cached matrix in place:
+#   - every change is "remove the key's rows, then append its new rows" (a delete appends nothing);
+#   - removed rows stay in the buffer with their id set to a dead marker (-1 for rowids, None for node
+#     ids) in a NEW id array, so a reader still holding the previous arrays sees them unchanged;
+#   - appended rows go past the previous row count, into headroom left by the last full build, so the
+#     previous views never see them either.
+# A full rebuild still happens on the first build, a model change, an undescribed change (``note_*``),
+# the headroom running out, or dead rows passing their bound; the rebuild is what compacts.
+_HEADROOM_FRAC = 4     # headroom = max(_BUILD_BATCH, rows // 4): the allocation past the last row is
+                       # never written until rows are appended, so it adds no resident memory until
+                       # used; a quarter means a growth rebuild after the index grows by 25 %.
+                       # Provisional: re-check against the live growth rate (rows per day) after deploy.
+_DEAD_FRAC = 8         # dead rows stay resident until a rebuild; bound them to max(_BUILD_BATCH,
+                       # rows // 8), i.e. at most 12.5 % of the matrix (55 MB for vec at 107k rows).
+                       # Provisional, same calibration as above.
+
+
+class _MatrixState:
+    """Bookkeeping for one cached matrix: the full-capacity buffers behind the published views, the
+    published views themselves (to notice a cache someone else replaced), the dead-row count, the
+    published changes not applied yet, and the write generation of the last undescribed change."""
+    __slots__ = ("bufM", "bufI", "bufS", "n", "dead", "view", "pending", "unknown_gen")
+
+    def __init__(self):
+        self.bufM = self.bufI = self.bufS = self.view = None
+        self.n = self.dead = 0
+        self.pending: list = []
+        self.unknown_gen = 0
+
+    def adopt(self, M, ids, srcs) -> None:
+        self.pending.clear()
+        if M is None:
+            self.bufM = self.bufI = self.bufS = self.view = None
+            self.n = self.dead = 0
+            return
+        self.bufM = M.base if M.base is not None else M
+        self.bufI = ids.base if ids.base is not None else ids
+        self.bufS = (srcs.base if srcs.base is not None else srcs) if srcs is not None else None
+        self.n, self.dead, self.view = len(ids), 0, M
+
+
+_mstate = {"vec": _MatrixState(), "thin": _MatrixState(), "chunk": _MatrixState()}
+_stage = threading.local()
+
+
+def _staged() -> dict:
+    d = getattr(_stage, "d", None)
+    if d is None:
+        d = _stage.d = {"vec": [], "thin": [], "chunk": []}
+    return d
+
+
+def stage_vec(rowid: int, v=None, source: "Optional[str]" = None, model_version: str = "") -> None:
+    """Stage the docs-matrix change for ``rowid`` made in the current transaction: its new vector
+    (with its doc's source and model version), or ``v=None`` when its vec row was deleted."""
+    _staged()["vec"].append((int(rowid), [v] if v is not None else [], source, model_version))
+
+
+def stage_chunks(rowid: int, vecs=(), source: "Optional[str]" = None, model_version: str = "") -> None:
+    """Stage the chunk-matrix change for ``rowid``: ALL its chunk rows are replaced by ``vecs`` (in
+    chunk order); an empty ``vecs`` means its chunk rows were deleted."""
+    _staged()["chunk"].append((int(rowid), list(vecs), source, model_version))
+
+
+def stage_thin(node_id: str, v=None, model_version: str = "") -> None:
+    """Stage the thin-matrix change for ``node_id``: its new title vector, or ``None`` when deleted."""
+    _staged()["thin"].append((str(node_id), [v] if v is not None else [], None, model_version))
+
+
+def discard_staged() -> None:
+    """The transaction rolled back: forget what it staged."""
+    _stage.d = None
+
+
+def publish_staged() -> None:
+    """The transaction committed: hand what it staged to the matrices (applied on their next
+    ``_ensure_*``). The write generation moves so a cached matrix knows it is behind."""
+    global _vec_write_gen, _thin_write_gen, _chunk_write_gen
+    d = getattr(_stage, "d", None)
+    _stage.d = None
+    if not d:
+        return
+    if d["vec"]:
+        with _vec_lock:
+            _mstate["vec"].pending.extend(d["vec"])
+            _vec_write_gen += 1
+    if d["thin"]:
+        with _thin_lock:
+            _mstate["thin"].pending.extend(d["thin"])
+            _thin_write_gen += 1
+    if d["chunk"]:
+        with _chunk_lock:
+            _mstate["chunk"].pending.extend(d["chunk"])
+            _chunk_write_gen += 1
+
+
+def _apply_deltas(st: _MatrixState, M, mv: str, int_ids: bool):
+    """Apply ``st.pending`` to the cached matrix whose published view is ``M`` (the caller holds the
+    matrix lock). Returns the new ``(M, ids, srcs)`` views, or None when a full rebuild is due instead
+    (the cache was replaced from outside, the headroom ran out, or dead rows passed their bound)."""
+    if st.view is None or st.view is not M or st.bufM is None:
+        return None
+    last: dict = {}
+    for key, vecs, src, dmv in st.pending:
+        last[key] = (vecs, src, dmv)
+    n = st.n
+    ids = st.bufI[:n]
+    if int_ids:
+        kill = _np.nonzero(_np.isin(ids, _np.fromiter(last.keys(), dtype=_np.int64, count=len(last))))[0]
+    else:
+        kill = _np.fromiter((i for i, x in enumerate(ids) if x in last), dtype=_np.int64)
+    rows: list = []
+    for key, (vecs, src, dmv) in last.items():
+        if dmv != mv or (st.bufS is not None and src is None):
+            continue  # not in the current space, or (vec/chunk) no doc row: the JOIN would drop it
+        for v in vecs:
+            rows.append((key, v, src))
+    dead = st.dead + len(kill)
+    if n + len(rows) > st.bufM.shape[0] or dead > max(_BUILD_BATCH, n // _DEAD_FRAC):
+        return None
+    bufI, bufS = st.bufI, st.bufS
+    if len(kill):
+        # Mark dead rows in a COPY of the small id array, so a reader holding the previous one keeps a
+        # consistent view. A dead row keeps its source (always a string, which np.isin needs); readers
+        # skip it by its id.
+        bufI = _np.empty_like(st.bufI)
+        bufI[:n] = st.bufI[:n]
+        bufI[kill] = -1 if int_ids else None
+    if rows:
+        block = _np.stack([_np.asarray(v, dtype=_np.float32).ravel() for _k, v, _s in rows])
+        if block.shape[1] != st.bufM.shape[1]:
+            return None
+        nrm = _np.linalg.norm(block, axis=1, keepdims=True)
+        _np.divide(block, _np.where(nrm > 0, nrm, 1.0), out=st.bufM[n:n + len(rows)])
+        bufI[n:n + len(rows)] = [k for k, _v, _s in rows]
+        if bufS is not None:
+            bufS[n:n + len(rows)] = [s for _k, _v, s in rows]
+    m = n + len(rows)
+    st.bufI, st.bufS, st.n, st.dead = bufI, bufS, m, dead
+    st.view = st.bufM[:m]
+    st.pending.clear()
+    return st.view, bufI[:m], (bufS[:m] if bufS is not None else None)
 
 
 def _ensure_matrix(con):
@@ -401,32 +651,37 @@ def _ensure_matrix(con):
     if _np is None:
         return None, None
     mv = _model_version()
-    gen = _vec_write_gen  # write-gen, not row-count: catches re-embeds the count key missed
     now = time.time()
     with _vec_lock:
+        gen = _vec_write_gen  # write-gen, not row-count; read under the lock publish_staged takes
+        st = _mstate["vec"]
         same_space = (_vec_M is not None and _vec_built_mv == mv)
         if same_space and _vec_built_gen == gen:
             return _vec_M, _vec_ids
+        if same_space and st.pending and st.unknown_gen <= _vec_built_gen:
+            out = _apply_deltas(st, _vec_M, mv, int_ids=True)
+            if out is not None:
+                _vec_M, _vec_ids, _vec_srcs = out
+                _vec_built_gen = gen
+                return _vec_M, _vec_ids
         if same_space and (now - _vec_built_ts) < _VEC_DEBOUNCE:
             return _vec_M, _vec_ids  # serve slightly-stale during an ingest burst
+        # Drop the old matrix before building (see _build_rows); a failed build leaves None and the
+        # next call retries.
+        _vec_M = _vec_ids = _vec_srcs = None
+        st.adopt(None, None, None)  # the rebuild reads every committed change, published or not
         try:
-            rows = con.execute(
+            M, ids, srcs = _build_rows(
+                con,
+                "SELECT count(*) FROM vec v JOIN docs d ON v.rowid = d.rowid WHERE v.model_version = ?",
                 "SELECT v.rowid, v.v, d.source FROM vec v JOIN docs d ON v.rowid = d.rowid "
-                "WHERE v.model_version = ?", (mv,)).fetchall()
-        except Exception:  # noqa: BLE001
-            return None, None
-        if not rows:
-            _vec_M, _vec_ids, _vec_srcs, _vec_built_ts, _vec_built_gen, _vec_built_mv = (
-                None, None, None, now, gen, mv)
-            return None, None
-        try:
-            ids = _np.fromiter((r[0] for r in rows), dtype=_np.int64, count=len(rows))
-            M = _np.frombuffer(b"".join(r[1] for r in rows), dtype=_np.float32).reshape(len(rows), -1)
-            srcs = _np.array([r[2] for r in rows], dtype=object)  # aligned per-row source (scope mask)
-            nrm = _np.linalg.norm(M, axis=1, keepdims=True)
-            M = (M / _np.where(nrm > 0, nrm, 1.0)).astype(_np.float32)
+                "WHERE v.model_version = ?", (mv,), int_ids=True, with_src=True, spare=True)
         except Exception as exc:  # noqa: BLE001
             logger.debug("recall matrix build failed: %s", exc)
+            return None, None
+        st.adopt(M, ids, srcs)
+        if M is None:
+            _vec_built_ts, _vec_built_gen, _vec_built_mv = now, gen, mv
             return None, None
         _vec_M, _vec_ids, _vec_srcs, _vec_built_ts, _vec_built_gen, _vec_built_mv = (
             M, ids, srcs, now, gen, mv)
@@ -444,30 +699,34 @@ def _ensure_thin_matrix(con):
     if _np is None:
         return None, None
     mv = _model_version()
-    gen = _thin_write_gen  # write-gen, not row-count: catches re-embeds the count key missed
     now = time.time()
     with _thin_lock:
+        gen = _thin_write_gen  # write-gen, not row-count; read under the lock publish_staged takes
+        st = _mstate["thin"]
         same_space = (_thin_M is not None and _thin_built_mv == mv)
         if same_space and _thin_built_gen == gen:
             return _thin_M, _thin_ids
+        if same_space and st.pending and st.unknown_gen <= _thin_built_gen:
+            out = _apply_deltas(st, _thin_M, mv, int_ids=False)
+            if out is not None:
+                _thin_M, _thin_ids, _ = out
+                _thin_built_gen = gen
+                return _thin_M, _thin_ids
         if same_space and (now - _thin_built_ts) < _VEC_DEBOUNCE:
             return _thin_M, _thin_ids  # serve slightly-stale during an ingest burst
+        _thin_M = _thin_ids = None  # drop the old matrix before building (see _build_rows)
+        st.adopt(None, None, None)
         try:
-            rows = con.execute(
-                "SELECT node_id, v FROM vec_thin WHERE model_version = ?", (mv,)
-            ).fetchall()
-        except Exception:  # noqa: BLE001
-            return None, None
-        if not rows:
-            _thin_M, _thin_ids, _thin_built_ts, _thin_built_gen, _thin_built_mv = None, None, now, gen, mv
-            return None, None
-        try:
-            ids = _np.array([r[0] for r in rows], dtype=object)
-            M = _np.frombuffer(b"".join(r[1] for r in rows), dtype=_np.float32).reshape(len(rows), -1)
-            nrm = _np.linalg.norm(M, axis=1, keepdims=True)
-            M = (M / _np.where(nrm > 0, nrm, 1.0)).astype(_np.float32)
+            M, ids, _ = _build_rows(
+                con, "SELECT count(*) FROM vec_thin WHERE model_version = ?",
+                "SELECT node_id, v FROM vec_thin WHERE model_version = ?", (mv,),
+                int_ids=False, with_src=False, spare=True)
         except Exception as exc:  # noqa: BLE001
             logger.debug("recall thin matrix build failed: %s", exc)
+            return None, None
+        st.adopt(M, ids, None)
+        if M is None:
+            _thin_built_ts, _thin_built_gen, _thin_built_mv = now, gen, mv
             return None, None
         _thin_M, _thin_ids, _thin_built_ts, _thin_built_gen, _thin_built_mv = M, ids, now, gen, mv
         return M, ids
@@ -483,32 +742,36 @@ def _ensure_chunk_matrix(con):
     if _np is None:
         return None, None
     mv = _model_version()
-    gen = _chunk_write_gen
     now = time.time()
     with _chunk_lock:
+        gen = _chunk_write_gen  # read under the lock publish_staged takes
+        st = _mstate["chunk"]
         same_space = (_chunk_M is not None and _chunk_built_mv == mv)
         if same_space and _chunk_built_gen == gen:
             return _chunk_M, _chunk_ids
+        if same_space and st.pending and st.unknown_gen <= _chunk_built_gen:
+            out = _apply_deltas(st, _chunk_M, mv, int_ids=True)
+            if out is not None:
+                _chunk_M, _chunk_ids, _chunk_srcs = out
+                _chunk_built_gen = gen
+                return _chunk_M, _chunk_ids
         if same_space and (now - _chunk_built_ts) < _VEC_DEBOUNCE:
             return _chunk_M, _chunk_ids  # serve slightly-stale during an ingest burst
+        _chunk_M = _chunk_ids = _chunk_srcs = None  # drop the old matrix before building (see _build_rows)
+        st.adopt(None, None, None)
         try:
-            rows = con.execute(
+            M, ids, srcs = _build_rows(
+                con,
+                "SELECT count(*) FROM vec_chunk c JOIN docs d ON c.rowid = d.rowid "
+                "WHERE c.model_version = ?",
                 "SELECT c.rowid, c.v, d.source FROM vec_chunk c JOIN docs d ON c.rowid = d.rowid "
-                "WHERE c.model_version = ?", (mv,)).fetchall()
-        except Exception:  # noqa: BLE001
-            return None, None
-        if not rows:
-            _chunk_M, _chunk_ids, _chunk_srcs, _chunk_built_ts, _chunk_built_gen, _chunk_built_mv = (
-                None, None, None, now, gen, mv)
-            return None, None
-        try:
-            ids = _np.fromiter((r[0] for r in rows), dtype=_np.int64, count=len(rows))
-            M = _np.frombuffer(b"".join(r[1] for r in rows), dtype=_np.float32).reshape(len(rows), -1)
-            srcs = _np.array([r[2] for r in rows], dtype=object)
-            nrm = _np.linalg.norm(M, axis=1, keepdims=True)
-            M = (M / _np.where(nrm > 0, nrm, 1.0)).astype(_np.float32)
+                "WHERE c.model_version = ?", (mv,), int_ids=True, with_src=True, spare=True)
         except Exception as exc:  # noqa: BLE001
             logger.debug("recall chunk matrix build failed: %s", exc)
+            return None, None
+        st.adopt(M, ids, srcs)
+        if M is None:
+            _chunk_built_ts, _chunk_built_gen, _chunk_built_mv = now, gen, mv
             return None, None
         _chunk_M, _chunk_ids, _chunk_srcs, _chunk_built_ts, _chunk_built_gen, _chunk_built_mv = (
             M, ids, srcs, now, gen, mv)
@@ -552,6 +815,7 @@ def vector_search(qvec, k: int = 60, sources: "Optional[frozenset[str]]" = None)
         if n > 0:
             q = q / n
         sims = M @ q
+        sims[ids < 0] = -_np.inf  # rows removed by an incremental update (see _apply_deltas)
         if sources:
             # Scope BEFORE the top-k: any row whose source is not requested is pushed to -inf so
             # argpartition can never spend a slot on it (the 1.1 recall-bypass fix). srcs is the
@@ -570,6 +834,7 @@ def vector_search(qvec, k: int = 60, sources: "Optional[frozenset[str]]" = None)
             Mc, ids_c, srcs_c = _chunk_M, _chunk_ids, _chunk_srcs
         if Mc is not None and ids_c is not None and len(ids_c) and Mc.shape[1] == q.shape[0]:
             sims_c = Mc @ q
+            sims_c[ids_c < 0] = -_np.inf
             if sources and (srcs_c is None or len(srcs_c) != len(ids_c)):
                 sims_c = None  # cannot honestly scope the chunk rows -> fall back to doc-only
             elif sources:
@@ -690,7 +955,7 @@ def similar_neighbors(anchor_vec, anchor_node_id: str, k: int = 10):
         if M is not None and ids is not None and len(ids) > 0 and M.shape[1] == q.shape[0]:
             sims = M @ q
             for i in range(len(ids)):
-                docs_rowids.append(int(ids[i]))
+                docs_rowids.append(int(ids[i]))  # a removed row (-1) hydrates to no node and is skipped
         else:
             sims = None
         # (b) thin matrix: ids are node_id strings; self-exclude by node_id here.
@@ -699,6 +964,8 @@ def similar_neighbors(anchor_vec, anchor_node_id: str, k: int = 10):
         if Mt is not None and tids is not None and len(tids) > 0 and Mt.shape[1] == q.shape[0]:
             tsims = Mt @ q
             for i in range(len(tids)):
+                if tids[i] is None:
+                    continue   # a row removed by an incremental update (see _apply_deltas)
                 nid = str(tids[i])
                 if nid == anchor_node_id:
                     continue   # exclude the anchor itself

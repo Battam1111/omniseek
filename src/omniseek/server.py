@@ -511,7 +511,8 @@ def omniseek_sources(check_health: LenientBool =False, domain: str = "", query: 
     unmeasured (our probe did not finish) | unverified (our probe finished but by design asked the
     upstream nothing, or the answer could not tell good from bad: a scarce quota, a busy gate, an open
     breaker, an answer from cache, an HTTP 429 or other rate limit; neither healthy nor failing) |
-    unknown (no watchdog row). `healthy` (check_health only) is true = verified working (sources that
+    unknown (no watchdog row) | sealed (switched off on purpose, not a failure; `sealed_reason` says
+    where to go instead). `healthy` (check_health only) is true = verified working (sources that
     log in are probed through their search path, not trusted on a kept login), false = verified
     broken, null = NOT verified by this probe (same reasons, or the probe timed out); `status` says
     which. Never count a null as healthy or as failed.
@@ -2326,7 +2327,8 @@ _GATHER_TOOLS: dict[str, object] = {
 def omniseek_sensor(action: str, query: str = "", sources: Optional[list[str]] = None,
                schedule: str = "daily", sensor_id: str = "", notify: LenientBool = False,
                notify_if: Optional[list[str]] = None, notify_if_match: str = "any",
-               detect_absence: LenientBool = False) -> dict:
+               detect_absence: LenientBool = False,
+               notify_source: Optional[str] = None) -> dict:
     """Use WHEN you want to MONITOR a query over time and be told only what's NEW: standing queries with novelty detection. ONE verb; ``action`` picks what to do.
 
     The agent decides WHAT to monitor (judgment); the sensor diffs mechanically (a (source,
@@ -2340,38 +2342,67 @@ def omniseek_sensor(action: str, query: str = "", sources: Optional[list[str]] =
       title/content match (notify_if_match="any" default, or "all"), so a broad standing query alerts
       on the sliver you care about instead of every new item. Optional detect_absence=True ALSO alerts
       when a tracked STABLE-source item DISAPPEARS (e.g. a page_watch policy page that goes dark / 404s);
-      scoped to stable sources so a churny query sensor is unaffected.
+      scoped to stable sources so a churny query sensor is unaffected. Optional notify_source (a
+      push source name, eye.sensor.<name>; empty = the default eye.sensor) sends this sensor's
+      alerts under that source, so the push router can deliver them somewhere other than where
+      eye.sensor goes (it still needs notify=True to push at all).
+    • action="update" (sensor_id, notify_source) -> change an existing sensor's push source in
+      place; notify_source="" puts it back on the default. Its baseline and history are untouched.
+      Returns {updated: true, sensor: {id, query, notify, notify_source}}.
     • action="list" -> all registered sensors with last-run stats {id, query, sources, schedule,
-      last_run_at, last_new_count, total_runs, baseline_size}.
-    • action="delete" (sensor_id) -> delete a sensor by id. Returns {deleted: true/false}.
+      notify, notify_source, last_run_at, last_new_count, total_runs, baseline_size}.
+    • action="delete" (sensor_id) -> delete a sensor by id (and its push-source entry). Returns
+      {deleted: true/false}.
     • action="run" (sensor_id) -> manually trigger one sensor NOW (the manual path beside the
       automatic scheduler): runs its query, diffs against baseline, updates state, returns a summary
       with new_count + new_titles. Tests a sensor on demand without waiting for its schedule.
 
     Unknown action, or a missing required arg, returns {"error": ...}.
     """
-    from omniseek.core.sensor import SensorStore
+    from omniseek.core.sensor import DEFAULT_NOTIFY_SOURCE, SensorStore
     a = (action or "").strip().lower()
     store = SensorStore()
 
     if a == "create":
         if not query:
             return {"error": "action=create requires query"}
-        s = store.create(query=query, sources=sources, schedule=schedule, notify=bool(notify),
-                         notify_if=notify_if or None, notify_if_match=notify_if_match,
-                         detect_absence=bool(detect_absence))
+        try:
+            s = store.create(query=query, sources=sources, schedule=schedule, notify=bool(notify),
+                             notify_if=notify_if or None, notify_if_match=notify_if_match,
+                             detect_absence=bool(detect_absence), notify_source=notify_source)
+        except ValueError as exc:
+            return {"error": str(exc)}
         return {"created": True, "sensor": {"id": s.id, "query": s.query,
                 "sources": s.sources, "schedule": s.schedule, "notify": s.notify,
                 "notify_if": s.notify_if, "detect_absence": s.detect_absence,
+                "notify_source": store.notify_sources().get(s.id) or DEFAULT_NOTIFY_SOURCE,
                 "created_at": s.created_at}}
+
+    if a == "update":
+        if not sensor_id:
+            return {"error": "action=update requires sensor_id"}
+        if notify_source is None:
+            return {"error": "action=update requires notify_source (a source name, or \"\" for "
+                             "the default eye.sensor)"}
+        try:
+            src = store.set_notify_source(sensor_id, notify_source)
+        except ValueError as exc:
+            return {"error": str(exc)}
+        if src is None:
+            return {"error": f"sensor {sensor_id} not found"}
+        s = store.get(sensor_id)
+        return {"updated": True, "sensor": {"id": sensor_id, "query": s.query if s else "",
+                "notify": s.notify if s else False, "notify_source": src}}
 
     if a == "list":
         raw = store.list_all()
+        custom = store.notify_sources()
         sensors = []
         for s in raw:
             sensors.append({
                 "id": s["id"], "query": s["query"], "sources": s.get("sources"),
-                "schedule": s.get("schedule", "daily"),
+                "schedule": s.get("schedule", "daily"), "notify": s.get("notify", False),
+                "notify_source": custom.get(s["id"]) or DEFAULT_NOTIFY_SOURCE,
                 "last_run_at": s.get("last_run_at"), "last_new_count": s.get("last_new_count", 0),
                 "total_runs": s.get("total_runs", 0), "baseline_size": len(s.get("baseline", [])),
             })
@@ -2392,7 +2423,7 @@ def omniseek_sensor(action: str, query: str = "", sources: Optional[list[str]] =
             return {"error": f"sensor {sensor_id} not found"}
         return run_sensor(s, store)
 
-    return {"error": f"unknown action {action!r}; valid: create | list | delete | run"}
+    return {"error": f"unknown action {action!r}; valid: create | list | update | delete | run"}
 
 
 @mcp.tool()

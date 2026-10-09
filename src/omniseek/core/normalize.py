@@ -1,4 +1,4 @@
-"""Unified document model for all OmniSeek eye sources.
+"""Unified document model for all OmniSeek sources.
 
 Every adapter returns content normalized to Document so downstream
 processing doesn't care whether content came from Reddit, Zhihu, or arXiv.
@@ -188,7 +188,7 @@ _ATTENTION_KINDS = frozenset({'engagement', 'citation'})
 
 
 class Document(BaseModel):
-    """Normalized representation of content from any OmniSeek eye source."""
+    """Normalized representation of content from any OmniSeek source."""
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 

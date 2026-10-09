@@ -1,4 +1,4 @@
-"""OmniSeek eye as a shared HTTP MCP service (streamable-http + bearer-token auth).
+"""OmniSeek as a shared HTTP MCP service (streamable-http + bearer-token auth).
 
 ONE always-on process (launchd com.omniseek.organ.eye-http) that every agent / window connects to
 over the network, instead of each Claude window spawning its own stdio-over-ssh server (N
@@ -109,6 +109,10 @@ mcp.settings.stateless_http = True
 
 app = mcp.streamable_http_app()  # Starlette ASGI app; streamable-http MCP served at /mcp
 app.add_middleware(TokenAuth)
+# Outermost layer: count requests in flight so the memory guard (eye.memguard) restarts the service
+# only at an idle moment. Pure ASGI, so a streamed response counts until its last body chunk.
+from omniseek.core.memguard import InflightMiddleware  # noqa: E402
+app.add_middleware(InflightMiddleware)
 
 # S2 graceful shutdown: COMPOSE the ASGI lifespan so a deploy restart (SIGTERM -> graceful uvicorn
 # shutdown) DRAINS the background loops instead of SIGKILLing the recall single-writer queue mid-
@@ -213,6 +217,13 @@ def main() -> None:
                         _jobs.TICK_SECONDS, len(_jobs.registry()))
     except Exception as exc:  # noqa: BLE001 — the scheduler is best-effort; never block boot
         logger.warning("job scheduler not started (%s)", exc)
+    # Memory ceiling backstop (eye.memguard): past a footprint ceiling, restart the way a deploy does
+    # (SIGTERM to self -> graceful drain -> launchd KeepAlive). HTTP service only; fail-open.
+    try:
+        from omniseek.core import memguard
+        memguard.start()
+    except Exception as exc:  # noqa: BLE001 -- the guard is best-effort; never block boot
+        logger.warning("memguard not started (%s)", exc)
     from omniseek.server import _senses_report, _warm_heavy_imports
     _warm_heavy_imports()  # same first-import race exists under HTTP; see the helper's docstring
     logger.info(_senses_report())

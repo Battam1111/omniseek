@@ -1,4 +1,4 @@
-"""OmniSeek Eye — multi-source information retrieval.
+"""OmniSeek — multi-source information retrieval.
 
 OmniSeek gives OmniSeek the ability to query 25 curated information sources
 (academic APIs, social platforms, blogs, forums) through a unified

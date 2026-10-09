@@ -36,7 +36,7 @@ from typing import Optional
 
 from markdownify import markdownify as html_to_md
 
-from omniseek.core import _probe, auth, diag, http, upstreams
+from omniseek.core import _probe, auth, cache, diag, http, upstreams
 from omniseek.core._guard import GateBusy
 from omniseek.core.normalize import Document, jsonsafe, mk_signal
 
@@ -134,10 +134,26 @@ def _se_record(ok: bool, backoff: float = 0.0) -> None:
                            _se_fail_streak, int(cd))
 
 
+def _cache_only_skip(url: str) -> bool:
+    """True on a cache-only collect (omniseek_search staleness=cache_only): the Stack Exchange answer is
+    cached per query by the caller, so a miss reaching here has nothing to read and must not touch
+    the network. http.get_json would return None without egress, but until 2026-10-08 that None went
+    through the gate (a permit and a pacing slot for a request that never happened) and was then
+    counted by `_se_record(False)` as a quota failure, so three cache-only misses opened the breaker
+    and the next real searches of all six Stack Exchange sources were skipped for `_SE_COOLDOWN`."""
+    if not cache.cache_only():
+        return False
+    diag.note("stackexchange.cache_only", url=url,
+              body="cache-only collect: no cached Stack Exchange answer, no live request made")
+    return True
+
+
 def _se_get(url: str, params: dict, timeout: float = TIMEOUT) -> Optional[dict]:
     """Shared SE API GET behind the quota breaker: skip instantly while cooling; trip on a 429/backoff
     so all six SE sources stop hammering a spent per-IP quota (no 429 storm, no per-search latency)."""
     if _se_cooling():
+        return None
+    if _cache_only_skip(url):
         return None
     try:
         # ONE budget for the permit and the start slot: the declared max_wait_s, cut to the caller's
@@ -391,10 +407,11 @@ async def _ase_get(url, params, timeout=TIMEOUT):
     (NOT a new asyncio.Semaphore: the cap is shared sync<->async across the migration). The permit
     is waited for in the gate's one line on the loop, without blocking it (`_se_guard.ahold`; a `with
     _se_sema:` on the loop would freeze it). `_se_record`/`_se_cooling` hold `_se_lock` only for
-    microsecond counter math -> fine on loop. cache_only/5xx/429 -> aget_json None -> record fail
-    (byte-identical to `_se_get`; the pre-existing cache_only false-record is mirrored, NOT fixed --
-    fixing it would diverge from sync)."""
+    microsecond counter math -> fine on loop. 5xx/429 -> aget_json None -> record fail; a cache-only
+    collect returns None before the gate and records nothing (`_cache_only_skip`, as in `_se_get`)."""
     if _se_cooling():
+        return None
+    if _cache_only_skip(url):
         return None
     try:
         async with _se_guard.ahold(upstreams.max_wait("stackexchange"), _se_busy, _se_late,

@@ -38,7 +38,8 @@ if [ -f "$EYE_ROOT/deploy.sh" ] && grep -q "frozen archive, not a deployable tre
   echo "       (or set POLARIS_EYE_ROOT)." >&2
   exit 1
 fi
-[ -d "$EYE_ROOT/src/polaris" ] || { echo "FATAL: no src/polaris under $EYE_ROOT" >&2; exit 1; }
+# The package directory: this default, unless the private overlay below names another (the eye's
+# package can be renamed privately; the check runs after the overlay so it sees the final choice).
 EYE_SRC="$EYE_ROOT/src/polaris"
 PEN_SRC="$PEN_ROOT/src/omniseek"
 
@@ -57,6 +58,7 @@ PRIVATE_OVERLAY="$EYE_ROOT/mirror/omniseek_private.sh"
 [ -f "$PRIVATE_OVERLAY" ] || { echo "FATAL: missing $PRIVATE_OVERLAY (the private half of this sync)" >&2; exit 1; }
 # shellcheck source=/dev/null
 . "$PRIVATE_OVERLAY"
+[ -d "$EYE_SRC" ] || { echo "FATAL: no package source at $EYE_SRC" >&2; exit 1; }
 
 # to_lf PATH...: turn CRLF line ends into LF in every TEXT file under the given files/directories.
 # A file with a NUL byte is binary and left alone (the same test the OmniSelf sync uses). Byte-level
@@ -241,8 +243,8 @@ SYNCED_ARTIFACTS=("tests/smoke.py" "tests/egress_baseline.json" "docs/BUDGETS.md
 # no deploy.sh (which the mirror is) instead of failing on an absence that is correct.
 # EXCEPT the deployment-bound ones, LISTED here with the reason for each (driver ruling of 2026-09-29):
 # they test the eye's release machinery (scripts/release_layout.py, release_transaction.py and the
-# bridges) or, since 2026-10-03, its launchd watchdog (scripts/sentinel.py), which the mirror does not
-# ship by the same rule that keeps SERVICES.md out. Carried anyway
+# bridges) or, since 2026-10-03, its launchd watchdog (scripts/sentinel.py) and, since 2026-10-10, its
+# state backup job and launchd fleet scripts, which the mirror does not ship by the same rule that keeps SERVICES.md out. Carried anyway
 # they do not fail meaningfully, they fail at IMPORT (`from scripts. ...`), which looks like the mirror
 # is broken rather than like the suite does not apply. Every test_*.py NOT on this list is synced.
 DEPLOYMENT_BOUND_SUITES=(
@@ -251,6 +253,8 @@ DEPLOYMENT_BOUND_SUITES=(
   "test_release_transaction.py"  # imports scripts.release_transaction: the atomic release switch
   "test_sentinel_watch.py"       # loads scripts/sentinel.py: the operator's launchd watchdog (2026-10-03)
   "test_notify_outlet.py"        # loads scripts/_sentinel_common.py and the operator's push outlet (2026-10-06)
+  "test_state_backup.py"         # runs scripts/state_backup.sh: the operator's state backup job (2026-10-10)
+  "test_xhs_cn_seal_launchd.py"  # loads scripts/services.py, sentinel.py, eye_doctor.py: the launchd fleet (2026-10-10)
 )
 # THE MIRROR-OWNED PREFIX (driver ruling of 2026-09-29). tests/test_mirror_*.py test the mirror's own
 # material (bench/, scripts/, .github/) and belong to the mirror: never written by this sync, never
@@ -267,7 +271,7 @@ while IFS= read -r _suite; do
   [ -n "$_suite" ] || continue
   case " ${DEPLOYMENT_BOUND_SUITES[*]} " in
     *" $(basename "$_suite") "*)
-      echo "    (skipping $(basename "$_suite"): deployment-bound, the mirror ships no release machinery or launchd watchdog)"
+      echo "    (skipping $(basename "$_suite"): deployment-bound, the mirror ships no release machinery or launchd fleet scripts)"
       continue ;;
   esac
   SYNCED_ARTIFACTS+=("tests/$(basename "$_suite")")
@@ -293,6 +297,30 @@ while IFS= read -r _dep; do
   SYNCED_ARTIFACTS+=("tests/$_dep.py")
 done < <(grep -rhoE 'tests\.[A-Za-z_][A-Za-z0-9_]*' "$EYE_ROOT"/tests/test_*.py 2>/dev/null \
          | sed 's/^tests\.//' | sort -u)
+
+# THE SUITES' DATA FILES, added 2026-10-10, by the same dependency rule: a file directly under
+# tests/fixtures/ rides along when a synced suite names it. The eye's xiaohongshu media suite reads two
+# such files; synced without them it failed at import in the mirror for a reason that says nothing about
+# the code. A fixture no synced suite names stays at the eye. Each one is renamed, line-end normalized and
+# residue-gated with the rest of SYNCED_ARTIFACTS. Its CONTENT is renamed, its file NAME is not, while
+# the suite's reference to it is: a fixture whose name a rename rule would change must be renamed at the
+# eye, or the suite would look for a file that is not there.
+_synced_suites=()
+for rel in "${SYNCED_ARTIFACTS[@]}"; do
+  case "$rel" in tests/*.py) _synced_suites+=("$EYE_ROOT/$rel") ;; esac
+done
+for _fx in "$EYE_ROOT"/tests/fixtures/*; do
+  [ -f "$_fx" ] || continue
+  _fxname="$(basename "$_fx")"
+  grep -qF -- "$_fxname" "${_synced_suites[@]}" || continue
+  if [ "$(printf '%s' "$_fxname" | sed "${RENAME[@]}")" != "$_fxname" ]; then
+    echo "FATAL: tests/fixtures/$_fxname is read by a synced suite and a rename rule changes its name;" >&2
+    echo "       rename the file at the eye." >&2
+    exit 1
+  fi
+  echo "    (carrying tests/fixtures/$_fxname: read by a synced suite)"
+  SYNCED_ARTIFACTS+=("tests/fixtures/$_fxname")
+done
 
 echo "  [3/6] syncing smoke tests + ${#SYNCED_ARTIFACTS[@]} code-bound artifacts ..."
 # NO MIRROR-ONLY TESTS (driver ruling of 2026-09-29). Tests of the eye's code live in the eye and ride

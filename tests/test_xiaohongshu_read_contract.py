@@ -14,6 +14,15 @@ from unittest.mock import patch
 # sniffer produced a URL.)
 _NO_VIDEO = (None, "unresolved")
 
+
+from contextlib import contextmanager  # noqa: E402
+
+
+@contextmanager
+def _open_slot(*_a, **_kw):
+    """The 小号 live slot, always granted and never slept on (the real one paces calls)."""
+    yield (True, "")
+
 # STATE ISOLATION (2026-08-12). This suite drives the xhs_cn guard, and the guard APPENDS to the
 # incident black box. Unisolated it wrote into ~/.omniseek/state/xhs-cn-incidents.jsonl on every
 # run, so the file whose whole job is to answer "what did a real 461 look like" filled up with
@@ -210,14 +219,31 @@ class XiaohongshuReadContractTests(unittest.TestCase):
                         f"the empty-shell branch was never reached; diag saw {_events}")
 
     def test_international_adapter_does_not_claim_mainland_urls(self):
+        # Unsealed, xiaohongshu.com belongs to the mainland 9224 adapter alone.
+        from omniseek.core.sources.walled import xiaohongshu_cn_source as cn
         from omniseek.core.sources.walled import xiaohongshu_source as module
 
         url = "https://www.xiaohongshu.com/search_result/0123456789abcdef01234567"
-        with patch.object(module.XiaohongshuAdapter, "_fetch_url_live") as live:
+        with patch.object(cn, "_SEALED", False), \
+             patch.object(module.XiaohongshuAdapter, "_fetch_url_live") as live:
             doc = module.XiaohongshuAdapter().fetch_url(url)
 
         self.assertIsNone(doc)
         live.assert_not_called()
+
+    def test_international_adapter_claims_mainland_urls_while_the_mainland_source_is_sealed(self):
+        from omniseek.core.sources.walled import xiaohongshu_cn_source as cn
+        from omniseek.core.sources.walled import xiaohongshu_source as module
+
+        url = "https://www.xiaohongshu.com/explore/0123456789abcdef01234567?xsec_token=t"
+        sentinel = object()
+        with patch.object(cn, "_SEALED", True), \
+             patch.object(module, "_live_slot", _open_slot), \
+             patch.object(module.XiaohongshuAdapter, "_fetch_url_live", return_value=sentinel) as live:
+            doc = module.XiaohongshuAdapter().fetch_url(url)
+
+        self.assertIs(doc, sentinel)
+        live.assert_called_once_with(url)
 
     def test_international_health_is_transport_only_and_does_not_navigate(self):
         from omniseek.core.sources.walled import xiaohongshu_source as module

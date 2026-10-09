@@ -17,7 +17,11 @@ from typing import Any, Optional
 
 from platformdirs import user_cache_dir
 
-CACHE_DIR = Path(user_cache_dir("omniseek", appauthor=False)) / "omniseek_cache"
+# OMNISEEK_CACHE_DIR moves the whole cache elsewhere. The service leaves it unset; the deploy smoke
+# sets it to a throwaway directory so its checks never read the live service's cache entries (state
+# such as reddit's cannot-search list, 2026-10-10) and never write into them.
+CACHE_DIR = Path(os.environ.get("OMNISEEK_CACHE_DIR")
+                 or Path(user_cache_dir("omniseek", appauthor=False)) / "omniseek_cache")
 DEFAULT_TTL = 900  # 15 minutes
 
 # Per-thread "fresh" flag: when set, get()/get_docs() force a cache MISS (live fetch),

@@ -65,7 +65,8 @@ class AuthAlertBackgroundTests(unittest.TestCase):
         title, body, kw = self.calls[0]
         self.assertEqual(title, "auth_alert_test_source 登录态失效")
         self.assertIn("VNC", body)
-        self.assertEqual(kw, {"group": "OmniSeek-Health"})
+        self.assertEqual(kw, {"group": "OmniSeek-Health",
+                              "questions": ["请 VNC 进 mini，在共享 Chrome (9222) 里手动登录 auth_alert_test_source"]})
 
     def test_inside_the_cooldown_no_thread_starts(self):
         with patch.object(infra_jobs, "_alert", self._slow_alert):

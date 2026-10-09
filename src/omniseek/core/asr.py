@@ -30,6 +30,7 @@ import random
 import re
 import subprocess
 import tempfile
+import threading
 import time
 from typing import Optional
 from urllib.parse import urlencode, urlparse
@@ -60,27 +61,128 @@ _EMOJI_RE = re.compile(r"[\U0001F000-\U0001FAFF☀-➿\U0001F1E6-\U0001F1FF️]"
 # lone CJK/ASCII clause-or-sentence punctuation plus surrounding spaces.
 _LEAD_PUNCT_RE = re.compile(r"^[\s。，、；：！？.,;:!?]+")
 
-_model = None  # lazy global singleton (load is expensive; keep warm across calls)
+_model = None  # lazy global singleton (load is expensive; keep warm while in use, see idle unload)
+
+# ── device memory bound (eye-mem-2 order, measured 2026-10-08 on the M4 16 GB mini) ─────────────
+# torch 2.12's MPS allocator keeps every freed block cached until the driver passes its LOW watermark
+# (16974 MB here, i.e. never before the machine is out of memory; see recall/embed.py). SenseVoice
+# with VAD batches of up to _BATCH_S seconds allocates differently sized activation blocks per call,
+# so the cache only ever grows: 14 real podcast slices (30 to 420 s) took the MPS driver allocation
+# from 1936 MB after load to 6813 MB, with live tensors flat at 894 MB (the weights), and 30 s of
+# idle returned nothing. Three measures, all under ONE lock so no generate is ever mid-flight:
+#   1. _release_device() after every generate: hand the cached blocks back to the driver.
+#   2. one generate at a time: two concurrent transcriptions would stack two activation peaks.
+#   3. idle unload: ASR is an explicit, rare tool, so after _IDLE_UNLOAD_S with no call the three
+#      lazy models are dropped (weights, the driver's ~1 GB beyond them) and the next call reloads.
+# With these, the driver allocation stays at 1939 to 1942 MB per call and idle drops the process to
+# ~850 MB. What stays is MALLOC_SMALL (MPSGraph's per-input-shape graphs, ~400 MB after load): it
+# grows ~5 MB per call with NEW input shapes (406 -> 617 MB over 60 random slices), does not grow on
+# replayed shapes, and survives unload; memguard's idle restart is its bound.
+_lock = threading.RLock()
+_BATCH_S = 300                    # funasr batch_size_s for the VAD-batched generate calls
+_last_use = 0.0                   # monotonic time the last generate finished (0 = never)
+_IDLE_STOP = threading.Event()
+_idle_thread: Optional[threading.Thread] = None
+_IDLE_POLL_S = 30.0
+
+
+def _idle_unload_s() -> float:
+    """Seconds of no ASR call after which the models are unloaded (env OMNISEEK_ASR_IDLE_UNLOAD_S,
+    default 600; 0 or negative keeps them loaded forever, the pre-2026-10-08 behaviour)."""
+    try:
+        return float(os.environ.get("OMNISEEK_ASR_IDLE_UNLOAD_S", "600"))
+    except ValueError:
+        return 600.0
+
+
+def _release_device() -> None:
+    """Return the MPS allocator's cached blocks to the driver. Caller holds _lock. Never raises."""
+    try:
+        import sys
+        torch = sys.modules.get("torch")
+        if torch is not None and torch.backends.mps.is_available():
+            torch.mps.empty_cache()
+    except Exception as exc:  # noqa: BLE001 — a cache release is a memory bound, never a failure
+        logger.debug("asr: mps empty_cache skipped (%s)", exc)
+
+
+def _touch() -> None:
+    """Mark a generate as finished (caller holds _lock): release the device cache, stamp the idle
+    clock, and make sure the idle-unload watcher is running."""
+    global _last_use
+    _release_device()
+    _last_use = time.monotonic()
+    _ensure_idle_watcher()
+
+
+def unload_models(reason: str = "") -> bool:
+    """Drop every loaded ASR model and release their device memory. Returns True if anything was
+    loaded. Waits for an in-flight generate (same lock), so it never pulls a model out from under one."""
+    global _model, _vad_model, _diar_model
+    with _lock:
+        had = [n for n, m in (("sensevoice", _model), ("vad", _vad_model), ("diar", _diar_model))
+               if m is not None]
+        _model = _vad_model = _diar_model = None
+        if not had:
+            return False
+        import gc
+        gc.collect()
+        _release_device()
+        logger.info("asr: unloaded %s (%s)", "+".join(had), reason or "requested")
+        return True
+
+
+def _idle_loop() -> None:
+    global _idle_thread
+    while not _IDLE_STOP.wait(_IDLE_POLL_S):
+        limit = _idle_unload_s()
+        if limit <= 0:
+            continue
+        with _lock:
+            idle = time.monotonic() - _last_use
+            if _last_use and idle >= limit:
+                unload_models(f"idle {idle:.0f}s >= {limit:.0f}s")
+                _idle_thread = None
+                return
+
+
+def _ensure_idle_watcher() -> None:
+    """Start the idle-unload watcher if a model is loaded and none is running (caller holds _lock).
+    The watcher exits after it unloads; the next load starts a fresh one."""
+    global _idle_thread
+    if _idle_unload_s() <= 0 or _IDLE_STOP.is_set():
+        return
+    if _idle_thread is not None and _idle_thread.is_alive():
+        return
+    t = threading.Thread(target=_idle_loop, name="asr-idle-unload", daemon=True)
+    _idle_thread = t
+    t.start()
+    try:
+        from omniseek.core import lifecycle
+        lifecycle.register_loop("asr-idle-unload", _IDLE_STOP, t)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("asr: idle watcher not registered with lifecycle (%s)", exc)
 
 
 def _get_model():
     global _model
-    if _model is None:
-        AutoModel = _optdep.require("funasr", "asr").AutoModel
-        last = None
-        for dev in ("mps", "cpu"):
-            try:
-                _model = AutoModel(model=_MODEL, vad_model=_VAD,
-                                   vad_kwargs={"max_single_segment_time": 30000},
-                                   device=dev, disable_update=True)
-                logger.info("SenseVoice loaded on %s", dev)
-                break
-            except Exception as exc:  # noqa: BLE001
-                last = exc
-                logger.warning("SenseVoice load on %s failed: %s", dev, exc)
+    with _lock:  # re-entrant: callers already holding it are fine
         if _model is None:
-            raise RuntimeError(f"could not load SenseVoice (mps/cpu): {last}")
-    return _model
+            AutoModel = _optdep.require("funasr", "asr").AutoModel
+            last = None
+            for dev in ("mps", "cpu"):
+                try:
+                    _model = AutoModel(model=_MODEL, vad_model=_VAD,
+                                       vad_kwargs={"max_single_segment_time": 30000},
+                                       device=dev, disable_update=True)
+                    logger.info("SenseVoice loaded on %s", dev)
+                    break
+                except Exception as exc:  # noqa: BLE001
+                    last = exc
+                    logger.warning("SenseVoice load on %s failed: %s", dev, exc)
+            if _model is None:
+                raise RuntimeError(f"could not load SenseVoice (mps/cpu): {last}")
+        return _model
 
 
 def _ffmpeg_exe() -> str:
@@ -180,9 +282,13 @@ def _clean(text: str) -> str:
 
 
 def _transcribe_wav(wav_path: str, language: Optional[str]) -> str:
-    m = _get_model()
-    res = m.generate(input=wav_path, cache={}, language=(language or "auto"),
-                     use_itn=True, batch_size_s=300, merge_vad=True, merge_length_s=15)
+    with _lock:
+        try:
+            m = _get_model()
+            res = m.generate(input=wav_path, cache={}, language=(language or "auto"),
+                             use_itn=True, batch_size_s=_BATCH_S, merge_vad=True, merge_length_s=15)
+        finally:
+            _touch()
     return _clean(" ".join(r.get("text", "") for r in (res or [])))
 
 
@@ -197,19 +303,20 @@ _vad_model = None  # lazy standalone fsmn-vad singleton (segment offsets)
 
 def _get_vad_model():
     global _vad_model
-    if _vad_model is None:
-        AutoModel = _optdep.require("funasr", "asr").AutoModel
-        last = None
-        for dev in ("mps", "cpu"):
-            try:
-                _vad_model = AutoModel(model=_VAD, device=dev, disable_update=True)
-                logger.info("fsmn-vad (segments) loaded on %s", dev)
-                break
-            except Exception as exc:  # noqa: BLE001
-                last = exc
+    with _lock:  # re-entrant: callers already holding it are fine
         if _vad_model is None:
-            raise RuntimeError(f"could not load fsmn-vad (mps/cpu): {last}")
-    return _vad_model
+            AutoModel = _optdep.require("funasr", "asr").AutoModel
+            last = None
+            for dev in ("mps", "cpu"):
+                try:
+                    _vad_model = AutoModel(model=_VAD, device=dev, disable_update=True)
+                    logger.info("fsmn-vad (segments) loaded on %s", dev)
+                    break
+                except Exception as exc:  # noqa: BLE001
+                    last = exc
+            if _vad_model is None:
+                raise RuntimeError(f"could not load fsmn-vad (mps/cpu): {last}")
+        return _vad_model
 
 
 def _segments_from(spans: list, texts: list) -> list[dict]:
@@ -236,13 +343,18 @@ def _transcribe_segments(wav_path: str, language: Optional[str]) -> list[dict]:
         audio, sr = sf.read(wav_path, dtype="float32")
         if getattr(audio, "ndim", 1) > 1:
             audio = audio[:, 0]  # mono (decode is already mono; belt-and-suspenders)
-        vres = _get_vad_model().generate(input=audio, fs=sr)
-        spans = ((vres[0].get("value") if vres else None) or [])
-        if not spans:
-            return []
-        slices = [audio[int(s * sr / 1000): int(e * sr / 1000)] for s, e in spans]
-        res = _get_model().generate(input=slices, fs=sr, cache={}, language=(language or "auto"),
-                                    use_itn=True, merge_vad=False)
+        with _lock:
+            try:
+                vres = _get_vad_model().generate(input=audio, fs=sr)
+                spans = ((vres[0].get("value") if vres else None) or [])
+                if not spans:
+                    return []
+                slices = [audio[int(s * sr / 1000): int(e * sr / 1000)] for s, e in spans]
+                res = _get_model().generate(input=slices, fs=sr, cache={},
+                                            language=(language or "auto"), use_itn=True,
+                                            merge_vad=False)
+            finally:
+                _touch()
         return _segments_from(spans, [r.get("text", "") for r in (res or [])])
     except Exception as exc:  # noqa: BLE001 — segments are opt-in; never break the transcript
         logger.warning("asr segments failed %s: %s", wav_path, exc)
@@ -260,20 +372,21 @@ _diar_model = None
 
 def _get_diar_model():
     global _diar_model
-    if _diar_model is None:
-        AutoModel = _optdep.require("funasr", "asr").AutoModel
-        last = None
-        for dev in ("mps", "cpu"):
-            try:
-                _diar_model = AutoModel(model="paraformer-zh", vad_model=_VAD, spk_model="cam++",
-                                        punc_model="ct-punc", device=dev, disable_update=True)
-                logger.info("diarization model (paraformer-zh+cam++) loaded on %s", dev)
-                break
-            except Exception as exc:  # noqa: BLE001
-                last = exc
+    with _lock:  # re-entrant: callers already holding it are fine
         if _diar_model is None:
-            raise RuntimeError(f"could not load diarization model (mps/cpu): {last}")
-    return _diar_model
+            AutoModel = _optdep.require("funasr", "asr").AutoModel
+            last = None
+            for dev in ("mps", "cpu"):
+                try:
+                    _diar_model = AutoModel(model="paraformer-zh", vad_model=_VAD, spk_model="cam++",
+                                            punc_model="ct-punc", device=dev, disable_update=True)
+                    logger.info("diarization model (paraformer-zh+cam++) loaded on %s", dev)
+                    break
+                except Exception as exc:  # noqa: BLE001
+                    last = exc
+            if _diar_model is None:
+                raise RuntimeError(f"could not load diarization model (mps/cpu): {last}")
+        return _diar_model
 
 
 def _diarized_from(sentence_info: list) -> list[dict]:
@@ -303,8 +416,12 @@ def _transcribe_diarized(wav_path: str, speakers: Optional[int] = None) -> tuple
     count (a 1-on-1 = 2, a solo = 1) is what makes the labels track the real turns."""
     preset = speakers if (speakers and speakers > 0) else None
     try:
-        res = _get_diar_model().generate(input=wav_path, cache={}, use_itn=True, batch_size_s=300,
-                                         preset_spk_num=preset)
+        with _lock:
+            try:
+                res = _get_diar_model().generate(input=wav_path, cache={}, use_itn=True,
+                                                 batch_size_s=_BATCH_S, preset_spk_num=preset)
+            finally:
+                _touch()
         si = ((res[0] if isinstance(res, list) and res else {}) or {}).get("sentence_info") or []
         segs = _diarized_from(si)
         flat = _clean(" ".join(s["text"] for s in segs))

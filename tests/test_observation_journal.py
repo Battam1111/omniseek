@@ -836,5 +836,127 @@ class ObservationJournalTests(unittest.TestCase):
                 writer._last_materialization_failure = original_last_failure
 
 
+def _append(journal, title, *, source="s", source_id="1", lane="full"):
+    return journal.append_payload(
+        {"title": title}, source=source, source_id=source_id, observed_at=1.0,
+        provenance="retrieved", privacy_namespace="public", lane=lane,
+    )
+
+
+class JournalMemoryContractTests(unittest.TestCase):
+    """eye-mem-3: the journal keeps offsets and two latest-seq indexes, never events or payloads."""
+
+    def test_reopened_journal_retains_no_payload_bytes(self):
+        import tracemalloc
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            writer_side = ObservationJournal(root)
+            for i in range(200):
+                writer_side.append_payload(
+                    {"title": f"t{i}", "content": f"{i}-" + "x" * 20000},
+                    source="s", source_id=str(i), observed_at=1.0,
+                    provenance="retrieved", privacy_namespace="public", lane="full",
+                )
+            del writer_side
+            tracemalloc.start()
+            try:
+                journal = ObservationJournal(root)
+                retained, _peak = tracemalloc.get_traced_memory()
+            finally:
+                tracemalloc.stop()
+            self.assertEqual(journal.head_seq, 200)
+            # 200 payloads of 20 KB are 4 MB on disk; the index for them is a few KB.
+            self.assertLess(retained, 512 * 1024)
+            self.assertFalse(hasattr(journal, "_events"))
+            self.assertFalse(hasattr(journal, "_pending"))
+            self.assertEqual(journal.pending(after_seq=199)[0].payload["title"], "t199")
+
+    def test_iter_pending_reads_one_payload_at_a_time_and_honours_bounds(self):
+        with tempfile.TemporaryDirectory() as td:
+            journal = ObservationJournal(Path(td))
+            for i in range(5):
+                _append(journal, f"t{i}", source_id=str(i))
+            reads = []
+            original = journal._read_blob
+            with patch.object(journal, "_read_blob", side_effect=lambda h: reads.append(h) or original(h)):
+                stream = journal.iter_pending(after_seq=1)
+                self.assertEqual(reads, [])
+                first = next(stream)
+                self.assertEqual(first.journal_seq, 2)
+                self.assertEqual(len(reads), 1)
+            self.assertEqual([o.journal_seq for o in journal.pending(after_seq=1, limit=2)], [2, 3])
+            self.assertEqual([o.journal_seq for o in journal.pending(after_seq=4)], [5])
+            self.assertEqual(journal.pending(after_seq=5), [])
+
+    def test_latest_lookup_survives_index_key_collisions(self):
+        with tempfile.TemporaryDirectory() as td, \
+                patch.object(journal_module, "_identity_key", return_value=0):
+            root = Path(td)
+            journal = ObservationJournal(root)
+            a1 = _append(journal, "a", source_id="a")
+            b1 = _append(journal, "b", source_id="b")
+            self.assertEqual(_append(journal, "a", source_id="a").journal_seq, a1.journal_seq)
+            self.assertEqual(_append(journal, "b", source_id="b").journal_seq, b1.journal_seq)
+            a2 = _append(journal, "a2", source_id="a")
+            self.assertEqual(a2.journal_seq, 3)
+            self.assertIsNone(journal.append_tombstone(
+                source="s", source_id="a", observed_at=2.0, provenance="sweep",
+                privacy_namespace="public", reason="expired", materialized_through=2,
+            ))
+            reopened = ObservationJournal(root)
+            self.assertEqual(_append(reopened, "b", source_id="b").journal_seq, b1.journal_seq)
+            self.assertEqual(_append(reopened, "a2", source_id="a").journal_seq, 3)
+
+    def test_missing_or_altered_blob_fails_closed_at_load(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            receipt = _append(ObservationJournal(root), "one")
+            blob = root / "blobs" / receipt.payload_hash
+            original = blob.read_bytes()
+            blob.write_bytes(original + b" ")
+            with self.assertRaises(JournalCorrupt):
+                ObservationJournal(root)
+            blob.unlink()
+            with self.assertRaises(JournalCorrupt):
+                ObservationJournal(root)
+            blob.write_bytes(original)
+            self.assertEqual(ObservationJournal(root).head_seq, 1)
+
+    def test_event_line_rewritten_after_load_is_reported_corrupt(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            journal = ObservationJournal(root)
+            _append(journal, "one")
+            events_path = root / "events.ndjson"
+            events_path.write_bytes(b"x" * len(events_path.read_bytes()))
+            with self.assertRaises(JournalCorrupt):
+                journal.event(1)
+
+    def test_unreadable_blob_during_replay_counts_as_a_materialization_failure(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            journal = ObservationJournal(root / "journal")
+            receipt = journal.append_payload(
+                _full_doc("gone").model_dump(mode="json"), source="public-feed", source_id="gone",
+                observed_at=1.0, provenance="retrieved", privacy_namespace="public", lane="full",
+            )
+            (root / "journal" / "blobs" / receipt.payload_hash).unlink()
+            original_failures = writer._materialization_failures
+            original_last_failure = writer._last_materialization_failure
+            writer._materialization_failures = 0
+            writer._last_materialization_failure = None
+            try:
+                with _temporary_store(root) as con:
+                    with patch.object(embed, "available", return_value=False):
+                        self.assertEqual(writer._materialize_pending(con, journal), 0)
+                    self.assertEqual(writer._materialization_failures, 1)
+                    self.assertIn("seq=1 JournalCorrupt", writer._last_materialization_failure)
+                    self.assertIsNone(con.execute(
+                        "SELECT v FROM meta WHERE k='journal_materialized_seq'").fetchone())
+            finally:
+                writer._materialization_failures = original_failures
+                writer._last_materialization_failure = original_last_failure
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

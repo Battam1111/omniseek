@@ -17,9 +17,18 @@ ml_collective additionally carried a comment declaring the serial fan-out DELIBE
 conclusion was wrong: replaying the gathered results in INDEX_PATHS order preserves that order
 exactly, which is what test_dedup_attribution_follows_index_paths_order_not_completion_order pins.
 
-The timing tests are the load-bearing ones and they assert on WALL CLOCK on purpose. A structural
+The timing tests are the load-bearing ones and they assert on the CLOCK on purpose. A structural
 assertion (counting gather calls) keeps passing the moment someone reintroduces an await inside the
 loop, and that is exactly how gov_open_data regressed after its sync twin had already been fixed.
+
+What they time is each fake target's own span, from entering it to leaving it, and what they assert is
+that all the spans were open at once: the latest start comes before the earliest end. Serial code cannot
+produce that, since each call starts only after the one before it has returned (latest start >= earliest
+end on a monotonic clock), so the check needs no tolerance factor. Until 2026-10-10 they asserted that the
+whole call took under 0.6 of the serial sum instead; that total also counts the adapter's own work around
+the targets (parsing, ranking), which grows with the host's load, and with the full suite running beside
+a smoke run one concurrent call measured 0.451s against the 0.36s bound. Load can delay the second span's
+start, but only a scheduler stall longer than the whole delay can push it past the first span's end.
 """
 import asyncio
 import contextlib
@@ -32,12 +41,37 @@ from omniseek.core.sources.scrape import books_openlibrary_ia_source as books
 from omniseek.core.sources.scrape import ml_collective_source as mlc
 from omniseek.core.sources.scrape import tieba_source as tieba
 
-# Per-target delay for the wall-clock tests. Sized so the gap between the concurrent time and the
-# 0.6*serial threshold is several times the OS timer granularity (~16ms on Windows), otherwise the
-# assertion measures the host's jitter rather than the code. The two-target sources need the longer
-# delay because their concurrent/serial ratio is the least forgiving one there is.
-PAIR_DELAY = 0.3   # two-target sources:   serial 0.6s, threshold 0.36s, concurrent ~0.31s
-TRIO_DELAY = 0.1   # three-target sources: serial 0.3s, threshold 0.18s, concurrent ~0.11s
+# Per-target delay for the timing tests. It is the margin the overlap check has: the spans stay open
+# together unless the event loop takes longer than this to start the next ready target, so it is sized
+# far above the OS timer granularity (~16ms on Windows) and above scheduler stalls under load.
+PAIR_DELAY = 0.3   # two-target sources
+TRIO_DELAY = 0.1   # three-target sources
+
+
+class Spans:
+    """The clock inside the fake targets: one (start, end) pair per call, on time.perf_counter."""
+
+    def __init__(self):
+        self.spans = []
+
+    @contextlib.asynccontextmanager
+    async def span(self):
+        start = time.perf_counter()
+        try:
+            yield
+        finally:
+            self.spans.append((start, time.perf_counter()))
+
+
+def assert_ran_together(case, spans, n):
+    """All n target calls were in flight at once: the latest start precedes the earliest end."""
+    case.assertEqual(len(spans.spans), n, f"expected {n} target calls, saw {len(spans.spans)}")
+    first = min(s for s, _ in spans.spans)
+    latest_start = max(s for s, _ in spans.spans)
+    earliest_end = min(e for _, e in spans.spans)
+    case.assertTrue(latest_start < earliest_end,
+                    f"the last call started {latest_start - first:.3f}s in, after the first one had "
+                    f"returned at {earliest_end - first:.3f}s -> still sequential")
 
 
 @contextlib.contextmanager
@@ -74,19 +108,18 @@ class MLCollectiveConcurrencyTests(unittest.IsolatedAsyncioTestCase):
             return await self.adapter.asearch(query, limit)
 
     async def test_index_pages_are_fetched_concurrently(self):
-        """Three TRIO_DELAY-slow index pages must finish well under their serial sum."""
+        """Three TRIO_DELAY-slow index pages are all in flight at once."""
+        spans = Spans()
+
         async def slow(path):
-            await asyncio.sleep(TRIO_DELAY)
+            async with spans.span():
+                await asyncio.sleep(TRIO_DELAY)
             return [self._row(path, "a")]
 
-        started = time.perf_counter()
         docs = await self._asearch(slow)
-        elapsed = time.perf_counter() - started
 
         self.assertEqual(len(docs), len(self.paths))
-        serial = TRIO_DELAY * len(self.paths)
-        self.assertLess(elapsed, serial * 0.6,
-                        f"took {elapsed:.3f}s; serial would be ~{serial:.1f}s -> still sequential")
+        assert_ran_together(self, spans, len(self.paths))
 
     async def test_dedup_attribution_follows_index_paths_order_not_completion_order(self):
         """THE test the old 'keep it sequential' comment was written for.
@@ -171,21 +204,20 @@ class BooksOpenLibraryIAConcurrencyTests(unittest.IsolatedAsyncioTestCase):
         return "ol" if url == books.OL_URL else "ia"
 
     async def test_both_surfaces_are_fetched_concurrently(self):
-        """Two PAIR_DELAY-slow surfaces must finish well under their serial sum."""
+        """Two PAIR_DELAY-slow surfaces are both in flight at once."""
+        spans = Spans()
+
         async def slow(url, **kwargs):
-            await asyncio.sleep(PAIR_DELAY)
+            async with spans.span():
+                await asyncio.sleep(PAIR_DELAY)
             return {"surface": self._surface_of(url)}
 
         with mock.patch.object(books.http, "aget_json", side_effect=slow):
-            started = time.perf_counter()
             out = await self.adapter._araw_fetch("q", 10)
-            elapsed = time.perf_counter() - started
 
         self.assertEqual(out["ol"], {"surface": "ol"})
         self.assertEqual(out["ia"], {"surface": "ia"})
-        serial = PAIR_DELAY * 2
-        self.assertLess(elapsed, serial * 0.6,
-                        f"took {elapsed:.3f}s; serial would be ~{serial:.1f}s -> still sequential")
+        assert_ran_together(self, spans, 2)
 
     async def test_the_two_results_are_not_swapped_when_archive_answers_first(self):
         """Unrolled awaits have no target list to restore against, so the failure mode is the two
@@ -273,24 +305,23 @@ class TiebaConcurrencyTests(unittest.IsolatedAsyncioTestCase):
         return "threads" if url == tieba.THREAD_URL else "forums"
 
     async def test_both_endpoints_are_fetched_concurrently(self):
-        """Two PAIR_DELAY-slow endpoints must finish well under their serial sum.
+        """Two PAIR_DELAY-slow endpoints are both in flight at once.
 
         Same host, so 'gently' is a fair question to ask: gently means two GETs per search, which
         is what this issues either way, and the adapter carries no rate limit or politeness gap."""
+        spans = Spans()
+
         async def slow(url, params):
-            await asyncio.sleep(PAIR_DELAY)
+            async with spans.span():
+                await asyncio.sleep(PAIR_DELAY)
             return {"no": 0, "endpoint": self._endpoint_of(url)}
 
         with mock.patch.object(self.adapter, "_aget_json", slow):
-            started = time.perf_counter()
             out = await self.adapter._araw_fetch("q", 10)
-            elapsed = time.perf_counter() - started
 
         self.assertEqual(out["threads"]["endpoint"], "threads")
         self.assertEqual(out["forums"]["endpoint"], "forums")
-        serial = PAIR_DELAY * 2
-        self.assertLess(elapsed, serial * 0.6,
-                        f"took {elapsed:.3f}s; serial would be ~{serial:.1f}s -> still sequential")
+        assert_ran_together(self, spans, 2)
 
     async def test_the_two_results_are_not_swapped_when_the_forum_search_answers_first(self):
         """The thread search is made the SLOW one: its payload must still land under 'threads'."""
@@ -389,19 +420,18 @@ class HackerNewsConcurrencyTests(unittest.IsolatedAsyncioTestCase):
             return await self.adapter.asearch(query, limit)
 
     async def test_both_layers_are_queried_concurrently(self):
-        """Two PAIR_DELAY-slow Algolia queries must finish well under their serial sum."""
+        """Two PAIR_DELAY-slow Algolia queries are both in flight at once."""
+        spans = Spans()
+
         async def slow(url, **kwargs):
-            await asyncio.sleep(PAIR_DELAY)
+            async with spans.span():
+                await asyncio.sleep(PAIR_DELAY)
             return self._hits(self._layer_of(kwargs))
 
-        started = time.perf_counter()
         docs = await self._asearch(slow)
-        elapsed = time.perf_counter() - started
 
         self.assertEqual(len(docs), 4)
-        serial = PAIR_DELAY * 2
-        self.assertLess(elapsed, serial * 0.6,
-                        f"took {elapsed:.3f}s; serial would be ~{serial:.1f}s -> still sequential")
+        assert_ran_together(self, spans, 2)
 
     async def test_stories_still_precede_comments_when_comments_answer_first(self):
         """The two mapping loops run after the gather, in the original order, so a fast comment

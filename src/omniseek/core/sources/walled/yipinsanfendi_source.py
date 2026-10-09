@@ -27,6 +27,7 @@ from urllib.parse import quote, urlparse
 
 from bs4 import BeautifulSoup
 
+from omniseek.core import cache
 from omniseek.core.normalize import Document, jsonsafe
 from omniseek.core.sources.walled._base import BaseCDPAdapter
 from omniseek.core.sources.walled._cdp import (
@@ -98,6 +99,12 @@ class YipinsanfendiAdapter(BaseCDPAdapter):
         # yipin egress runs at a time and consecutive ones are >= _YIPIN_MIN_GAP_S apart. Cache hits
         # skip this entirely (the base returns before _run), so only real searches pay the gap. Covers
         # BOTH the search flow and the auth-heal re-flow (both route through _run).
+        if cache.cache_only():
+            # A cache-only collect drives no page: cdp_call raises CacheOnlyMiss at once. Taking the
+            # gate here would make the collect sleep up to _YIPIN_MIN_GAP_S, hold the lock against a
+            # real search, and stamp _YIPIN_LAST so the NEXT real search waits a full gap for an egress
+            # that never happened (2026-10-08 audit, the false-backoff class of 4b3ee36).
+            return super()._run(callback, initial_url)
         with _YIPIN_GATE:
             wait = _YIPIN_MIN_GAP_S - (time.monotonic() - _YIPIN_LAST[0])
             if wait > 0:

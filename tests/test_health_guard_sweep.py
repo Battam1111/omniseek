@@ -335,6 +335,12 @@ def _sandbox_after_import() -> None:
     # (smoke's convention for every test that imports that guard).
     from omniseek.core.sources.walled import xiaohongshu_cn_source
     xiaohongshu_cn_source._INCIDENT_PATH = Path(os.environ["HOME"]) / "xhs_cn_incidents.jsonl"
+    # The mainland source is sealed since 2026-10-07 (health then reads "sealed", None, before any
+    # breaker). This sweep checks the code that comes back on restore, so it runs it unsealed;
+    # tests/test_xhs_cn_seal.py covers the sealed reading.
+    from omniseek.core.sources.walled import _cdp
+    xiaohongshu_cn_source._SEALED = False
+    _cdp._SEALED_PORTS.pop(xiaohongshu_cn_source._SEALED_PORT, None)
 
 
 def _clear_probe_caches() -> None:

@@ -27,7 +27,7 @@ import unittest
 from contextvars import copy_context
 from unittest import mock
 
-from omniseek.core import cache
+from omniseek.core import cache, upstreams
 from omniseek.core.sources.api import orcid_source as orc
 from omniseek.core.sources.api import sec_financials_source as sec
 from omniseek.core.sources.walled import discord_communities_source as disc
@@ -50,6 +50,12 @@ class _Resp:
 
     def json(self):
         return self._payload
+
+
+# time.sleep (unlike asyncio.sleep) overshoots on the mini by up to 150 ms: macOS timer coalescing,
+# a hard cap in 560 samples at load ~5 on 2026-10-07 (asyncio.sleep: ~2 ms). The three sync fan-out
+# bounds below put their limit at the midpoint of (delay + this) and the serial floor N * delay.
+_SYNC_SLEEP_OVERSHOOT_S = 0.15
 
 
 # ═══════════════════════════════════════════════════════════════════ orcid
@@ -346,10 +352,23 @@ def _channels_of(gid: str) -> list[dict]:
             {"id": f"{gid}c2", "type": 5, "name": "announce"}]
 
 
+def _own_discord_gate(test: unittest.TestCase) -> None:
+    """Give one test its own Discord gate, built from the same declaration (50 requests/s).
+
+    The gate is one object per process, so a test that runs after others in the same second
+    inherits their requests: once the window is full it waits about a second for a slot, which is
+    the whole margin of a timing bound. The production gate is put back untouched afterwards."""
+    p = mock.patch.dict(upstreams._guards)
+    p.start()
+    test.addCleanup(p.stop)
+    upstreams._guards.pop("discord", None)
+
+
 class DiscordDiscoveryConcurrencyTests(unittest.TestCase):
     """Sync-only source: no asearch twin exists, so the fan-out is a thread pool, not gather."""
 
     def setUp(self):
+        _own_discord_gate(self)
         self.adapter = disc.DiscordCommunitiesAdapter()
         self.sets: list = []
         for target, repl in (("get", lambda *a, **k: None),
@@ -370,10 +389,12 @@ class DiscordDiscoveryConcurrencyTests(unittest.TestCase):
         return mock.patch.object(disc.http, "direct", side_effect=route)
 
     def test_guilds_are_listed_concurrently(self):
-        """Four 100ms guilds must finish well under the serial 400ms. A thread pool drops the wall
+        """Four 200ms guilds must finish well under the serial 800ms. A thread pool drops the wall
         clock exactly like gather does."""
+        delay = 0.2
+
         def slow(gid):
-            time.sleep(0.1)
+            time.sleep(delay)
             return _Resp(payload=_channels_of(gid))
 
         with self._mock(slow):
@@ -382,8 +403,10 @@ class DiscordDiscoveryConcurrencyTests(unittest.TestCase):
             elapsed = time.perf_counter() - started
 
         self.assertEqual(len(out), len(_GUILDS) * 2)  # 2 of the 3 channel types survive
-        serial = 0.1 * len(_GUILDS)
-        self.assertLess(elapsed, serial * 0.6,
+        serial = delay * len(_GUILDS)
+        # Midpoint of concurrent worst (0.2 + 0.15 = 0.35s) and serial floor (4 * 0.2 = 0.8s): 0.575s.
+        bound = (delay + _SYNC_SLEEP_OVERSHOOT_S + serial) / 2
+        self.assertLess(elapsed, bound,
                         f"took {elapsed:.3f}s; serial would be ~{serial:.1f}s -> still sequential")
 
     def test_order_is_restored_when_the_first_guild_answers_last(self):
@@ -499,6 +522,7 @@ class DiscordChannelPullConcurrencyTests(unittest.TestCase):
     _discover_channels would also have read as a deliberate choice to the next person through."""
 
     def setUp(self):
+        _own_discord_gate(self)
         self.adapter = disc.DiscordCommunitiesAdapter()
         for target, repl in (("get", lambda *a, **k: None), ("set", lambda *a, **k: None)):
             p = mock.patch.object(disc.cache, target, repl)
@@ -518,9 +542,11 @@ class DiscordChannelPullConcurrencyTests(unittest.TestCase):
         return mock.patch.object(disc.http, "direct", side_effect=route)
 
     def test_channels_are_pulled_concurrently(self):
-        """Five 100ms channels must finish well under the serial 500ms."""
+        """Five 150ms channels must finish well under the serial 750ms."""
+        delay = 0.15
+
         def slow(cid):
-            time.sleep(0.1)
+            time.sleep(delay)
             return _Resp(payload=_messages_of(cid))
 
         with self._mock(slow):
@@ -529,9 +555,11 @@ class DiscordChannelPullConcurrencyTests(unittest.TestCase):
             elapsed = time.perf_counter() - started
 
         self.assertEqual(len(docs), len(_CHANNELS) * 2)
-        serial = 0.1 * len(_CHANNELS)
-        self.assertLess(elapsed, serial * 0.6,
-                        f"took {elapsed:.3f}s; serial would be ~{serial:.1f}s -> still sequential")
+        serial = delay * len(_CHANNELS)
+        # Midpoint of concurrent worst (0.15 + 0.15 = 0.3s) and serial floor (5 * 0.15 = 0.75s): 0.525s.
+        bound = (delay + _SYNC_SLEEP_OVERSHOOT_S + serial) / 2
+        self.assertLess(elapsed, bound,
+                        f"took {elapsed:.3f}s; serial would be ~{serial:.2f}s -> still sequential")
 
     def test_order_is_restored_when_the_first_channel_answers_last(self):
         """Every message here carries the SAME timestamp, so the newest-first sort is entirely in
@@ -658,9 +686,11 @@ class WechatFeedConcurrencyTests(unittest.TestCase):
         return mock.patch.object(wx.http, "direct", side_effect=route)
 
     def test_feeds_are_pulled_concurrently(self):
-        """Four 100ms feeds must finish well under the serial 400ms."""
+        """Four 200ms feeds must finish well under the serial 800ms."""
+        delay = 0.2
+
         def slow(name):
-            time.sleep(0.1)
+            time.sleep(delay)
             return _Resp(body=_rss(str(_FEEDS.index(next(f for f in _FEEDS if f[0] == name)))))
 
         with self._mock(slow):
@@ -669,8 +699,10 @@ class WechatFeedConcurrencyTests(unittest.TestCase):
             elapsed = time.perf_counter() - started
 
         self.assertEqual(len(docs), len(_FEEDS))
-        serial = 0.1 * len(_FEEDS)
-        self.assertLess(elapsed, serial * 0.6,
+        serial = delay * len(_FEEDS)
+        # Midpoint of concurrent worst (0.2 + 0.15 = 0.35s) and serial floor (4 * 0.2 = 0.8s): 0.575s.
+        bound = (delay + _SYNC_SLEEP_OVERSHOOT_S + serial) / 2
+        self.assertLess(elapsed, bound,
                         f"took {elapsed:.3f}s; serial would be ~{serial:.1f}s -> still sequential")
 
     def test_order_is_restored_when_the_first_feed_answers_last(self):

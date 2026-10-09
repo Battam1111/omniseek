@@ -118,7 +118,11 @@ class ZhihuUsersAdapter:
         all_docs.sort(key=sort_key, reverse=True)
         all_docs = all_docs[:limit]
 
-        cache.set_docs(key, all_docs, ttl=1800, empty_ttl=300)  # session/selector empty must not pin 30m
+        # A cache-only collect skips every cold handle (cdp_call raises CacheOnlyMiss, swallowed above),
+        # so its answer is only the warm subset: writing it under the query key would serve that partial
+        # (or empty) list to the next LIVE search as if it were the full answer (2026-10-08 audit).
+        if not cache.cache_only():
+            cache.set_docs(key, all_docs, ttl=1800, empty_ttl=300)  # session/selector empty must not pin 30m
         return all_docs
 
     def _fetch_user_posts(self, handle: str, display_name: str) -> list[Document]:

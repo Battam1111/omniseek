@@ -1,4 +1,4 @@
-"""Credentials loader for OmniSeek eye source adapters.
+"""Credentials loader for OmniSeek source adapters.
 
 Credentials live in ~/.omniseek/credentials/<source>.json (outside the
 project directory, so they are never accidentally committed). Each

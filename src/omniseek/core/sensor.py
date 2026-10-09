@@ -22,10 +22,11 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import tempfile
 import threading
 import time
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field, fields, asdict
 from pathlib import Path
 from typing import Optional
 
@@ -70,6 +71,32 @@ class Sensor:
     total_runs: int = 0
 
 
+_SENSOR_FIELDS = frozenset(f.name for f in fields(Sensor))
+
+# Per-sensor push source. The push outlet routes by source; a sensor pushes under
+# DEFAULT_NOTIFY_SOURCE unless the side file beside sensors.json maps its id to another source.
+# The side file keeps sensors.json's format exactly as older builds read it (an older build loads
+# sensors.json with Sensor(**row), so one extra key there would read the whole store as empty and
+# the next save would wipe every sensor). Rolling back leaves the side file unread and harmless.
+DEFAULT_NOTIFY_SOURCE = "eye.sensor"
+NOTIFY_SOURCES_FILE = "sensor_notify_sources.json"
+# A custom source stays inside the sensor namespace (eye.sensor.<name>), lowercase dotted words.
+_NOTIFY_SOURCE_RE = re.compile(r"^eye\.sensor(\.[a-z0-9_]+)+$")
+_WARNED_MISSING: set[str] = set()
+
+
+def normalize_notify_source(source: Optional[str]) -> str:
+    """The stored form of a requested push source: "" for the default (empty, None or eye.sensor
+    itself), else the name if it is eye.sensor.<name>; anything else raises ValueError."""
+    name = (source or "").strip()
+    if not name or name == DEFAULT_NOTIFY_SOURCE:
+        return ""
+    if not _NOTIFY_SOURCE_RE.match(name):
+        raise ValueError(f"notify_source {source!r} must be empty (default {DEFAULT_NOTIFY_SOURCE}) "
+                         f"or {DEFAULT_NOTIFY_SOURCE}.<name> in lowercase letters, digits, _ and dots")
+    return name
+
+
 # One lock for every mutating load-modify-save cycle on sensors.json (the _RULINGS_LOCK idiom).
 # The atomic tmp+replace in _save only prevents a TORN file; without this lock two concurrent
 # writers (the in-process scheduler thread vs a manual omniseek_sensor action=run on a tool worker
@@ -85,6 +112,7 @@ class SensorStore:
 
     def __init__(self, path: Optional[Path] = None):
         self.path = path or _DEFAULT_STATE_PATH
+        self.sources_path = self.path.with_name(NOTIFY_SOURCES_FILE)
         self._ensure_dir()
 
     def _ensure_dir(self) -> None:
@@ -95,7 +123,10 @@ class SensorStore:
             return {}
         try:
             raw = json.loads(self.path.read_text(encoding="utf-8"))
-            return {s["id"]: Sensor(**s) for s in raw}
+            # Unknown keys (a field a newer build wrote) are dropped, not fatal: a whole-file
+            # failure here reads as an EMPTY store and the next save would wipe every sensor.
+            return {s["id"]: Sensor(**{k: v for k, v in s.items() if k in _SENSOR_FIELDS})
+                    for s in raw}
         except Exception as exc:
             log.warning("sensors.json unreadable (%s) -> empty", exc)
             return {}
@@ -108,6 +139,79 @@ class SensorStore:
         tmp.write_text(data, encoding="utf-8")
         tmp.replace(self.path)
 
+    # ── the push-source side file: {sensor id: source name}, only non-default entries ──
+    def _read_sources(self) -> tuple[dict[str, str], Optional[str]]:
+        """(mapping, problem). problem is None when the file read clean, "missing" when there is no
+        file, else why it is unreadable (the mapping then holds only the entries that read clean)."""
+        if not self.sources_path.exists():
+            return {}, "missing"
+        try:
+            raw = json.loads(self.sources_path.read_text(encoding="utf-8"))
+        except Exception as exc:  # noqa: BLE001
+            return {}, f"unreadable ({exc})"
+        if not isinstance(raw, dict):
+            return {}, f"not a JSON object ({type(raw).__name__})"
+        good = {k: v for k, v in raw.items() if isinstance(k, str) and isinstance(v, str)
+                and v and _NOTIFY_SOURCE_RE.match(v)}
+        bad = sorted(set(raw) - set(good))
+        return good, (f"bad entries ignored: {bad}" if bad else None)
+
+    def _save_sources(self, mapping: dict[str, str]) -> None:
+        self._ensure_dir()
+        tmp = self.sources_path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(dict(sorted(mapping.items())), ensure_ascii=False, indent=1),
+                       encoding="utf-8")
+        tmp.replace(self.sources_path)
+
+    def notify_sources(self) -> dict[str, str]:
+        """The readable {sensor id: source} entries (custom sources only); a damaged file logs a
+        warning and yields what read clean (an unreadable file: nothing, so every sensor defaults)."""
+        mapping, problem = self._read_sources()
+        if problem and problem != "missing":
+            log.warning("%s %s -> sensors without a readable entry push under %s",
+                        self.sources_path, problem, DEFAULT_NOTIFY_SOURCE)
+        return mapping
+
+    def notify_source(self, sensor_id: str) -> str:
+        """The source this sensor pushes under: its side-file entry, else DEFAULT_NOTIFY_SOURCE.
+        Fail-open: a missing file warns once per process, a damaged one warns on every read."""
+        mapping, problem = self._read_sources()
+        if problem == "missing":
+            key = str(self.sources_path)
+            if key not in _WARNED_MISSING:
+                _WARNED_MISSING.add(key)
+                log.warning("%s missing -> every sensor pushes under %s",
+                            self.sources_path, DEFAULT_NOTIFY_SOURCE)
+        elif problem:
+            log.warning("%s %s -> sensor %s pushes under %s unless its entry read clean",
+                        self.sources_path, problem, sensor_id, DEFAULT_NOTIFY_SOURCE)
+        return mapping.get(sensor_id) or DEFAULT_NOTIFY_SOURCE
+
+    def _put_source_locked(self, sensor_id: str, source: str) -> None:
+        """Set (or, for "", drop) one entry; caller holds _STORE_LOCK. Refuses to rewrite a file it
+        could not read, so a damaged file's other entries are never silently lost."""
+        mapping, problem = self._read_sources()
+        if problem and problem != "missing":
+            raise ValueError(f"{self.sources_path} {problem}; fix or move it aside first")
+        if mapping.get(sensor_id, "") == source:
+            return
+        if source:
+            mapping[sensor_id] = source
+        else:
+            del mapping[sensor_id]
+        self._save_sources(mapping)
+
+    def set_notify_source(self, sensor_id: str, source: Optional[str]) -> Optional[str]:
+        """Point one sensor at a push source ("" or None = back to the default), leaving sensors.json
+        untouched. Returns the sensor's source now, None if the sensor does not exist; raises
+        ValueError on a bad name or a damaged side file."""
+        name = normalize_notify_source(source)
+        with _STORE_LOCK:
+            if sensor_id not in self._load():
+                return None
+            self._put_source_locked(sensor_id, name)
+        return name or DEFAULT_NOTIFY_SOURCE
+
     def list_all(self) -> list[dict]:
         return [asdict(s) for s in self._load().values()]
 
@@ -117,9 +221,14 @@ class SensorStore:
     def create(self, query: str, sources: Optional[list[str]] = None,
                schedule: str = "daily", notify: bool = False,
                notify_if: Optional[list[str]] = None, notify_if_match: str = "any",
-               detect_absence: bool = False) -> Sensor:
+               detect_absence: bool = False, notify_source: Optional[str] = None) -> Sensor:
         import hashlib
+        name = normalize_notify_source(notify_source)
         with _STORE_LOCK:
+            if name:
+                _, problem = self._read_sources()
+                if problem and problem != "missing":
+                    raise ValueError(f"{self.sources_path} {problem}; fix or move it aside first")
             sensors = self._load()
             sid = "sensor_" + hashlib.sha256(
                 f"{query}:{time.time()}".encode()).hexdigest()[:12]
@@ -130,6 +239,8 @@ class SensorStore:
                        created_at=datetime.now(timezone.utc).isoformat())
             sensors[sid] = s
             self._save(sensors)
+            if name:
+                self._put_source_locked(sid, name)
         return s
 
     def delete(self, sensor_id: str) -> bool:
@@ -139,6 +250,11 @@ class SensorStore:
                 return False
             del sensors[sensor_id]
             self._save(sensors)
+            try:
+                self._put_source_locked(sensor_id, "")
+            except ValueError as exc:
+                log.warning("sensor %s deleted; its push-source entry was not removed: %s",
+                            sensor_id, exc)
         return True
 
     def update(self, sensor: Sensor) -> None:
@@ -376,7 +492,7 @@ def scheduler_tick(store: SensorStore) -> dict:
             ran.append(s.id)
             if s.notify and (summary.get("notify_new_count", summary.get("new_count", 0)) > 0
                              or summary.get("gone_count", 0) > 0):
-                _bark_new_results(s, summary)
+                _bark_new_results(s, summary, store)
         except Exception:  # noqa: BLE001 (one bad sensor must never stop the tick)
             log.exception("sensor %s (%s) failed in scheduler tick", s.id, s.query)
             failed.append(s.id)
@@ -404,17 +520,22 @@ def scheduler_tick_for_sensors() -> dict:
 # thin alias keeps the P6 call sites (_bark_new_results) unchanged and the same fail-open contract +
 # GROUP "OmniSeek" (spelled so the omniseek sync's OmniSeek->OmniSeek rename lands on both sides).
 
-def _alert(title: str, body: str) -> None:
+def _alert(title: str, body: str, *, source: str | None = None) -> None:
     """Fail-open alarm: delegates to notify.alert (WeCom; Bark was deleted 2026-08-12). Kept as a module-local
     name so the existing _bark_new_results call site is untouched and any monkeypatch of this symbol
-    in a test still works."""
+    in a test still works. ``source`` is passed only for a non-default source, so a
+    default sensor's call is unchanged and still goes out tagged eye.sensor."""
     from omniseek.core import notify
-    notify.alert(title, body)
+    if source:
+        notify.alert(title, body, source=source)
+    else:
+        notify.alert(title, body)
 
 
-def _bark_new_results(sensor: "Sensor", summary: dict) -> None:
+def _bark_new_results(sensor: "Sensor", summary: dict, store: Optional[SensorStore] = None) -> None:
     """Shape the runner's message for a notify=True sensor that turned up new results and push it:
-    title = the sensor query, body = the new count + the first new titles. Fail-open via _alert."""
+    title = the sensor query, body = the new count + the first new titles, under the sensor's push
+    source from ``store``'s side file (default store when None). Fail-open via _alert."""
     titles = summary.get("notify_titles") or summary.get("new_titles") or []
     count = summary.get("notify_new_count", summary.get("new_count", 0))
     parts = []
@@ -423,4 +544,13 @@ def _bark_new_results(sensor: "Sensor", summary: dict) -> None:
     if summary.get("gone_count", 0) > 0:
         parts.append(f"⚠️ {summary['gone_count']} 个被盯项已消失: " + ", ".join(summary.get("gone_titles") or []))
     body = "\n".join(parts) if parts else f"{count} 条新结果"
-    _alert(sensor.query, body)
+    try:
+        source = (store or SensorStore()).notify_source(sensor.id)
+    except Exception as exc:  # noqa: BLE001 (a lookup failure must never cost the push)
+        log.warning("sensor %s push source lookup failed (%s) -> %s",
+                    sensor.id, exc, DEFAULT_NOTIFY_SOURCE)
+        source = DEFAULT_NOTIFY_SOURCE
+    if source != DEFAULT_NOTIFY_SOURCE:
+        _alert(sensor.query, body, source=source)
+    else:
+        _alert(sensor.query, body)

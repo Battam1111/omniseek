@@ -20,6 +20,7 @@ durable marker, because a siren nobody hears is worse than no siren, the quiet r
 from __future__ import annotations
 
 import importlib.util
+import inspect
 import json
 import logging
 import os
@@ -81,6 +82,38 @@ def _caller_source() -> str:
         return "eye.unknown"
 
 
+def _clean_questions(questions) -> list[str]:
+    """The questions a push asks the operator to answer, as a clean list (one string or a list of them;
+    blank items dropped). Same shape the outlet uses, so an empty list means "no question"."""
+    if questions is None:
+        return []
+    if isinstance(questions, str):
+        questions = [questions]
+    try:
+        return [str(q).strip() for q in questions if q is not None and str(q).strip()]
+    except TypeError:
+        return []
+
+
+def _with_questions(body: str, questions: list[str]) -> str:
+    """The body with the questions on top under 要你答：, the layout the outlet itself uses, for a
+    send path that cannot carry them as a separate argument (an older outlet, the direct send)."""
+    if not questions:
+        return body
+    ask = "要你答：\n" + "\n".join("- " + q for q in questions)
+    return ask + ("\n\n" + body if body else "")
+
+
+def _outlet_takes_questions(outlet) -> bool:
+    """Whether the outlet's send() accepts ``questions=`` (the routing outlet does; the first
+    outlet does not, and pushes everything to the operator anyway)."""
+    try:
+        params = inspect.signature(outlet.send).parameters.values()
+    except (TypeError, ValueError):
+        return False
+    return any(p.name == "questions" or p.kind is inspect.Parameter.VAR_KEYWORD for p in params)
+
+
 def _direct_push(url: str, content: str) -> bool:
     """The pre-outlet send, kept as the fallback for when the outlet cannot be reached."""
     try:
@@ -98,7 +131,7 @@ def _direct_push(url: str, content: str) -> bool:
         return False
 
 
-def wecom_push(title: str, body: str) -> bool:
+def wecom_push(title: str, body: str, *, source: str | None = None, questions=None) -> bool:
     """POST one 企业微信 (WeCom) group-robot MARKDOWN message via the webhook in
     ~/.omniseek/credentials/wecom.json ({webhook_url}). the operator's channel (desktop + phone).
     Returns True only if the message was actually sent. WeCom markdown content hard-caps ~4096
@@ -112,7 +145,14 @@ def wecom_push(title: str, body: str) -> bool:
     (file missing, load failure, send() raising) the message goes out the old direct way with a
     warning: an alarm is never dropped for the outlet's sake. If the outlet answers False (its own
     rate limit or a failed send) nothing else is sent, so its limit is not bypassed and nothing is
-    sent twice."""
+    sent twice.
+
+    2026-10-11: the outlet routes by source, so ``source`` overrides the caller-derived
+    ``eye.<module>`` tag when one module sends pushes that belong in different places (the weekly
+    report, a sensor's direct lane). ``questions`` (one string or a list) are what the operator must
+    answer; the outlet sends a push carrying them to the operator whatever its source routes to. An
+    outlet whose send() has no ``questions`` parameter, and the direct send, get them on top of
+    the body under 要你答： instead, so they are never lost."""
     try:
         if not _WECOM_CREDS_PATH.exists():
             log.debug("wecom push skipped: no credentials at %s", _WECOM_CREDS_PATH)
@@ -124,10 +164,12 @@ def wecom_push(title: str, body: str) -> bool:
     if not url:
         log.debug("wecom push skipped: no webhook_url in credentials")
         return False
-    source = _caller_source()
+    source = source or _caller_source()
     from omniseek import redact as _redact
     title, body = _redact.redact(title), _redact.redact(body)  # every push leaves the machine here
-    content = (f"**{title}**\n\n{body}" if title else body)
+    asks = [_redact.redact(q) for q in _clean_questions(questions)]
+    shown = _with_questions(body, asks)
+    content = (f"**{title}**\n\n{shown}" if title else shown)
     content = _redact.redact(content)  # no key rides along
     enc = content.encode("utf-8")
     if len(enc) > 4000:  # stay safely under WeCom's ~4096-byte markdown cap (byte-safe, not char-safe)
@@ -146,7 +188,12 @@ def wecom_push(title: str, body: str) -> bool:
         from omniseek.core import upstreams
         with upstreams.egress(url, request_s=5.0):  # OmniSeek's declared WeCom gate, as before
             try:
-                ok = outlet.send(source, title, body)
+                if not asks:
+                    ok = outlet.send(source, title, body)
+                elif _outlet_takes_questions(outlet):
+                    ok = outlet.send(source, title, body, questions=asks)
+                else:
+                    ok = outlet.send(source, title, shown)
             except Exception as exc:  # noqa: BLE001 -- outlet broke mid-send: fall back below
                 failure = exc
     except Exception as exc:  # noqa: BLE001 -- the gate refused the push: dropped, as before
@@ -162,7 +209,7 @@ def wecom_push(title: str, body: str) -> bool:
     return True
 
 
-def alert(title: str, body: str, **_ignored) -> list:
+def alert(title: str, body: str, *, source: str | None = None, questions=None, **_ignored) -> list:
     """Deliver ONE alarm. Returns the channels that took it (empty means nobody heard it).
 
     ``_ignored`` absorbs the retired Bark hints (group / level) so a caller that still passes them
@@ -171,10 +218,18 @@ def alert(title: str, body: str, **_ignored) -> list:
     A lane that delivered NOTHING leaves a WARNING plus a durable marker with a running streak, so
     the daily off-machine audit can surface a disconnected siren. That marker is the whole reason
     this wrapper exists rather than callers pushing directly: an alarm channel is itself a guard,
-    and an unwatched guard is the failure this codebase spent 2026-08-11 learning about."""
+    and an unwatched guard is the failure this codebase spent 2026-08-11 learning about.
+
+    ``source`` and ``questions`` pass through to wecom_push (see there); they are forwarded only
+    when given, so the plain two-argument call is unchanged."""
     from omniseek import redact as _redact
     title, body = _redact.redact(title), _redact.redact(body)
-    delivered = ["wecom"] if wecom_push(title, body) else []
+    extra = {}
+    if source:
+        extra["source"] = source
+    if _clean_questions(questions):
+        extra["questions"] = questions
+    delivered = ["wecom"] if wecom_push(title, body, **extra) else []
     try:
         prev = {}
         if _ALERT_DELIVERY_PATH.exists():

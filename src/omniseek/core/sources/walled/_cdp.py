@@ -98,6 +98,24 @@ _CDP_SERVICES = {
     "9225": "com.omniseek.cdp.douyin",
 }
 
+# port → why it is sealed. A sealed port's browser is never started, kickstarted or driven by OmniSeek:
+# ensure_browser (the one door every cdp_call and render goes through) refuses it. Filled at import by
+# the adapter that owns the port and decides the seal (2026-10-07: xiaohongshu_cn seals 9224 from its
+# _SEALED flag), so the restore point stays in that adapter; this table only records it.
+_SEALED_PORTS: dict[str, str] = {}
+
+
+def seal_port(port: str, reason: str) -> None:
+    """Mark a CDP port as sealed: ensure_browser raises for it from now on (see _SEALED_PORTS)."""
+    _SEALED_PORTS[str(port)] = reason or "sealed"
+
+
+def sealed_port_reason(cdp_url: str) -> str:
+    """The seal reason for the port in ``cdp_url``, or "" when that port is not sealed."""
+    port = cdp_port(cdp_url)
+    return _SEALED_PORTS.get(port, "") if port else ""
+
+
 # port → how many connections OmniSeek may hold to that Chrome at once. The ONE place this is decided,
 # read by both ways in (the persistent pool, _pool_for, and the per-call path's gate, _gate_for):
 #   * 9222, the shared browser (大号 logins: zhihu, 一亩三分地, ...): 3, a few reused connections so
@@ -173,7 +191,13 @@ def ensure_browser(cdp_url: str) -> None:
     Raises RuntimeError if the browser cannot be brought up: the caller (cdp_call) already
     propagates exceptions and every walled adapter degrades a raise to an empty result, so a
     failed start surfaces as 'this source returned nothing' plus a logged reason, exactly like a
-    dead browser did before this existed."""
+    dead browser did before this existed.
+
+    A sealed port (_SEALED_PORTS) raises at once, on every platform, before any health probe or
+    kickstart: nothing is started and nothing is sent to that browser."""
+    sealed = sealed_port_reason(cdp_url)
+    if sealed:
+        raise RuntimeError(f"CDP port {cdp_port(cdp_url)} sealed: {sealed}")
     if sys.platform != "darwin":
         return
     label = cdp_service_for(cdp_url)

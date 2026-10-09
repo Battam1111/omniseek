@@ -192,7 +192,8 @@ class _MainlandCase(_OfflineCase):
         for n, v in self._GLOBALS.items():
             setattr(CN, n, v)
         self.signed = _Signed()
-        more = [patch.object(CN, "_bump_daily", _noop),
+        more = [patch.object(CN, "_SEALED", False),  # the mainland read path as it returns on restore
+                patch.object(CN, "_bump_daily", _noop),
                 patch.object(CN, "_note_browser_cdp", _noop),
                 patch.object(CN, "_DEPS_OK", True),        # the signed fallback is armed
                 patch.object(CN, "_signed_ready", lambda: (True, "")),

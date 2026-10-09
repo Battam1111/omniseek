@@ -1,4 +1,4 @@
-"""Unified fetcher — the entry point for OmniSeek eye operations.
+"""Unified fetcher — the entry point for OmniSeek operations.
 
 All source adapters register themselves with this module via
 register_adapter(). The fetcher then routes queries to the appropriate
@@ -18,7 +18,7 @@ import re
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError, wait
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional, Protocol, runtime_checkable
 from urllib.parse import urlparse
@@ -182,13 +182,31 @@ def retired_reason(adapter: "SourceAdapter") -> str:
     return ov if ov.lower().startswith("retired") else ""
 
 
+def sealed_reason(adapter: "SourceAdapter") -> str:
+    """The seal reason for this adapter ('' = not sealed). The ONE place that answers 'is this source
+    sealed': an adapter that its owner has switched off on purpose declares a ``sealed`` attribute
+    (a reason string; the adapter's own flag decides it, so restoring is one edit in that adapter).
+    A sealed source is out of the broad fan-out, never suggested as excluded_relevant, answers a
+    named call with an empty result plus the reason, reads health "sealed" (not a failure) and is
+    skipped by the health sweep and the session warmer. First user: xiaohongshu_cn (2026-10-07)."""
+    try:
+        v = getattr(adapter, "sealed", "")
+    except Exception:  # noqa: BLE001 (a broken property must never break routing)
+        return ""
+    return v if isinstance(v, str) else ("sealed" if v else "")
+
+
 def _explicit_only_reason(adapter: "SourceAdapter") -> str:
     """Why this adapter is excluded from the broad fan-out ('' = included).
 
-    A reversible retire wins first (the strongest, operator-applied exclusion, always observable);
+    A seal wins first (the source is switched off on purpose, see sealed_reason); then a reversible
+    retire (the strongest, operator-applied exclusion, always observable);
     then the adapter's own ``explicit_only`` attribute (True or a reason string); then any non-retire
     runtime overlay entry; then the emergency override dict.
     """
+    sr = sealed_reason(adapter)
+    if sr:
+        return f"sealed: {sr}"
     rr = retired_reason(adapter)
     if rr:
         return rr
@@ -760,6 +778,12 @@ def _build_diagnostic(adapter: "SourceAdapter", *, docs: list, captures: list,
 
     fail-open: any assembly error degrades to None (a diagnostic bug never breaks retrieval)."""
     try:
+        sr = sealed_reason(adapter)
+        if sr and not docs:
+            # Sealed on purpose: the empty is the answer, not a fault. Say so plainly (and flag it) so
+            # neither the agent nor the /eye-fix loop treats it as a broken source.
+            return {"adapter_path": _adapter_source_path(adapter), "returned": 0,
+                    "captures": [], "sealed": True, "note": sr}
         if docs and not captures and not timed_out and raised is None:
             return None  # the no-noise success case: results came back, nothing failed → no diagnostic
         # Captures whose helper ALREADY explains the empty (a search-index venue's engine_empty /
@@ -1133,6 +1157,7 @@ class PolicySnapshot:
     emergency: dict
     watchdog_down: frozenset
     watchdog_as_of: object
+    sealed: dict = field(default_factory=dict)  # name -> seal reason (sealed_reason); wins over all
 
 
 def _build_policy_snapshot(catalog: dict) -> PolicySnapshot:
@@ -1142,12 +1167,16 @@ def _build_policy_snapshot(catalog: dict) -> PolicySnapshot:
     as_of. Reads globals HERE (the impure assembly step); the plan it feeds stays pure."""
     enabled = set()  # type: set
     retired = {}  # type: dict
+    sealed = {}  # type: dict
     for name in catalog:
         adapter = get_adapter(name)
         if adapter is None:  # a live unregister between catalog build and now: legacy skips it too
             continue
         if _profile_enabled(name, adapter):
             enabled.add(name)
+        sr = sealed_reason(adapter)
+        if sr:
+            sealed[name] = sr
         rr = retired_reason(adapter)
         if rr:
             retired[name] = rr
@@ -1159,6 +1188,7 @@ def _build_policy_snapshot(catalog: dict) -> PolicySnapshot:
         emergency=dict(_EXPLICIT_ONLY_SOURCES),
         watchdog_down=frozenset(_watchdog_down_set()),
         watchdog_as_of=as_of,
+        sealed=sealed,
     )
 
 
@@ -1181,7 +1211,11 @@ def _plan_excluded_reason(rec: CatalogRecord, policy: PolicySnapshot) -> str:
     retire wins first (policy.retired), then the adapter's own static explicit_only
     (rec.static_explicit_only: True or a reason str), then any NON-retire runtime overlay entry
     (policy.overlay), then the emergency dict (policy.emergency). Same four-tier precedence, same
-    True -> 'explicit-only' coercion as the legacy function."""
+    True -> 'explicit-only' coercion as the legacy function. A seal (policy.sealed) precedes all four,
+    as in _explicit_only_reason."""
+    sr = policy.sealed.get(rec.name, "")
+    if sr:
+        return f"sealed: {sr}"
     rr = policy.retired.get(rec.name, "")
     if rr:
         return rr
@@ -1220,8 +1254,9 @@ def build_search_plan(catalog: dict, policy: PolicySnapshot, query: str,
         if reason:
             excluded[name] = reason
             # Query-AWARE absence hint, SKIPPING org_watch lab feeds (their papers already reach broad
-            # via arxiv/s2, so they flood any ML query) exactly as the legacy loop does.
-            if not reason.startswith("org_watch"):
+            # via arxiv/s2, so they flood any ML query) exactly as the legacy loop does. A SEALED source
+            # is never suggested either: re-running it by name only returns the seal note.
+            if not reason.startswith("org_watch") and name not in policy.sealed:
                 hit = (q_tokens & rec.route_tokens) if q_tokens else set()
                 if hit:
                     _er_scored.append((sum(er_idf[t] for t in hit), {
@@ -2750,7 +2785,7 @@ def list_sources(check_health: bool = False, domain: Optional[str] = None,
     verdict: set expectations + prioritise repairs), and recent ``health`` from the P19 watchdog
     (advisory — never blocks a source). Pass ``check_health=True`` for a fresh LIVE probe (slow).
 
-    ``health`` takes one of five values:
+    ``health`` takes one of six values:
       - ``ok``: the watchdog's last probe verified the source works (or one transient failure, below
         the down threshold);
       - ``down``: failing across consecutive runs;
@@ -2759,7 +2794,9 @@ def list_sources(check_health: bool = False, domain: Optional[str] = None,
         answer could not tell good from bad (a quota too scarce to spend, a declared gate or an open
         breaker holding the probe back, an HTTP 429 or other rate limit, an answer served from cache
         or stored state). Neither healthy nor failing;
-      - ``unknown``: the watchdog has no row for the source.
+      - ``unknown``: the watchdog has no row for the source;
+      - ``sealed``: switched off on purpose (see sealed_reason); not a failure. The entry also carries
+        ``sealed: true`` and ``sealed_reason`` (where to go instead).
     With ``check_health=True`` each entry also carries ``healthy``: true (verified working), false
     (verified broken) or null (not verified by this probe: the adapter asked the upstream nothing, or
     the probe timed out), plus ``status``, the adapter's own message saying why.
@@ -2791,6 +2828,9 @@ def list_sources(check_health: bool = False, domain: Optional[str] = None,
             health = "unverified"   # our last probe completed but, by design, asked the upstream nothing
         else:
             health = "ok"           # healthy, or just a single transient blip
+        _sealed = sealed_reason(adapter)
+        if _sealed:
+            health = "sealed"       # switched off on purpose (sealed_reason), not a failure
         _eo_reason = _explicit_only_reason(adapter)
         entry = {
             "name": name,
@@ -2815,6 +2855,7 @@ def list_sources(check_health: bool = False, domain: Optional[str] = None,
             "access_tier": _derive_access_tier(adapter),
             "health": health,
             "health_as_of": as_of,
+            **({"sealed": True, "sealed_reason": _sealed} if _sealed else {}),
         }
         # Structured-query hint (the vertical param an agent should put in ``query`` on a NAMED call),
         # present only when the source declares one (see _param_hint). OmniSeek's idiom for a typed

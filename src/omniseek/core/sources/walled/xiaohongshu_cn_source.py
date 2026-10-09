@@ -63,7 +63,7 @@ from urllib.parse import parse_qs, quote, urlparse
 
 from omniseek.core import _probe, cache, diag
 from omniseek.core.normalize import Document, is_blocked, mk_signal, selector_drift_hint
-from omniseek.core.sources.walled._cdp import cdp_call
+from omniseek.core.sources.walled._cdp import CacheOnlyMiss, cdp_call
 from omniseek.core.sources.walled.xiaohongshu_source import (
     _detail_has_substance as _xhs_detail_has_substance,
     _refused_landing as _xhs_refused_landing,
@@ -158,10 +158,22 @@ _DAILY_REQ_CAP = 150              # daily signed-request budget (community ~300/
 _COOLDOWN_LADDER = (3600, 14400, 86400)        # 1h / 4h / 24h, exponential per consecutive 风控 trip
 _TIMEOUT = 25
 
-_SEALED = False  # emergency kill-switch: True → every entry point inert (zero network).
-                 # 2026-06-21: this account got a platform 警告, but the operator's call = do NOT seal —
-                 # it is a disposable 小号 (BOTH logged xhs accounts are 小号, neither is a precious
-                 # 大号). Rely on the 风控 breaker below (auto-trips + exponential backoff on a signal).
+# THE ONE RESTORE POINT of the 2026-10-07 seal. True -> every entry point inert (zero network, zero
+# 9224), and the rest of OmniSeek reads it through the adapter's ``sealed`` attribute: the broad sweep
+# leaves the source out, a named call returns [] with _SEALED_MSG, health reads "sealed" (not a
+# failure, no alert), the session warmer skips it, _cdp refuses to start or kickstart port 9224, and
+# omniseek_read of a xiaohongshu.com note goes to the international adapter (9223). Set back to False and
+# everything returns as before (launchd side: scripts/unseal_xhs_cn.sh; docs/platform-notes/
+# xiaohongshu-cn-seal.md). Nothing is deleted by the seal: the 9224 profile and account data stay.
+# History: 2026-06-21 the account got a platform 警告 and the operator chose NOT to seal (a disposable
+# 小号; the 风控 breaker below was the guard). 2026-10-07 the operator: 「小红书还有个国际号能上呢，大陆号
+# 先封存吧，我怀疑都被封了。」 (breaker trips that day: 15:28 1h and 17:55 4h, login wall / captcha).
+_SEALED = True
+_SEALED_MSG = "已封存，小红书请用 xiaohongshu"
+_SEALED_PORT = "9224"
+if _SEALED:
+    from omniseek.core.sources.walled._cdp import seal_port as _seal_port
+    _seal_port(_SEALED_PORT, f"xiaohongshu_cn {_SEALED_MSG}")
 
 try:
     from xhshow import Xhshow
@@ -789,6 +801,19 @@ def _browser_alive() -> bool:
     return _BROWSER_OK and not _SEALED
 
 
+def _cache_only_skip(entry: str, url: Optional[str] = None) -> None:
+    """A cache-only collect missed the cache: say so and make NO live touch (2026-10-08 audit).
+
+    Without this the miss reached the browser slot (charging the shared daily cap and the pacing gap),
+    raised CacheOnlyMiss inside cdp_call, was counted by _note_browser_cdp(False) toward the 风控
+    cooldown and wrote a false incident, and then fell through to the signed API, whose raw curl_cffi
+    egress the cache-only guard in http.py does not cover. The same false-backoff class 4b3ee36 fixed
+    for the international source."""
+    diag.note("xiaohongshu_cn.cache_only", url=url, body=(
+        f"cache-only collect, {entry}: cache miss, NO live call was made (no browser, no signed API). "
+        "NOT a failure; nothing counted toward the 风控 breaker or the daily cap."))
+
+
 def _note_browser_cdp(ok: bool) -> None:
     """Feed one 9224 browser-CDP outcome to the breaker: a real return clears the streak; a fully-failed
     flow extends it and, on a sustained streak, trips this account's exponential 风控 cooldown — so a
@@ -957,9 +982,12 @@ def _browser_search(query: str, limit: int) -> tuple[str, list]:
     XHR does NOT fire (probed live 2026-06-25), so this is a DOM parse, unlike the rednote 小号's XHR
     intercept. The browser still issues its OWN real signed navigation; we forge nothing, only read
     what it renders. Returns (status, docs): 'ok' | 'login' (login overlay / captcha → caller trips the
-    breaker) | 'capped' (daily volume cap) | 'error' (CDP failure → caller falls back to signed-API).
+    breaker) | 'capped' (daily volume cap) | 'cache_only' (a cache-only collect: no live touch) | 'error' (CDP failure → caller falls back to signed-API).
     Strictly serial + human-paced via _browser_slot (== the 9223 pool-of-1 invariant)."""
     global _browser_last_flow, _browser_next_gap
+    if cache.cache_only():  # before the slot, the daily cap and the pacing gap: no live touch at all
+        _cache_only_skip("browser search")
+        return ("cache_only", [])
     if not _browser_slot.acquire(timeout=_BROWSER_SLOT_TIMEOUT):
         diag.note("xiaohongshu_cn.browser_gate",
                   body=f"9224 busy: queued live search exceeded {_BROWSER_SLOT_TIMEOUT:.0f}s slot wait "
@@ -1018,8 +1046,16 @@ def _browser_search(query: str, limit: int) -> tuple[str, list]:
         # 'safe' (default) human profile — NOT _human.fast (fast is cleared ONLY for the international
         # 小号; this WARNED account stays slower, safety research §5). timeout 85s < the omniseek_search 单源钻取 search
         # deadline (~90s) so cdp_call cleans up before the fetcher backstop fires.
+        drove = True  # False only when cdp_call refused before any page was driven
         try:
             status, html = cdp_call(_flow, initial_url=None, timeout=85, cdp_url=_CN_CDP_URL)
+        except CacheOnlyMiss:
+            # cache-only mode reached cdp_call past the guard above: no page was driven, so nothing is
+            # counted toward the 风控 cooldown, recorded as an incident, stamped as a pacing gap, or
+            # sent down the signed fallback.
+            drove = False
+            _cache_only_skip("browser search")
+            return ("cache_only", [])
         except Exception as exc:  # noqa: BLE001
             _note_browser_cdp(False)  # sustained 9224 CDP failures → trip a cooldown (don't re-nav every query)
             # BLACK BOX: this is the branch that sends a healthy-looking query down the signed
@@ -1031,10 +1067,11 @@ def _browser_search(query: str, limit: int) -> tuple[str, list]:
                       body="9224 CDP search flow raised (Chrome wedged / timeout?) — falling back to signed-API")
             return ("error", [])
         finally:
-            with _browser_rate_lock:
-                _browser_last_flow = time.time()
-                _extra = max(0.0, min(_BROWSER_GAP_EXTRA_MAX, random.lognormvariate(0.4, 0.7)))
-                _browser_next_gap = random.uniform(_BROWSER_GAP_LO, _BROWSER_GAP_HI) + _extra
+            if drove:
+                with _browser_rate_lock:
+                    _browser_last_flow = time.time()
+                    _extra = max(0.0, min(_BROWSER_GAP_EXTRA_MAX, random.lognormvariate(0.4, 0.7)))
+                    _browser_next_gap = random.uniform(_BROWSER_GAP_LO, _BROWSER_GAP_HI) + _extra
         _note_browser_cdp(True)  # a real return (even login/empty) clears the CDP-failure streak
         if status == "login":
             return ("login", [])
@@ -1063,11 +1100,15 @@ def _browser_fetch(note_id: str, token: str, url: str) -> tuple[str, Optional["D
     /comment/page XHR + exhaustively DOM-load the comment thread + surface carousel images. Mirrors
     the rednote 小号's _fetch_url_live. Returns (status, doc): 'login' → caller trips the breaker;
     'refused' → the platform redirected the note to /404, its verdict on this link (caller stops);
+    'cache_only' → a cache-only collect, nothing was driven (caller stops);
     'unopened' → the browser never got the page open: it could not start, connect, or timed out
     (the ONLY status on which the caller may try the signed API); 'error' → the page opened but
     gave nothing readable, or the flow died after it opened (caller stops). READ-ONLY (the expander
     clicks reveal only what a human reader would; no like / follow / comment)."""
     global _browser_last_flow, _browser_next_gap
+    if cache.cache_only():  # before the slot, the daily cap and the pacing gap: no live touch at all
+        _cache_only_skip("browser read", url)
+        return ("cache_only", None)
     if not _browser_slot.acquire(timeout=_BROWSER_SLOT_TIMEOUT):
         diag.note("xiaohongshu_cn.browser_gate", url=url,
                   body=f"9224 busy: queued live fetch exceeded {_BROWSER_SLOT_TIMEOUT:.0f}s slot wait "
@@ -1152,9 +1193,14 @@ def _browser_fetch(note_id: str, token: str, url: str) -> tuple[str, Optional["D
 
         # 'safe' (default) human profile — NOT _human.fast (fast is cleared only for the international
         # 小号). timeout 110s < fetch_timeout (120) so cdp_call cleans up before the fetcher backstop.
+        drove = True  # False only when cdp_call refused before any page was driven
         try:
             flow_result = cdp_call(_flow, initial_url=None,
                                    timeout=110, cdp_url=_CN_CDP_URL)
+        except CacheOnlyMiss:
+            drove = False  # same as the search flow: no page, so no count, no incident, no pacing gap
+            _cache_only_skip("browser read", url)
+            return ("cache_only", None)
         except Exception as exc:  # noqa: BLE001
             _note_browser_cdp(False)  # sustained 9224 CDP failures → trip a cooldown (don't re-nav every query)
             _record_incident("browser_fetch_error", exc_type=type(exc).__name__,
@@ -1169,10 +1215,11 @@ def _browser_fetch(note_id: str, token: str, url: str) -> tuple[str, Optional["D
                            "could not start, connect, or timed out); the signed fallback may run")
             return ("unopened", None)
         finally:
-            with _browser_rate_lock:
-                _browser_last_flow = time.time()
-                _extra = max(0.0, min(_BROWSER_GAP_EXTRA_MAX, random.lognormvariate(0.4, 0.7)))
-                _browser_next_gap = random.uniform(_BROWSER_GAP_LO, _BROWSER_GAP_HI) + _extra
+            if drove:
+                with _browser_rate_lock:
+                    _browser_last_flow = time.time()
+                    _extra = max(0.0, min(_BROWSER_GAP_EXTRA_MAX, random.lognormvariate(0.4, 0.7)))
+                    _browser_next_gap = random.uniform(_BROWSER_GAP_LO, _BROWSER_GAP_HI) + _extra
         _note_browser_cdp(True)
         # Unpacked OUTSIDE the try above on purpose. The shape of our own return tuple is OUR bug;
         # inside that try a ValueError here is charged to the browser -- it trips the CDP cooldown
@@ -1252,6 +1299,11 @@ class XiaohongshuCNAdapter:
     fetch_timeout = 120.0  # >= the browser path's 110s cdp_call (matches the rednote 小号); the old 90s
                            # would let omniseek_read's backstop kill an in-progress fetch + orphan a 9224 tab.
 
+    @property
+    def sealed(self) -> str:
+        """The seal reason the fetcher, the health sweep and the warmer read ("" = not sealed)."""
+        return _SEALED_MSG if _SEALED else ""
+
     def _alive(self) -> bool:
         # Alive if EITHER path is available: the browser path (primary) or the signed-API (fallback).
         return (_BROWSER_OK or _DEPS_OK) and not _SEALED
@@ -1268,10 +1320,11 @@ class XiaohongshuCNAdapter:
         Because nothing is asked of xiaohongshu, an armed state is None (not verified), never True;
         a state that cannot serve (no deps, sealed) stays False. An open 风控 breaker sends nothing
         by design, so it is None too, with the cooldown left (until 2026-10-04 it read False)."""
+        if _SEALED:
+            # Sealed on purpose (2026-10-07), not broken: None, so no sweep counts it as a failure.
+            return None, f"sealed: {_SEALED_MSG}"
         if not (_BROWSER_OK or _DEPS_OK):
             return False, "browser deps (bs4/lxml + xiaohongshu_source helpers) AND signed deps (xhshow/curl_cffi) both unavailable"
-        if _SEALED:
-            return False, "sealed (manual kill-switch)"
         if _tripped():
             return None, _probe.breaker_open(f"风控 breaker: {_last_signal}", _tripped_until - time.time())
         primary = "browser (9224 自发签名 XHR)" if _BROWSER_OK else "signed-API"
@@ -1291,11 +1344,15 @@ class XiaohongshuCNAdapter:
 
     def search(self, query: str, limit: int = 20) -> list[Document]:
         if _SEALED:
+            diag.note("xiaohongshu_cn.sealed", body=_SEALED_MSG)
             return []
         key = cache.make_key("xiaohongshu_cn", "search", query, limit)
         cached = cache.get(key)
         if cached:  # non-empty hit only (a cached [] is a miss — xhs transient empties aren't authoritative)
             return [Document.model_validate(d) for d in cached]
+        if cache.cache_only():
+            _cache_only_skip("search")
+            return []
         if _tripped():  # gate LIVE calls when the 风控 breaker is open (cache above served regardless)
             reason = f"风控 breaker OPEN: {_last_signal}"
             logger.info("xhs_cn search skip (breaker open): %s", reason)
@@ -1312,7 +1369,7 @@ class XiaohongshuCNAdapter:
                     "9224 大陆号: 登录浮层 / 验证码 on xiaohongshu.com — re-login via VNC. xhs_cn data path "
                     "is DARK until then (this is NOT a query miss / empty result)."))
                 return []
-            if status == "capped":  # over the daily volume cap (breaker already tripped) — do NOT also hit signed
+            if status in ("capped", "cache_only"):  # over the daily cap, or a cache-only collect: do NOT also hit signed
                 return []
             if status == "ok":
                 # AUTHORITATIVE: a completed browser flow IS the answer (even when empty). Do NOT fall
@@ -1341,6 +1398,9 @@ class XiaohongshuCNAdapter:
         cached = cache.get(key)
         if cached:  # non-empty hit only; a cached [] is treated as a miss (xhs transient empties
             return [Document.model_validate(d) for d in cached]  # are never authoritative)
+        if cache.cache_only():
+            _cache_only_skip("signed search")
+            return []
         if _signed_tripped():  # cache above is served regardless; gate LIVE calls only when a breaker is open
             reason = f"风控 breaker OPEN: {_last_signal or _last_signed_signal}"
             logger.info("xhs_cn search skip (breaker open): %s", reason)
@@ -1425,7 +1485,7 @@ class XiaohongshuCNAdapter:
 
     def fetch_url(self, url: str) -> Optional[Document]:
         if _SEALED:
-            return None
+            return None  # silent non-claim: the international adapter owns xiaohongshu.com while sealed
         note_id, token = _parse_note_url(url)
         if not note_id:
             return None
@@ -1434,6 +1494,9 @@ class XiaohongshuCNAdapter:
         cached = cache.get(key)
         if cached is not None:
             return Document.model_validate(cached)
+        if cache.cache_only():
+            _cache_only_skip("read", url)
+            return None
         if _tripped():  # gate LIVE here only when the 风控 breaker is open (cache above served regardless)
             reason = f"风控 breaker OPEN: {_last_signal}"
             logger.info("xhs_cn fetch skip (breaker open): %s", reason)
@@ -1452,7 +1515,7 @@ class XiaohongshuCNAdapter:
                 diag.note("xiaohongshu_cn.login_wall", url=url, body=(
                     "9224 大陆号 logged OUT / captcha — re-login via VNC (note body unreadable until then)."))
                 return None
-            if status == "capped":
+            if status in ("capped", "cache_only"):
                 return None
             if status == "ok" and doc is not None:
                 cache.set(key, doc.model_dump(mode="json"), ttl=_CACHE_TTL)
@@ -1484,6 +1547,9 @@ class XiaohongshuCNAdapter:
         cached = cache.get(key)
         if cached is not None:
             return Document.model_validate(cached)
+        if cache.cache_only():
+            _cache_only_skip("signed read", url)
+            return None
         # Which links may reach the signed API (2026-09-26). A link with no xsec_token never does.
         # An App share link (xsec_source=app_share) never does either: share links are read through
         # the browser only, because every 461 in the incident black box came from a share link or

@@ -1,4 +1,4 @@
-"""Source adapters for the OmniSeek eye.
+"""Source adapters for the OmniSeek.
 
 Each adapter implements the SourceAdapter protocol defined in fetcher.py.
 Adapters are organized by access mechanism:

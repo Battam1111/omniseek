@@ -84,7 +84,7 @@ def _should_alert(key: str, alerts: dict, cooldown: int) -> bool:
     return True
 
 
-def _alert(title: str, body: str, **_ignored) -> None:
+def _alert(title: str, body: str, *, questions=None, **_ignored) -> None:
     """Fail-open in-process ALARM. Retired Bark's group/level hints are absorbed and ignored.
 
     2026-08-12: Bark was deleted from the fleet. It had been unreachable from the mini (three
@@ -93,10 +93,16 @@ def _alert(title: str, body: str, **_ignored) -> None:
     logged as pushed, and delivered nowhere, which is worse than having no alarms because the quiet
     reads as calm. One channel now, WeCom, which answers in 0.06s and is where the operator actually
     reads. The contract is unchanged: never raise, a broken alarm must not break the job that
-    raised it."""
+    raised it.
+
+    ``questions``: what the operator must do or answer; given, the push goes to the operator
+    whatever eye.infra_jobs routes to (see notify.wecom_push)."""
     try:
         from omniseek.core import notify
-        notify.alert(title, body)
+        if questions:
+            notify.alert(title, body, questions=questions)
+        else:
+            notify.alert(title, body)
     except Exception as exc:  # noqa: BLE001 -- a push failure never breaks a job
         log.debug("infra_jobs alert swallowed (%s)", exc)
 
@@ -127,7 +133,10 @@ REALERT_COOLDOWN_S = 3 * 24 * 3600      # while still down, re-nag at most every
 _CDP_SOURCES = {"xiaohongshu", "xiaomuchong", "zhihu", "zhihu_users", "yipinsanfendi", "scrape_js_sites"}
 # CDP-Chrome instances to liveness-check directly (label -> CDP URL). None = default 9222.
 _CDP_INSTANCES = {"9222-shared": None, "9223-xhs": "http://127.0.0.1:9223"}
-_SEALED_SOURCES: set[str] = set()
+# SEALED sources (switched off on purpose) are not a list kept here: each run reads them off the
+# adapters through fetcher.sealed_reason, so the adapter's own flag is the one restore point. A sealed
+# source is NOT probed (a probe of a sealed source asks nothing and would only add noise) and its
+# stale fail / status / alert rows are dropped, so it never reads or alerts as down.
 
 # Rows in the watchdog state that are NOT sources. _health_track writes one "_cdp:<label>" row per
 # CDP-Chrome instance alongside the per-source rows, so the state file mixes two namespaces in one
@@ -350,8 +359,13 @@ def run_source_health(scope: str = "all") -> dict:
         a = fetcher.get_adapter(n)
         return bool(fetcher.retired_reason(a)) if a is not None else False
     retired = {n for n in names if _is_retired(n)}
-    noncdp = [n for n in names if n not in _CDP_SOURCES and n not in _SEALED_SOURCES]
-    cdp = [n for n in names if n in _CDP_SOURCES] if full else []  # CDP ones, retired or not: full lane only
+
+    def _is_sealed(n: str) -> bool:
+        a = fetcher.get_adapter(n)
+        return bool(fetcher.sealed_reason(a)) if a is not None else False
+    sealed = {n for n in names if _is_sealed(n)}
+    noncdp = [n for n in names if n not in _CDP_SOURCES and n not in sealed]
+    cdp = [n for n in names if n in _CDP_SOURCES and n not in sealed] if full else []  # CDP ones, retired or not: full lane only
 
     def probe_named(n):
         return n, _health_probe(fetcher.get_adapter(n))
@@ -518,7 +532,9 @@ def run_source_health(scope: str = "all") -> dict:
     # A retired source is probed only for the alive-again signal above -> drop its stale fail / status /
     # alert entries so a parked source self-cleans instead of freezing at a stale "down" (no manual
     # state edit ever needed), and this run's probe never lands in them.
-    for r in retired:
+    # A SEALED source was not probed at all; drop its old rows the same way, so a source sealed while
+    # it read "down" stops showing (and re-alerting) as down.
+    for r in retired | sealed:
         fails.pop(r, None)
         snap.pop(r, None)
         unm.pop(r, None)
@@ -538,7 +554,8 @@ def run_source_health(scope: str = "all") -> dict:
              len(newly_down), len(recovered), pushed)
     return {"healthy": n_green, "failed": n_failed, "unverified": n_unverified,
             "unmeasured": n_unmeasured, "probed": len(probed), "newly_down": len(newly_down),
-            "recovered": len(recovered), "alert": pushed, "pruned": _pr["pruned"]}
+            "recovered": len(recovered), "alert": pushed, "pruned": _pr["pruned"],
+            "sealed": sorted(sealed)}
 
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
@@ -1259,8 +1276,23 @@ def _needs_relogin_alert(r: dict) -> bool:
     """The "re-login this account" alert is only true of a session the warmer actually LOOKED AT
     and found bad. Not for one it could not reach (``unprobed``: an unobserved state is not a
     negative), and not for an autofill-backed forum (``self_heals``: its reactive search path
-    already alerts on a failed re-login)."""
-    return not r["ok"] and not r.get("unprobed") and not r.get("self_heals")
+    already alerts on a failed re-login), and not for a sealed browser the warmer skipped
+    (``skipped``: nothing was looked at)."""
+    return not r["ok"] and not r.get("unprobed") and not r.get("self_heals") and not r.get("skipped")
+
+
+def _warmer_sealed(cdp: str) -> str:
+    """The seal reason for the Chrome at ``cdp`` ('' = not sealed). Reads _cdp's sealed-port table,
+    which the owning adapter fills at import from its own flag (xiaohongshu_cn seals 9224), so the
+    warmer never keeps a second copy of the decision. Importing the owner here makes the table
+    complete in a process-isolated job that has not loaded the sources yet."""
+    try:
+        from omniseek.core.sources.walled import xiaohongshu_cn_source  # noqa: F401 (registers its port seal)
+        from omniseek.core.sources.walled._cdp import sealed_port_reason
+        return sealed_port_reason(cdp)
+    except Exception as exc:  # noqa: BLE001 -- a broken check must not stop the other accounts
+        log.debug("session-warmer: seal check failed (%s)", exc)
+        return ""
 
 
 def run_session_warmer() -> dict:
@@ -1294,6 +1326,12 @@ def run_session_warmer() -> dict:
     with sync_playwright() as p:
         for label, (cdp, home, search_tpl, key, probe) in _WARMER_INSTANCES.items():
             if only and not (label in only or key in only):  # WARMER_ONLY accepts label or ASCII key
+                continue
+            _sr = _warmer_sealed(cdp)
+            if _sr:  # sealed on purpose: never open or drive that browser (no alert, nothing sent)
+                log.info("session-warmer %s: sealed -> skip (%s)", label, _sr)
+                results.append({"label": label, "ok": None, "skipped": "sealed", "reason": _sr,
+                                "notes": None, "acw_tc": None, "web_session": None})
                 continue
             r = _warm_one(p, label, cdp, home, search_tpl, key, probe)
             results.append(r)
@@ -1334,21 +1372,25 @@ def run_session_warmer() -> dict:
         if _should_alert(f"session_degraded:{r['label']}", alerts, _WARMER_COOLDOWN_S):
             _alert(f"{r['label']} session 退化",
                   f"暖号验证失败:{r['reason']}。登录态可能已失效,需 VNC 进 mini 重新扫码登录该账号"
-                  f"({r['label']} 的 Chrome 窗口)。", group="OmniSeek-Health")
+                  f"({r['label']} 的 Chrome 窗口)。", group="OmniSeek-Health",
+                  questions=[f"请 VNC 进 mini，在 {r['label']} 的 Chrome 窗口重新扫码登录该账号"])
 
     state["_alerts"] = alerts
     state["last_run"] = time.strftime("%Y-%m-%d %H:%M:%S")
     state["last_results"] = [
         {**{k: r[k] for k in ("label", "ok", "notes", "acw_tc", "reason")},
-         "unprobed": bool(r.get("unprobed"))}
+         "unprobed": bool(r.get("unprobed")),
+         **({"skipped": r["skipped"]} if r.get("skipped") else {})}
         for r in results]
     _save_state(_WARMER_STATE, state)
-    degraded = [r["label"] for r in results if not r["ok"] and not r.get("unprobed")]
+    degraded = [r["label"] for r in results
+                if not r["ok"] and not r.get("unprobed") and not r.get("skipped")]
     unprobed = [r["label"] for r in results if r.get("unprobed")]
-    log.info("session-warmer: warmed=%s degraded=%s unprobed=%s",
-             [r["label"] for r in results if r["ok"]], degraded, unprobed)
+    sealed = [r["label"] for r in results if r.get("skipped") == "sealed"]
+    log.info("session-warmer: warmed=%s degraded=%s unprobed=%s sealed=%s",
+             [r["label"] for r in results if r["ok"]], degraded, unprobed, sealed)
     return {"warmed": [r["label"] for r in results if r["ok"]],
-            "degraded": degraded, "unprobed": unprobed}
+            "degraded": degraded, "unprobed": unprobed, "sealed": sealed}
 
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
@@ -1973,6 +2015,7 @@ def run_digest() -> dict:
     # Push to 企业微信 (WeCom, the operator's MAIN channel) ONLY -- NOT Bark (the operator 2026-07-14). The full
     # Markdown is saved above; WeCom carries the briefing (agent) or the top-5 highlights (fallback).
     from omniseek.core import notify
-    notify.wecom_push(f"OmniSeek 周报 · {ts.date().isoformat()}", push_body)
+    # Its own source, so the outlet can route the weekly report apart from the alarms.
+    notify.wecom_push(f"OmniSeek 周报 · {ts.date().isoformat()}", push_body, source="eye.weekly")
     log.info("digest[%s]: wrote %s (%d themes); wecom push sent", mode, _DIGEST_DIR / "latest.md", len(themes))
     return {"themes": len(themes), "mode": mode}

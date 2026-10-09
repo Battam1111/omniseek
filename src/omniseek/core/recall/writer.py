@@ -237,9 +237,19 @@ def _materialize_pending(
     global _materialization_failures, _last_materialization_failure
     active_journal = journal or _journal()
     cursor = _materialization_cursor(con, active_journal)
-    pending = active_journal.pending(after_seq=cursor, limit=limit)
+    pending = active_journal.iter_pending(after_seq=cursor, limit=limit)
     applied = 0
-    for observation in pending:
+    while True:
+        try:
+            observation = next(pending)
+        except StopIteration:
+            break
+        except Exception as exc:  # noqa: BLE001 -- an unreadable blob stops replay like a failed apply
+            _materialization_failures += 1
+            _last_materialization_failure = f"seq={cursor + applied + 1} {type(exc).__name__}: {exc}"
+            logger.warning("observation materialization stopped at seq %d: %s",
+                           cursor + applied + 1, exc)
+            break
         try:
             _apply(
                 con,
@@ -250,7 +260,7 @@ def _materialize_pending(
             applied += 1
         except Exception as exc:  # noqa: BLE001 -- stop at the first unmaterialized sequence
             try:
-                con.rollback()
+                _rollback(con)
             except Exception:  # noqa: BLE001
                 pass
             _materialization_failures += 1
@@ -483,7 +493,7 @@ def _writer_loop() -> None:
         except Exception as exc:  # noqa: BLE001 — never let the writer thread die
             logger.warning("recall writer cycle errored: %s", exc)
             try:
-                con.rollback()
+                _rollback(con)
             except Exception:  # noqa: BLE001
                 pass
     # STOP requested (graceful shutdown): FINAL FLUSH of everything still queued. Best-effort within
@@ -520,7 +530,7 @@ def _final_flush(con) -> None:
             logger.warning("recall writer final-flush batch errored (%d item(s) already committed): %s",
                            total, exc)
             try:
-                con.rollback()
+                _rollback(con)
             except Exception:  # noqa: BLE001
                 pass
     while _JOURNAL_WAKE.is_set():
@@ -545,6 +555,20 @@ def vec_embed_failures() -> int:
     return _vec_fail
 
 
+def _commit(con) -> None:
+    """Commit, then hand the vector changes this transaction staged to the cached matrices."""
+    con.commit()
+    store.publish_staged()
+
+
+def _rollback(con) -> None:
+    """Roll back, and forget the vector changes this transaction staged."""
+    try:
+        con.rollback()
+    finally:
+        store.discard_staged()
+
+
 def _delete_observation(con, source: str, source_id: str) -> None:
     """Materialize a tombstone across both full and thin recall projections."""
     row = con.execute(
@@ -557,8 +581,8 @@ def _delete_observation(con, source: str, source_id: str) -> None:
         con.execute("DELETE FROM vec_chunk WHERE rowid = ?", (rowid,))
         con.execute("DELETE FROM vec WHERE rowid = ?", (rowid,))
         con.execute("DELETE FROM docs WHERE rowid = ?", (rowid,))
-        store.note_vec_write()
-        store.note_chunk_write()
+        store.stage_vec(rowid)
+        store.stage_chunks(rowid)
     from omniseek.core.recall.graph import doc_node_id
     node_id = doc_node_id(source, source_id)
     thin_row = con.execute("SELECT 1 FROM graph_nodes WHERE id = ?", (node_id,)).fetchone()
@@ -566,7 +590,7 @@ def _delete_observation(con, source: str, source_id: str) -> None:
         con.execute("DELETE FROM graph_edges WHERE src = ? OR dst = ?", (node_id, node_id))
         con.execute("DELETE FROM vec_thin WHERE node_id = ?", (node_id,))
         con.execute("DELETE FROM graph_nodes WHERE id = ?", (node_id,))
-        store.note_thin_write()
+        store.stage_thin(node_id)
 
 
 def _apply(
@@ -659,12 +683,12 @@ def _apply(
                     (str(seq),))
         con.execute("INSERT OR REPLACE INTO meta(k, v) VALUES('journal_materialized_hash', ?)",
                     (event_hash,))
-    con.commit()
-    # Warm the vector matrices HERE, on the writer thread, so the rebuild (a full reload + renormalize,
-    # ~131MB at 32k rows) stops landing on a search READ thread. Because ingest writes on essentially
-    # every search, the read path used to eat one rebuild per ~20s debounce window; the writer holding
-    # this WAL connection refreshes them off that path. Best-effort + fail-open: the read path still
-    # rebuilds on demand if this is skipped, so correctness never depends on it.
+    _commit(con)
+    # Bring the vector matrices up to date HERE, on the writer thread, so the work stops landing on a
+    # search READ thread. Since eye-mem-3 this applies the changes the commit just published to the
+    # cached matrices in place (store._apply_deltas); a full rebuild from SQLite happens only on the
+    # first build, a model change or an undescribed change. Best-effort + fail-open: the read path
+    # applies the same pending changes on demand if this is skipped, so correctness never depends on it.
     if staged or thin_staged or chunk_staged:
         try:
             if staged:
@@ -695,16 +719,27 @@ def _embed_and_store(con, staged) -> None:
         logger.debug("recall: batch embed failed/short → %d docs lexical-only", len(staged))
         return
     mv, dim = embed.MODEL_VERSION, embed.DIM
-    wrote = False
+    sources = _doc_sources(con, [rid for (rid, _t) in staged])
     for (rid, _t), v in zip(staged, vecs):
         try:
+            v32 = v.astype("float32")
             con.execute("INSERT OR REPLACE INTO vec(rowid, model_version, dim, v) VALUES(?,?,?,?)",
-                        (rid, mv, dim, v.astype("float32").tobytes()))
-            wrote = True
+                        (rid, mv, dim, v32.tobytes()))
+            store.stage_vec(rid, v32, sources.get(rid), mv)  # applied to the matrix after commit
         except Exception as exc:  # noqa: BLE001
             logger.debug("recall vec write skipped: %s", exc)
-    if wrote:
-        store.note_vec_write()  # invalidate the docs matrix (catches re-embeds the row-count missed)
+
+
+def _doc_sources(con, rowids) -> dict:
+    """``{docs.rowid: docs.source}`` for the given rowids (the matrices' per-row source scope)."""
+    out: dict = {}
+    rowids = list(rowids)
+    for i in range(0, len(rowids), 500):
+        part = rowids[i:i + 500]
+        marks = ",".join("?" * len(part))
+        for rid, src in con.execute(f"SELECT rowid, source FROM docs WHERE rowid IN ({marks})", part):
+            out[int(rid)] = src
+    return out
 
 
 # ── chunk embeddings: a LONG doc's TAIL passages (content beyond the head vec's first _CHUNK_SIZE
@@ -754,21 +789,29 @@ def _embed_and_store_chunk(con, doc_chunks) -> None:
         logger.debug("recall: chunk batch embed failed/short → %d passages skipped", len(flat))
         return
     mv, dim = embed.MODEL_VERSION, embed.DIM
+    cleared = set()
     for (rid, _passages) in doc_chunks:
         try:
             con.execute("DELETE FROM vec_chunk WHERE rowid = ?", (rid,))  # drop stale passages first
+            cleared.add(rid)
         except Exception as exc:  # noqa: BLE001
             logger.debug("recall vec_chunk clear skipped: %s", exc)
-    wrote = False
+    written: dict = {}
     for (rid, idx, _txt), v in zip(flat, vecs):
         try:
+            v32 = v.astype("float32")
             con.execute("INSERT OR REPLACE INTO vec_chunk(rowid, chunk_idx, model_version, dim, v) "
-                        "VALUES(?,?,?,?,?)", (rid, idx, mv, dim, v.astype("float32").tobytes()))
-            wrote = True
+                        "VALUES(?,?,?,?,?)", (rid, idx, mv, dim, v32.tobytes()))
+            written.setdefault(rid, []).append(v32)
         except Exception as exc:  # noqa: BLE001
             logger.debug("recall vec_chunk write skipped: %s", exc)
-    if wrote:
-        store.note_chunk_write()  # invalidate the chunk matrix
+    sources = _doc_sources(con, written.keys())
+    for rid in cleared | set(written):
+        if rid in cleared:
+            # The doc's chunk rows are now exactly what was written (applied to the matrix after commit).
+            store.stage_chunks(rid, written.get(rid, []), sources.get(rid), mv)
+        else:
+            store.note_chunk_write()  # the clear failed: old and new rows mix, so rebuild from SQLite
 
 
 def _embed_and_store_thin(con, staged) -> None:
@@ -790,17 +833,15 @@ def _embed_and_store_thin(con, staged) -> None:
         logger.debug("recall: thin batch embed failed/short → %d thin rows un-embedded", len(staged))
         return
     mv, dim = embed.MODEL_VERSION, embed.DIM
-    wrote = False
     for (nid, _t), v in zip(staged, vecs):
         try:
+            v32 = v.astype("float32")
             con.execute(
                 "INSERT OR REPLACE INTO vec_thin(node_id, model_version, dim, v) VALUES(?,?,?,?)",
-                (nid, mv, dim, v.astype("float32").tobytes()))
-            wrote = True
+                (nid, mv, dim, v32.tobytes()))
+            store.stage_thin(nid, v32, mv)  # applied to the thin matrix after commit
         except Exception as exc:  # noqa: BLE001
             logger.debug("recall vec_thin write skipped: %s", exc)
-    if wrote:
-        store.note_thin_write()  # invalidate the thin matrix
 
 
 _THIN_CATCHUP_PAGE = 50   # thin rows the idle catch-up embeds per cycle (bounded; monotone convergence)
@@ -841,7 +882,7 @@ def _thin_catchup(con) -> int:
         try:
             marks = ",".join("?" * len(ghost))
             con.execute(f"UPDATE graph_nodes SET label = NULL WHERE id IN ({marks})", ghost)
-            con.commit()
+            _commit(con)
         except Exception as exc:  # noqa: BLE001
             logger.debug("recall thin catch-up label normalization failed: %s", exc)
     if not staged:
@@ -849,11 +890,11 @@ def _thin_catchup(con) -> int:
     try:
         con.execute("BEGIN")
         _embed_and_store_thin(con, staged)
-        con.commit()
+        _commit(con)
     except Exception as exc:  # noqa: BLE001
         logger.debug("recall thin catch-up write failed: %s", exc)
         try:
-            con.rollback()
+            _rollback(con)
         except Exception:  # noqa: BLE001
             pass
         return 0
@@ -896,11 +937,11 @@ def _chunk_catchup(con) -> int:
     try:
         con.execute("BEGIN")
         _embed_and_store_chunk(con, doc_chunks)
-        con.commit()
+        _commit(con)
     except Exception as exc:  # noqa: BLE001
         logger.debug("recall chunk catch-up write failed: %s", exc)
         try:
-            con.rollback()
+            _rollback(con)
         except Exception:  # noqa: BLE001
             pass
         return 0
@@ -932,7 +973,7 @@ def _backfill_page(con) -> None:
     staged = [(r[0], ((r[1] or "") + "\n" + (r[2] or "")).strip()[:2000]) for r in rows]
     con.execute("BEGIN")
     _embed_and_store(con, staged)
-    con.commit()
+    _commit(con)
     _last_write_ts = time.time()
     logger.info("recall backfill: embedded a page of %d docs; re-enqueueing", len(staged))
     try:
@@ -1158,6 +1199,7 @@ def _upsert(con, rank, d: Document, now: float):
         )
         con.execute("INSERT INTO fts(rowid, seg) VALUES(?, ?)", (rowid, seg))
         con.execute("DELETE FROM vec WHERE rowid = ?", (rowid,))
+        store.stage_vec(rowid)  # the stale vector leaves the matrix too (a re-embed stages the new one)
         return (rowid, _embed_text(d))
     cur = con.execute(
         "INSERT INTO docs(source, source_id, fp, url, title, content, author, date, score, "
@@ -1238,6 +1280,6 @@ def _sweep(con) -> None:
     except Exception as exc:  # noqa: BLE001
         logger.debug("recall sweep skipped: %s", exc)
         try:
-            con.rollback()
+            _rollback(con)
         except Exception:  # noqa: BLE001
             pass

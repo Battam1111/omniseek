@@ -289,7 +289,8 @@ class BaseCDPAdapter:
                 from omniseek.core.infra_jobs import _alert
                 _alert(f"{name} 登录态失效",
                       f"{name} 的共享 Chrome (9222) 会话登出，且 autofill 自动重登失败，需 VNC 进 mini "
-                      f"手动登录该站点。", group="OmniSeek-Health")
+                      f"手动登录该站点。", group="OmniSeek-Health",
+                      questions=[f"请 VNC 进 mini，在共享 Chrome (9222) 里手动登录 {name}"])
             except Exception:  # noqa: BLE001 — the alert is best-effort; the typed diagnostic already fails loud
                 pass
 

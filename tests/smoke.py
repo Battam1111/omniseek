@@ -134,6 +134,20 @@ def _arm_smoke_socket_guard() -> None:
 _arm_smoke_socket_guard()
 sys.path.insert(0, str(ROOT / "src"))
 
+# The smoke runs on the mini beside the live service, as the same user, so by default it would share
+# the service's disk cache (~/Library/Caches/omniseek/omniseek_cache). On 2026-10-10 that made two reddit
+# checks fail for a day: the service had put r/PhD on reddit's cannot-search list (a cache entry with
+# a 24 h lifetime) after a real search, and the checks, which search r/PhD, read that entry. Every
+# check here, and the unittest battery the gate at the end starts as a child process (it inherits this
+# environment), therefore gets a fresh empty cache directory of its own, removed when the run exits.
+# Set before any omniseek import, because cache.py reads it once at import.
+import atexit as _cache_atexit  # noqa: E402
+import shutil as _cache_shutil  # noqa: E402
+import tempfile as _cache_tempfile  # noqa: E402
+_SMOKE_CACHE_DIR = _cache_tempfile.mkdtemp(prefix="omniseek-smoke-cache-")
+os.environ["OMNISEEK_CACHE_DIR"] = _SMOKE_CACHE_DIR
+_cache_atexit.register(_cache_shutil.rmtree, _SMOKE_CACHE_DIR, True)
+
 FAIL: list[str] = []
 
 
@@ -141,6 +155,15 @@ def check(name: str, ok: bool, detail: str = "") -> None:
     print(("  ok   " if ok else "  FAIL ") + name + (f": {detail}" if (detail and not ok) else ""))
     if not ok:
         FAIL.append(f"{name}: {detail}")
+
+
+from platformdirs import user_cache_dir as _live_user_cache_dir  # noqa: E402
+from omniseek.core import cache as _isolated_cache  # noqa: E402
+check("smoke isolation: OmniSeek disk cache is this run's own empty directory, not the live service's",
+      _isolated_cache.CACHE_DIR == Path(_SMOKE_CACHE_DIR)
+      and _isolated_cache.CACHE_DIR != Path(_live_user_cache_dir("omniseek", appauthor=False)) / "omniseek_cache"
+      and not any(_isolated_cache.CACHE_DIR.iterdir()),
+      f"CACHE_DIR={_isolated_cache.CACHE_DIR} expected={_SMOKE_CACHE_DIR}")
 
 
 if _SMOKE_GUARD_DISABLED:
@@ -915,10 +938,14 @@ async def _rt_nosleep(*_a, **_k):
     return None
 
 
+_rt_store: dict = {}
+
+
 def _rt_reset():
     reddit_source._arctic_cooldown_until = 0.0
     reddit_source._arctic_fail_streak = 0
     _rt_calls.clear()
+    _rt_store.clear()
 
 
 def _rt_posts():
@@ -930,11 +957,24 @@ def _rt_title_only(ps):
 
 
 _rt_save = (_rd_http.get_json, _rd_http.aget_json, _rt_cache.get_docs, _rt_cache.set_docs,
-            reddit_source._cdp_search, reddit_source.time, reddit_source.anyio)
+            reddit_source._cdp_search, reddit_source.time, reddit_source.anyio,
+            _rt_cache.get, _rt_cache.set)
 _rt_args = ("/posts/search", {"subreddit": "PhD", "title": "advisor", "sort": "desc", "limit": 25})
+# The plain key/value cache (cache.get / cache.set) holds reddit's cannot-search list, a day-long
+# per-sub entry. It is stubbed with a dict that _rt_reset empties, so no case here reads a listing
+# left on disk by anything else (on 2026-10-10 the live service's r/PhD listing failed case (a) for a
+# day) and no case leaves one behind. To prove it, r/PhD is listed ON DISK first and case (a) must
+# still send its searches; the planted entry is removed in the finally.
+_rt_planted_key = reddit_source._unsearchable_key("PhD")
+_rt_cache.set(_rt_planted_key, True, ttl=3600)
 try:
+    check("reddit: the r/PhD cannot-search listing planted on disk is really there (else the next three prove nothing)",
+          _rt_cache.get(_rt_planted_key) is True
+          and "phd" in reddit_source._arctic_unsearchable(["PhD"]))
     _rt_cache.get_docs = lambda *a, **k: None
     _rt_cache.set_docs = lambda *a, **k: None
+    _rt_cache.get = lambda key: _rt_store.get(key)
+    _rt_cache.set = lambda key, value, ttl=None, **_k: _rt_store.__setitem__(key, value)
     reddit_source._cdp_search = lambda *a, **k: []
     reddit_source.time = _rt_types.SimpleNamespace(time=_rt_save[5].time, sleep=lambda *_a: None)
     _rt_nosleep_anyio = _rt_types.SimpleNamespace(sleep=_rt_nosleep)
@@ -1130,7 +1170,9 @@ try:
           f"seen={_rt_f_seen} paths={_rt_f_paths}")
 finally:
     (_rd_http.get_json, _rd_http.aget_json, _rt_cache.get_docs, _rt_cache.set_docs,
-     reddit_source._cdp_search, reddit_source.time, reddit_source.anyio) = _rt_save
+     reddit_source._cdp_search, reddit_source.time, reddit_source.anyio,
+     _rt_cache.get, _rt_cache.set) = _rt_save
+    _rt_cache._key_path(_rt_planted_key).unlink(missing_ok=True)
     _rt_reset()
 
 # http keeps a bounded error body for the diag capture (2026-10-04, spec 5). A non-2xx raised inside
@@ -11201,9 +11243,9 @@ if _SENTINEL_PATH.exists():
                 _sent_imports.add(_a.name.split(".")[0])
         elif isinstance(_n, _ast57.ImportFrom) and _n.module:
             _sent_imports.add(_n.module.split(".")[0])
-    _sent_omniseek = sorted(m for m in _sent_imports if m == "omniseek")
+    _sent_omniseek = sorted(m for m in _sent_imports if m in ("omniseek", "omniseek"))
     check("p9 sentinel isolation: it imports ZERO omniseek.* (self-contained: works when the organ is broken)",
-          not _sent_omniseek, f"imports omniseek: {_sent_omniseek}")
+          not _sent_omniseek, f"imports the organ: {_sent_omniseek}")
     _ALLOWED_SENTINEL_IMPORTS = {"__future__", "json", "os", "plistlib", "subprocess", "sys", "time",
                                  "urllib", "pathlib", "_sentinel_common", "services", "ast"}
     _sent_unexpected = sorted(_sent_imports - _ALLOWED_SENTINEL_IMPORTS)
@@ -19235,7 +19277,7 @@ _fj_sr_save, _fj_bb_save = _fj_fetcher.search_ranked, _fj_brief.build_briefing
 try:
     _fj_ij._DIGEST_DIR = _Path44(_tf57.mkdtemp())
     _fj_ij._load_digest_themes = lambda: [{"label": "T", "query": "q", "sources": None}]
-    _fj_notify.wecom_push = lambda title, body: _fj_wecom_calls.append(title)
+    _fj_notify.wecom_push = lambda title, body, **_kw: _fj_wecom_calls.append(title)
     _fj_notify.alert = lambda *a, **k: _fj_bark_calls.append(a)
     _fj_brief.build_briefing = lambda themes: None            # agent unavailable -> mechanical fallback
     _fj_fetcher.search_ranked = lambda *a, **k: ([], {})       # empty digest, still pushes the note
@@ -20157,6 +20199,9 @@ _GATE_DECLARED_SKIPS = {
     # until the mirror sync ran it on Windows four days later. Third bill from the same unmerged
     # branch: first the cancellation tripwire, then the fleet roster, now this.
     "the production target is POSIX process-group isolation",
+    # An internal package rename (2026-10-10) keeps old names alive for one cycle; the public
+    # mirror ships none of that layer, so its test of the layer skips there. Remove with the layer.
+    "transition alias layer absent (the public build ships no legacy names)",
 }
 
 # BOUNDED. The battery once measured ~6s; it has grown: on 2026-10-03 it ran 572 tests in 284s on

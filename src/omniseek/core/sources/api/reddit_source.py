@@ -668,6 +668,8 @@ def _discover_subreddits(query: str) -> list[str]:
     for tok in probes:
         ck = cache.make_key("reddit_arctic", "discover", tok.lower())
         subs = cache.get(ck)
+        if subs is None and cache.cache_only():
+            continue  # cache-only: no probe, and no empty list written under this term
         if subs is None:
             raw = _arctic_get("/subreddits/search", {"subreddit_prefix": tok, "limit": 12})
             subs = []
@@ -712,6 +714,8 @@ def _resolve_subreddits(query: str, override_subs: Optional[list[str]]) -> list[
 
     routed = _routed_subreddits(q)
     if not routed:
+        if cache.cache_only():
+            return []  # the reddit-wide branch notes the cache-only skip itself
         diag.note(
             "reddit.discovery_empty",
             body=("no topic group, finance signal or same-name subreddit matched this Latin query, "
@@ -742,6 +746,22 @@ def _sitewide_docs(items: list[dict], limit: int) -> list[Document]:
 def _note_sitewide_empty() -> None:
     diag.note("reddit.sitewide_empty",
               body="the reddit-wide browser search found nothing for this query either")
+
+
+def _cache_only_skip(where: str) -> bool:
+    """True on a cache-only collect (omniseek_search staleness=cache_only) that missed the cache: reddit
+    then has nothing to read and must do no live work. Until 2026-10-08 such a miss ran the whole live
+    path: the reddit-wide branch reported a misleading ``reddit.sitewide_empty`` ("found nothing")
+    for a search that never ran; the Arctic fan-out slept through its retry backoffs and fed the
+    Arctic breaker with failures that never happened (enough of them tripped it for everyone); the
+    empty answer was then written under the query key (and an empty discovery list under each probed
+    term), which the next live search served as reddit's answer. Callers check this right after
+    their cache miss; it writes nothing and records nothing."""
+    if not cache.cache_only():
+        return False
+    diag.note("reddit.cache_only",
+              body=f"cache-only collect: no cached reddit {where} for this query, no live request made")
+    return True
 
 
 def _sitewide_key(q: str, limit: int) -> str:
@@ -1028,6 +1048,8 @@ def _arctic_get(path: str, params: dict, *, retries: int = 1, timeout: int = 20,
     """
     if _arctic_cooling():
         return None  # breaker open: skip the throttled mirror entirely (instant, silent, no retry)
+    if cache.cache_only():
+        return None  # no egress, so no retry sleep and nothing for the breaker (see _cache_only_skip)
 
     def _backoff(attempt: int) -> None:
         time.sleep(0.8 + attempt * 0.9 + random.uniform(0.0, 0.8))
@@ -1092,6 +1114,8 @@ async def _aarctic_get(path: str, params: dict, *, retries: int = 1, timeout: in
     """
     if _arctic_cooling():
         return None  # breaker open: skip the throttled mirror entirely (instant, silent, no retry)
+    if cache.cache_only():
+        return None  # mirror _arctic_get: no egress, no retry sleep, no breaker step
 
     async def _backoff(attempt: int) -> None:
         await anyio.sleep(0.8 + attempt * 0.9 + random.uniform(0.0, 0.8))
@@ -1261,6 +1285,8 @@ class RedditAdapter:
         cached = cache.get_docs(key)
         if cached is not None:
             return cached
+        if _cache_only_skip("search"):
+            return []
 
         per_sub = min(max(limit, 1), 100)
         blocked = _arctic_unsearchable(subreddits)  # grows when a round lists a sub (see _settle_round)
@@ -1386,6 +1412,8 @@ class RedditAdapter:
         cached = cache.get_docs(key)
         if cached is not None:
             return cached
+        if _cache_only_skip("reddit-wide search"):
+            return []
         docs = _sitewide_docs(_cdp_search(q, limit, None), limit)
         if docs:
             cache.set_docs(key, docs, ttl=_SEARCH_TTL)
@@ -1399,6 +1427,8 @@ class RedditAdapter:
         cached = await anyio.to_thread.run_sync(cache.get_docs, key)
         if cached is not None:
             return cached
+        if _cache_only_skip("reddit-wide search"):
+            return []
         items = await anyio.to_thread.run_sync(_cdp_search, q, limit, None)
         docs = _sitewide_docs(items, limit)
         if docs:
@@ -1453,6 +1483,8 @@ class RedditAdapter:
         cached = await anyio.to_thread.run_sync(cache.get_docs, key)  # disk read OFF loop
         if cached is not None:
             return cached
+        if _cache_only_skip("search"):
+            return []
 
         per_sub = min(max(limit, 1), 100)
         blocked = await anyio.to_thread.run_sync(_arctic_unsearchable, subreddits)  # cache IO OFF loop
@@ -1569,6 +1601,8 @@ class RedditAdapter:
             # comment width. No reddit-wide search here: nothing resolved means nothing returned.
             subreddits = _routed_subreddits(q)[:_COMMENT_MAX_SUBS]
             if not subreddits:
+                if _cache_only_skip("comment search"):
+                    return []
                 diag.note("reddit.discovery_empty",
                           body=("no topic group, finance signal or same-name subreddit matched this "
                                 "comment query; the comment path has no reddit-wide search, so it "
@@ -1581,6 +1615,8 @@ class RedditAdapter:
         cached = cache.get_docs(key)
         if cached is not None:
             return cached
+        if _cache_only_skip("comment search"):
+            return []
 
         seen_ids: set[str] = set()
         comments: list[dict] = []
