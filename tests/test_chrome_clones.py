@@ -176,8 +176,8 @@ class PlanTests(unittest.TestCase):
         link = os.path.join(self.fr.root, "code_sign_clone.HHHHHH")
         try:
             os.symlink(outside, link, target_is_directory=True)
-        except (OSError, NotImplementedError) as exc:
-            self.skipTest("cannot create a symlink here: %s" % exc)
+        except (OSError, NotImplementedError):
+            self.skipTest("filesystem does not permit symlink fixtures")
         self.fr.births["code_sign_clone.HHHHHH"] = NOW - 9 * HOUR
         res = cc.sweep(root=self.fr.root, open_files=[], starts={}, installed={INSTALLED},
                        now=NOW, birth_of=self.fr.birth_of, exe_ids_of=self.fr.exe_ids_of)

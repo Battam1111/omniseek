@@ -20202,6 +20202,17 @@ _GATE_DECLARED_SKIPS = {
     # An internal package rename (2026-10-10) keeps old names alive for one cycle; the public
     # mirror ships none of that layer, so its test of the layer skips there. Remove with the layer.
     "transition alias layer absent (the public build ships no legacy names)",
+    # Platform and OPTIONAL-PACKAGE gates that never fire on the live host (macOS, every extra
+    # installed). The first two failed the public mirror's Linux CI on 2026-10-10 while every local
+    # run was green; the static check after the gate now compares this list with the source, so a
+    # reason that only fires elsewhere fails here first.
+    "phys_footprint is a macOS reading",
+    "torch/transformers not installed",
+    "no Qwen3 in this transformers",
+    "curl_cffi is not installed",
+    "atproto is not installed",
+    "yt-dlp is not installed (a base dependency; a stripped install)",
+    "filesystem does not permit symlink fixtures",
 }
 
 # BOUNDED. The battery once measured ~6s; it has grown: on 2026-10-03 it ran 572 tests in 284s on
@@ -20278,6 +20289,61 @@ if _gate_rc != 0 and _gate_blocks:
 check("gate: every skipped test skipped for a DECLARED reason (else a suite could opt itself out)",
       not _gate_undeclared,
       f"undeclared skip reasons: {_gate_undeclared}")
+
+# The check above only sees the skips that FIRE on the machine running it. On 2026-10-10 two reasons
+# that only fire off macOS or without torch ("phys_footprint is a macOS reading", "torch/transformers
+# not installed") passed every local run and failed the public mirror's Linux CI. So the allowlist is
+# also compared with the SOURCE: every skip reason written under tests/ must be a literal string (or a
+# module-level string constant) that is on the list, whatever the platform or installed extras.
+# A reason built at run time (an f-string, "%s" % exc) can never match the list verbatim, so it fails
+# here too, naming the place.
+import ast as _skip_ast  # noqa: E402
+
+_SKIP_CALLS = {"skipIf": 1, "skipUnless": 1, "skipTest": 0, "SkipTest": 0}
+
+
+def _skip_reasons_in_source(tests_dir):
+    reasons, unresolved = {}, []
+    for path in sorted(tests_dir.rglob("*.py")):
+        rel = path.relative_to(tests_dir.parent).as_posix()
+        try:
+            tree = _skip_ast.parse(path.read_text(encoding="utf-8"), filename=rel)
+        except SyntaxError as exc:
+            unresolved.append(f"{rel}: does not parse ({exc.msg}), so its skips were not read")
+            continue
+        consts = {t.id: n.value.value for n in tree.body if isinstance(n, _skip_ast.Assign)
+                  for t in n.targets if isinstance(t, _skip_ast.Name)
+                  and isinstance(n.value, _skip_ast.Constant) and isinstance(n.value.value, str)}
+        for node in _skip_ast.walk(tree):
+            if not isinstance(node, _skip_ast.Call):
+                continue
+            fn = node.func
+            name = fn.attr if isinstance(fn, _skip_ast.Attribute) else getattr(fn, "id", None)
+            if name in _SKIP_CALLS:
+                pos = _SKIP_CALLS[name]
+            elif (name == "skip" and isinstance(fn, _skip_ast.Attribute)
+                  and getattr(fn.value, "id", None) in ("unittest", "pytest")):
+                pos = 0
+            else:
+                continue
+            arg = next((k.value for k in node.keywords if k.arg in ("reason", "msg")), None)
+            if arg is None and len(node.args) > pos:
+                arg = node.args[pos]
+            if isinstance(arg, _skip_ast.Constant) and isinstance(arg.value, str):
+                reasons.setdefault(arg.value, []).append(f"{rel}:{node.lineno}")
+            elif isinstance(arg, _skip_ast.Name) and arg.id in consts:
+                reasons.setdefault(consts[arg.id], []).append(f"{rel}:{node.lineno}")
+            else:
+                unresolved.append(f"{rel}:{node.lineno}: {name}() reason is not a literal string")
+    return reasons, unresolved
+
+
+_skip_src, _skip_unresolved = _skip_reasons_in_source(ROOT / "tests")
+_skip_src_undeclared = {r: at for r, at in sorted(_skip_src.items()) if r not in _GATE_DECLARED_SKIPS}
+check(f"gate: every skip reason written in tests/ ({len(_skip_src)} distinct) is declared, including the ones "
+      f"this platform and these installed extras never fire",
+      bool(_skip_src) and not _skip_src_undeclared and not _skip_unresolved,
+      f"undeclared in source: {_skip_src_undeclared} unreadable: {_skip_unresolved}")
 
 if FAIL:
     print(f"SMOKE FAILED: {len(FAIL)} problem(s)")
