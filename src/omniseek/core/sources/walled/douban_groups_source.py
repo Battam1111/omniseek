@@ -122,7 +122,7 @@ class DoubanGroupsAdapter:
         if isinstance(data, dict) and (data.get("code") == 103 or data.get("msg") == "need_login"):
             diag.note("douban_groups.auth_expired", url=_SEARCH, body=(
                 "AUTH_EXPIRED: the 9222 Chrome's douban session is logged out (rexxar need_login). Needs a "
-                "VNC re-login on the mini (the 9222 cn-forums Chrome, douban.com). NOT authoritative-empty."))
+                "VNC re-login on the host machine (the 9222 cn-forums Chrome, douban.com). NOT authoritative-empty."))
             return []
 
         docs: list[Document] = []

@@ -96,7 +96,7 @@ def _get_client() -> httpx.Client:
                     _h2 = True
                 except Exception:  # noqa: BLE001
                     _h2 = False
-                # HopClient: the redirect rule on every hop (driver ruling 1); the Brave / DuckDuckGo
+                # HopClient: the redirect rule on every hop (design decision 1); the Brave / DuckDuckGo
                 # upstreams themselves are paced by this module (gate.http_gate false), and it backs
                 # off on Retry-After itself (upstreams.SELF_BACKOFF), so its responses are recorded
                 # with the deferral off

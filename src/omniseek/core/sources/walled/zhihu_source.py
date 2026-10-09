@@ -207,7 +207,7 @@ class ZhihuAdapter:
                     diag.note("zhihu.auth_expired", url=url, body=(
                         "AUTH_EXPIRED: zhihu shared-Chrome session logged out (login wall on search). "
                         "zhihu login is QR/SMS so it cannot autofill-relogin; needs a VNC re-login on "
-                        "the mini (the 9222 Chrome). The session-warmer also Barks this. NOT "
+                        "the host machine (the 9222 Chrome). The session-warmer also Barks this. NOT "
                         "authoritative-empty."))
                 raise
             page.evaluate("window.scrollBy(0, 1500)")

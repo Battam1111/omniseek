@@ -36,19 +36,19 @@ class SchedulerContractArtifactTests(unittest.TestCase):
         ):
             self.assertIsNone(policy[field])
 
-    def test_survival_canonical_artifacts_are_byte_identical_when_present(self):
-        survival_root = ROOT.parent / "survival_28597ac_fresh"
-        # The guard is the FILES, not the directory. A gutted leftover checkout (RK's dissolution
-        # left one on the mini with empty config/ and schemas/) satisfies is_dir() and then crashes
+    def test_reference_canonical_artifacts_are_byte_identical_when_present(self):
+        reference_root = ROOT.parent / "reference_sibling_checkout"
+        # The guard is the FILES, not the directory. A gutted leftover checkout (a retired
+        # project left one on the live host with empty config/ and schemas/) satisfies is_dir() and then crashes
         # here with FileNotFoundError, turning "no sibling to compare against" into a red test. The
         # comparison is opportunistic by design; its precondition must be too.
-        survival_schema = survival_root / "schemas" / SCHEMA_PATH.name
-        survival_policy = survival_root / "config" / POLICY_PATH.name
-        if not (survival_schema.is_file() and survival_policy.is_file()):
-            self.skipTest("Survival sibling checkout is not present")
+        reference_schema = reference_root / "schemas" / SCHEMA_PATH.name
+        reference_policy = reference_root / "config" / POLICY_PATH.name
+        if not (reference_schema.is_file() and reference_policy.is_file()):
+            self.skipTest("Reference sibling checkout is not present")
 
-        self.assertEqual(SCHEMA_PATH.read_bytes(), survival_schema.read_bytes())
-        self.assertEqual(POLICY_PATH.read_bytes(), survival_policy.read_bytes())
+        self.assertEqual(SCHEMA_PATH.read_bytes(), reference_schema.read_bytes())
+        self.assertEqual(POLICY_PATH.read_bytes(), reference_policy.read_bytes())
 
 
 if __name__ == "__main__":

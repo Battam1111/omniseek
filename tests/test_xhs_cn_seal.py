@@ -132,7 +132,7 @@ class FetcherSealTests(unittest.TestCase):
     def test_broad_sweep_leaves_it_out_and_never_suggests_it(self):
         # The deployment profile is CONSTRUCTED, never read from this host's ~/.omniseek/profile.json.
         # Walled sources are deny-by-default without one, so neither xiaohongshu account would reach the
-        # plan at all and the seal would go untested; the mini's own file happens to opt the walled tier
+        # plan at all and the seal would go untested; the live host's own file happens to opt the walled tier
         # in, which is the only reason this ever passed without the patch (it failed in the public
         # mirror's gate, which runs with no profile).
         with mock.patch.object(profile, "_cache", {"walled": {"enabled": True, "bring_your_own": True}}):

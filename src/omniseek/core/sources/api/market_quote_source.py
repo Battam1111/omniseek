@@ -11,7 +11,7 @@ Source: CNBC's keyless quote backend (the JSON the cnbc.com quote pages call):
     GET https://quote.cnbc.com/quote-html-webservice/restQuote/symbolType/symbol
         ?symbols=ORCL|NVDA&requestMethod=itv&fund=1&exthrs=1&output=json
 
-Probed live from the mini US egress (2026-06-17). Hard facts that shaped this code:
+Probed live from a US egress (2026-06-17). Hard facts that shaped this code:
   - Multi-symbol uses a PIPE separator (``ORCL|NVDA``). A comma (``ORCL,NVDA``) is
     NOT split: the backend treats it as one bogus symbol and returns a ``code:1``
     stub. So we join requested tickers with ``|``.

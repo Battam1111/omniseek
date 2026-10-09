@@ -95,12 +95,12 @@ changed by a blanket replacement.
   `walled/xiaohongshu_cn_source.py`: these include login, browser, breaker, or wall states that
   are not all equivalent to an upstream fetch failure. Some branches already emit typed
   diagnostics. Recommendation: keep the current typed wall and account semantics and let the
-  driver adjudicate any branch without a surviving record.
+  maintainers adjudicate any branch without a surviving record.
 - `api/nowcoder_source.py:_fetch_job`: the empty return is part of a composite path. A local CDP
   failure is followed by a Brave fallback, and `health_check` reports a remote negative only when
   both paths fail. The task's premise is not sufficient to call this a silent total failure.
   Recommendation: no change in this round.
 
-The candidates above are intentionally left for driver review. D1 fixed the two unambiguous
+The candidates above are intentionally left for maintainer review. D1 fixed the two unambiguous
 paths named by the task and did not replace partial-result or typed-wall behavior with a blanket
 raise.

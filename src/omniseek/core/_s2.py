@@ -81,7 +81,7 @@ _BREAK_FOR_S = 120.0  # seconds the circuit stays open
 # a fresh caller inherits the WHOLE queue: an observed field_skeleton sat 886s on the gate. Past this
 # cap the queue is pathological (S2 storming) → fail fast (raise S2Down → the wrapper degrades to
 # []/None) instead of hanging, AND do not reserve a slot so the backlog drains rather than growing.
-# The value is the declared gate.max_wait_s of "s2" (driver ruling 2, 2026-09-29): ONE budget for the
+# The value is the declared gate.max_wait_s of "s2" (design decision 2, 2026-09-29): ONE budget for the
 # permit wait and the start wait together, cut to the caller's deadline by the guard itself.
 _PACE_MAX_WAIT_S = upstreams.max_wait("s2")
 
@@ -198,7 +198,7 @@ def get_client():
 
 
 def _bound_requests(client) -> None:
-    """A total deadline on every request the library sends (driver ruling of 2026-09-29 on section
+    """A total deadline on every request the library sends (design decision of 2026-09-29 on section
     17.5, item 2). semanticscholar reads each response inside its own httpx.AsyncClient, where the
     eye cannot see the body arrive to renew the gate's lease; so each request is cut at TIMEOUT from
     its start instead (asyncio.wait_for cancels it), which is never past the permit's lease (it ends

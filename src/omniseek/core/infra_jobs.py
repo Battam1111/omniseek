@@ -13,7 +13,7 @@ omniseek.core.notify (httpx, in-process), keeping the same fail-open contract.
 Each job runs INSIDE the writer process on the ONE scheduler thread, wrapped by jobs.run_due_jobs in
 its own try/except (a failing job never stops the rest, and the scheduler alerts on an unhandled
 exception with a 24h cooldown). The state files these jobs keep are the SAME paths the old crons
-used, so the mini's existing state carries across the migration unchanged.
+used, so the existing deployment's state carries across the migration unchanged.
 """
 
 from __future__ import annotations
@@ -87,7 +87,7 @@ def _should_alert(key: str, alerts: dict, cooldown: int) -> bool:
 def _alert(title: str, body: str, *, questions=None, **_ignored) -> None:
     """Fail-open in-process ALARM. Retired Bark's group/level hints are absorbed and ignored.
 
-    2026-08-12: Bark was deleted from the fleet. It had been unreachable from the mini (three
+    2026-08-12: Bark was deleted from the fleet. It had been unreachable from the service host (three
     probes, the connection never establishing, 20s timeouts, nine "push failed" lines across the
     logs) while EVERY infra alarm pushed to it and to nothing else. Alarms were written, counted,
     logged as pushed, and delivered nowhere, which is worse than having no alarms because the quiet
@@ -122,7 +122,7 @@ def _alert(title: str, body: str, *, questions=None, **_ignored) -> None:
 # account-risky activity. A DEAD CDP Chrome is relaunched (its launchd KeepAlive is
 # SuccessfulExit=false, so a clean quit is not auto-relaunched); a FAILED self-heal escalates to an alert
 # (the CDP safety net itself is down).
-# State: ~/.omniseek/state/health-watchdog-state.json (unchanged path -> the mini's state carries).
+# State: ~/.omniseek/state/health-watchdog-state.json (unchanged path -> the existing state carries).
 _HEALTH_STATE = _STATE / "health-watchdog-state.json"
 N_CONSECUTIVE = 2                       # consecutive failed runs before alerting
 PROBE_WORKERS = 8                       # moderate -- 16-wide caused census false-fails
@@ -153,7 +153,7 @@ def _prune_stale_health_rows(state: dict, live: set) -> dict:
       - run_source_health probes fetcher.all_adapter_names() with NO profile filter, so a source the
         deployer's profile DISABLES is still registered, still probed, and still rewrites its row
         every run. Pruning by enablement would delete a counter the same run re-creates, and would
-        throw away the fail history of every source a profile happens to gate (on the mini today the
+        throw away the fail history of every source a profile happens to gate (on the live deployment today the
         walled tier is deny-by-default and the profile re-enables it: 0 sources are profile-disabled,
         so that prune would look harmless right up until a profile changed).
       - the 6h fast lane probes only the non-CDP sources. Pruning by "probed" would delete every CDP
@@ -562,7 +562,7 @@ def run_source_health(scope: str = "all") -> dict:
 # JOB: wechat2rss probe   (transplanted from wewerss_watchdog.py; every:1800s)
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
 # RENAMED 2026-08-12, from wewerss-probe. It has monitored wechat2rss and NOT wewe-rss since the
-# self-hosted install was retired, and on 2026-08-12 that install was deleted from the mini
+# self-hosted install was retired, and on 2026-08-12 that install was deleted from the host
 # outright. A job whose name points at something that no longer exists is a trap: the next reader
 # finds "wewerss-probe" in the roster, goes looking for wewe-rss, finds nothing, and either
 # "repairs" a healthy job or deletes a live one. The name now says what it probes.
@@ -664,7 +664,7 @@ def run_wechat2rss_probe() -> dict:
 # not "no error was raised", not "it looked fine last time": every one of those stayed TRUE straight
 # through the outage. So this job measures what is actually there:
 #   * MIRRORS -- the Windows side writes a heartbeat here after each run carrying every mirror's HEAD
-#     and item count. Mini then asks its OWN repo how far behind that HEAD is (ancestor check +
+#     and item count. The service host then asks its OWN repo how far behind that HEAD is (ancestor check +
 #     rev-list count), which is exact rather than a guess from file counts. A STALE heartbeat is
 #     itself an alarm, so a Windows box that simply stops running cannot fail silently either:
 #     absence of news is news.
@@ -920,14 +920,14 @@ def run_offmachine_audit() -> dict:
 # doubles as the health probe: a genuinely degraded session alerts the operator.
 #
 # SAFETY (byte-preserved): read-only (navigation + scroll only -- never like/follow/comment, the
-# 风控 write-risk path), jitter-paced, active-hours only (08-23 mini local), and it honours the same
+# 风控 write-risk path), jitter-paced, active-hours only (08-23 host local time), and it honours the same
 # ~/.omniseek/state/cdp-maintenance pause flag cdp_keepalive uses (so it never fights a manual VNC
 # login). One light search per account per run is trivial activity (a real user does dozens) and is
 # the kind of passive browse 养号 recommends; it stays well under any rate concern.
 _WARMER_STATE = _STATE / "session-warmer.json"
 _MAINT_FLAG = _STATE / "cdp-maintenance"
 _WARMER_COOLDOWN_S = 6 * 3600
-_ACTIVE_START, _ACTIVE_END = 8, 23  # mini local hours; match the xiaohongshu_cn adapter gate
+_ACTIVE_START, _ACTIVE_END = 8, 23  # host local hours; match the xiaohongshu_cn adapter gate
 
 # Benign rotating warm queries (look like a real PhD-track user glancing at their feed).
 _WARM_QUERIES = ["读博日常", "科研", "博士生活", "留学生活", "实验室日常", "读研"]
@@ -1141,10 +1141,10 @@ CDP_IDLE_TIMEOUT_S = int(os.environ.get("OMNISEEK_CDP_IDLE_S", 30 * 60))
 # How the reaper stops a browser (2026-10-05): the CDP command Browser.close first, then waits for
 # the main process to exit, and only falls back to `launchctl kill TERM` when that does not work.
 # TERM made Chrome skip the end of its shutdown and leave its app-bundle clone behind every time
-# (12 of 12 on the mini; Browser.close: 0 of 13; see _cdp.close_browser). KeepAlive does not
+# (12 of 12 on the live host; Browser.close: 0 of 13; see _cdp.close_browser). KeepAlive does not
 # restart either way: both exits are clean (last exit code 0).
 # CDP_CLOSE_WAIT_S, confirmed 2026-10-06: the throwaway Chrome (empty profile) exited 0.3 s after
-# Browser.close, 13 of 13, and on the mini the reaper's first nine stops of the logged-in browsers
+# Browser.close, 13 of 13, and on the live host the reaper's first nine stops of the logged-in browsers
 # (2026-10-05 14:58 to 23:02) all exited within 1 to 2 s with no ":term" fallback, so only a hung
 # browser waits the full 15 s. Recheck from the reaper log: a ":term" suffix in "stopped" means the
 # TERM fallback ran.
@@ -1371,9 +1371,9 @@ def run_session_warmer() -> dict:
             continue
         if _should_alert(f"session_degraded:{r['label']}", alerts, _WARMER_COOLDOWN_S):
             _alert(f"{r['label']} session 退化",
-                  f"暖号验证失败:{r['reason']}。登录态可能已失效,需 VNC 进 mini 重新扫码登录该账号"
+                  f"暖号验证失败:{r['reason']}。登录态可能已失效,需 VNC 进主机重新扫码登录该账号"
                   f"({r['label']} 的 Chrome 窗口)。", group="OmniSeek-Health",
-                  questions=[f"请 VNC 进 mini，在 {r['label']} 的 Chrome 窗口重新扫码登录该账号"])
+                  questions=[f"请 VNC 进主机，在 {r['label']} 的 Chrome 窗口重新扫码登录该账号"])
 
     state["_alerts"] = alerts
     state["last_run"] = time.strftime("%Y-%m-%d %H:%M:%S")
@@ -1439,7 +1439,7 @@ def run_log_rotation() -> dict:
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
 # WHY (2026-07-14, approved by the operator as a standing job): nserc_awards is a BULK source — its data is
 # one ~56MB annual CSV, pulled at most monthly and cached (the CS/AI subset, ~3.6k docs) so queries
-# are zero-network. The catch: the cold 56MB pull takes ~96s (routed via a fast node in the mini's
+# are zero-network. The catch: the cold 56MB pull takes ~96s (routed via a fast node in the host's
 # mihomo, since the mainland-direct link throttles bulk to ~116KB/s), which BLOWS OmniSeek's 90s
 # single-source deadline. So if the cache ever expires and a QUERY triggers the refetch, it times out
 # mid-pull, never caches, and stays stuck. This job DECOUPLES the refetch from the query path: it runs
@@ -1916,12 +1916,12 @@ def run_source_audit() -> dict:
 # on demand. PUSH CHANNEL: 企业微信 (WeCom) ONLY, per the operator (2026-07-14) -- notify.wecom_push, not Bark.
 #
 # THE THEMES LIST LEFT THE CODE (P9): it is now DATA at ~/.omniseek/state/digest-themes.json (seeding
-# that file on the mini is the CEO's migration step). When the file is ABSENT the job NO-OPS with a
+# that file on the service host is the operator's migration step). When the file is ABSENT the job NO-OPS with a
 # log line -- it never invents a theme list. Row ships ENABLED (the operator 2026-07-14) but is SAFE on any
 # deployment BECAUSE of that no-op: a fresh deploy without themes pushes nothing. It is enabled in CODE
 # (not a profile override) on purpose -- a profile file, once present, gates the walled source fleet
 # OFF by default (profile.is_source_enabled), so enabling a JOB via the profile would silently disable
-# the walled sources; the mini runs profile-less.
+# the walled sources; the live deployment runs profile-less.
 # State: ~/.omniseek/state/digests/ (Markdown out) + the themes file (in).
 _DIGEST_DIR = _STATE / "digests"
 _DIGEST_THEMES_PATH = _STATE / "digest-themes.json"
@@ -1931,7 +1931,7 @@ _DIGEST_PER_THEME = 6
 def _load_digest_themes() -> list:
     """The theme rows (each {label, query, sources}) from ~/.omniseek/state/digest-themes.json, or []
     when the file is absent/corrupt. The job no-ops on []. Never a built-in default (the list is
-    the operator's DATA, seeded on the mini)."""
+    the operator's DATA, seeded on the service host)."""
     if not _DIGEST_THEMES_PATH.exists():
         return []
     try:
@@ -1967,7 +1967,7 @@ def run_digest() -> dict:
     ENABLED (the no-op makes that safe without a themes file)."""
     themes = _load_digest_themes()
     if not themes:
-        log.info("digest: no themes file at %s -> no-op (seed it on the mini to enable)",
+        log.info("digest: no themes file at %s -> no-op (seed it to enable)",
                  _DIGEST_THEMES_PATH)
         return {"noop": "no-themes"}
 

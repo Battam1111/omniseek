@@ -1,6 +1,6 @@
 """字节跳动 Top Seed 校招 + 实习 招聘适配器.
 
-基于 P7 opus sub-agent 深度调研（2026-05-28，69 tool calls）发现：
+基于 P7 深度调研（2026-05-28，69 tool calls）发现：
 字节 jobs.bytedance.com **暴露干净 JSON API**（之前误判为 SPA-only）：
 
 - Endpoint: `POST /api/v1/search/job/posts`

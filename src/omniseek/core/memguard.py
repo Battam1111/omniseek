@@ -16,7 +16,7 @@ the calibration plan):
         flight), so a restart never lands in the middle of an agent's call.
   hard: restart now, idle or not. The in-flight request is NOT answered (uvicorn closes its
         connection), but its tool body keeps running in an AnyIO worker thread and the server's
-        shutdown waits for that thread: a SIGTERM alone does not end a busy process (eye-mem-2
+        shutdown waits for that thread: a SIGTERM alone does not end a busy process (restart
         drill: 17 s for one transcription). So every restart also arms an exit watchdog that forces
         the exit EXIT_GRACE_S after the SIGTERM. The forced exit drops the in-flight call's result
         (the caller retries); documents already handed to the recall writer are safe, because they
@@ -41,8 +41,8 @@ from typing import Callable, Optional
 
 log = logging.getLogger("omniseek.core.memguard")
 
-# Ceilings, MB of phys_footprint, SET FROM THE MEMORY BUDGET (omniseek_orders/eye-mem-3/report.md,
-# part 3). The budget for OmniSeek HTTP service on this 16 GB machine: stable <= 3.5 GB, peak
+# Ceilings, MB of phys_footprint, SET FROM THE MEMORY BUDGET. The budget for OmniSeek
+# HTTP service on this 16 GB machine: stable <= 3.5 GB, peak
 # <= 4.5 GB (4608 MB). A healthy process never crosses the peak budget, so:
 #   soft = peak budget + 0.5 GB margin = 4608 + 512 = 5120 MB: crossing it means the process is
 #          already outside the budget (a leak or an unbounded path), so release caches and restart
@@ -71,7 +71,7 @@ IDLE_POLL_S = 1.0
 LOG_EVERY = 10
 # PROVISIONAL. Seconds between the restart's SIGTERM and a forced os._exit when the process is still
 # alive. Derivation: the lifespan drain budget is 5 s (lifecycle.drain_all); the clean exits measured in
-# OmniSeek-mem-2 drill took 1 to 6 s from SIGTERM; 30 s is 5x the slowest. Calibration plan: count the
+# the restart drill took 1 to 6 s from SIGTERM; 30 s is 5x the slowest. Calibration plan: count the
 # "memguard: forced exit(1)" lines after deploy; any hit on a soft (idle) restart means a clean exit took longer
 # than 30 s and the value or the drain needs a second look.
 EXIT_GRACE_S = 30.0

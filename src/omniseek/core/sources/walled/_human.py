@@ -1,6 +1,6 @@
 """Human-behavior simulation helpers for CDP browser sessions.
 
-Phase 4 P13 (2026-05-29). Anti-detection research (two opus sub-agents)
+Phase 4 P13 (2026-05-29). Anti-detection research (two independent passes)
 concluded that OmniSeek's `connect_over_cdp` + real-Chrome architecture is the
 correct stealth base (MediaCrawler 30k★ uses the same), and that the
 `Runtime.enable` CDP leak is already fixed on our Chrome 148 (empirically

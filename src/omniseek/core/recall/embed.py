@@ -9,7 +9,7 @@ weights won't load, the whole vector layer disables itself and OmniSeek degrades
 (never an error, never blocks boot). One forward ``Lock`` so a query-embed and an ingest-embed never
 run two concurrent MPS forwards (the real 16GB peak).
 
-Model chosen by an on-mini bake-off on REAL eye content (test on real data, never a benchmark):
+Model chosen by an on-host bake-off on REAL eye content (test on real data, never a benchmark):
 Qwen3-Embedding-0.6B won on cross-lingual RELIABILITY — zero whiffs on 12 real code-switched queries
 vs bge-m3's two, plus the widest related/unrelated cosine contrast. Local, ~0.6B, dim 1024.
 """
@@ -52,7 +52,7 @@ _fwd_lock = threading.Lock()   # serialize MPS forwards (query + ingest never co
 # if the embedding model, its device, or the typical document length changes.
 _PASSAGE_LOCK_CHUNK = 4
 
-# Token-length LADDER every forward is padded up to (2026-10-08, OmniSeek-mem order). On MPS, torch
+# Token-length LADDER every forward is padded up to (2026-10-08). On MPS, torch
 # compiles and caches one MPSGraph per distinct input SHAPE and never evicts it; the cache lives in
 # CPU malloc (footprint category MALLOC_SMALL), and empty_cache() does not touch it. Measured on
 # this machine with batch-1 forwards: 150 calls at ONE length grew MALLOC_SMALL by 34 MB, 150 calls
@@ -67,7 +67,7 @@ _PASSAGE_LOCK_CHUNK = 4
 # the 2000-char cap of _embed_text plus a title (sample max 1427 tokens). Measured agreement with
 # the unpadded vectors: cosine min 0.99989 over 40 real docs, inside the 0.99981 the current code
 # already shows between embedding a doc alone and in a batch of four. Calibration plan: re-run the
-# token-length sample and the shape probe of OmniSeek-mem order (omniseek_orders/eye-mem/bench) if
+# token-length sample and the shape probe behind this ladder if
 # the model, the _embed_text cap, or the chunking changes; drop a rung only if its share of
 # forwards is below one percent.
 _LEN_LADDER = (16, 32, 64, 128, 256, 384, 512, 768, 1024, 1536, 2048)
@@ -111,7 +111,7 @@ def _pad_kwargs(m, texts: list[str], longest: Optional[int] = None) -> dict:
         return {}
 
 
-# ONE FORWARD'S BUFFERS STAY UNDER 8 MiB (2026-10-09, OmniSeek-mem-3 order). torch's MPS allocator
+# ONE FORWARD'S BUFFERS STAY UNDER 8 MiB (2026-10-09). torch's MPS allocator
 # packs requests under 10 MiB into 8 or 32 MiB heaps, but opens a fresh 1 GiB heap for any request
 # of 10 MiB or more on a unified-memory Mac (allocator trace, PYTORCH_DEBUG_MPS_ALLOCATOR: the
 # first 16 MiB request of a forward allocated "shared heap of size 1024.00 MiB", every 8 MiB one
@@ -133,7 +133,7 @@ def _pad_kwargs(m, texts: list[str], longest: Optional[int] = None) -> dict:
 # Texts past the token budget are truncated there; _embed_text already caps text at 2000 chars,
 # which stayed under 1430 tokens on a 3000-doc sample. The cap is derived, not tuned: 8 MiB is the
 # largest power of two under the allocator's 10 MiB line. Re-derive it if torch changes its heap
-# sizes (re-run omniseek_orders/eye-mem-3/bench/probe/fwd_peak.py with the allocator trace on).
+# sizes (re-run the forward-peak probe with the allocator trace on).
 # Measured with the bound, same probe: batch 1 at 2048 +0.53 GB, batch 4 at 1536 +0.40 GB, batch
 # 4 at 2048 +0.52 GB, no forward slower; the trace shows no 1 GiB heap beyond the weights' own. On
 # 96 real docs (the 48 longest plus 48 spread) every vector matched the unbounded path to cosine
@@ -304,7 +304,7 @@ def _bound_forward_buffers(m) -> None:
 
 def _release_device_cache(m) -> None:
     """Hand the MPS allocator's cached buffers back to the driver after a forward (caller holds the
-    forward lock, so no forward is mid-flight). Measured 2026-10-08 (eye-mem order): torch 2.12's
+    forward lock, so no forward is mid-flight). Measured 2026-10-08: torch 2.12's
     MPS allocator only trims its cache when the driver's allocation passes the LOW watermark, which
     defaults to 1.4 x recommendedMaxWorkingSetSize = 1.4 x 12124 MB = 16974 MB on this 16 GB
     machine, i.e. never before the machine is out of memory. Over 400 real docs the cache grew the

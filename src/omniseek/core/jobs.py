@@ -778,7 +778,7 @@ def register_shipped_jobs() -> None:
     # ~/.omniseek/state/digest-themes.json is absent, so a fresh deploy without themes pushes nothing.
     # Enabled in CODE (not a profile override) because the profile file, once present, gates walled
     # sources OFF by default -- so enabling a JOB via the profile would silently disable the walled
-    # source fleet (the mini runs profile-less on purpose). See profile.is_source_enabled.
+    # source fleet (the live deployment runs profile-less on purpose). See profile.is_source_enabled.
     register_job("digest", "weekly@mon-09:00", infra_jobs.run_digest, enabled=True,
                  budget_s=1200,  # the agent briefing (frontier LLM + eye/brain tool loop) needs headroom
                  description="周度跨源精选阅读单(agent 合成,只读眼+脑)→ 企业微信;主题在 ~/.omniseek/state/digest-themes.json(可编辑,无主题则空跑)")

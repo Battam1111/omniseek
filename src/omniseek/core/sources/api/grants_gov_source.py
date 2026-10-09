@@ -18,7 +18,7 @@ backend="grants_gov" (its own upstream, distinct from api.nsf.gov / api.reporter
 explicit_only: a named funding-opportunity drill. closeDate is the application DEADLINE (the
 field an applicant cares about most), so it is used as the doc date.
 
-ENV note: the Claude sandbox DNS-blackholes api.grants.gov (198.18.x); the real adapter runs on
+ENV note: the sandboxed build environment DNS-blackholes api.grants.gov (198.18.x); the real adapter runs on
 the Mac eye host, which reaches it. Live-verify the oppHits field names from OmniSeek host
 (omniseek_search 单源钻取) before trusting them. Recon trail: brain note eye-free-api-probe-round2-2026-06-21.
 """

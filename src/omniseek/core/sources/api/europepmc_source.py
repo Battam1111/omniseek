@@ -34,7 +34,7 @@ clinical / life-sciences question) rather than broad-fan-out fodder that would
 pull PubMed-flavoured hits into a general ML retrieval.
 
 Recon trail: field names from the live Europe PMC REST docs + a probe of the
-search + fullTextXML endpoints (the Claude sandbox DNS-blackholes www.ebi.ac.uk;
+search + fullTextXML endpoints (the sandboxed build environment DNS-blackholes www.ebi.ac.uk;
 OmniSeek host live-verifies post-deploy).
 """
 

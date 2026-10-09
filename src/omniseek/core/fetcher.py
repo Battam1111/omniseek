@@ -549,7 +549,7 @@ def _has_declared_fetch_url_owner(url: str, adapters: list["SourceAdapter"]) -> 
 
 
 def _with_deadline(fn, seconds: Optional[float]):
-    """``fn`` run under the caller's deadline ``seconds`` from NOW (driver ruling 2, 2026-09-29): every
+    """``fn`` run under the caller's deadline ``seconds`` from NOW (design decision 2, 2026-09-29): every
     declared gate inside stops waiting at that moment and the request is not sent, instead of queueing
     on after the caller has given up. The deadline is fixed when this is called, so a wrapper handed to
     another thread keeps the caller's clock."""
@@ -2199,7 +2199,7 @@ _JUDG_NOTE_CHARS = 200      # truncate each judgment's note snippet (cartographe
 
 
 def _compact_judgments(node_ids: list[str], stmt_index: dict) -> "tuple[list[dict], bool]":
-    """The driver's OWN prior STATEMENTS touching any of ``node_ids`` (a hit's work: ids + its doc: id),
+    """The agent's OWN prior STATEMENTS touching any of ``node_ids`` (a hit's work: ids + its doc: id),
     compacted for the placement stamp: each ``{src, type, dst, note?}`` with self-describing labels
     (``_id_self_label`` for a ``{kind}:label:{x}`` id, else the raw id) and a note snippet capped at
     ``_JUDG_NOTE_CHARS``, deduped on the directed (src, dst, type) key, capped to ``_JUDG_MAX``. Returns
@@ -2244,7 +2244,7 @@ def _norm_arxiv_id(s: str) -> str:
 def _place_graph_presence(ranked: list[Document]) -> None:
     """Phase 1 STRUCTURAL PLACEMENT (off-loop store read, fail-open): stamp each scholarly result with (a)
     what the graph's STORE-MEMORY holds about its WORK entity -- the count of stored M/A graph_edges by type
-    -- AND (b) the driver's OWN prior tier-J STATEMENTS touching this entity (by its work: ids AND its doc:
+    -- AND (b) the agent's OWN prior tier-J STATEMENTS touching this entity (by its work: ids AND its doc:
     id). So both the accreted mechanical relations AND my own recorded judgments arrive ALREADY PLACED in the
     reflexive search, closing the write-side loop with no omniseek_graph verb invoked.
 
@@ -2278,7 +2278,7 @@ def _place_graph_presence(ranked: list[Document]) -> None:
         return
     from collections import Counter
     from omniseek.core.recall.graph import doc_node_id
-    # The driver's OWN typed statements (tier J): loaded + folded ONCE per search (fail-open to empty), then
+    # The agent's OWN typed statements (tier J): loaded + folded ONCE per search (fail-open to empty), then
     # O(1) per-hit lookups. Empty under any read failure -> the judgments arm silently no-ops.
     stmt_index: dict = {}
     try:
@@ -2363,7 +2363,7 @@ def _place_graph_presence(ranked: list[Document]) -> None:
             if jcapped:
                 stamp["judgments_capped"] = True
             stamp["judgments_note"] = ("your OWN prior recorded statements on this entity (tier J, the "
-                                       "driver's judgment, not mechanical facts and not live)")
+                                       "agent's judgment, not mechanical facts and not live)")
         elif counts:
             stamp["judgments"] = []   # in_graph but UNJUDGED: the conspicuous blank = the write-reflex cue
         try:

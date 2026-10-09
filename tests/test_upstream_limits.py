@@ -176,7 +176,7 @@ class DeclarationTests(unittest.TestCase):
         self.assertEqual([], cov["unknown_sources"], "declarations name sources that do not exist")
 
     def test_a_source_parked_at_run_time_leaves_both_checks_as_they_were(self):
-        """Driver ruling of 2026-09-29 (the mini pre-deploy check): a source parked by runtime state or an
+        """Design decision of 2026-09-29 (the pre-deploy check): a source parked by runtime state or an
         online override (here: a retire overlay row, as a curator verdict writes one) is out of service,
         but the code still has it. "Every in-service source is declared" is judged on the in-service
         sources, "every declared name exists" on every source, so parking one changes neither."""
@@ -1039,7 +1039,7 @@ class DeclaredUserAgentTests(unittest.TestCase):
     """A host whose upstream declares a User-Agent gets exactly that string from every shared egress
     layer (both shared clients, safe_fetch and so web_fallback / omniseek_read, the redirect walker used by
     docreader, the curl tier, the direct fetch paths), redirect hops included; every other host keeps
-    what it had; the shared browser refuses such a host (driver decision, 2026-09-29)."""
+    what it had; the shared browser refuses such a host (design decision, 2026-09-29)."""
 
     def setUp(self):
         _reset_guard(upstreams.guard("wikimedia"))
@@ -1233,7 +1233,7 @@ _FAMILY = ("wikipedia.org", "wikimedia.org", "wikidata.org", "wiktionary.org", "
 
 
 class WikimediaFamilyTests(unittest.TestCase):
-    """The whole Wikimedia family is one declaration (driver decision, 2026-09-29): every listed domain
+    """The whole Wikimedia family is one declaration (design decision, 2026-09-29): every listed domain
     and every subdomain of it share the one Wikimedia gate and the declared user_agent. A suffix is
     written with a leading dot and matches at a label boundary only, so a look-alike never does."""
 
@@ -1743,7 +1743,7 @@ class AsyncAdmissionTests(unittest.TestCase):
 
 
 class GateCoreTests(unittest.TestCase):
-    """Task R3 (driver rulings of 2026-09-29 on review N1 to N5, P1, P3, P6): one first-come-first-served
+    """Task R3 (design decisions of 2026-09-29 on review N1 to N5, P1, P3, P6): one first-come-first-served
     line for sync and async callers, leased permits, one try at a host gate while holding the browser's
     turn, and the smaller fixes."""
 
@@ -1912,7 +1912,7 @@ class GateCoreTests(unittest.TestCase):
         return _PW
 
     def test_P1_a_stuck_pooled_render_gives_the_host_back_when_its_lease_runs_out(self):
-        """Pooled CDP (as on mini): a render whose page load hangs holds the host's gate inside the pool
+        """Pooled CDP (as deployed): a render whose page load hangs holds the host's gate inside the pool
         worker. With a 0.6 s render timeout the caller gives up at 0.6 s and the pool retires the
         worker, which stays stuck; the host's gate comes back when the lease (the render's own 0.6 s,
         no waiting) runs out, instead of never."""
@@ -2435,7 +2435,7 @@ class RedirectRuleTests(unittest.TestCase):
         return anyio.run(run)
 
     def test_a_redirect_chain_has_one_budget(self):
-        """Driver rulings of 2026-09-29 (section 16.5 item 1, and the objection in 16.8). Without a
+        """Design decisions of 2026-09-29 (section 16.5 item 1, and the objection in 16.8). Without a
         caller's deadline the chain's budget is the first gated hop's max_wait_s (0.5 s here) and only
         waiting at gates uses it up: after the first hop waited 0.3 s, a second hop that must wait
         0.4 s is refused (its own 0.5 s would allow it), one that must wait 0.1 s goes after about
@@ -2516,7 +2516,7 @@ class RedirectRuleTests(unittest.TestCase):
         self.assertEqual(("ok", [a, b], (1, 1)), out["slow answer"])
 
     def test_a_budget_used_up_before_the_gate_is_tried_says_so(self):
-        """Driver ruling of 2026-09-29: when the budget is gone before a gate is even tried, the
+        """Design decision of 2026-09-29: when the budget is gone before a gate is even tried, the
         refusal says past this call's budget, not that the gate is saturated: whether the gate is
         free or another caller holds it, sync and async."""
         with _temp_upstream("t-spent", "spent.test.invalid", {"max_inflight": 1, "max_wait_s": 2.0}) as g:
@@ -2778,7 +2778,7 @@ class ModuleClientRedirectTests(unittest.TestCase):
         return problems
 
     def test_the_modules_off_the_rule_still_reach_no_gated_host(self):
-        """Driver ruling of 2026-09-29 (section 16.5, item 7): the modules above stay off the redirect
+        """Design decision of 2026-09-29 (section 16.5, item 7): the modules above stay off the redirect
         rule only while no host they reach is declared with a gate or a robots.txt Crawl-delay. The
         day one is, this fails and says so. Its own reverse control: a gate declared for a host one of
         them uses is caught."""
@@ -2790,7 +2790,7 @@ class ModuleClientRedirectTests(unittest.TestCase):
 
 
 class MCPTransportGateTests(unittest.TestCase):
-    """Driver ruling of 2026-09-29: the MCP transport (sources/_mcp.py) takes the declared gates like
+    """Design decision of 2026-09-29: the MCP transport (sources/_mcp.py) takes the declared gates like
     every other egress, although no MCP row exists today; and no module sends through the shared
     clients itself without doing the same."""
 
@@ -2868,7 +2868,7 @@ class MCPTransportGateTests(unittest.TestCase):
 
 
 class ResponseRecordingTests(unittest.TestCase):
-    """Driver ruling of 2026-09-29 (section 16.5, item 2): every response is recorded once, on its own
+    """Design decision of 2026-09-29 (section 16.5, item 2): every response is recorded once, on its own
     host, whichever client or layer made the request."""
 
     A, B = "rec-a.test.invalid", "rec-b.test.invalid"
@@ -3063,7 +3063,7 @@ class DeferralTests(unittest.TestCase):
         self.assertTrue(all(isinstance(r, str) and len(r) > 40 for r in upstreams.SELF_BACKOFF.values()))
 
     def test_retry_after_also_defers_the_hosts_crawl_delay_gate(self):
-        """Driver ruling of 2026-09-29 (section 16.5, item 5): a response carrying Retry-After also
+        """Design decision of 2026-09-29 (section 16.5, item 5): a response carrying Retry-After also
         defers the robots.txt Crawl-delay gate of the host it came from. A host with that gate and no
         upstream gate used to defer nothing."""
         from omniseek.core import safeurl
@@ -3136,7 +3136,7 @@ class DeferralTests(unittest.TestCase):
         thirty_after("byid", "byid")
 
     def test_an_exempt_module_still_defers_the_hosts_crawl_delay_gate(self):
-        """Driver ruling of 2026-09-29: defer_on_429=False (a module in SELF_BACKOFF) exempts the
+        """Design decision of 2026-09-29: defer_on_429=False (a module in SELF_BACKOFF) exempts the
         upstream gate only; the host's Crawl-delay gate is deferred regardless, whether the response
         is recorded by hand or by a HopClient built with defer_on_429=False (the search backend's
         shape)."""
@@ -3511,7 +3511,7 @@ class _ASlowBody(httpx.AsyncByteStream):
 
 
 class ProgressLeaseTests(unittest.TestCase):
-    """Driver ruling of 2026-09-29 on section 17.5, item 2: a request that holds a gate either renews its
+    """Design decision of 2026-09-29 on section 17.5, item 2: a request that holds a gate either renews its
     lease by its progress or has a total deadline no later than the lease. Where OmniSeek reads the body
     itself, every block of it moves the lease to that moment plus the request's own timeout; a holder
     that makes no progress is still reclaimed when its lease runs out; a library that reads the body
@@ -4071,7 +4071,7 @@ class ProgressCoverageTests(unittest.TestCase):
 
 
 class FirstByteLeaseTests(unittest.TestCase):
-    """Review X section 12.8, Q1, and the driver ruling of 2026-09-29: before its first byte a request makes
+    """Review X section 12.8, Q1, and the design decision of 2026-09-29: before its first byte a request makes
     progress twice, when it has been sent and when its headers arrive; both renew its leases, so a slow
     connection or a slow first byte inside the request's own timeout keeps the permit, and a one-permit
     gate never has two requests on the wire."""

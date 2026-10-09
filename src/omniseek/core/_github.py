@@ -325,7 +325,7 @@ def _backlog_shed(wait: float) -> "_GitHubShed":
 
 
 def _budget(path: str) -> tuple[float, float]:
-    """ONE budget for every gate of one request (driver ruling 2): the smallest declared max_wait_s
+    """ONE budget for every gate of one request (design decision 2): the smallest declared max_wait_s
     of the gates it passes, cut to the caller's deadline. Returns (max_wait, until)."""
     mw = upstreams.max_wait("github")
     if (path or "").startswith("/search/code"):

@@ -198,7 +198,7 @@ def safe_fetch(url: str, *, method: str = "GET", render: bool = False,
                 with client.stream(method, pinned_url, headers=req_headers,
                                    extensions=extensions, timeout=timeout_total) as resp:
                     # every response on its own host, by its real name (the wire URL is the pinned
-                    # IP): readings, and a Retry-After defers its gates (driver ruling 2026-09-29)
+                    # IP): readings, and a Retry-After defers its gates (design decision 2026-09-29)
                     upstreams.observe_response(current_url, resp)
                     status = resp.status_code
                     # Redirect? re-validate the Location target as a brand-new untrusted URL.

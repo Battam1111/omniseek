@@ -1,6 +1,6 @@
 """A note link the platform refuses must stop at the browser, never fall through to the signed API.
 
-What happened (2026-09-26, mini): an App share link (xsec_token CB..., xsec_source=app_share) for a
+What happened (2026-09-26): an App share link (xsec_token CB..., xsec_source=app_share) for a
 note older than about 60 days opened in the logged-in 9224 browser and was server-redirected to
 /404/sec_... and then /404. The mainland adapter read that as an empty page and fell through to the
 signed feed call, which carried a hardcoded xsec_source=pc_feed and drew HTTP 461 / code 300031;

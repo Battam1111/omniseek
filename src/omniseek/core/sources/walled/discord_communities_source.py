@@ -1,6 +1,6 @@
 """Discord communities — read research/peer/job channels via a bot token (REST).
 
-Phase 4 P14 (2026-05-29). opus sub-agent verified the mechanism against the
+Phase 4 P14 (2026-05-29). A research pass verified the mechanism against the
 official Discord API docs. We poll `GET /api/v10/channels/{id}/messages` with
 `Authorization: Bot {token}` — no gateway/websocket needed for periodic reads,
 and plain httpx is enough (no discord.py).

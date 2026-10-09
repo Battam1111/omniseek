@@ -44,7 +44,7 @@ def _holder_label(holder) -> str:
     return getattr(holder, "get_name", lambda: None)() or f"thread {holder}"
 
 
-# REQUESTS THAT WERE SENT (review N2, driver ruling of 2026-09-29). A hold's reservation is handed back
+# REQUESTS THAT WERE SENT (review N2, design decision of 2026-09-29). A hold's reservation is handed back
 # only when nothing was sent after it was made. Every hold registers a handle in the current context
 # while it runs; recording a response (upstreams.observe calls mark_sent) marks every handle
 # registered in that context as sent. So a failure after a response (a same-host hop that cannot
@@ -77,7 +77,7 @@ def mark_sent() -> None:
         handle.sent = True
 
 
-# RENEWED BY PROGRESS (driver ruling of 2026-09-29 on section 17.5, item 2). Where OmniSeek sees a
+# RENEWED BY PROGRESS (design decision of 2026-09-29 on section 17.5, item 2). Where OmniSeek sees a
 # request's body arrive (http's progress streams, the curl tier's download loop), every block of data
 # renews the leases of the holds that request runs under; they are taken once, when the response
 # arrives (``active_handles``), so the renewal reaches them wherever the body is read.
@@ -105,7 +105,7 @@ def _unregister_hold(handle: HoldHandle, token) -> None:
         pass
 
 
-# ONE LINE AND LEASES FOR EVERY GATE (driver ruling of 2026-09-29 on review N1 and P1).
+# ONE LINE AND LEASES FOR EVERY GATE (design decision of 2026-09-29 on review N1 and P1).
 class _Lease:
     """One permit handed out by a ``FairPermits``: who holds it and when its lease ends (None: never,
     for a permit taken with ``acquire``). ``active`` turns False when it is given back or reclaimed."""
@@ -350,7 +350,7 @@ class FairPermits:
         self.release()
 
 
-# THE CALLER'S DEADLINE (driver ruling 2, 2026-09-29). A gate never keeps a caller waiting past the
+# THE CALLER'S DEADLINE (design decision 2, 2026-09-29). A gate never keeps a caller waiting past the
 # caller's own deadline: the permit wait and the start wait together stay within the declared
 # max_wait_s AND the time the caller has left, across every gate one request passes. The deadline
 # rides this context variable from where it is decided (broad and named search, omniseek_read, the health
@@ -717,7 +717,7 @@ class BackendGuard:
         while waiting for the slot means every start is at least ``min_interval_s`` after the
         previous one, and with ``max_inflight=1`` the upstream sees exactly one request at a time.
 
-        ONE budget for both waits (driver ruling 2): the permit wait (in the gate's one line, review
+        ONE budget for both waits (design decision 2): the permit wait (in the gate's one line, review
         N1) and the start wait together end at ``until`` (monotonic), by default ``max_wait`` from now
         or the caller's deadline if sooner. No permit by then raises ``on_busy``; a start slot past it
         raises ``on_backlog(wait)`` (or ``on_busy``) at once, reserving nothing; a budget already used
@@ -835,7 +835,7 @@ class BackendGuard:
         for it. The slot reservation is under the lock; the wait is NOT, so callers do not serialize
         on the lock itself, only on the wire-rate. Bounds requests/second across all callers + threads.
 
-        The wait is bounded (driver ruling 2): by ``until`` if given, else ``max_wait`` from now cut to
+        The wait is bounded (design decision 2): by ``until`` if given, else ``max_wait`` from now cut to
         the caller's deadline, else the caller's deadline alone. A start past that bound is not
         reserved; ``on_backlog(wait)`` (or a GateBusy) is raised instead, so a pathological backlog
         sheds load and drains. Returns the reservation (hand it to ``refund`` if the request is then

@@ -66,7 +66,7 @@ EXEMPT: dict[str, str] = {
     "xiaohongshu": ("its check sends the site nothing: it asks only whether OUR browser is up and returns "
                     "None when it is (the account is protected; named search / read is its real probe)"),
     "polyu": ("its check sends nothing: with the browser up and the login file present it returns None "
-              "(the eStudent / Outlook session heals on use; driver ruling 2026-10-04: no real probe)"),
+              "(the eStudent / Outlook session heals on use; design decision 2026-10-04: no real probe)"),
 }
 
 # Sources the sweep can drive only when an optional-looking library is importable: without it the
@@ -78,7 +78,7 @@ NEEDS_MODULE: dict[str, str] = {"youtube": "yt_dlp", "youtube_channels": "yt_dlp
 # Sources whose check sends nothing at all (a local dependency is the whole of what it can verify):
 # the contract only rules out False for them.
 LOCAL_ONLY: dict[str, str] = {
-    "pdf": "no fixed upstream; the check only imports the local PDF parser (driver ruling 2026-10-04)",
+    "pdf": "no fixed upstream; the check only imports the local PDF parser (design decision 2026-10-04)",
 }
 # The module each LOCAL_ONLY check imports. Where it is not installed (a base install has no [pdf]
 # extra, as in the public mirror's CI) False is the true answer, so the sweep holds it to nothing.

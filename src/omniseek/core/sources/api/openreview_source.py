@@ -71,7 +71,7 @@ _VENUE_ALIASES = {
 
 # `reviews:` qualifier: fetch the actual PEER REVIEWS / rebuttals / meta-reviews of one
 # submission (a forum id). The reply notes of a forum carry the reviewer ratings + text; this
-# is the unique-to-OpenReview signal (the Galleria peer-review dimension's raw material).
+# is the unique-to-OpenReview signal (the raw material for peer-review analysis).
 # Accepts a bare forum id (`reviews:zzz123`) or an openreview.net/forum?id=… URL.
 _REVIEWS_RE = re.compile(r"(?:^|\s)reviews\s*:\s*(\S+)", re.IGNORECASE)
 # Reply notes whose content carries a review-ish field → treated as a review/meta-review/rebuttal.

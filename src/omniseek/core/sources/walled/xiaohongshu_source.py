@@ -6,7 +6,7 @@ search inside the logged-in session.
 ## 🔒 SEALED 2026-05-29 → P13 stealth overhaul
 
 This adapter was sealed after 小红书 officially warned that automated browsing
-was detected (ban risk). Two opus research sub-agents (red team + blue team)
+was detected (ban risk). Two research passes (red team + blue team)
 concluded:
 - The `connect_over_cdp` + **real Chrome + real profile + real residential IP**
   base is the *correct* stealth foundation (MediaCrawler 30k★ uses the same).
@@ -68,7 +68,7 @@ logger = logging.getLogger(__name__)
 # this profile directly, but as a GUEST (search there is login-walled; only
 # tokened note pages are guest-readable). So the search flow MUST ride
 # rednote.com, while fetch_url may fall back to xiaohongshu.com for the note
-# body when the mini's egress blackholes rednote.com alone (a proxy MATCH-lane
+# body when the host's egress blackholes rednote.com alone (a proxy MATCH-lane
 # exit node dying takes rednote.com with it while xiaohongshu.com rides the
 # direct lane — the 2026-08-11 outage). The note DOM is identical on both hosts.
 HOME_URL = "https://www.rednote.com"
@@ -130,10 +130,10 @@ _XHS_CDP_URL = "http://127.0.0.1:9223"
 #    • Frequency gate below keeps it human-paced.
 # ⚠️ HONEST RESIDUAL RISK (xhs-safety research wf_d76576c5 →
 #    docs/platform-notes/xiaohongshu-safety-research.md): "万无一失" is NOT
-#    achievable on this Mini. Two IRREDUCIBLE high-magnitude risks remain:
+#    achievable on this host. Two IRREDUCIBLE high-magnitude risks remain:
 #    (1) the server-side device-graph edge (大号↔小号↔device/IP, written when the 大号
 #        was penalized — no client action erases it); (2) hardware-fingerprint sameness
-#        (Canvas/WebGL/audio/CPU of this physical Mini, identical regardless of
+#        (Canvas/WebGL/audio/CPU of this physical machine, identical regardless of
 #        profile/IP); + same egress IP as the 大号. Net: this LOWERS the probability of
 #        active punishment, it does NOT sever the association. The operator accepts this
 #        residual (informed choice 2026-06-03).
@@ -148,7 +148,7 @@ CACHE_TTL = 21600          # 6h — identical queries hit cache, no live request
 # C (2026-06-14): build search docs from the INTERCEPTED /search/notes XHR JSON (CDP Network
 # domain) instead of parsing the rendered DOM. More robust (JSON survives HTML changes that
 # break DOM selectors), captures EVERY paginated XHR (recall >= DOM), and skips the
-# page.content()+BeautifulSoup parse. Verified on the mini: the JSON carries xsec_token (detail
+# page.content()+BeautifulSoup parse. Verified live: the JSON carries xsec_token (detail
 # link), display_title, user.nickname, interact_info.liked_count, and a full publish date.
 # Set False to instantly fall back to the DOM path if xhs ever changes the JSON schema.
 _USE_XHR_CAPTURE = True

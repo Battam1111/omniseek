@@ -186,7 +186,7 @@ def _post_responses(client: "httpx.Client", creds: dict, inp: list, tools: Optio
     """One /responses turn, STREAMED (SSE) over the SHARED client. Two robustness layers:
       1. STREAM: a non-streamed long request idle-times-out on the proxy while GPT-5.6 reasons
          (observed: SSL UNEXPECTED_EOF at ~70s); the SSE keeps the connection alive.
-      2. RETRY + connection REUSE: the httpx TLS handshake through the mini's TUN intermittently
+      2. RETRY + connection REUSE: the httpx TLS handshake through the host's TUN intermittently
          SSL-EOFs (~half of fresh connects; mihomo's own connect is fine, so it is an httpx/TLS glitch,
          not a route problem). The shared client REUSES a live connection (one handshake amortised over
          all turns), and each turn RETRIES with backoff on any transport error.

@@ -51,7 +51,7 @@ WIKI_REST_SUMMARY = "https://en.wikipedia.org/api/rest_v1/page/summary/"
 WIKIDATA_API = "https://www.wikidata.org/w/api.php"
 WIKIDATA_ENTITY_BASE = "https://www.wikidata.org/wiki"
 
-# WIKIMEDIA USER-AGENT (driver decisions, 2026-09-29). The Wikimedia Foundation User-Agent Policy
+# WIKIMEDIA USER-AGENT (design decisions, 2026-09-29). The Wikimedia Foundation User-Agent Policy
 # (foundation.wikimedia.org/wiki/Policy:Wikimedia_Foundation_User-Agent_Policy, read 2026-09-28) asks a
 # bot for name/version, a contact, the word "bot", and never a browser's User-Agent. The string lives
 # in ONE place, upstreams.json "wikimedia" -> "user_agent" (contact: the public OmniSeek repo, no

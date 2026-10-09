@@ -96,7 +96,7 @@ def _core_late(wait: float) -> GateBusy:
 def _core_get(url: str, **kwargs):
     """Single CORE egress chokepoint: all requests to api.core.ac.uk pass through here so the global
     in-flight cap (_core_sema) bounds concurrent requests to the shared key-quota host. The gate wait
-    is the declared max_wait_s cut to the caller's deadline (driver ruling 2); the request itself goes
+    is the declared max_wait_s cut to the caller's deadline (design decision 2); the request itself goes
     through http.direct, so a redirect follows the one redirect rule and every hop's rate-limit headers
     are recorded (a Retry-After defers the whole CORE gate)."""
     with _core_guard.hold(upstreams.max_wait("core"), _core_busy, _core_late,

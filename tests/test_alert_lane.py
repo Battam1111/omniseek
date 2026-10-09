@@ -1,7 +1,7 @@
 """Contract for the alarm lane (2026-08-12, after Bark was deleted from the fleet).
 
 The failure it exists to prevent: every infra alarm pushed to Bark alone, Bark was unreachable from
-the mini (three probes, the connection never establishing, 20s timeouts), and the push helper was
+the service host (three probes, the connection never establishing, 20s timeouts), and the push helper was
 fail-open and SILENT. So alarms were written, counted, logged as pushed, and delivered nowhere. A
 siren nobody hears is worse than no siren, because the quiet reads as calm. Bark is now gone and
 WeCom is the one channel; what these tests hold is that a silent lane can never happen again.

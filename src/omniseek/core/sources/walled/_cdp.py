@@ -70,11 +70,11 @@ DEFAULT_THREAD_TIMEOUT = 90  # seconds
 # ── on-demand browser lifecycle (2026-08-29) ──────────────────────────────────────────────────
 # Until now the four CDP Chromes were launched at boot by launchd and stayed up forever, because
 # this module only ever CONNECTS (see cdp_page's "Don't close the browser — it's shared,
-# persistent"). Measured cost of that choice on the mini: 3.1 GB of resident memory across 64
+# persistent"). Measured cost of that choice on the live host: 3.1 GB of resident memory across 64
 # processes, 11.5 GB of profile directories, and 248,762 lines of error log from browsers retrying
 # an unreachable Google push transport. Measured benefit: about 24 calls a day, each a few seconds.
 #
-# The memory mattered because the machine is a 16 GB M4 mini whose swap was 98.3% full, which
+# The memory mattered because the machine has 16 GB of memory and its swap was 98.3% full, which
 # pushed the 1.4 GB recall index onto disk and made a cold vector query take 8.8 s out of an 11 s
 # search budget — starving several dozen sources into timeout. Freeing the browsers is the only
 # lever that returns GBs (measured alternatives: capping local retrieval returns nothing, and the
@@ -186,7 +186,7 @@ def ensure_browser(cdp_url: str) -> None:
     """Make sure the CDP Chrome for this url is running, starting it if it is not.
 
     No-ops on any non-macOS host and on any port outside _CDP_SERVICES, so the only environment
-    whose behaviour changes is the mini's four launchd-managed browsers.
+    whose behaviour changes is the deployment's four launchd-managed browsers.
 
     Raises RuntimeError if the browser cannot be brought up: the caller (cdp_call) already
     propagates exceptions and every walled adapter degrades a raise to an empty result, so a
@@ -233,7 +233,7 @@ def ensure_browser(cdp_url: str) -> None:
 def close_browser(cdp_url: str, timeout: float = 5.0) -> bool:
     """Ask the Chrome at ``cdp_url`` to shut down the normal way, with the CDP command Browser.close.
 
-    Why not a signal (measured 2026-10-05 on the mini, with a throwaway Chrome run exactly like the
+    Why not a signal (measured 2026-10-05 on the live host, with a throwaway Chrome run exactly like the
     four services): at startup Chrome clones its own app bundle into a temp directory, and only the
     end of a normal shutdown starts the helper that deletes the clone (see omniseek.core.chrome_clones).
     ``launchctl kill TERM`` left the clone behind 12 times out of 12 (no cleanup helper ever
@@ -853,7 +853,7 @@ def wait_through_cloudflare(page, timeout: float = 20.0) -> bool:
     """Wait out a Cloudflare 'Just a moment' interstitial before reading the page.
 
     The persistent real Chrome (real profile + fingerprint) solves CF's non-interactive JS
-    challenge on its OWN — measured ~2s on the mini (verified 2026-06-11 on 1point3acres). The
+    challenge on its OWN — measured ~2s live (verified 2026-06-11 on 1point3acres). The
     only bug was reading title/content BEFORE it cleared (the cause of the false 'CF-walled,
     needs VNC' verdict). This polls cheaply until the CF markers are gone.
 

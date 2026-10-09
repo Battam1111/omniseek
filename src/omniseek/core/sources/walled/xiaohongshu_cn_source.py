@@ -37,7 +37,7 @@ MediaCrawler "page.evaluate the signer" trick is dead. xhshow re-implements the 
 survives the common input/constant rotation; on a FULL scheme rotation it breaks and is fixed by
 a lib bump, with the rednote browser-scroll adapter staying as the degraded fallback.
 
-IDENTITY = (mainland account logged into the 9224 Chrome, its cookies, the mini's Shenzhen
+IDENTITY = (mainland account logged into the 9224 Chrome, its cookies, the host's mainland
 residential DIRECT IP). The 9224 browser stays alive ONLY to mint/refresh cookies (and for
 captcha / manual fallback); every data fetch here is browserless. READ-ONLY. Paced under the safe
 rate (a jittered min-interval between signed calls + the 6h per-note cache). explicit_only so it

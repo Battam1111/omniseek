@@ -1,5 +1,5 @@
 {
- "_doc": "One entry per independent upstream OmniSeek sends requests to. terms = what the upstream publishes (a number, or 未公布 plus where_checked saying where we looked; url + checked date always). gate = what OmniSeek enforces through the shared BackendGuard (never looser than terms; http_gate false = enforced by the module's own pacer). terms.robots_crawl_delay_s = the Crawl-delay a host's robots.txt sets for User-agent *; each such host gets its own gate (one request at a time, starts at least the delay apart), taken after the upstream gate so the stricter always holds (driver decision, 2026-09-29). terms.max_concurrency 1 also makes the shared http clients use a no-keep-alive HTTP/1.1 transport and send Connection: close for that upstream's hosts. user_agent = the User-Agent the upstream's policy requires: every shared egress layer sends exactly this string to the entry's hosts (redirect hops included) and the shared browser refuses them; the one place it is written (driver decision, 2026-09-29). hosts = exact host names; an entry that starts with '.' is a domain suffix and matches every subdomain of that domain, not the bare domain (list that on its own); for one host a gated entry wins, then an exact entry, then the longest suffix (driver decision, 2026-09-29). disabled = OmniSeek does not send to this upstream: {reason, source, checked, ...}; the code that would send reads it, sends nothing and reports the reason (driver decision, 2026-09-29). pending = a published value not enforced yet and why. A new source must be listed under an existing upstream's sources (or backends) or get its own entry: tests/test_upstream_limits.py fails otherwise. Terms research: task R, 2026-09-28; robots sweeps 2026-09-28.",
+ "_doc": "One entry per independent upstream OmniSeek sends requests to. terms = what the upstream publishes (a number, or 未公布 plus where_checked saying where we looked; url + checked date always). gate = what OmniSeek enforces through the shared BackendGuard (never looser than terms; http_gate false = enforced by the module's own pacer). terms.robots_crawl_delay_s = the Crawl-delay a host's robots.txt sets for User-agent *; each such host gets its own gate (one request at a time, starts at least the delay apart), taken after the upstream gate so the stricter always holds (design decision, 2026-09-29). terms.max_concurrency 1 also makes the shared http clients use a no-keep-alive HTTP/1.1 transport and send Connection: close for that upstream's hosts. user_agent = the User-Agent the upstream's policy requires: every shared egress layer sends exactly this string to the entry's hosts (redirect hops included) and the shared browser refuses them; the one place it is written (design decision, 2026-09-29). hosts = exact host names; an entry that starts with '.' is a domain suffix and matches every subdomain of that domain, not the bare domain (list that on its own); for one host a gated entry wins, then an exact entry, then the longest suffix (design decision, 2026-09-29). disabled = OmniSeek does not send to this upstream: {reason, source, checked, ...}; the code that would send reads it, sends nothing and reports the reason (design decision, 2026-09-29). pending = a published value not enforced yet and why. A new source must be listed under an existing upstream's sources (or backends) or get its own entry: tests/test_upstream_limits.py fails otherwise. Terms research: task R, 2026-09-28; robots sweeps 2026-09-28.",
  "unpublished": "未公布",
  "optional_sources": {
   "_doc": "Sources the public mirror build removes (public_prepare.sh); a declaration may name them without the stale-name check failing there.",
@@ -46,7 +46,7 @@
     "quote": "Indiscriminate automated downloads from this site are not permitted",
     "url": "https://arxiv.org/robots.txt",
     "checked": "2026-09-28",
-    "where_checked": "arxiv.org/robots.txt read 2026-09-28: Crawl-delay 15 s for User-agent *, enforced as the arxiv.org host gate (driver decision, 2026-09-29). The API terms (info.arxiv.org/help/api/tou.html) cover the APIs, not /abs or /pdf pages; bulk PDF access is via the S3 bulk data",
+    "where_checked": "arxiv.org/robots.txt read 2026-09-28: Crawl-delay 15 s for User-agent *, enforced as the arxiv.org host gate (design decision, 2026-09-29). The API terms (info.arxiv.org/help/api/tou.html) cover the APIs, not /abs or /pdf pages; bulk PDF access is via the S3 bulk data",
     "robots_crawl_delay_s": {"arxiv.org": 15.0}
    }
   },
@@ -316,7 +316,7 @@
     "auth": "未公布",
     "url": "https://europepmc.org/developers",
     "checked": "2026-09-28",
-    "where_checked": "europepmc.org/developers and the RESTful web service docs state no numeric limit; the developer forum (groups.google.com/a/ebi.ac.uk/g/epmc-webservices) only says limits are per IP. www.ebi.ac.uk/robots.txt sets Crawl-delay 10 s for User-agent *, enforced as that host's gate (driver decision, 2026-09-29)",
+    "where_checked": "europepmc.org/developers and the RESTful web service docs state no numeric limit; the developer forum (groups.google.com/a/ebi.ac.uk/g/epmc-webservices) only says limits are per IP. www.ebi.ac.uk/robots.txt sets Crawl-delay 10 s for User-agent *, enforced as that host's gate (design decision, 2026-09-29)",
     "robots_crawl_delay_s": {"www.ebi.ac.uk": 10.0}
    }
   },
@@ -377,7 +377,7 @@
     "url": "https://www.mediawiki.org/wiki/Wikimedia_APIs/Rate_limits",
     "checked": "2026-09-28",
     "where_checked": "daily quota: none; limits are per minute. robots.txt of both hosts (read 2026-09-28 with the compliant User-Agent; a User-Agent without contact got HTTP 403): no Crawl-delay",
-    "notes": "New in 2026 and enforced on all APIs since June 2026. Respect Retry-After on 429/503, else wait at least 5 s. User-Agent policy: foundation.wikimedia.org/wiki/Policy:Wikimedia_Foundation_User-Agent_Policy (read 2026-09-28). Compliant User-Agent (driver decision, 2026-09-29), declared here as user_agent (driver decision, 2026-09-29). Hosts: the whole Wikimedia family (driver decision, 2026-09-29), because the User-Agent policy covers every Wikimedia site: each listed domain, and through its leading-dot entry every subdomain of it, share this one gate and this one user_agent. robots.txt was read for en.wikipedia.org and www.wikidata.org only."
+    "notes": "New in 2026 and enforced on all APIs since June 2026. Respect Retry-After on 429/503, else wait at least 5 s. User-Agent policy: foundation.wikimedia.org/wiki/Policy:Wikimedia_Foundation_User-Agent_Policy (read 2026-09-28). Compliant User-Agent (design decision, 2026-09-29), declared here as user_agent (design decision, 2026-09-29). Hosts: the whole Wikimedia family (design decision, 2026-09-29), because the User-Agent policy covers every Wikimedia site: each listed domain, and through its leading-dot entry every subdomain of it, share this one gate and this one user_agent. robots.txt was read for en.wikipedia.org and www.wikidata.org only."
    },
    "gate": {
     "max_inflight": 3,
@@ -599,7 +599,7 @@
     "quote": "Search REST API endpoints 30 requests per minute",
     "url": "https://developers.zenodo.org/",
     "checked": "2026-09-28",
-    "where_checked": "concurrency and daily quota: not stated. zenodo.org/robots.txt sets Crawl-delay 10 s, enforced as that host's gate on top of these windows (driver decision, 2026-09-29)",
+    "where_checked": "concurrency and daily quota: not stated. zenodo.org/robots.txt sets Crawl-delay 10 s, enforced as that host's gate on top of these windows (design decision, 2026-09-29)",
     "robots_crawl_delay_s": {"zenodo.org": 10.0}
    },
    "gate": {
@@ -718,7 +718,7 @@
     "quote": "individual IP address limit of 25 requests per second",
     "url": "https://www.statcan.gc.ca/en/developers/wds/user-guide",
     "checked": "2026-09-28",
-    "where_checked": "concurrency and daily quota: not stated. The host's robots.txt sets Crawl-delay 2 s, enforced as that host's gate on top of the 25/s window (driver decision, 2026-09-29)",
+    "where_checked": "concurrency and daily quota: not stated. The host's robots.txt sets Crawl-delay 2 s, enforced as that host's gate on top of the 25/s window (design decision, 2026-09-29)",
     "robots_crawl_delay_s": {"www150.statcan.gc.ca": 2.0}
    },
    "gate": {
@@ -1073,7 +1073,7 @@
     "url": "https://duckduckgo.com/terms",
     "checked": "2026-09-28",
     "where_checked": "no API and no published rate. duckduckgo.com/terms and /acceptable-use forbid unauthorised access or interference; robots.txt of both hosts: see notes",
-    "notes": "robots.txt, checked 2026-09-29: duckduckgo.com/robots.txt has User-agent: * with Disallow: /lite and Disallow: /html; html.duckduckgo.com/robots.txt has User-agent: * with Allow: /. The fallback requests html.duckduckgo.com (POST /html/), and robots.txt applies per host (RFC 9309), so the fallback complies with robots.txt (driver decision, 2026-09-29, withdrawing that day's decision to disable it)."
+    "notes": "robots.txt, checked 2026-09-29: duckduckgo.com/robots.txt has User-agent: * with Disallow: /lite and Disallow: /html; html.duckduckgo.com/robots.txt has User-agent: * with Allow: /. The fallback requests html.duckduckgo.com (POST /html/), and robots.txt applies per host (RFC 9309), so the fallback complies with robots.txt (design decision, 2026-09-29, withdrawing that day's decision to disable it)."
    },
    "gate": {
     "max_inflight": 1,
@@ -1160,7 +1160,7 @@
     "auth": "未公布",
     "url": "https://clinicaltrials.gov/data-api/api",
     "checked": "2026-09-28",
-    "where_checked": "no published rate (the 50 per minute seen in third-party tools is not from ClinicalTrials.gov); robots.txt Crawl-delay 1 s enforced as the host gate (driver decision, 2026-09-29)",
+    "where_checked": "no published rate (the 50 per minute seen in third-party tools is not from ClinicalTrials.gov); robots.txt Crawl-delay 1 s enforced as the host gate (design decision, 2026-09-29)",
     "robots_crawl_delay_s": {"clinicaltrials.gov": 1.0}
    }
   },
@@ -1503,7 +1503,7 @@
     "auth": "未公布",
     "url": "https://data.ontario.ca/",
     "checked": "2026-09-28",
-    "where_checked": "no published API rate; www.ontario.ca/robots.txt Crawl-delay 1 s enforced as that host's gate (driver decision, 2026-09-29)",
+    "where_checked": "no published API rate; www.ontario.ca/robots.txt Crawl-delay 1 s enforced as that host's gate (design decision, 2026-09-29)",
     "robots_crawl_delay_s": {"www.ontario.ca": 1.0},
     "notes": "robots.txt could not be read on 2026-09-28: data.ontario.ca (429)"
    }
@@ -2138,7 +2138,7 @@
     "auth": "未公布",
     "url": "https://academicjobsonline.org/robots.txt",
     "checked": "2026-09-28",
-    "where_checked": "ordinary web pages / RSS or Atom feeds, not an API: no published request rate or quota. Checked: robots.txt of each host (2026-09-28 sweep); Crawl-delay enforced as host gates (driver decision, 2026-09-29): academicjobsonline.org 5s",
+    "where_checked": "ordinary web pages / RSS or Atom feeds, not an API: no published request rate or quota. Checked: robots.txt of each host (2026-09-28 sweep); Crawl-delay enforced as host gates (design decision, 2026-09-29): academicjobsonline.org 5s",
     "robots_crawl_delay_s": {"academicjobsonline.org": 5.0}
    }
   },
@@ -2155,7 +2155,7 @@
     "auth": "未公布",
     "url": "https://www.alignmentforum.org/robots.txt",
     "checked": "2026-09-28",
-    "where_checked": "ordinary web pages / RSS or Atom feeds, not an API: no published request rate or quota. Checked: robots.txt of each host (2026-09-28 sweep); Crawl-delay enforced as host gates (driver decision, 2026-09-29): www.alignmentforum.org 3s",
+    "where_checked": "ordinary web pages / RSS or Atom feeds, not an API: no published request rate or quota. Checked: robots.txt of each host (2026-09-28 sweep); Crawl-delay enforced as host gates (design decision, 2026-09-29): www.alignmentforum.org 3s",
     "robots_crawl_delay_s": {"www.alignmentforum.org": 3.0}
    }
   },
@@ -2188,7 +2188,7 @@
     "auth": "未公布",
     "url": "https://connect.biorxiv.org/robots.txt",
     "checked": "2026-09-28",
-    "where_checked": "ordinary web pages / RSS or Atom feeds, not an API: no published request rate or quota. Checked: robots.txt of each host (2026-09-28 sweep); Crawl-delay enforced as host gates (driver decision, 2026-09-29): connect.biorxiv.org 10s",
+    "where_checked": "ordinary web pages / RSS or Atom feeds, not an API: no published request rate or quota. Checked: robots.txt of each host (2026-09-28 sweep); Crawl-delay enforced as host gates (design decision, 2026-09-29): connect.biorxiv.org 10s",
     "robots_crawl_delay_s": {"connect.biorxiv.org": 10.0}
    }
   },
@@ -2240,7 +2240,7 @@
     "auth": "未公布",
     "url": "https://www.jobbank.gc.ca/robots.txt",
     "checked": "2026-09-28",
-    "where_checked": "ordinary web pages / RSS or Atom feeds, not an API: no published request rate or quota. Checked: robots.txt of each host (2026-09-28 sweep); Crawl-delay enforced as host gates (driver decision, 2026-09-29): www.jobbank.gc.ca 5s",
+    "where_checked": "ordinary web pages / RSS or Atom feeds, not an API: no published request rate or quota. Checked: robots.txt of each host (2026-09-28 sweep); Crawl-delay enforced as host gates (design decision, 2026-09-29): www.jobbank.gc.ca 5s",
     "robots_crawl_delay_s": {"www.jobbank.gc.ca": 5.0}
    }
   },
@@ -2409,7 +2409,7 @@
     "auth": "未公布",
     "url": "https://aisingapore.org/robots.txt",
     "checked": "2026-09-28",
-    "where_checked": "ordinary web pages / RSS or Atom feeds, not an API: no published request rate or quota. Checked: robots.txt of each host (2026-09-28 sweep); Crawl-delay enforced as host gates (driver decision, 2026-09-29): schmidtsciencefellows.org 3s",
+    "where_checked": "ordinary web pages / RSS or Atom feeds, not an API: no published request rate or quota. Checked: robots.txt of each host (2026-09-28 sweep); Crawl-delay enforced as host gates (design decision, 2026-09-29): schmidtsciencefellows.org 3s",
     "robots_crawl_delay_s": {"schmidtsciencefellows.org": 3.0},
     "notes": "robots.txt could not be read on 2026-09-28: www.nserc-crsng.canada.ca (ConnectError), www.openphilanthropy.org (403)"
    }
@@ -2497,7 +2497,7 @@
     "auth": "未公布",
     "url": "https://f.gter.net/robots.txt",
     "checked": "2026-09-28",
-    "where_checked": "ordinary web pages / RSS or Atom feeds, not an API: no published request rate or quota. Checked: robots.txt of each host (2026-09-28 sweep); Crawl-delay enforced as host gates (driver decision, 2026-09-29): f.gter.net 10s",
+    "where_checked": "ordinary web pages / RSS or Atom feeds, not an API: no published request rate or quota. Checked: robots.txt of each host (2026-09-28 sweep); Crawl-delay enforced as host gates (design decision, 2026-09-29): f.gter.net 10s",
     "robots_crawl_delay_s": {"f.gter.net": 10.0}
    }
   },
@@ -2530,7 +2530,7 @@
     "auth": "未公布",
     "url": "https://hongkongfp.com/robots.txt",
     "checked": "2026-09-28",
-    "where_checked": "ordinary web pages / RSS or Atom feeds, not an API: no published request rate or quota. Checked: robots.txt of each host (2026-09-28 sweep); Crawl-delay enforced as host gates (driver decision, 2026-09-29): www.scmp.com 10s",
+    "where_checked": "ordinary web pages / RSS or Atom feeds, not an API: no published request rate or quota. Checked: robots.txt of each host (2026-09-28 sweep); Crawl-delay enforced as host gates (design decision, 2026-09-29): www.scmp.com 10s",
     "robots_crawl_delay_s": {"www.scmp.com": 10.0}
    }
   },
@@ -2599,7 +2599,7 @@
     "auth": "未公布",
     "url": "https://www.alignmentforum.org/robots.txt",
     "checked": "2026-09-28",
-    "where_checked": "ordinary web pages / RSS or Atom feeds, not an API: no published request rate or quota. Checked: robots.txt of each host (2026-09-28 sweep); Crawl-delay enforced as host gates (driver decision, 2026-09-29): www.alignmentforum.org 3s, www.lesswrong.com 3s",
+    "where_checked": "ordinary web pages / RSS or Atom feeds, not an API: no published request rate or quota. Checked: robots.txt of each host (2026-09-28 sweep); Crawl-delay enforced as host gates (design decision, 2026-09-29): www.alignmentforum.org 3s, www.lesswrong.com 3s",
     "robots_crawl_delay_s": {"www.alignmentforum.org": 3.0, "www.lesswrong.com": 3.0}
    }
   },
@@ -2616,7 +2616,7 @@
     "auth": "未公布",
     "url": "https://lobste.rs/robots.txt",
     "checked": "2026-09-28",
-    "where_checked": "ordinary web pages / RSS or Atom feeds, not an API: no published request rate or quota. Checked: robots.txt of each host (2026-09-28 sweep); Crawl-delay enforced as host gates (driver decision, 2026-09-29): lobste.rs 1s",
+    "where_checked": "ordinary web pages / RSS or Atom feeds, not an API: no published request rate or quota. Checked: robots.txt of each host (2026-09-28 sweep); Crawl-delay enforced as host gates (design decision, 2026-09-29): lobste.rs 1s",
     "robots_crawl_delay_s": {"lobste.rs": 1.0}
    }
   },
@@ -2633,7 +2633,7 @@
     "auth": "未公布",
     "url": "https://blog.ml.cmu.edu/robots.txt",
     "checked": "2026-09-28",
-    "where_checked": "ordinary web pages / RSS or Atom feeds, not an API: no published request rate or quota. Checked: robots.txt of each host (2026-09-28 sweep); Crawl-delay enforced as host gates (driver decision, 2026-09-29): blog.ml.cmu.edu 20s",
+    "where_checked": "ordinary web pages / RSS or Atom feeds, not an API: no published request rate or quota. Checked: robots.txt of each host (2026-09-28 sweep); Crawl-delay enforced as host gates (design decision, 2026-09-29): blog.ml.cmu.edu 20s",
     "robots_crawl_delay_s": {"blog.ml.cmu.edu": 20.0}
    }
   },
@@ -2666,7 +2666,7 @@
     "auth": "未公布",
     "url": "https://blog.iclr.cc/robots.txt",
     "checked": "2026-09-28",
-    "where_checked": "ordinary web pages / RSS or Atom feeds, not an API: no published request rate or quota. Checked: robots.txt of each host (2026-09-28 sweep); Crawl-delay enforced as host gates (driver decision, 2026-09-29): blog.iclr.cc 20s, blog.icml.cc 20s, blog.neurips.cc 20s",
+    "where_checked": "ordinary web pages / RSS or Atom feeds, not an API: no published request rate or quota. Checked: robots.txt of each host (2026-09-28 sweep); Crawl-delay enforced as host gates (design decision, 2026-09-29): blog.iclr.cc 20s, blog.icml.cc 20s, blog.neurips.cc 20s",
     "robots_crawl_delay_s": {"blog.iclr.cc": 20.0, "blog.icml.cc": 20.0, "blog.neurips.cc": 20.0}
    }
   },
@@ -2735,7 +2735,7 @@
     "auth": "未公布",
     "url": "https://brave.com/robots.txt",
     "checked": "2026-09-28",
-    "where_checked": "ordinary web pages / RSS or Atom feeds, not an API: no published request rate or quota. Checked: robots.txt of each host (2026-09-28 sweep); Crawl-delay enforced as host gates (driver decision, 2026-09-29): brightdata.com 5s",
+    "where_checked": "ordinary web pages / RSS or Atom feeds, not an API: no published request rate or quota. Checked: robots.txt of each host (2026-09-28 sweep); Crawl-delay enforced as host gates (design decision, 2026-09-29): brightdata.com 5s",
     "robots_crawl_delay_s": {"brightdata.com": 5.0}
    }
   },
@@ -2906,7 +2906,7 @@
     "auth": "未公布",
     "url": "https://aisingapore.org/robots.txt",
     "checked": "2026-09-28",
-    "where_checked": "ordinary web pages / RSS or Atom feeds, not an API: no published request rate or quota. Checked: robots.txt of each host (2026-09-28 sweep); Crawl-delay enforced as host gates (driver decision, 2026-09-29): news.nus.edu.sg 5s",
+    "where_checked": "ordinary web pages / RSS or Atom feeds, not an API: no published request rate or quota. Checked: robots.txt of each host (2026-09-28 sweep); Crawl-delay enforced as host gates (design decision, 2026-09-29): news.nus.edu.sg 5s",
     "robots_crawl_delay_s": {"news.nus.edu.sg": 5.0}
    }
   },
@@ -2946,7 +2946,7 @@
     "auth": "未公布",
     "url": "https://benjamintodd.substack.com/robots.txt",
     "checked": "2026-09-28",
-    "where_checked": "ordinary web pages / RSS or Atom feeds, not an API: no published request rate or quota. Checked: robots.txt of each host (2026-09-28 sweep); Crawl-delay enforced as host gates (driver decision, 2026-09-29): lemire.me 10s, statmodeling.stat.columbia.edu 3600s",
+    "where_checked": "ordinary web pages / RSS or Atom feeds, not an API: no published request rate or quota. Checked: robots.txt of each host (2026-09-28 sweep); Crawl-delay enforced as host gates (design decision, 2026-09-29): lemire.me 10s, statmodeling.stat.columbia.edu 3600s",
     "robots_crawl_delay_s": {"lemire.me": 10.0, "statmodeling.stat.columbia.edu": 3600.0}
    }
   },

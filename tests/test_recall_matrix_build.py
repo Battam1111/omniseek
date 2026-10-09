@@ -1,4 +1,4 @@
-"""eye-mem-2: the recall matrices are built by streaming the cursor into one preallocated array.
+"""The recall matrices are built by streaming the cursor into one preallocated array.
 
 The result must equal the old one-shot build (fetchall + join + normalize + astype) row for row,
 keep ids / srcs aligned, absorb a row count that moved between the count and the fetch, and stay
@@ -196,7 +196,7 @@ def _vec(seed):
 
 
 class MatrixDeltaTest(_StoreState):
-    """eye-mem-3: committed vector changes are applied to the cached matrices in place; the
+    """Committed vector changes are applied to the cached matrices in place; the
     result must equal a full rebuild from SQLite, without a rebuild."""
 
     def _no_rebuild(self):
@@ -404,7 +404,7 @@ def _mapping(a):
 
 
 class FileBackedRowsTest(_StoreState):
-    """eye-mem-3: matrix rows live in a deleted temporary file next to the index (outside the
+    """Matrix rows live in a deleted temporary file next to the index (outside the
     process footprint); a file that cannot be made falls back to process memory."""
 
     def test_build_is_file_backed_and_leaves_no_file(self):

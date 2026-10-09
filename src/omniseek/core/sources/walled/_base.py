@@ -265,7 +265,7 @@ class BaseCDPAdapter:
         if fresh is None:
             diag.note(f"{self.name}.auth_expired", url=search_url, body=(
                 "AUTH_EXPIRED: shared-Chrome session logged out and autofill-relogin FAILED. Needs a "
-                "VNC re-login on the mini (the 9222 Chrome). NOT authoritative-empty."))
+                "VNC re-login on the host machine (the 9222 Chrome). NOT authoritative-empty."))
             self._alert_auth_fail()
             return None
         logger.info("%s: auth self-healed via autofill relogin", self.name)
@@ -288,9 +288,9 @@ class BaseCDPAdapter:
             try:
                 from omniseek.core.infra_jobs import _alert
                 _alert(f"{name} 登录态失效",
-                      f"{name} 的共享 Chrome (9222) 会话登出，且 autofill 自动重登失败，需 VNC 进 mini "
+                      f"{name} 的共享 Chrome (9222) 会话登出，且 autofill 自动重登失败，需 VNC 进主机"
                       f"手动登录该站点。", group="OmniSeek-Health",
-                      questions=[f"请 VNC 进 mini，在共享 Chrome (9222) 里手动登录 {name}"])
+                      questions=[f"请 VNC 进主机，在共享 Chrome (9222) 里手动登录 {name}"])
             except Exception:  # noqa: BLE001 — the alert is best-effort; the typed diagnostic already fails loud
                 pass
 

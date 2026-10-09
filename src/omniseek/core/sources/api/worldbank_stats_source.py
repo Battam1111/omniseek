@@ -35,7 +35,7 @@ fed to the headline signal.
 
 Recon trail: the v2 [meta, rows] envelope + per-row field names (indicator.value,
 country.value, countryiso3code, date, value) are the documented, long-stable
-shape of api.worldbank.org/v2; the Claude sandbox DNS-blackholes the host, so the
+shape of api.worldbank.org/v2; the sandboxed build environment DNS-blackholes the host, so the
 field decode is written to that shape and live-verified from OmniSeek host.
 
 Eurostat (the JSON-stat cube sibling) is intentionally NOT in this round: its

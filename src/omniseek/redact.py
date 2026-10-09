@@ -1,6 +1,6 @@
 """Mask credentials in text OmniSeek lets out of its process: logs, tool results, state files, alerts.
 
-The leak this closes (found 2026-10-04 on the mini): httpx logs every request at INFO with its FULL
+The leak this closes (found 2026-10-04 in the live logs): httpx logs every request at INFO with its FULL
 address, so ``HTTP Request: GET https://api.openalex.org/works?...&api_key=<the real key>`` sat in
 organ.eye-http.err and its rotation. The same address rides inside an httpx HTTPStatusError's text,
 and that text flows on into health messages, ``_meta.diagnostic`` and the watchdog state file.

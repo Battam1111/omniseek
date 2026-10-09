@@ -2,7 +2,7 @@
 
 Faculty/PI comp at Ontario universities = a real Canada-path signal. The official open
 data is on data.ontario.ca, a CKAN portal, KEYLESS for public datasets. Reachable via
-plain HTTP from the mini (PROVINCIAL host, NOT canada.ca, so no transport wall, no CDP;
+plain HTTP from the live host (PROVINCIAL host, NOT canada.ca, so no transport wall, no CDP;
 verified 2026-06). The ontario.ca web front-end parses 0 docs; the CKAN datastore IS the
 structured interface.
 

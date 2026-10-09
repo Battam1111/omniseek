@@ -72,7 +72,7 @@ def _safe_import_sources() -> list[str]:
 # boot the registry through this, so they never couple to a private name.
 load_sources = _safe_import_sources
 
-# The upstream declarations first (driver ruling 4, 2026-09-29): OmniSeek does not run without them. An
+# The upstream declarations first (design decision 4, 2026-09-29): OmniSeek does not run without them. An
 # unreadable upstreams.json raises upstreams.DeclarationUnreadable HERE, naming the file and the reason,
 # so the server refuses to start, instead of every source that builds its gate at import quietly
 # failing to load and the shared http client running with no gate at all (review F10).
@@ -213,7 +213,7 @@ _OMNISEEK_INSTRUCTIONS = (
     "Relations you judge FROM content (typed, directed, attributed: 'X acquired_by Y', 'P refutes Q') "
     "persist the same way via omniseek_statement, and project at read time under working / exploratory "
     "(never conservative); identity stays omniseek_ruling (statements refuse same_as / not_same_as). A "
-    "conclusion that reads as PROSE (a lesson, a synthesis) belongs in the driver's own brain, not "
+    "conclusion that reads as PROSE (a lesson, a synthesis) belongs in the agent's own notes, not "
     "the wall's J channel, which holds graph-shaped relations between wall-addressable ids."
     "\n\n"
     "(7) WALLED SOURCES: explicit_only sources (zhihu, xiaohongshu, yipinsanfendi, xiaomuchong, "
@@ -349,14 +349,14 @@ except Exception:  # noqa: BLE001 - an identity string is never worth failing a 
 
 # --- L1: run each sync tool body OFF the single event-loop thread -------------------------
 # mcp 1.27 calls a sync @mcp.tool body DIRECTLY on the asyncio event-loop thread (verified on
-# the mini's stack: func_metadata does `return fn(**kw)` with no to_thread; serve_http runs ONE
+# the deployed stack: func_metadata does `return fn(**kw)` with no to_thread; serve_http runs ONE
 # uvicorn worker). So one tool that blocks the loop — a search_many wait() (up to the 16s broad
 # deadline), a rank/parse CPU segment, a CDP scroll — STALLS every other agent's calls, even a
 # trivial omniseek_sources (measured: 5 list_sources fired during one fresh broad ALL returned
 # at 16.85s, i.e. blocked the whole time). Under dozens-to-100 parallel agents that is fatal.
 # `_threaded` wraps each sync tool as async + anyio.to_thread.run_sync, so the body runs in a
 # worker thread and the loop stays free to accept connections and serve other agents.
-# Verified safe on the mini's stack before shipping: inspect.signature(func, eval_str=True)
+# Verified safe on the deployed stack before shipping: inspect.signature(func, eval_str=True)
 # follows __wrapped__ so the original sync signature (and tool schema) is unchanged;
 # _is_async_callable sees the async wrapper and awaits it; anyio 4.13 to_thread COPIES the
 # context, so cache._fresh_var (fresh=True) still propagates into the worker thread; CDP's
@@ -2525,7 +2525,7 @@ def omniseek_statement(action: str, src: str = "", dst: str = "", type: str = ""
 
     Endpoints may be ANY node id, even ones no tap minted (``claim:...``, ``org:...``,
     ``inst:label:openai``): a statement may pre-date the wall. Such HAND-MINTED ids FRAGMENT across
-    sessions (``claim:c3_wedge`` vs ``claim:c3_exact_wedge`` silently orphans the edge), so REUSE an
+    sessions (``claim:v2_wedge`` vs ``claim:v2_exact_wedge`` silently orphans the edge), so REUSE an
     existing id: a create echoes ``similar_anchors`` (existing near-match hand-minted ids) so you reuse
     one instead of minting a near-duplicate; keep a stable slug for your durable anchors.
 
@@ -2550,9 +2550,9 @@ def omniseek_statement(action: str, src: str = "", dst: str = "", type: str = ""
         except ValueError as exc:
             return {"error": str(exc)}
         out = {"created": True, "statement": res["statement"], "replaced": res["replaced"]}
-        # anti-fragmentation echo: surface existing near-match HAND-MINTED anchors so the driver reuses an
+        # anti-fragmentation echo: surface existing near-match HAND-MINTED anchors so the agent reuses an
         # id instead of silently orphaning the edge on a slightly-different mint (mechanical token overlap;
-        # the driver decides, never auto-merged). Advisory: a failure never breaks a successful create.
+        # the agent decides, never auto-merged). Advisory: a failure never breaks a successful create.
         try:
             _sim = graph.similar_anchors(res["statement"]["src"], res["statement"]["dst"])
             if _sim:

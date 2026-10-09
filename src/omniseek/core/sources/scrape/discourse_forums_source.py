@@ -146,7 +146,7 @@ class DiscourseForumsAdapter(BaseScrapeAdapter):
 
         "Gently" (the sync docstring's word) means one GET per instance, not one instance at a
         time. These are three unrelated hosts, so awaiting them in series only adds their latencies
-        together and is gentle to nobody. Measured 2026-08-29 from the mini: fast.ai 1.4 to 6.8s,
+        together and is gentle to nobody. Measured 2026-08-29 from the live host: fast.ai 1.4 to 6.8s,
         pytorch 3.0s, huggingface 2.4s, i.e. 7 to 12s serial against roughly the slowest one when
         concurrent. That sum is the whole reason this source missed the search fan-out deadline and
         was left as the single timing-out source after that day's memory work.

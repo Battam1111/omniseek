@@ -1,7 +1,7 @@
 """discourse_forums fetches its three instances concurrently (2026-08-29).
 
 Why this file exists: the async twin awaited the three forums one after another, so the source's
-latency was the SUM of three unrelated hosts (measured from the mini: 1.4-6.8s + 3.0s + 2.4s).
+latency was the SUM of three unrelated hosts (measured from the live host: 1.4-6.8s + 3.0s + 2.4s).
 That sum was the entire reason it missed the search fan-out deadline and was the last timing-out
 source after that day's memory work. Nothing was broken; it was just serial.
 

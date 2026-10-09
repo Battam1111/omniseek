@@ -73,7 +73,7 @@ def _one_connection_transport(asynchronous: bool = False):
     return httpx.HTTPTransport(http2=False, limits=_one_connection_limits())
 
 
-# DECLARED USER-AGENT (driver decision, 2026-09-29): the User-Agent a host's upstream requires lives
+# DECLARED USER-AGENT (design decision, 2026-09-29): the User-Agent a host's upstream requires lives
 # in upstreams.json ("user_agent"), in one place. The initial request gets it in _request_capped /
 # _arequest_capped; every HOP (redirects included) gets it from these request hooks on both shared
 # clients, and a hop that leaves such a host gets the shared USER_AGENT back.
@@ -89,7 +89,7 @@ async def _aapply_declared_user_agent(request: "httpx.Request") -> None:
     _apply_declared_user_agent(request)
 
 
-# THE REDIRECT RULE ON EVERY HOP (driver ruling 1, 2026-09-29). The layers that send one request set the
+# THE REDIRECT RULE ON EVERY HOP (design decision 1, 2026-09-29). The layers that send one request set the
 # request's upstreams.HopGates here for as long as it runs; this request hook, installed on the shared
 # clients and on every client ``direct`` builds, hands each hop httpx sends (redirects included) to it:
 # same host, the same visit; another host, its own gates, taken after the last host's are let go. The
@@ -133,8 +133,8 @@ def _resp_url(resp: Any, fallback: str) -> str:
 
 
 class _ProgressStream(httpx.SyncByteStream):
-    """A response body that renews the leases of its request's holds at every block of data (driver
-    ruling of 2026-09-29 on section 17.5, item 2): a request that is making progress keeps its
+    """A response body that renews the leases of its request's holds at every block of data (design
+    decision of 2026-09-29 on section 17.5, item 2): a request that is making progress keeps its
     permits; one that is stuck makes none and is reclaimed when its lease runs out. The holds are the
     ones running when the response arrived, so the renewal reaches them wherever the body is read
     (inside httpx for a plain ``get``, or by the caller for a stream)."""
@@ -166,7 +166,7 @@ class _AProgressStream(httpx.AsyncByteStream):
         await self._inner.aclose()
 
 
-# CONNECTED, SENT, AND THE HEADERS (driver rulings of 2026-09-29 on review X section 12.8, Q1). Before
+# CONNECTED, SENT, AND THE HEADERS (design decisions of 2026-09-29 on review X section 12.8, Q1). Before
 # its first byte a request makes progress when its connection is made, when TLS is set up on it, when the
 # whole request has been written and when its response headers arrive. Each renews the leases of the
 # holds it runs under, so a slow connection or a slow first byte inside the request's own timeout keeps
@@ -248,7 +248,7 @@ def aprogress_hooks() -> dict:
 
 def _response_hook(defer_on_429: bool = True):
     """The response hook of every hop-aware client: EVERY response it receives (each redirect hop and
-    the final one) is recorded on its own host, once (driver ruling of 2026-09-29 on section 16.5,
+    the final one) is recorded on its own host, once (design decision of 2026-09-29 on section 16.5,
     item 2); the layer that returns the final response records it as well, which is then a no-op
     (upstreams.observe_response marks a recorded response). ``defer_on_429=False`` only for the
     client of a module listed in upstreams.SELF_BACKOFF."""
@@ -378,7 +378,7 @@ def _get_client() -> httpx.Client:
                 from omniseek.core import safeurl  # noqa: PLC0415 (lazy: breaks the import cycle)
                 # Build the real HTTP transport explicitly (same http2 + limits as before), then wrap
                 # it so EVERY request AND every redirect hop is _netguard-validated at the connection
-                # layer (S1-C3). headers / follow_redirects / timeout stay Client-level so httpx still
+                # layer (the per-hop SSRF guard). headers / follow_redirects / timeout stay Client-level so httpx still
                 # owns redirect semantics; the wrapper only refuses an SSRF-class hop's connection.
                 _wrapped = httpx.HTTPTransport(
                     http2=_http2_ok(),
@@ -461,7 +461,7 @@ def _request_capped(method: str, url: str, *, timeout: int, headers: dict,
     # link-local/reserved IP (169.254.169.254 cloud-metadata, 127/10/192.168, ...). Closes the direct
     # omniseek_add_url -> web_fallback -> http.get attacker path; a 'dns' miss is NOT blocked (the fetch
     # fails on its own). This initial check is now REDUNDANT with the per-hop SSRFGuardTransport on the
-    # pooled client (S1-C3): that transport revalidates EVERY hop, so redirect-to-private is CLOSED
+    # pooled client: that transport revalidates EVERY hop, so redirect-to-private is CLOSED
     # there (the residual this comment used to admit). We keep this fast-fail for the clear initial
     # block message + diag.note evidence tap; the extra getaddrinfo is OS-cached, so negligible.
     # Residual: a DNS-rebind TOCTOU (host resolves public here, private at connect time) is NOT closed
@@ -643,12 +643,12 @@ async def adirect(method: str, url: str, *, client: Optional[httpx.AsyncClient] 
             await c.aclose()
 
 
-# A MODULE'S OWN CLIENT UNDER THE REDIRECT RULE (driver ruling 1, 2026-09-29). A module that keeps its
+# A MODULE'S OWN CLIENT UNDER THE REDIRECT RULE (design decision 1, 2026-09-29). A module that keeps its
 # own httpx client (its own headers, cookies, pool or HTTP/2) builds it as HopClient / AsyncHopClient
 # instead of httpx.Client / httpx.AsyncClient, and a one-off streamed download uses direct_stream
 # instead of httpx.stream. Every request such a client sends (get, post, stream, ...) then passes the
 # declared gates of each hop through upstreams.HopGates, gets the declared User-Agent on each hop, and
-# has every response recorded on its own host, the final one included (driver ruling of 2026-09-29 on
+# has every response recorded on its own host, the final one included (design decision of 2026-09-29 on
 # section 16.5, item 2; a module listed in upstreams.SELF_BACKOFF builds its client with
 # defer_on_429=False). A streamed response keeps its gates until it is closed. Inside ``direct`` /
 # ``adirect``, which carry the request's gates themselves, the client takes no gate of its own.
@@ -1083,7 +1083,7 @@ def _aget_client() -> httpx.AsyncClient:
                 from omniseek.core import safeurl  # noqa: PLC0415 (lazy: breaks the import cycle)
                 # Build the real async HTTP transport explicitly (same http2 + limits as the sync client),
                 # then wrap it so EVERY request AND every redirect hop is _netguard-validated at the
-                # connection layer (S1-C3 async twin). headers / follow_redirects / timeout stay
+                # connection layer (async twin of the sync guard). headers / follow_redirects / timeout stay
                 # Client-level so httpx still owns redirect semantics; the wrapper only refuses an
                 # SSRF-class hop's connection.
                 _awrapped = httpx.AsyncHTTPTransport(

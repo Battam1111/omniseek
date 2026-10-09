@@ -157,7 +157,7 @@ def _se_get(url: str, params: dict, timeout: float = TIMEOUT) -> Optional[dict]:
         return None
     try:
         # ONE budget for the permit and the start slot: the declared max_wait_s, cut to the caller's
-        # deadline (driver ruling 2). A saturated local queue is self-load, not an upstream failure, so
+        # deadline (design decision 2). A saturated local queue is self-load, not an upstream failure, so
         # shed it without feeding the quota breaker. Permit first, then the start slot under it (the
         # declared gate; a pending `backoff` pushes the slot).
         with _se_guard.hold(upstreams.max_wait("stackexchange"), _se_busy, _se_late,

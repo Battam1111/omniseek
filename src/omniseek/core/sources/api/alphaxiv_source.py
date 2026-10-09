@@ -55,7 +55,7 @@ TIMEOUT = 15
 _TRENDING_TTL = 1800
 _SEARCH_TTL = 900
 
-# AlphaXiv canonical URL forms (sub-agent + manual verification):
+# AlphaXiv canonical URL forms (research pass + manual verification):
 # - https://www.alphaxiv.org/abs/<arxiv_id>
 # - https://www.alphaxiv.org/overview/<arxiv_id>
 # - https://www.alphaxiv.org/paper/<arxiv_id>

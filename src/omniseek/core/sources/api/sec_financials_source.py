@@ -8,7 +8,7 @@ revenue) straight from the structured XBRL the SEC publishes, and (b) the most r
 filings (form + date + a direct link). This is clean, official, machine-read structure a
 web search cannot return: it would hand you an article ABOUT the 10-K, not the numbers.
 
-Three keyless SEC endpoints, probed live from the mini US egress (2026-06-17):
+Three keyless SEC endpoints, probed live from a US egress (2026-06-17):
   - Ticker -> CIK map: ``https://www.sec.gov/files/company_tickers.json`` ->
     ``{idx: {cik_str (int), ticker, title}}``. Loaded once per process and cached. CIK is
     zero-padded to 10 digits for the data.sec.gov endpoints. (Oracle's live CIK is

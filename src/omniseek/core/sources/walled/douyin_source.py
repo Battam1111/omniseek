@@ -156,7 +156,7 @@ class DouyinAdapter(BaseCDPAdapter):
         if raw.get("status_code") == 2483 or "请先登录" in (raw.get("status_msg") or ""):
             diag.note("douyin.needs_login", body=(
                 "抖音 search returned 2483 '请先登录': the 9225 小号 session is logged out/expired. "
-                "VNC into the mini's 抖音 Chrome (port 9225) and re-scan-login a disposable 小号."))
+                "VNC into the host machine's 抖音 Chrome (port 9225) and re-scan-login a disposable 小号."))
             return []
         if raw.get("fetch_error") or raw.get("parse_error"):
             diag.note("douyin.fetch_error", body=str(raw)[:200])

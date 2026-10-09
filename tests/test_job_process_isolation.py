@@ -11,7 +11,7 @@ from tests.isolated_job_fixture import CHILD_LIFETIME_S
 
 # Both waits below end as soon as their condition holds, so their size only matters on the failure
 # path. Each is 3x the largest value measured with this test's own fixture, rounded up to a whole
-# second (mini, 2026-10-07, 60 runs per condition: no extra load, 8 busy processes, and 8 busy plus
+# second (2026-10-07, 60 runs per condition: no extra load, 8 busy processes, and 8 busy plus
 # 8 loops spawning orphans at 1-minute load 21 to 34). A larger value only slows a real failure;
 # a smaller one risks a false failure on a busier machine.
 

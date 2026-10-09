@@ -494,8 +494,8 @@ def _statement_index(statements: list[dict]) -> dict:
 
 
 def _is_hand_minted(node_id: str) -> bool:
-    """True for a HAND-MINTED anchor id (one the driver typed, which can fragment across sessions): a short
-    synthetic id (``{kind}:{x}`` with no backend namespace, e.g. ``claim:c3_wedge`` / ``org:acme``) or a
+    """True for a HAND-MINTED anchor id (one the agent typed, which can fragment across sessions): a short
+    synthetic id (``{kind}:{x}`` with no backend namespace, e.g. ``claim:v2_wedge`` / ``org:acme``) or a
     label-keyed id (``{kind}:label:{x}``). False for a DETERMINISTIC backend id (``work:openalex:W1``,
     ``doc:arxiv:2401``): those never fragment, so they never need the near-duplicate echo."""
     parts = (node_id or "").split(":")
@@ -508,8 +508,8 @@ def _is_hand_minted(node_id: str) -> bool:
 
 def _anchor_tokens(node_id: str) -> set:
     """The significant tokens of an id's LOCAL part (after the kind[:label] prefix), for near-duplicate
-    detection: split on whitespace / _ - /, casefold, drop <3-char noise. ``claim:c3_exact_credit_wedge``
-    -> {exact, credit, wedge} (``c3`` dropped as 2-char)."""
+    detection: split on whitespace / _ - /, casefold, drop <3-char noise. ``claim:v2_exact_credit_wedge``
+    -> {exact, credit, wedge} (``v2`` dropped as 2-char)."""
     import re
     local = (node_id or "").split(":")[-1]
     return {t for t in re.split(r"[\s_\-/]+", local.casefold()) if len(t) >= 3}
@@ -518,12 +518,12 @@ def _anchor_tokens(node_id: str) -> set:
 def _similar_anchor_ids(target: str, statements: list[dict], limit: int = 5) -> list[str]:
     """Existing statement-endpoint ids that MAY be the SAME hand-minted anchor as ``target``: same kind
     prefix, and one token-set CONTAINED in the other (a near-duplicate is one id minus/plus a few tokens,
-    ``claim:c3_wedge`` vs ``claim:c3_exact_credit_wedge`` -> {wedge} ⊂ {exact,credit,wedge}). Containment,
+    ``claim:v2_wedge`` vs ``claim:v2_exact_credit_wedge`` -> {wedge} ⊂ {exact,credit,wedge}). Containment,
     not bare overlap, so a DIFFERENT claim merely sharing one word (``claim:turn_level_credit``) is not
     surfaced. Ranked by shared-token count. The mechanical half of anti-fragmentation: a create surfaces
-    these so the driver REUSES an id instead of silently orphaning the edge. Only hand-minted targets fire
+    these so the agent REUSES an id instead of silently orphaning the edge. Only hand-minted targets fire
     (deterministic backend ids never fragment). NEVER an identity verdict (that is omniseek_ruling's): OmniSeek
-    ranks by overlap, the driver decides."""
+    ranks by overlap, the agent decides."""
     t = (target or "").strip()
     if not _is_hand_minted(t):
         return []
@@ -546,7 +546,7 @@ def _similar_anchor_ids(target: str, statements: list[dict], limit: int = 5) -> 
 def similar_anchors(src: str, dst: str, statements: Optional[list] = None) -> dict:
     """The anti-fragmentation echo for a create: ``{role: [near-match hand-minted ids]}`` for whichever of
     src / dst is a hand-minted id with an existing near-duplicate endpoint (empty when neither fragments).
-    The tool surfaces this so the driver REUSES an anchor id instead of orphaning the edge on a
+    The tool surfaces this so the agent REUSES an anchor id instead of orphaning the edge on a
     slightly-different mint; it is mechanical overlap, NEVER an identity verdict (that is omniseek_ruling's)."""
     if statements is None:
         statements = load_statements()

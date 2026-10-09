@@ -6,7 +6,7 @@ its OWN copy in scripts/_sentinel_common (it must work when the organ's code is 
 never import omniseek.*); this module is the IN-PROCESS half, used only by code already running
 inside the writer process.
 
-2026-08-12: Bark is RETIRED and deleted from the fleet. It had been unreachable from the mini
+2026-08-12: Bark is RETIRED and deleted from the fleet. It had been unreachable from the service host
 (three probes, the connection never establishing, 20s timeouts) while every infra alarm pushed to
 it and to nothing else, so alarms were written, counted, logged as pushed, and delivered nowhere.
 WeCom answers in 0.06s and is the operator's actual channel (desktop + phone). One channel, and it works.

@@ -1,7 +1,7 @@
 """Contract: no credential leaves OmniSeek's process in text, whichever way the text goes out.
 
 The defect this pins (2026-10-04): httpx logs every request at INFO with its FULL address, so the
-mini's organ.eye-http.err carried the OpenAlex key verbatim (``...&api_key=<key> "HTTP/1.1 200 OK"``).
+live service's organ.eye-http.err carried the OpenAlex key verbatim (``...&api_key=<key> "HTTP/1.1 200 OK"``).
 The same address rides in an httpx HTTPStatusError's text, which OmniSeek copies into health
 messages, ``_meta.diagnostic``, tool errors, alerts and the watchdog state file.
 

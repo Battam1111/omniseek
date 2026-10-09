@@ -3,7 +3,7 @@
 Model choice was BENCHMARKED on real code-switched Chinese podcast audio (not just CER tables):
 SenseVoice-Small (FunAudioLLM / Alibaba, via funasr) produced an accurate, punctuated transcript
 with correct Mandarin + code-switched English (CEO / AI / GX), at RTF ~0.03 (≈38× realtime) on the
-M4 GPU (MPS). whisper-large-v3 on the SAME clip HALLUCINATED (the notorious "请点赞订阅转发打赏"
+Apple-silicon GPU (MPS). whisper-large-v3 on the SAME clip HALLUCINATED (the notorious "请点赞订阅转发打赏"
 loop) — Whisper is unreliable on Chinese audio that opens with music/intros, i.e. most podcasts.
 SenseVoice also leads the Mandarin CER benchmarks (2.96% vs Whisper-large-v3 5.14%) and ships
 built-in punctuation + a VAD pipeline (fsmn-vad) that chunks long audio for free.
@@ -63,7 +63,7 @@ _LEAD_PUNCT_RE = re.compile(r"^[\s。，、；：！？.,;:!?]+")
 
 _model = None  # lazy global singleton (load is expensive; keep warm while in use, see idle unload)
 
-# ── device memory bound (eye-mem-2 order, measured 2026-10-08 on the M4 16 GB mini) ─────────────
+# ── device memory bound (measured 2026-10-08 on a 16 GB Apple-silicon machine) ─────────────
 # torch 2.12's MPS allocator keeps every freed block cached until the driver passes its LOW watermark
 # (16974 MB here, i.e. never before the machine is out of memory; see recall/embed.py). SenseVoice
 # with VAD batches of up to _BATCH_S seconds allocates differently sized activation blocks per call,
@@ -293,7 +293,7 @@ def _transcribe_wav(wav_path: str, language: Optional[str]) -> str:
 
 
 # ── segment timestamps (opt-in): SenseVoice emits NO per-segment offsets and the combined model's
-# merge_vad=False surfaces text but not timestamps (verified on the mini, funasr 1.3.9). So we run
+# merge_vad=False surfaces text but not timestamps (verified with funasr 1.3.9). So we run
 # fsmn-vad STANDALONE for the [start_ms,end_ms] spans, slice the audio per span, and batch-transcribe
 # the slices in ONE generate call. This is the scaffold a --diarize turn hangs speaker labels on, and
 # on its own makes a no-shownote transcript navigable / time-citable. The default flat transcript path
@@ -365,7 +365,7 @@ def _transcribe_segments(wav_path: str, language: Optional[str]) -> list[dict]:
 # needs a TIMESTAMPED ASR, and SenseVoice emits none (it crashes distribute_spk), so the diarize path
 # uses Paraformer-zh + fsmn-vad + cam++ (speaker embed + cluster) + ct-punc (sentence boundaries), ALL
 # from modelscope (NO HuggingFace token, NO gated terms), lazy-loaded ONLY when --diarize is requested
-# (zero steady-state footprint on the mini). funasr does VAD + embed + cluster + attribution internally;
+# (zero steady-state footprint). funasr does VAD + embed + cluster + attribution internally;
 # we read sentence_info. zh-focused (Paraformer-zh); the flat transcript path keeps SenseVoice. ───────
 _diar_model = None
 

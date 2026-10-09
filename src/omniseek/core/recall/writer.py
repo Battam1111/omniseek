@@ -685,7 +685,7 @@ def _apply(
                     (event_hash,))
     _commit(con)
     # Bring the vector matrices up to date HERE, on the writer thread, so the work stops landing on a
-    # search READ thread. Since eye-mem-3 this applies the changes the commit just published to the
+    # search READ thread. Since 2026-10-09 this applies the changes the commit just published to the
     # cached matrices in place (store._apply_deltas); a full rebuild from SQLite happens only on the
     # first build, a model change or an undescribed change. Best-effort + fail-open: the read path
     # applies the same pending changes on demand if this is skipped, so correctness never depends on it.

@@ -72,12 +72,12 @@ _API = "https://export.arxiv.org/api/query"
 _guard = upstreams.guard("arxiv", log=logger)
 _ARXIV_MAX_INFLIGHT = _guard.max_inflight        # 1: the declared single connection
 _ARXIV_MIN_INTERVAL_S = _guard.min_interval_s    # 3.0 s between request starts, all callers + threads
-# ONE CONNECTION, not just one request in flight (driver decision, 2026-09-29): every arXiv request says
+# ONE CONNECTION, not just one request in flight (design decision, 2026-09-29): every arXiv request says
 # "Connection: close". The shared http clients also route export.arxiv.org to a no-keep-alive HTTP/1.1
 # transport (http._one_connection_transport, because the declared terms say max_concurrency 1), so no
 # idle connection is left open after a response in either the sync or the async pool.
 _CONNECTION_CLOSE = {"Connection": "close"}
-# HOW LONG A CALLER MAY WAIT (driver ruling 2, 2026-09-29): the permit wait and the 3 s start wait
+# HOW LONG A CALLER MAY WAIT (design decision 2, 2026-09-29): the permit wait and the 3 s start wait
 # together, within the declared max_wait_s of "arxiv" (upstreams.max_wait) cut to the caller's own
 # deadline. The module keeps no wait constant of its own (it had 20 s for the permit plus 12 s for the
 # start, 32 s against an 11 s broad-search deadline, review F2).

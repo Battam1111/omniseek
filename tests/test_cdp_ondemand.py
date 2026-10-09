@@ -2,7 +2,7 @@
 
 Covers the pure logic: port parsing, service mapping, last-use stamps, and the reaper's decision
 table. The launchctl calls themselves are mocked -- the real ones were verified by hand on the
-mini (stop stays stopped, cold start 1s, login session survives) and cannot run in CI.
+live host (stop stays stopped, cold start 1s, login session survives) and cannot run in CI.
 """
 import json
 import socket
@@ -194,7 +194,7 @@ class ReaperDecisionTests(unittest.TestCase):
 
     def test_idle_browser_is_closed_via_cdp(self):
         """Browser.close, not a signal: only a normal shutdown lets Chrome delete the app-bundle clone
-        it made at startup (TERM left it 12 times of 12 on the mini, 2026-10-05)."""
+        it made at startup (TERM left it 12 times of 12 on the live host, 2026-10-05)."""
         old = time.time() - 7200
         result, run, _ = self._run(healthy=lambda u: "9224" in u, last_use=lambda p: old)
         self.assertEqual(result["stopped"], ["9224:120m"])

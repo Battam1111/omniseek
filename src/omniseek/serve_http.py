@@ -1,7 +1,7 @@
 """OmniSeek as a shared HTTP MCP service (streamable-http + bearer-token auth).
 
 ONE always-on process (launchd com.omniseek.organ.eye-http) that every agent / window connects to
-over the network, instead of each Claude window spawning its own stdio-over-ssh server (N
+over the network, instead of each agent session spawning its own stdio-over-ssh server (N
 heavy processes, a cold 86-adapter load each). Token-gated, because OmniSeek drives
 credentialed + logged-in-browser tools: it must NEVER serve open.
 
@@ -95,7 +95,7 @@ if not _IS_LOOPBACK:
 # A stateful transport keeps per-connection state IN THIS PROCESS, so every deploy restart
 # invalidates the live agent's session id and the client dies with "Session terminated" for the
 # REST of its window (an agent has no reconnect verb; only the human can re-attach). That is the
-# eye punishing its own improvement: each fix costs the driver the tool.
+# eye punishing its own improvement: each fix costs the agent the tool.
 # The session bought OmniSeek nothing to begin with. Sessions exist for server-initiated traffic
 # (sampling, elicitation, progress notifications, SSE resumability); every eye tool is a pure
 # request -> response over PROCESS-global state (registry, caches, guards), and not one takes a

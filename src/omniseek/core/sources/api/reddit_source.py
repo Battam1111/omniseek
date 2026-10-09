@@ -78,7 +78,7 @@ API = "https://arctic-shift.photon-reddit.com/api"
 _SEARCH_TTL = 900       # 15 min
 # The submission-search fan-out's per-request timeout. LOWER than the 20s default on purpose: a healthy
 # Arctic answers a (term-capped) search in ~1-2s, so a 20s ceiling only ever helps a THROTTLED / hung
-# mirror waste the caller's whole deadline. Observed 2026-07-17: the mini's IP is rate-limited by Arctic,
+# mirror waste the caller's whole deadline. Observed 2026-07-17: the host's IP is rate-limited by Arctic,
 # so a lone reddit drill blew the 90s eye deadline — the 23-sub first wave burned 3x20s of timeouts before
 # the breaker tripped and the reddit-own CDP fallback could run. 10s bounds that first wave (~3x10s+backoff
 # ~= 33s) so a throttled Arctic fails FAST to the working CDP search WITHIN the deadline; a legit slow
@@ -890,7 +890,7 @@ _arctic_sema = threading.BoundedSemaphore(_ARCTIC_MAX_INFLIGHT)
 # response that was never read and got nothing. http now keeps a bounded copy of the error body, so
 # the refusal is read from what Arctic actually said. A 422 whose body still could not be read is
 # read as the refusal too, as the fallback: every 422 Arctic has sent us so far (the 2026-10-04 live
-# checks and driver probes, the 2026-06-25 comment endpoint probe) carried the slow-down body. Messages
+# checks and manual probes, the 2026-06-25 comment endpoint probe) carried the slow-down body. Messages
 # quote Arctic's words only when they were observed.
 _ARCTIC_REFUSAL_MARKERS = ("slow down", "timeout")
 _ARCTIC_REFUSED_HELPER = "reddit.arctic_refused"

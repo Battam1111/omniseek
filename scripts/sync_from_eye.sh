@@ -53,7 +53,11 @@ done
 # that NAMES one of the operator's private things would publish the very word it removes. Such rules
 # live in the eye's private repository, and the sync stops without them. The file defines PRIVATE_RENAME
 # (sed -e arguments, run before the public rename rules), PRIVATE_TOKENS (words the residue gate
-# refuses) and private_prepass (exact-match rewrites run before the rename pass).
+# refuses), PRIVATE_PATTERNS (regular expressions the residue gate refuses, for words that are also part
+# of ordinary words), PRIVATE_PATTERNS_CASE (the same, matched WITH case, for short codes that are
+# also ordinary words in another case), PRIVATE_EXCLUDED_SUITES (test files that stay private) and
+# private_prepass (exact-match rewrites run before the rename pass). The two arrays added 2026-10-11 and
+# PRIVATE_PATTERNS_CASE (2026-10-12) may be absent.
 PRIVATE_OVERLAY="$EYE_ROOT/mirror/omniseek_private.sh"
 [ -f "$PRIVATE_OVERLAY" ] || { echo "FATAL: missing $PRIVATE_OVERLAY (the private half of this sync)" >&2; exit 1; }
 # shellcheck source=/dev/null
@@ -241,7 +245,7 @@ SYNCED_ARTIFACTS=("tests/smoke.py" "tests/egress_baseline.json" "docs/BUDGETS.md
 # carried, renamed and residue-gated with no edit here.
 # _repo_only.py rides too: it is what lets the three repo-hygiene suites SKIP cleanly in a tree with
 # no deploy.sh (which the mirror is) instead of failing on an absence that is correct.
-# EXCEPT the deployment-bound ones, LISTED here with the reason for each (driver ruling of 2026-09-29):
+# EXCEPT the deployment-bound ones, LISTED here with the reason for each (decision of 2026-09-29):
 # they test the eye's release machinery (scripts/release_layout.py, release_transaction.py and the
 # bridges) or, since 2026-10-03, its launchd watchdog (scripts/sentinel.py) and, since 2026-10-10, its
 # state backup job and launchd fleet scripts, which the mirror does not ship by the same rule that keeps SERVICES.md out. Carried anyway
@@ -256,7 +260,7 @@ DEPLOYMENT_BOUND_SUITES=(
   "test_state_backup.py"         # runs scripts/state_backup.sh: the operator's state backup job (2026-10-10)
   "test_xhs_cn_seal_launchd.py"  # loads scripts/services.py, sentinel.py, eye_doctor.py: the launchd fleet (2026-10-10)
 )
-# THE MIRROR-OWNED PREFIX (driver ruling of 2026-09-29). tests/test_mirror_*.py test the mirror's own
+# THE MIRROR-OWNED PREFIX (decision of 2026-09-29). tests/test_mirror_*.py test the mirror's own
 # material (bench/, scripts/, .github/) and belong to the mirror: never written by this sync, never
 # checked by the unwritten gate. The eye must never carry a file with that prefix, or its copy would
 # overwrite the mirror's own; stop before any test file is written.
@@ -272,6 +276,11 @@ while IFS= read -r _suite; do
   case " ${DEPLOYMENT_BOUND_SUITES[*]} " in
     *" $(basename "$_suite") "*)
       echo "    (skipping $(basename "$_suite"): deployment-bound, the mirror ships no release machinery or launchd fleet scripts)"
+      continue ;;
+  esac
+  case " ${PRIVATE_EXCLUDED_SUITES[*]+${PRIVATE_EXCLUDED_SUITES[*]}} " in
+    *" $(basename "$_suite") "*)
+      echo "    (skipping $(basename "$_suite"): it tests a layer the public build does not ship)"
       continue ;;
   esac
   SYNCED_ARTIFACTS+=("tests/$(basename "$_suite")")
@@ -323,7 +332,7 @@ for _fx in "$EYE_ROOT"/tests/fixtures/*; do
 done
 
 echo "  [3/6] syncing smoke tests + ${#SYNCED_ARTIFACTS[@]} code-bound artifacts ..."
-# NO MIRROR-ONLY TESTS (driver ruling of 2026-09-29). Tests of the eye's code live in the eye and ride
+# NO MIRROR-ONLY TESTS (decision of 2026-09-29). Tests of the eye's code live in the eye and ride
 # this sync; the eye's deploy runs them, which it cannot do for a test that exists only here (three did:
 # test_honest_empty, test_truthful_status, test_s3_rebuild, and a source changed under them without
 # either side noticing until the mirror's smoke failed). So nothing is pruned and nothing is kept aside:
@@ -456,6 +465,22 @@ for tok in "${PRIVATE_TOKENS[@]}"; do
   if gate_hit private-word -rniq -e "$pat" "${GATE_PATHS[@]}"; then
     echo "  GATE FAIL: private-word residue (a PRIVATE_TOKENS entry in $PRIVATE_OVERLAY):"
     grep -rni -e "$pat" "${GATE_PATHS[@]}" | cut -d: -f1,2 | head -10
+    FAILED=1
+  fi
+done
+# The same for PRIVATE_PATTERNS (2026-10-11): extended regular expressions, matched without case.
+for pat in ${PRIVATE_PATTERNS[@]+"${PRIVATE_PATTERNS[@]}"}; do
+  if gate_hit private-pattern -rniqE -e "$pat" "${GATE_PATHS[@]}"; then
+    echo "  GATE FAIL: private-pattern residue (a PRIVATE_PATTERNS entry in $PRIVATE_OVERLAY):"
+    grep -rniE -e "$pat" "${GATE_PATHS[@]}" | cut -d: -f1,2 | head -10
+    FAILED=1
+  fi
+done
+# The same for PRIVATE_PATTERNS_CASE (2026-10-12): extended regular expressions, matched WITH case.
+for pat in ${PRIVATE_PATTERNS_CASE[@]+"${PRIVATE_PATTERNS_CASE[@]}"}; do
+  if gate_hit private-pattern-case -rnqE -e "$pat" "${GATE_PATHS[@]}"; then
+    echo "  GATE FAIL: private-pattern residue (a PRIVATE_PATTERNS_CASE entry in $PRIVATE_OVERLAY):"
+    grep -rnE -e "$pat" "${GATE_PATHS[@]}" | cut -d: -f1,2 | head -10
     FAILED=1
   fi
 done

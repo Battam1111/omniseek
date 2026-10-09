@@ -6,7 +6,7 @@ posts, 5.7M followers). It is the long-tail community voice OmniSeek otherwise m
 CN-language topics: exam prep, schools, games, fandoms, regional life, niche hobbies.
 
 The DESKTOP site 403s automation, but the MOBILE JSON endpoints answer keylessly with a
-plain mobile User-Agent (probed working from the US-LA mini egress, 2026-06-17):
+plain mobile User-Agent (probed working from a US egress, 2026-06-17):
 
   * Threads (the gold): GET https://tieba.baidu.com/mo/q/search/thread?word=<q>&pn=1
         -> {"no":0,"data":{"post_list":[{tid,title,content,time,user,post_num,

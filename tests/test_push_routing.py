@@ -63,7 +63,7 @@ class WarmerQuestionTests(unittest.TestCase):
         self.assertEqual(len(sent), 1)
         title, kw = sent[0]
         self.assertEqual(title, "论坛甲 session 退化")
-        self.assertEqual(kw["questions"], ["请 VNC 进 mini，在 论坛甲 的 Chrome 窗口重新扫码登录该账号"])
+        self.assertEqual(kw["questions"], ["请 VNC 进主机，在 论坛甲 的 Chrome 窗口重新扫码登录该账号"])
 
 
 class WeeklySourceTests(unittest.TestCase):

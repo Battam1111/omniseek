@@ -147,7 +147,7 @@ class MemGuardDecisionTests(unittest.TestCase):
 
 
     def test_defaults_follow_the_memory_budget(self):
-        # eye-mem-3: peak budget 4.5 GB (4608 MB); soft = budget + 0.5 GB, hard = soft + 1.5 GB.
+        # Peak budget 4.5 GB (4608 MB); soft = budget + 0.5 GB, hard = soft + 1.5 GB.
         self.assertEqual(memguard.SOFT_MB_DEFAULT, 4608 + 512)
         self.assertEqual(memguard.HARD_MB_DEFAULT, memguard.SOFT_MB_DEFAULT + 1536)
         from pathlib import Path

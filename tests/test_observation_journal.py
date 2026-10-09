@@ -844,7 +844,7 @@ def _append(journal, title, *, source="s", source_id="1", lane="full"):
 
 
 class JournalMemoryContractTests(unittest.TestCase):
-    """eye-mem-3: the journal keeps offsets and two latest-seq indexes, never events or payloads."""
+    """The journal keeps offsets and two latest-seq indexes, never events or payloads."""
 
     def test_reopened_journal_retains_no_payload_bytes(self):
         import tracemalloc

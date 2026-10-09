@@ -6,7 +6,7 @@ roles at overseas industry AI labs** — distinct from `ai_residencies`
 (early-career programs), `academic_jobs` (faculty/postdoc), and the Chinese ATS
 adapters (mokahr / feishu / bytedance).
 
-opus sub-agent (40+ calls, 2026-05-29) verified each lab's ATS + board token by
+A research pass (40+ calls, 2026-05-29) verified each lab's ATS + board token by
 hitting the live JSON API and confirming real research roles + SG/Canada/remote
 reach. Greenhouse / Ashby / Lever / SmartRecruiters / Workable all expose public
 no-auth JSON.

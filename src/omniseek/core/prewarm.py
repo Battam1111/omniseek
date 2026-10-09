@@ -42,7 +42,7 @@ WHY in-service (2026-06-14): the standalone launchd cron (com.omniseek.core-prew
 to fire only ONCE at load and never on its 30-min StartInterval (runs=1 after 14.5h), so the
 warmed caches silently expired (6h TTL) and Lever B's speedup evaporated in production. Tying the
 warmer to the always-on eye-http service (a daemon thread) makes it fire reliably. (That dead plist
-com.omniseek.core-prewarm was never installed on the mini and has since been REMOVED from the repo
+com.omniseek.core-prewarm was never installed on the service host and has since been REMOVED from the repo
 2026-06-16; the in-service daemon is the sole AUTOMATIC warmer. The standalone warm CLI moved INTO
 this module's ``__main__`` in the P9 rebuild -- ``python -m omniseek.core.prewarm`` -- so the manual
 one-shot lives beside the loop it warms, with no extra script to keep in sync.)

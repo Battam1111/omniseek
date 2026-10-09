@@ -52,7 +52,7 @@ class _Resp:
         return self._payload
 
 
-# time.sleep (unlike asyncio.sleep) overshoots on the mini by up to 150 ms: macOS timer coalescing,
+# time.sleep (unlike asyncio.sleep) overshoots on the test host by up to 150 ms: macOS timer coalescing,
 # a hard cap in 560 samples at load ~5 on 2026-10-07 (asyncio.sleep: ~2 ms). The three sync fan-out
 # bounds below put their limit at the midpoint of (delay + this) and the serial floor N * delay.
 _SYNC_SLEEP_OVERSHOOT_S = 0.15

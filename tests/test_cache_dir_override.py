@@ -56,9 +56,6 @@ class CacheDirOverride(unittest.TestCase):
             self.assertEqual(len(list(Path(tmp).glob("*.json"))), 1)
 
 
-# The pre-rename name keeps working for one transition cycle (omniseek._legacy_env copies it). The public
-# build ships no legacy names (its sync drops the bridge and maps both names onto one), so there these two
-# cases have nothing to test; they skip with the reason the alias suite already declares to the smoke gate.
 @unittest.skipUnless(importlib.util.find_spec("omniseek._legacy_env") is not None,
                      "transition alias layer absent (the public build ships no legacy names)")
 class LegacyCacheDirName(unittest.TestCase):

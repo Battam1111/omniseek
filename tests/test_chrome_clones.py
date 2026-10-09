@@ -1,7 +1,7 @@
 """Cleanup of the app-bundle clones Google Chrome leaves on macOS (2026-10-05).
 
 Fake clone roots in a temp directory, fake lsof / ps data: nothing here runs lsof, ps or getconf,
-and nothing touches the machine's real clone directory. The real one was checked by hand on the mini
+and nothing touches the machine's real clone directory. The real one was checked by hand on the live host
 (dry run, and a run with lsof's names blinded so only the file-identity test could keep a clone).
 """
 import os

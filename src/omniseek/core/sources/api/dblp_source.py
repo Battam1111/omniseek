@@ -3,7 +3,7 @@
 DBLP indexes ~7M CS publications + ~3M authors with rich metadata (venue, year, DOI,
 co-authorship graph). For ML/AI PhDs it's the canonical lens onto venue + author trajectory.
 
-WHY SPARQL (driver check of 2026-10-03): dblp.org answers every endpoint (search/publ/api,
+WHY SPARQL (manual check of 2026-10-03): dblp.org answers every endpoint (search/publ/api,
 search/author/api, pid/*.xml) with an Anubis proof-of-work page (HTTP 200, text/html), and
 https://dblp.org/robots.txt says ``User-agent: *`` / ``Disallow: /``. OmniSeek therefore sends NO
 request to dblp.org at all and never tries to solve or route around the Anubis page. The sanctioned

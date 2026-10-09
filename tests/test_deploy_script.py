@@ -76,7 +76,7 @@ class DeployScriptTests(unittest.TestCase):
         self.assertNotIn("tar -C omniseek -x", deploy)
         self.assertNotIn("find src scripts tests docs", deploy)
         self.assertNotIn("rm -rf", deploy)
-        self.assertNotIn("scp -q \"$TMP_BUNDLE\" \"$MINI:omniseek/.eye-git.bundle\"", deploy)
+        self.assertNotIn("scp -q \"$TMP_BUNDLE\" \"$HOST:omniseek/.eye-git.bundle\"", deploy)
 
     def test_deploy_preserves_failed_release_and_durable_receipts(self):
         deploy = (self._root() / "deploy.sh").read_text(encoding="utf-8")

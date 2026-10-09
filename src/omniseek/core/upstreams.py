@@ -14,7 +14,7 @@ what the upstream actually reports:
   hosts               exact host names, or a domain suffix written with a leading dot: ".wikipedia.org"
                       matches every subdomain ("zh.wikipedia.org"), never the bare domain (listed on
                       its own) and never a look-alike ("notwikipedia.org"). For one host a gated
-                      entry wins, then an exact entry, then the longest suffix (driver decision,
+                      entry wins, then an exact entry, then the longest suffix (design decision,
                       2026-09-29: the whole Wikimedia family is one entry).
   guard(uid)          THE shared _guard.BackendGuard for that upstream, built from its gate. Every
                       egress path to the upstream (the owning module, the shared http client's host
@@ -23,16 +23,16 @@ what the upstream actually reports:
   egress(url)         the host gate for any direct egress: a no-op for an ungated host or when the
                       current holder already holds that upstream (the owning module's own hold).
   budget              a request's permit wait and start wait, over every gate it passes, stay
-                      within the declared max_wait_s AND the caller's own deadline (driver ruling 2,
+                      within the declared max_wait_s AND the caller's own deadline (design decision 2,
                       2026-09-29); past it the request is not sent. See _guard.wait_until.
   redirects           HopGates holds the gates of the host a request is on: a redirect to the same
                       host continues the same visit; a redirect to another host lets go of the first
                       host's gates, then takes the new host's within the time left; never two hosts'
-                      gates at once (driver ruling 1). Every redirect-following path uses it.
+                      gates at once (design decision 1). Every redirect-following path uses it.
   host gates          a host whose robots.txt sets a Crawl-delay (terms.robots_crawl_delay_s) gets
                       its own gate, one request at a time and starts at least that delay apart.
                       egress(url) takes it after the upstream's gate, so the stricter of the two
-                      always holds (driver decision, 2026-09-29).
+                      always holds (design decision, 2026-09-29).
   single connection   a gated upstream whose terms publish max_concurrency 1 (arXiv: "a single
                       connection at a time") is listed by single_connection_hosts(); the shared http
                       clients give those hosts a no-keep-alive HTTP/1.1 transport and send
@@ -46,7 +46,7 @@ what the upstream actually reports:
                       reports the reason. The web-search backend reads it for its keyless fallback.
   observe(...)        records rate-limit headers / quota fields as the upstream reports them; any
                       response carrying Retry-After defers the whole upstream for every caller, unless
-                      the calling module is in SELF_BACKOFF (driver ruling 3).
+                      the calling module is in SELF_BACKOFF (design decision 3).
   health_block(...)   declared vs gate vs observed, mismatches flagged, undeclared sources listed.
 
 Judgment-free plumbing: it stores the declaration, enforces the numbers it is given and reports
@@ -103,7 +103,7 @@ class DeclaredUserAgentRefused(RuntimeError):
 
 
 class DeclarationUnreadable(RuntimeError):
-    """upstreams.json is missing or unreadable. OmniSeek does not run without it (driver ruling 4,
+    """upstreams.json is missing or unreadable. OmniSeek does not run without it (design decision 4,
     2026-09-29): no built-in defaults, the server refuses to start and names the file and the reason."""
 
 
@@ -111,7 +111,7 @@ class DeclarationUnreadable(RuntimeError):
 _guard.register_unsent(UpstreamBusy, DeclaredUserAgentRefused)
 
 # Modules that honour an upstream's Retry-After themselves, and therefore record responses with
-# defer_on_429=False (driver ruling 3, 2026-09-29). Everywhere else the default holds: a response that
+# defer_on_429=False (design decision 3, 2026-09-29). Everywhere else the default holds: a response that
 # carries Retry-After defers the whole upstream for every caller. The exemption covers the upstream
 # gate only; the host's robots.txt Crawl-delay gate is deferred regardless (see observe).
 # tests/test_upstream_limits.py fails on any call that switches the deferral off from a module not
@@ -161,7 +161,7 @@ def _load() -> dict:
                 raise ValueError("'upstreams' must be an object keyed by upstream id")
             _optional = set((raw.get("optional_sources") or {}).get("names") or ())
         except Exception as exc:  # noqa: BLE001 (re-raised as DeclarationUnreadable just below)
-            # No built-in defaults (driver ruling 4): a silently empty declaration dropped every
+            # No built-in defaults (design decision 4): a silently empty declaration dropped every
             # source that builds its gate at import and left the shared client ungated (review F10).
             _load_error = f"{DECL_PATH}: {type(exc).__name__}: {exc}"
             logger.error("upstreams.json unreadable: %s", _load_error)
@@ -409,7 +409,7 @@ def _busy_factories(key: str) -> tuple[Callable, Callable]:
         return UpstreamBusy(f"{key}: no permit within {waited:.1f}s (gate saturated); not sent")
 
     def on_late(wait: float) -> UpstreamBusy:
-        if wait <= 0:   # nothing left of the budget (driver ruling of 2026-09-29: not "saturated")
+        if wait <= 0:   # nothing left of the budget (design decision of 2026-09-29: not "saturated")
             return UpstreamBusy(f"{key}: past this call's budget (declared max_wait_s or the caller's "
                                 "deadline); not sent")
         return UpstreamBusy(f"{key}: next allowed start {wait:.1f}s away, past this caller's budget "
@@ -467,7 +467,7 @@ def check_browser(url: str) -> None:
 
 class HopGates:
     """The declared gates of the host one request is on right now, carried across its redirects: the
-    ONE place the redirect rule lives (driver ruling 1, 2026-09-29).
+    ONE place the redirect rule lives (design decision 1, 2026-09-29).
 
     ``enter(url)`` before every hop. A hop to the SAME host continues the same visit: no second
     permit, no second start slot (a same-host 301 used to wait a whole Crawl-delay, or be refused
@@ -476,7 +476,7 @@ class HopGates:
     gated host without its gate). Two hosts' gates are never held at once, so two redirect chains can
     never wait on each other.
 
-    ONE budget for the whole chain (a chain is one read; driver rulings of 2026-09-29 on section 16.5,
+    ONE budget for the whole chain (a chain is one read; design decisions of 2026-09-29 on section 16.5,
     item 1, and on the objection in 16.8). With a caller's deadline, the deadline is the chain's
     absolute end. Without one, the budget is the first gated hop's smallest declared ``max_wait_s``,
     and only the time actually spent waiting at gates uses it up: a slow response or building a
@@ -653,7 +653,7 @@ async def aegress(url: str, *, until: Optional[float] = None, wait: bool = True,
 
 def browser_turn(url: str, request_s: float):
     """What a CDP render enters once it HAS its turn at the browser (``cdp_call(on_turn=...)``): the
-    host's declared gates, tried ONCE without waiting (driver ruling of 2026-09-29 on review P6: a
+    host's declared gates, tried ONCE without waiting (design decision of 2026-09-29 on review P6: a
     caller holding the browser's turn must not wait in another line; no gate now means the turn is
     given up at once and the page is not loaded, ``UpstreamBusy``). ``request_s`` is the render's
     own timeout: the permits' lease, so a render stuck in its page load gives the host back when it
@@ -701,14 +701,14 @@ def observe(target: str, headers: Any, status: Optional[int] = None, *, lane: Op
     host or an upstream id; ``headers`` any mapping, e.g. response headers, or a dict of body quota
     fields like Stack Exchange's quota_max). Returns the upstream id, or None if undeclared.
 
-    Deferral is ON by default (driver ruling 3): a response carrying Retry-After (a 429, a 503, a
+    Deferral is ON by default (design decision 3): a response carrying Retry-After (a 429, a 503, a
     GitHub secondary-limit 403, any status) pushes the next allowed start by that long, for EVERY
     caller, capped at _DEFER_CAP_S: the upstream's gate, and the robots.txt Crawl-delay gate of the
-    host the response came from (``host``, else ``target``'s host; driver ruling of 2026-09-29 on
+    host the response came from (``host``, else ``target``'s host; design decision of 2026-09-29 on
     section 16.5, item 5: a host with a Crawl-delay gate and no upstream gate used to defer nothing).
     Only a module listed in SELF_BACKOFF, which honours that upstream's Retry-After itself, passes
     ``defer_on_429=False``, and that switches off the UPSTREAM gate's deferral only: the host's
-    Crawl-delay gate is deferred regardless (driver ruling of 2026-09-29: an exemption is no wider
+    Crawl-delay gate is deferred regardless (design decision of 2026-09-29: an exemption is no wider
     than its reason, and handling an upstream's 429 says nothing about courtesy to the host).
     Never raises."""
     try:
@@ -762,7 +762,7 @@ def observe_response(target: str, resp: Any, *, lane: Optional[str] = None,
     stub without them records nothing).
 
     EVERY response is recorded ONCE, on its own host, whichever client and layer made the request
-    (driver ruling of 2026-09-29 on section 16.5, item 2): the first recording marks the response
+    (design decision of 2026-09-29 on section 16.5, item 2): the first recording marks the response
     and a later one for the same response is a no-op, so a client's response hook and the layer that
     returns the final response can both call this. ``target`` names the host; when it is an upstream
     id, the response's own URL names the host (for that host's Crawl-delay gate). Never raises."""
@@ -892,7 +892,7 @@ def coverage(sources: Iterable[str], backend_of: Callable[[str], Optional[str]],
     """{'undeclared': [source...], 'unknown_sources': [(uid, name)...]}. ``undeclared``: the in-service
     ``sources`` no upstream covers (a source is declared when some upstream lists it in ``sources`` or its
     backend in ``backends``). ``unknown_sources``: names a declaration lists that are not in ``catalog``,
-    every source the code has, in service or not (driver ruling of 2026-09-29: whether a source is parked
+    every source the code has, in service or not (design decision of 2026-09-29: whether a source is parked
     by runtime state or an online override is a runtime fact and does not make its declaration wrong);
     without ``catalog``, ``sources`` stands in for it."""
     d = _load()

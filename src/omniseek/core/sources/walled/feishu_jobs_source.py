@@ -1,6 +1,6 @@
 """Feishu 招聘 (jobs.feishu.cn) ATS 适配器 — 6 个 Tier 1 大模型 startup.
 
-Phase 4 P11 opus sub-agent 二次调研（2026-05-28，30+ tool calls）确认：
+Phase 4 P11 二次调研（2026-05-28，30+ tool calls）确认：
 飞书的 SaaS 招聘门户暴露完全可 httpx 直连的 JSON API（**比 Mokahr 更简单**，
 无 AES 加密，纯 plaintext JSON 响应）。多租户通过 subdomain + `website-path`
 header 区分。

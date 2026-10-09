@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Offline smoke gate. Run by deploy.sh on the mini BEFORE the service restarts;
+"""Offline smoke gate. Run by deploy.sh on the service host BEFORE the service restarts;
 any failure aborts the deploy. Pure invariants, no network, no judgment.
 
 Covers the failure classes we have actually hit:
@@ -134,7 +134,7 @@ def _arm_smoke_socket_guard() -> None:
 _arm_smoke_socket_guard()
 sys.path.insert(0, str(ROOT / "src"))
 
-# The smoke runs on the mini beside the live service, as the same user, so by default it would share
+# The smoke runs on the service host beside the live service, as the same user, so by default it would share
 # the service's disk cache (~/Library/Caches/omniseek/omniseek_cache). On 2026-10-10 that made two reddit
 # checks fail for a day: the service had put r/PhD on reddit's cannot-search list (a cache entry with
 # a 24 h lifetime) after a real search, and the checks, which search r/PhD, read that entry. Every
@@ -491,8 +491,8 @@ check("docreader sandbox still allows the documented omniseek-inbox/<name> path"
 # Deployment-profile gate (P1): a profile subtracts, and the WALLED tier is deny-by-default with
 # or without one (2026-08-12). Walled-tier off keys off DERIVED stability (the robust mokahr-leak
 # fix). The no-profile state is CONSTRUCTED here, never inherited from whatever this host has on
-# disk: the old version of this block only exercised that branch because the mini happened to have
-# no profile file, and the mini has one now, so it would have quietly started measuring the real
+# disk: the old version of this block only exercised that branch because the live host happened to have
+# no profile file, and the live host has one now, so it would have quietly started measuring the real
 # deployment's config instead of the contract.
 from omniseek.core import profile as _prof  # noqa: E402
 _prof._cache = {}
@@ -2213,7 +2213,7 @@ check("fetcher stamps owner_adapter_missed when the host owner already failed (n
 # chksm got its interactive captcha, two articles were privacy-restricted by the author, one was
 # deleted. The adapter declined silently and did not own its host, so every URL fell through to the
 # generic renderer and the renderer's verdict became the only reason. The pages below are cut from
-# the real ones WeChat served the mini that day, keeping only the title, the script sources, the body
+# the real ones WeChat served the live host that day, keeping only the title, the script sources, the body
 # tag, .weui-msg and #app (no cookies, tokens, share params or inline scripts). Offline: httpx, the
 # cache and the web fallback are stubbed, and only the wechat adapter runs in the claim loop.
 import httpx as _wx_httpx_real  # noqa: E402
@@ -2358,7 +2358,7 @@ from omniseek.core.recall import store as _rstore  # noqa: E402
 
 # Keep the smoke gate hermetic from its first recall call. `maybe_ingest()`
 # lazy-creates the default Journal, so install a temporary Journal before any
-# write-path assertion can touch the mini's live state.
+# write-path assertion can touch the live host's state.
 _smoke_journal_dir = Path(_tf.mkdtemp()) / "smoke_recall_journal"
 _recall.writer._observation_journal = _recall.writer.ObservationJournal(_smoke_journal_dir)
 _recall.writer._JOURNAL_WAKE.clear()
@@ -2570,7 +2570,7 @@ check("ontario_sunshine: _build_doc skips a nameless record, builds a real one w
 # ---------------------------------------------------------------------------
 # 10. recall VECTOR layer (Phase 2): the mechanical fusion + merge_rank graft invariants that keep
 #     THE RAZOR and stay byte-identical to Phase 1 when the vector arm is absent. (No 0.6B model
-#     loaded — the embedding QUALITY is bake-off-verified on the mini; these are the code invariants.)
+#     loaded — the embedding QUALITY is bake-off-verified on real content; these are the code invariants.)
 # ---------------------------------------------------------------------------
 # (a) merge_rank still ranks the relevant doc first when NO doc carries recall_rrf (no interference)
 _mo = _doc("arxiv", "Sparse mixture of experts for language models", "https://e.com/moe")
@@ -3693,7 +3693,7 @@ finally:
 
 # ---------------------------------------------------------------------------
 # 15. Curator P4 (self-iterating source-acquisition loop): the 13 invariants (spec 9) that make
-#     the now-ACTIVE loop (C3 activation 2026-06-15) safe to run. Pure structural / offline / no network / no
+#     the now-ACTIVE loop (activated 2026-06-15) safe to run. Pure structural / offline / no network / no
 #     judgment. The CENTRAL proof is THE CRON NEVER JUDGES: curator.py + discover.py import
 #     no verdict-writer / model / WebSearch / profile, and discovery emits FACTS only.
 # ---------------------------------------------------------------------------
@@ -3976,7 +3976,7 @@ _pos_int = lambda v: isinstance(v, int) and v > 0
 _P4_KNOBS = ("M_zero_new_streak", "discover_topn", "min_cadence_days", "error_retry_budget",
              "watching_max_reprobes", "max_new_probes")
 check("curator P4: curator_policy.json carries finite positive-int knobs; loop ACTIVE (enabled True, "
-      "C3 activation 2026-06-15) with cold_start STILL OFF (the real safety invariant)",
+      "activated 2026-06-15) with cold_start STILL OFF (the real safety invariant)",
       all(_pos_int(_CUR_POLICY.get(k)) for k in _P4_KNOBS)
       and _CUR_POLICY.get("enabled") is True
       and (_CUR_POLICY.get("cold_start") or {}).get("enabled") is False
@@ -4000,10 +4000,10 @@ _pol_blob = json.dumps(_pol_operative, ensure_ascii=False).lower()
 _pol_verdict_leak = [w for w in _P4_VERDICT_WORDS if _p4re.search(r"\b" + w + r"\b", _pol_blob)]
 check("curator P4: curator_policy.json operative knobs carry NO keep/watch/prune/admit/reject/pursue token",
       not _pol_verdict_leak, str(_pol_verdict_leak))
-# coverage_targets.json: a list of <domain>x<MODE> cells. ACTIVE (C3 2026-06-15): the frozen
+# coverage_targets.json: a list of <domain>x<MODE> cells. ACTIVE (since 2026-06-15): the frozen
 # resilience set (the cells the live roster occupies); was [] in scaffold mode.
 _CT = json.loads((_CUR_DIR / "coverage_targets.json").read_text(encoding="utf-8"))
-check("curator P4: coverage_targets.json is a non-empty list of cell strings (C3 activation; was [])",
+check("curator P4: coverage_targets.json is a non-empty list of cell strings (activated; was [])",
       isinstance(_CT, list) and len(_CT) > 0 and all(isinstance(x, str) and x.strip() for x in _CT))
 
 # (9.12) Red-line denylist frozen (Attack-2/8a): EXPECTED_REDLINES includes the scraper host_suffix
@@ -4327,17 +4327,17 @@ check("curator live: a verified mode that disagrees with the declared mode is RE
       _capply._auto_apply_ok(_modemiss) is False)
 _il2.reload(_capply)  # restore pristine _capply for any later section
 
-# (12b) C3 razor-fix: the overlay-rss recurring-fetch IP guard REPLACES the removed human host-
+# (12b) razor-fix: the overlay-rss recurring-fetch IP guard REPLACES the removed human host-
 #       allowlist. Overlay-origin _RSSBundle carries guard_ip=True; the 143 base rows do not (their
 #       fetch is byte-identical); a guarded fetch whose host resolves to a blocked IP fails CLOSED
 #       (skip, no http.get) so an agent-auto-admitted feed cannot SSRF on its recurring poll.
 import omniseek.core.sources.scrape.rss_bundles_source as _rssb  # noqa: E402
 import omniseek.core.sources.scrape._rss as _rssmod  # noqa: E402
 from omniseek.core.curator import probe as _gprobe  # noqa: E402
-check("curator C3: a base (in-tree) rss bundle has guard_ip False (143 sources unchanged)",
+check("curator guard: a base (in-tree) rss bundle has guard_ip False (143 sources unchanged)",
       _rssb._RSSBundle(name="b", description="d", feeds=["https://x/f"]).guard_ip is False)
 _ov_b = _al.register_one("rss", {"name": "o", "description": "d", "feeds": ["https://x/f"]})
-check("curator C3: an overlay-origin rss bundle (apply_live.register_one) has guard_ip True",
+check("curator guard: an overlay-origin rss bundle (apply_live.register_one) has guard_ip True",
       _ov_b is not None and _ov_b.guard_ip is True)
 _orig_resolve_g, _orig_httpget_g = _gprobe._resolve_safe_ip, _rssmod.http.get
 _http_hits = {"n": 0}
@@ -4345,10 +4345,10 @@ try:
     _gprobe._resolve_safe_ip = lambda h: (None, None, "private_ip")
     _rssmod.http.get = lambda *a, **k: (_http_hits.__setitem__("n", _http_hits["n"] + 1) or None)
     _g_blocked = _rssmod.fetch_feed("https://internal.evil/feed", guard_ip=True)
-    check("curator C3: a guarded feed whose host resolves to a blocked IP is SKIPPED (None, no http.get)",
+    check("curator guard: a guarded feed whose host resolves to a blocked IP is SKIPPED (None, no http.get)",
           _g_blocked is None and _http_hits["n"] == 0)
     _rssmod.fetch_feed("https://internal.evil/feed", guard_ip=False)
-    check("curator C3: guard_ip=False (the base path) does NOT IP-guard (calls http.get as before)",
+    check("curator guard: guard_ip=False (the base path) does NOT IP-guard (calls http.get as before)",
           _http_hits["n"] == 1)
 finally:
     _gprobe._resolve_safe_ip, _rssmod.http.get = _orig_resolve_g, _orig_httpget_g
@@ -4561,7 +4561,7 @@ check("curator live: openalex get_json RAISES on a path that resolves off api.op
       _al_raises(lambda: _oa2.get_json("@evil.example/x")))
 
 # ---------------------------------------------------------------------------
-# 17. roadmap-④ + Galleria v1.1 adapter-parse invariants (pure, no live call): github tree-mode
+# 17. roadmap-④ + peer-review v1.1 adapter-parse invariants (pure, no live call): github tree-mode
 #     parses a canned git/trees response; openreview review-fetch parses canned reply notes.
 # ---------------------------------------------------------------------------
 from omniseek.core.sources.api.github_source import GitHubAdapter as _GH, _TREE_RE as _GH_TREE_RE  # noqa: E402
@@ -5548,7 +5548,7 @@ check("github_source REST surfaces route through _github.get_json (no raw http.g
       and "http.get_json" not in _insp2.getsource(_ghs.GitHubAdapter))
 check("github_trending routes /search/repositories + /repos through _github.get_json",
       "_github.get_json(" in _insp2.getsource(_ght.GitHubTrendingAdapter))
-check("github_source CACHE_TTL bumped to 10800 (3h) so 6-hourly watchtower polls hit the cache (M4)",
+check("github_source CACHE_TTL bumped to 10800 (3h) so 6-hourly watchtower polls hit the cache",
       _ghs.CACHE_TTL == 10800)
 check("github_source _multi_surface stays SERIAL (no concurrency added)",
       "SERIAL on purpose" in _insp2.getsource(_ghs.GitHubAdapter._multi_surface))
@@ -6198,7 +6198,7 @@ check("xhs: _flatten_captured_comments flattens comments + inline sub_comments, 
 # ---------------------------------------------------------------------------
 # 27. xiaohongshu_cn (mainland signed-direct API): the URL router + comment flattener are pure
 #     functions (no network / no signing) — test them offline. The signed fetch itself is
-#     account-live and verified on the mini, not here.
+#     account-live and verified live, not here.
 # ---------------------------------------------------------------------------
 from omniseek.core.sources.walled import xiaohongshu_cn_source as _xcn  # noqa: E402
 _nid, _tok = _xcn._parse_note_url(
@@ -6296,7 +6296,7 @@ check("xhs_cn black box: every test that drives the guard redirects _INCIDENT_PA
 # 27b. xiaohongshu_cn BROWSER-primary path (2026-06-25 mechanism flip: drive the 9224 browser to
 #      issue its own signed XHR, like the rednote 小号). The captured /search/notes decode
 #      (_items_to_docs) is a pure function → golden-test it offline; the live 9224 CDP flow is
-#      account-live and verified on the mini, not here.
+#      account-live and verified live, not here.
 # ---------------------------------------------------------------------------
 check("xhs_cn: browser path enabled (_BROWSER_OK) + helpers wired",
       _xcn._BROWSER_OK and all(hasattr(_xcn, n) for n in
@@ -6445,7 +6445,7 @@ check("gov_policy: registered + explicit_only + cn / STRUCTURE+UNWALL+MONITOR fa
 
 # ---------------------------------------------------------------------------
 # 32. eastmoney (A-share/HK/US quotes): quote backend moved EastMoney push2 → Tencent qt.gtimg.cn
-#     (2026-06-20, push2 dropped the mini under multi-agent burst). The GBK `~`-parse + symbol map +
+#     (2026-06-20, push2 dropped the host under multi-agent burst). The GBK `~`-parse + symbol map +
 #     quote→doc are pure fns — golden fixture them offline (real values, NOT ×100; market→url; doc).
 # ---------------------------------------------------------------------------
 from omniseek.core.sources.scrape import eastmoney_source as _em  # noqa: E402
@@ -8098,7 +8098,7 @@ finally:
      _g1_graph._stored_edges, _g1_graph.load_statements) = _g1_rc, _g1_dis, _g1_se, _g1_ls
 
 # --- Phase 1 READ-BACK (fetcher._place_graph_presence + _compact_judgments, 2026-07-15): the write-side loop
-#     close -- the driver's OWN tier-J statements surface AMBIENT on omniseek_search hits, matched by the hit's
+#     close -- the agent's OWN tier-J statements surface AMBIENT on omniseek_search hits, matched by the hit's
 #     work: ids AND its doc: id (doc-keyed statements are make-or-break). Stub load_statements + _stored_edges. ---
 _jr_rc, _jr_dis, _jr_se, _jr_ls = (_g1_store._read_con, _g1_store._disabled,
                                    _g1_graph._stored_edges, _g1_graph.load_statements)
@@ -8113,7 +8113,7 @@ _jr_axv = _PDoc(source="arxiv", source_id="2606.15621v1", url="http://axv", titl
 _jr_stmts = [
     {"src": "work:openalex:W7", "dst": "topic:label:credit assignment", "type": "anchors",
      "note": "the anchor of the line"},
-    {"src": "doc:arxiv:2604.17693", "dst": "claim:c3_exact_credit_wedge", "type": "attacks_premise_of",
+    {"src": "doc:arxiv:2604.17693", "dst": "claim:v2_exact_credit_wedge", "type": "attacks_premise_of",
      "note": "x" * 400},                                       # long note -> exercises the snippet cap
     {"src": "doc:arxiv:2606.15621", "dst": "claim:refeed_wedge", "type": "validates_premise_of",
      "note": "version-LESS arxiv statement -> must surface on a v-suffixed hit"},
@@ -8139,8 +8139,8 @@ try:
     check("read-back: the long note is snippet-capped (<= _JUDG_NOTE_CHARS + ellipsis)",
           all(len(j.get("note", "")) <= fetcher._JUDG_NOTE_CHARS + 3
               for j in _jr_arxiv.metadata["graph"]["judgments"]))
-    check("read-back: dst self-label surfaces the claim id readably (claim:c3_exact_credit_wedge)",
-          any("c3_exact_credit_wedge" in str(j.get("dst", "")) for j in _jr_arxiv.metadata["graph"]["judgments"]))
+    check("read-back: dst self-label surfaces the claim id readably (claim:v2_exact_credit_wedge)",
+          any("v2_exact_credit_wedge" in str(j.get("dst", "")) for j in _jr_arxiv.metadata["graph"]["judgments"]))
     check("read-back: an in_graph but UNJUDGED hit stamps judgments: [] (the write-reflex blank cue)",
           _jr_plain.metadata["graph"].get("judgments") == []
           and _jr_plain.metadata["graph"]["in_graph"] is True)
@@ -8742,7 +8742,7 @@ if _ep_path.exists() and _sh_path.exists():
 # ---------------------------------------------------------------------------
 # 46b. plist-drift tripwire: scripts/services.py is the SINGLE source of truth for every launchd
 #      service; its gen-plists regenerates every committed .plist from the registry and the committed
-#      files are what the mini installs (deploy.sh does NOT ship plists). Run that generation logic
+#      files are what the service host installs (deploy.sh does NOT ship plists). Run that generation logic
 #      IN-PROCESS (import, not subprocess) and assert every .plist under scripts/ is byte-identical to
 #      the registry — so a hand-edited plist or a registry row that forgot to regenerate FAILS the
 #      gate. Also assert the four retired sentinel plists + their scripts are GONE and their labels are
@@ -8768,7 +8768,7 @@ if _SERVICES_PATH.exists():
           _plist_rc == 0 and len(_committed_plists) > 0,
           f"gen_plists rc={_plist_rc}, {len(_committed_plists)} plist(s)")
     # StartInterval ban (2026-07-10): no registry row may schedule with StartInterval. Its relative
-    # timer suspends/drifts across the mini's sleep, silently stalling a periodic job (the sentinel
+    # timer suspends/drifts across the host's sleep, silently stalling a periodic job (the sentinel
     # watchdog sat at runs=1 for hours while every name-only check stayed green); we standardize on
     # StartCalendarInterval (wall-clock, catches up on wake). services.py owns the rule; asserting it
     # here makes the deploy gate block reintroducing the drifting timer, offline, before any live check.
@@ -10442,7 +10442,7 @@ finally:
 #     Point that path at a missing file and confirm both the notify primitive AND the sensor alias
 #     no-op without raising.
 import omniseek.core.notify as _notify53  # noqa: E402
-# 2026-08-12: Bark was DELETED from the fleet (unreachable from the mini while every alarm went to
+# 2026-08-12: Bark was DELETED from the fleet (unreachable from the service host while every alarm went to
 # it alone, so alarms were written, counted, and delivered nowhere). WeCom is the one channel, and
 # the push now REPORTS delivery: the alarm lane must be able to tell a dead siren from a live one,
 # which a silent None cannot. The fail-open contract is unchanged and is what this checks.
@@ -12008,21 +12008,21 @@ try:
     #      omniseek_statement create echo -> surface a near-match hand-minted anchor so a slightly-different mint
     #      does not silently orphan. Pure helpers first, then the tool wiring on the same temp path.
     check("statement (1b): _is_hand_minted true for synthetic/label ids, false for deterministic backend ids",
-          _graph._is_hand_minted("claim:c3_exact_credit_wedge") and _graph._is_hand_minted("topic:label:credit assignment")
+          _graph._is_hand_minted("claim:v2_exact_credit_wedge") and _graph._is_hand_minted("topic:label:credit assignment")
           and not _graph._is_hand_minted("work:openalex:W1") and not _graph._is_hand_minted("doc:arxiv:2401"))
-    check("statement (1b): _anchor_tokens takes the local part, drops <3-char noise (c3 dropped)",
-          _graph._anchor_tokens("claim:c3_exact_credit_wedge") == {"exact", "credit", "wedge"})
-    _s59_frag = [{"src": "doc:arxiv:1", "dst": "claim:c3_exact_credit_wedge", "type": "attacks_premise_of", "note": "n"},
+    check("statement (1b): _anchor_tokens takes the local part, drops <3-char noise (v2 dropped)",
+          _graph._anchor_tokens("claim:v2_exact_credit_wedge") == {"exact", "credit", "wedge"})
+    _s59_frag = [{"src": "doc:arxiv:1", "dst": "claim:v2_exact_credit_wedge", "type": "attacks_premise_of", "note": "n"},
                  {"src": "doc:arxiv:2", "dst": "claim:turn_level_credit", "type": "anchors", "note": "n"}]
-    check("statement (1b): _similar_anchor_ids surfaces the same-kind token-overlap anchor (c3_wedge ~ c3_exact_credit_wedge)",
-          _graph._similar_anchor_ids("claim:c3_wedge", _s59_frag) == ["claim:c3_exact_credit_wedge"])
+    check("statement (1b): _similar_anchor_ids surfaces the same-kind token-overlap anchor (v2_wedge ~ v2_exact_credit_wedge)",
+          _graph._similar_anchor_ids("claim:v2_wedge", _s59_frag) == ["claim:v2_exact_credit_wedge"])
     check("statement (1b): a deterministic backend id never fragments -> no echo",
           _graph._similar_anchor_ids("work:openalex:W1", _s59_frag) == [])
     # similar_anchors (the create-echo builder the omniseek_statement tool surfaces): a near-duplicate hand-minted
     # dst echoes the existing anchor; a deterministic src never fragments (no src key).
-    _s59_sim = _graph.similar_anchors("doc:arxiv:10", "claim:c3_credit_wedge", _s59_frag)
+    _s59_sim = _graph.similar_anchors("doc:arxiv:10", "claim:v2_credit_wedge", _s59_frag)
     check("statement (1b): similar_anchors echoes a near-duplicate hand-minted dst, and NEVER the deterministic src",
-          _s59_sim.get("dst") == ["claim:c3_exact_credit_wedge"] and "src" not in _s59_sim)
+          _s59_sim.get("dst") == ["claim:v2_exact_credit_wedge"] and "src" not in _s59_sim)
     check("statement (1b): similar_anchors is EMPTY when neither endpoint is a fragmenting hand-minted id",
           _graph.similar_anchors("doc:arxiv:10", "work:openalex:W5", _s59_frag) == {})
 finally:
@@ -12831,7 +12831,7 @@ if _SERVICES_PATH.exists():
     _p_cal = _svc66.parse_launchctl_print(_F_CAL_BEFORE)
     check("66 parse: calendar job before first fire -> loaded, runs=0, not speculative",
           _p_cal["loaded"] is True and _p_cal["runs"] == 0 and _p_cal["speculative"] is False)
-    # The REAL healthy idle state of the live sentinel (verified via `launchctl print` on the mini,
+    # The REAL healthy idle state of the live sentinel (verified via `launchctl print` on the live host,
     # 2026-07-10): state=not running, runs>=1, pended nondemand spawn = interval. The "interval"
     # value must NOT read as speculative (that is a scheduled job between fires, not a dead one).
     _F_HEALTHY_INTERVAL = ("com.omniseek.infra.sentinel = {\n"
@@ -15953,7 +15953,7 @@ finally:
 
 
 # ---------------------------------------------------------------------------
-# S1-C3 (mainline funnel per-hop SSRF): safeurl.SSRFGuardTransport wraps the shared pooled http client
+# Per-hop SSRF guard (mainline funnel): safeurl.SSRFGuardTransport wraps the shared pooled http client
 # (http._get_client), so EVERY http.get / get_json / post_json caller AND every redirect hop is
 # _netguard-validated at the connection layer. Offline via a real httpx.Client whose INNER transport is
 # a MockTransport wrapped by the REAL SSRFGuardTransport + a patched getaddrinfo. The final-body stream
@@ -16578,10 +16578,10 @@ check("S3: the portal self-test is RUN-ONCE (a module flag guards it) + submitte
 #      egress through. PURE ADDITION: the sync helpers (_get_client/_request_capped/get/...) are byte-
 #      identical; these goldens prove the async siblings MIRROR every sync guarantee OFFLINE (asyncio.run
 #      drives the coroutines; the network is stubbed with httpx.MockTransport wrapped in the REAL
-#      AsyncSSRFGuardTransport + a patched getaddrinfo, mirroring the S1-C3 sync transport harness). A LIVE
+#      AsyncSSRFGuardTransport + a patched getaddrinfo, mirroring the sync per-hop SSRF harness). A LIVE
 #      async fetch against a real upstream is NOT provable here (no async caller exists yet; S4's first
 #      converted adapter is the live proof). The final body uses httpx.ByteStream (NOT content=) so
-#      _arequest_capped's aiter_raw() can stream it once (same reason as the C3 harness).
+#      _arequest_capped's aiter_raw() can stream it once (same reason as the sync SSRF harness).
 # ---------------------------------------------------------------------------
 import asyncio as _s3b_aio  # noqa: E402
 import socket as _s3b_socket  # noqa: E402
@@ -16667,7 +16667,7 @@ finally:
     _s3b_restore()
 
 # (3a) unit-level: AsyncSSRFGuardTransport.handle_async_request RAISES ConnectError on a private hop (never
-#      delegates) and DELEGATES a public hop (returns the wrapped 200). Async twin of the C3 sync unit.
+#      delegates) and DELEGATES a public hop (returns the wrapped 200). Async twin of the sync SSRF unit.
 _s3b_deleg = {"n": 0}
 def _s3b_unit_handler(request):
     _s3b_deleg["n"] += 1
@@ -20184,8 +20184,8 @@ import subprocess as _gate_sub  # noqa: E402
 # Verbatim skip reasons this gate accepts. Keep in sync with tests/_repo_only.REASON.
 _GATE_DECLARED_SKIPS = {
     "source-repo suite: deploy.sh absent, so this is a packaged release and not a checkout",
-    "Survival sibling checkout is not present",
-    # PLATFORM gates. These never fire on the mini, so the first version of this list (written from
+    "Reference sibling checkout is not present",
+    # PLATFORM gates. These never fire on the live host, so the first version of this list (written from
     # one macOS run) did not know they existed; the public mirror's sync, run from Windows, found
     # them immediately. A list built by observing ONE environment describes that environment, not
     # the rule, which is the same mistake as a fixture that differs from production.

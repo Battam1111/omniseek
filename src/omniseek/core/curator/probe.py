@@ -457,7 +457,7 @@ def _jail_script() -> Optional[Path]:
 def _ensure_jail_up() -> bool:
     """Idempotently ensure the wall-probe jail is running; return True once its CDP endpoint answers.
     The rare parked_p2 case pays a few-seconds cold start (``probe_jail.sh up``) rather than keeping
-    three containers idle on the 16GB mini. Best-effort: any failure returns False (render_walled then
+    three containers idle on a 16 GB machine. Best-effort: any failure returns False (render_walled then
     fails closed), never raises."""
     cdp = _jail_cdp_url()
     try:

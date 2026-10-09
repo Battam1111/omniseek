@@ -53,7 +53,7 @@ logger = logging.getLogger(__name__)
 GRAPHQL = "https://api.github.com/graphql"  # the REST host lives in _github (BASE); GraphQL is here
 TIMEOUT = 20
 CACHE_TTL = 10800  # 3 h — the watchtower polls github 6-hourly; a 30-min TTL always-missed the cache
-                   # (finding M4), so every poll re-fired the full multi-surface fan-out. 3h < the
+                   # so every poll re-fired the full multi-surface fan-out. 3h < the
                    # 6h poll cadence keeps each poll fresh while killing the inter-poll re-fires.
 
 # A query that is ONLY `org:NAME` or `user:NAME` (no free keywords) → activity mode.

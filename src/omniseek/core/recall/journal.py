@@ -160,7 +160,7 @@ def _identity_key(*parts: str) -> int:
 class ObservationJournal:
     """A single-process append-only journal with content-addressed JSON blobs.
 
-    MEMORY CONTRACT (eye-mem-3, 2026-10-08): the journal holds NO event dicts and NO payloads in
+    MEMORY CONTRACT (2026-10-08): the journal holds NO event dicts and NO payloads in
     memory. It keeps one byte offset per event (an int64 array) plus two latest-sequence indexes
     (observation id, and source + source id), and reads events and payload blobs back from disk on
     demand. The earlier design kept every event dict and every parsed payload resident forever

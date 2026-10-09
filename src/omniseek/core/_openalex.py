@@ -72,7 +72,7 @@ _BREAK_FOR_S = 120.0  # seconds the circuit stays open
 # a fresh caller inherits the WHOLE queue — the same unbounded-pace-wait bug that made an S2
 # field_skeleton sit 886s on its gate (brain: eye-s2-rate-gate-hang-2026-06-21). Past this, fail fast
 # (raise OpenAlexDown → caller degrades to cache/empty) instead of hanging for minutes.
-# The value is the declared gate.max_wait_s of "openalex" (driver ruling 2, 2026-09-29): ONE budget for
+# The value is the declared gate.max_wait_s of "openalex" (design decision 2, 2026-09-29): ONE budget for
 # the start wait and the permit wait of an attempt together, cut to the caller's own deadline.
 _PACE_MAX_WAIT_S = upstreams.max_wait("openalex")
 
@@ -424,7 +424,7 @@ def get_json(path: str, params: Optional[dict] = None, timeout: float = TIMEOUT)
     for lane_name, p in lanes:
         for attempt in (1, 2):
             try:
-                # ONE budget per attempt for the start wait and the permit wait (driver ruling 2)
+                # ONE budget per attempt for the start wait and the permit wait (design decision 2)
                 until = upstreams.wait_until(_PACE_MAX_WAIT_S)
                 res = _pace(until)  # rate cap: bounds req/s so a fan-out across 40+ sources can't burst a bucket
                 # global concurrency cap, BOUNDED: a saturated/leaked pool degrades instead of hanging
@@ -537,7 +537,7 @@ async def aget_json(path: str, params: Optional[dict] = None, timeout: float = T
     for lane_name, p in lanes:
         for attempt in (1, 2):
             try:
-                # ONE budget per attempt for the start wait and the permit wait (driver ruling 2)
+                # ONE budget per attempt for the start wait and the permit wait (design decision 2)
                 until = upstreams.wait_until(_PACE_MAX_WAIT_S)
                 res = _guard.reserve(_late, until=until)  # rate cap: reserve the slot (sync, brief)...
                 sent = False

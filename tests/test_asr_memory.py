@@ -1,4 +1,4 @@
-"""ASR device-memory bound (eye-mem-2): one lock around load + generate + unload, an MPS cache release
+"""ASR device-memory bound: one lock around load + generate + unload, an MPS cache release
 after every generate, and an idle unload of the lazy models. Fakes stand in for funasr; no model loads."""
 import os
 import threading

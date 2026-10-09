@@ -9,7 +9,7 @@ THE RAZOR holds: this layer is pure RECALL. FTS5 only bounds the candidate pool 
 ``bm25`` is never surfaced); the agent-facing SCORE stays in ``rank.merge_rank`` /
 ``relevance.doc_scores``, identical for index- and live-sourced docs. Nothing here judges.
 
-CJK (verified on the mini): the FTS ``seg`` column stores ``relevance.tokenize`` output (ASCII
+CJK (verified on the live index): the FTS ``seg`` column stores ``relevance.tokenize`` output (ASCII
 words + OVERLAPPING CJK bigrams) and queries segment IDENTICALLY via ``relevance.query_terms`` —
 so index tokenization is provably the same as the live BM25 tokenizer (the codebase's anti-drift
 invariant), giving exact Chinese recall with ZERO new dependency (模型 21/21 vs trigram 0/21).
@@ -361,7 +361,7 @@ def _model_version() -> str:
     return embed.MODEL_VERSION
 
 
-# Rebuild memory bound (eye-mem-2, measured 2026-10-08 on a copy of the live index: vec 107005 rows,
+# Rebuild memory bound (measured 2026-10-08 on a copy of the live index: vec 107005 rows,
 # vec_thin 133195, vec_chunk 41750, 1024-d float32 = 1101 MB of matrices). The old one-shot build
 # held, at once, the previous matrix + fetchall()'s one bytes object per row + their b"".join + the
 # normalized quotient + its astype copy: about five times one matrix. Rebuilding thin alone lifted
@@ -372,7 +372,7 @@ def _model_version() -> str:
 # holds the old array keeps its own reference until it is done).
 _BUILD_BATCH = 4096
 
-# File-backed matrix rows (eye-mem-3, measured 2026-10-09 with the three live-size matrices, 281239
+# File-backed matrix rows (measured 2026-10-09 with the three live-size matrices, 281239
 # rows x 1024 float32 = 1.15 GB): held in process memory they are about 1.3 GB of the footprint and
 # the part that grows with every embedded document (4 KB per row). The same rows in a shared mapping
 # of a file count about 0 MB toward the footprint (16 MB for a reader process, 37 MB with 1.4 GB
@@ -486,7 +486,7 @@ def note_chunk_write() -> None:
     _mstate["chunk"].unknown_gen = _chunk_write_gen
 
 
-# ── Incremental matrix update (eye-mem-3, 2026-10-09) ────────────────────────────────────────────
+# ── Incremental matrix update (2026-10-09) ────────────────────────────────────────────
 # Measured under a replay of real ingest: after every committed write the writer re-read the WHOLE
 # matrix from SQLite (vec 438 MB, vec_thin 545 MB, vec_chunk 171 MB at the live row counts), at most
 # once per 20 s debounce per matrix. Under memory pressure that re-read was the writer's bottleneck

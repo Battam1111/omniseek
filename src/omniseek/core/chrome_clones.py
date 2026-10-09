@@ -6,9 +6,9 @@ executable inside is a HARD LINK to the running binary), so its code signature s
 an update replaces /Applications/Google Chrome.app. Only a normal shutdown removes it: the browser's
 last destructor starts a ``--type=code-sign-clone-cleanup`` helper that waits for the browser to exit
 and then deletes the directory (chrome/browser/mac/code_sign_clone_manager.mm). A browser that ends
-any other way leaves its clone behind until the machine reboots. Measured on the mini 2026-10-05:
+any other way leaves its clone behind until the machine reboots. Measured on the live host 2026-10-05:
 ``launchctl kill TERM`` (how the cdp-reaper stops an idle browser) leaves it every time, while the
-CDP command Browser.close lets Chrome remove it. The mini had collected 200 of them in two months.
+CDP command Browser.close lets Chrome remove it. The live host had collected 200 of them in two months.
 
 What this module does. One pass over the clone root, run by the cdp-reaper job (every 10 minutes):
   * only the direct children of the root whose name is exactly ``code_sign_clone.`` plus six letters
@@ -17,7 +17,7 @@ What this module does. One pass over the clone root, run by the cdp-reaper job (
     read two ways. (A) By path: a name lsof prints under the clone. (B) By file identity (device +
     inode) of the clone's main executable, because that executable is a hard link of the running
     binary and lsof prints just one of its names (under /Applications, or under any other clone of
-    the same binary; measured on the mini). Every clone of the current version shares one
+    the same binary; measured on the live host). Every clone of the current version shares one
     executable with every running browser of that version, so (B) alone would keep every leaked
     clone for as long as any such browser runs. (B) therefore counts a process only when it is the
     clone's maker (it started at most MAKER_WINDOW_S before the clone was born; measured: the clone
@@ -34,7 +34,7 @@ deleted.
 without deleting anything. On any host other than macOS the pass does nothing.
 
 Deliberately self-contained (standard library only, Python 3.9 compatible): the same file is run by
-hand on the mini for the dry run before it is deployed.
+hand on the live host for the dry run before it is deployed.
 """
 
 from __future__ import annotations
@@ -57,15 +57,15 @@ NAME_RE = re.compile(r"^code_sign_clone\.[A-Za-z0-9]{6}$")
 ROOT_PREFIX = "/private/var/folders/"   # Chrome refuses any clone dir outside this (ValidateTempDir)
 MIN_AGE_S = 3600                         # spec: never touch a clone born within the last hour
 # How long before a clone's birth its maker may have started. Confirmed 2026-10-06 from the clone
-# watch on the mini (2026-10-05 11:15 to 2026-10-06 04:30, four CDP services): of 11 clones, 10 were
+# watch on the live host (2026-10-05 11:15 to 2026-10-06 04:30, four CDP services): of 11 clones, 10 were
 # born within 3 s of their browser's start and one 19 s after it (that browser's second clone), so
 # 300 s keeps more than ten times the widest gap seen. Too wide only keeps a leaked clone longer; too
 # narrow could free the clone of a running browser (harmless until Chrome updates while that browser
 # is still up). Recheck if a pass ever deletes a clone whose maker was alive.
 MAKER_WINDOW_S = 300
 MAKER_SLACK_S = 2                        # ps start times have 1 s resolution
-TIME_BUDGET_S = 30.0                     # job budget 120 s; one clone took 0.12 s to delete on the mini
-LSOF_TIMEOUT_S = 30                      # one full lsof took 0.17 s on the mini
+TIME_BUDGET_S = 30.0                     # job budget 120 s; one clone took 0.12 s to delete on the live host
+LSOF_TIMEOUT_S = 30                      # one full lsof took 0.17 s on the live host
 PS_TIMEOUT_S = 10
 MIN_PASS_S = 15                          # with less time than this left, a pass does not start
 INSTALLED_EXES = ("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",

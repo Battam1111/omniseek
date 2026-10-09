@@ -145,7 +145,7 @@ class MCPClient:
 
         try:
             # The declared gates of the endpoint's host, held through the body read, and the redirect
-            # rule on every later hop: exactly as http._request_capped (driver ruling 2026-09-29: no
+            # rule on every later hop: exactly as http._request_capped (design decision 2026-09-29: no
             # egress may bypass a declared gate, whether or not an MCP row exists today). The client is
             # built first, so the start slot is the moment the request goes on the wire.
             client = http._get_client()

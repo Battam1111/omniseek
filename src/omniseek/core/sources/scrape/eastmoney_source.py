@@ -11,7 +11,7 @@ QUOTE comes from Tencent qt.gtimg.cn (one BATCHED `q=sym,sym,...` call, GBK, `~`
 
 WHY Tencent for the quote (2026-06-20): the original backend was EastMoney push2.eastmoney.com, but
 push2 has aggressive per-IP anti-abuse — under OmniSeek's MULTI-AGENT burst load (a research workflow
-fired many parallel eastmoney calls) push2 began dropping the mini's connections (accept-then-close,
+fired many parallel eastmoney calls) push2 began dropping the host's connections (accept-then-close,
 curl 56/52) for hours, while searchapi stayed fine. Tencent qt.gtimg.cn is the burst-tolerant,
 keyless, industry-standard A-share/HK/US quote endpoint (verified 2026-06-20: 5 rapid hits all 200,
 ~45ms, no throttle), so the QUOTE moved there. Name resolution stays on EastMoney suggest (it works);
