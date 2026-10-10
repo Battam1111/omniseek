@@ -61,20 +61,24 @@ jobs:
           PYTHONIOENCODING: "utf-8"
         run: python .github/workflows/scripts/mcp_client_probe.py
 
-  # Verifies the Docker quickstart on GitHub's runner (which has Docker preinstalled), so a
-  # maintainer without local Docker still gets the image built + booted + smoke-tested on every
-  # push to main (and on demand via workflow_dispatch). Skipped on PRs to avoid the chromium-layer
-  # build cost on every review.
+  # Verifies the Docker path on GitHub's runner (which has Docker preinstalled), so a maintainer
+  # without local Docker still gets the image built + booted + smoke-tested on every push to main
+  # (and on demand via workflow_dispatch). It builds THIS checkout through the compose `build`
+  # profile (docs/install.md), so a Dockerfile change is tested before publish-image ships it; the
+  # default compose service only pulls the published image. Skipped on PRs to avoid the
+  # chromium-layer build cost on every review.
   docker:
     runs-on: ubuntu-latest
     if: github.event_name != 'pull_request'
+    env:
+      COMPOSE_PROFILES: build
     steps:
       - uses: actions/checkout@v7
-      - name: Build the image (core) via the exact README command
-        run: docker compose build
-      - name: Boot it (docker compose up -d) and smoke healthz + token gate
+      - name: Build the image (core) via the documented build profile
+        run: docker compose build omniseek-build
+      - name: Boot it and smoke healthz + token gate
         run: |
-          docker compose up -d
+          docker compose up -d omniseek-build
           ok=
           for i in $(seq 1 40); do
             if curl -fsS http://127.0.0.1:8765/healthz >/dev/null 2>&1; then ok=1; break; fi

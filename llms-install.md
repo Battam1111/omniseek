@@ -1,35 +1,41 @@
 # Installing OmniSeek (a guide written for AI agents)
 
-OmniSeek is a self-hosted perception MCP server. There are two ways to run it; pick ONE based
-on what the machine has.
+OmniSeek is a self-hosted MCP server that lets AI agents search podcasts and videos, Chinese
+communities, citation graphs, and sites behind your own login (off by default). The default
+install runs it over stdio: the MCP client starts the `omniseek` command itself. No port, no
+token, no Docker. Python 3.11+ is required; `uv` fetches it if the machine only has an older one.
 
-## Option A: Docker (recommended when Docker is available)
-
-```bash
-git clone https://github.com/Battam1111/omniseek.git && cd omniseek
-docker compose up -d
-```
-
-1. The first start generates a bearer token. Read it from the logs
-   (`docker compose logs omniseek`, look for "generated a new bearer token") or from the file
-   `./.omniseek/credentials/omniseek_http.json` on the host.
-2. Health check: `curl http://127.0.0.1:8765/healthz` should answer.
-3. Register the server with the MCP client:
-   - transport: streamable HTTP
-   - endpoint: `http://127.0.0.1:8765/mcp`
-   - header: `Authorization: Bearer <token>`
-
-## Option B: pip + stdio (no Docker; Python 3.11+)
+## Step 1: install the command
 
 ```bash
-pip install omniseek
-python -m playwright install chromium
+uv tool install omniseek
 ```
 
-(The second command installs the headless browser the render-path sources use; skip it and
-those sources degrade gracefully while everything else works.)
+If `uv` is missing, install it first (`curl -LsSf https://astral.sh/uv/install.sh | sh` on
+macOS/Linux, `powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"`
+on Windows). If `uv tool install` warns that its bin folder is not on `PATH`, run
+`uv tool update-shell`; the client will not find a command that is off `PATH`.
 
-Then configure the client to launch the server itself over stdio. No port, no token:
+Do NOT use a plain `pip install omniseek` inside a virtual environment and then register the bare
+name `omniseek`: the client does not activate that environment and fails with
+`Executable not found in $PATH`. If you must use a virtual environment, register the absolute path
+of its `omniseek` executable instead.
+
+Recommended: download the headless browser some sources use (they degrade gracefully without it):
+
+```bash
+uvx --from omniseek playwright install chromium
+```
+
+## Step 2: register it with the client
+
+Claude Code:
+
+```bash
+claude mcp add omniseek -- omniseek
+```
+
+Cursor (`~/.cursor/mcp.json`) and other clients that take a JSON config:
 
 ```json
 {
@@ -41,18 +47,32 @@ Then configure the client to launch the server itself over stdio. No port, no to
 }
 ```
 
-Optional extras (each pulls dependencies under their own licenses; see NOTICE):
-`pip install "omniseek[pdf,asr,walled]"`.
+Desktop apps may not inherit the shell `PATH`; if the server fails to start there, use the full
+path printed by `which omniseek` as `command`.
 
 ## Verify the install
 
-Call the `omniseek_sources` tool: it returns the source catalog and capability index. Then try
-`omniseek_search` with any query. If both answer, the install is complete.
+`claude mcp list` should show `omniseek` as `✔ Connected`. Then call the `omniseek_sources` tool
+(it lists the sources) and `omniseek_search` with any query. If both answer, the install is
+complete.
+
+## Optional extras
+
+Each pulls libraries under their own licenses (see NOTICE): `pdf` (PDF reading, AGPL PyMuPDF),
+`asr` (podcast and video transcription), `recall`, `ocr`, `walled` (sites behind a login). Example:
+`uv tool install "omniseek[pdf]"`. Transcription also needs PyTorch, installed per platform; the
+exact commands and disk cost are in `docs/install.md`.
+
+## Advanced: HTTP or Docker
+
+Only when several clients share one server. Both need a bearer token; follow `docs/install.md`
+(sections "Advanced: HTTP service" and "Advanced: Docker"). The Docker image is
+`ghcr.io/battam1111/omniseek` and serves `http://127.0.0.1:8765/mcp`.
 
 ## Notes for the agent
 
-- HTTP mode binds `127.0.0.1` only. Do not expose it without a reverse proxy.
-- Login-walled sources ship OFF. They activate only when the human configures their own
-  credentials in `~/.omniseek/profile.json` (see `deploy/profile.example.json`).
-- Optional but recommended: set `OMNISEEK_CONTACT_EMAIL` so Crossref, SEC, and Unpaywall give
-  the polite-contact fast lane.
+- Sites behind a login ship OFF. They turn on only when the human configures their own account in
+  `~/.omniseek/profile.json` (see `docs/walled-sources.md`). Do not turn them on for the human.
+- Nothing that is on by default needs an API key.
+- Optional: set `OMNISEEK_CONTACT_EMAIL` so Crossref, SEC, and Unpaywall serve requests in their
+  faster lane.
