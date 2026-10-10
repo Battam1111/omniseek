@@ -3,44 +3,15 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>OmniSeek: your agent seeks what search can't find</title>
-<meta name="description" content="Your agent seeks what search can't find. A self-hosted perception MCP server that transcribes speech, reads behind logins, sees images and video frames, crosses languages, and remembers.">
+<title>OmniSeek: give your AI agent the parts of the internet web search doesn't reach</title>
+<meta name="description" content="OmniSeek is a self-hosted MCP server. Through one connection, your agent can search what people said in podcasts and videos, Chinese communities such as Bilibili and V2EX, and paper citation graphs. 200+ sources; works with Claude Code, Cursor, and other MCP clients.">
 <meta property="og:title" content="OmniSeek">
-<meta property="og:description" content="A self-hosted perception MCP server that transcribes speech, reads behind logins, sees images and video frames, crosses languages, and remembers.">
-<meta property="og:image" content="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/social-preview.png">
+<meta property="og:description" content="Give your AI agent the parts of the internet web search doesn't reach. A self-hosted MCP server with 200+ sources.">
+<meta property="og:image" content="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/logo-icon.png">
 <meta property="og:type" content="website">
-<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:card" content="summary">
 <link rel="icon" href="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/logo-dark.svg" type="image/svg+xml">
-<style>
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  body { background: #0F172A; color: #E2E8F0; font-family: -apple-system, "SF Pro Text", "Segoe UI", "PingFang SC", "Hiragino Sans", sans-serif; line-height: 1.6; }
-  .wrap { max-width: 960px; margin: 0 auto; padding: 64px 24px 40px; }
-  .hero { text-align: center; }
-  .mark { width: 128px; height: 128px; }
-  h1 { font-size: 44px; font-weight: 700; letter-spacing: -0.02em; margin-top: 18px; color: #F8FAFC; }
-  .tagline { font-size: 21px; font-weight: 650; margin-top: 10px; color: #E2E8F0; }
-  .lede { font-size: 16.5px; color: #94A3B8; margin: 14px auto 0; max-width: 700px; }
-  .cat { font-size: 13px; color: #64748B; margin-top: 12px; letter-spacing: 0.02em; }
-  .btns { margin-top: 26px; display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
-  .btn { display: inline-block; padding: 10px 22px; border-radius: 9px; font-size: 15px; font-weight: 600; text-decoration: none; }
-  .btn.primary { background: #3B82F6; color: #fff; }
-  .btn.ghost { border: 1px solid #334155; color: #E2E8F0; }
-  .btn:hover { filter: brightness(1.12); }
-  .install { margin: 40px auto 0; max-width: 640px; background: #16233F; border: 1px solid #1E3A8A; border-radius: 12px; padding: 18px 22px; text-align: left; }
-  .install .lbl { font-size: 12px; color: #93C5FD; font-weight: 650; letter-spacing: 0.04em; }
-  .install pre { margin: 8px 0 0; font-family: "SF Mono", ui-monospace, Menlo, Consolas, monospace; font-size: 13.5px; color: #E2E8F0; overflow-x: auto; }
-  .install .or { color: #64748B; font-size: 12.5px; margin-top: 12px; }
-  .figure { margin-top: 48px; }
-  .figure img { width: 100%; border-radius: 14px; border: 1px solid #1E293B; }
-  .senses { margin-top: 44px; display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; }
-  .sense { background: #111C33; border: 1px solid #1E293B; border-radius: 11px; padding: 14px 16px; }
-  .sense .t { font-weight: 650; color: #93C5FD; font-size: 14.5px; }
-  .sense .d { font-size: 13px; color: #94A3B8; margin-top: 5px; }
-  .foot { margin-top: 52px; text-align: center; font-size: 13px; color: #64748B; border-top: 1px solid #1E293B; padding-top: 22px; }
-  .foot a { color: #94A3B8; text-decoration: none; }
-  .foot a:hover { color: #E2E8F0; }
-  @media (max-width: 560px) { h1 { font-size: 34px; } .tagline { font-size: 18px; } }
-</style>
+<link rel="stylesheet" href="style.css">
 </head>
 <body>
 <div class="wrap">
@@ -52,41 +23,42 @@
       <circle cx="100" cy="100" r="8" fill="#F59E0B"/>
     </svg>
     <h1>OmniSeek</h1>
-    <div class="tagline">Your agent seeks what search can't find.</div>
-    <p class="lede">The answer is sitting in minute 47 of a podcast, three replies deep in a comment thread, behind a login, in another language. Your agent gets it anyway.</p>
-    <div class="cat">Self-hosted perception MCP server &middot; one connection &middot; Apache-2.0</div>
+    <div class="tagline">Give your AI agent the parts of the internet web search doesn't reach.</div>
+    <p class="lede">OmniSeek is a self-hosted MCP server. Through one connection, your agent can search what people said in podcasts and videos, Chinese communities such as Bilibili and V2EX, and paper citation graphs. If you turn it on, it can also read sites behind your own login (off by default). It covers 200+ sources and works with Claude Code, Cursor, and other MCP clients.</p>
+    <div class="cat">Self-hosted MCP server &middot; one connection &middot; Apache-2.0</div>
     <div class="btns">
       <a class="btn primary" href="https://github.com/Battam1111/omniseek">GitHub</a>
       <a class="btn ghost" href="https://pypi.org/project/omniseek/">PyPI</a>
-      <a class="btn ghost" href="https://github.com/Battam1111/omniseek/blob/main/docs/examples.md">Real examples</a>
+      <a class="btn ghost" href="https://github.com/Battam1111/omniseek/blob/main/docs/install.md">Install options</a>
       <a class="btn ghost" href="bench.html">Claim-verification results</a>
     </div>
   </div>
 
   <div class="install">
-    <div class="lbl">QUICK START</div>
-    <pre>git clone https://github.com/Battam1111/omniseek.git &amp;&amp; cd omniseek
-docker compose up -d</pre>
-    <div class="or">or</div>
-    <pre>pip install omniseek</pre>
+    <div class="lbl">QUICK START (Python 3.11+; uv fetches it if you don't have it)</div>
+    <pre>uv tool install omniseek
+claude mcp add omniseek -- omniseek</pre>
+    <div class="note">Then ask your agent: <em>What are the foundational papers on speculative decoding, and which recent papers build on them?</em></div>
+    <div class="note">No uv? <a href="https://docs.astral.sh/uv/">Install it</a>, or use pipx. Cursor, pip, HTTP, and Docker setups: <a href="https://github.com/Battam1111/omniseek/blob/main/docs/install.md">Install options</a>.</div>
+  </div>
+
+  <div class="cards">
+    <a class="card" href="cross-lingual-search-mcp.html"><div class="t">Cross-lingual search</div><div class="d">Ask in English, search Chinese sources, get links to the original posts.</div></a>
+    <a class="card" href="podcast-transcription-mcp.html"><div class="t">Podcast transcription</div><div class="d">Quote what was said, with timestamps, transcribed on your machine.</div></a>
+    <a class="card" href="zhihu-mcp.html"><div class="t">Zhihu search</div><div class="d">Zhihu questions and answers from Claude Code and other MCP clients.</div></a>
+    <a class="card" href="research-monitoring-mcp.html"><div class="t">Research monitoring</div><div class="d">Watch a topic and see only what's new since last time.</div></a>
+    <a class="card" href="citation-graph-mcp.html"><div class="t">Citation graph</div><div class="d">Which papers a field is built on, and which recent ones build on them.</div></a>
   </div>
 
   <div class="figure">
     <img src="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo-en-dark.png"
-         alt="One real investigation: search quotes the rule and stops; OmniSeek keeps seeking and comes back with a transcribed Chinese explainer, login-walled first-person timelines, the workaround buried in a comment thread, and the dissenting video note, each line attributed.">
-  </div>
-
-  <div class="senses">
-    <div class="sense"><div class="t">It hears</div><div class="d">Local bilingual ASR. Speech nobody transcribed becomes text, no cloud.</div></div>
-    <div class="sense"><div class="t">It sees</div><div class="d">Images, document figures, video frames, read in-band with vision.</div></div>
-    <div class="sense"><div class="t">It crosses languages</div><div class="d">An English question finds the Chinese answer, and vice versa.</div></div>
-    <div class="sense"><div class="t">It reads behind logins</div><div class="d">Your credentials, your machine, off by default.</div></div>
-    <div class="sense"><div class="t">It remembers</div><div class="d">Persistent retrieval memory plus a source-traced evidence graph.</div></div>
+         alt="One real investigation, drawn as three layers. Layer one, written down and easy to find: plain search quotes the rule and stops. Layer two, written down but behind a login or buried: first-person timelines on a forum you are logged in to, and a workaround in a comment thread. Layer three, never written down: a Chinese explainer video transcribed from audio, and a video note read from its frames.">
   </div>
 
   <div class="foot">
     <a href="https://github.com/Battam1111/omniseek">GitHub</a> &middot;
     <a href="https://pypi.org/project/omniseek/">PyPI</a> &middot;
+    <a href="https://github.com/Battam1111/omniseek/blob/main/docs/sources.md">All sources</a> &middot;
     <a href="https://github.com/Battam1111/omniseek/blob/main/docs/i18n/README_zh.md">中文</a> &middot;
     <a href="https://github.com/Battam1111/omniseek/blob/main/docs/i18n/README_ja.md">日本語</a> &middot;
     Apache-2.0
