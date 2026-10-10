@@ -97,8 +97,10 @@ claude mcp add omniseek -- ~/.omniseek-venv/bin/omniseek
 | `ocr` | 读图片和扫描页里的文字 | 带进 onnxruntime |
 | `walled` | 用你自己的登录态读要登录才能看的网站 | 你打开之前一直是关的，见 [要登录的网站（英文）](walled-sources.md) |
 
-要 API key 的源（CORE、Adzuna、Podcast Index、Bluesky）在你填 key 之前不出结果，见
-[配置（英文）](configuration.md)。默认开着的源都不需要 key。
+默认开着的源几乎都不需要 API key。有四个默认源填了凭据会更好用，见
+[配置（英文）](configuration.md)：Bluesky 和 CORE 在你填之前不出结果；GitHub 没有 token 时按匿名
+限额查，并跳过代码搜索；OpenReview 大多数论坛要账号登录才读得到。要付费或注册 key、又没有免费
+退路的源（Adzuna、Podcast Index、Exa 等）默认是关的。
 
 ## 播客与视频转写
 

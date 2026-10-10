@@ -105,8 +105,11 @@ libraries. Add them in brackets, for example `uv tool install "omniseek[pdf,ocr]
 | `ocr` | Reading text inside images and scanned pages | Pulls onnxruntime |
 | `walled` | Sites behind your own login | Off until you turn it on; see [Sites behind a login](walled-sources.md) |
 
-Sources that need an API key (CORE, Adzuna, Podcast Index, Bluesky) stay quiet until you add a key;
-see [Configuration](configuration.md). Nothing that is on by default needs a key.
+Almost everything that is on by default works without an API key. Four default sources do better
+with credentials you add, see [Configuration](configuration.md): Bluesky and CORE return nothing
+until you add one; GitHub falls back to the anonymous rate limit and skips code search; OpenReview
+needs an account login for most forums. Sources that need a paid or registered key and have no
+free fallback (Adzuna, Podcast Index, Exa and a few others) are off by default.
 
 ## Podcast and video transcription
 

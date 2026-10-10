@@ -73,6 +73,8 @@ Only when several clients share one server. Both need a bearer token; follow `do
 
 - Sites behind a login ship OFF. They turn on only when the human configures their own account in
   `~/.omniseek/profile.json` (see `docs/walled-sources.md`). Do not turn them on for the human.
-- Nothing that is on by default needs an API key.
+- Almost everything on by default works without an API key. Bluesky and CORE return nothing until
+  the human adds credentials; GitHub without a token uses the anonymous rate limit; OpenReview needs
+  an account login for most forums. See `docs/configuration.md`. Do not ask for keys up front.
 - Optional: set `OMNISEEK_CONTACT_EMAIL` so Crossref, SEC, and Unpaywall serve requests in their
   faster lane.
