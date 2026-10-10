@@ -14,7 +14,7 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
-      - name: Install (core, Apache-clean)
+      - name: Install (core, no optional extras)
         run: pip install -e .
       - name: Byte-compile all sources
         run: python -m compileall -q src scripts tests
@@ -51,6 +51,15 @@ jobs:
           PYTHONUTF8: "1"
           PYTHONIOENCODING: "utf-8"
         run: python scripts/stdio_stranger_probe.py
+      # Real MCP handshakes with the official Python client, not a /healthz ping: stdio, then the
+      # HTTP service on the loopback address reached once as 127.0.0.1 and once as localhost.
+      # /healthz stayed green through the 0.2.1 bug where every real HTTP client got 421.
+      - name: MCP client handshake (stdio + loopback HTTP via 127.0.0.1 and localhost)
+        if: runner.os == 'Linux'
+        env:
+          PYTHONUTF8: "1"
+          PYTHONIOENCODING: "utf-8"
+        run: python .github/workflows/scripts/mcp_client_probe.py
 
   # Verifies the Docker quickstart on GitHub's runner (which has Docker preinstalled), so a
   # maintainer without local Docker still gets the image built + booted + smoke-tested on every
