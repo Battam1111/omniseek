@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "omniseek"
 version = "0.2.1"
-description = "Your agent seeks what search can't find. A self-hosted perception MCP server that transcribes speech, reads behind logins, sees images and video frames, crosses languages, and remembers."
+description = "MCP server that lets AI agents search podcasts and videos, Chinese communities, citation graphs, and sites behind your own login (off by default)."
 requires-python = ">=3.11"
 readme = "README.md"
 license = "Apache-2.0"
@@ -21,8 +21,8 @@ classifiers = [
 
 # CORE = the permissive-licensed, out-of-the-box engine: every benign open-API + static-scrape
 # source, the recall index, document reading (minus PDF), and the shared infra. Heavy / AGPL /
-# circumvention deps are OPT-IN extras below, so a bare `pip install -e .` ships Apache-clean and
-# does not pull torch or an AGPL library. (Tools whose extra is absent fail-open with a clear
+# circumvention deps are OPT-IN extras below, so a bare `pip install omniseek` ships only
+# permissive licenses and does not pull torch or an AGPL library. (Tools whose extra is absent fail-open with a clear
 # "install omniseek[<extra>]" message; see asr.py / docreader.py / _cdp.py import guards.)
 dependencies = [
     # MCP framework. The <2 cap is load-bearing: mcp 2.0 (2026-08) dropped mcp.server.fastmcp,
@@ -30,6 +30,10 @@ dependencies = [
     # see it (already installed); only a stranger's first build does, which is what CI's docker
     # boot job exists to catch, and did.
     "mcp[cli]>=1.0.0,<2",
+    # Recent anyio releases no longer depend on sniffio, so a fresh resolve leaves it out, while
+    # parts of the async stack (httpcore, httpx, dnspython) still import it to detect the event
+    # loop. Declared explicitly so every install has it.
+    "sniffio>=1.3",
 
     # Source adapters (API-based). arxiv + openreview use the REST API directly via omniseek.core.http, so
     # neither needs a client lib here.
@@ -45,7 +49,7 @@ dependencies = [
     "feedparser>=6.0",
     "markdownify>=0.13",
     "pyyaml>=6.0",
-    "curl_cffi>=0.7",              # TLS/JA3 impersonation for fingerprint-walled public sites (MIT)
+    "curl_cffi>=0.7",              # TLS/JA3 impersonation for public sites that block plain clients (MIT)
 
     # Utilities
     "pydantic>=2.5",
@@ -71,13 +75,16 @@ dependencies = [
 
 [project.optional-dependencies]
 # PDF reading. pymupdf is AGPL-3.0 / Artifex-commercial, kept OUT of core so the default install
-# stays Apache-clean. With it absent, PDF reading (omniseek_read on a .pdf, the pdf source)
+# keeps only permissive licenses. With it absent, PDF reading (omniseek_read on a .pdf, the pdf source)
 # degrades with a clear message; everything else works. (Follow-up: a permissive swap to
 # pypdfium2 / pdfminer would fold PDF back into core.)
 pdf = ["pymupdf>=1.24"]
 
-# Audio/video transcription (omniseek_transcribe). funasr pulls torch (large); imageio-ffmpeg vendors
-# an ffmpeg binary. Opt-in so a retrieval-only deployer is not forced to install torch.
+# Audio/video transcription (omniseek_transcribe). funasr does NOT pull torch, and torch is
+# deliberately not listed here: the default Linux torch wheel bundles CUDA and is about ten times
+# the size of the CPU build, so the right wheel depends on the platform. Install torch + torchaudio
+# yourself first; docs/install.md has the per-platform commands and the disk cost. imageio-ffmpeg
+# vendors an ffmpeg binary.
 asr = ["funasr>=1.0", "imageio-ffmpeg>=0.5"]
 
 # Recall VECTOR layer (cross-lingual semantic search). sentence-transformers pulls torch (large);
@@ -89,7 +96,7 @@ recall = ["sentence-transformers>=3.0"]
 # while the rest of document reading works.
 ocr = ["rapidocr-onnxruntime>=1.2"]
 
-# Walled / login-driven + anti-bot-signed sources (the deployer brings their own account/session).
+# Sites behind a login + anti-bot-signed sources (the deployer brings their own account/session).
 # patchright = a stealth Playwright fork for the CDP path. xhshow = the xiaohongshu_cn request
 # SIGNER (anti-bot circumvention); OPT-IN ONLY and excluded from the default source pack, see
 # SECURITY.md (the circumvention/access-tier posture).
