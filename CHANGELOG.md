@@ -66,6 +66,8 @@ connection with two commands, and every place that explains installing should sa
   Windows-only bug in how the local log file was written got through with every test green.
 - Image URLs in the READMEs and on the site end with `?v=<date>`, so GitHub shows a re-rendered
   picture at once instead of the cached old one; `scripts/brand_lint.py` fails CI on an unversioned one.
+- `scripts/brand_lint.py` also fails on Markdown emphasis that GitHub would show as literal
+  asterisks (a `*` wedged between a letter and a quote mark, common in Chinese and Japanese text).
 - A short terminal recording in the README, right after the two install commands: one real run
   searching Zhihu and Bilibili, cut to the first results, in a light and a dark version
   (`assets/terminal-demo-{light,dark}.gif`) that follow the reader's GitHub theme. The first frame
