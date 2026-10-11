@@ -5,10 +5,6 @@
   </picture>
 </p>
 
-<p align="center">
-  <img src="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/terminal-demo.gif" width="760" alt="一次真实运行：Agent 在知乎和 B 站搜读博第一年的建议，每次约一秒拿回带链接的帖子和视频。">
-</p>
-
 OmniSeek 是一个自己部署的 MCP 服务。接上一次，你的 Agent 就能搜播客和视频里说的话、B 站和 V2EX 这类中文社区、论文引用图。你打开后，它还能用你自己的登录态读要登录才能看的网站（默认关）。覆盖 200 多个源，Claude Code、Cursor 等支持 MCP 的客户端都能用。
 
 试着问你的 Agent：
@@ -24,6 +20,15 @@ claude mcp add omniseek -- omniseek
 
 播客转写、PDF 阅读、要登录的网站是可选功能；Cursor、pipx、pip、HTTP、Docker 的装法也在那里，见[安装选项](../install.zh.md)。
 完整文档：[文档](../) | [全部数据源](../sources.md) | [工具说明](../tools.md)
+
+一次真实运行的样子（两次搜索，只截前几条结果，每次约一秒）：
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/terminal-demo-dark.gif">
+    <img src="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/terminal-demo-light.gif" width="720" alt="一次真实运行：Agent 在知乎和 B 站搜读博第一年的建议，每次约一秒拿回带链接的帖子和视频。">
+  </picture>
+</p>
 
 [![CI](https://github.com/Battam1111/omniseek/actions/workflows/ci.yml/badge.svg)](https://github.com/Battam1111/omniseek/actions/workflows/ci.yml) [![PyPI](https://img.shields.io/pypi/v/omniseek?color=3B82F6&style=flat-square)](https://pypi.org/project/omniseek/) [![License](https://img.shields.io/badge/License-Apache_2.0-3B82F6?style=flat-square)](../../LICENSE) ![Python](https://img.shields.io/badge/Python_3.11+-3B82F6?style=flat-square) ![Built for MCP](https://img.shields.io/badge/built_for-MCP-3B82F6?style=flat-square)
 

@@ -7,10 +7,6 @@
   </picture>
 </p>
 
-<p align="center">
-  <img src="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/terminal-demo.gif" width="760" alt="A real OmniSeek run: an agent searches Zhihu and Bilibili for first-year PhD advice and gets linked posts and videos back in about a second each.">
-</p>
-
 OmniSeek is a self-hosted MCP server. Through one connection, your agent can search what people said in podcasts and videos, Chinese communities such as Bilibili and V2EX, and paper citation graphs. If you turn it on, it can also read sites behind your own login (off by default). It covers 200+ sources and works with Claude Code, Cursor, and other MCP clients.
 
 Ask your agent:
@@ -26,6 +22,15 @@ claude mcp add omniseek -- omniseek
 
 Podcast transcription, PDF reading, and logged-in sites are optional extras; Cursor, pipx, pip, HTTP, and Docker setups are there too: see [Install options](https://github.com/Battam1111/omniseek/blob/main/docs/install.md).
 Full docs: [Docs](https://github.com/Battam1111/omniseek/tree/main/docs) | [All sources](https://github.com/Battam1111/omniseek/blob/main/docs/sources.md) | [Tools](https://github.com/Battam1111/omniseek/blob/main/docs/tools.md)
+
+A real run, two searches, cut to the first results (each took about a second):
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/terminal-demo-dark.gif">
+    <img src="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/terminal-demo-light.gif" width="720" alt="A real OmniSeek run: an agent searches Zhihu and Bilibili for first-year PhD advice and gets linked posts and videos back in about a second each.">
+  </picture>
+</p>
 
 [![CI](https://github.com/Battam1111/omniseek/actions/workflows/ci.yml/badge.svg)](https://github.com/Battam1111/omniseek/actions/workflows/ci.yml) [![PyPI](https://img.shields.io/pypi/v/omniseek?color=3B82F6&style=flat-square)](https://pypi.org/project/omniseek/) [![License](https://img.shields.io/badge/License-Apache_2.0-3B82F6?style=flat-square)](https://github.com/Battam1111/omniseek/blob/main/LICENSE) ![Python](https://img.shields.io/badge/Python_3.11+-3B82F6?style=flat-square) ![Built for MCP](https://img.shields.io/badge/built_for-MCP-3B82F6?style=flat-square)
 

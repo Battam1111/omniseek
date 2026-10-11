@@ -5,10 +5,6 @@
   </picture>
 </p>
 
-<p align="center">
-  <img src="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/terminal-demo.gif" width="760" alt="実際の実行例:エージェントが Zhihu と Bilibili で博士 1 年目へのアドバイスを検索し、それぞれ約 1 秒でリンク付きの投稿と動画を受け取る。">
-</p>
-
 OmniSeek はセルフホスト型の MCP サーバーです。一度つなぐだけで、あなたのエージェントはポッドキャストや動画の中で話された内容、Bilibili や V2EX のような中国語コミュニティ、論文の引用グラフを検索できるようになります。オンにすれば、あなた自身のログインでしか見られないサイトも読めます(デフォルトはオフ)。200 以上のソースに対応し、Claude Code、Cursor など MCP に対応したクライアントで使えます。
 
 エージェントにこう聞いてみてください:
@@ -24,6 +20,15 @@ claude mcp add omniseek -- omniseek
 
 ポッドキャストの書き起こし、PDF の読み取り、ログインが必要なサイトはオプション機能です。Cursor、pipx、pip、HTTP、Docker での導入方法もあわせて[インストールの選択肢(英語)](../install.md)にあります。
 ドキュメント:[ドキュメント一覧](../) | [全ソース](../sources.md) | [ツール](../tools.md)
+
+実際の実行はこうなります(2 回の検索、先頭の結果だけ表示、それぞれ約 1 秒):
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/terminal-demo-dark.gif">
+    <img src="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/terminal-demo-light.gif" width="720" alt="実際の実行例:エージェントが Zhihu と Bilibili で博士 1 年目へのアドバイスを検索し、それぞれ約 1 秒でリンク付きの投稿と動画を受け取る。">
+  </picture>
+</p>
 
 [![CI](https://github.com/Battam1111/omniseek/actions/workflows/ci.yml/badge.svg)](https://github.com/Battam1111/omniseek/actions/workflows/ci.yml) [![PyPI](https://img.shields.io/pypi/v/omniseek?color=3B82F6&style=flat-square)](https://pypi.org/project/omniseek/) [![License](https://img.shields.io/badge/License-Apache_2.0-3B82F6?style=flat-square)](../../LICENSE) ![Python](https://img.shields.io/badge/Python_3.11+-3B82F6?style=flat-square) ![Built for MCP](https://img.shields.io/badge/built_for-MCP-3B82F6?style=flat-square)
 

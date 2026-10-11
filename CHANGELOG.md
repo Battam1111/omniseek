@@ -52,9 +52,11 @@ connection with two commands, and every place that explains installing should sa
 - CI runs the unit tests and the offline smoke check on Windows as well (`smoke-windows`, the same
   steps as the Linux job). Before, Windows only installed the package and did the handshake, so a
   Windows-only bug in how the local log file was written got through with every test green.
-- A short terminal recording under the README hero (`assets/terminal-demo.gif`): one real run
-  searching Zhihu and Bilibili, cut to the first results. `assets/masters/gen_terminal_demo.py`
-  records the run and rebuilds the recording from it.
+- A short terminal recording in the README, right after the two install commands: one real run
+  searching Zhihu and Bilibili, cut to the first results, in a light and a dark version
+  (`assets/terminal-demo-{light,dark}.gif`) that follow the reader's GitHub theme. The first frame
+  already shows the finished answer, and the window is only as tall as its content.
+  `assets/masters/gen_terminal_demo.py` records the run and renders both GIFs from it.
 
 ### Notes
 
