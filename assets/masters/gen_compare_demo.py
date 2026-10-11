@@ -2,8 +2,8 @@
 OmniSeek (right). Rendered from one recorded run to GIFs (README, site) and MP4s (X, Bilibili).
 
     python assets/masters/gen_compare_demo.py gif      # assets/demo/compare-{en,zh,ja}-{light,dark}{,-narrow}.gif
-    python assets/masters/gen_compare_demo.py mp4      # assets/demo/compare-{en,zh}-dark.mp4 (+ posters)
-    python assets/masters/gen_compare_demo.py poster   # assets/demo/compare-{en,zh}-dark-poster.png only
+    python assets/masters/gen_compare_demo.py mp4      # assets/demo/compare-en-{light,dark}.mp4, compare-zh-dark.mp4 (+ posters)
+    python assets/masters/gen_compare_demo.py poster   # the posters only: compare-en-{light,dark}-poster.png, compare-zh-dark-poster.png
     python assets/masters/gen_compare_demo.py all
 
 The -narrow GIFs stack the two agents (web search on top) for phones: the README picks them with
@@ -258,7 +258,8 @@ GLOSS_JA = {
 }
 GLOSSES = {"en": GLOSS, "ja": GLOSS_JA}
 LANGS = ("en", "zh", "ja")
-MP4_LANGS = ("en", "zh")
+# Videos: both themes in English (the site picks one by the reader's theme), dark in Chinese.
+MP4_THEMES = {"en": ("light", "dark"), "zh": ("dark",)}
 
 INSTALL = 'uv tool install "omniseek[asr]" --with torch --with torchaudio'
 
@@ -587,7 +588,7 @@ def shoot(lang, theme, w, h, scale, mp4, narrow=False):
         page.wait_for_timeout(400)
         for st, ms in plan(mp4):
             page.evaluate(APPLY, [st, T[lang]["cap"]])
-            shots.append((page.locator("#stage").screenshot(omit_background=not mp4), ms))
+            shots.append((page.locator("#stage").screenshot(omit_background=True), ms))
         ctx.close()
         b.close()
     return shots
@@ -623,17 +624,24 @@ def to_gif(shots, page_hex: str, path: Path) -> None:
                    loop=0, transparency=255, disposal=1, optimize=False)
 
 
-def to_mp4(shots, path: Path) -> None:
-    import imageio_ffmpeg
+def on_page(png: bytes, page_hex: str):
+    """A stage screenshot (transparent outside its rounded corners) flattened onto the page colour,
+    at video size. Without it the corners came out white on the dark video."""
     from PIL import Image
+    im = Image.open(io.BytesIO(png)).convert("RGBA")
+    bg = Image.new("RGBA", im.size, page_hex)
+    return Image.alpha_composite(bg, im).convert("RGB").resize((MP4_W, MP4_H), Image.LANCZOS)
+
+
+def to_mp4(shots, page_hex: str, path: Path) -> None:
+    import imageio_ffmpeg
     ff = imageio_ffmpeg.get_ffmpeg_exe()
     cmd = [ff, "-y", "-loglevel", "error", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{MP4_W}x{MP4_H}",
            "-r", str(MP4_FPS), "-i", "-", "-c:v", "libx264", "-preset", "slow", "-crf", "20",
            "-pix_fmt", "yuv420p", "-movflags", "+faststart", str(path)]
     proc = subprocess.Popen(cmd, stdin=subprocess.PIPE)
     for png, ms in shots:
-        im = Image.open(io.BytesIO(png)).convert("RGB").resize((MP4_W, MP4_H), Image.LANCZOS)
-        raw = im.tobytes()
+        raw = on_page(png, page_hex).tobytes()
         for _ in range(max(1, round(ms * MP4_FPS / 1000))):
             proc.stdin.write(raw)
     proc.stdin.close()
@@ -641,10 +649,9 @@ def to_mp4(shots, path: Path) -> None:
         raise SystemExit("ffmpeg failed")
 
 
-def to_poster(shots, path: Path) -> None:
-    from PIL import Image
+def to_poster(shots, page_hex: str, path: Path) -> None:
     last = max(i for i, (st, _) in enumerate(plan(True)) if not st.get("end"))
-    im = Image.open(io.BytesIO(shots[last][0])).convert("RGB").resize((MP4_W, MP4_H), Image.LANCZOS)
+    im = on_page(shots[last][0], page_hex)
     im.save(path, optimize=True)
     print(f"wrote {path.name}: frame {last + 1} of {len(shots)}, {path.stat().st_size / 1e6:.2f} MB")
 
@@ -663,14 +670,15 @@ def main():
                     to_gif(shots, THEMES[theme]["page"], out)
                     print(f"wrote {out.name}: {len(shots)} frames, {sum(m for _, m in shots) / 1000:.1f}s, "
                           f"{out.stat().st_size / 1e6:.2f} MB")
-        if what in ("mp4", "poster", "all") and lang in MP4_LANGS:
-            # 1024 x 576 CSS rendered at 1.25 = 1280 x 720 px.
-            shots = shoot(lang, "dark", 1024, 576, MP4_W / 1024, True)
-            to_poster(shots, OUT / f"compare-{lang}-dark-poster.png")
-            if what != "poster":
-                out = OUT / f"compare-{lang}-dark.mp4"
-                to_mp4(shots, out)
-                print(f"wrote {out.name}: {sum(m for _, m in shots) / 1000:.1f}s, {out.stat().st_size / 1e6:.2f} MB")
+        if what in ("mp4", "poster", "all"):
+            for theme in MP4_THEMES.get(lang, ()):
+                # 1024 x 576 CSS rendered at 1.25 = 1280 x 720 px.
+                shots = shoot(lang, theme, 1024, 576, MP4_W / 1024, True)
+                to_poster(shots, THEMES[theme]["page"], OUT / f"compare-{lang}-{theme}-poster.png")
+                if what != "poster":
+                    out = OUT / f"compare-{lang}-{theme}.mp4"
+                    to_mp4(shots, THEMES[theme]["page"], out)
+                    print(f"wrote {out.name}: {sum(m for _, m in shots) / 1000:.1f}s, {out.stat().st_size / 1e6:.2f} MB")
 
 
 if __name__ == "__main__":

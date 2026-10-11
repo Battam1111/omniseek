@@ -99,7 +99,13 @@ h1.headline { font-size: 40px; line-height: 1.2; max-width: 820px; margin: 22px 
 .compare img { border-radius: 10px; }
 .watch { margin: 12px auto 0; max-width: 760px; text-align: left; }
 .watch summary { cursor: pointer; font-size: 14px; font-weight: 600; color: var(--link); }
-.watch video { display: block; width: 100%; margin-top: 10px; border-radius: 10px; background: #0F172A; }
+.watch video { display: block; width: 100%; margin-top: 10px; border-radius: 10px; background: var(--page); }
+/* One video per theme (index.html): dark by default like the page, light under a light scheme. */
+.watch video.for-light { display: none; }
+@media (prefers-color-scheme: light) {
+  .watch video.for-light { display: block; }
+  .watch video.for-dark { display: none; }
+}
 .caption a { color: var(--muted); }
 .gains { list-style: none; margin: 40px auto 0; max-width: 760px; }
 .gains li { font-size: 17px; color: var(--text); padding: 10px 0; border-top: 1px solid var(--line); }
