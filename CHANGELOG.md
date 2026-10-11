@@ -6,6 +6,46 @@ All notable changes to OmniSeek are documented here. The format follows
 Entries below the rename note predate it and use the project's former name, penumbra; they are
 history and are kept as written.
 
+## [Unreleased]
+
+A front-page and install-path release: a stranger should get from the README to a working
+connection with two commands, and every place that explains installing should say the same thing.
+
+### Changed
+
+- **New tagline.** "Give your AI agent the parts of the internet web search doesn't reach."
+  (Chinese 「给你的 AI Agent 接上网页搜索够不到的那部分互联网。」). The old one is listed as retired
+  in `docs/BRAND.md`.
+- **One install path.** `uv tool install omniseek` then `claude mcp add omniseek -- omniseek`,
+  Python 3.11+. A plain `pip install` into a virtual environment puts `omniseek` where Claude Code
+  cannot find it (the client reports the executable is not in `PATH`), so pip is now an alternative
+  that registers the absolute path. README, site, PyPI page and `llms-install.md` say the same thing.
+- **HTTP and Docker moved to `docs/install.md` as advanced setups**, with a one-line `docker run`.
+  `docker-compose.yml` now pulls `ghcr.io/battam1111/omniseek` by default; building from source sits
+  in its own `build` profile.
+- **README is a signpost.** The first screen is the tagline, a short description, one example
+  question, the two commands and a link to the docs; details live in `docs/`. Image links are
+  absolute so they render on PyPI and Glama. Internal project words were replaced with plain ones.
+- **New PyPI summary** in `pyproject.toml`, mirrored in `server.json`.
+- **Site:** new tagline and quick start, install commands no longer cut off on phones, and five
+  pages by capability (cross-lingual search, podcast transcription, Zhihu, research monitoring,
+  citation graph), each with an example that was actually run.
+
+### Added
+
+- `sniffio` is a declared dependency (it was imported but only arrived transitively).
+- `docs/install.md` (and a Chinese version) covers clients other than Claude Code, including a
+  Cursor config block, and how to install torch per platform before using `[asr]`.
+- CI job that installs the package and runs a real MCP handshake (initialize and tools/list) over
+  stdio, then over HTTP on `127.0.0.1` and on `localhost`. A health-check URL alone no longer counts
+  as a passing server.
+
+### Notes
+
+- `[asr]` still does not pull torch. On Linux the default torch wheel bundles CUDA and is about an
+  order of magnitude larger than the CPU wheel, so the choice is left to you; `docs/install.md`
+  gives the commands.
+
 ## [0.2.1] - 2026-09-14
 
 A patch release with one theme: a failure must not come back wearing a success's clothes.

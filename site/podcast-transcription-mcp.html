@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Podcast transcription MCP server: let your AI agent quote what was said, with timestamps</title>
+<meta name="description" content="Give your agent a podcast or video link, or just a topic, and it gets a transcript of the part that matters, with timestamps, transcribed locally on your own machine.">
+<meta property="og:title" content="Podcast transcription MCP server: let your AI agent quote what was said, with timestamps">
+<meta property="og:description" content="Give your agent a podcast or video link, or just a topic, and it gets a transcript of the part that matters, with timestamps, transcribed locally on your own machine.">
+<meta property="og:image" content="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/logo-icon.png">
+<meta property="og:type" content="website">
+<meta name="twitter:card" content="summary">
+<link rel="icon" href="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/logo-dark.svg" type="image/svg+xml">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="wrap narrow page">
+  <div class="crumb"><a href="index.html">OmniSeek</a></div>
+  <svg class="mark" style="width:56px;height:56px" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="OmniSeek mark">
+      <circle cx="100" cy="100" r="78" fill="none" stroke="#93C5FD" stroke-width="16" stroke-linecap="round" stroke-dasharray="416 74" transform="rotate(-55 100 100)"/>
+      <circle cx="100" cy="100" r="50" fill="none" stroke="#3B82F6" stroke-width="16" stroke-linecap="round" stroke-dasharray="267 47" transform="rotate(75 100 100)"/>
+      <circle cx="100" cy="100" r="23" fill="none" stroke="#2563EB" stroke-width="15" stroke-linecap="round" stroke-dasharray="116 28" transform="rotate(195 100 100)"/>
+      <circle cx="100" cy="100" r="8" fill="#F59E0B"/>
+    </svg>
+  <h1>Podcast transcription MCP server: let your AI agent quote what was said, with timestamps</h1>
+  <p class="lede">Give your agent a podcast or video link, or just a topic, and it gets a transcript of the part that matters, with timestamps, transcribed locally on your own machine.</p>
+
+  <h2>Try it</h2>
+  <div class="box">
+    <div class="lbl">ASK YOUR AGENT</div>
+    <div class="ask">Find a podcast episode on speculative decoding and quote what it says about the draft model, with the timestamp.</div>
+  </div>
+  <div class="box">
+    <div class="lbl">WHAT YOUR AGENT CALLS</div>
+    <pre><code>omniseek_search(query=&quot;speculative decoding&quot;, sources=[&quot;apple_podcasts&quot;])
+# picks an episode from the returned feed, then:
+omniseek_transcribe(url=&quot;https://www.buzzsprout.com/2529712/episodes/18794851-speculative-speculative-decoding.mp3&quot;,
+                    start=&quot;1:00&quot;, duration=&quot;0:45&quot;, language=&quot;en&quot;)</code></pre>
+  </div>
+  <div class="box">
+    <div class="lbl">WHAT CAME BACK</div>
+    <ul class="out">
+      <li><span class="src">1:00 to 1:45</span><a href="https://www.buzzsprout.com/2529712/episodes/18794851-speculative-speculative-decoding.mp3">“those older systems used a fast, small draft model to guess a few words ahead and then a massive target model came in”</a></li>
+    </ul>
+    <p class="small">From a real run on 2026-10-10. The first transcription downloads the speech model (about 900 MB) and took 162 seconds for this 45-second slice on a CPU; transcripts are cached after that. Ask for a slice (<code>start</code>, <code>duration</code>) instead of a whole two-hour episode.</p>
+  </div>
+
+  <h2>Install</h2>
+  <div class="install">
+    <div class="lbl">TWO COMMANDS</div>
+    <pre>uv tool install &quot;omniseek[asr]&quot; --with torch --with torchaudio
+claude mcp add omniseek -- omniseek</pre>
+    <div class="note">Transcription needs the <code>asr</code> extra and PyTorch. On Linux without an NVIDIA GPU add <code>--torch-backend cpu</code> to the first command, or PyTorch pulls several GB of CUDA libraries. Details and disk sizes: <a href="https://github.com/Battam1111/omniseek/blob/main/docs/install.md#podcast-and-video-transcription">Podcast and video transcription</a>.</div>
+  </div>
+
+  <h2>Related sources</h2>
+  <ul class="plain">
+      <li><a href="https://github.com/Battam1111/omniseek/blob/main/docs/sources.md"><code>apple_podcasts</code></a>: find shows and episode feeds by topic</li>
+      <li><a href="https://github.com/Battam1111/omniseek/blob/main/docs/sources.md"><code>xiaoyuzhou</code></a>: Chinese podcast episodes</li>
+      <li><a href="https://github.com/Battam1111/omniseek/blob/main/docs/sources.md"><code>chinese_podcasts</code></a>: Chinese tech and research podcast feeds</li>
+      <li><a href="https://github.com/Battam1111/omniseek/blob/main/docs/sources.md"><code>youtube</code></a>: videos, transcripts, and top comments</li>
+      <li><a href="https://github.com/Battam1111/omniseek/blob/main/docs/sources.md"><code>bilibili</code></a>: Chinese videos</li>
+      <li><a href="https://github.com/Battam1111/omniseek/blob/main/docs/sources.md"><code>podcast_index</code></a>: podcast directory (needs a free key)</li>
+  </ul>
+  <p class="small">Every source, with whether it needs a key or a login: <a href="https://github.com/Battam1111/omniseek/blob/main/docs/sources.md">docs/sources.md</a>. Tool reference: <a href="https://github.com/Battam1111/omniseek/blob/main/docs/tools.md">docs/tools.md</a>.</p>
+
+  <div class="foot">
+    <a href="index.html">OmniSeek</a> &middot;
+    <a href="https://github.com/Battam1111/omniseek">GitHub</a> &middot;
+    <a href="https://pypi.org/project/omniseek/">PyPI</a> &middot;
+    Apache-2.0
+  </div>
+</div>
+</body>
+</html>

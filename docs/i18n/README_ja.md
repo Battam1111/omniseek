@@ -1,9 +1,23 @@
 <div align="center">
 
-<picture>
-  <source media="(prefers-color-scheme: light)" srcset="../../assets/hero-ja-light.png">
-  <img src="../../assets/hero-ja-dark.png" width="620" alt="OmniSeek">
-</picture>
+<img src="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/logo-icon.png" width="88" alt="OmniSeek">
+
+<h1>OmniSeek</h1>
+
+<b>ウェブ検索が届かないインターネットを、あなたの AI エージェントに。</b>
+
+</div>
+
+インストール(Python 3.11 以上):
+
+```bash
+uv tool install omniseek
+claude mcp add omniseek -- omniseek
+```
+
+そのほかの導入方法とオプション機能は [Install options](../install.md)(英語)を参照してください。
+
+<div align="center">
 
 答えはポッドキャストの 47 分目、コメント欄の三つ下の返信、ログインの向こう、別の言語の中に眠っている。あなたのエージェントは、それでも取ってくる。
 
@@ -29,8 +43,8 @@ OmniSeek はその先へ進むための感覚を与えます:言語、ログイ�
 
 <div align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="../../assets/demo-ja-dark.png">
-    <img src="../../assets/demo-ja-light.png" alt="実際の調査を、三つの層をくぐる潜降として描いた図。第一層「書かれていて、届く」:通常の検索はルールを引用し、車止めに当たって止まる。第二層「書かれてはいるが、届かない」:ログインの内側の一次体験タイムラインと、コメント欄の奥に埋もれた回避策。第三層「そもそも書かれていない」:中国語解説動画のローカル書き起こしと、事実が画面の上にしかない動画ノート。探索は層ごとに位置の違う開口を見つけ、答えにたどり着く。">
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo-ja-dark.png">
+    <img src="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo-ja-light.png" alt="実際の調査を、三つの層をくぐる潜降として描いた図。第一層「書かれていて、届く」:通常の検索はルールを引用し、車止めに当たって止まる。第二層「書かれてはいるが、届かない」:ログインの内側の一次体験タイムラインと、コメント欄の奥に埋もれた回避策。第三層「そもそも書かれていない」:中国語解説動画のローカル書き起こしと、事実が画面の上にしかない動画ノート。探索は層ごとに位置の違う開口を見つけ、答えにたどり着く。">
   </picture>
 </div>
 
@@ -149,7 +163,7 @@ OmniSeek のクラウドは存在しません。テレメトリなし、アカ�
 
 ---
 
-**検索では届かないものを、あなたのエージェントが探し当てる。**
+**ウェブ検索が届かないインターネットを、あなたの AI エージェントに。**
 
 [Apache-2.0](../../LICENSE) · [NOTICE](../../NOTICE) · [Security](../../.github/SECURITY.md) · [Cite](../../CITATION.cff)
 

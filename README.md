@@ -1,164 +1,142 @@
 <!-- mcp-name: io.github.Battam1111/omniseek -->
 
-<div align="center">
+<p align="center">
+  <img src="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/logo-icon.png" width="88" alt="OmniSeek logo">
+</p>
 
-<picture>
-  <source media="(prefers-color-scheme: light)" srcset="assets/hero-en-light.png">
-  <img src="assets/hero-en-dark.png" width="620" alt="OmniSeek">
-</picture>
+# OmniSeek
 
-The answer is sitting in minute 47 of a podcast, three replies deep in a comment thread, behind a login, in another language. Your agent gets it anyway.
+**Give your AI agent the parts of the internet web search doesn't reach.**
 
-<sub>Self-hosted perception MCP server · one connection</sub>
+OmniSeek is a self-hosted MCP server. Through one connection, your agent can search what people said in podcasts and videos, Chinese communities such as Bilibili and V2EX, and paper citation graphs. If you turn it on, it can also read sites behind your own login (off by default). It covers 200+ sources and works with Claude Code, Cursor, and other MCP clients.
 
-[![CI](https://github.com/Battam1111/omniseek/actions/workflows/ci.yml/badge.svg)](https://github.com/Battam1111/omniseek/actions/workflows/ci.yml)
-&nbsp;[![License](https://img.shields.io/badge/License-Apache_2.0-3B82F6?style=flat-square)](./LICENSE)
-&nbsp;![Python](https://img.shields.io/badge/Python_3.11+-3B82F6?style=flat-square)
-&nbsp;![Built for MCP](https://img.shields.io/badge/built_for-MCP-3B82F6?style=flat-square)
-&nbsp;![Self-hosted](https://img.shields.io/badge/self--hosted-3B82F6?style=flat-square)
+Ask your agent:
 
-[Quick start](#quick-start) · [Tools](#tools) · [Configure](#configure) · [Contributing](#contributing)
+> What are the foundational papers on speculative decoding, and which recent papers build on them?
 
-**Languages:** English · [中文](docs/i18n/README_zh.md) · [日本語](docs/i18n/README_ja.md)
+Install (Python 3.11+; [uv](https://docs.astral.sh/uv/) fetches it if you don't have it):
 
-</div>
+```bash
+uv tool install omniseek
+claude mcp add omniseek -- omniseek
+```
+
+Podcast transcription, PDF reading, and logged-in sites are optional extras; Cursor, pipx, pip, HTTP, and Docker setups are there too: see [Install options](https://github.com/Battam1111/omniseek/blob/main/docs/install.md).
+Full docs: [Docs](https://github.com/Battam1111/omniseek/tree/main/docs) | [All sources](https://github.com/Battam1111/omniseek/blob/main/docs/sources.md) | [Tools](https://github.com/Battam1111/omniseek/blob/main/docs/tools.md)
+
+[![CI](https://github.com/Battam1111/omniseek/actions/workflows/ci.yml/badge.svg)](https://github.com/Battam1111/omniseek/actions/workflows/ci.yml) [![PyPI](https://img.shields.io/pypi/v/omniseek?color=3B82F6&style=flat-square)](https://pypi.org/project/omniseek/) [![License](https://img.shields.io/badge/License-Apache_2.0-3B82F6?style=flat-square)](https://github.com/Battam1111/omniseek/blob/main/LICENSE) ![Python](https://img.shields.io/badge/Python_3.11+-3B82F6?style=flat-square) ![Built for MCP](https://img.shields.io/badge/built_for-MCP-3B82F6?style=flat-square)
+
+**Languages:** English · [中文](https://github.com/Battam1111/omniseek/blob/main/docs/i18n/README_zh.md) · [日本語](https://github.com/Battam1111/omniseek/blob/main/docs/i18n/README_ja.md)
 
 ---
 
-Search gives your agent indexed pages, in one language, in text, and stops there.
+## What it finds that web search doesn't
 
-OmniSeek gives it the senses to keep going: through languages, logins, comment threads, audio, and pixels, all on your machine.
+The answer is sitting in minute 47 of a podcast, three replies deep in a comment thread, behind a login, in another language. Web search returns indexed pages, in one language, as text, and stops there. OmniSeek lets your agent keep going, all on your own machine.
 
 <div align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="assets/demo-en-dark.png">
-    <img src="assets/demo-en-light.png" alt="One real investigation, drawn as a descent through three layers. Layer one, written down and in reach: plain search quotes the rule and stops against a buffer stop. Layer two, written down but out of reach: login-walled first-person timelines, and the workaround buried in a comment thread. Layer three, never written down: a Chinese explainer transcribed from audio, and a video note read from pixels. The seek finds a different opening in each layer and arrives at the answer.">
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo-en-dark.png">
+    <img src="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo-en-light.png" alt="One real investigation, drawn as three layers. Layer one, written down and easy to find: plain search quotes the rule and stops. Layer two, written down but behind a login or buried: first-person timelines on a forum you are logged in to, and a workaround in a comment thread. Layer three, never written down: a Chinese explainer video transcribed from audio, and a video note read from its frames. Each layer opens a different way to the answer.">
   </picture>
 </div>
 
 What each layer gave back, verbatim:
 
-- **Written down, and in reach.** Headlines, official FAQ, top blogs, all one voice: *"From 2026, F-1 admission is limited to a 4-year initial period; renewal in a third country remains possible."* All quote the same rule. None of them have done it.
-- **Written down, but out of reach.** Three first-person threads on 1point3acres, behind your own login: **Bangkok**, booked to passport in 25 days, interview to approval in 30 minutes; **Milan**, a month-long fight for a slot, visa issued for 5 years; **Tokyo**, *"silky-smooth"*. Under the Milan post the author comes back in the comments: *"Book any late slot first, then email the consulate to expedite. For one F-1 applicant it worked."* One person's experience, not official guidance.
+- **Written down, and easy to find.** Headlines, official FAQ, top blogs, all one voice: *"From 2026, F-1 admission is limited to a 4-year initial period; renewal in a third country remains possible."* All quote the same rule. None of them have done it.
+- **Written down, but behind a login.** Three first-person threads on 1point3acres, read through your own login: **Bangkok**, booked to passport in 25 days, interview to approval in 30 minutes; **Milan**, a month-long fight for a slot, visa issued for 5 years; **Tokyo**, *"silky-smooth"*. Under the Milan post the author comes back in the comments: *"Book any late slot first, then email the consulate to expedite. For one F-1 applicant it worked."* One person's experience, not official guidance.
 - **Never written down.** A Chinese explainer video on bilibili, transcribed locally: the *"4-year cap"* in the headlines is the initial period, extensions moved desks rather than vanishing. A rednote video note whose caption is four hashtags, frames and speech read locally: a 212(a)(6)(C) refusal abroad, a misrepresentation finding, can nearly close the F-1 road.
 
-Plain search quoted the rule and stopped. The people who had lived it held the timelines, the workaround, and the risk. OmniSeek also named the sources it held back, each with the exact call to drill it.
+Plain search quoted the rule and stopped. The people who had lived it held the timelines, the workaround, and the risk. OmniSeek also named the sources it had not searched, each with the exact call that would search it.
 
-It hears (local bilingual ASR, no cloud), sees (images and video frames, in-band), crosses languages (a Chinese query finds English results and vice versa), reads behind login walls (your credentials, your machine, off by default), and remembers (persistent retrieval memory plus a typed, source-traced evidence graph).
+What it can do: transcribe audio locally in English and Chinese (no cloud), look at images and video frames, cross languages (a Chinese query finds English results and the reverse), read sites behind your own login (your accounts, your machine, off by default), and remember (a local search index that grows as you use it, plus a graph of the papers, people, and pages it has found, each link traced to its source).
 
-Crossing languages draws on the index OmniSeek builds as you use it, so a fresh install starts at a floor. The published claim-verification tests run on exactly that fresh install, which makes their cross-lingual number the coldest case rather than the typical one.
+Crossing languages draws on the index OmniSeek builds as you use it, so a fresh install starts low. The published claim tests run on exactly that fresh install, so their cross-lingual number is the coldest case, not the typical one.
 
-Every source in [the catalog](docs/sources.md), the curated roster of everything OmniSeek can reach, earned its place by beating plain search at one of five jobs (structure, unwalling, transcription, recall, monitoring): citation graphs, regulatory filings, login-walled forums, Chinese-language video. And the catalog is built to grow: a curator pipeline probes, judges, and admits new sources, and retires the ones that decay.
+Every source in [the catalog](https://github.com/Battam1111/omniseek/blob/main/docs/sources.md) earned its place by beating plain search at one of five jobs: structure (citation graphs, regulatory filings), access behind a login, transcription, recall, or monitoring. The catalog keeps growing: new candidate sources are tested before they are added, and sources that stop working are retired.
 
-**[Worked examples, real outputs](docs/examples.md)** · **[A full case study](docs/case-study.md)** · **[Every claim above is a test](bench/DESIGN.md)** ([latest results](https://github.com/Battam1111/omniseek/blob/health-data/bench/RESULTS.md)) · **[Source health, updated weekly](https://github.com/Battam1111/omniseek/blob/health-data/README.md)**
+**[Worked examples, real outputs](https://github.com/Battam1111/omniseek/blob/main/docs/examples.md)** · **[A full case study](https://github.com/Battam1111/omniseek/blob/main/docs/case-study.md)** · **[Every claim above is a test](https://github.com/Battam1111/omniseek/blob/main/bench/DESIGN.md)** ([latest results](https://github.com/Battam1111/omniseek/blob/health-data/bench/RESULTS.md)) · **[Source health, updated weekly](https://github.com/Battam1111/omniseek/blob/health-data/README.md)**
 
 ---
 
-## Quick start
+## Install options
 
-### Docker (recommended)
+The two commands at the top are the main path: the client starts `omniseek` itself over stdio, so there is no port and no token. Everything else is in **[Install options](https://github.com/Battam1111/omniseek/blob/main/docs/install.md)**:
 
-```bash
-git clone https://github.com/Battam1111/omniseek.git && cd omniseek
-docker compose up -d
-docker compose logs omniseek        # bearer token printed on first start
-curl -s http://127.0.0.1:8765/healthz
-```
+- a Cursor `mcp.json` block, and `pipx` or plain `pip` if you prefer them (with `pip` in a virtual environment, register the full path to `omniseek`, because the client does not activate the environment);
+- the optional extras: `pdf`, `asr` (transcription; needs PyTorch, with per-platform commands and disk sizes), `recall`, `ocr`, and `walled` (sites behind a login);
+- a shared HTTP service with a bearer token, a one-line `docker run`, and `docker compose`.
 
-On success, it returns:
-
-```json
-{"ok":true}
-```
-
-Point your MCP client at `http://127.0.0.1:8765/mcp` with `Authorization: Bearer <token>`. The token is generated on first start and stored in `~/.omniseek/credentials/omniseek_http.json` (with the compose file, that's `./.omniseek/credentials/omniseek_http.json` on the host).
-
-Two paths from here. The prebuilt core image (`docker pull ghcr.io/battam1111/omniseek`, amd64 + arm64) needs no build and carries every core sense; it is Apache-clean and ships without PDF reading, hearing (ASR + video frames), and login-walled sources. Wanting those extras is what triggers a local build: set `EXTRAS="[pdf,asr,walled]"` and run `docker compose build`, then `up -d` (the first build also fetches headless Chromium; later starts are instant). Optional but recommended: set `OMNISEEK_CONTACT_EMAIL` for a faster lane with Crossref, SEC, and Unpaywall.
-
-### Without Docker
-
-```bash
-python -m venv .venv && . .venv/bin/activate
-scripts/bootstrap.sh
-python -m omniseek.serve_http
-```
-
-The bare install is the **Core** tier: every keyless API and static source, document reading minus PDF, and the lexical memory index. `pip install "omniseek[pdf,asr,recall,ocr]"` wakes the **Research** tier (PDF, hearing, cross-lingual vectors, OCR); `omniseek[walled]` adds the login-walled tier, which stays off until you bring your own accounts; `omniseek[all]` takes everything. The server prints which senses are online, and which are dormant, at every boot.
-
-On Windows, run `bootstrap.sh` under Git Bash or WSL; Docker is the simplest path. For an always-on Linux service, see [`deploy/omniseek.service`](deploy/omniseek.service).
-
-Prefer stdio? The install also ships an `omniseek` command that speaks MCP over stdio, for clients that launch servers themselves; [`Dockerfile.stdio`](Dockerfile.stdio) wraps the same thing in a container.
-
-OmniSeek binds `127.0.0.1` and requires the bearer token on every request. Do not expose without a reverse proxy ([SECURITY.md](.github/SECURITY.md)).
+OmniSeek's HTTP service binds `127.0.0.1` and requires the token on every request. Do not expose it without a reverse proxy ([SECURITY.md](https://github.com/Battam1111/omniseek/blob/main/.github/SECURITY.md)).
 
 ---
 
 ## Tools
 
-One MCP connection; no model, no agent loop inside. Your model thinks, your harness drives the loop, OmniSeek reaches. Start with `omniseek_search`; explore what's available with `omniseek_sources`.
+One MCP connection; no model and no agent loop inside. Your model thinks, your client runs the loop, OmniSeek fetches. Start with `omniseek_search`; see what is available with `omniseek_sources`.
 
 | Tool | What it does |
 |------|-------------|
-| `omniseek_search` | Fan out across the whole catalog, deduplicate, rank. Cross-lingual (semantic + lexical). |
-| `omniseek_read` | Normalize any URL or document (web page, PDF, arXiv) into clean text. |
-| `omniseek_view` | Read images, document figures, video frames with vision. |
-| `omniseek_transcribe` | Transcribe audio/video locally. Bilingual ASR, sliceable by timestamp. |
-| `omniseek_field_skeleton` | Map a research field's citation neighborhood: foundational core vs. frontier. |
-| `omniseek_resolve_identity` | Resolve a person's name to candidate author IDs across databases. |
-| `omniseek_coauthors` | Map a researcher's collaboration network by joint-paper count. |
-| `omniseek_institution_cohort` | List who actively publishes at a lab, scoped to a field. |
-| `omniseek_paper_enrich` | Open-access PDF, retraction/integrity status, citation count for a paper. |
-| `omniseek_paper_recommend` | Semantically similar papers (SPECTER embeddings) that keyword search misses. |
-| `omniseek_graph` | Query the accumulated evidence graph: find, neighborhood, between, since, similar. |
-| `omniseek_sensor` | Standing queries with novelty detection. Only tells you what is new. |
-| `omniseek_ruling` | Record identity judgments (same/not-same) the graph applies at read time. |
-| `omniseek_statement` | Record directed relations the graph carries forward. |
-| `omniseek_curator_act` | Source lifecycle: submit, probe, judge, admit, retire. |
-| `omniseek_curator_view` | Read the source-admission queue or a per-source audit dossier. |
-| `omniseek_gather` | Run multiple tools in parallel, one response. |
-| `omniseek_sources` | List and route: domains, regions, capabilities, health. |
+| `omniseek_search` | Search the whole catalog at once, remove duplicates, rank. Works across languages. |
+| `omniseek_read` | Turn any URL or document (web page, PDF, arXiv) into clean text. |
+| `omniseek_view` | Look at images, document figures, and video frames. |
+| `omniseek_transcribe` | Transcribe audio or video locally, English and Chinese, from any timestamp. |
+| `omniseek_field_skeleton` | Map a research field's citations: the papers it is built on and the recent ones. |
+| `omniseek_resolve_identity` | Match a person's name to candidate author IDs across databases. |
+| `omniseek_coauthors` | Map a researcher's collaborators by number of joint papers. |
+| `omniseek_institution_cohort` | List who actively publishes at a lab, within a field. |
+| `omniseek_paper_enrich` | Open-access PDF, retraction status, and citation count for a paper. |
+| `omniseek_paper_recommend` | Similar papers (SPECTER embeddings) that keyword search misses. |
+| `omniseek_graph` | Query the local graph of what OmniSeek has found: find, neighborhood, between, since, similar. |
+| `omniseek_sensor` | Saved searches that rerun on a schedule and report only what is new. |
+| `omniseek_ruling` | Record that two entries are (or are not) the same person or thing. |
+| `omniseek_statement` | Record a directed relation between two entries. |
+| `omniseek_curator_act` | Propose, test, add, or retire a source. |
+| `omniseek_curator_view` | Read the queue of proposed sources or one source's report. |
+| `omniseek_gather` | Run several tools in parallel, one response. |
+| `omniseek_sources` | List sources by domain, region, capability, and health. |
 
-The login-walled tier has no tool of its own: once you opt in per source, the same `omniseek_search(..., sources=["xiaohongshu"], raw=True)` runs through your own logged-in browser. See [walled sources](docs/walled-sources.md).
+Sites behind a login have no tool of their own: once you turn one on, the same `omniseek_search(..., sources=["xiaohongshu"], raw=True)` runs through your own logged-in browser. See [Sites behind a login](https://github.com/Battam1111/omniseek/blob/main/docs/walled-sources.md).
 
-Full reference in **[tools.md](docs/tools.md)** · **[FAQ](docs/faq.md)**
+Full reference in **[tools.md](https://github.com/Battam1111/omniseek/blob/main/docs/tools.md)** · **[FAQ](https://github.com/Battam1111/omniseek/blob/main/docs/faq.md)**
 
-Using Claude Code? [`skills/omniseek-investigate`](skills/omniseek-investigate/SKILL.md) ships the investigation methodology (sweep, zoom, structure) as a ready-made skill.
+Using Claude Code? [`skills/omniseek-investigate`](https://github.com/Battam1111/omniseek/blob/main/skills/omniseek-investigate/SKILL.md) packages a research method (search wide, narrow in, add structure) as a ready-made skill.
 
 ---
 
 ## Configure
 
-OmniSeek is **catalog-first**: with no config, every benign source is on and login-walled sources are off. Tune in one file, `~/.omniseek/profile.json` ([example](deploy/profile.example.json)):
+With no config, every public source is on and every site behind a login is off. Change it in one file, `~/.omniseek/profile.json` ([example](https://github.com/Battam1111/omniseek/blob/main/deploy/profile.example.json)):
 
-| Tier | Default |
+| Kind of source | Default |
 |------|---------|
-| **free** (public, no key) | **on** |
-| **keyed** (a free or paid API key you supply) | on once the key is set |
-| **walled** (a login you hold) | **off**; you bring your own browser |
-| **circumvention** | **off**; none in the default pack |
+| Public, no key | **on** |
+| Needs an API key you supply (free or paid) | on once the key is set |
+| Behind a login you hold | **off**; uses your own browser |
+| Needs an access control bypassed | **off**; none in the default set |
 
-Full reference: **[configuration](docs/configuration.md)** · **[walled sources](docs/walled-sources.md)** · **[legal posture](docs/LEGAL-POSTURE.md)**
+Full reference: **[Configuration](https://github.com/Battam1111/omniseek/blob/main/docs/configuration.md)** · **[Sites behind a login](https://github.com/Battam1111/omniseek/blob/main/docs/walled-sources.md)** · **[Legal posture](https://github.com/Battam1111/omniseek/blob/main/docs/LEGAL-POSTURE.md)**
 
 ---
 
 ## Why self-hosted
 
-There is no OmniSeek cloud. No telemetry, no accounts, no relay: a query leaves your machine only as direct requests to the sources you enabled, and OmniSeek adds no other party to that path. Walled-source credentials stay in your own browser, presented only to the site they belong to; OmniSeek never stores, uploads, or even sees your passwords. The retrieval memory and evidence graph it accumulates over months are local files you own: stop running OmniSeek and you keep everything. Not a feature toggle. The architecture.
+There is no OmniSeek cloud. No telemetry, no accounts, no relay: a query leaves your machine only as direct requests to the sources you enabled, and OmniSeek adds no other party to that path. Logins stay in your own browser and are shown only to the site they belong to; OmniSeek never stores, uploads, or even sees your passwords. The search index and graph it builds up over months are local files you own: stop running OmniSeek and you keep everything.
 
 ---
 
 ## Contributing
 
-See [CONTRIBUTING.md](.github/CONTRIBUTING.md). The bar for a new source: it must beat plain web search via a mode (structure / unwall / transcribe / recall / monitor). The bar for fixing a decayed source: low, please do. `python tests/smoke.py` before you push.
+See [CONTRIBUTING.md](https://github.com/Battam1111/omniseek/blob/main/.github/CONTRIBUTING.md). The bar for a new source: it must beat plain web search at one of the five jobs above. The bar for fixing a source that stopped working: low, please do. Run `python tests/smoke.py` before you push.
 
-By participating you agree to the [Code of Conduct](.github/CODE_OF_CONDUCT.md).
+By participating you agree to the [Code of Conduct](https://github.com/Battam1111/omniseek/blob/main/.github/CODE_OF_CONDUCT.md).
 
 <div align="center">
 
 ---
 
-**Your agent seeks what search can't find.**
+**Give your AI agent the parts of the internet web search doesn't reach.**
 
-[Apache-2.0](./LICENSE) · [NOTICE](./NOTICE) · [Security](.github/SECURITY.md) · [Cite](./CITATION.cff)
+[Apache-2.0](https://github.com/Battam1111/omniseek/blob/main/LICENSE) · [NOTICE](https://github.com/Battam1111/omniseek/blob/main/NOTICE) · [Security](https://github.com/Battam1111/omniseek/blob/main/.github/SECURITY.md) · [Cite](https://github.com/Battam1111/omniseek/blob/main/CITATION.cff)
 
 </div>
