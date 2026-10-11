@@ -48,6 +48,9 @@ connection with two commands, and every place that explains installing should sa
 - CI job that installs the package and runs a real MCP handshake (initialize and tools/list) over
   stdio, then over HTTP on `127.0.0.1` and on `localhost`. A health-check URL alone no longer counts
   as a passing server.
+- CI runs the unit tests and the offline smoke check on Windows as well (`smoke-windows`, the same
+  steps as the Linux job). Before, Windows only installed the package and did the handshake, so a
+  Windows-only bug in how the local log file was written got through with every test green.
 
 ### Notes
 

@@ -26,6 +26,31 @@ jobs:
           PYTHONIOENCODING: "utf-8"
         run: python tests/smoke.py
 
+  # The same gate on Windows: identical steps, so the unittest battery that smoke.py runs at its
+  # end executes on Windows too. The stranger job below only installs and handshakes there, which
+  # is how a text-mode journal write that skewed byte offsets on Windows reached a release with
+  # every test green. A skip that only fires on Windows must carry a reason declared in
+  # _GATE_DECLARED_SKIPS (tests/smoke.py); the gate fails on any other.
+  smoke-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install (core, no optional extras)
+        run: pip install -e .
+      - name: Byte-compile all sources
+        run: python -m compileall -q src scripts tests
+      - name: Brand lint (no em-dash on any reader-facing surface)
+        run: python scripts/brand_lint.py
+      - name: Smoke (offline golden fixtures + invariants)
+        env:
+          PYTHONUTF8: "1"
+          PYTHONIOENCODING: "utf-8"
+        run: python tests/smoke.py
+
   # The stranger's first ten minutes, on machines that are not ours: install the package the
   # way a fresh user does, boot MCP over stdio, handshake, list tools, and make one cache-only
   # search call. The only assertion is that every call RETURNS. The 0.1.1 first-search deadlock
