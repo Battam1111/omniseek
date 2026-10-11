@@ -19,6 +19,9 @@ mechanically synced from the private upstream and keep its file style):
      is not left-flanking, so 头条说的*「最多待 4 年」*其实 shows its asterisks on GitHub and PyPI
      instead of italics (no space before a Chinese or Japanese quote mark, so it bites CJK text
      most). Use <em> / <strong> there, or put a space or punctuation on the outer side.
+  4. THE PYPI PAGE MATCHES THE README. docs/pypi.md (what PyPI shows; pyproject.toml `readme`) is
+     generated from README.md by scripts/gen_pypi_readme.py, light images only, because PyPI shows
+     both images of a GitHub light/dark pair. Editing README.md without regenerating fails here.
 
 A second rule used to live here and was RETIRED with the OmniSeek rebrand (2026-08-15): the
 project's earlier brand banned "perceive/perception" on prose surfaces, because it positioned
@@ -124,7 +127,8 @@ def _md_paragraphs(lines: list[str]):
 
 def _versioned_scope(rel: str) -> bool:
     name = rel.rsplit("/", 1)[-1]
-    return (name.startswith("README") and rel.endswith(".md")) or (rel.startswith("site/") and rel.endswith(".html"))
+    return ((name.startswith("README") and rel.endswith(".md")) or rel == "docs/pypi.md"
+            or (rel.startswith("site/") and rel.endswith(".html")))
 
 
 def _iter_files():
@@ -162,6 +166,14 @@ def main() -> int:
                     if not VERSION_QUERY.fullmatch(m.group(1) or ""):
                         violations.append((rel, n, "image URL without ?v=YYYY-MM-DD (or YYYY-MM-DDb)", m.group(0)))
 
+    sys.path.insert(0, str(ROOT / "scripts"))
+    import gen_pypi_readme
+    pypi = gen_pypi_readme.render((ROOT / "README.md").read_text(encoding="utf-8"))
+    have = gen_pypi_readme.OUT.read_text(encoding="utf-8") if gen_pypi_readme.OUT.exists() else ""
+    if have != pypi:
+        violations.append(("docs/pypi.md", 1, "out of date with README.md; run python scripts/gen_pypi_readme.py",
+                           "PyPI shows this file, not README.md"))
+
     if violations:
         print(f"brand_lint: FAIL, {len(violations)} violation(s)\n")
         for rel, n, why, text in violations:
@@ -169,7 +181,8 @@ def main() -> int:
             print(f"      {text[:120]}")
         print("\nFix these, or narrow the rule in scripts/brand_lint.py if it is a genuine false positive.")
         return 1
-    print("brand_lint: OK (no em-dash on any human-facing surface; every raw image URL is versioned; no stuck emphasis)")
+    print("brand_lint: OK (no em-dash on any human-facing surface; every raw image URL is versioned; no stuck emphasis; "
+          "docs/pypi.md matches README.md)")
     return 0
 
 
