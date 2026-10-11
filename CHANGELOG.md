@@ -32,8 +32,11 @@ connection with two commands, and every place that explains installing should sa
   citation graph, Bilibili), each with an example that was actually run. The capability cards on
   the home page sit in rows of three.
 - **Hero images and social card re-rendered with the new tagline** (English, Chinese, Japanese;
-  light and dark). The READMEs open with the hero again, and the site's link-share image is the
-  social card again.
+  light and dark). The site's link-share image is the social card again.
+- **README header:** one logo image (`assets/logo-lockup.png`, mark and wordmark) that reads on
+  GitHub's light and dark pages alike, with the tagline under it as text in each language. GitHub
+  picks a light or dark image by the system setting, not by the page theme, so a pair could show the
+  wrong one. The bold tagline line that repeated the hero image is gone.
 - **Brand colours only.** The hero, social card, demo figure and site stylesheet now use only the
   colours in `docs/BRAND.md`; softer text and lines are navy or white at lower opacity instead of
   separate greys. The light demo figure ends in a white panel framed in blue instead of a navy
@@ -68,11 +71,14 @@ connection with two commands, and every place that explains installing should sa
   picture at once instead of the cached old one; `scripts/brand_lint.py` fails CI on an unversioned one.
 - `scripts/brand_lint.py` also fails on Markdown emphasis that GitHub would show as literal
   asterisks (a `*` wedged between a letter and a quote mark, common in Chinese and Japanese text).
-- A short terminal recording in the README, right after the two install commands: one real run
-  searching Zhihu and Bilibili, cut to the first results, in a light and a dark version
-  (`assets/terminal-demo-{light,dark}.gif`) that follow the reader's GitHub theme. The first frame
-  already shows the finished answer, and the window is only as tall as its content.
-  `assets/masters/gen_terminal_demo.py` records the run and renders both GIFs from it.
+- **A side-by-side comparison from one real run** in the READMEs ("See the difference") and on the
+  site home page: the same question to an agent with web search only and to an agent with OmniSeek
+  (`assets/demo/compare-{en,zh}-{light,dark}.gif`, with a stacked version for phones). It takes the
+  place of the short terminal recording that was there before (`assets/terminal-demo-*.gif`, kept in
+  the repo). `docs/compare.md` and `docs/compare.zh.md` show all three recorded questions as an
+  infographic, with where each answer came from and a 38-second video; the site shows the same
+  infographic and video. Everything on screen is cut from `assets/masters/compare-demo-run.json` by
+  `gen_compare_demo.py` and `gen_compare_infographic.py`.
 
 ### Notes
 
