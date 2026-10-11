@@ -364,14 +364,37 @@ def _bounded(label: str, make_iter, cap: int) -> list:
 # Each carries the semaphore + breaker. Single-record calls degrade to None; the
 # paginated calls degrade to a bounded list. Callers keep their own cache + assembly.
 
-def get_paper(paper_id: str, fields: Optional[list[str]] = None):
-    """One paper record by id (normalized). None on any failure / breaker-open."""
+def failure_reason(exc: Exception) -> str:
+    """A short, stable reason code for why one S2 call failed, for callers that must SAY why a
+    record is missing instead of dropping it silently: rate_limited (HTTP 429 after the bounded
+    retries) / circuit_open (the breaker or the rate backlog refused to send) / not_found (S2 has
+    no paper under that id) / error:<type> (anything else)."""
+    if isinstance(exc, S2Down):
+        return "circuit_open"
+    if _is_rate_limit(exc):
+        return "rate_limited"
+    if type(exc).__name__ == "ObjectNotFoundException" or "not found" in str(exc).lower():
+        return "not_found"
+    return f"error:{type(exc).__name__}"
+
+
+def fetch_paper(paper_id: str, fields: Optional[list[str]] = None):
+    """One paper record by id (normalized), as ``(record, None)`` or ``(None, reason)`` where
+    reason is a failure_reason() code. Same semaphore + breaker + bounded retry as get_paper."""
     try:
         kwargs = {"fields": fields} if fields else {}
-        return _call("get_paper", lambda: get_client().get_paper(norm_s2_id(paper_id), **kwargs))
+        rec = _call("get_paper", lambda: get_client().get_paper(norm_s2_id(paper_id), **kwargs))
     except Exception as exc:  # noqa: BLE001
         logger.warning("s2 get_paper %s failed: %s", paper_id, exc)
-        return None
+        return None, failure_reason(exc)
+    if rec is None:
+        return None, "empty_record"
+    return rec, None
+
+
+def get_paper(paper_id: str, fields: Optional[list[str]] = None):
+    """One paper record by id (normalized). None on any failure / breaker-open."""
+    return fetch_paper(paper_id, fields)[0]
 
 
 def search_paper(query: str, limit: int = 10, fields: Optional[list[str]] = None,

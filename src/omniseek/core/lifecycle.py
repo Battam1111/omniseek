@@ -23,6 +23,21 @@ from the moment it starts until the process is gone: past the cap it logs ONE WA
 phase reached and every thread still alive, dumps every thread's stack, and forces the exit. A
 faulthandler backstop BACKSTOP_EXTRA_S later does the same from a C thread, for the case where the
 GIL itself is held and no Python thread (the watchdog included) can run.
+
+Drain cap (2026-10-11, eye-drain-cap): the segment BEFORE that, from SIGTERM until uvicorn has waited
+for the open connections and running requests, is capped too. uvicorn's timeout_graceful_shutdown
+(DRAIN_CAP_S_DEFAULT) bounds it cooperatively (cancels the requests still running and moves on to the
+lifespan shutdown); arm_drain_watchdog, called from the server's signal handler, bounds it hard, for
+the case where the event loop is blocked and that timeout can never fire. The two stages share one
+watchdog thread and one clock from SIGTERM, so SIGTERM to exit is at most drain cap + shutdown cap +
+BACKSTOP_EXTRA_S (30 + 30 + 5 = 65 s by default).
+
+Every stop signal uvicorn handles (its HANDLED_SIGNALS: SIGINT, SIGTERM, plus SIGBREAK on Windows)
+arms the drain cap, and the logs name the signal that arrived. On Windows a Python signal handler
+cannot arm it while the event loop is blocked: SIGBREAK does not interrupt a blocking call on the
+main thread (time.sleep there wakes for SIGINT only), so the handler runs only after the call
+returns. There the drain cap is ALSO armed from a console control handler, which Windows runs on a
+thread of its own the moment Ctrl+Break / Ctrl+C / console close arrives (_win_console_ctrl_arm).
 """
 
 from __future__ import annotations
@@ -31,6 +46,7 @@ import contextlib
 import faulthandler
 import logging
 import os
+import signal
 import sys
 import threading
 import time
@@ -137,23 +153,70 @@ SHUTDOWN_CAP_S_DEFAULT = 30.0
 # leaves it room. Calibration: a "Timeout (0:00:35)!" faulthandler dump in the log without the
 # watchdog's WARNING before it means the backstop was needed; keep it then, else it never fired.
 BACKSTOP_EXTRA_S = 5.0
+# PROVISIONAL. Seconds uvicorn may wait, after SIGTERM, for the open connections and the running
+# requests to finish (uvicorn's timeout_graceful_shutdown); past it uvicorn cancels the requests still
+# running ("Cancel N running task(s), timeout graceful shutdown exceeded") and starts the lifespan
+# shutdown. What it waits on is in-flight MCP tool calls.
+# Derivation (2026-10-11, eye-drain-cap report section 2): over the 10 deploy restarts logged
+# 10-10..10-11 (SIGTERM = the mtime of the deploy receipt written just before `launchctl kickstart
+# -k`; end of the wait = the log stamp next to "Waiting for application shutdown.") the wait was at
+# most 2 to 6 s, once at most 10 s (coarse stamps). The "about 26 s" in OmniSeek-shutdown-cap report
+# was measured from the last log line BEFORE the SIGTERM; that restart waited at most 4 s. A broad
+# omniseek_search ends at its 11 s source deadline (16 s with fresh=True). 30 s is 3x the coarse worst
+# case, 5x the usual maximum, longer than a full broad search, and the same value as
+# SHUTDOWN_CAP_S_DEFAULT and memguard.EXIT_GRACE_S. Upper limit: the deploy health wait (90 s) must
+# cover drain cap + shutdown cap + backstop + a new process getting ready (2 to 5 s), so at most 50.
+# Cost: a call still running 30 s into a restart (a named-source drill up to 45 s, omniseek_gather up to
+# 60 s, a transcription) is cancelled, as a memguard hard restart already does.
+# Override with OMNISEEK_DRAIN_CAP_S (0 turns off both uvicorn's timeout and the hard drain watchdog).
+# Calibration plan: every signalled shutdown now logs "lifecycle: SIGTERM to lifespan shutdown N s"
+# (the connection wait plus uvicorn's 0.1 s pause), and every cut call shows up as uvicorn's "Cancel N
+# running task(s)" line; after 20 restarts compare the largest N with the cap, and look up what each
+# cancelled call was (raise the cap if routine calls are cut, lower it toward 3x the largest N if
+# none comes near).
+DRAIN_CAP_S_DEFAULT = 30.0
+# PROVISIONAL. Seconds past the drain cap before the HARD drain watchdog fires. uvicorn's own timeout
+# moves on to the lifespan shutdown within milliseconds of the cap when its event loop runs (log one
+# line, cancel the tasks); this grace only gives that cooperative path priority, so the hard watchdog
+# fires only when the loop is blocked. It does not change the overall ceiling: the lifespan stage that
+# follows ends at most drain cap + shutdown cap after SIGTERM whatever this is. Calibration: a "shutdown
+# cap hit" WARNING in the connections stage right after a "Cancel N running task(s)" line would mean
+# the grace is too short for a healthy loop; raise it then.
+DRAIN_GRACE_S = 5.0
 
 _wd_lock = threading.Lock()
-_wd_state: dict = {"armed": False, "t0": None, "phase": "running", "cancel": None,
-                   "thread": None, "backstop": False}
+
+
+def _wd_reset() -> dict:
+    return {"stage": None, "t_signal": None, "signal": None, "drain_s": None, "t0": None,
+            "deadline": None, "phase": "running", "cancel": None, "wake": None, "thread": None,
+            "exit_fn": os._exit, "backstop": False, "announce": False}
+
+
+# stage: None (not shutting down), "connections" (SIGTERM seen, uvicorn waiting for connections and
+# requests) or "lifespan" (the lifespan shutdown and the teardown after it). deadline is monotonic.
+_wd_state: dict = _wd_reset()
+
+
+def _env_seconds(name: str, default: float) -> float:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        return max(0.0, float(raw))
+    except ValueError:
+        log.warning("lifecycle: %s=%r is not a number; using %.0f", name, raw, default)
+        return default
 
 
 def shutdown_cap_s() -> float:
     """The cap in seconds from OMNISEEK_SHUTDOWN_CAP_S, else SHUTDOWN_CAP_S_DEFAULT; 0 disables."""
-    raw = os.environ.get("OMNISEEK_SHUTDOWN_CAP_S", "").strip()
-    if not raw:
-        return SHUTDOWN_CAP_S_DEFAULT
-    try:
-        return max(0.0, float(raw))
-    except ValueError:
-        log.warning("lifecycle: OMNISEEK_SHUTDOWN_CAP_S=%r is not a number; using %.0f",
-                    raw, SHUTDOWN_CAP_S_DEFAULT)
-        return SHUTDOWN_CAP_S_DEFAULT
+    return _env_seconds("OMNISEEK_SHUTDOWN_CAP_S", SHUTDOWN_CAP_S_DEFAULT)
+
+
+def drain_cap_s() -> float:
+    """The drain cap in seconds from OMNISEEK_DRAIN_CAP_S, else DRAIN_CAP_S_DEFAULT; 0 disables."""
+    return _env_seconds("OMNISEEK_DRAIN_CAP_S", DRAIN_CAP_S_DEFAULT)
 
 
 def set_shutdown_phase(phase: str) -> None:
@@ -200,64 +263,199 @@ def _stderr_fd() -> Optional[int]:
         return None
 
 
+def _fire() -> None:
+    """The cap was hit: report, dump every thread's stack, force the exit."""
+    st = _wd_state
+    stage = st.get("stage")
+    if stage == "connections":
+        since, start = st.get("signal") or "SIGTERM", st.get("t_signal")
+        where = ("uvicorn has not finished waiting for open connections and running requests "
+                 f"(drain cap {st.get('drain_s') or 0:.0f}s + {DRAIN_GRACE_S:.0f}s grace)")
+    else:
+        since, start = "the lifespan shutdown began", st.get("t0")
+        where = "the lifespan shutdown and the teardown after it have not finished"
+    elapsed = time.monotonic() - start if start is not None else 0.0
+    try:
+        loops, others = _still_running()
+        log.warning("lifecycle: shutdown cap hit: still alive %.0fs after %s, %s, stuck in phase %r; "
+                    "registered loops still running %s; other live threads %s; dumping every "
+                    "thread's stack, then forcing exit(1)",
+                    elapsed, since, where, st.get("phase"), loops, others)
+    except Exception as exc:  # noqa: BLE001 -- the exit below must happen regardless
+        log.warning("lifecycle: shutdown cap hit %.0fs after %s (report failed: %s)",
+                    elapsed, since, exc)
+    _flush_all()
+    fd = _stderr_fd()
+    if fd is not None:
+        try:
+            faulthandler.dump_traceback(file=fd, all_threads=True)
+        except Exception:  # noqa: BLE001
+            pass
+        try:   # a raw fd write needs no logging state, so the exit always leaves one line
+            os.write(fd, f"lifecycle: forced exit(1) {elapsed:.0f}s after {since}\n".encode())
+        except Exception:  # noqa: BLE001
+            pass
+    st.get("exit_fn", os._exit)(1)
+
+
+def _watch(cancel: "threading.Event", wake: "threading.Event") -> None:
+    """The one watchdog thread: sleep until the current deadline (re-read on every wake, since the
+    lifespan stage replaces the connections stage's deadline), then fire."""
+    while True:
+        if cancel.is_set():
+            return
+        if _wd_state.get("announce"):   # the signal handler armed the drain stage; log for it here
+            _wd_state["announce"] = False
+            drain = _wd_state.get("drain_s") or 0.0
+            log.info("lifecycle: drain cap armed (uvicorn waits up to %.0fs for connections, hard "
+                     "cap %.0fs, backstop %s)", drain, drain + DRAIN_GRACE_S,
+                     f"+{BACKSTOP_EXTRA_S:.0f}s" if _wd_state.get("backstop") else "off")
+        deadline = _wd_state.get("deadline")
+        if deadline is None:
+            wake.wait()
+        else:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            wake.wait(remaining)
+        wake.clear()   # cleared BEFORE the deadline is re-read, so a new deadline is never missed
+    if not cancel.is_set():
+        _fire()
+
+
+def _ensure_thread() -> "threading.Thread":
+    """Start the watchdog thread unless it is running. Call under _wd_lock, never from a signal
+    handler (Thread.start takes threading's internal locks)."""
+    t = _wd_state.get("thread")
+    if t is not None and t.is_alive():
+        return t
+    cancel, wake = threading.Event(), threading.Event()
+    t = threading.Thread(target=_watch, args=(cancel, wake), name="shutdown-watchdog", daemon=True)
+    _wd_state.update(cancel=cancel, wake=wake, thread=t)
+    t.start()
+    return t
+
+
+def _arm_backstop(seconds: float) -> bool:
+    fd = _stderr_fd()
+    if fd is None:
+        return False
+    faulthandler.dump_traceback_later(seconds, exit=True, file=fd)   # replaces an earlier one
+    return True
+
+
+def prepare_drain_watchdog(exit_fn: Callable[[int], None] = os._exit) -> bool:
+    """Start the (idle) watchdog thread ahead of any signal, so arm_drain_watchdog, which runs inside
+    the signal handler, only has to set a deadline and wake it. Returns True when ready. FAIL-OPEN."""
+    try:
+        with _wd_lock:
+            _wd_state["exit_fn"] = exit_fn
+            _ensure_thread()
+        return True
+    except Exception as exc:  # noqa: BLE001 -- the cap must never break the server it guards
+        log.warning("lifecycle: could not prepare the drain watchdog: %s", exc)
+        return False
+
+
+def arm_drain_watchdog(drain_s: float, grace_s: float = DRAIN_GRACE_S, backstop: bool = True,
+                       signame: str = "SIGTERM") -> bool:
+    """Arm the connections stage: called from the server's signal handler (and on Windows from its
+    console control handler), it gives the process ``drain_s + grace_s`` seconds to get from the
+    signal ``signame`` to the lifespan shutdown (where
+    arm_shutdown_watchdog takes over, on the same clock). Past that the watchdog thread reports and
+    forces exit(1); with ``backstop`` faulthandler does the same BACKSTOP_EXTRA_S later from a C
+    thread. uvicorn calls signal handlers through signal.signal, so this runs on the main thread
+    between two bytecodes even while the event loop is blocked, which is exactly when uvicorn's own
+    timeout_graceful_shutdown cannot fire (on POSIX a blocking call is interrupted for the handler;
+    on Windows it is not, hence the console control handler there).
+
+    SIGNAL-HANDLER SAFE by construction: no lock of this module, no logging, no thread start (the
+    thread was started by prepare_drain_watchdog; it logs the "armed" line). Returns True when armed;
+    False when the drain cap is off, a stage is already armed, or the thread was never prepared."""
+    try:
+        if drain_s <= 0 or _wd_state.get("stage") is not None:
+            return False
+        wake, t = _wd_state.get("wake"), _wd_state.get("thread")
+        if wake is None or t is None or not t.is_alive():
+            return False
+        now = time.monotonic()
+        limit = drain_s + max(0.0, grace_s)
+        _wd_state.update(t_signal=now, signal=signame, drain_s=float(drain_s), stage="connections",
+                         phase=f"{signame} received: uvicorn's main loop has not yet started the "
+                               "shutdown (it checks every 0.1 s, so the event loop is busy)",
+                         deadline=now + limit)
+        if backstop:
+            _wd_state["backstop"] = _arm_backstop(limit + BACKSTOP_EXTRA_S)
+        _wd_state["announce"] = True
+        wake.set()
+        return True
+    except Exception:  # noqa: BLE001 -- never raise out of a signal handler
+        return False
+
+
+def _drop_drain_stage() -> None:
+    """With the shutdown cap off (cap 0), reaching the lifespan shutdown ends the connections stage
+    with no deadline after it: clear its deadline and its backstop. FAIL-OPEN."""
+    try:
+        with _wd_lock:
+            if _wd_state.get("stage") != "connections":
+                return
+            _wd_state.update(stage="lifespan", deadline=None)
+            if _wd_state.get("backstop"):
+                faulthandler.cancel_dump_traceback_later()
+                _wd_state["backstop"] = False
+            wake = _wd_state.get("wake")
+            if wake is not None:
+                wake.set()
+    except Exception as exc:  # noqa: BLE001
+        log.warning("lifecycle: could not drop the drain stage: %s", exc)
+
+
 def arm_shutdown_watchdog(cap_s: Optional[float] = None,
                           exit_fn: Callable[[int], None] = os._exit,
                           backstop: bool = True) -> "Optional[threading.Thread]":
-    """Start the shutdown cap: a daemon thread that, if the process is still alive ``cap_s`` seconds
-    later, logs one WARNING naming the phase reached, the registered loops still running and every
-    other live thread, dumps every thread's stack (faulthandler), and calls ``exit_fn(1)``. With
-    ``backstop`` it also arms faulthandler.dump_traceback_later(cap_s + BACKSTOP_EXTRA_S, exit=True),
-    which runs in a C thread and needs no GIL. Idempotent: a second call while armed returns None. It is
-    NOT disarmed when the lifespan finishes: the teardown after it (asyncio.run closing the default
-    executor, the interpreter joining non-daemon threads) can stall too, and a clean exit ends the
-    process and the thread with it. FAIL-OPEN: an error here is logged, never raised."""
+    """Arm the lifespan stage of the shutdown cap: if the process is still alive ``cap_s`` seconds
+    later, the watchdog thread logs one WARNING naming the phase reached, the registered loops still
+    running and every other live thread, dumps every thread's stack (faulthandler), and calls
+    ``exit_fn(1)``. With ``backstop`` it also arms faulthandler.dump_traceback_later(<that deadline> +
+    BACKSTOP_EXTRA_S, exit=True), which runs in a C thread and needs no GIL. When the connections
+    stage was armed (arm_drain_watchdog), the deadline is also kept within drain cap + ``cap_s`` of
+    the SIGTERM, so the whole shutdown stays within drain cap + cap + BACKSTOP_EXTRA_S, and the time
+    since the SIGTERM is logged. With ``cap_s`` 0 (the cap off) it arms nothing and drops the
+    connections stage's deadline, so the drain cap never cuts the lifespan short. Idempotent: a second call while the lifespan stage is armed returns
+    None. It is NOT disarmed when the lifespan finishes: the teardown after it (asyncio.run closing the
+    default executor, the interpreter joining non-daemon threads) can stall too, and a clean exit
+    ends the process and the thread with it. FAIL-OPEN: an error here is logged, never raised."""
     cap = shutdown_cap_s() if cap_s is None else max(0.0, float(cap_s))
     if cap <= 0:
+        _drop_drain_stage()   # the lifespan was reached; the drain deadline must not cut it short
         return None
-    with _wd_lock:
-        if _wd_state["armed"]:
-            return None
-        _wd_state["armed"] = True
-        _wd_state["t0"] = time.monotonic()
-        cancel = threading.Event()
-        _wd_state["cancel"] = cancel
-
-    def _wait() -> None:
-        if cancel.wait(cap):
-            return
-        try:
-            loops, others = _still_running()
-            log.warning("lifecycle: shutdown cap hit: still alive %.0fs after the lifespan shutdown "
-                        "began, stuck in phase %r; registered loops still running %s; other live "
-                        "threads %s; dumping every thread's stack, then forcing exit(1)",
-                        cap, _wd_state.get("phase"), loops, others)
-        except Exception as exc:  # noqa: BLE001 -- the exit below must happen regardless
-            log.warning("lifecycle: shutdown cap hit after %.0fs (report failed: %s)", cap, exc)
-        _flush_all()
-        fd = _stderr_fd()
-        if fd is not None:
-            try:
-                faulthandler.dump_traceback(file=fd, all_threads=True)
-            except Exception:  # noqa: BLE001
-                pass
-            try:   # a raw fd write needs no logging state, so the exit always leaves one line
-                os.write(fd, f"lifecycle: forced exit(1) {cap:.0f}s after the lifespan shutdown "
-                             f"began\n".encode())
-            except Exception:  # noqa: BLE001
-                pass
-        exit_fn(1)
-
     try:
-        t = threading.Thread(target=_wait, name="shutdown-watchdog", daemon=True)
-        t.start()
-        _wd_state["thread"] = t
-        if backstop:
-            fd = _stderr_fd()
-            if fd is not None:
-                faulthandler.dump_traceback_later(cap + BACKSTOP_EXTRA_S, exit=True, file=fd)
-                _wd_state["backstop"] = True
-        log.info("lifecycle: shutdown cap armed (%.0fs, backstop %s)", cap,
-                 f"+{BACKSTOP_EXTRA_S:.0f}s" if _wd_state["backstop"] else "off")
+        with _wd_lock:
+            if _wd_state.get("stage") == "lifespan":
+                return None
+            now = time.monotonic()
+            deadline = now + cap
+            waited = None
+            since = _wd_state.get("signal") or "SIGTERM"
+            t_signal = _wd_state.get("t_signal")
+            if _wd_state.get("stage") == "connections" and t_signal is not None:
+                waited = now - t_signal
+                deadline = min(deadline, t_signal + (_wd_state.get("drain_s") or 0.0) + cap)
+            _wd_state.update(stage="lifespan", t0=now, deadline=deadline, exit_fn=exit_fn)
+            t = _ensure_thread()
+            if backstop:
+                _wd_state["backstop"] = _arm_backstop(deadline - now + BACKSTOP_EXTRA_S)
+            elif _wd_state.get("backstop"):   # the drain stage's backstop would fire too early
+                faulthandler.cancel_dump_traceback_later()
+                _wd_state["backstop"] = False
+            _wd_state["wake"].set()
+            has_backstop = _wd_state["backstop"]
+        if waited is not None:
+            log.info("lifecycle: %s to lifespan shutdown %.1fs (uvicorn's wait for connections)",
+                     since, waited)
+        log.info("lifecycle: shutdown cap armed (%.0fs, backstop %s)", deadline - now,
+                 f"+{BACKSTOP_EXTRA_S:.0f}s" if has_backstop else "off")
         return t
     except Exception as exc:  # noqa: BLE001 -- the cap must never break the shutdown it guards
         log.warning("lifecycle: could not arm the shutdown cap: %s", exc)
@@ -268,16 +466,17 @@ def disarm_shutdown_watchdog() -> None:
     """Cancel the watchdog and the faulthandler backstop and reset the state (tests; a process that
     shuts down for real keeps them armed until it exits)."""
     with _wd_lock:
-        cancel = _wd_state.get("cancel")
-        if cancel is not None:
-            cancel.set()
+        for key in ("cancel", "wake"):
+            ev = _wd_state.get(key)
+            if ev is not None:
+                ev.set()
         if _wd_state.get("backstop"):
             try:
                 faulthandler.cancel_dump_traceback_later()
             except Exception:  # noqa: BLE001
                 pass
-        _wd_state.update(armed=False, t0=None, phase="running", cancel=None, thread=None,
-                         backstop=False)
+        _wd_state.clear()
+        _wd_state.update(_wd_reset())
 
 
 def cap_lifespan_shutdown(uvicorn_lifespan, cap_s: Optional[float] = None,
@@ -305,6 +504,123 @@ def cap_lifespan_shutdown(uvicorn_lifespan, cap_s: Optional[float] = None,
     except Exception as exc:  # noqa: BLE001
         log.warning("lifecycle: could not wrap uvicorn's lifespan shutdown: %s", exc)
         return False
+
+
+def capped_server_class(server_base, cap_s: Optional[float] = None,
+                        exit_fn: Callable[[int], None] = os._exit, backstop: bool = True):
+    """Return a subclass of ``server_base`` (uvicorn.Server, passed in so this module stays free of a
+    uvicorn import) with both stages of the shutdown cap wired in:
+
+    - connections stage: the first exit signal arms arm_drain_watchdog with the config's
+      ``timeout_graceful_shutdown`` (uvicorn's own cooperative cap on the same wait; the caller sets
+      it, drain_cap_s() in serve_http; None or 0 leaves this stage off); on Windows a console
+      control handler registered at startup arms it too (see _win_console_ctrl_arm);
+    - lifespan stage: cap_lifespan_shutdown(``cap_s``) at startup, as before.
+
+    serve_http and the subprocess tests use this same class, so the tests run the production
+    wiring. Only uvicorn's documented Server methods are overridden (handle_exit, startup, shutdown),
+    each calling super()."""
+
+    class CappedServer(server_base):
+        def __init__(self, config, *args, **kwargs):
+            super().__init__(config, *args, **kwargs)
+            self._drain_s = float(getattr(config, "timeout_graceful_shutdown", None) or 0.0)
+            self._drain_armed = False
+            self._console_ctrl = None
+            if self._drain_s > 0:
+                prepare_drain_watchdog(exit_fn=exit_fn)
+
+        def handle_exit(self, sig, frame):
+            if not self._drain_armed:   # only the first signal; a second one must not touch any lock
+                self._drain_armed = True
+                arm_drain_watchdog(self._drain_s, backstop=backstop, signame=_signal_name(sig))
+            super().handle_exit(sig, frame)
+
+        async def startup(self, sockets=None):
+            cap_lifespan_shutdown(self.lifespan, cap_s=cap_s, exit_fn=exit_fn, backstop=backstop)
+            if self._drain_s > 0:   # uvicorn's own handlers are in place by now (capture_signals)
+                self._console_ctrl = _win_console_ctrl_arm(_handled_signals(server_base),
+                                                           self._drain_s, backstop)
+            await super().startup(sockets=sockets)
+
+        async def shutdown(self, sockets=None):
+            if _wd_state.get("stage") == "connections":
+                set_shutdown_phase("uvicorn: waiting for open connections and running requests "
+                                   "(timeout_graceful_shutdown)")
+            await super().shutdown(sockets=sockets)
+            _win_console_ctrl_remove(getattr(self, "_console_ctrl", None))
+
+    return CappedServer
+
+
+def _signal_name(sig) -> str:
+    try:
+        return signal.Signals(sig).name
+    except Exception:  # noqa: BLE001 -- runs inside a signal handler, must not raise
+        return f"signal {sig}"
+
+
+def _handled_signals(server_base) -> tuple:
+    """The signals the server installs its handle_exit for: HANDLED_SIGNALS of the module defining
+    ``server_base`` or a base of it (uvicorn.server). () when none is found, so nothing is armed for
+    a signal the server may ignore."""
+    for klass in getattr(server_base, "__mro__", ()):
+        handled = getattr(sys.modules.get(klass.__module__), "HANDLED_SIGNALS", None)
+        if handled is not None:
+            return tuple(handled)
+    return ()
+
+
+# Windows console control events as the C runtime (UCRT) turns them into signals: CTRL_C_EVENT (0)
+# into SIGINT, every other event (Ctrl+Break, console close, logoff, system shutdown) into SIGBREAK.
+_CTRL_C_EVENT = 0
+_console_ctrl_keep: list = []   # registered callbacks stay referenced: Windows may call one any time
+
+
+def _win_console_ctrl_arm(handled: tuple, drain_s: float, backstop: bool):
+    """Windows only: register a console control handler that arms the drain cap the moment a console
+    event arrives whose signal is in ``handled``. Windows runs it on a thread of its own, so it arms
+    even while the main thread is blocked in a call that SIGBREAK does not interrupt (there the
+    Python signal handler, and so handle_exit, runs only after the call returns). It returns FALSE,
+    so the C runtime's handler runs next and uvicorn's handle_exit still gets the signal; the second
+    arming is a no-op. Returns the registered callback, None elsewhere or on failure. FAIL-OPEN."""
+    if sys.platform != "win32" or drain_s <= 0:
+        return None
+    sigint, sigbreak = signal.SIGINT, getattr(signal, "SIGBREAK", None)
+    names = {s: _signal_name(s) for s in (sigint, sigbreak) if s is not None and s in handled}
+    if not names:
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        def _on_console_ctrl(ctrl_type):
+            sig = sigint if ctrl_type == _CTRL_C_EVENT else sigbreak
+            if sig in names:
+                arm_drain_watchdog(drain_s, backstop=backstop, signame=names[sig])
+            return False
+
+        cb = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.DWORD)(_on_console_ctrl)
+        if not ctypes.windll.kernel32.SetConsoleCtrlHandler(cb, True):
+            log.warning("lifecycle: SetConsoleCtrlHandler failed (error %d); the drain cap arms "
+                        "only from the signal handler", ctypes.GetLastError())
+            return None
+        _console_ctrl_keep.append(cb)
+        return cb
+    except Exception as exc:  # noqa: BLE001 -- the cap must never break the server it guards
+        log.warning("lifecycle: could not register the console control handler: %s", exc)
+        return None
+
+
+def _win_console_ctrl_remove(cb) -> None:
+    """Unregister a handler from _win_console_ctrl_arm once uvicorn's shutdown is over. FAIL-OPEN."""
+    if cb is None:
+        return
+    try:
+        import ctypes
+        ctypes.windll.kernel32.SetConsoleCtrlHandler(cb, False)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def compose_lifespan(fastmcp_lifespan, cap_s: Optional[float] = None,

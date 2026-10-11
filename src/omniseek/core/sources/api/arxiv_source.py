@@ -18,16 +18,18 @@ string verbatim, so field prefixes + booleans work as-is — ``cat:cs.LG``, ``au
 **B2 migration:** now rides ``BaseAPIAdapter`` (template-method base). The two hooks
 ``_raw_fetch`` / ``_to_document`` carry the verbatim arXiv I/O + field mapping; the base
 supplies the cache-checked ``search`` skeleton + auto-registration. ``rank_locally=False``
-preserves the server's ``sortBy=relevance`` order byte-for-byte (no local re-rank, exactly
-as the hand-written form did). ``fetch_url`` (id_list by-id lookup) and ``health_check``
+preserves the server's order byte-for-byte (no local re-rank): ``sortBy=relevance`` by default,
+``sortBy=submittedDate`` descending for a recency query (``_search_params``, 2026-10-11).
+``fetch_url`` (id_list by-id lookup) and ``health_check``
 (treats HTTP 429 as alive) are overridden because they differ from the base defaults.
 """
 
 from __future__ import annotations
 
 import logging
+import re
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 from urllib.parse import urlparse
 
@@ -169,25 +171,101 @@ async def _arxiv_aget_text(url: str, **kwargs):
     return r
 
 
+# RECENCY (2026-10-11, OmniSeek showcase R12): the API sorts by relevance, which for a plain topic
+# query mixes every year (a 2022 paper led "speculative decoding"). Relevance stays the default, the
+# same as openalex / core / dblp and the base's server-side-relevance contract. A query that asks for
+# a time window is the case relevance cannot serve, so it is rewritten into arXiv's native form: the
+# window becomes a submittedDate range ANDed onto the topic, and the sort becomes submittedDate,
+# descending. The topic's bare words are ANDed (all:a AND all:b): arXiv joins bare words loosely
+# (50k hits for "speculative decoding"), and a date sort over a loose match is the newest papers of
+# the whole archive, not of the topic.
+_FIELD_PREFIX_RE = re.compile(r"\b(?:ti|au|abs|co|jr|cat|rn|id|all|submittedDate|lastUpdatedDate):",
+                              re.IGNORECASE)
+_BOOL_RE = re.compile(r"\b(?:AND|OR|ANDNOT)\b")
+_NATIVE_RANGE_RE = re.compile(r"\b(submittedDate|lastUpdatedDate):\s*\[", re.IGNORECASE)
+_DAYS_TOKEN_RE = re.compile(r"(?<!\S)days:(\d{1,4})(?!\S)", re.IGNORECASE)
+_SINCE_TOKEN_RE = re.compile(r"(?<!\S)since:(\d{4})-?(\d{2})-?(\d{2})(?!\S)", re.IGNORECASE)
+_EN_WINDOW_RE = re.compile(
+    r"(?:\b(?:in|over|from|during)\s+)?(?:\bthe\s+)?\b(?:past|last)\s+(\d{1,3})\s+(day|week|month)s?\b",
+    re.IGNORECASE)
+_ZH_WINDOW_RE = re.compile(r"(?:最近|近|过去)\s*(\d{1,3})\s*(天|日|周|个月|月)")
+_UNIT_DAYS = {"day": 1, "week": 7, "month": 30, "天": 1, "日": 1, "周": 7, "个月": 30, "月": 30}
+
+
+def _recency_window(query: str, today=None):
+    """``(topic, start_date)`` when ``query`` asks for a time window, else ``(query, None)``. The
+    window marker is cut out of the topic; ``start_date`` is a ``date`` in UTC."""
+    today = today or datetime.now(timezone.utc).date()
+    m = _SINCE_TOKEN_RE.search(query)
+    if m:
+        try:
+            start = datetime(int(m.group(1)), int(m.group(2)), int(m.group(3))).date()
+        except ValueError:
+            return query, None
+        return (query[:m.start()] + query[m.end():]), start
+    for rx in (_DAYS_TOKEN_RE, _EN_WINDOW_RE, _ZH_WINDOW_RE):
+        m = rx.search(query)
+        if not m:
+            continue
+        n = int(m.group(1))
+        unit = m.group(2).lower() if rx is not _DAYS_TOKEN_RE else "day"
+        days = n * _UNIT_DAYS[unit]
+        if days <= 0:
+            return query, None
+        return (query[:m.start()] + query[m.end():]), today - timedelta(days=days)
+    return query, None
+
+
+def _topic_clause(topic: str) -> str:
+    """The topic part of a windowed query: a native query (field prefix or boolean) is grouped as
+    is; bare words and quoted phrases are each put under ``all:`` and ANDed."""
+    topic = " ".join(topic.split())
+    if not topic:
+        return ""
+    if _FIELD_PREFIX_RE.search(topic) or _BOOL_RE.search(topic):
+        return f"({topic})"
+    terms = re.findall(r'"[^"]+"|\S+', topic)
+    return "(" + " AND ".join(f"all:{t}" for t in terms) + ")"
+
+
+def _search_params(query: str, limit: int, today=None) -> dict:
+    """The arXiv API parameters for a search: relevance order by default, newest first for a
+    recency query (see the RECENCY note above)."""
+    params = {"search_query": query, "max_results": max(1, min(limit, 100)),
+              "sortBy": "relevance", "sortOrder": "descending"}
+    native = _NATIVE_RANGE_RE.search(query)
+    if native:
+        params["sortBy"] = ("lastUpdatedDate" if native.group(1).lower() == "lastupdateddate"
+                            else "submittedDate")
+        return params
+    topic, start = _recency_window(query, today)
+    if start is None:
+        return params
+    end = today or datetime.now(timezone.utc).date()
+    window = f"submittedDate:[{start:%Y%m%d}0000 TO {end:%Y%m%d}2359]"
+    clause = _topic_clause(topic)
+    params["search_query"] = f"{clause} AND {window}" if clause else window
+    params["sortBy"] = "submittedDate"
+    return params
+
+
 class ArxivAdapter(BaseAPIAdapter):
     name = "arxiv"
     needs_credentials = False
-    description = "arXiv preprints: 3M+ papers across physics, math, CS, biology"
+    description = ("arXiv preprints: 3M+ papers across physics, math, CS, biology. Relevance order by "
+                   "default; a recency query (\"past 7 days\", \"last 2 weeks\", \"最近 7 天\", days:7, "
+                   "since:2026-10-01, or a native submittedDate:[A TO B] range) returns that window "
+                   "newest first")
 
-    # arXiv's API returns relevance-sorted results (sortBy=relevance); keep that
-    # server order verbatim — no local re-rank — exactly as the hand form did.
+    # The server order is kept verbatim (no local re-rank): relevance by default, newest first for a
+    # recency query (see _search_params).
     rank_locally = False
     cache_ttl = 3600
     url_host = "arxiv.org"
 
     # ------------------------------------------------------------------ hooks
     def _raw_fetch(self, query: str, limit: int) -> list:
-        xml = _arxiv_get_text(_API, params={
-            "search_query": query,
-            "max_results": max(1, min(limit, 100)),
-            "sortBy": "relevance",
-            "sortOrder": "descending",
-        })
+        xml = _arxiv_get_text(_API, params=_search_params(query, limit))
         if not xml:
             return []  # network failure / timeout / oversize → empty (do NOT cache)
         feed = feedparser.parse(xml)
@@ -199,15 +277,11 @@ class ArxivAdapter(BaseAPIAdapter):
     # ------------------------------------------------------------- async twins
     async def _araw_fetch(self, query: str, limit: int) -> list:
         """Async twin of _raw_fetch: BYTE-FAITHFUL mirror — same URL, same params (search_query,
-        the max(1,min(limit,100)) clamp, sortBy=relevance, sortOrder=descending), same not-xml -> []
-        contract, same feedparser.parse. ONLY the shared-http egress is swapped for its async twin:
-        _arxiv_get_text -> await _arxiv_aget_text (both ride the SAME shared _guard: sema + pace + breaker)."""
-        xml = await _arxiv_aget_text(_API, params={
-            "search_query": query,
-            "max_results": max(1, min(limit, 100)),
-            "sortBy": "relevance",
-            "sortOrder": "descending",
-        })
+        the max(1,min(limit,100)) clamp and the sort, all built by the one _search_params), same
+        not-xml -> [] contract, same feedparser.parse. ONLY the shared-http egress is swapped for its
+        async twin: _arxiv_get_text -> await _arxiv_aget_text (both ride the SAME shared _guard: sema +
+        pace + breaker)."""
+        xml = await _arxiv_aget_text(_API, params=_search_params(query, limit))
         if not xml:
             return []  # network failure / timeout / oversize → empty (do NOT cache)
         feed = feedparser.parse(xml)

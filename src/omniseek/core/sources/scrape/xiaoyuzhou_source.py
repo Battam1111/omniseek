@@ -159,7 +159,9 @@ class XiaoyuzhouAdapter:
         eid = e.get("eid")
         body = e.get("shownotes") or e.get("description") or ""
         content = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", body)).strip() or "(no shownotes)"
-        content += "\n\n[完整口语内容在音频里(shownotes 仅摘要)→ omniseek_transcribe 取本地 Whisper 全文转写]"
+        from omniseek.core import asr  # lazy: the engine name comes from asr's configured model id
+        content += (f"\n\n[完整口语内容在音频里(shownotes 仅摘要)→ omniseek_transcribe 取本地 "
+                    f"{asr.engine_label()} 全文转写]")
         img = _img(e.get("image"))
         enc = e.get("enclosure")
         return Document(

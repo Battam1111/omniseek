@@ -19,6 +19,7 @@ cartography. OmniSeek is the channel; the agent is the cartographer.
 from __future__ import annotations
 
 import logging
+import re
 import time
 from collections import Counter
 from typing import Optional
@@ -34,6 +35,7 @@ _TIMEOUT = 25
 # graph's ``published_in`` edge needs (work -> venue:openalex:S…). The other fields are unchanged.
 _SELECT = ("id,doi,title,publication_year,publication_date,cited_by_count,referenced_works,"
            "concepts,authorships,primary_location")
+_S2_PID_RE = re.compile(r"[0-9a-f]{40}")  # a bare S2 paperId (sha1 hex); other id forms need a lookup
 _S2_REF_CAP = 100  # hard cap on S2 references fetched per seed (page-bounded; refs are naturally small)
 # OVERALL wall-clock budget for one assemble. Each S2/OA call is individually bounded (timeout +
 # breaker), but the ~13 SERIAL calls of an assemble have no aggregate cap, so a slow/throttling
@@ -151,7 +153,11 @@ def _oa_assemble(query: Optional[str], seeds: Optional[list[str]],
 # ── Semantic Scholar backend (better arXiv coverage; normalized to the same shape) ──
 def _s2_assemble(query: Optional[str], seeds: Optional[list[str]],
                  n_seeds: int, citers_per_seed: int,
-                 deadline_at: Optional[float] = None) -> tuple[list[str], dict, bool]:
+                 deadline_at: Optional[float] = None,
+                 report: Optional[dict] = None) -> tuple[list[str], dict, bool]:
+    # ``report`` (optional, filled in place): report["unresolved"] lists each seed whose own record
+    # could not be fetched, as {id, reason, kept_as_seed, has_metadata}, so field_skeleton can SAY
+    # which seed is missing and why instead of silently demoting it.
     # Shared S2 client + breaker + bounded wrappers (_s2) — no per-call SemanticScholar().
     F = ["paperId", "title", "year", "publicationDate", "citationCount", "authors",
          "externalIds", "fieldsOfStudy"]
@@ -238,11 +244,35 @@ def _s2_assemble(query: Optional[str], seeds: Optional[list[str]],
     if not seed_ids:
         return [], {}, False
     deadline_hit = False
+    # Seeds whose OWN record could not be fetched, {input id: reason code}. Measured 2026-10-11:
+    # S2's keyed pool answers a scattered ~1 in 4 calls with HTTP 429 even at our 1 req/s pace, so
+    # the bounded retry inside _s2 sometimes runs out on a seed's record call while that seed's
+    # /references and /citations a second later return 200. Before, such a seed silently lost its
+    # seed status AND its seed->reference edges (they were recorded only when works[sid] existed).
+    unresolved: dict[str, str] = {}
 
     def _expired() -> bool:
         return bool(deadline_at and time.monotonic() >= deadline_at)
 
-    for sid in seed_ids:
+    def _placeholder(pid: str) -> None:
+        # A seed known only by its S2 paperId: keep it as a seed so its edges survive; a neighbor
+        # record (another seed's reference list, say) fills title/year in later through add()'s merge.
+        if pid not in works:
+            works[pid] = {"title": None, "publication_year": None, "publication_date": None,
+                          "cited_by_count": 0, "doi": None,
+                          "_url": f"https://www.semanticscholar.org/paper/{pid}",
+                          "authorships": [], "concepts": [], "referenced_works": [],
+                          "_seed": True, "_intents": [], "_influential": False, "_contexts": []}
+        works[pid]["_seed"] = True
+
+    # Pass 1 fetches each seed's record; a seed whose record call was throttled (or otherwise failed
+    # transiently) is retried ONCE in pass 2, after the other seeds' calls have spaced it out. Only a
+    # pass-2 failure is final; a not_found is final at once (its edge calls would 404 too).
+    queue = [(sid, 1) for sid in seed_ids]
+    i = 0
+    while i < len(queue):
+        sid, attempt = queue[i]
+        i += 1
         # Overall budget guard between every network call: the ~13 serial calls otherwise have no
         # aggregate cap, so a slow/throttling S2 grinds for minutes before the breaker trips. On the
         # budget we stop and return the PARTIAL map gathered so far (flagged), never hanging the agent.
@@ -251,29 +281,55 @@ def _s2_assemble(query: Optional[str], seeds: Optional[list[str]],
             break
         # _s2 wrappers normalize the id + bound the iteration (the "limit == page size, paginate
         # forever" trap) + carry the breaker/semaphore + degrade to None/[] — so no try/except here.
-        add(_s2.get_paper(sid, fields=F), seed=True)
+        rec, why = _s2.fetch_paper(sid, fields=F)
+        key = getattr(rec, "paperId", None) if rec is not None else None
+        if key:
+            add(rec, seed=True)
+            unresolved.pop(sid, None)
+        else:
+            unresolved[sid] = why or "empty_record"
+            if why == "not_found":
+                continue
+            if attempt == 1:
+                queue.append((sid, 2))
+                continue
+            # Final failure: an S2 paperId still addresses the edge endpoints, so keep the seed.
+            # Any other id form (bare arXiv id, DOI) cannot be matched to the corpus without its
+            # record, so it stays out and is reported.
+            if not _S2_PID_RE.fullmatch(sid.lower()):
+                continue
+            key = sid.lower()
+            _placeholder(key)
         if _expired():
             deadline_hit = True
             break
         for r in _s2.get_paper_references(sid, _S2_REF_CAP, fields=F_EDGE):
             # edge seed → r.paper (the seed CITES this reference): add the neighbor, then record
             # the edge on the SEED (the "this work cites these ids" direction _build expects).
+            # Keyed by the RESOLVED paperId, not the input id: an arXiv / DOI seed used to lose
+            # every one of these edges because works[] is keyed by paperId.
             rp = getattr(r, "paper", None)
             add(rp, intents=getattr(r, "intents", None),
                 influential=getattr(r, "isInfluential", None),
                 contexts=_edge_contexts(r))
             rpid = getattr(rp, "paperId", None)
-            if rpid and sid in works and rpid != sid:
-                works[sid]["referenced_works"].append(rpid)
+            if rpid and key in works and rpid != key:
+                works[key]["referenced_works"].append(rpid)
         if _expired():
             deadline_hit = True
             break
         for c in _s2.get_paper_citations(sid, citers_per_seed, fields=F_EDGE):
             # edge c.paper → seed (the CITER cites the seed): record the edge on the citer via
-            # cites=sid, so c.paper's referenced_works carries sid.
+            # cites=key, so c.paper's referenced_works carries the seed's paperId.
             add(getattr(c, "paper", None), intents=getattr(c, "intents", None),
                 influential=getattr(c, "isInfluential", None),
-                contexts=_edge_contexts(c), cites=sid)
+                contexts=_edge_contexts(c), cites=key)
+    if report is not None:
+        report["unresolved"] = [
+            {"id": sid, "reason": why,
+             "kept_as_seed": bool(works.get(sid.lower(), {}).get("_seed")),
+             "has_metadata": bool(works.get(sid.lower(), {}).get("title"))}
+            for sid, why in unresolved.items()]
     seed_pids = [pid for pid, w in works.items() if w.get("_seed")] or seed_ids
     return seed_pids, works, deadline_hit
 
@@ -523,8 +579,16 @@ def field_skeleton(query: Optional[str] = None, seeds: Optional[list[str]] = Non
             return cached
     t0 = time.monotonic()
     deadline_at = t0 + (deadline_s if deadline_s is not None else _ASSEMBLE_DEADLINE_S)
-    assemble = _s2_assemble if source == "s2" else _oa_assemble
-    seed_ids, works, deadline_hit = assemble(query, seeds, n_seeds, citers_per_seed, deadline_at)
+    seed_report: dict = {}
+    if source == "s2":
+        seed_ids, works, deadline_hit = _s2_assemble(query, seeds, n_seeds, citers_per_seed,
+                                                     deadline_at, report=seed_report)
+    else:
+        seed_ids, works, deadline_hit = _oa_assemble(query, seeds, n_seeds, citers_per_seed, deadline_at)
+    unresolved = seed_report.get("unresolved") or []
+    # A seed counts as resolved only when its own record came back; a placeholder kept for its edges
+    # is still reported under seeds_unresolved.
+    n_resolved = len([s for s in seed_ids if s in works]) - len([u for u in unresolved if u["kept_as_seed"]])
     seeds_requested = len(seeds) if seeds else n_seeds
     degraded = (_s2.breaker_open() if source == "s2" else oa.breaker_open())
     if not seed_ids:
@@ -540,7 +604,8 @@ def field_skeleton(query: Optional[str] = None, seeds: Optional[list[str]] = Non
                 "_meta": {"backend": source, "elapsed_s": round(time.monotonic() - t0, 1),
                           "seeds_requested": seeds_requested, "seeds_resolved": 0,
                           "nodes_capped": False, "degraded": bool(degraded or throttled),
-                          "partial": True}}
+                          "partial": True,
+                          **({"seeds_unresolved": unresolved} if unresolved else {})}}
     result = _build(seed_ids, works, max_nodes, query=query)
     result["source"] = source
     # FAIL-OPEN graph tap: the single exit point both backends share. Mints work/person/topic/venue
@@ -559,7 +624,7 @@ def field_skeleton(query: Optional[str] = None, seeds: Optional[list[str]] = Non
         "backend": source,
         "elapsed_s": round(time.monotonic() - t0, 1),
         "seeds_requested": seeds_requested,
-        "seeds_resolved": len(seed_ids),
+        "seeds_resolved": max(n_resolved, 0),
         "seed_titles": seed_titles,
         "seed_note": ("auto-seeds chosen by relevance — VERIFY these titles match your field before "
                       "trusting the map; re-call with seeds=[...] to re-anchor if off") if auto_seeded else None,
@@ -571,12 +636,28 @@ def field_skeleton(query: Optional[str] = None, seeds: Optional[list[str]] = Non
         # partial iff the graph is provably incomplete: backend circuit was open this run (some
         # assemble calls silently degraded to None/[]), OR the node corpus was truncated to
         # max_nodes, OR fewer seeds resolved than requested, OR the deadline bailed it early.
-        "partial": bool(degraded or nodes_capped or len(seed_ids) < seeds_requested or deadline_hit),
+        "partial": bool(degraded or nodes_capped or deadline_hit or unresolved
+                        or max(n_resolved, 0) < seeds_requested),
     }
+    if unresolved:
+        # Name every seed whose own record S2 did not return, and why, instead of silently demoting
+        # it to an ordinary node (OmniSeek R08: the Leviathan 2022 paperId came back is_seed=false
+        # with only partial:true to show for it; the cause was HTTP 429 on that one record call).
+        result["_meta"]["seeds_unresolved"] = unresolved
+        parts = []
+        for u in unresolved:
+            how = ("kept as a seed by its S2 id, edges fetched" if u["kept_as_seed"]
+                   else "left out of the map")
+            parts.append(f"{u['id']} ({u['reason']}; {how})")
+        msg = ("seed record not returned by Semantic Scholar: " + "; ".join(parts)
+               + ". rate_limited / circuit_open are transient: retry shortly (this map is not "
+                 "cached); not_found means S2 has no paper under that id.")
+        result["note"] = (result["note"] + " " + msg) if result.get("note") else msg
     if deadline_hit:
-        result["note"] = (f"partial map: the {round(deadline_at - t0)}s budget blew before all seeds' "
-                          "edges were fetched (slow/throttling upstream). Retry shortly, raise "
-                          "deadline_s, or pass source=openalex.")
+        dl = (f"partial map: the {round(deadline_at - t0)}s budget blew before all seeds' "
+              "edges were fetched (slow/throttling upstream). Retry shortly, raise "
+              "deadline_s, or pass source=openalex.")
+        result["note"] = (dl + " " + result["note"]) if result.get("note") else dl
     # Do NOT cache a TRANSIENT-partial map: time-truncated (deadline_hit) OR breaker-degraded (degraded:
     # some assemble calls silently fell to []/None while S2's circuit was open). Both are incomplete
     # because the UPSTREAM was unhealthy, not because the field is small, so a retry when it recovers
@@ -584,7 +665,10 @@ def field_skeleton(query: Optional[str] = None, seeds: Optional[list[str]] = Non
     # dict, so the cache.set empty-FLOOR cannot catch it — this is the local guard for that truthy-
     # partial case, using the health signal _s2/oa already expose. nodes_capped / fewer-seeds are
     # LEGITIMATE partials (the map is as complete as the field allows) and DO cache.
-    if not deadline_hit and not degraded:
+    # A seed lost to a TRANSIENT failure (rate_limited / circuit_open / error) is the same case:
+    # a retry should resolve it, so that map is not cached either. not_found is permanent and caches.
+    transient_seed = any(u["reason"] != "not_found" for u in unresolved)
+    if not deadline_hit and not degraded and not transient_seed:
         cache.set(key, result, ttl=6 * 3600)
     return result
 

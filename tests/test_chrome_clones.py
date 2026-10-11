@@ -4,6 +4,7 @@ Fake clone roots in a temp directory, fake lsof / ps data: nothing here runs lso
 and nothing touches the machine's real clone directory. The real one was checked by hand on the live host
 (dry run, and a run with lsof's names blinded so only the file-identity test could keep a clone).
 """
+import math
 import os
 import shutil
 import tempfile
@@ -18,6 +19,19 @@ NOW = 1_800_000_000.0
 HOUR = 3600
 INSTALLED = (1, 500)          # (dev, inode) of the installed Chrome executable
 OLD_BINARY = (1, 400)         # an executable no longer installed (an old version still running)
+
+# A deadline is time.monotonic() + budget, rounded to the nearest float at the clock's magnitude.
+# When the clock has not moved since (on Windows before Python 3.13 it steps every 15.6 ms),
+# "deadline - now" is that rounding: up to half a unit in the last place over the budget, e.g.
+# 90.00000000000003 on a Windows CI runner whose clock read 255.00000000000009. The code is right;
+# a check that the time handed on is at most the budget must allow this one rounding, no more.
+# CLOCK_THAT_ROUNDS_UP is such a reading: (CLOCK_THAT_ROUNDS_UP + 90) - CLOCK_THAT_ROUNDS_UP > 90.
+CLOCK_THAT_ROUNDS_UP = 255 + 3 * 2.0 ** -45
+
+
+def at_most(budget):
+    """``budget`` plus one unit in the last place of a deadline set now with that budget."""
+    return budget + math.ulp(time.monotonic() + budget)
 
 LSOF_SAMPLE = "\n".join([
     "p884", "cGoogle Chrome", "fcwd", "D0x1000010", "i2", "n/",
@@ -249,8 +263,12 @@ class SweepTests(unittest.TestCase):
         with mock.patch.object(cc, "read_lsof", return_value=[]) as lsof, \
              mock.patch.object(cc, "read_ps_starts", return_value={}) as ps:
             self._sweep(open_files=None, starts=None, time_left_s=20)
-        self.assertLessEqual(lsof.call_args.kwargs["timeout"], 20)
+        self.assertLessEqual(lsof.call_args.kwargs["timeout"], at_most(20))
         self.assertLessEqual(ps.call_args.kwargs["timeout"], cc.PS_TIMEOUT_S)
+
+    def test_a_clock_that_did_not_tick_still_gives_the_tools_no_more_time(self):
+        with mock.patch.object(cc.time, "monotonic", return_value=CLOCK_THAT_ROUNDS_UP):
+            self.test_the_tools_get_no_more_time_than_the_job_has_left()
 
     def test_an_unreadable_lsof_deletes_nothing(self):
         with mock.patch.object(cc, "read_lsof", return_value=None):
@@ -299,10 +317,14 @@ class ReaperRunsTheSweepTests(unittest.TestCase):
         res = self._reap(sweep)
         sweep.assert_called_once()
         left = sweep.call_args.kwargs["time_left_s"]
-        self.assertTrue(0 < left <= infra_jobs.REAPER_DEADLINE_S, left)
+        self.assertTrue(0 < left <= at_most(infra_jobs.REAPER_DEADLINE_S), left)
         self.assertEqual(res["clones"], {"deleted": ["code_sign_clone.Old001"], "in_use": 1,
                                          "too_new": 0, "errors": [], "left_for_next_pass": 0})
         self.assertEqual(len(res["already_down"]), 4)
+
+    def test_a_clock_that_did_not_tick_still_hands_the_sweep_no_more_than_the_budget(self):
+        with mock.patch.object(infra_jobs.time, "monotonic", return_value=CLOCK_THAT_ROUNDS_UP):
+            self.test_the_reaper_reports_what_the_sweep_deleted()
 
     def test_a_sweep_that_raises_does_not_fail_the_reaper(self):
         with self.assertLogs(infra_jobs.log, "WARNING"):

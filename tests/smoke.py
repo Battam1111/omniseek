@@ -4913,12 +4913,13 @@ class _FakeEdge:
 
 
 _save_s2 = {k: getattr(cartographer._s2, k) for k in
-            ("get_paper", "get_paper_references", "get_paper_citations", "search_paper")}
+            ("get_paper", "fetch_paper", "get_paper_references", "get_paper_citations", "search_paper")}
 try:
     _seedp = _FakePaper("SEED")
     _refp = _FakePaper("REF")       # the seed cites REF (in-corpus → an edge)
     _citerp = _FakePaper("CITER")   # CITER cites the seed (in-corpus → an edge)
     cartographer._s2.get_paper = lambda sid, fields=None: _seedp
+    cartographer._s2.fetch_paper = lambda sid, fields=None: (_seedp, None)
     cartographer._s2.get_paper_references = lambda sid, cap, fields=None: [_FakeEdge(_refp)]
     cartographer._s2.get_paper_citations = lambda sid, cap, fields=None: [_FakeEdge(_citerp)]
     cartographer._s2.search_paper = lambda q, limit=4, fields=None: [_seedp]
@@ -4960,6 +4961,7 @@ try:
     _seedp2 = _FakePaper("SEED2")
     _citerp2 = _FakePaper("CITER2")
     _bare.get_paper = lambda sid, fields=None: _seedp2
+    _bare.fetch_paper = lambda sid, fields=None: (_seedp2, None)
     _bare.get_paper_references = lambda sid, cap, fields=None: []
     _bare.get_paper_citations = lambda sid, cap, fields=None: [
         _FakeEdge(_citerp2, contextsWithIntent=[], contexts=["raw fallback citing sentence"])]

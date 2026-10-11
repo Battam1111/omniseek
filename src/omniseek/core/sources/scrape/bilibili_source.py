@@ -50,6 +50,15 @@ from omniseek.core import cache, http
 from omniseek.core.normalize import Document, jsonsafe, mk_signal
 from omniseek.core.sources.scrape._base import BaseScrapeAdapter
 
+
+def _transcribe_hint() -> str:
+    """The pointer to omniseek_transcribe appended to a video's description. The engine name comes from
+    asr's configured model ids, never a hard-coded name (it once said Whisper after the switch)."""
+    from omniseek.core import asr  # lazy: asr stays out of this module's import graph until needed
+    return (f"\n\n[视频的口语干货在音频里;B 站字幕需登录 → 用 omniseek_transcribe 取本地 "
+            f"{asr.engine_label()} 全文转写(免费,首次较慢、之后缓存;要分说话人加 diarize=True,"
+            f"走 {asr.engine_label(diarize=True)})]")
+
 logger = logging.getLogger(__name__)
 
 SEARCH_API = "https://api.bilibili.com/x/web-interface/search/type"
@@ -441,8 +450,7 @@ class BilibiliAdapter(BaseScrapeAdapter):
                 date = None
         cover = d.get("pic") or ""
         media = [cover] if isinstance(cover, str) and cover.startswith("http") else []
-        hint = ("\n\n[视频的口语干货在音频里;B 站字幕需登录 → 用 omniseek_transcribe 取本地 Whisper "
-                "全文转写(免费,首次较慢、之后缓存)]")
+        hint = _transcribe_hint()
         video_url = f"https://www.bilibili.com/video/{bvid}"
         content = (d.get("desc") or "(no description)") + hint
         aid = d.get("aid")

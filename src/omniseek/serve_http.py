@@ -143,15 +143,16 @@ app.add_middleware(InflightMiddleware)
 # dumps every thread's stack and forces the exit, so launchd can start the next process. The cap is
 # armed by _CappedServer below where uvicorn starts the lifespan shutdown (compose_lifespan arms it
 # again, idempotently, and records which step is running).
+# The wait BEFORE the lifespan shutdown, for open connections and running requests, is capped too
+# (lifecycle.DRAIN_CAP_S_DEFAULT, OMNISEEK_DRAIN_CAP_S): main() passes it to uvicorn as
+# timeout_graceful_shutdown, and _CappedServer arms a hard watchdog on the same clock from its
+# signal handler, so SIGTERM to exit is at most drain cap + shutdown cap + backstop (65 s by default;
+# launchd's ExitTimeOut must stay above that, see OmniSeek-drain-cap report).
 from omniseek.core import lifecycle  # noqa: E402
 app.router.lifespan_context = lifecycle.compose_lifespan(app.router.lifespan_context,
                                                          cap_s=lifecycle.shutdown_cap_s())
 
-
-class _CappedServer(uvicorn.Server):
-    async def startup(self, sockets=None):
-        lifecycle.cap_lifespan_shutdown(self.lifespan, cap_s=lifecycle.shutdown_cap_s())
-        await super().startup(sockets=sockets)
+_CappedServer = lifecycle.capped_server_class(uvicorn.Server, cap_s=lifecycle.shutdown_cap_s())
 
 
 def _raise_fd_limit(want: int = 16384) -> None:
@@ -257,10 +258,14 @@ def main() -> None:
     logger.debug(_senses_report())
     # The one INFO line of a start (stranger report item 8); the lines above are at DEBUG.
     logger.info(_boot_summary(f" (HTTP on {HOST}:{PORT}, token-gated, MCP at /mcp)"))
-    # uvicorn.run(app, ...) minus its reload / multi-worker branches (unused here), with one change:
-    # the Server arms the shutdown cap where uvicorn logs "Waiting for application shutdown." (see
-    # lifecycle.cap_lifespan_shutdown for why compose_lifespan's own arming is not enough).
-    server = _CappedServer(uvicorn.Config(app, host=HOST, port=PORT, log_level="info"))
+    # uvicorn.run(app, ...) minus its reload / multi-worker branches (unused here), with two changes:
+    # the Server arms the drain cap on SIGTERM and the shutdown cap where uvicorn logs "Waiting for
+    # application shutdown." (see lifecycle.cap_lifespan_shutdown for why compose_lifespan's own
+    # arming is not enough), and timeout_graceful_shutdown bounds the wait for connections
+    # (a uvicorn.Config parameter, read in Server.shutdown; checked in the deployed 0.48.0; 0 here
+    # passes None, uvicorn's "wait forever").
+    server = _CappedServer(uvicorn.Config(app, host=HOST, port=PORT, log_level="info",
+                                          timeout_graceful_shutdown=lifecycle.drain_cap_s() or None))
     try:
         server.run()
     except KeyboardInterrupt:

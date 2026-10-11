@@ -46,6 +46,13 @@ logger = logging.getLogger(__name__)
 
 _MODEL = "iic/SenseVoiceSmall"
 _VAD = "fsmn-vad"
+# The diarize=True path (WHO said what) loads a different ASR plus a speaker model; see _get_diar_model.
+_DIAR_MODEL = "paraformer-zh"
+_SPK_MODEL = "cam++"
+# Human-readable names for the configured model ids, so every hint that tells a user or an agent which
+# engine transcribes reads the id the code actually loads (OmniSeek R01: the bilibili hint said
+# "Whisper" long after the engine became SenseVoice). An id missing here falls back to its own name.
+_MODEL_LABELS = {"iic/SenseVoiceSmall": "SenseVoice-Small", "paraformer-zh": "Paraformer-zh"}
 _SR = 16000
 _MAX_SECONDS = 4 * 3600          # safety cap (4h of audio)
 _FFMPEG_RW_TIMEOUT_US = 30_000_000    # 30s: abort a STALLED network read (no infinite ffmpeg hang)
@@ -65,6 +72,18 @@ _EMOJI_RE = re.compile(r"[\U0001F000-\U0001FAFF☀-➿\U0001F1E6-\U0001F1FF️]"
 # with no speech before it; that mark is never legitimate at the very start. Strip a leading run of
 # lone CJK/ASCII clause-or-sentence punctuation plus surrounding spaces.
 _LEAD_PUNCT_RE = re.compile(r"^[\s。，、；：！？.,;:!?]+")
+
+
+
+def engine_label(diarize: bool = False) -> str:
+    """The name of the local ASR engine omniseek_transcribe runs, derived from the configured model ids:
+    the flat transcript path by default, the speaker-diarization pipeline with diarize=True."""
+    def name(mid: str) -> str:
+        return _MODEL_LABELS.get(mid) or mid.rsplit("/", 1)[-1]
+    if diarize:
+        return f"{name(_DIAR_MODEL)} + {name(_SPK_MODEL)}"
+    return name(_MODEL)
+
 
 _model = None  # lazy global singleton (load is expensive; keep warm while in use, see idle unload)
 
@@ -461,7 +480,7 @@ def _get_diar_model():
             for dev in ("mps", "cpu"):
                 try:
                     with _quiet_stdout():
-                        _diar_model = AutoModel(model="paraformer-zh", vad_model=_VAD, spk_model="cam++",
+                        _diar_model = AutoModel(model=_DIAR_MODEL, vad_model=_VAD, spk_model=_SPK_MODEL,
                                                 punc_model="ct-punc", device=dev, disable_update=True)
                     logger.info("diarization model (paraformer-zh+cam++) loaded on %s", dev)
                     break
