@@ -27,9 +27,10 @@ connection with two commands, and every place that explains installing should sa
   question, the two commands and a link to the docs; details live in `docs/`. Image links are
   absolute so they render on PyPI and Glama. Internal project words were replaced with plain ones.
 - **New PyPI summary** in `pyproject.toml`, mirrored in `server.json`.
-- **Site:** new tagline and quick start, install commands no longer cut off on phones, and five
+- **Site:** new tagline and quick start, install commands no longer cut off on phones, and six
   pages by capability (cross-lingual search, podcast transcription, Zhihu, research monitoring,
-  citation graph), each with an example that was actually run.
+  citation graph, Bilibili), each with an example that was actually run. The capability cards on
+  the home page sit in rows of three.
 - **Hero images and social card re-rendered with the new tagline** (English, Chinese, Japanese;
   light and dark). The READMEs open with the hero again, and the site's link-share image is the
   social card again.

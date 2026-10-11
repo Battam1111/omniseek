@@ -41,7 +41,7 @@ ul.plain { margin: 10px 0 0 20px; }
 ul.plain li { margin-top: 6px; }
 .figure { margin-top: 48px; }
 .figure img { width: 100%; border-radius: 14px; border: 1px solid #1E293B; }
-.cards { margin-top: 44px; display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; }
+.cards { margin-top: 44px; display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
 .card { display: block; background: #111C33; border: 1px solid #1E293B; border-radius: 11px; padding: 14px 16px; text-decoration: none; }
 .card:hover { border-color: #3B82F6; }
 .card .t { font-weight: 650; color: #93C5FD; font-size: 14.5px; }
