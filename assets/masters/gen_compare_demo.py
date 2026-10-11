@@ -11,6 +11,11 @@ a (max-width: 600px) source, where the side-by-side GIF would shrink below half 
 is as wide as in the side-by-side GIF, so the lines wrap the same; the columns are shorter, so the
 oldest steps scroll off the top sooner.
 
+Every GIF opens on the finished comparison (both answers in, 1:21:51 highlighted; the end card
+left off) for 3 s, then plays from the empty start and ends on the end card. Many places show only
+a GIF's first frame (a page still loading, a screenshot, a thumbnail, reduced motion, PyPI), and an
+empty first frame looks broken there. The MP4 keeps its storyboard and uses the poster instead.
+
 The poster is the MP4's last frame before the end card (the finished comparison), for the site's
 <video poster=...>; it needs no ffmpeg.
 
@@ -53,6 +58,7 @@ NARROW_W, NARROW_H = 360, 1080   # stacked layout for phones (README shows it at
 NARROW_LEFT = 300                # CSS px of the web-search column (header included is extra)
 MP4_W, MP4_H = 1280, 720
 MP4_FPS = 30
+COVER_MS = 3000  # GIF only: how long the finished comparison shows as frame 0 before the replay
 
 R01 = RUN["R01"]
 WEB = R01["web"]
@@ -326,7 +332,8 @@ def secs(s: float, lang: str) -> str:
 def speedup(real_s: float, mp4: bool, step: str, until: str) -> int:
     """How much faster than real time a step runs on screen: real time over the time the step is
     on screen before its next item appears (taken from the storyboard, so it follows any retiming)."""
-    shown = sum(ms for st, ms in plan(mp4) if step in st["show"] and until not in st["show"]) / 1000
+    shown = sum(ms for st, ms in plan(mp4)
+                if step in st["show"] and until not in st["show"] and not st.get("cover")) / 1000
     x = real_s / shown
     return int(round(x, -1)) if x >= 20 else max(1, round(x))
 
@@ -454,6 +461,12 @@ def plan(mp4: bool):
         if "r3" in st["show"]:
             st["show"] = [i for i in st["show"] if i not in full] + short
             st["dim"] = [i for i in st.get("dim", []) if i not in full] + short
+    if not mp4:
+        # GIF frame 0 is the finished comparison (the last frame before the end card): GitHub, PyPI,
+        # thumbnails and reduced-motion readers often show only the first frame. Then it plays from
+        # the empty start. The MP4 has a poster for that, so its storyboard is unchanged.
+        last = next(st for st, _ in reversed(S) if not st.get("end"))
+        S.insert(0, (dict(last, cover=True), COVER_MS))
     return S
 
 
@@ -508,9 +521,12 @@ def to_gif(shots, page_hex: str, path: Path) -> None:
         return Image.alpha_composite(bg, im).convert("RGB")
 
     # One palette for all frames, from a strip of every frame (each step adds colours), with the last
-    # index kept free for the transparent corners outside the rounded stage.
-    strip = Image.new("RGB", (rgba[0].width, rgba[0].height * len(rgba)))
-    for i, im in enumerate(rgba):
+    # index kept free for the transparent corners outside the rounded stage. A frame that repeats
+    # later (the cover) is left out: it adds no colours, and the replay keeps its exact palette.
+    pngs = [png for png, _ in shots]
+    src = [im for i, im in enumerate(rgba) if pngs[i] not in pngs[i + 1:]]
+    strip = Image.new("RGB", (rgba[0].width, rgba[0].height * len(src)))
+    for i, im in enumerate(src):
         strip.paste(flat(im), (0, i * im.height))
     pal = strip.quantize(colors=255, method=Image.Quantize.MEDIANCUT, dither=Image.Dither.NONE)
     entries = pal.getpalette()[: 255 * 3]

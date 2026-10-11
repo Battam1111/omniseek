@@ -28,10 +28,10 @@ claude mcp add omniseek -- omniseek
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark) and (max-width: 480px)" srcset="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/compare-zh-dark-narrow.gif?v=2026-10-11b">
-    <source media="(max-width: 480px)" srcset="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/compare-zh-light-narrow.gif?v=2026-10-11b">
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/compare-zh-dark.gif?v=2026-10-11b">
-    <img src="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/compare-zh-light.gif?v=2026-10-11b" width="720" alt="一次真实运行，左右对照。左边只有网页搜索的 Agent 给出网友整理的大意，说大约在开头第 1 到 8 分钟；右边装了 OmniSeek 的 Agent 把 87 分钟的视频整段转成文字，找到李沐的原话在 1:21:51，附一个从这一秒打开的链接。">
+    <source media="(prefers-color-scheme: dark) and (max-width: 480px)" srcset="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/compare-zh-dark-narrow.gif?v=2026-10-11c">
+    <source media="(max-width: 480px)" srcset="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/compare-zh-light-narrow.gif?v=2026-10-11c">
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/compare-zh-dark.gif?v=2026-10-11c">
+    <img src="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/compare-zh-light.gif?v=2026-10-11c" width="720" alt="一次真实运行，左右对照。左边只有网页搜索的 Agent 给出网友整理的大意，说大约在开头第 1 到 8 分钟；右边装了 OmniSeek 的 Agent 把 87 分钟的视频整段转成文字，找到李沐的原话在 1:21:51，附一个从这一秒打开的链接。">
   </picture>
 </p>
 

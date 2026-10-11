@@ -73,12 +73,14 @@ connection with two commands, and every place that explains installing should sa
   asterisks (a `*` wedged between a letter and a quote mark, common in Chinese and Japanese text).
 - **A side-by-side comparison from one real run** in the READMEs ("See the difference") and on the
   site home page: the same question to an agent with web search only and to an agent with OmniSeek
-  (`assets/demo/compare-{en,zh}-{light,dark}.gif`, with a stacked version for phones). It takes the
-  place of the short terminal recording that was there before (`assets/terminal-demo-*.gif`, kept in
-  the repo). `docs/compare.md` and `docs/compare.zh.md` show all three recorded questions as an
-  infographic, with where each answer came from and a 38-second video; the site shows the same
-  infographic and video. Everything on screen is cut from `assets/masters/compare-demo-run.json` by
-  `gen_compare_demo.py` and `gen_compare_infographic.py`.
+  (`assets/demo/compare-{en,zh}-{light,dark}.gif`, with a stacked version for phones). The GIF opens
+  on the finished comparison for 3 seconds, so a page that shows only its first frame still shows
+  both answers, then plays from the start. It takes the place of the short terminal recording that
+  was there before (`assets/terminal-demo-*.gif`, kept in the repo). `docs/compare.md` and
+  `docs/compare.zh.md` show all three recorded questions as an infographic, with where each answer
+  came from and a 38-second video; the site shows the same infographic and video. Everything on
+  screen is cut from `assets/masters/compare-demo-run.json` by `gen_compare_demo.py` and
+  `gen_compare_infographic.py`.
 
 ### Notes
 

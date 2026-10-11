@@ -28,10 +28,10 @@ claude mcp add omniseek -- omniseek
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark) and (max-width: 480px)" srcset="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/compare-en-dark-narrow.gif?v=2026-10-11b">
-    <source media="(max-width: 480px)" srcset="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/compare-en-light-narrow.gif?v=2026-10-11b">
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/compare-en-dark.gif?v=2026-10-11b">
-    <img src="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/compare-en-light.gif?v=2026-10-11b" width="720" alt="実際の実行例を左右に並べたもの。左はウェブ検索だけのエージェントで、ネット上のまとめの要旨と「最初の 1〜8 分ごろ」を返す。右は OmniSeek を使うエージェントで、87 分の動画をまるごと文字に起こし、李沐（Mu Li）の発言を 1:21:51 に見つけ、その秒から開くリンクを示す。">
+    <source media="(prefers-color-scheme: dark) and (max-width: 480px)" srcset="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/compare-en-dark-narrow.gif?v=2026-10-11c">
+    <source media="(max-width: 480px)" srcset="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/compare-en-light-narrow.gif?v=2026-10-11c">
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/compare-en-dark.gif?v=2026-10-11c">
+    <img src="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/compare-en-light.gif?v=2026-10-11c" width="720" alt="実際の実行例を左右に並べたもの。左はウェブ検索だけのエージェントで、ネット上のまとめの要旨と「最初の 1〜8 分ごろ」を返す。右は OmniSeek を使うエージェントで、87 分の動画をまるごと文字に起こし、李沐（Mu Li）の発言を 1:21:51 に見つけ、その秒から開くリンクを示す。">
   </picture>
 </p>
 
