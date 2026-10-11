@@ -27,12 +27,14 @@ claude mcp add omniseek -- omniseek
 2 つのエージェントに、李沐（Mu Li）が Bilibili の 87 分の Transformer 論文解説で論文の書き方をどう評したか、その原文と何分目かを尋ねました。ウェブ検索だけのエージェントはまとめの要旨と「最初の 1〜8 分ごろ」を返し、OmniSeek を使うエージェントは動画を文字に起こして、その発言を 1:21:51 に見つけました。
 
 <p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark) and (max-width: 480px)" srcset="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/compare-en-dark-narrow.gif?v=2026-10-11c">
-    <source media="(max-width: 480px)" srcset="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/compare-en-light-narrow.gif?v=2026-10-11c">
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/compare-en-dark.gif?v=2026-10-11c">
-    <img src="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/compare-en-light.gif?v=2026-10-11c" width="720" alt="実際の実行例を左右に並べたもの。左はウェブ検索だけのエージェントで、ネット上のまとめの要旨と「最初の 1〜8 分ごろ」を返す。右は OmniSeek を使うエージェントで、87 分の動画をまるごと文字に起こし、李沐（Mu Li）の発言を 1:21:51 に見つけ、その秒から開くリンクを示す。">
-  </picture>
+  <a href="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/compare-en-light.gif?v=2026-10-11c#gh-light-mode-only"><picture>
+    <source media="(max-width: 480px)" srcset="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/compare-en-light-narrow.gif?v=2026-10-11c#gh-light-mode-only">
+    <img src="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/compare-en-light.gif?v=2026-10-11c#gh-light-mode-only" width="720" alt="実際の実行例を左右に並べたもの。左はウェブ検索だけのエージェントで、ネット上のまとめの要旨と「最初の 1〜8 分ごろ」を返す。右は OmniSeek を使うエージェントで、87 分の動画をまるごと文字に起こし、李沐（Mu Li）の発言を 1:21:51 に見つけ、その秒から開くリンクを示す。">
+  </picture></a>
+  <a href="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/compare-en-dark.gif?v=2026-10-11c#gh-dark-mode-only"><picture>
+    <source media="(max-width: 480px)" srcset="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/compare-en-dark-narrow.gif?v=2026-10-11c#gh-dark-mode-only">
+    <img src="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/compare-en-dark.gif?v=2026-10-11c#gh-dark-mode-only" width="720" alt="実際の実行例を左右に並べたもの。左はウェブ検索だけのエージェントで、ネット上のまとめの要旨と「最初の 1〜8 分ごろ」を返す。右は OmniSeek を使うエージェントで、87 分の動画をまるごと文字に起こし、李沐（Mu Li）の発言を 1:21:51 に見つけ、その秒から開くリンクを示す。">
+  </picture></a>
 </p>
 
 [3 つの質問の完全な比較（英語）](../compare.md)：出典、日付、短い動画つき。

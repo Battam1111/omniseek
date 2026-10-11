@@ -10,7 +10,8 @@ mechanically synced from the private upstream and keep its file style):
      comma, period, or parentheses instead.
   2. VERSIONED IMAGE URLS. A README or site page that loads a brand image (png / gif) from
      raw.githubusercontent.com must end the URL with ?v=YYYY-MM-DD, optionally followed by one
-     lowercase letter for a second re-render on the same day (?v=YYYY-MM-DDb). GitHub's image proxy
+     lowercase letter for a second re-render on the same day (?v=YYYY-MM-DDb), and then optionally by
+     GitHub's theme fragment (#gh-light-mode-only / #gh-dark-mode-only). GitHub's image proxy
      keeps serving the old picture under an unchanged URL for a while after the file changes, so a
      re-render goes with a new version in every URL that points at it (docs/BRAND.md, Rules).
   3. NO STUCK EMPHASIS in Markdown. CommonMark opens emphasis only on a left-flanking run of *
@@ -57,7 +58,7 @@ EM_DASH_NAMES = {"Dockerfile", "NOTICE"}
 
 # Rule 2 scope: the READMEs (GitHub and PyPI render them) and the site pages.
 RAW_IMAGE = re.compile(r"https://raw\.githubusercontent\.com/[^\s\"')]+?\.(?:png|gif)(\?[^\s\"')]*)?(?=[\s\"')])")
-VERSION_QUERY = re.compile(r"\?v=\d{4}-\d{2}-\d{2}[a-z]?$")
+VERSION_QUERY = re.compile(r"\?v=\d{4}-\d{2}-\d{2}[a-z]?(?:#gh-(?:light|dark)-mode-only)?$")
 
 
 INLINE_CODE = re.compile(r"`[^`]*`")
