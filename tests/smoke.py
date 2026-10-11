@@ -5370,12 +5370,17 @@ import time as _t
 from omniseek.core import _s2 as _S2
 from omniseek.core.sources.api import semantic_scholar_source as _SS
 
+try:  # `python tests/smoke.py` puts tests/ on sys.path; the fallback serves an import from the repo root
+    from _clock import at_least as _clock_at_least
+except ImportError:
+    from tests._clock import at_least as _clock_at_least
+
 check("s2 has _pace", hasattr(_S2, "_pace"))
 check("s2 _MIN_INTERVAL_S honors ~1 RPS", _S2._MIN_INTERVAL_S == 1.0)
 check("s2: holds a BackendGuard with its original constants (cap=4, break 5/120.0) + aliases wire to it",
       _guard_wired(_S2, "s2", 4))
 check("s2 _pace_state slot", isinstance(_S2._pace_state, dict) and "next_at" in _S2._pace_state)
-check("s2 _pace spaces request starts >= ~1s", (lambda t0: (_S2._pace(), _S2._pace(), _t.monotonic() - t0)[-1])(_t.monotonic()) >= 0.95)
+check("s2 _pace spaces request starts >= 1s (less two clock ticks, tests/_clock.py)", (lambda t0: (_S2._pace(), _S2._pace(), _t.monotonic() - t0)[-1])(_t.monotonic()) >= _clock_at_least(1.0))
 # Pace-gate cap: a pathological backlog (next_at far in the future, the 429-storm signature that
 # made a field_skeleton sit 886s on the gate) must FAIL FAST (raise S2Down) WITHOUT reserving a new
 # slot — not inherit the whole queue. Deterministic: push next_at out, assert raise + slot unchanged.
@@ -16214,17 +16219,46 @@ try:
     _s2w._enqueue(list(_s2_batch1))   # one full-doc batch
     _s2w._enqueue(list(_s2_batch2))   # a second, to prove the final drain sweeps the whole queue
     # WARM the embedder BEFORE the timed final-flush. A COLD qwen3-emb load (the first embed_passage
-    # inside _apply) can exceed the 5s join below, leaving a ZOMBIE writer thread that keeps draining the
+    # inside _apply) once exceeded the old 5s join, leaving a ZOMBIE writer thread that keeps draining the
     # SHARED global _queue and then steals docs from the NEXT test (F2), which enqueues to the same queue.
     # That is the sole root of the flaky S2.3+F2 pair (they failed / passed TOGETHER exactly as the
     # embedder flipped cold / warm). warm() blocks until loaded, so this assertion now measures the flush
     # LOGIC (its intent), never one-off model-load time, and the thread joins cleanly with no zombie.
     from omniseek.core.recall import embed as _s2embed
     _s2embed.warm()
+    # WAIT FOR COMPLETION, NOT FOR A CLOCK. The old join(timeout=5.0) raced the flush's own embed +
+    # write time, which scales with machine load: on the deploy host at load 5 to 7 (and reproducibly
+    # with 30 CPU burners) the join returned with the writer still alive and the check failed with
+    # nothing wrong in the flush; the still-running writer then kept draining the SHARED _queue and
+    # stole F2's docs, failing F2 as well. Now the thread signals an explicit event when _writer_loop
+    # RETURNS (the final flush is done or has given up), and the check waits for that signal. The
+    # ceiling below only turns a DEADLOCK into a failure instead of a hung smoke; it is not a speed
+    # budget.
+    # Ceiling 240 s (provisional). Derivation: flush_s measured on the deploy host (2026-10-11) was
+    # 4.0 to 7.5 s at load 7 to 15, 4.3 to 7.2 s with 30 CPU burners at load 29 to 41, 15.4 s at load
+    # 8.7 and 19.8 s at load 21 while other jobs shared the machine; the ceiling keeps at least 10x the
+    # largest reading (19.8 s -> 198 s), rounded up to 240 s, so only a hung writer reaches it. (It was
+    # 180 s until the 19.8 s reading crossed that ceiling's calibration line, 18 s.) Calibration: the
+    # info line below prints flush_s on every run; if any run prints more than 24 s (one tenth of the
+    # ceiling), raise the ceiling to 10x that reading.
+    # Strength is unchanged: a writer that returns WITHOUT flushing signals fast and fails on
+    # queue_empty / docs_present, and a writer that never returns fails on signalled=False.
+    _S2_FLUSH_DEADLOCK_CEIL_S = 240.0
+    _s2_flushed = _s2thr.Event()
+
+    def _s2_run_writer():
+        try:
+            _s2w._writer_loop()
+        finally:
+            _s2_flushed.set()
+
     _s2w._STOP.set()                  # stop BEFORE start -> loop body skipped -> pure FINAL FLUSH
-    _s2_tw = _s2thr.Thread(target=_s2w._writer_loop, name="s2-recall-writer", daemon=True)
+    _s2_tw = _s2thr.Thread(target=_s2_run_writer, name="s2-recall-writer", daemon=True)
+    _s2_tf0 = _s2time.monotonic()
     _s2_tw.start()
-    _s2_tw.join(timeout=5.0)
+    _s2_signalled = _s2_flushed.wait(timeout=_S2_FLUSH_DEADLOCK_CEIL_S)
+    _s2_flush_s = _s2time.monotonic() - _s2_tf0
+    _s2_tw.join(timeout=5.0)          # the target has already returned once signalled; this only reaps it
     _s2_qdrained = _s2w._queue.empty()
     _s2_con = _rstore.connect()
     _s2_present = _s2_con.execute(
@@ -16234,8 +16268,11 @@ try:
     except Exception:  # noqa: BLE001
         pass
     check("S2: recall writer FINAL-FLUSHES its queue on stop (no lost write; both batches persisted)",
-          (not _s2_tw.is_alive()) and _s2_qdrained and _s2_present == 6,
-          f"alive={_s2_tw.is_alive()} queue_empty={_s2_qdrained} docs_present={_s2_present}")
+          _s2_signalled and (not _s2_tw.is_alive()) and _s2_qdrained and _s2_present == 6,
+          f"signalled={_s2_signalled} alive={_s2_tw.is_alive()} queue_empty={_s2_qdrained} "
+          f"docs_present={_s2_present} flush_s={_s2_flush_s:.1f} ceiling_s={_S2_FLUSH_DEADLOCK_CEIL_S:.0f}")
+    print(f"  info S2.3 final flush took flush_s={_s2_flush_s:.1f} (deadlock ceiling "
+          f"{_S2_FLUSH_DEADLOCK_CEIL_S:.0f} s; raise it if this ever exceeds a tenth of it)")
 finally:
     while not _s2w._queue.empty():
         try:

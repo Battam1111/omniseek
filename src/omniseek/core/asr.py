@@ -860,6 +860,103 @@ def _remember_transcript(rec: dict) -> None:
         logger.debug("transcript memory ingest skipped: %s", exc)
 
 
+# ── single flight per cache key (incident 2026-10-11 14:44 to 15:02) ──────────────────────────
+# omniseek_gather returns "warming" after its wait window while the transcription keeps running in the
+# background; the caller re-issued the same 87-minute omniseek_transcribe three more times and each call
+# fetched the audio again and queued another full run on the model, until memguard restarted OmniSeek
+# with three transcriptions in flight and every result was lost. The cache only knows a key once a
+# run FINISHES, so a repeat inside the run window is a miss. _inflight closes that window: the first
+# caller for a key is the leader and runs it; every later caller for the same key, while it runs,
+# is a follower that waits on the leader's job and never starts a second run. So at any moment at most
+# ONE run exists per key; distinct keys still share the one-generate-at-a-time _lock above.
+#
+# Distinct keys: the number of concurrent generates the memguard ceiling allows is
+#   floor((HARD 6656 MB - idle eye after unload 3366 MB) / per-generate driver allocation 1940 MB) = 1
+# (HARD from memguard.py; 3366 MB is OmniSeek's footprint at 14:41:52 in the incident log, after the
+# idle unload; 1940 MB is the measured allocation per call above). _lock already enforces exactly
+# one, so no new cap is added for generates. The stages before the lock (download to a temp file,
+# ffmpeg decode to a wav on disk) hold disk and a parked thread, not process memory, so queued
+# distinct keys are left to queue rather than be refused (several chapter slices in one gather is the
+# documented pattern). A single generate on long audio can by itself pass HARD (the 87-minute run
+# reached 6666 MB at 14:46:53, restart at 14:47:54 with one transcription running); that bound is per
+# generate, not per concurrency, and is not fixed here.
+_inflight: dict = {}
+_inflight_lock = threading.Lock()
+_runs_started = 0   # real (uncached) runs started in this process; tests and health read it
+
+
+def _follow_wait_s() -> float:
+    """How long a follower waits on the running leader before returning the running receipt
+    (env OMNISEEK_ASR_FOLLOW_WAIT_S, default 30). Provisional: omniseek_gather's default wait_s is 60 s,
+    so a follower issued inside a default gather returns its own explicit receipt (already running,
+    no second run) before the gather window closes, instead of a generic warming. Calibrate from the
+    log: if most followers return the receipt within seconds of the leader finishing, raise it."""
+    try:
+        return max(0.0, float(os.environ.get("OMNISEEK_ASR_FOLLOW_WAIT_S", "30")))
+    except ValueError:
+        return 30.0
+
+
+class _Job:
+    __slots__ = ("started", "phase", "audio_seconds", "done", "result")
+
+    def __init__(self):
+        self.started = time.monotonic()
+        self.phase = "fetching_audio"
+        self.audio_seconds = None
+        self.done = threading.Event()
+        self.result = None
+
+
+def runs_started() -> int:
+    """Real (uncached) transcription runs this process has started."""
+    return _runs_started
+
+
+def _join_or_lead(ck):
+    """Elect under _inflight_lock: (job, True, None) for the leader, (job, False, None) for a follower,
+    (None, False, cached) when a run for ck finished after the caller's first cache read (the leader
+    writes the cache BEFORE it leaves _inflight, so re-reading under the lock closes that gap)."""
+    with _inflight_lock:
+        job = _inflight.get(ck)
+        if job is not None:
+            return job, False, None
+        cached = cache.get(ck)
+        if cached is not None:
+            return None, False, cached
+        job = _Job()
+        _inflight[ck] = job
+        return job, True, None
+
+
+def _finish(ck, job, rec, url) -> None:
+    """Leader exit: publish the result to followers and free the key (always, even on a crash)."""
+    with _inflight_lock:
+        job.result = rec if rec is not None else {
+            "url": url, "transcript": "", "error": "transcription crashed before returning a result"}
+        if _inflight.get(ck) is job:
+            del _inflight[ck]
+    job.done.set()
+
+
+def _follow(job, url) -> dict:
+    """A repeat call for a key that is already running: wait on that run, never start another."""
+    if job.done.wait(_follow_wait_s()):
+        return {**job.result, "joined": True}
+    running = round(time.monotonic() - job.started, 1)
+    with _inflight_lock:
+        n = len(_inflight)
+    rec = {"url": url, "transcript": "", "status": "running", "already_running": True,
+           "running_seconds": running, "phase": job.phase, "transcriptions_in_flight": n,
+           "note": (f"This transcription is already running (started {running:.0f} s ago). Calling "
+                    "again will NOT start a second run: a repeat call with the same arguments attaches "
+                    "to this one, and once it finishes returns the cached result instantly. One "
+                    "transcription runs on the model at a time; others queue behind it.")}
+    if job.audio_seconds is not None:
+        rec["audio_seconds"] = job.audio_seconds
+    return rec
+
+
 def transcribe_url(url: str, language: Optional[str] = None,
                    start=None, duration=None, segments: bool = False, diarize: bool = False,
                    speakers: Optional[int] = None) -> dict:
@@ -875,7 +972,11 @@ def transcribe_url(url: str, language: Optional[str] = None,
     SEPARATE ASR pass (Paraformer, not SenseVoice) so the flat ``transcript`` is the diarized text
     joined; use it for interviews / multi-host podcasts where speaker turns matter. Pass ``speakers=N``
     (the known head-count) to pin cam++'s cluster count; leaving it None auto-estimates (unstable on
-    short audio)."""
+    short audio).
+
+    Single flight: while a run for the same arguments is in progress, a repeat call never starts a
+    second one. It waits up to _follow_wait_s() for that run and returns its result (``joined``), or
+    returns a running receipt ({status: "running", already_running: True, note, ...}, transcript "")."""
     url = (url or "").strip()
     if not url:
         return {"url": url, "error": "empty url", "transcript": ""}
@@ -909,9 +1010,30 @@ def transcribe_url(url: str, language: Optional[str] = None,
         logger.warning("asr unavailable: %s", msg)
         return {"url": url, "error": msg, "transcript": ""}
 
+    job, leader, cached = _join_or_lead(ck)
+    if cached is not None:  # a run for this key finished between the first cache read and the election
+        return {**cached, "cached": True}
+    if not leader:
+        return _follow(job, url)
+    rec = None
+    try:
+        rec = _transcribe_uncached(url, language, start_s, dur_s, segments, diarize, speakers, ck,
+                                   host, job)
+        return rec
+    finally:
+        _finish(ck, job, rec, url)
+
+
+def _transcribe_uncached(url, language, start_s, dur_s, segments, diarize, speakers, ck, host,
+                         job) -> dict:
+    """The real run behind transcribe_url: fetch, decode, transcribe, cache. Only the single-flight
+    leader for ``ck`` calls this, so it runs at most once per key at any moment."""
     def _host_is(domain: str) -> bool:  # SUFFIX match, not substring: xiaoyuzhoufm.com.evil.net must NOT route
         return host == domain or host.endswith("." + domain)
 
+    global _runs_started
+    with _inflight_lock:
+        _runs_started += 1
     t0 = time.time()
     ytmp = wav = None
     try:
@@ -942,6 +1064,7 @@ def transcribe_url(url: str, language: Optional[str] = None,
                         else f"could not resolve audio for {host or url} (no audio stream found)"}
             wav = _decode_to_wav(ytmp, start_s, dur_s)
         audio_secs = round(os.path.getsize(wav) / (_SR * 2))  # 16-bit mono
+        job.audio_seconds, job.phase = audio_secs, "transcribing"
         diar_segs, n_spk, seg = [], 0, None
         if diarize:  # WHO-said-what: the Paraformer diarization model gives BOTH the flat text + speaker segments
             text, diar_segs, n_spk = _transcribe_diarized(wav, speakers)

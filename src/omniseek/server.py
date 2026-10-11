@@ -1329,6 +1329,12 @@ def omniseek_transcribe(url: str, language: str = "", start: str = "", duration:
     unstable on short / noisy slices and will over- or under-split, so pinning N is what makes the turns
     track reality. Leave it 0 (auto) only when the count is genuinely unknown. Ignored unless diarize=True.
 
+    ALREADY RUNNING: a long item can outlast one call window (omniseek_gather reports it as warming). A
+    repeat call with the same arguments NEVER starts a second run: it attaches to the one in
+    progress and returns its result when it finishes (``joined: true``), or a receipt
+    {status: "running", already_running: true, running_seconds, phase, note} with transcript "";
+    call again later with the same arguments and the finished result comes back from the cache.
+
     Returns: {url, transcript, chars, audio_seconds, asr_seconds, source, title, cached,
     start_seconds?, duration_seconds?, segments?, speakers?}, or {url, error, transcript:""} if no
     audio resolved.
@@ -2060,6 +2066,16 @@ def omniseek_curator_act(verb: str, candidate_id: str = "", name: str = "",
 # ---------------------------------------------------------------------------
 _GATHER_MAX = 10
 _GATHER_TIMEOUT = 120  # defensive ceiling on the wait_s budget (a hung batch can't stall the worker)
+# The warming hint names how to collect the still-running call. staleness="cache_only" is an
+# omniseek_search parameter; omniseek_transcribe has none, and on 2026-10-11 a caller re-issued the same long
+# transcription after each warming, so its hint says what a repeat call actually does now.
+_GATHER_WARMING_HINT_DEFAULT = "still running in background; pick up later with staleness=\"cache_only\""
+_GATHER_WARMING_HINTS = {
+    "omniseek_transcribe": ("transcription already running in background (it continues after this gather "
+                       "returns). Calling omniseek_transcribe again with the same arguments will NOT start a "
+                       "second run: it attaches to this one, and once it finishes returns the cached "
+                       "result instantly."),
+}
 
 # _GATHER_TOOLS (the read-only whitelist) is an explicit data mapping defined AFTER the tool defs
 # below — mechanism demoted to data; sensor/curator/gather stay excluded BY OMISSION.
@@ -2160,7 +2176,8 @@ def omniseek_gather(calls: list[dict], wait_s: LenientInt = 60) -> dict:
     ``wait_s``: the patience budget. gather returns when all calls finish OR wait_s elapses,
     whichever comes first; calls still running are reported with status ``"warming"`` (their
     background threads keep going and warm the cache; pick them up later with
-    staleness="cache_only" or a second gather).
+    staleness="cache_only" or a second gather; for omniseek_transcribe repeat the same call, which
+    attaches to the running transcription and never starts a second one).
 
     Returns: {results: [{index, tool, status, result|error|hint}, ...],
               elapsed_s, completed, warming, failed, total}
@@ -2223,9 +2240,10 @@ def omniseek_gather(calls: list[dict], wait_s: LenientInt = 60) -> dict:
                             "status": "errored", "error": "crashed during the wait_s window"}
     for fut in not_done:
         idx = futs[fut]
-        results[idx] = {"index": idx, "tool": calls[idx].get("tool", "?"),
+        _tool = calls[idx].get("tool", "?")
+        results[idx] = {"index": idx, "tool": _tool,
                         "status": "warming",
-                        "hint": "still running in background; pick up later with staleness=\"cache_only\""}
+                        "hint": _GATHER_WARMING_HINTS.get(_tool, _GATHER_WARMING_HINT_DEFAULT)}
     # Let background threads continue (they self-warm the cache), then release without joining.
     pool.shutdown(wait=False)
 

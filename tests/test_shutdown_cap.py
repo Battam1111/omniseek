@@ -30,6 +30,11 @@ import unittest
 
 from omniseek.core import lifecycle
 
+try:  # `discover -s tests` puts tests/ on sys.path; `-m unittest tests.x` puts the repo root there
+    from _clock import at_least
+except ImportError:
+    from tests._clock import at_least
+
 _SRC = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src")
 
 
@@ -186,7 +191,7 @@ class InProcessDrainCapTests(unittest.TestCase):
             elapsed = time.monotonic() - t0
         self.assertTrue(fired, cm.output)
         self.assertEqual(rec.codes, [1])
-        self.assertGreaterEqual(elapsed, 0.5)
+        self.assertGreaterEqual(elapsed, at_least(0.5))
         self.assertLess(elapsed, 0.5 + 1.0)
         self.assertTrue(any("drain cap armed" in r for r in cm.output), cm.output)
         warn = [r for r in cm.output if "shutdown cap hit" in r]
@@ -208,7 +213,7 @@ class InProcessDrainCapTests(unittest.TestCase):
             elapsed = time.monotonic() - t0
         self.assertTrue(fired, cm.output)
         self.assertEqual(rec.codes, [1])
-        self.assertGreaterEqual(elapsed, 1.1)        # 0.1 + the 1.0 lifespan cap
+        self.assertGreaterEqual(elapsed, at_least(1.1))   # 0.1 + the 1.0 lifespan cap
         self.assertLess(elapsed, 1.1 + 1.0)
         self.assertTrue(any("SIGTERM to lifespan shutdown" in r for r in cm.output), cm.output)
         warn = [r for r in cm.output if "shutdown cap hit" in r]
@@ -228,7 +233,7 @@ class InProcessDrainCapTests(unittest.TestCase):
         fired = rec.called.wait(5.0)
         elapsed = time.monotonic() - t0
         self.assertTrue(fired)
-        self.assertGreaterEqual(elapsed, 2.2 - 0.05)   # 0.2 + 2.0 from the SIGTERM
+        self.assertGreaterEqual(elapsed, at_least(2.2))   # 0.2 + 2.0 from the SIGTERM
         self.assertLess(elapsed, 2.7)                # not 1.0 + 2.0 = 3.0
 
     def test_shutdown_cap_off_drops_the_drain_deadline(self):
@@ -511,7 +516,7 @@ class SubprocessCapTests(unittest.TestCase):
         rc, elapsed, out = self._run("hang_requests", self.DRAIN + self.CAP + 10,
                                      requests=("/hang", "/stream"))
         self.assertIn(rc, _CLEAN_EXIT_CODES, out)
-        self.assertGreaterEqual(elapsed, self.DRAIN)
+        self.assertGreaterEqual(elapsed, at_least(self.DRAIN))
         self.assertLess(elapsed, self.DRAIN + 1.5)
         self.assertIn("Waiting for connections to close", out)
         n = _requests_cancelled_at_drain_cap(n_requests=1, n_streams=1)
@@ -531,7 +536,7 @@ class SubprocessCapTests(unittest.TestCase):
         rc, elapsed, out = self._run("drain_loop_blocked",
                                      self.DRAIN + lifecycle.DRAIN_GRACE_S + 10, requests=("/block",))
         self.assertEqual(rc, 1, out)
-        self.assertGreaterEqual(elapsed, self.DRAIN + lifecycle.DRAIN_GRACE_S - 0.1)
+        self.assertGreaterEqual(elapsed, at_least(self.DRAIN + lifecycle.DRAIN_GRACE_S))
         self.assertLess(elapsed, self.DRAIN + lifecycle.DRAIN_GRACE_S + 2)
         self.assertIn("shutdown cap hit", out)
         self.assertIn(f"after {_STOP_NAME}", out)
@@ -545,7 +550,7 @@ class SubprocessCapTests(unittest.TestCase):
                                      self.DRAIN + lifecycle.DRAIN_GRACE_S + 10,
                                      requests=("/block_late",))
         self.assertEqual(rc, 1, out)
-        self.assertGreaterEqual(elapsed, self.DRAIN + lifecycle.DRAIN_GRACE_S - 0.1)
+        self.assertGreaterEqual(elapsed, at_least(self.DRAIN + lifecycle.DRAIN_GRACE_S))
         self.assertLess(elapsed, self.DRAIN + lifecycle.DRAIN_GRACE_S + 2)
         self.assertIn("Waiting for connections to close", out)
         self.assertIn("shutdown cap hit", out)
