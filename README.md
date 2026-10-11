@@ -30,6 +30,8 @@ We asked two agents for Mu Li's exact words on the Transformer paper's writing, 
 
 <p align="center">
   <picture>
+    <source media="(prefers-color-scheme: dark) and (max-width: 480px)" srcset="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/compare-en-dark-narrow.gif?v=2026-10-11b">
+    <source media="(max-width: 480px)" srcset="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/compare-en-light-narrow.gif?v=2026-10-11b">
     <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/compare-en-dark.gif?v=2026-10-11b">
     <img src="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/compare-en-light.gif?v=2026-10-11b" width="720" alt="A real run, side by side. Left, an agent with web search only answers with a paraphrase and says around minutes 1 to 8. Right, an agent with OmniSeek transcribes the 87-minute video and quotes Mu Li at 1:21:51, with a link that opens there.">
   </picture>

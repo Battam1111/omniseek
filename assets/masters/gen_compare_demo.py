@@ -1,10 +1,15 @@
 """Side-by-side demo: the same question to an agent with web search only (left) and an agent with
 OmniSeek (right). Rendered from one recorded run to GIFs (README, site) and MP4s (X, Bilibili).
 
-    python assets/masters/gen_compare_demo.py gif      # assets/demo/compare-{en,zh}-{light,dark}.gif
+    python assets/masters/gen_compare_demo.py gif      # assets/demo/compare-{en,zh}-{light,dark}{,-narrow}.gif
     python assets/masters/gen_compare_demo.py mp4      # assets/demo/compare-{en,zh}-dark.mp4 (+ posters)
     python assets/masters/gen_compare_demo.py poster   # assets/demo/compare-{en,zh}-dark-poster.png only
     python assets/masters/gen_compare_demo.py all
+
+The -narrow GIFs stack the two agents (web search on top) for phones: the README picks them with
+a (max-width: 600px) source, where the side-by-side GIF would shrink below half size. Each column
+is as wide as in the side-by-side GIF, so the lines wrap the same; the columns are shorter, so the
+oldest steps scroll off the top sooner.
 
 The poster is the MP4's last frame before the end card (the finished comparison), for the site's
 <video poster=...>; it needs no ffmpeg.
@@ -44,6 +49,8 @@ FRAME = Path(os.environ.get("OMNISEEK_PLAYER_FRAME", "/nonexistent"))
 W = 720            # CSS px; the README shows GIFs at width 720
 GIF_H = 810
 GIF_SCALE = 2
+NARROW_W, NARROW_H = 360, 1080   # stacked layout for phones (README shows it at width 360)
+NARROW_LEFT = 300                # CSS px of the web-search column (header included is extra)
 MP4_W, MP4_H = 1280, 720
 MP4_FPS = 30
 
@@ -288,7 +295,7 @@ html, body {{ background:transparent; }}
 .frame {{ margin-top:6px; border-radius:8px; overflow:hidden; border:1px solid var(--line); }}
 .frame img {{ display:block; width:100%; }}
 .h {{ display:none; }}
-</style></head><body>
+{narrow}</style></head><body>
 <div id="stage">
   <div class="q"><div class="ask">{ask}</div><div class="text">{question}</div></div>
   <div class="cols">
@@ -392,8 +399,18 @@ def build_steps(lang: str, mp4: bool):
 
 
 
-def page_html(lang: str, theme: str, w: int, h: int, mp4: bool) -> str:
+NARROW_CSS = """.cols {{ flex-direction:column; }}
+.col {{ min-height:0; }}
+.col:first-child {{ flex:0 0 {left}px; }}
+.col:last-child {{ flex:1 1 0; }}
+.col + .col {{ border-left:none; border-top:1px solid var(--line); }}
+.cap {{ min-height:{caph}px; }}
+"""
+
+
+def page_html(lang: str, theme: str, w: int, h: int, mp4: bool, narrow: bool = False) -> str:
     t = T[lang]
+    extra_css = NARROW_CSS.format(left=NARROW_LEFT + 43, caph=72) if narrow else ""
     left, right = build_steps(lang, mp4)
     st = lambda d: "".join(f'<div class="step h" id="{k}">{v}</div>' for k, v in d.items())
     return PAGE.format(css=THEMES[theme]["css"], w=w, h=h, lang=lang, ask=html.escape(t["ask"]),
@@ -401,7 +418,8 @@ def page_html(lang: str, theme: str, w: int, h: int, mp4: bool) -> str:
                        right=html.escape(t["right"]), glass=GLASS, mark=MARK, lsteps=st(left), rsteps=st(right),
                        extra=html.escape(t["extra"]), install=html.escape(INSTALL),
                        end1=html.escape(t["end1"]), end2=html.escape(t["end2"]), run=html.escape(t["run"]),
-                       qsize=19 if lang == "en" else 20, capsize=19, caph=30, esize=24, esize2=29)
+                       qsize=19 if lang == "en" else 20, capsize=19, caph=30, esize=24, esize2=29,
+                       narrow=extra_css)
 
 
 def plan(mp4: bool):
@@ -461,7 +479,7 @@ def browser(p):
     return p.chromium.launch(executable_path=exe) if exe else p.chromium.launch()
 
 
-def shoot(lang, theme, w, h, scale, mp4):
+def shoot(lang, theme, w, h, scale, mp4, narrow=False):
     from playwright.sync_api import sync_playwright
     shots = []
     with tempfile.TemporaryDirectory() as td, sync_playwright() as p:
@@ -469,7 +487,7 @@ def shoot(lang, theme, w, h, scale, mp4):
         ctx = b.new_context(viewport={"width": w + 20, "height": h + 20}, device_scale_factor=scale)
         page = ctx.new_page()
         f = Path(td) / "page.html"
-        f.write_text(page_html(lang, theme, w, h, mp4), encoding="utf-8")
+        f.write_text(page_html(lang, theme, w, h, mp4, narrow), encoding="utf-8")
         page.goto(f.as_uri())
         page.wait_for_timeout(400)
         for st, ms in plan(mp4):
@@ -541,11 +559,12 @@ def main():
     for lang in ("en", "zh"):
         if what in ("gif", "all"):
             for theme in ("light", "dark"):
-                shots = shoot(lang, theme, W, GIF_H, GIF_SCALE, False)
-                out = OUT / f"compare-{lang}-{theme}.gif"
-                to_gif(shots, THEMES[theme]["page"], out)
-                print(f"wrote {out.name}: {len(shots)} frames, {sum(m for _, m in shots) / 1000:.1f}s, "
-                      f"{out.stat().st_size / 1e6:.2f} MB")
+                for narrow, (w, h), tail in ((False, (W, GIF_H), ""), (True, (NARROW_W, NARROW_H), "-narrow")):
+                    shots = shoot(lang, theme, w, h, GIF_SCALE, False, narrow)
+                    out = OUT / f"compare-{lang}-{theme}{tail}.gif"
+                    to_gif(shots, THEMES[theme]["page"], out)
+                    print(f"wrote {out.name}: {len(shots)} frames, {sum(m for _, m in shots) / 1000:.1f}s, "
+                          f"{out.stat().st_size / 1e6:.2f} MB")
         if what in ("mp4", "poster", "all"):
             # 1024 x 576 CSS rendered at 1.25 = 1280 x 720 px.
             shots = shoot(lang, "dark", 1024, 576, MP4_W / 1024, True)

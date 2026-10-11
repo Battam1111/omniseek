@@ -4,6 +4,8 @@ On 2026-10-11 we asked two agents the same three questions: one with only its bu
 
 <p align="center">
   <picture>
+    <source media="(prefers-color-scheme: dark) and (max-width: 600px)" srcset="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/compare-table-en-dark-narrow.png?v=2026-10-11b">
+    <source media="(max-width: 600px)" srcset="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/compare-table-en-light-narrow.png?v=2026-10-11b">
     <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/compare-table-en-dark.png?v=2026-10-11b">
     <img src="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/compare-table-en-light.png?v=2026-10-11b" width="1200" alt="Three questions, two agents. One: Mu Li's exact words on the Transformer paper's writing, and the minute. Web search gives a paraphrase and around minutes 1 to 8; OmniSeek quotes him at 1:21:51 with a link that opens there. Two: the top Bilibili comments under that video. Web search sorts them into types with no comment text; OmniSeek returns the comments with their like counts, 1,954 and 1,271. Three: papers that cite both Leviathan 2022 and Chen 2023 on speculative decoding. Web search could not confirm one; OmniSeek's citation graph has 29.">
   </picture>
