@@ -1,12 +1,9 @@
-<div align="center">
-
-<img src="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/logo-icon.png" width="88" alt="OmniSeek">
-
-<h1>OmniSeek</h1>
-
-<b>ウェブ検索が届かないインターネットを、あなたの AI エージェントに。</b>
-
-</div>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/hero-ja-dark.png">
+    <img src="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/hero-ja-light.png" width="670" alt="OmniSeek:ウェブ検索が届かないインターネットを、あなたの AI エージェントに。">
+  </picture>
+</p>
 
 インストール(Python 3.11 以上):
 

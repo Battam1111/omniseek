@@ -1,12 +1,11 @@
 <!-- mcp-name: io.github.Battam1111/omniseek -->
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/logo-icon.png" width="88" alt="OmniSeek logo">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/hero-en-dark.png">
+    <img src="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/hero-en-light.png" width="720" alt="OmniSeek: give your AI agent the parts of the internet web search doesn't reach.">
+  </picture>
 </p>
-
-# OmniSeek
-
-**Give your AI agent the parts of the internet web search doesn't reach.**
 
 OmniSeek is a self-hosted MCP server. Through one connection, your agent can search what people said in podcasts and videos, Chinese communities such as Bilibili and V2EX, and paper citation graphs. If you turn it on, it can also read sites behind your own login (off by default). It covers 200+ sources and works with Claude Code, Cursor, and other MCP clients.
 

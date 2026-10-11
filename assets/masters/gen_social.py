@@ -18,7 +18,7 @@ HTML = """<!doctype html><html><head><meta charset="utf-8"><style>
   .field { position:absolute; inset:0; }
   .text { position:absolute; left:560px; top:50%; transform:translateY(-50%); }
   .name { font-size:98px; font-weight:750; letter-spacing:-.025em; color:#F1F5F9; line-height:1; }
-  .tag { font-size:31px; font-weight:500; color:#94A3B8; margin-top:18px; letter-spacing:-.005em; }
+  .tag { font-size:31px; font-weight:500; color:#94A3B8; margin-top:18px; letter-spacing:-.005em; line-height:1.3; }
   .tag .dot { color:#F59E0B; font-weight:800; }
   .sub { font-size:22px; font-weight:500; color:#64748B; margin-top:14px; }
 </style></head><body>
@@ -45,8 +45,8 @@ HTML = """<!doctype html><html><head><meta charset="utf-8"><style>
   </svg>
   <div class="text">
     <div class="name">OmniSeek</div>
-    <div class="tag">Your agent seeks what search can&rsquo;t find<span class="dot">.</span></div>
-    <div class="sub">Self-hosted perception MCP server for AI agents</div>
+    <div class="tag">Give your AI agent the parts of the internet<br>web search doesn&rsquo;t reach<span class="dot">.</span></div>
+    <div class="sub">Self-hosted MCP server for AI agents</div>
   </div>
 </div>
 </body></html>"""

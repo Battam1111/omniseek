@@ -30,6 +30,9 @@ connection with two commands, and every place that explains installing should sa
 - **Site:** new tagline and quick start, install commands no longer cut off on phones, and five
   pages by capability (cross-lingual search, podcast transcription, Zhihu, research monitoring,
   citation graph), each with an example that was actually run.
+- **Hero images and social card re-rendered with the new tagline** (English, Chinese, Japanese;
+  light and dark). The READMEs open with the hero again, and the site's link-share image is the
+  social card again.
 
 ### Added
 

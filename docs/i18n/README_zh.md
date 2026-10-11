@@ -1,10 +1,9 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/logo-icon.png" width="88" alt="OmniSeek 标志">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/hero-zh-dark.png">
+    <img src="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/hero-zh-light.png" width="560" alt="OmniSeek：给你的 AI Agent 接上网页搜索够不到的那部分互联网。">
+  </picture>
 </p>
-
-# OmniSeek
-
-**给你的 AI Agent 接上网页搜索够不到的那部分互联网。**
 
 OmniSeek 是一个自己部署的 MCP 服务。接上一次，你的 Agent 就能搜播客和视频里说的话、B 站和 V2EX 这类中文社区、论文引用图。你打开后，它还能用你自己的登录态读要登录才能看的网站（默认关）。覆盖 200 多个源，Claude Code、Cursor 等支持 MCP 的客户端都能用。
 
