@@ -5,11 +5,11 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "omniseek"
 version = "0.2.1"
-description = "MCP server that lets AI agents search podcasts and videos, Chinese communities, citation graphs, and sites behind your own login (off by default)."
+description = "Give your AI agent the parts of the internet web search doesn't reach: podcasts and videos, Chinese communities, and research papers. An MCP server for Claude Code, Cursor, and Codex."
 requires-python = ">=3.11"
 readme = "README.md"
 license = "Apache-2.0"
-keywords = ["mcp", "deep-retrieval", "ai-agent", "llm", "rag", "citation-graph", "transcription", "web-scraping", "self-hosted"]
+keywords = ["mcp", "ai-agent", "claude-code", "cursor", "llm", "rag", "citation-graph", "transcription", "podcast-transcription", "bilibili", "zhihu", "self-hosted"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",

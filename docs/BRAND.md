@@ -14,7 +14,7 @@ The single canonical reference for OmniSeek's visual identity. Keep it locked so
 
 Chinese: `给你的 AI Agent 接上网页搜索够不到的那部分互联网。` Japanese (working rendering, pending native review): `ウェブ検索が届かないインターネットを、あなたの AI エージェントに。`
 
-Use it as written on the README first screen, the site, and the localized READMEs. The PyPI summary is a separate one-liner kept in `pyproject.toml` (`description`); `server.json` carries the same sentence.
+Use it as written on the README first screen, the site, and the localized READMEs. The PyPI summary is a separate one-liner kept in `pyproject.toml` (`description`); `server.json` carries a shortened form of it, because the MCP Registry caps that description at 100 characters.
 
 ### Retired taglines
 

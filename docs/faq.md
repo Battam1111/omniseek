@@ -3,8 +3,8 @@
 <sub>[OmniSeek](../README.md)&nbsp;·&nbsp;[Configuration](configuration.md)&nbsp;·&nbsp;[Tools](tools.md)&nbsp;·&nbsp;[Patterns](patterns.md)&nbsp;·&nbsp;[Case study](case-study.md)</sub>
 
 Short answers to the questions people ask first. The one-line version of what OmniSeek is:
-**self-hosted reach and memory for your AI agent. It reaches what plain search cannot,
-remembers what it reached, and never thinks for you.**
+**an add-on that lets your AI agent search where web search stops, keeps what it finds on your
+own computer, and never thinks for you.**
 
 ---
 
@@ -27,21 +27,13 @@ memory is a file on your disk that appreciates the more you use it.
 
 ## How is it different from Perplexity, or Exa / Tavily?
 
-Two axes: who owns the index, and who does the thinking.
+Exa and Tavily search the web's index, and do it well. OmniSeek goes where that index stops:
+what was said in podcasts and videos, Chinese communities, papers and how they cite each other,
+and sites you log in to. It runs on your computer and returns sources, not a finished answer, so
+your own agent does the reasoning. Many people use both.
 
-- **Perplexity** rents you answers: its index, its model, its editorial. You get a written
-  conclusion.
-- **Exa / Tavily** rent you reach: their index, your model. You get results to reason over,
-  from an index they own and you cannot see.
-- **OmniSeek** is the missing corner: your index, your judgments, your model's thinking. It
-  returns evidence with provenance, never an answer; the index is yours (a self-hosted file);
-  and it remembers across sessions, which a stateless search API cannot.
-
-OmniSeek does not compete with an open-web search API on breadth: those index billions of
-pages, while OmniSeek curates a catalog where every source earned its seat by beating plain
-search via a mode (structure, reading behind a login, transcription, longitudinal recall, monitoring). It
-competes on depth, memory, and ownership. Use both if you like: reach the open web with a
-search API, and send OmniSeek where search can't follow.
+Perplexity is different again: it gives you a written answer from its own index and its own
+model. OmniSeek never writes the answer; your agent does, from the sources OmniSeek brings back.
 
 ## How is it different from GraphRAG?
 
@@ -64,9 +56,12 @@ of you, the other is the agent's memory of what it has seen out there.
 
 ## Does it phone home? What about my data?
 
-Never. OmniSeek binds to loopback, requires a bearer token on every request, and makes no
-outbound call except to the sources you enable. It is self-hosted: your logins, your API
-quotas, your memory file. There is no server for us to see, and no telemetry.
+Never. OmniSeek runs on your computer and makes no outbound call except to the sources you
+enable: your logins, your API quotas, your files. There is no server for us to see, and no
+telemetry. With the usual two-command setup your AI app starts OmniSeek itself and talks to it
+directly, so there is no port open at all. If you run it as an HTTP service instead (see
+[Install](install.md#advanced-http-service)), it listens only on your own machine (loopback) by
+default and requires a bearer token on every request.
 
 ## Is it legal to reach sites behind a login?
 
@@ -86,9 +81,10 @@ can hallucinate, OmniSeek is the one layer that structurally cannot, because it 
 
 ## What does it cost / how do I run it?
 
-Free and open source (Apache-2.0). One `docker compose up`, or a non-Docker bootstrap. It runs
-on your machine; the only costs are API keys for any sources you choose to add (most keys are free) and
-your own compute. See the [README](../README.md) quick start.
+Free and open source (Apache-2.0). Two commands install it: `uv tool install omniseek`, then
+`claude mcp add omniseek -- omniseek` (Cursor, Codex, Docker, and the HTTP service are in
+[Install](install.md)). It runs on your machine; the only costs are API keys for any sources you
+choose to add (most keys are free) and your own compute.
 
 ## Who is it for?
 
