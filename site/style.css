@@ -59,7 +59,7 @@ p { margin-top: 12px; }
 .btn.ghost { border: 1px solid var(--ghost-line); color: var(--text); }
 .btn:hover { filter: brightness(1.12); }
 .install { margin: 40px auto 0; max-width: 640px; background: var(--surface-2); border: 1px solid var(--line-strong); border-radius: 12px; padding: 18px 22px; text-align: left; }
-.page .install { margin-left: 0; margin-right: 0; max-width: none; }
+.page .install { margin: 14px 0 0; max-width: none; }
 .install .lbl { font-size: 12px; color: var(--label); font-weight: 650; letter-spacing: 0.04em; }
 .install .note { color: var(--muted); font-size: 13px; margin-top: 10px; }
 /* Long commands wrap instead of being cut off on phone screens. */
@@ -85,7 +85,7 @@ ul.plain li { margin-top: 6px; }
 .card .t { font-weight: 650; color: var(--link); font-size: 14.5px; }
 .card .d { font-size: 13px; color: var(--muted); margin-top: 5px; }
 .foot { margin-top: 52px; text-align: center; font-size: 13px; color: var(--faint); border-top: 1px solid var(--line); padding-top: 22px; }
-.foot a { color: var(--muted); text-decoration: none; }
+.foot a { color: var(--muted); text-decoration: none; white-space: nowrap; }
 .foot a:hover { color: var(--ink); }
 /* Home page: brand line, headline, proof slot, gains, client tabs, data lines. */
 .brand { display: inline-flex; align-items: center; gap: 10px; }
@@ -100,7 +100,7 @@ h1.headline { font-size: 40px; line-height: 1.2; max-width: 820px; margin: 22px 
 .gains li:first-child { border-top: none; }
 .gains .w { color: var(--muted); }
 .gains-note { max-width: 760px; margin: 4px auto 0; font-size: 13px; color: var(--faint); }
-.works { max-width: 760px; margin: 28px auto 0; font-size: 15px; color: var(--text-2); }
+.works { max-width: 760px; margin: 28px auto 0; font-size: 15px; color: var(--text-2); text-wrap: pretty; }
 h2.lbl-h { font-size: 18px; margin-top: 0; }
 .clients { margin-top: 14px; }
 .clients details { border-top: 1px solid var(--line); padding: 8px 0; }
