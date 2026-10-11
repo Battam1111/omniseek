@@ -1,0 +1,59 @@
+{
+ "_provenance": "GET https://api.github.com/users/Battam1111/starred?per_page=3&sort=created&direction=desc&page=1 with Accept application/vnd.github.star+json, unauthenticated, recorded 2026-10-10T07:25:17Z (the one real request made while writing the adapter); repo objects trimmed to the fields the adapter reads",
+ "page": [
+  {
+   "starred_at": "2026-10-08T03:20:12Z",
+   "repo": {
+    "id": 1139787647,
+    "full_name": "verl-project/uni-agent",
+    "html_url": "https://github.com/verl-project/uni-agent",
+    "description": "Uni-Agent is a framework for training long-horizon agents.",
+    "language": "Python",
+    "topics": [],
+    "stargazers_count": 654,
+    "forks_count": 129,
+    "pushed_at": "2026-10-09T09:46:29Z",
+    "created_at": "2026-01-22T12:18:16Z",
+    "owner": {
+     "login": "verl-project"
+    }
+   }
+  },
+  {
+   "starred_at": "2026-10-07T09:20:27Z",
+   "repo": {
+    "id": 1204415882,
+    "full_name": "microsoft/CUAWright",
+    "html_url": "https://github.com/microsoft/CUAWright",
+    "description": "A simple SWE style browser+desktop agent framework that achieves SOTA results on long horizon web tasks. ",
+    "language": "Python",
+    "topics": [],
+    "stargazers_count": 6045,
+    "forks_count": 386,
+    "pushed_at": "2026-10-06T07:30:35Z",
+    "created_at": "2026-04-08T01:48:09Z",
+    "owner": {
+     "login": "microsoft"
+    }
+   }
+  },
+  {
+   "starred_at": "2026-10-07T05:41:27Z",
+   "repo": {
+    "id": 1407950271,
+    "full_name": "openai/math",
+    "html_url": "https://github.com/openai/math",
+    "description": null,
+    "language": "Lean",
+    "topics": [],
+    "stargazers_count": 13311,
+    "forks_count": 1455,
+    "pushed_at": "2026-10-08T05:20:00Z",
+    "created_at": "2026-10-06T21:47:02Z",
+    "owner": {
+     "login": "openai"
+    }
+   }
+  }
+ ]
+}

@@ -105,7 +105,7 @@ try:
     )
     _BROWSER_OK = True
 except Exception as _bexc:  # noqa: BLE001 — an import issue must NOT dark this adapter (signed-API stays)
-    logger.warning("xhs_cn: browser path deps unavailable (%s) — signed-API fallback only", _bexc)
+    logger.debug("xhs_cn: browser path deps unavailable (%s); signed-API fallback only", _bexc)
     _BROWSER_OK = False
 
 # Strict single-flight + human min-interval for the 9224 browser (== the rednote 小号's "9223 pool=1"
@@ -181,7 +181,7 @@ try:
     _signer = Xhshow()
     _DEPS_OK = True
 except Exception as exc:  # noqa: BLE001 — missing deps must not break server import
-    logger.warning("xiaohongshu_cn: xhshow/curl_cffi unavailable (%s) — adapter inert", exc)
+    logger.debug("xiaohongshu_cn: xhshow/curl_cffi unavailable (%s); adapter inert", exc)
     _DEPS_OK = False
 
 

@@ -736,9 +736,11 @@ def register_shipped_jobs() -> None:
     from omniseek.core import sensor
     from omniseek.core import infra_jobs
 
-    # Row #1: the P6 sensor scheduler tick, now a job row (semantics unchanged).
+    # Row #1: the sensor tick. With a resident-task table (sensor.sensor_table_path) it decides which
+    # sensors run and when, read on every tick; without one each sensor keeps its own schedule. This
+    # row only sets how often that is checked.
     register_job("sensors", "every:900s", sensor.scheduler_tick_for_sensors,
-                 description="标准查询 + novelty 监控(当前 0 个 sensor)")
+                 description="标准查询 + novelty 监控(配置了常驻任务表 SERVICES.tsv 时按表跑，否则按各 sensor 自己的 schedule)")
 
     # Transplanted infra rows (see infra_jobs.py for each core's transplanted rationale + state).
     register_job("source-health", "daily@05:00", infra_jobs.run_source_health, budget_s=900,

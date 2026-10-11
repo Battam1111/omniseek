@@ -266,8 +266,8 @@ class MemGuard:
         self.last_mb = mb
         if mb is None:
             return None
-        if self.checks % LOG_EVERY == 1:
-            log.info("memguard: footprint %.0f MB (soft %d, hard %d, in-flight %d)",
+        if self.checks % LOG_EVERY == 1:  # the boot-time first sample stays out of the one INFO boot line
+            (log.debug if self.checks == 1 else log.info)("memguard: footprint %.0f MB (soft %d, hard %d, in-flight %d)",
                      mb, self.soft_mb, self.hard_mb, self._busy())
         self.hard_hits = self.hard_hits + 1 if self.hard_mb and mb >= self.hard_mb else 0
         self.soft_hits = self.soft_hits + 1 if self.soft_mb and mb >= self.soft_mb else 0
@@ -327,7 +327,7 @@ def start() -> Optional[threading.Thread]:
         log.info("memguard: disabled (both thresholds 0)")
         return None
     if footprint_mb() is None:
-        log.info("memguard: disabled (no phys_footprint reading on this platform)")
+        log.debug("memguard: disabled (no phys_footprint reading on this platform)")
         return None
     guard = MemGuard(soft, hard)
     t = threading.Thread(target=guard.run, args=(_STOP,), name="memguard", daemon=True)
@@ -337,5 +337,5 @@ def start() -> Optional[threading.Thread]:
         lifecycle.register_loop("memguard", _STOP, t)
     except Exception:  # noqa: BLE001
         pass
-    log.info("memguard: started (soft %d MB, hard %d MB, every %.0fs)", soft, hard, CHECK_INTERVAL_S)
+    log.debug("memguard: started (soft %d MB, hard %d MB, every %.0fs)", soft, hard, CHECK_INTERVAL_S)
     return t

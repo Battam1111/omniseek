@@ -21,6 +21,43 @@ logger = logging.getLogger(__name__)
 _MAX_CHARS = 250_000  # extracted-text cap for a pathologically long PDF — keep the payload sane
 
 
+def extract_text(content: bytes, *, label: str = "") -> Optional[tuple[str, int, str, bool]]:
+    """PDF bytes -> ``(text, pages, metadata title, truncated)`` with PyMuPDF, capped at
+    ``_MAX_CHARS``. None when PyMuPDF is missing, the bytes do not open as a PDF, or there is no text
+    layer (a scanned / image-only PDF). Shared by this adapter and any adapter that downloads a PDF
+    through its own authenticated route (openreview), so every PDF OmniSeek reads is extracted alike."""
+    try:
+        import fitz  # PyMuPDF; lazy so a missing dep can never break server import
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("pdf adapter: PyMuPDF unavailable: %s", exc)
+        return None
+    try:
+        doc = fitz.open(stream=content, filetype="pdf")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("pdf adapter: open failed (%s): %s", label, exc)
+        return None
+    try:
+        parts: list[str] = []
+        total = 0
+        for page in doc:
+            t = page.get_text() or ""
+            parts.append(t)
+            total += len(t)
+            if total > _MAX_CHARS:
+                break
+        n_pages = doc.page_count
+        meta_title = (doc.metadata or {}).get("title") or ""
+    finally:
+        doc.close()
+
+    text = "\n\n".join(parts).strip()
+    truncated = len(text) > _MAX_CHARS
+    text = text[:_MAX_CHARS]
+    if not text:
+        return None
+    return text, n_pages, meta_title, truncated
+
+
 class PdfAdapter:
     name = "pdf"
     needs_credentials = False
@@ -46,7 +83,7 @@ class PdfAdapter:
         if not (path.endswith(".pdf") or "/pdf/" in path):
             return None
         try:
-            import fitz  # PyMuPDF; lazy so a missing dep can never break server import
+            import fitz  # noqa: F401  PyMuPDF; lazy so a missing dep can never break server import
         except Exception as exc:  # noqa: BLE001
             logger.warning("pdf adapter: PyMuPDF unavailable: %s", exc)
             return None
@@ -61,30 +98,10 @@ class PdfAdapter:
         resp = http.get(url)  # shared UA + redirects + 30MB cap; None on failure
         if resp is None:
             return None
-        try:
-            doc = fitz.open(stream=resp.content, filetype="pdf")
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("pdf adapter: open failed (%s): %s", url, exc)
+        got = extract_text(resp.content, label=url)
+        if got is None:
             return None
-        try:
-            parts: list[str] = []
-            total = 0
-            for page in doc:
-                t = page.get_text() or ""
-                parts.append(t)
-                total += len(t)
-                if total > _MAX_CHARS:
-                    break
-            n_pages = doc.page_count
-            meta_title = (doc.metadata or {}).get("title") or ""
-        finally:
-            doc.close()
-
-        text = "\n\n".join(parts).strip()
-        truncated = len(text) > _MAX_CHARS
-        text = text[:_MAX_CHARS]
-        if not text:
-            return None  # scanned / image-only PDF with no extractable text layer
+        text, n_pages, meta_title, truncated = got
 
         leaf = urlparse(url).path.rstrip("/").split("/")[-1] or url
         return Document(

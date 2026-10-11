@@ -189,7 +189,7 @@ class LogsAreMaskedAtEveryEntry(unittest.TestCase):
         r = _run_python(code)
         self.assertEqual(r.returncode, 0, r.stderr)
         self._assert_masked(r.stderr)
-        self.assertIn("OmniSeek MCP server starting", r.stderr)
+        self.assertIn("OmniSeek MCP server ready (stdio)", r.stderr)
         self.assertIn("job raised", r.stderr)
 
     def test_isolated_job_child(self):

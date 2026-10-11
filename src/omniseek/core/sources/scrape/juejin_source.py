@@ -32,7 +32,7 @@ try:
     from omniseek.core import curl as _creq  # curl_cffi.requests, every response recorded (upstreams.observe)
     _DEPS_OK = True
 except Exception as exc:  # noqa: BLE001
-    logger.warning("juejin: curl_cffi unavailable (%s) — adapter inert", exc)
+    logger.debug("juejin: curl_cffi unavailable (%s); adapter inert", exc)
     _DEPS_OK = False
 
 

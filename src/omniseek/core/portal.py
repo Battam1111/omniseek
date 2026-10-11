@@ -37,6 +37,11 @@ _loop: Optional[asyncio.AbstractEventLoop] = None
 # context), this IS the loop thread's ident, which the deadlock guard compares against.
 _loop_thread_ident: Optional[int] = None
 
+
+class PortalClosed(RuntimeError):
+    """The bound loop has closed (the session ended); submit() refused without scheduling."""
+
+
 # A trivial value the self-test round-trips to confirm the bridge is live.
 _SELFTEST_SENTINEL = "omniseek-portal-selftest-ok"
 
@@ -67,6 +72,11 @@ def submit(coro, *, timeout: Optional[float] = None):
     if loop is None:
         coro.close()  # refuse cleanly; never leave an un-awaited coroutine dangling
         raise RuntimeError("portal is not bound to an event loop")
+    if loop.is_closed():
+        # The bound loop is gone (the stdio session ended while a worker thread was still busy, e.g.
+        # the background shadow probe). Refuse the same clean way as "not bound".
+        coro.close()
+        raise PortalClosed("portal event loop is closed")
     if threading.get_ident() == _loop_thread_ident:
         coro.close()
         raise RuntimeError(
@@ -98,7 +108,18 @@ def submit(coro, *, timeout: Optional[float] = None):
             _cache._refresh_margin_var.reset(t_margin)
             _diag._trace_var.reset(t_trace)
 
-    fut = asyncio.run_coroutine_threadsafe(_wrapped(), loop)
+    wrapped = _wrapped()
+    try:
+        fut = asyncio.run_coroutine_threadsafe(wrapped, loop)
+    except BaseException:
+        # The loop closed between the check above and the hand-off (a shutdown race): neither the
+        # wrapper nor the caller's coroutine was ever scheduled, so close both instead of leaking
+        # "coroutine ... was never awaited" warnings at interpreter exit.
+        wrapped.close()
+        coro.close()
+        if loop.is_closed():
+            raise PortalClosed("portal event loop is closed") from None
+        raise
     return fut.result(timeout)  # blocks; re-raises the coro's exception; TimeoutError past `timeout`
 
 

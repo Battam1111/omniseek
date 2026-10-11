@@ -114,7 +114,7 @@
    "name": "GitHub REST API",
    "kind": "api",
    "hosts": ["api.github.com"],
-   "sources": ["github", "github_trending"],
+   "sources": ["github", "github_starred", "github_trending"],
    "terms": {
     "max_concurrency": 100,
     "min_interval_s": "未公布",
@@ -809,6 +809,33 @@
     "windows": [[25, 60], [250, 86400], [1000, 604800], [2500, 2592000]],
     "max_wait_s": 15.0,
     "enforced_in": "http.py host gate (in-memory windows reset on restart)"
+   }
+  },
+  "cubox": {
+   "name": "Cubox Open API (card filter)",
+   "kind": "api",
+   "hosts": ["cubox.pro"],
+   "sources": ["cubox"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": [
+     {"limit": 200, "seconds": 86400, "text": "API calls per day, standard account (premium: 500)"}
+    ],
+    "daily_quota": "200 API calls per day on a standard account, 500 on a premium account; error -3030 once the day's calls are used up",
+    "auth": "per-user API token (the API link from Cubox settings), sent as a Bearer header",
+    "quote": "标准账户每天 200 次、高级账户每天 500 次",
+    "url": "https://help.cubox.pro/save/89d3/",
+    "checked": "2026-10-10",
+    "where_checked": "concurrency and spacing: not stated on the help page; which tier this account is on was not measured (no credential handed over yet)",
+    "notes": "The quota is shared with an external digest puller, which keeps its own count in its state.json. OmniSeek's cubox source caps itself at 50 calls a day, one run per 2 hours, and stops for the day when puller calls plus its own leave fewer than 60 of an assumed 500 (cubox_source.py)."
+   },
+   "gate": {
+    "max_inflight": 1,
+    "min_interval_s": 1.0,
+    "windows": [[50, 86400]],
+    "max_wait_s": 15.0,
+    "enforced_in": "cubox_source.py persisted day budget (~/.omniseek/state/cubox_budget.json) + http.py host gate (in-memory windows reset on restart)"
    }
   },
   "exa": {

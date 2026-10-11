@@ -19,7 +19,7 @@ Descriptions are quoted in the language of each source's own audience; many are 
 because that is where those sources live. The always-English routing layer is the domain
 headers, the access tiers, and the flags on every row.
 
-Generated from omniseek 0.2.1: 218 live sources across 32 domains.
+Generated from omniseek 0.2.1: 220 live sources across 33 domains.
 
 ## papers (65)
 
@@ -62,7 +62,7 @@ Generated from omniseek 0.2.1: 218 live sources across 32 domains.
 - **openai** `free` `explicit-only` `stream`: OpenAI 近期论文流 (经 OpenAlex raw-affiliation 短语 "OpenAI, San Francisco" 精确隔离: 73 篇均为真实研究, 已逐条核 raw_affiliation_strings). 裸 "OpenAI" 被 GitHub release-bot / 以 'Codex' 'Claude' 为伪作者的 '@openai' 垃圾污染, 故只用带城市的短语. LLM/RL/reasoning/agent 核心 lab, 对标 LLM PhD 工业前沿. precision-over-recall: 量小 (多数 arXiv-only 不带城市) 但干 ...
 - **openalex** `free` `lookup`: OpenAlex: open academic graph (250M+ scholarly works, institutions + concepts ontology; open alternative to Semantic Scholar)
 - **openalex_cn** `free` `explicit-only` `lookup`: 中文学术: Chinese-LANGUAGE scholarship via OpenAlex (language:zh): 中文期刊论文 + 学位论文 (add inline `type:dissertation`) that OmniSeek's English paper sources (arxiv/s2/crossref) miss. Returns structured 题录: title / authors / 中文期刊 venue / year / citations / OA / abstract. Optional inline filters: `type:dissert ...
-- **openreview** `keyed` `bring-your-own-login` `lookup`: OpenReview: peer reviews, rebuttals, meta-reviews from ICLR/NeurIPS/ICML; venue browse via `venue:` qualifier (venue:colm2025 / venue:iclr2026 / raw venueid) and a submission's actual reviews via `reviews:` (reviews:<forum_id> or a /forum?id=… URL); browse a venue's accepted papers via its venueid
+- **openreview** `keyed` `bring-your-own-login` `lookup`: OpenReview: peer reviews, rebuttals, meta-reviews from ICLR/NeurIPS/ICML; venue browse via `venue:` qualifier (venue:colm2025 / venue:iclr2026 / raw venueid) and a submission's actual reviews via `reviews:` (reviews:<forum_id> or a /forum?id=… URL); browse a venue's accepted papers via its venueid; ...
 - **pdf** `free` `portal`: PDF full-text: download a paper PDF (arxiv.org/pdf/… or any *.pdf) and extract its text so you can read the WHOLE paper, not just the abstract (pair with omniseek_paper_enrich's pdf_url)
 - **pmlr** `free` `stream`: PMLR: Proceedings of Machine Learning Research (ICML / AISTATS / COLT / NeurIPS comp / UAI / IJCAI / CoRL / AutoML / MIDL + 等; 232 volumes)
 - **qwen** `free` `explicit-only` `stream`: 阿里通义 (Qwen) 实验室近期论文,经 OpenAlex 短语对 "Tongyi Lab"(90 篇,全部 'Tongyi Lab, Alibaba Group')+"Qwen Team"(显式 Qwen-LLM-team 论文如 ProcessBench)精确隔离阿里旗舰 AI 实验室及 Qwen 线。覆盖 agentic-RL/RL-蒸馏 (AgentJet、EvoRubric、TCOD) 与多模态/视频生成。对 CN ML PhD (LLM/agent/RL+multimodal) on-topic:Qwen 是开源权重生态主力。precision 关键:勿用 bare 'Qwen' ...
@@ -289,6 +289,11 @@ Generated from omniseek 0.2.1: 218 live sources across 32 domains.
 - **bilibili** `free` `lookup`: Bilibili: Chinese academic video (论文精读, 科研 vlog, 方法论讲解); pass a BV-id/video URL as the query to get its top comments as docs
 - **youtube** `walled` `lookup`: YouTube: video search + transcript + top comments (PhD methodology channels, lectures, talks; pass a video URL/id as the query to get its comments as docs)
 - **youtube_channels** `free` `stream`: Curated YouTube channels: MLST / Yannic Kilcher / 3Blue1Brown / Dwarkesh / GPU MODE (latest uploads via yt-dlp; the RSS endpoint is IP-blocked for this host)
+
+## bookmarks (2)
+
+- **cubox** `keyed` `bring-your-own-login` `explicit-only` `stream`: Cubox: the owner's saved cards, list only (id, url, title, saved time, folder, tags), newest first over the last 7 days; no article body. Personal feed for a digest shadow run.
+- **github_starred** `keyed` `bring-your-own-login` `explicit-only` `stream`: GitHub starred: the repos one GitHub user starred in the last 30 days, newest star first (repo, description, language, stars, starred_at). Personal feed for a digest shadow run.
 
 ## books (2)
 

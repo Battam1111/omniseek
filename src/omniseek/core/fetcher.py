@@ -1803,9 +1803,19 @@ def async_fanout_shadow_probe() -> None:
                                "deduped_sync=%s deduped_async=%s", rparity, rsync_order, rasync_order,
                                rsync_meta.get("deduped"), rasync_meta.get("deduped"))
         except Exception as exc:  # noqa: BLE001 -- the ranked shadow must NEVER break a tool call
-            logger.warning("async ranked shadow probe failed: %s", exc)
+            _shadow_log_failure("async ranked shadow probe", exc)
     except Exception as exc:  # noqa: BLE001 -- the shadow probe must NEVER break a tool call
-        logger.warning("async fan-out shadow probe failed: %s", exc)
+        _shadow_log_failure("async fan-out shadow probe", exc)
+
+
+def _shadow_log_failure(what: str, exc: Exception) -> None:
+    """A probe that loses the race with session shutdown (the loop closed under it) is not a
+    failure of the async path; keep it out of the WARNING stream."""
+    from omniseek.core import portal
+    if isinstance(exc, portal.PortalClosed):
+        logger.debug("%s skipped: session ended before it finished", what)
+    else:
+        logger.warning("%s failed: %s", what, exc)
 
 
 def _compute_source_diversity(ranked: list[Document]) -> dict:
@@ -2518,6 +2528,7 @@ def search_ranked(
     cache_only: bool = False,
     semantic: Optional[bool] = None,
     record_yield: bool = True,
+    per_source: Optional[int] = None,
 ) -> tuple[list[Document], dict]:
     """Search, then DEDUP + RANK into one list; return ``(documents, _meta)``.
 
@@ -2535,7 +2546,9 @@ def search_ranked(
     # (they are stamped with time.time() only AFTER this line runs), so they can never flip the stamp
     # to "seen before" for a doc this very search is the first to retrieve.
     t0_wall = time.time()
-    per_source = min(max(limit, 5), 15)
+    # per_source given (a sensor over a source that declares sensor_window) overrides the default
+    # per-source cap; the default keeps every other caller exactly as before.
+    per_source = per_source if per_source else min(max(limit, 5), 15)
     # Kick the perception-index recall off CONCURRENTLY with the live fan-out. It depends ONLY on the
     # query (not the live results), and its query-embed serializes behind the shared _fwd_lock (ingest
     # + backfill), so running it AFTER the ~10s fan-out added that embed serially to every default
@@ -2609,6 +2622,7 @@ async def asearch_ranked(
     cache_only: bool = False,
     semantic: Optional[bool] = None,
     record_yield: bool = True,
+    per_source: Optional[int] = None,
 ) -> tuple[list[Document], dict]:
     """Async twin of search_ranked (S4c-1): SAME (documents, _meta) contract; the ONLY difference is
     that the fan-out + the recall arm run as coroutines / off-loop hops instead of the sync executor.
@@ -2636,7 +2650,9 @@ async def asearch_ranked(
     # persisted first_seen against this instant; this search's own ingest writes carry first_seen >=
     # t0_wall, so they can never flip a doc this very search is the first to retrieve to "seen before".
     t0_wall = time.time()
-    per_source = min(max(limit, 5), 15)
+    # per_source given (a sensor over a source that declares sensor_window) overrides the default
+    # per-source cap; the default keeps every other caller exactly as before.
+    per_source = per_source if per_source else min(max(limit, 5), 15)
     # Build the recall arm OFF the loop (the watchdog-state disk read inside _build_policy_snapshot +
     # indexable_set) via the SAME shared helper the sync twin uses. Returns the request snapshot (routed
     # into asearch_many so the scope + the fan-out observe one generation) + the arm callable + the

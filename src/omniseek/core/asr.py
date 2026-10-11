@@ -21,14 +21,19 @@ podcast's shownotes timestamps) instead of a whole 3-hour episode nobody reads.
 """
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import hmac
+import importlib.util
 import json
 import logging
 import os
+import platform
 import random
 import re
+import shutil
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -164,17 +169,91 @@ def _ensure_idle_watcher() -> None:
         logger.debug("asr: idle watcher not registered with lifecycle (%s)", exc)
 
 
+# ── dependency check (runs BEFORE any audio is fetched) ─────────────────────────────────────────
+# The 'asr' extra installs funasr + imageio-ffmpeg but NOT torch: the right torch build differs by
+# platform (macOS MPS, Linux CUDA or CPU, Windows), so it is installed separately. funasr's own
+# "requires PyTorch" error suggests a CUDA wheel index even on a Mac, and it only fires after the
+# audio was downloaded and decoded. Checking up front lets one message name EVERYTHING missing,
+# with the command for THIS platform and the disk the first call will need.
+# Disk figures measured on OmniSeek host 2026-10-10 (~/.cache/modelscope/hub/models/iic):
+# SenseVoiceSmall 897M + fsmn-vad 3.9M; diarize adds paraformer-zh 953M + ct-punc 1.1G + cam++ 28M.
+_MODEL_DISK_NOTE = ("The first transcription downloads the SenseVoice model (about 0.9 GB, into "
+                    "~/.cache/modelscope); diarize=True downloads about 2.1 GB more on first use.")
+
+
+def _has_cuda_gpu() -> bool:
+    """Cheap, side-effect-free NVIDIA presence check (no torch needed: it is what is missing)."""
+    return bool(shutil.which("nvidia-smi")) or os.path.exists("/proc/driver/nvidia/version")
+
+
+def _torch_install_hint(system: Optional[str] = None, cuda: Optional[bool] = None) -> str:
+    """The torch install command for THIS platform. macOS and GPU-less machines get the plain PyPI
+    command; a CUDA wheel index is suggested only when an NVIDIA driver is actually present."""
+    system = (system or platform.system()).lower()
+    cuda = _has_cuda_gpu() if cuda is None else cuda
+    plain = "pip install torch torchaudio"
+    if system == "darwin":
+        return f"{plain} (the macOS build uses the Apple GPU via MPS; about 0.5 GB)"
+    if system == "linux" and not cuda:
+        return (f"{plain} (no NVIDIA GPU found; the smaller CPU-only build is: {plain} "
+                "--index-url https://download.pytorch.org/whl/cpu)")
+    if cuda:
+        default = ("the default Linux build already includes CUDA; "
+                   if system == "linux" else "")
+        return (f"{plain} ({default}NVIDIA GPU found; to match your driver's CUDA version use "
+                f"{plain} --index-url https://download.pytorch.org/whl/cuXXX, with cuXXX "
+                "from https://pytorch.org/get-started/locally/)")
+    return plain
+
+
+def _missing_asr_deps() -> list[str]:
+    return [m for m in ("funasr", "imageio_ffmpeg", "torch", "torchaudio")
+            if importlib.util.find_spec(m) is None]
+
+
+def _asr_install_message(missing: list[str], system: Optional[str] = None,
+                         cuda: Optional[bool] = None) -> str:
+    """One actionable message for everything the transcription path lacks."""
+    extra = [m for m in missing if m in ("funasr", "imageio_ffmpeg")]
+    torch_missing = [m for m in missing if m in ("torch", "torchaudio")]
+    steps = []
+    if extra:
+        steps.append("pip install 'omniseek[asr]'")
+    if torch_missing:
+        steps.append(_torch_install_hint(system, cuda))
+    return (f"audio transcription is not installed (missing: {', '.join(missing)}). "
+            f"Install: {'; then '.join(steps)}. {_MODEL_DISK_NOTE}")
+
+
+def _model_cached(model_id: str) -> bool:
+    root = os.environ.get("MODELSCOPE_CACHE") or os.path.expanduser("~/.cache/modelscope/hub")
+    return any(os.path.isdir(os.path.join(root, sub, model_id)) for sub in ("models", ""))
+
+
+def _quiet_stdout():
+    """funasr print()s to stdout (its version banner at AutoModel init, an ffmpeg notice at import).
+    Under the stdio transport stdout IS the JSON-RPC channel, so each line reached the client as a
+    'Failed to parse JSONRPC message'. Send those prints to stderr; the MCP server writes through its
+    own wrapper of the stdout buffer, taken at startup, so swapping sys.stdout here does not touch it."""
+    return contextlib.redirect_stdout(sys.stderr)
+
+
 def _get_model():
     global _model
     with _lock:  # re-entrant: callers already holding it are fine
         if _model is None:
-            AutoModel = _optdep.require("funasr", "asr").AutoModel
+            with _quiet_stdout():
+                AutoModel = _optdep.require("funasr", "asr").AutoModel
+            if not _model_cached(_MODEL):
+                logger.info("first transcription: downloading the SenseVoice model (about 0.9 GB, "
+                            "one time) before transcribing")
             last = None
             for dev in ("mps", "cpu"):
                 try:
-                    _model = AutoModel(model=_MODEL, vad_model=_VAD,
-                                       vad_kwargs={"max_single_segment_time": 30000},
-                                       device=dev, disable_update=True)
+                    with _quiet_stdout():
+                        _model = AutoModel(model=_MODEL, vad_model=_VAD,
+                                           vad_kwargs={"max_single_segment_time": 30000},
+                                           device=dev, disable_update=True)
                     logger.info("SenseVoice loaded on %s", dev)
                     break
                 except Exception as exc:  # noqa: BLE001
@@ -282,7 +361,7 @@ def _clean(text: str) -> str:
 
 
 def _transcribe_wav(wav_path: str, language: Optional[str]) -> str:
-    with _lock:
+    with _lock, _quiet_stdout():
         try:
             m = _get_model()
             res = m.generate(input=wav_path, cache={}, language=(language or "auto"),
@@ -305,11 +384,13 @@ def _get_vad_model():
     global _vad_model
     with _lock:  # re-entrant: callers already holding it are fine
         if _vad_model is None:
-            AutoModel = _optdep.require("funasr", "asr").AutoModel
+            with _quiet_stdout():
+                AutoModel = _optdep.require("funasr", "asr").AutoModel
             last = None
             for dev in ("mps", "cpu"):
                 try:
-                    _vad_model = AutoModel(model=_VAD, device=dev, disable_update=True)
+                    with _quiet_stdout():
+                        _vad_model = AutoModel(model=_VAD, device=dev, disable_update=True)
                     logger.info("fsmn-vad (segments) loaded on %s", dev)
                     break
                 except Exception as exc:  # noqa: BLE001
@@ -343,7 +424,7 @@ def _transcribe_segments(wav_path: str, language: Optional[str]) -> list[dict]:
         audio, sr = sf.read(wav_path, dtype="float32")
         if getattr(audio, "ndim", 1) > 1:
             audio = audio[:, 0]  # mono (decode is already mono; belt-and-suspenders)
-        with _lock:
+        with _lock, _quiet_stdout():
             try:
                 vres = _get_vad_model().generate(input=audio, fs=sr)
                 spans = ((vres[0].get("value") if vres else None) or [])
@@ -374,12 +455,14 @@ def _get_diar_model():
     global _diar_model
     with _lock:  # re-entrant: callers already holding it are fine
         if _diar_model is None:
-            AutoModel = _optdep.require("funasr", "asr").AutoModel
+            with _quiet_stdout():
+                AutoModel = _optdep.require("funasr", "asr").AutoModel
             last = None
             for dev in ("mps", "cpu"):
                 try:
-                    _diar_model = AutoModel(model="paraformer-zh", vad_model=_VAD, spk_model="cam++",
-                                            punc_model="ct-punc", device=dev, disable_update=True)
+                    with _quiet_stdout():
+                        _diar_model = AutoModel(model="paraformer-zh", vad_model=_VAD, spk_model="cam++",
+                                                punc_model="ct-punc", device=dev, disable_update=True)
                     logger.info("diarization model (paraformer-zh+cam++) loaded on %s", dev)
                     break
                 except Exception as exc:  # noqa: BLE001
@@ -416,7 +499,7 @@ def _transcribe_diarized(wav_path: str, speakers: Optional[int] = None) -> tuple
     count (a 1-on-1 = 2, a solo = 1) is what makes the labels track the real turns."""
     preset = speakers if (speakers and speakers > 0) else None
     try:
-        with _lock:
+        with _lock, _quiet_stdout():
             try:
                 res = _get_diar_model().generate(input=wav_path, cache={}, use_itn=True,
                                                  batch_size_s=_BATCH_S, preset_spk_num=preset)
@@ -800,6 +883,12 @@ def transcribe_url(url: str, language: Optional[str] = None,
         _blk = _netguard.security_block_reason(url)
         if _blk:
             return {"url": url, "error": f"refused: {_blk}", "transcript": ""}
+
+    missing = _missing_asr_deps()
+    if missing:  # fail BEFORE fetching audio, with one message naming everything to install
+        msg = _asr_install_message(missing)
+        logger.warning("asr unavailable: %s", msg)
+        return {"url": url, "error": msg, "transcript": ""}
 
     def _host_is(domain: str) -> bool:  # SUFFIX match, not substring: xiaoyuzhoufm.com.evil.net must NOT route
         return host == domain or host.endswith("." + domain)

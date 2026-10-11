@@ -397,6 +397,7 @@ canada_jobbank_wages ircc_processing_times mpnp_draws
 cordis_eu ukri_gtr uk_companies_house nsfc_awards oecd_ai_policy
 layoffs_tracker statcan_wds wikidata_identity eurostat_stats
 ml_conferences
+cubox github_starred
 """.split())
 actual_eo = sorted(n for n in names if fetcher._explicit_only_reason(fetcher.get_adapter(n)))
 # mokahr_ats (access_tier=circumvention) is EXCLUDED from the public release for §1201 reasons, so its
@@ -2566,6 +2567,47 @@ check("ontario_sunshine: _build_doc skips a nameless record, builds a real one w
            )(_onss._build_doc({"_id": 2, "First name": "Jane", "Last name": "Doe",
                                "Salary": "$200,000", "Employer": "University Of Toronto",
                                "Job title": "Professor", "Year": "2020"}, 2020)))
+
+# --- cubox + github_starred (2026-10-10, shadow run): personal feeds, explicit_only, MONITOR
+#     sources whose daily sensor writes its new items to ~/.omniseek/state/shadow_feed/<source>.jsonl.
+#     Golden: tests/fixtures/cubox_filter_page.json (synthetic until the credential is handed over) and
+#     tests/fixtures/github_starred_page.json (one recorded page). Offline: egress and credential reads
+#     are stubbed; the full offline suite is tests/test_shadow_feed_sources.py. ---
+import json as _ms_json  # noqa: E402
+from unittest import mock as _ms_mock  # noqa: E402
+from omniseek.core import shadow_feed as _ms_shadow  # noqa: E402
+from omniseek.core.sources.api import cubox_source as _ms_cx, github_starred_source as _ms_gs  # noqa: E402
+_ms_fix = Path(__file__).parent / "fixtures"
+_ms_cubox = fetcher.get_adapter("cubox")
+_ms_star = fetcher.get_adapter("github_starred")
+for _ms_n, _ms_a in (("cubox", _ms_cubox), ("github_starred", _ms_star)):
+    check(f"{_ms_n}: registered, explicit_only, NOT indexable, MONITOR+RECALL stream, opts into the shadow output",
+          _ms_a is not None and bool(fetcher._explicit_only_reason(_ms_a)) and not _recall.indexable(_ms_n)
+          and _ms_a.kind == "stream" and _ms_a.modes == ["MONITOR", "RECALL"] and "bookmarks" in _ms_a.domains
+          and _ms_a.shadow_feed is True and _ms_a.sensor_window > 15)
+with _ms_mock.patch.object(_ms_cx.auth, "load", return_value=None), \
+        _ms_mock.patch.object(_ms_cx.http, "post_json", side_effect=AssertionError("egress")):
+    _ms_nocred = _ms_cubox._raw_fetch("*", 10)
+    _ms_h = _ms_cubox.health_check()
+check("cubox: no credential -> [] and health False naming the missing file, nothing sent",
+      _ms_nocred == [] and _ms_h[0] is False and "cubox.json" in _ms_h[1], str(_ms_h))
+_ms_card = _ms_json.loads((_ms_fix / "cubox_filter_page.json").read_text(encoding="utf-8"))["unarchived"]["data"][1]
+_ms_cd = _ms_cubox._to_document({**_ms_card, "_archived": False})
+check("cubox golden: card -> doc (id key, upstream url, article_title fallback, +0800 time, nested folder)",
+      _ms_cd.source_id == "7330000000000000002" and _ms_cd.url.startswith("https://mp.weixin.qq.com/s?")
+      and _ms_cd.title == "微信公众号文章标题" and _ms_cd.date.utcoffset().total_seconds() == 28800
+      and _ms_cd.metadata["folder"] == "Research/Papers" and _ms_cd.tags == ["待读/读"])
+_ms_row = _ms_json.loads((_ms_fix / "github_starred_page.json").read_text(encoding="utf-8"))["page"][0]
+_ms_sd = _ms_star._to_document(_ms_row)
+check("github_starred golden: star -> doc (full_name key, html_url, starred_at as the date)",
+      _ms_sd.source_id == "verl-project/uni-agent" and _ms_sd.url == "https://github.com/verl-project/uni-agent"
+      and _ms_sd.date.isoformat() == "2026-10-08T03:20:12+00:00"
+      and _ms_sd.metadata["starred_at"] == "2026-10-08T03:20:12Z")
+_ms_line = _ms_shadow.line_for(_ms_cd, run_at="2026-10-10T04:00:00+00:00", sensor_id="s", first_run=False)
+check("shadow output: line format schema 1 is frozen (the external comparison parses these keys)",
+      sorted(_ms_line) == ["first_run", "first_seen_at", "item_time", "schema", "sensor_id", "source",
+                           "source_id", "title", "url"]
+      and _ms_line["schema"] == 1 and _ms_line["item_time"] == "2026-10-08T09:01:44.010000+08:00")
 
 # ---------------------------------------------------------------------------
 # 10. recall VECTOR layer (Phase 2): the mechanical fusion + merge_rank graft invariants that keep

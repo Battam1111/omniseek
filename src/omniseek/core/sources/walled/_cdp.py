@@ -61,7 +61,7 @@ try:
 except ImportError:  # pragma: no cover
     from playwright.sync_api import Browser, BrowserContext, Page, sync_playwright
     _CDP_ENGINE = "playwright"
-    logger.warning("patchright unavailable; CDP stealth degraded to vanilla playwright")
+    logger.debug("patchright unavailable; CDP stealth degraded to vanilla playwright")
 
 DEFAULT_CDP_URL = "http://127.0.0.1:9222"
 DEFAULT_THREAD_TIMEOUT = 90  # seconds

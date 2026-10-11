@@ -104,6 +104,14 @@ def _sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+# Every file this journal writes is opened through os.open, and on Windows os.open opens in TEXT
+# mode unless O_BINARY is passed: os.write then turns each b"\n" into b"\r\n" on disk. The event
+# index records len(line) as written, so every line on disk was one byte longer than its index
+# entry and the offset read of line 3 onwards landed mid-line ("journal line 3 changed on disk").
+# O_BINARY exists only on Windows; elsewhere this is 0 and the flags are unchanged.
+_O_BINARY = getattr(os, "O_BINARY", 0)
+
+
 def _write_all(fd: int, data: bytes) -> None:
     offset = 0
     while offset < len(data):
@@ -140,7 +148,7 @@ def _durable_replace(path: Path, data: bytes, *, mode: int = 0o600) -> None:
     """Replace one file with fsync on both file and parent directory."""
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f".{path.name}.tmp-{os.getpid()}-{threading.get_ident()}-{uuid.uuid4().hex}")
-    fd = os.open(tmp, os.O_CREAT | os.O_EXCL | os.O_WRONLY, mode)
+    fd = os.open(tmp, os.O_CREAT | os.O_EXCL | os.O_WRONLY | _O_BINARY, mode)
     try:
         _write_all(fd, data)
         os.fsync(fd)
@@ -237,7 +245,7 @@ class ObservationJournal:
 
     def _truncate_events(self, length: int) -> None:
         self.events_path.parent.mkdir(parents=True, exist_ok=True)
-        fd = os.open(self.events_path, os.O_RDWR | os.O_CREAT, 0o600)
+        fd = os.open(self.events_path, os.O_RDWR | os.O_CREAT | _O_BINARY, 0o600)
         try:
             os.ftruncate(fd, length)
             os.fsync(fd)
@@ -248,7 +256,7 @@ class ObservationJournal:
     def _durable_append(self, data: bytes) -> None:
         self.events_path.parent.mkdir(parents=True, exist_ok=True)
         existed = self.events_path.exists()
-        fd = os.open(self.events_path, os.O_CREAT | os.O_APPEND | os.O_WRONLY, 0o600)
+        fd = os.open(self.events_path, os.O_CREAT | os.O_APPEND | os.O_WRONLY | _O_BINARY, 0o600)
         try:
             _write_all(fd, data)
             os.fsync(fd)

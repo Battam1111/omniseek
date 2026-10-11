@@ -16,6 +16,7 @@ import contextvars
 import functools
 import logging
 import re
+import weakref
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from typing import Optional
@@ -33,6 +34,29 @@ logger = logging.getLogger(__name__)
 # Reasonable browser-like UA to avoid some basic 403s on RSS endpoints
 DEFAULT_UA = "Mozilla/5.0 (compatible; OmniSeek/0.1; +https://github.com/cyj/omniseek)"
 FETCH_TIMEOUT = 15
+
+# BOUNDED FEED FAN-OUT (OmniSeek redo item 4, 2026-10-10). Each RSS source used to start every one of
+# its feeds at once, and a cold broad sweep runs dozens of RSS sources together: one measured cold
+# query sent 2,210 feed requests into the shared async pool (128 connections). The pool sat full with
+# 50 to 75 requests queued for seconds, the loop spent the sweep doing TLS handshakes for blog hosts,
+# and the API sources the caller actually waits for (arxiv, crossref, alphaxiv) queued behind them
+# and missed the broad deadline. So at most _FEED_CONCURRENCY feed fetches are in flight per event
+# loop, leaving the other half of the pool to every non-feed source. The feeds still all get
+# fetched: a sweep that cuts an RSS source at the deadline lets it keep warming its cache detached.
+# 64 = half the shared pool (http._aget_client max_connections 128), provisional until measured
+# against other values on a cold sweep. Per loop because asyncio primitives are loop-bound and
+# omniseek_gather runs each call on its own loop; cross-loop stacking is bounded by fetcher._EGRESS_SEM.
+_FEED_CONCURRENCY = 64
+_feed_sems: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Semaphore]" = (
+    weakref.WeakKeyDictionary())
+
+
+def _feed_slot() -> asyncio.Semaphore:
+    loop = asyncio.get_running_loop()
+    sem = _feed_sems.get(loop)
+    if sem is None:
+        sem = _feed_sems[loop] = asyncio.Semaphore(_FEED_CONCURRENCY)
+    return sem
 
 
 def fetch_feed(url: str, *, guard_ip: bool = False,
@@ -328,14 +352,19 @@ class RSSAdapterBase:
         runs the sync fetch_feed OFF the loop (curl_cffi has no async API; guard_ip does a blocking
         DNS resolve). Returns a parsed feed or None, the SAME contract as fetch_feed."""
         if self.guard_ip or self.tls_impersonate:
-            return await anyio.to_thread.run_sync(
-                functools.partial(fetch_feed, url, guard_ip=self.guard_ip,
-                                  impersonate=self.tls_impersonate))
+            async with _feed_slot():
+                return await anyio.to_thread.run_sync(
+                    functools.partial(fetch_feed, url, guard_ip=self.guard_ip,
+                                      impersonate=self.tls_impersonate))
         accept = {"Accept": "application/rss+xml, application/xml, text/xml, */*"}
-        resp = await http.aget(url, timeout=FETCH_TIMEOUT, headers=accept)
+        async with _feed_slot():
+            resp = await http.aget(url, timeout=FETCH_TIMEOUT, headers=accept)
         if resp is None:
             return None
-        return _parse_or_refuse(resp.content, url, status=resp.status_code)
+        # feedparser is pure CPU (tens of ms per large feed). A broad sweep parses hundreds of feeds
+        # at once; on the loop that stalled it for seconds and made fast sources miss the deadline.
+        return await anyio.to_thread.run_sync(functools.partial(
+            _parse_or_refuse, resp.content, url, status=resp.status_code))
 
     async def _afetch_all_docs(self) -> list[Document]:
         """Native-async twin of _fetch_all_docs: off-loop cache round-trip, feeds fetched as
@@ -383,7 +412,8 @@ class RSSAdapterBase:
             return []
         if not relevance.query_terms(query):
             return docs_all[:limit]
-        scores = relevance.doc_scores(docs_all, query)
+        # BM25 over the whole bundle is pure CPU: score OFF the loop (same reason as the parse).
+        scores = await anyio.to_thread.run_sync(relevance.doc_scores, docs_all, query)
         scored = [(s, d) for s, d in zip(scores, docs_all) if s > 0.0]
         scored.sort(key=lambda x: x[0], reverse=True)
         return [d for _, d in scored[:limit]]

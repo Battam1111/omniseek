@@ -9,6 +9,13 @@ Reads credentials from ~/.omniseek/credentials/openreview.json:
 
 OpenReview is the unique source where we can read actual peer reviews,
 rebuttals, and meta-reviews — irreplaceable methodology learning material.
+
+Full text (2026-10-10): omniseek_read on an openreview.net /pdf?id= or /forum?id= link downloads the
+submission PDF through the logged-in session (the attachment endpoint the official openreview-py
+client uses) and extracts it with the pdf adapter's extractor. Anonymous access to every OpenReview
+entry now answers 403 ChallengeRequiredError, so without a session, or when the session is asked
+to verify too, the read falls back to the title and abstract and says why in
+metadata.fulltext_reason. OmniSeek never touches the anonymous challenge page.
 """
 
 from __future__ import annotations
@@ -45,6 +52,11 @@ DEFAULT_TIMEOUT = 30
 # Health probe: the search path itself, for ONE paper on a term that always has papers.
 _PROBE_TERM = "learning"
 _RELOGIN = object()   # _probe_search's answer when the token itself was refused
+# The submission PDF: openreview-py (api/client.py, get_attachment) asks
+# GET {baseurl}/attachment with params {"id": <note id>, "name": "pdf"} and the Bearer token.
+_ATTACHMENT_PATH = "/attachment"
+# Keep an error message readable in a reason line; the status and error name always come first.
+_REASON_MSG_CHARS = 200
 
 auth.write_template(
     "openreview",
@@ -106,6 +118,31 @@ def _parse_venue(query: str) -> tuple[str, Optional[str]]:
     return clean, tok  # raw venueid passthrough
 
 
+def _answer_reason(resp, scrub: tuple = ()) -> str:
+    """``HTTP <status> <error name>: <message>`` from an OpenReview answer, for a reason line.
+    OpenReview answers errors as JSON ``{"name", "message", ...}`` (a challenged request says
+    ``ChallengeRequiredError``). Every string in ``scrub`` (the token, the account name) is masked
+    out of the text, so a reason never carries a credential. Never raises."""
+    status = getattr(resp, "status_code", None)
+    name = msg = ""
+    try:
+        data = resp.json()
+    except Exception:  # noqa: BLE001 (a non-JSON error body just has no name)
+        data = None
+    if isinstance(data, dict):
+        name = str(data.get("name") or "")
+        msg = str(data.get("message") or "")
+    for secret in scrub:
+        if secret:
+            name, msg = name.replace(secret, "<redacted>"), msg.replace(secret, "<redacted>")
+    out = f"HTTP {status}"
+    if name:
+        out += f" {name}"
+    if msg and msg != name:
+        out += f": {msg[:_REASON_MSG_CHARS]}"
+    return out
+
+
 class OpenReviewAdapter:
     name = "openreview"
     needs_credentials = True
@@ -113,7 +150,8 @@ class OpenReviewAdapter:
         "OpenReview: peer reviews, rebuttals, meta-reviews from ICLR/NeurIPS/ICML; "
         "venue browse via `venue:` qualifier (venue:colm2025 / venue:iclr2026 / raw "
         "venueid) and a submission's actual reviews via `reviews:` (reviews:<forum_id> "
-        "or a /forum?id=… URL); browse a venue's accepted papers via its venueid"
+        "or a /forum?id=… URL); browse a venue's accepted papers via its venueid; omniseek_read on a "
+        "/forum?id= or /pdf?id= link returns the paper's full PDF text through the logged-in session"
     )
 
     _token: Optional[str] = None
@@ -162,10 +200,15 @@ class OpenReviewAdapter:
             return self._accept_login(resp.json())
         except Exception as exc:  # noqa: BLE001
             logger.warning("OpenReview login failed: %s", exc)
-            st = getattr(getattr(exc, "response", None), "status_code", None)
+            resp_ = getattr(exc, "response", None)
+            st = getattr(resp_, "status_code", None)
             self._login_status = st   # a 429 here is "not verified" for health_check, not "down"
-            self._login_retry_after = _probe.retry_after_s(getattr(getattr(exc, "response", None), "headers", None))
-            diag.note("openreview.login", url=f"{API_BASE}/login", status=st, exc=exc)
+            self._login_retry_after = _probe.retry_after_s(getattr(resp_, "headers", None))
+            if resp_ is not None:
+                # the error name (e.g. ChallengeRequiredError) says WHY, where "login failed" does not
+                self._login_issue = _answer_reason(resp_, scrub=(creds["username"], creds["password"]))
+            diag.note("openreview.login", url=f"{API_BASE}/login", status=st, exc=exc,
+                      body=self._login_issue)
             return None
 
     async def _aget_token(self) -> Optional[str]:
@@ -208,8 +251,10 @@ class OpenReviewAdapter:
             return resp.json()
         except Exception as exc:  # noqa: BLE001
             logger.warning("OpenReview API call failed: %s", exc)
-            st = getattr(getattr(exc, "response", None), "status_code", None)
-            diag.note("openreview.api", url=f"{base}{path}", status=st, exc=exc)
+            resp_ = getattr(exc, "response", None)
+            st = getattr(resp_, "status_code", None)
+            body = _answer_reason(resp_, scrub=(token,)) if resp_ is not None else None
+            diag.note("openreview.api", url=f"{base}{path}", status=st, exc=exc, body=body)
             return None
 
     async def _aapi_get(self, path: str, params: dict) -> Optional[dict]:
@@ -454,6 +499,11 @@ class OpenReviewAdapter:
         )
 
     def fetch_url(self, url: str) -> Optional[Document]:
+        """An openreview.net link (``/forum?id=`` or ``/pdf?id=``) as ONE document: the paper's whole
+        text when the logged-in session can download its PDF, else the title and abstract with the
+        reason in ``metadata.fulltext_reason`` (``metadata.fulltext`` says which). None when the
+        note itself cannot be read, as before. At most one /login per call: the notes request makes
+        it, the PDF request only reuses the token that login left (never a second attempt)."""
         host = urlparse(url).hostname or ""
         if "openreview.net" not in host:
             return None
@@ -464,10 +514,92 @@ class OpenReviewAdapter:
         note_id = (qs.get("id") or [None])[0]
         if not note_id:
             return None
+        key = cache.make_key("openreview", "fulltext", note_id)
+        cached = cache.get(key)
+        if cached is not None:
+            # omniseek_read pages a long paper by start_char: one download serves every page
+            return Document.model_validate(cached)
         data = self._api_get("/notes", {"id": note_id})
         if not data or "notes" not in data or not data["notes"]:
             return None
-        return self._note_to_document(data["notes"][0])
+        doc = self._note_to_document(data["notes"][0])
+        token = self._live_token()
+        if token is None:
+            return self._abstract_only(doc, f"no logged-in OpenReview session ({self._no_session_reason()})")
+        status, _ctype, content, reason = self._download_pdf(note_id, token)
+        if content is None:
+            return self._abstract_only(doc, f"the PDF download failed: {reason}")
+        from omniseek.core.sources.scrape.pdf_source import extract_text
+        got = extract_text(content, label=f"openreview pdf {note_id}")
+        if got is None:
+            return self._abstract_only(doc, "the PDF has no extractable text (or PyMuPDF is missing)")
+        text, n_pages, _meta_title, truncated = got
+        meta = dict(doc.metadata or {})
+        meta.update({"fulltext": True, "abstract": doc.content, "pages": n_pages,
+                     "extracted_chars": len(text), "truncated": truncated, "pdf_bytes": len(content)})
+        full = doc.model_copy(update={"content": text, "metadata": meta})
+        cache.set(key, full.model_dump(mode="json"), ttl=1800)
+        return full
+
+    def _live_token(self) -> Optional[str]:
+        """The token the last login left, if still fresh; never logs in (``_get_token`` would)."""
+        if self._token and time.time() < self._token_expires_at - 600:
+            return self._token
+        return None
+
+    def _no_session_reason(self) -> str:
+        if not auth.is_configured("openreview"):
+            return "credentials not configured"
+        if self._login_status == 429:
+            return _probe.rate_limited("api2.openreview.net", self._login_retry_after)
+        if self._login_issue:
+            return f"login failed: {self._login_issue}"
+        if self._login_status:
+            return f"login failed: HTTP {self._login_status}"
+        return "login gave no token"
+
+    @staticmethod
+    def _abstract_only(doc: Document, reason: str) -> Document:
+        """The abstract document, saying why it is not the full text (the omniseek_read result carries
+        the metadata, so the reader sees the reason beside the abstract)."""
+        logger.info("OpenReview full text unavailable for %s: %s", doc.source_id, reason)
+        diag.note("openreview.pdf", url=doc.url, body=reason)
+        meta = dict(doc.metadata or {})
+        meta.update({"fulltext": False, "fulltext_reason": reason})
+        return doc.model_copy(update={"metadata": meta})
+
+    def _download_pdf(self, note_id: str, token: str) -> tuple[Optional[int], str, Optional[bytes], str]:
+        """GET the submission PDF through the attachment endpoint with ``token``.
+
+        Returns ``(HTTP status or None, content type, PDF bytes or None, reason)``; the bytes are
+        set only for a 200 whose body starts with ``%PDF-`` and fits the shared 30MB body cap
+        (``http.MAX_BYTES``), else the reason says what came back (a challenged request reads
+        ``HTTP 403 ChallengeRequiredError: ...``). The reason never carries the token. A redirect
+        is followed under the shared redirect rule (``http.direct``: every hop takes its host's gate);
+        httpx drops the Authorization header when a hop leaves the host. Shared by
+        fetch_url and scripts/probe_openreview_pdf.py."""
+        try:
+            resp = http.direct(
+                "GET",
+                f"{API_BASE}{_ATTACHMENT_PATH}",
+                params={"id": note_id, "name": "pdf"},
+                headers={"Authorization": f"Bearer {token}"},
+                timeout=DEFAULT_TIMEOUT,
+                follow_redirects=True,
+            )
+        except Exception as exc:  # noqa: BLE001
+            reason = f"request failed: {type(exc).__name__}"
+            logger.warning("OpenReview PDF download failed for %s: %s", note_id, reason)
+            return None, "", None, reason
+        ctype = resp.headers.get("content-type", "")
+        if resp.status_code != 200:
+            return resp.status_code, ctype, None, _answer_reason(resp, scrub=(token,))
+        body = resp.content
+        if len(body) > http.MAX_BYTES:
+            return resp.status_code, ctype, None, f"the PDF is over the {http.MAX_BYTES} byte cap ({len(body)} bytes)"
+        if not body.startswith(b"%PDF-"):
+            return resp.status_code, ctype, None, f"HTTP 200 but the body is not a PDF (content type {ctype or 'none'})"
+        return resp.status_code, ctype, body, "ok"
 
     def health_check(self) -> tuple[Optional[bool], str]:
         """Ask the search path itself: the same ``/notes/search`` request (``source=forum``) with the

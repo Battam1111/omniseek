@@ -17,12 +17,12 @@ import hmac
 import json
 import logging
 import os
-from pathlib import Path
 
 import uvicorn
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 
+from omniseek.core import auth
 from omniseek.server import mcp
 
 logger = logging.getLogger("omniseek.serve_http")
@@ -33,7 +33,7 @@ logger = logging.getLogger("omniseek.serve_http")
 HOST = os.environ.get("OMNISEEK_HTTP_HOST", "127.0.0.1")
 _IS_LOOPBACK = HOST in ("127.0.0.1", "::1", "localhost")
 PORT = int(os.environ.get("OMNISEEK_HTTP_PORT", "8765"))
-_TOKEN_PATH = Path.home() / ".omniseek" / "credentials" / "omniseek_http.json"
+_TOKEN_PATH = auth.CREDS_DIR / "omniseek_http.json"
 
 
 def _load_token() -> str:
@@ -76,15 +76,29 @@ class TokenAuth(BaseHTTPMiddleware):
         return await call_next(request)
 
 
-# MCP streamable-http does DNS-rebinding Host-header validation (defaults to localhost-only). It
-# guards a browser the operator visits from reaching a loopback service via a rebound DNS name.
-# Keep it ON for the safe loopback default; only DISABLE it when the operator explicitly binds
-# non-loopback (LAN/tailnet), where it would otherwise 421 those clients and the bearer token is
-# the real auth. So: protection tracks the bind, instead of being unconditionally off.
+# MCP streamable-http does DNS-rebinding Host-header validation. It guards a browser the operator
+# visits from reaching a loopback service via a rebound DNS name. Keep it ON for the safe loopback
+# default; only DISABLE it when the operator explicitly binds non-loopback (LAN/tailnet), where it
+# would otherwise 421 those clients and the bearer token is the real auth. So: protection tracks
+# the bind, instead of being unconditionally off.
+# The protection is an ALLOWLIST: switched on with an empty allowed_hosts it rejects EVERY Host
+# header, so each loopback client got "421 Invalid Host header" while /healthz said ok (a stranger's
+# first install, 2026-10-10). The SDK's own loopback default names the loopback hosts; we name them
+# with THIS port only, so a page served from another local port cannot pass the check.
 from mcp.server.transport_security import TransportSecuritySettings  # noqa: E402
 
-mcp.settings.transport_security = TransportSecuritySettings(
-    enable_dns_rebinding_protection=_IS_LOOPBACK)
+
+def _transport_security(host: str, port: int) -> TransportSecuritySettings:
+    if host not in ("127.0.0.1", "::1", "localhost"):
+        return TransportSecuritySettings(enable_dns_rebinding_protection=False)
+    names = ("127.0.0.1", "localhost", "[::1]")
+    return TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=[f"{n}:{port}" for n in names],
+        allowed_origins=[f"http://{n}:{port}" for n in names])
+
+
+mcp.settings.transport_security = _transport_security(HOST, PORT)
 if not _IS_LOOPBACK:
     logger.warning(
         "OMNISEEK_HTTP_HOST=%s binds NON-loopback: OmniSeek is reachable off-box. Ensure a "
@@ -140,7 +154,7 @@ def _raise_fd_limit(want: int = 16384) -> None:
         target = want if hard == resource.RLIM_INFINITY else min(want, hard)
         if soft < target:
             resource.setrlimit(resource.RLIMIT_NOFILE, (target, hard))
-            logger.info("fd limit raised: soft %s to %s (hard %s)", soft, target, hard)
+            logger.debug("fd limit raised: soft %s to %s (hard %s)", soft, target, hard)
     except Exception as exc:  # noqa: BLE001: never block boot on an rlimit tweak
         logger.warning("fd limit raise skipped (%s)", exc)
 
@@ -153,7 +167,7 @@ def main() -> None:
     _raise_fd_limit()  # a 95-source fan-out under nested omniseek_gather needs headroom over macOS's 256 default
     from omniseek.core import cache
     pruned = cache.clear_expired()  # TTL only gates reads; sweep dead files each (re)start
-    logger.info("cache: pruned %d expired entries", pruned)
+    logger.debug("cache: pruned %d expired entries", pruned)
     # Background cache warmer, tied to THIS always-on service (replaces the standalone launchd
     # cron, which was observed to fire only once — see omniseek.core.prewarm): warm the
     # query-independent slow sources on startup + every 30min so Lever B's caches stay hot.
@@ -191,7 +205,7 @@ def main() -> None:
             # False → no drain thread runs there → no cross-process pollution of the yield statistic.
             from omniseek.core.curator import yield_tap as _yield_tap
             _yield_tap.start_writer()
-            logger.info("curator yield tap: drain thread started")
+            logger.debug("curator yield tap: drain thread started")
             # Phase 2 (vector): preload the embedder AND the search matrices, in a background
             # thread, never synchronously. A synchronous warm() here held the listener closed for
             # the whole ~8-9s warmup, so every restart became a 9-second outage and the deploy
@@ -201,7 +215,7 @@ def main() -> None:
             # completes the first hybrid call drops from ~9s to well under a second.
             recall.start_backfill()
             threading.Thread(target=recall.warm, name="recall-warm", daemon=True).start()
-            logger.info("recall index: writes enabled + ingest loop + vector backfill started")
+            logger.debug("recall index: writes enabled + ingest loop + vector backfill started")
     except Exception as exc:  # noqa: BLE001 — the index is best-effort; never block boot
         logger.warning("recall index disabled (init failed): %s", exc)
     # In-process JOB scheduler (P9, generalizing the P6 sensor scheduler): every scheduled piece of
@@ -213,7 +227,7 @@ def main() -> None:
     try:
         from omniseek.core import jobs as _jobs
         if _jobs.start_scheduler() is not None:
-            logger.info("job scheduler started (tick %ds, %d rows)",
+            logger.debug("job scheduler started (tick %ds, %d rows)",
                         _jobs.TICK_SECONDS, len(_jobs.registry()))
     except Exception as exc:  # noqa: BLE001 — the scheduler is best-effort; never block boot
         logger.warning("job scheduler not started (%s)", exc)
@@ -224,10 +238,11 @@ def main() -> None:
         memguard.start()
     except Exception as exc:  # noqa: BLE001 -- the guard is best-effort; never block boot
         logger.warning("memguard not started (%s)", exc)
-    from omniseek.server import _senses_report, _warm_heavy_imports
+    from omniseek.server import _boot_summary, _senses_report, _warm_heavy_imports
     _warm_heavy_imports()  # same first-import race exists under HTTP; see the helper's docstring
-    logger.info(_senses_report())
-    logger.info("OmniSeek HTTP service on %s:%s (token-gated; MCP at /mcp)", HOST, PORT)
+    logger.debug(_senses_report())
+    # The one INFO line of a start (stranger report item 8); the lines above are at DEBUG.
+    logger.info(_boot_summary(f" (HTTP on {HOST}:{PORT}, token-gated, MCP at /mcp)"))
     uvicorn.run(app, host=HOST, port=PORT, log_level="info")
 
 

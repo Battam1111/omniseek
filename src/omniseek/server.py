@@ -18,6 +18,7 @@ import asyncio
 import functools
 import importlib
 import logging
+import os
 import pkgutil
 import sys
 from typing import Optional
@@ -29,6 +30,22 @@ from omniseek.core import sources as _sources_pkg
 from omniseek.core.normalize import LenientBool, LenientInt
 
 log = logging.getLogger(__name__)
+
+
+def _apply_log_level_env() -> None:
+    """OMNISEEK_LOG_LEVEL=DEBUG brings back everything the one boot line summarizes (the module list,
+    each optional dependency a source runs without). It must act BEFORE the sources import, since
+    their notices fire at import. Unset (the default) leaves logging to the entry point, so a test or
+    cron script that imports this module keeps its own setup. (FASTMCP_LOG_LEVEL cannot do this:
+    FastMCP passes log_level="INFO" explicitly, which beats the env setting.)"""
+    level = os.environ.get("OMNISEEK_LOG_LEVEL", "").strip().upper()
+    if level in ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"):
+        logging.basicConfig(level=level, stream=sys.stderr,
+                            format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+        logging.getLogger().setLevel(level)
+
+
+_apply_log_level_env()
 
 # Adapters parked until an external dependency is ready. Auto-discovery would
 # otherwise import + register them; list a module's leaf name here to keep it
@@ -823,6 +840,11 @@ async def omniseek_search(query: str, sources: Optional[list[str]] = None, limit
     excluded_relevant, truncated, progressive:{fast,slow,timed_out}, ...}}. An unknown staleness value
     is treated as cached_ok and a "note" is added to the return.
     """
+    # omniseek_search is the one async tool body, so it skips _threaded's _set_limiter. Without this, a
+    # session whose FIRST call is omniseek_search (a new user's usual first move) fans ~90 sources out
+    # against AnyIO's default 40 worker tokens: every off-loop cache read and every legacy adapter
+    # queues for a token, and core academic sources miss the broad deadline on a cold cache.
+    _set_limiter()
     # Boundary translation (MCP surface -> engine): staleness enum -> fresh / cache_only booleans.
     _stale = (staleness or "cached_ok").strip().lower()
     fresh = _stale == "fresh"
@@ -2335,9 +2357,11 @@ def omniseek_sensor(action: str, query: str = "", sources: Optional[list[str]] =
     source_id) fingerprint diff against baseline). Each action's REQUIRED args:
 
     • action="create" (query; optional sources, schedule, notify) -> register a standing query that
-      detects NEW results over time. Sensors run on their schedule automatically in the live service
-      (hourly | daily | weekly; unknown = daily); use action="run" to trigger one manually. Returns
-      the created sensor with its id. notify=True means the scheduler alerts when a scheduled run finds
+      detects NEW results over time. The live service runs sensors automatically on their own
+      ``schedule`` (hourly | daily | weekly; unknown = daily); a deployment that schedules sensors
+      from a resident-task table (SERVICES.tsv) runs one only once that table lists it, at the
+      row's 何时跑, and then the reply's ``schedule_note`` names the row to add. Use action="run" to
+      trigger one manually. Returns the created sensor with its id. notify=True means the scheduler alerts when a scheduled run finds
       new results; optional notify_if=[keywords] narrows that alert to ONLY new results whose
       title/content match (notify_if_match="any" default, or "all"), so a broad standing query alerts
       on the sliver you care about instead of every new item. Optional detect_absence=True ALSO alerts
@@ -2359,7 +2383,7 @@ def omniseek_sensor(action: str, query: str = "", sources: Optional[list[str]] =
 
     Unknown action, or a missing required arg, returns {"error": ...}.
     """
-    from omniseek.core.sensor import DEFAULT_NOTIFY_SOURCE, SensorStore
+    from omniseek.core.sensor import DEFAULT_NOTIFY_SOURCE, SensorStore, table_row_hint
     a = (action or "").strip().lower()
     store = SensorStore()
 
@@ -2372,11 +2396,15 @@ def omniseek_sensor(action: str, query: str = "", sources: Optional[list[str]] =
                              detect_absence=bool(detect_absence), notify_source=notify_source)
         except ValueError as exc:
             return {"error": str(exc)}
-        return {"created": True, "sensor": {"id": s.id, "query": s.query,
+        made = {"created": True, "sensor": {"id": s.id, "query": s.query,
                 "sources": s.sources, "schedule": s.schedule, "notify": s.notify,
                 "notify_if": s.notify_if, "detect_absence": s.detect_absence,
                 "notify_source": store.notify_sources().get(s.id) or DEFAULT_NOTIFY_SOURCE,
                 "created_at": s.created_at}}
+        note = table_row_hint(s)
+        if note is not None:
+            made["schedule_note"] = note
+        return made
 
     if a == "update":
         if not sensor_id:
@@ -2724,9 +2752,19 @@ _SENSE_PROBES = (
 )
 
 
-def _senses_report(probe=importlib.util.find_spec) -> str:
-    online = []
-    dormant = []
+_SENSE_LABELS = {
+    "pdf": "PDF reading",
+    "hearing": "audio transcription",
+    "vector recall": "semantic recall",
+    "ocr": "OCR",
+    "walled": "logged-in browser sources",
+}
+
+
+def _sense_status(probe=importlib.util.find_spec) -> "tuple[list[str], list[tuple[str, str]]]":
+    """(installed sense names, [(missing sense name, its extra)]) for the optional senses."""
+    online: list[str] = []
+    missing: list[tuple[str, str]] = []
     for sense, module_name, extra in _SENSE_PROBES:
         try:
             present = probe(module_name) is not None
@@ -2735,11 +2773,53 @@ def _senses_report(probe=importlib.util.find_spec) -> str:
         if present:
             online.append(sense)
         else:
-            dormant.append(f"{sense} (install with the [{extra}] extra)")
+            missing.append((sense, extra))
+    return online, missing
+
+
+def _senses_report(probe=importlib.util.find_spec) -> str:
+    online, missing = _sense_status(probe)
     report = f"senses online: {', '.join(online) if online else 'none'}"
-    if dormant:
-        report += f" | dormant: {', '.join(dormant)}"
+    if missing:
+        report += " | dormant: " + ", ".join(
+            f"{sense} (install with the [{extra}] extra)" for sense, extra in missing)
     return report
+
+
+def _source_counts() -> "tuple[int, int]":
+    """(registered sources, sources the default broad search fans out to)."""
+    names = fetcher.all_adapter_names()
+    swept = 0
+    for name in names:
+        adapter = fetcher.get_adapter(name)
+        try:
+            if adapter is not None and not fetcher._explicit_only_reason(adapter):
+                swept += 1
+        except Exception:  # noqa: BLE001: a count for the boot line must never block boot
+            swept += 1
+    return len(names), swept
+
+
+def _boot_summary(where: str = "", probe=importlib.util.find_spec) -> str:
+    """The ONE human-readable INFO line a fresh start prints (stranger report item 8).
+
+    A first-time user read the old boot log (two 'unavailable' notices, ~100 lines of module names,
+    then 'senses online: none') as a broken install. Everything that was there is still logged, at
+    DEBUG; this line says what works, what is optional and how to add it."""
+    total, swept = _source_counts()
+    online, missing = _sense_status(probe)
+    line = f"OmniSeek MCP server ready{where}: {total} sources available"
+    if swept < total:
+        line += f" ({swept} searched by default, {total - swept} only when named)"
+    line += "."
+    if online:
+        line += " Optional capabilities installed: " + ", ".join(
+            _SENSE_LABELS.get(s, s) for s in online) + "."
+    if missing:
+        line += " Not installed (optional): " + ", ".join(
+            f"{_SENSE_LABELS.get(s, s)} (pip install 'omniseek[{extra}]')" for s, extra in missing) + "."
+    line += " Per-module details: set OMNISEEK_LOG_LEVEL=DEBUG."
+    return line
 
 
 def main() -> None:
@@ -2751,11 +2831,12 @@ def main() -> None:
     )
     from omniseek.core import _lograte
     _lograte.install_on_root()  # no single logger may flood the log (fresh-install OpenAlex storm)
-    log.info("OmniSeek MCP server starting. Loaded %d source modules.", len(loaded_modules))
-    log.info("Registered adapters: %s", fetcher.all_adapter_names())
+    log.debug("OmniSeek MCP server starting. Loaded %d source modules.", len(loaded_modules))
+    log.debug("Registered adapters: %s", fetcher.all_adapter_names())
     _warm_heavy_imports()
-    log.info(_senses_report())
-    log.info("rank/recall import chain warmed")
+    log.debug(_senses_report())
+    log.debug("rank/recall import chain warmed")
+    log.info(_boot_summary(" (stdio)"))
     mcp.run()
 
 

@@ -5,6 +5,7 @@ keep ids / srcs aligned, absorb a row count that moved between the count and the
 fail-open (a malformed row -> no matrix, the next call retries)."""
 from __future__ import annotations
 
+import gc
 import os
 import sqlite3
 import tempfile
@@ -413,11 +414,21 @@ class FileBackedRowsTest(_StoreState):
         M, ids = store._ensure_matrix(con)
         self.assertIsNotNone(_mapping(M))
         self.assertIs(_mapping(store._mstate["vec"].bufM), _mapping(M))
-        self.assertEqual(os.listdir(self._tmp.name), [])  # unnamed: nothing to leave behind
+        if os.name != "nt":
+            self.assertEqual(os.listdir(self._tmp.name), [])  # unnamed: nothing to leave behind
         sql = ("SELECT v.rowid, v.v, d.source FROM vec v JOIN docs d ON v.rowid = d.rowid "
                "WHERE v.model_version = ?")
         np.testing.assert_array_equal(M, _old_build(con.execute(sql, (MV,)).fetchall()))
         self.assertEqual(type(M @ np.ones(DIM, np.float32)), np.ndarray)
+        if os.name == "nt":
+            # Windows has no unnamed file: TemporaryFile there is a named file removed when its last
+            # handle closes, and the mapping holds one while the matrix lives. Once every reference
+            # to the rows is dropped, the file must be gone.
+            store._mstate["vec"] = store._MatrixState()
+            store._vec_M = store._vec_ids = store._vec_srcs = None
+            del M, ids
+            gc.collect()
+            self.assertEqual(os.listdir(self._tmp.name), [])
 
     def test_growth_past_the_count_stays_file_backed(self):
         store._BUILD_BATCH = 4

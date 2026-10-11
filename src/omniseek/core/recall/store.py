@@ -167,7 +167,7 @@ def init() -> bool:
             con.commit()
         finally:
             con.close()
-        logger.info("recall index ready at %s", DB_PATH)
+        logger.debug("recall index ready at %s", DB_PATH)
         return True
     except Exception as exc:  # noqa: BLE001 — never crash boot on a bad index
         logger.warning("recall index init failed -> DISABLED (eye stays stateless): %s", exc)

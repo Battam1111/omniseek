@@ -1,0 +1,20 @@
+{
+ "_provenance": "SYNTHETIC, not recorded: no Cubox credential was handed over by 2026-10-10 and the job forbade real Cubox requests. Shape follows the fields an external digest puller reads from POST /c/api/cli/card/filter: {code, message, data:[{id, title, article_title, description, url, domain, create_time, update_time, tags, folder}]}. Replace with a recorded page once the credential is handed over.",
+ "unarchived": {
+  "code": 200,
+  "message": "",
+  "data": [
+   {"id": "7330000000000000003", "title": "Scaling test-time compute", "article_title": "Scaling test-time compute with verifiers", "description": "A post on verifier-guided search.", "url": "https://example.org/blog/test-time-compute", "domain": "example.org", "create_time": "2026-10-09T21:15:02.481+0800", "update_time": "2026-10-09T21:15:05.002+0800", "tags": ["AI", "reasoning"], "folder": {"id": "f1", "name": "Inbox", "nested_name": "Inbox"}},
+   {"id": "7330000000000000002", "title": "", "article_title": "微信公众号文章标题", "description": "", "url": "https://mp.weixin.qq.com/s?__biz=MzA&mid=1&idx=1&sn=abc", "domain": "mp.weixin.qq.com", "create_time": "2026-10-08T09:01:44.010+0800", "update_time": "2026-10-08T09:01:44.010+0800", "tags": [{"name": "读", "nested_name": "待读/读"}], "folder": {"id": "f2", "name": "Papers", "nested_name": "Research/Papers"}}
+  ]
+ },
+ "archived": {
+  "code": 200,
+  "message": "",
+  "data": [
+   {"id": "7330000000000000001", "title": "An archived card", "article_title": "", "description": "Already digested.", "url": "", "domain": "", "create_time": "2026-10-06T12:00:00.000+0800", "update_time": "2026-10-07T08:00:00.000+0800", "tags": [], "folder": null},
+   {"id": "7320000000000000000", "title": "Too old", "url": "https://example.org/old", "create_time": "2026-09-01T12:00:00.000+0800", "tags": [], "folder": null}
+  ]
+ },
+ "quota_used_up": {"code": -3030, "message": "today's quota is used up", "data": null}
+}

@@ -888,6 +888,26 @@ class JournalMemoryContractTests(unittest.TestCase):
             self.assertEqual([o.journal_seq for o in journal.pending(after_seq=4)], [5])
             self.assertEqual(journal.pending(after_seq=5), [])
 
+    def test_disk_bytes_match_the_offset_index(self):
+        # On Windows a text-mode fd writes b"\r\n" for b"\n", so the file grew one byte per line
+        # beyond the index and offset reads went wrong from line 3. Checked on the bytes, so it
+        # fails on the platform that translates, not only through a later misread.
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            journal = ObservationJournal(root)
+            for i in range(3):
+                _append(journal, f"t{i}", source_id=str(i))
+            journal.append_tombstone(
+                source="s", source_id="0", observed_at=2.0, provenance="sweep",
+                privacy_namespace="public", reason="expired",
+            )
+            raw = (root / "events.ndjson").read_bytes()
+            self.assertNotIn(b"\r", raw)
+            self.assertEqual(len(raw), journal._end)
+            self.assertEqual([journal.event(seq)["seq"] for seq in range(1, 5)], [1, 2, 3, 4])
+            for blob in (root / "blobs").iterdir():
+                self.assertEqual(journal_module._sha256(blob.read_bytes()), blob.name)
+
     def test_latest_lookup_survives_index_key_collisions(self):
         with tempfile.TemporaryDirectory() as td, \
                 patch.object(journal_module, "_identity_key", return_value=0):

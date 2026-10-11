@@ -21,8 +21,10 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import contextvars
+import importlib.util
 import logging
 import random
+import sys
 import threading
 import time
 from typing import Any, Optional
@@ -34,6 +36,17 @@ import httpx
 from omniseek.core import _guard, _netguard, _probe, cache, diag, upstreams
 
 logger = logging.getLogger(__name__)
+
+# NO SYS.PATH SCAN PER ASYNC LOCK (OmniSeek redo item 4, 2026-10-10). httpcore 1.0.x asks which async
+# library is running by doing `import sniffio` inside every lock, event and cancel-shield setup, that
+# is several times per request. anyio 4.x no longer installs sniffio, and a FAILED import is not
+# cached: each call re-scans sys.path with stat syscalls (measured 48us against 0.4us). On a cold
+# broad sweep that is thousands of scans on the event loop, and each stat releases the GIL, so while
+# worker threads parse feeds the loop waits up to a thread switch interval per stat to get it back.
+# A None entry in sys.modules makes the import fail at once with the same ImportError, so httpcore
+# takes the same "asyncio" branch it takes today. Only set when sniffio is genuinely not installed.
+if importlib.util.find_spec("sniffio") is None:
+    sys.modules.setdefault("sniffio", None)
 
 # DECLARED UPSTREAM GATE (task R, 2026-09-28). Every request through these helpers first takes the
 # gate of the upstream its host is declared under in upstreams.json (the SAME BackendGuard the owning
