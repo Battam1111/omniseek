@@ -38,6 +38,14 @@ connection with two commands, and every place that explains installing should sa
   colours in `docs/BRAND.md`; softer text and lines are navy or white at lower opacity instead of
   separate greys. The light demo figure ends in a white panel framed in blue instead of a navy
   block, and its corners are transparent so it sits cleanly on GitHub's light and dark pages.
+- **The site follows the reader's light or dark setting.** It had only a dark look; it now has a
+  light one too, picked by the system theme, and the demo figure switches with it. On phones the
+  figure is a narrower version stacked to fit the screen, so its text stays readable.
+- **Latin text no longer falls back to a Chinese font** on the site and in the terminal GIFs, where
+  hyphens were drawn as long dashes.
+- **Chinese and Japanese READMEs:** the quoted "four-year" phrase in the third layer now renders in
+  italics instead of showing its asterisks, and the demo figure's alt text uses the same layer
+  names as the figure.
 - **Docs say it plainly.** The configuration, tools, patterns and login-site pages, the source
   catalog header and the Japanese README use everyday words instead of project jargon: "sites
   behind a login", "access level", "run only when named", "source review". Field values and names

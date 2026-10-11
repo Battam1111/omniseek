@@ -121,7 +121,7 @@ html, body {{ background:transparent; }}
 body {{ padding:8px; }}
 #term {{ {css}
   width:{width}px; background:var(--bg); border:1px solid var(--line); border-radius:12px; overflow:hidden;
-  font-family:-apple-system,"SF Pro Text","PingFang SC","Hiragino Sans GB","Hiragino Sans",sans-serif;
+  font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI","Helvetica Neue",Arial,"PingFang SC","Hiragino Sans GB","Hiragino Sans",sans-serif;
   color:var(--fg); -webkit-font-smoothing:antialiased; }}
 .mono {{ font-family:ui-monospace,"SF Mono",Menlo,monospace; }}
 .bar {{ display:flex; align-items:center; gap:9px; padding:8px 16px; background:var(--bar);

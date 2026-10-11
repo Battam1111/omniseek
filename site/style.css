@@ -15,8 +15,29 @@
   --line-strong: rgba(59,130,246,.42);
   --ghost-line: rgba(147,197,253,.28);
 }
+/* Follows the reader's system theme; dark is the default above. */
+@media (prefers-color-scheme: light) {
+  :root {
+    --page: #FFFFFF;
+    --ink: #0F172A;
+    --text: rgba(15,23,42,.90);
+    --text-2: rgba(15,23,42,.80);
+    --muted: rgba(15,23,42,.66);
+    --faint: rgba(15,23,42,.54);
+    --link: #1D4ED8;
+    --label: #1D4ED8;
+    --surface: rgba(147,197,253,.10);
+    --surface-2: rgba(147,197,253,.16);
+    --line: rgba(59,130,246,.18);
+    --line-strong: rgba(59,130,246,.40);
+    --ghost-line: rgba(15,23,42,.22);
+  }
+  /* BRAND.md: the innermost ring is #1D4ED8 on light backgrounds. */
+  .mark circle:nth-of-type(3) { stroke: #1D4ED8; }
+}
+:root { color-scheme: dark light; }
 * { margin: 0; padding: 0; box-sizing: border-box; }
-body { background: var(--page); color: var(--text); font-family: -apple-system, "SF Pro Text", "Segoe UI", "PingFang SC", "Hiragino Sans", sans-serif; line-height: 1.6; }
+body { background: var(--page); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", "Helvetica Neue", Arial, "PingFang SC", "Hiragino Sans", sans-serif; line-height: 1.6; }
 a { color: var(--link); }
 .wrap { max-width: 960px; margin: 0 auto; padding: 64px 24px 40px; }
 .narrow { max-width: 760px; }

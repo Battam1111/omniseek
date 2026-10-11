@@ -87,7 +87,7 @@ TEMPLATE = """<!doctype html><html><head><meta charset="utf-8"><style>
 
   <!-- Seam 1. The rail arrives at x=24 and the floor of layer 1 is closed under it: plain search
        ends against the buffer stop. The seek finds the opening at x=78 and drops through. -->
-  <svg class="seam" style="height:52px" viewBox="0 0 860 52" xmlns="http://www.w3.org/2000/svg">
+  <svg class="seam" style="height:52px" viewBox="0 0 860 52" preserveAspectRatio="xMinYMid slice" xmlns="http://www.w3.org/2000/svg">
     <path d="M 0 28 L 64 28" stroke="@@RING1@@" stroke-width="3.4" stroke-linecap="round" fill="none"/>
     <path d="M 92 28 L 860 28" stroke="@@RING1@@" stroke-width="3.4" stroke-linecap="round" fill="none"/>
     <path d="M 42 0 L 42 12" stroke="@@STOPINK@@" stroke-width="4" fill="none" stroke-linecap="round"/>
@@ -107,7 +107,7 @@ TEMPLATE = """<!doctype html><html><head><meta charset="utf-8"><style>
   </div>
 
   <!-- Seam 2. The opening moved back the other way, to x=58: the drift is not a drift, it wanders. -->
-  <svg class="seam" viewBox="0 0 860 60" xmlns="http://www.w3.org/2000/svg">
+  <svg class="seam" viewBox="0 0 860 60" preserveAspectRatio="xMinYMid slice" xmlns="http://www.w3.org/2000/svg">
     <path d="M 0 32 L 44 32" stroke="@@RING2@@" stroke-width="3.4" stroke-linecap="round" fill="none"/>
     <path d="M 72 32 L 860 32" stroke="@@RING2@@" stroke-width="3.4" stroke-linecap="round" fill="none"/>
     <path d="M 78 0 C 78 12 58 14 58 32 C 58 44 58 50 58 60" stroke="@@RING3@@" stroke-width="3.8" fill="none" stroke-linecap="round"/>
@@ -127,7 +127,7 @@ TEMPLATE = """<!doctype html><html><head><meta charset="utf-8"><style>
   <!-- The descent resolves into the mark: the three rails ARE its three rings, and the rail
        enters through the outer opening, which the -55 degree rotation already points upward.
        The amber centre is the find, so the figure ends inside the thing it is named for. -->
-  <svg class="seam seam3" style="height:86px" viewBox="0 0 860 86" xmlns="http://www.w3.org/2000/svg">
+  <svg class="seam seam3" style="height:86px" viewBox="0 0 860 86" preserveAspectRatio="xMinYMid slice" xmlns="http://www.w3.org/2000/svg">
     <defs>
       <radialGradient id="glow" cx="50%" cy="50%" r="50%">
         <stop offset="0%" stop-color="#F59E0B" stop-opacity=".55"/>
@@ -324,6 +324,23 @@ def _lint_layer_assignment():
     assert not problems, "layer assignment drifted:\n" + "\n".join(problems)
 
 
+# The narrow cut is for phones: the site serves it under 600 px wide (<picture> media query), where
+# the full figure would shrink to unreadable type. Same session, same words, same colours; the
+# column narrows, the icons drop (the chip already names the wall), and the seams keep their
+# x coordinates because preserveAspectRatio="xMinYMid slice" crops them on the right instead
+# of scaling. English only: the site is English, and a README cannot switch images by width.
+NARROW_CSS = """
+  #shot { width:400px; padding:22px 16px 18px; border-radius:14px; }
+  h1 { font-size:21px; margin-top:7px; }
+  .seam { width:100%; }
+  .card { padding:10px 13px 9px; }
+  .card .ico { display:none; }
+  .panel { margin-left:0; padding:18px 18px 16px; }
+  .aname { margin-left:84px; margin-bottom:12px; }
+  .panel .say { font-size:15.5px; }
+"""
+NARROW_LANGS = ("en",)
+
 _lint_cjk_punctuation()
 _lint_layer_assignment()
 
@@ -336,3 +353,7 @@ for lang, strings in LANGS.items():
         assert "@@" not in html, f"unreplaced token in {lang}-{mode}"
         (out / f"demo-{lang}-{mode}.html").write_text(html, encoding="utf-8")
         print(f"wrote demo-{lang}-{mode}.html")
+        if lang in NARROW_LANGS:
+            narrow = html.replace("</style>", NARROW_CSS + "</style>", 1)
+            (out / f"demo-{lang}-{mode}-narrow.html").write_text(narrow, encoding="utf-8")
+            print(f"wrote demo-{lang}-{mode}-narrow.html")
