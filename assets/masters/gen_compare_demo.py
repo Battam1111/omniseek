@@ -7,14 +7,16 @@ OmniSeek (right). Rendered from one recorded run to GIFs (README, site) and MP4s
     python assets/masters/gen_compare_demo.py all
 
 The -narrow GIFs stack the two agents (web search on top) for phones: the README picks them with
-a (max-width: 600px) source, where the side-by-side GIF would shrink below half size. Each column
+a (max-width: 480px) source, where the side-by-side GIF would shrink below half size. Each column
 is as wide as in the side-by-side GIF, so the lines wrap the same; the columns are shorter, so the
 oldest steps scroll off the top sooner.
 
 Every GIF opens on the finished comparison (both answers in, 1:21:51 highlighted; the end card
-left off) for 3 s, then plays from the empty start and ends on the end card. Many places show only
-a GIF's first frame (a page still loading, a screenshot, a thumbnail, reduced motion, PyPI), and an
-empty first frame looks broken there. The MP4 keeps its storyboard and uses the poster instead.
+left off) for 3 s, then replays from the question with each agent's first call already on screen
+(never two empty columns) and ends on the end card. Many places show only a GIF's first frame (a
+page still loading, a screenshot, a thumbnail, reduced motion), and an empty frame looks broken
+there and to a reader who scrolls to the GIF late. The MP4 keeps its storyboard (it starts from the
+empty stage) and uses the poster instead.
 
 The poster is the MP4's last frame before the end card (the finished comparison), for the site's
 <video poster=...>; it needs no ffmpeg.
@@ -437,7 +439,11 @@ def plan(mp4: bool):
     def add(ms, **st):
         S.append((st, int(ms * k)))
 
-    add(3000, show=[], cap=0)
+    if mp4:
+        # The video starts from the empty stage (it has a poster for its still). A GIF starts its
+        # replay on the question with each agent's first call already in: a reader who scrolls to a
+        # GIF late never lands on two empty columns.
+        add(3000, show=[], cap=0)
     add(1500, show=["l1", "r1"], cap=0)
     add(2200, show=["l1", "r1", "r1r"], cap=2)
     for i, p in enumerate((0, 20, 40, 60, 80)):
@@ -463,8 +469,8 @@ def plan(mp4: bool):
             st["dim"] = [i for i in st.get("dim", []) if i not in full] + short
     if not mp4:
         # GIF frame 0 is the finished comparison (the last frame before the end card): GitHub, PyPI,
-        # thumbnails and reduced-motion readers often show only the first frame. Then it plays from
-        # the empty start. The MP4 has a poster for that, so its storyboard is unchanged.
+        # thumbnails and reduced-motion readers often show only the first frame. Then it replays
+        # from the first calls. The MP4 has a poster for that, so its storyboard is unchanged.
         last = next(st for st, _ in reversed(S) if not st.get("end"))
         S.insert(0, (dict(last, cover=True), COVER_MS))
     return S
