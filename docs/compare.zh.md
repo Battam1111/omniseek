@@ -11,7 +11,7 @@
   </picture>
 </p>
 
-**短视频（38 秒）：**[第一个问题的左右对照](https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/compare-zh-dark.mp4)
+**短视频（38 秒）：**[第一个问题的左右对照](https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/compare-zh-dark.mp4?v=2026-10-11b)
 
 ## 每个回答的出处
 

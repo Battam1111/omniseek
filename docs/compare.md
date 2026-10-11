@@ -11,7 +11,7 @@ On 2026-10-11 we asked two agents the same three questions: one with only its bu
   </picture>
 </p>
 
-**Video (38 seconds):** [the first question, played side by side](https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/compare-en-dark.mp4)
+**Video (38 seconds):** [the first question, played side by side](https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/compare-en-dark.mp4?v=2026-10-11b)
 
 ## Where each answer came from
 
