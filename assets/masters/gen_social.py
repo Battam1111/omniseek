@@ -48,7 +48,7 @@ HTML = """<!doctype html><html><head><meta charset="utf-8"><style>
   <div class="text">
     <div class="name">OmniSeek</div>
     <div class="tag">Give your AI agent the parts of the internet<br>web search doesn&rsquo;t reach<span class="dot">.</span></div>
-    <div class="sub">Self-hosted MCP server for AI agents</div>
+    <div class="sub">Works with Claude Code, Cursor, and Codex</div>
   </div>
 </div>
 </body></html>"""
