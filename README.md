@@ -29,16 +29,16 @@ Runs on your own computer. It plugs in through MCP, the standard way AI apps lik
 
 ## See the difference
 
-The answer is sitting in minute 47 of a podcast, three replies deep in a comment thread, behind a login, in another language. Web search finds pages that are already indexed, in one language, as text. Then it stops. OmniSeek lets your agent keep going, all on your own machine.
+We asked two agents for Mu Li's exact words on the Transformer paper's writing, and the minute, in his 87-minute Bilibili walkthrough: web search returned a paraphrase and "around minutes 1 to 8", while the agent with OmniSeek transcribed the video and found the line at 1:21:51.
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/terminal-demo-dark.gif?v=2026-10-11">
-    <img src="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/terminal-demo-light.gif?v=2026-10-11" width="720" alt="A real OmniSeek run: an agent searches Zhihu and Bilibili for first-year PhD advice and gets linked posts and videos back in about a second each.">
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/compare-en-dark.gif?v=2026-10-11b">
+    <img src="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/compare-en-light.gif?v=2026-10-11b" width="720" alt="A real run, side by side. Left, an agent with web search only answers with a paraphrase and says around minutes 1 to 8. Right, an agent with OmniSeek transcribes the 87-minute video and quotes Mu Li at 1:21:51, with a link that opens there.">
   </picture>
 </p>
 
-A real run: your agent searches Zhihu and Bilibili for first-year PhD advice and gets linked posts and videos back, each in about a second. For one question taken all the way, next to what plain search returned, read [the F-1 visa case](https://github.com/Battam1111/omniseek/blob/main/docs/case-study.md#one-question-three-layers).
+[The full comparison on three questions](https://github.com/Battam1111/omniseek/blob/main/docs/compare.md), with sources, dates, and a short video.
 
 ---
 

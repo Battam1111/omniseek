@@ -27,16 +27,16 @@ claude mcp add omniseek -- omniseek
 
 ## 看看差别
 
-答案常常在一期播客的第 47 分钟，在评论区往下数第三条回复里，在登录之后，在另一种语言里。网页搜索给你的是已经收录的网页，一种语言，只有文字，然后就停了。OmniSeek 让你的 Agent 接着往下找，全程在你自己的电脑上。
+问两个 Agent：李沐在 B 站 87 分钟的 Transformer 论文精读里怎么评价这篇论文的写作，原话是什么、在第几分钟；只有网页搜索的 Agent 给出网友整理的大意和「大约在开头第1~8分钟」，装了 OmniSeek 的 Agent 把视频整段转成文字，找到原话在 1:21:51。
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/terminal-demo-dark.gif?v=2026-10-11">
-    <img src="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/terminal-demo-light.gif?v=2026-10-11" width="720" alt="一次真实运行：Agent 在知乎和 B 站搜读博第一年的建议，每次约一秒拿回带链接的帖子和视频。">
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/compare-zh-dark.gif?v=2026-10-11b">
+    <img src="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/compare-zh-light.gif?v=2026-10-11b" width="720" alt="一次真实运行，左右对照。左边只有网页搜索的 Agent 给出网友整理的大意，说大约在开头第 1 到 8 分钟；右边装了 OmniSeek 的 Agent 把 87 分钟的视频整段转成文字，找到李沐的原话在 1:21:51，附一个从这一秒打开的链接。">
   </picture>
 </p>
 
-一次真实运行：Agent 在知乎和 B 站搜读博第一年的建议，每次约一秒拿回带链接的帖子和视频。想看一个问题从头查到底、和普通搜索的结果摆在一起，读 [F-1 签证这个例子（英文页，附中文版）](../case-study.md#one-question-three-layers)。
+[三个问题的完整对照](../compare.zh.md)，附出处、日期和一段短视频。
 
 ---
 

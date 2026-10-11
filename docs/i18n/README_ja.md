@@ -27,16 +27,16 @@ claude mcp add omniseek -- omniseek
 
 ## 違いを見る
 
-答えは、ポッドキャストの 47 分目に、コメント欄を三つ下った返信に、ログインの向こうに、別の言語の中にあります。ウェブ検索が見つけるのは、すでにインデックスされた、ひとつの言語の、文字になったページだけで、そこで止まります。OmniSeek はエージェントにその先を探させます。すべてあなた自身のコンピューターの上で。
+2 つのエージェントに、李沐（Mu Li）が Bilibili の 87 分の Transformer 論文解説で論文の書き方をどう評したか、その原文と何分目かを尋ねました。ウェブ検索だけのエージェントはまとめの要旨と「最初の 1〜8 分ごろ」を返し、OmniSeek を使うエージェントは動画を文字に起こして、その発言を 1:21:51 に見つけました。
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/terminal-demo-dark.gif?v=2026-10-11">
-    <img src="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/terminal-demo-light.gif?v=2026-10-11" width="720" alt="実際の実行例：エージェントが Zhihu と Bilibili で博士 1 年目へのアドバイスを検索し、それぞれ約 1 秒でリンクつきの投稿と動画を受け取る。">
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/compare-en-dark.gif?v=2026-10-11b">
+    <img src="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/compare-en-light.gif?v=2026-10-11b" width="720" alt="実際の実行例を左右に並べたもの。左はウェブ検索だけのエージェントで、ネット上のまとめの要旨と「最初の 1〜8 分ごろ」を返す。右は OmniSeek を使うエージェントで、87 分の動画をまるごと文字に起こし、李沐（Mu Li）の発言を 1:21:51 に見つけ、その秒から開くリンクを示す。">
   </picture>
 </p>
 
-実際の実行例です。エージェントが Zhihu と Bilibili で博士 1 年目へのアドバイスを検索し、それぞれ約 1 秒でリンクつきの投稿と動画を受け取っています。ひとつの質問を最後まで追い、通常の検索の結果と並べた例は、[F-1 ビザの事例（英語ページ、日本語版つき）](../case-study.md#one-question-three-layers)をご覧ください。
+[3 つの質問の完全な比較（英語）](../compare.md)：出典、日付、短い動画つき。
 
 ---
 

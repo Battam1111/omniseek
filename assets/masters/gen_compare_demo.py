@@ -2,8 +2,12 @@
 OmniSeek (right). Rendered from one recorded run to GIFs (README, site) and MP4s (X, Bilibili).
 
     python assets/masters/gen_compare_demo.py gif      # assets/demo/compare-{en,zh}-{light,dark}.gif
-    python assets/masters/gen_compare_demo.py mp4      # assets/demo/compare-{en,zh}-dark.mp4
+    python assets/masters/gen_compare_demo.py mp4      # assets/demo/compare-{en,zh}-dark.mp4 (+ posters)
+    python assets/masters/gen_compare_demo.py poster   # assets/demo/compare-{en,zh}-dark-poster.png only
     python assets/masters/gen_compare_demo.py all
+
+The poster is the MP4's last frame before the end card (the finished comparison), for the site's
+<video poster=...>; it needs no ffmpeg.
 
 Needs `playwright` (with its Chromium), `pillow`, and for mp4 `imageio-ffmpeg` (it ships an ffmpeg
 binary). OMNISEEK_CHROMIUM may point at a Chromium executable to use instead of Playwright's own.
@@ -521,9 +525,17 @@ def to_mp4(shots, path: Path) -> None:
         raise SystemExit("ffmpeg failed")
 
 
+def to_poster(shots, path: Path) -> None:
+    from PIL import Image
+    last = max(i for i, (st, _) in enumerate(plan(True)) if not st.get("end"))
+    im = Image.open(io.BytesIO(shots[last][0])).convert("RGB").resize((MP4_W, MP4_H), Image.LANCZOS)
+    im.save(path, optimize=True)
+    print(f"wrote {path.name}: frame {last + 1} of {len(shots)}, {path.stat().st_size / 1e6:.2f} MB")
+
+
 def main():
     what = sys.argv[1] if len(sys.argv) > 1 else ""
-    if what not in ("gif", "mp4", "all"):
+    if what not in ("gif", "mp4", "poster", "all"):
         sys.exit(__doc__)
     OUT.mkdir(parents=True, exist_ok=True)
     for lang in ("en", "zh"):
@@ -534,12 +546,14 @@ def main():
                 to_gif(shots, THEMES[theme]["page"], out)
                 print(f"wrote {out.name}: {len(shots)} frames, {sum(m for _, m in shots) / 1000:.1f}s, "
                       f"{out.stat().st_size / 1e6:.2f} MB")
-        if what in ("mp4", "all"):
+        if what in ("mp4", "poster", "all"):
             # 1024 x 576 CSS rendered at 1.25 = 1280 x 720 px.
             shots = shoot(lang, "dark", 1024, 576, MP4_W / 1024, True)
-            out = OUT / f"compare-{lang}-dark.mp4"
-            to_mp4(shots, out)
-            print(f"wrote {out.name}: {sum(m for _, m in shots) / 1000:.1f}s, {out.stat().st_size / 1e6:.2f} MB")
+            to_poster(shots, OUT / f"compare-{lang}-dark-poster.png")
+            if what != "poster":
+                out = OUT / f"compare-{lang}-dark.mp4"
+                to_mp4(shots, out)
+                print(f"wrote {out.name}: {sum(m for _, m in shots) / 1000:.1f}s, {out.stat().st_size / 1e6:.2f} MB")
 
 
 if __name__ == "__main__":
