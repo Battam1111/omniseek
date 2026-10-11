@@ -24,7 +24,8 @@ uv tool install omniseek
 claude mcp add omniseek -- omniseek
 ```
 
-Then run `claude mcp list`; the `omniseek` line should end in `✔ Connected`.
+Then run `claude mcp list`; the `omniseek` line should end in `✔ Connected`. Using Cursor or Codex
+instead? Keep the first command and see [Connect your client](#connect-your-client).
 
 `uv tool install` puts the `omniseek` command in `~/.local/bin` (Windows: `%USERPROFILE%\.local\bin`).
 If uv warns that this folder is not on your `PATH`, run `uv tool update-shell` and open a new
@@ -89,6 +90,9 @@ Apps opened from the Dock or Start menu may not see your shell's `PATH`. If Curs
 failed, replace `"omniseek"` with the full path that `which omniseek` (Windows: `where omniseek`)
 prints, for example `"/Users/you/.local/bin/omniseek"`.
 
+**Codex:** `codex mcp add omniseek -- omniseek`. Codex saves it in `~/.codex/config.toml` under
+`[mcp_servers.omniseek]`, and the Codex CLI and IDE extension share that file.
+
 **Other MCP clients** (Claude Desktop, VS Code, Windsurf, Cline, and so on): the same block works
 wherever the client takes a `command` for a stdio server.
 
@@ -131,7 +135,9 @@ With pip in a virtual environment, install PyTorch first and then the extra. On 
 
 Disk: on an Apple silicon Mac the installed tool grows from about 270 MB to about 1.3 GB. The first
 transcription also downloads the speech model (about 1 GB, kept in a cache), so that first call is
-slow (about two minutes in our test). Plan for about 2.5 GB in total.
+slow (about two minutes in our test: on a CPU, a 45-second slice took 162 seconds the first time,
+model download included). After that, transcripts are saved and reused. Plan for about 2.5 GB in
+total.
 
 ## Advanced: HTTP service
 

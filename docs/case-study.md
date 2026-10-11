@@ -167,6 +167,72 @@ It never summarized. It never decided which paper matters; the agent did. It rea
 stamped, collapsed, contradicted, and remembered, and the thinking stayed in the agent from
 start to finish. Nothing that can hallucinate ever touched the data.
 
+## One question, three layers
+
+A second real run, on a different topic: the 2026 F-1 student visa rule. The answer sat in three
+layers, and each one opened a different way.
+
+<div align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo-en-dark.png?v=2026-10-11">
+    <img src="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo-en-light.png?v=2026-10-11" alt="One real investigation, drawn as three layers. Layer one, written down and easy to find: plain search quotes the rule and stops. Layer two, written down but behind a login or buried: first-person timelines on a forum you are logged in to, and a workaround in a comment thread. Layer three, never written down: a Chinese explainer video transcribed from audio, and a video note read from its frames. Each layer opens a different way to the answer.">
+  </picture>
+</div>
+
+What each layer gave back, verbatim:
+
+- **Written down, and easy to find.** Headlines, official FAQ, top blogs, all one voice: *"From 2026, F-1 admission is limited to a 4-year initial period; renewal in a third country remains possible."* All quote the same rule. None of them had been through it.
+- **Written down, but behind a login.** Three first-person threads on 1point3acres, read through your own login: **Bangkok**, booked to passport in 25 days, interview to approval in 30 minutes; **Milan**, a month-long fight for a slot, visa issued for 5 years; **Tokyo**, *"silky-smooth"*. Under the Milan post the author comes back in the comments: *"Book any late slot first, then email the consulate to expedite. For one F-1 applicant it worked."* One person's experience, not official guidance.
+- **Never written down.** A Chinese explainer video on bilibili, transcribed locally: the *"4-year cap"* in the headlines is the initial period, extensions moved desks rather than vanishing. A rednote video note whose caption is four hashtags, frames and speech read locally: a 212(a)(6)(C) refusal abroad, a misrepresentation finding, can nearly close the F-1 road.
+
+Plain search quoted the rule and stopped. The people who had lived it held the timelines, the
+workaround, and the risk. It also listed the places it had not searched yet, and how to search
+each one.
+
+Reproducing the second and third layers needs the optional add-ons: your own 1point3acres and
+rednote logins ([Sites behind a login](walled-sources.md)) and transcription
+([Install](install.md#podcast-and-video-transcription)).
+
+<details>
+<summary>中文版</summary>
+
+<div align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo-zh-dark.png?v=2026-10-11">
+    <img src="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo-zh-light.png?v=2026-10-11" alt="一次真实调查，画成三层。第一层「搜得到」：普通搜索引到规则就停了。第二层「搜不到，因为要登录、埋得太深」：你登录的论坛上第一手的时间线，以及埋在评论区的办法。第三层「搜不到，因为压根就不是文字」：中文讲解视频经本地转写，以及只在画面上的视频笔记。每一层各有一条通向答案的路。">
+  </picture>
+</div>
+
+每一层带回了什么，逐字引用：
+
+- **搜得到。** 新闻头条、官方 FAQ、热门博客，口径完全一致：*「2026 年起，F-1 入境限四年初始期；第三国续签仍被允许。」* 引的都是同一条规则，谁都没真的办过。
+- **写下来了，但要登录。** 一亩三分地上三份第一手时间线，用你自己的登录态读到：**曼谷**，预约到拿护照 25 天，面签到通过 30 分钟；**米兰**，抢号一个月，签出 5 年；**东京**，*「丝滑」*。米兰帖下，楼主回到评论区补充：*「先约一个靠后的日期，再发邮件给领事馆申请加急。有一位 F-1 申请人真的成功了。」* 个人经验，非官方指引。
+- **压根不是文字。** bilibili 上一段中文解读视频，本地转写：头条说的<em>「最多待 4 年」</em>其实是初始停留期，延期只是换了审批部门，并没有消失。小红书一条视频笔记，正文只有四个话题标签，画面与语音在本地读取：第三国遇上 212(a)(6)(C) 拒签（虚假陈述认定），F-1 之路几乎断送。
+
+普通搜索引到规则就停了。真正办过的人手里有时间线、办法和风险。它还列出了还没去搜的地方，以及各自怎么搜。
+
+</details>
+
+<details>
+<summary>日本語版</summary>
+
+<div align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo-ja-dark.png?v=2026-10-11">
+    <img src="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo-ja-light.png?v=2026-10-11" alt="実際の調査を三つの層として描いた図。第一層「書かれていて、届く」:通常の検索はルールを引用して止まる。第二層「書かれてはいるが、届かない」:ログインの内側の一次体験タイムラインと、コメント欄の奥に埋もれた回避策。第三層「そもそも書かれていない」:中国語解説動画のローカル書き起こしと、事実が画面の上にしかない動画ノート。層ごとに答えへの道が一本ずつある。">
+  </picture>
+</div>
+
+各層が持ち帰ったもの、原文のまま:
+
+- **書かれていて、届く。** ニュース見出し、公式 FAQ、人気ブログ、声はひとつ:*「2026 年より F-1 の入国は 4 年の初期滞在期間に制限。第三国での更新は引き続き可能。」* どれも同じ規則の引用で、実際に経験した人はいない。
+- **書かれてはいるが、ログインの向こう。** 1point3acres の一次体験タイムライン三件、あなた自身のログインで読んだもの:**バンコク**、予約からパスポートまで 25 日、面接から承認まで 30 分。**ミラノ**、枠争奪ひと月、ビザは 5 年。**東京**、*「スムーズそのもの」*。ミラノ投稿のコメント欄には投稿者が戻ってきて:*「まず遅い日程で予約し、それから領事館にメールで繰り上げを依頼。F-1 申請者一人は実際に成功した。」* 個人の経験であって、公式の案内ではない。
+- **そもそも文字ではない。** bilibili の中国語解説動画をローカルで書き起こし:見出しの<em>「最長 4 年」</em>は初期滞在期間のことで、延長は審査窓口が変わっただけで消えてはいない。RED（小紅書）の動画ノートは本文がハッシュタグ四つだけ、フレームと音声をローカルで読む:第三国での 212(a)(6)(C) 拒否(虚偽陳述の認定)は F-1 への道をほぼ閉ざす。
+
+通常の検索は規則を引用して止まりました。実際に経験した人々はタイムラインと回避策とリスクを持っていました。まだ検索していない場所と、それぞれの検索のしかたも挙げていました。
+
+</details>
+
 ---
 
 <div align="center"><sub><a href="../README.md">← back to the README</a></sub></div>

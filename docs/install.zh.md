@@ -21,7 +21,7 @@ uv tool install omniseek
 claude mcp add omniseek -- omniseek
 ```
 
-然后运行 `claude mcp list`，`omniseek` 那一行末尾应是 `✔ Connected`。
+然后运行 `claude mcp list`，`omniseek` 那一行末尾应是 `✔ Connected`。用 Cursor 或 Codex？第一条命令照旧，接法见[接到客户端](#接到客户端)。
 
 `uv tool install` 把 `omniseek` 命令放在 `~/.local/bin`（Windows 是 `%USERPROFILE%\.local\bin`）。
 如果 uv 提示这个目录不在 `PATH` 里，运行 `uv tool update-shell` 再开一个新终端。不做这一步，
@@ -81,6 +81,9 @@ claude mcp add omniseek -- ~/.omniseek-venv/bin/omniseek
 从程序坞或开始菜单打开的应用不一定能读到终端里的 `PATH`。Cursor 里显示连接失败时，把 `"omniseek"`
 换成 `which omniseek`（Windows 用 `where omniseek`）打印的完整路径，例如 `"/Users/you/.local/bin/omniseek"`。
 
+**Codex：** `codex mcp add omniseek -- omniseek`。Codex 把它存在 `~/.codex/config.toml` 的
+`[mcp_servers.omniseek]` 下，Codex 命令行和 IDE 插件共用这份配置。
+
 **其他 MCP 客户端**（Claude Desktop、VS Code、Windsurf、Cline 等）：只要客户端能用 `command` 启动 stdio
 服务，同一段配置就能用。
 
@@ -119,7 +122,7 @@ NVIDIA CUDA 库，CPU 版下载约 200 MB，默认版连同 CUDA 库要下载 1.
 `pip install "omniseek[asr]"`。macOS 和 Windows 直接 `pip install torch torchaudio` 就行。
 
 磁盘：在 Apple 芯片的 Mac 上，装好的工具从约 270 MB 涨到约 1.3 GB。第一次转写还要下载语音模型
-（约 1 GB，下载后缓存），所以第一次调用较慢（我们实测约两分钟）。总共按 2.5 GB 左右准备。
+（约 1 GB，下载后缓存），所以第一次调用较慢（我们实测约两分钟：在 CPU 上，一段 45 秒的音频第一次转写用了 162 秒，含下载模型）。之后转好的文字会存下来重复用。总共按 2.5 GB 左右准备。
 
 ## 进阶：HTTP 服务
 

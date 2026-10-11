@@ -9,9 +9,10 @@ mechanically synced from the private upstream and keep its file style):
      common AI-writing tell, and the project bans it in human-facing text; use a colon, semicolon,
      comma, period, or parentheses instead.
   2. VERSIONED IMAGE URLS. A README or site page that loads a brand image (png / gif) from
-     raw.githubusercontent.com must end the URL with ?v=YYYY-MM-DD. GitHub's image proxy keeps
-     serving the old picture under an unchanged URL for a while after the file changes, so a
-     re-render goes with a new date in every URL that points at it (docs/BRAND.md, Rules).
+     raw.githubusercontent.com must end the URL with ?v=YYYY-MM-DD, optionally followed by one
+     lowercase letter for a second re-render on the same day (?v=YYYY-MM-DDb). GitHub's image proxy
+     keeps serving the old picture under an unchanged URL for a while after the file changes, so a
+     re-render goes with a new version in every URL that points at it (docs/BRAND.md, Rules).
   3. NO STUCK EMPHASIS in Markdown. CommonMark opens emphasis only on a left-flanking run of *
      and closes it only on a right-flanking one, and a run wedged between a letter and punctuation
      is not left-flanking, so 头条说的*「最多待 4 年」*其实 shows its asterisks on GitHub and PyPI
@@ -56,7 +57,7 @@ EM_DASH_NAMES = {"Dockerfile", "NOTICE"}
 
 # Rule 2 scope: the READMEs (GitHub and PyPI render them) and the site pages.
 RAW_IMAGE = re.compile(r"https://raw\.githubusercontent\.com/[^\s\"')]+?\.(?:png|gif)(\?[^\s\"')]*)?(?=[\s\"')])")
-VERSION_QUERY = re.compile(r"\?v=\d{4}-\d{2}-\d{2}$")
+VERSION_QUERY = re.compile(r"\?v=\d{4}-\d{2}-\d{2}[a-z]?$")
 
 
 INLINE_CODE = re.compile(r"`[^`]*`")
@@ -158,7 +159,7 @@ def main() -> int:
             if versioned:
                 for m in RAW_IMAGE.finditer(line):
                     if not VERSION_QUERY.fullmatch(m.group(1) or ""):
-                        violations.append((rel, n, "image URL without ?v=YYYY-MM-DD", m.group(0)))
+                        violations.append((rel, n, "image URL without ?v=YYYY-MM-DD (or YYYY-MM-DDb)", m.group(0)))
 
     if violations:
         print(f"brand_lint: FAIL, {len(violations)} violation(s)\n")

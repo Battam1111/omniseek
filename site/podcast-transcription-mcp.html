@@ -22,16 +22,17 @@
       <circle cx="100" cy="100" r="23" fill="none" stroke="#2563EB" stroke-width="15" stroke-linecap="round" stroke-dasharray="116 28" transform="rotate(195 100 100)"/>
       <circle cx="100" cy="100" r="8" fill="#F59E0B"/>
     </svg>
-  <h1>Podcast transcription MCP server: let your AI agent quote what was said, with timestamps</h1>
-  <p class="lede">Give your agent a podcast or video link, or just a topic, and it gets a transcript of the part that matters, with timestamps, transcribed locally on your own machine.</p>
+  <h1>Let your AI agent quote what was said in a podcast or video, with the minute</h1>
+  <p class="sub">An MCP server: works with Claude Code, Cursor, and Codex.</p>
+  <p class="lede">Give your agent a podcast or video link, or just a topic, and it gets the words of the part that matters, with the minute each was said, turned into text on your own computer.</p>
 
   <h2>Try it</h2>
   <div class="box">
     <div class="lbl">ASK YOUR AGENT</div>
     <div class="ask">Find a podcast episode on speculative decoding and quote what it says about the draft model, with the timestamp.</div>
   </div>
-  <div class="box">
-    <div class="lbl">WHAT YOUR AGENT CALLS</div>
+  <div class="box behind">
+    <div class="lbl">Behind the scenes</div>
     <pre><code>omniseek_search(query=&quot;speculative decoding&quot;, sources=[&quot;apple_podcasts&quot;])
 # picks an episode from the returned feed, then:
 omniseek_transcribe(url=&quot;https://www.buzzsprout.com/2529712/episodes/18794851-speculative-speculative-decoding.mp3&quot;,
@@ -42,7 +43,8 @@ omniseek_transcribe(url=&quot;https://www.buzzsprout.com/2529712/episodes/187948
     <ul class="out">
       <li><span class="src">1:00 to 1:45</span><a href="https://www.buzzsprout.com/2529712/episodes/18794851-speculative-speculative-decoding.mp3">“those older systems used a fast, small draft model to guess a few words ahead and then a massive target model came in”</a></li>
     </ul>
-    <p class="small">From a real run on 2026-10-10. The first transcription downloads the speech model (about 900 MB) and took 162 seconds for this 45-second slice on a CPU; transcripts are cached after that. Ask for a slice (<code>start</code>, <code>duration</code>) instead of a whole two-hour episode.</p>
+    <p class="small">From a real run on 2026-10-10. The first time, it downloads a speech-to-text model (about 900 MB). After that, transcripts are saved and reused.</p>
+    <p class="small">Tip: ask for the part you need, say minutes 40 to 50, not the whole two-hour episode.</p>
   </div>
 
   <h2>Install</h2>
@@ -50,10 +52,11 @@ omniseek_transcribe(url=&quot;https://www.buzzsprout.com/2529712/episodes/187948
     <div class="lbl">TWO COMMANDS</div>
     <pre>uv tool install &quot;omniseek[asr]&quot; --with torch --with torchaudio
 claude mcp add omniseek -- omniseek</pre>
-    <div class="note">Transcription needs the <code>asr</code> extra and PyTorch. On Linux without an NVIDIA GPU add <code>--torch-backend cpu</code> to the first command, or PyTorch pulls several GB of CUDA libraries. Details and disk sizes: <a href="https://github.com/Battam1111/omniseek/blob/main/docs/install.md#podcast-and-video-transcription">Podcast and video transcription</a>.</div>
+    <div class="note">Turning speech into text needs this optional add-on (the <code>asr</code> extra and PyTorch). Details and disk sizes: <a href="https://github.com/Battam1111/omniseek/blob/main/docs/install.md#podcast-and-video-transcription">Podcast and video transcription</a>.</div>
+    <details class="more"><summary>Linux</summary><div class="note">Without an NVIDIA GPU, add <code>--torch-backend cpu</code> to the first command, or PyTorch downloads several GB of CUDA libraries you will not use.</div></details>
   </div>
 
-  <h2>Related sources</h2>
+  <h2>Where it looks</h2>
   <ul class="plain">
       <li><a href="https://github.com/Battam1111/omniseek/blob/main/docs/sources.md"><code>apple_podcasts</code></a>: find shows and episode feeds by topic</li>
       <li><a href="https://github.com/Battam1111/omniseek/blob/main/docs/sources.md"><code>xiaoyuzhou</code></a>: Chinese podcast episodes</li>

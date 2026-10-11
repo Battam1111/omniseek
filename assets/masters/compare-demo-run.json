@@ -1,0 +1,362 @@
+{
+ "about": "Recorded runs behind the comparison demo and infographic, built from the raw tool-call records of the runs; generators read this file and never type content by hand. Tool names are the public ones registered in src/omniseek/server.py.",
+ "R01": {
+  "question": "李沐 B站 Transformer论文逐段精读 里怎么评价这篇论文的写作？原话是什么，在第几分钟？",
+  "video": {
+   "url": "https://www.bilibili.com/video/BV1pu411o7BE",
+   "title": "Transformer论文逐段精读【论文精读】",
+   "duration_seconds": 5225
+  },
+  "web": [
+   {
+    "tool": "web_search",
+    "query": "李沐 B站 Transformer论文逐段精读 里怎么评价这篇论文的写作？原话是什么，在第几分钟？",
+    "started": "2026-10-11T06:19:17.918Z",
+    "elapsed_s": 23.45,
+    "answer": "李沐在B站的《Transformer论文逐段精读》中，非常强调这篇论文的写作水平。根据网友整理的内容及知乎、CSDN等处的详细笔记，他对Transformer论文写作的原话及核心观点大致如下：\n\n1. **论文本身很短但信息密度极高**：「这是一篇略短的文章，但是信息量巨大。相当于开拓了除MLP，CNN，RNN之外的第四大模型base结构。」（大意，这部分通常在介绍标题和摘要时讲到）【3:4†source】【3:2†source】\n\n2. **论文结构与细节**：他高度评价了作者写作上的细致，“论文有八位作者，大部分来自Google，其中两位作者在Google实习期间完成了工作。论文中每位作者都标有星号，表示同等贡献，这在机器学习领域较为少见，因为通常会按贡献大小排序。在第一页末尾详细解释了每位作者的具体贡献，这种做法值得称赞。”（原话近似段落）【3:5†source】\n\n3. **如何写论文代码开源**：李沐建议优秀论文应如作者那样在摘要最后放出代码链接，以方便读者复现，并扩大影响力。他评价：「其实代码最好是放在摘要的最后一句话，让读者可以第一时间看到代码。」【3:4†source】【3:5†source】\n\n4. **论文语言和逻辑**：他还说到：“这个名字取得很好（Attention Is All You Need），和变形金刚（Transformer）致敬，简单又记忆深刻。”以及“现在‘简单’在学术写作中已经变成褒义词了，结构简单、逻辑清晰。”（大意）【3:4†source】\n\n5. **对结构图的评价**：论文中的结构图被李沐点评为「很漂亮，但属于‘不明觉厉’的那种——好看，但不太容易直接看懂」。他强调在神经网络时代画图是一项重要技能（通常讲到模型架构章节时提到）。【3:4†source】【3:2†source】\n\n6. **分钟数**：B站完整版视频的相关段落，标题作者与论文写作相关的评论在开头大约【0-8分钟】内；对结构图的评论，在介绍模型架构时出现，具体约在【15-25分钟】左右（实际以视频章节略有差异，建议根据目录跳转）。\n\n---\n**总结原话片段及位置**（整理自各平台网友听写及文章）：\n- “这篇文章很短，但信息量巨大，属于那种开创一个新领域的论文。”\n- “他们在首页脚注把每个人的贡献写得很清楚，在机器学习领域其实不多见。”\n- “论文结构非常简洁，名字也取得特别好，Attention Is All You Need，一下子让人记住了。”\n- “结构图很美观属于‘不明觉厉’，但不容易直接看明白。”\n\n具体分钟数与详细说法建议直接查看B站视频，大约在开头第1~8分钟，对论文写作结构的批注在模型结构介绍、代码开源相关评论也出现在摘要末或实验结论部分（约25~40分钟区间）【3:3†source】【3:4†source】【3:5†source】。\n\n如果你需要**精确到几分几秒的原话**，建议结合B站视频章节跳转（如【3:3†source】）进行核对。如需B站链接或详细目录可继续告知！"
+   },
+   {
+    "tool": "web_search",
+    "query": "李沐 Transformer 精读视频 \"这篇文章的写作是非常简洁的\" 在视频第几分钟",
+    "started": "2026-10-11T06:27:06.202Z",
+    "elapsed_s": 14.62,
+    "answer": "No relevant web results found."
+   },
+   {
+    "tool": "web_search",
+    "query": "李沐 B站 Transformer论文逐段精读 里怎么评价这篇论文的写作？原话是什么，在第几分钟？",
+    "started": "2026-10-11T06:31:08.414Z",
+    "elapsed_s": 20.47,
+    "answer": "李沐在 B 站《Transformer 论文逐段精读》中，对于这篇论文的写作有明确评价。\n\n1. **关于写作的整体评价**，李沐有一句高频原话是：\n   > “这篇文章其实很短，但是信息量巨大。”  \n   并且他强调：“这个图画得很好，在神经网络时代，画图是一个重要的技能。但这个图属于不明觉厉的图，很好看，但是不容易看懂。”  \n   这里，他一方面肯定了论文写作的紧凑和密度大，另一方面又指出图示“有气场不等于好懂”，表达了写作上的优点和挑战。\n\n2. **原话出处和时间点**：  \n   - 关于“这篇文章其实很短，但是信息量巨大”，出现在**开头部分，介绍标题和作者时，约在1分50秒-2分30秒之间**。\n   - 谈及“画图很好，但不容易看懂”这句，集中在**模型结构图展开讲解时，大约5分钟-6分钟左右**。\n\n3. **扩展说明**：   \n   李沐在视频中反复提到，这篇论文的结构与表达“非常清晰，把以前CNN和RNN模型讲的很容易比较混乱的地方通过attention机制讲得非常清楚”。他还提到，这种写作使得“学过一次的人都能讲清楚这个模型”，反映出论文写作上对逻辑和可读性的高度追求。\n\n如果你需要原视频片段，可以在B站搜“跟李沐学AI Transformer论文逐段精读”，在视频刚开始几分钟内留意他对于写作的评价原话，具体详见上述时间点【3:9†source】【3:2†source】。\n\n---\n**总结性回答**：\n> 李沐在B站的Transformer论文逐段精读视频中高度评价了这篇论文的写作，认为“文章很短但信息量巨大”，并指出“图画得很好，但属于那种不明觉厉的图”，原话大约出现在视频的2-6分钟之间【3:9†source】【3:2†source】。",
+    "note": "the first question asked again, 2026-10-11 06:31Z"
+   }
+  ],
+  "omniseek": [
+   {
+    "tool": "omniseek_read",
+    "args": {
+     "target": "https://www.bilibili.com/video/BV1pu411o7BE",
+     "max_chars": 3000
+    },
+    "started": "2026-10-11T06:44:29.326Z",
+    "elapsed_s": 1.59,
+    "result": {
+     "title": "Transformer论文逐段精读【论文精读】",
+     "duration_seconds": 5225,
+     "content": "更多请见：https://github.com/mli/paper-reading"
+    },
+    "note": "left out here: the comment section of the page reply (it carries usernames) and its one-line pointer to the transcription tool"
+   },
+   {
+    "tool": "omniseek_transcribe",
+    "args": {
+     "url": "https://www.bilibili.com/video/BV1pu411o7BE",
+     "language": "zh",
+     "segments": true
+    },
+    "started": "2026-10-11T07:06:18.820+00:00",
+    "ended": "2026-10-11T07:20:01.879+00:00",
+    "wall_seconds": 823.1,
+    "asr_seconds": 822.9,
+    "audio_seconds": 5225,
+    "chars": 30745,
+    "segments_count": 955,
+    "cached": false,
+    "model": "SenseVoice-Small",
+    "execution_note": "No start or duration: the whole video. Run by calling the same function the tool wraps (asr.transcribe_url) in its own process, after the shared development service restarted under memory pressure mid-run."
+   }
+  ],
+  "omniseek_again": {
+   "tool": "omniseek_transcribe",
+   "args": {
+    "url": "https://www.bilibili.com/video/BV1pu411o7BE",
+    "language": "zh",
+    "segments": true
+   },
+   "started": "2026-10-11T07:20:48.117+00:00",
+   "wall_seconds": 0.1,
+   "cached": true,
+   "same_segments": true
+  },
+  "transcript_hits_写作": [
+   {
+    "start": 419.93,
+    "end": 479.94,
+    "text": "都要效果要好。然后他只在8个GPU上训练了3.5天啊，最后他说我的transform架构啊能够泛化到一些别的任务上面都很好。这基本上你可以看到是说我提出了一个新的模型，主要用在是什么呢？在机器翻译这个任务上面。所以这篇文章一开始写的时候是针对机器翻译这个小任务写的啊，所以他整个写作的时候，他其实假设你前面是知道的，然后我提出个模型，然后我就我主要在我的机。 翻译上结果很好，这个也是比较有意思的工作啊。他一开始做的是机器翻译这个比较相对来说小一点的领域上面啊，之所以说小是因为你会发现机器翻译也就那么几家公司关心，对吧？你能够提供机器翻译的那些服务的公司啊，其实全世界范围来讲，也就那么多家。但是随着之后bert呀GPT把这个架构用在更多的在原处理的人物上的时候呢，整个这个工作要出圈了。然后最近当然大家都知道用在了图片。",
+    "at": "0:06:59"
+   },
+   {
+    "start": 4909.47,
+    "end": 4911.95,
+    "text": "啊，我们首先看一下他的写作。",
+    "at": "1:21:49"
+   },
+   {
+    "start": 4911.95,
+    "end": 4917.81,
+    "text": "啊，这篇文章的写作是非常简洁的，因为就是说他每一句话就基本上在讲一件事情。",
+    "at": "1:21:51"
+   },
+   {
+    "start": 4927.73,
+    "end": 4933.08,
+    "text": "另外一个是说他没有用太多的写作技巧啊，基本上就是说啊你看我提出一个什么东西。",
+    "at": "1:22:07"
+   }
+  ]
+ },
+ "R04": {
+  "question_en": "What do the top Bilibili comments say under Mu Li's \"Transformer论文逐段精读\" paper-reading video?",
+  "web": [
+   {
+    "tool": "web_search",
+    "query": "What do the top Bilibili comments say under Mu Li's \"Transformer论文逐段精读\" paper-reading video?",
+    "started": "2026-10-11T06:19:17.950Z",
+    "elapsed_s": 17.77,
+    "answer": "根据Bilibili及相关整理网站的信息，Mu Li（李沐）的“Transformer论文逐段精读”视频下，顶级评论和弹幕主要分为以下几个类型：\n\n1. **对内容的褒奖和认可**  \n   很多观众表示：“不愧是李沐大神，讲得非常通俗易懂！”、“终于有人详细带着逐行逐段精讲Transformer了，干货满满”这类评论高度评价了李沐的解读方式和教学质量，认为对理解论文帮助很大【3:0†source】。\n\n2. **学习资料分享与交流**  \n   有的UP主或评论区热心观众会提到“还整理了60G人工智能入门学习资源，需要的可以留言”，分享西瓜书、花书，以及顶会论文仓库、机器学习和计算机视觉的视频课程等，增强学习氛围【3:0†source】。\n\n3. **感叹经典论文的地位**  \n   不少弹幕会刷“AI大模型时代的奠基作”、“近几年来深度学习最重要的论文”，还有的会激动地说“终于能逐段啃下Transformer原文了！”表达认同Transformer论文的地位和对逐段解读的期待【3:0†source】【3:3†source】。\n\n4. **感谢与催更**  \n   “谢谢李沐老师！”、“希望以后能多出点这种逐段精读的系列！”这类评论表达感谢和对系列持续更新的希望。\n\n5. **走心共鸣型评论**  \n   “以前读论文总是停留在‘看过’阶段，这次真正明白了每一段的含义”、“跟着李沐精讲，从知道到真正理解”——这样的用户反馈显示大家真正被逐段精讲的形式打动，提高了自学论文的信心和效率【3:3†source】。\n\n总体来看，评论区氛围非常积极，大家普遍对李沐老师的风格和Transformer论文的重要性给予高度评价，并乐于在评论区分享资源、经验和学习心得，是国内AI自学者交流和成长的典范互动场所【3:0†source】【3:3†source】。"
+   },
+   {
+    "tool": "web_search",
+    "query": "李沐 Transformer论文逐段精读 BV1pu411o7BE 评论区 点赞最多的热门评论",
+    "started": "2026-10-11T06:27:06.210Z",
+    "elapsed_s": 19.05,
+    "answer": "根据B站视频《李沐 Transformer论文逐段精读》（BV1pu411o7BE）的公开资料，该视频的评论区没有官方自动汇总和排序的页面可被直接检索。但通常B站科技区此类高播放高收藏的视频下方，点赞最多的热门评论往往聚焦以下几类（总结自过往经验及同类内容的评论特征）：\n\n1. **致敬与感谢型**：如“感谢沐神！这一期真的让我明白了Transformer的精髓。”、“这个系列论文精读含金量极高，刷了好几遍。”此类评论易获得共鸣和最高点赞。\n2. **知识总结型**：如“总结：Transformer就是全靠Attention来解决序列任务，没有循环和卷积。最大突破是大幅提升并行效率，还能处理超长依赖。” 这样一语道破主旨的总结经常被顶到热评前列。\n3. **表情包或段子型**：比如调侃“自从看完李沐讲Transformer，面试官都不敢为难我了”，这种轻松幽默夹带梗的评论，也会被刷到热评。\n4. **补充和纠错型**：如有观众发现讲解细节或论文原文中的小错误，详细回复并获进一步热议时，也常排热门。\n\n据2024年评论区资料显示，实际点赞数最多的是一条典型的共鸣与总结型评论，其内容大略为：\n> “李沐的论文精读系列是机器学习入门最顶级的资料之一，尤其这期Transformer不仅把原理、细节和上下文讲透了，还手把手教学如何读论文，建议所有深度学习新手反复刷，每次都有新收获！”\n\n此外还有类似“顶沐神！公式推导和动手环节讲得太好了”等评价紧随其后。\n\n如果你需要**最新最准确的热评内容原文**，建议直接前往B站本视频页面，按“点赞数排序”查看前三条评论即可，因为B站评论实时更新、热评会随用户点赞变化而变化。当前无法直接提供热评全文，但基于以往数据，内容多集中在上述几类，并以感谢和知识提炼为主【3:0†source】。"
+   }
+  ],
+  "omniseek": {
+   "tool": "omniseek_search",
+   "args": {
+    "full": true,
+    "limit": 15,
+    "query": "BV1pu411o7BE",
+    "raw": true,
+    "sources": [
+     "bilibili"
+    ]
+   },
+   "started": "2026-10-11T06:20:10.488Z",
+   "elapsed_s": 22.25,
+   "comments": [
+    {
+     "content": "Mu Li Is All You Need[doge]",
+     "likes": 1954,
+     "date": "2021-10-28T01:03:52Z"
+    },
+    {
+     "content": "你好，我是聋人，对你这些视频很有感兴趣，可是没有字幕，听着听着挺费力的。。我不知道其他UP大主，怎么做到有字幕啊？都是后期处理的吗？这样工作量不止翻了几倍啊。。。。如果你觉得累，可以不用加字幕了，我用自己APP讯飞软件来翻译，有一些不准。。。。。如果你有条件的话，可以交给负责字幕组来添加字幕，可以分红。如果没条件的话，付出成本不成比例，千万别为我加字幕，先感谢你提供这些珍贵的经验！！",
+     "likes": 3994,
+     "date": "2021-10-29T08:06:07Z"
+    },
+    {
+     "content": "沐神一己之力拉高国内研究生教育水平[doge]",
+     "likes": 1271,
+     "date": "2021-10-30T06:49:40Z"
+    }
+   ],
+   "note": "elapsed is the whole parallel batch; comment authors dropped"
+  }
+ },
+ "R08": {
+  "question": "Which papers cite both foundational speculative decoding papers: Leviathan et al. 2022 and Chen et al. 2023?",
+  "seeds": {
+   "leviathan": {
+    "id": "d8e9f8c8a37cb4cd26b92ad0d942d641cd512644",
+    "title": "Fast Inference from Transformers via Speculative Decoding"
+   },
+   "chen": {
+    "id": "a1f8082505c7e90b0a033e1b9da0a97d67aad66c",
+    "title": "Accelerating Large Language Model Decoding with Speculative Sampling"
+   }
+  },
+  "web": [
+   {
+    "tool": "web_search",
+    "query": "which papers cite both Leviathan 2022 \"Fast Inference from Transformers via Speculative Decoding\" and Chen 2023 \"Accelerating Large Language Model Decoding with Speculative Sampling\"",
+    "started": "2026-10-11T06:27:06.225Z",
+    "elapsed_s": 12.93,
+    "answer": "I could not find a specific paper that directly cites both Leviathan et al. (2022) \"Fast Inference from Transformers via Speculative Decoding\" and Chen et al. (2023) \"Accelerating Large Language Model Decoding with Speculative Sampling\" simultaneously. Most results discuss the relationship and influence between these two works in the context of speculative decoding or efficient transformer inference but do not point to a third-party publication that explicitly cites both.\n\nOne recent relevant survey, \"Edge-Centric Generative AI: A Survey on Efficient Inference for Large Language Models in Resource-Constrained Environments\" by Rui Huang, does cite Leviathan et al. (2023) in its taxonomy of efficient inference techniques but it's not clear from the available information if it also cites Chen et al. (2023)【3:2†source】.\n\nIf you require an exact list of papers that cite both, specialized databases like Google Scholar, Semantic Scholar, or Web of Science—using their advanced citation analysis features—will be the most reliable resources. As of now, no single publication from the web search is unambiguously confirmed to cite both papers together."
+   }
+  ],
+  "omniseek": {
+   "tool": "omniseek_field_skeleton",
+   "args": {
+    "citers_per_seed": 50,
+    "deadline_s": 60,
+    "max_nodes": 200,
+    "seeds": [
+     "d8e9f8c8a37cb4cd26b92ad0d942d641cd512644",
+     "a1f8082505c7e90b0a033e1b9da0a97d67aad66c"
+    ],
+    "source": "s2"
+   },
+   "started": "2026-10-11T06:21:21.688Z",
+   "elapsed_s": 17.68,
+   "run_date": "2026-10-11",
+   "n_nodes": 117,
+   "n_edges": 121,
+   "meta": {
+    "backend": "s2",
+    "elapsed_s": 17.3,
+    "seeds_requested": 2,
+    "seeds_resolved": 1,
+    "seed_titles": [
+     "Accelerating Large Language Model Decoding with Speculative Sampling"
+    ],
+    "seed_note": null,
+    "nodes_capped": false,
+    "degraded": false,
+    "deadline_hit": false,
+    "partial": true
+   },
+   "cite_both_count": 29,
+   "cite_both": [
+    {
+     "title": "Fast LM Head via Coarse-Fine Decomposition and Tile-Wise Weight Clustering",
+     "date": "2026-11-01",
+     "arxiv": null
+    },
+    {
+     "title": "Schema-Conditioned Next-Tool Prediction for Coding Agents under Interface Drift",
+     "date": "2026-10-08",
+     "arxiv": null
+    },
+    {
+     "title": "DiffuPlex: Accelerating Full-Duplex Spoken Dialog Models via Rolling Masked Diffusion",
+     "date": "2026-10-08",
+     "arxiv": "2610.12214"
+    },
+    {
+     "title": "Where Draft Trees Lose Target Mass: Exit-Guided Speculative Decoding",
+     "date": "2026-10-08",
+     "arxiv": "2610.11750"
+    },
+    {
+     "title": "Speedbumps: Rejection Attacks on Speculative Decoding",
+     "date": "2026-10-07",
+     "arxiv": "2610.10929"
+    },
+    {
+     "title": "Training Parallel Speculative Draft Models by Directly Minimizing Expected Decoding Rounds",
+     "date": "2026-10-07",
+     "arxiv": "2610.10411"
+    },
+    {
+     "title": "Nucleus Speculative Decoding: Plausibility-Aware Verification Beyond Exact Distribution",
+     "date": "2026-10-06",
+     "arxiv": "2610.07822"
+    },
+    {
+     "title": "Secure Speculative Decoding for Large Language Models",
+     "date": "2026-10-06",
+     "arxiv": "2610.08678"
+    },
+    {
+     "title": "DLoop: Looped Speculative Decoding",
+     "date": "2026-10-06",
+     "arxiv": "2610.07659"
+    },
+    {
+     "title": "APEX: Speculate smarter, not deeper",
+     "date": "2026-10-06",
+     "arxiv": "2610.07780"
+    },
+    {
+     "title": "Breaking the Space Barrier and its Application to Language Model Inference",
+     "date": "2026-10-06",
+     "arxiv": "2610.09139"
+    },
+    {
+     "title": "SchemaFill: Efficient LLM Tool Calling via Slot-Parallel Speculative Decoding",
+     "date": "2026-10-05",
+     "arxiv": "2610.07086"
+    },
+    {
+     "title": "Trajectory-Retrieval Speculative Decoding: When Does a Model's Own History Help?",
+     "date": "2026-10-05",
+     "arxiv": "2610.07350"
+    },
+    {
+     "title": "Learning What to Imitate: Entropy-Aware Distribution Mixing",
+     "date": "2026-10-05",
+     "arxiv": "2610.06671"
+    },
+    {
+     "title": "Nash Equilibrium Text: A Game-Theoretic Decoding Framework for Text Generation",
+     "date": "2026-10-05",
+     "arxiv": "2610.05817"
+    },
+    {
+     "title": "AdaSpark: Adaptive DSpark with Online Learning for Tree Verification and N-gram Fill",
+     "date": "2026-10-05",
+     "arxiv": "2610.05774"
+    },
+    {
+     "title": "SharpDraft: Accelerating Long-Context Speculative Decoding with Cardinality-Aware Query Scaling",
+     "date": "2026-10-04",
+     "arxiv": "2610.05106"
+    },
+    {
+     "title": "SpecFold: Folding Multi-Branch Redundancy for Faster Speculative Decoding in Diffusion Language Models",
+     "date": "2026-10-04",
+     "arxiv": "2610.04875"
+    },
+    {
+     "title": "SEIS: Self-Evolving Inference Systems",
+     "date": "2026-10-03",
+     "arxiv": "2610.04646"
+    },
+    {
+     "title": "LEAP: Learning Efficient Action Proposals For LLM Agents",
+     "date": "2026-10-02",
+     "arxiv": "2610.02670"
+    },
+    {
+     "title": "BitNest: Bit-Nested Speculative Decoding for Memory-Efficient LLM Inference Acceleration",
+     "date": "2026-10-02",
+     "arxiv": "2610.02800"
+    },
+    {
+     "title": "Match the Distribution, Not the Compute: Post-Training Multi-Token Prediction Heads",
+     "date": "2026-10-01",
+     "arxiv": "2610.00888"
+    },
+    {
+     "title": "What Does a Token Cost? A Mixture-of-Agents Measurement of Sufficient Per-Token Compute",
+     "date": "2026-10-01",
+     "arxiv": "2610.02491"
+    },
+    {
+     "title": "AgSpec: Pushing the Limits of Retrieval-Based Speculative Decoding in Coding Agent Pipelines",
+     "date": "2026-10-01",
+     "arxiv": "2610.01108"
+    },
+    {
+     "title": "Clock Diffusion: Efficient Semi-Autoregressive Continuous Diffusion Language Models",
+     "date": "2026-10-01",
+     "arxiv": "2610.00894"
+    },
+    {
+     "title": "DRelay: Global Draft Context for Prefix-Aware Parallel Speculative Decoding Repair",
+     "date": "2026-10-01",
+     "arxiv": "2610.01439"
+    },
+    {
+     "title": "Student-Guided Teacher Distillation for Efficient LLM Task Routing: Positioning Against Jev-Style System-1 Classifiers",
+     "date": "2026-10-01",
+     "arxiv": "2610.02516"
+    },
+    {
+     "title": "Recovering Off-Policy Supervision for Speculative Decoding",
+     "date": "2026-09-30",
+     "arxiv": "2609.38795"
+    },
+    {
+     "title": "Vosti: Specifying, Implementing, and Verifying Deterministic LLM Inference",
+     "date": "2026-09-30",
+     "arxiv": "2609.38981"
+    }
+   ],
+   "note": "count computed from the returned edges; only one of the two seeds resolved as a seed, the other is a node in the graph; citing papers change daily"
+  }
+ }
+}

@@ -22,8 +22,9 @@
       <circle cx="100" cy="100" r="23" fill="none" stroke="#2563EB" stroke-width="15" stroke-linecap="round" stroke-dasharray="116 28" transform="rotate(195 100 100)"/>
       <circle cx="100" cy="100" r="8" fill="#F59E0B"/>
     </svg>
-  <h1>Zhihu MCP server: search Zhihu questions and answers from Claude Code and other MCP clients</h1>
-  <p class="lede">Your agent can search Zhihu through public search-engine results with no account, or read full answers through your own Zhihu login if you turn it on (off by default).</p>
+  <h1>Let your AI agent search Zhihu questions and answers</h1>
+  <p class="sub">An MCP server: works with Claude Code, Cursor, and Codex.</p>
+  <p class="lede">Without an account, your agent finds Zhihu answers through public search engines. If you switch it on, it reads full answers through your own Zhihu login. Off by default.</p>
   <h2 lang="zh">知乎 MCP：在 Claude Code 等客户端里让 AI Agent 搜知乎</h2>
   <p lang="zh">不登录时，你的 Agent 搜的是公开搜索引擎里的知乎结果；你打开后，它用你自己的知乎登录态读完整回答（默认关）。</p>
   <h2>Try it</h2>
@@ -31,8 +32,8 @@
     <div class="lbl">ASK YOUR AGENT</div>
     <div class="ask">知乎上，博士第一年有哪些建议？给出链接。</div>
   </div>
-  <div class="box">
-    <div class="lbl">WHAT YOUR AGENT CALLS</div>
+  <div class="box behind">
+    <div class="lbl">Behind the scenes</div>
     <pre><code>omniseek_search(query=&quot;读博 第一年 建议&quot;, sources=[&quot;zhihu_search&quot;])</code></pre>
   </div>
   <div class="box">
@@ -40,18 +41,18 @@
     <ul class="out">
       <li><span class="src">zhihu_search</span><a href="https://www.zhihu.com/question/626639333">博士生第一年怎么度过?</a></li><li><span class="src">zhihu_search</span><a href="https://www.zhihu.com/question/23166185">如果有可能，你会给博士第一年的自己什么建议？</a></li><li><span class="src">zhihu_search</span><a href="https://www.zhihu.com/question/556543536">有哪些给在读博士的建议？</a></li>
     </ul>
-    <p class="small">The first three results from a real run on 2026-10-10, no account. Without a login each result carries the search-engine snippet; your agent can open the page for more.</p>
+    <p class="small">The first three results from a real run on 2026-10-10, no account. Without a login each result carries the short preview the search engine shows; your agent can open the page for more.</p>
   </div>
-  <p class="small">Zhihu goes through public search-engine results that share one rate-limited backend, so your agent searches it when it names <code>zhihu_search</code>. To read full answers, turn on the <code>zhihu</code> source with your own login, on your own machine: see <a href="https://github.com/Battam1111/omniseek/blob/main/docs/walled-sources.md">Logged-in sites</a>.</p>
+  <p class="small">These results come from public search engines, which limit how often anyone can ask. So Zhihu is searched when your agent asks for it by name (<code>zhihu_search</code>), not on every search. To read full answers, turn on the <code>zhihu</code> source with your own login, on your own machine: see <a href="https://github.com/Battam1111/omniseek/blob/main/docs/walled-sources.md">Logged-in sites</a>.</p>
   <h2>Install</h2>
   <div class="install">
     <div class="lbl">TWO COMMANDS</div>
     <pre>uv tool install omniseek
 claude mcp add omniseek -- omniseek</pre>
-    <div class="note">Python 3.11+; <a href="https://docs.astral.sh/uv/">uv</a> fetches it if you don't have it. Cursor, pipx, pip, HTTP, and Docker setups: <a href="https://github.com/Battam1111/omniseek/blob/main/docs/install.md">Install options</a>.</div>
+    <div class="note">Python 3.11 or newer; <a href="https://docs.astral.sh/uv/">uv</a> installs it if you don't have it. Using Cursor, Codex, or another setup? See <a href="https://github.com/Battam1111/omniseek/blob/main/docs/install.md#connect-your-client">Install</a>.</div>
   </div>
 
-  <h2>Related sources</h2>
+  <h2>Where it looks</h2>
   <ul class="plain">
       <li><a href="https://github.com/Battam1111/omniseek/blob/main/docs/sources.md"><code>zhihu_search</code></a>: Zhihu through public search-engine results, no account</li>
       <li><a href="https://github.com/Battam1111/omniseek/blob/main/docs/sources.md"><code>zhihu</code></a>: full answers through your own login (off by default)</li>

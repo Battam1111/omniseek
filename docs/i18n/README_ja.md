@@ -1,139 +1,90 @@
 <p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/hero-ja-dark.png?v=2026-10-11">
-    <img src="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/hero-ja-light.png?v=2026-10-11" width="670" alt="OmniSeek:ウェブ検索が届かないインターネットを、あなたの AI エージェントに。">
-  </picture>
+  <img src="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/logo-lockup.png?v=2026-10-11b" width="320" alt="OmniSeek">
 </p>
 
-OmniSeek はセルフホスト型の MCP サーバーです。一度つなぐだけで、あなたのエージェントはポッドキャストや動画の中で話された内容、Bilibili や V2EX のような中国語コミュニティ、論文の引用グラフを検索できるようになります。オンにすれば、あなた自身のログインでしか見られないサイトも読めます(デフォルトはオフ)。200 以上のソースに対応し、Claude Code、Cursor など MCP に対応したクライアントで使えます。
+**ウェブ検索が届かないインターネットを、あなたの AI エージェントに。**
 
-エージェントにこう聞いてみてください:
+OmniSeek は、Claude Code、Cursor、Codex のような AI アシスタントやエージェントに追加する拡張機能です。ウェブ検索が止まるところから先を、エージェントが探せるようになります。
 
-> speculative decoding の基盤となる論文はどれで、それを土台にした最近の論文は何か?
-
-インストール(Python 3.11 以上。なければ [uv](https://docs.astral.sh/uv/) が取ってきます):
+- 日本語で聞くだけで、Bilibili で実際に語られていること（Zhihu は名前を挙げたときに検索）を、元の投稿へのリンクつきで。
+- ある研究分野の土台になった論文と、それを踏まえた最近の論文を、ひとつの答えで。
+- テーマを見張らせておけば、前回から新しく出たものだけを知らせます。
 
 ```bash
 uv tool install omniseek
 claude mcp add omniseek -- omniseek
 ```
 
-ポッドキャストの書き起こし、PDF の読み取り、ログインが必要なサイトはオプション機能です。Cursor、pipx、pip、HTTP、Docker での導入方法もあわせて[インストールの選択肢(英語)](../install.md)にあります。
-ドキュメント:[ドキュメント一覧](../) | [全ソース](../sources.md) | [ツール](../tools.md)
-
-実際の実行はこうなります(2 回の検索、先頭の結果だけ表示、それぞれ約 1 秒):
-
-<p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/terminal-demo-dark.gif?v=2026-10-11">
-    <img src="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/terminal-demo-light.gif?v=2026-10-11" width="720" alt="実際の実行例:エージェントが Zhihu と Bilibili で博士 1 年目へのアドバイスを検索し、それぞれ約 1 秒でリンク付きの投稿と動画を受け取る。">
-  </picture>
-</p>
+あなた自身のコンピューターで動きます。接続には MCP を使います（MCP は Claude Code や Cursor のような AI アプリがツールを追加するための共通の仕組みです）。Cursor と Codex もそれぞれ 1 行で追加できます。[インストール（英語）](../install.md#connect-your-client)を参照してください。
 
 [![CI](https://github.com/Battam1111/omniseek/actions/workflows/ci.yml/badge.svg)](https://github.com/Battam1111/omniseek/actions/workflows/ci.yml) [![PyPI](https://img.shields.io/pypi/v/omniseek?color=3B82F6&style=flat-square)](https://pypi.org/project/omniseek/) [![License](https://img.shields.io/badge/License-Apache_2.0-3B82F6?style=flat-square)](../../LICENSE) ![Python](https://img.shields.io/badge/Python_3.11+-3B82F6?style=flat-square) ![Built for MCP](https://img.shields.io/badge/built_for-MCP-3B82F6?style=flat-square)
-
 **Languages:** [English](../../README.md) · [中文](README_zh.md) · 日本語
 
 ---
 
-## ウェブ検索では見つからないもの
+## 違いを見る
 
-答えはポッドキャストの 47 分目、コメント欄の三つ下の返信、ログインの向こう、別の言語の中に眠っています。ウェブ検索が返すのはインデックス済みのページ、単一言語のテキストだけで、そこで止まります。OmniSeek はあなたのエージェントにその先を探させます。すべてあなた自身のマシンの上で。
+2 つのエージェントに、李沐（Mu Li）が Bilibili の 87 分の Transformer 論文解説で論文の書き方をどう評したか、その原文と何分目かを尋ねました。ウェブ検索だけのエージェントはまとめの要旨と「最初の 1〜8 分ごろ」を返し、OmniSeek を使うエージェントは動画を文字に起こして、その発言を 1:21:51 に見つけました。
 
-<div align="center">
+<p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo-ja-dark.png?v=2026-10-11">
-    <img src="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo-ja-light.png?v=2026-10-11" alt="実際の調査を三つの層として描いた図。第一層「書かれていて、届く」:通常の検索はルールを引用して止まる。第二層「書かれてはいるが、届かない」:ログインの内側の一次体験タイムラインと、コメント欄の奥に埋もれた回避策。第三層「そもそも書かれていない」:中国語解説動画のローカル書き起こしと、事実が画面の上にしかない動画ノート。層ごとに答えへの道が一本ずつある。">
+    <source media="(prefers-color-scheme: dark) and (max-width: 480px)" srcset="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/compare-en-dark-narrow.gif?v=2026-10-11c">
+    <source media="(max-width: 480px)" srcset="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/compare-en-light-narrow.gif?v=2026-10-11c">
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/compare-en-dark.gif?v=2026-10-11c">
+    <img src="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/compare-en-light.gif?v=2026-10-11c" width="720" alt="実際の実行例を左右に並べたもの。左はウェブ検索だけのエージェントで、ネット上のまとめの要旨と「最初の 1〜8 分ごろ」を返す。右は OmniSeek を使うエージェントで、87 分の動画をまるごと文字に起こし、李沐（Mu Li）の発言を 1:21:51 に見つけ、その秒から開くリンクを示す。">
   </picture>
-</div>
+</p>
 
-各層が持ち帰ったもの、原文のまま:
-
-- **書かれていて、届く。** ニュース見出し、公式 FAQ、人気ブログ、声はひとつ:*「2026 年より F-1 の入国は 4 年の初期滞在期間に制限。第三国での更新は引き続き可能。」* どれも同じ規則の引用で、実際にやった人はいない。
-- **書かれてはいるが、ログインの向こう。** 1point3acres の一次体験タイムライン三件、あなた自身のログインで読んだもの:**バンコク**、予約からパスポートまで 25 日、面接から承認まで 30 分。**ミラノ**、枠争奪ひと月、ビザは 5 年。**東京**、*「スムーズそのもの」*。ミラノ投稿のコメント欄には投稿者が戻ってきて:*「まず遅い日程で予約し、それから領事館にメールで繰り上げを依頼。F-1 申請者一人は実際に成功した。」* 個人の経験であって、公式の案内ではない。
-- **そもそも文字ではない。** bilibili の中国語解説動画をローカルで書き起こし:見出しの<em>「最長 4 年」</em>は初期滞在期間のことで、延長は審査窓口が変わっただけで消えてはいない。RED（小紅書）の動画ノートは本文がハッシュタグ四つだけ、フレームと音声をローカルで読む:第三国での 212(a)(6)(C) 拒否(虚偽陳述の認定)は F-1 への道をほぼ閉ざす。
-
-通常の検索は規則を引用して止まりました。実際に経験した人々はタイムラインと回避策とリスクを持っていました。OmniSeek は検索しなかったソースも挙げ、それぞれを検索するための呼び出しを添えていました。
-
-できること:中国語と英語の音声をローカルで書き起こす(クラウドを使わない)。画像と動画フレームを読む。言語をまたぐ(中国語の質問で英語の結果が見つかり、その逆も)。あなた自身のアカウントでログインが必要なサイトを読む(あなたのマシンの上で、デフォルトはオフ)。そして覚えておく(使うほど育つローカルの検索インデックスと、見つけた論文・人・ページの関係を出典つきで記録するグラフ)。
-
-言語をまたぐ検索は、OmniSeek が使ううちに蓄積するインデックスに依拠します。つまり新規インストールは低いところから始まります。公開の検証テストはまさにその新規インストール上で実行されるため、その言語横断の数値は最も条件の悪い状態であって、通常の状態ではありません。
-
-[ソース一覧](../sources.md)のどのソースも、五つの仕事のいずれかで通常の検索に勝って収録されています:構造化(引用グラフ、規制当局への提出書類)、ログインが必要な内容を読む、書き起こし、想起、監視。一覧は増え続けます:新しい候補はテストしてから収録し、使えなくなったソースは外します。
-
-**[実例と実際の出力](../examples.md)** · **[一回分の調査の全記録](../case-study.md)** · **[上の主張を一つずつ確かめるテスト](../../bench/DESIGN.md)**([最新結果](https://github.com/Battam1111/omniseek/blob/health-data/bench/RESULTS.md))· **[ソースの稼働状況、毎週更新](https://github.com/Battam1111/omniseek/blob/health-data/README.md)**
+[3 つの質問の完全な比較（英語）](../compare.md)：出典、日付、短い動画つき。
 
 ---
 
-## インストールの選択肢
+## エージェントが届く場所
 
-冒頭の二つのコマンドが基本の道です:クライアントが stdio で `omniseek` を自分で起動するので、ポートも token も要りません。それ以外はすべて **[インストールの選択肢(英語)](../install.md)** にあります:
+- **中国語コミュニティ**：Bilibili の動画とコメント、Zhihu の回答（名前を挙げたとき）、V2EX の最近のスレッド。どれも元の投稿へのリンクつき。詳しく：[Bilibili](https://battam1111.github.io/omniseek/bilibili-mcp.html)、[Zhihu](https://battam1111.github.io/omniseek/zhihu-mcp.html)（英語）
+- **言語をまたいで**：日本語や英語で聞けば、中国語で検索して、あなたの言語で答えます。その逆も。[詳しく](https://battam1111.github.io/omniseek/cross-lingual-search-mcp.html)
+- **ポッドキャストと動画**：話された言葉をあなたのコンピューター上で文字にし、何分目の発言かを添えて引用します（オプションの追加機能）。[詳しく](https://battam1111.github.io/omniseek/podcast-transcription-mcp.html)
+- **研究論文**：ある分野がどの論文の上に立っていて、最近どの論文がそれを引用しているか。[詳しく](https://battam1111.github.io/omniseek/citation-graph-mcp.html)
+- **前回からの新着**：検索を一度保存すれば、次からは新しいものだけを返します。[詳しく](https://battam1111.github.io/omniseek/research-monitoring-mcp.html)
+- **ログインして使うサイト**：オンにすると、エージェントはあなたのブラウザーのログインを使って読みます。デフォルトはオフ。[詳しく（英語）](../walled-sources.md)
 
-- Cursor の `mcp.json` の設定、`pipx` や素の `pip` で入れる方法(仮想環境に `pip` で入れたときは、クライアントがその環境を有効化しないので `omniseek` の絶対パスを登録します);
-- オプション機能:`pdf`、`asr`(書き起こし。先に PyTorch が要ります。プラットフォームごとのコマンドとディスク容量も記載)、`recall`、`ocr`、`walled`(ログインが必要なサイト);
-- bearer token つきの共有 HTTP サーバー、一行の `docker run`、`docker compose`。
+見つけたものはあなたのコンピューター上のローカルな検索インデックスに残るので、次の検索はすでに知っていることから始まります。
 
-OmniSeek の HTTP サーバーは `127.0.0.1` にだけバインドし、すべてのリクエストに token を要求します。リバースプロキシなしで外部に公開しないでください([SECURITY.md](../../.github/SECURITY.md))。
+---
+
+## インストール
+
+必要なのは上の 2 つのコマンドだけです。Python 3.11 以上が必要ですが、なければ [uv](https://docs.astral.sh/uv/) が入れてくれます。OmniSeek は AI アプリが必要なときに自分で起動するので、常に動かしておく必要も、ポートを開ける必要もありません。
+
+Cursor、Codex、pipx、Docker での導入と、オプションの追加機能（ポッドキャストの書き起こし、PDF の読み取り、ログインして使うサイト）は **[インストール（英語）](../install.md)** にあります。
+
+---
+
+## あなたのデータ、あなたのログイン
+
+OmniSeek はあなたのコンピューターで動きます。OmniSeek のクラウドはなく、アカウント登録も、利用データの送信もありません。エージェントの検索は、あなたがオンにしたサイトへ直接届きます。公開サイトはデフォルトでオン。ログインが必要なサイトはオンにするまでオフで、オンにするとあなたのブラウザーにすでにあるログインを使います。OmniSeek があなたのパスワードを目にすることはありません。使ううちに積み上がるものは、すべてあなたのローカルファイルです。
+
+OmniSeek は自前の AI モデルを持たず、私たちのサーバーに何かを送ることもありません。考えるのはあなたのエージェント、取ってくるのが OmniSeek です。設定：[Configuration（英語）](../configuration.md)。
 
 ---
 
 ## ツール
 
-MCP 接続はひとつ。中にモデルはなく、エージェントループもありません。考えるのはモデル、ループを回すのはクライアント、取ってくるのが OmniSeek。まず `omniseek_search` から。どんなソースがあるかは `omniseek_sources` で。
-
-| ツール | 何をするか |
-|--------|-----------|
-| `omniseek_search` | 一覧全体をまとめて検索し、重複を除いて並べる。言語をまたげる。 |
-| `omniseek_read` | 任意の URL や文書(ウェブ、PDF、arXiv)をきれいなテキストにする。 |
-| `omniseek_view` | 画像、文書の図、動画フレームを見る。 |
-| `omniseek_transcribe` | 音声・動画をローカルで書き起こす。中英対応、任意の時刻から開始可。 |
-| `omniseek_field_skeleton` | 研究分野の引用関係を描く:基盤となる論文と最近の論文。 |
-| `omniseek_resolve_identity` | 人名を各データベースの著者 ID 候補に対応づける。 |
-| `omniseek_coauthors` | 共著論文数で研究者の共同研究者を挙げる。 |
-| `omniseek_institution_cohort` | ある研究室で、ある分野で活発に発表している人を挙げる。 |
-| `omniseek_paper_enrich` | 論文のオープンアクセス PDF、撤回状況、被引用数。 |
-| `omniseek_paper_recommend` | キーワード検索では出ない似た論文(SPECTER 埋め込み)。 |
-| `omniseek_graph` | OmniSeek が見つけたものからなるローカルの関係グラフを問い合わせる:find、neighborhood、between、since、similar。 |
-| `omniseek_sensor` | 保存した検索を予定どおり再実行し、新しく出た結果だけを知らせる。 |
-| `omniseek_ruling` | 二つの項目が同じ人や物である(またはない)と記録する。 |
-| `omniseek_statement` | 二つの項目の間の向きのある関係を記録する。 |
-| `omniseek_curator_act` | ソースを提案、テスト、収録、または外す。 |
-| `omniseek_curator_view` | 候補ソースの待ち行列や、あるソースの報告を見る。 |
-| `omniseek_gather` | 複数のツールを並列に実行し、まとめて返す。 |
-| `omniseek_sources` | 分野、地域、機能、稼働状況でソースを一覧する。 |
-
-ログインが必要なサイトに専用のツールはありません:ソースをオンにした後は、同じ `omniseek_search(..., sources=["xiaohongshu"], raw=True)` があなた自身のログイン済みブラウザを通って実行されます。詳しくは[ログインが必要なサイト(英語)](../walled-sources.md)。
-
-完全なリファレンスは **[tools.md](../tools.md)** · **[FAQ](../faq.md)**
-
-Claude Code をお使いなら、[`skills/omniseek-investigate`](../../skills/omniseek-investigate/SKILL.md) に調査の手順(広く探す、絞り込む、構造にまとめる)が既製の skill として入っています。
+エージェントはまず `omniseek_search` を使います。論文の地図づくり、保存した検索、エージェントが残す判断の記録（`omniseek_ruling`、`omniseek_statement`）など、ほかのツールは **[tools.md（英語）](../tools.md)** にあります。
 
 ---
 
-## 設定
+## もっと知る
 
-何も設定しなければ、公開のソースはすべてオン、ログインが必要なサイトはすべてオフです。調整は一つのファイル `~/.omniseek/profile.json`([例](../../deploy/profile.example.json))で行います:
+[実例と実際の出力（英語）](../examples.md) · [ひとつの調査の全記録（英語）](../case-study.md) · [FAQ（英語）](../faq.md)、Exa や Tavily との違いも · [全ソース（英語）](../sources.md) · [ソースの稼働状況、毎週更新](https://github.com/Battam1111/omniseek/blob/health-data/README.md)
 
-| ソースの種類 | デフォルト |
-|----|-----------|
-| 公開、キー不要 | **オン** |
-| あなたが用意する API キーが必要(無料または有料) | キーを設定するとオン |
-| あなたのログインが必要 | **オフ**;ブラウザは自前 |
-| アクセス制御の回避が必要 | **オフ**;デフォルトにはひとつも含まれない |
-
-詳細:**[設定(英語)](../configuration.md)** · **[ログインが必要なサイト(英語)](../walled-sources.md)** · **[法的な立場(英語)](../LEGAL-POSTURE.md)**
-
----
-
-## なぜセルフホストか
-
-OmniSeek のクラウドは存在しません。テレメトリなし、アカウントなし、中継なし。クエリがあなたのマシンを離れるのは、あなたが有効にしたソースへの直接リクエストとしてだけで、OmniSeek がその経路に第三者を加えることはありません。ログイン状態はあなた自身のブラウザにだけあり、そのサイトにだけ提示されます。OmniSeek はパスワードを保存も送信もせず、そもそも見ることがありません。使うほど育つ検索インデックスと関係グラフは、あなたのマシン上のローカルファイルです。OmniSeek をやめても、すべて手元に残ります。
+**[これらの主張をどう確かめているか（英語）](../../bench/DESIGN.md)**：テストは、通常のウェブ検索の 1 ページ目で答えが見つからないことを先に確かめたものだけを数えます（[最新結果](https://github.com/Battam1111/omniseek/blob/health-data/bench/RESULTS.md)）。Claude Code を使っているなら、[`skills/omniseek-investigate`](../../skills/omniseek-investigate/SKILL.md) がすぐ使える調査の手順です：広く探し、絞り込み、構造を足す。
 
 ---
 
 ## コントリビュート
 
-[CONTRIBUTING.md](../../.github/CONTRIBUTING.md) を参照してください。新しいソースの基準:上の五つの仕事のいずれかで通常のウェブ検索に勝つこと。壊れたソースを直す基準:低いです、ぜひ。push する前に `python tests/smoke.py` を実行してください。
+[CONTRIBUTING.md](../../.github/CONTRIBUTING.md) を参照してください。新しいソースは、通常のウェブ検索では見つからないものを見つけられる必要があります。動かなくなったソースの修正はいつでも歓迎です。push の前に `python tests/smoke.py` を実行してください。
 
 参加により[行動規範](../../.github/CODE_OF_CONDUCT.md)に同意したものとみなされます。
 
