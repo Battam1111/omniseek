@@ -1401,7 +1401,7 @@ class VisualizationContractTests(unittest.TestCase):
             "https://raw.githubusercontent.com/Battam1111/omniseek/health-data/bench/latest.json",
             html,
         )
-        self.assertIn("Unable to load claim-verification results", html)
+        self.assertIn("The latest results could not be loaded", html)
         self.assertIn("health-data", html)
         self.assertIn('id="chart"', html)
         self.assertIn('id="baseline"', html)

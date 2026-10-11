@@ -4,9 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Citation graph MCP server: let your AI agent map a research field</title>
-<meta name="description" content="Give your agent a topic or a few papers, and it gets the citation neighborhood: which papers the field is built on and which recent ones build on them, from OpenAlex and Semantic Scholar.">
+<meta name="description" content="Give your agent a topic or a few papers, and it gets the papers around it and which ones cite which: which papers the field is built on and which recent ones build on them, from OpenAlex and Semantic Scholar.">
 <meta property="og:title" content="Citation graph MCP server: let your AI agent map a research field">
-<meta property="og:description" content="Give your agent a topic or a few papers, and it gets the citation neighborhood: which papers the field is built on and which recent ones build on them, from OpenAlex and Semantic Scholar.">
+<meta property="og:description" content="Give your agent a topic or a few papers, and it gets the papers around it and which ones cite which: which papers the field is built on and which recent ones build on them, from OpenAlex and Semantic Scholar.">
 <meta property="og:image" content="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/social-preview.png?v=2026-10-11">
 <meta property="og:type" content="website">
 <meta name="twitter:card" content="summary_large_image">
@@ -22,16 +22,17 @@
       <circle cx="100" cy="100" r="23" fill="none" stroke="#2563EB" stroke-width="15" stroke-linecap="round" stroke-dasharray="116 28" transform="rotate(195 100 100)"/>
       <circle cx="100" cy="100" r="8" fill="#F59E0B"/>
     </svg>
-  <h1>Citation graph MCP server: let your AI agent map a research field</h1>
-  <p class="lede">Give your agent a topic or a few papers, and it gets the citation neighborhood: which papers the field is built on and which recent ones build on them, from OpenAlex and Semantic Scholar.</p>
+  <h1>Let your AI agent map a research field: the papers it is built on and the new ones</h1>
+  <p class="sub">An MCP server: works with Claude Code, Cursor, and Codex.</p>
+  <p class="lede">Give your agent a topic or a few papers, and it gets the papers around it and which ones cite which: which papers the field is built on and which recent ones build on them, from OpenAlex and Semantic Scholar.</p>
 
   <h2>Try it</h2>
   <div class="box">
     <div class="lbl">ASK YOUR AGENT</div>
     <div class="ask">What are the foundational papers on speculative decoding, and which recent papers build on them?</div>
   </div>
-  <div class="box">
-    <div class="lbl">WHAT YOUR AGENT CALLS</div>
+  <div class="box behind">
+    <div class="lbl">Behind the scenes</div>
     <pre><code>omniseek_field_skeleton(query=&quot;speculative decoding&quot;, source=&quot;s2&quot;)</code></pre>
   </div>
   <div class="box">
@@ -41,16 +42,16 @@
     </ul>
     <p class="small">From a real run on 2026-10-10 (60 papers, 198 citation links). Each paper comes back with its year and how many papers in the map cite it; your agent sorts them into foundations and recent work.</p>
   </div>
-  <p class="small">The default backend is OpenAlex; <code>source="s2"</code> uses Semantic Scholar, which covers recent arXiv papers better. Both have free daily limits; when one is busy the tool says so, and your agent can switch to the other.</p>
+  <p class="small">It uses OpenAlex by default, and Semantic Scholar when you want the newest arXiv papers. Both have free daily limits; when one is busy the tool says so, and your agent can switch to the other.</p>
   <h2>Install</h2>
   <div class="install">
     <div class="lbl">TWO COMMANDS</div>
     <pre>uv tool install omniseek
 claude mcp add omniseek -- omniseek</pre>
-    <div class="note">Python 3.11+; <a href="https://docs.astral.sh/uv/">uv</a> fetches it if you don't have it. Cursor, pipx, pip, HTTP, and Docker setups: <a href="https://github.com/Battam1111/omniseek/blob/main/docs/install.md">Install options</a>.</div>
+    <div class="note">Python 3.11 or newer; <a href="https://docs.astral.sh/uv/">uv</a> installs it if you don't have it. Using Cursor, Codex, or another setup? See <a href="https://github.com/Battam1111/omniseek/blob/main/docs/install.md#connect-your-client">Install</a>.</div>
   </div>
 
-  <h2>Related sources</h2>
+  <h2>Where it looks</h2>
   <ul class="plain">
       <li><a href="https://github.com/Battam1111/omniseek/blob/main/docs/sources.md"><code>openalex</code></a>: the open scholarly graph</li>
       <li><a href="https://github.com/Battam1111/omniseek/blob/main/docs/sources.md"><code>semantic_scholar</code></a>: papers, citations, and citing sentences</li>
