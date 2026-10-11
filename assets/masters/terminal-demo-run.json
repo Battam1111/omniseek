@@ -1,0 +1,92 @@
+{
+ "recorded": "2026-10-11",
+ "question": "What advice do PhD students in China give for the first year? Link the posts.",
+ "calls": [
+  {
+   "call": {
+    "tool": "omniseek_search",
+    "args": {
+     "query": "读博 第一年 建议",
+     "sources": [
+      "zhihu_search"
+     ]
+    }
+   },
+   "secs": 1.0,
+   "count": 10,
+   "documents": [
+    {
+     "source": "zhihu_search",
+     "title": "如果有可能，你会给博士第一年的自己什么建议？ - 知乎",
+     "url": "https://www.zhihu.com/question/23166185",
+     "date": null,
+     "views": null
+    },
+    {
+     "source": "zhihu_search",
+     "title": "博士生第一年怎么度过? - 知乎",
+     "url": "https://www.zhihu.com/question/626639333",
+     "date": null,
+     "views": null
+    },
+    {
+     "source": "zhihu_search",
+     "title": "给博士一年级新生的15条实用建议：从心态到行动的全面指南",
+     "url": "https://zhuanlan.zhihu.com/p/29441451185",
+     "date": null,
+     "views": null
+    },
+    {
+     "source": "zhihu_search",
+     "title": "有哪些给在读博士的建议？ - 知乎",
+     "url": "https://www.zhihu.com/question/556543536/answers/updated",
+     "date": null,
+     "views": null
+    }
+   ]
+  },
+  {
+   "call": {
+    "tool": "omniseek_search",
+    "args": {
+     "query": "读博 第一年 建议",
+     "sources": [
+      "bilibili"
+     ]
+    }
+   },
+   "secs": 0.7,
+   "count": 15,
+   "documents": [
+    {
+     "source": "bilibili",
+     "title": "如果重新开局，读博第一年我会做什么",
+     "url": "https://www.bilibili.com/video/BV1GHWSeLE4v",
+     "date": "2024-08-23",
+     "views": 15814
+    },
+    {
+     "source": "bilibili",
+     "title": "建议不读博",
+     "url": "https://www.bilibili.com/video/BV1cSec6tET8",
+     "date": "2026-09-16",
+     "views": 91369
+    },
+    {
+     "source": "bilibili",
+     "title": "什么情况下适合读博? 我是不是要读博?",
+     "url": "https://www.bilibili.com/video/BV1L4pY6VEHz",
+     "date": "2026-10-10",
+     "views": 3806
+    },
+    {
+     "source": "bilibili",
+     "title": "如果回到博一，我会给自己提什么建议",
+     "url": "https://www.bilibili.com/video/BV1994y1n7vC",
+     "date": "2023-11-20",
+     "views": 41938
+    }
+   ]
+  }
+ ]
+}

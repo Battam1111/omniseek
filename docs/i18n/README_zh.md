@@ -5,6 +5,10 @@
   </picture>
 </p>
 
+<p align="center">
+  <img src="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/terminal-demo.gif" width="760" alt="一次真实运行：Agent 在知乎和 B 站搜读博第一年的建议，每次约一秒拿回带链接的帖子和视频。">
+</p>
+
 OmniSeek 是一个自己部署的 MCP 服务。接上一次，你的 Agent 就能搜播客和视频里说的话、B 站和 V2EX 这类中文社区、论文引用图。你打开后，它还能用你自己的登录态读要登录才能看的网站（默认关）。覆盖 200 多个源，Claude Code、Cursor 等支持 MCP 的客户端都能用。
 
 试着问你的 Agent：

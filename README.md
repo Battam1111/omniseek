@@ -7,6 +7,10 @@
   </picture>
 </p>
 
+<p align="center">
+  <img src="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/terminal-demo.gif" width="760" alt="A real OmniSeek run: an agent searches Zhihu and Bilibili for first-year PhD advice and gets linked posts and videos back in about a second each.">
+</p>
+
 OmniSeek is a self-hosted MCP server. Through one connection, your agent can search what people said in podcasts and videos, Chinese communities such as Bilibili and V2EX, and paper citation graphs. If you turn it on, it can also read sites behind your own login (off by default). It covers 200+ sources and works with Claude Code, Cursor, and other MCP clients.
 
 Ask your agent:

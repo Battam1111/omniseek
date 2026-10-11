@@ -5,6 +5,10 @@
   </picture>
 </p>
 
+<p align="center">
+  <img src="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/terminal-demo.gif" width="760" alt="実際の実行例:エージェントが Zhihu と Bilibili で博士 1 年目へのアドバイスを検索し、それぞれ約 1 秒でリンク付きの投稿と動画を受け取る。">
+</p>
+
 OmniSeek はセルフホスト型の MCP サーバーです。一度つなぐだけで、あなたのエージェントはポッドキャストや動画の中で話された内容、Bilibili や V2EX のような中国語コミュニティ、論文の引用グラフを検索できるようになります。オンにすれば、あなた自身のログインでしか見られないサイトも読めます(デフォルトはオフ)。200 以上のソースに対応し、Claude Code、Cursor など MCP に対応したクライアントで使えます。
 
 エージェントにこう聞いてみてください:
