@@ -213,8 +213,11 @@ THEMES = {
   --bar: color-mix(in srgb, #93C5FD 22%, #FFFFFF);
   --line: color-mix(in srgb, #3B82F6 24%, #FFFFFF);
   --fg: #0F172A;
-  --muted: color-mix(in srgb, #0F172A 62%, #FFFFFF);
-  --faint: color-mix(in srgb, #0F172A 45%, #FFFFFF);
+  --muted: color-mix(in srgb, #0F172A 68%, #FFFFFF);
+  --faint: color-mix(in srgb, #0F172A 55%, #FFFFFF);
+  --fg-dim: color-mix(in srgb, #0F172A 72%, #FFFFFF);
+  --muted-dim: color-mix(in srgb, #0F172A 52%, #FFFFFF);
+  --fn-dim: color-mix(in srgb, #1D4ED8 84%, #FFFFFF);
   --fn: #1D4ED8;
   --hl: color-mix(in srgb, #F59E0B 22%, #FFFFFF);
   --amber: #B45309;
@@ -228,15 +231,19 @@ THEMES = {
   --fg: color-mix(in srgb, #FFFFFF 94%, #0F172A);
   --muted: color-mix(in srgb, #FFFFFF 64%, #0F172A);
   --faint: color-mix(in srgb, #FFFFFF 48%, #0F172A);
+  --fg-dim: color-mix(in srgb, #FFFFFF 64%, #0F172A);
+  --muted-dim: color-mix(in srgb, #FFFFFF 46%, #0F172A);
+  --fn-dim: color-mix(in srgb, #93C5FD 70%, #0F172A);
   --fn: #93C5FD;
   --hl: color-mix(in srgb, #F59E0B 24%, #0F172A);
   --amber: #F59E0B;
   --badge: color-mix(in srgb, #3B82F6 22%, #0F172A);
   --ring3: #2563EB;"""},
 }
-# --amber on light pages is the brand amber mixed toward navy for contrast on white.
+# --amber on light pages is the brand amber mixed toward navy for contrast on white and on the
+# amber highlight (at least 4.5:1, see check_contrast.py).
 THEMES["light"]["css"] = THEMES["light"]["css"].replace(
-    "--amber: #B45309;", "--amber: color-mix(in srgb, #F59E0B 62%, #0F172A);")
+    "--amber: #B45309;", "--amber: color-mix(in srgb, #F59E0B 50%, #0F172A);")
 
 MARK = """<svg viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
   <circle cx="100" cy="100" r="78" fill="none" stroke="#93C5FD" stroke-width="16" stroke-linecap="round" stroke-dasharray="416 74" transform="rotate(-55 100 100)"/>
@@ -254,9 +261,9 @@ html, body {{ background:transparent; }}
 #stage {{ {css}
   position:relative; width:{w}px; height:{h}px; background:var(--bg); border:1px solid var(--line);
   border-radius:14px; overflow:hidden; display:flex; flex-direction:column; color:var(--fg);
-  font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI","Helvetica Neue",Arial,"PingFang SC","Hiragino Sans GB",sans-serif;
+  font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI","Helvetica Neue",Arial,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
   -webkit-font-smoothing:antialiased; }}
-.mono {{ font-family:ui-monospace,"SF Mono",Menlo,"PingFang SC",monospace; }}
+.mono {{ font-family:ui-monospace,"SF Mono",Menlo,Consolas,"PingFang SC","Microsoft YaHei",monospace; }}
 .q {{ padding:14px 18px 12px; border-bottom:1px solid var(--line); }}
 .q .ask {{ font-size:15px; color:var(--muted); font-weight:600; }}
 .q .text {{ font-size:{qsize}px; font-weight:700; line-height:1.28; margin-top:3px; letter-spacing:-.005em; }}
@@ -270,7 +277,9 @@ html, body {{ background:transparent; }}
   justify-content:flex-end; padding:6px 14px 10px;
   -webkit-mask-image:linear-gradient(to bottom, transparent 0, #000 34px); }}
 .step {{ margin-top:10px; transition:none; }}
-.step.dim {{ opacity:.5; }}
+/* A step that is no longer current steps back by colour, not opacity: its main line stays at
+   4.5:1 or more and its smaller lines at 3:1 or more against the card (check_contrast.py). */
+.step.dim {{ --fg:var(--fg-dim); --muted:var(--muted-dim); --fn:var(--fn-dim); color:var(--fg); }}
 .call {{ font-size:15px; color:var(--muted); line-height:1.35; overflow-wrap:anywhere; }}
 .call .fn {{ color:var(--fn); font-weight:650; }}
 .lbl {{ font-size:16px; color:var(--muted); font-weight:600; }}

@@ -74,8 +74,8 @@ html, body { background:transparent; }
 #stage { %(theme)s
   width:%(w)spx; background:var(--bg); border:1px solid var(--line); border-radius:14px; overflow:hidden;
   color:var(--fg); -webkit-font-smoothing:antialiased;
-  font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI","Helvetica Neue",Arial,"PingFang SC","Hiragino Sans GB",sans-serif; }
-.mono { font-family:ui-monospace,"SF Mono",Menlo,"PingFang SC",monospace; }
+  font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI","Helvetica Neue",Arial,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif; }
+.mono { font-family:ui-monospace,"SF Mono",Menlo,Consolas,"PingFang SC","Microsoft YaHei",monospace; }
 .top { display:flex; align-items:center; gap:12px; padding:16px 22px; border-bottom:1px solid var(--line); background:var(--bar); }
 .top svg { width:34px; height:34px; }
 .top h1 { font-size:24px; font-weight:800; letter-spacing:-.01em; }
