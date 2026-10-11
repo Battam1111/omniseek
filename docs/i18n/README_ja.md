@@ -1,7 +1,7 @@
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/hero-ja-dark.png">
-    <img src="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/hero-ja-light.png" width="670" alt="OmniSeek:ウェブ検索が届かないインターネットを、あなたの AI エージェントに。">
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/hero-ja-dark.png?v=2026-10-11">
+    <img src="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/hero-ja-light.png?v=2026-10-11" width="670" alt="OmniSeek:ウェブ検索が届かないインターネットを、あなたの AI エージェントに。">
   </picture>
 </p>
 
@@ -25,8 +25,8 @@ claude mcp add omniseek -- omniseek
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/terminal-demo-dark.gif">
-    <img src="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/terminal-demo-light.gif" width="720" alt="実際の実行例:エージェントが Zhihu と Bilibili で博士 1 年目へのアドバイスを検索し、それぞれ約 1 秒でリンク付きの投稿と動画を受け取る。">
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/terminal-demo-dark.gif?v=2026-10-11">
+    <img src="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/terminal-demo-light.gif?v=2026-10-11" width="720" alt="実際の実行例:エージェントが Zhihu と Bilibili で博士 1 年目へのアドバイスを検索し、それぞれ約 1 秒でリンク付きの投稿と動画を受け取る。">
   </picture>
 </p>
 
@@ -42,8 +42,8 @@ claude mcp add omniseek -- omniseek
 
 <div align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo-ja-dark.png">
-    <img src="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo-ja-light.png" alt="実際の調査を三つの層として描いた図。第一層「書かれていて、届く」:通常の検索はルールを引用して止まる。第二層「書かれてはいるが、ログインや奥深くにある」:ログインの内側の一次体験タイムラインと、コメント欄の奥に埋もれた回避策。第三層「そもそも文字ではない」:中国語解説動画のローカル書き起こしと、事実が画面の上にしかない動画ノート。層ごとに答えへの道が一本ずつある。">
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo-ja-dark.png?v=2026-10-11">
+    <img src="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo-ja-light.png?v=2026-10-11" alt="実際の調査を三つの層として描いた図。第一層「書かれていて、届く」:通常の検索はルールを引用して止まる。第二層「書かれてはいるが、ログインや奥深くにある」:ログインの内側の一次体験タイムラインと、コメント欄の奥に埋もれた回避策。第三層「そもそも文字ではない」:中国語解説動画のローカル書き起こしと、事実が画面の上にしかない動画ノート。層ごとに答えへの道が一本ずつある。">
   </picture>
 </div>
 

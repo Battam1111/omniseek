@@ -52,6 +52,8 @@ connection with two commands, and every place that explains installing should sa
 - CI runs the unit tests and the offline smoke check on Windows as well (`smoke-windows`, the same
   steps as the Linux job). Before, Windows only installed the package and did the handshake, so a
   Windows-only bug in how the local log file was written got through with every test green.
+- Image URLs in the READMEs and on the site end with `?v=<date>`, so GitHub shows a re-rendered
+  picture at once instead of the cached old one; `scripts/brand_lint.py` fails CI on an unversioned one.
 - A short terminal recording in the README, right after the two install commands: one real run
   searching Zhihu and Bilibili, cut to the first results, in a light and a dark version
   (`assets/terminal-demo-{light,dark}.gif`) that follow the reader's GitHub theme. The first frame

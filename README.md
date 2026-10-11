@@ -2,8 +2,8 @@
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/hero-en-dark.png">
-    <img src="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/hero-en-light.png" width="720" alt="OmniSeek: give your AI agent the parts of the internet web search doesn't reach.">
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/hero-en-dark.png?v=2026-10-11">
+    <img src="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/hero-en-light.png?v=2026-10-11" width="720" alt="OmniSeek: give your AI agent the parts of the internet web search doesn't reach.">
   </picture>
 </p>
 
@@ -27,8 +27,8 @@ A real run, two searches, cut to the first results (each took about a second):
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/terminal-demo-dark.gif">
-    <img src="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/terminal-demo-light.gif" width="720" alt="A real OmniSeek run: an agent searches Zhihu and Bilibili for first-year PhD advice and gets linked posts and videos back in about a second each.">
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/terminal-demo-dark.gif?v=2026-10-11">
+    <img src="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/terminal-demo-light.gif?v=2026-10-11" width="720" alt="A real OmniSeek run: an agent searches Zhihu and Bilibili for first-year PhD advice and gets linked posts and videos back in about a second each.">
   </picture>
 </p>
 
@@ -44,8 +44,8 @@ The answer is sitting in minute 47 of a podcast, three replies deep in a comment
 
 <div align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo-en-dark.png">
-    <img src="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo-en-light.png" alt="One real investigation, drawn as three layers. Layer one, written down and easy to find: plain search quotes the rule and stops. Layer two, written down but behind a login or buried: first-person timelines on a forum you are logged in to, and a workaround in a comment thread. Layer three, never written down: a Chinese explainer video transcribed from audio, and a video note read from its frames. Each layer opens a different way to the answer.">
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo-en-dark.png?v=2026-10-11">
+    <img src="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo-en-light.png?v=2026-10-11" alt="One real investigation, drawn as three layers. Layer one, written down and easy to find: plain search quotes the rule and stops. Layer two, written down but behind a login or buried: first-person timelines on a forum you are logged in to, and a workaround in a comment thread. Layer three, never written down: a Chinese explainer video transcribed from audio, and a video note read from its frames. Each layer opens a different way to the answer.">
   </picture>
 </div>
 

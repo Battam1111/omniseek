@@ -1,7 +1,7 @@
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/hero-zh-dark.png">
-    <img src="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/hero-zh-light.png" width="560" alt="OmniSeek：给你的 AI Agent 接上网页搜索够不到的那部分互联网。">
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/hero-zh-dark.png?v=2026-10-11">
+    <img src="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/hero-zh-light.png?v=2026-10-11" width="560" alt="OmniSeek：给你的 AI Agent 接上网页搜索够不到的那部分互联网。">
   </picture>
 </p>
 
@@ -25,8 +25,8 @@ claude mcp add omniseek -- omniseek
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/terminal-demo-dark.gif">
-    <img src="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/terminal-demo-light.gif" width="720" alt="一次真实运行：Agent 在知乎和 B 站搜读博第一年的建议，每次约一秒拿回带链接的帖子和视频。">
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/terminal-demo-dark.gif?v=2026-10-11">
+    <img src="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/terminal-demo-light.gif?v=2026-10-11" width="720" alt="一次真实运行：Agent 在知乎和 B 站搜读博第一年的建议，每次约一秒拿回带链接的帖子和视频。">
   </picture>
 </p>
 
@@ -42,8 +42,8 @@ claude mcp add omniseek -- omniseek
 
 <div align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo-zh-dark.png">
-    <img src="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo-zh-light.png" alt="一次真实调查，画成三层。第一层「搜得到」：普通搜索引到规则就停了。第二层「写下来了，但要登录或埋得太深」：你登录的论坛上第一手的时间线，以及埋在评论区的办法。第三层「压根不是文字」：中文讲解视频经本地转写，以及只在画面上的视频笔记。每一层各有一条通向答案的路。">
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo-zh-dark.png?v=2026-10-11">
+    <img src="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo-zh-light.png?v=2026-10-11" alt="一次真实调查，画成三层。第一层「搜得到」：普通搜索引到规则就停了。第二层「写下来了，但要登录或埋得太深」：你登录的论坛上第一手的时间线，以及埋在评论区的办法。第三层「压根不是文字」：中文讲解视频经本地转写，以及只在画面上的视频笔记。每一层各有一条通向答案的路。">
   </picture>
 </div>
 
