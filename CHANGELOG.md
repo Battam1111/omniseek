@@ -27,9 +27,19 @@ connection with two commands, and every place that explains installing should sa
   question, the two commands and a link to the docs; details live in `docs/`. Image links are
   absolute so they render on PyPI and Glama. Internal project words were replaced with plain ones.
 - **New PyPI summary** in `pyproject.toml`, mirrored in `server.json`.
-- **Site:** new tagline and quick start, install commands no longer cut off on phones, and five
+- **Site:** new tagline and quick start, install commands no longer cut off on phones, and six
   pages by capability (cross-lingual search, podcast transcription, Zhihu, research monitoring,
-  citation graph), each with an example that was actually run.
+  citation graph, Bilibili), each with an example that was actually run. The capability cards on
+  the home page sit in rows of three.
+- **Hero images and social card re-rendered with the new tagline** (English, Chinese, Japanese;
+  light and dark). The READMEs open with the hero again, and the site's link-share image is the
+  social card again.
+- **Docs say it plainly.** The configuration, tools, patterns and login-site pages, the source
+  catalog header and the Japanese README use everyday words instead of project jargon: "sites
+  behind a login", "access level", "run only when named", "source review". Field values and names
+  in code (`access_tier`, the `walled` extra, `omniseek_curator_*`) are unchanged. The catalog tag
+  for sources that never join a broad search is now `by-name-only`. The Japanese README follows
+  the current English and Chinese structure (two-command install, plain-language tables).
 
 ### Added
 
@@ -39,6 +49,12 @@ connection with two commands, and every place that explains installing should sa
 - CI job that installs the package and runs a real MCP handshake (initialize and tools/list) over
   stdio, then over HTTP on `127.0.0.1` and on `localhost`. A health-check URL alone no longer counts
   as a passing server.
+- CI runs the unit tests and the offline smoke check on Windows as well (`smoke-windows`, the same
+  steps as the Linux job). Before, Windows only installed the package and did the handshake, so a
+  Windows-only bug in how the local log file was written got through with every test green.
+- A short terminal recording under the README hero (`assets/terminal-demo.gif`): one real run
+  searching Zhihu and Bilibili, cut to the first results. `assets/masters/gen_terminal_demo.py`
+  records the run and rebuilds the recording from it.
 
 ### Notes
 

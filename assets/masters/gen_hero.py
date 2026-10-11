@@ -41,9 +41,9 @@ MODES = {
 
 # Taglines match each README's own wording; the terminal stop is split out so it can be amber.
 LANGS = {
-    "en": {"tagline": "Your agent seeks what search can&rsquo;t find", "stop": ".", "tagsize": 21.5},
-    "zh": {"tagline": "让你的 Agent 找到难以触及之物", "stop": "。", "tagsize": 21},
-    "ja": {"tagline": "検索では届かないものを、あなたのエージェントが探し当てる", "stop": "。", "tagsize": 18.5},
+    "en": {"tagline": "Give your AI agent the parts of the internet web search doesn&rsquo;t reach", "stop": ".", "tagsize": 21.5},
+    "zh": {"tagline": "给你的 AI Agent 接上网页搜索够不到的那部分互联网", "stop": "。", "tagsize": 21},
+    "ja": {"tagline": "ウェブ検索が届かないインターネットを、あなたの AI エージェントに", "stop": "。", "tagsize": 20},
 }
 
 BASE = pathlib.Path(__file__).parent

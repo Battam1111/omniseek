@@ -10,7 +10,7 @@ agent is an ordinary one: map where credit assignment for multi-agent LLM system
 this week. What matters is not the topic. It is what OmniSeek already knew.
 
 This is the second investigation in that loop: the first populated retrieval memory and the
-evidence graph, and this one shows how the next investigation starts from those records.
+citation graph, and this one shows how the next investigation starts from those records.
 
 ## One call, one ranked list, and a paper trail
 
@@ -33,7 +33,7 @@ Here `lexical` and `vector` are candidate counts, not scores or percentages. For
 
 The `searched: 87` value is 87 of the configured sources eligible for this broad pass, not
 87 of the full catalog. `src/omniseek/core/fetcher.py` sets it to `len(target_sources)` after
-routing removes explicit-only, disabled, retired, and watchdog-down sources.
+routing removes sources that run only when named, plus disabled, retired, and watchdog-down sources.
 
 Eleven seconds, 87 eligible sources in parallel, 435 candidate records collapsed into 8 documents.
 Not eight links: eight distinct claims on the field, because records of the same paper from
@@ -102,7 +102,7 @@ information.
 and `news` in `src/omniseek/core/fetcher.py`; it reports which of those fixed perspectives did
 not appear in this pass.
 
-(`agent_tooling_radar` is an explicit-only monitor source; its `reason` field is quoted as
+(`agent_tooling_radar` is a monitor source that runs only when named; its `reason` field is quoted as
 stored on the day of this session. The catalog has since reworded that entry in plainer
 language; outputs here stay verbatim to their run.) A ranked list that merely looks complete is the most dangerous
 kind of complete. So the router reports which perspectives this pass had none of, and which
@@ -111,7 +111,7 @@ reaches it. Coverage becomes something you read, not something you assume.
 
 ## A judgment, recorded once, inherited forever
 
-The evidence graph held two nodes with the same title, "Quantile Credit Assignment". Two
+The citation graph held two nodes with the same title, "Quantile Credit Assignment". Two
 `omniseek_read` calls settled it: same ICML 2023 paper, same authors, same abstract; one node
 is the conference record, the other the same paper as imported from DBLP, the computer-science
 bibliography. So the agent ruled (a node id is the graph's name for a remembered document:
@@ -151,14 +151,14 @@ new on day one, 3 the next day, then 0, which is exactly what a working watch lo
 ```mermaid
 flowchart LR
     A[investigation] -->|first_seen stamps| M[(retrieval memory)]
-    A -->|rulings + statements| G[(evidence graph)]
+    A -->|rulings + statements| G[(citation graph)]
     W[standing sensors] -->|scheduled diffs| M
     M -->|seen_before, per document| B[next investigation]
     G -->|duplicates collapsed, judgments applied| B
 ```
 
 Every investigation leaves OmniSeek sharper than it found it: stamps in the retrieval
-memory, judgments in the evidence graph, watches on the frontier. The second investigation
+memory, judgments in the citation graph, watches on the frontier. The second investigation
 does not start from zero. It starts from everything the first one settled.
 
 ## What OmniSeek did not do

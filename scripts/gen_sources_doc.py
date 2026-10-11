@@ -1,7 +1,7 @@
 """Generate docs/sources.md from the shipped catalog.
 
-The catalog is code, so a hand-written roster would rot the day the curator admits or
-retires a source. This generator imports the engine exactly the way the server does
+The catalog is code, so a hand-written roster would rot the day a source is admitted or
+retired. This generator imports the engine exactly the way the server does
 (registration happens at source-module import), asks the same ``list_sources`` the
 ``omniseek_sources`` tool answers from, and rewrites the doc. The sync pipeline reruns it on
 every engine update, so the doc can never drift from the code it describes.
@@ -46,14 +46,16 @@ def main() -> int:
         "# The source catalog",
         "",
         "<sub>[OmniSeek](../README.md)&nbsp;·&nbsp;[Configuration](configuration.md)&nbsp;·&nbsp;"
-        "[Walled sources](walled-sources.md)&nbsp;·&nbsp;[Tools](tools.md)</sub>",
+        "[Sites behind a login](walled-sources.md)&nbsp;·&nbsp;[Tools](tools.md)</sub>",
         "",
-        "Every source below earned its place by beating plain web search at something, via one of",
-        "five modes: structure, unwall, transcribe, recall, monitor. Access tiers: **free** is on by",
-        "default; **keyed** activates once you supply the API key; **walled** stays off until you",
-        "bring your own login. Sources marked `explicit-only` never join the broad sweep: name them",
-        "in `sources=[...]` to use them. The catalog is not a fixed list: the built-in curator",
-        "pipeline probes, judges, and admits new sources, and retires the ones that decay.",
+        "Every source below earned its place by beating plain web search at one of five jobs:",
+        "giving structure (citation graphs, regulatory filings), reading what sits behind a login,",
+        "transcribing, recalling, and monitoring. The first tag on each row is the access level",
+        "from the `access_tier` field: `free` is on by default; `keyed` turns on once you supply",
+        "its API key; `walled` stays off until you bring your own login. Sources marked",
+        "`by-name-only` never join a broad search: name them in `sources=[...]` to use them. The",
+        "catalog is not a fixed list: the built-in source review tools test new candidates before",
+        "they are added, and retire the ones that stop working.",
         "",
         "**This file is generated.** `python scripts/gen_sources_doc.py` rebuilds it from the",
         "shipped catalog (the sync pipeline reruns it on every engine update); to change a line,",
@@ -63,7 +65,7 @@ def main() -> int:
         "",
         "Descriptions are quoted in the language of each source's own audience; many are Chinese,",
         "because that is where those sources live. The always-English routing layer is the domain",
-        "headers, the access tiers, and the flags on every row.",
+        "headers, the access levels, and the tags on every row.",
         "",
         f"Generated from omniseek {version}: {len(entries)} live sources across "
         f"{len(by_domain)} domains.",
@@ -79,7 +81,7 @@ def main() -> int:
             if s.get("needs_credentials"):
                 tags.append("`bring-your-own-login`")
             if s.get("explicit_only"):
-                tags.append("`explicit-only`")
+                tags.append("`by-name-only`")
             if s.get("kind"):
                 tags.append(f"`{s['kind']}`")
             lines.append(f"- **{s['name']}** {' '.join(tags)}: {_wash(s.get('description', ''))}")
