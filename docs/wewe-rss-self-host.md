@@ -1,6 +1,6 @@
 # Self-hosting a WeChat RSS bridge (optional)
 
-<sub>[OmniSeek](../README.md)&nbsp;·&nbsp;[Configuration](configuration.md)&nbsp;·&nbsp;[Walled sources](walled-sources.md)</sub>
+<sub>[OmniSeek](../README.md)&nbsp;·&nbsp;[Configuration](configuration.md)&nbsp;·&nbsp;[Sites behind a login](walled-sources.md)</sub>
 
 > Only needed if you want to monitor WeChat 公众号 NOT covered by the free hosted wechat2rss.xlab.app
 > (e.g., 学术志, 科研圈, or any niche/new account).

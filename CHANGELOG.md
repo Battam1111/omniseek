@@ -33,6 +33,12 @@ connection with two commands, and every place that explains installing should sa
 - **Hero images and social card re-rendered with the new tagline** (English, Chinese, Japanese;
   light and dark). The READMEs open with the hero again, and the site's link-share image is the
   social card again.
+- **Docs say it plainly.** The configuration, tools, patterns and login-site pages, the source
+  catalog header and the Japanese README use everyday words instead of project jargon: "sites
+  behind a login", "access level", "run only when named", "source review". Field values and names
+  in code (`access_tier`, the `walled` extra, `omniseek_curator_*`) are unchanged. The catalog tag
+  for sources that never join a broad search is now `by-name-only`. The Japanese README follows
+  the current English and Chinese structure (two-command install, plain-language tables).
 
 ### Added
 

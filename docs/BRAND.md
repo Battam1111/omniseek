@@ -1,6 +1,6 @@
 # Brand
 
-<sub>[OmniSeek](../README.md)&nbsp;·&nbsp;[Configuration](configuration.md)&nbsp;·&nbsp;[Tools](tools.md)&nbsp;·&nbsp;[Patterns](patterns.md)&nbsp;·&nbsp;[Logged-in sites](walled-sources.md)&nbsp;·&nbsp;**Brand**</sub>
+<sub>[OmniSeek](../README.md)&nbsp;·&nbsp;[Configuration](configuration.md)&nbsp;·&nbsp;[Tools](tools.md)&nbsp;·&nbsp;[Patterns](patterns.md)&nbsp;·&nbsp;[Sites behind a login](walled-sources.md)&nbsp;·&nbsp;**Brand**</sub>
 
 The single canonical reference for OmniSeek's visual identity. Keep it locked so the look does not drift as contributors add diagrams, badges, or assets.
 

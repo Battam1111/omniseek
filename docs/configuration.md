@@ -1,9 +1,9 @@
 # Configuration
 
-<sub>[OmniSeek](../README.md)&nbsp;·&nbsp;**Configuration**&nbsp;·&nbsp;[Tools](tools.md)&nbsp;·&nbsp;[Patterns](patterns.md)&nbsp;·&nbsp;[Walled sources](walled-sources.md)&nbsp;·&nbsp;[Brand](BRAND.md)</sub>
+<sub>[OmniSeek](../README.md)&nbsp;·&nbsp;**Configuration**&nbsp;·&nbsp;[Tools](tools.md)&nbsp;·&nbsp;[Patterns](patterns.md)&nbsp;·&nbsp;[Sites behind a login](walled-sources.md)&nbsp;·&nbsp;[Brand](BRAND.md)</sub>
 
 OmniSeek is **catalog-first**: it ships a classified set of sources and you choose what to enable.
-With no configuration at all, every benign default source is on and every login-walled source is
+With no configuration at all, every benign default source is on and every source that needs a login is
 off. None of this page is needed for a first run; it is the full reference for when you want to tune.
 
 ---
@@ -12,7 +12,7 @@ off. None of this page is needed for a first run; it is the full reference for w
 
 All configuration lives in one file, `~/.omniseek/profile.json`, seeded from
 [`profile.example.json`](../deploy/profile.example.json). It is a **sparse delta** over the shipped pack:
-write only what you change. Narrow or widen by source name, domain, region, and access tier.
+write only what you change. Narrow or widen by source name, domain, region, and access level.
 
 ```jsonc
 {
@@ -21,36 +21,36 @@ write only what you change. Narrow or widen by source name, domain, region, and 
     "disable": ["glassdoor"],     // drop specific sources by name
     "enable":  []                 // force-on a source the defaults skip
   },
-  "walled": { "enabled": false, "bring_your_own": {} }   // see Walled sources
+  "walled": { "enabled": false, "bring_your_own": {} }   // see Sites behind a login
 }
 ```
 
 Point `OMNISEEK_PROFILE_PATH` at another location to relocate the file.
 
-## Access tiers
+## Access levels
 
-Every source declares an `access_tier`. It is the legal-posture axis, and it decides what runs by
-default.
+Every source declares an access level (the `access_tier` field). It records the legal posture, and
+it decides what runs by default.
 
-| Tier | What it is | Default | You provide |
+| Level | What it is | Default | You provide |
 |------|------------|---------|-------------|
-| **free** | public, no key | **on** | nothing |
-| **keyed** | a free or paid API key | on once a key is present | the key |
-| **walled** | content behind a login you are entitled to | **off** | your own logged-in browser |
-| **circumvention** | requires defeating an access control | **off**; none in the default pack | your own adapter + legal judgment |
+| `free` | public, no key | **on** | nothing |
+| `keyed` | needs a free or paid API key | on once a key is present | the key |
+| `walled` | content behind a login you are entitled to | **off** | your own logged-in browser |
+| `circumvention` | requires defeating an access control | **off**; none in the default pack | your own adapter + legal judgment |
 
 Route at call time with `omniseek_sources(domain=..., query=...)`; each source reports its
 `access_tier`, so an agent can filter by legal posture instead of memorizing the set.
 
-## Keyed sources
+## Sources that need an API key
 
-A keyed adapter stays **silent** until you give it a key, so an empty result usually just means
+An adapter that needs a key stays **silent** until you give it a key, so an empty result usually just means
 "no key set." Keys live in `~/.omniseek/credentials/<source>.json`, outside the project tree so they
-are never committed. On its first import each keyed adapter drops a `<source>.json.template` next to
+are never committed. On its first import each such adapter drops a `<source>.json.template` next to
 it with the sign-up URL inline: copy it to `<source>.json` and fill in the values.
 
 ```bash
-python scripts/creds_doctor.py     # which keyed sources are configured vs missing (presence only, never secrets)
+python scripts/creds_doctor.py     # which key-based sources are configured vs missing (presence only, never secrets)
 ```
 
 <details>
@@ -65,7 +65,7 @@ python scripts/creds_doctor.py     # which keyed sources are configured vs missi
 | Podcast Index (`podcastindex`) | `key`, `secret` | <https://api.podcastindex.org/signup> |
 | Bluesky | `handle`, `app_password` | <https://bsky.app/settings/app-passwords> |
 
-Every keyed adapter drops its own template with the get-key URL inline, so `creds_doctor.py` and
+Every adapter that needs a key drops its own template with the get-key URL inline, so `creds_doctor.py` and
 the templates together are always the authoritative, up-to-date list.
 
 </details>
@@ -90,11 +90,11 @@ needs auth, put its headers in `~/.omniseek/credentials/mcp_<name>.json`
 A wrapped server is admitted like any source: it must beat plain search per the contributing
 razor, judged per server. The row schema is documented in `core/sources/_declarative.py`.
 
-## Walled sources
+## Sites behind a login
 
 Xiaohongshu, Zhihu, Douyin, and other login-only platforms are read through a browser **you** run
 and log into; OmniSeek never sees your password. They are off until you opt in, per source. See
-**[walled sources](walled-sources.md)** for the full browser-and-CDP setup.
+**[Sites behind a login](walled-sources.md)** for the full browser-and-CDP setup.
 
 ## Advanced
 
@@ -123,21 +123,21 @@ trigger it again.
 </details>
 
 <details>
-<summary><b>Circumvention tier</b> (legal posture)</summary>
+<summary><b>Circumvention</b> (legal posture)</summary>
 
 <br>
 
-The access-tier system classifies every source by legal posture: `free`, `keyed`, `walled`, and
+The `access_tier` field classifies every source by legal posture: `free`, `keyed`, `walled`, and
 `circumvention`. The first three ship in the default pack; circumvention does not.
 
 A circumvention source is one that **defeats an access control** (decrypts an encrypted response,
-circumvents a paywall, bypasses a rate-limit enforcement). The engine's tier-detection logic
-(`_CIRCUMVENTION_RE`) auto-classifies any adapter whose `explicit_only` reason mentions these
-patterns. No circumvention-class source ships in the public catalog.
+circumvents a paywall, bypasses a rate-limit enforcement). The engine's classifier
+(`_CIRCUMVENTION_RE`) automatically marks any adapter whose reason for staying off by default
+mentions these patterns. No circumvention-class source ships in the public catalog.
 
-**Why it exists as a tier**: the framework is designed so that deployers who choose to build or
-contribute circumvention-class adapters can do so as opt-in `explicit_only` sources, gated behind
-the same profile consent mechanism as walled sources. The project does not ship them by default,
+**Why the category exists**: the framework is designed so that deployers who choose to build or
+contribute circumvention-class adapters can do so as opt-in sources that run only when named, gated
+behind the same profile consent mechanism as sites behind a login. The project does not ship them by default,
 but it does not reject the category: the deployer's jurisdiction, legal counsel, and Terms of
 Service obligations determine what is appropriate for their deployment.
 
@@ -159,7 +159,7 @@ the classification framework and the opt-in gate; the legal judgment is yours. S
 | `OMNISEEK_HTTP_PORT` | `8765` | HTTP port |
 | `OMNISEEK_PROFILE_PATH` | `~/.omniseek/profile.json` | relocate the profile |
 | `OMNISEEK_CONTACT_EMAIL` | (placeholder) | polite-pool contact for Crossref / SEC / Unpaywall; courtesy contact for OpenAlex |
-| `OMNISEEK_CDP_POOL` | off | keep a persistent CDP connection per walled browser |
+| `OMNISEEK_CDP_POOL` | off | keep a persistent CDP connection per logged-in browser |
 | `OMNISEEK_ALLOW_NETS` | (none) | extra CIDRs the SSRF guard may reach (advanced) |
 | `OMNISEEK_DOC_ROOTS` | inbox only | additional roots `omniseek_read` (document branch) may read |
 

@@ -1,6 +1,6 @@
 # Legal Posture
 
-<sub>[OmniSeek](../README.md)&nbsp;·&nbsp;[Configuration](configuration.md)&nbsp;·&nbsp;[Tools](tools.md)&nbsp;·&nbsp;[Patterns](patterns.md)&nbsp;·&nbsp;[Walled sources](walled-sources.md)&nbsp;·&nbsp;[Privacy](PRIVACY.md)&nbsp;·&nbsp;**Legal posture**</sub>
+<sub>[OmniSeek](../README.md)&nbsp;·&nbsp;[Configuration](configuration.md)&nbsp;·&nbsp;[Tools](tools.md)&nbsp;·&nbsp;[Patterns](patterns.md)&nbsp;·&nbsp;[Sites behind a login](walled-sources.md)&nbsp;·&nbsp;[Privacy](PRIVACY.md)&nbsp;·&nbsp;**Legal posture**</sub>
 
 > **THIS IS NOT LEGAL ADVICE.** It is an engineering description of what the published software does
 > and does not do, written so that an operator, a reviewer, or a source's owner can check each claim
@@ -26,20 +26,20 @@ corpus, and not a collection of anyone's credentials.
   rather than genericised, because a targeted adapter is a description of a particular person's
   situation and does not belong in a public catalog.
 
-## 2. The access tiers
+## 2. The access levels
 
 The catalog is self-describing about how a source is reached. The engine classifies every source
-into one of four **access tiers**, and the tier is machine-readable, not a matter of prose:
+into one of four **access levels**, and the level is machine-readable, not a matter of prose:
 
-| Tier | What it means | Default |
+| Level | What it means | Default |
 |---|---|---|
 | `free` | Public, no authentication | **on** |
 | `keyed` | An API key the operator obtains from the provider | on when a key is present |
 | `walled` | A login the operator personally holds | **off** |
 | `circumvention` | Defeating an access control | **not shipped** |
 
-The taxonomy lives in `src/omniseek/core/fetcher.py` (`_ACCESS_TIERS`), and the tier is derived from
-the source's own declaration, so a source cannot quietly sit in a gentler tier than it belongs to.
+The taxonomy lives in `src/omniseek/core/fetcher.py` (`_ACCESS_TIERS`), and the level is derived from
+the source's own declaration, so a source cannot quietly sit at a gentler level than it belongs to.
 
 ## 3. The line this project draws
 
@@ -52,13 +52,14 @@ a person's own access. The second is a different act, and this project does not 
 
 That line is enforced in two places rather than asserted once:
 
-1. **The walled tier is deny-by-default, including on a fresh clone.** A newly cloned OmniSeek with
-   no configuration file at all enables every non-walled source and **no** walled source. Turning one
+1. **Sites behind a login are denied by default, including on a fresh clone.** A newly cloned
+   OmniSeek with no configuration file at all enables every source that needs no login and **no**
+   site behind a login. Turning one
    on takes two deliberate edits (`walled.enabled`, then naming the source under
    `walled.bring_your_own`). This matters most for exactly the reader who is not thinking about it:
    someone who clones, runs, and never opens the config. See `is_source_enabled` in
    `src/omniseek/core/profile.py`.
-2. **No shipped source declares the circumvention tier, and the mirror script refuses to publish one
+2. **No shipped source declares the circumvention level, and the mirror script refuses to publish one
    that does.** This is a gate in `scripts/sync_from_eye.sh`, not a promise: it scans the tree it is
    about to publish for a circumvention declaration and aborts the sync if it finds one. The claim in
    this document and the contents of the catalog therefore cannot drift apart silently.
@@ -67,14 +68,14 @@ That line is enforced in two places rather than asserted once:
 
 Everything about the operator's own use, and this is not a formality.
 
-- **Terms of service.** Each source has its own terms. Enabling a walled source means the operator
+- **Terms of service.** Each source has its own terms. Enabling a site behind a login means the operator
   has decided that their use of their own account, through their own browser, is consistent with the
   agreement they personally accepted. This project cannot make that judgment for a deployment it
   never sees.
 - **Jurisdiction.** Automated access, and access to a computer system generally, is governed
   differently in different places. The operator runs the software; the operator is in a jurisdiction;
   the project is not a party to that.
-- **Rate and burden.** The engine paces its walled access and bounds its concurrency, but an operator
+- **Rate and burden.** The engine paces its logged-in access and bounds its concurrency, but an operator
   can widen those. Placing an unreasonable load on someone else's service is the operator's act.
 - **What is done with what comes back.** Retrieval is not republication. Reading a page and then
   redistributing it are separate acts with separate rules.
@@ -88,7 +89,7 @@ mistaken for accidents:
   binds `127.0.0.1`. It is built to be one person's tool on one person's machine, not a shared
   gateway that lets others reach a source through the operator's credentials. See
   [SECURITY.md](../.github/SECURITY.md).
-- **Human-paced walled access.** Walled reads are paced, with gaps between requests and bounded
+- **Human-paced logged-in access.** Reads behind a login are paced, with gaps between requests and bounded
   concurrency, so the engine does not impose load a human reader would not. The shipped defaults are
   the conservative profile; a faster one exists and is an explicit operator choice, per source. This
   pacing is not a disguise: the traffic is the operator's own authenticated session, and the operator
@@ -107,5 +108,5 @@ adapter is an available answer.
 ---
 
 *See also [PRIVACY.md](PRIVACY.md) (data handling), [SECURITY.md](../.github/SECURITY.md) (threat
-model), [walled sources](walled-sources.md) (how the walled tier works in practice), and
+model), [Sites behind a login](walled-sources.md) (how logged-in access works in practice), and
 [NOTICE](../NOTICE).*

@@ -1,13 +1,13 @@
-# Walled sources: bring your own browser
+# Sites behind a login: bring your own browser
 
-<sub>[OmniSeek](../README.md)&nbsp;·&nbsp;[Configuration](configuration.md)&nbsp;·&nbsp;[Tools](tools.md)&nbsp;·&nbsp;[Patterns](patterns.md)&nbsp;·&nbsp;**Walled sources**&nbsp;·&nbsp;[Brand](BRAND.md)</sub>
+<sub>[OmniSeek](../README.md)&nbsp;·&nbsp;[Configuration](configuration.md)&nbsp;·&nbsp;[Tools](tools.md)&nbsp;·&nbsp;[Patterns](patterns.md)&nbsp;·&nbsp;**Sites behind a login**&nbsp;·&nbsp;[Brand](BRAND.md)</sub>
 
 Some of the richest corners of the web sit behind a **login**: Xiaohongshu, Zhihu, Douyin,
 WeChat, and other platforms that no search engine indexes and no public API exposes. OmniSeek can
 reach them, but only on **your** behalf, through **your** logged-in browser. This guide explains the
 model and the setup.
 
-> Walled sources are **OFF by default**. They are the advanced, bring-your-own-account tier. You opt
+> Sites behind a login are **OFF by default**. They are the advanced, bring-your-own-account setup. You opt
 > in deliberately (see [Enable the source](#5-enable-the-source)), and you are responsible for
 > using each platform within its Terms of Service in your jurisdiction. See [SECURITY.md](../.github/SECURITY.md).
 
@@ -35,12 +35,12 @@ opening a tab: OmniSeek reaches only what you, the account holder, are already e
 ```
    your account                  a Chrome you run                    OmniSeek
   ─────────────       log in     ───────────────       CDP        ─────────────
-  xiaohongshu.com  ──────────▶   --remote-debugging   ◀────────   walled adapter
-  (your session)   (you, once)   --port=9223          connect     (the omniseek_search drill)
+  xiaohongshu.com  ──────────▶   --remote-debugging   ◀────────   site adapter
+  (your session)   (you, once)   --port=9223          connect     (omniseek_search, one named source)
                                   (session on disk)
 ```
 
-Each walled platform is read by an **adapter** that connects to a CDP endpoint on a fixed local
+Each such platform is read by an **adapter** that connects to a CDP endpoint on a fixed local
 port. Some platforms get their **own** Chrome (their own port + profile) so that one account's
 activity never bleeds into another's, and so per-account anti-ban pacing stays isolated.
 
@@ -50,7 +50,7 @@ activity never bleeds into another's, and so per-account anti-ban pacing stays i
 
 ### 1. Install the optional dependency
 
-Walled sources need the stealth browser engine. Install the `[walled]` extra:
+These sites need the stealth browser engine. Install the `[walled]` extra:
 
 ```bash
 pip install -e ".[walled]"        # or "[all]"
@@ -90,7 +90,7 @@ this again when the platform expires your session (typically rare).
 
 ### 5. Enable the source
 
-Walled sources are off until you opt in. In `~/.omniseek/profile.json`:
+These sites are off until you opt in. In `~/.omniseek/profile.json`:
 
 ```json
 {
@@ -106,20 +106,20 @@ Walled sources are off until you opt in. In `~/.omniseek/profile.json`:
 
 `enabled: true` is your explicit acknowledgment that you accept operator responsibility for these
 sources (see [SECURITY.md](../.github/SECURITY.md)). List under `bring_your_own` the sources you have logged
-in for; the rest stay dark. If you have logged in for all of them and want the whole tier, write
+in for; the rest stay dark. If you have logged in for all of them and want them all, write
 `"bring_your_own": true` instead of the map.
 
 **Where "off by default" is enforced.** Not by this document: by
-`profile.is_source_enabled()` in `src/omniseek/core/profile.py`, which denies any source of
-`walled` stability unless it finds both `walled.enabled` and a `bring_your_own` opt-in. The deny
+`profile.is_source_enabled()` in `src/omniseek/core/profile.py`, which denies any source whose
+stability is `walled` unless it finds both `walled.enabled` and a `bring_your_own` opt-in. The deny
 applies **with or without a profile file**, so a fresh clone that has configured nothing reaches
-no walled source at all. The smoke suite pins both halves (`profile: with NO profile the WALLED
-tier is DENIED`, and the two `bring_your_own` forms), so the claim on this page is checkable
+no site behind a login at all. The smoke suite pins both halves (the deny with no profile file,
+and the two `bring_your_own` forms), so the claim on this page is checkable
 rather than asserted.
 
 ### 6. Use it
 
-Walled sources are `explicit_only`: they never join the broad fan-out (they are slow and
+These sites run only when you name them: they never join the broad fan-out (they are slow and
 account-rate-sensitive). Name one directly:
 
 ```
@@ -150,15 +150,15 @@ latency, at the cost of a held connection). Off by default.
 
 ## Legal posture
 
-The walled tier is the **unwall** acquisition mode: content behind a login you have a **right** to,
+Reading a site behind a login means: content behind a login you have a **right** to,
 read with a credential **you** hold, to obtain access **you** are already entitled to. It crosses no
 access control you are not authorized to be on the far side of.
 
-It is **not** circumvention: the walled tier crosses logins you hold, not access controls you are
+It is **not** circumvention: it crosses logins you hold, not access controls you are
 not authorized to pass. Sources that defeat a paywall, break a rate-limit, or decrypt a protected
-response fall under the separate **circumvention** tier, which is off by default and absent from
-the shipped catalog. The framework supports circumvention-class adapters as opt-in `explicit_only`
-sources for deployers who choose to build or enable them; the legal judgment is theirs. See
+response fall under the separate **circumvention** level, which is off by default and absent from
+the shipped catalog. The framework supports circumvention-class adapters as opt-in sources that run only
+when named, for deployers who choose to build or enable them; the legal judgment is theirs. See
 [configuration](configuration.md), [SECURITY.md](../.github/SECURITY.md), and [NOTICE](../NOTICE).
 
 ---

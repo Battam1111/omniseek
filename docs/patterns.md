@@ -1,6 +1,6 @@
 # Patterns
 
-<sub>[OmniSeek](../README.md)&nbsp;·&nbsp;[Configuration](configuration.md)&nbsp;·&nbsp;[Tools](tools.md)&nbsp;·&nbsp;**Patterns**&nbsp;·&nbsp;[Walled sources](walled-sources.md)&nbsp;·&nbsp;[Brand](BRAND.md)</sub>
+<sub>[OmniSeek](../README.md)&nbsp;·&nbsp;[Configuration](configuration.md)&nbsp;·&nbsp;[Tools](tools.md)&nbsp;·&nbsp;**Patterns**&nbsp;·&nbsp;[Sites behind a login](walled-sources.md)&nbsp;·&nbsp;[Brand](BRAND.md)</sub>
 
 This is not a new tool. It is how to get more out of the tools in [Tools](tools.md): how to route a
 query, how to read what came back, and how to notice what didn't.
@@ -19,17 +19,17 @@ Then pick the simplest call for the intent:
 |------|------|
 | `omniseek_search` | The default. Deduped, ranked, cross-lingual recall folded into one list. |
 | `omniseek_search(raw=True)` | You want each source's raw bucket separately, to compare source-by-source. |
-| `omniseek_search(sources=["<one>"], raw=True, full=True)` | The drill idiom: ONE named source, unbounded, whole content. The escape hatch for a slow or walled source a broad sweep would drop. |
+| `omniseek_search(sources=["<one>"], raw=True, full=True)` | The single-source form: ONE named source, unbounded, whole content. The way to reach a slow source or a site behind a login, which a broad sweep would drop. |
 
-## Walled sources: name them, don't sweep them
+## Sites behind a login: name them, don't sweep them
 
 A broad `omniseek_search` sweep is deadline-bounded (`wait_s`) and skips
-`explicit_only` sources (slow, login-walled, or otherwise not safe to include in every sweep) so
+sources that run only when named (slow, behind a login, or otherwise not safe to include in every sweep) so
 one query never hangs on the slowest source.
 
-`_meta.excluded_relevant` is the query-aware subset of those: the walled sources whose facets
+`_meta.excluded_relevant` is the query-aware subset of those: the held-back sources whose facets
 actually match what you asked, each with a copy-paste `sources=[...]` hint to re-run against just
-them. Name the ones that match the query's domain; don't sweep the whole walled cluster into every
+them. Name the ones that match the query's domain; don't sweep every held-back source into every
 call; that only serializes them against each other for no gain.
 
 ## Corroboration over hit count

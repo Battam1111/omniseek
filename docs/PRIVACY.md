@@ -31,7 +31,7 @@ operator's control.
 API keys and login sessions stay on the host. Specifically:
 
 - API keys and credentials live under `~/.omniseek/credentials` on the operator's machine.
-- Walled-source login state lives in the operator's own CDP Chrome profiles on the host.
+- Login state for sites behind a login lives in the operator's own CDP Chrome profiles on the host.
 
 These **never enter the git repository, never enter any release bundle, and are never transmitted to
 any third party.** They are the operator's own secrets on the operator's own machine; the engine reads
@@ -42,19 +42,19 @@ them locally to act on the operator's behalf and does not export them.
 OmniSeek reaches in two ways, and the results go to one place:
 
 - It fetches from **public and curated sources** over ordinary requests.
-- For walled sources, it uses the **operator's own logged-in browser session on the host** (the
+- For sites behind a login, it uses the **operator's own logged-in browser session on the host** (the
   operator's CDP Chrome).
 
 Results are returned **only to the calling agent** over MCP. Apart from the outbound retrieval to the
 sources themselves, **data does not leave the host.** There is no intermediate collection point.
 
-## 5. UNWALL: the conservative line
+## 5. Reading behind a login: the conservative line
 
-OmniSeek's wall-crossing (UNWALL) is bounded to **credentialed access the operator is themselves
+OmniSeek's reading behind a login is bounded to **credentialed access the operator is themselves
 entitled to**. The engine blesses the operator using their own credentials for what those credentials
 already grant them. It does **not** host, broker, or authenticate any access that bypasses a control
 the operator is not entitled to be on the far side of. (The full legal posture, including the access
-tiers and the two places this line is mechanically enforced, is in
+levels and the two places this line is mechanically enforced, is in
 [LEGAL-POSTURE.md](LEGAL-POSTURE.md).)
 
 ## 6. Open source

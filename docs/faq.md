@@ -12,7 +12,7 @@ remembers what it reached, and never thinks for you.**
 
 No. A harness (Claude Code, Codex CLI, Cursor's agent mode) wraps a model and drives the
 agent loop: prompts, tool dispatch, retries, context. OmniSeek contains no model and no
-loop. It is the perception peripheral a harness mounts over MCP: the model thinks, the
+loop. It is the search-and-read peripheral a harness mounts over MCP: the model thinks, the
 harness drives the loop, OmniSeek reaches. If "MCP server" reads unfamiliar, think
 peripheral, not framework: you plug it into whatever harness you already use.
 
@@ -39,7 +39,7 @@ Two axes: who owns the index, and who does the thinking.
 
 OmniSeek does not compete with an open-web search API on breadth: those index billions of
 pages, while OmniSeek curates a catalog where every source earned its seat by beating plain
-search via a mode (structure, unwalling, transcription, longitudinal recall, monitoring). It
+search via a mode (structure, reading behind a login, transcription, longitudinal recall, monitoring). It
 competes on depth, memory, and ownership. Use both if you like: reach the open web with a
 search API, and send OmniSeek where search can't follow.
 
@@ -68,9 +68,9 @@ Never. OmniSeek binds to loopback, requires a bearer token on every request, and
 outbound call except to the sources you enable. It is self-hosted: your logins, your API
 quotas, your memory file. There is no server for us to see, and no telemetry.
 
-## Is it legal to reach login-walled sources?
+## Is it legal to reach sites behind a login?
 
-Walled sources are off by default. When you turn one on, you supply your own logged-in browser
+Sites behind a login are off by default. When you turn one on, you supply your own logged-in browser
 session: OmniSeek reaches only what your own account can already see, using your own credentials
 on your own machine. It is not a scraper-for-hire or a paywall bypass; it is your agent reading,
 with your eyes, pages you already have the right to read. Some source families carry more legal
@@ -87,7 +87,7 @@ can hallucinate, OmniSeek is the one layer that structurally cannot, because it 
 ## What does it cost / how do I run it?
 
 Free and open source (Apache-2.0). One `docker compose up`, or a non-Docker bootstrap. It runs
-on your machine; the only costs are any keyed sources you choose to add (most keys are free) and
+on your machine; the only costs are API keys for any sources you choose to add (most keys are free) and
 your own compute. See the [README](../README.md) quick start.
 
 ## Who is it for?

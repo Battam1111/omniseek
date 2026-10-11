@@ -19,7 +19,7 @@ flowchart LR
     Q(["My F-1 expired abroad.<br/>Renew in a third country?<br/>What changed in 2026?"]) --> S["1 · sweep, in English<br/>437 raw hits → 10, plus a map:<br/>«gter, blind, quora, zhihu_search:<br/>relevant but excluded»"]
     S --> S2["2 · the same question,<br/>asked in Chinese<br/>news · forum · video · audio"]
     S2 --> T["3 · transcribe the explainer<br/>the '4-year cap' debunk,<br/>spoken, never written"]
-    S2 --> D["4 · drill the login wall<br/>six first-person runs<br/>+ engagement signals"]
+    S2 --> D["4 · go behind the login wall<br/>six first-person runs<br/>+ engagement signals"]
     D --> C["5 · read the comments<br/>the expedite email<br/>that actually worked"]
     D --> V["6 · the dissenting video note<br/>body is hashtags; the facts<br/>are on screen"]
     T --> A(["7 · routes, timelines,<br/>workaround, risk,<br/>every line cited"])
@@ -44,7 +44,7 @@ One call, 437 raw hits deduplicated into 10: immigration-news explainers of the 
 
 These are source identifiers, including the `blind` source, not adjectives.
 
-The broad sweep holds back slow, quota-burning, and login-walled sources, and **says so, with the exact call to reach each one**. The response is a map, not just a list. The same `_meta` block also names the perspectives that came back absent (`source_diversity.absent_perspectives`: audio and walled, on this run). A dimension that returned nothing is a fact, not a gap to paper over.
+The broad sweep holds back slow, quota-burning, and login-only sources, and **says so, with the exact call to reach each one**. The response is a map, not just a list. The same `_meta` block also names the perspectives that came back absent (`source_diversity.absent_perspectives`: audio and sites behind a login, on this run). A dimension that returned nothing is a fact, not a gap to paper over.
 
 ### 2. The same question, in the language the answers live in
 
@@ -75,7 +75,7 @@ That correction was spoken into a camera and never written down. Text search str
 omniseek_search("第三国签证 F1 经验", sources=["xiaohongshu"], raw=True)
 ```
 
-`raw=True` is the drill switch: fetch this one named source, unbounded, instead of the ranked cross-source merge. It runs through your own logged-in browser, on your machine (the walled tier is **off** until you enable it with your own account: [how that works](walled-sources.md)). Six first-person accounts came back, one posted the day before this session:
+`raw=True` is the single-source switch: fetch this one named source, unbounded, instead of the ranked cross-source merge. It runs through your own logged-in browser, on your machine (sites behind a login are **off** until you enable them with your own account: [how that works](walled-sources.md)). Six first-person accounts came back, one posted the day before this session:
 
 | Post | Engagement | Other signal |
 |------|------------|--------------|
@@ -121,7 +121,7 @@ Every line traces to a handle, a timestamp, and an engagement count a human can 
 
 ---
 
-## Part 2: the other senses
+## Part 2: what else it can do
 
 ### It maps people: a name becomes a structure
 
