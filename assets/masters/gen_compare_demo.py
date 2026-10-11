@@ -13,7 +13,7 @@ records of the run (see its "about" field). Every Chinese line on screen is cut 
 `cut()`, which refuses to run if the cut is not found verbatim, so a line can be shortened (with an
 ellipsis) but never reworded. The English version adds a translation under each Chinese line; the
 translations are typed here (GLOSS) and set in italics as translations. Tool names on screen are the
-public ones from src/omniseek/server.py; the record maps them from the development deployment's names.
+public ones from src/omniseek/server.py.
 
 Speed: some steps are sped up. Each sped-up step carries a badge with the real time and the factor.
 
