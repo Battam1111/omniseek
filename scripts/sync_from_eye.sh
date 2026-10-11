@@ -555,9 +555,99 @@ smoke_failure_sections() {
   ' "$1"
 }
 # END smoke_failure_sections
+# THE SMOKE GATE'S PYTHON (2026-10-11). CI runs the smoke on the lowest Python the project declares
+# (requires-python in pyproject.toml, 3.11 today), while this gate used the machine's default (3.13 on
+# the operator's laptop). Four times in one day the gate here was green and CI's Windows leg was red,
+# each time because Python 3.11 on Windows reads time.monotonic from GetTickCount64 (15.625 ms steps)
+# where 3.13 has a 100 ns clock. So the smoke runs on that lowest version, in a virtual environment
+# holding what CI installs (pip install -e . of this tree; a bare interpreter lacks the dependencies),
+# and that class of failure stops the sync here instead of reaching CI. When no such Python or no such
+# environment can be had, one WARNING line says so and the smoke runs on $PYBIN as before.
+# The environment lives at $OMNISEEK_SMOKE_VENV (default ~/.cache/omniseek-sync/smoke-py<version>) and
+# is rebuilt when pyproject.toml, this tree's path or the interpreter changes.
+# BEGIN smoke_python
+# min_python_version PYPROJECT: the lowest MAJOR.MINOR its requires-python allows (">=3.11" -> 3.11).
+min_python_version() {
+  grep -E '^[[:space:]]*requires-python[[:space:]]*=' "$1" 2>/dev/null | head -1 \
+    | grep -oE '[0-9]+\.[0-9]+' | head -1 || true
+}
+# python_at VERSION CMD...: print the interpreter's own path when CMD runs a Python of VERSION.
+python_at() {
+  local want="$1" out
+  shift
+  out="$("$@" -c 'import sys; print("%d.%d" % sys.version_info[:2]); print(sys.executable)' \
+         2>/dev/null | tr -d '\r')" || return 1
+  [ "$(printf '%s\n' "$out" | sed -n 1p)" = "$want" ] || return 1
+  printf '%s\n' "$out" | sed -n 2p
+}
+# find_min_python VERSION: print the path of a Python of VERSION, or return 1. python<VERSION> on PATH
+# first (macOS, Linux), then on Windows each interpreter the py launcher lists (py -0p: -V:3.11 for a
+# python.org install, -V:Astral/CPython3.11.15 for one uv installed, -3.11-64 on an older launcher).
+find_min_python() {
+  local want="$1" exe tag
+  if exe="$(python_at "$want" "python$want")"; then printf '%s\n' "$exe"; return 0; fi
+  command -v py >/dev/null 2>&1 || return 1
+  while IFS= read -r tag; do
+    [ -n "$tag" ] || continue
+    if exe="$(python_at "$want" py "$tag")"; then printf '%s\n' "$exe"; return 0; fi
+  done < <(py -0p 2>/dev/null | tr -d '\r' \
+           | sed -n 's/^ *\(-V:[^ ]*\).*/\1/p; s/^ *\(-[0-9][^ ]*\) .*/\1/p')
+  return 1
+}
+# native_path PATH: the form a Windows interpreter reads (Git Bash), PATH unchanged elsewhere.
+native_path() {
+  if command -v cygpath >/dev/null 2>&1; then cygpath -w "$1"; else printf '%s\n' "$1"; fi
+}
+# venv_python DIR: the interpreter of the virtual environment at DIR, or return 1.
+venv_python() {
+  if [ -x "$1/Scripts/python.exe" ]; then printf '%s\n' "$1/Scripts/python.exe"
+  elif [ -x "$1/bin/python" ]; then printf '%s\n' "$1/bin/python"
+  else return 1; fi
+}
+# smoke_python: print the interpreter the smoke gate runs on. Progress and the one WARNING go to stderr.
+smoke_python() {
+  local want base venv vpy stamp fallback
+  fallback="the smoke gate runs on $PYBIN ($("$PYBIN" --version 2>&1 | tr -d '\r'))"
+  want="$(min_python_version "$PEN_ROOT/pyproject.toml")"
+  if [ -z "$want" ]; then
+    echo "  WARNING: no requires-python version in pyproject.toml; $fallback" >&2
+    printf '%s\n' "$PYBIN"; return 0
+  fi
+  if ! base="$(find_min_python "$want")"; then
+    echo "  WARNING: no Python $want found (python$want, py -0p); $fallback, so a failure only Python $want shows (CI runs $want) is not caught here" >&2
+    printf '%s\n' "$PYBIN"; return 0
+  fi
+  if command -v cygpath >/dev/null 2>&1; then base="$(cygpath -u "$base")"; fi
+  venv="${OMNISEEK_SMOKE_VENV:-${XDG_CACHE_HOME:-$HOME/.cache}/omniseek-sync/smoke-py$want}"
+  stamp="$({ cat "$PEN_ROOT/pyproject.toml"; printf '%s\n%s\n' "$PEN_ROOT" "$base"; } | cksum | cut -d' ' -f1)"
+  if [ "$(cat "$venv/.sync-stamp" 2>/dev/null)" != "$stamp" ] || ! vpy="$(venv_python "$venv")"; then
+    if [ -e "$venv" ] && [ ! -f "$venv/pyvenv.cfg" ]; then
+      echo "  WARNING: $venv exists and is not a virtual environment, left untouched; $fallback" >&2
+      printf '%s\n' "$PYBIN"; return 0
+    fi
+    echo "    (setting up the Python $want environment for the smoke gate: $venv)" >&2
+    if ! "$base" -m venv --clear "$(native_path "$venv")" >/dev/null 2>&1 || ! vpy="$(venv_python "$venv")"; then
+      echo "  WARNING: could not create a Python $want virtual environment at $venv; $fallback" >&2
+      printf '%s\n' "$PYBIN"; return 0
+    fi
+    if ! "$vpy" -m pip install -q --disable-pip-version-check -e "$(native_path "$PEN_ROOT")" \
+         >"$venv/pip-install.log" 2>&1; then
+      echo "  WARNING: pip install -e . into the Python $want environment failed (log: $venv/pip-install.log); $fallback" >&2
+      printf '%s\n' "$PYBIN"; return 0
+    fi
+    printf '%s\n' "$stamp" >"$venv/.sync-stamp"
+  fi
+  if ! python_at "$want" "$vpy" >/dev/null; then
+    echo "  WARNING: the environment at $venv does not run Python $want; $fallback" >&2
+    printf '%s\n' "$PYBIN"; return 0
+  fi
+  printf '%s\n' "$vpy"
+}
+# END smoke_python
+SMOKE_PY="$(smoke_python)"
 SMOKE_LOG=/tmp/omniseek_smoke.log
-echo "  [6/6] smoke gate (the mirror's own tests) ..."
-if ! (cd "$PEN_ROOT" && PYTHONIOENCODING=utf-8 "$PYBIN" tests/smoke.py >"$SMOKE_LOG" 2>&1); then
+echo "  [6/6] smoke gate (the mirror's own tests) on $("$SMOKE_PY" --version 2>&1 | tr -d '\r') ..."
+if ! (cd "$PEN_ROOT" && PYTHONIOENCODING=utf-8 "$SMOKE_PY" tests/smoke.py >"$SMOKE_LOG" 2>&1); then
   echo "=== SYNC ABORTED: smoke gate failed. Failure sections (full text, at most 400 lines): ==="
   smoke_failure_sections "$SMOKE_LOG"
   echo "=== Tail: ==="
