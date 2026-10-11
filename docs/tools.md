@@ -10,6 +10,32 @@ registers; `omniseek_sources()` returns the live capability index at runtime. St
 Two axes are shared by the retrieval verbs: `wait_s` (the patience budget) and `staleness`
 (`fresh` | `cached_ok` | `cache_only`).
 
+## At a glance
+
+One MCP connection; no model and no agent loop inside. Your model thinks, your client runs the
+loop, OmniSeek fetches. Start with `omniseek_search`; see what is available with `omniseek_sources`.
+
+| Tool | What it does |
+|------|-------------|
+| `omniseek_search` | Search the whole catalog at once, remove duplicates, rank. Works across languages. |
+| `omniseek_read` | Turn any URL or document (web page, PDF, arXiv) into clean text. |
+| `omniseek_view` | Look at images, document figures, and video frames. |
+| `omniseek_transcribe` | Transcribe audio or video locally, English and Chinese, from any timestamp. |
+| `omniseek_field_skeleton` | Map a research field's citations: the papers it is built on and the recent ones. |
+| `omniseek_resolve_identity` | Match a person's name to candidate author IDs across databases. |
+| `omniseek_coauthors` | Map a researcher's collaborators by number of joint papers. |
+| `omniseek_institution_cohort` | List who actively publishes at a lab, within a field. |
+| `omniseek_paper_enrich` | Open-access PDF, retraction status, and citation count for a paper. |
+| `omniseek_paper_recommend` | Similar papers (SPECTER embeddings) that keyword search misses. |
+| `omniseek_graph` | Query the local graph of what OmniSeek has found: find, neighborhood, between, since, similar. |
+| `omniseek_sensor` | Saved searches that rerun on a schedule and report only what is new. |
+| `omniseek_ruling` | Record that two entries are (or are not) the same person or thing. |
+| `omniseek_statement` | Record a directed relation between two entries. |
+| `omniseek_curator_act` | Propose, test, add, or retire a source. |
+| `omniseek_curator_view` | Read the queue of proposed sources or one source's report. |
+| `omniseek_gather` | Run several tools in parallel, one response. |
+| `omniseek_sources` | List sources by domain, region, capability, and health. |
+
 ---
 
 ## The verbs
@@ -31,7 +57,7 @@ Two axes are shared by the retrieval verbs: `wait_s` (the patience budget) and `
 
 | Tool | What it does |
 |------|--------------|
-| `omniseek_field_skeleton` | Assemble a research field's citation neighborhood for your agent to map. |
+| `omniseek_field_skeleton` | Assemble a research field's citation neighborhood for your agent to map. It uses OpenAlex by default; pass `source="s2"` (Semantic Scholar) for the newest arXiv papers, where OpenAlex lags. |
 | `omniseek_paper_recommend` | Semantically similar papers to a seed, beyond keyword search. |
 | `omniseek_paper_enrich` | Open-access PDF, retraction flags, and citation counts for specific papers. |
 | `omniseek_resolve_identity` | Resolve a person's name to candidate author ids (the front door for the relations tools). |

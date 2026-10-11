@@ -119,6 +119,9 @@ rather than asserted.
 
 ### 6. Use it
 
+Sites behind a login have no tool of their own: once you turn one on, the same `omniseek_search`
+call runs through your own logged-in browser.
+
 These sites run only when you name them: they never join the broad fan-out (they are slow and
 account-rate-sensitive). Name one directly:
 

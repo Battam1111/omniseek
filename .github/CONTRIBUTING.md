@@ -18,6 +18,8 @@ Core install is Apache-clean. Optional extras carry their own licenses (see [NOT
 
 ## The admission razor (for a NEW source)
 
+In short: a new source has to find something plain web search doesn't.
+
 A source earns a slot only if its acquisition MODE beats plain web search, not by duplicating prose
 the open web already returns. The modes:
 

@@ -38,6 +38,10 @@ claim.**
 | S5 scholar graph | structured scholarly evidence | `omniseek_coauthors` / `omniseek_paper_enrich` | core |
 | S6 memory | remembers, deduplicates, traces provenance | `_meta` contract of repeat runs | core |
 
+Crossing languages draws on the index OmniSeek builds as you use it, so a fresh install starts
+low. The published claim tests run on exactly that fresh install, so their cross-lingual number
+is the coldest case, not the typical one.
+
 Suites declare their required extras, which makes the claim-verification suite double as an honest
 capability-tier map: a core-only install is expected to pass core suites and to report the
 others as "sense dormant", not as failures. S3 declares a source credential the same way: it
