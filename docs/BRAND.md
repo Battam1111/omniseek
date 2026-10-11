@@ -72,7 +72,7 @@ The SVG masters are the single source of truth for the mark; the logo and social
 
 - All shields.io badges use color `3B82F6` and `style=flat-square`.
 - No em-dash on any human-facing surface (CI-enforced by `scripts/brand_lint.py`).
-- Every README or site page that loads a brand image from raw.githubusercontent.com ends the URL with `?v=YYYY-MM-DD` (CI-enforced by `scripts/brand_lint.py`). GitHub's image proxy keeps showing the old picture under an unchanged URL, so when you re-render an image, set the date to the day of the re-render in every URL that points at it.
+- Every README or site page that loads a brand image from raw.githubusercontent.com ends the URL with `?v=YYYY-MM-DD` (CI-enforced by `scripts/brand_lint.py`). GitHub's image proxy keeps showing the old picture under an unchanged URL, so when you re-render an image, set the date to the day of the re-render in every URL that points at it. A second re-render on a day that already has a version adds one lowercase letter: `?v=2026-10-11b`, then `c`.
 - No personal information appears in any brand asset.
 - Describe the product in plain words, starting from what the reader already knows: an add-on for AI assistants like Claude Code, Cursor, and Codex that lets them search where web search stops. Say MCP last, with a plain line on what it is; give words like self-hosted, stdio, and transcription a common phrase or a plain gloss the first time. Internal project vocabulary stays out of human-facing text; the words below are retired from the README, docs, site, and package metadata (code identifiers and file names that already use them are left alone):
   perception, senses, walled, unwalling, drill, tier, curator, evidence graph, explicit-only, keyed, Apache-clean.
