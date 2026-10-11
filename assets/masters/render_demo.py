@@ -1,4 +1,5 @@
-"""Render the 6 localized demo figures at 2x (940 css width -> 1880 px).
+"""Render the 6 localized demo figures at 2x (940 css width -> 1880 px), plus the 2 English
+narrow cuts for phones (400 css width -> 800 px).
 
 Run gen_demo.py first (it writes the HTML next to this file), then this script; copy the
 PNGs up into assets/. Requires playwright with chromium installed."""
@@ -9,6 +10,7 @@ from playwright.sync_api import sync_playwright
 BASE = Path(__file__).parent
 JOBS = [(f"demo-{lang}-{mode}.html", f"demo-{lang}-{mode}.png")
         for lang in ("en", "zh", "ja") for mode in ("light", "dark")]
+JOBS += [(f"demo-en-{mode}-narrow.html", f"demo-en-{mode}-narrow.png") for mode in ("light", "dark")]
 
 with sync_playwright() as p:
     browser = p.chromium.launch()
@@ -17,7 +19,7 @@ with sync_playwright() as p:
     for html, out in JOBS:
         page.goto((BASE / html).as_uri())
         page.wait_for_timeout(400)
-        page.locator("#shot").screenshot(path=str(BASE / out))
+        page.locator("#shot").screenshot(path=str(BASE / out), omit_background=True)
         print(out, (BASE / out).stat().st_size, "bytes")
     ctx.close()
     browser.close()

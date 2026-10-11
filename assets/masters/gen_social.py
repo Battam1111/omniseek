@@ -4,7 +4,9 @@
 Composition: the mark at depth on the navy field, lit by its own amber centre, with two
 faint echo rings widening outward; the wordmark and tagline answer on the right. After
 re-rendering, the PNG still has to be uploaded in the repository's social preview
-setting by hand; committing it here only versions the master.
+setting by hand; committing it here only versions the master. Colours are the brand palette
+only (docs/BRAND.md): white text at lower opacity for the tagline, primary blue at low opacity
+for the echo rings.
 """
 import pathlib
 
@@ -17,10 +19,10 @@ HTML = """<!doctype html><html><head><meta charset="utf-8"><style>
           font-family:-apple-system,"SF Pro Display","Segoe UI",sans-serif; }
   .field { position:absolute; inset:0; }
   .text { position:absolute; left:560px; top:50%; transform:translateY(-50%); }
-  .name { font-size:98px; font-weight:750; letter-spacing:-.025em; color:#F1F5F9; line-height:1; }
-  .tag { font-size:31px; font-weight:500; color:#94A3B8; margin-top:18px; letter-spacing:-.005em; line-height:1.3; }
+  .name { font-size:98px; font-weight:750; letter-spacing:-.025em; color:#FFFFFF; line-height:1; }
+  .tag { font-size:31px; font-weight:500; color:rgba(255,255,255,.72); margin-top:18px; letter-spacing:-.005em; line-height:1.3; }
   .tag .dot { color:#F59E0B; font-weight:800; }
-  .sub { font-size:22px; font-weight:500; color:#64748B; margin-top:14px; }
+  .sub { font-size:22px; font-weight:500; color:rgba(255,255,255,.50); margin-top:14px; }
 </style></head><body>
 <div id="shot">
   <svg class="field" viewBox="0 0 1280 640" xmlns="http://www.w3.org/2000/svg">
@@ -34,13 +36,13 @@ HTML = """<!doctype html><html><head><meta charset="utf-8"><style>
     <g transform="translate(300 320)">
       <circle r="188" fill="url(#glow)"/>
       <g transform="translate(-160 -160) scale(1.6)">
-        <circle cx="100" cy="100" r="97" fill="none" stroke="#1E3A5F" stroke-width="5" stroke-linecap="round" stroke-dasharray="540 70" transform="rotate(140 100 100)" opacity=".55"/>
+        <circle cx="100" cy="100" r="97" fill="none" stroke="#3B82F6" stroke-width="5" stroke-linecap="round" stroke-dasharray="540 70" transform="rotate(140 100 100)" opacity=".22"/>
         <circle cx="100" cy="100" r="78" fill="none" stroke="#93C5FD" stroke-width="16" stroke-linecap="round" stroke-dasharray="416 74" transform="rotate(-55 100 100)"/>
         <circle cx="100" cy="100" r="50" fill="none" stroke="#3B82F6" stroke-width="16" stroke-linecap="round" stroke-dasharray="267 47" transform="rotate(75 100 100)"/>
         <circle cx="100" cy="100" r="23" fill="none" stroke="#2563EB" stroke-width="15" stroke-linecap="round" stroke-dasharray="116 28" transform="rotate(195 100 100)"/>
         <circle cx="100" cy="100" r="16" fill="#F59E0B"/>
       </g>
-      <circle r="252" fill="none" stroke="#1E3A5F" stroke-width="3" stroke-linecap="round" stroke-dasharray="1220 180" transform="rotate(20)" opacity=".4"/>
+      <circle r="252" fill="none" stroke="#3B82F6" stroke-width="3" stroke-linecap="round" stroke-dasharray="1220 180" transform="rotate(75)" opacity=".16"/>
     </g>
   </svg>
   <div class="text">

@@ -1,12 +1,8 @@
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/hero-ja-dark.png">
-    <img src="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/hero-ja-light.png" width="670" alt="OmniSeek:ウェブ検索が届かないインターネットを、あなたの AI エージェントに。">
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/hero-ja-dark.png?v=2026-10-11">
+    <img src="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/hero-ja-light.png?v=2026-10-11" width="670" alt="OmniSeek:ウェブ検索が届かないインターネットを、あなたの AI エージェントに。">
   </picture>
-</p>
-
-<p align="center">
-  <img src="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/terminal-demo.gif" width="760" alt="実際の実行例:エージェントが Zhihu と Bilibili で博士 1 年目へのアドバイスを検索し、それぞれ約 1 秒でリンク付きの投稿と動画を受け取る。">
 </p>
 
 OmniSeek はセルフホスト型の MCP サーバーです。一度つなぐだけで、あなたのエージェントはポッドキャストや動画の中で話された内容、Bilibili や V2EX のような中国語コミュニティ、論文の引用グラフを検索できるようになります。オンにすれば、あなた自身のログインでしか見られないサイトも読めます(デフォルトはオフ)。200 以上のソースに対応し、Claude Code、Cursor など MCP に対応したクライアントで使えます。
@@ -25,6 +21,15 @@ claude mcp add omniseek -- omniseek
 ポッドキャストの書き起こし、PDF の読み取り、ログインが必要なサイトはオプション機能です。Cursor、pipx、pip、HTTP、Docker での導入方法もあわせて[インストールの選択肢(英語)](../install.md)にあります。
 ドキュメント:[ドキュメント一覧](../) | [全ソース](../sources.md) | [ツール](../tools.md)
 
+実際の実行はこうなります(2 回の検索、先頭の結果だけ表示、それぞれ約 1 秒):
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/terminal-demo-dark.gif?v=2026-10-11">
+    <img src="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/terminal-demo-light.gif?v=2026-10-11" width="720" alt="実際の実行例:エージェントが Zhihu と Bilibili で博士 1 年目へのアドバイスを検索し、それぞれ約 1 秒でリンク付きの投稿と動画を受け取る。">
+  </picture>
+</p>
+
 [![CI](https://github.com/Battam1111/omniseek/actions/workflows/ci.yml/badge.svg)](https://github.com/Battam1111/omniseek/actions/workflows/ci.yml) [![PyPI](https://img.shields.io/pypi/v/omniseek?color=3B82F6&style=flat-square)](https://pypi.org/project/omniseek/) [![License](https://img.shields.io/badge/License-Apache_2.0-3B82F6?style=flat-square)](../../LICENSE) ![Python](https://img.shields.io/badge/Python_3.11+-3B82F6?style=flat-square) ![Built for MCP](https://img.shields.io/badge/built_for-MCP-3B82F6?style=flat-square)
 
 **Languages:** [English](../../README.md) · [中文](README_zh.md) · 日本語
@@ -37,8 +42,8 @@ claude mcp add omniseek -- omniseek
 
 <div align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo-ja-dark.png">
-    <img src="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo-ja-light.png" alt="実際の調査を三つの層として描いた図。第一層「書かれていて、届く」:通常の検索はルールを引用して止まる。第二層「書かれてはいるが、ログインや奥深くにある」:ログインの内側の一次体験タイムラインと、コメント欄の奥に埋もれた回避策。第三層「そもそも文字ではない」:中国語解説動画のローカル書き起こしと、事実が画面の上にしかない動画ノート。層ごとに答えへの道が一本ずつある。">
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo-ja-dark.png?v=2026-10-11">
+    <img src="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo-ja-light.png?v=2026-10-11" alt="実際の調査を三つの層として描いた図。第一層「書かれていて、届く」:通常の検索はルールを引用して止まる。第二層「書かれてはいるが、届かない」:ログインの内側の一次体験タイムラインと、コメント欄の奥に埋もれた回避策。第三層「そもそも書かれていない」:中国語解説動画のローカル書き起こしと、事実が画面の上にしかない動画ノート。層ごとに答えへの道が一本ずつある。">
   </picture>
 </div>
 
@@ -46,7 +51,7 @@ claude mcp add omniseek -- omniseek
 
 - **書かれていて、届く。** ニュース見出し、公式 FAQ、人気ブログ、声はひとつ:*「2026 年より F-1 の入国は 4 年の初期滞在期間に制限。第三国での更新は引き続き可能。」* どれも同じ規則の引用で、実際にやった人はいない。
 - **書かれてはいるが、ログインの向こう。** 1point3acres の一次体験タイムライン三件、あなた自身のログインで読んだもの:**バンコク**、予約からパスポートまで 25 日、面接から承認まで 30 分。**ミラノ**、枠争奪ひと月、ビザは 5 年。**東京**、*「スムーズそのもの」*。ミラノ投稿のコメント欄には投稿者が戻ってきて:*「まず遅い日程で予約し、それから領事館にメールで繰り上げを依頼。F-1 申請者一人は実際に成功した。」* 個人の経験であって、公式の案内ではない。
-- **そもそも文字ではない。** bilibili の中国語解説動画をローカルで書き起こし:見出しの*「最長 4 年」*は初期滞在期間のことで、延長は審査窓口が変わっただけで消えてはいない。RED（小紅書）の動画ノートは本文がハッシュタグ四つだけ、フレームと音声をローカルで読む:第三国での 212(a)(6)(C) 拒否(虚偽陳述の認定)は F-1 への道をほぼ閉ざす。
+- **そもそも文字ではない。** bilibili の中国語解説動画をローカルで書き起こし:見出しの<em>「最長 4 年」</em>は初期滞在期間のことで、延長は審査窓口が変わっただけで消えてはいない。RED（小紅書）の動画ノートは本文がハッシュタグ四つだけ、フレームと音声をローカルで読む:第三国での 212(a)(6)(C) 拒否(虚偽陳述の認定)は F-1 への道をほぼ閉ざす。
 
 通常の検索は規則を引用して止まりました。実際に経験した人々はタイムラインと回避策とリスクを持っていました。OmniSeek は検索しなかったソースも挙げ、それぞれを検索するための呼び出しを添えていました。
 

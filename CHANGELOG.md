@@ -34,6 +34,18 @@ connection with two commands, and every place that explains installing should sa
 - **Hero images and social card re-rendered with the new tagline** (English, Chinese, Japanese;
   light and dark). The READMEs open with the hero again, and the site's link-share image is the
   social card again.
+- **Brand colours only.** The hero, social card, demo figure and site stylesheet now use only the
+  colours in `docs/BRAND.md`; softer text and lines are navy or white at lower opacity instead of
+  separate greys. The light demo figure ends in a white panel framed in blue instead of a navy
+  block, and its corners are transparent so it sits cleanly on GitHub's light and dark pages.
+- **The site follows the reader's light or dark setting.** It had only a dark look; it now has a
+  light one too, picked by the system theme, and the demo figure switches with it. On phones the
+  figure is a narrower version stacked to fit the screen, so its text stays readable.
+- **Latin text no longer falls back to a Chinese font** on the site and in the terminal GIFs, where
+  hyphens were drawn as long dashes.
+- **Chinese and Japanese READMEs:** the quoted "four-year" phrase in the third layer now renders in
+  italics instead of showing its asterisks, and the demo figure's alt text uses the same layer
+  names as the figure.
 - **Docs say it plainly.** The configuration, tools, patterns and login-site pages, the source
   catalog header and the Japanese README use everyday words instead of project jargon: "sites
   behind a login", "access level", "run only when named", "source review". Field values and names
@@ -52,9 +64,15 @@ connection with two commands, and every place that explains installing should sa
 - CI runs the unit tests and the offline smoke check on Windows as well (`smoke-windows`, the same
   steps as the Linux job). Before, Windows only installed the package and did the handshake, so a
   Windows-only bug in how the local log file was written got through with every test green.
-- A short terminal recording under the README hero (`assets/terminal-demo.gif`): one real run
-  searching Zhihu and Bilibili, cut to the first results. `assets/masters/gen_terminal_demo.py`
-  records the run and rebuilds the recording from it.
+- Image URLs in the READMEs and on the site end with `?v=<date>`, so GitHub shows a re-rendered
+  picture at once instead of the cached old one; `scripts/brand_lint.py` fails CI on an unversioned one.
+- `scripts/brand_lint.py` also fails on Markdown emphasis that GitHub would show as literal
+  asterisks (a `*` wedged between a letter and a quote mark, common in Chinese and Japanese text).
+- A short terminal recording in the README, right after the two install commands: one real run
+  searching Zhihu and Bilibili, cut to the first results, in a light and a dark version
+  (`assets/terminal-demo-{light,dark}.gif`) that follow the reader's GitHub theme. The first frame
+  already shows the finished answer, and the window is only as tall as its content.
+  `assets/masters/gen_terminal_demo.py` records the run and renders both GIFs from it.
 
 ### Notes
 

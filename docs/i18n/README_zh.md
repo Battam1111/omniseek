@@ -1,12 +1,8 @@
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/hero-zh-dark.png">
-    <img src="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/hero-zh-light.png" width="560" alt="OmniSeek：给你的 AI Agent 接上网页搜索够不到的那部分互联网。">
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/hero-zh-dark.png?v=2026-10-11">
+    <img src="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/hero-zh-light.png?v=2026-10-11" width="560" alt="OmniSeek：给你的 AI Agent 接上网页搜索够不到的那部分互联网。">
   </picture>
-</p>
-
-<p align="center">
-  <img src="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/terminal-demo.gif" width="760" alt="一次真实运行：Agent 在知乎和 B 站搜读博第一年的建议，每次约一秒拿回带链接的帖子和视频。">
 </p>
 
 OmniSeek 是一个自己部署的 MCP 服务。接上一次，你的 Agent 就能搜播客和视频里说的话、B 站和 V2EX 这类中文社区、论文引用图。你打开后，它还能用你自己的登录态读要登录才能看的网站（默认关）。覆盖 200 多个源，Claude Code、Cursor 等支持 MCP 的客户端都能用。
@@ -25,6 +21,15 @@ claude mcp add omniseek -- omniseek
 播客转写、PDF 阅读、要登录的网站是可选功能；Cursor、pipx、pip、HTTP、Docker 的装法也在那里，见[安装选项](../install.zh.md)。
 完整文档：[文档](../) | [全部数据源](../sources.md) | [工具说明](../tools.md)
 
+一次真实运行的样子（两次搜索，只截前几条结果，每次约一秒）：
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/terminal-demo-dark.gif?v=2026-10-11">
+    <img src="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/terminal-demo-light.gif?v=2026-10-11" width="720" alt="一次真实运行：Agent 在知乎和 B 站搜读博第一年的建议，每次约一秒拿回带链接的帖子和视频。">
+  </picture>
+</p>
+
 [![CI](https://github.com/Battam1111/omniseek/actions/workflows/ci.yml/badge.svg)](https://github.com/Battam1111/omniseek/actions/workflows/ci.yml) [![PyPI](https://img.shields.io/pypi/v/omniseek?color=3B82F6&style=flat-square)](https://pypi.org/project/omniseek/) [![License](https://img.shields.io/badge/License-Apache_2.0-3B82F6?style=flat-square)](../../LICENSE) ![Python](https://img.shields.io/badge/Python_3.11+-3B82F6?style=flat-square) ![Built for MCP](https://img.shields.io/badge/built_for-MCP-3B82F6?style=flat-square)
 
 **Languages:** [English](../../README.md) · 中文 · [日本語](README_ja.md)
@@ -37,8 +42,8 @@ claude mcp add omniseek -- omniseek
 
 <div align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo-zh-dark.png">
-    <img src="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo-zh-light.png" alt="一次真实调查，画成三层。第一层「搜得到」：普通搜索引到规则就停了。第二层「写下来了，但要登录或埋得太深」：你登录的论坛上第一手的时间线，以及埋在评论区的办法。第三层「压根不是文字」：中文讲解视频经本地转写，以及只在画面上的视频笔记。每一层各有一条通向答案的路。">
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo-zh-dark.png?v=2026-10-11">
+    <img src="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo-zh-light.png?v=2026-10-11" alt="一次真实调查，画成三层。第一层「搜得到」：普通搜索引到规则就停了。第二层「搜不到，因为要登录、埋得太深」：你登录的论坛上第一手的时间线，以及埋在评论区的办法。第三层「搜不到，因为压根就不是文字」：中文讲解视频经本地转写，以及只在画面上的视频笔记。每一层各有一条通向答案的路。">
   </picture>
 </div>
 
@@ -46,7 +51,7 @@ claude mcp add omniseek -- omniseek
 
 - **搜得到。** 新闻头条、官方 FAQ、热门博客，口径完全一致：*「2026 年起，F-1 入境限四年初始期；第三国续签仍被允许。」* 引的都是同一条规则，谁都没真的办过。
 - **写下来了，但要登录。** 一亩三分地上三份第一手时间线，用你自己的登录态读到：**曼谷**，预约到拿护照 25 天，面签到通过 30 分钟；**米兰**，抢号一个月，签出 5 年；**东京**，*「丝滑」*。米兰帖下，楼主回到评论区补充：*「先约一个靠后的日期，再发邮件给领事馆申请加急。有一位 F-1 申请人真的成功了。」* 个人经验，非官方指引。
-- **压根不是文字。** bilibili 上一段中文解读视频，本地转写：头条说的*「最多待 4 年」*其实是初始停留期，延期只是换了审批部门，并没有消失。小红书一条视频笔记，正文只有四个话题标签，画面与语音在本地读取：第三国遇上 212(a)(6)(C) 拒签（虚假陈述认定），F-1 之路几乎断送。
+- **压根不是文字。** bilibili 上一段中文解读视频，本地转写：头条说的<em>「最多待 4 年」</em>其实是初始停留期，延期只是换了审批部门，并没有消失。小红书一条视频笔记，正文只有四个话题标签，画面与语音在本地读取：第三国遇上 212(a)(6)(C) 拒签（虚假陈述认定），F-1 之路几乎断送。
 
 普通搜索引到规则就停了。真正办过的人手里有时间线、办法和风险。OmniSeek 还列出了它没去搜的源，每个都附上去搜它的那条调用。
 

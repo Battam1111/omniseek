@@ -21,10 +21,10 @@ import re
 
 TEMPLATE = """<!doctype html><html><head><meta charset="utf-8"><style>
   * { margin:0; padding:0; box-sizing:border-box; }
-  html,body { background:@@PAGEBG@@; }
-  body { font-family:-apple-system,"SF Pro Text","Segoe UI","PingFang SC","Hiragino Sans","Hiragino Sans GB",sans-serif; padding:20px; }
+  html,body { background:transparent; }
+  body { font-family:-apple-system,"SF Pro Text","Segoe UI","Helvetica Neue",Arial,"PingFang SC","Hiragino Sans","Hiragino Sans GB",sans-serif; padding:20px; }
   /* The canvas itself descends: one gradient, three strata, darker the deeper you go. */
-  #shot { width:940px; background:@@SHOTBG@@; border-radius:16px; padding:28px 40px 24px; overflow:hidden; }
+  #shot { width:940px; background:@@SHOTBG@@; border:1px solid @@SHOTBORDER@@; border-radius:16px; padding:28px 40px 24px; overflow:hidden; }
   .ask { text-align:center; font-size:13px; color:@@MUTED@@; letter-spacing:.06em; }
   h1 { text-align:center; font-size:27px; font-weight:700; color:@@FG@@; margin-top:9px; letter-spacing:-.015em; }
   h1 + .layer { margin-top:24px; }
@@ -41,10 +41,11 @@ TEMPLATE = """<!doctype html><html><head><meta charset="utf-8"><style>
   .l2 .rail { background:@@RING2@@; }
   .l3 .rail { background:@@RING3@@; }
   .lname { font-size:12px; letter-spacing:.12em; margin-bottom:10px; font-weight:650; display:flex; align-items:center; gap:8px; }
-  .lname::before { content:""; width:9px; height:9px; border-radius:50%; border:2.5px solid currentColor; opacity:.85; }
-  .l1 .lname { color:@@RING1TEXT@@; }
-  .l2 .lname { color:@@RING2@@; }
-  .l3 .lname { color:@@RING3TEXT@@; }
+  .lname { color:@@LABEL@@; }
+  .lname::before { content:""; width:9px; height:9px; border-radius:50%; border:2.5px solid currentColor; }
+  .l1 .lname::before { border-color:@@RING1@@; }
+  .l2 .lname::before { border-color:@@RING2@@; }
+  .l3 .lname::before { border-color:@@RING3@@; }
 
   .card { display:flex; gap:14px; background:@@CARDBG@@; border:1px solid @@CARDBORDER@@; border-left:3.5px solid @@ACCENT@@; border-radius:12px; padding:11px 18px 10px; box-shadow:@@CARDSHADOW@@; }
   .card + .card { margin-top:10px; }
@@ -53,22 +54,23 @@ TEMPLATE = """<!doctype html><html><head><meta charset="utf-8"><style>
   .card .ico { flex:0 0 auto; width:24px; padding-top:3px; }
   .card .ico svg { display:block; }
   .card .meta { font-size:12.5px; color:@@MUTED@@; }
-  .card .meta b { color:@@ACCENT@@; font-weight:650; }
-  .wall { display:inline-block; font-size:11.5px; font-weight:650; letter-spacing:.01em; color:@@ACCENT@@; background:@@CHIPBG@@; border-radius:5px; padding:2px 8px; margin-right:8px; vertical-align:1px; }
+  .card .meta b { color:@@ACCENTTEXT@@; font-weight:650; }
+  .wall { display:inline-block; font-size:11.5px; font-weight:650; letter-spacing:.01em; color:@@ACCENTTEXT@@; background:@@CHIPBG@@; border-radius:5px; padding:2px 8px; margin-right:8px; vertical-align:1px; }
   .card .txt { font-size:14.5px; color:@@FG@@; line-height:1.45; margin-top:3px; }
   .card .txt b { font-weight:650; }
 
   .stopnote { margin-top:9px; font-size:12.5px; font-weight:650; color:@@STOPINK@@; letter-spacing:.02em; }
   .seam { display:block; width:860px; height:60px; }
 
-  /* Arrival: the panel inverts the page. The find is the brightest thing on the figure. */
+  /* Arrival: the panel is the one framed thing on the figure; the amber point marks the find. */
   .seam3 { position:relative; z-index:2; }
   .arrive { position:relative; margin-top:-26px; }
   .panel { position:relative; overflow:hidden; margin-left:24px; background:@@PANELBG@@; border:1px solid @@PANELBORDER@@; border-radius:14px; padding:20px 28px 19px 126px; box-shadow:@@PANELSHADOW@@; }
-  .aname { font-size:12px; letter-spacing:.12em; margin-bottom:7px; font-weight:650; color:@@PANELAMBER@@; }
+  .aname { font-size:12px; letter-spacing:.12em; margin-bottom:7px; font-weight:650; color:@@PANELLABEL@@; display:flex; align-items:center; gap:8px; }
+  .aname::before { content:""; width:8px; height:8px; border-radius:50%; background:#F59E0B; }
   .panel .say { font-size:16.5px; color:@@PANELFG@@; line-height:1.55; }
-  .panel .say b { color:@@PANELAMBER@@; font-weight:650; }
-  .panel .echo { position:absolute; right:-70px; top:50%; transform:translateY(-50%); opacity:.09; }
+  .panel .say b { color:@@PANELBOLD@@; font-weight:650; }
+  .panel .echo { position:absolute; right:-70px; top:50%; transform:translateY(-50%); opacity:@@ECHO@@; }
 </style></head><body>
 <div id="shot">
   <div class="ask">@@ASK@@</div>
@@ -85,7 +87,7 @@ TEMPLATE = """<!doctype html><html><head><meta charset="utf-8"><style>
 
   <!-- Seam 1. The rail arrives at x=24 and the floor of layer 1 is closed under it: plain search
        ends against the buffer stop. The seek finds the opening at x=78 and drops through. -->
-  <svg class="seam" style="height:52px" viewBox="0 0 860 52" xmlns="http://www.w3.org/2000/svg">
+  <svg class="seam" style="height:52px" viewBox="0 0 860 52" preserveAspectRatio="xMinYMid slice" xmlns="http://www.w3.org/2000/svg">
     <path d="M 0 28 L 64 28" stroke="@@RING1@@" stroke-width="3.4" stroke-linecap="round" fill="none"/>
     <path d="M 92 28 L 860 28" stroke="@@RING1@@" stroke-width="3.4" stroke-linecap="round" fill="none"/>
     <path d="M 42 0 L 42 12" stroke="@@STOPINK@@" stroke-width="4" fill="none" stroke-linecap="round"/>
@@ -105,7 +107,7 @@ TEMPLATE = """<!doctype html><html><head><meta charset="utf-8"><style>
   </div>
 
   <!-- Seam 2. The opening moved back the other way, to x=58: the drift is not a drift, it wanders. -->
-  <svg class="seam" viewBox="0 0 860 60" xmlns="http://www.w3.org/2000/svg">
+  <svg class="seam" viewBox="0 0 860 60" preserveAspectRatio="xMinYMid slice" xmlns="http://www.w3.org/2000/svg">
     <path d="M 0 32 L 44 32" stroke="@@RING2@@" stroke-width="3.4" stroke-linecap="round" fill="none"/>
     <path d="M 72 32 L 860 32" stroke="@@RING2@@" stroke-width="3.4" stroke-linecap="round" fill="none"/>
     <path d="M 78 0 C 78 12 58 14 58 32 C 58 44 58 50 58 60" stroke="@@RING3@@" stroke-width="3.8" fill="none" stroke-linecap="round"/>
@@ -125,7 +127,7 @@ TEMPLATE = """<!doctype html><html><head><meta charset="utf-8"><style>
   <!-- The descent resolves into the mark: the three rails ARE its three rings, and the rail
        enters through the outer opening, which the -55 degree rotation already points upward.
        The amber centre is the find, so the figure ends inside the thing it is named for. -->
-  <svg class="seam seam3" style="height:86px" viewBox="0 0 860 86" xmlns="http://www.w3.org/2000/svg">
+  <svg class="seam seam3" style="height:86px" viewBox="0 0 860 86" preserveAspectRatio="xMinYMid slice" xmlns="http://www.w3.org/2000/svg">
     <defs>
       <radialGradient id="glow" cx="50%" cy="50%" r="50%">
         <stop offset="0%" stop-color="#F59E0B" stop-opacity=".55"/>
@@ -158,41 +160,44 @@ TEMPLATE = """<!doctype html><html><head><meta charset="utf-8"><style>
 </body></html>
 """
 
+# Brand colours only (docs/BRAND.md): the blue ramp, navy, white, and the amber point. Text,
+# hairlines and tints are navy or white (or a brand blue) at lower opacity, so nothing on the
+# figure is a colour the palette does not have. The PNG has a transparent page around the
+# rounded canvas, so it sits on GitHub's white or near-black page without a coloured fringe.
 MODES = {
     "light": {
-        "@@PAGEBG@@": "#f1f5f9", "@@FG@@": "#0F172A",
-        # one canvas, three strata: white at the surface, unmistakably blue at depth
-        "@@SHOTBG@@": "linear-gradient(180deg, #FFFFFF 0%, #FDFEFF 16%, #F4F8FE 36%, #EAF1FD 60%, #DFEAFB 82%, #D6E4FA 100%)",
-        "@@MUTED@@": "#64748B", "@@MUTED2@@": "#475569",
-        "@@CARDBG@@": "#FFFFFF", "@@CARDBORDER@@": "#E2E8F0",
+        "@@FG@@": "#0F172A",
+        # one canvas, three strata: white at the surface, shallow blue at depth
+        "@@SHOTBG@@": "linear-gradient(180deg, #FFFFFF 0%, #FFFFFF 14%, rgba(147,197,253,.12) 40%, rgba(147,197,253,.22) 70%, rgba(147,197,253,.32) 100%), #FFFFFF",
+        "@@SHOTBORDER@@": "rgba(59,130,246,.18)",
+        "@@MUTED@@": "rgba(15,23,42,.62)", "@@LABEL@@": "rgba(15,23,42,.72)",
+        "@@CARDBG@@": "#FFFFFF", "@@CARDBORDER@@": "rgba(59,130,246,.18)",
         "@@CARDSHADOW@@": "0 1px 2px rgba(15,23,42,.04), 0 10px 26px -14px rgba(29,78,216,.28)",
-        "@@ACCENT@@": "#3B82F6", "@@AMBERTEXT@@": "#B45309",
-        "@@SURFRAIL@@": "#94A3B8", "@@STOPINK@@": "#64748B", "@@CHIPBG@@": "#EFF6FF",
-        # the arrival panel inverts the page: the find sits on navy, lit amber
-        "@@PANELBG@@": "#0F172A", "@@PANELFG@@": "#E2E8F0", "@@PANELAMBER@@": "#FBBF24",
-        "@@PANELBORDER@@": "#0F172A",
-        "@@PANELSHADOW@@": "0 18px 40px -18px rgba(15,23,42,.45)",
+        "@@ACCENT@@": "#3B82F6", "@@ACCENTTEXT@@": "#1D4ED8",
+        "@@SURFRAIL@@": "rgba(15,23,42,.36)", "@@STOPINK@@": "rgba(15,23,42,.58)", "@@CHIPBG@@": "rgba(59,130,246,.10)",
+        # the arrival panel stays light: white, framed in primary blue, lifted by a blue shadow
+        "@@PANELBG@@": "#FFFFFF", "@@PANELFG@@": "#0F172A", "@@PANELLABEL@@": "#1D4ED8", "@@PANELBOLD@@": "#1D4ED8",
+        "@@PANELBORDER@@": "#3B82F6", "@@ECHO@@": ".07",
+        "@@PANELSHADOW@@": "0 18px 40px -18px rgba(29,78,216,.40)",
         # the three rings of the mark, in order of depth
         "@@RING1@@": "#93C5FD", "@@RING2@@": "#3B82F6", "@@RING3@@": "#1D4ED8",
-        # ring 1 is too pale to set type in on white, so the layer name gets a readable sibling
-        "@@RING1TEXT@@": "#5B8FD9", "@@RING3TEXT@@": "#1D4ED8",
     },
     "dark": {
-        "@@PAGEBG@@": "#0d1117", "@@FG@@": "#E2E8F0",
-        # the same descent at night: navy at the surface, near-black at depth
-        "@@SHOTBG@@": "linear-gradient(180deg, #152238 0%, #121D31 24%, #0E1626 52%, #0A1120 78%, #070D19 100%)",
-        "@@MUTED@@": "#94A3B8", "@@MUTED2@@": "#A8B4C4",
-        "@@CARDBG@@": "#172440", "@@CARDBORDER@@": "#25395F",
-        "@@CARDSHADOW@@": "0 1px 2px rgba(0,0,0,.3), 0 12px 30px -16px rgba(0,0,0,.6)",
-        "@@ACCENT@@": "#60A5FA", "@@AMBERTEXT@@": "#FBBF24",
-        "@@SURFRAIL@@": "#64748B", "@@STOPINK@@": "#94A3B8", "@@CHIPBG@@": "#1E3A5F",
-        # at full depth the find is the light source: amber-edged panel on near-black
-        "@@PANELBG@@": "#0A1322", "@@PANELFG@@": "#E2E8F0", "@@PANELAMBER@@": "#FBBF24",
-        "@@PANELBORDER@@": "rgba(245,158,11,.32)",
+        "@@FG@@": "rgba(255,255,255,.94)",
+        # the same descent at night: shallow blue haze at the surface, plain navy at depth
+        "@@SHOTBG@@": "linear-gradient(180deg, rgba(147,197,253,.10) 0%, rgba(147,197,253,.06) 30%, rgba(147,197,253,0) 75%), #0F172A",
+        "@@SHOTBORDER@@": "rgba(147,197,253,.14)",
+        "@@MUTED@@": "rgba(255,255,255,.62)", "@@LABEL@@": "rgba(255,255,255,.74)",
+        "@@CARDBG@@": "rgba(147,197,253,.07)", "@@CARDBORDER@@": "rgba(147,197,253,.16)",
+        "@@CARDSHADOW@@": "0 1px 2px rgba(15,23,42,.4), 0 12px 30px -16px rgba(15,23,42,.8)",
+        "@@ACCENT@@": "#3B82F6", "@@ACCENTTEXT@@": "#93C5FD",
+        "@@SURFRAIL@@": "rgba(255,255,255,.34)", "@@STOPINK@@": "rgba(255,255,255,.58)", "@@CHIPBG@@": "rgba(59,130,246,.22)",
+        # at full depth the find is the light source: navy panel edged and lit by the amber point
+        "@@PANELBG@@": "#0F172A", "@@PANELFG@@": "rgba(255,255,255,.94)", "@@PANELLABEL@@": "#93C5FD", "@@PANELBOLD@@": "#FFFFFF",
+        "@@PANELBORDER@@": "rgba(245,158,11,.36)", "@@ECHO@@": ".09",
         "@@PANELSHADOW@@": "0 0 46px -14px rgba(245,158,11,.28)",
         # BRAND.md: the innermost ring lifts to #2563EB on navy, where #1D4ED8 loses contrast
         "@@RING1@@": "#93C5FD", "@@RING2@@": "#3B82F6", "@@RING3@@": "#2563EB",
-        "@@RING1TEXT@@": "#93C5FD", "@@RING3TEXT@@": "#60A5FA",
     },
 }
 
@@ -319,6 +324,23 @@ def _lint_layer_assignment():
     assert not problems, "layer assignment drifted:\n" + "\n".join(problems)
 
 
+# The narrow cut is for phones: the site serves it under 600 px wide (<picture> media query), where
+# the full figure would shrink to unreadable type. Same session, same words, same colours; the
+# column narrows, the icons drop (the chip already names the wall), and the seams keep their
+# x coordinates because preserveAspectRatio="xMinYMid slice" crops them on the right instead
+# of scaling. English only: the site is English, and a README cannot switch images by width.
+NARROW_CSS = """
+  #shot { width:400px; padding:22px 16px 18px; border-radius:14px; }
+  h1 { font-size:21px; margin-top:7px; }
+  .seam { width:100%; }
+  .card { padding:10px 13px 9px; }
+  .card .ico { display:none; }
+  .panel { margin-left:0; padding:18px 18px 16px; }
+  .aname { margin-left:84px; margin-bottom:12px; }
+  .panel .say { font-size:15.5px; }
+"""
+NARROW_LANGS = ("en",)
+
 _lint_cjk_punctuation()
 _lint_layer_assignment()
 
@@ -331,3 +353,7 @@ for lang, strings in LANGS.items():
         assert "@@" not in html, f"unreplaced token in {lang}-{mode}"
         (out / f"demo-{lang}-{mode}.html").write_text(html, encoding="utf-8")
         print(f"wrote demo-{lang}-{mode}.html")
+        if lang in NARROW_LANGS:
+            narrow = html.replace("</style>", NARROW_CSS + "</style>", 1)
+            (out / f"demo-{lang}-{mode}-narrow.html").write_text(narrow, encoding="utf-8")
+            print(f"wrote demo-{lang}-{mode}-narrow.html")
