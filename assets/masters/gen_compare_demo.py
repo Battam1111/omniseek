@@ -1,20 +1,22 @@
 """Side-by-side demo: the same question to an agent with web search only (left) and an agent with
 OmniSeek (right). Rendered from one recorded run to GIFs (README, site) and MP4s (X, Bilibili).
 
-    python assets/masters/gen_compare_demo.py gif      # assets/demo/compare-{en,zh}-{light,dark}{,-narrow}.gif
-    python assets/masters/gen_compare_demo.py mp4      # assets/demo/compare-{en,zh}-dark.mp4 (+ posters)
-    python assets/masters/gen_compare_demo.py poster   # assets/demo/compare-{en,zh}-dark-poster.png only
+    python assets/masters/gen_compare_demo.py gif      # assets/demo/compare-{en,zh,ja}-{light,dark}{,-narrow}.gif
+    python assets/masters/gen_compare_demo.py mp4      # assets/demo/compare-en-{light,dark}.mp4, compare-zh-dark.mp4 (+ posters)
+    python assets/masters/gen_compare_demo.py poster   # the posters only: compare-en-{light,dark}-poster.png, compare-zh-dark-poster.png
     python assets/masters/gen_compare_demo.py all
 
 The -narrow GIFs stack the two agents (web search on top) for phones: the README picks them with
-a (max-width: 600px) source, where the side-by-side GIF would shrink below half size. Each column
+a (max-width: 480px) source, where the side-by-side GIF would shrink below half size. Each column
 is as wide as in the side-by-side GIF, so the lines wrap the same; the columns are shorter, so the
 oldest steps scroll off the top sooner.
 
 Every GIF opens on the finished comparison (both answers in, 1:21:51 highlighted; the end card
-left off) for 3 s, then plays from the empty start and ends on the end card. Many places show only
-a GIF's first frame (a page still loading, a screenshot, a thumbnail, reduced motion, PyPI), and an
-empty first frame looks broken there. The MP4 keeps its storyboard and uses the poster instead.
+left off) for 3 s, then replays from the question with each agent's first call already on screen
+(never two empty columns) and ends on the end card. Many places show only a GIF's first frame (a
+page still loading, a screenshot, a thumbnail, reduced motion), and an empty frame looks broken
+there and to a reader who scrolls to the GIF late. The MP4 keeps its storyboard (it starts from the
+empty stage) and uses the poster instead.
 
 The poster is the MP4's last frame before the end card (the finished comparison), for the site's
 <video poster=...>; it needs no ffmpeg.
@@ -26,7 +28,9 @@ Where the words come from: compare-demo-run.json next to this script, built from
 records of the run (see its "about" field). Every Chinese line on screen is cut from that record by
 `cut()`, which refuses to run if the cut is not found verbatim, so a line can be shortened (with an
 ellipsis) but never reworded. The English version adds a translation under each Chinese line; the
-translations are typed here (GLOSS) and set in italics as translations. Tool names on screen are the
+translations are typed here (GLOSS) and set in italics as translations. The Japanese version does the
+same in Japanese (GLOSS_JA, upright, in 「」), with its cards, headers and captions in Japanese; the
+Chinese lines on it are marked lang="zh-CN" so they keep Chinese fonts. Tool names on screen are the
 public ones from src/omniseek/server.py.
 
 Speed: some steps are sped up. Each sped-up step carries a badge with the real time and the factor.
@@ -200,7 +204,62 @@ T = {
         "end2": "装了 OmniSeek，\nAgent 读得到视频里说了什么，精确到秒。",
         "run": "均为 2026-10-11 实跑；加速的步骤都已标出。",
     },
+    # Japanese: the cards, headers, captions and end card in Japanese; every Chinese line from the
+    # record stays as said, with a Japanese translation under it (GLOSS_JA), in the voice of
+    # docs/i18n/README_ja.md.
+    "ja": {
+        "lang": "ja",
+        "ask": "中国語で質問（ここでは日本語訳）",
+        "question": "李沐（Mu Li）が Bilibili で Transformer 論文を解説した動画で、彼は論文の書き方をどう評していますか？"
+                    "本人の言葉と、何分目かを教えてください。",
+        "left": "ウェブ検索だけのエージェント",
+        "right": "OmniSeek を使うエージェント",
+        "real": "実際は {r}、画面では ×{x} に加速",
+        "realtime": "実際の速度、{r}",
+        "no_chapters": "ページにチャプターの時刻がないので、動画をまるごと文字起こし",
+        "no_chapters_short": "チャプターの時刻なし",
+        "realtime_short": "実際 {r}",
+        "length": "長さ",
+        "transcribing": "動画をまるごと文字起こし中…",
+        "transcribed": "音声 {a}、時刻つきの {n} 行",
+        "search_text": "文字起こしから「写作」（書き方）を検索",
+        "opens": "{t} から再生",
+        "again": "もう一度質問",
+        "same": "同じ発言、{t}（キャッシュ済み、{s}）",
+        "check": "本人の言葉をウェブで検索",
+        "extra": "文字起こしは追加機能です：",
+        "cap": [
+            "同じ質問を、2 つのエージェントに",
+            "ウェブ検索は、他の人が書いたメモを見つけて言い換える",
+            "OmniSeek はまず動画のページを読む",
+            "頼れるチャプターがないので、動画をまるごと手元で文字に起こす",
+            "次に文字を検索：本人の言葉と、それを話した秒",
+            "リンクはその秒へ直接飛ぶ",
+            "本人の言葉はウェブでは見つからない",
+            "もう一度聞くと、ウェブの答えは変わり、文字起こしは変わらない",
+        ],
+        "end1": "ウェブ検索が見つけるのは、動画について他の人が書いたこと。",
+        "end2": "OmniSeek があれば、エージェントは\n動画で話されたことを秒単位で読めます。",
+        "run": "2026-10-11 の実際の実行です。加速したステップには印をつけています。",
+    },
 }
+
+GLOSS_JA = {
+    "这是一篇略短的文章，但是信息量巨大。": "「やや短い論文だが、情報量はとても多い。」",
+    "（大意，": "（回答自身の注記：「要旨」）",
+    "大约在开头第1~8分钟": "「最初の 1〜8 分ごろ」",
+    "约在1分50秒-2分30秒之间": "「およそ 1 分 50 秒から 2 分 30 秒のあいだ」",
+    "更多请见：https://github.com/mli/paper-reading": "「詳しくは github.com/mli/paper-reading へ」",
+    "所以他整个写作的时候，": "「…だから全体を書くときに…」",
+    "我们首先看一下他的写作。": "「まず、この論文の書き方を見てみましょう。」",
+    "啊，这篇文章的写作是非常简洁的，因为就是说他每一句话就基本上在讲一件事情。":
+        "「この論文の書き方はとても簡潔です。基本的に、一文ごとにひとつのことを言っているからです。」",
+    "另外一个是说他没有用太多的写作技巧啊，": "「もうひとつは、書き方のテクニックをあまり使っていないことで…」",
+}
+GLOSSES = {"en": GLOSS, "ja": GLOSS_JA}
+LANGS = ("en", "zh", "ja")
+# Videos: both themes in English (the site picks one by the reader's theme), dark in Chinese.
+MP4_THEMES = {"en": ("light", "dark"), "zh": ("dark",)}
 
 INSTALL = 'uv tool install "omniseek[asr]" --with torch --with torchaudio'
 
@@ -211,8 +270,11 @@ THEMES = {
   --bar: color-mix(in srgb, #93C5FD 22%, #FFFFFF);
   --line: color-mix(in srgb, #3B82F6 24%, #FFFFFF);
   --fg: #0F172A;
-  --muted: color-mix(in srgb, #0F172A 62%, #FFFFFF);
-  --faint: color-mix(in srgb, #0F172A 45%, #FFFFFF);
+  --muted: color-mix(in srgb, #0F172A 68%, #FFFFFF);
+  --faint: color-mix(in srgb, #0F172A 55%, #FFFFFF);
+  --fg-dim: color-mix(in srgb, #0F172A 72%, #FFFFFF);
+  --muted-dim: color-mix(in srgb, #0F172A 52%, #FFFFFF);
+  --fn-dim: color-mix(in srgb, #1D4ED8 84%, #FFFFFF);
   --fn: #1D4ED8;
   --hl: color-mix(in srgb, #F59E0B 22%, #FFFFFF);
   --amber: #B45309;
@@ -226,15 +288,19 @@ THEMES = {
   --fg: color-mix(in srgb, #FFFFFF 94%, #0F172A);
   --muted: color-mix(in srgb, #FFFFFF 64%, #0F172A);
   --faint: color-mix(in srgb, #FFFFFF 48%, #0F172A);
+  --fg-dim: color-mix(in srgb, #FFFFFF 64%, #0F172A);
+  --muted-dim: color-mix(in srgb, #FFFFFF 46%, #0F172A);
+  --fn-dim: color-mix(in srgb, #93C5FD 70%, #0F172A);
   --fn: #93C5FD;
   --hl: color-mix(in srgb, #F59E0B 24%, #0F172A);
   --amber: #F59E0B;
   --badge: color-mix(in srgb, #3B82F6 22%, #0F172A);
   --ring3: #2563EB;"""},
 }
-# --amber on light pages is the brand amber mixed toward navy for contrast on white.
+# --amber on light pages is the brand amber mixed toward navy for contrast on white and on the
+# amber highlight (at least 4.5:1, see check_contrast.py).
 THEMES["light"]["css"] = THEMES["light"]["css"].replace(
-    "--amber: #B45309;", "--amber: color-mix(in srgb, #F59E0B 62%, #0F172A);")
+    "--amber: #B45309;", "--amber: color-mix(in srgb, #F59E0B 50%, #0F172A);")
 
 MARK = """<svg viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
   <circle cx="100" cy="100" r="78" fill="none" stroke="#93C5FD" stroke-width="16" stroke-linecap="round" stroke-dasharray="416 74" transform="rotate(-55 100 100)"/>
@@ -252,9 +318,16 @@ html, body {{ background:transparent; }}
 #stage {{ {css}
   position:relative; width:{w}px; height:{h}px; background:var(--bg); border:1px solid var(--line);
   border-radius:14px; overflow:hidden; display:flex; flex-direction:column; color:var(--fg);
-  font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI","Helvetica Neue",Arial,"PingFang SC","Hiragino Sans GB",sans-serif;
+  font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI","Helvetica Neue",Arial,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
   -webkit-font-smoothing:antialiased; }}
-.mono {{ font-family:ui-monospace,"SF Mono",Menlo,"PingFang SC",monospace; }}
+.mono {{ font-family:ui-monospace,"SF Mono",Menlo,Consolas,"PingFang SC","Microsoft YaHei",monospace; }}
+/* Japanese page: Japanese fonts first, no italics for translations; the Chinese lines from the
+   record are marked lang="zh-CN" there and keep their Chinese fonts. */
+#stage:lang(ja) {{ font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI","Helvetica Neue",Arial,"Hiragino Sans","Hiragino Kaku Gothic ProN","Yu Gothic UI","Yu Gothic",Meiryo,sans-serif; }}
+#stage:lang(ja) .mono {{ font-family:ui-monospace,"SF Mono",Menlo,Consolas,"Hiragino Sans","Yu Gothic UI",Meiryo,monospace; }}
+#stage:lang(ja) .gl {{ font-style:normal; }}
+#stage [lang|="zh"] {{ font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI","Helvetica Neue",Arial,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif; }}
+#stage .mono [lang|="zh"] {{ font-family:ui-monospace,"SF Mono",Menlo,Consolas,"PingFang SC","Microsoft YaHei",monospace; }}
 .q {{ padding:14px 18px 12px; border-bottom:1px solid var(--line); }}
 .q .ask {{ font-size:15px; color:var(--muted); font-weight:600; }}
 .q .text {{ font-size:{qsize}px; font-weight:700; line-height:1.28; margin-top:3px; letter-spacing:-.005em; }}
@@ -268,7 +341,9 @@ html, body {{ background:transparent; }}
   justify-content:flex-end; padding:6px 14px 10px;
   -webkit-mask-image:linear-gradient(to bottom, transparent 0, #000 34px); }}
 .step {{ margin-top:10px; transition:none; }}
-.step.dim {{ opacity:.5; }}
+/* A step that is no longer current steps back by colour, not opacity: its main line stays at
+   4.5:1 or more and its smaller lines at 3:1 or more against the card (check_contrast.py). */
+.step.dim {{ --fg:var(--fg-dim); --muted:var(--muted-dim); --fn:var(--fn-dim); color:var(--fg); }}
 .call {{ font-size:15px; color:var(--muted); line-height:1.35; overflow-wrap:anywhere; }}
 .call .fn {{ color:var(--fn); font-weight:650; }}
 .lbl {{ font-size:16px; color:var(--muted); font-weight:600; }}
@@ -316,17 +391,18 @@ html, body {{ background:transparent; }}
 
 
 def gl(lang: str, zh: str, cls: str = "gl") -> str:
-    if lang != "en":
+    if lang not in GLOSSES:
         return ""
-    if zh not in GLOSS:
-        raise SystemExit(f"no English translation for {zh!r}; add it to GLOSS")
-    return f'<div class="{cls}">{html.escape(GLOSS[zh])}</div>'
+    if zh not in GLOSSES[lang]:
+        raise SystemExit(f"no {lang} translation for {zh!r}; add it to GLOSS / GLOSS_JA")
+    return f'<div class="{cls}">{html.escape(GLOSSES[lang][zh])}</div>'
 
 
 def secs(s: float, lang: str) -> str:
+    unit = {"en": ("min", "s"), "zh": ("分钟", "秒"), "ja": ("分", "秒")}[lang]
     if s >= 90:
-        return f"{s / 60:.0f} min" if lang == "en" else f"{s / 60:.0f} 分钟"
-    return f"{s:.1f} s" if lang == "en" else f"{s:.1f} 秒"
+        return f"{s / 60:.0f} {unit[0]}"
+    return f"{s:.1f} {unit[1]}"
 
 
 def speedup(real_s: float, mp4: bool, step: str, until: str) -> int:
@@ -341,25 +417,28 @@ def speedup(real_s: float, mp4: bool, step: str, until: str) -> int:
 def build_steps(lang: str, mp4: bool):
     """Left and right step HTML, keyed by id."""
     t, e = T[lang], html.escape
+    # On the Japanese page, a Chinese line from the record is marked as Chinese (fonts, line breaks).
+    z = (lambda s: f'<span lang="zh-CN">{s}</span>') if lang == "ja" else (lambda s: s)
     w1, w2, w3 = WEB
     q1 = w1["query"]
     left = {}
-    left["l1"] = (f'<div class="call mono"><span class="fn">web_search</span>("{e(cut(q1, q1[:22]))}")</div>'
+    left["l1"] = (f'<div class="call mono"><span class="fn">web_search</span>("{z(e(cut(q1, q1[:22])))}")</div>'
                   f'<div class="badge" id="l1b">{e(t["real"].format(r=secs(w1["elapsed_s"], lang), x=speedup(w1["elapsed_s"], mp4, "l1", "l1r")))}</div>')
     a1 = w1["answer"]
-    left["l1r"] = (f'<div class="mid">「{e(cut(a1, "这是一篇略短的文章，但是信息量巨大。"))}」{e(cut(a1, "（大意，"))}</div>'
+    gist = "「" + e(cut(a1, "这是一篇略短的文章，但是信息量巨大。")) + "」" + e(cut(a1, "（大意，"))
+    left["l1r"] = (f'<div class="mid">{z(gist)}</div>'
                    + gl(lang, "这是一篇略短的文章，但是信息量巨大。") + gl(lang, "（大意，")
-                   + f'<div class="big">{e(cut(a1, "大约在开头第1~8分钟", more=False))}</div>'
+                   + f'<div class="big">{z(e(cut(a1, "大约在开头第1~8分钟", more=False)))}</div>'
                    + gl(lang, "大约在开头第1~8分钟"))
     q2 = w2["query"]
     phrase = '"这篇文章的写作是非常简洁的"'
     left["l2"] = (f'<div class="lbl">{e(t["check"])}</div>'
-                  f'<div class="call mono"><span class="fn">web_search</span>(\'…{e(cut(q2, phrase, more=False))}…\')</div>'
+                  f'<div class="call mono"><span class="fn">web_search</span>(\'…{z(e(cut(q2, phrase, more=False)))}…\')</div>'
                   f'<div class="no">{e(cut(w2["answer"], "No relevant web results found.", more=False))}</div>'
                   f'<div class="badge">{e(t["real"].format(r=secs(w2["elapsed_s"], lang), x=speedup(w2["elapsed_s"], mp4, "l2", "l3")))}</div>')
     a3 = w3["answer"]
     left["l3"] = (f'<div class="lbl">{e(t["again"])}</div>'
-                  f'<div class="big">{e(cut(a3, "约在1分50秒-2分30秒之间", more=False))}</div>'
+                  f'<div class="big">{z(e(cut(a3, "约在1分50秒-2分30秒之间", more=False)))}</div>'
                   + gl(lang, "约在1分50秒-2分30秒之间"))
 
     right = {}
@@ -367,8 +446,8 @@ def build_steps(lang: str, mp4: bool):
     right["r1"] = (f'<div class="call mono"><span class="fn">omniseek_read</span>("{e(tgt)}")</div>'
                    f'<div class="badge">{e(t["realtime"].format(r=secs(READ["elapsed_s"], lang)))}</div>')
     desc = READ["result"]["content"]
-    right["r1r"] = (f'<div class="mid">{e(READ["result"]["title"])} · {e(t["length"])} {hms(READ["result"]["duration_seconds"])}</div>'
-                    f'<div class="mid">{e(cut(desc, "更多请见：https://github.com/mli/paper-reading", more=False))}</div>'
+    right["r1r"] = (f'<div class="mid">{z(e(READ["result"]["title"]))} · {e(t["length"])} {hms(READ["result"]["duration_seconds"])}</div>'
+                    f'<div class="mid">{z(e(cut(desc, "更多请见：https://github.com/mli/paper-reading", more=False)))}</div>'
                     + gl(lang, "更多请见：https://github.com/mli/paper-reading")
                     + f'<div class="lbl" style="margin-top:4px">→ {e(t["no_chapters"])}</div>')
     a = TRANS["args"]
@@ -388,7 +467,7 @@ def build_steps(lang: str, mp4: bool):
     for h in HITS:
         hl = " hl" if h is QUOTE else ""
         lines.append(f'<div class="line{hl}"><span class="at mono">{hms(h["start"])}</span>'
-                     f'<div><div class="tx">{e(hit_show(h))}</div>{gl(lang, hit_text(h))}</div></div>')
+                     f'<div><div class="tx">{z(e(hit_show(h)))}</div>{gl(lang, hit_text(h))}</div></div>')
     right["r3"] = f'<div class="lbl">{e(t["search_text"])}</div>' + "".join(lines)
     link = f'bilibili.com/video/BV1pu411o7BE<wbr><span style="white-space:nowrap">?t={T_QUOTE}</span>'
     frame = ""
@@ -437,7 +516,11 @@ def plan(mp4: bool):
     def add(ms, **st):
         S.append((st, int(ms * k)))
 
-    add(3000, show=[], cap=0)
+    if mp4:
+        # The video starts from the empty stage (it has a poster for its still). A GIF starts its
+        # replay on the question with each agent's first call already in: a reader who scrolls to a
+        # GIF late never lands on two empty columns.
+        add(3000, show=[], cap=0)
     add(1500, show=["l1", "r1"], cap=0)
     add(2200, show=["l1", "r1", "r1r"], cap=2)
     for i, p in enumerate((0, 20, 40, 60, 80)):
@@ -463,8 +546,8 @@ def plan(mp4: bool):
             st["dim"] = [i for i in st.get("dim", []) if i not in full] + short
     if not mp4:
         # GIF frame 0 is the finished comparison (the last frame before the end card): GitHub, PyPI,
-        # thumbnails and reduced-motion readers often show only the first frame. Then it plays from
-        # the empty start. The MP4 has a poster for that, so its storyboard is unchanged.
+        # thumbnails and reduced-motion readers often show only the first frame. Then it replays
+        # from the first calls. The MP4 has a poster for that, so its storyboard is unchanged.
         last = next(st for st, _ in reversed(S) if not st.get("end"))
         S.insert(0, (dict(last, cover=True), COVER_MS))
     return S
@@ -505,7 +588,7 @@ def shoot(lang, theme, w, h, scale, mp4, narrow=False):
         page.wait_for_timeout(400)
         for st, ms in plan(mp4):
             page.evaluate(APPLY, [st, T[lang]["cap"]])
-            shots.append((page.locator("#stage").screenshot(omit_background=not mp4), ms))
+            shots.append((page.locator("#stage").screenshot(omit_background=True), ms))
         ctx.close()
         b.close()
     return shots
@@ -541,17 +624,24 @@ def to_gif(shots, page_hex: str, path: Path) -> None:
                    loop=0, transparency=255, disposal=1, optimize=False)
 
 
-def to_mp4(shots, path: Path) -> None:
-    import imageio_ffmpeg
+def on_page(png: bytes, page_hex: str):
+    """A stage screenshot (transparent outside its rounded corners) flattened onto the page colour,
+    at video size. Without it the corners came out white on the dark video."""
     from PIL import Image
+    im = Image.open(io.BytesIO(png)).convert("RGBA")
+    bg = Image.new("RGBA", im.size, page_hex)
+    return Image.alpha_composite(bg, im).convert("RGB").resize((MP4_W, MP4_H), Image.LANCZOS)
+
+
+def to_mp4(shots, page_hex: str, path: Path) -> None:
+    import imageio_ffmpeg
     ff = imageio_ffmpeg.get_ffmpeg_exe()
     cmd = [ff, "-y", "-loglevel", "error", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{MP4_W}x{MP4_H}",
            "-r", str(MP4_FPS), "-i", "-", "-c:v", "libx264", "-preset", "slow", "-crf", "20",
            "-pix_fmt", "yuv420p", "-movflags", "+faststart", str(path)]
     proc = subprocess.Popen(cmd, stdin=subprocess.PIPE)
     for png, ms in shots:
-        im = Image.open(io.BytesIO(png)).convert("RGB").resize((MP4_W, MP4_H), Image.LANCZOS)
-        raw = im.tobytes()
+        raw = on_page(png, page_hex).tobytes()
         for _ in range(max(1, round(ms * MP4_FPS / 1000))):
             proc.stdin.write(raw)
     proc.stdin.close()
@@ -559,10 +649,9 @@ def to_mp4(shots, path: Path) -> None:
         raise SystemExit("ffmpeg failed")
 
 
-def to_poster(shots, path: Path) -> None:
-    from PIL import Image
+def to_poster(shots, page_hex: str, path: Path) -> None:
     last = max(i for i, (st, _) in enumerate(plan(True)) if not st.get("end"))
-    im = Image.open(io.BytesIO(shots[last][0])).convert("RGB").resize((MP4_W, MP4_H), Image.LANCZOS)
+    im = on_page(shots[last][0], page_hex)
     im.save(path, optimize=True)
     print(f"wrote {path.name}: frame {last + 1} of {len(shots)}, {path.stat().st_size / 1e6:.2f} MB")
 
@@ -572,7 +661,7 @@ def main():
     if what not in ("gif", "mp4", "poster", "all"):
         sys.exit(__doc__)
     OUT.mkdir(parents=True, exist_ok=True)
-    for lang in ("en", "zh"):
+    for lang in LANGS:
         if what in ("gif", "all"):
             for theme in ("light", "dark"):
                 for narrow, (w, h), tail in ((False, (W, GIF_H), ""), (True, (NARROW_W, NARROW_H), "-narrow")):
@@ -582,13 +671,14 @@ def main():
                     print(f"wrote {out.name}: {len(shots)} frames, {sum(m for _, m in shots) / 1000:.1f}s, "
                           f"{out.stat().st_size / 1e6:.2f} MB")
         if what in ("mp4", "poster", "all"):
-            # 1024 x 576 CSS rendered at 1.25 = 1280 x 720 px.
-            shots = shoot(lang, "dark", 1024, 576, MP4_W / 1024, True)
-            to_poster(shots, OUT / f"compare-{lang}-dark-poster.png")
-            if what != "poster":
-                out = OUT / f"compare-{lang}-dark.mp4"
-                to_mp4(shots, out)
-                print(f"wrote {out.name}: {sum(m for _, m in shots) / 1000:.1f}s, {out.stat().st_size / 1e6:.2f} MB")
+            for theme in MP4_THEMES.get(lang, ()):
+                # 1024 x 576 CSS rendered at 1.25 = 1280 x 720 px.
+                shots = shoot(lang, theme, 1024, 576, MP4_W / 1024, True)
+                to_poster(shots, THEMES[theme]["page"], OUT / f"compare-{lang}-{theme}-poster.png")
+                if what != "poster":
+                    out = OUT / f"compare-{lang}-{theme}.mp4"
+                    to_mp4(shots, THEMES[theme]["page"], out)
+                    print(f"wrote {out.name}: {sum(m for _, m in shots) / 1000:.1f}s, {out.stat().st_size / 1e6:.2f} MB")
 
 
 if __name__ == "__main__":
