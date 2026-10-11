@@ -30,7 +30,7 @@ Runs on your own computer. It plugs in through MCP, the standard way AI apps lik
 We asked two agents for Mu Li's exact words on the Transformer paper's writing, and the minute, in his 87-minute Bilibili walkthrough: web search returned a paraphrase and "around minutes 1 to 8", while the agent with OmniSeek transcribed the video and found the line at 1:21:51.
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/compare-en-light.gif?v=2026-10-11c" width="720" alt="A real run, side by side. Left, an agent with web search only answers with a paraphrase and says around minutes 1 to 8. Right, an agent with OmniSeek transcribes the 87-minute video and quotes Mu Li at 1:21:51, with a link that opens there.">
+  <img src="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/compare-en-light.gif?v=2026-10-11d" width="720" alt="A real run, side by side. Left, an agent with web search only answers with a paraphrase and says around minutes 1 to 8. Right, an agent with OmniSeek transcribes the 87-minute video and quotes Mu Li at 1:21:51, with a link that opens there.">
 </p>
 
 [The full comparison on three questions](https://github.com/Battam1111/omniseek/blob/main/docs/compare.md), with sources, dates, and a short video.

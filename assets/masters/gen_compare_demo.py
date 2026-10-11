@@ -1,7 +1,7 @@
 """Side-by-side demo: the same question to an agent with web search only (left) and an agent with
 OmniSeek (right). Rendered from one recorded run to GIFs (README, site) and MP4s (X, Bilibili).
 
-    python assets/masters/gen_compare_demo.py gif      # assets/demo/compare-{en,zh}-{light,dark}{,-narrow}.gif
+    python assets/masters/gen_compare_demo.py gif      # assets/demo/compare-{en,zh,ja}-{light,dark}{,-narrow}.gif
     python assets/masters/gen_compare_demo.py mp4      # assets/demo/compare-{en,zh}-dark.mp4 (+ posters)
     python assets/masters/gen_compare_demo.py poster   # assets/demo/compare-{en,zh}-dark-poster.png only
     python assets/masters/gen_compare_demo.py all
@@ -28,7 +28,9 @@ Where the words come from: compare-demo-run.json next to this script, built from
 records of the run (see its "about" field). Every Chinese line on screen is cut from that record by
 `cut()`, which refuses to run if the cut is not found verbatim, so a line can be shortened (with an
 ellipsis) but never reworded. The English version adds a translation under each Chinese line; the
-translations are typed here (GLOSS) and set in italics as translations. Tool names on screen are the
+translations are typed here (GLOSS) and set in italics as translations. The Japanese version does the
+same in Japanese (GLOSS_JA, upright, in 「」), with its cards, headers and captions in Japanese; the
+Chinese lines on it are marked lang="zh-CN" so they keep Chinese fonts. Tool names on screen are the
 public ones from src/omniseek/server.py.
 
 Speed: some steps are sped up. Each sped-up step carries a badge with the real time and the factor.
@@ -202,7 +204,61 @@ T = {
         "end2": "装了 OmniSeek，\nAgent 读得到视频里说了什么，精确到秒。",
         "run": "均为 2026-10-11 实跑；加速的步骤都已标出。",
     },
+    # Japanese: the cards, headers, captions and end card in Japanese; every Chinese line from the
+    # record stays as said, with a Japanese translation under it (GLOSS_JA), in the voice of
+    # docs/i18n/README_ja.md.
+    "ja": {
+        "lang": "ja",
+        "ask": "中国語で質問（ここでは日本語訳）",
+        "question": "李沐（Mu Li）が Bilibili で Transformer 論文を解説した動画で、彼は論文の書き方をどう評していますか？"
+                    "本人の言葉と、何分目かを教えてください。",
+        "left": "ウェブ検索だけのエージェント",
+        "right": "OmniSeek を使うエージェント",
+        "real": "実際は {r}、画面では ×{x} に加速",
+        "realtime": "実際の速度、{r}",
+        "no_chapters": "ページにチャプターの時刻がないので、動画をまるごと文字起こし",
+        "no_chapters_short": "チャプターの時刻なし",
+        "realtime_short": "実際 {r}",
+        "length": "長さ",
+        "transcribing": "動画をまるごと文字起こし中…",
+        "transcribed": "音声 {a}、時刻つきの {n} 行",
+        "search_text": "文字起こしから「写作」（書き方）を検索",
+        "opens": "{t} から再生",
+        "again": "もう一度質問",
+        "same": "同じ発言、{t}（キャッシュ済み、{s}）",
+        "check": "本人の言葉をウェブで検索",
+        "extra": "文字起こしは追加機能です：",
+        "cap": [
+            "同じ質問を、2 つのエージェントに",
+            "ウェブ検索は、他の人が書いたメモを見つけて言い換える",
+            "OmniSeek はまず動画のページを読む",
+            "頼れるチャプターがないので、動画をまるごと手元で文字に起こす",
+            "次に文字を検索：本人の言葉と、それを話した秒",
+            "リンクはその秒へ直接飛ぶ",
+            "本人の言葉はウェブでは見つからない",
+            "もう一度聞くと、ウェブの答えは変わり、文字起こしは変わらない",
+        ],
+        "end1": "ウェブ検索が見つけるのは、動画について他の人が書いたこと。",
+        "end2": "OmniSeek があれば、エージェントは\n動画で話されたことを秒単位で読めます。",
+        "run": "2026-10-11 の実際の実行です。加速したステップには印をつけています。",
+    },
 }
+
+GLOSS_JA = {
+    "这是一篇略短的文章，但是信息量巨大。": "「やや短い論文だが、情報量はとても多い。」",
+    "（大意，": "（回答自身の注記：「要旨」）",
+    "大约在开头第1~8分钟": "「最初の 1〜8 分ごろ」",
+    "约在1分50秒-2分30秒之间": "「およそ 1 分 50 秒から 2 分 30 秒のあいだ」",
+    "更多请见：https://github.com/mli/paper-reading": "「詳しくは github.com/mli/paper-reading へ」",
+    "所以他整个写作的时候，": "「…だから全体を書くときに…」",
+    "我们首先看一下他的写作。": "「まず、この論文の書き方を見てみましょう。」",
+    "啊，这篇文章的写作是非常简洁的，因为就是说他每一句话就基本上在讲一件事情。":
+        "「この論文の書き方はとても簡潔です。基本的に、一文ごとにひとつのことを言っているからです。」",
+    "另外一个是说他没有用太多的写作技巧啊，": "「もうひとつは、書き方のテクニックをあまり使っていないことで…」",
+}
+GLOSSES = {"en": GLOSS, "ja": GLOSS_JA}
+LANGS = ("en", "zh", "ja")
+MP4_LANGS = ("en", "zh")
 
 INSTALL = 'uv tool install "omniseek[asr]" --with torch --with torchaudio'
 
@@ -264,6 +320,13 @@ html, body {{ background:transparent; }}
   font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI","Helvetica Neue",Arial,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
   -webkit-font-smoothing:antialiased; }}
 .mono {{ font-family:ui-monospace,"SF Mono",Menlo,Consolas,"PingFang SC","Microsoft YaHei",monospace; }}
+/* Japanese page: Japanese fonts first, no italics for translations; the Chinese lines from the
+   record are marked lang="zh-CN" there and keep their Chinese fonts. */
+#stage:lang(ja) {{ font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI","Helvetica Neue",Arial,"Hiragino Sans","Hiragino Kaku Gothic ProN","Yu Gothic UI","Yu Gothic",Meiryo,sans-serif; }}
+#stage:lang(ja) .mono {{ font-family:ui-monospace,"SF Mono",Menlo,Consolas,"Hiragino Sans","Yu Gothic UI",Meiryo,monospace; }}
+#stage:lang(ja) .gl {{ font-style:normal; }}
+#stage [lang|="zh"] {{ font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI","Helvetica Neue",Arial,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif; }}
+#stage .mono [lang|="zh"] {{ font-family:ui-monospace,"SF Mono",Menlo,Consolas,"PingFang SC","Microsoft YaHei",monospace; }}
 .q {{ padding:14px 18px 12px; border-bottom:1px solid var(--line); }}
 .q .ask {{ font-size:15px; color:var(--muted); font-weight:600; }}
 .q .text {{ font-size:{qsize}px; font-weight:700; line-height:1.28; margin-top:3px; letter-spacing:-.005em; }}
@@ -327,17 +390,18 @@ html, body {{ background:transparent; }}
 
 
 def gl(lang: str, zh: str, cls: str = "gl") -> str:
-    if lang != "en":
+    if lang not in GLOSSES:
         return ""
-    if zh not in GLOSS:
-        raise SystemExit(f"no English translation for {zh!r}; add it to GLOSS")
-    return f'<div class="{cls}">{html.escape(GLOSS[zh])}</div>'
+    if zh not in GLOSSES[lang]:
+        raise SystemExit(f"no {lang} translation for {zh!r}; add it to GLOSS / GLOSS_JA")
+    return f'<div class="{cls}">{html.escape(GLOSSES[lang][zh])}</div>'
 
 
 def secs(s: float, lang: str) -> str:
+    unit = {"en": ("min", "s"), "zh": ("分钟", "秒"), "ja": ("分", "秒")}[lang]
     if s >= 90:
-        return f"{s / 60:.0f} min" if lang == "en" else f"{s / 60:.0f} 分钟"
-    return f"{s:.1f} s" if lang == "en" else f"{s:.1f} 秒"
+        return f"{s / 60:.0f} {unit[0]}"
+    return f"{s:.1f} {unit[1]}"
 
 
 def speedup(real_s: float, mp4: bool, step: str, until: str) -> int:
@@ -352,25 +416,28 @@ def speedup(real_s: float, mp4: bool, step: str, until: str) -> int:
 def build_steps(lang: str, mp4: bool):
     """Left and right step HTML, keyed by id."""
     t, e = T[lang], html.escape
+    # On the Japanese page, a Chinese line from the record is marked as Chinese (fonts, line breaks).
+    z = (lambda s: f'<span lang="zh-CN">{s}</span>') if lang == "ja" else (lambda s: s)
     w1, w2, w3 = WEB
     q1 = w1["query"]
     left = {}
-    left["l1"] = (f'<div class="call mono"><span class="fn">web_search</span>("{e(cut(q1, q1[:22]))}")</div>'
+    left["l1"] = (f'<div class="call mono"><span class="fn">web_search</span>("{z(e(cut(q1, q1[:22])))}")</div>'
                   f'<div class="badge" id="l1b">{e(t["real"].format(r=secs(w1["elapsed_s"], lang), x=speedup(w1["elapsed_s"], mp4, "l1", "l1r")))}</div>')
     a1 = w1["answer"]
-    left["l1r"] = (f'<div class="mid">「{e(cut(a1, "这是一篇略短的文章，但是信息量巨大。"))}」{e(cut(a1, "（大意，"))}</div>'
+    gist = "「" + e(cut(a1, "这是一篇略短的文章，但是信息量巨大。")) + "」" + e(cut(a1, "（大意，"))
+    left["l1r"] = (f'<div class="mid">{z(gist)}</div>'
                    + gl(lang, "这是一篇略短的文章，但是信息量巨大。") + gl(lang, "（大意，")
-                   + f'<div class="big">{e(cut(a1, "大约在开头第1~8分钟", more=False))}</div>'
+                   + f'<div class="big">{z(e(cut(a1, "大约在开头第1~8分钟", more=False)))}</div>'
                    + gl(lang, "大约在开头第1~8分钟"))
     q2 = w2["query"]
     phrase = '"这篇文章的写作是非常简洁的"'
     left["l2"] = (f'<div class="lbl">{e(t["check"])}</div>'
-                  f'<div class="call mono"><span class="fn">web_search</span>(\'…{e(cut(q2, phrase, more=False))}…\')</div>'
+                  f'<div class="call mono"><span class="fn">web_search</span>(\'…{z(e(cut(q2, phrase, more=False)))}…\')</div>'
                   f'<div class="no">{e(cut(w2["answer"], "No relevant web results found.", more=False))}</div>'
                   f'<div class="badge">{e(t["real"].format(r=secs(w2["elapsed_s"], lang), x=speedup(w2["elapsed_s"], mp4, "l2", "l3")))}</div>')
     a3 = w3["answer"]
     left["l3"] = (f'<div class="lbl">{e(t["again"])}</div>'
-                  f'<div class="big">{e(cut(a3, "约在1分50秒-2分30秒之间", more=False))}</div>'
+                  f'<div class="big">{z(e(cut(a3, "约在1分50秒-2分30秒之间", more=False)))}</div>'
                   + gl(lang, "约在1分50秒-2分30秒之间"))
 
     right = {}
@@ -378,8 +445,8 @@ def build_steps(lang: str, mp4: bool):
     right["r1"] = (f'<div class="call mono"><span class="fn">omniseek_read</span>("{e(tgt)}")</div>'
                    f'<div class="badge">{e(t["realtime"].format(r=secs(READ["elapsed_s"], lang)))}</div>')
     desc = READ["result"]["content"]
-    right["r1r"] = (f'<div class="mid">{e(READ["result"]["title"])} · {e(t["length"])} {hms(READ["result"]["duration_seconds"])}</div>'
-                    f'<div class="mid">{e(cut(desc, "更多请见：https://github.com/mli/paper-reading", more=False))}</div>'
+    right["r1r"] = (f'<div class="mid">{z(e(READ["result"]["title"]))} · {e(t["length"])} {hms(READ["result"]["duration_seconds"])}</div>'
+                    f'<div class="mid">{z(e(cut(desc, "更多请见：https://github.com/mli/paper-reading", more=False)))}</div>'
                     + gl(lang, "更多请见：https://github.com/mli/paper-reading")
                     + f'<div class="lbl" style="margin-top:4px">→ {e(t["no_chapters"])}</div>')
     a = TRANS["args"]
@@ -399,7 +466,7 @@ def build_steps(lang: str, mp4: bool):
     for h in HITS:
         hl = " hl" if h is QUOTE else ""
         lines.append(f'<div class="line{hl}"><span class="at mono">{hms(h["start"])}</span>'
-                     f'<div><div class="tx">{e(hit_show(h))}</div>{gl(lang, hit_text(h))}</div></div>')
+                     f'<div><div class="tx">{z(e(hit_show(h)))}</div>{gl(lang, hit_text(h))}</div></div>')
     right["r3"] = f'<div class="lbl">{e(t["search_text"])}</div>' + "".join(lines)
     link = f'bilibili.com/video/BV1pu411o7BE<wbr><span style="white-space:nowrap">?t={T_QUOTE}</span>'
     frame = ""
@@ -587,7 +654,7 @@ def main():
     if what not in ("gif", "mp4", "poster", "all"):
         sys.exit(__doc__)
     OUT.mkdir(parents=True, exist_ok=True)
-    for lang in ("en", "zh"):
+    for lang in LANGS:
         if what in ("gif", "all"):
             for theme in ("light", "dark"):
                 for narrow, (w, h), tail in ((False, (W, GIF_H), ""), (True, (NARROW_W, NARROW_H), "-narrow")):
@@ -596,7 +663,7 @@ def main():
                     to_gif(shots, THEMES[theme]["page"], out)
                     print(f"wrote {out.name}: {len(shots)} frames, {sum(m for _, m in shots) / 1000:.1f}s, "
                           f"{out.stat().st_size / 1e6:.2f} MB")
-        if what in ("mp4", "poster", "all"):
+        if what in ("mp4", "poster", "all") and lang in MP4_LANGS:
             # 1024 x 576 CSS rendered at 1.25 = 1280 x 720 px.
             shots = shoot(lang, "dark", 1024, 576, MP4_W / 1024, True)
             to_poster(shots, OUT / f"compare-{lang}-dark-poster.png")
