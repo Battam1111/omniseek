@@ -1,8 +1,5 @@
 <p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/hero-zh-dark.png?v=2026-10-11">
-    <img src="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/hero-zh-light.png?v=2026-10-11" width="560" alt="OmniSeek：给你的 AI Agent 接上网页搜索够不到的那部分互联网。">
-  </picture>
+  <img src="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/logo-lockup.png?v=2026-10-11b" width="320" alt="OmniSeek">
 </p>
 
 **给你的 AI Agent 接上网页搜索够不到的那部分互联网。**

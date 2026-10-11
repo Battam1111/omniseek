@@ -1,10 +1,7 @@
 <!-- mcp-name: io.github.Battam1111/omniseek -->
 
 <p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/hero-en-dark.png?v=2026-10-11">
-    <img src="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/hero-en-light.png?v=2026-10-11" width="720" alt="OmniSeek: give your AI agent the parts of the internet web search doesn't reach.">
-  </picture>
+  <img src="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/logo-lockup.png?v=2026-10-11b" width="320" alt="OmniSeek">
 </p>
 
 **Give your AI agent the parts of the internet web search doesn't reach.**

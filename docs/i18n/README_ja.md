@@ -1,8 +1,5 @@
 <p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/hero-ja-dark.png?v=2026-10-11">
-    <img src="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/hero-ja-light.png?v=2026-10-11" width="670" alt="OmniSeek：ウェブ検索が届かないインターネットを、あなたの AI エージェントに。">
-  </picture>
+  <img src="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/logo-lockup.png?v=2026-10-11b" width="320" alt="OmniSeek">
 </p>
 
 **ウェブ検索が届かないインターネットを、あなたの AI エージェントに。**
