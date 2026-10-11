@@ -13,12 +13,23 @@ import logging
 from typing import Optional
 from urllib.parse import urlparse
 
-from omniseek.core import http
+from omniseek.core import _optdep, http
 from omniseek.core.normalize import Document
 
 logger = logging.getLogger(__name__)
 
 _MAX_CHARS = 250_000  # extracted-text cap for a pathologically long PDF — keep the payload sane
+
+
+def reader_missing() -> Optional[str]:
+    """None when PyMuPDF imports; else the install hint for the optional [pdf] extra. An adapter that
+    downloads a PDF through its own route asks this BEFORE the download, so an install without the
+    extra neither fetches bytes it cannot read nor reports the gap as "no extractable text"."""
+    try:
+        _optdep.require("fitz", "pdf")
+    except RuntimeError as exc:
+        return str(exc)
+    return None
 
 
 def extract_text(content: bytes, *, label: str = "") -> Optional[tuple[str, int, str, bool]]:

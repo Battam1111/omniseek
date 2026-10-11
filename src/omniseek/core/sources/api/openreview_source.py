@@ -15,7 +15,9 @@ submission PDF through the logged-in session (the attachment endpoint the offici
 client uses) and extracts it with the pdf adapter's extractor. Anonymous access to every OpenReview
 entry now answers 403 ChallengeRequiredError, so without a session, or when the session is asked
 to verify too, the read falls back to the title and abstract and says why in
-metadata.fulltext_reason. OmniSeek never touches the anonymous challenge page.
+metadata.fulltext_reason. OmniSeek never touches the anonymous challenge page. Reading the PDF needs
+the optional [pdf] extra (PyMuPDF); an install without it skips the download and falls back the
+same way, the reason naming what to install (pip install 'omniseek[pdf]').
 """
 
 from __future__ import annotations
@@ -526,13 +528,16 @@ class OpenReviewAdapter:
         token = self._live_token()
         if token is None:
             return self._abstract_only(doc, f"no logged-in OpenReview session ({self._no_session_reason()})")
+        from omniseek.core.sources.scrape import pdf_source
+        missing = pdf_source.reader_missing()
+        if missing:
+            return self._abstract_only(doc, f"this install cannot read PDFs: {missing}")
         status, _ctype, content, reason = self._download_pdf(note_id, token)
         if content is None:
             return self._abstract_only(doc, f"the PDF download failed: {reason}")
-        from omniseek.core.sources.scrape.pdf_source import extract_text
-        got = extract_text(content, label=f"openreview pdf {note_id}")
+        got = pdf_source.extract_text(content, label=f"openreview pdf {note_id}")
         if got is None:
-            return self._abstract_only(doc, "the PDF has no extractable text (or PyMuPDF is missing)")
+            return self._abstract_only(doc, "the PDF has no extractable text (it did not open, or it has no text layer)")
         text, n_pages, _meta_title, truncated = got
         meta = dict(doc.metadata or {})
         meta.update({"fulltext": True, "abstract": doc.content, "pages": n_pages,

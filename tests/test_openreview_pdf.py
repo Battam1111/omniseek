@@ -5,6 +5,10 @@ Every upstream is a stub (no network, no real credential). Pins:
   (a) a /forum?id= or /pdf?id= link with a working session returns the PDF's whole text (the
       fixture below is a tiny valid PDF), with the abstract kept in metadata, and the PDF is
       asked from the attachment endpoint the official client uses (GET /attachment, id + name=pdf);
+      without the optional [pdf] extra (PyMuPDF) the same read falls back to the abstract, downloads
+      nothing, and the reason names the extra to install. Both halves are asserted in every install:
+      the full-text tests check whichever behavior this install should show, and one test removes
+      PyMuPDF on purpose so the fallback is pinned even where the extra is installed;
   (b) a download answered 403 ChallengeRequiredError falls back to the abstract and says why;
   (c) no session (no credentials; a login answered mfaPending; a login answered
       ChallengeRequiredError) falls back to the abstract and says why, never calls /mfa/, and
@@ -35,6 +39,11 @@ import httpx  # noqa: E402
 
 from omniseek.core import diag  # noqa: E402
 from omniseek.core.sources.api import openreview_source as ors  # noqa: E402
+from omniseek.core.sources.scrape import pdf_source  # noqa: E402
+
+# None when this install has the [pdf] extra; else the install hint the adapter reports. The public
+# mirror's CI installs the core only, the live host installs every extra: each must pass.
+READER_MISSING = pdf_source.reader_missing()
 
 TOKEN = "tok-SECRET-0123456789"
 USER, PASSWORD = "someone@example.org", "pw-SECRET-xyz"
@@ -79,7 +88,10 @@ class _Records(logging.Handler):
 class _Upstream:
     """A scripted OpenReview: /login, /notes, /attachment. Records every request."""
 
-    def __init__(self, *, login=None, attachment=None, configured=True):
+    def __init__(self, *, login=None, attachment=None, configured=True, reader="real"):
+        # reader: "real" leaves PyMuPDF as installed; "present" says it is there (paths that never
+        # reach extraction, so they run alike in every install); "absent" hides it from import.
+        self.reader = reader
         self.login = login if login is not None else (200, {"token": TOKEN})
         self.attachment = attachment if attachment is not None else (200, PDF_BYTES, "application/pdf")
         self.configured = configured
@@ -108,7 +120,12 @@ class _Upstream:
 
     def patches(self):
         creds = {"username": USER, "password": PASSWORD} if self.configured else None
-        return [
+        reader = []
+        if self.reader == "present":
+            reader = [mock.patch.object(pdf_source, "reader_missing", lambda: None)]
+        elif self.reader == "absent":
+            reader = [mock.patch.dict(sys.modules, {"fitz": None})]
+        return reader + [
             mock.patch.object(ors.httpx, "post", self.post),
             mock.patch.object(ors.httpx, "get", self.get),
             mock.patch.object(ors.http, "direct", self.direct),
@@ -145,11 +162,27 @@ class OpenReviewFullText(unittest.TestCase):
         for secret in (TOKEN, PASSWORD):
             self.assertNotIn(secret, blob)
 
+    def _assert_reader_missing_fallback(self, doc, up):
+        """Without PyMuPDF: the abstract, the reason naming the extra, and no PDF download."""
+        self.assertIsNotNone(doc)
+        self.assertEqual(doc.content, ABSTRACT)
+        self.assertIs(doc.metadata["fulltext"], False)
+        self.assertTrue(doc.metadata["fulltext_reason"].startswith("this install cannot read PDFs: "),
+                        doc.metadata["fulltext_reason"])
+        self.assertIn("pip install 'omniseek[pdf]'", doc.metadata["fulltext_reason"])
+        self.assertEqual(doc.title, "Depth Before Breadth")
+        self.assertFalse([u for u, _ in up.gets if u.endswith("/attachment")])
+        self.assertEqual(len(up.posts), 1)
+
     def test_a_full_text_from_the_attachment_endpoint(self):
         for url in (f"https://openreview.net/pdf?id={FORUM}", f"https://openreview.net/forum?id={FORUM}"):
             with self.subTest(url=url):
                 up = _Upstream()
                 doc, captures, logs = self._read(up, url)
+                if READER_MISSING:
+                    self._assert_reader_missing_fallback(doc, up)
+                    self._assert_no_secret(doc.to_tool_dict(full=True), captures, logs)
+                    continue
                 self.assertIsNotNone(doc)
                 self.assertIn("Depth Before Breadth fixture", doc.content)
                 self.assertNotEqual(doc.content, ABSTRACT)
@@ -166,6 +199,15 @@ class OpenReviewFullText(unittest.TestCase):
                 self.assertEqual(len(up.posts), 1)
                 self._assert_no_secret(doc.to_tool_dict(full=True), captures, logs)
 
+    def test_a_without_the_pdf_extra_the_abstract_names_the_extra(self):
+        for url in (f"https://openreview.net/pdf?id={FORUM}", f"https://openreview.net/forum?id={FORUM}"):
+            with self.subTest(url=url):
+                up = _Upstream(reader="absent")
+                doc, captures, logs = self._read(up, url)
+                self._assert_reader_missing_fallback(doc, up)
+                self.assertTrue(any("omniseek[pdf]" in (c.get("body") or "") for c in captures), captures)
+                self._assert_no_secret(doc.to_tool_dict(full=True), captures, logs)
+
     def test_a_eye_read_windows_the_full_text(self):
         from omniseek import server
         up = _Upstream()
@@ -180,14 +222,21 @@ class OpenReviewFullText(unittest.TestCase):
             out = asyncio.run(server.omniseek_read(target=f"https://openreview.net/pdf?id={FORUM}",
                                               start_char=6, max_chars=6))
         self.assertTrue(out["matched"])
+        self.assertTrue(out["truncated"])
+        self._assert_no_secret(out)
+        if READER_MISSING:
+            # the window runs over the abstract, and the reader sees why it is not the paper
+            self.assertEqual(out["document"]["content"], ABSTRACT[6:12])
+            self.assertEqual(out["total_chars"], len(ABSTRACT))
+            self.assertIs(out["document"]["metadata"]["fulltext"], False)
+            self.assertIn("pip install 'omniseek[pdf]'", out["document"]["metadata"]["fulltext_reason"])
+            return
         self.assertEqual(out["document"]["content"], "Before")
         self.assertEqual(out["total_chars"], len("Depth Before Breadth fixture"))
-        self.assertTrue(out["truncated"])
         self.assertIs(out["document"]["metadata"]["fulltext"], True)
-        self._assert_no_secret(out)
 
     def test_b_a_challenged_download_falls_back_to_the_abstract_with_the_reason(self):
-        up = _Upstream(attachment=(403, CHALLENGE, None))
+        up = _Upstream(attachment=(403, CHALLENGE, None), reader="present")
         doc, captures, logs = self._read(up)
         self.assertEqual(doc.content, ABSTRACT)
         self.assertIs(doc.metadata["fulltext"], False)
@@ -197,7 +246,7 @@ class OpenReviewFullText(unittest.TestCase):
         self._assert_no_secret(doc.to_tool_dict(full=True), captures, logs)
 
     def test_b_a_200_that_is_not_a_pdf_falls_back(self):
-        up = _Upstream(attachment=(200, b"<html>verify you are human</html>", "text/html"))
+        up = _Upstream(attachment=(200, b"<html>verify you are human</html>", "text/html"), reader="present")
         doc, _c, _l = self._read(up)
         self.assertEqual(doc.content, ABSTRACT)
         self.assertIn("not a PDF", doc.metadata["fulltext_reason"])
