@@ -540,6 +540,15 @@ async def bounded_async_slot(
             gate.release()
 
 
+def _clock_slack() -> float:
+    """How far a reading of the gate's clock (``time.monotonic``) can trail the true moment: the clock's
+    resolution. A reading only says the true moment is in [reading, reading + resolution), so a request
+    started at a slot measured on that clock can leave up to one resolution after it, and the next slot
+    must clear that by the full interval. 1e-9 on Linux and macOS; 0.015625 s on Windows before
+    Python 3.13, where ``time.monotonic`` is GetTickCount64 (one tick every 15.6 ms)."""
+    return float(time.get_clock_info("monotonic").resolution)
+
+
 class Reservation:
     """One reserved request start: when it is (``start``, monotonic), how long the caller waits for it,
     and the pacer state before and after, so an unsent request can hand it back (``BackendGuard.refund``)."""
@@ -624,16 +633,23 @@ class BackendGuard:
         """Reserve the next request start (>= ``min_interval_s`` after the previous, room in every
         window) UNDER the pace lock and return it; the caller waits ``.wait`` itself. When the start
         would come after ``until`` (the caller's budget, monotonic), nothing is reserved (the backlog
-        drains instead of growing) and ``on_backlog(wait)`` (or a GateBusy) is raised."""
+        drains instead of growing) and ``on_backlog(wait)`` (or a GateBusy) is raised.
+
+        The next start is ``min_interval_s`` plus the clock's resolution after this one
+        (``_clock_slack``): this request really leaves somewhere in [start, start + resolution), so
+        without it a coarse clock (Windows before Python 3.13) lets two starts land up to 15.6 ms
+        closer than the interval. Window budgets keep the same margin."""
         with self.pace_lock:
             now = time.monotonic()
-            start = self._window_start(max(now, self.pace_state["next_at"]), now)
+            slack = _clock_slack()
+            start = self._window_start(max(now, self.pace_state["next_at"]), now, slack)
             wait = start - now
             if until is not None and start > until:
                 raise ((on_backlog(wait) if on_backlog is not None else None)
                        or GateBusy(f"{self.name}: next allowed start {wait:.1f}s away, past the "
                                    "caller's budget; not sent"))
-            res = Reservation(start, wait, self.pace_state["next_at"], start + self.min_interval_s)
+            gap = self.min_interval_s + slack if self.min_interval_s > 0 else 0.0
+            res = Reservation(start, wait, self.pace_state["next_at"], start + gap)
             self.pace_state["next_at"] = res.next_at
             for log in self._win_logs:
                 log.append(start)
@@ -652,22 +668,23 @@ class BackendGuard:
             if self.pace_state["next_at"] == res.next_at:
                 self.pace_state["next_at"] = max(res.prev_next_at, self.pace_state.get("floor", 0.0))
 
-    def _window_start(self, start: float, now: float) -> float:
+    def _window_start(self, start: float, now: float, slack: float = 0.0) -> float:
         """The earliest start >= ``start`` that leaves room in every (limit, seconds) window. Called
-        under the pace lock. Entries at or before ``now - seconds`` can never constrain a start at or
-        after ``now`` and are dropped. Reserved starts never decrease (each is >= the previous
+        under the pace lock. ``slack`` is the clock's resolution (see ``reserve``): a logged start
+        really left up to that much after it, so a new start clears it by ``seconds + slack``.
+        Entries at or before ``now - seconds - slack`` can never constrain a start at or after
+        ``now`` and are dropped. Reserved starts never decrease (each is >= the previous
         next_at, and a refund rolls next_at back only when nothing was reserved after it), so each
-        log is sorted and the entry ``limit`` places from its end is the one a new start must clear
-        by ``seconds``. Pushing ``start`` for one window can only help the others, so a few passes
-        always settle."""
+        log is sorted and the entry ``limit`` places from its end is the one a new start must clear.
+        Pushing ``start`` for one window can only help the others, so a few passes always settle."""
         for (_limit, secs), log in zip(self.windows, self._win_logs):
-            while log and log[0] <= now - secs:
+            while log and log[0] <= now - secs - slack:
                 log.popleft()
         for _ in range(len(self._win_logs) + 1):
             moved = False
             for (limit, secs), log in zip(self.windows, self._win_logs):
-                if len(log) >= limit and start < log[-limit] + secs:
-                    start = log[-limit] + secs
+                if len(log) >= limit and start < log[-limit] + secs + slack:
+                    start = log[-limit] + secs + slack
                     moved = True
             if not moved:
                 break
@@ -676,11 +693,12 @@ class BackendGuard:
     def defer(self, seconds: float) -> None:
         """Push the next allowed request start at least ``seconds`` into the future, for EVERY caller
         (an upstream's Retry-After or Stack Exchange's ``backoff``). A caller that would then wait
-        past its own budget sheds through its ``on_backlog`` instead of hanging."""
+        past its own budget sheds through its ``on_backlog`` instead of hanging. Counted from the latest
+        moment the clock reading allows (reading + resolution, see ``_clock_slack``)."""
         if not seconds or seconds <= 0:
             return
         with self.pace_lock:
-            at = time.monotonic() + float(seconds)
+            at = time.monotonic() + _clock_slack() + float(seconds)
             self.pace_state["next_at"] = max(self.pace_state["next_at"], at)
             self.pace_state["floor"] = max(self.pace_state.get("floor", 0.0), at)
 

@@ -17,6 +17,7 @@ import hmac
 import json
 import logging
 import os
+import sys
 
 import uvicorn
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -136,8 +137,21 @@ app.add_middleware(InflightMiddleware)
 # (starlette 1.0.0 / mcp streamable-http): lifespan_context is a callable `app -> async context
 # manager` and Starlette copies the yielded state into the lifespan scope, so compose_lifespan
 # re-yields FastMCP's state. Must run after `app = ...` and before uvicorn.run (below, in main()).
+# The shutdown side is CAPPED (lifecycle.SHUTDOWN_CAP_S_DEFAULT, OMNISEEK_SHUTDOWN_CAP_S): uvicorn awaits
+# the lifespan shutdown with no timeout, and a stall there (10-10 15:55, 10-11 12:25) kept the old
+# process alive and the new one from starting. Past the cap a watchdog logs who is still running,
+# dumps every thread's stack and forces the exit, so launchd can start the next process. The cap is
+# armed by _CappedServer below where uvicorn starts the lifespan shutdown (compose_lifespan arms it
+# again, idempotently, and records which step is running).
 from omniseek.core import lifecycle  # noqa: E402
-app.router.lifespan_context = lifecycle.compose_lifespan(app.router.lifespan_context)
+app.router.lifespan_context = lifecycle.compose_lifespan(app.router.lifespan_context,
+                                                         cap_s=lifecycle.shutdown_cap_s())
+
+
+class _CappedServer(uvicorn.Server):
+    async def startup(self, sockets=None):
+        lifecycle.cap_lifespan_shutdown(self.lifespan, cap_s=lifecycle.shutdown_cap_s())
+        await super().startup(sockets=sockets)
 
 
 def _raise_fd_limit(want: int = 16384) -> None:
@@ -243,7 +257,16 @@ def main() -> None:
     logger.debug(_senses_report())
     # The one INFO line of a start (stranger report item 8); the lines above are at DEBUG.
     logger.info(_boot_summary(f" (HTTP on {HOST}:{PORT}, token-gated, MCP at /mcp)"))
-    uvicorn.run(app, host=HOST, port=PORT, log_level="info")
+    # uvicorn.run(app, ...) minus its reload / multi-worker branches (unused here), with one change:
+    # the Server arms the shutdown cap where uvicorn logs "Waiting for application shutdown." (see
+    # lifecycle.cap_lifespan_shutdown for why compose_lifespan's own arming is not enough).
+    server = _CappedServer(uvicorn.Config(app, host=HOST, port=PORT, log_level="info"))
+    try:
+        server.run()
+    except KeyboardInterrupt:
+        pass
+    if not server.started:
+        sys.exit(3)   # uvicorn.main.STARTUP_FAILURE, as uvicorn.run does
 
 
 if __name__ == "__main__":

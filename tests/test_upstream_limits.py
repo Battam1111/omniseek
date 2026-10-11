@@ -21,6 +21,7 @@ import contextlib
 import contextvars
 import email.utils
 import json
+import math
 import os
 import random
 import re
@@ -30,6 +31,7 @@ import sys
 import tempfile
 import threading
 import time
+import types
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -95,8 +97,23 @@ class _GateClock:
     def sleep(self, seconds: float) -> None:
         self.advance(seconds)
 
+    @staticmethod
+    def get_clock_info(name):   # an exact clock: the gate needs no margin for its resolution
+        return _exact_clock_info(name)
+
     def __getattr__(self, name):   # time.time and anything else: the real module
         return getattr(time, name)
+
+
+def _exact_clock_info(name):
+    return types.SimpleNamespace(implementation="test clock", monotonic=True, adjustable=False,
+                                 resolution=0.0)
+
+
+# How far a reading of the real ``time.monotonic`` can trail the true moment: its resolution (1e-9 on
+# Linux and macOS, 0.015625 s on Windows before Python 3.13, where it is GetTickCount64). A stamp the
+# test takes with it can read up to that much early, which is the margin ``_assert_paced`` allows.
+_STAMP_RES = time.get_clock_info("monotonic").resolution
 
 
 def _wait_for(cond, what: str, timeout: float = 20.0) -> None:
@@ -140,14 +157,19 @@ def _assert_paced(tc, wire_times, slots, interval, *, what=""):
     """The gate's promise, stated without the wall clock: the requests that reached the wire had one
     start slot each, the slots are ``interval`` apart, and no request reached the wire before its slot.
     (Two starts can still land closer than ``interval`` on the wire when the EARLIER one is late, which
-    a busy machine does; the gate never promised otherwise.)"""
+    a busy machine does; the gate never promised otherwise.) The wire times are ``time.monotonic``
+    stamps, which can read up to one clock resolution before the true moment (``_STAMP_RES``), so a
+    stamp counts as early only when it is below its slot by more than that (and never by less than
+    2 ms, the margin on a fine clock). That the gate clears its own clock's resolution is asserted on a
+    deliberately coarse clock in ``CoarseClockGateTests``."""
     wire, starts = sorted(wire_times), sorted(slots)
     tc.assertEqual(len(wire), len(starts), f"{what}: one start slot per request on the wire "
                                            f"(wire {wire}, slots {starts})")
     gaps = [b - a for a, b in zip(starts, starts[1:])]
     tc.assertTrue(all(gap >= interval - 1e-6 for gap in gaps),
                   f"{what}: start slots {gaps} apart, the gate says {interval}")
-    early = [(w, s) for w, s in zip(wire, starts) if w < s - 0.002]
+    margin = max(0.002, _STAMP_RES)
+    early = [(w, s) for w, s in zip(wire, starts) if w < s - margin]
     tc.assertEqual([], early, f"{what}: on the wire before its start slot (wire, slot)")
 
 
@@ -682,6 +704,90 @@ def _temp_host_delay(host, seconds):
         d.pop("t-robots-" + host.split(".")[0], None)
         upstreams._host_delay.pop(host, None)
         upstreams._host_guards.pop(host, None)
+
+
+class _CoarseClock:
+    """Windows' ``time.monotonic`` before Python 3.13 (GetTickCount64, one tick every 15.625 ms) on a
+    fake timeline: the true moment ``t`` moves only by ``sleep`` and by the test, a reading is ``t``
+    floored to the tick, so it trails ``t`` by up to one tick, and the clock declares that resolution
+    as the real one does. Requests are stamped with ``t``, the moment they really leave."""
+
+    RES = 0.015625
+
+    def __init__(self, t: float = 1000.0):
+        self.t = t
+
+    def monotonic(self) -> float:
+        return math.floor(self.t / self.RES) * self.RES
+
+    def sleep(self, seconds: float) -> None:
+        self.t += max(0.0, seconds)
+
+    def get_clock_info(self, name):
+        return types.SimpleNamespace(implementation="coarse test clock", monotonic=True,
+                                     adjustable=False, resolution=self.RES)
+
+    def __getattr__(self, name):
+        return getattr(time, name)
+
+
+class CoarseClockGateTests(unittest.TestCase):
+    """A gate whose clock reads up to one tick behind the true moment (Windows before Python 3.13)
+    still keeps its promises in TRUE time: starts at least the interval apart, no more than a window's
+    budget in any window, nothing before a Retry-After has passed (2026-10-11). Measured on the
+    Windows CI: on that clock the gate let true starts land up to 13.6 ms closer than its interval,
+    because it treated a reading as the exact moment. The timeline is fake, so no thread is ever late
+    and every gap is the gate's own doing; each case runs a few hundred random tick phases."""
+
+    @staticmethod
+    def _busy(w):
+        return RuntimeError("busy")
+
+    def _send(self, g, clock):
+        with g.hold(30.0, self._busy):
+            return clock.t
+
+    def test_starts_are_the_interval_apart_in_true_time(self):
+        clock, rnd = _CoarseClock(), random.Random(11)
+        with mock.patch.object(guard_mod, "time", clock):
+            g = BackendGuard("t-coarse-interval", 1, min_interval_s=0.3)
+            wire = []
+            with _start_slots(g) as slots:
+                for _ in range(300):
+                    # back to back, inside a tick, around the interval, well past it
+                    clock.t += rnd.choice([0.0, rnd.uniform(0.0, 0.02), rnd.uniform(0.25, 0.35),
+                                           rnd.uniform(0.3, 0.6)])
+                    wire.append(self._send(g, clock))
+        short = [(round(a, 4), round(b - a, 4)) for a, b in zip(wire, wire[1:]) if b - a < 0.3 - 1e-9]
+        self.assertEqual([], short, "true starts closer than 0.3 s (start, gap)")
+        self.assertEqual([], [(w, s) for w, s in zip(wire, slots[g]) if w < s - 1e-9],
+                         "a request left before its start slot (true moment, slot)")
+
+    def test_a_window_budget_holds_in_true_time(self):
+        clock, rnd = _CoarseClock(), random.Random(12)
+        with mock.patch.object(guard_mod, "time", clock):
+            g = BackendGuard("t-coarse-window", 4, windows=[(3, 1.0)])
+            wire = []
+            for _ in range(300):
+                clock.t += rnd.choice([0.0, rnd.uniform(0.0, 0.02), rnd.uniform(0.2, 0.5)])
+                wire.append(self._send(g, clock))
+        over = [(round(a, 4), round(b - a, 4)) for a, b in zip(wire, wire[3:]) if b - a < 1.0 - 1e-9]
+        self.assertEqual([], over, "4 true starts inside 1.0 s, the budget is 3 (first, span)")
+
+    def test_a_retry_after_holds_in_true_time(self):
+        clock, rnd = _CoarseClock(), random.Random(13)
+        early = []
+        with mock.patch.object(guard_mod, "time", clock):
+            g = BackendGuard("t-coarse-defer", 1)
+            for _ in range(300):
+                clock.t += rnd.uniform(0.0, 0.05)
+                asked = clock.t                 # the response saying Retry-After arrives now
+                g.defer(0.5)
+                clock.t += rnd.uniform(0.0, 0.3)
+                sent = self._send(g, clock)
+                if sent - asked < 0.5 - 1e-9:
+                    early.append((round(asked, 4), round(sent - asked, 4)))
+        self.assertEqual([], early, "sent before the Retry-After had passed (asked at, sent after)")
 
 
 class CrawlDelayGateTests(unittest.TestCase):
@@ -1708,7 +1814,10 @@ class AsyncAdmissionTests(unittest.TestCase):
         self.assertEqual("busy", anyio.run(scenario))
         self.assertEqual(1, g.sema._value)
         self.assertEqual(2, len(waits))
-        self.assertTrue(all(0.15 < w <= 0.2 for w in waits), waits)
+        # the budget left is (now + 0.2) - now: on a clock that did not tick between the two readings
+        # (Windows before Python 3.13 ticks every 15.6 ms) that is 0.2 plus the float rounding at now
+        rounding = 4 * math.ulp(time.monotonic())
+        self.assertTrue(all(0.15 < w <= 0.2 + rounding for w in waits), waits)
 
     def test_P2_a_hold_left_from_another_thread_or_task_leaves_no_holder_record(self):
         """Review P2: the holder's record lives in the gate, so a hold entered in one thread (task) and
@@ -2299,8 +2408,10 @@ class RedirectRuleTests(unittest.TestCase):
         self.assertLess(t1 - t0, 15.0)
         # ONE start slot for the visit: the next start is 20 s after a slot taken during the call (two
         # slots would put it 40 s out). Read as the absolute moment, not as time left from now.
+        # (plus the gate clock's resolution, the margin the gate keeps for a reading that trails the
+        # true moment: 1e-9 on Linux and macOS, 15.6 ms on Windows before Python 3.13)
         nxt = upstreams.host_guard("blog.iclr.cc").pace_state["next_at"]
-        self.assertTrue(t0 + 20.0 - 1e-6 <= nxt <= t1 + 20.0 + 1e-6,
+        self.assertTrue(t0 + 20.0 - 1e-6 <= nxt <= t1 + 20.0 + _STAMP_RES + 1e-6,
                         f"one start slot for the visit: next start {nxt - t0:.2f}s after the call began, "
                         f"the call took {t1 - t0:.2f}s")
 
@@ -3124,8 +3235,9 @@ class DeferralTests(unittest.TestCase):
         self.assertEqual((True, 429), (res["ok"], res["status"]))
 
         def thirty_after(key, call, last_call=None):
+            # the upper end allows the gate's margin for its clock's resolution (_STAMP_RES)
             t0, t1 = span[call][0], span[last_call or call][1]
-            self.assertTrue(t0 + 30.0 - 1e-6 <= nxt[key] <= t1 + 30.0 + 1e-6,
+            self.assertTrue(t0 + 30.0 - 1e-6 <= nxt[key] <= t1 + 30.0 + _STAMP_RES + 1e-6,
                             f"{key}: next start {nxt[key] - t0:.2f}s after its call began "
                             f"(the call took {t1 - t0:.2f}s); Retry-After said 30 s")
         thirty_after("only", "only")
@@ -3296,6 +3408,10 @@ class WindowPropertyTests(unittest.TestCase):
 
         def sleep(self, s):
             self.now += max(0.0, s)
+
+        @staticmethod
+        def get_clock_info(name):   # an exact clock: the gate needs no margin for its resolution
+            return _exact_clock_info(name)
 
     def _check(self, seed: int) -> list:
         rnd = random.Random(seed)
