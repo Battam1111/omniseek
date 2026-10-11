@@ -34,6 +34,10 @@ connection with two commands, and every place that explains installing should sa
 - **Hero images and social card re-rendered with the new tagline** (English, Chinese, Japanese;
   light and dark). The READMEs open with the hero again, and the site's link-share image is the
   social card again.
+- **Brand colours only.** The hero, social card, demo figure and site stylesheet now use only the
+  colours in `docs/BRAND.md`; softer text and lines are navy or white at lower opacity instead of
+  separate greys. The light demo figure ends in a white panel framed in blue instead of a navy
+  block, and its corners are transparent so it sits cleanly on GitHub's light and dark pages.
 - **Docs say it plainly.** The configuration, tools, patterns and login-site pages, the source
   catalog header and the Japanese README use everyday words instead of project jargon: "sites
   behind a login", "access level", "run only when named", "source review". Field values and names

@@ -33,6 +33,8 @@ The blue ramp is depth: the further in, the deeper the shade. The single amber p
 - Navy field: `#0F172A` (dark backgrounds, the hero and social card)
 - Amber find: `#F59E0B` (the center point, and only the center point; a thread of lineage from the project's earlier palette)
 
+Text and lines use no other colours. On light backgrounds text is navy, on dark backgrounds white; secondary text, hairlines and tinted surfaces are navy, white or a brand blue at lower opacity (for example `rgba(15,23,42,.62)` for muted text on white). No separate greys. Amber is never set as body text on a light background, where it is too faint to read.
+
 ## Mark
 
 **The deep O.** Three concentric rings, each with one opening, the openings rotated layer by layer: the way in exists, but it is not a straight line. That is seeking, as opposed to searching. The amber point at the center is the thing found at depth. Read as a whole, the rings and the point are also an iris and a pupil: the mark quietly remains an eye without saying so.

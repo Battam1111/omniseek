@@ -35,8 +35,10 @@ TEMPLATE = """<!doctype html><html><head><meta charset="utf-8"><style>
 </body></html>"""
 
 MODES = {
-    "light": {"fg": "#0F172A", "muted": "#475569", "ring3": "#1D4ED8"},
-    "dark": {"fg": "#F1F5F9", "muted": "#94A3B8", "ring3": "#2563EB"},
+    # Brand colours only (docs/BRAND.md): navy text on light pages, white on dark, and the tagline
+    # is the same colour at lower opacity, so it blends with whatever page the PNG sits on.
+    "light": {"fg": "#0F172A", "muted": "rgba(15, 23, 42, .72)", "ring3": "#1D4ED8"},
+    "dark": {"fg": "#FFFFFF", "muted": "rgba(255, 255, 255, .70)", "ring3": "#2563EB"},
 }
 
 # Taglines match each README's own wording; the terminal stop is split out so it can be amber.

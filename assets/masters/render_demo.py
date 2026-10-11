@@ -17,7 +17,7 @@ with sync_playwright() as p:
     for html, out in JOBS:
         page.goto((BASE / html).as_uri())
         page.wait_for_timeout(400)
-        page.locator("#shot").screenshot(path=str(BASE / out))
+        page.locator("#shot").screenshot(path=str(BASE / out), omit_background=True)
         print(out, (BASE / out).stat().st_size, "bytes")
     ctx.close()
     browser.close()
