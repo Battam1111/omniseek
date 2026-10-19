@@ -1,15 +1,15 @@
 {
-  "generated_utc": "2026-10-12T11:03:48Z",
+  "generated_utc": "2026-10-19T09:04:24Z",
   "vantage": "github-actions",
   "omniseek_version": "0.2.1",
-  "sweep_seconds": 33.69,
+  "sweep_seconds": 26.249,
   "sources": [
     {
       "name": "a_happy_phd",
       "domain": "methodology",
       "tier": "free",
       "status": "up",
-      "latency_ms": 1759,
+      "latency_ms": 1027,
       "detail": ""
     },
     {
@@ -25,7 +25,7 @@
       "domain": "community",
       "tier": "free",
       "status": "up",
-      "latency_ms": 446,
+      "latency_ms": 385,
       "detail": ""
     },
     {
@@ -33,23 +33,23 @@
       "domain": "news",
       "tier": "free",
       "status": "degraded",
-      "latency_ms": 1343,
+      "latency_ms": 809,
       "detail": "2/3 feeds OK (degraded; dead: news.mit.edu: HTTP 403)"
     },
     {
       "name": "academic_job_boards",
       "domain": "jobs",
       "tier": "free",
-      "status": "skipped",
-      "latency_ms": null,
-      "detail": "timeout (>25s): health_check did not return"
+      "status": "up",
+      "latency_ms": 19155,
+      "detail": ""
     },
     {
       "name": "academic_jobs",
       "domain": "jobs",
       "tier": "free",
       "status": "up",
-      "latency_ms": 1401,
+      "latency_ms": 1187,
       "detail": ""
     },
     {
@@ -57,7 +57,7 @@
       "domain": "papers",
       "tier": "free",
       "status": "up",
-      "latency_ms": 690,
+      "latency_ms": 656,
       "detail": ""
     },
     {
@@ -97,23 +97,23 @@
       "domain": "news",
       "tier": "free",
       "status": "degraded",
-      "latency_ms": 4620,
+      "latency_ms": 2007,
       "detail": "4/5 feeds OK (degraded; dead: thesequence.substack.com: HTTP 403)"
     },
     {
       "name": "ai_residencies",
       "domain": "funding",
       "tier": "free",
-      "status": "skipped",
-      "latency_ms": null,
-      "detail": "timeout (>25s): health_check did not return"
+      "status": "up",
+      "latency_ms": 15226,
+      "detail": ""
     },
     {
       "name": "ai_se",
       "domain": "community",
       "tier": "free",
       "status": "up",
-      "latency_ms": 450,
+      "latency_ms": 383,
       "detail": ""
     },
     {
@@ -121,7 +121,7 @@
       "domain": "jobs",
       "tier": "free",
       "status": "up",
-      "latency_ms": 16605,
+      "latency_ms": 11105,
       "detail": ""
     },
     {
@@ -129,7 +129,7 @@
       "domain": "safety",
       "tier": "free",
       "status": "up",
-      "latency_ms": 1340,
+      "latency_ms": 1222,
       "detail": ""
     },
     {
@@ -137,7 +137,7 @@
       "domain": "papers",
       "tier": "free",
       "status": "up",
-      "latency_ms": 268,
+      "latency_ms": 716,
       "detail": ""
     },
     {
@@ -161,7 +161,7 @@
       "domain": "podcast",
       "tier": "free",
       "status": "up",
-      "latency_ms": 288,
+      "latency_ms": 183,
       "detail": ""
     },
     {
@@ -169,7 +169,7 @@
       "domain": "papers",
       "tier": "free",
       "status": "up",
-      "latency_ms": 474,
+      "latency_ms": 382,
       "detail": ""
     },
     {
@@ -209,7 +209,7 @@
       "domain": "video",
       "tier": "free",
       "status": "up",
-      "latency_ms": 2418,
+      "latency_ms": 1696,
       "detail": ""
     },
     {
@@ -217,7 +217,7 @@
       "domain": "papers",
       "tier": "free",
       "status": "up",
-      "latency_ms": 14774,
+      "latency_ms": 12765,
       "detail": ""
     },
     {
@@ -241,7 +241,7 @@
       "domain": "books",
       "tier": "free",
       "status": "up",
-      "latency_ms": 6518,
+      "latency_ms": 2827,
       "detail": ""
     },
     {
@@ -265,7 +265,7 @@
       "domain": "news",
       "tier": "free",
       "status": "up",
-      "latency_ms": 24964,
+      "latency_ms": 13512,
       "detail": ""
     },
     {
@@ -273,7 +273,7 @@
       "domain": "immigration",
       "tier": "free",
       "status": "degraded",
-      "latency_ms": 17480,
+      "latency_ms": 12057,
       "detail": "3/4 feeds OK (degraded; dead: www.immigration.ca: HTTP 403)"
     },
     {
@@ -297,7 +297,7 @@
       "domain": "media",
       "tier": "free",
       "status": "up",
-      "latency_ms": 2106,
+      "latency_ms": 3164,
       "detail": ""
     },
     {
@@ -305,7 +305,7 @@
       "domain": "podcast",
       "tier": "free",
       "status": "up",
-      "latency_ms": 19039,
+      "latency_ms": 10731,
       "detail": ""
     },
     {
@@ -345,7 +345,7 @@
       "domain": "deadlines",
       "tier": "free",
       "status": "up",
-      "latency_ms": 17858,
+      "latency_ms": 9577,
       "detail": ""
     },
     {
@@ -385,7 +385,7 @@
       "domain": "papers",
       "tier": "free",
       "status": "up",
-      "latency_ms": 2454,
+      "latency_ms": 869,
       "detail": ""
     },
     {
@@ -401,7 +401,7 @@
       "domain": "community",
       "tier": "free",
       "status": "up",
-      "latency_ms": 446,
+      "latency_ms": 359,
       "detail": ""
     },
     {
@@ -409,7 +409,7 @@
       "domain": "community",
       "tier": "free",
       "status": "up",
-      "latency_ms": 208,
+      "latency_ms": 203,
       "detail": ""
     },
     {
@@ -417,7 +417,7 @@
       "domain": "policy",
       "tier": "free",
       "status": "blocked",
-      "latency_ms": 413,
+      "latency_ms": 1226,
       "detail": "HTTP 403: <!DOCTYPE HTML>\n      <html>\n        <head>\n          <title>403 - Forbidden</title>\n        </head>\n        <body style=\"font-family:Arial, Helvetica, sans-serif; text-align: center\">\n     "
     },
     {
@@ -425,7 +425,7 @@
       "domain": "general",
       "tier": "free",
       "status": "up",
-      "latency_ms": 829,
+      "latency_ms": 571,
       "detail": ""
     },
     {
@@ -441,7 +441,7 @@
       "domain": "papers",
       "tier": "free",
       "status": "up",
-      "latency_ms": 862,
+      "latency_ms": 669,
       "detail": ""
     },
     {
@@ -465,7 +465,7 @@
       "domain": "community",
       "tier": "free",
       "status": "up",
-      "latency_ms": 25,
+      "latency_ms": 4,
       "detail": ""
     },
     {
@@ -473,7 +473,7 @@
       "domain": "papers",
       "tier": "free",
       "status": "up",
-      "latency_ms": 5998,
+      "latency_ms": 6112,
       "detail": ""
     },
     {
@@ -505,7 +505,7 @@
       "domain": "community",
       "tier": "free",
       "status": "up",
-      "latency_ms": 10379,
+      "latency_ms": 8486,
       "detail": ""
     },
     {
@@ -553,7 +553,7 @@
       "domain": "models",
       "tier": "free",
       "status": "up",
-      "latency_ms": 243,
+      "latency_ms": 354,
       "detail": ""
     },
     {
@@ -601,7 +601,7 @@
       "domain": "funding",
       "tier": "free",
       "status": "up",
-      "latency_ms": 24432,
+      "latency_ms": 16687,
       "detail": ""
     },
     {
@@ -609,7 +609,7 @@
       "domain": "news",
       "tier": "free",
       "status": "degraded",
-      "latency_ms": 11306,
+      "latency_ms": 7283,
       "detail": "16/17 feeds OK (degraded; dead: pytorch.org: HTTP 403)"
     },
     {
@@ -625,7 +625,7 @@
       "domain": "methodology",
       "tier": "free",
       "status": "up",
-      "latency_ms": 621,
+      "latency_ms": 460,
       "detail": ""
     },
     {
@@ -633,7 +633,7 @@
       "domain": "code",
       "tier": "free",
       "status": "up",
-      "latency_ms": 19415,
+      "latency_ms": 15652,
       "detail": ""
     },
     {
@@ -649,7 +649,7 @@
       "domain": "code",
       "tier": "free",
       "status": "up",
-      "latency_ms": 119,
+      "latency_ms": 120,
       "detail": ""
     },
     {
@@ -681,7 +681,7 @@
       "domain": "data",
       "tier": "free",
       "status": "up",
-      "latency_ms": 15899,
+      "latency_ms": 12940,
       "detail": ""
     },
     {
@@ -729,7 +729,7 @@
       "domain": "community",
       "tier": "free",
       "status": "up",
-      "latency_ms": 344,
+      "latency_ms": 393,
       "detail": ""
     },
     {
@@ -745,7 +745,7 @@
       "domain": "papers",
       "tier": "free",
       "status": "up",
-      "latency_ms": 1188,
+      "latency_ms": 640,
       "detail": ""
     },
     {
@@ -760,9 +760,9 @@
       "name": "hk_career_research",
       "domain": "news",
       "tier": "free",
-      "status": "up",
-      "latency_ms": 9079,
-      "detail": ""
+      "status": "degraded",
+      "latency_ms": 9531,
+      "detail": "4/5 feeds OK (degraded; dead: www.astri.org: HTTP 200)"
     },
     {
       "name": "hk_universities",
@@ -793,7 +793,7 @@
       "domain": "models",
       "tier": "free",
       "status": "up",
-      "latency_ms": 336,
+      "latency_ms": 370,
       "detail": ""
     },
     {
@@ -817,7 +817,7 @@
       "domain": "jobs",
       "tier": "free",
       "status": "up",
-      "latency_ms": 9727,
+      "latency_ms": 9324,
       "detail": ""
     },
     {
@@ -841,7 +841,7 @@
       "domain": "media",
       "tier": "free",
       "status": "up",
-      "latency_ms": 5792,
+      "latency_ms": 5902,
       "detail": ""
     },
     {
@@ -857,7 +857,7 @@
       "domain": "methodology",
       "tier": "free",
       "status": "up",
-      "latency_ms": 8469,
+      "latency_ms": 6760,
       "detail": ""
     },
     {
@@ -865,7 +865,7 @@
       "domain": "compensation",
       "tier": "free",
       "status": "down",
-      "latency_ms": 2203,
+      "latency_ms": 1207,
       "detail": "role_ok=False comp_ok=False (page structure changed?)"
     },
     {
@@ -897,7 +897,7 @@
       "domain": "eval",
       "tier": "free",
       "status": "up",
-      "latency_ms": 5094,
+      "latency_ms": 2492,
       "detail": ""
     },
     {
@@ -905,7 +905,7 @@
       "domain": "community",
       "tier": "free",
       "status": "up",
-      "latency_ms": 10584,
+      "latency_ms": 7735,
       "detail": ""
     },
     {
@@ -937,7 +937,7 @@
       "domain": "social",
       "tier": "free",
       "status": "up",
-      "latency_ms": 11807,
+      "latency_ms": 7067,
       "detail": ""
     },
     {
@@ -969,7 +969,7 @@
       "domain": "papers",
       "tier": "free",
       "status": "up",
-      "latency_ms": 6076,
+      "latency_ms": 4110,
       "detail": ""
     },
     {
@@ -977,7 +977,7 @@
       "domain": "methodology",
       "tier": "free",
       "status": "up",
-      "latency_ms": 10625,
+      "latency_ms": 6860,
       "detail": ""
     },
     {
@@ -993,7 +993,7 @@
       "domain": "eval",
       "tier": "free",
       "status": "blocked",
-      "latency_ms": 4652,
+      "latency_ms": 3739,
       "detail": "all 2 feeds failed (epochai.substack.com: HTTP 403, metr.substack.com: HTTP 403)"
     },
     {
@@ -1001,7 +1001,7 @@
       "domain": "papers",
       "tier": "free",
       "status": "up",
-      "latency_ms": 1015,
+      "latency_ms": 704,
       "detail": ""
     },
     {
@@ -1033,7 +1033,7 @@
       "domain": "jobs",
       "tier": "free",
       "status": "up",
-      "latency_ms": 2217,
+      "latency_ms": 1558,
       "detail": ""
     },
     {
@@ -1041,7 +1041,7 @@
       "domain": "career",
       "tier": "free",
       "status": "up",
-      "latency_ms": 4935,
+      "latency_ms": 2745,
       "detail": ""
     },
     {
@@ -1137,7 +1137,7 @@
       "domain": "papers",
       "tier": "free",
       "status": "up",
-      "latency_ms": 1847,
+      "latency_ms": 1185,
       "detail": ""
     },
     {
@@ -1161,7 +1161,7 @@
       "domain": "models",
       "tier": "free",
       "status": "up",
-      "latency_ms": 4886,
+      "latency_ms": 2756,
       "detail": ""
     },
     {
@@ -1177,7 +1177,7 @@
       "domain": "jobs",
       "tier": "free",
       "status": "up",
-      "latency_ms": 16657,
+      "latency_ms": 10311,
       "detail": ""
     },
     {
@@ -1193,7 +1193,7 @@
       "domain": "papers",
       "tier": "free",
       "status": "down",
-      "latency_ms": 28,
+      "latency_ms": 775,
       "detail": "PyMuPDF missing: No module named 'fitz'"
     },
     {
@@ -1201,7 +1201,7 @@
       "domain": "papers",
       "tier": "free",
       "status": "up",
-      "latency_ms": 2168,
+      "latency_ms": 1184,
       "detail": ""
     },
     {
@@ -1217,7 +1217,7 @@
       "domain": "code",
       "tier": "free",
       "status": "up",
-      "latency_ms": 1394,
+      "latency_ms": 2204,
       "detail": ""
     },
     {
@@ -1273,7 +1273,7 @@
       "domain": "papers",
       "tier": "free",
       "status": "up",
-      "latency_ms": 404,
+      "latency_ms": 46,
       "detail": ""
     },
     {
@@ -1281,7 +1281,7 @@
       "domain": "code",
       "tier": "free",
       "status": "up",
-      "latency_ms": 14290,
+      "latency_ms": 8903,
       "detail": ""
     },
     {
@@ -1353,7 +1353,7 @@
       "domain": "eval",
       "tier": "free",
       "status": "up",
-      "latency_ms": 13454,
+      "latency_ms": 8319,
       "detail": ""
     },
     {
@@ -1361,7 +1361,7 @@
       "domain": "news",
       "tier": "free",
       "status": "up",
-      "latency_ms": 14295,
+      "latency_ms": 8705,
       "detail": ""
     },
     {
@@ -1377,7 +1377,7 @@
       "domain": "filings",
       "tier": "free",
       "status": "up",
-      "latency_ms": 2056,
+      "latency_ms": 1983,
       "detail": ""
     },
     {
@@ -1425,7 +1425,7 @@
       "domain": "news",
       "tier": "free",
       "status": "degraded",
-      "latency_ms": 4707,
+      "latency_ms": 7358,
       "detail": "4/5 feeds OK (degraded; dead: www.techinasia.com: HTTP 403)"
     },
     {
@@ -1433,7 +1433,7 @@
       "domain": "papers",
       "tier": "free",
       "status": "up",
-      "latency_ms": 14689,
+      "latency_ms": 9715,
       "detail": ""
     },
     {
@@ -1465,7 +1465,7 @@
       "domain": "community",
       "tier": "free",
       "status": "up",
-      "latency_ms": 51,
+      "latency_ms": 85,
       "detail": ""
     },
     {
@@ -1489,7 +1489,7 @@
       "domain": "media",
       "tier": "free",
       "status": "degraded",
-      "latency_ms": 10980,
+      "latency_ms": 7229,
       "detail": "16/21 feeds OK (degraded; dead: benjamintodd.substack.com: HTTP 403, chinai.substack.com: HTTP 403, importai.substack.com: HTTP 403, thealgorithmicbridge.substack.com: HTTP 403, www.aisnakeoil.com: HT"
     },
     {
@@ -1505,7 +1505,7 @@
       "domain": "methodology",
       "tier": "free",
       "status": "up",
-      "latency_ms": 5968,
+      "latency_ms": 3954,
       "detail": ""
     },
     {
@@ -1513,7 +1513,7 @@
       "domain": "community",
       "tier": "free",
       "status": "up",
-      "latency_ms": 6036,
+      "latency_ms": 4784,
       "detail": ""
     },
     {
@@ -1529,7 +1529,7 @@
       "domain": "papers",
       "tier": "free",
       "status": "up",
-      "latency_ms": 7727,
+      "latency_ms": 5372,
       "detail": ""
     },
     {
@@ -1553,7 +1553,7 @@
       "domain": "papers",
       "tier": "free",
       "status": "up",
-      "latency_ms": 1103,
+      "latency_ms": 970,
       "detail": ""
     },
     {
@@ -1561,7 +1561,7 @@
       "domain": "community",
       "tier": "free",
       "status": "up",
-      "latency_ms": 1775,
+      "latency_ms": 680,
       "detail": ""
     },
     {
@@ -1585,7 +1585,7 @@
       "domain": "jobs",
       "tier": "free",
       "status": "up",
-      "latency_ms": 2172,
+      "latency_ms": 5616,
       "detail": ""
     },
     {
@@ -1625,7 +1625,7 @@
       "domain": "reference",
       "tier": "free",
       "status": "up",
-      "latency_ms": 1048,
+      "latency_ms": 1114,
       "detail": ""
     },
     {
@@ -1681,7 +1681,7 @@
       "domain": "podcast",
       "tier": "free",
       "status": "up",
-      "latency_ms": 5187,
+      "latency_ms": 2347,
       "detail": ""
     },
     {
@@ -1713,7 +1713,7 @@
       "domain": "video",
       "tier": "walled",
       "status": "up",
-      "latency_ms": 13236,
+      "latency_ms": 8331,
       "detail": ""
     },
     {
@@ -1721,7 +1721,7 @@
       "domain": "video",
       "tier": "free",
       "status": "up",
-      "latency_ms": 9814,
+      "latency_ms": 7626,
       "detail": ""
     },
     {
@@ -1729,7 +1729,7 @@
       "domain": "papers",
       "tier": "free",
       "status": "up",
-      "latency_ms": 15815,
+      "latency_ms": 1775,
       "detail": ""
     },
     {
@@ -1766,14 +1766,14 @@
     }
   ],
   "summary": {
-    "up": 69,
-    "degraded": 6,
+    "up": 70,
+    "degraded": 7,
     "rate_limited": 0,
     "blocked": 2,
     "down": 2,
-    "skipped": 141,
+    "skipped": 139,
     "skipped_policy": 136,
-    "skipped_capability": 5,
+    "skipped_capability": 3,
     "skipped_budget": 0,
     "total": 220
   }
