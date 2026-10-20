@@ -1,6 +1,6 @@
 # OmniSeek: self-hosted deep-retrieval MCP. CORE (Apache-clean) image: no AGPL PDF lib, no
 # torch, no circumvention signer. Opt into extras at build time:  --build-arg EXTRAS="[pdf,asr]".
-FROM python:3.11-slim
+FROM python:3.15-slim
 
 ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
