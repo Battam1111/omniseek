@@ -1,0 +1,1780 @@
+{
+  "generated_utc": "2026-10-26T09:07:31Z",
+  "vantage": "github-actions",
+  "omniseek_version": "0.2.1",
+  "sweep_seconds": 32.728,
+  "sources": [
+    {
+      "name": "a_happy_phd",
+      "domain": "methodology",
+      "tier": "free",
+      "status": "up",
+      "latency_ms": 2437,
+      "detail": ""
+    },
+    {
+      "name": "aaip_draws",
+      "domain": "immigration",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "academia_se",
+      "domain": "community",
+      "tier": "free",
+      "status": "up",
+      "latency_ms": 359,
+      "detail": ""
+    },
+    {
+      "name": "academic_ai_labs",
+      "domain": "news",
+      "tier": "free",
+      "status": "degraded",
+      "latency_ms": 2010,
+      "detail": "2/3 feeds OK (degraded; dead: news.mit.edu: HTTP 403)"
+    },
+    {
+      "name": "academic_job_boards",
+      "domain": "jobs",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "timeout (>25s): health_check did not return"
+    },
+    {
+      "name": "academic_jobs",
+      "domain": "jobs",
+      "tier": "free",
+      "status": "up",
+      "latency_ms": 1095,
+      "detail": ""
+    },
+    {
+      "name": "acl_anthology",
+      "domain": "papers",
+      "tier": "free",
+      "status": "up",
+      "latency_ms": 989,
+      "detail": ""
+    },
+    {
+      "name": "adzuna",
+      "domain": "jobs",
+      "tier": "keyed",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "requires operator credentials"
+    },
+    {
+      "name": "agent_tooling_radar",
+      "domain": "tooling",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "ai2",
+      "domain": "papers",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "ai_incidents",
+      "domain": "safety",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "ai_newsletters",
+      "domain": "news",
+      "tier": "free",
+      "status": "degraded",
+      "latency_ms": 5164,
+      "detail": "4/5 feeds OK (degraded; dead: thesequence.substack.com: HTTP 403)"
+    },
+    {
+      "name": "ai_residencies",
+      "domain": "funding",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "timeout (>25s): health_check did not return"
+    },
+    {
+      "name": "ai_se",
+      "domain": "community",
+      "tier": "free",
+      "status": "up",
+      "latency_ms": 339,
+      "detail": ""
+    },
+    {
+      "name": "ajo",
+      "domain": "jobs",
+      "tier": "free",
+      "status": "up",
+      "latency_ms": 11526,
+      "detail": ""
+    },
+    {
+      "name": "alignment_forum",
+      "domain": "safety",
+      "tier": "free",
+      "status": "up",
+      "latency_ms": 7666,
+      "detail": ""
+    },
+    {
+      "name": "alphaxiv",
+      "domain": "papers",
+      "tier": "free",
+      "status": "up",
+      "latency_ms": 1085,
+      "detail": ""
+    },
+    {
+      "name": "amii",
+      "domain": "papers",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "ant_ling",
+      "domain": "papers",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "apple_podcasts",
+      "domain": "podcast",
+      "tier": "free",
+      "status": "up",
+      "latency_ms": 248,
+      "detail": ""
+    },
+    {
+      "name": "arxiv",
+      "domain": "papers",
+      "tier": "free",
+      "status": "up",
+      "latency_ms": 216,
+      "detail": ""
+    },
+    {
+      "name": "astar_cfar",
+      "domain": "papers",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "baai",
+      "domain": "papers",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "baichuan",
+      "domain": "papers",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "bcpnp_invitations",
+      "domain": "immigration",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "bilibili",
+      "domain": "video",
+      "tier": "free",
+      "status": "up",
+      "latency_ms": 2750,
+      "detail": ""
+    },
+    {
+      "name": "biorxiv",
+      "domain": "papers",
+      "tier": "free",
+      "status": "up",
+      "latency_ms": 13792,
+      "detail": ""
+    },
+    {
+      "name": "blind",
+      "domain": "insider",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "bluesky",
+      "domain": "social",
+      "tier": "keyed",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "requires operator credentials"
+    },
+    {
+      "name": "books_openlibrary_ia",
+      "domain": "books",
+      "tier": "free",
+      "status": "up",
+      "latency_ms": 3601,
+      "detail": ""
+    },
+    {
+      "name": "bytedance_research",
+      "domain": "papers",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "bytedance_seed",
+      "domain": "jobs",
+      "tier": "walled",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "canada_ai_research",
+      "domain": "news",
+      "tier": "free",
+      "status": "up",
+      "latency_ms": 24756,
+      "detail": ""
+    },
+    {
+      "name": "canada_immigration",
+      "domain": "immigration",
+      "tier": "free",
+      "status": "degraded",
+      "latency_ms": 16318,
+      "detail": "3/4 feeds OK (degraded; dead: www.immigration.ca: HTTP 403)"
+    },
+    {
+      "name": "canada_jobbank_wages",
+      "domain": "compensation",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "cdp_fulltext",
+      "domain": "general",
+      "tier": "walled",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "chinese_ai_media",
+      "domain": "media",
+      "tier": "free",
+      "status": "up",
+      "latency_ms": 4769,
+      "detail": ""
+    },
+    {
+      "name": "chinese_podcasts",
+      "domain": "podcast",
+      "tier": "free",
+      "status": "up",
+      "latency_ms": 18811,
+      "detail": ""
+    },
+    {
+      "name": "cihr_grants",
+      "domain": "funding",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "clinicaltrials",
+      "domain": "clinical",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "cninfo",
+      "domain": "finance",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "cohere",
+      "domain": "papers",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "conference_deadlines",
+      "domain": "deadlines",
+      "tier": "free",
+      "status": "up",
+      "latency_ms": 20091,
+      "detail": ""
+    },
+    {
+      "name": "context7",
+      "domain": "code",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "contextual",
+      "domain": "papers",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "cordis_eu",
+      "domain": "funding",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "core",
+      "domain": "papers",
+      "tier": "keyed",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "requires operator credentials"
+    },
+    {
+      "name": "crossref",
+      "domain": "papers",
+      "tier": "free",
+      "status": "up",
+      "latency_ms": 870,
+      "detail": ""
+    },
+    {
+      "name": "crossref_retractions",
+      "domain": "papers",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "crossvalidated",
+      "domain": "community",
+      "tier": "free",
+      "status": "up",
+      "latency_ms": 355,
+      "detail": ""
+    },
+    {
+      "name": "cs_se",
+      "domain": "community",
+      "tier": "free",
+      "status": "up",
+      "latency_ms": 161,
+      "detail": ""
+    },
+    {
+      "name": "cset",
+      "domain": "policy",
+      "tier": "free",
+      "status": "blocked",
+      "latency_ms": 1222,
+      "detail": "HTTP 403: <!DOCTYPE HTML>\n      <html>\n        <head>\n          <title>403 - Forbidden</title>\n        </head>\n        <body style=\"font-family:Arial, Helvetica, sans-serif; text-align: center\">\n     "
+    },
+    {
+      "name": "csrankings",
+      "domain": "general",
+      "tier": "free",
+      "status": "up",
+      "latency_ms": 845,
+      "detail": ""
+    },
+    {
+      "name": "cubox",
+      "domain": "bookmarks",
+      "tier": "keyed",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "requires operator credentials"
+    },
+    {
+      "name": "cvf_openaccess",
+      "domain": "papers",
+      "tier": "free",
+      "status": "up",
+      "latency_ms": 900,
+      "detail": ""
+    },
+    {
+      "name": "databricks_mosaic",
+      "domain": "papers",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "datagovsg_nonresident_pass_types",
+      "domain": "immigration",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "datascience_se",
+      "domain": "community",
+      "tier": "free",
+      "status": "up",
+      "latency_ms": 27,
+      "detail": ""
+    },
+    {
+      "name": "dblp",
+      "domain": "papers",
+      "tier": "free",
+      "status": "up",
+      "latency_ms": 2764,
+      "detail": ""
+    },
+    {
+      "name": "dblp_author",
+      "domain": "people",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "deepseek",
+      "domain": "papers",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "discord_communities",
+      "domain": "community",
+      "tier": "walled",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "requires operator credentials"
+    },
+    {
+      "name": "discourse_forums",
+      "domain": "community",
+      "tier": "free",
+      "status": "up",
+      "latency_ms": 12683,
+      "detail": ""
+    },
+    {
+      "name": "distill_pub",
+      "domain": "papers",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "douban_groups",
+      "domain": "community",
+      "tier": "walled",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "douyin",
+      "domain": "social",
+      "tier": "walled",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "requires operator credentials"
+    },
+    {
+      "name": "eastmoney",
+      "domain": "finance",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "eleutherai",
+      "domain": "papers",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "epoch_ai_models",
+      "domain": "models",
+      "tier": "free",
+      "status": "up",
+      "latency_ms": 447,
+      "detail": ""
+    },
+    {
+      "name": "europepmc",
+      "domain": "papers",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "eurostat_stats",
+      "domain": "data",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "exa",
+      "domain": "general",
+      "tier": "keyed",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "requires operator credentials"
+    },
+    {
+      "name": "federal_register",
+      "domain": "policy",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "feishu_jobs",
+      "domain": "jobs",
+      "tier": "walled",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "fellowships",
+      "domain": "funding",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "timeout (>25s): health_check did not return"
+    },
+    {
+      "name": "frontier_labs",
+      "domain": "news",
+      "tier": "free",
+      "status": "degraded",
+      "latency_ms": 11831,
+      "detail": "16/17 feeds OK (degraded; dead: pytorch.org: HTTP 403)"
+    },
+    {
+      "name": "github",
+      "domain": "code",
+      "tier": "keyed",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "requires operator credentials"
+    },
+    {
+      "name": "github_awesome_phd",
+      "domain": "methodology",
+      "tier": "free",
+      "status": "up",
+      "latency_ms": 327,
+      "detail": ""
+    },
+    {
+      "name": "github_releases",
+      "domain": "code",
+      "tier": "free",
+      "status": "up",
+      "latency_ms": 23674,
+      "detail": ""
+    },
+    {
+      "name": "github_starred",
+      "domain": "bookmarks",
+      "tier": "keyed",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "requires operator credentials"
+    },
+    {
+      "name": "github_trending",
+      "domain": "code",
+      "tier": "free",
+      "status": "up",
+      "latency_ms": 240,
+      "detail": ""
+    },
+    {
+      "name": "glassdoor",
+      "domain": "insider",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "google_deepmind",
+      "domain": "papers",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "google_patents",
+      "domain": "patents",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "gov_open_data",
+      "domain": "data",
+      "tier": "free",
+      "status": "up",
+      "latency_ms": 15912,
+      "detail": ""
+    },
+    {
+      "name": "gov_policy",
+      "domain": "news",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "gpu_pricing",
+      "domain": "compute",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "grants_gov",
+      "domain": "funding",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "gter",
+      "domain": "community",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "gutenberg",
+      "domain": "books",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "hackernews",
+      "domain": "community",
+      "tier": "free",
+      "status": "up",
+      "latency_ms": 355,
+      "detail": ""
+    },
+    {
+      "name": "hardwarezone",
+      "domain": "community",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "hf_daily_papers",
+      "domain": "papers",
+      "tier": "free",
+      "status": "up",
+      "latency_ms": 612,
+      "detail": ""
+    },
+    {
+      "name": "higheredjobs_cs",
+      "domain": "jobs",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "hk_career_research",
+      "domain": "news",
+      "tier": "free",
+      "status": "degraded",
+      "latency_ms": 12537,
+      "detail": "4/5 feeds OK (degraded; dead: www.astri.org: HTTP 200)"
+    },
+    {
+      "name": "hk_universities",
+      "domain": "news",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "timeout (>25s): health_check did not return"
+    },
+    {
+      "name": "huawei_noah",
+      "domain": "papers",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "huggingface",
+      "domain": "papers",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "huggingface_hub",
+      "domain": "models",
+      "tier": "free",
+      "status": "up",
+      "latency_ms": 518,
+      "detail": ""
+    },
+    {
+      "name": "ircc_ee_rounds",
+      "domain": "immigration",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "ircc_processing_times",
+      "domain": "immigration",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "jobrxiv_canada",
+      "domain": "jobs",
+      "tier": "free",
+      "status": "up",
+      "latency_ms": 14155,
+      "detail": ""
+    },
+    {
+      "name": "juejin",
+      "domain": "community",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "kaggle",
+      "domain": "datasets",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "kexue_fm",
+      "domain": "media",
+      "tier": "free",
+      "status": "up",
+      "latency_ms": 4239,
+      "detail": ""
+    },
+    {
+      "name": "layoffs_tracker",
+      "domain": "jobs",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "lesswrong",
+      "domain": "methodology",
+      "tier": "free",
+      "status": "up",
+      "latency_ms": 11409,
+      "detail": ""
+    },
+    {
+      "name": "levels_fyi",
+      "domain": "compensation",
+      "tier": "free",
+      "status": "down",
+      "latency_ms": 1435,
+      "detail": "role_ok=False comp_ok=False (page structure changed?)"
+    },
+    {
+      "name": "linkedin_posts",
+      "domain": "career",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "liquid_ai",
+      "domain": "papers",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "llm_leaderboard",
+      "domain": "eval",
+      "tier": "keyed",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "requires operator credentials"
+    },
+    {
+      "name": "lmsys_arena",
+      "domain": "eval",
+      "tier": "free",
+      "status": "up",
+      "latency_ms": 3604,
+      "detail": ""
+    },
+    {
+      "name": "lobsters",
+      "domain": "community",
+      "tier": "free",
+      "status": "up",
+      "latency_ms": 7628,
+      "detail": ""
+    },
+    {
+      "name": "maimai",
+      "domain": "insider",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "market_crypto",
+      "domain": "finance",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "market_quote",
+      "domain": "finance",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "mastodon",
+      "domain": "social",
+      "tier": "free",
+      "status": "up",
+      "latency_ms": 9899,
+      "detail": ""
+    },
+    {
+      "name": "meta_fair",
+      "domain": "papers",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "microsoft_research",
+      "domain": "papers",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "mila",
+      "domain": "papers",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "ml_cmu_blog",
+      "domain": "papers",
+      "tier": "free",
+      "status": "up",
+      "latency_ms": 8654,
+      "detail": ""
+    },
+    {
+      "name": "ml_collective",
+      "domain": "methodology",
+      "tier": "free",
+      "status": "up",
+      "latency_ms": 9453,
+      "detail": ""
+    },
+    {
+      "name": "ml_conferences",
+      "domain": "deadlines",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "ml_eval_safety",
+      "domain": "eval",
+      "tier": "free",
+      "status": "blocked",
+      "latency_ms": 5183,
+      "detail": "all 2 feeds failed (epochai.substack.com: HTTP 403, metr.substack.com: HTTP 403)"
+    },
+    {
+      "name": "mlrc",
+      "domain": "papers",
+      "tier": "free",
+      "status": "up",
+      "latency_ms": 1232,
+      "detail": ""
+    },
+    {
+      "name": "modelscope",
+      "domain": "models",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "moonshot",
+      "domain": "papers",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "mpnp_draws",
+      "domain": "immigration",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "mycareersfuture",
+      "domain": "jobs",
+      "tier": "free",
+      "status": "up",
+      "latency_ms": 2561,
+      "detail": ""
+    },
+    {
+      "name": "nature_careers",
+      "domain": "career",
+      "tier": "free",
+      "status": "up",
+      "latency_ms": 5408,
+      "detail": ""
+    },
+    {
+      "name": "nih_reporter",
+      "domain": "funding",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "nous",
+      "domain": "papers",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "nowcoder",
+      "domain": "career",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "nserc_awards",
+      "domain": "funding",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "nsf_awards",
+      "domain": "funding",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "nsfc_awards",
+      "domain": "funding",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "nvidia_research",
+      "domain": "papers",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "oecd_ai_policy",
+      "domain": "policy",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "oinp_invitations",
+      "domain": "immigration",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "ontario_sunshine",
+      "domain": "compensation",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "openai",
+      "domain": "papers",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "openalex",
+      "domain": "papers",
+      "tier": "free",
+      "status": "up",
+      "latency_ms": 1419,
+      "detail": ""
+    },
+    {
+      "name": "openalex_cn",
+      "domain": "papers",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "openreview",
+      "domain": "papers",
+      "tier": "keyed",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "requires operator credentials"
+    },
+    {
+      "name": "openrouter_rankings",
+      "domain": "models",
+      "tier": "free",
+      "status": "up",
+      "latency_ms": 4299,
+      "detail": ""
+    },
+    {
+      "name": "orcid",
+      "domain": "people",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "overseas_ai_jobs",
+      "domain": "jobs",
+      "tier": "free",
+      "status": "up",
+      "latency_ms": 17616,
+      "detail": ""
+    },
+    {
+      "name": "page_watch",
+      "domain": "immigration",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "pdf",
+      "domain": "papers",
+      "tier": "free",
+      "status": "down",
+      "latency_ms": 319,
+      "detail": "PyMuPDF missing: No module named 'fitz'"
+    },
+    {
+      "name": "pmlr",
+      "domain": "papers",
+      "tier": "free",
+      "status": "up",
+      "latency_ms": 3666,
+      "detail": ""
+    },
+    {
+      "name": "podcast_index",
+      "domain": "podcast",
+      "tier": "keyed",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "requires operator credentials"
+    },
+    {
+      "name": "pypi",
+      "domain": "code",
+      "tier": "free",
+      "status": "up",
+      "latency_ms": 2322,
+      "detail": ""
+    },
+    {
+      "name": "quora",
+      "domain": "community",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "qwen",
+      "domain": "papers",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "rbc_borealis",
+      "domain": "papers",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "reddit",
+      "domain": "community",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "not verified: rate-limited (Arctic Shift: HTTP 422, its \"Timeout. Maybe slow down a bit\" refusal; the far end's load-based rate limit refused the probe; not retried)"
+    },
+    {
+      "name": "reka",
+      "domain": "papers",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "remotive",
+      "domain": "jobs",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "researcher_watch",
+      "domain": "papers",
+      "tier": "free",
+      "status": "up",
+      "latency_ms": 38,
+      "detail": ""
+    },
+    {
+      "name": "rl_llm_frameworks",
+      "domain": "code",
+      "tier": "free",
+      "status": "up",
+      "latency_ms": 14736,
+      "detail": ""
+    },
+    {
+      "name": "s2_authors",
+      "domain": "people",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "s2_snippet",
+      "domain": "papers",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "sakana",
+      "domain": "papers",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "salesforce_research",
+      "domain": "papers",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "scale_ai",
+      "domain": "papers",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "scrape_canada",
+      "domain": "news",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "scrape_hongkong",
+      "domain": "news",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "scrape_js_sites",
+      "domain": "news",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "scrape_ml_orgs",
+      "domain": "eval",
+      "tier": "free",
+      "status": "up",
+      "latency_ms": 13244,
+      "detail": ""
+    },
+    {
+      "name": "scrape_singapore",
+      "domain": "news",
+      "tier": "free",
+      "status": "up",
+      "latency_ms": 14117,
+      "detail": ""
+    },
+    {
+      "name": "sea_ai_lab",
+      "domain": "papers",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "sec_edgar",
+      "domain": "filings",
+      "tier": "free",
+      "status": "up",
+      "latency_ms": 1146,
+      "detail": ""
+    },
+    {
+      "name": "sec_financials",
+      "domain": "finance",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "semantic_scholar",
+      "domain": "papers",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "not verified: rate-limited (HTTP 429 from api.semanticscholar.org): RetryError"
+    },
+    {
+      "name": "servicenow_research",
+      "domain": "papers",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "sg_immigration",
+      "domain": "immigration",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "shanghai_ai_lab",
+      "domain": "papers",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "singapore_ai_research",
+      "domain": "news",
+      "tier": "free",
+      "status": "degraded",
+      "latency_ms": 6510,
+      "detail": "4/5 feeds OK (degraded; dead: www.techinasia.com: HTTP 403)"
+    },
+    {
+      "name": "slideslive_talks",
+      "domain": "papers",
+      "tier": "free",
+      "status": "up",
+      "latency_ms": 15577,
+      "detail": ""
+    },
+    {
+      "name": "sogou_weixin",
+      "domain": "community",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "sshrc_awards",
+      "domain": "funding",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "stability",
+      "domain": "papers",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "stackoverflow",
+      "domain": "community",
+      "tier": "free",
+      "status": "up",
+      "latency_ms": 162,
+      "detail": ""
+    },
+    {
+      "name": "statcan_wds",
+      "domain": "data",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "stepfun",
+      "domain": "papers",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "substack_matrix",
+      "domain": "media",
+      "tier": "free",
+      "status": "degraded",
+      "latency_ms": 13390,
+      "detail": "16/21 feeds OK (degraded; dead: benjamintodd.substack.com: HTTP 403, calnewport.com: HTTP 403, chinai.substack.com: HTTP 403, importai.substack.com: HTTP 403, thealgorithmicbridge.substack.com: HTTP 4"
+    },
+    {
+      "name": "tencent_hunyuan",
+      "domain": "papers",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "thesis_whisperer",
+      "domain": "methodology",
+      "tier": "free",
+      "status": "up",
+      "latency_ms": 8124,
+      "detail": ""
+    },
+    {
+      "name": "tieba",
+      "domain": "community",
+      "tier": "free",
+      "status": "up",
+      "latency_ms": 6037,
+      "detail": ""
+    },
+    {
+      "name": "together_ai",
+      "domain": "papers",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "transformer_circuits",
+      "domain": "papers",
+      "tier": "free",
+      "status": "up",
+      "latency_ms": 6694,
+      "detail": ""
+    },
+    {
+      "name": "uk_companies_house",
+      "domain": "filings",
+      "tier": "keyed",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "requires operator credentials"
+    },
+    {
+      "name": "ukri_gtr",
+      "domain": "funding",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "underline_talks",
+      "domain": "papers",
+      "tier": "free",
+      "status": "up",
+      "latency_ms": 1187,
+      "detail": ""
+    },
+    {
+      "name": "v2ex",
+      "domain": "community",
+      "tier": "free",
+      "status": "up",
+      "latency_ms": 1832,
+      "detail": ""
+    },
+    {
+      "name": "vast_ai",
+      "domain": "compute",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "vector_institute",
+      "domain": "papers",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "vector_talent_hub",
+      "domain": "jobs",
+      "tier": "free",
+      "status": "up",
+      "latency_ms": 9796,
+      "detail": ""
+    },
+    {
+      "name": "wayback",
+      "domain": "news",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "wechat",
+      "domain": "media",
+      "tier": "walled",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "wikicfp_nlp",
+      "domain": "general",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "wikidata_identity",
+      "domain": "people",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "wikidata_wikipedia",
+      "domain": "reference",
+      "tier": "free",
+      "status": "up",
+      "latency_ms": 2152,
+      "detail": ""
+    },
+    {
+      "name": "worldbank_stats",
+      "domain": "data",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "x_search",
+      "domain": "social",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "xiaohongshu",
+      "domain": "community",
+      "tier": "walled",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "xiaohongshu_cn",
+      "domain": "general",
+      "tier": "walled",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "xiaohongshu_search",
+      "domain": "community",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "xiaomuchong",
+      "domain": "community",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "xiaoyuzhou",
+      "domain": "podcast",
+      "tier": "free",
+      "status": "up",
+      "latency_ms": 5513,
+      "detail": ""
+    },
+    {
+      "name": "yi_01ai",
+      "domain": "papers",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "yipin_search",
+      "domain": "community",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "yipinsanfendi",
+      "domain": "community",
+      "tier": "walled",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "youtube",
+      "domain": "video",
+      "tier": "walled",
+      "status": "up",
+      "latency_ms": 12710,
+      "detail": ""
+    },
+    {
+      "name": "youtube_channels",
+      "domain": "video",
+      "tier": "free",
+      "status": "up",
+      "latency_ms": 12184,
+      "detail": ""
+    },
+    {
+      "name": "zenodo",
+      "domain": "papers",
+      "tier": "free",
+      "status": "up",
+      "latency_ms": 1588,
+      "detail": ""
+    },
+    {
+      "name": "zhihu",
+      "domain": "community",
+      "tier": "walled",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "zhihu_search",
+      "domain": "community",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "zhihu_users",
+      "domain": "community",
+      "tier": "walled",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    },
+    {
+      "name": "zhipu",
+      "domain": "papers",
+      "tier": "free",
+      "status": "skipped",
+      "latency_ms": null,
+      "detail": "explicit-only"
+    }
+  ],
+  "summary": {
+    "up": 67,
+    "degraded": 7,
+    "rate_limited": 0,
+    "blocked": 2,
+    "down": 2,
+    "skipped": 142,
+    "skipped_policy": 136,
+    "skipped_capability": 6,
+    "skipped_budget": 0,
+    "total": 220
+  }
+}
