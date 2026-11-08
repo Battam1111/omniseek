@@ -78,7 +78,7 @@ async def probe_stdio(home: Path) -> tuple[bool, str]:
         return False, "the `omniseek` command is not on PATH (console script missing?)"
     params = StdioServerParameters(command=exe, args=[], env=_child_env(home))
     logpath = home / "stdio_server.log"
-    with open(logpath, "w") as errlog:
+    with open(logpath, "w", encoding="utf-8") as errlog:
         try:
             async with stdio_client(params, errlog=errlog) as (read, write):
                 async with ClientSession(read, write) as session:
