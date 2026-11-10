@@ -391,6 +391,35 @@ def current_deadline() -> Optional[float]:
     return _deadline_var.get()
 
 
+# WHO ASKED (EYE-GATE-FIX G, 2026-10-20). A gate refusal says which part of OmniSeek sent the request
+# (检索 search, 收录 recall ingest, 健康检查 health check, 盯梢 sensor, 预热 prewarm, 读取 omniseek_read), so the
+# refusals can be counted per initiator instead of guessed from time windows. Set where the work
+# starts; like the deadline it rides a context variable (a pool thread is handed it explicitly).
+_initiator_var: contextvars.ContextVar = contextvars.ContextVar("omniseek_eye_initiator", default=None)
+
+
+@contextlib.contextmanager
+def initiator(label: Optional[str], *, keep_outer: bool = False):
+    """Inside this block requests are attributed to ``label``. ``keep_outer``: an initiator already in
+    force wins (a sensor's search stays the sensor's). ``None`` changes nothing."""
+    if label is None or (keep_outer and _initiator_var.get() is not None):
+        yield
+        return
+    token = _initiator_var.set(label)
+    try:
+        yield
+    finally:
+        try:
+            _initiator_var.reset(token)
+        except (ValueError, RuntimeError):  # reset from another context: the value dies with it
+            pass
+
+
+def current_initiator() -> Optional[str]:
+    """The initiator in force here, or None."""
+    return _initiator_var.get()
+
+
 def wait_until(max_wait: float) -> float:
     """The latest moment a gate may keep the current caller waiting: ``max_wait`` seconds from now,
     or the caller's deadline when that comes first."""
@@ -462,49 +491,6 @@ def _lease_end(end: float, request_s: Optional[float], max_wait: float) -> float
     return end + _request_s(request_s, max_wait)
 
 
-@contextlib.contextmanager
-def bounded_slot(
-    gate,
-    max_wait: float,
-    on_busy: Callable[[float], BaseException],
-    *,
-    request_s: Optional[float] = None,
-):
-    """Acquire a threading gate with a finite wait (``max_wait``, cut to the caller's deadline) and
-    guaranteed release. A ``FairPermits`` gate is taken in its line and with a lease."""
-    end = wait_until(max_wait)
-    left = end - time.monotonic()
-    if left <= 0:
-        # Nothing tried: the caller's time is already up (not a saturated gate, review N4)
-        logger.info("gate not tried: past the caller's budget (free=%s)", getattr(gate, "_value", "?"))
-        raise on_busy(0.0)
-    if isinstance(gate, FairPermits):
-        lease = gate.take(_holder(), end, _lease_end(end, request_s, max_wait))
-        acquired = lease is not None
-    else:
-        lease, acquired = None, gate.acquire(timeout=left)
-    if not acquired:
-        # Record WHY the wait failed. A saturated gate reads the same to the caller whether the
-        # permits are in flight (real load, self-shedding working) or stuck (nothing running, yet
-        # nothing free), and the second case is a bug that only shows up as sources going dark:
-        # six Stack Exchange sources sat unusable behind a gate whose permits never came back
-        # (2026-09-09), and there was nothing in the logs to tell the two apart. _value is CPython's
-        # free-permit counter, read defensively because it is not API.
-        logger.warning("gate saturated: no permit after %.1fs (free=%s)",
-                       left, getattr(gate, "_value", "?"))
-        raise on_busy(max_wait)
-    handle = HoldHandle(gate, lease, _request_s(request_s, max_wait)) if lease is not None else None
-    token = _register_hold(handle) if handle is not None else None
-    try:
-        yield
-    finally:
-        if handle is not None:
-            _unregister_hold(handle, token)
-            gate.give_back(lease)
-        else:
-            gate.release()
-
-
 @contextlib.asynccontextmanager
 async def bounded_async_slot(
     gate,
@@ -513,13 +499,17 @@ async def bounded_async_slot(
     *,
     request_s: Optional[float] = None,
 ):
-    """Async, cancellation-safe twin of bounded_slot: the permit is taken inside this coroutine (a
-    ``FairPermits`` gate in its line with a lease, any other gate by polling, ``_apoll_acquire``),
-    so no cancellation can leave it taken, and no worker thread waits. A saturated gate fails fast at
-    ``max_wait`` (or the caller's deadline); a deadline already past refuses at once, as the sync
-    twin does (review N4)."""
+    """Acquire a gate with a finite wait (``max_wait``, cut to the caller's deadline) and guaranteed
+    release, cancellation-safe: the permit is taken inside this coroutine (a ``FairPermits`` gate in
+    its line with a lease, any other gate by polling, ``_apoll_acquire``), so no cancellation can leave
+    it taken, and no worker thread waits. A saturated gate fails fast at ``max_wait`` (or the caller's
+    deadline); a deadline already past refuses at once (review N4)."""
     end = wait_until(max_wait)
-    if end - time.monotonic() <= 0:
+    left = end - time.monotonic()
+    if left <= 0:
+        # Nothing tried: the caller's time is already up (not a saturated gate, review N4)
+        logger.info("gate not tried: past the caller's budget (free=%s) [by=%s]",
+                    getattr(gate, "_value", "?"), _initiator_var.get() or "?")
         raise on_busy(0.0)
     if isinstance(gate, FairPermits):
         lease = await gate.atake(_holder(), end, _lease_end(end, request_s, max_wait))
@@ -527,6 +517,14 @@ async def bounded_async_slot(
     else:
         lease, acquired = None, await _apoll_acquire(gate, end)
     if not acquired:
+        # Record WHY the wait failed. A saturated gate reads the same to the caller whether the
+        # permits are in flight (real load, self-shedding working) or stuck (nothing running, yet
+        # nothing free), and the second case is a bug that only shows up as sources going dark:
+        # six Stack Exchange sources sat unusable behind a gate whose permits never came back
+        # (2026-09-09), and there was nothing in the logs to tell the two apart. _value is the
+        # gate's free-permit counter, read defensively because a plain semaphore's is not API.
+        logger.warning("gate saturated: no permit after %.1fs (free=%s) [by=%s]",
+                       left, getattr(gate, "_value", "?"), _initiator_var.get() or "?")
         raise on_busy(max_wait)
     handle = HoldHandle(gate, lease, _request_s(request_s, max_wait)) if lease is not None else None
     token = _register_hold(handle) if handle is not None else None
@@ -557,6 +555,62 @@ class Reservation:
 
     def __init__(self, start: float, wait: float, prev_next_at: float, next_at: float) -> None:
         self.start, self.wait, self.prev_next_at, self.next_at = start, wait, prev_next_at, next_at
+
+
+# WHAT THE BREAKER COUNTS (EYE-BREAKER-404, 2026-11-07). The breaker is there to stop sending to an
+# upstream that is down or calling a halt; it counts only failures that say so: no connection, a
+# timeout, a 5xx, a 429, the upstream's own rate-limit answer (``throttled``: GitHub's secondary-rate
+# 403, OpenAlex's budget 429), and any failure whose cause is not known. An answer that names the
+# thing asked for as absent (404, 410), or the request itself as wrong (400, 422), shows an upstream
+# that is up and answering: it is not counted, and neither is an adapter's settled "not there"
+# (``settled``, the answer it marks ``diag.note(..., final=True)``). Before this, reading five GitHub
+# issues that do not exist opened the GitHub breaker and blocked every GitHub read for two minutes.
+# Every BackendGuard user goes through ``record_fail``, which applies this one rule.
+NOT_UPSTREAM_FAULT_STATUS = frozenset({400, 404, 410, 422})
+
+
+def failure_status(exc: Optional[BaseException]) -> Optional[int]:
+    """The HTTP status a failure carries, or None: ``exc.response.status_code`` (httpx's
+    HTTPStatusError and its kin), else an int ``status_code`` / ``status`` on the exception."""
+    if exc is None:
+        return None
+    for holder in (getattr(exc, "response", None), exc):
+        for attr in ("status_code", "status"):
+            st = getattr(holder, attr, None) if holder is not None else None
+            if isinstance(st, int) and not isinstance(st, bool):
+                return st
+    return None
+
+
+def counts_against_upstream(exc: Optional[BaseException] = None, *, status: Optional[int] = None,
+                            throttled: bool = False, settled: bool = False) -> bool:
+    """True when this failure says the upstream is unhealthy, so the breaker counts it (the rule
+    above). ``status`` wins over the one read off ``exc``; ``throttled`` always counts."""
+    if throttled:
+        return True
+    if settled:
+        return False
+    st = status if status is not None else failure_status(exc)
+    return st not in NOT_UPSTREAM_FAULT_STATUS
+
+
+# RETRIES AND OTHER CHANNELS FOLLOW THE SAME RULE (EYE-RETRY-404, 2026-11-07). A failure the breaker
+# does not count is an answer: sending the same request again, or the same request down another
+# channel (OpenAlex's second lane, Jina after a plain fetch), gets the same answer and spends the
+# upstream's budget for nothing. Before this, reading one GitHub issue that does not exist sent two
+# requests and an OpenAlex 404 went out up to four times. Every retry and channel switch of OmniSeek
+# asks ``counts_against_upstream`` (an exception) or ``answered`` (the failure records an egress
+# helper noted through diag, for a helper that returns None instead of raising).
+def answered(records: Optional[Iterable]) -> bool:
+    """True when one of these failure records (``diag.note`` / ``diag.tap`` records) is an answer
+    the breaker does not count: a status in ``NOT_UPSTREAM_FAULT_STATUS`` or an adapter's settled
+    ``final`` record. Such a request is not sent again and not sent down another channel."""
+    for rec in records or ():
+        if not isinstance(rec, dict) or (rec.get("status") is None and not rec.get("final")):
+            continue  # no answer in it (no connection, a timeout, a gate that sent nothing)
+        if not counts_against_upstream(status=rec.get("status"), settled=bool(rec.get("final"))):
+            return True
+    return False
 
 
 class BackendGuard:
@@ -871,47 +925,16 @@ class BackendGuard:
         without tangling with the in-loop retry bookkeeping."""
         return max(0.0, self.pace_state["next_at"] - time.monotonic())
 
-    # ── concurrency gate (bounded + cancellation-safe acquire) ─────────────────
-    # A raw ``with self.sema:`` acquire is UNBOUNDED: if every permit is held (a saturating fan-out,
-    # or a leaked permit) the caller blocks forever, so an interactive call hangs the whole MCP idle
-    # window (the 300s resolve_identity hang, 2026-07-18). And the async ``to_thread.run_sync(
-    # self.sema.acquire)`` sitting OUTSIDE a try/finally LEAKS a permit under cancellation: anyio's
-    # to_thread is abandon_on_cancel=False, so a deadline/client cancel landing on that await lets the
-    # worker thread FINISH the acquire (permit taken) and only THEN raise CancelledError, before the
-    # try -> the release never runs. Enough leaks drain the shared pool and every OA/S2 call then hangs
-    # on acquire (the observed outage). These two helpers close both holes: acquire is BOUNDED (raise +
-    # degrade past ``max_wait``, the same shed-load discipline the rate gate already applies on backlog),
-    # and the async acquire waits in the gate's one line on a future of its own loop (FairPermits.atake;
-    # it used to be a shielded worker-thread acquire, which asyncio's own cancel could still separate
-    # from the release: review F1, 2026-09-29), so no cancel can separate the acquire from the release.
-    @contextlib.contextmanager
-    def slot(self, max_wait: float, on_busy: Callable[[float], BaseException], *,
-             until: Optional[float] = None, request_s: Optional[float] = None):
-        """Bounded concurrency-cap acquire (sync): wait in the gate's one line until ``until``
-        (default ``max_wait`` from now, cut to the caller's deadline) for a permit; if none comes in
-        time, raise ``on_busy`` (fail fast -> the caller degrades to []/None) instead of blocking
-        unboundedly. The permit is on a lease (see ``hold``). Guarantees release."""
-        end, left, lease_end = self._bounds(max_wait, until, request_s, True)
-        if left <= 0:
-            raise on_busy(0.0)
-        lease = self.sema.take(_holder(), end, lease_end)
-        if lease is None:
-            raise on_busy(left)
-        handle = HoldHandle(self.sema, lease, _request_s(request_s, max_wait))
-        token = _register_hold(handle)   # the request's progress renews the lease
-        try:
-            yield
-        finally:
-            _unregister_hold(handle, token)
-            self.sema.give_back(lease)
-
     @contextlib.asynccontextmanager
     async def aslot(self, max_wait: float, on_busy: Callable[[float], BaseException], *,
                     until: Optional[float] = None, request_s: Optional[float] = None):
-        """Bounded + cancellation-safe concurrency-cap acquire (async): waits in the same one line on
-        a future of the running loop, so no cancellation (AnyIO's or asyncio's own) can leave the
-        permit taken and no worker thread waits. Bounded and leased like ``slot``; a deadline already
-        past refuses at once, as ``slot`` does (review N4)."""
+        """Bounded + cancellation-safe concurrency-cap acquire (async): wait in the gate's one line, on
+        a future of the running loop, until ``until`` (default ``max_wait`` from now, cut to the
+        caller's deadline) for a permit; if none comes in time, raise ``on_busy`` (fail fast -> the
+        caller degrades to []/None). No cancellation (AnyIO's or asyncio's own) can leave the permit
+        taken and no worker thread waits. The permit is on a lease (see ``hold``); a deadline already
+        past refuses at once (review N4). Guarantees release. (The sync ``slot`` was deleted 11-04,
+        async migration step seven: its last caller, the sync OpenAlex egress, went with it.)"""
         end, left, lease_end = self._bounds(max_wait, until, request_s, True)
         if left <= 0:
             raise on_busy(0.0)
@@ -937,8 +960,19 @@ class BackendGuard:
         with self.lock:
             self.state["fails"] = 0
 
-    def record_fail(self) -> None:
-        """Record one failure; open the circuit once ``break_after`` consecutive failures pile up."""
+    def record_fail(self, exc: Optional[BaseException] = None, *, status: Optional[int] = None,
+                    throttled: bool = False, settled: bool = False) -> bool:
+        """Record one failure; open the circuit once ``break_after`` consecutive failures pile up.
+
+        Only a failure that says the upstream is unhealthy is counted (``counts_against_upstream``):
+        hand over what is known of the cause (the exception, the status, ``throttled`` for the
+        upstream's own rate-limit answer, ``settled`` for an adapter's "not there"). A failure that
+        is not counted leaves the streak as it was. A bare call (cause unknown) counts. Returns
+        whether it counted."""
+        if not counts_against_upstream(exc, status=status, throttled=throttled, settled=settled):
+            self._log.debug("%s: failure not counted by the breaker (the upstream answered: %s)",
+                            self.name, status if status is not None else failure_status(exc))
+            return False
         with self.lock:
             self.state["fails"] += 1
             if self.state["fails"] >= self.break_after:

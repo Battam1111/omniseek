@@ -17,16 +17,13 @@ API (verified 2026-05-30):
 
 from __future__ import annotations
 
-import functools
 import logging
-from datetime import datetime, timezone
 from typing import Optional
 
-import anyio
-import httpx
 
-from omniseek.core import _probe, cache, diag, http
-from omniseek.core.normalize import Document, jsonsafe, mk_signal
+from omniseek.core import _probe, cache, http, upstreams
+from omniseek.core.normalize import Document, jsonsafe, mk_signal, to_utc
+from omniseek.core.sources._base import SourceBase
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +34,7 @@ CACHE_TTL = 3600  # 1h
 DEFAULT_QUERY = "machine learning"
 
 
-class MyCareersFutureAdapter:
+class MyCareersFutureAdapter(SourceBase):
     name = "mycareersfuture"
     needs_credentials = False
     description = (
@@ -45,43 +42,8 @@ class MyCareersFutureAdapter:
         "SG 全境岗位 (本地/MNC/政府), 自由文本查询; 新加坡求职主板"
     )
 
-    def search(self, query: str, limit: int = 10) -> list[Document]:
-        q = (query or "").strip() or DEFAULT_QUERY
-        key = cache.make_key("mycareersfuture", "search", q, limit)
-        cached = cache.get_docs(key)
-        if cached is not None:
-            return cached
-
-        n = min(max(limit, 5), 30)
-        body = {
-            "sessionId": "",
-            "search": q,
-            "sortBy": ["new_posting_date"],
-            "limit": n,
-            "page": 0,
-        }
-        try:
-            r = httpx.post(f"{API}?limit={n}&page=0", json=body, headers=HEADERS, timeout=TIMEOUT)
-            r.raise_for_status()
-            results = r.json().get("results", []) or []
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("MyCareersFuture search failed: %s", exc)
-            st = getattr(getattr(exc, "response", None), "status_code", None)
-            diag.note("mycareersfuture.search", url=API, status=st, exc=exc)
-            return []
-
-        docs: list[Document] = []
-        for j in results:
-            doc = self._to_doc(j)
-            if doc:
-                docs.append(doc)
-            if len(docs) >= limit:
-                break
-        cache.set_docs(key, docs, ttl=CACHE_TTL)
-        return docs
-
     async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async twin of ``search`` (S4b): mirrors ``search`` line-for-line so the fetcher's
+        """Native-async replacement of the deleted sync ``search`` (11-04, S9; this is the only one now) (S4b): mirrors ``search`` line-for-line so the fetcher's
         native async dispatch (``AsyncSearchCapable``) awaits it DIRECTLY, spending a coroutine on the
         MCF POST wait instead of a held pool thread. Three changes only vs ``search``:
           - the disk CACHE read/write go OFF the loop (anyio.to_thread.run_sync: get_docs / set_docs do
@@ -97,46 +59,44 @@ class MyCareersFutureAdapter:
             byte-identical to ``search`` (no drift)."""
         q = (query or "").strip() or DEFAULT_QUERY
         key = cache.make_key("mycareersfuture", "search", q, limit)
-        cached = await anyio.to_thread.run_sync(cache.get_docs, key)  # disk read OFF loop
-        if cached is not None:
-            return cached
 
-        n = min(max(limit, 5), 30)
-        body = {
-            "sessionId": "",
-            "search": q,
-            "sortBy": ["new_posting_date"],
-            "limit": n,
-            "page": 0,
-        }
-        data = await http.apost_json(f"{API}?limit={n}&page=0", json=body, headers=HEADERS, timeout=TIMEOUT)
-        if not isinstance(data, dict):
-            # egress/parse failure (None) or non-object body → honest empty, don't cache the miss
-            # (mirrors search's except-branch return []; apost_json already logged + diag.note'd it).
-            return []
-        results = data.get("results", []) or []
+        async def _aget() -> Optional[list[Document]]:
+            n = min(max(limit, 5), 30)
+            body = {
+                "sessionId": "",
+                "search": q,
+                "sortBy": ["new_posting_date"],
+                "limit": n,
+                "page": 0,
+            }
+            data = await http.apost_json(f"{API}?limit={n}&page=0", json=body, headers=HEADERS, timeout=TIMEOUT)
+            if not isinstance(data, dict):
+                # egress/parse failure (None) or non-object body → honest empty, don't cache the miss
+                # (mirrors search's except-branch return []; apost_json already logged + diag.note'd it).
+                return None  # a failure: not cached
+            results = data.get("results", []) or []
 
-        docs: list[Document] = []
-        for j in results:
-            doc = self._to_doc(j)
-            if doc:
-                docs.append(doc)
-            if len(docs) >= limit:
-                break
-        await anyio.to_thread.run_sync(  # disk write OFF loop
-            functools.partial(cache.set_docs, key, docs, ttl=CACHE_TTL))
-        return docs
+            docs: list[Document] = []
+            for j in results:
+                doc = self._to_doc(j)
+                if doc:
+                    docs.append(doc)
+                if len(docs) >= limit:
+                    break
+            return docs
 
-    def fetch_url(self, url: str) -> Optional[Document]:
+        return await self._acached(key, CACHE_TTL, _aget)
+
+    async def afetch_url(self, url: str) -> Optional[Document]:
         return None
 
-    def health_check(self) -> tuple[Optional[bool], str]:
+    async def ahealth_check(self) -> tuple[Optional[bool], str]:
         try:
-            r = httpx.post(f"{API}?limit=1&page=0",
-                           json={"search": "engineer", "limit": 1, "page": 0},
-                           headers=HEADERS, timeout=10)
+            r = await http.adirect("POST", f"{API}?limit=1&page=0",
+                                   json={"search": "engineer", "limit": 1, "page": 0},
+                                   headers=HEADERS, timeout=10)
             if r.status_code == 429:  # it answered, but not whether search serves: not verified
-                return None, _probe.rate_limited("api.mycareersfuture.gov.sg", _probe.retry_after_s(r.headers))
+                return None, _probe.rate_limited("api.mycareersfuture.gov.sg", upstreams.parse_retry_after(r.headers))
             if r.status_code != 200:
                 return False, f"HTTP {r.status_code}"
             return True, f"OK (total {r.json().get('total', '?')} for 'engineer')"
@@ -164,12 +124,7 @@ class MyCareersFutureAdapter:
 
         meta = j.get("metadata") or {}
         posted = meta.get("newPostingDate") or meta.get("originalPostingDate")
-        date = None
-        if posted:
-            try:
-                date = datetime.fromisoformat(str(posted)).replace(tzinfo=timezone.utc)
-            except (ValueError, TypeError):
-                pass
+        date = to_utc(str(posted)) if posted else None
 
         parts = []
         if salary_str:
@@ -187,7 +142,7 @@ class MyCareersFutureAdapter:
             source_id=uuid,
             url=url,
             title=f"[{company}] {title}" if company else title,
-            content=content or "(SG job)",
+            content=content,
             author=company or "MyCareersFuture",
             date=date,
             signals=mk_signal('salary', (hi or lo), kind='compensation',

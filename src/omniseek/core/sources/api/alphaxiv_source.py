@@ -34,17 +34,16 @@ best-effort and never sinks the base document.
 
 from __future__ import annotations
 
-import functools
 import logging
 import re
 from datetime import datetime
 from typing import Optional
 from urllib.parse import urlparse
 
-import anyio
 
 from omniseek.core import cache, http
-from omniseek.core.normalize import Document, jsonsafe, mk_signal
+from omniseek.core.normalize import Document, jsonsafe, mk_signal, to_utc
+from omniseek.core.sources._base import SourceBase
 
 logger = logging.getLogger(__name__)
 
@@ -71,15 +70,9 @@ _ARXIV_ID_RE = re.compile(
 def _parse_date(value) -> Optional[datetime]:
     """Best-effort parse of alphaXiv's first_publication_date / publication_date (ISO datetime OR
     bare 'YYYY-MM-DD'). None (not a fabricated date) on anything unparseable."""
-    if not value or not isinstance(value, str):
+    if not isinstance(value, str):
         return None
-    try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except (ValueError, TypeError):
-        try:
-            return datetime.strptime(value[:10], "%Y-%m-%d")
-        except (ValueError, TypeError):
-            return None
+    return to_utc(value) or to_utc(value[:10])
 
 
 def _author_names(authors) -> list[str]:
@@ -191,7 +184,7 @@ def _comment_digest(compact: list[dict]) -> str:
     return f"Community discussion ({n} threads): {joined}" if joined else f"Community discussion ({n} threads)."
 
 
-class AlphaXivAdapter:
+class AlphaXivAdapter(SourceBase):
     name = "alphaxiv"
     needs_credentials = False  # keyless public REST: only a User-Agent, no OAuth/account/key
     description = (
@@ -199,58 +192,15 @@ class AlphaXivAdapter:
         "discussion + AI-generated paper overview, all via the keyless api.alphaxiv.org REST API"
     )
 
-    def search(self, query: str, limit: int = 10) -> list[Document]:
-        key = cache.make_key("alphaxiv", "search", query, limit)
-        cached = cache.get_docs(key)
-        if cached is not None:
-            return cached
-
-        q = (query or "").strip()
-        if not q:
-            docs = self._trending(limit)   # empty/whitespace query -> "what is hot"
-            ttl = _TRENDING_TTL
-        else:
-            docs = self._search_papers(q, limit)
-            ttl = _SEARCH_TTL
-
-        if docs is None:  # network failure (not an authoritative empty) -> honest [], don't cache
-            return []
-        cache.set_docs(key, docs, ttl=ttl)
-        return docs
-
     async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async twin of ``search`` (the fetcher's AsyncSearchCapable dispatch awaits this
-        DIRECTLY, spending a coroutine on the network wait instead of a held pool thread). Off-loop
-        discipline mirrors the shipped async sources (hackernews / declarative): the disk cache
-        read/write go OFF the loop (anyio.to_thread), the egress awaits http.aget_json (the async
-        wait stays on the loop via epoll), and the pure hit->doc mapping stays on the loop."""
+        """The trending feed for a blank query, else the paper search; each cached under its own TTL
+        (a network failure is ``None``: ``[]``, not cached). The egress awaits http.aget_json and the
+        pure hit->doc mapping stays on the loop."""
         key = cache.make_key("alphaxiv", "search", query, limit)
-        cached = await anyio.to_thread.run_sync(cache.get_docs, key)  # disk read OFF loop
-        if cached is not None:
-            return cached
-
         q = (query or "").strip()
-        if not q:
-            docs = await self._atrending(limit)
-            ttl = _TRENDING_TTL
-        else:
-            docs = await self._asearch_papers(q, limit)
-            ttl = _SEARCH_TTL
-
-        if docs is None:
-            return []
-        await anyio.to_thread.run_sync(  # disk write OFF loop
-            functools.partial(cache.set_docs, key, docs, ttl=ttl))
-        return docs
-
-    # -- trending feed (the unique buzz signal) --------------------------------------------------
-    def _trending(self, limit: int) -> Optional[list[Document]]:
-        data = http.get_json(
-            f"{BASE}/papers/v3/feed",
-            params={"pageNum": 0, "pageSize": limit, "sort": "Hot", "interval": "7 Days"},
-            timeout=TIMEOUT,
-        )
-        return self._parse_feed(data, limit)
+        if not q:  # empty/whitespace query -> "what is hot"
+            return await self._acached(key, _TRENDING_TTL, lambda: self._atrending(limit))
+        return await self._acached(key, _SEARCH_TTL, lambda: self._asearch_papers(q, limit))
 
     async def _atrending(self, limit: int) -> Optional[list[Document]]:
         data = await http.aget_json(
@@ -273,15 +223,6 @@ class AlphaXivAdapter:
             if len(docs) >= limit:
                 break
         return docs
-
-    # -- keyword search (redundant with arxiv, kept minimal) -------------------------------------
-    def _search_papers(self, query: str, limit: int) -> Optional[list[Document]]:
-        data = http.get_json(
-            f"{BASE}/search/v2/paper/fast",
-            params={"q": query, "includePrivate": "false"},
-            timeout=TIMEOUT,
-        )
-        return self._parse_search(data, limit)
 
     async def _asearch_papers(self, query: str, limit: int) -> Optional[list[Document]]:
         data = await http.aget_json(
@@ -310,16 +251,25 @@ class AlphaXivAdapter:
         return docs
 
     # -- per-URL drill: arxiv base doc + keyless community/overview enrich ------------------------
-    def fetch_url(self, url: str) -> Optional[Document]:
-        doc = self._arxiv_base_doc(url)
+    @staticmethod
+    def _paper_arxiv_id(url: str) -> Optional[str]:
+        """The arXiv id of an alphaxiv.org paper URL, or None (this adapter does not read ``url``)."""
+        host = (urlparse(url).hostname or "").lower()
+        if "alphaxiv.org" not in host:
+            return None
+        m = _ARXIV_ID_RE.search(urlparse(url).path)
+        return m.group("id") if m else None
+
+    async def afetch_url(self, url: str) -> Optional[Document]:
+        doc = await self._arxiv_base_doc(url)
         if doc is None:
             return None
         arxiv_id = (doc.metadata or {}).get("arxiv_id")
         if arxiv_id:
-            self._enrich_from_community(doc, arxiv_id)  # best-effort: never sinks the base doc
+            await self._enrich_from_community(doc, arxiv_id)  # best-effort: never sinks the base doc
         return doc
 
-    def _arxiv_base_doc(self, url: str) -> Optional[Document]:
+    async def _arxiv_base_doc(self, url: str) -> Optional[Document]:
         """The canonical arXiv-backed base document for an alphaxiv.org paper URL: delegate to the
         arxiv adapter for the abstract/metadata, then re-brand as an alphaxiv doc. None if the URL
         is not an alphaxiv paper URL or the arxiv delegation fails."""
@@ -327,11 +277,10 @@ class AlphaXivAdapter:
         if "alphaxiv.org" not in host:
             return None
 
-        m = _ARXIV_ID_RE.search(urlparse(url).path)
-        if not m:
+        arxiv_id = self._paper_arxiv_id(url)
+        if not arxiv_id:
             logger.debug("AlphaXiv URL has no extractable arxiv id: %s", url)
             return None
-        arxiv_id = m.group("id")
 
         from omniseek.core import fetcher
         arxiv_adapter = fetcher.get_adapter("arxiv")
@@ -341,7 +290,7 @@ class AlphaXivAdapter:
 
         arxiv_url = f"https://arxiv.org/abs/{arxiv_id}"
         try:
-            arxiv_doc = arxiv_adapter.fetch_url(arxiv_url)
+            arxiv_doc = await arxiv_adapter.afetch_url(arxiv_url)
         except Exception as exc:  # noqa: BLE001
             logger.warning("arxiv delegation failed for %s: %s", arxiv_id, exc)
             return None
@@ -360,10 +309,10 @@ class AlphaXivAdapter:
             arxiv_doc.tags = (arxiv_doc.tags or []) + ["alphaxiv-community"]
         return arxiv_doc
 
-    def _enrich_from_community(self, doc: Document, arxiv_id: str) -> None:
+    async def _enrich_from_community(self, doc: Document, arxiv_id: str) -> None:
         """Keyless-enrich the base doc with alphaXiv's community discussion + AI overview. Every
         step is best-effort: a failed/empty part is simply skipped and never sinks the base doc."""
-        legacy = http.get_json(f"{BASE}/papers/v3/legacy/{arxiv_id}", timeout=TIMEOUT)
+        legacy = await http.aget_json(f"{BASE}/papers/v3/legacy/{arxiv_id}", timeout=TIMEOUT)
         if not isinstance(legacy, dict):
             return
 
@@ -381,7 +330,7 @@ class AlphaXivAdapter:
             version = (legacy.get("paper") or {}).get("paper_version") or {}
             version_id = version.get("id")
             if version_id:
-                ov = http.get_json(f"{BASE}/papers/v3/{version_id}/overview/en", timeout=TIMEOUT)
+                ov = await http.aget_json(f"{BASE}/papers/v3/{version_id}/overview/en", timeout=TIMEOUT)
                 overview = (ov or {}).get("overview") if isinstance(ov, dict) else None
                 if overview:
                     doc.metadata["alphaxiv_overview"] = overview
@@ -393,9 +342,9 @@ class AlphaXivAdapter:
         except Exception as exc:  # noqa: BLE001
             logger.debug("alphaXiv overview enrich skipped for %s: %s", arxiv_id, exc)
 
-    def health_check(self) -> tuple[bool, str]:
+    async def ahealth_check(self) -> tuple[bool, str]:
         try:
-            resp = http.direct(
+            resp = await http.adirect(
                 "GET", f"{BASE}/papers/v3/feed",
                 # pageNum is REQUIRED by /papers/v3/feed: without it the endpoint 400s (a false
                 # health-down while keyword search + the trending feed both work when pageNum is

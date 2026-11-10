@@ -9,7 +9,7 @@ UK sibling of sec_edgar (US filers) and uk_companies_house's own registry-of-rec
 
 Auth: a FREE registered API key (https://developer.company-information.service.gov.uk/, no cost).
 It rides as HTTP Basic with the key as the username and an EMPTY password (Basic base64(key + ':')).
-The key lives ONLY on the host at ~/.omniseek/credentials/uk_companies_house.json ->
+The key lives ONLY on the host at <credentials>/uk_companies_house.json ->
 {"api_key": "..."}. needs_credentials=True; no key -> _raw_fetch returns None -> [] (the podcast_index
 precedent: a missing credential degrades to empty, never a crash).
 
@@ -31,12 +31,12 @@ and a credential-aware health_check. No module-tail register call (BaseAPIAdapte
 from __future__ import annotations
 
 import logging
-from datetime import datetime
 from typing import Any, Optional
 
 from omniseek.core import auth, http
-from omniseek.core.normalize import Document, jsonsafe
+from omniseek.core.normalize import Document, jsonsafe, to_utc
 from omniseek.core.sources.api._base import BaseAPIAdapter
+from omniseek import where
 
 logger = logging.getLogger(__name__)
 
@@ -46,24 +46,13 @@ API = "https://api.company-information.service.gov.uk"
 WEB = "https://find-and-update.company-information.service.gov.uk"
 
 # Drop a credential template on first import (free key from the developer portal).
-auth.write_template(
+auth.register_template(
     "uk_companies_house",
     {"_comment": "FREE API key from https://developer.company-information.service.gov.uk/ "
                  "(register an application, create a 'REST' / Live key). Sent as HTTP Basic "
                  "with the key as username and an empty password.",
      "api_key": ""},
 )
-
-
-def _parse_date(raw: Any) -> Optional[datetime]:
-    """Companies House dates are 'YYYY-MM-DD' (e.g. date_of_creation, appointed_on, notified_on).
-    None on anything else (never a fabricated date)."""
-    if not isinstance(raw, str) or not raw.strip():
-        return None
-    try:
-        return datetime.strptime(raw.strip()[:10], "%Y-%m-%d")
-    except ValueError:
-        return None
 
 
 class UkCompaniesHouseAdapter(BaseAPIAdapter):
@@ -90,14 +79,6 @@ class UkCompaniesHouseAdapter(BaseAPIAdapter):
     def _api_key() -> Optional[str]:
         return (auth.load("uk_companies_house") or {}).get("api_key") or None
 
-    def _get(self, path: str, params: Optional[dict] = None) -> Optional[Any]:
-        """GET an API path with the key as HTTP Basic username (empty password). None on any
-        failure (the shared http helper's contract) or if the host has no key."""
-        key = self._api_key()
-        if not key:
-            return None
-        return http.get_json(f"{API}{path}", params=params or {}, auth=(key, ""), timeout=20)
-
     async def _aget(self, path: str, params: Optional[dict] = None) -> Optional[Any]:
         """Async twin of _get: BYTE-FAITHFUL mirror — same URL / params / HTTP-Basic auth / timeout,
         same no-key -> None contract; ONLY the shared-http egress swaps http.get_json -> await
@@ -119,32 +100,8 @@ class UkCompaniesHouseAdapter(BaseAPIAdapter):
                 return verb, q[len(verb) + 1:].strip()
         return "search", q
 
-    def _raw_fetch(self, query: str, limit: int) -> Optional[list]:
-        """Verb-route to one of three endpoints; tag each record with its kind + parent CRN so the
-        single-record _to_document hook can branch. Returns [] on no key / empty result / failure."""
-        verb, arg = self._route(query)
-        n = max(1, min(int(limit), 50))
-        if verb == "officers":
-            if not arg:
-                return []
-            data = self._get(f"/company/{arg}/officers", {"items_per_page": n})
-            items = (data or {}).get("items") or []
-            return [{"_ch": "officer", "_crn": arg, **it} for it in items if isinstance(it, dict)]
-        if verb == "psc":
-            if not arg:
-                return []
-            data = self._get(f"/company/{arg}/persons-with-significant-control", {"items_per_page": n})
-            items = (data or {}).get("items") or []
-            return [{"_ch": "psc", "_crn": arg, **it} for it in items if isinstance(it, dict)]
-        # default: company name search
-        if not arg:
-            return []
-        data = self._get("/search/companies", {"q": arg, "items_per_page": n})
-        items = (data or {}).get("items") or []
-        return [{"_ch": "company", **it} for it in items if isinstance(it, dict)]
-
     async def _araw_fetch(self, query: str, limit: int) -> Optional[list]:
-        """Async twin of _raw_fetch: BYTE-FAITHFUL mirror — same verb routing, same clamp, same
+        """Async replacement of the deleted sync ``_raw_fetch`` (11-04, S9; this is the only one now): BYTE-FAITHFUL mirror — same verb routing, same clamp, same
         endpoints / params, same kind+CRN record tagging, same None/[] contract. ONLY the shared-http
         egress is mirrored (self._get -> await self._aget, i.e. http.get_json -> await http.aget_json);
         control flow is unchanged (exactly one keyed GET per branch, as in the sync path)."""
@@ -168,12 +125,6 @@ class UkCompaniesHouseAdapter(BaseAPIAdapter):
         data = await self._aget("/search/companies", {"q": arg, "items_per_page": n})
         items = (data or {}).get("items") or []
         return [{"_ch": "company", **it} for it in items if isinstance(it, dict)]
-
-    async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async twin of search -> AsyncSearchCapable. Shares the base async cache round-trip
-        (_aapi_search: same cache key, per-record _to_document, rank_locally, cache-only-if-docs);
-        egress via _araw_fetch; mapping via the SAME pure-CPU _to_document (byte-identical to search)."""
-        return await self._aapi_search(query, limit, araw_fetch=lambda: self._araw_fetch(query, limit))
 
     def _to_document(self, raw: Any) -> Optional[Document]:
         if not isinstance(raw, dict):
@@ -208,7 +159,7 @@ class UkCompaniesHouseAdapter(BaseAPIAdapter):
             url=f"{WEB}/company/{crn}",
             title=f"{title} ({crn})",
             content=content,
-            date=_parse_date(created),
+            date=to_utc(created),
             tags=[t for t in (status, ctype, "uk") if t],
             metadata={
                 "company_number": crn,
@@ -251,7 +202,7 @@ class UkCompaniesHouseAdapter(BaseAPIAdapter):
             title=f"{name} - {role or 'officer'} @ {crn}",
             content=content,
             author=name,
-            date=_parse_date(appointed),
+            date=to_utc(appointed),
             tags=[t for t in (role, o.get("nationality"), "uk") if t],
             metadata={
                 "company_number": crn,
@@ -297,7 +248,7 @@ class UkCompaniesHouseAdapter(BaseAPIAdapter):
             title=f"{name} - PSC of {crn}",
             content=content,
             author=name,
-            date=_parse_date(notified),
+            date=to_utc(notified),
             tags=[t for t in ([pkind] + list(natures) + ["uk"]) if t],
             metadata={
                 "company_number": crn,
@@ -314,13 +265,13 @@ class UkCompaniesHouseAdapter(BaseAPIAdapter):
         )
 
     # ------------------------------------------------------------- health
-    def health_check(self) -> tuple[bool, str]:
+    async def ahealth_check(self) -> tuple[bool, str]:
         """Liveness: a tiny keyed name search. Without a key, report unconfigured (the endpoint is
         fine, the host just has no credential yet) rather than failing the source outright."""
         if not self._api_key():
-            return False, "no api_key (set ~/.omniseek/credentials/uk_companies_house.json)"
+            return False, f"no api_key (set {where.show(where.credentials())}/uk_companies_house.json)"
         try:
-            data = self._get("/search/companies", {"q": "tesco", "items_per_page": 1})
+            data = await self._aget("/search/companies", {"q": "tesco", "items_per_page": 1})
         except Exception as exc:  # noqa: BLE001
             return False, f"{type(exc).__name__}: {str(exc)[:80]}"
         ok = isinstance(data, dict) and "items" in data

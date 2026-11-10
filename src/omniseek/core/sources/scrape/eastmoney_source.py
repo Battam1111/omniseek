@@ -170,6 +170,12 @@ class EastMoneyAdapter(BaseScrapeAdapter):
     cache_ttl = 120  # quotes are time-sensitive
     rank = False
 
+    # Source spec (omniseek.core.filters): a by-name / by-code quote lookup takes no filters.
+    filters: dict = {}
+    coverage = {"since": None, "until": None, "gaps": [],
+                "note": "current (delayed) quotes only; no history"}
+    samples = [{"query": "贵州茅台"}, {"query": "600519"}]
+
     def _suggest(self, sess, name: str) -> list[dict]:
         r = sess.get(_SUGGEST, params={"input": name, "type": "14", "token": _SUGGEST_TOKEN, "count": "8"},
                      headers={"user-agent": _UA, "referer": "https://www.eastmoney.com/"}, timeout=15)

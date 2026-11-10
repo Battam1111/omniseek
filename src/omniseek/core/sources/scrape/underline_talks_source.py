@@ -48,10 +48,10 @@ from __future__ import annotations
 
 import logging
 import re
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any, Optional
 
-from omniseek.core.normalize import Document
+from omniseek.core.normalize import Document, to_utc
 from omniseek.core.sources.scrape._base import BaseScrapeAdapter
 
 logger = logging.getLogger(__name__)
@@ -102,16 +102,6 @@ class UnderlineTalksAdapter(BaseScrapeAdapter):
     regions = ["global"]
     modes = ["TRANSCRIBE", "STRUCTURE"]
 
-    # --------------------------------------------------------------- hooks
-    def _raw_fetch(self, query: str, limit: int) -> Optional[dict]:
-        """Resolve query -> lecture id -> JSON:API lecture payload. A non-URL/non-id
-        keyword query returns None (Underline has no public full-text search, see
-        module docstring), which the base turns into []."""
-        lecture_id = _lecture_id(query)
-        if not lecture_id:
-            return None
-        return self._resolve(lecture_id)
-
     def _to_documents(self, raw: Any, query: str, limit: int) -> list[Document]:
         if not isinstance(raw, dict):
             return []
@@ -119,7 +109,7 @@ class UnderlineTalksAdapter(BaseScrapeAdapter):
         return [doc] if doc is not None else []
 
     async def _araw_fetch(self, query: str, limit: int) -> Optional[dict]:
-        """Async twin of ``_raw_fetch``: resolve query -> lecture id (pure CPU) -> the JSON:API lecture
+        """Async replacement of the deleted sync ``_raw_fetch`` (11-04, S9; this is the only one now): resolve query -> lecture id (pure CPU) -> the JSON:API lecture
         payload via the async resolve. A non-URL/non-id keyword query (or a failed resolve) -> None,
         which the base turns into [] (the same contract as the sync path)."""
         lecture_id = _lecture_id(query)
@@ -127,56 +117,25 @@ class UnderlineTalksAdapter(BaseScrapeAdapter):
             return None
         return await self._aresolve(lecture_id)
 
-    async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async twin of BaseScrapeAdapter.search -> AsyncSearchCapable (the S4a fan-out awaits
-        this directly; the JSON:API resolve costs a COROUTINE, not a held pool thread). Shares the base
-        async cache round-trip (``_asearch_via``: SAME cache key + 6h ttl, off-loop disk IO, rank off);
-        egress via ``_araw_fetch``; mapping via the SAME pure-CPU ``_to_documents`` -> byte-identical to
-        ``search`` (a keyword query still returns [], a lecture URL/id still resolves one doc)."""
-        return await self._asearch_via(
-            query, limit,
-            afetch=lambda: self._araw_fetch(query, limit),
-            abuild=lambda raw: self._to_documents(raw, query, limit))
-
-    def fetch_url(self, url: str) -> Optional[Document]:
+    async def afetch_url(self, url: str) -> Optional[Document]:
         """Claim an underline.io lecture URL: resolve its metadata + video handle into
         one doc (the omniseek_read / omniseek_search 单源钻取 drill-down path). Returns None for any
         non-Underline url so the fetcher's host routing skips this source."""
         lecture_id = _lecture_id(url)
         if not lecture_id:
             return None
-        raw = self._resolve(lecture_id)
+        raw = await self._aresolve(lecture_id)
         if raw is None:
             return None
         return self._payload_to_document(raw)
 
-    def health_check(self) -> tuple[bool, str]:
+    async def ahealth_check(self) -> tuple[bool, str]:
         """A keyword probe (the base default) would always return [] here, so probe a
         cheap resolve of one known-stable lecture id (EMNLP 2023 FActScore) instead."""
-        raw = self._resolve("88705")
+        raw = await self._aresolve("88705")
         if raw and _attrs(raw).get("title"):
             return True, "OK (underline JSON:API resolve)"
         return False, "underline API could not resolve the probe lecture"
-
-    # --------------------------------------------------------------- internals
-    @staticmethod
-    def _resolve(lecture_id: str) -> Optional[dict]:
-        """GET the JSON:API lecture payload. None on any failure (network, 404, a
-        non-JSON body) -> the base turns it into [] (the adapter contract)."""
-        from omniseek.core import http  # lazy: off the boot import path (self-registers at import)
-        try:
-            r = http.direct(
-                "GET", _API.format(id=lecture_id),
-                timeout=20,
-                follow_redirects=True,
-                headers={"User-Agent": _UA, "Accept": "application/vnd.api+json"},
-            )
-            r.raise_for_status()
-            data = r.json()
-        except Exception as exc:  # noqa: BLE001 (failure -> None -> [], the adapter contract)
-            logger.warning("underline resolve failed for %s: %s", lecture_id, exc)
-            return None
-        return data if isinstance(data, dict) and isinstance(data.get("data"), dict) else None
 
     @staticmethod
     async def _aresolve(lecture_id: str) -> Optional[dict]:
@@ -293,13 +252,9 @@ def _parse_date(attrs: dict) -> Optional[datetime]:
     Both are ISO 8601 with a trailing Z (e.g. 2023-12-08T08:00:00.000Z)."""
     for key in ("held_at", "published_at"):
         raw = attrs.get(key)
-        if not isinstance(raw, str) or not raw:
-            continue
-        try:
-            dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
-        except ValueError:
-            continue
-        return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+        dt = to_utc(raw) if isinstance(raw, str) else None
+        if dt is not None:
+            return dt
     return None
 
 

@@ -47,7 +47,7 @@ from datetime import datetime
 from typing import Any, Optional
 
 from omniseek.core import http
-from omniseek.core.normalize import Document, jsonsafe, mk_signal
+from omniseek.core.normalize import Document, html_fragment_text, jsonsafe, mk_signal, to_utc
 from omniseek.core.sources.scrape._base import BaseScrapeAdapter
 
 SEARCH_URL = "https://www.ebi.ac.uk/europepmc/webservices/rest/search"
@@ -85,21 +85,8 @@ class EuropePMCAdapter(BaseScrapeAdapter):
                      "clinical / life-sciences question), not broad-fan-out fodder that would "
                      "pull PubMed-flavoured hits into general ML retrieval")
 
-    def _raw_fetch(self, query: str, limit: int) -> Optional[Any]:
-        # resultType=core is REQUIRED for abstractText; pageSize is the per-page count.
-        return http.get_json(
-            SEARCH_URL,
-            params={
-                "query": query,
-                "format": "json",
-                "resultType": "core",
-                "pageSize": max(1, int(limit)),
-            },
-            timeout=20,
-        )
-
     async def _araw_fetch(self, query: str, limit: int) -> Optional[Any]:
-        # Async twin of _raw_fetch: byte-faithful mirror, only http.get_json → await http.aget_json.
+        # Async replacement of the deleted sync ``_raw_fetch`` (11-04, S9; this is the only one now): byte-faithful mirror, only http.get_json → await http.aget_json.
         return await http.aget_json(
             SEARCH_URL,
             params={
@@ -111,27 +98,8 @@ class EuropePMCAdapter(BaseScrapeAdapter):
             timeout=20,
         )
 
-    def _to_documents(self, raw: Any, query: str, limit: int) -> list[Document]:
-        if not isinstance(raw, dict):
-            return []
-        results = ((raw.get("resultList") or {}).get("result")) or []
-        docs: list[Document] = []
-        fulltext_budget = _MAX_FULLTEXT
-        for result in results[:limit]:
-            doc = self._result_to_doc(result)
-            if doc is None:
-                continue
-            # Bounded OA full-text fan-out: only the first few eligible results pull
-            # the JATS body, and only when there is budget left. A failure inside
-            # _maybe_fulltext is swallowed there (doc keeps its abstract).
-            if fulltext_budget > 0 and self._fulltext_eligible(result):
-                if self._maybe_fulltext(doc, result):
-                    fulltext_budget -= 1
-            docs.append(doc)
-        return docs
-
     async def _ato_documents(self, raw: Any, query: str, limit: int) -> list[Document]:
-        """Async twin of _to_documents (TWO-LAYER: the per-record OA full-text enrichment
+        """Async replacement of the deleted sync ``_to_documents`` (11-04, S9; this is the only one now) (TWO-LAYER: the per-record OA full-text enrichment
         egresses). SAME _MAX_FULLTEXT budget, SAME eligibility gate, SAME doc order, SAME
         per-record skip-on-fail (a miss keeps the abstract), SAME pure-CPU _result_to_doc /
         _strip_jats on the loop. The full-text pulls run CONCURRENTLY, in batches.
@@ -180,15 +148,6 @@ class EuropePMCAdapter(BaseScrapeAdapter):
                 if item:
                     need -= 1
         return docs
-
-    async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async twin of search -> AsyncSearchCapable. Shares the base async cache round-trip;
-        egress via _araw_fetch; mapping via the ASYNC _ato_documents (the enrichment layer egresses,
-        so _asearch_via awaits the async abuild — byte-identical to search's two-layer flow)."""
-        return await self._asearch_via(
-            query, limit,
-            afetch=lambda: self._araw_fetch(query, limit),
-            abuild=lambda raw: self._ato_documents(raw, query, limit))
 
     # ---------------------------------------------------------------- doc builder
     def _result_to_doc(self, result: Any) -> Optional[Document]:
@@ -266,27 +225,8 @@ class EuropePMCAdapter(BaseScrapeAdapter):
             and bool(result.get("source"))
         )
 
-    def _maybe_fulltext(self, doc: Document, result: dict) -> bool:
-        """Fetch the JATS full text for an eligible OA article and graft the stripped
-        body into ``doc.content``. Returns True iff a non-empty body was grafted (so the
-        caller can spend its fan-out budget on real hits only). Any failure -> False and
-        ``doc`` keeps its abstract: a full-text miss never costs us the result."""
-        src = result.get("source")
-        pmcid = result.get("pmcid")
-        if not src or not pmcid:
-            return False
-        xml = http.get_text(
-            FULLTEXT_URL.format(pmcid=pmcid), timeout=20,
-        )
-        body = self._strip_jats(xml)
-        if not body:
-            return False
-        doc.content = body[:_BODY_CAP]
-        doc.metadata["full_text"] = "europepmc/fullTextXML"
-        return True
-
     async def _amaybe_fulltext(self, doc: Document, result: dict) -> bool:
-        """Async twin of _maybe_fulltext: byte-faithful mirror, only http.get_text → await
+        """Async replacement of the deleted sync ``_maybe_fulltext`` (11-04, S9; this is the only one now): byte-faithful mirror, only http.get_text → await
         http.aget_text. SAME eligibility guard, SAME _strip_jats (pure CPU, on loop), SAME
         _BODY_CAP, SAME failure → False fallback (doc keeps its abstract)."""
         src = result.get("source")
@@ -309,7 +249,7 @@ class EuropePMCAdapter(BaseScrapeAdapter):
 
         Drops the <front> (title page / abstract / author block — already captured in
         the doc fields), removes reference/table/figure-graphic noise, strips all
-        remaining tags, unescapes the few entities JATS uses, and collapses
+        remaining tags, decodes every entity, and collapses
         whitespace. Best-effort and total: returns '' on empty / non-text / no body."""
         if not isinstance(xml, str) or not xml.strip():
             return ""
@@ -323,17 +263,9 @@ class EuropePMCAdapter(BaseScrapeAdapter):
         for block in ("ref-list", "table-wrap", "table", "tex-math", "mml:math", "fig"):
             text = re.sub(rf"<{block}[\s>].*?</{block}>", " ", text,
                           flags=re.DOTALL | re.IGNORECASE)
-        # Drop XML comments / processing instructions, then every remaining tag.
-        text = re.sub(r"<!--.*?-->", " ", text, flags=re.DOTALL)
-        text = re.sub(r"<[^>]+>", " ", text)
-        # Unescape the handful of entities JATS emits (order matters: &amp; last).
-        for ent, ch in (("&lt;", "<"), ("&gt;", ">"), ("&quot;", '"'),
-                        ("&apos;", "'"), ("&#x2018;", "'"), ("&#x2019;", "'"),
-                        ("&nbsp;", " "), ("&amp;", "&")):
-            text = text.replace(ent, ch)
-        # Collapse all runs of whitespace to single spaces.
-        text = re.sub(r"\s+", " ", text).strip()
-        return text
+        # Every remaining tag, comment and processing instruction out, entities decoded,
+        # whitespace collapsed.
+        return html_fragment_text(text)
 
     # ------------------------------------------------------------------- helpers
     @staticmethod
@@ -387,17 +319,9 @@ class EuropePMCAdapter(BaseScrapeAdapter):
     def _parse_date(first_pub: Any, pub_year: Any) -> Optional[datetime]:
         """firstPublicationDate is 'YYYY-MM-DD' (sometimes 'YYYY-MM' / 'YYYY'); fall back
         to a bare pubYear. None on anything unparseable (never raises)."""
-        if isinstance(first_pub, str) and first_pub.strip():
-            for fmt in ("%Y-%m-%d", "%Y-%m", "%Y"):
-                try:
-                    return datetime.strptime(first_pub.strip(), fmt)
-                except ValueError:
-                    continue
-        if pub_year is not None:
-            try:
-                return datetime(int(str(pub_year).strip()[:4]), 1, 1)
-            except (ValueError, TypeError):
-                return None
-        return None
+        dt = to_utc(first_pub) if isinstance(first_pub, str) else None
+        if dt is None and pub_year is not None:
+            dt = to_utc(str(pub_year).strip()[:4])
+        return dt
 
 # Registration is automatic via BaseScrapeAdapter.__init_subclass__ (no module-tail ceremony).

@@ -12,7 +12,7 @@ payload (stamped by="agent"; this module computes nothing about the verdict).
 The 8 mechanical SAFETY FLAGS (gather_source_dossier) physically encode the operator's coverage red-lines
 (audit_policy.json, DATA): record_source_verdict RAISES on a prune the flags forbid, so the agent
 CANNOT record an unsafe prune and there is NO code path to a live config mutation. A prune stages a
-reversible operator case (explicit_only="retired:..." + the smoke frozen list) with a mandatory
+reversible operator case (explicit_only="retired:...") with a mandatory
 coverage_impact block (every cell occupants_before/after) so a sequence of individually-safe prunes
 cannot silently walk a cell to a single point of failure. auto_appliable is ALWAYS False.
 """
@@ -28,13 +28,14 @@ from typing import Optional
 
 from omniseek.core import cache
 from omniseek.core.curator import yield_tap as _yt
+from omniseek import where
 
 logger = logging.getLogger(__name__)
 
 # Verdict write-back lives in the SAME tree as candidates.json / yield.json (survives redeploys,
-# rides the weekly state-backup launchd, keeps the read-only deploy tree pristine). Created on first
+# in no backup, keeps the read-only deploy tree pristine). Created on first
 # write. The gather + the policy are READ-ONLY; only record_source_verdict ever writes here.
-STATE_DIR = Path.home() / ".omniseek" / "state" / "curator"
+STATE_DIR = where.state() / "curator"
 SOURCE_VERDICTS_PATH = STATE_DIR / "source_verdicts.json"
 
 _POLICY_PATH = Path(__file__).with_name("audit_policy.json")
@@ -43,8 +44,7 @@ _COVERAGE_TARGETS_PATH = Path(__file__).with_name("coverage_targets.json")
 # Guards ONLY the atomic write of source_verdicts.json (mirrors candidates._LOCK / yield_tap._LOCK).
 _LOCK = threading.Lock()
 
-# The set of keys NO gather path may emit at any depth (smoke §14 walks for these with the existing
-# _walk_banned_keys scanner). Identical to evidence.BANNED_KEYS + the P2/P3-specific judgment words.
+# The set of keys NO gather path may emit at any depth. Identical to evidence.BANNED_KEYS + the P2/P3-specific judgment words.
 BANNED_KEYS = frozenset({
     "score", "verdict", "passes", "recommend", "admit", "reject", "good", "quality", "rating",
     "confidence", "decision", "redundant", "dead", "low_yield", "prune", "keep",
@@ -296,7 +296,7 @@ def gather_source_dossier() -> dict:
     # path; the write-back owns the write). We surface ONLY age + presence + a stale-revalidation
     # nudge per source so a judgment the agent made and forgot ('reddit/dblp = WATCH, awaiting
     # evidence') resurfaces for a re-look next cycle, instead of being stored-and-forgotten. We DO
-    # NOT echo the recorded word or any verdict token (smoke §14 walks for that): the gather stays a
+    # NOT echo the recorded word or any verdict token: the gather stays a
     # neutral fact-joiner; the agent re-renders the verdict from the live facts.
     prior_rows = _load_verdicts().get("verdicts") or {}
 
@@ -679,7 +679,7 @@ def compute_coverage_impact(name: str) -> dict:
 
 def prepare_source_prune_case(name: str, reason: str) -> dict:
     """Stage a REVERSIBLE operator case for a PRUNE (mirrors apply.prepare_owner_case). NEVER a
-    live mutation: it renders the exact two reversible edits + the mandatory coverage_impact block.
+    live mutation: it renders the exact reversible edit + the mandatory coverage_impact block.
     auto_appliable is ALWAYS False. The operator commits + redeploys; flipping explicit_only back fully
     reverses it (the adapter + its index history are untouched).
     """
@@ -694,14 +694,10 @@ def prepare_source_prune_case(name: str, reason: str) -> dict:
              "value": retire_value,
              "effect": ("leaves the broad fan-out (no longer searched by default) but stays "
                         "omniseek_fetch-able + indexed + recoverable")},
-            {"edit": "add_to_smoke_frozen_explicit_only_list",
-             "target": "tests/smoke.py the frozen explicit_only set",
-             "value": name,
-             "effect": "freezes the retire so it can only change by a deliberate later edit"},
         ],
         "coverage_impact": impact,
-        "note": ("Curator P3 stages this reversible retire for the operator: set explicit_only + freeze "
-                 "it in smoke, commit, redeploy. It reduces broad fan-out cost; it does NOT delete "
+        "note": ("Curator P3 stages this reversible retire for the operator: set explicit_only, "
+                 "commit, redeploy. It reduces broad fan-out cost; it does NOT delete "
                  "the adapter or its index history. Flip explicit_only back to fully reverse. "
                  "auto_appliable is always false; no code path applies this automatically."),
     }

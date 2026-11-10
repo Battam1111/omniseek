@@ -10,7 +10,7 @@ tag. The AGENT reads these facts and judges; the code never does.
 ``safe_fetch`` (the crux of safety: IP-pinned, redirect-revalidated, decode-capped) was PROMOTED
 to the core-leaf module ``omniseek.core.safeurl`` so the untrusted web_fallback read can share the
 EXACT same pinned-per-hop fetcher. It is RE-EXPORTED at the top of this module (with its helpers)
-so every probe below + the smoke goldens exercise the moved impl through the same names; the
+so every probe below exercises the moved impl through the same names; the
 mechanics + rationale now live in safeurl's docstring.
 """
 
@@ -29,16 +29,17 @@ import httpx  # kept so the moved-fetcher goldens' probe.httpx.Client / .MockTra
 # safe_fetch + its SSRF helpers were PROMOTED to the core-leaf module omniseek.core.safeurl so the
 # untrusted web_fallback read can share the EXACT pinned-per-hop fetcher (safeurl imports only core,
 # so no curator import cycle). They are RE-EXPORTED here so probe's callers (mode_probe + the mode
-# probes below) and its smoke goldens stay byte-identical: they exercise the MOVED impl through
+# probes below) stay byte-identical: they exercise the MOVED impl through
 # these names (curator.probe.safe_fetch IS safeurl.safe_fetch).
+from omniseek.core.normalize import html_fragment_text
 from omniseek.core.safeurl import (  # noqa: F401
-    _DEFAULT_MAX_BYTES, _blocked, _host_suffix_blocked, _ip_is_blocked, _read_capped,
+    _DEFAULT_MAX_BYTES, _aread_capped, _blocked, _host_suffix_blocked, _ip_is_blocked,
     _resolve_safe_ip, _validate_url_shape, safe_fetch,
 )
 
 logger = logging.getLogger(__name__)
 
-# The §11 frozen acquisition-mode vocabulary (reused; smoke §12 asserts _PROBES keys == this).
+# The §11 frozen acquisition-mode vocabulary (reused; _PROBES keys must equal this).
 MODE_VOCAB = {"STRUCTURE", "UNWALL", "TRANSCRIBE", "RECALL", "MONITOR"}
 
 # ─────────────────────────────────────────────────────────────────────────────────
@@ -110,8 +111,8 @@ def _probe_structure(candidate: dict, fetch: dict) -> dict:
     # Resolve a DOI / arXiv id through the SAME enrich path OmniSeek already trusts (Crossref/OA).
     for ident in (dois + arxiv)[:3]:
         try:
-            from omniseek.core import enrich
-            recs = enrich.enrich([ident])
+            from omniseek.core import enrich, portal
+            recs = portal.call(enrich.aenrich, [ident])   # this probe runs on a thread; enrich is async
         except Exception as exc:  # noqa: BLE001: resolution failure -> not resolved, never raise
             logger.debug("STRUCTURE enrich resolve failed for %r: %s", ident, exc)
             recs = []
@@ -130,7 +131,8 @@ def _probe_structure(candidate: dict, fetch: dict) -> dict:
     for wid in oa_ids[:2]:
         try:
             from omniseek.core import _openalex as oa
-            work = oa.get_json(f"/works/{wid}")
+            from omniseek.core import portal
+            work = portal.call(oa.aget_json, f"/works/{wid}")   # this probe runs on a thread
             if work and work.get("id"):
                 author_ids_resolved += len(work.get("authorships") or [])
                 if citation_count is None:
@@ -277,14 +279,14 @@ def _parse_feed_titles(text: str) -> "tuple[list, list, Optional[str], Optional[
             if t:
                 titles.append(t)
             body = e.get("summary") or e.get("description") or ""
-            bodies.append(re.sub(r"<[^>]+>", "", body).strip())
+            bodies.append(html_fragment_text(body))
             for k in ("published", "updated"):
                 if e.get(k):
                     dates.append(str(e.get(k)))
                     break
     except Exception:  # noqa: BLE001: degrade to regex
         for m in re.finditer(r"<title>(.*?)</title>", text, re.IGNORECASE | re.DOTALL):
-            t = re.sub(r"<[^>]+>", "", m.group(1)).strip()
+            t = html_fragment_text(m.group(1))
             if t:
                 titles.append(t)
     oldest = min(dates) if dates else None
@@ -367,7 +369,7 @@ def _probe_monitor(candidate: dict, fetch: dict) -> dict:
             "web_baseline_request": {"suggested_queries": _baseline_queries(titles[:10])}}
 
 
-# Frozen dispatch table; keys == MODE_VOCAB (smoke §12 asserts equality).
+# Frozen dispatch table; keys == MODE_VOCAB.
 _PROBES: "dict[str, Callable]" = {
     "STRUCTURE": _probe_structure,
     "UNWALL": _probe_unwall,

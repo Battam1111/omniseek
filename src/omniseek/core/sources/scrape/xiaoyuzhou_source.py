@@ -7,7 +7,7 @@ episodes straight from xiaoyuzhoufm.com — the Next.js page embeds the full
 episode list (title, shownotes, audio enclosure, cover, pubDate) in its
 ``__NEXT_DATA__`` JSON, so no API auth is needed.
 
-Configure via ``~/.omniseek/credentials/xiaoyuzhou.json``:
+Configure via ``<credentials>/xiaoyuzhou.json``:
     {"podcasts": [{"id": "<24-hex>", "name": "..."}]}   (id = the /podcast/<id> id)
 """
 
@@ -24,8 +24,10 @@ from urllib.parse import urlparse
 
 import anyio
 
-from omniseek.core import auth, cache, diag, http
-from omniseek.core.normalize import Document, jsonsafe, keyword_score_filter
+from omniseek.core import auth, cache, diag, http, portal
+from omniseek.core.normalize import Document, html_fragment_text, jsonsafe, keyword_score_filter, to_utc
+from omniseek import where
+from omniseek.core.sources._base import SourceBase
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +46,7 @@ DEFAULT_PODCASTS = [
     {"id": "670f3da40d2f24f28978736f", "name": "跨国串门儿计划"},
 ]
 
-auth.write_template("xiaoyuzhou", {
+auth.register_template("xiaoyuzhou", {
     "_comment": "小宇宙播客跟踪. id = xiaoyuzhoufm.com/podcast/<id> 的 24-hex id.",
     "podcasts": DEFAULT_PODCASTS,
 })
@@ -54,15 +56,6 @@ def _img(v) -> Optional[str]:
     if isinstance(v, dict):
         return v.get("picUrl") or v.get("largePicUrl") or v.get("middlePicUrl")
     return v if isinstance(v, str) and v.startswith("http") else None
-
-
-def _date(s) -> Optional[datetime]:
-    if not s:
-        return None
-    try:
-        return datetime.fromisoformat(str(s).replace("Z", "+00:00"))
-    except Exception:  # noqa: BLE001
-        return None
 
 
 def _next_data(html: str) -> dict:
@@ -75,12 +68,12 @@ def _next_data(html: str) -> dict:
         return {}
 
 
-class XiaoyuzhouAdapter:
+class XiaoyuzhouAdapter(SourceBase):
     name = "xiaoyuzhou"
     needs_credentials = False
     description = (
         "小宇宙播客：张小珺商业访谈录 / OnBoard! / 42章经 等中文 AI/科技/创投深度访谈 "
-        "(原生抓 xiaoyuzhoufm __NEXT_DATA__, 无需 RSSHub; 可配 ~/.omniseek/credentials/xiaoyuzhou.json)"
+        f"(原生抓 xiaoyuzhoufm __NEXT_DATA__, 无需 RSSHub; 可配 {where.show(where.credentials())}/xiaoyuzhou.json)"
     )
 
     def _podcasts(self) -> list[dict]:
@@ -89,32 +82,8 @@ class XiaoyuzhouAdapter:
             return creds["podcasts"]
         return DEFAULT_PODCASTS
 
-    def _fetch_podcast(self, pid: str, name: str) -> list[Document]:
-        key = cache.make_key("xiaoyuzhou", "podcast", pid)
-        cached = cache.get_docs(key)
-        if cached is not None:
-            return cached
-        try:
-            r = http.direct("GET", f"{BASE}/podcast/{pid}", headers={"User-Agent": UA}, timeout=20,
-                            follow_redirects=True)
-            pod = _next_data(r.text).get("podcast", {}) or {}
-            title = pod.get("title") or name
-            eps = pod.get("episodes") or []
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("xiaoyuzhou fetch failed for %s (%s): %s", name, pid, exc)
-            # RAISE, do not return []. One podcast failing is a PARTIAL result the caller can still
-            # use; swallowing it here made "this podcast is unreachable" identical to "this podcast
-            # published nothing", so a total outage read as an empty catalog. The two search paths
-            # collect these per podcast and decide: some docs -> return them and note the gap, no
-            # docs at all -> re-raise so the failure surfaces instead of being published as a fact.
-            raise
-        docs = [self._ep_to_doc(e, title) for e in eps if isinstance(e, dict) and e.get("eid")]
-        if docs:
-            cache.set_docs(key, docs, ttl=CACHE_TTL)
-        return docs
-
     async def _afetch_podcast(self, pid: str, name: str) -> list[Document]:
-        """Native-async twin of ``_fetch_podcast`` (mirrored line-for-line). Changes ONLY the two
+        """Async replacement of the deleted sync ``_fetch_podcast`` (11-04, async step seven; this is the only one now) (mirrored line-for-line). Changes ONLY the two
         blocking waits per the conversion pattern:
           - the per-podcast disk cache read + write -> ``anyio.to_thread.run_sync`` (SAME cache key
             ``xiaoyuzhou/podcast/<pid>``, SAME ttl), so the file IO never runs on the event loop;
@@ -127,7 +96,7 @@ class XiaoyuzhouAdapter:
         JSON walk + ``_ep_to_doc`` mapping are pure CPU and stay ON the loop, byte-identical to
         ``_fetch_podcast``."""
         key = cache.make_key("xiaoyuzhou", "podcast", pid)
-        cached = await anyio.to_thread.run_sync(cache.get_docs, key)  # disk read OFF loop
+        cached = await anyio.to_thread.run_sync(cache.get_docs, key, limiter=portal.IO_LANE)  # disk read OFF loop
         if cached is not None:
             return cached
         try:
@@ -152,13 +121,13 @@ class XiaoyuzhouAdapter:
         docs = [self._ep_to_doc(e, title) for e in eps if isinstance(e, dict) and e.get("eid")]
         if docs:
             await anyio.to_thread.run_sync(  # disk write OFF loop
-                functools.partial(cache.set_docs, key, docs, ttl=CACHE_TTL))
+                functools.partial(cache.set_docs, key, docs, ttl=CACHE_TTL), limiter=portal.IO_LANE)
         return docs
 
     def _ep_to_doc(self, e: dict, podcast_title: str) -> Document:
         eid = e.get("eid")
         body = e.get("shownotes") or e.get("description") or ""
-        content = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", body)).strip() or "(no shownotes)"
+        content = html_fragment_text(body)
         from omniseek.core import asr  # lazy: the engine name comes from asr's configured model id
         content += (f"\n\n[完整口语内容在音频里(shownotes 仅摘要)→ omniseek_transcribe 取本地 "
                     f"{asr.engine_label()} 全文转写]")
@@ -171,7 +140,7 @@ class XiaoyuzhouAdapter:
             title=(e.get("title") or "(untitled)").strip(),
             content=content,
             author=podcast_title,
-            date=_date(e.get("pubDate")),
+            date=to_utc(e.get("pubDate")),
             tags=["播客", podcast_title],
             media=[img] if img else [],
             metadata={
@@ -183,34 +152,8 @@ class XiaoyuzhouAdapter:
             },
         )
 
-    def search(self, query: str, limit: int = 10) -> list[Document]:
-        docs: list[Document] = []
-        failures: list[tuple[str, BaseException]] = []
-        for p in self._podcasts():
-            pid = p.get("id")
-            if pid:
-                name = p.get("name", pid)
-                try:
-                    docs.extend(self._fetch_podcast(pid, name))
-                except Exception as exc:  # noqa: BLE001
-                    failures.append((name, exc))
-        if failures and not docs:
-            raise failures[0][1]
-        if failures:
-            diag.note(
-                "xiaoyuzhou.partial",
-                body=f"partial results: {len(docs)} documents; "
-                f"{len(failures)} podcast fetches failed",
-                exc=failures[0][1],
-            )
-        q = (query or "").strip()
-        if q:
-            return keyword_score_filter(docs, q)[:limit]
-        docs.sort(key=lambda d: d.date or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
-        return docs[:limit]
-
     async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async twin of ``search`` (mirrors it line-for-line). The async omniseek_search fan-out
+        """Native-async replacement of the deleted sync ``search`` (11-04, S9; this is the only one now) (mirrors it line-for-line). The async omniseek_search fan-out
         awaits this DIRECTLY (no held pool thread), and the per-podcast egresses that ``search`` runs
         one after another become CONCURRENT coroutines on the one loop. Changes ONLY:
           - the per-podcast fetch loop -> ``asyncio.gather`` over ``_afetch_podcast`` (each does its
@@ -250,15 +193,15 @@ class XiaoyuzhouAdapter:
         docs.sort(key=lambda d: d.date or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
         return docs[:limit]
 
-    def fetch_url(self, url: str) -> Optional[Document]:
+    async def afetch_url(self, url: str) -> Optional[Document]:
         host = (urlparse(url).hostname or "").lower()
         if "xiaoyuzhoufm.com" not in host:
             return None
         parts = urlparse(url).path.strip("/").split("/")
         if len(parts) >= 2 and parts[0] == "episode":
             try:
-                r = http.direct("GET", url, headers={"User-Agent": UA}, timeout=20,
-                                follow_redirects=True)
+                r = await http.adirect("GET", url, headers={"User-Agent": UA}, timeout=20,
+                                       follow_redirects=True)
                 ep = _next_data(r.text).get("episode", {}) or {}
                 if ep.get("eid"):
                     pod = ep.get("podcast") or {}
@@ -267,17 +210,17 @@ class XiaoyuzhouAdapter:
                 logger.warning("xiaoyuzhou fetch_url failed for %s: %s", url, exc)
         return None
 
-    def health_check(self) -> tuple[Optional[bool], str]:
+    async def ahealth_check(self) -> tuple[Optional[bool], str]:
         pods = self._podcasts()
         if not pods:
             return False, "no podcasts configured"
         first = pods[0]
-        # SAME key _fetch_podcast reads: while the page is cached, it answers from the cache and asks
+        # SAME key _afetch_podcast reads: while the page is cached, it answers from the cache and asks
         # xiaoyuzhou nothing, so this check verifies nothing (None).
-        if cache.get_docs(cache.make_key("xiaoyuzhou", "podcast", first.get("id"))) is not None:
+        if await cache.aget_docs(cache.make_key("xiaoyuzhou", "podcast", first.get("id"))) is not None:
             return None, f"not probed ({first.get('name', '?')} is still cached; the site is asked again when it expires)"
         try:
-            docs = self._fetch_podcast(first.get("id"), first.get("name", "?"))
+            docs = await self._afetch_podcast(first.get("id"), first.get("name", "?"))
             if docs:
                 return True, f"OK ({len(pods)} podcasts; first returned {len(docs)} episodes)"
             return False, f"0 episodes for {first.get('name')}: page structure changed?"

@@ -34,7 +34,7 @@ from typing import Optional
 from urllib.parse import urlparse
 
 from omniseek.core import _github
-from omniseek.core.normalize import Document, jsonsafe, mk_signal
+from omniseek.core.normalize import Document, jsonsafe, mk_signal, to_utc
 from omniseek.core.sources.api._base import BaseAPIAdapter
 
 logger = logging.getLogger(__name__)
@@ -56,29 +56,8 @@ class GitHubTrendingAdapter(BaseAPIAdapter):
     cache_ttl = 1800
     search_label = "search"
 
-    def _raw_fetch(self, query: str, limit: int) -> list:
-        # Constrain to repos pushed in the last 30 days. This is the "trending"
-        # signal — we want active not stale. The caller can refine via query.
-        days_back = 30
-        pushed_filter = (datetime.now(timezone.utc) - timedelta(days=days_back)).strftime("%Y-%m-%d")
-        q = f"{query} pushed:>{pushed_filter}"
-
-        data = _github.get_json(
-            "/search/repositories",
-            params={
-                "q": q,
-                "sort": "stars",
-                "order": "desc",
-                "per_page": min(limit, 30),
-            },
-            timeout=TIMEOUT,
-        )
-        if data is None:
-            return []
-        return data.get("items") or []
-
     async def _araw_fetch(self, query: str, limit: int) -> list:
-        """Async twin of _raw_fetch: BYTE-FAITHFUL mirror — same 30-day pushed filter, same q/params,
+        """Async replacement of the deleted sync ``_raw_fetch`` (11-04, S9; this is the only one now): BYTE-FAITHFUL mirror — same 30-day pushed filter, same q/params,
         same None->[] contract; ONLY the shared _github egress is swapped (_github.get_json -> await
         _github.aget_json, which shares the SAME breaker / rate pacer / token auth). Single get_json
         call, so nothing else changes."""
@@ -102,13 +81,7 @@ class GitHubTrendingAdapter(BaseAPIAdapter):
             return []
         return data.get("items") or []
 
-    async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async twin of search -> AsyncSearchCapable. Shares the base async cache round-trip
-        (_aapi_search: same cache key, per-record _to_document, rank_locally=False, cache-only-if-docs);
-        egress via _araw_fetch; mapping via the SAME pure-CPU _to_document (byte-identical to search)."""
-        return await self._aapi_search(query, limit, araw_fetch=lambda: self._araw_fetch(query, limit))
-
-    def fetch_url(self, url: str) -> Optional[Document]:
+    async def afetch_url(self, url: str) -> Optional[Document]:
         host = (urlparse(url).hostname or "").lower()
         if host != "github.com":
             # Don't claim raw.githubusercontent.com URLs (handled by github_awesome_phd)
@@ -121,7 +94,7 @@ class GitHubTrendingAdapter(BaseAPIAdapter):
         if len(parts) > 2 and parts[2] in ("pulls", "issues", "actions", "wiki", "blob", "tree"):
             return None
         owner, repo_name = parts[0], parts[1]
-        repo = _github.get_json(
+        repo = await _github.aget_json(
             f"/repos/{owner}/{repo_name}",
             timeout=TIMEOUT,
         )
@@ -129,15 +102,15 @@ class GitHubTrendingAdapter(BaseAPIAdapter):
             return None
         return self._to_document(repo)
 
-    def health_check(self) -> tuple[Optional[bool], str]:
+    async def ahealth_check(self) -> tuple[Optional[bool], str]:
         # Delegate to the shared single-flight /rate_limit probe (one upstream call for all three
         # GitHub-backed sources, token-authenticated, 60s-cached) instead of an own unauth probe.
-        return _github.health()
+        return await _github.ahealth()
 
     def _to_document(self, repo: dict) -> Optional[Document]:
         full_name = repo.get("full_name") or repo.get("name") or "(unnamed)"
         url = repo.get("html_url") or f"https://github.com/{full_name}"
-        description = repo.get("description") or "(no description)"
+        description = repo.get("description") or ""
         stars = repo.get("stargazers_count") or 0
         forks = repo.get("forks_count") or 0
         language = repo.get("language") or ""
@@ -145,12 +118,7 @@ class GitHubTrendingAdapter(BaseAPIAdapter):
         owner = (repo.get("owner") or {}).get("login")
 
         updated_at = repo.get("pushed_at") or repo.get("updated_at")
-        date = None
-        if updated_at:
-            try:
-                date = datetime.fromisoformat(updated_at.replace("Z", "+00:00"))
-            except (ValueError, TypeError):
-                pass
+        date = to_utc(updated_at)
 
         tags = list(topics)[:10]
         if language and language not in tags:

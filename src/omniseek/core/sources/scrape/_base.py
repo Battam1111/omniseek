@@ -6,27 +6,31 @@ endpoint (a public API like Academia Stack Exchange, or a query-able HTML/JSON
 search page) and parse the response. Roughly a dozen scrape adapters share the
 identical ritual:
 
-    def search(self, query, limit):
+    async def asearch(self, query, limit):
         key = cache.make_key(name, "search", query, limit)
-        cached = cache.get_docs(key)
+        cached = await <the cache, off the loop>
         if cached is not None: return cached
-        raw = <fetch the query-specific URL/API>
+        raw = await <fetch the query-specific URL/API>
         if raw is None: return []
         docs = [<parse each item> ...]
-        cache.set_docs(key, docs, ttl)
+        <cache.set_docs(key, docs, ttl), off the loop>
         return docs
 
 This base owns that mechanism (cache check / build / atomic set_docs / optional
 shared-BM25 rank / self-registration); a concrete adapter declares a few class
 attributes and fills TWO hooks:
 
-    _raw_fetch(query, limit) -> Any | None     # the network call → parsed payload
+    async _araw_fetch(query, limit) -> Any | None   # the network call → parsed payload
     _to_documents(raw, query, limit) -> list[Document]   # payload → docs
+
+The search is written once, async (``asearch`` here); the sync ``search`` for scripts is
+``sources._base.SourceBase``'s, generated from it. A source whose fetch can only block writes
+``def _raw_fetch`` instead of ``_araw_fetch`` and the base runs it on a worker thread.
 
 It is a CONVENIENCE, never a mandate. The Protocol (duck-typed
 ``fetcher.SourceAdapter``) stays the contract; a source with bespoke needs
 (multi-host fan-out, signed requests, GBK search encoding, anti-bot headers)
-keeps writing search/fetch_url/health_check by hand. This base only serves the
+keeps writing asearch/afetch_url/ahealth_check by hand. This base only serves the
 regular, single-endpoint majority.
 
 Design rules it obeys (the moat):
@@ -37,21 +41,22 @@ Design rules it obeys (the moat):
     a source whose endpoint already returns server-relevance order (e.g. an API
     with ``sort=relevance``) stays byte-identical to its hand-written form.
   * ``explicit_only`` self-declaration, atomic cache writes (via cache.set_docs),
-    and the failure→empty contract (``_raw_fetch`` returns None → ``search`` →
+    and the failure→empty contract (the fetch hook returns None → ``asearch`` →
     ``[]``) all pass straight through.
 """
 
 from __future__ import annotations
 
 import functools
-import inspect
+import importlib
 import logging
 from typing import Any, Optional
 
 import anyio
 
-from omniseek.core import cache, diag, relevance
+from omniseek.core import cache, diag, fetcher, portal, relevance
 from omniseek.core.normalize import Document, schema_extract
+from omniseek.core.sources._base import SourceBase, ablocking, aparse
 
 logger = logging.getLogger(__name__)
 _SCRAPE_UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
@@ -64,7 +69,26 @@ _SCRAPE_UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.3
 _SCRAPE_ACCEPT = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
 
 
-class BaseScrapeAdapter:
+def _adapter_to_documents(module: str, name: str, raw: Any, query: str, limit: int) -> list[Document]:
+    """``<source name>._to_documents(raw, query, limit)`` in a worker of the process lane: importing the
+    source's module registers it in the worker's own registry, so the source is found by name and
+    nothing but its module, its name and the raw payload is pickled."""
+    importlib.import_module(module)
+    adapter = fetcher.get_adapter(name)
+    if adapter is None:
+        raise LookupError(f"source {name!r} is not registered by {module} in the process-lane worker")
+    return adapter._to_documents(raw, query, limit)
+
+
+def _answer_size(raw: Any, counted: int) -> int:
+    """The answer's size for ``aparse``: the bytes the fetch step read through ``omniseek.core.http``; a
+    fetch that read none that way (its own client) but hands back text or bytes counts their length."""
+    if counted:
+        return counted
+    return len(raw) if isinstance(raw, (str, bytes, bytearray)) else 0
+
+
+class BaseScrapeAdapter(SourceBase):
     """Template-method base for query-endpoint HTML/JSON scrape adapters.
 
     Subclass and set the class attributes, then implement the two hooks.
@@ -83,15 +107,26 @@ class BaseScrapeAdapter:
                                    hand-written form; set True to score locally like RSS)
 
     Hooks (override):
-        _raw_fetch(query, limit) -> Any | None
+        async _araw_fetch(query, limit) -> Any | None
             Do the network call and return a parsed payload (dict / list / str /
             BeautifulSoup — whatever ``_to_documents`` wants). Return ``None`` on
             ANY failure: the base turns that into ``[]`` (the adapter contract).
-            Default uses ``http.get_json(search_url)`` when ``search_url`` is set.
+            Default uses ``http.aget_json(search_url)`` when ``search_url`` is set.
+            A fetch that can only block: ``def _raw_fetch(query, limit)`` instead
+            (run, with ``_to_documents``, on a worker thread).
+        async _ato_documents(raw, query, limit) -> list[Document]   (optional)
+            Use instead of ``_to_documents`` when building the documents needs more
+            requests (per-record egress).
         _to_documents(raw, query, limit) -> list[Document]
             Convert the payload into Documents. Slice to ``limit`` here if the
             payload can over-return (the base does NOT re-slice, to preserve each
             source's exact "take first N items" semantics).
+            The async path runs it through ``sources._base.aparse`` (ASYNC-CORE-DESIGN.md
+            D14): on the loop for a small answer, in a worker process for one over
+            ``PARSE_INLINE_MAX_BYTES`` (the bytes the fetch hook read). The worker finds
+            this source by ``name`` in its own registry, so the payload must pickle
+            (plain data, not a parser object) and the method must not lean on state
+            set at runtime.
     """
 
     # ── identity / contract ────────────────────────────────────────────────
@@ -108,16 +143,24 @@ class BaseScrapeAdapter:
     rank: bool = False
     # Optional convenience for the common "GET a templated search URL → JSON" case:
     # set ``search_url`` to a format string with a ``{query}`` (and optionally
-    # ``{limit}``) placeholder and the default ``_raw_fetch`` will GET+parse it.
+    # ``{limit}``) placeholder and the default ``_araw_fetch`` will GET+parse it.
     search_url: Optional[str] = None
     # Declarative HTML extraction (force-multiplier: a source becomes DATA, not code). Set
     # ``extract_schema`` (see normalize.schema_extract: {item_selector, fields}) + ``fetch_html=True``
-    # (default _raw_fetch returns the page text instead of get_json) + ``base_url`` (relative-URL
+    # (default _araw_fetch returns the page text instead of the JSON) + ``base_url`` (relative-URL
     # join) and the default _to_documents builds docs with ZERO per-source parsing. Default off ⇒
     # every existing hand-written scrape adapter is byte-identical.
     extract_schema: Optional[dict] = None
     fetch_html: bool = False
     base_url: str = ""
+    # QUERY-INDEPENDENT FETCH (EYE-GATE-FIX A, 2026-10-20). A source whose network fetch is the same
+    # whatever the query (v2ex's node listings: the query only scores the merged topics locally) sets
+    # this True. Its cache key then holds only what it fetches (``_fetch_identity``: the URLs and
+    # parameters), never the query or the limit, so one fetch serves every query until the cache runs
+    # out; the fetch hook / ``_to_documents`` get an empty query and must not slice to ``limit``;
+    # ``rank`` scores the cached documents per query. Before, v2ex keyed by query and re-fetched the
+    # same six listings for every new query: 375 of the 1,516 gate refusals measured over 4.2 days.
+    query_independent: bool = False
 
     # --------------------------------------------------------- auto-registration
     def __init_subclass__(cls, *, register: bool = True, **kwargs) -> None:
@@ -131,32 +174,34 @@ class BaseScrapeAdapter:
         from omniseek.core.fetcher import register_adapter  # local: avoid package-init cycle
         register_adapter(cls())
 
-    # ── hooks ──────────────────────────────────────────────────────────────
-    def _raw_fetch(self, query: str, limit: int) -> Optional[Any]:
-        """Network call → parsed payload (None on failure). Default: GET+JSON of
-        ``search_url`` (URL-encoding the query). Override for anything else
-        (POST, HTML, params dict, multi-step). Returning None ⇒ search ⇒ []."""
+    def _search_target(self, query: str, limit: int) -> str:
+        """``search_url`` filled with the URL-encoded query and the limit (the default hooks' URL)."""
         if not self.search_url:
             raise NotImplementedError(
-                f"{type(self).__name__} must set `search_url` or override `_raw_fetch`"
+                f"{type(self).__name__} must set `search_url` or override `_araw_fetch`"
             )
         from urllib.parse import quote
-        url = self.search_url.format(query=quote(query), limit=limit)
-        if self.fetch_html:  # declarative-HTML source: fetch the page text for schema_extract
-            from omniseek.core import http
+        return self.search_url.format(query=quote(query), limit=limit)
+
+    async def _araw_fetch(self, query: str, limit: int) -> Optional[Any]:
+        """Network call -> parsed payload (None on failure). Default: GET of ``search_url`` (the query
+        URL-encoded), its page text when ``fetch_html`` (for ``extract_schema``), else its JSON. Override
+        for anything else (POST, params, several steps). A source whose fetch can only BLOCK (a library
+        with no async client) defines a plain ``def _raw_fetch(query, limit)`` instead and no
+        ``_araw_fetch``: the base then runs that hook and the source's ``_to_documents`` on a worker
+        thread (``_afetch`` / ``_abuild``)."""
+        url = self._search_target(query, limit)
+        from omniseek.core import http
+        if self.fetch_html:
             try:
-                # A declared upstream's gates apply here too, on every hop (http.direct: a no-op for an
-                # undeclared host), so a declarative-HTML row pointed at a rate-limited host cannot
-                # bypass them.
-                r = http.direct("GET", url, timeout=20, follow_redirects=True,
-                                headers={"User-Agent": _SCRAPE_UA, "Accept": _SCRAPE_ACCEPT})
+                r = await http.adirect("GET", url, timeout=20, follow_redirects=True,
+                                       headers={"User-Agent": _SCRAPE_UA, "Accept": _SCRAPE_ACCEPT})
                 r.raise_for_status()
                 return r.text
             except Exception as exc:  # noqa: BLE001 — failure → None → [] (the contract)
                 logger.warning("%s: html fetch failed: %s", self.name, exc)
                 return None
-        from omniseek.core import http
-        return http.get_json(url)
+        return await http.aget_json(url)
 
     def _to_documents(self, raw: Any, query: str, limit: int) -> list[Document]:
         """Parsed payload → Documents. Override, OR set ``extract_schema`` for the
@@ -192,55 +237,99 @@ class BaseScrapeAdapter:
         return docs
 
     # ── mechanism (the base owns this; subclasses rarely touch it) ──────────
-    def search(self, query: str, limit: int = 10) -> list[Document]:
+    def _fetch_identity(self) -> tuple:
+        """What a query-independent fetch asks for (its URLs and parameters): the whole cache key of
+        such a source besides its name. Override with the endpoint list; the default is ``search_url``."""
+        return (self.search_url or "",)
+
+    def _fetch_ttl(self) -> float:
+        """The cache time of a query-independent fetch: ``cache_ttl``, never shorter than the longest
+        Crawl-delay of the hosts it asks (a cache that runs out first only buys a refused request)."""
+        from omniseek.core import upstreams
+        urls = [p for p in self._fetch_identity() if isinstance(p, str) and "://" in p]
+        return upstreams.cache_ttl_for(self.cache_ttl, urls)
+
+    def _query_independent_key(self) -> str:
+        return cache.make_key(self.name, "fetch", *self._fetch_identity())
+
+    def _scored(self, docs: list[Document], query: str) -> list[Document]:
+        return self._rank(docs, query) if self.rank and docs else docs
+
+    async def asearch(self, query: str, limit: int = 10) -> list[Document]:
+        """The search, written once: ``_afetch`` then ``_abuild`` through ``_asearch_via``. ``search``
+        (the sync entry for scripts) is SourceBase's, generated from this."""
+        return await self._asearch_via(query, limit)
+
+    def _blocking(self) -> bool:
+        """The source's fetch can only block: it defines ``_raw_fetch`` and does not override
+        ``_araw_fetch`` (an overridden ``_araw_fetch`` always wins, so a leftover sync hook is dead code,
+        never the one that runs)."""
+        return hasattr(self, "_raw_fetch") and type(self)._araw_fetch is BaseScrapeAdapter._araw_fetch
+
+    async def _afetch(self, query: str, limit: int) -> tuple[Optional[Any], int]:
+        """The fetch hook and the bytes it read (``http.count_bytes``): a blocking ``_raw_fetch`` on a
+        worker thread (see ``_blocking``), else ``_araw_fetch`` on the loop."""
+        from omniseek.core import http
+        with http.count_bytes() as got:
+            if self._blocking():
+                raw = await ablocking(self._raw_fetch, query, limit)
+            else:
+                raw = await self._araw_fetch(query, limit)
+        return raw, _answer_size(raw, got[0])
+
+    async def _aparse(self, raw: Any, query: str, limit: int, size: int) -> list[Document]:
+        """``_to_documents`` through ``aparse``: here on the loop for a small answer, in the process
+        lane for a large one (the worker finds this source by ``name``, see ``_adapter_to_documents``)."""
+        return await aparse(size, self._to_documents, raw, query, limit,
+                            lane=functools.partial(_adapter_to_documents, type(self).__module__, self.name))
+
+    async def _abuild(self, raw: Any, query: str, limit: int, size: int) -> list[Document]:
+        """The build hook: ``_ato_documents`` when the source assembles with further requests (Stack
+        Exchange fetching answers), else ``_to_documents`` through ``_aparse`` (on the worker thread for
+        a source with a blocking ``_raw_fetch``, where its whole search ran before)."""
+        if self._blocking():
+            return await ablocking(self._to_documents, raw, query, limit)
+        ato = getattr(self, "_ato_documents", None)
+        if ato is not None:
+            return await ato(raw, query, limit)
+        return await self._aparse(raw, query, limit, size)
+
+    async def _asearch_via(self, query: str, limit: int) -> list[Document]:
+        """The mechanism (cache round-trip + opt-in rank): ``_afetch`` (off-loop NETWORK) then
+        ``_abuild``. A query-independent source fetches with an empty query and parses through
+        ``_aparse`` likewise. Off-loop: cache get/set (disk IO) and the parse of a large answer. On loop:
+        `_rank` (shared BM25, pure CPU)."""
+        if self.query_independent:
+            key = self._query_independent_key()
+            cached = await cache.aget_docs(key)                        # disk read OFF loop
+            if cached is None:
+                raw, size = await self._afetch("", limit)
+                if raw is None:
+                    return []
+                try:
+                    cached = await self._aparse(raw, "", limit, size) or []
+                except Exception as exc:  # noqa: BLE001 -- malformed payload -> [] (mirror search)
+                    logger.warning("%s: async _to_documents failed: %s", self.name, exc)
+                    return []
+                await anyio.to_thread.run_sync(
+                    functools.partial(cache.set_docs, key, cached, ttl=self._fetch_ttl()), limiter=portal.IO_LANE)
+            return self._scored(cached, query)                         # pure CPU, on loop
         key = cache.make_key(self.name, "search", query, limit)
-        cached = cache.get_docs(key)
+        cached = await cache.aget_docs(key)                            # disk read OFF loop
         if cached is not None:
             return cached
-
-        raw = self._raw_fetch(query, limit)
-        if raw is None:
-            return []  # failure → empty, the adapter contract (don't cache a miss)
-
-        try:
-            docs = self._to_documents(raw, query, limit) or []
-        except Exception as exc:  # noqa: BLE001 — a malformed payload degrades to []
-            logger.warning("%s: _to_documents failed: %s", self.name, exc)
-            return []
-
-        if self.rank and docs:
-            docs = self._rank(docs, query)
-
-        cache.set_docs(key, docs, ttl=self.cache_ttl)
-        return docs
-
-    async def _asearch_via(self, query, limit, afetch, abuild):
-        """Async twin of `search`'s mechanism (cache round-trip + opt-in rank) for a subclass whose
-        egress has gone NATIVE async. `afetch()` -> raw|None (async, off-loop NETWORK). `abuild(raw)`
-        -> list[Document]; POLYMORPHIC: if it returns an awaitable it is awaited (an async
-        ASSEMBLY twin that egresses per-record, e.g. Stack Exchange fetching answers), else it is used
-        directly (a PURE-CPU `_to_documents` that only parses/maps -- the common single-call case, run on
-        the loop). This lets every A-tier source pass its sync `_to_documents` with a one-line `asearch`.
-        This is a `_`-prefixed HELPER, NOT `asearch`, so the base is NOT flagged AsyncSearchCapable (only
-        a subclass that DEFINES `asearch` -> calls this is). Off-loop: cache get/set (disk IO). On loop:
-        `_rank` (shared BM25, pure CPU). BEHAVIOR-IDENTICAL to `search` given identical egress."""
-        key = cache.make_key(self.name, "search", query, limit)
-        cached = await anyio.to_thread.run_sync(cache.get_docs, key)   # disk read OFF loop
-        if cached is not None:
-            return cached
-        raw = await afetch()
+        raw, size = await self._afetch(query, limit)
         if raw is None:
             return []                                                  # failure -> [], NOT cached (mirror)
         try:
-            built = abuild(raw)                                        # sync _to_documents OR async twin
-            docs = (await built if inspect.isawaitable(built) else built) or []
+            docs = await self._abuild(raw, query, limit, size) or []
         except Exception as exc:  # noqa: BLE001 -- malformed payload -> [] (mirror search)
             logger.warning("%s: async _to_documents failed: %s", self.name, exc)
             return []
         if self.rank and docs:
             docs = self._rank(docs, query)                             # pure CPU, on loop
         await anyio.to_thread.run_sync(                                # disk write OFF loop
-            functools.partial(cache.set_docs, key, docs, ttl=self.cache_ttl))
+            functools.partial(cache.set_docs, key, docs, ttl=self.cache_ttl), limiter=portal.IO_LANE)
         return docs
 
     @staticmethod
@@ -255,28 +344,50 @@ class BaseScrapeAdapter:
         scored.sort(key=lambda x: x[0], reverse=True)
         return [d for _, d in scored]
 
-    def fetch_url(self, url: str) -> Optional[Document]:
+    # ── a query-independent page inside a query-dependent source (EYE-GATE-FIX A) ──────────────
+    def _url_key(self, url: str, params: Optional[dict]) -> str:
+        return cache.make_key(self.name, "url", url, *sorted(f"{k}={v}" for k, v in (params or {}).items()))
+
+    async def _aurl_json(self, url: str, params: Optional[dict] = None, *, timeout: int = 15) -> Optional[Any]:
+        """GET+JSON of ``url`` cached by the URL and its parameters (not by any query), one fetch per key
+        at a time, for a page that is the same whatever the query (data.gov.sg's dataset listing). None
+        on failure (not cached)."""
+        from omniseek.core import http, upstreams
+        key = self._url_key(url, params)
+        hit = await cache.aget_once(key)
+        if hit is not None:
+            return hit
+        raw = await http.aget_json(url, params=params, timeout=timeout)
+        if raw is not None:
+            await anyio.to_thread.run_sync(functools.partial(
+                cache.set, key, raw, ttl=upstreams.cache_ttl_for(self.cache_ttl, [url])), limiter=portal.IO_LANE)
+        return raw
+
+    async def afetch_url(self, url: str) -> Optional[Document]:
         """Default: this source does not claim arbitrary URLs. Override to claim a
-        host + build a doc from a single page (the academia_se / pypi pattern)."""
+        host + build a doc from a single page (the academia_se / pypi pattern). The
+        override is ``async def afetch_url``, the source's only URL reader (there is no
+        sync ``fetch_url``; see ``fetcher.SourceAdapter.afetch_url``)."""
         return None
 
-    def _health_fetch(self, query: str, *, fallback: str) -> tuple[Any, str]:
-        """``(raw, why)``: one ``_raw_fetch(query, 1)`` under an armed failure capture. When ``raw`` is
-        None, ``why`` is the last egress failure the shared helpers noted (``HTTP 504: <body>``, or the
-        exception), else ``fallback``; an exception from ``_raw_fetch`` propagates."""
+    async def _ahealth_fetch(self, query: str, *, fallback: str) -> tuple[Any, str]:
+        """``(raw, why)``: one fetch (``_afetch(query, 1)``, the source's own fetch hook) under an armed
+        failure capture. When ``raw`` is None, ``why`` is the last egress failure the shared helpers
+        noted (``HTTP 504: <body>``, or the exception), else ``fallback``; an exception from the fetch
+        propagates."""
         diag.enable()
         try:
-            raw = self._raw_fetch(query, 1)
+            raw, _size = await self._afetch(query, 1)
         finally:
             captures = diag.drain()
         return raw, ("" if raw is not None else diag.failure_reason(captures, fallback=fallback))
 
-    def health_check(self) -> tuple[bool, str]:
-        """Default probe: a cheap ``_raw_fetch`` with a trivial query proves the
+    async def ahealth_check(self) -> tuple[bool, str]:
+        """Default probe: a cheap fetch with a trivial query proves the
         endpoint answers. Override for a lighter/different liveness signal (e.g. an
         API ``/info`` endpoint or a quota readout)."""
         try:
-            raw, why = self._health_fetch("test", fallback="no payload without an observed egress failure")
+            raw, why = await self._ahealth_fetch("test", fallback="no payload without an observed egress failure")
         except Exception as exc:  # noqa: BLE001
             return False, f"{type(exc).__name__}: {str(exc)[:80]}"
         if raw is None:

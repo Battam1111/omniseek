@@ -24,13 +24,13 @@ LIMITS / RISK (flagged prominently):
   * Third-party ToS is gray (the operator approved the open stance); LetPub is a commercial site and the
     unauthenticated table is the free tier. STABILITY is the real risk: the HTML layout, the free-tier
     year cap, and the field order are LetPub's to change without notice. If the two-row table shape
-    shifts, _parse_grants yields nothing and search degrades to [] (the contract) — a smoke-fixture
-    regression + the source-audit sentinel will catch it.
+    shifts, _parse_grants yields nothing and search degrades to [] (the contract) — the source-audit sentinel
+    will catch it.
   * FREE-TIER YEAR CAP: any search whose range reaches 2022+ triggers a login wall (verified live
     2026-07-10). So we hard-cap endTime at _MAX_YEAR (2021); post-2021 grants are NOT reachable here.
     Bump _MAX_YEAR when LetPub opens a newer year to the free tier (re-verify against the wall first).
 
-explicit_only: a named-query drill (like nserc_awards / cninfo), kept out of the broad sweep.
+explicit_only: a named-query drill (like sshrc_awards / cninfo), kept out of the broad sweep.
 Verified live 2026-07-10: keyword 自然语言处理 (1997-2021) -> 654 pages, rows parse clean.
 """
 
@@ -47,6 +47,7 @@ from bs4 import BeautifulSoup
 
 from omniseek.core import http
 from omniseek.core.normalize import Document
+from omniseek.core.sources._base import aparse
 from omniseek.core.sources.scrape._base import BaseScrapeAdapter
 
 logger = logging.getLogger(__name__)
@@ -62,10 +63,10 @@ _HEADERS = ("负责人", "单位", "金额", "项目编号", "项目类型", "�
 # exposes NO form-POST->text leaf (its public async leaves are aget_json / aget_text (GET) and
 # apost_json (a JSON body -> parsed JSON) — none can POST x-www-form-urlencoded data and return HTML
 # text); this source's SYNC path went RAW httpx.post for exactly that reason, so its async twin keeps
-# its OWN client — lazy, double-checked-lock like _openalex._aget_client / nserc_awards._aget_client —
+# its OWN client — lazy, double-checked-lock like _openalex._aget_client —
 # with the SAME follow_redirects / timeout as the sync httpx.post it mirrors (the per-request headers,
 # incl. the Chrome UA, are passed in _afetch_page exactly as _fetch_page does). Only asearch awaits it;
-# the sync search is byte-identical. Same posture as nserc_awards' own client: a fixed public host
+# the sync search is byte-identical. A fixed public host
 # (letpub.com.cn) with the query in the POST body (not the URL), so no SSRF surface is opened.
 _aclient: Optional["httpx.AsyncClient"] = None
 _aclient_lock = threading.Lock()  # construction is sync (no await); double-check like http._aget_client
@@ -193,31 +194,8 @@ class NSFCAwardsAdapter(BaseScrapeAdapter):
     _PER_PAGE = 10     # LetPub fixes 10 records per result page
     _MAX_PAGES = 5     # cap the page walk (50 records) — plenty for a named drill; be a polite client
 
-    def _fetch_page(self, query: str, page: int) -> Optional[str]:
-        url = f"{_SEARCH_URL}?mode=advanced&datakind=list&currentpage={page}"
-        data = {
-            "page": "", "name": query, "person": "", "no": "", "company": "",
-            "addcomment_s1": "", "addcomment_s2": "", "addcomment_s3": "", "addcomment_s4": "",
-            "money1": "", "money2": "", "startTime": str(self._MIN_YEAR),
-            "endTime": str(self._MAX_YEAR), "province_main": "", "subcategory": "",
-            "searchsubmit": "true",
-        }
-        headers = {
-            "User-Agent": _UA, "X-Requested-With": "XMLHttpRequest",
-            "Referer": _PORTAL_URL,
-            "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
-        }
-        try:
-            r = http.direct("POST", url, data=data, headers=headers, timeout=30,
-                            follow_redirects=True)
-            r.raise_for_status()
-            return r.text
-        except Exception as exc:  # noqa: BLE001 — failure -> None -> [] (the adapter contract)
-            logger.warning("nsfc_awards: page %d fetch failed: %s", page, exc)
-            return None
-
     async def _afetch_page(self, query: str, page: int) -> Optional[str]:
-        # Async twin of _fetch_page: byte-faithful mirror (same url / form data / headers / timeout,
+        # Async replacement of the deleted sync ``_fetch_page`` (11-04, S9; this is the only one now): byte-faithful mirror (same url / form data / headers / timeout,
         # and follow_redirects carried on the client). Only the RAW httpx.post egress swaps to the
         # module-level AsyncClient (see _aget_client above for why this source keeps its own client,
         # not a shared http leaf). The data + headers dicts are duplicated inline (not extracted to a
@@ -243,24 +221,8 @@ class NSFCAwardsAdapter(BaseScrapeAdapter):
             logger.warning("nsfc_awards: page %d fetch failed: %s", page, exc)
             return None
 
-    def _raw_fetch(self, query: str, limit: int) -> Optional[list[str]]:
-        q = (query or "").strip()
-        if not q:
-            return None  # this is a keyword drill: an empty query has nothing to match
-        pages = max(1, min(self._MAX_PAGES, math.ceil(limit / self._PER_PAGE)))
-        htmls: list[str] = []
-        for p in range(1, pages + 1):
-            h = self._fetch_page(q, p)
-            if h is None:
-                break
-            htmls.append(h)
-            # stop early on the last page (fewer than a full page of grants parsed)
-            if len(_parse_grants(h)) < self._PER_PAGE:
-                break
-        return htmls or None
-
     async def _araw_fetch(self, query: str, limit: int) -> Optional[list[str]]:
-        # Async twin of _raw_fetch: same page-count math, same sequential page walk with the SAME
+        # Async replacement of the deleted sync ``_raw_fetch`` (11-04, S9; this is the only one now): same page-count math, same sequential page walk with the SAME
         # early-break on a short page (fewer than a full page of grants parsed); pages are awaited in
         # order (not gathered) because the break depends on each page's parse. _parse_grants is pure
         # CPU on the loop (a small HTML fragment), byte-identical to the sync path.
@@ -279,17 +241,6 @@ class NSFCAwardsAdapter(BaseScrapeAdapter):
                 break
         return htmls or None
 
-    async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async twin of BaseScrapeAdapter.search -> AsyncSearchCapable (the S4a fan-out awaits
-        this directly; the page walk costs a COROUTINE, not a held pool thread). Shares the base async
-        cache round-trip (_asearch_via: SAME cache key + cache_ttl, off-loop disk IO, rank off here
-        since rank=False); egress via the async _araw_fetch page walk; mapping via the SAME pure-CPU
-        _to_documents -> byte-identical to search."""
-        return await self._asearch_via(
-            query, limit,
-            afetch=lambda: self._araw_fetch(query, limit),
-            abuild=lambda raw: self._to_documents(raw, query, limit))
-
     def _to_documents(self, raw: list[str], query: str, limit: int) -> list[Document]:
         docs: list[Document] = []
         seen: set[str] = set()
@@ -304,9 +255,9 @@ class NSFCAwardsAdapter(BaseScrapeAdapter):
                     return docs
         return docs
 
-    def health_check(self) -> tuple[bool, str]:
-        raw = self._raw_fetch("机器学习", 1)
+    async def ahealth_check(self) -> tuple[bool, str]:
+        raw, _size = await self._afetch("机器学习", 1)
         if not raw:
             return False, "fetch failed / blocked"
-        n = len(_parse_grants(raw[0]))
+        n = len(await aparse(len(raw[0]), _parse_grants, raw[0]))
         return (n > 0), f"OK ({n} grants on page 1)" if n else "no grants parsed (layout changed?)"

@@ -2,163 +2,193 @@
 
 One endpoint carries what the scattered leaderboards could not give us cleanly
 (verified 2026-06-10: LiveBench site is a JS shell, SWE-bench data needs
-repo assembly): 500+ models with AA intelligence / coding / math indices,
-benchmark scores (GPQA / AIME-25 / HLE / LiveCodeBench / MMLU-Pro / IFBench),
-per-1M-token pricing and median speed/TTFT, each with creator + release date.
+repo assembly): 500+ models with the AA Intelligence Index and the six AA
+Capability Indexes, per-1M-token pricing and median speed/TTFT, each with
+creator + release date.
 MODE: STRUCTURE (queryable current scores) + MONITOR (source_id = model slug,
 so every newly listed model surfaces as a new item in the watchtower).
 
+2026-11-06: Artificial Analysis retired the legacy /api/v2/data/* endpoints on
+2026-11-04 23:59:59 GMT (they answer 410 Gone; migration guide
+https://artificialanalysis.ai/data-api/migrate-v2-data). The source now reads the
+Free replacement /api/v2/language/models/free (same key, same x-api-key header):
+it is paginated (``page``, ``pagination.has_more``), the speed/TTFT fields moved
+under ``performance``, and the Free shape no longer carries the per-benchmark
+scores (GPQA / AIME-25 / HLE / LiveCodeBench / MMLU-Pro / IFBench, Pro tier only)
+nor the Math Index; the Coding / Agentic indexes are always null (no longer
+published). Field reference: https://artificialanalysis.ai/api/v2/openapi
+(schema FreeModelData).
+
 Data by Artificial Analysis (https://artificialanalysis.ai), free API key,
-attribution required. Key: ~/.omniseek/credentials/artificial_analysis.json
-{"api_key": "..."}. explicit_only: the free tier is rate-limited, so this is a
-named lookup (the full list is cached; local filtering costs no API calls).
+attribution required. Key: <credentials>/artificial_analysis.json
+{"api_key": "..."}. explicit_only: the free tier is rate-limited (100 requests
+per 24h window), so this is a named lookup (the full list is cached; local
+filtering costs no API calls).
+
+2026-11-07 (LLM-LB-PROBE): a failed read of the list is no longer an empty list. ``_amodels`` raises
+``ModelsUnavailable`` with what the API answered (HTTP status and body, e.g. the 410 Gone of the
+retired endpoint, which read for two days as "0 models (key invalid / API down)"), so a search
+reports the source as errored with that reason and the health check reports it. The health check
+always reads the list from the API (``_amodels(fresh=True)``) and rewrites the cache: the recall
+ingest kept the cache warm at every health round (ingest at :06 of 01/07/13/19h, health at :45 of
+03/09/15/21h, TTL 6h), so the check never asked the API and a recovered source kept its failure
+streak. One read is the 4 pages of the list; the health round's read refills the cache the next
+ingest then reads, so the daily request count stays where it was. A 429 is not verified (None) with
+the time the quota resets (``X-RateLimit-Reset`` / ``Retry-After``).
 """
 
 from __future__ import annotations
 
+import datetime
 import functools
 import logging
-from datetime import datetime, timezone
+import time
 from typing import Optional
 from urllib.parse import urlparse
 
 import anyio
 
-from omniseek.core import auth, cache, diag, http, upstreams
-from omniseek.core.normalize import Document
+from omniseek.core import _probe, auth, cache, diag, http, portal, upstreams
+from omniseek.core.normalize import Document, to_utc
+from omniseek import where
+from omniseek.core.sources._base import SourceBase
 
 logger = logging.getLogger(__name__)
 
-API = "https://artificialanalysis.ai/api/v2/data/llms/models"
+API = "https://artificialanalysis.ai/api/v2/language/models/free"
 TIMEOUT = 30
 CACHE_TTL = 21600  # 6h: scores move slowly; the free tier is rate-limited
 
-auth.write_template(
+auth.register_template(
     "artificial_analysis",
     {"api_key": "aa_...", "_help": "free key from https://artificialanalysis.ai/api"},
 )
 
-_EVAL_KEYS = ("artificial_analysis_intelligence_index", "artificial_analysis_coding_index",
-              "artificial_analysis_math_index", "gpqa", "aime_25", "hle",
-              "livecodebench", "mmlu_pro", "ifbench")
+# The Free shape's ``evaluations`` (FreeEvaluations in the OpenAPI spec), minus the Coding and
+# Agentic indexes, which the API documents as always null.
+_EVAL_KEYS = ("artificial_analysis_intelligence_index",
+              "artificial_analysis_finance_and_accounting_index",
+              "artificial_analysis_strategy_and_ops_index", "artificial_analysis_legal_index",
+              "artificial_analysis_healthcare_and_medical_index",
+              "artificial_analysis_engineering_index", "artificial_analysis_economics_index")
+# Cache key of the slim list: "free" since the 11-06 move to the Free endpoint (its slim rows carry
+# other eval keys than the retired v2/data rows did).
+_CACHE_PARTS = ("llm_leaderboard", "models", "free")
+_UPSTREAM = "artificial_analysis"  # its entry in upstreams.json (the rate-limit readings live there)
 
 
-class LLMLeaderboardAdapter:
+class ModelsUnavailable(RuntimeError):
+    """The model list could not be read. The message is what the API answered (``HTTP <status>:
+    <body>``) or why nothing came back; ``status`` is the HTTP status when there was an answer."""
+
+    def __init__(self, reason: str, status: Optional[int] = None) -> None:
+        super().__init__(reason)
+        self.status = status
+
+
+def _failure(records: list) -> ModelsUnavailable:
+    """The ``ModelsUnavailable`` for one failed page read, from the failure records the shared http
+    helper noted (``diag.tap``): the last answer's status and body, else the note's own text (a
+    declared gate that sent nothing says so in its body), else the exception."""
+    recs = [r for r in records if isinstance(r, dict)]
+    last = recs[-1] if recs else {}
+    if last.get("status") is None and not last.get("exc") and last.get("body"):
+        return ModelsUnavailable(str(last["body"]))
+    return ModelsUnavailable(
+        diag.failure_reason(recs, fallback="the API answered no JSON object and no failure was recorded"),
+        last.get("status"))
+
+
+def _quota_back_at() -> str:
+    """When the API's quota comes back, from its last answer's ``X-RateLimit-Reset`` (Unix time) or
+    ``Retry-After`` (seconds), as local time; "" when neither was seen."""
+    lanes = (upstreams.readings(_UPSTREAM).get("lanes") or {}).values()
+    for lane in lanes:
+        fields = lane.get("fields") or {}
+        at: Optional[float] = None
+        try:
+            at = float(fields.get("x-ratelimit-reset") or "")
+        except ValueError:
+            ra = upstreams.parse_retry_after(fields.get("retry-after"))
+            if ra:
+                at = float(lane.get("at") or time.time()) + ra
+        if at:
+            return datetime.datetime.fromtimestamp(at).astimezone().isoformat(timespec="minutes")
+    return ""
+
+
+class LLMLeaderboardAdapter(SourceBase):
     name = "llm_leaderboard"
     needs_credentials = True
     kind = "lookup"
     domains = ["eval", "models"]
     explicit_only = "Artificial Analysis API (free key, rate-limited); named lookup + watchtower"
     description = (
-        "LLM 榜单：Artificial Analysis 全模型实时评测 (500+ 模型: AA 智能/代码/数学指数, "
-        "GPQA/AIME-25/HLE/LiveCodeBench/MMLU-Pro, $/1M tokens, tok/s, 发布日期). "
+        "LLM 榜单：Artificial Analysis 全模型实时评测 (500+ 模型: AA 智能指数 + 六个能力指数 "
+        "(金融会计/战略运营/法律/医疗/工程/经济), $/1M tokens, tok/s, 发布日期). "
         "领域脉搏的结构化层: 空 query=按智能指数排序; 关键词过滤模型/厂商 "
         "('claude' / 'deepseek' / 'openai'). 新模型上榜=watchtower 新条目. "
         "Data by Artificial Analysis (attribution required)"
     )
 
-    def _models(self) -> list[dict]:
-        key = cache.make_key("llm_leaderboard", "models", "v2")
-        cached = cache.get(key)
-        if cached is not None:
-            return cached
+    async def _amodels(self, *, fresh: bool = False) -> list[dict]:
+        """The slim model list: from the disk cache (read and written off the loop) while it is warm,
+        else every page of the Free endpoint through the shared async egress (``http.aget_json``),
+        cached for ``CACHE_TTL``. ``fresh`` skips the cache read (the health check: it must ask the
+        API) and still writes the list it got.
+
+        A failed read raises ``ModelsUnavailable`` carrying what the API answered (status and body,
+        from the failure records the shared helper notes) and caches nothing: the caller sees why,
+        not an empty list that reads like "no models", and a transient miss is not pinned for the
+        TTL. A list missing pages would sort and filter as if it were whole, so one failed page
+        fails the read. In cache-only mode a cold cache is an empty list (nothing may be sent)."""
+        key = cache.make_key(*_CACHE_PARTS)
+        if not fresh:
+            cached = await cache.aget_once(key)  # disk read OFF loop
+            if cached is not None:
+                return cached
+        if cache.cache_only():
+            return []
         creds = auth.load("artificial_analysis") or {}
         api_key = creds.get("api_key")
         if not api_key:
-            logger.info("llm_leaderboard: API key not configured")
-            return []
-        try:
-            # Declared Artificial Analysis gate: 1,000 requests per day (in-process window; the
-            # 24 h cache already keeps this far below). UpstreamBusy lands in the except: not sent.
-            with upstreams.egress(API, request_s=TIMEOUT):
-                resp = http.direct("GET", API, headers={"x-api-key": api_key}, timeout=TIMEOUT)
-            upstreams.observe_response(API, resp)
-            resp.raise_for_status()
-            raw = resp.json().get("data", [])
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("llm_leaderboard: fetch failed: %s", exc)
-            st = getattr(getattr(exc, "response", None), "status_code", None)
-            diag.note("llm_leaderboard.fetch", url=API, status=st, exc=exc)
-            return []
+            raise ModelsUnavailable(
+                f"API key not configured ({where.show(where.credentials())}/artificial_analysis.json)")
+        raw: list = []
+        page = 1
+        while True:  # the Free endpoint is paginated: walk every page the API says there is
+            with diag.tap() as seen:
+                data = await http.aget_json(API, headers={"x-api-key": api_key}, params={"page": page},
+                                            timeout=TIMEOUT)  # async network
+            if not isinstance(data, dict):
+                raise _failure(seen)
+            raw.extend(data.get("data") or [])
+            pg = data.get("pagination") or {}
+            if not pg.get("has_more") or page >= (pg.get("total_pages") or page):
+                break
+            page += 1
         slim = []
         for m in raw:
             ev = m.get("evaluations") or {}
             pr = m.get("pricing") or {}
+            perf = m.get("performance") or {}
             slim.append({
                 "name": m.get("name"),
                 "slug": m.get("slug"),
                 "creator": ((m.get("model_creator") or {}).get("name")) or "",
                 "release_date": m.get("release_date"),
-                "tps": m.get("median_output_tokens_per_second"),
-                "ttft": m.get("median_time_to_first_token_seconds"),
-                "price_in": pr.get("price_1m_input_tokens"),
-                "price_out": pr.get("price_1m_output_tokens"),
-                "evals": {k: ev.get(k) for k in _EVAL_KEYS if ev.get(k) is not None},
-            })
-        cache.set(key, slim, ttl=CACHE_TTL)
-        return slim
-
-    async def _amodels(self) -> list[dict]:
-        """Native-async twin of ``_models`` (S4b): SAME cache key (async + sync share the disk
-        cache), the disk read/write pushed OFF the loop (cache.get/set do file IO), and the RAW
-        ``httpx.get`` egress swapped to the shared async leaf (``await http.aget_json`` → the shared
-        pool + SSRF guard + cache_only + 30MB cap). Byte-identical logic to ``_models`` (same key,
-        same credential check, same slim projection); only the blocking syscalls move off-loop and
-        the egress goes async. ``auth.load`` stays inline — a tiny credential read on the loop, like
-        ``exa.asearch`` (the disk-CACHE round-trip is what earns the thread, not the creds file).
-
-        The one shape difference from ``_models``: ``http.aget_json`` returns the PARSED body (or None
-        on any request/parse failure, already logged + diag.note'd by the shared leaf), so we pull
-        ``.get("data", [])`` off that here — where ``_models`` did ``resp.json().get("data", [])`` inside
-        its own try/except. A None (fetch failed) returns [] WITHOUT caching, exactly as ``_models``'s
-        except branch does (a transient miss is not pinned for the full TTL)."""
-        key = cache.make_key("llm_leaderboard", "models", "v2")
-        cached = await anyio.to_thread.run_sync(cache.get, key)  # disk read OFF loop
-        if cached is not None:
-            return cached
-        creds = auth.load("artificial_analysis") or {}
-        api_key = creds.get("api_key")
-        if not api_key:
-            logger.info("llm_leaderboard: API key not configured")
-            return []
-        data = await http.aget_json(API, headers={"x-api-key": api_key}, timeout=TIMEOUT)  # async network
-        if data is None:
-            return []  # fetch failed (aget_json logged + diag.note'd); don't cache a transient miss
-        raw = data.get("data", []) if isinstance(data, dict) else []
-        slim = []
-        for m in raw:
-            ev = m.get("evaluations") or {}
-            pr = m.get("pricing") or {}
-            slim.append({
-                "name": m.get("name"),
-                "slug": m.get("slug"),
-                "creator": ((m.get("model_creator") or {}).get("name")) or "",
-                "release_date": m.get("release_date"),
-                "tps": m.get("median_output_tokens_per_second"),
-                "ttft": m.get("median_time_to_first_token_seconds"),
+                "tps": perf.get("median_output_tokens_per_second"),
+                "ttft": perf.get("median_time_to_first_token_seconds"),
                 "price_in": pr.get("price_1m_input_tokens"),
                 "price_out": pr.get("price_1m_output_tokens"),
                 "evals": {k: ev.get(k) for k in _EVAL_KEYS if ev.get(k) is not None},
             })
         await anyio.to_thread.run_sync(  # disk write OFF loop
-            functools.partial(cache.set, key, slim, ttl=CACHE_TTL))
+            functools.partial(cache.set, key, slim, ttl=CACHE_TTL), limiter=portal.IO_LANE)
         return slim
 
-    def search(self, query: str, limit: int = 10) -> list[Document]:
-        models = self._models()
-        if not models:
-            return []
-        terms = [t for t in (query or "").lower().split() if t]
-        if terms:
-            models = [m for m in models
-                      if all(t in f"{m['name']} {m['creator']} {m['slug']}".lower()
-                             for t in terms)]
-        models.sort(key=lambda m: m["evals"].get("artificial_analysis_intelligence_index")
-                    or -1, reverse=True)
-        return [self._to_doc(m) for m in models[:limit]]
-
     async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async twin of ``search`` (S4b): the fan-out awaits this DIRECTLY (no pool thread),
+        """Native-async replacement of the deleted sync ``search`` (11-04, S9; this is the only one now) (S4b): the fan-out awaits this DIRECTLY (no pool thread),
         so this source's dominant NETWORK wait costs a coroutine, not a held thread. Mirrors ``search``
         line-for-line: only the cached fetch swaps to the async ``_amodels`` (async egress + off-loop
         cache); the term filter / intelligence-index sort / ``_to_doc`` map below is PURE CPU and stays
@@ -175,27 +205,32 @@ class LLMLeaderboardAdapter:
                     or -1, reverse=True)
         return [self._to_doc(m) for m in models[:limit]]
 
-    def fetch_url(self, url: str) -> Optional[Document]:
+    async def afetch_url(self, url: str) -> Optional[Document]:
         host = (urlparse(url).hostname or "").lower()
         if "artificialanalysis.ai" not in host:
             return None
         slug = urlparse(url).path.rstrip("/").split("/")[-1]
-        for m in self._models():
+        for m in await self._amodels():
             if m["slug"] == slug:
                 return self._to_doc(m)
         return None
 
-    def health_check(self) -> tuple[Optional[bool], str]:
+    async def ahealth_check(self) -> tuple[Optional[bool], str]:
         if not auth.is_configured("artificial_analysis"):
-            return False, "API key not configured (~/.omniseek/credentials/artificial_analysis.json)"
-        # SAME key _models reads: while the list is cached, _models answers from the cache and asks
-        # the API nothing, so this check verifies nothing (None).
-        if cache.get(cache.make_key("llm_leaderboard", "models", "v2")) is not None:
-            return None, "not probed (the model list is still cached; the API is asked again when it expires)"
-        n = len(self._models())
+            return False, f"API key not configured ({where.show(where.credentials())}/artificial_analysis.json)"
+        # Always asks the API (fresh): a check answered from the cache verifies nothing, and the cache
+        # is warm at every health round (module docstring, 2026-11-07).
+        try:
+            n = len(await self._amodels(fresh=True))
+        except ModelsUnavailable as exc:
+            if exc.status == 429 or _probe.says_rate_limited(str(exc)):
+                back = _quota_back_at()
+                return None, (_probe.rate_limited("artificialanalysis.ai", status=exc.status or 429)
+                              + (f"; the quota resets at {back}" if back else "") + f"; the API said: {exc}")
+            return False, str(exc)
         if n:
             return True, f"OK ({n} models)"
-        return False, "0 models (key invalid / API down)"
+        return False, "the API answered every page with no models"
 
     @staticmethod
     def _to_doc(m: dict) -> Document:
@@ -215,19 +250,11 @@ class LLMLeaderboardAdapter:
                if k.startswith("artificial_analysis")}
         if idx:
             lines.append("Indices: " + "  ".join(f"{k}={v}" for k, v in idx.items()))
-        bench = {k: v for k, v in ev.items() if not k.startswith("artificial_analysis")}
-        if bench:
-            lines.append("Benchmarks: " + "  ".join(f"{k}={v}" for k, v in bench.items()))
         lines.append(f"Pricing: in ${m.get('price_in')}/1M, out ${m.get('price_out')}/1M  ·  "
                      f"Speed: {m.get('tps')} tok/s, TTFT {m.get('ttft')}s")
         lines.append("Data by Artificial Analysis")
 
-        date = None
-        if m.get("release_date"):
-            try:
-                date = datetime.fromisoformat(m["release_date"]).replace(tzinfo=timezone.utc)
-            except (ValueError, TypeError):
-                pass
+        date = to_utc(m.get("release_date"))
         return Document(
             source="llm_leaderboard",
             source_id=m["slug"] or m["name"],

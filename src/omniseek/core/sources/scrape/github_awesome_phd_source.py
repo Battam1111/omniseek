@@ -19,8 +19,9 @@ from urllib.parse import urlparse
 
 import anyio
 
-from omniseek.core import cache, http
+from omniseek.core import cache, http, portal
 from omniseek.core.normalize import Document, jsonsafe
+from omniseek.core.sources._base import SourceBase
 
 logger = logging.getLogger(__name__)
 
@@ -37,31 +38,17 @@ AWESOME_REPOS = [
 DEFAULT_TIMEOUT = 20
 
 
-class GithubAwesomePhDAdapter:
+class GithubAwesomePhDAdapter(SourceBase):
     name = "github_awesome_phd"
     needs_credentials = False
     description = "GitHub Awesome-PhD curated lists: highest SNR PhD resource collections"
-
-    def _fetch_readme(self, owner: str, repo: str) -> Optional[str]:
-        key = cache.make_key("gh_awesome", owner, repo)
-        cached = cache.get(key)
-        if cached is not None:
-            return cached
-        # GitHub raw content (try main, then master)
-        for branch in ("main", "master"):
-            url = f"https://raw.githubusercontent.com/{owner}/{repo}/{branch}/README.md"
-            text = http.get_text(url, timeout=DEFAULT_TIMEOUT)
-            if text:
-                cache.set(key, text, ttl=86400)  # README updates rarely; 24h
-                return text
-        return None
 
     async def _afetch_readme(self, owner: str, repo: str) -> Optional[str]:
         """Async egress twin of ``_fetch_readme`` (mirrors it exactly): SAME cache key, the disk
         cache read/write pushed OFF the loop via anyio.to_thread, and the README egress swapped to
         its async twin (http.get_text -> await http.aget_text). No CPU work here to keep on-loop."""
         key = cache.make_key("gh_awesome", owner, repo)
-        cached = await anyio.to_thread.run_sync(cache.get, key)  # disk read OFF loop
+        cached = await cache.aget_once(key)  # disk read OFF loop
         if cached is not None:
             return cached
         # GitHub raw content (try main, then master)
@@ -70,50 +57,12 @@ class GithubAwesomePhDAdapter:
             text = await http.aget_text(url, timeout=DEFAULT_TIMEOUT)  # async network, ON loop
             if text:
                 await anyio.to_thread.run_sync(  # disk write OFF loop
-                    functools.partial(cache.set, key, text, ttl=86400))  # README updates rarely; 24h
+                    functools.partial(cache.set, key, text, ttl=86400), limiter=portal.IO_LANE)  # README updates rarely; 24h
                 return text
         return None
 
-    def search(self, query: str, limit: int = 10) -> list[Document]:
-        query_terms = [t.lower() for t in re.findall(r"\w+", query) if len(t) > 1]
-        if not query_terms:
-            return []
-
-        all_docs: list[tuple[int, Document]] = []
-        for owner, repo, desc in AWESOME_REPOS:
-            readme = self._fetch_readme(owner, repo)
-            if not readme:
-                continue
-            # Split README into bullet sections; each bullet often = one resource
-            sections = self._extract_link_items(readme)
-            for section in sections:
-                blob = section["text"].lower()
-                score = sum(blob.count(t) for t in query_terms)
-                if score == 0:
-                    continue
-                # The link in this bullet is the "primary" URL
-                primary_url = section.get("url") or f"https://github.com/{owner}/{repo}"
-                doc = Document(
-                    source="github_awesome_phd",
-                    source_id=f"{owner}/{repo}#{section.get('anchor', '')}",
-                    url=primary_url,
-                    title=section.get("title") or section["text"][:80],
-                    content=section["text"],
-                    author=f"{owner} (Awesome list maintainer)",
-                    tags=[f"awesome-list", f"{owner}/{repo}"],
-                    metadata={
-                        "repo": f"{owner}/{repo}",
-                        "repo_description": desc,
-                        "raw": jsonsafe(section),
-                    },
-                )
-                all_docs.append((score, doc))
-
-        all_docs.sort(key=lambda x: x[0], reverse=True)
-        return [d for _, d in all_docs[:limit]]
-
     async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async twin of ``search``, with the six READMEs fetched CONCURRENTLY (2026-08-30).
+        """Native-async replacement of the deleted sync ``search`` (11-04, S9; this is the only one now), with the six READMEs fetched CONCURRENTLY (2026-08-30).
 
         The per-repo egress is ``self._afetch_readme`` (its cache round-trip + http.aget_text run
         off/on the loop correctly). Everything after the fetch is the same PURE CPU code as
@@ -172,7 +121,7 @@ class GithubAwesomePhDAdapter:
         all_docs.sort(key=lambda x: x[0], reverse=True)
         return [d for _, d in all_docs[:limit]]
 
-    def fetch_url(self, url: str) -> Optional[Document]:
+    async def afetch_url(self, url: str) -> Optional[Document]:
         # Match repo URLs from our curated set
         host = urlparse(url).hostname or ""
         if "github.com" not in host:
@@ -184,7 +133,7 @@ class GithubAwesomePhDAdapter:
         owner, repo = parts[0], parts[1]
         if not any(o == owner and r == repo for o, r, _ in AWESOME_REPOS):
             return None
-        readme = self._fetch_readme(owner, repo)
+        readme = await self._afetch_readme(owner, repo)
         if not readme:
             return None
         return Document(
@@ -198,10 +147,10 @@ class GithubAwesomePhDAdapter:
             metadata={"raw": jsonsafe({"owner": owner, "repo": repo, "readme": readme})},
         )
 
-    def health_check(self) -> tuple[bool, str]:
+    async def ahealth_check(self) -> tuple[bool, str]:
         # Just probe github raw content
         try:
-            resp = http.direct(
+            resp = await http.adirect(
                 "GET", "https://raw.githubusercontent.com/pliang279/awesome-phd-advice/main/README.md",
                 timeout=10,
                 follow_redirects=True,
@@ -209,7 +158,7 @@ class GithubAwesomePhDAdapter:
             if resp.status_code == 200:
                 return True, "OK"
             # Try master
-            resp = http.direct(
+            resp = await http.adirect(
                 "GET", "https://raw.githubusercontent.com/pliang279/awesome-phd-advice/master/README.md",
                 timeout=10,
                 follow_redirects=True,

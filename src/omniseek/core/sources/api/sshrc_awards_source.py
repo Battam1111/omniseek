@@ -16,21 +16,19 @@ Acquisition (OmniSeek's bulk-file pattern, shared via _bulk_funding):
     (~comp-ling/NLP), cache those docs query-independent; a query BM25-filters the cached subset.
 
 Header verified live 2026-06-22 (24 cols, utf-8-sig; latest = "2024 Payments"). explicit_only: a
-named-query lookup like nsf_awards / nserc_awards.
+named-query lookup like nsf_awards / cihr_grants.
 """
 
 from __future__ import annotations
 
 import csv
-import functools
 import io
 import logging
 from typing import Optional
 
-import anyio
 
-from omniseek.core import cache, diag, http
-from omniseek.core.normalize import Document, keyword_score_filter
+from omniseek.core import diag, http
+from omniseek.core.normalize import Document
 from omniseek.core.sources.api._bulk_funding import UA, BulkFundingBase, is_ai_relevant, year_of
 
 logger = logging.getLogger(__name__)
@@ -54,43 +52,6 @@ class SSHRCAwardsAdapter(BulkFundingBase):
     regions = ["ca"]
     modes = ["STRUCTURE"]
     _version = "FY2024"
-
-    def _resolve_csv_url(self) -> str:
-        data = http.get_json(_PKG_SHOW)
-        if isinstance(data, dict):
-            res = (data.get("result") or {}).get("resources") or []
-            pays = [r for r in res if "payment" in (r.get("name") or "").lower()
-                    and (r.get("format") or "").upper() == "CSV" and r.get("url")]
-            pays.sort(key=lambda r: year_of(r.get("name")), reverse=True)
-            if pays:
-                return pays[0]["url"]
-        return _FALLBACK_CSV
-
-    def _build_subset_docs(self) -> list[Document]:
-        url = self._resolve_csv_url()
-        try:
-            # 85s < the 90s fetch_one deadline: the old 180s could never elapse on a deadline-bounded
-            # call (outer deadline killed it first); 85s is generous for a CSV. Raise the OUTER
-            # deadline, not this, if a larger download is ever needed.
-            r = http.direct("GET", url, headers={"User-Agent": UA}, timeout=85,
-                            follow_redirects=True)
-            r.raise_for_status()
-            text = r.content.decode("utf-8-sig", errors="replace")
-        except Exception as exc:  # noqa: BLE001 — failure → [] (the contract); don't cache a miss
-            logger.warning("sshrc_awards: CSV fetch failed (%s): %s", url, exc)
-            st = getattr(getattr(exc, "response", None), "status_code", None)
-            diag.note("sshrc_awards.csv", url=url, status=st, exc=exc)
-            return []
-        docs: list[Document] = []
-        for row in csv.DictReader(io.StringIO(text)):
-            if is_ai_relevant(row.get("Title-Titre"), row.get("Keywords-Mots-clés"),
-                              row.get("SSHRC_Discipline_EN"), row.get("SSHRC_Area_of_Research"),
-                              row.get("CRDC_Field_of_Research")):
-                d = self._row_to_doc(row)
-                if d is not None:
-                    docs.append(d)
-        logger.info("sshrc_awards: built %d comp-ling/NLP docs from FY2024", len(docs))
-        return docs
 
     def _row_to_doc(self, row: dict) -> Optional[Document]:
         name = (row.get("Name-Nom") or "").strip()
@@ -137,7 +98,7 @@ class SSHRCAwardsAdapter(BulkFundingBase):
     # the dominant network wait) instead of pushing the sync .search onto the shared thread pool. The
     # sync search() / _subset_docs (base) are untouched and stay the legacy-runner path.
     async def _aresolve_csv_url(self) -> str:
-        """Async twin of _resolve_csv_url: the CKAN package_show GET goes async (http.aget_json); the
+        """Async replacement of the deleted sync ``_resolve_csv_url`` (11-04, S9; this is the only one now): the CKAN package_show GET goes async (http.aget_json); the
         resource pick (filter / sort / fallback) is pure CPU, byte-identical, on the loop."""
         data = await http.aget_json(_PKG_SHOW)
         if isinstance(data, dict):
@@ -150,7 +111,7 @@ class SSHRCAwardsAdapter(BulkFundingBase):
         return _FALLBACK_CSV
 
     async def _abuild_subset_docs(self) -> list[Document]:
-        """Async twin of _build_subset_docs. The RAW httpx.get -> http.aget (the shared async leaf): the
+        """Async replacement of the deleted sync ``_build_subset_docs`` (11-04, S9; this is the only one now) The RAW httpx.get -> http.aget (the shared async leaf): the
         FY2024 CSV is ~6.9MB, well under http's 30MB cap, so routing through it gains the pooled client +
         SSRF guard + cache_only for free; http.aget already logs + diag.notes a network / non-2xx failure
         (label "http.get"), so a None here is the same failure -> [] contract. The decode is kept EXACT as
@@ -179,32 +140,8 @@ class SSHRCAwardsAdapter(BulkFundingBase):
         logger.info("sshrc_awards: built %d comp-ling/NLP docs from FY2024", len(docs))
         return docs
 
-    async def _asubset_docs(self) -> list[Document]:
-        """Async twin of BulkFundingBase._subset_docs: the SAME subset cache key, its read + write pushed
-        OFF the loop (get_docs / set_docs do file IO). The fresh / cache_only contextvars propagate into
-        the worker thread via anyio, so this shares the exact cache entry the sync path uses (no
-        double-fetch, no divergence)."""
-        key = cache.make_key(self.name, "subset", self._version)
-        cached = await anyio.to_thread.run_sync(cache.get_docs, key)  # disk read OFF loop
-        if cached is not None:
-            return cached
-        docs = await self._abuild_subset_docs()
-        if docs:
-            await anyio.to_thread.run_sync(  # disk write OFF loop
-                functools.partial(cache.set_docs, key, docs, ttl=self.cache_ttl))
-        return docs
-
-    async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async twin of BulkFundingBase.search: identical BM25 filter over the cached subset,
-        only the subset build / cache round-trip is now non-blocking. BEHAVIOR-IDENTICAL to search."""
-        docs = await self._asubset_docs()
-        if not docs:
-            return []
-        q = (query or "").strip()
-        return docs[:limit] if not q else keyword_score_filter(docs, q)[:limit]
-
-    def health_check(self) -> tuple[bool, str]:
-        data = http.get_json(_PKG_SHOW)
+    async def ahealth_check(self) -> tuple[bool, str]:
+        data = await http.aget_json(_PKG_SHOW)
         if isinstance(data, dict) and (data.get("result") or {}).get("resources"):
             return True, "OK (open.canada package_show resolves)"
         return False, "package_show did not resolve resources"

@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import re
 
+from omniseek.core import portal
 from omniseek.core.normalize import Document, jsonsafe, keyword_score_filter
 from omniseek.core.sources.scrape._rss import RSSAdapterBase
 
@@ -99,31 +100,38 @@ class FellowshipsAdapter(RSSAdapterBase):
             for name, url, note in LINKS
         ]
 
-    def search(self, query: str, limit: int = 10) -> list[Document]:
-        # RSS entries, keyword-gated to funding-relevant posts.
-        rss = [
-            d for d in super().search(query, max(limit * 4, 40))
-            if _KW.search((d.title or "") + " " + (d.content or ""))
-        ]
-        static = self._static_docs()
-        if not query:
-            # No query: most-recent funding posts first, then the reference shelf.
-            return (rss + static)[:limit]
-        # Rank the curated award shelf and the live RSS announcements SEPARATELY,
-        # then interleave (curated first). Otherwise terse fellowship entries get
-        # buried under verbose institutional news on raw keyword counts.
-        sr = keyword_score_filter(static, query)
-        rr = keyword_score_filter(rss, query)
-        out: list[Document] = []
-        si = ri = 0
-        while len(out) < limit and (si < len(sr) or ri < len(rr)):
-            if si < len(sr):
-                out.append(sr[si])
-                si += 1
-            if ri < len(rr) and len(out) < limit:
-                out.append(rr[ri])
-                ri += 1
-        return out[:limit]
+    async def asearch(self, query: str, limit: int = 10) -> list[Document]:
+        """The bundle (feeds as coroutines, the parse and BM25 in the process lane), then the curated
+        static shelf picked in, also in the process lane (two more BM25 passes)."""
+        bundle = await super().asearch(query, max(limit * 4, 40))
+        return await portal.run_cpu(_pick, bundle, self._static_docs(), query, limit)
+
+
+def _pick(bundle: list[Document], static: list[Document], query: str, limit: int) -> list[Document]:
+    """search's selection over the RSS bundle's hits and the curated shelf (pure CPU)."""
+    # RSS entries, keyword-gated to funding-relevant posts.
+    rss = [
+        d for d in bundle
+        if _KW.search((d.title or "") + " " + (d.content or ""))
+    ]
+    if not query:
+        # No query: most-recent funding posts first, then the reference shelf.
+        return (rss + static)[:limit]
+    # Rank the curated award shelf and the live RSS announcements SEPARATELY,
+    # then interleave (curated first). Otherwise terse fellowship entries get
+    # buried under verbose institutional news on raw keyword counts.
+    sr = keyword_score_filter(static, query)
+    rr = keyword_score_filter(rss, query)
+    out: list[Document] = []
+    si = ri = 0
+    while len(out) < limit and (si < len(sr) or ri < len(rr)):
+        if si < len(sr):
+            out.append(sr[si])
+            si += 1
+        if ri < len(rr) and len(out) < limit:
+            out.append(rr[ri])
+            ri += 1
+    return out[:limit]
 
 
 from omniseek.core.fetcher import register_adapter

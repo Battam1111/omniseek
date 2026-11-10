@@ -27,13 +27,12 @@ caught in a WebSearch head-to-head, 2026-06-17).
 
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Any, Optional
 
 from markdownify import markdownify as html_to_md
 
 from omniseek.core import http, relevance
-from omniseek.core.normalize import Document, jsonsafe, mk_signal
+from omniseek.core.normalize import Document, jsonsafe, mk_signal, to_utc
 from omniseek.core.sources.scrape._base import BaseScrapeAdapter
 
 API_URL = "https://zenodo.org/api/records"
@@ -52,18 +51,8 @@ class ZenodoAdapter(BaseScrapeAdapter):
     domains = ["papers", "datasets"]
     modes = ["STRUCTURE"]
 
-    def _raw_fetch(self, query: str, limit: int) -> Optional[Any]:
-        # NO explicit sort: Zenodo defaults to RELEVANCE order when q is present. Pull a WIDE pool
-        # (capped at Zenodo's max page size of 25 -- size>=30 returns HTTP 400); _to_documents
-        # re-ranks it with OmniSeek's shared BM25 + caps to the caller's limit.
-        return http.get_json(
-            API_URL,
-            params={"q": query, "size": min(max(limit, _CANDIDATE_POOL), _ZENODO_MAX_SIZE)},
-            timeout=15,
-        )
-
     async def _araw_fetch(self, query: str, limit: int) -> Optional[Any]:
-        # Async twin of _raw_fetch: byte-faithful mirror, only http.get_json → await http.aget_json.
+        # Async replacement of the deleted sync ``_raw_fetch`` (11-04, S9; this is the only one now): byte-faithful mirror, only http.get_json → await http.aget_json.
         return await http.aget_json(
             API_URL,
             params={"q": query, "size": min(max(limit, _CANDIDATE_POOL), _ZENODO_MAX_SIZE)},
@@ -90,14 +79,6 @@ class ZenodoAdapter(BaseScrapeAdapter):
                     if _s > 0.0]
         return docs[:limit]
 
-    async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async twin of search -> AsyncSearchCapable. Shares the base async cache round-trip;
-        egress via _araw_fetch; mapping via the SAME pure-CPU _to_documents (byte-identical to search)."""
-        return await self._asearch_via(
-            query, limit,
-            afetch=lambda: self._araw_fetch(query, limit),
-            abuild=lambda raw: self._to_documents(raw, query, limit))
-
     def _record_to_doc(self, rec: dict) -> Optional[Document]:
         meta = rec.get("metadata") or {}
         title = (meta.get("title") or "").strip()
@@ -118,7 +99,7 @@ class ZenodoAdapter(BaseScrapeAdapter):
         )
 
         author = _format_authors(meta.get("creators") or [])
-        date = _parse_date(meta.get("publication_date"))
+        date = to_utc(meta.get("publication_date"))
         content = _description_to_md(meta.get("description"))
 
         # resource_type is a dict like {"title": "Dataset", "type": "dataset", "subtype": ...}
@@ -174,23 +155,6 @@ def _format_authors(creators: list) -> str:
         elif isinstance(c, str) and c.strip():
             names.append(c.strip())
     return ", ".join(names)
-
-
-def _parse_date(s: Any) -> Optional[datetime]:
-    """Zenodo publication_date is ISO ``YYYY-MM-DD`` (sometimes a year or year-month)."""
-    if not isinstance(s, str) or not s.strip():
-        return None
-    s = s.strip()
-    try:
-        return datetime.fromisoformat(s)
-    except ValueError:
-        pass
-    for fmt in ("%Y-%m-%d", "%Y-%m", "%Y"):
-        try:
-            return datetime.strptime(s, fmt)
-        except ValueError:
-            continue
-    return None
 
 
 def _description_to_md(desc: Any) -> str:

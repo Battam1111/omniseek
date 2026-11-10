@@ -42,11 +42,11 @@ from __future__ import annotations
 
 import logging
 import re
-from datetime import datetime
 from typing import Any, Optional
 
 from omniseek.core import auth, http
-from omniseek.core.normalize import Document, jsonsafe, mk_signal
+from omniseek.core import filters as _flt
+from omniseek.core.normalize import Document, jsonsafe, mk_signal, to_utc
 from omniseek.core.sources.scrape._base import BaseScrapeAdapter
 
 logger = logging.getLogger(__name__)
@@ -76,23 +76,61 @@ class SECEdgarAdapter(BaseScrapeAdapter):
     domains = ["filings", "compensation"]
     modes = ["STRUCTURE"]
 
-    def _raw_fetch(self, query: str, limit: int) -> Optional[Any]:
-        # The backend ignores a page-size param (returns up to 100 hits per page); we slice
-        # to ``limit`` in _to_documents. UA override is mandatory or SEC 403s.
-        return http.get_json(
-            API_URL,
-            params={"q": query},
-            headers={"User-Agent": SEC_UA},
-            timeout=TIMEOUT,
-        )
+    # Source spec (omniseek.core.filters). filed -> the backend's startdt / enddt parameters; form -> its
+    # forms= parameter (comma-joined, upper case). The backend answered forms= with HTTP 500 when probed
+    # on 2026-06-17 and filters by it since (probed 2026-10-20: forms=DEF 14A gives 100 DEF 14A hits,
+    # forms=10-K,8-K gives 10-K, 10-K/A and 8-K). An amendment (10-K/A) comes back for its base form,
+    # so the returned page is still kept to the exact forms asked for.
+    filters = {
+        "filed": {"type": "date", "ops": ["eq", "gte", "lte", "range"], "doc_key": "date",
+                  "desc": "filing date (sent as startdt / enddt)"},
+        "form": {"type": "keyword", "ops": ["eq", "any"], "doc_key": "metadata.form",
+                 "desc": "form type such as 10-K, 8-K, DEF 14A (sent as forms=; exact match, so an "
+                         "amendment such as 10-K/A comes back only when asked for)"},
+    }
+    # omniseek_search(as_of=...) pushes "filed <= as_of" upstream through this field: the filing date.
+    as_of_field = "filed"
+    coverage = {"since": "2001-01-01", "until": None, "gaps": [],
+                "note": "EDGAR full-text search indexes filings since 2001"}
+    license = ("SEC EDGAR filings are public information on sec.gov; the SEC fair-access policy "
+               "applies (upstreams:sec_edgar)")
+    samples = [{"query": "executive compensation", "filters": {"form": "DEF 14A"}},
+               {"query": "artificial intelligence", "filters": {"filed": {"gte": "2024-01-01"}}}]
+
+    def translate_filters(self, query: str, clauses: list):
+        """filed -> {startdt, enddt} (both always sent; an open side is 2001-01-01 or today);
+        form -> {forms}, sent upper case as the backend's forms= and kept for the exact-match page filter."""
+        from datetime import date as _date
+        params: dict = {}
+        for c in clauses:
+            if c.field == "filed":
+                params["startdt"] = (c.lo or _date(2001, 1, 1)).isoformat()
+                params["enddt"] = (c.hi or _date.today()).isoformat()
+            elif c.field == "form":
+                vals = [c.value] if c.op == "eq" else list(c.value)
+                params["forms"] = [str(v).strip().upper() for v in vals]
+            else:
+                raise _flt.Unsupported(c.field)
+        return query or "", params
+
+    @staticmethod
+    def _params(query: str) -> dict:
+        p = {"q": query}
+        up = _flt.upstream()
+        if up.get("startdt"):
+            p["startdt"] = up["startdt"]
+            p["enddt"] = up["enddt"]
+        if up.get("forms"):
+            p["forms"] = ",".join(up["forms"])
+        return p
 
     async def _araw_fetch(self, query: str, limit: int) -> Optional[Any]:
-        # Async twin of _raw_fetch: byte-faithful mirror (same URL, params, UA header, timeout);
+        # Async replacement of the deleted sync ``_raw_fetch`` (11-04, S9; this is the only one now): byte-faithful mirror (same URL, params, UA header, timeout);
         # ONLY the shared-http egress fn is swapped for its async twin (http.aget_json). The UA
         # override stays mandatory or SEC 403s (see module docstring).
         return await http.aget_json(
             API_URL,
-            params={"q": query},
+            params=self._params(query),
             headers={"User-Agent": SEC_UA},
             timeout=TIMEOUT,
         )
@@ -112,7 +150,13 @@ class SECEdgarAdapter(BaseScrapeAdapter):
         # endpoint, not a per-company API) is to reorder the page here: newest
         # file_date first, undated hits last, ties keep the backend's relevance order
         # (Python's sort is stable). Same recency-bias shape as the zenodo fix.
+        # (forms= has worked since: probed 2026-10-20, see the filters spec above. It narrows the
+        # set like startdt / enddt; it does not reorder it either.)
         hits = _sort_by_recency(hits)
+        forms = {str(f).strip().upper() for f in (_flt.upstream().get("forms") or [])}
+        if forms:
+            hits = [h for h in hits if isinstance(h, dict)
+                    and str(((h.get("_source") or {}).get("form") or "")).strip().upper() in forms]
         docs: list[Document] = []
         for hit in hits[:limit]:
             try:
@@ -123,15 +167,6 @@ class SECEdgarAdapter(BaseScrapeAdapter):
             if doc is not None:
                 docs.append(doc)
         return docs
-
-    async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async twin of BaseScrapeAdapter.search -> AsyncSearchCapable. Shares the base async
-        cache round-trip; egress via `_araw_fetch` (async twin of `_raw_fetch`); mapping via the SAME
-        pure-CPU `_to_documents` (byte-identical to `search`, including the client-side recency sort)."""
-        return await self._asearch_via(
-            query, limit,
-            afetch=lambda: self._araw_fetch(query, limit),
-            abuild=lambda raw: self._to_documents(raw, query, limit))
 
     def _hit_to_document(self, hit: dict) -> Optional[Document]:
         if not isinstance(hit, dict):
@@ -159,7 +194,7 @@ class SECEdgarAdapter(BaseScrapeAdapter):
 
         url = _filing_url(cik, adsh)
 
-        date = _parse_date(src.get("file_date"))
+        date = to_utc(src.get("file_date"))
 
         title = ": ".join(p for p in (form, company) if p) or (hit_id or self.name)
 
@@ -223,11 +258,11 @@ class SECEdgarAdapter(BaseScrapeAdapter):
             },
         )
 
-    def health_check(self) -> tuple[bool, str]:
+    async def ahealth_check(self) -> tuple[bool, str]:
         # Override the base probe so the trivial liveness query carries the mandatory SEC UA
-        # (the base _raw_fetch already does, but be explicit about the failure contract here).
+        # (the fetch hook already does, but be explicit about the failure contract here).
         try:
-            raw = self._raw_fetch("test", 1)
+            raw, _size = await self._afetch("test", 1)
         except Exception as exc:  # noqa: BLE001
             return False, f"{type(exc).__name__}: {str(exc)[:80]}"
         if not isinstance(raw, dict) or "hits" not in raw:
@@ -274,16 +309,6 @@ def _filing_url(cik: str, adsh: str) -> str:
     return "https://efts.sec.gov/LATEST/search-index"
 
 
-def _parse_date(s: Any) -> Optional[datetime]:
-    """EDGAR file_date is ISO ``YYYY-MM-DD``."""
-    if not isinstance(s, str) or not s.strip():
-        return None
-    try:
-        return datetime.fromisoformat(s.strip())
-    except ValueError:
-        return None
-
-
 def _sort_by_recency(hits: list) -> list:
     """Reorder efts hits newest-first by ``_source.file_date`` (the recency bias the
     backend will not apply server-side: see ``_to_documents``). A hit with no parseable
@@ -297,7 +322,7 @@ def _sort_by_recency(hits: list) -> list:
         src = hit.get("_source") if isinstance(hit, dict) else None
         fd = (src or {}).get("file_date") if isinstance(src, dict) else None
         # ISO YYYY-MM-DD sorts lexically == chronologically; "" sorts below any real date.
-        return fd if (isinstance(fd, str) and _parse_date(fd) is not None) else ""
+        return fd if (isinstance(fd, str) and to_utc(fd) is not None) else ""
 
     return sorted(hits, key=_key, reverse=True)
 

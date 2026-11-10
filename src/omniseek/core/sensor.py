@@ -30,16 +30,17 @@ import time
 from dataclasses import dataclass, field, fields, asdict
 from pathlib import Path
 from typing import Optional
+from omniseek import where
 
 log = logging.getLogger(__name__)
 
-_DEFAULT_STATE_PATH = Path.home() / ".omniseek" / "state" / "sensors.json"
+_DEFAULT_STATE_PATH = where.state() / "sensors.json"
 
 from omniseek.core.recall import graph  # noqa: E402 (the graph write verb + mint registry)
 
 # Vocabulary this tap MINTS (vocabulary-by-minting, design section 3): declared on the tap itself,
-# registered at import, folded into ``graph.declared_vocabulary`` as the computed union; the smoke
-# tripwire bounds ACTUAL graph data to that union. The sensor tap is the P4 event layer: it mints
+# registered at import, folded into ``graph.declared_vocabulary`` as the computed union; ACTUAL
+# graph data must stay within that union. The sensor tap is the P4 event layer: it mints
 # ONE sensor node + observed edges (sensor -> doc) for the results THIS RUN detected as new. THE
 # MINT RULE (design "Mint the product"): a sensor mints the RUN DIFF, not the baseline: the
 # baseline is state (it mints nothing), the diff is the product (the mint-the-product rule applied
@@ -269,7 +270,7 @@ class SensorStore:
 # THE MINT RULE (design "Mint the product, not the intermediate"): a sensor's PRODUCT is the set of
 # results THIS RUN newly detected (the diff); the baseline is state and mints nothing. The builder
 # below is PURE (takes the Sensor + the new (source, source_id) pairs + the run timestamp, returns
-# (nodes, edges) in the writer's dict shapes) so the smoke can golden-test it with zero network;
+# (nodes, edges) in the writer's dict shapes) so it runs with zero network;
 # ``_tap`` wraps enqueue_graph fail-open (a tap failure must NEVER break the run summary the agent
 # gets). Every run now executes IN OmniSeek-http process (a manual omniseek_sensor action=run, or the
 # in-process scheduler below), where ``WRITES_ENABLED`` is on, so observed edges accrue from every
@@ -324,9 +325,14 @@ def _sensor_window(sources: Optional[list[str]]) -> int:
         return 0
 
 
-def run_sensor(sensor: Sensor, store: SensorStore, limit: int = 15) -> dict:
-    """Execute one sensor: search -> diff baseline -> update. Returns a summary dict."""
-    from omniseek.core import fetcher
+async def arun_sensor(sensor: Sensor, store: SensorStore, limit: int = 15) -> dict:
+    """Execute one sensor: search -> diff baseline -> update. Returns a summary dict.
+
+    Awaited on the service's loop: the ranked search directly, the store write on the IO lane. The
+    omniseek_sensor tool body awaits it; the job scheduler's sensor tick (a thread) reaches it through
+    ``portal.run``."""
+    import anyio
+    from omniseek.core import _guard, fetcher, portal
     from datetime import datetime, timezone
 
     # A source that lists a personal feed (cubox, github_starred) declares ``sensor_window``: how many
@@ -334,17 +340,14 @@ def run_sensor(sensor: Sensor, store: SensorStore, limit: int = 15) -> dict:
     # missed for good once it scrolls out of the source's lookback). Sources without it keep the old
     # call exactly.
     window = _sensor_window(sensor.sources)
-    if window:
-        limit = max(limit, window)
-        ranked, _meta = fetcher.search_ranked(
-            sensor.query, sources=sensor.sources, limit=limit, per_source=window)
-    else:
-        ranked, _meta = fetcher.search_ranked(
-            sensor.query, sources=sensor.sources, limit=limit)
-    # The seeding run is the first one that sees anything: an empty run (no credential yet, a quota
-    # refusal) leaves the baseline empty, so counting runs would mislabel the later backlog as new.
-    first_run = not sensor.baseline
-
+    with _guard.initiator("盯梢"):   # a gate refusal names who asked (EYE-GATE-FIX G)
+        if window:
+            limit = max(limit, window)
+            ranked, _meta = await fetcher.asearch_ranked(
+                sensor.query, sources=sensor.sources, limit=limit, per_source=window)
+        else:
+            ranked, _meta = await fetcher.asearch_ranked(
+                sensor.query, sources=sensor.sources, limit=limit)
     current_keys = set()
     for doc in ranked:
         current_keys.add((doc.source, doc.source_id))
@@ -391,20 +394,12 @@ def run_sensor(sensor: Sensor, store: SensorStore, limit: int = 15) -> dict:
     sensor.last_run_at = _now_iso
     sensor.last_new_count = len(new_keys)
     sensor.total_runs += 1
-    store.update(sensor)
+    await anyio.to_thread.run_sync(store.update, sensor, limiter=portal.IO_LANE)
 
     # FAIL-OPEN graph tap (design section 6 + P4): mint the RUN DIFF (observed edges sensor -> new
     # doc) here, where the new-result diff is final, BEFORE the summary returns. The baseline mints
     # nothing; an empty diff mints nothing (a no-news run is not an accretion event).
     _tap(sensor, list(new_keys), sensor.last_run_at)
-
-    # FAIL-OPEN shadow output: the new items of opted-in sources go to a fixed JSONL file an external
-    # comparison job reads (format in shadow_feed's docstring). Other sources write nothing.
-    try:
-        from omniseek.core import shadow_feed
-        shadow_feed.record_new(sensor, new_docs, sensor.last_run_at, first_run)
-    except Exception as exc:  # noqa: BLE001, a shadow write must NEVER break a sensor run
-        log.debug("shadow feed swallowed: %s", exc)
 
     return {
         "sensor_id": sensor.id,
@@ -486,13 +481,12 @@ def _parse_iso(ts: Optional[str]) -> Optional[float]:
     is treated as never-run, i.e. due immediately). Mechanical, no guessing."""
     if not ts:
         return None
-    from datetime import datetime
-    try:
-        dt = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
-        return dt.timestamp()
-    except Exception as exc:  # noqa: BLE001 (a bad stamp reads as never-run, never a crash)
-        log.debug("sensor last_run_at unparseable (%r): %s", ts, exc)
+    from omniseek.core.normalize import to_utc
+    dt = to_utc(str(ts))
+    if dt is None:  # a bad stamp reads as never-run, never a crash
+        log.debug("sensor last_run_at unparseable (%r)", ts)
         return None
+    return dt.timestamp()
 
 
 def due_sensors(store: SensorStore, now: float, schedules: Optional[dict] = None) -> list["Sensor"]:
@@ -521,7 +515,8 @@ def due_sensors(store: SensorStore, now: float, schedules: Optional[dict] = None
 # ── Optional: a resident-task table (SERVICES.tsv) decides WHICH sensors run and WHEN ────────────
 # A deployment that keeps a shared table of its resident tasks can make it the one place that says
 # whether and when each sensor runs, since a sensor is a resident task too. A table row for a
-# sensor: 归谁 全知之眼, 种类 内部调度, 标签或单元 omniseek.core.sensor:<id>, 何时跑 "眼内部调度 <spec>".
+# sensor: 种类 内部调度, 标签或单元 omniseek.core.sensor:<id>, 何时跑 "眼内部调度 <spec>"; its 归谁 only says
+# who is responsible and is never read to pick the row (EYE-OWNER-KEY).
 # The table is read with the deployment's own reader (scripts/services.py), never a second parser.
 # A stored definition the table does not list is kept but never runs. The table being unreadable
 # stops this round loudly (see scheduler_tick_for_sensors).
@@ -529,7 +524,7 @@ def due_sensors(store: SensorStore, now: float, schedules: Optional[dict] = None
 # the reader is never imported and nothing about a table is logged or pushed.
 
 SENSOR_TABLE_ENV = "OMNISEEK_SERVICES_TSV"   # must match the table reader's own variable and default
-_DEFAULT_SENSOR_TABLE: Optional[Path] = None  # the public build ships no resident-task table
+_DEFAULT_SENSOR_TABLE: Optional[Path] = where.services_table()
 TABLE_WHEN_PREFIX = "眼内部调度"
 TABLE_ALERT_COOLDOWN_S = 6 * 3600
 _table_alert_last: dict[str, float] = {}
@@ -553,7 +548,7 @@ def sensor_table_path(table_path=None) -> Optional[Path]:
 
 def _services():
     """The table reader, scripts/services.py (importable without omniseek by design, the same
-    import infra_jobs._declared_resident_labels uses). Imported only in table mode, on first use.
+    import omniseek_doctor.py uses). Imported only in table mode, on first use.
     Raises when it cannot be loaded."""
     scripts_dir = Path(__file__).resolve().parents[3] / "scripts"
     if str(scripts_dir) not in sys.path:
@@ -608,7 +603,7 @@ def table_is_due(sched, now: float, last_run: Optional[float]) -> bool:
 
 def table_sensor_schedules(path=None) -> tuple[dict, list[str]]:
     """Read the resident-task table: ({sensor id: jobs.Schedule}, [row problems]). Only rows with
-    归谁 全知之眼, 种类 内部调度 and 标签或单元 omniseek.core.sensor:<id> count. A row whose 何时跑
+    种类 内部调度 and 标签或单元 omniseek.core.sensor:<id> count (归谁 is not read). A row whose 何时跑
     cannot be read, or a second row for the same sensor, becomes a problem string and that row is
     left out (its sensor does not run). Raises services.TableError (or any load error) when the
     table as a whole is unusable; never answers an unusable table with an empty map."""
@@ -638,8 +633,15 @@ def table_row_hint(sensor: "Sensor") -> Optional[str]:
     if sensor_table_path() is None:
         return None
     num = sensor.id[len("sensor_"):] if sensor.id.startswith("sensor_") else sensor.id
+    try:
+        svc = _services()
+        owner = svc.omniseek_owner(svc.omniseek_rows(sensor_table_path()))
+    except Exception as exc:  # noqa: BLE001 -- the hint must not fail the create; the tick reports a bad table
+        log.debug("table_row_hint: cannot read 归谁 of OmniSeek's rows (%s)", exc)
+        owner = ""
+    owner = owner or "照表上眼的其他行"
     return (f"已建定义，但还不会自动跑：要在常驻任务表 SERVICES.tsv 加一行（名字 服务/eye-sensor-{num}，"
-            f"种类 内部调度，标签或单元 omniseek.core.sensor:{sensor.id}，归谁 全知之眼，"
+            f"种类 内部调度，标签或单元 omniseek.core.sensor:{sensor.id}，归谁 {owner}，"
             f"何时跑 {TABLE_WHEN_PREFIX} {sensor.schedule}），表发版后才会按表上的何时跑运行；"
             f"在那之前可以用 action=\"run\" 手动跑。")
 
@@ -659,13 +661,14 @@ def _table_alert(key: str, title: str, body: str, now: Optional[float] = None) -
 
 
 def scheduler_tick(store: SensorStore, schedules: Optional[dict] = None) -> dict:
-    """Run every DUE sensor serially via ``run_sensor`` (each wrapped in try/except so one failing
-    sensor never stops the rest), Bark on ``sensor.notify and summary["new_count"] > 0``, and return
+    """Run every DUE sensor serially via ``arun_sensor`` (through ``portal.run``: the tick is a
+    thread), each wrapped in try/except so one failing
+    sensor never stops the rest, Bark on ``sensor.notify and summary["new_count"] > 0``, and return
     a mechanical summary ``{"checked", "ran", "failed"}``. ``schedules`` as in ``due_sensors`` (the
     job entry passes the table's map; None keeps each sensor's own schedule). Logs ONE info line per
     tick that ran anything; a zero-due tick logs NOTHING (silence there means idle; the launchd
     service log must not fill with heartbeats). The tick needs no extra lock: SensorStore is
-    thread-safe and run_sensor is reentrant-safe (a concurrent manual run at worst double-searches;
+    thread-safe and arun_sensor is reentrant-safe (a concurrent manual run at worst double-searches;
     the cache absorbs it)."""
     now = time.time()
     due = due_sensors(store, now, schedules)
@@ -673,7 +676,8 @@ def scheduler_tick(store: SensorStore, schedules: Optional[dict] = None) -> dict
     failed: list[str] = []
     for s in due:
         try:
-            summary = run_sensor(s, store)
+            from omniseek.core import portal
+            summary = portal.run(arun_sensor, s, store)
             ran.append(s.id)
             if s.notify and (summary.get("notify_new_count", summary.get("new_count", 0)) > 0
                              or summary.get("gone_count", 0) > 0):
@@ -698,14 +702,14 @@ def scheduler_tick_for_sensors(table_path=None) -> dict:
     With a table, which sensors run and when comes from it (table_sensor_schedules): a
     stored sensor the table does not list never runs; a sensor row whose 何时跑 cannot be read, or
     one naming a sensor with no stored definition, is skipped and pushed once per 6h. When the
-    table as a whole cannot be used (missing file, missing column, bad row shape, no 全知之眼 row,
+    table as a whole cannot be used (missing file, missing column, bad row shape, no row of OmniSeek,
     reader not loadable) NO sensor runs this round, the reason is logged and pushed once per 6h,
     and SensorTableError is raised so the job registry records the "sensors" row as failed (the
     in-process analog of the table checker's exit code 2). Never an unnoticed full run, never an
     unnoticed stop.
 
     Due sensors run serially, a failing sensor is isolated, and Bark-on-new stays inside
-    run_sensor/_bark_new_results. The WRITES_ENABLED + double-start guards live on
+    arun_sensor/_bark_new_results. The WRITES_ENABLED + double-start guards live on
     jobs.start_scheduler, which owns the single daemon thread this row runs under."""
     path = sensor_table_path(table_path)
     if path is None:

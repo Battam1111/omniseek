@@ -85,37 +85,8 @@ class BooksOpenLibraryIAAdapter(BaseScrapeAdapter):
     domains = ["books"]
     modes = ["STRUCTURE", "UNWALL"]
 
-    # ── hooks ───────────────────────────────────────────────────────────────
-    def _raw_fetch(self, query: str, limit: int) -> Optional[dict]:
-        """Fetch BOTH surfaces. Split the limit so a small limit still samples each;
-        a failure of either surface is tolerated (partial payload still yields docs).
-        Returns None only when BOTH surfaces miss (the failure -> [] contract)."""
-        # Give each surface at least 1 slot; bias slightly toward Open Library (the
-        # primary bibliographic record) when limit is odd.
-        ol_n = max(1, (limit + 1) // 2)
-        ia_n = max(1, limit // 2)
-
-        ol = http.get_json(
-            OL_URL,
-            params={"q": query, "limit": ol_n, "fields": OL_FIELDS},
-            timeout=TIMEOUT,
-        )
-        ia = http.get_json(
-            IA_URL,
-            params=[
-                ("q", f"{query} AND mediatype:texts"),
-                *[("fl[]", f) for f in IA_FIELDS],
-                ("rows", ia_n),
-                ("output", "json"),
-            ],
-            timeout=TIMEOUT,
-        )
-        if ol is None and ia is None:
-            return None
-        return {"ol": ol, "ia": ia, "ol_n": ol_n, "ia_n": ia_n}
-
     async def _araw_fetch(self, query: str, limit: int) -> Optional[dict]:
-        """Async twin of ``_raw_fetch``, with ONE deliberate divergence: the two surfaces are fetched
+        """Async replacement of the deleted sync ``_raw_fetch`` (11-04, S9; this is the only one now), with ONE deliberate divergence: the two surfaces are fetched
         CONCURRENTLY instead of one after another. Same dual GET (Open Library + Internet Archive), same
         URLs, same params, same TIMEOUT, same limit-split, same partial-tolerance / both-miss->None
         contract; the shared-http egress is its async twin (``http.get_json`` -> ``await http.aget_json``).
@@ -191,16 +162,6 @@ class BooksOpenLibraryIAAdapter(BaseScrapeAdapter):
                     logger.debug("Skipping malformed Internet Archive record: %s", exc)
 
         return docs
-
-    async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async twin of ``search`` -> AsyncSearchCapable (the S4a fan-out awaits this directly;
-        the dual keyless GET costs COROUTINES, not held pool threads). Shares the base async cache
-        round-trip; egress via ``_araw_fetch``; mapping via the SAME pure-CPU ``_to_documents``
-        (byte-identical to ``search``: same cache key, same docs)."""
-        return await self._asearch_via(
-            query, limit,
-            afetch=lambda: self._araw_fetch(query, limit),
-            abuild=lambda raw: self._to_documents(raw, query, limit))
 
     # ── per-surface mappers ───────────────────────────────────────────────────
     @staticmethod

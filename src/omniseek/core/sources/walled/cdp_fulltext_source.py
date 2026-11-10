@@ -35,6 +35,10 @@ from urllib.parse import urlparse
 from bs4 import BeautifulSoup
 from markdownify import markdownify as html_to_md
 
+import anyio
+
+from omniseek.core import portal
+from omniseek.core.sources._base import SourceBase
 from omniseek.core.normalize import Document, strip_base64_images
 from omniseek.core.sources.walled._cdp import cdp_call, cdp_health, content_with_media, images_from_page
 
@@ -61,7 +65,7 @@ _EXPAND_JS = (
 )
 
 
-class CdpFulltextAdapter:
+class CdpFulltextAdapter(SourceBase):
     name = "cdp_fulltext"
     needs_credentials = False
     kind = "portal"
@@ -81,7 +85,14 @@ class CdpFulltextAdapter:
     def search(self, query: str, limit: int = 10) -> list[Document]:
         return []  # discovery is the search-index sources' job; this adapter is URL-only
 
-    def fetch_url(self, url: str) -> Optional[Document]:
+    async def afetch_url(self, url: str) -> Optional[Document]:
+        host = (urlparse(url).hostname or "").rstrip(".")
+        if not any(host == d or host.endswith("." + d) for d in _HOSTS):
+            return None
+        # the CDP page drive blocks (cdp_call): a worker thread
+        return await anyio.to_thread.run_sync(self._read_url, url, limiter=portal.IO_LANE)
+
+    def _read_url(self, url: str) -> Optional[Document]:
         parsed = urlparse(url)
         host = (parsed.hostname or "").rstrip(".")  # hostname is lower-cased; a trailing dot is the same host
         if not any(host == d or host.endswith("." + d) for d in _HOSTS):
@@ -139,7 +150,7 @@ class CdpFulltextAdapter:
         return Document(
             source="cdp_fulltext", source_id=url, url=r["url"],
             title=(r["title"] or "(untitled)").strip()[:200],
-            content=content_with_media(body, r.get("images") or []) or "(no text extracted)",
+            content=content_with_media(body, r.get("images") or []) or "",
             media=(r.get("images") or []),
         )
 

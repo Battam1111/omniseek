@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://omniseek.local/schemas/scheduler-heartbeat-v1.json",
-  "title": "OmniSeek Eye Scheduler Heartbeat v1",
+  "title": "OmniSeek Scheduler Heartbeat v1",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -22,9 +22,7 @@
     "emitted_monotonic_ns",
     "initial_delay_s",
     "tick_interval_s",
-    "max_job_budget_s",
-    "startup_grace_s",
-    "stale_after_s"
+    "max_job_budget_s"
   ],
   "properties": {
     "schema": {
@@ -50,18 +48,11 @@
     "contract": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["schema_digest", "policy_digest", "mode"],
+      "required": ["schema_digest"],
       "properties": {
         "schema_digest": {
           "type": "string",
           "pattern": "^[0-9a-f]{64}$"
-        },
-        "policy_digest": {
-          "type": "string",
-          "pattern": "^[0-9a-f]{64}$"
-        },
-        "mode": {
-          "enum": ["calibration-probe", "enforced"]
         }
       }
     },
@@ -124,18 +115,6 @@
     "max_job_budget_s": {
       "type": "number",
       "exclusiveMinimum": 0
-    },
-    "startup_grace_s": {
-      "oneOf": [
-        {"type": "null"},
-        {"type": "number", "exclusiveMinimum": 0}
-      ]
-    },
-    "stale_after_s": {
-      "oneOf": [
-        {"type": "null"},
-        {"type": "number", "exclusiveMinimum": 0}
-      ]
     }
   },
   "allOf": [
@@ -162,40 +141,6 @@
           "tick_seq": {"type": "integer", "minimum": 1},
           "last_tick_at_utc": {"type": "string", "format": "date-time"},
           "last_tick_monotonic_ns": {"type": "integer", "minimum": 0}
-        }
-      }
-    },
-    {
-      "if": {
-        "properties": {
-          "contract": {
-            "properties": {"mode": {"const": "calibration-probe"}},
-            "required": ["mode"]
-          }
-        },
-        "required": ["contract"]
-      },
-      "then": {
-        "properties": {
-          "startup_grace_s": {"type": "null"},
-          "stale_after_s": {"type": "null"}
-        }
-      }
-    },
-    {
-      "if": {
-        "properties": {
-          "contract": {
-            "properties": {"mode": {"const": "enforced"}},
-            "required": ["mode"]
-          }
-        },
-        "required": ["contract"]
-      },
-      "then": {
-        "properties": {
-          "startup_grace_s": {"type": "number", "exclusiveMinimum": 0},
-          "stale_after_s": {"type": "number", "exclusiveMinimum": 0}
         }
       }
     }

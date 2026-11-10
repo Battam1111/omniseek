@@ -24,7 +24,7 @@ DESIGN — OmniSeek's bulk-file pattern (shared via _bulk_funding, as NSERC/SSHR
 
 Only Horizon Europe (2021-2027, the ACTIVE programme) is ingested; the closed H2020 (2014-2020) is a
 separate same-shape zip that could be a sibling later. explicit_only: a named-query lookup like
-nsf_awards / nserc_awards. Structure verified live 2026-07-10 (project.csv 21 cols, ';'-delimited,
+nsf_awards / sshrc_awards. Structure verified live 2026-07-10 (project.csv 21 cols, ';'-delimited,
 utf-8-sig; totalCost is EUR with a comma decimal, e.g. '2073781,25'; coordinator lives in
 organization.csv role=='coordinator'; project page = cordis.europa.eu/project/id/{id}).
 """
@@ -32,19 +32,16 @@ organization.csv role=='coordinator'; project page = cordis.europa.eu/project/id
 from __future__ import annotations
 
 import csv
-import functools
 import io
 import logging
 import threading
 import zipfile
-from datetime import datetime
 from typing import Optional
 
-import anyio
 import httpx
 
-from omniseek.core import cache, diag, http
-from omniseek.core.normalize import Document, keyword_score_filter
+from omniseek.core import diag, http
+from omniseek.core.normalize import Document, to_utc
 from omniseek.core.sources.api._bulk_funding import UA, BulkFundingBase, is_ai_relevant
 
 logger = logging.getLogger(__name__)
@@ -70,16 +67,6 @@ def _aget_client() -> "httpx.AsyncClient":
     return _aclient
 
 
-def _parse_date(s: Optional[str]) -> Optional[datetime]:
-    s = (s or "").strip()
-    if not s:
-        return None
-    try:
-        return datetime.strptime(s[:10], "%Y-%m-%d")
-    except ValueError:
-        return None
-
-
 class CordisEuAdapter(BulkFundingBase):
     name = "cordis_eu"
     description = (
@@ -97,79 +84,8 @@ class CordisEuAdapter(BulkFundingBase):
     url_host = "cordis.europa.eu"
     _version = "horizon-2021-2027"
 
-    # ── bulk fetch + coordinator join + subset build ────────────────────────
-    def _build_subset_docs(self) -> list[Document]:
-        try:
-            # 85s < the 90s fetch_one deadline (the NSERC/SSHRC/CIHR precedent): generous for a ~35MB
-            # zip. Raise the OUTER deadline, not this, if a larger download is ever needed.
-            r = http.direct("GET", _CSV_ZIP, headers={"User-Agent": UA}, timeout=85,
-                            follow_redirects=True)
-            r.raise_for_status()
-            content = r.content
-        except Exception as exc:  # noqa: BLE001 — failure → [] (the contract); don't cache a miss
-            logger.warning("cordis_eu: zip fetch failed: %s", exc)
-            st = getattr(getattr(exc, "response", None), "status_code", None)
-            diag.note("cordis_eu.zip", url=_CSV_ZIP, status=st, exc=exc)
-            return []
-        try:
-            zf = zipfile.ZipFile(io.BytesIO(content))
-            proj_text = zf.read("project.csv").decode("utf-8-sig", errors="replace")
-            org_text = zf.read("organization.csv").decode("utf-8-sig", errors="replace")
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("cordis_eu: zip parse failed: %s", exc)
-            return []
-        projects: dict[str, dict] = {}
-        for row in csv.DictReader(io.StringIO(proj_text), delimiter=";"):
-            if is_ai_relevant(row.get("title"), row.get("objective"), row.get("keywords")):
-                pid = (row.get("id") or "").strip()
-                if pid:
-                    projects[pid] = row
-        # Join the coordinator org (first coordinator row) for the kept projects only.
-        coords: dict[str, dict] = {}
-        for orow in csv.DictReader(io.StringIO(org_text), delimiter=";"):
-            if (orow.get("role") or "") == "coordinator":
-                pid = (orow.get("projectID") or "").strip()
-                if pid in projects and pid not in coords:
-                    coords[pid] = orow
-        docs: list[Document] = []
-        for pid, proj in projects.items():
-            d = self._row_to_doc(proj, coords.get(pid))
-            if d is not None:
-                docs.append(d)
-        logger.info("cordis_eu: built %d AI/ML/NLP docs from Horizon Europe (of %d projects)",
-                    len(docs), len(projects))
-        return docs
-
-    # ── native-async twins (S4b): asearch -> _asubset_docs -> _abuild_subset_docs ───────────────
-    # Byte-faithful mirror of BulkFundingBase.search / _subset_docs + this source's _build_subset_docs
-    # (the base owns search/_subset_docs; this file owns the bulk build, so both twins live here).
-    # Changing ONLY: the disk cache round-trip goes OFF the loop (anyio.to_thread, SAME cache key) and
-    # the raw ~35MB httpx.get goes async via the module AsyncClient. The BM25 filter + zip/csv parse +
-    # coordinator join stay pure CPU ON the loop, byte-identical. Defining asearch flags the adapter
-    # AsyncSearchCapable, routing it to the fetcher's native-async dispatch branch.
-    async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async twin of BulkFundingBase.search."""
-        docs = await self._asubset_docs()
-        if not docs:
-            return []
-        q = (query or "").strip()
-        return docs[:limit] if not q else keyword_score_filter(docs, q)[:limit]
-
-    async def _asubset_docs(self) -> list[Document]:
-        """Native-async twin of BulkFundingBase._subset_docs: cache round-trip OFF the loop (SAME key),
-        async build on a miss. The fresh / cache_only contextvars propagate into the worker thread."""
-        key = cache.make_key(self.name, "subset", self._version)  # SAME key as _subset_docs
-        cached = await anyio.to_thread.run_sync(cache.get_docs, key)  # disk read OFF loop
-        if cached is not None:
-            return cached
-        docs = await self._abuild_subset_docs()
-        if docs:
-            await anyio.to_thread.run_sync(  # disk write OFF loop
-                functools.partial(cache.set_docs, key, docs, ttl=self.cache_ttl))
-        return docs
-
     async def _abuild_subset_docs(self) -> list[Document]:
-        """Native-async twin of _build_subset_docs. ONLY the raw ~35MB httpx.get -> await
+        """Native-async replacement of the deleted sync ``_build_subset_docs`` (11-04, S9; this is the only one now) ONLY the raw ~35MB httpx.get -> await
         _aget_client().get (same UA / timeout / follow_redirects); the zip parse + coordinator join +
         row->doc mapping below are pure CPU held ON the loop, byte-identical to _build_subset_docs (a
         monthly cache-miss event; the conversion pattern keeps csv/parse on the loop). KEEP IN SYNC
@@ -254,7 +170,7 @@ class CordisEuAdapter(BulkFundingBase):
             title=(title or acronym)[:140],
             content=" ".join(p for p in parts if p),
             author=None,  # CORDIS project rows carry a coordinator ORG, not a PI person
-            date=_parse_date(start_date),
+            date=to_utc(start_date),
             tags=tags,
             metadata={"project_id": pid, "acronym": acronym, "status": status,
                       "funding_scheme": scheme, "master_call": master_call,
@@ -264,10 +180,10 @@ class CordisEuAdapter(BulkFundingBase):
                       "coordinator_city": coord_city, "keywords": keywords},
         )
 
-    def health_check(self) -> tuple[bool, str]:
+    async def ahealth_check(self) -> tuple[bool, str]:
         # Cheap: a 2-byte Range proves the zip is live (PK magic) without the ~35MB pull.
         try:
-            r = http.direct("GET", _CSV_ZIP, headers={"User-Agent": UA, "Range": "bytes=0-1"},
+            r = await http.adirect("GET", _CSV_ZIP, headers={"User-Agent": UA, "Range": "bytes=0-1"},
                             timeout=20, follow_redirects=True)
             ok = r.status_code in (200, 206) and r.content[:2] == b"PK"
             return ok, f"HTTP {r.status_code}" + ("" if ok else " (not a zip / unreachable)")

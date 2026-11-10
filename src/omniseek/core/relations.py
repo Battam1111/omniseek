@@ -20,9 +20,10 @@ Built from live probes against the real host (2026-06-10):
     (Yi R. Fung -> Heng Ji ~51x across two split ids).
 
 THE THREE CLEAN-STRUCTURED LAYERS BUILT HERE (mechanical, keyless, read-only):
-  resolve_identity   name -> ranked candidate ids (the shared front door for ALL layers)
-  coauthors          academic collaboration: per-author neighborhood + pairwise joint-work
-  institution_cohort organizational: who is at a lab/dept (optionally in a field, a window)
+  aresolve_identity   name -> ranked candidate ids (the shared front door for ALL layers)
+  acoauthors          academic collaboration: per-author neighborhood + pairwise joint-work
+  ainstitution_cohort organizational: who is at a lab/dept (optionally in a field, a window)
+(async, awaited by the tool bodies on the loop; the coauthor counting runs in the process lane)
 
 Fuzzy / behavioral layers (media co-mention, social proximity, business ties,
 advisor-as-meaning, academic siblings, code collaboration) are deliberately NOT
@@ -37,15 +38,17 @@ researcher_watch, csrankings, org_watch).
 
 from __future__ import annotations
 
+import functools
 import logging
 import re
 from collections import Counter
-from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
+
+import anyio
 
 from omniseek.core import _openalex as oa
 from omniseek.core import _s2
-from omniseek.core import cache
+from omniseek.core import cache, portal
 
 logger = logging.getLogger(__name__)
 
@@ -61,12 +64,23 @@ _MAX_WORKS = 200  # OpenAlex per-page hard max; one author's neighborhood in one
 _WORKS_TTL = 6 * 3600     # per-author work lists: the heavy fetch; a person's recent papers land slowly
 _RESOLVE_TTL = 3600       # name -> id map: stable, but short so a fresh ingestion is picked up within the hour
 _COHORT_TTL = 6 * 3600    # institution roster: an org's publishing cohort shifts slowly
+_FETCH_AUTHORS_AT_ONCE = 8  # coauthors: per-author work pulls in flight at once (the old thread pool's size)
+
+
+async def _cache_get(key: str):
+    """``cache.get`` off the loop (disk read on the IO lane)."""
+    return await anyio.to_thread.run_sync(cache.get, key, limiter=portal.IO_LANE)
+
+
+async def _cache_set(key: str, value, ttl: int) -> None:
+    """``cache.set`` off the loop (disk write on the IO lane)."""
+    await anyio.to_thread.run_sync(functools.partial(cache.set, key, value, ttl=ttl), limiter=portal.IO_LANE)
 
 from omniseek.core.recall import graph  # noqa: E402 — the graph write verb + mint registry
 
 # Vocabulary this tap MINTS (vocabulary-by-minting, design section 3): declared on the tap itself,
-# registered at import, folded into ``graph.declared_vocabulary`` as the computed union; the smoke
-# tripwire bounds ACTUAL graph data to that union. relations owns the PERSON layer the cartographer
+# registered at import, folded into ``graph.declared_vocabulary`` as the computed union; ACTUAL
+# graph data must stay within that union. relations owns the PERSON layer the cartographer
 # deferred (P3 taps table row): person/institution nodes, and the coauthored / affiliated / same_as
 # edges from the three clean-structured layers. THE MINT RULE (design "Mint the product"): a tap
 # mints what its tool RETURNS, never its internal fetch material — coauthors pulls up to 200 works
@@ -102,9 +116,9 @@ def _name_matches(query: str, candidate: str) -> bool:
 
 
 # ── identity resolution (the shared front door) ──────────────────────────────
-def _oa_candidates(name: str, limit: int) -> list[dict]:
-    data = oa.get_json("/authors", {"search": name, "per-page": max(limit, 10),
-                                    "select": _AUTHOR_SELECT})
+async def _aoa_candidates(name: str, limit: int) -> list[dict]:
+    data = await oa.aget_json("/authors", {"search": name, "per-page": max(limit, 10),
+                                          "select": _AUTHOR_SELECT})
     out = []
     for a in (data.get("results") or []):
         insts = [(i.get("display_name") or "") for i in (a.get("last_known_institutions") or [])]
@@ -123,9 +137,9 @@ def _oa_candidates(name: str, limit: int) -> list[dict]:
     return out
 
 
-def _s2_candidates(name: str, limit: int) -> list[dict]:
+async def _as2_candidates(name: str, limit: int) -> list[dict]:
     out = []
-    for a in _s2.search_author(name, limit):  # bounded + breaker + degrade-to-[] inside _s2
+    for a in await _s2.asearch_author(name, limit):  # bounded + breaker + degrade-to-[] inside _s2
         dn = getattr(a, "name", None)
         out.append({
             "id": getattr(a, "authorId", None),
@@ -151,7 +165,7 @@ def _rank(cands: list[dict], hint: str) -> list[dict]:
     return sorted(cands, key=key, reverse=True)
 
 
-def _resolve_by_paper(name: str, paper: str) -> list[dict]:
+async def _aresolve_by_paper(name: str, paper: str) -> list[dict]:
     """Disambiguate by a KNOWN paper: return the author(s) matching ``name`` in the author
     list of ``paper`` (an arXiv id, a DOI, or a title searched on S2). The reliable way to
     pin a common-name junior — a distinctive paper fixes the exact id where a bare name
@@ -159,13 +173,13 @@ def _resolve_by_paper(name: str, paper: str) -> list[dict]:
     s = (paper or "").strip()
     if not s:
         return []
-    # _s2.get_paper normalizes a bare arXiv id / DOI internally (single source of truth); a
+    # _s2.aget_paper normalizes a bare arXiv id / DOI internally (single source of truth); a
     # title goes through search. Both wrappers carry the breaker/semaphore + degrade to None/[].
     if re.fullmatch(r"\d{4}\.\d{4,5}(v\d+)?", s) or s.lower().startswith("10.") or "doi.org/" in s.lower():
-        p = _s2.get_paper(s)
+        p = await _s2.aget_paper(s)
     else:
         best = None
-        for hit in _s2.search_paper(s, limit=3):
+        for hit in await _s2.asearch_paper(s, limit=3):
             best = best or hit
             if s.lower()[:24] in (getattr(hit, "title", "") or "").lower():
                 best = hit
@@ -224,8 +238,8 @@ def _likely_same_person(candidates: list[dict]) -> list[dict]:
 # counting material for the ranking — none of that mints; the returned top_coauthors / bridges /
 # pairwise edges (the product) do. resolve candidates' institution STRINGS mint nothing ("no external
 # id, no node"); cohort's id-bearing institution does. The three builders below are PURE (take the
-# tool's OUT dict, return (nodes, edges) in the writer's dict shapes) so the smoke can golden-test
-# them with zero network; _tap wraps enqueue_graph fail-open (a tap failure must NEVER break the
+# tool's OUT dict, return (nodes, edges) in the writer's dict shapes) so they
+# run with zero network; _tap wraps enqueue_graph fail-open (a tap failure must NEVER break the
 # read the agent gets). person node ids namespace by the candidate/result's own backend
 # (person:openalex:A… / person:s2:…); institution is inst:openalex:I….
 
@@ -391,8 +405,8 @@ def _tap(builder, out: dict) -> None:
         logger.debug("relations graph tap swallowed: %s", exc)
 
 
-def resolve_identity(name: str, hint: str = "", source: str = "auto", paper: str = "",
-                     limit: int = 5, fresh: bool = False) -> dict:
+async def aresolve_identity(name: str, hint: str = "", source: str = "auto", paper: str = "",
+                            limit: int = 5, fresh: bool = False) -> dict:
     """name -> ranked candidate author ids. NEVER silently picks, and NEVER promotes a
     name that does not actually match the query: returns CANDIDATES, name-matches first.
 
@@ -420,16 +434,16 @@ def resolve_identity(name: str, hint: str = "", source: str = "auto", paper: str
     key = cache.make_key("relations", "resolve", name.lower(), hint, source,
                          _s2.norm_s2_id(paper) if paper else "", limit)
     if not fresh:
-        cached = cache.get(key)
+        cached = await _cache_get(key)
         if cached is not None:
             _tap(_resolve_mints, cached)   # a cache hit is still a real resolution → honest re-mint
             return cached
-    anchored = _resolve_by_paper(name, paper) if paper else []
+    anchored = await _aresolve_by_paper(name, paper) if paper else []
     cands: list[dict] = []
     oa_failed: Optional[str] = None
     if source in ("auto", "openalex"):
         try:
-            cands += _oa_candidates(name, limit)
+            cands += await _aoa_candidates(name, limit)
         except Exception as exc:  # noqa: BLE001
             # A TRANSPORT failure (429 / breaker-open / network) means we have NO OpenAlex data — it
             # is NOT evidence the person is absent. Record it so the verdict below never reports a
@@ -441,7 +455,7 @@ def resolve_identity(name: str, hint: str = "", source: str = "auto", paper: str
             logger.warning("relations openalex resolve failed for %r: %s", name, exc)
     best_match = max((c["works_count"] for c in cands if c.get("name_match")), default=0)
     if source == "s2" or (source == "auto" and best_match < 8) or anchored:
-        cands += _s2_candidates(name, limit)
+        cands += await _as2_candidates(name, limit)
     cands = _rank(cands, hint)
     matched = [c for c in cands if c.get("name_match")]
     if anchored:
@@ -457,7 +471,7 @@ def resolve_identity(name: str, hint: str = "", source: str = "auto", paper: str
         # itself is a fact from the paper's author list, but a failed OpenAlex call means the `rest`
         # tail is blind, so do not freeze a partially-degraded view for the whole TTL.
         if not oa_failed:
-            cache.set(key, anchored_out, ttl=_RESOLVE_TTL)
+            await _cache_set(key, anchored_out, _RESOLVE_TTL)
         _tap(_resolve_mints, anchored_out)   # mint the returned candidates + any same_as group
         return anchored_out
     strong = [c for c in matched if c["works_count"] >= 2]
@@ -492,7 +506,7 @@ def resolve_identity(name: str, hint: str = "", source: str = "auto", paper: str
     # Cache the resolution UNLESS it was degraded: a 429 / breaker-open lookup is recoverable, and
     # freezing it for the whole TTL would turn a transient outage into a stale "no match" all hour.
     if not oa_failed:
-        cache.set(key, out, ttl=_RESOLVE_TTL)
+        await _cache_set(key, out, _RESOLVE_TTL)
     _tap(_resolve_mints, out)   # mint person nodes + likely_same_person same_as candidates (fail-open)
     return out
 
@@ -507,19 +521,19 @@ def _looks_like_id(s: str) -> Optional[str]:
     return None
 
 
-def _oa_author_works(author_id: str, fresh: bool = False) -> list[dict]:
+async def _aoa_author_works(author_id: str, fresh: bool = False) -> list[dict]:
     # Cache the heavy per-author OpenAlex pull (up to _MAX_WORKS works) keyed by the author id, so a
     # repeated omniseek_coauthors over the same people reads disk instead of re-spending the shared key. The
     # normalized work shape below is what gets cached, identical on a hit. (mirrors researcher_watch's
     # _fetch_pi_works + cartographer's fresh-bypass idiom.)
     key = cache.make_key("relations", "works", "openalex", author_id)
     if not fresh:
-        cached = cache.get(key)
+        cached = await _cache_get(key)
         if cached is not None:
             return cached
-    data = oa.get_json("/works", {"filter": f"author.id:{author_id}",
-                                  "sort": "publication_date:desc",
-                                  "per-page": _MAX_WORKS, "select": _WORKS_SELECT})
+    data = await oa.aget_json("/works", {"filter": f"author.id:{author_id}",
+                                         "sort": "publication_date:desc",
+                                         "per-page": _MAX_WORKS, "select": _WORKS_SELECT})
     works = []
     for w in (data.get("results") or []):
         ids, names = [], {}
@@ -533,11 +547,11 @@ def _oa_author_works(author_id: str, fresh: bool = False) -> list[dict]:
                       "title": w.get("title") or "(untitled)",
                       "year": w.get("publication_year"),
                       "author_ids": ids, "author_names": names})
-    cache.set(key, works, ttl=_WORKS_TTL)
+    await _cache_set(key, works, _WORKS_TTL)
     return works
 
 
-def _s2_author_works(author_id: str, cap: int = _MAX_WORKS, fresh: bool = False) -> list[dict]:
+async def _as2_author_works(author_id: str, cap: int = _MAX_WORKS, fresh: bool = False) -> list[dict]:
     """S2 author's papers as the SAME normalized shape. S2 consolidates a junior's
     profile far better than OpenAlex (which splits arXiv-recent papers across ids), so
     this is the right backend for junior / arXiv-frontier co-authorship edges. Uses the
@@ -547,12 +561,12 @@ def _s2_author_works(author_id: str, cap: int = _MAX_WORKS, fresh: bool = False)
     # silently-truncated hit. (mirrors researcher_watch's _fetch_pi_works + cartographer's fresh bypass.)
     key = cache.make_key("relations", "works", "s2", author_id, cap)
     if not fresh:
-        cached = cache.get(key)
+        cached = await _cache_get(key)
         if cached is not None:
             return cached
     works = []
-    # _s2.get_author_papers is hard-bounded (page size = cap, stop at cap) + breaker + degrade-to-[].
-    for p in _s2.get_author_papers(author_id, cap, fields=["title", "year", "authors"]):
+    # _s2.aget_author_papers is hard-bounded (page size = cap, stop at cap) + breaker + degrade-to-[].
+    for p in await _s2.aget_author_papers(author_id, cap, fields=["title", "year", "authors"]):
         ids, names = [], {}
         for a in (getattr(p, "authors", None) or []):
             aid = getattr(a, "authorId", None)
@@ -563,7 +577,7 @@ def _s2_author_works(author_id: str, cap: int = _MAX_WORKS, fresh: bool = False)
                       "title": getattr(p, "title", None) or "(untitled)",
                       "year": getattr(p, "year", None),
                       "author_ids": ids, "author_names": names})
-    cache.set(key, works, ttl=_WORKS_TTL)
+    await _cache_set(key, works, _WORKS_TTL)
     return works
 
 
@@ -574,7 +588,7 @@ def _name_key(name: str) -> str:
     return " ".join(sorted(_name_tokens(name)))
 
 
-def _resolve_one(token: str, hint: str, source: str, paper: str = "", fresh: bool = False) -> dict:
+async def _aresolve_one(token: str, hint: str, source: str, paper: str = "", fresh: bool = False) -> dict:
     """Resolve one input token for the graph. A token may be:
       • a NAME (-> top NAME-MATCHING candidate; paper= pins a common-name junior),
       • a single id, or
@@ -586,7 +600,7 @@ def _resolve_one(token: str, hint: str, source: str, paper: str = "", fresh: boo
         ns = _looks_like_id(parts[0])
         return {"query": token, "resolved": {"id": parts[0], "ids": parts, "source": ns, "name": None},
                 "ambiguous": False, "alternatives": []}
-    r = resolve_identity(token, hint=hint, source=source, paper=paper, fresh=fresh)
+    r = await aresolve_identity(token, hint=hint, source=source, paper=paper, fresh=fresh)
     want = "s2" if (source == "s2" or paper) else "openalex"
     matched = [c for c in r["candidates"] if c.get("name_match") and c["source"] == want]
     if not matched and paper:
@@ -607,9 +621,9 @@ def _resolve_one(token: str, hint: str, source: str, paper: str = "", fresh: boo
             "ambiguous": r["ambiguous"], "alternatives": matched[1:4]}
 
 
-def coauthors(authors: list[str], source: str = "openalex", hints: Optional[list[str]] = None,
-              papers: Optional[list[str]] = None, per_author_works: int = 200,
-              fresh: bool = False) -> dict:
+async def acoauthors(authors: list[str], source: str = "openalex", hints: Optional[list[str]] = None,
+                     papers: Optional[list[str]] = None, per_author_works: int = 200,
+                     fresh: bool = False) -> dict:
     """Co-authorship layer. Pass names and/or ids (single source per call — OpenAlex 'A…'
     ids and S2 numeric ids do not mix in one graph).
 
@@ -630,6 +644,10 @@ def coauthors(authors: list[str], source: str = "openalex", hints: Optional[list
 
     fresh=True bypasses the cache for both the per-author work pulls and the identity
     resolutions (the same fresh idiom cartographer/field_skeleton uses).
+
+    The lookups are awaited on the loop (at most ``_FETCH_AUTHORS_AT_ONCE`` authors' work pulls at
+    once); the counting over the pulled works (``_coauthor_graph``) is pure CPU and runs in the
+    process lane (``portal.run_cpu``).
     """
     authors = [a for a in (authors or []) if a and a.strip()]
     if not authors:
@@ -637,12 +655,12 @@ def coauthors(authors: list[str], source: str = "openalex", hints: Optional[list
     hints = hints or []
     papers = papers or []
 
-    nodes = [_resolve_one(a, hint=(hints[i] if i < len(hints) else ""), source=source,
-                          paper=(papers[i] if i < len(papers) else ""), fresh=fresh)
+    nodes = [await _aresolve_one(a, hint=(hints[i] if i < len(hints) else ""), source=source,
+                                 paper=(papers[i] if i < len(papers) else ""), fresh=fresh)
              for i, a in enumerate(authors)]
 
     # fetch each resolved author's works, MERGING across their split ids (deduped)
-    def fetch(n):
+    async def fetch(n):
         rid = n.get("resolved")
         if not rid:
             return []
@@ -652,11 +670,8 @@ def coauthors(authors: list[str], source: str = "openalex", hints: Optional[list
             if not aid:
                 continue
             try:
-                # fresh is threaded EXPLICITLY (not via cache._fresh_var): these run inside the
-                # ThreadPoolExecutor below, and the fresh contextvar does not propagate into raw
-                # worker threads (researcher_watch copy_context()s for the same reason).
-                ws = (_s2_author_works(aid, per_author_works, fresh=fresh) if rid.get("source") == "s2"
-                      else _oa_author_works(aid, fresh=fresh)[:per_author_works])
+                ws = (await _as2_author_works(aid, per_author_works, fresh=fresh) if rid.get("source") == "s2"
+                      else (await _aoa_author_works(aid, fresh=fresh))[:per_author_works])
             except Exception as exc:  # noqa: BLE001
                 logger.warning("coauthors fetch failed for %s: %s", aid, exc)
                 continue
@@ -664,9 +679,35 @@ def coauthors(authors: list[str], source: str = "openalex", hints: Optional[list
                 merged[w.get("id") or _name_key(w["title"])] = w
         return list(merged.values())
 
-    with ThreadPoolExecutor(max_workers=min(len(nodes), 8)) as ex:
-        works_by_node = list(ex.map(fetch, nodes))
+    works_by_node: list = [None] * len(nodes)
+    slots = anyio.CapacityLimiter(_FETCH_AUTHORS_AT_ONCE)
 
+    async def fetch_into(i: int, n: dict) -> None:
+        async with slots:
+            works_by_node[i] = await fetch(n)
+
+    async with anyio.create_task_group() as tg:
+        for i, n in enumerate(nodes):
+            tg.start_soon(fetch_into, i, n)
+
+    out = await portal.run_cpu(_coauthor_graph, nodes, works_by_node, source)
+    # If any input author's resolution was DEGRADED (an OpenAlex transport failure, not a real
+    # absence), surface it at the top level so a thin / empty graph reads as missing-data, not "no ties".
+    degraded = {n["query"]: n["degraded"] for n in out["nodes"] if n.get("degraded")}
+    if degraded:
+        out["degraded"] = degraded
+    # FAIL-OPEN graph tap: mint the PRODUCT (resolved persons + top_coauthors + bridges + pairwise
+    # coauthored edges); the per-author works pool + cooc mint nothing (the mint-the-product rule).
+    _tap(_coauthors_mints, out)
+    return out
+
+
+def _coauthor_graph(nodes: list[dict], works_by_node: list[list[dict]], source: str) -> dict:
+    """The co-authorship counting over the pulled works (pure CPU; a worker of the process lane runs
+    it): each node's name-collapsed, 1/n-weighted coauthor neighborhood (``works_seen`` and
+    ``top_coauthors`` written onto the node, the ego's name backfilled for a bare-id input), the
+    pairwise edges, the bridges and the cooc sub-community pairs. Returns the result dict without the
+    ``degraded`` key (``acoauthors`` adds it)."""
     node_ids = [set((n.get("resolved") or {}).get("ids")
                     or ([n["resolved"]["id"]] if n.get("resolved") else [])) for n in nodes]
     input_names = {_name_key(n["query"]) for n in nodes}
@@ -769,22 +810,13 @@ def coauthors(authors: list[str], source: str = "openalex", hints: Optional[list
                        for (a, b), ct in cooc.items() if ct >= 2),
                       key=lambda x: -x["n"])[:30]
 
-    out = {"source": source, "n_authors": len(nodes),
-           "nodes": nodes, "edges": edges, "bridges": bridges, "cooc": cooc_out}
-    # If any input author's resolution was DEGRADED (an OpenAlex transport failure, not a real
-    # absence), surface it at the top level so a thin / empty graph reads as missing-data, not "no ties".
-    degraded = {n["query"]: n["degraded"] for n in nodes if n.get("degraded")}
-    if degraded:
-        out["degraded"] = degraded
-    # FAIL-OPEN graph tap: mint the PRODUCT (resolved persons + top_coauthors + bridges + pairwise
-    # coauthored edges); the per-author works pool + cooc mint nothing (the mint-the-product rule).
-    _tap(_coauthors_mints, out)
-    return out
+    return {"source": source, "n_authors": len(nodes),
+            "nodes": nodes, "edges": edges, "bridges": bridges, "cooc": cooc_out}
 
 
 # ── organizational layer: institution cohort ─────────────────────────────────
-def institution_cohort(institution: str, concept: str = "", year_from: Optional[int] = None,
-                       limit: int = 40, fresh: bool = False) -> dict:
+async def ainstitution_cohort(institution: str, concept: str = "", year_from: Optional[int] = None,
+                              limit: int = 40, fresh: bool = False) -> dict:
     """Who actively publishes at an institution (a lab/dept/university), optionally within a
     FIELD and since a year. The organizational network — orthogonal to co-authorship
     ('same lab, never co-authored' is still a tie, and a lab's roster is the SG/Canada
@@ -802,19 +834,19 @@ def institution_cohort(institution: str, concept: str = "", year_from: Optional[
     # Cache the roster keyed by the full query (institution + concept + window + size): an org's
     # publishing cohort shifts slowly, so a repeated identical cohort call reads disk instead of
     # re-running the institution + concept + group_by works queries against the shared metered key.
-    # A transport failure raises out of oa.get_json BEFORE any cache.set, so a degraded lookup is
+    # A transport failure raises out of oa.aget_json BEFORE any cache.set, so a degraded lookup is
     # never frozen (same boundary as cartographer: only a real result is cached).
     key = cache.make_key("relations", "cohort", institution, concept, year_from or "", limit)
     if not fresh:
-        cached = cache.get(key)
+        cached = await _cache_get(key)
         if cached is not None:
             _tap(_cohort_mints, cached)   # a cache hit is a real cohort → honest re-mint (a miss mints nothing)
             return cached
-    inst = oa.get_json("/institutions", {"search": institution, "per-page": 1})
+    inst = await oa.aget_json("/institutions", {"search": institution, "per-page": 1})
     res = inst.get("results") or []
     if not res:
         miss = {"institution": None, "people": [], "note": f"no institution matched {institution!r}"}
-        cache.set(key, miss, ttl=_COHORT_TTL)
+        await _cache_set(key, miss, _COHORT_TTL)
         return miss
     iid = (res[0].get("id") or "").rsplit("/", 1)[-1]
     iname = res[0].get("display_name")
@@ -822,7 +854,7 @@ def institution_cohort(institution: str, concept: str = "", year_from: Optional[
     filt = [f"institutions.id:{iid}"]
     cid = None
     if concept:
-        cj = oa.get_json("/concepts", {"search": concept, "per-page": 1})
+        cj = await oa.aget_json("/concepts", {"search": concept, "per-page": 1})
         cres = cj.get("results") or []
         if cres:
             cid = (cres[0].get("id") or "").rsplit("/", 1)[-1]
@@ -831,9 +863,9 @@ def institution_cohort(institution: str, concept: str = "", year_from: Optional[
         filt.append(f"from_publication_date:{int(year_from)}-01-01")
     # group works by author -> "who publishes at this institution in this field" (per-page
     # caps the number of GROUPS returned, hence the cohort size).
-    data = oa.get_json("/works", {"filter": ",".join(filt),
-                                  "group_by": "authorships.author.id",
-                                  "per-page": min(limit, 100)})
+    data = await oa.aget_json("/works", {"filter": ",".join(filt),
+                                         "group_by": "authorships.author.id",
+                                         "per-page": min(limit, 100)})
     people = [{"id": (g.get("key") or "").rsplit("/", 1)[-1],
                "name": g.get("key_display_name"),
                "works_at_institution_in_field": g.get("count")}
@@ -844,6 +876,6 @@ def institution_cohort(institution: str, concept: str = "", year_from: Optional[
            "note": ("" if concept else
                     "no field filter — all fields at this institution; pass concept= to "
                     "scope to a cohort")}
-    cache.set(key, out, ttl=_COHORT_TTL)
+    await _cache_set(key, out, _COHORT_TTL)
     _tap(_cohort_mints, out)   # mint the institution + people nodes + affiliated edges (fail-open)
     return out

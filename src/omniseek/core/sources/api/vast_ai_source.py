@@ -56,16 +56,8 @@ class VastAIAdapter(BaseScrapeAdapter):
     explicit_only = ("vast_ai: a named compute-price drill (price a GPU / list cheapest offers); "
                      "not broad-fan-out fodder")
 
-    def _raw_fetch(self, query: str, limit: int) -> Optional[Any]:
-        # q is a JSON filter object: rank cheapest-first, and if the query is a GPU label,
-        # filter by exact gpu_name. (vast's eq is exact: 'RTX 4090' works, 'RTX_4090' does not.)
-        flt: dict[str, Any] = {"order": [["dph_total", "asc"]]}
-        if query and query.strip():
-            flt["gpu_name"] = {"eq": query.strip()}
-        return http.get_json(API_URL, params={"q": _json.dumps(flt)}, timeout=20)
-
     async def _araw_fetch(self, query: str, limit: int) -> Optional[Any]:
-        # Async twin of _raw_fetch: byte-faithful mirror (same URL, same q filter, same
+        # Async replacement of the deleted sync ``_raw_fetch`` (11-04, S9; this is the only one now): byte-faithful mirror (same URL, same q filter, same
         # timeout); only the shared-http egress swaps to its async twin.
         flt: dict[str, Any] = {"order": [["dph_total", "asc"]]}
         if query and query.strip():
@@ -86,14 +78,6 @@ class VastAIAdapter(BaseScrapeAdapter):
             if doc is not None:
                 docs.append(doc)
         return docs
-
-    async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async twin of search -> AsyncSearchCapable. Shares the base async cache
-        round-trip; egress via _araw_fetch; mapping via the SAME pure-CPU _to_documents."""
-        return await self._asearch_via(
-            query, limit,
-            afetch=lambda: self._araw_fetch(query, limit),
-            abuild=lambda raw: self._to_documents(raw, query, limit))
 
     def _offer_to_doc(self, offer: Any) -> Optional[Document]:
         if not isinstance(offer, dict):
@@ -147,9 +131,9 @@ class VastAIAdapter(BaseScrapeAdapter):
             return mk_signal("perf_per_dollar", ppd, kind="engagement", by="vast_ai/dlperf_per_dphtotal")
         return {}
 
-    def health_check(self) -> tuple[bool, str]:
+    async def ahealth_check(self) -> tuple[bool, str]:
         try:
-            raw = http.get_json(API_URL, params={"q": _json.dumps({"order": [["dph_total", "asc"]]})}, timeout=15)
+            raw = await http.aget_json(API_URL, params={"q": _json.dumps({"order": [["dph_total", "asc"]]})}, timeout=15)
         except Exception as exc:  # noqa: BLE001
             return False, f"{type(exc).__name__}: {str(exc)[:80]}"
         ok = isinstance(raw, dict) and isinstance(raw.get("offers"), list)

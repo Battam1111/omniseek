@@ -36,8 +36,9 @@ import threading
 from typing import Any, Optional
 
 from omniseek.core import auth, http
-from omniseek.core._guard import GateBusy, bounded_async_slot, bounded_slot
-from omniseek.core.normalize import Document, mk_signal
+from omniseek.core._guard import GateBusy, bounded_async_slot
+from omniseek.core.normalize import Document, mk_signal, to_utc
+from omniseek.core.sources._base import SourceBase
 
 logger = logging.getLogger(__name__)
 
@@ -80,46 +81,8 @@ def _pad_cik(cik: Any) -> str:
     return str(cik).strip().lstrip("0").zfill(10) if str(cik).strip() else ""
 
 
-def _load_ticker_map() -> tuple[dict[str, dict], list[tuple[str, str, str]]]:
-    """Load + cache the SEC ticker->CIK map once per process. Returns
-    (by_ticker, by_title) where by_ticker maps UPPER ticker -> {cik, title} and by_title is
-    a list of (lower_title, ticker, cik) for company-name matching. Empty on fetch failure."""
-    global _TICKER_MAP, _TICKER_BY_TITLE
-    if _TICKER_MAP is not None and _TICKER_BY_TITLE is not None:
-        return _TICKER_MAP, _TICKER_BY_TITLE
-    with bounded_slot(
-        _MAP_LOCK,
-        TIMEOUT,
-        lambda waited: GateBusy(f"SEC ticker-map gate busy after {waited:.1f}s"),
-    ):
-        if _TICKER_MAP is not None and _TICKER_BY_TITLE is not None:
-            return _TICKER_MAP, _TICKER_BY_TITLE
-        payload = http.get_json(TICKERS_URL, headers=SEC_HEADERS, timeout=TIMEOUT)
-        by_ticker: dict[str, dict] = {}
-        by_title: list[tuple[str, str, str]] = []
-        if isinstance(payload, dict):
-            for row in payload.values():
-                if not isinstance(row, dict):
-                    continue
-                ticker = str(row.get("ticker") or "").strip().upper()
-                title = str(row.get("title") or "").strip()
-                cik = _pad_cik(row.get("cik_str"))
-                if not ticker or not cik:
-                    continue
-                by_ticker[ticker] = {"cik": cik, "title": title}
-                if title:
-                    by_title.append((title.lower(), ticker, cik))
-            logger.info("sec_financials: loaded %d tickers", len(by_ticker))
-        else:
-            # Do NOT pin an empty map permanently: leave the cache unset so a later call retries.
-            logger.warning("sec_financials: ticker map fetch failed; will retry next call")
-            return {}, []
-        _TICKER_MAP, _TICKER_BY_TITLE = by_ticker, by_title
-        return _TICKER_MAP, _TICKER_BY_TITLE
-
-
 async def _aload_ticker_map() -> tuple[dict[str, dict], list[tuple[str, str, str]]]:
-    """Async twin of ``_load_ticker_map``: BYTE-FAITHFUL mirror — same lock-free fast path, same
+    """Async replacement of the deleted sync ``_load_ticker_map`` (11-04, async step seven; this is the only one now): BYTE-FAITHFUL mirror — same lock-free fast path, same
     double-checked module cache, same map build + logging + empty-on-failure (unset-cache retry)
     contract. TWO off-loop changes only: (1) the SAME process-wide ``_MAP_LOCK`` is acquired by the
     shared bounded, cancellation-safe async gate helper, NEVER ``with _MAP_LOCK:`` on the loop and
@@ -159,44 +122,8 @@ async def _aload_ticker_map() -> tuple[dict[str, dict], list[tuple[str, str, str
         return _TICKER_MAP, _TICKER_BY_TITLE
 
 
-def _resolve(query: str) -> Optional[dict]:
-    """Resolve a free-text query (a ticker or a company name) to {cik, ticker, title}.
-
-    Order: exact ticker hit (when the query looks like a single ticker) -> exact
-    case-insensitive title match -> title substring match (shortest title wins, so
-    "Oracle" prefers "ORACLE CORP" over a longer subsidiary). None if nothing matches."""
-    q = (query or "").strip()
-    if not q:
-        return None
-    try:
-        by_ticker, by_title = _load_ticker_map()
-    except GateBusy as exc:
-        logger.info("sec_financials: %s", exc)
-        return None
-    if not by_ticker:
-        return None
-
-    if _TICKER_RE.match(q):
-        hit = by_ticker.get(q.upper())
-        if hit:
-            return {"cik": hit["cik"], "ticker": q.upper(), "title": hit["title"]}
-
-    ql = q.lower()
-    exact = [(t, tk, c) for (t, tk, c) in by_title if t == ql]
-    if exact:
-        t, tk, c = exact[0]
-        return {"cik": c, "ticker": tk, "title": t}
-
-    subs = [(t, tk, c) for (t, tk, c) in by_title if ql in t]
-    if subs:
-        subs.sort(key=lambda x: len(x[0]))
-        t, tk, c = subs[0]
-        return {"cik": c, "ticker": tk, "title": t}
-    return None
-
-
 async def _aresolve(query: str) -> Optional[dict]:
-    """Async twin of ``_resolve``: BYTE-FAITHFUL mirror — same normalize, same resolution order
+    """Async replacement of the deleted sync ``_resolve`` (11-04, S9; this is the only one now): BYTE-FAITHFUL mirror — same normalize, same resolution order
     (single-ticker exact hit -> exact case-insensitive title -> shortest substring title) and the
     same None fall-through. The ONLY change is the ticker-map load, which carries the sole egress,
     swaps to its async twin (``_load_ticker_map`` -> ``await _aload_ticker_map``); every other line is
@@ -291,7 +218,7 @@ def _fmt_usd(val: Any, unit: str) -> str:
     return f"{val} {unit}"
 
 
-class SECFinancialsAdapter:
+class SECFinancialsAdapter(SourceBase):
     name = "sec_financials"
     needs_credentials = False
     kind = "lookup"
@@ -305,15 +232,14 @@ class SECFinancialsAdapter:
         "+ 最近 10 条备案 (form/日期/直达链接). 命名查询, 不进广搜. web search 给不了干净的结构化数字."
     )
 
-    def search(self, query: str, limit: int = 10) -> list[Document]:
-        ident = _resolve(query)
-        if not ident:
-            return []
-        doc = self._build_doc(ident)
-        return [doc] if doc is not None else []
+    # Source spec (omniseek.core.filters): one company per query, no filters.
+    filters: dict = {}
+    coverage = {"since": None, "until": None, "gaps": [],
+                "note": "the latest XBRL facts and the 10 most recent filings of one company"}
+    samples = [{"query": "AAPL"}, {"query": "Apple"}]
 
     async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async twin of ``search`` (S4b) -> AsyncSearchCapable, so the async fan-out awaits
+        """Native-async replacement of the deleted sync ``search`` (11-04, S9; this is the only one now) (S4b) -> AsyncSearchCapable, so the async fan-out awaits
         this DIRECTLY instead of pushing sync ``.search`` onto the shared thread pool. Mirrors
         ``search`` LINE-FOR-LINE: the two egress-carrying calls swap to their async twins
         (``_resolve`` -> ``await _aresolve``, ``self._build_doc`` -> ``await self._abuild_doc``), which
@@ -327,114 +253,20 @@ class SECFinancialsAdapter:
         doc = await self._abuild_doc(ident)
         return [doc] if doc is not None else []
 
-    def fetch_url(self, url: str) -> Optional[Document]:
+    async def afetch_url(self, url: str) -> Optional[Document]:
         return None
 
-    def health_check(self) -> tuple[Optional[bool], str]:
+    async def ahealth_check(self) -> tuple[Optional[bool], str]:
         try:
-            by_ticker, _ = _load_ticker_map()
+            by_ticker, _ = await _aload_ticker_map()
         except GateBusy as exc:   # the gate sent nothing: not verified (until 2026-10-04 this read False)
             return None, f"not verified: an eye gate held the request back, nothing sent ({exc})"
         if not by_ticker:
             return False, "ticker map fetch failed (UA gating or endpoint change?)"
         return True, f"OK ({len(by_ticker)} tickers)"
 
-    def _build_doc(self, ident: dict) -> Optional[Document]:
-        cik = ident["cik"]
-        ticker = ident.get("ticker") or ""
-        title = ident.get("title") or ticker or cik
-
-        sub = http.get_json(SUBMISSIONS_URL.format(cik=cik), headers=SEC_HEADERS, timeout=TIMEOUT)
-        facts = http.get_json(COMPANYFACTS_URL.format(cik=cik), headers=SEC_HEADERS, timeout=FACTS_TIMEOUT)
-        if sub is None and facts is None:
-            return None  # both endpoints failed → nothing to report, do not fabricate
-
-        company = (sub.get("name") if isinstance(sub, dict) else None) or title
-        cik_num = cik.lstrip("0") or cik
-        edgar_url = (
-            "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany"
-            f"&CIK={cik_num}&type=&dateb=&owner=include&count=40"
-        )
-
-        content_lines: list[str] = [f"Company: {company}  ·  CIK: {cik_num}"]
-        if ticker:
-            content_lines[0] += f"  ·  Ticker: {ticker}"
-        if isinstance(sub, dict) and sub.get("sicDescription"):
-            content_lines.append(f"Industry (SIC): {sub.get('sicDescription')}")
-
-        signals: dict = {}
-
-        # --- Key fundamentals (latest value per concept; absent concepts skipped) -----
-        gaap = {}
-        if isinstance(facts, dict):
-            gaap = (facts.get("facts") or {}).get("us-gaap") or {}
-        if isinstance(gaap, dict) and gaap:
-            content_lines.append("")
-            content_lines.append("Latest reported fundamentals (us-gaap XBRL):")
-            rev = _latest_fact(gaap, _REVENUE_CONCEPTS)
-            ordered = ([("Revenue", rev)] if rev else []) + [
-                (label, _latest_fact(gaap, concepts)) for label, concepts in _CONCEPTS
-            ]
-            for label, fact in ordered:
-                if not fact:
-                    continue
-                period = f"{fact.get('fp') or ''} {fact.get('fy') or ''}".strip()
-                # Show the exact span for a flow figure (start..end), just the as-of date for a
-                # point-in-time balance (no start) — so a YTD total is never read as a quarter.
-                when = (f"{fact['start']}..{fact['end']}" if fact.get("start")
-                        else f"as of {fact['end']}")
-                content_lines.append(
-                    f"  {label}: {_fmt_usd(fact['val'], fact['unit'])} "
-                    f"({when}, {period}, {fact.get('form') or ''})".rstrip()
-                )
-            if rev:
-                signals.update(mk_signal(
-                    "latest_revenue", rev.get("val"), kind="other",
-                    by="sec/companyfacts", unit=rev.get("unit"),
-                ))
-
-        # --- Most recent filings (parallel arrays, already newest-first) ---------------
-        filings = self._recent_filings(sub, cik_num)
-        if filings:
-            content_lines.append("")
-            content_lines.append(f"Most recent filings (newest first, top {len(filings)}):")
-            for f in filings:
-                content_lines.append(
-                    f"  {f['date']}  {f['form']:<8} {f.get('desc') or ''}".rstrip()
-                )
-                content_lines.append(f"      {f['url']}")
-        content_lines.append("")
-        content_lines.append(f"EDGAR company page: {edgar_url}")
-
-        latest_date = None
-        if filings:
-            from datetime import datetime
-            try:
-                latest_date = datetime.fromisoformat(filings[0]["date"])
-            except (ValueError, KeyError):
-                latest_date = None
-
-        return Document(
-            source="sec_financials",
-            source_id=cik,
-            url=edgar_url,
-            title=f"SEC: {company} (CIK {cik_num})",
-            content="\n".join(content_lines),
-            author=company,
-            date=latest_date,
-            signals=signals,
-            tags=[t for t in (ticker, "sec-financials") if t],
-            metadata={
-                "cik": cik_num,
-                "ticker": ticker or None,
-                "company": company,
-                "n_filings": len(filings),
-                "raw_facts_available": bool(gaap),
-            },
-        )
-
     async def _abuild_doc(self, ident: dict) -> Optional[Document]:
-        """Async twin of ``_build_doc``: same URLs/headers/timeouts and the same both-None guard,
+        """Async replacement of the deleted sync ``_build_doc`` (11-04, S9; this is the only one now): same URLs/headers/timeouts and the same both-None guard,
         with the two egress calls swapped to their async twins AND run CONCURRENTLY.
 
         submissions and companyfacts are two unrelated endpoints on ``data.sec.gov`` that share
@@ -526,13 +358,7 @@ class SECFinancialsAdapter:
         content_lines.append("")
         content_lines.append(f"EDGAR company page: {edgar_url}")
 
-        latest_date = None
-        if filings:
-            from datetime import datetime
-            try:
-                latest_date = datetime.fromisoformat(filings[0]["date"])
-            except (ValueError, KeyError):
-                latest_date = None
+        latest_date = to_utc(filings[0].get("date")) if filings else None
 
         return Document(
             source="sec_financials",

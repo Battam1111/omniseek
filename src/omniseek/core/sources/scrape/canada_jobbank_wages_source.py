@@ -27,12 +27,15 @@ outrank a longer phrase -- that is the site's ranking, not ours to second-guess)
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 from typing import Any, Optional
+from urllib.parse import urlencode
 
 from omniseek.core import http
-from omniseek.core.normalize import Document, jsonsafe, mk_signal
+from omniseek.core.normalize import Document, html_fragment_text, jsonsafe, mk_signal
+from omniseek.core.sources._base import aparse
 from omniseek.core.sources.scrape._base import BaseScrapeAdapter
 
 logger = logging.getLogger(__name__)
@@ -42,14 +45,17 @@ RESOLVE_URL = "https://www.jobbank.gc.ca/core/ta-jobtitle_en/select"
 # Wage page, keyed on the job-title concordance id (see module docstring / og:url proof).
 PAGE_URL = "https://www.jobbank.gc.ca/wagereport/occupation/{cid}"
 TIMEOUT = 20
-HEADERS = {
-    "User-Agent": ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
-                   "(KHTML, like Gecko) Chrome/121.0 Safari/537.36"),
-    "Accept": "text/html,application/xhtml+xml",
-}
+# Both steps go straight to the libcurl tier (http.aget_impersonated, Chrome's handshake), the way the
+# higheredjobs feed does: this site leaves about half of the handshakes that offer ALPN "http/1.1"
+# alone (what httpx offers without h2) unanswered until the timeout, while curl's and a browser's
+# handshake go through (brain finding-eye-handshake-hangs-when-alpn-offers-only-http11-jobbank-
+# 2026-11-10). Through the shared httpx helper 8 of 10 queries first waited out the openssl timeout
+# before its libcurl fallback served them, 12 to 16 s a query. Only Accept is sent: Chrome's own
+# User-Agent and header order come with the impersonation, and overriding them would desync it.
+HEADERS = {"Accept": "text/html,application/xhtml+xml"}
+_JSON_HEADERS = {"Accept": "application/json"}
 CACHE_TTL = 604800  # 7 days: the wage tables refresh about yearly, cache hard.
 
-_TAG_RE = re.compile(r"<[^>]+>")
 _WS_RE = re.compile(r"\s+")
 # Noise words that hurt the title match (Solr searches occupation titles, not wages/geos).
 _NOISE = re.compile(r"\b(prevailing|wages?|salary|salaries|pay|hourly|rate|earnings?|"
@@ -63,8 +69,8 @@ def _clean_query(query: str) -> str:
 
 
 def _text(html_fragment: str) -> str:
-    """Tag-strip + whitespace-collapse a fragment to plain text."""
-    return _WS_RE.sub(" ", _TAG_RE.sub(" ", html_fragment or "")).strip()
+    """A fragment to plain text (tags out, entities decoded, whitespace collapsed)."""
+    return html_fragment_text(html_fragment)
 
 
 def _wage(cell_html: str) -> Optional[float]:
@@ -215,25 +221,18 @@ class CanadaJobBankWagesAdapter(BaseScrapeAdapter):
                      "fuzzy-matches any text to an occupation, so broad fan-out would return "
                      "irrelevant wage docs. Name it, or route via compensation+ca.")
 
-    # ---- (1) resolve title -> concordance id, then (2) fetch the wage page HTML ----
-    def _resolve(self, query: str) -> Optional[dict]:
-        """Query -> {concordance_id, noc_code, noc21_code, matched_title} via the Solr typeahead."""
-        data = http.get_json(RESOLVE_URL, params={"q": _clean_query(query), "wt": "json",
-                                                   "rows": 25}, timeout=TIMEOUT)
-        docs = (((data or {}).get("response") or {}).get("docs")) or []
-        for d in docs:
-            cid = d.get("noc_job_title_concordance_id")
-            if cid:
-                return {"concordance_id": str(cid), "noc_code": d.get("noc_code"),
-                        "noc21_code": d.get("noc21_code"), "matched_title": d.get("title")}
-        return None
-
     async def _aresolve(self, query: str) -> Optional[dict]:
-        """Async twin of ``_resolve``: byte-faithful mirror; ONLY the shared-http egress swaps to its
-        async leaf (``http.get_json`` -> ``await http.aget_json``, SAME url/params/timeout). The Solr
-        doc walk (pick the first concordance id) is pure CPU, identical."""
-        data = await http.aget_json(RESOLVE_URL, params={"q": _clean_query(query), "wt": "json",
-                                                         "rows": 25}, timeout=TIMEOUT)
+        """Title -> concordance id through the site's Solr typeahead (libcurl tier, see HEADERS). The
+        Solr doc walk (pick the first concordance id) is pure CPU. None when the fetch failed (noted
+        under http.impersonated_get) or nothing matched."""
+        qs = urlencode({"q": _clean_query(query), "wt": "json", "rows": 25})
+        body = await http.aget_impersonated(f"{RESOLVE_URL}?{qs}", timeout=TIMEOUT,
+                                            headers=_JSON_HEADERS)
+        try:
+            data = json.loads(body) if body is not None else None
+        except ValueError as exc:
+            logger.warning("canada_jobbank_wages: typeahead answer is not JSON: %s", exc)
+            data = None
         docs = (((data or {}).get("response") or {}).get("docs")) or []
         for d in docs:
             cid = d.get("noc_job_title_concordance_id")
@@ -241,36 +240,12 @@ class CanadaJobBankWagesAdapter(BaseScrapeAdapter):
                 return {"concordance_id": str(cid), "noc_code": d.get("noc_code"),
                         "noc21_code": d.get("noc21_code"), "matched_title": d.get("title")}
         return None
-
-    def _raw_fetch(self, query: str, limit: int) -> Optional[dict]:
-        if not (query or "").strip():
-            return None
-        resolved = self._resolve(query)
-        if not resolved:
-            logger.info("canada_jobbank_wages: no occupation match for %r", query)
-            return None
-        url = PAGE_URL.format(cid=resolved["concordance_id"])
-        # The shared helper, not a bare httpx.get: this host is one the deployment's egress mangles
-        # the openssl handshake to (SSL-EOF through httpx, HTTP 200 through curl seconds later), and
-        # only the shared path carries the libcurl fallback, the SSRF guard and the drill diagnostic.
-        # This makes the sync leg match the async twin below, which already routes through it.
-        html = http.get_text(url, headers=HEADERS, timeout=TIMEOUT)
-        if html is None:
-            return None  # wage page fetch failed (get_text logged + diag.note'd); -> None -> []
-        resolved["html"] = html
-        return resolved
 
     async def _araw_fetch(self, query: str, limit: int) -> Optional[dict]:
-        """Async twin of ``_raw_fetch``: BYTE-FAITHFUL mirror of the two-step pipeline, changing ONLY the
-        two blocking egresses (the empty-query guard, no-match log + None, and html-attach are identical).
-          - step (1) title -> concordance id: ``await self._aresolve`` (its ``http.get_json`` -> ``aget_json``);
-          - step (2) the wage page: the raw ``httpx.get(...).text`` -> the shared async leaf
-            ``http.aget_text`` (shared pool + SSRF guard + 30MB cap; the wage HTML is well under the cap),
-            keeping the SAME browser HEADERS + TIMEOUT (the sync ``follow_redirects=True`` is already the
-            shared async client's client-level default, so redirects behave identically). On any fetch
-            failure ``aget_text`` returns None (already logged + ``diag.note``'d as "http.get"), so this
-            returns None -> [] exactly as ``_raw_fetch``'s try/except -> None does (its bespoke "wage page
-            fetch failed" warning is subsumed by that shared http.get tap)."""
+        """The two-step pipeline: (1) title -> concordance id (``_aresolve``); (2) the wage page, both on
+        the libcurl tier (``http.aget_impersonated``: SSRF check and declared gates on every hop, 30MB
+        cap; see HEADERS). On any fetch failure it returns None (already logged + ``diag.note``'d as
+        "http.impersonated_get"), so the search returns []."""
         if not (query or "").strip():
             return None
         resolved = await self._aresolve(query)
@@ -278,22 +253,12 @@ class CanadaJobBankWagesAdapter(BaseScrapeAdapter):
             logger.info("canada_jobbank_wages: no occupation match for %r", query)
             return None
         url = PAGE_URL.format(cid=resolved["concordance_id"])
-        html = await http.aget_text(url, headers=HEADERS, timeout=TIMEOUT)
-        if html is None:
-            return None  # wage page fetch failed (aget_text logged + diag.note'd); mirror -> None -> []
+        page = await http.aget_impersonated(url, headers=HEADERS, timeout=TIMEOUT)
+        if page is None:
+            return None  # wage page fetch failed (logged + diag.note'd as http.impersonated_get) -> []
+        html = page.decode("utf-8", "replace")
         resolved["html"] = html
         return resolved
-
-    async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async twin of the inherited ``search`` -> AsyncSearchCapable. Shares the base async cache
-        round-trip (SAME cache key as ``search``: name/"search"/query/limit, SAME cache_ttl); egress via
-        ``_araw_fetch`` (resolve + wage page, both native async); mapping via the SAME pure-CPU
-        ``_to_documents`` (``build_document``), so it is behavior-identical to ``search`` given identical
-        egress. No ``rank`` set on this source, so ``_asearch_via`` skips ranking exactly as ``search`` does."""
-        return await self._asearch_via(
-            query, limit,
-            afetch=lambda: self._araw_fetch(query, limit),
-            abuild=lambda raw: self._to_documents(raw, query, limit))
 
     def _to_documents(self, raw: Any, query: str, limit: int) -> list[Document]:
         if not isinstance(raw, dict):
@@ -301,20 +266,21 @@ class CanadaJobBankWagesAdapter(BaseScrapeAdapter):
         doc = build_document(raw)
         return [doc] if doc else []
 
-    def fetch_url(self, url: str) -> Optional[Document]:
+    async def afetch_url(self, url: str) -> Optional[Document]:
         return None  # search-only
 
-    def health_check(self) -> tuple[bool, str]:
+    async def ahealth_check(self) -> tuple[bool, str]:
         # Prove BOTH steps: Solr resolves a common title, and its wage page parses a national row.
         try:
-            resolved = self._resolve("software engineer")
+            resolved = await self._aresolve("software engineer")
             if not resolved:
-                return False, "typeahead returned no concordance id (Solr schema changed?)"
-            html = http.get_text(PAGE_URL.format(cid=resolved["concordance_id"]),
-                                 headers=HEADERS, timeout=12)
-            if html is None:
-                return False, "wage page fetch failed (see the http.get diag note)"
-            rows = parse_wage_table(html)
+                return False, "typeahead gave no concordance id: the fetch failed or the Solr answer changed (see the http.impersonated_get diag note)"
+            page = await http.aget_impersonated(PAGE_URL.format(cid=resolved["concordance_id"]),
+                                                headers=HEADERS, timeout=12)
+            if page is None:
+                return False, "wage page fetch failed (see the http.impersonated_get diag note)"
+            html = page.decode("utf-8", "replace")
+            rows = await aparse(len(html), parse_wage_table, html)  # here or process lane
             nat = next((x for x in rows if x["level"] == "national"), None)
             if nat and nat.get("median") is not None:
                 return True, "OK (typeahead resolve + national wage row)"

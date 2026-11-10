@@ -29,6 +29,7 @@ from typing import Optional
 
 from omniseek.core import diag, http
 from omniseek.core.normalize import Document
+from omniseek.core.sources._base import SourceBase
 
 logger = logging.getLogger(__name__)
 
@@ -132,7 +133,7 @@ def _note_cdx_miss(q: str) -> None:
                     "JSON); asked the availability API for the closest snapshot instead"))
 
 
-class WaybackAdapter:
+class WaybackAdapter(SourceBase):
     name = "wayback"
     needs_credentials = False
     kind = "lookup"
@@ -150,25 +151,8 @@ class WaybackAdapter:
         "CDX 30 秒内不应答时退到 availability API,只返回最近的一个快照(metadata.partial=true)."
     )
 
-    def search(self, query: str, limit: int = 10) -> list[Document]:
-        q = (query or "").strip()
-        if not _looks_like_url(q):
-            return []  # not a URL, do not guess
-        # ONE CDX attempt. The old 3-attempt loop retried only on an exception, but get_json returns
-        # None and never raises, so it never ran. No shared connect retry either: a CDX miss falls
-        # through to the availability API, which is the cheaper second try.
-        payload = http.get_json(CDX_URL, params=_cdx_params(q, limit), headers={"User-Agent": _UA},
-                                timeout=TIMEOUT, retry_transient=False)
-        if isinstance(payload, list):
-            return _cdx_docs(payload, limit)
-        _note_cdx_miss(q)
-        avail = http.get_json(AVAILABILITY_URL, params={"url": q}, headers={"User-Agent": _UA},
-                              timeout=AVAILABILITY_TIMEOUT)
-        doc = _availability_doc(avail, q)
-        return [doc] if doc is not None else []
-
     async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async twin of ``search`` (S4b): the fan-out awaits this DIRECTLY, so a wayback
+        """Native-async replacement of the deleted sync ``search`` (11-04, S9; this is the only one now) (S4b): the fan-out awaits this DIRECTLY, so a wayback
         lookup's dominant NETWORK wait (CDX is legitimately slow) costs a COROUTINE, not a held pool
         thread. Mirrors ``search`` line for line; the only swaps are the two egress calls to their
         async twins (``await http.aget_json``). The URL guard and the pure payload-to-doc helpers stay
@@ -186,19 +170,19 @@ class WaybackAdapter:
         doc = _availability_doc(avail, q)
         return [doc] if doc is not None else []
 
-    def fetch_url(self, url: str) -> Optional[Document]:
+    async def afetch_url(self, url: str) -> Optional[Document]:
         return None
 
-    def health_check(self) -> tuple[bool, str]:
+    async def ahealth_check(self) -> tuple[bool, str]:
         # The CDX probe waits as long as the data path does (30 s), so health certifies that path and
         # nothing stricter. A CDX miss is still a usable source when the availability API answers.
-        payload = http.get_json(
+        payload = await http.aget_json(
             CDX_URL, params={"url": "example.com", "output": "json", "limit": "1"},
             headers={"User-Agent": _UA}, timeout=TIMEOUT,
         )
         if isinstance(payload, list):
             return True, "OK (Internet Archive CDX)"
-        avail = http.get_json(AVAILABILITY_URL, params={"url": "example.com"},
+        avail = await http.aget_json(AVAILABILITY_URL, params={"url": "example.com"},
                               headers={"User-Agent": _UA}, timeout=AVAILABILITY_TIMEOUT)
         if isinstance(avail, dict) and "archived_snapshots" in avail:
             return True, (f"degraded: CDX did not answer within {TIMEOUT} s (Internet Archive load); the "

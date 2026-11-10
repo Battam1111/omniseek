@@ -7,7 +7,7 @@ grant category, research subjects/topics, participating organisations + award am
 FIRST UK funding source (it had US NSF/NIH/grants_gov and Canadian NSERC/SSHRC/CIHR, but no UK):
 for a PhD eyeing a UK postdoc/faculty track, knowing which UK labs hold EPSRC/BBSRC grants in
 NLP/ML - amounts, institutions, funders, abstracts - is direct career-targeting intel web search
-cannot return as structured records. The UK sibling of nserc_awards / nih_reporter.
+cannot return as structured records. The UK sibling of sshrc_awards / nih_reporter.
 
 Razor (STRUCTURE): the per-project record (title, abstract, funder, subjects, org, award amount)
 beats web search's prose. Telos: a researcher mapping the fundable UK ML landscape = where the
@@ -46,7 +46,7 @@ from typing import Any, Optional
 from urllib.parse import quote
 
 from omniseek.core import http
-from omniseek.core.normalize import Document, jsonsafe
+from omniseek.core.normalize import Document, jsonsafe, to_utc
 from omniseek.core.sources.scrape._base import BaseScrapeAdapter
 
 API_URL = "https://gtr.ukri.org/gtr/api/projects"
@@ -75,18 +75,8 @@ class UKRIGtRAdapter(BaseScrapeAdapter):
     explicit_only = ("ukri_gtr: a named UK research-council funding drill (by topic / funder), "
                      "not broad-fan-out fodder")
 
-    # -- hooks --
-    def _raw_fetch(self, query: str, limit: int) -> Optional[Any]:
-        size = max(_MIN_SIZE, min(int(limit), _MAX_SIZE))  # API rejects size < 10
-        return http.get_json(
-            API_URL,
-            headers={"Accept": ACCEPT_JSON},
-            params={"q": query or "", "s": size, "p": 1},
-            timeout=20,
-        )
-
     async def _araw_fetch(self, query: str, limit: int) -> Optional[Any]:
-        """Async twin of _raw_fetch: byte-faithful mirror (same URL, headers, params, timeout);
+        """Async replacement of the deleted sync ``_raw_fetch`` (11-04, S9; this is the only one now): byte-faithful mirror (same URL, headers, params, timeout);
         ONLY the shared-http egress swaps to its async twin (http.get_json -> await http.aget_json)."""
         size = max(_MIN_SIZE, min(int(limit), _MAX_SIZE))  # API rejects size < 10
         return await http.aget_json(
@@ -95,14 +85,6 @@ class UKRIGtRAdapter(BaseScrapeAdapter):
             params={"q": query or "", "s": size, "p": 1},
             timeout=20,
         )
-
-    async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async twin of search -> AsyncSearchCapable. Shares the base async cache round-trip;
-        egress via _araw_fetch; mapping via the SAME pure-CPU _to_documents (byte-identical to search)."""
-        return await self._asearch_via(
-            query, limit,
-            afetch=lambda: self._araw_fetch(query, limit),
-            abuild=lambda raw: self._to_documents(raw, query, limit))
 
     def _to_documents(self, raw: Any, query: str, limit: int) -> list[Document]:
         if not isinstance(raw, dict):
@@ -284,11 +266,6 @@ class UKRIGtRAdapter(BaseScrapeAdapter):
     def _parse_ms(raw: Any) -> Optional[datetime]:
         """GtR start/end are epoch MILLISECONDS (e.g. 1359676800000) or null. None on anything
         unparseable; never raises."""
-        if not isinstance(raw, (int, float)):
-            return None
-        try:
-            return datetime.utcfromtimestamp(raw / 1000.0)
-        except (ValueError, OverflowError, OSError):
-            return None
+        return to_utc(raw / 1000.0) if isinstance(raw, (int, float)) and not isinstance(raw, bool) else None
 
 # Registration is automatic via BaseScrapeAdapter.__init_subclass__ (no module-tail ceremony).

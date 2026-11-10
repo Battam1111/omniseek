@@ -7,7 +7,7 @@ youtube-transcript-api extracts auto-generated or manual captions.
 
 Search uses yt-dlp's `ytsearch<N>:<query>` URL form. This is slower than
 the YouTube Data API but needs no key. If the user wants higher throughput,
-they can drop a YouTube Data API v3 key at ~/.omniseek/credentials/youtube.json
+they can drop a YouTube Data API v3 key at <credentials>/youtube.json
 — Phase 3.5 enhancement, not done yet.
 
 Transcripts are pulled lazily — only when a doc's `fetch_url()` is called
@@ -41,7 +41,10 @@ from youtube_transcript_api import (
     VideoUnavailable,
 )
 
-from omniseek.core import cache
+import anyio
+
+from omniseek.core import cache, fetcher
+from omniseek.core.sources._base import SourceBase
 from omniseek.core.normalize import Document, jsonsafe, mk_signal
 
 # Single API instance reused across calls
@@ -141,7 +144,7 @@ def _fetch_comments(video_id: str, limit: int = _MAX_COMMENTS) -> list[dict]:
     promote any pinned comment to the front (highest-signal)."""
     cap = max(1, min(limit, _MAX_COMMENTS))
     key = cache.make_key("youtube", "comments", video_id, cap)
-    cached = cache.get(key)
+    cached = cache.get_once(key)
     if cached is not None:
         return cached  # may be [] — a known "no comments / disabled" memo
 
@@ -192,7 +195,7 @@ def _comment_to_document(comment: dict, video_id: str, video_url: str) -> Docume
         source_id=f"{video_id}:comment:{cid}" if cid else f"{video_id}:comment",
         url=video_url,  # a comment has no standalone URL; point at the video
         title=f"Comment by {author or 'unknown'} on {video_id}",
-        content=text or "(empty comment)",
+        content=text or "",
         author=author,
         date=date,
         signals=mk_signal("likes", comment.get("like_count"),
@@ -246,7 +249,7 @@ def _fetch_transcript(video_id: str, prefer_languages=("en", "zh-CN", "zh-Hans",
         api.fetch(video_id, languages=[...]) -> FetchedTranscript (iter of FetchedTranscriptSnippet)
     """
     key = cache.make_key("youtube", "transcript", video_id)
-    cached = cache.get(key)
+    cached = cache.get_once(key)
     if cached is not None:
         return cached or None  # cached '' means we already know there's no transcript
 
@@ -296,7 +299,7 @@ def _fetch_transcript(video_id: str, prefer_languages=("en", "zh-CN", "zh-Hans",
     return text or None
 
 
-class YouTubeAdapter:
+class YouTubeAdapter(SourceBase):
     name = "youtube"
     needs_credentials = False
     # OWN the YouTube hosts (same declaration zhihu/xiaomuchong make). Without it the fetcher
@@ -320,7 +323,7 @@ class YouTubeAdapter:
             return self._comments_search(ref_id, limit)
 
         key = cache.make_key("youtube", "search", query, limit)
-        cached = cache.get(key)
+        cached = cache.get_once(key)
         if cached is not None:
             return [Document.model_validate(d) for d in cached]
 
@@ -360,7 +363,13 @@ class YouTubeAdapter:
                 logger.debug("Skipping YouTube comment: %s", exc)
         return docs
 
-    def fetch_url(self, url: str) -> Optional[Document]:
+    async def afetch_url(self, url: str) -> Optional[Document]:
+        if not _extract_video_id(url):
+            return None
+        # yt-dlp and the transcript API are blocking libraries: a worker thread
+        return await anyio.to_thread.run_sync(self._read_url, url, limiter=fetcher._LEGACY_LIMITER)
+
+    def _read_url(self, url: str) -> Optional[Document]:
         video_id = _extract_video_id(url)
         if not video_id:
             return None
@@ -485,7 +494,7 @@ class YouTubeAdapter:
             source_id=video_id or url,
             url=url,
             title=title,
-            content=description or "(no description)",
+            content=description or "",
             author=author,
             date=date,
             signals=mk_signal("views", entry.get("view_count"),

@@ -17,9 +17,12 @@ invariant), giving exact Chinese recall with ZERO new dependency (模型 21/21 v
 
 from __future__ import annotations
 
+import ctypes
 import hashlib
 import json
 import logging
+import mmap
+import re
 import sqlite3
 import tempfile
 import threading
@@ -29,10 +32,11 @@ from typing import Optional
 
 from omniseek.core import relevance
 from omniseek.core.normalize import Document
+from omniseek import where
 
 logger = logging.getLogger(__name__)
 
-DB_PATH = Path.home() / ".omniseek" / "state" / "index.db"
+DB_PATH = where.state() / "index.db"
 _SCHEMA_VERSION = "2"  # 2 = + vec table (Phase-2 vector layer; additive, CREATE IF NOT EXISTS)
 # Tokenizer/segment version: bumped when the seg-column DERIVATION changes (NOT the tokenizer
 # itself), so the writer RE-SEGMENTS an existing doc whose stored seg_version != this on the next
@@ -100,7 +104,7 @@ CREATE INDEX IF NOT EXISTS vec_thin_mv ON vec_thin(model_version);
 -- (same embedder + MODEL_VERSION -> ONE cosine space; a model swap drops the old space out of ALL three
 -- matrices) so ``vector_search`` can MAX-POOL a doc's head (vec) and tail (vec_chunk) sims into one
 -- per-doc score. Purely ADDITIVE: ``vec`` is untouched, short docs never chunk, and an EMPTY vec_chunk
--- makes vector_search byte-identical to the doc-only path (the smoke asserts this). Backfilled once for
+-- makes vector_search byte-identical to the doc-only path. Backfilled once for
 -- the pre-existing long docs; new long docs chunk on ingest.
 CREATE TABLE IF NOT EXISTS vec_chunk(
   rowid         INTEGER NOT NULL,
@@ -292,6 +296,21 @@ def _ran_at(con: sqlite3.Connection, source: str) -> Optional[float]:
         return None
 
 
+SWEPT_KEY = "ingest_swept:"   # meta key prefix: when the ingest loop last swept a source (writer.mark_swept)
+
+
+def swept_at(source: str) -> Optional[float]:
+    """When the ingest loop last swept ``source`` (any outcome), or None (never, or unreadable)."""
+    con = _read_con()
+    if con is None:
+        return None
+    try:
+        r = con.execute("SELECT v FROM meta WHERE k = ?", (SWEPT_KEY + source,)).fetchone()
+        return float(r[0]) if r and r[0] else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def as_of() -> Optional[float]:
     """Newest ingest watermark across all sources (for _meta.index.as_of)."""
     con = _read_con()
@@ -312,6 +331,28 @@ def doc_count() -> int:
         return con.execute("SELECT count(*) FROM docs").fetchone()[0]
     except Exception:  # noqa: BLE001
         return 0
+
+
+def field_value_counts(source: str, doc_key: str, limit: int = 30) -> list:
+    """[(value, count)] of one document field over ``source``'s indexed docs, most common first.
+    ``doc_key`` is a dotted path into the stored document (``metadata.venue``; a list such as ``tags``
+    counts each element). Read-only; [] on a disabled index, a bad path or any failure."""
+    if _disabled or not re.fullmatch(r"[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)*", doc_key or ""):
+        return []
+    con = _read_con()
+    if con is None:
+        return []
+    try:
+        rows = con.execute(
+            "SELECT j.value, count(*) AS n FROM docs d, json_each(d.doc_json, ?) j "
+            "WHERE d.source = ? AND j.value IS NOT NULL AND j.type NOT IN ('object', 'array') "
+            "GROUP BY j.value ORDER BY n DESC, j.value LIMIT ?",
+            ("$." + doc_key, source, max(1, int(limit))),
+        ).fetchall()
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("field_value_counts failed: %s", exc)
+        return []
+    return [(v, n) for v, n in rows]
 
 
 # ── Phase-2 vector layer: a per-model_version float32 matrix cached in module state ──────────────
@@ -368,8 +409,8 @@ def _model_version() -> str:
 # the footprint +1.55 GB, all three together +2.0 GB, and the freed small blocks stayed in the
 # process footprint afterwards. _build_rows streams the cursor in _BUILD_BATCH-row batches into ONE
 # preallocated array, normalizing each batch in place, and the caller drops the old matrix first
-# (every reader takes the same lock, so none reads the globals mid-rebuild; a reader that already
-# holds the old array keeps its own reference until it is done).
+# (every reader takes the same lock and uses a matrix only inside it, so none reads the globals
+# mid-rebuild and none holds the old matrix after it; see _release).
 _BUILD_BATCH = 4096
 
 # File-backed matrix rows (measured 2026-10-09 with the three live-size matrices, 281239
@@ -379,7 +420,7 @@ _BUILD_BATCH = 4096
 # freshly written and never flushed), at the same search speed (38.9 ms per query over all three vs
 # 35 to 39 ms in memory) and the same top-60 neighbours. The file is a deleted temporary file beside
 # the index: it has no name, so nothing is left behind by a crash and nothing stale is ever read
-# back; the space returns when the last view of the matrix is dropped. It is written out in full
+# back; the space returns when the mapping is closed (see _release). It is written out in full
 # before it is mapped, because writing a mapped page whose disk block was never allocated kills the
 # process (SIGBUS) when the disk is full; a full disk instead fails that write here and the rows go
 # to process memory, as before.
@@ -400,12 +441,52 @@ def _alloc_rows(rows: int, dim: int):
                 while left:
                     left -= f.write(zeros[:min(left, len(zeros))])
                 f.flush()
-                mm = _np.memmap(f, dtype=_np.float32, mode="r+", shape=(rows, dim))
-            return mm.view(_np.ndarray)
+                mm = mmap.mmap(f.fileno(), nbytes, access=mmap.ACCESS_WRITE)
+            # numpy lets go of a buffer export as soon as the array exists, so an mmap under a plain
+            # array (np.memmap included) can be closed under it and the next read crashes the
+            # process. The ctypes array keeps the export for as long as an array over it lives, so a
+            # close while one does is refused (BufferError) instead.
+            pin = (ctypes.c_char * nbytes).from_buffer(mm)
+            pin.mapping = mm
+            return _np.ndarray((rows, dim), dtype=_np.float32, buffer=pin)
         except (OSError, ValueError) as e:
             logger.warning("recall matrix: file-backed rows unavailable (%s); holding %d MB in memory",
                         e, nbytes >> 20)
     return _np.empty((rows, dim), dtype=_np.float32)
+
+
+# Releasing a replaced matrix (2026-10-13). The file behind a matrix has no name, so its disk space
+# returns only when its mapping and its descriptor close, and both close with the mmap object at the
+# bottom of the array's ``.base`` chain. Left to reference counting, one array still held anywhere (a
+# row view handed to a caller, a reader's frame waiting on SQLite) keeps the whole file on disk with
+# nothing on disk to find it by. So whoever replaces a matrix closes the old mapping itself
+# (``_release``), and the store's own readers touch a matrix only under its lock (vector_search,
+# similar_anchor, similar_neighbors), so that close never meets one of them. A holder outside the store
+# makes the close fail (its array still exports the buffer); that is logged, and the file then goes
+# when that holder lets go.
+def _mapping_of(a):
+    """The mmap object under a file-backed array (``_alloc_rows``), or None for rows in process memory."""
+    while _np is not None and isinstance(a, _np.ndarray):
+        a = a.base
+    mm = getattr(a, "mapping", None)
+    return mm if isinstance(mm, mmap.mmap) else None
+
+
+def _release(maps, what: str) -> None:
+    """Close the mappings of a replaced matrix; the caller has already dropped the store's references
+    to its arrays."""
+    seen = set()
+    for mm in maps:
+        if mm is None or id(mm) in seen:
+            continue
+        seen.add(id(mm))
+        try:
+            mm.close()
+        except BufferError:
+            logger.warning("recall matrix: the replaced %s matrix is still referenced outside the store; "
+                           "its file is released when that reference goes", what)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("recall matrix: closing the replaced %s matrix failed: %s", what, exc)
 
 
 def _build_rows(con, count_sql: str, sql: str, params: tuple, int_ids: bool, with_src: bool,
@@ -420,34 +501,43 @@ def _build_rows(con, count_sql: str, sql: str, params: tuple, int_ids: bool, wit
     if spare:
         n += max(_BUILD_BATCH, n // _HEADROOM_FRAC)
     cur = con.execute(sql, params)
-    M = ids = srcs = None
+    M = M2 = ids = srcs = None
     filled = 0
     interned: dict = {}
-    while True:
-        batch = cur.fetchmany(_BUILD_BATCH)
-        if not batch:
-            break
-        k = len(batch)
-        block = _np.frombuffer(b"".join(r[1] for r in batch), dtype=_np.float32).reshape(k, -1)
-        if M is None:
-            cap = max(n, k)
-            M = _alloc_rows(cap, block.shape[1])
-            ids = _np.empty(cap, dtype=_np.int64) if int_ids else _np.empty(cap, dtype=object)
-            srcs = _np.empty(cap, dtype=object) if with_src else None
-        if filled + k > M.shape[0]:
-            grow = filled + k + _BUILD_BATCH
-            M2 = _alloc_rows(grow, M.shape[1])
-            M2[:filled] = M[:filled]
-            M = M2
-            ids = _np.concatenate([ids[:filled], _np.empty(grow - filled, dtype=ids.dtype)])
+    try:
+        while True:
+            batch = cur.fetchmany(_BUILD_BATCH)
+            if not batch:
+                break
+            k = len(batch)
+            block = _np.frombuffer(b"".join(r[1] for r in batch), dtype=_np.float32).reshape(k, -1)
+            if M is None:
+                cap = max(n, k)
+                M = _alloc_rows(cap, block.shape[1])
+                ids = _np.empty(cap, dtype=_np.int64) if int_ids else _np.empty(cap, dtype=object)
+                srcs = _np.empty(cap, dtype=object) if with_src else None
+            if filled + k > M.shape[0]:
+                grow = filled + k + _BUILD_BATCH
+                M2 = _alloc_rows(grow, M.shape[1])
+                M2[:filled] = M[:filled]
+                old, M, M2 = _mapping_of(M), M2, None
+                _release([old], "outgrown")  # copied: the smaller file goes now, not when the build ends
+                old = None
+                ids = _np.concatenate([ids[:filled], _np.empty(grow - filled, dtype=ids.dtype)])
+                if srcs is not None:
+                    srcs = _np.concatenate([srcs[:filled], _np.empty(grow - filled, dtype=object)])
+            nrm = _np.linalg.norm(block, axis=1, keepdims=True)
+            _np.divide(block, _np.where(nrm > 0, nrm, 1.0), out=M[filled:filled + k])
+            ids[filled:filled + k] = [r[0] for r in batch]
             if srcs is not None:
-                srcs = _np.concatenate([srcs[:filled], _np.empty(grow - filled, dtype=object)])
-        nrm = _np.linalg.norm(block, axis=1, keepdims=True)
-        _np.divide(block, _np.where(nrm > 0, nrm, 1.0), out=M[filled:filled + k])
-        ids[filled:filled + k] = [r[0] for r in batch]
-        if srcs is not None:
-            srcs[filled:filled + k] = [interned.setdefault(r[2], r[2]) for r in batch]
-        filled += k
+                srcs[filled:filled + k] = [interned.setdefault(r[2], r[2]) for r in batch]
+            filled += k
+    except BaseException:
+        # The traceback keeps this frame, and with it the partly built file, alive for as long as the
+        # caller keeps the exception: close it here.
+        maps, M, M2 = [_mapping_of(M), _mapping_of(M2)], None, None
+        _release(maps, "partly built")
+        raise
     if M is None or filled == 0:
         return None, None, None
     # Always views of the buffers, even when full: ``_MatrixState.adopt`` finds the buffer as ``.base``.
@@ -666,10 +756,13 @@ def _ensure_matrix(con):
                 return _vec_M, _vec_ids
         if same_space and (now - _vec_built_ts) < _VEC_DEBOUNCE:
             return _vec_M, _vec_ids  # serve slightly-stale during an ingest burst
-        # Drop the old matrix before building (see _build_rows); a failed build leaves None and the
-        # next call retries.
+        # Drop the old matrix before building (see _build_rows) and close its file (see _release); a
+        # failed build leaves None and the next call retries.
+        old = [_mapping_of(_vec_M), _mapping_of(st.bufM)]
         _vec_M = _vec_ids = _vec_srcs = None
         st.adopt(None, None, None)  # the rebuild reads every committed change, published or not
+        _release(old, "vec")
+        old = None
         try:
             M, ids, srcs = _build_rows(
                 con,
@@ -714,8 +807,11 @@ def _ensure_thin_matrix(con):
                 return _thin_M, _thin_ids
         if same_space and (now - _thin_built_ts) < _VEC_DEBOUNCE:
             return _thin_M, _thin_ids  # serve slightly-stale during an ingest burst
+        old = [_mapping_of(_thin_M), _mapping_of(st.bufM)]
         _thin_M = _thin_ids = None  # drop the old matrix before building (see _build_rows)
         st.adopt(None, None, None)
+        _release(old, "thin")
+        old = None
         try:
             M, ids, _ = _build_rows(
                 con, "SELECT count(*) FROM vec_thin WHERE model_version = ?",
@@ -757,8 +853,11 @@ def _ensure_chunk_matrix(con):
                 return _chunk_M, _chunk_ids
         if same_space and (now - _chunk_built_ts) < _VEC_DEBOUNCE:
             return _chunk_M, _chunk_ids  # serve slightly-stale during an ingest burst
+        old = [_mapping_of(_chunk_M), _mapping_of(st.bufM)]
         _chunk_M = _chunk_ids = _chunk_srcs = None  # drop the old matrix before building (see _build_rows)
         st.adopt(None, None, None)
+        _release(old, "chunk")
+        old = None
         try:
             M, ids, srcs = _build_rows(
                 con,
@@ -791,8 +890,7 @@ def vector_search(qvec, k: int = 60, sources: "Optional[frozenset[str]]" = None)
 
     P7 DELIBERATE NON-GOAL: this is omniseek_search's recall arm, and it consults ONLY ``vec`` (the docs
     matrix) — NOT ``vec_thin``. Folding thin-title embeddings into search recall is a SEPARATE
-    decision with its own dogfood; do not add ``_ensure_thin_matrix`` here (the smoke asserts this
-    structurally). vec_thin feeds ``graph.similar`` (and future P5 consumers) only."""
+    decision with its own dogfood; do not add ``_ensure_thin_matrix`` here. vec_thin feeds ``graph.similar`` (and future P5 consumers) only."""
     if _disabled or qvec is None or _np is None:
         return []
     con = _read_con()
@@ -803,18 +901,28 @@ def vector_search(qvec, k: int = 60, sources: "Optional[frozenset[str]]" = None)
     # tuple under this lock, so a locked group-read always yields a CONSISTENT triple. Reading srcs
     # separately after the call left a window where a concurrent rebuild (e.g. a same-count re-embed)
     # could swap in a differently-aligned array and the mask would scope the WRONG rows silently.
-    with _vec_lock:
-        M, ids, srcs = _vec_M, _vec_ids, _vec_srcs
-    if M is None or ids is None or len(ids) == 0:
-        return []
+    # The matrix itself is used only inside the lock and dropped before leaving it, so a rebuild can
+    # close the old file at once (see _release); ids / srcs / sims are in process memory.
     try:
         q = _np.asarray(qvec, dtype=_np.float32).ravel()
-        if q.shape[0] != M.shape[1]:
-            return []
         n = _np.linalg.norm(q)
         if n > 0:
             q = q / n
-        sims = M @ q
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("vector_search failed: %s", exc)
+        return []
+    with _vec_lock:
+        M, ids, srcs = _vec_M, _vec_ids, _vec_srcs
+        try:
+            if M is None or ids is None or len(ids) == 0 or q.shape[0] != M.shape[1]:
+                return []
+            sims = M @ q
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("vector_search failed: %s", exc)
+            return []
+        finally:
+            M = None
+    try:
         sims[ids < 0] = -_np.inf  # rows removed by an incremental update (see _apply_deltas)
         if sources:
             # Scope BEFORE the top-k: any row whose source is not requested is pushed to -inf so
@@ -830,10 +938,15 @@ def vector_search(qvec, k: int = 60, sources: "Optional[frozenset[str]]" = None)
         # all_sims/all_ids are the doc-only arrays -> byte-identical to the pre-chunk path.
         all_sims, all_ids = sims, ids
         _ensure_chunk_matrix(con)
+        sims_c = None
         with _chunk_lock:
             Mc, ids_c, srcs_c = _chunk_M, _chunk_ids, _chunk_srcs
-        if Mc is not None and ids_c is not None and len(ids_c) and Mc.shape[1] == q.shape[0]:
-            sims_c = Mc @ q
+            try:
+                if Mc is not None and ids_c is not None and len(ids_c) and Mc.shape[1] == q.shape[0]:
+                    sims_c = Mc @ q
+            finally:
+                Mc = None
+        if sims_c is not None:
             sims_c[ids_c < 0] = -_np.inf
             if sources and (srcs_c is None or len(srcs_c) != len(ids_c)):
                 sims_c = None  # cannot honestly scope the chunk rows -> fall back to doc-only
@@ -910,19 +1023,32 @@ def similar_anchor(source: str, source_id: str):
     node_id = _anchor_node_id(source, source_id)
     try:
         # (a) docs vec by rowid (an indexed doc). anchor_rowid is None for a non-indexed doc.
+        # The row is COPIED under the matrix lock: a view of it would keep the whole matrix file
+        # mapped for as long as the caller holds the vector, across the rebuild similar_neighbors may
+        # run (see _release).
         rid = anchor_rowid(source, source_id)
         if rid is not None:
-            M, ids = _ensure_matrix(con)
-            if M is not None and ids is not None and len(ids) > 0:
-                pos = _np.where(ids == int(rid))[0]
-                if pos.size > 0:
-                    return M[int(pos[0])], node_id
+            _ensure_matrix(con)
+            with _vec_lock:
+                M, ids = _vec_M, _vec_ids
+                try:
+                    if M is not None and ids is not None and len(ids) > 0:
+                        pos = _np.where(ids == int(rid))[0]
+                        if pos.size > 0:
+                            return M[int(pos[0])].copy(), node_id
+                finally:
+                    M = None
         # (b) vec_thin by node_id (a thin doc whose title is embedded).
-        Mt, tids = _ensure_thin_matrix(con)
-        if Mt is not None and tids is not None and len(tids) > 0:
-            tpos = _np.where(tids == node_id)[0]
-            if tpos.size > 0:
-                return Mt[int(tpos[0])], node_id
+        _ensure_thin_matrix(con)
+        with _thin_lock:
+            Mt, tids = _thin_M, _thin_ids
+            try:
+                if Mt is not None and tids is not None and len(tids) > 0:
+                    tpos = _np.where(tids == node_id)[0]
+                    if tpos.size > 0:
+                        return Mt[int(tpos[0])].copy(), node_id
+            finally:
+                Mt = None
     except Exception as exc:  # noqa: BLE001
         logger.debug("similar_anchor failed: %s", exc)
         return None
@@ -950,19 +1076,32 @@ def similar_neighbors(anchor_vec, anchor_node_id: str, k: int = 10):
             q = q / n
         scored: list = []   # (cosine, node_id) across both stores, self excluded
         docs_rowids: list = []
+        # Each matrix is used only under its lock and dropped before leaving it (see _release).
         # (a) docs vec matrix: ids are rowids; map to node_id + title AFTER ranking.
-        M, ids = _ensure_matrix(con)
-        if M is not None and ids is not None and len(ids) > 0 and M.shape[1] == q.shape[0]:
-            sims = M @ q
+        _ensure_matrix(con)
+        sims = None
+        with _vec_lock:
+            M, ids = _vec_M, _vec_ids
+            try:
+                if M is not None and ids is not None and len(ids) > 0 and M.shape[1] == q.shape[0]:
+                    sims = M @ q
+            finally:
+                M = None
+        if sims is not None:
             for i in range(len(ids)):
                 docs_rowids.append(int(ids[i]))  # a removed row (-1) hydrates to no node and is skipped
-        else:
-            sims = None
         # (b) thin matrix: ids are node_id strings; self-exclude by node_id here.
-        Mt, tids = _ensure_thin_matrix(con)
+        _ensure_thin_matrix(con)
+        tsims = None
+        with _thin_lock:
+            Mt, tids = _thin_M, _thin_ids
+            try:
+                if Mt is not None and tids is not None and len(tids) > 0 and Mt.shape[1] == q.shape[0]:
+                    tsims = Mt @ q
+            finally:
+                Mt = None
         thin_pairs: list = []
-        if Mt is not None and tids is not None and len(tids) > 0 and Mt.shape[1] == q.shape[0]:
-            tsims = Mt @ q
+        if tsims is not None:
             for i in range(len(tids)):
                 if tids[i] is None:
                     continue   # a row removed by an incremental update (see _apply_deltas)
@@ -970,8 +1109,6 @@ def similar_neighbors(anchor_vec, anchor_node_id: str, k: int = 10):
                 if nid == anchor_node_id:
                     continue   # exclude the anchor itself
                 thin_pairs.append((float(tsims[i]), nid))
-        else:
-            tsims = None
     except Exception as exc:  # noqa: BLE001
         logger.debug("similar_neighbors ranking failed: %s", exc)
         return []

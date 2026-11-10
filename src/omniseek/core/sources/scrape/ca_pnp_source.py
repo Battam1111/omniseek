@@ -35,7 +35,7 @@ from typing import Optional
 
 from bs4 import BeautifulSoup
 
-from omniseek.core.normalize import Document
+from omniseek.core.normalize import Document, to_utc
 from omniseek.core.sources.scrape._base import BaseScrapeAdapter
 
 logger = logging.getLogger(__name__)
@@ -50,7 +50,7 @@ def _parse_date(s: str) -> Optional[datetime]:
     s = (s or "").strip()
     for fmt in ("%B %d, %Y", "%b %d, %Y"):
         try:
-            return datetime.strptime(s, fmt)
+            return to_utc(datetime.strptime(s, fmt))
         except Exception:  # noqa: BLE001
             continue
     return None

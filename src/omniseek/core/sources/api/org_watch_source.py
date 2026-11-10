@@ -23,12 +23,10 @@ work parser). Adding a lab = one row in ``org_watch.json``
 from __future__ import annotations
 
 import asyncio
-import contextvars
 import functools
 import json
 import logging
 import re
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Optional
 from urllib.parse import urlparse
@@ -36,8 +34,9 @@ from urllib.parse import urlparse
 import anyio
 
 from omniseek.core import _openalex as oa
-from omniseek.core import cache
+from omniseek.core import cache, portal
 from omniseek.core.normalize import Document, keyword_score_filter, mk_signal
+from omniseek.core.sources._base import SourceBase
 
 logger = logging.getLogger(__name__)
 
@@ -82,7 +81,7 @@ def _is_ai_byline_crank(work: dict) -> bool:
     return False
 
 
-class _OrgWatchAdapter:
+class _OrgWatchAdapter(SourceBase):
     needs_credentials = False
     kind = "stream"
     domains = ["papers"]
@@ -108,65 +107,8 @@ class _OrgWatchAdapter:
                     return True
         return False
 
-    def _fetch(self) -> "tuple[list[dict], bool]":
-        """Return (works, stale). ``stale`` True iff OpenAlex was DOWN (budget exhausted / circuit
-        open) and we served the last-good snapshot instead of live results."""
-        key = cache.make_key("org_watch", self.name, "works", "|".join(self.affiliations))
-        lg_key = cache.make_key("org_watch", self.name, "lastgood", "|".join(self.affiliations))
-        cached = cache.get(key)
-        if cached is not None:
-            return cached, False
-        def _one(aff: str) -> list[dict]:
-            try:
-                data = oa.get_json("/works", {
-                    "filter": f'raw_affiliation_strings.search:"{aff}"',
-                    "sort": "publication_date:desc",
-                    "per-page": PER_PAGE,
-                    "select": _SELECT,
-                })
-                return data.get("results", [])
-            except Exception as exc:  # noqa: BLE001 — incl. OpenAlexDown: degrade, never raise
-                logger.warning("org_watch[%s]: fetch failed for %r: %s", self.name, aff, exc)
-                return []
-
-        # Fetch this org's affiliation strings CONCURRENTLY (a row has 2-3). Each oa.get_json
-        # still passes through _openalex's global BoundedSemaphore(8), so the OpenAlex-wide
-        # in-flight cap is unchanged (no extra load on the polite pool) — this only folds THIS
-        # source's per-string serial wait (meta_fair 3×~3s≈9s → ≈3s). ex.map preserves order,
-        # and _matches/dedup/sort below are identical to the old serial path (result unchanged).
-        if len(self.affiliations) <= 1:
-            results = [_one(a) for a in self.affiliations]
-        else:
-            # Per-affiliation COPY of the caller's context so an armed diag capture reaches the
-            # worker threads (oa.get_json notes on OpenAlex-down); a plain ex.map lost those notes,
-            # so a drill on this source during an OpenAlex outage saw captures: [] (RSS diag-loss class).
-            affs = [(a, contextvars.copy_context()) for a in self.affiliations]
-            with ThreadPoolExecutor(max_workers=min(len(self.affiliations), 3)) as ex:
-                results = list(ex.map(lambda p: p[1].run(_one, p[0]), affs))
-        merged: dict[str, dict] = {}
-        for works in results:
-            for w in works:
-                if self._matches(w) and not _is_ai_byline_crank(w):
-                    merged[w.get("id") or w.get("doi") or w.get("title")] = w
-        out = sorted(merged.values(),
-                     key=lambda w: w.get("publication_date") or "", reverse=True)
-        if out:
-            cache.set(key, out, ttl=CACHE_TTL)        # 6h fresh
-            cache.set(lg_key, out, ttl=_LASTGOOD_TTL)  # 7d last-good snapshot for the down-fallback
-            return out, False
-        # Empty result: distinguish OpenAlex being DOWN (budget exhausted / circuit open — the 44-source
-        # single point of fragility) from a genuine no-match. If down, serve the last-good snapshot
-        # (the org's real recent papers, <=~1d stale) so the per-lab stream stays useful through a
-        # budget outage. NEVER cache an empty over the fresh key (the old unconditional set poisoned it
-        # for 6h on any failure). A genuine empty (OpenAlex up, no matching papers) just returns [].
-        if oa.unavailable():
-            stale = cache.get(lg_key)
-            if stale:
-                return stale, True
-        return out, False
-
     async def _afetch(self) -> "tuple[list[dict], bool]":
-        """Native-async twin of ``_fetch`` (mirrors it line-for-line, same (works, stale) contract).
+        """Native-async replacement of the deleted sync ``_fetch`` (11-04, S9; this is the only one now) (mirrors it line-for-line, same (works, stale) contract).
         Only the BLOCKING work moves: the disk cache read/write hops OFF the loop via
         ``anyio.to_thread.run_sync``, the OpenAlex egress swaps ``oa.get_json`` -> ``await oa.aget_json``,
         and the per-affiliation ThreadPoolExecutor fan-out becomes an ``asyncio.gather`` over async
@@ -174,7 +116,7 @@ class _OrgWatchAdapter:
         keys as ``_fetch`` (async + sync share the cache)."""
         key = cache.make_key("org_watch", self.name, "works", "|".join(self.affiliations))
         lg_key = cache.make_key("org_watch", self.name, "lastgood", "|".join(self.affiliations))
-        cached = await anyio.to_thread.run_sync(cache.get, key)  # disk read OFF loop
+        cached = await cache.aget_once(key)  # disk read OFF loop
         if cached is not None:
             return cached, False
 
@@ -210,32 +152,22 @@ class _OrgWatchAdapter:
                      key=lambda w: w.get("publication_date") or "", reverse=True)
         if out:
             await anyio.to_thread.run_sync(  # 6h fresh — disk write OFF loop
-                functools.partial(cache.set, key, out, ttl=CACHE_TTL))
+                functools.partial(cache.set, key, out, ttl=CACHE_TTL), limiter=portal.IO_LANE)
             await anyio.to_thread.run_sync(  # 7d last-good snapshot for the down-fallback
-                functools.partial(cache.set, lg_key, out, ttl=_LASTGOOD_TTL))
+                functools.partial(cache.set, lg_key, out, ttl=_LASTGOOD_TTL), limiter=portal.IO_LANE)
             return out, False
         # Empty result: distinguish OpenAlex being DOWN (budget exhausted / circuit open) from a genuine
         # no-match. If down, serve the last-good snapshot (the org's real recent papers, <=~1d stale) so
         # the per-lab stream stays useful through a budget outage. NEVER cache an empty over the fresh key.
         # A genuine empty (OpenAlex up, no matching papers) just returns []. Byte-identical to _fetch.
         if oa.unavailable():
-            stale = await anyio.to_thread.run_sync(cache.get, lg_key)
+            stale = await anyio.to_thread.run_sync(cache.get, lg_key, limiter=portal.IO_LANE)
             if stale:
                 return stale, True
         return out, False
 
-    def search(self, query: str, limit: int = 10) -> list[Document]:
-        works, stale = self._fetch()
-        docs = [d for d in (self._to_doc(w) for w in works) if d]
-        docs = keyword_score_filter(docs, (query or "").strip())[:limit]
-        if stale:  # mark the served snapshot so the agent knows it is not real-time
-            for d in docs:
-                d.metadata["stale"] = ("OpenAlex 日预算耗尽 (午夜 UTC 重置); 本结果来自上次成功抓取的"
-                                       "缓存快照 (最多约 1 天旧), 非实时")
-        return docs
-
     async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async twin of ``search`` (all 39 org_watch rows share this ONE _OrgWatchAdapter class,
+        """Native-async replacement of the deleted sync ``search`` (11-04, S9; this is the only one now) (all 39 org_watch rows share this ONE _OrgWatchAdapter class,
         so this converts every row at once; the class is never subclassed, so no override can silently
         diverge). Awaits ``_afetch`` (native-async egress) instead of parking a pool thread on the whole
         affiliation fan-out. The parse/map/filter — ``_to_doc`` (oa.parse_work) + keyword_score_filter —
@@ -250,7 +182,7 @@ class _OrgWatchAdapter:
                                        "缓存快照 (最多约 1 天旧), 非实时")
         return docs
 
-    def fetch_url(self, url: str) -> Optional[Document]:
+    async def afetch_url(self, url: str) -> Optional[Document]:
         host = (urlparse(url).hostname or "").lower()
         if "openalex.org" not in host:
             return None
@@ -258,17 +190,17 @@ class _OrgWatchAdapter:
         if not work_id.startswith("W"):
             return None
         try:
-            return self._to_doc(oa.get_json(f"/works/{work_id}"))
+            return self._to_doc(await oa.aget_json(f"/works/{work_id}"))
         except Exception as exc:  # noqa: BLE001 — 404s and breaker both land here
             logger.warning("org_watch[%s] fetch_url failed: %s", self.name, exc)
             return None
 
-    def health_check(self) -> tuple[Optional[bool], str]:
+    async def ahealth_check(self) -> tuple[Optional[bool], str]:
         # Delegate to the shared single-flight upstream probe (see _openalex.health): 39 org_watch
         # rows + openalex + researcher_watch share ONE OpenAlex key + breaker, so probing each row's
         # affiliation separately used to fire ~40 concurrent calls and burst the key into 429. The
         # per-affiliation validity is a config-time concern (curator / source-audit), not an uptime probe.
-        return oa.health()
+        return await oa.ahealth()
 
     def _to_doc(self, work: dict) -> Optional[Document]:
         p = oa.parse_work(work)
@@ -286,7 +218,7 @@ class _OrgWatchAdapter:
             source_id=p["work_id"] or p["url"],
             url=p["url"],
             title=p["title"],
-            content="\n".join(parts) or "(no abstract)",
+            content="\n".join(parts) if p["abstract"] else "",   # venue / authors alone are metadata
             author=", ".join(p["authors"][:4]) or None,
             date=p["date"],
             signals=mk_signal("citations", p["cited_by"],

@@ -27,7 +27,9 @@ from urllib.parse import quote, urlparse
 
 from bs4 import BeautifulSoup
 
-from omniseek.core import cache
+import anyio
+
+from omniseek.core import cache, portal
 from omniseek.core.normalize import Document, jsonsafe
 from omniseek.core.sources.walled._base import BaseCDPAdapter
 from omniseek.core.sources.walled._cdp import (
@@ -200,7 +202,7 @@ class YipinsanfendiAdapter(BaseCDPAdapter):
                         source_id=tid,
                         url=full_url,
                         title=title,
-                        content=excerpt or "(click URL for full thread)",
+                        content=excerpt or "",
                         author=author,
                         metadata={"raw": jsonsafe(str(r))},
                     )
@@ -211,7 +213,13 @@ class YipinsanfendiAdapter(BaseCDPAdapter):
                 logger.debug("Skipping 1point3acres result: %s", exc)
         return docs
 
-    def fetch_url(self, url: str) -> Optional[Document]:
+    async def afetch_url(self, url: str) -> Optional[Document]:
+        if "1point3acres.com" not in (urlparse(url).hostname or ""):
+            return None
+        # the CDP page drive blocks (cdp_call): a worker thread
+        return await anyio.to_thread.run_sync(self._read_url, url, limiter=portal.IO_LANE)
+
+    def _read_url(self, url: str) -> Optional[Document]:
         host = urlparse(url).hostname or ""
         if "1point3acres.com" not in host:
             return None
@@ -251,7 +259,7 @@ class YipinsanfendiAdapter(BaseCDPAdapter):
             source_id=tid,
             url=url,
             title=title,
-            content=content_with_media(body, images) or "(no body extracted)",
+            content=content_with_media(body, images) or "",
             media=images,
         )
 

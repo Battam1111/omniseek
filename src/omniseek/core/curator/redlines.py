@@ -3,8 +3,8 @@
 A red line is an operator-owned rule that a candidate source's URLs or query-bearing fields
 touch a forbidden pattern. The MECHANISM lives here (ship + a seed); the CONTENTS of
 ``redlines.json`` (which lines exist, each line's hard/soft severity) are operator policy
-data, reviewed/edited at install. Smoke freezes the shape + an EXPECTED_REDLINES id set so a
-silent loosening fails the deploy, and asserts NO national-origin term appears.
+data, reviewed/edited at install. The shape is fixed and EXPECTED_REDLINES pins the id set so a
+loosening is a deliberate edit; NO national-origin term may appear.
 
 ``match(candidate)`` reports WHICH lines a candidate touches. It does NOT decide admission.
 The ONE place severity bites mechanically is downstream (omniseek_curator_decide refuses an admit
@@ -14,7 +14,7 @@ only reports facts.
 National-origin is NOT a red line (operator policy, 2026-06-10): the sources carry no
 national-origin field and we never touch LinkedIn profiles, so a national-origin "guardrail" is
 a cargo-cult pseudo-rail; national origin is a legitimate, core dimension of immigration
-research. Smoke asserts no national-origin term appears in this data file.
+research. No national-origin term may appear in this data file.
 """
 
 from __future__ import annotations
@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 
 _DATA = Path(__file__).with_name("redlines.json")
 
-# Frozen id set (smoke asserts equality). Adding/removing a line is a deliberate operator edit
+# Frozen id set (must equal redlines.json's ids). Adding/removing a line is a deliberate operator edit
 # that must update BOTH redlines.json AND this constant.
 EXPECTED_REDLINES = frozenset({
     "linkedin_trackb", "pii_email_query", "pii_employment_tracker", "scraper_data_broker",

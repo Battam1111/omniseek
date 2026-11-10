@@ -32,9 +32,9 @@ surface ``metadata.transcript_episodes`` (episodes that already ship a transcrip
 read it, skip ASR) and ``metadata.asr_episodes`` (enclosure-only: candidates for
 omniseek_transcribe), mirroring apple_podcasts' one-step-to-ASR enrichment.
 
-Credentials live in ``~/.omniseek/credentials/podcastindex.json`` as
+Credentials live in ``<credentials>/podcastindex.json`` as
 ``{"key": "...", "secret": "..."}`` (a free key registered at the signup URL).
-A ``.json.template`` is dropped on first import for discoverability. Without a key
+Its template is registered on import (auth.register_template) and listed in docs/credential-templates.md. Without a key
 the adapter returns ``[]`` (the contract) and ``health_check`` reports the gap.
 
 rank stays default-False: byterm returns the index's own term-relevance order, and
@@ -52,6 +52,7 @@ from typing import Any, Optional
 from omniseek.core import auth, http
 from omniseek.core.normalize import Document, jsonsafe, mk_signal
 from omniseek.core.sources.scrape._base import BaseScrapeAdapter
+from omniseek import where
 
 logger = logging.getLogger(__name__)
 
@@ -62,7 +63,7 @@ PODCAST_PAGE = "https://podcastindex.org/podcast"  # human page: /podcast/<feedI
 TIMEOUT = 15
 
 # Drop a credential template on first import so the user knows the file shape.
-auth.write_template(
+auth.register_template(
     "podcastindex",
     {
         "key": "YOUR_PODCASTINDEX_API_KEY",
@@ -108,178 +109,13 @@ class PodcastIndexAdapter(BaseScrapeAdapter):
 
     # ── credentials ─────────────────────────────────────────────────────────
     def _creds(self) -> Optional[tuple[str, str]]:
-        """Return (key, secret) from ~/.omniseek/credentials/podcastindex.json, or None."""
+        """Return (key, secret) from <credentials>/podcastindex.json, or None."""
         creds = auth.load("podcastindex") or {}
         key = (creds.get("key") or "").strip()
         secret = (creds.get("secret") or "").strip()
         if not key or not secret:
             return None
         return key, secret
-
-    # ── hooks ───────────────────────────────────────────────────────────────
-    def _raw_fetch(self, query: str, limit: int) -> Optional[Any]:
-        creds = self._creds()
-        if creds is None:
-            logger.info("podcast_index: credentials not configured (see "
-                        "~/.omniseek/credentials/podcastindex.json.template)")
-            return None  # → [] (the contract); no key means no live call
-        key, secret = creds
-        return http.get_json(
-            SEARCH_URL,
-            params={"q": query, "max": max(1, min(limit, 1000))},
-            headers=_auth_headers(key, secret),
-            timeout=TIMEOUT,
-        )
-
-    def _to_documents(self, raw: Any, query: str, limit: int) -> list[Document]:
-        if not isinstance(raw, dict):
-            return []
-        feeds = raw.get("feeds") or []
-        if not isinstance(feeds, list):
-            return []
-        docs: list[Document] = []
-        for idx, feed in enumerate(feeds[:limit]):
-            if not isinstance(feed, dict):
-                continue
-            doc = self._feed_to_doc(feed, enrich=(idx == 0), limit=limit)
-            if doc is not None:
-                docs.append(doc)
-        return docs
-
-    # ── feed → doc ────────────────────────────────────────────────────────────
-    def _feed_to_doc(self, feed: dict, *, enrich: bool, limit: int) -> Optional[Document]:
-        title = (feed.get("title") or "").strip()
-        feed_id = feed.get("id")
-        if not title and feed_id is None:
-            return None
-        if not title:
-            title = str(feed_id)
-
-        rss_url = (feed.get("url") or "").strip()
-        homepage = (feed.get("link") or "").strip()
-        page_url = f"{PODCAST_PAGE}/{feed_id}" if feed_id is not None else ""
-        # Canonical URL: the Podcast Index page if we have an id, else homepage, else RSS.
-        url = page_url or homepage or rss_url
-
-        author = (feed.get("author") or feed.get("ownerName") or "").strip() or None
-        date = _unix_to_dt(feed.get("newestItemPubdate"))
-        categories = _categories(feed.get("categories"))
-        episode_count = feed.get("episodeCount")
-        description = (feed.get("description") or "").strip()
-
-        # Content is the discovery/TRANSCRIBE breadcrumb (a podcast feed has little
-        # readable body): the show blurb + the RSS feed + how transcript routing works.
-        content_lines: list[str] = []
-        if description:
-            content_lines.append(description)
-        if categories:
-            content_lines.append("Categories: " + ", ".join(categories))
-        if isinstance(episode_count, int):
-            content_lines.append(f"Episodes: {episode_count}")
-        if rss_url:
-            content_lines.append(f"RSS feed: {rss_url}")
-
-        metadata: dict[str, Any] = {
-            "feedId": feed_id,
-            "rssUrl": rss_url or None,
-            "homepage": homepage or None,
-            "ownerName": feed.get("ownerName") or None,
-            "language": feed.get("language") or None,
-            "itunesId": feed.get("itunesId"),
-            "image": feed.get("image") or feed.get("artwork") or None,
-            "raw": jsonsafe(feed),
-        }
-
-        # ONE-HOP transcript routing for the TOP show only (cheap, like apple_podcasts'
-        # latest-episode enrichment): split recent episodes into already-transcribed
-        # (read the transcript, skip ASR) vs enclosure-only (omniseek_transcribe candidates).
-        if enrich and feed_id is not None:
-            routed = self._episode_transcript_routing(feed_id, limit)
-            if routed is not None:
-                with_t, asr = routed
-                metadata["transcript_episodes"] = with_t  # already ship podcast:transcript
-                metadata["asr_episodes"] = asr            # enclosure-only → omniseek_transcribe
-                content_lines.append(
-                    f"Recent episodes: {len(with_t)} already ship a transcript "
-                    f"(read it, skip ASR), {len(asr)} are audio-only (omniseek_transcribe candidates)."
-                )
-                if with_t:
-                    t0 = with_t[0]
-                    content_lines.append(
-                        f"Transcript example: '{t0.get('title')}' -> {t0.get('transcript_url')}"
-                    )
-                if asr:
-                    a0 = asr[0]
-                    content_lines.append(
-                        f"ASR candidate: '{a0.get('title')}' (audio for omniseek_transcribe) -> {a0.get('enclosure_url')}"
-                    )
-
-        content = "\n\n".join(content_lines)
-
-        # episode_count is the catalogue size: a mechanical engagement-ish FACT (how much
-        # there is to transcribe / read), not a judgment of quality.
-        signals = mk_signal(
-            "episode_count", episode_count, kind="engagement",
-            by="podcast_index/episodeCount", unit="episodes",
-        )
-
-        return Document(
-            source=self.name,
-            source_id=str(feed_id) if feed_id is not None else (rss_url or title),
-            url=url,
-            title=title,
-            content=content,
-            author=author,
-            date=date,
-            signals=signals,
-            tags=categories,
-            metadata=metadata,
-        )
-
-    def _episode_transcript_routing(
-        self, feed_id: Any, limit: int
-    ) -> Optional[tuple[list[dict], list[dict]]]:
-        """One hop to /episodes/byfeedid for the top show: classify recent episodes into
-        (already-ships-a-transcript, enclosure-only). Best-effort: any failure returns None
-        (the show doc still stands without the routing extra)."""
-        creds = self._creds()
-        if creds is None:
-            return None
-        key, secret = creds
-        raw = http.get_json(
-            EPISODES_URL,
-            params={"id": feed_id, "max": max(1, min(limit, 50))},
-            headers=_auth_headers(key, secret),
-            timeout=TIMEOUT,
-        )
-        if not isinstance(raw, dict):
-            return None
-        items = raw.get("items") or []
-        if not isinstance(items, list):
-            return None
-
-        with_transcript: list[dict] = []
-        asr_only: list[dict] = []
-        for ep in items:
-            if not isinstance(ep, dict):
-                continue
-            ep_title = (ep.get("title") or "").strip()
-            enclosure = (ep.get("enclosureUrl") or "").strip()
-            t_url = _first_transcript_url(ep)
-            if t_url:
-                with_transcript.append({
-                    "id": ep.get("id"),
-                    "title": ep_title,
-                    "transcript_url": t_url,
-                    "enclosure_url": enclosure or None,
-                })
-            elif enclosure:
-                asr_only.append({
-                    "id": ep.get("id"),
-                    "title": ep_title,
-                    "enclosure_url": enclosure,
-                })
-        return with_transcript, asr_only
 
     # ── native-async twin (S4d: BOTH layers egress, so BOTH are mirrored) ────
     # This source is TWO-LAYER: `_raw_fetch` egresses (the byterm search GET) AND `_to_documents`
@@ -291,12 +127,12 @@ class PodcastIndexAdapter(BaseScrapeAdapter):
     # UNTOUCHED; the pure-CPU helpers (`_unix_to_dt` / `_categories` / `_first_transcript_url` /
     # `mk_signal` / `jsonsafe`) are reused, not re-mirrored.
     async def _araw_fetch(self, query: str, limit: int) -> Optional[Any]:
-        """Async twin of `_raw_fetch`: SAME creds gate (no key -> None -> [] the contract, SAME log),
+        """Async replacement of the deleted sync `_raw_fetch` (11-04, S9; this is the only one now): SAME creds gate (no key -> None -> [] the contract, SAME log),
         now `await http.aget_json` for the byterm search GET."""
         creds = self._creds()
         if creds is None:
             logger.info("podcast_index: credentials not configured (see "
-                        "~/.omniseek/credentials/podcastindex.json.template)")
+                        f"{where.show(where.credentials())}/podcastindex.json, {auth.template_hint('podcastindex')})")
             return None  # → [] (the contract); no key means no live call
         key, secret = creds
         return await http.aget_json(
@@ -307,7 +143,7 @@ class PodcastIndexAdapter(BaseScrapeAdapter):
         )
 
     async def _ato_documents(self, raw: Any, query: str, limit: int) -> list[Document]:
-        """Async twin of `_to_documents` (this source's `_to_documents` ITSELF egresses per-record:
+        """Async replacement of the deleted sync `_to_documents` (11-04, S9; this is the only one now) (this source's `_to_documents` ITSELF egresses per-record:
         the TOP feed's `_episode_transcript_routing` /episodes hop). Reproduced line-for-line, but the
         per-feed doc build is AWAITED (`_afeed_to_doc`, whose one enrichment GET is async). SAME
         top-feed-only enrich cap (idx == 0), SAME order, SAME per-record skip-on-fail. Only the TOP
@@ -327,7 +163,7 @@ class PodcastIndexAdapter(BaseScrapeAdapter):
         return docs
 
     async def _afeed_to_doc(self, feed: dict, *, enrich: bool, limit: int) -> Optional[Document]:
-        """Async twin of `_feed_to_doc`: reproduced line-for-line, but the ONE enrichment egress
+        """Async replacement of the deleted sync `_feed_to_doc` (11-04, S9; this is the only one now): reproduced line-for-line, but the ONE enrichment egress
         (`_episode_transcript_routing`) is AWAITED (`_aepisode_transcript_routing`). Everything else
         is pure CPU on the loop, so the built doc is byte-identical to `_feed_to_doc`."""
         title = (feed.get("title") or "").strip()
@@ -421,7 +257,7 @@ class PodcastIndexAdapter(BaseScrapeAdapter):
     async def _aepisode_transcript_routing(
         self, feed_id: Any, limit: int
     ) -> Optional[tuple[list[dict], list[dict]]]:
-        """Async twin of `_episode_transcript_routing`: SAME creds gate, SAME /episodes/byfeedid GET
+        """Async replacement of the deleted sync `_episode_transcript_routing` (11-04, S9; this is the only one now): SAME creds gate, SAME /episodes/byfeedid GET
         (now `await http.aget_json`), SAME max cap + SAME pure-CPU classification (already-ships-a-
         transcript vs enclosure-only). Best-effort: any failure returns None (the show doc still
         stands without the routing extra)."""
@@ -464,26 +300,15 @@ class PodcastIndexAdapter(BaseScrapeAdapter):
                 })
         return with_transcript, asr_only
 
-    async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async twin of BaseScrapeAdapter.search -> AsyncSearchCapable (the fan-out awaits
-        this directly; the byterm search GET AND the top-feed /episodes enrichment cost COROUTINES,
-        not held pool threads). BOTH layers egress, so `_asearch_via` is handed the ASYNC
-        `_ato_documents` (it awaits it, being polymorphic). Shares the base async cache round-trip.
-        BEHAVIOR-IDENTICAL to `search`: same cache key, same order, same enrichment cap."""
-        return await self._asearch_via(
-            query, limit,
-            afetch=lambda: self._araw_fetch(query, limit),
-            abuild=lambda raw: self._ato_documents(raw, query, limit))
-
     # ── liveness ────────────────────────────────────────────────────────────
-    def health_check(self) -> tuple[bool, str]:
+    async def ahealth_check(self) -> tuple[bool, str]:
         if not auth.is_configured("podcastindex"):
             return (False,
                     "credentials not configured (register a free key at "
-                    "https://api.podcastindex.org/signup -> ~/.omniseek/credentials/podcastindex.json)")
+                    f"https://api.podcastindex.org/signup -> {where.show(where.credentials())}/podcastindex.json)")
         if self._creds() is None:
             return False, "podcastindex.json present but missing key/secret"
-        raw = self._raw_fetch("test", 1)
+        raw, _size = await self._afetch("test", 1)
         if raw is None:
             return False, "search call failed (key rejected or network)"
         if isinstance(raw, dict) and str(raw.get("status")).lower() in ("true", "1"):

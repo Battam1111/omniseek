@@ -34,8 +34,9 @@ from urllib.parse import urljoin, urlparse
 import anyio
 from bs4 import BeautifulSoup
 
-from omniseek.core import cache, diag, http
+from omniseek.core import cache, diag, http, portal
 from omniseek.core.normalize import Document, keyword_score_filter
+from omniseek.core.sources._base import SourceBase
 
 logger = logging.getLogger(__name__)
 
@@ -66,7 +67,7 @@ def _parse_conference(query: str) -> tuple[str, Optional[str]]:
     return (query or "").strip(), None
 
 
-class CVFOpenAccessAdapter:
+class CVFOpenAccessAdapter(SourceBase):
     name = "cvf_openaccess"
     needs_credentials = False
     kind = "lookup"
@@ -81,73 +82,8 @@ class CVFOpenAccessAdapter:
         "列表页给标题/作者/PDF/BibTeX, 摘要在每篇论文页 (对论文 URL 用 omniseek_read 补全)"
     )
 
-    # ------------------------------------------------------------- listing parse
-    def _papers(self, conf: str) -> list[dict]:
-        """Fetch + parse a conference listing into a list of paper dicts (cached
-        per conference, since the proceedings are immutable). `?day=all` collapses
-        the day-paginated venues (CVPR/ICCV) into one page and is a harmless no-op
-        on the single-page venues (WACV)."""
-        key = cache.make_key("cvf_openaccess", "conf", conf)
-        cached = cache.get(key)
-        if cached is not None:
-            return cached
-        url = f"{BASE}/{conf}?day=all"
-        try:
-            resp = http.direct("GET", url, headers={"User-Agent": USER_AGENT},
-                               timeout=TIMEOUT, follow_redirects=True)
-            resp.raise_for_status()
-            soup = BeautifulSoup(resp.text, "html.parser")
-        except Exception as exc:  # noqa: BLE001 — failure degrades to [] (adapter contract)
-            logger.warning("cvf_openaccess: fetch/parse failed for %s: %s", conf, exc)
-            st = getattr(getattr(exc, "response", None), "status_code", None)
-            diag.note("cvf_openaccess.fetch", url=url, status=st, exc=exc)
-            return []
-        year = conf[-4:]
-        papers: list[dict] = []
-        for dt in soup.select("dt.ptitle"):
-            a = dt.find("a", href=True)
-            if not a:
-                continue
-            title = a.get_text(" ", strip=True)
-            if not title:
-                continue
-            html_url = urljoin(BASE, a["href"])
-            authors: list[str] = []
-            pdf_url = ""
-            bibtex = ""
-            # walk the two <dd> siblings that follow this <dt> (authors, then links)
-            sib = dt.find_next_sibling()
-            while sib is not None and getattr(sib, "name", None) == "dd":
-                for inp in sib.select("input[name='query_author']"):
-                    val = (inp.get("value") or "").strip()
-                    if val:
-                        authors.append(val)
-                if not pdf_url:
-                    for link in sib.find_all("a", href=True):
-                        if link["href"].lower().endswith("_paper.pdf") or \
-                                link.get_text(strip=True).lower() == "pdf":
-                            pdf_url = urljoin(BASE, link["href"])
-                            break
-                if not bibtex:
-                    bib = sib.select_one("div.bibref")
-                    if bib:
-                        bibtex = bib.get_text("\n", strip=True)
-                sib = sib.find_next_sibling()
-            papers.append({
-                "title": title,
-                "authors": authors[:12],
-                "url": html_url,
-                "pdf_url": pdf_url,
-                "bibtex": bibtex,
-                "year": year,
-                "conference": conf,
-                "id": urlparse(html_url).path.rsplit("/", 1)[-1].removesuffix(".html"),
-            })
-        cache.set(key, papers, ttl=CACHE_TTL)
-        return papers
-
     async def _apapers(self, conf: str) -> list[dict]:
-        """Async twin of ``_papers`` (S4b): BYTE-FAITHFUL mirror changing ONLY the blocking parts.
+        """Async replacement of the deleted sync ``_papers`` (11-04, S9; this is the only one now) (S4b): BYTE-FAITHFUL mirror changing ONLY the blocking parts.
           - the disk cache read + write -> ``anyio.to_thread.run_sync`` (SAME cache key, so the sync
             and async paths share one warmed per-conference entry);
           - the raw ``httpx.get`` listing fetch -> the shared async leaf ``http.aget_text`` (shared
@@ -160,7 +96,7 @@ class CVFOpenAccessAdapter:
             byte-identical, stays ON the loop.
         A fetch/parse failure returns [] WITHOUT caching, exactly as ``_papers`` does."""
         key = cache.make_key("cvf_openaccess", "conf", conf)
-        cached = await anyio.to_thread.run_sync(cache.get, key)  # disk read OFF loop
+        cached = await cache.aget_once(key)  # disk read OFF loop
         if cached is not None:
             return cached
         url = f"{BASE}/{conf}?day=all"
@@ -216,19 +152,11 @@ class CVFOpenAccessAdapter:
                 "id": urlparse(html_url).path.rsplit("/", 1)[-1].removesuffix(".html"),
             })
         await anyio.to_thread.run_sync(  # disk write OFF loop
-            functools.partial(cache.set, key, papers, ttl=CACHE_TTL))
+            functools.partial(cache.set, key, papers, ttl=CACHE_TTL), limiter=portal.IO_LANE)
         return papers
 
-    def search(self, query: str, limit: int = 10) -> list[Document]:
-        terms, conf = _parse_conference(query)
-        if not conf:
-            return []  # no venue token: not this source's job (see description)
-        docs = [self._to_doc(p) for p in self._papers(conf)]
-        docs = keyword_score_filter(docs, terms)
-        return docs[:limit]
-
     async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async twin of ``search`` -> AsyncSearchCapable. Mirrors ``search`` line-for-line,
+        """Native-async replacement of the deleted sync ``search`` (11-04, S9; this is the only one now) -> AsyncSearchCapable. Mirrors ``search`` line-for-line,
         awaiting ``_apapers`` (disk cache OFF the loop, listing fetch via the async leaf) instead of
         the sync ``_papers``. The ``_to_doc`` mapping + ``keyword_score_filter`` are pure CPU, so this
         is behavior-identical to ``search`` (same conference parse, same BM25 filter, same limit)."""
@@ -240,7 +168,7 @@ class CVFOpenAccessAdapter:
         return docs[:limit]
 
     # ------------------------------------------------------- single-paper enrich
-    def fetch_url(self, url: str) -> Optional[Document]:
+    async def afetch_url(self, url: str) -> Optional[Document]:
         host = (urlparse(url).hostname or "").lower()
         if "openaccess.thecvf.com" not in host:
             return None
@@ -248,8 +176,8 @@ class CVFOpenAccessAdapter:
         if "/html/" not in path or not path.endswith(".html"):
             return None  # only claim per-paper landing pages
         try:
-            resp = http.direct("GET", url, headers={"User-Agent": USER_AGENT},
-                               timeout=30, follow_redirects=True)
+            resp = await http.adirect("GET", url, headers={"User-Agent": USER_AGENT},
+                                      timeout=30, follow_redirects=True)
             resp.raise_for_status()
             soup = BeautifulSoup(resp.text, "html.parser")
         except Exception as exc:  # noqa: BLE001
@@ -281,9 +209,9 @@ class CVFOpenAccessAdapter:
         }
         return self._to_doc(p)
 
-    def health_check(self) -> tuple[bool, str]:
+    async def ahealth_check(self) -> tuple[bool, str]:
         try:
-            resp = http.direct("HEAD", f"{BASE}/CVPR2024", headers={"User-Agent": USER_AGENT},
+            resp = await http.adirect("HEAD", f"{BASE}/CVPR2024", headers={"User-Agent": USER_AGENT},
                                timeout=10, follow_redirects=True)
             return resp.status_code == 200, f"HTTP {resp.status_code} (CVPR2024 probe)"
         except Exception as exc:  # noqa: BLE001
@@ -307,8 +235,8 @@ class CVFOpenAccessAdapter:
         if p.get("pdf_url"):
             parts.append(f"PDF: {p['pdf_url']}")
         abstract = p.get("abstract") or ""
-        body = abstract or "(no abstract in listing; use omniseek_read on the paper URL)"
-        content = "\n".join(parts) + "\n\n" + body
+        # no abstract in the listing: no body (the header lines are metadata; omniseek_read the paper URL)
+        content = ("\n".join(parts) + "\n\n" + abstract) if abstract else ""
         return Document(
             source="cvf_openaccess",
             source_id=p["id"],

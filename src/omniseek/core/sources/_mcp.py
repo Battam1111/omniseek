@@ -35,7 +35,7 @@ FAIL-OPEN contract (the whole point; a wrapped server can never crash OmniSeek o
   * One client per (endpoint, headers) per process; the session is reused, and a 404 / expired
     -session response triggers exactly ONE re-initialize (servers recycle sessions).
 
-Auth: optional per-source credentials at ``~/.omniseek/credentials/mcp_<name>.json``
+Auth: optional per-source credentials at ``<credentials>/mcp_<name>.json``
 (``{"headers": {...}}``) read via the ``auth.py`` idiom. A row with ``needs_credentials: true``
 and no file degrades to ``[]`` silently at fetch (again the podcast_index precedent); the
 adapter checks that BEFORE ever touching the network.
@@ -48,9 +48,10 @@ import logging
 import threading
 from typing import Any, Optional
 
+import anyio
 import httpx
 
-from omniseek.core import _netguard, auth, cache, http, upstreams
+from omniseek.core import _netguard, auth, cache, http, portal, upstreams
 
 logger = logging.getLogger(__name__)
 
@@ -114,14 +115,18 @@ class MCPClient:
         self._id = 0
         self._lock = threading.Lock()  # serialize handshake + id issuance for this endpoint
 
-    # -- low-level POST (the ONE network touchpoint; monkeypatched by smoke) ----------------
+    # -- low-level POST (the ONE network touchpoint) -----------------------------------------
 
     def _post(self, payload: dict) -> "tuple[Optional[dict], dict]":
+        """``_apost`` from the caller's thread, run on the event loop (portal.call)."""
+        return portal.call(self._apost, payload)
+
+    async def _apost(self, payload: dict) -> "tuple[Optional[dict], dict]":
         """POST one JSON-RPC message via the SHARED pooled http client (keep-alive), keeping the
-        SAME security guards ``http._request_capped`` applies (SSRF pre-flight + a MAX_BYTES read
+        SAME security guards ``http._arequest_capped`` applies (SSRF pre-flight + a MAX_BYTES read
         cap + cache-only refusal), but reading the RAW response so we can see the status code the
         MCP session protocol needs: a 404/410 means the server recycled the session (-> re-init
-        ONCE), which ``_request_capped`` would otherwise swallow to None via raise_for_status.
+        ONCE), which ``_arequest_capped`` would otherwise swallow to None via raise_for_status.
 
         Returns (parsed_response_or_None, response_headers). A NOTIFICATION (no ``id``) or a 202/
         empty body returns (None, headers). RAISES ``_SessionExpired`` on 404/410 and
@@ -129,9 +134,11 @@ class MCPClient:
         text/event-stream bodies are handled."""
         if cache.cache_only():
             raise MCPTransportError("cache-only mode: no live MCP call")
-        # SSRF pre-flight (the load-bearing guard, identical to http._request_capped): refuse a
-        # host that resolves to a private/loopback/link-local/reserved IP before connecting.
-        blk = _netguard.security_block_reason(self.endpoint)
+        # SSRF pre-flight (the load-bearing guard, identical to http._arequest_capped): refuse a
+        # host that resolves to a private/loopback/link-local/reserved IP before connecting (the DNS
+        # lookup blocks: off the loop).
+        blk = await anyio.to_thread.run_sync(_netguard.security_block_reason, self.endpoint,
+                                             limiter=portal.IO_LANE)
         if blk is not None:
             raise MCPTransportError(f"SSRF-class endpoint blocked ({blk})")
 
@@ -145,25 +152,25 @@ class MCPClient:
 
         try:
             # The declared gates of the endpoint's host, held through the body read, and the redirect
-            # rule on every later hop: exactly as http._request_capped (design decision 2026-09-29: no
+            # rule on every later hop: exactly as http._arequest_capped (design decision 2026-09-29: no
             # egress may bypass a declared gate, whether or not an MCP row exists today). The client is
             # built first, so the start slot is the moment the request goes on the wire.
-            client = http._get_client()
-            with upstreams.hop_gates(request_s=self.timeout_s) as gates:
-                gates.enter(self.endpoint)
+            client = http._aget_client()
+            async with upstreams.ahop_gates(request_s=self.timeout_s) as gates:
+                await gates.enter(self.endpoint)
                 token = http._hops_var.set(gates)
                 try:
-                    with client.stream("POST", self.endpoint, timeout=self.timeout_s,
-                                       headers=headers, json=payload) as r:
+                    async with client.stream("POST", self.endpoint, timeout=self.timeout_s,
+                                             headers=headers, json=payload) as r:
                         status = r.status_code
                         resp_headers = dict(r.headers)
                         # A 404/410 is the session-recycled signal: surface it to the caller BEFORE
                         # reading the body (we re-initialize once and retry).
                         if status in (404, 410):
                             raise _SessionExpired(f"session expired (HTTP {status})")
-                        # Read the body under the SAME MAX_BYTES cap _request_capped enforces.
+                        # Read the body under the SAME MAX_BYTES cap _arequest_capped enforces.
                         raw = bytearray()
-                        for chunk in r.iter_raw():
+                        async for chunk in r.aiter_raw():
                             raw += chunk
                             if len(raw) > http.MAX_BYTES:
                                 raise MCPTransportError(f"MCP response exceeded {http.MAX_BYTES} bytes")
@@ -190,7 +197,7 @@ class MCPClient:
             return None, resp_headers
 
         # Rebuild a normal already-read Response from the raw body + original headers (the exact
-        # http._request_capped idiom), so content-encoding (gzip/deflate) and charset decoding
+        # http._arequest_capped idiom), so content-encoding (gzip/deflate) and charset decoding
         # happen as a buffered read would; iter_raw() gave the UNDECODED transfer bytes, and a
         # naive utf-8 decode of a gzipped body would be garbage that silently degrades to [].
         text = httpx.Response(status, headers=resp_headers, content=body).text
@@ -396,7 +403,7 @@ class _SessionExpired(Exception):
 
 
 def load_mcp_headers(name: str) -> "tuple[Optional[dict], bool]":
-    """Read per-source MCP credentials at ~/.omniseek/credentials/mcp_<name>.json via the auth.py
+    """Read per-source MCP credentials at <credentials>/mcp_<name>.json via the auth.py
     idiom. Returns (headers, configured): ({...}, True) when the file supplies a ``headers`` dict,
     ({}, False) when no file exists. A malformed file (present but no headers dict) is treated as
     NOT configured so a needs_credentials row degrades to [] rather than sending junk headers."""

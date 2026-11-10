@@ -16,13 +16,39 @@ sources lands on the SAME key:
   5. source:source_id (last resort — never merges across sources)
 
 Ranking is intentionally simple + explainable (no opaque learned weights):
-  query present →  0.60·relevance + 0.25·recency + 0.15·engagement
-  query absent  →  0.70·recency + 0.30·engagement      (browse/digest mode)
+  query present →  0.60·relevance + 0.25·recency + 0.15·heat
+  query absent  →  0.70·recency + 0.30·heat      (browse/digest mode)
 then a light cross-source corroboration nudge (×up to ~1.15 when several sources
 independently surface the same work) — a SIGNAL, not truth; the agent re-judges.
 The chosen item's score is stamped into ``metadata._rank``; the corroborating
 sources into ``metadata.also_in`` + their count into ``metadata.corroboration`` —
 so the ranking is auditable, never a black box.
+
+The three terms (2026-10-20; measured on a recording of real searches):
+  relevance  BM25 (relevance.doc_scores, title 3x body) divided by the batch's best. A source with no
+             body sends "" (never a placeholder text). An empty body is scored as UNKNOWN length (the
+             average body length of the batch), not as zero length, which made a bare title the
+             strongest match (``empty_body_unknown``). Its words are still absent: only the title
+             can match. (Sorting empty bodies after all others measured worse on the paper queries.)
+             The query's adjacent word pairs are extra BM25 terms at ``PHRASE_WEIGHT`` (EYE-RELEVANCE,
+             2026-10-24): words of the query that stand apart in a document ("Point-Based Distributed
+             Zeroth-Order" for "distributed point function") count less than the query's phrase.
+             The vector-recall prior (``recall_rrf``, perception-memory docs only) may stand in for
+             relevance when it is higher; for a document that matches lexically only above what one
+             stored copy can earn (``_prior_counts``), since below that it is only a rank inside the
+             index, whose first hit used to score like the batch's best literal match.
+  recency    1.0 today, 0.5 at ~30 days (``_recency``). An undated document gets the batch's median.
+  heat       a FIXED transform of the document's own attention signals (``_heat``):
+             min(1, log1p(value) / log1p(cap of that signal name)), the best over its signals. The
+             caps (``HEAT_CAPS``) are read off a recording, not the batch, so a document's heat never
+             depends on what else came back. A document with no signal whose scale is known has an
+             UNKNOWN heat, not a zero one: it gets the batch's median heat (the median of the
+             documents that have one). Zero is kept for a real zero (a paper with 0 citations).
+"The batch" for the statistics above (BM25's document count, term frequencies and average length,
+the best relevance, the two medians) is the documents of the sources that returned at least one
+document holding a query word. A source that answered nothing on the topic therefore moves nobody
+else's rank (it used to: adding such a source changed the order in 26 of 45 recorded queries).
+Browse mode (no query words) uses every document.
 """
 
 from __future__ import annotations
@@ -34,15 +60,16 @@ from datetime import datetime, timezone
 from typing import Callable, Optional
 
 from omniseek.core import relevance
-from omniseek.core.normalize import Document
+from omniseek.core.normalize import Document, to_utc
 
 logger = logging.getLogger(__name__)
 
 from omniseek.core.recall import graph as _graph  # noqa: E402 — the graph write verb + mint registry
+from omniseek.core.recall import RRF_C as _RRF_C  # noqa: E402 (the recall fusion's smoothing constant)
 
 # Vocabulary this tap MINTS (vocabulary-by-minting, design section 3): declared on the tap itself,
-# registered at import, folded into ``_graph.declared_vocabulary`` as the computed union; the smoke
-# tripwire bounds ACTUAL graph data to that union. The conflicts tap is the P4 event layer's second
+# registered at import, folded into ``_graph.declared_vocabulary`` as the computed union; ACTUAL
+# graph data must stay within that union. The conflicts tap is the P4 event layer's second
 # half: it mints ``conflicts`` A-tier edges (doc <-> doc) where dedup already found same-work signal
 # DIVERGENCE across sources. NO node kinds (doc endpoints are virtual/thin), NO new methods beyond
 # ``signal:divergence``. The edge attrs carry the signal NAME and its KIND (e.g. "engagement"), so
@@ -397,7 +424,7 @@ def dedup(docs: list[Document],
 # record, not its internal comparison material. Each record carries both members' full identities +
 # the signal's name + KIND + the two raw values (collected in ``dedup`` under the private
 # ``_conflict_pairs`` stamp the fetcher pops). The builder is PURE (records -> (nodes, edges)) so
-# the smoke can golden-test it with zero network; ``_conflict_tap`` wraps enqueue_graph fail-open (a
+# it runs with zero network; ``_conflict_tap`` wraps enqueue_graph fail-open (a
 # tap failure must NEVER break the search the agent gets). NO nodes are minted — the doc endpoints
 # are virtual/thin document rows, and a stored edge does not require a node row for its endpoints.
 
@@ -454,56 +481,94 @@ def _recency(doc: Document, now: datetime, unknown: float = 0.3) -> float:
     DATED docs competing with them scored 0.04-0.29, i.e. essentially all BELOW the 0.3 floor. So
     "neutral-low" was neutral only against an imagined distribution; against the real one it was
     near the TOP, and an undated video outscored a genuinely 4-month-old paper on recency."""
-    dt = doc.date
+    dt = to_utc(doc.date)
     if not dt:
         return unknown
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
     age_days = max(0.0, (now - dt).total_seconds() / 86400.0)
     return 1.0 / (1.0 + age_days / 30.0)  # 1.0 today, 0.5 at ~30d
 
 
 def _engagement(doc: Document) -> float:
-    """Absolute attention on a log scale. Retained for direct callers; merge_rank uses the
-    WITHIN-SOURCE version below, because this one compares incomparable things (see _engagement_ranks)."""
+    """Absolute attention on a log scale over attention_value(). Retained for direct callers; merge_rank
+    uses ``_heat`` below, because this one puts views and citations on one curve."""
     s = doc.attention_value() or 0
     if s <= 0:
         return 0.0
     return min(1.0, math.log10(1 + s) / 4.0)  # ~1.0 at score≈10k
 
 
-def _engagement_ranks(docs: list[Document]) -> list[float]:
-    """Engagement as a percentile WITHIN THE DOC'S OWN SOURCE, not on one absolute scale.
+# Heat caps (EYE-RANK, 2026-10-20). PROVISIONAL, calibrate 2026-10-27. Derivation: for every
+# attention-class signal name (engagement / citation) seen at least 20 times in a broad-search
+# recording plus EYE-2's two queries (27,156 + 873 recorded documents, out/EYE-RANK/scripts/
+# replay_rank.py derive_caps), the 95th percentile of its values. At or above its cap a signal counts
+# as full attention (1.0); below it, log1p(value) / log1p(cap). Read at p99 instead, the replay gave
+# the 23 paper queries 216 and the 20 control queries 121 on-topic in their top 10 (p95: 215, 121;
+# out/EYE-RANK/evidence/replay_summary.md), so the choice is not sharp; p95 was fixed before looking.
+# A name not in this table is not on any known scale: it counts as no signal
+# (unknown heat), never as a guess. Recalibrate by re-running derive_caps on a newer recording.
+HEAT_CAPS: dict[str, float] = {
+    "citations": 104.0, "comments": 128.0, "downloads": 336.0, "episode_count": 2000.0,
+    "favourites": 3.0, "likes": 11.0, "points": 65.0, "posts": 32.0, "reblogs": 3.0,
+    "replies": 112.0, "shares": 2.0, "stars": 812.0, "upvotes": 201.0, "views": 210987.0,
+    "votes": 12.0,
+}
+_ATTENTION = ("engagement", "citation")
 
-    WHY (measured 2026-07-25). attention_value() is a max over engagement AND citation signals, so
-    the same number means YouTube views for one doc and citations for another, and the old
-    log10(1+s)/4 put them on ONE curve. 10k views is unremarkable; 10k citations is legendary. The
-    result in real searches: youtube docs scored 0.47-0.98 while semantic_scholar / crossref scored
-    0.08-0.35, a standing ~0.1 advantage (of a 1.0 scale) for video over research, on top of the
-    recency floor above. Three videos with LOWER relevance outranked the best-matching paper.
+# Phrase pairs (EYE-RELEVANCE, 2026-10-24). PROVISIONAL, calibrate with the next replay. The query's
+# adjacent word pairs count as extra BM25 terms at this weight (relevance.doc_scores pair_weight):
+# 0.10 / 0.85, the ordered-window over single-term weight of the sequential dependence model
+# (Metzler & Croft, SIGIR 2005, the published default 0.85 / 0.10 / 0.05), fixed before the replay
+# was read. Replay of the 45 recorded queries (out/EYE-RELEVANCE/, with _prior_counts): weights
+# 0.0588 / 0.1176 / 0.1765 / 0.25 gave the 23 paper queries 216 / 217 / 218 / 219 on-topic in their top
+# 10 and the 20 control queries 125 / 126 / 126 / 125, so the choice is not sharp. Recalibrate by
+# re-running out/EYE-RELEVANCE/scripts/variants.py with pw:<x> on a newer recording.
+PHRASE_WEIGHT = 0.10 / 0.85
 
-    Comparing a doc only to its OWN source's docs makes the number mean something again: "more
-    watched than the other videos here" / "more cited than the other papers here". Scale-free, so no
-    per-source constants are introduced, and it follows the same within-candidate-set normalization
-    the relevance term already uses (max_rel).
 
-    No attention signal at all still scores 0.0 (never invent attention), and a source contributing a
-    single doc gets 0.5 (neutral, since it has no peers to beat) rather than a free 1.0."""
-    vals = [(d.attention_value() or 0.0) for d in docs]
-    peers: dict[str, list[float]] = {}
-    for d, v in zip(docs, vals):
-        if v > 0:
-            peers.setdefault(d.source, []).append(v)
-    out: list[float] = []
-    for d, v in zip(docs, vals):
-        if v <= 0:
-            out.append(0.0)
+def _heat(doc: Document) -> Optional[float]:
+    """The document's attention on a FIXED scale per signal name, 0..1, or None when it carries no
+    attention signal whose scale is known (unknown, which merge_rank does not read as zero).
+
+    WHY per signal name (measured 2026-07-25, kept): 10k views is unremarkable, 10k citations is
+    legendary, so one curve over attention_value() put youtube at 0.47-0.98 and papers at 0.08-0.35.
+    That fix used a percentile WITHIN each source's returned batch; EYE-RANK replaced it with this
+    transform because a batch-relative number is not a property of the document (the same paper scored
+    differently depending on its neighbours) and because the percentile gave a doc without any signal
+    0.0, i.e. read "unknown" as "nobody looked at it" (an IACR ePrint paper with no counts at all fell
+    behind every counted paper)."""
+    best: Optional[float] = None
+    for name, sig in (doc.signals or {}).items():
+        if sig.kind not in _ATTENTION or not isinstance(sig.value, (int, float)):
             continue
-        group = peers.get(d.source) or [v]
-        below = sum(1 for p in group if p < v)
-        equal = sum(1 for p in group if p == v)
-        out.append((below + 0.5 * equal) / len(group))
-    return out
+        cap = HEAT_CAPS.get(name)
+        if cap is None:
+            continue
+        x = min(1.0, math.log1p(max(0.0, float(sig.value))) / math.log1p(cap))
+        best = x if best is None else max(best, x)
+    return best
+
+
+def _median(vals: list[float], default: float) -> float:
+    vals = sorted(vals)
+    return vals[len(vals) // 2] if vals else default
+
+
+# The most RRF one stored copy can get (first in both recall arms): 2 / (c + 1). See _prior_counts.
+_RRF_ONE_COPY = 2.0 / (_RRF_C + 1)
+
+
+def _prior_counts(rel: float, rrf: float) -> bool:
+    """Whether a document's vector-recall prior (``recall_rrf``) may stand in for its relevance.
+
+    Always for a document with no lexical match (rel 0): lifting such hits is what the prior is for.
+    For a document that matches lexically, only when the prior is above what ONE stored copy can get,
+    i.e. the index holds several copies of the work ranked high (EYE-RELEVANCE 2026-10-24). Up to that
+    bound the prior is only the document's rank among the index's own candidates: the index always has
+    a first one, and divided by the batch's best prior it scored like the batch's best literal match.
+    Measured on the replay (out/EYE-RELEVANCE/report.md): seven pytorch commit records holding
+    "pytorch" only inside link URLs and "compile" once took 7 of the top 10 for "PyTorch compile
+    error" this way, over forum threads holding all three words in their titles."""
+    return rel <= 0.0 or rrf > _RRF_ONE_COPY + 1e-12
 
 
 def _extract_hook(doc: Document, terms: list[str], cap: int = 120) -> str:
@@ -529,36 +594,86 @@ def _extract_hook(doc: Document, terms: list[str], cap: int = 120) -> str:
     return best[:cap]
 
 
-def merge_rank(results, query: str, limit: int = 15,
-               backend_of: Optional[Callable[[str], str]] = None) -> list[Document]:
-    """Flatten → dedup → rank. ``results`` is a search_many dict or a flat list. ``backend_of`` is
-    passed through to ``dedup`` so corroboration counts distinct BACKENDS (injected by the caller to
-    avoid a rank->fetcher import cycle; absent → the historical source-name count)."""
+def text_scores(texts: list[tuple[str, str, str]], survivors: list[int],
+                query: str) -> tuple[list[bool], list[float]]:
+    """The text half of merge_rank: which survivors the batch statistics are taken over, and their
+    lexical relevance. ``texts`` is (source, title or "", content or "") of every document BEFORE
+    dedup, in order; ``survivors`` the indices into it of what dedup kept, in its order. Returns
+    ``(inset, rels)`` aligned with ``survivors``: ``inset`` says which survivors the batch statistics
+    are taken over (those of a source that returned at least one document holding a query word; every
+    one in browse mode).
+
+    Lexical relevance comes from the shared engine (omniseek.core.relevance: BM25-shaped,
+    CJK-bigram-aware) so ranking and adapter-side filtering can never drift apart. Each title and
+    content is tokenized ONCE and its tokens serve the topic check, the body length and the BM25 terms
+    (the three of them tokenized every content again: about 3.8 passes over some 6.5 M characters of a
+    broad search, 0.6 to 0.75 s, measured). Plain data in and out and
+    module-level, because asearch_ranked runs it in the process lane (portal.run_cpu, ASYNC-CORE-DESIGN
+    D14): on the event loop it held the loop for those 0.6 s, and for 0.14 to 0.35 s on a
+    single-source search whose recalled index documents are long."""
+    terms = relevance.query_terms(query)
+    if not terms:
+        # browse mode: every survivor counts and no document has a lexical score (doc_scores of a
+        # term-less query is all zeros), so nothing needs tokenizing
+        return [True] * len(survivors), [0.0] * len(survivors)
+    toks = [(relevance.tokenize(t), relevance.tokenize(c)) for _s, t, c in texts]
+    # The sources that answered on the topic (read before dedup, so a source whose only matching
+    # document merged into another source's survivor still counts). See the module docstring. The
+    # tokens of title + " " + content are the title's then the content's: the space ends every token.
+    tset = set(terms)
+    hit_sources = {texts[i][0] for i, (tt, tc) in enumerate(toks) if tset & (set(tt) | set(tc))}
+    inset = [texts[i][0] in hit_sources for i in survivors]
+    sub_rels = iter(relevance.doc_scores_tokens([toks[i] for i, k in zip(survivors, inset) if k], query,
+                                                empty_body_unknown=True, pair_weight=PHRASE_WEIGHT))
+    return inset, [next(sub_rels) if k else 0.0 for k in inset]
+
+
+def _merge_prep(results, backend_of):
+    """Flatten, then dedup; returns (survivors, texts, survivor indices) for text_scores."""
     if isinstance(results, dict):
         docs: list[Document] = []
         for lst in results.values():
             docs.extend(lst)
     else:
         docs = list(results)
+    # dedup keeps one of each group's own documents (it changes their date and metadata, never their
+    # source, title or content), so the texts read here are the survivors' texts too
+    texts = [(d.source, d.title or "", d.content or "") for d in docs]
+    pos = {id(d): i for i, d in enumerate(docs)}
+    kept = dedup(docs, backend_of=backend_of)
+    return kept, texts, [pos[id(d)] for d in kept]
 
-    docs = dedup(docs, backend_of=backend_of)
-    # Lexical relevance comes from the shared engine (omniseek.core.relevance:
-    # BM25-shaped, CJK-bigram-aware) so ranking and adapter-side filtering can
-    # never drift apart; the transparent blend below is unchanged.
+
+async def amerge_rank(results, query: str, limit: int = 15,
+                      backend_of: Optional[Callable[[str], str]] = None) -> list[Document]:
+    """Flatten → dedup → rank (the ranking step OmniSeek calls merge_rank), for a caller ON the event
+    loop (fetcher.asearch_ranked). ``results`` is a search_many dict or a flat list. ``backend_of`` is
+    passed through to ``dedup`` so corroboration counts distinct BACKENDS (injected by the caller to
+    avoid a rank->fetcher import cycle; absent → the historical source-name count). text_scores runs
+    in a worker process of the process lane (portal.run_cpu). Only the texts cross (pickled on the
+    loop: about 6.5 MB for a broad search). A worker that dies raises anyio.BrokenWorkerProcess here;
+    nothing falls back to the loop."""
+    from omniseek.core import portal
+    docs, texts, survivors = _merge_prep(results, backend_of)
+    inset, rels = await portal.run_cpu(text_scores, texts, survivors, query or "")
+    return _merge_finish(docs, inset, rels, query, limit)
+
+
+def _merge_finish(docs: list[Document], inset: list[bool], rels: list[float], query: str,
+                  limit: int) -> list[Document]:
+    """The blend of merge_rank over the survivors and their text_scores; stamps the top ``limit``."""
     terms = relevance.query_terms(query or "")
     now = datetime.now(timezone.utc)
-
-    rels = relevance.doc_scores(docs, query or "")
-    # Both non-relevance terms are normalized WITHIN THE CANDIDATE SET, exactly as max_rel already
-    # normalizes relevance. A fixed unknown-date floor and an absolute attention curve both silently
-    # favoured whichever sources omit dates and count cheap units (see _recency / _engagement_ranks).
-    _dated = [_recency(d, now) for d in docs if d.date]
-    _unknown_rec = sorted(_dated)[len(_dated) // 2] if _dated else 0.3
-    engs = _engagement_ranks(docs)
-    scored = [[d, rel, _recency(d, now, unknown=_unknown_rec), eng,
+    # The undated doc's recency and the unsignalled doc's heat are UNKNOWN: each gets the median of the
+    # documents that have one (a fixed floor or a zero both rewarded or punished missing metadata, see
+    # _recency / _heat).
+    _unknown_rec = _median([_recency(d, now) for d, k in zip(docs, inset) if k and d.date], 0.3)
+    heats = [_heat(d) for d in docs]
+    _unknown_heat = _median([h for h, k in zip(heats, inset) if k and h is not None], 0.0)
+    scored = [[d, rel, _recency(d, now, unknown=_unknown_rec), (_unknown_heat if h is None else h),
                int((d.metadata or {}).get("corroboration", 1)),
                float((d.metadata or {}).get("recall_rrf") or 0.0)]
-              for d, rel, eng in zip(docs, rels, engs)]
+              for d, rel, h in zip(docs, rels, heats)]
     max_rel = max((s[1] for s in scored), default=0.0) or 1.0
     # The Phase-2 vector-recall prior (RRF). Only the perception-memory hybrid path stamps it; live
     # docs never carry it, so max_rrf=0 ⇒ rel_term below is EXACTLY today's rel/max_rel (Phase-1
@@ -570,7 +685,11 @@ def merge_rank(results, query: str, limit: int = 15,
         # A vector-only hit has rel≈0 (that's WHY lexical missed it); lift it by its normalized RRF
         # rank-prior instead of flooring it. A strong lexical doc (rel/max_rel≈1) is unchanged — the
         # max() picks lexical. Mechanical (a max of two 0-1 normalized values); coefficients untouched.
-        rel_term = max(rel / max_rel, rrf / max_rrf) if rrf > 0.0 else (rel / max_rel)
+        # A doc that DOES match lexically keeps the prior only when it is more than one stored copy
+        # can earn (_prior_counts): the prior is a rank inside the index, divided by the batch's best,
+        # so the index's top hit scored as high as the batch's best literal match on every query.
+        rel_term = (max(rel / max_rel, rrf / max_rrf) if rrf > 0.0 and _prior_counts(rel, rrf)
+                    else (rel / max_rel))
         base = (0.60 * rel_term + 0.25 * rec + 0.15 * eng) if terms else (0.70 * rec + 0.30 * eng)
         # Cross-source corroboration is a SIGNAL, not truth: a light multiplicative nudge (max
         # ~+15% at 4+ distinct sources) so a work several sources independently surface floats up,
@@ -588,10 +707,8 @@ def merge_rank(results, query: str, limit: int = 15,
         # Already feeds ranking via _recency; these are pure metadata. Timezone-naive dates
         # handled the same way as _recency (line ~147-148).
         try:
-            _dd = d.date
+            _dd = to_utc(d.date)
             if _dd is not None:
-                if _dd.tzinfo is None:
-                    _dd = _dd.replace(tzinfo=timezone.utc)
                 _fd = round((now - _dd).total_seconds() / 86400.0, 1)
             else:
                 _fd = None

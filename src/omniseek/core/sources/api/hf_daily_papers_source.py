@@ -30,14 +30,14 @@ from __future__ import annotations
 
 import functools
 import logging
-from datetime import datetime
 from typing import Optional
 from urllib.parse import urlparse
 
 import anyio
 
-from omniseek.core import cache, http, upstreams
-from omniseek.core.normalize import Document, jsonsafe, mk_signal
+from omniseek.core import cache, http, portal, upstreams
+from omniseek.core.normalize import Document, jsonsafe, mk_signal, to_utc
+from omniseek.core.sources._base import SourceBase
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +47,7 @@ USER_AGENT = "omniseek/0.1 (automated retrieval)"
 CACHE_TTL = 3600  # 1h — daily curation, but multiple intra-day visits possible
 
 
-class HFDailyPapersAdapter:
+class HFDailyPapersAdapter(SourceBase):
     name = "hf_daily_papers"
     needs_credentials = False
     description = (
@@ -55,64 +55,24 @@ class HFDailyPapersAdapter:
         "with upvotes, ai_summary, githubRepo links. Curation layer above raw arXiv."
     )
 
-    def _fetch_all(self) -> list[dict]:
-        key = cache.make_key(self.name, "all")
-        cached = cache.get(key)
-        if cached is not None:
-            return cached
-        data = http.get_json(API_URL, timeout=TIMEOUT)
-        if data is None:
-            return []
-        cache.set(key, data, ttl=CACHE_TTL)
-        return data
-
     async def _afetch_all(self) -> list[dict]:
         """Async twin of ``_fetch_all`` (S4b): SAME cache key (async + sync share the disk cache),
         the disk read/write pushed OFF the loop (cache.get/set do file IO), the ONE network egress
         swapped to its async twin (http.get_json -> await http.aget_json, epoll not a held thread).
         Byte-identical logic to ``_fetch_all``; only the blocking syscalls move off-loop."""
         key = cache.make_key(self.name, "all")
-        cached = await anyio.to_thread.run_sync(cache.get, key)  # disk read OFF loop
+        cached = await cache.aget_once(key)  # disk read OFF loop
         if cached is not None:
             return cached
         data = await http.aget_json(API_URL, timeout=TIMEOUT)  # async network, on loop
         if data is None:
             return []
         await anyio.to_thread.run_sync(  # disk write OFF loop
-            functools.partial(cache.set, key, data, ttl=CACHE_TTL))
+            functools.partial(cache.set, key, data, ttl=CACHE_TTL), limiter=portal.IO_LANE)
         return data
 
-    def search(self, query: str, limit: int = 10) -> list[Document]:
-        items = self._fetch_all()
-        if not items:
-            return []
-        q_terms = [t.lower() for t in query.split() if len(t) > 1]
-        scored: list[tuple[int, dict]] = []
-        if not q_terms:
-            scored = [(0, it) for it in items[:limit]]
-        else:
-            for it in items:
-                paper = it.get("paper") or {}
-                title = (it.get("title") or paper.get("title") or "").lower()
-                summary = (it.get("summary") or paper.get("summary") or "").lower()
-                ai_sum = (paper.get("ai_summary") or "").lower()
-                kws = " ".join(paper.get("ai_keywords") or []).lower()
-                blob = " ".join([title, summary, ai_sum, kws])
-                score = sum(blob.count(t) for t in q_terms)
-                # Title hits 3x weight
-                score += 3 * sum(title.count(t) for t in q_terms)
-                if score > 0:
-                    scored.append((score, it))
-        scored.sort(key=lambda x: x[0], reverse=True)
-        docs: list[Document] = []
-        for sc, it in scored[:limit]:
-            doc = self._item_to_document(it)
-            if doc:
-                docs.append(doc)
-        return docs
-
     async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async twin of ``search`` (S4b): the fan-out awaits this DIRECTLY (no pool thread),
+        """Native-async replacement of the deleted sync ``search`` (11-04, S9; this is the only one now) (S4b): the fan-out awaits this DIRECTLY (no pool thread),
         so this source's dominant NETWORK wait costs a coroutine, not a held thread. Mirrors ``search``
         line-for-line: only the cached fetch swaps to the async ``_afetch_all`` (async egress + off-loop
         cache); the keyword score / sort / map below is PURE CPU and stays ON the loop, byte-identical."""
@@ -144,7 +104,7 @@ class HFDailyPapersAdapter:
                 docs.append(doc)
         return docs
 
-    def fetch_url(self, url: str) -> Optional[Document]:
+    async def afetch_url(self, url: str) -> Optional[Document]:
         host = (urlparse(url).hostname or "").lower()
         if "huggingface.co" not in host:
             return None
@@ -154,16 +114,16 @@ class HFDailyPapersAdapter:
         paper_id = path.split("/", 1)[1].split("/")[0]
         if not paper_id:
             return None
-        for it in self._fetch_all():
+        for it in await self._afetch_all():
             paper = it.get("paper") or {}
             if paper.get("id") == paper_id:
                 return self._item_to_document(it)
         return None
 
-    def health_check(self) -> tuple[Optional[bool], str]:
+    async def ahealth_check(self) -> tuple[Optional[bool], str]:
         try:
-            with upstreams.egress(API_URL, request_s=8):  # declared Hugging Face gate (per-IP 5-minute windows)
-                resp = http.direct("GET", API_URL, headers={"User-Agent": USER_AGENT}, timeout=8)
+            async with upstreams.aegress(API_URL, request_s=8):  # declared Hugging Face gate (per-IP 5-minute windows)
+                resp = await http.adirect("GET", API_URL, headers={"User-Agent": USER_AGENT}, timeout=8)
             upstreams.observe_response(API_URL, resp)
             if resp.status_code != 200:
                 return False, f"HTTP {resp.status_code}"
@@ -194,13 +154,9 @@ class HFDailyPapersAdapter:
         # Date
         date = None
         for k in ("publishedAt", "submittedOnDailyAt"):
-            v = it.get(k) or paper.get(k)
-            if v:
-                try:
-                    date = datetime.fromisoformat(v.replace("Z", "+00:00"))
-                    break
-                except (ValueError, TypeError):
-                    pass
+            date = to_utc(it.get(k) or paper.get(k))
+            if date is not None:
+                break
 
         # Content: prefer ai_summary, fall back to summary
         summary_text = paper.get("ai_summary") or paper.get("summary") or it.get("summary") or ""

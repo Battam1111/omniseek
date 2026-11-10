@@ -24,6 +24,16 @@ a silent empty.
 Taxonomy note: only top-level title CATEGORIES resolve at /t/{cat}; ML-engineer /
 research-scientist are SUBTITLES under software-engineer; locations are COUNTRY-level,
 cities 404.
+
+WAF note (2026-11-01, LEVELS-FYI-FIX): www.levels.fyi is behind AWS WAF (CloudFront). The page
+structure did NOT change; what broke was the WAF: a request without browser navigation headers
+gets 405 + a "Human Verification" CAPTCHA page, and from a shared proxy-node IP even a
+browser-looking request gets 202 + ``x-amzn-waf-action: challenge`` (a JS proof-of-work page)
+after a handful of requests in a few minutes. HEADERS carries the navigation headers; the health
+check names a WAF block instead of "page structure changed". If the challenge persists on the
+eye's egress, the options are an egress the WAF does not challenge, or levels.fyi's official MCP
+endpoint https://mcp.levels.fyi/ (listed in /llms.txt; no WAF, anonymous 20 calls per 60 s, but
+USD only and no title filter, so "ML engineer @ Singapore" becomes the software-engineer family).
 """
 
 from __future__ import annotations
@@ -39,8 +49,9 @@ from typing import Optional
 import anyio
 import httpx
 
-from omniseek.core import cache, diag, http
+from omniseek.core import cache, diag, http, portal
 from omniseek.core.normalize import Document, jsonsafe, mk_signal
+from omniseek.core.sources._base import SourceBase, aparse
 
 logger = logging.getLogger(__name__)
 
@@ -48,10 +59,18 @@ PAGE_URL = "https://www.levels.fyi/companies/{slug}/salaries"   # company path (
 TITLE_URL = "https://www.levels.fyi/t/{cat}/locations/{loc}"     # role category path (range)
 SUBTITLE_URL = "https://www.levels.fyi/t/{cat}/title/{sub}/locations/{loc}"  # role subtitle (median)
 TIMEOUT = 20
+# 2026-11-01: levels.fyi sits behind AWS WAF; a request without a browser's top-level-navigation
+# headers (Sec-Fetch-Site / Sec-Fetch-Dest / Upgrade-Insecure-Requests) gets a 405/202 "Human
+# Verification" CAPTCHA page instead of the salary page. With them the page is served as before.
 HEADERS = {
     "User-Agent": ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
                    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"),
-    "Accept": "text/html,application/xhtml+xml",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+    "Sec-Fetch-Dest": "document",
+    "Upgrade-Insecure-Requests": "1",
 }
 CACHE_TTL = 86400  # 24h — comp data moves slowly
 
@@ -101,7 +120,7 @@ _MONEY = re.compile(r"(SGD|CAD|USD|GBP|EUR|INR|AUD|HKD|JPY|CA\$|US\$|S\$|A\$|HK\
 # returns the raw Response (non-2xx included) for that same status inspection. Only asearch awaits it;
 # the sync search is byte-identical. Posture: a FIXED public host (www.levels.fyi) with the query in
 # the URL PATH (a slugged company / a mapped role+country from a closed lexicon), so no SSRF surface is
-# opened (same as nsfc_awards / nserc_awards keeping their own client).
+# opened (same as nsfc_awards keeping its own client).
 _aclient: Optional["httpx.AsyncClient"] = None
 _aclient_lock = threading.Lock()  # construction is sync (no await); double-check like http._aget_client
 
@@ -243,8 +262,10 @@ def _build_doc(slug: str, url: str, pp: dict) -> Optional[Document]:
     med = pp.get("medianAcrossAllJobFamilies")
     hi = pp.get("highestPayingJobFamilyAndLevel")
     lo = pp.get("lowestPayingJobFamilyAndLevel")
-    if isinstance(med, dict) and med.get("totalCompensation"):
-        lines.append(f"中位总包(全职位族): {_money(med.get('totalCompensation'))}")
+    # medianAcrossAllJobFamilies was an object {totalCompensation: ...}; since 2026-11 it is a bare number
+    med_tc = med.get("totalCompensation") if isinstance(med, dict) else med
+    if med_tc and not isinstance(med_tc, (dict, list)):
+        lines.append(f"中位总包(全职位族): {_money(med_tc)}")
     if isinstance(hi, dict):
         lines.append(f"最高: {_tc(hi)}")
     if isinstance(lo, dict):
@@ -294,7 +315,7 @@ def _build_doc(slug: str, url: str, pp: dict) -> Optional[Document]:
     )
 
 
-class LevelsFyiAdapter:
+class LevelsFyiAdapter(SourceBase):
     name = "levels_fyi"
     needs_credentials = False
     description = (
@@ -303,37 +324,6 @@ class LevelsFyiAdapter:
         "中位 + 区间 (本币, location-accurate, 取自页面 og:description); (2) 公司名 (\"bytedance\") "
         "→ 该公司各职位族/级别总包 (US/USD 基准). 用于谈 offer / 比较雇主薪酬参考."
     )
-
-    # ---- ROLE path (the fix): /t/ pages, location-accurate median+range from og:description ----
-    def _role_search(self, query: str, role: tuple, country: Optional[str]) -> list[Document]:
-        cat, sub = role
-        loc = country or "united-states"  # /t/ pages need a location; default to the US benchmark
-        url = (SUBTITLE_URL.format(cat=cat, sub=sub, loc=loc) if sub
-               else TITLE_URL.format(cat=cat, loc=loc))
-        key = cache.make_key("levels_fyi", "role", cat, sub or "-", loc)
-        cached = cache.get_docs(key)
-        if cached is not None:
-            return cached
-        try:
-            r = http.direct("GET", url, headers=HEADERS, timeout=TIMEOUT, follow_redirects=True)
-        except Exception as exc:  # noqa: BLE001
-            diag.note("levels_fyi", url=url, exc=exc)
-            return []
-        if r.status_code != 200:
-            # Legible, not silent: a taxonomy miss (unmapped subtitle / unknown country) records WHY.
-            diag.note("levels_fyi", url=url, status=r.status_code,
-                      body=f"role page not found (cat={cat} sub={sub} loc={loc}); taxonomy miss")
-            return []
-        desc = _meta_description(r.text)
-        comp = _parse_comp_meta(desc) if desc else {}
-        if not desc or not comp:
-            diag.note("levels_fyi", url=url, status=200,
-                      body="200 but no parseable comp in og:description (page structure changed?)")
-            return []
-        doc = self._role_doc(query, cat, sub, loc, url, desc, comp)
-        docs = [doc] if doc else []
-        cache.set_docs(key, docs, ttl=CACHE_TTL)
-        return docs
 
     @staticmethod
     def _role_doc(query, cat, sub, loc, url, desc, comp) -> Optional[Document]:
@@ -367,7 +357,7 @@ class LevelsFyiAdapter:
         )
 
     async def _arole_search(self, query: str, role: tuple, country: Optional[str]) -> list[Document]:
-        """Native-async twin of ``_role_search``: BYTE-FAITHFUL mirror, changing ONLY the two blocking
+        """Native-async replacement of the deleted sync ``_role_search`` (11-04, S9; this is the only one now): BYTE-FAITHFUL mirror, changing ONLY the two blocking
         legs. The URL build, the status-differentiated diag.notes, and the pure-CPU parse
         (``_meta_description`` / ``_parse_comp_meta`` / ``_role_doc``) are identical, on the loop.
           - the disk cache read + write -> ``anyio.to_thread.run_sync`` (get_docs / set_docs do file IO);
@@ -380,7 +370,7 @@ class LevelsFyiAdapter:
         url = (SUBTITLE_URL.format(cat=cat, sub=sub, loc=loc) if sub
                else TITLE_URL.format(cat=cat, loc=loc))
         key = cache.make_key("levels_fyi", "role", cat, sub or "-", loc)
-        cached = await anyio.to_thread.run_sync(cache.get_docs, key)  # disk read OFF loop
+        cached = await anyio.to_thread.run_sync(cache.get_docs, key, limiter=portal.IO_LANE)  # disk read OFF loop
         if cached is not None:
             return cached
         try:
@@ -389,9 +379,12 @@ class LevelsFyiAdapter:
             diag.note("levels_fyi", url=url, exc=exc)
             return []
         if r.status_code != 200:
-            # Legible, not silent: a taxonomy miss (unmapped subtitle / unknown country) records WHY.
+            # Legible, not silent: a WAF challenge on our egress is not a taxonomy miss (unmapped
+            # subtitle / unknown country); the header says which one it is.
+            waf = r.headers.get("x-amzn-waf-action")
             diag.note("levels_fyi", url=url, status=r.status_code,
-                      body=f"role page not found (cat={cat} sub={sub} loc={loc}); taxonomy miss")
+                      body=(f"AWS WAF {waf} on the role page: our egress is challenged" if waf else
+                            f"role page not found (cat={cat} sub={sub} loc={loc}); taxonomy miss"))
             return []
         desc = _meta_description(r.text)
         comp = _parse_comp_meta(desc) if desc else {}
@@ -402,38 +395,11 @@ class LevelsFyiAdapter:
         doc = self._role_doc(query, cat, sub, loc, url, desc, comp)
         docs = [doc] if doc else []
         await anyio.to_thread.run_sync(  # disk write OFF loop
-            functools.partial(cache.set_docs, key, docs, ttl=CACHE_TTL))
-        return docs
-
-    # ---- COMPANY path (unchanged): /companies/{slug}/salaries __NEXT_DATA__ (US/USD) ----
-    def _company_search(self, query: str) -> list[Document]:
-        slug = self._resolve_company(query)
-        key = cache.make_key("levels_fyi", "nextdata", slug)
-        cached = cache.get_docs(key)
-        if cached is not None:
-            return cached
-        url = PAGE_URL.format(slug=slug)
-        try:
-            r = http.direct("GET", url, headers=HEADERS, timeout=TIMEOUT, follow_redirects=True)
-            if r.status_code == 404:
-                diag.note("levels_fyi", url=url, status=404,
-                          body=f"no company page for slug={slug!r} (not a company? try a role+country query)")
-                return []
-            r.raise_for_status()
-            pp = _next_data_pageprops(r.text)
-        except Exception as exc:  # noqa: BLE001
-            diag.note("levels_fyi", url=url, exc=exc)
-            return []
-        if not pp or not pp.get("company"):
-            diag.note("levels_fyi", url=url, status=200, body="200 but no __NEXT_DATA__ company data")
-            return []
-        doc = _build_doc(slug, url, pp)
-        docs = [doc] if doc else []
-        cache.set_docs(key, docs, ttl=CACHE_TTL)
+            functools.partial(cache.set_docs, key, docs, ttl=CACHE_TTL), limiter=portal.IO_LANE)
         return docs
 
     async def _acompany_search(self, query: str) -> list[Document]:
-        """Native-async twin of ``_company_search``: BYTE-FAITHFUL mirror, changing ONLY the two blocking
+        """Native-async replacement of the deleted sync ``_company_search`` (11-04, S9; this is the only one now): BYTE-FAITHFUL mirror, changing ONLY the two blocking
         legs. The slug resolve, the ``status_code == 404`` legible note THEN ``raise_for_status`` for other
         non-2xx (caught by the generic except -> its diag.note), and the pure-CPU ``_next_data_pageprops``
         / ``_build_doc`` are identical, on the loop.
@@ -444,7 +410,7 @@ class LevelsFyiAdapter:
             raise on the 404 and lose that status-specific note)."""
         slug = self._resolve_company(query)
         key = cache.make_key("levels_fyi", "nextdata", slug)
-        cached = await anyio.to_thread.run_sync(cache.get_docs, key)  # disk read OFF loop
+        cached = await anyio.to_thread.run_sync(cache.get_docs, key, limiter=portal.IO_LANE)  # disk read OFF loop
         if cached is not None:
             return cached
         url = PAGE_URL.format(slug=slug)
@@ -453,6 +419,11 @@ class LevelsFyiAdapter:
             if r.status_code == 404:
                 diag.note("levels_fyi", url=url, status=404,
                           body=f"no company page for slug={slug!r} (not a company? try a role+country query)")
+                return []
+            waf = r.headers.get("x-amzn-waf-action")
+            if waf:  # a 202 challenge is 2xx: without this it read as "200 but no company data"
+                diag.note("levels_fyi", url=url, status=r.status_code,
+                          body=f"AWS WAF {waf} on the company page: our egress is challenged")
                 return []
             r.raise_for_status()
             pp = _next_data_pageprops(r.text)
@@ -465,7 +436,7 @@ class LevelsFyiAdapter:
         doc = _build_doc(slug, url, pp)
         docs = [doc] if doc else []
         await anyio.to_thread.run_sync(  # disk write OFF loop
-            functools.partial(cache.set_docs, key, docs, ttl=CACHE_TTL))
+            functools.partial(cache.set_docs, key, docs, ttl=CACHE_TTL), limiter=portal.IO_LANE)
         return docs
 
     @staticmethod
@@ -478,16 +449,8 @@ class LevelsFyiAdapter:
                     q = re.sub(re.escape(p), "", q, flags=re.IGNORECASE).strip(" ,")
         return _slug(q or "google")
 
-    def search(self, query: str, limit: int = 10) -> list[Document]:
-        if not (query or "").strip():
-            return []
-        role = _role(query)
-        if role:  # role[+country] query -> location-accurate /t/ page (the fix)
-            return self._role_search(query, role, _location(query))
-        return self._company_search(query)  # else treat as a company name (US/USD benchmark)
-
     async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async twin of ``search`` (S4b) -> AsyncSearchCapable, so the omniseek_search fan-out awaits
+        """Native-async replacement of the deleted sync ``search`` (11-04, S9; this is the only one now) (S4b) -> AsyncSearchCapable, so the omniseek_search fan-out awaits
         this DIRECTLY instead of pushing the sync ``.search`` onto the shared thread pool; the one
         network wait costs a COROUTINE, not a held pool thread. Mirrors ``search`` line-for-line: the
         SAME empty guard + the SAME ``_role`` / ``_location`` routing (pure CPU, on the loop), dispatching
@@ -500,23 +463,47 @@ class LevelsFyiAdapter:
             return await self._arole_search(query, role, _location(query))
         return await self._acompany_search(query)  # else treat as a company name (US/USD benchmark)
 
-    def fetch_url(self, url: str) -> Optional[Document]:
+    async def afetch_url(self, url: str) -> Optional[Document]:
         return None  # search-only
 
-    def health_check(self) -> tuple[bool, str]:
-        # Probe BOTH paths: a role page (the fixed path) + the company page.
-        try:
-            ru = SUBTITLE_URL.format(cat="software-engineer", sub="machine-learning-engineer", loc="singapore")
-            rr = http.direct("GET", ru, headers=HEADERS, timeout=12, follow_redirects=True)
-            role_ok = rr.status_code == 200 and bool(_parse_comp_meta(_meta_description(rr.text) or ""))
-            cr = http.direct("GET", PAGE_URL.format(slug="google"), headers=HEADERS, timeout=12,
-                             follow_redirects=True)
-            comp_ok = cr.status_code == 200 and bool((_next_data_pageprops(cr.text) or {}).get("company"))
-            if role_ok and comp_ok:
-                return True, "OK (role og:description + company __NEXT_DATA__)"
-            return False, f"role_ok={role_ok} comp_ok={comp_ok} (page structure changed?)"
-        except Exception as exc:  # noqa: BLE001
-            return False, f"{type(exc).__name__}: {exc}"
+    async def ahealth_check(self) -> tuple[bool, str]:
+        # Probe BOTH paths: a role page (the fixed path) + the company page. A leg that fails leaves a
+        # failure record with its address, status and the request headers sent (the exit-node sweep
+        # refetches it on other nodes with them; the bare eye User-Agent gets 403 on every node).
+        # Before EYE-FIX-1109 neither leg noted anything, so a walled run left no address to refetch.
+        legs = (("role", SUBTITLE_URL.format(cat="software-engineer", sub="machine-learning-engineer",
+                                             loc="singapore")),
+                ("company", PAGE_URL.format(slug="google")))
+        res: dict = {}
+        for leg, url in legs:
+            try:
+                r = await http.adirect("GET", url, headers=HEADERS, timeout=12, follow_redirects=True)
+            except Exception as exc:  # noqa: BLE001
+                diag.note("levels_fyi.health", url=url, exc=exc, headers=HEADERS)
+                res[leg] = (None, False, f"{type(exc).__name__}: {exc}")
+                continue
+            if leg == "role":
+                ok = r.status_code == 200 and bool(_parse_comp_meta(_meta_description(r.text) or ""))
+            else:
+                ok = r.status_code == 200 and bool(
+                    (await aparse(len(r.text), _next_data_pageprops, r.text) or {}).get("company"))
+            walled = r.status_code in (202, 405) or "Human Verification" in r.text[:600]
+            if not ok:
+                waf = r.headers.get("x-amzn-waf-action")
+                diag.note("levels_fyi.health", url=url, status=r.status_code, headers=HEADERS,
+                          body=(f"AWS WAF {waf or 'challenge'} on the {leg} page: our egress is challenged"
+                                if walled else f"{leg} page: no parseable comp data"))
+            res[leg] = (r.status_code, ok, "walled" if walled else "")
+        if all(v[1] for v in res.values()):
+            return True, "OK (role og:description + company __NEXT_DATA__)"
+        raised = [f"{leg}: {v[2]}" for leg, v in res.items() if v[0] is None]
+        if raised:
+            return False, "; ".join(raised)
+        walled = [leg for leg, v in res.items() if v[2] == "walled"]
+        why = (f"AWS WAF challenge on {'+'.join(walled)}; request headers no longer pass?"
+               if walled else "page structure changed?")
+        return False, (f"role_ok={res['role'][1]}({res['role'][0]}) comp_ok={res['company'][1]}"
+                       f"({res['company'][0]}) ({why})")
 
 
 from omniseek.core.fetcher import register_adapter

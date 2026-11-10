@@ -9,6 +9,8 @@ CUHK CSE / CityU CS / PolyU COMP 已改 JS/卡片渲染,news 不在静态 anchor
 (CDP render 亦超时/结构异常,非选择器可救)。提取器据此改为「card-aware + 必须有近期
 日期」:一条 recency 闸同时滤掉无日期的导航与陈旧存档(如 HKU 2018),只放当前真新闻 —
 宁可某站返 0,也绝不把旧闻/导航当新闻吐出。站若日后恢复静态新闻会被自动重新收录。
+2026-11-07: CityU CS 改版到 /en/news/<分类>,条目是不带链接的 <article id> 卡片(静态 HTML),
+提取器加了这类卡片的读法,地址取列表页加 #<id>。
 
 应用场景：
 - 跟踪 HK CS 院系动态 / 同行 / 导师
@@ -23,16 +25,15 @@ import datetime
 import functools
 import logging
 import re
-from concurrent.futures import ThreadPoolExecutor
-from contextvars import copy_context
 from typing import Optional
 from urllib.parse import urljoin, urlparse
 
 import anyio
 from bs4 import BeautifulSoup
 
-from omniseek.core import cache, diag, http
+from omniseek.core import cache, http, portal
 from omniseek.core.normalize import Document, jsonsafe
+from omniseek.core.sources._base import SourceBase, aparse
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +48,10 @@ UNIS = [
     ("HKU CS", "https://www.cs.hku.hk/news-events/in-the-media", r"cs\.hku\.hk"),
     ("HKUST CSE", "https://cse.hkust.edu.hk/news/", r"cse\.hkust\.edu\.hk"),
     ("CUHK CSE", "https://www.cse.cuhk.edu.hk/news/", r"cse\.cuhk\.edu\.hk"),
-    ("CityU CS", "https://www.cs.cityu.edu.hk/news/", r"cs\.cityu\.edu\.hk"),
+    # CityU CS moved its news to /en/news/<category> (the old /news/ 302s to staff-achievements). Each
+    # item there is an <article id=...> card with a date and a heading but no link of its own, so the
+    # extractor gives such a card the listing URL plus #<id> (2026-11-07: answers in 1.2 to 2.6 s).
+    ("CityU CS", "https://www.cs.cityu.edu.hk/en/news/staff-achievements", r"cs\.cityu\.edu\.hk"),
     ("PolyU COMP", "https://www.polyu.edu.hk/comp/news-and-events/news/", r"polyu\.edu\.hk"),
 ]
 
@@ -101,23 +105,6 @@ def _parse_news_date(text: str) -> Optional[datetime.date]:
         except ValueError:
             pass
     return None
-
-
-def _fetch_html(url: str) -> Optional[str]:
-    try:
-        resp = http.direct(
-            "GET", url,
-            headers={"User-Agent": USER_AGENT, "Accept-Language": "en-US,en;q=0.9,zh;q=0.8"},
-            timeout=TIMEOUT,
-            follow_redirects=True,
-        )
-        resp.raise_for_status()
-        return resp.text
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("HK uni HTML fetch failed for %s: %s", url, exc)
-        st = getattr(getattr(exc, "response", None), "status_code", None)
-        diag.note("hk_universities.fetch", url=url, status=st, exc=exc)
-        return None
 
 
 def _extract_news_items(html: str, base_url: str, uni_name: str) -> list[dict]:
@@ -194,13 +181,40 @@ def _extract_news_items(html: str, base_url: str, uni_name: str) -> list[dict]:
             "uni": uni_name,
         })
 
+    # Link-less cards (CityU CS since its 2026 redesign): an <article id=...> whose heading is not a
+    # link is one news item with no page of its own, so its address is the listing URL plus #<id>.
+    page_url = base_url.split("#", 1)[0]
+    for card in soup.find_all("article", id=True):
+        heading = card.find(["h1", "h2", "h3", "h4", "h5"])
+        if heading is None or heading.find_parent("a") or heading.find("a", href=True):
+            continue  # no title, or a linked title the anchor pass above already read
+        text = heading.get_text(" ", strip=True)
+        if not text or len(text) < MIN_TITLE_LEN or len(text) > MAX_TITLE_LEN:
+            continue
+        full_url = f"{page_url}#{card['id']}"
+        if full_url in seen_urls:
+            continue
+        scope_text = card.get_text(" ", strip=True)
+        pub = _parse_news_date(scope_text)
+        if not pub or pub < floor or pub > horizon:
+            continue
+        seen_urls.add(full_url)
+        items.append({
+            "title": text,
+            "url": full_url,
+            "snippet": re.sub(r"\s+", " ", scope_text.replace(text, "", 1)).strip()[:500],
+            "date_str": pub.isoformat(),
+            "_date": pub,
+            "uni": uni_name,
+        })
+
     items.sort(key=lambda it: it["_date"], reverse=True)
     for it in items:
         it.pop("_date", None)
     return items
 
 
-class HKUniversitiesAdapter:
+class HKUniversitiesAdapter(SourceBase):
     name = "hk_universities"
     needs_credentials = False
     description = (
@@ -208,64 +222,8 @@ class HKUniversitiesAdapter:
         "CityU CS / PolyU COMP (HTML scrape，HK CS 院系动态信号)"
     )
 
-    def search(self, query: str, limit: int = 10) -> list[Document]:
-        key = cache.make_key("hk_universities", "search", query, limit)
-        cached_data = cache.get_docs(key)
-        if cached_data is not None:
-            return cached_data
-
-        # Root cause confirmed: this IS a serial fan-out. The loop fetches each of
-        # the 5 dept pages over the network one after another (the dominant cost —
-        # CUHK ~175KB / CityU ~133KB / PolyU ~137KB are large, slow downloads), and
-        # each is followed by a full-page BeautifulSoup parse. The 5 unis are
-        # independent hosts with no shared rate limit, so fetch+extract per uni runs
-        # in parallel. Each worker keeps the same fetch-then-extract-with-try/except
-        # shape, so a single uni's failure stays isolated. copy_context() is captured
-        # HERE on the search thread (where the cache `fresh` contextvar is set) and one
-        # private copy goes to each worker via ctx.run — never copied inside the worker.
-        # The query filter, [:limit] slice, doc build, and 1h cache below are untouched.
-        def _fetch_uni(entry: tuple) -> list[dict]:
-            uni_name, url, _host_re = entry
-            html = _fetch_html(url)
-            if not html:
-                return []
-            try:
-                return _extract_news_items(html, url, uni_name)
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("HK uni extract failed for %s: %s", uni_name, exc)
-                return []
-
-        contexts = [copy_context() for _ in UNIS]
-        with ThreadPoolExecutor(max_workers=min(len(UNIS), 5)) as ex:
-            per_uni = list(ex.map(lambda ctx, e: ctx.run(_fetch_uni, e),
-                                  contexts, UNIS))
-        # Round-robin interleave so EVERY uni surfaces within `limit` — not the first uni
-        # (HKU CS, whose cs.hku.hk/news/ page is itself stale, linking 2018 items) hogging all
-        # the slots and starving PolyU / HKUST / CUHK / CityU current news. (2026-06-29 fix:
-        # an empty-query fetch returned only HKU-CS-2018 because the per-uni lists were
-        # concatenated HKU-first and then sliced [:limit].)
-        from itertools import zip_longest
-        all_items: list[dict] = [it for tier in zip_longest(*per_uni) for it in tier if it is not None]
-
-        # Filter by query
-        if query:
-            q_lower = query.lower()
-            filtered = []
-            for item in all_items:
-                blob = (item["title"] + " " + item["snippet"]).lower()
-                if q_lower in blob:
-                    filtered.append(item)
-            all_items = filtered
-
-        docs: list[Document] = []
-        for item in all_items[:limit]:
-            docs.append(self._item_to_document(item))
-
-        cache.set_docs(key, docs, ttl=3600, empty_ttl=300)  # all-unis-fail empty must not pin 1h
-        return docs
-
     async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async twin of ``search``: the async omniseek_search fan-out awaits this DIRECTLY (no
+        """Native-async replacement of the deleted sync ``search`` (11-04, S9; this is the only one now): the async omniseek_search fan-out awaits this DIRECTLY (no
         held pool thread), so the dominant cost — 5 serial-in-sync dept-page downloads (CUHK ~175KB /
         CityU ~133KB / PolyU ~137KB) — becomes 5 CONCURRENT coroutines on the one loop. Mirrors
         ``search`` line-for-line, changing ONLY the blocking waits:
@@ -281,19 +239,19 @@ class HKUniversitiesAdapter:
         ttl=3600/empty_ttl=300 cache policy) is pure CPU on the loop, byte-identical to search. The
         BeautifulSoup parse (_extract_news_items) stays ON the loop, per the pattern (pure CPU)."""
         key = cache.make_key("hk_universities", "search", query, limit)
-        cached_data = await anyio.to_thread.run_sync(cache.get_docs, key)  # disk read OFF loop
+        cached_data = await anyio.to_thread.run_sync(cache.get_docs, key, limiter=portal.IO_LANE)  # disk read OFF loop
         if cached_data is not None:
             return cached_data
 
         async def _afetch_uni(entry: tuple) -> list[dict]:
             uni_name, url, _host_re = entry
-            html = await http.aget_text(  # async twin of _fetch_html; same headers/timeout/redirects
+            html = await http.aget_text(  # the deleted sync _fetch_html's headers/timeout/redirects
                 url, timeout=TIMEOUT,
                 headers={"User-Agent": USER_AGENT, "Accept-Language": "en-US,en;q=0.9,zh;q=0.8"})
             if not html:
                 return []
             try:
-                return _extract_news_items(html, url, uni_name)  # pure CPU, on loop
+                return await aparse(len(html), _extract_news_items, html, url, uni_name)  # here or process lane
             except Exception as exc:  # noqa: BLE001
                 logger.warning("HK uni extract failed for %s: %s", uni_name, exc)
                 return []
@@ -319,10 +277,10 @@ class HKUniversitiesAdapter:
             docs.append(self._item_to_document(item))
 
         await anyio.to_thread.run_sync(  # disk write OFF loop
-            functools.partial(cache.set_docs, key, docs, ttl=3600, empty_ttl=300))
+            functools.partial(cache.set_docs, key, docs, ttl=3600, empty_ttl=300), limiter=portal.IO_LANE)
         return docs
 
-    def fetch_url(self, url: str) -> Optional[Document]:
+    async def afetch_url(self, url: str) -> Optional[Document]:
         host = (urlparse(url).hostname or "").lower()
         if not any(re.search(host_re, host) for _, _, host_re in UNIS):
             return None
@@ -330,27 +288,35 @@ class HKUniversitiesAdapter:
         for uni_name, index_url, host_re in UNIS:
             if not re.search(host_re, host):
                 continue
-            html = _fetch_html(index_url)
+            html = await http.aget_text(  # as asearch's _afetch_uni: same headers/timeout/redirects
+                index_url, timeout=TIMEOUT,
+                headers={"User-Agent": USER_AGENT, "Accept-Language": "en-US,en;q=0.9,zh;q=0.8"})
             if not html:
                 continue
-            items = _extract_news_items(html, index_url, uni_name)
+            items = await aparse(len(html), _extract_news_items, html, index_url, uni_name)  # here or process lane
             for item in items:
                 if item["url"] == url:
                     return self._item_to_document(item)
         return None
 
-    def health_check(self) -> tuple[bool, str]:
+    async def ahealth_check(self) -> tuple[bool, str]:
         # Honest health = how many unis actually YIELD dated news, not just return HTML.
         # (A page can 200 + be large yet yield nothing: a JS-rendered list or a stale archive.)
-        yields: list[str] = []
-        loaded = 0
-        for uni_name, url, _ in UNIS:
-            html = _fetch_html(url)
+        # The five reads run concurrently, as asearch's do: walked one after another they took about
+        # 25 s on 2026-11-06 21:44 (each page 1 to 9 s read plus parse), the health sweep's whole
+        # budget, so the check never returned and read "unmeasured".
+        async def _ayield(entry: tuple) -> tuple[bool, bool]:
+            uni_name, url, _ = entry
+            html = await http.aget_text(  # the same read as asearch's
+                url, timeout=TIMEOUT,
+                headers={"User-Agent": USER_AGENT, "Accept-Language": "en-US,en;q=0.9,zh;q=0.8"})
             if not (html and len(html) > 500):
-                continue
-            loaded += 1
-            if _extract_news_items(html, url, uni_name):
-                yields.append(uni_name)
+                return False, False
+            return True, bool(await aparse(len(html), _extract_news_items, html, url, uni_name))
+
+        per_uni = await asyncio.gather(*[_ayield(e) for e in UNIS])
+        loaded = sum(1 for got, _ in per_uni if got)
+        yields = [uni_name for (uni_name, _, _), (_, ok) in zip(UNIS, per_uni) if ok]
         if not yields:
             return False, f"{loaded}/{len(UNIS)} pages load but 0 yield dated news (JS/stale)"
         return True, f"OK ({len(yields)}/{len(UNIS)} unis yield news: {', '.join(yields)})"
@@ -362,7 +328,7 @@ class HKUniversitiesAdapter:
             source_id=item["url"],
             url=item["url"],
             title=f"[{item['uni']}] {item['title']}",
-            content=item["snippet"] or f"{item['uni']} — {item['title']}",
+            content=item["snippet"] or "",
             author=item["uni"],
             tags=[item["uni"].lower().replace(" ", "_"), "hk-academia"],
             metadata={

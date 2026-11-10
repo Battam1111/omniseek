@@ -13,7 +13,7 @@ Endpoint (probed live, undocumented):
 
 i.e. the ``url`` query-param is itself a URL-encoded ``q=<query>`` string (double-encoded:
 the query is encoded once for the inner ``q=...`` and the whole ``q=...`` is encoded again
-for the outer ``url=...``). A real browser User-Agent is required (the OmniSeek UA is
+for the outer ``url=...``). A real browser User-Agent is required (the omniseek UA is
 403-gated), so this adapter passes a Chrome UA through the shared http client.
 
 Response shape (confirmed against several live queries):
@@ -50,13 +50,11 @@ from __future__ import annotations
 
 import json
 import logging
-import re
-from datetime import datetime
 from typing import Any, Optional
 from urllib.parse import quote
 
 from omniseek.core import http
-from omniseek.core.normalize import Document, jsonsafe
+from omniseek.core.normalize import Document, html_fragment_text, jsonsafe, to_utc
 from omniseek.core.sources.scrape._base import BaseScrapeAdapter
 
 logger = logging.getLogger(__name__)
@@ -64,14 +62,13 @@ logger = logging.getLogger(__name__)
 XHR_URL = "https://patents.google.com/xhr/query"
 PATENT_PAGE_BASE = "https://patents.google.com/patent"
 PDF_BASE = "https://patentimages.storage.googleapis.com"
-# patents.google.com 403s the default OmniSeek UA; the XHR endpoint wants a real browser UA.
+# patents.google.com 403s the default omniseek UA; the XHR endpoint wants a real browser UA.
 BROWSER_UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 )
 TIMEOUT = 15
 
-_TAG_RE = re.compile(r"<[^>]+>")  # strip <b>...</b> highlight tags (and any stray markup)
 
 
 class GooglePatentsAdapter(BaseScrapeAdapter):
@@ -175,7 +172,7 @@ class GooglePatentsAdapter(BaseScrapeAdapter):
         inventor = _clean(patent.get("inventor")) or None
 
         url = f"{PATENT_PAGE_BASE}/{number}"
-        date = _parse_date(patent.get("priority_date"))
+        date = to_utc(patent.get("priority_date"))
 
         # content: the snippet (the closest thing to an abstract this endpoint returns),
         # plus the structured header so a bare-snippet result is still self-describing.
@@ -251,31 +248,8 @@ def _parse_body(body: str) -> Optional[Any]:
 
 
 def _clean(s: Any) -> str:
-    """Decode HTML entities and strip <b> highlight tags from a Google Patents string.
-    Stdlib only (html.unescape + a tag-stripping regex) to stay dependency-free."""
-    import html as _html
-
-    if not isinstance(s, str) or not s.strip():
-        return ""
-    out = _TAG_RE.sub("", s)
-    out = _html.unescape(out)
-    return out.strip()
-
-
-def _parse_date(s: Any) -> Optional[datetime]:
-    """priority_date is ISO YYYY-MM-DD (sometimes a year or year-month)."""
-    if not isinstance(s, str) or not s.strip():
-        return None
-    s = s.strip()
-    for fmt in ("%Y-%m-%d", "%Y-%m", "%Y"):
-        try:
-            return datetime.strptime(s, fmt)
-        except ValueError:
-            continue
-    try:
-        return datetime.fromisoformat(s)
-    except ValueError:
-        return None
+    """Decode HTML entities and strip <b> highlight tags from a Google Patents string."""
+    return html_fragment_text(s)
 
 
 # Registration is automatic via BaseScrapeAdapter.__init_subclass__ (no module-tail ceremony).

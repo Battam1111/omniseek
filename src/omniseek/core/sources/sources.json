@@ -67,6 +67,71 @@
       ]
     },
     "explicit_only": "federal_register: named drill only. MEASURED 2026-07-25 over 1986 recorded searches: timed out 727 times (37% of all searches) and reached the ranked top-k ZERO times, sole-contributed ZERO times. US federal regulatory filings sit outside the research and career queries the default catalog is tuned for, and cset / oecd_ai_policy already carry AI policy. Kept fully reachable by name; excluded_relevant still recommends it on a real match. Standing curation call, 2026-07-25.",
-    "needs_credentials": false
+    "needs_credentials": false,
+    "filters": {
+      "type": {
+        "type": "keyword",
+        "ops": [
+          "eq",
+          "any"
+        ],
+        "values": [
+          "RULE",
+          "PRORULE",
+          "NOTICE",
+          "PRESDOCU"
+        ],
+        "param": "conditions[type][]",
+        "desc": "document type: RULE, PRORULE (proposed rule), NOTICE, PRESDOCU (presidential document)"
+      },
+      "publication_date": {
+        "type": "date",
+        "ops": [
+          "eq",
+          "gte",
+          "lte",
+          "range"
+        ],
+        "param": {
+          "gte": "conditions[publication_date][gte]",
+          "lte": "conditions[publication_date][lte]"
+        },
+        "doc_key": "date",
+        "desc": "publication date in the Federal Register"
+      },
+      "agency": {
+        "type": "keyword",
+        "ops": [
+          "eq",
+          "any"
+        ],
+        "param": "conditions[agencies][]",
+        "desc": "agency slug as federalregister.gov writes it, e.g. commerce-department"
+      }
+    },
+    "coverage": {
+      "since": "1994-01-01",
+      "until": null,
+      "gaps": [],
+      "note": "the federalregister.gov API holds documents published since 1994"
+    },
+    "license": "US federal government work: public domain in the US (17 U.S.C. 105)",
+    "as_of_field": "publication_date",
+    "samples": [
+      {
+        "query": "artificial intelligence",
+        "filters": {
+          "type": "RULE"
+        }
+      },
+      {
+        "query": "export controls",
+        "filters": {
+          "publication_date": {
+            "gte": "2024-01-01"
+          }
+        }
+      }
+    ]
   }
 ]

@@ -8,14 +8,264 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import re
+import struct
+import sys
 import threading
+import time
 import uuid
 from array import array
+from bisect import bisect_left
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
+from omniseek import where
+
+logger = logging.getLogger(__name__)
+
+# How many events may be written after the last checkpoint before the journal writes the next one
+# (EYE-JOURNAL-CKPT, 2026-10-24). A boot reads the checkpoint and replays only the events after it,
+# so this number bounds what a boot costs, however long the history gets. Derivation: the journal's
+# boot budget is 0.5 s (its share of the 3 s line the release check sets for an eye search); one
+# replayed event (JSON parse, canonical re-hash of the chain link, two index keys) costs up to 94 us
+# (full builds of a copy of the live journal, 282,319 events, ran 47 to 94 us an event on the host machine at
+# load average 22 to 28 on 2026-10-24; OmniSeek restarts with a release, right after the merge gate's
+# full test run, so the busy reading is the one that counts); so a tail of about 5,300 events fits the
+# budget, and half of that, for margin, is 2500. Re-derive it when the per-event cost or the budget
+# changes. Reading on 2026-10-24 (same copy, load 24 to 28, nice 10): a boot with a 5000-event tail
+# took 0.17 to 0.21 s, and 0.43 to 0.62 s while a full test suite shared the cores, over the budget;
+# boot_info["seconds"] (journal_boot_seconds in the health reading) shows it on every boot.
+CKPT_EVERY = 2500
+CHECKPOINT_NAME = "events.ckpt"
+
+# Checkpoint file layout, little-endian, fixed width:
+#   header  magic b"OBSJCKPT", u32 version, u32 reserved (0), i64 head_seq, i64 end (byte length of
+#           the events file through event head_seq), i64 n_obs, i64 n_ident, 32 bytes head event_hash
+#           (raw sha256; zeros when head_seq is 0)
+#   body    i64 offsets[head_seq]; u64 observation keys[n_obs], i64 seqs[n_obs];
+#           u64 identity keys[n_ident], i64 seqs[n_ident]
+#   footer  sha256 of header + body (32 bytes)
+# A reader refuses the file when the magic or version is unknown, when its length is not exactly
+# what the header's counts say (a truncated or padded file), or when the footer digest does not match
+# (an altered byte). It then checks the file against the events file: see _restore_checkpoint.
+_CKPT_MAGIC = b"OBSJCKPT"
+_CKPT_VERSION = 1
+_CKPT_HEADER = struct.Struct("<8sIIqqqq32s")
+_CKPT_DIGEST = 32
+
+
+class CheckpointInvalid(ValueError):
+    """A checkpoint file that cannot be used; the boot falls back to a full build."""
+
+
+class _SortedIndex(Mapping):
+    """An immutable key -> seq map kept as two aligned arrays sorted by key, read by binary search.
+
+    This is how a checkpoint's index comes back into memory: two array copies, not one Python
+    object per entry. Rebuilding a dict of the live journal's 182,609 + 182,609 entries took 0.23 to
+    0.46 s on the host machine (load 22 to 27, 2026-10-24) and grows with the history; the copies take about
+    a millisecond. A lookup is about 18 comparisons. The arrays are never changed after construction."""
+
+    __slots__ = ("_keys", "_seqs")
+
+    def __init__(self, keys: array | None = None, seqs: array | None = None):
+        self._keys = keys if keys is not None else array("Q")
+        self._seqs = seqs if seqs is not None else array("q")
+
+    def get(self, key, default=None):
+        keys = self._keys
+        i = bisect_left(keys, key)
+        if i < len(keys) and keys[i] == key:
+            return self._seqs[i]
+        return default
+
+    def __getitem__(self, key):
+        seq = self.get(key)
+        if seq is None:
+            raise KeyError(key)
+        return seq
+
+    def __iter__(self):
+        return iter(self._keys)
+
+    def __len__(self) -> int:
+        return len(self._keys)
+
+
+def _merge_sorted(base: _SortedIndex, overlay: dict[int, int]) -> _SortedIndex:
+    """``base`` with every entry of ``overlay`` set (a new index; ``base`` is not changed)."""
+    if not overlay:
+        return base
+    if not base:
+        keys = sorted(overlay)
+        return _SortedIndex(array("Q", keys), array("q", (overlay[key] for key in keys)))
+    base_keys, seqs = base._keys, base._seqs[:]
+    n = len(base_keys)
+    new = []
+    for key, seq in overlay.items():
+        i = bisect_left(base_keys, key)
+        if i < n and base_keys[i] == key:
+            seqs[i] = seq
+        else:
+            new.append(key)
+    if not new:
+        return _SortedIndex(base_keys, seqs)
+    new.sort()
+    keys_out, seqs_out = array("Q"), array("q")
+    previous = 0
+    for key in new:
+        i = bisect_left(base_keys, key, previous)
+        keys_out += base_keys[previous:i]
+        seqs_out += seqs[previous:i]
+        keys_out.append(key)
+        seqs_out.append(overlay[key])
+        previous = i
+    keys_out += base_keys[previous:]
+    seqs_out += seqs[previous:]
+    return _SortedIndex(keys_out, seqs_out)
+
+
+class _LatestIndex(Mapping):
+    """key -> latest seq: a _SortedIndex base (what the last checkpoint holds) plus a dict of the
+    entries set since. ``_index`` sets into the dict; after a checkpoint is written, ``rebase`` swaps
+    in the merged base and keeps in the dict only what was set after the checkpoint's copy, so the
+    dict holds at most about ``CKPT_EVERY`` entries plus what arrives while a checkpoint is written."""
+
+    __slots__ = ("base", "overlay")
+
+    def __init__(self, base: _SortedIndex | None = None, overlay: dict[int, int] | None = None):
+        self.base = base if base is not None else _SortedIndex()
+        self.overlay = overlay if overlay is not None else {}
+
+    def get(self, key, default=None):
+        seq = self.overlay.get(key)
+        if seq is None:
+            seq = self.base.get(key)
+        return default if seq is None else seq
+
+    def __getitem__(self, key):
+        seq = self.get(key)
+        if seq is None:
+            raise KeyError(key)
+        return seq
+
+    def __setitem__(self, key, seq: int) -> None:
+        self.overlay[key] = seq
+
+    def __iter__(self):
+        overlay = self.overlay
+        yield from overlay
+        for key in self.base:
+            if key not in overlay:
+                yield key
+
+    def __len__(self) -> int:
+        return len(self.base) + sum(1 for key in self.overlay if self.base.get(key) is None)
+
+    def frozen_copy(self) -> "_LatestIndex":
+        """A copy sharing the (immutable) base and copying the dict: what the lock holder copies."""
+        return _LatestIndex(self.base, self.overlay.copy())
+
+    def rebase(self, merged: _SortedIndex, written: dict[int, int]) -> None:
+        self.base = merged
+        self.overlay = {key: seq for key, seq in self.overlay.items() if written.get(key) != seq}
+
+
+def _as_sorted(index: Mapping) -> _SortedIndex:
+    if isinstance(index, _SortedIndex):
+        return index
+    if isinstance(index, _LatestIndex):
+        return _merge_sorted(index.base, index.overlay)
+    return _merge_sorted(_SortedIndex(), dict(index))
+
+
+class _Snapshot(NamedTuple):
+    """The four things the journal keeps in memory, as one consistent copy."""
+
+    end: int
+    head_hash: str | None
+    offsets: array
+    by_observation: Mapping
+    by_identity: Mapping
+
+    @property
+    def head_seq(self) -> int:
+        return len(self.offsets)
+
+
+def _le_bytes(values: array) -> bytes:
+    if sys.byteorder != "little":
+        values = array(values.typecode, values)
+        values.byteswap()
+    return values.tobytes()
+
+
+def _encode_checkpoint(snap: _Snapshot) -> bytes:
+    by_observation, by_identity = _as_sorted(snap.by_observation), _as_sorted(snap.by_identity)
+    obs_keys, obs_seqs = by_observation._keys, by_observation._seqs
+    ident_keys, ident_seqs = by_identity._keys, by_identity._seqs
+    head = bytes.fromhex(snap.head_hash) if snap.head_seq else bytes(32)
+    if len(head) != 32:
+        raise ValueError("head event_hash is not a sha256 hex digest")
+    body = b"".join((
+        _CKPT_HEADER.pack(_CKPT_MAGIC, _CKPT_VERSION, 0, snap.head_seq, snap.end,
+                          len(obs_keys), len(ident_keys), head),
+        _le_bytes(snap.offsets), _le_bytes(obs_keys), _le_bytes(obs_seqs),
+        _le_bytes(ident_keys), _le_bytes(ident_seqs),
+    ))
+    return body + hashlib.sha256(body).digest()
+
+
+def _decode_checkpoint(data: bytes) -> _Snapshot:
+    """Parse and self-check a checkpoint file; raise CheckpointInvalid saying why it is unusable."""
+    minimum = _CKPT_HEADER.size + _CKPT_DIGEST
+    if len(data) < minimum:
+        raise CheckpointInvalid(f"checkpoint length {len(data)} is shorter than its header ({minimum})")
+    magic, version, _reserved, head_seq, end, n_obs, n_ident, head = _CKPT_HEADER.unpack_from(data)
+    if magic != _CKPT_MAGIC:
+        raise CheckpointInvalid("checkpoint magic is not OBSJCKPT")
+    if version != _CKPT_VERSION:
+        raise CheckpointInvalid(f"checkpoint version {version} is not {_CKPT_VERSION}")
+    if min(head_seq, end, n_obs, n_ident) < 0:
+        raise CheckpointInvalid("checkpoint header has a negative count")
+    expected = minimum + 8 * (head_seq + 2 * n_obs + 2 * n_ident)
+    if len(data) != expected:
+        raise CheckpointInvalid(f"checkpoint length {len(data)} does not match its header ({expected})")
+    if hashlib.sha256(memoryview(data)[:-_CKPT_DIGEST]).digest() != data[-_CKPT_DIGEST:]:
+        raise CheckpointInvalid("checkpoint digest mismatch")
+    view = memoryview(data)
+    pos = _CKPT_HEADER.size
+
+    def take(typecode: str, count: int) -> array:
+        nonlocal pos
+        values = array(typecode)
+        values.frombytes(view[pos:pos + 8 * count])
+        if sys.byteorder != "little":
+            values.byteswap()
+        pos += 8 * count
+        return values
+
+    offsets = take("q", head_seq)
+    obs_keys, obs_seqs = take("Q", n_obs), take("q", n_obs)
+    ident_keys, ident_seqs = take("Q", n_ident), take("q", n_ident)
+    if head_seq:
+        if offsets[0] != 0 or offsets[-1] >= end:
+            raise CheckpointInvalid("checkpoint offsets do not start at 0 and end before its end")
+    elif end != 0 or head != bytes(32) or n_obs or n_ident:
+        raise CheckpointInvalid("empty checkpoint carries an end, a head hash or index entries")
+    # The index entries are not scanned here (min/max over the arrays cost 45 ms on the live journal
+    # and grow with it): the digest says they are the bytes the encoder wrote from a validated
+    # journal, and verify_chain, run after every checkpoint boot, compares every entry by lookup.
+    return _Snapshot(
+        end=end,
+        head_hash=head.hex() if head_seq else None,
+        offsets=offsets,
+        by_observation=_SortedIndex(obs_keys, obs_seqs),
+        by_identity=_SortedIndex(ident_keys, ident_seqs),
+    )
 
 
 class JournalCorrupt(RuntimeError):
@@ -174,20 +424,59 @@ class ObservationJournal:
     demand. The earlier design kept every event dict and every parsed payload resident forever
     (``_pending`` was never pruned): on the live journal (212232 events, 1.1 GB of blobs) that was
     1951 MB of phys_footprint and a 142 s load during which every maybe_ingest caller waited on the
-    journal lock. Integrity is unchanged at boot: the hash chain is validated line by line and every
-    referenced blob must exist and match its content hash; a blob's JSON is parsed when it is read.
+    journal lock.
+
+    BOOT CONTRACT (EYE-JOURNAL-BOOT, 2026-10-24): the boot load reads the events only. It validates
+    the hash chain line by line and builds the index, and reads no payload blob. A blob's existence
+    and content hash are checked in two places instead: every read (``_read_blob``, which fails closed
+    with JournalCorrupt) and ``scrub_blobs``, a pass over every referenced blob that the service runs
+    on a background thread after boot, off the journal lock, reporting bad blobs without stopping
+    anything. Reading every blob at boot cost 41.4 s on the live journal of 2026-10-24 (253345 blobs,
+    574 MB), all of it inside the first maybe_ingest of every source after a restart.
+
+    CHECKPOINT (EYE-JOURNAL-CKPT, 2026-10-24): the index itself still cost one JSON parse and one
+    canonical re-hash per event (282,319 events, 13.3 s on the live copy, about 47 us an event and
+    growing with the history), under the lock the first searches wait on. So the four things the
+    journal keeps in memory (the offsets, the two latest-seq indexes, the chain head with its end
+    offset) are also kept in a checkpoint file (``events.ckpt`` beside the events, fixed-width binary
+    with its own sha256, replaced atomically; layout above ``_encode_checkpoint``). A boot reads the
+    checkpoint, checks it against the events file (the file is at least as long as the checkpoint's
+    end, and the bytes of its last event parse to its head seq and head event_hash), and then reads
+    and validates only the events after it, line by line, chained onto its head. The two indexes come
+    back as sorted arrays read by binary search (``_SortedIndex``), with a dict on top for the entries
+    set since (``_LatestIndex``), so reading the checkpoint is array copies plus one sha256, never
+    one Python object per entry (live 2026-10-24: 7 to 15 ms; rebuilding dicts took 0.23 to 0.46 s and
+    grew with the history). No checkpoint, an unusable one, or a tail that fails to validate: a full
+    build as before, with the reason logged in one line and kept in ``boot_info``. The events file
+    stays the only source of truth; the checkpoint is derived from it and rebuilt whenever it does not
+    match. ``maybe_checkpoint`` writes the next one once ``CKPT_EVERY`` events have been written after
+    the last (and once after every boot). Under the lock it only copies the offsets array and each
+    index's small dict, and afterwards swaps in the merged sorted arrays; merging, encoding and the
+    durable write run outside it. The service calls it on the recall-journal-boot and recall-writer
+    threads, never on the foreground append path. A boot
+    therefore replays at most ``CKPT_EVERY`` events plus what one writer cycle adds, however long the
+    history. The part of the chain before the checkpoint is no longer validated at boot: the service
+    runs ``verify_chain`` on its boot thread after the build, which re-validates the whole chain off
+    the lock and compares the four things it derives with the ones in memory, reporting a break or a
+    mismatch with its first bad seq without stopping anything. Every read still checks the seq of the
+    line it reads (``_read_line``).
     """
 
     def __init__(self, root: Path | None = None):
-        self.root = Path(root) if root is not None else Path.home() / ".omniseek" / "state" / "observation-journal"
+        self.root = Path(root) if root is not None else where.state() / "observation-journal"
         self.events_path = self.root / "events.ndjson"
         self.blobs_path = self.root / "blobs"
         self._lock = threading.RLock()
         self._offsets = array("q")
         self._end = 0
         self._head_hash: str | None = None
-        self._latest_by_observation: dict[int, int] = {}
-        self._latest_by_identity: dict[int, int] = {}
+        self._latest_by_observation = _LatestIndex()
+        self._latest_by_identity = _LatestIndex()
+        self.checkpoint_path = self.root / CHECKPOINT_NAME
+        self._ckpt_lock = threading.Lock()
+        self._ckpt_seq: int | None = None
+        self._boot_ckpt_pending = True
+        self.boot_info: dict[str, Any] = {}
         self._load()
 
     @property
@@ -209,14 +498,109 @@ class ObservationJournal:
     def _load(self) -> None:
         self.root.mkdir(parents=True, exist_ok=True)
         self.blobs_path.mkdir(parents=True, exist_ok=True)
+        started = time.monotonic()
         if not self.events_path.exists():
+            self.boot_info = {"mode": "empty", "reason": None, "checkpoint_seq": None,
+                              "replayed": 0, "head_seq": 0, "seconds": 0.0}
             return
 
-        previous_hash = ""
-        expected_seq = 1
-        offset = 0
-        verified_blobs: set[str] = set()
+        reason = self._restore_checkpoint()
+        checkpoint_seq = None
+        replayed = 0
+        if reason is None:
+            checkpoint_seq = self.head_seq
+            try:
+                replayed = self._replay()
+            except JournalCorrupt as exc:
+                reason = f"tail replay after checkpoint seq {checkpoint_seq} failed: {exc}"
+                checkpoint_seq = None
+                self._reset_index()
+        if reason is not None:
+            (logger.info if reason == "no checkpoint" else logger.warning)(
+                "observation journal checkpoint not used, full build: %s", reason)
+            replayed = self._replay()
+        self._ckpt_seq = checkpoint_seq
+        self._boot_ckpt_pending = checkpoint_seq is None or replayed > 0
+        self.boot_info = {
+            "mode": "checkpoint" if reason is None else "full",
+            "reason": reason,
+            "checkpoint_seq": checkpoint_seq,
+            "replayed": replayed,
+            "head_seq": self.head_seq,
+            "seconds": round(time.monotonic() - started, 3),
+        }
+
+    def _reset_index(self) -> None:
+        self._offsets = array("q")
+        self._end = 0
+        self._head_hash = None
+        self._latest_by_observation = _LatestIndex()
+        self._latest_by_identity = _LatestIndex()
+
+    def _restore_checkpoint(self) -> str | None:
+        """Install the checkpoint's four things if it is usable; else return why it is not.
+
+        Usable means: the file reads and passes its own checks (_decode_checkpoint), the events file
+        is at least as long as the checkpoint's end, and the bytes of the checkpoint's last event
+        (its last offset up to its end) are exactly one event line whose seq is the checkpoint's head
+        seq and whose event_hash is the checkpoint's head hash (and is that event's real hash)."""
+        try:
+            data = self.checkpoint_path.read_bytes()
+        except FileNotFoundError:
+            return "no checkpoint"
+        except OSError as exc:
+            return f"checkpoint unreadable: {type(exc).__name__}: {exc}"
+        try:
+            snap = _decode_checkpoint(data)
+        except CheckpointInvalid as exc:
+            return str(exc)
+        try:
+            size = self.events_path.stat().st_size
+        except OSError as exc:
+            return f"events file unreadable: {type(exc).__name__}: {exc}"
+        if snap.end > size:
+            return f"checkpoint end {snap.end} is past the end of the events file ({size} bytes)"
+        if snap.head_seq:
+            start = snap.offsets[-1]
+            with open(self.events_path, "rb") as fh:
+                fh.seek(start)
+                raw = fh.read(snap.end - start)
+            try:
+                if not raw.endswith(b"\n"):
+                    raise ValueError("no line end")
+                event = json.loads(raw.decode("utf-8"))
+            except (UnicodeDecodeError, ValueError):
+                return (f"checkpoint seq {snap.head_seq}: bytes {start}..{snap.end} of the events file "
+                        "are not one event line")
+            if not isinstance(event, dict) or event.get("seq") != snap.head_seq:
+                got = event.get("seq") if isinstance(event, dict) else None
+                return f"checkpoint head seq {snap.head_seq} does not match the event at its last offset (seq {got!r})"
+            if event.get("event_hash") != snap.head_hash or self._event_hash(event) != snap.head_hash:
+                return f"checkpoint event_hash at seq {snap.head_seq} does not match the events file"
+        self._offsets = snap.offsets
+        self._end = snap.end
+        self._head_hash = snap.head_hash
+        self._latest_by_observation = _LatestIndex(_as_sorted(snap.by_observation))
+        self._latest_by_identity = _LatestIndex(_as_sorted(snap.by_identity))
+        return None
+
+    @staticmethod
+    def _parse_event_line(line: bytes, expected_seq: int) -> Any:
+        try:
+            return json.loads(line.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise JournalCorrupt(f"invalid journal line {expected_seq}") from exc
+
+    def _replay(self) -> int:
+        """Read, validate and index every event after the current head (all of them when the index
+        is empty), chained onto the current head; return how many. A torn last line is repaired as
+        before: completed if it parses, truncated away if it does not."""
+        previous_hash = self._head_hash or ""
+        expected_seq = self.head_seq + 1
+        offset = self._end
+        replayed = 0
         with open(self.events_path, "rb") as fh:
+            fh.seek(offset)
             while True:
                 line = fh.readline()
                 if not line:
@@ -229,19 +613,143 @@ class ObservationJournal:
                         break
                     self._durable_append(b"\n")
                     line += b"\n"
-                try:
-                    event = json.loads(line.decode("utf-8"))
-                except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-                    raise JournalCorrupt(f"invalid journal line {expected_seq}") from exc
+                event = self._parse_event_line(line, expected_seq)
                 self._validate_event(event, expected_seq, previous_hash)
-                payload_hash = event["payload_hash"]
-                if payload_hash is not None and payload_hash not in verified_blobs:
-                    self._read_blob(payload_hash)
-                    verified_blobs.add(payload_hash)
                 self._index(event, offset, len(line))
                 offset += len(line)
                 expected_seq += 1
                 previous_hash = event["event_hash"]
+                replayed += 1
+        return replayed
+
+    def _snapshot(self) -> _Snapshot:
+        """Copy the four things under the lock: the offsets array, and of each index its small dict of
+        entries since the last checkpoint (its sorted base is immutable and shared). No encoding."""
+        with self._lock:
+            return _Snapshot(
+                end=self._end,
+                head_hash=self._head_hash,
+                offsets=self._offsets[:],
+                by_observation=self._latest_by_observation.frozen_copy(),
+                by_identity=self._latest_by_identity.frozen_copy(),
+            )
+
+    @property
+    def checkpoint_seq(self) -> int | None:
+        """Head seq of the checkpoint on disk known to match this journal (None: none yet)."""
+        return self._ckpt_seq
+
+    def checkpoint_due(self) -> bool:
+        """True after a boot that has not written its checkpoint yet, or once ``CKPT_EVERY`` events
+        were written after the last checkpoint."""
+        with self._lock:
+            head = self.head_seq
+        written = self._ckpt_seq
+        return written is None or self._boot_ckpt_pending or head - written >= CKPT_EVERY
+
+    def write_checkpoint(self) -> dict[str, Any] | None:
+        """Write the checkpoint for the current head; return {seq, bytes, seconds}, or None when a
+        newer one was written meanwhile. Only the copy of the four things holds the journal lock;
+        encoding and the durable write (``_durable_replace``) run outside it, so appends go on.
+        ``_ckpt_lock`` keeps two writers in order (a later head is never replaced by an earlier)."""
+        with self._ckpt_lock:
+            started = time.monotonic()
+            snap = self._snapshot()
+            if self._ckpt_seq is not None and snap.head_seq < self._ckpt_seq:
+                return None
+            by_observation, by_identity = _as_sorted(snap.by_observation), _as_sorted(snap.by_identity)
+            data = _encode_checkpoint(snap._replace(by_observation=by_observation, by_identity=by_identity))
+            _durable_replace(self.checkpoint_path, data)
+            with self._lock:
+                # the merged bases now hold everything the copies held; the dicts keep only newer sets
+                self._latest_by_observation.rebase(by_observation, snap.by_observation.overlay)
+                self._latest_by_identity.rebase(by_identity, snap.by_identity.overlay)
+            self._ckpt_seq = snap.head_seq
+            self._boot_ckpt_pending = False
+            return {"seq": snap.head_seq, "bytes": len(data),
+                    "seconds": round(time.monotonic() - started, 3)}
+
+    def maybe_checkpoint(self) -> dict[str, Any] | None:
+        """``write_checkpoint`` when ``checkpoint_due``; else None."""
+        if not self.checkpoint_due():
+            return None
+        return self.write_checkpoint()
+
+    def verify_chain(self) -> dict[str, Any]:
+        """Validate the whole chain from the first event and compare what it derives with memory.
+
+        Takes a snapshot of the four things under the lock, then reads the events file up to the
+        snapshot's head without the lock (the file is append-only), validating every event exactly as
+        a full build does and deriving the offsets, the two indexes and the head. Never raises for a
+        bad journal: returns {"ok", "checked" (events validated), "head_seq", "first_bad_seq",
+        "error", "seconds"}, ``first_bad_seq`` being the first event that fails to validate or whose
+        offset or index entry differs from memory."""
+        started = time.monotonic()
+        snap = self._snapshot()
+        head = snap.head_seq
+        offsets = array("q")
+        by_observation: dict[int, int] = {}
+        by_identity: dict[int, int] = {}
+        previous_hash = ""
+        checked = 0
+        offset = 0
+        first_bad: int | None = None
+        error: str | None = None
+        if head:
+            with open(self.events_path, "rb") as fh:
+                while checked < head:
+                    expected = checked + 1
+                    line = fh.readline()
+                    if not line.endswith(b"\n"):
+                        first_bad, error = expected, f"events file ends before seq {expected}"
+                        break
+                    try:
+                        event = self._parse_event_line(line, expected)
+                        self._validate_event(event, expected, previous_hash)
+                    except JournalCorrupt as exc:
+                        first_bad, error = expected, str(exc)
+                        break
+                    offsets.append(offset)
+                    by_observation[_identity_key(event["observation_id"])] = expected
+                    by_identity[_identity_key(event["source"], event["source_id"])] = expected
+                    offset += len(line)
+                    previous_hash = event["event_hash"]
+                    checked = expected
+        if first_bad is None:
+            first_bad, error = self._first_mismatch(
+                snap, offsets, offset, previous_hash or None, by_observation, by_identity)
+        return {"ok": first_bad is None, "checked": checked, "head_seq": head,
+                "first_bad_seq": first_bad, "error": error,
+                "seconds": round(time.monotonic() - started, 3)}
+
+    @staticmethod
+    def _first_mismatch(snap: _Snapshot, offsets: array, end: int, head_hash: str | None,
+                        by_observation: dict[int, int], by_identity: dict[int, int]):
+        """The first seq at which what the events derive differs from the memory snapshot, and why.
+        The indexes are compared by lookup (what ``_latest`` does), and by size for extra keys."""
+        found: list[tuple[int, str]] = []
+        if offsets != snap.offsets:
+            seq = next((i + 1 for i, (a, b) in enumerate(zip(offsets, snap.offsets)) if a != b),
+                       min(len(offsets), len(snap.offsets)) + 1)
+            found.append((seq, f"offset index differs from the events file at seq {seq}"))
+        if end != snap.end or head_hash != snap.head_hash:
+            found.append((snap.head_seq, f"chain head differs from the events file at seq {snap.head_seq}"))
+        for name, derived, memory in (("observation", by_observation, snap.by_observation),
+                                      ("source identity", by_identity, snap.by_identity)):
+            seqs = []
+            for key, seq in derived.items():
+                held = memory.get(key)
+                if held != seq:
+                    seqs.append(seq if held is None else min(seq, held))
+            if len(memory) != len(derived):
+                seqs.extend(memory.get(key) for key in memory if key not in derived)
+            if not seqs:
+                continue
+            seq = min(seqs)
+            found.append((seq, f"latest-by-{name} index differs from the events file at seq {seq}"))
+        if not found:
+            return None, None
+        return min(found)
 
     def _truncate_events(self, length: int) -> None:
         self.events_path.parent.mkdir(parents=True, exist_ok=True)
@@ -324,6 +832,48 @@ class ObservationJournal:
         if _sha256(blob_bytes) != payload_hash:
             raise JournalCorrupt(f"payload hash mismatch for {payload_hash}")
         return blob_bytes
+
+    def scrub_blobs(self) -> dict[str, Any]:
+        """Check every blob the journal references, once each, with the same check a read uses.
+
+        Runs without the journal lock: the events file is append-only, so the bytes up to the end
+        seen at the start never change, and ``_read_blob`` touches no shared state. One blob at a
+        time. A missing or altered blob is reported, not raised (a read of it still raises).
+        Returns {"checked": unique blobs checked, "bad": [{"payload_hash", "seq", "error"}] with
+        ``seq`` the first event naming it, "seconds"}."""
+        started = time.monotonic()
+        with self._lock:
+            end = self._end
+        seen: set[bytes | str] = set()
+        bad: list[dict[str, Any]] = []
+        checked = 0
+        seq = 0
+        if end:
+            with open(self.events_path, "rb") as fh:
+                while fh.tell() < end:
+                    line = fh.readline()
+                    if not line:
+                        break
+                    seq += 1
+                    try:
+                        payload_hash = json.loads(line.decode("utf-8"))["payload_hash"]
+                    except (UnicodeDecodeError, json.JSONDecodeError, KeyError, TypeError) as exc:
+                        raise JournalCorrupt(f"journal line {seq} changed on disk") from exc
+                    if payload_hash is None:
+                        continue
+                    try:
+                        key: bytes | str = bytes.fromhex(payload_hash)
+                    except (TypeError, ValueError):
+                        key = str(payload_hash)
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    checked += 1
+                    try:
+                        self._read_blob(payload_hash)
+                    except JournalCorrupt as exc:
+                        bad.append({"payload_hash": payload_hash, "seq": seq, "error": str(exc)})
+        return {"checked": checked, "bad": bad, "seconds": round(time.monotonic() - started, 3)}
 
     def _observation_from_event(self, event: dict[str, Any]) -> JournaledObservation:
         payload = None

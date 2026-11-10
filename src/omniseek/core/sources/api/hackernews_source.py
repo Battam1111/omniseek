@@ -27,18 +27,15 @@ Two layers are retrieved per query and merged into one ranked result set:
 from __future__ import annotations
 
 import asyncio
-import functools
 import logging
-import re
-from datetime import datetime
 from typing import Optional
 from urllib.parse import parse_qs, urlparse
 
-import anyio
 from markdownify import markdownify as html_to_md
 
 from omniseek.core import cache, http, upstreams
-from omniseek.core.normalize import Document, jsonsafe, mk_signal
+from omniseek.core.normalize import Document, html_fragment_text, jsonsafe, mk_signal, to_utc
+from omniseek.core.sources._base import SourceBase
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +44,7 @@ TIMEOUT = 15
 USER_AGENT = "omniseek/0.1 (automated retrieval)"
 
 
-class HackerNewsAdapter:
+class HackerNewsAdapter(SourceBase):
     name = "hackernews"
     needs_credentials = False
     description = (
@@ -55,52 +52,8 @@ class HackerNewsAdapter:
         "(full-text comment search), both via the Algolia HN API"
     )
 
-    def search(self, query: str, limit: int = 10) -> list[Document]:
-        key = cache.make_key("hackernews", "search", query, limit)
-        cached = cache.get_docs(key)
-        if cached is not None:
-            return cached
-
-        # Two layers, ONE merged result set: stories (the submission) AND comments
-        # (the actual thread discussion, often HN's highest-signal content). Split the
-        # budget so a small ``limit`` still surfaces both; over-fetch is capped at 30
-        # per layer (Algolia's practical page size) before slicing back to ``limit``.
-        story_budget = max(1, (limit + 1) // 2)   # ceil(limit/2) → stories get the tie
-        comment_budget = max(1, limit - story_budget)
-
-        docs: list[Document] = []
-
-        story_data = http.get_json(
-            f"{ALGOLIA_BASE}/search",
-            params={"query": query, "tags": "story", "hitsPerPage": min(story_budget, 30)},
-            timeout=TIMEOUT,
-        )
-        for hit in (story_data or {}).get("hits", [])[:story_budget]:
-            try:
-                docs.append(self._hit_to_document(hit))
-            except Exception as exc:  # noqa: BLE001
-                logger.debug("Skipping malformed HN story hit: %s", exc)
-
-        comment_data = http.get_json(
-            f"{ALGOLIA_BASE}/search",
-            params={"query": query, "tags": "comment", "hitsPerPage": min(comment_budget, 30)},
-            timeout=TIMEOUT,
-        )
-        for hit in (comment_data or {}).get("hits", [])[:comment_budget]:
-            try:
-                docs.append(self._comment_to_document(hit))
-            except Exception as exc:  # noqa: BLE001
-                logger.debug("Skipping malformed HN comment hit: %s", exc)
-
-        # Both layers failed (e.g. network) → honest empty, don't cache the miss.
-        if story_data is None and comment_data is None:
-            return []
-
-        cache.set_docs(key, docs, ttl=900)
-        return docs
-
     async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async twin of ``search`` (S4b): mirrors ``search`` line-for-line so the fetcher's
+        """Native-async replacement of the deleted sync ``search`` (11-04, S9; this is the only one now) (S4b): mirrors ``search`` line-for-line so the fetcher's
         native async dispatch (``AsyncSearchCapable``) awaits it DIRECTLY, spending a coroutine on the
         two Algolia waits instead of a held pool thread. Three changes only vs ``search``:
           - the disk CACHE read/write go OFF the loop (anyio.to_thread.run_sync: get_docs / set_docs do
@@ -118,63 +71,61 @@ class HackerNewsAdapter:
         construction (``aget_json`` returns None on failure); ``return_exceptions=True`` degrades it to
         that same None, so one bad layer leaves the other's docs intact."""
         key = cache.make_key("hackernews", "search", query, limit)
-        cached = await anyio.to_thread.run_sync(cache.get_docs, key)  # disk read OFF loop
-        if cached is not None:
-            return cached
 
-        # Two layers, ONE merged result set: stories (the submission) AND comments
-        # (the actual thread discussion, often HN's highest-signal content). Split the
-        # budget so a small ``limit`` still surfaces both; over-fetch is capped at 30
-        # per layer (Algolia's practical page size) before slicing back to ``limit``.
-        story_budget = max(1, (limit + 1) // 2)   # ceil(limit/2) → stories get the tie
-        comment_budget = max(1, limit - story_budget)
+        async def _aget() -> Optional[list[Document]]:
+            # Two layers, ONE merged result set: stories (the submission) AND comments
+            # (the actual thread discussion, often HN's highest-signal content). Split the
+            # budget so a small ``limit`` still surfaces both; over-fetch is capped at 30
+            # per layer (Algolia's practical page size) before slicing back to ``limit``.
+            story_budget = max(1, (limit + 1) // 2)   # ceil(limit/2) → stories get the tie
+            comment_budget = max(1, limit - story_budget)
 
-        docs: list[Document] = []
+            docs: list[Document] = []
 
-        def _settled(layer: str, result):
-            """A gathered result -> the value the serial version would have seen (None on failure)."""
-            if isinstance(result, BaseException):
-                logger.debug("hackernews: the %s layer raised: %s", layer, result)
-                return None
-            return result
+            def _settled(layer: str, result):
+                """A gathered result -> the value the serial version would have seen (None on failure)."""
+                if isinstance(result, BaseException):
+                    logger.debug("hackernews: the %s layer raised: %s", layer, result)
+                    return None
+                return result
 
-        story_res, comment_res = await asyncio.gather(
-            http.aget_json(
-                f"{ALGOLIA_BASE}/search",
-                params={"query": query, "tags": "story", "hitsPerPage": min(story_budget, 30)},
-                timeout=TIMEOUT,
-            ),
-            http.aget_json(
-                f"{ALGOLIA_BASE}/search",
-                params={"query": query, "tags": "comment", "hitsPerPage": min(comment_budget, 30)},
-                timeout=TIMEOUT,
-            ),
-            return_exceptions=True,
-        )
-        story_data = _settled("story", story_res)
-        comment_data = _settled("comment", comment_res)
+            story_res, comment_res = await asyncio.gather(
+                http.aget_json(
+                    f"{ALGOLIA_BASE}/search",
+                    params={"query": query, "tags": "story", "hitsPerPage": min(story_budget, 30)},
+                    timeout=TIMEOUT,
+                ),
+                http.aget_json(
+                    f"{ALGOLIA_BASE}/search",
+                    params={"query": query, "tags": "comment", "hitsPerPage": min(comment_budget, 30)},
+                    timeout=TIMEOUT,
+                ),
+                return_exceptions=True,
+            )
+            story_data = _settled("story", story_res)
+            comment_data = _settled("comment", comment_res)
 
-        for hit in (story_data or {}).get("hits", [])[:story_budget]:
-            try:
-                docs.append(self._hit_to_document(hit))
-            except Exception as exc:  # noqa: BLE001
-                logger.debug("Skipping malformed HN story hit: %s", exc)
+            for hit in (story_data or {}).get("hits", [])[:story_budget]:
+                try:
+                    docs.append(self._hit_to_document(hit))
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug("Skipping malformed HN story hit: %s", exc)
 
-        for hit in (comment_data or {}).get("hits", [])[:comment_budget]:
-            try:
-                docs.append(self._comment_to_document(hit))
-            except Exception as exc:  # noqa: BLE001
-                logger.debug("Skipping malformed HN comment hit: %s", exc)
+            for hit in (comment_data or {}).get("hits", [])[:comment_budget]:
+                try:
+                    docs.append(self._comment_to_document(hit))
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug("Skipping malformed HN comment hit: %s", exc)
 
-        # Both layers failed (e.g. network) → honest empty, don't cache the miss.
-        if story_data is None and comment_data is None:
-            return []
+            # Both layers failed (e.g. network) → honest empty, don't cache the miss.
+            if story_data is None and comment_data is None:
+                return None  # a failure: not cached
 
-        await anyio.to_thread.run_sync(  # disk write OFF loop
-            functools.partial(cache.set_docs, key, docs, ttl=900))
-        return docs
+            return docs
 
-    def fetch_url(self, url: str) -> Optional[Document]:
+        return await self._acached(key, 900, _aget)
+
+    async def afetch_url(self, url: str) -> Optional[Document]:
         host = (urlparse(url).hostname or "").lower()
         if "ycombinator.com" not in host:
             return None
@@ -182,15 +133,15 @@ class HackerNewsAdapter:
         item_id = (qs.get("id") or [None])[0]
         if not item_id:
             return None
-        item = http.get_json(f"{ALGOLIA_BASE}/items/{item_id}", timeout=TIMEOUT)
+        item = await http.aget_json(f"{ALGOLIA_BASE}/items/{item_id}", timeout=TIMEOUT)
         if item is None:
             return None
         return self._item_to_document(item)
 
-    def health_check(self) -> tuple[Optional[bool], str]:
+    async def ahealth_check(self) -> tuple[Optional[bool], str]:
         try:
-            with upstreams.egress(f"{ALGOLIA_BASE}/search", request_s=8):  # declared HN Search gate (10,000/h per IP)
-                resp = http.direct(
+            async with upstreams.aegress(f"{ALGOLIA_BASE}/search", request_s=8):  # declared HN Search gate (10,000/h per IP)
+                resp = await http.adirect(
                     "GET", f"{ALGOLIA_BASE}/search",
                     params={"query": "test", "hitsPerPage": 1},
                     headers={"User-Agent": USER_AGENT},
@@ -215,18 +166,13 @@ class HackerNewsAdapter:
         comment_count = hit.get("num_comments") or 0
         score = hit.get("points") or 0
         created_at = hit.get("created_at")
-        date = None
-        if created_at:
-            try:
-                date = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
-            except (ValueError, TypeError):
-                pass
+        date = to_utc(created_at)
         return Document(
             source="hackernews",
             source_id=str(story_id),
             url=url,
             title=title,
-            content=hit.get("story_text") or f"HN story • {comment_count} comments • {score} points",
+            content=hit.get("story_text") or "",   # comment / point counts ride in signals + metadata
             author=hit.get("author"),
             date=date,
             # num_comments was already parsed into metadata; promote it to a SIGNAL so it is
@@ -261,22 +207,17 @@ class HackerNewsAdapter:
         try:
             body = html_to_md(body_html, heading_style="ATX").strip() if body_html else ""
         except Exception:  # noqa: BLE001
-            body = re.sub(r"<[^>]+>", "", body_html).strip()
+            body = html_fragment_text(body_html)
 
         created_at = hit.get("created_at")
-        date = None
-        if created_at:
-            try:
-                date = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
-            except (ValueError, TypeError):
-                pass
+        date = to_utc(created_at)
 
         return Document(
             source="hackernews",
             source_id=str(comment_id),
             url=comments_url,
             title=story_title,
-            content=body or "(empty comment)",
+            content=body or "",
             author=hit.get("author"),
             date=date,
             # Comment hits carry a `points` key but the HN Algolia index leaves it None;
@@ -307,7 +248,7 @@ class HackerNewsAdapter:
             source_id=str(item_id),
             url=external_url or comments_url,
             title=title,
-            content=item.get("text") or item.get("title") or "(no text)",
+            content=item.get("text") or "",
             author=item.get("author"),
             signals=mk_signal("points", item.get("points"),
                               kind="engagement", by="hackernews/points"),

@@ -35,7 +35,10 @@ from urllib.parse import urlparse
 
 import httpx
 
-from omniseek.core import _probe, cache
+import anyio
+
+from omniseek.core import _probe, cache, fetcher
+from omniseek.core.sources._base import SourceBase
 from omniseek.core.normalize import Document, jsonsafe
 
 logger = logging.getLogger(__name__)
@@ -62,7 +65,7 @@ HEADERS = {
 DEFAULT_TOP_SEED_REGEX = r"Seed.*(?:校招|实习|招)"
 
 
-class BytedanceSeedAdapter:
+class BytedanceSeedAdapter(SourceBase):
     name = "bytedance_seed"
     needs_credentials = False
     explicit_only = "walled 招聘源(字节校招);命名钻取 (omniseek_search 单源 raw) 才调,不进广搜"
@@ -75,7 +78,7 @@ class BytedanceSeedAdapter:
         """Get subject ID → name map. Cached aggressively (1h). ``_status``: a list the HTTP status
         of a failed fetch is appended to (the health check reads a 429 from it)."""
         key = cache.make_key("bytedance_seed", "filters_meta", "v1")
-        cached = cache.get(key)
+        cached = cache.get_once(key)
         if cached is not None:
             return cached
 
@@ -169,7 +172,7 @@ class BytedanceSeedAdapter:
 
     def search(self, query: str, limit: int = 10) -> list[Document]:
         key = cache.make_key("bytedance_seed", "search", query, limit)
-        cached = cache.get(key)
+        cached = cache.get_once(key)
         if cached is not None:
             return [Document.model_validate(d) for d in cached]
 
@@ -202,7 +205,13 @@ class BytedanceSeedAdapter:
         cache.set(key, [d.model_dump(mode="json") for d in docs], ttl=1800)
         return docs
 
-    def fetch_url(self, url: str) -> Optional[Document]:
+    async def afetch_url(self, url: str) -> Optional[Document]:
+        if "jobs.bytedance.com" not in (urlparse(url).hostname or "").lower():
+            return None
+        # the posting API is read with the sync httpx client this source shares with its search: a worker thread
+        return await anyio.to_thread.run_sync(self._read_url, url, limiter=fetcher._LEGACY_LIMITER)
+
+    def _read_url(self, url: str) -> Optional[Document]:
         host = (urlparse(url).hostname or "").lower()
         if "jobs.bytedance.com" not in host:
             return None
@@ -266,7 +275,7 @@ class BytedanceSeedAdapter:
         if requirement:
             content_parts.append("--- 任职要求 ---")
             content_parts.append(requirement.strip())
-        content = "\n\n".join(content_parts) or "(no content)"
+        content = "\n\n".join(content_parts)
 
         # Metadata extraction
         category = post.get("job_category") or {}

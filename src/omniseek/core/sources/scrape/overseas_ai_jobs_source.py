@@ -27,21 +27,20 @@ from __future__ import annotations
 import asyncio
 import functools
 import html
+import json
 import logging
 import re
 import threading
-from concurrent.futures import ThreadPoolExecutor
-from contextvars import copy_context
 from dataclasses import dataclass, field
 from typing import Any, Optional
 from urllib.parse import urlparse
 
 import anyio
-import httpx
 
-from omniseek.core import cache, diag, http
-from omniseek.core._guard import GateBusy, bounded_async_slot, bounded_slot
-from omniseek.core.normalize import Document, jsonsafe, keyword_score_filter
+from omniseek.core import cache, diag, http, portal
+from omniseek.core._guard import GateBusy, bounded_async_slot
+from omniseek.core.normalize import Document, html_fragment_text, jsonsafe, keyword_score_filter
+from omniseek.core.sources._base import SourceBase, aparse
 
 logger = logging.getLogger(__name__)
 
@@ -162,38 +161,17 @@ class _Job:
         )
 
 
-def _get(url: str) -> Optional[httpx.Response]:
-    try:
-        with bounded_slot(
-            _sema_for(url),
-            TIMEOUT,
-            lambda waited: GateBusy(f"ATS gate busy after {waited:.1f}s for {urlparse(url).hostname}"),
-        ):  # declared host gates of every hop in http.direct (api.lever.co: robots Crawl-delay 1 s)
-            r = http.direct("GET", url, headers={"User-Agent": USER_AGENT}, timeout=TIMEOUT,
-                            follow_redirects=True)
-        r.raise_for_status()
-        return r
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("overseas_ai_jobs GET failed (%s): %s", url, exc)
-        st = getattr(getattr(exc, "response", None), "status_code", None)
-        diag.note("overseas_ai_jobs.fetch", url=url, status=st, exc=exc)
-        return None
+async def _aget_body(url: str) -> Optional[bytes]:
+    """Async egress twin of ``_get``: the answer's body, or None (the source's failure -> [] contract).
 
-
-async def _aget_json(url: str) -> Optional[Any]:
-    """Async egress twin of ``_get`` + ``.json()`` (the source goes native async).
-
-    Mirrors ``_get`` -> ``.json()``, changing ONLY the transport: the RAW ``httpx.get`` becomes the
-    shared async leaf ``http.aget_json`` (pooled AsyncClient + SSRF guard + cache_only + 30MB cap),
-    keeping the SAME source User-Agent + timeout and the SAME per-host in-flight cap. The per-host
-    ``threading.BoundedSemaphore`` is the VERY SAME object the sync ``_get`` holds (via ``_sema_for``),
-    so a mixed sync+async burst can never DOUBLE a shared ATS host's in-flight (greenhouse collapses 7
-    sites onto one host) — the reddit shared-cap rule. The shared bounded, cancellation-safe helper
-    acquires it off-loop with the existing wire timeout as the finite queue budget. Returns parsed
-    JSON (dict or list) or None (the source's
-    failure -> [] contract). NOTE: an egress FAILURE now taps ``diag.note('http.get'/'http.get_json')``
-    (the shared leaf's evidence) instead of the sync path's bespoke ``overseas_ai_jobs.fetch`` label;
-    the URL + status are captured either way, so an /eye-fix drill still sees the wall."""
+    The RAW ``httpx.get`` is the shared async leaf ``http.aget`` (pooled AsyncClient + SSRF guard +
+    cache_only + 30MB cap), with the SAME source User-Agent + timeout and the SAME per-host in-flight
+    cap. The per-host ``threading.BoundedSemaphore`` is the VERY SAME object the sync ``_get`` holds (via
+    ``_sema_for``), so a mixed sync+async burst can never DOUBLE a shared ATS host's in-flight
+    (greenhouse collapses 7 sites onto one host) — the reddit shared-cap rule. The shared bounded,
+    cancellation-safe helper acquires it off-loop with the existing wire timeout as the finite queue
+    budget. NOTE: an egress FAILURE taps ``diag.note('http.get')`` (the shared leaf's evidence); the URL
+    + status are captured either way, so an /eye-fix drill still sees the wall."""
     sema = _sema_for(url)
     try:
         async with bounded_async_slot(
@@ -201,7 +179,8 @@ async def _aget_json(url: str) -> Optional[Any]:
             TIMEOUT,
             lambda waited: GateBusy(f"ATS gate busy after {waited:.1f}s for {urlparse(url).hostname}"),
         ):
-            return await http.aget_json(url, headers={"User-Agent": USER_AGENT}, timeout=TIMEOUT)
+            resp = await http.aget(url, headers={"User-Agent": USER_AGENT}, timeout=TIMEOUT)
+            return resp.content if resp is not None else None
     except Exception as exc:  # noqa: BLE001
         logger.warning("overseas_ai_jobs GET failed (%s): %s", url, exc)
         st = getattr(getattr(exc, "response", None), "status_code", None)
@@ -209,9 +188,48 @@ async def _aget_json(url: str) -> Optional[Any]:
         return None
 
 
-def _gh(token: str, lab: str) -> list[_Job]:
-    r = _get(f"https://boards-api.greenhouse.io/v1/boards/{token}/jobs?content=true")
-    jobs = (r.json().get("jobs") if r else None) or []
+def _decode_then(parse: Any, body: bytes, *args: Any) -> tuple[Any, Optional[str]]:
+    """``parse(<body's JSON>, *args)`` and the decode error (None when the body was JSON). A body that
+    is not JSON is parsed as None, as ``http.aget_json`` answered it. Module-level: it may run in a
+    worker of the process lane (``aparse``)."""
+    try:
+        data = json.loads(body)  # what httpx's Response.json() does with the same bytes
+    except Exception as exc:  # noqa: BLE001
+        return parse(None, *args), f"{type(exc).__name__}: {exc}"
+    return parse(data, *args), None
+
+
+def _research_roles(data: Any) -> Optional[int]:
+    """How many jobs of a Greenhouse board answer (``{"jobs": [...]}``) have a research title, or None
+    when the answer carries no jobs list. Module-level: it may run in a worker of the process lane."""
+    jobs = data.get("jobs") if isinstance(data, dict) else None
+    if not isinstance(jobs, list):
+        return None
+    return sum(1 for j in jobs if isinstance(j, dict) and RESEARCH_RE.search((j.get("title") or "").strip()))
+
+
+async def _aget_parsed(url: str, parse: Any, *args: Any) -> Any:
+    """GET ``url`` and ``parse(data, *args)`` its JSON (``data`` None when the GET failed or the body is
+    not JSON). The decode and the parse run together through ``aparse``: here for a small answer, in the
+    process lane for a large one (a greenhouse board with ``content=true`` is up to ~10 MB), so neither
+    holds the loop. ``parse`` is a module-level function of plain data."""
+    body = await _aget_body(url)
+    if body is None:
+        return parse(None, *args)
+    out, bad = await aparse(len(body), functools.partial(_decode_then, parse), body, *args)
+    if bad is not None:  # the same evidence http.aget_json leaves for a body that is not JSON
+        logger.warning("http.get_json parse failed (%s): %s", url, bad)
+        diag.note("http.get_json", url=url, status=200, body=body.decode("utf-8", "replace"),
+                  exc=ValueError(bad))
+    return out
+
+
+# ── THE ATS PARSERS (one per ATS) and their async fetchers ──────────────────────────────────────
+# Each parser maps one decoded answer (None: the GET failed) to research ``_Job``s: the title filter,
+# the location walk, the ``_Job`` build. Pure CPU of plain data, module-level, so ``_aget_parsed``
+# runs it in a worker process when the answer is large. The fetchers only GET and hand over.
+def _gh_jobs(data: Any, token: str, lab: str) -> list[_Job]:
+    jobs = (data.get("jobs") if data else None) or []
     out: list[_Job] = []
     for j in jobs:
         title = (j.get("title") or "").strip()
@@ -227,16 +245,18 @@ def _gh(token: str, lab: str) -> list[_Job]:
         for off in (j.get("offices") or []):
             if isinstance(off, dict) and off.get("name"):
                 locs.append(off["name"])
-        summary = html.unescape(j.get("content") or "")
-        summary = re.sub(r"<[^>]+>", " ", summary)
-        summary = re.sub(r"\s+", " ", summary).strip()
+        summary = html_fragment_text(html.unescape(j.get("content") or ""))
         out.append(_Job(lab, title, url, locs, summary=summary, raw=j))
     return out
 
 
-def _ashby(token: str, lab: str) -> list[_Job]:
-    r = _get(f"https://api.ashbyhq.com/posting-api/job-board/{token}?includeCompensation=false")
-    jobs = (r.json().get("jobs") if r else None) or []
+async def _agh(token: str, lab: str) -> list[_Job]:
+    return await _aget_parsed(f"https://boards-api.greenhouse.io/v1/boards/{token}/jobs?content=true",
+                              _gh_jobs, token, lab)
+
+
+def _ashby_jobs(data: Any, token: str, lab: str) -> list[_Job]:
+    jobs = (data.get("jobs") if data else None) or []
     out: list[_Job] = []
     for j in jobs:
         title = (j.get("title") or "").strip()
@@ -260,160 +280,15 @@ def _ashby(token: str, lab: str) -> list[_Job]:
         out.append(_Job(lab, title, url, locs, bool(j.get("isRemote")),
                         team=j.get("team") or "", employment_type=j.get("employmentType") or "",
                         raw=j))
-    return out
-
-
-def _lever(token: str, lab: str) -> list[_Job]:
-    r = _get(f"https://api.lever.co/v0/postings/{token}?mode=json")
-    jobs = (r.json() if r else None) or []
-    out: list[_Job] = []
-    for j in jobs:
-        title = (j.get("text") or "").strip()
-        if not RESEARCH_RE.search(title):
-            continue
-        url = j.get("hostedUrl") or j.get("applyUrl") or ""
-        if not url:
-            continue
-        cats = j.get("categories") or {}
-        locs = []
-        if cats.get("location"):
-            locs.append(cats["location"])
-        for l in (cats.get("allLocations") or []):
-            if isinstance(l, str):
-                locs.append(l)
-        remote = (j.get("workplaceType") == "remote") or any("remote" in str(l).lower() for l in locs)
-        out.append(_Job(lab, title, url, locs, remote, team=cats.get("team") or "", raw=j))
-    return out
-
-
-def _smartrecruiters(token: str, lab: str, max_pages: int = 6) -> list[_Job]:
-    out: list[_Job] = []
-    offset = 0
-    while offset < max_pages * 100:
-        r = _get(f"https://api.smartrecruiters.com/v1/companies/{token}/postings?limit=100&offset={offset}")
-        if not r:
-            break
-        d = r.json()
-        items = d.get("content") or []
-        if not items:
-            break
-        for j in items:
-            title = (j.get("name") or "").strip()
-            if not RESEARCH_RE.search(title):
-                continue
-            ref = j.get("ref") or ""
-            jid = ref.rstrip("/").split("/")[-1] if ref else (j.get("id") or "")
-            url = f"https://jobs.smartrecruiters.com/{token}/{jid}" if jid else ref
-            lo = j.get("location") or {}
-            full = lo.get("fullLocation") or " ".join(
-                x for x in [lo.get("city"), lo.get("region"), lo.get("country")] if x)
-            out.append(_Job(lab, title, url, [full] if full else [], bool(lo.get("remote")), raw=j))
-        total = d.get("totalFound") or 0
-        offset += len(items)
-        if offset >= total:
-            break
-    return out
-
-
-def _workable(token: str, lab: str) -> list[_Job]:
-    r = _get(f"https://apply.workable.com/api/v1/widget/accounts/{token}")
-    if not r:
-        return []
-    data = r.json()
-    jobs = data.get("jobs") if isinstance(data.get("jobs"), list) else []
-    out: list[_Job] = []
-    for j in jobs:
-        title = (j.get("title") or j.get("name") or "").strip()
-        if not title or not RESEARCH_RE.search(title):
-            continue
-        sc = j.get("shortcode")
-        url = j.get("url") or j.get("application_url") or (f"https://apply.workable.com/{token}/j/{sc}/" if sc else "")
-        if not url:
-            continue
-        loc = j.get("location") or {}
-        locs = []
-        remote = False
-        if isinstance(loc, dict):
-            ls = loc.get("location_str") or loc.get("city") or loc.get("country")
-            if ls:
-                locs.append(ls)
-            remote = bool(loc.get("workplace_type") == "remote" or loc.get("telecommuting"))
-        elif isinstance(loc, str):
-            locs.append(loc)
-        out.append(_Job(lab, title, url, locs, remote, raw=j))
-    return out
-
-
-HELPERS = {
-    "gh": _gh,
-    "ashby": _ashby,
-    "lever": _lever,
-    "smartrecruiters": _smartrecruiters,
-    "workable": _workable,
-}
-
-
-# ── ASYNC FETCHER TWINS (S4b) ────────────────────────────────────────────────────────────────────
-# One per ATS, mirroring its sync sibling LINE-FOR-LINE and changing ONLY the egress: the raw
-# ``_get(url).json()`` becomes ``await _aget_json(url)`` (shared async pool + the SAME per-host cap).
-# The pure-CPU parse/map loop (title filter, location walk, _Job build) stays byte-identical and runs
-# ON the loop. A pure addition: the sync fetchers above are untouched.
-async def _agh(token: str, lab: str) -> list[_Job]:
-    data = await _aget_json(f"https://boards-api.greenhouse.io/v1/boards/{token}/jobs?content=true")
-    jobs = (data.get("jobs") if data else None) or []
-    out: list[_Job] = []
-    for j in jobs:
-        title = (j.get("title") or "").strip()
-        if not RESEARCH_RE.search(title):
-            continue
-        url = j.get("absolute_url") or ""
-        if not url:
-            continue
-        locs = []
-        lo = j.get("location") or {}
-        if isinstance(lo, dict) and lo.get("name"):
-            locs.append(lo["name"])
-        for off in (j.get("offices") or []):
-            if isinstance(off, dict) and off.get("name"):
-                locs.append(off["name"])
-        summary = html.unescape(j.get("content") or "")
-        summary = re.sub(r"<[^>]+>", " ", summary)
-        summary = re.sub(r"\s+", " ", summary).strip()
-        out.append(_Job(lab, title, url, locs, summary=summary, raw=j))
     return out
 
 
 async def _aashby(token: str, lab: str) -> list[_Job]:
-    data = await _aget_json(f"https://api.ashbyhq.com/posting-api/job-board/{token}?includeCompensation=false")
-    jobs = (data.get("jobs") if data else None) or []
-    out: list[_Job] = []
-    for j in jobs:
-        title = (j.get("title") or "").strip()
-        if not RESEARCH_RE.search(title):
-            continue
-        url = j.get("jobUrl") or j.get("applyUrl") or ""
-        if not url:
-            continue
-        locs = []
-        if j.get("location"):
-            locs.append(j["location"])
-        for sl in (j.get("secondaryLocations") or []):
-            if isinstance(sl, dict):
-                loc = sl.get("location")
-                if isinstance(loc, str):
-                    locs.append(loc)
-                elif isinstance(loc, dict):
-                    locs.append(loc.get("locationName") or loc.get("name") or "")
-            elif isinstance(sl, str):
-                locs.append(sl)
-        out.append(_Job(lab, title, url, locs, bool(j.get("isRemote")),
-                        team=j.get("team") or "", employment_type=j.get("employmentType") or "",
-                        raw=j))
-    return out
+    return await _aget_parsed(
+        f"https://api.ashbyhq.com/posting-api/job-board/{token}?includeCompensation=false", _ashby_jobs, token, lab)
 
 
-async def _alever(token: str, lab: str) -> list[_Job]:
-    data = await _aget_json(f"https://api.lever.co/v0/postings/{token}?mode=json")
+def _lever_jobs(data: Any, token: str, lab: str) -> list[_Job]:
     jobs = (data if data else None) or []
     out: list[_Job] = []
     for j in jobs:
@@ -435,37 +310,51 @@ async def _alever(token: str, lab: str) -> list[_Job]:
     return out
 
 
+async def _alever(token: str, lab: str) -> list[_Job]:
+    return await _aget_parsed(f"https://api.lever.co/v0/postings/{token}?mode=json", _lever_jobs, token, lab)
+
+
+def _smartrecruiters_page(d: Any, token: str, lab: str) -> Optional[tuple[list[_Job], int, int]]:
+    """One page: its research jobs, how many postings it held, and ``totalFound``; None when the GET
+    failed (the paging loop stops, as the sync ``if not r: break``)."""
+    if d is None:
+        return None
+    items = d.get("content") or []
+    out: list[_Job] = []
+    for j in items:
+        title = (j.get("name") or "").strip()
+        if not RESEARCH_RE.search(title):
+            continue
+        ref = j.get("ref") or ""
+        jid = ref.rstrip("/").split("/")[-1] if ref else (j.get("id") or "")
+        url = f"https://jobs.smartrecruiters.com/{token}/{jid}" if jid else ref
+        lo = j.get("location") or {}
+        full = lo.get("fullLocation") or " ".join(
+            x for x in [lo.get("city"), lo.get("region"), lo.get("country")] if x)
+        out.append(_Job(lab, title, url, [full] if full else [], bool(lo.get("remote")), raw=j))
+    return out, len(items), (d.get("totalFound") or 0) if items else 0
+
+
 async def _asmartrecruiters(token: str, lab: str, max_pages: int = 6) -> list[_Job]:
     out: list[_Job] = []
     offset = 0
     while offset < max_pages * 100:
-        d = await _aget_json(
-            f"https://api.smartrecruiters.com/v1/companies/{token}/postings?limit=100&offset={offset}")
-        if d is None:  # egress failure (mirror sync's ``if not r: break`` — a Response is never falsy)
+        page = await _aget_parsed(
+            f"https://api.smartrecruiters.com/v1/companies/{token}/postings?limit=100&offset={offset}",
+            _smartrecruiters_page, token, lab)
+        if page is None:  # egress failure (mirror sync's ``if not r: break`` — a Response is never falsy)
             break
-        items = d.get("content") or []
-        if not items:
+        jobs, n_items, total = page
+        if not n_items:
             break
-        for j in items:
-            title = (j.get("name") or "").strip()
-            if not RESEARCH_RE.search(title):
-                continue
-            ref = j.get("ref") or ""
-            jid = ref.rstrip("/").split("/")[-1] if ref else (j.get("id") or "")
-            url = f"https://jobs.smartrecruiters.com/{token}/{jid}" if jid else ref
-            lo = j.get("location") or {}
-            full = lo.get("fullLocation") or " ".join(
-                x for x in [lo.get("city"), lo.get("region"), lo.get("country")] if x)
-            out.append(_Job(lab, title, url, [full] if full else [], bool(lo.get("remote")), raw=j))
-        total = d.get("totalFound") or 0
-        offset += len(items)
+        out.extend(jobs)
+        offset += n_items
         if offset >= total:
             break
     return out
 
 
-async def _aworkable(token: str, lab: str) -> list[_Job]:
-    data = await _aget_json(f"https://apply.workable.com/api/v1/widget/accounts/{token}")
+def _workable_jobs(data: Any, token: str, lab: str) -> list[_Job]:
     if not data:
         return []
     jobs = data.get("jobs") if isinstance(data.get("jobs"), list) else []
@@ -492,6 +381,11 @@ async def _aworkable(token: str, lab: str) -> list[_Job]:
     return out
 
 
+async def _aworkable(token: str, lab: str) -> list[_Job]:
+    return await _aget_parsed(f"https://apply.workable.com/api/v1/widget/accounts/{token}",
+                              _workable_jobs, token, lab)
+
+
 AHELPERS = {
     "gh": _agh,
     "ashby": _aashby,
@@ -501,7 +395,7 @@ AHELPERS = {
 }
 
 
-class OverseasAIJobsAdapter:
+class OverseasAIJobsAdapter(SourceBase):
     name = "overseas_ai_jobs"
     needs_credentials = False
     description = (
@@ -510,49 +404,6 @@ class OverseasAIJobsAdapter:
         "Lever/SmartRecruiters/Workable; 标注 Singapore/Canada/remote (按部署方配置的目标地区)"
     )
 
-    def _all_docs(self) -> list[Document]:
-        key = cache.make_key("overseas_ai_jobs", "all")
-        cached = cache.get(key)
-        if cached is not None:
-            return [Document.model_validate(d) for d in cached]
-        docs: list[Document] = []
-
-        # Each ATS is a distinct host with no shared rate limit, so the 14-site
-        # fan-out is pure independent network wait → parallelize it. One worker
-        # fetches one site; failures stay isolated per site (the try/except moves
-        # into the worker, identical to the old per-site guard). copy_context()
-        # is captured HERE in the search thread (where the fetcher has set the
-        # cache `fresh` contextvar) and one private copy is handed to each worker
-        # via ctx.run — never copied inside the worker, where it would capture an
-        # empty context and silently defeat fresh=True. Assembly (to_doc) + sort
-        # + cache are unchanged and stay on this thread.
-        def _fetch_site(item: tuple[str, str, str]) -> list[_Job]:
-            lab, ats, token = item
-            fetch = HELPERS.get(ats)
-            if not fetch:
-                return []
-            try:
-                return fetch(token, lab)
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("overseas_ai_jobs %s (%s) failed: %s", lab, ats, exc)
-                return []
-
-        contexts = [copy_context() for _ in SITES]
-        with ThreadPoolExecutor(max_workers=min(len(SITES), 14)) as ex:
-            site_jobs = list(ex.map(lambda ctx, it: ctx.run(_fetch_site, it),
-                                    contexts, SITES))
-        for jobs in site_jobs:
-            for job in jobs:
-                docs.append(job.to_doc())
-        # SG/Canada first, then remote-friendly, then the rest.
-        docs.sort(key=lambda d: (0 if "sg-or-canada" in d.tags else 1,
-                                 0 if "remote-ok" in d.tags else 1))
-        cache.set(key, [d.model_dump(mode="json") for d in docs], ttl=CACHE_TTL)
-        return docs
-
-    def search(self, query: str, limit: int = 10) -> list[Document]:
-        return keyword_score_filter(self._all_docs(), query)[:limit]
-
     async def _a_all_docs(self) -> list[Document]:
         """Native-async twin of ``_all_docs``: the SAME cache key + the SAME 14-site assembly, changing
         ONLY the blocking waits (the load-bearing off-loop discipline). Mirrors ``_all_docs``:
@@ -560,14 +411,15 @@ class OverseasAIJobsAdapter:
             SAME model_dump(mode='json') value shape — so async and sync SHARE the cache entry);
           - the ThreadPoolExecutor(max_workers=14) site fan-out -> asyncio.gather over the SAME SITES
             order (gather preserves order, so the assembly + sort are byte-identical to ex.map's);
-          - each site's raw ``_get`` egress -> the async ``_aget_json`` (shared pool + per-host cap);
+          - each site's raw ``_get`` egress -> the async ``_aget_parsed`` (shared pool + per-host cap; the
+            JSON decode and the ATS parser through ``aparse``: off the loop for a large board);
           - the per-site failure isolation (the try/except inside the worker) stays, in ``_afetch_site``.
         Every coroutine runs on the ONE loop thread, so (unlike the sync worker threads) NO
         copy_context() is needed: the cache ``fresh`` / cache_only contextvars propagate naturally.
         Assembly (to_doc), the sort, and the model_dump payload build are pure CPU and stay ON the loop;
         only the disk read + write themselves go off-loop. Byte-identical result to ``_all_docs``."""
         key = cache.make_key("overseas_ai_jobs", "all")
-        cached = await anyio.to_thread.run_sync(cache.get, key)  # disk read OFF loop
+        cached = await cache.aget_once(key)  # disk read OFF loop
         if cached is not None:
             return [Document.model_validate(d) for d in cached]  # pure CPU, on loop
         docs: list[Document] = []
@@ -592,31 +444,32 @@ class OverseasAIJobsAdapter:
                                  0 if "remote-ok" in d.tags else 1))
         payload = [d.model_dump(mode="json") for d in docs]  # pure CPU, on loop
         await anyio.to_thread.run_sync(  # disk write OFF loop
-            functools.partial(cache.set, key, payload, ttl=CACHE_TTL))
+            functools.partial(cache.set, key, payload, ttl=CACHE_TTL), limiter=portal.IO_LANE)
         return docs
 
     async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async twin of ``search`` (routes this source to the fetcher's native dispatch
+        """Native-async replacement of the deleted sync ``search`` (11-04, S9; this is the only one now) (routes this source to the fetcher's native dispatch
         branch): the async ``_a_all_docs`` egress runs on the loop, then the SAME
         ``keyword_score_filter`` (pure CPU) ranks + truncates, byte-identical to ``search``."""
         return keyword_score_filter(await self._a_all_docs(), query)[:limit]
 
-    def fetch_url(self, url: str) -> Optional[Document]:
+    async def afetch_url(self, url: str) -> Optional[Document]:
         return None
 
-    def health_check(self) -> tuple[Optional[bool], str]:
+    async def ahealth_check(self) -> tuple[Optional[bool], str]:
         # The board itself must answer with its jobs list: _gh reads ANY failure as an empty board,
         # so until 2026-10-04 this read True on a 429, a 5xx or a timeout. A failed GET is False here;
         # the health funnel re-reads one that failed only on a 429 (or a busy gate) as not verified.
         url = "https://boards-api.greenhouse.io/v1/boards/anthropic/jobs?content=true"
         try:
-            r = _get(url)
-            if r is None:
+            body = await _aget_body(url)
+            if body is None:
                 return False, "the Anthropic Greenhouse board did not answer (see the overseas_ai_jobs.fetch diag note)"
-            jobs = r.json().get("jobs")
-            if not isinstance(jobs, list):
+            n, bad = await aparse(len(body), functools.partial(_decode_then, _research_roles), body)
+            if bad is not None:
+                return False, bad
+            if n is None:
                 return False, "the Anthropic Greenhouse board answered without a jobs list"
-            n = sum(1 for j in jobs if isinstance(j, dict) and RESEARCH_RE.search((j.get("title") or "").strip()))
             return True, f"OK ({len(SITES)} labs configured; Anthropic board → {n} research roles)"
         except Exception as exc:  # noqa: BLE001
             return False, f"{type(exc).__name__}: {exc}"

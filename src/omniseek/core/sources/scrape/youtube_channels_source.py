@@ -18,6 +18,7 @@ import logging
 from typing import Optional
 
 from omniseek.core import cache
+from omniseek.core.sources._base import SourceBase
 from omniseek.core.normalize import Document, jsonsafe, keyword_score_filter, mk_signal
 
 logger = logging.getLogger(__name__)
@@ -43,7 +44,7 @@ _YDL_OPTS = {
 }
 
 
-class YoutubeChannelsAdapter:
+class YoutubeChannelsAdapter(SourceBase):
     name = "youtube_channels"
     needs_credentials = False
     description = (
@@ -53,7 +54,7 @@ class YoutubeChannelsAdapter:
 
     def _fetch_channel(self, channel_id: str, display: str) -> list[dict]:
         key = cache.make_key("youtube_channels", "chan", channel_id, PER_CHANNEL)
-        cached = cache.get(key)
+        cached = cache.get_once(key)
         if cached is not None:
             return cached
         url = f"https://www.youtube.com/channel/{channel_id}/videos"
@@ -87,7 +88,7 @@ class YoutubeChannelsAdapter:
         # YouTube's per-video thumbnail URL is stable and always valid.
         thumb = f"https://i.ytimg.com/vi/{vid}/hqdefault.jpg"
         dur = e.get("duration")
-        content = f"{e.get('channel', '')} — YouTube video" + (f" ({int(dur)}s)" if dur else "")
+        content = ""   # the flat listing has no description; channel and duration ride in author / metadata
         return Document(
             source="youtube_channels",
             source_id=str(vid),
@@ -104,6 +105,7 @@ class YoutubeChannelsAdapter:
                 "channel_id": e.get("channel_id"),
                 "video_id": vid,
                 "view_count": e.get("view_count"),
+                "duration_s": int(dur) if dur else None,
                 "raw": jsonsafe(e),
             },
         )
@@ -118,7 +120,7 @@ class YoutubeChannelsAdapter:
             return keyword_score_filter(docs, q)[:limit]
         return docs[:limit]
 
-    def fetch_url(self, url: str) -> Optional[Document]:
+    async def afetch_url(self, url: str) -> Optional[Document]:
         # Defer YouTube URL fetches to the dedicated `youtube` adapter (it adds
         # transcripts). This source only provides the curated-channel stream.
         return None

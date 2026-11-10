@@ -36,11 +36,10 @@ fan-out fodder (same posture as worldbank_stats).
 from __future__ import annotations
 
 import re
-from datetime import datetime
 from typing import Any, Optional
 
 from omniseek.core import http
-from omniseek.core.normalize import Document, jsonsafe, mk_signal
+from omniseek.core.normalize import Document, jsonsafe, mk_signal, to_utc
 from omniseek.core.sources.api._base import BaseAPIAdapter
 
 REST = "https://www150.statcan.gc.ca/t1/wds/rest"
@@ -97,13 +96,6 @@ def _resolve(query: str) -> list[dict]:
     return [e for e in _CURATED if any(_matches(k, ql) for k in e["keywords"])]
 
 
-def _parse_date(s: Any) -> Optional[datetime]:
-    try:
-        return datetime.strptime(str(s).strip(), "%Y-%m-%d")
-    except (ValueError, TypeError):
-        return None
-
-
 def _table_parts(product_id: Any) -> tuple[str, str]:
     """(pid_for_url, human_table_code) from a numeric productId. 14100287 -> ('1410028701', '14-10-0287')."""
     pid8 = str(product_id or "").strip()
@@ -134,28 +126,8 @@ class StatCanWdsAdapter(BaseAPIAdapter):
     explicit_only = ("statcan_wds: a structured Canadian-statistics point lookup by keyword / vector id, "
                      "named on demand, not broad-fan-out fodder")
 
-    def _raw_fetch(self, query: str, limit: int) -> list:
-        """Resolve to curated vectors, POST them all in one batch, and pair each returned object
-        with its entry -> [(entry, obj), ...] (one time-series doc per pair). Any failure -> []."""
-        entries = _resolve(query)
-        if not entries:
-            return []
-        body = [{"vectorId": int(e["vector"]), "latestN": _LATEST_N} for e in entries]
-        raw = http.post_json(DATA_URL, json=body, timeout=20)
-        if not isinstance(raw, list):
-            return []
-        objs: dict[int, dict] = {}
-        for item in raw:
-            if isinstance(item, dict) and item.get("status") == "SUCCESS" and isinstance(item.get("object"), dict):
-                obj = item["object"]
-                vid = obj.get("vectorId")
-                if isinstance(vid, int):
-                    objs[vid] = obj
-        pairs = [(e, objs.get(int(e["vector"]))) for e in entries]
-        return [(e, o) for e, o in pairs if o is not None]
-
     async def _araw_fetch(self, query: str, limit: int) -> list:
-        """Async twin of _raw_fetch: byte-faithful mirror (same URL / body / timeout, same SUCCESS
+        """Async replacement of the deleted sync ``_raw_fetch`` (11-04, S9; this is the only one now): byte-faithful mirror (same URL / body / timeout, same SUCCESS
         gate + pair-up control flow, same None/[] contract), only the shared-http egress swapped for
         its async twin (http.post_json -> await http.apost_json)."""
         entries = _resolve(query)
@@ -174,11 +146,6 @@ class StatCanWdsAdapter(BaseAPIAdapter):
                     objs[vid] = obj
         pairs = [(e, objs.get(int(e["vector"]))) for e in entries]
         return [(e, o) for e, o in pairs if o is not None]
-
-    async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async twin of search -> AsyncSearchCapable. Shares the base async cache round-trip
-        (_aapi_search); egress via _araw_fetch; per-record mapping via the SAME pure-CPU _to_document."""
-        return await self._aapi_search(query, limit, araw_fetch=lambda: self._araw_fetch(query, limit))
 
     def _to_document(self, raw) -> Optional[Document]:
         if not isinstance(raw, tuple) or len(raw) != 2:
@@ -229,7 +196,7 @@ class StatCanWdsAdapter(BaseAPIAdapter):
             url=url,
             title=entry.get("label") or f"StatCan vector v{vid}",
             content="\n".join(lines),
-            date=_parse_date(latest_period),
+            date=to_utc(latest_period),
             signals=mk_signal("latest_value", latest_value, kind="engagement",
                               by="statcan_wds/value", unit=unit or None),
             tags=["canada", "statistics"],
@@ -247,7 +214,7 @@ class StatCanWdsAdapter(BaseAPIAdapter):
             },
         )
 
-    def health_check(self) -> tuple[bool, str]:
+    async def ahealth_check(self) -> tuple[bool, str]:
         """POST-only endpoint: probe vector 1 (population) for the latest period; SUCCESS = alive.
 
         Same 20s budget the fetch paths use, not a tighter one. WDS is genuinely slow (12.2s for a
@@ -256,7 +223,7 @@ class StatCanWdsAdapter(BaseAPIAdapter):
         for does not measure the source, it measures the probe.
         """
         try:
-            raw = http.post_json(DATA_URL, json=[{"vectorId": 1, "latestN": 1}], timeout=20)
+            raw = await http.apost_json(DATA_URL, json=[{"vectorId": 1, "latestN": 1}], timeout=20)
         except Exception as exc:  # noqa: BLE001
             return False, f"{type(exc).__name__}: {str(exc)[:80]}"
         if isinstance(raw, list) and raw and isinstance(raw[0], dict) and raw[0].get("status") == "SUCCESS":

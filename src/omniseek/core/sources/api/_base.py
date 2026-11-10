@@ -9,12 +9,18 @@ into a Document*. Everything else is mechanism repeated ~38 times.
 
 ``BaseAPIAdapter`` factors that mechanism out, mirroring ``scrape/_rss.py``'s
 ``RSSAdapterBase``: a subclass only implements two hooks and declares a handful
-of class attributes; the base supplies ``search`` / ``fetch_url`` /
-``health_check`` and auto-registers the adapter on class creation.
+of class attributes; the base supplies ``asearch`` / ``afetch_url`` /
+``ahealth_check`` and auto-registers the adapter on class creation. The search is
+written once, async; the sync ``search`` for scripts is ``sources._base.SourceBase``'s,
+generated from ``asearch``.
+
+A source whose fetch can only block (a library with no async client, a lock held
+across pages) writes ``def _raw_fetch(self, query, limit) -> list`` instead of
+``_araw_fetch``; the base runs it on a worker thread.
 
 Two hooks (the ONLY required overrides)::
 
-    def _raw_fetch(self, query: str, limit: int) -> list:      # API-specific I/O
+    async def _araw_fetch(self, query: str, limit: int) -> list:  # API-specific I/O
     def _to_document(self, raw) -> Optional[Document]:   # one record → doc
 
 Class attributes (declare on the subclass)::
@@ -32,10 +38,10 @@ Class attributes (declare on the subclass)::
                               server-side (arXiv/DBLP/OpenAlex sort= relevance) so
                               the base preserves the server order verbatim.
     url_host          str   — substring matched against a URL's hostname so
-                              fetch_url can claim it (e.g. "arxiv.org"); None →
-                              fetch_url returns None unless the subclass overrides.
-    health_probe_url  str   — URL hit by the default health_check; None → the
-                              subclass must override health_check.
+                              afetch_url can claim it (e.g. "arxiv.org"); None →
+                              afetch_url returns None unless the subclass overrides.
+    health_probe_url  str   — URL hit by the default ahealth_check; None → the
+                              subclass must override ahealth_check.
     kind/domains/regions/facets — optional routing facets (list_sources decoration).
 
 The base intentionally holds NO business judgment: it never re-sorts by a source
@@ -64,17 +70,18 @@ from urllib.parse import urlparse
 
 import anyio
 
-from omniseek.core import cache, diag, http
+from omniseek.core import cache, diag, http, portal
 from omniseek.core.normalize import Document, keyword_score_filter
+from omniseek.core.sources._base import SourceBase, ablocking
 
 logger = logging.getLogger(__name__)
 
 
-class BaseAPIAdapter:
+class BaseAPIAdapter(SourceBase):
     """Base class for plain HTTP/JSON API source adapters (template method).
 
-    Subclass, set the class attributes, implement ``_raw_fetch`` + ``_to_document``.
-    The base provides ``search`` / ``fetch_url`` / ``health_check`` and registers
+    Subclass, set the class attributes, implement ``_araw_fetch`` + ``_to_document``.
+    The base provides ``asearch`` / ``afetch_url`` / ``ahealth_check`` and registers
     the instance automatically when the subclass is defined.
     """
 
@@ -100,80 +107,53 @@ class BaseAPIAdapter:
     #  reads them via getattr and falls back to facets.json)
 
     # ------------------------------------------------------------------ hooks
-    def _raw_fetch(self, query: str, limit: int) -> list:
+    async def _araw_fetch(self, query: str, limit: int) -> list:
         """Fetch raw records for ``query`` from the source's API.
 
         Return a list of opaque per-record objects (dicts, feedparser entries,
         anything) which the base passes to ``_to_document``. Returning ``[]`` means
         the source answered successfully and had no matching records. Subclasses
-        SHOULD raise, or leave uncaught, egress failures; ``search`` catches those
+        SHOULD raise, or leave uncaught, egress failures; ``asearch`` catches those
         exceptions, records the adapter failure, and degrades to ``[]`` without
         caching it. Do NOT raise for an ordinary empty result. The base never
         inspects the items, so their shape is entirely the subclass's business.
         """
-        raise NotImplementedError("subclass must implement _raw_fetch")
+        raise NotImplementedError("subclass must implement _araw_fetch (or a blocking _raw_fetch)")
 
     def _to_document(self, raw) -> Optional[Document]:
         """Map ONE raw record to a Document (or None to drop it).
 
-        Called once per item returned by ``_raw_fetch``. Returning None silently
+        Called once per item returned by the fetch hook. Returning None silently
         skips a malformed record (the base logs it at debug). Any exception raised
         here is caught + skipped per-record, so one bad record can't lose the rest.
         """
         raise NotImplementedError("subclass must implement _to_document")
 
     # ------------------------------------------------------------------ search
-    def search(self, query: str, limit: int = 10) -> list[Document]:
-        """Cache-checked search: make_key → get_docs → early return → _raw_fetch →
-        map → (rank) → set_docs.
+    async def asearch(self, query: str, limit: int = 10) -> list[Document]:
+        """Cache-checked search: make_key -> cache -> early return -> fetch -> map -> (rank) -> cache.
 
-        Cache identity is ``(name, search_label, query, limit)`` — set
-        ``search_label`` to match an existing source's key on migration. On a hit
-        the cached, already-mapped Documents are returned directly (zero
-        re-parse, zero re-score). Empty results are NOT cached (a transient
-        failure must not pin an empty answer for the whole TTL).
-        """
-        key = cache.make_key(self.name, self.search_label, query, limit)
-        cached = cache.get_docs(key)
-        if cached is not None:
-            return cached
+        Cache identity is ``(name, search_label, query, limit)`` -- set ``search_label`` to match an
+        existing source's key on migration. On a hit the cached, already-mapped Documents are
+        returned directly (zero re-parse, zero re-score). Empty results are NOT cached (a transient
+        failure must not pin an empty answer for the whole TTL)."""
+        return await self._aapi_search(query, limit, araw_fetch=lambda: self._afetch(query, limit))
 
-        try:
-            raw_items = self._raw_fetch(query, limit) or []
-        except Exception as exc:  # noqa: BLE001, the base owns failure degradation
-            diag.note(f"{self.name}.fetch_failed", exc=exc)
-            raw_items = []
-        docs: list[Document] = []
-        for raw in raw_items[:limit]:
-            try:
-                doc = self._to_document(raw)
-            except Exception as exc:  # noqa: BLE001 — one bad record can't sink the rest
-                logger.debug("%s: skipping malformed record: %s", self.name, exc)
-                continue
-            if doc is not None:
-                docs.append(doc)
-
-        # Lexical funnel guard (shared BM25 scorer, so this can never drift from
-        # search-ranking / filtering elsewhere). A term-less query returns docs in
-        # source order. Sources the API already ranks server-side opt out
-        # (rank_locally=False) so the base preserves the server's order verbatim.
-        if self.rank_locally:
-            docs = keyword_score_filter(docs, query)
-
-        if docs:
-            cache.set_docs(key, docs, ttl=self.cache_ttl)
-        return docs
+    async def _afetch(self, query: str, limit: int) -> list:
+        """The fetch hook: a blocking ``_raw_fetch`` on a worker thread when the source defines one and
+        does not override ``_araw_fetch`` (an overridden ``_araw_fetch`` always wins), else
+        ``_araw_fetch`` on the loop."""
+        if hasattr(self, "_raw_fetch") and type(self)._araw_fetch is BaseAPIAdapter._araw_fetch:
+            return await ablocking(self._raw_fetch, query, limit)
+        return await self._araw_fetch(query, limit)
 
     async def _aapi_search(self, query, limit, araw_fetch):
-        """Async twin of ``search``'s mechanism (cache round-trip + per-record map + opt-in rank) for a
-        subclass whose egress has gone NATIVE async. ``araw_fetch()`` -> the raw records list (async,
-        off-loop NETWORK). This is a ``_``-prefixed HELPER, NOT ``asearch``, so the base is NOT flagged
-        AsyncSearchCapable; only a subclass that DEFINES ``asearch`` -> calls this is. Off-loop: cache
-        get/set (disk IO). On loop: per-record ``_to_document`` (pure CPU) + ``keyword_score_filter``
-        (BM25). BEHAVIOR-IDENTICAL to ``search`` given identical egress: same cache key (``search_label``),
-        same per-record skip-on-error, same ``rank_locally``, same cache-only-if-docs policy."""
+        """The mechanism (cache round-trip + per-record map + opt-in rank). ``araw_fetch()`` -> the raw
+        records list (async, off-loop NETWORK). Off-loop: cache get/set (disk IO). On loop: per-record
+        ``_to_document`` (pure CPU) + ``keyword_score_filter`` (BM25). Same cache key
+        (``search_label``), per-record skip-on-error, ``rank_locally``, cache-only-if-docs policy."""
         key = cache.make_key(self.name, self.search_label, query, limit)
-        cached = await anyio.to_thread.run_sync(cache.get_docs, key)   # disk read OFF loop
+        cached = await cache.aget_docs(key)   # disk read OFF loop; one fetch per key at a time
         if cached is not None:
             return cached
         try:
@@ -194,11 +174,11 @@ class BaseAPIAdapter:
             docs = keyword_score_filter(docs, query)
         if docs:
             await anyio.to_thread.run_sync(   # disk write OFF loop
-                functools.partial(cache.set_docs, key, docs, ttl=self.cache_ttl))
+                functools.partial(cache.set_docs, key, docs, ttl=self.cache_ttl), limiter=portal.IO_LANE)
         return docs
 
-    # --------------------------------------------------------------- fetch_url
-    def fetch_url(self, url: str) -> Optional[Document]:
+    # --------------------------------------------------------------- afetch_url
+    async def afetch_url(self, url: str) -> Optional[Document]:
         """Default claim-by-host: if ``url_host`` is a substring of the URL's
         hostname, scan this source's already-cached search docs for an exact URL
         match. Returns None when the URL isn't ours or isn't in cache.
@@ -207,7 +187,9 @@ class BaseAPIAdapter:
         of its own (a by-id endpoint differs per API). A source that can fetch a
         single record by URL/id (arXiv ``id_list=``, OpenAlex ``/works/{id}``)
         SHOULD override this with that direct lookup; the base just guarantees a
-        sane no-op for sources that don't.
+        sane no-op for sources that don't. The override is ``async def afetch_url``,
+        the source's only URL reader (there is no sync ``fetch_url``: omniseek_read awaits
+        this one; see ``fetcher.SourceAdapter.afetch_url``).
         """
         if not self.url_host:
             return None
@@ -220,12 +202,12 @@ class BaseAPIAdapter:
         return None
 
     # ------------------------------------------------------------- health_check
-    def health_check(self) -> tuple[Optional[bool], str]:
+    async def ahealth_check(self) -> tuple[Optional[bool], str]:
         """Default probe: GET ``health_probe_url`` through the shared http client
         and report on the status. ``http.get`` returns None on any failure (incl.
         oversize / timeout), which maps to an unhealthy result; one that came only from
         an HTTP 429 or a busy declared gate is re-read as None (not verified) by the
-        health funnel (``fetcher._safe_health``). Subclasses with a smarter probe override
+        health funnel (``fetcher._asafe_health``). Subclasses with a smarter probe override
         this.
         """
         if not self.health_probe_url:
@@ -234,7 +216,7 @@ class BaseAPIAdapter:
             # asked. None is "not verified" (the watchdog's `unverified`), which stays out of the
             # consecutive-fail counter instead of quarantining the source over it.
             return None, "our adapter configuration is missing health_probe_url"
-        resp = http.get(self.health_probe_url, timeout=10)
+        resp = await http.aget(self.health_probe_url, timeout=10)
         if resp is None:
             return False, "request failed (timeout / network / oversize)"
         ok = resp.status_code == 200

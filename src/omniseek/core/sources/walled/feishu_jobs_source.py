@@ -53,7 +53,10 @@ import threading
 
 import httpx
 
-from omniseek.core import _probe, cache, diag
+import anyio
+
+from omniseek.core import _probe, cache, diag, fetcher, upstreams
+from omniseek.core.sources._base import SourceBase
 from omniseek.core.normalize import Document, jsonsafe, keyword_score_filter
 
 EMPTY_TTL = 300  # a transient all-portals-fail must not pin [] for the full 1800s (masks the outage)
@@ -243,7 +246,7 @@ def _job_to_document(job: dict, label: str, subdomain: str,
     )
 
 
-class FeishuJobsAdapter:
+class FeishuJobsAdapter(SourceBase):
     name = "feishu_jobs"
     needs_credentials = False
     explicit_only = "walled 招聘源(飞书);命名钻取 (omniseek_search 单源 raw) 才调,不进广搜"
@@ -254,7 +257,7 @@ class FeishuJobsAdapter:
 
     def search(self, query: str, limit: int = 10) -> list[Document]:
         key = cache.make_key("feishu_jobs", "search", query, limit)
-        cached = cache.get(key)
+        cached = cache.get_once(key)
         if cached is not None:
             return [Document.model_validate(d) for d in cached]
 
@@ -297,7 +300,13 @@ class FeishuJobsAdapter:
                   ttl=1800 if all_docs else EMPTY_TTL)
         return all_docs
 
-    def fetch_url(self, url: str) -> Optional[Document]:
+    async def afetch_url(self, url: str) -> Optional[Document]:
+        if not (urlparse(url).hostname or "").lower().endswith(".jobs.feishu.cn"):
+            return None
+        # the portal listing is read with the sync httpx client this source shares with its search: a worker thread
+        return await anyio.to_thread.run_sync(self._read_url, url, limiter=fetcher._LEGACY_LIMITER)
+
+    def _read_url(self, url: str) -> Optional[Document]:
         host = (urlparse(url).hostname or "").lower()
         if not host.endswith(".jobs.feishu.cn"):
             return None
@@ -341,7 +350,7 @@ class FeishuJobsAdapter:
             )
             if resp.status_code == 429:   # it answered, but not whether the listing serves
                 return None, _probe.rate_limited(f"{subdomain}.jobs.feishu.cn",
-                                                 _probe.retry_after_s(resp.headers))
+                                                 upstreams.parse_retry_after(resp.headers))
             if resp.status_code != 200:
                 return False, f"HTTP {resp.status_code}"
             data = (resp.json() or {}).get("data") or {}

@@ -8,7 +8,7 @@ which web search cannot assemble. Fills the "cross-country jobs + salary" gap (M
 is SG-only, levels.fyi is self-reported tech comp).
 
 Auth: a FREE registered app_id + app_key (https://developer.adzuna.com/signup, no cost;
-free tier ~250 calls/day). They live ONLY on the host at ~/.omniseek/credentials/adzuna.json
+free tier ~250 calls/day). They live ONLY on the host at <credentials>/adzuna.json
 -> {"app_id": "...", "app_key": "..."} and ride as URL params (no auth header), so this uses
 the shared http helper. needs_credentials=True; no key -> _raw_fetch returns None -> [].
 
@@ -26,8 +26,9 @@ from datetime import datetime
 from typing import Any, Optional
 
 from omniseek.core import auth, http
-from omniseek.core.normalize import Document, jsonsafe, mk_signal
+from omniseek.core.normalize import Document, jsonsafe, mk_signal, to_utc
 from omniseek.core.sources.scrape._base import BaseScrapeAdapter
+from omniseek import where
 
 API_URL = "https://api.adzuna.com/v1/api/jobs/{country}/search/1"
 _COUNTRIES = {"gb", "us", "ca", "au", "sg", "de", "fr", "in", "it", "nl",
@@ -35,7 +36,7 @@ _COUNTRIES = {"gb", "us", "ca", "au", "sg", "de", "fr", "in", "it", "nl",
 _DEFAULT_COUNTRY = "ca"  # the deployer's default job market (configurable)
 
 # Drop a credential template on first import (free key from developer.adzuna.com/signup).
-auth.write_template(
+auth.register_template(
     "adzuna",
     {"_comment": "FREE app_id + app_key from https://developer.adzuna.com/signup (no cost, "
                  "~250 calls/day). BOTH are required; sent as URL params.",
@@ -71,20 +72,8 @@ class AdzunaAdapter(BaseScrapeAdapter):
             return parts[0].lower(), (parts[1] if len(parts) > 1 else "")
         return _DEFAULT_COUNTRY, (query or "").strip()
 
-    def _raw_fetch(self, query: str, limit: int) -> Optional[Any]:
-        app_id, app_key = self._creds()
-        if not app_id or not app_key:
-            return None  # no key -> [] (the contract); the template names where to put it
-        country, what = self._split_country(query)
-        return http.get_json(
-            API_URL.format(country=country),
-            params={"app_id": app_id, "app_key": app_key, "what": what,
-                    "results_per_page": max(1, min(int(limit), 50))},
-            timeout=20,
-        )
-
     async def _araw_fetch(self, query: str, limit: int) -> Optional[Any]:
-        """Async twin of _raw_fetch: byte-faithful mirror (same URL / params / timeout / None
+        """Async replacement of the deleted sync ``_raw_fetch`` (11-04, S9; this is the only one now): byte-faithful mirror (same URL / params / timeout / None
         contract); only the shared-http egress swaps get_json -> await aget_json."""
         app_id, app_key = self._creds()
         if not app_id or not app_key:
@@ -96,14 +85,6 @@ class AdzunaAdapter(BaseScrapeAdapter):
                     "results_per_page": max(1, min(int(limit), 50))},
             timeout=20,
         )
-
-    async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async twin of search -> AsyncSearchCapable. Shares the base async cache
-        round-trip; egress via _araw_fetch; mapping via the SAME pure-CPU _to_documents."""
-        return await self._asearch_via(
-            query, limit,
-            afetch=lambda: self._araw_fetch(query, limit),
-            abuild=lambda raw: self._to_documents(raw, query, limit))
 
     def _to_documents(self, raw: Any, query: str, limit: int) -> list[Document]:
         if not isinstance(raw, dict):
@@ -163,24 +144,18 @@ class AdzunaAdapter(BaseScrapeAdapter):
     @staticmethod
     def _parse_date(raw: Any) -> Optional[datetime]:
         """Adzuna 'created' is ISO-8601 (e.g. 2026-06-01T12:00:00Z). None on anything else."""
-        if not isinstance(raw, str) or not raw.strip():
+        if not isinstance(raw, str):
             return None
-        try:
-            return datetime.fromisoformat(raw.strip().replace("Z", "+00:00"))
-        except ValueError:
-            try:
-                return datetime.strptime(raw.strip()[:19], "%Y-%m-%dT%H:%M:%S")
-            except ValueError:
-                return None
+        return to_utc(raw) or to_utc(raw.strip()[:19])
 
-    def health_check(self) -> tuple[bool, str]:
+    async def ahealth_check(self) -> tuple[bool, str]:
         """Liveness: a tiny keyed query. Without a key, report unconfigured (the endpoint
         itself is fine, the host just has no credential yet)."""
         app_id, app_key = self._creds()
         if not app_id or not app_key:
-            return False, "no app_id/app_key (set ~/.omniseek/credentials/adzuna.json)"
+            return False, f"no app_id/app_key (set {where.show(where.credentials())}/adzuna.json)"
         try:
-            raw = http.get_json(API_URL.format(country=_DEFAULT_COUNTRY),
+            raw = await http.aget_json(API_URL.format(country=_DEFAULT_COUNTRY),
                                 params={"app_id": app_id, "app_key": app_key,
                                         "what": "engineer", "results_per_page": 1}, timeout=15)
         except Exception as exc:  # noqa: BLE001

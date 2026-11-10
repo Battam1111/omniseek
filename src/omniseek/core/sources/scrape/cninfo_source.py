@@ -23,6 +23,7 @@ import re
 from datetime import datetime, timezone
 from typing import Optional
 
+from omniseek.core import filters as _flt
 from omniseek.core.normalize import Document
 from omniseek.core.sources.scrape._base import BaseScrapeAdapter
 
@@ -91,12 +92,39 @@ class CninfoAdapter(BaseScrapeAdapter):
     cache_ttl = 3600
     rank = False  # CNINFO returns its own relevance/time order
 
+    # Source spec (omniseek.core.filters). date -> the query form's seDate field ("A~B").
+    filters = {
+        "date": {"type": "date", "ops": ["eq", "gte", "lte", "range"], "doc_key": "date",
+                 "desc": "announcement date (sent as seDate A~B)"},
+    }
+    # omniseek_search(as_of=...) pushes "date <= as_of" upstream through this field: the announcement date.
+    as_of_field = "date"
+    coverage = {"since": None, "until": None, "gaps": [],
+                "note": "SSE / SZSE announcements in the CNINFO full-text index; oldest date not recorded here"}
+    # The dated sample needs a word announced every week: "数据安全" has six hits in all, the newest
+    # from 2023, so its 2025 window was empty by nature (a live run of the samples, 2026-10-20).
+    samples = [{"query": "年报"}, {"query": "回购", "filters": {"date": {"gte": "2025-01-01"}}}]
+
+    def translate_filters(self, query: str, clauses: list):
+        """date -> {seDate: "YYYY-MM-DD~YYYY-MM-DD"}. An open lower side is 1990-01-01, before the first
+        A-share exchange opened (SSE, December 1990), so it cuts nothing; an open upper side is today."""
+        from datetime import date as _date
+        from omniseek.core.filters import Unsupported
+        params: dict = {}
+        for c in clauses:
+            if c.field != "date":
+                raise Unsupported(c.field)
+            params["seDate"] = (f"{(c.lo or _date(1990, 1, 1)).isoformat()}~"
+                                f"{(c.hi or _date.today()).isoformat()}")
+        return query or "", params
+
     def _raw_fetch(self, query: str, limit: int):
         if not _DEPS_OK:
             return None
         data = {"pageNum": "1", "pageSize": str(min(limit, 30)), "column": "szse",
                 "tabName": "fulltext", "plate": "", "stock": "", "searchkey": query,
-                "secid": "", "category": "", "trade": "", "seDate": "",
+                "secid": "", "category": "", "trade": "",
+                "seDate": _flt.upstream().get("seDate", ""),
                 "sortName": "", "sortType": "", "isHLtitle": "true"}
         headers = {"user-agent": _UA, "x-requested-with": "XMLHttpRequest",
                    "content-type": "application/x-www-form-urlencoded; charset=UTF-8",
@@ -115,10 +143,10 @@ class CninfoAdapter(BaseScrapeAdapter):
     def _to_documents(self, raw, query, limit) -> list[Document]:
         return [d for a in raw[:limit] if (d := _ann_to_doc(a))]
 
-    def health_check(self) -> tuple[bool, str]:
+    async def ahealth_check(self) -> tuple[bool, str]:
         if not _DEPS_OK:
             return False, "curl_cffi not installed"
-        raw, why = self._health_fetch("年报", fallback="fetch failed / blocked")
+        raw, why = await self._ahealth_fetch("年报", fallback="fetch failed / blocked")
         if raw is None:
             return False, why
         return True, f"OK ({len(raw)} announcements)"

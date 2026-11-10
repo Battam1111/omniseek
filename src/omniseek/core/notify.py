@@ -1,10 +1,9 @@
 """The ONE fail-open notification primitive OmniSeek's own daemons share.
 
 Extracted from sensor.py's push helper (P6) so the sensor tap and the generalized job registry push
-through ONE implementation instead of duplicating the credential read. The external sentinel keeps
-its OWN copy in scripts/_sentinel_common (it must work when the organ's code is broken, so it may
-never import omniseek.*); this module is the IN-PROCESS half, used only by code already running
-inside the writer process.
+through ONE implementation instead of duplicating the credential read. This module is the
+IN-PROCESS push, used only by code already running inside the writer process (the old external
+watchdog's own copy retired with it on 10-20).
 
 2026-08-12: Bark is RETIRED and deleted from the fleet. It had been unreachable from the service host
 (three probes, the connection never establishing, 20s timeouts) while every infra alarm pushed to
@@ -25,16 +24,15 @@ import json
 import logging
 import os
 import sys
-import time
 from pathlib import Path
+from omniseek import where
 
 log = logging.getLogger(__name__)
 
-_WECOM_CREDS_PATH = Path.home() / ".omniseek" / "credentials" / "wecom.json"
-_ALERT_DELIVERY_PATH = Path.home() / ".omniseek" / "state" / "alert-delivery.json"
+_WECOM_CREDS_PATH = where.credentials() / "wecom.json"
 # The system push outlet (one ledger for every push to the operator); OMNISEEK_NOTIFY_OUTLET overrides.
 # A build with no outlet sets this to None: with the variable unset too, pushes go out directly.
-_OUTLET_DEFAULT = None  # the public build ships no default outlet
+_OUTLET_DEFAULT = where.notify_outlet()
 _OUTLET_CACHE: dict = {}
 
 
@@ -46,7 +44,7 @@ def _outlet_path() -> Path | None:
 
 def _load_outlet():
     """Load the system push outlet (an external push outlet) BY FILE PATH, never via sys.path: the outlet
-    belongs to neither OmniSeek nor the sentinel. Returns None when no outlet is configured (nothing
+    belongs to the system, not to OmniSeek. Returns None when no outlet is configured (nothing
     is loaded). A successful load is cached per path; a failed one raises, so the caller falls back
     to the direct send and the next push tries again."""
     configured = _outlet_path()
@@ -118,12 +116,12 @@ def _direct_push(url: str, content: str) -> bool:
     """The pre-outlet send, kept as the fallback for when the outlet cannot be reached."""
     try:
         from omniseek.core import http, upstreams
-        # The declared WeCom robot gate: at most 20 messages a minute per robot (qyapi.weixin.qq.com,
-        # developer doc 91770). A burst of alerts past that queues up to the gate's wait, then is
-        # dropped here (returns False) instead of being rejected by WeCom.
-        with upstreams.egress(url, request_s=5.0):
-            r = http.direct("POST", url, json={"msgtype": "markdown", "markdown": {"content": content}},
-                            timeout=5.0)
+        # The declared WeCom robot gate (taken by http.direct on every hop): at most 20 messages a
+        # minute per robot (qyapi.weixin.qq.com, developer doc 91770). A burst of alerts past that
+        # queues up to the gate's wait, then is dropped here (returns False) instead of being rejected
+        # by WeCom. http.direct runs on OmniSeek's event loop: never call this on the loop's own thread.
+        r = http.direct("POST", url, json={"msgtype": "markdown", "markdown": {"content": content}},
+                        timeout=5.0)
         upstreams.observe_response(url, r)
         return True
     except Exception as exc:  # noqa: BLE001 -- best-effort; a push failure never breaks the run
@@ -133,7 +131,7 @@ def _direct_push(url: str, content: str) -> bool:
 
 def wecom_push(title: str, body: str, *, source: str | None = None, questions=None) -> bool:
     """POST one 企业微信 (WeCom) group-robot MARKDOWN message via the webhook in
-    ~/.omniseek/credentials/wecom.json ({webhook_url}). the operator's channel (desktop + phone).
+    <credentials>/wecom.json ({webhook_url}). the operator's channel (desktop + phone).
     Returns True only if the message was actually sent. WeCom markdown content hard-caps ~4096
     BYTES, so the content is truncated byte-safely (CJK is 3 bytes/char).
 
@@ -215,10 +213,9 @@ def alert(title: str, body: str, *, source: str | None = None, questions=None, *
     ``_ignored`` absorbs the retired Bark hints (group / level) so a caller that still passes them
     keeps working while the fleet converges; they mean nothing to WeCom.
 
-    A lane that delivered NOTHING leaves a WARNING plus a durable marker with a running streak, so
-    the daily off-machine audit can surface a disconnected siren. That marker is the whole reason
-    this wrapper exists rather than callers pushing directly: an alarm channel is itself a guard,
-    and an unwatched guard is the failure this codebase spent 2026-08-11 learning about.
+    A lane that delivered NOTHING leaves a WARNING in the log. The durable delivery marker it also used
+    to write (a running undelivered streak) went with CHECK-PRUNE-5 on 2026-10-20: the guards that read
+    it retired on 2026-10-19 and nothing read it after that.
 
     ``source`` and ``questions`` pass through to wecom_push (see there); they are forwarded only
     when given, so the plain two-argument call is unchanged."""
@@ -230,19 +227,6 @@ def alert(title: str, body: str, *, source: str | None = None, questions=None, *
     if _clean_questions(questions):
         extra["questions"] = questions
     delivered = ["wecom"] if wecom_push(title, body, **extra) else []
-    try:
-        prev = {}
-        if _ALERT_DELIVERY_PATH.exists():
-            prev = json.loads(_ALERT_DELIVERY_PATH.read_text(encoding="utf-8")) or {}
-        _ALERT_DELIVERY_PATH.parent.mkdir(parents=True, exist_ok=True)
-        _ALERT_DELIVERY_PATH.write_text(json.dumps({
-            "at": time.strftime("%Y-%m-%dT%H:%M:%S"),
-            "title": title[:80],
-            "delivered": delivered,
-            "undelivered_streak": 0 if delivered else int(prev.get("undelivered_streak", 0)) + 1,
-        }, ensure_ascii=False), encoding="utf-8")
-    except Exception as exc:  # noqa: BLE001 -- bookkeeping must not break the alarm
-        log.debug("alert delivery bookkeeping failed (%s)", exc)
     if not delivered:
         log.warning("ALERT NOT DELIVERED on any channel: %s | %s", title, body[:120])
     return delivered

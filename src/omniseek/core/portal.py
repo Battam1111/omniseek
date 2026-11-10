@@ -1,139 +1,166 @@
-"""Sync -> async PORTAL: reach the bound event loop from a SYNC (worker) thread.
+"""The ONE bridge from a thread into OmniSeek's event loop (charter ASYNC-CORE-DESIGN.md D9).
 
-S3a of the async migration (charter ASYNC-CORE-DESIGN.md D9). This is a PURE-ADDITION leaf:
-it converts NO operation. Every eye tool still runs its body SYNC on a worker thread via
-``server._threaded`` -> ``anyio.to_thread.run_sync``. The portal only proves + provides the
-BRIDGE a sync caller will use to run a coroutine on the FastMCP/uvicorn loop once operations
-actually become async (S3b onward). Nothing here changes any tool's behavior today.
+Async migration step two. The fetch core is async; the callers that still run on a THREAD (the
+in-service background loops: cache warmer, recall ingest, the job scheduler's sensor tick; a sync
+tool body on an AnyIO worker thread; a source's one sync entry) reach it through
+``run()`` here, and nowhere else. It is anyio's own ``from_thread.run`` with the event-loop token the
+service captured ONCE at lifespan startup (``bind()``, called from serve_http's lifespan), so:
 
-Stdlib only (asyncio / threading; the contextvar OBJECTS are read from the sibling cache/diag
-leaves at call time). One authoritative loop is captured at ``bind()`` (called from the loop),
-and ``submit()`` runs a coroutine on it from a NON-loop thread via
-``asyncio.run_coroutine_threadsafe``, blocking for the result. Two hazards it handles:
+  - the coroutine runs on the service's one loop (no second loop per call, no ``asyncio.run`` in a
+    background thread);
+  - the calling thread's WHOLE contextvars.Context is carried into the coroutine (anyio runs the
+    hand-off inside ``copy_context()``), so every fetch contextvar (fresh / cache_only / refresh
+    margin / diag trace / deadline / initiator / flight scope / filter upstream / probe ledger ...)
+    arrives as the caller set it, with no hand-kept list that a new variable could be missing from;
+  - an AnyIO worker thread (a tool body under ``anyio.to_thread.run_sync``) needs no token at all
+    (anyio knows its loop), so the stdio server, which has no lifespan of ours, works unchanged.
 
-  - DEADLOCK GUARD: ``submit()`` from the loop thread itself would block the loop waiting on the
-    loop -> deadlock. bind() captures the loop thread's ident; submit() compares
-    ``threading.get_ident()`` to it and raises RuntimeError instead of hanging.
-  - CONTEXTVAR PROPAGATION (D9): ``run_coroutine_threadsafe`` runs the coro in the LOOP's own
-    context, NOT the caller's, so the caller's fetch contextvars (cache fresh / cache_only /
-    refresh_margin + diag trace) would be lost. submit() captures them on the caller's thread and
-    re-applies them INSIDE a wrapper coroutine, so an async fetch honors the caller's
-    cache_only / fresh exactly like the sync path does; the wrapper resets them after, so nothing
-    leaks into the loop's context for the next coroutine.
+Failure is loud, never silent: a plain thread with no bound token raises ``anyio.NoEventLoopError``;
+a loop that has finished raises ``anyio.RunFinishedError``; calling from a thread that is itself
+running an event loop raises RuntimeError (blocking there would deadlock that loop).
+
+A standalone process (a CLI such as ``python -m omniseek.core.prewarm``) has no service loop: it uses
+``run_standalone()``, which starts that process's one loop, binds the bridge to it for the duration,
+and runs the sync body on a worker thread.
 """
 
 from __future__ import annotations
 
 import asyncio
-import logging
+import functools
+import os
+import sys
 import threading
-from typing import Optional
+from typing import Any, Callable, Optional
 
-log = logging.getLogger(__name__)
+import anyio
+import anyio.from_thread
+import anyio.lowlevel
+import anyio.to_process
+import anyio.to_thread
 
-# The authoritative loop, set once from the loop thread at bind(). None until bound.
-_loop: Optional[asyncio.AbstractEventLoop] = None
-# The ident of the thread bind() ran on. Because bind() is called FROM the loop (an async
-# context), this IS the loop thread's ident, which the deadlock guard compares against.
-_loop_thread_ident: Optional[int] = None
+# The service loop's token, captured once by bind() at lifespan startup. None until then (and in a
+# process that never binds: the stdio server, a test): an AnyIO worker thread then uses its own loop.
+_token: Optional[anyio.lowlevel.EventLoopToken] = None
+
+# --- The offload lanes (the reverse bridge: loop -> elsewhere; ASYNC-CORE-DESIGN.md D14) -----------
+# PROCESS lane = run_cpu() below: CPU work whose input is already in memory (parse, score, convert)
+# runs in a worker PROCESS, never on a thread of this one. A thread doing pure Python here shares the
+# one GIL with the loop thread, and the loop, to get the GIL back, may wait a whole switch interval
+# (5 ms) at every hand-off (the convoy, bpo-7946): a handful of parse threads kept the loop answering
+# hundreds of ms late, measured live 11-03 and in a replay. A worker
+# process has its own GIL. What crosses is pickled (the function by its module path, the arguments,
+# the result), so the function must be module-level and its arguments plain data; pickling runs on the
+# loop, so send what the work reads, not whole objects. A worker that dies fails that one call loudly
+# (anyio.BrokenWorkerProcess, recorded like any source error); nothing falls back to a thread.
+# IO lane = IO_LANE: everything that WAITS (network, disk, DNS, subprocess, CDP, a lock, the loop via
+# run() above) and every tool body; it passes limiter=IO_LANE explicitly. A waiting thread holds the
+# GIL only between waits, so the old ceiling of 256 stays.
+# Mixed (a legacy sync source's whole .search: waits on the network AND parses) stays on
+# fetcher._LEGACY_LIMITER.
+# PROC_LANE_TOKENS is PROVISIONAL (a replay picked it from 2 and 4); the
+# live probe on the host machine settles it. ASYNC-CORE-DESIGN.md D14 has the readings.
+PROC_LANE_TOKENS = 2
+PROC_LANE = anyio.CapacityLimiter(PROC_LANE_TOKENS)
+# The process lane's worker pids, each reported by the worker itself with every result (_tagged), so the
+# memory guard counts the workers' footprint with OmniSeek's own (eye.memguard.lane_pids, which drops a
+# pid that ended). Added to on the loop, read on the guard's thread.
+LANE_PIDS: set = set()
+IO_LANE_TOKENS = 256
+IO_LANE = anyio.CapacityLimiter(IO_LANE_TOKENS)
 
 
-class PortalClosed(RuntimeError):
-    """The bound loop has closed (the session ended); submit() refused without scheduling."""
+async def run_cpu(fn: Callable[..., Any], *args: Any) -> Any:
+    """From the LOOP: ``fn(*args)`` in a worker process of the process lane; returns its result or
+    re-raises its exception. ``fn`` module-level, ``args`` picklable (functools.partial of such a
+    function for keywords). Workers are anyio's: started on demand, reused, ended after 5 idle minutes
+    and when the loop ends; a worker imports only the modules of the functions it is sent.
+
+    Side effect, once per process: the main module's ``__file__`` becomes None. An anyio worker re-runs
+    the parent's main module as ``__mp_main__`` when that module has a file (so a pickled function of
+    ``__main__`` resolves, as with multiprocessing). OmniSeek never sends one, and the re-run is all
+    cost or harm: the HTTP service's main (serve_http) loads the whole eye and reads the bearer token,
+    about 0.5 GB per worker against about 0.07 GB for what the parsers import; a script without a
+    ``__name__ == "__main__"`` guard (a test script, say) would run again in every worker, and start
+    workers of its own from there. Without a file the worker skips that step."""
+    main = sys.modules.get("__main__")
+    if main is not None and getattr(main, "__file__", None):
+        main.__file__ = None
+    pid, out = await anyio.to_process.run_sync(_tagged, fn, *args, limiter=PROC_LANE)
+    LANE_PIDS.add(pid)
+    return out
 
 
-# A trivial value the self-test round-trips to confirm the bridge is live.
-_SELFTEST_SENTINEL = "omniseek-portal-selftest-ok"
+def _tagged(fn: Callable[..., Any], *args: Any) -> tuple:
+    """Runs IN the worker: ``fn(*args)`` and this worker's pid (run_cpu records it, see LANE_PIDS)."""
+    return os.getpid(), fn(*args)
 
 
-def bind(loop: asyncio.AbstractEventLoop) -> None:
-    """Register the authoritative event loop. MUST be called FROM the loop (an async context),
-    so ``threading.get_ident()`` here is the loop thread's ident -> captured for the deadlock
-    guard. Idempotent: production binds the one FastMCP loop exactly once; re-binding just
-    overwrites (a test spins up throwaway loops and rebinds)."""
-    global _loop, _loop_thread_ident
-    _loop = loop
-    _loop_thread_ident = threading.get_ident()
+def bind() -> None:
+    """Capture the RUNNING loop as the bridge's target. MUST be called from the loop (the lifespan
+    startup does it); raises anyio.NoEventLoopError anywhere else."""
+    global _token
+    _token = anyio.lowlevel.current_token()
 
 
-def is_bound() -> bool:
-    """True once a loop has been bound."""
-    return _loop is not None
+def run(fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
+    """From a THREAD: run ``await fn(*args, **kwargs)`` on the bound loop and BLOCK for its result
+    (re-raises its exception). See the module docstring for the guarantees and the failures."""
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        pass
+    else:
+        raise RuntimeError("portal.run called from a thread running an event loop would deadlock it; "
+                           "await the coroutine there instead")
+    return anyio.from_thread.run(functools.partial(fn, *args, **kwargs), token=_token)
 
 
-def submit(coro, *, timeout: Optional[float] = None):
-    """From a SYNC (non-loop) thread: run ``coro`` on the bound loop and BLOCK for its result.
+def call(fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
+    """From SYNC code that may run anywhere (a script, a thread of the service, a test): ``await
+    fn(*args, **kwargs)`` and block for its result. The service's loop when this process has one (the
+    bound token, or the loop of an AnyIO worker thread), exactly as ``run``; in a process that never
+    bound a loop, this process's OWN loop (started once, on a daemon thread, kept for the life of the
+    process), so the pooled async clients stay on one loop however many calls come. This is what the
+    sources' one sync entry (``sources._base.SourceBase.search``) goes through."""
+    try:
+        return run(fn, *args, **kwargs)
+    except anyio.NoEventLoopError:
+        pass
+    return anyio.from_thread.run(functools.partial(fn, *args, **kwargs), token=_own_loop())
 
-    Raises RuntimeError if no loop is bound, or if called from the loop thread itself (the
-    deadlock guard: doing so would block the loop waiting on the loop). Propagates the caller's
-    fetch contextvars into the coroutine (D9). Returns the coro's result, re-raises the coro's
-    exception, or raises TimeoutError if ``timeout`` elapses first."""
-    loop = _loop
-    if loop is None:
-        coro.close()  # refuse cleanly; never leave an un-awaited coroutine dangling
-        raise RuntimeError("portal is not bound to an event loop")
-    if loop.is_closed():
-        # The bound loop is gone (the stdio session ended while a worker thread was still busy, e.g.
-        # the background shadow probe). Refuse the same clean way as "not bound".
-        coro.close()
-        raise PortalClosed("portal event loop is closed")
-    if threading.get_ident() == _loop_thread_ident:
-        coro.close()
-        raise RuntimeError(
-            "portal.submit called from the loop thread would deadlock; "
-            "call it from a worker (sync) thread")
 
-    # Capture the CALLER's fetch contextvars HERE, on the caller's thread. run_coroutine_threadsafe
-    # runs coro in the LOOP's context, not ours, so without this an async fetch would silently
-    # ignore the caller's cache_only / fresh. Read the exact ContextVar objects from cache/diag.
-    from omniseek.core import cache as _cache
-    from omniseek.core import diag as _diag
-    _fresh = _cache._fresh_var.get()
-    _cache_only = _cache._cache_only_var.get()
-    _margin = _cache._refresh_margin_var.get()
-    _trace = _diag._trace_var.get()
+_own_token: Optional[anyio.lowlevel.EventLoopToken] = None
+_own_lock = threading.Lock()
 
-    async def _wrapped():
-        # Re-apply the captured values in the loop's context, run the real coro, then RESET so the
-        # loop's context is clean for the next coroutine (no cross-request leak).
-        t_fresh = _cache._fresh_var.set(_fresh)
-        t_only = _cache._cache_only_var.set(_cache_only)
-        t_margin = _cache._refresh_margin_var.set(_margin)
-        t_trace = _diag._trace_var.set(_trace)
+
+def _own_loop() -> anyio.lowlevel.EventLoopToken:
+    """The token of this process's own loop (``call`` in a process with no bound loop), started once."""
+    with _own_lock:
+        if _own_token is None:
+            ready = threading.Event()
+
+            async def _serve() -> None:
+                global _own_token
+                _own_token = anyio.lowlevel.current_token()
+                ready.set()
+                await anyio.sleep_forever()
+
+            threading.Thread(target=anyio.run, args=(_serve,), name="eye-own-loop", daemon=True).start()
+            ready.wait()
+        return _own_token
+
+
+def run_standalone(fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
+    """For a process with NO service loop (a CLI, a script, an offline test): start this process's one
+    loop, bind the bridge to it while ``fn(*args, **kwargs)`` runs on a worker thread, then put the
+    previous binding back. Returns fn's result."""
+    async def _main():
+        global _token
+        prev = _token
+        bind()
         try:
-            return await coro
+            return await anyio.to_thread.run_sync(functools.partial(fn, *args, **kwargs), limiter=IO_LANE)
         finally:
-            _cache._fresh_var.reset(t_fresh)
-            _cache._cache_only_var.reset(t_only)
-            _cache._refresh_margin_var.reset(t_margin)
-            _diag._trace_var.reset(t_trace)
-
-    wrapped = _wrapped()
-    try:
-        fut = asyncio.run_coroutine_threadsafe(wrapped, loop)
-    except BaseException:
-        # The loop closed between the check above and the hand-off (a shutdown race): neither the
-        # wrapper nor the caller's coroutine was ever scheduled, so close both instead of leaking
-        # "coroutine ... was never awaited" warnings at interpreter exit.
-        wrapped.close()
-        coro.close()
-        if loop.is_closed():
-            raise PortalClosed("portal event loop is closed") from None
-        raise
-    return fut.result(timeout)  # blocks; re-raises the coro's exception; TimeoutError past `timeout`
-
-
-def self_test(timeout: float = 5.0) -> bool:
-    """Round-trip a trivial coroutine through the bound loop from THIS (sync) thread and confirm
-    it returns the sentinel. Returns True on success, False on ANY failure; NEVER raises.
-
-    Must be called from a NON-loop (worker) thread: server._ensure_portal runs it via
-    ``anyio.to_thread.run_sync`` so it proves the REAL sync-thread -> loop round-trip through the
-    actual FastMCP loop, not a same-thread shortcut."""
-    try:
-        async def _ping():
-            return _SELFTEST_SENTINEL
-        return submit(_ping(), timeout=timeout) == _SELFTEST_SENTINEL
-    except Exception as exc:  # noqa: BLE001 -- self_test must never raise into its caller
-        log.warning("portal self-test error: %s", exc)
-        return False
+            _token = prev
+    return anyio.run(_main)

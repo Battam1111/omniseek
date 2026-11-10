@@ -19,17 +19,16 @@ NLP feed. explicit_only: named via omniseek_search 单源钻取 (a topic-filtere
 
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Optional
 from urllib.parse import urlencode
 
 from omniseek.core import auth, http
-from omniseek.core.normalize import Document
+from omniseek.core.normalize import Document, to_utc
 from omniseek.core.sources.api._base import BaseAPIAdapter
 
 # Crossref's "polite pool" courtesy contact (NOT a credential / not auth): a working mailto gets the
 # eye into Crossref's faster, monitored request pool. The address is the DEPLOYER's, host-injected via
-# auth.contact_email() (~/.omniseek/credentials/contact.json or OMNISEEK_CONTACT_EMAIL), never in-tree.
+# auth.contact_email() (<credentials>/contact.json or OMNISEEK_CONTACT_EMAIL), never in-tree.
 _ENDPOINT = "https://api.crossref.org/works"
 
 
@@ -52,23 +51,8 @@ class CrossrefRetractionsAdapter(BaseAPIAdapter):
     regions = ["global"]
     modes = ["STRUCTURE", "MONITOR"]
 
-    def _raw_fetch(self, query: str, limit: int) -> list:
-        params = {
-            "filter": "update-type:retraction",
-            "rows": max(1, min(limit, 50)),
-            "sort": "created", "order": "desc",
-            "mailto": auth.contact_email(),
-        }
-        if (query or "").strip():
-            params["query"] = query.strip()  # server-side full-text filter within the retraction set
-        url = f"{_ENDPOINT}?{urlencode(params)}"
-        data = http.get_json(url, headers={"User-Agent": f"OmniSeek/1.0 (mailto:{auth.contact_email()})"})
-        if not isinstance(data, dict):
-            return []
-        return ((data.get("message") or {}).get("items")) or []
-
     async def _araw_fetch(self, query: str, limit: int) -> list:
-        """Async twin of _raw_fetch: BYTE-FAITHFUL mirror — same URL/params/headers, same isinstance
+        """Async replacement of the deleted sync ``_raw_fetch`` (11-04, S9; this is the only one now): BYTE-FAITHFUL mirror — same URL/params/headers, same isinstance
         guard + None/[] contract; ONLY the shared-http egress is swapped (http.get_json -> await
         http.aget_json). Single get_json call, so nothing else changes."""
         params = {
@@ -84,12 +68,6 @@ class CrossrefRetractionsAdapter(BaseAPIAdapter):
         if not isinstance(data, dict):
             return []
         return ((data.get("message") or {}).get("items")) or []
-
-    async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async twin of search -> AsyncSearchCapable. Shares the base async cache round-trip
-        (_aapi_search: same cache key, per-record _to_document, rank_locally, cache-only-if-docs);
-        egress via _araw_fetch; mapping via the SAME pure-CPU _to_document (byte-identical to search)."""
-        return await self._aapi_search(query, limit, araw_fetch=lambda: self._araw_fetch(query, limit))
 
     def _to_document(self, raw) -> Optional[Document]:
         if not isinstance(raw, dict):
@@ -109,13 +87,8 @@ class CrossrefRetractionsAdapter(BaseAPIAdapter):
         if ct and isinstance(ct[0], str):
             journal = ct[0].strip()
         publisher = raw.get("publisher")
-        date = None
         created = (raw.get("created") or {}).get("date-time")
-        if isinstance(created, str):
-            try:
-                date = datetime.fromisoformat(created.replace("Z", "+00:00"))
-            except Exception:  # noqa: BLE001
-                date = None
+        date = to_utc(created) if isinstance(created, str) else None
         authors = raw.get("author") or []
         names = [f"{a.get('given', '')} {a.get('family', '')}".strip()
                  for a in authors[:6] if isinstance(a, dict)]

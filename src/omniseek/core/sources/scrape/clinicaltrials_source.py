@@ -29,7 +29,7 @@ from datetime import datetime
 from typing import Any, Optional
 
 from omniseek.core import http
-from omniseek.core.normalize import Document, jsonsafe, mk_signal
+from omniseek.core.normalize import Document, jsonsafe, mk_signal, to_utc
 from omniseek.core.sources.scrape._base import BaseScrapeAdapter
 
 API_URL = "https://clinicaltrials.gov/api/v2/studies"
@@ -52,16 +52,8 @@ class ClinicalTrialsAdapter(BaseScrapeAdapter):
         "a query genuinely matches. Standing curation call 2026-07-25.")
     modes = ["STRUCTURE"]
 
-    def _raw_fetch(self, query: str, limit: int) -> Optional[Any]:
-        # pageSize is clamped by the API; ask for the requested count (>=1).
-        return http.get_json(
-            API_URL,
-            params={"query.term": query, "pageSize": max(1, int(limit))},
-            timeout=15,
-        )
-
     async def _araw_fetch(self, query: str, limit: int) -> Optional[Any]:
-        # Async twin of _raw_fetch: byte-faithful mirror, only http.get_json → await http.aget_json.
+        # Async replacement of the deleted sync ``_raw_fetch`` (11-04, S9; this is the only one now): byte-faithful mirror, only http.get_json → await http.aget_json.
         return await http.aget_json(
             API_URL,
             params={"query.term": query, "pageSize": max(1, int(limit))},
@@ -78,14 +70,6 @@ class ClinicalTrialsAdapter(BaseScrapeAdapter):
             if doc is not None:
                 docs.append(doc)
         return docs
-
-    async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async twin of search -> AsyncSearchCapable. Shares the base async cache round-trip;
-        egress via _araw_fetch; mapping via the SAME pure-CPU _to_documents (byte-identical to search)."""
-        return await self._asearch_via(
-            query, limit,
-            afetch=lambda: self._araw_fetch(query, limit),
-            abuild=lambda raw: self._to_documents(raw, query, limit))
 
     def _study_to_doc(self, study: Any) -> Optional[Document]:
         if not isinstance(study, dict):
@@ -149,13 +133,6 @@ class ClinicalTrialsAdapter(BaseScrapeAdapter):
         if not isinstance(date_struct, dict):
             return None
         raw = date_struct.get("date")
-        if not isinstance(raw, str) or not raw:
-            return None
-        for fmt in ("%Y-%m-%d", "%Y-%m", "%Y"):
-            try:
-                return datetime.strptime(raw, fmt)
-            except ValueError:
-                continue
-        return None
+        return to_utc(raw) if isinstance(raw, str) else None
 
 # Registration is automatic via BaseScrapeAdapter.__init_subclass__ (no module-tail ceremony).

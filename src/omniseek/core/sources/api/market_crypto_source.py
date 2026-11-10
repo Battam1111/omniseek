@@ -22,6 +22,7 @@ from typing import Optional
 
 from omniseek.core import http
 from omniseek.core.normalize import Document, mk_signal
+from omniseek.core.sources._base import SourceBase
 
 logger = logging.getLogger(__name__)
 
@@ -111,7 +112,7 @@ def _to_doc(cid: str, sym: str, data: dict) -> Optional[Document]:
     )
 
 
-class MarketCryptoAdapter:
+class MarketCryptoAdapter(SourceBase):
     name = "market_crypto"
     needs_credentials = False
     kind = "lookup"
@@ -125,33 +126,8 @@ class MarketCryptoAdapter:
         "命名查询, 不进广搜; 主流币静态映射、未知大写符号不臆测 → query 无币种或无法解析返空."
     )
 
-    def search(self, query: str, limit: int = 10) -> list[Document]:
-        plan = _resolve(query)[:max(limit, 1)]
-        if not plan:
-            return []
-        payload = http.get_json(
-            API_URL,
-            params={
-                "ids": ",".join(cid for cid, _ in plan),
-                "vs_currencies": "usd",
-                "include_market_cap": "true",
-                "include_24hr_vol": "true",
-                "include_24hr_change": "true",
-            },
-            headers={"User-Agent": BROWSER_UA, "Accept": "application/json"},
-            timeout=TIMEOUT,
-        )
-        if not isinstance(payload, dict):
-            return []
-        docs: list[Document] = []
-        for cid, sym in plan:
-            doc = _to_doc(cid, sym, payload.get(cid) or {})
-            if doc is not None:
-                docs.append(doc)
-        return docs[:limit]
-
     async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async twin of ``search`` (S4b): mirrors it line-for-line so the fan-out awaits this
+        """Native-async replacement of the deleted sync ``search`` (11-04, S9; this is the only one now) (S4b): mirrors it line-for-line so the fan-out awaits this
         DIRECTLY instead of pushing the sync ``.search`` onto the shared pool. Only ONE line differs —
         the network egress swaps ``http.get_json`` -> ``await http.aget_json`` (epoll on the loop, no
         held thread). No disk-cache round-trip exists in ``search`` (this source caches at the fan-out
@@ -181,11 +157,11 @@ class MarketCryptoAdapter:
                 docs.append(doc)
         return docs[:limit]
 
-    def fetch_url(self, url: str) -> Optional[Document]:
+    async def afetch_url(self, url: str) -> Optional[Document]:
         return None
 
-    def health_check(self) -> tuple[bool, str]:
-        payload = http.get_json(
+    async def ahealth_check(self) -> tuple[bool, str]:
+        payload = await http.aget_json(
             API_URL,
             params={"ids": "bitcoin", "vs_currencies": "usd"},
             headers={"User-Agent": BROWSER_UA, "Accept": "application/json"},

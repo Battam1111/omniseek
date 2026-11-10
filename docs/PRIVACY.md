@@ -48,6 +48,10 @@ OmniSeek reaches in two ways, and the results go to one place:
 Results are returned **only to the calling agent** over MCP. Apart from the outbound retrieval to the
 sources themselves, **data does not leave the host.** There is no intermediate collection point.
 
+A query goes to the sources it searches **with every word the agent wrote**: OmniSeek does not mask
+or strip anything from it before sending it. Keep out of a query what you would not type into that
+site's own search box.
+
 ## 5. Reading behind a login: the conservative line
 
 OmniSeek's reading behind a login is bounded to **credentialed access the operator is themselves

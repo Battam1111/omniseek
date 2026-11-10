@@ -16,22 +16,20 @@ Acquisition (OmniSeek's bulk-file pattern, shared via _bulk_funding):
 
 Structure verified live 2026-06-22 (5 sheets; G&A_S&B = 38 cols incl. ApplicationTitle/Abstract/
 Keywords; row1 = Nemer / University of Ottawa). Empty cells arrive as None or the literal "None"
-string — both normalized to "". explicit_only: a named-query lookup like nserc_awards / nsf_awards.
+string — both normalized to "". explicit_only: a named-query lookup like sshrc_awards / nsf_awards.
 """
 
 from __future__ import annotations
 
-import functools
 import io
 import logging
 import threading
 from typing import Optional
 
-import anyio
 import httpx
 
-from omniseek.core import cache, diag, http
-from omniseek.core.normalize import Document, keyword_score_filter
+from omniseek.core import diag, http
+from omniseek.core.normalize import Document
 from omniseek.core.sources.api._bulk_funding import UA, BulkFundingBase, is_ai_relevant, year_of
 
 logger = logging.getLogger(__name__)
@@ -82,61 +80,6 @@ class CIHRGrantsAdapter(BulkFundingBase):
     modes = ["STRUCTURE"]
     _version = "FY202526"
 
-    def _resolve_xlsx_url(self) -> Optional[str]:
-        data = http.get_json(_PKG_SHOW)
-        if not isinstance(data, dict):
-            return None
-        res = (data.get("result") or {}).get("resources") or []
-        import re
-        inv = [r for r in res if re.search(r"CIHR Investments \d{4}-\d{2}", (r.get("name") or ""))
-               and (r.get("format") or "").upper() == "XLSX" and r.get("url")]
-        inv.sort(key=lambda r: year_of(r.get("name")), reverse=True)
-        return inv[0]["url"] if inv else None
-
-    def _build_subset_docs(self) -> list[Document]:
-        url = self._resolve_xlsx_url()
-        if not url:
-            logger.warning("cihr_grants: could not resolve XLSX url via package_show")
-            return []
-        try:
-            # 85s < the 90s fetch_one deadline: the old 240s could never elapse on a deadline-bounded
-            # call (the outer deadline killed it first, wasting the budget), and 85s is amply generous
-            # for a few-MB XLSX. A genuinely larger download should raise the OUTER deadline, not this.
-            r = http.direct("GET", url, headers={"User-Agent": UA}, timeout=85,
-                            follow_redirects=True)
-            r.raise_for_status()
-            content = r.content
-        except Exception as exc:  # noqa: BLE001 — failure → [] (the contract)
-            logger.warning("cihr_grants: XLSX fetch failed: %s", exc)
-            st = getattr(getattr(exc, "response", None), "status_code", None)
-            diag.note("cihr_grants.xlsx", url=url, status=st, exc=exc)
-            return []
-        try:
-            import openpyxl
-            wb = openpyxl.load_workbook(io.BytesIO(content), read_only=True, data_only=True)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("cihr_grants: XLSX parse failed: %s", exc)
-            return []
-        sheet = next((s for s in wb.sheetnames if "G&A" in s or "S&B" in s),
-                     wb.sheetnames[0] if wb.sheetnames else None)
-        if not sheet:
-            return []
-        it = wb[sheet].iter_rows(values_only=True)
-        try:
-            header = [str(h or "") for h in next(it)]
-        except StopIteration:
-            return []
-        docs: list[Document] = []
-        for row in it:
-            rowd = {header[i]: _clean(row[i] if i < len(row) else None) for i in range(len(header))}
-            if not self._is_relevant(rowd):
-                continue
-            d = self._row_to_doc(rowd)
-            if d is not None:
-                docs.append(d)
-        logger.info("cihr_grants: built %d health-AI/NLP docs from FY2025-26", len(docs))
-        return docs
-
     # ── native-async twins (S4b) ────────────────────────────────────────────
     async def _aresolve_xlsx_url(self) -> Optional[str]:
         """Async twin of _resolve_xlsx_url: the package_show body is a small standard JSON, so it rides
@@ -152,7 +95,7 @@ class CIHRGrantsAdapter(BulkFundingBase):
         return inv[0]["url"] if inv else None
 
     async def _abuild_subset_docs(self) -> list[Document]:
-        """Async twin of _build_subset_docs. ONLY the two egresses change: the package_show resolve
+        """Async replacement of the deleted sync ``_build_subset_docs`` (11-04, S9; this is the only one now) ONLY the two egresses change: the package_show resolve
         rides http.aget_json, and the binary XLSX fetch rides the module-level uncapped AsyncClient
         (same UA + timeout + follow_redirects as the sync raw httpx.get). The openpyxl parse + row map
         + relevance filter is pure CPU, kept ON the loop byte-identical to the sync path."""
@@ -196,29 +139,6 @@ class CIHRGrantsAdapter(BulkFundingBase):
                 docs.append(d)
         logger.info("cihr_grants: built %d health-AI/NLP docs from FY2025-26", len(docs))
         return docs
-
-    async def _asubset_docs(self) -> list[Document]:
-        """Async twin of BulkFundingBase._subset_docs: SAME cache key; the disk read + write hop OFF the
-        loop (get_docs / set_docs do file IO); the build is the async _abuild_subset_docs."""
-        key = cache.make_key(self.name, "subset", self._version)
-        cached = await anyio.to_thread.run_sync(cache.get_docs, key)  # disk read OFF loop
-        if cached is not None:
-            return cached
-        docs = await self._abuild_subset_docs()
-        if docs:
-            await anyio.to_thread.run_sync(  # disk write OFF loop
-                functools.partial(cache.set_docs, key, docs, ttl=self.cache_ttl))
-        return docs
-
-    async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async twin of BulkFundingBase.search (S4b): the fan-out awaits this directly, so the
-        monthly bulk-refresh network wait costs a coroutine, not a held pool thread. BEHAVIOR-IDENTICAL
-        to search — SAME subset cache + SAME BM25 filter; only the egress + disk IO moved off the loop."""
-        docs = await self._asubset_docs()
-        if not docs:
-            return []
-        q = (query or "").strip()
-        return docs[:limit] if not q else keyword_score_filter(docs, q)[:limit]
 
     @staticmethod
     def _pick(rowd: dict, part: str) -> str:
@@ -275,8 +195,8 @@ class CIHRGrantsAdapter(BulkFundingBase):
                       "keywords": keywords},
         )
 
-    def health_check(self) -> tuple[bool, str]:
-        url = self._resolve_xlsx_url()
+    async def ahealth_check(self) -> tuple[bool, str]:
+        url = await self._aresolve_xlsx_url()
         if url and url.startswith("http"):
             return True, "OK (latest CIHR Investments XLSX resolved via package_show)"
         return False, "could not resolve the latest XLSX via package_show"

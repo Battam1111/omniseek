@@ -23,9 +23,12 @@ import re
 from typing import Optional
 
 import anyio
+from tenacity import AsyncRetrying, retry_if_result, stop_after_attempt
 
-from omniseek.core import cache, http
+from omniseek.core import cache, diag, http, portal
+from omniseek.core._guard import answered
 from omniseek.core.normalize import Document, jsonsafe
+from omniseek.core.sources._base import SourceBase
 
 logger = logging.getLogger(__name__)
 
@@ -49,69 +52,32 @@ def _f(rec: dict, *aliases: str) -> str:
     return ""
 
 
-def _get_json_retry(url: str, params: dict, *, timeout: int = 20, tries: int = 2):
-    """http.get_json with a small bounded retry (the one-off TLS UNEXPECTED_EOF seen in probing).
-    http.get_json already returns None on any failure + honors cache_only + the 30MB cap."""
-    for _ in range(tries):
-        data = http.get_json(url, params=params, timeout=timeout)
-        if data is not None:
-            return data
-    return None
-
-
 async def _aget_json_retry(url: str, params: dict, *, timeout: int = 20, tries: int = 2):
-    """Async twin of ``_get_json_retry`` (S4b): SAME bounded retry, the egress swaps
+    """Async replacement of the deleted sync ``_get_json_retry`` (11-04, S9; this is the only one now) (S4b): SAME bounded retry, the egress swaps
     ``http.get_json`` -> ``await http.aget_json``. Same None-on-failure contract (aget_json already
-    returns None on any failure + honors cache_only + the 30MB cap). Stays ON the loop (epoll wait)."""
-    for _ in range(tries):
-        data = await http.aget_json(url, params=params, timeout=timeout)
-        if data is not None:
-            return data
-    return None
+    returns None on any failure + honors cache_only + the 30MB cap). Stays ON the loop (epoll wait).
+    A failure that is an answer (404 / 410 / 400 / 422, read from the failure record http noted;
+    _guard.answered) is not retried: CKAN would say the same again (EYE-RETRY-404)."""
+    async def _attempt():
+        with diag.tap() as seen:
+            data = await http.aget_json(url, params=params, timeout=timeout)
+        return data, seen
 
-
-def _resolve_latest_resource() -> Optional[tuple[str, int]]:
-    """(resource_id, year) of the most-recent 'All sectors' datastore-active resource.
-    package_search -> max year whose name matches salary-disclosure-YYYY -> its 'All sectors'
-    resource with datastore_active (dedup resources by id). Cached (RESOURCE_TTL). None on failure.
-    Do NOT hardcode a resource_id (they rot per year; open data currently ends at 2020)."""
-    ck = cache.make_key("ontario_sunshine", "latest_resource", "v1")
-    hit = cache.get(ck)
-    if hit and isinstance(hit, list) and len(hit) == 2:
-        return (hit[0], int(hit[1]))
-    data = _get_json_retry(PKG_SEARCH, {"q": PKG_QUERY, "rows": 40})
-    if not data or not data.get("success"):
-        return None
-    best_year, best_pkg = -1, None
-    for pkg in (data.get("result") or {}).get("results", []) or []:
-        m = _YEAR_RE.match(pkg.get("name", "") or "")
-        if m and int(m.group(1)) > best_year:
-            best_year, best_pkg = int(m.group(1)), pkg
-    if not best_pkg:
-        return None
-    seen, rid = set(), None
-    for r in best_pkg.get("resources", []) or []:
-        if r.get("id") in seen:
-            continue
-        seen.add(r.get("id"))
-        if (r.get("name", "") or "").startswith("All sectors") and r.get("datastore_active"):
-            rid = r.get("id")
-            break
-    if not rid:
-        return None
-    cache.set(ck, [rid, best_year], ttl=RESOURCE_TTL)
-    return (rid, best_year)
+    data, _seen = await AsyncRetrying(sleep=anyio.sleep, stop=stop_after_attempt(tries),
+                                      retry=retry_if_result(lambda r: r[0] is None and not answered(r[1])),
+                                      retry_error_callback=lambda state: state.outcome.result())(_attempt)
+    return data
 
 
 async def _aresolve_latest_resource() -> Optional[tuple[str, int]]:
-    """Async twin of ``_resolve_latest_resource`` (S4b): mirrors it LINE-FOR-LINE with the two blocking
+    """Async replacement of the deleted sync ``_resolve_latest_resource`` (11-04, S9; this is the only one now) (S4b): mirrors it LINE-FOR-LINE with the two blocking
     syscalls moved OFF the loop and the CKAN package_search egress swapped to its async twin.
       - the disk cache read/write -> ``await anyio.to_thread.run_sync`` (cache.get/set do file IO);
       - the package_search egress -> ``await _aget_json_retry`` (-> http.aget_json), ON the loop;
       - the PURE-CPU max-year + 'All sectors' resource walk stays ON the loop, UNCHANGED.
     SAME cache key ("latest_resource","v1") + SAME RESOURCE_TTL as sync, so async and sync share it."""
     ck = cache.make_key("ontario_sunshine", "latest_resource", "v1")
-    hit = await anyio.to_thread.run_sync(cache.get, ck)  # disk read OFF loop
+    hit = await cache.aget_once(ck)  # disk read OFF loop
     if hit and isinstance(hit, list) and len(hit) == 2:
         return (hit[0], int(hit[1]))
     data = await _aget_json_retry(PKG_SEARCH, {"q": PKG_QUERY, "rows": 40})  # async network
@@ -135,7 +101,7 @@ async def _aresolve_latest_resource() -> Optional[tuple[str, int]]:
     if not rid:
         return None
     await anyio.to_thread.run_sync(  # disk write OFF loop
-        functools.partial(cache.set, ck, [rid, best_year], ttl=RESOURCE_TTL))
+        functools.partial(cache.set, ck, [rid, best_year], ttl=RESOURCE_TTL), limiter=portal.IO_LANE)
     return (rid, best_year)
 
 
@@ -169,7 +135,7 @@ def _build_doc(rec: dict, year: int) -> Optional[Document]:
     )
 
 
-class OntarioSunshineAdapter:
+class OntarioSunshineAdapter(SourceBase):
     name = "ontario_sunshine"
     needs_credentials = False
     kind = "lookup"
@@ -184,35 +150,8 @@ class OntarioSunshineAdapter:
         "传人名或机构名 (如 'University of Toronto')."
     )
 
-    def search(self, query: str, limit: int = 10) -> list[Document]:
-        q = (query or "").strip()
-        if not q:
-            return []  # targeted lookup: empty query must NEVER trigger a bulk pull
-        low = q.lower()
-        for kw in _DROP:
-            if kw in low:
-                q = re.sub(re.escape(kw), "", q, flags=re.IGNORECASE).strip(" ,")
-        if not q:
-            return []
-        lim = max(1, min(limit, _MAX_LIMIT))
-        key = cache.make_key("ontario_sunshine", "q", q, lim)
-        cached = cache.get_docs(key)
-        if cached is not None:
-            return cached
-        rr = _resolve_latest_resource()
-        if not rr:
-            return []
-        rid, year = rr
-        data = _get_json_retry(DATASTORE, {"resource_id": rid, "q": q, "limit": min(lim * 2, 50)})
-        if not data or not data.get("success"):
-            return []
-        records = (data.get("result") or {}).get("records", []) or []
-        docs = [d for d in (_build_doc(r, year) for r in records) if d][:lim]
-        cache.set_docs(key, docs, ttl=CACHE_TTL)
-        return docs
-
     async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async twin of ``search`` (S4b): mirrors it LINE-FOR-LINE with three changes only, so
+        """Native-async replacement of the deleted sync ``search`` (11-04, S9; this is the only one now) (S4b): mirrors it LINE-FOR-LINE with three changes only, so
         this standalone lookup adapter routes to the fetcher's native async dispatch branch.
           1. the disk CACHE read/write hop OFF the loop (``await anyio.to_thread.run_sync``);
           2. the two CKAN egresses swap to their async twins (``_aresolve_latest_resource`` for the
@@ -231,26 +170,25 @@ class OntarioSunshineAdapter:
             return []
         lim = max(1, min(limit, _MAX_LIMIT))
         key = cache.make_key("ontario_sunshine", "q", q, lim)
-        cached = await anyio.to_thread.run_sync(cache.get_docs, key)  # disk read OFF loop
-        if cached is not None:
-            return cached
-        rr = await _aresolve_latest_resource()  # async resolve (own cache round-trip + egress)
-        if not rr:
-            return []
-        rid, year = rr
-        data = await _aget_json_retry(DATASTORE, {"resource_id": rid, "q": q, "limit": min(lim * 2, 50)})
-        if not data or not data.get("success"):
-            return []
-        records = (data.get("result") or {}).get("records", []) or []
-        docs = [d for d in (_build_doc(r, year) for r in records) if d][:lim]
-        await anyio.to_thread.run_sync(  # disk write OFF loop
-            functools.partial(cache.set_docs, key, docs, ttl=CACHE_TTL))
-        return docs
 
-    def fetch_url(self, url: str) -> Optional[Document]:
+        async def _aget() -> Optional[list[Document]]:
+            rr = await _aresolve_latest_resource()  # async resolve (own cache round-trip + egress)
+            if not rr:
+                return None  # a failure: not cached
+            rid, year = rr
+            data = await _aget_json_retry(DATASTORE, {"resource_id": rid, "q": q, "limit": min(lim * 2, 50)})
+            if not data or not data.get("success"):
+                return None  # a failure: not cached
+            records = (data.get("result") or {}).get("records", []) or []
+            docs = [d for d in (_build_doc(r, year) for r in records) if d][:lim]
+            return docs
+
+        return await self._acached(key, CACHE_TTL, _aget)
+
+    async def afetch_url(self, url: str) -> Optional[Document]:
         return None  # structured lookup; reach via search (no arbitrary-URL fan-in)
 
-    def health_check(self) -> tuple[Optional[bool], str]:
+    async def ahealth_check(self) -> tuple[Optional[bool], str]:
         """Report from CACHE; never spend requests on a host that rate-limits by IP.
 
         MEASURED 2026-07-25: data.ontario.ca returns 429 to this IP for the WHOLE domain (even the
@@ -268,7 +206,7 @@ class OntarioSunshineAdapter:
         `unverified`), never True. A cached resource says the last drill worked, not that the host
         works now."""
         ck = cache.make_key("ontario_sunshine", "latest_resource", "v1")
-        hit = cache.get(ck)
+        hit = await anyio.to_thread.run_sync(cache.get, ck, limiter=portal.IO_LANE)  # disk read OFF loop
         if hit and isinstance(hit, list) and len(hit) == 2:
             return None, f"not probed live (from cache: resource {hit[0]}, year {hit[1]})"
         return None, ("not probed (data.ontario.ca rate-limits by IP; a probe costs several requests "

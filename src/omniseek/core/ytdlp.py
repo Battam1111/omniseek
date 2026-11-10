@@ -21,7 +21,7 @@ from urllib.parse import urlsplit
 from yt_dlp import YoutubeDL as _YoutubeDL
 from yt_dlp.networking.exceptions import HTTPError as _HTTPError
 
-from omniseek.core import _probe
+from omniseek.core import _probe, upstreams
 
 
 def _note(exc: BaseException, req: Any) -> None:
@@ -30,7 +30,7 @@ def _note(exc: BaseException, req: Any) -> None:
         resp = getattr(exc, "response", None)
         url = str(getattr(resp, "url", "") or getattr(req, "url", "") or req or "")
         _probe.note_response(getattr(exc, "status", None), where=urlsplit(url).hostname or url,
-                             retry_after=_probe.retry_after_s(getattr(resp, "headers", None)))
+                             retry_after=upstreams.parse_retry_after(getattr(resp, "headers", None)))
     except Exception:  # noqa: BLE001 (recording must never break an extraction)
         pass
 

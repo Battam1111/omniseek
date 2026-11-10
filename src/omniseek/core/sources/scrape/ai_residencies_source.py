@@ -27,7 +27,6 @@ import json
 import logging
 import re
 import threading
-from concurrent.futures import ThreadPoolExecutor
 from contextvars import copy_context
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -39,9 +38,10 @@ import anyio
 import httpx
 from bs4 import BeautifulSoup
 
-from omniseek.core import cache, diag, http, relevance
-from omniseek.core._guard import GateBusy, bounded_async_slot, bounded_slot
-from omniseek.core.normalize import Document, jsonsafe
+from omniseek.core import cache, diag, http, portal, relevance
+from omniseek.core._guard import GateBusy, bounded_async_slot
+from omniseek.core.normalize import Document, html_fragment_text, jsonsafe
+from omniseek.core.sources._base import SourceBase, aparse
 
 logger = logging.getLogger(__name__)
 
@@ -66,7 +66,7 @@ class ResidencyPosition:
     tier: int = 2
     raw: dict = field(default_factory=dict)  # original source record/page (lossless escape hatch)
 
-    def to_omniseek_doc(self) -> Document:
+    def to_eye_doc(self) -> Document:
         tags = [
             "residency",
             f"lab:{self.lab.lower().replace(' ', '_')}",
@@ -87,7 +87,7 @@ class ResidencyPosition:
             source_id=self.url,
             url=self.url,
             title=f"[{self.lab}] {self.title}",
-            content=self.summary or f"{self.lab} {self.program} (status: {self.status})",
+            content=self.summary or "",   # lab / program / status ride in metadata
             author=self.lab,
             date=self.deadline,
             tags=tags,
@@ -124,31 +124,8 @@ def _sema_for(url: str) -> threading.BoundedSemaphore:
     return s
 
 
-def _http_get(url: str, *, timeout: int = TIMEOUT, **kwargs) -> Optional[httpx.Response]:
-    try:
-        with bounded_slot(
-            _sema_for(url),
-            timeout,
-            lambda waited: GateBusy(f"ATS gate busy after {waited:.1f}s for {urlparse(url).hostname}"),
-        ):  # declared host gates of every hop in http.direct (api.lever.co: robots Crawl-delay 1 s)
-            resp = http.direct(
-                "GET", url,
-                headers={"User-Agent": USER_AGENT, "Accept-Language": "en-US,en;q=0.9,zh;q=0.8"},
-                timeout=timeout,
-                follow_redirects=True,
-                **kwargs,
-            )
-        resp.raise_for_status()
-        return resp
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("HTTP GET failed for %s: %s", url, exc)
-        st = getattr(getattr(exc, "response", None), "status_code", None)
-        diag.note("ai_residencies.fetch", url=url, status=st, exc=exc)
-        return None
-
-
 async def _ahttp_get(url: str, *, timeout: int = TIMEOUT, **kwargs) -> Optional[httpx.Response]:
-    """Native-async twin of ``_http_get`` (S4b): the async egress leaf for asearch's per-row fan-out.
+    """Async replacement of the deleted sync ``_http_get`` (11-04, async step seven; this is the only one now) (S4b): the async egress leaf for asearch's per-row fan-out.
     Mirrors ``_http_get`` faithfully, moving ONLY the blocking waits off the loop so no thread is held:
 
       - the per-host in-flight cap -> the SAME ``_sema_for`` threading BoundedSemaphore, acquired by
@@ -184,8 +161,7 @@ async def _ahttp_get(url: str, *, timeout: int = TIMEOUT, **kwargs) -> Optional[
 
 
 def _strip_html(html: str) -> str:
-    text = re.sub(r"<[^>]+>", " ", html or "")
-    return re.sub(r"\s+", " ", text).strip()
+    return html_fragment_text(html)
 
 
 # ---------------------------------------------------------------------------
@@ -335,144 +311,6 @@ def _row_common(row: dict, *, title: str, url: str, status: str, summary: str,
     )
 
 
-def _fetch_greenhouse(row: dict) -> list[ResidencyPosition]:
-    """boards-api.greenhouse.io/v1/boards/{slug}/jobs — stable public JSON, no auth."""
-    resp = _http_get(f"https://boards-api.greenhouse.io/v1/boards/{row['slug']}/jobs?content=true")
-    if resp is None:
-        return []
-    try:
-        jobs = resp.json().get("jobs") or []
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("Greenhouse JSON parse failed (%s): %s", row["slug"], exc)
-        return []
-    filter_re = re.compile(row["title_filter"], re.IGNORECASE) if row.get("title_filter") else None
-    out = []
-    for job in jobs:
-        title = (job.get("title") or "").strip()
-        url = job.get("absolute_url") or ""
-        if not url or (filter_re and not filter_re.search(title)):
-            continue
-        loc = job.get("location") or {}
-        summary = _strip_html(job.get("content") or "")
-        out.append(_row_common(row, title=title, url=url, status="open",  # Greenhouse lists open only
-                               summary=summary, location=loc.get("name") if isinstance(loc, dict) else None,
-                               deadline=_extract_deadline_from_text(summary), raw=job, program=title))
-    return out
-
-
-def _fetch_ashby(row: dict) -> list[ResidencyPosition]:
-    """api.ashbyhq.com/posting-api/job-board/{slug} — public JSON."""
-    resp = _http_get(f"https://api.ashbyhq.com/posting-api/job-board/{row['slug']}", timeout=30)
-    if resp is None:
-        return []
-    try:
-        jobs = resp.json().get("jobs") or []
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("Ashby JSON parse failed (%s): %s", row["slug"], exc)
-        return []
-    filter_re = re.compile(row["title_filter"], re.IGNORECASE) if row.get("title_filter") else None
-    out = []
-    for job in jobs:
-        title = (job.get("title") or "").strip()
-        url = job.get("jobUrl") or job.get("applyUrl") or ""
-        if not url or (filter_re and not filter_re.search(title)):
-            continue
-        summary = _strip_html(job.get("descriptionHtml") or "")
-        out.append(_row_common(row, title=title, url=url, status="open",
-                               summary=summary, location=job.get("location") or job.get("locationName"),
-                               deadline=_extract_deadline_from_text(summary), raw=job))
-    return out
-
-
-def _fetch_lever(row: dict) -> list[ResidencyPosition]:
-    """api.lever.co/v0/postings/{slug}?mode=json — public JSON list."""
-    resp = _http_get(f"https://api.lever.co/v0/postings/{row['slug']}?mode=json", timeout=30)
-    if resp is None:
-        return []
-    try:
-        postings = resp.json()
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("Lever JSON parse failed (%s): %s", row["slug"], exc)
-        return []
-    filter_re = re.compile(row["title_filter"], re.IGNORECASE) if row.get("title_filter") else None
-    out = []
-    for posting in postings:
-        title = (posting.get("text") or "").strip()
-        url = posting.get("hostedUrl") or posting.get("applyUrl") or ""
-        if not url or (filter_re and not filter_re.search(title)):
-            continue
-        body = posting.get("descriptionBodyPlain") or posting.get("descriptionPlain") or ""
-        summary = re.sub(r"\s+", " ", body).strip()
-        out.append(_row_common(row, title=title, url=url, status="open",
-                               summary=summary, location=(posting.get("categories") or {}).get("location"),
-                               deadline=_extract_deadline_from_text(summary), raw=posting))
-    return out
-
-
-def _fetch_workable(row: dict) -> list[ResidencyPosition]:
-    """apply.workable.com/api/v1/widget/accounts/{slug} — defensive schema handling."""
-    resp = _http_get(f"https://apply.workable.com/api/v1/widget/accounts/{row['slug']}", timeout=20)
-    if resp is None:
-        return []
-    try:
-        data = resp.json()
-    except Exception:  # noqa: BLE001
-        return []
-    jobs: list = []
-    if isinstance(data.get("jobs"), list):
-        jobs = data["jobs"]
-    elif isinstance(data.get("widget"), dict) and isinstance(data["widget"].get("jobs"), list):
-        jobs = data["widget"]["jobs"]
-    elif isinstance(data.get("results"), list):
-        jobs = data["results"]
-
-    out = []
-    for job in jobs:
-        if not isinstance(job, dict):
-            continue
-        title = job.get("title") or job.get("name") or job.get("shortcode")
-        if not title:
-            continue
-        url = job.get("url") or job.get("application_url") or job.get("apply_url")
-        if not url and job.get("shortcode"):
-            url = f"https://apply.workable.com/{row['slug']}/j/{job['shortcode']}/"
-        if not url:
-            continue
-        loc = job.get("location") or job.get("city")
-        if isinstance(loc, dict):
-            location = loc.get("city") or loc.get("country") or loc.get("location_str") or ""
-        else:
-            location = loc or ""
-        location = location or row.get("default_location") or ""
-        summary = _strip_html(str(job.get("description") or job.get("requirements") or ""))
-        out.append(_row_common(row, title=title, url=url, status="open",
-                               summary=summary or f"{row['lab']}: {title}",
-                               location=location, deadline=None, raw=job, program=title))
-    return out
-
-
-def _fetch_static(row: dict) -> list[ResidencyPosition]:
-    """A program page: shared open/closed/upcoming heuristics + deadline window."""
-    resp = _http_get(row["url"])
-    if resp is None:
-        return []
-    body_text = BeautifulSoup(resp.text, "lxml").get_text(" ", strip=True)
-    status = _detect_open_closed_status(body_text, cn=bool(row.get("cn_status")))
-    if status == "unknown" and row.get("default_status"):
-        status = row["default_status"]
-    return [_row_common(row, title=row["title"], url=row["url"], status=status,
-                        summary=body_text[:500], location=row.get("location"),
-                        deadline=_extract_deadline_from_text(body_text),
-                        raw={"url": row["url"], "page_text": body_text})]
-
-
-_KIND_FETCHERS = {
-    "greenhouse": _fetch_greenhouse,
-    "ashby": _fetch_ashby,
-    "lever": _fetch_lever,
-    "workable": _fetch_workable,
-    "static": _fetch_static,
-}
 
 
 # ---------------------------------------------------------------------------
@@ -484,7 +322,7 @@ _KIND_FETCHERS = {
 
 
 async def _afetch_greenhouse(row: dict) -> list[ResidencyPosition]:
-    """Native-async twin of ``_fetch_greenhouse`` (egress via ``_ahttp_get``; parse identical)."""
+    """Async replacement of the deleted sync ``_fetch_greenhouse`` (11-04, async step seven; this is the only one now) (egress via ``_ahttp_get``; parse identical)."""
     resp = await _ahttp_get(f"https://boards-api.greenhouse.io/v1/boards/{row['slug']}/jobs?content=true")
     if resp is None:
         return []
@@ -509,7 +347,7 @@ async def _afetch_greenhouse(row: dict) -> list[ResidencyPosition]:
 
 
 async def _afetch_ashby(row: dict) -> list[ResidencyPosition]:
-    """Native-async twin of ``_fetch_ashby`` (egress via ``_ahttp_get``; parse identical)."""
+    """Async replacement of the deleted sync ``_fetch_ashby`` (11-04, async step seven; this is the only one now) (egress via ``_ahttp_get``; parse identical)."""
     resp = await _ahttp_get(f"https://api.ashbyhq.com/posting-api/job-board/{row['slug']}", timeout=30)
     if resp is None:
         return []
@@ -533,7 +371,7 @@ async def _afetch_ashby(row: dict) -> list[ResidencyPosition]:
 
 
 async def _afetch_lever(row: dict) -> list[ResidencyPosition]:
-    """Native-async twin of ``_fetch_lever`` (egress via ``_ahttp_get``; parse identical)."""
+    """Async replacement of the deleted sync ``_fetch_lever`` (11-04, async step seven; this is the only one now) (egress via ``_ahttp_get``; parse identical)."""
     resp = await _ahttp_get(f"https://api.lever.co/v0/postings/{row['slug']}?mode=json", timeout=30)
     if resp is None:
         return []
@@ -558,7 +396,7 @@ async def _afetch_lever(row: dict) -> list[ResidencyPosition]:
 
 
 async def _afetch_workable(row: dict) -> list[ResidencyPosition]:
-    """Native-async twin of ``_fetch_workable`` (egress via ``_ahttp_get``; parse identical)."""
+    """Async replacement of the deleted sync ``_fetch_workable`` (11-04, async step seven; this is the only one now) (egress via ``_ahttp_get``; parse identical)."""
     resp = await _ahttp_get(f"https://apply.workable.com/api/v1/widget/accounts/{row['slug']}", timeout=20)
     if resp is None:
         return []
@@ -599,12 +437,18 @@ async def _afetch_workable(row: dict) -> list[ResidencyPosition]:
     return out
 
 
+def _page_text(html: str) -> str:
+    """A page's visible text (pure CPU: the async twin runs it through ``aparse``)."""
+    return BeautifulSoup(html, "lxml").get_text(" ", strip=True)
+
+
 async def _afetch_static(row: dict) -> list[ResidencyPosition]:
-    """Native-async twin of ``_fetch_static`` (egress via ``_ahttp_get``; BeautifulSoup parse on loop)."""
+    """Async replacement of the deleted sync ``_fetch_static`` (11-04, async step seven; this is the only one now) (egress via ``_ahttp_get``; BeautifulSoup parse through ``aparse``)."""
     resp = await _ahttp_get(row["url"])
     if resp is None:
         return []
-    body_text = BeautifulSoup(resp.text, "lxml").get_text(" ", strip=True)
+    html = resp.text
+    body_text = await aparse(len(html), _page_text, html)
     status = _detect_open_closed_status(body_text, cn=bool(row.get("cn_status")))
     if status == "unknown" and row.get("default_status"):
         status = row["default_status"]
@@ -656,7 +500,7 @@ def _url_key(url: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-class AIResidenciesAdapter:
+class AIResidenciesAdapter(SourceBase):
     name = "ai_residencies"
     needs_credentials = False
     kind = "stream"
@@ -667,77 +511,6 @@ class AIResidenciesAdapter:
         "Ai2 PYI / 上海 AI Lab / Mistral Intern / Vector Institute (Tier 1-3; "
         "config rows in ai_residencies.json, adding a program is a one-row edit)"
     )
-
-    def _fetch_all_positions(self) -> list[ResidencyPosition]:
-        key = cache.make_key("ai_residencies", "all_positions", "v1")
-        cached_payload = cache.get(key)
-        if cached_payload is not None:
-            return [_position_from_dict(d) for d in cached_payload]
-
-        positions: list[ResidencyPosition] = []
-
-        # Each row is an independent fetch (13 static pages on distinct hosts +
-        # 5 board APIs); static rows additionally BeautifulSoup-parse a whole
-        # page. The work is dominated by independent network wait → parallelize
-        # the per-row fan-out. The single-row failure isolation (try/except) and
-        # the unknown-kind warning move into the worker unchanged, so one bad row
-        # never blocks the rest. copy_context() is captured HERE on the search
-        # thread (where the cache `fresh` contextvar is already set) and one
-        # private copy is handed to each worker via ctx.run — never copied inside
-        # the worker, where it would grab an empty context and silently defeat
-        # fresh=True. The 2h cache.set below and ordering are untouched.
-        rows = _rows()
-
-        def _fetch_row(row: dict) -> list[ResidencyPosition]:
-            fetcher_fn = _KIND_FETCHERS.get(row.get("kind"))
-            if fetcher_fn is None:
-                logger.warning("ai_residencies: unknown kind %r (row %s)", row.get("kind"), row.get("lab"))
-                return []
-            try:
-                return fetcher_fn(row)
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("Residency fetcher %s/%s raised: %s",
-                               row.get("kind"), row.get("lab"), exc)
-                return []
-
-        contexts = [copy_context() for _ in rows]
-        with ThreadPoolExecutor(max_workers=min(len(rows), 18) or 1) as ex:
-            row_positions = list(ex.map(lambda ctx, r: ctx.run(_fetch_row, r),
-                                        contexts, rows))
-        for plist in row_positions:
-            positions.extend(plist)
-
-        cache.set(key, [_position_to_dict(p) for p in positions], ttl=7200)  # 2h cache
-        return positions
-
-    def search(self, query: str, limit: int = 10) -> list[Document]:
-        positions = self._fetch_all_positions()
-        if not positions:
-            return []
-
-        # Lexical match via the shared engine; tier/status/deadline stay primary.
-        has_terms = bool(relevance.query_terms(query or ""))
-        if has_terms:
-            fields = [[(f"{p.title} {p.lab} {p.program}", 3.0), (p.summary, 1.0)]
-                      for p in positions]
-            q_scores = relevance.field_scores(fields, query)
-        else:
-            q_scores = [0.0] * len(positions)
-
-        status_priority = {"open": 0, "rolling": 1, "upcoming": 2, "unknown": 3, "closed": 4}
-        scored = []
-        for p, q in zip(positions, q_scores):
-            if has_terms and q == 0.0:
-                continue  # query given but nothing matched: honest skip
-            sort_key = (
-                p.tier,
-                status_priority.get(p.status, 5),
-                p.deadline or datetime.max.replace(tzinfo=timezone.utc),
-                -q,
-            )
-            scored.append((sort_key, p))
-        scored.sort(key=lambda x: x[0])
-        return [p.to_omniseek_doc() for _, p in scored[:limit]]
 
     async def _afetch_all_positions(self) -> list[ResidencyPosition]:
         """Native-async twin of ``_fetch_all_positions`` (S4b): the per-row fan-out becomes CONCURRENT
@@ -755,12 +528,12 @@ class AIResidenciesAdapter:
         The single-row failure isolation + unknown-kind warning (``_afetch_row``) and the 2h cache.set are
         byte-identical to the sync path; _position_to_dict / _position_from_dict (pure CPU) stay on the loop."""
         key = cache.make_key("ai_residencies", "all_positions", "v1")
-        cached_payload = await anyio.to_thread.run_sync(cache.get, key)  # disk read OFF loop
+        cached_payload = await cache.aget_once(key)  # disk read OFF loop
         if cached_payload is not None:
             return [_position_from_dict(d) for d in cached_payload]
 
         positions: list[ResidencyPosition] = []
-        rows = await anyio.to_thread.run_sync(_rows)  # ai_residencies.json read OFF loop
+        rows = await anyio.to_thread.run_sync(_rows, limiter=portal.IO_LANE)  # ai_residencies.json read OFF loop
 
         async def _afetch_row(row: dict) -> list[ResidencyPosition]:
             fetcher_fn = _AKIND_FETCHERS.get(row.get("kind"))
@@ -780,11 +553,11 @@ class AIResidenciesAdapter:
 
         payload = [_position_to_dict(p) for p in positions]  # pure CPU, on loop
         await anyio.to_thread.run_sync(  # disk write OFF loop
-            functools.partial(cache.set, key, payload, ttl=7200))  # 2h cache
+            functools.partial(cache.set, key, payload, ttl=7200), limiter=portal.IO_LANE)  # 2h cache
         return positions
 
     async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async twin of ``search`` (S4b): awaits the async ``_afetch_all_positions`` (concurrent
+        """Native-async replacement of the deleted sync ``search`` (11-04, S9; this is the only one now) (S4b): awaits the async ``_afetch_all_positions`` (concurrent
         per-row egress) then runs the SAME tier/status/deadline scoring + lexical match, all pure CPU on
         the loop. Byte-identical to ``search`` below the fetch: the shared _afetch_all_positions and the
         pure-CPU relevance.query_terms / field_scores + sort guarantee no drift between the two paths."""
@@ -814,9 +587,9 @@ class AIResidenciesAdapter:
             )
             scored.append((sort_key, p))
         scored.sort(key=lambda x: x[0])
-        return [p.to_omniseek_doc() for _, p in scored[:limit]]
+        return [p.to_eye_doc() for _, p in scored[:limit]]
 
-    def fetch_url(self, url: str) -> Optional[Document]:
+    async def afetch_url(self, url: str) -> Optional[Document]:
         # Claim a URL only when it IS one of this source's pages (a configured program page, or a
         # posting a board returned), compared by _url_key. Another page on the same site is not
         # ours. The host fallback that used to follow the exact match accepted the same host, a
@@ -826,19 +599,27 @@ class AIResidenciesAdapter:
         want = _url_key(url)
         if not want:
             return None
-        for p in self._fetch_all_positions():
+        # Every read passes here (no host check can say which pages are ours before the listing is
+        # known), so the listing's own failure notes (a board host that did not answer) are about this
+        # source's boards, not about ``url``: they stay out of this read's reason. Capture is off in a
+        # copied context for the listing only.
+        quiet = copy_context()
+        quiet.run(diag.drain)
+        positions = await asyncio.get_running_loop().create_task(self._afetch_all_positions(), context=quiet)
+        for p in positions:
             if _url_key(p.url) == want:
-                return p.to_omniseek_doc()
+                return p.to_eye_doc()
         return None
 
-    def health_check(self) -> tuple[bool, str]:
+    async def ahealth_check(self) -> tuple[bool, str]:
         # Probe only the first few rows, returning on the FIRST that yields data:
         # running all of them (each a full fetch) blocked the all-source probe.
-        rows = _rows()[:3]
+        all_rows = await anyio.to_thread.run_sync(_rows, limiter=portal.IO_LANE)  # ai_residencies.json read OFF loop
+        rows = all_rows[:3]
         for row in rows:
             try:
-                if _KIND_FETCHERS[row["kind"]](row):
-                    return True, f"OK (probed {row['kind']}/{row['lab']} of {len(_rows())} rows)"
+                if await _AKIND_FETCHERS[row["kind"]](row):
+                    return True, f"OK (probed {row['kind']}/{row['lab']} of {len(all_rows)} rows)"
             except Exception:  # noqa: BLE001
                 continue
         return False, f"first {len(rows)} rows returned no data/failed"

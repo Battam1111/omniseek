@@ -6,7 +6,7 @@ their own copy of the HTTP call, the inverted-index abstract reconstruction and
 the work-to-fields parsing; and a dead upstream degraded a third of OmniSeek with
 no shared protection. Here:
 
-  get_json()             keyed client (api_key → the raised per-key credit budget),
+  aget_json()            keyed client (api_key → the raised per-key credit budget),
                          one gentle retry honoring Retry-After
   circuit breaker        consecutive failures open the circuit briefly, so a dead
                          upstream fails FAST instead of stacking 20s timeouts
@@ -30,8 +30,12 @@ from urllib.parse import urlsplit
 
 import anyio
 import httpx
+from tenacity import (AsyncRetrying, RetryCallState, retry_if_exception, retry_if_result,
+                      stop_after_attempt)
 
 from omniseek.core import _probe, auth, diag, http, upstreams
+from omniseek.core._guard import counts_against_upstream
+from omniseek.core.normalize import to_utc
 
 logger = logging.getLogger(__name__)
 
@@ -53,7 +57,7 @@ _BREAK_FOR_S = 120.0  # seconds the circuit stays open
 # keyless bucket is ONE TENTH of the keyed one. (The comment here until 2026-09-28 said "each bucket
 # $1/day, ~2x daily capacity": that was the 2026-06-17 reading and is no longer true.)
 #
-# So the keyless lane is a small overflow, not a second budget: get_json tries the keyed lane first and
+# So the keyless lane is a small overflow, not a second budget: aget_json tries the keyed lane first and
 # spills to the keyless lane on a budget-429, and it decides from READINGS, not from an assumed size:
 # every response's x-ratelimit-* headers are recorded per lane (_note_remaining -> _usage["lanes"]),
 # a lane whose last reading shows nothing left before its reported reset is skipped, and a budget-429
@@ -102,18 +106,9 @@ def _load_api_key() -> Optional[str]:
 
 
 # Loaded once at import (mirrors _s2's keyed-client pattern): None when no key file exists, so
-# get_json's injection is a no-op and behavior is unchanged until ~/.omniseek/credentials/openalex.json
+# aget_json's injection is a no-op and behavior is unchanged until <credentials>/openalex.json
 # is dropped on the host. Committing the code before the key exists is therefore safe.
 _api_key = _load_api_key()
-
-# Pooled client: reuse one keep-alive connection to api.openalex.org across the 40+ OpenAlex-
-# backed sources (researcher_watch fan-out + 39 org_watch + openalex + cartographer/field_skeleton)
-# instead of a fresh TCP+TLS handshake per call (~0.5-1.5s to the overseas endpoint). httpx.Client
-# is thread-safe; the global _sema still bounds in-flight concurrency. HTTP/2 multiplexing if h2
-# is importable, else HTTP/1.1 keep-alive.
-_client: Optional["httpx.Client"] = None
-_client_lock = threading.Lock()
-
 
 def _http2_ok() -> bool:
     try:
@@ -121,28 +116,6 @@ def _http2_ok() -> bool:
         return True
     except Exception:  # noqa: BLE001
         return False
-
-
-def _get_client() -> "httpx.Client":
-    global _client
-    if _client is None:
-        with _client_lock:
-            if _client is None:
-                _client = httpx.Client(
-                    headers={"User-Agent": USER_AGENT},
-                    timeout=TIMEOUT,
-                    http2=_http2_ok(),
-                    # follow_redirects=False (the SSRF hardening, attack-3): get_json is reached
-                    # with a candidate-page-parsed OpenAlex work-id (attacker-influenceable). The
-                    # API answers 200 JSON; a 3xx is the off-host redirect attack -> refuse it
-                    # explicitly. With the host assert in get_json + the _OA_ID_RE path constraint,
-                    # three independent constraints close the redirect/host/path injection.
-                    follow_redirects=False,
-                    limits=httpx.Limits(max_keepalive_connections=16, max_connections=32,
-                                        keepalive_expiry=30.0),
-                    event_hooks=http.progress_hooks(),   # the body's progress renews the lease
-                )
-    return _client
 
 
 class OpenAlexDown(RuntimeError):
@@ -172,7 +145,7 @@ def unavailable() -> bool:
     """True iff OpenAlex cannot serve a request right now WITHOUT a live probe: the circuit is open
     (recent consecutive failures) OR every budget lane is dry (keyed and keyless, each until the reset
     it reported). A non-probing read (no upstream call, no budget spend), using the same lane
-    selection as get_json, so a caller can choose to serve a stale last-good fallback instead of a blind
+    selection as aget_json, so a caller can choose to serve a stale last-good fallback instead of a blind
     empty when the only reason for [] is OpenAlex being down (vs a genuine no-match)."""
     with _lock:
         if time.time() < _state["open_until"]:
@@ -184,28 +157,50 @@ def _late(wait: float) -> OpenAlexDown:
     return OpenAlexDown(f"rate-gate slot {wait:.0f}s away, past this caller's budget; degrade")
 
 
-def _pace(until: Optional[float] = None):
-    """Reserve the next request-start slot (>= _MIN_INTERVAL_S after the previous), then wait for it.
-    The slot reservation is under the lock; the wait is NOT, so callers do not serialize on the lock
-    itself, only on the wire-rate. Bounds OpenAlex requests/second across all callers + threads. A slot
-    past ``until`` (the attempt's budget) is not reserved: OpenAlexDown. Returns the reservation."""
-    return _guard.pace(on_backlog=_late, until=until)
-
-
 def _pace_backlog_s() -> float:
     """How long the NEXT request would wait on the rate gate, read-only (no reservation). >
-    _PACE_MAX_WAIT_S means the backlog is pathological (a 429 storm) and get_json fails fast instead
-    of inheriting the whole queue. The fast-fail lives at get_json's top (beside the breaker check),
-    not in _pace(), so it never tangles with the in-loop retry/fails bookkeeping."""
+    _PACE_MAX_WAIT_S means the backlog is pathological (a 429 storm) and aget_json fails fast instead
+    of inheriting the whole queue. The fast-fail lives at aget_json's top (beside the breaker check),
+    not in the pacer, so it never tangles with the in-loop retry/fails bookkeeping."""
     return _guard.pace_backlog_s()
 
 
-def _retry_after(resp, default: float = 0.0) -> float:
-    """The Retry-After header in seconds (OpenAlex sends seconds-until-reset), else ``default``."""
-    try:
-        return float(resp.headers.get("retry-after") or default)
-    except (ValueError, TypeError):
-        return default
+class _LaneDry(RuntimeError):
+    """A budget-429: this lane's daily budget is spent. Not retried; aget_json spills to the next lane."""
+
+
+_RETRY_STATUS = (429, 500, 502, 503)
+_AGAIN = object()   # an attempt's body slot when its answer was a transient 429 / 5xx
+
+
+def _wait_before_retry(state: RetryCallState) -> float:
+    """Seconds before the one retry of a lane: 1s after an exception; after a transient 429 / 5xx, its
+    Retry-After (OpenAlex sends seconds-until-reset), else 1.5s, capped 5s. X-RateLimit-Reset is not
+    read here: OpenAlex reports the seconds to its daily reset there, not an epoch."""
+    if state.outcome.failed:
+        return 1.0
+    return upstreams.retry_wait(state.outcome.result()[0].headers, cap=5.0, default=1.5, reset=False)
+
+
+def _raise_last(state: RetryCallState) -> None:
+    """After the second attempt: an exception is raised as it is; a response still 429 / 5xx raises
+    its HTTPStatusError, so the lane fails with it."""
+    state.outcome.result()[0].raise_for_status()
+
+
+# Per lane: one retry (two attempts) on a transient 429 / 500 / 502 / 503 (the attempt returns
+# (response, _AGAIN)) or on any exception except the gate's refusal (OpenAlexDown), a budget-429, and
+# an answer the breaker does not count (404 / 410 / 400 / 422: OpenAlex said it is not there or the
+# request is wrong; _guard.counts_against_upstream). Such an answer also ends the lane loop in
+# aget_json: the keyless lane would only be told the same.
+_RETRY = dict(
+    stop=stop_after_attempt(2),
+    wait=_wait_before_retry,
+    retry=(retry_if_exception(lambda e: isinstance(e, Exception) and not isinstance(e, (OpenAlexDown, _LaneDry))
+                              and counts_against_upstream(e))
+           | retry_if_result(lambda r: r[1] is _AGAIN)),
+    retry_error_callback=_raise_last,
+)
 
 
 def _is_budget_429(resp) -> bool:
@@ -238,7 +233,7 @@ _usage: dict = {"since": None, "by_caller": {}, "spilled_to_anon": 0,
 def _caller_tag() -> str:
     """The nearest stack frame OUTSIDE this module = OmniSeek component that drove the call."""
     import sys
-    f = sys._getframe(2)  # 0=_caller_tag, 1=get_json, 2=the immediate caller
+    f = sys._getframe(2)  # 0=_caller_tag, 1=aget_json, 2=the immediate caller
     for _ in range(15):
         if f is None:
             break
@@ -328,7 +323,7 @@ def _open_lanes(base: dict, billable: bool = True) -> list:
 def _seconds_to_reset(resp) -> float:
     """How long a budget-exhausted lane stays dry: the x-ratelimit-reset OpenAlex reports (seconds
     to midnight UTC), else Retry-After, else the actual seconds to the next midnight UTC. Capped a day."""
-    for secs in (_hdr_num(resp, "x-ratelimit-reset"), _retry_after(resp) or None):
+    for secs in (_hdr_num(resp, "x-ratelimit-reset"), upstreams.parse_retry_after(resp.headers.get("retry-after"))):
         if secs and secs > 0:
             return min(secs, 86400.0)
     now = datetime.now(timezone.utc)
@@ -374,107 +369,11 @@ def usage_stats() -> dict:
         }
 
 
-def get_json(path: str, params: Optional[dict] = None, timeout: float = TIMEOUT) -> dict:
-    """GET api.openalex.org``path`` and return parsed JSON.
-
-    Budget lanes (see the usage-model note above): the keyed lane FIRST, spilling to the keyless lane
-    on a budget-429. The keyless lane is a tenth of the keyed budget, so the spill is a small overflow,
-    and which lanes are tried comes from what OpenAlex last reported for each (_open_lanes). One gentle
-    retry on a TRANSIENT 429/5xx (honoring Retry-After, capped 5s). While the breaker is open this
-    raises ``OpenAlexDown`` at once; any final failure propagates so each caller degrades exactly
-    as it did before (log + empty).
-    """
-    # Host pin (the SSRF hardening, attack-3): the resolved request host MUST be api.openalex.org.
-    # path comes from a candidate-page-parsed work-id (_OA_ID_RE = W\d{6,}); assert the assembled
-    # URL never resolves off-host (a crafted path with an authority or scheme can't redirect us).
-    if (urlsplit(f"{BASE}{path}").hostname or "").lower() != _BASE_HOST:
-        raise ValueError(f"openalex get_json refused: path {path!r} resolves off {_BASE_HOST}")
-
-    with _lock:
-        if time.time() < _state["open_until"]:
-            _down = OpenAlexDown(f"circuit open {_state['open_until'] - time.time():.0f}s more")
-            diag.note("openalex.get_json", url=f"{BASE}{path}", exc=_down)
-            raise _down
-
-    # Rate-gate backlog fast-fail (beside the breaker check): if the pacer would make this caller wait
-    # absurdly long (a 429/budget storm piled the queue up), fail fast like an open circuit instead of
-    # inheriting a multi-minute wait. Does NOT count as a transient fail (it is shed load, not an
-    # upstream error), mirroring the circuit-open early raise above.
-    _backlog = _pace_backlog_s()
-    if time.monotonic() + _backlog > upstreams.wait_until(_PACE_MAX_WAIT_S):
-        _down = OpenAlexDown(f"rate-gate backlog {_backlog:.0f}s, past this caller's budget "
-                             f"(declared {_PACE_MAX_WAIT_S:.0f}s or the caller's deadline); OA storming, degrade")
-        diag.note("openalex.get_json", url=f"{BASE}{path}", exc=_down)
-        raise _down
-
-    base = dict(params or {})
-    # Budget lanes in preference order (keyed, then the keyless overflow), minus any lane that is dry
-    # by its own last report (a budget-429 until the reset it reported, or read empty for a billable
-    # call). Chosen from readings, not from an assumed size.
-    lanes = _open_lanes(base, _billable(path, base))
-    if not lanes:  # every lane's daily budget is spent → fail fast; the caller degrades to cached/empty
-        _dry = OpenAlexDown(
-            "OpenAlex daily budgets exhausted on every lane (keyed + keyless), per their last "
-            "reported x-ratelimit readings; reset midnight UTC")
-        diag.note("openalex.get_json", url=f"{BASE}{path}", exc=_dry)
-        raise _dry
-
-    caller = _caller_tag()  # attribute this call's budget spend to OmniSeek component that drove it
-    last_exc: Optional[Exception] = None
-    for lane_name, p in lanes:
-        for attempt in (1, 2):
-            try:
-                # ONE budget per attempt for the start wait and the permit wait (design decision 2)
-                until = upstreams.wait_until(_PACE_MAX_WAIT_S)
-                res = _pace(until)  # rate cap: bounds req/s so a fan-out across 40+ sources can't burst a bucket
-                # global concurrency cap, BOUNDED: a saturated/leaked pool degrades instead of hanging
-                try:
-                    # released before the retry sleep below
-                    with _guard.slot(_PACE_MAX_WAIT_S, _slot_busy, until=until, request_s=timeout):
-                        resp = _get_client().get(f"{BASE}{path}", params=p, timeout=timeout)
-                except OpenAlexDown:  # only the slot's refusal raises it here: never sent (review F8)
-                    _guard.refund(res)
-                    raise
-                _note_remaining(lane_name, resp)  # record this lane's reported budget (200 or 429)
-                if resp.status_code == 429:  # stamp it so health() can surface it honestly
-                    with _lock:
-                        _state["last_429"] = time.time()
-                    if _is_budget_429(resp):  # THIS lane's daily budget is spent → mark dry + spill
-                        reset = _seconds_to_reset(resp)  # the reset OpenAlex reported, not a guess
-                        with _lock:
-                            _state["dry_until"][lane_name] = time.monotonic() + reset
-                        last_exc = RuntimeError(
-                            f"OpenAlex {lane_name} daily budget exhausted (429); resets in ~{int(reset)}s")
-                        break  # spill to the next lane (no sleep: this one won't recover for hours)
-                if resp.status_code in (429, 500, 502, 503) and attempt == 1:
-                    time.sleep(min(_retry_after(resp, 1.5), 5.0))
-                    continue
-                resp.raise_for_status()
-                _guard.record_ok()  # reset the consecutive-failure streak
-                _record_ok(caller, lane_name)  # budget-spending success → tally to its caller
-                return resp.json()
-            except OpenAlexDown:  # the gate turned it away (we did not ask): no retry, no breaker
-                raise
-            except Exception as exc:  # noqa: BLE001
-                last_exc = exc
-                if attempt == 1:
-                    time.sleep(1.0)
-        # this bucket failed (budget-429 spill, or two transient failures) → try the next bucket
-    _guard.record_fail()  # one failure; opens the circuit at _BREAK_AFTER consecutive (logs on open)
-    # Every lane failed (budget-429 spill or two transient failures each). Surface the last
-    # exception + the path so the fixing agent sees WHY OpenAlex gave nothing (429 budget, 5xx,
-    # timeout): only on this real-failure exit, never the success return above.
-    diag.note("openalex.get_json", url=f"{BASE}{path}", exc=last_exc)
-    raise last_exc  # type: ignore[misc]
-
-
-# --- native-async twin of get_json (the 40+ OpenAlex sources go native async) --------------------
-# Byte-faithful mirror of get_json sharing the SAME _guard (breaker + rate pacer + concurrency sema)
-# and the SAME 2-lane budget state, so async and sync egress are ONE load guard + ONE budget ledger.
-# Only the BLOCKING waits go async (no thread held during them). No operation converted here changes
-# get_json; this is a pure addition callers opt into via aget_json.
+# --- the one OpenAlex egress (async; the sync get_json and its client were deleted 11-04) ----------
+# aget_json goes through the module's _guard (breaker + rate pacer + concurrency sema) and the 2-lane
+# budget state; no wait holds a thread.
 _aclient: Optional["httpx.AsyncClient"] = None
-_aclient_lock = threading.Lock()  # construction is sync (no await), double-check like _get_client
+_aclient_lock = threading.Lock()  # construction is sync (no await): double-checked under this lock
 
 
 def _aget_client() -> "httpx.AsyncClient":
@@ -486,7 +385,7 @@ def _aget_client() -> "httpx.AsyncClient":
                     headers={"User-Agent": USER_AGENT},
                     timeout=TIMEOUT,
                     http2=_http2_ok(),
-                    follow_redirects=False,  # same SSRF hardening as _get_client (attack-3)
+                    follow_redirects=False,  # SSRF hardening (attack-3): a 3xx is the off-host redirect attack
                     limits=httpx.Limits(max_keepalive_connections=16, max_connections=32,
                                         keepalive_expiry=30.0),
                     event_hooks=http.aprogress_hooks(),
@@ -495,18 +394,18 @@ def _aget_client() -> "httpx.AsyncClient":
 
 
 async def aget_json(path: str, params: Optional[dict] = None, timeout: float = TIMEOUT) -> dict:
-    """Native-async twin of ``get_json`` (byte-faithful): SAME host-pin, SAME shared breaker / rate
-    pacer / concurrency cap / 2-lane budget / retry, so async and sync egress share ONE load guard and
-    ONE budget ledger. Only the BLOCKING waits go async so no thread is held during them:
+    """GET api.openalex.org``path`` and return the parsed JSON: the ONE OpenAlex egress (the sync
+    ``get_json`` was deleted 11-04, async migration step seven; a thread reaches this through
+    ``portal.call``). Host-pinned, behind the shared breaker / rate pacer / concurrency cap / 2-lane
+    budget / retry: ONE load guard and ONE budget ledger. No wait holds a thread:
       - the rate-gate wait -> ``_guard.reserve_pace_slot()`` (reserve the slot, sync + brief) then
         ``await anyio.sleep`` (NOT time.sleep on the loop; the SAME shared pace state, NOT a new primitive);
       - the concurrency cap -> the SAME ``_sema``, waited for in its one line on the loop (``aslot``:
-        no thread, bounded, leased), held only around the async network call (mirror get_json's slot);
+        no thread, bounded, leased), held only around the async network call;
       - the network -> ``await _aget_client().get`` (epoll, no held thread);
       - the retry backoffs -> ``await anyio.sleep`` (a time.sleep on the loop would freeze every coroutine).
     Everything else (host-pin, breaker check, lane selection, budget-429 dry/spill, record_ok/fail,
-    _note_remaining, _record_ok, diag labels) is brief-lock / pure CPU, byte-identical to get_json. The
-    ``aslot`` takes and returns the permit inside this coroutine, so no cancellation can leak it."""
+    _note_remaining, _record_ok, diag labels) is brief-lock / pure CPU. The ``aslot`` takes and returns the permit inside this coroutine, so no cancellation can leak it."""
     if (urlsplit(f"{BASE}{path}").hostname or "").lower() != _BASE_HOST:
         raise ValueError(f"openalex aget_json refused: path {path!r} resolves off {_BASE_HOST}")
 
@@ -533,111 +432,113 @@ async def aget_json(path: str, params: Optional[dict] = None, timeout: float = T
         raise _dry
 
     caller = _caller_tag()
+
+    async def _attempt(lane_name: str, p: dict):
+        """One try on one lane (mirror get_json's _attempt)."""
+        # ONE budget per attempt for the start wait and the permit wait (design decision 2)
+        until = upstreams.wait_until(_PACE_MAX_WAIT_S)
+        res = _guard.reserve(_late, until=until)  # rate cap: reserve the slot (sync, brief)...
+        sent = False
+        try:
+            if res.wait > 0:
+                await anyio.sleep(res.wait)     # ...then wait WITHOUT holding a thread
+            # concurrency cap, polled in this coroutine (no worker thread, and no cancel can
+            # strand the permit) + BOUNDED; released before the retry sleep (mirror get_json).
+            async with _guard.aslot(_PACE_MAX_WAIT_S, _slot_busy, until=until,
+                                    request_s=timeout):
+                sent = True
+                resp = await _aget_client().get(f"{BASE}{path}", params=p, timeout=timeout)
+        except BaseException:
+            if not sent:  # refused or cancelled before sending: hand the slot back (review F8)
+                _guard.refund(res)
+            raise
+        _note_remaining(lane_name, resp)
+        if resp.status_code == 429:
+            with _lock:
+                _state["last_429"] = time.time()
+            if _is_budget_429(resp):
+                reset = _seconds_to_reset(resp)  # the reset OpenAlex reported, not a guess
+                with _lock:
+                    _state["dry_until"][lane_name] = time.monotonic() + reset
+                raise _LaneDry(f"OpenAlex {lane_name} daily budget exhausted (429); resets in ~{int(reset)}s")
+        if resp.status_code in _RETRY_STATUS:
+            return resp, _AGAIN
+        resp.raise_for_status()
+        _guard.record_ok()
+        _record_ok(caller, lane_name)
+        return resp, resp.json()
+
     last_exc: Optional[Exception] = None
     for lane_name, p in lanes:
-        for attempt in (1, 2):
-            try:
-                # ONE budget per attempt for the start wait and the permit wait (design decision 2)
-                until = upstreams.wait_until(_PACE_MAX_WAIT_S)
-                res = _guard.reserve(_late, until=until)  # rate cap: reserve the slot (sync, brief)...
-                sent = False
-                try:
-                    if res.wait > 0:
-                        await anyio.sleep(res.wait)     # ...then wait WITHOUT holding a thread
-                    # concurrency cap, polled in this coroutine (no worker thread, and no cancel can
-                    # strand the permit) + BOUNDED; released before the retry sleep below (mirror get_json).
-                    async with _guard.aslot(_PACE_MAX_WAIT_S, _slot_busy, until=until,
-                                            request_s=timeout):
-                        sent = True
-                        resp = await _aget_client().get(f"{BASE}{path}", params=p, timeout=timeout)
-                except BaseException:
-                    if not sent:  # refused or cancelled before sending: hand the slot back (review F8)
-                        _guard.refund(res)
-                    raise
-                _note_remaining(lane_name, resp)
-                if resp.status_code == 429:
-                    with _lock:
-                        _state["last_429"] = time.time()
-                    if _is_budget_429(resp):
-                        reset = _seconds_to_reset(resp)  # the reset OpenAlex reported, not a guess
-                        with _lock:
-                            _state["dry_until"][lane_name] = time.monotonic() + reset
-                        last_exc = RuntimeError(
-                            f"OpenAlex {lane_name} daily budget exhausted (429); resets in ~{int(reset)}s")
-                        break  # spill to the next lane (no sleep: this one won't recover for hours)
-                if resp.status_code in (429, 500, 502, 503) and attempt == 1:
-                    await anyio.sleep(min(_retry_after(resp, 1.5), 5.0))
-                    continue
-                resp.raise_for_status()
-                _guard.record_ok()
-                _record_ok(caller, lane_name)
-                return resp.json()
-            except OpenAlexDown:  # the gate turned it away (we did not ask): no retry, no breaker
-                raise
-            except Exception as exc:  # noqa: BLE001
-                last_exc = exc
-                if attempt == 1:
-                    await anyio.sleep(1.0)
+        try:
+            return (await AsyncRetrying(sleep=anyio.sleep, **_RETRY)(_attempt, lane_name, p))[1]
+        except OpenAlexDown:  # the gate turned it away (we did not ask): no retry, no breaker
+            raise
+        except _LaneDry as exc:  # spill to the next lane (no sleep: this one won't recover for hours)
+            last_exc = RuntimeError(str(exc))
+        except Exception as exc:  # noqa: BLE001
+            last_exc = exc
+            if not counts_against_upstream(exc):
+                break  # an answer (404 / 410 / 400 / 422): the next lane would get the same one
         # this bucket failed (budget-429 spill, or two transient failures) → try the next bucket
-    _guard.record_fail()
+    _guard.record_fail(last_exc)  # a 404 / 410 / 400 / 422 is OpenAlex answering, not counted (_guard)
     diag.note("openalex.get_json", url=f"{BASE}{path}", exc=last_exc)
     raise last_exc  # type: ignore[misc]
 
 
 _HEALTH_TTL_S = 60.0
 _health: dict = {"at": 0.0, "result": None}
-_health_lock = threading.Lock()
 
 
-def health(timeout: float = 8.0) -> tuple[Optional[bool], str]:
-    """ONE shared upstream probe for all 40+ OpenAlex-backed sources (single-flight + 60s cache).
+async def ahealth(timeout: float = 8.0) -> tuple[Optional[bool], str]:
+    """ONE shared upstream probe for all 40+ OpenAlex-backed sources (single-flight + 60s cache,
+    ``_probe.shared_verdict``).
 
     Before this, openalex + researcher_watch + every org_watch row each probed OpenAlex in its own
     health_check; the health sweep fired all 40 at once, bursting the shared key into 429 and tripping
     the breaker, so one transient probe storm read as "40 sources down" and degraded them all. Now
     they delegate here: one minimal filter call (per-page=1, select=id) tests connectivity + key
-    validity + the breaker/rate state, cached 60s and single-flighted (the probe runs under the lock)
-    so 40 concurrent callers cause exactly ONE upstream call. A recent 429 is surfaced even when this
+    validity + the breaker/rate state, cached 60s and single-flighted so 40 concurrent callers cause
+    exactly ONE upstream call. A recent 429 is surfaced even when this
     probe succeeds, because get_json may have reached OpenAlex via the keyless lane while the keyed
     lane is exhausted (the two budgets are SEPARATE, $1.00 and $0.10 a day), so a recent budget-429
     stays legible even on an OK verdict, with each lane's last reported remaining."""
-    now = time.monotonic()
-    with _health_lock:
-        if _health["result"] is not None and now - _health["at"] < _HEALTH_TTL_S:
-            return _health["result"]
-        with _probe.watching() as led:
-            try:
-                get_json("/works", {"per-page": 1, "select": "id"}, timeout=timeout)
-                ok, msg = True, "OK (shared OpenAlex upstream reachable, key valid)"
-            except OpenAlexDown as exc:
-                # Self-shed, NOT upstream-down: get_json raises OpenAlexDown ONLY for OmniSeek's own
-                # protective states (breaker open / concurrency pool saturated / rate-gate backlog /
-                # daily budget dry) and raises the RAW exception for a genuine upstream failure (caught
-                # below). Reporting DOWN here flipped all 40+ OpenAlex-backed sources down on a single
-                # transient breaker-open (the false mass outage the source-health watchdog surfaced
-                # 2026-07-23). Nothing was sent, so nothing was verified: None (the watchdog's
-                # `unverified`), neither healthy nor failing; it self-heals when the breaker closes / the
-                # pool frees. A genuine outage still surfaces as ok=False via the raw branch.
-                with _lock:
-                    left = _state["open_until"] - time.time()
-                ok, msg = None, (_probe.breaker_open("OpenAlex, eye backing off", left) if left > 0
-                                 else f"not verified: OmniSeek shed the probe, nothing sent ({exc})")
-            except Exception as exc:  # noqa: BLE001
-                ok, msg = False, f"{type(exc).__name__}: {exc}"
-        # Cached for every OpenAlex-backed source, so re-read HERE: a probe that failed only on a 429
-        # (both lanes rate-limited) is "not verified" for all of them, not "down".
-        ok, msg = _probe.reread(ok, msg, led)
-        with _lock:
-            last = _state.get("last_429", 0.0)
-        if ok and last and (time.time() - last) < 1800:
-            with _usage_lock:
-                rep = {k: (v or {}).get("remaining-usd") for k, v in (_usage.get("lanes") or {}).items()}
-            msg = (f"OK (OpenAlex reachable), but a 429 hit {int(time.time() - last)}s ago: a daily "
-                   f"budget lane (keyed $1.00 / keyless $0.10) ran out; last reported remaining USD "
-                   f"{rep or 'unknown'}; resets at midnight UTC")
-        _health["at"] = time.monotonic()
-        _health["result"] = (ok, msg)
-        return _health["result"]
+    return await _probe.shared_verdict(_health, _HEALTH_TTL_S, lambda: _aprobe(timeout))
+
+
+async def _aprobe(timeout: float) -> tuple[Optional[bool], str]:
+    """The probe behind ``ahealth`` (run once per TTL by ``_probe.shared_verdict``)."""
+    with _probe.watching() as led:
+        try:
+            await aget_json("/works", {"per-page": 1, "select": "id"}, timeout=timeout)
+            ok, msg = True, "OK (shared OpenAlex upstream reachable, key valid)"
+        except OpenAlexDown as exc:
+            # Self-shed, NOT upstream-down: get_json raises OpenAlexDown ONLY for OmniSeek's own
+            # protective states (breaker open / concurrency pool saturated / rate-gate backlog /
+            # daily budget dry) and raises the RAW exception for a genuine upstream failure (caught
+            # below). Reporting DOWN here flipped all 40+ OpenAlex-backed sources down on a single
+            # transient breaker-open (the false mass outage the source-health watchdog surfaced
+            # 2026-07-23). Nothing was sent, so nothing was verified: None (the watchdog's
+            # `unverified`), neither healthy nor failing; it self-heals when the breaker closes / the
+            # pool frees. A genuine outage still surfaces as ok=False via the raw branch.
+            with _lock:
+                left = _state["open_until"] - time.time()
+            ok, msg = None, (_probe.breaker_open("OpenAlex, eye backing off", left) if left > 0
+                             else f"not verified: OmniSeek shed the probe, nothing sent ({exc})")
+        except Exception as exc:  # noqa: BLE001
+            ok, msg = False, f"{type(exc).__name__}: {exc}"
+    # Cached for every OpenAlex-backed source, so re-read HERE: a probe that failed only on a 429
+    # (both lanes rate-limited) is "not verified" for all of them, not "down".
+    ok, msg = _probe.reread(ok, msg, led)
+    with _lock:
+        last = _state.get("last_429", 0.0)
+    if ok and last and (time.time() - last) < 1800:
+        with _usage_lock:
+            rep = {k: (v or {}).get("remaining-usd") for k, v in (_usage.get("lanes") or {}).items()}
+        msg = (f"OK (OpenAlex reachable), but a 429 hit {int(time.time() - last)}s ago: a daily "
+               f"budget lane (keyed $1.00 / keyless $0.10) ran out; last reported remaining USD "
+               f"{rep or 'unknown'}; resets at midnight UTC")
+    return ok, msg
 
 
 def reconstruct_abstract(inv: Optional[dict]) -> str:
@@ -672,10 +573,7 @@ def parse_work(work: dict) -> dict:
     date = None
     pub = work.get("publication_date")
     if pub:
-        try:
-            date = datetime.fromisoformat(pub).replace(tzinfo=timezone.utc)
-        except (ValueError, TypeError):
-            pass
+        date = to_utc(pub)
 
     venue = ""
     if isinstance(loc, dict):

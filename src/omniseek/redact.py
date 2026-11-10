@@ -135,6 +135,87 @@ def redact_obj(obj: Any, mask: str = MASK, skip: Optional[Callable[[Any], bool]]
         return obj
 
 
+# ── queries sent out (SMALL-BATCH 18; the operator 2026-11-07 18:59:04, decision table row 107: what goes to machines
+# that are not ours is masked) ─────────────────────────────────────────────────────────────────────────────────
+# The rule is NOT this module's: it is the push outlet's 07_services/notify/redact.py (one rule for everything that
+# leaves for someone else's machine), loaded by file path as the services part installs it, else from the repo
+# checkout beside this tree (tests, a hand run). Masked spans become "[已遮]"; the search goes on with what is left.
+# One log line per masked query, with the tool and the count, never the text. Fail-open like the rest of this
+# module: when the rule cannot be loaded the query goes out as it is, an ERROR line says so and one alert goes through the
+# eye's push (omniseek.core.notify.alert, routed like the other alerts), once per process,
+# because an eye that refuses every search is worse than one query unmasked, and nobody reads the log on their own.
+# A deployment that sets no rule at all (omniseek.where.notify_redact() is None: the public build, which has no push
+# outlet) masks nothing, logs nothing and alerts nobody: there it is the normal state, not a fault. That return value
+# is the one place that says which of the two a process is in.
+OUTWARD_MARK = "[已遮]"
+_OUTWARD: dict = {}
+_outward_log = logging.getLogger("omniseek.outward")
+
+
+def _outward_rule(configured: "Path") -> Optional[Callable[[str], str]]:
+    from pathlib import Path
+    for path in (configured, Path(__file__).resolve().parents[3] / "07_services" / "notify" / "redact.py"):
+        try:
+            stamp = (str(path), path.stat().st_mtime_ns)
+        except OSError:
+            continue
+        fn = _OUTWARD.get(stamp)
+        if fn is None:
+            import importlib.util
+            spec = importlib.util.spec_from_file_location("omniseek_outward_redact", str(path))
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            fn = mod.redact
+            _OUTWARD.clear()
+            _OUTWARD[stamp] = fn
+        return fn
+    return None
+
+
+def outward(text: Any, tool: str) -> Any:
+    """The query ``text`` with what the push outlet's rule masks taken out, before OmniSeek hands it to any source
+    (omniseek_search and the omniseek_search calls of omniseek_gather, omniseek_sensor's create). Not a string: returned as it is."""
+    if not isinstance(text, str) or not text:
+        return text
+    from omniseek import where
+    configured = where.notify_redact()
+    if configured is None:   # no rule configured (see the comment above OUTWARD_MARK): nothing to mask, no fault
+        return text
+    try:
+        fn = _outward_rule(configured)
+    except Exception as exc:  # noqa: BLE001
+        fn, why = None, f"{type(exc).__name__}"
+    else:
+        why = "redact.py not found"
+    if fn is None:
+        if not _OUTWARD.get("warned"):
+            _OUTWARD["warned"] = True
+            _outward_log.error("outward query masking unavailable (%s): queries go out unmasked", why)
+            try:
+                import threading
+                from omniseek.core import notify
+                # Off this thread: outward runs on OmniSeek's event loop (omniseek_search), and the push both
+                # blocks and, when the outlet is out, sends through the loop itself (http.direct).
+                threading.Thread(
+                    target=notify.alert, name="outward-alert", daemon=True,
+                    args=("眼往外发的查询没遮", "推送出口的遮挡规则（07_services/notify/redact.py，装在 "
+                          "%s）载不进来（%s）：这个进程往外发的查询照原样发出，"
+                          "直到规则装回、眼重启。只报一次。" % (where.show(configured), why)),
+                    kwargs={"source": "eye.infra_jobs"}).start()   # 眼的设施毛病，同源体检一行去向（routes.tsv），表里没有的来源只记账
+            except Exception:  # noqa: BLE001 -- a push failure never breaks a search
+                pass
+        return text
+    try:
+        masked = fn(text)
+    except Exception as exc:  # noqa: BLE001
+        _outward_log.error("outward query masking failed (%s): query sent unmasked", type(exc).__name__)
+        return text
+    if masked != text:
+        _outward_log.warning("outward query masked: tool=%s spans=%d", tool,
+                             masked.count(OUTWARD_MARK) - text.count(OUTWARD_MARK))
+    return masked
+
+
 # ── logging: one record factory, so every logger (ours and httpx / httpcore / urllib3 / uvicorn)
 # and every handler is covered, whatever an entry point's own logging configuration is ──────────
 _FACTORY_MARK = "_omniseek_redacting_factory"

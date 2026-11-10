@@ -31,9 +31,10 @@ def main(argv: list[str] | None = None) -> int:
     except BaseException as exc:
         # A cancellation must propagate rather than become a plain non-zero exit: the parent kills
         # this process group on budget overrun, and swallowing the cancellation would report that
-        # kill as an ordinary job failure. Required by the S0.2 AST tripwire, which this file
+        # kill as an ordinary job failure. Required by the D11 AST tripwire (tests/test_cancel_guard.py,
+        # run by the merge gate since 2026-10-26), which this file
         # violated from the day it shipped (2026-08-25) because the branch it came on was deployed
-        # without ever running the full smoke against the main line.
+        # without that check ever running against the main line.
         if isinstance(exc, asyncio.CancelledError):
             raise
         # The child's stderr is OmniSeek-http .err log; an HTTPStatusError's text carries the full

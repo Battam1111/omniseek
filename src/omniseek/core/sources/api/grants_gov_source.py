@@ -29,7 +29,7 @@ from datetime import datetime
 from typing import Any, Optional
 
 from omniseek.core import http
-from omniseek.core.normalize import Document, jsonsafe
+from omniseek.core.normalize import Document, jsonsafe, to_utc
 from omniseek.core.sources.scrape._base import BaseScrapeAdapter
 
 API_URL = "https://api.grants.gov/v1/api/search2"
@@ -53,17 +53,8 @@ class GrantsGovAdapter(BaseScrapeAdapter):
     explicit_only = ("grants_gov: a named US federal funding-opportunity drill (by topic / agency), "
                      "not broad-fan-out fodder")
 
-    def _raw_fetch(self, query: str, limit: int) -> Optional[Any]:
-        body = {
-            "keyword": query or "",
-            "rows": max(1, min(int(limit), _MAX_ROWS)),
-            "oppStatuses": "posted|forecasted",  # applyable now + upcoming
-            "startRecordNum": 0,
-        }
-        return http.post_json(API_URL, json=body, timeout=20)
-
     async def _araw_fetch(self, query: str, limit: int) -> Optional[Any]:
-        # Async twin of _raw_fetch: byte-faithful mirror; only http.post_json -> await http.apost_json.
+        # Async replacement of the deleted sync ``_raw_fetch`` (11-04, S9; this is the only one now): byte-faithful mirror; only http.post_json -> await http.apost_json.
         body = {
             "keyword": query or "",
             "rows": max(1, min(int(limit), _MAX_ROWS)),
@@ -71,14 +62,6 @@ class GrantsGovAdapter(BaseScrapeAdapter):
             "startRecordNum": 0,
         }
         return await http.apost_json(API_URL, json=body, timeout=20)
-
-    async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async twin of search -> AsyncSearchCapable. Shares the base async cache round-trip;
-        egress via _araw_fetch; mapping via the SAME pure-CPU _to_documents (byte-identical to search)."""
-        return await self._asearch_via(
-            query, limit,
-            afetch=lambda: self._araw_fetch(query, limit),
-            abuild=lambda raw: self._to_documents(raw, query, limit))
 
     def _to_documents(self, raw: Any, query: str, limit: int) -> list[Document]:
         if not isinstance(raw, dict):
@@ -138,11 +121,9 @@ class GrantsGovAdapter(BaseScrapeAdapter):
         """Grants.gov dates are 'MM/DD/YYYY' (e.g. '06/30/2026'); tolerate ISO too. None else."""
         if not isinstance(raw, str) or not raw.strip():
             return None
-        for fmt in ("%m/%d/%Y", "%Y-%m-%d", "%Y-%m-%dT%H:%M:%S"):
-            try:
-                return datetime.strptime(raw.strip()[:19] if "T" in raw else raw.strip(), fmt)
-            except ValueError:
-                continue
-        return None
+        try:
+            return to_utc(datetime.strptime(raw.strip(), "%m/%d/%Y"))
+        except ValueError:
+            return to_utc(raw.strip()[:19] if "T" in raw else raw)
 
 # Registration is automatic via BaseScrapeAdapter.__init_subclass__ (no module-tail ceremony).

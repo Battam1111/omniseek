@@ -1,6 +1,6 @@
 # The source catalog
 
-<sub>[OmniSeek](../README.md)&nbsp;·&nbsp;[Configuration](configuration.md)&nbsp;·&nbsp;[Sites behind a login](walled-sources.md)&nbsp;·&nbsp;[Tools](tools.md)</sub>
+<sub>[OmniSeek](../README.md)&nbsp;·&nbsp;[Configuration](configuration.md)&nbsp;·&nbsp;[Sites behind a login](walled-sources.md)&nbsp;·&nbsp;[Tools](TOOLS.md)</sub>
 
 Every source below earned its place by beating plain web search at one of five jobs:
 giving structure (citation graphs, regulatory filings), reading what sits behind a login,
@@ -21,16 +21,16 @@ Descriptions are quoted in the language of each source's own audience; many are 
 because that is where those sources live. The always-English routing layer is the domain
 headers, the access levels, and the tags on every row.
 
-Generated from omniseek 0.2.1: 220 live sources across 33 domains.
+Generated from omniseek 0.2.1: 222 live sources across 34 domains.
 
-## papers (65)
+## papers (66)
 
 - **acl_anthology** `free` `lookup`: ACL Anthology: NLP venue-of-record 按卷浏览 (官方数据仓 XML, keyless). 查某届会议实际收了什么: 'acl 2025 reasoning' / 'emnlp2024 retrieval' / 'volume:2024.findings-emnlp'(裸集合 id). 必须带 venue+年份 token (这是卷浏览器; 跨会关键词搜索请用 dblp / semantic_scholar / arxiv)
 - **ai2** `free` `by-name-only` `stream`: Ai2 近期论文流 (经 OpenAlex 两全名短语精确隔离: 长名=819 + 短名=570, 名称唯一无误中). OLMo/Tulu 开源 LLM、agentic LLM contexts、reasoning, 对 LLM PhD 工业+研究监测高度相关. 宽口径机构, 浏览需带主题词查 (Ai2 还带气候 emulator/保护工具/软件 release).
 - **alphaxiv** `free` `lookup`: AlphaXiv: trending preprint buzz (Hot feed: visits + votes) + per-paper community discussion + AI-generated paper overview, all via the keyless api.alphaxiv.org REST API
 - **amii** `free` `by-name-only` `stream`: Amii (埃德蒙顿) 近期论文流 (经 OpenAlex 全名 'Alberta Machine Intelligence Institute'=542 为锚 + 裸 'Amii'=279 经 10/10 抽样验证干净加召回). 对 PhD 的 Canada 路线是落地目标; 强 RL/reasoning 产出 (offline policy selection、Nash 均衡 meta-learning、K-Step return 蒸馏). 宽口径机构, 浏览需带主题词查 (亦发计算生物/化学材料/医学影像).
 - **ant_ling** `free` `by-name-only` `stream`: 蚂蚁集团 (Ant Group,含 Ling / Inclusion AI 实验室) 近期论文,经 OpenAlex 'Ant Group'(count=2260,14/14 抽样真带连续公司短语,零昆虫/生物误匹配)捕获。透传捕获 Ling/Inclusion AI 论文 (其署名读作 'Inclusion AI, Ant Group, Hangzhou, China')。强 on-topic LLM/RL/agent/RAG/reasoning:多 agent RAG、test-time-compute survey、GraphRAG、越狱攻击、LLM 数据合成。窄串 'Inclusion ...
-- **arxiv** `free` `lookup`: arXiv preprints: 3M+ papers across physics, math, CS, biology. Relevance order by default; a recency query ("past 7 days", "last 2 weeks", "最近 7 天", days:7, since:2026-10-01, or a native submittedDate:[A TO B] range) returns that window newest first
+- **arxiv** `free` `lookup`: arXiv preprints: 3M+ papers across physics, math, CS, biology. Relevance order by default; a recency query ("past 7 days", "last 2 weeks", "最近 7 天", days:7, since:2026-10-01, or a native submittedDate:[A TO B] range) returns that window newest first; omniseek_read on an arxiv.org /pdf/ or /html/ lin ...
 - **astar_cfar** `free` `by-name-only` `stream`: A*STAR CFAR (新加坡) 近期论文流 (经 OpenAlex 全名短语 'Centre for Frontier AI Research'=422 精确隔离, 10/10 抽样绑 A*STAR/Singapore, 零 false positive; 裸缩写 'CFAR' 禁用: 误中雷达 Constant False Alarm Rate). on-topic (Tool-Using LLM Agents、dataset distillation、rectified flow). 对 PhD 的 SG 路线是落地目标. 宽口径机构, 浏览需带主题词查 (CFAR 跨医疗 AI/MR ...
 - **baai** `free` `by-name-only` `stream`: 北京智源人工智能研究院 (BAAI) 近期论文,经 OpenAlex 引号短语 "Beijing Academy of Artificial Intelligence"(640,15/15 抽样真带) + 干净缩写 'BAAI'(85,10/10 真) 精确隔离。on-topic 核心:VLA、RL 机器人规划 (RoboGPT-R1)、LLM 上下文-记忆调和、多模态 next-token 预测、高效 LLM 探索。对 CN ML PhD on-topic。precision 强制:必须引号短语;未引号 (11,338) 在 Beijing/Artificial/Intelligence t ...
 - **baichuan** `free` `by-name-only` `stream`: 百川智能 (Baichuan) 近期论文,经 OpenAlex 两个更具体短语 "Baichuan Inc"(14 篇全真)+"Baichuan Intelligent Technology"(英文/北京公司变体,捕 AITQE、HtmlRAG、Sequential Preference Optimization)精确隔离北京 LLM 实验室。覆盖 LLM 医生、多模态数学 benchmark、长上下文 KV cache (PQCache)、长上下文数据框架。对 CN ML PhD on-topic。precision 关键:bare 'Baichuan'(190)被生物医药/中医/机械 (唐 ...
@@ -52,6 +52,7 @@ Generated from omniseek 0.2.1: 220 live sources across 33 domains.
 - **hf_daily_papers** `free` `stream`: HuggingFace Daily Papers: AK / community-curated daily ML papers, with upvotes, ai_summary, githubRepo links. Curation layer above raw arXiv.
 - **huawei_noah** `free` `by-name-only` `stream`: 华为诺亚方舟实验室 (Huawei Noah's Ark Lab) 近期论文,经 OpenAlex 'Huawei Noah's Ark Lab'(1604,主串,10/10 真) + 可选更宽 'Noah's Ark Lab'(1622,~+18 同精度) 精确隔离。名字高度独特,跨深圳/北京/Paris/Montreal 研究中心,零误匹配。强 on-topic LLM/RL/reasoning/agent:扩散 LLM 训练 (Mask Is What DLLM Needs)、LLM 数学推理 (CAMA)、LLM 多 agent 协调的自适应心智理论、LLM 极致压缩 (PocketL ...
 - **huggingface** `free` `by-name-only` `stream`: Hugging Face 近期论文流 (经 OpenAlex 'Hugging Face'=144 精确隔离, 双词短语无通用碰撞; 真实成员 Loubna Ben Allal/Lewis Tunstall/Thomas Wolf 等, 最新 2026-06-08 仍活跃). LLM/RL/agent (TRL/RLHF、开源模型训练、Nash learning from human feedback). 不宽, 无需主题词.
+- **iacr_eprint** `free` `lookup`: IACR Cryptology ePrint Archive (eprint.iacr.org): cryptography preprints, most of which are posted nowhere else. Title/author search over the whole archive (the official listing, fetched at most once a day; the site's own search is robots-disallowed), abstract, category, dates and licence via OAI-PM ...
 - **liquid_ai** `free` `by-name-only` `stream`: Liquid AI 论文流 (经 OpenAlex 'Liquid AI'=4 精确; 引号 bigram 不与化学/流体碰撞, 抽样 raw_affiliation 含 'Liquid AI, San Francisco', 零 false positive). Liquid 神经网络/基础模型创业公司, on-topic (flow matching、基因组基础模型 Evo 2). 量低 (年轻公司多在 arXiv/blog), 精确, 随索引增长. 不宽.
 - **meta_fair** `free` `by-name-only` `stream`: Meta FAIR 近期论文流 (经 OpenAlex 三短语精确隔离: 旧名 'Facebook AI Research'=1352 + 现名 'FAIR at Meta'=32 + 'Fundamental AI Research'=48, 均干净). 故意不用裸 'Meta AI' (有拼接伪影且更宽). LLM/RL/reasoning/agent 领军 lab, 对标 LLM PhD 工业研究前沿. 宽口径机构, 浏览需带主题词查 (FAIR 还跨催化/分子晶体/神经影像).
 - **microsoft_research** `free` `by-name-only` `stream`: Microsoft Research 近期论文流 (经 OpenAlex 短语 'Microsoft Research'=37227 精确隔离, 每条 raw_affiliation 均含该短语; 不像裸 'Microsoft' 误中硬件/产品). 各子单元 (Redmond/New England/AI for Science/Asia) 都带母短语, 单串覆盖全 lab. 含真实 on-topic 工作 (如 'The Geometry of LLM-as-Judge'). 宽口径机构, 浏览需带主题词查 (MSR 横跨生物/系统/理论/材料).
@@ -64,8 +65,8 @@ Generated from omniseek 0.2.1: 220 live sources across 33 domains.
 - **openai** `free` `by-name-only` `stream`: OpenAI 近期论文流 (经 OpenAlex raw-affiliation 短语 "OpenAI, San Francisco" 精确隔离: 73 篇均为真实研究, 已逐条核 raw_affiliation_strings). 裸 "OpenAI" 被 GitHub release-bot / 以 'Codex' 'Claude' 为伪作者的 '@openai' 垃圾污染, 故只用带城市的短语. LLM/RL/reasoning/agent 核心 lab, 对标 LLM PhD 工业前沿. precision-over-recall: 量小 (多数 arXiv-only 不带城市) 但干 ...
 - **openalex** `free` `lookup`: OpenAlex: open academic graph (250M+ scholarly works, institutions + concepts ontology; open alternative to Semantic Scholar)
 - **openalex_cn** `free` `by-name-only` `lookup`: 中文学术: Chinese-LANGUAGE scholarship via OpenAlex (language:zh): 中文期刊论文 + 学位论文 (add inline `type:dissertation`) that OmniSeek's English paper sources (arxiv/s2/crossref) miss. Returns structured 题录: title / authors / 中文期刊 venue / year / citations / OA / abstract. Optional inline filters: `type:dissert ...
-- **openreview** `keyed` `bring-your-own-login` `lookup`: OpenReview: peer reviews, rebuttals, meta-reviews from ICLR/NeurIPS/ICML; venue browse via `venue:` qualifier (venue:colm2025 / venue:iclr2026 / raw venueid) and a submission's actual reviews via `reviews:` (reviews:<forum_id> or a /forum?id=… URL); browse a venue's accepted papers via its venueid; ...
-- **pdf** `free` `portal`: PDF full-text: download a paper PDF (arxiv.org/pdf/… or any *.pdf) and extract its text so you can read the WHOLE paper, not just the abstract (pair with omniseek_paper_enrich's pdf_url)
+- **openreview** `keyed` `bring-your-own-login` `lookup`: OpenReview: peer reviews, rebuttals, meta-reviews from ICLR/NeurIPS/ICML; papers by words (anonymous search); `venue:` qualifier (venue:colm2025 / venue:iclr2026 / raw venueid) with words searches every submission of that venue, alone it browses the venue's accepted papers; a submission's actual rev ...
+- **pdf** `free` `portal`: PDF full-text: download a paper PDF (any *.pdf or /pdf/ link; arXiv links are read by the arxiv source) and extract its text so you can read the WHOLE paper, not just the abstract (pair with omniseek_paper_enrich's pdf_url)
 - **pmlr** `free` `stream`: PMLR: Proceedings of Machine Learning Research (ICML / AISTATS / COLT / NeurIPS comp / UAI / IJCAI / CoRL / AutoML / MIDL + 等; 232 volumes)
 - **qwen** `free` `by-name-only` `stream`: 阿里通义 (Qwen) 实验室近期论文,经 OpenAlex 短语对 "Tongyi Lab"(90 篇,全部 'Tongyi Lab, Alibaba Group')+"Qwen Team"(显式 Qwen-LLM-team 论文如 ProcessBench)精确隔离阿里旗舰 AI 实验室及 Qwen 线。覆盖 agentic-RL/RL-蒸馏 (AgentJet、EvoRubric、TCOD) 与多模态/视频生成。对 CN ML PhD (LLM/agent/RL+multimodal) on-topic:Qwen 是开源权重生态主力。precision 关键:勿用 bare 'Qwen' ...
 - **rbc_borealis** `free` `by-name-only` `stream`: RBC Borealis 近期论文流 (经 OpenAlex 'Borealis AI'=97 + 改名后 'RBC Borealis'=5 精确隔离, 抽样 raw_affiliation 均含该串, 双词无误中). 对 PhD 的 Canada 路线相关 (多伦多/温哥华/蒙特利尔 RBC 工业 lab). on-topic: LLM/RL/agent (LLM 先验启动 bandit、微电网 RL、金融 AI×LLM). 聚焦工业 ML, 不宽 (软 LLM/RL 过滤仍有助).
@@ -111,7 +112,7 @@ Generated from omniseek 0.2.1: 220 live sources across 33 domains.
 - **sogou_weixin** `free` `by-name-only` `lookup`: 微信公众号文章关键词搜索 (Sogou Weixin): the only free keyword index over WeChat 公众号 articles, which Google does NOT crawl. Reach for Chinese first-hand / specialist 公众号 writing (industry/行业号, 学院官方号, niche expertise, 经验贴) on a topic. Returns title + snippet + 公众号 name + date + a permanent mp.weixin.qq.com link.
 - **stackoverflow** `free` `lookup`: Stack Overflow: programming Q&A (parallel to academia_se; primary destination for pytorch/CUDA/JAX/data-preprocessing implementation issues)
 - **tieba** `free` `lookup`: Baidu Tieba (百度贴吧): China's largest topical BBS; CN-community threads + forum structure via the keyless mobile JSON endpoints
-- **v2ex** `free` `lookup`: V2EX (www.v2ex.com): the CN tech / 润学 forum; 职场 / 求职 / 远程工作 / 移民 / 海外留学 community threads via the keyless topics JSON
+- **v2ex** `free` `lookup`: V2EX (www.v2ex.com): the CN tech / 润学 forum; 职场 / 求职 / 远程工作 / 移民 / 海外留学 community threads via the keyless per-node Atom feeds
 - **xiaohongshu** `walled` `by-name-only` `lookup`: 小红书: first-hand PhD daily life + real experience sharing (CDP session)
 - **xiaohongshu_search** `free` `by-name-only` `proxy`: 小红书 经搜索索引 (Brave site: → 笔记 snippet; 永不用账号/CDP 碰站 → 零设备风险, 与封印的 CDP xiaohongshu 完全隔离, ToS 干净)：留学/读博/求职/城市/公司体验的海量一手笔记 (实测出字节面经/HKPFS 攻略). url_filter 只留真实笔记(discovery/item·explore), 滤掉 pro./job. 导航页. explicit_only (点名即达)
 - **xiaomuchong** `free` `by-name-only` `lookup`: 小木虫: China's oldest PhD/master's academic forum (since 2001, 5M users)
@@ -144,7 +145,7 @@ Generated from omniseek 0.2.1: 220 live sources across 33 domains.
 - **canada_ai_research** `free` `stream`: 加拿大 AI 研究所 + tech ecosystem：Vector / CIFAR / UWaterloo CS / Layer 6 / BetaKit / Globe and Mail Tech / Mila / UofT Schwartz Reisman (Amii 经 scrape_js_sites; IVADO 经 ivado_news 源)
 - **frontier_labs** `free` `stream`: Frontier AI research labs: Anthropic / DeepMind / Hugging Face / OpenAI / Mistral / Meta FAIR / Microsoft Research / MSRA / Google Research / Apple ML / Ai2 / Sakana / Character.AI / PyTorch
 - **gov_policy** `free` `by-name-only` `lookup`: 中国政府网 政策文件库 (gov.cn): the AUTHORITATIVE 国务院/国办 policy-document corpus (法规/条例/通知/国令), keyword search with each hit linking the FULL policy text on gov.cn (omniseek_read it). Google can't return this faceted policy index keyed to 文号 + issuing-org + date. No login. Reach for Chinese central-government ...
-- **hk_career_research** `free` `stream`: Hong Kong AI / career / 媒体信号：SCMP News + HKFP + ASTRI (R&D 院所) + info.gov.hk (SenseTime 经 scrape_js_sites). HK PhD 出海+本地路径专用
+- **hk_career_research** `free` `stream`: Hong Kong AI / career / 媒体信号：SCMP News + HKFP + info.gov.hk (SenseTime 经 scrape_js_sites). HK PhD 出海+本地路径专用
 - **hk_universities** `free` `stream`: HK 5 大学 CS/CSE/COMP dept news：HKU CS / HKUST CSE / CUHK CSE / CityU CS / PolyU COMP (HTML scrape，HK CS 院系动态信号)
 - **scrape_canada** `free` `by-name-only` `stream`: 加拿大工业界 AI lab (scrape, 无 RSS)：RBC Borealis research blog 博文 (加拿大最大工业 AI 实验室, Toronto/Edmonton, 落地招聘目标). 论文已由 rbc_borealis 覆盖,这里补 blog 长文
 - **scrape_hongkong** `free` `by-name-only` `stream`: 香港创新生态 (scrape, 无 RSS)：HKSTP 科技园 news & events (AI co-incubation / launchpad, 本地招 ML 的深科技公司). 补 hk_career_research
@@ -153,7 +154,7 @@ Generated from omniseek 0.2.1: 220 live sources across 33 domains.
 - **singapore_ai_research** `free` `stream`: 新加坡 AI 学术 + tech ecosystem：NUS News + AI Singapore + Grab Eng + Vulcan Post + Tech in Asia (A*STAR/SMU/SEA-LION 经 scrape_singapore; NTU 经 scrape_js_sites)
 - **wayback** `free` `by-name-only` `lookup`: Wayback Machine 时光机：一个 URL 的历史/被删快照 (keyless, Internet Archive CDX). query = 一个 URL → 该页的存档快照列表(时间戳 + web.archive.org 存档链接,再 omniseek_read 读历史正文). web 搜只给 LIVE 页;这取开放网已遗忘/已删改的旧版本(对抗检索、读历史、读被删)。命名查询;非 URL 返空. CDX 30 秒内不应答时退到 availability API,只返回最近的一个快照(metadata.partial=true).
 
-## funding (11)
+## funding (10)
 
 - **ai_residencies** `free` `stream`: AI research residency / fellows / scholars programs: Anthropic Fellows / MATS / Cohere Scholars + Catalyst Grants / NVIDIA / OpenAI Safety + Residency / Constellation Astra / EleutherAI SOAR / Ai2 PYI / 上海 AI Lab / Mistral Intern / Vector Institute (Tier 1-3; config rows in ai_residencies.json, addi ...
 - **cihr_grants** `free` `by-name-only` `lookup`: 加拿大 CIHR 健康研究经费：临床 AI/健康 NLP 切片 (加拿大三大联邦研究局之三: NSERC 理工、SSHRC 人文、CIHR 健康). NLP/ML 在健康这边以 临床 NLP/医学机器学习/健康数据科学/EHR 预测模型 形式存在, 是另两局不覆盖的. 开放数据为逐年 bulk XLSX (FY2025-26 ~12MB, 无查询 API; openpyxl 解析). 逐笔奖助: 获奖人 + 机构/系 + 金额(CAD) + program + 主题/类别 + 标题/摘要/关键词. 仅收 AI/ML/NLP 相关切片. 命名钻取 (omniseek_search 单源 raw) ...
@@ -161,7 +162,6 @@ Generated from omniseek 0.2.1: 220 live sources across 33 domains.
 - **fellowships** `free` `stream`: 海外 PhD/postdoc 资助与 Fellowship：Vector/CIFAR/IVADO(加) + AISG/NRF/SINGA(新) + Google/Apple/NVIDIA/Meta/MS PhD Fellowship + Schmidt/OpenPhil/LTFF(全球 AI). 国际开放 + HK→SG/加拿大路径; RSS 自动 + 静态链接人工核窗口
 - **grants_gov** `free` `by-name-only` `lookup`: Grants.gov: OPEN + forecasted US federal funding OPPORTUNITIES you can apply to, across all ~26 grant-making agencies (NSF / DOE / DARPA / NIH / ...); name it to find applyable funding by topic. The prospective complement to nsf_awards / nih_reporter (which show awards already granted). STRUCTURE, k ...
 - **nih_reporter** `free` `by-name-only` `lookup`: NIH RePORTER: US NIH biomedical research grants (contact PI / award amount / awardee organization / full abstract + terms); name it to drill US federal biomedical funding by topic / PI / organization. STRUCTURE, keyless POST api.reporter.nih.gov; the biomedical sibling of nsf_awards.
-- **nserc_awards** `free` `by-name-only` `lookup`: 加拿大 NSERC 科研经费：计算机/AI/ML/NLP 切片 (眼首个加拿大经费源, 此前只有美国 NSF/NIH). NSERC 是加拿大主科学资助局, 开放数据仅以逐年 bulk CSV 发布 (无查询 API, FY2024 ~56MB/~6 万行). 逐笔奖助: 获奖人 + 机构 + 金额 (CAD) + program + 学科 + 关键词. 博士赴加找实验室/PI/资助方向的一手结构 (网搜给不出). 仅收 CS 学科 + AI/ML/NLP 关键词的子集 (~3-4k 行, telos 视角, 非全 NSERC). 命名钻取 (omniseek_search 单源 raw).
 - **nsf_awards** `free` `by-name-only` `lookup`: NSF Award Search: US National Science Foundation research grants (PI / award amount / awardee institution / full abstract); name it to drill US federal funding by topic / institution / PI. STRUCTURE, keyless api.nsf.gov; fills the grants/funding gap.
 - **nsfc_awards** `free` `by-name-only` `lookup`: 国家自然科学基金 NSFC 已批准项目检索：中国基础科研主资助局 (美国 NSF 的对位), 眼首个中国经费源 (此前只有美国 NSF/NIH + 加拿大 NSERC/SSHRC/CIHR). 官方门户 kd.nsfc.cn 有验证码 + 加密响应不可脚本化, 故走 LetPub 第三方基金索引 (letpub.com.cn) 的免登录切片. 关键词 (题目) 搜索, 逐笔奖助: 负责人 + 单位 + 金额 (万元) + 项目批准号 + 项目类型 + 学部 + 批准年份 + 题目. 博士/研究者查某课题 (NLP/ML/视觉) 谁在中国拿了基金、在哪家机构、多少钱：一手经费格局 (网搜给不出结 ...
 - **sshrc_awards** `free` `by-name-only` `lookup`: 加拿大 SSHRC 人文社科经费：计算语言学/NLP/数字人文 切片 (加拿大三大联邦研究局之二: NSERC 理工、SSHRC 人文社科、CIHR 健康). NLP 在人文社科这边以 计算语言学/语言技术/数字人文/语料文本/计算社科 形式存在, 是 NSERC(理工) 不覆盖的一块. 开放数据为逐年 Payments bulk CSV (FY2024 ~6.9MB, 无查询 API). 逐笔奖助: 获奖人 + 机构 + 金额(CAD) + program + 学科/方向 + 关键词. 仅收 AI/ML/NLP 相关切片. 命名钻取 (omniseek_search 单源 raw).
@@ -189,6 +189,15 @@ Generated from omniseek 0.2.1: 220 live sources across 33 domains.
 - **pypi** `free` `stream`: PyPI: Python package update stream (recent releases across all packages)
 - **rl_llm_frameworks** `free` `stream`: RL-on-LLM 训练框架发布流：OpenRLHF / verl(volcengine) / TRL(HuggingFace) / LLaMA-Factory. RL/reasoning 方向的工程交付层; github_releases(推理栈 vLLM/SGLang/...)未覆盖的训练框架补充
 
+## methodology (6)
+
+- **a_happy_phd** `free` `stream`: A Happy PhD: PhD wellbeing + productivity (Luis P. Prieto, ed. psychology lens)
+- **github_awesome_phd** `free` `lookup`: GitHub Awesome-PhD curated lists: highest SNR PhD resource collections
+- **lemire_blog** `free` `stream`: Daniel Lemire's blog: software performance, SIMD, parsing and data engineering. Split out of substack_matrix 2026-11-07: lemire.me answers most of OmniSeek's exit nodes with SiteGround's IP-reputation challenge (HTTP 202 to /.well-known/sgcaptcha/), so it stands as its own row (parked through the cu ...
+- **lesswrong** `free` `stream`: LessWrong + Alignment Forum: research methodology meta-reflection (RSS, recent posts only)
+- **ml_collective** `free`: ML Collective: free ML research mentorship + research jams + DLCT reading group
+- **thesis_whisperer** `free` `stream`: The Thesis Whisperer: Inger Mewburn's authoritative PhD blog
+
 ## finance (5)
 
 - **cninfo** `free` `by-name-only` `lookup`: 巨潮资讯网 CNINFO: the SSE/SZSE OFFICIAL A-share disclosure repository (the Chinese EDGAR). Keyword full-text search over every listed-company filing (年报/季报/招股书/ad-hoc 公告), each hit a DIRECT PDF link (static.cninfo.com.cn); pair with omniseek_read for the body. Google can't return this structured filing ...
@@ -196,22 +205,6 @@ Generated from omniseek 0.2.1: 220 live sources across 33 domains.
 - **market_crypto** `free` `by-name-only` `lookup`: 加密现货行情：BTC/ETH 等币种的实时(秒级)报价 (keyless, CoinGecko 后端). query 点名币种 (BTC / ETH / $SOL / bitcoin) → 每币一条: 美元现价 / 24h 涨跌% / 市值 / 24h 成交额. 多币一次. 命名查询, 不进广搜; 主流币静态映射、未知大写符号不臆测 → query 无币种或无法解析返空.
 - **market_quote** `free` `by-name-only` `lookup`: 美股行情：实时(延迟)股票报价 (keyless, CNBC quote 后端). query 里点名 ticker ($NVDA / ORCL) → 每个 ticker 一条: 现价/涨跌/涨跌幅/成交量/市值/PE/EPS/股息/日内区间/52周区间 + 盘前盘后. 多 symbol 一次. 命名查询, 不进广搜; query 无 ticker 返空.
 - **sec_financials** `free` `by-name-only` `lookup`: SEC 结构化财务：公司官方基本面 + 最新备案 (keyless, data.sec.gov XBRL). query 给 ticker 或公司名 → 一条: 最新营收/净利/总资产/股东权益/递延收入 (us-gaap XBRL) + 最近 10 条备案 (form/日期/直达链接). 命名查询, 不进广搜. web search 给不了干净的结构化数字.
-
-## general (5)
-
-- **cdp_fulltext** `walled` `by-name-only` `portal`: Full-text via the CDP real browser for venues that wall/403 headless but render for a real browser (Quora, Blind/teamblind, Glassdoor, 脉脉/maimai, LinkedIn public posts, X/Twitter profiles+tweets, PropertyGuru 与 99.co 的新加坡房源页). Discover via the matching search-index source, then omniseek_read the URL ...
-- **csrankings** `free` `lookup`: CSRankings: CS faculty roster by institution/region (keyless, via CSRankings.org GitHub data). Query a REGION (singapore / canada / hong kong), an INSTITUTION ('National University of Singapore', 'University of Toronto'), or a faculty NAME → faculty with homepage + Google Scholar + ORCID + a DBLP li ...
-- **exa** `keyed` `bring-your-own-login` `by-name-only` `proxy`: Exa neural/semantic web search (exa.ai): finds open-web pages by MEANING, not keywords. Use for conceptual queries where keyword search misses the right page; each result carries relevant-excerpt highlights. omniseek_read the URL for the full page. Complements ordinary web search + the curated sourc ...
-- **wikicfp_nlp** `free` `by-name-only` `stream`: WikiCFP 自然语言处理征稿发现 (cat=natural language processing)：NLP 方向会议/研讨会的征稿 (CFP) 条目: 会议名 + 地点 + 日期范围 + 事件页链接. 长尾 CFP 发现, 补 conference_deadlines/ml_conferences 的主榜. 注意: 截稿日不在 feed 里 (feed 只给会议日期), 真截稿需打开事件页看. 命名 omniseek_fetch.
-- **xiaohongshu_cn** `walled` `by-name-only`: 小红书 mainland (xiaohongshu.com)：真浏览器驱动 (与 rednote 小号同一安全机制; 2026-06-25 由 self-signed direct-API 切换): search 读 SSR 笔记卡片, 笔记正文 + 完整评论区走拦截+DOM; forge nothing. signed direct-API 为 degraded fallback.
-
-## methodology (5)
-
-- **a_happy_phd** `free` `stream`: A Happy PhD: PhD wellbeing + productivity (Luis P. Prieto, ed. psychology lens)
-- **github_awesome_phd** `free` `lookup`: GitHub Awesome-PhD curated lists: highest SNR PhD resource collections
-- **lesswrong** `free` `stream`: LessWrong + Alignment Forum: research methodology meta-reflection (RSS, recent posts only)
-- **ml_collective** `free`: ML Collective: free ML research mentorship + research jams + DLCT reading group
-- **thesis_whisperer** `free` `stream`: The Thesis Whisperer: Inger Mewburn's authoritative PhD blog
 
 ## data (4)
 
@@ -222,10 +215,17 @@ Generated from omniseek 0.2.1: 220 live sources across 33 domains.
 
 ## eval (4)
 
-- **llm_leaderboard** `keyed` `bring-your-own-login` `by-name-only` `lookup`: LLM 榜单：Artificial Analysis 全模型实时评测 (500+ 模型: AA 智能/代码/数学指数, GPQA/AIME-25/HLE/LiveCodeBench/MMLU-Pro, $/1M tokens, tok/s, 发布日期). 领域脉搏的结构化层: 空 query=按智能指数排序; 关键词过滤模型/厂商 ('claude' / 'deepseek' / 'openai'). 新模型上榜=watchtower 新条目. Data by Artificial Analysis (attribution required)
+- **llm_leaderboard** `keyed` `bring-your-own-login` `by-name-only` `lookup`: LLM 榜单：Artificial Analysis 全模型实时评测 (500+ 模型: AA 智能指数 + 六个能力指数 (金融会计/战略运营/法律/医疗/工程/经济), $/1M tokens, tok/s, 发布日期). 领域脉搏的结构化层: 空 query=按智能指数排序; 关键词过滤模型/厂商 ('claude' / 'deepseek' / 'openai'). 新模型上榜=watchtower 新条目. Data by Artificial Analysis (attribution required)
 - **lmsys_arena** `free` `stream`: LMArena (原 LMSys) 官方博客：Chatbot Arena Elo 方法论 + LLM 评测深度文章 + red-teaming 报告 (LLM 评测方法论的第一手来源). 站点已不再提供 RSS, 故直接抓其服务端渲染的博客列表.
 - **ml_eval_safety** `free` `stream`: LLM 评测 + AI 安全/威胁评估 机构：METR (前沿危险能力/autonomy 评估 + Frontier Risk Report) + Epoch AI (基准 DB + 算力/数据/成本趋势量化). 评测/安全职业线信号, 区别于 lmsys_arena(实时 Elo) 与 alignment_forum(社区)
 - **scrape_ml_orgs** `free` `stream`: ML 工程 / 评测 / 科研方法 机构 (scrape, 无 RSS)：Baseten (推理云工程深文) + UK AISI (政府级前沿评测/安全研究) + Simon Peyton Jones research-skills (写论文/做报告 canonical craft)
+
+## general (4)
+
+- **cdp_fulltext** `walled` `by-name-only` `portal`: Full-text via the CDP real browser for venues that wall/403 headless but render for a real browser (Quora, Blind/teamblind, Glassdoor, 脉脉/maimai, LinkedIn public posts, X/Twitter profiles+tweets, PropertyGuru 与 99.co 的新加坡房源页). Discover via the matching search-index source, then omniseek_read the URL ...
+- **csrankings** `free` `lookup`: CSRankings: CS faculty roster by institution/region (keyless, via CSRankings.org GitHub data). Query a REGION (singapore / canada / hong kong), an INSTITUTION ('National University of Singapore', 'University of Toronto'), or a faculty NAME → faculty with homepage + Google Scholar + ORCID + a DBLP li ...
+- **exa** `keyed` `bring-your-own-login` `by-name-only` `proxy`: Exa neural/semantic web search (exa.ai): finds open-web pages by MEANING, not keywords. Use for conceptual queries where keyword search misses the right page; each result carries relevant-excerpt highlights. omniseek_read the URL for the full page. Complements ordinary web search + the curated sourc ...
+- **xiaohongshu_cn** `walled` `by-name-only`: 小红书 mainland (xiaohongshu.com)：真浏览器驱动 (与 rednote 小号同一安全机制; 2026-06-25 由 self-signed direct-API 切换): search 读 SSR 笔记卡片, 笔记正文 + 完整评论区走拦截+DOM; forge nothing. signed direct-API 为 degraded fallback.
 
 ## media (4)
 
@@ -255,13 +255,6 @@ Generated from omniseek 0.2.1: 220 live sources across 33 domains.
 - **podcast_index** `keyed` `bring-your-own-login` `by-name-only` `lookup`: Podcast Index: cross-network podcast catalog; flags which episodes ship a podcast:transcript (read it, skip ASR) vs which need omniseek_transcribe (free key/secret)
 - **xiaoyuzhou** `free` `stream`: 小宇宙播客：张小珺商业访谈录 / OnBoard! / 42章经 等中文 AI/科技/创投深度访谈 (原生抓 xiaoyuzhoufm __NEXT_DATA__, 无需 RSSHub; 可配 ~/.omniseek/credentials/xiaoyuzhou.json)
 
-## social (4)
-
-- **bluesky** `keyed` `bring-your-own-login` `lookup`: Bluesky: academic Twitter migration target, AT Protocol open API
-- **douyin** `walled` `bring-your-own-login` `by-name-only` `stream`: 抖音：中国第一短视频平台的登录墙网页搜索 (UNWALL). 一手 留学/移民/海外生活、政务/官方号公告、创作者实时评论, 视频原生, 与 知乎(文字问答)/小红书(生活笔记)/一亩三分地(北美技术移民) 不重叠. 隔离 小号 会话 (9225 专属 Chrome, 同小红书 9223 模式). 返回视频的标题/文案、作者、互动数 + 视频 URL (再对该 url 调 omniseek_transcribe 可转写语音正文). 命名调用 (omniseek_search 单源钻取), 不进广搜.
-- **mastodon** `free` `lookup`: Mastodon / the fediverse: public HASHTAG timelines across high-signal instances (mastodon.social / sigmoid.social ML / fosstodon.org FOSS), keyless. Reaches walled same-day fediverse posts web search barely indexes; best for BROAD / trending topics (retrieval is hashtag-level, not precise keyword se ...
-- **x_search** `free` `by-name-only` `proxy`: X/Twitter 经搜索索引 (非 twscrape, 与封印的 twitter_x 互补)：研究者 'joining lab X' / 'we are hiring' / 招聘意图, 新 PI/新 lab 形成 (暖、不拥挤的 faculty/postdoc 入口). explicit_only; 查询带 joining/hiring/recruiting + 方向 + 机构(Vector/Mila/NUS/NTU/A*STAR)
-
 ## career (3)
 
 - **linkedin_posts** `free` `by-name-only` `proxy`: LinkedIn 公开招聘帖 经搜索索引 (仅 Track A 公开 /posts; 人脉/档案/国籍属法务封死的 Track B, 不碰)：具名 hiring manager 'we are hiring' = 最暖的当前招聘意图 + 直接暖介绍目标. explicit_only
@@ -274,6 +267,12 @@ Generated from omniseek 0.2.1: 220 live sources across 33 domains.
 - **levels_fyi** `free` `lookup`: levels.fyi：科技公司/岗位薪酬 (TC 黄金标准, keyless). 两种查法: (1) 岗位[+国家] ("machine learning engineer singapore" / "data scientist canada") → 该岗位在该国的中位 + 区间 (本币, location-accurate, 取自页面 og:description); (2) 公司名 ("bytedance") → 该公司各职位族/级别总包 (US/USD 基准). 用于谈 offer / 比较雇主薪酬参考.
 - **ontario_sunshine** `free` `by-name-only` `lookup`: 安大略 Sunshine List: 公共部门薪酬披露 (>= CAD 10万, 含大学/教职, data.ontario.ca 官方 CKAN, keyless). 查人名/雇主/职称 → 该人薪资+福利+部门+年份. 安大略大学 PI/教职 薪酬的公开参考. 开放数据目前止于 2020 (2021+ 仅前端). 空 query 无意义 → 传人名或机构名 (如 'University of Toronto').
 
+## deadlines (3)
+
+- **conference_deadlines** `free` `lookup`: ML/AI conference submission deadlines (ccfddl): NeurIPS / ICML / ICLR / CVPR / ACL / AAAI / IJCAI / CoRL / ICRA + 47 more AI venues, ranked by nearest upcoming deadline with CCF/CORE rank + location
+- **ml_conferences** `free` `by-name-only` `stream`: NeurIPS / ICML / ICLR 官方博客：获奖公告 (Outstanding Papers / Test of Time / Awards)、投稿与评审政策变化 (如 NeurIPS 对 AI 生成论文的处理)、注册与容量公告、keynote 名单、newsletter. 与 conference_deadlines 互补: 那个只给截稿日期, 这个给公告与政策. 站点已把 feed 挡在反爬后, 故经 CDP 真浏览器渲染抓取, 命名钻取 (omniseek_search 单源 raw).
+- **wikicfp_nlp** `free` `by-name-only` `stream`: WikiCFP 自然语言处理征稿发现 (cat=natural language processing)：NLP 方向会议/研讨会的征稿 (CFP) 条目: 会议名 + 地点 + 日期范围 + 事件页链接. 长尾 CFP 发现, 补 conference_deadlines/ml_conferences 的主榜. 注意: 截稿日不在 feed 里 (feed 只给会议日期), 真截稿需打开事件页看. 命名 omniseek_fetch.
+
 ## insider (3)
 
 - **blind** `free` `by-name-only` `proxy`: Blind 在职员工匿名爆料 (经搜索索引, 非爬墙)：按国籍的 EP/签证真实结果、firm 真实薪资、招聘冻结、内推渠道. 全 insider 层最高价值生信号 (HK/中国护照 EP 可批性). explicit_only; 查询里带 公司名 + EP/visa/offer/freeze/referral 薪资/offer 题用当事人晒 offer 的词 (日薪 / package / 总包 / 晒工资 / offer 对比), 别用招聘方的词 (招聘 / 内推 / 岗位).
@@ -285,6 +284,12 @@ Generated from omniseek 0.2.1: 220 live sources across 33 domains.
 - **cset** `free` `lookup`: CSET (Georgetown): US AI-policy think-tank reports on compute/export controls, AI safety, and national security (keyless WordPress REST API)
 - **federal_register** `free` `by-name-only` `stream`: US Federal Register keyless JSON API (federalregister.gov/api/v1). Full-text term search over the daily journal of the US government: proposed and final Rules, Notices, and Presidential Documents (executive orders, proclamations). Each hit carries title, document type (Rule / Proposed Rule / Notice ...
 - **oecd_ai_policy** `free` `by-name-only` `lookup`: OECD.AI Policy Navigator：全球官方 AI 政策倡议活册 (STRUCTURE/MONITOR). 全世界最大的政府 AI 政策目录: 2364 项倡议, 覆盖 80+ 法域与政府间组织, 每项带 法域/工具类型/类别/约束力状态/起止年份 + 原始政策文件链接. 端点无全文检索且 perPage 固定 20 (119 页 × ~3s 无法在抓取窗口内快照全量), 故本源取 最新切片: 抓最新 ~300 项 (按加入时间倒序 = 最近新增/更新的倡议, 跨法域), 缓存 30 天, 逐查询 BM25 过滤. 这是对 谁在进入导航册 的 MONITOR 视角, 非全史注册表 ...
+
+## social (3)
+
+- **bluesky** `keyed` `bring-your-own-login` `lookup`: Bluesky: academic Twitter migration target, AT Protocol open API
+- **mastodon** `free` `lookup`: Mastodon / the fediverse: public HASHTAG timelines across high-signal instances (mastodon.social / sigmoid.social ML / fosstodon.org FOSS), keyless. Reaches walled same-day fediverse posts web search barely indexes; best for BROAD / trending topics (retrieval is hashtag-level, not precise keyword se ...
+- **x_search** `free` `by-name-only` `proxy`: X/Twitter 经搜索索引 (非 twscrape, 与封印的 twitter_x 互补)：研究者 'joining lab X' / 'we are hiring' / 招聘意图, 新 PI/新 lab 形成 (暖、不拥挤的 faculty/postdoc 入口). explicit_only; 查询带 joining/hiring/recruiting + 方向 + 机构(Vector/Mila/NUS/NTU/A*STAR)
 
 ## video (3)
 
@@ -307,11 +312,6 @@ Generated from omniseek 0.2.1: 220 live sources across 33 domains.
 - **gpu_pricing** `free` `by-name-only` `lookup`: GPU 价格对比：跨云 GPU $/hr 结构化查询 (keyless, Full Stack DL cloud-gpus 数据). compute-bound 时'现在最便宜的 H100/A100/4090 在哪家云'. 查 GPU 型号 (H100/A100/4090) 和/或云 (lambda/runpod/vast) → 报价按便宜优先. 快照非实时; 实时 spot 见 vast.ai/runpod API. 配 reference/compute-access-map.md (现在能申的免费额度).
 - **vast_ai** `free` `by-name-only` `lookup`: Vast.ai: LIVE GPU rental marketplace: per-offer on-demand + spot ($/hr), perf-per-dollar, GPU RAM, location, reliability; name it with an EXACT GPU label ('RTX 4090', 'H100 SXM') to price a model, or bare to list the cheapest offers. STRUCTURE, keyless; the live compute-cost order book gpu_pricing's ...
 
-## deadlines (2)
-
-- **conference_deadlines** `free` `lookup`: ML/AI conference submission deadlines (ccfddl): NeurIPS / ICML / ICLR / CVPR / ACL / AAAI / IJCAI / CoRL / ICRA + 47 more AI venues, ranked by nearest upcoming deadline with CCF/CORE rank + location
-- **ml_conferences** `free` `by-name-only` `stream`: NeurIPS / ICML / ICLR 官方博客：获奖公告 (Outstanding Papers / Test of Time / Awards)、投稿与评审政策变化 (如 NeurIPS 对 AI 生成论文的处理)、注册与容量公告、keynote 名单、newsletter. 与 conference_deadlines 互补: 那个只给截稿日期, 这个给公告与政策. 站点已把 feed 挡在反爬后, 故经 CDP 真浏览器渲染抓取, 命名钻取 (omniseek_search 单源 raw).
-
 ## filings (2)
 
 - **sec_edgar** `free` `lookup`: SEC EDGAR full-text filing search: US public-company disclosures (10-K/8-K/DEF 14A proxy/etc.), keyless UA-gated
@@ -319,8 +319,13 @@ Generated from omniseek 0.2.1: 220 live sources across 33 domains.
 
 ## safety (2)
 
-- **ai_incidents** `free` `by-name-only` `lookup`: AI Incident Database (AIID): the curated ledger of real-world AI HARMS: search incidents by keyword (facial recognition, chatbot, autonomous vehicle, biased hiring) → each with the alleged developer + deployer, harmed parties, date, and the source-report URLs to drill into. STRUCTURE, keyless; the e ...
+- **ai_incidents** `free` `by-name-only` `lookup`: AI Incident Database (AIID): the curated ledger of real-world AI HARMS (~1.75k incidents), read from the AIID's weekly public snapshot into a local index: search incidents by keyword (deepfake, chatbot, autonomous vehicle, facial recognition, biased hiring) -> each with the alleged developer + deplo ...
 - **alignment_forum** `free` `stream`: AI Alignment Forum: alignment / safety / interpretability research (complement to lesswrong adapter; AF-filtered view)
+
+## shopping (2)
+
+- **smzdm** `free` `by-name-only` `lookup`: 什么值得买 好价爆料：按关键词取新品的优惠帖，每条带价格、商城（京东、天猫、抖音商城等）、发帖时间、是否已过期、值与评论数、链接。一个商品的历次爆料可当价格走势看；不是官方实时价，也没有登录后才有的历史价曲线。
+- **xianyu** `walled` `by-name-only` `lookup`: 闲鱼 (goofish.com) 二手在售列表：按关键词搜在售商品，每条带挂牌价、原价、成色、卖家昵称、鱼小铺或个人、卖家信用、所在地、服务标签（包邮、7天无理由退货、验货宝等）、多少人想要、链接。只有在售挂牌价，没有成交价（网页版没有已卖出列表或行情接口）。走主机 9222 浏览器里登录的闲鱼小号，一次一个、两次至少隔 5 秒、每天至多 100 次；没登录或要人工验证时回空并在诊断里写明。筛选：price（区间）、personal、appraise（验货宝）、brand_new（全新）、free_shipping（包邮）、sort（综合 / 新发布 / 价格从低到高 / 价格从高到低）、pa ...
 
 ## clinical (1)
 

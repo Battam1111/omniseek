@@ -55,9 +55,10 @@ dependencies = [
     "pydantic>=2.5",
     "platformdirs>=4.0",
     "python-dateutil>=2.8",
+    "tenacity>=9.0",               # bounded retries (http, the scholarly clients, reddit, ...)
 
     # Media metadata / captions (permissive)
-    "yt-dlp>=2026.6.9",            # video/audio metadata + extractors (Unlicense); rots fast, keep current
+    "yt-dlp>=2026.8.19",           # video/audio metadata + extractors (Unlicense); rots fast, keep current
     "youtube-transcript-api>=0.6.2",
 
     # Document digestion (omniseek_read, document branch) minus PDF: office files are zip+XML; three small pure

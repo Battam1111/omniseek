@@ -12,17 +12,15 @@ Two-layer architecture:
   self-host wewe-rss with their own 微信读书 account, see
   docs/wewe-rss-self-host.md.
 
-For OmniSeek use cases, Layer A covers the 80% case (user reads 微信 daily,
+For OmniSeek's use cases, Layer A covers the 80% case (user reads 微信 daily,
 shares interesting article URLs). Layer B adds proactive monitoring.
 """
 
 from __future__ import annotations
 
 import logging
-import re
 from concurrent.futures import ThreadPoolExecutor
 from contextvars import copy_context
-from datetime import datetime
 from typing import Optional
 from urllib.parse import urlparse, parse_qs
 
@@ -30,8 +28,11 @@ import httpx
 from bs4 import BeautifulSoup
 from markdownify import markdownify as html_to_md
 
-from omniseek.core import auth, cache, diag, http
-from omniseek.core.normalize import Document, jsonsafe
+import anyio
+
+from omniseek.core import auth, cache, diag, fetcher, http, relevance
+from omniseek.core.sources._base import SourceBase
+from omniseek.core.normalize import Document, jsonsafe, to_utc
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +62,7 @@ DEFAULT_WECHAT2RSS_FEEDS = [
 
 # Optional: Layer B alternative (self-hosted wewe-rss). Only needed for accounts
 # wechat2rss doesn't index (e.g., 学术志, 科研圈). See docs/wewe-rss-self-host.md.
-auth.write_template(
+auth.register_template(
     "wechat",
     {
         "_comment": "OPTIONAL. wechat2rss feeds for 3 default accounts are hardcoded. Add more accounts here either by adding to wechat2rss_extra_feeds (URLs from wechat2rss.xlab.app/list/list) OR by setting up wewe-rss locally.",
@@ -127,7 +128,7 @@ def _status_page_reason(html: str) -> str:
     return f"no article body (WeChat status page: {title or 'no title'})"
 
 
-class WechatAdapter:
+class WechatAdapter(SourceBase):
     name = "wechat"
     needs_credentials = False  # Layer A needs no creds; Layer B is optional
     explicit_only = "walled(微信公众号);命名钻取 (omniseek_search 单源 raw) 才调,不进广搜"
@@ -147,7 +148,13 @@ class WechatAdapter:
     # Layer A: single-URL fetch (works immediately, no extra setup)
     # ─────────────────────────────────────────────────────────────────
 
-    def fetch_url(self, url: str) -> Optional[Document]:
+    async def afetch_url(self, url: str) -> Optional[Document]:
+        if "mp.weixin.qq.com" not in (urlparse(url).hostname or ""):
+            return None
+        # the article read and its parse are the sync code this source shares with its search: a worker thread
+        return await anyio.to_thread.run_sync(self._read_url, url, limiter=fetcher._LEGACY_LIMITER)
+
+    def _read_url(self, url: str) -> Optional[Document]:
         host = urlparse(url).hostname or ""
         # Accept mp.weixin.qq.com (canonical) and mp.weixin.qq.com.cn (rare)
         if "mp.weixin.qq.com" not in host:
@@ -156,7 +163,7 @@ class WechatAdapter:
         # Canonical article identity (see _wx_canon): the same article under different tracking params
         # shares ONE cache row instead of re-fetching per variant.
         key = cache.make_key("wechat", "fetch", _wx_canon(url))
-        cached = cache.get(key)
+        cached = cache.get_once(key)
         if cached is not None:
             return Document.model_validate(cached)
 
@@ -238,18 +245,12 @@ class WechatAdapter:
         date = None
         date_el = soup.select_one("#publish_time, em.rich_media_meta_text[id='publish_time']")
         if date_el:
-            try:
-                date = datetime.fromisoformat(date_el.get_text(strip=True).replace("/", "-"))
-            except (ValueError, TypeError):
-                pass
+            date = to_utc(date_el.get_text(strip=True).replace("/", "-"))
         if not date:
             # WeChat also embeds publish time in a JS variable; try meta
             pub_meta = soup.select_one('meta[property="article:published_time"]')
             if pub_meta and pub_meta.get("content"):
-                try:
-                    date = datetime.fromisoformat(pub_meta["content"].replace("Z", "+00:00"))
-                except (ValueError, TypeError):
-                    pass
+                date = to_utc(pub_meta["content"])
 
         # ── Body ──
         # Article body is in #js_content (the canonical container)
@@ -288,7 +289,7 @@ class WechatAdapter:
             source_id=source_id,
             url=url,
             title=title,
-            content=body_md or "(no body extracted)",
+            content=body_md or "",
             author=author,
             date=date,
             metadata={
@@ -367,7 +368,7 @@ class WechatAdapter:
 
         Sources are (in order): wechat2rss.xlab.app feeds for the popular
         AI accounts (hardcoded defaults), plus any user-added feeds in
-        ~/.omniseek/credentials/wechat.json (wechat2rss extras OR wewe-rss
+        <credentials>/wechat.json (wechat2rss extras OR wewe-rss
         self-hosted).
 
         The feeds are pulled CONCURRENTLY. They are independent documents, and once an operator
@@ -387,14 +388,12 @@ class WechatAdapter:
         every-feed-failed run still falls through to the sogou breadth merge exactly as before.
         """
         key = cache.make_key("wechat", "search", query, limit)
-        cached = cache.get(key)
+        cached = cache.get_once(key)
         if cached is not None:
             return [Document.model_validate(d) for d in cached]
 
         import feedparser
         from omniseek.core.sources.scrape._rss import entry_to_document, _DictAsObj
-
-        query_terms = [t.lower() for t in re.findall(r"\w+", query) if len(t) > 1]
 
         def _one(feed: tuple[str, str]) -> list[tuple[str, str, dict]]:
             account_name, feed_url = feed
@@ -432,14 +431,16 @@ class WechatAdapter:
                 for entries in ex.map(lambda ctx, f: ctx.run(_one, f), contexts, feeds):
                     all_entries.extend(entries)
 
-        # Rank by query-term occurrence in title + summary
-        scored: list[tuple[int, str, str, dict]] = []
-        for account_name, feed_url, entry in all_entries:
-            text = ((entry.get("title") or "") + " " + (entry.get("summary") or "")).lower()
-            score = sum(text.count(t) for t in query_terms) if query_terms else 1
-            if query_terms and score == 0:
-                continue
-            scored.append((score, account_name, feed_url, entry))
+        # Rank title (3x) + summary through OmniSeek's one text scorer. Counting each \w+ run as an exact
+        # substring read a Chinese query typed without spaces as ONE word, so 「强化学习机器人」 matched no
+        # entry at all; relevance reads a Chinese run as its two-character pieces (see relevance.py).
+        # A query with no scorable term keeps every entry, in feed order (the stable sort).
+        scores = relevance.field_scores(
+            [[(e.get("title") or "", 3.0), (e.get("summary") or "", 1.0)] for _, _, e in all_entries], query)
+        keep_all = not relevance.query_terms(query or "")
+        scored = [(score, account_name, feed_url, entry)
+                  for score, (account_name, feed_url, entry) in zip(scores, all_entries)
+                  if keep_all or score > 0.0]
         scored.sort(key=lambda x: x[0], reverse=True)
 
         docs: list[Document] = []
@@ -500,7 +501,9 @@ class WechatAdapter:
         if layer_a and layer_b_ok:
             return True, f"OK (Layer A + Layer B: {len(feeds)} 公众号 feeds via wechat2rss)"
         if layer_a:
-            return True, f"OK (Layer A; Layer B {len(feeds)} feeds unreachable)"
+            # "degraded" is the marker source-health reads (infra_jobs.run_source_health): Layer B
+            # going dark fires 源降级 once. Since 2026-10-19 nothing else watches the wechat2rss feeds.
+            return True, f"OK (degraded; Layer A; Layer B {len(feeds)} feeds unreachable)"
         return False, "WeChat unreachable"
 
 

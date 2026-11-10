@@ -4,7 +4,7 @@
 #
 #   ./scripts/launch_cdp.sh <port> [profile-dir] [url-to-open]
 #
-#   port         the CDP port the adapter expects (9222 shared, 9223/9224 xiaohongshu, 9225 douyin)
+#   port         the CDP port the adapter expects (9222 shared, 9223/9224 xiaohongshu)
 #   profile-dir  persistent browser profile; default ~/.omniseek/chrome-<port>. Keep it stable so
 #                your login survives restarts.
 #   url          optional page to open (e.g. https://www.xiaohongshu.com) so you can log in directly.
@@ -16,7 +16,7 @@ set -euo pipefail
 PORT="${1:-}"
 if [ -z "$PORT" ]; then
   echo "usage: $0 <port> [profile-dir] [url]" >&2
-  echo "  ports: 9222 shared | 9223 xiaohongshu | 9224 xiaohongshu(mainland) | 9225 douyin" >&2
+  echo "  ports: 9222 shared | 9223 xiaohongshu | 9224 xiaohongshu(mainland)" >&2
   exit 1
 fi
 PROFILE="${2:-$HOME/.omniseek/chrome-$PORT}"

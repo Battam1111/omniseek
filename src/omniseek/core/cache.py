@@ -2,24 +2,33 @@
 
 Keyed by SHA-256 of the cache key. Values are JSON. Survives restarts.
 Default TTL is 15 minutes — adapters can override per-call.
+Inside a source call a miss on a fetch result is single-flight: one caller fetches a key, the others
+of that moment wait for it (see "ONE FETCH PER KEY AT A TIME" below).
 """
 
 from __future__ import annotations
 
+import contextlib
 import contextvars
 import hashlib
 import json
 import os
+import threading
 import time
 import uuid
 from pathlib import Path
 from typing import Any, Optional
 
+import anyio
 from platformdirs import user_cache_dir
 
-# OMNISEEK_CACHE_DIR moves the whole cache elsewhere. The service leaves it unset; the deploy smoke
-# sets it to a throwaway directory so its checks never read the live service's cache entries (state
-# such as reddit's cannot-search list, 2026-10-10) and never write into them.
+from omniseek.core import _guard, portal
+from omniseek.core import filters as _filters
+
+# OMNISEEK_CACHE_DIR moves the whole cache elsewhere. The service leaves it unset; a test or one-off
+# run sets it to a throwaway directory so it never reads the live service's cache entries (state
+# such as reddit's cannot-search list, 2026-10-10) and never write into them. The application name is omniseek
+# (NAME-3, 2026-10-20); the deploy moves the old-named directory to the recycle area (10_deploy/parts.json retire_links).
 CACHE_DIR = Path(os.environ.get("OMNISEEK_CACHE_DIR")
                  or Path(user_cache_dir("omniseek", appauthor=False)) / "omniseek_cache")
 DEFAULT_TTL = 900  # 15 minutes
@@ -51,7 +60,7 @@ def set_refresh_margin(seconds: float) -> None:
     _refresh_margin_var.set(max(0.0, float(seconds)))
 
 
-# Per-thread "cache-only" flag: when set, the live egresses (http._request_capped + cdp_call)
+# Per-thread "cache-only" flag: when set, the live egresses (http._arequest_capped + cdp_call)
 # short-circuit (return None / raise), so a search reads ONLY warm cache and does ZERO live work.
 # This is the basis of the cache_only=True pickup: pick up walled results that have self-warmed after a fire,
 # WITHOUT re-firing a still-cold source (no extra CDP nav / account traffic; poll-safe). The
@@ -69,6 +78,11 @@ def cache_only() -> bool:
 
 
 def _key_path(key: str) -> Path:
+    # A filtered call whose source translated the filters into separate upstream parameters gets its
+    # own key space (filters.fingerprint() is '' on every unfiltered call, so those keys are unchanged).
+    salt = _filters.fingerprint()
+    if salt:
+        key = f"{key}\x00filters={salt}"
     h = hashlib.sha256(key.encode("utf-8")).hexdigest()
     return CACHE_DIR / f"{h}.json"
 
@@ -77,6 +91,10 @@ def get(key: str) -> Optional[Any]:
     """Return cached value if present and not expired, else None."""
     if _fresh_var.get():
         return None  # caller requested fresh → force a live fetch
+    return _read(key, _refresh_margin_var.get())
+
+
+def _read(key: str, margin: float = 0.0) -> Optional[Any]:
     path = _key_path(key)
     if not path.exists():
         return None
@@ -92,7 +110,6 @@ def get(key: str) -> Optional[Any]:
         return None
     except OSError:
         return None  # transient read error → miss, but don't delete
-    margin = _refresh_margin_var.get()
     # margin > 0 (the prewarmer's refresh-if-near-expiry pass): treat an entry within `margin`
     # seconds of expiry as a miss so the adapter refetches and rewrites it; a comfortably-warm
     # entry is served untouched. margin 0 (the default) collapses this to the plain TTL check.
@@ -153,6 +170,7 @@ def set(key: str, value: Any, ttl: Optional[int] = None, *,  # noqa: A001 (shado
     path = _key_path(key)
     payload = {"expires_at": time.time() + eff_ttl, "value": value}
     _atomic_write_text(path, json.dumps(payload, default=str, ensure_ascii=False))
+    _end_flight(path, filled=True)   # a caller waiting on this key reads what was just written
 
 
 def clear_expired() -> int:
@@ -213,6 +231,117 @@ def seconds_until_expiry(key: str) -> Optional[float]:
 
 
 # -----------------------------------------------------------------------------
+# ONE FETCH PER KEY AT A TIME (EYE-GATE-FIX A, 2026-10-20). Measured 2026-10-18 16:35 to 16:46: about 40
+# queries fanned out at once and 285 requests were turned away by OmniSeek's own gates in 11 minutes,
+# much of it the same cache key fetched side by side (v2ex's six node listings, the data.gov.sg pages).
+# Inside a ``flight_scope`` (the fetcher opens one around every source call) a cache miss on a fetch
+# result (``aget_docs`` / ``aget_once`` and their sync entries) is single-flight: the first caller of a key
+# fetches it, every other caller of the same key waits for that fetch and reads what it wrote. The wait
+# ends at the waiter's own deadline (``_guard.current_deadline``): past it the waiter goes on as it
+# would have before (fetches itself, and the gates refuse it if its time is up), so no number is
+# chosen here; a caller with no deadline does not wait. A leader's flight ends when it writes the key
+# (``set``) or when its scope ends (the source call returned, written or not); a waiter whose leader
+# wrote nothing tries again, leading the next fetch if nobody else does. Outside a scope (health
+# checks, tools that read the cache directly) nothing changes.
+# -----------------------------------------------------------------------------
+
+
+class _Flight:
+    __slots__ = ("done", "scope", "filled")
+
+    def __init__(self, scope) -> None:
+        self.done = threading.Event()
+        self.scope = scope
+        self.filled = False
+
+
+class _FlightScope:
+    __slots__ = ("led",)
+
+    def __init__(self) -> None:
+        self.led: dict = {}   # keys this scope leads (a dict: this module's own ``set`` shadows the builtin)
+
+
+_flights: dict[str, _Flight] = {}
+_flights_lock = threading.Lock()
+_scope_var: contextvars.ContextVar = contextvars.ContextVar("omniseek_cache_flight_scope", default=None)
+
+
+@contextlib.contextmanager
+def flight_scope():
+    """One source call: cache misses inside it are single-flight (see the section above); the flights
+    it leads end when it ends."""
+    scope = _FlightScope()
+    token = _scope_var.set(scope)
+    try:
+        yield scope
+    finally:
+        try:
+            _scope_var.reset(token)
+        except (ValueError, RuntimeError):  # reset from another context: the value dies with it
+            pass
+        with _flights_lock:
+            keys = list(scope.led)
+        for k in keys:
+            _end_flight_key(k, scope, filled=False)
+
+
+def _end_flight(path: Path, filled: bool) -> None:
+    _end_flight_key(str(path), None, filled)
+
+
+def _end_flight_key(k: str, scope, filled: bool) -> None:
+    with _flights_lock:
+        fl = _flights.get(k)
+        if fl is None or (scope is not None and fl.scope is not scope):
+            return
+        del _flights[k]
+        fl.filled = filled
+        fl.scope.led.pop(k, None)
+    fl.done.set()
+
+
+def _join(key: str) -> Optional[_Flight]:
+    """None: this caller fetches the key (it now leads its flight, or no single flight applies here).
+    A flight: another caller is fetching the key; wait for it."""
+    scope = _scope_var.get()
+    if scope is None or _cache_only_var.get():   # a cache_only collect stays instant: it never waits
+        return None
+    k = str(_key_path(key))   # the filters salt included: a filtered call is another key
+    with _flights_lock:
+        fl = _flights.get(k)
+        if fl is None:
+            _flights[k] = _Flight(scope)
+            scope.led[k] = True
+            return None
+        return None if fl.scope is scope else fl
+
+
+def _time_left() -> Optional[float]:
+    d = _guard.current_deadline()
+    return None if d is None else d - time.monotonic()
+
+
+async def _await_flight(key: str) -> Optional[Any]:
+    """After a miss: lead the key's flight (None: fetch it), or wait on the loop for the caller already
+    fetching it and return what it wrote."""
+    while True:
+        fl = _join(key)
+        left = _time_left()
+        if fl is None or left is None or left <= 0:
+            return None
+        end = time.monotonic() + left
+        while not fl.done.is_set():
+            if time.monotonic() >= end:
+                return None
+            await anyio.sleep(_guard._ADMISSION_POLL_S)
+        if fl.filled:
+            value = await anyio.to_thread.run_sync(_read, key, limiter=portal.IO_LANE)
+            if value is not None:
+                return value
+
+
+# -----------------------------------------------------------------------------
 # Document convenience — the list[Document] round-trip that ~38
 # adapters were re-implementing inline (cache.get → model_validate / cache.set →
 # model_dump(mode="json")). Behavior is identical; this just removes the boilerplate.
@@ -220,12 +349,48 @@ def seconds_until_expiry(key: str) -> Optional[float]:
 
 
 def get_docs(key: str):
-    """Return a cached ``list[Document]`` if present + fresh, else None."""
-    from omniseek.core.normalize import Document  # local import: avoid import cycle
+    """Sync entry for a caller on a thread: ``aget_docs`` on the event loop (portal.call), so there is
+    one implementation of the single-flight read (EYE-TWINS-1)."""
+    return portal.call(aget_docs, key)
 
+
+def _read_docs(key: str):
     cached = get(key)
-    if cached is None:
-        return None
+    return None if cached is None else _to_docs(cached)
+
+
+async def aget_docs(key: str):
+    """Return a cached ``list[Document]`` if present + fresh, else None.
+
+    Inside a ``flight_scope`` a miss is single-flight (see the section above): when another caller
+    is already fetching this key, wait for its result (until this caller's own deadline) instead of
+    fetching it a second time; otherwise this caller becomes the one that fetches it. The first read
+    runs in a worker thread (disk IO off the loop), the wait for another caller's fetch on the loop
+    (no worker thread blocks on it)."""
+    cached = await anyio.to_thread.run_sync(_read_docs, key, limiter=portal.IO_LANE)
+    if cached is not None:
+        return cached
+    raw = await _await_flight(key)
+    return None if raw is None else _to_docs(raw)
+
+
+def get_once(key: str) -> Optional[Any]:
+    """Sync entry for a caller on a thread: ``aget_once`` on the event loop (portal.call)."""
+    return portal.call(aget_once, key)
+
+
+async def aget_once(key: str) -> Optional[Any]:
+    """``get`` with the single flight of ``aget_docs``: for a cached fetch result (a raw payload) whose
+    key is always written after a successful fetch. Never for a state key that a fetch may leave
+    unwritten (a caller would wait for nothing). First read in a worker thread, the wait on the loop."""
+    hit = await anyio.to_thread.run_sync(get, key, limiter=portal.IO_LANE)
+    if hit is not None:
+        return hit
+    return await _await_flight(key)
+
+
+def _to_docs(cached):
+    from omniseek.core.normalize import Document  # local import: avoid import cycle
     return [Document.model_validate(d) for d in cached]
 
 
@@ -244,3 +409,60 @@ def set_docs(key: str, docs, ttl: Optional[int] = None, empty_ttl: Optional[int]
         set(key, payload, ttl=empty_ttl, authoritative_empty=True)  # caller explicitly chose the empty TTL
     else:
         set(key, payload, ttl=ttl, authoritative_empty=authoritative_empty)
+
+
+# -----------------------------------------------------------------------------
+# Whole-URL read cache. The URL branch of omniseek_read (fetcher.fetch_url_with_reason) stores every
+# successful read here, so the layered reads an agent makes in a row (head, then a section or two)
+# reuse one download instead of fetching the page again each time. The value is the WHOLE document;
+# windowing (start_char / max_chars / grep / level / section) is cut after it comes out. Sources that
+# keep their own cache are untouched. The generic web read (web_fallback.py) kept a second copy of
+# the same page for the same hour; it was removed (EYE-CACHE-SECRET-R2, 2026-11-03): it duplicated
+# this one and kept credential-bearing addresses on disk that this cache refuses.
+# -----------------------------------------------------------------------------
+
+# One hour, the value the generic web read used for its own page cache before it was folded into
+# this one. Provisional: revisit once a month of hit records exists.
+URL_READ_TTL = 3600
+
+# A doc carrying one of these flags is a stand-in (a search snippet, a generic read standing in for the
+# owning adapter that failed, a partial archive copy): an honest answer for this call, never one to reuse.
+_URL_READ_DEGRADED = ("body_needs_read", "fulltext_fallback", "owner_adapter_missed", "partial")
+
+
+def url_read_key(url: str) -> str:
+    """Cache key of a URL read: scheme and host lowercased, the #fragment dropped, the query kept.
+    Two links that differ only in their fragment point at the same document, so they share one entry."""
+    from urllib.parse import urlsplit, urlunsplit
+
+    parts = urlsplit(str(url).strip())
+    norm = urlunsplit((parts.scheme.lower(), parts.netloc.lower(), parts.path, parts.query, ""))
+    return make_key("url_read", norm)
+
+
+def url_read_cacheable(doc) -> bool:
+    """A read worth keeping: a document with a non-empty body and no stand-in flag."""
+    if doc is None or not (getattr(doc, "content", "") or "").strip():
+        return False
+    meta = getattr(doc, "metadata", None) or {}
+    return not any(meta.get(flag) for flag in _URL_READ_DEGRADED)
+
+
+def get_url_read(url: str):
+    """``(Document, fetched_at)`` for a cached read of ``url``, else None."""
+    from omniseek.core.normalize import Document  # local import: avoid import cycle
+
+    value = get(url_read_key(url))
+    if not isinstance(value, dict) or not isinstance(value.get("doc"), dict):
+        return None
+    return Document.model_validate(value["doc"]), value.get("fetched_at")
+
+
+def set_url_read(url: str, doc, fetched_at: str) -> bool:
+    """Keep a successful read of ``url`` for URL_READ_TTL seconds. Returns False (nothing written)
+    for a read that is not worth keeping (see url_read_cacheable)."""
+    if not url_read_cacheable(doc):
+        return False
+    set(url_read_key(url), {"doc": doc.model_dump(mode="json"), "fetched_at": fetched_at},
+        ttl=URL_READ_TTL)
+    return True

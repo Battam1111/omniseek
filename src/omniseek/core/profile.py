@@ -1,7 +1,7 @@
 """Per-deployment PROFILE: the thin host-side overlay that turns the shipped engine into THIS
 deployment (which sources are exposed, polite-pool contact, extra red-lines, rate knobs).
 
-Lives at ``~/.omniseek/profile.json`` (or ``OMNISEEK_PROFILE_PATH``), OUTSIDE the source tree — so a
+Lives at ``<root>/profile.json`` (or ``OMNISEEK_PROFILE_PATH``), OUTSIDE the source tree — so a
 cold ``git clone`` carries ZERO deployer identity. ABSENT or corrupt -> the all-default profile =
 exactly the pre-profile behavior (every registered source usable, today's deadlines/redlines), so
 the engine always boots and an existing host is unaffected until it writes a profile. The shipped
@@ -17,9 +17,10 @@ import os
 import threading
 from pathlib import Path
 from typing import Any, Optional
+from omniseek import where
 
 _PATH = Path(os.environ.get(
-    "OMNISEEK_PROFILE_PATH", str(Path.home() / ".omniseek" / "profile.json")))
+    "OMNISEEK_PROFILE_PATH", str(where.profile_json())))
 
 _cache: "Optional[dict]" = None
 _lock = threading.Lock()

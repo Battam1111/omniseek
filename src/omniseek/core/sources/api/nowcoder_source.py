@@ -6,12 +6,13 @@ a firm leans 八股 vs 重思维/paper-driven, full hiring-loop timelines, live 
 codes. The SPA's gateway endpoint returns full records with NO auth (the older
 RSSHub /discuss/experience/json route is degraded → empty for anonymous callers).
 
-Config (optional) ``~/.omniseek/credentials/nowcoder.json``: {"job_ids": [645, ...]}
+Config (optional) ``<credentials>/nowcoder.json``: {"job_ids": [645, ...]}
 — 645 = 算法工程师 (the AI/ML interview position tag).
 """
 
 from __future__ import annotations
 
+import functools
 import json
 import logging
 import re
@@ -19,8 +20,10 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from omniseek.core import auth, cache, diag
-from omniseek.core.normalize import Document, jsonsafe, keyword_score_filter, mk_signal
+from omniseek.core.normalize import Document, html_fragment_text, jsonsafe, keyword_score_filter, mk_signal
+from omniseek.core.sources._base import ablocking
 from omniseek.core.sources.walled._cdp import cdp_call, cdp_health
+from omniseek import where
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +31,7 @@ API = "https://gw-c.nowcoder.com/api/sparta/job-experience/experience/job/list"
 DEFAULT_JOB_IDS = [645]  # 算法工程师 (AI/ML)
 CACHE_TTL = 3600
 
-auth.write_template("nowcoder", {"_comment": "牛客面经跟踪. job_ids: 职位 tag (645=算法工程师).", "job_ids": [645]})
+auth.register_template("nowcoder", {"_comment": "牛客面经跟踪. job_ids: 职位 tag (645=算法工程师).", "job_ids": [645]})
 
 
 class NowcoderAdapter:
@@ -45,7 +48,7 @@ class NowcoderAdapter:
     description = (
         "牛客网 面经 + 内推：中文 AI/ML 真实面试 bar (八股 vs 重思维 / 全流程时间线 / 内推码), "
         "成于面试后数天. 两条路: 无 query = 拉最近面经流 (默认岗位 tag 645 算法工程师, 可配 "
-        "~/.omniseek/credentials/nowcoder.json job_ids), 经共享 9222 CDP Chrome 原生取 JSON "
+        f"{where.show(where.credentials())}/nowcoder.json job_ids), 经共享 9222 CDP Chrome 原生取 JSON "
         "(WAF 是指纹闸非登录闸, 无需登录); 有 query = 在这批最近面经里做关键词筛选, 并合并 "
         "site:nowcoder.com 的网页搜索结果 (真正的站内关键词搜索, 走共享搜索后端), 每条 "
         "metadata.via 标明来路 (native-feed / native-feed-filter / site-search), 两半并集按与 query "
@@ -119,8 +122,8 @@ class NowcoderAdapter:
 
     def _to_doc(self, it: dict, cd: dict, job_id) -> Document:
         uuid = cd.get("uuid")
-        body = cd.get("content") or re.sub(r"<[^>]+>", " ", cd.get("richText") or cd.get("newContent") or "")
-        body = re.sub(r"\s+", " ", body).strip() or "(no content)"
+        body = cd.get("content") or html_fragment_text(cd.get("richText") or cd.get("newContent") or "")
+        body = re.sub(r"\s+", " ", body).strip()
         date = None
         ts = cd.get("createTime")
         if ts:
@@ -236,7 +239,7 @@ class NowcoderAdapter:
             docs.append(Document(
                 source="nowcoder", source_id=url, url=url,
                 title=r.get("title") or "(untitled)",
-                content=r.get("snippet") or "(snippet only — open the URL for the full 面经)",
+                content=r.get("snippet") or "",
                 tags=["面经", "search-index-fallback"],
                 metadata={"via": "site-search", "raw": jsonsafe(r)},
             ))
@@ -244,31 +247,32 @@ class NowcoderAdapter:
                 break
         return docs
 
-    def fetch_url(self, url: str) -> Optional[Document]:
+    async def afetch_url(self, url: str) -> Optional[Document]:
         return None  # search-only; the list endpoint already carries full post content
 
-    def health_check(self) -> tuple[Optional[bool], str]:
+    async def ahealth_check(self) -> tuple[Optional[bool], str]:
+        """The CDP half (the browser and the native fetch through it) blocks, so it runs on a thread
+        of the legacy lane; the cache read on the IO lane; the Brave fallback ping on the loop."""
         # Native path via CDP: drive the 9222 Chrome to fetch the gateway once and count real posts.
-        cdp_ok, cdp_msg = cdp_health(ensure=True)
+        cdp_ok, cdp_msg = await ablocking(functools.partial(cdp_health, ensure=True))
         if cdp_ok:
             # SAME key _fetch_job reads: while it is cached, the native fetch below would answer from
             # the cache and ask nowcoder nothing, so this check verifies nothing (None).
-            if cache.get_docs(cache.make_key("nowcoder", "job", DEFAULT_JOB_IDS[0], 3, 1)) is not None:
+            if await cache.aget_docs(cache.make_key("nowcoder", "job", DEFAULT_JOB_IDS[0], 3, 1)) is not None:
                 return None, "not probed (the native probe page is still cached; nowcoder is asked again when it expires)"
             try:
-                docs = self._fetch_job(DEFAULT_JOB_IDS[0], pages=1)
+                docs = await ablocking(functools.partial(self._fetch_job, DEFAULT_JOB_IDS[0], pages=1))
                 if docs:
                     return True, f"OK ({len(docs)} posts, native JSON via CDP)"
             except Exception:  # noqa: BLE001 — fall through to the fallback ping
                 pass
         # CDP down / native yielded nothing → the source still works IFF the Brave fallback is alive.
-        from omniseek.core.sources.api._search_backend import backend_ping
-        ok, msg = backend_ping()
+        from omniseek.core.sources.api._search_backend import abackend_ping
+        ok, msg = await abackend_ping()
         if ok is None:  # the fallback was not probed (backend cooling): nothing verified either way
             return None, f"not verified (native CDP path unavailable [{cdp_msg}]; Brave fallback: {msg})"
         return (True, f"OK (native via CDP unavailable [{cdp_msg}]; Brave fallback: {msg})") if ok \
             else (False, f"native CDP path down [{cdp_msg}] + Brave fallback down: {msg}")
-
 
 from omniseek.core.fetcher import register_adapter
 

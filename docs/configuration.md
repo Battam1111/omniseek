@@ -92,7 +92,7 @@ razor, judged per server. The row schema is documented in `core/sources/_declara
 
 ## Sites behind a login
 
-Xiaohongshu, Zhihu, Douyin, and other login-only platforms are read through a browser **you** run
+Xiaohongshu, Zhihu, and other login-only platforms are read through a browser **you** run
 and log into; OmniSeek never sees your password. They are off until you opt in, per source. See
 **[Sites behind a login](walled-sources.md)** for the full browser-and-CDP setup.
 

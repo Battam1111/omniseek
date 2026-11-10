@@ -4,15 +4,15 @@ WHY no live apply in P1 (confirmed against the real code): every config family r
 rows ONCE at import (rss_bundles_source._load_and_register, org_watch_source._load,
 page_watch_source, news_scraper_source._load), reading the in-tree JSON via
 Path(__file__).with_name(...). There is NO runtime overlay path, no importlib.reload, no
-file-watch. So a row appended to a ~/.omniseek/state overlay is read by NOTHING (a silent no-op
-marked 'applied' would be a lie smoke can't catch), and appending to the in-tree file violates
+file-watch. So a row appended to a <state> overlay is read by NOTHING (a silent no-op
+marked 'applied' would be a lie nothing would notice), and appending to the in-tree file violates
 the read-only-deploy invariant and vanishes on the next deploy. THEREFORE: every admit stages
 to owner_review with a ready-to-paste config row + a git-patch note; the operator commits, the
 deploy restart picks it up. ``reversibility.auto_appliable`` is ALWAYS False in P1.
 
 This module provides:
   * _live_hosts()   : the FRESH live-roster host set for dedup + first-seen (never stale)
-  * _validate_row() : pure, network-free per-family required-field check (mirrors smoke's)
+  * _validate_row() : pure, network-free per-family required-field check
   * _auto_apply_ok(): the GATE (reads policy DATA); built for P1.5 but NEVER drives a mutation
                        in P1 (nothing calls it to write live config)
   * prepare_owner_case(): what omniseek_curator_stage_commit returns (render the row + patch note)
@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 
 _POLICY_PATH = Path(__file__).with_name("admission_policy.json")
 
-# Per-family required fields for a network-free row validation (mirrors tests/smoke.py CONFIGS).
+# Per-family required fields for a network-free row validation.
 _FAMILY_REQUIRED = {
     "rss": ("name", "description", "feeds"),
     "news_scraper": ("name", "description", "sites"),
@@ -120,11 +120,10 @@ def _live_hosts() -> set:
     return hosts
 
 
-# ── per-family row validation (pure, network-free; mirrors smoke) ─────────────────
+# ── per-family row validation (pure, network-free) ─────────────────────────────────
 def _validate_row(family: str, row: dict) -> list:
     """Return a list of problems (empty == valid). Pure: checks required fields are present +
-    truthy for the family, mirroring tests/smoke.py's per-family check. Does NOT run smoke
-    (which sys.exits + re-load_sources()), does NOT touch the network."""
+    truthy for the family. Does NOT re-load_sources(), does NOT touch the network."""
     problems: list = []
     required = _FAMILY_REQUIRED.get(family)
     if required is None:
@@ -141,7 +140,7 @@ def validate_row_typed(family: str, row: dict) -> list:
     """The TYPED companion to _validate_row: beyond required-field PRESENCE, check element SHAPE so
     a hand-edited / fuzzed overlay row can never register a junk adapter (or crash a loader at
     import). Pure, network-free. Returns a list of problems (empty == valid). The import-time
-    overlay loaders + the live-apply sequence + the deploy smoke all call this.
+    overlay loaders + the live-apply sequence both call this.
 
       rss          : feeds is a NON-EMPTY list[str] of URLs (a bare str is rejected, else
                      RSSAdapterBase iterates the string's characters as if each were a feed).

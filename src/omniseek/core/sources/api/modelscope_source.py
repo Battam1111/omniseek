@@ -12,7 +12,7 @@ Access via the public Hub API (no token for read):
   -> {"Code": 200, "Data": {"TotalCount": N, "Models": [{Name, Path, ChineseName, Downloads,
        License, Tasks: [{Name, ChineseName, ...}], Organization, LastUpdatedTime, ...}, ...]}}
 The model listing is a PUT with a JSON body (an API quirk), so this is a coded adapter on the
-``http.put_json`` helper. The model-page url is constructed from Path + Name.
+``http.aput_json`` helper. The model-page url is constructed from Path + Name.
 
 backend="modelscope" (its own upstream). explicit_only: a named model drill.
 
@@ -46,19 +46,9 @@ class ModelScopeAdapter(BaseScrapeAdapter):
     explicit_only = ("modelscope: a named China-model drill (search the ModelScope hub); not "
                      "broad-fan-out fodder")
 
-    def _raw_fetch(self, query: str, limit: int) -> Optional[Any]:
-        body: dict[str, Any] = {
-            "PageNumber": 1,
-            "PageSize": max(1, min(int(limit), 50)),
-            "SortBy": "DownloadsCount",
-        }
-        if query and query.strip():
-            body["Name"] = query.strip()
-        return http.put_json(API_URL, json=body, timeout=20)
-
     async def _araw_fetch(self, query: str, limit: int) -> Optional[Any]:
-        """Async twin of _raw_fetch: byte-faithful mirror -- same PUT, same body, same timeout;
-        only the shared-http egress swaps to its async twin (http.put_json -> await http.aput_json)."""
+        """Async replacement of the deleted sync ``_raw_fetch`` (11-04, S9; this is the only one now): byte-faithful mirror -- same PUT, same body, same timeout;
+        only the shared-http egress swaps to its async twin (the deleted sync http.put_json -> await http.aput_json)."""
         body: dict[str, Any] = {
             "PageNumber": 1,
             "PageSize": max(1, min(int(limit), 50)),
@@ -78,14 +68,6 @@ class ModelScopeAdapter(BaseScrapeAdapter):
             if doc is not None:
                 docs.append(doc)
         return docs
-
-    async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async twin of search -> AsyncSearchCapable. Shares the base async cache round-trip;
-        egress via _araw_fetch; mapping via the SAME pure-CPU _to_documents (byte-identical to search)."""
-        return await self._asearch_via(
-            query, limit,
-            afetch=lambda: self._araw_fetch(query, limit),
-            abuild=lambda raw: self._to_documents(raw, query, limit))
 
     def _model_to_doc(self, model: Any) -> Optional[Document]:
         if not isinstance(model, dict):
@@ -172,9 +154,9 @@ class ModelScopeAdapter(BaseScrapeAdapter):
         except (ValueError, OSError, OverflowError):
             return None
 
-    def health_check(self) -> tuple[bool, str]:
+    async def ahealth_check(self) -> tuple[bool, str]:
         try:
-            raw = http.put_json(API_URL, json={"PageNumber": 1, "PageSize": 1, "SortBy": "DownloadsCount"}, timeout=15)
+            raw = await http.aput_json(API_URL, json={"PageNumber": 1, "PageSize": 1, "SortBy": "DownloadsCount"}, timeout=15)
         except Exception as exc:  # noqa: BLE001
             return False, f"{type(exc).__name__}: {str(exc)[:80]}"
         ok = isinstance(raw, dict) and isinstance(raw.get("Data"), dict)

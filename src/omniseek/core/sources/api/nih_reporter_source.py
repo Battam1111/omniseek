@@ -38,7 +38,7 @@ from datetime import datetime
 from typing import Any, Optional
 
 from omniseek.core import http
-from omniseek.core.normalize import Document, jsonsafe, mk_signal
+from omniseek.core.normalize import Document, jsonsafe, mk_signal, to_utc
 from omniseek.core.sources.scrape._base import BaseScrapeAdapter
 
 API_URL = "https://api.reporter.nih.gov/v2/projects/search"
@@ -60,27 +60,8 @@ class NIHReporterAdapter(BaseScrapeAdapter):
     explicit_only = ("nih_reporter: US-only federal biomedical grants, a named drill "
                      "(by topic / PI / organization), not broad-fan-out fodder")
 
-    def _raw_fetch(self, query: str, limit: int) -> Optional[Any]:
-        # limit is clamped to the API's 500 ceiling (>=1); offset fixed at the first page.
-        # No include_fields: NIH returns the full project record by default. Requesting an
-        # explicit field set risks a name mismatch that silently yields 0 results (live-caught
-        # 2026-06-21: snake_case include_fields → 200 with empty results); the working public
-        # examples all omit it. search_field names are lowercase (projecttitle/abstracttext/terms).
-        body = {
-            "criteria": {
-                "advanced_text_search": {
-                    "operator": "and",
-                    "search_field": "projecttitle,abstracttext,terms",
-                    "search_text": query,
-                },
-            },
-            "offset": 0,
-            "limit": max(1, min(int(limit), _MAX_LIMIT)),
-        }
-        return http.post_json(API_URL, json=body, timeout=20)
-
     async def _araw_fetch(self, query: str, limit: int) -> Optional[Any]:
-        # Async twin of _raw_fetch: BYTE-FAITHFUL mirror — same URL, same body, same timeout, same
+        # Async replacement of the deleted sync ``_raw_fetch`` (11-04, S9; this is the only one now): BYTE-FAITHFUL mirror — same URL, same body, same timeout, same
         # None-return contract; ONLY the shared-http egress swaps sync post_json → async apost_json.
         body = {
             "criteria": {
@@ -94,14 +75,6 @@ class NIHReporterAdapter(BaseScrapeAdapter):
             "limit": max(1, min(int(limit), _MAX_LIMIT)),
         }
         return await http.apost_json(API_URL, json=body, timeout=20)
-
-    async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async twin of search → AsyncSearchCapable. Shares the base async cache round-trip;
-        egress via _araw_fetch; mapping via the SAME pure-CPU _to_documents (byte-identical to search)."""
-        return await self._asearch_via(
-            query, limit,
-            afetch=lambda: self._araw_fetch(query, limit),
-            abuild=lambda raw: self._to_documents(raw, query, limit))
 
     def _to_documents(self, raw: Any, query: str, limit: int) -> list[Document]:
         if not isinstance(raw, dict):
@@ -189,16 +162,14 @@ class NIHReporterAdapter(BaseScrapeAdapter):
         if not isinstance(raw, str) or not raw.strip():
             return None
         s = raw.strip()
-        for fmt in ("%Y-%m-%dT%H:%M:%S%z", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d", "%Y/%m/%d"):
+        dt = to_utc(s)
+        if dt is None:
             try:
-                return datetime.strptime(s.replace("Z", "+0000"), fmt)
+                dt = to_utc(datetime.strptime(s, "%Y/%m/%d"))
             except ValueError:
-                continue
-        # Last resort: take the leading YYYY-MM-DD prefix if present.
-        try:
-            return datetime.strptime(s[:10], "%Y-%m-%d")
-        except ValueError:
-            return None
+                # Last resort: take the leading YYYY-MM-DD prefix if present.
+                dt = to_utc(s[:10])
+        return dt
 
 
 def _join_name(pi: dict) -> Optional[str]:

@@ -21,10 +21,11 @@ from omniseek.core.curator import apply as _apply
 from omniseek.core.curator import candidates as _cand
 from omniseek.core.curator import probe as _probe
 from omniseek.core.curator import redlines as _redlines
+from omniseek import where
 
 logger = logging.getLogger(__name__)
 
-# The set of keys NO code path may emit at any depth (smoke §12 invariant 2 walks for these).
+# The set of keys NO code path may emit at any depth.
 BANNED_KEYS = frozenset({
     "score", "verdict", "passes", "recommend", "admit", "reject", "good",
     "quality", "rating", "confidence", "decision", "beats_web_search",
@@ -65,7 +66,7 @@ def _eye_git_sha() -> Optional[str]:
     flagged as an open risk, non-blocking)."""
     try:
         from pathlib import Path
-        p = Path.home() / ".omniseek" / "state" / "omniseek_git_sha.txt"
+        p = where.state() / "omniseek_git_sha.txt"
         if p.exists():
             return p.read_text(encoding="utf-8").strip()[:64] or None
     except Exception:  # noqa: BLE001
@@ -170,8 +171,8 @@ def _stage2_dedup(candidate: dict) -> dict:
 
 def _stage4_live(candidate: dict) -> dict:
     """Real parse through the proposed family via fetch_one. live_reached (a source claimed the
-    URL / the fetch returned) is distinct from fetched_ok (docs came back). Daemon-bounded by
-    the caller via _run_bounded; here we just time it."""
+    URL / the fetch returned) is distinct from fetched_ok (docs came back). It sends nothing itself:
+    it reads the probe the caller already ran (bounded, server._abounded)."""
     family = (candidate.get("proposed_family") or "other").lower()
     row = _proposed_config_row(candidate)
     result = {
@@ -238,7 +239,7 @@ def build_packet(candidate_id: str) -> dict:
 
 def build_packet_for(cand: dict) -> dict:
     """Build the packet from a candidate dict (the probe cache may be attached as
-    cand['_probe_cache']). Split out so smoke can call it on a hand-built fixture offline."""
+    cand['_probe_cache']). Split out so it runs offline on a hand-built candidate."""
     domain = cand.get("proposed_domain") or ""
     mode = (cand.get("proposed_mode") or "").upper()
     urls = cand.get("urls") or []

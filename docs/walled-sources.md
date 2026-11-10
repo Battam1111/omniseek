@@ -2,7 +2,7 @@
 
 <sub>[OmniSeek](../README.md)&nbsp;·&nbsp;[Configuration](configuration.md)&nbsp;·&nbsp;[Tools](TOOLS.md)&nbsp;·&nbsp;[Patterns](patterns.md)&nbsp;·&nbsp;**Sites behind a login**&nbsp;·&nbsp;[Brand](BRAND.md)</sub>
 
-Some of the richest corners of the web sit behind a **login**: Xiaohongshu, Zhihu, Douyin,
+Some of the richest corners of the web sit behind a **login**: Xiaohongshu, Zhihu,
 WeChat, and other platforms that no search engine indexes and no public API exposes. OmniSeek can
 reach them, but only on **your** behalf, through **your** logged-in browser. This guide explains the
 model and the setup.
@@ -64,7 +64,6 @@ python -m playwright install chromium
 | The shared majority (Zhihu, Yipin Sanfendi, CN forums, …) | **9222** | default | one login you reuse across these sources |
 | Xiaohongshu (international) | **9223** | isolated | account-rate-sensitive, strictly serial |
 | Xiaohongshu (mainland) | **9224** | isolated | a second, independent login if you hold one |
-| Douyin | **9225** | `~/.omniseek/chrome-douyin` | account-rate-sensitive, fully isolated |
 
 Sources that are NOT CDP browsers: **Discord** uses a bot token (see its adapter), and **WeChat**
 public accounts are read through a self-hosted RSS bridge (see [wewe-rss-self-host.md](wewe-rss-self-host.md)).
@@ -76,7 +75,6 @@ Use the helper (it detects Chrome/Chromium on macOS and Linux):
 ```bash
 ./scripts/launch_cdp.sh 9222                                  # the shared Chrome
 ./scripts/launch_cdp.sh 9223 ~/.omniseek/chrome-xhs https://www.xiaohongshu.com
-./scripts/launch_cdp.sh 9225 ~/.omniseek/chrome-douyin https://www.douyin.com
 ```
 
 Arguments: `launch_cdp.sh <port> [profile-dir] [url-to-open]`. The profile dir defaults to
@@ -98,7 +96,7 @@ These sites are off until you opt in. In `~/.omniseek/profile.json`:
     "enabled": true,
     "bring_your_own": {
       "xiaohongshu": { "note": "my own account, logged in on port 9223" },
-      "douyin":      { "note": "my own account, logged in on port 9225" }
+      "zhihu":       { "note": "my own account, logged in on port 9222" }
     }
   }
 }

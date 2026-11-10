@@ -20,10 +20,10 @@ import io
 import logging
 from typing import Optional
 
-import httpx
 
-from omniseek.core import diag, http
+from omniseek.core import http
 from omniseek.core.normalize import Document, mk_signal
+from omniseek.core.sources._base import SourceBase
 
 logger = logging.getLogger(__name__)
 
@@ -41,27 +41,8 @@ def _price(s) -> Optional[float]:
         return None
 
 
-def _load() -> list[dict]:
-    global _ROWS
-    if _ROWS is not None:
-        return _ROWS
-    try:
-        resp = httpx.get(CSV_URL, headers={"User-Agent": USER_AGENT}, timeout=TIMEOUT)
-        resp.raise_for_status()
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("gpu_pricing: CSV fetch failed: %s", exc)
-        st = getattr(getattr(exc, "response", None), "status_code", None)
-        diag.note("gpu_pricing.csv", url=CSV_URL, status=st, exc=exc)
-        return []
-    rows = [{k: (v or "").strip() for k, v in r.items()}
-            for r in csv.DictReader(io.StringIO(resp.text))]
-    _ROWS = rows
-    logger.info("gpu_pricing: loaded %d offerings", len(rows))
-    return rows
-
-
 async def _aload() -> list[dict]:
-    """Native-async twin of ``_load`` (S4b): SAME in-memory ``_ROWS`` cache (async + sync share the
+    """Native-async replacement of the deleted sync ``_load`` (11-04, S9; this is the only one now) (S4b): SAME in-memory ``_ROWS`` cache (async + sync share the
     process global; there is NO disk cache here, so nothing hops off the loop), and the RAW
     ``httpx.get(...).text`` egress swapped to the shared async leaf (``await http.aget_text`` → the
     shared pool + SSRF guard + cache_only + 30MB cap; a failure is already logged + diag.note'd by the
@@ -82,7 +63,7 @@ async def _aload() -> list[dict]:
     return rows
 
 
-class GPUPricingAdapter:
+class GPUPricingAdapter(SourceBase):
     name = "gpu_pricing"
     needs_credentials = False
     kind = "lookup"
@@ -98,28 +79,8 @@ class GPUPricingAdapter:
         "配 reference/compute-access-map.md (现在能申的免费额度)."
     )
 
-    def search(self, query: str, limit: int = 12) -> list[Document]:
-        rows = _load()
-        if not rows:
-            return []
-        terms = [t for t in (query or "").strip().lower().split() if t]
-
-        def match(r: dict) -> bool:
-            blob = " ".join((r.get(k, "") or "") for k in
-                            ("Cloud", "GPU Type", "GPU Arch", "Name")).lower()
-            return all(t in blob for t in terms)
-
-        sel = [r for r in rows if match(r)] if terms else list(rows)
-
-        def keyf(r: dict):
-            return (_price(r.get("Per-GPU")) or _price(r.get("On-demand"))
-                    or _price(r.get("Spot")) or 1e9)
-
-        sel.sort(key=keyf)
-        return [d for d in (self._to_doc(r) for r in sel[:limit]) if d]
-
     async def asearch(self, query: str, limit: int = 12) -> list[Document]:
-        """Native-async twin of ``search`` (S4b): the fan-out awaits this DIRECTLY (no pool thread), so
+        """Native-async replacement of the deleted sync ``search`` (11-04, S9; this is the only one now) (S4b): the fan-out awaits this DIRECTLY (no pool thread), so
         this source's dominant NETWORK wait (the one-time CSV fetch) costs a coroutine, not a held
         thread. Mirrors ``search`` line-for-line: only the load swaps to the async ``_aload`` (async
         egress; the in-memory ``_ROWS`` cache is shared with ``search``); the term filter / cheapest-
@@ -144,12 +105,12 @@ class GPUPricingAdapter:
         sel.sort(key=keyf)
         return [d for d in (self._to_doc(r) for r in sel[:limit]) if d]
 
-    def fetch_url(self, url: str) -> Optional[Document]:
+    async def afetch_url(self, url: str) -> Optional[Document]:
         return None
 
-    def health_check(self) -> tuple[bool, str]:
+    async def ahealth_check(self) -> tuple[bool, str]:
         try:
-            resp = http.direct("HEAD", CSV_URL, headers={"User-Agent": USER_AGENT},
+            resp = await http.adirect("HEAD", CSV_URL, headers={"User-Agent": USER_AGENT},
                                timeout=10, follow_redirects=True)
             return resp.status_code == 200, f"HTTP {resp.status_code}"
         except Exception as exc:  # noqa: BLE001

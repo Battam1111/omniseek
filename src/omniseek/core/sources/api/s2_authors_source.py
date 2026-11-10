@@ -49,30 +49,14 @@ class S2AuthorsAdapter(BaseScrapeAdapter):
     explicit_only = ("s2_authors: a named researcher drill (resolve a person + citation metrics); "
                      "not broad-fan-out fodder (the keyless S2 pool is rate-limited)")
 
-    def _raw_fetch(self, query: str, limit: int) -> Optional[Any]:
-        return http.get_json(
-            SEARCH_URL,
-            params={"query": query, "fields": _FIELDS, "limit": max(1, min(int(limit), 20))},
-            timeout=15,
-        )
-
     async def _araw_fetch(self, query: str, limit: int) -> Optional[Any]:
-        """Async twin of _raw_fetch: same URL, same params, same timeout; ONLY the shared-http
+        """Async replacement of the deleted sync ``_raw_fetch`` (11-04, S9; this is the only one now): same URL, same params, same timeout; ONLY the shared-http
         egress swaps http.get_json -> await http.aget_json. Everything else verbatim."""
         return await http.aget_json(
             SEARCH_URL,
             params={"query": query, "fields": _FIELDS, "limit": max(1, min(int(limit), 20))},
             timeout=15,
         )
-
-    async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async twin of BaseScrapeAdapter.search -> AsyncSearchCapable. Shares the base
-        async cache round-trip; egress via _araw_fetch; mapping via the SAME pure-CPU
-        _to_documents (byte-identical to search)."""
-        return await self._asearch_via(
-            query, limit,
-            afetch=lambda: self._araw_fetch(query, limit),
-            abuild=lambda raw: self._to_documents(raw, query, limit))
 
     def _to_documents(self, raw: Any, query: str, limit: int) -> list[Document]:
         if not isinstance(raw, dict):
@@ -129,7 +113,7 @@ class S2AuthorsAdapter(BaseScrapeAdapter):
             return mk_signal("citations", cites, kind="citation", by="s2_authors/citationCount")
         return {}
 
-    def health_check(self) -> tuple[Optional[bool], str]:
+    async def ahealth_check(self) -> tuple[Optional[bool], str]:
         """Liveness via a tiny author search. The shared keyless S2 pool 429s under load; a 429 is
         S2 rate-limiting us: it answered, but not whether author search serves, so it is NOT
         verified (None; until 2026-10-04 it read healthy). http.get_json raise_for_status-es a 429
@@ -138,7 +122,7 @@ class S2AuthorsAdapter(BaseScrapeAdapter):
         try:
             # The probe takes the declared S2 gate like every other S2 request (1 RPS shared with
             # _s2's keyed client and this source's searches through the shared http client).
-            r = http.direct("GET", SEARCH_URL, params={"query": "Bengio", "fields": "name", "limit": 1},
+            r = await http.adirect("GET", SEARCH_URL, params={"query": "Bengio", "fields": "name", "limit": 1},
                             headers={"User-Agent": http.USER_AGENT}, timeout=15,
                             follow_redirects=True)
         except upstreams.UpstreamBusy as exc:
@@ -146,7 +130,7 @@ class S2AuthorsAdapter(BaseScrapeAdapter):
         except Exception as exc:  # noqa: BLE001
             return False, f"{type(exc).__name__}: {str(exc)[:80]}"
         if r.status_code == 429:
-            return None, f"{_probe.rate_limited('api.semanticscholar.org', _probe.retry_after_s(r.headers))} (keyless pool)"
+            return None, f"{_probe.rate_limited('api.semanticscholar.org', upstreams.parse_retry_after(r.headers))} (keyless pool)"
         if r.status_code != 200:
             return False, f"HTTP {r.status_code}"
         try:

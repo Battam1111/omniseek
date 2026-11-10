@@ -20,8 +20,9 @@ from urllib.parse import urlparse
 import anyio
 from bs4 import BeautifulSoup
 
-from omniseek.core import cache, diag, http
+from omniseek.core import cache, http, portal
 from omniseek.core.normalize import Document, keyword_score_filter
+from omniseek.core.sources._base import SourceBase
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +35,7 @@ CACHE_TTL = 10800  # 3h, matches the other job scrapes
 _JOB_HREF = re.compile(r"^/ajo/jobs/(\d+)")
 
 
-class AJOAdapter:
+class AJOAdapter(SourceBase):
     name = "ajo"
     needs_credentials = False
     kind = "stream"
@@ -46,43 +47,8 @@ class AJOAdapter:
         "higheredjobs_cs / academic_jobs(Nature Careers)"
     )
 
-    def _positions(self) -> list[dict]:
-        key = cache.make_key("ajo", "positions", "v1")
-        cached = cache.get(key)
-        if cached is not None:
-            return cached
-        try:
-            # Declared host gate: academicjobsonline.org's robots.txt sets Crawl-delay 5 s (http.direct:
-            # the gates, the declared User-Agent and the readings of every hop).
-            resp = http.direct("GET", LIST_URL, headers={"User-Agent": UA}, timeout=TIMEOUT,
-                               follow_redirects=True)
-            resp.raise_for_status()
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("ajo: listing fetch failed: %s", exc)
-            st = getattr(getattr(exc, "response", None), "status_code", None)
-            diag.note("ajo.fetch", url=LIST_URL, status=st, exc=exc)
-            return []
-        soup = BeautifulSoup(resp.text, "lxml")
-        out: list[dict] = []
-        for a in soup.find_all("a", href=_JOB_HREF):
-            jid = _JOB_HREF.match(a["href"]).group(1)
-            title_el = soup.find("span", id=f"j{jid}")
-            title = title_el.get_text(" ", strip=True) if title_el else ""
-            if not title or len(title) < 8:
-                continue  # no real title rendered for this row
-            inst = ""
-            h3 = a.find_previous("h3", class_="x1")
-            if h3 is not None:
-                inst = h3.get_text(" ", strip=True)
-            li = a.find_parent("li")
-            extra = li.get_text(" ", strip=True)[:400] if li is not None else ""
-            out.append({"id": jid, "title": title, "institution": inst, "extra": extra,
-                        "url": f"{BASE}/ajo/jobs/{jid}"})
-        cache.set(key, out, ttl=CACHE_TTL)
-        return out
-
     async def _apositions(self) -> list[dict]:
-        """Async twin of ``_positions`` (S4b): BYTE-FAITHFUL mirror changing ONLY the blocking parts.
+        """Async replacement of the deleted sync ``_positions`` (11-04, async step seven; this is the only one now) (S4b): BYTE-FAITHFUL mirror changing ONLY the blocking parts.
           - the disk cache read + write -> ``anyio.to_thread.run_sync`` (SAME cache key "ajo/positions/v1",
             so the sync and async paths share one warmed listing entry);
           - the raw ``httpx.get`` listing fetch -> the shared async leaf ``http.aget_text`` (shared pool +
@@ -95,7 +61,7 @@ class AJOAdapter:
             CPU, byte-identical, stays ON the loop (OUTSIDE any try/except, exactly as ``_positions``).
         On fetch failure returns [] WITHOUT caching, exactly as ``_positions`` does."""
         key = cache.make_key("ajo", "positions", "v1")
-        cached = await anyio.to_thread.run_sync(cache.get, key)  # disk read OFF loop
+        cached = await cache.aget_once(key)  # disk read OFF loop
         if cached is not None:
             return cached
         text = await http.aget_text(LIST_URL, headers={"User-Agent": UA},
@@ -119,16 +85,11 @@ class AJOAdapter:
             out.append({"id": jid, "title": title, "institution": inst, "extra": extra,
                         "url": f"{BASE}/ajo/jobs/{jid}"})
         await anyio.to_thread.run_sync(  # disk write OFF loop
-            functools.partial(cache.set, key, out, ttl=CACHE_TTL))
+            functools.partial(cache.set, key, out, ttl=CACHE_TTL), limiter=portal.IO_LANE)
         return out
 
-    def search(self, query: str, limit: int = 10) -> list[Document]:
-        docs = [self._to_doc(p) for p in self._positions()]
-        docs = keyword_score_filter(docs, (query or "").strip())
-        return docs[:limit]
-
     async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async twin of ``search`` -> AsyncSearchCapable. Mirrors ``search`` line-for-line,
+        """Native-async replacement of the deleted sync ``search`` (11-04, S9; this is the only one now) -> AsyncSearchCapable. Mirrors ``search`` line-for-line,
         awaiting ``_apositions`` (disk cache OFF the loop, listing fetch via the async leaf) instead of
         the sync ``_positions``. The ``_to_doc`` mapping + ``keyword_score_filter`` are pure CPU, so this
         is behavior-identical to ``search`` (same parse, same BM25 filter, same limit)."""
@@ -136,11 +97,11 @@ class AJOAdapter:
         docs = keyword_score_filter(docs, (query or "").strip())
         return docs[:limit]
 
-    def fetch_url(self, url: str) -> Optional[Document]:
+    async def afetch_url(self, url: str) -> Optional[Document]:
         host = (urlparse(url).hostname or "").lower()
         if "academicjobsonline.org" not in host:
             return None
-        for p in self._positions():
+        for p in await self._apositions():
             # A prefix counts only on a path boundary (/, ? or #): the posting URL ends in its id,
             # so a bare startswith let /ajo/jobs/2750 claim /ajo/jobs/27501.
             base = p["url"]
@@ -148,12 +109,14 @@ class AJOAdapter:
                 return self._to_doc(p)
         return None
 
-    def health_check(self) -> tuple[Optional[bool], str]:
-        # SAME key _positions reads: while the listing is cached, _positions answers from the cache
+    async def ahealth_check(self) -> tuple[Optional[bool], str]:
+        # SAME key _apositions reads: while the listing is cached, _apositions answers from the cache
         # and asks the site nothing, so this check verifies nothing (None).
-        if cache.get(cache.make_key("ajo", "positions", "v1")) is not None:
+        ck = cache.make_key("ajo", "positions", "v1")
+        hit = await anyio.to_thread.run_sync(cache.get, ck, limiter=portal.IO_LANE)  # disk read OFF loop
+        if hit is not None:
             return None, "not probed (the listing is still cached; the site is asked again when it expires)"
-        n = len(self._positions())
+        n = len(await self._apositions())
         if n:
             return True, f"OK ({n} positions parsed)"
         return False, "0 positions parsed (layout drift or fetch failure)"

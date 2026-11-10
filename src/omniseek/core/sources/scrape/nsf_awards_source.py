@@ -29,7 +29,7 @@ from datetime import datetime
 from typing import Any, Optional
 
 from omniseek.core import http
-from omniseek.core.normalize import Document, jsonsafe, mk_signal
+from omniseek.core.normalize import Document, jsonsafe, mk_signal, to_utc
 from omniseek.core.sources.scrape._base import BaseScrapeAdapter
 
 API_URL = "https://api.nsf.gov/services/v1/awards.json"
@@ -55,17 +55,8 @@ class NSFAwardsAdapter(BaseScrapeAdapter):
     explicit_only = ("nsf_awards: US-only federal science grants, a named drill "
                      "(by topic / institution / PI), not broad-fan-out fodder")
 
-    def _raw_fetch(self, query: str, limit: int) -> Optional[Any]:
-        # rpp is capped at 25 by the API; ask for the requested count (1..25).
-        return http.get_json(
-            API_URL,
-            params={"keyword": query, "rpp": max(1, min(int(limit), 25)),
-                    "printFields": _FIELDS},
-            timeout=15,
-        )
-
     async def _araw_fetch(self, query: str, limit: int) -> Optional[Any]:
-        # Async twin of _raw_fetch: byte-faithful mirror (same URL, params, timeout);
+        # Async replacement of the deleted sync ``_raw_fetch`` (11-04, S9; this is the only one now): byte-faithful mirror (same URL, params, timeout);
         # only the shared-http egress fn is swapped for its async twin.
         return await http.aget_json(
             API_URL,
@@ -73,14 +64,6 @@ class NSFAwardsAdapter(BaseScrapeAdapter):
                     "printFields": _FIELDS},
             timeout=15,
         )
-
-    async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async twin of search -> AsyncSearchCapable. Shares the base async cache
-        round-trip; egress via _araw_fetch; mapping via the SAME pure-CPU _to_documents."""
-        return await self._asearch_via(
-            query, limit,
-            afetch=lambda: self._araw_fetch(query, limit),
-            abuild=lambda raw: self._to_documents(raw, query, limit))
 
     def _to_documents(self, raw: Any, query: str, limit: int) -> list[Document]:
         if not isinstance(raw, dict):
@@ -136,11 +119,9 @@ class NSFAwardsAdapter(BaseScrapeAdapter):
         """NSF award dates are MM/DD/YYYY (e.g. '01/15/2025'). None on anything else."""
         if not isinstance(raw, str) or not raw.strip():
             return None
-        for fmt in ("%m/%d/%Y", "%Y-%m-%d"):
-            try:
-                return datetime.strptime(raw.strip(), fmt)
-            except ValueError:
-                continue
-        return None
+        try:
+            return to_utc(datetime.strptime(raw.strip(), "%m/%d/%Y"))
+        except ValueError:
+            return to_utc(raw)
 
 # Registration is automatic via BaseScrapeAdapter.__init_subclass__ (no module-tail ceremony).

@@ -3,7 +3,7 @@
 ``safe_fetch`` is OmniSeek's ONE hardened fetch primitive for a URL an adversary chose: a
 candidate-source URL the curator probes, OR an arbitrary user/page URL no adapter claims that
 web_fallback must read. It OWNS its httpx client (cookieless, redirect-disabled, trust_env=False)
-instead of wrapping http._request_capped (which forces the shared pool + follow_redirects=True + a
+instead of wrapping http._arequest_capped (which forces the shared pool + follow_redirects=True + a
 COMPRESSED-bytes cap: all wrong for an attacker host). It scheme-allowlists http/https, rejects
 userinfo + non-80/443 ports on the FINAL pinned connection, resolves the host and validates EVERY
 resolved IP, then CONNECTS TO THE PINNED IP literal (defeating DNS-rebind), walks redirects manually
@@ -28,7 +28,7 @@ from urllib.parse import urljoin
 import anyio
 import httpx
 
-from omniseek.core import _netguard, cache, http, upstreams
+from omniseek.core import _netguard, cache, http, portal, upstreams
 
 # ── SSRF guard: DELEGATED to omniseek.core._netguard (ONE guard, shared with the mainline egress) ──
 # The URL-shape (scheme/userinfo/port), IP-block, and host-suffix DECISIONS all live in _netguard;
@@ -83,7 +83,7 @@ def _blocked(reason: str, status: Optional[int] = None, chain: Optional[list] = 
             "redirect_chain": chain or [], "content_type": None, "blocked_reason": reason}
 
 
-def _read_capped(resp: httpx.Response, max_bytes: int) -> "tuple[Optional[bytes], Optional[str]]":
+async def _aread_capped(resp: httpx.Response, max_bytes: int) -> "tuple[Optional[bytes], Optional[str]]":
     """Read the body, aborting on EITHER cap: DECODED bytes (iter_bytes handles gzip/deflate/
     br/zstd) > max_bytes (gzip-bomb defense), OR raw compressed bytes > max_bytes (refuse a body
     whose compressed size alone already blows the budget). Returns (decoded_bytes, None) or
@@ -93,7 +93,7 @@ def _read_capped(resp: httpx.Response, max_bytes: int) -> "tuple[Optional[bytes]
     # raw_total tracks compressed wire bytes; if the COMPRESSED stream already exceeds the cap we
     # never finish decoding. httpx exposes the raw stream length via num_bytes_downloaded.
     try:
-        for chunk in resp.iter_bytes():
+        async for chunk in resp.aiter_bytes():
             decoded += chunk
             if len(decoded) > max_bytes:
                 return None, "oversize"
@@ -105,12 +105,17 @@ def _read_capped(resp: httpx.Response, max_bytes: int) -> "tuple[Optional[bytes]
     return bytes(decoded), None
 
 
-def safe_fetch(url: str, *, method: str = "GET", render: bool = False,
-               timeout_total: float = 20.0, max_bytes: int = _DEFAULT_MAX_BYTES,
-               max_redirects: int = 5) -> dict:
+def safe_fetch(url: str, **kwargs) -> dict:
+    """Sync entry for a caller on a thread: ``asafe_fetch`` on the event loop (portal.call)."""
+    return portal.call(asafe_fetch, url, **kwargs)
+
+
+async def asafe_fetch(url: str, *, method: str = "GET", render: bool = False,
+                      timeout_total: float = 20.0, max_bytes: int = _DEFAULT_MAX_BYTES,
+                      max_redirects: int = 5) -> dict:
     """Fetch an ATTACKER-INFLUENCEABLE candidate URL and return FACTS, fail-closed.
 
-    Owns its client (NOT http._request_capped/_get_client). Returns:
+    Owns its client (NOT http._arequest_capped/_aget_client). Returns:
         {"ok", "status", "bytes", "text", "final_url", "redirect_chain", "content_type",
          "blocked_reason": one of private_ip|bad_scheme|oversize|timeout|dns|userinfo|
                            bad_port|redirect_loop|cache_only|fetch_error|rate_gate|None}
@@ -140,19 +145,19 @@ def safe_fetch(url: str, *, method: str = "GET", render: bool = False,
     current_url = url
     seen: set = set()
 
-    client = httpx.Client(
+    client = httpx.AsyncClient(
         follow_redirects=False,           # we walk redirects MANUALLY, re-validating each hop
         cookies={},                       # no cookies, ever
         headers={"User-Agent": http.USER_AGENT},
         timeout=httpx.Timeout(connect=5.0, read=10.0, write=5.0, pool=5.0),
         trust_env=False,                  # no env proxies / no Authorization from netrc / etc.
         max_redirects=0,
-        event_hooks=http.progress_hooks(),  # the body's progress renews the gates' leases
+        event_hooks=http.aprogress_hooks(),  # the body's progress renews the gates' leases
     )
     # The declared gates of the host this fetch is on (upstreams.HopGates, the ONE redirect rule): a
     # hop to the same host continues the same visit, a hop to another host lets go of the last host's
     # gates and takes its own. Held until the fetch returns.
-    gates = upstreams.HopGates(request_s=timeout_total)   # a request's own time, for the leases
+    gates = upstreams.AsyncHopGates(request_s=timeout_total)   # a request's own time, for the leases
     try:
         for _hop in range(max_redirects + 1):
             parts, reason = _validate_url_shape(current_url)
@@ -162,7 +167,9 @@ def safe_fetch(url: str, *, method: str = "GET", render: bool = False,
             port = parts["port"]
             scheme = parts["scheme"]
 
-            safe_ip, _family, reason = _resolve_safe_ip(host)
+            # the lookup blocks (getaddrinfo): off the loop
+            safe_ip, _family, reason = await anyio.to_thread.run_sync(_resolve_safe_ip, host,
+                                                                      limiter=portal.IO_LANE)
             if reason is not None:
                 return _blocked(reason, chain=chain)
 
@@ -191,12 +198,12 @@ def safe_fetch(url: str, *, method: str = "GET", render: bool = False,
                 # A hop to a DECLARED upstream takes its gates like any other egress (a no-op for an
                 # undeclared host, i.e. almost every candidate URL, and for a same-host redirect).
                 # Not admitted in time -> blocked_reason "rate_gate": nothing was sent.
-                gates.enter(f"{scheme}://{host}/")
+                await gates.enter(f"{scheme}://{host}/")
             except upstreams.UpstreamBusy:
                 return _blocked("rate_gate", chain=chain)
             try:
-                with client.stream(method, pinned_url, headers=req_headers,
-                                   extensions=extensions, timeout=timeout_total) as resp:
+                async with client.stream(method, pinned_url, headers=req_headers,
+                                         extensions=extensions, timeout=timeout_total) as resp:
                     # every response on its own host, by its real name (the wire URL is the pinned
                     # IP): readings, and a Retry-After defers its gates (design decision 2026-09-29)
                     upstreams.observe_response(current_url, resp)
@@ -212,7 +219,7 @@ def safe_fetch(url: str, *, method: str = "GET", render: bool = False,
                         current_url = nxt
                         continue  # next hop re-runs the FULL guard at the top of the loop
                     # Terminal response: read the body under both caps.
-                    body, oversize = _read_capped(resp, max_bytes)
+                    body, oversize = await _aread_capped(resp, max_bytes)
                     if oversize is not None:
                         return _blocked(oversize, status=status, chain=chain)
                     ctype = resp.headers.get("content-type")
@@ -235,26 +242,26 @@ def safe_fetch(url: str, *, method: str = "GET", render: bool = False,
                     }
             except httpx.TimeoutException as exc:
                 if isinstance(exc, httpx.ConnectTimeout):  # never connected: nothing was sent
-                    gates.close(unsent=True)
+                    await gates.close(unsent=True)
                 return _blocked("timeout", chain=chain)
             except httpx.HTTPError as exc:
                 if isinstance(exc, httpx.ConnectError):  # never connected: nothing was sent
-                    gates.close(unsent=True)
+                    await gates.close(unsent=True)
                 return _blocked("fetch_error", chain=chain)
         # Exhausted max_redirects without a terminal response.
         return _blocked("redirect_loop", chain=chain)
     finally:
-        gates.close()
+        await gates.close()
         try:
-            client.close()
+            await client.aclose()
         except Exception:  # noqa: BLE001
             pass
 
 
-def walk_redirects_revalidated(client: "httpx.Client", method: str, url: str, *,
-                               max_redirects: int = 10,
-                               headers: Optional[dict] = None,
-                               gates: "Optional[upstreams.HopGates]" = None) -> "httpx.Response":
+async def awalk_redirects_revalidated(client: "httpx.AsyncClient", method: str, url: str, *,
+                                      max_redirects: int = 10,
+                                      headers: Optional[dict] = None,
+                                      gates: "Optional[upstreams.AsyncHopGates]" = None) -> "httpx.Response":
     """Walk redirects MANUALLY on a follow_redirects=False client, re-validating EVERY hop's target
     via _netguard.security_block_reason BEFORE connecting. Returns the FINAL non-3xx httpx.Response
     with its body still UNREAD (the caller reads/streams then closes it), or RAISES
@@ -272,46 +279,47 @@ def walk_redirects_revalidated(client: "httpx.Client", method: str, url: str, *,
     arbitrary-user-URL lane that warrants full pinning already goes through safe_fetch. Streamed
     (H1) vs buffered (H2) final-body handling stays in each caller; only the hop walk is shared.
 
-    ``gates`` (an ``upstreams.HopGates`` the caller holds until it has read the body): every hop goes
+    ``gates`` (an ``upstreams.AsyncHopGates`` the caller holds until it has read the body): every hop goes
     through the redirect rule, so a hop to a declared host takes that host's gates (raising
     ``upstreams.UpstreamBusy``, nothing sent, when they cannot admit it in time)."""
     current = url
     for _hop in range(max_redirects + 1):
-        blk = _netguard.security_block_reason(current)
+        blk = await anyio.to_thread.run_sync(_netguard.security_block_reason, current,
+                                             limiter=portal.IO_LANE)
         if blk is not None:
             raise RuntimeError(f"refused SSRF-class url ({blk}): {current[:120]}")
         if gates is not None:
-            gates.enter(current)
+            await gates.enter(current)
         # a hop to a host whose upstream declares a User-Agent sends that one (upstreams.json)
         req = client.build_request(method, current,
                                    headers=upstreams.with_declared_user_agent(current, headers))
         # follow_redirects=False EXPLICITLY: the per-hop _netguard check above is the ONLY redirect
         # authority, so the primitive stays safe even if a future caller hands it a client built with
         # follow_redirects=True (never let httpx auto-follow past the guard).
-        resp = client.send(req, stream=True, follow_redirects=False)
+        resp = await client.send(req, stream=True, follow_redirects=False)
         upstreams.observe_response(current, resp)   # every response on its own host (ruling 2026-09-29)
         if resp.status_code in (301, 302, 303, 307, 308) and "location" in resp.headers:
             loc = resp.headers["location"]
-            resp.close()                       # drop the 3xx before connecting to the next hop
+            await resp.aclose()                # drop the 3xx before connecting to the next hop
             current = urljoin(current, loc)    # resolve relative Location against the CURRENT url
             continue
         return resp                            # final non-3xx: caller owns read + close
     raise RuntimeError(f"refused SSRF-class url (redirect_loop): {url[:120]}")
 
 
-class SSRFGuardTransport(httpx.BaseTransport):
-    """A sync httpx transport wrapper that _netguard-validates EVERY request URL before delegating.
+class AsyncSSRFGuardTransport(httpx.AsyncBaseTransport):
+    """An httpx transport wrapper that _netguard-validates EVERY request URL before delegating.
 
     httpx re-invokes the client's transport ONCE PER REQUEST, including once per redirect hop (the
     redirect loop calls transport.handle_request for each hop). So wrapping the real transport here
     enforces SSRF on EVERY hop while httpx keeps owning redirect method/body/cookie semantics (no
     manual redirect walk, no reimplementing 303->GET / 307-body rules). This is the mainline per-hop
-    redirect-SSRF closure for the shared pooled client (http._get_client): it only refuses a blocked
+    redirect-SSRF closure for the shared pooled client (http._aget_client): it only refuses a blocked
     hop's connection, so a 302 -> 169.254.169.254 / a private IP is never followed and its body is
-    never delivered, for this and every other http.get / get_json / post_json caller at once.
+    never delivered, for this and every other http.aget / aget_json / apost_json caller at once.
 
     It raises httpx.ConnectError (a RequestError subclass httpx will NOT retry, and that
-    http._request_capped's except already turns into None: the adapter failure contract).
+    http._arequest_capped's except already turns into None: the adapter failure contract).
 
     IP-PINNED (the rebind TOCTOU is now closed on the mainline too, not only in safe_fetch): it
     resolves + validates ONCE via _netguard.resolve_pin, then rewrites the request URL to the checked
@@ -323,45 +331,14 @@ class SSRFGuardTransport(httpx.BaseTransport):
     delegates to _netguard so the guard never forks; an unresolvable host is NOT pinned (dns is not a
     security block) and passes through so the wrapped transport surfaces its own DNS error."""
 
-    def __init__(self, wrapped: "httpx.BaseTransport") -> None:
-        self._wrapped = wrapped
-
-    def handle_request(self, request: "httpx.Request") -> "httpx.Response":
-        ip, host, reason = _netguard.resolve_pin(str(request.url))
-        if reason is not None and reason != "dns":
-            raise httpx.ConnectError(
-                f"refused SSRF-class url ({reason}): {str(request.url)[:120]}", request=request)
-        if ip is None:  # unresolvable / no host: cannot pin; let the wrapped transport surface the error
-            return self._wrapped.handle_request(request)
-        original_url = request.url
-        request.url = original_url.copy_with(host=ip)     # connect to the validated IP (defeats rebind)
-        request.extensions.setdefault("sni_hostname", host)  # TLS SNI + cert stay on the real host
-        try:
-            return self._wrapped.handle_request(request)
-        finally:
-            request.url = original_url  # restore: a relative-redirect Location resolves against the real host
-
-    def close(self) -> None:
-        self._wrapped.close()
-
-
-class AsyncSSRFGuardTransport(httpx.AsyncBaseTransport):
-    """Async twin of ``SSRFGuardTransport``: the per-hop SSRF guard for the shared pooled
-    ``httpx.AsyncClient`` (http._aget_client). Same guard DECISION (delegates to
-    _netguard.security_block_reason, single-homed, never forks), same per-hop enforcement
-    (httpx re-invokes the transport once per redirect hop), same httpx.ConnectError (a
-    non-retried RequestError http._arequest_capped's except turns into None). See the sync
-    twin above for the full rationale (not re-transcribed here)."""
-
     def __init__(self, wrapped: "httpx.AsyncBaseTransport") -> None:
         self._wrapped = wrapped
 
     async def handle_async_request(self, request: "httpx.Request") -> "httpx.Response":
         # OFF-LOOP (S4b): resolve_pin does getaddrinfo per hop (a BLOCKING syscall). On the async client
         # this would run ON the loop, so a slow/cold DNS would freeze EVERY coroutine. Push it to a worker
-        # thread; the pin rewrite itself is pure CPU on the loop. IDENTICAL guard DECISION + pin as the sync
-        # twin (SSRFGuardTransport): see it for the full rationale (not re-transcribed).
-        ip, host, reason = await anyio.to_thread.run_sync(_netguard.resolve_pin, str(request.url))
+        # thread; the pin rewrite itself is pure CPU on the loop.
+        ip, host, reason = await anyio.to_thread.run_sync(_netguard.resolve_pin, str(request.url), limiter=portal.IO_LANE)
         if reason is not None and reason != "dns":
             raise httpx.ConnectError(
                 f"refused SSRF-class url ({reason}): {str(request.url)[:120]}", request=request)
@@ -377,8 +354,3 @@ class AsyncSSRFGuardTransport(httpx.AsyncBaseTransport):
 
     async def aclose(self) -> None:
         await self._wrapped.aclose()
-
-
-# DEFER (S4-side, not built here): an async safe_fetch / walk_redirects_revalidated (the
-# attacker-URL IP-pinning lane serving fetch_url / web_fallback / docreader) is a DIFFERENT lane
-# from the adapter mainline and is NOT needed by the S4 async fan-out; it stays sync-on-thread for now.

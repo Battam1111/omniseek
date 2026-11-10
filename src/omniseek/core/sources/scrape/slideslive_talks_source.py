@@ -42,10 +42,13 @@ from __future__ import annotations
 
 import logging
 import re
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any, Optional
 
-from omniseek.core.normalize import Document, mk_signal
+import anyio
+
+from omniseek.core import fetcher
+from omniseek.core.normalize import Document, mk_signal, to_utc
 from omniseek.core.sources.scrape._base import BaseScrapeAdapter, _SCRAPE_UA
 
 logger = logging.getLogger(__name__)
@@ -156,17 +159,15 @@ class SlidesLiveTalksAdapter(BaseScrapeAdapter):
     domains = ["papers", "video"]
     modes = ["TRANSCRIBE", "STRUCTURE"]
 
-    # --------------------------------------------------------------- hooks
-    def _raw_fetch(self, query: str, limit: int) -> Optional[Any]:
-        """Route the query. A SlidesLive URL / bare numeric id -> the yt-dlp resolve path (full
-        metadata for that one talk, a dict). Any other non-empty keyword -> the PUBLIC library
-        search (a list of lightweight hit dicts). Empty query -> None. Returning None ⇒ [] (the
-        adapter contract); an empty search list is collapsed to None so no miss is cached."""
+    async def _araw_fetch(self, query: str, limit: int) -> Optional[Any]:
+        """Async replacement of the deleted sync ``_raw_fetch`` (11-04, S9; this is the only one now). The keyword library search (what a broad search sends) is a
+        coroutine; a talk URL / id goes to yt-dlp, a blocking library, so that one branch runs in a
+        worker thread."""
         talk_id = _talk_id(query)
         if talk_id:
-            return self._extract_info(_canonical_url(talk_id))
+            return await anyio.to_thread.run_sync(self._extract_info, _canonical_url(talk_id), limiter=fetcher._LEGACY_LIMITER)
         if query and query.strip():
-            return self._search_presentations(query, limit) or None
+            return (await self._asearch_presentations(query, limit)) or None
         return None
 
     def _to_documents(self, raw: Any, query: str, limit: int) -> list[Document]:
@@ -178,14 +179,16 @@ class SlidesLiveTalksAdapter(BaseScrapeAdapter):
         doc = self._info_to_document(raw)
         return [doc] if doc is not None else []
 
-    def fetch_url(self, url: str) -> Optional[Document]:
+    async def afetch_url(self, url: str) -> Optional[Document]:
         """Claim a slideslive.com talk URL: resolve its metadata + audio handle into
         one doc (the omniseek_read / omniseek_search 单源钻取 drill-down path). Returns None for any
         non-SlidesLive url so the fetcher's host routing skips this source."""
         talk_id = _talk_id(url)
         if not talk_id:
             return None
-        info = self._extract_info(_canonical_url(talk_id))
+        # yt-dlp is a blocking library: a worker thread, as in _araw_fetch
+        info = await anyio.to_thread.run_sync(self._extract_info, _canonical_url(talk_id),
+                                              limiter=fetcher._LEGACY_LIMITER)
         if info is None:
             return None
         return self._info_to_document(info)
@@ -215,34 +218,15 @@ class SlidesLiveTalksAdapter(BaseScrapeAdapter):
             return None
 
     @staticmethod
-    def _search_presentations(query: str, limit: int) -> list[dict]:
-        """Page through the PUBLIC SlidesLive library search (``/search/presentations``), parse
-        each 20-result page, and return up to ``limit`` result dicts (deduped by id, in
-        server-relevance order). Stops at ``limit`` or the first empty page; a page fetch failure
-        just ends the walk (returning what we have). Routes through the shared ``http`` helper so
-        the search inherits the SSRF guard + pooled client + /eye-fix diagnostic tap; a browser UA
-        is sent because SlidesLive gates the omniseek default UA."""
-        from urllib.parse import quote
+    async def _asearch_presentations(query: str, limit: int) -> list[dict]:
+        """Async replacement of the deleted sync ``_search_presentations`` (11-04, S9; this is the only one now) (http.aget_text, same pages, same stop rules)."""
         from omniseek.core import http
-        pages = max(1, (limit + _RESULTS_PER_PAGE - 1) // _RESULTS_PER_PAGE)
         results: list[dict] = []
         seen: set[str] = set()
-        for page in range(1, pages + 1):
-            url = _SEARCH_URL.format(query=quote(query), page=page)
-            html = http.get_text(url, timeout=20,
-                                  headers={"User-Agent": _SCRAPE_UA, "Accept": "text/html"})
-            if not html:
-                break  # fetch failed (None) or empty body -> stop; return what we have so far
-            page_items = _parse_search_fragment(html)
-            if not page_items:
-                break  # first empty page -> no more library results
-            for item in page_items:
-                if item["id"] in seen:
-                    continue
-                seen.add(item["id"])
-                results.append(item)
-                if len(results) >= limit:
-                    return results
+        for url in _search_page_urls(query, limit):
+            html = await http.aget_text(url, timeout=20, headers=_SEARCH_HEADERS)
+            if not html or _merge_search_page(html, results, seen, limit):
+                break
         return results
 
     @staticmethod
@@ -356,6 +340,31 @@ class SlidesLiveTalksAdapter(BaseScrapeAdapter):
 
 
 # ─────────────────────────────────────────────────────────────── module helpers
+_SEARCH_HEADERS = {"User-Agent": _SCRAPE_UA, "Accept": "text/html"}
+
+
+def _search_page_urls(query: str, limit: int) -> list[str]:
+    from urllib.parse import quote
+    pages = max(1, (limit + _RESULTS_PER_PAGE - 1) // _RESULTS_PER_PAGE)
+    return [_SEARCH_URL.format(query=quote(query), page=page) for page in range(1, pages + 1)]
+
+
+def _merge_search_page(html: str, results: list[dict], seen: set[str], limit: int) -> bool:
+    """Add one library-search page's hits to ``results`` (deduped by id, server order). True when the
+    walk stops here: the page holds no result card (the end of the library results) or ``limit`` is
+    reached."""
+    page_items = _parse_search_fragment(html)
+    if not page_items:
+        return True
+    for item in page_items:
+        if item["id"] in seen:
+            continue
+        seen.add(item["id"])
+        results.append(item)
+        if len(results) >= limit:
+            return True
+    return False
+
 
 def _slim_audio(fmt: Optional[dict]) -> Optional[dict]:
     """A COMPACT audio-handle summary: identifying fields only. The full yt-dlp format dict
@@ -387,18 +396,11 @@ def _best_audio_format(formats: list) -> Optional[dict]:
 def _parse_date(info: dict) -> Optional[datetime]:
     """Prefer the unix ``timestamp``; fall back to the ``YYYYMMDD`` ``upload_date``."""
     ts = info.get("timestamp")
-    if isinstance(ts, (int, float)):
-        try:
-            return datetime.fromtimestamp(ts, tz=timezone.utc)
-        except (ValueError, OSError, OverflowError):
-            pass
+    dt = to_utc(ts) if isinstance(ts, (int, float)) else None
     ud = info.get("upload_date")
-    if isinstance(ud, str) and len(ud) == 8 and ud.isdigit():
-        try:
-            return datetime.strptime(ud, "%Y%m%d").replace(tzinfo=timezone.utc)
-        except ValueError:
-            pass
-    return None
+    if dt is None and isinstance(ud, str) and len(ud) == 8 and ud.isdigit():
+        dt = to_utc(ud)
+    return dt
 
 
 def _build_content(*, description: str, duration: Optional[float], audio_present: bool,

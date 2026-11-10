@@ -1,4 +1,4 @@
-"""Shared helpers for OmniSeek's bulk-file FUNDING sources (the NSERC pattern, reused by SSHRC/CIHR).
+"""Shared helpers for OmniSeek's bulk-file FUNDING sources (SSHRC, CIHR).
 
 A funding council that publishes its awards ONLY as a bulk per-fiscal-year file (CSV/XLSX, no query
 API) gets this treatment: fetch the (static, annual) file at most monthly, keep ONLY the AI/ML/NLP
@@ -11,12 +11,16 @@ a ``*_source.py`` subclass imports it (the same convention as ``api/_base.py``).
 
 from __future__ import annotations
 
+import functools
 import logging
 import re
 from typing import Optional
 
-from omniseek.core import cache
+import anyio
+
+from omniseek.core import cache, portal
 from omniseek.core.normalize import Document, keyword_score_filter
+from omniseek.core.sources._base import SourceBase
 
 logger = logging.getLogger(__name__)
 
@@ -25,9 +29,8 @@ UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
 CACHE_TTL = 2592000  # 30 days: an annual static snapshot → refresh ~monthly (catches a new FY)
 
 # AI/ML/NLP relevance terms — the telos slice across councils (SSHRC humanities comp-ling, CIHR
-# health-AI). Matched against a grant's title / abstract / keywords / discipline / category. (NSERC
-# keeps its own sciences-tuned list in nserc_awards_source; this one is broadened for humanities +
-# health, hence 'computational social' / 'digital humanities'.)
+# health-AI). Matched against a grant's title / abstract / keywords / discipline / category. Broadened
+# for humanities + health, hence 'computational social' / 'digital humanities'.
 AI_TERMS = (
     "natural language", "machine learning", "deep learning", "neural network",
     "artificial intelligence", "computational lingu", "language model",
@@ -49,12 +52,12 @@ def year_of(name: Optional[str]) -> int:
     return int(m.group(1)) if m else 0
 
 
-class BulkFundingBase:
+class BulkFundingBase(SourceBase):
     """Cache + search over a query-independent AI/ML/NLP doc subset built from a bulk funding file.
 
     Subclass: set name / description / explicit_only / facets + ``_version`` (a cache-key part; bump
-    when targeting a new fiscal year) and implement ``_build_subset_docs() -> list[Document]``
-    (fetch the bulk file, keep is_ai_relevant rows, build docs). The base owns the 30-day subset cache
+    when targeting a new fiscal year) and implement ``async _abuild_subset_docs() -> list[Document]``
+    (async: fetch the bulk file, keep is_ai_relevant rows, build docs). The base owns the 30-day subset cache
     + the per-query BM25 filter + the fetch_url no-op. Registration stays a module-tail
     ``register_adapter(...)`` in the subclass file (this is a duck-typed Protocol adapter, not a
     BaseAPIAdapter — there is no __init_subclass__ auto-register here)."""
@@ -64,25 +67,29 @@ class BulkFundingBase:
     cache_ttl = CACHE_TTL
     _version = ""
 
-    def _build_subset_docs(self) -> list[Document]:
-        raise NotImplementedError("subclass must implement _build_subset_docs")
+    async def _abuild_subset_docs(self) -> list[Document]:
+        raise NotImplementedError("subclass must implement _abuild_subset_docs")
 
-    def _subset_docs(self) -> list[Document]:
+    async def _asubset_docs(self) -> list[Document]:
+        """The subset, cached for ``cache_ttl`` under one key per ``_version`` (an empty build is not
+        cached); the disk read + write off the loop."""
         key = cache.make_key(self.name, "subset", self._version)
-        cached = cache.get_docs(key)
+        cached = await cache.aget_docs(key)
         if cached is not None:
             return cached
-        docs = self._build_subset_docs()
+        docs = await self._abuild_subset_docs()
         if docs:
-            cache.set_docs(key, docs, ttl=self.cache_ttl)
+            await anyio.to_thread.run_sync(
+                functools.partial(cache.set_docs, key, docs, ttl=self.cache_ttl), limiter=portal.IO_LANE)
         return docs
 
-    def search(self, query: str, limit: int = 10) -> list[Document]:
-        docs = self._subset_docs()
+    async def asearch(self, query: str, limit: int = 10) -> list[Document]:
+        """The subset, filtered by the shared BM25 for a real query (a blank one keeps the build order)."""
+        docs = await self._asubset_docs()
         if not docs:
             return []
         q = (query or "").strip()
         return docs[:limit] if not q else keyword_score_filter(docs, q)[:limit]
 
-    def fetch_url(self, url: str) -> Optional[Document]:
+    async def afetch_url(self, url: str) -> Optional[Document]:
         return None

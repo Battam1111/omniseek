@@ -38,10 +38,16 @@ cannot arm it while the event loop is blocked: SIGBREAK does not interrupt a blo
 main thread (time.sleep there wakes for SIGINT only), so the handler runs only after the call
 returns. There the drain cap is ALSO armed from a console control handler, which Windows runs on a
 thread of its own the moment Ctrl+Break / Ctrl+C / console close arrives (_win_console_ctrl_arm).
+
+Answers on exit (2026-10-24, SSE-DRAIN): the drain cap only helps a running MCP call if its answer
+can still be sent; sse_starlette cuts every SSE stream at the signal unless told not to.
+answer_running_calls_on_exit sets the cap on uvicorn's Config and turns that off, for the entry, the
+eye and the brain alike (the entry and the brain load this file by path).
 """
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import faulthandler
 import logging
@@ -506,6 +512,46 @@ def cap_lifespan_shutdown(uvicorn_lifespan, cap_s: Optional[float] = None,
         return False
 
 
+def answer_running_calls_on_exit(uvicorn_config, drain_s: float) -> bool:
+    """SSE-DRAIN (2026-10-24): on an exit signal, give the requests still running up to ``drain_s``
+    seconds to finish AND get their answer to the caller. The one copy for the services that
+    stop this way; each calls it on its uvicorn Config before
+    building the server object (capped_server_class reads the timeout in its __init__).
+
+    Why both halves are needed: MCP streamable-http answers a POST over SSE by default
+    (sse_starlette's EventSourceResponse, json_response=False). On import sse_starlette wraps
+    uvicorn's Server.handle_exit, so the first exit signal sets its AppStatus.should_exit and every
+    open SSE stream is cancelled at once, mid-answer, while the tool keeps running in the background
+    with nowhere to send its result (measured 2026-10-24 on the entry: IncompleteRead(0 bytes) 0.01 s
+    after SIGTERM; the same on OmniSeek and the brain, SSE-DRAIN report). uvicorn's own wait gave a
+    running call time to finish, never time to answer. So:
+    1. ``uvicorn_config.timeout_graceful_shutdown = drain_s`` (None when ``drain_s`` <= 0, uvicorn's
+       "wait forever"): uvicorn waits that long for the running requests, then cancels the rest;
+    2. sse_starlette's automatic drain is switched off, so a stream ends when its answer is sent.
+       Only with a cap: without one a stream that never ends would hold the shutdown forever, so
+       with ``drain_s`` <= 0 the streams are still cut at the signal, as before.
+    sse_starlette is imported here, never at module level: this module stays stdlib only (the entry
+    and the brain load it by path, without OmniSeek's dependencies). The switch is process-global.
+    Returns True when the streams now outlive the signal. FAIL-OPEN: no sse_starlette (no SSE to
+    keep) only logs."""
+    drain = max(0.0, float(drain_s or 0.0))
+    uvicorn_config.timeout_graceful_shutdown = drain or None
+    if not drain:
+        log.info("lifecycle: no drain cap; SSE streams are cut at the exit signal (sse_starlette's "
+                 "default), running calls lose their answers")
+        return False
+    try:
+        from sse_starlette.sse import AppStatus
+    except Exception as exc:  # noqa: BLE001 -- no SSE library, no stream to keep open
+        log.warning("lifecycle: sse_starlette not importable (%s); only uvicorn's %.0fs wait applies",
+                    exc, drain)
+        return False
+    AppStatus.disable_automatic_graceful_drain()
+    log.info("lifecycle: on exit, running calls get up to %.0fs to finish and answer (SSE streams "
+             "are not cut at the signal; uvicorn cancels what is left at the cap)", drain)
+    return True
+
+
 def capped_server_class(server_base, cap_s: Optional[float] = None,
                         exit_fn: Callable[[int], None] = os._exit, backstop: bool = True):
     """Return a subclass of ``server_base`` (uvicorn.Server, passed in so this module stays free of a
@@ -656,7 +702,10 @@ def compose_lifespan(fastmcp_lifespan, cap_s: Optional[float] = None,
                         arm_shutdown_watchdog(cap_s, exit_fn=exit_fn, backstop=backstop)
                     set_shutdown_phase("lifespan: draining background loops (lifecycle.drain_all)")
                     try:
-                        drain_all(timeout_total=drain_timeout)  # graceful drain of our loops on shutdown
+                        # Off the loop thread: a loop being drained may be waiting on a coroutine it
+                        # sent through omniseek.core.portal, which needs this loop free to finish; joined
+                        # from the loop thread it could only time out.
+                        await asyncio.to_thread(drain_all, timeout_total=drain_timeout)
                     except Exception as exc:  # noqa: BLE001 -- a drain error must not corrupt shutdown
                         log.warning("lifespan drain_all failed: %s", exc)
                     set_shutdown_phase("lifespan: FastMCP session manager shutdown "

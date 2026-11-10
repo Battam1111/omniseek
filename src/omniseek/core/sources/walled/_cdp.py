@@ -25,11 +25,43 @@ All CDP adapters should use `cdp_call` instead of `cdp_page`.
 
 `cdp_page` is kept for backward compat (legacy direct-Python invocations)
 but emits a deprecation warning when used from an async context.
+
+## Page globals need the page's own world (2026-10-24)
+
+patchright runs `page.evaluate` in an isolated world: the DOM is shared, but
+the site's own JavaScript globals (`window.lib`, `window.__INITIAL_STATE__`)
+are not there, so a read of one comes back undefined. Read a page global with
+`page_world_evaluate`; a DOM read stays on `page.evaluate`. Two older findings
+that a site "has no such global" (xiaohongshu, 2026-06-18) came from the
+isolated world, so they prove nothing.
+
+## Page listeners run in the context they were registered in (2026-11-07)
+
+The sync browser library calls every `page.on(...)` / `page.once(...)` listener
+on a greenlet of its own (one per event), which starts with an empty context:
+before this, whatever such a listener noted through `diag` (or read from the
+caller's context: cache-only, the deadline, the health-check ledger) was lost.
+This module now wraps `on`, `once` and `remove_listener` of the library's sync
+objects once, at import (`_listeners_in_registering_context`): `on` / `once`
+take `contextvars.copy_context()` at the moment of registration and each call of
+the listener runs in a fresh copy of it, the way an asyncio callback runs in the
+context captured when it was scheduled. Inside a `cdp_call` / `cdp_render`
+callback that is the caller's context, so a note made in a listener reaches the
+caller's diagnostic. A copy per call (not the one context every time) because a
+listener that calls back into the page (`resp.json()`, `resp.text()`) lets the
+next event's greenlet run the same listener before the first call returns, and
+one context cannot be entered twice at once; a context variable a listener sets
+therefore does not carry over to its next call (mutable values such as the
+diagnostic's record list are shared, as in any copy). `remove_listener(event, f)`
+takes off what `on(event, f)` put on, as before. Adapters register listeners the
+plain way; none wraps its own.
 """
 
 from __future__ import annotations
 
 import asyncio
+import contextvars
+import functools
 import logging
 import os
 import pathlib
@@ -44,6 +76,7 @@ from typing import Any, Callable, ContextManager, Iterator, Optional
 from urllib.parse import urlsplit
 
 from omniseek.core import _probe, cache, diag, upstreams
+from omniseek import where
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +100,70 @@ DEFAULT_CDP_URL = "http://127.0.0.1:9222"
 DEFAULT_THREAD_TIMEOUT = 90  # seconds
 
 
+# None once the wrapper is installed; otherwise why not (cdp_health's answer carries it, so a library
+# that moved its internals shows up there instead of every listener's notes going quietly missing).
+_LISTENER_CONTEXT_MISSING: Optional[str] = "not installed yet"
+
+
+def _listeners_in_registering_context() -> None:
+    """Make ``on`` / ``once`` listeners of the library's sync objects run in the context they were
+    registered in, and keep ``remove_listener`` working (module docstring). Installed once."""
+    global _LISTENER_CONTEXT_MISSING
+    try:
+        if _CDP_ENGINE == "patchright":
+            from patchright._impl._sync_base import SyncBase
+        else:  # pragma: no cover
+            from playwright._impl._sync_base import SyncBase
+        lib_on, lib_once, lib_remove = SyncBase.on, SyncBase.once, SyncBase.remove_listener
+    except (ImportError, AttributeError) as exc:
+        _LISTENER_CONTEXT_MISSING = f"{_CDP_ENGINE} internals moved ({type(exc).__name__}: {exc})"
+        logger.warning("page listeners will run outside the caller's context, their diag notes are "
+                       "lost: %s", _LISTENER_CONTEXT_MISSING)
+        return
+    if getattr(SyncBase, "_omniseek_listener_context", False):
+        _LISTENER_CONTEXT_MISSING = None
+        return
+
+    def _wrapped(self, event, f, once: bool):
+        ctx = contextvars.copy_context()
+        listeners = self.__dict__.setdefault("_omniseek_listeners", {})
+        key = (event, f)
+
+        # updated=(): the library keeps its own wrapper as an attribute on the function it is given,
+        # and f's attributes must not hand this one the wrapper of an earlier direct registration
+        @functools.wraps(f, updated=())
+        def run(*args):
+            if once and listeners.get(key) is run:
+                listeners.pop(key, None)
+            return ctx.copy().run(f, *args)
+
+        old = listeners.get(key)
+        if old is not None:  # the same f again: the library keeps one listener per function
+            try:
+                lib_remove(self, event, old)
+            except Exception:  # noqa: BLE001 (a once listener that already fired is gone)
+                pass
+        listeners[key] = run
+        return run
+
+    def on(self, event, f):
+        return lib_on(self, event, _wrapped(self, event, f, False) if callable(f) else f)
+
+    def once(self, event, f):
+        return lib_once(self, event, _wrapped(self, event, f, True) if callable(f) else f)
+
+    def remove_listener(self, event, f):
+        run = self.__dict__.get("_omniseek_listeners", {}).pop((event, f), None)
+        return lib_remove(self, event, run if run is not None else f)
+
+    SyncBase.on, SyncBase.once, SyncBase.remove_listener = on, once, remove_listener
+    SyncBase._omniseek_listener_context = True
+    _LISTENER_CONTEXT_MISSING = None
+
+
+_listeners_in_registering_context()
+
+
 # ── on-demand browser lifecycle (2026-08-29) ──────────────────────────────────────────────────
 # Until now the four CDP Chromes were launched at boot by launchd and stayed up forever, because
 # this module only ever CONNECTS (see cdp_page's "Don't close the browser — it's shared,
@@ -86,16 +183,15 @@ DEFAULT_THREAD_TIMEOUT = 90  # seconds
 #   2. Cold start to a usable browser takes 1 second (profile and cache are already on disk).
 #   3. The login session survives: after a restart the page returned to xiaohongshu.com/explore,
 #      not the login wall, and the Cookies file kept updating.
-_CDP_STATE_DIR = pathlib.Path.home() / ".omniseek" / "state" / "cdp-lastuse"
+_CDP_STATE_DIR = where.state() / "cdp-lastuse"
 
 # port → launchd label. A port that is NOT here (e.g. the jailed 9444 render Chromium, which is a
 # colima container and not a launchd service) is left completely alone: ensure_browser returns
 # immediately and behaviour is byte-identical to before.
 _CDP_SERVICES = {
-    "9222": "com.omniseek.cdp.cn-forums",
-    "9223": "com.omniseek.cdp.xhs",
-    "9224": "com.omniseek.cdp.xhs-cn",
-    "9225": "com.omniseek.cdp.douyin",
+    "9222": where.label("cdp-cn-forums"),
+    "9223": where.label("cdp-xhs"),
+    "9224": where.label("cdp-xhs-cn"),
 }
 
 # port → why it is sealed. A sealed port's browser is never started, kickstarted or driven by OmniSeek:
@@ -121,8 +217,8 @@ def sealed_port_reason(cdp_url: str) -> str:
 #   * 9222, the shared browser (大号 logins: zhihu, 一亩三分地, ...): 3, a few reused connections so
 #     concurrent named walled fetches do not queue behind each other (the Chrome's CDP pump
 #     serializes commands anyway; page loads and renders still overlap);
-#   * 9223 / 9224, the two xiaohongshu 小号, and 9225, the douyin 小号: 1, strictly one flow at a
-#     time (anti-ban: an account that must not look automated).
+#   * 9223 / 9224, the two xiaohongshu 小号: 1, strictly one flow at a time (anti-ban: an account
+#     that must not look automated).
 # A port that is not here (the jailed 9444 render Chromium, a new browser nobody listed) gets 1: one
 # at a time is the safe side to be wrong on. tests/test_cdp_ondemand.py fails when a port in
 # _CDP_SERVICES has no row here, so a new browser's size is a decision, not a default.
@@ -130,7 +226,6 @@ _CDP_MAX_CONNECTIONS = {
     "9222": 3,
     "9223": 1,
     "9224": 1,
-    "9225": 1,
 }
 _CDP_DEFAULT_CONNECTIONS = 1
 
@@ -147,6 +242,20 @@ def cdp_port(cdp_url: str) -> Optional[str]:
 def cdp_service_for(cdp_url: str) -> Optional[str]:
     port = cdp_port(cdp_url)
     return _CDP_SERVICES.get(port) if port else None
+
+
+def live_port_refusal(cdp_url: str) -> str:
+    """Why this process may not start or connect to the browser at ``cdp_url``, or "" when it may.
+
+    The launchd browsers (_CDP_SERVICES) belong to the live eye. A process that is not the live eye
+    (where.not_live_reason: another HOME, or the rehearsal switch) gets a reason here and is refused
+    before any launchctl call or connection; a port that is no launchd service (the jailed 9444 render
+    Chromium) is never refused here."""
+    label = cdp_service_for(cdp_url)
+    if label is None:
+        return ""
+    why = where.not_live_reason()
+    return f"CDP browser {label} belongs to the live eye and this process is not the live eye ({why})" if why else ""
 
 
 def max_connections(cdp_url: str) -> int:
@@ -194,10 +303,14 @@ def ensure_browser(cdp_url: str) -> None:
     dead browser did before this existed.
 
     A sealed port (_SEALED_PORTS) raises at once, on every platform, before any health probe or
-    kickstart: nothing is started and nothing is sent to that browser."""
+    kickstart: nothing is started and nothing is sent to that browser. So does a launchd port in a
+    process that is not the live eye (live_port_refusal), on every platform."""
     sealed = sealed_port_reason(cdp_url)
     if sealed:
         raise RuntimeError(f"CDP port {cdp_port(cdp_url)} sealed: {sealed}")
+    refusal = live_port_refusal(cdp_url)
+    if refusal:
+        raise RuntimeError(refusal)
     if sys.platform != "darwin":
         return
     label = cdp_service_for(cdp_url)
@@ -361,9 +474,9 @@ def _sweep_excess_tabs(ctx, keep_recent: int = 6) -> None:
 # runs each callback on a fresh page inside its owning worker thread — which satisfies Playwright
 # sync's thread-affinity (a connection is only ever touched by the one thread that created it).
 # Its size per Chrome is the port's row of _CDP_MAX_CONNECTIONS (9222 shared 大号: 3; the 小号 on
-# 9223 / 9224 / 9225: 1, strictly serial, the pool never widens them; any other port: 1).
+# 9223 / 9224: 1, strictly serial, the pool never widens them; any other port: 1).
 # Self-heals after a Chrome restart (the reaper stopped it and ensure_browser started a new one, or
-# the sentinel / launchd restarted it): before reusing its connection a worker checks that the
+# launchd restarted it): before reusing its connection a worker checks that the
 # Chrome on the port is still the one it connected to (_browser_instance) and reconnects if not, so
 # the first task after a restart already runs on the new browser; only a task in flight at the
 # moment Chrome dies fails, exactly as the old per-call path would. The
@@ -460,7 +573,7 @@ def _watch(page, seen: Optional[list]) -> None:
                         return
                 elif kind not in ("fetch", "xhr") or status != 429:
                     return
-                seen.append((status, resp.url, _probe.retry_after_s(resp.headers), kind == "document"))
+                seen.append((status, resp.url, upstreams.parse_retry_after(resp.headers), kind == "document"))
             except Exception:  # noqa: BLE001 (recording must never break a page)
                 pass
         page.on("response", on_response)
@@ -514,7 +627,8 @@ class _CdpPool:
         with self._lock:
             q = self._q  # snapshot: a concurrent _recover swap must not split put/get across queues
         reply: "queue.Queue" = queue.Queue(maxsize=1)
-        q.put((callback, initial_url, reply, queue_until, on_turn, seen))
+        # the caller's context rides with the task: the callback runs in it (see cdp_call)
+        q.put((callback, contextvars.copy_context(), initial_url, reply, queue_until, on_turn, seen))
         try:
             status, payload = reply.get(timeout=timeout)
         except queue.Empty:
@@ -563,7 +677,7 @@ class _CdpPool:
             browser = pw.chromium.connect_over_cdp(self.cdp_url, timeout=10000)
 
         while True:
-            callback, initial_url, reply, queue_until, on_turn, seen = q.get()
+            callback, caller_ctx, initial_url, reply, queue_until, on_turn, seen = q.get()
             if queue_until is not None and time.monotonic() > queue_until:
                 # Its turn came after the caller's budget ran out: do not load the page at all.
                 reply.put(("err", TimeoutError("CDP queue: the caller's time ran out before its turn; "
@@ -598,7 +712,7 @@ class _CdpPool:
                         with (on_turn() if on_turn is not None else nullcontext()):
                             if initial_url:
                                 page.goto(initial_url, wait_until="domcontentloaded", timeout=30000)
-                            reply.put(("ok", callback(page)))
+                            reply.put(("ok", caller_ctx.run(callback, page)))
                     finally:
                         _unwatch(page)
                         try:
@@ -636,8 +750,16 @@ def cdp_call(callback: Callable[[Page], Any], *,
     "Sync API inside asyncio loop" error that would otherwise occur when
     called from FastMCP's async tool dispatch.
 
+    The callback runs in a copy of the CALLER's context (contextvars.copy_context, the way
+    asyncio.to_thread hands work to a thread), on the pooled and the per-call path alike: what the
+    caller armed (diag capture and tap, cache-only, deadline, probe ledger) holds inside the flow, so
+    a diag.note made there reaches the caller's diagnostic. Before 2026-11-07 the worker thread
+    started with an empty context and every such note was dropped. A page.on(...) / page.once(...)
+    listener the callback registers runs in a copy of the context it was registered in (module
+    docstring), so a note made in a listener reaches the caller's diagnostic too.
+
     Args:
-        callback: function `(page) -> Any`. Runs inside the worker thread.
+        callback: function `(page) -> Any`. Runs inside the worker thread, in the caller's context.
         initial_url: optional URL to `page.goto(...)` before invoking callback.
         timeout: max seconds for the entire operation (default 90).
         queue_until: optional monotonic time: the latest this call may wait for its turn at this
@@ -675,6 +797,7 @@ def cdp_call(callback: Callable[[Page], Any], *,
         return value
 
     result_queue: queue.Queue = queue.Queue(maxsize=1)
+    caller_ctx = contextvars.copy_context()  # the callback runs in it (see the docstring)
 
     def worker() -> None:
         global _inflight_cdp
@@ -693,7 +816,7 @@ def cdp_call(callback: Callable[[Page], Any], *,
                 try:
                     if initial_url:
                         page.goto(initial_url, wait_until="domcontentloaded", timeout=30000)
-                    value = callback(page)
+                    value = caller_ctx.run(callback, page)
                     result_queue.put(("ok", value))
                 finally:
                     _unwatch(page)
@@ -768,8 +891,14 @@ def cdp_render(callback: Callable[[Page], Any], *,
         miss = CacheOnlyMiss("cache-only mode: live CDP render suppressed")
         diag.note("cdp_render", url=initial_url, exc=miss)
         raise miss
+    refusal = live_port_refusal(cdp_url)
+    if refusal:
+        exc = RuntimeError(refusal)
+        diag.note("cdp_render", url=initial_url, exc=exc)
+        raise exc
 
     result_queue: queue.Queue = queue.Queue(maxsize=1)
+    caller_ctx = contextvars.copy_context()  # the callback runs in it, as in cdp_call
 
     def worker() -> None:
         global _inflight_cdp
@@ -784,7 +913,7 @@ def cdp_render(callback: Callable[[Page], Any], *,
                     page.goto(initial_url, wait_until="domcontentloaded", timeout=30000)
                     if wait_cloudflare:
                         wait_through_cloudflare(page)
-                    result_queue.put(("ok", callback(page)))
+                    result_queue.put(("ok", caller_ctx.run(callback, page)))
                 finally:
                     try:
                         ctx.close()  # drops the page + ALL cookies/storage for THIS probe
@@ -823,6 +952,9 @@ def cdp_page(initial_url: Optional[str] = None) -> Iterator[Page]:
             page.wait_for_load_state("networkidle")
             html = page.content()
     """
+    refusal = live_port_refusal(DEFAULT_CDP_URL)
+    if refusal:
+        raise RuntimeError(refusal)
     with sync_playwright() as pw:
         try:
             browser: Browser = pw.chromium.connect_over_cdp(DEFAULT_CDP_URL, timeout=10000)
@@ -891,10 +1023,14 @@ def cdp_health(cdp_url: str = DEFAULT_CDP_URL, *, ensure: bool = False) -> tuple
     * ``ensure=True`` asks "would a real call reach this browser", which is what a SOURCE health
       check reports on. ``cdp_call`` starts the browser on demand (~1s), so without this a source
       whose browser is merely idle reads as DOWN: an unobserved state reported as a negative. That
-      false verdict is what kept douyin at a 53-run failure streak while its searches worked fine.
+      false verdict is what kept one walled source at a 53-run failure streak while its searches
+      worked fine.
     """
     import httpx
 
+    refusal = live_port_refusal(cdp_url)
+    if refusal:
+        return False, refusal
     if ensure:
         try:
             ensure_browser(cdp_url)
@@ -904,7 +1040,9 @@ def cdp_health(cdp_url: str = DEFAULT_CDP_URL, *, ensure: bool = False) -> tuple
         resp = httpx.get(f"{cdp_url}/json/version", timeout=3)
         if resp.status_code == 200:
             data = resp.json()
-            return True, f"OK ({data.get('Browser', 'Chrome')} via {_CDP_ENGINE})"
+            missing = (f"; page listeners lose the caller's context: {_LISTENER_CONTEXT_MISSING}"
+                       if _LISTENER_CONTEXT_MISSING else "")
+            return True, f"OK ({data.get('Browser', 'Chrome')} via {_CDP_ENGINE}{missing})"
         return False, f"HTTP {resp.status_code}"
     except Exception as exc:  # noqa: BLE001
         return False, f"{type(exc).__name__}: {exc}"
@@ -925,6 +1063,72 @@ def is_logged_in_zhihu(page: Page) -> bool:
                page.locator(".AppHeader-userInfo").count() > 0
     except Exception:  # noqa: BLE001
         return False
+
+
+# ── the page's own JavaScript world (2026-10-24) ─────────────────────────────────────────────
+def page_world_evaluate(page, script: str, arg: Any = None) -> Any:
+    """Run ``script`` where the site's own scripts run, so its globals are there. patchright's
+    ``page.evaluate`` runs in an isolated world (the page cannot see our code, our code cannot see
+    the page's globals; the DOM is shared), vanilla playwright's in the page's own, so the choice is
+    made here once and never depends on which engine imported. Measured on the 9222 Chrome
+    2026-10-24: a global the page set read ``undefined`` through ``page.evaluate`` and ``number``
+    through this."""
+    if _CDP_ENGINE == "patchright":
+        return page.evaluate(script, arg, isolated_context=False)
+    return page.evaluate(script, arg)
+
+
+# ── navigation that survives a dropped connection (2026-11-07) ─────────────────────────────────
+# Chrome's errors for a connection that broke, as Page.goto reports them ("Page.goto:
+# net::ERR_CONNECTION_CLOSED at https://www.rednote.com/"). A load that ran past Playwright's own
+# timeout is a different error (TimeoutError) and is NOT retried here: the warmer reads it as
+# "unprobed", and a 30 s wait repeated four times would eat a search's whole budget.
+NAV_TRANSIENT_ERRORS = ("net::ERR_CONNECTION_CLOSED", "net::ERR_CONNECTION_RESET", "net::ERR_TIMED_OUT")
+# Waits before retries 1..3. Three retries: on 2026-11-06 the direct route to rednote.com failed 2 of 4
+# reads, so with that rate four independent attempts all fail with probability 0.5**4 = 6 %, against
+# 50 % for one. The waits double so the attempts spread over about 14 s instead of hitting the same
+# break; PROVISIONAL (no reading yet of how long a break lasts). Calibration: every retry writes a
+# "cdp.nav_retry" warning naming the attempt; after a month, if the second attempt almost always works,
+# shorten them, and if all four often fail inside one break, lengthen them.
+NAV_RETRY_DELAYS_S = (2.0, 4.0, 8.0)
+
+
+def nav_error_is_transient(exc: BaseException) -> bool:
+    """True for a goto error that says the connection broke (see NAV_TRANSIENT_ERRORS)."""
+    text = str(exc)
+    return any(code in text for code in NAV_TRANSIENT_ERRORS)
+
+
+def goto_retrying(page, url: str, *, timeout: int = 30000, wait_until: str = "domcontentloaded",
+                  budget_s: Optional[float] = None,
+                  delays: tuple = NAV_RETRY_DELAYS_S) -> Any:
+    """``page.goto`` that retries a dropped connection (NAV_TRANSIENT_ERRORS) after each wait in
+    ``delays``, same page, same exit: nothing about the route or the account changes between
+    attempts. Any other error, and the last transient one, raises unchanged. ``budget_s`` bounds the
+    whole navigation: a retry is not started when its wait would pass it, and each attempt's timeout
+    is cut to what is left, so a caller running inside a fixed cap keeps the rest of its time.
+    Each dropped attempt is noted (diag ``cdp.nav_retry``) before the wait; inside a cdp_call flow
+    the note reaches the caller's diagnostic (the callback runs in the caller's context)."""
+    start = time.monotonic()
+    for attempt in range(len(delays) + 1):
+        t = timeout
+        if budget_s is not None:
+            left_ms = int((budget_s - (time.monotonic() - start)) * 1000)
+            t = max(1000, min(timeout, left_ms))
+        try:
+            return page.goto(url, wait_until=wait_until, timeout=t)
+        except Exception as exc:  # noqa: BLE001 (classified below; only a dropped connection is retried)
+            if attempt >= len(delays) or not nav_error_is_transient(exc):
+                raise
+            wait = delays[attempt]
+            if budget_s is not None and time.monotonic() - start + wait >= budget_s:
+                raise
+            logger.warning("cdp.nav_retry: goto %s attempt %d failed (%s); retrying in %.0fs",
+                           url, attempt + 1, str(exc)[:120], wait)
+            diag.note("cdp.nav_retry", url=url, exc=exc,
+                      body=f"attempt {attempt + 1} dropped the connection; retrying in {wait:.0f}s")
+            time.sleep(wait)
+    raise AssertionError("unreachable")  # pragma: no cover (the loop returns or raises)
 
 
 # ── "substance is in the images" surfacing ──────────────────────────────────────

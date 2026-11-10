@@ -19,9 +19,9 @@ asyncio isolation: twscrape is async; SourceAdapter.search is sync and may run o
 FastMCP's event-loop thread, so every twscrape call goes through ``_run_async``
 (fresh thread + new loop) — the same isolation the CDP adapters use.
 
-Config: ``~/.omniseek/credentials/twitter_x.json`` →
+Config: ``<credentials>/twitter_x.json`` →
   {"auth_token": "...", "handles": ["karpathy", ...]}   (handles optional)
-twscrape account db: ``~/.omniseek/state/twscrape_accounts.db``.
+twscrape account db: ``<state>/twscrape_accounts.db``.
 """
 
 from __future__ import annotations
@@ -38,19 +38,23 @@ from pathlib import Path
 from typing import Optional
 from urllib.parse import urlparse
 
-from omniseek.core import cache
+import anyio
+
+from omniseek.core import cache, portal
+from omniseek.core.sources._base import SourceBase
 from omniseek.core.fetcher import register_adapter
 from omniseek.core.normalize import Document, jsonsafe, keyword_score_filter, mk_signal
+from omniseek import where
 
 logger = logging.getLogger(__name__)
 
-CRED = Path.home() / ".omniseek" / "credentials" / "twitter_x.json"
-DB_PATH = Path.home() / ".omniseek" / "state" / "twscrape_accounts.db"
+CRED = where.credentials() / "twitter_x.json"
+DB_PATH = where.state() / "twscrape_accounts.db"
 CACHE_TTL = 3600          # 1h — keep X access low-frequency (account safety)
 PER_HANDLE_TWEETS = 20
 _JITTER = (1.0, 3.5)      # random seconds between per-handle fetches
 _EPOCH = datetime.min.replace(tzinfo=timezone.utc)
-_ID_CACHE = Path.home() / ".omniseek" / "state" / "twitter_x_ids.json"  # handle→user_id
+_ID_CACHE = where.state() / "twitter_x_ids.json"  # handle→user_id
 
 
 def _load_id_cache() -> dict:
@@ -221,13 +225,13 @@ def _tweet_media(tw) -> list[str]:
     return out
 
 
-class TwitterXAdapter:
+class TwitterXAdapter(SourceBase):
     name = "twitter_x"
     needs_credentials = True
     explicit_only = "low-frequency burner (account-rate-sensitive)"
     description = (
         "X/Twitter 顶级 ML 研究者 + 加拿大/SG AI 信号 (twscrape 直连 burner cookie, "
-        "低频). 起步 curated 名单, 可配 ~/.omniseek/credentials/twitter_x.json handles"
+        f"低频). 起步 curated 名单, 可配 {where.show(where.credentials())}/twitter_x.json handles"
     )
 
     def __init__(self) -> None:
@@ -305,7 +309,7 @@ class TwitterXAdapter:
             return keyword_score_filter(docs, q)[:limit]
         return sorted(docs, key=lambda d: d.date or _EPOCH, reverse=True)[:limit]
 
-    def fetch_url(self, url: str) -> Optional[Document]:
+    async def afetch_url(self, url: str) -> Optional[Document]:
         if _SEALED:
             logger.warning(_SEALED_MSG)
             return None
@@ -318,17 +322,22 @@ class TwitterXAdapter:
                 tid = int(parts[2])
             except ValueError:
                 return None
-            try:
-                with self._lock:
-                    tw = _run_async(self._one_tweet(tid), timeout=30)
-            except Exception as exc:  # noqa: BLE001 — bounded: never hang omniseek_read
-                logger.warning("twitter_x fetch_url timed out / failed for %s: %s", url, exc)
-                return None
-            if tw is None:
-                return None
-            uname = getattr(getattr(tw, "user", None), "username", "") or "i"
-            return self._tweet_to_doc(tw, uname)
+            # twscrape runs isolated on its own thread and loop behind this adapter's lock (_run_async):
+            # waiting for both is blocking, so a worker thread.
+            return await anyio.to_thread.run_sync(self._read_tweet, tid, url, limiter=portal.IO_LANE)
         return None
+
+    def _read_tweet(self, tid: int, url: str) -> Optional[Document]:
+        try:
+            with self._lock:
+                tw = _run_async(self._one_tweet(tid), timeout=30)
+        except Exception as exc:  # noqa: BLE001 — bounded: never hang omniseek_read
+            logger.warning("twitter_x fetch_url timed out / failed for %s: %s", url, exc)
+            return None
+        if tw is None:
+            return None
+        uname = getattr(getattr(tw, "user", None), "username", "") or "i"
+        return self._tweet_to_doc(tw, uname)
 
     def health_check(self) -> tuple[bool, str]:
         if _SEALED:

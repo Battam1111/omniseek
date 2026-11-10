@@ -31,16 +31,13 @@ newest slice, slow cold fetch), like the funding drills.
 
 from __future__ import annotations
 
-import functools
 import logging
 import time
-from datetime import datetime
-from typing import Any, Optional
+from typing import Optional
 
-import anyio
 
-from omniseek.core import cache, diag, http
-from omniseek.core.normalize import Document, keyword_score_filter
+from omniseek.core import diag, http
+from omniseek.core.normalize import Document, to_utc
 from omniseek.core.sources.api._bulk_funding import BulkFundingBase
 
 logger = logging.getLogger(__name__)
@@ -69,33 +66,8 @@ class OecdAiPolicyAdapter(BulkFundingBase):
     modes = ["MONITOR", "STRUCTURE"]
     _version = "v1-newest15"
 
-    def _build_subset_docs(self) -> list[Document]:
-        docs: list[Document] = []
-        seen: set[int] = set()
-        started = time.monotonic()
-        for page in range(1, _PAGES + 1):
-            if time.monotonic() - started > _ELAPSED_CAP:
-                logger.info("oecd_ai_policy: elapsed cap hit at page %d, stopping", page)
-                break
-            payload = http.get_json(_API, params={"page": page}, timeout=15)
-            if not isinstance(payload, dict):
-                diag.note("oecd_ai_policy.page", url=_API, status=None, body=f"page={page}")
-                break  # keep the pages already gathered; do not cache a full miss (base skips empty)
-            rows = payload.get("data") or []
-            if not rows:
-                break
-            for row in rows:
-                d = self._row_to_doc(row)
-                if d is not None and row.get("id") not in seen:
-                    seen.add(row.get("id"))
-                    docs.append(d)
-            if page >= (payload.get("lastPage") or _PAGES):
-                break
-        logger.info("oecd_ai_policy: built %d initiative docs from newest %d pages", len(docs), _PAGES)
-        return docs
-
     async def _abuild_subset_docs(self) -> list[Document]:
-        """Async egress twin of ``_build_subset_docs`` (S4b): byte-for-byte the same paginate / dedup /
+        """Async egress replacement of the deleted sync ``_build_subset_docs`` (11-04, S9; this is the only one now) (S4b): byte-for-byte the same paginate / dedup /
         map loop, the ONLY change being ``http.get_json`` -> ``await http.aget_json`` (the async network
         wait stays ON the loop via epoll, no held pool thread; the SSRF getaddrinfo in the async leaf is
         moved off-loop by S4b Part 1). The elapsed-cap clock, the pure-CPU ``_row_to_doc`` map, the
@@ -123,34 +95,6 @@ class OecdAiPolicyAdapter(BulkFundingBase):
                 break
         logger.info("oecd_ai_policy: built %d initiative docs from newest %d pages", len(docs), _PAGES)
         return docs
-
-    async def _asubset_docs(self) -> list[Document]:
-        """Async twin of ``BulkFundingBase._subset_docs``: the SAME 30-day subset cache key
-        (``cache.make_key(self.name, "subset", self._version)``, so the async and sync paths share the
-        warmed snapshot) with the disk read + write pushed OFF the loop via ``anyio.to_thread.run_sync``
-        and the paginated egress swapped to the async ``_abuild_subset_docs``. The ``if docs:`` write
-        gate (never cache an empty/failed build) mirrors the sync ``_subset_docs`` exactly."""
-        key = cache.make_key(self.name, "subset", self._version)  # SAME key as _subset_docs
-        cached = await anyio.to_thread.run_sync(cache.get_docs, key)  # disk read OFF loop
-        if cached is not None:
-            return cached
-        docs = await self._abuild_subset_docs()  # async paginated egress
-        if docs:
-            await anyio.to_thread.run_sync(  # disk write OFF loop
-                functools.partial(cache.set_docs, key, docs, ttl=self.cache_ttl))
-        return docs
-
-    async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async twin of ``BulkFundingBase.search`` (S4b): serve/build the query-independent
-        subset off the loop, then run the pure-CPU BM25 filter ON the loop. BEHAVIOR-IDENTICAL to the
-        sync ``search`` (same subset cache, same ``keyword_score_filter`` rank, same term-less
-        passthrough, same ``limit`` truncation). Exposing ``asearch`` makes this adapter
-        AsyncSearchCapable, routing it to the fetcher's native async dispatch branch."""
-        docs = await self._asubset_docs()
-        if not docs:
-            return []
-        q = (query or "").strip()
-        return docs[:limit] if not q else keyword_score_filter(docs, q)[:limit]
 
     def _row_to_doc(self, row: dict) -> Optional[Document]:
         rid = row.get("id")
@@ -196,7 +140,7 @@ class OecdAiPolicyAdapter(BulkFundingBase):
             url=url,
             title=f"{title} ({jurisdiction})"[:160],
             content="\n".join(p for p in parts if p),
-            date=self._parse_date(row.get("updatedAt") or row.get("createdAt")),
+            date=to_utc(row.get("updatedAt") or row.get("createdAt")),
             tags=[t for t in ["policy", "ai-policy", country_code, "oecd"] if t],
             metadata={
                 "jurisdiction": jurisdiction, "country": country, "country_code": country_code,
@@ -207,18 +151,8 @@ class OecdAiPolicyAdapter(BulkFundingBase):
             },
         )
 
-    @staticmethod
-    def _parse_date(value: Any) -> Optional[datetime]:
-        """OECD ``updatedAt`` / ``createdAt`` is ISO-8601 with a Z suffix (e.g. 2026-07-03T16:28:47.000Z)."""
-        if not isinstance(value, str) or not value.strip():
-            return None
-        try:
-            return datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
-        except ValueError:
-            return None
-
-    def health_check(self) -> tuple[bool, str]:
-        payload = http.get_json(_API, params={"page": 1}, timeout=15)
+    async def ahealth_check(self) -> tuple[bool, str]:
+        payload = await http.aget_json(_API, params={"page": 1}, timeout=15)
         if isinstance(payload, dict) and payload.get("data"):
             return True, f"OK (total={payload.get('total')}, lastPage={payload.get('lastPage')})"
         return False, "policy-initiatives page 1 did not return data"

@@ -3,9 +3,9 @@
 OmniSeek otherwise forgets (fetch-live, TTL-cache). The Curator must NOT: a candidate
 source submitted, probed, and awaiting a verdict has to survive a redeploy / restart /
 crash, or the work is lost (a prior bug lost candidates held only in transient task
-output). So this module owns ONE JSON file under ``~/.omniseek/state/curator/`` (the same
-tree as ``health-watchdog-state.json``; survives redeploys, rides the weekly state-backup
-launchd, keeps the read-only deploy tree pristine).
+output). So this module owns ONE JSON file under ``<state>/curator/`` (the same
+tree as ``health-watchdog-state.json``; survives redeploys, is in no backup since the state
+backup retired on 2026-10-15, keeps the read-only deploy tree pristine).
 
 THE RAZOR holds here too: this module is pure STATE. It stores what was decided and hands
 it back. It NEVER computes a verdict: ``record_verdict`` is the AGENT's write-back; nothing
@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Optional
 
 from omniseek.core import cache
+from omniseek import where
 
 logger = logging.getLogger(__name__)
 
@@ -32,10 +33,10 @@ logger = logging.getLogger(__name__)
 # the builtin under a private alias for the type checks inside this module.
 _builtin_list = list
 
-# Runtime state lives under ~/.omniseek/state/curator/ (NOT in the repo). Created on first
-# write. Survives redeploys + rides the state-backup launchd. The deploy SMOKE must touch
-# NO write path here (smoke imports the module read-only; see smoke §12 invariant 5).
-STATE_DIR = Path.home() / ".omniseek" / "state" / "curator"
+# Runtime state lives under <state>/curator/ (NOT in the repo). Created on first
+# write. Survives redeploys; no backup carries it. Importing this module touches
+# NO write path here (an import is read-only; only an explicit call writes).
+STATE_DIR = where.state() / "curator"
 CANDIDATES_PATH = STATE_DIR / "candidates.json"
 SEEN_HOSTS_PATH = STATE_DIR / "seen_hosts.json"
 # P4 anti-rediscovery: the canonical-host TERMINAL ledger. A host that ever reached a terminal
@@ -105,7 +106,7 @@ ALLOWED_TRANSITIONS = frozenset({
     ("watching", "rejected"),
     ("owner_review", "error"),
     # any -> error (a thrown probe/fetch is recorded). Enumerated for the remaining states
-    # so the frozen set is total and smoke can assert it exactly.
+    # so the frozen set is total.
     ("redline_blocked", "error"),
     ("parked_p2", "error"),
     # P2 wall-aware probe: a parked_p2 candidate (structurally invisible to the plain-HTTP probe)

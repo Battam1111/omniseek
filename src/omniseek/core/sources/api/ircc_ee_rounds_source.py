@@ -20,11 +20,11 @@ from __future__ import annotations
 import json
 import logging
 import re
-from datetime import datetime, timezone
 from typing import Optional
 
 from omniseek.core import cache
-from omniseek.core.normalize import Document, keyword_score_filter
+from omniseek.core.sources._base import SourceBase
+from omniseek.core.normalize import Document, keyword_score_filter, to_utc
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +51,7 @@ def _fetch_rounds_json() -> list[dict]:
     return json.loads(body).get("rounds", [])
 
 
-class IRCCEERoundsAdapter:
+class IRCCEERoundsAdapter(SourceBase):
     name = "ircc_ee_rounds"
     needs_credentials = False
     kind = "stream"
@@ -67,7 +67,7 @@ class IRCCEERoundsAdapter:
 
     def _rounds(self) -> list[dict]:
         key = cache.make_key("ircc_ee_rounds", "rounds", "v1")
-        cached = cache.get(key)
+        cached = cache.get_once(key)
         if cached is not None:
             return cached
         try:
@@ -83,7 +83,7 @@ class IRCCEERoundsAdapter:
         docs = keyword_score_filter(docs, (query or "").strip())
         return docs[:limit]
 
-    def fetch_url(self, url: str) -> Optional[Document]:
+    async def afetch_url(self, url: str) -> Optional[Document]:
         return None  # structured lookup source; reach it via search
 
     def health_check(self) -> tuple[Optional[bool], str]:
@@ -111,12 +111,7 @@ class IRCCEERoundsAdapter:
         name = (r.get("drawName") or "").strip()
         crs = str(r.get("drawCRS") or "").strip()
         size = str(r.get("drawSize") or "").strip()
-        date = None
-        if r.get("drawDate"):
-            try:
-                date = datetime.fromisoformat(r["drawDate"]).replace(tzinfo=timezone.utc)
-            except (ValueError, TypeError):
-                pass
+        date = to_utc(r.get("drawDate"))
         m = _HREF_RE.search(r.get("drawNumberURL") or "")
         url = ("https://www.canada.ca" + m.group(1)) if m else ROUNDS_PAGE
 

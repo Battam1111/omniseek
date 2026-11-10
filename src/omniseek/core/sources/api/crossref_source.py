@@ -31,13 +31,12 @@ express generically.
 from __future__ import annotations
 
 import logging
-import re
 from datetime import datetime, timezone
 from typing import Optional
 from urllib.parse import urlparse
 
 from omniseek.core import auth, diag, http, upstreams
-from omniseek.core.normalize import Document, jsonsafe, mk_signal
+from omniseek.core.normalize import Document, html_fragment_text, jsonsafe, mk_signal
 from omniseek.core.sources.api._base import BaseAPIAdapter
 
 logger = logging.getLogger(__name__)
@@ -62,37 +61,12 @@ class CrossrefAdapter(BaseAPIAdapter):
     cache_ttl = 3600
     url_host = "doi.org"
 
-    # ------------------------------------------------------------------ hooks
-    def _raw_fetch(self, query: str, limit: int) -> list:
-        """GET /works?query= and return message.items ([] on any failure)."""
-        try:
-            # The declared Crossref gate (polite pool: 3 in flight, list requests <= 3/s; the SAME guard
-            # the shared http client applies to crossref_retractions and enrich). UpstreamBusy lands
-            # in the except below: not sent, [] like any other failure.
-            with upstreams.egress(f"{CROSSREF_BASE}/works", request_s=TIMEOUT):
-                resp = http.direct(
-                    "GET", f"{CROSSREF_BASE}/works",
-                    params={"query": query, "rows": min(limit, 25)},
-                    headers={"User-Agent": USER_AGENT},
-                    timeout=TIMEOUT,
-                )
-            upstreams.observe_response(CROSSREF_BASE, resp)
-            resp.raise_for_status()
-            data = resp.json()
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("Crossref search failed: %s", exc)
-            st = getattr(getattr(exc, "response", None), "status_code", None)
-            diag.note("crossref.search", url=f"{CROSSREF_BASE}/works", status=st, exc=exc)
-            return []
-
-        return ((data.get("message") or {}).get("items")) or []
-
     def _to_document(self, raw) -> Optional[Document]:
         return self._item_to_document(raw)
 
     # ------------------------------------------------------------- async hooks
     async def _araw_fetch(self, query: str, limit: int) -> list:
-        """Async twin of _raw_fetch: BYTE-FAITHFUL mirror — same endpoint/params/headers/timeout and the
+        """Async replacement of the deleted sync ``_raw_fetch`` (11-04, S9; this is the only one now): BYTE-FAITHFUL mirror — same endpoint/params/headers/timeout and the
         same ``message.items`` walk + []-on-failure contract; ONLY the egress swaps (RAW
         ``httpx.get(...).json()`` -> ``await http.aget_json``, which buys the shared async pool + SSRF
         guard + cache_only + the 30MB cap for free). ``http.aget_json`` returns None on any failure /
@@ -109,14 +83,8 @@ class CrossrefAdapter(BaseAPIAdapter):
             return []
         return ((data.get("message") or {}).get("items")) or []
 
-    async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async twin of search -> AsyncSearchCapable. Shares the base async cache round-trip
-        (_aapi_search: same cache key, per-record _to_document, rank_locally=False, cache-only-if-docs);
-        egress via _araw_fetch; mapping via the SAME pure-CPU _item_to_document (byte-identical to search)."""
-        return await self._aapi_search(query, limit, araw_fetch=lambda: self._araw_fetch(query, limit))
-
     # --------------------------------------------------------------- fetch_url
-    def fetch_url(self, url: str) -> Optional[Document]:
+    async def afetch_url(self, url: str) -> Optional[Document]:
         host = (urlparse(url).hostname or "").lower()
         # Crossref handles DOI URLs (doi.org/...) and direct api.crossref.org/works/DOI
         doi: Optional[str] = None
@@ -131,8 +99,8 @@ class CrossrefAdapter(BaseAPIAdapter):
             return None
 
         try:
-            with upstreams.egress(f"{CROSSREF_BASE}/works/{doi}", request_s=TIMEOUT):  # declared Crossref gate
-                resp = http.direct(
+            async with upstreams.aegress(f"{CROSSREF_BASE}/works/{doi}", request_s=TIMEOUT):  # declared Crossref gate
+                resp = await http.adirect(
                     "GET", f"{CROSSREF_BASE}/works/{doi}",
                     headers={"User-Agent": USER_AGENT},
                     timeout=TIMEOUT,
@@ -152,10 +120,10 @@ class CrossrefAdapter(BaseAPIAdapter):
         return self._item_to_document(item)
 
     # ------------------------------------------------------------- health_check
-    def health_check(self) -> tuple[Optional[bool], str]:
+    async def ahealth_check(self) -> tuple[Optional[bool], str]:
         try:
-            with upstreams.egress(f"{CROSSREF_BASE}/works", request_s=8):  # the probe is a list request too
-                resp = http.direct(
+            async with upstreams.aegress(f"{CROSSREF_BASE}/works", request_s=8):  # the probe is a list request too
+                resp = await http.adirect(
                     "GET", f"{CROSSREF_BASE}/works",
                     params={"query": "test", "rows": 1},
                     headers={"User-Agent": USER_AGENT},
@@ -214,11 +182,9 @@ class CrossrefAdapter(BaseAPIAdapter):
         # Abstract (often missing or as JATS XML)
         abstract = item.get("abstract") or ""
         if abstract:
-            # Strip JATS XML tags for readability
-            abstract = re.sub(r"<[^>]+>", " ", abstract)
-            abstract = re.sub(r"\s+", " ", abstract).strip()
-        if not abstract:
-            abstract = f"{venue or 'Crossref-indexed work'} • {item.get('type', 'work')}"
+            # JATS XML to plain text (tags out, entities decoded)
+            abstract = html_fragment_text(abstract)
+        # no abstract: no body (venue and type ride in metadata, never as a stand-in body)
 
         return Document(
             source="crossref",

@@ -6,7 +6,7 @@ the exact PASSAGES (sentences / sections) across S2's open-access full-text corp
 the STRUCTURE web search cannot cleanly return. explicit_only (named drill): a passage search is a
 targeted lit-review move, not something every broad omniseek_search should pay S2 for. English CS/AI corpus
 (S2 open-access full text). Reuses the shared _s2 guard (pace / semaphore / breaker) via
-``_s2.snippet_search`` — this adapter never touches S2 directly.
+``_s2.asnippet_search`` — this adapter never touches S2 directly.
 
 Each snippet -> one Document (source_id = corpusId#kind#offset, so multiple passages of one
 paper stay distinct; rank's cross-source title-fingerprint may still fold them into also_in on a broad
@@ -20,11 +20,12 @@ from typing import Optional
 
 from omniseek.core import _s2
 from omniseek.core.normalize import Document, mk_signal
+from omniseek.core.sources._base import SourceBase
 
 logger = logging.getLogger(__name__)
 
 
-class S2SnippetAdapter:
+class S2SnippetAdapter(SourceBase):
     name = "s2_snippet"
     needs_credentials = False  # S2 key optional (shared pool without); the shared _s2 guard applies either way
     kind = "lookup"
@@ -73,21 +74,21 @@ class S2SnippetAdapter:
                       "snippet_kind": kind, "score": hit.get("score")},
         )
 
-    def search(self, query: str, limit: int = 20) -> list[Document]:
-        hits = _s2.snippet_search(query or "", limit=limit)
+    async def asearch(self, query: str, limit: int = 20) -> list[Document]:
+        hits = await _s2.asnippet_search(query or "", limit=limit)
         docs = [d for d in (self._to_doc(h) for h in hits if isinstance(h, dict)) if d]
         return docs[:limit]
 
-    def fetch_url(self, url: str) -> Optional[Document]:
+    async def afetch_url(self, url: str) -> Optional[Document]:
         # Search-only (passage retrieval): an S2 paper URL is semantic_scholar / omniseek_paper_enrich's
         # job, not a snippet source's. Claim nothing so omniseek_read routes it to the right adapter.
         return None
 
-    def health_check(self) -> tuple[Optional[bool], str]:
+    async def ahealth_check(self) -> tuple[Optional[bool], str]:
         # Delegate to the ONE shared, single-flighted S2 probe (60s cache): the all-source health
         # sweep must NOT fire a second live S2 call per S2-backed adapter (that bursts the key into a
         # 429 storm). Mirrors semantic_scholar_source / s2_authors_source.
-        return _s2.health()
+        return await _s2.ahealth()
 
 
 from omniseek.core.fetcher import register_adapter

@@ -35,16 +35,17 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime, timezone
 from typing import Any, Optional
 from urllib.parse import urlparse
 
 from omniseek.core import http
 from omniseek.core.normalize import (
     Document,
+    html_fragment_text,
     jsonsafe,
     keyword_score_filter,
     mk_signal,
+    to_utc,
 )
 from omniseek.core.sources.scrape._base import BaseScrapeAdapter
 
@@ -59,16 +60,6 @@ INSTANCES: dict[str, str] = {
     "discuss.pytorch.org": "https://discuss.pytorch.org",
     "forums.fast.ai": "https://forums.fast.ai",
 }
-
-
-def _parse_date(value: Optional[str]) -> Optional[datetime]:
-    """Discourse timestamps are ISO-8601 UTC with a trailing 'Z'."""
-    if not value:
-        return None
-    try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(timezone.utc)
-    except (ValueError, TypeError):
-        return None
 
 
 class DiscourseForumsAdapter(BaseScrapeAdapter):
@@ -93,24 +84,6 @@ class DiscourseForumsAdapter(BaseScrapeAdapter):
     # no-reslice contract would starve the later forums. We rank-then-slice the FULL
     # cross-instance pool ourselves inside _to_documents (same shared BM25 scorer).
     rank = False
-
-    # ── hooks ───────────────────────────────────────────────────────────────
-    def _raw_fetch(self, query: str, limit: int) -> Optional[Any]:
-        """Fan the query out over each instance's keyless ``/search.json`` (one GET
-        each, gently). Returns a list of (host, payload) for instances that answered;
-        None only if EVERY instance failed (so the base degrades to [])."""
-        results: list[tuple[str, dict]] = []
-        for host, base in INSTANCES.items():
-            data = http.get_json(
-                f"{base}/search.json",
-                params={"q": query},
-                timeout=TIMEOUT,
-            )
-            if isinstance(data, dict):
-                results.append((host, data))
-            else:
-                logger.debug("discourse_forums: %s returned no JSON", host)
-        return results or None
 
     def _to_documents(self, raw: Any, query: str, limit: int) -> list[Document]:
         docs: list[Document] = []
@@ -141,7 +114,7 @@ class DiscourseForumsAdapter(BaseScrapeAdapter):
         return docs[:limit] if limit and limit > 0 else docs
 
     async def _araw_fetch(self, query: str, limit: int) -> Optional[Any]:
-        """Async twin of `_raw_fetch`, with ONE deliberate divergence: the instances are fetched
+        """Async replacement of the deleted sync `_raw_fetch` (11-04, S9; this is the only one now), with ONE deliberate divergence: the instances are fetched
         CONCURRENTLY instead of one after another.
 
         "Gently" (the sync docstring's word) means one GET per instance, not one instance at a
@@ -183,16 +156,7 @@ class DiscourseForumsAdapter(BaseScrapeAdapter):
         results = [(host, answered[host]) for host in INSTANCES if host in answered]
         return results or None
 
-    async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async twin of `search` -> AsyncSearchCapable. Shares the base async
-        cache round-trip; egress via `_araw_fetch`; mapping via the SAME pure-CPU
-        `_to_documents` (byte-identical to `search`)."""
-        return await self._asearch_via(
-            query, limit,
-            afetch=lambda: self._araw_fetch(query, limit),
-            abuild=lambda raw: self._to_documents(raw, query, limit))
-
-    def fetch_url(self, url: str) -> Optional[Document]:
+    async def afetch_url(self, url: str) -> Optional[Document]:
         """Claim a topic permalink ``{base}/t/{slug}/{id}`` (or ``/t/{id}``) on a
         known instance: fetch ``{base}/t/{id}.json`` and build a doc from the
         topic + its first post."""
@@ -215,7 +179,7 @@ class DiscourseForumsAdapter(BaseScrapeAdapter):
         if topic_id is None:
             return None
 
-        data = http.get_json(f"{base}/t/{topic_id}.json", timeout=TIMEOUT)
+        data = await http.aget_json(f"{base}/t/{topic_id}.json", timeout=TIMEOUT)
         if not isinstance(data, dict):
             return None
 
@@ -260,9 +224,9 @@ class DiscourseForumsAdapter(BaseScrapeAdapter):
         url = f"{base}/t/{slug}/{topic_id}"
 
         post = post or {}
-        content = (post.get("blurb") or "").strip() or "(no preview)"
+        content = (post.get("blurb") or "").strip()
         author = post.get("name") or post.get("username")
-        date = _parse_date(post.get("created_at") or topic.get("created_at"))
+        date = to_utc(post.get("created_at") or topic.get("created_at"))
 
         # Signals: prefer the matched post's like_count, else the topic's; pair with posts_count.
         like_count = post.get("like_count")
@@ -326,7 +290,6 @@ def _strip_html(html: str) -> str:
         from markdownify import markdownify as html_to_md
         return html_to_md(html, heading_style="ATX").strip()
     except Exception:  # noqa: BLE001
-        import re
-        return re.sub(r"<[^>]+>", "", html).strip()
+        return html_fragment_text(html)
 
 # Registration is automatic via BaseScrapeAdapter.__init_subclass__ (no module-tail ceremony).

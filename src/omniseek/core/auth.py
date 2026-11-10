@@ -1,18 +1,22 @@
 """Credentials loader for OmniSeek source adapters.
 
-Credentials live in ~/.omniseek/credentials/<source>.json (outside the
+Credentials live in <credentials>/<source>.json (outside the
 project directory, so they are never accidentally committed). Each
 adapter that needs credentials calls load(<source>) and gets back a
 dict — or None if the file doesn't exist.
 
-To set up credentials, adapters call write_template() once on first
-import to drop a .template file the user can copy and fill in.
+This module only READS that directory; it never creates it and never writes into it.
+Since the cutover (2026-10-15) the directory belongs to the credential tool. An
+adapter that needs credentials declares the expected file shape with register_template()
+at import: the template goes into the in-memory TEMPLATES registry, nothing touches the
+disk, and the human-readable list is docs/credential-templates.md (rendered from TEMPLATES
+by `scripts/creds_doctor.py --templates`).
 
 A credentials directory this process may not read (PermissionError, or an OSError
 whose errno is EACCES / EPERM: e.g. a sandbox that denies the path) reads as "no
-credentials": load() returns None, is_configured() False, list_configured() [], and
-write_template() writes nothing. The reason is logged once at DEBUG; nothing is raised
-into the importing module. Any other OSError still propagates, as before.
+credentials": load() returns None, is_configured() False, list_configured() [].
+The reason is logged once at DEBUG; nothing is raised into the importing module.
+A missing directory reads the same way, silently. Any other OSError still propagates.
 """
 
 from __future__ import annotations
@@ -21,12 +25,14 @@ import errno
 import json
 import logging
 import os
+import stat
 from pathlib import Path
 from typing import Optional
+from omniseek import where
 
 log = logging.getLogger(__name__)
 
-CREDS_DIR = Path.home() / ".omniseek" / "credentials"
+CREDS_DIR = where.credentials()
 
 _DENIED_ERRNOS = (errno.EACCES, errno.EPERM)
 _denied_logged: set[str] = set()
@@ -46,21 +52,23 @@ def _note_denied(exc: OSError) -> None:
               CREDS_DIR, type(exc).__name__, exc)
 
 
-def ensure_dir() -> Path:
-    CREDS_DIR.mkdir(parents=True, exist_ok=True)
-    return CREDS_DIR
+# source -> the credential file's expected shape. Filled by register_template() at import.
+TEMPLATES: dict = {}
 
 
 def _dir_usable() -> bool:
-    """ensure_dir(), but a permission-class failure answers False (logged once) instead of raising."""
+    """Is the credentials directory there to read? Missing answers False quietly; a permission-class
+    failure answers False (logged once) instead of raising. Never creates the directory."""
     try:
-        ensure_dir()
+        st = CREDS_DIR.stat()
+    except FileNotFoundError:
+        return False
     except OSError as exc:
         if not _is_denied(exc):
             raise
         _note_denied(exc)
         return False
-    return True
+    return stat.S_ISDIR(st.st_mode)
 
 
 def load(source: str) -> Optional[dict]:
@@ -84,7 +92,7 @@ def load(source: str) -> Optional[dict]:
 
 # A contact email for polite-pool / fair-access User-Agents (OpenAlex, SEC, Unpaywall, Crossref).
 # This is PII and must never be hardcoded in the tree. The real address lives only on the host
-# (~/.omniseek/credentials/contact.json -> {"email": "..."} or the OMNISEEK_CONTACT_EMAIL env var);
+# (<credentials>/contact.json -> {"email": "..."} or the OMNISEEK_CONTACT_EMAIL env var);
 # unconfigured it degrades to an RFC-2606 reserved placeholder, so a cold checkout still forms a
 # valid UA and the tree ships with no personal data.
 _CONTACT_DEFAULT = "omniseek@example.com"
@@ -96,25 +104,17 @@ def contact_email() -> str:
     return creds.get("email") or os.environ.get("OMNISEEK_CONTACT_EMAIL") or _CONTACT_DEFAULT
 
 
-def write_template(source: str, template: dict, force: bool = False) -> Path:
-    """Drop a credential template at ~/.omniseek/credentials/<source>.json.template
+def register_template(source: str, template: dict) -> None:
+    """Declare the shape of <credentials>/<source>.json. In memory only: writes no file."""
+    TEMPLATES[source] = template
 
-    Templates are NEVER overwritten if they already exist (unless force=True).
-    Real credentials at <source>.json are never touched. An unreadable credentials
-    directory writes nothing (the would-be path is still returned).
-    """
-    path = CREDS_DIR / f"{source}.json.template"
-    if not _dir_usable():
-        return path
-    try:
-        if path.exists() and not force:
-            return path
-        path.write_text(json.dumps(template, indent=2, ensure_ascii=False), encoding="utf-8")
-    except OSError as exc:
-        if not _is_denied(exc):
-            raise
-        _note_denied(exc)
-    return path
+
+TEMPLATE_DOC = "docs/credential-templates.md"
+
+
+def template_hint(source: str) -> str:
+    """Where a person finds the template of one source (for a "not configured" message)."""
+    return f"template: {TEMPLATE_DOC}, section {source}"
 
 
 def is_configured(source: str) -> bool:

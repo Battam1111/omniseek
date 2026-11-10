@@ -15,8 +15,10 @@ is the symmetric twin of ``_openalex`` for the GitHub backend:
   _pace()         space request STARTS so a fan-out can't burst the Search ceiling
   circuit breaker consecutive failures (and a 429 / 403 secondary-rate hit) open the
                   circuit briefly, so a throttled GitHub fails FAST instead of stacking
-                  retries across the three sources (same idea as the OpenAlex breaker)
-  health()        ONE single-flight 60s-cached probe of the quota-free GET /rate_limit
+                  retries across the three sources (same idea as the OpenAlex breaker);
+                  a 404 / 410 / 400 / 422 is GitHub answering and is not counted
+                  (_guard.counts_against_upstream)
+  ahealth()       ONE single-flight 60s-cached probe of the quota-free GET /rate_limit
                   that all three adapters delegate to
 
 Judgment-free plumbing only; callers keep their own caching + doc assembly.
@@ -35,9 +37,12 @@ from urllib.parse import urlsplit
 
 import anyio
 import httpx
+from tenacity import (AsyncRetrying, RetryCallState, retry_if_exception, retry_if_result,
+                      stop_after_attempt)
 
 from omniseek.core import _guard as _guard_mod
-from omniseek.core import _probe, cache, diag, http, upstreams
+from omniseek.core import _probe, cache, diag, http, portal, upstreams
+from omniseek import where
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +50,7 @@ BASE = "https://api.github.com"
 _BASE_HOST = "api.github.com"
 USER_AGENT = "omniseek/0.1 (automated retrieval)"
 TIMEOUT = 20
-CRED = Path.home() / ".omniseek" / "credentials" / "github.json"
+CRED = where.credentials() / "github.json"
 
 _BREAK_AFTER = 5      # consecutive failures that open the circuit
 _BREAK_FOR_S = 120.0  # seconds the circuit stays open
@@ -87,7 +92,7 @@ _pace_lock = _guard.pace_lock
 
 
 def _load_token() -> Optional[str]:
-    """The GitHub token from ~/.omniseek/credentials/github.json (``{"token": "..."}``).
+    """The GitHub token from <credentials>/github.json (``{"token": "..."}``).
 
     Classic OR fine-grained PAT (both accept ``Authorization: Bearer``). None when the
     file is absent / unreadable, so the Authorization injection is a no-op and behavior
@@ -101,15 +106,8 @@ def _load_token() -> Optional[str]:
 
 # Loaded once at import (mirrors _openalex's keyed-client pattern): None when no key file
 # exists, so the Authorization injection is a no-op and behavior is unchanged until
-# ~/.omniseek/credentials/github.json is dropped on the host.
+# <credentials>/github.json is dropped on the host.
 _token = _load_token()
-
-# Pooled client: reuse one keep-alive connection to api.github.com across the three GitHub-backed
-# sources instead of a fresh TCP+TLS handshake per call. httpx.Client is thread-safe; the global
-# _sema still bounds in-flight concurrency. HTTP/2 multiplexing if h2 is importable, else HTTP/1.1
-# keep-alive.
-_client: Optional["httpx.Client"] = None
-_client_lock = threading.Lock()
 
 
 def _http2_ok() -> bool:
@@ -118,28 +116,6 @@ def _http2_ok() -> bool:
         return True
     except Exception:  # noqa: BLE001
         return False
-
-
-def _get_client() -> "httpx.Client":
-    global _client
-    if _client is None:
-        with _client_lock:
-            if _client is None:
-                _client = httpx.Client(
-                    headers={"User-Agent": USER_AGENT},
-                    timeout=TIMEOUT,
-                    http2=_http2_ok(),
-                    # follow_redirects=False (SSRF hardening): get_json is reached with a
-                    # candidate-page-parsed owner/repo/path (attacker-influenceable). The API
-                    # answers 200 JSON; a 3xx is the off-host redirect attack -> refuse it
-                    # explicitly. With the host pin in get_json, two independent constraints close
-                    # the redirect/host injection.
-                    follow_redirects=False,
-                    limits=httpx.Limits(max_keepalive_connections=8, max_connections=16,
-                                        keepalive_expiry=30.0),
-                    event_hooks=http.progress_hooks(),   # the body's progress renews the leases
-                )
-    return _client
 
 
 class GitHubDown(RuntimeError):
@@ -153,23 +129,33 @@ def _pace() -> None:
     _guard.pace()
 
 
-def _retry_after(resp: "httpx.Response") -> float:
-    """Seconds to wait before a retry, honoring (in order) Retry-After, then X-RateLimit-Reset
-    (an absolute epoch). Capped to 5s: the breaker, not a long sleep, is what protects a fan-out
-    from a sustained throttle (a long sleep here would just stack across callers)."""
-    ra = resp.headers.get("retry-after")
-    if ra:
-        try:
-            return min(float(ra), 5.0)
-        except ValueError:
-            pass
-    reset = resp.headers.get("x-ratelimit-reset")
-    if reset:
-        try:
-            return max(0.0, min(float(reset) - time.time(), 5.0))
-        except ValueError:
-            pass
-    return 1.5
+_RETRY_STATUS = (500, 502, 503)
+
+
+def _wait_before_retry(state: RetryCallState) -> float:
+    """Seconds before the one retry: 1s after an exception; after a throttle / 5xx, what the answer
+    asked for (Retry-After, then X-RateLimit-Reset, upstreams.retry_wait), else 1.5s. Capped to 5s:
+    the breaker, not a long sleep, is what protects a fan-out from a sustained throttle (a long sleep
+    here would just stack across callers)."""
+    if state.outcome.failed:
+        return 1.0
+    resp, _throttled = state.outcome.result()
+    return upstreams.retry_wait(resp.headers, cap=5.0, default=1.5)
+
+
+# One retry (two attempts) on a 429 / secondary-rate 403 / 500 / 502 / 503 or on any exception except a
+# shed (nothing was sent) and an answer the breaker does not count (404 / 410 / 400 / 422: GitHub said
+# it is not there or the request is wrong, and says so again; _guard.counts_against_upstream). After
+# the second attempt, or at once for those, the last outcome comes back as it is (a response, or its
+# exception raised) and get_json / aget_json decide: breaker, diag note, None.
+_RETRY = dict(
+    stop=stop_after_attempt(2),
+    wait=_wait_before_retry,
+    retry=(retry_if_exception(lambda e: isinstance(e, Exception) and not isinstance(e, _GitHubShed)
+                              and _guard_mod.counts_against_upstream(e))
+           | retry_if_result(lambda r: r[1] or r[0].status_code in _RETRY_STATUS)),
+    retry_error_callback=lambda state: state.outcome.result(),
+)
 
 
 def _is_secondary_rate(resp: "httpx.Response") -> bool:
@@ -191,93 +177,22 @@ def _is_secondary_rate(resp: "httpx.Response") -> bool:
 
 def get_json(path: str, params: Optional[dict] = None, headers: Optional[dict] = None,
              timeout: float = TIMEOUT) -> Optional[Any]:
-    """GET api.github.com``path`` and return parsed JSON (or None on any failure).
-
-    Authenticates onto the shared token (Authorization on every call when a token exists),
-    paces request starts, and does ONE gentle retry on 429 / 5xx / a 403 secondary-rate hit
-    (honoring Retry-After / X-RateLimit-Reset, capped 5s). While the breaker is open this
-    returns None at once. Returning None on failure (not raising) keeps each adapter's
-    "failure -> empty result" contract exactly as the prior ``http.get_json`` did."""
-    if cache.cache_only():
-        return None  # cache-only mode (cache_only=True): do NO live HTTP, the single egress guard
-
-    # Host pin (SSRF hardening): the resolved request host MUST be api.github.com. path comes from a
-    # candidate-page-parsed owner/repo/number/branch; assert the assembled URL never resolves off-host
-    # (a crafted path with an authority or scheme can't redirect us off the pinned API host).
-    if (urlsplit(f"{BASE}{path}").hostname or "").lower() != _BASE_HOST:
-        logger.warning("github get_json refused: path %r resolves off %s", path, _BASE_HOST)
-        return None
-
-    with _lock:
-        if time.time() < _state["open_until"]:
-            logger.debug("github circuit open %.0fs more; skipping %s",
-                         _state["open_until"] - time.time(), path)
-            return None
-
-    # Authenticate onto the shared token (the real remedy for github_trending's unauth ceiling +
-    # the per-IP Search 429). The Authorization header is injected here so ONE site covers all three
-    # GitHub-backed sources; the caller's Accept / API-version headers ride on top. No token -> no-op.
-    hdrs = {"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"}
-    if headers:
-        hdrs.update(headers)
-    if _token:
-        hdrs["Authorization"] = f"Bearer {_token}"
-
-    last_exc: Optional[Exception] = None
-    for attempt in (1, 2):
-        try:
-            # Permit first, then the start slot under it (the declared gate; plus the code-search gate
-            # for /search/code). BOUNDED: the old `with _sema:` could wait forever on a saturated or
-            # leaked pool. Released during the retry sleep below.
-            with _hold_for(path, request_s=timeout):
-                resp = _get_client().get(f"{BASE}{path}", params=params, headers=hdrs, timeout=timeout)
-            # the module honours Retry-After itself (upstreams.SELF_BACKOFF)
-            upstreams.observe_response("github", resp, defer_on_429=False)  # x-ratelimit-* per resource
-            throttled = resp.status_code == 429 or _is_secondary_rate(resp)
-            if throttled:  # rate/secondary limit: stamp it so health() can surface it honestly
-                with _lock:
-                    _state["last_429"] = time.time()
-            if (throttled or resp.status_code in (500, 502, 503)) and attempt == 1:
-                time.sleep(_retry_after(resp))
-                continue
-            if throttled:  # a throttle that survived the one retry trips the breaker (fail fast)
-                _trip_breaker()
-                diag.note("github.get_json", url=f"{BASE}{path}", status=resp.status_code,
-                          body="rate / secondary-rate limited (survived one retry)")
-                return None
-            resp.raise_for_status()
-            _guard.record_ok()  # reset the consecutive-failure streak
-            try:
-                return resp.json()
-            except Exception as exc:  # noqa: BLE001 — unparseable body is a failure, degrade to None
-                logger.warning("github get_json parse failed (%s): %s", path, exc)
-                diag.note("github.get_json", url=f"{BASE}{path}", status=resp.status_code,
-                          body=resp.text, exc=exc)
-                return None
-        except _GitHubShed as exc:  # the gate turned it away: nothing sent, not a GitHub failure
-            diag.note("github.get_json", url=f"{BASE}{path}",
-                      body=f"declared upstream gate, request not sent: {exc}")
-            return None
-        except Exception as exc:  # noqa: BLE001
-            last_exc = exc
-            if attempt == 1:
-                time.sleep(1.0)
-    _trip_breaker()
-    logger.warning("github get_json failed (%s): %s", path, last_exc)
-    # Only on the real-failure exit (both attempts failed): surface the exception + path so the
-    # fixing agent sees the network/HTTP cause, not just an empty result.
-    diag.note("github.get_json", url=f"{BASE}{path}", exc=last_exc)
-    return None
+    """Sync entry for a caller on a thread: ``aget_json`` run on the event loop (portal.call), so
+    there is one implementation of the GitHub request (EYE-TWINS-1)."""
+    return portal.call(aget_json, path, params=params, headers=headers, timeout=timeout)
 
 
-def _trip_breaker() -> None:
-    """Record one failure; open the circuit once _BREAK_AFTER consecutive failures pile up."""
-    _guard.record_fail()
+def _trip_breaker(exc: Optional[BaseException] = None) -> None:
+    """Record one failure; open the circuit once _BREAK_AFTER consecutive failures pile up. Whether
+    it counts is _guard's one rule (``counts_against_upstream``): with no exception (a throttle that
+    survived the retry) it counts; an exception carrying 404 / 410 / 400 / 422 does not."""
+    _guard.record_fail(exc)
 
 
-# --- native-async twin of get_json (github + github_trending go native async) --------------------
-# Byte-faithful mirror of get_json sharing the SAME _guard (breaker + rate pacer + concurrency sema).
-# Only the BLOCKING waits go async (no thread held during them); a pure addition callers opt into.
+# --- the GitHub request (one implementation; get_json above is its sync entry) --------------------
+# Pooled client: reuse one keep-alive connection to api.github.com across the three GitHub-backed
+# sources instead of a fresh TCP+TLS handshake per call. HTTP/2 multiplexing if h2 is importable,
+# else HTTP/1.1 keep-alive.
 _aclient: Optional["httpx.AsyncClient"] = None
 _aclient_lock = threading.Lock()
 
@@ -291,7 +206,12 @@ def _aget_client() -> "httpx.AsyncClient":
                     headers={"User-Agent": USER_AGENT},
                     timeout=TIMEOUT,
                     http2=_http2_ok(),
-                    follow_redirects=False,  # same SSRF hardening as _get_client
+                    # follow_redirects=False (SSRF hardening): aget_json is reached with a
+                    # candidate-page-parsed owner/repo/path (attacker-influenceable). The API
+                    # answers 200 JSON; a 3xx is the off-host redirect attack -> refuse it
+                    # explicitly. With the host pin in aget_json, two independent constraints close
+                    # the redirect/host injection.
+                    follow_redirects=False,
                     limits=httpx.Limits(max_keepalive_connections=8, max_connections=16,
                                         keepalive_expiry=30.0),
                     event_hooks=http.aprogress_hooks(),
@@ -333,24 +253,11 @@ def _budget(path: str) -> tuple[float, float]:
     return mw, upstreams.wait_until(mw)
 
 
-@contextlib.contextmanager
-def _hold_for(path: str, request_s: Optional[float] = None):
+@contextlib.asynccontextmanager
+async def _ahold_for(path: str, request_s: Optional[float] = None):
     """The declared gates for one request to ``path``: the code-search gate first when the path is
     under /search/code (10 per minute), then the GitHub-wide gate. One fixed order, so no deadlock;
     one budget for both."""
-    mw, until = _budget(path)
-    with contextlib.ExitStack() as stack:
-        if (path or "").startswith("/search/code"):
-            stack.enter_context(_code_guard.hold(mw, _slot_busy, _backlog_shed, until=until,
-                                                 request_s=request_s))
-        stack.enter_context(_guard.hold(mw, _slot_busy, _backlog_shed, until=until,
-                                        request_s=request_s))
-        yield
-
-
-@contextlib.asynccontextmanager
-async def _ahold_for(path: str, request_s: Optional[float] = None):
-    """Async twin of _hold_for (same gates, same order, same budget)."""
     mw, until = _budget(path)
     async with contextlib.AsyncExitStack() as stack:
         if (path or "").startswith("/search/code"):
@@ -363,14 +270,13 @@ async def _ahold_for(path: str, request_s: Optional[float] = None):
 
 async def aget_json(path: str, params: Optional[dict] = None, headers: Optional[dict] = None,
                     timeout: float = TIMEOUT) -> Optional[Any]:
-    """Native-async twin of ``get_json`` (byte-faithful): SAME cache_only guard, host-pin, shared
-    breaker / rate pacer / concurrency cap, token auth, throttle/retry, failure->None contract, so
-    async and sync egress share ONE load guard. Only the BLOCKING waits go async so no thread is held:
-    the SAME ``_sema`` waited for in its one line on the loop (no thread; a cancel cannot keep it),
-    then the start slot awaited under it (``_ahold_for``: the permit-first ``ahold`` of the declared
-    gates); the network via
-    ``await _aget_client().get``; the retry backoffs via ``await anyio.sleep``. Everything else is
-    brief-lock / pure CPU, byte-identical to get_json."""
+    """GET api.github.com``path`` and return parsed JSON (or None on any failure).
+
+    Authenticates onto the shared token (Authorization on every call when a token exists), takes the
+    declared gates (``_ahold_for``: the permit waited for in the gate's line on the loop, then the
+    start slot under it), and does ONE gentle retry on 429 / 5xx / a 403 secondary-rate hit (honoring
+    Retry-After / X-RateLimit-Reset, capped 5s). While the breaker is open this returns None at once.
+    Returning None on failure (not raising) keeps each adapter's "failure -> empty result" contract."""
     if cache.cache_only():
         return None
 
@@ -390,118 +296,113 @@ async def aget_json(path: str, params: Optional[dict] = None, headers: Optional[
     if _token:
         hdrs["Authorization"] = f"Bearer {_token}"
 
-    last_exc: Optional[Exception] = None
-    for attempt in (1, 2):
-        try:
-            # Same gates, same order as get_json: the permit waited for in the gate's line on the
-            # loop (bounded; a cancel cannot keep it), then the start slot awaited under it. Released
-            # before the retry sleep below (mirror get_json).
-            async with _ahold_for(path, request_s=timeout):
-                resp = await _aget_client().get(f"{BASE}{path}", params=params, headers=hdrs, timeout=timeout)
-            upstreams.observe_response("github", resp, defer_on_429=False)  # upstreams.SELF_BACKOFF
-            throttled = resp.status_code == 429 or _is_secondary_rate(resp)
-            if throttled:
-                with _lock:
-                    _state["last_429"] = time.time()
-            if (throttled or resp.status_code in (500, 502, 503)) and attempt == 1:
-                await anyio.sleep(_retry_after(resp))
-                continue
-            if throttled:
-                _trip_breaker()
-                diag.note("github.get_json", url=f"{BASE}{path}", status=resp.status_code,
-                          body="rate / secondary-rate limited (survived one retry)")
-                return None
+    async def _attempt() -> tuple:
+        # Same gates, same order as get_json: the permit waited for in the gate's line on the
+        # loop (bounded; a cancel cannot keep it), then the start slot awaited under it. Released
+        # before the retry sleep (mirror get_json).
+        async with _ahold_for(path, request_s=timeout):
+            resp = await _aget_client().get(f"{BASE}{path}", params=params, headers=hdrs, timeout=timeout)
+        upstreams.observe_response("github", resp, defer_on_429=False)  # upstreams.SELF_BACKOFF
+        throttled = resp.status_code == 429 or _is_secondary_rate(resp)
+        if throttled:
+            with _lock:
+                _state["last_429"] = time.time()
+        elif resp.status_code not in _RETRY_STATUS:
             resp.raise_for_status()
-            _guard.record_ok()
-            try:
-                return resp.json()
-            except Exception as exc:  # noqa: BLE001 — unparseable body is a failure, degrade to None
-                logger.warning("github aget_json parse failed (%s): %s", path, exc)
-                diag.note("github.get_json", url=f"{BASE}{path}", status=resp.status_code,
-                          body=resp.text, exc=exc)
-                return None
-        except _GitHubShed as exc:  # the gate turned it away: nothing sent, not a GitHub failure
-            diag.note("github.get_json", url=f"{BASE}{path}",
-                      body=f"declared upstream gate, request not sent: {exc}")
+        return resp, throttled
+
+    try:
+        resp, throttled = await AsyncRetrying(sleep=anyio.sleep, **_RETRY)(_attempt)
+        if throttled:
+            _trip_breaker()
+            diag.note("github.get_json", url=f"{BASE}{path}", status=resp.status_code,
+                      body="rate / secondary-rate limited (survived one retry)")
             return None
-        except Exception as exc:  # noqa: BLE001
-            last_exc = exc
-            if attempt == 1:
-                await anyio.sleep(1.0)
-    _trip_breaker()
-    logger.warning("github aget_json failed (%s): %s", path, last_exc)
-    diag.note("github.get_json", url=f"{BASE}{path}", exc=last_exc)
-    return None
+        resp.raise_for_status()
+    except _GitHubShed as exc:  # the gate turned it away: nothing sent, not a GitHub failure
+        diag.note("github.get_json", url=f"{BASE}{path}",
+                  body=f"declared upstream gate, request not sent: {exc}")
+        return None
+    except Exception as exc:  # noqa: BLE001
+        _trip_breaker(exc)  # a 404 / 410 / 400 / 422 is GitHub answering, not counted (_guard)
+        logger.warning("github aget_json failed (%s): %s", path, exc)
+        diag.note("github.get_json", url=f"{BASE}{path}", exc=exc,
+                  status=getattr(getattr(exc, "response", None), "status_code", None))
+        return None
+    _guard.record_ok()
+    try:
+        return resp.json()
+    except Exception as exc:  # noqa: BLE001 — unparseable body is a failure, degrade to None
+        logger.warning("github aget_json parse failed (%s): %s", path, exc)
+        diag.note("github.get_json", url=f"{BASE}{path}", status=resp.status_code,
+                  body=resp.text, exc=exc)
+        return None
 
 
 _HEALTH_TTL_S = 60.0
 _health: dict = {"at": 0.0, "result": None}
-_health_lock = threading.Lock()
 
 
-def health(timeout: float = 8.0) -> tuple[Optional[bool], str]:
-    """ONE shared upstream probe for all three GitHub-backed sources (single-flight + 60s cache).
+async def ahealth(timeout: float = 8.0) -> tuple[Optional[bool], str]:
+    """ONE shared upstream probe for all three GitHub-backed sources (single-flight + 60s cache,
+    ``_probe.shared_verdict``).
 
     Before this, github + github_trending each probed GET /rate_limit in its own health_check; the
     health sweep fired both at once, and github_trending probed UNAUTHENTICATED. Now they delegate
     here: one GET /rate_limit (quota-free: it never spends the core / search budget) tests
-    connectivity + token validity + the breaker state, cached 60s and single-flighted (the probe runs
-    under the lock) so concurrent callers cause exactly ONE upstream call. The core + search remaining
-    counts and whether a token is present are surfaced; a recent 429 / secondary-rate hit is surfaced
+    connectivity + token validity + the breaker state, cached 60s and single-flighted so concurrent
+    callers cause exactly ONE upstream call. The core + search remaining counts and whether a token
+    is present are surfaced; a recent 429 / secondary-rate hit is surfaced
     even when the probe itself succeeds, because GET /rate_limit is quota-free and so does not prove
     the Search budget is unexhausted."""
-    now = time.monotonic()
-    with _health_lock:
-        if _health["result"] is not None and now - _health["at"] < _HEALTH_TTL_S:
-            return _health["result"]
+    return await _probe.shared_verdict(_health, _HEALTH_TTL_S, lambda: _aprobe(timeout))
+
+
+async def _aprobe(timeout: float) -> tuple[Optional[bool], str]:
+    """The probe behind ``ahealth`` (run once per TTL by ``_probe.shared_verdict``)."""
+    with _lock:
+        if time.time() < _state["open_until"]:
+            # Self-shed (breaker open after consecutive failures), NOT GitHub-unreachable: a
+            # transient breaker-open must not flip github + github_trending down (they self-heal
+            # when the breaker closes). Nothing is sent, so nothing is verified: None (the
+            # watchdog's `unverified`). A genuine outage surfaces as a failed /rate_limit probe
+            # below (2026-07-23 watchdog false-mass-down fix).
+            return None, _probe.breaker_open("GitHub, eye backing off",
+                                             _state["open_until"] - time.time())
+    t0 = time.time()
+    # The verdict is cached for every GitHub-backed source, so it is re-read HERE (not only in
+    # the per-source health funnel): a 429 or a refused gate is "not verified" for all of them.
+    with _probe.watching() as led:
+        data = await aget_json("/rate_limit", timeout=timeout)
+    if data is None:
         with _lock:
-            if time.time() < _state["open_until"]:
-                # Self-shed (breaker open after consecutive failures), NOT GitHub-unreachable: a
-                # transient breaker-open must not flip github + github_trending down (they self-heal
-                # when the breaker closes). Nothing is sent, so nothing is verified: None (the
-                # watchdog's `unverified`). A genuine outage surfaces as a failed /rate_limit probe
-                # below (2026-07-23 watchdog false-mass-down fix).
-                ok, msg = None, _probe.breaker_open("GitHub, eye backing off",
-                                                    _state["open_until"] - time.time())
-                _health["at"] = time.monotonic()
-                _health["result"] = (ok, msg)
-                return _health["result"]
-        t0 = time.time()
-        # The verdict is cached for every GitHub-backed source, so it is re-read HERE (not only in
-        # the per-source health funnel): a 429 or a refused gate is "not verified" for all of them.
-        with _probe.watching() as led:
-            data = get_json("/rate_limit", timeout=timeout)
-        if data is None:
-            with _lock:
-                throttled_at = _state.get("last_429", 0.0)
-            if throttled_at >= t0:
-                # A 429 or a secondary-rate 403 during THIS probe: GitHub answered, but only that it
-                # is throttling us, which says nothing about whether the API serves: not verified.
-                ok, msg = None, (f"{_probe.rate_limited('api.github.com')}: GET /rate_limit hit a "
-                                 "rate or secondary limit")
-            else:
-                ok, msg = _probe.reread(
-                    False, "GET /rate_limit failed (timeout / network / breaker / throttle)", led)
+            throttled_at = _state.get("last_429", 0.0)
+        if throttled_at >= t0:
+            # A 429 or a secondary-rate 403 during THIS probe: GitHub answered, but only that it
+            # is throttling us, which says nothing about whether the API serves: not verified.
+            ok, msg = None, (f"{_probe.rate_limited('api.github.com')}: GET /rate_limit hit a "
+                             "rate or secondary limit")
         else:
-            res = (data or {}).get("resources", {})
-            # GET /rate_limit reports EVERY bucket's limit and remaining in one quota-free call: record
-            # them as readings (one lane per resource) so the upstream health block compares core /
-            # search / code_search against the declared 5000 / 30 / 10.
-            for rname in ("core", "search", "code_search"):
-                b = res.get(rname) or {}
-                if b.get("limit") is not None:
-                    upstreams.observe("github", {"x-ratelimit-limit": b.get("limit"),
-                                                 "x-ratelimit-remaining": b.get("remaining"),
-                                                 "x-ratelimit-reset": b.get("reset")}, 200, lane=rname)
-            core = res.get("core", {}).get("remaining", "?")
-            cs = res.get("search", {}).get("remaining", "?")
-            tok = "token" if _token else "NO token (unauth ceiling)"
-            ok, msg = True, f"OK ({tok}; core={core}, search={cs})"
-            with _lock:
-                last = _state.get("last_429", 0.0)
-            if last and (time.time() - last) < 1800:
-                msg = (f"OK ({tok}; core={core}, search={cs}), but a rate/secondary-limit hit "
-                       f"{int(time.time() - last)}s ago: the Search budget (30/min) may be throttling")
-        _health["at"] = time.monotonic()
-        _health["result"] = (ok, msg)
-        return _health["result"]
+            ok, msg = _probe.reread(
+                False, "GET /rate_limit failed (timeout / network / breaker / throttle)", led)
+    else:
+        res = (data or {}).get("resources", {})
+        # GET /rate_limit reports EVERY bucket's limit and remaining in one quota-free call: record
+        # them as readings (one lane per resource) so the upstream health block compares core /
+        # search / code_search against the declared 5000 / 30 / 10.
+        for rname in ("core", "search", "code_search"):
+            b = res.get(rname) or {}
+            if b.get("limit") is not None:
+                upstreams.observe("github", {"x-ratelimit-limit": b.get("limit"),
+                                             "x-ratelimit-remaining": b.get("remaining"),
+                                             "x-ratelimit-reset": b.get("reset")}, 200, lane=rname)
+        core = res.get("core", {}).get("remaining", "?")
+        cs = res.get("search", {}).get("remaining", "?")
+        tok = "token" if _token else "NO token (unauth ceiling)"
+        ok, msg = True, f"OK ({tok}; core={core}, search={cs})"
+        with _lock:
+            last = _state.get("last_429", 0.0)
+        if last and (time.time() - last) < 1800:
+            msg = (f"OK ({tok}; core={core}, search={cs}), but a rate/secondary-limit hit "
+                   f"{int(time.time() - last)}s ago: the Search budget (30/min) may be throttling")
+    return ok, msg

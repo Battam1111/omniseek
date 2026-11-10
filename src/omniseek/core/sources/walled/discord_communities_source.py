@@ -27,7 +27,7 @@ OFF). With it off you get message metadata but blank text.
    (66560 = View Channel + Read Message History — no manage perms needed)
 4. Discord → enable Developer Mode → right-click each channel → Copy Channel ID
    (optionally also Copy Server ID for clean message links).
-5. Write ~/.omniseek/credentials/discord.json:
+5. Write <credentials>/discord.json:
    {
      "bot_token": "MT...",
      "channels": [
@@ -45,7 +45,9 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from omniseek.core import auth, cache, http, upstreams
-from omniseek.core.normalize import Document, jsonsafe, keyword_score_filter
+from omniseek.core.sources._base import SourceBase
+from omniseek.core.normalize import Document, jsonsafe, keyword_score_filter, to_utc
+from omniseek import where
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +57,7 @@ CACHE_TTL = 600          # 10 min — real-time-ish
 PER_CHANNEL = 40         # messages pulled per channel per refresh
 
 # Drop a template on first import so the operator knows the shape.
-auth.write_template(
+auth.register_template(
     "discord",
     {
         "bot_token": "PASTE — and enable Message Content Intent in the Dev Portal",
@@ -66,14 +68,14 @@ auth.write_template(
 )
 
 
-class DiscordCommunitiesAdapter:
+class DiscordCommunitiesAdapter(SourceBase):
     name = "discord_communities"
     needs_credentials = True
     explicit_only = "walled(需 bot 凭证);命名钻取 (omniseek_search 单源 raw) 才调,不进广搜"
     description = (
         "Discord 研究/peer/求职 频道 (REST bot)：仅能读 部署者有管理员权限、"
         "已邀请 bot 的 server (大社区加不进 bot, 走其他源). 配 "
-        "~/.omniseek/credentials/discord.json + 开 Message Content Intent"
+        f"{where.show(where.credentials())}/discord.json + 开 Message Content Intent"
     )
 
     def _config(self) -> tuple[Optional[str], list[dict]]:
@@ -105,14 +107,14 @@ class DiscordCommunitiesAdapter:
         guild-by-guild in guild-list order; a guild that fails is skipped rather than fatal; and an
         every-guild-failed run still returns (and caches) the empty list exactly as before."""
         ck = cache.make_key("discord_communities", "channels")
-        cached = cache.get(ck)
+        cached = cache.get_once(ck)
         if cached is not None:
             return cached
         out: list[dict] = []
         hdr = {"Authorization": f"Bot {token}"}
         try:
-            with upstreams.egress(API, request_s=TIMEOUT):  # declared Discord gate (50 requests/s per bot token)
-                resp = http.direct("GET", f"{API}/users/@me/guilds", headers=hdr, timeout=TIMEOUT)
+            # http.direct takes the declared Discord gate (50 requests/s per bot token) on every hop
+            resp = http.direct("GET", f"{API}/users/@me/guilds", headers=hdr, timeout=TIMEOUT)
             upstreams.observe_response(API, resp)  # a Retry-After defers the whole Discord gate
             guilds = resp.json()
         except Exception as exc:  # noqa: BLE001
@@ -124,9 +126,8 @@ class DiscordCommunitiesAdapter:
             """One guild's channel listing. None on failure (skipped), mirroring the old
             ``except: continue`` — including a malformed guild row, whose g['id'] raises in here."""
             try:
-                with upstreams.egress(API, request_s=TIMEOUT):
-                    resp = http.direct("GET", f"{API}/guilds/{g['id']}/channels", headers=hdr,
-                                       timeout=TIMEOUT)
+                resp = http.direct("GET", f"{API}/guilds/{g['id']}/channels", headers=hdr,
+                                   timeout=TIMEOUT)
                 upstreams.observe_response(API, resp)  # a Retry-After defers the whole Discord gate
                 return resp.json()
             except Exception:  # noqa: BLE001
@@ -154,13 +155,12 @@ class DiscordCommunitiesAdapter:
 
     def _pull(self, token: str, channel_id: str) -> list[dict]:
         try:
-            with upstreams.egress(API, request_s=TIMEOUT):
-                r = http.direct(
-                    "GET", f"{API}/channels/{channel_id}/messages",
-                    params={"limit": min(PER_CHANNEL, 100)},
-                    headers={"Authorization": f"Bot {token}"},
-                    timeout=TIMEOUT,
-                )
+            r = http.direct(
+                "GET", f"{API}/channels/{channel_id}/messages",
+                params={"limit": min(PER_CHANNEL, 100)},
+                headers={"Authorization": f"Bot {token}"},
+                timeout=TIMEOUT,
+            )
             upstreams.observe_response(API, r)
             if r.status_code in (401, 403):
                 logger.warning("discord channel %s: %s (bot not in server / missing perms)",
@@ -199,7 +199,7 @@ class DiscordCommunitiesAdapter:
         if not channels:
             return []
         key = cache.make_key("discord_communities", "all")
-        cached = cache.get(key)
+        cached = cache.get_once(key)
         if cached is not None:
             docs = [Document.model_validate(d) for d in cached]
         else:
@@ -224,17 +224,16 @@ class DiscordCommunitiesAdapter:
             cache.set(key, [d.model_dump(mode="json") for d in docs], ttl=CACHE_TTL)
         return keyword_score_filter(docs, query)[:limit]
 
-    def fetch_url(self, url: str) -> Optional[Document]:
+    async def afetch_url(self, url: str) -> Optional[Document]:
         return None
 
     def health_check(self) -> tuple[bool, str]:
         token, channels = self._config()
         if not token:
-            return False, "no bot_token (see ~/.omniseek/credentials/discord.json.template)"
+            return False, f"no bot_token in {where.show(where.credentials())}/discord.json ({auth.template_hint('discord')})"
         try:
-            with upstreams.egress(API, request_s=15):
-                r = http.direct("GET", f"{API}/users/@me", headers={"Authorization": f"Bot {token}"},
-                                timeout=15)
+            r = http.direct("GET", f"{API}/users/@me", headers={"Authorization": f"Bot {token}"},
+                            timeout=15)
             if r.status_code != 200:
                 return False, f"HTTP {r.status_code} (bad token?)"
             who = r.json().get("username", "?")
@@ -260,12 +259,7 @@ class DiscordCommunitiesAdapter:
         else:
             url = f"https://discord.com/channels/{ch['channel_id']}"
         ts = m.get("timestamp")
-        date = None
-        if ts:
-            try:
-                date = datetime.fromisoformat(ts.replace("Z", "+00:00"))
-            except (ValueError, TypeError):
-                pass
+        date = to_utc(ts)
         author = (m.get("author") or {}).get("username", "?")
         server = ch.get("server", "?")
         label = ch.get("label", "")
@@ -274,7 +268,7 @@ class DiscordCommunitiesAdapter:
             source_id=msg_id,
             url=url,
             title=(content[:80] or "(embed / empty — enable Message Content Intent)"),
-            content=content or "(no text — enable Message Content Intent in the Dev Portal)",
+            content=content or "",
             author=f"{author} @{server}#{label}",
             date=date,
             tags=["discord", f"server:{server}", f"channel:{label}"],

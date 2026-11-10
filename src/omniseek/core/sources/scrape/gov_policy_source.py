@@ -114,10 +114,10 @@ class GovPolicyAdapter(BaseScrapeAdapter):
     def _to_documents(self, raw, query, limit) -> list[Document]:
         return [d for it in raw[:limit] if (d := _doc_from_policy(it))]
 
-    def health_check(self) -> tuple[bool, str]:
+    async def ahealth_check(self) -> tuple[bool, str]:
         if not _DEPS_OK:
             return False, "curl_cffi not installed"
-        raw, why = self._health_fetch("数据", fallback="fetch failed / blocked")
+        raw, why = await self._ahealth_fetch("数据", fallback="fetch failed / blocked")
         if raw is None:
             return False, why
         return True, f"OK ({len(raw)} docs)"

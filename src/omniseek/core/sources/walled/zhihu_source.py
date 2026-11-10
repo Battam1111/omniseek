@@ -24,7 +24,10 @@ from urllib.parse import quote, urlparse
 
 from bs4 import BeautifulSoup
 
-from omniseek.core import cache
+import anyio
+
+from omniseek.core import cache, diag, portal
+from omniseek.core.sources._base import SourceBase
 from omniseek.core.normalize import Document, jsonsafe, mk_signal
 from omniseek.core.sources.walled._base import EMPTY_TTL
 from omniseek.core.sources.walled._cdp import cdp_call, cdp_health, content_with_media, images_from_page
@@ -160,7 +163,7 @@ def _article_date(soup) -> Optional[str]:
     return None
 
 
-class ZhihuAdapter:
+class ZhihuAdapter(SourceBase):
     name = "zhihu"
     needs_credentials = False  # Login happens once via VNC; we just use the session
     explicit_only = "shared CDP Chrome (precious logged-in session)"
@@ -176,7 +179,7 @@ class ZhihuAdapter:
 
     def search(self, query: str, limit: int = 10) -> list[Document]:
         key = cache.make_key("zhihu", "search", query, limit)
-        cached = cache.get(key)
+        cached = cache.get_once(key)
         if cached is not None:
             return [Document.model_validate(d) for d in cached]
 
@@ -244,7 +247,13 @@ class ZhihuAdapter:
         cache.set(key, [d.model_dump(mode="json") for d in docs], ttl=ttl)
         return docs
 
-    def fetch_url(self, url: str) -> Optional[Document]:
+    async def afetch_url(self, url: str) -> Optional[Document]:
+        if "zhihu.com" not in (urlparse(url).hostname or ""):
+            return None
+        # the CDP page drive blocks (cdp_call): a worker thread
+        return await anyio.to_thread.run_sync(self._read_url, url, limiter=portal.IO_LANE)
+
+    def _read_url(self, url: str) -> Optional[Document]:
         host = urlparse(url).hostname or ""
         if "zhihu.com" not in host:
             return None
@@ -267,6 +276,16 @@ class ZhihuAdapter:
         # Body: for answers/posts, the main content is in .RichText or .Post-RichTextContainer
         body_el = soup.select_one(".Post-RichTextContainer, .RichContent .RichText, .Post-RichText")
         body = body_el.get_text("\n", strip=True) if body_el else ""
+
+        # Not a question or article page (EYE-SRC-FAIL, 2026-11-04): for an article that does not exist or was
+        # deleted, 知乎 answers with its own error page (an h1 reading 你似乎来到了没有知识存在的荒原) that has
+        # no question header, no article header and no body, and this reader used to hand that h1 back as the
+        # document. Judged by structure (all three absent), not by the sentence, which 知乎 can reword.
+        if not body and not soup.select_one("h1.QuestionHeader-title, h1.Post-Title"):
+            diag.note("zhihu.fetch_url", url=url,
+                      body="no question header, article header or body on the page, so it is not a readable "
+                           "question or article (page h1: %r); most likely it does not exist or was deleted" % title[:80])
+            return None
 
         # Author. The old code took select_one's first structural match, which on an article page
         # is an EMPTY .AuthorInfo-name shell, so this returned '' (measured 2026-08-30). An empty
@@ -297,7 +316,7 @@ class ZhihuAdapter:
             source_id=source_id,
             url=url,
             title=title,
-            content=content_with_media(body, images) or "(no body extracted)",
+            content=content_with_media(body, images) or "",
             author=author,
             date=date,
             media=images,
@@ -366,7 +385,7 @@ class ZhihuAdapter:
             source_id=source_id,
             url=url,
             title=title,
-            content=excerpt or "(click URL for full content)",
+            content=excerpt or "",
             author=author,
             date=date,
             signals=mk_signal('votes', score, kind='engagement', by='zhihu/score'),

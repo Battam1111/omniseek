@@ -45,6 +45,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from omniseek.core import cache, relevance
+from omniseek.core.sources._base import SourceBase
 from omniseek.core.normalize import Document, keyword_score_filter
 
 logger = logging.getLogger(__name__)
@@ -198,7 +199,7 @@ def _filter_rows(docs: list[Document], query: str) -> list[Document]:
     return [d for d, c in zip(ranked, covers) if c == best]
 
 
-class IRCCProcessingTimesAdapter:
+class IRCCProcessingTimesAdapter(SourceBase):
     name = "ircc_processing_times"
     needs_credentials = False
     kind = "lookup"
@@ -218,7 +219,7 @@ class IRCCProcessingTimesAdapter:
     # table cache (raw JSON payloads, one combined blob)
     def _tables(self) -> Optional[dict]:
         key = cache.make_key(*TABLES_CACHE_KEY)
-        cached = cache.get(key)
+        cached = cache.get_once(key)
         if cached is not None:
             return cached
         try:
@@ -361,7 +362,7 @@ class IRCCProcessingTimesAdapter:
         docs = self._build_docs(tables)
         return _filter_rows(docs, query)[:limit]
 
-    def fetch_url(self, url: str) -> Optional[Document]:
+    async def afetch_url(self, url: str) -> Optional[Document]:
         return None  # structured lookup source; reach it via search
 
     def health_check(self) -> tuple[Optional[bool], str]:

@@ -24,10 +24,11 @@ from pathlib import Path
 from typing import Optional
 
 import numpy as np
+from omniseek import where
 
 logger = logging.getLogger(__name__)
 
-MODEL_PATH = str(Path.home() / ".omniseek" / "models" / "qwen3-embedding-0.6b")
+MODEL_PATH = str(where.models() / "qwen3-embedding-0.6b")
 DIM = 1024
 # Qwen3-Embedding: the instruct prefix goes on the QUERY side only; documents embed raw.
 _QUERY_PREFIX = "Instruct: Given a query, retrieve relevant documents.\nQuery: "

@@ -10,7 +10,7 @@ API endpoint: https://api.bilibili.com/x/web-interface/wbi/search/type
 
 Migrated to ``BaseScrapeAdapter`` (template method): the base owns the
 cache-check / cache-set / auto-register mechanism. The source-specific facts live
-in the hooks — ``_raw_fetch`` (the anti-bot ``_bili_request``: a fresh session that
+in the hooks — ``_raw_fetch`` (the anti-bot ``_abili_request``: a fresh session that
 FIRST bootstraps the buvid cookies, plus the ``data.code != 0`` guard) and
 ``_to_documents`` (the per-video raw→doc mapping). Bilibili returns server order
 (``order=totalrank``), so ``rank = False`` keeps that order verbatim (byte-identical
@@ -46,7 +46,7 @@ from urllib.parse import urlparse
 import anyio
 import httpx
 
-from omniseek.core import cache, http
+from omniseek.core import cache, http, portal
 from omniseek.core.normalize import Document, jsonsafe, mk_signal
 from omniseek.core.sources.scrape._base import BaseScrapeAdapter
 
@@ -78,21 +78,8 @@ HEADERS = {
 }
 
 
-def _bili_request(url: str, params: dict, timeout: int = DEFAULT_TIMEOUT) -> httpx.Response:
-    """GET a bilibili web API in a fresh session that FIRST bootstraps the buvid
-    cookies by visiting bilibili.com — the search API returns 412 Precondition Failed
-    without them (their anti-crawler gate; verified 2026-06). One extra GET, and search
-    results are cached, so the cost is amortized."""
-    with http.HopClient(headers=HEADERS, timeout=timeout, follow_redirects=True) as client:
-        try:
-            client.get("https://www.bilibili.com/")  # sets buvid3 / buvid4 cookies
-        except Exception as exc:  # noqa: BLE001
-            logger.debug("bilibili cookie bootstrap failed (continuing): %s", exc)
-        return client.get(url, params=params)
-
-
 async def _abili_request(url: str, params: dict, timeout: int = DEFAULT_TIMEOUT) -> httpx.Response:
-    """Async twin of ``_bili_request``: byte-faithful mirror of the two-GET buvid handshake in a FRESH
+    """Async replacement of the deleted sync ``_bili_request`` (11-04, async step seven; this is the only one now): byte-faithful mirror of the two-GET buvid handshake in a FRESH
     per-call ``httpx.AsyncClient`` (fresh client = fresh cookie jar per call, exactly like the sync
     ``with http.HopClient(...)``). ONLY the two ``client.get`` egresses go async; the bootstrap-then-fetch
     order, the browser UA + Referer HEADERS, follow_redirects, timeout, and the best-effort bootstrap
@@ -129,38 +116,13 @@ def _looks_like_video_ref(s: str) -> Optional[str]:
     return None
 
 
-def _bvid_to_aid(bvid: str) -> Optional[int]:
-    """Resolve a BV-id → its numeric ``aid`` via /x/web-interface/view (the reply
-    endpoint keys on aid, not BV-id). 24h-cached: a BV→aid mapping is permanent.
-    None on any failure / non-zero API code."""
-    key = cache.make_key("bilibili", "bvid_aid", bvid)
-    cached = cache.get(key)
-    if cached is not None:
-        return cached or None  # cached 0/None memo means "could not resolve"
-    try:
-        resp = _bili_request(VIEW_API, {"bvid": bvid})
-        resp.raise_for_status()
-        data = resp.json()
-    except Exception as exc:  # noqa: BLE001
-        logger.debug("bilibili bvid→aid view fetch failed for %s: %s", bvid, exc)
-        return None
-    if data.get("code") != 0:
-        logger.debug("bilibili view code %s for %s: %s", data.get("code"), bvid, data.get("message"))
-        return None
-    aid = (data.get("data") or {}).get("aid")
-    if isinstance(aid, int) and aid > 0:
-        cache.set(key, aid, ttl=86400)
-        return aid
-    return None
-
-
 async def _abvid_to_aid(bvid: str) -> Optional[int]:
-    """Async twin of ``_bvid_to_aid``: byte-faithful mirror (SAME cache key + 24h ttl, the ``code != 0``
+    """Async replacement of the deleted sync ``_bvid_to_aid`` (11-04, S9; this is the only one now): byte-faithful mirror (SAME cache key + 24h ttl, the ``code != 0``
     guard, the ``aid > 0`` check, the failure -> None contract). The disk cache get/set go OFF the loop
     (``anyio.to_thread.run_sync``); the egress swaps to ``_abili_request``; ``resp.json()`` /
     ``raise_for_status`` are pure CPU on an already-read Response, so they stay on the loop."""
     key = cache.make_key("bilibili", "bvid_aid", bvid)
-    cached = await anyio.to_thread.run_sync(cache.get, key)
+    cached = await cache.aget_once(key)
     if cached is not None:
         return cached or None  # cached 0/None memo means "could not resolve"
     try:
@@ -175,40 +137,9 @@ async def _abvid_to_aid(bvid: str) -> Optional[int]:
         return None
     aid = (data.get("data") or {}).get("aid")
     if isinstance(aid, int) and aid > 0:
-        await anyio.to_thread.run_sync(functools.partial(cache.set, key, aid, ttl=86400))
+        await anyio.to_thread.run_sync(functools.partial(cache.set, key, aid, ttl=86400), limiter=portal.IO_LANE)
         return aid
     return None
-
-
-def _fetch_comments(aid: int, limit: int = _MAX_COMMENTS) -> list[dict]:
-    """Pull up to ``limit`` (capped at _MAX_COMMENTS) top comments for a video via the
-    LEGACY reply endpoint (sort=2 = by likes). Returns the raw reply dicts
-    (content.message / like / member.uname / ctime / rpid). Empty list on any failure /
-    non-zero code / comments disabled. 6h-cached (like counts drift but slowly)."""
-    cap = max(1, min(limit, _MAX_COMMENTS))
-    key = cache.make_key("bilibili", "comments", str(aid), cap)
-    cached = cache.get(key)
-    if cached is not None:
-        return cached  # may be [] — a known "no comments / disabled" memo
-    try:
-        resp = _bili_request(REPLY_API, {"type": 1, "oid": aid, "sort": 2})
-        resp.raise_for_status()
-        data = resp.json()
-    except Exception as exc:  # noqa: BLE001
-        logger.debug("bilibili comment fetch failed for aid %s: %s", aid, exc)
-        return []
-    if data.get("code") != 0:
-        # code 12022 = comments closed; -404 = not found; etc. Treat as "no comments".
-        logger.debug("bilibili reply code %s for aid %s: %s",
-                     data.get("code"), aid, data.get("message"))
-        return []
-    replies = (data.get("data") or {}).get("replies") or []
-    if not isinstance(replies, list):
-        replies = []
-    # The endpoint already returns highest-liked first (sort=2); just take the cap.
-    ranked = [r for r in replies if isinstance(r, dict)][:cap]
-    cache.set(key, ranked, ttl=6 * 3600)
-    return ranked
 
 
 async def _afetch_comments(aid: int, limit: int = _MAX_COMMENTS) -> list[dict]:
@@ -217,7 +148,7 @@ async def _afetch_comments(aid: int, limit: int = _MAX_COMMENTS) -> list[dict]:
     memo). The disk cache get/set go OFF the loop; the legacy reply egress swaps to ``_abili_request``."""
     cap = max(1, min(limit, _MAX_COMMENTS))
     key = cache.make_key("bilibili", "comments", str(aid), cap)
-    cached = await anyio.to_thread.run_sync(cache.get, key)
+    cached = await cache.aget_once(key)
     if cached is not None:
         return cached  # may be [] — a known "no comments / disabled" memo
     try:
@@ -237,7 +168,7 @@ async def _afetch_comments(aid: int, limit: int = _MAX_COMMENTS) -> list[dict]:
         replies = []
     # The endpoint already returns highest-liked first (sort=2); just take the cap.
     ranked = [r for r in replies if isinstance(r, dict)][:cap]
-    await anyio.to_thread.run_sync(functools.partial(cache.set, key, ranked, ttl=6 * 3600))
+    await anyio.to_thread.run_sync(functools.partial(cache.set, key, ranked, ttl=6 * 3600), limiter=portal.IO_LANE)
     return ranked
 
 
@@ -262,7 +193,7 @@ def _comment_to_document(reply: dict, bvid: str, aid: int, video_url: str) -> Do
         source_id=f"{bvid}:comment:{rpid}" if rpid else f"{bvid}:comment",
         url=video_url,  # a comment has no standalone URL; point at the video
         title=f"评论 by {author or '匿名'} on {bvid}",
-        content=message or "(空评论)",
+        content=message or "",
         author=author,
         date=date,
         signals=mk_signal("likes", reply.get("like"),
@@ -289,20 +220,8 @@ class BilibiliAdapter(BaseScrapeAdapter):
     # Bilibili returns server order (order=totalrank); keep it verbatim.
     rank = False
 
-    # --------------------------------------------------------------------- search
-    def search(self, query: str, limit: int = 10) -> list[Document]:
-        """Routing convenience (arXiv id_list / YouTube precedent): if the query is
-        itself a single bilibili video URL or bare BV-id, return that video's TOP
-        COMMENTS (by likes) as separate docs. A multi-word / non-BV query never
-        matches, so ordinary keyword video search (and broad fan-out) is byte-identical
-        to the base template-method path."""
-        bvid = _looks_like_video_ref(query)
-        if bvid:
-            return self._comments_search(bvid, limit)
-        return super().search(query, limit)
-
     async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async twin of ``search`` -> AsyncSearchCapable. SAME routing: a bare BV-id / bilibili
+        """Native-async replacement of the deleted sync ``search`` (11-04, S9; this is the only one now) -> AsyncSearchCapable. SAME routing: a bare BV-id / bilibili
         video URL query returns that video's top comments as docs (async ``_acomments_search``); any other
         query goes the base async template path (``_asearch_via``: cache round-trip OFF the loop with the
         SAME cache key as ``search``, opt-in rank on the loop). Egress via ``_araw_fetch``; mapping via the
@@ -310,28 +229,10 @@ class BilibiliAdapter(BaseScrapeAdapter):
         bvid = _looks_like_video_ref(query)
         if bvid:
             return await self._acomments_search(bvid, limit)
-        return await self._asearch_via(
-            query, limit,
-            afetch=lambda: self._araw_fetch(query, limit),
-            abuild=lambda raw: self._to_documents(raw, query, limit))
-
-    def _comments_search(self, bvid: str, limit: int) -> list[Document]:
-        """Return up to ``limit`` top comments (by likes) for one video, each as a doc."""
-        aid = _bvid_to_aid(bvid)
-        if not aid:
-            return []
-        video_url = f"https://www.bilibili.com/video/{bvid}"
-        replies = _fetch_comments(aid, limit=min(max(limit, 1), _MAX_COMMENTS))
-        docs: list[Document] = []
-        for r in replies[:limit]:
-            try:
-                docs.append(_comment_to_document(r, bvid, aid, video_url))
-            except Exception as exc:  # noqa: BLE001
-                logger.debug("Skipping bilibili comment: %s", exc)
-        return docs
+        return await self._asearch_via(query, limit)
 
     async def _acomments_search(self, bvid: str, limit: int) -> list[Document]:
-        """Async twin of ``_comments_search``: resolve the aid (async ``_abvid_to_aid``) then fetch the top
+        """Async replacement of the deleted sync ``_comments_search`` (11-04, S9; this is the only one now): resolve the aid (async ``_abvid_to_aid``) then fetch the top
         comments (async ``_afetch_comments``, off-loop cache); the ``min(max(limit, 1), _MAX_COMMENTS)``
         cap, the ``replies[:limit]`` slice, and the per-comment ``_comment_to_document`` map (pure CPU, on
         the loop) are byte-identical to sync."""
@@ -348,39 +249,8 @@ class BilibiliAdapter(BaseScrapeAdapter):
                 logger.debug("Skipping bilibili comment: %s", exc)
         return docs
 
-    # ------------------------------------------------------------------ hooks
-    def _raw_fetch(self, query: str, limit: int) -> Optional[list]:
-        """Anti-bot search call → the result list (None on failure / API error).
-
-        Verbatim port of the old search() fetch block: the buvid-cookie-bootstrapping
-        ``_bili_request``, the raise_for_status, and the ``data.code != 0`` guard.
-        Returns the (possibly empty) result list on success so the base caches it,
-        or None on any failure / non-zero code so the base returns [] without caching."""
-        try:
-            resp = _bili_request(
-                SEARCH_API,
-                {
-                    "search_type": "video",
-                    "keyword": query,
-                    "page": 1,
-                    "page_size": min(limit, 42),
-                    "order": "totalrank",  # relevance + popularity hybrid
-                },
-            )
-            resp.raise_for_status()
-            data = resp.json()
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("Bilibili search failed: %s", exc)
-            return None
-
-        if data.get("code") != 0:
-            logger.warning("Bilibili API error: %s", data.get("message"))
-            return None
-
-        return (data.get("data") or {}).get("result") or []
-
     async def _araw_fetch(self, query: str, limit: int) -> Optional[list]:
-        """Async twin of ``_raw_fetch``: byte-faithful mirror of the anti-bot search call — the SAME params
+        """Async replacement of the deleted sync ``_raw_fetch`` (11-04, S9; this is the only one now): byte-faithful mirror of the anti-bot search call — the SAME params
         (``search_type``/``keyword``/``page``/``page_size=min(limit, 42)``/``order=totalrank``), the
         raise_for_status, the ``code != 0`` guard, and the failure/error -> None contract (so the base
         caches a success list but not a miss). ONLY the ``_bili_request`` egress swaps to ``_abili_request``."""
@@ -422,7 +292,7 @@ class BilibiliAdapter(BaseScrapeAdapter):
         return docs
 
     # --------------------------------------------------------------- fetch_url
-    def fetch_url(self, url: str) -> Optional[Document]:
+    async def afetch_url(self, url: str) -> Optional[Document]:
         import re
         host = urlparse(url).hostname or ""
         if "bilibili.com" not in host:
@@ -432,7 +302,7 @@ class BilibiliAdapter(BaseScrapeAdapter):
             return None
         bvid = m.group(1)
         try:
-            resp = _bili_request("https://api.bilibili.com/x/web-interface/view", {"bvid": bvid})
+            resp = await _abili_request("https://api.bilibili.com/x/web-interface/view", {"bvid": bvid})
             resp.raise_for_status()
             data = resp.json()
         except Exception as exc:  # noqa: BLE001
@@ -452,7 +322,7 @@ class BilibiliAdapter(BaseScrapeAdapter):
         media = [cover] if isinstance(cover, str) and cover.startswith("http") else []
         hint = _transcribe_hint()
         video_url = f"https://www.bilibili.com/video/{bvid}"
-        content = (d.get("desc") or "(no description)") + hint
+        content = (d.get("desc") + hint) if d.get("desc") else ""   # the handles stamp still says it is transcribable
         aid = d.get("aid")
 
         metadata = {"bvid": bvid, "aid": aid, "duration": d.get("duration"),
@@ -464,7 +334,7 @@ class BilibiliAdapter(BaseScrapeAdapter):
         # inline so the drill-down doc carries it too). Best-effort: a comment failure
         # never sinks the video doc.
         try:
-            replies = _fetch_comments(aid, limit=_MAX_COMMENTS) if isinstance(aid, int) and aid > 0 else []
+            replies = await _afetch_comments(aid, limit=_MAX_COMMENTS) if isinstance(aid, int) and aid > 0 else []
         except Exception:  # noqa: BLE001
             replies = []
         if replies:
@@ -505,9 +375,9 @@ class BilibiliAdapter(BaseScrapeAdapter):
         )
 
     # ------------------------------------------------------------- health_check
-    def health_check(self) -> tuple[bool, str]:
+    async def ahealth_check(self) -> tuple[bool, str]:
         try:
-            resp = _bili_request(
+            resp = await _abili_request(
                 SEARCH_API,
                 {"search_type": "video", "keyword": "test", "page": 1, "page_size": 1},
                 timeout=10,
@@ -560,7 +430,7 @@ class BilibiliAdapter(BaseScrapeAdapter):
             source_id=bvid or str(v.get("aid", "")),
             url=url,
             title=title,
-            content=v.get("description") or "(no description)",
+            content=v.get("description") or "",
             author=v.get("author"),
             date=date,
             signals={   # play = views; video_review = the danmaku/comment count on a search hit

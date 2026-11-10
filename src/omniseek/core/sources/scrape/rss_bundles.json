@@ -182,11 +182,10 @@
   },
   {
     "name": "hk_career_research",
-    "description": "Hong Kong AI / career / 媒体信号：SCMP News + HKFP + ASTRI (R&D 院所) + info.gov.hk (SenseTime 经 scrape_js_sites). HK PhD 出海+本地路径专用",
+    "description": "Hong Kong AI / career / 媒体信号：SCMP News + HKFP + info.gov.hk (SenseTime 经 scrape_js_sites). HK PhD 出海+本地路径专用",
     "feeds": [
       "https://www.scmp.com/rss/91/feed",
       "https://hongkongfp.com/feed/",
-      "https://www.astri.org/tag/press-release/feed/",
       "https://www.info.gov.hk/gia/rss/general_en.xml",
       "https://www.news.gov.hk/en/common/html/topstories.rss.xml"
     ],
@@ -265,7 +264,7 @@
       "https://eugeneyan.com/rss/",
       "https://www.interconnects.ai/feed",
       "https://simonwillison.net/atom/everything/",
-      "https://theprofessorisin.com/feed/",
+      "https://feeds.feedburner.com/TheProfessorIsIn",
       "https://www.dwarkesh.com/feed",
       "https://www.astralcodexten.com/feed",
       "https://statmodeling.stat.columbia.edu/feed/",
@@ -276,10 +275,18 @@
       "https://tridao.me/feed.xml",
       "https://www.argmin.net/feed",
       "https://timdettmers.com/feed/",
-      "https://lemire.me/blog/feed/",
       "https://calnewport.com/blog/feed/",
       "https://blog.ezyang.com/feed.xml",
       "https://newsletter.pragmaticengineer.com/feed"
+    ],
+    "cache_ttl": 1800,
+    "url_pattern": null
+  },
+  {
+    "name": "lemire_blog",
+    "description": "Daniel Lemire's blog: software performance, SIMD, parsing and data engineering. Split out of substack_matrix 2026-11-07: lemire.me answers most of OmniSeek's exit nodes with SiteGround's IP-reputation challenge (HTTP 202 to /.well-known/sgcaptcha/), so it stands as its own row (parked through the curator's reversible retire while that holds) and the bundle no longer degrades for it",
+    "feeds": [
+      "https://lemire.me/blog/feed/"
     ],
     "cache_ttl": 1800,
     "url_pattern": null

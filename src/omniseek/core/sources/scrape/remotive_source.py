@@ -21,18 +21,14 @@ Recon trail: brain note eye-free-api-probe-round2-2026-06-21 (live-probed keyles
 
 from __future__ import annotations
 
-import html
-import re
 from datetime import datetime
 from typing import Any, Optional
 
 from omniseek.core import http
-from omniseek.core.normalize import Document, jsonsafe
+from omniseek.core.normalize import Document, html_fragment_text, jsonsafe, to_utc
 from omniseek.core.sources.scrape._base import BaseScrapeAdapter
 
 API_URL = "https://remotive.com/api/remote-jobs"
-_TAG_RE = re.compile(r"<[^>]+>")
-_WS_RE = re.compile(r"\s+")
 _DESC_CAP = 4000
 
 
@@ -50,27 +46,13 @@ class RemotiveAdapter(BaseScrapeAdapter):
     explicit_only = ("remotive: a remote-job drill, never broad-fan-out fodder (the public API "
                      "bans clients over ~2 req/min and expects only a few calls/day)")
 
-    def _raw_fetch(self, query: str, limit: int) -> Optional[Any]:
-        params = {"limit": max(1, min(int(limit), 50))}
-        if query and query.strip():
-            params["search"] = query.strip()
-        return http.get_json(API_URL, params=params, timeout=20)
-
     async def _araw_fetch(self, query: str, limit: int) -> Optional[Any]:
-        """Async twin of _raw_fetch: byte-faithful mirror (same URL, params, timeout, control
+        """Async replacement of the deleted sync ``_raw_fetch`` (11-04, S9; this is the only one now): byte-faithful mirror (same URL, params, timeout, control
         flow); only the shared-http egress swaps to its async twin (get_json -> aget_json)."""
         params = {"limit": max(1, min(int(limit), 50))}
         if query and query.strip():
             params["search"] = query.strip()
         return await http.aget_json(API_URL, params=params, timeout=20)
-
-    async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async twin of search -> AsyncSearchCapable. Shares the base async cache round-trip;
-        egress via _araw_fetch; mapping via the SAME pure-CPU _to_documents (byte-identical to search)."""
-        return await self._asearch_via(
-            query, limit,
-            afetch=lambda: self._araw_fetch(query, limit),
-            abuild=lambda raw: self._to_documents(raw, query, limit))
 
     def _to_documents(self, raw: Any, query: str, limit: int) -> list[Document]:
         if not isinstance(raw, dict):
@@ -120,20 +102,13 @@ class RemotiveAdapter(BaseScrapeAdapter):
         Pure, total."""
         if not isinstance(s, str) or not s:
             return ""
-        text = html.unescape(_TAG_RE.sub(" ", s))
-        return _WS_RE.sub(" ", text).strip()[:_DESC_CAP]
+        return html_fragment_text(s)[:_DESC_CAP]
 
     @staticmethod
     def _parse_date(raw: Any) -> Optional[datetime]:
         """Remotive publication_date is 'YYYY-MM-DDTHH:MM:SS'. None on anything else."""
-        if not isinstance(raw, str) or not raw.strip():
+        if not isinstance(raw, str):
             return None
-        try:
-            return datetime.fromisoformat(raw.strip().replace("Z", "+00:00"))
-        except ValueError:
-            try:
-                return datetime.strptime(raw.strip()[:19], "%Y-%m-%dT%H:%M:%S")
-            except ValueError:
-                return None
+        return to_utc(raw) or to_utc(raw.strip()[:19])
 
 # Registration is automatic via BaseScrapeAdapter.__init_subclass__ (no module-tail ceremony).

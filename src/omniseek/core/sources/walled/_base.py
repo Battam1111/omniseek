@@ -53,7 +53,10 @@ from __future__ import annotations
 import logging
 from typing import Any, Optional
 
-from omniseek.core import cache, diag, relevance
+import anyio
+
+from omniseek.core import cache, diag, portal, relevance
+from omniseek.core.sources._base import SourceBase
 from omniseek.core.normalize import Document, is_blocked
 from omniseek.core.sources.walled import _human
 from omniseek.core.sources.walled._cdp import DEFAULT_CDP_URL, cdp_call, cdp_health
@@ -80,7 +83,7 @@ _AUTH_RELOGIN_COOLDOWN_S = 600      # 10 min between relogin attempts per source
 _AUTH_ALERT_COOLDOWN_S = 6 * 3600   # 6h between "needs VNC" alerts per source
 
 
-class BaseCDPAdapter:
+class BaseCDPAdapter(SourceBase):
     """Template-method base for regular shared-Chrome CDP adapters.
 
     Class attributes:
@@ -100,9 +103,9 @@ class BaseCDPAdapter:
         rank: bool               — re-rank built docs with the shared BM25 scorer (default
                                    False: keep the page's DOM/result order, byte-identical
                                    to the hand-written sources)
-        url_host: str            — substring gate for fetch_url ("zhihu.com"); if a URL's
-                                   host doesn't contain it, fetch_url returns None. Empty
-                                   ⇒ fetch_url is disabled (returns None) unless overridden.
+        url_host: str            — substring gate for afetch_url ("zhihu.com"); if a URL's
+                                   host doesn't contain it, afetch_url returns None. Empty
+                                   ⇒ afetch_url is disabled (returns None) unless overridden.
         kind / domains / regions — optional routing facets.
 
     Hooks:
@@ -115,8 +118,8 @@ class BaseCDPAdapter:
         _to_documents(raw, query, limit) -> list[Document]
             Parse the raw payload into docs (slice to ``limit`` here). Must override.
         _fetch_flow(page) -> Any  /  _to_document(raw, url) -> Optional[Document]
-            Optional fetch_url hooks (mirror the search pair). If ``_to_document`` is
-            left as the default no-op, fetch_url returns None.
+            Optional afetch_url hooks (mirror the search pair). If ``_to_document`` is
+            left as the default no-op, afetch_url returns None.
     """
 
     # ── identity / contract ────────────────────────────────────────────────
@@ -180,12 +183,12 @@ class BaseCDPAdapter:
         )
 
     def _fetch_flow(self, page) -> Any:
-        """Interact with a single-URL page for fetch_url. Default: full HTML.
+        """Interact with a single-URL page for afetch_url. Default: full HTML.
         Override to also surface images (return ``page.content(), images_from_page(page)``)."""
         return page.content()
 
     def _to_document(self, raw: Any, url: str) -> Optional[Document]:
-        """Single-page payload → one Document. Default no-op (fetch_url disabled).
+        """Single-page payload → one Document. Default no-op (afetch_url disabled).
         Override (with ``url_host`` set) to claim this source's URLs."""
         return None
 
@@ -355,7 +358,7 @@ class BaseCDPAdapter:
         scored.sort(key=lambda x: x[0], reverse=True)
         return [d for _, d in scored]
 
-    def fetch_url(self, url: str) -> Optional[Document]:
+    async def afetch_url(self, url: str) -> Optional[Document]:
         """Claim ``url`` if its host contains ``url_host``, then drive the page via
         ``_fetch_flow`` and build a doc via ``_to_document``. Disabled (returns None)
         unless both ``url_host`` is set and ``_to_document`` is overridden."""
@@ -366,7 +369,8 @@ class BaseCDPAdapter:
         if self.url_host not in host:
             return None
         try:
-            raw = self._run(self._fetch_flow, url)
+            # the CDP page drive blocks (cdp_call): a worker thread of the IO lane
+            raw = await anyio.to_thread.run_sync(self._run, self._fetch_flow, url, limiter=portal.IO_LANE)
         except Exception as exc:  # noqa: BLE001
             logger.warning("%s fetch_url failed: %s", self.name, exc)
             return None

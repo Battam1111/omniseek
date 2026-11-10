@@ -130,20 +130,18 @@ class DBLPAuthorAdapter(BaseScrapeAdapter):
     # because this adapter runs after it and knows both URL kinds it can answer.
     fetch_url_hosts = tuple(sorted(_dblp.DBLP_HOSTS))
 
+    # Source spec (omniseek.core.filters): a person lookup by name, no filters.
+    filters: dict = {}
+    coverage = {"since": None, "until": None, "gaps": [], "note": "computer-science authors in DBLP"}
+    license = "dblp data is CC0 1.0"
+    samples = [{"query": "Yoshua Bengio"}]
+
     @staticmethod
     def _limit(limit: int) -> int:
         return max(1, min(int(limit), 30))
 
-    def _raw_fetch(self, query: str, limit: int) -> Optional[Any]:
-        """The binding rows (a list), [] without a request when the name has no usable word, None on
-        a failed request or a non-JSON answer. Every name word is kept (no stopwords for names)."""
-        words = _dblp.query_words(query, drop_stopwords=False)
-        if not words:
-            return []
-        return _dblp.sparql_select(author_search_query(words, self._limit(limit)), timeout=15)
-
     async def _araw_fetch(self, query: str, limit: int) -> Optional[Any]:
-        """Async twin of _raw_fetch: same words, same query, same reader; only the egress is async."""
+        """Async replacement of the deleted sync ``_raw_fetch`` (11-04, S9; this is the only one now): same words, same query, same reader; only the egress is async."""
         words = _dblp.query_words(query, drop_stopwords=False)
         if not words:
             return []
@@ -160,14 +158,6 @@ class DBLPAuthorAdapter(BaseScrapeAdapter):
             if len(docs) >= limit:
                 break
         return docs
-
-    async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async twin of search -> AsyncSearchCapable. Shares the base async cache
-        round-trip; egress via _araw_fetch; mapping via the SAME pure-CPU _to_documents."""
-        return await self._asearch_via(
-            query, limit,
-            afetch=lambda: self._araw_fetch(query, limit),
-            abuild=lambda raw: self._to_documents(raw, query, limit))
 
     def _binding_to_doc(self, row: Any) -> Optional[Document]:
         """One SPARQL binding row -> doc on the canonical PID URL. Pure, total: a row without a
@@ -238,7 +228,7 @@ class DBLPAuthorAdapter(BaseScrapeAdapter):
         return affils, awards
 
     # --------------------------------------------------------------- fetch_url
-    def fetch_url(self, url: str) -> Optional[Document]:
+    async def afetch_url(self, url: str) -> Optional[Document]:
         """A dblp person URL (dblp.org/pid/<pid>[.html|.xml|.bib], mirror hosts too) answered by one
         gated SPARQL request about that person; dblp.org itself is never fetched. Any other URL, a
         failed request, or a pid with no primary name: None."""
@@ -251,7 +241,7 @@ class DBLPAuthorAdapter(BaseScrapeAdapter):
                                "serves a bot check; OmniSeek answers only dblp record (/rec/) and person "
                                "(/pid/) URLs, from sparql.dblp.org")
             return None
-        rows = _dblp.sparql_select(person_query(uri), timeout=15)
+        rows = await _dblp.asparql_select(person_query(uri), timeout=15)
         if not rows:
             return None
         return self._profile_to_doc(uri, rows)
@@ -330,9 +320,9 @@ class DBLPAuthorAdapter(BaseScrapeAdapter):
             },
         )
 
-    def health_check(self) -> tuple[Optional[bool], str]:
+    async def ahealth_check(self) -> tuple[Optional[bool], str]:
         # One gated SPARQL request for a known person. The Anubis page (or any non-JSON body) and an
         # empty answer are failures with their own reasons; a busy gate is None (not verified).
-        return _dblp.sparql_probe(HEALTH_QUERY, f"person pid {HEALTH_PID}", timeout=15)
+        return await _dblp.asparql_probe(HEALTH_QUERY, f"person pid {HEALTH_PID}", timeout=15)
 
 # Registration is automatic via BaseScrapeAdapter.__init_subclass__ (no module-tail ceremony).

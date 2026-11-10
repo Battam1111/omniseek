@@ -33,14 +33,14 @@ from __future__ import annotations
 import functools
 import logging
 import re
-from datetime import datetime, timezone
 from typing import Optional
 from urllib.parse import urlparse
 
 import anyio
 
-from omniseek.core import cache, diag, http
-from omniseek.core.normalize import Document
+from omniseek.core import cache, diag, http, portal
+from omniseek.core.normalize import Document, to_utc
+from omniseek.core.sources._base import SourceBase
 
 logger = logging.getLogger(__name__)
 
@@ -98,40 +98,6 @@ def _js_string_after(text: str, marker: str) -> Optional[str]:
         return None
 
 
-def _handshake_fetch() -> Optional[dict]:
-    """Two-step Airtable shared-view handshake -> the raw readSharedViewData dict.
-
-    None on any failure (the failure -> empty, do-not-cache contract). Never raises.
-    """
-    html = http.get_text(EMBED_URL, timeout=TIMEOUT)
-    if not html:
-        logger.info("layoffs_tracker: embed page fetch failed")
-        return None
-    path = _js_string_after(html, 'urlWithParams: "')
-    app_m = re.search(r'"applicationId":"(app[A-Za-z0-9]+)"', html)
-    pll_m = re.search(r'"pageLoadId":"([^"]+)"', html)
-    if not (path and app_m and pll_m):
-        logger.warning("layoffs_tracker: handshake tokens not found in embed page")
-        diag.note("layoffs_tracker.handshake", url=EMBED_URL,
-                  body="missing urlWithParams / applicationId / pageLoadId")
-        return None
-    headers = {
-        "x-airtable-application-id": app_m.group(1),
-        "x-airtable-page-load-id": pll_m.group(1),
-        "x-requested-with": "XMLHttpRequest",
-        "x-time-zone": "America/Toronto",
-        "x-user-locale": "en",
-        "Accept": "application/json",
-        "Referer": EMBED_URL,
-    }
-    raw = http.get_json(API_ORIGIN + path, timeout=TIMEOUT, headers=headers)
-    if not isinstance(raw, dict) or raw.get("msg") != "SUCCESS":
-        logger.warning("layoffs_tracker: readSharedViewData not SUCCESS (%s)",
-                       (raw or {}).get("msg") if isinstance(raw, dict) else type(raw))
-        return None
-    return raw
-
-
 async def _ahandshake_fetch() -> Optional[dict]:
     """Async twin of _handshake_fetch: SAME 2-step Airtable handshake (same EMBED_URL, same token regex,
     same headers, same SUCCESS guard, same None-on-failure contract); only the two shared-http egresses
@@ -169,7 +135,7 @@ async def _ahandshake_fetch() -> Optional[dict]:
 def _parse(raw: dict) -> list[dict]:
     """Raw readSharedViewData dict -> list of flat, label-resolved layoff dicts.
 
-    Pure (no I/O): the smoke golden fixture feeds a real captured payload straight
+    Pure (no I/O): a real captured payload can be fed straight
     in. Select / multiSelect cells arrive as choice ids (sel...); we resolve them to
     their human labels via each column's typeOptions.choices map. Rows missing a
     company are dropped.
@@ -221,16 +187,7 @@ def _parse(raw: dict) -> list[dict]:
     return out
 
 
-def _parse_date(s) -> Optional[datetime]:
-    if not isinstance(s, str) or not s:
-        return None
-    try:
-        return datetime.fromisoformat(s.replace("Z", "+00:00"))
-    except ValueError:
-        return None
-
-
-class LayoffsTrackerAdapter:
+class LayoffsTrackerAdapter(SourceBase):
     name = "layoffs_tracker"
     needs_credentials = False
     kind = "stream"
@@ -248,38 +205,11 @@ class LayoffsTrackerAdapter:
         "MONITOR: 新裁员事件=watchtower 新条目. Data by layoffs.fyi (attribution required)"
     )
 
-    def _rows(self) -> list[dict]:
-        key = cache.make_key(self.name, "dataset", "v1")
-        cached = cache.get(key)
-        if cached is not None:
-            return cached
-        raw = _handshake_fetch()
-        if not raw:
-            return []
-        rows = _parse(raw)
-        if rows:
-            cache.set(key, rows, ttl=CACHE_TTL)
-        return rows
-
-    def search(self, query: str, limit: int = 10) -> list[Document]:
-        rows = self._rows()
-        if not rows:
-            return []
-        terms = [t for t in (query or "").lower().split() if t]
-        if terms:
-            def hay(r: dict) -> str:
-                return " ".join(str(x) for x in (
-                    r.get("company"), r.get("industry"), r.get("country"),
-                    r.get("stage"), " ".join(r.get("locations") or []))).lower()
-            rows = [r for r in rows if all(t in hay(r) for t in terms)]
-        rows.sort(key=lambda r: r.get("date") or "", reverse=True)
-        return [self._to_doc(r) for r in rows[:limit]]
-
     async def _arows(self) -> list[dict]:
         """Async twin of _rows: off-loop cache get/set (SAME 'dataset','v1' key so async + sync share the
         6h dataset cache), await _ahandshake_fetch (the 2-step handshake), pure-CPU _parse on the loop."""
         key = cache.make_key(self.name, "dataset", "v1")
-        cached = await anyio.to_thread.run_sync(cache.get, key)  # disk read OFF loop
+        cached = await cache.aget_once(key)  # disk read OFF loop
         if cached is not None:
             return cached
         raw = await _ahandshake_fetch()
@@ -287,11 +217,11 @@ class LayoffsTrackerAdapter:
             return []
         rows = _parse(raw)  # pure CPU, on loop
         if rows:
-            await anyio.to_thread.run_sync(functools.partial(cache.set, key, rows, ttl=CACHE_TTL))
+            await anyio.to_thread.run_sync(functools.partial(cache.set, key, rows, ttl=CACHE_TTL), limiter=portal.IO_LANE)
         return rows
 
     async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async twin of search -> AsyncSearchCapable (the ~2.8MB handshake fetch costs a
+        """Native-async replacement of the deleted sync ``search`` (11-04, S9; this is the only one now) -> AsyncSearchCapable (the ~2.8MB handshake fetch costs a
         COROUTINE, not a held pool thread). Awaits _arows (handshake + off-loop cache), then the SAME
         pure-CPU term filter + date sort + _to_doc map -> byte-identical to search."""
         rows = await self._arows()
@@ -307,23 +237,25 @@ class LayoffsTrackerAdapter:
         rows.sort(key=lambda r: r.get("date") or "", reverse=True)
         return [self._to_doc(r) for r in rows[:limit]]
 
-    def fetch_url(self, url: str) -> Optional[Document]:
+    async def afetch_url(self, url: str) -> Optional[Document]:
         """Claim by the news-source URL cached in the ledger (no by-id endpoint on the
         shared view). Cheap scan of already-cached rows; None if not ours / not cached."""
         host = (urlparse(url).hostname or "").lower()
         if "layoffs.fyi" not in host and "airtable.com" not in host:
             return None
-        for r in self._rows():
+        for r in await self._arows():
             if r.get("source") == url:
                 return self._to_doc(r)
         return None
 
-    def health_check(self) -> tuple[Optional[bool], str]:
+    async def ahealth_check(self) -> tuple[Optional[bool], str]:
         # SAME key _rows reads: while the dataset is cached, _rows answers from the cache and asks
         # Airtable nothing, so this check verifies nothing (None).
-        if cache.get(cache.make_key(self.name, "dataset", "v1")) is not None:
+        ck = cache.make_key(self.name, "dataset", "v1")
+        hit = await anyio.to_thread.run_sync(cache.get, ck, limiter=portal.IO_LANE)  # disk read OFF loop
+        if hit is not None:
             return None, "not probed (the dataset is still cached; Airtable is asked again when it expires)"
-        n = len(self._rows())
+        n = len(await self._arows())
         if n:
             return True, f"OK ({n} layoff events)"
         return False, "0 rows (handshake failed / view moved / Airtable down)"
@@ -335,7 +267,7 @@ class LayoffsTrackerAdapter:
         pct = r.get("pct")
         country = r.get("country")
         industry = r.get("industry")
-        date = _parse_date(r.get("date"))
+        date = to_utc(r.get("date"))
         pct_str = f"{round(pct * 100)}%" if isinstance(pct, (int, float)) else None
 
         head_bits = []

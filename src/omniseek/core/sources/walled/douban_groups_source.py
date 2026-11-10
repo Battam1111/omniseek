@@ -31,11 +31,11 @@ from __future__ import annotations
 import json
 import logging
 import re
-from datetime import datetime
 from typing import Optional
 
 from omniseek.core import cache, diag
-from omniseek.core.normalize import Document, jsonsafe, mk_signal
+from omniseek.core.sources._base import SourceBase
+from omniseek.core.normalize import Document, jsonsafe, mk_signal, to_utc
 from omniseek.core.sources.walled._base import EMPTY_TTL
 from omniseek.core.sources.walled._cdp import cdp_call, cdp_health
 
@@ -68,16 +68,7 @@ def _int_before(text: str, marker: str) -> Optional[int]:
     return int(m.group(1).replace(",", "")) if m else None
 
 
-def _parse_dt(s) -> Optional[datetime]:
-    if not s:
-        return None
-    try:
-        return datetime.strptime(str(s), "%Y-%m-%d %H:%M:%S")
-    except (ValueError, TypeError):
-        return None
-
-
-class DoubanGroupsAdapter:
+class DoubanGroupsAdapter(SourceBase):
     name = "douban_groups"
     needs_credentials = False  # login happens once via VNC on the 9222 Chrome; we reuse the session
     explicit_only = "CDP-login rexxar JSON via shared 9222 Chrome (precious logged-in douban session)"
@@ -95,7 +86,7 @@ class DoubanGroupsAdapter:
         if not q:
             return []
         key = cache.make_key("douban_groups", "search", q, limit)
-        cached = cache.get(key)
+        cached = cache.get_once(key)
         if cached is not None:
             return [Document.model_validate(d) for d in cached]
 
@@ -158,7 +149,7 @@ class DoubanGroupsAdapter:
             source_id=f"group:{g.get('id') or url}",
             url=url,
             title=f"[小组] {name}",
-            content=(g.get("desc_abstract") or "").strip() or "(no description)",
+            content=(g.get("desc_abstract") or "").strip(),
             signals=mk_signal("members", g.get("member_count"), kind="engagement", by="douban/member_count"),
             tags=["豆瓣小组", "group"],
             metadata={"member_count": g.get("member_count"), "topic_count": g.get("topic_count"),
@@ -182,16 +173,16 @@ class DoubanGroupsAdapter:
             source_id=f"topic:{topic_id or url}",
             url=url,
             title=title,
-            content=(t.get("abstract") or "").strip() or "(click URL for the full thread)",
+            content=(t.get("abstract") or "").strip(),
             author=(t.get("owner") or {}).get("name"),
-            date=_parse_dt(t.get("create_time")),
+            date=to_utc(t.get("create_time")),
             signals=mk_signal("replies", replies, kind="engagement", by="douban/reply_count"),
             tags=["豆瓣小组", "topic"],
             metadata={"likes": _int_before(sub, "赞"), "replies": replies, "card_subtitle": sub,
                       "photos_count": t.get("photos_count"), "raw": jsonsafe(t)},
         )
 
-    def fetch_url(self, url: str) -> Optional[Document]:
+    async def afetch_url(self, url: str) -> Optional[Document]:
         return None  # search-only; the topic abstract already carries the gist
 
     def health_check(self) -> tuple[Optional[bool], str]:

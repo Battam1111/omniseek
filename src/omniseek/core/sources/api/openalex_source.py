@@ -18,17 +18,16 @@ Polite-pool: include `mailto:` in User-Agent for higher rate limit.
 
 from __future__ import annotations
 
-import functools
 import logging
 import re
 from typing import Optional
 from urllib.parse import urlparse
 
-import anyio
 
 from omniseek.core import _openalex as oa
 from omniseek.core import cache
 from omniseek.core.normalize import Document, mk_signal
+from omniseek.core.sources._base import SourceBase
 
 logger = logging.getLogger(__name__)
 
@@ -84,7 +83,7 @@ def _parse_filters(query: str) -> tuple[str, Optional[str]]:
     return search_text, ",".join(pairs)
 
 
-class OpenAlexAdapter:
+class OpenAlexAdapter(SourceBase):
     name = "openalex"
     backend = "openalex"  # shared by openalex_cn (subclass) / researcher_watch / 39 org_watch slices
     needs_credentials = False
@@ -93,51 +92,64 @@ class OpenAlexAdapter:
         "institutions + concepts ontology; open alternative to Semantic Scholar)"
     )
 
-    def search(self, query: str, limit: int = 10) -> list[Document]:
-        # Pull any allowlisted OpenAlex `key:value` filters out of the query and
-        # route them to the API's `filter=` param. No recognized filter →
-        # behaviour unchanged (plain `search=` as before).
-        search_text, filter_str = _parse_filters(query or "")
+    # Source spec (omniseek.core.filters). Every field translates into the allowlisted `key:value`
+    # tokens _parse_filters already routes to the API's filter= param, so the cache key follows.
+    filters = {
+        "publication_date": {"type": "date", "ops": ["eq", "gte", "lte", "range"], "doc_key": "date",
+                             "desc": "publication date (sent as from_publication_date / to_publication_date)"},
+        "publication_year": {"type": "int", "ops": ["eq", "any"], "doc_key": "metadata.publication_year",
+                             "desc": "publication year (sent as publication_year:, several joined with |)"},
+        "type": {"type": "keyword", "ops": ["eq", "any"], "doc_key": "metadata.type",
+                 "desc": "work type such as article, preprint, dissertation, book-chapter, dataset"},
+        "is_oa": {"type": "bool", "ops": ["eq"], "doc_key": "metadata.is_oa",
+                  "desc": "open access or not"},
+        "language": {"type": "keyword", "ops": ["eq", "any"],
+                     "desc": "ISO 639-1 language code of the work, e.g. en, zh"},
+        "institution_country": {"type": "keyword", "ops": ["eq", "any"],
+                                "desc": "ISO country code of an author institution, e.g. us, cn "
+                                        "(sent as institutions.country_code)"},
+        "institution_id": {"type": "keyword", "ops": ["eq", "any"],
+                           "desc": "OpenAlex institution id, e.g. I136199984 (sent as institutions.id)"},
+        "author_id": {"type": "keyword", "ops": ["eq", "any"],
+                      "desc": "OpenAlex author id, e.g. A5023888391 (sent as author.id)"},
+    }
+    # omniseek_search(as_of=...) pushes "publication_date <= as_of" upstream through this field: the publication date (openalex_cn inherits it).
+    as_of_field = "publication_date"
+    coverage = {"since": None, "until": None, "gaps": [],
+                "note": "the whole OpenAlex works graph (250M+ works); its oldest date is not recorded here"}
+    license = "OpenAlex data is CC0 1.0"
+    # Two years, so the sample also shows the any-of form (values joined with |).
+    samples = [{"query": "graph neural networks", "filters": {"publication_year": [2022, 2023]}},
+               {"query": "protein structure prediction", "filters": {"type": "article", "is_oa": True}}]
 
-        # CRITICAL: the resolved filter is part of the cache identity — otherwise
-        # `from_publication_date:2024-01-01 x` and `...:2020-01-01 x` (same search
-        # text) would collide. Empty filter_str keeps the key shape stable.
-        key = cache.make_key("openalex", "search", search_text, filter_str or "", limit)
-        cached = cache.get_docs(key)
-        if cached is not None:
-            return cached
+    _FILTER_TOKENS = {"publication_year": "publication_year", "type": "type", "language": "language",
+                      "institution_country": "institutions.country_code",
+                      "institution_id": "institutions.id", "author_id": "author.id"}
 
-        params: dict = {
-            "per-page": min(limit, 25),
-            "sort": "relevance_score:desc",
-        }
-        # Only send `search` when there's actual free text — a filter-only query
-        # (e.g. just `institutions.id:I... from_publication_date:...`) is valid on
-        # its own, and an empty `search=` would needlessly skew relevance ranking.
-        if search_text:
-            params["search"] = search_text
-        if filter_str:
-            params["filter"] = filter_str
-
-        try:
-            data = oa.get_json("/works", params)
-        except Exception as exc:  # noqa: BLE001 — incl. the shared circuit breaker
-            logger.warning("OpenAlex search failed: %s", exc)
-            return []
-
-        results = data.get("results") or []
-        docs: list[Document] = []
-        for work in results[:limit]:
-            try:
-                docs.append(self._work_to_document(work))
-            except Exception as exc:  # noqa: BLE001
-                logger.debug("Skipping malformed OpenAlex work: %s", exc)
-
-        cache.set_docs(key, docs, ttl=3600)
-        return docs
+    def translate_filters(self, query: str, clauses: list) -> str:
+        """Append the filters as OpenAlex `key:value` tokens (any-of joined with |); dates become
+        from_publication_date / to_publication_date."""
+        from omniseek.core.filters import Unsupported
+        toks = []
+        for c in clauses:
+            if c.field == "publication_date":
+                if c.lo:
+                    toks.append(f"from_publication_date:{c.lo.isoformat()}")
+                if c.hi:
+                    toks.append(f"to_publication_date:{c.hi.isoformat()}")
+            elif c.field == "is_oa":
+                toks.append(f"is_oa:{'true' if c.value else 'false'}")
+            elif c.field in self._FILTER_TOKENS:
+                vals = [c.value] if c.op == "eq" else list(c.value)
+                if any((" " in str(v)) or ("," in str(v)) for v in vals):
+                    raise Unsupported(c.field, "a value with a space or comma cannot be sent")
+                toks.append(f"{self._FILTER_TOKENS[c.field]}:{'|'.join(str(v) for v in vals)}")
+            else:
+                raise Unsupported(c.field)
+        return " ".join([(query or "").strip(), *toks]).strip()
 
     async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async twin of ``search`` (the OpenAlex sources go native async), so the live async
+        """Native-async replacement of the deleted sync ``search`` (11-04, S9; this is the only one now) (the OpenAlex sources go native async), so the live async
         omniseek_search path awaits it DIRECTLY instead of parking a pool thread on the ``/works`` call. It
         mirrors ``search`` step-for-step; only the BLOCKING work moves:
           • the disk cache read/write → ``anyio.to_thread.run_sync`` (get_docs / set_docs do file IO);
@@ -156,16 +168,6 @@ class OpenAlexAdapter:
         facet just does not go native async, which is fine). This auto-protects every present/future
         subclass with no per-subclass ``asearch`` needed, resolving the hazard in this one file.
         """
-        # Fire ONLY for a subclass that overrode search but did NOT define its OWN asearch: then the
-        # inherited async path would silently drop the override, so run its sync search off-loop. A
-        # subclass that DEFINES its own asearch (openalex_cn) is EXCLUDED -- it calls super().asearch on
-        # purpose to reuse the parent's native egress, and must NOT be bounced back to its sync search
-        # (that would double-apply its query transform, e.g. _pin_zh twice). The type(self).asearch
-        # check distinguishes "inherited this asearch" (guard) from "has its own asearch" (proceed).
-        if (type(self).search is not OpenAlexAdapter.search
-                and type(self).asearch is OpenAlexAdapter.asearch):
-            return await anyio.to_thread.run_sync(functools.partial(self.search, query, limit))
-
         # Pull any allowlisted OpenAlex `key:value` filters out of the query and route them to the
         # API's `filter=` param. No recognized filter → behaviour unchanged (plain `search=` as before).
         search_text, filter_str = _parse_filters(query or "")
@@ -174,40 +176,38 @@ class OpenAlexAdapter:
         # `from_publication_date:2024-01-01 x` and `...:2020-01-01 x` (same search text) would collide.
         # This is the SAME key as search() — async and sync share the cache.
         key = cache.make_key("openalex", "search", search_text, filter_str or "", limit)
-        cached = await anyio.to_thread.run_sync(cache.get_docs, key)  # disk read OFF loop
-        if cached is not None:
-            return cached
 
-        params: dict = {
-            "per-page": min(limit, 25),
-            "sort": "relevance_score:desc",
-        }
-        # Only send `search` when there's actual free text — a filter-only query is valid on its own,
-        # and an empty `search=` would needlessly skew relevance ranking.
-        if search_text:
-            params["search"] = search_text
-        if filter_str:
-            params["filter"] = filter_str
+        async def _aget() -> Optional[list[Document]]:
+            params: dict = {
+                "per-page": min(limit, 25),
+                "sort": "relevance_score:desc",
+            }
+            # Only send `search` when there's actual free text — a filter-only query is valid on its own,
+            # and an empty `search=` would needlessly skew relevance ranking.
+            if search_text:
+                params["search"] = search_text
+            if filter_str:
+                params["filter"] = filter_str
 
-        try:
-            data = await oa.aget_json("/works", params)  # native-async egress twin (same path + params)
-        except Exception as exc:  # noqa: BLE001 — incl. the shared circuit breaker
-            logger.warning("OpenAlex search failed: %s", exc)
-            return []
-
-        results = data.get("results") or []
-        docs: list[Document] = []
-        for work in results[:limit]:
             try:
-                docs.append(self._work_to_document(work))  # pure CPU parse/map — stays ON the loop
-            except Exception as exc:  # noqa: BLE001
-                logger.debug("Skipping malformed OpenAlex work: %s", exc)
+                data = await oa.aget_json("/works", params)  # native-async egress twin (same path + params)
+            except Exception as exc:  # noqa: BLE001 — incl. the shared circuit breaker
+                logger.warning("OpenAlex search failed: %s", exc)
+                return None  # a failure: not cached
 
-        await anyio.to_thread.run_sync(  # disk write OFF loop
-            functools.partial(cache.set_docs, key, docs, ttl=3600))
-        return docs
+            results = data.get("results") or []
+            docs: list[Document] = []
+            for work in results[:limit]:
+                try:
+                    docs.append(self._work_to_document(work))  # pure CPU parse/map — stays ON the loop
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug("Skipping malformed OpenAlex work: %s", exc)
 
-    def fetch_url(self, url: str) -> Optional[Document]:
+            return docs
+
+        return await self._acached(key, 3600, _aget)
+
+    async def afetch_url(self, url: str) -> Optional[Document]:
         host = (urlparse(url).hostname or "").lower()
         if "openalex.org" not in host:
             return None
@@ -216,18 +216,18 @@ class OpenAlexAdapter:
         if not work_id.startswith("W"):
             return None
         try:
-            work = oa.get_json(f"/works/{work_id}")
+            work = await oa.aget_json(f"/works/{work_id}")
         except Exception as exc:  # noqa: BLE001
             logger.warning("OpenAlex fetch_url failed: %s", exc)
             return None
         return self._work_to_document(work)
 
-    def health_check(self) -> tuple[Optional[bool], str]:
+    async def ahealth_check(self) -> tuple[Optional[bool], str]:
         # Shared single-flight upstream probe (see _openalex.health): all OpenAlex-backed sources
         # delegate here so the health sweep makes ONE OpenAlex call, not one-per-source (which used
         # to burst the shared key into 429 and trip the breaker, degrading all 40 at once). The old
         # probe here also used a `search` call, needlessly spending the scarce 1k/day search budget.
-        return oa.health()
+        return await oa.ahealth()
 
     @staticmethod
     def _work_to_document(work: dict) -> Document:
@@ -251,7 +251,7 @@ class OpenAlexAdapter:
             source_id=p["work_id"] or "?",
             url=url,
             title=title,
-            content=p["abstract"] or "(no abstract available)",
+            content=p["abstract"] or "",
             author=author_str,
             date=p["date"],
             signals=mk_signal("citations", p["cited_by"],

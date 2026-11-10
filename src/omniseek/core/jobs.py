@@ -5,13 +5,16 @@ THE DERIVED ARCHITECTURE (P6 moved the fleet's center of gravity, P9 finishes th
 an act of PERCEPTION or self-maintenance and must land inside the ONE process that can write memory,
 so anything that CAN die with the organ lives HERE as a declarative JOB ROW instead of an external
 launchd cron. The test for what stays OUTSIDE the organ is "must this still run when the organ is
-dead?" -- only the hands that restart it (one sentinel), the vault that outlives it (state-backup),
-and the browsers that must not die with it (the CDP launchers) stay external. Everything else is a
-row registered here.
+dead?" -- only the browsers that must not die with it (the CDP launchers) stay external. Restarting a dead or
+hung organ is launchd's KeepAlive (a process that exits), the MCP front door's that forwards calls to OmniSeek
+(a process alive but not answering: it kickstarts the organ when a forwarded call fails, SENTINEL-RETIRE), and
+this module's own wedge watchdog (a live process whose scheduler thread stopped). Everything else is a row
+registered here.
 
 This generalizes the P6 sensors-only scheduler (sensor.py) into a registry with a mechanical
-schedule vocabulary. The sensor tick becomes job row #1; the transplanted watchdogs / curator /
-audit / digest become the other rows (see infra_jobs.py). The graph_view / register_mints DNA
+schedule vocabulary. The sensor tick becomes job row #1; the transplanted health probe / session
+warmer / browser reaper / log rotation / AIID snapshot become the other rows (see
+infra_jobs.py). The graph_view / register_mints DNA
 (a registry dict populated by a register_* call at import) is the shape here too.
 
 THE RAZOR stays: the registry runs declared jobs mechanically on a schedule; WHICH jobs exist and
@@ -36,21 +39,37 @@ from typing import Callable, Optional
 
 from omniseek.core.contracts.build_identity import resolve_build_id
 from omniseek.core.contracts.heartbeat import SchedulerHeartbeat, load_contract_artifacts
+from omniseek import where
 
 log = logging.getLogger(__name__)
 
 # One persisted last-run map for ALL jobs (the SensorStore atomic tmp+replace idiom, one file keyed
 # by job name). Distinct from sensors.json: sensors carry their own baselines; this only remembers
 # each job's last_run epoch + its per-job Bark-on-exception cooldown stamp.
-STATE_PATH = Path.home() / ".omniseek" / "state" / "scheduler-state.json"
-# The dead-man file the EXTERNAL sentinel watches: the scheduler loop touches it every tick, so a
-# stale mtime while /healthz is still OK means "organ alive but scheduler dead" (the sentinel's
-# distinct alarm). Kept beside the state file under ~/.omniseek/state/.
-HEARTBEAT_PATH = Path.home() / ".omniseek" / "state" / "scheduler-heartbeat"
+STATE_PATH = where.state() / "scheduler-state.json"
+# The dead-man file the wedge watchdog below watches: the scheduler loop touches it every tick, so a
+# stale mtime while the process still runs means "organ alive but scheduler dead". Kept beside the
+# state file under <state>/.
+HEARTBEAT_PATH = where.state() / "scheduler-heartbeat"
 
-TICK_SECONDS = 900        # the loop wakes every 15 min; a job runs when its own schedule is due
+TICK_SECONDS = 900        # the loop wakes when the next job is due, and at least every 15 min (the heartbeat)
 INITIAL_DELAY_S = 120     # keep deploy restart-storms from firing jobs mid-restart
+# After a tick the loop sleeps until the earliest next run of an enabled job, at most a tick and at least
+# LOOP_MIN_SLEEP_S. Until 11-04 it slept a fixed tick: cdp-reaper (every 600 s) really ran every 900 s, and a job not
+# yet due at the first tick after a restart waited a whole extra tick (97.4 h of logs read:
+# 11 gaps over two periods, all across restarts). 60 s is a tenth of the shortest registered period (600 s); it also
+# bounds a job whose last_run cannot be saved to one rerun a minute instead of a busy loop.
+LOOP_MIN_SLEEP_S = 60
 JOB_BARK_COOLDOWN_S = 24 * 3600   # Bark at most once per 24h per job on repeated exceptions
+# The wedge watchdog (SENTINEL-RETIRE C; until 10-20 an external watchdog script did this from outside): a heartbeat
+# file older than WEDGE_FACTOR ticks means the scheduler thread wedged while the process lives on. The line is the
+# old one, unchanged (900 s x 2 = 1800 s; the tick publishes the heartbeat before and after every job, and
+# _MAX_JOB_BUDGET_S stays under the line). The watchdog then logs one line and exits the process with WEDGED_EXIT;
+# launchd restarts it (eye-http's unit is KeepAlive = true, 10_deploy/nix/modules/agents.nix), which respawns the
+# thread. WATCHDOG_CHECK_S only bounds how late after the line it notices (the external one looked every 600 s).
+WEDGE_FACTOR = 2
+WEDGED_EXIT = 75          # EX_TEMPFAIL: any non-zero code; launchd's KeepAlive restarts on every exit
+WATCHDOG_CHECK_S = 60
 
 # ── the schedule vocabulary (mechanical parser, PURE + unit-testable) ─────────────────────────────
 # every:<N>s | daily@HH:MM[,HH:MM...] | weekly@ddd-HH:MM (ddd in mon..sun) | monthly@<D>-HH:MM
@@ -214,7 +233,8 @@ def is_due(sched: Schedule, now: float, last_run: Optional[float]) -> bool:
 
 def _next_slot(sched: Schedule, now: float, last_run: Optional[float] = None) -> Optional[float]:
     """The epoch of the NEXT firing STRICTLY AFTER ``now`` (the forward twin of _most_recent_slot),
-    for the fleet-status DISPLAY only (never a control decision). Interval: (last_run or now) + period,
+    for the fleet-status display and for timing the loop's wake (seconds_to_next_run); it never decides
+    what runs, is_due does. Interval: (last_run or now) + period,
     floored at now if already overdue. Calendar: the earliest future matching slot, or None if none in
     the next-month/8-day window. PURE except reading the local timezone via datetime."""
     if sched.kind == "interval":
@@ -246,7 +266,7 @@ def _next_slot(sched: Schedule, now: float, last_run: Optional[float] = None) ->
 
 
 # ── the registry (the register_mints DNA: a dict populated by register_job at import) ──────────────
-# Per-job wall-clock budget ceiling. The external sentinel declares the scheduler WEDGED when the
+# Per-job wall-clock budget ceiling. The wedge watchdog declares the scheduler WEDGED when the
 # heartbeat goes stale past its threshold (2x the 900s tick = 1800s); the tick publishes the
 # heartbeat before and after EVERY job, so worst-case staleness is ONE job's budget, and every
 # budget must therefore
@@ -276,10 +296,10 @@ def register_job(name: str, schedule: str, fn: Callable[[], object], enabled: bo
     """Register one job row. Parses ``schedule`` NOW so an unknown/malformed spec raises ValueError
     AT REGISTRATION (import time), never a silent default. A duplicate ``name`` also raises (two
     rows fighting over one last-run key is a bug), as does a budget outside (0, _MAX_JOB_BUDGET_S]
-    (a budget at or past the sentinel's wedge threshold would let one slow job read as a dead
+    (a budget at or past the watchdog's wedge threshold would let one slow job read as a dead
     scheduler). Returns the stored JobRow. The profile override is NOT applied here (it is read
     live at tick time via ``job_enabled``), so tests can register a row and inspect it independent
-    of any ~/.omniseek/profile.json."""
+    of any <root>/profile.json."""
     if name in _REGISTRY:
         raise ValueError(f"duplicate job name {name!r}")
     if not (0 < int(budget_s) <= _MAX_JOB_BUDGET_S):
@@ -296,8 +316,8 @@ def register_job(name: str, schedule: str, fn: Callable[[], object], enabled: bo
 
 
 def registry() -> "dict[str, JobRow]":
-    """The live registry dict (name -> JobRow). Read-only use; the smoke's registry tripwire walks
-    it to assert every shipped row's fn is callable + its schedule parsed."""
+    """The live registry dict (name -> JobRow). Read-only use; every shipped row's fn must be
+    callable + its schedule must parse."""
     return _REGISTRY
 
 
@@ -426,6 +446,26 @@ def fleet_status(now: Optional[float] = None) -> list[dict]:
     return out
 
 
+def seconds_to_next_run(now: Optional[float] = None, cap_s: float = TICK_SECONDS) -> float:
+    """How long the loop sleeps after a tick: until the earliest next run of an enabled job (_next_slot over
+    the last-run state), at least LOOP_MIN_SLEEP_S and at most ``cap_s`` (the heartbeat must stay under the
+    wedge line). Only times the wake; is_due still decides what runs. A cap below LOOP_MIN_SLEEP_S wins."""
+    now = time.time() if now is None else now
+    with _STATE_LOCK:
+        state = _load_state()
+    overrides = _profile_jobs()
+    nexts: list[float] = []
+    for name, row in _REGISTRY.items():
+        if not job_enabled(row, overrides):
+            continue
+        last = (state.get(name) or {}).get("last_run")
+        nxt = _next_slot(row.schedule, now, float(last) if isinstance(last, (int, float)) else None)
+        if nxt is not None:
+            nexts.append(nxt)
+    wait = (min(nexts) - now) if nexts else cap_s
+    return min(cap_s, max(LOOP_MIN_SLEEP_S, wait))
+
+
 def run_due_jobs(now: Optional[float] = None) -> dict:
     """The tick BODY (call it directly in tests; the loop calls it every TICK_SECONDS): publish the
     structured heartbeat, then run every due enabled job SERIALLY. Each job runs in its own
@@ -443,7 +483,7 @@ def run_due_jobs(now: Optional[float] = None) -> dict:
     for row in due:
         # Heartbeat BEFORE every job: the dead-man staleness is bounded by ONE job's budget, never
         # the serial sum of a whole tick (else a legitimately long tick reads as a wedged scheduler
-        # and the sentinel kickstarts the organ mid-run).
+        # and the wedge watchdog restarts the organ mid-run).
         _publish_running_heartbeat()
         t0 = time.monotonic()
         outcome, exc = _run_with_budget(row)
@@ -602,8 +642,6 @@ def scheduler_contract_status() -> dict:
             "last_emitted_at_utc": None,
             "build_id": None,
             "schema_digest": None,
-            "policy_digest": None,
-            "mode": None,
             "phase": None,
             "scheduler_generation": None,
         }
@@ -614,8 +652,6 @@ def scheduler_contract_status() -> dict:
         "last_emitted_at_utc": heartbeat.last_emitted_at_utc,
         "build_id": heartbeat.build_id,
         "schema_digest": heartbeat.artifacts.schema_digest,
-        "policy_digest": heartbeat.artifacts.policy_digest,
-        "mode": heartbeat.artifacts.mode,
         "phase": phase,
         "scheduler_generation": heartbeat.generation,
     }
@@ -646,13 +682,8 @@ def _read_host_boot_id() -> str:
 
 
 def _make_scheduler_heartbeat(*, interval_s: int, initial_delay_s: int) -> SchedulerHeartbeat:
-    artifacts = load_contract_artifacts()
-    if float(interval_s) != artifacts.tick_interval_s:
-        raise ValueError("scheduler tick interval differs from packaged policy")
-    if float(initial_delay_s) != artifacts.initial_delay_s:
-        raise ValueError("scheduler initial delay differs from packaged policy")
-    if float(_MAX_JOB_BUDGET_S) != artifacts.max_job_budget_s:
-        raise ValueError("scheduler maximum job budget differs from packaged policy")
+    artifacts = load_contract_artifacts(initial_delay_s=initial_delay_s, tick_interval_s=interval_s,
+                                        max_job_budget_s=_MAX_JOB_BUDGET_S)
     return SchedulerHeartbeat(
         path=HEARTBEAT_PATH,
         artifacts=artifacts,
@@ -664,14 +695,14 @@ def _make_scheduler_heartbeat(*, interval_s: int, initial_delay_s: int) -> Sched
 
 def start_scheduler(interval_s: int = TICK_SECONDS,
                     initial_delay_s: int = INITIAL_DELAY_S) -> Optional[threading.Thread]:
-    """Start the daemon scheduler thread (``sleep(initial_delay_s); while True: run_due_jobs;
-    sleep(interval_s)``). Registers the shipped rows first (idempotent).
+    """Start the daemon scheduler thread (``sleep(initial_delay_s); while True: run_due_jobs; sleep until
+    the next job is due, at most interval_s``). Registers the shipped rows first (idempotent).
 
     Two guards make this the ONE self-maintenance path (unchanged from P6): (1) it REFUSES to start
     unless ``writer.WRITES_ENABLED`` is truthy (the scheduler only ever belongs in the writer
-    process -- a cron / smoke / CLI import leaves it False, so no memory-less path ticks); (2) a
+    process -- a cron / CLI import leaves it False, so no memory-less path ticks); (2) a
     module idempotence flag so a double call cannot start two threads. Returns the Thread it started,
-    or None when a guard refused. Import the writer INSIDE so a smoke import that never enables writes
+    or None when a guard refused. Import the writer INSIDE so an import that never enables writes
     still sees the refusal, not an import-order surprise."""
     global _scheduler_contract_error, _scheduler_heartbeat, _scheduler_started
     try:
@@ -711,13 +742,61 @@ def start_scheduler(interval_s: int = TICK_SECONDS,
                     run_due_jobs()
                 except Exception:  # noqa: BLE001 -- a tick must never kill the loop
                     log.exception("job scheduler tick crashed; continuing")
-                _STOP.wait(max(1, interval_s))
+                try:
+                    wait = seconds_to_next_run(cap_s=interval_s)
+                except Exception:  # noqa: BLE001 -- timing the wake must never kill the loop
+                    log.exception("job scheduler: next-run time failed; sleeping a tick")
+                    wait = interval_s
+                _STOP.wait(max(1, wait))
 
         t = threading.Thread(target=_loop, name="job-scheduler", daemon=True)
         _scheduler_heartbeat = heartbeat
         _scheduler_started = True
         t.start()
+        start_wedge_watchdog()
         return t
+
+
+def scheduler_wedged(now: float, heartbeat_mtime: Optional[float], started: float) -> bool:
+    """PURE: is the scheduler wedged? No heartbeat file (None) is never a wedge: it is ambiguous with a fresh boot.
+    Age counts from the later of the file's mtime and this process's start, so a stale file the previous process
+    left behind does not count before this one had its chance to write."""
+    if heartbeat_mtime is None:
+        return False
+    return now - max(float(heartbeat_mtime), float(started)) > TICK_SECONDS * WEDGE_FACTOR
+
+
+def start_wedge_watchdog(path: Path = HEARTBEAT_PATH, started: Optional[float] = None,
+                         check_s: float = WATCHDOG_CHECK_S, stop: Optional[threading.Event] = None,
+                         exit_fn: Callable[[int], object] = os._exit) -> threading.Thread:
+    """Start the daemon thread that exits the process (WEDGED_EXIT) once the scheduler heartbeat is stale
+    (scheduler_wedged). It stops looking once ``stop`` (default the scheduler's _STOP) is set, so a graceful
+    shutdown is never mistaken for a wedge."""
+    started = time.time() if started is None else float(started)
+    stop = _STOP if stop is None else stop
+
+    def _watch() -> None:
+        while not stop.wait(max(0.01, check_s)):
+            try:
+                mtime: Optional[float] = path.stat().st_mtime
+            except FileNotFoundError:
+                mtime = None
+            except Exception:  # noqa: BLE001 -- a stat failure right now is not a confirmed wedge; look again
+                log.warning("job scheduler watchdog: cannot stat %s; looking again next time", path)
+                continue
+            now = time.time()
+            if scheduler_wedged(now, mtime, started):
+                log.error("job scheduler WEDGED: heartbeat %s is %ds old (> %ds) while the process runs; "
+                          "exiting %d so launchd restarts OmniSeek and the scheduler thread",
+                          path, int(now - max(mtime, started)), TICK_SECONDS * WEDGE_FACTOR, WEDGED_EXIT)
+                print("job scheduler wedged: heartbeat %s stale; exiting %d" % (path, WEDGED_EXIT),
+                      file=sys.stderr, flush=True)
+                exit_fn(WEDGED_EXIT)
+                return
+
+    t = threading.Thread(target=_watch, name="job-scheduler-watchdog", daemon=True)
+    t.start()
+    return t
 
 
 _shipped_registered = False
@@ -725,7 +804,7 @@ _shipped_registered = False
 
 def register_shipped_jobs() -> None:
     """Register every SHIPPED job row exactly once (idempotent). Row #1 is the P6 sensor tick,
-    absorbed here unchanged (its own Bark-on-new logic stays inside sensor.run_sensor /
+    absorbed here unchanged (its own Bark-on-new logic stays inside sensor.arun_sensor /
     _bark_new_results). The rest are the transplanted infra jobs (infra_jobs.py). Import the fns
     INSIDE so a bare ``import jobs`` (e.g. a unit test of the parser) does not drag in the whole eye.
     """
@@ -743,16 +822,16 @@ def register_shipped_jobs() -> None:
                  description="标准查询 + novelty 监控(配置了常驻任务表 SERVICES.tsv 时按表跑，否则按各 sensor 自己的 schedule)")
 
     # Transplanted infra rows (see infra_jobs.py for each core's transplanted rationale + state).
-    register_job("source-health", "daily@05:00", infra_jobs.run_source_health, budget_s=900,
-                 description="每日探全源健康,标 down / 恢复(watchdog down 的来源)")
-    # Fast non-CDP lane: cheap health probes every 6h so a dead open-API/RSS source surfaces in
-    # ~6-12h (N_CONSECUTIVE=2) instead of the daily lane's worst-case ~48h. CDP stays daily/serial.
-    register_job("source-health-fast", "every:21600s", infra_jobs.run_source_health_fast,
-                 budget_s=300, description="每 6h 快探非 CDP 源健康")
-    register_job("wechat2rss-probe", "every:1800s", infra_jobs.run_wechat2rss_probe,
-                 description="每 30min 探 wechat2rss 公益 feed")
+    # source-health: ONE job every 6h. Every run probes the non-CDP sources, so a dead open-API/RSS
+    # source surfaces in ~6-12h (N_CONSECUTIVE=2); the CDP lane (heal + serial CDP probes) rides one
+    # run a day (infra_jobs._cdp_lane_due). Budget is the full run's, the one that carries the CDP lane.
+    # The schedule stays a literal (services.registered_jobs reads it off this file); 21600 is
+    # infra_jobs.HEALTH_EVERY_S, which the lane cadence uses (test_health_state_scope pins the two).
+    register_job("source-health", "every:21600s", infra_jobs.run_source_health,
+                 budget_s=infra_jobs.HEALTH_BUDGET_S,
+                 description="每 6h 探非 CDP 源健康,走浏览器(CDP)的源每天带一轮;标 down / 恢复 / 降级(watchdog down 的来源)")
     register_job("session-warmer", "daily@09:17,14:17,19:17", infra_jobs.run_session_warmer,
-                 budget_s=900, description="每日暖 CDP 登录态(小红书 / 抖音 / 9222 论坛)",
+                 budget_s=900, description="每日暖 CDP 登录态(小红书 / 9222 论坛)",
                  process_entrypoint=("omniseek.core.infra_jobs", "run_session_warmer"))
     # On-demand CDP lifecycle (2026-08-29): the four browsers used to sit resident forever, holding
     # 3.1 GB on a 16 GB machine for ~24 calls a day. This row stops the idle ones; _cdp.ensure_browser
@@ -761,26 +840,13 @@ def register_shipped_jobs() -> None:
                  description="每 10min 停掉空闲的 CDP 浏览器(下次调用 1s 内自动拉起),并删 Chrome 留下的签名克隆",
                  process_entrypoint=("omniseek.core.infra_jobs", "run_cdp_reaper"))
     register_job("log-rotation", "daily@04:50", infra_jobs.run_log_rotation,
-                 description="每日转超大日志")
-    # The 2026-08-11 answer to a backup that ran on time, failed on time, and told nobody: audit
-    # the CONTENT at every off-machine destination (mirror heartbeats + the external drive) and
-    # Bark on any shortfall. Read-only and cheap, so it runs daily just after the 04:30 wall copy.
-    register_job("offmachine-audit", "daily@06:30", infra_jobs.run_offmachine_audit,
-                 budget_s=300,
-                 description="每日核机外备份的真实内容(镜像心跳 + 外置盘),不看跑没跑")
-    # Keep the nserc bulk-CSV cache warm OFF the query path (the ~96s cold pull would blow the 90s
-    # single-source deadline if a query triggered it). budget 300s > the adapter's 240s httpx timeout.
-    register_job("nserc-prime", "monthly@1-03:30", infra_jobs.run_nserc_prime, budget_s=300,
-                 description="月度给 nserc 56MB CSV 缓存保温(避开查询死线)")
-    register_job("curator", "monthly@1-06:00", infra_jobs.run_curator, enabled=True,
-                 budget_s=1500, description="月度发现候选源,推中性事实(admit/reject 归 agent)")
-    register_job("source-audit", "weekly@sun-06:00", infra_jobs.run_source_audit, enabled=True,
-                 budget_s=900, description="周度源审计(冗余 / 死 / 空格),推中性事实")
-    # ENABLED per the operator (2026-07-14). Safe on ANY deployment: run_digest NO-OPS (a log line) when
-    # ~/.omniseek/state/digest-themes.json is absent, so a fresh deploy without themes pushes nothing.
-    # Enabled in CODE (not a profile override) because the profile file, once present, gates walled
-    # sources OFF by default -- so enabling a JOB via the profile would silently disable the walled
-    # source fleet (the live deployment runs profile-less on purpose). See profile.is_source_enabled.
-    register_job("digest", "weekly@mon-09:00", infra_jobs.run_digest, enabled=True,
-                 budget_s=1200,  # the agent briefing (frontier LLM + eye/brain tool loop) needs headroom
-                 description="周度跨源精选阅读单(agent 合成,只读眼+脑)→ 企业微信;主题在 ~/.omniseek/state/digest-themes.json(可编辑,无主题则空跑)")
+                 description="每日转超大日志、删过期的缓存文件")
+    # The NSERC cache prime (monthly) and the weekly reading list (weekly, with its briefing agent)
+    # were withdrawn on 2026-10-20 with the NSERC source.
+    # The AI Incident Database snapshot (task EYE-AIID-SNAP, 2026-10-20). The upstream publishes one a
+    # week on Mondays; the last 60 came out between 10:00 and 12:xx UTC, so 21:30 local (the host machine runs
+    # on Beijing time, = 13:30 UTC) is the first slot after all of them. Process-isolated: it holds a
+    # ~120 MB download and a full bzip2 pass. Budget: measured ~30-100 s under load on 2026-10-20.
+    register_job("aiid-snapshot", "weekly@mon-21:30", infra_jobs.run_aiid_snapshot, budget_s=900,
+                 description="每周一查 AI 事故库（AIID）快照页，有新的才下、核完整、建本地索引并换上（ai_incidents 源）",
+                 process_entrypoint=("omniseek.core.infra_jobs", "run_aiid_snapshot"))

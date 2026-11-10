@@ -49,27 +49,14 @@ class DataGovSgPassesAdapter(BaseAPIAdapter):
     regions = ["sg"]
     modes = ["STRUCTURE"]
 
-    def _raw_fetch(self, query: str, limit: int) -> list:
-        # Small dataset (a handful of pass-type rows): fetch all, let the base rank/filter by name.
-        url = f"{_ENDPOINT}?resource_id={_RID}&limit=100"
-        data = http.get_json(url)
-        if not isinstance(data, dict):
-            return []
-        return ((data.get("result") or {}).get("records")) or []
-
     async def _araw_fetch(self, query: str, limit: int) -> list:
-        """Async twin of _raw_fetch: byte-faithful mirror (same URL, same None/[]-guard control flow),
+        """Async replacement of the deleted sync ``_raw_fetch`` (11-04, S9; this is the only one now): byte-faithful mirror (same URL, same None/[]-guard control flow),
         only the shared-http egress swapped for its async twin (http.get_json -> await http.aget_json)."""
         url = f"{_ENDPOINT}?resource_id={_RID}&limit=100"
         data = await http.aget_json(url)
         if not isinstance(data, dict):
             return []
         return ((data.get("result") or {}).get("records")) or []
-
-    async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async twin of search -> AsyncSearchCapable. Base async cache round-trip; egress via
-        _araw_fetch; mapping via the SAME pure-CPU _to_document (byte-identical to search)."""
-        return await self._aapi_search(query, limit, araw_fetch=lambda: self._araw_fetch(query, limit))
 
     def _to_document(self, raw) -> Optional[Document]:
         if not isinstance(raw, dict):
@@ -86,7 +73,7 @@ class DataGovSgPassesAdapter(BaseAPIAdapter):
             source_id=f"datagovsg_npass:{series}",
             url=f"https://data.gov.sg/datasets/{_RID}/view",
             title=f"新加坡非居民准证占比 · {series}",
-            content=f"{series} (占非居民人口百分比, 逐年): {body or '(无数据)'}",
+            content=f"{series} (占非居民人口百分比, 逐年): {body}" if body else "",
             tags=["singapore", "immigration", "stats"],
             metadata={"data_series": series, "by_year": years, "_id": raw.get("_id")},
         )

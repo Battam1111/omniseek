@@ -26,11 +26,10 @@ search term, and OmniSeek's ranked search re-scores across sources when it needs
 
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Any, Optional
 
 from omniseek.core import http
-from omniseek.core.normalize import Document, jsonsafe, mk_signal
+from omniseek.core.normalize import Document, jsonsafe, mk_signal, to_utc
 from omniseek.core.sources.scrape._base import BaseScrapeAdapter
 
 API_URL = "https://www.kaggle.com/api/v1/datasets/list"
@@ -54,15 +53,8 @@ class KaggleAdapter(BaseScrapeAdapter):
         "2026-07-25.")
     modes = ["STRUCTURE"]
 
-    def _raw_fetch(self, query: str, limit: int) -> Optional[Any]:
-        return http.get_json(
-            API_URL,
-            params={"search": query},
-            timeout=15,
-        )
-
     async def _araw_fetch(self, query: str, limit: int) -> Optional[Any]:
-        """Async twin of _raw_fetch: byte-faithful mirror — same URL, params, timeout;
+        """Async replacement of the deleted sync ``_raw_fetch`` (11-04, S9; this is the only one now): byte-faithful mirror — same URL, params, timeout;
         only the shared-http egress swaps to its async twin (http.get_json → aget_json)."""
         return await http.aget_json(
             API_URL,
@@ -82,14 +74,6 @@ class KaggleAdapter(BaseScrapeAdapter):
                 docs.append(doc)
         return docs
 
-    async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async twin of search → AsyncSearchCapable. Shares the base async cache
-        round-trip; egress via _araw_fetch; mapping via the SAME pure-CPU _to_documents."""
-        return await self._asearch_via(
-            query, limit,
-            afetch=lambda: self._araw_fetch(query, limit),
-            abuild=lambda raw: self._to_documents(raw, query, limit))
-
     def _record_to_doc(self, rec: dict) -> Optional[Document]:
         title = (rec.get("title") or "").strip()
         ref = (rec.get("ref") or "").strip()
@@ -108,7 +92,7 @@ class KaggleAdapter(BaseScrapeAdapter):
         content = description if len(description) > len(subtitle) else subtitle
 
         author = (rec.get("ownerName") or rec.get("creatorName") or "").strip() or None
-        date = _parse_date(rec.get("lastUpdated"))
+        date = to_utc(rec.get("lastUpdated"))
 
         # tags: each is a dict like {"name": "weather and climate", "fullPath": "subject > ..."}.
         tags = _extract_tags(rec.get("tags") or [])
@@ -155,16 +139,5 @@ def _extract_tags(tags_raw: list) -> list[str]:
             out.append(t.strip())
     return out
 
-
-def _parse_date(s: Any) -> Optional[datetime]:
-    """Kaggle ``lastUpdated`` is ISO 8601 with a ``Z`` suffix (e.g. 2024-02-22T08:53:54.627Z).
-    The shared convention: swap ``Z`` for ``+00:00`` and ``fromisoformat`` (3.11+ handles the
-    fractional seconds). None on anything unparseable — a missing date is not a failure."""
-    if not isinstance(s, str) or not s.strip():
-        return None
-    try:
-        return datetime.fromisoformat(s.strip().replace("Z", "+00:00"))
-    except ValueError:
-        return None
 
 # Registration is automatic via BaseScrapeAdapter.__init_subclass__ (no module-tail ceremony).

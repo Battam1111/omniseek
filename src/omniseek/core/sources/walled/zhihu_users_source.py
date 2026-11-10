@@ -6,7 +6,7 @@ posts, then filters by query. Use case: track senior Chinese ML/NLP
 researchers who publish on Zhihu rather than English venues.
 
 Initially follows 张俊林 (新浪微博 AI 首席科学家, an S-tier Chinese-world
-senior). The deployer extends the list via `~/.omniseek/credentials/zhihu_users.json`:
+senior). The deployer extends the list via `<credentials>/zhihu_users.json`:
 
     {
       "users": [
@@ -23,15 +23,18 @@ from __future__ import annotations
 
 import logging
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 from urllib.parse import urlparse
 
+import anyio
 from bs4 import BeautifulSoup
 
-from omniseek.core import auth, cache, diag, relevance
+from omniseek.core import auth, cache, diag, portal, relevance
+from omniseek.core.sources._base import SourceBase
 from omniseek.core.normalize import Document, jsonsafe
 from omniseek.core.sources.walled._cdp import cdp_call, cdp_health
+from omniseek import where
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +48,7 @@ DEFAULT_USERS = [
 ]
 
 # Drop credential template
-auth.write_template(
+auth.register_template(
     "zhihu_users",
     {
         "_comment": "Customize the list of Zhihu users to track. Default tracks 张俊林.",
@@ -64,13 +67,13 @@ POSTS_PER_HANDLE = 25
 POSTS_TTL = 3600  # 1h: a researcher posts a few times/day at most; the prewarmer keeps it hot
 
 
-class ZhihuUsersAdapter:
+class ZhihuUsersAdapter(SourceBase):
     name = "zhihu_users"
     needs_credentials = False  # CDP login is one-time; this just configures user list
     explicit_only = "shared CDP Chrome (precious logged-in session)"
     description = (
         "知乎 followed researchers：张俊林 等 senior 中文 NLP/ML 作者跟踪 "
-        "(via CDP, configurable via ~/.omniseek/credentials/zhihu_users.json)"
+        f"(via CDP, configurable via {where.show(where.credentials())}/zhihu_users.json)"
     )
 
     def _load_users(self) -> list[dict]:
@@ -114,7 +117,7 @@ class ZhihuUsersAdapter:
 
         # Sort by date desc (None last)
         def sort_key(d: Document):
-            return d.date or datetime.min
+            return d.date or datetime.min.replace(tzinfo=timezone.utc)
         all_docs.sort(key=sort_key, reverse=True)
         all_docs = all_docs[:limit]
 
@@ -194,7 +197,7 @@ class ZhihuUsersAdapter:
         cache.set_docs(pkey, docs, ttl=POSTS_TTL, empty_ttl=300)  # a selector-drift empty must not pin 1h
         return docs
 
-    def fetch_url(self, url: str) -> Optional[Document]:
+    async def afetch_url(self, url: str) -> Optional[Document]:
         host = (urlparse(url).hostname or "").lower()
         if "zhihu.com" not in host:
             return None
@@ -203,7 +206,8 @@ class ZhihuUsersAdapter:
         # zhihu.com/p/<id> or zhuanlan.zhihu.com/p/<id> → individual post; defer to zhihu adapter
         if path.startswith("people/") and path.endswith("/posts"):
             handle = path.split("/")[1]
-            posts = self._fetch_user_posts(handle, handle)
+            # the CDP nav (and its disk cache) blocks: a worker thread of the IO lane
+            posts = await anyio.to_thread.run_sync(self._fetch_user_posts, handle, handle, limiter=portal.IO_LANE)
             if posts:
                 return posts[0]
         return None
@@ -271,7 +275,7 @@ class ZhihuUsersAdapter:
             source_id=str(source_id),
             url=url,
             title=title,
-            content=excerpt or "(click URL for full content)",
+            content=excerpt or "",
             author=display_name,
             date=date,
             tags=[f"zhihu-user:{handle}"],

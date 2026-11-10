@@ -1,9 +1,7 @@
 """GitHub starred: the repos one GitHub user starred, newest star first (``starred_at``).
 
-Feeds the shadow run (``shadow_feed = True``): a daily sensor over this source finds the new
-stars and the sensor writes them to ``~/.omniseek/state/shadow_feed/github_starred.jsonl`` (format in
-``omniseek.core.shadow_feed``). The digest's own GitHub-stars puller keeps running until the
-comparison passes.
+Named searches and sensors use it. The digest's own GitHub-stars puller is the one that pulls stars
+into the digest (OmniSeek's shadow run beside it was withdrawn on 2026-10-20).
 
 Endpoint: ``GET /users/<user>/starred?per_page=100&sort=created&direction=desc`` with
 ``Accept: application/vnd.github.star+json``, so each row is ``{starred_at, repo}``. Egress goes
@@ -27,7 +25,7 @@ from typing import Optional
 from urllib.parse import quote
 
 from omniseek.core import _github, diag
-from omniseek.core.normalize import Document, jsonsafe, keyword_score_filter, mk_signal
+from omniseek.core.normalize import Document, jsonsafe, keyword_score_filter, mk_signal, to_utc
 from omniseek.core.sources.api._base import BaseAPIAdapter
 
 logger = logging.getLogger(__name__)
@@ -44,16 +42,6 @@ _WILDCARD = {"", "*", "all"}
 
 def starred_user() -> str:
     return os.environ.get(ENV_USER, "").strip() or DEFAULT_USER
-
-
-def _parse(value) -> Optional[_dt.datetime]:
-    if not value or not isinstance(value, str):
-        return None
-    try:
-        d = _dt.datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
-    except ValueError:
-        return None
-    return d if d.tzinfo else d.replace(tzinfo=_dt.timezone.utc)
 
 
 def _now() -> _dt.datetime:
@@ -79,12 +67,11 @@ class GitHubStarredAdapter(BaseAPIAdapter):
     cache_ttl = 1800
     search_label = "starred"
     sensor_window = PER_PAGE * MAX_PAGES
-    shadow_feed = True
 
-    def search(self, query: str, limit: int = 10) -> list[Document]:
+    async def asearch(self, query: str, limit: int = 10) -> list[Document]:
         # One cache entry and one upstream run serve every query and limit (keyed on the user so an
         # override never reads another user's cache); a non-wildcard query filters lexically.
-        docs = super().search(f"user:{starred_user()}", self.sensor_window)
+        docs = await super().asearch(f"user:{starred_user()}", self.sensor_window)
         q = (query or "").strip().lower()
         if q not in _WILDCARD:
             docs = keyword_score_filter(docs, query)
@@ -110,7 +97,7 @@ class GitHubStarredAdapter(BaseAPIAdapter):
             for row in data:
                 if not isinstance(row, dict) or not isinstance(row.get("repo"), dict):
                     continue
-                t = _parse(row.get("starred_at"))
+                t = to_utc(row.get("starred_at"))
                 if t is None:
                     # Without starred_at the Accept header did not take: refuse the page rather than
                     # pass off plain repos as new stars.
@@ -123,8 +110,8 @@ class GitHubStarredAdapter(BaseAPIAdapter):
                 break
         return rows
 
-    def health_check(self) -> tuple[Optional[bool], str]:
-        return _github.health()
+    async def ahealth_check(self) -> tuple[Optional[bool], str]:
+        return await _github.ahealth()
 
     def _to_document(self, row: dict) -> Optional[Document]:
         repo = row.get("repo") or {}
@@ -144,7 +131,7 @@ class GitHubStarredAdapter(BaseAPIAdapter):
             title=full_name,
             content=repo.get("description") or "",
             author=(repo.get("owner") or {}).get("login"),
-            date=_parse(row.get("starred_at")),
+            date=to_utc(row.get("starred_at")),
             signals=mk_signal("stars", stars, kind="engagement", by="github_starred/stars"),
             tags=tags,
             metadata={

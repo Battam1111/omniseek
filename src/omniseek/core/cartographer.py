@@ -18,15 +18,18 @@ cartography. OmniSeek is the channel; the agent is the cartographer.
 
 from __future__ import annotations
 
+import functools
 import logging
 import re
 import time
 from collections import Counter
 from typing import Optional
 
+import anyio
+
 from omniseek.core import _openalex as oa
 from omniseek.core import _s2
-from omniseek.core import cache
+from omniseek.core import cache, portal
 
 logger = logging.getLogger(__name__)
 
@@ -49,14 +52,14 @@ _S2_REF_CAP = 100  # hard cap on S2 references fetched per seed (page-bounded; r
 _ASSEMBLE_DEADLINE_S = 45.0
 
 # _norm_s2_id now lives in _s2.norm_s2_id (single source of truth, shared with relations).
-# Kept as a module-level alias so the smoke gate + any external caller keep working.
+# Kept as a module-level alias so any external caller keeps working.
 _norm_s2_id = _s2.norm_s2_id
 
 from omniseek.core.recall import graph  # noqa: E402 — the graph write verb + mint registry
 
 # Vocabulary this tap MINTS (vocabulary-by-minting, design section 3): declared on the tap itself,
-# registered at import, and folded into ``graph.declared_vocabulary`` as the computed union. The
-# smoke tripwire bounds ACTUAL graph data to that union. cartographer mints the CITATION-graph core:
+# registered at import, and folded into ``graph.declared_vocabulary`` as the computed union. ACTUAL
+# graph data must stay within that union. cartographer mints the CITATION-graph core:
 # work/person/topic/venue nodes and cites/authored/about/published_in edges, over the two academic
 # backends (api:openalex, api:s2). authored/person and about/topic are OpenAlex-only in the tap (the
 # S2 path has display-name-only authorships and id-less fields → mints NO person/topic there; the
@@ -75,7 +78,7 @@ def _wid(full: str) -> str:
 
 
 # ── OpenAlex backend ──────────────────────────────────────────────────────────
-def _get(path: str, params: dict) -> Optional[dict]:
+async def _aget(path: str, params: dict) -> Optional[dict]:
     # Route through the shared _openalex client so cartographer / field_skeleton sit BEHIND the
     # same circuit breaker + politeness semaphore + pooled connection as the 40+ other OpenAlex
     # sources. This was the ONE path bypassing them with a bare httpx.get, so a dead/over-quota
@@ -83,7 +86,7 @@ def _get(path: str, params: dict) -> Optional[dict]:
     # shared breaker). Preserve cartographer's None-on-failure contract: OpenAlexDown (breaker
     # open) and any error degrade to None, exactly as the old bare GET did.
     try:
-        return oa.get_json(path, params)
+        return await oa.aget_json(path, params)
     except Exception as exc:  # noqa: BLE001 — incl. OpenAlexDown: degrade to None
         logger.warning("cartographer OpenAlex GET %s failed: %s", path, exc)
         return None
@@ -93,8 +96,8 @@ def _ids(data: Optional[dict]) -> list[str]:
     return [_wid(w.get("id", "")) for w in ((data or {}).get("results") or []) if w.get("id")]
 
 
-def _oa_cited_by(work_id: str, cap: int, sort: str = "cited_by_count:desc") -> list[str]:
-    return _ids(_get("/works", {"filter": f"cites:{work_id}", "sort": sort,
+async def _aoa_cited_by(work_id: str, cap: int, sort: str = "cited_by_count:desc") -> list[str]:
+    return _ids(await _aget("/works", {"filter": f"cites:{work_id}", "sort": sort,
                                 "per-page": min(cap, 200), "select": "id"}))
 
 
@@ -111,14 +114,14 @@ def _oa_venue(work: dict) -> Optional[dict]:
     return {"id": _wid(src.get("id", "")), "display_name": src.get("display_name")}
 
 
-def _oa_fetch(ids: list[str]) -> dict[str, dict]:
+async def _aoa_fetch(ids: list[str]) -> dict[str, dict]:
     out: dict[str, dict] = {}
     for i in range(0, len(ids), 50):
         chunk = [c for c in ids[i:i + 50] if c]
         if not chunk:
             continue
-        data = _get("/works", {"filter": "openalex_id:" + "|".join(chunk),
-                               "per-page": 50, "select": _SELECT})
+        data = await _aget("/works", {"filter": "openalex_id:" + "|".join(chunk),
+                                      "per-page": 50, "select": _SELECT})
         for w in ((data or {}).get("results") or []):
             # Carry the venue {id, display_name} through the works dict when present (the SAME shape
             # the tap reads for published_in). The S2 path has no venue id, so it stays absent there.
@@ -129,15 +132,15 @@ def _oa_fetch(ids: list[str]) -> dict[str, dict]:
     return out
 
 
-def _oa_assemble(query: Optional[str], seeds: Optional[list[str]],
-                 n_seeds: int, citers_per_seed: int,
-                 deadline_at: Optional[float] = None) -> tuple[list[str], dict, bool]:
-    seed_ids = [_wid(s) for s in seeds] if seeds else _ids(_get(
+async def _aoa_assemble(query: Optional[str], seeds: Optional[list[str]],
+                        n_seeds: int, citers_per_seed: int,
+                        deadline_at: Optional[float] = None) -> tuple[list[str], dict, bool]:
+    seed_ids = [_wid(s) for s in seeds] if seeds else _ids(await _aget(
         "/works", {"search": query or "", "per-page": n_seeds,
                    "sort": "relevance_score:desc", "select": "id"}))
     if not seed_ids:
         return [], {}, False
-    seed_works = _oa_fetch(seed_ids)
+    seed_works = await _aoa_fetch(seed_ids)
     refs = {_wid(r) for w in seed_works.values() for r in (w.get("referenced_works") or [])}
     citers: set[str] = set()
     deadline_hit = False
@@ -145,16 +148,16 @@ def _oa_assemble(query: Optional[str], seeds: Optional[list[str]],
         if deadline_at and time.monotonic() >= deadline_at:  # overall budget blown -> stop, return partial
             deadline_hit = True
             break
-        citers |= set(_oa_cited_by(s, citers_per_seed))
-        citers |= set(_oa_cited_by(s, citers_per_seed, "publication_date:desc"))
-    return seed_ids, _oa_fetch(list(set(seed_ids) | refs | citers)), deadline_hit
+        citers |= set(await _aoa_cited_by(s, citers_per_seed))
+        citers |= set(await _aoa_cited_by(s, citers_per_seed, "publication_date:desc"))
+    return seed_ids, await _aoa_fetch(list(set(seed_ids) | refs | citers)), deadline_hit
 
 
 # ── Semantic Scholar backend (better arXiv coverage; normalized to the same shape) ──
-def _s2_assemble(query: Optional[str], seeds: Optional[list[str]],
-                 n_seeds: int, citers_per_seed: int,
-                 deadline_at: Optional[float] = None,
-                 report: Optional[dict] = None) -> tuple[list[str], dict, bool]:
+async def _as2_assemble(query: Optional[str], seeds: Optional[list[str]],
+                        n_seeds: int, citers_per_seed: int,
+                        deadline_at: Optional[float] = None,
+                        report: Optional[dict] = None) -> tuple[list[str], dict, bool]:
     # ``report`` (optional, filled in place): report["unresolved"] lists each seed whose own record
     # could not be fetched, as {id, reason, kept_as_seed, has_metadata}, so field_skeleton can SAY
     # which seed is missing and why instead of silently demoting it.
@@ -236,8 +239,8 @@ def _s2_assemble(query: Optional[str], seeds: Optional[list[str]],
 
     seed_ids = list(seeds) if seeds else []
     if not seed_ids:
-        # _s2.search_paper is hard-bounded (page size = n_seeds, stop at n_seeds) + degrades to [].
-        res = _s2.search_paper(query or "", limit=n_seeds, fields=F)
+        # _s2.asearch_paper is hard-bounded (page size = n_seeds, stop at n_seeds) + degrades to [].
+        res = await _s2.asearch_paper(query or "", limit=n_seeds, fields=F)
         for p in res:
             add(p, seed=True)
         seed_ids = [getattr(p, "paperId", None) for p in res if getattr(p, "paperId", None)]
@@ -281,7 +284,7 @@ def _s2_assemble(query: Optional[str], seeds: Optional[list[str]],
             break
         # _s2 wrappers normalize the id + bound the iteration (the "limit == page size, paginate
         # forever" trap) + carry the breaker/semaphore + degrade to None/[] — so no try/except here.
-        rec, why = _s2.fetch_paper(sid, fields=F)
+        rec, why = await _s2.afetch_paper(sid, fields=F)
         key = getattr(rec, "paperId", None) if rec is not None else None
         if key:
             add(rec, seed=True)
@@ -303,7 +306,7 @@ def _s2_assemble(query: Optional[str], seeds: Optional[list[str]],
         if _expired():
             deadline_hit = True
             break
-        for r in _s2.get_paper_references(sid, _S2_REF_CAP, fields=F_EDGE):
+        for r in await _s2.aget_paper_references(sid, _S2_REF_CAP, fields=F_EDGE):
             # edge seed → r.paper (the seed CITES this reference): add the neighbor, then record
             # the edge on the SEED (the "this work cites these ids" direction _build expects).
             # Keyed by the RESOLVED paperId, not the input id: an arXiv / DOI seed used to lose
@@ -318,7 +321,7 @@ def _s2_assemble(query: Optional[str], seeds: Optional[list[str]],
         if _expired():
             deadline_hit = True
             break
-        for c in _s2.get_paper_citations(sid, citers_per_seed, fields=F_EDGE):
+        for c in await _s2.aget_paper_citations(sid, citers_per_seed, fields=F_EDGE):
             # edge c.paper → seed (the CITER cites the seed): record the edge on the citer via
             # cites=key, so c.paper's referenced_works carries the seed's paperId.
             add(getattr(c, "paper", None), intents=getattr(c, "intents", None),
@@ -555,36 +558,42 @@ def _graph_tap(source: str, works: dict) -> None:
         logger.debug("cartographer graph tap swallowed: %s", exc)
 
 
-def field_skeleton(query: Optional[str] = None, seeds: Optional[list[str]] = None,
-                   n_seeds: int = 4, citers_per_seed: int = 30, source: str = "openalex",
-                   max_nodes: int = 250, fresh: bool = False,
-                   deadline_s: Optional[float] = None) -> dict:
+async def afield_skeleton(query: Optional[str] = None, seeds: Optional[list[str]] = None,
+                          n_seeds: int = 4, citers_per_seed: int = 30, source: str = "openalex",
+                          max_nodes: int = 250, fresh: bool = False,
+                          deadline_s: Optional[float] = None) -> dict:
     """Assemble the COMPLETE raw citation neighborhood of a field over a CHOSEN graph source
     (``openalex`` default / ``s2``). Mechanical, no judgment — the AGENT routes + maps. Pass
     ``seeds`` (work/paper ids you chose) or ``query`` (auto-resolves top-relevance seeds).
     ``deadline_s`` (default ~25s) is the OVERALL wall-clock budget: on a slow/throttling upstream
     the assemble bails early with a PARTIAL map (``_meta.deadline_hit``) instead of hanging — raise
-    it to map a large field more completely."""
+    it to map a large field more completely.
+
+    The fetches are awaited on the loop (``_openalex.aget_json`` / the ``_s2`` async wrappers); the
+    graph build (``_build``: in-degree, sort, edge list, relevance stamp) is pure CPU over the
+    assembled works and runs in the process lane (``portal.run_cpu``); the cache read and write go to
+    the IO lane."""
     # A-class canonical key: normalize + sort the seeds so every id-FORM (bare arXiv / ArXiv: / DOI:)
     # and ORDERING of one seed SET collapses to a single cache row (a set defines the neighborhood;
-    # order does not). Reuses the s2 normalizer _s2_assemble applies downstream; oa seeds are already
+    # order does not). Reuses the s2 normalizer _as2_assemble applies downstream; oa seeds are already
     # canonical W-ids, so just sort them for order-stability.
     _seed_norm = _s2.norm_s2_id if source == "s2" else (lambda s: s)
     seed_key = ",".join(sorted(_seed_norm(s) for s in (seeds or [])))
     key = cache.make_key("cartographer", "nbhd", source, query or "",
                          seed_key, n_seeds, citers_per_seed)
     if not fresh:
-        cached = cache.get(key)
+        cached = await anyio.to_thread.run_sync(cache.get, key, limiter=portal.IO_LANE)
         if cached is not None:
             return cached
     t0 = time.monotonic()
     deadline_at = t0 + (deadline_s if deadline_s is not None else _ASSEMBLE_DEADLINE_S)
     seed_report: dict = {}
     if source == "s2":
-        seed_ids, works, deadline_hit = _s2_assemble(query, seeds, n_seeds, citers_per_seed,
-                                                     deadline_at, report=seed_report)
+        seed_ids, works, deadline_hit = await _as2_assemble(query, seeds, n_seeds, citers_per_seed,
+                                                            deadline_at, report=seed_report)
     else:
-        seed_ids, works, deadline_hit = _oa_assemble(query, seeds, n_seeds, citers_per_seed, deadline_at)
+        seed_ids, works, deadline_hit = await _aoa_assemble(query, seeds, n_seeds, citers_per_seed,
+                                                            deadline_at)
     unresolved = seed_report.get("unresolved") or []
     # A seed counts as resolved only when its own record came back; a placeholder kept for its edges
     # is still reported under seeds_unresolved.
@@ -606,7 +615,7 @@ def field_skeleton(query: Optional[str] = None, seeds: Optional[list[str]] = Non
                           "nodes_capped": False, "degraded": bool(degraded or throttled),
                           "partial": True,
                           **({"seeds_unresolved": unresolved} if unresolved else {})}}
-    result = _build(seed_ids, works, max_nodes, query=query)
+    result = await portal.run_cpu(_build, seed_ids, works, max_nodes, query)
     result["source"] = source
     # FAIL-OPEN graph tap: the single exit point both backends share. Mints work/person/topic/venue
     # nodes + cites/authored/about/published_in edges from the assembled works dict through the
@@ -669,11 +678,12 @@ def field_skeleton(query: Optional[str] = None, seeds: Optional[list[str]] = Non
     # a retry should resolve it, so that map is not cached either. not_found is permanent and caches.
     transient_seed = any(u["reason"] != "not_found" for u in unresolved)
     if not deadline_hit and not degraded and not transient_seed:
-        cache.set(key, result, ttl=6 * 3600)
+        await anyio.to_thread.run_sync(functools.partial(cache.set, key, result, ttl=6 * 3600),
+                                       limiter=portal.IO_LANE)
     return result
 
 
-def recommend(seeds: Optional[list[str]] = None, limit: int = 20, fresh: bool = False) -> dict:
+async def arecommend(seeds: Optional[list[str]] = None, limit: int = 20, fresh: bool = False) -> dict:
     """Semantically-similar papers to the seed(s) via Semantic Scholar's recommendation model
     (SPECTER embeddings + co-citation) — discovery BEYOND keyword search + the citation graph,
     including recent work the graph hasn't caught up to. A THIN channel: we build no embeddings;
@@ -687,15 +697,15 @@ def recommend(seeds: Optional[list[str]] = None, limit: int = 20, fresh: bool = 
     key = cache.make_key("cartographer", "recommend",
                          ",".join(sorted(_s2.norm_s2_id(s) for s in seeds)), limit)
     if not fresh:
-        cached = cache.get(key)
+        cached = await anyio.to_thread.run_sync(cache.get, key, limiter=portal.IO_LANE)
         if cached is not None:
             return cached
     F = ["paperId", "title", "year", "publicationDate", "citationCount", "authors", "externalIds"]
     # _s2 wrappers normalize seeds + carry the breaker/semaphore + degrade to [] on failure.
     if len(seeds) == 1:
-        raw = _s2.get_recommended_papers(seeds[0], fields=F, limit=limit)
+        raw = await _s2.aget_recommended_papers(seeds[0], fields=F, limit=limit)
     else:
-        raw = _s2.get_recommended_papers_from_lists(positive_paper_ids=seeds, fields=F)
+        raw = await _s2.aget_recommended_papers_from_lists(positive_paper_ids=seeds, fields=F)
 
     papers = []
     for i, p in enumerate(raw or []):
@@ -735,8 +745,6 @@ def recommend(seeds: Optional[list[str]] = None, limit: int = 20, fresh: bool = 
     # are NO recs AND S2 was unreachable (breaker-open / throttled), the empty is a FAILURE artifact,
     # not a genuine 'no recs' — cache it briefly so it self-heals instead of pinning 6h. A non-empty
     # result, or a genuine empty from a HEALTHY S2, keeps the 6h TTL.
-    if papers or not (_s2.breaker_open() or _s2.recently_throttled()):
-        cache.set(key, result, ttl=6 * 3600)
-    else:
-        cache.set(key, result, ttl=cache.EMPTY_TTL_CAP)
+    ttl = 6 * 3600 if papers or not (_s2.breaker_open() or _s2.recently_throttled()) else cache.EMPTY_TTL_CAP
+    await anyio.to_thread.run_sync(functools.partial(cache.set, key, result, ttl=ttl), limiter=portal.IO_LANE)
     return result

@@ -18,13 +18,15 @@ before trusting a high-stakes cite → check integrity) and what to do with the 
 
 from __future__ import annotations
 
+import functools
 import logging
 import re
 import urllib.parse
 
+import anyio
 import feedparser
 
-from omniseek.core import auth, cache, http
+from omniseek.core import auth, cache, http, portal
 from omniseek.core.recall import graph
 
 logger = logging.getLogger(__name__)
@@ -81,7 +83,7 @@ _RETRACTED_TYPES = {"retraction", "removal", "withdrawal"}
 
 # FIXED-API host allowlist (the SSRF hardening for the STRUCTURE resolver route, attack-3): these
 # resolvers are reached with a candidate-page-parsed DOI / arXiv id, so the id is attacker-
-# influenceable. _get_json pins the request to one of these trusted hosts AND refuses redirects (a
+# influenceable. _aget_json pins the request to one of these trusted hosts AND refuses redirects (a
 # 3xx is the attack signal — these APIs return 200 JSON; a redirect -> resolution failure). Three
 # independent constraints hold together: the id regex constrains the path, the allowlist constrains
 # the host, follow_redirects=False constrains the redirect. (Not full safe_fetch: these are fixed
@@ -91,7 +93,7 @@ _API_HOSTS = frozenset({"api.unpaywall.org", "api.crossref.org", "arxiv.org"})
 
 class _OffAllowlistHost(ValueError):
     """A resolver URL whose host is not in _API_HOSTS (a candidate-influenced id redirected /
-    pointed off-host). _get_json raises this; the callers' except returns the empty record."""
+    pointed off-host). _aget_json raises this; the callers' except returns the empty record."""
 
 
 def _arxiv_id(s: str) -> str | None:
@@ -121,7 +123,7 @@ def _canonical_key(raw: str) -> str:
     return f"raw:{(raw or '').strip().lower()}"
 
 
-def _get_json(url: str) -> dict:
+async def _aget_json(url: str) -> dict:
     host = (urllib.parse.urlparse(url).hostname or "").lower()
     if host not in _API_HOSTS:
         raise _OffAllowlistHost(f"resolver host {host!r} not in the fixed-API allowlist")
@@ -132,27 +134,33 @@ def _get_json(url: str) -> dict:
     # off-host redirect attack (attack-3) — refuse it, keeping the host pin + id regex + redirect
     # refusal as three independent SSRF constraints. The enrich _UA carries the mailto courtesy
     # contact unpaywall/crossref expect (their mailto/email params already ride the url query).
-    # http.get_json returns None on failure; re-raise so the callers' except returns the empty record.
-    d = http.get_json(url, headers={"User-Agent": _UA}, timeout=_TIMEOUT, follow_redirects=False)
+    # http.aget_json returns None on failure; re-raise so the callers' except returns the empty record.
+    d = await http.aget_json(url, headers={"User-Agent": _UA}, timeout=_TIMEOUT, follow_redirects=False)
     if d is None:
         raise RuntimeError(f"resolver request failed or returned no JSON: {url}")
     return d
 
 
-def _unpaywall(doi: str) -> dict:
+async def _aunpaywall(doi: str) -> dict:
     try:
-        d = _get_json(f"https://api.unpaywall.org/v2/{urllib.parse.quote(doi)}?email={_MAIL}")
+        d = await _aget_json(f"https://api.unpaywall.org/v2/{urllib.parse.quote(doi)}?email={_MAIL}")
         loc = d.get("best_oa_location") or {}
+        # is_oa is UNPAYWALL's verdict (oa_by), read from license metadata and the copies it has
+        # found: a publisher page that shows a chapter free without an open license can still be
+        # "closed" here (EYE-RANK 2026-10-20: 10.1007/978-3-031-68397-8_11, a CRYPTO 2024 chapter
+        # Springer labels "open access", © IACR, no license in Crossref; Unpaywall and OpenAlex both
+        # say closed). False means "no free copy known to Unpaywall", not "unreadable".
         return {"is_oa": bool(d.get("is_oa")), "pdf_url": loc.get("url_for_pdf"),
-                "oa_url": loc.get("url"), "oa_host": loc.get("host_type")}
+                "oa_url": loc.get("url"), "oa_host": loc.get("host_type"),
+                "oa_status": d.get("oa_status"), "oa_by": "unpaywall"}
     except Exception as exc:  # noqa: BLE001
         logger.warning("unpaywall %s: %s", doi, exc)
-        return {"is_oa": None, "pdf_url": None}
+        return {"is_oa": None, "pdf_url": None, "oa_by": "unpaywall"}
 
 
-def _integrity(doi: str) -> dict:
+async def _aintegrity(doi: str) -> dict:
     try:
-        d = _get_json(f"https://api.crossref.org/works/{urllib.parse.quote(doi)}?mailto={_MAIL}")["message"]
+        d = (await _aget_json(f"https://api.crossref.org/works/{urllib.parse.quote(doi)}?mailto={_MAIL}"))["message"]
         notices = sorted({u.get("type") for u in (d.get("updated-by") or []) if u.get("type")}
                          & _INTEGRITY_TYPES)
         # The citation count rides the SAME Crossref message we already fetched (no extra HTTP):
@@ -164,7 +172,7 @@ def _integrity(doi: str) -> dict:
         return {"retracted": None, "notices": [], "citation_count": None}
 
 
-def _arxiv_integrity(ax: str) -> dict:
+async def _aarxiv_integrity(ax: str) -> dict:
     """arXiv integrity from ONE Atom lookup: a withdrawal marker (author-announced in prose) and,
     when the preprint carries a published-journal DOI, that DOI routed through the SAME Crossref /
     Retraction-Watch path the DOI branch uses. arXiv has no machine retraction feed, so a withdrawal
@@ -172,8 +180,8 @@ def _arxiv_integrity(ax: str) -> dict:
     _arxiv_id() (\\d{4}\\.\\d{4,5}), so the id_list value is injection-safe; degrades to the
     honest "not checked" record on any failure (network / parse / Crossref down)."""
     try:
-        xml = http.get_text(_ARXIV_API, headers={"User-Agent": _UA}, timeout=_TIMEOUT,
-                            params={"id_list": ax, "max_results": 1})
+        xml = await http.aget_text(_ARXIV_API, headers={"User-Agent": _UA}, timeout=_TIMEOUT,
+                                   params={"id_list": ax, "max_results": 1})
         if not xml:
             return {"retracted": None, "notices": [], "note": "arxiv: not checked"}
         entries = feedparser.parse(xml).entries
@@ -191,7 +199,7 @@ def _arxiv_integrity(ax: str) -> dict:
         notices = ["arxiv_withdrawn"] if _ARXIV_WITHDRAWN_RE.search(blob) else []
         journal_doi = _doi(e.get("arxiv_doi") or "")
         if journal_doi:
-            di = _integrity(journal_doi)
+            di = await _aintegrity(journal_doi)
             notices = sorted(set(notices) | set(di.get("notices") or []))
             return {"retracted": di.get("retracted"), "notices": notices,
                     "note": f"arxiv: marker noted + journal-doi {journal_doi} checked",
@@ -265,18 +273,19 @@ def _graph_tap(rec: dict) -> None:
         logger.debug("enrich graph tap swallowed: %s", exc)
 
 
-def enrich(ids: list[str]) -> list[dict]:
+async def aenrich(ids: list[str]) -> list[dict]:
     """For each DOI / arXiv id: open-access PDF + integrity + citation count. Keyless.
 
     Cache keys on the CANONICAL paper identity (_canonical_key), NOT the raw string, so every
     reference form of one paper shares one row (no per-form divergence, no duplicate upstream calls).
     A COMPLETE record caches _TTL_OK (24h); a DEGRADED record (a needed backend was unreachable, so a
     None is "not fetched") caches _TTL_DEGRADED so a transient failure self-heals instead of persisting
-    a false null for a day (the 2026-07-10 citation-count bug: a transient S2 None cached 24h)."""
+    a false null for a day (the 2026-07-10 citation-count bug: a transient S2 None cached 24h).
+    The lookups are awaited on the loop; the cache read and write go to the IO lane."""
     out: list[dict] = []
     for raw in (ids or [])[:_MAX_IDS]:
         key = cache.make_key("enrich", _canonical_key(raw))
-        cached = cache.get(key)
+        cached = await anyio.to_thread.run_sync(cache.get, key, limiter=portal.IO_LANE)
         if cached is not None:
             rec = {**cached, "id": raw}  # share the resolved facts; echo the caller's own id form
             out.append(rec)
@@ -285,18 +294,18 @@ def enrich(ids: list[str]) -> list[dict]:
         ax = _arxiv_id(raw)
         if ax:
             # ONE bounded, cached S2 call for the arXiv citation count (the arXiv branch makes no
-            # other external call). _s2.get_paper normalizes the bare id to ArXiv:<id> and carries
+            # other external call). _s2.aget_paper normalizes the bare id to ArXiv:<id> and carries
             # the breaker + semaphore; it degrades to None, so the count is None when S2 is unreachable.
             from omniseek.core import _s2
-            p = _s2.get_paper(ax, fields=["citationCount"])
+            p = await _s2.aget_paper(ax, fields=["citationCount"])
             # Withdrawal marker (author-announced on arXiv) + the journal DOI, if any, routed through
             # the SAME Crossref / Retraction-Watch path the DOI branch uses.
-            integ = _arxiv_integrity(ax)
+            integ = await _aarxiv_integrity(ax)
             rec = {"id": raw, "kind": "arxiv", "doi": f"10.48550/arXiv.{ax}",
                    # .pdf suffix so omniseek_read_document/_fmt_of routes it to the PDF reader (a bare
                    # /pdf/<id> has no extension → was rejected as "unsupported"). arXiv serves both.
                    "is_oa": True, "pdf_url": f"https://arxiv.org/pdf/{ax}.pdf",
-                   "oa_url": f"https://arxiv.org/abs/{ax}",
+                   "oa_url": f"https://arxiv.org/abs/{ax}", "oa_status": "green", "oa_by": "arxiv",
                    "citation_count": getattr(p, "citationCount", None) if p else None,
                    "integrity": integ}
             # DEGRADED iff a backend we NEEDED could not answer: S2 returned no record (p is None -> the
@@ -310,9 +319,9 @@ def enrich(ids: list[str]) -> list[dict]:
                 rec = {"id": raw, "error": "not a DOI or arXiv id"}
                 degraded = False  # a malformed id is a stable, deterministic fact — cache normally
             else:
-                integrity = _integrity(doi)
-                oa = _unpaywall(doi)
-                # Surface the count Crossref returned inside _integrity at the record top level.
+                integrity = await _aintegrity(doi)
+                oa = await _aunpaywall(doi)
+                # Surface the count Crossref returned inside _aintegrity at the record top level.
                 rec = {"id": raw, "kind": "doi", "doi": doi,
                        **oa, "citation_count": integrity.get("citation_count"),
                        "integrity": integrity}
@@ -320,7 +329,9 @@ def enrich(ids: list[str]) -> list[dict]:
                 # retracted as a bool, so retracted=None means the Crossref call errored; is_oa=None
                 # means the Unpaywall call errored. Either -> cache briefly so it self-heals.
                 degraded = (integrity.get("retracted") is None) or (oa.get("is_oa") is None)
-        cache.set(key, rec, ttl=_TTL_DEGRADED if degraded else _TTL_OK)
+        await anyio.to_thread.run_sync(
+            functools.partial(cache.set, key, rec, ttl=_TTL_DEGRADED if degraded else _TTL_OK),
+            limiter=portal.IO_LANE)
         out.append(rec)
         _graph_tap(rec)          # mint the work node's integrity/OA facts (fail-open, enqueue-only)
     return out

@@ -18,15 +18,18 @@ This is the symmetric twin of ``_openalex`` for the S2 backend:
   circuit breaker (S2Down)  consecutive failures open the circuit briefly so a dead /
                             rate-limited S2 fails FAST instead of stacking the lib's
                             tenacity backoff across callers (mirror of OpenAlexDown)
-  retry=False + _retry_rl   the lib's OWN tenacity retry (default retry=True does
+  retry=False + _aretry_rl  the lib's OWN tenacity retry (default retry=True does
                             stop_after_attempt(10) + wait_exponential(5,60) ~= 250s of hidden
                             backoff on a 429) is turned OFF at construction so it can no longer
                             pre-empt the breaker with a ~260s fake-hang (the field_skeleton cold-
                             seed symptom); a SHORT eye-owned bounded retry (a few seconds) rides a
                             brief throttle, then degrades fast and lets the breaker take over
-  thin wrappers             get_paper / get_paper_references / get_paper_citations /
-                            search_paper / get_recommended_papers / search_author /
-                            get_author_papers — each with the semaphore + breaker, the
+  thin async wrappers       aget_paper / aget_paper_references / aget_paper_citations /
+                            asearch_paper / aget_recommended_papers / asearch_author /
+                            aget_author_papers (the library's async client, awaited on the
+                            loop; the sync ones were deleted 11-04, async step seven, and the
+                            last one, snippet_search, became asnippet_search on 11-10, EYE-TWINS-1)
+                            — each with the semaphore + breaker, the
                             bounded-iteration page cap (the "limit == page size, iterating
                             a PaginatedResults pages through EVERY page" trap the
                             cartographer comment warns about), and exception → degrade.
@@ -38,15 +41,17 @@ agent-facing shaping. No ranking, no relevance, no doc building here.
 from __future__ import annotations
 
 import asyncio
-import itertools
 import logging
 import re
 import threading
 import time
 from typing import Iterable, Optional
 
+import anyio
+from tenacity import AsyncRetrying, retry_if_exception, stop_after_attempt
+
 from omniseek.core import _guard as _guard_mod
-from omniseek.core import _probe, diag, upstreams
+from omniseek.core import _probe, diag, portal, upstreams
 
 logger = logging.getLogger(__name__)
 
@@ -191,7 +196,7 @@ def get_client():
                 # stop_after_attempt(10) + wait_exponential(5,60) ~= 250s of HIDDEN backoff on a 429,
                 # which pre-empts this module's breaker/pace and surfaces as a ~260s fake-hang (the
                 # field_skeleton cold-seed symptom). With it off, a 429 surfaces here in ~1s and the
-                # eye owns the short, bounded retry (_retry_rl) instead.
+                # eye owns the short, bounded retry (_aretry_rl) instead.
                 _client = SemanticScholar(api_key=_load_api_key(), timeout=TIMEOUT, retry=False)
                 _bound_requests(_client)
     return _client
@@ -266,48 +271,68 @@ def _is_rate_limit(exc: Exception) -> bool:
     return "429" in msg or "Too Many Requests" in msg or "ConnectionRefusedError" in msg
 
 
+_RL_TEXT = ("HTTP 429 from Semantic Scholar (rate limit; the semanticscholar library raises it as "
+            "ConnectionRefusedError, no connection was refused)")
+
+
+def _failure_text(exc: Exception) -> str:
+    """What a failure says in the log and the diagnostic: a rate limit is named as one. The library's
+    ConnectionRefusedError for a 429 read as "the host refuses connections" to a caller (PQDVRF
+    tspcf2, 2026-10-20) while the host answered every time (10-16 to 10-20: 331 of 920 requests were
+    429, no connection failed, OmniSeek's host breaker for it never opened)."""
+    return _RL_TEXT if _is_rate_limit(exc) else str(exc)
+
+
+# The semanticscholar library turns an answered 400 / 404 into exceptions of its own that carry no
+# status (semanticscholar 0.12 ApiRequester: BadQueryParametersException, ObjectNotFoundException);
+# named here so the breaker's one rule (_guard.counts_against_upstream) sees the status S2 answered.
+_LIB_ANSWER_STATUS = {"BadQueryParametersException": 400, "ObjectNotFoundException": 404}
+
+
 def _record_fail(exc: Optional[Exception] = None) -> None:
-    if exc is not None and _is_rate_limit(exc):  # stamp it so health() can surface it honestly
+    throttled = exc is not None and _is_rate_limit(exc)
+    if throttled:  # stamp it so ahealth() can surface it honestly
         with _lock:
             _state["last_429"] = time.time()
-    _guard.record_fail()  # bump the streak; opens the circuit at _BREAK_AFTER consecutive (logs on open)
+    # bump the streak unless S2 answered "no such paper" / "bad query"; opens the circuit at
+    # _BREAK_AFTER consecutive (logs on open)
+    _guard.record_fail(exc, status=_LIB_ANSWER_STATUS.get(type(exc).__name__), throttled=throttled)
 
 
-def _retry_rl(do):
-    """Run ``do()``, retrying ONLY on a rate-limit (429 -> ConnectionRefusedError; see _is_rate_limit)
-    with OmniSeek's own SHORT bounded backoff. Any other exception propagates on the first occurrence
-    exactly as before. This is the retry budget the lib used to own (and overspent at ~250s); here it
+def _rl_policy() -> dict:
+    return dict(
+        stop=stop_after_attempt(_RL_RETRIES + 1),
+        wait=lambda state: _RL_BACKOFF_S[min(state.attempt_number - 1, len(_RL_BACKOFF_S) - 1)],
+        retry=retry_if_exception(lambda e: isinstance(e, Exception) and _is_rate_limit(e)),
+        reraise=True,
+    )
+
+
+async def _aretry_rl(ado):
+    """Await ``ado()``, retrying ONLY on a rate-limit (429 -> ConnectionRefusedError; see _is_rate_limit)
+    with OmniSeek's own SHORT bounded backoff (``anyio.sleep``). Any other exception propagates on the
+    first occurrence. This is the retry budget the lib used to own (and overspent at ~250s); here it
     is a handful of seconds, after which the caller degrades + the breaker takes over."""
-    for _i in range(_RL_RETRIES + 1):
-        try:
-            return do()
-        except Exception as exc:
-            if _i >= _RL_RETRIES or not _is_rate_limit(exc):
-                raise
-            time.sleep(_RL_BACKOFF_S[min(_i, len(_RL_BACKOFF_S) - 1)])
+    return await AsyncRetrying(sleep=anyio.sleep, **_rl_policy())(ado)
 
 
-def _call(label: str, fn):
-    """Run one S2 client call behind the semaphore + breaker + eye-owned rate-limit retry.
-
-    Returns ``fn()`` (the raw lib return — a record OR a lazy ``PaginatedResults``;
-    NOTE: the lib defers the HTTP call to iteration time for paginated calls, so the
-    breaker can only see failures that surface at call time here; iteration failures
-    are bounded + degraded by the iterating wrappers below). ``S2Down`` propagates
-    immediately while the circuit is open; a 429 is retried a few times (bounded) by
-    _retry_rl; any other exception trips the breaker and re-raises so the wrapper degrades.
-    """
+async def _acall(label: str, afn):
+    """Run one S2 call, ``await afn()`` (the library's ASYNC call on the shared client's
+    ``_AsyncSemanticScholar``, or a raw request), behind the breaker, the permit + start slot awaited on
+    the loop (``_guard.ahold``) and OmniSeek-owned rate-limit retry (``_aretry_rl``). ``S2Down``
+    propagates immediately while the circuit is open; a 429 is retried a few times (bounded); any other
+    exception trips the breaker and re-raises so the wrapper degrades."""
     _check_open()
 
-    def _attempt():
+    async def _attempt():
         # Permit FIRST, then the 1 s start slot while holding it (the declared keyed 1 RPS): pacing
         # before the permit let slots reserved while all 4 permits were busy fire back to back when
         # slow calls finished. Both waits bounded: S2Down (degrade), never an unbounded hang.
-        with _guard.hold(_PACE_MAX_WAIT_S, _slot_busy, on_backlog=_backlog_shed, request_s=TIMEOUT):
-            return fn()
+        async with _guard.ahold(_PACE_MAX_WAIT_S, _slot_busy, on_backlog=_backlog_shed, request_s=TIMEOUT):
+            return await afn()
 
     try:
-        r = _retry_rl(_attempt)
+        r = await _aretry_rl(_attempt)
         _record_ok()
         return r
     except S2Down as exc:
@@ -315,38 +340,38 @@ def _call(label: str, fn):
         raise
     except Exception as exc:
         _record_fail(exc)
-        diag.note(f"s2.{label}", exc=exc)
+        diag.note(f"s2.{label}", body=_RL_TEXT if _is_rate_limit(exc) else None, exc=exc)
         raise
 
 
-def _bounded(label: str, make_iter, cap: int) -> list:
-    """Iterate a lazy ``PaginatedResults`` HARD-BOUNDED to ``cap`` items, behind the
-    semaphore + breaker, degrading to ``[]`` on any error.
+async def _abounded(label: str, amake_iter, cap: int) -> list:
+    """Iterate a lazy ``PaginatedResults`` HARD-BOUNDED to ``cap`` items, behind the semaphore +
+    breaker, degrading to ``[]`` on any error. ``amake_iter()`` awaits the library's ASYNC call (its
+    first page); the permit + start slot are ``_guard.ahold``.
 
-    CRITICAL (the trap the cartographer comment documents): the semanticscholar lib's
-    ``limit`` is the PAGE SIZE, and iterating a PaginatedResults auto-fetches EVERY
-    page. A famous seed (thousands of citers) would paginate without end (observed:
-    358s / 3750 nodes / 429 storm / dropped HTTP). So ``make_iter`` must request a
-    page size of ``cap`` (caller's job) AND we stop the iteration at ``cap`` here, so
-    the call is bounded no matter how cited the seed is.
-    """
+    CRITICAL (the trap the cartographer comment documents): the semanticscholar lib's ``limit`` is
+    the PAGE SIZE, and iterating a PaginatedResults auto-fetches EVERY page. A famous seed
+    (thousands of citers) would paginate without end (observed: 358s / 3750 nodes / 429 storm /
+    dropped HTTP). So ``amake_iter`` must request a page size of ``cap`` (caller's job) AND the
+    iteration stops at ``cap`` items here (pulling one item PAST cap advanced the lazy results into
+    a needless second HTTP page that hit S2's 429), so the call is bounded no matter how cited the
+    seed is. One page, one request."""
     try:
         _check_open()
 
-        def _attempt():
-            # permit first, then the 1 s start slot under it (see _call); bounded both ways
-            with _guard.hold(_PACE_MAX_WAIT_S, _slot_busy, on_backlog=_backlog_shed,
-                             request_s=TIMEOUT):
-                it = make_iter()
-                # islice pulls EXACTLY ``cap`` items and stops; the prior ``for i,item: if i>=cap: break``
-                # pulled one item PAST cap, which advances the lazy PaginatedResults into its next-page
-                # branch and fires a needless second HTTP page (offset=cap). At a cap that equals the page
-                # size (the ranked path's per_source=15) that doubled every S2 call and the second page hit
-                # S2's 429 throttle, so the lib's internal retry backoff blew past the broad deadline and the
-                # source was silently dropped. One page, one request.
-                return list(itertools.islice(it, cap))
+        async def _attempt():
+            async with _guard.ahold(_PACE_MAX_WAIT_S, _slot_busy, on_backlog=_backlog_shed,
+                                    request_s=TIMEOUT):
+                results = await amake_iter()
+                out: list = []
+                if cap > 0:
+                    async for item in results:
+                        out.append(item)
+                        if len(out) >= cap:
+                            break
+                return out
 
-        out = _retry_rl(_attempt)
+        out = await _aretry_rl(_attempt)
         _record_ok()
         return out
     except S2Down as exc:
@@ -355,8 +380,8 @@ def _bounded(label: str, make_iter, cap: int) -> list:
         return []
     except Exception as exc:  # noqa: BLE001 — bounded iteration degrades to empty
         _record_fail(exc)
-        logger.warning("s2 %s failed: %s", label, exc)
-        diag.note(f"s2.{label}", exc=exc)
+        logger.warning("s2 %s failed: %s", label, _failure_text(exc))
+        diag.note(f"s2.{label}", body=_RL_TEXT if _is_rate_limit(exc) else None, exc=exc)
         return []
 
 
@@ -378,12 +403,13 @@ def failure_reason(exc: Exception) -> str:
     return f"error:{type(exc).__name__}"
 
 
-def fetch_paper(paper_id: str, fields: Optional[list[str]] = None):
+async def afetch_paper(paper_id: str, fields: Optional[list[str]] = None):
     """One paper record by id (normalized), as ``(record, None)`` or ``(None, reason)`` where
-    reason is a failure_reason() code. Same semaphore + breaker + bounded retry as get_paper."""
+    reason is a failure_reason() code. Same semaphore + breaker + bounded retry as aget_paper."""
     try:
         kwargs = {"fields": fields} if fields else {}
-        rec = _call("get_paper", lambda: get_client().get_paper(norm_s2_id(paper_id), **kwargs))
+        rec = await _acall("get_paper", lambda: get_client()._AsyncSemanticScholar.get_paper(
+            norm_s2_id(paper_id), **kwargs))
     except Exception as exc:  # noqa: BLE001
         logger.warning("s2 get_paper %s failed: %s", paper_id, exc)
         return None, failure_reason(exc)
@@ -392,34 +418,38 @@ def fetch_paper(paper_id: str, fields: Optional[list[str]] = None):
     return rec, None
 
 
-def get_paper(paper_id: str, fields: Optional[list[str]] = None):
+async def aget_paper(paper_id: str, fields: Optional[list[str]] = None):
     """One paper record by id (normalized). None on any failure / breaker-open."""
-    return fetch_paper(paper_id, fields)[0]
+    return (await afetch_paper(paper_id, fields))[0]
 
 
-def search_paper(query: str, limit: int = 10, fields: Optional[list[str]] = None,
-                 **kwargs) -> list:
-    """Search papers, HARD-BOUNDED to ``limit`` (page size = limit so iteration can't
-    page through every hit). Extra kwargs (year / venue / min_citation_count) pass
-    through to the lib. Returns a list (degrades to [] on error)."""
+async def asearch_paper(query: str, limit: int = 10, fields: Optional[list[str]] = None,
+                        **kwargs) -> list:
+    """Search papers, HARD-BOUNDED to ``limit`` (page size = limit so iteration can't page through
+    every hit). Extra kwargs (year / venue / min_citation_count) pass through to the lib. Returns a
+    list (degrades to [] on error). The library's own async call (the shared client's
+    ``_AsyncSemanticScholar``, the object its sync methods drive through asyncio.run, so the total
+    deadline of ``_bound_requests`` applies here too), awaited on the caller's loop."""
     page = min(limit, 100)
     fkw = {"fields": fields} if fields else {}
-    return _bounded("search_paper",
-                    lambda: get_client().search_paper(query or "", limit=page, **fkw, **kwargs),
-                    limit)
+    return await _abounded(
+        "search_paper",
+        lambda: get_client()._AsyncSemanticScholar.search_paper(query or "", limit=page, **fkw, **kwargs),
+        limit)
 
 
-def snippet_search(query: str, limit: int = 20) -> list:
+async def asnippet_search(query: str, limit: int = 20) -> list:
     """Passage-level full-text retrieval via S2 ``/graph/v1/snippet/search`` — the exact SENTENCES /
     sections across S2's open-access full-text corpus that match ``query`` (not just papers/abstracts).
-    The ``semanticscholar`` lib does NOT expose this endpoint, so it is a raw ``http.get_json`` wrapped
-    in ``_call`` for the SAME pace/semaphore/breaker guard every S2 caller shares (never hit S2 outside
-    ``_call``). Returns the raw ``data`` list of ``{score, paper, snippet}`` records; degrades to [] on
-    error (a 429 surfaces as get_json -> None -> [], so the pace+concurrency guard still bounds it even
-    though the breaker cannot see the swallowed 429)."""
-    def _go():
+    The ``semanticscholar`` lib does NOT expose this endpoint, so it is a raw ``http.aget_json`` wrapped
+    in ``_acall`` for the SAME pace/semaphore/breaker guard every S2 caller shares (never hit S2 outside
+    ``_acall``; the shared helper's own gate is then a no-op, the task already holds it). Returns the
+    raw ``data`` list of ``{score, paper, snippet}`` records; degrades to [] on error (a 429 surfaces
+    as aget_json -> None -> [], so the pace+concurrency guard still bounds it even though the breaker
+    cannot see the swallowed 429)."""
+    async def _go():
         from omniseek.core import http
-        key = _load_api_key()
+        key = await anyio.to_thread.run_sync(_load_api_key, limiter=portal.IO_LANE)
         headers = {"x-api-key": key} if key else {}
         # S2's snippet/search default response already carries paper.{corpusId,title,authors,
         # openAccessInfo} + snippet.{text,snippetKind,section,snippetOffset}; a custom ``fields`` param
@@ -427,55 +457,55 @@ def snippet_search(query: str, limit: int = 20) -> list:
         # shape. publicationDate / citationCount are simply absent (never fabricated).
         params = {"query": query or "", "limit": max(1, min(int(limit or 20), 1000))}
         # A penalty-boxed S2 host can manifest as connect failures, so an in-slot retry would double one paced request.
-        data = http.get_json("https://api.semanticscholar.org/graph/v1/snippet/search",
-                             params=params, headers=headers, timeout=TIMEOUT,
-                             retry_transient=False)
+        data = await http.aget_json("https://api.semanticscholar.org/graph/v1/snippet/search",
+                                    params=params, headers=headers, timeout=TIMEOUT,
+                                    retry_transient=False)
         return (data or {}).get("data", []) or []
     try:
-        return _call("snippet_search", _go) or []
+        return await _acall("snippet_search", _go) or []
     except Exception:  # noqa: BLE001 — degrade to [] like the other wrappers (breaker already tripped upstream)
         return []
 
 
-def get_paper_references(paper_id: str, limit: int, fields: Optional[list[str]] = None) -> list:
+async def aget_paper_references(paper_id: str, limit: int, fields: Optional[list[str]] = None) -> list:
     """A paper's references, HARD-BOUNDED to ``limit`` (page size = limit). Returns the
     edge records (each carries ``.paper`` + ``.intents`` / ``.isInfluential``)."""
     page = min(limit, 100)
     fkw = {"fields": fields} if fields else {}
-    return _bounded("get_paper_references",
-                    lambda: get_client().get_paper_references(norm_s2_id(paper_id), limit=page, **fkw),
-                    limit)
+    return await _abounded("get_paper_references",
+                           lambda: get_client()._AsyncSemanticScholar.get_paper_references(norm_s2_id(paper_id), limit=page, **fkw),
+                           limit)
 
 
-def get_paper_citations(paper_id: str, limit: int, fields: Optional[list[str]] = None) -> list:
+async def aget_paper_citations(paper_id: str, limit: int, fields: Optional[list[str]] = None) -> list:
     """A paper's citations, HARD-BOUNDED to ``limit`` (page size = limit). Returns the
     edge records (each carries ``.paper`` + ``.intents`` / ``.isInfluential``)."""
     page = min(limit, 100)
     fkw = {"fields": fields} if fields else {}
-    return _bounded("get_paper_citations",
-                    lambda: get_client().get_paper_citations(norm_s2_id(paper_id), limit=page, **fkw),
-                    limit)
+    return await _abounded("get_paper_citations",
+                           lambda: get_client()._AsyncSemanticScholar.get_paper_citations(norm_s2_id(paper_id), limit=page, **fkw),
+                           limit)
 
 
-def get_recommended_papers(paper_id: str, fields: Optional[list[str]] = None,
-                           limit: int = 20) -> list:
+async def aget_recommended_papers(paper_id: str, fields: Optional[list[str]] = None,
+                                  limit: int = 20) -> list:
     """Recommended papers for ONE seed. The lib returns a plain list, but we cap
     defensively to ``limit`` regardless. Degrades to [] on error / breaker-open."""
     try:
         kwargs = {"fields": fields} if fields else {}
-        raw = _call("get_recommended_papers",
-                    lambda: get_client().get_recommended_papers(
-                        norm_s2_id(paper_id), limit=min(limit, 100), **kwargs))
+        raw = await _acall("get_recommended_papers",
+                           lambda: get_client()._AsyncSemanticScholar.get_recommended_papers(
+                               norm_s2_id(paper_id), limit=min(limit, 100), **kwargs))
     except Exception as exc:  # noqa: BLE001
         logger.warning("s2 get_recommended_papers %s failed: %s", paper_id, exc)
         return []
     return list(raw or [])[:limit]
 
 
-def get_recommended_papers_from_lists(positive_paper_ids: Iterable[str],
-                                      fields: Optional[list[str]] = None,
-                                      negative_paper_ids: Optional[Iterable[str]] = None,
-                                      limit: int = 20) -> list:
+async def aget_recommended_papers_from_lists(positive_paper_ids: Iterable[str],
+                                             fields: Optional[list[str]] = None,
+                                             negative_paper_ids: Optional[Iterable[str]] = None,
+                                             limit: int = 20) -> list:
     """Recommended papers from MULTIPLE positive seeds (and optional negatives). Seeds are
     normalized. Capped defensively to ``limit`` (mirrors the single-seed sibling). Degrades
     to [] on error / breaker-open."""
@@ -488,89 +518,87 @@ def get_recommended_papers_from_lists(positive_paper_ids: Iterable[str],
                 kwargs["fields"] = fields
             if neg:
                 kwargs["negative_paper_ids"] = neg
-            return get_client().get_recommended_papers_from_lists(**kwargs)
-        raw = _call("get_recommended_papers_from_lists", _go)
+            return get_client()._AsyncSemanticScholar.get_recommended_papers_from_lists(**kwargs)
+        raw = await _acall("get_recommended_papers_from_lists", _go)
     except Exception as exc:  # noqa: BLE001
         logger.warning("s2 get_recommended_papers_from_lists failed: %s", exc)
         return []
     return list(raw or [])[:limit]
 
 
-def search_author(name: str, limit: int = 10) -> list:
+async def asearch_author(name: str, limit: int = 10) -> list:
     """Search authors by name, HARD-BOUNDED to ``limit`` (page size = limit so a
     common name can't page forever). Returns a list (degrades to [])."""
     page = min(limit, 10)
-    return _bounded("search_author",
-                    lambda: get_client().search_author(name, limit=page),
-                    limit)
+    return await _abounded("search_author",
+                           lambda: get_client()._AsyncSemanticScholar.search_author(name, limit=page),
+                           limit)
 
 
-def get_author_papers(author_id: str, limit: int, fields: Optional[list[str]] = None) -> list:
+async def aget_author_papers(author_id: str, limit: int, fields: Optional[list[str]] = None) -> list:
     """One author's papers, HARD-BOUNDED to ``limit`` (page size = limit so a prolific
     author can't page forever). Returns a list (degrades to [])."""
     page = min(limit, 100)
     fkw = {"fields": fields} if fields else {}
-    return _bounded("get_author_papers",
-                    lambda: get_client().get_author_papers(author_id, limit=page, **fkw),
-                    limit)
+    return await _abounded("get_author_papers",
+                           lambda: get_client()._AsyncSemanticScholar.get_author_papers(author_id, limit=page, **fkw),
+                           limit)
 
 
 # ── shared health probe (single-flight + 60s cache) ──────────────────────────
 _HEALTH_TTL_S = 60.0
 _health: dict = {"at": 0.0, "result": None}
-_health_lock = threading.Lock()
 
 
-def health(timeout: float = 8.0) -> tuple[Optional[bool], str]:
+async def ahealth(timeout: float = 8.0) -> tuple[Optional[bool], str]:
     """ONE shared upstream probe for every S2-backed capability (single-flight + 60s cache).
 
-    Mirror of ``_openalex.health``: the cartographer (field_skeleton/recommend), the relations
+    Mirror of ``_openalex.ahealth``: the cartographer (field_skeleton/recommend), the relations
     layer (resolve_identity/coauthors) and the semantic_scholar source all delegate here instead
     of each probing S2 in its own health_check; the all-source health sweep otherwise fired them
     all at once, bursting the shared key into a 429 storm and tripping the breaker, so one transient
     probe storm read as "every S2 source down". One minimal search call (limit=1, fields=title) tests
-    connectivity + key validity + the breaker/rate state, cached 60s and single-flighted (the probe
-    runs under the lock) so N concurrent callers cause exactly ONE upstream call. A 429 is S2
+    connectivity + key validity + the breaker/rate state, cached 60s and single-flighted
+    (``_probe.shared_verdict``) so N concurrent callers cause exactly ONE upstream call. A 429 is S2
     rate-limiting us: it answered, but not whether search serves, so the verdict is None (not
     verified, 2026-10-04; it used to read healthy); a recent-429 stamp is surfaced in the message of a
     healthy verdict so an active throttle stays legible.
 
-    NOTE: the ``timeout`` arg is accepted for call-site parity with ``_openalex.health``; the shared
+    NOTE: the ``timeout`` arg is accepted for call-site parity with ``_openalex.ahealth``; the shared
     client's timeout is fixed at construction (TIMEOUT), so it is advisory here, not re-applied.
     """
-    now = time.monotonic()
-    with _health_lock:
-        if _health["result"] is not None and now - _health["at"] < _HEALTH_TTL_S:
-            return _health["result"]
-        try:
-            # ONE minimal call through _call (so it shares the pace + semaphore + breaker and an
-            # exception surfaces, unlike the degrading wrappers). search_paper returns a lazy
-            # PaginatedResults; touching len()/the first page forces the HTTP call here under the lock.
-            _call("health", lambda: get_client().search_paper(
-                "machine learning", limit=1, fields=["title"]))
-            ok, msg = True, "OK (shared S2 upstream reachable)"
-        except S2Down as exc:
-            # Self-shed (breaker / pool), NOT upstream-down: a genuine outage raises the raw
-            # exception below. Don't flip every S2-backed source down on a transient breaker-open.
-            # Nothing was sent, so nothing was verified: None (the watchdog's `unverified`), neither
-            # healthy nor failing; it self-heals when the breaker closes.
-            with _lock:
-                left = _state["open_until"] - time.time()
-            ok, msg = None, (_probe.breaker_open("Semantic Scholar, eye backing off", left) if left > 0
-                             else f"not verified: OmniSeek shed the probe, nothing sent ({exc})")
-        except Exception as exc:  # noqa: BLE001
-            # A 429 is S2 rate-limiting us: it answered, but not whether search serves, so it is
-            # NOT verified (None), never healthy (it used to read True here) and never down. Any
-            # other exception is a genuine outage.
-            if _is_rate_limit(exc):
-                ok, msg = None, f"{_probe.rate_limited('api.semanticscholar.org')}: {type(exc).__name__}"
-            else:
-                ok, msg = False, f"{type(exc).__name__}: {exc}"
+    return await _probe.shared_verdict(_health, _HEALTH_TTL_S, _aprobe)
+
+
+async def _aprobe() -> tuple[Optional[bool], str]:
+    """The probe behind ``ahealth`` (run once per TTL by ``_probe.shared_verdict``)."""
+    try:
+        # ONE minimal call through _acall (so it shares the pace + semaphore + breaker and an
+        # exception surfaces, unlike the degrading wrappers). Awaiting the library's async
+        # search_paper reads its first page: the HTTP call happens here.
+        await _acall("health", lambda: get_client()._AsyncSemanticScholar.search_paper(
+            "machine learning", limit=1, fields=["title"]))
+        ok, msg = True, "OK (shared S2 upstream reachable)"
+    except S2Down as exc:
+        # Self-shed (breaker / pool), NOT upstream-down: a genuine outage raises the raw
+        # exception below. Don't flip every S2-backed source down on a transient breaker-open.
+        # Nothing was sent, so nothing was verified: None (the watchdog's `unverified`), neither
+        # healthy nor failing; it self-heals when the breaker closes.
         with _lock:
-            last = _state.get("last_429", 0.0)
-        if ok and last and (time.time() - last) < 1800 and "429" not in msg:
-            msg = (f"OK (probe live), but a 429 hit {int(time.time() - last)}s ago: S2 is actively "
-                   "throttling the shared key; the data path falls back to cache while it backs off")
-        _health["at"] = time.monotonic()
-        _health["result"] = (ok, msg)
-        return _health["result"]
+            left = _state["open_until"] - time.time()
+        ok, msg = None, (_probe.breaker_open("Semantic Scholar, eye backing off", left) if left > 0
+                         else f"not verified: OmniSeek shed the probe, nothing sent ({exc})")
+    except Exception as exc:  # noqa: BLE001
+        # A 429 is S2 rate-limiting us: it answered, but not whether search serves, so it is
+        # NOT verified (None), never healthy (it used to read True here) and never down. Any
+        # other exception is a genuine outage.
+        if _is_rate_limit(exc):
+            ok, msg = None, f"{_probe.rate_limited('api.semanticscholar.org')}: {type(exc).__name__}"
+        else:
+            ok, msg = False, f"{type(exc).__name__}: {exc}"
+    with _lock:
+        last = _state.get("last_429", 0.0)
+    if ok and last and (time.time() - last) < 1800 and "429" not in msg:
+        msg = (f"OK (probe live), but a 429 hit {int(time.time() - last)}s ago: S2 is actively "
+               "throttling the shared key; the data path falls back to cache while it backs off")
+    return ok, msg

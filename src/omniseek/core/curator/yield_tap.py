@@ -17,7 +17,7 @@ the atomic write against a future P3 reader. Drop-oldest on ``queue.Full``. Batc
 
 Gating (REUSES recall.writer.WRITES_ENABLED, one source of truth, never a second "am I live"
 flag): ``record_search`` no-ops when WRITES_ENABLED is False, and the drain thread is started ONLY
-from ``serve_http.main`` under that guard. A cron/smoke process (watchtower / digest / health,
+from ``serve_http.main`` under that guard. A cron/CLI process (watchtower / digest / health,
 digest DOES call search_ranked) imports fresh -> WRITES_ENABLED False -> the tap is a silent no-op
 AND no drain thread runs, so even a stray enqueue is drained by nobody and fills+drops. The
 ``record_yield=False`` kwarg on search_ranked closes the in-process synthetic-search hole
@@ -36,13 +36,14 @@ import time
 from pathlib import Path
 
 from omniseek.core import cache
+from omniseek import where
 
 logger = logging.getLogger(__name__)
 
-# Runtime state lives under ~/.omniseek/state/curator/ (same tree as candidates.json + the
-# health-watchdog state; survives redeploys, rides the weekly state-backup launchd, keeps the
-# read-only deploy tree pristine). Created on first flush.
-STATE_DIR = Path.home() / ".omniseek" / "state" / "curator"
+# Runtime state lives under <state>/curator/ (same tree as candidates.json + the
+# health-watchdog state; survives redeploys, in no backup, keeps the read-only deploy tree
+# pristine). Created on first flush.
+STATE_DIR = where.state() / "curator"
 YIELD_PATH = STATE_DIR / "yield.json"
 
 _VERSION = 1
@@ -170,7 +171,7 @@ def _build_bundle(query: str, ranked, results, meta) -> dict:
 
 def record_search(query: str, ranked, results, meta) -> None:
     """Hot-path hook spliced at the return of ``search_ranked``. NO-OP unless WRITES_ENABLED (so
-    cron/smoke processes that hit the same chokepoint write nothing). ENQUEUE-ONLY: it builds an
+    cron/CLI processes that hit the same chokepoint write nothing). ENQUEUE-ONLY: it builds an
     immutable fact bundle and ``put_nowait``s it: it mutates nothing shared inline, performs no
     I/O, and NEVER raises into the caller (an exception here would break every search)."""
     try:
@@ -303,7 +304,7 @@ def _idle_timeout(pending: int, last_flush: float, now: "float | None" = None) -
 
 def start_writer() -> None:
     """Start the single drain daemon (idempotent). Called ONCE from serve_http.main() under the
-    WRITES_ENABLED guard, never from a cron/smoke import."""
+    WRITES_ENABLED guard, never from a cron/CLI import."""
     global _writer_started
     with _start_lock:
         if _writer_started:

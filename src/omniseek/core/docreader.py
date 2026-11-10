@@ -29,9 +29,10 @@ image half is delivered to the agent's own vision two ways:
     the fabrication trap). eye = render + structure; agent = see + judge.
 
 Transport: OmniSeek runs on the host; the user's files live on client machines.
-Convention: ``scp "<file>" <eye-host>:omniseek-inbox/`` (any window can),
-then call with ``omniseek-inbox/<name>`` — relative paths resolve against the
-service user's HOME. Exports land in ``omniseek-inbox/.exports/<stem>/``.
+Convention: ``scp "<file>" <eye-host>:<doc-inbox>/`` (any window can),
+then call with ``<doc-inbox>/<name>`` (``~`` expands; a relative path resolves
+against the service user's HOME). ``<doc-inbox>`` is omniseek.where.doc_inbox();
+the omniseek_read tool text shows its real value. Exports land in ``<doc-inbox>/.exports/<stem>/``.
 """
 from __future__ import annotations
 
@@ -39,12 +40,14 @@ import logging
 import os
 import re
 import tempfile
+from bisect import bisect_right
 from io import BytesIO
 from pathlib import Path
 from typing import Optional
 from urllib.parse import unquote, urlparse
 
-from omniseek.core import _netguard, _optdep, cache, http, safeurl, upstreams
+from omniseek.core import _netguard, _optdep, cache, http, portal, safeurl, upstreams
+from omniseek import where
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +64,7 @@ _CODE_EXTS = ("py", "pyi", "ts", "tsx", "js", "jsx", "mjs", "cjs", "rs", "go", "
               "sh", "bash", "zsh", "sql", "toml", "cfg", "ini", "conf", "yaml", "yml",
               "json", "xml", "html", "css", "tex", "rst", "dockerfile", "makefile")
 _SUPPORTED = ("pptx", "docx", "xlsx", "pdf", "txt", "md", "markdown", "csv", "htm") + _CODE_EXTS
-_MAX_DOWNLOAD = 100 * 1024 * 1024   # 100MB URL-download cap
+_MAX_DOWNLOAD = http.DOC_MAX_BYTES  # URL-download cap: the shared document cap (EYE-RSS-3; was 100MB here)
 _MAX_TEXT_FILE = 2 * 1024 * 1024    # raw txt/md/csv read cap
 _XLSX_MAX_ROWS = 300                # per sheet — honest truncation, not silence
 _XLSX_MAX_COLS = 40
@@ -136,7 +139,7 @@ def _fmt_from_response(content_type: Optional[str], cd_filename: Optional[str]) 
 def _allowed_doc_roots() -> list[Path]:
     """Directories omniseek_read_document / view_images may read from. Default: the inbox only.
     A deployer adds roots via OMNISEEK_DOC_ROOTS (',' or ':' separated absolute paths)."""
-    roots = [(Path.home() / "omniseek-inbox").resolve()]
+    roots = [(where.doc_inbox()).resolve()]
     for r in re.split(r"[:,]", os.environ.get("OMNISEEK_DOC_ROOTS", "")):
         r = r.strip()
         if r:
@@ -149,13 +152,13 @@ def _allowed_doc_roots() -> list[Path]:
 
 def _resolve_local(path: str) -> Path:
     """Local-path semantics: ~ expands; a relative path resolves against HOME (so the documented
-    "omniseek-inbox/<name>" convention works verbatim). SANDBOXED: the resolved REAL path must sit
-    under an allowed root (default ~/omniseek-inbox; extend via OMNISEEK_DOC_ROOTS), so a caller (or a
-    prompt-injected agent) cannot read arbitrary host files like ~/.omniseek/credentials. `..` is
+    "<doc-inbox>/<name>" convention works with the inbox written as ~/... or relative to HOME). SANDBOXED: the resolved REAL path must sit
+    under an allowed root (default <doc-inbox>; extend via OMNISEEK_DOC_ROOTS), so a caller (or a
+    prompt-injected agent) cannot read arbitrary host files like <credentials>. `..` is
     collapsed by resolve() before the containment check. Raises PermissionError on escape."""
     p = Path(os.path.expanduser(path))
     if not p.is_absolute():
-        p = Path.home() / p
+        p = where.home() / p
     rp = p.resolve()
     roots = _allowed_doc_roots()
     if not any(rp == root or root in rp.parents for root in roots):
@@ -181,6 +184,137 @@ def _window(text: str, start_char: int, max_chars: int) -> tuple[str, bool]:
             end = nl + 1                          # include the newline; the next page starts fresh
     chunk = text[start:end]
     return chunk, (start + len(chunk)) < len(text)
+
+
+# A sentence ends at . ! ? followed by whitespace, at 。！？ (no space needed), or at a line break.
+_SENT_SEP = re.compile(r"(?<=[.!?])\s+|(?<=[。！？])\s*|\s*\n\s*")
+
+
+def _flag(v) -> bool:
+    """A grep flag as a bool; 'true' / 'false' strings (an omniseek_gather call skips the MCP coercion) too."""
+    if isinstance(v, str):
+        from omniseek.core.normalize import _coerce_bool
+        return _coerce_bool(v) is True
+    return bool(v)
+
+
+def grep_terms(grep, grep_case=False) -> list[str]:
+    """``grep`` argument -> clean term list. A list/tuple is taken item by item; a string is split
+    on commas (ASCII or full-width) so a term may itself contain spaces. Empty -> []. Duplicates are
+    dropped ignoring case, or exactly when ``grep_case`` (then iO and IO are two terms)."""
+    if grep is None:
+        return []
+    items = grep if isinstance(grep, (list, tuple)) else re.split(r"[,，]", str(grep))
+    case = _flag(grep_case)
+    out: list[str] = []
+    for it in items:
+        t = str(it).strip()
+        if t and (t not in out if case else t.lower() not in [o.lower() for o in out]):
+            out.append(t)
+    return out
+
+
+def _ascii_alnum(c: str) -> bool:
+    return c.isascii() and c.isalnum()
+
+
+# A word hyphenated at the end of a PDF line: the hyphen, then the line break.
+_LINE_END_HYPHEN = r"(?:-[ \t]*\n\s*)?"
+
+
+def _part_pattern(part: str) -> str:
+    """One blank-free piece of a term. PDF text hyphenates long words at line ends (replace-, then
+    ment on the next line), so between two ASCII letters a line-end hyphen may sit; a hyphen of the
+    term itself may be followed by the line break (agent-, then state). The extracted text keeps its
+    hyphens: removing them at extraction (PyMuPDF TEXT_DEHYPHENATE) would also glue every compound
+    broken at a line end (agentstate), so the search tolerates the break instead (EYE-PDF-TEXT)."""
+    out = []
+    for i, c in enumerate(part):
+        if c == "-":
+            out.append(r"-\s*")
+            continue
+        if i and part[i - 1].isascii() and part[i - 1].isalpha() and c.isascii() and c.isalpha():
+            out.append(_LINE_END_HYPHEN)
+        out.append(re.escape(c))
+    return "".join(out)
+
+
+def _term_pattern(term: str, word: bool, case: bool) -> "re.Pattern":
+    """``term`` as a pattern over the whole text. A blank in it matches any run of white space: PDF
+    text breaks every line, so a phrase is often split by a line break; a word or compound hyphenated
+    across a line break matches too (_part_pattern). With ``word``, an ASCII letter or digit at either
+    edge may not touch another ASCII letter or digit; an edge that is any other character (a CJK one,
+    punctuation) is not limited."""
+    body = r"\s+".join(_part_pattern(part) for part in term.split())
+    pre = r"(?<![A-Za-z0-9])" if word and _ascii_alnum(term[0]) else ""
+    post = r"(?![A-Za-z0-9])" if word and _ascii_alnum(term[-1]) else ""
+    return re.compile(pre + body + post, 0 if case else re.IGNORECASE)
+
+
+def _sentences(text: str) -> list[tuple[int, int]]:
+    """(start, end) spans of the sentences in ``text``; ``text[start:end]`` is the sentence."""
+    spans, pos = [], 0
+    for m in _SENT_SEP.finditer(text):
+        if m.start() > pos:
+            spans.append((pos, m.start()))
+        pos = max(pos, m.end())
+    if pos < len(text):
+        spans.append((pos, len(text)))
+    return spans
+
+
+def grep_text(text: str, grep, start_char: int = 0, max_chars: int = 24000, context: int = 1,
+              grep_word=False, grep_case=False) -> dict:
+    """Only the sentences of ``text`` that contain any of the ``grep`` terms (case-insensitive unless
+    ``grep_case``; a substring unless ``grep_word``, which matches whole words; a blank in a term also
+    matches a line break, see _term_pattern), each
+    with ``context`` sentences before and after; overlapping windows merge into one match. Every
+    match carries its ``start`` / ``end`` character offsets in the FULL text (``text[start:end]`` is
+    exactly its ``text``) and the terms it hit. ``hits`` = sentences a term occurrence starts in,
+    ``occurrences`` = total term occurrences. Matches whose first hit sentence starts before
+    ``start_char`` are skipped; the returned matches stop once their text passes ``max_chars``
+    (at least one is always returned); then ``truncated`` is true and ``next_start_char`` is where
+    to re-call to page on. Context 1 = one sentence each side: enough to read the hit in place,
+    the least that does. hits, occurrences and each match's terms all follow the same rule."""
+    case, word = _flag(grep_case), _flag(grep_word)
+    terms = grep_terms(grep, grep_case=case)
+    pats = [_term_pattern(t, word, case) for t in terms]
+    spans = _sentences(text)
+    starts = [a for a, _ in spans]
+    reach: dict[int, int] = {}            # sentence an occurrence starts in -> last sentence it reaches
+    occurrences = 0
+    for p in pats:
+        for m in p.finditer(text):
+            occurrences += 1
+            i = max(bisect_right(starts, m.start()) - 1, 0)
+            reach[i] = max(reach.get(i, i), bisect_right(starts, m.end() - 1) - 1)
+    hit_idx = sorted(reach)
+    groups: list[list[int]] = []          # [lo, hi, first_hit] sentence indices
+    for i in hit_idx:
+        lo, hi = max(i - context, 0), min(reach[i] + context, len(spans) - 1)
+        if groups and lo <= groups[-1][1] + 1:
+            groups[-1][1] = max(groups[-1][1], hi)
+        else:
+            groups.append([lo, hi, i])
+    first = max(int(start_char or 0), 0)
+    budget = max(int(max_chars or 0), 1)
+    matches, used, truncated, next_start = [], 0, False, None
+    for lo, hi, h in groups:
+        if spans[h][0] < first:
+            continue
+        a, b = spans[lo][0], spans[hi][1]
+        if matches and used + (b - a) > budget:
+            truncated, next_start = True, spans[h][0]
+            break
+        chunk = text[a:b]
+        matches.append({"start": a, "end": b, "text": chunk,
+                        "terms": [t for t, p in zip(terms, pats) if p.search(chunk)]})
+        used += b - a
+    out = {"terms": terms, "hits": len(hit_idx), "occurrences": occurrences, "matches": matches,
+           "returned_matches": len(matches), "truncated": truncated}
+    if next_start is not None:
+        out["next_start_char"] = next_start
+    return out
 
 
 def _sec(label: str, lines: list[str], media: int) -> dict:
@@ -289,9 +423,10 @@ def _read_pdf(path: Path, export_dir: Optional[Path]) -> tuple[str, list[dict], 
     sections = []
     for i, page in enumerate(doc, 1):
         n_imgs = len(page.get_images(full=True))
-        sections.append(_sec(f"Page {i}", [page.get_text("text").strip(),
-                                           f"[{n_imgs} image(s) on this page]" if n_imgs else None],
-                             n_imgs))
+        page_text = page.get_text("text").strip()
+        sec = _sec(f"Page {i}", [page_text, f"[{n_imgs} image(s) on this page]" if n_imgs else None], n_imgs)
+        sec["text"] = page_text   # the page's own text, without the image note, for text_quality
+        sections.append(sec)
     doc.close()
     return title, sections, []
 
@@ -344,42 +479,47 @@ def _cd_filename(content_disposition: Optional[str]) -> Optional[str]:
 
 
 def _download(url: str, fmt: str) -> tuple[Path, Optional[str], Optional[str]]:
+    """Sync entry for a caller on a thread: ``_adownload`` on the event loop (portal.call)."""
+    return portal.call(_adownload, url, fmt)
+
+
+async def _adownload(url: str, fmt: str) -> tuple[Path, Optional[str], Optional[str]]:
     """Stream a URL to a temp file (bounded). Returns (path, content_type, cd_filename) so the
     caller can type a resource the URL extension couldn't (e.g. an extension-less arxiv.org/pdf/<id>
     served as application/pdf). ``fmt`` is only the temp-file suffix (".bin" when unknown)."""
+    import anyio
     import httpx
 
-    _blk = _netguard.security_block_reason(url)
+    _blk = await anyio.to_thread.run_sync(_netguard.security_block_reason, url, limiter=portal.IO_LANE)
     if _blk is not None:
         raise RuntimeError(f"refused SSRF-class url ({_blk}): {url[:120]}")
     # Follow redirects MANUALLY (follow_redirects=False) and re-validate EVERY hop's Location via
     # _netguard before connecting (C2 UNTRUSTED_URL close): this URL is agent-controlled and the bytes
-    # come back in-band, so a blind 302 -> 169.254.169.254 was an SSRF oracle. safeurl.walk_redirects_
+    # come back in-band, so a blind 302 -> 169.254.169.254 was an SSRF oracle. safeurl.awalk_redirects_
     # revalidated centralizes the per-hop guard (one _netguard decision, no forked SSRF logic) and hands
     # back the FINAL non-3xx response with its body unread so we still STREAM it under _MAX_DOWNLOAD.
     # Declared host gates for the URL asked for (e.g. arxiv.org's robots.txt Crawl-delay 15 s), held
     # for the whole download; UpstreamBusy (a RuntimeError) propagates like any other refusal.
-    with upstreams.hop_gates(request_s=90) as gates, httpx.Client(
+    async with upstreams.ahop_gates(request_s=90) as gates, httpx.AsyncClient(
             follow_redirects=False, timeout=90, headers={"User-Agent": _UA},
-            event_hooks=http.progress_hooks()) as client:   # progress renews the gates' leases
+            event_hooks=http.aprogress_hooks()) as client:   # progress renews the gates' leases
         # every hop through the redirect rule (declared gates), held until the body is written
-        r = safeurl.walk_redirects_revalidated(client, "GET", url, max_redirects=10, gates=gates)
+        r = await safeurl.awalk_redirects_revalidated(client, "GET", url, max_redirects=10, gates=gates)
         try:
             r.raise_for_status()
             content_type = r.headers.get("content-type")
             cd_filename = _cd_filename(r.headers.get("content-disposition"))
             # mkstemp only AFTER the final response is validated + 2xx-checked: a refused redirect (raise
             # above) never leaves an empty temp file behind, unlike the old create-then-stream order.
-            fd, tmp = tempfile.mkstemp(suffix=f".{fmt or 'bin'}", prefix="omniseek-doc-")
-            os.close(fd)
+            tmp = await anyio.to_thread.run_sync(_new_temp, fmt, limiter=portal.IO_LANE)
             try:
                 size = 0
-                with open(tmp, "wb") as f:
-                    for chunk in r.iter_bytes():
+                async with await anyio.open_file(tmp, "wb") as f:
+                    async for chunk in r.aiter_bytes():
                         size += len(chunk)
                         if size > _MAX_DOWNLOAD:
                             raise RuntimeError(f"download exceeds {_MAX_DOWNLOAD // 2**20}MB cap")
-                        f.write(chunk)
+                        await f.write(chunk)
             except BaseException:  # noqa: BLE001 an oversize / stream failure must not orphan the temp file
                 try:
                     os.remove(tmp)
@@ -387,17 +527,74 @@ def _download(url: str, fmt: str) -> tuple[Path, Optional[str], Optional[str]]:
                     pass
                 raise
         finally:
-            r.close()
+            await r.aclose()
     return Path(tmp), content_type, cd_filename
 
 
+def _new_temp(fmt: str) -> str:
+    fd, tmp = tempfile.mkstemp(suffix=f".{fmt or 'bin'}", prefix="omniseek-doc-")
+    os.close(fd)
+    return tmp
+
+
+_OCR_LABEL = "图中文字 (OCR · 机器识别,可能有误)"
+_MARKDOWN_FORMATS = ("docx", "md", "markdown", "html", "htm")
+
+
+def _level_plan(fmt: str, rec: dict) -> tuple:
+    """(detectors to try, outline labels, skip_to) for omniseek_read's brief/head/section levels.
+
+    The reader's own outline is reused where it has one (pptx slides, xlsx sheets, pdf pages); a pdf
+    first tries paper headings, since a paper's pages say less than its sections. docx / md / html
+    hold one outline part whose body carries markdown headings, so those are cut inside the body,
+    past the "## <label>" wrapper line. Plain text, csv and code carry no heading markup."""
+    text = rec.get("_full_text") or ""
+    labels = [o["label"] for o in rec.get("outline") or []]
+    if f"\n## {_OCR_LABEL}\n" in text:
+        labels.append(_OCR_LABEL)
+    if fmt == "pdf":
+        return ["paper", "outline"], labels, 0
+    if fmt in _MARKDOWN_FORMATS:
+        nl = text.find("\n")
+        return ["markdown"], labels, (nl + 1 if nl >= 0 else 0)
+    if fmt in ("pptx", "xlsx"):
+        return ["outline"], labels, 0
+    return [], labels, 0
+
+
+def _dns_absent(src: str, exc: BaseException) -> Optional[str]:
+    """The download failed before any answer (no connection, the TLS handshake cut, the host's breaker
+    open): when public DNS says the host does not exist, the sentence saying so (eye.dns_absence), and
+    the host's failed connections are dropped so they open no breaker. Else None."""
+    if not (upstreams.is_unreachable(exc) or isinstance(exc, upstreams.HostDown)):
+        return None
+    try:
+        host = exc.request.url.host   # the hop that failed (an httpx error carries its request)
+    except Exception:  # noqa: BLE001 (no request on it: the address asked for)
+        host = urlparse(src).hostname or ""
+    from omniseek.core import dns_absence
+    gone = dns_absence.absent(host)
+    if gone:
+        upstreams.note_host_absent(host)
+    return gone
+
+
 def read_document(src: str, start_char: int = 0, max_chars: int = 24000,
-                  export_media: bool = False, ocr: bool = False) -> dict:
+                  export_media: bool = False, ocr: bool = False, grep=None,
+                  level: str = "full", section="", grep_word=False, grep_case=False) -> dict:
     """Parse `src` (local path or URL) → structured readable text. See omniseek_read_document.
 
     ocr=True additionally runs OCR over every embedded image (pptx/pdf/docx) and folds the
     recognized text-in-pixels into the body under a '图中文字 (OCR)' section — turns a scanned
-    doc / figure deck's baked-in text into searchable text. Slower (per-image); cached."""
+    doc / figure deck's baked-in text into searchable text. Slower (per-image); cached.
+
+    grep (one term, a comma-separated string, or a list) returns, instead of ``text``, only the
+    sentences that contain a term (see ``grep_text``) under ``grep``; without it nothing changes.
+    grep_word / grep_case go to grep_text unchanged (whole words / match case).
+
+    level="brief" / "head" / "section" answer from the same parsed text through
+    sections.read_level (see omniseek_read); "full" is the windowed text below, unchanged. grep, when
+    given, takes precedence over level."""
     src = (src or "").strip()
     if not src:
         return {"source": src, "error": "empty path/url"}
@@ -415,7 +612,10 @@ def read_document(src: str, start_char: int = 0, max_chars: int = 24000,
     try:
         if is_url:
             ck_id = src
-            tmp, content_type, cd_filename = _download(src, fmt)
+            # an arXiv /pdf/ or /html/ link is read from export.arxiv.org under its full-text gate
+            # (EYE-RSS-3), not from arxiv.org under the 15 s Crawl-delay gate; the cache key stays src
+            from omniseek.core.sources.api import _arxiv_fulltext
+            tmp, content_type, cd_filename = _download(_arxiv_fulltext.export_url(src) or src, fmt)
             path = tmp
             if not fmt:
                 fmt = _fmt_from_response(content_type, cd_filename)
@@ -429,7 +629,7 @@ def read_document(src: str, start_char: int = 0, max_chars: int = 24000,
             except PermissionError as exc:
                 return {"source": src, "error": str(exc)}
             if not path.is_file():
-                inbox = Path.home() / "omniseek-inbox"
+                inbox = where.doc_inbox()
                 have = sorted(p.name for p in inbox.glob("*") if p.is_file())[:20] if inbox.is_dir() else []
                 return {"source": src, "error": f"file not found: {path}",
                         "inbox_files": have}
@@ -439,7 +639,7 @@ def read_document(src: str, start_char: int = 0, max_chars: int = 24000,
         export_dir: Optional[Path] = None
         if export_media:
             stem = re.sub(r"[^\w.-]+", "_", Path(unquote(urlparse(src).path if is_url else src)).stem) or "doc"
-            export_dir = Path.home() / "omniseek-inbox" / ".exports" / stem
+            export_dir = where.doc_inbox() / ".exports" / stem
             export_dir.mkdir(parents=True, exist_ok=True)
 
         ck = cache.make_key("docreader", ck_id, fmt, bool(export_media), bool(ocr))
@@ -458,6 +658,12 @@ def read_document(src: str, start_char: int = 0, max_chars: int = 24000,
                 "media": media[:_MEDIA_LIST_CAP],
                 "media_dir": str(export_dir) if export_dir else None,
             }
+            if fmt == "pdf":
+                # the same garbled-text-layer reading as every other PDF OmniSeek reads (pdf_source)
+                from omniseek.core.sources.scrape.pdf_source import text_quality
+                quality = text_quality("\n\n".join(s.get("text", "") for s in sections))
+                if quality:
+                    rec["text_quality"] = quality
             if ocr and fmt in _IMAGE_FORMATS:
                 blocks, n = [], 0
                 for im in _iter_images(path, fmt, None, None):
@@ -470,16 +676,34 @@ def read_document(src: str, start_char: int = 0, max_chars: int = 24000,
                         n += 1
                 rec["ocr_images"] = n
                 if blocks:
-                    rec["_full_text"] += "\n\n## 图中文字 (OCR · 机器识别,可能有误)\n\n" + "\n\n".join(blocks)
+                    rec["_full_text"] += f"\n\n## {_OCR_LABEL}\n\n" + "\n\n".join(blocks)
             cache.set(ck, rec, ttl=_TTL)
+        # The window fields go before the outline and the body: a caller that cuts a long answer short
+        # keeps them (total_chars, truncated, where to continue), losing only text.
+        rest = {k: v for k, v in rec.items() if k != "_full_text"}
+        if grep_terms(grep):
+            return {"source": src, "total_chars": len(rec["_full_text"]), "start_char": int(start_char or 0),
+                    "cached": was_cached, **rest,
+                    "grep": grep_text(rec["_full_text"], grep, start_char, max_chars,
+                                      grep_word=grep_word, grep_case=grep_case)}
+        if level and level != "full":
+            from omniseek.core import sections
+            kinds, labels, skip_to = _level_plan(fmt, rec)
+            lv = sections.read_level(rec["_full_text"], level, section=section, kinds=kinds,
+                                     labels=labels, skip_to=skip_to,
+                                     meta={"title": rec.get("title"), "source": src},
+                                     max_chars=max_chars)
+            tq = {"text_quality": rec["text_quality"]} if rec.get("text_quality") else {}
+            return {"source": src, "format": fmt, "cached": was_cached, **tq, **lv}
         text, truncated = _window(rec["_full_text"], start_char, max_chars)
-        out = {k: v for k, v in rec.items() if k != "_full_text"}
-        out.update({"source": src, "text": text, "total_chars": len(rec["_full_text"]),
-                    "returned_chars": len(text), "start_char": int(start_char or 0),
-                    "truncated": truncated, "cached": was_cached})
-        return out
+        return {"source": src, "total_chars": len(rec["_full_text"]), "returned_chars": len(text),
+                "start_char": int(start_char or 0), "truncated": truncated, "cached": was_cached,
+                **rest, "text": text}
     except Exception as exc:  # noqa: BLE001
         logger.warning("docreader failed %s: %s", src, exc)
+        gone = _dns_absent(src, exc) if "://" in src else None
+        if gone:
+            return {"source": src, "error": gone}
         return {"source": src, "error": f"{type(exc).__name__}: {str(exc)[:300]}"}
     finally:
         if tmp is not None:
@@ -633,7 +857,6 @@ def view_image_urls(urls, max_images: int = 8, max_dim: int = _VIEW_MAX_DIM) -> 
     (xiaohongshu / zhihu / etc. — where the 干货 often lives) WITHOUT a download/scp dance.
     Browser-ish headers + a Referer so image CDNs (rednotecdn / xhscdn) serve us. Returns
     {"images": [{url, data:bytes, format} | {url, error}], "count": N_ok}."""
-    import httpx
     items = urls if isinstance(urls, (list, tuple)) else re.split(r"[\s,]+", str(urls or "").strip())
     items = [u for u in (str(x).strip() for x in items) if u.startswith("http")][:max_images]
     if not items:
@@ -650,26 +873,32 @@ def view_image_urls(urls, max_images: int = 8, max_dim: int = _VIEW_MAX_DIM) -> 
             out.append({"url": u, "error": f"refused: {_blk}"})
             continue
         try:
-            # Follow redirects MANUALLY + re-validate each hop via _netguard (C2 UNTRUSTED_URL close):
-            # follow_redirects=True let a 302 -> 127.0.0.1:9222 reach the loopback CDP DevTools API and
-            # exfil its bytes in-band. safeurl.walk_redirects_revalidated raises refused-SSRF on a blocked
-            # hop (caught below -> error entry); the FINAL non-3xx response's bytes are used as before.
-            with upstreams.hop_gates(request_s=25) as gates, httpx.Client(
-                    follow_redirects=False, timeout=25, headers=hdrs,
-                    event_hooks=http.progress_hooks()) as client:
-                r = safeurl.walk_redirects_revalidated(client, "GET", u, max_redirects=10,
-                                                       gates=gates)
-                try:
-                    r.read()  # buffer the final body (stream=True response) before touching .content
-                    if r.status_code == 200 and len(r.content) > 500:
-                        out.append({"url": u, "data": _downscale_png(r.content, max_dim), "format": "png"})
-                    else:
-                        out.append({"url": u, "error": f"HTTP {r.status_code} ({len(r.content)}B)"})
-                finally:
-                    r.close()
+            status, content = portal.call(_afetch_image, u, hdrs)
+            if status == 200 and len(content) > 500:
+                out.append({"url": u, "data": _downscale_png(content, max_dim), "format": "png"})
+            else:
+                out.append({"url": u, "error": f"HTTP {status} ({len(content)}B)"})
         except Exception as exc:  # noqa: BLE001
             out.append({"url": u, "error": f"{type(exc).__name__}: {str(exc)[:80]}"})
     return {"images": out, "count": sum(1 for o in out if o.get("data"))}
+
+
+async def _afetch_image(u: str, hdrs: dict) -> tuple[int, bytes]:
+    """(status, body) of one image URL, on the event loop. Follow redirects MANUALLY + re-validate each
+    hop via _netguard (C2 UNTRUSTED_URL close): follow_redirects=True let a 302 -> 127.0.0.1:9222 reach
+    the loopback CDP DevTools API and exfil its bytes in-band. safeurl.awalk_redirects_revalidated
+    raises refused-SSRF on a blocked hop; the FINAL non-3xx response's bytes are used. The declared
+    gates of every hop are held until the body is read."""
+    import httpx
+    async with upstreams.ahop_gates(request_s=25) as gates, httpx.AsyncClient(
+            follow_redirects=False, timeout=25, headers=hdrs,
+            event_hooks=http.aprogress_hooks()) as client:
+        r = await safeurl.awalk_redirects_revalidated(client, "GET", u, max_redirects=10, gates=gates)
+        try:
+            await r.aread()  # buffer the final body (stream=True response) before touching .content
+            return r.status_code, r.content
+        finally:
+            await r.aclose()
 
 
 def _downscale_png(data: bytes, max_dim: int = _VIEW_MAX_DIM) -> bytes:
@@ -779,7 +1008,8 @@ def view_images(src: str, sections=None, names=None, max_images: int = _VIEW_FUL
     tmp: Optional[Path] = None
     try:
         if is_url:
-            tmp, content_type, cd_filename = _download(src, fmt)
+            from omniseek.core.sources.api import _arxiv_fulltext   # arXiv full text: export.arxiv.org
+            tmp, content_type, cd_filename = _download(_arxiv_fulltext.export_url(src) or src, fmt)
             path = tmp
             if not fmt:
                 fmt = _fmt_from_response(content_type, cd_filename)
@@ -797,7 +1027,7 @@ def view_images(src: str, sections=None, names=None, max_images: int = _VIEW_FUL
             except PermissionError as exc:
                 return {"source": src, "error": str(exc)}
             if not path.is_file():
-                inbox = Path.home() / "omniseek-inbox"
+                inbox = where.doc_inbox()
                 have = sorted(p.name for p in inbox.glob("*") if p.is_file())[:20] if inbox.is_dir() else []
                 return {"source": src, "error": f"file not found: {path}", "inbox_files": have}
 

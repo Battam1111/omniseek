@@ -35,7 +35,7 @@ class _RSSBundle(RSSAdapterBase):
     # bundle size, not with any one host. Measured 2026-08-19 against the live feeds:
     # rl_llm_frameworks 65.6s, github_releases 40.6s, both answering healthy against a 25s
     # default cap, so every run recorded them as failures and the broad sweep skipped them.
-    # Declared per-source (fetcher._probe_all_health) so only bundles pay this, not all ~220.
+    # Declared per-source (fetcher._aprobe_all_health) so only bundles pay this, not all ~220.
     health_timeout_s = 90
     """An RSSAdapterBase configured from a data row, not a hand-written class."""
 

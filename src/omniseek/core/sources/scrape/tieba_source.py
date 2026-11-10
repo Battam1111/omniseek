@@ -31,7 +31,7 @@ _to_documents = the forum/thread -> Document maps). ``rank`` stays default-False
 search/thread returns server-relevance order for the query, which we keep byte-faithful.
 
 These are public mobile endpoints with a mobile UA, NOT the open-API ``http`` helper's UA
-contract (Baidu gates the OmniSeek UA), so this adapter uses httpx directly with a mobile
+contract (Baidu gates the omniseek UA), so this adapter uses httpx directly with a mobile
 User-Agent. No new dependency: httpx is already a core dep.
 """
 
@@ -56,7 +56,7 @@ FORUM_PAGE = "https://tieba.baidu.com/f?kw="       # +<forum_name>
 TIMEOUT = 15
 
 # A plain mobile User-Agent: the desktop site 403s, the mobile JSON endpoints answer with
-# this. The shared http.USER_AGENT (OmniSeek/0.1) is gated by Baidu, so we cannot route
+# this. The shared http.USER_AGENT (omniseek/0.1) is gated by Baidu, so we cannot route
 # through the open-API helper here (per its module docstring: walled/anti-bot sources keep
 # their own headers).
 _MOBILE_UA = (
@@ -77,51 +77,15 @@ class TiebaAdapter(BaseScrapeAdapter):
     modes = ["UNWALL", "STRUCTURE"]
     regions = ["cn"]
 
-    # ── network ─────────────────────────────────────────────────────────────
-    def _raw_fetch(self, query: str, limit: int) -> Optional[dict]:
-        """Two mobile GETs: the thread search (the gold) plus the forum search (the
-        community-size STRUCTURE). Returns a bundle dict; None only if BOTH fail (the
-        thread search failing alone is the real miss, but we still emit a forum doc if
-        that one answered). httpx directly with a mobile UA (Baidu gates the shared UA)."""
-        threads = self._get_json(THREAD_URL, {"word": query, "pn": 1})
-        forums = self._get_json(FORUM_URL, {"word": query})
-        if threads is None and forums is None:
-            return None
-        return {"threads": threads, "forums": forums}
-
-    @staticmethod
-    def _get_json(url: str, params: dict) -> Optional[dict]:
-        """GET + parse JSON with the mobile UA. None on any failure (the adapter contract).
-        Builds the query string with quote() so a CN-character query is encoded correctly."""
-        qs = "&".join(f"{k}={quote(str(v))}" for k, v in params.items())
-        full = f"{url}?{qs}"
-        try:
-            resp = http.direct(
-                "GET", full,
-                headers={"User-Agent": _MOBILE_UA},
-                follow_redirects=True,
-                timeout=TIMEOUT,
-            )
-            resp.raise_for_status()
-            data = resp.json()
-        except Exception as exc:  # noqa: BLE001 (failure -> None is the adapter contract)
-            logger.warning("tieba: GET %s failed: %s", url, exc)
-            return None
-        # Tieba envelope: {"no":0,"error":"success","data":{...}}; no != 0 is an API error.
-        if not isinstance(data, dict) or data.get("no") not in (0, "0", None):
-            logger.warning("tieba: %s returned error envelope no=%s", url, data.get("no") if isinstance(data, dict) else "?")
-            return None
-        return data
-
     # ── native async (S4) ────────────────────────────────────────────────────
     @staticmethod
     async def _aget_json(url: str, params: dict) -> Optional[dict]:
-        """Async twin of ``_get_json``: byte-faithful mirror (SAME quote()-built query string, mobile-UA
+        """Async replacement of the deleted sync ``_get_json`` (11-04, S9; this is the only one now): byte-faithful mirror (SAME quote()-built query string, mobile-UA
         header, timeout, the ``no != 0`` envelope check, and the failure -> None contract). ONLY the raw
         ``httpx.get(...).json()`` egress swaps to the shared async leaf ``await http.aget_json`` (this is a
         standard keyless JSON GET, so it needs nothing httpx.aget cannot do; the leaf adds the shared pool +
         SSRF guard + cache_only + 30MB cap + diag.note evidence tap for free, and its pooled async client
-        already carries follow_redirects=True). The mobile UA overrides the shared OmniSeek UA via the
+        already carries follow_redirects=True). The mobile UA overrides the shared omniseek UA via the
         headers kwarg (Baidu gates the shared UA)."""
         qs = "&".join(f"{k}={quote(str(v))}" for k, v in params.items())
         full = f"{url}?{qs}"
@@ -135,7 +99,7 @@ class TiebaAdapter(BaseScrapeAdapter):
         return data
 
     async def _araw_fetch(self, query: str, limit: int) -> Optional[dict]:
-        """Async twin of ``_raw_fetch``: the same two mobile GETs (thread search + forum search) and the
+        """Async replacement of the deleted sync ``_raw_fetch`` (11-04, S9; this is the only one now): the same two mobile GETs (thread search + forum search) and the
         same both-failed -> None contract, each egress via ``_aget_json``, with ONE deliberate divergence:
         the two run CONCURRENTLY.
 
@@ -166,15 +130,6 @@ class TiebaAdapter(BaseScrapeAdapter):
         if threads is None and forums is None:
             return None
         return {"threads": threads, "forums": forums}
-
-    async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async twin of ``search`` -> AsyncSearchCapable. Shares the base async cache round-trip
-        (``_asearch_via``: cache get/set off the loop, SAME cache key as ``search``); egress via
-        ``_araw_fetch``; mapping via the SAME pure-CPU ``_to_documents`` (byte-identical to ``search``)."""
-        return await self._asearch_via(
-            query, limit,
-            afetch=lambda: self._araw_fetch(query, limit),
-            abuild=lambda raw: self._to_documents(raw, query, limit))
 
     # ── parse ───────────────────────────────────────────────────────────────
     def _to_documents(self, raw: Any, query: str, limit: int) -> list[Document]:
@@ -297,7 +252,7 @@ class TiebaAdapter(BaseScrapeAdapter):
             },
         )
 
-    def fetch_url(self, url: str) -> Optional[Document]:
+    async def afetch_url(self, url: str) -> Optional[Document]:
         """This source does not claim arbitrary thread URLs (the search endpoint is the
         entry point; a single thread's full replies need the pb page, out of scope here)."""
         return None

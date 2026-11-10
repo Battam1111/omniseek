@@ -14,7 +14,8 @@ least 10 s apart. dblp record URIs (https://dblp.org/rec/<key>) and person URIs
 
 Endpoint: GET https://sparql.dblp.org/sparql?query=<SPARQL> with
 ``Accept: application/sparql-results+json`` (QLever). Title search uses QLever's text index: one
-``ql:contains-word`` line per query word on the title's text record (``?t ql:contains-entity ?title``;
+``ql:contains-word`` line per query word (as a prefix, ``word*``, see ``PREFIX_MIN``) on the title's
+text record (``?t ql:contains-entity ?title``;
 the same test directly on the literal returns 0 rows). The text index returns matches unranked
 (roughly alphabetical), so the query takes the ``POOL`` SHORTEST matching titles (newest first on a
 tie) and ``_raw_fetch`` ranks that pool locally with the shared BM25 scorer before the base caps it to
@@ -22,6 +23,14 @@ tie) and ``_raw_fetch`` ranks that pool locally with the shared BM25 scorer befo
 term frequency fixed BM25 falls monotonically as the title gets longer, so the shortest titles are the
 BM25 top of the whole match set. The first version took the most recent matches instead, and a known
 older paper (a 2017 title against 2026 to 2027 matches for a common word pair) never reached the pool.
+
+A SENTENCE IS RELAXED, NOT SENT WHOLE (EYE-PAPERS, 2026-10-18): every word must be in the title, so a
+sentence of six content words matched nothing and the source looked broken. When the full match is
+short, one more request asks the endpoint how many titles each word matches on its own
+(``word_counts_query``) and the shared plan in ``_relax`` drops the least distinctive word, one at a
+time, re-searching until the match is long enough. Each result carries the word set its title matched
+(``metadata.matched_words``). A legal empty answer leaves a ``dblp.no_match`` diagnostic naming every
+word set tried, so it is not read as a broken parser.
 
 The helpers here (query builders, the SPARQL JSON reader, the gated GET and the health probe) are
 shared with ``dblp_author_source``: one upstream, one egress path. Every request goes through the
@@ -43,6 +52,7 @@ from urllib.parse import urlparse
 
 from omniseek.core import diag, http, upstreams
 from omniseek.core.normalize import Document, jsonsafe, keyword_score_filter
+from omniseek.core.sources.api import _relax
 from omniseek.core.sources.api._base import BaseAPIAdapter
 
 logger = logging.getLogger(__name__)
@@ -53,20 +63,29 @@ TIMEOUT = 20
 USER_AGENT = "omniseek/0.1 (automated retrieval)"
 HEADERS = {"User-Agent": USER_AGENT, "Accept": SPARQL_ACCEPT}
 REC_PREFIX = "https://dblp.org/rec/"
+# The row key carrying the word set a search matched (set by the adapter, never by the endpoint).
+_MATCHED_KEY = "_matched_words"
 # The candidate pool one title search ranks locally (the text index itself does not rank).
 POOL = 100
 # More words only narrow an AND match further; past this the query is long and the pool tiny.
-MAX_WORDS = 8
+MAX_WORDS = _relax.MAX_WORDS
 
 PREFIX = "PREFIX dblp: <https://dblp.org/rdf/schema#>\n"
 # English function words that carry no title signal; dropped from a PUBLICATION search only (a
 # person's name keeps every word: "An", "He", "Le" are surnames).
-_STOPWORDS = frozenset({
-    "a", "an", "and", "are", "as", "at", "be", "by", "for", "from", "in", "into", "is", "it",
-    "its", "of", "on", "or", "the", "their", "this", "that", "to", "via", "was", "were", "with",
-})
+_STOPWORDS = _relax.STOPWORDS
 # Letters and digits only, so a word can never close the SPARQL string literal it is placed in.
 _WORD_RE = re.compile(r"[^\W_]+")
+# A hyphenated word ("post-quantum", "zero-knowledge") is one term of a publication search: the text
+# index splits it into its parts, and relaxing must drop both parts together, never one half.
+_TERM_RE = re.compile(r"[^\W_]+(?:-[^\W_]+)*")
+# The text index matches whole words only, so a query's "function" missed every title saying
+# "Functions" and "vrf" every "VRFs". A publication search sends each word of at least this many
+# characters as a prefix ("function*"). PROVISIONAL (measured 2026-10-18, out/EYE-PAPERS/report.md):
+# two-letter prefixes explode (le* matched 2.19M titles, ai* 2.8x ai), three-letter ones grew 1.03x
+# (lwe*) to 3.6x (rag*), and the local BM25 ranking, which does not stem, keeps the exact-word
+# titles first.
+PREFIX_MIN = 3
 _REC_KEY_RE = re.compile(r"[A-Za-z0-9_./-]+")
 _REC_PATH_RE = re.compile(r"^/rec/(.+?)(?:\.(?:html|xml|bib|ris|nt|ttl|rdf))?/?$")
 # The dblp web hosts whose record (and, in dblp_author, person) URLs are answered from SPARQL.
@@ -115,6 +134,42 @@ def query_words(query: str, *, drop_stopwords: bool = True) -> list[str]:
     return words[:MAX_WORDS]
 
 
+def query_terms(query: str) -> list[str]:
+    """The terms of a publication search: lowercased, a hyphenated word kept as one term of its
+    parts (each part letters/digits, at least 2 characters, not a stopword), de-duplicated in order,
+    at most ``MAX_WORDS`` words in all. An empty list means there is nothing to send."""
+    terms: list[str] = []
+    n = 0
+    for unit in _TERM_RE.findall((query or "").lower()):
+        parts = [p for p in unit.split("-") if len(p) >= 2 and p not in _STOPWORDS]
+        term = "-".join(parts)
+        if not parts or term in terms:
+            continue
+        if n + len(parts) > MAX_WORDS:
+            break
+        terms.append(term)
+        n += len(parts)
+    return terms
+
+
+def index_word(word: str) -> str:
+    """The ``ql:contains-word`` form of a publication-search word: ``word*`` (any title word starting
+    with it, so plurals match) from ``PREFIX_MIN`` characters on, the word itself below."""
+    return f"{word}*" if len(word) >= PREFIX_MIN else word
+
+
+def term_words(terms: list[str]) -> list[str]:
+    """The ``ql:contains-word`` words of some terms: every part of every term in its index form
+    (``index_word``), de-duplicated."""
+    words: list[str] = []
+    for t in terms:
+        for w in t.split("-"):
+            w = index_word(w)
+            if w not in words:
+                words.append(w)
+    return words
+
+
 def contains_lines(var: str, words: list[str], indent: str = "  ") -> str:
     """The QLever text-index pattern: ``?var``'s text record must contain every word."""
     lines = [f"?t ql:contains-entity ?{var} ."] + [f'?t ql:contains-word "{w}" .' for w in words]
@@ -133,6 +188,33 @@ def publ_search_query(words: list[str], pool: int = POOL) -> str:
             + f"    }} ORDER BY ASC(?len) DESC(?y) LIMIT {int(pool)}\n  }}\n"
             + _PUB_FIELDS
             + "} GROUP BY ?pub ?title ORDER BY DESC(?year)")
+
+
+def word_counts_query(terms: list[str]) -> str:
+    """How many titles each term matches on its own (every part of a hyphenated term), in one request
+    (one UNION branch per term). A term matching nothing has no row in the answer. At most
+    ``MAX_WORDS`` branches; the endpoint answers a GET of ~12 KB with HTTP 414 (56 branches, checked
+    2026-10-18), and 8 branches took 0.1 to 1.7 s."""
+    branches = "\n  UNION ".join(
+        "{ ?t ql:contains-entity ?title . "
+        + "".join(f'?t ql:contains-word "{index_word(w)}" . ' for w in t.split("-"))
+        + f'BIND("{t}" AS ?w) }}'
+        for t in terms)
+    return (PREFIX + "SELECT ?w (COUNT(DISTINCT ?title) AS ?n) WHERE {\n  " + branches
+            + "\n} GROUP BY ?w")
+
+
+def read_word_counts(rows: Optional[list[dict]]) -> Optional[dict]:
+    """``word_counts_query`` rows -> ``{word: count}``; None when the request failed."""
+    if rows is None:
+        return None
+    out: dict = {}
+    for row in rows:
+        try:
+            out[row["w"]] = int(row["n"])
+        except (KeyError, TypeError, ValueError):
+            continue
+    return out
 
 
 def record_query(rec_uri: str) -> str:
@@ -205,14 +287,6 @@ def _note_unreadable(resp: Any, why: str) -> None:
 
 
 # ── egress (the one path to sparql.dblp.org) ─────────────────────────────────────────────────
-def sparql_select(query: str, *, timeout: int = TIMEOUT) -> Optional[list[dict]]:
-    """Run one SELECT through the shared http helper (declared dblp gate, SSRF guard, diag notes).
-    Rows (possibly empty) on a SPARQL JSON answer; None on any failure or a non-JSON body."""
-    resp = http.get(SPARQL_URL, params={"query": query}, headers=HEADERS, timeout=timeout)
-    rows, why = read_response(resp)
-    if rows is None:
-        _note_unreadable(resp, why)
-    return rows
 
 
 async def asparql_select(query: str, *, timeout: int = TIMEOUT) -> Optional[list[dict]]:
@@ -224,14 +298,14 @@ async def asparql_select(query: str, *, timeout: int = TIMEOUT) -> Optional[list
     return rows
 
 
-def sparql_probe(query: str, what: str, *, timeout: int = TIMEOUT) -> tuple[Optional[bool], str]:
+async def asparql_probe(query: str, what: str, *, timeout: int = TIMEOUT) -> tuple[Optional[bool], str]:
     """Health probe shared by both dblp adapters: ONE gated request for a known entity. Healthy only
     when the answer is SPARQL JSON with at least one binding. The gate is taken here first, so a busy
     gate surfaces as ``UpstreamBusy`` (None: degraded, not probed, so not verified) instead of a
     failed request."""
     try:
-        with upstreams.egress(SPARQL_URL, request_s=timeout):
-            resp = http.get(SPARQL_URL, params={"query": query}, headers=HEADERS, timeout=timeout)
+        async with upstreams.aegress(SPARQL_URL, request_s=timeout):
+            resp = await http.aget(SPARQL_URL, params={"query": query}, headers=HEADERS, timeout=timeout)
     except upstreams.UpstreamBusy as exc:
         return None, f"degraded: declared dblp gate busy, not probed this cycle ({exc})"
     except Exception as exc:  # noqa: BLE001
@@ -292,34 +366,36 @@ class DBLPAdapter(BaseAPIAdapter):
     rank_locally = False
     url_host = "dblp.org"
 
-    # ------------------------------------------------------------------ hooks
-    def _raw_fetch(self, query: str, limit: int) -> list:
-        """The SPARQL title search, its pool ranked locally. No usable word: [] and no request.
-        A failed request or a non-JSON answer raises, so the base records it and caches nothing."""
-        words = query_words(query)
-        if not words:
-            return []
-        rows = sparql_select(publ_search_query(words))
-        if rows is None:
-            raise RuntimeError("dblp SPARQL search failed (see the dblp.sparql / http.get diag note)")
-        return self._rank_rows(rows, query)
-
     async def _araw_fetch(self, query: str, limit: int) -> list:
-        """Async twin of ``_raw_fetch``: same words, same query, same reader, same ranking; only the
-        egress is ``http.aget``."""
-        words = query_words(query)
-        if not words:
+        """Async replacement of the deleted sync ``_raw_fetch`` (11-04, S9; this is the only one now): same words, same plan, same queries, same reader, same
+        ranking; only the egress is ``http.aget``."""
+        terms = query_terms(query)
+        if not terms:
             return []
-        rows = await asparql_select(publ_search_query(words))
-        if rows is None:
-            raise RuntimeError("dblp SPARQL search failed (see the dblp.sparql / http.get diag note)")
-        return self._rank_rows(rows, query)
 
-    async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async twin of ``search`` (AsyncSearchCapable): the base async cache round-trip
-        ``_aapi_search`` (SAME cache key ``(name, "publ_search", query, limit)``, per-record
-        ``_to_document``, cache-only-if-docs) with egress via ``_araw_fetch``."""
-        return await self._aapi_search(query, limit, araw_fetch=lambda: self._araw_fetch(query, limit))
+        async def counts(ts):
+            return read_word_counts(await asparql_select(word_counts_query(ts)))
+        outcome = await _relax.arun(
+            terms, lambda ts: asparql_select(publ_search_query(term_words(ts))), counts,
+            want=min(_relax.MIN_HITS, limit))
+        return self._finish(outcome, query)
+
+    def _finish(self, outcome: "_relax.Outcome", query: str) -> list:
+        """Raise on a failed first search; note a legal empty answer with the word sets tried; tag
+        each row with the word set its title matched, then rank."""
+        if outcome.failed:
+            raise RuntimeError("dblp SPARQL search failed (see the dblp.sparql / http.get diag note)")
+        if outcome.stopped:
+            diag.note("dblp.relax_stopped", url=SPARQL_URL,
+                      body=f"{outcome.stopped}; word sets tried: {_relax.tried_text(outcome)}")
+        if not outcome.rows:
+            diag.note("dblp.no_match", url=SPARQL_URL,
+                      body=f"上游回 0 条（试过的词组：{_relax.tried_text(outcome)}）: the endpoint "
+                           "answered SPARQL JSON with no title holding every word of any set")
+            return []
+        for row in outcome.rows:
+            row[_MATCHED_KEY] = list(outcome.words)
+        return self._rank_rows(outcome.rows, query)
 
     def _to_document(self, raw) -> Optional[Document]:
         """One binding row -> Document."""
@@ -344,14 +420,14 @@ class DBLPAdapter(BaseAPIAdapter):
         return ranked + [r for _, r in pairs if id(r) not in taken]
 
     # --------------------------------------------------------------- fetch_url
-    def fetch_url(self, url: str) -> Optional[Document]:
+    async def afetch_url(self, url: str) -> Optional[Document]:
         """A dblp record URL (dblp.org/rec/<key>[.html|.xml|.bib]) resolved by a SPARQL lookup of
         its record URI; dblp.org itself is never fetched. Any other URL: None (a dblp person URL,
         dblp.org/pid/<pid>, is answered by ``dblp_author.fetch_url``)."""
         rec = record_uri(url)
         if rec is None:
             return None
-        rows = sparql_select(record_query(rec))
+        rows = await asparql_select(record_query(rec))
         if not rows:
             return None
         try:
@@ -361,8 +437,8 @@ class DBLPAdapter(BaseAPIAdapter):
             return None
 
     # ------------------------------------------------------------- health_check
-    def health_check(self) -> tuple[Optional[bool], str]:
-        return sparql_probe(HEALTH_QUERY, 'title word pair "attention" + "transformer"')
+    async def ahealth_check(self) -> tuple[Optional[bool], str]:
+        return await asparql_probe(HEALTH_QUERY, 'title word pair "attention" + "transformer"')
 
     # ------------------------------------------------------------ field mapping
     @staticmethod
@@ -386,13 +462,15 @@ class DBLPAdapter(BaseAPIAdapter):
                 pass
         doi = bare_doi(row.get("doi"))
         pub_type = local_name(row.get("type"))   # the BibTeX type: "Inproceedings", "Article", ...
+        matched = row.get(_MATCHED_KEY)
+        raw = {k: v for k, v in row.items() if k != _MATCHED_KEY}
 
         return Document(
             source="dblp",
             source_id=key,
             url=pub,   # the record URI: an identifier, never fetched
             title=title,
-            content=f"{venue or '(no venue)'} • {year or '?'} • {pub_type or '?'}",
+            content="",   # dblp carries no abstract; venue / year / type ride in metadata
             author=author_str,
             date=date,
             tags=[pub_type] if pub_type else [],
@@ -403,6 +481,7 @@ class DBLPAdapter(BaseAPIAdapter):
                 "doi": doi,
                 "type": pub_type,
                 "authors": authors,
-                "raw": jsonsafe(row),
+                "matched_words": list(matched) if isinstance(matched, list) else None,
+                "raw": jsonsafe(raw),
             },
         )

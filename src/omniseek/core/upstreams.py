@@ -16,12 +16,25 @@ what the upstream actually reports:
                       its own) and never a look-alike ("notwikipedia.org"). For one host a gated
                       entry wins, then an exact entry, then the longest suffix (design decision,
                       2026-09-29: the whole Wikimedia family is one entry).
+  paths               an entry may also list path prefixes ("paths": ["/pdf/", "/html/"]): it then owns
+                      only the URLs on its hosts whose path starts with one of them, and wins those over
+                      the host's other entries (EYE-RSS-3, 2026-10-24: export.arxiv.org serves the API
+                      under /api/ with one request every 3 s, and full text under /pdf/ and /html/,
+                      which arXiv sets aside for programs with its own rate). A bare host (no path) and
+                      every other path stay with the host's entry. Host-wide things (a robots.txt
+                      Crawl-delay, a declared User-Agent, the one-connection transport) cannot be
+                      scoped to a path, so a path entry may not declare them.
   guard(uid)          THE shared _guard.BackendGuard for that upstream, built from its gate. Every
                       egress path to the upstream (the owning module, the shared http client's host
                       gate, a health probe) takes the same object, so the limit holds across sources,
                       tools, threads and event loops.
-  egress(url)         the host gate for any direct egress: a no-op for an ungated host or when the
+  aegress(url)        the host gate for any direct egress: a no-op for an ungated host or when the
                       current holder already holds that upstream (the owning module's own hold).
+                      The sync ``egress`` / ``hop_gates`` / ``HopGates`` (and _guard's sync
+                      ``BackendGuard.hold``) remain only for egress that blocks in a thread OmniSeek
+                      cannot hand to the event loop mid-request: the shared Chrome's page load
+                      (``browser_turn``, entered by _cdp's pool thread once it has the browser's turn;
+                      xianyu's CDP read) and the system push outlet's sync ``send`` (notify).
   budget              a request's permit wait and start wait, over every gate it passes, stay
                       within the declared max_wait_s AND the caller's own deadline (design decision 2,
                       2026-09-29); past it the request is not sent. See _guard.wait_until.
@@ -35,7 +48,7 @@ what the upstream actually reports:
                       always holds (design decision, 2026-09-29).
   single connection   a gated upstream whose terms publish max_concurrency 1 (arXiv: "a single
                       connection at a time") is listed by single_connection_hosts(); the shared http
-                      clients give those hosts a no-keep-alive HTTP/1.1 transport and send
+                      client gives those hosts a no-keep-alive HTTP/1.1 transport and send
                       "Connection: close", so no idle connection outlives a request.
   user agent          an upstream may declare the User-Agent it requires (Wikimedia's policy): every
                       shared egress layer sends that string to the upstream's hosts and nothing else
@@ -46,7 +59,15 @@ what the upstream actually reports:
                       reports the reason. The web-search backend reads it for its keyless fallback.
   observe(...)        records rate-limit headers / quota fields as the upstream reports them; any
                       response carrying Retry-After defers the whole upstream for every caller, unless
-                      the calling module is in SELF_BACKOFF (design decision 3).
+                      the calling module is in SELF_BACKOFF (design decision 3). Any answer also tells
+                      the host's liveness record that the host is reachable.
+  host liveness       HOST_DOWN_AFTER connections in a row that were not made (refused, handshake
+                      timeout, EOF) open the host's breaker for HOST_DOWN_FOR_S: requests to it fail at
+                      once with HostDown (an UpstreamBusy, nothing sent, no permit taken), and the health
+                      check reads that as down (EYE-GATE-FIX B, 2026-10-20). A run of failures opens it
+                      only when some host answered after the run began: when nothing answers at all,
+                      this machine's network is down, not the host (EYE-BREAKER). Every refusal names
+                      its URL (credentials masked) and the initiator (_guard.initiator).
   health_block(...)   declared vs gate vs observed, mismatches flagged, undeclared sources listed.
 
 Judgment-free plumbing: it stores the declaration, enforces the numbers it is given and reports
@@ -57,6 +78,7 @@ from __future__ import annotations
 
 import contextlib
 import email.utils
+import itertools
 import json
 import logging
 import math
@@ -96,6 +118,17 @@ class UpstreamBusy(RuntimeError):
         _probe.note_held(str(self))   # a running health check records that nothing was sent
 
 
+class HostDown(UpstreamBusy):
+    """The host's breaker is open (``HOST_DOWN_AFTER`` connections in a row were not made): the request
+    was NOT sent and took no permit. An ``UpstreamBusy`` so every caller's existing failure mapping
+    holds, but recorded as evidence the host is down, not as a gate holding a request back: a health
+    check that meets it reads False, and the search _meta names the reason 主机断路."""
+
+    def __init__(self, *args) -> None:
+        RuntimeError.__init__(self, *args)
+        _probe.note_host_down(str(self))
+
+
 class DeclaredUserAgentRefused(RuntimeError):
     """The host's upstream declares a User-Agent and the caller is the shared browser, which sends its
     own: the page was NOT rendered (sending a browser's User-Agent there would break the upstream's
@@ -114,8 +147,8 @@ _guard.register_unsent(UpstreamBusy, DeclaredUserAgentRefused)
 # defer_on_429=False (design decision 3, 2026-09-29). Everywhere else the default holds: a response that
 # carries Retry-After defers the whole upstream for every caller. The exemption covers the upstream
 # gate only; the host's robots.txt Crawl-delay gate is deferred regardless (see observe).
-# tests/test_upstream_limits.py fails on any call that switches the deferral off from a module not
-# listed here.
+# Only the modules listed here may switch the deferral off (the test that enforced it was deleted in
+# TEST-CUT).
 SELF_BACKOFF = {
     "omniseek.core._openalex": (
         "per-lane budgets: a budget 429 marks that lane dry until the reset OpenAlex reports and the "
@@ -138,6 +171,7 @@ _suffix_index: dict[str, str] = {}   # ".domain" suffix -> owning upstream id
 _host_delay: dict[str, float] = {}   # host -> robots.txt Crawl-delay seconds (max over declarations)
 _host_ua: dict[str, str] = {}        # exact host -> the User-Agent a declaration listing it requires
 _suffix_ua: dict[str, str] = {}      # ".domain" suffix -> the User-Agent its declaration requires
+_path_index: dict[str, list] = {}    # exact host -> [(path prefix, upstream id)], longest prefix first
 _HOST_RE = re.compile(r"[a-z0-9-]+(\.[a-z0-9-]+)+")
 _SUFFIX_RE = re.compile(r"\.[a-z0-9-]+(\.[a-z0-9-]+)+")   # at least two labels: never a bare ".org"
 _optional: set = set()
@@ -149,6 +183,7 @@ _readings: dict[str, dict] = {}
 # ── loading ────────────────────────────────────────────────────────────────────────────────────
 def _load() -> dict:
     global _decl, _load_error, _host_index, _suffix_index, _host_delay, _host_ua, _suffix_ua, _optional
+    global _path_index
     if _decl is not None:
         return _decl
     with _lock:
@@ -170,13 +205,21 @@ def _load() -> dict:
             ) from exc
         index: dict[str, str] = {}
         sfx_index: dict[str, str] = {}
+        path_index: dict[str, list] = {}
         # Gated entries win a shared host (the gate is what must see the request); otherwise the
         # first declaration of a host is its owner for header readings. A host entry starting with
-        # "." is a domain suffix (see uid_for_host for how the two kinds meet).
+        # "." is a domain suffix (see uid_for_host for how the two kinds meet). An entry with "paths"
+        # owns only those path prefixes of its hosts, so it stays out of the host-wide indexes.
         for uid, e in sorted(ups.items(), key=lambda kv: (not kv[1].get("gate"), kv[0])):
+            prefixes = [str(p) for p in (e.get("paths") or ()) if str(p).startswith("/")]
             for h in e.get("hosts") or ():
                 h = str(h).lower()
+                if prefixes:
+                    path_index.setdefault(h, []).extend((p, uid) for p in prefixes)
+                    continue
                 (sfx_index if h.startswith(".") else index).setdefault(h, uid)
+        for h in path_index:
+            path_index[h].sort(key=lambda pu: -len(pu[0]))
         delays: dict[str, float] = {}
         for e in ups.values():
             rcd = (e.get("terms") or {}).get("robots_crawl_delay_s")
@@ -195,6 +238,7 @@ def _load() -> dict:
                     (sfx_uas if h.startswith(".") else uas).setdefault(h, ua)
         _host_index = index
         _suffix_index = sfx_index
+        _path_index = path_index
         _host_delay = delays
         _host_ua = uas
         _suffix_ua = sfx_uas
@@ -240,14 +284,31 @@ def _suffixes(host: str) -> list[str]:
     return ["." + ".".join(labels[i:]) for i in range(1, len(labels) - 1)]
 
 
+def _path_of(target: str) -> Optional[str]:
+    """The path of ``target`` when it is a URL ("/" for an empty one), else None (a bare host)."""
+    if "://" not in target:
+        return None
+    try:
+        return urlsplit(target).path or "/"
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def uid_for_host(target: str) -> Optional[str]:
-    """The upstream id owning ``target`` (a URL or a bare host), or None if undeclared. Candidates are
-    the entry listing the exact host and every entry whose domain suffix matches it; a gated one wins
-    (the gate must see the request), then the exact one, then the longest suffix."""
+    """The upstream id owning ``target`` (a URL or a bare host), or None if undeclared. A URL whose
+    path starts with a prefix an entry declares for its host ("paths") belongs to that entry, the
+    longest prefix first. Otherwise candidates are the entry listing the exact host and every entry
+    whose domain suffix matches it; a gated one wins (the gate must see the request), then the exact
+    one, then the longest suffix."""
     d = _load()
     h = _host(target)
     if not h:
         return None
+    path = _path_of(target)
+    if path is not None:
+        for prefix, uid in _path_index.get(h, ()):
+            if path.startswith(prefix):
+                return uid
     cands = [(0, 0, _host_index[h])] if h in _host_index else []
     cands += [(1, -len(sfx), _suffix_index[sfx]) for sfx in _suffixes(h) if sfx in _suffix_index]
     if not cands:
@@ -260,6 +321,14 @@ def crawl_delay_for(target: str) -> Optional[float]:
     """The robots.txt Crawl-delay declared for ``target``'s host (a URL or a bare host), or None."""
     _load()
     return _host_delay.get(_host(target))
+
+
+def cache_ttl_for(ttl: float, urls: Iterable[str]) -> float:
+    """A cache time for a fetch of ``urls`` that is never shorter than the longest Crawl-delay among
+    their hosts (EYE-GATE-FIX A): a cache that runs out before the host may be asked again only buys
+    a refused request (statmodeling: Crawl-delay 3600 s against a 1800 s feed cache, 68 of 85 refused)."""
+    delays = [d for d in (crawl_delay_for(str(u)) for u in urls) if d]
+    return max([ttl, *delays]) if delays else ttl
 
 
 def single_connection_hosts() -> list[str]:
@@ -403,38 +472,189 @@ def _gates_for_url(url: str) -> list:
     return out
 
 
-def _busy_factories(key: str) -> tuple[Callable, Callable]:
-    """The two ways a gate turns a request away, both raised BEFORE anything is sent."""
+def _busy_factories(key: str, url: Optional[str] = None) -> tuple[Callable, Callable]:
+    """The two ways a gate turns a request away, both raised BEFORE anything is sent. The message ends
+    with the request's URL (credentials masked) and who asked (EYE-GATE-FIX G), so every log line that
+    prints the refusal can be counted by URL and initiator."""
+    tail = _refusal_tail(url)
+
     def on_busy(waited: float) -> UpstreamBusy:
-        return UpstreamBusy(f"{key}: no permit within {waited:.1f}s (gate saturated); not sent")
+        return UpstreamBusy(f"{key}: no permit within {waited:.1f}s (gate saturated); not sent{tail}")
 
     def on_late(wait: float) -> UpstreamBusy:
         if wait <= 0:   # nothing left of the budget (design decision of 2026-09-29: not "saturated")
             return UpstreamBusy(f"{key}: past this call's budget (declared max_wait_s or the caller's "
-                                "deadline); not sent")
+                                f"deadline); not sent{tail}")
         return UpstreamBusy(f"{key}: next allowed start {wait:.1f}s away, past this caller's budget "
-                            "(declared max_wait_s or the caller's deadline); not sent")
+                            f"(declared max_wait_s or the caller's deadline); not sent{tail}")
     return on_busy, on_late
 
 
-@contextlib.contextmanager
-def hold(uid: Optional[str], *, request_s: Optional[float] = None):
-    """Hold upstream ``uid``'s declared gate around ONE request (sync): a permit, then the start
-    slot, both within ONE budget (the declared ``max_wait_s``, cut to the caller's deadline). For
-    egress that is not addressed by URL (a client library such as atproto). Raises ``UpstreamBusy``
-    without sending when the gate cannot admit the request in time; ``uid=None`` is a no-op.
-    ``request_s``: the request's own timeout, for the permit's lease (see ``BackendGuard.hold``)."""
-    if uid is None:
-        yield None
-        return
-    on_busy, on_late = _busy_factories(uid)
-    with guard(uid).hold(max_wait(uid), on_busy, on_late, request_s=request_s):
-        yield uid
+def loggable_url(url: str) -> str:
+    """``url`` with the value of every credential-shaped query parameter masked (omniseek.redact)."""
+    try:
+        from omniseek import redact as _redact
+        return str(_redact.redact(str(url)))[:300]
+    except Exception:  # noqa: BLE001 (masking must never break a refusal)
+        return urlsplit(str(url))._replace(query="", fragment="").geturl()[:300]
+
+
+def _refusal_tail(url: Optional[str]) -> str:
+    who = _guard.current_initiator() or "?"
+    return f" [url={loggable_url(url)} by={who}]" if url else f" [by={who}]"
+
+
+# ── host liveness: a host that stopped answering opens its breaker (EYE-GATE-FIX B) ─────────────────
+# lobste.rs stopped completing TLS handshakes on 2026-10-18; for two days every request to it held the
+# host's one permit for the full 15 s timeout, the other two feed requests of the same bundle waited
+# 15 s and were refused, and the health check re-read that as "not verified". The ONE record of
+# whether a host answers lives here, per host (every host, gated or not), and is read by every egress
+# path that passes the HopGates (the shared http helpers, http.direct, the curl tier, CDP renders) and,
+# through the HostDown it raises, by the health check and the search _meta.
+#
+# PROVISIONAL (both numbers, 2026-10-20, spec EYE-GATE-FIX): HOST_DOWN_AFTER unreachable answers in a
+# row open the breaker; it stays open HOST_DOWN_FOR_S seconds, then the count starts again from zero.
+# Calibrate from the first week of logs: count the "host breaker OPEN" lines, and for each open window
+# check whether another path (a browser render, the curl tier, a later request) reached the host while
+# it was open (a breaker that opens on a host that did answer means the count is too low or the window
+# too long); a host that keeps reopening every window is the case the window is for.
+HOST_DOWN_AFTER = 3
+HOST_DOWN_FOR_S = 600
+
+_host_live: dict[str, dict] = {}   # host -> {"fails", "since", "open_until" (wall clock), "last"}
+_host_live_lock = threading.Lock()
+
+# The last HTTP status each host answered and when (wall clock), whoever asked (observe records it): what
+# a check whose own request that host's gate held back can still say about the host. A feed host with a
+# one-hour Crawl-delay is asked by the hourly ingest and almost never by the health check, so without
+# this the check could only read it as dead without an address, or never see its 403 (EYE-FIX-1109).
+_last_answer: dict[str, tuple[int, float]] = {}
+
+
+def last_answer(host: str) -> Optional[tuple[int, float]]:
+    """``(HTTP status, wall-clock time)`` of the last answer ``host`` gave this process, or None."""
+    return _last_answer.get(_host(host)) if host else None
+
+# A run of failures says the HOST is down only if the network worked meanwhile (EYE-BREAKER,
+# 2026-10-20): when the host machine's own egress drops (it has flapped, brain
+# finding-egress-flap-investigation-2026-10-19) every host asked in that minute fails at once, and
+# without this each would sit behind a 600 s breaker after the network came back. ``_answered`` is the
+# number of answers from any host so far; a run remembers it in "since" and opens the breaker only
+# when it has grown. A count, not a clock, so two calls in one clock tick still order.
+_answers = itertools.count(1)
+_answered = 0
+
+_UNREACHABLE_TYPES = ("ConnectTimeout", "ConnectError", "ConnectionRefusedError")
+_UNREACHABLE_MARKERS = (
+    "UNEXPECTED_EOF_WHILE_READING", "EOF occurred in violation of protocol",
+    "Server disconnected without sending a response",
+    "net::ERR_CONNECTION_REFUSED", "net::ERR_CONNECTION_TIMED_OUT", "net::ERR_CONNECTION_CLOSED",
+    "net::ERR_EMPTY_RESPONSE",
+    "curl: (7)", "curl: (35)", "curl: (52)", "Connection refused", "Connection timed out",
+)
+
+
+def is_unreachable(exc: BaseException) -> bool:
+    """True when ``exc`` says no connection was made: refused, the TCP or TLS handshake timed out, or
+    the host closed before any answer (EOF). A read timeout, an HTTP error status, an SSRF refusal or a
+    gate refusal is not this."""
+    if isinstance(exc, UpstreamBusy):
+        return False
+    text = str(exc)
+    if text.startswith("refused SSRF-class url"):
+        return False
+    if any(t.__name__ in _UNREACHABLE_TYPES for t in type(exc).__mro__):
+        return True
+    return any(m in text for m in _UNREACHABLE_MARKERS)
+
+
+def note_host_failure(host: str, exc: BaseException) -> None:
+    """One connection to ``host`` was not made (see ``is_unreachable``). Opens the host's breaker at
+    the ``HOST_DOWN_AFTER``-th in a row, if some host answered after the run began. Never raises."""
+    try:
+        h = _host(host)
+        if not h:
+            return
+        _probe.note_unreachable(h, f"{type(exc).__name__}: {exc}")
+        opened = None
+        with _host_live_lock:
+            rec = _host_live.setdefault(h, {"fails": 0, "since": 0, "open_until": 0.0, "last": ""})
+            if rec["fails"] == 0:
+                rec["since"] = _answered
+            rec["fails"] += 1
+            rec["last"] = f"{type(exc).__name__}: {str(exc)[:120]}"
+            if rec["fails"] >= HOST_DOWN_AFTER and _answered > rec["since"]:
+                rec["open_until"] = time.time() + float(HOST_DOWN_FOR_S)
+                opened, rec["fails"] = rec["fails"], 0
+        if opened:
+            logger.warning("host breaker OPEN: %s did not answer %d connections in a row (last: %s); "
+                           "requests to it fail at once until %s", h, opened, rec["last"],
+                           _clock(rec["open_until"]))
+    except Exception as e:  # noqa: BLE001 (bookkeeping must never break an egress)
+        logger.debug("note_host_failure failed: %s", e)
+
+
+def note_host_reached(host: str) -> None:
+    """``host`` answered (any status): its count of unreachable connections starts again, and the
+    network is known to work (a run of failures elsewhere that began before now may open a breaker)."""
+    global _answered
+    _answered = next(_answers)
+    h = _host(host) if host else ""
+    if h and h in _host_live:
+        with _host_live_lock:
+            rec = _host_live.get(h)
+            if rec is not None:
+                rec["fails"] = 0
+                rec["open_until"] = 0.0
+
+
+def note_host_absent(host: str) -> None:
+    """Public DNS says ``host`` does not exist (eye.dns_absence): its unreachable connections were an
+    answer, not a host that is down, so they are dropped and never open its breaker (SMALL-BATCH-4)."""
+    h = _host(host) if host else ""
+    if h and h in _host_live:
+        with _host_live_lock:
+            _host_live.pop(h, None)
+
+
+def host_down_until(host: str) -> Optional[float]:
+    """The wall-clock time ``host``'s breaker stays open until, or None when it is closed."""
+    rec = _host_live.get(_host(host))
+    if rec and rec["open_until"] > time.time():
+        return rec["open_until"]
+    return None
+
+
+def host_breakers() -> dict:
+    """{host: {"open_until", "last"}} for every open breaker (the health block shows it)."""
+    now = time.time()
+    with _host_live_lock:
+        return {h: {"open_until": _clock(r["open_until"]), "last": r["last"]}
+                for h, r in _host_live.items() if r["open_until"] > now}
+
+
+def _clock(t: float) -> str:
+    return time.strftime("%H:%M:%S", time.localtime(t))
+
+
+def _check_host(url: str) -> None:
+    """Raise ``HostDown`` (nothing sent, no permit taken) when ``url``'s host has an open breaker."""
+    h = _host(url)
+    until = host_down_until(h) if h else None
+    if until is not None:
+        rec = _host_live.get(h) or {}
+        raise HostDown(f"{h}: 主机连不上，断路到 {_clock(until)} (last: {rec.get('last', '')}); "
+                       f"not sent{_refusal_tail(url)}")
 
 
 @contextlib.asynccontextmanager
 async def ahold(uid: Optional[str], *, request_s: Optional[float] = None):
-    """Async twin of ``hold``."""
+    """Hold upstream ``uid``'s declared gate around ONE request: a permit, then the start slot, both
+    within ONE budget (the declared ``max_wait_s``, cut to the caller's deadline). For egress that is
+    not addressed by URL (a client library such as atproto: its blocking call then runs on a worker
+    thread inside this block). Raises ``UpstreamBusy`` without sending when the gate cannot admit the
+    request in time; ``uid=None`` is a no-op. ``request_s``: the request's own timeout, for the
+    permit's lease (see ``BackendGuard.hold``)."""
     if uid is None:
         yield None
         return
@@ -490,11 +710,12 @@ class HopGates:
     also hands back the reserved start, for a request that was never sent (review F8), unless a
     response already arrived for it (review N2, see ``_guard.mark_sent``)."""
 
-    def __init__(self, request_s: Optional[float] = None) -> None:
+    def __init__(self, request_s: Optional[float] = None, check_host: bool = True) -> None:
         self._host: Optional[str] = None
         self._stack: Optional[contextlib.ExitStack] = None
         self.key: Optional[str] = None
         self._request_s = request_s
+        self._check_host = check_host   # False only for the curl tier's retry of a request that just failed
         self._deadline: Optional[float] = _guard.current_deadline()   # the chain's absolute end
         self._budget: Optional[float] = None   # without a deadline: set by the first gated hop
         self._waited = 0.0                     # seconds spent waiting at gates so far
@@ -513,6 +734,8 @@ class HopGates:
         if host == self._host:
             return
         self.close()
+        if self._check_host:
+            _check_host(url)   # a host whose breaker is open: refused here, before any gate or permit
         gates = _gates_for_url(url)
         if gates:
             end = self._hop_end(gates, until)
@@ -520,7 +743,7 @@ class HopGates:
             t0 = time.monotonic()
             try:
                 for key, g, mw in gates:
-                    on_busy, on_late = _busy_factories(key)
+                    on_busy, on_late = _busy_factories(key, url)
                     stack.enter_context(g.hold(mw, on_busy, on_late, until=end,
                                                request_s=self._request_s, wait=wait))
             except BaseException as exc:
@@ -541,20 +764,34 @@ class HopGates:
         else:
             stack.__exit__(None, None, None)
 
-    def _abort(self, exc: BaseException) -> None:
+    def _abort(self, exc: BaseException, *, count: bool = True) -> Optional[str]:
+        host = self._host
         stack, self._stack, self._host, self.key = self._stack, None, None, None
+        unreached = host if host and is_unreachable(exc) else None
+        if unreached and count:
+            note_host_failure(unreached, exc)   # the hop's connection was not made (see host liveness)
         if stack is not None:
             stack.__exit__(type(exc), exc, exc.__traceback__)
+        return unreached
+
+    def let_go(self, exc: BaseException) -> Optional[str]:
+        """Let go of this hop's gates after ``exc`` ended it, exactly as a failure leaving the block
+        does (a request that never left hands its start back), but WITHOUT counting it against the
+        host: the caller is about to try the same request another way (the libcurl tier). Returns the
+        host when ``exc`` says its connection was not made, for the caller to ``note_host_failure``
+        if the other way fails too; None otherwise."""
+        return self._abort(exc, count=False)
 
 
 class AsyncHopGates:
     """Async twin of ``HopGates`` (same rule, same order, same one budget per chain)."""
 
-    def __init__(self, request_s: Optional[float] = None) -> None:
+    def __init__(self, request_s: Optional[float] = None, check_host: bool = True) -> None:
         self._host: Optional[str] = None
         self._stack: Optional[contextlib.AsyncExitStack] = None
         self.key: Optional[str] = None
         self._request_s = request_s
+        self._check_host = check_host   # False only for the curl tier's retry of a request that just failed
         self._deadline: Optional[float] = _guard.current_deadline()   # the chain's absolute end
         self._budget: Optional[float] = None
         self._waited = 0.0
@@ -566,6 +803,8 @@ class AsyncHopGates:
         if host == self._host:
             return
         await self.close()
+        if self._check_host:
+            _check_host(url)
         gates = _gates_for_url(url)
         if gates:
             end = self._hop_end(gates, until)
@@ -573,7 +812,7 @@ class AsyncHopGates:
             t0 = time.monotonic()
             try:
                 for key, g, mw in gates:
-                    on_busy, on_late = _busy_factories(key)
+                    on_busy, on_late = _busy_factories(key, url)
                     await stack.enter_async_context(g.ahold(mw, on_busy, on_late, until=end,
                                                             request_s=self._request_s, wait=wait))
             except BaseException as exc:
@@ -594,18 +833,30 @@ class AsyncHopGates:
         else:
             await stack.__aexit__(None, None, None)
 
-    async def _abort(self, exc: BaseException) -> None:
+    async def _abort(self, exc: BaseException, *, count: bool = True) -> Optional[str]:
+        host = self._host
         stack, self._stack, self._host, self.key = self._stack, None, None, None
+        unreached = host if host and is_unreachable(exc) else None
+        if unreached and count:
+            note_host_failure(unreached, exc)
         if stack is not None:
             await stack.__aexit__(type(exc), exc, exc.__traceback__)
+        return unreached
+
+    async def let_go(self, exc: BaseException) -> Optional[str]:
+        """Async twin of ``HopGates.let_go``."""
+        return await self._abort(exc, count=False)
 
 
 @contextlib.contextmanager
-def hop_gates(request_s: Optional[float] = None):
+def hop_gates(request_s: Optional[float] = None, *, check_host: bool = True):
     """A ``HopGates`` for one request (``request_s``: its own timeout, for the leases), let go on
     exit; an exception leaving the block reaches the gates first, so a request that never left hands
-    its reserved start back."""
-    gates = HopGates(request_s)
+    its reserved start back. ``check_host=False``: the host breaker is not consulted (the libcurl
+    tier's one retry of a request httpx could not connect: that failure is not counted until the retry
+    fails too, see ``HopGates.let_go``; if libcurl gets through, its answer closes a breaker earlier
+    failures opened meanwhile)."""
+    gates = HopGates(request_s, check_host)
     try:
         yield gates
     except BaseException as exc:
@@ -615,9 +866,9 @@ def hop_gates(request_s: Optional[float] = None):
 
 
 @contextlib.asynccontextmanager
-async def ahop_gates(request_s: Optional[float] = None):
-    """Async twin of ``hop_gates``."""
-    gates = AsyncHopGates(request_s)
+async def ahop_gates(request_s: Optional[float] = None, *, check_host: bool = True):
+    """Async twin of ``hop_gates`` (same ``check_host``)."""
+    gates = AsyncHopGates(request_s, check_host)
     try:
         yield gates
     except BaseException as exc:
@@ -670,9 +921,14 @@ def _num(v: Any) -> Optional[float]:
 
 
 def parse_retry_after(value: Any) -> Optional[float]:
-    """Seconds a Retry-After value asks for, in either RFC 9110 form: delay-seconds, or an HTTP-date
-    (a date already past is 0). None when it is neither (review F7: the first number of a date used to
-    be read as seconds, so "Wed, 21 Oct 2026 07:28:00 GMT" deferred 21 s)."""
+    """Seconds a Retry-After asks for, in either RFC 9110 form (section 10.2.3): delay-seconds, or an
+    HTTP-date (a date already past is 0). ``value`` is the header's value, or a response's headers
+    (anything with ``.get``: httpx Headers, a plain dict naming it in either case), read for
+    Retry-After. None when absent or neither form (review F7: the first number of a date used to be
+    read as seconds, so "Wed, 21 Oct 2026 07:28:00 GMT" deferred 21 s). OmniSeek's ONE Retry-After
+    parser: every module that reads the header calls this."""
+    if value is not None and not isinstance(value, str) and hasattr(value, "get"):
+        value = value.get("retry-after") or value.get("Retry-After")
     if value is None:
         return None
     text = str(value).strip()
@@ -693,6 +949,25 @@ def parse_retry_after(value: Any) -> Optional[float]:
     if when.tzinfo is None:
         when = when.replace(tzinfo=timezone.utc)
     return max(0.0, (when - datetime.now(timezone.utc)).total_seconds())
+
+
+def retry_wait(headers: Any, *, cap: float, default: float = 0.0, reset: bool = True) -> float:
+    """Seconds a module's own retry waits after a throttled / failed answer carrying ``headers``: the
+    Retry-After it asks for (either RFC 9110 form, parse_retry_after), else X-RateLimit-Reset read as
+    an absolute epoch minus now (never below 0), else ``default``; never more than ``cap``. The ONE
+    reading every module's retry uses; how many tries, the cap and the default stay at the caller.
+    ``reset=False`` skips X-RateLimit-Reset, for an upstream whose reset is not an epoch (OpenAlex
+    reports seconds to its daily reset there, and its retry never read that header)."""
+    h = headers if hasattr(headers, "get") else {}
+    secs = parse_retry_after(h)
+    if secs is None and reset:
+        try:
+            at = float(h.get("x-ratelimit-reset") or "")
+        except (TypeError, ValueError):
+            at = math.nan
+        if math.isfinite(at):
+            secs = max(0.0, at - time.time())
+    return min(default if secs is None else secs, cap)
 
 
 def observe(target: str, headers: Any, status: Optional[int] = None, *, lane: Optional[str] = None,
@@ -734,8 +1009,18 @@ def observe(target: str, headers: Any, status: Optional[int] = None, *, lane: Op
                     rec["last_429_at"] = now
         ra = parse_retry_after(fields.get("retry-after"))
         _probe.note_response(status, where=h or uid or str(target), retry_after=ra)
+        if h:
+            note_host_reached(h)   # any answer: the host is reachable (host liveness)
+            if isinstance(status, int):
+                _last_answer[h] = (status, time.time())
         if ra and ra > 0:
             secs = min(ra, _DEFER_CAP_S)
+            if status not in (429, 503):
+                # EYE-GATE-FIX E (2026-10-20): zenodo was measured at about one request a minute and
+                # only a Retry-After on its 200 answers could explain it, but nothing showed the
+                # headers. Whether to stop deferring on a 2xx is decided once this line has been seen.
+                logger.info("upstream %s answered HTTP %s with Retry-After %.0fs: deferring every caller",
+                            uid or h or target, status, ra)
             if defer_on_429 and uid is not None and d[uid].get("gate"):
                 guard(uid).defer(secs)
             if h and crawl_delay_for(h):      # always: SELF_BACKOFF covers the upstream gate only
@@ -786,7 +1071,7 @@ def readings(uid: str) -> dict:
         return json.loads(json.dumps(_readings.get(uid) or {}))
 
 
-# ── checks (shared by the health block and the smoke tests) ─────────────────────────────────────
+# ── checks (used by the health block) ───────────────────────────────────────────────────────────
 def _is_num(v: Any) -> bool:
     return isinstance(v, (int, float)) and not isinstance(v, bool)
 
@@ -807,6 +1092,16 @@ def schema_problems(uid: str, e: dict) -> list[str]:
         if not (_HOST_RE.fullmatch(str(h)) or _SUFFIX_RE.fullmatch(str(h))):
             p.append(f"{uid}: host {h!r} must be a lower-case host name, or a domain suffix that starts "
                      "with '.' and has at least two labels ('.wikipedia.org')")
+    paths = e.get("paths")
+    if paths is not None:
+        if not (isinstance(paths, list) and paths
+                and all(isinstance(x, str) and x.startswith("/") for x in paths)):
+            p.append(f"{uid}: paths must be a non-empty list of path prefixes that start with '/'")
+        if not e.get("hosts") or any(str(h).startswith(".") for h in e.get("hosts") or ()):
+            p.append(f"{uid}: an entry with paths must list exact hosts (no domain suffix)")
+        if t.get("robots_crawl_delay_s") is not None or e.get("user_agent") is not None:
+            p.append(f"{uid}: a Crawl-delay or a User-Agent holds for the whole host; declare it on the "
+                     "host's entry, not on an entry with paths")
     if (e.get("gate") and t.get("max_concurrency") == 1
             and any(str(h).startswith(".") for h in e.get("hosts") or ())):
         p.append(f"{uid}: a domain suffix cannot get the one-connection transport (it is mounted per "
@@ -885,6 +1180,59 @@ def gate_problems(uid: str, e: dict) -> list[str]:
 def _covered(e: dict, source: str, backend: Optional[str]) -> bool:
     return source in (e.get("sources") or ()) or (backend is not None
                                                   and backend in (e.get("backends") or ()))
+
+
+def uid_for_source(source: str, backend: Optional[str] = None) -> Optional[str]:
+    """The first declared upstream that lists ``source`` (or its ``backend``), or None. A source's
+    default ``license`` points here (``upstreams:<uid>``): that entry carries the upstream's terms."""
+    d = _load()
+    for uid, e in d.items():
+        if source in (e.get("sources") or ()):
+            return uid
+    if backend:
+        for uid, e in d.items():
+            if backend in (e.get("backends") or ()) or backend in (e.get("sources") or ()):
+                return uid
+    return None
+
+
+def _site(host: str) -> str:
+    h = str(host or "").lower().strip().rstrip(".").lstrip(".")
+    return h[4:] if h.startswith("www.") else h
+
+
+def source_on_site(source: str, target: str, backend: Optional[str] = None) -> bool:
+    """Whether an entry covering ``source`` names a host on the same site as ``target``'s host: the
+    same host, or one a subdomain of the other, a leading "www." and a suffix entry's "." set aside
+    (arxiv.org and export.arxiv.org; alphaxiv.org and api.alphaxiv.org). An entry covers a source the
+    way ``coverage`` counts it: the source in its ``sources``, or ``backend`` (the source's backend,
+    fetcher.backend_of) in its ``backends`` (EYE-REG-CHECK: the OpenAlex slices). Read-only."""
+    site = _site(_host(target))
+    if "." not in site:   # never a bare label ("com" would sit under every .com host)
+        return False
+    for e in _load().values():
+        if not _covered(e, source, backend):
+            continue
+        for h in e.get("hosts") or ():
+            h = _site(h)
+            if "." in h and (h == site or h.endswith("." + site) or site.endswith("." + h)):
+                return True
+    return False
+
+
+def strictest_gate_for_source(source: str, backend: Optional[str] = None) -> Optional[str]:
+    """The upstream id whose declared gate is the strictest of those covering ``source`` (listing it in
+    ``sources``, or ``backend`` in ``backends``, as ``coverage`` counts it): the smallest
+    gate.max_inflight, the earlier entry in upstreams.json on a tie; None when no entry covering it
+    declares a gate. Read-only."""
+    best: Optional[tuple[str, float]] = None
+    for uid, e in _load().items():
+        if not _covered(e, source, backend):
+            continue
+        n = gate_value(uid, "max_inflight")
+        if _is_num(n) and (best is None or n < best[1]):
+            best = (uid, n)
+    return best[0] if best else None
 
 
 def coverage(sources: Iterable[str], backend_of: Callable[[str], Optional[str]],
@@ -1003,4 +1351,5 @@ def health_block(sources: Iterable[str], backend_of: Callable[[str], Optional[st
         "undeclared_sources": cov["undeclared"],
         "declared_but_unknown_sources": [f"{u}:{s}" for u, s in cov["unknown_sources"]],
         "flagged_rows": flagged,
+        "host_breakers": host_breakers(),
     }

@@ -40,7 +40,10 @@ import time
 from typing import Optional
 from urllib.parse import urlencode, urlparse
 
-from omniseek.core import _netguard, _optdep, cache, http
+import anyio
+
+from omniseek.core import _netguard, _optdep, cache, http, portal
+from omniseek import where
 
 logger = logging.getLogger(__name__)
 
@@ -96,12 +99,26 @@ _model = None  # lazy global singleton (load is expensive; keep warm while in us
 # idle returned nothing. Three measures, all under ONE lock so no generate is ever mid-flight:
 #   1. _release_device() after every generate: hand the cached blocks back to the driver.
 #   2. one generate at a time: two concurrent transcriptions would stack two activation peaks.
-#   3. idle unload: ASR is an explicit, rare tool, so after _IDLE_UNLOAD_S with no call the three
+#   3. idle unload: ASR is an explicit, rare tool, so after _idle_unload_s() with no call the three
 #      lazy models are dropped (weights, the driver's ~1 GB beyond them) and the next call reloads.
+#   4. one family at a time (2026-10-11): loading the diarization model drops SenseVoice and its VAD,
+#      and loading either of those drops the diarization model. One call only ever uses one family
+#      (transcribe_url takes the diarize path OR the flat path), and the two together would not fit:
+#      SenseVoice+VAD measured +2.4 GB over OmniSeek's 2.1 GB base, the diarization stack (Paraformer
+#      953 MB + ct-punc 1.1 GB + cam++ on disk) is larger, so both loaded is past memguard's hard line
+#      before a single activation is allocated.
 # With these, the driver allocation stays at 1939 to 1942 MB per call and idle drops the process to
 # ~850 MB. What stays is MALLOC_SMALL (MPSGraph's per-input-shape graphs, ~400 MB after load): it
 # grows ~5 MB per call with NEW input shapes (406 -> 617 MB over 60 random slices), does not grow on
 # replayed shapes, and survives unload; memguard's idle restart is its bound.
+# Tried and dropped (10-11): the generate peak does NOT grow
+# with audio length (whole-file peak footprint 5225 / 5164 / 4402 to 4466 MB for 10 / 30 / 87 min, all
+# within the ASR allowance). Cutting long audio into 300 s windows RAISED the 87 min peak (5194 to
+# 5474 MB), and so did _BATCH_S = 60 (7578 MB): funasr's inference_with_vad sorts the VAD segments by
+# length and, when segment j overflows batch_size_s, flushes a batch that still INCLUDES j, so a window
+# or a small batch pads a long segment onto many short ones (600 s padded per batch instead of 311 s).
+# PYTORCH_MPS_LOW_WATERMARK_RATIO=0.25 changed nothing (peak 5180 vs 5225 MB). Keep the whole-file path
+# and _BATCH_S = 300.
 _lock = threading.RLock()
 _BATCH_S = 300                    # funasr batch_size_s for the VAD-batched generate calls
 _last_use = 0.0                   # monotonic time the last generate finished (0 = never)
@@ -110,13 +127,28 @@ _idle_thread: Optional[threading.Thread] = None
 _IDLE_POLL_S = 30.0
 
 
+# PROVISIONAL. Seconds of no ASR call before the models are unloaded. Derivation (2026-10-11, memory
+# report section 3): the 175 transcripts in the live cache (08-11 to 10-11) give 174 gaps between one
+# transcription finishing and the next finishing (an upper bound on the idle time between them). The
+# gaps split in two: within a session (p50 52 s, p75 166 s) and between sessions (p90 3.4 h). 130 of
+# 174 (75%) are <= 180 s, 140 (80%) are <= 600 s, 145 are <= 1800 s, so 600 s instead of 180 s
+# saves a reload in 10 of 174 gaps and pays for it by holding about 2.4 GB for 7 more minutes after
+# every session, on a shared 16 GB machine where that memory is taken from swap. A reload costs the
+# model load (measured 6.0 to 9.1 s in a fresh process, long-audio probes 10-11). Calibration plan: every reload now logs
+# "asr: reloaded N s after unload"; after 50 reloads, if more than a quarter came within 300 s of an
+# unload, raise this toward the 80% gap point; if none came within 600 s, keep it.
+IDLE_UNLOAD_S_DEFAULT = 180.0
+_unloaded_at = 0.0                # monotonic time of the last unload (0 = never), for the reload line
+
+
 def _idle_unload_s() -> float:
     """Seconds of no ASR call after which the models are unloaded (env OMNISEEK_ASR_IDLE_UNLOAD_S,
-    default 600; 0 or negative keeps them loaded forever, the pre-2026-10-08 behaviour)."""
+    default IDLE_UNLOAD_S_DEFAULT; 0 or negative keeps them loaded forever, the pre-2026-10-08
+    behaviour)."""
     try:
-        return float(os.environ.get("OMNISEEK_ASR_IDLE_UNLOAD_S", "600"))
+        return float(os.environ.get("OMNISEEK_ASR_IDLE_UNLOAD_S", str(IDLE_UNLOAD_S_DEFAULT)))
     except ValueError:
-        return 600.0
+        return IDLE_UNLOAD_S_DEFAULT
 
 
 def _release_device() -> None:
@@ -139,21 +171,36 @@ def _touch() -> None:
     _ensure_idle_watcher()
 
 
-def unload_models(reason: str = "") -> bool:
-    """Drop every loaded ASR model and release their device memory. Returns True if anything was
-    loaded. Waits for an in-flight generate (same lock), so it never pulls a model out from under one."""
-    global _model, _vad_model, _diar_model
+def unload_models(reason: str = "", which: tuple = ("sensevoice", "vad", "diar")) -> bool:
+    """Drop the loaded ASR models named in `which` (default all) and release their device memory.
+    Returns True if any of them was loaded. Waits for an in-flight generate (same lock), so it never
+    pulls a model out from under one."""
+    global _model, _vad_model, _diar_model, _unloaded_at
     with _lock:
         had = [n for n, m in (("sensevoice", _model), ("vad", _vad_model), ("diar", _diar_model))
-               if m is not None]
-        _model = _vad_model = _diar_model = None
+               if m is not None and n in which]
         if not had:
             return False
+        if "sensevoice" in which:
+            _model = None
+        if "vad" in which:
+            _vad_model = None
+        if "diar" in which:
+            _diar_model = None
         import gc
         gc.collect()
         _release_device()
+        _unloaded_at = time.monotonic()
         logger.info("asr: unloaded %s (%s)", "+".join(had), reason or "requested")
         return True
+
+
+def _before_load(name: str, other: tuple) -> None:
+    """Called under _lock just before a model loads: drop the other family (see measure 4 above) and
+    log how long after the last unload this reload came (the idle-unload calibration reading)."""
+    unload_models(f"loading {name}", which=other)
+    if _unloaded_at:
+        logger.info("asr: reloaded %s %.0f s after unload", name, time.monotonic() - _unloaded_at)
 
 
 def _idle_loop() -> None:
@@ -197,7 +244,7 @@ def _ensure_idle_watcher() -> None:
 # Disk figures measured on OmniSeek host 2026-10-10 (~/.cache/modelscope/hub/models/iic):
 # SenseVoiceSmall 897M + fsmn-vad 3.9M; diarize adds paraformer-zh 953M + ct-punc 1.1G + cam++ 28M.
 _MODEL_DISK_NOTE = ("The first transcription downloads the SenseVoice model (about 0.9 GB, into "
-                    "~/.cache/modelscope); diarize=True downloads about 2.1 GB more on first use.")
+                    f"{where.show(where.modelscope_cache())}); diarize=True downloads about 2.1 GB more on first use.")
 
 
 def _has_cuda_gpu() -> bool:
@@ -245,7 +292,7 @@ def _asr_install_message(missing: list[str], system: Optional[str] = None,
 
 
 def _model_cached(model_id: str) -> bool:
-    root = os.environ.get("MODELSCOPE_CACHE") or os.path.expanduser("~/.cache/modelscope/hub")
+    root = os.environ.get("MODELSCOPE_CACHE") or str(where.modelscope_cache() / "hub")
     return any(os.path.isdir(os.path.join(root, sub, model_id)) for sub in ("models", ""))
 
 
@@ -261,6 +308,7 @@ def _get_model():
     global _model
     with _lock:  # re-entrant: callers already holding it are fine
         if _model is None:
+            _before_load("sensevoice", ("diar",))
             with _quiet_stdout():
                 AutoModel = _optdep.require("funasr", "asr").AutoModel
             if not _model_cached(_MODEL):
@@ -403,6 +451,7 @@ def _get_vad_model():
     global _vad_model
     with _lock:  # re-entrant: callers already holding it are fine
         if _vad_model is None:
+            _before_load("vad", ("diar",))
             with _quiet_stdout():
                 AutoModel = _optdep.require("funasr", "asr").AutoModel
             last = None
@@ -420,7 +469,7 @@ def _get_vad_model():
 
 
 def _segments_from(spans: list, texts: list) -> list[dict]:
-    """PURE assembler (the smoke-golden target): zip VAD spans ``[[start_ms,end_ms],...]`` with the
+    """PURE assembler (no I/O, testable on a recorded fixture): zip VAD spans ``[[start_ms,end_ms],...]`` with the
     per-span transcribed texts into ``[{start,end,text}]`` (seconds, cleaned). Zips to the shorter
     length so a count mismatch degrades gracefully instead of misaligning; drops empty-text spans."""
     out = []
@@ -474,6 +523,7 @@ def _get_diar_model():
     global _diar_model
     with _lock:  # re-entrant: callers already holding it are fine
         if _diar_model is None:
+            _before_load("diar", ("sensevoice", "vad"))
             with _quiet_stdout():
                 AutoModel = _optdep.require("funasr", "asr").AutoModel
             last = None
@@ -492,7 +542,7 @@ def _get_diar_model():
 
 
 def _diarized_from(sentence_info: list) -> list[dict]:
-    """PURE assembler (the smoke-golden target): funasr ``sentence_info`` [{start,end,text/sentence,spk}]
+    """PURE assembler (no I/O, testable on a recorded fixture): funasr ``sentence_info`` [{start,end,text/sentence,spk}]
     -> ``[{start,end,text,speaker}]`` (seconds, cleaned, empty-text sentences dropped). ``speaker`` is the
     raw cluster index funasr assigned (the agent reads 'speaker 0 said X, speaker 1 said Y')."""
     out = []
@@ -581,9 +631,14 @@ def _bili_wbi_signed_query(params: dict, wbi_key: str) -> str:
 
 
 def bilibili_playurl(url: str) -> Optional[dict]:
+    """Sync entry for a caller on a thread: ``abilibili_playurl`` on the event loop (portal.call)."""
+    return portal.call(abilibili_playurl, url)
+
+
+async def abilibili_playurl(url: str) -> Optional[dict]:
     """Activated-session playurl for a bilibili video -> its DASH streams + the handles to fetch
     them. Runs the full browser-style bootstrap (homepage -> spi buvid3/4 -> synth _uuid/b_lsid ->
-    bili_ticket -> ExClimbWuzhi activation -> WBI-signed playurl) in ONE httpx session. Shared by
+    bili_ticket -> ExClimbWuzhi activation -> WBI-signed playurl) in ONE httpx session (an AsyncHopClient: the declared gates and the redirect rule on every hop). Shared by
     _bilibili_audio (audio) and vframes (video). The 412 is risk-control, not IP/login (see the
     block comment above). Returns None on any failure.
 
@@ -600,18 +655,18 @@ def bilibili_playurl(url: str) -> Optional[dict]:
         c.cookies.set(name, val, domain=".bilibili.com")
 
     try:
-        with http.HopClient(headers=base_headers, follow_redirects=True, timeout=30) as c:
+        async with http.AsyncHopClient(headers=base_headers, follow_redirects=True, timeout=30) as c:
             # b23.tv (or any non-BV URL) -> follow to the real video page for its BVID
             if bvid is None:
-                r = c.get(url)
+                r = await c.get(url)
                 m = _BVID_RE.search(str(r.url)) or _BVID_RE.search(r.text)
                 if not m:
                     logger.warning("bilibili: no BVID resolvable from %s", url)
                     return None
                 bvid = m.group(0)
 
-            c.get("https://www.bilibili.com/")  # seeds buvid3 / b_nut
-            spi = c.get("https://api.bilibili.com/x/frontend/finger/spi").json()
+            await c.get("https://www.bilibili.com/")  # seeds buvid3 / b_nut
+            spi = (await c.get("https://api.bilibili.com/x/frontend/finger/spi")).json()
             ck(c, "buvid3", spi["data"]["b_3"])
             ck(c, "buvid4", spi["data"]["b_4"])
 
@@ -624,8 +679,8 @@ def bilibili_playurl(url: str) -> Optional[dict]:
             t = int(time.time())
             hexsign = hmac.new(_BILI_TICKET_KEY.encode(), ("ts%d" % t).encode(),
                                hashlib.sha256).hexdigest()
-            tj = c.post("https://api.bilibili.com/bapis/bilibili.api.ticket.v1.Ticket/GenWebTicket"
-                        "?key_id=ec02&hexsign=%s&context[ts]=%d&csrf=" % (hexsign, t)).json()
+            tj = (await c.post("https://api.bilibili.com/bapis/bilibili.api.ticket.v1.Ticket/GenWebTicket"
+                               "?key_id=ec02&hexsign=%s&context[ts]=%d&csrf=" % (hexsign, t))).json()
             if tj.get("code") == 0:
                 ck(c, "bili_ticket", tj["data"]["ticket"])
                 ck(c, "bili_ticket_expires", str(t + tj["data"]["ttl"]))
@@ -634,18 +689,18 @@ def bilibili_playurl(url: str) -> Optional[dict]:
             payload = {"3064": 1, "5062": str(ts), "03bf": "https://www.bilibili.com/",
                        "39c8": "333.1007.fp.risk", "6e7c": "878x1080",
                        "3c43": {"b8ce": _BILI_UA, "07a4": "zh-CN", "6aa9": "Asia/Shanghai"}}
-            c.post("https://api.bilibili.com/x/internal/gaia-gateway/ExClimbWuzhi",
-                   json={"payload": json.dumps(payload)})
+            await c.post("https://api.bilibili.com/x/internal/gaia-gateway/ExClimbWuzhi",
+                         json={"payload": json.dumps(payload)})
 
-            vj = c.get("https://api.bilibili.com/x/web-interface/view",
-                       params={"bvid": bvid}).json()
+            vj = (await c.get("https://api.bilibili.com/x/web-interface/view",
+                              params={"bvid": bvid})).json()
             data = vj.get("data") or {}
             cid = data.get("cid")
             if not cid:
                 logger.warning("bilibili: no cid for %s (code %s)", bvid, vj.get("code"))
                 return None
 
-            nav = c.get("https://api.bilibili.com/x/web-interface/nav").json()
+            nav = (await c.get("https://api.bilibili.com/x/web-interface/nav")).json()
             wi = nav["data"]["wbi_img"]
             orig = (wi["img_url"].rsplit("/", 1)[-1].split(".")[0]
                     + wi["sub_url"].rsplit("/", 1)[-1].split(".")[0])
@@ -654,8 +709,8 @@ def bilibili_playurl(url: str) -> Optional[dict]:
             query = _bili_wbi_signed_query({"bvid": bvid, "cid": cid, "fnval": 4048,
                                             "try_look": 1}, wbi_key)
             ref = "https://www.bilibili.com/video/%s" % bvid
-            r = c.get("https://api.bilibili.com/x/player/wbi/playurl?" + query,
-                      headers={"Referer": ref})
+            r = await c.get("https://api.bilibili.com/x/player/wbi/playurl?" + query,
+                            headers={"Referer": ref})
             if r.status_code != 200:
                 logger.warning("bilibili playurl HTTP %s for %s (activation may have failed)",
                                r.status_code, bvid)
@@ -681,17 +736,22 @@ def _bili_stream_urls(stream: dict) -> list:
 
 
 def _bili_download(urls: list, cookies: dict, referer: str, dest: str) -> bool:
+    """Sync entry for a caller on a thread: ``_abili_download`` on the event loop (portal.call)."""
+    return portal.call(_abili_download, urls, cookies, referer, dest)
+
+
+async def _abili_download(urls: list, cookies: dict, referer: str, dest: str) -> bool:
     """Download the first working bilibili CDN url to ``dest`` (a DASH .m4s; pre-signed, but the
     CDN requires the video-page Referer + the activated cookies). True on success."""
     hdrs = {"User-Agent": _BILI_UA, "Referer": referer}
     for u in urls:
         try:
-            with http.direct_stream("GET", u, headers=hdrs, cookies=cookies, timeout=120,
-                                    follow_redirects=True) as resp:
+            async with http.adirect_stream("GET", u, headers=hdrs, cookies=cookies, timeout=120,
+                                           follow_redirects=True) as resp:
                 resp.raise_for_status()
-                with open(dest, "wb") as f:
-                    for chunk in resp.iter_bytes(262144):
-                        f.write(chunk)
+                async with await anyio.open_file(dest, "wb") as f:
+                    async for chunk in resp.aiter_bytes(262144):
+                        await f.write(chunk)
             return True
         except Exception as exc:  # noqa: BLE001
             logger.debug("bilibili CDN url failed (%s): %s", str(u)[:60], exc)
@@ -756,73 +816,10 @@ def _rm(path: Optional[str]) -> None:
         shutil.rmtree(d, ignore_errors=True)
 
 
-# ── douyin: capture play_addr via the logged-in 9225 Chrome (yt-dlp's Douyin extractor is broken) ──
-# yt-dlp 2026.06.09's Douyin extractor rejects even real logged-in cookies ("Fresh cookies (not
-# necessarily logged in) are needed", tested 2026-06-23 both via cookiesfrombrowser and a 59-cookie
-# CDP-exported jar), so we bypass it the same way _bilibili_audio bypasses yt-dlp for bilibili: drive
-# the 9225 douyin Chrome to the video page, CAPTURE its own detail XHR (/aweme/v1/web/aweme/detail/ —
-# the page signs a-bogus INTERNALLY, we never sign anything), read video.play_addr.url_list, and
-# download the pre-signed CDN mp4 (UA + Referer, NO cookies needed — tested HTTP 200 video/mp4). The
-# audio rides inside that mp4; the shared _decode_to_wav extracts it for SenseVoice.
-_DOUYIN_CDP = "http://127.0.0.1:9225"
-
-
-def _douyin_audio(url: str) -> tuple[Optional[str], dict]:
-    """Resolve a douyin video's media file by capturing its play_addr off the page's own (internally
-    a-bogus-signed) detail XHR via the 9225 Chrome, then downloading the pre-signed CDN mp4. Returns
-    (path, meta) or (None, {}); the caller removes the file + its dir."""
-    from omniseek.core.sources.walled._cdp import cdp_call  # lazy: avoid import-time CDP dependency
-
-    def _flow(page):
-        out = {"play_url": None, "title": None, "author": None}
-
-        def _on_resp(r):
-            try:
-                if "/aweme/v1/web/aweme/detail" in r.url and not out["play_url"]:
-                    d = r.json().get("aweme_detail") or {}
-                    urls = (((d.get("video") or {}).get("play_addr") or {}).get("url_list")) or []
-                    if urls:
-                        out["play_url"] = urls[0]
-                        out["title"] = d.get("desc")
-                        out["author"] = (d.get("author") or {}).get("nickname")
-            except Exception:  # noqa: BLE001
-                pass
-
-        page.on("response", _on_resp)
-        try:
-            page.goto(url, wait_until="domcontentloaded", timeout=30000)
-        except Exception:  # noqa: BLE001
-            pass
-        for _ in range(12):  # poll up to ~12s for the detail XHR to fire + carry play_addr
-            page.wait_for_timeout(1000)
-            if out["play_url"]:
-                break
-        return out
-
-    try:
-        r = cdp_call(_flow, initial_url=None, cdp_url=_DOUYIN_CDP, timeout=75)
-    except Exception as exc:  # noqa: BLE001 — CDP/flow failure → degrade (the contract)
-        logger.warning("douyin audio: CDP flow failed %s: %s", url, exc)
-        return None, {}
-    play_url = (r or {}).get("play_url")
-    if not play_url:
-        logger.warning("douyin audio: no play_addr captured (9225 logged out / 风控?) for %s", url)
-        return None, {}
-    tmpdir = tempfile.mkdtemp(prefix="omniseek-asr-dl-")
-    dest = os.path.join(tmpdir, "a.mp4")
-    try:
-        with http.direct_stream("GET", play_url, follow_redirects=True, timeout=120,
-                                headers={"User-Agent": _UA, "Referer": "https://www.douyin.com/"}) as resp:
-            resp.raise_for_status()
-            with open(dest, "wb") as f:
-                for chunk in resp.iter_bytes():
-                    f.write(chunk)
-    except Exception as exc:  # noqa: BLE001
-        import shutil
-        shutil.rmtree(tmpdir, ignore_errors=True)
-        logger.warning("douyin audio: download failed %s: %s", play_url[:80], exc)
-        return None, {}
-    return dest, {"source": "Douyin", "title": r.get("title"), "author": r.get("author")}
+# 抖音: its videos were resolved through OmniSeek's logged-in douyin browser, which was withdrawn on
+# 2026-10-20 (yt-dlp's Douyin extractor rejects even logged-in cookies, so there is no other way in).
+# A douyin URL now gets this one sentence and nothing is fetched.
+DOUYIN_UNSUPPORTED = "抖音视频暂不支持转写（登录浏览器已撤）"
 
 
 def _remember_transcript(rec: dict) -> None:
@@ -870,16 +867,16 @@ def _remember_transcript(rec: dict) -> None:
 # is a follower that waits on the leader's job and never starts a second run. So at any moment at most
 # ONE run exists per key; distinct keys still share the one-generate-at-a-time _lock above.
 #
-# Distinct keys: the number of concurrent generates the memguard ceiling allows is
-#   floor((HARD 6656 MB - idle eye after unload 3366 MB) / per-generate driver allocation 1940 MB) = 1
-# (HARD from memguard.py; 3366 MB is OmniSeek's footprint at 14:41:52 in the incident log, after the
-# idle unload; 1940 MB is the measured allocation per call above). _lock already enforces exactly
-# one, so no new cap is added for generates. The stages before the lock (download to a temp file,
+# Distinct keys: the number of concurrent generates the memguard ceiling allows is one. While the ASR
+# models are loaded the hard line is soft + the models' load + ONE generate's largest transient
+# (memguard.ASR_EXTRA_MB_DEFAULT, 10-11), so a second concurrent generate would add a second
+# transient (up to 2351 MB) past it. _lock already enforces exactly one, so no new cap is added for
+# generates. The stages before the lock (download to a temp file,
 # ffmpeg decode to a wav on disk) hold disk and a parked thread, not process memory, so queued
 # distinct keys are left to queue rather than be refused (several chapter slices in one gather is the
-# documented pattern). A single generate on long audio can by itself pass HARD (the 87-minute run
-# reached 6666 MB at 14:46:53, restart at 14:47:54 with one transcription running); that bound is per
-# generate, not per concurrency, and is not fixed here.
+# documented pattern). Under the old HARD (6656 MB, no ASR allowance) a single generate on long audio
+# could by itself pass it (the 87-minute run reached 6666 MB at 14:46:53, restart at 14:47:54 with
+# one transcription running); the ASR allowance is sized for exactly that one generate.
 _inflight: dict = {}
 _inflight_lock = threading.Lock()
 _runs_started = 0   # real (uncached) runs started in this process; tests and health read it
@@ -995,6 +992,8 @@ def transcribe_url(url: str, language: Optional[str] = None,
 
     scheme = (urlparse(url).scheme or "").lower()
     host = (urlparse(url).hostname or "").lower()
+    if host == "douyin.com" or host.endswith(".douyin.com"):
+        return {"url": url, "error": DOUYIN_UNSUPPORTED, "transcript": ""}
     # SSRF guard: transcribe_url takes an AGENT-controlled URL and the yt-dlp else-branch below
     # hands it straight to yt-dlp (a SEPARATE egress from the ffmpeg _decode_to_wav guard). Refuse
     # an SSRF-class http(s) URL here so no branch can reach a loopback/private host (127.0.0.1:9222
@@ -1046,11 +1045,6 @@ def _transcribe_uncached(url, language, start_s, dur_s, segments, diarize, speak
             ytmp, meta = _bilibili_audio(url)  # own activated session — yt-dlp 412s on bilibili
             if not ytmp:
                 return {"url": url, "error": "could not resolve bilibili audio (anti-crawler 412?)", "transcript": ""}
-            wav = _decode_to_wav(ytmp, start_s, dur_s)
-        elif _host_is("douyin.com"):
-            ytmp, meta = _douyin_audio(url)  # yt-dlp's Douyin extractor is broken; capture play_addr via 9225
-            if not ytmp:
-                return {"url": url, "error": "could not resolve douyin audio (9225 session down / play_addr miss)", "transcript": ""}
             wav = _decode_to_wav(ytmp, start_s, dur_s)
         elif url.lower().split("?")[0].endswith(_AUDIO_EXT):
             meta = {"source": "audio"}

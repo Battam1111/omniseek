@@ -43,29 +43,20 @@ class StackOverflowAdapter(BaseScrapeAdapter):
     domains = ["community", "code"]
     modes = ["STRUCTURE"]
 
-    def _raw_fetch(self, query: str, limit: int) -> Optional[Any]:
-        return _stackexchange.search(query, limit, SITE)
+    async def _araw_fetch(self, query: str, limit: int) -> Optional[Any]:
+        return await _stackexchange.asearch(query, limit, SITE)
 
-    def _to_documents(self, raw: Any, query: str, limit: int) -> list[Document]:
-        return _stackexchange.build_documents(raw, limit, self.name, SITE, SITE_HOST)
+    async def _ato_documents(self, raw: Any, query: str, limit: int) -> list[Document]:
+        # the SE-API search + per-question answer GETs cost coroutines, not held pool threads
+        return await _stackexchange.abuild_documents(raw, limit, self.name, SITE, SITE_HOST)
 
-    async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async twin of BaseScrapeAdapter.search -> AsyncSearchCapable (the S4a fan-out awaits this
-        directly; the SE-API search + per-question answer GETs cost COROUTINES, not held pool threads).
-        Shares the base async cache round-trip; egress via `_stackexchange` async twins (same breaker/cap
-        as sync). BEHAVIOR-IDENTICAL to `search`: same shared mappers, same cache key."""
-        return await self._asearch_via(
-            query, limit,
-            afetch=lambda: _stackexchange.asearch(query, limit, SITE),
-            abuild=lambda raw: _stackexchange.abuild_documents(raw, limit, self.name, SITE, SITE_HOST))
+    async def afetch_url(self, url: str) -> Optional[Document]:
+        return await _stackexchange.afetch_question_document(url, self.name, SITE, SITE_HOST)
 
-    def fetch_url(self, url: str) -> Optional[Document]:
-        return _stackexchange.fetch_question_document(url, self.name, SITE, SITE_HOST)
-
-    def health_check(self) -> tuple[Optional[bool], str]:
+    async def ahealth_check(self) -> tuple[Optional[bool], str]:
         # Shared single-flight probe (see _stackexchange.health): all SE sources share the
         # api.stackexchange.com keyless per-IP quota, so they delegate to ONE 60s-cached probe
         # instead of each firing its own live /questions GET on every health sweep.
-        return _stackexchange.health()
+        return await _stackexchange.ahealth()
 
 # Registration is automatic via BaseScrapeAdapter.__init_subclass__ (no module-tail ceremony).

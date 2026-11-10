@@ -25,14 +25,16 @@ from __future__ import annotations
 
 import functools
 import logging
+import re
 from datetime import datetime, timezone
 from typing import Optional
 
 import anyio
 import yaml
 
-from omniseek.core import cache, diag, http
+from omniseek.core import cache, diag, http, portal
 from omniseek.core.normalize import Document, jsonsafe, keyword_score_filter
+from omniseek.core.sources._base import SourceBase, aparse
 
 logger = logging.getLogger(__name__)
 
@@ -66,7 +68,38 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-class ConferenceDeadlinesAdapter:
+# Filter tokens this source reads out of the query (what translate_filters writes; a caller may type
+# them too): ccf:A|B  core:A*|A  deadline:2026-01-01..2026-06-30 (either side may be empty)
+# upcoming:true. They select over the whole ccfddl list after it is fetched (no upstream query).
+_TOKEN_RE = re.compile(r"(?:^|\s)(ccf|core|deadline|upcoming):(\S+)", re.IGNORECASE)
+
+
+def _split_filters(query: str) -> tuple[str, dict]:
+    preds: dict = {}
+    for m in _TOKEN_RE.finditer(query or ""):
+        preds[m.group(1).lower()] = m.group(2)
+    return _TOKEN_RE.sub(" ", query or "").strip(), preds
+
+
+def _keep(doc: Document, preds: dict) -> bool:
+    md = doc.metadata or {}
+    if "ccf" in preds and str(md.get("ccf_rank") or "N").upper() not in {
+            v.upper() for v in preds["ccf"].split("|")}:
+        return False
+    if "core" in preds and str(md.get("core_rank") or "").upper() not in {
+            v.upper() for v in preds["core"].split("|")}:
+        return False
+    if "upcoming" in preds and bool(md.get("is_upcoming")) != (preds["upcoming"].lower() == "true"):
+        return False
+    if "deadline" in preds:
+        lo, _, hi = preds["deadline"].partition("..")
+        d = doc.date.date().isoformat() if doc.date else None
+        if d is None or (lo and d < lo) or (hi and d > hi):
+            return False
+    return True
+
+
+class ConferenceDeadlinesAdapter(SourceBase):
     name = "conference_deadlines"
     needs_credentials = False
     description = (
@@ -75,48 +108,63 @@ class ConferenceDeadlinesAdapter:
         "nearest upcoming deadline with CCF/CORE rank + location"
     )
 
-    def _fetch_confs(self) -> list[dict]:
-        key = cache.make_key("conference_deadlines", "all")
-        cached = cache.get(key)
-        if cached is not None:
-            return cached
-        try:
-            resp = http.direct("GET", YAML_URL, headers={"User-Agent": USER_AGENT},
-                               timeout=TIMEOUT, follow_redirects=True)
-            resp.raise_for_status()
-            data = yaml.safe_load(resp.content)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("conference_deadlines: fetch/parse failed: %s", exc)
-            st = getattr(getattr(exc, "response", None), "status_code", None)
-            diag.note("conference_deadlines.fetch", url=YAML_URL, status=st, exc=exc)
-            return []
-        if not isinstance(data, list):
-            return []
-        confs = [c for c in data if c.get("sub") in INCLUDE_SUBS]
-        cache.set(key, confs, ttl=CACHE_TTL)
-        return confs
+    # Source spec (omniseek.core.filters). All fields select over the fetched ccfddl list (the
+    # query tokens above); the date is the shown edition's submission deadline.
+    filters = {
+        "ccf": {"type": "keyword", "ops": ["eq", "any"], "values": ["A", "B", "C", "N"],
+                "doc_key": "metadata.ccf_rank", "desc": "CCF rank (N = not ranked)"},
+        "core": {"type": "keyword", "ops": ["eq", "any"], "doc_key": "metadata.core_rank",
+                 "desc": "CORE rank such as A*, A, B"},
+        "deadline": {"type": "date", "ops": ["eq", "gte", "lte", "range"], "doc_key": "date",
+                     "desc": "submission deadline of the shown edition (nearest upcoming, else latest past)"},
+        "upcoming": {"type": "bool", "ops": ["eq"], "doc_key": "metadata.is_upcoming",
+                     "desc": "true = the deadline is still ahead"},
+    }
+    coverage = {"since": None, "until": None, "gaps": ["only ccfddl's AI category (about 55 venues)"],
+                "note": "one edition per venue: the nearest upcoming deadline, else the latest past one"}
+    samples = [{"query": "", "filters": {"ccf": "A", "upcoming": True}},
+               {"query": "NeurIPS"}]
+
+    def translate_filters(self, query: str, clauses: list) -> str:
+        """Append the filters as this source's query tokens (ccf: core: deadline: upcoming:)."""
+        from omniseek.core.filters import Unsupported
+        toks = []
+        for c in clauses:
+            if c.field in ("ccf", "core"):
+                vals = [c.value] if c.op == "eq" else list(c.value)
+                if any(" " in str(v) or "|" in str(v) for v in vals):
+                    raise Unsupported(c.field, "a value with a space or | cannot be sent")
+                toks.append(f"{c.field}:{'|'.join(str(v) for v in vals)}")
+            elif c.field == "deadline":
+                toks.append(f"deadline:{c.lo.isoformat() if c.lo else ''}..{c.hi.isoformat() if c.hi else ''}")
+            elif c.field == "upcoming":
+                toks.append(f"upcoming:{'true' if c.value else 'false'}")
+            else:
+                raise Unsupported(c.field)
+        return " ".join([(query or "").strip(), *toks]).strip()
 
     async def _afetch_confs(self) -> list[dict]:
-        """Async egress twin of ``_fetch_confs`` (S4b). SAME cache key + TTL + INCLUDE_SUBS
+        """Async replacement of the deleted sync ``_fetch_confs`` (11-04, async step seven; this is the only one now) (S4b). SAME cache key + TTL + INCLUDE_SUBS
         filter as the sync path; only the two blocking legs change:
           - the disk cache read + write -> anyio.to_thread.run_sync (get/set do file IO);
           - the raw ``httpx.get`` -> ``http.aget`` (shared pool + SSRF guard + cache_only + the
             30MB cap; the ~346KB YAML is far under the cap, so no per-source AsyncClient needed).
-        ``http.aget`` keeps follow_redirects=True (client-level) and takes the SAME OmniSeek UA
+        ``http.aget`` keeps follow_redirects=True (client-level) and takes the SAME omniseek UA
         + timeout. It handles the HTTP failure branch itself (non-2xx / timeout / SSRF / oversize
         -> None + its own diag.note under the "http.get" label), so this returns [] on None; a
         200-but-unparseable YAML is the ONE failure http.aget can't see, so it keeps this source's
         own diag.note("conference_deadlines.fetch"). Parsing stays byte-identical: ``yaml.safe_load``
-        runs on ``resp.content`` (the same bytes the sync path fed it), on the loop (pure CPU)."""
+        runs on ``resp.content`` (the same bytes the sync path fed it), on the CPU lane (pure CPU; the
+        pure-Python yaml scanner kept the loop busy for ~0.8 s here)."""
         key = cache.make_key("conference_deadlines", "all")
-        cached = await anyio.to_thread.run_sync(cache.get, key)  # disk read OFF loop
+        cached = await cache.aget_once(key)  # disk read OFF loop
         if cached is not None:
             return cached
         resp = await http.aget(YAML_URL, headers={"User-Agent": USER_AGENT}, timeout=TIMEOUT)
         if resp is None:
             return []  # http.aget already logged + diag.note'd the egress failure
         try:
-            data = yaml.safe_load(resp.content)
+            data = await aparse(len(resp.content), yaml.safe_load, resp.content)
         except Exception as exc:  # noqa: BLE001
             logger.warning("conference_deadlines: parse failed: %s", exc)
             diag.note("conference_deadlines.fetch", url=YAML_URL, status=resp.status_code, exc=exc)
@@ -125,7 +173,7 @@ class ConferenceDeadlinesAdapter:
             return []
         confs = [c for c in data if c.get("sub") in INCLUDE_SUBS]
         await anyio.to_thread.run_sync(  # disk write OFF loop
-            functools.partial(cache.set, key, confs, ttl=CACHE_TTL))
+            functools.partial(cache.set, key, confs, ttl=CACHE_TTL), limiter=portal.IO_LANE)
         return confs
 
     def _best_edition(self, conf: dict) -> Optional[tuple[dict, Optional[datetime], bool]]:
@@ -151,29 +199,8 @@ class ConferenceDeadlinesAdapter:
             return ed, dl, False
         return None
 
-    def search(self, query: str, limit: int = 10) -> list[Document]:
-        confs = self._fetch_confs()
-        docs: list[Document] = []
-        for conf in confs:
-            best = self._best_edition(conf)
-            if not best:
-                continue
-            ed, dl, is_upcoming = best
-            doc = self._to_document(conf, ed, dl, is_upcoming)
-            if doc:
-                docs.append(doc)
-
-        # Default order: upcoming first (soonest deadline ascending), then past
-        # editions after (also by date — recent past nearest the boundary).
-        far_future = datetime.max.replace(tzinfo=timezone.utc)
-        docs.sort(key=lambda d: (0 if d.metadata.get("is_upcoming") else 1,
-                                 d.date or far_future))
-
-        docs = keyword_score_filter(docs, query)
-        return docs[:limit]
-
     async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async twin of ``search`` (S4b): the async omniseek_search fan-out awaits this DIRECTLY
+        """Native-async replacement of the deleted sync ``search`` (11-04, S9; this is the only one now) (S4b): the async omniseek_search fan-out awaits this DIRECTLY
         (no held pool thread), so the dominant NETWORK wait — the one ~346KB YAML fetch — costs a
         COROUTINE, not a thread. Mirrors ``search`` line-for-line, changing ONLY the egress+cache
         leg: it awaits ``_afetch_confs`` (shared async leaf + off-loop disk cache, SAME cache key)
@@ -197,19 +224,24 @@ class ConferenceDeadlinesAdapter:
         docs.sort(key=lambda d: (0 if d.metadata.get("is_upcoming") else 1,
                                  d.date or far_future))
 
+        query, preds = _split_filters(query)
+        if preds:
+            docs = [d for d in docs if _keep(d, preds)]
         docs = keyword_score_filter(docs, query)
         return docs[:limit]
 
-    def fetch_url(self, url: str) -> Optional[Document]:
+    async def afetch_url(self, url: str) -> Optional[Document]:
         # Aggregator of conference deadlines — no per-URL resolution.
         return None
 
-    def health_check(self) -> tuple[Optional[bool], str]:
-        # SAME key _fetch_confs reads: while the YAML is cached, _fetch_confs answers from the cache
+    async def ahealth_check(self) -> tuple[Optional[bool], str]:
+        # SAME key _afetch_confs reads: while the YAML is cached, _afetch_confs answers from the cache
         # and asks ccfddl nothing, so this check verifies nothing (None).
-        if cache.get(cache.make_key("conference_deadlines", "all")) is not None:
+        ck = cache.make_key("conference_deadlines", "all")
+        hit = await anyio.to_thread.run_sync(cache.get, ck, limiter=portal.IO_LANE)  # disk read OFF loop
+        if hit is not None:
             return None, "not probed (the ccfddl YAML is still cached; it is fetched again when it expires)"
-        confs = self._fetch_confs()
+        confs = await self._afetch_confs()
         if not confs:
             return False, "no AI conferences parsed from ccfddl YAML"
         upcoming = 0

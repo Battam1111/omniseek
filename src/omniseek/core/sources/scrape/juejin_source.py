@@ -113,10 +113,10 @@ class JuejinAdapter(BaseScrapeAdapter):
     def _to_documents(self, raw, query, limit) -> list[Document]:
         return [d for it in raw[:limit] if (d := _article_to_doc(it.get("result_model") or {}))]
 
-    def health_check(self) -> tuple[bool, str]:
+    async def ahealth_check(self) -> tuple[bool, str]:
         if not _DEPS_OK:
             return False, "curl_cffi not installed"
-        raw, why = self._health_fetch("python", fallback="fetch failed")
+        raw, why = await self._ahealth_fetch("python", fallback="fetch failed")
         if raw is None:
             return False, why
         return True, f"OK ({len(raw)} results)"

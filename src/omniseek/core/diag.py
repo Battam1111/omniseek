@@ -14,6 +14,11 @@ Design (deliberately small):
     None) ``note`` is a cheap no-op, so the broad search_many fan-out (which never calls
     ``enable()``) pays ZERO cost and never cross-contaminates one source's trace with
     another's. Capture is armed ONLY around a single fetch_one_with_diag run.
+  - ``tap()`` is a second, independent listener for a caller that wants every failure a whole
+    piece of work noted, however its inner steps arm and drain their own capture (a source's
+    health check arms one around its fetch and keeps it to itself). The source-health job taps
+    each probe, so a source that failed leaves the addresses it failed on for the exit-node
+    sweep (eye.exit_node). enable/drain behave exactly as before with or without a tap.
 
 fail-open is absolute: every function here swallows its own errors. A bug in the
 diagnostic path must NEVER turn a working retrieval into a broken one. note() that raises
@@ -24,7 +29,8 @@ is passed through best-effort. The capture is a luxury; the retrieval is the pro
 from __future__ import annotations
 
 import contextvars
-from typing import Optional
+from contextlib import contextmanager
+from typing import Iterator, Optional
 
 from omniseek import redact as _redact
 
@@ -32,6 +38,12 @@ from omniseek import redact as _redact
 # appends to it. The default is shared, but enable() always sets a FRESH list, so two
 # concurrent armed contexts never share a list (contextvars are per-logical-context).
 _trace_var: contextvars.ContextVar = contextvars.ContextVar("omniseek_eye_diag", default=None)
+# None = no tap. A tuple of lists = the open taps, outermost first: every note() made in this context
+# (and the tasks and threads that copy it) is also appended to each of them, whatever _trace_var holds
+# at that moment. A tap opened inside another adds its list and keeps the outer ones: an adapter tapping
+# its own page reads (llm_leaderboard, github, arxiv...) used to hide them from the health probe's tap,
+# so the exit-node sweep saw "no address" for that source (llm_leaderboard, 11-10).
+_tap_var: contextvars.ContextVar = contextvars.ContextVar("omniseek_eye_diag_tap", default=None)
 
 _MAX_BODY = 500       # a body snippet beyond this is truncated (a marker is appended)
 _MAX_CAPTURES = 50    # an upper bound on captures per run, so a retry storm cannot grow unbounded
@@ -40,6 +52,9 @@ _MAX_CAPTURES = 50    # an upper bound on captures per run, so a retry storm can
 # to the fixing agent (the trace is read by an agent + may be logged). Case-insensitive match.
 # ONE list for the whole eye: omniseek.redact owns it (logs, tool results and state files use it too).
 _SECRET_KEYS = _redact.SECRET_PARAMS
+
+# Request headers that carry a credential whatever their value looks like: never kept in a record.
+_SECRET_HEADERS = frozenset({"cookie", "proxy-authorization", "x-auth-token", "x-csrf-token"})
 
 # The diagnostic's historical marker for a masked value, kept so existing readers see no change.
 _DIAG_MASK = "<redacted>"
@@ -61,6 +76,12 @@ def active() -> bool:
         return _trace_var.get() is not None
     except Exception:  # noqa: BLE001
         return False
+
+
+def strip_secrets(url: Optional[str]) -> Optional[str]:
+    """The url exactly as ``note`` records it (credential values masked): what a reader compares a
+    record's ``url`` with to find the records about one address."""
+    return _strip_secrets(url)
 
 
 def _strip_secrets(url: Optional[str]) -> Optional[str]:
@@ -87,18 +108,35 @@ def _redact_text(text: Optional[str]) -> Optional[str]:
 
 
 def note(helper: str, *, url: Optional[str] = None, status: Optional[int] = None,
-         body: Optional[object] = None, exc: Optional[BaseException] = None) -> None:
+         body: Optional[object] = None, exc: Optional[BaseException] = None,
+         final: bool = False, headers: Optional[dict] = None) -> None:
     """Append ONE failure record to the active trace (a no-op when capture is OFF).
 
     Called ONLY from the failure branches of the shared egress helpers (never the success
     path). ``helper`` names the egress (e.g. "http.get", "openalex.get_json", "cdp_call").
     ``url`` has its credential query values stripped; ``body`` is stringified + truncated to
     ``_MAX_BODY``; ``exc`` is reduced to ``type: message``. Fail-open: any internal error is
-    swallowed so a diagnostic bug can never break the retrieval it is observing."""
+    swallowed so a diagnostic bug can never break the retrieval it is observing.
+
+    ``final=True`` is an adapter's settled answer on the URL it owns: the thing is not there (an
+    upstream API said 404 / 401 for it). The record carries ``"final": True`` and ``body`` is the
+    caller-facing reason; the URL read (fetcher._afetch_url_via_adapters_with_reason) then stops and
+    returns that reason, trying no other reader and no generic web read. Only the adapter that
+    recognised the URL as its own says this, and only on an answer that names the thing as absent,
+    never on a timeout, a rate limit or a gate that sent nothing. A final record is kept past the
+    capture cap, so a long run of earlier records cannot drop it.
+
+    ``headers`` are the request headers a refetch of ``url`` must send to get the same answer (levels.fyi
+    serves its page only to a request carrying a browser's navigation headers): the record carries them
+    as ``headers`` and the exit-node sweep refetches with them instead of OmniSeek's bare User-Agent.
+    Credential-bearing names (Authorization, Cookie, an API key...) are never recorded."""
     try:
         trace = _trace_var.get()
-        if trace is None or len(trace) >= _MAX_CAPTURES:
-            return  # capture OFF (the broad-search path), or this run already hit the cap
+        taps = [t for t in (_tap_var.get() or ()) if final or len(t) < _MAX_CAPTURES]
+        if trace is not None and len(trace) >= _MAX_CAPTURES and not final:
+            trace = None  # this run already hit the cap
+        if trace is None and not taps:
+            return  # capture OFF and no tap (the broad-search path), or both full
         rec: dict = {"helper": helper}
         if url is not None:
             rec["url"] = _strip_secrets(str(url))
@@ -114,9 +152,34 @@ def note(helper: str, *, url: Optional[str] = None, status: Optional[int] = None
                 rec["body"] = text[:_MAX_BODY] + ("…(truncated)" if len(text) > _MAX_BODY else "")
         if exc is not None:
             rec["exc"] = (_redact_text(f"{type(exc).__name__}: {exc}") or "")[:_MAX_BODY]
-        trace.append(rec)
+        if final:
+            rec["final"] = True
+        if headers:
+            kept = {str(k): str(v) for k, v in headers.items()
+                    if str(k).lower() not in _SECRET_KEYS and str(k).lower() not in _SECRET_HEADERS}
+            if kept:
+                rec["headers"] = kept
+        if trace is not None:
+            trace.append(rec)
+        for t in taps:
+            t.append(rec)
     except Exception:  # noqa: BLE001 (capture must never raise into a live retrieval)
         pass
+
+
+@contextmanager
+def tap() -> Iterator[list]:
+    """Listen to every failure noted inside the block, as a list of the same records ``drain`` returns
+    (at most ``_MAX_CAPTURES``). Independent of ``enable``/``drain``: an inner step arming and draining
+    its own capture does not take the records away from the tap, and the tap changes nothing they see.
+    A tap opened inside the block does not take them away either: each record goes to every open tap.
+    The list is shared by the tasks and threads that copy this context (portal.run, anyio threads)."""
+    seen: list = []
+    token = _tap_var.set((*(_tap_var.get() or ()), seen))
+    try:
+        yield seen
+    finally:
+        _tap_var.reset(token)
 
 
 def drain() -> list:

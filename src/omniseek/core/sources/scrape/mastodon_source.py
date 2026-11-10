@@ -39,15 +39,16 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-from datetime import datetime, timezone
 from typing import Any, Optional
 
 from omniseek.core import http
 from omniseek.core.normalize import (
     Document,
+    html_fragment_text,
     jsonsafe,
     keyword_score_filter,
     mk_signal,
+    to_utc,
 )
 from omniseek.core.sources.scrape._base import BaseScrapeAdapter
 
@@ -76,27 +77,17 @@ def _derive_tag(query: str) -> str:
     return ""
 
 
-def _parse_date(value: Optional[str]) -> Optional[datetime]:
-    """Mastodon ``created_at`` is ISO-8601 UTC with a trailing 'Z'."""
-    if not value:
-        return None
-    try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(timezone.utc)
-    except (ValueError, TypeError):
-        return None
-
-
 def _strip_html(html: Optional[str]) -> str:
     """Status ``content`` is server-rendered HTML (``<p>``/``<a>``/``<br>``); convert it to
     clean Markdown (the same markdownify the RSS / Zenodo / Discourse sources use). Falls
-    back to a crude tag-strip on the rare payload markdownify chokes on."""
+    back to plain text (html_fragment_text) on the rare payload markdownify chokes on."""
     if not isinstance(html, str) or not html.strip():
         return ""
     try:
         from markdownify import markdownify as html_to_md
         return html_to_md(html, heading_style="ATX").strip()
-    except Exception:  # noqa: BLE001 (markdownify can be picky; degrade to a tag-strip)
-        return re.sub(r"<[^>]+>", "", html).strip()
+    except Exception:  # noqa: BLE001 (markdownify can be picky; degrade to plain text)
+        return html_fragment_text(html)
 
 
 class MastodonAdapter(BaseScrapeAdapter):
@@ -119,30 +110,6 @@ class MastodonAdapter(BaseScrapeAdapter):
     # no-reslice contract would starve the later instances. We rank-then-slice the FULL
     # cross-instance pool ourselves inside _to_documents (same shared BM25 scorer).
     rank = False
-
-    # ── hooks ───────────────────────────────────────────────────────────────
-    def _raw_fetch(self, query: str, limit: int) -> Optional[Any]:
-        """Fan the derived hashtag out over each instance's keyless tag timeline (one GET
-        each, gently). Returns a list of (host, statuses) for instances that answered;
-        None if no tag could be derived OR every instance failed (base degrades to [])."""
-        tag = _derive_tag(query)
-        if not tag:
-            return None
-        # Ask each instance for up to `limit` statuses; Mastodon caps tag-timeline limit at
-        # 40, so clamp into [1, 40] to stay within the documented bound.
-        per = max(1, min(limit or 10, 40))
-        results: list[tuple[str, list]] = []
-        for host, base in INSTANCES.items():
-            data = http.get_json(
-                f"{base}/api/v1/timelines/tag/{tag}",
-                params={"limit": per},
-                timeout=TIMEOUT,
-            )
-            if isinstance(data, list):
-                results.append((host, data))
-            else:
-                logger.debug("mastodon: %s returned no list for #%s", host, tag)
-        return results or None
 
     def _to_documents(self, raw: Any, query: str, limit: int) -> list[Document]:
         docs: list[Document] = []
@@ -170,7 +137,7 @@ class MastodonAdapter(BaseScrapeAdapter):
         return docs[:limit] if limit and limit > 0 else docs
 
     async def _araw_fetch(self, query: str, limit: int) -> Optional[Any]:
-        """Async twin of _raw_fetch: byte-faithful mirror (same URLs, params, timeout, control
+        """Async replacement of the deleted sync ``_raw_fetch`` (11-04, S9; this is the only one now): byte-faithful mirror (same URLs, params, timeout, control
         flow, None-return contract); ONLY the shared-http egress swaps to its async twin
         (http.get_json -> await http.aget_json). Fans the derived hashtag out over each instance's
         keyless tag timeline (one GET each, gently)."""
@@ -217,15 +184,6 @@ class MastodonAdapter(BaseScrapeAdapter):
                 answered[item[0]] = item[1]
         results = [(host, answered[host]) for host in INSTANCES if host in answered]
         return results or None
-
-    async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async twin of search -> AsyncSearchCapable. Shares the base async cache
-        round-trip; egress via _araw_fetch; mapping via the SAME pure-CPU _to_documents
-        (byte-identical to search)."""
-        return await self._asearch_via(
-            query, limit,
-            afetch=lambda: self._araw_fetch(query, limit),
-            abuild=lambda raw: self._to_documents(raw, query, limit))
 
     @staticmethod
     def _status_to_document(status: dict, base: str) -> Optional[Document]:
@@ -286,7 +244,7 @@ class MastodonAdapter(BaseScrapeAdapter):
             title=title,
             content=content_md,
             author=acct or display or None,
-            date=_parse_date(src.get("created_at")),
+            date=to_utc(src.get("created_at")),
             signals=signals,
             tags=tags,
             media=media,

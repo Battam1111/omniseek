@@ -15,6 +15,7 @@
   "transformer_circuits": {"domains": ["papers", "safety"], "modes": ["RECALL", "MONITOR"]},
   "mlrc": {"kind": "lookup", "domains": ["papers", "methodology"], "modes": ["STRUCTURE"]},
   "pdf": {"kind": "portal", "domains": ["papers"], "modes": ["UNWALL"]},
+  "iacr_eprint": {"kind": "lookup", "domains": ["papers"], "regions": ["global"], "modes": ["STRUCTURE"], "keywords": "cryptography cryptology IACR ePrint preprint 密码学 密码 预印本"},
 
   "github": {"kind": "lookup", "domains": ["code"], "modes": ["STRUCTURE", "MONITOR"]},
   "github_trending": {"kind": "stream", "domains": ["code"], "modes": ["STRUCTURE", "RECALL", "MONITOR"]},
@@ -31,17 +32,20 @@
   "chinese_ai_media": {"domains": ["media", "news"], "regions": ["cn"], "modes": ["RECALL", "MONITOR"]},
   "ai_newsletters": {"domains": ["news", "media"], "modes": ["RECALL", "MONITOR"]},
   "substack_matrix": {"domains": ["media", "methodology"], "modes": ["RECALL", "MONITOR"]},
+  "lemire_blog": {"domains": ["methodology"], "modes": ["RECALL", "MONITOR"]},
   "lobsters": {"domains": ["community", "news"], "modes": ["RECALL", "MONITOR"]},
   "hackernews": {"kind": "lookup", "domains": ["community", "news"], "modes": ["STRUCTURE", "MONITOR"]},
 
   "lesswrong": {"domains": ["methodology", "community"], "modes": ["RECALL", "MONITOR"]},
   "alignment_forum": {"domains": ["safety", "community"], "modes": ["RECALL", "MONITOR"]},
   "ml_eval_safety": {"domains": ["eval", "safety"], "modes": ["RECALL", "MONITOR"]},
+  "ai_incidents": {"kind": "lookup", "domains": ["safety"], "modes": ["STRUCTURE"]},
   "lmsys_arena": {"domains": ["eval"], "modes": ["RECALL", "MONITOR"]},
   "scrape_ml_orgs": {"domains": ["eval", "methodology"], "modes": ["RECALL", "MONITOR"]},
 
   "conference_deadlines": {"kind": "lookup", "domains": ["deadlines"], "modes": ["STRUCTURE", "MONITOR"]},
   "ml_conferences": {"domains": ["deadlines", "news"], "modes": ["RECALL", "MONITOR"]},
+  "wikicfp_nlp": {"domains": ["deadlines"], "modes": ["MONITOR"]},
 
   "a_happy_phd": {"domains": ["methodology"], "modes": ["RECALL", "MONITOR"]},
   "thesis_whisperer": {"domains": ["methodology"], "modes": ["RECALL", "MONITOR"]},

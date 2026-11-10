@@ -47,3 +47,5 @@ class LmsysArenaAdapter(BaseScrapeAdapter):
             "content": {"selector": "p"},
         },
     }
+
+

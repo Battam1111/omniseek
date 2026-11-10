@@ -55,21 +55,10 @@ class GutenbergAdapter(BaseScrapeAdapter):
         "a query genuinely matches. Standing curation call 2026-07-25.")
     modes = ["STRUCTURE", "UNWALL"]
 
-    def _raw_fetch(self, query: str, limit: int) -> Optional[Any]:
-        return http.get_json(API_URL, params={"search": query}, timeout=TIMEOUT)
-
     async def _araw_fetch(self, query: str, limit: int) -> Optional[Any]:
-        """Async twin of _raw_fetch: byte-faithful mirror (same URL/params/timeout), only the
+        """Async replacement of the deleted sync ``_raw_fetch`` (11-04, S9; this is the only one now): byte-faithful mirror (same URL/params/timeout), only the
         shared-http egress swapped for its async twin (http.get_json -> await http.aget_json)."""
         return await http.aget_json(API_URL, params={"search": query}, timeout=TIMEOUT)
-
-    async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async twin of search -> AsyncSearchCapable. Shares the base async cache round-trip;
-        egress via _araw_fetch; mapping via the SAME pure-CPU _to_documents (byte-identical to search)."""
-        return await self._asearch_via(
-            query, limit,
-            afetch=lambda: self._araw_fetch(query, limit),
-            abuild=lambda raw: self._to_documents(raw, query, limit))
 
     def _to_documents(self, raw: Any, query: str, limit: int) -> list[Document]:
         results = raw.get("results") or []

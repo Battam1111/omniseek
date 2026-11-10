@@ -41,7 +41,7 @@ from datetime import datetime
 from typing import Any, Optional
 
 from omniseek.core import http
-from omniseek.core.normalize import Document, jsonsafe, mk_signal
+from omniseek.core.normalize import Document, jsonsafe, mk_signal, to_utc
 from omniseek.core.sources.scrape._base import BaseScrapeAdapter
 
 logger = logging.getLogger(__name__)
@@ -70,38 +70,8 @@ class OrcidAdapter(BaseScrapeAdapter):
     explicit_only = ("orcid: a named drill (look a researcher up BY name to pull their CV); "
                      "not broad-fan-out fodder (a topic query would waste the polite per-iD fan-out)")
 
-    def _raw_fetch(self, query: str, limit: int) -> Optional[list[tuple[str, dict]]]:
-        """expanded-search → top iDs → polite per-iD GET /record. Returns the list of
-        (orcid_id, record) pairs (decode happens in _to_documents). None ONLY if the
-        search call fails (the adapter contract); a per-record miss is just skipped."""
-        search = http.get_json(SEARCH_URL, params={"q": query},
-                               headers=_ACCEPT, timeout=15)
-        if not isinstance(search, dict):
-            return None  # search endpoint unreachable / unparseable ⇒ [] upstream
-        results = search.get("expanded-result") or []
-        if not isinstance(results, list):
-            return None
-
-        n = max(1, min(int(limit), _MAX_FANOUT))
-        pairs: list[tuple[str, dict]] = []
-        seen: set[str] = set()
-        for item in results:
-            if len(pairs) >= n:
-                break
-            if not isinstance(item, dict):
-                continue
-            oid = item.get("orcid-id")
-            if not isinstance(oid, str) or not oid or oid in seen:
-                continue
-            seen.add(oid)
-            record = http.get_json(f"{API_BASE}/{oid}/record",
-                                   headers=_ACCEPT, timeout=15)
-            if isinstance(record, dict):
-                pairs.append((oid, record))
-        return pairs
-
     async def _araw_fetch(self, query: str, limit: int) -> Optional[list[tuple[str, dict]]]:
-        """Async twin of _raw_fetch: same URLs, params, headers, timeouts, fan-out cap and
+        """Async replacement of the deleted sync ``_raw_fetch`` (11-04, S9; this is the only one now): same URLs, params, headers, timeouts, fan-out cap and
         None-return contract, with the per-iD /record GETs run CONCURRENTLY rather than one at a time.
 
         The expanded-search stays FIRST and alone: its iD list is a REAL dependency, nothing can be
@@ -173,16 +143,6 @@ class OrcidAdapter(BaseScrapeAdapter):
             if doc is not None:
                 docs.append(doc)
         return docs
-
-    async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async twin of search -> AsyncSearchCapable (the fan-out awaits this directly; the
-        expanded-search + polite per-iD /record GETs cost COROUTINES, not held pool threads). Shares the
-        base async cache round-trip; egress via _araw_fetch; mapping via the SAME pure-CPU _to_documents
-        (byte-identical to search: same mappers, same cache key)."""
-        return await self._asearch_via(
-            query, limit,
-            afetch=lambda: self._araw_fetch(query, limit),
-            abuild=lambda raw: self._to_documents(raw, query, limit))
 
     # ------------------------------------------------------------------ decode
     def _record_to_doc(self, orcid_id: Any, record: Any) -> Optional[Document]:
@@ -358,22 +318,11 @@ class OrcidAdapter(BaseScrapeAdapter):
         candidates: list[datetime] = []
         for src in (employments, works):
             for item in src:
-                d = cls._parse_partial(item.get("start") or item.get("date"))
+                raw = item.get("start") or item.get("date")
+                d = to_utc(raw) if isinstance(raw, str) else None
                 if d is not None:
                     candidates.append(d)
         return max(candidates) if candidates else None
-
-    @staticmethod
-    def _parse_partial(raw: Any) -> Optional[datetime]:
-        """Parse a "YYYY", "YYYY-MM", or "YYYY-MM-DD" string (padding partials). None else."""
-        if not isinstance(raw, str) or not raw.strip():
-            return None
-        for fmt in ("%Y-%m-%d", "%Y-%m", "%Y"):
-            try:
-                return datetime.strptime(raw.strip(), fmt)
-            except ValueError:
-                continue
-        return None
 
     @staticmethod
     def _compose_content(name: str, employments: list[dict],
@@ -428,10 +377,10 @@ class OrcidAdapter(BaseScrapeAdapter):
                          by="orcid/works.count", unit="works")
 
     # ---------------------------------------------------------------- liveness
-    def health_check(self) -> tuple[bool, str]:
+    async def ahealth_check(self) -> tuple[bool, str]:
         """Cheap liveness: a bare expanded-search answers without any per-iD fan-out."""
         try:
-            raw = http.get_json(SEARCH_URL, params={"q": "Einstein"},
+            raw = await http.aget_json(SEARCH_URL, params={"q": "Einstein"},
                                 headers=_ACCEPT, timeout=15)
         except Exception as exc:  # noqa: BLE001
             return False, f"{type(exc).__name__}: {str(exc)[:80]}"

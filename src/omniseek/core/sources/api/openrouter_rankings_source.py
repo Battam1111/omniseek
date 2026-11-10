@@ -20,14 +20,14 @@ from __future__ import annotations
 
 import functools
 import logging
-from datetime import datetime, timezone
 from typing import Optional
 from urllib.parse import urlparse
 
 import anyio
 
-from omniseek.core import cache, diag, http
-from omniseek.core.normalize import Document, mk_signal
+from omniseek.core import cache, diag, http, portal
+from omniseek.core.normalize import Document, mk_signal, to_utc
+from omniseek.core.sources._base import SourceBase
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +50,7 @@ def _fmt_tokens(n: float) -> str:
     return str(int(n))
 
 
-class OpenRouterRankingsAdapter:
+class OpenRouterRankingsAdapter(SourceBase):
     name = "openrouter_rankings"
     needs_credentials = False
     kind = "lookup"
@@ -65,61 +65,8 @@ class OpenRouterRankingsAdapter:
         "新模型冲上用量榜=watchtower 新条目. 用量数据来自 OpenRouter"
     )
 
-    def _rankings(self) -> list[dict]:
-        key = cache.make_key("openrouter_rankings", "models", "week")
-        cached = cache.get(key)
-        if cached is not None:
-            return cached
-        try:
-            resp = http.direct("GET", API, headers={"User-Agent": UA}, timeout=TIMEOUT,
-                               follow_redirects=True)
-            resp.raise_for_status()
-            rows = resp.json().get("data", [])
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("openrouter_rankings: fetch failed: %s", exc)
-            st = getattr(getattr(exc, "response", None), "status_code", None)
-            diag.note("openrouter_rankings.fetch", url=API, status=st, exc=exc)
-            return []
-
-        # Aggregate the per-day, per-variant series into one row per model.
-        agg: dict[str, dict] = {}
-        for r in rows:
-            slug = r.get("model_permaslug")
-            if not slug:
-                continue
-            e = agg.get(slug)
-            if e is None:
-                e = agg[slug] = {"slug": slug, "prompt": 0, "completion": 0,
-                                 "requests": 0, "variants": set(), "latest": None}
-            e["prompt"] += r.get("total_prompt_tokens") or 0
-            e["completion"] += r.get("total_completion_tokens") or 0
-            e["requests"] += r.get("count") or 0
-            v = r.get("variant")
-            if v:
-                e["variants"].add(v)
-            d = r.get("date")
-            if d and (e["latest"] is None or d > e["latest"]):
-                e["latest"] = d
-
-        ranked = sorted(agg.values(),
-                        key=lambda e: e["prompt"] + e["completion"], reverse=True)
-        slim = []
-        for i, e in enumerate(ranked, 1):
-            slim.append({
-                "rank": i,
-                "slug": e["slug"],
-                "prompt_tokens": e["prompt"],
-                "completion_tokens": e["completion"],
-                "total_tokens": e["prompt"] + e["completion"],
-                "requests": e["requests"],
-                "variants": sorted(e["variants"]),
-                "latest": e["latest"],
-            })
-        cache.set(key, slim, ttl=CACHE_TTL)
-        return slim
-
     async def _arankings(self) -> list[dict]:
-        """Native-async twin of ``_rankings`` (S4b): the SAME cache key + a byte-identical per-day
+        """Async replacement of the deleted sync ``_rankings`` (11-04, async step seven; this is the only one now) (S4b): the SAME cache key + a byte-identical per-day
         aggregation, changing ONLY the egress path so the async fan-out awaits this without holding a
         pool thread. Off-loop discipline:
           - the disk cache read + write hop OFF the loop (``anyio.to_thread.run_sync``; cache.get/set do file IO);
@@ -131,7 +78,7 @@ class OpenRouterRankingsAdapter:
         A fetch failure (None / non-dict body) returns [] WITHOUT caching, mirroring the sync except branch
         (which returns [] before ``cache.set``); a reached-but-empty series still caches like the sync path."""
         key = cache.make_key("openrouter_rankings", "models", "week")
-        cached = await anyio.to_thread.run_sync(cache.get, key)  # disk read OFF loop
+        cached = await cache.aget_once(key)  # disk read OFF loop
         if cached is not None:
             return cached
         data = await http.aget_json(API, headers={"User-Agent": UA}, timeout=TIMEOUT)
@@ -177,20 +124,11 @@ class OpenRouterRankingsAdapter:
                 "latest": e["latest"],
             })
         await anyio.to_thread.run_sync(  # disk write OFF loop
-            functools.partial(cache.set, key, slim, ttl=CACHE_TTL))
+            functools.partial(cache.set, key, slim, ttl=CACHE_TTL), limiter=portal.IO_LANE)
         return slim
 
-    def search(self, query: str, limit: int = 10) -> list[Document]:
-        ranked = self._rankings()
-        if not ranked:
-            return []
-        terms = [t for t in (query or "").lower().split() if t]
-        if terms:
-            ranked = [e for e in ranked if all(t in e["slug"].lower() for t in terms)]
-        return [self._to_doc(e) for e in ranked[:limit]]
-
     async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async twin of ``search`` (S4b): mirrors it line-for-line, awaiting ``_arankings``
+        """Native-async replacement of the deleted sync ``search`` (11-04, S9; this is the only one now) (S4b): mirrors it line-for-line, awaiting ``_arankings``
         (async cache + egress) instead of the sync ``_rankings``. The term filter + ``_to_doc`` map are
         PURE CPU and stay ON the loop, byte-identical to ``search`` so the two can never drift. Exposing
         ``asearch`` makes this adapter AsyncSearchCapable, routing it to the fetcher's native async branch."""
@@ -202,22 +140,24 @@ class OpenRouterRankingsAdapter:
             ranked = [e for e in ranked if all(t in e["slug"].lower() for t in terms)]
         return [self._to_doc(e) for e in ranked[:limit]]
 
-    def fetch_url(self, url: str) -> Optional[Document]:
+    async def afetch_url(self, url: str) -> Optional[Document]:
         host = (urlparse(url).hostname or "").lower()
         if "openrouter.ai" not in host:
             return None
         slug = urlparse(url).path.strip("/")
-        for e in self._rankings():
+        for e in await self._arankings():
             if e["slug"] == slug:
                 return self._to_doc(e)
         return None
 
-    def health_check(self) -> tuple[Optional[bool], str]:
-        # SAME key _rankings reads: while the rankings are cached, _rankings answers from the cache
+    async def ahealth_check(self) -> tuple[Optional[bool], str]:
+        # SAME key _arankings reads: while the rankings are cached, _arankings answers from the cache
         # and asks OpenRouter nothing, so this check verifies nothing (None).
-        if cache.get(cache.make_key("openrouter_rankings", "models", "week")) is not None:
+        ck = cache.make_key("openrouter_rankings", "models", "week")
+        hit = await anyio.to_thread.run_sync(cache.get, ck, limiter=portal.IO_LANE)  # disk read OFF loop
+        if hit is not None:
             return None, "not probed (the rankings are still cached; OpenRouter is asked again when they expire)"
-        n = len(self._rankings())
+        n = len(await self._arankings())
         if n:
             return True, f"OK ({n} models ranked)"
         return False, "0 models (endpoint down / shape changed)"
@@ -235,12 +175,7 @@ class OpenRouterRankingsAdapter:
             "Usage data by OpenRouter (openrouter.ai/rankings)",
         ]
 
-        date = None
-        if e.get("latest"):
-            try:
-                date = datetime.fromisoformat(e["latest"]).replace(tzinfo=timezone.utc)
-            except (ValueError, TypeError):
-                pass
+        date = to_utc(e.get("latest"))
         author = e["slug"].split("/")[0] if "/" in e["slug"] else None
         signals = mk_signal("usage_tokens", e["total_tokens"], kind="engagement",
                             by="openrouter_rankings/tokens_week", unit="tokens/week")

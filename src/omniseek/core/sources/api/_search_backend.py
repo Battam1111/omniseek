@@ -6,7 +6,7 @@ Reaches walled venues WITHOUT scraping them: queries a SEARCH ENGINE with a
 robots.txt block on the target.
 
 Backend is pluggable + keyless-by-default:
-  * Brave Search API (robust) when ``~/.omniseek/credentials/brave.json`` has ``api_key``;
+  * Brave Search API (robust) when ``<credentials>/brave.json`` has ``api_key``;
   * else DuckDuckGo HTML (keyless, fragile — soft-rate-limits with HTTP 202, so we
     pace, retry, then break the circuit). Drop a Brave key any time to upgrade with
     zero code change.
@@ -15,8 +15,7 @@ Backend is pluggable + keyless-by-default:
     reads it). It is in service: the host it posts to, html.duckduckgo.com, allows / in its
     robots.txt (checked 2026-09-29, see that entry's notes).
 
-Both halves are paced + circuit-broken over ONE module-global ledger shared by the sync
-and async twins; ``backend_state()`` is the pure read of it, and when neither half can
+Both halves are paced + circuit-broken over ONE module-global ledger; ``backend_state()`` is the pure read of it, and when neither half can
 serve, ``search_web`` raises instead of sending (a request into a cooling backend buys
 no information and only re-arms the limiter). With the fallback disabled that error is
 ``WebSearchUnavailable``: the callers answer it with an EMPTY result whose diagnostic is
@@ -25,6 +24,7 @@ the error's message (Brave's state + the declared reason), and nothing reaches D
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import math
@@ -38,12 +38,13 @@ import anyio
 import httpx
 from bs4 import BeautifulSoup
 
-from omniseek.core import _probe, http, upstreams
+from omniseek.core import _probe, http, portal, upstreams
+from omniseek import where
 
 logger = logging.getLogger(__name__)
 
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0 Safari/537.36"
-_BRAVE_CRED = Path.home() / ".omniseek" / "credentials" / "brave.json"
+_BRAVE_CRED = where.credentials() / "brave.json"
 
 # Brave resilience: a circuit-breaker + a ~1-req/s rate gate (free tier ≈ 1 qps). Without
 # these, a dead/over-quota key is re-hit every call (wasted round-trip that can keep a
@@ -56,13 +57,12 @@ _brave_last_call = 0.0        # last Brave request time (min-interval pacing)
 # stricter than both published plans: legacy free 1 query/s, plans since 2026-02-12 50/s). This
 # module's own pacer enforces it (gate.http_gate false: no second limiter for the same upstream).
 _BRAVE_MIN_INTERVAL = float(upstreams.gate_value("brave_search", "min_interval_s"))
-_ping_lock = threading.Lock()
 
 # DDG resilience, the SYMMETRIC half (2026-09-10). DDG was the last-resort backend with NO gate and
 # NO breaker: five search-index venues named in one gather pushed Brave into cooldown, all five fell
 # onto DDG at once, DDG soft-limited (HTTP 202), and every later call re-hit a limiter it had no way
 # to know about — ten sources reading as dead with zero information for the caller. Same shape as
-# Brave now: a min-interval gate + an exponential circuit-breaker, one ledger shared by sync + async
+# Brave now: a min-interval gate + an exponential circuit-breaker, one ledger
 # under _ddg_lock. 2.5s because DDG's HTML endpoint limits harder than Brave's paid 1 qps.
 _ddg_lock = threading.Lock()
 _ddg_last_call = 0.0          # last DDG request time (min-interval pacing)
@@ -78,34 +78,6 @@ _DDG_SOFT_LIMIT_TRIES = 3     # consecutive HTTP 202s that trip the breaker
 # The last backend failure, one line, for backend_state() to hand the caller. A cooling backend is
 # only actionable if the caller can see WHY it is cooling.
 _last_error: Optional[str] = None
-
-# Pooled client: reuse keep-alive connections to the Brave API / DDG endpoints across the 10
-# search-index venues instead of a fresh TCP+TLS handshake per call (~0.5-1.5s to the overseas
-# Brave endpoint). Thread-safe; the 1qps Brave gate + circuit breaker are untouched.
-_client: Optional[httpx.Client] = None
-_client_init_lock = threading.Lock()
-
-
-def _get_client() -> httpx.Client:
-    global _client
-    if _client is None:
-        with _client_init_lock:
-            if _client is None:
-                try:
-                    import h2  # noqa: F401
-                    _h2 = True
-                except Exception:  # noqa: BLE001
-                    _h2 = False
-                # HopClient: the redirect rule on every hop (design decision 1); the Brave / DuckDuckGo
-                # upstreams themselves are paced by this module (gate.http_gate false), and it backs
-                # off on Retry-After itself (upstreams.SELF_BACKOFF), so its responses are recorded
-                # with the deferral off
-                _client = http.HopClient(timeout=15, http2=_h2, follow_redirects=True,
-                                         defer_on_429=False,
-                                         limits=httpx.Limits(max_keepalive_connections=8,
-                                                             max_connections=16, keepalive_expiry=30.0))
-    return _client
-
 
 class _BraveUnavailable(Exception):
     """Brave key broken (401/403) or rate-limited (429): back off (then the fallback, if its
@@ -148,33 +120,6 @@ def _brave_key():
         return None
 
 
-def _brave(query: str, n: int, key: str) -> list[dict]:
-    global _brave_last_call
-    # Rate gate: serialize Brave calls ≥ _BRAVE_MIN_INTERVAL apart (free tier ~1 qps), so a
-    # concurrent venue fan-out can't trip 429.
-    with _brave_lock:
-        wait = _BRAVE_MIN_INTERVAL - (time.time() - _brave_last_call)
-        if wait > 0:
-            time.sleep(wait)
-        _brave_last_call = time.time()
-    r = _get_client().get(
-        "https://api.search.brave.com/res/v1/web/search",
-        params={"q": query, "count": min(n, 20)},
-        headers={"X-Subscription-Token": key, "Accept": "application/json"},
-        timeout=15,
-    )
-    # X-RateLimit-* show the key's plan; the backend honours Retry-After itself (upstreams.SELF_BACKOFF)
-    upstreams.observe_response("brave_search", r, defer_on_429=False)
-    if r.status_code in (401, 403):
-        raise _BraveUnavailable(f"brave key rejected ({r.status_code})", 3600)  # broken → 1h
-    if r.status_code == 429:
-        ra = r.headers.get("Retry-After", "")
-        raise _BraveUnavailable("brave rate-limited (429)", int(ra) if ra.isdigit() else 60)
-    r.raise_for_status()
-    web = (r.json().get("web") or {}).get("results") or []
-    return [{"title": x.get("title", ""), "url": x.get("url", ""), "snippet": x.get("description", "")} for x in web[:n]]
-
-
 def _clock(ts: float) -> str:
     """Wall-clock HH:MM:SS for a cooldown deadline — the form a waiting caller can act on."""
     return time.strftime("%H:%M:%S", time.localtime(ts))
@@ -190,7 +135,7 @@ def _fail(msg: str) -> RuntimeError:
 def _ddg_guard() -> None:
     """Refuse to spend a request while DDG is cooling. The breaker only works if a retry inside the
     window sends NOTHING: hitting a soft-limited endpoint again just re-arms its limiter, which is
-    exactly how one fan-out kept ten venues dead. Shared by the sync + async twins."""
+    exactly how one fan-out kept ten venues dead."""
     remaining = _ddg_cooldown_until - time.time()
     if remaining > 0:
         raise _fail(f"ddg soft rate-limit; cooling {math.ceil(remaining)}s until "
@@ -217,23 +162,6 @@ def _ddg_ok() -> None:
         _ddg_consecutive_trips = 0
 
 
-def _ddg_gate() -> None:
-    """Rate gate: serialize DDG calls ≥ _DDG_MIN_INTERVAL apart, so a concurrent venue fan-out
-    can't soft-limit it. RESERVE the next slot under the lock (brief, no IO), then sleep OFF the
-    lock. Unlike ``_brave``'s gate this must not sleep while holding the lock: ``_ddg_lock`` is also
-    taken by ``_ddg_trip`` / ``_ddg_ok``, which the async twin calls ON the event loop, so a sleep
-    held under it would stall every coroutine for up to one interval."""
-    global _ddg_last_call
-    with _ddg_lock:
-        now = time.time()
-        wait = _DDG_MIN_INTERVAL - (now - _ddg_last_call)
-        if wait < 0:
-            wait = 0.0
-        _ddg_last_call = now + wait  # reserve the slot at the reserved start time
-    if wait > 0:
-        time.sleep(wait)
-
-
 def _ddg_parse(html: str, n: int) -> list[dict]:
     """Pure parse of a DDG HTML result page → [{title, url, snippet}] (no IO, no state)."""
     soup = BeautifulSoup(html, "lxml")
@@ -248,51 +176,6 @@ def _ddg_parse(html: str, n: int) -> list[dict]:
         if len(out) >= n:
             break
     return out
-
-
-def _ddg(query: str, n: int) -> list[dict]:
-    off = _ddg_off()
-    if off:  # disabled by its declaration: refuse here too, whoever called
-        raise _ddg_refused(off)
-    _ddg_guard()  # cooling → raise WITHOUT sending anything
-    soft = 0       # consecutive HTTP 202 soft rate-limits this call
-    transient = 0  # transient network faults this call
-    while True:
-        _ddg_gate()
-        try:
-            r = _get_client().post(
-                "https://html.duckduckgo.com/html/",
-                data={"q": query},
-                headers={"User-Agent": UA},
-                timeout=15,
-            )
-        except httpx.TransportError as exc:
-            # A transport fault (connect / read / remote-protocol / an SSL EOF) is usually the link
-            # blinking, not the engine refusing. Retrying it a bounded number of times is the
-            # difference between a blip and a declared TOTAL failure of web search.
-            if transient < _DDG_TRANSIENT_RETRIES:
-                transient += 1
-                logger.warning("ddg transport error (%s) — retry %d/%d", exc, transient,
-                               _DDG_TRANSIENT_RETRIES)
-                time.sleep(_DDG_TRANSIENT_BACKOFF)
-                continue
-            raise _fail(f"DDG request failed: {exc}") from exc
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("ddg request failed: %s", exc)
-            # DDG is the LAST-RESORT backend (search_web falls back to it when Brave is unkeyed),
-            # so its failure is a TOTAL failure of web search. Returning [] published that as
-            # "the web has no such page", which is the one thing a retrieval layer must never say.
-            raise _fail(f"DDG request failed: {exc}") from exc
-        if r.status_code == 200:
-            _ddg_ok()
-            return _ddg_parse(r.text, n)
-        if r.status_code == 202:  # DDG soft rate-limit — pace and retry, then break the circuit
-            soft += 1
-            if soft >= _DDG_SOFT_LIMIT_TRIES:
-                raise _ddg_trip()
-            time.sleep(2.0 + (soft - 1) * 2.0)
-            continue
-        raise _fail(f"DDG request failed: HTTP {r.status_code}")
 
 
 def _both_cooling(key: Optional[str]) -> RuntimeError:
@@ -330,53 +213,17 @@ def _no_backend(key: Optional[str], ddg_off: Optional[str],
 
 
 def search_web(query: str, n: int = 8) -> list[dict]:
-    """``site:``-scoped web search → ``[{title, url, snippet}]``. Brave if keyed, else the DDG
-    fallback unless its declaration disables it.
-
-    Both halves are circuit-broken, so the FIRST thing this does is read the two breakers: when
-    neither can serve it raises WITHOUT sending anything (a request into a cooling backend buys no
-    information and re-arms the limiter). ``backend_state()`` is the pure read of the same ledger.
-    With the fallback disabled, "neither can serve" means Brave is unkeyed, cooling or failing,
-    and the error is ``WebSearchUnavailable`` carrying the declared reason.
-
-    (CN-engine backends rejected 2026-06-03: cn.bing.com IGNORES the ``site:`` operator
-    → returns general web junk; Baidu blocks the bot; Sogou's xhs index is sparse. Brave
-    honors ``site:`` and is the ceiling for safe engine-read CN-walled content.)"""
-    global _brave_cooldown_until
-    key = _brave_key()
-    now = time.time()
-    brave_ok = bool(key) and now >= _brave_cooldown_until
-    ddg_off = _ddg_off()
-    ddg_ok = not ddg_off and now >= _ddg_cooldown_until
-    if not brave_ok and not ddg_ok:
-        raise _no_backend(key, ddg_off)
-    if brave_ok:
-        brave_error = None
-        try:
-            return _brave(query, n, key)
-        except _BraveUnavailable as exc:
-            _brave_cooldown_until = time.time() + exc.cooldown  # circuit-breaker: stop hitting it
-            _fail(f"brave: {exc}")
-            brave_error = str(exc)
-            logger.warning("brave unavailable (%s) → %s for %.0fs", exc,
-                           "no fallback" if ddg_off else "DDG", exc.cooldown)
-        except Exception as exc:  # noqa: BLE001
-            _fail(f"brave: {type(exc).__name__}: {exc}")
-            brave_error = f"{type(exc).__name__}: {exc}"
-            logger.warning("brave search failed, %s: %s",
-                           "no fallback" if ddg_off else "falling back to ddg", exc)
-        if not ddg_ok:  # Brave just fell over and the fallback is cooling or disabled
-            raise _no_backend(key, ddg_off, brave_error)
-    return _ddg(query, n)
+    """Sync entry for a caller on a thread: ``asearch_web`` on the event loop (portal.call)."""
+    return portal.call(asearch_web, query, n)
 
 
-# --- native-async twins (the search-index venues + nowcoder go native async) ---------------------
-# Byte-faithful mirror of search_web / _brave / _ddg. SAME Brave 1qps rate gate (shared _brave_last_call
-# + _brave_lock) + SAME cooldown breaker (_brave_cooldown_until) so async and sync share ONE rate ledger
-# + ONE circuit. Only the BLOCKING waits go async: the Brave rate gate reserves the slot under the lock
-# (brief, no IO) then `await anyio.sleep` OFF the lock (a `time.sleep` holding _brave_lock on the loop
-# would freeze every coroutine); the network on a shared httpx.AsyncClient; the DDG 202 backoff via
-# anyio.sleep. The BeautifulSoup parse is pure CPU, on the loop. A pure addition; sync is untouched.
+# --- the web search (one implementation; search_web above is its sync entry) ----------------------
+# The Brave 1qps rate gate (_brave_last_call + _brave_lock) reserves the slot under the lock (brief, no
+# IO) then `await anyio.sleep` OFF the lock (a sleep holding _brave_lock on the loop would freeze every
+# coroutine); the network on a shared AsyncHopClient (the redirect rule on every hop; the Brave /
+# DuckDuckGo upstreams themselves are paced by this module, gate.http_gate false, and it backs off on
+# Retry-After itself, upstreams.SELF_BACKOFF, so its responses are recorded with the deferral off); the
+# DDG 202 backoff via anyio.sleep. The BeautifulSoup parse is pure CPU, on the loop.
 _aclient: Optional[httpx.AsyncClient] = None
 _aclient_init_lock = threading.Lock()
 
@@ -402,8 +249,8 @@ def _aget_client() -> httpx.AsyncClient:
 async def _abrave(query: str, n: int, key: str) -> list[dict]:
     global _brave_last_call
     # Rate gate: RESERVE the next Brave slot under the lock (brief, no IO), then wait for it OFF the lock
-    # via anyio.sleep -- holding _brave_lock across an await would block the loop. Shares _brave_last_call
-    # with sync _brave so async + sync Brave calls together stay >= _BRAVE_MIN_INTERVAL apart (~1 qps).
+    # via anyio.sleep -- holding _brave_lock across an await would block the loop. Every Brave call stays
+    # >= _BRAVE_MIN_INTERVAL apart (free tier ~1 qps), so a concurrent venue fan-out can't trip 429.
     with _brave_lock:
         now = time.time()
         wait = _BRAVE_MIN_INTERVAL - (now - _brave_last_call)
@@ -422,17 +269,17 @@ async def _abrave(query: str, n: int, key: str) -> list[dict]:
     if r.status_code in (401, 403):
         raise _BraveUnavailable(f"brave key rejected ({r.status_code})", 3600)
     if r.status_code == 429:
-        ra = r.headers.get("Retry-After", "")
-        raise _BraveUnavailable("brave rate-limited (429)", int(ra) if ra.isdigit() else 60)
+        ra = upstreams.parse_retry_after(r.headers)
+        raise _BraveUnavailable("brave rate-limited (429)", 60 if ra is None else ra)
     r.raise_for_status()
     web = (r.json().get("web") or {}).get("results") or []
     return [{"title": x.get("title", ""), "url": x.get("url", ""), "snippet": x.get("description", "")} for x in web[:n]]
 
 
 async def _addg_gate() -> None:
-    """Async twin of ``_ddg_gate``: RESERVE the next DDG slot under the lock (brief, no IO), then
-    wait for it OFF the lock via anyio.sleep — holding _ddg_lock across an await would block the
-    loop. Shares _ddg_last_call with sync ``_ddg``, so async + sync stay ONE paced stream."""
+    """Rate gate: serialize DDG calls ≥ _DDG_MIN_INTERVAL apart, so a concurrent venue fan-out can't
+    soft-limit it. RESERVE the next slot under the lock (brief, no IO), then wait for it OFF the lock
+    via anyio.sleep: holding _ddg_lock across an await would block the loop."""
     global _ddg_last_call
     with _ddg_lock:
         now = time.time()
@@ -448,7 +295,7 @@ async def _addg(query: str, n: int) -> list[dict]:
     off = _ddg_off()
     if off:  # disabled by its declaration: refuse here too, whoever called
         raise _ddg_refused(off)
-    _ddg_guard()  # cooling → raise WITHOUT sending anything (SAME ledger as the sync twin)
+    _ddg_guard()  # cooling → raise WITHOUT sending anything
     soft = 0       # consecutive HTTP 202 soft rate-limits this call
     transient = 0  # transient network faults this call
     while True:
@@ -490,10 +337,18 @@ async def _addg(query: str, n: int) -> list[dict]:
 
 
 async def asearch_web(query: str, n: int = 8) -> list[dict]:
-    """Native-async twin of ``search_web``: Brave (if keyed + not cooling) else the DDG fallback unless
-    its declaration disables it, SAME cooldown breakers (``_brave_cooldown_until`` /
-    ``_ddg_cooldown_until``) shared with the sync path, including the no-half-can-serve early exit.
-    Byte-identical routing + result shape."""
+    """``site:``-scoped web search → ``[{title, url, snippet}]``. Brave if keyed, else the DDG
+    fallback unless its declaration disables it.
+
+    Both halves are circuit-broken, so the FIRST thing this does is read the two breakers: when
+    neither can serve it raises WITHOUT sending anything (a request into a cooling backend buys no
+    information and re-arms the limiter). ``backend_state()`` is the pure read of the same ledger.
+    With the fallback disabled, "neither can serve" means Brave is unkeyed, cooling or failing,
+    and the error is ``WebSearchUnavailable`` carrying the declared reason.
+
+    (CN-engine backends rejected 2026-06-03: cn.bing.com IGNORES the ``site:`` operator
+    → returns general web junk; Baidu blocks the bot; Sogou's xhs index is sparse. Brave
+    honors ``site:`` and is the ceiling for safe engine-read CN-walled content.)"""
     global _brave_cooldown_until
     key = _brave_key()
     now = time.time()
@@ -507,7 +362,7 @@ async def asearch_web(query: str, n: int = 8) -> list[dict]:
         try:
             return await _abrave(query, n, key)
         except _BraveUnavailable as exc:
-            _brave_cooldown_until = time.time() + exc.cooldown
+            _brave_cooldown_until = time.time() + exc.cooldown  # circuit-breaker: stop hitting it
             _fail(f"brave: {exc}")
             brave_error = str(exc)
             logger.warning("brave unavailable (%s) → %s for %.0fs", exc,
@@ -567,49 +422,57 @@ def backend_state() -> dict:
 _ping = {"t": 0.0, "ok": None, "msg": ""}
 
 
-def backend_ping() -> tuple[Optional[bool], str]:
+async def abackend_ping() -> tuple[Optional[bool], str]:
     """Cached (10 min) backend reachability — so N venues' health checks cost ~1 real hit
-    (avoids a rate-limit storm when the watchdog probes every search-index venue)."""
+    (avoids a rate-limit storm when the watchdog probes every search-index venue). A cold or expired
+    cache under concurrent probes makes ONE real hit: the callers await one shared task
+    (``asyncio.shield``: one caller giving up never cancels the probe the others wait on)."""
     now = time.time()
     if _ping["msg"] and now - _ping["t"] < 600:
         return _ping["ok"], _ping["msg"]
-    with _ping_lock:  # double-checked: cold/expired cache under concurrent probes → ONE real hit
-        now = time.time()
-        if _ping["msg"] and now - _ping["t"] < 600:
-            return _ping["ok"], _ping["msg"]
-        state = backend_state()
-        if state["active"] == "none":
-            ddg_off = state["ddg"].get("disabled")
-            if ddg_off and not state["brave"]["keyed"]:
-                # Not a cooldown: no engine this eye may use until a Brave key is configured (or the
-                # declaration enables a fallback). Down, and cached like any real probe result.
-                ok, msg = False, (f"no web-search backend: brave unkeyed; {ddg_off} "
-                                  f"(upstreams.json {_FALLBACK_UID}.disabled)")
-                _ping.update(t=now, ok=ok, msg=msg)
-                return ok, msg
-            # A probe must not spend the very thing it is checking: both halves are closed, so send
-            # NOTHING. None (not verified), deliberately: a cooldown is a transient state that
-            # self-heals, a False here would let the watchdog mark all ten venues down and HIDE them
-            # for a blip, and the True this used to return claimed a check nobody ran. None moves no
-            # counter and reads as `unverified`. Deliberately NOT cached either, so the next probe
-            # after the cooldown sees the truth.
-            ddg_part = (f"ddg disabled: {ddg_off}" if ddg_off
-                        else f"ddg {state['ddg']['cooling_s']}s")
-            return None, _probe.breaker_open(f"web-search backend cooling: brave "
-                                             f"{state['brave']['cooling_s']}s / {ddg_part}; will self-heal")
-        backend = "brave" if _brave_key() else "ddg"
-        with _probe.watching() as led:
-            try:
-                search_web("site:example.com test", n=1)  # reachable if no exception (empty is fine)
-                ok, msg = True, f"OK ({backend} backend)"
-            except Exception as exc:  # noqa: BLE001
-                ok, msg = False, f"{backend}: {type(exc).__name__}: {exc}"
-                if _probe.says_rate_limited(str(exc)):
-                    # The engine's own rate-limit signal (DuckDuckGo's 202 soft limit, Brave's 429):
-                    # it answered, but not whether search serves: not verified. Cached like any probe
-                    # result, so ten venues asking at once cannot re-probe a rate-limited engine.
-                    ok, msg = None, f"not verified: rate-limited ({msg})"
-        ok, msg = _probe.reread(ok, msg, led)
-        msg = f"{msg} [active: {backend_state()['active']}]"
-        _ping.update(t=now, ok=ok, msg=msg)
-        return ok, msg
+    loop = asyncio.get_running_loop()
+    task = _ping.get("task")
+    if task is None or task.done() or task.get_loop() is not loop:
+        task = _ping["task"] = loop.create_task(_aping())
+    return await asyncio.shield(task)
+
+
+async def _aping() -> tuple[Optional[bool], str]:
+    """The probe behind ``abackend_ping``."""
+    now = time.time()
+    state = backend_state()
+    if state["active"] == "none":
+        ddg_off = state["ddg"].get("disabled")
+        if ddg_off and not state["brave"]["keyed"]:
+            # Not a cooldown: no engine this eye may use until a Brave key is configured (or the
+            # declaration enables a fallback). Down, and cached like any real probe result.
+            ok, msg = False, (f"no web-search backend: brave unkeyed; {ddg_off} "
+                              f"(upstreams.json {_FALLBACK_UID}.disabled)")
+            _ping.update(t=now, ok=ok, msg=msg)
+            return ok, msg
+        # A probe must not spend the very thing it is checking: both halves are closed, so send
+        # NOTHING. None (not verified), deliberately: a cooldown is a transient state that
+        # self-heals, a False here would let the watchdog mark all ten venues down and HIDE them
+        # for a blip, and the True this used to return claimed a check nobody ran. None moves no
+        # counter and reads as `unverified`. Deliberately NOT cached either, so the next probe
+        # after the cooldown sees the truth.
+        ddg_part = (f"ddg disabled: {ddg_off}" if ddg_off
+                    else f"ddg {state['ddg']['cooling_s']}s")
+        return None, _probe.breaker_open(f"web-search backend cooling: brave "
+                                         f"{state['brave']['cooling_s']}s / {ddg_part}; will self-heal")
+    backend = "brave" if _brave_key() else "ddg"
+    with _probe.watching() as led:
+        try:
+            await asearch_web("site:example.com test", n=1)  # reachable if no exception (empty is fine)
+            ok, msg = True, f"OK ({backend} backend)"
+        except Exception as exc:  # noqa: BLE001
+            ok, msg = False, f"{backend}: {type(exc).__name__}: {exc}"
+            if _probe.says_rate_limited(str(exc)):
+                # The engine's own rate-limit signal (DuckDuckGo's 202 soft limit, Brave's 429):
+                # it answered, but not whether search serves: not verified. Cached like any probe
+                # result, so ten venues asking at once cannot re-probe a rate-limited engine.
+                ok, msg = None, f"not verified: rate-limited ({msg})"
+    ok, msg = _probe.reread(ok, msg, led)
+    msg = f"{msg} [active: {backend_state()['active']}]"
+    _ping.update(t=now, ok=ok, msg=msg)
+    return ok, msg

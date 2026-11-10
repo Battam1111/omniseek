@@ -50,11 +50,9 @@ class OpenAlexCNAdapter(OpenAlexAdapter):
     domains = ["papers"]
     regions = ["cn"]
     modes = ["STRUCTURE"]
-
-    def search(self, query: str, limit: int = 10) -> list[Document]:
-        docs = super().search(_pin_zh(query), limit)
-        # re-stamp source so omniseek_search results + recall index label them as this facet, not 'openalex'
-        return [d.model_copy(update={"source": self.name}) for d in docs]
+    # Source spec: the parent's filters minus language (this facet pins language:zh).
+    filters = {k: v for k, v in OpenAlexAdapter.filters.items() if k != "language"}
+    samples = [{"query": "人工智能", "filters": {"type": "dissertation"}}]
 
     async def asearch(self, query: str, limit: int = 10) -> list[Document]:
         # Native-async twin of THIS source's OVERRIDDEN search — it MUST be defined here, never inherited.

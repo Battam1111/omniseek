@@ -31,7 +31,9 @@ from pathlib import Path
 from typing import Optional, TypedDict
 
 from omniseek.core import relevance
+from omniseek.core.normalize import to_utc
 from omniseek.core.recall import store
+from omniseek import where
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +42,7 @@ logger = logging.getLogger(__name__)
 # agent hands one in via omniseek_ruling(action=create), which calls save_ruling below. The read half
 # (load_rulings) stays fail-open; the WRITE half is serialized under _RULINGS_LOCK + atomic
 # tmp/replace (the SensorStore idiom), so a concurrent create/delete never corrupts the file.
-RULINGS_PATH = Path.home() / ".omniseek" / "state" / "graph_rulings.json"
+RULINGS_PATH = where.state() / "graph_rulings.json"
 _RULINGS_LOCK = threading.Lock()
 _RULING_VERDICTS = frozenset({"same", "not_same"})
 
@@ -54,7 +56,7 @@ _RULING_VERDICTS = frozenset({"same", "not_same"})
 # KEY: re-stating replaces (declarative state, not a log; git history is the audit trail), and the
 # direction is the agent's assertion, NEVER normalized (unlike a ruling's sorted pair). Two types are
 # REFUSED — same_as / not_same_as — so identity keeps exactly ONE judgment source (omniseek_ruling).
-STATEMENTS_PATH = Path.home() / ".omniseek" / "state" / "graph_statements.json"
+STATEMENTS_PATH = where.state() / "graph_statements.json"
 _STATEMENTS_LOCK = threading.Lock()
 _STATEMENT_MAX_TYPE_LEN = 40
 _STATEMENT_REFUSED_TYPES = frozenset({"same_as", "not_same_as"})
@@ -126,7 +128,7 @@ class ManifestEntry(TypedDict, total=False):
 # So each WRITE TAP declares, on itself, the kinds + edge types + methods it mints (the same pattern
 # as adapters declaring facets as class attrs); the GLOBAL vocabulary is the COMPUTED UNION of those
 # declarations (mechanism demoted to data). The ONLY governance gate is the one that already exists:
-# tap admission (shipping the tap IS the grant). A smoke tripwire then bounds ACTUAL data: the
+# tap admission (shipping the tap IS the grant). ACTUAL data is then bounded: the
 # kinds/edge-types PRESENT in graph_nodes / graph_edges must be a subset of ``declared_vocabulary``
 # (no silent vocabulary). J-tier vocabulary is the AGENT'S — fixed by the GraphNode/GraphEdge schema
 # and versioned with it, NEVER tap-minted — so it lives in those TypedDicts above, not here.
@@ -150,8 +152,8 @@ def register_mints(tap: str, kinds: list[str], edge_types: list[str], methods: l
 def declared_vocabulary() -> dict:
     """The COMPUTED UNION of every registered tap's declaration: ``{"kinds": set, "edge_types": set,
     "methods": set}``. This replaces any central enum — there is no canonical list to lag reality,
-    only the sum of what the shipped taps actually mint. The smoke tripwire asserts the vocabulary
-    ACTUALLY present in graph_nodes / graph_edges is a SUBSET of this union (a tap writing an
+    only the sum of what the shipped taps actually mint. The vocabulary
+    ACTUALLY present in graph_nodes / graph_edges must be a SUBSET of this union (a tap writing an
     undeclared kind/type is the bug the tripwire catches). Empty until the first tap registers."""
     kinds: set = set()
     edge_types: set = set()
@@ -253,7 +255,7 @@ def graph_view(fn):
 # ── Rulings store (the one J exception; sensors.json precedent) ─────────────────────────────────
 
 def load_rulings() -> list[dict]:
-    """Read the agent's identity rulings from ``~/.omniseek/state/graph_rulings.json`` — a list of
+    """Read the agent's identity rulings from ``<state>/graph_rulings.json`` — a list of
     ``{src, dst, verdict: "same"|"not_same", note, ruled_at}``. The sensors.json pattern: fail-OPEN
     to ``[]`` on absent/unreadable/malformed. There is deliberately NO writer here: the agent writes
     rulings via its own session tools; OmniSeek only APPLIES them (it stores judgment as config, it
@@ -360,7 +362,7 @@ def _ruling_index(rulings: list[dict]) -> tuple[set, dict]:
 # stays omniseek_ruling's alone.
 
 def load_statements() -> list[dict]:
-    """Read the agent's typed statements from ``~/.omniseek/state/graph_statements.json`` — a list of
+    """Read the agent's typed statements from ``<state>/graph_statements.json`` — a list of
     ``{src, dst, type, note, doc, stated_at}``. The sensors.json / rulings pattern: fail-OPEN to ``[]``
     on absent/unreadable/malformed. The writer is ``save_statement``; OmniSeek only APPLIES statements
     (it stores the judgment as config, it never makes one)."""
@@ -771,14 +773,11 @@ def _stated_at_epoch(stated_at: str) -> Optional[float]:
     s = (stated_at or "").strip()
     if not s:
         return None
-    try:
-        dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        return dt.timestamp()
-    except Exception as exc:  # noqa: BLE001 — an unparseable stamp is skipped, never a crash
-        logger.debug("graph._stated_at_epoch failed for %r: %s", stated_at, exc)
+    dt = to_utc(s)
+    if dt is None:
+        logger.debug("graph._stated_at_epoch failed for %r", stated_at)
         return None
+    return dt.timestamp()
 
 
 def _statements_since(anchor: str, types: Optional[list[str]], cutoff: float) -> list[dict]:
@@ -1435,9 +1434,7 @@ def _parse_since_cutoff(date: str) -> Optional[float]:
         if len(s) == 10 and s[4] == "-" and s[7] == "-":   # bare YYYY-MM-DD -> midnight UTC
             dt = datetime.strptime(s, "%Y-%m-%d").replace(tzinfo=timezone.utc)
         else:
-            dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)
+            dt = to_utc(datetime.fromisoformat(s))
         return dt.timestamp()
     except Exception as exc:  # noqa: BLE001 — an unparseable date is a caller error, not a crash
         logger.debug("graph._parse_since_cutoff failed for %r: %s", date, exc)

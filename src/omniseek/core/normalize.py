@@ -7,7 +7,7 @@ processing doesn't care whether content came from Reddit, Zhihu, or arXiv.
 from __future__ import annotations
 
 import re
-from datetime import datetime
+from datetime import date as _date, datetime, timezone
 from typing import Annotated, Any, Optional
 
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
@@ -15,8 +15,8 @@ from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
 
 # Ranking / recall TELEMETRY that rank.py + recall/ leak into a doc's metadata: read ONLY inside the
 # pipeline that BUILDS a ranked result (to compute _rank / merge / live_sources), never by a consumer
-# of the RETURNED doc (verified 2026-07-04: every read-site is in rank.py / recall / curator ingest /
-# a rank-layer smoke, all UPSTREAM of to_tool_dict). So to_tool_dict drops it from the DEFAULT agent
+# of the RETURNED doc (verified 2026-07-04: every read-site is in rank.py / recall / curator ingest,
+# all UPSTREAM of to_tool_dict). So to_tool_dict drops it from the DEFAULT agent
 # projection (~25% of a ranked doc, the same "write-only weight" principle it already applies to
 # metadata['raw']); debug=True keeps it for the /eye-fix rank-analysis case. NOT listed here (the
 # agent SIGNAL, always kept): _rank (re-sort), also_in (independent-upstream count), seen_before /
@@ -63,6 +63,55 @@ LenientInt = Annotated[int, BeforeValidator(_coerce_int)]
 LenientBool = Annotated[bool, BeforeValidator(_coerce_bool)]
 
 
+# ── moments: the ONE place an upstream time becomes a comparable moment ─────────────────────────
+# A number at or above this is Unix MILLISECONDS, below it Unix seconds. 10**11 s is the year 5138, so
+# no real seconds stamp reaches it; Unix seconds reach 10**10 only in 2286, and every millisecond stamp
+# after 1973-03-03 is already above 10**11.
+_MS_FROM = 10 ** 11
+_DATE_FORMATS = ("%Y-%m-%d", "%Y-%m", "%Y")
+
+
+def to_utc(v: Any) -> Optional[datetime]:
+    """Any upstream time as an aware UTC datetime, or None when it is not one (never raises).
+
+    datetime: a naive one is read as UTC, an aware one converted to UTC. date: that day 00:00 UTC.
+    int / float: Unix seconds, or milliseconds when it is at least ``_MS_FROM`` (bool is not a number
+    here). str: stripped, then ``datetime.fromisoformat`` (3.11+: ``Z``, ``+0800``, fractions, a bare
+    date, ``YYYYMMDD``; a lowercase ``t`` / ``z`` too), then ``YYYY-MM-DD`` (unpadded too), ``YYYY-MM`` and ``YYYY``. A source's own
+    formats (``March 5, 2024``, a date inside a URL) are the source's job; it hands the result here."""
+    try:
+        if isinstance(v, datetime):
+            return v.replace(tzinfo=timezone.utc) if v.tzinfo is None else v.astimezone(timezone.utc)
+        if isinstance(v, _date):
+            return datetime(v.year, v.month, v.day, tzinfo=timezone.utc)
+        if isinstance(v, (int, float)) and not isinstance(v, bool):
+            return datetime.fromtimestamp(v / 1000 if abs(v) >= _MS_FROM else v, tz=timezone.utc)
+        if isinstance(v, str):
+            s = v.strip()
+            if not s:
+                return None
+            try:  # RFC 3339 allows a lowercase t and z; fromisoformat takes only the uppercase ones
+                return to_utc(datetime.fromisoformat(s.upper()))
+            except ValueError:
+                pass
+            for fmt in _DATE_FORMATS:
+                try:
+                    return datetime.strptime(s, fmt).replace(tzinfo=timezone.utc)
+                except ValueError:
+                    continue
+    except (ValueError, OverflowError, OSError, TypeError):
+        return None
+    return None
+
+
+def _doc_date(v: Any) -> Any:
+    """Document.date always leaves as aware UTC; what to_utc cannot read goes on to pydantic as before."""
+    if v is None:
+        return None
+    m = to_utc(v)
+    return v if m is None else m
+
+
 # ── block detection (borrowed: crawl4ai antibot_detector + OmniSeek's own 风控 texts) ────────────
 # A fetch that comes back EMPTY but whose RAW page matches one of these is a BLOCK, not authoritative
 # 'no results'. Lets an adapter LABEL a [] as a block (surface + pace/retry) instead of silently
@@ -101,6 +150,48 @@ def strip_base64_images(md: str) -> str:
     if not md or "base64," not in md:
         return md
     return _DATA_IMG_MD.sub(r"\1(<base64-image-removed>)", md)
+
+
+# ── HTML fragment -> plain text: the ONE tag-strip every adapter calls ────────────────────────────
+# A field that carries a bit of markup (a JATS abstract, an RSS summary, a job description, a title
+# with <b> highlights) goes through html_fragment_text; a WHOLE page goes through
+# web_fallback._extract_text instead (it drops page chrome and returns Markdown).
+# Inline markup sits inside a word or phrase, so it is unwrapped without a break ("H<sub>2</sub>O"
+# stays "H2O", a highlight "<b>neur</b>al" stays one word); every other tag is a break (a space).
+# Matched on the local name, so a JATS "<jats:italic>" counts as "italic".
+_INLINE_TAGS = frozenset({
+    "a", "abbr", "b", "bdi", "bdo", "cite", "code", "data", "dfn", "em", "font", "i", "kbd", "mark",
+    "q", "s", "samp", "small", "span", "strike", "strong", "sub", "sup", "time", "tt", "u", "var",
+    "wbr", "bold", "italic", "monospace", "sc", "underline", "xref", "ext-link", "named-content",
+    "styled-content",
+})
+_DROP_TAGS = ("script", "style", "noscript", "template")
+_bs4_quiet = False
+
+
+def html_fragment_text(fragment: Any) -> str:
+    """Plain text of an HTML (or JATS / other XML-ish) fragment: tags removed, every entity decoded
+    (``&amp;`` -> ``&``, ``&#8217;`` -> the apostrophe), script / style / comments dropped, all
+    whitespace collapsed to single spaces. "" for a non-string or blank input. Pure, no I/O."""
+    global _bs4_quiet
+    if not isinstance(fragment, str) or not fragment.strip():
+        return ""
+    from bs4 import BeautifulSoup
+    if not _bs4_quiet:
+        # A short fragment that looks like a URL / file name, or a JATS document with an XML
+        # declaration, is still meant as markup here: bs4's guesses about it are noise.
+        import warnings
+        from bs4 import MarkupResemblesLocatorWarning, XMLParsedAsHTMLWarning
+        warnings.filterwarnings("ignore", category=MarkupResemblesLocatorWarning)
+        warnings.filterwarnings("ignore", category=XMLParsedAsHTMLWarning)
+        _bs4_quiet = True
+    soup = BeautifulSoup(fragment, "html.parser")
+    for tag in soup(_DROP_TAGS):
+        tag.decompose()
+    for tag in soup.find_all(lambda t: t.name.rsplit(":", 1)[-1].lower() in _INLINE_TAGS):
+        tag.unwrap()
+    soup.smooth()
+    return " ".join(soup.get_text(" ").split())
 
 
 # ── selector-drift DIAGNOSTIC (borrowed idea: Scrapling adaptive relocation, STRIPPED of the silent
@@ -201,7 +292,7 @@ class Document(BaseModel):
     title: str
     content: str = Field(description="Main content as Markdown")
     author: Optional[str] = None
-    date: Optional[datetime] = None
+    date: Annotated[Optional[datetime], BeforeValidator(_doc_date)] = None
 
     # Discovery signals: named, source-reported FACTS (a count, a citation tally, a salary), each
     # with provenance + a semantic kind. Never a judgment: the agent / the ranker decide worth.

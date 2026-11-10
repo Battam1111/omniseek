@@ -33,7 +33,10 @@ Proven live 2026-06-18 with this account's cookies (all returned ``code:0 成功
 
 WHY xhshow and not the in-browser signer: ``window._webmsxyw`` is GONE on the current site
 (probed 2026-06-18: no global, the request is signed off the main thread), so the old
-MediaCrawler "page.evaluate the signer" trick is dead. xhshow re-implements the ALGORITHM, so it
+MediaCrawler "page.evaluate the signer" trick is dead. (2026-10-24: that probe used page.evaluate,
+which under patchright runs in an isolated world where no page global is visible, so "no global"
+is unproven; see _cdp.page_world_evaluate. xhshow stays: it needs no browser.)
+xhshow re-implements the ALGORITHM, so it
 survives the common input/constant rotation; on a FULL scheme rotation it breaks and is fixed by
 a lib bump, with the rednote browser-scroll adapter staying as the degraded fallback.
 
@@ -61,7 +64,10 @@ from pathlib import Path
 from typing import Optional
 from urllib.parse import parse_qs, quote, urlparse
 
-from omniseek.core import _probe, cache, diag
+import anyio
+
+from omniseek.core import _probe, cache, diag, portal
+from omniseek.core.sources._base import SourceBase
 from omniseek.core.normalize import Document, is_blocked, mk_signal, selector_drift_hint
 from omniseek.core.sources.walled._cdp import CacheOnlyMiss, cdp_call
 from omniseek.core.sources.walled.xiaohongshu_source import (
@@ -69,10 +75,11 @@ from omniseek.core.sources.walled.xiaohongshu_source import (
     _refused_landing as _xhs_refused_landing,
     _refused_reason as _xhs_refused_reason,
 )
+from omniseek import where
 
 logger = logging.getLogger(__name__)
 
-# The mainland account's OWN isolated CDP Chrome (port 9224, profile ~/.omniseek/chrome-xhs-cn,
+# The mainland account's OWN isolated CDP Chrome (port 9224, profile <root>/chrome-xhs-cn,
 # launchd com.omniseek.cdp.xhs-cn). 2026-06-25 (operator: align with the international account): this
 # browser is now DRIVEN to xiaohongshu.com to issue its OWN signed XHR (the PRIMARY path) — not only
 # cookie-minting (which the signed-API fallback below still uses it for).
@@ -292,7 +299,7 @@ def _clear_signed_streak() -> None:
 # This is deliberately NOT done for the 风控 breaker / _backoff_until, which are COOLDOWNS: there,
 # restart-clears is a documented repair path (INFRA gotcha #13 clears a wedged-Chrome backoff
 # exactly that way). A cumulative budget has no such excuse, because forgetting IS its failure.
-_DAILY_STATE_PATH = Path.home() / ".omniseek" / "state" / "xhs-cn-daily-budget.json"
+_DAILY_STATE_PATH = where.state() / "xhs-cn-daily-budget.json"
 _daily_ledger_warned = False
 
 
@@ -376,7 +383,7 @@ def _bump_daily() -> None:
 # host scope, remaining TTL and lengths already separate "wrong cookie" from "stale cookie" from
 # "missing xsec_token" from "signature rejected"; the values would only turn a diagnostic into a
 # credential leak. Same reason the response body is truncated and the URL is never logged whole.
-_INCIDENT_PATH = Path.home() / ".omniseek" / "state" / "xhs-cn-incidents.jsonl"
+_INCIDENT_PATH = where.state() / "xhs-cn-incidents.jsonl"
 _INCIDENT_MAX_BYTES = 512 * 1024
 _INCIDENT_KEEP_LINES = 400
 # Response headers worth keeping: 小红书 signals a challenge through these, and which ones are
@@ -913,7 +920,7 @@ def _cn_card_to_document(card) -> "Optional[Document]":
         source_id=note_id,
         url=full_url,
         title=title,
-        content="(card preview; call omniseek_read on this url for the full note body)",
+        content="",   # a card has no body; omniseek_read the url for the note
         author=author,
         signals=mk_signal("likes", likes, kind="engagement", by="xhs/liked_count"),
         metadata={"note_id": note_id, "via": "browser-dom"},
@@ -1289,7 +1296,7 @@ def _browser_fetch(note_id: str, token: str, url: str) -> tuple[str, Optional["D
 
 
 # ── adapter ────────────────────────────────────────────────────────────────────
-class XiaohongshuCNAdapter:
+class XiaohongshuCNAdapter(SourceBase):
     name = "xiaohongshu_cn"
     needs_credentials = False  # cookies come from the logged-in 9224 browser
     explicit_only = "signed API (9224 mainland account, account-rate-sensitive)"
@@ -1347,7 +1354,7 @@ class XiaohongshuCNAdapter:
             diag.note("xiaohongshu_cn.sealed", body=_SEALED_MSG)
             return []
         key = cache.make_key("xiaohongshu_cn", "search", query, limit)
-        cached = cache.get(key)
+        cached = cache.get_once(key)
         if cached:  # non-empty hit only (a cached [] is a miss — xhs transient empties aren't authoritative)
             return [Document.model_validate(d) for d in cached]
         if cache.cache_only():
@@ -1386,7 +1393,7 @@ class XiaohongshuCNAdapter:
 
     def _items_to_docs(self, items: list, limit: int) -> list[Document]:
         """Decode intercepted /search/notes XHR items → docs. Delegates to the module-level
-        _cn_items_to_docs (kept as the XHR-bonus decoder + for the smoke golden); the mainland search
+        _cn_items_to_docs (kept as the XHR-bonus decoder); the mainland search
         PRIMARY decode is _cn_cards_from_html (DOM cards), since the mainland SSRs results."""
         return _cn_items_to_docs(items, limit)
 
@@ -1395,7 +1402,7 @@ class XiaohongshuCNAdapter:
         if not _DEPS_OK:
             return []
         key = cache.make_key("xiaohongshu_cn", "search", query, limit)
-        cached = cache.get(key)
+        cached = cache.get_once(key)
         if cached:  # non-empty hit only; a cached [] is treated as a miss (xhs transient empties
             return [Document.model_validate(d) for d in cached]  # are never authoritative)
         if cache.cache_only():
@@ -1483,7 +1490,13 @@ class XiaohongshuCNAdapter:
             _clear_signed_streak()   # ... and an accepted signed call clears THIS path's own ladder
         return docs
 
-    def fetch_url(self, url: str) -> Optional[Document]:
+    async def afetch_url(self, url: str) -> Optional[Document]:
+        if _SEALED or not _parse_note_url(url)[0]:
+            return None
+        # the browser read and the signed request block (CDP, the shared account lock): a worker thread
+        return await anyio.to_thread.run_sync(self._read_url, url, limiter=portal.IO_LANE)
+
+    def _read_url(self, url: str) -> Optional[Document]:
         if _SEALED:
             return None  # silent non-claim: the international adapter owns xiaohongshu.com while sealed
         note_id, token = _parse_note_url(url)
@@ -1491,7 +1504,7 @@ class XiaohongshuCNAdapter:
             return None
         full = _wants_full(url)  # &xhs_full=1 → deep sub-reply drilling for THIS note (signed fallback only)
         key = cache.make_key("xiaohongshu_cn", "note", note_id, "full" if full else "top")
-        cached = cache.get(key)
+        cached = cache.get_once(key)
         if cached is not None:
             return Document.model_validate(cached)
         if cache.cache_only():
@@ -1544,7 +1557,7 @@ class XiaohongshuCNAdapter:
             return None
         full = _wants_full(url)  # &xhs_full=1 → deep sub-reply drilling for THIS note (per-note override)
         key = cache.make_key("xiaohongshu_cn", "note", note_id, "full" if full else "top")
-        cached = cache.get(key)
+        cached = cache.get_once(key)
         if cached is not None:
             return Document.model_validate(cached)
         if cache.cache_only():

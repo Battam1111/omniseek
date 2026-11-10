@@ -1,6 +1,6 @@
 """Render-fallback for ad-hoc URLs no adapter claims: plain fetch, then Jina on a thin page.
 
-``fetcher.fetch_url`` (the ``omniseek_add_url`` path) tries every registered adapter until one
+``fetcher.afetch_url_with_reason`` (the ``omniseek_read`` URL path) tries every registered adapter until one
 CLAIMS the URL. ~167 adapters cover specific sources, but there is NO generic "read any web
 page" adapter, so a URL outside every adapter (a Next.js / SPA marketing page, a JS-walled
 doc, an arbitrary blog) returns ``matched=false`` today: OmniSeek does not reach it at all.
@@ -11,9 +11,14 @@ so it costs the happy path zero: a claiming adapter returns first and this never
 Two-tier, cheapest-first:
   1. Plain ``http.get`` + a static-HTML text extraction (the same bs4 path news_scraper uses).
      If the page is server-rendered, that text is the whole content and we stop (no 2nd call).
+     A JSON answer (``application/json`` or a ``+json`` type) is data, not a page: its body is the
+     content as is (pretty-printed when it parses), tagged ``format:json``, never sent to Jina.
   2. Only if the extracted text is THIN (a JS-wall / SPA shell whose body is client-rendered),
      re-fetch through ``https://r.jina.ai/<url>`` (Jina Reader runs real headless Chrome and
      returns LLM-ready markdown; free, keyless at 20 RPM, no key wired). We return that markdown.
+A page that is not there is no content on either tier: a plain 404 / 410 (or a 400 / 422, the request
+itself refused) stops before Jina, and a Jina render whose header says the target answered 4xx / 5xx is
+that error page, never a read.
 
 THE RAZOR: this RETRIEVES and returns raw page text / markdown. It renders NO judgment about
 what the page MEANS; the agent reads the returned content and judges. The thin-trigger is a
@@ -22,12 +27,14 @@ mechanical char-count of extracted text, not a judgment of value. No LLM, no sum
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 from typing import Optional
 from urllib.parse import urlparse
 
-from omniseek.core import _netguard, cache, diag, http, safeurl
+from omniseek.core import _netguard, cache, diag, dns_absence, http, safeurl
+from omniseek.core._guard import counts_against_upstream
 from omniseek.core.normalize import Document, jsonsafe, strip_base64_images
 
 logger = logging.getLogger(__name__)
@@ -38,7 +45,6 @@ logger = logging.getLogger(__name__)
 _THIN_CHARS = 600
 _JINA_ENDPOINT = "https://r.jina.ai/"
 _JINA_TIMEOUT = 30          # headless-Chrome render is slower than a plain GET
-_FALLBACK_CACHE_TTL = 3600  # an ad-hoc page is re-read rarely; an hour is plenty
 _MAX_CHARS = 200_000        # keep a pathologically long render payload sane
 
 # A safe_fetch blocked_reason in THIS set means the untrusted target was SSRF-REFUSED: return None and
@@ -51,8 +57,14 @@ _MAX_CHARS = 200_000        # keep a pathologically long render payload sane
 # fetch_error / oversize / redirect_loop) likewise falls through.
 _SSRF_REFUSE = _netguard.SECURITY_BLOCK_REASONS
 
-# Distinctive anti-bot interstitial phrases (Cloudflare / generic CAPTCHA walls / 知乎).
+# Distinctive anti-bot interstitial phrases (Cloudflare / generic CAPTCHA walls / 知乎 / Anubis).
 # Deliberately narrow: each string is challenge-page boilerplate no real article carries.
+# Anubis (Techaro's proof-of-work wall) answers 200 text/html; seen 2026-11-03 on
+# inria.hal.science/<id>/document, which came back as a matched render:plain read. Its static asset
+# path is in every such page and survives a site rewriting the default sentence.
+# SiteGround's IP-reputation wall answers 202 with a bare meta refresh to /.well-known/sgcaptcha/
+# (seen 2026-11-07 on lemire.me and theprofessorisin.com from OmniSeek's exit); that fixed path is
+# what a render of the wall carries (Jina's "URL Source:" line, for one), whatever the page says.
 # Why refuse instead of return: a challenge page IS a failure. Returning it as a doc MASKS
 # the true cause (an adapter that claims this host failed/timed out upstream and the URL
 # leaked here), which is exactly how the 2026-07 "1p3a thread bodies unreadable" class stayed
@@ -65,6 +77,15 @@ _CHALLENGE_MARKERS = (
     "page maybe requiring CAPTCHA",
     "验证您是否是真人",
     "安全验证 - 知乎",
+    "set up Anubis to protect the server",
+    "/.within.website/x/cmd/anubis/",
+    "/.well-known/sgcaptcha/",
+    # OpenReview's browser check (Cloudflare Turnstile behind its own page), seen 2026-11-09: the site
+    # answers 307 to /challenge?redirect=<path>, titled "Verifying your browser". The redirect path is
+    # the fixed part (checked on the redirect chain too, _challenge_redirect); the sentence catches a
+    # render or a cached copy that no longer carries the address.
+    "/challenge?redirect=",
+    "Complete the check below to continue to OpenReview",
 )
 
 # Error screens a site's own framework shows when the page failed to load. Seen 2026-09-25 (routing
@@ -80,6 +101,70 @@ _ERROR_SCREEN_MARKERS = (
     "Application error: a client-side exception has occurred",
     "Application error: a server-side exception has occurred",
 )
+
+# HTTP says the page is not there (RFC 9110 15.5.5 404 Not Found, 15.5.11 410 Gone): the server has no
+# representation of it, so a headless render cannot make one, and the body sent is the site's own
+# error page. Seen 2026-11-04: https://www.python.org/<a missing path> answered 404, went to Jina as a
+# thin plain read and came back as a matched render:jina doc titled "Welcome to Python.org". Jina is
+# another channel to the same server, so OmniSeek's one rule for retries and channels decides
+# (_guard.counts_against_upstream, EYE-RETRY-404): 404 / 410, and 400 / 422 (the request itself refused),
+# are the server's answer and do not go to Jina.
+_NOT_THERE = (404, 410)
+# safe_fetch failures with no answer from the host: the connection or TLS handshake (fetch_error, timeout)
+# or the local resolver (dns). Only these ask public DNS whether the name exists (dns_absence).
+_NO_ANSWER = ("fetch_error", "timeout", "dns")
+# Jina's header block names the status its headless Chrome got for the target, in a line
+# "Warning: Target URL returned error 404: Not Found". Any 4xx / 5xx there means the render IS an
+# error page (not found, refused, rate limited, server error), whatever the plain fetch saw.
+_JINA_TARGET_ERROR = re.compile(r"^Warning: Target URL returned error (\d{3})", re.M)
+
+
+def challenge_marker(title: str, content: str) -> Optional[str]:
+    """The _CHALLENGE_MARKERS entry in ``title`` or the head of ``content`` (where a wall shows it), or
+    None. The one test of "this page is a bot check": a live read and a cached read both ask it."""
+    head = f"{title or ''}\n{(content or '')[:1500]}"
+    return next((m for m in _CHALLENGE_MARKERS if m in head), None)
+
+
+def _challenge_redirect(res: dict) -> Optional[str]:
+    """The address a plain fetch was sent to that is a challenge page (a redirect hop or the final URL
+    carrying a _CHALLENGE_MARKERS entry), or None."""
+    hops = [h.get("to") or "" for h in (res.get("redirect_chain") or []) if isinstance(h, dict)]
+    for target in [*hops, res.get("final_url") or ""]:
+        if any(m in target for m in _CHALLENGE_MARKERS):
+            return target
+    return None
+
+
+def _site_readers(url: str) -> list[str]:
+    """Names of OmniSeek's sources declared on ``url``'s site (upstreams.json), the ones to read it
+    through when the site walls the generic read; [] when none is."""
+    try:
+        from omniseek.core import fetcher, upstreams
+        return [a.name for a in fetcher.fetch_url_route(url)
+                if getattr(a, "name", None) and upstreams.source_on_site(a.name, url, fetcher.backend_of(a.name))]
+    except Exception as exc:  # noqa: BLE001 - naming a way round must never break the refusal
+        logger.debug("web_fallback: no site readers for %s: %s", url, exc)
+        return []
+
+
+def challenge_reason(url: str, via: str, marker: str) -> str:
+    """The reason a read refused as a bot check carries: blocked, by what, and which source to use."""
+    readers = _site_readers(url)
+    instead = (f"read it through the {', '.join(readers)} source instead (omniseek_read again once it is "
+               f"healthy, or omniseek_search with sources={readers!r})" if readers
+               else "no source of OmniSeek covers this site")
+    return (f"blocked: the site answered an anti-bot challenge page, not the content (via={via}, shows "
+            f"{marker!r}); {instead}")
+
+
+def _jina_target_error(md: Optional[str]) -> Optional[int]:
+    """The 4xx / 5xx status Jina's header block reports for the target, or None. Only the header block
+    (before "Markdown Content:") is read, so an article quoting that line is not taken for one."""
+    if not md:
+        return None
+    m = _JINA_TARGET_ERROR.search(md.split("Markdown Content:", 1)[0])
+    return int(m.group(1)) if m and int(m.group(1)) >= 400 else None
 
 
 def _is_known_walled_shell(url: str, title: str, content: str) -> bool:
@@ -126,8 +211,10 @@ def _is_known_walled_deep_link(url: str) -> bool:
 
 
 def _extract_text(html: str) -> tuple[str, str]:
-    """(title, visible_text) from static HTML, the news_scraper extraction centralized here.
-    Strips script/style, prefers <main>/<article>/<body>. Returns ('','') if bs4 is absent."""
+    """(title, markdown) from a static HTML page: OmniSeek's one whole-page extraction (this
+    fallback and news_scraper's fetch_url both call it; a fragment of markup goes through
+    normalize.html_fragment_text instead). Strips script/style, prefers <main>/<article>/<body>,
+    drops nav/footer/aside inside it. Returns ('','') if bs4 is absent."""
     try:
         from bs4 import BeautifulSoup
     except Exception as exc:  # noqa: BLE001
@@ -157,6 +244,20 @@ def _extract_text(html: str) -> tuple[str, str]:
     except Exception:  # noqa: BLE001 — markdownify can be picky; plain text is the safe fallback
         text = plain
     return title, text
+
+
+def _is_json_type(ctype: str) -> bool:
+    """``application/json`` or any ``+json`` structured-syntax type (RFC 6839), parameters aside."""
+    media = ctype.split(";", 1)[0].strip().lower()
+    return media == "application/json" or media.endswith("+json")
+
+
+def _json_text(raw: str) -> str:
+    """A JSON body as content: pretty-printed (2-space indent) when it parses, else as it came."""
+    try:
+        return json.dumps(json.loads(raw), indent=2, ensure_ascii=False)
+    except ValueError:
+        return raw
 
 
 def _jina_markdown(url: str) -> Optional[str]:
@@ -193,11 +294,9 @@ def read_via_fallback(url: str) -> Optional[Document]:
         return None
     if cache.cache_only():
         return None  # respect the single egress guard
-
-    key = cache.make_key("web", "fallback", url)
-    cached = cache.get(key)
-    if cached is not None:
-        return Document(**cached) if isinstance(cached, dict) else cached
+    # No page cache of its own: its one caller (fetcher.fetch_url_with_reason) keeps successful reads in
+    # the whole-URL read cache, and a second copy kept credential-bearing addresses on disk
+    # (EYE-CACHE-SECRET-R2, 2026-11-03).
 
     # Plain fetch through the SSRF-pinned per-hop fetcher (safeurl.safe_fetch), NOT the shared
     # follow-redirects pool: this URL is attacker-influenceable (no adapter claimed it), so EVERY
@@ -224,6 +323,27 @@ def read_via_fallback(url: str) -> Optional[Document]:
                   body=f"refused untrusted target (safe_fetch blocked_reason="
                        f"{res['blocked_reason']}); not escalating to Jina")
         return None
+    if not res["ok"] and res["blocked_reason"] in _NO_ANSWER and res["status"] is None:
+        # Failed at the connection or TLS step (or the local resolver): the host machine's fake-ip proxy makes a
+        # name that does not exist fail exactly like a broken network. Ask public DNS once; NXDOMAIN is
+        # a settled answer (final: no Jina, no retry, not an upstream fault). Else the old path below.
+        chain = res.get("redirect_chain") or []
+        gone = dns_absence.absent(urlparse(chain[-1]["to"] if chain else url).hostname or "")
+        if gone:
+            diag.note("web_fallback", url=url, body=gone, final=True)
+            return None
+    if res["ok"] and res["status"] and not counts_against_upstream(status=res["status"]):
+        said = ("this page does not exist" if res["status"] in _NOT_THERE
+                else "the request is wrong")
+        diag.note("web_fallback", url=url,
+                  body=f"HTTP {res['status']}: the server says {said}; not escalating to Jina")
+        return None  # not there is a FAILURE, never content (and never cached)
+    walled_at = _challenge_redirect(res)
+    if walled_at:
+        # Sent to a challenge page: what comes back (and a Jina render of the same URL) is the wall.
+        marker = next(m for m in _CHALLENGE_MARKERS if m in walled_at)
+        diag.note("web_fallback", url=url, body=challenge_reason(url, "plain", marker))
+        return None  # a challenge wall is a FAILURE, never content (and never cached)
     plain_title, plain_text = "", ""
     # Gate the plain-extract on a 2xx status. safe_fetch returns ok=True for ANY terminal (non-3xx)
     # response regardless of status class, so a 4xx/5xx carries an error page in res["text"]. The OLD
@@ -234,7 +354,18 @@ def read_via_fallback(url: str) -> Optional[Document]:
     # branch above is unchanged.)
     if res["ok"] and 200 <= (res["status"] or 0) < 300:
         ctype = (res["content_type"] or "").lower()
-        # Only HTML is extraction-worthy here; a PDF/json/binary is some other adapter's job
+        if _is_json_type(ctype) and (res["text"] or "").strip():
+            # JSON is data, not a page to render: the body IS the content. Jina would hand back a
+            # rendering of it that no longer parses as JSON.
+            raw = res["text"]
+            doc = Document(
+                source="web", source_id=url, url=url, title=url, content=_json_text(raw),
+                tags=["web", "render:plain", "format:json"],
+                metadata={"raw": jsonsafe({"url": url, "rendered_via": "plain", "format": "json",
+                                           "content_type": ctype, "plain_chars": len(raw)})},
+            )
+            return doc
+        # Only HTML is extraction-worthy here; a PDF/binary is some other adapter's job
         # (pdf_source already claimed *.pdf earlier in the loop), so do not mis-handle it.
         if "html" in ctype or ctype == "" or ctype.startswith("text/"):
             plain_title, plain_text = _extract_text(res["text"])
@@ -255,6 +386,11 @@ def read_via_fallback(url: str) -> Optional[Document]:
                       body="thin plain read but URL is SSRF-blocked; not escalating to Jina")
             return None  # genuinely nothing we may safely fetch
         md = _jina_markdown(url)
+        err = _jina_target_error(md)
+        if err is not None:
+            diag.note("web_fallback", url=url,
+                      body=f"the Jina render is an error page (the target answered HTTP {err}), not content")
+            return None  # an error page is a FAILURE, never content (and never cached)
         if md and len(md) > len(plain_text):
             via, content = "jina", md[:_MAX_CHARS]
             if not title:
@@ -270,10 +406,9 @@ def read_via_fallback(url: str) -> Optional[Document]:
         return None  # genuinely nothing: keep matched=false, never a fake empty doc
 
     head = f"{title}\n{content[:1500]}"
-    if any(m in head for m in _CHALLENGE_MARKERS):
-        diag.note("web_fallback", url=url,
-                  body=f"refused anti-bot challenge page (via={via}); if an adapter claims "
-                       f"this host, it failed upstream and the URL leaked to the fallback")
+    marker = challenge_marker(title, content)
+    if marker:
+        diag.note("web_fallback", url=url, body=challenge_reason(url, via, marker))
         return None  # a challenge wall is a FAILURE, never content (and never cached)
 
     # A thin page carrying a known error screen IS that screen. For a Jina render the body is what
@@ -296,5 +431,4 @@ def read_via_fallback(url: str) -> Optional[Document]:
         metadata={"raw": jsonsafe({"url": url, "rendered_via": via,
                                    "plain_chars": len(plain_text)})},
     )
-    cache.set(key, doc.model_dump(mode="json"), ttl=_FALLBACK_CACHE_TTL)
     return doc

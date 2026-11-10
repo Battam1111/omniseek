@@ -31,16 +31,28 @@ What a row declares (see ``sources.json`` for the live rows + per-key notes)::
           "id":      "objectID"
       },
       "cache_ttl":         900,
-      "url_host":          "ycombinator.com", # substring test for fetch_url ownership
+      "url_host":          "ycombinator.com", # substring test for afetch_url ownership
       "facets":            {"kind": "stream", "domains": ["news"]},
       "explicit_only":     false,             # True | reason-string | absent
       "auth_prefix":       "",                # prepended to the key, e.g. "Bearer " (RFC-style auth)
       "auth_header":       "",                # header NAME to send the key under; the VALUE is read
-                                             #   from ~/.omniseek/credentials/<name>.json -> api_key.
+                                             #   from <credentials>/<name>.json -> api_key.
                                              #   Absent file = keyless, unchanged behaviour.
       "no_live_probe":     false,             # True | reason-string | absent: skip the health
                                              #   probe when probing SPENDS the quota it checks
-      "needs_credentials": false
+      "needs_credentials": false,
+      "filters":  {"publication_date": {"type": "date", "ops": ["gte", "lte", "range"],
+                   "desc": "...", "param": {"gte": "since", "lte": "until"}},
+                   "type": {"type": "keyword", "ops": ["eq", "any"], "desc": "...",
+                            "param": "type[]"}},
+                                             # OPTIONAL source spec (omniseek.core.filters): each
+                                             #   field names the upstream parameter it is sent as;
+                                             #   eq sends the value, any a list, a range its bounds
+      "coverage": {"since": null, "until": null, "gaps": [], "note": null},
+      "license":  "...",                      # text, or upstreams:<key>
+      "samples":  [{"query": "...", "filters": {}}],
+      "as_of_field": "publication_date",      # OPTIONAL: the date filter omniseek_search(as_of=) pushes
+                                              # "<field> <= as_of" through
     }
 
 TRANSPORT (the meta-source, P10): a row also declares HOW to move bytes. ``transport`` is
@@ -68,11 +80,11 @@ wrapped server still earns its slot through the curator razor PER SERVER. An ``m
 
 Netguard posture: an ``mcp`` row's ``endpoint`` is OPERATOR-CONFIG data (the same trust class
 as every ``sources.json`` endpoint) and rides the same pooled client + SSRF guard + deadline
-machinery (``_mcp._post`` re-applies ``http._request_capped``'s exact guards inline: SSRF
+machinery (``_mcp._apost`` re-applies ``http._arequest_capped``'s exact guards inline: SSRF
 pre-flight, MAX_BYTES cap, response-rebuild decoding). Retrieved tool RESULTS stay
 UNTRUSTED data (instructions §9), exactly like every other source. ``url_host`` works as usual
 for omniseek_read routing when set. Credentials for an ``mcp`` row live at
-``~/.omniseek/credentials/mcp_<name>.json`` (``{"headers": {...}}``); a ``needs_credentials: true``
+``<credentials>/mcp_<name>.json`` (``{"headers": {...}}``); a ``needs_credentials: true``
 row with no file degrades to [] silently at fetch (the podcast_index precedent).
 
 Boundary (when to NOT use this — fall back to a coded adapter / a base class):
@@ -99,14 +111,17 @@ from __future__ import annotations
 import functools
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
 import anyio
 
-from omniseek.core import cache, diag, http
-from omniseek.core.normalize import Document, jsonsafe, keyword_score_filter, mk_signal
+from omniseek.core import cache, diag, fetcher, http, portal
+from omniseek.core import filters as _flt
+from omniseek.core.normalize import Document, jsonsafe, keyword_score_filter, mk_signal, to_utc
+from omniseek.core.sources._base import SourceBase
+from omniseek import where
 
 logger = logging.getLogger(__name__)
 
@@ -206,42 +221,24 @@ def _as_int(v: Any) -> Optional[int]:
     return None
 
 
-_DATE_FORMATS = (
-    "%Y-%m-%dT%H:%M:%S.%f%z",
-    "%Y-%m-%dT%H:%M:%S%z",
-    "%Y-%m-%dT%H:%M:%SZ",
-    "%Y-%m-%dT%H:%M:%S",
-    "%Y-%m-%d %H:%M:%S",
-    "%Y-%m-%d",
-    "%Y/%m/%d",
-)
-
-
 def _as_date(v: Any) -> Optional[datetime]:
     """Parse a common date string (ISO-8601 and a few near-ISO shapes). None on
     miss — declarative sources only carry plainly-formatted dates; anything exotic
     (epoch math, date-parts arrays) is the boundary signal to use a coded adapter."""
     if v is None:
         return None
-    if isinstance(v, (int, float)):  # epoch seconds
-        try:
-            return datetime.fromtimestamp(float(v), tz=timezone.utc)
-        except (ValueError, OSError, OverflowError):
-            return None
+    if isinstance(v, (int, float)):  # epoch seconds (milliseconds when that large)
+        return to_utc(v)
     s = _as_str(v)
     if not s:
         return None
-    iso = s.replace("Z", "+00:00")
-    try:
-        return datetime.fromisoformat(iso)
-    except (ValueError, TypeError):
-        pass
-    for fmt in _DATE_FORMATS:
+    dt = to_utc(s)
+    if dt is None:
         try:
-            return datetime.strptime(s, fmt)
-        except (ValueError, TypeError):
-            continue
-    return None
+            dt = to_utc(datetime.strptime(s, "%Y/%m/%d"))
+        except ValueError:
+            pass
+    return dt
 
 
 # -----------------------------------------------------------------------------
@@ -249,7 +246,7 @@ def _as_date(v: Any) -> Optional[datetime]:
 # -----------------------------------------------------------------------------
 
 
-class DeclarativeAPIAdapter:
+class DeclarativeAPIAdapter(SourceBase):
     """A standard REST/JSON search source, fully described by a data row.
 
     Mechanism only (OmniSeek's "code is dumb, agent is smart" rule): fetch via the
@@ -285,6 +282,11 @@ class DeclarativeAPIAdapter:
         transport: str = "http",
         tool: Optional[str] = None,
         text_fallback: bool = False,
+        filters: Optional[dict] = None,
+        coverage: Optional[dict] = None,
+        license: Optional[str] = None,
+        samples: Optional[list] = None,
+        as_of_field: Optional[str] = None,
     ) -> None:
         if "title" not in field_map or "url" not in field_map:
             raise ValueError(
@@ -302,7 +304,7 @@ class DeclarativeAPIAdapter:
                 f"declarative source {name!r}: transport 'mcp' requires a 'tool' name")
         # text_fallback (mcp only): opt-in to synthesize one doc per prose text block when the tool
         # result carries NO structured object the field_map can walk. Never silent: without this a
-        # prose-only result fails VISIBLY to [] (see _fetch_results / _docs_from_text_blocks).
+        # prose-only result fails VISIBLY to [] (see _results_from / _docs_from_text_blocks).
         self.text_fallback = bool(text_fallback)
         self.name = name
         self.description = description
@@ -330,6 +332,13 @@ class DeclarativeAPIAdapter:
         self.post_filter = bool(post_filter)
         # Optional routing facets surfaced through list_sources (adapter attr wins over
         # facets.json) — exactly the kind/domains/regions the fetcher reads off an adapter.
+        # Source spec (omniseek.core.filters), declared on the row; read back by the same accessors as
+        # a coded source's class attributes.
+        self.filters = dict(filters or {})
+        self.coverage = dict(coverage) if coverage else None
+        self.license = license
+        self.samples = list(samples or [])
+        self.as_of_field = as_of_field or None  # the date filter omniseek_search(as_of=) pushes through
         facets = facets or {}
         for facet in ("kind", "domains", "regions"):
             if facets.get(facet):
@@ -358,35 +367,50 @@ class DeclarativeAPIAdapter:
                 out[k] = v
         return out
 
-    def _fetch_results(self, params: dict) -> list[dict]:
-        """Fetch by the row's transport -> the list of raw result objects (via ``results_path``).
+    def translate_filters(self, query: str, clauses: list):
+        """Each filtered field becomes the upstream parameter its row spec names (``param``): eq sends
+        the value, any a list, a range its ``gte`` / ``lte`` bounds (a field without ``param`` is not
+        supported). The query is unchanged."""
+        params: dict = {}
+        for c in clauses:
+            spec = self.filters.get(c.field) or {}
+            target = spec.get("param")
+            if not target:
+                raise _flt.Unsupported(c.field, "the row names no upstream param")
+            if c.op in ("eq", "any") and c.type != "date":
+                if not isinstance(target, str):
+                    raise _flt.Unsupported(c.field, "eq / any need a param name")
+                vals = [c.value] if c.op == "eq" else list(c.value)
+                params[target] = vals if target.endswith("[]") or c.op == "any" else vals[0]
+            elif c.op in ("range", "eq") and c.type in ("date", "int", "number"):
+                if not isinstance(target, dict):
+                    raise _flt.Unsupported(c.field, "a range needs {gte, lte} param names")
+                if c.type == "date":
+                    lo, hi = c.lo, c.hi
+                else:
+                    lo, hi = c.value if c.op == "range" else (c.value, c.value)
+                for side, bound in (("gte", lo), ("lte", hi)):
+                    if bound is None:
+                        continue
+                    if not target.get(side):
+                        raise _flt.Unsupported(c.field, f"the row names no {side} param")
+                    params[target[side]] = bound.isoformat() if hasattr(bound, "isoformat") else bound
+            else:
+                raise _flt.Unsupported(c.field, f"operator {c.op}")
+        return query or "", params
 
-        transport "http" (default): one GET/POST. transport "mcp": one ``tools/call`` on the
-        wrapped server. Both then walk ``results_path`` out of the response the SAME way. The mcp
-        text_fallback (prose-only result -> synthesized docs) is handled in ``search`` (which reads
-        the raw response via ``_fetch_response``); this returns only the mappable ITEM dicts, so it
-        stays the drop-in ``health_check`` probe path too."""
-        data = self._fetch_response(params)
-        return self._results_from(data)
-
-    def _fetch_response(self, params: dict) -> Any:
-        """Transport-specific fetch -> the raw response OBJECT (an http JSON body, or an mcp tool
-        result). None on any failure (the source contract; mcp transport errors are caught here)."""
-        if self.transport == "mcp":
-            return self._mcp_fetch(params)
-        hdrs = self._auth_headers()
-        if self.method == "POST":
-            return http.post_json(self.endpoint, json=params, timeout=self.timeout,
-                                  **({"headers": hdrs} if hdrs else {}))
-        return http.get_json(self.endpoint, params=params, timeout=self.timeout,
-                             **({"headers": hdrs} if hdrs else {}))
+    def _render_filtered(self, query: str, limit: int) -> dict:
+        """The rendered params plus a filtered call's upstream params ({} unfiltered)."""
+        params = self._render_params(query or "", limit)
+        params.update(_flt.upstream())
+        return params
 
     def _auth_headers(self) -> Optional[dict]:
-        """{header_name: key} from ~/.omniseek/credentials/<name>.json, or None when keyless.
+        """{header_name: key} from <credentials>/<name>.json, or None when keyless.
 
         The row names the HEADER (``auth_header``); the SECRET stays in the credentials file, which is
         the house pattern for every keyed source (adzuna / core / semantic_scholar / ... all ship a
-        <name>.json.template beside it) and keeps the key out of sources.json, a file OmniSeek's
+        template in docs/credential-templates.md) and keeps the key out of sources.json, a file OmniSeek's
         generalization path publishes. Absent / unreadable / empty file = keyless, i.e. EXACTLY the
         previous behaviour, so a row can carry auth_header before any key exists and simply upgrades
         itself the moment the file appears. Resolved once per process (a restart picks up a new key)."""
@@ -395,7 +419,7 @@ class DeclarativeAPIAdapter:
         if self._auth_hdrs is None:
             key = ""
             try:
-                path = Path.home() / ".omniseek" / "credentials" / f"{self.name}.json"
+                path = where.credentials() / f"{self.name}.json"
                 key = str((json.loads(path.read_text(encoding="utf-8")) or {}).get("api_key") or "")
             except Exception:  # noqa: BLE001 — no key is a normal state, never an error
                 key = ""
@@ -424,22 +448,27 @@ class DeclarativeAPIAdapter:
             return None
 
     async def _afetch_response(self, params: dict) -> Any:
-        """Async egress twin of ``_fetch_response`` -> the raw response OBJECT (an http JSON body, or an
-        mcp tool result), None on any failure. Off-loop discipline: the async NETWORK wait stays ON the
+        """Transport-specific fetch -> the raw response OBJECT (an http JSON body, or an mcp tool result),
+        None on any failure (the source contract; mcp transport errors are caught in ``_mcp_fetch``).
+        A row's ``auth_header`` rides on the http request (the sync twin that was deleted on 11-04 sent
+        it and this one did not, so context7 went out keyless). Off-loop discipline: the async NETWORK wait stays ON the
         loop (await http.aget_json / apost_json use epoll, no held thread); the SYNC mcp transport is
         pushed OFF the loop via to_thread (a native-async mcp client is a later slice). The SSRF
         getaddrinfo inside the async leaf (http._arequest_capped + AsyncSSRFGuardTransport) is moved off
         the loop by S4b Part 1, so this whole path holds no blocking syscall on the loop."""
         if self.transport == "mcp":
-            return await anyio.to_thread.run_sync(self._mcp_fetch, params)  # sync MCP off-loop
+            return await anyio.to_thread.run_sync(self._mcp_fetch, params, limiter=fetcher._LEGACY_LIMITER)  # sync MCP off-loop
+        hdrs = self._auth_headers()
         if self.method == "POST":
-            return await http.apost_json(self.endpoint, json=params, timeout=self.timeout)
-        return await http.aget_json(self.endpoint, params=params, timeout=self.timeout)
+            return await http.apost_json(self.endpoint, json=params, timeout=self.timeout,
+                                         **({"headers": hdrs} if hdrs else {}))
+        return await http.aget_json(self.endpoint, params=params, timeout=self.timeout,
+                                    **({"headers": hdrs} if hdrs else {}))
 
     def _results_from(self, data: Any, *, classify: bool = False) -> list[dict]:
         """Walk ``results_path`` out of a response object -> the list of raw item dicts.
 
-        ``classify=True`` (the ``search`` parse path, Wave 3 / 1.16) adds FOUR-STATE drift detection
+        ``classify=True`` (the ``asearch`` parse path, Wave 3 / 1.16) adds FOUR-STATE drift detection
         so a schema drift stops masquerading as an authoritative empty day. It emits ONE ``diag.note``
         (a no-op unless an /eye-fix drill armed capture, so the broad fan-out pays nothing) when:
           - the ``results_path`` is ABSENT (``_dig`` returned None, whether a segment was missing or a
@@ -448,7 +477,7 @@ class DeclarativeAPIAdapter:
         A reached-but-empty LIST stays SILENT (authoritative empty is a legitimate quiet day), and a
         dict is still tolerated as a ``{id: {...}}`` map -> values (the historical behavior). The hot
         success path is unchanged either way: the note f-strings build only on the drift branches.
-        The default (``classify=False``: the health probe and ``_fetch_results``) stays byte-silent."""
+        The default (``classify=False``: the health probe) stays byte-silent."""
         if data is None:
             return []
         results = _dig(data, self.results_path)
@@ -488,7 +517,7 @@ class DeclarativeAPIAdapter:
             source_id=source_id or url,
             url=url,
             title=title,
-            content=content or title,
+            content=content or "",   # no body: empty, never the title again
             author=_as_str(_dig_any(item, fm["author"])) if fm.get("author") else None,
             date=_as_date(_dig_any(item, fm["date"])) if fm.get("date") else None,
             signals=(mk_signal('score', _as_int(_dig_any(item, fm['score'])),
@@ -537,9 +566,7 @@ class DeclarativeAPIAdapter:
     def _assemble_docs(self, response: Any, query: str, limit: int) -> list[Document]:
         """PURE assembly: a raw response -> the ranked ``list[Document]``. No cache, no egress.
 
-        Extracted VERBATIM from ``search``'s former body so BOTH the sync ``search`` and the native
-        async ``asearch`` share it: a duplicated parse/map/rank would DRIFT (the parity golden guards
-        this). Runs entirely on the CPU (safe to keep on the event loop in the async path)."""
+        Runs entirely on the CPU (safe to keep on the event loop)."""
         # classify=True: the parse step notes a missing / wrong-shape results_path (1.16) so a schema
         # drift is not silently indistinguishable from an authoritative empty day (no-op unless a drill
         # armed diag capture).
@@ -581,8 +608,7 @@ class DeclarativeAPIAdapter:
         return docs
 
     def _cache_decision(self, response: Any, docs: list[Document]) -> tuple[int, bool]:
-        """The ``(ttl, authoritative_empty)`` the cache write uses, computed EXACTLY as ``search``
-        did (shared by search + asearch so the write policy can never drift between the two paths).
+        """The ``(ttl, authoritative_empty)`` the cache write uses.
 
         A failure-empty (egress returned None) must NOT pin [] for the full cache_ttl: that blinds
         a later /eye-fix drill (cache HIT -> zero egress -> empty diag) and masks the wall from real
@@ -596,22 +622,10 @@ class DeclarativeAPIAdapter:
         ttl = self.cache_ttl if (docs or not failed) else min(300, self.cache_ttl)
         return ttl, (not failed)
 
-    def search(self, query: str, limit: int = 10) -> list[Document]:
-        key = cache.make_key(self.name, "search", query, limit)
-        cached = cache.get_docs(key)
-        if cached is not None:
-            return cached
-
-        response = self._fetch_response(self._render_params(query or "", limit))
-        docs = self._assemble_docs(response, query, limit)
-        ttl, auth = self._cache_decision(response, docs)
-        cache.set_docs(key, docs, ttl=ttl, authoritative_empty=auth)
-        return docs
-
     async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async twin of ``search`` (S4b): the S4a fan-out awaits this DIRECTLY (no thread), so a
-        declarative source's dominant NETWORK wait costs a COROUTINE, not a held pool thread. This makes
-        EVERY declarative row AsyncSearchCapable, routing it to the fetcher's native dispatch branch.
+        """The search (the only one; ``search`` for scripts is SourceBase's, generated from this): the
+        fan-out awaits this DIRECTLY (no thread), so a declarative source's dominant NETWORK wait costs a
+        COROUTINE, not a held pool thread.
 
         OFF-LOOP DISCIPLINE (the load-bearing rule): a native async method runs ON the loop, so every
         BLOCKING syscall must go OFF it or one slow call freezes every coroutine.
@@ -620,20 +634,20 @@ class DeclarativeAPIAdapter:
           - the async NETWORK egress stays ON the loop (await _afetch_response, epoll not a thread);
           - PURE CPU (_assemble_docs: parse/map/BM25) + the (ttl, auth) decision stay ON the loop (fast).
         The fresh / cache_only / refresh_margin contextvars propagate into the worker thread via anyio.
-        BEHAVIOR-IDENTICAL to search: the SHARED _assemble_docs + _cache_decision guarantee no drift."""
+        """
         key = cache.make_key(self.name, "search", query, limit)
-        cached = await anyio.to_thread.run_sync(cache.get_docs, key)  # disk read OFF loop
+        cached = await cache.aget_docs(key)  # disk read OFF loop; one fetch per key at a time
         if cached is not None:
             return cached
 
-        response = await self._afetch_response(self._render_params(query or "", limit))  # async network
+        response = await self._afetch_response(self._render_filtered(query, limit))  # async network
         docs = self._assemble_docs(response, query, limit)  # pure, on loop
         ttl, auth = self._cache_decision(response, docs)
         await anyio.to_thread.run_sync(  # disk write OFF loop
-            functools.partial(cache.set_docs, key, docs, ttl=ttl, authoritative_empty=auth))
+            functools.partial(cache.set_docs, key, docs, ttl=ttl, authoritative_empty=auth), limiter=portal.IO_LANE)
         return docs
 
-    def fetch_url(self, url: str) -> Optional[Document]:
+    async def afetch_url(self, url: str) -> Optional[Document]:
         """Declarative sources are SEARCH-ONLY: they declare a search endpoint + param
         template, not a per-item GET-by-id endpoint, so there is no mechanical way to
         turn an arbitrary URL into one result object. Returns None (does not claim the
@@ -641,16 +655,17 @@ class DeclarativeAPIAdapter:
 
         This is a deliberate boundary, NOT a gap: a source whose value includes
         by-URL drill-down (e.g. Hacker News' ``/items/{id}`` thread fetch) keeps a
-        coded ``*_source.py`` adapter with a real ``fetch_url`` — the Protocol back
+        coded ``*_source.py`` adapter with a real ``afetch_url`` — the Protocol back
         door is always open. ``url_host`` is still declared so facets/routing know which
         host a row's docs come from."""
         return None
 
-    def health_check(self) -> tuple[Optional[bool], str]:
+    async def ahealth_check(self) -> tuple[Optional[bool], str]:
         """Probe with a tiny live request; healthy if the results list is reachable.
 
-        Probes ``_fetch_response`` (not ``_fetch_results``) so a DOWN upstream is caught: the egress
-        contract is failure->None WITHOUT raising, so the old ``_fetch_results`` path turned a 403 /
+        Probes the raw response (``_afetch_response``, through the sync entry's bridge: this runs on a
+        thread), not the item list, so a DOWN upstream is caught: the egress contract is
+        failure->None WITHOUT raising, so the old item-list path turned a 403 /
         404 / 500 / timeout into an empty list and reported GREEN, making the entire declarative family
         (the largest source family) invisible to the watchdog. None response = down; a reached
         response with an empty result list for a junk query is still "endpoint + shape OK"."""
@@ -670,7 +685,7 @@ class DeclarativeAPIAdapter:
             return None, f"not probed (would spend the metered quota): {_why}"
         diag.enable()
         try:
-            response = self._fetch_response(self._render_params("test", 1))
+            response = await self._afetch_response(self._render_params("test", 1))
         except Exception as exc:  # noqa: BLE001
             diag.drain()
             return False, f"{type(exc).__name__}: {exc}"
@@ -712,6 +727,11 @@ def _row_to_adapter(row: dict) -> DeclarativeAPIAdapter:
         transport=row.get("transport", "http"),
         tool=row.get("tool"),
         text_fallback=row.get("text_fallback", False),
+        filters=row.get("filters"),
+        coverage=row.get("coverage"),
+        license=row.get("license"),
+        samples=row.get("samples"),
+        as_of_field=row.get("as_of_field"),
     )
 
 

@@ -46,6 +46,14 @@ _last_journal_failure: "str | None" = None
 _materialization_failures = 0
 _last_materialization_failure: "str | None" = None
 _JOURNAL_WAKE = threading.Event()
+# The boot blob scrub (EYE-JOURNAL-BOOT): None until it starts, then {"state": "running" | "done" |
+# "failed", "checked", "bad": [{payload_hash, seq, error}], "seconds", "error"?}. Read by journal_health.
+_blob_scrub: "dict | None" = None
+# The background whole-chain check (EYE-JOURNAL-CKPT): None until it starts, then {"state": "running" |
+# "done" | "failed", "ok", "checked", "first_bad_seq", "error", "seconds"}. Read by journal_health.
+_chain_check: "dict | None" = None
+_checkpoint_failures = 0
+_last_checkpoint_failure: "str | None" = None
 
 # S2 graceful-shutdown stop Event for the single-writer loop: set on ASGI-lifespan shutdown so the
 # writer stops polling and runs its FINAL FLUSH, draining the queue BEST-EFFORT within the shutdown
@@ -90,6 +98,43 @@ def last_materialization_failure() -> "str | None":
     return _last_materialization_failure
 
 
+def _blob_scrub_health() -> dict:
+    scrub = _blob_scrub
+    if scrub is None:
+        return {"journal_blob_scrub_state": "not_started", "journal_blobs_checked": None,
+                "journal_blobs_bad": None}
+    done = scrub["state"] == "done"
+    health = {
+        "journal_blob_scrub_state": scrub["state"],
+        "journal_blobs_checked": scrub.get("checked") if done else None,
+        "journal_blobs_bad": len(scrub.get("bad") or ()) if done else None,
+    }
+    if scrub.get("error"):
+        health["journal_blob_scrub_error"] = scrub["error"]
+    return health
+
+
+def _checkpoint_health(journal: "ObservationJournal") -> dict:
+    boot = getattr(journal, "boot_info", None) or {}
+    chain = _chain_check
+    done = bool(chain) and chain["state"] == "done"
+    health = {
+        "journal_boot_mode": boot.get("mode"),
+        "journal_boot_reason": boot.get("reason"),
+        "journal_boot_replayed": boot.get("replayed"),
+        "journal_boot_seconds": boot.get("seconds"),
+        "journal_checkpoint_seq": getattr(journal, "checkpoint_seq", None),
+        "journal_checkpoint_failures": _checkpoint_failures,
+        "journal_last_checkpoint_failure": _last_checkpoint_failure,
+        "journal_chain_check_state": chain["state"] if chain else "not_started",
+        "journal_chain_ok": chain.get("ok") if done else None,
+        "journal_chain_first_bad_seq": chain.get("first_bad_seq") if done else None,
+    }
+    if chain and chain.get("error"):
+        health["journal_chain_check_error"] = chain["error"]
+    return health
+
+
 def journal_health(
     *,
     journal: "ObservationJournal | None" = None,
@@ -97,6 +142,8 @@ def journal_health(
 ) -> dict:
     """Return observable Journal and SQLite materialization state without mutating either."""
     active_journal = journal or _journal()
+    scrub = _blob_scrub_health()
+    scrub.update(_checkpoint_health(active_journal))
     own_con = con is None
     connection = con or store.connect()
     try:
@@ -114,6 +161,7 @@ def journal_health(
             "materialization_failures": _materialization_failures,
             "failed_receipts": _journal_failures + _materialization_failures,
             "last_failure": _last_materialization_failure or _last_journal_failure,
+            **scrub,
         }
     except Exception as exc:  # noqa: BLE001 -- health reports corruption instead of hiding it
         return {
@@ -126,6 +174,7 @@ def journal_health(
             "materialization_failures": _materialization_failures,
             "failed_receipts": _journal_failures + _materialization_failures,
             "last_failure": _last_materialization_failure or _last_journal_failure,
+            **scrub,
             "error": f"{type(exc).__name__}: {exc}",
         }
     finally:
@@ -143,6 +192,119 @@ def _journal() -> ObservationJournal:
             if _observation_journal is None:
                 _observation_journal = ObservationJournal()
     return _observation_journal
+
+
+def scrub_journal_blobs(journal: "ObservationJournal | None" = None) -> dict:
+    """Check every referenced blob once (ObservationJournal.scrub_blobs), log ONE line with the
+    count, every bad blob and the time, and keep the result for journal_health. Never raises: a bad
+    blob is reported here and still fails closed when it is read, so the service keeps running."""
+    global _blob_scrub
+    _blob_scrub = {"state": "running"}
+    try:
+        active_journal = journal or _journal()
+        report = active_journal.scrub_blobs()
+    except Exception as exc:  # noqa: BLE001 -- a scrub failure is reported, never fatal
+        _blob_scrub = {"state": "failed", "error": f"{type(exc).__name__}: {exc}"}
+        logger.warning("observation journal blob scrub failed: %s", _blob_scrub["error"])
+        return _blob_scrub
+    _blob_scrub = {"state": "done", **report}
+    bad = report["bad"]
+    listed = ", ".join(f"{entry['payload_hash']} (seq {entry['seq']}: {entry['error']})" for entry in bad)
+    (logger.warning if bad else logger.info)(
+        "observation journal blob scrub: checked %d, bad %d%s, %.1fs",
+        report["checked"], len(bad), f" [{listed}]" if bad else "", report["seconds"],
+    )
+    return _blob_scrub
+
+
+def checkpoint_journal_if_due(journal: "ObservationJournal | None" = None) -> "dict | None":
+    """Write the journal checkpoint when one is due (ObservationJournal.maybe_checkpoint, EYE-JOURNAL-CKPT).
+
+    Called on the recall-journal-boot thread once the journal is built, and on the recall-writer
+    thread after every cycle (``_writer_loop``): never on the foreground path that records an
+    observation. Never builds the journal (does nothing until it is built) and never raises: a failed
+    write is logged, counted for journal_health, and tried again on the next cycle."""
+    global _checkpoint_failures, _last_checkpoint_failure
+    active_journal = journal or _observation_journal
+    if active_journal is None:
+        return None
+    try:
+        written = active_journal.maybe_checkpoint()
+    except Exception as exc:  # noqa: BLE001 -- a checkpoint is a cache; the events file stays the truth
+        _checkpoint_failures += 1
+        _last_checkpoint_failure = f"{type(exc).__name__}: {exc}"
+        logger.warning("observation journal checkpoint write failed: %s", _last_checkpoint_failure)
+        return None
+    if written:
+        logger.info("observation journal checkpoint written at seq %d (%d bytes, %.2fs)",
+                    written["seq"], written["bytes"], written["seconds"])
+    return written
+
+
+def verify_journal_chain(journal: "ObservationJournal | None" = None) -> dict:
+    """Validate the whole hash chain once (ObservationJournal.verify_chain), log ONE line, keep the
+    result for journal_health. Never raises and never stops the service: a break is reported with
+    the first bad seq; reads still check each line's seq (``_read_line``)."""
+    global _chain_check
+    _chain_check = {"state": "running"}
+    try:
+        active_journal = journal or _journal()
+        report = active_journal.verify_chain()
+    except Exception as exc:  # noqa: BLE001 -- a check failure is reported, never fatal
+        _chain_check = {"state": "failed", "error": f"{type(exc).__name__}: {exc}"}
+        logger.warning("observation journal chain check failed: %s", _chain_check["error"])
+        return _chain_check
+    _chain_check = {"state": "done", **report}
+    if report["ok"]:
+        logger.info("observation journal chain check: ok, %d events, %.1fs",
+                    report["checked"], report["seconds"])
+    else:
+        logger.warning("observation journal chain check: BROKEN at seq %d (%s), %d events validated, %.1fs",
+                       report["first_bad_seq"], report["error"], report["checked"], report["seconds"])
+    return _chain_check
+
+
+def _journal_boot() -> None:
+    global _chain_check
+    started = time.monotonic()
+    try:
+        journal = _journal()
+    except Exception as exc:  # noqa: BLE001 -- a later maybe_ingest retries and records its own failure
+        _record_journal_failure("boot load", exc)
+        return
+    boot = journal.boot_info
+    if boot.get("mode") == "checkpoint":
+        logger.info("observation journal built at boot in %.2fs from checkpoint seq %d, "
+                    "replayed tail %d events in %.2fs (head %d, no blob read)",
+                    time.monotonic() - started, boot["checkpoint_seq"], boot["replayed"],
+                    boot["seconds"], journal.head_seq)
+    else:
+        logger.info("observation journal built at boot in %.2fs by a full build of %d events (%s, no blob read)",
+                    time.monotonic() - started, journal.head_seq, boot.get("reason") or boot.get("mode"))
+    checkpoint_journal_if_due(journal)
+    if boot.get("mode") == "checkpoint":
+        verify_journal_chain(journal)
+    else:
+        # a full build (or an empty journal) has just validated every event and derived the index
+        # from them, which is exactly what the background check would redo
+        _chain_check = {"state": "done", "ok": True, "checked": journal.head_seq,
+                        "head_seq": journal.head_seq, "first_bad_seq": None, "error": None,
+                        "seconds": 0.0, "by": "full build at boot"}
+        logger.info("observation journal chain check: ok, %d events, validated by the full build at boot",
+                    journal.head_seq)
+    scrub_journal_blobs(journal)
+
+
+def start_journal_boot() -> threading.Thread:
+    """Build the observation journal on its own thread at service start, write its checkpoint, check
+    the whole hash chain, then scrub its blobs (EYE-JOURNAL-BOOT, EYE-JOURNAL-CKPT). Built lazily, the
+    first maybe_ingest of every source after a restart built it under _journal_lock inside that
+    search's wait budget; a search that arrives while this thread is still building waits on the same
+    lock, but only for the checkpoint read plus a tail of at most about CKPT_EVERY events (a full
+    build of every event when the checkpoint is missing or does not match)."""
+    t = threading.Thread(target=_journal_boot, name="recall-journal-boot", daemon=True)
+    t.start()
+    return t
 
 
 def _journal_payload(d: Document, lane: str) -> dict:
@@ -408,6 +570,19 @@ def mark_run(source: str, count: int) -> None:
         pass
 
 
+def mark_swept(source: str) -> None:
+    """Stamp when the ingest loop last swept ``source`` (any outcome; the still_live watermark is
+    ``mark_run``'s and stays conditional). Read back by ``store.swept_at`` so a restarted process does
+    not sweep again what the one before it swept less than an interval ago (EYE-RANK, 2026-10-20).
+    Routed through the writer queue (single writer). No-op unless writes are enabled."""
+    if not WRITES_ENABLED or store._disabled:
+        return
+    try:
+        _queue.put_nowait(("__swept__", source, 0, time.time()))
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def enqueue_graph(nodes: list[dict], edges: list[dict]) -> None:
     """The GENERAL graph write verb (design section 6): the write taps (cartographer, enrich, ...)
     hand mechanical FACTS + labeled ALIGNMENT candidates here as node + edge dicts. Generalizes the
@@ -471,6 +646,9 @@ def _writer_loop() -> None:
             if not items and not _JOURNAL_WAKE.is_set():
                 continue
             _process_writer_items(con, items)
+            # the journal checkpoint, once CKPT_EVERY events were written after the last one: the
+            # copy is taken under the journal lock, the file is written here, off the foreground path
+            checkpoint_journal_if_due()
             # periodic roll-off sweep (cheap; once/hour of wall-time between batches)
             if time.time() - last_sweep > 3600:
                 _sweep(con)
@@ -611,7 +789,7 @@ def _apply(
     do_backfill = False
     for it in items:
         if isinstance(it, tuple) and it:
-            if it[0] == "__mark__":
+            if it[0] in ("__mark__", "__swept__"):
                 marks.append(it)
             elif it[0] == "__backfill__":
                 do_backfill = True
@@ -667,6 +845,10 @@ def _apply(
             logger.debug("recall graph apply skipped one batch: %s", exc)
     for _tag, source, count, ts in marks:
         try:
+            if _tag == "__swept__":   # when the ingest loop last swept it, whatever came of the sweep
+                con.execute("INSERT OR REPLACE INTO meta(k, v) VALUES(?, ?)",
+                            (store.SWEPT_KEY + source, repr(float(ts))))
+                continue
             con.execute("INSERT OR REPLACE INTO ingest_runs(source, ran_at, doc_count) VALUES(?,?,?)",
                         (source, ts, count))
         except Exception:  # noqa: BLE001

@@ -32,17 +32,17 @@ from __future__ import annotations
 
 import logging
 import re
-from datetime import datetime
 from typing import Optional
 
 from omniseek.core import http
-from omniseek.core.normalize import Document, jsonsafe, mk_signal
+from omniseek.core.normalize import Document, jsonsafe, mk_signal, to_utc
+from omniseek.core.sources._base import SourceBase
 
 logger = logging.getLogger(__name__)
 
 API_URL = "https://quote.cnbc.com/quote-html-webservice/restQuote/symbolType/symbol"
 TIMEOUT = 15
-# CNBC serves this backend to browsers; the shared OmniSeek UA gets thinner data,
+# CNBC serves this backend to browsers; the shared omniseek UA gets thinner data,
 # so we send a browser UA via the http helper's headers= merge (same pattern sec_edgar
 # uses to send its contact UA).
 BROWSER_UA = (
@@ -114,19 +114,7 @@ def _num(s) -> Optional[float]:
         return None
 
 
-def _dt(s) -> Optional[datetime]:
-    """Parse CNBC's ISO-8601 as-of timestamp (last_time, e.g. "2026-06-17T14:57:46.975-0400")
-    to an aware datetime, or None. The prose uses last_timedate ("2:57 PM EDT") which is dateless;
-    last_time is the machine field with a full date + offset."""
-    if not s:
-        return None
-    try:
-        return datetime.fromisoformat(str(s))
-    except (ValueError, TypeError):
-        return None
-
-
-class MarketQuoteAdapter:
+class MarketQuoteAdapter(SourceBase):
     name = "market_quote"
     needs_credentials = False
     kind = "lookup"
@@ -142,36 +130,14 @@ class MarketQuoteAdapter:
         "52周区间 + 盘前盘后. 多 symbol 一次. 命名查询, 不进广搜; query 无 ticker 返空."
     )
 
-    def search(self, query: str, limit: int = 10) -> list[Document]:
-        tickers = _extract_tickers(query)
-        if not tickers:
-            return []
-        tickers = tickers[:limit]
-        payload = http.get_json(
-            API_URL,
-            params={
-                "symbols": "|".join(tickers),
-                "requestMethod": "itv",
-                "fund": "1",
-                "exthrs": "1",
-                "output": "json",
-            },
-            headers={"User-Agent": BROWSER_UA},
-            timeout=TIMEOUT,
-        )
-        docs: list[Document] = []
-        for q in _quotes(payload):
-            try:
-                doc = self._to_doc(q)
-            except Exception as exc:  # noqa: BLE001 — one bad quote can't sink the rest
-                logger.debug("market_quote: skipping malformed quote: %s", exc)
-                continue
-            if doc is not None:
-                docs.append(doc)
-        return docs
+    # Source spec (omniseek.core.filters): a ticker lookup takes no filters.
+    filters: dict = {}
+    coverage = {"since": None, "until": None, "gaps": [],
+                "note": "current (delayed) US quotes only; no history"}
+    samples = [{"query": "AAPL"}, {"query": "$NVDA MSFT"}]
 
     async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async twin of ``search`` (S4b) → AsyncSearchCapable, so the async fan-out awaits
+        """Native-async replacement of the deleted sync ``search`` (11-04, S9; this is the only one now) (S4b) → AsyncSearchCapable, so the async fan-out awaits
         this DIRECTLY instead of pushing the sync .search onto the shared thread pool.
 
         Mirrors ``search`` LINE-FOR-LINE: the ONLY change is the shared-http egress swaps to its async
@@ -206,11 +172,11 @@ class MarketQuoteAdapter:
                 docs.append(doc)
         return docs
 
-    def fetch_url(self, url: str) -> Optional[Document]:
+    async def afetch_url(self, url: str) -> Optional[Document]:
         return None
 
-    def health_check(self) -> tuple[bool, str]:
-        payload = http.get_json(
+    async def ahealth_check(self) -> tuple[bool, str]:
+        payload = await http.aget_json(
             API_URL,
             params={"symbols": "AAPL", "requestMethod": "itv", "output": "json"},
             headers={"User-Agent": BROWSER_UA},
@@ -266,7 +232,7 @@ class MarketQuoteAdapter:
             title=title,
             content="\n".join(lines),
             author=name,
-            date=_dt(q.get("last_time")),
+            date=to_utc(q.get("last_time")),
             signals=signals,
             tags=[symbol, "stock-quote"],
             metadata={

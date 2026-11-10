@@ -18,19 +18,14 @@ from omniseek.core.contracts.build_identity import validate_build_id
 
 _CONTRACTS_DIR = Path(__file__).resolve().parent
 _SCHEMA_PATH = _CONTRACTS_DIR / "scheduler-heartbeat-v1.json"
-_POLICY_PATH = _CONTRACTS_DIR / "scheduler-heartbeat-policy-v1.json"
 
 
 @dataclass(frozen=True)
 class ContractArtifacts:
     schema_digest: str
-    policy_digest: str
-    mode: str
     initial_delay_s: float
     tick_interval_s: float
     max_job_budget_s: float
-    startup_grace_s: Optional[float]
-    stale_after_s: Optional[float]
 
 
 def _number(value: object, *, field: str, positive: bool) -> float:
@@ -43,44 +38,17 @@ def _number(value: object, *, field: str, positive: bool) -> float:
     return number
 
 
-def load_contract_artifacts(contract_dir: Optional[Path] = None) -> ContractArtifacts:
+def load_contract_artifacts(*, initial_delay_s: float, tick_interval_s: float, max_job_budget_s: float,
+                            contract_dir: Optional[Path] = None) -> ContractArtifacts:
+    """The schema digest the heartbeat names, with the scheduler's own timing (omniseek.core.jobs holds
+    those numbers; the heartbeat only reports them)."""
     base = _CONTRACTS_DIR if contract_dir is None else Path(contract_dir)
     schema_bytes = (base / _SCHEMA_PATH.name).read_bytes()
-    policy_bytes = (base / _POLICY_PATH.name).read_bytes()
-    policy = json.loads(policy_bytes.decode("utf-8"))
-    schema_digest = hashlib.sha256(schema_bytes).hexdigest()
-    policy_digest = hashlib.sha256(policy_bytes).hexdigest()
-    if policy.get("schema") != "omniseek.scheduler-heartbeat-policy/v1":
-        raise ValueError("unknown scheduler heartbeat policy schema")
-    if policy.get("heartbeat_schema_digest") != schema_digest:
-        raise ValueError("scheduler heartbeat schema digest mismatch")
-    mode = policy.get("mode")
-    if mode not in {"calibration-probe", "enforced"}:
-        raise ValueError("unknown scheduler heartbeat policy mode")
-    initial_delay_s = _number(policy.get("initial_delay_s"), field="initial_delay_s", positive=False)
-    tick_interval_s = _number(policy.get("tick_interval_s"), field="tick_interval_s", positive=True)
-    max_job_budget_s = _number(
-        policy.get("max_job_budget_s"), field="max_job_budget_s", positive=True
-    )
-    startup_grace = policy.get("startup_grace_s")
-    stale_after = policy.get("stale_after_s")
-    if mode == "calibration-probe":
-        if startup_grace is not None or stale_after is not None:
-            raise ValueError("calibration-probe decision values must be null")
-        startup_grace_s = None
-        stale_after_s = None
-    else:
-        startup_grace_s = _number(startup_grace, field="startup_grace_s", positive=True)
-        stale_after_s = _number(stale_after, field="stale_after_s", positive=True)
     return ContractArtifacts(
-        schema_digest=schema_digest,
-        policy_digest=policy_digest,
-        mode=mode,
-        initial_delay_s=initial_delay_s,
-        tick_interval_s=tick_interval_s,
-        max_job_budget_s=max_job_budget_s,
-        startup_grace_s=startup_grace_s,
-        stale_after_s=stale_after_s,
+        schema_digest=hashlib.sha256(schema_bytes).hexdigest(),
+        initial_delay_s=_number(initial_delay_s, field="initial_delay_s", positive=False),
+        tick_interval_s=_number(tick_interval_s, field="tick_interval_s", positive=True),
+        max_job_budget_s=_number(max_job_budget_s, field="max_job_budget_s", positive=True),
     )
 
 
@@ -163,8 +131,6 @@ class SchedulerHeartbeat:
             "producer": {"repo": "omniseek", "build_id": self.build_id},
             "contract": {
                 "schema_digest": self.artifacts.schema_digest,
-                "policy_digest": self.artifacts.policy_digest,
-                "mode": self.artifacts.mode,
             },
             "host_boot_id": self.host_boot_id,
             "omniseek_pid": self.omniseek_pid,
@@ -180,8 +146,6 @@ class SchedulerHeartbeat:
             "initial_delay_s": self.artifacts.initial_delay_s,
             "tick_interval_s": self.artifacts.tick_interval_s,
             "max_job_budget_s": self.artifacts.max_job_budget_s,
-            "startup_grace_s": self.artifacts.startup_grace_s,
-            "stale_after_s": self.artifacts.stale_after_s,
         }
 
     def _publish(self, *, phase: str) -> dict:

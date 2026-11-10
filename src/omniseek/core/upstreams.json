@@ -1,5 +1,5 @@
 {
- "_doc": "One entry per independent upstream OmniSeek sends requests to. terms = what the upstream publishes (a number, or 未公布 plus where_checked saying where we looked; url + checked date always). gate = what OmniSeek enforces through the shared BackendGuard (never looser than terms; http_gate false = enforced by the module's own pacer). terms.robots_crawl_delay_s = the Crawl-delay a host's robots.txt sets for User-agent *; each such host gets its own gate (one request at a time, starts at least the delay apart), taken after the upstream gate so the stricter always holds (design decision, 2026-09-29). terms.max_concurrency 1 also makes the shared http clients use a no-keep-alive HTTP/1.1 transport and send Connection: close for that upstream's hosts. user_agent = the User-Agent the upstream's policy requires: every shared egress layer sends exactly this string to the entry's hosts (redirect hops included) and the shared browser refuses them; the one place it is written (design decision, 2026-09-29). hosts = exact host names; an entry that starts with '.' is a domain suffix and matches every subdomain of that domain, not the bare domain (list that on its own); for one host a gated entry wins, then an exact entry, then the longest suffix (design decision, 2026-09-29). disabled = OmniSeek does not send to this upstream: {reason, source, checked, ...}; the code that would send reads it, sends nothing and reports the reason (design decision, 2026-09-29). pending = a published value not enforced yet and why. A new source must be listed under an existing upstream's sources (or backends) or get its own entry: tests/test_upstream_limits.py fails otherwise. Terms research: task R, 2026-09-28; robots sweeps 2026-09-28.",
+ "_doc": "One entry per independent upstream OmniSeek sends requests to. terms = what the upstream publishes (a number, or 未公布 plus where_checked saying where we looked; url + checked date always). gate = what OmniSeek enforces through the shared BackendGuard (never looser than terms; http_gate false = enforced by the module's own pacer). terms.robots_crawl_delay_s = the Crawl-delay a host's robots.txt sets for User-agent *; each such host gets its own gate (one request at a time, starts at least the delay apart), taken after the upstream gate so the stricter always holds (design decision, 2026-09-29). terms.max_concurrency 1 also makes the shared http clients use a no-keep-alive HTTP/1.1 transport and send Connection: close for that upstream's hosts. user_agent = the User-Agent the upstream's policy requires: every shared egress layer sends exactly this string to the entry's hosts (redirect hops included) and the shared browser refuses them; the one place it is written (design decision, 2026-09-29). hosts = exact host names; an entry that starts with '.' is a domain suffix and matches every subdomain of that domain, not the bare domain (list that on its own); for one host a gated entry wins, then an exact entry, then the longest suffix (design decision, 2026-09-29). disabled = OmniSeek does not send to this upstream: {reason, source, checked, ...}; the code that would send reads it, sends nothing and reports the reason (design decision, 2026-09-29). pending = a published value not enforced yet and why. paths = path prefixes (each starting with '/'): the entry then owns only the URLs on its hosts whose path starts with one of them, ahead of the host's other entries; a Crawl-delay or a User-Agent cannot be scoped to a path (EYE-RSS-3, 2026-10-24: export.arxiv.org full text vs its API). gate.provisional = why a gate number is provisional and how it is to be recalibrated. gate.break_after / gate.break_for_s = the guard's circuit breaker: that many failures in a row that say the upstream is unhealthy (_guard.counts_against_upstream: a 404 / 410 / 400 / 422 answer is not one) open it for that many seconds (default 5 and 120); an upstream's breaker is this one, never a failure count and cooldown kept in the module (EYE-BREAKER-ONE, 2026-11-07; an adapter's account-safety breaker, which stops a logged-in account on captcha or risk signals, is a different thing and stays in the adapter). A new source must be listed under an existing upstream's sources (or its backend under backends) or get its own entry (the merge-gate test that failed otherwise was deleted in TEST-CUT; nothing checks it now). sources and backends are also how omniseek_gather knows which gate an omniseek_read passes first (fetcher.fetch_url_upstream, EYE-GATHER-PACE-R2; backends since EYE-REG-CHECK): the first reader on the read's route that some entry covers (its name in sources or its backend in backends, as upstreams.coverage counts it) with a host on the link's site, then the gated entry covering that reader with the smallest max_inflight. Terms research: task R, 2026-09-28; robots sweeps 2026-09-28.",
  "unpublished": "未公布",
  "optional_sources": {
   "_doc": "Sources the public mirror build removes (public_prepare.sh); a declaration may name them without the stale-name check failing there.",
@@ -10,7 +10,7 @@
    "name": "arXiv legacy API",
    "kind": "api",
    "hosts": ["export.arxiv.org"],
-   "sources": ["arxiv"],
+   "sources": ["arxiv", "alphaxiv"],
    "tools": ["omniseek_paper_enrich: arXiv withdrawal / journal-DOI lookup (enrich._arxiv_integrity)"],
    "terms": {
     "max_concurrency": 1,
@@ -27,8 +27,33 @@
    "gate": {
     "max_inflight": 1,
     "min_interval_s": 3.0,
-    "max_wait_s": 12.0,
-    "enforced_in": "sources/api/arxiv_source.py _arxiv_get_text/_arxiv_aget_text/health_check (hold) + http.py host gate (enrich._arxiv_integrity)"
+    "max_wait_s": 12.0
+   }
+  },
+  "arxiv_export": {
+   "name": "arXiv export mirror: full text (PDF and HTML) for programs",
+   "kind": "web",
+   "hosts": ["export.arxiv.org"],
+   "paths": ["/pdf/", "/html/"],
+   "sources": ["arxiv"],
+   "tools": ["omniseek_read on arxiv.org/pdf/<id> and arxiv.org/html/<id> (arxiv source, sources/api/_arxiv_fulltext.py)", "omniseek_read document branch on an arxiv.org/pdf/<id>.pdf link (docreader)"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "none",
+    "quote": "specifically set aside for programmatic access",
+    "url": "https://info.arxiv.org/help/bulk_data.html",
+    "checked": "2026-10-24",
+    "where_checked": "info.arxiv.org/help/bulk_data.html read 2026-10-24: 'We ask that users intent on harvesting use the dedicated site export.arxiv.org for these purposes, which contains an up-to-date copy of the corpus and is specifically set aside for programmatic access' and 'we suggest that a reasonable rate to be bursts at 4 requests per second with a 1 second sleep, per burst' (a suggestion, no hard number, so the terms stay 未公布). The one-request-every-three-seconds rule of info.arxiv.org/help/api/tou.html is for the legacy APIs (the arxiv entry, /api/ on this host), not these pages. Measured 2026-10-24 (EYE-RSS-3): https://export.arxiv.org/pdf/2305.18290 200 application/pdf and https://export.arxiv.org/html/2305.18290v3 200 text/html, neither redirects. export.arxiv.org/robots.txt says 'User-agent: * Disallow: /' (read 2026-10-24); the bulk-data page names this host for programs, which is the instruction followed here",
+    "notes": "Paths scoped (upstreams.py, 'paths'): /api/ and anything else on export.arxiv.org stay with the arxiv entry and its 3 s gate."
+   },
+   "gate": {
+    "max_inflight": 1,
+    "min_interval_s": 1.0,
+    "max_wait_s": 30.0,
+    "provisional": "EYE-RSS-3 2026-10-24: one at a time, starts at least 1 s apart, a quarter of the 4 requests per second the bulk-data page suggests for a burst; recalibrate from the gate's refusal lines and the full-text read counts after the first weeks (report out/EYE-RSS-3/report.md). max_wait_s 30: a PDF download holds the permit for its whole body, so a second reader waits for the first download, not just the 1 s"
    }
   },
   "arxiv_web": {
@@ -36,7 +61,7 @@
    "kind": "web",
    "hosts": ["arxiv.org"],
    "sources": ["pdf"],
-   "tools": ["omniseek_read on arxiv.org/pdf/<id> (pdf source / docreader)"],
+   "tools": ["the generic web read (web_fallback) and the document reader on arxiv.org links that are not /pdf/ or /html/ full text (those go to export.arxiv.org since EYE-RSS-3)"],
    "terms": {
     "max_concurrency": "未公布",
     "min_interval_s": "未公布",
@@ -47,7 +72,8 @@
     "url": "https://arxiv.org/robots.txt",
     "checked": "2026-09-28",
     "where_checked": "arxiv.org/robots.txt read 2026-09-28: Crawl-delay 15 s for User-agent *, enforced as the arxiv.org host gate (design decision, 2026-09-29). The API terms (info.arxiv.org/help/api/tou.html) cover the APIs, not /abs or /pdf pages; bulk PDF access is via the S3 bulk data",
-    "robots_crawl_delay_s": {"arxiv.org": 15.0}
+    "robots_crawl_delay_s": {"arxiv.org": 15.0},
+    "notes": "pdf is listed for the coverage check (it reads any PDF link, no fixed upstream); since EYE-RSS-3 (2026-10-24) it leaves arXiv links to the arxiv source, which reads full text from export.arxiv.org (the arxiv_export entry)"
    }
   },
   "openalex": {
@@ -74,8 +100,7 @@
    "gate": {
     "max_inflight": 8,
     "min_interval_s": 0.2,
-    "max_wait_s": 15.0,
-    "enforced_in": "_openalex.get_json/aget_json (keyed lane first, keyless lane on a budget 429)"
+    "max_wait_s": 15.0
    },
    "observe": {
     "expect": {
@@ -106,8 +131,7 @@
    "gate": {
     "max_inflight": 4,
     "min_interval_s": 1.0,
-    "max_wait_s": 15.0,
-    "enforced_in": "_s2._call/_bounded (hold) + http.py host gate (s2_authors)"
+    "max_wait_s": 15.0
    }
   },
   "github": {
@@ -134,8 +158,7 @@
    "gate": {
     "max_inflight": 4,
     "min_interval_s": 2.0,
-    "max_wait_s": 15.0,
-    "enforced_in": "_github.get_json/aget_json (hold)"
+    "max_wait_s": 15.0
    },
    "observe": {
     "lane_header": "x-ratelimit-resource",
@@ -165,8 +188,7 @@
    "gate": {
     "max_inflight": 1,
     "min_interval_s": 6.0,
-    "max_wait_s": 15.0,
-    "enforced_in": "_github.get_json/aget_json for paths under /search/code (inside the github gate)"
+    "max_wait_s": 15.0
    }
   },
   "stackexchange": {
@@ -192,7 +214,8 @@
     "max_inflight": 4,
     "windows": [[30, 1.0]],
     "max_wait_s": 15.0,
-    "enforced_in": "_stackexchange._se_get/_ase_get (hold; 'backoff' defers the gate)"
+    "break_after": 3,
+    "break_for_s": 300.0
    }
   },
   "core": {
@@ -221,8 +244,7 @@
    "gate": {
     "max_inflight": 3,
     "windows": [[10, 60]],
-    "max_wait_s": 30.0,
-    "enforced_in": "sources/api/core_source.py _core_get/_acore_get (hold)"
+    "max_wait_s": 30.0
    }
   },
   "crossref": {
@@ -253,8 +275,7 @@
    "gate": {
     "max_inflight": 3,
     "windows": [[3, 1.0]],
-    "max_wait_s": 15.0,
-    "enforced_in": "sources/api/crossref_source.py (egress) + http.py host gate (crossref_retractions, enrich)"
+    "max_wait_s": 15.0
    },
    "observe": {
     "expect": {"x-concurrency-limit": 3}
@@ -299,8 +320,7 @@
    "gate": {
     "max_inflight": 1,
     "min_interval_s": 10.0,
-    "max_wait_s": 15.0,
-    "enforced_in": "sources/api/dblp_source.py sparql_select/asparql_select (http.py host gate) + sparql_probe (egress hold, shared by dblp_author health_check)"
+    "max_wait_s": 15.0
    }
   },
   "europepmc": {
@@ -345,8 +365,7 @@
    "gate": {
     "max_inflight": 8,
     "windows": [[12, 1.0]],
-    "max_wait_s": 15.0,
-    "enforced_in": "http.py host gate (8 in flight = orcid_source._MAX_FANOUT)"
+    "max_wait_s": 15.0
    }
   },
   "wikimedia": {
@@ -382,8 +401,7 @@
    "gate": {
     "max_inflight": 3,
     "windows": [[200, 60]],
-    "max_wait_s": 15.0,
-    "enforced_in": "http.py host gate; the declared user_agent on every request to these hosts"
+    "max_wait_s": 15.0
    }
   },
   "hn_algolia": {
@@ -407,8 +425,7 @@
    "gate": {
     "max_inflight": 4,
     "windows": [[10000, 3600]],
-    "max_wait_s": 15.0,
-    "enforced_in": "http.py host gate + hackernews health_check (egress)"
+    "max_wait_s": 15.0
    }
   },
   "bluesky": {
@@ -432,8 +449,7 @@
    "gate": {
     "max_inflight": 2,
     "windows": [[3000, 300]],
-    "max_wait_s": 15.0,
-    "enforced_in": "sources/api/bluesky_source.py (hold around the atproto client calls)"
+    "max_wait_s": 15.0
    }
   },
   "mastodon_social": {
@@ -457,8 +473,7 @@
    "gate": {
     "max_inflight": 2,
     "windows": [[300, 300]],
-    "max_wait_s": 15.0,
-    "enforced_in": "http.py host gate"
+    "max_wait_s": 15.0
    },
    "observe": {
     "expect": {"x-ratelimit-limit": 300}
@@ -485,8 +500,7 @@
    "gate": {
     "max_inflight": 2,
     "windows": [[300, 300]],
-    "max_wait_s": 15.0,
-    "enforced_in": "http.py host gate"
+    "max_wait_s": 15.0
    },
    "observe": {
     "expect": {"x-ratelimit-limit": 300}
@@ -513,8 +527,7 @@
    "gate": {
     "max_inflight": 2,
     "windows": [[300, 300]],
-    "max_wait_s": 15.0,
-    "enforced_in": "http.py host gate"
+    "max_wait_s": 15.0
    },
    "observe": {
     "expect": {"x-ratelimit-limit": 300}
@@ -535,6 +548,13 @@
     "url": "https://github.com/ArthurHeitmann/arctic_shift/blob/master/api/README.md",
     "checked": "2026-09-28",
     "where_checked": "the README publishes no number; limits vary with server load"
+   },
+   "gate": {
+    "max_inflight": 6,
+    "http_gate": false,
+    "break_after": 5,
+    "break_for_s": 120.0,
+    "provisional": "EYE-BREAKER-ONE 2026-11-07: the three numbers moved unchanged from reddit_source.py (its own in-flight semaphore, set 2026-06-20 after an 18-agent burst stormed the host into 429s; its own breaker of 5 failed subs then 120 s). http_gate false: reddit_source takes this guard's permits itself around each Arctic request (bounded_slot), the shared http layer does not take them a second time. Recalibrate from the 'arctic_shift circuit OPEN' log lines and Arctic's 429 / slow-down 422 counts"
    }
   },
   "reddit_web": {
@@ -577,8 +597,29 @@
    "gate": {
     "max_inflight": 4,
     "windows": [[100, 300]],
-    "max_wait_s": 15.0,
-    "enforced_in": "hf sources (egress) + http.py host gate"
+    "max_wait_s": 15.0
+   }
+  },
+  "iacr_eprint": {
+   "name": "IACR Cryptology ePrint Archive",
+   "kind": "web",
+   "hosts": ["eprint.iacr.org"],
+   "sources": ["iacr_eprint"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": [],
+    "daily_quota": "未公布",
+    "auth": "none: metadata is CC0, no key exists",
+    "quote": "Users should set their readers to refresh no more than once a day.",
+    "url": "https://eprint.iacr.org/rss/",
+    "checked": "2026-10-20",
+    "where_checked": "eprint.iacr.org/rss/ (the metadata harvesting page: RSS, Atom, OAI-PMH under CC0, the once-a-day refresh rule quoted) and eprint.iacr.org/robots.txt read 2026-10-20: User-agent * has Disallow: /search, Disallow: *.pdf and the per-year PDF paths, /archive, /versions, /submit, no Crawl-delay; abstract pages /<year>/<number>, /complete/compact and /oai are allowed. No request rate, concurrency or quota is published. Observed by PQDVRF workers 2026-10-18 (brain note finding-eprint-blocks-automated-fulltext-2026-10-18): abstract pages answer 429 after about 15 requests in a row, one every 6 s passes; the site search answers 'Rate limit exceeded' after about 200 a day per IP (OmniSeek does not use it).",
+    "notes": "OmniSeek uses /complete/compact (cached one day, the published rule) and OAI-PMH GetRecord (each record cached one day). PDFs are never requested: they are robots-disallowed and answer 403 or a challenge page to programs."
+   },
+   "gate": {
+    "max_inflight": 1,
+    "max_wait_s": 15.0
    }
   },
   "zenodo": {
@@ -605,8 +646,7 @@
    "gate": {
     "max_inflight": 2,
     "windows": [[30, 60], [2000, 3600]],
-    "max_wait_s": 15.0,
-    "enforced_in": "http.py host gate"
+    "max_wait_s": 15.0
    },
    "observe": {
     "expect": {
@@ -633,8 +673,7 @@
    "gate": {
     "max_inflight": 2,
     "min_interval_s": 1.0,
-    "max_wait_s": 15.0,
-    "enforced_in": "http.py host gate"
+    "max_wait_s": 15.0
    }
   },
   "internet_archive": {
@@ -675,8 +714,7 @@
    "gate": {
     "max_inflight": 4,
     "windows": [[10, 1.0]],
-    "max_wait_s": 15.0,
-    "enforced_in": "http.py host gate"
+    "max_wait_s": 15.0
    }
   },
   "nih_reporter": {
@@ -698,8 +736,7 @@
    "gate": {
     "max_inflight": 1,
     "min_interval_s": 1.0,
-    "max_wait_s": 15.0,
-    "enforced_in": "http.py host gate"
+    "max_wait_s": 15.0
    }
   },
   "statcan_wds": {
@@ -724,8 +761,7 @@
    "gate": {
     "max_inflight": 4,
     "windows": [[25, 1.0]],
-    "max_wait_s": 15.0,
-    "enforced_in": "http.py host gate"
+    "max_wait_s": 15.0
    }
   },
   "companies_house": {
@@ -750,8 +786,7 @@
    "gate": {
     "max_inflight": 2,
     "windows": [[600, 300]],
-    "max_wait_s": 15.0,
-    "enforced_in": "http.py host gate"
+    "max_wait_s": 15.0
    }
   },
   "data_gov_sg": {
@@ -779,8 +814,7 @@
    "gate": {
     "max_inflight": 2,
     "windows": [[4, 10]],
-    "max_wait_s": 15.0,
-    "enforced_in": "http.py host gate"
+    "max_wait_s": 15.0
    }
   },
   "adzuna": {
@@ -807,8 +841,7 @@
    "gate": {
     "max_inflight": 2,
     "windows": [[25, 60], [250, 86400], [1000, 604800], [2500, 2592000]],
-    "max_wait_s": 15.0,
-    "enforced_in": "http.py host gate (in-memory windows reset on restart)"
+    "max_wait_s": 15.0
    }
   },
   "cubox": {
@@ -834,8 +867,7 @@
     "max_inflight": 1,
     "min_interval_s": 1.0,
     "windows": [[50, 86400]],
-    "max_wait_s": 15.0,
-    "enforced_in": "cubox_source.py persisted day budget (~/.omniseek/state/cubox_budget.json) + http.py host gate (in-memory windows reset on restart)"
+    "max_wait_s": 15.0
    }
   },
   "exa": {
@@ -859,8 +891,7 @@
    "gate": {
     "max_inflight": 4,
     "windows": [[10, 1.0]],
-    "max_wait_s": 15.0,
-    "enforced_in": "http.py host gate"
+    "max_wait_s": 15.0
    }
   },
   "itunes_search": {
@@ -884,8 +915,7 @@
    "gate": {
     "max_inflight": 2,
     "windows": [[20, 60]],
-    "max_wait_s": 15.0,
-    "enforced_in": "http.py host gate"
+    "max_wait_s": 15.0
    }
   },
   "jina_reader": {
@@ -910,8 +940,7 @@
    "gate": {
     "max_inflight": 2,
     "windows": [[20, 60]],
-    "max_wait_s": 15.0,
-    "enforced_in": "http.py host gate (web_fallback._jina_markdown)"
+    "max_wait_s": 15.0
    }
   },
   "coingecko": {
@@ -939,8 +968,7 @@
    "gate": {
     "max_inflight": 1,
     "windows": [[5, 60]],
-    "max_wait_s": 15.0,
-    "enforced_in": "http.py host gate"
+    "max_wait_s": 15.0
    }
   },
   "artificial_analysis": {
@@ -952,20 +980,19 @@
     "max_concurrency": "未公布",
     "min_interval_s": "未公布",
     "windows": [
-     {"limit": 1000, "seconds": 86400, "text": "per day"}
+     {"limit": 100, "seconds": 86400, "text": "Free tier: 100 requests per fixed 24-hour window that starts with the first request (the gate enforces it as a sliding 24-hour window, never looser)"}
     ],
-    "daily_quota": "1,000 requests per day",
-    "auth": "未公布",
-    "quote": "The API is rate-limited to 1,000 requests per day.",
-    "url": "https://artificialanalysis.ai/api-reference",
-    "checked": "2026-09-28",
+    "daily_quota": "100 requests per fixed 24-hour window (Free tier; Pro 500)",
+    "auth": "API key in the x-api-key header",
+    "quote": "Quotas run on a fixed 24-hour window that starts with your first request and resets in full when it ends.",
+    "url": "https://artificialanalysis.ai/data-api/docs",
+    "checked": "2026-11-06",
     "where_checked": "concurrency and interval: not stated"
    },
    "gate": {
     "max_inflight": 1,
-    "windows": [[1000, 86400]],
-    "max_wait_s": 15.0,
-    "enforced_in": "sources/api/llm_leaderboard_source.py (egress)"
+    "windows": [[100, 86400]],
+    "max_wait_s": 15.0
    }
   },
   "v2ex": {
@@ -980,7 +1007,7 @@
      {"limit": 120, "seconds": 3600, "text": "per IP, API 1.0 (the endpoint OmniSeek uses)"}
     ],
     "daily_quota": "未公布",
-    "auth": "the API 2.0 page (updated 2026-08-03) says 600 per hour per IP; OmniSeek calls the keyless 1.0 endpoint /api/topics/show.json, whose documented quota was 120 per hour",
+    "auth": "the API 2.0 page (updated 2026-08-03) says 600 per hour per IP; the keyless 1.0 endpoint /api/topics/show.json (documented quota 120 per hour) answers Cloudflare's challenge since 2026-11-04, so since 2026-11-09 OmniSeek reads the per-node Atom feeds /feed/<node>.xml on the same host (no published quota, served from Cloudflare's cache, no rate headers); the gate keeps the 120-per-hour window for the host",
     "quote": "up to 600 API requests per hour",
     "url": "https://www.v2ex.com/help/api",
     "checked": "2026-09-28",
@@ -989,8 +1016,7 @@
    "gate": {
     "max_inflight": 6,
     "windows": [[120, 3600]],
-    "max_wait_s": 15.0,
-    "enforced_in": "sources/scrape/v2ex_source.py (egress; 6 in flight = its six nodes)"
+    "max_wait_s": 15.0
    },
    "observe": {
     "expect": {
@@ -1020,8 +1046,7 @@
    "gate": {
     "max_inflight": 1,
     "windows": [[20, 60]],
-    "max_wait_s": 15.0,
-    "enforced_in": "notify.py (egress)"
+    "max_wait_s": 15.0
    }
   },
   "discord": {
@@ -1045,8 +1070,7 @@
    "gate": {
     "max_inflight": 8,
     "windows": [[50, 1.0]],
-    "max_wait_s": 15.0,
-    "enforced_in": "sources/walled/discord_communities_source.py (egress; 8 in flight = its channel fan-out)"
+    "max_wait_s": 15.0
    }
   },
   "brave_search": {
@@ -1079,8 +1103,7 @@
    "gate": {
     "max_inflight": 1,
     "min_interval_s": 1.1,
-    "http_gate": false,
-    "enforced_in": "sources/api/_search_backend.py own pacer (reads this gate), not BackendGuard"
+    "http_gate": false
    }
   },
   "duckduckgo_html": {
@@ -1105,8 +1128,7 @@
    "gate": {
     "max_inflight": 1,
     "min_interval_s": 2.5,
-    "http_gate": false,
-    "enforced_in": "sources/api/_search_backend.py own pacer (reads this gate), not BackendGuard"
+    "http_gate": false
    }
   },
   "context7": {
@@ -1489,7 +1511,7 @@
    "name": "Open Government Canada (CKAN API)",
    "kind": "api",
    "hosts": ["open.canada.ca"],
-   "sources": ["nserc_awards", "sshrc_awards", "cihr_grants", "gov_open_data"],
+   "sources": ["sshrc_awards", "cihr_grants", "gov_open_data"],
    "terms": {
     "max_concurrency": "未公布",
     "min_interval_s": "未公布",
@@ -1533,23 +1555,6 @@
     "where_checked": "no published API rate; www.ontario.ca/robots.txt Crawl-delay 1 s enforced as that host's gate (design decision, 2026-09-29)",
     "robots_crawl_delay_s": {"www.ontario.ca": 1.0},
     "notes": "robots.txt could not be read on 2026-09-28: data.ontario.ca (429)"
-   }
-  },
-  "frontier_proxy": {
-   "name": "Private Responses-API proxy (weekly briefing agent)",
-   "kind": "tool",
-   "hosts": [],
-   "sources": [],
-   "tools": ["digest job briefing agent (briefing.py)"],
-   "terms": {
-    "max_concurrency": "未公布",
-    "min_interval_s": "未公布",
-    "windows": "未公布",
-    "daily_quota": "未公布",
-    "auth": "未公布",
-    "url": "~/.omniseek/credentials/frontier.json (host-only)",
-    "checked": "2026-09-28",
-    "where_checked": "a private proxy; no public terms. Used once a week by the digest job"
    }
   },
   "youtube": {
@@ -1619,22 +1624,6 @@
     "where_checked": "a website or app front end, not a documented API: no published request rate. OmniSeek's own pacing here: CDP pool cap (OMNISEEK_CDP_POOL)"
    }
   },
-  "douyin_web": {
-   "name": "Douyin (logged-in browser)",
-   "kind": "walled",
-   "hosts": ["www.douyin.com"],
-   "sources": ["douyin"],
-   "terms": {
-    "max_concurrency": "未公布",
-    "min_interval_s": "未公布",
-    "windows": "未公布",
-    "daily_quota": "未公布",
-    "auth": "未公布",
-    "url": "https://www.douyin.com/",
-    "checked": "2026-09-28",
-    "where_checked": "a website or app front end, not a documented API: no published request rate. OmniSeek's own pacing here: dedicated CDP on 9225"
-   }
-  },
   "douban_web": {
    "name": "Douban groups",
    "kind": "walled",
@@ -1649,6 +1638,50 @@
     "url": "https://m.douban.com/",
     "checked": "2026-09-28",
     "where_checked": "a website or app front end, not a documented API: no published request rate. OmniSeek's own pacing here: CDP pool cap"
+   }
+  },
+  "goofish": {
+   "name": "闲鱼 goofish.com (logged-in 小号 on the shared 9222 browser)",
+   "kind": "walled",
+   "hosts": ["www.goofish.com", "h5api.m.goofish.com"],
+   "sources": ["xianyu"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "quote": "闲鱼用户服务协议 V3.0 mentions crawlers only among content users must not publish: 存在可能破坏、篡改、删除、影响闲鱼社区任何系统正常运行或未经授权秘密获取闲鱼及其他用户的数据、个人资料的病毒、木马、爬虫等恶意软件、程序代码的内容",
+    "url": "https://terms.alicdn.com/legal-agreement/terms/suit_bu1_taobao/suit_bu1_taobao202201051730_62767.html",
+    "checked": "2026-10-24",
+    "where_checked": "a website front end, not a documented API: no published rate, concurrency or quota. Read 2026-10-24: the 闲鱼用户服务协议 V3.0 (url above; no request rate in it), https://www.goofish.com/robots.txt (User-agent: * disallows /find-account, /select-account, /playground; no Crawl-delay; /search allowed), https://h5api.m.goofish.com/robots.txt (HTTP 404, none). The two hosts are the ones a search really sends to: the search page (www) and the page's own signed mtop call (h5api.m); passport.goofish.com and umdc.goofish.com are hit by the page's login box and device check, not by our reads"
+   },
+   "gate": {
+    "max_inflight": 1,
+    "min_interval_s": 5.0,
+    "max_wait_s": 70.0,
+    "provisional": "EYE-XIANYU 2026-10-24 (spec item 6): one at a time on the 小号; starts at least 5 s apart, the upper end of the 3 to 5 s a third-party 闲鱼 tool advises (seen only in a web-search summary, not opened). max_wait_s 70: one browser call holds the permit at most 60 s (xianyu_source._CDP_TIMEOUT) plus the 5 s spacing, so the next search can wait out the one in front of it. Recalibrate two weeks after going live from <state>/xianyu/risk-events.jsonl: no trip keeps it, any trip doubles min_interval_s (and halves the source's daily cap); the reading goes into brain note eye-recon-xianyu"
+   }
+  },
+  "smzdm_api": {
+   "name": "什么值得买 deal list (api.smzdm.com, the apps' list endpoint)",
+   "kind": "api",
+   "hosts": ["api.smzdm.com"],
+   "sources": ["smzdm"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://api.smzdm.com/v1/list",
+    "checked": "2026-10-24",
+    "where_checked": "an undocumented app endpoint: no published terms or rate. Read 2026-10-24: https://api.smzdm.com/robots.txt (HTTP 404, none); https://www.smzdm.com/robots.txt (User-agent: * disallows /*?* and /*=* on www only, robots.txt holds per host); search.smzdm.com answers a Tencent captcha WAF page, which this source does not use"
+   },
+   "gate": {
+    "max_inflight": 1,
+    "min_interval_s": 1.0,
+    "provisional": "EYE-XIANYU 2026-10-24: nothing published; one at a time, starts 1 s apart keeps a build list (about 7 parts, one request each) under 10 s while never bursting. Recalibrate from the gate's refusal lines and any 429 after the first weeks"
    }
   },
   "yipinsanfendi_web": {
@@ -2117,20 +2150,22 @@
     "where_checked": "ordinary web pages / RSS or Atom feeds, not an API: no published request rate or quota. Checked: robots.txt of each host (2026-09-28 sweep); no Crawl-delay for User-agent *"
    }
   },
-  "web:ai_incidents": {
-   "name": "ai_incidents (plain web)",
+  "aiid_snapshot": {
+   "name": "AI Incident Database weekly snapshot (page + Cloudflare R2 bucket)",
    "kind": "web",
-   "hosts": ["incidentdatabase.ai"],
+   "hosts": ["incidentdatabase.ai", "pub-72b2b2fc36ec423189843747af98f80e.r2.dev"],
    "sources": ["ai_incidents"],
    "terms": {
     "max_concurrency": "未公布",
     "min_interval_s": "未公布",
     "windows": "未公布",
     "daily_quota": "未公布",
-    "auth": "未公布",
-    "url": "https://incidentdatabase.ai/robots.txt",
-    "checked": "2026-09-28",
-    "where_checked": "ordinary web pages / RSS or Atom feeds, not an API: no published request rate or quota. Checked: robots.txt of each host (2026-09-28 sweep); no Crawl-delay for User-agent *"
+    "auth": "none: the snapshot page and the R2 bucket are public (the GraphQL API, which this source no longer uses, requires a login since 2026-10)",
+    "quote": "Weekly point-in-time dumps of the full database, available in JSON, MongoDB archive, and CSV formats.",
+    "url": "https://incidentdatabase.ai/research/snapshots/",
+    "checked": "2026-10-20",
+    "where_checked": "incidentdatabase.ai/research/snapshots/ (one backup-<stamp>.tar.bz2 a week, ~120 MB, on a public Cloudflare R2 bucket) and incidentdatabase.ai/terms-of-use/ (Data License: CC BY-SA 4.0; Exclusions: submissions and the text field of reports) read 2026-10-20: no request rate, concurrency or quota is published. incidentdatabase.ai/robots.txt answers the site's 404 page and the R2 host's /robots.txt answers HTTP 404, so no Crawl-delay applies.",
+    "notes": "OmniSeek sends one GET of the snapshot page and at most one archive download a week (eye job aiid-snapshot), plus one HEAD of the snapshot page per source-health run. Queries are answered from the local index and send nothing."
    }
   },
   "web:ai_newsletters": {
@@ -2547,7 +2582,7 @@
   "web:hk_career_research": {
    "name": "hk_career_research (plain web)",
    "kind": "web",
-   "hosts": ["hongkongfp.com", "www.astri.org", "www.info.gov.hk", "www.news.gov.hk", "www.scmp.com"],
+   "hosts": ["hongkongfp.com", "www.info.gov.hk", "www.news.gov.hk", "www.scmp.com"],
    "sources": ["hk_career_research"],
    "terms": {
     "max_concurrency": "未公布",
@@ -2958,9 +2993,9 @@
    "kind": "web",
    "hosts": [
      "benjamintodd.substack.com", "blog.ezyang.com", "calnewport.com", "chinai.substack.com",
-     "eugeneyan.com", "importai.substack.com", "lemire.me", "lilianweng.github.io",
-     "magazine.sebastianraschka.com", "newsletter.pragmaticengineer.com", "simonwillison.net",
-     "statmodeling.stat.columbia.edu", "thealgorithmicbridge.substack.com", "theprofessorisin.com",
+     "eugeneyan.com", "feeds.feedburner.com", "importai.substack.com",
+     "lilianweng.github.io", "magazine.sebastianraschka.com", "newsletter.pragmaticengineer.com",
+     "simonwillison.net", "statmodeling.stat.columbia.edu", "thealgorithmicbridge.substack.com",
      "timdettmers.com", "tridao.me", "www.aisnakeoil.com", "www.argmin.net",
      "www.astralcodexten.com", "www.dwarkesh.com", "www.interconnects.ai"
    ],
@@ -2973,8 +3008,25 @@
     "auth": "未公布",
     "url": "https://benjamintodd.substack.com/robots.txt",
     "checked": "2026-09-28",
-    "where_checked": "ordinary web pages / RSS or Atom feeds, not an API: no published request rate or quota. Checked: robots.txt of each host (2026-09-28 sweep); Crawl-delay enforced as host gates (design decision, 2026-09-29): lemire.me 10s, statmodeling.stat.columbia.edu 3600s",
-    "robots_crawl_delay_s": {"lemire.me": 10.0, "statmodeling.stat.columbia.edu": 3600.0}
+    "where_checked": "ordinary web pages / RSS or Atom feeds, not an API: no published request rate or quota. Checked: robots.txt of each host (2026-09-28 sweep); Crawl-delay enforced as host gates (design decision, 2026-09-29): statmodeling.stat.columbia.edu 3600s (lemire.me 10s moved to web:lemire_blog with its feed, 2026-11-07)",
+    "robots_crawl_delay_s": {"statmodeling.stat.columbia.edu": 3600.0}
+   }
+  },
+  "web:lemire_blog": {
+   "name": "lemire_blog (plain web)",
+   "kind": "web",
+   "hosts": ["lemire.me"],
+   "sources": ["lemire_blog"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://lemire.me/robots.txt",
+    "checked": "2026-09-28",
+    "where_checked": "an ordinary blog RSS feed, not an API: no published request rate or quota. Checked: robots.txt (2026-09-28 sweep, then under web:substack_matrix); Crawl-delay 10s enforced as a host gate (design decision, 2026-09-29)",
+    "robots_crawl_delay_s": {"lemire.me": 10.0}
    }
   },
   "web:thesis_whisperer": {

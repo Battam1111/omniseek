@@ -25,14 +25,11 @@ OmniSeek's ranked search re-score across sources when it needs cross-source rele
 
 from __future__ import annotations
 
-import html as _html
 import logging
-import re
-from datetime import datetime
 from typing import Any, Optional
 
 from omniseek.core import http, relevance
-from omniseek.core.normalize import Document, jsonsafe
+from omniseek.core.normalize import Document, html_fragment_text, jsonsafe, to_utc
 from omniseek.core.sources.scrape._base import BaseScrapeAdapter
 
 logger = logging.getLogger(__name__)
@@ -57,18 +54,8 @@ class CSETAdapter(BaseScrapeAdapter):
     domains = ["policy", "safety"]
     modes = ["STRUCTURE", "RECALL"]
 
-    def _raw_fetch(self, query: str, limit: int) -> Optional[Any]:
-        # _embed pulls the author + taxonomy terms inline so we avoid N follow-up GETs.
-        # Pull a WIDE candidate pool (not just `limit`): WP search relevance is weak, so the
-        # on-topic report can sit past a narrow window; _to_documents re-ranks + caps.
-        return http.get_json(
-            API_URL,
-            params={"search": query, "per_page": max(limit, _CANDIDATE_POOL), "_embed": "1"},
-            timeout=TIMEOUT,
-        )
-
     async def _araw_fetch(self, query: str, limit: int) -> Optional[Any]:
-        # Byte-faithful async twin of _raw_fetch: same URL/params/timeout, only the shared-http
+        # Byte-faithful async replacement of the deleted sync ``_raw_fetch`` (11-04, S9; this is the only one now): same URL/params/timeout, only the shared-http
         # egress swaps get_json -> aget_json (single call, so a single mirror).
         return await http.aget_json(
             API_URL,
@@ -100,16 +87,6 @@ class CSETAdapter(BaseScrapeAdapter):
                     if _s > 0.0]
         return docs[:limit]
 
-    async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async twin of BaseScrapeAdapter.search -> AsyncSearchCapable (the S4a fan-out awaits
-        this directly; the WP /posts GET costs a COROUTINE, not a held pool thread). Shares the base async
-        cache round-trip; egress via `_araw_fetch`; mapping via the SAME pure-CPU `_to_documents`
-        (BM25 re-rank included) -> byte-identical to `search`."""
-        return await self._asearch_via(
-            query, limit,
-            afetch=lambda: self._araw_fetch(query, limit),
-            abuild=lambda raw: self._to_documents(raw, query, limit))
-
     def _post_to_doc(self, post: dict) -> Optional[Document]:
         title = _clean_text((post.get("title") or {}).get("rendered"))
         if not title:
@@ -123,7 +100,7 @@ class CSETAdapter(BaseScrapeAdapter):
         if not content:
             content = _strip_html((post.get("excerpt") or {}).get("rendered"))
 
-        date = _parse_date(post.get("date"))
+        date = to_utc(post.get("date"))
         author = _embedded_author(post)
         tags = _embedded_terms(post)
 
@@ -145,7 +122,7 @@ class CSETAdapter(BaseScrapeAdapter):
 
 def _strip_html(value: Any) -> str:
     """Lossy HTML -> text for a WordPress ``rendered`` field. Prefer markdownify (already a
-    dep, keeps link/heading structure); fall back to a tag-strip + entity-unescape so the
+    dep, keeps link/heading structure); fall back to plain text (html_fragment_text) so the
     adapter never hard-fails on odd HTML."""
     if not isinstance(value, str) or not value.strip():
         return ""
@@ -153,7 +130,7 @@ def _strip_html(value: Any) -> str:
         from markdownify import markdownify as html_to_md
         return html_to_md(value, heading_style="ATX").strip()
     except Exception:  # noqa: BLE001 (markdownify can be picky on weird HTML)
-        return _html.unescape(re.sub(r"<[^>]+>", "", value)).strip()
+        return html_fragment_text(value)
 
 
 def _clean_text(value: Any) -> str:
@@ -161,17 +138,7 @@ def _clean_text(value: Any) -> str:
     unescape entities (``&#8217;`` -> the apostrophe) for a clean one-line title."""
     if not isinstance(value, str):
         return ""
-    return _html.unescape(re.sub(r"<[^>]+>", "", value)).strip()
-
-
-def _parse_date(value: Any) -> Optional[datetime]:
-    """WordPress ``date`` is local-time ISO ``YYYY-MM-DDTHH:MM:SS`` (no offset)."""
-    if not isinstance(value, str) or not value.strip():
-        return None
-    try:
-        return datetime.fromisoformat(value.strip())
-    except ValueError:
-        return None
+    return html_fragment_text(value)
 
 
 def _embedded_author(post: dict) -> Optional[str]:

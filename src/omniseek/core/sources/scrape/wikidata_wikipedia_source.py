@@ -51,19 +51,6 @@ WIKI_REST_SUMMARY = "https://en.wikipedia.org/api/rest_v1/page/summary/"
 WIKIDATA_API = "https://www.wikidata.org/w/api.php"
 WIKIDATA_ENTITY_BASE = "https://www.wikidata.org/wiki"
 
-# WIKIMEDIA USER-AGENT (design decisions, 2026-09-29). The Wikimedia Foundation User-Agent Policy
-# (foundation.wikimedia.org/wiki/Policy:Wikimedia_Foundation_User-Agent_Policy, read 2026-09-28) asks a
-# bot for name/version, a contact, the word "bot", and never a browser's User-Agent. The string lives
-# in ONE place, upstreams.json "wikimedia" -> "user_agent" (contact: the public OmniSeek repo, no
-# personal address); the shared layers send it to these hosts on every hop, and every Wikimedia call
-# here also asks for it explicitly through these two helpers. With it, requests fall in the
-# "User-Agent only" tier of the Wikimedia API rate limits (200 per minute, at most 3 concurrent), the
-# gate declared for the same upstream.
-def _wm_get_json(url, **kwargs):
-    """http.get_json with the User-Agent the declaration gives for this host."""
-    kwargs["headers"] = upstreams.with_declared_user_agent(url, kwargs.get("headers"))
-    return http.get_json(url, **kwargs)
-
 
 async def _wm_aget_json(url, **kwargs):
     """Async twin of _wm_get_json."""
@@ -90,146 +77,6 @@ class WikidataWikipediaAdapter(BaseScrapeAdapter):
     kind = "lookup"
     domains = ["reference", "papers"]
     modes = ["STRUCTURE"]
-
-    # --------------------------------------------------------------- fetch hook
-    def _raw_fetch(self, query: str, limit: int) -> Optional[Any]:
-        """Fan out across the four endpoints and return an assembled payload. Returns
-        None only if BOTH layers come back empty/failed (the base then yields [])."""
-        # Split the budget: roughly half articles, half entities (at least 1 each).
-        n_articles = max(1, limit - limit // 2)
-        n_entities = max(1, limit // 2)
-
-        articles = self._fetch_articles(query, n_articles)
-        entities = self._fetch_entities(query, n_entities)
-
-        if not articles and not entities:
-            return None
-        return {"articles": articles, "entities": entities}
-
-    def _fetch_articles(self, query: str, n: int) -> list[dict]:
-        """Action-API search → per-title REST summary. Each item: the summary dict
-        (extract / content_urls / description / wikibase_item / thumbnail)."""
-        search = _wm_get_json(
-            WIKI_API,
-            params={
-                "action": "query",
-                "list": "search",
-                "srsearch": query,
-                "srlimit": n,
-                "format": "json",
-            },
-            timeout=TIMEOUT,
-        )
-        if not isinstance(search, dict):
-            return []
-        hits = (search.get("query") or {}).get("search") or []
-
-        out: list[dict] = []
-        for hit in hits[:n]:
-            if not isinstance(hit, dict):
-                continue
-            title = hit.get("title")
-            if not title:
-                continue
-            summary = _wm_get_json(
-                WIKI_REST_SUMMARY + quote(title.replace(" ", "_"), safe=""),
-                timeout=TIMEOUT,
-            )
-            if isinstance(summary, dict) and summary.get("type") != "disambiguation":
-                out.append(summary)
-        return out
-
-    def _fetch_entities(self, query: str, n: int) -> list[dict]:
-        """wbsearchentities → entity hits (id / label / description / concepturi),
-        with the top entity enriched with a couple of resolved key claims."""
-        resp = _wm_get_json(
-            WIKIDATA_API,
-            params={
-                "action": "wbsearchentities",
-                "search": query,
-                "language": "en",
-                "uselang": "en",
-                "format": "json",
-                "limit": n,
-            },
-            timeout=TIMEOUT,
-        )
-        if not isinstance(resp, dict):
-            return []
-        hits = [h for h in (resp.get("search") or []) if isinstance(h, dict)][:n]
-        if not hits:
-            return []
-
-        # Enrich ONLY the top entity (one extra graph lookup, not n of them).
-        top_qid = hits[0].get("id")
-        if top_qid:
-            claims = self._fetch_key_claims(top_qid)
-            if claims:
-                hits[0] = {**hits[0], "_key_claims": claims}
-        return hits
-
-    def _fetch_key_claims(self, qid: str) -> list[tuple[str, str]]:
-        """Fetch the entity's claims, keep the KEY_CLAIM_PROPS, and resolve the opaque
-        property + value QIDs to human labels in ONE batched follow-up call. Returns a
-        list of (property_label, value_label) pairs, best-effort (empty on any failure)."""
-        ent_resp = _wm_get_json(
-            WIKIDATA_API,
-            params={"action": "wbgetentities", "ids": qid,
-                    "languages": "en", "format": "json", "props": "claims"},
-            timeout=TIMEOUT,
-        )
-        if not isinstance(ent_resp, dict):
-            return []
-        claims = ((ent_resp.get("entities") or {}).get(qid) or {}).get("claims") or {}
-        if not isinstance(claims, dict):
-            return []
-
-        # Collect (prop, value-qid) pairs for the key properties (cap a few per prop).
-        pairs: list[tuple[str, str]] = []
-        ids_to_label: set[str] = set()
-        for prop in KEY_CLAIM_PROPS:
-            statements = claims.get(prop) or []
-            kept = 0
-            for st in statements:
-                if not isinstance(st, dict) or kept >= 3:
-                    continue
-                dv = (st.get("mainsnak") or {}).get("datavalue") or {}
-                if dv.get("type") != "wikibase-entityid":
-                    continue
-                vid = (dv.get("value") or {}).get("id")
-                if not vid:
-                    continue
-                pairs.append((prop, vid))
-                ids_to_label.update((prop, vid))
-                kept += 1
-        if not pairs:
-            return []
-
-        labels = self._resolve_labels(sorted(ids_to_label))
-        resolved: list[tuple[str, str]] = []
-        for prop, vid in pairs:
-            resolved.append((labels.get(prop, prop), labels.get(vid, vid)))
-        return resolved
-
-    @staticmethod
-    def _resolve_labels(ids: list[str]) -> dict[str, str]:
-        """Batch-resolve a mixed list of P-/Q-ids to their English labels in one call."""
-        if not ids:
-            return {}
-        resp = _wm_get_json(
-            WIKIDATA_API,
-            params={"action": "wbgetentities", "ids": "|".join(ids[:50]),
-                    "languages": "en", "format": "json", "props": "labels"},
-            timeout=TIMEOUT,
-        )
-        if not isinstance(resp, dict):
-            return {}
-        out: dict[str, str] = {}
-        for k, v in (resp.get("entities") or {}).items():
-            label = ((v or {}).get("labels") or {}).get("en", {}).get("value")
-            if label:
-                out[k] = label
-        return out
 
     # ----------------------------------------------------------- documents hook
     def _to_documents(self, raw: Any, query: str, limit: int) -> list[Document]:
@@ -263,7 +110,8 @@ class WikidataWikipediaAdapter(BaseScrapeAdapter):
         parts: list[str] = []
         if description:
             parts.append(f"_{description}_")
-        parts.append(extract or "(no summary extract available)")
+        if extract:
+            parts.append(extract)
         if qid:
             parts.append(
                 f"Wikidata entity: {qid} "
@@ -340,12 +188,12 @@ class WikidataWikipediaAdapter(BaseScrapeAdapter):
     # per-title REST summary + top-entity claims + one batched label resolve); `_to_documents`
     # is PURE CPU (article/entity dict -> doc, no network). So the native-async twin mirrors
     # `_raw_fetch` (+ its egressing helpers) with every `http.get_json` -> `await http.aget_json`
-    # (byte-faithful params / timeout / order / per-record skip-on-fail), and passes the SAME
-    # sync `_to_documents` to `_asearch_via` (run on the loop, pure CPU). This is the shipped
+    # (byte-faithful params / timeout / order / per-record skip-on-fail), and leaves the SAME
+    # sync `_to_documents` to the base's `_asearch_via` (pure CPU, through `aparse`). This is the shipped
     # discourse A2 idiom, not the Stack Exchange two-layer one, because the egress is in FETCH,
     # not in the doc mapper -- there is no doc-layer egress to make async.
     async def _araw_fetch(self, query: str, limit: int) -> Optional[Any]:
-        """Async twin of `_raw_fetch`: SAME budget split, SAME both-empty->None contract; the
+        """Async replacement of the deleted sync `_raw_fetch` (11-04, S9; this is the only one now): SAME budget split, SAME both-empty->None contract; the
         per-record enrichment egress goes native async via the async helper twins below.
 
         The two layers are fetched CONCURRENTLY (2026-08-30). They are DIFFERENT hosts
@@ -377,7 +225,7 @@ class WikidataWikipediaAdapter(BaseScrapeAdapter):
         return {"articles": articles, "entities": entities}
 
     async def _afetch_articles(self, query: str, n: int) -> list[dict]:
-        """Async twin of `_fetch_articles`: Action-API search -> per-title REST summary. SAME
+        """Async replacement of the deleted sync `_fetch_articles` (11-04, S9; this is the only one now): Action-API search -> per-title REST summary. SAME
         srlimit, SAME result order, SAME disambiguation drop + skip-on-fail.
 
         The per-title summaries are fetched CONCURRENTLY (2026-08-30). The search call still has
@@ -429,7 +277,7 @@ class WikidataWikipediaAdapter(BaseScrapeAdapter):
         return out
 
     async def _afetch_entities(self, query: str, n: int) -> list[dict]:
-        """Async twin of `_fetch_entities`: wbsearchentities -> hits, top entity enriched with
+        """Async replacement of the deleted sync `_fetch_entities` (11-04, S9; this is the only one now): wbsearchentities -> hits, top entity enriched with
         resolved key claims (ONE extra graph lookup, not n). Byte-faithful shape + order."""
         resp = await _wm_aget_json(
             WIKIDATA_API,
@@ -458,7 +306,7 @@ class WikidataWikipediaAdapter(BaseScrapeAdapter):
         return hits
 
     async def _afetch_key_claims(self, qid: str) -> list[tuple[str, str]]:
-        """Async twin of `_fetch_key_claims`: wbgetentities claims -> keep KEY_CLAIM_PROPS ->
+        """Async replacement of the deleted sync `_fetch_key_claims` (11-04, S9; this is the only one now): wbgetentities claims -> keep KEY_CLAIM_PROPS ->
         ONE batched label-resolve follow-up. SAME 3-per-prop cap, SAME order, [] on any failure."""
         ent_resp = await _wm_aget_json(
             WIKIDATA_API,
@@ -501,7 +349,7 @@ class WikidataWikipediaAdapter(BaseScrapeAdapter):
 
     @staticmethod
     async def _aresolve_labels(ids: list[str]) -> dict[str, str]:
-        """Async twin of `_resolve_labels`: batch-resolve a mixed P-/Q-id list to English labels
+        """Async replacement of the deleted sync `_resolve_labels` (11-04, S9; this is the only one now): batch-resolve a mixed P-/Q-id list to English labels
         in one call."""
         if not ids:
             return {}
@@ -520,22 +368,12 @@ class WikidataWikipediaAdapter(BaseScrapeAdapter):
                 out[k] = label
         return out
 
-    async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async twin of `search` -> AsyncSearchCapable (the async fan-out awaits this
-        directly; the four-endpoint per-record fan-out costs COROUTINES, not held pool threads).
-        Shares the base async cache round-trip; egress via `_araw_fetch`; mapping via the SAME
-        pure-CPU `_to_documents` (byte-identical to `search`, run on the loop)."""
-        return await self._asearch_via(
-            query, limit,
-            afetch=lambda: self._araw_fetch(query, limit),
-            abuild=lambda raw: self._to_documents(raw, query, limit))
-
     # --------------------------------------------------------------- liveness
-    def health_check(self) -> tuple[bool, str]:
+    async def ahealth_check(self) -> tuple[bool, str]:
         """Cheap probe: a trivial Wikidata entity search proves the keyless API answers.
         (Uses the lighter wbsearchentities rather than the full four-endpoint fan-out.)"""
         try:
-            resp = _wm_get_json(
+            resp = await _wm_aget_json(
                 WIKIDATA_API,
                 params={"action": "wbsearchentities", "search": "test",
                         "language": "en", "format": "json", "limit": 1},
@@ -637,55 +475,6 @@ class WikidataIdentityAdapter(BaseScrapeAdapter):
     regions = ["global"]
     modes = ["STRUCTURE"]
 
-    # --------------------------------------------------------------- fetch hook
-    def _raw_fetch(self, query: str, limit: int) -> Optional[Any]:
-        """Resolve the name to the best entity that actually carries an identity
-        cluster (scan the top few search hits so a disambiguation stub does not win),
-        assemble that cluster, and resolve its QID-valued fields to labels. Returns
-        None if no matched entity carries any identity property (base yields [])."""
-        for hit in self._search_entities(query, 5):
-            qid = hit.get("id")
-            if not qid:
-                continue
-            claims = self._fetch_claims(qid)
-            if not claims:
-                continue
-            cluster = self._extract_cluster(claims)
-            if not (cluster["external_ids"] or cluster["tickers"] or cluster["items"]):
-                continue  # not an identity-bearing entity; try the next hit
-            cluster = self._resolve_item_labels(cluster)
-            return {
-                "qid": qid,
-                "label": (hit.get("label") or "").strip(),
-                "description": (hit.get("description") or "").strip(),
-                "is_human": _has_instance(claims, Q_HUMAN),
-                **cluster,
-            }
-        return None
-
-    def _search_entities(self, query: str, n: int) -> list[dict]:
-        resp = _wm_get_json(
-            WIKIDATA_API,
-            params={"action": "wbsearchentities", "search": query, "language": "en",
-                    "uselang": "en", "format": "json", "limit": n, "type": "item"},
-            timeout=TIMEOUT,
-        )
-        if not isinstance(resp, dict):
-            return []
-        return [h for h in (resp.get("search") or []) if isinstance(h, dict)]
-
-    def _fetch_claims(self, qid: str) -> dict:
-        resp = _wm_get_json(
-            WIKIDATA_API,
-            params={"action": "wbgetentities", "ids": qid, "languages": "en",
-                    "format": "json", "props": "claims"},
-            timeout=TIMEOUT,
-        )
-        if not isinstance(resp, dict):
-            return {}
-        claims = ((resp.get("entities") or {}).get(qid) or {}).get("claims") or {}
-        return claims if isinstance(claims, dict) else {}
-
     @staticmethod
     def _extract_cluster(claims: dict) -> dict:
         """Pull the string external-ids (with resolvable URLs), the stock tickers (with
@@ -710,26 +499,6 @@ class WikidataIdentityAdapter(BaseScrapeAdapter):
             if qids:
                 items[key] = qids
         return {"external_ids": external_ids, "tickers": tickers, "items": items}
-
-    def _resolve_item_labels(self, cluster: dict) -> dict:
-        """Batch-resolve every QID in the cluster (org/person items + stock exchanges)
-        to an English label in ONE follow-up call, in place."""
-        ids: set[str] = set()
-        for qids in cluster["items"].values():
-            ids.update(qids)
-        for t in cluster["tickers"]:
-            if t.get("exchange_qid"):
-                ids.add(t["exchange_qid"])
-        labels = _resolve_labels_batch(sorted(ids)) if ids else {}
-
-        cluster["items"] = {
-            key: [{"qid": q, "label": labels.get(q, q)} for q in qids]
-            for key, qids in cluster["items"].items()
-        }
-        for t in cluster["tickers"]:
-            eq = t.get("exchange_qid")
-            t["exchange"] = labels.get(eq, eq) if eq else None
-        return cluster
 
     # ----------------------------------------------------------- documents hook
     def _to_documents(self, raw: Any, query: str, limit: int) -> list[Document]:
@@ -801,9 +570,9 @@ class WikidataIdentityAdapter(BaseScrapeAdapter):
     # claims + one batched QID-label resolve); `_to_documents`/`_identity_to_doc` are pure CPU.
     # The async twin mirrors `_raw_fetch` (+ its egressing helpers) with `http.get_json` ->
     # `await http.aget_json` (byte-faithful params / order / the SAME top-5-hit scan for the
-    # first identity-bearing entity), and passes the SAME sync `_to_documents` to `_asearch_via`.
+    # first identity-bearing entity), and leaves the SAME sync `_to_documents` to the base's `_asearch_via`.
     async def _araw_fetch(self, query: str, limit: int) -> Optional[Any]:
-        """Async twin of `_raw_fetch`: SAME top-5 scan + first-identity-bearing-hit selection,
+        """Async replacement of the deleted sync `_raw_fetch` (11-04, S9; this is the only one now): SAME top-5 scan + first-identity-bearing-hit selection,
         SAME assemble+resolve, SAME None-when-none contract. Only the egress swaps to async; the
         pure-CPU `_extract_cluster` + `_has_instance` are reused unchanged."""
         for hit in await self._asearch_entities(query, 5):
@@ -827,7 +596,7 @@ class WikidataIdentityAdapter(BaseScrapeAdapter):
         return None
 
     async def _asearch_entities(self, query: str, n: int) -> list[dict]:
-        """Async twin of `_search_entities`."""
+        """Async replacement of the deleted sync `_search_entities` (11-04, S9; this is the only one now)."""
         resp = await _wm_aget_json(
             WIKIDATA_API,
             params={"action": "wbsearchentities", "search": query, "language": "en",
@@ -839,7 +608,7 @@ class WikidataIdentityAdapter(BaseScrapeAdapter):
         return [h for h in (resp.get("search") or []) if isinstance(h, dict)]
 
     async def _afetch_claims(self, qid: str) -> dict:
-        """Async twin of `_fetch_claims`."""
+        """Async replacement of the deleted sync `_fetch_claims` (11-04, S9; this is the only one now)."""
         resp = await _wm_aget_json(
             WIKIDATA_API,
             params={"action": "wbgetentities", "ids": qid, "languages": "en",
@@ -852,7 +621,7 @@ class WikidataIdentityAdapter(BaseScrapeAdapter):
         return claims if isinstance(claims, dict) else {}
 
     async def _aresolve_item_labels(self, cluster: dict) -> dict:
-        """Async twin of `_resolve_item_labels`: batch-resolve every QID in the cluster (org/
+        """Async replacement of the deleted sync `_resolve_item_labels` (11-04, S9; this is the only one now): batch-resolve every QID in the cluster (org/
         person items + stock exchanges) to an English label in ONE async follow-up call, in place."""
         ids: set[str] = set()
         for qids in cluster["items"].values():
@@ -871,21 +640,12 @@ class WikidataIdentityAdapter(BaseScrapeAdapter):
             t["exchange"] = labels.get(eq, eq) if eq else None
         return cluster
 
-    async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async twin of `search` -> AsyncSearchCapable. The per-record egress (entity
-        search + per-hit claims + QID-label resolve) goes native async in `_araw_fetch`; mapping
-        via the SAME pure-CPU `_to_documents` (byte-identical to `search`)."""
-        return await self._asearch_via(
-            query, limit,
-            afetch=lambda: self._araw_fetch(query, limit),
-            abuild=lambda raw: self._to_documents(raw, query, limit))
-
     # --------------------------------------------------------------- liveness
-    def health_check(self) -> tuple[bool, str]:
+    async def ahealth_check(self) -> tuple[bool, str]:
         """Cheap probe: a trivial entity search proves the keyless API answers (does NOT
         run the full resolve+claims fan-out)."""
         try:
-            resp = _wm_get_json(
+            resp = await _wm_aget_json(
                 WIKIDATA_API,
                 params={"action": "wbsearchentities", "search": "test",
                         "language": "en", "format": "json", "limit": 1},
@@ -948,28 +708,8 @@ def _has_instance(claims: dict, target_qid: str) -> bool:
     return False
 
 
-def _resolve_labels_batch(ids: list[str]) -> dict[str, str]:
-    """Batch-resolve a list of Q-/P-ids to their English labels in one call."""
-    if not ids:
-        return {}
-    resp = _wm_get_json(
-        WIKIDATA_API,
-        params={"action": "wbgetentities", "ids": "|".join(ids[:50]),
-                "languages": "en", "format": "json", "props": "labels"},
-        timeout=TIMEOUT,
-    )
-    if not isinstance(resp, dict):
-        return {}
-    out: dict[str, str] = {}
-    for k, v in (resp.get("entities") or {}).items():
-        label = ((v or {}).get("labels") or {}).get("en", {}).get("value")
-        if label:
-            out[k] = label
-    return out
-
-
 async def _aresolve_labels_batch(ids: list[str]) -> dict[str, str]:
-    """Async twin of `_resolve_labels_batch`: batch-resolve a list of Q-/P-ids to their English
+    """Async replacement of the deleted sync `_resolve_labels_batch` (11-04, S9; this is the only one now): batch-resolve a list of Q-/P-ids to their English
     labels in one call."""
     if not ids:
         return {}

@@ -1,6 +1,6 @@
 """Bluesky adapter — uses the atproto Python package.
 
-Reads credentials from ~/.omniseek/credentials/bluesky.json:
+Reads credentials from <credentials>/bluesky.json:
     {"handle": "name.bsky.social", "app_password": "xxxx-xxxx-xxxx-xxxx"}
 
 App passwords are generated at https://bsky.app/settings/app-passwords
@@ -12,20 +12,26 @@ in our OmniSeek stack — 5000 points/hour, 35000/day, no payment required.
 
 from __future__ import annotations
 
+import functools
 import logging
-from datetime import datetime
+import time
 from typing import Optional
 from urllib.parse import urlparse
 
-from atproto import Client
+import anyio
+from atproto import Client, models
+from atproto_client.client.session import Session
+from atproto_client.models.utils import get_model_as_dict, get_or_create
 
-from omniseek.core import _probe, auth, cache, http, upstreams
-from omniseek.core.normalize import Document, jsonsafe, mk_signal
+from omniseek.core import _probe, auth, cache, http, portal, upstreams
+from omniseek.core.normalize import Document, jsonsafe, mk_signal, to_utc
+from omniseek import where
+from omniseek.core.sources._base import SourceBase
 
 logger = logging.getLogger(__name__)
 
 # Template dropped on first import for user discoverability
-auth.write_template(
+auth.register_template(
     "bluesky",
     {
         "handle": "your-handle.bsky.social",
@@ -69,6 +75,21 @@ _PROBE_HOST = "bsky.social"
 _RELOGIN = object()   # _probe_search's answer when the session itself was refused
 
 
+def _xrpc_url(pds_endpoint: str, nsid: str) -> str:
+    """The XRPC endpoint of ``nsid`` on a PDS, the way atproto builds it (base url + /xrpc)."""
+    base = (pds_endpoint or "").rstrip("/")
+    if not base.endswith("/xrpc"):
+        base += "/xrpc"
+    return f"{base}/{nsid}"
+
+
+def _search_params(query: str, limit: int) -> dict:
+    """searchPosts query parameters exactly as atproto sends them (its Params model, lexicon defaults
+    such as sort=latest included)."""
+    return get_model_as_dict(get_or_create({"q": query, "limit": min(limit, 100)},
+                                           models.AppBskyFeedSearchPosts.Params))
+
+
 def _xrpc_response(exc):
     """The error response atproto attaches to its request exceptions (None for anything else)."""
     return getattr(exc, "response", None)
@@ -84,11 +105,7 @@ def _xrpc_error(exc) -> Optional[str]:
     return getattr(content, "error", None) or (content.get("error") if isinstance(content, dict) else None)
 
 
-def _xrpc_retry_after(exc) -> Optional[float]:
-    return _probe.retry_after_s(getattr(_xrpc_response(exc), "headers", None))
-
-
-class BlueskyAdapter:
+class BlueskyAdapter(SourceBase):
     name = "bluesky"
     needs_credentials = True
     description = "Bluesky: academic Twitter migration target, AT Protocol open API"
@@ -116,6 +133,19 @@ class BlueskyAdapter:
             logger.warning("bluesky: atproto's http client is not where expected; no progress renewal")
             return None
 
+    def _held(self, fn, *args):
+        """``fn(*args)``, one call of atproto's sync client, from the caller's thread under the declared
+        Bluesky gate (upstreams.json "bluesky": the PDS / entryway allows 3000 requests per 5 minutes
+        per IP): ``_aheld`` on the event loop (portal.call). Raises what the call raises, and
+        ``UpstreamBusy`` (nothing sent) when the gate cannot admit it in time."""
+        return portal.call(self._aheld, fn, *args)
+
+    async def _aheld(self, fn, *args):
+        """The gate is taken on the loop (``upstreams.ahold``); the call itself blocks, so it runs on a
+        worker thread, in a copy of the context that holds the gate (its progress hooks renew the lease)."""
+        async with upstreams.ahold("bluesky", request_s=self._request_s):
+            return await anyio.to_thread.run_sync(functools.partial(fn, *args), limiter=portal.IO_LANE)
+
     def _ensure_client(self) -> Optional[Client]:
         if self._client is None:
             creds = auth.load("bluesky")
@@ -128,8 +158,7 @@ class BlueskyAdapter:
                 self._request_s = self._wire_progress(self._client)
                 # Every atproto call takes the declared Bluesky gate (upstreams.json "bluesky": the
                 # PDS / entryway allows 3000 requests per 5 minutes per IP); UpstreamBusy is a failure.
-                with upstreams.hold("bluesky", request_s=self._request_s):
-                    self._client.login(creds["handle"], creds["app_password"])
+                self._held(self._client.login, creds["handle"], creds["app_password"])
                 self._logged_in = True
             except Exception as exc:  # noqa: BLE001
                 logger.warning("Bluesky login failed: %s", exc)
@@ -138,38 +167,84 @@ class BlueskyAdapter:
                 return None
         return self._client
 
-    def search(self, query: str, limit: int = 10) -> list[Document]:
-        client = self._ensure_client()
-        if client is None:
+    async def asearch(self, query: str, limit: int = 10) -> list[Document]:
+        """Native twin of ``search``. The search itself is one XRPC GET (searchPosts) sent with the
+        kept session's access token through http.aget, under the same declared Bluesky gate, and the
+        answer is parsed into the same atproto model ``search`` gets. The session stays the sync
+        client's own (login and token refresh are atproto's), so no second session exists to rotate
+        tokens against it; that upkeep runs in a worker thread, only when there is no session yet or
+        its access token would end within one request."""
+        session = await self._asession()
+        if session is None:
             return []
 
         key = cache.make_key("bluesky", "search", query, limit)
-        cached = cache.get(key)
-        if cached is not None:
-            return [Document.model_validate(d) for d in cached]
 
-        try:
-            with upstreams.hold("bluesky", request_s=self._request_s):
-                response = client.app.bsky.feed.search_posts(
-                    {"q": query, "limit": min(limit, 100)}
-                )
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("Bluesky search failed: %s", exc)
-            return []
+        async def _aget() -> Optional[list[Document]]:
+            try:
+                async with upstreams.ahold("bluesky", request_s=self._request_s):
+                    resp = await http.aget(
+                        _xrpc_url(session.pds_endpoint, "app.bsky.feed.searchPosts"),
+                        params=_search_params(query, limit),
+                        headers={"Authorization": f"Bearer {session.access_jwt}"},
+                        timeout=self._request_s or http.DEFAULT_TIMEOUT)
+                if resp is None:
+                    raise RuntimeError("searchPosts failed (the http diagnostic has the answer)")
+                response = get_or_create(resp.json(), models.AppBskyFeedSearchPosts.Response, strict=True)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Bluesky search failed: %s", exc)
+                return None  # a failure: not cached
 
+            docs = self._posts_to_documents(response, limit)
+            return docs
+
+        return await self._acached(key, lambda docs: 900 if docs else 300, _aget)
+
+    def _posts_to_documents(self, response, limit: int) -> list[Document]:
         docs: list[Document] = []
         for post in (response.posts or [])[:limit]:
             try:
                 docs.append(self._post_to_document(post))
             except Exception as exc:  # noqa: BLE001
                 logger.debug("Skipping malformed Bluesky post: %s", exc)
-
-        # An auth-lapse / outage empty must not pin [] for 15m (masks the outage); genuine empties
-        # self-heal in 5m. bluesky is credentialed, so a lapsed session is the likely empty here.
-        cache.set(key, [d.model_dump(mode="json") for d in docs], ttl=900 if docs else 300)
         return docs
 
-    def fetch_url(self, url: str) -> Optional[Document]:
+    def _live_session(self) -> Optional[Session]:
+        """The kept session when its access token outlives one more request; None when there is no
+        session yet or the token is at its end (then atproto must refresh it first)."""
+        client = self._client
+        if client is None:
+            return None
+        try:
+            session = Session.decode(client.export_session_string())
+            exp = session.access_jwt_payload.exp
+        except Exception:  # noqa: BLE001
+            return None
+        if not exp or exp - time.time() <= (self._request_s or http.DEFAULT_TIMEOUT):
+            return None
+        return session
+
+    def _session_upkeep(self) -> None:
+        """Worker thread: log in when there is no session; else send atproto's smallest call
+        (getSession), before which the library refreshes a token near its end, as it does before
+        every call the sync path sends."""
+        kept = self._client is not None
+        client = self._ensure_client()
+        if client is None or not kept:
+            return
+        try:
+            self._held(client.com.atproto.server.get_session)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Bluesky session refresh failed: %s", exc)
+
+    async def _asession(self) -> Optional[Session]:
+        session = self._live_session()
+        if session is None:
+            await anyio.to_thread.run_sync(self._session_upkeep, limiter=portal.IO_LANE)
+            session = self._live_session()
+        return session
+
+    async def afetch_url(self, url: str) -> Optional[Document]:
         host = urlparse(url).hostname or ""
         if "bsky.app" not in host and "bsky.social" not in host:
             return None
@@ -177,17 +252,17 @@ class BlueskyAdapter:
         parts = urlparse(url).path.strip("/").split("/")
         if len(parts) < 4 or parts[0] != "profile" or parts[2] != "post":
             return None
-        handle = parts[1]
-        rkey = parts[3]
+        # atproto's sync client (login, the two calls, the declared gate): a worker thread
+        return await anyio.to_thread.run_sync(self._read_post, parts[1], parts[3], limiter=portal.IO_LANE)
+
+    def _read_post(self, handle: str, rkey: str) -> Optional[Document]:
         client = self._ensure_client()
         if client is None:
             return None
         try:
-            with upstreams.hold("bluesky", request_s=self._request_s):
-                profile = client.get_profile(handle)
+            profile = self._held(client.get_profile, handle)
             at_uri = f"at://{profile.did}/app.bsky.feed.post/{rkey}"
-            with upstreams.hold("bluesky", request_s=self._request_s):
-                thread = client.get_post_thread(at_uri)
+            thread = self._held(client.get_post_thread, at_uri)
             return self._post_to_document(thread.thread.post)
         except Exception as exc:  # noqa: BLE001
             logger.warning("Bluesky fetch_url failed: %s", exc)
@@ -204,7 +279,7 @@ class BlueskyAdapter:
         the search refuses (401 / 403 / expired token) is logged in again ONCE, as a fresh client
         would; a failed re-login is False."""
         if not auth.is_configured("bluesky"):
-            return False, "credentials not configured (see ~/.omniseek/credentials/bluesky.json.template)"
+            return False, f"credentials not configured: {where.show(where.credentials())}/bluesky.json ({auth.template_hint('bluesky')})"
         kept = self._client is not None
         client = self._ensure_client()
         if client is None:
@@ -225,20 +300,21 @@ class BlueskyAdapter:
         if isinstance(exc, upstreams.UpstreamBusy):
             return None, f"not verified: {what} held back by the declared Bluesky gate, nothing sent ({exc})"
         if _xrpc_status(exc) == 429:
-            return None, f"{_probe.rate_limited(_PROBE_HOST, _xrpc_retry_after(exc))} ({what})"
+            wait = upstreams.parse_retry_after(getattr(_xrpc_response(exc), "headers", None))
+            return None, f"{_probe.rate_limited(_PROBE_HOST, wait)} ({what})"
         why = f": {type(exc).__name__}" if exc is not None else ""
         return False, f"{what} failed{why}"
 
     def _probe_search(self, client: Client):
         try:
-            with upstreams.hold("bluesky", request_s=self._request_s):
-                resp = client.app.bsky.feed.search_posts({"q": _PROBE_QUERY, "limit": 1})
+            resp = self._held(client.app.bsky.feed.search_posts, {"q": _PROBE_QUERY, "limit": 1})
         except upstreams.UpstreamBusy as exc:
             return None, f"not verified: the declared Bluesky gate was busy, nothing sent ({exc})"
         except Exception as exc:  # noqa: BLE001
             status = _xrpc_status(exc)
             if status == 429:
-                return None, _probe.rate_limited(_PROBE_HOST, _xrpc_retry_after(exc))
+                wait = upstreams.parse_retry_after(getattr(_xrpc_response(exc), "headers", None))
+                return None, _probe.rate_limited(_PROBE_HOST, wait)
             if status in (401, 403) or _xrpc_error(exc) in ("ExpiredToken", "InvalidToken"):
                 return _RELOGIN
             return False, f"search probe failed: {type(exc).__name__}" + (f" (HTTP {status})" if status else "")
@@ -255,12 +331,7 @@ class BlueskyAdapter:
         author = post.author
         text = getattr(record, "text", "") or ""
         created_at = getattr(record, "created_at", None)
-        date = None
-        if created_at:
-            try:
-                date = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
-            except (ValueError, TypeError):
-                date = None
+        date = to_utc(created_at)
 
         # Construct canonical Bluesky URL
         rkey = post.uri.rsplit("/", 1)[-1] if post.uri else ""

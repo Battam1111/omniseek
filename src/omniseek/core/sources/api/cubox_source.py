@@ -1,9 +1,7 @@
 """Cubox: the card list of the owner's Cubox account (list only, never the article body).
 
-Feeds the shadow run (``shadow_feed = True``): a daily sensor over this source finds the new
-cards and the sensor writes them to ``~/.omniseek/state/shadow_feed/cubox.jsonl`` (format in
-``omniseek.core.shadow_feed``). The digest's own Cubox puller keeps running until the comparison
-passes; this source only LISTS.
+Named searches and sensors use it; it only LISTS. The digest's own Cubox puller is the one that
+pulls cards into the digest (OmniSeek's shadow run beside it was withdrawn on 2026-10-20).
 
 Endpoint: ``POST https://cubox.pro/c/api/cli/card/filter`` (the endpoint the official cubox-cli and
 the digest puller call) with ``Authorization: Bearer <key>`` and a JSON body ``{limit, archived,
@@ -13,7 +11,7 @@ tags, folder. The filter answers ONE archive state per call, and the digest pull
 it has ingested, so a run lists both ``archived: false`` and ``archived: true``, newest first, paging
 by ``last_card_id`` until a card is older than the lookback.
 
-Credential: ``~/.omniseek/credentials/cubox.json`` holding ``{"token": "<API key>"}`` (the whole API
+Credential: ``<credentials>/cubox.json`` holding ``{"token": "<API key>"}`` (the whole API
 link pasted as the token also works: its last path segment is the key, the puller's rule). No file,
 or no key in it: the search returns ``[]`` with a diagnostic saying so; it never raises and never
 guesses another location.
@@ -22,7 +20,7 @@ Quota (the hard limit): Cubox caps API calls per account per day, 200 on a stand
 a premium one (help.cubox.pro/save/89d3, checked 2026-10-10), and answers ``-3030`` past it; the
 puller assumes 500 and which tier this account has is not measured yet. The
 quota is SHARED with the digest puller, so this source keeps its own persistent counter
-(``~/.omniseek/state/cubox_budget.json``, override ``$EYE_CUBOX_BUDGET_PATH``) and runs only when:
+(``<state>/cubox_budget.json``, override ``$EYE_CUBOX_BUDGET_PATH``) and runs only when:
 - fewer than 50 calls of ours today (local day, the puller's day),
 - at least 2 hours since our last run,
 - Cubox has not answered ``-3030`` today (to us, or to the puller: read from its state file,
@@ -39,7 +37,6 @@ import datetime as _dt
 import json
 import logging
 import os
-import re
 import tempfile
 import threading
 import time
@@ -47,8 +44,9 @@ from pathlib import Path
 from typing import Optional
 
 from omniseek.core import auth, diag, http
-from omniseek.core.normalize import Document, jsonsafe, keyword_score_filter
+from omniseek.core.normalize import Document, jsonsafe, keyword_score_filter, to_utc
 from omniseek.core.sources.api._base import BaseAPIAdapter
+from omniseek import where
 
 logger = logging.getLogger(__name__)
 
@@ -67,20 +65,20 @@ STOP_BELOW_REMAINING = 60
 
 ENV_BUDGET = "EYE_CUBOX_BUDGET_PATH"
 ENV_PULLER_STATE = "EYE_CUBOX_PULLER_STATE"
-_DEFAULT_PULLER_STATE = None  # the public build ships no default puller state
+_DEFAULT_PULLER_STATE = where.cubox_puller_state()
 
 _WILDCARD = {"", "*", "all"}
 _ERR_TEXT = {
     3030: "Cubox says today's call quota is used up (-3030); listing resumes tomorrow",
     1025: "Cubox says the API needs a premium account (1025)",
-    1100: "Cubox rejected the API key (1100): re-copy it into ~/.omniseek/credentials/cubox.json",
+    1100: f"Cubox rejected the API key (1100): re-copy it into {where.show(where.credentials())}/cubox.json",
 }
 _budget_lock = threading.Lock()
 
 
 def _budget_path() -> Path:
     env = os.environ.get(ENV_BUDGET, "").strip()
-    return Path(env).expanduser() if env else Path.home() / ".omniseek" / "state" / "cubox_budget.json"
+    return Path(env).expanduser() if env else where.state() / "cubox_budget.json"
 
 
 def _puller_state_path() -> Optional[Path]:
@@ -184,19 +182,6 @@ def _token() -> str:
     return tok
 
 
-_TZ_NOCOLON = re.compile(r"([+-]\d{2})(\d{2})$")
-
-
-def parse_time(value) -> Optional[_dt.datetime]:
-    if not value or not isinstance(value, str):
-        return None
-    s = value.strip().replace("Z", "+00:00")
-    s = _TZ_NOCOLON.sub(r"\1:\2", s)
-    try:
-        d = _dt.datetime.fromisoformat(s)
-    except ValueError:
-        return None
-    return d if d.tzinfo else d.replace(tzinfo=_dt.timezone.utc)
 
 
 def _note(reason: str) -> None:
@@ -228,12 +213,11 @@ class CuboxAdapter(BaseAPIAdapter):
     search_label = "cards"
     url_host = "cubox.pro"
     sensor_window = 2 * PAGE * MAX_PAGES_PER_STATE
-    shadow_feed = True
 
-    def search(self, query: str, limit: int = 10) -> list[Document]:
+    async def asearch(self, query: str, limit: int = 10) -> list[Document]:
         # ONE cache entry and ONE upstream run serve every query and limit: the quota is too tight for
         # a separate run per drill. A non-wildcard query filters the cached window lexically.
-        docs = super().search("*", self.sensor_window)
+        docs = await super().asearch("*", self.sensor_window)
         q = (query or "").strip().lower()
         if q not in _WILDCARD:
             docs = keyword_score_filter(docs, query)
@@ -242,7 +226,7 @@ class CuboxAdapter(BaseAPIAdapter):
     def _raw_fetch(self, query: str, limit: int) -> list:
         token = _token()
         if not token:
-            _note("cubox: no credential; put {\"token\": \"<API key>\"} in ~/.omniseek/credentials/cubox.json "
+            _note(f"cubox: no credential; put {{\"token\": \"<API key>\"}} in {where.show(where.credentials())}/cubox.json "
                   "(nothing was sent)")
             return []
         with _budget_lock:
@@ -295,7 +279,7 @@ class CuboxAdapter(BaseAPIAdapter):
                 for card in page:
                     if not isinstance(card, dict) or not card.get("id"):
                         continue
-                    t = parse_time(card.get("create_time"))
+                    t = to_utc(card.get("create_time"))
                     if t is not None and t < cutoff:
                         older = True
                         break
@@ -306,11 +290,11 @@ class CuboxAdapter(BaseAPIAdapter):
             if stop:
                 break
         epoch = _dt.datetime.min.replace(tzinfo=_dt.timezone.utc)
-        return sorted(cards.values(), key=lambda c: parse_time(c.get("create_time")) or epoch, reverse=True)
+        return sorted(cards.values(), key=lambda c: to_utc(c.get("create_time")) or epoch, reverse=True)
 
-    def health_check(self) -> tuple[Optional[bool], str]:
+    async def ahealth_check(self) -> tuple[Optional[bool], str]:
         if not _token():
-            return False, "no credential: ~/.omniseek/credentials/cubox.json is missing or has no token"
+            return False, f"no credential: {where.show(where.credentials())}/cubox.json is missing or has no token"
         return None, "not probed: the daily call quota is shared with the digest puller"
 
     def _to_document(self, card: dict) -> Optional[Document]:
@@ -333,7 +317,7 @@ class CuboxAdapter(BaseAPIAdapter):
             url=url,
             title=title,
             content=card.get("description") or "",
-            date=parse_time(card.get("create_time")),
+            date=to_utc(card.get("create_time")),
             tags=tags,
             metadata={
                 "cubox_url": cubox_url,

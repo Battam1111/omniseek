@@ -17,14 +17,11 @@ URL.
 from __future__ import annotations
 
 import logging
-from datetime import datetime
 from typing import Optional
 from urllib.parse import urlparse
 
-import httpx
-
-from omniseek.core import diag
-from omniseek.core.normalize import Document, jsonsafe
+from omniseek.core import diag, http
+from omniseek.core.normalize import Document, jsonsafe, to_utc
 from omniseek.core.sources.scrape._rss import RSSAdapterBase
 
 logger = logging.getLogger(__name__)
@@ -40,7 +37,7 @@ class PyPIAdapter(RSSAdapterBase):
     url_pattern = r"pypi\.org"
     cache_ttl = 1800  # 30 min — PyPI updates frequently
 
-    def fetch_url(self, url: str) -> Optional[Document]:
+    async def afetch_url(self, url: str) -> Optional[Document]:
         # Pattern: pypi.org/project/<name>/  or  pypi.org/project/<name>/<version>/
         host = (urlparse(url).hostname or "").lower()
         if "pypi.org" not in host:
@@ -50,12 +47,15 @@ class PyPIAdapter(RSSAdapterBase):
             return None
         package_name = path[1]
         try:
-            resp = httpx.get(
-                f"https://pypi.org/pypi/{package_name}/json",
+            resp = await http.adirect(
+                "GET", f"https://pypi.org/pypi/{package_name}/json",
                 headers={"User-Agent": USER_AGENT},
                 timeout=TIMEOUT,
             )
             if resp.status_code == 404:
+                # PyPI's JSON API has no project of this name: a settled "not there", the read ends here.
+                diag.note("pypi.fetch_url", url=url, status=404, final=True,
+                          body=f"PyPI 上没有这个包（{package_name}，JSON API 回 404）")
                 return None
             resp.raise_for_status()
             data = resp.json()
@@ -79,18 +79,14 @@ class PyPIAdapter(RSSAdapterBase):
             files = releases[latest_version]
             if isinstance(files, list) and files:
                 upload_time = files[0].get("upload_time_iso_8601") or files[0].get("upload_time")
-                if upload_time:
-                    try:
-                        date = datetime.fromisoformat(upload_time.replace("Z", "+00:00"))
-                    except (ValueError, TypeError):
-                        pass
+                date = to_utc(upload_time)
 
         return Document(
             source="pypi",
             source_id=package_name,
             url=home,
             title=title,
-            content=summary or "(no summary)",
+            content=summary or "",
             author=author,
             date=date,
             tags=info.get("keywords", "").split(",")[:10] if info.get("keywords") else [],

@@ -158,27 +158,8 @@ class WorldBankStatsAdapter(BaseAPIAdapter):
         "?format=json&per_page=1"
     )
 
-    def _raw_fetch(self, query: str, limit: int) -> list:
-        """Resolve the (country, indicator) convention, GET the series, and return
-        it as a SINGLE aggregation unit [(country, indicator, rows)] so the base's
-        per-record loop yields exactly one time-series doc. Any failure (bad query,
-        network, malformed envelope) -> [] (the adapter contract)."""
-        parsed = _parse_query(query)
-        if parsed is None:
-            return []
-        country, indicator = parsed
-        raw = http.get_json(
-            API_URL.format(country=country, indicator=indicator),
-            params={"format": "json", "date": _DATE_RANGE, "per_page": _PER_PAGE},
-            timeout=15,
-        )
-        rows = self._rows(raw)
-        if not rows:
-            return []
-        return [(country, indicator, rows)]
-
     async def _araw_fetch(self, query: str, limit: int) -> list:
-        """Async twin of ``_raw_fetch``: byte-faithful mirror (same query parse, same URL / params /
+        """Async replacement of the deleted sync ``_raw_fetch`` (11-04, S9; this is the only one now): byte-faithful mirror (same query parse, same URL / params /
         timeout, same ``_rows`` decode, same None/[] contract). ONLY the shared-http egress is swapped
         for its async twin (``http.get_json`` -> ``await http.aget_json``)."""
         parsed = _parse_query(query)
@@ -194,13 +175,6 @@ class WorldBankStatsAdapter(BaseAPIAdapter):
         if not rows:
             return []
         return [(country, indicator, rows)]
-
-    async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async twin of ``search`` -> AsyncSearchCapable. Shares the base async cache round-trip
-        (``_aapi_search``); egress via ``_araw_fetch``; mapping via the SAME pure-CPU ``_to_document``
-        (byte-identical to ``search``)."""
-        return await self._aapi_search(
-            query, limit, araw_fetch=lambda: self._araw_fetch(query, limit))
 
     def _to_document(self, raw) -> Optional[Document]:
         """One aggregation unit (country, indicator, rows) -> one time-series doc."""

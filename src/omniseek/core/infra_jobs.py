@@ -2,9 +2,12 @@
 now zero-arg job fns the in-process scheduler (omniseek.core.jobs) runs on their declared schedules.
 
 WHY THEY MOVED (the derived architecture): the test for what stays OUTSIDE the organ is "must this
-still run when the organ is dead?" These do NOT -- a source-health probe, a wewe-rss feed check, an
-xhs session warm, log rotation, the monthly curator pass, the weekly source audit, the weekly
-digest are all self-maintenance of a LIVE eye. So each old script's LOOP body becomes a job fn here;
+still run when the organ is dead?" These do NOT -- a source-health probe, an xhs session warm, the
+idle-browser reaper and log rotation are all self-maintenance of a LIVE eye. (The wechat2rss probe,
+the monthly curator pass and the weekly source audit were retired on 2026-10-19: wechat is probed
+with every other source by source-health, and the curator tools stay callable by hand. The NSERC
+cache prime and the weekly reading list were retired on 2026-10-20, with the NSERC source.) So each
+old script's LOOP body becomes a job fn here;
 its hard-won lessons (the consecutive-fail thresholds, the cooldowns, the state-file formats, the
 safety rationales) are transplanted verbatim, because those lessons are what kept the fleet quiet
 and safe. The push path changes from scripts/_sentinel_common (urllib, out-of-process) to
@@ -26,20 +29,20 @@ import re
 import subprocess
 import sys
 import time
-from datetime import datetime, timezone
-from email.utils import parsedate_to_datetime
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
+from omniseek import where
 
 log = logging.getLogger(__name__)
 
-_STATE = Path.home() / ".omniseek" / "state"
-_LOG_DIR = Path.home() / ".omniseek" / "logs"
+_STATE = where.state()
+_LOG_DIR = where.logs()
 
 
 # ── tiny local state helpers (the _sentinel_common load/save idiom, atomic) ───────────────────────
-# In-process we cannot import scripts/_sentinel_common (it is the sentinel's isolated module and is
-# not on the src path). These mirror its atomic load_state/save_state/should_alert so the state-file
+# These were transplanted from the old external watchdog's helper module (scripts/_sentinel_common,
+# retired 10-20 with it) when the crons moved in-process; they keep its atomic load_state/save_state/should_alert so the state-file
 # FORMATS + cooldown semantics the old crons relied on are preserved byte-for-byte.
 
 def _load_state(path: Path) -> dict:
@@ -58,7 +61,7 @@ def _load_state(path: Path) -> dict:
 
 def _save_state(path: Path, data: dict) -> None:
     # Every infra state file is written here, and their message fields (health "unmeasured" /
-    # "unverified" notes, audit and curator summaries) can quote an exception that carries a full
+    # "unverified" notes, warmer summaries) can quote an exception that carries a full
     # request address. Mask on the way to disk; the caller's dict is left as it was.
     from omniseek import redact as _redact
     data = _redact.redact_obj(data)
@@ -108,7 +111,7 @@ def _alert(title: str, body: str, *, questions=None, **_ignored) -> None:
 
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
-# JOB: source-health probe   (transplanted from cron_watchdog.py 源体检 half; daily@05:00)
+# JOB: source-health probe   (transplanted from cron_watchdog.py 源体检 half; every:21600s, CDP once a day)
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
 # The health watchdog detects SILENT source decay: an API deprecates a field, a site changes its
 # HTML, a feed 404s, or a logged-in CDP session EXPIRES -- in an ~190-source fleet that failure is
@@ -122,15 +125,27 @@ def _alert(title: str, body: str, *, questions=None, **_ignored) -> None:
 # account-risky activity. A DEAD CDP Chrome is relaunched (its launchd KeepAlive is
 # SuccessfulExit=false, so a clean quit is not auto-relaunched); a FAILED self-heal escalates to an alert
 # (the CDP safety net itself is down).
-# State: ~/.omniseek/state/health-watchdog-state.json (unchanged path -> the existing state carries).
+# ONE job, two lanes (2026-10-19; it used to be two jobs, a daily full run at 05:00 and a 6h fast
+# non-CDP run). Every 6h run probes the non-CDP sources, so a dead open-API/RSS source surfaces in
+# ~6-12h (N_CONSECUTIVE=2). The CDP lane (heal + serial CDP probes + the Chrome liveness rows) rides
+# one run a day, decided by when a run last carried it (state "cdp_lane_at", the run's START epoch;
+# see _cdp_lane_due): every fourth run carries it, once a day as before, never twice.
+# State: <state>/health-watchdog-state.json (unchanged path -> the existing state carries).
 _HEALTH_STATE = _STATE / "health-watchdog-state.json"
 N_CONSECUTIVE = 2                       # consecutive failed runs before alerting
 PROBE_WORKERS = 8                       # moderate -- 16-wide caused census false-fails
 REALERT_COOLDOWN_S = 3 * 24 * 3600      # while still down, re-nag at most every 3d
+HEALTH_EVERY_S = 6 * 3600               # the job's interval (jobs.py registers every:21600s, a test pins it)
+HEALTH_BUDGET_S = 900                   # the job's wall-clock budget (jobs.py registers it from here); the
+                                        # exit-node sweep a run may end with must finish inside it too
+CDP_LANE_EVERY_S = 24 * 3600            # the CDP lane's cadence, the old daily full run's
 
 # CDP (logged-in browser) sources -- probed INDIVIDUALLY + SERIALLY (login-state visibility).
 # xiaohongshu lives on the ISOLATED 9223 Chrome (小号); the rest on the shared 9222.
-_CDP_SOURCES = {"xiaohongshu", "xiaomuchong", "zhihu", "zhihu_users", "yipinsanfendi", "scrape_js_sites"}
+# xianyu (EYE-XIANYU 2026-10-24): its check is a real search on a 小号 with a daily cap, so it rides the
+# daily serial lane, not the 6-hourly one (four checks a day would be four account touches).
+_CDP_SOURCES = {"xiaohongshu", "xiaomuchong", "zhihu", "zhihu_users", "yipinsanfendi", "scrape_js_sites",
+                "xianyu"}
 # CDP-Chrome instances to liveness-check directly (label -> CDP URL). None = default 9222.
 _CDP_INSTANCES = {"9222-shared": None, "9223-xhs": "http://127.0.0.1:9223"}
 # SEALED sources (switched off on purpose) are not a list kept here: each run reads them off the
@@ -156,8 +171,9 @@ def _prune_stale_health_rows(state: dict, live: set) -> dict:
         throw away the fail history of every source a profile happens to gate (on the live deployment today the
         walled tier is deny-by-default and the profile re-enables it: 0 sources are profile-disabled,
         so that prune would look harmless right up until a profile changed).
-      - the 6h fast lane probes only the non-CDP sources. Pruning by "probed" would delete every CDP
-        source's row twice a day and hand the daily lane a blank slate.
+      - a run without the CDP lane (three of every four 6h runs) probes only the non-CDP sources.
+        Pruning by "probed" would delete every CDP source's row on those runs and hand the CDP lane
+        a blank slate.
     A "_"-prefixed row is infrastructure and is never a prune candidate.
 
     Fail-safe: an EMPTY ``live`` means the registry did not load, not that every source vanished, so
@@ -173,7 +189,8 @@ def _prune_stale_health_rows(state: dict, live: set) -> dict:
     fails, status, alerts = _d("fails"), _d("last_status"), _d("_alerts")
     unmeasured = _d("unmeasured")  # the third state gets pruned like the other two, or it fossilizes
     unverified = _d("unverified")  # and the fourth, for the same reason
-    rows = set(fails) | set(status) | set(unmeasured) | set(unverified)
+    fail_at = _d("fail_at")        # the time of each count's last failed check, beside the count
+    rows = set(fails) | set(status) | set(unmeasured) | set(unverified) | set(fail_at)
     written_infra = {f"_cdp:{label}" for label in _CDP_INSTANCES}
     orphan_infra = sorted(r for r in rows
                           if r.startswith(_INFRA_ROW_PREFIX) and r not in written_infra)
@@ -185,14 +202,16 @@ def _prune_stale_health_rows(state: dict, live: set) -> dict:
         status.pop(n, None)
         unmeasured.pop(n, None)
         unverified.pop(n, None)
+        fail_at.pop(n, None)
         alerts.pop(f"down:{n}", None)
     return {"pruned": stale, "orphan_infra": orphan_infra, "skipped": ""}
 
 
 def _health_probe(adapter) -> tuple[Optional[bool], str, bool]:
     """BOUNDED health_check (per-source hard timeout -> can never hang the loop) with one in-run
-    retry to absorb transient blips. Routes through the same fetcher.health_check_outcome primitive
-    the live MCP probe uses. Returns ``(ok, msg, completed)``.
+    retry to absorb transient blips. Routes through the same fetcher.ahealth_check_outcome primitive
+    the live MCP probe uses, reached from this job's thread through the portal (the service's loop).
+    Returns ``(ok, msg, completed)``.
 
     THREE results, and two kinds of None. ``ok`` True = verified working, False = verified broken,
     None = not verified. ``completed`` tells the two Nones apart: False means OUR probe hit its hard
@@ -210,12 +229,12 @@ def _health_probe(adapter) -> tuple[Optional[bool], str, bool]:
     An unverified answer is NOT retried: the adapter chose not to ask (a quota it must not spend, a
     gate that is busy now), so a second call three seconds later would either say the same or spend
     exactly what the first one declined to spend."""
-    from omniseek.core import fetcher
+    from omniseek.core import fetcher, portal
     ok: Optional[bool] = False
     msg = "?"
     completed = True
     for attempt in (1, 2):
-        ok, msg, completed = fetcher.health_check_outcome(adapter)
+        ok, msg, completed = portal.run(fetcher.ahealth_check_outcome, adapter)
         if ok:
             return True, str(msg), True
         if ok is None and completed:
@@ -223,6 +242,19 @@ def _health_probe(adapter) -> tuple[Optional[bool], str, bool]:
         if attempt == 1:
             time.sleep(3)
     return (None if ok is None else False), str(msg), completed
+
+
+def _probe_tapped(name: str, adapter, noted: dict) -> tuple[Optional[bool], str, bool]:
+    """``_health_probe`` under a diag tap: every failure record the probe's attempts noted (whatever the
+    source's own check armed and drained inside it) lands in ``noted[name]``, so a source that failed
+    leaves the addresses it failed on for the exit-node sweep (EYE-EXIT). One list per source: each
+    probe thread taps in its own context."""
+    from omniseek.core import diag
+    with diag.tap() as seen:
+        try:
+            return _health_probe(adapter)
+        finally:
+            noted[name] = seen
 
 
 # "They refuse us" is not "we are broken", and the two were indistinguishable in the alert. A 403
@@ -241,28 +273,109 @@ def _is_refused(msg: object) -> bool:
 
 
 def _health_track(name: str, ok: Optional[bool], msg: str, fails: dict, alerts: dict,
-                  newly_down: list, recovered: list) -> None:
+                  newly_down: list, recovered: list, fail_at: Optional[dict] = None,
+                  fetched_at: Optional[float] = None, now: Optional[float] = None) -> str:
     """Shared consecutive-fail / recovery bookkeeping for one probed entity (cron_watchdog._track).
 
     ``ok is None`` means we learned nothing about this source this run: either OUR probe timed out
     (``unmeasured``) or the probe finished without asking the upstream anything (``unverified``).
-    The counter must not move in EITHER direction: incrementing it quarantines a healthy source (the
-    2026-08-19 ten-source false-down), and zeroing it would erase a real failure streak on a
+    The counter must not move in EITHER direction on that alone: incrementing it quarantines a healthy
+    source (the 2026-08-19 ten-source false-down), and zeroing it would erase a real failure streak on a
     coincidental timeout or a busy gate. No alert either way. The run body records the name in
-    ``unmeasured`` or ``unverified`` so the gap stays visible."""
+    ``unmeasured`` or ``unverified`` so the gap stays visible.
+
+    The one exception is evidence from outside the check (EYE-NONE-RESET, 2026-11-07): ``fail_at``
+    {name: epoch of its last failed check} is kept here, and ``fetched_at`` is the source's last live
+    fetch that worked (fetcher.fetched_ok_at). A None after a fetch that worked LATER than the last
+    failed check clears the count like a True would (recovered when it had been reported down).
+    Without that, a check answering "not probed" while the listing is cached kept a repaired source
+    reading as down for good: the recall ingest refetches on its own schedule and every check met a
+    warm cache. A timeout, a busy gate, or no fetch since the failure still moves nothing.
+    Returns the reason line when such a fetch cleared the count, else ""."""
+    t = time.time() if now is None else now
     if ok is None:
-        return
+        failed_at = (fail_at or {}).get(name)
+        if (fails.get(name, 0) and isinstance(failed_at, (int, float))
+                and isinstance(fetched_at, (int, float)) and fetched_at > failed_at):
+            if fails[name] >= N_CONSECUTIVE:
+                recovered.append(name)
+            why = (f"上一次探失败（{_clock(failed_at)}）之后，{_clock(fetched_at)} 成功取数过，"
+                   f"连续失败数 {fails[name]} 清零")
+            fails[name] = 0
+            fail_at.pop(name, None)
+            return why
+        return ""
     prev = fails.get(name, 0)
     if ok:
         if prev >= N_CONSECUTIVE:
             recovered.append(name)
         fails[name] = 0
+        if fail_at is not None:
+            fail_at.pop(name, None)
     else:
         fails[name] = prev + 1
+        if fail_at is not None:
+            fail_at[name] = t
         if fails[name] == N_CONSECUTIVE:
             newly_down.append((name, msg))
         elif fails[name] > N_CONSECUTIVE and _should_alert(f"down:{name}", alerts, REALERT_COOLDOWN_S):
             newly_down.append((name, msg))  # still down -- periodic re-nag
+    return ""
+
+
+def _clock(epoch: float) -> str:
+    return datetime.fromtimestamp(epoch).strftime("%m-%d %H:%M")
+
+
+def _track_probed(state: dict, results: dict, probed: list, retired: set, fails: dict, alerts: dict,
+                  newly_down: list, recovered: list, fetched_ok_at, now: float) -> dict:
+    """Run ``_health_track`` over this run's probed sources (retired ones excluded) and return
+    {name: reason} for the counts a later live fetch cleared (the reason is also put in front of that
+    source's message in ``results``, so its unverified / unmeasured row says why).
+
+    ``fail_at`` lives in ``state`` beside ``fails``. A row that carries a count but no ``fail_at`` (written
+    before 2026-11-07) gets ``now``: later than its real last failure, so only a fetch after this run
+    can clear it, never one from before the failure. ``fetched_ok_at`` is fetcher.fetched_ok_at
+    (a parameter so a replay can pass a record of its own)."""
+    fail_at = state.get("fail_at") if isinstance(state.get("fail_at"), dict) else {}
+    for n, c in fails.items():
+        if c and n not in fail_at:
+            fail_at[n] = now
+    cleared: dict[str, str] = {}
+    for n in probed:
+        if n in retired:
+            continue  # no fail streak, no alarm; the alive-again transition is handled by the caller
+        ok, msg, completed = results[n]
+        why = _health_track(n, ok, msg, fails, alerts, newly_down, recovered, fail_at,
+                            fetched_ok_at(n) if ok is None else None, now)
+        if why:
+            cleared[n] = why
+            results[n] = (ok, f"{why}；{msg}", completed)  # reason first: the row is cut at 200
+    state["fail_at"] = fail_at
+    return cleared
+
+
+def _gate_held_rounds(state: dict, results: dict, probed: list, fails: dict) -> None:
+    """A source whose check said it failed, re-read as "not verified" only because one of OmniSeek's
+    gates also refused a request (``_probe.held_by_gate``), N_CONSECUTIVE runs in a row, is reported
+    DOWN from that run on (EYE-GATE-FIX B, 2026-10-20). lobste.rs read "not verified" for two days
+    while its host completed no handshake at all. A check that asked nothing (a busy gate in front of
+    the whole check, a metered quota) is not this and stays not verified. The round count is kept in
+    the state's ``gate_held`` map (merged like the other maps, so a run that did not probe a source
+    keeps its count); any other answer clears it. Mutates ``results`` and ``fails`` in place."""
+    from omniseek.core import _probe
+    rounds = state.get("gate_held") if isinstance(state.get("gate_held"), dict) else {}
+    for n in probed:
+        ok, msg, completed = results[n]
+        if not (ok is None and completed and _probe.held_by_gate(msg)):
+            rounds.pop(n, None)
+            continue
+        rounds[n] = int(rounds.get(n, 0)) + 1
+        if rounds[n] >= N_CONSECUTIVE:
+            results[n] = (False, f"连续 {rounds[n]} 轮因闸未核实，照坏报: {msg}", True)
+            # the failure streak starts where the held rounds reached, so this run raises the alarm
+            fails[n] = max(int(fails.get(n, 0)), N_CONSECUTIVE - 1)
+    state["gate_held"] = rounds
 
 
 def _cdp_label_map() -> dict:
@@ -280,7 +393,7 @@ def _cdp_label_map() -> dict:
         return {"9222-shared": by_port.get(9222), "9223-xhs": by_port.get(9223)}
     except Exception as exc:  # noqa: BLE001 -- fall back to the known labels if services.py is unreadable
         log.debug("cdp label map from services.py failed (%s); using literals", exc)
-        return {"9222-shared": "com.omniseek.cdp.cn-forums", "9223-xhs": "com.omniseek.cdp.xhs"}
+        return {"9222-shared": where.label("cdp-cn-forums"), "9223-xhs": where.label("cdp-xhs")}
 
 
 def _heal_cdp_chrome() -> list[str]:
@@ -290,6 +403,10 @@ def _heal_cdp_chrome() -> list[str]:
     to an alert (otherwise the failure is silent)."""
     import subprocess
     from omniseek.core.sources.walled._cdp import cdp_health
+    not_live = where.not_live_reason()
+    if not_live:
+        log.info("self-heal: skipped, this process is not the live eye (%s)", not_live)
+        return []
     launchd = _cdp_label_map()
     failed: list[str] = []
     for label, url in _CDP_INSTANCES.items():
@@ -321,29 +438,37 @@ def _heal_cdp_chrome() -> list[str]:
     return failed
 
 
-def run_source_health_fast() -> dict:
-    """The fast lane: probe ONLY the non-CDP sources (cheap, no browser), scheduled every 6h so a
-    dead source surfaces in ~6-12h instead of the daily lane's worst-case ~48h. Shares the watchdog
-    state + consecutive-fail counter with the full daily run; CDP heal/probe stays daily + serial
-    (gentle + account-safe). See run_source_health(scope=...)."""
-    return run_source_health(scope="noncdp")
+def _cdp_lane_due(state: dict, now: float) -> bool:
+    """Whether this run carries the CDP lane. PURE. Due when no run ever carried it, or the last one
+    that did started at least CDP_LANE_EVERY_S minus half a run interval ago. The half interval
+    absorbs how late a run starts behind the other jobs of its scheduler tick (it never starts early),
+    and is less than one interval, so the lane lands on every fourth 6h run: once a day, not twice."""
+    last = state.get("cdp_lane_at")
+    if not isinstance(last, (int, float)):
+        return True
+    return (now - last) >= CDP_LANE_EVERY_S - HEALTH_EVERY_S / 2
 
 
-def run_source_health(scope: str = "all") -> dict:
+def run_source_health(scope: Optional[str] = None) -> dict:
     """One source-health run (the cron_watchdog 源体检 half, minus the dissolved cron-liveness half):
     heal dead CDP Chrome, probe every source's health_check (non-CDP concurrent, CDP serial), track
     consecutive fails, and alert newly-down / recovered (cooldown-gated). Returns a small summary.
 
-    scope="all" (daily): the full run (heal CDP, probe non-CDP + CDP + infra). scope="noncdp" (the
-    6h fast lane): probe ONLY non-CDP sources, skip the CDP heal/probe/infra entirely, and MERGE the
-    result into the stored last_status (never dropping the CDP entries the daily run owns)."""
+    scope=None (the scheduled job, every 6h): carry the CDP lane when it is due (_cdp_lane_due),
+    else probe the non-CDP sources only.
+    scope="all" forces the full run (heal CDP, probe non-CDP +
+    CDP + infra); scope="noncdp" forces the non-CDP run, which skips the CDP heal/probe/infra entirely
+    and MERGES its result into the stored state (never dropping the CDP entries the CDP lane owns)."""
+    started = time.time()
+    if scope is None:
+        scope = "all" if _cdp_lane_due(_load_state(_HEALTH_STATE), started) else "noncdp"
+    full = (scope != "noncdp")
     from omniseek.server import load_sources
     from concurrent.futures import ThreadPoolExecutor
     load_sources()
     from omniseek.core import fetcher
 
-    full = (scope != "noncdp")
-    heal_failed = _heal_cdp_chrome() if full else []  # CDP heal is daily-only (needs a browser)
+    heal_failed = _heal_cdp_chrome() if full else []  # CDP heal rides the CDP lane only (needs a browser)
 
     names = sorted(fetcher.all_adapter_names())
     # RETIRED sources are PROBED too (since 2026-10-04), and only watched for coming back: a curator
@@ -367,8 +492,12 @@ def run_source_health(scope: str = "all") -> dict:
     noncdp = [n for n in names if n not in _CDP_SOURCES and n not in sealed]
     cdp = [n for n in names if n in _CDP_SOURCES and n not in sealed] if full else []  # CDP ones, retired or not: full lane only
 
+    # name -> the failure records its probe noted (_probe_tapped): the addresses a source failed on,
+    # read by the exit-node sweep below.
+    noted: dict[str, list] = {}
+
     def probe_named(n):
-        return n, _health_probe(fetcher.get_adapter(n))
+        return n, _probe_tapped(n, fetcher.get_adapter(n), noted)
 
     # name -> (ok, msg, completed): ok True / False / None, see _health_probe
     results: dict[str, tuple[Optional[bool], str, bool]] = {}
@@ -376,7 +505,7 @@ def run_source_health(scope: str = "all") -> dict:
         for n, res in ex.map(probe_named, noncdp):
             results[n] = res
     for n in cdp:  # CDP: SERIAL (one browser tab at a time -- gentle + account-safe)
-        results[n] = _health_probe(fetcher.get_adapter(n))
+        results[n] = _probe_tapped(n, fetcher.get_adapter(n), noted)
 
     infra: dict[str, tuple[bool, str]] = {}
     if full:
@@ -431,13 +560,14 @@ def run_source_health(scope: str = "all") -> dict:
     # It is still PROBED rather than skipped (see the probe list above): its retire note asks to roll
     # back if the feeds come back, and that signal only exists if someone keeps looking.
     retired &= set(probed)
-    for n in probed:
-        ok, msg, _completed = results[n]
-        if n in retired:
-            continue  # no fail streak, no alarm; the alive-again transition is handled below
-        _health_track(n, ok, msg, fails, alerts, newly_down, recovered)
+    _gate_held_rounds(state, results, [n for n in probed if n not in retired], fails)
+    cleared = _track_probed(state, results, probed, retired, fails, alerts, newly_down, recovered,
+                            fetcher.fetched_ok_at, time.time())
+    if cleared:
+        log.info("source-health[%s]: %d count(s) cleared by a later live fetch: %s", scope, len(cleared),
+                 "; ".join(f"{n}: {w}" for n, w in sorted(cleared.items())))
     for label, (ok, msg) in infra.items():
-        _health_track(f"_cdp:{label}", ok, msg, fails, alerts, newly_down, recovered)
+        _health_track(f"_cdp:{label}", ok, msg, fails, alerts, newly_down, recovered, state["fail_at"])
 
     if newly_down:
         body = "\n".join(f"- {n}{' [对方拒绝]' if _is_refused(msg) else ''}: {msg[:48]}"
@@ -445,7 +575,9 @@ def run_source_health(scope: str = "all") -> dict:
         _alert(f"源故障 · {len(newly_down)}", body)
         pushed += 1
     if recovered:
-        _alert(f"源恢复 · {len(recovered)}", "\n".join(f"- {n}" for n in recovered))
+        _alert(f"源恢复 · {len(recovered)}",
+               "\n".join(f"- {n}" + (f"（体检没核到；{cleared[n]}）" if n in cleared else "")
+                         for n in recovered))
         pushed += 1
 
     # DEGRADED transition: a multi-feed bundle can be healthy (ok=True) yet have lost members. Those
@@ -463,15 +595,43 @@ def run_source_health(scope: str = "all") -> dict:
         _alert(f"源降级 · {len(newly_degraded)}", body)
         pushed += 1
     # SCOPE-AWARE, by the same rule the snapshot below already follows: a scoped run may only speak
-    # about what it PROBED. The 6h fast lane never probes the CDP sources, so replacing the whole set
-    # from it dropped every CDP source out of `degraded`; the next daily run re-added them, they read
+    # about what it PROBED. A non-CDP run never probes the CDP sources, so replacing the whole set
+    # from it dropped every CDP source out of `degraded`; the next CDP-lane run re-added them, they read
     # as NEWLY degraded, and 源降级 re-fired twice a day forever. The set is a partial observation
     # being written as if it were a total one, which is exactly the defect the last_status merge
     # fixes one block down. This key was simply left behind.
-    # Full run rebuilds (and thereby self-cleans a source that left the registry); the fast lane
+    # Full run rebuilds (and thereby self-cleans a source that left the registry); a non-CDP run
     # keeps what it could not see.
     state["degraded"] = sorted(degraded_now if full
                                else (prev_degraded - set(probed)) | degraded_now)
+
+    # EXIT NODE (EYE-EXIT): sources that broke this run may have broken because the proxy node OmniSeek
+    # leaves through broke or got refused. Test the nodes and switch to one that reaches them
+    # (eye.exit_node; it sends its own notice either way). What broke this run: a source down for the
+    # first time (a re-nag of one long down is not new), a bundle that just lost members, and a source
+    # already down or degraded that failed on MORE hosts than last run (its new dead hosts only: 11-04 two
+    # blogs went dark on Z11 inside substack_matrix, degraded for weeks by another feed, and a dead feed
+    # would fail every node; 11-10 llm_leaderboard went down leaving no address, so its first-down sweep
+    # tested nothing, and the run that first sees its host must test it).
+    # dead_hosts {source: [hosts it failed on]} remembers the last run's, same scope rule as `degraded`.
+    # Bounded by what is left of this job's budget; it runs after the state is saved (below), so a slow
+    # sweep can never lose this run's bookkeeping.
+    from omniseek.core import exit_node
+    dead_now = {n: sorted(exit_node.failed_hosts(noted.get(n, []))) for n in probed
+                if n not in retired and (results[n][0] is False or n in degraded_now)}
+    # The first run that keeps dead_hosts only learns them: every degraded bundle would read as grown.
+    seeding = not isinstance(state.get("dead_hosts"), dict)
+    prev_dead = {} if seeding else state["dead_hosts"]
+    first_down = [n for n, _m in newly_down if not n.startswith(_INFRA_ROW_PREFIX)
+                  and fails.get(n) == N_CONSECUTIVE]
+    broke = {n: noted.get(n, []) for n in first_down + newly_degraded}
+    long_down = {n for n in dead_now if (fails.get(n) or 0) > N_CONSECUTIVE}
+    for n in ([] if seeding else sorted((degraded_now | long_down) - set(broke))):
+        grew = set(dead_now.get(n, [])) - set(prev_dead.get(n, []))
+        if grew:
+            broke[n] = exit_node.only_hosts(noted.get(n, []), grew)
+    state["dead_hosts"] = (dead_now if full
+                           else {**{k: v for k, v in prev_dead.items() if k not in set(probed)}, **dead_now})
 
     # REFUSED set, same scope rule as `degraded`: which of the failing sources are failing because
     # the far end turned us away. Purely additive bookkeeping (the fail streaks and the alert
@@ -500,8 +660,10 @@ def run_source_health(scope: str = "all") -> dict:
     state["fails"] = fails
     state["_alerts"] = alerts
     state["last_run"] = datetime.now().isoformat(timespec="seconds")
-    # Full run rebuilds the snapshot; the fast (noncdp) lane MERGES so the CDP + infra entries the
-    # daily run owns are preserved (a from-scratch snap would drop them -> list_sources 'unknown').
+    if full:
+        state["cdp_lane_at"] = started  # this run carried the CDP lane (read by _cdp_lane_due)
+    # Full run rebuilds the snapshot; a non-CDP run MERGES so the CDP + infra entries the CDP lane
+    # owns are preserved (a from-scratch snap would drop them -> list_sources 'unknown').
     snap = dict(state.get("last_status", {})) if not full else {}
     snap.update({n: results[n][0] for n in probed})
     for label, (ok, _msg) in infra.items():
@@ -510,7 +672,7 @@ def run_source_health(scope: str = "all") -> dict:
     # The third state, kept as its OWN map. last_status can hold None, but a consumer reading only
     # its KEY set (fetcher._watchdog_health does exactly that) cannot tell None from True, which
     # would turn "we could not measure" into a reported ok: a false green replacing the false red.
-    # Same merge rule as snap so the fast lane does not erase the daily lane's rows.
+    # Same merge rule as snap so a non-CDP run does not erase the CDP lane's rows.
     unm = dict(state.get("unmeasured", {})) if not full else {}
     for n in probed:
         if results[n][0] is None and not results[n][2]:
@@ -521,7 +683,7 @@ def run_source_health(scope: str = "all") -> dict:
     # The fourth state, also its OWN map for the same key-set reason: the probe COMPLETED, but by
     # design asked the upstream nothing (a metered quota, a busy declared gate, a breaker, an answer
     # from cache). Neither healthy nor failing, so it moves no counter above and must not read as ok.
-    # Same merge rule as snap / unm so the fast lane keeps the daily lane's rows.
+    # Same merge rule as snap / unm so a non-CDP run keeps the CDP lane's rows.
     unv = dict(state.get("unverified", {})) if not full else {}
     for n in probed:
         if results[n][0] is None and results[n][2]:
@@ -536,11 +698,19 @@ def run_source_health(scope: str = "all") -> dict:
     # it read "down" stops showing (and re-alerting) as down.
     for r in retired | sealed:
         fails.pop(r, None)
+        state["fail_at"].pop(r, None)
         snap.pop(r, None)
         unm.pop(r, None)
         unv.pop(r, None)
         alerts.pop(f"down:{r}", None)
     _save_state(_HEALTH_STATE, state)
+    if broke:
+        try:
+            left = HEALTH_BUDGET_S - (time.time() - started)
+            exit_node.sweep(broke, time.monotonic() + left, why=f"源体检[{scope}]")
+        except Exception as exc:  # noqa: BLE001 -- the sweep never breaks the health run
+            log.warning("source-health[%s]: exit-node sweep failed: %s", scope, exc)
+            _alert("出口节点 · 测切出错", f"源体检后测、切出口节点出错（{type(exc).__name__}: {str(exc)[:120]}），没切。")
 
     # Counted apart, never summed into "healthy": only a VERIFIED True is green, and an unverified or
     # unmeasured None is neither green nor a failure.
@@ -559,356 +729,6 @@ def run_source_health(scope: str = "all") -> dict:
 
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
-# JOB: wechat2rss probe   (transplanted from wewerss_watchdog.py; every:1800s)
-# ══════════════════════════════════════════════════════════════════════════════════════════════════
-# RENAMED 2026-08-12, from wewerss-probe. It has monitored wechat2rss and NOT wewe-rss since the
-# self-hosted install was retired, and on 2026-08-12 that install was deleted from the host
-# outright. A job whose name points at something that no longer exists is a trap: the next reader
-# finds "wewerss-probe" in the roster, goes looking for wewe-rss, finds nothing, and either
-# "repairs" a healthy job or deletes a live one. The name now says what it probes.
-#
-# wechat2rss feed health check. (原 wewe-rss 双轨监控; 2026-06-06 弃用 AI寒武纪、退役 wewe-rss 自建后,
-# 只剩这一轨。) Monitors 4 free wechat2rss.xlab.app feeds (no SLA): each reachable + whether the whole
-# service froze. Any anomaly -> an alert. A 6h cooldown prevents a 30-min re-alert flood. There is no
-# heal (a free public source has no local process to relaunch).
-_WECHAT2RSS_STATE = _STATE / "wechat2rss-last-alert.json"
-_WECHAT2RSS_COOLDOWN_S = 6 * 3600
-# KEEP IN SYNC with wechat_source.DEFAULT_WECHAT2RSS_FEEDS.
-_WECHAT2RSS_FEEDS = [
-    ("PaperWeekly", "https://wechat2rss.xlab.app/feed/3be891c2f4e526629ab055a297cc2cd6c1f0a563.xml"),
-    ("机器之心", "https://wechat2rss.xlab.app/feed/51e92aad2728acdd1fda7314be32b16639353001.xml"),
-    ("量子位", "https://wechat2rss.xlab.app/feed/7131b577c61365cb47e81000738c10d872685908.xml"),
-    ("新智元", "https://wechat2rss.xlab.app/feed/ede30346413ea70dbef5d485ea5cbb95cca446e7.xml"),
-]
-# All 4 are among China's most active AI媒体, so if NONE posted in this long the service froze (one
-# quiet account will not trip it: we test the NEWEST across all feeds).
-_WECHAT2RSS_FREEZE_LIMIT_S = 3 * 86400
-# The probe reads a PREFIX and only needs the newest <pubDate>; 256 KB covers many
-# entries even on the chattiest of these accounts. The timeout then bounds a genuinely
-# unreachable host rather than a large-but-healthy one.
-_WECHAT2RSS_PREFIX_BYTES = 256 * 1024
-_WECHAT2RSS_TIMEOUT_S = 25
-
-
-def check_wechat2rss_feeds() -> tuple[bool, str]:
-    """(all_ok, message). Flags a feed UNREACHABLE (per-feed; if xlab.app dies, all 4 trip) and a
-    service-wide FREEZE (newest item across ALL feeds older than the limit, so one quiet account does
-    not false-alarm). PURE except for the network reads (importable for the smoke)."""
-    import re
-    import urllib.request
-    unreachable: list[str] = []
-    newest = None
-    for name, url in _WECHAT2RSS_FEEDS:
-        try:
-            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-            with urllib.request.urlopen(req, timeout=_WECHAT2RSS_TIMEOUT_S) as resp:
-                # BOUNDED PREFIX, not the whole feed (2026-08-11). These feeds run 1-2.4 MB and the
-                # probe only needs the NEWEST pubDate, which RSS puts near the top. Reading the whole
-                # body made the probe's cost scale with the publisher's backlog: measured the same
-                # night, one feed took 16.8s against a 12s budget, so the probe raised URLError and
-                # raised "unreachable" about a feed that was serving fine. A liveness check whose
-                # own cost can exceed its own timeout manufactures its own false alarms.
-                body = resp.read(_WECHAT2RSS_PREFIX_BYTES).decode("utf-8", "ignore")
-        except Exception as exc:  # noqa: BLE001
-            unreachable.append(f"{name}({type(exc).__name__})")
-            continue
-        for ds in re.findall(r"<pubDate>([^<]+)</pubDate>", body):
-            try:
-                dt = parsedate_to_datetime(ds)
-                if dt.tzinfo is None:
-                    dt = dt.replace(tzinfo=timezone.utc)
-                if newest is None or dt > newest:
-                    newest = dt
-            except Exception:  # noqa: BLE001
-                continue
-    problems: list[str] = []
-    if unreachable:
-        problems.append("unreachable: " + ", ".join(unreachable))
-    if newest is not None:
-        age = datetime.now(timezone.utc) - newest
-        if age.total_seconds() > _WECHAT2RSS_FREEZE_LIMIT_S:
-            problems.append(f"all feeds frozen (newest {int(age.total_seconds() / 86400)}d old)")
-    if problems:
-        return False, "; ".join(problems)
-    fresh = f"{int((datetime.now(timezone.utc) - newest).total_seconds() / 3600)}h" if newest else "?"
-    return True, f"all {len(_WECHAT2RSS_FEEDS)} feeds OK (newest {fresh})"
-
-
-def run_wechat2rss_probe() -> dict:
-    """One wechat2rss run: probe the 4 feeds, alert on anomaly (6h cooldown). No heal."""
-    ok, msg = check_wechat2rss_feeds()
-    log.info("wechat2rss: %s : %s", "OK" if ok else "FAIL", msg)
-    state = _load_state(_WECHAT2RSS_STATE)
-    alerts = state.get("_alerts", {})
-    pushed = 0
-    if not ok and _should_alert("wechat2rss_down", alerts, _WECHAT2RSS_COOLDOWN_S):
-        _alert("wechat2rss feed 异常",
-              f"{msg}。免费第三方源, 可能要换源或换号, 检查 wechat2rss.xlab.app。", group="OmniSeek")
-        pushed = 1
-    state["_alerts"] = alerts
-    state["last_run"] = datetime.now().isoformat(timespec="seconds")
-    _save_state(_WECHAT2RSS_STATE, state)
-    return {"ok": ok, "alert": pushed}
-
-
-# ══════════════════════════════════════════════════════════════════════════════════════════════════
-# JOB: off-machine backup AUDIT   (daily@06:30)
-# ══════════════════════════════════════════════════════════════════════════════════════════════════
-# WHY THIS EXISTS (2026-08-11): the brain's off-machine mirror was dead for FIFTEEN DAYS and nothing
-# noticed. Its Windows scheduled task ran on time, failed on time (its remote pinned a LAN alias that
-# stopped resolving when the fleet moved to a private network), and told nobody, because its exit code had no
-# reader. A backup in that state is worse than no backup: it manufactures exactly the confidence that
-# stops anyone from checking by hand. 79 notes sat on a single disk while the ledger said "mirrored".
-#
-# THE ONLY CRITERION THAT SURVIVES THAT FAILURE IS CONTENT AT THE DESTINATION. Not "the task ran",
-# not "no error was raised", not "it looked fine last time": every one of those stayed TRUE straight
-# through the outage. So this job measures what is actually there:
-#   * MIRRORS -- the Windows side writes a heartbeat here after each run carrying every mirror's HEAD
-#     and item count. The service host then asks its OWN repo how far behind that HEAD is (ancestor check +
-#     rev-list count), which is exact rather than a guess from file counts. A STALE heartbeat is
-#     itself an alarm, so a Windows box that simply stops running cannot fail silently either:
-#     absence of news is news.
-#   * EXTERNAL DRIVE -- read directly (newest wall-*.db.gz under /Volumes/*/omniseek-backups versus
-#     the newest local one), because that lane needs no second machine to report on it.
-# Read-only and fail-visible: this job never repairs, it only measures and alerts. Every helper
-# swallows its own errors, because an audit that can crash is an audit that quietly stops running.
-_OFFMACHINE_STATE = _STATE / "offmachine-audit.json"
-_OFFMACHINE_HEARTBEAT = _STATE / "offmachine-mirror-heartbeat.json"
-_OFFMACHINE_COOLDOWN_S = 6 * 3600
-_HEARTBEAT_STALE_S = 3 * 24 * 3600   # the mirror task is daily; 3 quiet days is a fault, not jitter
-_WALL_STALE_S = 3 * 24 * 3600        # the wall backup is daily
-_MIRROR_LAG_MAX_COMMITS = 60         # a busy writing day stays well under this; 15 days did not
-_BACKUPS = Path.home() / ".omniseek" / "backups"
-_VOLUMES = Path("/Volumes")
-_BACKUP_LOG = Path.home() / ".omniseek" / "logs" / "infra.state-backup.log"
-_ALERT_DELIVERY_PATH = _STATE / "alert-delivery.json"
-# name -> the LIVE repo each off-machine mirror is supposed to be a copy of.
-_MIRROR_TARGETS = {
-    "brain": Path.home() / "omniseek-brain",
-    "core": Path.home() / "omniseek-maintenance",
-}
-
-
-def _git(root: Path, *args: str, timeout: int = 60) -> tuple[int, str]:
-    try:
-        p = subprocess.run(["git", "-C", str(root), *args],
-                           capture_output=True, text=True, timeout=timeout)
-        return p.returncode, (p.stdout or "").strip()
-    except Exception:  # noqa: BLE001 -- an audit that raises is an audit nobody runs
-        return 1, ""
-
-
-def _mirror_lag(root: Path, mirror_head: str) -> tuple[str, int]:
-    """How far the mirror trails the live repo: ("", n) behind by n commits, or (fault, -1).
-
-    An ancestor check comes FIRST: a mirror head the live repo does not contain means divergence or
-    corruption, which is a different (and worse) problem than being behind."""
-    if not mirror_head:
-        return ("心跳没带 HEAD", -1)
-    rc, _ = _git(root, "cat-file", "-e", f"{mirror_head}^{{commit}}")
-    if rc != 0:
-        return (f"镜像 HEAD {mirror_head[:8]} 在活仓里不存在(分叉或损坏)", -1)
-    rc, _ = _git(root, "merge-base", "--is-ancestor", mirror_head, "HEAD")
-    if rc != 0:
-        return (f"镜像 HEAD {mirror_head[:8]} 不是活仓 HEAD 的祖先(分叉)", -1)
-    rc, out = _git(root, "rev-list", "--count", f"{mirror_head}..HEAD")
-    if rc != 0:
-        return ("", 0)
-    try:
-        return ("", int(out))
-    except ValueError:
-        return ("", 0)
-
-
-def _audit_mirrors(now: float) -> list[str]:
-    """Every off-machine git mirror, judged by content rather than by a run log."""
-    hb = _load_state(_OFFMACHINE_HEARTBEAT)
-    if not hb:
-        return ["镜像心跳缺失:Windows 侧镜像任务从未成功写回过"]
-    faults: list[str] = []
-    stamp = str(hb.get("at") or "")
-    try:
-        age = now - datetime.fromisoformat(stamp).timestamp()
-    except ValueError:
-        return [f"镜像心跳时间戳无法解析:{stamp!r}"]
-    if age > _HEARTBEAT_STALE_S:
-        faults.append(f"镜像心跳已 {age / 86400:.1f} 天未更新(Windows 侧镜像任务可能已死)")
-    rows = hb.get("mirrors") or {}
-    for name, root in _MIRROR_TARGETS.items():
-        row = rows.get(name) or {}
-        if not row:
-            faults.append(f"{name}:心跳里没有这面镜子")
-            continue
-        if not row.get("ok"):
-            faults.append(f"{name}:上次镜像更新失败({str(row.get('error') or '')[:90]})")
-            continue
-        fault, behind = _mirror_lag(root, str(row.get("head") or ""))
-        if fault:
-            faults.append(f"{name}:{fault}")
-        elif behind > _MIRROR_LAG_MAX_COMMITS:
-            faults.append(f"{name}:镜像落后活仓 {behind} 个 commit")
-    return faults
-
-
-def _newest_mtime(paths) -> float:
-    best = 0.0
-    for p in paths:
-        try:
-            best = max(best, p.stat().st_mtime)
-        except OSError:
-            continue
-    return best
-
-
-def _removable_volumes_visible() -> bool:
-    """Can THIS process see removable volumes at all?
-
-    macOS gates /Volumes/* behind a privacy grant (Files and Folders -> Removable Volumes, or Full
-    Disk Access) that a launchd-spawned process does not inherit from an interactive shell. When the
-    grant is missing the directory reads as EMPTY rather than raising, so a naive check concludes
-    "there is no backup on the drive" when the truth is "I am not allowed to look". Measured
-    2026-08-11 with the same script a minute apart: under launchd off-machine=NONE, over ssh
-    off-machine=ext:OmniSeekRecovery. Distinguishing the two is the whole point, because they need
-    opposite responses (grant a permission vs plug in a drive)."""
-    try:
-        return any(p.name != "Macintosh HD" and p.is_dir() for p in _VOLUMES.iterdir())
-    except OSError:
-        return False
-
-
-def _scheduled_offmachine_verdict() -> str:
-    """What the BACKUP ITSELF last recorded about its off-machine destination ("" if unknown).
-
-    This is not "did the task run" (the thing this whole job exists to distrust): it is the lane's
-    own verdict about the DESTINATION, written by the process that has the same view of the disk as
-    the scheduled run. That makes it the one honest signal available from inside a blinded process."""
-    try:
-        lines = _BACKUP_LOG.read_text(encoding="utf-8", errors="ignore").strip().splitlines()
-    except OSError:
-        return ""
-    for line in reversed(lines):
-        if "off-machine=" in line:
-            return line.rsplit("off-machine=", 1)[1].strip()
-    return ""
-
-
-def _declared_resident_labels() -> list[str]:
-    """The launchd labels the service REGISTRY says must be resident (status="running").
-
-    scripts/services.py is the single declaration of the fleet and is deliberately importable
-    without omniseek (the external sentinel depends on that), so the registry is read rather than
-    duplicated: a hardcoded copy here would drift from the thing it is supposed to guard, which is
-    the exact failure this check exists to catch."""
-    try:
-        scripts_dir = Path(__file__).resolve().parents[3] / "scripts"
-        if str(scripts_dir) not in sys.path:
-            sys.path.insert(0, str(scripts_dir))
-        import services  # noqa: PLC0415 -- deliberately late + guarded
-        rows = []
-        for layer in ("organ", "cdp", "infra"):
-            rows.extend(services.by_layer(layer))
-        return [r["label"] for r in rows
-                if r.get("status") == "running" and r.get("repo") == "core"]
-    except Exception as exc:  # noqa: BLE001 -- an unreadable registry must not break the audit
-        log.debug("fleet check: registry unreadable (%s)", exc)
-        return []
-
-
-def _loaded_labels() -> set:
-    try:
-        out = subprocess.run(["launchctl", "list"], capture_output=True, text=True, timeout=30)
-        if out.returncode != 0:
-            return set()
-        return {line.split("\t")[-1].strip() for line in out.stdout.splitlines()[1:] if line.strip()}
-    except Exception:  # noqa: BLE001
-        return set()
-
-
-def _audit_launchd_fleet() -> list[str]:
-    """Is every service the registry declares resident actually LOADED?
-
-    WHY (2026-08-12): com.omniseek.infra.sentinel, the ONE external watchdog (the hands that restart
-    the organ and its browsers when the organ's own code is broken), was absent from launchd for
-    FOUR DAYS. Its plist sat on disk, the registry declared it resident, its log simply stopped, and
-    nothing noticed, because the thing that would have noticed IS the watchdog. Its two alarm state
-    files still carried timestamps from eight days earlier, which read as "no incidents" rather than
-    "no observer". A guard that can silently cease to exist needs an outside check on its EXISTENCE,
-    not just on its verdicts."""
-    declared = _declared_resident_labels()
-    if not declared:
-        return []          # registry unreadable: say nothing rather than cry wolf
-    loaded = _loaded_labels()
-    if not loaded:
-        return []          # launchctl unavailable (not macOS, or sandboxed): unauditable, not broken
-    missing = [lbl for lbl in declared if lbl not in loaded]
-    if missing:
-        return [f"launchd 舰队缺员:{', '.join(missing)} 在注册表里声明常驻,但没有加载"]
-    return []
-
-
-def _audit_alert_delivery() -> list[str]:
-    """Is the siren connected? An alarm nobody receives is the failure mode this whole job exists
-    for, one level up: every other check here reports through the very lane being checked."""
-    try:
-        row = json.loads(_ALERT_DELIVERY_PATH.read_text(encoding="utf-8"))
-    except OSError:
-        return []          # nothing has alarmed yet; silence here is honest
-    except Exception:      # noqa: BLE001
-        return ["告警投递台账无法解析"]
-    streak = int(row.get("undelivered_streak") or 0)
-    if streak:
-        return [f"最近 {streak} 条告警一条都没送达(所有通道都失败),最后一条:{str(row.get('title'))[:60]}"]
-    return []
-
-
-def _audit_external_drive(now: float) -> list[str]:
-    """The wall's external-drive lane, read at the destination."""
-    local_newest = _newest_mtime(_BACKUPS.glob("wall-*.db.gz"))
-    if not local_newest:
-        return ["本地一个 wall 备份都没有(state_backup 可能没在跑)"]
-    faults: list[str] = []
-    if now - local_newest > _WALL_STALE_S:
-        faults.append(f"本地最新 wall 备份已是 {(now - local_newest) / 86400:.1f} 天前")
-    verdict = _scheduled_offmachine_verdict()
-    if verdict == "NONE":
-        faults.append("上一次 state_backup 报 off-machine=NONE:计划路径下没有任何机外目的地"
-                      "(launchd 进程若无「可移动卷」授权,/Volumes 对它是空的)")
-    offsite_newest = _newest_mtime(_VOLUMES.glob("*/omniseek-backups/wall-*.db.gz"))
-    if not offsite_newest:
-        if not _removable_volumes_visible():
-            faults.append("本进程看不到可移动卷(macOS 隐私授权),外置盘这条 lane 无法从这里核对;"
-                          "要么给 launchd 服务授权,要么以此为准信上面那条 state_backup 的判决")
-        else:
-            faults.append("外置盘上没有任何 wall 备份(盘没挂上,或 off-machine lane 没跑成)")
-        return faults
-    lag_days = (local_newest - offsite_newest) / 86400.0
-    if lag_days > 2.0:
-        faults.append(f"外置盘最新 wall 比本地旧 {lag_days:.1f} 天")
-    return faults
-
-
-def run_offmachine_audit() -> dict:
-    """Audit every off-machine copy by measuring the destination, never by trusting a run log."""
-    now = time.time()
-    # The siren is audited FIRST and separately: every other check here reports through the very
-    # lane being checked, so if it is disconnected none of the rest can reach anyone anyway.
-    faults = (_audit_alert_delivery() + _audit_launchd_fleet()
-              + _audit_mirrors(now) + _audit_external_drive(now))
-    log.info("offmachine-audit: %s", " / ".join(faults) if faults else "所有机外目的地内容已核对")
-    state = _load_state(_OFFMACHINE_STATE)
-    alerts = state.get("_alerts", {})
-    pushed = 0
-    if faults and _should_alert("offmachine_degraded", alerts, _OFFMACHINE_COOLDOWN_S):
-        _alert("机外备份异常", " / ".join(faults)[:400])
-        pushed = 1
-    state["_alerts"] = alerts
-    state["last_run"] = datetime.now().isoformat(timespec="seconds")
-    state["faults"] = faults
-    _save_state(_OFFMACHINE_STATE, state)
-    return {"ok": not faults, "faults": faults, "alert": pushed}
-
-
-# ══════════════════════════════════════════════════════════════════════════════════════════════════
 # JOB: session warmer   (transplanted from session_warmer.py; daily@09:17,14:17,19:17)
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
 # WHY THIS EXISTS (root cause, 2026-06-22): the logged-in xhs sessions silently DEGRADE when the
@@ -921,24 +741,31 @@ def run_offmachine_audit() -> dict:
 #
 # SAFETY (byte-preserved): read-only (navigation + scroll only -- never like/follow/comment, the
 # 风控 write-risk path), jitter-paced, active-hours only (08-23 host local time), and it honours the same
-# ~/.omniseek/state/cdp-maintenance pause flag cdp_keepalive uses (so it never fights a manual VNC
+# <state>/cdp-maintenance pause flag cdp_keepalive uses (so it never fights a manual VNC
 # login). One light search per account per run is trivial activity (a real user does dozens) and is
 # the kind of passive browse 养号 recommends; it stays well under any rate concern.
 _WARMER_STATE = _STATE / "session-warmer.json"
 _MAINT_FLAG = _STATE / "cdp-maintenance"
 _WARMER_COOLDOWN_S = 6 * 3600
 _ACTIVE_START, _ACTIVE_END = 8, 23  # host local hours; match the xiaohongshu_cn adapter gate
+# A blank search page (no results, no login wall) alerts only when it is the Nth run in a row. N=2 is
+# PROVISIONAL: in the 19 runs of 2026-10-10..16 the two blank pages each came back on the next run, and
+# 2 is the smallest N that lets both pass while a lasting blank still alerts within one run's gap.
+# Calibration: after a month of runs, read _self_heals and the blank_streak values in the state file
+# (and the warmer log's "blank search page" lines); if a streak of 2 ever healed by itself on run 3,
+# raise N; if a real logout ever showed as blank pages with no login wall, lower it to 1.
+_BLANK_ALERT_STREAK = 2
+# Per-result keys copied into the state file's last_results when present (the xhs search probe and the
+# sealed skip set them).
+_WARMER_STATE_EXTRAS = ("skipped", "kind", "dom_items", "body_len", "retry", "self_healed", "blank_streak")
 
 # Benign rotating warm queries (look like a real PhD-track user glancing at their feed).
 _WARM_QUERIES = ["读博日常", "科研", "博士生活", "留学生活", "实验室日常", "读研"]
 
 # label -> (cdp url, home url, search url template {kw}, site-key substring, probe-kind).
 # probe-kind decides how a degraded session is DETECTED (the warm half -- home+scroll -- is identical):
-#   "xhs_search"   = observe the search-result XHR + DOM (a login wall hides the results cards).
-#   "douyin_login" = read the login state DIRECTLY (localStorage HasUserLogin / cookie LOGIN_STATUS,
-#                    the same signal douyin_source.health_check uses). 抖音's search XHR is NOT reliably
-#                    fired by a page nav (the adapter same-origin-FETCHes it), so observing the page's
-#                    own XHR is flaky here; the login-state read is the reliable degradation signal.
+#   "xhs_search"   = read the search-result DOM (a login wall hides the results cards).
+# (The 抖音 browser and its login-state probe were withdrawn on 2026-10-20 with the browser itself.)
 _WARMER_INSTANCES = {
     "小号-rednote": (
         "http://127.0.0.1:9223", "https://www.rednote.com",
@@ -946,9 +773,6 @@ _WARMER_INSTANCES = {
     "大陆号-xiaohongshu": (
         "http://127.0.0.1:9224", "https://www.xiaohongshu.com",
         "https://www.xiaohongshu.com/search_result?keyword={kw}", "xiaohongshu", "xhs_search"),
-    "抖音": (
-        "http://127.0.0.1:9225", "https://www.douyin.com",
-        "https://www.douyin.com/search/{kw}?type=general", "douyin", "douyin_login"),
 }
 
 _DOM_JS = r"""(()=>({
@@ -963,18 +787,51 @@ def _jsleep(lo: float, hi: float) -> None:
     time.sleep(random.uniform(lo, hi))
 
 
+def _search_dom(page, url: str) -> dict:
+    """Open one search-result page and read _DOM_JS off it. A goto failure raises; a failed read
+    returns an empty dict, which _classify_search calls blank (nothing was seen, so no login wall).
+    A dropped connection is retried on the same page and exit (_cdp.goto_retrying)."""
+    from omniseek.core.sources.walled import _cdp
+    _cdp.goto_retrying(page, url, timeout=25000)
+    _jsleep(4.0, 6.0)
+    try:
+        return page.evaluate(_DOM_JS) or {}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _classify_search(dom: dict) -> str:
+    """One search-result page, as the warmer reads it: "ok" (more than three note cards and no login
+    overlay), "login_wall" (a login overlay or a login button on the page: the session is gone) or
+    "blank" (no results and no login wall: the 2026-10-13 and 10-16 pages, body_len 85 and 133,
+    which came back on the next run by themselves)."""
+    if dom.get("note_items", 0) > 3 and not dom.get("login_overlay"):
+        return "ok"
+    if dom.get("login_overlay") or dom.get("login_btn", 0) > 0:
+        return "login_wall"
+    return "blank"
+
+
+def _is_load_timeout(exc: BaseException) -> bool:
+    """A page load that ran out of time (Playwright's / Patchright's TimeoutError from Page.goto): the
+    page was never seen, so it says nothing about the login."""
+    return isinstance(exc, TimeoutError) or any(c.__name__ == "TimeoutError" for c in type(exc).__mro__)
+
+
 def _warm_one(p, label: str, cdp: str, home: str, search_tpl: str, key: str, probe: str) -> dict:
     """Drive ONE Chrome through home -> scroll -> one search. Returns a status dict. Never raises
     (per-instance isolation); records why if it could not warm. ``probe`` selects the degradation-
-    detection (see _WARMER_INSTANCES): "xhs_search" observes the result XHR/DOM, "douyin_login" reads
-    the login state directly.
+    detection (see _WARMER_INSTANCES): "xhs_search" reads the result page's DOM (see _classify_search;
+    the result carries ``kind``, and ``retry`` / ``self_healed`` when a blank page was searched again).
 
-    ``unprobed`` is set when the browser could not be reached at all. That says nothing about the
-    login, so the caller must not turn it into a "session degraded, re-login" alert (2026-09-26: it
-    did, three times a day per account, for browsers the idle reaper had merely stopped)."""
+    ``unprobed`` is set when the browser could not be reached at all, or when the home or search page
+    did not finish loading in time (a Page.goto timeout). Neither says anything about the login, so
+    the caller must not turn it into a "session degraded, re-login" alert (2026-09-26: it did, three
+    times a day per account, for browsers the idle reaper had merely stopped; 2026-11-06: a home page
+    that timed out was pushed as a re-scan). A page that loaded and shows a login wall still alerts."""
     from urllib.parse import quote
     from omniseek.core.sources.walled import _cdp
-    res = {"label": label, "ok": False, "unprobed": False, "reason": "", "notes": 0,
+    res = {"label": label, "ok": False, "unprobed": False, "reason": "",
            "acw_tc": False, "web_session": False}
     # The idle reaper stops a browser nobody used for CDP_IDLE_TIMEOUT_S, and this job runs only
     # three times a day, so it usually finds its browser stopped. Start it the way every read does;
@@ -996,10 +853,13 @@ def _warm_one(p, label: str, cdp: str, home: str, search_tpl: str, key: str, pro
         cand = [pg for pg in ctx.pages if key in (pg.url or "")]
         page = cand[0] if cand else (ctx.pages[0] if ctx.pages else ctx.new_page())
 
-        # 1) home + light human-like scroll (re-mints the short-lived security cookies)
+        # 1) home + light human-like scroll (re-mints the short-lived security cookies). A dropped
+        # connection (2026-11-06: net::ERR_CONNECTION_CLOSED on the direct route to rednote.com) is
+        # retried on the same page and exit; a load timeout still raises at once (unprobed, below).
         try:
-            page.goto(home, wait_until="domcontentloaded", timeout=25000)
+            _cdp.goto_retrying(page, home, timeout=25000)
         except Exception as exc:  # noqa: BLE001
+            res["unprobed"] = _is_load_timeout(exc)
             res["reason"] = f"home goto failed: {exc!r}"
             return res
         _jsleep(2.5, 4.0)
@@ -1019,62 +879,36 @@ def _warm_one(p, label: str, cdp: str, home: str, search_tpl: str, key: str, pro
         except Exception:  # noqa: BLE001
             pass
 
-        # 抖音 (login-probe instances): the home+scroll above already re-minted msToken + the security
-        # cookies; 抖音's search XHR is NOT reliably page-fired (the adapter same-origin-FETCHes it), so
-        # detect degradation by reading the LOGIN STATE directly -- the same signal
-        # douyin_source.health_check uses. A light search-page nav adds a little extra warming.
-        if probe == "douyin_login":
-            kw = random.choice(_WARM_QUERIES)
-            try:
-                page.goto(search_tpl.format(kw=quote(kw)), wait_until="domcontentloaded", timeout=25000)
-                _jsleep(3.0, 5.0)
-            except Exception:  # noqa: BLE001
-                pass
-            try:
-                st = page.evaluate("()=>({login: window.localStorage.getItem('HasUserLogin'),"
-                                   "status:(document.cookie.match(/LOGIN_STATUS=([^;]+)/)||[])[1]||''})")
-            except Exception:  # noqa: BLE001
-                st = {}
-            logged_in = (st or {}).get("login") == "1" or (st or {}).get("status") == "1"
-            res["notes"] = 1 if logged_in else 0  # reuse the health-signal field
-            res["ok"] = bool(logged_in)
-            if not logged_in:
-                res["reason"] = (f"degraded: 抖音 logged out (HasUserLogin={(st or {}).get('login')}, "
-                                 f"LOGIN_STATUS={(st or {}).get('status')})")
-            return res
-
-        # 2) one light search (warms search-auth + serves as the health probe)
-        notes = {"n": 0}
-
-        def _on_resp(r):
-            try:
-                if "search/notes" in r.url or "/api/sns/web/v1/search" in r.url:
-                    j = r.json()
-                    notes["n"] += len((j.get("data") or {}).get("items") or [])
-            except Exception:  # noqa: BLE001
-                pass
-
-        page.on("response", _on_resp)
+        # 2) one light search (warms search-auth + serves as the health probe). A blank result page
+        # (no notes, no login wall) is retried once in the same run: it is how a one-off rendering
+        # hiccup looks, and the next search usually comes back fine.
         kw = random.choice(_WARM_QUERIES)
+        url = search_tpl.format(kw=quote(kw))
         try:
-            page.goto(search_tpl.format(kw=quote(kw)), wait_until="domcontentloaded", timeout=25000)
+            dom = _search_dom(page, url)
         except Exception as exc:  # noqa: BLE001
+            res["unprobed"] = _is_load_timeout(exc)
             res["reason"] = f"search goto failed: {exc!r}"
             return res
-        _jsleep(4.0, 6.0)
-        try:
-            dom = page.evaluate(_DOM_JS)
-        except Exception:  # noqa: BLE001
-            dom = {"note_items": 0, "login_overlay": True, "login_btn": 9, "body_len": 0}
-        res["notes"] = max(notes["n"], 0)
-
-        # Healthy iff search produced results AND no blocking login overlay.
-        healthy = (res["notes"] > 0 or dom.get("note_items", 0) > 3) and not dom.get("login_overlay")
-        res["ok"] = bool(healthy)
-        if not healthy:
-            res["reason"] = (f"degraded: search notes={res['notes']} dom_items={dom.get('note_items')} "
+        kind = _classify_search(dom)
+        if kind == "blank":
+            _jsleep(3.0, 6.0)
+            try:
+                dom = _search_dom(page, url)
+                kind = _classify_search(dom)
+                res["retry"] = kind
+            except Exception as exc:  # noqa: BLE001
+                res["retry"] = f"goto failed: {exc!r}"
+        res["kind"] = kind
+        res["dom_items"] = dom.get("note_items")
+        res["body_len"] = dom.get("body_len")
+        res["ok"] = kind == "ok"
+        res["self_healed"] = res["ok"] and "retry" in res
+        if not res["ok"]:
+            res["reason"] = (f"degraded ({kind}): dom_items={dom.get('note_items')} "
                              f"login_overlay={dom.get('login_overlay')} login_btn={dom.get('login_btn')} "
-                             f"body_len={dom.get('body_len')}")
+                             f"body_len={dom.get('body_len')}"
+                             + (f" retry={res['retry']}" if "retry" in res else ""))
         return res
     except Exception as exc:  # noqa: BLE001
         res["reason"] = f"warm flow raised: {exc!r}"
@@ -1082,7 +916,7 @@ def _warm_one(p, label: str, cdp: str, home: str, search_tpl: str, key: str, pro
 
 
 # The 9222 shared-Chrome FORUM sources (cn-forums Chrome) had NO proactive maintenance: only the
-# xhs/douyin Chromes were warmed above, so a silently-expired 一亩三分地 / zhihu session stayed dark
+# 小号 Chromes were warmed above, so a silently-expired 一亩三分地 / zhihu session stayed dark
 # until a user query hit it (the root cause of the 2026-07-06 mis-diagnosis). Warm them the SAME way
 # the reactive path heals: a benign search THROUGH the adapter. An autofill-backed source (login_url
 # set, e.g. yipinsanfendi) self-heals inside search() and alerts on its own if that relogin fails; a
@@ -1100,11 +934,11 @@ _FORUM_WARMERS = [
 def _warm_forum_one(source_name: str, label: str, query: str) -> dict:
     """Health-probe + warm ONE 9222 forum source by running a benign search through its adapter
     (which self-heals if it is autofill-backed). Returns a status dict shaped like _warm_one's, so it
-    flows through the same log / Bark / state machinery: ``notes`` reuses the result count, and
+    flows through the same log / Bark / state machinery, and
     ``self_heals`` marks a source whose reactive search path already Barks (so the warmer skips a
     duplicate Bark for it). Never raises (per-instance isolation)."""
     from omniseek.core.fetcher import get_adapter
-    res = {"label": label, "ok": False, "reason": "", "notes": 0,
+    res = {"label": label, "ok": False, "reason": "",
            "acw_tc": False, "web_session": False, "self_heals": False}
     ad = get_adapter(source_name)
     if ad is None:
@@ -1116,7 +950,6 @@ def _warm_forum_one(source_name: str, label: str, query: str) -> dict:
     except Exception as exc:  # noqa: BLE001 -- per-instance isolation
         res["reason"] = f"search raised: {exc!r}"
         return res
-    res["notes"] = len(docs)
     res["ok"] = len(docs) > 0
     if not res["ok"]:
         res["reason"] = f"degraded: {source_name} search returned 0 (logged out / blocked / empty)"
@@ -1210,6 +1043,9 @@ def run_cdp_reaper() -> dict:
     """Stop idle CDP browsers; leave busy ones and already-stopped ones alone."""
     if sys.platform != "darwin":
         return {"skipped": "not-darwin"}
+    not_live = where.not_live_reason()
+    if not_live:
+        return {"skipped": f"not the live eye ({not_live})"}
     if _MAINT_FLAG.exists():
         log.info("cdp-reaper: cdp-maintenance flag present -> skip (rm the flag to resume)")
         return {"skipped": "maintenance"}
@@ -1331,12 +1167,13 @@ def run_session_warmer() -> dict:
             if _sr:  # sealed on purpose: never open or drive that browser (no alert, nothing sent)
                 log.info("session-warmer %s: sealed -> skip (%s)", label, _sr)
                 results.append({"label": label, "ok": None, "skipped": "sealed", "reason": _sr,
-                                "notes": None, "acw_tc": None, "web_session": None})
+                                "acw_tc": None, "web_session": None})
                 continue
             r = _warm_one(p, label, cdp, home, search_tpl, key, probe)
             results.append(r)
-            log.info("session-warmer %s: ok=%s notes=%s acw_tc=%s web_session=%s %s",
-                     label, r["ok"], r["notes"], r["acw_tc"], r["web_session"],
+            log.info("session-warmer %s: ok=%s%s acw_tc=%s web_session=%s %s",
+                     label, r["ok"], " (blank page, healed on retry)" if r.get("self_healed") else "",
+                     r["acw_tc"], r["web_session"],
                      ("| " + r["reason"]) if r["reason"] else "")
             _jsleep(3.0, 6.0)  # space the accounts apart
 
@@ -1358,29 +1195,52 @@ def run_session_warmer() -> dict:
                 continue
             r = _warm_forum_one(source_name, label, q)
             results.append(r)
-            log.info("session-warmer %s: ok=%s notes=%s self_heals=%s %s",
-                     label, r["ok"], r["notes"], r["self_heals"],
+            log.info("session-warmer %s: ok=%s self_heals=%s %s",
+                     label, r["ok"], r["self_heals"],
                      ("| " + r["reason"]) if r["reason"] else "")
             _jsleep(3.0, 6.0)
 
+    streaks = state.get("_blank_streak", {})
+    heals = state.get("_self_heals", {})
     for r in results:
         if r.get("unprobed"):
-            log.warning("session-warmer %s: browser unreachable, session NOT probed (no alert): %s",
+            log.warning("session-warmer %s: browser unreachable or page load timed out, session NOT probed (no alert): %s",
                         r["label"], r["reason"])
+        if r.get("self_healed"):
+            heals[r["label"]] = heals.get(r["label"], 0) + 1
         if not _needs_relogin_alert(r):
+            if r["ok"]:
+                streaks.pop(r["label"], None)
             continue
+        if r.get("kind") == "blank":
+            n = streaks[r["label"]] = streaks.get(r["label"], 0) + 1
+            r["blank_streak"] = n
+            if n < _BLANK_ALERT_STREAK:
+                log.warning("session-warmer %s: blank search page, no login wall (%d in a row, "
+                            "alert at %d): %s", r["label"], n, _BLANK_ALERT_STREAK, r["reason"])
+                continue
+            if _should_alert(f"session_blank:{r['label']}", alerts, _WARMER_COOLDOWN_S):
+                _alert(f"{r['label']} 搜索连续 {n} 轮空白页",
+                       f"暖号连续 {n} 轮搜到空白页，没见登录墙（每轮都当场重试过一次）:{r['reason']}。"
+                       f"登录态未必失效，也可能是小红书这几次没出结果。", group="OmniSeek-Health",
+                       questions=[f"有空请看一眼 {r['label']}：小红书搜索现在还出结果吗？"])
+            continue
+        streaks.pop(r["label"], None)
         if _should_alert(f"session_degraded:{r['label']}", alerts, _WARMER_COOLDOWN_S):
+            seen = "暖号搜索见到登录墙" if r.get("kind") == "login_wall" else "暖号验证失败"
             _alert(f"{r['label']} session 退化",
-                  f"暖号验证失败:{r['reason']}。登录态可能已失效,需 VNC 进主机重新扫码登录该账号"
+                  f"{seen}:{r['reason']}。登录态可能已失效,需 VNC 进主机重新扫码登录该账号"
                   f"({r['label']} 的 Chrome 窗口)。", group="OmniSeek-Health",
                   questions=[f"请 VNC 进主机，在 {r['label']} 的 Chrome 窗口重新扫码登录该账号"])
 
     state["_alerts"] = alerts
+    state["_blank_streak"] = streaks
+    state["_self_heals"] = heals
     state["last_run"] = time.strftime("%Y-%m-%d %H:%M:%S")
     state["last_results"] = [
-        {**{k: r[k] for k in ("label", "ok", "notes", "acw_tc", "reason")},
+        {**{k: r[k] for k in ("label", "ok", "acw_tc", "reason")},
          "unprobed": bool(r.get("unprobed")),
-         **({"skipped": r["skipped"]} if r.get("skipped") else {})}
+         **{k: r[k] for k in _WARMER_STATE_EXTRAS if k in r}}
         for r in results]
     _save_state(_WARMER_STATE, state)
     degraded = [r["label"] for r in results
@@ -1396,17 +1256,17 @@ def run_session_warmer() -> dict:
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
 # JOB: log rotation   (transplanted from omniseek_http_watchdog.py rotation half; daily@04:50)
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
-# Copytruncate any oversized log in ~/.omniseek/logs so one chatty source can't grow a log unbounded
+# Copytruncate any oversized log in <logs> so one chatty source can't grow a log unbounded
 # (eye-http.err reached 63MB from a reddit Arctic-Shift 429 storm). launchd opens these redirects
 # with O_APPEND (verified 2026-06-20: truncate-in-place stayed small, no sparse hole), so this is
 # safe with the writer still running: it resumes appending at the new EOF, NO restart needed. The
 # last _LOG_KEEP_TAIL bytes are kept as <name>.1 for recent context.
-_LOG_MAX_BYTES = 30 * 1024 * 1024   # copytruncate any omniseek log over 30MB
+_LOG_MAX_BYTES = 30 * 1024 * 1024   # copytruncate any eye log over 30MB
 _LOG_KEEP_TAIL = 4 * 1024 * 1024    # keep the last 4MB of recent context after rotating
 
 
 def rotate_logs() -> int:
-    """Copytruncate every oversized log in ~/.omniseek/logs. Returns how many it rotated. One bad log
+    """Copytruncate every oversized log in <logs>. Returns how many it rotated. One bad log
     never blocks the others; the whole pass is wrapped so log hygiene can never break the scheduler."""
     rotated = 0
     try:
@@ -1431,591 +1291,30 @@ def rotate_logs() -> int:
 
 
 def run_log_rotation() -> dict:
-    return {"rotated": rotate_logs()}
-
-
-# ══════════════════════════════════════════════════════════════════════════════════════════════════
-# JOB: nserc cache prime   (monthly@1-03:30; keep the bulk-CSV source warm OFF the query path)
-# ══════════════════════════════════════════════════════════════════════════════════════════════════
-# WHY (2026-07-14, approved by the operator as a standing job): nserc_awards is a BULK source — its data is
-# one ~56MB annual CSV, pulled at most monthly and cached (the CS/AI subset, ~3.6k docs) so queries
-# are zero-network. The catch: the cold 56MB pull takes ~96s (routed via a fast node in the host's
-# mihomo, since the mainland-direct link throttles bulk to ~116KB/s), which BLOWS OmniSeek's 90s
-# single-source deadline. So if the cache ever expires and a QUERY triggers the refetch, it times out
-# mid-pull, never caches, and stays stuck. This job DECOUPLES the refetch from the query path: it runs
-# the pull in the background monthly and caches with a TTL that OUTLASTS the cadence, so an eye query
-# always hits a warm cache and never waits. Fail-open: a failed pull logs + leaves the existing cache
-# intact (a stale-but-present cache beats a broken query). Structurally the right shape for any future
-# bulk source (a big file that must not be pulled on the synchronous query path).
-_NSERC_PRIME_TTL_S = 45 * 86400   # 45d > the monthly cadence, so each monthly refresh always overlaps
-
-
-def run_nserc_prime() -> dict:
-    """Prime the nserc_awards cache OFF the query path: pull the FY bulk CSV, build the CS/AI subset,
-    and cache it with a TTL that outlasts the monthly cadence. Fail-open: a raised/empty pull keeps
-    the existing cache (never caches an empty) and never crashes the tick. Returns a small summary."""
-    from omniseek.core.sources.api.nserc_awards_source import NSERCAwardsAdapter
+    # EYE-CACHE-CAP (2026-11-03): the same daily pass deletes expired cache files. cache.clear_expired
+    # ran only at a (re)start (serve_http), so a stretch with no release kept dead JSON on disk. No
+    # size cap on top: the TTLs bound the total (11-03: 1,060 files, ~157 MB, oldest from 10-21).
     from omniseek.core import cache
-    a = NSERCAwardsAdapter()
     try:
-        docs = a._fetch_filter_build()   # always fetches the 56MB CSV (no cache short-circuit)
-    except Exception as exc:  # noqa: BLE001 -- a pull failure keeps the existing cache, never kills the tick
-        log.warning("nserc-prime: fetch raised (%s) -> kept existing cache", exc)
-        return {"ok": False, "reason": str(exc)[:80]}
-    if not docs:
-        log.warning("nserc-prime: fetch returned no docs -> kept existing cache")
-        return {"ok": False, "docs": 0}
-    cache.set_docs(cache.make_key(a.name, "subset", a._YEAR), docs, ttl=_NSERC_PRIME_TTL_S)
-    log.info("nserc-prime: cached %d CS/AI docs (ttl %dd)", len(docs), _NSERC_PRIME_TTL_S // 86400)
-    return {"ok": True, "docs": len(docs)}
+        expired = cache.clear_expired()
+    except Exception as exc:  # noqa: BLE001 -- housekeeping must never break the scheduler
+        log.warning("cache sweep skipped: %s", exc)
+        expired = None
+    return {"rotated": rotate_logs(), "cache_expired": expired}
 
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
-# JOB: curator monthly pass   (transplanted from curator.py; monthly@1-06:00, ENABLED per the operator)
+# JOB: aiid-snapshot   (weekly; task EYE-AIID-SNAP, 2026-10-20)
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
-# THE ONE-LINE RAZOR (every drift violates it): the pass is mechanical-only. It discovers, probes,
-# persists, counts, and Barks pure FACTS, rendering ZERO editorial judgment. A spawned AGENT renders
-# EVERY verdict (which gap matters, which candidate to pursue, admit/watch/reject). the operator owns only
-# red-line/coverage POLICY DATA + the single irreversible sanction (committing an owner_review-staged
-# config row). This code imports NO verdict-writer, NO model/anthropic client, NO WebSearch, NO
-# profile.*/relevance/employer_hits. Every digest list is sorted(...) lexicographic, NEVER
-# centrality/yield/relevance-ranked.
-#
-# GATES, as they actually ship (verified against curator_policy.json at the P9 gate; an earlier
-# draft of this note claimed enabled:false, which was stale): the policy ships enabled:TRUE, so an
-# enabled row DOES run the monthly discovery -> probe -> neutral-evidence-packet pass. What stays
-# data-gated: cold_start.enabled ships FALSE (web-seeding of unreachable coverage cells is off,
-# hard-capped by its budget when on), and discovery only pursues cells DECLARED in
-# coverage_targets.json. The min-cadence guard means an out-of-schedule extra run within the
-# cadence window is a clean no-op, so a deploy restart storm cannot defeat the monthly cadence.
-# State: ~/.omniseek/state/curator/curator-loop-state.json (unchanged path).
-#
-# NOTE (ignition, P9): the ROW is ENABLED per the operator: expect one Bark digest of neutral facts per
-# month (admit/watch/reject verdicts stay the agent's, in the /curator session). Runs in the writer
-# process; discovery's own probe fetches use _run_bounded, and the pass records no yield.
-_CURATOR_STATE = _STATE / "curator" / "curator-loop-state.json"
-_CURATOR_RUN_HISTORY_CAP = 12  # bounded ring of run summaries for the STOP streak
-
-
-def _now_iso() -> str:
-    return datetime.now().isoformat(timespec="seconds")
-
-
-def _now_epoch() -> float:
-    return datetime.now(timezone.utc).timestamp()
-
-
-def _curator_read_policy():
-    """Read curator_policy.json (the operator DATA). Tolerant: a missing/corrupt file degrades to the
-    INERT built-in (enabled:false), so a broken policy never accidentally ENABLES discovery."""
-    p = (Path(__file__).resolve().parent / "curator" / "curator_policy.json")
-    try:
-        data = json.loads(p.read_text(encoding="utf-8"))
-        if isinstance(data, dict):
-            return data
-    except Exception as exc:  # noqa: BLE001
-        log.warning("curator_policy.json unreadable (%s) -> INERT built-in (enabled:false)", exc)
-    return {"enabled": False, "cold_start": {"enabled": False, "budget": 3},
-            "min_cadence_days": 25, "M_zero_new_streak": 3, "discover_topn": 12,
-            "error_retry_budget": 2, "watching_max_reprobes": 3, "watching_ttl_days": 120,
-            "max_new_probes": 24, "coverage_ceiling": {"_default": 4}}
-
-
-def _curator_is_stopped(state: dict, policy: dict) -> bool:
-    """True iff the loop has CONVERGED: M consecutive demonstrably-HEALTHY rounds with zero net-new
-    placed cells. A pure read of the run history + state counter; renders no verdict."""
-    m = int(policy.get("M_zero_new_streak", 3) or 3)
-    return int(state.get("consecutive_zero_new_rounds", 0) or 0) >= m
-
-
-def _curator_live_hosts_safe(fetcher) -> set:
-    try:
-        from omniseek.core.curator import apply as _apply
-        return _apply._live_hosts()
-    except Exception:  # noqa: BLE001
-        return set()
-
-
-def _curator_set_field(candidates, cid: str, key: str, value) -> None:
-    """Persist a scalar bookkeeping field (error_count) on a candidate row WITHOUT a state change.
-    Mechanical, no verdict. Degrades silently on any failure (a convenience counter, not load-bearing
-    for safety)."""
-    try:
-        with candidates._LOCK:
-            rows = candidates._load_all()
-            for r in rows:
-                if r.get("id") == cid:
-                    r[key] = value
-                    break
-            candidates._save_all(rows)
-    except Exception as exc:  # noqa: BLE001
-        log.warning("curator set_field %s on %s failed: %s", key, cid, exc)
-
-
-def _curator_sweep_watching(candidates, policy: dict) -> None:
-    """Route a watching candidate past its re-probe budget / TTL to rejected ('watch-expired'). A
-    mechanical lifecycle bound (the recurring re-probe set cannot grow unbounded), NOT a verdict on
-    the source's worth: it uses the watching->rejected FSM edge with a fixed mechanical reason."""
-    max_reprobes = int(policy.get("watching_max_reprobes", 3) or 3)
-    ttl_days = float(policy.get("watching_ttl_days", 120) or 120)
-    now = _now_epoch()
-    for row in candidates.list("watching"):
-        cid = row.get("id")
-        reprobes = sum(1 for h in (row.get("history") or []) if h.get("state") == "probed")
-        expired = reprobes >= max_reprobes
-        if not expired:
-            verdict = row.get("verdict") or {}
-            at = verdict.get("at")
-            if isinstance(at, str):
-                try:
-                    t = datetime.strptime(at, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc).timestamp()
-                    expired = (now - t) >= (ttl_days * 86400.0)
-                except Exception:  # noqa: BLE001
-                    expired = False
-        if expired:
-            try:
-                candidates.set_state(cid, "rejected", note="watch-expired (TTL/re-probe budget)", by="curator")
-                for u in (row.get("urls") or []):
-                    candidates.record_tried_host(u)
-            except Exception as exc:  # noqa: BLE001
-                log.warning("curator watch-expire of %s failed: %s", cid, exc)
-
-
-def _curator_net_new_placed(state: dict, empty_cells: list) -> int:
-    """How many target cells became PLACED since last round (left empty_cells_for_discovery). A pure
-    set-difference FACT for the STOP streak. First round (no prior) -> 0."""
-    prev = set(state.get("prev_empty_cells") or [])
-    if not prev:
-        return 0
-    return len(prev - set(empty_cells))
-
-
-def run_curator() -> dict:
-    """One curator P4 loop pass (curator.py main() transplanted). Mechanical-only: gap read ->
-    discover (gated by policy.enabled) -> dedup+persist -> pre-build evidence -> watching sweep ->
-    diff-gated Bark -> write run-summary state. Renders NO verdict."""
-    from omniseek.server import load_sources
-    load_sources()
-    from omniseek.core.curator import candidates, discover, evidence, probe, redlines, source_audit  # noqa: F401
-    from omniseek.core import fetcher
-
-    policy = _curator_read_policy()
-    state = _load_state(_CURATOR_STATE)
-    first_run = not state
-
-    # Step 0: min-interval guard. A run within the cadence window is a clean no-op (RunAtLoad restart
-    # storms during dev redeploys cannot defeat the monthly cadence). Skipped on the first run.
-    min_cadence_days = float(policy.get("min_cadence_days", 25) or 25)
-    last_run_epoch = state.get("last_discovery_run_epoch")
-    if not first_run and isinstance(last_run_epoch, (int, float)):
-        if (_now_epoch() - float(last_run_epoch)) < (min_cadence_days * 86400.0):
-            log.info("curator: within cadence (%sd); no-op", min_cadence_days)
-            return {"noop": "within-cadence"}
-
-    # Step 1: gap read (READ-ONLY). The SAME gather the weekly audit makes.
-    dossier = source_audit.gather_source_dossier()
-    empty_cells = list(dossier.get("empty_cells_for_discovery") or [])
-    single_cells = list(dossier.get("single_occupant_cells") or [])
-    try:
-        from omniseek.core.curator import yield_tap
-        yield_state = yield_tap._load_all()
-    except Exception as exc:  # noqa: BLE001
-        log.warning("curator: yield read failed (%s) -> empty", exc)
-        yield_state = {}
-
-    # Step 2: discover. Returns [] when policy.enabled is false (scaffold idle).
-    try:
-        findings = discover.discover(dossier, yield_state=yield_state, policy=policy)
-    except Exception as exc:  # noqa: BLE001: a discovery failure is a degraded round, never fatal
-        log.warning("curator: discover failed (%s) -> degraded round, no findings", exc)
-        findings = []
-    discovery_health = discover.discovery_health(findings, dossier)
-    log.info("curator: discovered %d candidate(s); discovery_health=%s", len(findings), discovery_health)
-
-    # Step 3: dedup + persist.
-    try:
-        live_hosts = _curator_live_hosts_safe(fetcher)
-    except Exception:  # noqa: BLE001
-        live_hosts = set()
-    existing = {r.get("id"): r.get("state") for r in candidates.list()}
-    survived = 0
-    for f in findings:
-        urls = f.get("urls") or []
-        cand_hosts = {candidates.canonical_host(u) for u in urls}
-        cand_hosts.discard("")
-        if cand_hosts & {candidates.canonical_host(h) for h in live_hosts}:
-            continue  # already a live source
-        if any(candidates.host_is_tried(u) for u in urls):
-            continue  # terminal-host ledger
-        fid = f.get("id") or candidates.make_id(f.get("name") or "", urls)
-        st = existing.get(fid)
-        if st is not None and st not in ("new", "error"):
-            continue  # already tracked downstream
-        try:
-            candidates.add(f)
-            survived += 1
-        except Exception as exc:  # noqa: BLE001: one bad row must not abort the round
-            log.warning("curator: candidates.add failed for %s: %s", fid, exc)
-    log.info("curator: survived dedup: %d", survived)
-
-    # Step 4: pre-build evidence (drive P1's mechanical half). NEVER calls a verdict-writer.
-    error_retry_budget = int(policy.get("error_retry_budget", 2) or 2)
-    max_new_probes = int(policy.get("max_new_probes", 24) or 24)
-    probed = 0
-    for row in candidates.list("new"):
-        if probed >= max_new_probes:
-            break  # per-run probe ceiling
-        cid = row.get("id")
-        if not (row.get("urls") or []):
-            continue  # URL-less cold-start stub: surfaces as an unfilled cell
-        probed += 1
-        hits = redlines.match(row)
-        if any(h.get("severity") == "hard" for h in hits):
-            candidates.set_state(cid, "redline_blocked",
-                                 note=f"hard red-line: {[h['id'] for h in hits if h['severity']=='hard']}")
-            for u in (row.get("urls") or []):
-                candidates.record_tried_host(u)
-            continue
-        ok, probe_out = fetcher._run_bounded(lambda r=row: probe.mode_probe(r), 60.0)
-        if not ok or (isinstance(probe_out, dict) and probe_out.get("probe_error")
-                      and not probe_out.get("probe_reached")):
-            reason = "deadline" if not ok else probe_out.get("probe_error")
-            ec = int((candidates.get(cid) or {}).get("error_count", 0) or 0) + 1
-            if ec >= error_retry_budget:
-                candidates.set_state(cid, "probe_dead", note=f"probe failed {ec}x: {reason}")
-                _curator_set_field(candidates, cid, "error_count", ec)
-                for u in (row.get("urls") or []):
-                    candidates.record_tried_host(u)
-            else:
-                candidates.set_state(cid, "error", note=f"probe failure {ec}/{error_retry_budget}: {reason}")
-                _curator_set_field(candidates, cid, "error_count", ec)
-            continue
-        _curator_set_field(candidates, cid, "error_count", 0)
-        row["_probe_cache"] = probe_out
-        packet = evidence.build_packet_for(row)
-        digest = evidence.safety_digest(packet)
-        candidates.store_evidence(cid, packet, digest, "awaiting_verdict",
-                                  note=f"probed (mode={probe_out.get('mode')})")
-    log.info("curator: probed %d new row(s)", probed)
-
-    _curator_sweep_watching(candidates, policy)
-
-    # Step 5: Bark (diff-gated edge-alarm).
-    prev = state.get("last_signals") or {}
-    awaiting_ids = sorted(r.get("id") for r in candidates.list("awaiting_verdict") if r.get("id"))
-    newly_awaiting = sorted(set(awaiting_ids) - set(prev.get("awaiting_verdict_ids") or []))
-    newly_empty = sorted(set(empty_cells) - set(prev.get("empty_cells") or []))
-    newly_single = sorted(set(single_cells) - set(prev.get("single_occupant_cells") or []))
-
-    pushed = 0
-    lines = []
-    if newly_awaiting:
-        names = sorted((candidates.get(i) or {}).get("name") or i for i in newly_awaiting)
-        lines.append(f"{len(newly_awaiting)} NEW candidate(s) awaiting verdict: "
-                     f"{', '.join(names[:8])}" + (" ..." if len(names) > 8 else ""))
-    if newly_empty:
-        lines.append(f"{len(newly_empty)} NEWLY-empty target cell(s): "
-                     f"{', '.join(newly_empty[:10])}" + (" ..." if len(newly_empty) > 10 else ""))
-    if newly_single:
-        lines.append(f"{len(newly_single)} NEWLY-single-occupant cell(s): "
-                     f"{', '.join(newly_single[:10])}" + (" ..." if len(newly_single) > 10 else ""))
-    body = "\n".join(lines) if lines else "no new curator signals this round"
-    log.info("curator: %s", body.replace("\n", " | "))
-
-    if first_run:
-        log.info("curator: first run -> SILENT baseline (no push); signals recorded for next diff")
-    elif lines:
-        title = f"源采集巡查 · {len(newly_awaiting)} 新候选 / {len(newly_empty)} 新空格"
-        _alert(title, body + "\n\n(中性事实; admit/watch/reject 由采集 agent 判,本巡查不裁决)",
-              group="OmniSeek-Curator", level="passive")
-        pushed += 1
-
-    # Step 6: write run-summary state (for the STOP streak). Degraded FREEZES the streak.
-    net_new_placed = _curator_net_new_placed(state, empty_cells)
-    streak = int(state.get("consecutive_zero_new_rounds", 0) or 0)
-    if discovery_health == "degraded":
-        pass  # FREEZE: an outage round never masquerades as saturation
-    elif net_new_placed == 0:
-        streak += 1
-    else:
-        streak = 0
-    summary = {
-        "at": _now_iso(), "candidates_found": len(findings), "survived_dedup": survived,
-        "newly_awaiting_count": len(newly_awaiting), "empty_cells_count": len(empty_cells),
-        "net_new_placed": net_new_placed, "discovery_health": discovery_health,
-    }
-    history = list(state.get("run_history") or [])
-    history.append(summary)
-    history = history[-_CURATOR_RUN_HISTORY_CAP:]
-
-    state["last_run"] = _now_iso()
-    state["last_discovery_run_epoch"] = _now_epoch()
-    state["consecutive_zero_new_rounds"] = streak
-    state["prev_empty_cells"] = empty_cells
-    state["run_history"] = history
-    state["last_signals"] = {"awaiting_verdict_ids": awaiting_ids, "empty_cells": empty_cells,
-                             "single_occupant_cells": single_cells}
-    _save_state(_CURATOR_STATE, state)
-
-    stopped = _curator_is_stopped(state, policy)
-    log.info("curator: done. found=%d survived=%d probed=%d awaiting_new=%d streak=%d stopped=%s bark=%d",
-             len(findings), survived, probed, len(newly_awaiting), streak, stopped, pushed)
-    return {"found": len(findings), "survived": survived, "probed": probed,
-            "awaiting_new": len(newly_awaiting), "streak": streak, "stopped": stopped, "bark": pushed}
-
-
-# ══════════════════════════════════════════════════════════════════════════════════════════════════
-# JOB: source audit   (transplanted from source_audit.py; weekly@sun-06:00, ENABLED per the operator)
-# ══════════════════════════════════════════════════════════════════════════════════════════════════
-# The health watchdog reports a source that DIED; this reports the slow structural question: which
-# sources look like dead weight (yield-measured), which feeds went silent, and -- the inverse of a
-# prune -- which (domain x mode) coverage cells are EMPTY and want a NEW source. It PRUNES NOTHING and
-# renders NO verdict: it calls the read-only mechanical gather (source_audit.gather_source_dossier)
-# and surfaces NEUTRAL candidates + gaps for the spawned audit agent + the operator. Every
-# keep/watch/prune call is the agent's, downstream of this push.
-# Discipline: first run per signal-class is a SILENT baseline (no Bark flood); prune-FLAGGING is
-# suppressed for any source below min_evidence_met (cold-start); one deduplicated Bark digest, diff-
-# gated so a standing structural warning does not re-fire every week.
-# State: ~/.omniseek/state/job.source-audit/state.json (unchanged path).
-_AUDIT_STATE = _STATE / "job.source-audit" / "state.json"
-_MIN_SEARCHES_TO_FLAG = 30        # only flag sole_share=0 once offered to >= this many searches
-_DEAD_FAILS_TO_FLAG = 2           # consecutive watchdog fails before surfacing as a DEAD candidate
-_SILENT_DAYS_TO_FLAG = 30         # live-feed-silent days before surfacing as a low-yield candidate
-
-
-def _audit_redundant(sources: list) -> list:
-    """Sources offered to enough searches, cold-start cleared, sole_share == 0 (others always
-    co-surface their hits) AND not protected/tap-blind/deadline-starved. NEUTRAL surfacing only."""
-    out = []
-    for s in sources:
-        f = s.get("safety_flags") or {}
-        if not f.get("min_evidence_met"):
-            continue  # cold-start: never surface as a prune candidate
-        if f.get("protected_sole_contributor") or f.get("tap_blind") or f.get("deadline_starved"):
-            continue
-        y = s.get("yield") or {}
-        offered = int(y.get("searches_present", 0)) + int(y.get("searches_timed_out", 0))
-        if offered < _MIN_SEARCHES_TO_FLAG:
-            continue
-        if (s.get("ratios") or {}).get("sole_share", 0.0) == 0.0 and int(y.get("topk_appearances", 0)) > 0:
-            out.append(s["name"])
-    return sorted(out)
-
-
-def _audit_dead(sources: list) -> list:
-    """Sources with >= _DEAD_FAILS_TO_FLAG consecutive watchdog fails AND not CDP/credentialed (a
-    benign auth failure is not death)."""
-    out = []
-    for s in sources:
-        f = s.get("safety_flags") or {}
-        if f.get("is_cdp_or_credentialed"):
-            continue
-        if int((s.get("watchdog") or {}).get("consecutive_fails", 0)) >= _DEAD_FAILS_TO_FLAG:
-            out.append(s["name"])
-    return sorted(out)
-
-
-def _audit_silent(sources: list) -> list:
-    """Live feed silent >= _SILENT_DAYS_TO_FLAG days but recall still carrying it (from_index_only>0),
-    and NOT below its own cadence floor (a quarterly feed between cycles is expected silence)."""
-    out = []
-    for s in sources:
-        f = s.get("safety_flags") or {}
-        if f.get("below_cadence_floor"):
-            continue
-        days = (s.get("ingest") or {}).get("live_feed_silent_days")
-        carrying = int((s.get("yield") or {}).get("from_index_only_appearances", 0)) > 0
-        if isinstance(days, (int, float)) and days >= _SILENT_DAYS_TO_FLAG and carrying:
-            out.append(s["name"])
-    return sorted(out)
-
-
-def run_source_audit() -> dict:
-    """One source-audit pass (source_audit.py main() transplanted). Read-only + diff-gated Bark;
-    renders NO verdict. First run per signal-class is a SILENT baseline."""
-    from omniseek.server import load_sources
-    load_sources()
-    from omniseek.core.curator import source_audit
-
-    dossier = source_audit.gather_source_dossier()  # READ-ONLY mechanical gather
-    sources = dossier.get("sources", [])
-    redundant = _audit_redundant(sources)
-    dead = _audit_dead(sources)
-    silent = _audit_silent(sources)
-    empty_cells = dossier.get("empty_cells", [])
-    single_cells = dossier.get("single_occupant_cells", [])
-    revalidation = dossier.get("revalidation_candidates", [])  # stale prior judgments to re-look
-
-    state = _load_state(_AUDIT_STATE)
-    first_run = not state  # first ever run -> SILENT baseline, no Bark flood
-    pushed = 0
-
-    # Diff-gate the STANDING structural lines into EDGE alarms: compare against the saved baseline +
-    # Bark only the cells that JUST changed (a cell that newly emptied / newly dropped to one occupant
-    # = a real fragility event). Persist the full current sets below so a cell leaving a set re-arms it.
-    prev = state.get("last_candidates") or {}
-    newly_empty = sorted(set(empty_cells) - set(prev.get("empty_cells") or []))
-    newly_single = sorted(set(single_cells) - set(prev.get("single_occupant_cells") or []))
-    newly_stale = sorted(set(revalidation) - set(prev.get("revalidation_candidates") or []))
-
-    lines = []
-    if redundant:
-        lines.append(f"{len(redundant)} sources sole_share=0 over >={_MIN_SEARCHES_TO_FLAG} "
-                     f"searches: {', '.join(redundant[:8])}" + (" ..." if len(redundant) > 8 else ""))
-    if dead:
-        lines.append(f"{len(dead)} sources consecutive_fails>={_DEAD_FAILS_TO_FLAG}: "
-                     f"{', '.join(dead[:8])}" + (" ..." if len(dead) > 8 else ""))
-    if silent:
-        lines.append(f"{len(silent)} sources live-silent >={_SILENT_DAYS_TO_FLAG}d but recall "
-                     f"carrying: {', '.join(silent[:8])}" + (" ..." if len(silent) > 8 else ""))
-    if newly_empty:
-        lines.append(f"{len(newly_empty)} NEWLY-empty (domain x mode) cells = coverage GAPS to ADD: "
-                     f"{', '.join(newly_empty[:10])}" + (" ..." if len(newly_empty) > 10 else ""))
-    if newly_single:
-        lines.append(f"{len(newly_single)} cells NEWLY dropped to ONE live occupant "
-                     f"(prune-protected): {', '.join(newly_single[:10])}"
-                     + (" ..." if len(newly_single) > 10 else ""))
-    if newly_stale:
-        _floor = int((dossier.get("policy") or {}).get("verdict_revalidation_floor_days", 90))
-        lines.append(f"{len(newly_stale)} 个源上次裁决 >{_floor}d (复检 fruit): "
-                     f"{', '.join(newly_stale[:10])}" + (" ..." if len(newly_stale) > 10 else ""))
-
-    body = "\n".join(lines) if lines else "no audit candidates this week"
-    log.info("source-audit: %s", body.replace("\n", " | "))
-
-    if first_run:
-        log.info("source-audit: first run -> SILENT baseline (no push); candidates recorded for next diff")
-    elif lines:
-        title = (f"源审计周报 · {len(redundant)+len(dead)+len(silent)} 候选 / "
-                 f"{len(newly_empty)} 新空格 / {len(newly_stale)} 待复检")
-        _alert(title, body + "\n\n(中性事实; KEEP/WATCH/PRUNE 由审计 agent 判,本哨兵不裁决)",
-              group="OmniSeek-Curator", level="passive")
-        pushed += 1
-
-    state["last_run"] = datetime.now().isoformat(timespec="seconds")
-    state["last_candidates"] = {"redundant": redundant, "dead": dead, "silent": silent,
-                                "empty_cells": empty_cells, "single_occupant_cells": single_cells,
-                                "revalidation_candidates": revalidation}
-    _save_state(_AUDIT_STATE, state)
-    log.info("source-audit: done. redundant=%d dead=%d silent=%d empty=%d(newly=%d) "
-             "single=%d(newly=%d) reval=%d(newly=%d) bark=%d",
-             len(redundant), len(dead), len(silent), len(empty_cells), len(newly_empty),
-             len(single_cells), len(newly_single), len(revalidation), len(newly_stale), pushed)
-    return {"redundant": len(redundant), "dead": len(dead), "silent": len(silent),
-            "empty_cells": len(empty_cells), "bark": pushed}
-
-
-# ══════════════════════════════════════════════════════════════════════════════════════════════════
-# JOB: weekly digest   (transplanted from digest.py; weekly@mon-09:00, DISABLED)
-# ══════════════════════════════════════════════════════════════════════════════════════════════════
-# A cross-source, deduped, ranked reading list. Where the sensors push individual NEW items (event-
-# driven), the digest gives the operator a periodic CURATED view: per theme it runs fetcher.search_ranked
-# across the relevant sources -> cross-source dedup + unified ranking -> the top items. Output: a
-# Markdown digest (saved + archived) + a condensed Bark push. The synthesis is STRUCTURAL (dedup +
-# rank + theme grouping), not LLM prose -- the Markdown is the substrate a session turns into prose
-# on demand. PUSH CHANNEL: 企业微信 (WeCom) ONLY, per the operator (2026-07-14) -- notify.wecom_push, not Bark.
-#
-# THE THEMES LIST LEFT THE CODE (P9): it is now DATA at ~/.omniseek/state/digest-themes.json (seeding
-# that file on the service host is the operator's migration step). When the file is ABSENT the job NO-OPS with a
-# log line -- it never invents a theme list. Row ships ENABLED (the operator 2026-07-14) but is SAFE on any
-# deployment BECAUSE of that no-op: a fresh deploy without themes pushes nothing. It is enabled in CODE
-# (not a profile override) on purpose -- a profile file, once present, gates the walled source fleet
-# OFF by default (profile.is_source_enabled), so enabling a JOB via the profile would silently disable
-# the walled sources; the live deployment runs profile-less.
-# State: ~/.omniseek/state/digests/ (Markdown out) + the themes file (in).
-_DIGEST_DIR = _STATE / "digests"
-_DIGEST_THEMES_PATH = _STATE / "digest-themes.json"
-_DIGEST_PER_THEME = 6
-
-
-def _load_digest_themes() -> list:
-    """The theme rows (each {label, query, sources}) from ~/.omniseek/state/digest-themes.json, or []
-    when the file is absent/corrupt. The job no-ops on []. Never a built-in default (the list is
-    the operator's DATA, seeded on the service host)."""
-    if not _DIGEST_THEMES_PATH.exists():
-        return []
-    try:
-        data = json.loads(_DIGEST_THEMES_PATH.read_text(encoding="utf-8"))
-        return data if isinstance(data, list) else []
-    except Exception as exc:  # noqa: BLE001
-        log.warning("digest-themes.json unreadable (%s) -> no-op", exc)
-        return []
-
-
-def _digest_theme_section(fetcher, theme: dict) -> tuple[list, "str | None"]:
-    # Bounded per theme: the digest is a periodic background pulse -- timeliness over completeness,
-    # and a slow venue must not stretch the serial multi-theme run.
-    docs, _ = fetcher.search_ranked(theme.get("query", ""), theme.get("sources"),
-                                    _DIGEST_PER_THEME, deadline_s=30)
-    lines = [f"## {theme.get('label', '?')}", ""]
-    if not docs:
-        lines += ["_(无结果)_", ""]
-        return lines, None
-    for d in docs:
-        date = d.date.date().isoformat() if d.date else "-"  # (was em-dash in digest.py; P9 no-em-dash)
-        also = d.metadata.get("also_in")
-        src = d.source + (f" (+{'+'.join(also)})" if also else "")
-        lines.append(f"- **{d.title.strip()[:90]}**  ")
-        lines.append(f"  `{src}` · {date} · rank={d.metadata.get('_rank', '?')} · {d.url}")
-    lines.append("")
-    return lines, docs[0].title.strip()[:48]
-
-
-def run_digest() -> dict:
-    """One weekly digest pass (digest.py main() transplanted). NO-OPS (with a log line) when the
-    themes file is absent; else builds the Markdown + a condensed WeCom (企业微信) push. Row ships
-    ENABLED (the no-op makes that safe without a themes file)."""
-    themes = _load_digest_themes()
-    if not themes:
-        log.info("digest: no themes file at %s -> no-op (seed it to enable)",
-                 _DIGEST_THEMES_PATH)
-        return {"noop": "no-themes"}
-
-    from omniseek.server import load_sources
-    load_sources()
-    ts = datetime.now()
-
-    # PRIMARY: an AGENT-synthesized briefing (a frontier LLM with READ-ONLY use of OmniSeek + brain ->
-    # insight tied to the operator's goals, not a link list). Fail-open by contract: None -> the mechanical
-    # ranked-link digest below (the agent is an enrichment, never a hard dependency).
-    mode = "agent"
-    try:
-        from omniseek.core import briefing
-        agent_md = briefing.build_briefing(themes)
-    except Exception as exc:  # noqa: BLE001 -- the briefing agent must never crash the job
-        log.warning("digest: briefing agent raised (%s) -> link fallback", exc)
-        agent_md = None
-
-    if agent_md:
-        body = f"# OmniSeek 周报 · {ts.date().isoformat()}\n\n{agent_md}"
-        push_body = agent_md  # already concise markdown; wecom_push byte-caps it defensively
-    else:
-        # FALLBACK: the mechanical cross-source dedup+rank link list (the pre-agent behaviour).
-        mode = "links"
-        from omniseek.core import fetcher
-        md = [f"# OmniSeek 周报 · {ts.date().isoformat()}", "",
-              f"_跨源去重 + 统一排序 · {len(themes)} 个主题 · 每主题 top {_DIGEST_PER_THEME}_", ""]
-        highlights: list = []
-        for theme in themes:
-            try:
-                sec, top = _digest_theme_section(fetcher, theme)
-            except Exception as exc:  # noqa: BLE001 -- one theme must not kill the digest
-                sec, top = [f"## {theme.get('label', '?')}", "", f"_(error: {exc})_", ""], None
-            md += sec
-            if top:
-                highlights.append(f"{theme.get('label', '?')}: {top}")
-            log.info("digest: %s: %s", theme.get("label", "?"), "ok" if top else "empty")
-        body = "\n".join(md)
-        push_body = "\n".join(f"- {h}" for h in highlights[:5]) or "本期无新内容"
-
-    _DIGEST_DIR.mkdir(parents=True, exist_ok=True)
-    (_DIGEST_DIR / "latest.md").write_text(body, encoding="utf-8")
-    (_DIGEST_DIR / f"digest-{ts.strftime('%Y%m%d')}.md").write_text(body, encoding="utf-8")
-
-    # Push to 企业微信 (WeCom, the operator's MAIN channel) ONLY -- NOT Bark (the operator 2026-07-14). The full
-    # Markdown is saved above; WeCom carries the briefing (agent) or the top-5 highlights (fallback).
-    from omniseek.core import notify
-    # Its own source, so the outlet can route the weekly report apart from the alarms.
-    notify.wecom_push(f"OmniSeek 周报 · {ts.date().isoformat()}", push_body, source="eye.weekly")
-    log.info("digest[%s]: wrote %s (%d themes); wecom push sent", mode, _DIGEST_DIR / "latest.md", len(themes))
-    return {"themes": len(themes), "mode": mode}
+# The ai_incidents source answers from a local index built off the AI Incident Database's weekly
+# public snapshot. This job checks the snapshot page once a week and, only when a newer snapshot is
+# listed, downloads it, checks it is whole, builds the index and switches to it (all in
+# sources/api/ai_incidents_source.refresh, which also removes the downloaded archive and the older
+# snapshot). A failed check keeps the snapshot in use; the source's health_check reports it stale
+# once it is more than 14 days old, and source-health carries that to the usual alert.
+def run_aiid_snapshot() -> dict:
+    from omniseek.core.sources.api import ai_incidents_source as aiid
+    summary = aiid.refresh()
+    log.info("aiid-snapshot: %s", {k: summary.get(k) for k in
+                                   ("outcome", "latest_listed", "in_use", "incidents", "timings_s", "error")})
+    return summary

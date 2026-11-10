@@ -1,7 +1,7 @@
 """The QUARANTINED live-mutation core of the curator (apply.py stays pure / gate-only).
 
 THE CORE SPLIT (the load-bearing safety property):
-  * LIVE EFFECT (reversible)  = an overlay row under ~/.omniseek/state/curator/overlays/ + a live
+  * LIVE EFFECT (reversible)  = an overlay row under <state>/curator/overlays/ + a live
     re-register into the RUNNING worker's fetcher._adapters. NO git, NO restart, NO in-tree write.
     A single operator tap (server.omniseek_curator_apply_live) applies exactly this.
   * DURABLE TRUTH (irreversible) = the in-tree config JSON commit + redeploy. THE OPERATOR'S HAND
@@ -33,12 +33,13 @@ from pathlib import Path
 from typing import Optional
 
 from omniseek.core import cache
+from omniseek import where
 
 logger = logging.getLogger(__name__)
 
-# Same state tree as candidates.json / source_verdicts.json (survives redeploys, rides the weekly
-# state-backup launchd, keeps the read-only deploy tree pristine). Created on first append.
-OVERLAY_DIR = Path.home() / ".omniseek" / "state" / "curator" / "overlays"
+# Same state tree as candidates.json / source_verdicts.json (survives redeploys, in no backup, keeps
+# the read-only deploy tree pristine). Created on first append.
+OVERLAY_DIR = where.state() / "curator" / "overlays"
 
 # Guards every overlay write (mirrors candidates._LOCK / source_audit._LOCK). All mutations go
 # through append/drop/mark_committed under this lock; an atomic cache._atomic_write_text means a
@@ -204,11 +205,8 @@ def register_one(family: str, row: dict):
             name=row["name"], affiliations=row["affiliations"],
             description=row["description"], regions=row.get("regions"))
     if family == "news_scraper":
-        from omniseek.core.sources.scrape.news_scraper_source import _ScrapeSite
-        return _ScrapeSite(
-            name=row["name"], description=row["description"], sites=row["sites"],
-            cache_ttl=row.get("cache_ttl", 10800), url_pattern=row.get("url_pattern"),
-            explicit_only=row.get("explicit_only", False))
+        from omniseek.core.sources.scrape.news_scraper_source import site_adapter
+        return site_adapter(row)
     if family == "page_watch":
         return None  # an extra ROW, not a new adapter (the single PageWatchAdapter owns all rows)
     if family == "search_index":
@@ -252,7 +250,7 @@ def apply_overlay_row(cand: dict) -> dict:
     if not isinstance(row, dict):
         raise ValueError("no proposed_config_row to apply (run omniseek_curator_probe first)")
 
-    # 1. typed validation (network-free; never tests/smoke.py which sys.exits + reloads all 143).
+    # 1. typed validation (network-free; never a whole-registry reload).
     problems = _apply.validate_row_typed(family, row)
     if problems:
         raise ValueError(f"row failed typed validation, NOT applied: {problems}")
@@ -339,7 +337,7 @@ def rollback_overlay_row(family: str, name: str) -> dict:
 
 
 # ── the runtime retire overlay (omniseek_curator_retire_live; the prune live-half) ────────────────────
-_RETIRE_PATH = (Path.home() / ".omniseek" / "state" / "curator" / "explicit_only_overrides.json")
+_RETIRE_PATH = (where.state() / "curator" / "explicit_only_overrides.json")
 
 
 def load_retire_overlay() -> dict:
@@ -362,7 +360,7 @@ def retire_live(name: str, reason: str) -> dict:
     """Add a reversible runtime retire for a source: write name -> "retired:<reason> <date>" into
     the retire overlay (atomic, under _LOCK) so _explicit_only_reason returns it and the source
     leaves the broad fan-out immediately (no restart, no git). Invalidates the fetcher cache + the
-    recall cache. The DURABLE half (the in-tree explicit_only edit + the smoke frozen-list line) is
+    recall cache. The DURABLE half (the in-tree explicit_only edit) is
     staged for the operator separately (source_audit.prepare_source_prune_case)."""
     from omniseek.core import fetcher
 

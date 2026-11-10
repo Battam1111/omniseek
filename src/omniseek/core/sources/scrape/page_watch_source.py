@@ -29,8 +29,9 @@ from urllib.parse import urlparse
 import anyio
 from bs4 import BeautifulSoup
 
-from omniseek.core import cache, http, upstreams
+from omniseek.core import cache, http, portal, upstreams
 from omniseek.core.normalize import Document, keyword_score_filter
+from omniseek.core.sources._base import SourceBase
 
 logger = logging.getLogger(__name__)
 
@@ -85,33 +86,14 @@ def _render_html(url: str) -> str:
         return ""
 
 
-def _page_text(url: str, render: bool = False) -> str:
-    """Fetch + normalize a page's visible text (whitespace-collapsed). ``render=True`` drives the
-    page through the CDP Chrome (JS-rendered) instead of httpx — the only way to fingerprint a
-    SPA changelog that client-renders to an empty shell. Empty string on failure."""
-    if render:
-        html = _render_html(url)
-        return _strip_to_text(html) if html else ""
-    try:
-        # http.direct: the declared gates of every hop (the one redirect rule), the declared
-        # User-Agent, the readings. UpstreamBusy lands in the except below: not sent.
-        resp = http.direct("GET", url, headers={"User-Agent": UA}, timeout=TIMEOUT,
-                           follow_redirects=True)
-        resp.raise_for_status()
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("page_watch: fetch failed %s: %s", url, exc)
-        return ""
-    return _strip_to_text(resp.text)
-
-
 async def _apage_text(url: str, render: bool = False) -> str:
-    """Native-async twin of ``_page_text``. A NORMAL page goes native async through the shared leaf
+    """Async replacement of the deleted sync ``_page_text`` (11-04, async step seven; this is the only one now). A NORMAL page goes native async through the shared leaf
     (``http.aget_text``: pooled client + SSRF guard + 30MB cap + cache_only, no thread held during the
     network wait); a ``render`` page runs the sync CDP ``_render_html`` OFF the loop (cdp_call has no
     async API and is serialized/gated — the _rss impersonate/guard_ip precedent). ``_strip_to_text``
     is pure CPU and stays ON the loop. Empty string on failure, the SAME contract as ``_page_text``."""
     if render:
-        html = await anyio.to_thread.run_sync(_render_html, url)  # sync CDP OFF the loop
+        html = await anyio.to_thread.run_sync(_render_html, url, limiter=portal.IO_LANE)  # sync CDP OFF the loop
         return _strip_to_text(html) if html else ""
     # http.aget_text passes our headers through (a passed UA WINS over the shared UA), so the bespoke
     # browser UA is preserved; the shared async client already follow_redirects=True (matching the sync
@@ -121,7 +103,7 @@ async def _apage_text(url: str, render: bool = False) -> str:
     return _strip_to_text(text) if text else ""
 
 
-class PageWatchAdapter:
+class PageWatchAdapter(SourceBase):
     name = "page_watch"
     needs_credentials = False
     kind = "stream"
@@ -159,40 +141,18 @@ class PageWatchAdapter:
             logger.warning("page_watch overlay rows skipped: %s", exc)
         return rows
 
-    def _doc_for(self, row: dict) -> Optional[Document]:
-        key = cache.make_key("page_watch", "text", row["url"])
-        text = cache.get(key)
-        if text is None:
-            text = _page_text(row["url"], render=bool(row.get("render")))
-            if text:
-                cache.set(key, text, ttl=CACHE_TTL)
-        if not text or len(text) < 200:
-            return None  # JS shell or fetch failure: no honest fingerprint possible
-        fp = hashlib.sha256(text.encode("utf-8")).hexdigest()[:10]
-        return Document(
-            source="page_watch",
-            source_id=f"{row['name']}:{fp}",
-            url=row["url"],
-            title=f"{row['label']} · 内容指纹 {fp}",
-            content=(text[:1200] + ("…" if len(text) > 1200 else "")
-                     + "\n\n(此文档代表该页当前内容版本; 指纹变化 = 页面已被改动, 打开 URL 看现行规则)"),
-            tags=["page-watch"] + (row.get("regions") or []),
-            metadata={"page": row["name"], "fingerprint": fp, "chars": len(text),
-                      "note": row.get("note", "")},
-        )
-
     async def _adoc_for(self, row: dict) -> Optional[Document]:
-        """Native-async twin of ``_doc_for``: the SAME per-row TEXT cache (SAME key + TTL) read/written
+        """Async replacement of the deleted sync ``_doc_for`` (11-04, async step seven; this is the only one now): the SAME per-row TEXT cache (SAME key + TTL) read/written
         OFF the loop, the egress via the async ``_apage_text``, then the pure-CPU fingerprint +
         Document build kept ON the loop, byte-identical to ``_doc_for`` (a shared helper would
         have to touch sync code, so this small build is duplicated verbatim instead)."""
         key = cache.make_key("page_watch", "text", row["url"])
-        text = await anyio.to_thread.run_sync(cache.get, key)  # disk read OFF loop, SAME key as _doc_for
+        text = await cache.aget_once(key)  # disk read OFF loop, SAME key as the deleted _doc_for
         if text is None:
             text = await _apage_text(row["url"], render=bool(row.get("render")))
             if text:
                 await anyio.to_thread.run_sync(  # disk write OFF loop
-                    functools.partial(cache.set, key, text, ttl=CACHE_TTL))
+                    functools.partial(cache.set, key, text, ttl=CACHE_TTL), limiter=portal.IO_LANE)
         if not text or len(text) < 200:
             return None  # JS shell or fetch failure: no honest fingerprint possible
         fp = hashlib.sha256(text.encode("utf-8")).hexdigest()[:10]
@@ -208,39 +168,36 @@ class PageWatchAdapter:
                       "note": row.get("note", "")},
         )
 
-    def search(self, query: str, limit: int = 10) -> list[Document]:
-        docs = [d for d in (self._doc_for(r) for r in self._rows()) if d]
-        docs = keyword_score_filter(docs, (query or "").strip())
-        return docs[:limit]
-
     async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async twin of ``search`` -> AsyncSearchCapable (the fetcher awaits this directly
+        """Native-async replacement of the deleted sync ``search`` (11-04, S9; this is the only one now) -> AsyncSearchCapable (the fetcher awaits this directly
         instead of pushing ``.search`` onto the shared thread pool). ``_rows`` (disk read + overlay
         import/validate) runs OFF the loop; the per-row docs are fetched as CONCURRENT coroutines
         (``asyncio.gather``, order-preserving so the result is byte-identical to search's sequential
         build — the _rss/hk_universities fan-out precedent); the shared BM25 filter + truncate stay
         ON the loop, the SAME calls as ``search``."""
-        rows = await anyio.to_thread.run_sync(self._rows)  # disk read + overlay OFF loop
+        rows = await anyio.to_thread.run_sync(self._rows, limiter=portal.IO_LANE)  # disk read + overlay OFF loop
         docs = [d for d in await asyncio.gather(*(self._adoc_for(r) for r in rows)) if d]
         docs = keyword_score_filter(docs, (query or "").strip())
         return docs[:limit]
 
-    def fetch_url(self, url: str) -> Optional[Document]:
+    async def afetch_url(self, url: str) -> Optional[Document]:
         norm = url.split("?")[0].rstrip("/")
-        for row in self._rows():
+        for row in await anyio.to_thread.run_sync(self._rows, limiter=portal.IO_LANE):  # disk read + overlay OFF loop
             if row["url"].split("?")[0].rstrip("/") == norm:
-                return self._doc_for(row)
+                return await self._adoc_for(row)
         return None
 
-    def health_check(self) -> tuple[Optional[bool], str]:
+    async def ahealth_check(self) -> tuple[Optional[bool], str]:
         rows = self._rows()
         if not rows:
             return False, "no pages configured"
-        # SAME key _doc_for reads: while the page text is cached, _doc_for answers from the cache and
+        # SAME key _adoc_for reads: while the page text is cached, _adoc_for answers from the cache and
         # fetches nothing, so this check verifies nothing (None).
-        if cache.get(cache.make_key("page_watch", "text", rows[0]["url"])) is not None:
+        ck = cache.make_key("page_watch", "text", rows[0]["url"])
+        hit = await anyio.to_thread.run_sync(cache.get, ck, limiter=portal.IO_LANE)  # disk read OFF loop
+        if hit is not None:
             return None, f"not probed (the first page's text is still cached; {rows[0]['url']} is fetched again when it expires)"
-        d = self._doc_for(rows[0])
+        d = await self._adoc_for(rows[0])
         if d is None:
             return False, f"first page yielded no text ({rows[0]['url']})"
         return True, f"OK ({len(rows)} pages; first fp={d.metadata['fingerprint']})"

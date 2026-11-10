@@ -5,14 +5,15 @@ over the network, instead of each agent session spawning its own stdio-over-ssh 
 heavy processes, a cold 86-adapter load each). Token-gated, because OmniSeek drives
 credentialed + logged-in-browser tools: it must NEVER serve open.
 
-Run:    python -m omniseek.serve_http      (env: OMNISEEK_HTTP_HOST / OMNISEEK_HTTP_PORT)
-Token:  ~/.omniseek/credentials/omniseek_http.json  ->  {"token": "..."}  (mode 600)
+Run:    OMNISEEK_HTTP_PORT=<port> python -m omniseek.serve_http   (env: OMNISEEK_HTTP_HOST; the port has no default)
+Token:  <credentials>/omniseek_http.json  ->  {"token": "..."}  (mode 600)
 Client: send  Authorization: Bearer <token>  on every request. Unauthed -> 401.
         /healthz is open (liveness only, returns no data).
 """
 
 from __future__ import annotations
 
+import contextlib
 import hmac
 import json
 import logging
@@ -23,7 +24,7 @@ import uvicorn
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 
-from omniseek.core import auth
+from omniseek.core import auth, portal
 from omniseek.server import mcp
 
 logger = logging.getLogger("omniseek.serve_http")
@@ -33,7 +34,24 @@ logger = logging.getLogger("omniseek.serve_http")
 # OMNISEEK_HTTP_HOST=0.0.0.0 explicitly (and owns putting it behind a firewall / reverse proxy).
 HOST = os.environ.get("OMNISEEK_HTTP_HOST", "127.0.0.1")
 _IS_LOOPBACK = HOST in ("127.0.0.1", "::1", "localhost")
-PORT = int(os.environ.get("OMNISEEK_HTTP_PORT", "8765"))
+
+
+def _port_from_env() -> int:
+    # The port comes ONLY from the service's own configuration (the launchd plist, the systemd unit,
+    # the container's environment): two installs on one machine (a live one and a rehearsal) must
+    # never meet on a port the code picked for them.
+    raw = os.environ.get("OMNISEEK_HTTP_PORT", "").strip()
+    try:
+        port = int(raw)
+    except ValueError:
+        port = 0
+    if not 0 < port < 65536:
+        raise SystemExit("refusing to start: OMNISEEK_HTTP_PORT is not set to a port number "
+                         f"({raw!r}); the service configuration (plist / unit / container) sets it")
+    return port
+
+
+PORT = _port_from_env()
 _TOKEN_PATH = auth.CREDS_DIR / "omniseek_http.json"
 
 
@@ -132,7 +150,8 @@ app.add_middleware(InflightMiddleware)
 # S2 graceful shutdown: COMPOSE the ASGI lifespan so a deploy restart (SIGTERM -> graceful uvicorn
 # shutdown) DRAINS the background loops instead of SIGKILLing the recall single-writer queue mid-
 # flush. app.router.lifespan_context is ALREADY FastMCP's own session lifespan; compose_lifespan
-# delegates its startup + shutdown UNCHANGED (an inner `async with`) and only adds a FAIL-SAFE
+# delegates its startup + shutdown UNCHANGED (an inner `async with`; here _eye_lifespan, FastMCP's
+# lifespan plus the portal bind and the background starts) and only adds a FAIL-SAFE
 # drain_all() on the shutdown side (any drain error is logged, never fatal). Confirmed shape
 # (starlette 1.0.0 / mcp streamable-http): lifespan_context is a callable `app -> async context
 # manager` and Starlette copies the yielded state into the lifespan scope, so compose_lifespan
@@ -149,10 +168,98 @@ app.add_middleware(InflightMiddleware)
 # signal handler, so SIGTERM to exit is at most drain cap + shutdown cap + backstop (65 s by default;
 # launchd's ExitTimeOut must stay above that, see OmniSeek-drain-cap report).
 from omniseek.core import lifecycle  # noqa: E402
-app.router.lifespan_context = lifecycle.compose_lifespan(app.router.lifespan_context,
-                                                         cap_s=lifecycle.shutdown_cap_s())
+_fastmcp_lifespan = app.router.lifespan_context
+
+
+@contextlib.asynccontextmanager
+async def _eye_lifespan(app_):
+    """FastMCP's own lifespan, plus OmniSeek's startup: bind the ONE portal (omniseek.core.portal) to this
+    loop, the loop every request runs on, so a thread reaches the async core only through it; then
+    start the background services that use it. The portal stays bound through the shutdown drain
+    (compose_lifespan drains inside this context)."""
+    async with _fastmcp_lifespan(app_) as state:
+        from omniseek.core import portal
+        portal.bind()
+        _start_background_services()
+        yield state
+
+
+app.router.lifespan_context = lifecycle.compose_lifespan(_eye_lifespan, cap_s=lifecycle.shutdown_cap_s())
 
 _CappedServer = lifecycle.capped_server_class(uvicorn.Server, cap_s=lifecycle.shutdown_cap_s())
+
+
+def _start_background_services() -> None:
+    """Start the in-service background loops. Called ONCE from the lifespan startup (_eye_lifespan),
+    after the portal is bound, because the warmer, the recall ingest and the job scheduler's sensor tick
+    reach the async core through omniseek.core.portal.run: started before the bind,
+    their first calls would fail (a plain thread with no bound loop raises NoEventLoopError). The
+    lifespan startup runs before uvicorn opens the listener, as the pre-uvicorn start did, so the
+    boot stays as fast as before. Only this HTTP service starts them (the stdio path never does), so
+    only this process ever writes."""
+    # Background cache warmer, tied to THIS always-on service (replaces the standalone launchd
+    # cron, which was observed to fire only once — see omniseek.core.prewarm): warm the
+    # query-independent slow sources on startup + every 30min so Lever B's caches stay hot.
+    # P9 JUDGMENT (prewarm stays its OWN daemon, NOT folded into the jobs scheduler): the warmer is a
+    # continuous WARM LOOP with two properties the calendar/interval job model would break — it warms
+    # ON ENTRY (kills the cold-herd the instant the service (re)starts, before any tick would fire),
+    # and it carries a refresh-margin contextvar that must run on its own thread inline. Folding it
+    # into the 900s serial job tick would delay the boot warm and change its 1800s cadence, so it
+    # stays a dedicated thread; the jobs scheduler owns the CALENDAR/interval self-maintenance instead.
+    # They START here, in the lifespan startup, and S2 drains them on the lifespan shutdown (see the
+    # compose_lifespan wiring above).
+    import threading
+    from omniseek.core import prewarm
+    threading.Thread(target=prewarm.warm_loop, name="cache-warmer", daemon=True).start()
+    # Perception-memory index (eye.recall): make the enumerable sources STATEFUL. init() is
+    # fail-open (a bad index never crashes boot); ENABLE writes for THIS process only (cron
+    # processes that hit the same ingest hook leave WRITES_ENABLED False → no cross-process writer);
+    # start the single serialized writer + a Path-C completeness ingest loop beside the warmer.
+    try:
+        from omniseek.core import recall
+        from omniseek.core.recall import writer as _recall_writer
+        if recall.init():
+            _recall_writer.WRITES_ENABLED = True
+            # Build the observation journal now, on its own thread, then scrub its blobs there
+            # (EYE-JOURNAL-BOOT): built lazily it was built inside the first search's maybe_ingest,
+            # under the journal lock, and every source of that search sat out its wait budget.
+            recall.start_journal_boot()
+            recall.start_writer()
+            threading.Thread(target=recall.ingest_loop, name="recall-ingest", daemon=True).start()
+            # Curator P2 yield tap: start its single drain daemon beside the recall writer, under
+            # the SAME WRITES_ENABLED guard (idempotent). Cron/CLI processes leave WRITES_ENABLED
+            # False → no drain thread runs there → no cross-process pollution of the yield statistic.
+            from omniseek.core.curator import yield_tap as _yield_tap
+            _yield_tap.start_writer()
+            logger.debug("curator yield tap: drain thread started")
+            # Phase 2 (vector): preload the embedder AND the search matrices, in a background
+            # thread, never synchronously. A synchronous warm() here held the listener closed for
+            # the whole ~8-9s warmup, so every restart became a 9-second outage and the deploy
+            # health gate rejected the release outright (measured 2026-08-22: RUNTIME BUILD ID
+            # MISMATCH -> rollback). The thread keeps boot instant; a request that arrives before
+            # warmup finishes takes the same lazy, fail-open path it always did, and once warm()
+            # completes the first hybrid call drops from ~9s to well under a second. While it runs a
+            # search skips the vector arm instead of waiting on the warmup's locks (EYE-FG-FIRST:
+            # the first search after a restart used to sit out its whole wait budget); start_warm
+            # sets that flag before the thread starts, see recall._WARMING.
+            recall.start_backfill()
+            recall.start_warm()
+            logger.debug("recall index: writes enabled + ingest loop + vector backfill started")
+    except Exception as exc:  # noqa: BLE001 — the index is best-effort; never block boot
+        logger.warning("recall index disabled (init failed): %s", exc)
+    # In-process JOB scheduler (P9, generalizing the P6 sensor scheduler): every scheduled piece of
+    # OmniSeek's self-maintenance (the sensor tick + the transplanted watchdogs / curator / audit /
+    # digest) runs as a declarative row on ONE daemon loop in the process that writes memory. Start it
+    # HERE (the writer process), AFTER writes are enabled above, so its WRITES_ENABLED guard passes; a
+    # cron / CLI import never reaches this call site and its guard refuses anyway. Fail-open: a
+    # scheduler hiccup must never block boot. (This absorbs the deleted launchd crons + the P6 loop.)
+    try:
+        from omniseek.core import jobs as _jobs
+        if _jobs.start_scheduler() is not None:
+            logger.debug("job scheduler started (tick %ds, %d rows)",
+                        _jobs.TICK_SECONDS, len(_jobs.registry()))
+    except Exception as exc:  # noqa: BLE001 — the scheduler is best-effort; never block boot
+        logger.warning("job scheduler not started (%s)", exc)
 
 
 def _raise_fd_limit(want: int = 16384) -> None:
@@ -183,69 +290,6 @@ def main() -> None:
     from omniseek.core import cache
     pruned = cache.clear_expired()  # TTL only gates reads; sweep dead files each (re)start
     logger.debug("cache: pruned %d expired entries", pruned)
-    # Background cache warmer, tied to THIS always-on service (replaces the standalone launchd
-    # cron, which was observed to fire only once — see omniseek.core.prewarm): warm the
-    # query-independent slow sources on startup + every 30min so Lever B's caches stay hot.
-    # P9 JUDGMENT (prewarm stays its OWN daemon, NOT folded into the jobs scheduler): the warmer is a
-    # continuous WARM LOOP with two properties the calendar/interval job model would break — it warms
-    # ON ENTRY (kills the cold-herd the instant the service (re)starts, before any tick would fire),
-    # and it carries a refresh-margin contextvar that must run on its own thread inline. Folding it
-    # into the 900s serial job tick would delay the boot warm and change its 1800s cadence, so it
-    # stays a dedicated thread; the jobs scheduler owns the CALENDAR/interval self-maintenance instead.
-    #
-    # S2 NOTE (deferred to S3): the background services below still START here as pre-uvicorn daemon
-    # threads (unchanged). S2 only makes them STOPPABLE + drains them on the ASGI-lifespan shutdown
-    # (see the compose_lifespan wiring after `app = ...`). Moving these STARTS into the lifespan
-    # startup is an S3 change, needed only when a service must reach the async core via the sync->
-    # async PORTAL (also S3). No double-writer today: the stdio path (omniseek.server.main -> mcp.run)
-    # never starts these services (they start ONLY here in serve_http.main), so only this process
-    # ever writes -- the lifespan ROLES split (stdio must not start the WRITER services) is likewise
-    # an S3 concern with no live exposure now.
-    import threading
-    from omniseek.core import prewarm
-    threading.Thread(target=prewarm.warm_loop, name="cache-warmer", daemon=True).start()
-    # Perception-memory index (eye.recall): make the enumerable sources STATEFUL. init() is
-    # fail-open (a bad index never crashes boot); ENABLE writes for THIS process only (cron
-    # processes that hit the same ingest hook leave WRITES_ENABLED False → no cross-process writer);
-    # start the single serialized writer + a Path-C completeness ingest loop beside the warmer.
-    try:
-        from omniseek.core import recall
-        from omniseek.core.recall import writer as _recall_writer
-        if recall.init():
-            _recall_writer.WRITES_ENABLED = True
-            recall.start_writer()
-            threading.Thread(target=recall.ingest_loop, name="recall-ingest", daemon=True).start()
-            # Curator P2 yield tap: start its single drain daemon beside the recall writer, under
-            # the SAME WRITES_ENABLED guard (idempotent). Cron/smoke processes leave WRITES_ENABLED
-            # False → no drain thread runs there → no cross-process pollution of the yield statistic.
-            from omniseek.core.curator import yield_tap as _yield_tap
-            _yield_tap.start_writer()
-            logger.debug("curator yield tap: drain thread started")
-            # Phase 2 (vector): preload the embedder AND the search matrices, in a background
-            # thread, never synchronously. A synchronous warm() here held the listener closed for
-            # the whole ~8-9s warmup, so every restart became a 9-second outage and the deploy
-            # health gate rejected the release outright (measured 2026-08-22: RUNTIME BUILD ID
-            # MISMATCH -> rollback). The thread keeps boot instant; a request that arrives before
-            # warmup finishes takes the same lazy, fail-open path it always did, and once warm()
-            # completes the first hybrid call drops from ~9s to well under a second.
-            recall.start_backfill()
-            threading.Thread(target=recall.warm, name="recall-warm", daemon=True).start()
-            logger.debug("recall index: writes enabled + ingest loop + vector backfill started")
-    except Exception as exc:  # noqa: BLE001 — the index is best-effort; never block boot
-        logger.warning("recall index disabled (init failed): %s", exc)
-    # In-process JOB scheduler (P9, generalizing the P6 sensor scheduler): every scheduled piece of
-    # OmniSeek's self-maintenance (the sensor tick + the transplanted watchdogs / curator / audit /
-    # digest) runs as a declarative row on ONE daemon loop in the process that writes memory. Start it
-    # HERE (the writer process), AFTER writes are enabled above, so its WRITES_ENABLED guard passes; a
-    # cron / smoke / CLI import never reaches this call site and its guard refuses anyway. Fail-open: a
-    # scheduler hiccup must never block boot. (This absorbs the deleted launchd crons + the P6 loop.)
-    try:
-        from omniseek.core import jobs as _jobs
-        if _jobs.start_scheduler() is not None:
-            logger.debug("job scheduler started (tick %ds, %d rows)",
-                        _jobs.TICK_SECONDS, len(_jobs.registry()))
-    except Exception as exc:  # noqa: BLE001 — the scheduler is best-effort; never block boot
-        logger.warning("job scheduler not started (%s)", exc)
     # Memory ceiling backstop (eye.memguard): past a footprint ceiling, restart the way a deploy does
     # (SIGTERM to self -> graceful drain -> launchd KeepAlive). HTTP service only; fail-open.
     try:
@@ -264,8 +308,12 @@ def main() -> None:
     # arming is not enough), and timeout_graceful_shutdown bounds the wait for connections
     # (a uvicorn.Config parameter, read in Server.shutdown; checked in the deployed 0.48.0; 0 here
     # passes None, uvicorn's "wait forever").
-    server = _CappedServer(uvicorn.Config(app, host=HOST, port=PORT, log_level="info",
-                                          timeout_graceful_shutdown=lifecycle.drain_cap_s() or None))
+    # SSE-DRAIN (2026-10-24): lifecycle.answer_running_calls_on_exit sets that timeout AND keeps
+    # sse_starlette from cutting every SSE stream at the signal, so a call running at a restart gets
+    # its answer to the caller within the drain cap instead of the caller reading half a response.
+    config = uvicorn.Config(app, host=HOST, port=PORT, log_level="info")
+    lifecycle.answer_running_calls_on_exit(config, lifecycle.drain_cap_s())
+    server = _CappedServer(config)
     try:
         server.run()
     except KeyboardInterrupt:

@@ -46,9 +46,12 @@ from urllib.parse import urlparse
 
 from bs4 import BeautifulSoup
 
-from omniseek.core import cache, diag
+import anyio
+
+from omniseek.core import cache, diag, portal
+from omniseek.core.sources._base import SourceBase
 from omniseek.core.normalize import Document, mk_signal
-from omniseek.core.sources.walled import _human
+from omniseek.core.sources.walled import _cdp, _human
 from omniseek.core.sources.walled._cdp import (
     VIDEO_PLAYER_SELECTORS,
     CacheOnlyMiss,
@@ -107,7 +110,7 @@ def _goto_note_dual_host(page, url: str) -> None:
                   body="rednote.com goto failed at the network layer; retrying the tokened note on xiaohongshu.com (guest-readable)")
     page.goto(fallback, wait_until="domcontentloaded", timeout=30000)
 
-# Isolated xhs-ONLY CDP Chrome — port 9223, fresh ~/.omniseek/chrome-xhs profile
+# Isolated xhs-ONLY CDP Chrome — port 9223, fresh <root>/chrome-xhs profile
 # (launchd com.omniseek.cdp.xhs). PHYSICALLY separate from the shared 9222 Chrome
 # (zhihu/一亩三分地/大号 residue) so the 小号 gets a fresh b1 and never re-exposes the
 # other CDP sources. See scripts/launch_cdp_xhs.sh + the safety research note.
@@ -123,7 +126,7 @@ _XHS_CDP_URL = "http://127.0.0.1:9223"
 #    大号 + 小号 logged in → device graph linked them. (History; see git/research note.)
 # 🔓 UN-SEALED 2026-06-03 — the operator's INFORMED decision (D), executed the SAFEST way:
 #    a FULLY ISOLATED instance, NOT the shared 9222 profile.
-#    • Dedicated Chrome on port 9223 + fresh ~/.omniseek/chrome-xhs profile (NEVER had
+#    • Dedicated Chrome on port 9223 + fresh <root>/chrome-xhs profile (NEVER had
 #      the 大号; launchd com.omniseek.cdp.xhs) → fresh b1, and zhihu/一亩三分地 are
 #      NOT re-exposed. The 小号 logs in fresh here via VNC.
 #    • READ-ONLY only — this adapter never likes/follows/comments/posts.
@@ -140,6 +143,12 @@ _XHS_CDP_URL = "http://127.0.0.1:9223"
 # EMERGENCY RE-SEAL: set _SEALED = True — every entry point inert (zero CDP / zero network).
 # ──────────────────────────────────────────────────────────────────────────────
 _SEALED = False
+# Time the search flow may spend reaching the homepage, retries included (_cdp.goto_retrying). The
+# flow runs under cdp_call(timeout=150); the steps after the homepage need at most about 61 s in the
+# fast profile (two 10 s results waits, a 15 s card wait, two 8 s click timeouts, and at most about
+# 10 s of dwell, typing and four scrolled screens, from _human's fast bounds), and connecting to the
+# browser up to 10 s: 150 - 61 - 10 = 79, kept at 75 so the flow ends on its own, not on the cap.
+_NAV_BUDGET_S = 75.0
 _SEALED_MSG = "xiaohongshu adapter SEALED (小红书封号风险) — no browsing performed"
 
 # ── frequency gate + anomaly backoff (account safety) ─────────────────────────
@@ -159,9 +168,10 @@ _USE_XHR_CAPTURE = True
 # own signed comment pages on scroll; we read the responses, same pattern as the search capture),
 # and we do FEWER interactions than _load_comments (no expander clicks) -> faster AND lighter on the
 # 小号. The body text stays a DOM read (#detail-title / #detail-desc); there is no note-body XHR. The
-# 2026-06-18 probe also said rednote has no __INITIAL_STATE__; that was wrong for the IMAGE list: the
-# note page carries window.__INITIAL_STATE__ with the note's full imageList (2026-10-08, see
-# _state_note). Set False to fall back to the DOM expand+harvest path.
+# 2026-06-18 probe also said rednote has no __INITIAL_STATE__; it read the global with page.evaluate in
+# patchright's isolated world, where no page global is ever visible (2026-10-24). The note page's HTML
+# carries window.__INITIAL_STATE__ with the note's full imageList (2026-10-08, read by
+# _state_note_from_html). Set False to fall back to the DOM expand+harvest path.
 _USE_XHR_COMMENTS = True
 
 
@@ -270,38 +280,6 @@ def _state_note_from_html(html: str, note_id: Optional[str]) -> Optional[dict]:
     return _pick_state_note(state.get("note") if isinstance(state, dict) else None, note_id)
 
 
-def _state_note_from_live(raw, note_id: Optional[str]) -> Optional[dict]:
-    """The _STATE_NOTE_JS result (a JSON string of the picked note, or null) -> the note object."""
-    if not raw:
-        return None
-    try:
-        note = json.loads(raw) if isinstance(raw, str) else raw
-    except ValueError:
-        return None
-    if not isinstance(note, dict) or (note_id and note.get("noteId") and note.get("noteId") != note_id):
-        return None
-    return note
-
-
-# Read the live page's state object (Vue refs unwrapped). Returns a JSON string of
-# {noteId, type, imageList} for the requested note (or the current one), or null.
-_STATE_NOTE_JS = r"""
-(nid) => {
-  try {
-    const u = x => (x && x.__v_isRef) ? x.value : x;
-    const st = window.__INITIAL_STATE__;
-    const ns = u(st && st.note);
-    const map = u(ns && ns.noteDetailMap);
-    if (!map) return null;
-    const id = nid || u(ns.currentNoteId) || u(ns.firstNoteId);
-    const entry = u(map[id]);
-    const note = u(entry && entry.note);
-    if (!note || !Array.isArray(note.imageList)) return null;
-    return JSON.stringify({noteId: note.noteId, type: note.type, imageList: note.imageList});
-  } catch (e) { return null; }
-}
-"""
-
 # The DOM fallback (no initial state): large note-CDN images, split by where they sit. An image
 # inside the comment area, or served from a /comment/ path, is a comment picture, never note body.
 _DOM_IMAGES_JS = (
@@ -376,7 +354,8 @@ def _flatten_captured_comments(items: list) -> list[dict]:
 
 
 def _card_hint(comment_count: Optional[int]) -> str:
-    """The card's placeholder body, naming what is MISSING, including the comment thread.
+    """The card's read hint (``metadata.read_hint``; the body itself is empty, EYE-RANK 2026-10-20),
+    naming what is MISSING, including the comment thread.
 
     On this platform the post is the hook and the COMMENTS are the dataset: a note whose body is one
     line plus a screenshot routinely carries the actual numbers in 50+ replies. The old text only
@@ -469,7 +448,7 @@ def _json_item_to_document(item: dict) -> Optional[Document]:
         source_id=note_id,
         url=url,
         title=title,
-        content=_card_hint(comments),
+        content="",   # a card has no body; what is missing is named in metadata.read_hint
         author=author,
         signals={
             **mk_signal('likes', score, kind='engagement', by='xiaohongshu/liked_count'),
@@ -477,13 +456,278 @@ def _json_item_to_document(item: dict) -> Optional[Document]:
             **mk_signal('collects', collects, kind='engagement', by='xiaohongshu/collected_count'),
             **mk_signal('shares', shares, kind='engagement', by='xiaohongshu/shared_count'),
         },
-        metadata={"time_hint": time_hint, "like_count": score, "comment_count": comments,
+        metadata={"read_hint": _card_hint(comments),
+                  "time_hint": time_hint, "like_count": score, "comment_count": comments,
                   "collected_count": collects, "shared_count": shares,
                   # This doc is a CARD, not the note: full=True cannot conjure a body the
                   # search response never contained. The server reads this to say so out
                   # loud instead of returning the placeholder as if it were the article.
                   "body_needs_read": True},
     )
+
+
+# ── the two search APIs (2026-11-07) ─────────────────────────────────────────────────────────
+# The rednote front end (index.ec832f48.js, read 2026-11-07) posts a search to one of two endpoints:
+# v1 for the classic layout, v2 (WEB_AI_SEARCH_NOTES_V2) when the AI search layout is on and the
+# query came from its input box. Both answers go through the SAME client-side decode (module 1717,
+# export R7) before the page reads ``items``, so both are read here the same way.
+_SEARCH_NOTES_API = {"/api/sns/web/v1/search/notes": 1, "/api/sns/web/v2/search/notes": 2}
+_MAX_SCENE_RESPONSES = 8   # one record per search/notes answer; pages past the first say nothing new
+
+
+def _search_api_version(url: str) -> Optional[int]:
+    """1 or 2 for a search/notes answer, else None. Matched on the path, so a query string or another
+    API host (the front end posts to its own API base) does not change the answer."""
+    try:
+        return _SEARCH_NOTES_API.get(urlparse(url or "").path.rstrip("/"))
+    except Exception:  # noqa: BLE001
+        return None
+
+
+# camelCase -> snake_case for the item fields _json_item_to_document reads. The front end requests
+# with transform:true and reads camelCase (noteCard, displayTitle, xsecToken, interactInfo ...); the
+# wire answer read by this adapter since 2026-06-14 is snake_case. Should a v2 answer arrive in the
+# camelCase form, these are the names the front end itself reads (all found in the bundle); a key
+# not listed here is left as it is and shows up in the scene's key lists, never guessed at.
+_CAMEL_ITEM_KEYS = {"noteCard": "note_card", "xsecToken": "xsec_token", "modelType": "model_type"}
+_CAMEL_CARD_KEYS = {"displayTitle": "display_title", "interactInfo": "interact_info",
+                    "cornerTagInfo": "corner_tag_info"}
+_CAMEL_COUNT_KEYS = {"likedCount": "liked_count", "commentCount": "comment_count",
+                     "collectedCount": "collected_count"}
+_CAMEL_COVER_KEYS = {"urlDefault": "url_default", "urlPre": "url_pre"}
+
+
+def _rename(d: dict, table: dict) -> dict:
+    out = dict(d)
+    for camel, snake in table.items():
+        if camel in out:
+            out.setdefault(snake, out.pop(camel))
+    return out
+
+
+def _snake_search_item(item: dict) -> dict:
+    """A copy of ``item`` with the camelCase keys above renamed (a snake_case key already present wins)."""
+    out = _rename(item, _CAMEL_ITEM_KEYS)
+    nc = out.get("note_card")
+    if isinstance(nc, dict):
+        nc = _rename(nc, _CAMEL_CARD_KEYS)
+        if isinstance(nc.get("interact_info"), dict):
+            nc["interact_info"] = _rename(nc["interact_info"], _CAMEL_COUNT_KEYS)
+        if isinstance(nc.get("cover"), dict):
+            nc["cover"] = _rename(nc["cover"], _CAMEL_COVER_KEYS)
+        if isinstance(nc.get("user"), dict):
+            nc["user"] = dict(nc["user"])
+        out["note_card"] = nc
+    return out
+
+
+def _hidden_id(text, marker: str, n: int = 24) -> Optional[tuple[str, str]]:
+    """The front end's id carrier (module 1717, function i): the ``n`` characters after the LAST
+    ``marker`` in ``text`` are a note id; returns (id, text without marker and id), or None."""
+    if not isinstance(text, str) or not text:
+        return None
+    t = text.rfind(marker)
+    if t < 0:
+        return None
+    o = t + len(marker)
+    if len(text) < o + n:
+        return None
+    return text[o:o + n], text[:t] + text[o + n:]
+
+
+def _is_decoy_cover(cover) -> bool:
+    """The front end drops an item whose cover has width 0, or a url_pre ending ?v=cb1, or a
+    url_default ending ?v=cb2 (module 1717, R7): such items are never shown on the page."""
+    if not isinstance(cover, dict):
+        return False
+    w = cover.get("width")
+    if isinstance(w, (int, float)) and not isinstance(w, bool) and w == 0:
+        return True
+    pre, dft = cover.get("url_pre"), cover.get("url_default")
+    return (isinstance(pre, str) and pre.endswith("?v=cb1")) or \
+        (isinstance(dft, str) and dft.endswith("?v=cb2"))
+
+
+def _normalize_search_item(item) -> tuple[Optional[dict], str]:
+    """One search/notes item (v1 or v2) as the page itself would show it: ``(item, how)``, ``how``
+    one of "ok", "recovered" (the real note id was carried elsewhere and moved back to ``id``),
+    "decoy" (item None: the page drops it) or "not_dict" (item None). A transcription of the front
+    end's R7 decode, nothing added: the id moves back only when the marker is there."""
+    if not isinstance(item, dict):
+        return None, "not_dict"
+    item = _snake_search_item(item)
+    nc = item.get("note_card")
+    if not isinstance(nc, dict):
+        return item, "ok"
+    cover, user = nc.get("cover"), nc.get("user")
+    if _is_decoy_cover(cover):
+        return None, "decoy"
+    cover = cover if isinstance(cover, dict) else {}
+    user = user if isinstance(user, dict) else {}
+    dft, pre, avatar = cover.get("url_default"), cover.get("url_pre"), user.get("avatar")
+    got = None
+    if isinstance(dft, str) and dft.endswith("##w=vp1"):
+        got = _hidden_id(avatar, "#")
+        if got:
+            user["avatar"], cover["url_default"] = got[1], dft[:-len("##w=vp1")]
+    elif isinstance(pre, str) and pre.endswith("##w=vp4"):
+        got = _hidden_id(avatar, "%%")
+        if got:
+            user["avatar"], cover["url_pre"] = got[1], pre[:-len("##w=vp4")]
+    elif isinstance(avatar, str) and avatar.endswith("##w=vp6"):
+        got = _hidden_id(pre, "#%")
+        if got:
+            cover["url_pre"], user["avatar"] = got[1], avatar[:-len("##w=vp6")]
+    if not got:
+        return item, "ok"
+    item["id"] = got[0]
+    return item, "recovered"
+
+
+def _keys(d, limit: int = 20) -> Optional[list]:
+    return sorted(d.keys())[:limit] if isinstance(d, dict) else None
+
+
+def _read_search_answer(version: int, status: Optional[int], payload) -> tuple[list, dict]:
+    """One search/notes answer -> (normalized items, a record of what it held). The record is the
+    scene line for this answer: version, status, the platform's code / msg, the top-level and data
+    keys, the item count, the first item's keys and its note_card's keys, and how many items were
+    decoys, carried their id elsewhere, or were note items this adapter cannot read (no id, or no
+    note_card object: the first such item's keys are kept). A shape it does not know is recorded,
+    never guessed at: without ``data.items`` as a list nothing is read."""
+    rec: dict = {"v": version, "status": status}
+    if not isinstance(payload, dict):
+        rec["payload"] = type(payload).__name__
+        return [], rec
+    rec["top"] = _keys(payload)
+    for k in ("code", "success", "msg"):
+        if k in payload:
+            rec[k] = str(payload[k])[:60] if k == "msg" else payload[k]
+    data = payload.get("data")
+    rec["data"] = _keys(data)
+    items = data.get("items") if isinstance(data, dict) else None
+    if not isinstance(items, list):
+        rec["items"] = None
+        return [], rec
+    rec["items"] = len(items)
+    if items:
+        rec["first"] = _keys(items[0])
+        if isinstance(items[0], dict):
+            rec["first_note_card"] = _keys(items[0].get("note_card") or items[0].get("noteCard"))
+    out: list = []
+    decoys = recovered = unparsed = 0
+    for raw in items:
+        it, how = _normalize_search_item(raw)
+        if how == "decoy":
+            decoys += 1
+            continue
+        if it is None:
+            unparsed += 1
+            continue
+        recovered += how == "recovered"
+        if it.get("model_type") in (None, "note") and \
+                (not it.get("id") or not isinstance(it.get("note_card"), dict)):
+            unparsed += 1
+            rec.setdefault("unparsed_first", _keys(it))
+            continue
+        if it.get("id"):
+            out.append(it)
+    rec.update(decoys=decoys, ids_recovered=recovered, unparsed=unparsed)
+    return out, rec
+
+
+def _on_ai_results_route(url: str) -> bool:
+    """The AI search layout's results route (/search_result_ai, front-end AISearchPath)."""
+    path = urlparse(url or "").path
+    return path == "/search_result_ai" or path.startswith("/search_result_ai/")
+
+
+def _on_classic_results_route(url: str) -> bool:
+    path = urlparse(url or "").path
+    return path == "/search_result" or path.startswith("/search_result/")
+
+
+# Read in the page's own world (_cdp.page_world_evaluate): the layout switch lives in the front end's
+# Pinia store "aiAbExp" (isAIMode, and webLabRes, the /web/lib answer it is computed from), which the
+# isolated world of page.evaluate cannot see. Every step says what it found, so an absent store reads
+# as absent, not as "off".
+_AI_MODE_JS = r"""() => {
+  const out = {};
+  try {
+    const el = document.querySelector('[data-v-app]');
+    const app = el && el.__vue_app__;
+    out.vue_app = !!app;
+    const gp = app && app.config && app.config.globalProperties;
+    const pinia = gp && gp.$pinia;
+    out.pinia = !!pinia;
+    const st = pinia && pinia._s && pinia._s.get && pinia._s.get('aiAbExp');
+    out.aiAbExp_store = !!st;
+    if (st) {
+      out.isAIMode = st.isAIMode;
+      const lab = st.webLabRes;
+      out.webLab = (lab && typeof lab === 'object') ? Object.keys(lab).slice(0, 12)
+        : (lab === undefined ? 'undefined' : lab);
+    }
+  } catch (e) { out.error = String(e).slice(0, 120); }
+  return out;
+}"""
+
+
+def _capture_scene(page) -> dict:
+    """Where the page ended up: final URL, title, the section.note-item count and the AI layout
+    switch. Each read stands alone; a read that fails says why in its own field."""
+    scene: dict = {}
+    try:
+        scene["url"] = page.url or ""
+    except Exception as exc:  # noqa: BLE001
+        scene["url_error"] = repr(exc)[:120]
+    try:
+        scene["title"] = (page.title() or "")[:120]
+    except Exception as exc:  # noqa: BLE001
+        scene["title_error"] = repr(exc)[:120]
+    try:
+        scene["note_items"] = page.evaluate("()=>document.querySelectorAll('section.note-item').length")
+    except Exception as exc:  # noqa: BLE001
+        scene["note_items_error"] = repr(exc)[:120]
+    try:
+        scene["ai_mode"] = _cdp.page_world_evaluate(page, _AI_MODE_JS)
+    except Exception as exc:  # noqa: BLE001
+        scene["ai_mode"] = {"error": repr(exc)[:120]}
+    return scene
+
+
+def _box_record(sel: str, loc) -> dict:
+    """The search box the flow clicked: its selector and the first 200 characters of its outerHTML."""
+    rec = {"selector": sel}
+    try:
+        rec["outer_html"] = (loc.evaluate("e=>e.outerHTML") or "")[:200]
+    except Exception as exc:  # noqa: BLE001
+        rec["outer_html_error"] = repr(exc)[:120]
+    return rec
+
+
+def _dump(obj) -> str:
+    return json.dumps(obj, ensure_ascii=False, default=str, separators=(",", ":"))
+
+
+def _note_scene(page, boxes: list, responses: list) -> None:
+    """Put what the page looked like when the search flow ended into the diagnostic
+    (_meta.diagnostic.captures), one capture per part so none is cut by the 500-character body limit.
+    Called from inside the flow (cdp_call runs it in the caller's context). Never raises."""
+    try:
+        scene = _capture_scene(page)
+        diag.note("xiaohongshu.scene", url=scene.pop("url", None), body=_dump(scene))
+        for b in list(boxes):
+            diag.note("xiaohongshu.scene.search_box", body=_dump(b))
+        for r in list(responses):
+            diag.note("xiaohongshu.scene.search_notes", status=r.get("status"), body=_dump(r))
+        if not responses:
+            diag.note("xiaohongshu.scene.search_notes",
+                      body="no /api/sns/web/v1/search/notes or /api/sns/web/v2/search/notes answer was seen")
+    except Exception:  # noqa: BLE001 (the scene is evidence; it must never break the search)
+        pass
+
+
 # Jittered min-interval between LIVE calls (burst guard). A FIXED interval is itself a bot
 # signature (humans aren't metronomic), so roll a fresh value per call. The operator set the 5-11s
 # band (2026-06-11): drops the old fixed-15s signature, ~1.7x faster, still leaves a safety
@@ -606,15 +850,56 @@ _SEARCH_BOX_SELECTORS = [
 _LOGGED_IN_SELECTOR = "a[href*='/user/profile/']"
 
 
+def _reached_results(page, timeout: int = 10000, v2_seen=lambda: False) -> bool:
+    """Is the page on a search results page? Waits up to ``timeout`` ms for the URL, then reads
+    it, so a wait that timed out is answered from where the page actually is.
+
+    The classic results route (/search_result, /search_result/<id>) counts on its own. The AI
+    layout's route (/search_result_ai) does NOT count by its URL (2026-11-07): there the page is a
+    results page only once a v2 search/notes answer has come in (``v2_seen``), waited for in the
+    same ``timeout``. Polling goes through page.wait_for_timeout, which lets the response listener
+    run; time.sleep would not."""
+    deadline = time.monotonic() + timeout / 1000.0
+    try:
+        page.wait_for_url("**/search_result**", timeout=timeout)
+    except Exception:  # noqa: BLE001
+        pass
+    url = page.url or ""
+    if _on_ai_results_route(url):
+        while not v2_seen():
+            left_ms = (deadline - time.monotonic()) * 1000.0
+            if left_ms <= 0:
+                return False
+            try:
+                page.wait_for_timeout(min(250.0, left_ms))
+            except Exception:  # noqa: BLE001
+                return bool(v2_seen())
+        return True
+    return _on_classic_results_route(url)
+
+
 def _find_search_box(page):
+    """The first visible search box: ``(locator, selector)``, or ``(None, None)``."""
     for sel in _SEARCH_BOX_SELECTORS:
         try:
             loc = page.locator(sel).first
             if loc.count() > 0 and loc.is_visible():
-                return loc
+                return loc, sel
         except Exception:  # noqa: BLE001
             continue
-    return None
+    return None, None
+
+
+def _login_overlay(page) -> bool:
+    """A VISIBLE blocking login overlay / popup mask (the first half of _login_wall)."""
+    try:
+        for sel in (".login-container", "[class*='LoginModal']", ".reds-mask"):
+            loc = page.locator(sel).first
+            if loc.count() > 0 and loc.is_visible():
+                return True
+    except Exception:  # noqa: BLE001
+        pass
+    return False
 
 
 def _login_wall(page) -> bool:
@@ -636,13 +921,8 @@ def _login_wall(page) -> bool:
       of a broad match.
     """
     # 1) Visible blocking login overlay / popup mask.
-    try:
-        for sel in (".login-container", "[class*='LoginModal']", ".reds-mask"):
-            loc = page.locator(sel).first
-            if loc.count() > 0 and loc.is_visible():
-                return True
-    except Exception:  # noqa: BLE001
-        pass
+    if _login_overlay(page):
+        return True
     # 2) The REAL search box (#search-input specifically — NOT the decoy).
     try:
         real = page.locator("input#search-input").first
@@ -768,7 +1048,7 @@ def _load_comments(page, max_rounds: int = 40) -> None:
             break
 
 
-class XiaohongshuAdapter:
+class XiaohongshuAdapter(SourceBase):
     name = "xiaohongshu"
     needs_credentials = False  # Login via VNC into persistent Chrome
     explicit_only = "sealed / CDP (isolated 9223 Chrome, account-rate-sensitive)"
@@ -811,28 +1091,73 @@ class XiaohongshuAdapter:
         # page) so recall >= the DOM path. The listener appends to this outer-scope list from
         # the CDP worker thread; cdp_call's join() flushes the writes before we read it below.
         _xhr_items: list = []
+        # The search boxes clicked and one record per search/notes answer (v1 and v2); the flow notes
+        # them with the page's state when the search does not come back clean (_note_scene). The
+        # response listener only records here and the flow notes, because the note needs the page's
+        # state (a listener itself runs in the caller's context since 2026-11-07, see _cdp).
+        boxes: list = []
+        responses: list = []
+        _v2_seen: list = []
 
         def _flow(page) -> tuple[str, Optional[str]]:
-            if _USE_XHR_CAPTURE:
-                def _on_resp(resp):
+            result = None
+            try:
+                result = _flow_steps(page)
+                return result
+            finally:
+                # An answer held note items this adapter cannot read (no id, or no note_card object):
+                # noted even when other items made results, so a schema change shows up before it
+                # empties them.
+                for rec in list(responses):
+                    if rec.get("unparsed"):
+                        diag.note("xiaohongshu.search_notes_unparsed", status=rec.get("status"),
+                                  body=_dump(rec))
+                # Note the scene unless the captured answers already make results: a clean search
+                # leaves no diagnostic, so it pays for no extra reads (the AI-switch read runs in the
+                # page's own world).
+                if not (result and result[0] == "ok" and _USE_XHR_CAPTURE
+                        and any(_json_item_to_document(it) for it in _xhr_items)):
+                    _note_scene(page, boxes, responses)
+
+        def _flow_steps(page) -> tuple[str, Optional[str]]:
+            def _on_resp(resp):
+                try:
+                    version = _search_api_version(resp.url or "")
+                    if version is None or resp.request.method == "OPTIONS":
+                        return
+                    if version == 2:
+                        _v2_seen.append(True)
                     try:
-                        if "/api/sns/web/v1/search/notes" in (resp.url or ""):
-                            for it in ((resp.json().get("data") or {}).get("items") or []):
-                                if isinstance(it, dict) and it.get("id"):
-                                    _xhr_items.append(it)
-                    except Exception:  # noqa: BLE001 — one unparseable XHR never breaks the search
-                        pass
-                page.on("response", _on_resp)
-            # 1) Homepage first (NOT a direct search-URL jump), then dwell.
-            page.goto(HOME_URL, wait_until="domcontentloaded", timeout=30000)
+                        payload = resp.json()
+                    except Exception as exc:  # noqa: BLE001 (recorded, the search goes on)
+                        payload = None
+                        err = repr(exc)[:80]
+                    else:
+                        err = None
+                    items, rec = _read_search_answer(version, resp.status, payload)
+                    if err:
+                        rec["json_error"] = err
+                    if len(responses) < _MAX_SCENE_RESPONSES:
+                        responses.append(rec)
+                    if _USE_XHR_CAPTURE:
+                        _xhr_items.extend(items)
+                except Exception:  # noqa: BLE001 — one unparseable XHR never breaks the search
+                    pass
+            page.on("response", _on_resp)
+
+            # 1) Homepage first (NOT a direct search-URL jump), then dwell. A dropped connection is
+            #    retried on the same page and exit (_cdp.goto_retrying, which notes each retry); see
+            #    _NAV_BUDGET_S.
+            _cdp.goto_retrying(page, HOME_URL, timeout=30000, budget_s=_NAV_BUDGET_S)
             _human.read_dwell()
             if _login_wall(page):
                 return ("login", None)
             # 2) Locate the search box; human mouse-move + click + type + Enter.
-            box = _find_search_box(page)
+            box, sel = _find_search_box(page)
             if box is None:
                 logger.warning("xiaohongshu: search box not found on homepage")
                 return ("nobox", None)
+            boxes.append(_box_record(sel, box))
             # Human mouse path (behavioral) → reliable native click (focus) →
             # type → Enter. Coordinate-clicking 小红书's collapsed search bar can
             # miss/fail-to-focus, so the focus click is a native locator.click().
@@ -842,21 +1167,39 @@ class XiaohongshuAdapter:
             _human.type_text(page, query)
             _human.action_pause()
             page.keyboard.press("Enter")
-            # 3) Confirm navigation to the results page — Enter on the collapsed
-            #    bar otherwise leaves us on /explore (we'd scrape the feed).
-            try:
-                page.wait_for_url("**/search_result**", timeout=10000)
-            except Exception:  # noqa: BLE001
-                pass
-            try:
-                page.wait_for_selector(
-                    "section.note-item, .login-container, [class*='LoginModal']",
-                    timeout=15000,
-                )
-            except Exception:  # noqa: BLE001
-                pass
-            if _login_wall(page):
-                return ("login", None)
+            # 3) Confirm navigation to the results page. Enter on the collapsed bar can leave us
+            #    on /explore, whose recommendation feed renders the same section.note-item cards:
+            #    parsed, that feed came back as confident results for a query it never ran
+            #    (2026-10-14, "新加坡 周末" returned three unrelated feed notes and cached them for
+            #    6h). So the landing is CHECKED, not merely waited for: one more Enter, and if the
+            #    page is still not a results page the flow reports it and nothing is parsed.
+            #    The AI layout's route (/search_result_ai) counts only once a v2 answer came in.
+            v2_seen = lambda: bool(_v2_seen)  # noqa: E731
+            if not _reached_results(page, v2_seen=v2_seen):
+                box, sel = _find_search_box(page)
+                if box is not None:
+                    boxes.append(_box_record(sel, box))
+                    box.click(timeout=8000)
+                    _human.short_pause()
+                    page.keyboard.press("Enter")
+                if not _reached_results(page, v2_seen=v2_seen):
+                    return ("nav", page.url or "")
+            if _on_ai_results_route(page.url or ""):
+                # The v2 answer already confirmed the results; this layout's cards and search box are
+                # not the classic ones, so only a visible login overlay counts as a wall here (the
+                # classic check reads a missing input#search-input as logged out).
+                if _login_overlay(page):
+                    return ("login", None)
+            else:
+                try:
+                    page.wait_for_selector(
+                        "section.note-item, .login-container, [class*='LoginModal']",
+                        timeout=15000,
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
+                if _login_wall(page):
+                    return ("login", None)
             _human.action_pause()
             # 4) Scroll the feed ADAPTIVELY. Each scroll fires one paginated /search/notes XHR
             #    (~22 notes) and the initial search already fired one BEFORE any scroll, so for a
@@ -892,6 +1235,13 @@ class XiaohongshuAdapter:
             diag.note("xiaohongshu.login_wall",
                       body="小号 logged OUT of the isolated 9223 CDP Chrome — re-login via VNC required. "
                            "xiaohongshu data path is DARK until then (this is NOT a query miss / empty result).")
+            return []
+        if status == "nav":
+            # html carries the URL the page stayed on. Not a query miss and not a login wall:
+            # the search never ran, so there is nothing true to parse or to cache.
+            diag.note("xiaohongshu.nav",
+                      body=f"search never reached the results page (stayed on {html!r}); "
+                           "nothing parsed or cached, this is NOT a query miss")
             return []
         if status != "ok" or not html:
             diag.note("xiaohongshu.flow",
@@ -939,7 +1289,15 @@ class XiaohongshuAdapter:
         cache.set(key, [d.model_dump(mode="json") for d in docs], ttl=CACHE_TTL)
         return docs
 
-    def fetch_url(self, url: str) -> Optional[Document]:
+    async def afetch_url(self, url: str) -> Optional[Document]:
+        host = urlparse(url).hostname or ""
+        if not _SEALED and "rednote.com" not in host and not (
+                host.endswith("xiaohongshu.com") and _mainland_sealed()):
+            return None
+        # the CDP read blocks (and while sealed, _read_url says so in the log, as before): a worker thread
+        return await anyio.to_thread.run_sync(self._read_url, url, limiter=portal.IO_LANE)
+
+    def _read_url(self, url: str) -> Optional[Document]:
         if _SEALED:
             logger.warning(_SEALED_MSG)
             return None
@@ -1037,9 +1395,9 @@ class XiaohongshuAdapter:
             _human.scroll_like_reading(page, screens=random.randint(1, 2))
             _human.read_dwell()
             # 小红书 puts the substance in CAROUSEL IMAGES, not always the text desc. The full list
-            # comes from the page's own state (_STATE_NOTE_JS, read after the comment harvest below);
-            # this DOM scan is the fallback for a page without it, split into body and comment
-            # pictures. OmniSeek does not OCR; the consuming agent reads the images with vision.
+            # comes from the page's own state (the __INITIAL_STATE__ script in the page HTML, read
+            # after the flow); this DOM scan is the fallback for a page without it, split into body
+            # and comment pictures. OmniSeek does not OCR; the consuming agent reads them with vision.
             try:
                 split = page.evaluate(_DOM_IMAGES_JS) or {}
                 images = list(split.get("body") or [])
@@ -1059,8 +1417,7 @@ class XiaohongshuAdapter:
             # often above it. We forge nothing (the expander clicks reveal only what a human reader
             # would, same READ-ONLY contract). The expander loop is the slow part, kept because full
             # completeness requires it; speed is secondary to completeness here.
-            cdata = {"list": [], "declared": None, "dom_comment_images": dom_comment_images,
-                     "state_note": None}
+            cdata = {"list": [], "declared": None, "dom_comment_images": dom_comment_images}
             dom_list: list = []
             try:
                 _load_comments(page)  # exhaustive: every expander + container scroll, bounded by its own caps
@@ -1072,10 +1429,6 @@ class XiaohongshuAdapter:
             cdata["list"] = cap_list if len(cap_list) >= len(dom_list) else dom_list
             # Comment pictures ride on the captured comments even when the DOM list wins above.
             cdata["captured_images"] = [c for c in cap_list if c.get("images")]
-            try:
-                cdata["state_note"] = page.evaluate(_STATE_NOTE_JS, nav_note_id)
-            except Exception:  # noqa: BLE001 -- the HTML copy of the state is read below
-                pass
             return ("ok", page.content(), images, cdata, video)
 
         try:
@@ -1133,8 +1486,10 @@ class XiaohongshuAdapter:
 
         # The note's images: the page's own state when it has them (every slide, in order), else
         # the DOM scan. Comment pictures never enter media; they go to metadata.comment_media.
-        state_note = (_state_note_from_live(cdata.get("state_note"), nav_note_id)
-                      or _state_note_from_html(html, nav_note_id))
+        # The state comes from the page HTML. The live read through page.evaluate this flow used to
+        # make never saw window.__INITIAL_STATE__ (patchright's isolated world, see
+        # _cdp.page_world_evaluate), so the HTML copy is the one that has always answered.
+        state_note = _state_note_from_html(html, nav_note_id)
         state_video = bool(state_note) and state_note.get("type") == "video"
         state_images = _image_urls(state_note.get("imageList")) if state_note else []
         if state_images and not state_video:
@@ -1181,7 +1536,7 @@ class XiaohongshuAdapter:
                     f"下载后用视觉读图中文字]")
             content = (body + "\n\n" + note) if body else note
         else:
-            content = body or "(no body extracted; note may require interaction to load)"
+            content = body or ""
 
         # Comments carry the crowd-sourced 经验, and they are returned ONCE: structured, in
         # metadata.comments. They used to ALSO be rendered into the body, so every note shipped its
@@ -1286,13 +1641,14 @@ class XiaohongshuAdapter:
             source_id=note_id or "",
             url=full_url,
             title=title,
-            content=_card_hint(None),   # the DOM card exposes only .count (likes); no comment number
+            content="",   # a card has no body; metadata.read_hint names what is missing
             author=author,
             signals=mk_signal('likes', score, kind='engagement', by='xiaohongshu/score'),
             # comment_count is None, NOT 0: this fallback path genuinely cannot see it (the rendered
             # card shows a like count only), and reporting 0 would read as "no discussion" on exactly
             # the notes worth opening. The JSON path above carries the real number; this one says so.
-            metadata={"time_hint": time_hint, "like_count": score, "comment_count": None,
+            metadata={"read_hint": _card_hint(None),   # the DOM card exposes only .count (likes)
+                      "time_hint": time_hint, "like_count": score, "comment_count": None,
                       "body_needs_read": True},
         )
 

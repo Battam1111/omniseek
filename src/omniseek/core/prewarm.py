@@ -30,19 +30,18 @@ fetch would write (per-PI for researcher_watch, per-affiliation for org_watch, p
 rest), because it happens inside the same get() the adapter already calls. Still purely additive:
 it changes no result, only whether a later broad pays the live cost.
 
-WHY deadline_s=None on the warm fetch: the refresh margin is a contextvar, and fetch_one's default
-deadline runs the adapter in a fresh backstop thread that does NOT inherit contextvars (a plain
-threading.Thread resets them), which would silently drop the margin. deadline_s=None runs the
-adapter inline on THIS thread, so the margin (and the adapter's copy_context() workers) see it. The
-warmer is a background daemon whose job is to pay slow costs off the critical path, so trading the
-per-call backstop for correct margin propagation is right here; each source keeps its own internal
-timeouts + the per-source try/except below, and warm_loop wraps the whole cycle.
+WHY deadline_s=None on the warm fetch: the warmer is a background daemon whose job is to pay slow
+costs off the critical path, so no per-call backstop cuts a slow source short; each source keeps its
+own internal timeouts + the per-source try/except below, and warm_loop wraps the whole cycle. (It was
+first chosen because the old thread backstop dropped contextvars; the fetch now runs on the service
+loop through omniseek.core.portal, which carries this thread's whole context, the refresh margin and the
+initiator included, into the coroutine.)
 
-WHY in-service (2026-06-14): the standalone launchd cron (com.omniseek.core-prewarm) was observed
+WHY in-service (2026-06-14): the standalone launchd cron (eye-prewarm) was observed
 to fire only ONCE at load and never on its 30-min StartInterval (runs=1 after 14.5h), so the
 warmed caches silently expired (6h TTL) and Lever B's speedup evaporated in production. Tying the
 warmer to the always-on eye-http service (a daemon thread) makes it fire reliably. (That dead plist
-com.omniseek.core-prewarm was never installed on the service host and has since been REMOVED from the repo
+for that eye-prewarm cron was never installed on the service host and has since been REMOVED from the repo
 2026-06-16; the in-service daemon is the sole AUTOMATIC warmer. The standalone warm CLI moved INTO
 this module's ``__main__`` in the P9 rebuild -- ``python -m omniseek.core.prewarm`` -- so the manual
 one-shot lives beside the loop it warms, with no extra script to keep in sync.)
@@ -94,11 +93,11 @@ def warm_sources() -> tuple[int, int]:
     """Warm every source in warm_list() (empty query → the query-independent fetch). Refresh-if-
     near-expiry: a cache.set_refresh_margin(REFRESH_MARGIN_S) makes each adapter's own cache.get
     refetch (and rewrite) ONLY a key that is missing or within the margin of expiry, while a still-
-    warm key is served from cache at zero live cost. Run with deadline_s=None so the adapter runs
-    inline on this thread and the margin contextvar (and its copy_context() workers) sees it (a
-    backstop thread would reset the contextvar and silently drop the margin). Returns (warmed,
-    total). One bad source never blocks the rest."""
-    from omniseek.core import cache, fetcher
+    warm key is served from cache at zero live cost. Run with deadline_s=None (no per-call limit, see
+    the module docstring); the margin rides into each fetch with this thread's context. Returns (warmed,
+    total). One bad source never blocks the rest. Called from a thread: each fetch runs on the loop
+    the portal is bound to (the service's, or the CLI's own via portal.run_standalone)."""
+    from omniseek.core import _guard, cache, fetcher, portal
     srcs = warm_list()
     failures = 0
     cache.set_refresh_margin(REFRESH_MARGIN_S)
@@ -106,7 +105,8 @@ def warm_sources() -> tuple[int, int]:
         for src in srcs:
             t0 = time.monotonic()
             try:
-                docs = fetcher.fetch_one(src, "", limit=50, deadline_s=None)
+                with _guard.initiator("预热"):   # a gate refusal names who asked (EYE-GATE-FIX G)
+                    docs = portal.run(fetcher.afetch_one, src, "", limit=50, deadline_s=None)
                 log.info("prewarm %s: %d docs in %.1fs", src, len(docs), time.monotonic() - t0)
             except Exception as exc:  # noqa: BLE001 — one bad source never blocks the rest
                 failures += 1
@@ -150,7 +150,8 @@ def _main() -> int:
     except Exception as exc:  # noqa: BLE001
         print(f"  FATAL import: {exc}")
         return 2
-    ok, total = warm_sources()
+    from omniseek.core import portal
+    ok, total = portal.run_standalone(warm_sources)   # this process's one loop (no service loop here)
     print(f"  done. {ok}/{total} warmed")
     return 0 if ok == total else 1
 

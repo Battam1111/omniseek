@@ -1,10 +1,10 @@
 """OmniSeek — multi-source information retrieval.
 
-OmniSeek gives OmniSeek the ability to query 25 curated information sources
+OmniSeek gives an AI agent the ability to query 25 curated information sources
 (academic APIs, social platforms, blogs, forums) through a unified
 interface. It is one capability of OmniSeek, not the whole of OmniSeek.
 """
 
-from omniseek.core.fetcher import fetch_one, search_many, list_sources, health_check
+from omniseek.core.fetcher import afetch_one, aprobe_health, asearch_many, list_sources
 
-__all__ = ["fetch_one", "search_many", "list_sources", "health_check"]
+__all__ = ["afetch_one", "aprobe_health", "asearch_many", "list_sources"]

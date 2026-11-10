@@ -17,16 +17,19 @@ The site itself has no JS — pure static HTML, cheap to scrape.
 
 from __future__ import annotations
 
+import functools
 import logging
 import re
 from datetime import datetime, timezone
 from typing import Optional
 from urllib.parse import urljoin, urlparse
 
+import anyio
 from bs4 import BeautifulSoup
 
-from omniseek.core import cache, http
-from omniseek.core.normalize import Document, jsonsafe
+from omniseek.core import cache, http, portal
+from omniseek.core.normalize import Document, jsonsafe, to_utc
+from omniseek.core.sources._base import SourceBase, aparse
 
 logger = logging.getLogger(__name__)
 
@@ -70,21 +73,27 @@ def _parse_date_from_url(href: str) -> Optional[datetime]:
         return None
 
 
-class TransformerCircuitsAdapter:
+class TransformerCircuitsAdapter(SourceBase):
     name = "transformer_circuits"
     needs_credentials = False
     description = "Transformer Circuits Thread: Anthropic mechanistic interpretability research"
 
-    def _fetch_index(self) -> list[dict]:
-        key = cache.make_key("transformer_circuits", "index", "v1")
-        cached = cache.get(key)
+    _INDEX_KEY = cache.make_key("transformer_circuits", "index", "v1")
+
+    async def _afetch_index(self) -> list[dict]:
+        """Async replacement of the deleted sync ``_fetch_index`` (11-04, async step seven; this is the only one now): same key, same parse, same cache-on-any-answer."""
+        cached = await cache.aget_once(self._INDEX_KEY)
         if cached is not None:
             return cached
-
-        html = http.get_text(INDEX_URL, timeout=TIMEOUT)
+        html = await http.aget_text(INDEX_URL, timeout=TIMEOUT)
         if html is None:
             return []
+        entries = await aparse(len(html), TransformerCircuitsAdapter._parse_index, html)  # HTML parse: here or process lane
+        await anyio.to_thread.run_sync(functools.partial(cache.set, self._INDEX_KEY, entries, ttl=3600), limiter=portal.IO_LANE)
+        return entries
 
+    @staticmethod
+    def _parse_index(html: str) -> list[dict]:
         soup = BeautifulSoup(html, "lxml")
         entries: list[dict] = []
         seen_urls: set[str] = set()
@@ -122,12 +131,13 @@ class TransformerCircuitsAdapter:
                 "date": date.isoformat() if date else None,
                 "context": context,
             })
-
-        cache.set(key, entries, ttl=3600)
         return entries
 
-    def search(self, query: str, limit: int = 10) -> list[Document]:
-        entries = self._fetch_index()
+    async def asearch(self, query: str, limit: int = 10) -> list[Document]:
+        return self._docs(await self._afetch_index(), query, limit)
+
+    @staticmethod
+    def _docs(entries: list[dict], query: str, limit: int) -> list[Document]:
         if not entries:
             return []
 
@@ -147,18 +157,13 @@ class TransformerCircuitsAdapter:
 
         docs: list[Document] = []
         for score, e in scored[:limit]:
-            date = None
-            if e.get("date"):
-                try:
-                    date = datetime.fromisoformat(e["date"])
-                except ValueError:
-                    pass
+            date = to_utc(e.get("date"))
             doc = Document(
                 source="transformer_circuits",
                 source_id=e["url"],
                 url=e["url"],
                 title=e["title"],
-                content=e["context"] or "(no context)",
+                content=e["context"] or "",
                 author="Anthropic Interpretability Team",
                 date=date,
                 tags=["mechanistic-interpretability"],
@@ -167,24 +172,19 @@ class TransformerCircuitsAdapter:
             docs.append(doc)
         return docs
 
-    def fetch_url(self, url: str) -> Optional[Document]:
+    async def afetch_url(self, url: str) -> Optional[Document]:
         host = urlparse(url).hostname or ""
         if "transformer-circuits.pub" not in host:
             return None
-        for e in self._fetch_index():
+        for e in await self._afetch_index():
             if e["url"] == url:
-                date = None
-                if e.get("date"):
-                    try:
-                        date = datetime.fromisoformat(e["date"])
-                    except ValueError:
-                        pass
+                date = to_utc(e.get("date"))
                 return Document(
                     source="transformer_circuits",
                     source_id=url,
                     url=url,
                     title=e["title"],
-                    content=e["context"] or "(no context)",
+                    content=e["context"] or "",
                     author="Anthropic Interpretability Team",
                     date=date,
                     tags=["mechanistic-interpretability"],
@@ -192,16 +192,16 @@ class TransformerCircuitsAdapter:
                 )
         return None
 
-    def health_check(self) -> tuple[bool, str]:
+    async def ahealth_check(self) -> tuple[bool, str]:
         try:
-            resp = http.direct(
+            resp = await http.adirect(
                 "GET", INDEX_URL,
                 headers={"User-Agent": USER_AGENT},
                 timeout=10,
                 follow_redirects=True,
             )
             if resp.status_code == 200 and len(resp.text) > 1000:
-                entries = self._fetch_index()
+                entries = await self._afetch_index()
                 return True, f"OK ({len(entries)} articles indexed)"
             return False, f"HTTP {resp.status_code}, len={len(resp.text)}"
         except Exception as exc:  # noqa: BLE001

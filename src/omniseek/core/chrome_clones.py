@@ -13,11 +13,13 @@ CDP command Browser.close lets Chrome remove it. The live host had collected 200
 What this module does. One pass over the clone root, run by the cdp-reaper job (every 10 minutes):
   * only the direct children of the root whose name is exactly ``code_sign_clone.`` plus six letters
     or digits, that are real directories (not symlinks) and whose resolved path is still in the root;
-  * a clone is IN USE, and kept, when a process has a file under it open or mapped. One full lsof,
-    read two ways. (A) By path: a name lsof prints under the clone. (B) By file identity (device +
-    inode) of the clone's main executable, because that executable is a hard link of the running
-    binary and lsof prints just one of its names (under /Applications, or under any other clone of
-    the same binary; measured on the live host). Every clone of the current version shares one
+  * a clone is IN USE, and kept, when a process has a file under it open or mapped. One scan of
+    every open and mapped file of this user's processes (omo_proc.scan_open_files; it was
+    one full lsof before), read two ways. (A) By path: a name the kernel reports under the clone.
+    (B) By file identity (device + inode) of the clone's main executable, because that executable is
+    a hard link of the running binary and the kernel reports just one of its names (under
+    /Applications, or under any other clone of the same binary; measured on the live host with lsof,
+    which asks the kernel the same way). Every clone of the current version shares one
     executable with every running browser of that version, so (B) alone would keep every leaked
     clone for as long as any such browser runs. (B) therefore counts a process only when it is the
     clone's maker (it started at most MAKER_WINDOW_S before the clone was born; measured: the clone
@@ -27,14 +29,17 @@ What this module does. One pass over the clone root, run by the cdp-reaper job (
   * a clone born less than an hour ago is kept (the browser that made it may still be starting);
   * everything else is deleted, one log line each (name, birth time, seconds taken). Any error is
     logged and the pass goes on; nothing here raises to the caller.
-If lsof or ps cannot be read (it fails, or its output does not even list this process), nothing is
-deleted.
+If the open files or the process table cannot be read in full (no loadable omo_proc, a scan that
+says it is incomplete, a table without this process), nothing is deleted.
+
+Reading processes goes through omo_proc only (omniseek.procs finds the copy released with
+OmniSeek), never lsof or ps (one place asks the kernel about processes).
 
 ``python -m <this module> --dry-run`` (or running the file directly) prints what one pass would do
 without deleting anything. On any host other than macOS the pass does nothing.
 
-Deliberately self-contained (standard library only, Python 3.9 compatible): the same file is run by
-hand on the live host for the dry run before it is deployed.
+Needs nothing beyond OmniSeek's own environment and omo_proc: the same file is run by hand on the live host
+for the dry run before it is deployed (``python -m omniseek.core.chrome_clones --dry-run``).
 """
 
 from __future__ import annotations
@@ -63,13 +68,17 @@ MIN_AGE_S = 3600                         # spec: never touch a clone born within
 # narrow could free the clone of a running browser (harmless until Chrome updates while that browser
 # is still up). Recheck if a pass ever deletes a clone whose maker was alive.
 MAKER_WINDOW_S = 300
-MAKER_SLACK_S = 2                        # ps start times have 1 s resolution
+MAKER_SLACK_S = 2                        # kept from the ps days (1 s resolution); omo_proc gives microseconds
 TIME_BUDGET_S = 30.0                     # job budget 120 s; one clone took 0.12 s to delete on the live host
-LSOF_TIMEOUT_S = 30                      # one full lsof took 0.17 s on the live host
-PS_TIMEOUT_S = 10
 MIN_PASS_S = 15                          # with less time than this left, a pass does not start
-INSTALLED_EXES = ("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-                  os.path.expanduser("~/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"))
+CHROME_EXE_IN_APPS = "Google Chrome.app/Contents/MacOS/Google Chrome"
+
+
+def installed_exes() -> Tuple[str, str]:
+    """The system-wide and the per-user install of Google Chrome (the per-user Applications folder is
+    omniseek.where's, imported here and not at the top: the file is also loaded on its own by path)."""
+    from omniseek import where
+    return ("/Applications/" + CHROME_EXE_IN_APPS, str(where.user_applications() / CHROME_EXE_IN_APPS))
 
 
 def _tool(name: str, path: str) -> str:
@@ -109,102 +118,69 @@ class OpenFile:
         self.pid, self.cmd, self.fd, self.dev, self.ino, self.name = pid, cmd, fd, dev, ino, name
 
 
-def parse_lsof(text: str) -> List[OpenFile]:
-    """Parse ``lsof -F pcfDin`` output: one record per open file, with the process it belongs to."""
+PROC_LIB = None   # tests: an omo_proc module (or a stand-in) used instead of omniseek.procs.lib()
+
+
+def _omo():
+    if PROC_LIB is not None:
+        return PROC_LIB
+    from omniseek import procs   # here, not at the top: the file is also loaded on its own by path
+    lib = procs.lib()
+    if lib is None:
+        log.warning("chrome-clones: %s", procs.why())
+    return lib
+
+
+def _is_bundle_exe(path: str) -> bool:
+    """Only an app bundle's main executable (``.../Contents/MacOS/<name>``) can share an identity with a
+    clone's executable (plan() compares just those, see _exe_ids), so only those paths are stat'ed."""
+    return os.path.basename(os.path.dirname(path)) == "MacOS" and "/Contents/MacOS/" in path
+
+
+def read_open_files() -> Optional[List[OpenFile]]:
+    """Every file this user's processes have open or mapped (current directory, descriptors, the
+    executable, mapped files), from one omo_proc scan; None when it cannot be trusted: omo_proc does
+    not load, or the scan is not complete (the full process list was refused, a process of this user
+    could not be read, or the scan did not see this process: omo_proc's OpenScan.ok)."""
+    lib = _omo()
+    if lib is None:
+        return None
+    sc = lib.scan_open_files()
+    if not sc.ok:
+        log.warning("chrome-clones: open-file scan incomplete (%s); deleting nothing", sc.why)
+        return None
     files: List[OpenFile] = []
-    pid, cmd = -1, ""
-    cur: Optional[dict] = None
-
-    def flush() -> None:
-        if cur is not None and cur.get("name") is not None:
-            files.append(OpenFile(pid, cmd, cur.get("fd", ""), cur.get("dev"), cur.get("ino"),
-                                  cur["name"]))
-
-    for line in text.splitlines():
-        if not line:
-            continue
-        key, val = line[0], line[1:]
-        if key == "p":
-            flush()
-            cur = None
-            try:
-                pid = int(val)
-            except ValueError:
-                pid = -1
-            cmd = ""
-        elif key == "c":
-            cmd = val
-        elif key == "f":
-            flush()
-            cur = {"fd": val}
-        elif cur is None:
-            continue
-        elif key == "D":
-            try:
-                cur["dev"] = int(val, 16) if val.lower().startswith("0x") else int(val)
-            except ValueError:
-                pass
-        elif key == "i":
-            try:
-                cur["ino"] = int(val)
-            except ValueError:
-                pass
-        elif key == "n":
-            cur["name"] = val
-    flush()
+    for pid in sorted(sc.files):
+        for p in sc.files[pid]:
+            dev = ino = None
+            if _is_bundle_exe(p):
+                try:
+                    st = os.stat(p)
+                    dev, ino = st.st_dev, st.st_ino
+                except OSError:
+                    pass
+            files.append(OpenFile(pid, sc.names.get(pid, ""), "", dev, ino, p))
     return files
 
 
-def read_lsof(timeout: float = LSOF_TIMEOUT_S) -> Optional[List[OpenFile]]:
-    """One full lsof of this user's processes, or None when it cannot be trusted."""
-    try:
-        out = subprocess.run([_tool("lsof", "/usr/sbin/lsof"), "-nP", "-w", "-FpcfDin"],
-                             capture_output=True, text=True, timeout=timeout).stdout
-    except (OSError, subprocess.SubprocessError) as exc:
-        log.warning("chrome-clones: lsof failed: %s", exc)
+def read_starts() -> Optional[Dict[int, float]]:
+    """Start time (epoch s, with microseconds) of every process omo_proc can read, or None when the
+    table cannot be trusted (omo_proc does not load, the process list is incomplete, or this process
+    is not in it)."""
+    lib = _omo()
+    if lib is None:
         return None
-    files = parse_lsof(out)
-    if not any(f.pid == os.getpid() for f in files):
-        log.warning("chrome-clones: lsof output does not list this process; deleting nothing")
+    tab = lib.table()
+    if not tab.complete or os.getpid() not in tab:
+        log.warning("chrome-clones: process table incomplete; deleting nothing")
         return None
-    return files
+    return {pid: r["t"] for pid, r in tab.items() if r.get("t") is not None}
 
 
-def parse_ps_starts(text: str) -> Dict[int, float]:
-    """Parse ``ps -o pid=,lstart=`` (C locale) into {pid: start time, epoch seconds}."""
-    starts: Dict[int, float] = {}
-    for line in text.splitlines():
-        m = re.match(r"\s*(\d+)\s+(\w{3}\s+\w{3}\s+\d+\s+\d\d:\d\d:\d\d\s+\d{4})\s*$", line)
-        if not m:
-            continue
-        try:
-            t = time.mktime(time.strptime(re.sub(r"\s+", " ", m.group(2)), "%a %b %d %H:%M:%S %Y"))
-        except (ValueError, OverflowError):
-            continue
-        starts[int(m.group(1))] = t
-    return starts
-
-
-def read_ps_starts(timeout: float = PS_TIMEOUT_S) -> Optional[Dict[int, float]]:
-    """Start time of every process, or None when ps cannot be trusted."""
-    env = dict(os.environ, LC_ALL="C", LANG="C")
-    try:
-        out = subprocess.run([_tool("ps", "/bin/ps"), "-axww", "-o", "pid=,lstart="],
-                             capture_output=True, text=True, timeout=timeout, env=env).stdout
-    except (OSError, subprocess.SubprocessError) as exc:
-        log.warning("chrome-clones: ps failed: %s", exc)
-        return None
-    starts = parse_ps_starts(out)
-    if os.getpid() not in starts:
-        log.warning("chrome-clones: ps output does not list this process; deleting nothing")
-        return None
-    return starts
-
-
-def installed_exe_ids(paths: Iterable[str] = INSTALLED_EXES) -> Set[FileId]:
+def installed_exe_ids(paths: Optional[Iterable[str]] = None) -> Set[FileId]:
     """File identities of the installed Google Chrome executables (what a new browser would run)."""
     ids: Set[FileId] = set()
-    for p in paths:
+    for p in (installed_exes() if paths is None else paths):
         try:
             st = os.stat(p)
         except OSError:
@@ -327,9 +303,9 @@ def sweep(*, dry_run: bool = False, root: Optional[str] = None,
           exe_ids_of: Callable[[str], Set[FileId]] = _exe_ids,
           delete: Callable[[str], None] = _delete) -> dict:
     """One cleanup pass. Never raises; returns a small summary for the job's result. Every input
-    left as None is read from the machine (root, lsof, ps, the installed executables).
-    ``time_left_s`` is how long the caller can still wait for the whole pass (None: no limit beyond
-    the tools' own timeouts and ``time_budget_s`` for deleting); below MIN_PASS_S nothing starts."""
+    left as None is read from the machine (root, open files and start times through omo_proc, the
+    installed executables). ``time_left_s`` is how long the caller can still wait for the whole pass
+    (None: no limit beyond ``time_budget_s`` for deleting); below MIN_PASS_S nothing starts."""
     try:
         if time_left_s is not None and time_left_s < MIN_PASS_S:
             return {"skipped": "no time left (%.0f s)" % time_left_s}
@@ -354,13 +330,13 @@ def _sweep(*, dry_run, root, open_files, starts, installed, now, min_age_s, time
     if not os.path.isdir(root):
         return {"skipped": "no clone dir", "root": root}
     if open_files is None:
-        open_files = read_lsof(timeout=min(LSOF_TIMEOUT_S, max(1.0, t_end - time.monotonic())))
+        open_files = read_open_files()
         if open_files is None:
-            return {"skipped": "lsof unreadable", "root": root}
+            return {"skipped": "open files unreadable", "root": root}
     if starts is None:
-        starts = read_ps_starts(timeout=min(PS_TIMEOUT_S, max(1.0, t_end - time.monotonic())))
+        starts = read_starts()
         if starts is None:
-            return {"skipped": "ps unreadable", "root": root}
+            return {"skipped": "process table unreadable", "root": root}
     if installed is None:
         installed = installed_exe_ids()
     p = plan(root, open_files, now=time.time() if now is None else now, starts=starts,

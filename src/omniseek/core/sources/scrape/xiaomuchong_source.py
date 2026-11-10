@@ -23,9 +23,10 @@ import re
 from typing import Optional
 from urllib.parse import quote, urlparse
 
+import anyio
 from bs4 import BeautifulSoup
 
-from omniseek.core import diag
+from omniseek.core import diag, portal
 from omniseek.core.normalize import Document, jsonsafe
 from omniseek.core.sources.walled._base import BaseCDPAdapter
 from omniseek.core.sources.walled._cdp import cdp_call, cdp_health, content_with_media, images_from_page
@@ -125,7 +126,7 @@ class XiaomuchongAdapter(BaseCDPAdapter):
                     source_id=tid,
                     url=full_url,
                     title=text,
-                    content="(click URL for full thread; 小木虫 search returns titles only)",
+                    content="",   # search returns titles only; the thread body is behind the url
                     metadata={
                         "discuz_thread_id": tid,
                         "raw": jsonsafe({"thread_id": tid, "title": text, "url": full_url, "href": href}),
@@ -138,10 +139,14 @@ class XiaomuchongAdapter(BaseCDPAdapter):
         return docs
 
     # ----- bespoke overrides (no base default expresses these) -----------------
-    def fetch_url(self, url: str) -> Optional[Document]:
+    async def afetch_url(self, url: str) -> Optional[Document]:
         host = urlparse(url).hostname or ""
         if "muchong.com" not in host and "emuch.net" not in host:
             return None
+        # the CDP page load blocks: a worker thread of the IO lane
+        return await anyio.to_thread.run_sync(self._read_thread, url, limiter=portal.IO_LANE)
+
+    def _read_thread(self, url: str) -> Optional[Document]:
         def _navigate(page):
             page.wait_for_selector("h1, #thread_subject, .ts h1", timeout=15000)
             return page.content(), images_from_page(page)
@@ -166,7 +171,7 @@ class XiaomuchongAdapter(BaseCDPAdapter):
         title_text = title_el.get_text(strip=True) if title_el else "(untitled)"
 
         body_el = soup.select_one("td.t_f, .t_fsz, div.t_f, .t_msgfont")
-        body_text = body_el.get_text("\n", strip=True) if body_el else "(no body extracted)"
+        body_text = body_el.get_text("\n", strip=True) if body_el else ""
 
         m = re.search(r"thread-(\d+)|tid=(\d+)", url)
         tid = (m.group(1) or m.group(2)) if m else url

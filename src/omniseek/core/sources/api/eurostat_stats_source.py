@@ -54,7 +54,7 @@ from datetime import datetime
 from typing import Any, Optional
 
 from omniseek.core import http
-from omniseek.core.normalize import Document, jsonsafe, mk_signal
+from omniseek.core.normalize import Document, jsonsafe, mk_signal, to_utc
 from omniseek.core.sources.api._base import BaseAPIAdapter
 
 DATA_URL = "https://ec.europa.eu/eurostat/api/dissemination/statistics/1.0/data/{dataset}"
@@ -190,23 +190,8 @@ class EurostatStatsAdapter(BaseAPIAdapter):
     explicit_only = ("eurostat_stats: a structured EU-statistics point lookup by geo + indicator "
                      "keyword, named on demand, not broad-fan-out fodder")
 
-    def _raw_fetch(self, query: str, limit: int) -> list:
-        """Resolve (geo, entry), GET the dataset with format=JSON + the entry's dimension
-        pins + geo, and return it as a SINGLE aggregation unit [(entry, geo, jsonstat)] so
-        the base's per-record loop yields exactly one time-series doc. Any failure (bad
-        query, network, non-dict body) -> [] (the adapter contract)."""
-        parsed = _parse_query(query)
-        if parsed is None:
-            return []
-        geo, entry = parsed
-        params = {"format": "JSON", "geo": geo, **entry["filters"]}
-        raw = http.get_json(DATA_URL.format(dataset=entry["dataset"]), params=params, timeout=20)
-        if not isinstance(raw, dict):
-            return []
-        return [(entry, geo, raw)]
-
     async def _araw_fetch(self, query: str, limit: int) -> list:
-        """Async twin of _raw_fetch: byte-faithful mirror (same query parse, same URL /
+        """Async replacement of the deleted sync ``_raw_fetch`` (11-04, S9; this is the only one now): byte-faithful mirror (same query parse, same URL /
         params / timeout, same non-dict -> [] contract). ONLY the shared-http egress is
         swapped for its async twin (http.get_json -> await http.aget_json)."""
         parsed = _parse_query(query)
@@ -218,12 +203,6 @@ class EurostatStatsAdapter(BaseAPIAdapter):
         if not isinstance(raw, dict):
             return []
         return [(entry, geo, raw)]
-
-    async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async twin of search -> AsyncSearchCapable. Shares the base async cache
-        round-trip (_aapi_search); egress via _araw_fetch; per-record mapping via the SAME
-        pure-CPU _to_document (byte-identical to search)."""
-        return await self._aapi_search(query, limit, araw_fetch=lambda: self._araw_fetch(query, limit))
 
     def _to_document(self, raw) -> Optional[Document]:
         if not isinstance(raw, tuple) or len(raw) != 3:
@@ -315,11 +294,11 @@ class EurostatStatsAdapter(BaseAPIAdapter):
             },
         )
 
-    def health_check(self) -> tuple[bool, str]:
+    async def ahealth_check(self) -> tuple[bool, str]:
         """Probe une_rt_a for geo=DE (fully pinned): a JSON-stat body with a non-empty value
         map = alive."""
         try:
-            raw = http.get_json(
+            raw = await http.aget_json(
                 DATA_URL.format(dataset="une_rt_a"),
                 params={"format": "JSON", "geo": "DE", "sex": "T", "age": "Y15-74", "unit": "PC_ACT"},
                 timeout=10)
@@ -352,17 +331,15 @@ class EurostatStatsAdapter(BaseAPIAdapter):
         """Parse a Eurostat time key: annual "2024", monthly "2024-06", daily "2024-06-01",
         quarterly "2024-Q2", or SDMX-style "2024M06" / "2024Q2". None if unparseable."""
         p = str(period).strip()
-        for fmt in ("%Y-%m-%d", "%Y-%m", "%Y"):
-            try:
-                return datetime.strptime(p, fmt)
-            except ValueError:
-                continue
+        dt = to_utc(p)
+        if dt is not None:
+            return dt
         m = re.match(r"^(\d{4})-?Q([1-4])$", p)
         if m:
-            return datetime(int(m.group(1)), (int(m.group(2)) - 1) * 3 + 1, 1)
+            return to_utc(datetime(int(m.group(1)), (int(m.group(2)) - 1) * 3 + 1, 1))
         m = re.match(r"^(\d{4})M(\d{2})$", p)
         if m:
-            return datetime(int(m.group(1)), int(m.group(2)), 1)
+            return to_utc(datetime(int(m.group(1)), int(m.group(2)), 1))
         return None
 
     @staticmethod
