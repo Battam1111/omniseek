@@ -86,7 +86,7 @@ OmniSeek は自前の AI モデルを持たず、私たちのサーバーに何�
 
 ## コントリビュート
 
-[CONTRIBUTING.md](../../.github/CONTRIBUTING.md) を参照してください。新しいソースは、通常のウェブ検索では見つからないものを見つけられる必要があります。動かなくなったソースの修正はいつでも歓迎です。push の前に `python tests/smoke.py` を実行してください。
+[CONTRIBUTING.md](../../.github/CONTRIBUTING.md) を参照してください。新しいソースは、通常のウェブ検索では見つからないものを見つけられる必要があります。動かなくなったソースの修正はいつでも歓迎です。
 
 参加により[行動規範](../../.github/CODE_OF_CONDUCT.md)に同意したものとみなされます。
 

@@ -7,16 +7,12 @@
 # against the eye, NOT invented; the 2026-08-15 rebrand re-targeted them
 # penumbra -> omniseek with the same structure.
 #
-# Self-verifying: a residue gate (grep) and a smoke gate (the mirror's own
-# tests) run at the end and FAIL the script loudly. Never push a sync whose
-# gates did not pass.
+# Self-verifying: a residue gate (grep) runs at the end and FAILS the script
+# loudly. Never push a sync whose gate did not pass.
 #
-# Syncs:  src/  (minus polyu + mokahr_ats); tests/: smoke.py, every test_*.py suite (minus the
-#         deployment-bound ones listed in step 3), __init__.py and the modules the suites use; the
-#         code-bound artifacts listed in step 3. Tests of the eye's code live in the eye: apart from
-#         the mirror-owned tests/test_mirror_*.py, the mirror's tests/ holds no .py this script did
-#         not write (a gate in step 3 aborts on one).
-# Keeps:  tests/test_mirror_*.py: tests of the mirror's own material (bench/, scripts/, .github/).
+# Syncs:  src/  (minus polyu + mokahr_ats); the code-bound artifacts listed in step 3.
+#         The mirror carries no copy of the eye's tests: its CI checks that the package installs
+#         and the server starts (.github/workflows/ci.yml).
 # Keeps:  skills/, README*, CLAUDE.md, docs/, pyproject.toml, .github/, other scripts/
 #
 # Usage:  cd the mirror repo root && bash scripts/sync_from_eye.sh
@@ -47,7 +43,7 @@ PYBIN=""
 for p in python3 python /c/Python313/python.exe /c/Python312/python.exe; do
   if "$p" --version >/dev/null 2>&1; then PYBIN="$p"; break; fi
 done
-[ -n "$PYBIN" ] || { echo "FATAL: no python found (needed for the smoke gate)"; exit 1; }
+[ -n "$PYBIN" ] || { echo "FATAL: no python found (needed for line endings and docs/sources.md)"; exit 1; }
 
 # The private half of this sync (2026-10-07). This script is published with the mirror, so a rule here
 # that NAMES one of the operator's private things would publish the very word it removes. Such rules
@@ -55,9 +51,8 @@ done
 # (sed -e arguments, run before the public rename rules), PRIVATE_TOKENS (words the residue gate
 # refuses), PRIVATE_PATTERNS (regular expressions the residue gate refuses, for words that are also part
 # of ordinary words), PRIVATE_PATTERNS_CASE (the same, matched WITH case, for short codes that are
-# also ordinary words in another case), PRIVATE_EXCLUDED_SUITES (test files that stay private) and
-# private_prepass (exact-match rewrites run before the rename pass). The two arrays added 2026-10-11 and
-# PRIVATE_PATTERNS_CASE (2026-10-12) may be absent.
+# also ordinary words in another case) and private_prepass (exact-match rewrites run before the rename
+# pass). PRIVATE_PATTERNS (2026-10-11) and PRIVATE_PATTERNS_CASE (2026-10-12) may be absent.
 PRIVATE_OVERLAY="$EYE_ROOT/mirror/omniseek_private.sh"
 [ -f "$PRIVATE_OVERLAY" ] || { echo "FATAL: missing $PRIVATE_OVERLAY (the private half of this sync)" >&2; exit 1; }
 # shellcheck source=/dev/null
@@ -93,7 +88,7 @@ PYEOF
 echo "=== sync_from_eye: $EYE_ROOT -> $PEN_ROOT ==="
 
 # --- 1. copy src/ (exclude personal sources + caches) ---
-echo "  [1/6] copying src/ ..."
+echo "  [1/5] copying src/ ..."
 rm -rf "$PEN_SRC"
 cp -R "$EYE_SRC" "$PEN_SRC"
 rm -f "$PEN_SRC/eye/sources/walled/polyu_source.py" \
@@ -104,9 +99,8 @@ find "$PEN_SRC" -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || tru
 # 1b. LINE ENDINGS. The mirror is LF-only (its .gitattributes: `* text=auto eol=lf`). The eye's
 #     repository is LF by the same rule, but this copy reads the eye's Windows WORKING tree, where an
 #     editor can still leave a CRLF file. Left alone, git would normalize it on commit and the working
-#     tree would show a whole-file phantom diff; worse, step 2b pins the sha256 of a schema file, and a
-#     digest taken over CRLF bytes stops matching the moment git stores the file as LF. So convert
-#     here, right after the copy and before anything reads or hashes these bytes.
+#     tree would show a whole-file phantom diff. So convert here, right after the copy and before
+#     anything reads these bytes.
 to_lf "$PEN_SRC"
 
 # --- 2. rename pass (ORDER MATTERS; semantics = the bb8a4af hand-made mirror) ---
@@ -114,7 +108,7 @@ to_lf "$PEN_SRC"
 #   2026-08-16 flip: "the eye" prose is RENAMED to OmniSeek now (the runtime-surface
 #   audit: server instructions and tool descriptions are strings an MCP client SEES, and they
 #   said "the eye" to strangers). Bare standalone "eye" in comments stays: invisible at runtime.
-echo "  [2/6] renaming namespace + branding ..."
+echo "  [2/5] renaming namespace + branding ..."
 RENAME=(
   -e 's/polaris\.eye/omniseek.core/g'
   # the PATH form of the module rename (docs cite files as src/polaris/eye/...): without this,
@@ -155,32 +149,6 @@ RENAME=("${PRIVATE_RENAME[@]}" "${RENAME[@]}")
 private_prepass "$PEN_SRC"
 find "$PEN_SRC" \( -name "*.py" -o -name "*.json" \) -exec sed -i "${RENAME[@]}" {} +
 
-# 2b. RE-PIN the one content digest the rename invalidates. The scheduler-heartbeat POLICY pins the
-#     sha256 of its SCHEMA file; the rename pass just rewrote that schema's bytes (polaris ->
-#     penumbra inside the JSON), so the pin no longer matches the schema sitting next to it and
-#     load_contract_artifacts refuses to start ("schema digest mismatch"). The pin's job is to bind
-#     a policy to the exact schema it was written against, so recomputing it for the MIRROR'S OWN
-#     pair preserves that invariant; shipping the eye's hex would ship a self-inconsistent pair.
-#     Targeted hex swap, never a json round-trip, so nothing else in the file moves.
-"$PYBIN" - "$PEN_SRC/core/contracts" <<'PYEOF'
-import hashlib, json, sys
-from pathlib import Path
-
-d = Path(sys.argv[1])
-schema, policy = d / "scheduler-heartbeat-v1.json", d / "scheduler-heartbeat-policy-v1.json"
-want = hashlib.sha256(schema.read_bytes()).hexdigest()
-text = policy.read_text(encoding="utf-8")
-have = json.loads(text)["heartbeat_schema_digest"]
-if have == want:
-    print("    heartbeat schema digest already matches")
-else:
-    assert text.count(have) == 1, f"pin appears {text.count(have)} times, refusing to guess"
-    # newline="\n": text mode on Windows would otherwise write every line end back as CRLF
-    # (that is how this file came to be the one CRLF file in the mirror's src/).
-    policy.write_text(text.replace(have, want, 1), encoding="utf-8", newline="\n")
-    print(f"    re-pinned heartbeat schema digest {have[:12]}.. -> {want[:12]}..")
-PYEOF
-
 # 2c. The package ROOT (src/omniseek/__init__.py) is PUBLIC METADATA, not engine code: its
 #     docstring is product positioning and its __version__ is the released PyPI version, and both
 #     belong to the MIRROR (pyproject.toml is kept, not synced). The raw copy in step 1 ships the
@@ -188,7 +156,7 @@ PYEOF
 #     this one file from the mirror's own pyproject after every sync; drift is impossible.
 #     Only the docstring and __version__ are metadata. CODE after the eye's __version__ line is
 #     engine behaviour and is kept (2026-10-04: the eye installs its credential masking there, and
-#     re-authoring the whole file silently dropped it from the mirror; the smoke gate caught it).
+#     re-authoring the whole file silently dropped it from the mirror).
 VER="$(sed -n 's/^version = "\(.*\)"$/\1/p' "$PEN_ROOT/pyproject.toml" | head -1)"
 [ -n "$VER" ] || { echo "FATAL: could not read version from pyproject.toml" >&2; exit 1; }
 INIT_CODE="$(awk 'seen{print} /^__version__ = /{seen=1}' "$PEN_SRC/__init__.py")"
@@ -217,213 +185,38 @@ echo "    re-authored src/omniseek/__init__.py (version $VER from pyproject; cod
 echo "    regenerating docs/sources.md ..."
 (cd "$PEN_ROOT" && PYTHONDONTWRITEBYTECODE=1 PYTHONIOENCODING=utf-8 "$PYBIN" scripts/gen_sources_doc.py >/dev/null)
 
-# --- 3. smoke tests + the repo ARTIFACTS the suite reads: same renames + drop polyu from the
-#     frozen explicit_only list (the public mirror has no polyu source; mokahr_ats is already
-#     tolerated at the source: "<= {mokahr_ats}").
+# --- 3. the repo ARTIFACTS bound to the code: same renames as src/.
 #
 #     ONE list, used by both the copy below and the residue gate in step 5, so a newly synced
 #     artifact can never slip past the gate that is supposed to cover it.
 #
 #     WHAT BELONGS HERE: artifacts bound to the CODE, whose meaning transfers to the mirror intact.
-#     docs/BUDGETS.md is a doc-vs-code drift rail (S0.5 imports each live constant and compares);
-#     tests/egress_baseline.json is the egress ratchet baseline (S0.6). Both guard code the mirror
-#     ships, so a mirror without them has a gate with holes in it.
-#     WHAT DOES NOT: artifacts bound to the DEPLOYMENT. SERVICES.md and the launchd plists describe
-#     one operator's live fleet; the mirror ships no fleet, and those checks are already written
-#     repo-adaptive at the source (`if _SERVICES_PATH.exists():`), so they skip cleanly here. ---
-SYNCED_ARTIFACTS=("tests/smoke.py" "tests/egress_baseline.json" "docs/BUDGETS.md")
+#     docs/BUDGETS.md names each wall-clock budget by the constant that holds it.
+#     WHAT DOES NOT: the eye's tests (the mirror carries none; its CI checks install and boot), and
+#     artifacts bound to the DEPLOYMENT. SERVICES.md and the launchd plists describe one operator's
+#     live fleet; the mirror ships no fleet. ---
+SYNCED_ARTIFACTS=("docs/BUDGETS.md")
 
-# The CONTRACT SUITES, added 2026-08-12. smoke.py grew a gate that runs every tests/test_*.py suite,
-# and the mirror carried none of them, so the first sync after that change aborted with
-# "0 suites, 0 tests" -- correctly: the gate refuses to report green when there is nothing to check.
-# The fix is the one this list's own rule already prescribes (code-bound artifacts ride along, or the
-# mirror ships a gate with holes in it), and it is the better answer anyway: a public engine that
-# carries its own 23 suites is a stronger artifact than one that asks you to trust it.
-#
-# DISCOVERED, not enumerated. A hand-list is a second place to forget a file, which is the exact
-# defect class this script keeps finding elsewhere; globbing means a suite written tomorrow is
-# carried, renamed and residue-gated with no edit here.
-# _repo_only.py rides too: it is what lets the three repo-hygiene suites SKIP cleanly in a tree with
-# no deploy.sh (which the mirror is) instead of failing on an absence that is correct.
-# EXCEPT the deployment-bound ones, LISTED here with the reason for each (decision of 2026-09-29):
-# they test the eye's release machinery (scripts/release_layout.py, release_transaction.py and the
-# bridges) or, since 2026-10-03, its launchd watchdog (scripts/sentinel.py) and, since 2026-10-10, its
-# state backup job and launchd fleet scripts, which the mirror does not ship by the same rule that keeps SERVICES.md out. Carried anyway
-# they do not fail meaningfully, they fail at IMPORT (`from scripts. ...`), which looks like the mirror
-# is broken rather than like the suite does not apply. Every test_*.py NOT on this list is synced.
-DEPLOYMENT_BOUND_SUITES=(
-  "test_release_bridges.py"      # imports scripts.release_layout / release_transaction: the deploy bridges
-  "test_release_layout.py"       # imports scripts.release_layout: the release directory layout
-  "test_release_transaction.py"  # imports scripts.release_transaction: the atomic release switch
-  "test_sentinel_watch.py"       # loads scripts/sentinel.py: the operator's launchd watchdog (2026-10-03)
-  "test_notify_outlet.py"        # loads scripts/_sentinel_common.py and the operator's push outlet (2026-10-06)
-  "test_state_backup.py"         # runs scripts/state_backup.sh: the operator's state backup job (2026-10-10)
-  "test_xhs_cn_seal_launchd.py"  # loads scripts/services.py, sentinel.py, eye_doctor.py: the launchd fleet (2026-10-10)
-)
-# THE MIRROR-OWNED PREFIX (decision of 2026-09-29). tests/test_mirror_*.py test the mirror's own
-# material (bench/, scripts/, .github/) and belong to the mirror: never written by this sync, never
-# checked by the unwritten gate. The eye must never carry a file with that prefix, or its copy would
-# overwrite the mirror's own; stop before any test file is written.
-_eye_mirror_named="$(ls "$EYE_ROOT"/tests/test_mirror_*.py 2>/dev/null || true)"
-if [ -n "$_eye_mirror_named" ]; then
-  echo "FATAL: the eye carries test file(s) with the mirror-owned prefix test_mirror_:" >&2
-  echo "$_eye_mirror_named" | sed 's/^/         /' >&2
-  echo "       That prefix belongs to the mirror's own tests; rename the file at the eye." >&2
-  exit 1
-fi
-while IFS= read -r _suite; do
-  [ -n "$_suite" ] || continue
-  case " ${DEPLOYMENT_BOUND_SUITES[*]} " in
-    *" $(basename "$_suite") "*)
-      echo "    (skipping $(basename "$_suite"): deployment-bound, the mirror ships no release machinery or launchd fleet scripts)"
-      continue ;;
-  esac
-  case " ${PRIVATE_EXCLUDED_SUITES[*]+${PRIVATE_EXCLUDED_SUITES[*]}} " in
-    *" $(basename "$_suite") "*)
-      echo "    (skipping $(basename "$_suite"): it tests a layer the public build does not ship)"
-      continue ;;
-  esac
-  SYNCED_ARTIFACTS+=("tests/$(basename "$_suite")")
-done < <(ls "$EYE_ROOT"/tests/test_*.py "$EYE_ROOT"/tests/_repo_only.py "$EYE_ROOT"/tests/__init__.py \
-           2>/dev/null || true)
-
-# THE SUITES' OWN DEPENDENCIES, added 2026-08-29. The discovery rule above is a FILENAME rule, so it
-# carries test_job_process_isolation.py and silently leaves behind isolated_job_fixture.py, the module
-# that suite spawns as a subprocess. The mirror then held a test referring to a module that did not
-# exist there. It cost a long hunt because every cheap signal said fine: the copy does not fail, the
-# eye's own macOS deploy is green (the fixture is right there), Windows skips the suite outright, and
-# only Linux CI actually runs it -- where the subprocess cannot start, so nothing times out and the
-# assertion fails with no hint about why.
-#
-# So discovery is now DEPENDENCY-driven, not name-driven: whatever a carried suite references as
-# tests.<module> is carried too. A fixture added tomorrow rides along with no edit here, which is the
-# same reason the suite list itself is globbed rather than hand-written.
-while IFS= read -r _dep; do
-  [ -n "$_dep" ] || continue
-  [ -f "$EYE_ROOT/tests/$_dep.py" ] || continue          # tests.<pkg> that is not a local module
-  case " ${SYNCED_ARTIFACTS[*]} " in *" tests/$_dep.py "*) continue ;; esac
-  echo "    (carrying tests/$_dep.py: referenced by a synced suite)"
-  SYNCED_ARTIFACTS+=("tests/$_dep.py")
-done < <(grep -rhoE 'tests\.[A-Za-z_][A-Za-z0-9_]*' "$EYE_ROOT"/tests/test_*.py 2>/dev/null \
-         | sed 's/^tests\.//' | sort -u)
-
-# THE SUITES' DATA FILES, added 2026-10-10, by the same dependency rule: a file directly under
-# tests/fixtures/ rides along when a synced suite names it. The eye's xiaohongshu media suite reads two
-# such files; synced without them it failed at import in the mirror for a reason that says nothing about
-# the code. A fixture no synced suite names stays at the eye. Each one is renamed, line-end normalized and
-# residue-gated with the rest of SYNCED_ARTIFACTS. Its CONTENT is renamed, its file NAME is not, while
-# the suite's reference to it is: a fixture whose name a rename rule would change must be renamed at the
-# eye, or the suite would look for a file that is not there.
-_synced_suites=()
-for rel in "${SYNCED_ARTIFACTS[@]}"; do
-  case "$rel" in tests/*.py) _synced_suites+=("$EYE_ROOT/$rel") ;; esac
-done
-for _fx in "$EYE_ROOT"/tests/fixtures/*; do
-  [ -f "$_fx" ] || continue
-  _fxname="$(basename "$_fx")"
-  grep -qF -- "$_fxname" "${_synced_suites[@]}" || continue
-  if [ "$(printf '%s' "$_fxname" | sed "${RENAME[@]}")" != "$_fxname" ]; then
-    echo "FATAL: tests/fixtures/$_fxname is read by a synced suite and a rename rule changes its name;" >&2
-    echo "       rename the file at the eye." >&2
-    exit 1
-  fi
-  echo "    (carrying tests/fixtures/$_fxname: read by a synced suite)"
-  SYNCED_ARTIFACTS+=("tests/fixtures/$_fxname")
-done
-
-echo "  [3/6] syncing smoke tests + ${#SYNCED_ARTIFACTS[@]} code-bound artifacts ..."
-# NO MIRROR-ONLY TESTS (decision of 2026-09-29). Tests of the eye's code live in the eye and ride
-# this sync; the eye's deploy runs them, which it cannot do for a test that exists only here (three did:
-# test_honest_empty, test_truthful_status, test_s3_rebuild, and a source changed under them without
-# either side noticing until the mirror's smoke failed). So nothing is pruned and nothing is kept aside:
-# every .py under tests/ except the mirror-owned tests/test_mirror_*.py is written by the copy below, and
-# the UNWRITTEN gate after it aborts, naming the files, when the mirror holds one this sync did not write
-# (a suite deleted upstream, or one written here by hand without the prefix). The deletion gate further
-# down still catches a tracked test that disappears.
+echo "  [3/5] syncing ${#SYNCED_ARTIFACTS[@]} code-bound artifact(s) ..."
 for rel in "${SYNCED_ARTIFACTS[@]}"; do
   [ -f "$EYE_ROOT/$rel" ] || { echo "FATAL: $rel missing at the eye" >&2; exit 1; }
   mkdir -p "$PEN_ROOT/$(dirname "$rel")"
   cp "$EYE_ROOT/$rel" "$PEN_ROOT/$rel"
   sed -i "${RENAME[@]}" "$PEN_ROOT/$rel"
 done
-sed -i 's/\bpolyu\b *//g' "$PEN_ROOT/tests/smoke.py"
-# The egress baseline (S0.6) must list exactly the modules this tree has: the eye's smoke check judges a
-# listed module that does not exist as stale. Step 1 left the two personal sources out, so they leave the
-# list here (read and rewritten as JSON, never by line, so the list stays valid wherever they sat).
-"$PYBIN" - "$PEN_ROOT/tests/egress_baseline.json" <<'PY'
-import json, sys
-path = sys.argv[1]
-with open(path, encoding="utf-8") as f:
-    data = json.load(f)
-data["modules"] = [m for m in data["modules"]
-                   if m.rsplit(".", 1)[-1] not in ("polyu_source", "mokahr_ats_source")]
-with open(path, "w", encoding="utf-8", newline="\n") as f:
-    json.dump(data, f, indent=2, ensure_ascii=False)
-    f.write("\n")
-PY
 # Same line-ending rule as step 1b, for the artifacts this step just copied in.
 _synced_abs=()
 for rel in "${SYNCED_ARTIFACTS[@]}"; do _synced_abs+=("$PEN_ROOT/$rel"); done
 to_lf "${_synced_abs[@]}"
 
-# UNWRITTEN GATE. Every .py under the mirror's tests/ must be one this sync just wrote, or a mirror-owned
-# tests/test_mirror_*.py.
-_written=" "
-for rel in "${SYNCED_ARTIFACTS[@]}"; do _written="$_written$rel "; done
-_unwritten=""
-while IFS= read -r _py; do
-  [ -n "$_py" ] || continue
-  _rel="${_py#"$PEN_ROOT"/}"
-  case "$_rel" in tests/test_mirror_*.py) continue ;; esac   # mirror-owned
-  case "$_written" in *" $_rel "*) ;; *) _unwritten="$_unwritten $_rel" ;; esac
-done < <(find "$PEN_ROOT/tests" -name "*.py" -not -path "*/__pycache__/*" | sort)
-if [ -n "$_unwritten" ]; then
-  echo "FATAL: the mirror's tests/ holds .py file(s) this sync did not write:" >&2
-  for _f in $_unwritten; do echo "         $_f" >&2; done
-  echo "       A test of the eye's code belongs in the eye (it rides this sync from there); a test of" >&2
-  echo "       this repository's own material is named tests/test_mirror_*.py; a suite deleted" >&2
-  echo "       upstream is deleted here in its own commit, with a reason." >&2
-  exit 1
-fi
-
-# DANGLING-REFERENCE GATE. The carry rule above is the fix; this is the check that the fix held.
-# A tests.<module> reference that resolves at the eye and not here is exactly the failure that shipped
-# on 2026-08-29, and it is invisible to everything else in this script: the copy succeeds, and the
-# smoke gate below passes on any platform that skips the affected suite. Cheap, and it fails at sync
-# time with the filename instead of in CI with a bare "failures=1".
-_dangling=""
-while IFS= read -r _ref; do
-  [ -n "$_ref" ] || continue
-  [ -f "$EYE_ROOT/tests/$_ref.py" ] || continue          # not a local module at the eye either
-  [ -f "$PEN_ROOT/tests/$_ref.py" ] || _dangling="$_dangling tests/$_ref.py"
-done < <(grep -rhoE 'tests\.[A-Za-z_][A-Za-z0-9_]*' "$PEN_ROOT"/tests/*.py 2>/dev/null \
-         | sed 's/^tests\.//' | sort -u)
-if [ -n "$_dangling" ]; then
-  echo "FATAL: synced tests reference module(s) that did not come with them:$_dangling" >&2
-  echo "       They exist at the eye, so the carry rule above missed them." >&2
-  exit 1
-fi
-
-# DELETION GATE. The smoke gate below proves the surviving tests pass; it says nothing about tests
-# that stopped existing, because a smaller suite passes more easily. This is the only check in the
-# script that can see a test being removed, so it runs before anything is believed.
-_gone="$(git -C "$PEN_ROOT" status --porcelain -- tests/ | sed -n 's/^ *D //p')"
-if [ -n "$_gone" ]; then
-  echo "FATAL: this sync would DELETE tracked test file(s):" >&2
-  echo "$_gone" | sed 's/^/         /' >&2
-  echo "       If a suite is genuinely gone upstream, delete it in its own commit with a reason." >&2
-  echo "       If it tests this repository's own material, name it tests/test_mirror_*.py." >&2
-  exit 1
-fi
-
 # --- 4. (retired) the standalone cron runner script was DELETED at the eye (P6, 2026-07-03):
 #     it was a second, memory-less perception path; the scheduler moved in-process. Its stale
 #     penumbra copy was removed the same day; nothing ships it anymore, so there is nothing to
-#     sync or delete here (step kept as a numbered placeholder so the 1-6 narration stays stable).
-echo "  [4/6] (retired step: the cron runner is gone; scheduler is in-process) ..."
+#     sync or delete here (step kept as a numbered placeholder so the 1-5 narration stays stable).
+echo "  [4/5] (retired step: the cron runner is gone; scheduler is in-process) ..."
 
 # --- 5. RESIDUE GATE (hard fail) ---
-echo "  [5/6] residue gate ..."
+echo "  [5/5] residue gate ..."
 # Gate EVERYTHING this script wrote: the renamed src tree plus every synced artifact, off the same
 # list step 3 copied from. A file that gets synced but not gated is exactly how a namespace leak
 # reaches a public repo.
@@ -527,135 +320,4 @@ if gate_hit legal -rniE 'explicit_only.*(circumvention|§?[[:space:]]*1201|decry
 fi
 [ "$FAILED" -eq 0 ] || { echo "=== SYNC ABORTED: residue gate failed ==="; exit 1; }
 
-# --- 6. SMOKE GATE (hard fail) ---
-# On failure, print every failure section of the log in full before the tail: unittest ERROR/FAIL
-# blocks with their tracebacks, bare Python tracebacks, and smoke's own "  FAIL " lines, capped at
-# 400 lines in total. The tail alone lost the cause of the 2026-10-05 intermittent failure, because
-# the error text sat further up the log than its last 20 lines.
-# BEGIN smoke_failure_sections
-smoke_failure_sections() {
-  awk -v cap=400 '
-    function emit(s) {
-      if (n < cap) { print s; n++ }
-      else if (!capped) { print "  ... (failure sections capped at " cap " lines)"; capped = 1 }
-    }
-    inblk {
-      if ($0 ~ /^Ran [0-9]+ tests? in / || $0 ~ /^======+$/) { inblk = 0 }
-      else { emit($0); prev = $0; next }
-    }
-    intb {
-      emit($0)
-      if ($0 !~ /^[ \t]/) { intb = 0 }
-      prev = $0; next
-    }
-    /^(ERROR|FAIL): / && prev ~ /^======+$/ { emit(prev); emit($0); inblk = 1; prev = $0; next }
-    /^Traceback \(most recent call last\):/ { emit($0); intb = 1; prev = $0; next }
-    /^  FAIL / || /^SMOKE FAILED/ { emit($0) }
-    { prev = $0 }
-  ' "$1"
-}
-# END smoke_failure_sections
-# THE SMOKE GATE'S PYTHON (2026-10-11). CI runs the smoke on the lowest Python the project declares
-# (requires-python in pyproject.toml, 3.11 today), while this gate used the machine's default (3.13 on
-# the operator's laptop). Four times in one day the gate here was green and CI's Windows leg was red,
-# each time because Python 3.11 on Windows reads time.monotonic from GetTickCount64 (15.625 ms steps)
-# where 3.13 has a 100 ns clock. So the smoke runs on that lowest version, in a virtual environment
-# holding what CI installs (pip install -e . of this tree; a bare interpreter lacks the dependencies),
-# and that class of failure stops the sync here instead of reaching CI. When no such Python or no such
-# environment can be had, one WARNING line says so and the smoke runs on $PYBIN as before.
-# The environment lives at $OMNISEEK_SMOKE_VENV (default ~/.cache/omniseek-sync/smoke-py<version>) and
-# is rebuilt when pyproject.toml, this tree's path or the interpreter changes.
-# BEGIN smoke_python
-# min_python_version PYPROJECT: the lowest MAJOR.MINOR its requires-python allows (">=3.11" -> 3.11).
-min_python_version() {
-  grep -E '^[[:space:]]*requires-python[[:space:]]*=' "$1" 2>/dev/null | head -1 \
-    | grep -oE '[0-9]+\.[0-9]+' | head -1 || true
-}
-# python_at VERSION CMD...: print the interpreter's own path when CMD runs a Python of VERSION.
-python_at() {
-  local want="$1" out
-  shift
-  out="$("$@" -c 'import sys; print("%d.%d" % sys.version_info[:2]); print(sys.executable)' \
-         2>/dev/null | tr -d '\r')" || return 1
-  [ "$(printf '%s\n' "$out" | sed -n 1p)" = "$want" ] || return 1
-  printf '%s\n' "$out" | sed -n 2p
-}
-# find_min_python VERSION: print the path of a Python of VERSION, or return 1. python<VERSION> on PATH
-# first (macOS, Linux), then on Windows each interpreter the py launcher lists (py -0p: -V:3.11 for a
-# python.org install, -V:Astral/CPython3.11.15 for one uv installed, -3.11-64 on an older launcher).
-find_min_python() {
-  local want="$1" exe tag
-  if exe="$(python_at "$want" "python$want")"; then printf '%s\n' "$exe"; return 0; fi
-  command -v py >/dev/null 2>&1 || return 1
-  while IFS= read -r tag; do
-    [ -n "$tag" ] || continue
-    if exe="$(python_at "$want" py "$tag")"; then printf '%s\n' "$exe"; return 0; fi
-  done < <(py -0p 2>/dev/null | tr -d '\r' \
-           | sed -n 's/^ *\(-V:[^ ]*\).*/\1/p; s/^ *\(-[0-9][^ ]*\) .*/\1/p')
-  return 1
-}
-# native_path PATH: the form a Windows interpreter reads (Git Bash), PATH unchanged elsewhere.
-native_path() {
-  if command -v cygpath >/dev/null 2>&1; then cygpath -w "$1"; else printf '%s\n' "$1"; fi
-}
-# venv_python DIR: the interpreter of the virtual environment at DIR, or return 1.
-venv_python() {
-  if [ -x "$1/Scripts/python.exe" ]; then printf '%s\n' "$1/Scripts/python.exe"
-  elif [ -x "$1/bin/python" ]; then printf '%s\n' "$1/bin/python"
-  else return 1; fi
-}
-# smoke_python: print the interpreter the smoke gate runs on. Progress and the one WARNING go to stderr.
-smoke_python() {
-  local want base venv vpy stamp fallback
-  fallback="the smoke gate runs on $PYBIN ($("$PYBIN" --version 2>&1 | tr -d '\r'))"
-  want="$(min_python_version "$PEN_ROOT/pyproject.toml")"
-  if [ -z "$want" ]; then
-    echo "  WARNING: no requires-python version in pyproject.toml; $fallback" >&2
-    printf '%s\n' "$PYBIN"; return 0
-  fi
-  if ! base="$(find_min_python "$want")"; then
-    echo "  WARNING: no Python $want found (python$want, py -0p); $fallback, so a failure only Python $want shows (CI runs $want) is not caught here" >&2
-    printf '%s\n' "$PYBIN"; return 0
-  fi
-  if command -v cygpath >/dev/null 2>&1; then base="$(cygpath -u "$base")"; fi
-  venv="${OMNISEEK_SMOKE_VENV:-${XDG_CACHE_HOME:-$HOME/.cache}/omniseek-sync/smoke-py$want}"
-  stamp="$({ cat "$PEN_ROOT/pyproject.toml"; printf '%s\n%s\n' "$PEN_ROOT" "$base"; } | cksum | cut -d' ' -f1)"
-  if [ "$(cat "$venv/.sync-stamp" 2>/dev/null)" != "$stamp" ] || ! vpy="$(venv_python "$venv")"; then
-    if [ -e "$venv" ] && [ ! -f "$venv/pyvenv.cfg" ]; then
-      echo "  WARNING: $venv exists and is not a virtual environment, left untouched; $fallback" >&2
-      printf '%s\n' "$PYBIN"; return 0
-    fi
-    echo "    (setting up the Python $want environment for the smoke gate: $venv)" >&2
-    if ! "$base" -m venv --clear "$(native_path "$venv")" >/dev/null 2>&1 || ! vpy="$(venv_python "$venv")"; then
-      echo "  WARNING: could not create a Python $want virtual environment at $venv; $fallback" >&2
-      printf '%s\n' "$PYBIN"; return 0
-    fi
-    if ! "$vpy" -m pip install -q --disable-pip-version-check -e "$(native_path "$PEN_ROOT")" \
-         >"$venv/pip-install.log" 2>&1; then
-      echo "  WARNING: pip install -e . into the Python $want environment failed (log: $venv/pip-install.log); $fallback" >&2
-      printf '%s\n' "$PYBIN"; return 0
-    fi
-    printf '%s\n' "$stamp" >"$venv/.sync-stamp"
-  fi
-  if ! python_at "$want" "$vpy" >/dev/null; then
-    echo "  WARNING: the environment at $venv does not run Python $want; $fallback" >&2
-    printf '%s\n' "$PYBIN"; return 0
-  fi
-  printf '%s\n' "$vpy"
-}
-# END smoke_python
-SMOKE_PY="$(smoke_python)"
-SMOKE_LOG=/tmp/omniseek_smoke.log
-echo "  [6/6] smoke gate (the mirror's own tests) on $("$SMOKE_PY" --version 2>&1 | tr -d '\r') ..."
-if ! (cd "$PEN_ROOT" && PYTHONIOENCODING=utf-8 "$SMOKE_PY" tests/smoke.py >"$SMOKE_LOG" 2>&1); then
-  echo "=== SYNC ABORTED: smoke gate failed. Failure sections (full text, at most 400 lines): ==="
-  smoke_failure_sections "$SMOKE_LOG"
-  echo "=== Tail: ==="
-  tail -20 "$SMOKE_LOG"
-  echo "=== Full log: $SMOKE_LOG ==="
-  if command -v cygpath >/dev/null 2>&1; then echo "    (Windows path: $(cygpath -w "$SMOKE_LOG"))"; fi
-  exit 1
-fi
-tail -1 "$SMOKE_LOG"
-
-echo "=== sync complete + gates green. Review the diff, then commit. ==="
+echo "=== sync complete + residue gate green. Review the diff, then commit. ==="

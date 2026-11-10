@@ -77,8 +77,8 @@ The SVG masters are the single source of truth for the mark; the logo and social
 
 - All shields.io badges use color `3B82F6` and `style=flat-square`.
 - Text in the demo figures (comparison GIFs, videos, infographic) has a contrast ratio of at least 4.5:1 against the card it sits on; text that is meant to step back (a step that is no longer current, except its main line; the install note; the "real runs" lines) at least 3:1. A step that is no longer current steps back by colour, not by opacity. `assets/masters/check_contrast.py` measures it.
-- No em-dash on any human-facing surface (CI-enforced by `scripts/brand_lint.py`).
-- Every README or site page that loads a brand image from raw.githubusercontent.com ends the URL with `?v=YYYY-MM-DD` (CI-enforced by `scripts/brand_lint.py`). GitHub's image proxy keeps showing the old picture under an unchanged URL, so when you re-render an image, set the date to the day of the re-render in every URL that points at it. A second re-render on a day that already has a version adds one lowercase letter: `?v=2026-10-11b`, then `c`.
+- No em-dash on any human-facing surface (checked by `scripts/brand_lint.py`).
+- Every README or site page that loads a brand image from raw.githubusercontent.com ends the URL with `?v=YYYY-MM-DD` (checked by `scripts/brand_lint.py`). GitHub's image proxy keeps showing the old picture under an unchanged URL, so when you re-render an image, set the date to the day of the re-render in every URL that points at it. A second re-render on a day that already has a version adds one lowercase letter: `?v=2026-10-11b`, then `c`.
 - On GitHub pages (the READMEs, `docs/compare.md`, `docs/compare.zh.md`), an image that comes in a light and a dark version follows the theme the reader picked on GitHub, not the computer's: one `<picture>` per theme, each inside a link, every URL ending in the theme fragment after the version:
 
   ```html

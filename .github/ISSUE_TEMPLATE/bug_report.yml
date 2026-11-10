@@ -52,7 +52,5 @@ body:
     attributes:
       label: Before filing
       options:
-        - label: I ran `python tests/smoke.py` and noted whether it passes.
-          required: false
         - label: I confirmed this is not a security/SSRF issue (those go to SECURITY.md).
           required: true

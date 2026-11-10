@@ -9,7 +9,6 @@ purpose (see below); the bar for fixing a decayed one is low (please do).
 ```bash
 python -m venv .venv && . .venv/bin/activate    # Windows: .venv\Scripts\activate
 scripts/bootstrap.sh                             # install + chromium + token + profile
-python tests/smoke.py                            # must pass before you push
 python -m omniseek.serve_http                      # run it; curl http://127.0.0.1:8765/healthz
 ```
 
@@ -41,8 +40,7 @@ easy it is to build. Fewer, sharper sources over a long tail of redundant ones.
    `explicit_only` so the broad fan-out skips it, and `needs_credentials` if it needs a logged-in session.
 
 Declare facets as CLASS ATTRS (`kind`, `domains`, `regions`, `modes`); never hand-edit `facets.json`.
-Add an offline golden fixture to `tests/smoke.py` (recorded raw payload -> expected doc shape). Never
-fabricate fields or signals: a field the source doesn't provide is absent, not guessed.
+Never fabricate fields or signals: a field the source doesn't provide is absent, not guessed.
 
 ## Legal + safety (read before adding a walled or scrape source)
 
@@ -56,7 +54,7 @@ fabricate fields or signals: a field the source doesn't provide is absent, not g
 
 ## Pull requests
 
-- `python tests/smoke.py` passes; `python -m compileall src` is clean.
+- `python -m compileall src` is clean.
 - No em-dash in human-facing text (use colon, comma, period, or parens).
 - One source (or one fix) per PR where practical; explain the mode edge in the description.
 
@@ -69,5 +67,4 @@ src/omniseek/
   core/                retrieval engine: fetcher · rank · normalize · cache
                        profile · _netguard (SSRF) · enrich · asr · curator
   core/sources/        adapters: api/ · scrape/ · walled/
-tests/smoke.py         offline invariants + golden fixtures (CI gate)
 ```

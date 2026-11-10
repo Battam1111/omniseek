@@ -86,7 +86,7 @@ OmniSeek 自己不带 AI 模型，也不往我们的服务器发任何东西。�
 
 ## 参与
 
-见 [CONTRIBUTING.md](../../.github/CONTRIBUTING.md)：新来源得能找到普通网页搜索找不到的东西。某个来源失效了，欢迎来修。push 前跑 `python tests/smoke.py`。
+见 [CONTRIBUTING.md](../../.github/CONTRIBUTING.md)：新来源得能找到普通网页搜索找不到的东西。某个来源失效了，欢迎来修。
 
 参与即同意[行为准则](../../.github/CODE_OF_CONDUCT.md)。
 

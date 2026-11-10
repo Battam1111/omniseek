@@ -88,7 +88,7 @@ Your agent starts with `omniseek_search`. The rest, from paper maps to saved sea
 
 ## Contributing
 
-See [CONTRIBUTING.md](https://github.com/Battam1111/omniseek/blob/main/.github/CONTRIBUTING.md): a new source has to find something plain web search doesn't. Fixing a source that stopped working is always welcome. Run `python tests/smoke.py` before you push.
+See [CONTRIBUTING.md](https://github.com/Battam1111/omniseek/blob/main/.github/CONTRIBUTING.md): a new source has to find something plain web search doesn't. Fixing a source that stopped working is always welcome.
 
 By participating you agree to the [Code of Conduct](https://github.com/Battam1111/omniseek/blob/main/.github/CODE_OF_CONDUCT.md).
 

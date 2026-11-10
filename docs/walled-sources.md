@@ -113,9 +113,7 @@ in for; the rest stay dark. If you have logged in for all of them and want them 
 `profile.is_source_enabled()` in `src/omniseek/core/profile.py`, which denies any source whose
 stability is `walled` unless it finds both `walled.enabled` and a `bring_your_own` opt-in. The deny
 applies **with or without a profile file**, so a fresh clone that has configured nothing reaches
-no site behind a login at all. The smoke suite pins both halves (the deny with no profile file,
-and the two `bring_your_own` forms), so the claim on this page is checkable
-rather than asserted.
+no site behind a login at all.
 
 ### 6. Use it
 

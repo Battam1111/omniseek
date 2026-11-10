@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Brand-voice lint: mechanically enforce the brand invariants that hand-authoring keeps leaking,
-so they stop being prose in BRAND.md and start being a CI gate.
+so they stop being prose in BRAND.md and start being a check.
 
 Two rules, run over the reader- and deployer-facing surfaces (NOT src/, whose comments are
 mechanically synced from the private upstream and keep its file style):
@@ -30,8 +30,8 @@ IS the category ("perception MCP server for AI agents"), so the vocabulary is no
 the ban would fail the tagline itself. If a future rebrand flips the positioning again, restore the
 rule from git history rather than rewriting it.
 
-Exit 0 = clean; exit 1 = violations, each printed as file:line. Wired into CI (.github/workflows/
-ci.yml) so a regression fails the build. This is the structural fix for a whole class the launch
+Exit 0 = clean; exit 1 = violations, each printed as file:line. Not part of CI (which checks only that
+the package installs and the server starts); run it before you push. This is the structural fix for a whole class the launch
 audit found by hand: a guard at the one place every surface must pass, not a per-file human
 re-audit each time (the same "fix it at the one choke point" move as the log rate-limiter).
 
