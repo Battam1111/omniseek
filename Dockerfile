@@ -17,7 +17,6 @@ COPY pyproject.toml README.md LICENSE NOTICE ./
 COPY deploy/profile.example.json ./profile.example.json
 COPY src ./src
 COPY scripts ./scripts
-COPY tests ./tests
 
 # Core install is Apache-clean. EXTRAS opt-in (you accept their licenses; see NOTICE):
 #   docker build --build-arg EXTRAS="[pdf,asr,walled]" .
