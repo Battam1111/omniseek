@@ -1,6 +1,6 @@
 # FAQ
 
-<sub>[OmniSeek](../README.md)&nbsp;·&nbsp;[Configuration](configuration.md)&nbsp;·&nbsp;[Tools](tools.md)&nbsp;·&nbsp;[Patterns](patterns.md)&nbsp;·&nbsp;[Case study](case-study.md)</sub>
+<sub>[OmniSeek](../README.md)&nbsp;·&nbsp;[Configuration](configuration.md)&nbsp;·&nbsp;[Tools](TOOLS.md)&nbsp;·&nbsp;[Patterns](patterns.md)&nbsp;·&nbsp;[Case study](case-study.md)</sub>
 
 Short answers to the questions people ask first. The one-line version of what OmniSeek is:
 **an add-on that lets your AI agent search where web search stops, keeps what it finds on your

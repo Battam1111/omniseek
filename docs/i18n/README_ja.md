@@ -72,7 +72,7 @@ OmniSeek は自前の AI モデルを持たず、私たちのサーバーに何�
 
 ## ツール
 
-エージェントはまず `omniseek_search` を使います。論文の地図づくり、保存した検索、エージェントが残す判断の記録（`omniseek_ruling`、`omniseek_statement`）など、ほかのツールは **[tools.md（英語）](../tools.md)** にあります。
+エージェントはまず `omniseek_search` を使います。論文の地図づくり、保存した検索、エージェントが残す判断の記録（`omniseek_ruling`、`omniseek_statement`）など、ほかのツールは **[TOOLS.md（英語）](../TOOLS.md)** にあります。
 
 ---
 

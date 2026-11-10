@@ -74,7 +74,32 @@ OmniSeek has no AI model of its own and sends nothing to a server of ours. Your 
 
 ## Tools
 
-Your agent starts with `omniseek_search`. The rest, from paper maps to saved searches and the notes your agent keeps (`omniseek_ruling`, `omniseek_statement`), are in **[tools.md](https://github.com/Battam1111/omniseek/blob/main/docs/tools.md)**.
+Your agent starts with `omniseek_search`; `omniseek_sources` shows what is available. The rest, from paper maps to saved searches and the notes your agent keeps (`omniseek_ruling`, `omniseek_statement`):
+
+| Tool | What it does |
+|------|-------------|
+| `omniseek_search` | Search the whole catalog at once, remove duplicates, rank. Works across languages. |
+| `omniseek_read` | Turn any URL or document (web page, PDF, arXiv) into clean text. |
+| `omniseek_view` | Look at images, document figures, and video frames. |
+| `omniseek_transcribe` | Transcribe audio or video locally, English and Chinese, from any timestamp. |
+| `omniseek_field_skeleton` | Map a research field's citations: the papers it is built on and the recent ones. |
+| `omniseek_resolve_identity` | Match a person's name to candidate author IDs across databases. |
+| `omniseek_coauthors` | Map a researcher's collaborators by number of joint papers. |
+| `omniseek_institution_cohort` | List who actively publishes at a lab, within a field. |
+| `omniseek_paper_enrich` | Open-access PDF, retraction status, and citation count for a paper. |
+| `omniseek_paper_recommend` | Similar papers (SPECTER embeddings) that keyword search misses. |
+| `omniseek_graph` | Query the local graph of what OmniSeek has found: find, neighborhood, between, since, similar. |
+| `omniseek_sensor` | Saved searches that rerun on a schedule and report only what is new. |
+| `omniseek_ruling` | Record that two entries are (or are not) the same person or thing. |
+| `omniseek_statement` | Record a directed relation between two entries. |
+| `omniseek_curator_act` | Propose, test, add, or retire a source. |
+| `omniseek_curator_view` | Read the queue of proposed sources or one source's report. |
+| `omniseek_gather` | Run several tools in parallel, one response. |
+| `omniseek_sources` | List sources by domain, region, capability, and health. |
+
+One MCP prompt comes with them: `investigate(target, shape, context)`, a ready-made investigation recipe, where `shape` is `person`, `lab`, `field`, `product` or `chase` and the optional `context` narrows the angle.
+
+Every parameter, and what each returned field means: **[TOOLS.md](https://github.com/Battam1111/omniseek/blob/main/docs/TOOLS.md)**. Each tool's own description ends by pointing at its section there.
 
 ---
 

@@ -51,8 +51,10 @@ done
 # (sed -e arguments, run before the public rename rules), PRIVATE_TOKENS (words the residue gate
 # refuses), PRIVATE_PATTERNS (regular expressions the residue gate refuses, for words that are also part
 # of ordinary words), PRIVATE_PATTERNS_CASE (the same, matched WITH case, for short codes that are
-# also ordinary words in another case) and private_prepass (exact-match rewrites run before the rename
-# pass). PRIVATE_PATTERNS (2026-10-11) and PRIVATE_PATTERNS_CASE (2026-10-12) may be absent.
+# also ordinary words in another case), private_prepass (exact-match rewrites run before the rename
+# pass) and private_artifact_prepass (the same for each artifact step 3 copies; arguments: the copied
+# file and its path relative to the repo root). PRIVATE_PATTERNS (2026-10-11) and PRIVATE_PATTERNS_CASE
+# (2026-10-12) may be absent.
 PRIVATE_OVERLAY="$EYE_ROOT/mirror/omniseek_private.sh"
 [ -f "$PRIVATE_OVERLAY" ] || { echo "FATAL: missing $PRIVATE_OVERLAY (the private half of this sync)" >&2; exit 1; }
 # shellcheck source=/dev/null
@@ -191,17 +193,36 @@ echo "    regenerating docs/sources.md ..."
 #     artifact can never slip past the gate that is supposed to cover it.
 #
 #     WHAT BELONGS HERE: artifacts bound to the CODE, whose meaning transfers to the mirror intact.
-#     docs/BUDGETS.md names each wall-clock budget by the constant that holds it.
+#     docs/BUDGETS.md names each wall-clock budget by the constant that holds it. docs/TOOLS.md is
+#     the full tool and server reference: every tool description carries only its contract and ends
+#     with "More: omniseek docs/TOOLS.md, <tool>", so the reference ships with the code that cites it.
 #     WHAT DOES NOT: the eye's tests (the mirror carries none; its CI checks install and boot), and
 #     artifacts bound to the DEPLOYMENT. SERVICES.md and the launchd plists describe one operator's
-#     live fleet; the mirror ships no fleet. ---
-SYNCED_ARTIFACTS=("docs/BUDGETS.md")
+#     live fleet; the mirror ships no fleet.
+#
+#     Each artifact owns its name in every letter case: another file whose name differs only in case
+#     is removed first, since on a case-insensitive disk (macOS, Windows) the copy would otherwise
+#     land in that file and keep the wrong name. Before the rename rules, private_artifact_prepass
+#     (from the private half) makes its exact-match rewrites of the passages that describe the
+#     operator's own deployment. ---
+SYNCED_ARTIFACTS=("docs/BUDGETS.md" "docs/TOOLS.md")
 
 echo "  [3/5] syncing ${#SYNCED_ARTIFACTS[@]} code-bound artifact(s) ..."
 for rel in "${SYNCED_ARTIFACTS[@]}"; do
   [ -f "$EYE_ROOT/$rel" ] || { echo "FATAL: $rel missing at the eye" >&2; exit 1; }
-  mkdir -p "$PEN_ROOT/$(dirname "$rel")"
+  dst_dir="$PEN_ROOT/$(dirname "$rel")"
+  base="$(basename "$rel")"
+  mkdir -p "$dst_dir"
+  for f in "$dst_dir"/*; do
+    [ -e "$f" ] || continue
+    n="$(basename "$f")"
+    if [ "$n" != "$base" ] && [ "$(printf '%s' "$n" | tr '[:upper:]' '[:lower:]')" = "$(printf '%s' "$base" | tr '[:upper:]' '[:lower:]')" ]; then
+      rm -f "$f"
+      echo "    removed $(dirname "$rel")/$n (same name as $rel but for letter case)"
+    fi
+  done
   cp "$EYE_ROOT/$rel" "$PEN_ROOT/$rel"
+  private_artifact_prepass "$PEN_ROOT/$rel" "$rel"
   sed -i "${RENAME[@]}" "$PEN_ROOT/$rel"
 done
 # Same line-ending rule as step 1b, for the artifacts this step just copied in.

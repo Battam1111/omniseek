@@ -1,6 +1,6 @@
 # Examples
 
-<sub>[OmniSeek](../README.md)&nbsp;·&nbsp;[Tools](tools.md)&nbsp;·&nbsp;[Configuration](configuration.md)&nbsp;·&nbsp;[FAQ](faq.md)</sub>
+<sub>[OmniSeek](../README.md)&nbsp;·&nbsp;[Tools](TOOLS.md)&nbsp;·&nbsp;[Configuration](configuration.md)&nbsp;·&nbsp;[FAQ](faq.md)</sub>
 
 Everything on this page came from one live OmniSeek instance and is quoted as returned: real queries, real outputs, real engagement numbers. Part 1 is a single session, shown in the order it happened.
 

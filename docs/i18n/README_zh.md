@@ -72,7 +72,7 @@ OmniSeek 自己不带 AI 模型，也不往我们的服务器发任何东西。�
 
 ## 工具
 
-你的 Agent 从 `omniseek_search` 开始。其余的，从画论文地图、存搜索，到 Agent 记下的判断（`omniseek_ruling`、`omniseek_statement`），都在 **[tools.md（英文）](../tools.md)**。
+你的 Agent 从 `omniseek_search` 开始。其余的，从画论文地图、存搜索，到 Agent 记下的判断（`omniseek_ruling`、`omniseek_statement`），都在 **[TOOLS.md（英文）](../TOOLS.md)**。
 
 ---
 

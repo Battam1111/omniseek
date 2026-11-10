@@ -1,6 +1,6 @@
 # Sites behind a login: bring your own browser
 
-<sub>[OmniSeek](../README.md)&nbsp;·&nbsp;[Configuration](configuration.md)&nbsp;·&nbsp;[Tools](tools.md)&nbsp;·&nbsp;[Patterns](patterns.md)&nbsp;·&nbsp;**Sites behind a login**&nbsp;·&nbsp;[Brand](BRAND.md)</sub>
+<sub>[OmniSeek](../README.md)&nbsp;·&nbsp;[Configuration](configuration.md)&nbsp;·&nbsp;[Tools](TOOLS.md)&nbsp;·&nbsp;[Patterns](patterns.md)&nbsp;·&nbsp;**Sites behind a login**&nbsp;·&nbsp;[Brand](BRAND.md)</sub>
 
 Some of the richest corners of the web sit behind a **login**: Xiaohongshu, Zhihu, Douyin,
 WeChat, and other platforms that no search engine indexes and no public API exposes. OmniSeek can

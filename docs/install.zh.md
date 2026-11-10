@@ -1,6 +1,6 @@
 # 安装方式
 
-<sub>[OmniSeek](i18n/README_zh.md)&nbsp;·&nbsp;**安装**&nbsp;·&nbsp;[配置（英文）](configuration.md)&nbsp;·&nbsp;[工具（英文）](tools.md)&nbsp;·&nbsp;[常见问题（英文）](faq.md)&nbsp;·&nbsp;[English](install.md)</sub>
+<sub>[OmniSeek](i18n/README_zh.md)&nbsp;·&nbsp;**安装**&nbsp;·&nbsp;[配置（英文）](configuration.md)&nbsp;·&nbsp;[工具（英文）](TOOLS.md)&nbsp;·&nbsp;[常见问题（英文）](faq.md)&nbsp;·&nbsp;[English](install.md)</sub>
 
 OmniSeek 跑在你自己的机器上。MCP 客户端（Claude Code、Cursor 等）把它当作本机命令启动，经 stdio
 （标准输入输出）和它通信：不开端口、不要 token、不用 Docker。第一节以外的内容都是可选的。

@@ -1,6 +1,6 @@
 # Install options
 
-<sub>[OmniSeek](../README.md)&nbsp;·&nbsp;**Install**&nbsp;·&nbsp;[Configuration](configuration.md)&nbsp;·&nbsp;[Tools](tools.md)&nbsp;·&nbsp;[FAQ](faq.md)&nbsp;·&nbsp;[中文](install.zh.md)</sub>
+<sub>[OmniSeek](../README.md)&nbsp;·&nbsp;**Install**&nbsp;·&nbsp;[Configuration](configuration.md)&nbsp;·&nbsp;[Tools](TOOLS.md)&nbsp;·&nbsp;[FAQ](faq.md)&nbsp;·&nbsp;[中文](install.zh.md)</sub>
 
 OmniSeek runs on your own machine. Your MCP client (Claude Code, Cursor, and others) starts it as a
 local command and talks to it over stdio: no port, no token, no Docker. Everything below the first

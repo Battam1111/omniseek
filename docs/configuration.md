@@ -1,6 +1,6 @@
 # Configuration
 
-<sub>[OmniSeek](../README.md)&nbsp;·&nbsp;**Configuration**&nbsp;·&nbsp;[Tools](tools.md)&nbsp;·&nbsp;[Patterns](patterns.md)&nbsp;·&nbsp;[Sites behind a login](walled-sources.md)&nbsp;·&nbsp;[Brand](BRAND.md)</sub>
+<sub>[OmniSeek](../README.md)&nbsp;·&nbsp;**Configuration**&nbsp;·&nbsp;[Tools](TOOLS.md)&nbsp;·&nbsp;[Patterns](patterns.md)&nbsp;·&nbsp;[Sites behind a login](walled-sources.md)&nbsp;·&nbsp;[Brand](BRAND.md)</sub>
 
 OmniSeek is **catalog-first**: it ships a classified set of sources and you choose what to enable.
 With no configuration at all, every benign default source is on and every source that needs a login is

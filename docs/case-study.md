@@ -1,6 +1,6 @@
 # Case study: the second investigation
 
-<sub>[OmniSeek](../README.md)&nbsp;·&nbsp;[Worked examples](examples.md)&nbsp;·&nbsp;[Tools](tools.md)&nbsp;·&nbsp;[The source catalog](sources.md)</sub>
+<sub>[OmniSeek](../README.md)&nbsp;·&nbsp;[Worked examples](examples.md)&nbsp;·&nbsp;[Tools](TOOLS.md)&nbsp;·&nbsp;[The source catalog](sources.md)</sub>
 
 Search is stateless: ask the same question twice and it starts from zero twice. This case
 study is about the other half of OmniSeek, the half that compounds. One real session

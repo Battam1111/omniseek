@@ -46,7 +46,7 @@ def main() -> int:
         "# The source catalog",
         "",
         "<sub>[OmniSeek](../README.md)&nbsp;·&nbsp;[Configuration](configuration.md)&nbsp;·&nbsp;"
-        "[Sites behind a login](walled-sources.md)&nbsp;·&nbsp;[Tools](tools.md)</sub>",
+        "[Sites behind a login](walled-sources.md)&nbsp;·&nbsp;[Tools](TOOLS.md)</sub>",
         "",
         "Every source below earned its place by beating plain web search at one of five jobs:",
         "giving structure (citation graphs, regulatory filings), reading what sits behind a login,",
