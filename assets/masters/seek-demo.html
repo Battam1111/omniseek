@@ -1,0 +1,224 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<!-- The README "See the difference" figure: one real run (compare-demo-run.json, R01), drawn on the
+     87-minute video's own timeline. Web search's two answers both point into the shaded stretch near the start;
+     OmniSeek transcribed the whole video and found the line at 1:21:51, the amber point (the brand's
+     "what you found there"). Query: lang=en|zh|ja, theme=light|dark, layout=wide|narrow (narrow is for
+     screens under 480 px). Rendered frame by frame by gen_seek_demo.py; the page exposes renderAt(t). -->
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Noto+Sans+SC:wght@400;500;600&family=Noto+Sans+JP:wght@400;500;600&display=block">
+<style>
+  html, body { margin: 0; padding: 0; background: transparent; }
+  svg { display: block; }
+  text { font-family: Inter, "Noto Sans SC", "Noto Sans JP", sans-serif; font-variant-numeric: tabular-nums; }
+  html[lang="ja"] text { font-family: Inter, "Noto Sans JP", "Noto Sans SC", sans-serif; }
+  .kick { font-weight: 600; letter-spacing: .02em; }
+  .ans  { font-weight: 500; }
+  .sub  { font-weight: 400; }
+  .time { font-weight: 600; letter-spacing: -.01em; }
+  .tick { font-weight: 500; }
+  .cap  { font-weight: 400; }
+</style>
+</head>
+<body>
+<svg id="fig" xmlns="http://www.w3.org/2000/svg">
+  <rect id="bg" x="0" y="0"/>
+  <defs>
+    <clipPath id="swept"><rect id="sweptRect" x="0" y="0" width="0" height="2000"/></clipPath>
+  </defs>
+  <!-- web search: the stretch both its answers point into, shaded behind the bars -->
+  <rect id="webBand" rx="4"/>
+  <!-- the 87 minutes: fixed-width bars, height = how densely he speaks there (transcript characters per second) -->
+  <g id="waveFaint"></g>
+  <g id="waveBlue" clip-path="url(#swept)"></g>
+  <line id="head" stroke-width="2" stroke-linecap="round"/>
+  <line id="webLead" stroke-width="1.25" stroke-linecap="round"/>
+  <g id="webLbl">
+    <text id="webK" class="kick"></text>
+    <text id="web1" class="ans"></text>
+    <text id="web2" class="sub"></text>
+  </g>
+  <!-- OmniSeek: the find -->
+  <g id="omniLbl">
+    <text id="omniK" class="kick" text-anchor="end"></text>
+    <text id="omniT" class="time" text-anchor="end"></text>
+    <text id="omniG" class="sub" text-anchor="end"></text>
+  </g>
+  <line id="lead" stroke-width="1.25" stroke-linecap="round"/>
+  <circle id="ring" r="10" fill="none" stroke-width="2"/>
+  <circle id="halo" r="10"/>
+  <circle id="find" r="10"/>
+  <!-- the clock and what the line is -->
+  <text id="t0" class="tick"></text>
+  <text id="tN" class="tick" text-anchor="end"></text>
+  <text id="cap" class="cap" text-anchor="middle"></text>
+</svg>
+<script>
+const Q = new URLSearchParams(location.search);
+const LANG = Q.get("lang") || "en", THEME = Q.get("theme") || "light", LAYOUT = Q.get("layout") || "wide";
+document.documentElement.lang = LANG;
+
+// The words on screen. zh is the run's own wording (compare-demo-run.json, R01); en and ja are the
+// glosses gen_compare_demo.py has always used for the same lines.
+const TXT = {
+  en: { webK: "Web search", web1: "“Around minutes 1 to 8”", web2: "Asked again: “between about 1:50 and 2:30”",
+        omniK: "OmniSeek", gloss: "“The writing of this paper is very concise.”",
+        cap: "All 87 minutes, transcribed on your machine" },
+  zh: { webK: "网页搜索", web1: "「大约在开头第1~8分钟」", web2: "再问一次：「约在1分50秒-2分30秒之间」",
+        omniK: "OmniSeek", gloss: "「这篇文章的写作是非常简洁的」",
+        cap: "整段 87 分钟，在你的电脑上转写" },
+  ja: { webK: "ウェブ検索", web1: "「最初の1〜8分ごろ」", web2: "もう一度聞くと：「1分50秒から2分30秒のあいだ」",
+        omniK: "OmniSeek", gloss: "「この論文の書き方はとても簡潔です」",
+        cap: "87 分を丸ごと、あなたのマシンで文字起こし" },
+};
+
+// Colours: the brand palette only (docs/BRAND.md): navy or white for text, the brand blues, one amber point.
+const C = {
+  light: { bg: "#FFFFFF", text: "#0F172A", muted: "rgba(15,23,42,.60)", faint: "rgba(15,23,42,.12)",
+           blue: "#3B82F6", kickOmni: "#1D4ED8", kickWeb: "rgba(15,23,42,.60)", lead: "rgba(15,23,42,.55)",
+           band: "rgba(15,23,42,.07)", head: "#0F172A", amber: "#F59E0B" },
+  dark:  { bg: "#0F172A", text: "#FFFFFF", muted: "rgba(255,255,255,.64)", faint: "rgba(255,255,255,.15)",
+           blue: "#3B82F6", kickOmni: "#93C5FD", kickWeb: "rgba(255,255,255,.64)", lead: "rgba(255,255,255,.60)",
+           band: "rgba(255,255,255,.09)", head: "#FFFFFF", amber: "#F59E0B" },
+}[THEME];
+
+// Geometry. wide: the two answers face each other above the line. narrow (phones): stacked, larger type.
+const G = {
+  wide:   { W: 1200, H: 390, X0: 72, X1: 1128, MID: 252, HMAX: 34, STEP: 4, BAR: 2.2,
+            webK: 84, web1: 122, web2: 154, omniK: 84, omniT: 134, omniG: 164,
+            clock: 334, fs: { kick: 15, ans: 24, sub: 17, time: 46, tick: 16, cap: 15 } },
+  narrow: { W: 600, H: 420, X0: 32, X1: 568, MID: 322, HMAX: 28, STEP: 4, BAR: 2.2,
+            webK: 50, web1: 84, web2: 112, omniK: 160, omniT: 208, omniG: 238,
+            clock: 386, fs: { kick: 15, ans: 22, sub: 16, time: 44, tick: 15, cap: 14 } },
+}[LAYOUT];
+
+const HMIN = 3;
+const DUR = 5225;                        // the video, seconds (run record: duration_seconds)
+const FIND = 4911.95;                    // the line that judges the writing (transcript_hits_写作[2].start)
+const WEB = [60, 480];                   // "around minutes 1 to 8"; asked again, "between about 1:50 and 2:30" falls inside it
+const xAt = s => G.X0 + (G.X1 - G.X0) * s / DUR;
+
+// Timeline (seconds). Frame 0 is the finished picture, so a still or a thumbnail already says it all;
+// the loop then clears it and draws it again, and the last frame equals the first.
+const T = { reset: [2.4, 3.0], web1: [3.15, 3.85], web2: [3.85, 4.5], sweep: [4.75, 7.55],
+            find: [7.55, 8.35], end: 8.6 };
+
+const $ = id => document.getElementById(id);
+const clamp01 = v => Math.max(0, Math.min(1, v));
+const prog = (t, [a, b]) => clamp01((t - a) / (b - a));
+const ease = p => p < .5 ? 4 * p * p * p : 1 - Math.pow(-2 * p + 2, 3) / 2;       // cubic in-out
+const out = p => 1 - Math.pow(1 - p, 3);                                          // cubic out
+const back = p => { const c = 1.7; return 1 + (c + 1) * Math.pow(p - 1, 3) + c * Math.pow(p - 1, 2); };
+const hms = s => { s = Math.floor(s + 1e-6); const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), x = s % 60;
+                   return (h ? h + ":" + String(m).padStart(2, "0") : String(m)) + ":" + String(x).padStart(2, "0"); };
+const attr = (el, o) => { for (const k in o) el.setAttribute(k, typeof o[k] === "number" ? +o[k].toFixed(2) : o[k]); };
+
+function setData(segs) {
+  // segs: [[start, end, characters], ...] from compare-demo-transcript.json (955 lines). Bin the video
+  // into STEP-pixel slots; a slot's height is the characters spoken in it per second, stretched between
+  // the 5th and 95th percentile so the shape of the talk shows.
+  const n = Math.floor((G.X1 - G.X0) / G.STEP), per = DUR / n, rate = new Array(n).fill(0);
+  for (const [s, e, c] of segs) {
+    const cps = c / Math.max(1, e - s);
+    for (let i = Math.floor(s / per); i <= Math.min(n - 1, Math.floor(e / per)); i++) {
+      const lo = Math.max(s, i * per), hi = Math.min(e, (i + 1) * per);
+      if (hi > lo) rate[i] += cps * (hi - lo) / per;
+    }
+  }
+  const sorted = [...rate].sort((a, b) => a - b);
+  const p5 = sorted[Math.floor(n * .05)], p95 = sorted[Math.floor(n * .95)];
+  const ns = "http://www.w3.org/2000/svg";
+  for (const g of ["waveFaint", "waveBlue"]) {
+    rate.forEach((r, i) => {
+      const h = HMIN + (G.HMAX - HMIN) * Math.pow(clamp01((r - p5) / (p95 - p5)), .9);
+      const b = document.createElementNS(ns, "rect");
+      attr(b, { x: G.X0 + i * G.STEP + (G.STEP - G.BAR) / 2, width: G.BAR, y: G.MID - h, height: 2 * h, rx: G.BAR / 2 });
+      $(g).appendChild(b);
+    });
+  }
+}
+
+function paint() {
+  const L = TXT[LANG] || TXT.en, fs = G.fs;
+  attr($("fig"), { width: G.W, height: G.H, viewBox: `0 0 ${G.W} ${G.H}` });
+  attr($("bg"), { width: G.W, height: G.H, fill: C.bg });
+  $("waveFaint").setAttribute("fill", C.faint); $("waveBlue").setAttribute("fill", C.blue);
+  const bandTop = G.MID - G.HMAX - 10;
+  attr($("webBand"), { x: xAt(WEB[0]), width: xAt(WEB[1]) - xAt(WEB[0]), y: bandTop, height: 2 * G.HMAX + 20, fill: C.band });
+  const wx = (xAt(WEB[0]) + xAt(WEB[1])) / 2;
+  attr($("webLead"), { x1: wx, x2: wx, y1: G.web2 + 14, y2: bandTop, stroke: C.lead });
+  attr($("head"), { stroke: C.head, y1: G.MID - G.HMAX - 14, y2: G.MID + G.HMAX + 14 });
+  const T_ = (id, x, y, size, fill, s) => { attr($(id), { x, y, fill, "font-size": size }); $(id).textContent = s; };
+  T_("webK", G.X0, G.webK, fs.kick, C.kickWeb, L.webK);
+  T_("web1", G.X0, G.web1, fs.ans, C.muted, L.web1);
+  T_("web2", G.X0, G.web2, fs.sub, C.muted, L.web2);
+  T_("omniK", G.X1, G.omniK, fs.kick, C.kickOmni, L.omniK);
+  T_("omniT", G.X1, G.omniT, fs.time, C.text, hms(FIND));
+  T_("omniG", G.X1, G.omniG, fs.sub, C.muted, L.gloss);
+  T_("t0", G.X0, G.clock, fs.tick, C.muted, "0:00");
+  T_("cap", (G.X0 + G.X1) / 2, G.clock, fs.cap, C.muted, L.cap);
+  attr($("tN"), { y: G.clock, fill: C.muted, "font-size": fs.tick });
+  const fx = xAt(FIND);
+  for (const id of ["find", "ring", "halo"]) attr($(id), { cx: fx, cy: G.MID });
+  $("find").setAttribute("fill", C.amber); $("ring").setAttribute("stroke", C.amber); $("halo").setAttribute("fill", C.bg);
+  attr($("lead"), { x1: fx, x2: fx, y1: G.omniG + 14, y2: G.MID - 16, stroke: C.lead });
+}
+
+function renderAt(t) {
+  t = ((t % T.end) + T.end) % T.end;
+  const done = t < T.reset[1] ? 1 - ease(prog(t, T.reset)) : 0;     // the finished picture, fading out
+  const w1 = ease(prog(t, T.web1)), w2 = ease(prog(t, T.web2));
+  const sw = ease(prog(t, T.sweep)), sweeping = t >= T.sweep[0] && t < T.sweep[1];
+  const f = prog(t, T.find);
+  const on = (id, v, dy = 0) => { $(id).setAttribute("opacity", v.toFixed(3));
+                                  if (dy) $(id).setAttribute("transform", `translate(0 ${((1 - v) * dy).toFixed(2)})`); };
+
+  // web search: the first answer and its stretch, shaded from the left; the second answer and the lead line
+  const a1 = Math.max(done, w1), a2 = Math.max(done, w2);
+  on("webK", a1); on("web1", a1, 8); on("web2", a2, 8);
+  on("webBand", a1); attr($("webBand"), { width: (xAt(WEB[1]) - xAt(WEB[0])) * a1 });
+  on("webLead", a2);
+
+  // the sweep: OmniSeek transcribes all 87 minutes
+  const swept = t < T.reset[1] ? done : (t >= T.sweep[0] ? sw : 0);
+  const hx = G.X0 + (G.X1 - G.X0) * swept;
+  attr($("sweptRect"), { x: G.X0 - 2, width: Math.max(0, hx - G.X0 + 2) });
+  attr($("head"), { x1: hx, x2: hx });
+  on("head", sweeping ? Math.min(prog(t, [T.sweep[0], T.sweep[0] + .25]), 1 - prog(t, [T.sweep[1] - .3, T.sweep[1]])) : 0);
+
+  // the clock: 0:00 stays; the running time rides under the play head and ends as 1:27:05
+  const tn = $("tN");
+  tn.textContent = hms(t < T.reset[1] ? DUR : (t >= T.sweep[0] ? DUR * sw : 0));
+  const wN = tn.getComputedTextLength();
+  attr(tn, { x: Math.max(G.X0 + wN, Math.min(G.X1, hx + wN / 2)) });
+  const tnOn = t < T.reset[1] ? done : (t >= T.sweep[0] ? prog(t, [T.sweep[0], T.sweep[0] + .2]) : 0);
+  on("tN", tnOn);
+  on("t0", hx - G.X0 < $("t0").getComputedTextLength() + 28 ? 1 - tnOn : 1);
+
+  // the find: the amber point lands at 1:21:51, one ring goes out, the answer and the caption come in
+  const fOn = Math.max(done, out(f));
+  const pop = t < T.reset[1] ? 1 : Math.max(0, back(clamp01(f / .55)));
+  attr($("find"), { r: 10 * pop }); attr($("halo"), { r: 10 * pop + 3.5 });
+  on("find", fOn); on("halo", fOn);
+  const rp = t < T.reset[1] ? 0 : clamp01((t - T.find[0]) / .9);
+  attr($("ring"), { r: 10 + 28 * out(rp), opacity: rp > 0 && rp < 1 ? (1 - rp) * .8 : 0 });
+  const lbl = Math.max(done, out(clamp01((t - T.find[0] - .15) / .6)));
+  on("omniLbl", lbl, 10); on("lead", lbl); on("cap", lbl);
+}
+
+window.SIZE = { W: G.W, H: G.H };
+window.setData = setData;
+window.renderAt = renderAt;
+window.ready = (async () => {
+  paint();
+  await Promise.all(["400 17px Inter", "500 24px Inter", "600 46px Inter", "600 15px Inter", "500 16px Inter",
+                     "400 17px 'Noto Sans SC'", "500 24px 'Noto Sans SC'", "600 15px 'Noto Sans SC'",
+                     "400 17px 'Noto Sans JP'", "500 24px 'Noto Sans JP'", "600 15px 'Noto Sans JP'"]
+                    .map(f => document.fonts.load(f, "写作あOmniSeek0123")));
+  await document.fonts.ready;
+  return true;
+})();
+</script>
+</body>
+</html>

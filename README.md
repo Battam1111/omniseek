@@ -26,18 +26,21 @@ Runs on your own computer. It plugs in through MCP, the standard way AI apps lik
 
 ## See the difference
 
-We asked two agents for Mu Li's exact words on the Transformer paper's writing, and the minute, in his 87-minute Bilibili walkthrough: web search returned a paraphrase and "around minutes 1 to 8", while the agent with OmniSeek transcribed the video and found the line at 1:21:51.
+One real question, asked in Chinese: in Mu Li's 87-minute Bilibili walkthrough of the Transformer paper, what does he say about the paper's writing, and at what minute?
 
 <p align="center">
-  <a href="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/compare-en-light.gif?v=2026-10-11d#gh-light-mode-only"><picture>
-    <source media="(max-width: 480px)" srcset="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/compare-en-light-narrow.gif?v=2026-10-11d#gh-light-mode-only">
-    <img src="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/compare-en-light.gif?v=2026-10-11d#gh-light-mode-only" width="720" alt="A real run, side by side. Left, an agent with web search only answers with a paraphrase and says around minutes 1 to 8. Right, an agent with OmniSeek transcribes the 87-minute video and quotes Mu Li at 1:21:51, with a link that opens there.">
+  <a href="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/seek-en-light.gif?v=2026-11-11#gh-light-mode-only"><picture>
+    <source media="(max-width: 480px)" srcset="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/seek-en-light-narrow.gif?v=2026-11-11#gh-light-mode-only">
+    <img src="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/seek-en-light.gif?v=2026-11-11#gh-light-mode-only" width="720" alt="The 87-minute video as a timeline. Web search's two answers point near the start: minutes 1 to 8, then 1:50 to 2:30. OmniSeek transcribes all 87 minutes and finds the line at 1:21:51.">
   </picture></a>
-  <a href="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/compare-en-dark.gif?v=2026-10-11d#gh-dark-mode-only"><picture>
-    <source media="(max-width: 480px)" srcset="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/compare-en-dark-narrow.gif?v=2026-10-11d#gh-dark-mode-only">
-    <img src="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/compare-en-dark.gif?v=2026-10-11d#gh-dark-mode-only" width="720" alt="A real run, side by side. Left, an agent with web search only answers with a paraphrase and says around minutes 1 to 8. Right, an agent with OmniSeek transcribes the 87-minute video and quotes Mu Li at 1:21:51, with a link that opens there.">
+  <a href="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/seek-en-dark.gif?v=2026-11-11#gh-dark-mode-only"><picture>
+    <source media="(max-width: 480px)" srcset="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/seek-en-dark-narrow.gif?v=2026-11-11#gh-dark-mode-only">
+    <img src="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/seek-en-dark.gif?v=2026-11-11#gh-dark-mode-only" width="720" alt="The 87-minute video as a timeline. Web search's two answers point near the start: minutes 1 to 8, then 1:50 to 2:30. OmniSeek transcribes all 87 minutes and finds the line at 1:21:51.">
   </picture></a>
 </p>
+
+- **Web search** answered from other people's notes: "around minutes 1 to 8", and asked again, "between about 1:50 and 2:30". A search for his exact words found nothing.
+- **With OmniSeek**, the agent transcribed all 87 minutes locally and found the line at [1:21:51](https://www.bilibili.com/video/BV1pu411o7BE?t=4911): 「这篇文章的写作是非常简洁的，因为就是说他每一句话就基本上在讲一件事情。」 "The writing of this paper is very concise: basically, every sentence says one thing." Asked again, it gave the same line from cache in 0.1 s.
 
 [The full comparison on three questions](https://github.com/Battam1111/omniseek/blob/main/docs/compare.md), with sources, dates, and a short video.
 

@@ -24,18 +24,21 @@ claude mcp add omniseek -- omniseek
 
 ## 違いを見る
 
-2 つのエージェントに、李沐（Mu Li）が Bilibili の 87 分の Transformer 論文解説で論文の書き方をどう評したか、その原文と何分目かを尋ねました。ウェブ検索だけのエージェントはまとめの要旨と「最初の 1〜8 分ごろ」を返し、OmniSeek を使うエージェントは動画を文字に起こして、その発言を 1:21:51 に見つけました。
+実際の質問をひとつ（中国語で質問）：李沐（Mu Li）は Bilibili の 87 分の Transformer 論文解説で、論文の書き方をどう評したか。原文は何で、何分目か。
 
 <p align="center">
-  <a href="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/compare-ja-light.gif?v=2026-10-11d#gh-light-mode-only"><picture>
-    <source media="(max-width: 480px)" srcset="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/compare-ja-light-narrow.gif?v=2026-10-11d#gh-light-mode-only">
-    <img src="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/compare-ja-light.gif?v=2026-10-11d#gh-light-mode-only" width="720" alt="実際の実行例を左右に並べたもの。左はウェブ検索だけのエージェントで、ネット上のまとめの要旨と「最初の 1〜8 分ごろ」を返す。右は OmniSeek を使うエージェントで、87 分の動画をまるごと文字に起こし、李沐（Mu Li）の発言を 1:21:51 に見つけ、その秒から開くリンクを示す。">
+  <a href="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/seek-ja-light.gif?v=2026-11-11#gh-light-mode-only"><picture>
+    <source media="(max-width: 480px)" srcset="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/seek-ja-light-narrow.gif?v=2026-11-11#gh-light-mode-only">
+    <img src="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/seek-ja-light.gif?v=2026-11-11#gh-light-mode-only" width="720" alt="87 分の動画を 1 本のタイムラインにしたもの。ウェブ検索の 2 つの答えはどちらも冒頭を指す（1〜8 分、もう一度聞くと 1 分 50 秒から 2 分 30 秒）。OmniSeek は 87 分をまるごと文字起こしし、その発言を 1:21:51 に見つける。">
   </picture></a>
-  <a href="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/compare-ja-dark.gif?v=2026-10-11d#gh-dark-mode-only"><picture>
-    <source media="(max-width: 480px)" srcset="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/compare-ja-dark-narrow.gif?v=2026-10-11d#gh-dark-mode-only">
-    <img src="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/compare-ja-dark.gif?v=2026-10-11d#gh-dark-mode-only" width="720" alt="実際の実行例を左右に並べたもの。左はウェブ検索だけのエージェントで、ネット上のまとめの要旨と「最初の 1〜8 分ごろ」を返す。右は OmniSeek を使うエージェントで、87 分の動画をまるごと文字に起こし、李沐（Mu Li）の発言を 1:21:51 に見つけ、その秒から開くリンクを示す。">
+  <a href="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/seek-ja-dark.gif?v=2026-11-11#gh-dark-mode-only"><picture>
+    <source media="(max-width: 480px)" srcset="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/seek-ja-dark-narrow.gif?v=2026-11-11#gh-dark-mode-only">
+    <img src="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/seek-ja-dark.gif?v=2026-11-11#gh-dark-mode-only" width="720" alt="87 分の動画を 1 本のタイムラインにしたもの。ウェブ検索の 2 つの答えはどちらも冒頭を指す（1〜8 分、もう一度聞くと 1 分 50 秒から 2 分 30 秒）。OmniSeek は 87 分をまるごと文字起こしし、その発言を 1:21:51 に見つける。">
   </picture></a>
 </p>
+
+- **ウェブ検索だけ**：ネット上のまとめをもとに「最初の 1〜8 分ごろ」、もう一度聞くと「1 分 50 秒から 2 分 30 秒のあいだ」。本人の言葉そのままで検索しても、何も見つからなかった。
+- **OmniSeek あり**：エージェントが 87 分をまるごと手元で文字起こしし、[1:21:51](https://www.bilibili.com/video/BV1pu411o7BE?t=4911) の一文を見つけた：「这篇文章的写作是非常简洁的，因为就是说他每一句话就基本上在讲一件事情。」（この論文の書き方はとても簡潔です。基本的に、一文ごとにひとつのことを言っています。）もう一度聞くと、キャッシュから 0.1 秒で同じ一文。
 
 [3 つの質問の完全な比較（英語）](../compare.md)：出典、日付、短い動画つき。
 

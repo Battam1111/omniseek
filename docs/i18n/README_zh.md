@@ -24,18 +24,21 @@ claude mcp add omniseek -- omniseek
 
 ## 看看差别
 
-问两个 Agent：李沐在 B 站 87 分钟的 Transformer 论文精读里怎么评价这篇论文的写作，原话是什么、在第几分钟；只有网页搜索的 Agent 给出网友整理的大意和「大约在开头第1~8分钟」，装了 OmniSeek 的 Agent 把视频整段转成文字，找到原话在 1:21:51。
+一个真实的问题：李沐在 B 站 87 分钟的 Transformer 论文精读里，怎么评价这篇论文的写作？原话是什么，在第几分钟？
 
 <p align="center">
-  <a href="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/compare-zh-light.gif?v=2026-10-11d#gh-light-mode-only"><picture>
-    <source media="(max-width: 480px)" srcset="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/compare-zh-light-narrow.gif?v=2026-10-11d#gh-light-mode-only">
-    <img src="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/compare-zh-light.gif?v=2026-10-11d#gh-light-mode-only" width="720" alt="一次真实运行，左右对照。左边只有网页搜索的 Agent 给出网友整理的大意，说大约在开头第 1 到 8 分钟；右边装了 OmniSeek 的 Agent 把 87 分钟的视频整段转成文字，找到李沐的原话在 1:21:51，附一个从这一秒打开的链接。">
+  <a href="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/seek-zh-light.gif?v=2026-11-11#gh-light-mode-only"><picture>
+    <source media="(max-width: 480px)" srcset="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/seek-zh-light-narrow.gif?v=2026-11-11#gh-light-mode-only">
+    <img src="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/seek-zh-light.gif?v=2026-11-11#gh-light-mode-only" width="720" alt="把 87 分钟的视频画成一条时间线。网页搜索的两个回答都指在开头：第 1 到 8 分钟，再问一次是 1 分 50 秒到 2 分 30 秒。OmniSeek 把 87 分钟整段转写，找到原话在 1:21:51。">
   </picture></a>
-  <a href="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/compare-zh-dark.gif?v=2026-10-11d#gh-dark-mode-only"><picture>
-    <source media="(max-width: 480px)" srcset="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/compare-zh-dark-narrow.gif?v=2026-10-11d#gh-dark-mode-only">
-    <img src="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/compare-zh-dark.gif?v=2026-10-11d#gh-dark-mode-only" width="720" alt="一次真实运行，左右对照。左边只有网页搜索的 Agent 给出网友整理的大意，说大约在开头第 1 到 8 分钟；右边装了 OmniSeek 的 Agent 把 87 分钟的视频整段转成文字，找到李沐的原话在 1:21:51，附一个从这一秒打开的链接。">
+  <a href="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/seek-zh-dark.gif?v=2026-11-11#gh-dark-mode-only"><picture>
+    <source media="(max-width: 480px)" srcset="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/seek-zh-dark-narrow.gif?v=2026-11-11#gh-dark-mode-only">
+    <img src="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/seek-zh-dark.gif?v=2026-11-11#gh-dark-mode-only" width="720" alt="把 87 分钟的视频画成一条时间线。网页搜索的两个回答都指在开头：第 1 到 8 分钟，再问一次是 1 分 50 秒到 2 分 30 秒。OmniSeek 把 87 分钟整段转写，找到原话在 1:21:51。">
   </picture></a>
 </p>
+
+- **只有网页搜索**：照网友整理的笔记回答「大约在开头第1~8分钟」，再问一次变成「约在1分50秒-2分30秒之间」；拿他的原话去搜，什么也没搜到。
+- **装了 OmniSeek**：Agent 在本机把 87 分钟整段转成文字，找到 [1:21:51](https://www.bilibili.com/video/BV1pu411o7BE?t=4911) 这一句：「这篇文章的写作是非常简洁的，因为就是说他每一句话就基本上在讲一件事情。」再问一次，从缓存 0.1 秒给出同一句。
 
 [三个问题的完整对照](../compare.zh.md)，附出处、日期和一段短视频。
 

@@ -31,3 +31,6 @@ bench/RESULTS.md
 assets/masters/*.html
 assets/masters/*.png
 assets/masters/*.cast
+assets/masters/seek-frames/
+# seek-demo.html is a source, not a build intermediate: gen_seek_demo.py renders it
+!assets/masters/seek-demo.html

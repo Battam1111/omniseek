@@ -6,6 +6,18 @@ All notable changes to OmniSeek are documented here. The format follows
 Entries below the rename note predate it and use the project's former name, penumbra; they are
 history and are kept as written.
 
+## [Unreleased]
+
+### Changed
+
+- The figure under "See the difference" (README in each language, and the site home page) is
+  redrawn on the video's own timeline: the 87 minutes as one line whose height is how densely he
+  speaks, web search's two answers as a shaded stretch at minutes 1 to 8, and OmniSeek's find as
+  the amber point at 1:21:51. The question, the full quote and the link to that second now sit
+  under the figure as text. 0.6 to 0.7 MB per GIF instead of 3.7 MB; rendered by
+  `assets/masters/gen_seek_demo.py` from `assets/masters/seek-demo.html`. The side-by-side
+  comparison GIFs stay in the repo for reference.
+
 ## [0.3.0] - 2026-11-11
 
 A front-page and install-path release: a stranger should get from the README to a working
