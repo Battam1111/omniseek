@@ -177,7 +177,7 @@ def sealed_reason(adapter: "SourceAdapter") -> str:
     (a reason string; the adapter's own flag decides it, so restoring is one edit in that adapter).
     A sealed source is out of the broad fan-out, never suggested as excluded_relevant, answers a
     named call with an empty result plus the reason, reads health "sealed" (not a failure) and is
-    skipped by the health sweep and the session warmer. First user: xiaohongshu_cn (2026-10-07)."""
+    skipped by the health sweep. First user: xiaohongshu_cn (2026-10-07; deleted in SMALL-BATCH-13)."""
     try:
         v = getattr(adapter, "sealed", "")
     except Exception:  # noqa: BLE001 (a broken property must never break routing)
@@ -882,7 +882,6 @@ _ROUTING_KEYWORDS: dict[str, str] = {
     "maimai": "China big tech ByteDance Sea Shopee Singapore overseas staffing referral salary layoff hiring freeze insider workplace",
     "zhihu_search": "Chinese first-hand experience PhD jobhunt company insider visa city comparison question answer",
     "xiaohongshu_search": "study abroad PhD jobhunt city company experience notes interview guide lifestyle review",
-    "xiaohongshu_cn": "study abroad experience notes lifestyle review comments little red book",
     "xiaohongshu": "study abroad experience notes lifestyle review little red book",
     "hardwarezone": "Singapore local forum EDMW employment pass foreign talent salary company immigration ground truth",
     "sogou_weixin": "WeChat official account article keyword search Chinese industry specialist first-hand writing",

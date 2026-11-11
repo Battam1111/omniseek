@@ -177,7 +177,7 @@ _listeners_in_registering_context()
 # lever that returns GBs (measured alternatives: capping local retrieval returns nothing, and the
 # unified memory is soldered so it cannot be upgraded).
 #
-# Three facts make on-demand safe, all measured 2026-08-29 on com.omniseek.cdp.xhs-cn:
+# Three facts make on-demand safe, all measured 2026-08-29 on the mainland xiaohongshu browser (port 9224, deleted since):
 #   1. `launchctl kill TERM` does NOT get auto-restarted: KeepAlive is {Crashed, !SuccessfulExit},
 #      so a deliberate stop stays stopped while a crash still self-heals.
 #   2. Cold start to a usable browser takes 1 second (profile and cache are already on disk).
@@ -191,41 +191,21 @@ _CDP_STATE_DIR = where.state() / "cdp-lastuse"
 _CDP_SERVICES = {
     "9222": where.label("cdp-cn-forums"),
     "9223": where.label("cdp-xhs"),
-    "9224": where.label("cdp-xhs-cn"),
 }
-
-# port → why it is sealed. A sealed port's browser is never started, kickstarted or driven by OmniSeek:
-# ensure_browser (the one door every cdp_call and render goes through) refuses it. Filled at import by
-# the adapter that owns the port and decides the seal (2026-10-07: xiaohongshu_cn seals 9224 from its
-# _SEALED flag), so the restore point stays in that adapter; this table only records it.
-_SEALED_PORTS: dict[str, str] = {}
-
-
-def seal_port(port: str, reason: str) -> None:
-    """Mark a CDP port as sealed: ensure_browser raises for it from now on (see _SEALED_PORTS)."""
-    _SEALED_PORTS[str(port)] = reason or "sealed"
-
-
-def sealed_port_reason(cdp_url: str) -> str:
-    """The seal reason for the port in ``cdp_url``, or "" when that port is not sealed."""
-    port = cdp_port(cdp_url)
-    return _SEALED_PORTS.get(port, "") if port else ""
-
 
 # port → how many connections OmniSeek may hold to that Chrome at once. The ONE place this is decided,
 # read by both ways in (the persistent pool, _pool_for, and the per-call path's gate, _gate_for):
 #   * 9222, the shared browser (大号 logins: zhihu, 一亩三分地, ...): 3, a few reused connections so
 #     concurrent named walled fetches do not queue behind each other (the Chrome's CDP pump
 #     serializes commands anyway; page loads and renders still overlap);
-#   * 9223 / 9224, the two xiaohongshu 小号: 1, strictly one flow at a time (anti-ban: an account
-#     that must not look automated).
+#   * 9223, the xiaohongshu 小号: 1, strictly one flow at a time (anti-ban: an account that must not
+#     look automated).
 # A port that is not here (the jailed 9444 render Chromium, a new browser nobody listed) gets 1: one
 # at a time is the safe side to be wrong on. tests/test_cdp_ondemand.py fails when a port in
 # _CDP_SERVICES has no row here, so a new browser's size is a decision, not a default.
 _CDP_MAX_CONNECTIONS = {
     "9222": 3,
     "9223": 1,
-    "9224": 1,
 }
 _CDP_DEFAULT_CONNECTIONS = 1
 
@@ -295,19 +275,15 @@ def ensure_browser(cdp_url: str) -> None:
     """Make sure the CDP Chrome for this url is running, starting it if it is not.
 
     No-ops on any non-macOS host and on any port outside _CDP_SERVICES, so the only environment
-    whose behaviour changes is the deployment's four launchd-managed browsers.
+    whose behaviour changes is the deployment's launchd-managed browsers.
 
     Raises RuntimeError if the browser cannot be brought up: the caller (cdp_call) already
     propagates exceptions and every walled adapter degrades a raise to an empty result, so a
     failed start surfaces as 'this source returned nothing' plus a logged reason, exactly like a
     dead browser did before this existed.
 
-    A sealed port (_SEALED_PORTS) raises at once, on every platform, before any health probe or
-    kickstart: nothing is started and nothing is sent to that browser. So does a launchd port in a
-    process that is not the live eye (live_port_refusal), on every platform."""
-    sealed = sealed_port_reason(cdp_url)
-    if sealed:
-        raise RuntimeError(f"CDP port {cdp_port(cdp_url)} sealed: {sealed}")
+    A launchd port in a process that is not the live eye (live_port_refusal) raises at once, on every
+    platform, before any health probe or kickstart."""
     refusal = live_port_refusal(cdp_url)
     if refusal:
         raise RuntimeError(refusal)
@@ -474,7 +450,7 @@ def _sweep_excess_tabs(ctx, keep_recent: int = 6) -> None:
 # runs each callback on a fresh page inside its owning worker thread — which satisfies Playwright
 # sync's thread-affinity (a connection is only ever touched by the one thread that created it).
 # Its size per Chrome is the port's row of _CDP_MAX_CONNECTIONS (9222 shared 大号: 3; the 小号 on
-# 9223 / 9224: 1, strictly serial, the pool never widens them; any other port: 1).
+# 9223: 1, strictly serial, the pool never widens them; any other port: 1).
 # Self-heals after a Chrome restart (the reaper stopped it and ensure_browser started a new one, or
 # launchd restarted it): before reusing its connection a worker checks that the
 # Chrome on the port is still the one it connected to (_browser_instance) and reconnects if not, so

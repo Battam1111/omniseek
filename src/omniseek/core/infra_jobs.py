@@ -747,7 +747,7 @@ def run_source_health(scope: Optional[str] = None) -> dict:
 _WARMER_STATE = _STATE / "session-warmer.json"
 _MAINT_FLAG = _STATE / "cdp-maintenance"
 _WARMER_COOLDOWN_S = 6 * 3600
-_ACTIVE_START, _ACTIVE_END = 8, 23  # host local hours; match the xiaohongshu_cn adapter gate
+_ACTIVE_START, _ACTIVE_END = 8, 23  # host local hours
 # A blank search page (no results, no login wall) alerts only when it is the Nth run in a row. N=2 is
 # PROVISIONAL: in the 19 runs of 2026-10-10..16 the two blank pages each came back on the next run, and
 # 2 is the smallest N that lets both pass while a lasting blank still alerts within one run's gap.
@@ -755,8 +755,7 @@ _ACTIVE_START, _ACTIVE_END = 8, 23  # host local hours; match the xiaohongshu_cn
 # (and the warmer log's "blank search page" lines); if a streak of 2 ever healed by itself on run 3,
 # raise N; if a real logout ever showed as blank pages with no login wall, lower it to 1.
 _BLANK_ALERT_STREAK = 2
-# Per-result keys copied into the state file's last_results when present (the xhs search probe and the
-# sealed skip set them).
+# Per-result keys copied into the state file's last_results when present (the xhs search probe sets them).
 _WARMER_STATE_EXTRAS = ("skipped", "kind", "dom_items", "body_len", "retry", "self_healed", "blank_streak")
 
 # Benign rotating warm queries (look like a real PhD-track user glancing at their feed).
@@ -770,9 +769,6 @@ _WARMER_INSTANCES = {
     "小号-rednote": (
         "http://127.0.0.1:9223", "https://www.rednote.com",
         "https://www.rednote.com/search_result?keyword={kw}&type=51", "rednote", "xhs_search"),
-    "大陆号-xiaohongshu": (
-        "http://127.0.0.1:9224", "https://www.xiaohongshu.com",
-        "https://www.xiaohongshu.com/search_result?keyword={kw}", "xiaohongshu", "xhs_search"),
 }
 
 _DOM_JS = r"""(()=>({
@@ -1112,23 +1108,9 @@ def _needs_relogin_alert(r: dict) -> bool:
     """The "re-login this account" alert is only true of a session the warmer actually LOOKED AT
     and found bad. Not for one it could not reach (``unprobed``: an unobserved state is not a
     negative), and not for an autofill-backed forum (``self_heals``: its reactive search path
-    already alerts on a failed re-login), and not for a sealed browser the warmer skipped
-    (``skipped``: nothing was looked at)."""
+    already alerts on a failed re-login), and not for a browser the warmer skipped (``skipped``:
+    nothing was looked at)."""
     return not r["ok"] and not r.get("unprobed") and not r.get("self_heals") and not r.get("skipped")
-
-
-def _warmer_sealed(cdp: str) -> str:
-    """The seal reason for the Chrome at ``cdp`` ('' = not sealed). Reads _cdp's sealed-port table,
-    which the owning adapter fills at import from its own flag (xiaohongshu_cn seals 9224), so the
-    warmer never keeps a second copy of the decision. Importing the owner here makes the table
-    complete in a process-isolated job that has not loaded the sources yet."""
-    try:
-        from omniseek.core.sources.walled import xiaohongshu_cn_source  # noqa: F401 (registers its port seal)
-        from omniseek.core.sources.walled._cdp import sealed_port_reason
-        return sealed_port_reason(cdp)
-    except Exception as exc:  # noqa: BLE001 -- a broken check must not stop the other accounts
-        log.debug("session-warmer: seal check failed (%s)", exc)
-        return ""
 
 
 def run_session_warmer() -> dict:
@@ -1162,12 +1144,6 @@ def run_session_warmer() -> dict:
     with sync_playwright() as p:
         for label, (cdp, home, search_tpl, key, probe) in _WARMER_INSTANCES.items():
             if only and not (label in only or key in only):  # WARMER_ONLY accepts label or ASCII key
-                continue
-            _sr = _warmer_sealed(cdp)
-            if _sr:  # sealed on purpose: never open or drive that browser (no alert, nothing sent)
-                log.info("session-warmer %s: sealed -> skip (%s)", label, _sr)
-                results.append({"label": label, "ok": None, "skipped": "sealed", "reason": _sr,
-                                "acw_tc": None, "web_session": None})
                 continue
             r = _warm_one(p, label, cdp, home, search_tpl, key, probe)
             results.append(r)
@@ -1246,11 +1222,10 @@ def run_session_warmer() -> dict:
     degraded = [r["label"] for r in results
                 if not r["ok"] and not r.get("unprobed") and not r.get("skipped")]
     unprobed = [r["label"] for r in results if r.get("unprobed")]
-    sealed = [r["label"] for r in results if r.get("skipped") == "sealed"]
-    log.info("session-warmer: warmed=%s degraded=%s unprobed=%s sealed=%s",
-             [r["label"] for r in results if r["ok"]], degraded, unprobed, sealed)
+    log.info("session-warmer: warmed=%s degraded=%s unprobed=%s",
+             [r["label"] for r in results if r["ok"]], degraded, unprobed)
     return {"warmed": [r["label"] for r in results if r["ok"]],
-            "degraded": degraded, "unprobed": unprobed, "sealed": sealed}
+            "degraded": degraded, "unprobed": unprobed}
 
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════════

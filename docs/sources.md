@@ -21,7 +21,7 @@ Descriptions are quoted in the language of each source's own audience; many are 
 because that is where those sources live. The always-English routing layer is the domain
 headers, the access levels, and the tags on every row.
 
-Generated from omniseek 0.3.0: 222 live sources across 34 domains.
+Generated from omniseek 0.3.0: 221 live sources across 34 domains.
 
 ## papers (66)
 
@@ -220,13 +220,6 @@ Generated from omniseek 0.3.0: 222 live sources across 34 domains.
 - **ml_eval_safety** `free` `stream`: LLM 评测 + AI 安全/威胁评估 机构：METR (前沿危险能力/autonomy 评估 + Frontier Risk Report) + Epoch AI (基准 DB + 算力/数据/成本趋势量化). 评测/安全职业线信号, 区别于 lmsys_arena(实时 Elo) 与 alignment_forum(社区)
 - **scrape_ml_orgs** `free` `stream`: ML 工程 / 评测 / 科研方法 机构 (scrape, 无 RSS)：Baseten (推理云工程深文) + UK AISI (政府级前沿评测/安全研究) + Simon Peyton Jones research-skills (写论文/做报告 canonical craft)
 
-## general (4)
-
-- **cdp_fulltext** `walled` `by-name-only` `portal`: Full-text via the CDP real browser for venues that wall/403 headless but render for a real browser (Quora, Blind/teamblind, Glassdoor, 脉脉/maimai, LinkedIn public posts, X/Twitter profiles+tweets, PropertyGuru 与 99.co 的新加坡房源页). Discover via the matching search-index source, then omniseek_read the URL ...
-- **csrankings** `free` `lookup`: CSRankings: CS faculty roster by institution/region (keyless, via CSRankings.org GitHub data). Query a REGION (singapore / canada / hong kong), an INSTITUTION ('National University of Singapore', 'University of Toronto'), or a faculty NAME → faculty with homepage + Google Scholar + ORCID + a DBLP li ...
-- **exa** `keyed` `bring-your-own-login` `by-name-only` `proxy`: Exa neural/semantic web search (exa.ai): finds open-web pages by MEANING, not keywords. Use for conceptual queries where keyword search misses the right page; each result carries relevant-excerpt highlights. omniseek_read the URL for the full page. Complements ordinary web search + the curated sourc ...
-- **xiaohongshu_cn** `walled` `by-name-only`: 小红书 mainland (xiaohongshu.com)：真浏览器驱动 (与 rednote 小号同一安全机制; 2026-06-25 由 self-signed direct-API 切换): search 读 SSR 笔记卡片, 笔记正文 + 完整评论区走拦截+DOM; forge nothing. signed direct-API 为 degraded fallback.
-
 ## media (4)
 
 - **chinese_ai_media** `free` `stream`: 中文 AI 媒体 + 个人博客：量子位 QbitAI (直取) + 李博杰 01.me (agent/career 长文) + PaperWeekly (社区 wechat2rss 镜像). 机器之心/新智元 已移交 wechat 适配器 (经 wechat2rss, 比已死的 AnyFeeder 桥可靠)
@@ -272,6 +265,12 @@ Generated from omniseek 0.3.0: 222 live sources across 34 domains.
 - **conference_deadlines** `free` `lookup`: ML/AI conference submission deadlines (ccfddl): NeurIPS / ICML / ICLR / CVPR / ACL / AAAI / IJCAI / CoRL / ICRA + 47 more AI venues, ranked by nearest upcoming deadline with CCF/CORE rank + location
 - **ml_conferences** `free` `by-name-only` `stream`: NeurIPS / ICML / ICLR 官方博客：获奖公告 (Outstanding Papers / Test of Time / Awards)、投稿与评审政策变化 (如 NeurIPS 对 AI 生成论文的处理)、注册与容量公告、keynote 名单、newsletter. 与 conference_deadlines 互补: 那个只给截稿日期, 这个给公告与政策. 站点已把 feed 挡在反爬后, 故经 CDP 真浏览器渲染抓取, 命名钻取 (omniseek_search 单源 raw).
 - **wikicfp_nlp** `free` `by-name-only` `stream`: WikiCFP 自然语言处理征稿发现 (cat=natural language processing)：NLP 方向会议/研讨会的征稿 (CFP) 条目: 会议名 + 地点 + 日期范围 + 事件页链接. 长尾 CFP 发现, 补 conference_deadlines/ml_conferences 的主榜. 注意: 截稿日不在 feed 里 (feed 只给会议日期), 真截稿需打开事件页看. 命名 omniseek_fetch.
+
+## general (3)
+
+- **cdp_fulltext** `walled` `by-name-only` `portal`: Full-text via the CDP real browser for venues that wall/403 headless but render for a real browser (Quora, Blind/teamblind, Glassdoor, 脉脉/maimai, LinkedIn public posts, X/Twitter profiles+tweets, PropertyGuru 与 99.co 的新加坡房源页). Discover via the matching search-index source, then omniseek_read the URL ...
+- **csrankings** `free` `lookup`: CSRankings: CS faculty roster by institution/region (keyless, via CSRankings.org GitHub data). Query a REGION (singapore / canada / hong kong), an INSTITUTION ('National University of Singapore', 'University of Toronto'), or a faculty NAME → faculty with homepage + Google Scholar + ORCID + a DBLP li ...
+- **exa** `keyed` `bring-your-own-login` `by-name-only` `proxy`: Exa neural/semantic web search (exa.ai): finds open-web pages by MEANING, not keywords. Use for conceptual queries where keyword search misses the right page; each result carries relevant-excerpt highlights. omniseek_read the URL for the full page. Complements ordinary web search + the curated sourc ...
 
 ## insider (3)
 

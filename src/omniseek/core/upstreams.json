@@ -1559,8 +1559,8 @@
   "xiaohongshu_web": {
    "name": "Xiaohongshu / RedNote (logged-in browser)",
    "kind": "walled",
-   "hosts": ["www.xiaohongshu.com", "www.rednote.com", "edith.xiaohongshu.com"],
-   "sources": ["xiaohongshu", "xiaohongshu_cn"],
+   "hosts": ["www.xiaohongshu.com", "www.rednote.com"],
+   "sources": ["xiaohongshu"],
    "terms": {
     "max_concurrency": "未公布",
     "min_interval_s": "未公布",

@@ -1,4 +1,4 @@
-# The versions the Docker image installs (pip constraints). Written by scripts/sync_from_eye.sh
+# The versions the Docker image installs (pip constraints). Written by the mirror sync
 # from the upstream lock on every sync; do not edit by hand.
 aliyun-python-sdk-core==2.16.0
 aliyun-python-sdk-kms==2.16.5
@@ -136,7 +136,6 @@ urllib3==2.7.0
 uvicorn==0.48.0
 websocket-client==1.9.0
 websockets==15.0.1
-xhshow==0.2.0
 xlsxwriter==3.2.9
 youtube-transcript-api==1.2.4
 yt-dlp==2026.8.19

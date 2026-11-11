@@ -190,7 +190,7 @@ def asr_run() -> Path:
     return _at("asr", lambda: root() / "asr")
 
 
-CHROME_PROFILES = ("cdp", "xhs", "xhs-cn")
+CHROME_PROFILES = ("cdp", "xhs")
 
 
 def chrome(name: str) -> Path:
@@ -283,7 +283,6 @@ LABELS = {
     "eye-http": "com.omniseek.organ.eye-http",
     "cdp-cn-forums": "com.omniseek.cdp.cn-forums",
     "cdp-xhs": "com.omniseek.cdp.xhs",
-    "cdp-xhs-cn": "com.omniseek.cdp.xhs-cn",
     "brain-http": "com.omniseek.organ.brain-http",
 }
 
@@ -342,7 +341,6 @@ NAMES: Dict[str, Callable[[], Optional[Path]]] = {
     "modelscope-cache": modelscope_cache,
     "chrome-cdp": lambda: chrome("cdp"),
     "chrome-xhs": lambda: chrome("xhs"),
-    "chrome-xhs-cn": lambda: chrome("xhs-cn"),
     "profile": profile_json,
     "signposts": signposts_json,
     "watchlist": watchlist_json,

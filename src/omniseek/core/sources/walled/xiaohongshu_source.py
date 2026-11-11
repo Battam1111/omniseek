@@ -81,17 +81,6 @@ logger = logging.getLogger(__name__)
 HOME_URL = "https://www.rednote.com"
 
 
-def _mainland_sealed() -> bool:
-    """True while the mainland 9224 adapter is sealed (its module-level _SEALED, the one restore
-    point; docs/platform-notes/xiaohongshu-cn-seal.md). Read lazily so the two modules keep no
-    import-order coupling; an import failure reads as unsealed (ownership stays rednote-only)."""
-    try:
-        from omniseek.core.sources.walled import xiaohongshu_cn_source as _cn
-    except Exception:  # noqa: BLE001
-        return False
-    return bool(getattr(_cn, "_SEALED", False))
-
-
 def _goto_note_dual_host(page, url: str) -> None:
     """Navigate to a tokened note URL with a sibling-host fallback. A note page
     with its xsec_token is guest-readable on www.xiaohongshu.com too (verified
@@ -1514,8 +1503,7 @@ class XiaohongshuAdapter(SourceBase):
 
     async def afetch_url(self, url: str) -> Optional[Document]:
         host = urlparse(url).hostname or ""
-        if not _SEALED and "rednote.com" not in host and not (
-                host.endswith("xiaohongshu.com") and _mainland_sealed()):
+        if not _SEALED and "rednote.com" not in host and not host.endswith("xiaohongshu.com"):
             return None
         # the CDP read blocks (and while sealed, _read_url says so in the log, as before): a worker thread
         return await anyio.to_thread.run_sync(self._read_url, url, limiter=portal.IO_LANE)
@@ -1525,13 +1513,10 @@ class XiaohongshuAdapter(SourceBase):
             logger.warning(_SEALED_MSG)
             return None
         host = urlparse(url).hostname or ""
-        # URL ownership is explicit and decided in ONE place: the mainland adapter's _SEALED.
-        # While the mainland 9224 source is sealed (2026-10-07), this adapter also owns
-        # xiaohongshu.com note links, so every 小红书 read rides the international account.
-        # Unsealed, xiaohongshu.com belongs to the 9224 adapter again (claiming both hosts then
-        # made registration order decide which account read the note).
-        if "rednote.com" not in host and not (
-                host.endswith("xiaohongshu.com") and _mainland_sealed()):
+        # This adapter owns rednote.com and xiaohongshu.com note links, so every 小红书 read rides the
+        # international account (the mainland 9224 source, sealed 2026-10-07, was deleted in
+        # SMALL-BATCH-13).
+        if "rednote.com" not in host and not host.endswith("xiaohongshu.com"):
             return None
         if cache.cache_only():
             # Same reason as in search(): a cache-only read never reaches the browser, so it
@@ -1549,8 +1534,7 @@ class XiaohongshuAdapter(SourceBase):
     def _fetch_url_live(self, url: str) -> Optional[Document]:
         """Live (CDP) half of fetch_url(), run while holding the single 小号 slot (see
         _search_live / _live_slot). The ``with`` auto-releases on every return path below."""
-        # This adapter owns rednote.com URLs, plus xiaohongshu.com URLs while the mainland 9224
-        # adapter is sealed (see fetch_url). The 小号's login session lives on rednote.com only,
+        # This adapter owns rednote.com and xiaohongshu.com URLs (see fetch_url). The 小号's login session lives on rednote.com only,
         # so a xiaohongshu.com NOTE link is navigated to https://www.rednote.com/explore/<id> with
         # its query string kept (xsec_token, xsec_source, ...). Read as given, xiaohongshu.com
         # showed this Chrome the GUEST view: first comment page only, and the reply expanders send
