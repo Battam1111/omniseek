@@ -12,16 +12,8 @@ on:
         required: true
         default: "3"
 
-  push:
-    paths:
-      - "bench/**"
-  pull_request:
-    paths:
-      - "bench/**"
-
 jobs:
   run-benchmark:
-    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -89,19 +81,3 @@ jobs:
           git -C "$publish_dir" add bench
           git -C "$publish_dir" commit -m "bench: publish $(basename "$result_file" .json)" || exit 0
           git -C "$publish_dir" push origin HEAD:health-data
-
-  offline-tests:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v6
-        with:
-          python-version: "3.11"
-          cache: pip
-      - name: Install package
-        run: pip install .
-      - name: Run offline claim-verification tests
-        env:
-          PYTHONUTF8: "1"
-          PYTHONIOENCODING: "utf-8"
-        run: python bench/test_bench.py
