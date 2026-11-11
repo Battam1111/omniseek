@@ -3,7 +3,7 @@
 The root fixes live in eye.recall.embed: a fixed token-length ladder bounds the MPS graph cache, and
 an empty_cache after every forward stops the MPS allocator from hoarding freed blocks (its default
 low watermark on this 16 GB machine is ~17 GB, so it never gives memory back on its own). Those
-bound the growth paths that were MEASURED. This module bounds the ones that were not: ASR on MPS,
+bound the growth paths that were MEASURED. This module bounds the ones that were not:
 a future model, a leak nobody has found yet. It watches this process's physical footprint (the
 same number Activity Monitor and `footprint` report, read through omo_proc.rusage) plus that of the
 process lane's worker processes it started (eye.portal.run_cpu; lane_pids below) and, past a ceiling,
@@ -12,11 +12,11 @@ lifespan drain (eye.lifecycle.drain_all flushes the recall writer), then launchd
 ThrottleInterval=30) starts a fresh process.
 
 Two thresholds, both derived from the machine budget (see SOFT_MB_DEFAULT for the derivation and the
-calibration plan), and an ASR allowance on top of hard while an ASR model is loaded:
+calibration plan). Speech recognition is not under them: it runs in its own worker process with its
+own cap (eye.asr_sched), outside OmniSeek's footprint, since 2026-11-10.
   soft: first release device caches; if still over, restart at the next idle moment (no call in
         flight; the MCP clients' long-lived GET listening streams do not count as calls), so a restart
-        never lands in the middle of an agent's call. Held while an ASR model is loaded (the idle unload
-        ends the hold).
+        never lands in the middle of an agent's call.
   hard: restart now, idle or not. The restart is the graceful one a deploy gets: SIGTERM to self, so
         eye.lifecycle's caps apply (in-flight calls get drain_cap_s() to finish, the lifespan shutdown
         shutdown_cap_s()); a call still running past them is dropped (the caller retries); documents
@@ -25,9 +25,10 @@ calibration plan), and an ASR allowance on top of hard while an ASR model is loa
         (exit_grace_s(), 70 s with the default caps, under the plist's ExitTimeOut of 80 s) for the case
         where that path never starts.
 Every crossing writes ONE line (memguard: <what> | fp_mb rss_mb workers workers_mb inflight streams
-asr embed mps_driver_mb mps_cur_mb threads soft hard uptime_s; fp_mb and rss_mb are OmniSeek's own
-process, workers_mb the process-lane workers together, and <what> names the sum), so a restart can be
-matched to what held the memory. A restart ends the workers with the process (anyio ends them with the
+embed mps_driver_mb mps_cur_mb asr_worker asr_worker_mb threads soft hard uptime_s; fp_mb and rss_mb
+are OmniSeek's own process, workers_mb the process-lane workers together, asr_worker_mb the speech
+worker (shown, not counted), and <what> names the sum), so a restart can be matched to what held the
+memory. A restart ends the workers with the process (anyio ends them with the
 event loop).
 A threshold has to hold for several consecutive samples before it acts, so a short spike (a matrix
 rebuild, one large forward) does not cost a restart. Both are disabled by setting them to 0.
@@ -62,7 +63,8 @@ log = logging.getLogger("omniseek.core.memguard")
 #          plus its process-lane workers, which since 11-04 do the parsing and the ranking's text scoring
 #          and stay until 5 idle minutes end them: PROC_LANE_TOKENS = 2 workers at the size they keep after
 #          broad searches, about 340 MB each live (read 11-04 01:00 after the proc-lane deploy), 680 MB.
-#          W0 = 3261 + 680 = 3941 MB. One worker (504 MB, the p50 Copilot process) is the most OmniSeek may
+#          W0 = 3261 + 680 = 3941 MB. (3261 is a process that had never loaded ASR, so moving ASR out of
+#          the process, 2026-11-10, leaves W0 as it is.) One worker (504 MB, the p50 Copilot process) is the most OmniSeek may
 #          hold over its steady state before it acts: 3941 + 504 = 4445, rounded down to 4352 MB
 #          (4.25 GiB; it was 3584 before the workers were counted, the same derivation without the 680).
 #          Over soft the guard releases device caches and, if still over, restarts at the next idle moment
@@ -75,28 +77,20 @@ log = logging.getLogger("omniseek.core.memguard")
 #          The 680 MB the workers add is paid like the rest: the budget above left 1515 MB for OmniSeek at
 #          p50, so W0 was already over it, now by 680 MB more, in swap. The lever on that is the lane's
 #          size (PROC_LANE_TOKENS, ASYNC-CORE-DESIGN.md D14), not this line.
-#   asr_extra: while an ASR model is loaded, hard rises by the ASR allowance, because the models alone
-#          put the process over hard by design. The allowance is what ASR adds at its peak, measured in a
-#          fresh process: load 2487 MB (2874 loaded minus 387 for the torch and funasr imports OmniSeek
-#          already holds) plus the largest transcription transient 2351 MB (10 min clip; 30 and 87 min
-#          clips peaked lower) = 4838 MB; above the in-eye replay (+3531) and the 10-11 production load
-#          (+3300, then 7747 with three copies in flight, which single-flight now prevents). Soft plus
-#          the allowance, rounded UP: 4352 + 4838 = 9190, so 9216 MB, i.e. asr_extra = 9216 - 5376 = 3840 MB
-#          (unchanged: ASR runs in OmniSeek's own process, not in the workers).
-# PROVISIONAL: asr_extra, because the diarization family was not measured and rides the same allowance;
-# soft and hard since 11-04, because the workers' 340 MB is one live reading of two workers.
-# Calibration plan for all three: every crossing writes one line with fp, RSS, in flight, the loaded ASR
-# models and the MPS allocations; after deploy, (a) a soft restart more often than once per ASR use, or
-# with asr=none, means W0 moved and the memory path behind it needs a look before the line does; (b) a
-# hard restart with asr=none means a no-ASR transient above 948 MB, and the call in flight names it;
-# (c) a hard restart with asr loaded and one transcription in flight means the ASR allowance is short,
-# and the fp in that line minus the soft level is the new measurement; (d) the line's workers_mb is the
-# workers' part: settling well above 680 (two workers) means their steady size moved, and W0 with it.
-# OMNISEEK_MEM_SOFT_MB / OMNISEEK_MEM_HARD_MB / OMNISEEK_MEM_ASR_EXTRA_MB override these (0
-# disables); the service launcher (scripts/services.py) does not set them, so these defaults are what runs.
+#   No ASR allowance (2026-11-10). Until then hard rose by 3840 MB (to 9216) while an ASR model was
+#          loaded in this process, and soft waited for its idle unload. Recognition now runs in a speech
+#          worker process with its own cap (eye.asr_sched.worker_cap_mb), so OmniSeek's own footprint has
+#          no ASR term and the plain lines above hold at all times.
+# PROVISIONAL: soft and hard since 11-04, because the workers' 340 MB is one live reading of two workers.
+# Calibration plan for both: every crossing writes one line with fp, RSS, in flight and the MPS
+# allocations; after deploy, (a) a soft restart more often than once a day means W0 moved and the
+# memory path behind it needs a look before the line does; (b) a hard restart means a transient above
+# 948 MB, and the call in flight names it; (c) the line's workers_mb is the workers' part: settling well
+# above 680 (two workers) means their steady size moved, and W0 with it.
+# OMNISEEK_MEM_SOFT_MB / OMNISEEK_MEM_HARD_MB override these (0 disables); the service launcher
+# (scripts/services.py) does not set them, so these defaults are what runs.
 SOFT_MB_DEFAULT = 4352
 HARD_MB_DEFAULT = 5376
-ASR_EXTRA_MB_DEFAULT = 3840
 CHECK_INTERVAL_S = 60.0
 # Consecutive over-threshold samples before acting. 3 x 60 s rides out a matrix rebuild (its
 # transient is the one known multi-sample spike); hard acts after 2 because by then swap is the cost.
@@ -342,28 +336,21 @@ def _restart_self() -> None:
     os.kill(os.getpid(), signal.SIGTERM)
 
 
-def _asr_models() -> list:
-    """Names of the ASR models loaded right now (never imports asr: if it is not imported, none are)."""
-    asr = sys.modules.get("omniseek.core.asr")
-    if asr is None:
-        return []
-    return [n for n, a in (("sensevoice", "_model"), ("vad", "_vad_model"), ("diar", "_diar_model"))
-            if getattr(asr, a, None) is not None]
-
-
-def _asr_hold() -> Optional[str]:
-    """Why a soft restart should wait, or None. While an ASR model is loaded the footprint is over soft
-    by design (weights plus their graphs, about 2.4 GB), and a restart would only make the next call
-    of the same session reload it; the ASR idle unload ends the hold, and if the unload leaves the
-    process over soft (MPSGraph's per-shape cache survives it) the restart follows at the next idle
-    moment. Hard is never held."""
-    loaded = _asr_models()
-    return "asr " + "+".join(loaded) + " loaded" if loaded else None
+def _asr_worker() -> tuple:
+    """(pid, footprint MB) of the speech worker this process started, or (None, None) when none runs
+    (never imports asr_sched: if it is not imported, there is none). Shown on the line, not counted:
+    the worker has its own cap."""
+    sched = sys.modules.get("omniseek.core.asr_sched")
+    w = getattr(getattr(sched, "POOL", None), "worker", None)
+    if w is None or not w.alive():
+        return None, None
+    fp = footprint_mb(w.pid)
+    return w.pid, None if fp is None else round(fp)
 
 
 def snapshot() -> dict:
     """What the crossing line records: footprint and RSS, calls in flight and open listening streams,
-    the large objects (ASR models, embedder, MPS allocations), threads and uptime. Never raises."""
+    the large objects (embedder, MPS allocations, the speech worker), threads and uptime. Never raises."""
     out: dict = {}
     try:
         fp, rss = footprint_mb(), resident_mb()
@@ -374,13 +361,16 @@ def snapshot() -> dict:
         out["workers_mb"] = round(workers_mb(pids))
         out["inflight"] = inflight()
         out["streams"] = streams()
-        out["asr"] = "+".join(_asr_models()) or "none"
         emb = sys.modules.get("omniseek.core.recall.embed")
         out["embed"] = "loaded" if emb is not None and getattr(emb, "_model", None) is not None else "none"
         torch = sys.modules.get("torch")
         if torch is not None and torch.backends.mps.is_available():
             out["mps_driver_mb"] = round(torch.mps.driver_allocated_memory() / 2**20)
             out["mps_cur_mb"] = round(torch.mps.current_allocated_memory() / 2**20)
+        pid, mb = _asr_worker()
+        out["asr_worker"] = pid or "none"
+        if mb is not None:
+            out["asr_worker_mb"] = mb
         out["threads"] = threading.active_count()
     except Exception as exc:  # noqa: BLE001
         out["snapshot_error"] = str(exc)[:80]
@@ -399,15 +389,10 @@ class MemGuard:
                  restart: Callable[[], None] = _restart_self,
                  clock: Callable[[], float] = time.monotonic,
                  min_uptime_s: float = MIN_UPTIME_S,
-                 hold: Callable[[], Optional[str]] = _asr_hold,
-                 snap: Callable[[], dict] = snapshot,
-                 asr_extra_mb: int = 0,
-                 asr_loaded: Callable[[], bool] = lambda: bool(_asr_models())):
+                 snap: Callable[[], dict] = snapshot):
         self.soft_mb, self.hard_mb = soft_mb, hard_mb
-        self.asr_extra_mb = asr_extra_mb
-        self._asr_loaded = asr_loaded
         self._read, self._busy, self._release, self._restart = read, busy, release, restart
-        self._hold, self._snap = hold, snap
+        self._snap = snap
         self._clock = clock
         self._born = clock()
         self.min_uptime_s = min_uptime_s
@@ -416,39 +401,22 @@ class MemGuard:
         self.low_hits = 0         # consecutive samples under soft
         self.released = False
         self.pending = False      # soft restart decided, waiting for an idle moment
-        self.held: Optional[str] = None   # last hold reason logged (one line per hold episode)
         self.fired: Optional[str] = None
         self.checks = 0
         self.last_mb: Optional[float] = None
 
     def _line(self, what: str, mb: float) -> None:
         """The one line per crossing: what happened, then the snapshot (footprint, RSS, in flight,
-        streams, ASR models, embedder, MPS allocations, threads) and the uptime."""
+        streams, embedder, MPS allocations, speech worker, threads) and the uptime."""
         snap = {}
         try:
             snap = dict(self._snap() or {})
         except Exception as exc:  # noqa: BLE001
             snap = {"snapshot_error": str(exc)[:80]}
         snap.setdefault("fp_mb", round(mb))
-        snap["soft"], snap["hard"] = self.soft_mb, self.effective_hard()
+        snap["soft"], snap["hard"] = self.soft_mb, self.hard_mb
         snap["uptime_s"] = round(self._clock() - self._born)
         log.warning("memguard: %s | %s", what, _fmt(snap))
-
-    def _hold_reason(self) -> Optional[str]:
-        try:
-            return self._hold()
-        except Exception:  # noqa: BLE001 -- a broken hold never blocks the guard
-            return None
-
-    def effective_hard(self) -> int:
-        """hard, plus the ASR allowance while an ASR model is loaded (0 stays 0: hard disabled)."""
-        if not self.hard_mb or not self.asr_extra_mb:
-            return self.hard_mb
-        try:
-            loaded = bool(self._asr_loaded())
-        except Exception:  # noqa: BLE001 -- a broken probe means the plain hard line
-            loaded = False
-        return self.hard_mb + self.asr_extra_mb if loaded else self.hard_mb
 
     def check(self) -> Optional[str]:
         """One sample. Returns "hard" / "soft" when it restarted, else None."""
@@ -459,7 +427,7 @@ class MemGuard:
         self.last_mb = mb
         if mb is None:
             return None
-        hard = self.effective_hard()
+        hard = self.hard_mb
         if self.checks % LOG_EVERY == 1:  # the boot-time first sample stays out of the one INFO boot line
             (log.debug if self.checks == 1 else log.info)("memguard: footprint %.0f MB (soft %d, hard %d, in-flight %d)",
                      mb, self.soft_mb, hard, self._busy())
@@ -471,7 +439,6 @@ class MemGuard:
         self.low_hits = 0 if self.soft_hits else self.low_hits + 1
         if self.low_hits >= SOFT_CONSECUTIVE:
             self.released = self.pending = False
-            self.held = None
         old_enough = self._clock() - self._born >= self.min_uptime_s
         if self.hard_hits >= HARD_CONSECUTIVE:
             if not old_enough:
@@ -494,15 +461,8 @@ class MemGuard:
             self._line(f"footprint {mb:.0f} MB still over soft {self.soft_mb} MB after a cache release; "
                        "restart scheduled for the next idle moment", mb)
         if self.pending:
-            reason = self._hold_reason()
-            if reason:
-                if reason != self.held:
-                    self._line(f"soft restart held ({reason})", mb)
-                self.held = reason
-                return None
-            self.held = None
-            # only while this sample is still over soft: an unload that ended the hold may also have
-            # brought the footprint back under the line, and then there is nothing to restart for
+            # only while this sample is still over soft: the footprint may have come back under the
+            # line since the decision, and then there is nothing to restart for
             if self.soft_hits and self._busy() == 0:
                 return self._fire("soft", mb)
         return None
@@ -519,7 +479,7 @@ class MemGuard:
                 self.check()
             except Exception as exc:  # noqa: BLE001 -- the guard never takes the service down
                 log.warning("memguard: check failed (%s)", exc)
-            stop.wait(IDLE_POLL_S if self.pending and not self.held else CHECK_INTERVAL_S)
+            stop.wait(IDLE_POLL_S if self.pending else CHECK_INTERVAL_S)
 
 
 _STOP = threading.Event()
@@ -529,14 +489,13 @@ def start() -> Optional[threading.Thread]:
     """Start the guard thread for the HTTP service. None when disabled or unsupported."""
     soft = _env_mb("OMNISEEK_MEM_SOFT_MB", SOFT_MB_DEFAULT)
     hard = _env_mb("OMNISEEK_MEM_HARD_MB", HARD_MB_DEFAULT)
-    asr_extra = _env_mb("OMNISEEK_MEM_ASR_EXTRA_MB", ASR_EXTRA_MB_DEFAULT)
     if not soft and not hard:
         log.info("memguard: disabled (both thresholds 0)")
         return None
     if footprint_mb() is None:
         log.debug("memguard: disabled (no phys_footprint reading on this platform)")
         return None
-    guard = MemGuard(soft, hard, asr_extra_mb=asr_extra)
+    guard = MemGuard(soft, hard)
     t = threading.Thread(target=guard.run, args=(_STOP,), name="memguard", daemon=True)
     t.start()
     try:
@@ -544,6 +503,5 @@ def start() -> Optional[threading.Thread]:
         lifecycle.register_loop("memguard", _STOP, t)
     except Exception:  # noqa: BLE001
         pass
-    log.debug("memguard: started (soft %d MB, hard %d MB, +%d MB while ASR is loaded, every %.0fs)",
-              soft, hard, asr_extra, CHECK_INTERVAL_S)
+    log.debug("memguard: started (soft %d MB, hard %d MB, every %.0fs)", soft, hard, CHECK_INTERVAL_S)
     return t

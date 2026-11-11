@@ -154,7 +154,7 @@ async def asafe_fetch(url: str, *, method: str = "GET", render: bool = False,
         max_redirects=0,
         event_hooks=http.aprogress_hooks(),  # the body's progress renews the gates' leases
     )
-    # The declared gates of the host this fetch is on (upstreams.HopGates, the ONE redirect rule): a
+    # The declared gates of the host this fetch is on (upstreams.AsyncHopGates, the ONE redirect rule): a
     # hop to the same host continues the same visit, a hop to another host lets go of the last host's
     # gates and takes its own. Held until the fetch returns.
     gates = upstreams.AsyncHopGates(request_s=timeout_total)   # a request's own time, for the leases

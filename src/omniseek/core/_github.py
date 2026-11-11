@@ -12,7 +12,8 @@ is the symmetric twin of ``_openalex`` for the GitHub backend:
 
   get_json()      one keyed pooled client (Authorization on EVERY call when a token
                   exists), one gentle retry honoring Retry-After / X-RateLimit-Reset
-  _pace()         space request STARTS so a fan-out can't burst the Search ceiling
+  pacing          the declared gate's start slot (``_guard.ahold``) spaces request
+                  STARTS so a fan-out can't burst the Search ceiling
   circuit breaker consecutive failures (and a 429 / 403 secondary-rate hit) open the
                   circuit briefly, so a throttled GitHub fails FAST instead of stacking
                   retries across the three sources (same idea as the OpenAlex breaker);
@@ -87,7 +88,7 @@ _MIN_INTERVAL_S = _guard.min_interval_s
 _state = _guard.state   # health probe reads fails / open_until / last_429
 _lock = _guard.lock
 _sema = _guard.sema
-_pace_state = _guard.pace_state   # the slot reservation _pace() reads/reserves (aliases the guard)
+_pace_state = _guard.pace_state   # the guard's start-slot state (an alias)
 _pace_lock = _guard.pace_lock
 
 
@@ -120,13 +121,6 @@ def _http2_ok() -> bool:
 
 class GitHubDown(RuntimeError):
     """Raised internally while the circuit is open (recent consecutive failures / a throttle)."""
-
-
-def _pace() -> None:
-    """Reserve the next request-start slot (>= _MIN_INTERVAL_S after the previous), then wait for it.
-    The slot reservation is under the lock; the wait is NOT, so callers do not serialize on the lock
-    itself, only on the wire-rate. Bounds GitHub requests/minute across all callers + threads."""
-    _guard.pace()
 
 
 _RETRY_STATUS = (500, 502, 503)
@@ -220,7 +214,7 @@ def _aget_client() -> "httpx.AsyncClient":
 
 
 class _GitHubShed(RuntimeError):
-    """A declared gate did not admit the request within this caller's budget: nothing was sent. It
+    """A declared gate could not start the request before the caller's deadline: nothing was sent. It
     is self-load, not a GitHub failure, so it is neither retried nor counted by the breaker."""
 
     def __init__(self, *args) -> None:
@@ -233,38 +227,22 @@ class _GitHubShed(RuntimeError):
 _guard_mod.register_unsent(_GitHubShed)
 
 
-def _slot_busy(wait: float) -> "_GitHubShed":
-    """Concurrency-permit exhaustion: degrade to None (no retry, no breaker). Handed to the guards'
-    hold/ahold as their on_busy factory."""
-    return _GitHubShed(f"github concurrency pool saturated (no slot in {wait:.0f}s); not sent")
-
-
-def _backlog_shed(wait: float) -> "_GitHubShed":
-    """The error for a start slot past this caller's budget (degrade to None, never queue on)."""
-    return _GitHubShed(f"github rate slot {wait:.0f}s away, past this caller's budget; not sent")
-
-
-def _budget(path: str) -> tuple[float, float]:
-    """ONE budget for every gate of one request (design decision 2): the smallest declared max_wait_s
-    of the gates it passes, cut to the caller's deadline. Returns (max_wait, until)."""
-    mw = upstreams.max_wait("github")
-    if (path or "").startswith("/search/code"):
-        mw = min(mw, upstreams.max_wait("github_code_search"))
-    return mw, upstreams.wait_until(mw)
+def _refuse_for(name: str):
+    """The error for a request the gate ``name`` could not start before the caller's deadline: degrade
+    to None (no retry, no breaker). Handed to the guards' ahold."""
+    return lambda waited: _GitHubShed(_guard_mod.deadline_refusal(name, waited))
 
 
 @contextlib.asynccontextmanager
 async def _ahold_for(path: str, request_s: Optional[float] = None):
     """The declared gates for one request to ``path``: the code-search gate first when the path is
     under /search/code (10 per minute), then the GitHub-wide gate. One fixed order, so no deadlock;
-    one budget for both."""
-    mw, until = _budget(path)
+    one bound for both, the caller's deadline."""
     async with contextlib.AsyncExitStack() as stack:
         if (path or "").startswith("/search/code"):
             await stack.enter_async_context(
-                _code_guard.ahold(mw, _slot_busy, _backlog_shed, until=until, request_s=request_s))
-        await stack.enter_async_context(_guard.ahold(mw, _slot_busy, _backlog_shed, until=until,
-                                                     request_s=request_s))
+                _code_guard.ahold(_refuse_for("github_code_search"), request_s=request_s))
+        await stack.enter_async_context(_guard.ahold(_refuse_for("github"), request_s=request_s))
         yield
 
 

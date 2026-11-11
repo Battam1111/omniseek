@@ -21,7 +21,7 @@ podcast's shownotes timestamps) instead of a whole 3-hour episode nobody reads.
 """
 from __future__ import annotations
 
-import contextlib
+import contextvars
 import hashlib
 import hmac
 import importlib.util
@@ -33,30 +33,31 @@ import random
 import re
 import shutil
 import subprocess
-import sys
 import tempfile
 import threading
 import time
+from pathlib import Path
 from typing import Optional
 from urllib.parse import urlencode, urlparse
 
 import anyio
 
-from omniseek.core import _netguard, _optdep, cache, http, portal
-from omniseek import where
+from omniseek.core import _netguard, _optdep, asr_sched, cache, http, portal
+from omniseek import asr_worker as _worker, where
 
 logger = logging.getLogger(__name__)
 
-_MODEL = "iic/SenseVoiceSmall"
-_VAD = "fsmn-vad"
-# The diarize=True path (WHO said what) loads a different ASR plus a speaker model; see _get_diar_model.
-_DIAR_MODEL = "paraformer-zh"
-_SPK_MODEL = "cam++"
+# The model ids live with the worker that loads them (omniseek.asr_worker); the cache key and the engine
+# label read them here.
+_MODEL = _worker.MODEL
+_VAD = _worker.VAD
+_DIAR_MODEL = _worker.DIAR_MODEL
+_SPK_MODEL = _worker.SPK_MODEL
 # Human-readable names for the configured model ids, so every hint that tells a user or an agent which
 # engine transcribes reads the id the code actually loads (OmniSeek R01: the bilibili hint said
 # "Whisper" long after the engine became SenseVoice). An id missing here falls back to its own name.
 _MODEL_LABELS = {"iic/SenseVoiceSmall": "SenseVoice-Small", "paraformer-zh": "Paraformer-zh"}
-_SR = 16000
+_SR = _worker.SR
 _MAX_SECONDS = 4 * 3600          # safety cap (4h of audio)
 _FFMPEG_RW_TIMEOUT_US = 30_000_000    # 30s: abort a STALLED network read (no infinite ffmpeg hang)
 _MIN_WAV_BYTES = 2000                 # a decode yielding < this (~header only) = a failed remote fetch
@@ -88,151 +89,14 @@ def engine_label(diarize: bool = False) -> str:
     return name(_MODEL)
 
 
-_model = None  # lazy global singleton (load is expensive; keep warm while in use, see idle unload)
-
-# ── device memory bound (measured 2026-10-08 on a 16 GB Apple-silicon machine) ─────────────
-# torch 2.12's MPS allocator keeps every freed block cached until the driver passes its LOW watermark
-# (16974 MB here, i.e. never before the machine is out of memory; see recall/embed.py). SenseVoice
-# with VAD batches of up to _BATCH_S seconds allocates differently sized activation blocks per call,
-# so the cache only ever grows: 14 real podcast slices (30 to 420 s) took the MPS driver allocation
-# from 1936 MB after load to 6813 MB, with live tensors flat at 894 MB (the weights), and 30 s of
-# idle returned nothing. Three measures, all under ONE lock so no generate is ever mid-flight:
-#   1. _release_device() after every generate: hand the cached blocks back to the driver.
-#   2. one generate at a time: two concurrent transcriptions would stack two activation peaks.
-#   3. idle unload: ASR is an explicit, rare tool, so after _idle_unload_s() with no call the three
-#      lazy models are dropped (weights, the driver's ~1 GB beyond them) and the next call reloads.
-#   4. one family at a time (2026-10-11): loading the diarization model drops SenseVoice and its VAD,
-#      and loading either of those drops the diarization model. One call only ever uses one family
-#      (transcribe_url takes the diarize path OR the flat path), and the two together would not fit:
-#      SenseVoice+VAD measured +2.4 GB over OmniSeek's 2.1 GB base, the diarization stack (Paraformer
-#      953 MB + ct-punc 1.1 GB + cam++ on disk) is larger, so both loaded is past memguard's hard line
-#      before a single activation is allocated.
-# With these, the driver allocation stays at 1939 to 1942 MB per call and idle drops the process to
-# ~850 MB. What stays is MALLOC_SMALL (MPSGraph's per-input-shape graphs, ~400 MB after load): it
-# grows ~5 MB per call with NEW input shapes (406 -> 617 MB over 60 random slices), does not grow on
-# replayed shapes, and survives unload; memguard's idle restart is its bound.
-# Tried and dropped (10-11): the generate peak does NOT grow
-# with audio length (whole-file peak footprint 5225 / 5164 / 4402 to 4466 MB for 10 / 30 / 87 min, all
-# within the ASR allowance). Cutting long audio into 300 s windows RAISED the 87 min peak (5194 to
-# 5474 MB), and so did _BATCH_S = 60 (7578 MB): funasr's inference_with_vad sorts the VAD segments by
-# length and, when segment j overflows batch_size_s, flushes a batch that still INCLUDES j, so a window
-# or a small batch pads a long segment onto many short ones (600 s padded per batch instead of 311 s).
-# PYTORCH_MPS_LOW_WATERMARK_RATIO=0.25 changed nothing (peak 5180 vs 5225 MB). Keep the whole-file path
-# and _BATCH_S = 300.
-_lock = threading.RLock()
-_BATCH_S = 300                    # funasr batch_size_s for the VAD-batched generate calls
-_last_use = 0.0                   # monotonic time the last generate finished (0 = never)
-_IDLE_STOP = threading.Event()
-_idle_thread: Optional[threading.Thread] = None
-_IDLE_POLL_S = 30.0
-
-
-# PROVISIONAL. Seconds of no ASR call before the models are unloaded. Derivation (2026-10-11, memory
-# report section 3): the 175 transcripts in the live cache (08-11 to 10-11) give 174 gaps between one
-# transcription finishing and the next finishing (an upper bound on the idle time between them). The
-# gaps split in two: within a session (p50 52 s, p75 166 s) and between sessions (p90 3.4 h). 130 of
-# 174 (75%) are <= 180 s, 140 (80%) are <= 600 s, 145 are <= 1800 s, so 600 s instead of 180 s
-# saves a reload in 10 of 174 gaps and pays for it by holding about 2.4 GB for 7 more minutes after
-# every session, on a shared 16 GB machine where that memory is taken from swap. A reload costs the
-# model load (measured 6.0 to 9.1 s in a fresh process, long-audio probes 10-11). Calibration plan: every reload now logs
-# "asr: reloaded N s after unload"; after 50 reloads, if more than a quarter came within 300 s of an
-# unload, raise this toward the 80% gap point; if none came within 600 s, keep it.
-IDLE_UNLOAD_S_DEFAULT = 180.0
-_unloaded_at = 0.0                # monotonic time of the last unload (0 = never), for the reload line
-
-
-def _idle_unload_s() -> float:
-    """Seconds of no ASR call after which the models are unloaded (env OMNISEEK_ASR_IDLE_UNLOAD_S,
-    default IDLE_UNLOAD_S_DEFAULT; 0 or negative keeps them loaded forever, the pre-2026-10-08
-    behaviour)."""
-    try:
-        return float(os.environ.get("OMNISEEK_ASR_IDLE_UNLOAD_S", str(IDLE_UNLOAD_S_DEFAULT)))
-    except ValueError:
-        return IDLE_UNLOAD_S_DEFAULT
-
-
-def _release_device() -> None:
-    """Return the MPS allocator's cached blocks to the driver. Caller holds _lock. Never raises."""
-    try:
-        import sys
-        torch = sys.modules.get("torch")
-        if torch is not None and torch.backends.mps.is_available():
-            torch.mps.empty_cache()
-    except Exception as exc:  # noqa: BLE001 — a cache release is a memory bound, never a failure
-        logger.debug("asr: mps empty_cache skipped (%s)", exc)
-
-
-def _touch() -> None:
-    """Mark a generate as finished (caller holds _lock): release the device cache, stamp the idle
-    clock, and make sure the idle-unload watcher is running."""
-    global _last_use
-    _release_device()
-    _last_use = time.monotonic()
-    _ensure_idle_watcher()
-
-
-def unload_models(reason: str = "", which: tuple = ("sensevoice", "vad", "diar")) -> bool:
-    """Drop the loaded ASR models named in `which` (default all) and release their device memory.
-    Returns True if any of them was loaded. Waits for an in-flight generate (same lock), so it never
-    pulls a model out from under one."""
-    global _model, _vad_model, _diar_model, _unloaded_at
-    with _lock:
-        had = [n for n, m in (("sensevoice", _model), ("vad", _vad_model), ("diar", _diar_model))
-               if m is not None and n in which]
-        if not had:
-            return False
-        if "sensevoice" in which:
-            _model = None
-        if "vad" in which:
-            _vad_model = None
-        if "diar" in which:
-            _diar_model = None
-        import gc
-        gc.collect()
-        _release_device()
-        _unloaded_at = time.monotonic()
-        logger.info("asr: unloaded %s (%s)", "+".join(had), reason or "requested")
-        return True
-
-
-def _before_load(name: str, other: tuple) -> None:
-    """Called under _lock just before a model loads: drop the other family (see measure 4 above) and
-    log how long after the last unload this reload came (the idle-unload calibration reading)."""
-    unload_models(f"loading {name}", which=other)
-    if _unloaded_at:
-        logger.info("asr: reloaded %s %.0f s after unload", name, time.monotonic() - _unloaded_at)
-
-
-def _idle_loop() -> None:
-    global _idle_thread
-    while not _IDLE_STOP.wait(_IDLE_POLL_S):
-        limit = _idle_unload_s()
-        if limit <= 0:
-            continue
-        with _lock:
-            idle = time.monotonic() - _last_use
-            if _last_use and idle >= limit:
-                unload_models(f"idle {idle:.0f}s >= {limit:.0f}s")
-                _idle_thread = None
-                return
-
-
-def _ensure_idle_watcher() -> None:
-    """Start the idle-unload watcher if a model is loaded and none is running (caller holds _lock).
-    The watcher exits after it unloads; the next load starts a fresh one."""
-    global _idle_thread
-    if _idle_unload_s() <= 0 or _IDLE_STOP.is_set():
-        return
-    if _idle_thread is not None and _idle_thread.is_alive():
-        return
-    t = threading.Thread(target=_idle_loop, name="asr-idle-unload", daemon=True)
-    _idle_thread = t
-    t.start()
-    try:
-        from omniseek.core import lifecycle
-        lifecycle.register_loop("asr-idle-unload", _IDLE_STOP, t)
-    except Exception as exc:  # noqa: BLE001
-        logger.debug("asr: idle watcher not registered with lifecycle (%s)", exc)
+# ── where recognition runs (2026-11-10) ───────────────────────────────────────────────────────
+# Not in this process. The models load in a speech worker process (omniseek.asr_worker) that
+# omniseek.core.asr_sched starts, feeds one job at a time and ends when it is idle, too big for another
+# job, or has to be stopped. The measures that bounded the models inside OmniSeek (release the MPS cache
+# after every generate, one generate at a time, one model family at a time, the idle unload) moved with
+# them: the first three run in the worker, the idle unload became the worker's idle exit. What a loaded
+# model leaves in a process (MPSGraph's per-shape heap, 1 to 2.5 GB after long files, which no unload
+# gave back) now ends with the worker instead of needing a restart of OmniSeek.
 
 
 # ── dependency check (runs BEFORE any audio is fetched) ─────────────────────────────────────────
@@ -296,41 +160,6 @@ def _model_cached(model_id: str) -> bool:
     return any(os.path.isdir(os.path.join(root, sub, model_id)) for sub in ("models", ""))
 
 
-def _quiet_stdout():
-    """funasr print()s to stdout (its version banner at AutoModel init, an ffmpeg notice at import).
-    Under the stdio transport stdout IS the JSON-RPC channel, so each line reached the client as a
-    'Failed to parse JSONRPC message'. Send those prints to stderr; the MCP server writes through its
-    own wrapper of the stdout buffer, taken at startup, so swapping sys.stdout here does not touch it."""
-    return contextlib.redirect_stdout(sys.stderr)
-
-
-def _get_model():
-    global _model
-    with _lock:  # re-entrant: callers already holding it are fine
-        if _model is None:
-            _before_load("sensevoice", ("diar",))
-            with _quiet_stdout():
-                AutoModel = _optdep.require("funasr", "asr").AutoModel
-            if not _model_cached(_MODEL):
-                logger.info("first transcription: downloading the SenseVoice model (about 0.9 GB, "
-                            "one time) before transcribing")
-            last = None
-            for dev in ("mps", "cpu"):
-                try:
-                    with _quiet_stdout():
-                        _model = AutoModel(model=_MODEL, vad_model=_VAD,
-                                           vad_kwargs={"max_single_segment_time": 30000},
-                                           device=dev, disable_update=True)
-                    logger.info("SenseVoice loaded on %s", dev)
-                    break
-                except Exception as exc:  # noqa: BLE001
-                    last = exc
-                    logger.warning("SenseVoice load on %s failed: %s", dev, exc)
-            if _model is None:
-                raise RuntimeError(f"could not load SenseVoice (mps/cpu): {last}")
-        return _model
-
-
 def _ffmpeg_exe() -> str:
     imageio_ffmpeg = _optdep.require("imageio_ffmpeg", "asr")
     return imageio_ffmpeg.get_ffmpeg_exe()
@@ -355,12 +184,30 @@ def _parse_ts(v) -> Optional[float]:
     return secs
 
 
-def _decode_to_wav(src: str, start_s: Optional[float] = None, dur_s: Optional[float] = None) -> str:
+def _workdir(ticket) -> Optional[str]:
+    """The transcription's own temporary directory (removed when it ends, asr_sched.remove_workdir), or
+    None for the process's temp directory."""
+    return None if ticket is None or ticket.workdir is None else str(ticket.workdir)
+
+
+def _run_proc(cmd: list, ticket=None) -> tuple:
+    """Run a download or decode process the transcription's cancellation can kill: (returncode, stderr)."""
+    proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    if ticket is not None:
+        ticket.watch(proc)
+    _, err = proc.communicate()
+    if ticket is not None and ticket.cancelled.is_set():
+        raise asr_sched.Cancelled()
+    return proc.returncode, err
+
+
+def _decode_to_wav(src: str, start_s: Optional[float] = None, dur_s: Optional[float] = None,
+                   ticket=None) -> str:
     """ffmpeg-decode any audio file/URL to a temp 16k mono WAV; return its path (caller removes).
 
     start_s/dur_s slice the audio: -ss before -i is a fast input seek (HTTP range
     on remote URLs, so a 10-min slice of a 3-hour episode never downloads the rest)."""
-    fd, path = tempfile.mkstemp(suffix=".wav", prefix="omniseek-asr-")
+    fd, path = tempfile.mkstemp(suffix=".wav", prefix="omniseek-asr-", dir=_workdir(ticket))
     os.close(fd)
     # Lock ffmpeg's -i protocol surface per source kind: by default ffmpeg honors file:// (local-file
     # read) and http(s):// to ANY host (SSRF) on its input. A remote URL is SSRF-guarded + denied the
@@ -391,197 +238,51 @@ def _decode_to_wav(src: str, start_s: Optional[float] = None, dur_s: Optional[fl
         cmd += ["-ss", str(start_s)]
     cmd += ["-i", src, "-t", str(min(dur_s, _MAX_SECONDS) if dur_s else _MAX_SECONDS),
             "-ac", "1", "-ar", str(_SR), "-y", path]
-    proc = subprocess.run(cmd, capture_output=True)
+    returncode, stderr = _run_proc(cmd, ticket)
     # The bundled ffmpeg's TLS (macOS SecureTransport) intermittently fails to negotiate with some CDNs
     # (-9806 on cloudfront / anchor), surfacing two ways: a non-zero exit, OR exit 0 with an empty /
     # near-empty WAV. On a REMOTE url either way, fall back to a robust httpx (openssl) download of the
     # whole file, then decode it LOCALLY (file protocol, ffmpeg never touches TLS). The fast ffmpeg
     # range-seek stays the default for CDNs it handles fine (e.g. xyzcdn), so slice efficiency is kept.
-    if scheme in ("http", "https") and (proc.returncode != 0 or os.path.getsize(path) < _MIN_WAV_BYTES):
+    if scheme in ("http", "https") and (returncode != 0 or os.path.getsize(path) < _MIN_WAV_BYTES):
         _rm(path)
         dl = None
         try:
-            fd2, dl = tempfile.mkstemp(suffix=".audio", prefix="omniseek-asr-dl-")
+            fd2, dl = tempfile.mkstemp(suffix=".audio", prefix="omniseek-asr-dl-", dir=_workdir(ticket))
             os.close(fd2)
             from omniseek.core import http as _http  # lazy: asr stays import-light
             _http.download_to_file(src, dl, max_bytes=_AUDIO_DL_MAX_BYTES)
-            return _decode_to_wav(dl, start_s, dur_s)  # local path -> "file" proto, no ffmpeg TLS
+            if ticket is not None and ticket.cancelled.is_set():
+                raise asr_sched.Cancelled()
+            return _decode_to_wav(dl, start_s, dur_s, ticket)  # local path -> "file" proto, no ffmpeg TLS
+        except asr_sched.Cancelled:
+            raise
         except Exception as exc:  # noqa: BLE001
             raise RuntimeError(
                 f"ffmpeg direct decode failed and robust-download fallback failed: {exc}") from exc
         finally:
             _rm(dl)
-    if proc.returncode != 0:
+    if returncode != 0:
         try:
             os.remove(path)
         except OSError:
             pass
-        raise RuntimeError(f"ffmpeg decode failed: {proc.stderr.decode('utf-8', 'ignore')[:200]}")
+        raise RuntimeError(f"ffmpeg decode failed: {stderr.decode('utf-8', 'ignore')[:200]}")
     return path
 
 
-def _clean(text: str) -> str:
-    text = _TAG_RE.sub("", text or "")
-    text = _EMOJI_RE.sub("", text)
-    text = re.sub(r"[ \t]{2,}", " ", text).strip()
-    return _LEAD_PUNCT_RE.sub("", text).strip()
+def _models() -> dict:
+    return {"model": _MODEL, "vad": _VAD, "diar": _DIAR_MODEL, "spk": _SPK_MODEL, "punc": _worker.PUNC_MODEL}
 
 
-def _transcribe_wav(wav_path: str, language: Optional[str]) -> str:
-    with _lock, _quiet_stdout():
-        try:
-            m = _get_model()
-            res = m.generate(input=wav_path, cache={}, language=(language or "auto"),
-                             use_itn=True, batch_size_s=_BATCH_S, merge_vad=True, merge_length_s=15)
-        finally:
-            _touch()
-    return _clean(" ".join(r.get("text", "") for r in (res or [])))
-
-
-# ── segment timestamps (opt-in): SenseVoice emits NO per-segment offsets and the combined model's
-# merge_vad=False surfaces text but not timestamps (verified with funasr 1.3.9). So we run
-# fsmn-vad STANDALONE for the [start_ms,end_ms] spans, slice the audio per span, and batch-transcribe
-# the slices in ONE generate call. This is the scaffold a --diarize turn hangs speaker labels on, and
-# on its own makes a no-shownote transcript navigable / time-citable. The default flat transcript path
-# (above) is untouched, so segments carries zero cost / zero regression when not requested. ────────
-_vad_model = None  # lazy standalone fsmn-vad singleton (segment offsets)
-
-
-def _get_vad_model():
-    global _vad_model
-    with _lock:  # re-entrant: callers already holding it are fine
-        if _vad_model is None:
-            _before_load("vad", ("diar",))
-            with _quiet_stdout():
-                AutoModel = _optdep.require("funasr", "asr").AutoModel
-            last = None
-            for dev in ("mps", "cpu"):
-                try:
-                    with _quiet_stdout():
-                        _vad_model = AutoModel(model=_VAD, device=dev, disable_update=True)
-                    logger.info("fsmn-vad (segments) loaded on %s", dev)
-                    break
-                except Exception as exc:  # noqa: BLE001
-                    last = exc
-            if _vad_model is None:
-                raise RuntimeError(f"could not load fsmn-vad (mps/cpu): {last}")
-        return _vad_model
-
-
-def _segments_from(spans: list, texts: list) -> list[dict]:
-    """PURE assembler (no I/O, testable on a recorded fixture): zip VAD spans ``[[start_ms,end_ms],...]`` with the
-    per-span transcribed texts into ``[{start,end,text}]`` (seconds, cleaned). Zips to the shorter
-    length so a count mismatch degrades gracefully instead of misaligning; drops empty-text spans."""
-    out = []
-    for span, t in zip(spans or [], texts or []):
-        if not (isinstance(span, (list, tuple)) and len(span) >= 2):
-            continue
-        txt = _clean(t or "")
-        if txt:
-            out.append({"start": round(span[0] / 1000.0, 2),
-                        "end": round(span[1] / 1000.0, 2), "text": txt})
-    return out
-
-
-def _transcribe_segments(wav_path: str, language: Optional[str]) -> list[dict]:
-    """Per-VAD-segment ``{start,end,text}`` for a wav. fsmn-vad standalone for the offsets -> slice per
-    span -> ONE batched generate for the texts -> zip. Returns [] on any hiccup (the caller keeps the
-    flat transcript regardless; segments are opt-in extra, never load-bearing)."""
-    try:
-        import soundfile as sf
-        audio, sr = sf.read(wav_path, dtype="float32")
-        if getattr(audio, "ndim", 1) > 1:
-            audio = audio[:, 0]  # mono (decode is already mono; belt-and-suspenders)
-        with _lock, _quiet_stdout():
-            try:
-                vres = _get_vad_model().generate(input=audio, fs=sr)
-                spans = ((vres[0].get("value") if vres else None) or [])
-                if not spans:
-                    return []
-                slices = [audio[int(s * sr / 1000): int(e * sr / 1000)] for s, e in spans]
-                res = _get_model().generate(input=slices, fs=sr, cache={},
-                                            language=(language or "auto"), use_itn=True,
-                                            merge_vad=False)
-            finally:
-                _touch()
-        return _segments_from(spans, [r.get("text", "") for r in (res or [])])
-    except Exception as exc:  # noqa: BLE001 — segments are opt-in; never break the transcript
-        logger.warning("asr segments failed %s: %s", wav_path, exc)
-        return []
-
-
-# ── speaker diarization (opt-in --diarize): WHO-said-what. funasr's timestamp-based speaker attribution
-# needs a TIMESTAMPED ASR, and SenseVoice emits none (it crashes distribute_spk), so the diarize path
-# uses Paraformer-zh + fsmn-vad + cam++ (speaker embed + cluster) + ct-punc (sentence boundaries), ALL
-# from modelscope (NO HuggingFace token, NO gated terms), lazy-loaded ONLY when --diarize is requested
-# (zero steady-state footprint). funasr does VAD + embed + cluster + attribution internally;
-# we read sentence_info. zh-focused (Paraformer-zh); the flat transcript path keeps SenseVoice. ───────
-_diar_model = None
-
-
-def _get_diar_model():
-    global _diar_model
-    with _lock:  # re-entrant: callers already holding it are fine
-        if _diar_model is None:
-            _before_load("diar", ("sensevoice", "vad"))
-            with _quiet_stdout():
-                AutoModel = _optdep.require("funasr", "asr").AutoModel
-            last = None
-            for dev in ("mps", "cpu"):
-                try:
-                    with _quiet_stdout():
-                        _diar_model = AutoModel(model=_DIAR_MODEL, vad_model=_VAD, spk_model=_SPK_MODEL,
-                                                punc_model="ct-punc", device=dev, disable_update=True)
-                    logger.info("diarization model (paraformer-zh+cam++) loaded on %s", dev)
-                    break
-                except Exception as exc:  # noqa: BLE001
-                    last = exc
-            if _diar_model is None:
-                raise RuntimeError(f"could not load diarization model (mps/cpu): {last}")
-        return _diar_model
-
-
-def _diarized_from(sentence_info: list) -> list[dict]:
-    """PURE assembler (no I/O, testable on a recorded fixture): funasr ``sentence_info`` [{start,end,text/sentence,spk}]
-    -> ``[{start,end,text,speaker}]`` (seconds, cleaned, empty-text sentences dropped). ``speaker`` is the
-    raw cluster index funasr assigned (the agent reads 'speaker 0 said X, speaker 1 said Y')."""
-    out = []
-    for s in (sentence_info or []):
-        if not isinstance(s, dict):
-            continue
-        txt = _clean(s.get("text") or s.get("sentence") or "")
-        st, en = s.get("start"), s.get("end")
-        if not txt or st is None or en is None:
-            continue
-        out.append({"start": round(st / 1000.0, 2), "end": round(en / 1000.0, 2),
-                    "text": txt, "speaker": s.get("spk")})
-    return out
-
-
-def _transcribe_diarized(wav_path: str, speakers: Optional[int] = None) -> tuple:
-    """(flat_text, segments, n_speakers) via the diarization model. funasr does the whole pipeline; we
-    read sentence_info -> per-sentence {start,end,text,speaker}. ("", [], 0) on any hiccup (the caller
-    keeps degrading honestly, never a false transcript).
-
-    speakers>0 pins cam++'s cluster count to that oracle number (preset_spk_num); the eigengap
-    auto-estimate is unstable on short / noisy audio (it over- or under-splits), so passing the known
-    count (a 1-on-1 = 2, a solo = 1) is what makes the labels track the real turns."""
-    preset = speakers if (speakers and speakers > 0) else None
-    try:
-        with _lock, _quiet_stdout():
-            try:
-                res = _get_diar_model().generate(input=wav_path, cache={}, use_itn=True,
-                                                 batch_size_s=_BATCH_S, preset_spk_num=preset)
-            finally:
-                _touch()
-        si = ((res[0] if isinstance(res, list) and res else {}) or {}).get("sentence_info") or []
-        segs = _diarized_from(si)
-        flat = _clean(" ".join(s["text"] for s in segs))
-        n_spk = len({s["speaker"] for s in segs if s["speaker"] is not None})
-        return flat, segs, n_spk
-    except Exception as exc:  # noqa: BLE001 — diarize is opt-in; never break the caller
-        logger.warning("asr diarization failed %s: %s", wav_path, exc)
-        return "", [], 0
+def _recognize(ticket, op: str, wav_path: str, audio_s: float, **kw):
+    """One job on the speech worker (asr_sched.POOL): op "flat" gives the transcript, "segments" the
+    per-VAD-segment [{start,end,text}] (SenseVoice emits no offsets, so the worker runs fsmn-vad
+    standalone and recognizes the slices in one batch), "diar" [flat, [{start,end,text,speaker}],
+    n_speakers] via Paraformer-zh + fsmn-vad + cam++ + ct-punc (all from modelscope, no HuggingFace
+    token; SenseVoice emits no timestamps, which funasr's speaker attribution needs). Raises
+    asr_sched.JobError or asr_sched.Cancelled."""
+    return asr_sched.POOL.run(ticket, dict(op=op, wav=wav_path, models=_models(), **kw), audio_s)
 
 
 def _xiaoyuzhou_audio(url: str) -> tuple[Optional[str], dict]:
@@ -735,14 +436,15 @@ def _bili_stream_urls(stream: dict) -> list:
             + list(stream.get("backupUrl") or stream.get("backup_url") or []))
 
 
-def _bili_download(urls: list, cookies: dict, referer: str, dest: str) -> bool:
+def _bili_download(urls: list, cookies: dict, referer: str, dest: str, stop=None) -> bool:
     """Sync entry for a caller on a thread: ``_abili_download`` on the event loop (portal.call)."""
-    return portal.call(_abili_download, urls, cookies, referer, dest)
+    return portal.call(_abili_download, urls, cookies, referer, dest, stop)
 
 
-async def _abili_download(urls: list, cookies: dict, referer: str, dest: str) -> bool:
+async def _abili_download(urls: list, cookies: dict, referer: str, dest: str, stop=None) -> bool:
     """Download the first working bilibili CDN url to ``dest`` (a DASH .m4s; pre-signed, but the
-    CDN requires the video-page Referer + the activated cookies). True on success."""
+    CDN requires the video-page Referer + the activated cookies). True on success. ``stop`` (an Event)
+    set during the download ends it (a cancelled transcription stops downloading)."""
     hdrs = {"User-Agent": _BILI_UA, "Referer": referer}
     for u in urls:
         try:
@@ -751,6 +453,8 @@ async def _abili_download(urls: list, cookies: dict, referer: str, dest: str) ->
                 resp.raise_for_status()
                 async with await anyio.open_file(dest, "wb") as f:
                     async for chunk in resp.aiter_bytes(262144):
+                        if stop is not None and stop.is_set():
+                            return False
                         await f.write(chunk)
             return True
         except Exception as exc:  # noqa: BLE001
@@ -758,7 +462,7 @@ async def _abili_download(urls: list, cookies: dict, referer: str, dest: str) ->
     return False
 
 
-def _bilibili_audio(url: str) -> tuple[Optional[str], dict]:
+def _bilibili_audio(url: str, ticket=None) -> tuple[Optional[str], dict]:
     """Resolve a bilibili video URL -> its smallest DASH AUDIO stream, downloaded to a temp .m4s.
     Returns (path, meta); caller removes the file + its dir. (None, {}) on failure."""
     pl = bilibili_playurl(url)
@@ -769,25 +473,31 @@ def _bilibili_audio(url: str) -> tuple[Optional[str], dict]:
         logger.warning("bilibili: no audio stream for %s", pl.get("bvid"))
         return None, {}
     lo = min(audio, key=lambda a: a.get("bandwidth", 0))
-    tmpdir = tempfile.mkdtemp(prefix="omniseek-asr-dl-")
+    tmpdir = tempfile.mkdtemp(prefix="omniseek-asr-dl-", dir=_workdir(ticket))
     path = os.path.join(tmpdir, "a.m4s")
-    if _bili_download(_bili_stream_urls(lo), pl["cookies"], pl["referer"], path):
+    stop = None if ticket is None else ticket.cancelled
+    if _bili_download(_bili_stream_urls(lo), pl["cookies"], pl["referer"], path, stop):
         return path, {"source": "bilibili", "title": pl.get("title"), "author": pl.get("author")}
     import shutil
     shutil.rmtree(tmpdir, ignore_errors=True)
     return None, {}
 
 
-def _ytdlp_download(url: str) -> tuple[Optional[str], dict]:
+def _ytdlp_download(url: str, ticket=None) -> tuple[Optional[str], dict]:
     """Download bestaudio to a temp file via yt-dlp (non-bilibili video/podcast hosts — bilibili
     has its own activated-session path that yt-dlp structurally can't do; see _bilibili_audio).
     A real UA is the difference between working and blocked. Returns (path, meta); caller removes
     the file + its dir."""
     import yt_dlp
-    tmpdir = tempfile.mkdtemp(prefix="omniseek-asr-dl-")
+    tmpdir = tempfile.mkdtemp(prefix="omniseek-asr-dl-", dir=_workdir(ticket))
+
+    def _hook(_d):  # a cancelled transcription stops downloading
+        if ticket is not None and ticket.cancelled.is_set():
+            raise asr_sched.Cancelled()
+
     opts = {"quiet": True, "no_warnings": True, "noplaylist": True,
             "format": "bestaudio/best", "outtmpl": os.path.join(tmpdir, "a.%(ext)s"),
-            "postprocessors": [], "http_headers": {"User-Agent": _UA}}
+            "postprocessors": [], "http_headers": {"User-Agent": _UA}, "progress_hooks": [_hook]}
     try:
         with yt_dlp.YoutubeDL(opts) as ydl:
             info = ydl.extract_info(url, download=True)
@@ -796,6 +506,10 @@ def _ytdlp_download(url: str) -> tuple[Optional[str], dict]:
         return path, {"source": (info.get("extractor") or "video").split(":")[0],
                       "title": info.get("title"), "author": info.get("uploader")}
     except Exception as exc:  # noqa: BLE001
+        import shutil
+        shutil.rmtree(tmpdir, ignore_errors=True)   # a failed fetch left an empty download dir behind
+        if ticket is not None and ticket.cancelled.is_set():
+            raise asr_sched.Cancelled() from exc
         logger.warning("yt-dlp audio download failed %s: %s", url, exc)
         # Carry the real reason out. Swallowing it forced the caller to GUESS at a cause, and the
         # guess it printed ("unsupported host?") sent a reader looking for a routing bug when the
@@ -863,23 +577,18 @@ def _remember_transcript(rec: dict) -> None:
 # fetched the audio again and queued another full run on the model, until memguard restarted OmniSeek
 # with three transcriptions in flight and every result was lost. The cache only knows a key once a
 # run FINISHES, so a repeat inside the run window is a miss. _inflight closes that window: the first
-# caller for a key is the leader and runs it; every later caller for the same key, while it runs,
+# caller for a key is the leader and starts it; every later caller for the same key, while it runs,
 # is a follower that waits on the leader's job and never starts a second run. So at any moment at most
-# ONE run exists per key; distinct keys still share the one-generate-at-a-time _lock above.
+# ONE run exists per key.
 #
-# Distinct keys: the number of concurrent generates the memguard ceiling allows is one. While the ASR
-# models are loaded the hard line is soft + the models' load + ONE generate's largest transient
-# (memguard.ASR_EXTRA_MB_DEFAULT, 10-11), so a second concurrent generate would add a second
-# transient (up to 2351 MB) past it. _lock already enforces exactly one, so no new cap is added for
-# generates. The stages before the lock (download to a temp file,
-# ffmpeg decode to a wav on disk) hold disk and a parked thread, not process memory, so queued
-# distinct keys are left to queue rather than be refused (several chapter slices in one gather is the
-# documented pattern). Under the old HARD (6656 MB, no ASR allowance) a single generate on long audio
-# could by itself pass it (the 87-minute run reached 6666 MB at 14:46:53, restart at 14:47:54 with
-# one transcription running); the ASR allowance is sized for exactly that one generate.
+# Distinct keys go through asr_sched: a machine-wide number of transcriptions at once (download, decode
+# and recognition together), a memory admission before each starts, one recognition at a time on the
+# speech worker. A run that cannot start at once is queued; its leader returns a queued receipt (its
+# place, how to collect the result) and the run goes on in the background, so a later call with the
+# same arguments attaches to it or reads its cached result.
 _inflight: dict = {}
 _inflight_lock = threading.Lock()
-_runs_started = 0   # real (uncached) runs started in this process; tests and health read it
+_runs_started = 0   # real (uncached) runs that got past admission in this process; status reads it
 
 
 def _follow_wait_s() -> float:
@@ -895,22 +604,26 @@ def _follow_wait_s() -> float:
 
 
 class _Job:
-    __slots__ = ("started", "phase", "audio_seconds", "done", "result")
+    __slots__ = ("started", "audio_seconds", "done", "result", "ticket")
 
-    def __init__(self):
+    def __init__(self, url: str):
         self.started = time.monotonic()
-        self.phase = "fetching_audio"
         self.audio_seconds = None
         self.done = threading.Event()
         self.result = None
+        self.ticket = asr_sched.Ticket(url)
+
+    @property
+    def phase(self) -> str:
+        return self.ticket.phase
 
 
 def runs_started() -> int:
-    """Real (uncached) transcription runs this process has started."""
+    """Real (uncached) transcription runs this process has started (past the machine-wide admission)."""
     return _runs_started
 
 
-def _join_or_lead(ck):
+def _join_or_lead(ck, url):
     """Elect under _inflight_lock: (job, True, None) for the leader, (job, False, None) for a follower,
     (None, False, cached) when a run for ck finished after the caller's first cache read (the leader
     writes the cache BEFORE it leaves _inflight, so re-reading under the lock closes that gap)."""
@@ -921,7 +634,7 @@ def _join_or_lead(ck):
         cached = cache.get(ck)
         if cached is not None:
             return None, False, cached
-        job = _Job()
+        job = _Job(url)
         _inflight[ck] = job
         return job, True, None
 
@@ -936,10 +649,30 @@ def _finish(ck, job, rec, url) -> None:
     job.done.set()
 
 
+def _limits_note() -> str:
+    return (f"The machine runs at most {asr_sched.max_segments()} transcriptions at a time (download, "
+            f"decode and recognition together), and starts none while the system's memory pressure is "
+            f"critical.")
+
+
+def _queued_receipt(job, url, position: int) -> dict:
+    t = job.ticket
+    why = (" It is waiting for memory to free up." if t.waiting_for == "memory" else "")
+    return {"url": url, "transcript": "", "status": "queued", "queued": True,
+            "queue_position": position, "transcriptions_in_flight": asr_sched.slots_busy(),
+            "waiting_for": t.waiting_for or "slot",
+            "note": (f"Queued: number {position} in line.{why} {_limits_note()} It will run without "
+                     "you: call omniseek_transcribe again with the same arguments to attach to it; once it "
+                     "has finished, the same call returns the result from the cache.")}
+
+
 def _follow(job, url) -> dict:
     """A repeat call for a key that is already running: wait on that run, never start another."""
     if job.done.wait(_follow_wait_s()):
         return {**job.result, "joined": True}
+    pos = asr_sched.SCHED.position(job.ticket)
+    if pos:
+        return {**_queued_receipt(job, url, pos), "already_running": True}
     running = round(time.monotonic() - job.started, 1)
     with _inflight_lock:
         n = len(_inflight)
@@ -947,8 +680,8 @@ def _follow(job, url) -> dict:
            "running_seconds": running, "phase": job.phase, "transcriptions_in_flight": n,
            "note": (f"This transcription is already running (started {running:.0f} s ago). Calling "
                     "again will NOT start a second run: a repeat call with the same arguments attaches "
-                    "to this one, and once it finishes returns the cached result instantly. One "
-                    "transcription runs on the model at a time; others queue behind it.")}
+                    "to this one, and once it finishes returns the cached result instantly. "
+                    + _limits_note())}
     if job.audio_seconds is not None:
         rec["audio_seconds"] = job.audio_seconds
     return rec
@@ -956,7 +689,7 @@ def _follow(job, url) -> dict:
 
 def transcribe_url(url: str, language: Optional[str] = None,
                    start=None, duration=None, segments: bool = False, diarize: bool = False,
-                   speakers: Optional[int] = None) -> dict:
+                   speakers: Optional[int] = None, caller: Optional[str] = None) -> dict:
     """Resolve audio for `url` → SenseVoice transcript. Cached forever. See omniseek_transcribe for fields.
 
     start/duration (seconds or MM:SS / HH:MM:SS) transcribe only that slice — the
@@ -971,9 +704,13 @@ def transcribe_url(url: str, language: Optional[str] = None,
     (the known head-count) to pin cam++'s cluster count; leaving it None auto-estimates (unstable on
     short audio).
 
+    caller names who asked (the job behind the request; asr_sched.cancel stops what a caller asked for).
+
     Single flight: while a run for the same arguments is in progress, a repeat call never starts a
     second one. It waits up to _follow_wait_s() for that run and returns its result (``joined``), or
-    returns a running receipt ({status: "running", already_running: True, note, ...}, transcript "")."""
+    returns a running receipt ({status: "running", already_running: True, note, ...}, transcript "").
+    Over the machine-wide limit (or short of memory) a new run is queued and the call returns a queued
+    receipt ({status: "queued", queue_position, note, ...}, transcript ""); the run goes on without it."""
     url = (url or "").strip()
     if not url:
         return {"url": url, "error": "empty url", "transcript": ""}
@@ -1009,68 +746,105 @@ def transcribe_url(url: str, language: Optional[str] = None,
         logger.warning("asr unavailable: %s", msg)
         return {"url": url, "error": msg, "transcript": ""}
 
-    job, leader, cached = _join_or_lead(ck)
+    job, leader, cached = _join_or_lead(ck, url)
     if cached is not None:  # a run for this key finished between the first cache read and the election
         return {**cached, "cached": True}
+    job.ticket.add_caller(caller)
     if not leader:
         return _follow(job, url)
-    rec = None
-    try:
-        rec = _transcribe_uncached(url, language, start_s, dur_s, segments, diarize, speakers, ck,
-                                   host, job)
-        return rec
-    finally:
-        _finish(ck, job, rec, url)
+    position = asr_sched.SCHED.submit(job.ticket)
+    ctx = contextvars.copy_context()
+
+    def _lead() -> None:
+        rec = None
+        try:
+            rec = _transcribe_uncached(url, language, start_s, dur_s, segments, diarize, speakers, ck,
+                                       host, job)
+        except Exception as exc:  # noqa: BLE001 -- the result is the error, never a lost thread
+            logger.warning("asr run %d failed %s: %s", job.ticket.id, url, exc)
+            rec = {"url": url, "error": f"{type(exc).__name__}: {str(exc)[:200]}", "transcript": ""}
+        finally:
+            _finish(ck, job, rec, url)
+
+    threading.Thread(target=ctx.run, args=(_lead,), name=f"asr-run-{job.ticket.id}", daemon=True).start()
+    if position:
+        return _queued_receipt(job, url, position)
+    job.done.wait()
+    return job.result
+
+
+def _cancelled_rec(url, job) -> dict:
+    who = ", ".join(sorted(job.ticket.ever_callers)) or "its caller"
+    return {"url": url, "transcript": "", "cancelled": True,
+            "error": f"cancelled: the transcription was stopped on request of {who}; nothing was cached"}
 
 
 def _transcribe_uncached(url, language, start_s, dur_s, segments, diarize, speakers, ck, host,
                          job) -> dict:
-    """The real run behind transcribe_url: fetch, decode, transcribe, cache. Only the single-flight
-    leader for ``ck`` calls this, so it runs at most once per key at any moment."""
+    """The real run behind transcribe_url: wait for admission, fetch, decode, recognize, cache. Only the
+    single-flight leader for ``ck`` calls this, so it runs at most once per key at any moment."""
     def _host_is(domain: str) -> bool:  # SUFFIX match, not substring: xiaoyuzhoufm.com.evil.net must NOT route
         return host == domain or host.endswith("." + domain)
 
     global _runs_started
+    t = job.ticket
+    if not asr_sched.SCHED.wait_admitted(t):
+        return _cancelled_rec(url, job)
+    t_wait = time.monotonic() - t.t_submit
     with _inflight_lock:
         _runs_started += 1
     t0 = time.time()
     ytmp = wav = None
     try:
+        t.workdir = Path(tempfile.mkdtemp(prefix=f"omniseek-asr-{t.id}-"))
         if _host_is("xiaoyuzhoufm.com"):
             au, meta = _xiaoyuzhou_audio(url)
             if not au:
                 return {"url": url, "error": "could not resolve 小宇宙 audio", "transcript": ""}
-            wav = _decode_to_wav(au, start_s, dur_s)
+            wav = _decode_to_wav(au, start_s, dur_s, t)
         elif _host_is("bilibili.com") or _host_is("b23.tv"):
-            ytmp, meta = _bilibili_audio(url)  # own activated session — yt-dlp 412s on bilibili
+            ytmp, meta = _bilibili_audio(url, t)  # own activated session — yt-dlp 412s on bilibili
+            if t.cancelled.is_set():
+                raise asr_sched.Cancelled()
             if not ytmp:
                 return {"url": url, "error": "could not resolve bilibili audio (anti-crawler 412?)", "transcript": ""}
-            wav = _decode_to_wav(ytmp, start_s, dur_s)
+            wav = _decode_to_wav(ytmp, start_s, dur_s, t)
         elif url.lower().split("?")[0].endswith(_AUDIO_EXT):
             meta = {"source": "audio"}
-            wav = _decode_to_wav(url, start_s, dur_s)
+            wav = _decode_to_wav(url, start_s, dur_s, t)
         else:  # other video/podcast hosts → yt-dlp download (robust)
-            ytmp, meta = _ytdlp_download(url)
+            ytmp, meta = _ytdlp_download(url, t)
             if not ytmp:
                 why = (meta or {}).get("error")
                 return {"url": url, "transcript": "",
                         "error": f"could not resolve audio for {host or url}: {why}" if why
                         else f"could not resolve audio for {host or url} (no audio stream found)"}
-            wav = _decode_to_wav(ytmp, start_s, dur_s)
+            wav = _decode_to_wav(ytmp, start_s, dur_s, t)
+        _rm(ytmp)   # the decoded wav is all recognition needs; give the download's disk back now
+        ytmp = None
         audio_secs = round(os.path.getsize(wav) / (_SR * 2))  # 16-bit mono
-        job.audio_seconds, job.phase = audio_secs, "transcribing"
+        job.audio_seconds = audio_secs
+        t_fetch = time.time() - t0
         diar_segs, n_spk, seg = [], 0, None
         if diarize:  # WHO-said-what: the Paraformer diarization model gives BOTH the flat text + speaker segments
-            text, diar_segs, n_spk = _transcribe_diarized(wav, speakers)
+            text, diar_segs, n_spk = _recognize(t, "diar", wav, audio_secs, speakers=speakers)
         else:
-            text = _transcribe_wav(wav, language)
-            seg = _transcribe_segments(wav, language) if segments else None  # compute while the wav still exists
+            text = _recognize(t, "flat", wav, audio_secs, language=language)
+            if segments:  # compute while the wav still exists
+                seg = _recognize(t, "segments", wav, audio_secs, language=language)
+    except asr_sched.Cancelled:
+        return _cancelled_rec(url, job)
+    except asr_sched.JobError as exc:
+        logger.warning("asr failed %s: %s", url, exc)
+        return {"url": url, "error": str(exc), "transcript": ""}
     except Exception as exc:  # noqa: BLE001
         logger.warning("asr failed %s: %s", url, exc)
         return {"url": url, "error": f"{type(exc).__name__}: {str(exc)[:200]}", "transcript": ""}
     finally:
         _rm(wav)
         _rm(ytmp)
+        asr_sched.remove_workdir(t)
+        asr_sched.SCHED.release(t)
 
     rec = {"url": url, "transcript": text, "chars": len(text),
            "audio_seconds": audio_secs, "asr_seconds": round(time.time() - t0, 1),
@@ -1084,6 +858,8 @@ def _transcribe_uncached(url, language, start_s, dur_s, segments, diarize, speak
     if start_s or dur_s:
         rec["start_seconds"] = start_s or 0
         rec["duration_seconds"] = dur_s
+    logger.info("asr run %d: %d s audio, queued %.1f s, fetched in %.1f s, done in %.1f s", t.id,
+                audio_secs, t_wait, t_fetch, rec["asr_seconds"])
     cache.set(ck, rec, ttl=_TTL)
     _remember_transcript(rec)
     return rec

@@ -1060,14 +1060,40 @@ def omniseek_transcribe(url: str, language: str = "", start: str = "", duration:
     Returns {url, transcript, chars, audio_seconds, asr_seconds, source, title, cached,
     start_seconds?, duration_seconds?, segments?, speakers?}, or {url, error, transcript: ""} when no
     audio resolved. Repeating the same call while it runs attaches to that run; still running gives
-    {status: "running", already_running: true, running_seconds, phase, note}: call again later.
+    {status: "running", already_running: true, running_seconds, phase, note}: call again later. Over
+    the machine's transcription limit it is queued and runs without you: {status: "queued",
+    queue_position, note}; call again later with the same arguments.
     More: omniseek docs/TOOLS.md, omniseek_transcribe.
     """
     from omniseek.core import asr
     return asr.transcribe_url(url, language=language or None,
                               start=start or None, duration=duration or None,
                               segments=bool(segments), diarize=bool(diarize),
-                              speakers=int(speakers) or None)
+                              speakers=int(speakers) or None, caller=_caller())
+
+
+# Who a transcription is for: the job behind the request, named by the X-Eye-Caller request header.
+# OmniSeek's front door sets it per connection (a dispatcher gives each job its own connection); it is
+# not a tool argument, so an agent neither sees nor sets it. asr_sched.cancel(<caller>) (from outside:
+# omniseek.asr_ctl cancel --job <caller>) stops what that job asked for. A request without it (stdio, a
+# direct HTTP client) has no caller and is not cancellable by job.
+CALLER_HEADER = "x-eye-caller"
+_CALLER_MAX = 128
+
+
+def _caller() -> Optional[str]:
+    """The X-Eye-Caller of the request being served, or None (no HTTP request, no header, or a value
+    that is not a plain name: letters, digits and . _ : @ - only, at most _CALLER_MAX characters)."""
+    try:
+        from mcp.server.lowlevel.server import request_ctx
+        req = request_ctx.get().request
+        raw = req.headers.get(CALLER_HEADER) if req is not None else None
+    except Exception:  # noqa: BLE001 -- no request context (stdio, a direct call): no caller
+        return None
+    v = (raw or "").strip()
+    if not v or len(v) > _CALLER_MAX or not all(c.isascii() and (c.isalnum() or c in "._:@-") for c in v):
+        return None
+    return v
 
 
 # Video-target test for omniseek_view kind="auto": a known video host OR a video-file suffix.
@@ -1219,9 +1245,13 @@ async def _abounded(fn, timeout: float, limiter=None):
     """``fn()`` (blocking curator work that may hang on a candidate host) on a worker thread of
     ``limiter`` (the IO lane by default), waited at most ``timeout`` seconds: ``(True, result)``, or
     ``(False, None)`` past it (``fetcher._arun_bounded``: the thread is not interrupted, it finishes on
-    its own); re-raises what ``fn`` raised."""
-    return await fetcher._arun_bounded(
-        anyio.to_thread.run_sync(fn, limiter=limiter or portal.IO_LANE), timeout)
+    its own); re-raises what ``fn`` raised. ``timeout`` is also the caller's deadline at the declared
+    gates ``fn``'s requests pass (``_guard.deadline_after``: the worker thread runs in a copy of this
+    context)."""
+    from omniseek.core import _guard
+    with _guard.deadline_after(timeout):
+        return await fetcher._arun_bounded(
+            anyio.to_thread.run_sync(fn, limiter=limiter or portal.IO_LANE), timeout)
 
 
 def _curator_submit(name: str, urls: list[str], mode: str, domain: str, family: str,
@@ -1868,32 +1898,6 @@ def _count_shared_backend_targets(calls: list[dict]) -> int:
     return n
 
 
-def _gather_gate(spec: dict) -> Optional[tuple[str, int]]:
-    """``(upstream id, its declared max_inflight)`` when this gather call's first request passes a
-    declared upstream gate, else None (run it concurrently, as before).
-
-    Only an omniseek_read on the URL branch is answered, and by the SAME routing omniseek_read itself uses:
-    ``_is_document_target`` picks the branch, then ``fetcher.fetch_url_upstream`` derives the gate from
-    upstreams.json for the first reader on ``fetcher.fetch_url_route`` (the list omniseek_read's URL read
-    walks) that is declared on the URL's site. No second routing table, no declaration on the readers.
-    Read-only, sends nothing; anything unexpected is None."""
-    try:
-        if not isinstance(spec, dict) or spec.get("tool") != "omniseek_read":
-            return None
-        target = (spec.get("args") or {}).get("target")
-        if not isinstance(target, str) or not target.strip() or _is_document_target(target):
-            return None
-        uid = fetcher.fetch_url_upstream(target)
-        if not uid:
-            return None
-        from omniseek.core import upstreams as _ups
-        n = _ups.gate_value(uid, "max_inflight")
-        return (uid, int(n)) if n else None
-    except Exception as exc:  # noqa: BLE001 (a scheduling hint must never break a gather)
-        log.debug("gather: gate lookup failed for %r: %s", spec, exc)
-        return None
-
-
 def _is_signature_mismatch(exc: Exception) -> bool:
     """True iff ``exc`` reads as a call-signature mismatch (a wrong/missing argument), the one failure
     class where naming the real params HELPS. A wrong/missing kwarg raises a ``TypeError`` whose
@@ -1925,7 +1929,7 @@ async def omniseek_gather(calls: list[dict], wait_s: LenientInt = 60) -> dict:
 
     import time
 
-    async def _run_one(idx: int, spec: dict, gate: Optional[anyio.CapacityLimiter]) -> dict:
+    async def _run_one(idx: int, spec: dict) -> dict:
         tool_name = spec.get("tool", "")
         args = spec.get("args") or {}
         fn = _GATHER_TOOLS.get(tool_name)
@@ -1936,17 +1940,13 @@ async def omniseek_gather(calls: list[dict], wait_s: LenientInt = 60) -> dict:
         try:
             # Every child runs on THIS loop (the service's one loop): a coroutine tool (omniseek_search, omniseek_read,
             # omniseek_view, omniseek_sources, omniseek_field_skeleton and the paper / relations tools) is
-            # awaited here, a sync body goes to a worker thread on the IO lane (as a @_threaded tool), or
-            # under its gate's limiter when it passes a declared upstream gate.
+            # awaited here, a sync body goes to a worker thread on the IO lane (as a @_threaded tool).
+            # Calls that pass one declared upstream gate wait in that gate's own line, as any callers do.
             if asyncio.iscoroutinefunction(fn):
-                if gate is None:
-                    result = await fn(**args)
-                else:
-                    async with gate:
-                        result = await fn(**args)
+                result = await fn(**args)
             else:
                 result = await anyio.to_thread.run_sync(functools.partial(fn, **args),
-                                                     limiter=gate or portal.IO_LANE)
+                                                     limiter=portal.IO_LANE)
             return {"index": idx, "tool": tool_name, "status": "ok", "result": result}
         except Exception as exc:
             out = {"index": idx, "tool": tool_name, "status": "errored",
@@ -1963,25 +1963,12 @@ async def omniseek_gather(calls: list[dict], wait_s: LenientInt = 60) -> dict:
     t0 = time.monotonic()
     results: list[dict] = [None] * len(calls)  # type: ignore[list-item]
 
-    # Calls that pass one declared upstream gate share ONE limiter per gate for this batch, sized to the
-    # gate's max_inflight: at most that many of them are at the gate at once, the rest wait their turn
-    # in calls order (tasks start in creation order and the limiter wakes waiters first-in first-out),
-    # and a call still waiting is not at the gate, so it spends none of the gate's max_wait_s.
-    gates: dict[str, anyio.CapacityLimiter] = {}
     tasks: dict[asyncio.Task, int] = {}
     loop = asyncio.get_running_loop()
-    # The gate lookups and the shared-backend count read the adapter registry and upstreams.json;
-    # they stay off the loop, in one worker hop, as they were when the whole body ran on a worker.
-    plan, shared = await anyio.to_thread.run_sync(
-        lambda: ([_gather_gate(c) for c in calls], _count_shared_backend_targets(calls)), limiter=portal.IO_LANE)
+    # The shared-backend count reads the adapter registry; it stays off the loop, in one worker hop.
+    shared = await anyio.to_thread.run_sync(lambda: _count_shared_backend_targets(calls), limiter=portal.IO_LANE)
     for i, c in enumerate(calls):
-        g = plan[i]
-        lim = None
-        if g is not None:
-            lim = gates.get(g[0])
-            if lim is None:
-                lim = gates[g[0]] = anyio.CapacityLimiter(g[1])
-        t = loop.create_task(_run_one(i, c, lim))
+        t = loop.create_task(_run_one(i, c))
         _GATHER_RUNNING.add(t)  # strong reference: a child past wait_s keeps running and warms the cache
         t.add_done_callback(_gather_child_done)
         tasks[t] = i
@@ -2486,8 +2473,9 @@ def main() -> None:
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
         stream=sys.stderr,
     )
-    from omniseek.core import _lograte
+    from omniseek.core import _lograte, scratch
     _lograte.install_on_root()  # no single logger may flood the log (fresh-install OpenAlex storm)
+    scratch.install()  # this process's own temp directory; ended processes' leftovers go (eye.scratch)
     log.debug("OmniSeek MCP server starting. Loaded %d source modules.", len(loaded_modules))
     log.debug("Registered adapters: %s", fetcher.all_adapter_names())
     _warm_heavy_imports()

@@ -4,8 +4,8 @@ One implementation, async (EYE-TWINS-1, 2026-11-10): every helper here is an ``a
 coroutine; the sync names (``get``, ``get_json``, ``get_text``, ``post_json``, ``direct``,
 ``get_impersonated``, ``download_to_file``) are one-line entries for a caller on a thread, which
 run the coroutine on the event loop through ``portal.call``. Never call a sync entry on the event
-loop's own thread (portal raises): await the coroutine there. The sync request/response hooks kept
-below (``progress_hooks``) are for a third-party sync client OmniSeek does not build itself (atproto).
+loop's own thread (portal raises): await the coroutine there. The request/response hooks a client
+OmniSeek does not build itself gets (``aprogress_hooks``: atproto's, a module's own) are async too.
 
 ~20 adapters each re-implemented the same wrapper: ``httpx.get`` + a UA header +
 ``follow_redirects=True`` + ``raise_for_status()`` + ``try/except → None`` (with
@@ -109,7 +109,7 @@ async def _aapply_declared_user_agent(request: "httpx.Request") -> None:
 # request's upstreams.AsyncHopGates here for as long as it runs; this request hook, installed on the
 # shared client and on every client ``adirect`` builds, hands each hop httpx sends (redirects included) to it:
 # same host, the same visit; another host, its own gates, taken after the last host's are let go. The
-# rule itself lives in HopGates only.
+# rule itself lives in AsyncHopGates only.
 _hops_var: contextvars.ContextVar = contextvars.ContextVar("omniseek_eye_hops", default=None)
 
 
@@ -152,7 +152,8 @@ def _timeout_s(timeout: Any) -> Optional[float]:
     """A request's own timeout in seconds, for the gates' leases (review P1): a number as it is; an
     ``httpx.Timeout`` (or the dict httpx keeps in a request's extensions) its longest phase, which is
     per operation, so a long body can outlive it (the lease then ends early and the gate may admit one
-    more request, never fewer); None when unknown (the gate falls back to its declared max_wait_s)."""
+    more request, never fewer); None when unknown (the permit then has no lease and is held until
+    given back)."""
     if timeout is None or timeout is _UNSET:
         return None
     if isinstance(timeout, (int, float)) and not isinstance(timeout, bool):
@@ -171,27 +172,12 @@ def _resp_url(resp: Any, fallback: str) -> str:
         return fallback
 
 
-class _ProgressStream(httpx.SyncByteStream):
+class _AProgressStream(httpx.AsyncByteStream):
     """A response body that renews the leases of its request's holds at every block of data (design
     decision of 2026-09-29 on section 17.5, item 2): a request that is making progress keeps its
     permits; one that is stuck makes none and is reclaimed when its lease runs out. The holds are the
     ones running when the response arrived, so the renewal reaches them wherever the body is read
     (inside httpx for a plain ``get``, or by the caller for a stream)."""
-
-    def __init__(self, inner: Any, handles: tuple) -> None:
-        self._inner, self._handles = inner, handles
-
-    def __iter__(self):
-        for chunk in self._inner:
-            _guard.renew_handles(self._handles)
-            yield chunk
-
-    def close(self) -> None:
-        self._inner.close()
-
-
-class _AProgressStream(httpx.AsyncByteStream):
-    """Async twin of ``_ProgressStream``."""
 
     def __init__(self, inner: Any, handles: tuple) -> None:
         self._inner, self._handles = inner, handles
@@ -215,23 +201,13 @@ class _AProgressStream(httpx.AsyncByteStream):
 _PROGRESS_EVENTS = ("connect_tcp.complete", "start_tls.complete", "send_request_body.complete")
 
 
-def _sent_trace(handles: tuple, prior: Any):
-    def trace(name: str, info: dict) -> None:
-        if name.endswith(_PROGRESS_EVENTS):
-            _guard.renew_handles(handles)
-        if prior is not None:
-            prior(name, info)
-    trace._omniseek_prior = prior   # a redirect hop carries the extensions on: never chain our own
-    return trace
-
-
 def _asent_trace(handles: tuple, prior: Any):
     async def trace(name: str, info: dict) -> None:
         if name.endswith(_PROGRESS_EVENTS):
             _guard.renew_handles(handles)
         if prior is not None:
             await prior(name, info)
-    trace._omniseek_prior = prior
+    trace._omniseek_prior = prior   # a redirect hop carries the extensions on: never chain our own
     return trace
 
 
@@ -240,27 +216,14 @@ def _prior_trace(request: "httpx.Request") -> Any:
     return getattr(prior, "_omniseek_prior", prior)
 
 
-def _watch_send(request: "httpx.Request") -> None:
-    """Request hook: when this request's connection is made, when TLS is set up and when the request has
-    been sent, renew the holds it runs under."""
-    handles = _guard.active_handles()
-    if handles:
-        request.extensions["trace"] = _sent_trace(handles, _prior_trace(request))
-
-
 async def _awatch_send(request: "httpx.Request") -> None:
-    """Async twin of ``_watch_send`` (httpcore awaits an async client's trace callback)."""
+    """Request hook, the last before the transport: keep the departure spacing of the gates the request
+    runs under (``_guard.adepart``); then, when its connection is made, when TLS is set up and when the
+    request has been sent, renew those holds (httpcore awaits an async client's trace callback)."""
     handles = _guard.active_handles()
     if handles:
+        await _guard.adepart(handles)
         request.extensions["trace"] = _asent_trace(handles, _prior_trace(request))
-
-
-def _watch_progress(response: "httpx.Response") -> None:
-    handles = _guard.active_handles()
-    if handles:
-        _guard.renew_handles(handles)   # the headers arrived
-        if isinstance(response.stream, httpx.SyncByteStream):
-            response.stream = _ProgressStream(response.stream, handles)
 
 
 def _awatch_progress(response: "httpx.Response") -> None:
@@ -271,15 +234,12 @@ def _awatch_progress(response: "httpx.Response") -> None:
             response.stream = _AProgressStream(response.stream, handles)
 
 
-def progress_hooks() -> dict:
-    """The event hooks that give a plain sync ``httpx.Client`` (a module's own, one that takes its gates
-    with ``hold``/``slot``/``egress`` around the request) the lease renewal by progress: when the
-    request has been sent, when its headers arrive, and at every block of its body."""
-    return {"request": [_watch_send], "response": [_watch_progress]}
-
-
 def aprogress_hooks() -> dict:
-    """Async twin of ``progress_hooks``."""
+    """The event hooks that give an ``httpx.AsyncClient`` of a module's own (one that takes its gates
+    with ``ahold``/``aslot``/``upstreams.ahold`` around the request, or atproto's, bluesky_source) the
+    lease renewal by progress: when the request has been sent, when its headers arrive, and at every
+    block of its body. (The sync ``progress_hooks`` and its four helpers went in EYE-TWINS-2 with
+    their one user, bluesky's sync atproto client.)"""
     async def hook(response: "httpx.Response") -> None:
         _awatch_progress(response)
     return {"request": [_awatch_send], "response": [hook]}
@@ -404,7 +364,7 @@ def _openssl_failed_unsent(exc: BaseException) -> bool:
 def _curl_tier_may_serve(method: str, exc: BaseException) -> bool:
     """Whether the libcurl tier will try this failed request next. When it will, the request helpers
     let go of the hop's gates without counting the failure against the host yet
-    (``upstreams.HopGates.let_go``) and keep it for ``_count_unreached``: a host libcurl reaches is
+    (``upstreams.AsyncHopGates.let_go``) and keep it for ``_count_unreached``: a host libcurl reaches is
     not a host that is down."""
     return method.upper() in _CURL_TIER_METHODS and _openssl_failed_unsent(exc)
 
@@ -708,6 +668,7 @@ async def _acurl_hops(creq, method: str, url: str, gates: "upstreams.AsyncHopGat
         if upstreams.user_agent_for(url):   # a declared User-Agent replaces Chrome's for that host only
             hop_headers = upstreams.with_declared_user_agent(url, hop_headers)
         holds = _guard.active_handles()
+        await _guard.adepart(holds)   # the departure spacing of its gates, as the httpx request hook does
         _guard.renew_handles(holds)   # this hop goes out (libcurl reports no "request written" moment)
         r = await anyio.to_thread.run_sync(
             functools.partial(creq.request, method, url, impersonate="chrome", headers=hop_headers,

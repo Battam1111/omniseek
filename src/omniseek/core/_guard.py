@@ -20,6 +20,7 @@ import collections
 import contextlib
 import contextvars
 import logging
+import math
 import threading
 import time
 from typing import Callable, Iterable, Optional
@@ -30,18 +31,33 @@ from omniseek.core import _probe
 
 logger = logging.getLogger(__name__)
 
-def _holder():
-    """Who holds or waits: the running asyncio task, else the current thread. A child task or thread
-    is a holder of its own: a new request that takes a gate like any other (review, pending 2)."""
-    try:
-        task = asyncio.current_task()
-    except RuntimeError:  # no running event loop in this thread
-        task = None
-    return task if task is not None else threading.get_ident()
+# WHO HOLDS A GATE IS A CREDENTIAL (EYE-TWINS-2, 2026-11-11). A gate knows its holder only by the object
+# handed to it: re-entry (``held_by``), the lease and the give-back all name that object, never the task
+# or thread that happens to run the code. An async caller that hands none is held by its running task,
+# the convention of anyio's ``CapacityLimiter`` (``acquire`` borrows on behalf of ``current_task()``),
+# so a child task stays a holder of its own: a new request that takes a gate like any other (review,
+# pending 2). A sync entry (``upstreams.egress``) makes a ``Holder`` at the start of its blocking call,
+# enters the async gate with it through ``portal.call`` and gives the gate back with it through another
+# ``portal.call``: two tasks on the loop, one holder.
+class Holder:
+    """An explicit holder credential: one blocking call that holds gates across several portal calls."""
+
+    __slots__ = ("name",)
+
+    def __init__(self, name: Optional[str] = None) -> None:
+        self.name = name or f"thread {threading.current_thread().name}"
+
+    def get_name(self) -> str:
+        return self.name
+
+
+def _holder(holder=None):
+    """The holder a gate records: ``holder`` when given, else the running asyncio task."""
+    return holder if holder is not None else asyncio.current_task()
 
 
 def _holder_label(holder) -> str:
-    return getattr(holder, "get_name", lambda: None)() or f"thread {holder}"
+    return getattr(holder, "get_name", lambda: None)() or repr(holder)
 
 
 # REQUESTS THAT WERE SENT (review N2, design decision of 2026-09-29). A hold's reservation is handed back
@@ -54,20 +70,25 @@ _active_holds: contextvars.ContextVar = contextvars.ContextVar("omniseek_eye_act
 
 
 class HoldHandle:
-    """What ``hold``/``ahold`` yield: ``sent`` turns True once a response arrived while it was held.
-    It also carries the permit's lease, so the request's progress can renew it (``renew``)."""
+    """What ``ahold`` yields (``aslot`` and ``bounded_async_slot`` register one too): ``sent`` turns
+    True once a response arrived while it was held.
+    It also carries the permit's lease, so the request's progress can renew it (``renew``), and the
+    gate that gave it (``guard``), whose spacing the request's departure keeps (``adepart``)."""
 
-    __slots__ = ("sent", "active", "pool", "lease", "request_s")
+    __slots__ = ("sent", "active", "pool", "lease", "request_s", "guard", "departed")
 
-    def __init__(self, pool=None, lease=None, request_s: float = 0.0) -> None:
+    def __init__(self, pool=None, lease=None, request_s: Optional[float] = 0.0, guard=None) -> None:
         self.sent = False
         self.active = True
         self.pool, self.lease, self.request_s = pool, lease, request_s
+        self.guard, self.departed = guard, False
 
     def renew(self) -> None:
         """Data arrived for this request: its lease now ends ``request_s`` from now (never earlier
-        than it already did). A holder that makes no progress is not renewed and is reclaimed."""
-        if self.active and self.pool is not None and self.lease is not None:
+        than it already did). A holder that makes no progress is not renewed and is reclaimed. A
+        request whose own timeout is unknown (``request_s`` None) has no lease to renew."""
+        if (self.active and self.pool is not None and self.lease is not None
+                and self.request_s is not None):
             self.pool.renew(self.lease, time.monotonic() + self.request_s)
 
 
@@ -92,6 +113,42 @@ def renew_handles(handles: tuple) -> None:
         handle.renew()
 
 
+# SPACED AT THE DEPARTURE (SMALL-BATCH-12A). The start slot is when a hold's body begins; the request
+# leaves later, after work that differs from one request to the next (the first builds its client:
+# about 10 ms), so two departures measured on the wire came 2.99 s apart behind arXiv's 3 s slots. The
+# moment a request is handed to the transport (OmniSeek's httpx request hook, the curl tier's send)
+# calls ``adepart``: each gate it runs under that declares ``min_interval_s`` waits until that long
+# (plus the clock's resolution, see ``_clock_slack``) after its previous departure. Once per hold: a
+# same-host redirect hop continues the same visit (upstreams.AsyncHopGates) and does not wait again.
+def _departing(handles: tuple) -> tuple[list, float]:
+    """Reserve this request's departure on every gate it runs under: (those gates, seconds to wait)."""
+    gs = [h.guard for h in handles if h.guard is not None and not h.departed]
+    for h in handles:
+        h.departed = True
+    if not gs:
+        return gs, 0.0
+    at = max(g.reserve_departure() for g in gs)
+    for g in gs:
+        g.note_departure(at)
+    return gs, max(0.0, at - time.monotonic())
+
+
+def _departed(gates: list) -> None:
+    """The wait is over: the request leaves now, which is later than reserved when the sleep woke late;
+    the next departure counts from this moment."""
+    now = time.monotonic()
+    for g in gates:
+        g.note_departure(now)
+
+
+async def adepart(handles: tuple) -> None:
+    """A request under these holds is handed to the transport now: wait for its departure (see above)."""
+    gates, wait = _departing(handles)
+    if wait > 0:
+        await anyio.sleep(wait)
+        _departed(gates)
+
+
 def _register_hold(handle: HoldHandle):
     live = tuple(h for h in _active_holds.get() if h.active)
     return _active_holds.set(live + (handle,))
@@ -105,10 +162,26 @@ def _unregister_hold(handle: HoldHandle, token) -> None:
         pass
 
 
+@contextlib.contextmanager
+def holding(handles: Iterable):
+    """Run a blocking body in its thread's context with these holds registered: they were taken on the
+    loop through ``portal.call``, in a copy of the context that ended with that call, so a response the
+    body records (``mark_sent``) or a block of data it reads (``active_handles``) still reaches them."""
+    live = tuple(h for h in _active_holds.get() if h.active)
+    token = _active_holds.set(live + tuple(h for h in handles if h is not None))
+    try:
+        yield
+    finally:
+        try:
+            _active_holds.reset(token)
+        except (ValueError, RuntimeError):
+            pass
+
+
 # ONE LINE AND LEASES FOR EVERY GATE (design decision of 2026-09-29 on review N1 and P1).
 class _Lease:
-    """One permit handed out by a ``FairPermits``: who holds it and when its lease ends (None: never,
-    for a permit taken with ``acquire``). ``active`` turns False when it is given back or reclaimed."""
+    """One permit handed out by a ``FairPermits``: who holds it (a holder credential, see ``Holder``) and
+    when its lease ends (None: not set yet). ``active`` turns False when it is given back or reclaimed."""
 
     __slots__ = ("holder", "expires_at", "active", "since")
 
@@ -117,13 +190,12 @@ class _Lease:
 
 
 class _Waiter:
-    """One place in a ``FairPermits`` line: a thread (``event``) or a coroutine (``fut`` on ``loop``)."""
+    """One place in a ``FairPermits`` line: a coroutine waiting on ``fut`` of its ``loop``."""
 
-    __slots__ = ("holder", "expires_at", "event", "loop", "fut", "lease")
+    __slots__ = ("holder", "expires_at", "loop", "fut", "lease")
 
-    def __init__(self, holder, expires_at: Optional[float], loop=None, fut=None) -> None:
+    def __init__(self, holder, expires_at: Optional[float], loop, fut) -> None:
         self.holder, self.expires_at = holder, expires_at
-        self.event = threading.Event() if loop is None else None
         self.loop, self.fut = loop, fut
         self.lease: Optional[_Lease] = None   # set, under the pool's lock, when a permit is handed over
 
@@ -134,27 +206,29 @@ def _resolve(fut) -> None:
 
 
 class FairPermits:
-    """The permits of one gate: a counting semaphore with two things a threading semaphore lacks.
+    """The permits of one gate: a counting semaphore with three things a threading semaphore lacks.
 
-    FIRST COME, FIRST SERVED (review N1). Sync and async callers wait in ONE line, and a permit that
-    comes free goes straight to the first of them: a thread is woken by its event, a coroutine by
-    ``call_soon_threadsafe`` on its own loop. A newcomer never takes a permit while anyone is in line,
-    so a caller that sends one request after another can no longer keep a single-permit gate to
-    itself. A coroutine cancelled after a permit was handed to it passes the permit on.
+    FIRST COME, FIRST SERVED (review N1). Every caller waits in ONE line, and a permit that comes free
+    goes straight to the first of them, woken by ``call_soon_threadsafe`` on its own loop (a process
+    may run more than one loop: the service's and portal's own). A newcomer never takes a permit while
+    anyone is in line, so a caller that sends one request after another can no longer keep a
+    single-permit gate to itself. A coroutine cancelled after a permit was handed to it passes the
+    permit on.
 
     LEASES (review P1). The gate does not trust a holder to give a permit back. A permit taken with
-    ``take``/``atake`` carries a lease ending at ``expires_at`` (the caller's waiting budget plus the
-    request's own timeout); when it runs out, the pool takes the permit back, logs it and counts it
-    (``reclaimed``), and the late holder's ``give_back`` is then a no-op, so a permit is never
-    returned twice. Leases are checked whenever a permit is asked for and while anyone waits (a
-    waiter wakes at the earliest expiry), so a stuck holder blocks a line no longer than its lease.
+    ``atake`` carries a lease ending at ``expires_at``; a ``BackendGuard`` hold sets it (``renew``) to
+    the caller's deadline plus the request's own timeout; when it runs out, the pool takes the permit
+    back, logs it and counts it (``reclaimed``), and the late holder's ``give_back`` is then a no-op,
+    so a permit is never returned twice. Leases are checked whenever a permit is asked for and while
+    anyone waits (a waiter wakes at the earliest expiry), so a stuck holder blocks a line no longer
+    than its lease.
 
-    The gate also knows who holds it (review P2): ``held_by(holder)`` reads the live leases, so a
-    record never outlives its permit, whichever context or thread gives the permit back.
-
-    ``acquire``/``release`` (and ``with``) keep the threading-semaphore interface for tests and code
-    that manages a permit by hand: FIFO too, without a lease. ``_value`` is the number of free permits
-    and ``_initial_value`` the cap, as on a threading semaphore."""
+    WHO HOLDS IT (review P2; EYE-TWINS-2). Every permit names its holder, the credential handed to
+    ``atake`` (see ``Holder``), and ``held_by(holder)`` reads the live leases, so a record never
+    outlives its permit, whichever task gives the permit back. ``_value`` is the number of free permits
+    and ``_initial_value`` the cap, as on a threading semaphore. (The sync ``take`` and the
+    threading-semaphore ``acquire``/``release`` were deleted in EYE-TWINS-2: a blocking caller holds a
+    gate through ``upstreams.egress``, which enters the async one with a credential of its own.)"""
 
     def __init__(self, n: int, name: str = "gate") -> None:
         self._initial_value = n
@@ -163,7 +237,6 @@ class FairPermits:
         self._lock = threading.Lock()
         self._waiters: collections.deque = collections.deque()
         self._leases: list = []   # live leased permits
-        self._anon = 0            # permits taken with acquire(), given back with release()
         self.reclaimed = 0
 
     @property
@@ -173,10 +246,7 @@ class FairPermits:
     # ── under self._lock ──────────────────────────────────────────────────────────────────────────
     def _lease_locked(self, holder, expires_at: Optional[float]) -> _Lease:
         lease = _Lease(holder, expires_at)
-        if holder is None:
-            self._anon += 1
-        else:
-            self._leases.append(lease)
+        self._leases.append(lease)
         return lease
 
     def _hand_over_locked(self) -> None:
@@ -184,10 +254,6 @@ class FairPermits:
         while self._waiters:
             w = self._waiters.popleft()
             lease = self._lease_locked(w.holder, w.expires_at)
-            if w.loop is None:
-                w.lease = lease
-                w.event.set()
-                return
             try:
                 w.loop.call_soon_threadsafe(_resolve, w.fut)
             except RuntimeError:  # its loop is closed: nobody is there to take it
@@ -199,9 +265,7 @@ class FairPermits:
 
     def _drop_locked(self, lease: _Lease) -> None:
         lease.active = False
-        if lease.holder is None:
-            self._anon -= 1
-        elif lease in self._leases:
+        if lease in self._leases:
             self._leases.remove(lease)
 
     def _give_back_locked(self, lease: _Lease) -> None:
@@ -239,37 +303,17 @@ class FairPermits:
         if until is not None and now >= until:
             self._waiters.remove(w)
             return True, 0.0
-        ends = [t for t in (until, self._next_expiry_locked()) if t is not None]
+        # math.inf (a caller with no deadline waits in line without bound) is no moment to wake at
+        ends = [t for t in (until, self._next_expiry_locked()) if t is not None and t != math.inf]
         return False, (min(ends) - now) if ends else -1.0
 
     # ── leased permits ────────────────────────────────────────────────────────────────────────
-    def take(self, holder, until: Optional[float], expires_at: Optional[float]) -> Optional[_Lease]:
-        """A permit whose lease ends at ``expires_at``, waiting in line until ``until`` (None: take it
-        only if one is free now and nobody is in line). None when none came in time."""
-        with self._lock:
-            lease = self._take_now_locked(holder, expires_at)
-            if lease is not None or until is None or until <= time.monotonic():
-                return lease
-            w = _Waiter(holder, expires_at)
-            self._waiters.append(w)
-        return self._wait_thread(w, until)
-
-    def _wait_thread(self, w: _Waiter, until: Optional[float]) -> Optional[_Lease]:
-        try:
-            while True:
-                with self._lock:
-                    done, pause = self._wait_step_locked(w, until)
-                    if done:
-                        return w.lease
-                w.event.wait(None if pause < 0 else max(pause, 0.0))
-        except BaseException:
-            self._leave_line(w)
-            raise
-
     async def atake(self, holder, until: Optional[float],
                     expires_at: Optional[float]) -> Optional[_Lease]:
-        """Async twin of ``take``: waits in the same line, on a future of the running loop (no thread
-        and no polling); cancelled, it leaves the line and passes on a permit already handed to it."""
+        """A permit held by ``holder`` whose lease ends at ``expires_at``, waiting in line until ``until``
+        (None: take it only if one is free now and nobody is in line; ``math.inf``: wait as long as it
+        takes). None when none came in time. Waits on a future of the running loop (no thread and no
+        polling); cancelled, it leaves the line and passes on a permit already handed to it."""
         loop = asyncio.get_running_loop()
         with self._lock:
             lease = self._take_now_locked(holder, expires_at)
@@ -300,11 +344,13 @@ class FairPermits:
 
     def renew(self, lease: Optional[_Lease], expires_at: float) -> None:
         """Move a live lease's end to ``expires_at`` when that is later (the request is making
-        progress). A no-op for a lease already given back or reclaimed."""
+        progress); a lease taken without an end (``expires_at`` None) gets this one, which is how a
+        ``BackendGuard`` hold starts it once its request's start is reserved. A no-op for a lease
+        already given back or reclaimed."""
         if lease is None:
             return
         with self._lock:
-            if lease.active and lease.expires_at is not None and expires_at > lease.expires_at:
+            if lease.active and (lease.expires_at is None or expires_at > lease.expires_at):
                 lease.expires_at = expires_at
 
     def give_back(self, lease: Optional[_Lease]) -> None:
@@ -318,44 +364,23 @@ class FairPermits:
         """Whether ``holder`` holds a live leased permit of this gate now."""
         with self._lock:
             self._reclaim_locked(time.monotonic())
-            return any(x.holder == holder for x in self._leases)
+            return any(x.holder is holder for x in self._leases)
 
     def reclaim_expired(self) -> None:
         """Take back the permits whose lease has run out (the health view calls this before it reads)."""
         with self._lock:
             self._reclaim_locked(time.monotonic())
 
-    # ── the threading-semaphore interface (no lease) ──────────────────────────────────────────────────
-    def acquire(self, blocking: bool = True, timeout: Optional[float] = None) -> bool:
-        with self._lock:
-            if self._take_now_locked(None, None) is not None:
-                return True
-            if not blocking or (timeout is not None and timeout <= 0):
-                return False
-            w = _Waiter(None, None)
-            self._waiters.append(w)
-        return self._wait_thread(w, None if timeout is None else time.monotonic() + timeout) is not None
 
-    def release(self) -> None:
-        with self._lock:
-            if self._anon <= 0:
-                raise ValueError("FairPermits released too many times")
-            self._anon -= 1
-            self._hand_over_locked()
-
-    def __enter__(self) -> bool:
-        return self.acquire()
-
-    def __exit__(self, *exc) -> None:
-        self.release()
-
-
-# THE CALLER'S DEADLINE (design decision 2, 2026-09-29). A gate never keeps a caller waiting past the
-# caller's own deadline: the permit wait and the start wait together stay within the declared
-# max_wait_s AND the time the caller has left, across every gate one request passes. The deadline
-# rides this context variable from where it is decided (broad and named search, omniseek_read, the health
-# probe) down to the gates; code with no deadline set gets the declared max_wait_s alone. Monotonic
-# seconds (time.monotonic), absolute.
+# THE CALLER'S DEADLINE (design decision 2, 2026-09-29; EYE-GATE-QUEUE, 2026-11-11). The caller's own
+# deadline is the ONE bound on how long a declared gate keeps it waiting: a full gate is a line, the
+# permit wait and the start wait together run until the caller's deadline, across every gate one
+# request passes, and only then is the request turned away unsent. A shorter per-gate ceiling
+# (gate.max_wait_s, 12 s for arXiv: four requests at one every 3 s) turned away half of an ordinary
+# 8-question fan-out that would have gone out had it queued, and was removed. The deadline rides this
+# context variable from where it is decided (search, omniseek_read, the health probe, field_skeleton, the
+# curator's bounded steps) down to the gates; code with no deadline set waits in line until served.
+# Monotonic seconds (time.monotonic), absolute.
 _deadline_var: contextvars.ContextVar = contextvars.ContextVar("omniseek_eye_deadline", default=None)
 
 
@@ -421,11 +446,22 @@ def current_initiator() -> Optional[str]:
 
 
 def wait_until(max_wait: float) -> float:
-    """The latest moment a gate may keep the current caller waiting: ``max_wait`` seconds from now,
-    or the caller's deadline when that comes first."""
+    """``max_wait`` seconds from now, or the caller's deadline when that comes first: the wait of a
+    module's own in-process semaphore (``bounded_async_slot``), which a declared gate does not use."""
     until = time.monotonic() + max(0.0, float(max_wait))
     d = _deadline_var.get()
     return until if d is None else min(until, d)
+
+
+def deadline_refusal(name: str, waited: float, tail: str = "") -> str:
+    """THE sentence for a request a declared gate turned away unsent: the caller's deadline came (or
+    its next allowed start fell past it) before the request could start. Names the gate, how long this
+    request waited at it, and (``tail``) the URL; who asked is added when ``tail`` does not carry it.
+    ``_probe.held_reason`` reads it by ``_probe.DEADLINE_WORDS``."""
+    if "by=" not in tail:
+        tail = f"{tail} [by={_initiator_var.get() or '?'}]"
+    return (f"{name}: {_probe.DEADLINE_WORDS} (waited {max(0.0, waited):.1f}s at the gate); "
+            f"not sent{tail}")
 
 
 class GateBusy(TimeoutError):
@@ -437,7 +473,7 @@ class GateBusy(TimeoutError):
 
 
 class RequestNotSent(Exception):
-    """Thrown into a hold to say its request never left (see HopGates.close(unsent=True))."""
+    """Thrown into a hold to say its request never left (see upstreams.AsyncHopGates.close(unsent=True))."""
 
 
 # REQUESTS THAT NEVER LEFT (review F8). A hold reserves its start slot, and a place in every window,
@@ -481,7 +517,7 @@ async def _apoll_acquire(gate, until: float) -> bool:
 
 
 def _request_s(request_s: Optional[float], max_wait: float) -> float:
-    """The request's own timeout; a path that cannot say it gets its declared ``max_wait`` instead."""
+    """The request's own timeout; a path that cannot say it gets its semaphore's ``max_wait`` instead."""
     return float(request_s) if request_s is not None else float(max_wait)
 
 
@@ -620,7 +656,8 @@ class BackendGuard:
     ``FairPermits`` (one first-come-first-served line, leased permits). ``break_after`` /
     ``break_for_s`` are the consecutive-failure count that
     opens the circuit and the seconds it stays open. ``min_interval_s`` is the minimum spacing
-    between request STARTS enforced by ``pace()`` (0.0 = no pacing, for a semaphore-only user).
+    between request STARTS enforced by the start slot of ``ahold`` (0.0 = no pacing, for a
+    semaphore-only user).
     ``extra_state`` is merged into ``.state`` for backends that carry extra breaker-adjacent fields
     (OpenAlex's per-bucket ``dry_until``). ``log`` overrides the logger the breaker-open warning is
     emitted through, so a backend can keep its own module logger name.
@@ -651,7 +688,7 @@ class BackendGuard:
         self._win_logs = [collections.deque() for _ in self.windows]
 
         # Concurrency cap: at most ``max_inflight`` in-flight calls across all callers + threads, one
-        # first-come-first-served line for sync and async callers, every permit on a lease.
+        # first-come-first-served line for every caller, every permit on a lease.
         self.sema = FairPermits(max_inflight, name)
 
         # Breaker state + its lock. The dict the health probes read directly (fails / open_until /
@@ -664,7 +701,8 @@ class BackendGuard:
         # Rate pacer: reserve the next request-start slot under this lock, then sleep (outside it).
         # ``floor``: the latest start a Retry-After (defer) asked for; a refund never rolls the next
         # start back below it (review N3).
-        self.pace_state: dict = {"next_at": 0.0, "floor": 0.0}
+        # ``sent_at``: when the latest request under this gate was handed to the transport (``adepart``).
+        self.pace_state: dict = {"next_at": 0.0, "floor": 0.0, "sent_at": None}
         self.pace_lock = threading.Lock()
 
     # ── rate pacer ────────────────────────────────────────────────────────────
@@ -672,8 +710,8 @@ class BackendGuard:
             self, on_backlog: Optional[Callable[[float], Optional[BaseException]]] = None, *,
             until: Optional[float] = None) -> float:
         """Reserve the next request-start slot (>= ``min_interval_s`` after the previous) UNDER the pace
-        lock and return the seconds to WAIT for it. The caller does the wait itself: a sync caller via
-        ``time.sleep`` (see ``pace``), a native-async caller via ``await anyio.sleep`` -- so the async
+        lock and return the seconds to WAIT for it. The caller does the wait itself, ``await anyio.sleep``
+        (``ahold``; the OpenAlex egress, ``_openalex``) -- so the async
         egress can honor the SAME shared rate gate WITHOUT holding a thread during the wait. The
         reservation (pure sync arithmetic under a brief lock, no IO) is safe on the event loop.
 
@@ -700,14 +738,32 @@ class BackendGuard:
             wait = start - now
             if until is not None and start > until:
                 raise ((on_backlog(wait) if on_backlog is not None else None)
-                       or GateBusy(f"{self.name}: next allowed start {wait:.1f}s away, past the "
-                                   "caller's budget; not sent"))
+                       or GateBusy(deadline_refusal(self.name, 0.0)))
             gap = self.min_interval_s + slack if self.min_interval_s > 0 else 0.0
             res = Reservation(start, wait, self.pace_state["next_at"], start + gap)
             self.pace_state["next_at"] = res.next_at
             for log in self._win_logs:
                 log.append(start)
         return res
+
+    def reserve_departure(self) -> float:
+        """When a request now handed to the transport may leave (monotonic): ``min_interval_s`` plus
+        the clock's resolution after the previous departure, or now; reserved under the pace lock, so
+        two requests reaching the transport together are spaced too (see ``adepart``)."""
+        with self.pace_lock:
+            now = time.monotonic()
+            last = self.pace_state.get("sent_at")
+            at = now
+            if last is not None and self.min_interval_s > 0:
+                at = max(now, last + self.min_interval_s + _clock_slack())
+            self.pace_state["sent_at"] = at
+        return at
+
+    def note_departure(self, at: float) -> None:
+        """The request leaves at ``at`` (another gate it runs under may hold it back past its own slot)."""
+        with self.pace_lock:
+            last = self.pace_state.get("sent_at")
+            self.pace_state["sent_at"] = at if last is None else max(last, at)
 
     def refund(self, res: "Reservation") -> None:
         """Hand back a reservation whose request never left (review F8): its place in every window,
@@ -757,112 +813,87 @@ class BackendGuard:
             self.pace_state["floor"] = max(self.pace_state.get("floor", 0.0), at)
 
     # ── who holds it + permit-first hold (the one entry point for a declared upstream) ─────────────
-    def held(self) -> bool:
-        """True iff the current holder (task, else thread) holds a live permit of this guard. The
-        record lives in the gate (review P2): it ends with the permit, whichever context or thread
-        gives the permit back (or when the lease runs out). A child task or thread is not the holder."""
+    def held(self, holder=None) -> bool:
+        """True iff ``holder`` (default: the running task, see ``Holder``) holds a live permit of this
+        guard. The record lives in the gate (review P2): it ends with the permit, whichever task gives
+        the permit back (or when the lease runs out). A child task is not the holder."""
         try:
-            return self.sema.held_by(_holder())
+            return self.sema.held_by(_holder(holder))
         except Exception:  # noqa: BLE001 (a read of the record must never break an egress)
             return False
 
     @staticmethod
-    def _late(on_busy, on_backlog):
-        return lambda w: (on_backlog(w) if on_backlog else None) or on_busy(w)
+    def _end(until: Optional[float], wait: bool) -> float:
+        """When this hold stops waiting: ``until`` if given, else the caller's deadline, else never
+        (``math.inf``: a caller with no deadline waits in line until served); now for a try-once."""
+        if not wait:
+            return time.monotonic()
+        if until is None:
+            until = _deadline_var.get()
+        return math.inf if until is None else until
 
-    def _bounds(self, max_wait: float, until: Optional[float], request_s: Optional[float],
-                wait: bool) -> "tuple[float, float, float]":
-        """(end of the waiting budget, seconds of it left, when the lease ends)."""
-        end = (wait_until(max_wait) if until is None else until) if wait else time.monotonic()
-        return end, end - time.monotonic(), _lease_end(end, request_s, max_wait)
+    def _start_lease(self, lease, end: float, start: float, request_s: Optional[float]) -> None:
+        """The permit's lease ends the request's own timeout after the end of the caller's waiting
+        bound (its deadline; with none, the reserved start), renewed by the request's progress (see
+        ``HoldHandle.renew``); a request whose timeout is unknown keeps the permit until it gives it
+        back."""
+        if request_s is not None:
+            self.sema.renew(lease, (start if end == math.inf else end) + float(request_s))
 
-    @contextlib.contextmanager
-    def hold(self, max_wait: float, on_busy: Callable[[float], BaseException],
-             on_backlog: Optional[Callable[[float], Optional[BaseException]]] = None, *,
-             until: Optional[float] = None, request_s: Optional[float] = None, wait: bool = True):
+    @contextlib.asynccontextmanager
+    async def ahold(self, on_refuse: Callable[[float], BaseException], *,
+                    until: Optional[float] = None, request_s: Optional[float] = None,
+                    wait: bool = True, holder=None):
         """Take a concurrency permit FIRST, then reserve and wait for the request-start slot WHILE
         holding it, then run the body; release on exit.
 
-        The order is the point. Pacing before the permit (``pace()`` then ``slot()``) lets callers
+        The order is the point. Pacing before the permit (a start slot, then a permit) lets callers
         whose slots were reserved while every permit was busy start back to back the moment a slow
         request frees one, so starts can land closer than ``min_interval_s``. Holding the permit
         while waiting for the slot means every start is at least ``min_interval_s`` after the
         previous one, and with ``max_inflight=1`` the upstream sees exactly one request at a time.
 
-        ONE budget for both waits (design decision 2): the permit wait (in the gate's one line, review
-        N1) and the start wait together end at ``until`` (monotonic), by default ``max_wait`` from now
-        or the caller's deadline if sooner. No permit by then raises ``on_busy``; a start slot past it
-        raises ``on_backlog(wait)`` (or ``on_busy``) at once, reserving nothing; a budget already used
-        up before the gate is tried raises ``on_backlog(0.0)`` (past this call's budget, not a
-        saturated gate). ``wait=False`` tries once: a permit free now with nobody in line and a start
-        slot open now, else the same errors at once (review P6: a caller holding a place in another
+        ONE bound for both waits, the caller's deadline (EYE-GATE-QUEUE): a full gate is a line, and
+        the permit wait (in the gate's one line, review N1, on a future of the running loop: no worker
+        thread, no polling, and no cancellation can leave it taken) and the start wait (``await
+        anyio.sleep``) together run until ``until`` (monotonic), by default the caller's deadline; with
+        neither, the caller waits until served. No permit by then, a start slot past it, or a deadline
+        already gone before the gate is tried raises ``on_refuse(seconds waited at this gate)``,
+        reserving nothing. ``wait=False`` tries once: a permit free now with nobody in line and a start
+        slot open now, else the same error at once (review P6: a caller holding a place in another
         line must not wait here).
 
-        LEASE (review P1): the permit's lease ends at the end of the waiting budget plus ``request_s``
-        (the request's own timeout; the declared ``max_wait`` when the caller cannot say it); then the
-        gate takes the permit back even if this holder never returns.
+        LEASE (review P1): the permit's lease ends ``request_s`` (the request's own timeout) after the
+        end of the waiting bound (the caller's deadline; with none, the reserved start); then the gate
+        takes the permit back even if this holder never returns.
+
+        HOLDER (EYE-TWINS-2): ``holder`` is the credential the permit is held by (default: the running
+        task, see ``Holder``). A blocking caller hands its own, so this block may be entered in one
+        task and left in another (``upstreams.egress`` enters and leaves it through two portal calls).
 
         Yields a ``HoldHandle`` (None when re-entered). A request that never left (an exception
         registered with ``register_unsent``, or a cancel before the body) hands its reservation back,
-        unless a response already arrived in this context while it was held (review N2).
-        Re-entrant per holder: inside an outer ``hold`` of the same guard it is a no-op."""
-        if self.held():
+        unless a response already arrived for it while it was held (review N2).
+        Re-entrant per holder: inside an outer hold of the same guard by the same holder it is a no-op."""
+        holder = _holder(holder)
+        if self.held(holder):
             yield None
             return
-        late = self._late(on_busy, on_backlog)
-        end, left, lease_end = self._bounds(max_wait, until, request_s, wait)
-        if wait and left <= 0:   # the budget was used up before the gate was tried: say so
-            raise late(0.0)
-        lease = self.sema.take(_holder(), end if wait else None, lease_end)
+        t0 = time.monotonic()
+        end = self._end(until, wait)
+        refuse = lambda _away=0.0: on_refuse(time.monotonic() - t0)  # noqa: E731
+        if wait and end <= t0:   # the deadline was gone before the gate was tried
+            raise refuse()
+        lease = await self.sema.atake(holder, end if wait else None, None)
         if lease is None:
-            raise on_busy(max(0.0, left))
+            raise refuse()
         try:
-            res = self.reserve(late, until=end if wait else None)
+            res = self.reserve(refuse, until=end if wait and end != math.inf else None)
             if not wait and res.wait > 0:
                 self.refund(res)
-                raise late(res.wait)
-            handle = HoldHandle(self.sema, lease, _request_s(request_s, max_wait))
-            token = _register_hold(handle)
-            in_body = False
-            try:
-                if res.wait > 0:
-                    time.sleep(res.wait)
-                in_body = True
-                yield handle
-            except BaseException as exc:
-                if (not in_body or isinstance(exc, _UNSENT)) and not handle.sent:
-                    self.refund(res)
-                raise
-            finally:
-                _unregister_hold(handle, token)
-        finally:
-            self.sema.give_back(lease)
-
-    @contextlib.asynccontextmanager
-    async def ahold(self, max_wait: float, on_busy: Callable[[float], BaseException],
-                    on_backlog: Optional[Callable[[float], Optional[BaseException]]] = None, *,
-                    until: Optional[float] = None, request_s: Optional[float] = None,
-                    wait: bool = True):
-        """Async twin of ``hold``: the permit is waited for in the same one line, on a future of the
-        running loop (no worker thread, no polling, and no cancellation can leave it taken), the slot
-        wait is ``await anyio.sleep``; same order, budget, lease, try-once mode, refund and
-        re-entrancy."""
-        if self.held():
-            yield None
-            return
-        late = self._late(on_busy, on_backlog)
-        end, left, lease_end = self._bounds(max_wait, until, request_s, wait)
-        if wait and left <= 0:   # the budget was used up before the gate was tried: say so
-            raise late(0.0)
-        lease = await self.sema.atake(_holder(), end if wait else None, lease_end)
-        if lease is None:
-            raise on_busy(max(0.0, left))
-        try:
-            res = self.reserve(late, until=end if wait else None)
-            if not wait and res.wait > 0:
-                self.refund(res)
-                raise late(res.wait)
-            handle = HoldHandle(self.sema, lease, _request_s(request_s, max_wait))
+                raise refuse()
+            self._start_lease(lease, end, res.start, request_s)
+            handle = HoldHandle(self.sema, lease, request_s, guard=self)
             token = _register_hold(handle)
             in_body = False
             try:
@@ -901,24 +932,6 @@ class BackendGuard:
             "leases_reclaimed": int(getattr(self.sema, "reclaimed", 0)),
         }
 
-    def pace(self, on_backlog: Optional[Callable[[float], Optional[BaseException]]] = None, *,
-             max_wait: Optional[float] = None, until: Optional[float] = None) -> "Reservation":
-        """Reserve the next request-start slot (>= ``min_interval_s`` after the previous), then wait
-        for it. The slot reservation is under the lock; the wait is NOT, so callers do not serialize
-        on the lock itself, only on the wire-rate. Bounds requests/second across all callers + threads.
-
-        The wait is bounded (design decision 2): by ``until`` if given, else ``max_wait`` from now cut to
-        the caller's deadline, else the caller's deadline alone. A start past that bound is not
-        reserved; ``on_backlog(wait)`` (or a GateBusy) is raised instead, so a pathological backlog
-        sheds load and drains. Returns the reservation (hand it to ``refund`` if the request is then
-        not sent)."""
-        if until is None:
-            until = wait_until(max_wait) if max_wait is not None else _deadline_var.get()
-        res = self.reserve(on_backlog, until=until)
-        if res.wait > 0:
-            time.sleep(res.wait)
-        return res
-
     def pace_backlog_s(self) -> float:
         """How long the NEXT request would wait on the rate gate, read-only (no reservation). Lets a
         caller fast-fail at its own site (beside its breaker check) when the backlog is pathological,
@@ -926,22 +939,25 @@ class BackendGuard:
         return max(0.0, self.pace_state["next_at"] - time.monotonic())
 
     @contextlib.asynccontextmanager
-    async def aslot(self, max_wait: float, on_busy: Callable[[float], BaseException], *,
+    async def aslot(self, on_refuse: Callable[[float], BaseException], *,
                     until: Optional[float] = None, request_s: Optional[float] = None):
-        """Bounded + cancellation-safe concurrency-cap acquire (async): wait in the gate's one line, on
-        a future of the running loop, until ``until`` (default ``max_wait`` from now, cut to the
-        caller's deadline) for a permit; if none comes in time, raise ``on_busy`` (fail fast -> the
-        caller degrades to []/None). No cancellation (AnyIO's or asyncio's own) can leave the permit
-        taken and no worker thread waits. The permit is on a lease (see ``hold``); a deadline already
-        past refuses at once (review N4). Guarantees release. (The sync ``slot`` was deleted 11-04,
-        async migration step seven: its last caller, the sync OpenAlex egress, went with it.)"""
-        end, left, lease_end = self._bounds(max_wait, until, request_s, True)
-        if left <= 0:
-            raise on_busy(0.0)
-        lease = await self.sema.atake(_holder(), end, lease_end)
+        """Cancellation-safe concurrency-cap acquire (async): wait in the gate's one line, on a future
+        of the running loop, until ``until`` (default the caller's deadline; none: until served) for a
+        permit; if none comes in time, raise ``on_refuse(seconds waited)`` (the caller degrades to
+        []/None). No cancellation (AnyIO's or asyncio's own) can leave the permit taken and no worker
+        thread waits. The permit's lease ends ``request_s`` after the caller's deadline (with none,
+        after it is taken; see ``ahold``); a deadline already past refuses at once (review N4). Guarantees release. (The sync ``slot`` was
+        deleted 11-04, async migration step seven: its last caller, the sync OpenAlex egress, went
+        with it.)"""
+        t0 = time.monotonic()
+        end = self._end(until, True)
+        if end <= t0:
+            raise on_refuse(0.0)
+        lease = await self.sema.atake(_holder(), end, None)
         if lease is None:
-            raise on_busy(left)
-        handle = HoldHandle(self.sema, lease, _request_s(request_s, max_wait))
+            raise on_refuse(time.monotonic() - t0)
+        self._start_lease(lease, end, time.monotonic(), request_s)
+        handle = HoldHandle(self.sema, lease, request_s, guard=self)
         token = _register_hold(handle)
         try:
             yield

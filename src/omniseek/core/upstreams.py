@@ -30,15 +30,18 @@ what the upstream actually reports:
                       tools, threads and event loops.
   aegress(url)        the host gate for any direct egress: a no-op for an ungated host or when the
                       current holder already holds that upstream (the owning module's own hold).
-                      The sync ``egress`` / ``hop_gates`` / ``HopGates`` (and _guard's sync
-                      ``BackendGuard.hold``) remain only for egress that blocks in a thread OmniSeek
-                      cannot hand to the event loop mid-request: the shared Chrome's page load
-                      (``browser_turn``, entered by _cdp's pool thread once it has the browser's turn;
-                      xianyu's CDP read) and the system push outlet's sync ``send`` (notify).
-  budget              a request's permit wait and start wait, over every gate it passes, stay
-                      within the declared max_wait_s AND the caller's own deadline (design decision 2,
-                      2026-09-29); past it the request is not sent. See _guard.wait_until.
-  redirects           HopGates holds the gates of the host a request is on: a redirect to the same
+                      The sync ``egress`` is a thin wrapper over the same async gates (EYE-TWINS-2),
+                      for egress that blocks in a thread OmniSeek cannot hand to the event loop
+                      mid-request: the shared Chrome's page load (``browser_turn``, entered by _cdp's
+                      pool thread once it has the browser's turn; xianyu's CDP read) and the system
+                      push outlet's sync ``send`` (notify). It holds the gates by a credential of its
+                      own (_guard.Holder), entered and let go through two portal calls.
+  budget              a full gate is a line: a request's permit wait and start wait, over every gate
+                      it passes, run until the caller's own deadline and only then is the request
+                      turned away unsent (EYE-GATE-QUEUE, 2026-11-11: the shorter declared
+                      max_wait_s was removed). A caller with no deadline waits until served. See
+                      _guard.deadline_refusal.
+  redirects           AsyncHopGates holds the gates of the host a request is on: a redirect to the same
                       host continues the same visit; a redirect to another host lets go of the first
                       host's gates, then takes the new host's within the time left; never two hosts'
                       gates at once (design decision 1). Every redirect-following path uses it.
@@ -90,8 +93,8 @@ from pathlib import Path
 from typing import Any, Callable, Iterable, Optional
 from urllib.parse import urlsplit
 
-from omniseek.core import _guard, _probe
-from omniseek.core._guard import BackendGuard, deadline_after, deadline_until, wait_until  # noqa: F401
+from omniseek.core import _guard, _probe, portal
+from omniseek.core._guard import BackendGuard, deadline_after, deadline_until  # noqa: F401
 
 logger = logging.getLogger(__name__)
 
@@ -100,7 +103,6 @@ UNPUBLISHED = "未公布"
 # A declaration older than this is flagged for re-checking (the terms of several upstreams changed
 # within months in 2025-2026: OpenAlex, Crossref, Wikimedia, Brave, Context7).
 RECHECK_AFTER_DAYS = 90
-_DEFAULT_MAX_WAIT_S = 15.0
 # A Retry-After longer than this still sheds callers (they fail fast), it just is not waited out.
 _DEFER_CAP_S = 600.0
 
@@ -110,7 +112,7 @@ _RATE_HEADER = re.compile(r"^(x-)?(rate-?limit|ratelimit)|^x-concurrency-limit$|
 
 
 class UpstreamBusy(RuntimeError):
-    """A declared upstream's gate had no permit / no start slot within the caller's budget: the
+    """A declared upstream's gate could not start the request before the caller's deadline: the
     request was NOT sent. Callers map it to their failure contract (None / [] / degrade)."""
 
     def __init__(self, *args) -> None:
@@ -432,15 +434,6 @@ def guard(uid: str, *, extra_state: Optional[dict] = None,
     return g
 
 
-def max_wait(uid: str) -> float:
-    """The declared ``gate.max_wait_s`` of upstream ``uid`` (default 15 s): the most one request may
-    wait on that upstream's gates in total, before the caller's own deadline cuts it shorter."""
-    return float(gate_value(uid, "max_wait_s", _DEFAULT_MAX_WAIT_S))
-
-
-_max_wait = max_wait
-
-
 def host_guard(host: str) -> BackendGuard:
     """THE gate for a host whose robots.txt sets a Crawl-delay: one request at a time, request
     starts at least the delay apart. Named by the host itself (upstream ids never contain a dot,
@@ -461,33 +454,27 @@ def host_guard(host: str) -> BackendGuard:
 
 def _gates_for_url(url: str) -> list:
     """The gates one request to ``url`` must pass, in the fixed order (upstream gate, then the
-    host's Crawl-delay gate): [(key, guard, max_wait)]. Taking both is the stricter of the two."""
+    host's Crawl-delay gate): [(key, guard)]. Taking both is the stricter of the two."""
     out = []
     uid = gated_uid_for_url(url)
     if uid is not None:
-        out.append((uid, guard(uid), _max_wait(uid)))
+        out.append((uid, guard(uid)))
     host = _host(url)
     if crawl_delay_for(host):
-        out.append((host, host_guard(host), _max_wait(uid) if uid else _DEFAULT_MAX_WAIT_S))
+        out.append((host, host_guard(host)))
     return out
 
 
-def _busy_factories(key: str, url: Optional[str] = None) -> tuple[Callable, Callable]:
-    """The two ways a gate turns a request away, both raised BEFORE anything is sent. The message ends
-    with the request's URL (credentials masked) and who asked (EYE-GATE-FIX G), so every log line that
-    prints the refusal can be counted by URL and initiator."""
+def _refusal(key: str, url: Optional[str] = None) -> Callable[[float], UpstreamBusy]:
+    """The one way a gate turns a request away, raised BEFORE anything is sent: the caller's deadline
+    came before the request could start (``_guard.deadline_refusal``). The message names the gate, how
+    long the request waited at it, the request's URL (credentials masked) and who asked
+    (EYE-GATE-FIX G), so every log line that prints the refusal can be counted by URL and initiator."""
     tail = _refusal_tail(url)
 
-    def on_busy(waited: float) -> UpstreamBusy:
-        return UpstreamBusy(f"{key}: no permit within {waited:.1f}s (gate saturated); not sent{tail}")
-
-    def on_late(wait: float) -> UpstreamBusy:
-        if wait <= 0:   # nothing left of the budget (design decision of 2026-09-29: not "saturated")
-            return UpstreamBusy(f"{key}: past this call's budget (declared max_wait_s or the caller's "
-                                f"deadline); not sent{tail}")
-        return UpstreamBusy(f"{key}: next allowed start {wait:.1f}s away, past this caller's budget "
-                            f"(declared max_wait_s or the caller's deadline); not sent{tail}")
-    return on_busy, on_late
+    def on_refuse(waited: float) -> UpstreamBusy:
+        return UpstreamBusy(_guard.deadline_refusal(key, waited, tail))
+    return on_refuse
 
 
 def loggable_url(url: str) -> str:
@@ -509,7 +496,7 @@ def _refusal_tail(url: Optional[str]) -> str:
 # host's one permit for the full 15 s timeout, the other two feed requests of the same bundle waited
 # 15 s and were refused, and the health check re-read that as "not verified". The ONE record of
 # whether a host answers lives here, per host (every host, gated or not), and is read by every egress
-# path that passes the HopGates (the shared http helpers, http.direct, the curl tier, CDP renders) and,
+# path that passes the AsyncHopGates (the shared http helpers, http.direct, the curl tier, CDP renders) and,
 # through the HostDown it raises, by the health check and the search _meta.
 #
 # PROVISIONAL (both numbers, 2026-10-20, spec EYE-GATE-FIX): HOST_DOWN_AFTER unreachable answers in a
@@ -649,31 +636,27 @@ def _check_host(url: str) -> None:
 
 @contextlib.asynccontextmanager
 async def ahold(uid: Optional[str], *, request_s: Optional[float] = None):
-    """Hold upstream ``uid``'s declared gate around ONE request: a permit, then the start slot, both
-    within ONE budget (the declared ``max_wait_s``, cut to the caller's deadline). For egress that is
-    not addressed by URL (a client library such as atproto: its blocking call then runs on a worker
-    thread inside this block). Raises ``UpstreamBusy`` without sending when the gate cannot admit the
+    """Hold upstream ``uid``'s declared gate around ONE request: a permit, then the start slot, waited
+    for until the caller's deadline (none: until served). For egress that is
+    not addressed by URL (a client library such as atproto's ``AsyncClient``, awaited inside this
+    block). Raises ``UpstreamBusy`` without sending when the gate cannot admit the
     request in time; ``uid=None`` is a no-op. ``request_s``: the request's own timeout, for the
-    permit's lease (see ``BackendGuard.hold``)."""
+    permit's lease (see ``BackendGuard.ahold``)."""
     if uid is None:
         yield None
         return
-    on_busy, on_late = _busy_factories(uid)
-    async with guard(uid).ahold(max_wait(uid), on_busy, on_late, request_s=request_s):
+    async with guard(uid).ahold(_refusal(uid), request_s=request_s):
         yield uid
 
 
 def budget_until(url: str, default: Optional[float] = None) -> Optional[float]:
-    """The monotonic moment one request to ``url`` must stop waiting by: the smallest declared
-    max_wait_s of its gates (else ``default``, else no bound of its own), cut to the caller's
-    deadline. For a path that waits somewhere else first (a render's Chrome turn), so that wait and
-    the gate wait share one budget."""
-    gates = _gates_for_url(url)
-    if gates:
-        return wait_until(min(mw for _, _, mw in gates))
-    if default is not None:
-        return wait_until(default)
-    return _guard.current_deadline()
+    """The monotonic moment one request to ``url`` must stop waiting by: the caller's deadline, else
+    ``default`` seconds from now (the path's own timeout), else no bound. For a path that waits
+    somewhere else first (a render's Chrome turn), so that wait and the gate wait share one budget."""
+    d = _guard.current_deadline()
+    if d is not None or default is None:
+        return d
+    return time.monotonic() + max(0.0, float(default))
 
 
 def check_browser(url: str) -> None:
@@ -685,7 +668,7 @@ def check_browser(url: str) -> None:
             "not rendered")
 
 
-class HopGates:
+class AsyncHopGates:
     """The declared gates of the host one request is on right now, carried across its redirects: the
     ONE place the redirect rule lives (design decision 1, 2026-09-29).
 
@@ -696,107 +679,38 @@ class HopGates:
     gated host without its gate). Two hosts' gates are never held at once, so two redirect chains can
     never wait on each other.
 
-    ONE budget for the whole chain (a chain is one read; design decisions of 2026-09-29 on section 16.5,
-    item 1, and on the objection in 16.8). With a caller's deadline, the deadline is the chain's
-    absolute end. Without one, the budget is the first gated hop's smallest declared ``max_wait_s``,
-    and only the time actually spent waiting at gates uses it up: a slow response or building a
-    client does not (a chain across N gated hosts used to be able to wait N times ``max_wait_s``).
-    Either way the gates of one hop (the upstream's, then the host's Crawl-delay gate, in that fixed
-    order) wait no longer than their own smallest declared ``max_wait_s`` (ruling 2), so a hop waits
-    at most the smaller of that and what is left of the chain's budget. One HopGates per request.
-    ``request_s`` is the request's own timeout: each permit's lease ends that long after its hop's
-    waiting budget (review P1; None: the gate's declared ``max_wait_s``). ``enter(url, wait=False)``
+    ONE bound for the whole chain (a chain is one read; design decisions of 2026-09-29 on section 16.5,
+    item 1, and on the objection in 16.8): the caller's deadline is the chain's absolute end, and the
+    gates of every hop (the upstream's, then the host's Crawl-delay gate, in that fixed order) wait
+    in line until it (EYE-GATE-QUEUE: no shorter per-gate ceiling); without a deadline a hop waits
+    until served. One AsyncHopGates per request. ``request_s`` is the request's own timeout: each
+    permit's lease ends that long after the chain's deadline (with none, after its hop's reserved
+    start; review P1; None: no lease, the permit is held until given back). ``enter(url, wait=False)``
     tries each gate once without waiting (review P6). ``close()`` lets go; ``close(unsent=True)``
     also hands back the reserved start, for a request that was never sent (review F8), unless a
-    response already arrived for it (review N2, see ``_guard.mark_sent``)."""
+    response already arrived for it (review N2, see ``_guard.mark_sent``).
 
-    def __init__(self, request_s: Optional[float] = None, check_host: bool = True) -> None:
-        self._host: Optional[str] = None
-        self._stack: Optional[contextlib.ExitStack] = None
-        self.key: Optional[str] = None
-        self._request_s = request_s
-        self._check_host = check_host   # False only for the curl tier's retry of a request that just failed
-        self._deadline: Optional[float] = _guard.current_deadline()   # the chain's absolute end
-        self._budget: Optional[float] = None   # without a deadline: set by the first gated hop
-        self._waited = 0.0                     # seconds spent waiting at gates so far
+    ``holder`` (EYE-TWINS-2): the credential every gate of the chain is held by (``_guard.Holder``);
+    None, the task that enters each hop. ``egress`` hands one, so the chain may be entered and let go
+    of in different tasks. ``handles`` are the holds of the current hop (``egress`` registers them in
+    its thread's context, ``_guard.holding``)."""
 
-    def _hop_end(self, gates: list, until: Optional[float]) -> float:
-        own = min(mw for _, _, mw in gates)               # this hop's own declared wait (ruling 2)
-        if self._deadline is None:
-            if self._budget is None:
-                self._budget = own                        # the first gated hop fixes the budget
-            own = min(own, max(0.0, self._budget - self._waited))
-        end = wait_until(own)                             # never past the caller's deadline
-        return end if until is None else min(end, until)
-
-    def enter(self, url: str, *, until: Optional[float] = None, wait: bool = True) -> None:
-        host = _host(url)
-        if host == self._host:
-            return
-        self.close()
-        if self._check_host:
-            _check_host(url)   # a host whose breaker is open: refused here, before any gate or permit
-        gates = _gates_for_url(url)
-        if gates:
-            end = self._hop_end(gates, until)
-            stack = contextlib.ExitStack()
-            t0 = time.monotonic()
-            try:
-                for key, g, mw in gates:
-                    on_busy, on_late = _busy_factories(key, url)
-                    stack.enter_context(g.hold(mw, on_busy, on_late, until=end,
-                                               request_s=self._request_s, wait=wait))
-            except BaseException as exc:
-                stack.__exit__(type(exc), exc, exc.__traceback__)  # the gates taken see why (refund)
-                raise
-            finally:
-                self._waited += time.monotonic() - t0   # only the time spent at the gates counts
-            self._stack, self.key = stack, gates[0][0]
-        self._host = host
-
-    def close(self, unsent: bool = False) -> None:
-        stack, self._stack, self._host, self.key = self._stack, None, None, None
-        if stack is None:
-            return
-        if unsent:
-            exc = _guard.RequestNotSent()
-            stack.__exit__(type(exc), exc, None)
-        else:
-            stack.__exit__(None, None, None)
-
-    def _abort(self, exc: BaseException, *, count: bool = True) -> Optional[str]:
-        host = self._host
-        stack, self._stack, self._host, self.key = self._stack, None, None, None
-        unreached = host if host and is_unreachable(exc) else None
-        if unreached and count:
-            note_host_failure(unreached, exc)   # the hop's connection was not made (see host liveness)
-        if stack is not None:
-            stack.__exit__(type(exc), exc, exc.__traceback__)
-        return unreached
-
-    def let_go(self, exc: BaseException) -> Optional[str]:
-        """Let go of this hop's gates after ``exc`` ended it, exactly as a failure leaving the block
-        does (a request that never left hands its start back), but WITHOUT counting it against the
-        host: the caller is about to try the same request another way (the libcurl tier). Returns the
-        host when ``exc`` says its connection was not made, for the caller to ``note_host_failure``
-        if the other way fails too; None otherwise."""
-        return self._abort(exc, count=False)
-
-
-class AsyncHopGates:
-    """Async twin of ``HopGates`` (same rule, same order, same one budget per chain)."""
-
-    def __init__(self, request_s: Optional[float] = None, check_host: bool = True) -> None:
+    def __init__(self, request_s: Optional[float] = None, check_host: bool = True,
+                 holder: Optional[_guard.Holder] = None) -> None:
         self._host: Optional[str] = None
         self._stack: Optional[contextlib.AsyncExitStack] = None
         self.key: Optional[str] = None
+        self.handles: tuple = ()
         self._request_s = request_s
         self._check_host = check_host   # False only for the curl tier's retry of a request that just failed
+        self._holder = holder
         self._deadline: Optional[float] = _guard.current_deadline()   # the chain's absolute end
-        self._budget: Optional[float] = None
-        self._waited = 0.0
 
-    _hop_end = HopGates._hop_end
+    def _hop_end(self, until: Optional[float]) -> Optional[float]:
+        """The earliest of the chain's deadline, the caller's deadline in force now and ``until``;
+        None when there is none (wait until served)."""
+        ends = [t for t in (self._deadline, _guard.current_deadline(), until) if t is not None]
+        return min(ends) if ends else None
 
     async def enter(self, url: str, *, until: Optional[float] = None, wait: bool = True) -> None:
         host = _host(url)
@@ -804,27 +718,30 @@ class AsyncHopGates:
             return
         await self.close()
         if self._check_host:
-            _check_host(url)
+            _check_host(url)   # a host whose breaker is open: refused here, before any gate or permit
         gates = _gates_for_url(url)
         if gates:
-            end = self._hop_end(gates, until)
+            end = self._hop_end(until)
             stack = contextlib.AsyncExitStack()
-            t0 = time.monotonic()
+            handles = []
             try:
-                for key, g, mw in gates:
-                    on_busy, on_late = _busy_factories(key, url)
-                    await stack.enter_async_context(g.ahold(mw, on_busy, on_late, until=end,
-                                                            request_s=self._request_s, wait=wait))
+                for key, g in gates:
+                    handles.append(await stack.enter_async_context(
+                        g.ahold(_refusal(key, url), until=end, request_s=self._request_s, wait=wait,
+                                holder=self._holder)))
             except BaseException as exc:
-                await stack.__aexit__(type(exc), exc, exc.__traceback__)
+                await stack.__aexit__(type(exc), exc, exc.__traceback__)  # the gates taken see why (refund)
                 raise
-            finally:
-                self._waited += time.monotonic() - t0
-            self._stack, self.key = stack, gates[0][0]
+            self._stack, self.key, self.handles = stack, gates[0][0], tuple(handles)
         self._host = host
 
+    def _detach(self):
+        host, stack = self._host, self._stack
+        self._stack, self._host, self.key, self.handles = None, None, None, ()
+        return host, stack
+
     async def close(self, unsent: bool = False) -> None:
-        stack, self._stack, self._host, self.key = self._stack, None, None, None
+        _host, stack = self._detach()
         if stack is None:
             return
         if unsent:
@@ -834,40 +751,31 @@ class AsyncHopGates:
             await stack.__aexit__(None, None, None)
 
     async def _abort(self, exc: BaseException, *, count: bool = True) -> Optional[str]:
-        host = self._host
-        stack, self._stack, self._host, self.key = self._stack, None, None, None
+        host, stack = self._detach()
         unreached = host if host and is_unreachable(exc) else None
         if unreached and count:
-            note_host_failure(unreached, exc)
+            note_host_failure(unreached, exc)   # the hop's connection was not made (see host liveness)
         if stack is not None:
             await stack.__aexit__(type(exc), exc, exc.__traceback__)
         return unreached
 
     async def let_go(self, exc: BaseException) -> Optional[str]:
-        """Async twin of ``HopGates.let_go``."""
+        """Let go of this hop's gates after ``exc`` ended it, exactly as a failure leaving the block
+        does (a request that never left hands its start back), but WITHOUT counting it against the
+        host: the caller is about to try the same request another way (the libcurl tier). Returns the
+        host when ``exc`` says its connection was not made, for the caller to ``note_host_failure``
+        if the other way fails too; None otherwise."""
         return await self._abort(exc, count=False)
-
-
-@contextlib.contextmanager
-def hop_gates(request_s: Optional[float] = None, *, check_host: bool = True):
-    """A ``HopGates`` for one request (``request_s``: its own timeout, for the leases), let go on
-    exit; an exception leaving the block reaches the gates first, so a request that never left hands
-    its reserved start back. ``check_host=False``: the host breaker is not consulted (the libcurl
-    tier's one retry of a request httpx could not connect: that failure is not counted until the retry
-    fails too, see ``HopGates.let_go``; if libcurl gets through, its answer closes a breaker earlier
-    failures opened meanwhile)."""
-    gates = HopGates(request_s, check_host)
-    try:
-        yield gates
-    except BaseException as exc:
-        gates._abort(exc)
-        raise
-    gates.close()
 
 
 @contextlib.asynccontextmanager
 async def ahop_gates(request_s: Optional[float] = None, *, check_host: bool = True):
-    """Async twin of ``hop_gates`` (same ``check_host``)."""
+    """An ``AsyncHopGates`` for one request (``request_s``: its own timeout, for the leases), let go on
+    exit; an exception leaving the block reaches the gates first, so a request that never left hands
+    its reserved start back. ``check_host=False``: the host breaker is not consulted (the libcurl
+    tier's one retry of a request httpx could not connect: that failure is not counted until the retry
+    fails too, see ``AsyncHopGates.let_go``; if libcurl gets through, its answer closes a breaker
+    earlier failures opened meanwhile)."""
     gates = AsyncHopGates(request_s, check_host)
     try:
         yield gates
@@ -880,23 +788,39 @@ async def ahop_gates(request_s: Optional[float] = None, *, check_host: bool = Tr
 @contextlib.contextmanager
 def egress(url: str, *, browser: bool = False, until: Optional[float] = None, wait: bool = True,
            request_s: Optional[float] = None):
-    """Hold every declared gate of ``url`` around ONE request (sync): the upstream's gate, then the
-    host's robots.txt Crawl-delay gate, within one budget (``HopGates``). Yields the first gate's key
-    (or None when nothing applies). Raises ``UpstreamBusy`` without sending when a gate cannot admit
-    the request in time. ``browser=True`` (a CDP page load) also raises ``DeclaredUserAgentRefused``
-    for a host whose upstream declares a User-Agent, since the shared browser cannot send it.
-    ``request_s``: the request's own timeout, for the permits' leases. ``wait=False``: one try."""
+    """Sync entry for a blocking call that must hold ``url``'s declared gates the whole time it runs
+    (the CDP pool's page load, ``browser_turn``; xianyu's CDP read; notify's push outlet): the
+    upstream's gate, then the host's robots.txt Crawl-delay gate, within one budget, exactly as
+    ``aegress``. A thin wrapper (EYE-TWINS-2): it makes a holder credential (``_guard.Holder``), takes
+    the gates on the event loop through ``portal.call`` (``AsyncHopGates.enter``), runs the block on
+    this thread with those holds registered in its context (``_guard.holding``), and lets go through
+    another ``portal.call``, as the same holder. Yields the first gate's key (or None when nothing
+    applies). Raises ``UpstreamBusy`` without sending when a gate cannot admit the request in time.
+    ``browser=True`` (a CDP page load) also raises ``DeclaredUserAgentRefused`` for a host whose
+    upstream declares a User-Agent, since the shared browser cannot send it. ``request_s``: the
+    request's own timeout, for the permits' leases. ``wait=False``: one try. Never call it on the
+    event loop's own thread (portal raises RuntimeError)."""
     if browser:
         check_browser(url)
-    with hop_gates(request_s) as gates:
-        gates.enter(url, until=until, wait=wait)
-        yield gates.key
+    gates = AsyncHopGates(request_s, holder=_guard.Holder())
+    portal.call(gates.enter, url, until=until, wait=wait)
+    try:
+        with _guard.holding(gates.handles):
+            yield gates.key
+    except BaseException as exc:
+        portal.call(gates._abort, exc)
+        raise
+    portal.call(gates.close)
 
 
 @contextlib.asynccontextmanager
 async def aegress(url: str, *, until: Optional[float] = None, wait: bool = True,
                   request_s: Optional[float] = None):
-    """Async twin of ``egress`` (same gates, same order, same budget)."""
+    """Hold every declared gate of ``url`` around ONE request: the upstream's gate, then the host's
+    robots.txt Crawl-delay gate, within one budget (``AsyncHopGates``). Yields the first gate's key
+    (or None when nothing applies). Raises ``UpstreamBusy`` without sending when a gate cannot admit
+    the request in time. ``request_s``: the request's own timeout, for the permits' leases.
+    ``wait=False``: one try. A blocking caller on a thread uses ``egress``, a wrapper over this."""
     async with ahop_gates(request_s) as gates:
         await gates.enter(url, until=until, wait=wait)
         yield gates.key
@@ -1218,21 +1142,6 @@ def source_on_site(source: str, target: str, backend: Optional[str] = None) -> b
             if "." in h and (h == site or h.endswith("." + site) or site.endswith("." + h)):
                 return True
     return False
-
-
-def strictest_gate_for_source(source: str, backend: Optional[str] = None) -> Optional[str]:
-    """The upstream id whose declared gate is the strictest of those covering ``source`` (listing it in
-    ``sources``, or ``backend`` in ``backends``, as ``coverage`` counts it): the smallest
-    gate.max_inflight, the earlier entry in upstreams.json on a tie; None when no entry covering it
-    declares a gate. Read-only."""
-    best: Optional[tuple[str, float]] = None
-    for uid, e in _load().items():
-        if not _covered(e, source, backend):
-            continue
-        n = gate_value(uid, "max_inflight")
-        if _is_num(n) and (best is None or n < best[1]):
-            best = (uid, n)
-    return best[0] if best else None
 
 
 def coverage(sources: Iterable[str], backend_of: Callable[[str], Optional[str]],

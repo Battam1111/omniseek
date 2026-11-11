@@ -44,7 +44,7 @@ from urllib.parse import urlparse
 import httpx
 
 from omniseek.core import _probe, auth, diag, http, upstreams
-from omniseek.core._guard import GateBusy
+from omniseek.core._guard import GateBusy, deadline_refusal
 from omniseek.core.normalize import Document, jsonsafe, mk_signal, to_utc
 from omniseek.core.sources.api._base import BaseAPIAdapter
 from omniseek import where
@@ -85,13 +85,8 @@ _CORE_MAX_INFLIGHT = _core_guard.max_inflight
 _core_sema = _core_guard.sema
 
 
-def _core_busy(waited: float) -> GateBusy:
-    return GateBusy(f"CORE gate busy after {waited:.1f}s")
-
-
-def _core_late(wait: float) -> GateBusy:
-    return GateBusy(f"CORE start slot {wait:.1f}s away (declared per-minute ceiling), past this "
-                    "caller's budget")
+def _core_refuse(waited: float) -> GateBusy:
+    return GateBusy(deadline_refusal("CORE gate", waited))
 
 
 # ── ASYNC EGRESS TWIN (S4) ───────────────────────────────────────────────────────────────────────
@@ -128,11 +123,9 @@ async def _acore_get(url: str, **kwargs):
     in-flight cap bounds sync + async requests TOGETHER against the one shared-key host (the reddit
     ``_arctic_sema`` precedent — ONE ``threading.BoundedSemaphore``, never a second ``asyncio`` one, so
     the async migration can never double the CORE burst). ``_core_guard.ahold`` waits for it in the
-    gate's one line on the loop (no thread), then for the declared start slot, bounds both waits by the
-    declared max_wait_s cut to the caller's deadline, and keeps acquire/release paired under
-    cancellation. Egress uses the module-level uncapped AsyncClient (see ``_acore_client``)."""
-    async with _core_guard.ahold(upstreams.max_wait("core"), _core_busy, _core_late,
-                                 request_s=http._timeout_s(kwargs.get("timeout"))):
+    gate's one line on the loop (no thread), then for the declared start slot, both until the caller's
+    deadline, and keeps acquire/release paired under cancellation. Egress uses the module-level uncapped AsyncClient (see ``_acore_client``)."""
+    async with _core_guard.ahold(_core_refuse, request_s=http._timeout_s(kwargs.get("timeout"))):
         return await http.adirect("GET", url, client=_acore_client(), **kwargs)
 
 

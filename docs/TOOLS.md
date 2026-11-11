@@ -40,7 +40,7 @@ List all sources: call this to ROUTE before searching.
 BOUNDED ORIENT: a bare (no-arg) call does NOT dump every source's facets. It returns the routing
 VOCABULARY (available_domains / available_regions with counts) + the capabilities verb index +
 `source_names` (the bare inventory) + counts, so the orient payload stays small no matter how far
-the roster grows (brain_orient's lesson). The per-source FACETS (kind / domains / regions / modes,
+the roster grows. The per-source FACETS (kind / domains / regions / modes,
 needs_credentials, explicit_only, stability, health, ...) plus the prose `description` arrive when
 you NARROW or ask verbose; reach for them on demand:
 • domain="jobs" / "papers" / … → only sources whose `domains` facet contains it, WITH their
@@ -147,9 +147,9 @@ ROUTING (all shapes): sources=None = all non-explicit_only, deadline-bounded; sl
 are listed in _meta.timed_out. With wait_s unset, the paper sources (domains "papers") get the
 named-search budget (45 s) instead of the broad one; _meta.paper_wait names those that came in
 late and those still out. A source one of OmniSeek's OWN gates held back is listed in
-_meta.held {source: {why, detail, n, partial}}, never in _meta.empty: why = 闸满 (no permit in time),
-时限不够 (its next allowed start fell past your deadline), 主机断路 (its host stopped answering and is
-cut off for a while); partial = some documents came back anyway. Its absence says nothing about the
+_meta.held {source: {why, detail, n, partial}}, never in _meta.empty: why = 时限不够 (a declared gate
+is a line, and your deadline came before its turn), 闸满 (the source's own in-process cap or breaker
+turned it away), 主机断路 (its host stopped answering and is cut off for a while); partial = some documents came back anyway. Its absence says nothing about the
 topic: re-run later or name it with a longer wait_s. explicit_only sources (browser/CDP + twitter_x) are excluded from
 the broad sweep → _meta.excluded_count (the size; the full name->reason map is in omniseek_sources) +
 _meta.excluded_relevant (the query-AWARE subset: walled/slow sources whose facets thematically
@@ -555,6 +555,19 @@ progress and returns its result when it finishes (``joined: true``), or a receip
 {status: "running", already_running: true, running_seconds, phase, note} with transcript "";
 call again later with the same arguments and the finished result comes back from the cache.
 
+QUEUED: the machine runs at most 2 transcriptions at a time (download, decode and recognition
+together) and starts none while the system's memory pressure is critical. A call over that limit returns at
+once with {status: "queued", queue_position, waiting_for: "slot" | "memory", note} and transcript "";
+the transcription keeps its place and runs without the caller. Call again with the same arguments:
+while it waits or runs you get its receipt, once it is done the cached result. Several slices of one
+long item are best sent one after another; sent together, they queue.
+
+Recognition runs in a separate speech worker process with its own memory cap (5376 MB, 7168 MB with
+diarize) and a time limit (2 minutes plus the audio length); a job over either, or a worker that
+crashes, returns {url, error, transcript:""} with the reason, and nothing is cached. A transcription
+asked for by a job that is then stopped is cancelled (queued: dropped; running: stopped) and returns
+{cancelled: true, error, transcript:""}.
+
 Returns: {url, transcript, chars, audio_seconds, asr_seconds, source, title, cached,
 start_seconds?, duration_seconds?, segments?, speakers?}, or {url, error, transcript:""} if no
 audio resolved.
@@ -666,17 +679,13 @@ this batch first, then decides the next batch).
 Bounded: max 10 calls. Read-only tools only.
 Calls naming search-index venues / nowcoder serialize through one paced backend (see server
 instructions (10)); >2 per gather adds a `warnings` entry.
-Calls that pass the same declared upstream gate (e.g. omniseek_read on several arXiv links) are sent
-to it one after another at that gate's own pace (as many at once as it declares, max_inflight),
-in their order in ``calls``, so none is refused for arriving with the whole batch; a batch of N
-takes about N times that gate's interval (arXiv API: 3 s). Every other call runs concurrently.
-Which gate an omniseek_read passes is read from upstreams.json alone: the first reader on the read's
-route that an entry covers (lists it in ``sources``, or its backend in ``backends``) with a host on
-the link's site (same host or a subdomain, "www." aside), then the gated entry covering that reader
-with the smallest max_inflight. Two costs:
-a source on the link's site that does not read the link still queues the call (slower, never
-refused); a reader of another site's links that no entry lists on that site is not queued (a
-refusal then says "request not sent", as before).
+Calls that pass the same declared upstream gate (e.g. omniseek_read on several arXiv links) all start
+at once and wait in that gate's own line, as any callers do: the gate lets them through at its own
+pace (as many at once as it declares, max_inflight), so a batch of N takes about N times that
+gate's interval (arXiv API: 3 s). Each call waits there no longer than its own tool's deadline,
+counted from the start of the gather (omniseek_read: the claiming reader's fetch_timeout, arXiv 90 s,
+else 30 s); one whose turn would come later is refused ("no start before the caller's deadline").
+Every other call runs concurrently.
 
 ``wait_s``: the patience budget. gather returns when all calls finish OR wait_s elapses,
 whichever comes first; calls still running, or still queued for their gate, are reported with
@@ -778,8 +787,8 @@ source_id) fingerprint diff against baseline). Each action's REQUIRED args:
 • action="create" (query; optional sources, schedule, notify) -> register a standing query that
   detects NEW results over time. The live service runs sensors automatically on their own
   ``schedule`` (hourly | daily | weekly; unknown = daily); a deployment that schedules sensors
-  from a resident-task table (SERVICES.tsv) runs one only once that table lists it, at the
-  row's 何时跑, and then the reply's ``schedule_note`` names the row to add. Use action="run" to
+  from your resident-task registry runs one only once that registry lists it, at the time
+  the entry gives, and then the reply's ``schedule_note`` names the entry to add. Use action="run" to
   trigger one manually. Returns the created sensor with its id. notify=True means the scheduler alerts when a scheduled run finds
   new results; optional notify_if=[keywords] narrows that alert to ONLY new results whose
   title/content match (notify_if_match="any" default, or "all"), so a broad standing query alerts

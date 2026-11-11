@@ -1558,7 +1558,7 @@ def build_search_plan(catalog: dict, policy: PolicySnapshot, query: str,
 
 def _note_held(held: dict, src: str, cap: list, docs: list) -> bool:
     """Record ``src`` in ``_meta.held`` when a gate or an open host breaker refused any of its requests
-    (EYE-GATE-FIX C): ``{why: 闸满 | 时限不够 | 主机断路, detail, n, partial}``, ``partial`` when documents
+    (EYE-GATE-FIX C): ``{why: 时限不够 | 闸满 | 主机断路, detail, n, partial}`` (``_probe.held_reason``), ``partial`` when documents
     came back anyway. Returns True when the source came back EMPTY because of it: such a source is not
     also listed in ``_meta.empty`` (it was not asked, which is not "nothing found")."""
     summary = _probe.summarize_held(cap)
@@ -3007,45 +3007,10 @@ def _adapter_absent_reason(name: str, captures: list) -> Optional[str]:
 def fetch_url_route(url: str) -> list["SourceAdapter"]:
     """The URL readers a read of ``url`` tries, in the order it tries them (each until one claims it,
     then the generic web read). THE one routing step: the read itself (``_afetch_url_via_adapters_with_
-    reason``) walks this list and ``fetch_url_upstream`` walks the same list to find the reader whose
-    gate comes first, so replacing this function changes both together. Read-only, sends nothing."""
+    reason``) walks this list. Read-only, sends nothing."""
     with _registry_lock:  # snapshot under the lock; iterate (slow per-adapter fetch) on the copy
         adapters_snapshot = list(_adapters.values())
     return _fetch_url_adapter_order(adapters_snapshot)
-
-
-def fetch_url_upstream(url: str) -> Optional[str]:
-    """The upstream id (upstreams.json) whose declared gate a read of ``url`` passes FIRST, or None.
-
-    Derived from upstreams.json alone, no reader declares it (EYE-GATHER-PACE-R2): walk
-    ``fetch_url_route(url)`` in order and take the first reader that has a declaration on the URL's site
-    (``upstreams.source_on_site``: an entry covering the reader names a host on the same site, so an
-    arxiv.org link meets the arxiv reader through export.arxiv.org). An entry covers a reader the way
-    ``upstreams.coverage`` counts it: its name in ``sources``, or its backend (``backend_of``) in
-    ``backends`` (EYE-REG-CHECK: the 41 OpenAlex slices are under the openalex entry's backends only).
-    That reader sends the first request; its gate is the strictest of the gated entries covering it
-    (``upstreams.strictest_gate_for_source``: smallest max_inflight, the earlier entry on a tie), or
-    None when it is under none. No reader on the site, or a reader the declarations leave out, is None
-    too: the caller treats the read as ungated, and a gate that then refuses it says so as always
-    ("request not sent"). Never raises (a scheduling hint must never break a read).
-
-    The route itself does not depend on ``url`` (every reader, in one order), and the declarations say
-    which hosts a source SENDS to, not which links it READS; the site match stands in for "reads this
-    link". Its two costs: a source declared on the link's site that does not read the link still
-    answers (the call queues behind a gate it never meets: slower, never refused); a reader of links on
-    another site, with no entry listing it on that site, answers nothing (not queued)."""
-    try:
-        from omniseek.core import upstreams as _ups
-        for adapter in fetch_url_route(url):
-            name = getattr(adapter, "name", None)
-            if not name:
-                continue
-            backend = backend_of(name)
-            if _ups.source_on_site(name, url, backend):
-                return _ups.strictest_gate_for_source(name, backend)
-    except Exception as exc:  # noqa: BLE001
-        logger.debug("fetch_url_upstream: no answer for %s: %s", url, exc)
-    return None
 
 
 async def _afetch_url_via_adapters_with_reason(

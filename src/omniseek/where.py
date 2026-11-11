@@ -1,8 +1,13 @@
 """Where OmniSeek keeps its data: the ONE module that names those locations.
 
 Every other module and script asks this one; none of them builds a path under the home directory on
-its own. So a change of layout is a change here, and a deployment with a different root (the public
-build) changes the few defaults below and nothing else.
+its own.
+
+Where the data lives is not written here. A deployment that has a parts table (a release tree carries
+``.omo_places.json`` at its root, generated from the table; a source checkout has
+``10_deploy/parts.json``) names every data location there, and each function below takes its location
+from that table BY NAME: a name the table lacks raises NotRegistered, which says where to register it.
+Without a table (the public build), each function falls back to the default written next to it.
 
 Each location is computed from the HOME of the calling process at CALL time (``Path.home()``), never
 frozen at import: a process started with another HOME (a rehearsal home, a test's temporary home)
@@ -21,6 +26,7 @@ can ask it on the command line: ``python3 <this file> state`` prints that one lo
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 from typing import Callable, Dict, Optional
@@ -28,6 +34,82 @@ from typing import Callable, Dict, Optional
 # The repository's structure check reads this line: only a part's location module may build a path
 # from the home directory, and each part has exactly one.
 OMO_LOCATION_MODULE = "omniseek"
+
+
+# ── the parts table: data locations by name ───────────────────────────────────────────────────────
+
+PLACES_FILE = ".omo_places.json"
+_TABLE: list = []
+
+
+class NotRegistered(LookupError):
+    """A data location the parts table does not name; the message says where to register it."""
+
+
+def _read_table(start: str):
+    """Look upward from start for the table: the release tree's PLACES_FILE, or a checkout's
+    10_deploy/parts.json. Returns (source, {part: (home, {name: path})}) or (None, None); paths are
+    as the table writes them (relative to the home directory unless absolute)."""
+    import json
+    d = start
+    while True:
+        f = os.path.join(d, PLACES_FILE)
+        if os.path.isfile(f):
+            with open(f, encoding="utf-8") as h:
+                doc = json.load(h)
+            return f, {p: (v["home"]["rel"], {n: e["rel"] for n, e in v["names"].items()})
+                       for p, v in doc["parts"].items()}
+        f = os.path.join(d, "10_deploy", "parts.json")
+        if os.path.isfile(f):
+            with open(f, encoding="utf-8") as h:
+                doc = json.load(h)
+            return f, {p: (v["home"].rstrip("/"), {n: e["path"].rstrip("/") for n, e in (v.get("data") or {}).items()
+                                                   if isinstance(e, dict)})
+                       for p, v in doc["parts"].items() if isinstance(v, dict) and v.get("home") and "target" not in v}
+        up = os.path.dirname(d)
+        if up == d:
+            return None, None
+        d = up
+
+
+def _table():
+    if not _TABLE:
+        _TABLE.append(_read_table(os.path.dirname(os.path.realpath(__file__))))
+    return _TABLE[0]
+
+
+def has_table() -> bool:
+    """Whether this deployment has a parts table (False in the public build)."""
+    return _table()[1] is not None
+
+
+def _at(name: str, default: Callable[[], Optional[Path]], part: str = OMO_LOCATION_MODULE,
+        child: Optional[str] = None) -> Optional[Path]:
+    """The data location registered as ``name`` under ``part`` (plus ``child`` inside it), or
+    ``default()`` when there is no table. A table without the name raises NotRegistered."""
+    src, t = _table()
+    if t is None:
+        return default()
+    names = t.get(part, (None, {}))[1]
+    if name not in names:
+        raise NotRegistered(f"{name} is not registered: add it under parts.{part}.data in 10_deploy/parts.json, "
+                            f"then release (table {src})")
+    p = Path.home() / names[name]
+    return p / child if child else p
+
+
+def _part_home(part: str, default: Callable[[], Path]) -> Path:
+    """A part's home directory as the table writes it, or ``default()`` without a table."""
+    src, t = _table()
+    if t is None:
+        return default()
+    if part not in t:
+        raise NotRegistered(f"the parts table {src} has no part {part}")
+    return Path.home() / t[part][0]
+
+
+def _none() -> None:
+    return None
 
 
 def home() -> Path:
@@ -69,7 +151,8 @@ def not_live_reason() -> str:
 # ── OmniSeek's own data ────────────────────────────────────────────────────────────────────────────
 
 def root() -> Path:
-    return Path.home() / ".omniseek"
+    """OmniSeek's own home (its code and data directories sit under it)."""
+    return _part_home(OMO_LOCATION_MODULE, lambda: Path.home() / ".omniseek")
 
 
 def credentials() -> Path:
@@ -77,19 +160,31 @@ def credentials() -> Path:
 
 
 def state() -> Path:
-    return root() / "state"
+    return _at("state", lambda: root() / "state")
 
 
 def logs() -> Path:
-    return root() / "logs"
+    return _at("logs", lambda: root() / "logs")
 
 
 def debug() -> Path:
-    return root() / "debug"
+    return _at("debug", lambda: root() / "debug")
 
 
 def models() -> Path:
-    return root() / "models"
+    return _at("models", lambda: root() / "models")
+
+
+def scratch() -> Path:
+    """Per-process temporary files: an eye process's own temp directory is ``<scratch>/<pid>``, swept
+    once that process is gone (omniseek.core.scratch)."""
+    return _at("scratch", lambda: root() / "scratch")
+
+
+def asr_run() -> Path:
+    """The speech workers' shared state across eye processes: the transcription slot locks, the
+    inference lock and each live eye process's control socket (omniseek.core.asr_sched)."""
+    return _at("asr", lambda: root() / "asr")
 
 
 CHROME_PROFILES = ("cdp", "xhs", "xhs-cn")
@@ -99,19 +194,19 @@ def chrome(name: str) -> Path:
     """The user-data directory of one logged-in browser (``cdp`` is the shared 9222 one)."""
     if name not in CHROME_PROFILES:
         raise ValueError(f"unknown browser profile {name!r} (known: {', '.join(CHROME_PROFILES)})")
-    return root() / f"chrome-{name}"
+    return _at(f"chrome-{name}", lambda: root() / f"chrome-{name}")
 
 
 def profile_json() -> Path:
-    return root() / "profile.json"
+    return _at("profile", lambda: root() / "profile.json")
 
 
 def signposts_json() -> Path:
-    return root() / "signposts.json"
+    return _at("signposts", lambda: root() / "signposts.json")
 
 
 def watchlist_json() -> Path:
-    return root() / "watchlist.json"
+    return _at("watchlist", lambda: root() / "watchlist.json")
 
 
 def modelscope_cache() -> Path:
@@ -168,7 +263,7 @@ def egress2_state() -> Optional[Path]:
     """The second exit egress2's state file (its generator writes it on every start): the exit-node sweep
     (eye.exit_node) reads its test port ``probe``, test group ``probe_group`` and ``control_sock`` there.
     None when the deployment has no egress2."""
-    return None  # the public build ships no second exit
+    return _at("egress2-state", _none, part="services")
 
 
 def proxy_control() -> Optional[Path]:
@@ -239,6 +334,8 @@ NAMES: Dict[str, Callable[[], Optional[Path]]] = {
     "logs": logs,
     "debug": debug,
     "models": models,
+    "scratch": scratch,
+    "asr": asr_run,
     "modelscope-cache": modelscope_cache,
     "chrome-cdp": lambda: chrome("cdp"),
     "chrome-xhs": lambda: chrome("xhs"),

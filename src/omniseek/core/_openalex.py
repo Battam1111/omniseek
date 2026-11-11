@@ -34,7 +34,7 @@ from tenacity import (AsyncRetrying, RetryCallState, retry_if_exception, retry_i
                       stop_after_attempt)
 
 from omniseek.core import _probe, auth, diag, http, upstreams
-from omniseek.core._guard import counts_against_upstream
+from omniseek.core._guard import counts_against_upstream, current_deadline, deadline_refusal
 from omniseek.core.normalize import to_utc
 
 logger = logging.getLogger(__name__)
@@ -71,14 +71,12 @@ _BREAK_FOR_S = 120.0  # seconds the circuit stays open
 # cron, a workflow's cohort burst) can never spike the rate and 429 the shared key. The semaphore bounds
 # CONCURRENCY, the pacer bounds RATE; together a burst is impossible by construction (the root cause of
 # the self-DOS the all-at-once health probe used to cause). The numbers live in upstreams.json.
-# Hard cap on how long ONE caller may wait on the rate gate. Without it, an OA 429 / budget-exhaustion
-# storm (40+ OA sources fanning out, each retry re-reserving a slot) grows the backlog unboundedly and
-# a fresh caller inherits the WHOLE queue — the same unbounded-pace-wait bug that made an S2
-# field_skeleton sit 886s on its gate (brain: eye-s2-rate-gate-hang-2026-06-21). Past this, fail fast
-# (raise OpenAlexDown → caller degrades to cache/empty) instead of hanging for minutes.
-# The value is the declared gate.max_wait_s of "openalex" (design decision 2, 2026-09-29): ONE budget for
-# the start wait and the permit wait of an attempt together, cut to the caller's own deadline.
-_PACE_MAX_WAIT_S = upstreams.max_wait("openalex")
+# How long ONE caller may wait on the gate: until its own deadline (EYE-GATE-QUEUE, 2026-11-11), the
+# start wait and the permit wait of an attempt together. An OA 429 / budget-exhaustion storm (40+ OA
+# sources fanning out, each retry re-reserving a slot) grows the backlog; a start past the caller's
+# deadline fails fast (raise OpenAlexDown → caller degrades to cache/empty) without reserving, so the
+# backlog drains (the S2 field_skeleton that sat 886s on its gate had no deadline; brain:
+# eye-s2-rate-gate-hang-2026-06-21).
 
 # The shared load-guard (concurrency cap + rate pacer + circuit breaker): the registry's ONE OpenAlex
 # BackendGuard, built from the declared gate (upstreams.json "openalex"), so any other egress to
@@ -127,10 +125,10 @@ class OpenAlexDown(RuntimeError):
         _probe.note_held(str(self))   # a running health check records that nothing was sent
 
 
-def _slot_busy(wait: float) -> OpenAlexDown:
-    """Concurrency-permit exhaustion -> the same degrade-to-cache/empty path as breaker-open / budget
-    dry / a pathological rate backlog. Handed to _guard.slot / _guard.aslot as their on_busy factory."""
-    return OpenAlexDown(f"concurrency pool saturated (no slot in {wait:.0f}s); degrade")
+def _refuse(waited: float) -> OpenAlexDown:
+    """The caller's deadline came before the gate could start the request -> the same
+    degrade-to-cache/empty path as breaker-open / budget dry. Handed to _guard.reserve / _guard.aslot."""
+    return OpenAlexDown(deadline_refusal("openalex gate", waited))
 
 
 def breaker_open() -> bool:
@@ -153,14 +151,9 @@ def unavailable() -> bool:
     return not _open_lanes({})
 
 
-def _late(wait: float) -> OpenAlexDown:
-    return OpenAlexDown(f"rate-gate slot {wait:.0f}s away, past this caller's budget; degrade")
-
-
 def _pace_backlog_s() -> float:
-    """How long the NEXT request would wait on the rate gate, read-only (no reservation). >
-    _PACE_MAX_WAIT_S means the backlog is pathological (a 429 storm) and aget_json fails fast instead
-    of inheriting the whole queue. The fast-fail lives at aget_json's top (beside the breaker check),
+    """How long the NEXT request would wait on the rate gate, read-only (no reservation). Past the
+    caller's deadline, aget_json fails fast instead of reserving a start it could not use. The fast-fail lives at aget_json's top (beside the breaker check),
     not in the pacer, so it never tangles with the in-loop retry/fails bookkeeping."""
     return _guard.pace_backlog_s()
 
@@ -416,9 +409,9 @@ async def aget_json(path: str, params: Optional[dict] = None, timeout: float = T
             raise _down
 
     _backlog = _pace_backlog_s()
-    if time.monotonic() + _backlog > upstreams.wait_until(_PACE_MAX_WAIT_S):
-        _down = OpenAlexDown(f"rate-gate backlog {_backlog:.0f}s, past this caller's budget "
-                             f"(declared {_PACE_MAX_WAIT_S:.0f}s or the caller's deadline); OA storming, degrade")
+    _until = current_deadline()
+    if _until is not None and time.monotonic() + _backlog > _until:
+        _down = _refuse(0.0)
         diag.note("openalex.get_json", url=f"{BASE}{path}", exc=_down)
         raise _down
 
@@ -435,16 +428,17 @@ async def aget_json(path: str, params: Optional[dict] = None, timeout: float = T
 
     async def _attempt(lane_name: str, p: dict):
         """One try on one lane (mirror get_json's _attempt)."""
-        # ONE budget per attempt for the start wait and the permit wait (design decision 2)
-        until = upstreams.wait_until(_PACE_MAX_WAIT_S)
-        res = _guard.reserve(_late, until=until)  # rate cap: reserve the slot (sync, brief)...
+        # ONE bound per attempt for the start wait and the permit wait: the caller's deadline
+        until = current_deadline()
+        t0 = time.monotonic()
+        res = _guard.reserve(lambda _away: _refuse(0.0), until=until)  # rate cap: reserve the slot (sync, brief)...
         sent = False
         try:
             if res.wait > 0:
                 await anyio.sleep(res.wait)     # ...then wait WITHOUT holding a thread
             # concurrency cap, polled in this coroutine (no worker thread, and no cancel can
             # strand the permit) + BOUNDED; released before the retry sleep (mirror get_json).
-            async with _guard.aslot(_PACE_MAX_WAIT_S, _slot_busy, until=until,
+            async with _guard.aslot(lambda w: _refuse(time.monotonic() - t0), until=until,
                                     request_s=timeout):
                 sent = True
                 resp = await _aget_client().get(f"{BASE}{path}", params=p, timeout=timeout)

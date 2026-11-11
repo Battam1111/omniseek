@@ -203,9 +203,13 @@ def capture_answers():
 _held_var: contextvars.ContextVar[Optional[list]] = contextvars.ContextVar(
     "omniseek_eye_held_capture", default=None)
 
-HELD_FULL = "闸满"          # no permit within the caller's budget
-HELD_LATE = "时限不够"      # the next allowed start, or the budget itself, ran past the caller's time
+HELD_FULL = "闸满"          # a module's own in-process cap or breaker turned it away (not a declared gate)
+HELD_LATE = "时限不够"      # a declared gate: the caller's deadline came before the request could start
 HELD_DOWN = "主机断路"      # the host's breaker is open (see upstreams.HostDown)
+
+# The words every declared gate's refusal carries (``_guard.deadline_refusal``, EYE-GATE-QUEUE): since a
+# full gate is a line, the caller's deadline is the only reason a declared gate turns a request away.
+DEADLINE_WORDS = "no start before the caller's deadline"
 
 
 def _capture_held(kind: str, detail) -> None:
@@ -232,15 +236,13 @@ def held_reason(kind: str, detail: str) -> str:
     """Which of the three reasons one captured refusal is (HELD_FULL / HELD_LATE / HELD_DOWN)."""
     if kind == "host":
         return HELD_DOWN
-    d = str(detail)
-    if "budget" in d or "next allowed start" in d or "past the caller" in d:
-        return HELD_LATE
-    return HELD_FULL
+    return HELD_LATE if DEADLINE_WORDS in str(detail) else HELD_FULL
 
 
 def summarize_held(cap: list) -> Optional[dict]:
     """``{"why", "detail", "n"}`` for a capture (the most telling reason first: a broken host, then a
-    full gate, then a short budget), or None when nothing was held."""
+    module's own cap or breaker, then the caller's deadline at a declared gate), or None when nothing
+    was held."""
     if not cap:
         return None
     reasons = [(held_reason(k, d), d) for k, d in cap]

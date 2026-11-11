@@ -29,7 +29,7 @@ import anyio
 
 from omniseek.core import _openalex as oa
 from omniseek.core import _s2
-from omniseek.core import cache, portal
+from omniseek.core import _guard, cache, portal
 
 logger = logging.getLogger(__name__)
 
@@ -588,12 +588,15 @@ async def afield_skeleton(query: Optional[str] = None, seeds: Optional[list[str]
     t0 = time.monotonic()
     deadline_at = t0 + (deadline_s if deadline_s is not None else _ASSEMBLE_DEADLINE_S)
     seed_report: dict = {}
-    if source == "s2":
-        seed_ids, works, deadline_hit = await _as2_assemble(query, seeds, n_seeds, citers_per_seed,
-                                                            deadline_at, report=seed_report)
-    else:
-        seed_ids, works, deadline_hit = await _aoa_assemble(query, seeds, n_seeds, citers_per_seed,
-                                                            deadline_at)
+    # The overall budget is also the caller's deadline at the S2 / OpenAlex gates: a call waits in
+    # their line until it, never past it (EYE-GATE-QUEUE).
+    with _guard.deadline_until(deadline_at):
+        if source == "s2":
+            seed_ids, works, deadline_hit = await _as2_assemble(query, seeds, n_seeds, citers_per_seed,
+                                                                deadline_at, report=seed_report)
+        else:
+            seed_ids, works, deadline_hit = await _aoa_assemble(query, seeds, n_seeds, citers_per_seed,
+                                                                deadline_at)
     unresolved = seed_report.get("unresolved") or []
     # A seed counts as resolved only when its own record came back; a placeholder kept for its edges
     # is still reported under seeds_unresolved.

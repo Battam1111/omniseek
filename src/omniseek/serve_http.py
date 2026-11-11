@@ -284,8 +284,9 @@ def _raise_fd_limit(want: int = 16384) -> None:
 def main() -> None:
     logging.basicConfig(level=logging.INFO,
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
-    from omniseek.core import _lograte
+    from omniseek.core import _lograte, scratch
     _lograte.install_on_root()  # no single logger may flood the boot log (fresh-install OpenAlex storm)
+    scratch.install()  # this process's own temp directory; ended processes' leftovers go (eye.scratch)
     _raise_fd_limit()  # a 95-source fan-out under nested omniseek_gather needs headroom over macOS's 256 default
     from omniseek.core import cache
     pruned = cache.clear_expired()  # TTL only gates reads; sweep dead files each (re)start

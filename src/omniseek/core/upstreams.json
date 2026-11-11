@@ -1,8 +1,8 @@
 {
- "_doc": "One entry per independent upstream OmniSeek sends requests to. terms = what the upstream publishes (a number, or 未公布 plus where_checked saying where we looked; url + checked date always). gate = what OmniSeek enforces through the shared BackendGuard (never looser than terms; http_gate false = enforced by the module's own pacer). terms.robots_crawl_delay_s = the Crawl-delay a host's robots.txt sets for User-agent *; each such host gets its own gate (one request at a time, starts at least the delay apart), taken after the upstream gate so the stricter always holds (design decision, 2026-09-29). terms.max_concurrency 1 also makes the shared http clients use a no-keep-alive HTTP/1.1 transport and send Connection: close for that upstream's hosts. user_agent = the User-Agent the upstream's policy requires: every shared egress layer sends exactly this string to the entry's hosts (redirect hops included) and the shared browser refuses them; the one place it is written (design decision, 2026-09-29). hosts = exact host names; an entry that starts with '.' is a domain suffix and matches every subdomain of that domain, not the bare domain (list that on its own); for one host a gated entry wins, then an exact entry, then the longest suffix (design decision, 2026-09-29). disabled = OmniSeek does not send to this upstream: {reason, source, checked, ...}; the code that would send reads it, sends nothing and reports the reason (design decision, 2026-09-29). pending = a published value not enforced yet and why. paths = path prefixes (each starting with '/'): the entry then owns only the URLs on its hosts whose path starts with one of them, ahead of the host's other entries; a Crawl-delay or a User-Agent cannot be scoped to a path (EYE-RSS-3, 2026-10-24: export.arxiv.org full text vs its API). gate.provisional = why a gate number is provisional and how it is to be recalibrated. gate.break_after / gate.break_for_s = the guard's circuit breaker: that many failures in a row that say the upstream is unhealthy (_guard.counts_against_upstream: a 404 / 410 / 400 / 422 answer is not one) open it for that many seconds (default 5 and 120); an upstream's breaker is this one, never a failure count and cooldown kept in the module (EYE-BREAKER-ONE, 2026-11-07; an adapter's account-safety breaker, which stops a logged-in account on captcha or risk signals, is a different thing and stays in the adapter). A new source must be listed under an existing upstream's sources (or its backend under backends) or get its own entry (the merge-gate test that failed otherwise was deleted in TEST-CUT; nothing checks it now). sources and backends are also how omniseek_gather knows which gate an omniseek_read passes first (fetcher.fetch_url_upstream, EYE-GATHER-PACE-R2; backends since EYE-REG-CHECK): the first reader on the read's route that some entry covers (its name in sources or its backend in backends, as upstreams.coverage counts it) with a host on the link's site, then the gated entry covering that reader with the smallest max_inflight. Terms research: task R, 2026-09-28; robots sweeps 2026-09-28.",
+ "_doc": "One entry per independent upstream OmniSeek sends requests to. terms = what the upstream publishes (a number, or 未公布 plus where_checked saying where we looked; url + checked date always). gate = what OmniSeek enforces through the shared BackendGuard (never looser than terms; http_gate false = enforced by the module's own pacer). terms.robots_crawl_delay_s = the Crawl-delay a host's robots.txt sets for User-agent *; each such host gets its own gate (one request at a time, starts at least the delay apart), taken after the upstream gate so the stricter always holds (design decision, 2026-09-29). terms.max_concurrency 1 also makes the shared http clients use a no-keep-alive HTTP/1.1 transport and send Connection: close for that upstream's hosts. user_agent = the User-Agent the upstream's policy requires: every shared egress layer sends exactly this string to the entry's hosts (redirect hops included) and the shared browser refuses them; the one place it is written (design decision, 2026-09-29). hosts = exact host names; an entry that starts with '.' is a domain suffix and matches every subdomain of that domain, not the bare domain (list that on its own); for one host a gated entry wins, then an exact entry, then the longest suffix (design decision, 2026-09-29). disabled = OmniSeek does not send to this upstream: {reason, source, checked, ...}; the code that would send reads it, sends nothing and reports the reason (design decision, 2026-09-29). pending = a published value not enforced yet and why. paths = path prefixes (each starting with '/'): the entry then owns only the URLs on its hosts whose path starts with one of them, ahead of the host's other entries; a Crawl-delay or a User-Agent cannot be scoped to a path (EYE-RSS-3, 2026-10-24: export.arxiv.org full text vs its API). gate.provisional = why a gate number is provisional and how it is to be recalibrated. gate.break_after / gate.break_for_s = the guard's circuit breaker: that many failures in a row that say the upstream is unhealthy (_guard.counts_against_upstream: a 404 / 410 / 400 / 422 answer is not one) open it for that many seconds (default 5 and 120); an upstream's breaker is this one, never a failure count and cooldown kept in the module (EYE-BREAKER-ONE, 2026-11-07; an adapter's account-safety breaker, which stops a logged-in account on captcha or risk signals, is a different thing and stays in the adapter). A new source must be listed under an existing upstream's sources (or its backend under backends) or get its own entry (the merge-gate test that failed otherwise was deleted in TEST-CUT; nothing checks it now). Terms research: task R, 2026-09-28; robots sweeps 2026-09-28.",
  "unpublished": "未公布",
  "optional_sources": {
-  "_doc": "Sources the public mirror build removes (public_prepare.sh); a declaration may name them without the stale-name check failing there.",
+  "_doc": "Sources a public build may leave out; a declaration may name them without the stale-name check failing there.",
   "names": ["polyu", "mokahr_ats"]
  },
  "upstreams": {
@@ -26,8 +26,7 @@
    },
    "gate": {
     "max_inflight": 1,
-    "min_interval_s": 3.0,
-    "max_wait_s": 12.0
+    "min_interval_s": 3.0
    }
   },
   "arxiv_export": {
@@ -52,8 +51,7 @@
    "gate": {
     "max_inflight": 1,
     "min_interval_s": 1.0,
-    "max_wait_s": 30.0,
-    "provisional": "EYE-RSS-3 2026-10-24: one at a time, starts at least 1 s apart, a quarter of the 4 requests per second the bulk-data page suggests for a burst; recalibrate from the gate's refusal lines and the full-text read counts after the first weeks (report out/EYE-RSS-3/report.md). max_wait_s 30: a PDF download holds the permit for its whole body, so a second reader waits for the first download, not just the 1 s"
+    "provisional": "EYE-RSS-3 2026-10-24: one at a time, starts at least 1 s apart, a quarter of the 4 requests per second the bulk-data page suggests for a burst; recalibrate from the gate's refusal lines and the full-text read counts after the first weeks (report out/EYE-RSS-3/report.md)."
    }
   },
   "arxiv_web": {
@@ -99,8 +97,7 @@
    },
    "gate": {
     "max_inflight": 8,
-    "min_interval_s": 0.2,
-    "max_wait_s": 15.0
+    "min_interval_s": 0.2
    },
    "observe": {
     "expect": {
@@ -130,8 +127,7 @@
    },
    "gate": {
     "max_inflight": 4,
-    "min_interval_s": 1.0,
-    "max_wait_s": 15.0
+    "min_interval_s": 1.0
    }
   },
   "github": {
@@ -157,8 +153,7 @@
    },
    "gate": {
     "max_inflight": 4,
-    "min_interval_s": 2.0,
-    "max_wait_s": 15.0
+    "min_interval_s": 2.0
    },
    "observe": {
     "lane_header": "x-ratelimit-resource",
@@ -187,8 +182,7 @@
    },
    "gate": {
     "max_inflight": 1,
-    "min_interval_s": 6.0,
-    "max_wait_s": 15.0
+    "min_interval_s": 6.0
    }
   },
   "stackexchange": {
@@ -213,7 +207,6 @@
    "gate": {
     "max_inflight": 4,
     "windows": [[30, 1.0]],
-    "max_wait_s": 15.0,
     "break_after": 3,
     "break_for_s": 300.0
    }
@@ -243,8 +236,7 @@
    },
    "gate": {
     "max_inflight": 3,
-    "windows": [[10, 60]],
-    "max_wait_s": 30.0
+    "windows": [[10, 60]]
    }
   },
   "crossref": {
@@ -274,8 +266,7 @@
    },
    "gate": {
     "max_inflight": 3,
-    "windows": [[3, 1.0]],
-    "max_wait_s": 15.0
+    "windows": [[3, 1.0]]
    },
    "observe": {
     "expect": {"x-concurrency-limit": 3}
@@ -319,8 +310,7 @@
    },
    "gate": {
     "max_inflight": 1,
-    "min_interval_s": 10.0,
-    "max_wait_s": 15.0
+    "min_interval_s": 10.0
    }
   },
   "europepmc": {
@@ -364,8 +354,7 @@
    },
    "gate": {
     "max_inflight": 8,
-    "windows": [[12, 1.0]],
-    "max_wait_s": 15.0
+    "windows": [[12, 1.0]]
    }
   },
   "wikimedia": {
@@ -400,8 +389,7 @@
    },
    "gate": {
     "max_inflight": 3,
-    "windows": [[200, 60]],
-    "max_wait_s": 15.0
+    "windows": [[200, 60]]
    }
   },
   "hn_algolia": {
@@ -424,8 +412,7 @@
    },
    "gate": {
     "max_inflight": 4,
-    "windows": [[10000, 3600]],
-    "max_wait_s": 15.0
+    "windows": [[10000, 3600]]
    }
   },
   "bluesky": {
@@ -448,8 +435,7 @@
    },
    "gate": {
     "max_inflight": 2,
-    "windows": [[3000, 300]],
-    "max_wait_s": 15.0
+    "windows": [[3000, 300]]
    }
   },
   "mastodon_social": {
@@ -472,8 +458,7 @@
    },
    "gate": {
     "max_inflight": 2,
-    "windows": [[300, 300]],
-    "max_wait_s": 15.0
+    "windows": [[300, 300]]
    },
    "observe": {
     "expect": {"x-ratelimit-limit": 300}
@@ -499,8 +484,7 @@
    },
    "gate": {
     "max_inflight": 2,
-    "windows": [[300, 300]],
-    "max_wait_s": 15.0
+    "windows": [[300, 300]]
    },
    "observe": {
     "expect": {"x-ratelimit-limit": 300}
@@ -526,8 +510,7 @@
    },
    "gate": {
     "max_inflight": 2,
-    "windows": [[300, 300]],
-    "max_wait_s": 15.0
+    "windows": [[300, 300]]
    },
    "observe": {
     "expect": {"x-ratelimit-limit": 300}
@@ -596,8 +579,7 @@
    },
    "gate": {
     "max_inflight": 4,
-    "windows": [[100, 300]],
-    "max_wait_s": 15.0
+    "windows": [[100, 300]]
    }
   },
   "iacr_eprint": {
@@ -618,8 +600,7 @@
     "notes": "OmniSeek uses /complete/compact (cached one day, the published rule) and OAI-PMH GetRecord (each record cached one day). PDFs are never requested: they are robots-disallowed and answer 403 or a challenge page to programs."
    },
    "gate": {
-    "max_inflight": 1,
-    "max_wait_s": 15.0
+    "max_inflight": 1
    }
   },
   "zenodo": {
@@ -645,8 +626,7 @@
    },
    "gate": {
     "max_inflight": 2,
-    "windows": [[30, 60], [2000, 3600]],
-    "max_wait_s": 15.0
+    "windows": [[30, 60], [2000, 3600]]
    },
    "observe": {
     "expect": {
@@ -672,8 +652,7 @@
    },
    "gate": {
     "max_inflight": 2,
-    "min_interval_s": 1.0,
-    "max_wait_s": 15.0
+    "min_interval_s": 1.0
    }
   },
   "internet_archive": {
@@ -713,8 +692,7 @@
    },
    "gate": {
     "max_inflight": 4,
-    "windows": [[10, 1.0]],
-    "max_wait_s": 15.0
+    "windows": [[10, 1.0]]
    }
   },
   "nih_reporter": {
@@ -735,8 +713,7 @@
    },
    "gate": {
     "max_inflight": 1,
-    "min_interval_s": 1.0,
-    "max_wait_s": 15.0
+    "min_interval_s": 1.0
    }
   },
   "statcan_wds": {
@@ -760,8 +737,7 @@
    },
    "gate": {
     "max_inflight": 4,
-    "windows": [[25, 1.0]],
-    "max_wait_s": 15.0
+    "windows": [[25, 1.0]]
    }
   },
   "companies_house": {
@@ -785,8 +761,7 @@
    },
    "gate": {
     "max_inflight": 2,
-    "windows": [[600, 300]],
-    "max_wait_s": 15.0
+    "windows": [[600, 300]]
    }
   },
   "data_gov_sg": {
@@ -813,8 +788,7 @@
    },
    "gate": {
     "max_inflight": 2,
-    "windows": [[4, 10]],
-    "max_wait_s": 15.0
+    "windows": [[4, 10]]
    }
   },
   "adzuna": {
@@ -840,8 +814,7 @@
    },
    "gate": {
     "max_inflight": 2,
-    "windows": [[25, 60], [250, 86400], [1000, 604800], [2500, 2592000]],
-    "max_wait_s": 15.0
+    "windows": [[25, 60], [250, 86400], [1000, 604800], [2500, 2592000]]
    }
   },
   "cubox": {
@@ -866,8 +839,7 @@
    "gate": {
     "max_inflight": 1,
     "min_interval_s": 1.0,
-    "windows": [[50, 86400]],
-    "max_wait_s": 15.0
+    "windows": [[50, 86400]]
    }
   },
   "exa": {
@@ -890,8 +862,7 @@
    },
    "gate": {
     "max_inflight": 4,
-    "windows": [[10, 1.0]],
-    "max_wait_s": 15.0
+    "windows": [[10, 1.0]]
    }
   },
   "itunes_search": {
@@ -914,8 +885,7 @@
    },
    "gate": {
     "max_inflight": 2,
-    "windows": [[20, 60]],
-    "max_wait_s": 15.0
+    "windows": [[20, 60]]
    }
   },
   "jina_reader": {
@@ -939,8 +909,7 @@
    },
    "gate": {
     "max_inflight": 2,
-    "windows": [[20, 60]],
-    "max_wait_s": 15.0
+    "windows": [[20, 60]]
    }
   },
   "coingecko": {
@@ -967,8 +936,7 @@
    },
    "gate": {
     "max_inflight": 1,
-    "windows": [[5, 60]],
-    "max_wait_s": 15.0
+    "windows": [[5, 60]]
    }
   },
   "artificial_analysis": {
@@ -991,8 +959,7 @@
    },
    "gate": {
     "max_inflight": 1,
-    "windows": [[100, 86400]],
-    "max_wait_s": 15.0
+    "windows": [[100, 86400]]
    }
   },
   "v2ex": {
@@ -1015,8 +982,7 @@
    },
    "gate": {
     "max_inflight": 6,
-    "windows": [[120, 3600]],
-    "max_wait_s": 15.0
+    "windows": [[120, 3600]]
    },
    "observe": {
     "expect": {
@@ -1045,8 +1011,7 @@
    },
    "gate": {
     "max_inflight": 1,
-    "windows": [[20, 60]],
-    "max_wait_s": 15.0
+    "windows": [[20, 60]]
    }
   },
   "discord": {
@@ -1069,8 +1034,7 @@
    },
    "gate": {
     "max_inflight": 8,
-    "windows": [[50, 1.0]],
-    "max_wait_s": 15.0
+    "windows": [[50, 1.0]]
    }
   },
   "brave_search": {
@@ -1659,8 +1623,7 @@
    "gate": {
     "max_inflight": 1,
     "min_interval_s": 5.0,
-    "max_wait_s": 70.0,
-    "provisional": "EYE-XIANYU 2026-10-24 (spec item 6): one at a time on the 小号; starts at least 5 s apart, the upper end of the 3 to 5 s a third-party 闲鱼 tool advises (seen only in a web-search summary, not opened). max_wait_s 70: one browser call holds the permit at most 60 s (xianyu_source._CDP_TIMEOUT) plus the 5 s spacing, so the next search can wait out the one in front of it. Recalibrate two weeks after going live from <state>/xianyu/risk-events.jsonl: no trip keeps it, any trip doubles min_interval_s (and halves the source's daily cap); the reading goes into brain note eye-recon-xianyu"
+    "provisional": "EYE-XIANYU 2026-10-24 (spec item 6): one at a time on the 小号; starts at least 5 s apart, the upper end of the 3 to 5 s a third-party 闲鱼 tool advises (seen only in a web-search summary, not opened). Recalibrate two weeks after going live from <state>/xianyu/risk-events.jsonl: no trip keeps it, any trip doubles min_interval_s (and halves the source's daily cap); the reading goes into brain note eye-recon-xianyu"
    }
   },
   "smzdm_api": {

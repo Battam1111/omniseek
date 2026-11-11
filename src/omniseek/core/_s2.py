@@ -81,14 +81,11 @@ _BREAK_FOR_S = 120.0  # seconds the circuit stays open
 # 1.0s honors S2's ~1 RPS keyed guarantee exactly (the docstring's "even with the key 1 RPS"); S2
 # throttles far harder than OpenAlex's polite pool, hence the much wider interval than _openalex's 0.2.
 # (the value, 1.0 s, is declared in upstreams.json "s2" gate.min_interval_s; bound below)
-# Hard cap on how long ONE caller may wait on the rate gate. Without it, a 429 storm (each failed
-# call retries, and every attempt reserves another 1s-apart slot) grows the backlog unboundedly, and
-# a fresh caller inherits the WHOLE queue: an observed field_skeleton sat 886s on the gate. Past this
-# cap the queue is pathological (S2 storming) → fail fast (raise S2Down → the wrapper degrades to
-# []/None) instead of hanging, AND do not reserve a slot so the backlog drains rather than growing.
-# The value is the declared gate.max_wait_s of "s2" (design decision 2, 2026-09-29): ONE budget for the
-# permit wait and the start wait together, cut to the caller's deadline by the guard itself.
-_PACE_MAX_WAIT_S = upstreams.max_wait("s2")
+# How long ONE caller may wait on the gate: until its own deadline (EYE-GATE-QUEUE, 2026-11-11), the
+# permit wait and the start wait together. A 429 storm (each failed call retries, and every attempt
+# reserves another 1s-apart slot) grows the backlog, and a caller with no deadline once sat 886s on the
+# gate (field_skeleton, which now carries its own deadline); a start past the caller's deadline is not
+# reserved (raise S2Down → the wrapper degrades to []/None), so the backlog drains rather than growing.
 
 # The shared load-guard (concurrency cap + rate pacer + circuit breaker): the registry's ONE S2
 # BackendGuard, built from the declared gate (upstreams.json "s2": 4 in flight, starts >= 1.0 s apart
@@ -102,25 +99,14 @@ _MIN_INTERVAL_S = _guard.min_interval_s
 _state = _guard.state   # health / recently_throttled read fails / open_until / last_429
 _lock = _guard.lock
 _sema = _guard.sema
-_pace_state = _guard.pace_state   # the slot reservation _pace() reads/reserves (aliases the guard)
+_pace_state = _guard.pace_state   # the guard's start-slot state (an alias)
 _pace_lock = _guard.pace_lock
 
 
-def _backlog_shed(wait: float) -> S2Down:
-    """The error for a start slot past this caller's budget (used by _pace and the permit-first hold):
-    the caller fails fast with S2Down and nothing is reserved, so the backlog drains."""
-    return S2Down(f"rate-gate backlog {wait:.0f}s, past this caller's budget; S2 storming, degrade")
-
-
-def _pace() -> None:
-    """Reserve the next request-start slot (>= _MIN_INTERVAL_S after the previous), then wait for it.
-    The slot reservation is under the lock; the wait is NOT, so callers do not serialize on the lock
-    itself, only on the wire-rate. Bounds S2 requests/second across all callers + threads. Raises
-    ``S2Down`` (without reserving) when the backlog would make this caller wait > _PACE_MAX_WAIT_S, so
-    a 429-storm sheds load + fails fast instead of stacking an unbounded multi-minute gate wait."""
-    # on_backlog runs under the guard's pace lock with this caller's would-be wait: over the cap it
-    # raises S2Down WITHOUT reserving a slot (the backlog drains), exactly as the inline check did.
-    _guard.pace(on_backlog=_backlog_shed, max_wait=_PACE_MAX_WAIT_S)
+def _refuse(waited: float) -> S2Down:
+    """The error for a request the gate could not start before the caller's deadline (used by the
+    permit-first hold): S2Down, and nothing is reserved, so the backlog drains."""
+    return S2Down(_guard_mod.deadline_refusal("s2 gate", waited))
 
 
 # Eye-owned bounded retry on a 429, REPLACING the lib's (now-disabled) 10x/250s tenacity backoff.
@@ -139,12 +125,6 @@ class S2Down(RuntimeError):
     def __init__(self, *args) -> None:
         super().__init__(*args)
         _probe.note_held(str(self))   # a running health check records that nothing was sent
-
-
-def _slot_busy(wait: float) -> S2Down:
-    """Concurrency-permit exhaustion -> the same degrade-to-[]/None path as breaker-open / a
-    pathological rate backlog. Handed to _guard.slot as its on_busy factory."""
-    return S2Down(f"concurrency pool saturated (no slot in {wait:.0f}s); degrade")
 
 
 def breaker_open() -> bool:
@@ -327,8 +307,8 @@ async def _acall(label: str, afn):
     async def _attempt():
         # Permit FIRST, then the 1 s start slot while holding it (the declared keyed 1 RPS): pacing
         # before the permit let slots reserved while all 4 permits were busy fire back to back when
-        # slow calls finished. Both waits bounded: S2Down (degrade), never an unbounded hang.
-        async with _guard.ahold(_PACE_MAX_WAIT_S, _slot_busy, on_backlog=_backlog_shed, request_s=TIMEOUT):
+        # slow calls finished. Both waits end at the caller's deadline: S2Down (degrade).
+        async with _guard.ahold(_refuse, request_s=TIMEOUT):
             return await afn()
 
     try:
@@ -360,8 +340,7 @@ async def _abounded(label: str, amake_iter, cap: int) -> list:
         _check_open()
 
         async def _attempt():
-            async with _guard.ahold(_PACE_MAX_WAIT_S, _slot_busy, on_backlog=_backlog_shed,
-                                    request_s=TIMEOUT):
+            async with _guard.ahold(_refuse, request_s=TIMEOUT):
                 results = await amake_iter()
                 out: list = []
                 if cap > 0:

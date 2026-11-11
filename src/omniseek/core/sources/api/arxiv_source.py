@@ -42,7 +42,7 @@ through the API above and not under arxiv.org's 15 s Crawl-delay. ``/html/`` is 
 as text with ``#`` section lines (omniseek_read level="head" cuts it, appendices included); a paper with no
 HTML version, or whose render has no heading under the title (a source that only includes a PDF), gives
 the abstract with ``metadata.fulltext`` false and the reason. ``/pdf/`` that cannot
-be had (gate saturated, download failed, no text) falls back to the html of the same id
+be had (no turn at the gate by the caller's deadline, download failed, no text) falls back to the html of the same id
 (``metadata.fulltext_from`` "html", ``metadata.pdf_reason``); both failing returns None, and the
 diagnostic names both reasons. Other arXiv links (``/abs/``) stay the API lookup by id.
 """
@@ -59,6 +59,7 @@ from urllib.parse import urlparse
 import anyio
 import feedparser
 
+from omniseek.core import _guard as _guard_mod
 from omniseek.core import _probe, diag, fetcher, http, upstreams
 from omniseek.core.normalize import Document
 from omniseek.core.sources.api import _arxiv_fulltext, _relax
@@ -78,7 +79,7 @@ _MATCHED_KEY = "omniseek_matched_words"
 # STARTS so a fan-out can't spike the rate), a breaker (consecutive failures -> fail fast + serve cache
 # instead of hammering), and backlog fail-fast. SHARED sync<->async so the async path cannot double
 # the concurrency OR the rate. Order: breaker -> permit -> start slot -> record ok/fail (the
-# permit-first hold, see _guard.BackendGuard.hold). The in-flight cap was 4 until 2026-09-28 and is
+# permit-first hold, see _guard.BackendGuard.ahold). The in-flight cap was 4 until 2026-09-28 and is
 # now the declared 1 (see below).
 #
 # THE RATE IS arXiv's NUMBER, NOT A TUNABLE. arXiv's API terms say ONE request every THREE seconds.
@@ -106,25 +107,21 @@ _ARXIV_MIN_INTERVAL_S = _guard.min_interval_s    # 3.0 s between request starts,
 # transport (http._one_connection_transport, because the declared terms say max_concurrency 1), so no
 # idle connection is left open after a response in either the sync or the async pool.
 _CONNECTION_CLOSE = {"Connection": "close"}
-# HOW LONG A CALLER MAY WAIT (design decision 2, 2026-09-29): the permit wait and the 3 s start wait
-# together, within the declared max_wait_s of "arxiv" (upstreams.max_wait) cut to the caller's own
-# deadline. The module keeps no wait constant of its own (it had 20 s for the permit plus 12 s for the
-# start, 32 s against an 11 s broad-search deadline, review F2).
+# HOW LONG A CALLER MAY WAIT (EYE-GATE-QUEUE, 2026-11-11): the gate is a line; the permit wait and the
+# 3 s start wait together run until the caller's own deadline. The module keeps no wait constant of its
+# own (it had 20 s for the permit plus 12 s for the start, review F2; then the declared max_wait_s of
+# 12 s, which fit four requests and turned away the rest of an ordinary 8-question fan-out).
 
 
 class _ArxivBusy(upstreams.UpstreamBusy):
-    """Internal signal: the gate had no permit or no start slot within this caller's budget, so shed
-    load + degrade to None (the caller returns []) instead of stacking an unbounded gate wait. An
+    """Internal signal: the caller's deadline came before the gate could start the request, so degrade
+    to None (the caller returns []). An
     UpstreamBusy, so the refusal is recorded like every other gate's (a search's _meta.held, a drill's
     top-level held) and an empty arxiv answer reads "not sent", not "nothing there"."""
 
 
-def _busy(wait: float) -> "_ArxivBusy":
-    return _ArxivBusy(f"arXiv gate: no permit within {wait:.1f}s (gate saturated); not sent")
-
-
-def _late(wait: float) -> "_ArxivBusy":
-    return _ArxivBusy(f"arXiv gate: next allowed start {wait:.1f}s away, past this caller's budget; not sent")
+def _refuse(waited: float) -> "_ArxivBusy":
+    return _ArxivBusy(_guard_mod.deadline_refusal("arXiv gate", waited))
 
 
 def _answered_status(seen: list) -> Optional[int]:
@@ -157,10 +154,9 @@ async def _arxiv_aget_text(url: str, **kwargs):
     try:
         # Permit FIRST, then the 3 s start slot while holding it: with the declared single connection,
         # pacing before the permit let two queued callers start back to back the moment a slow request
-        # finished. The permit is waited for in the gate's line on the loop (no thread; bounded; a
-        # cancel cannot keep it).
-        async with _guard.ahold(upstreams.max_wait("arxiv"), _busy, on_backlog=_late,
-                                request_s=kwargs.get("timeout", http.DEFAULT_TIMEOUT)):
+        # finished. The permit is waited for in the gate's line on the loop (no thread; until the
+        # caller's deadline; a cancel cannot keep it).
+        async with _guard.ahold(_refuse, request_s=kwargs.get("timeout", http.DEFAULT_TIMEOUT)):
             # A penalty-boxed arXiv host manifests as connect failures (measured as http=000), so an in-slot retry would send two requests through one pace slot.
             with diag.tap() as seen:
                 r = await http.aget_text(url, retry_transient=False,
@@ -169,8 +165,8 @@ async def _arxiv_aget_text(url: str, **kwargs):
                                          **kwargs)
     except _ArxivBusy:
         diag.note("arxiv.rate_gate_shed", url=url, body=(
-            "declared upstream gate, request not sent: the arXiv gate had no permit or no start slot "
-            f"within this caller's budget (published limit: one connection, 1 request / "
+            "declared upstream gate, request not sent: the caller's deadline came before its turn at "
+            f"the arXiv gate (published limit: one connection, 1 request / "
             f"{_ARXIV_MIN_INTERVAL_S}s). We did not ask."))
         return None
     if not r:
@@ -630,9 +626,9 @@ class ArxivAdapter(BaseAPIAdapter):
         try:
             # The probe is a real API request: it takes the same permit AND the same 3 s start slot
             # as a search (it used to take only the in-flight permit, so a health sweep could land
-            # inside another request's 3 s). Bounded: a busy gate reports "not probed" (None, not
-            # verified), never down and never healthy.
-            async with _guard.ahold(upstreams.max_wait("arxiv"), _busy, on_backlog=_late, request_s=15):
+            # inside another request's 3 s). Bounded by the check's deadline: no turn by then reports
+            # "not probed" (None, not verified), never down and never healthy.
+            async with _guard.ahold(_refuse, request_s=15):
                 resp = await http.adirect(  # a one-shot client: its connection closes when it returns
                     "GET", _API,
                     params={"search_query": "all:machine learning", "max_results": 1},

@@ -612,7 +612,7 @@ class OpenReviewAdapter(SourceBase):
         if not note_id:
             return None
         # The login, the notes request, the PDF download and its text extraction are the sync client's
-        # (shared with search and scripts/probe_openreview_pdf.py): a worker thread under the legacy limiter.
+        # (shared with search): a worker thread under the legacy limiter.
         # A /forum link is the discussion page: the paper, then its thread (_read_forum); /pdf is the paper only.
         read = self._read_forum if urlparse(url).path.rstrip("/").endswith("/forum") else self._read_note
         return await anyio.to_thread.run_sync(read, note_id, limiter=fetcher._LEGACY_LIMITER)
@@ -790,7 +790,7 @@ class OpenReviewAdapter(SourceBase):
         ``HTTP 403 ChallengeRequiredError: ...``). The reason never carries the token. The download is
         ``http.download_to_file`` (streamed to disk, never whole in memory): every redirect hop goes
         through the redirect rule (its host's gates, the _netguard check), and the Authorization header
-        is dropped when a hop leaves the host. Shared by fetch_url and scripts/probe_openreview_pdf.py."""
+        is dropped when a hop leaves the host. Used by fetch_url."""
         url = f"{base}{_ATTACHMENT_PATH}?{urlencode({'id': note_id, 'name': 'pdf'})}"
         info: dict = {}
         try:

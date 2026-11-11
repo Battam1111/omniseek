@@ -592,6 +592,34 @@ def rusage(pid=None):
             "resident": int.from_bytes(raw[_RU_RESIDENT:_RU_RESIDENT + 8], "little")}
 
 
+PRESSURE_LEVELS = (1, 2, 4)   # kern.memorystatus_vm_pressure_level 的三档：1 正常、2 警告、4 危急
+PRESSURE_CRITICAL = 4
+
+
+def pressure():
+    """整机内存这一刻怎么样：{"level": 内核判的压力档或 None, "free_pct": 空闲百分比或 None}（sysctl，不起子进程）。
+    判「够不够、能不能再起活」只看 level（kern.memorystatus_vm_pressure_level，1 正常、2 警告、4 危急；到
+    PRESSURE_CRITICAL 才挡）。free_pct 是 kern.memorystatus_level（memory_pressure -Q 的空闲百分比），数的是没锁定、
+    没压缩的那部分，冷数据一压缩它就掉、机器并不卡，只记下给人看，不拿来判。转写的内存准入读这里，
+    读法只此一份。Linux 与读不到时两项都是 None（不判）。"""
+    out = {"level": None, "free_pct": None}
+    if not ENABLED or LINUX:
+        return out
+    try:
+        libc, _ = _libs()
+    except Exception:
+        return out
+    for key, name in (("level", b"kern.memorystatus_vm_pressure_level"), ("free_pct", b"kern.memorystatus_level")):
+        v = ctypes.c_int(0)
+        sz = ctypes.c_size_t(ctypes.sizeof(v))
+        try:
+            if libc.sysctlbyname(name, ctypes.byref(v), ctypes.byref(sz), None, 0) == 0:
+                out[key] = v.value
+        except Exception:
+            pass
+    return out
+
+
 _RU_USER, _RU_SYSTEM = 16, 24   # struct rusage_info_v0 起：ri_user_time 在 16，ri_system_time 在 24（单位是 mach 时钟滴答）
 _RU_CHILD_USER, _RU_CHILD_SYSTEM = 96, 104   # rusage_info_v1 起：ri_child_user_time、ri_child_system_time（已收走的子进程）
 _TIMEBASE = []

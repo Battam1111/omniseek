@@ -36,7 +36,7 @@ from typing import Optional
 from markdownify import markdownify as html_to_md
 
 from omniseek.core import _probe, auth, cache, diag, http, upstreams
-from omniseek.core._guard import GateBusy
+from omniseek.core._guard import GateBusy, deadline_refusal
 from omniseek.core.normalize import Document, html_fragment_text, jsonsafe, mk_signal
 
 logger = logging.getLogger(__name__)
@@ -95,14 +95,10 @@ def _se_failure(seen: list) -> tuple[Optional[int], bool]:
     return None, False
 
 
-def _se_busy(waited: float) -> GateBusy:
-    return GateBusy(f"Stack Exchange gate busy after {waited:.1f}s")
-
-
-def _se_late(wait: float) -> GateBusy:
-    """The error for a start slot past this caller's budget (a pending `backoff` or the rate)."""
-    return GateBusy(f"Stack Exchange start slot {wait:.1f}s away (backoff / rate), past this caller's "
-                    "budget")
+def _se_refuse(waited: float) -> GateBusy:
+    """The error for a request the gate could not start before the caller's deadline (its permit, or a
+    start slot pushed past it by a pending `backoff` or the rate)."""
+    return GateBusy(deadline_refusal("Stack Exchange gate", waited))
 
 
 def _se_observe(data) -> float:
@@ -306,8 +302,7 @@ async def _ase_get(url, params, timeout=TIMEOUT):
     if _cache_only_skip(url):
         return None
     try:
-        async with _se_guard.ahold(upstreams.max_wait("stackexchange"), _se_busy, _se_late,
-                                   request_s=timeout):
+        async with _se_guard.ahold(_se_refuse, request_s=timeout):
             # A quota-boxed Stack Exchange host can manifest as connect failures, so an in-slot retry would double one paced request.
             with diag.tap() as seen:
                 data = await http.aget_json(
