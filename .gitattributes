@@ -2,8 +2,8 @@
 # `git archive` output (the tree is shipped to a mac via git archive | tar, and a stray CRLF
 # breaks a shebang). Git enforces it, so nobody has to remember it.
 #
-# The eye this mirror syncs from is LF by the same rule; scripts/sync_from_eye.sh also converts
-# every text file it writes, so a CRLF working copy on the Windows side cannot leak in.
+# The eye this mirror syncs from is LF by the same rule, and the sync turns any CRLF line end in the
+# files it writes into LF, so a CRLF working copy upstream cannot leak in.
 # No file here needs CRLF (no .bat/.cmd/.ps1; no test reads raw \r\n bytes from a file).
 * text=auto eol=lf
 

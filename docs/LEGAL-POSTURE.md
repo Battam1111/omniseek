@@ -59,9 +59,9 @@ That line is enforced in two places rather than asserted once:
    `walled.bring_your_own`). This matters most for exactly the reader who is not thinking about it:
    someone who clones, runs, and never opens the config. See `is_source_enabled` in
    `src/omniseek/core/profile.py`.
-2. **No shipped source declares the circumvention level, and the mirror script refuses to publish one
-   that does.** This is a gate in `scripts/sync_from_eye.sh`, not a promise: it scans the tree it is
-   about to publish for a circumvention declaration and aborts the sync if it finds one. The claim in
+2. **No shipped source declares the circumvention level, and the sync that publishes this repository
+   refuses to publish one that does.** This is a gate in that sync, not a promise: it scans the tree it
+   is about to publish for a circumvention declaration and aborts the sync if it finds one. The claim in
    this document and the contents of the catalog therefore cannot drift apart silently.
 
 ## 4. What the operator is responsible for
