@@ -6,7 +6,7 @@ All notable changes to OmniSeek are documented here. The format follows
 Entries below the rename note predate it and use the project's former name, penumbra; they are
 history and are kept as written.
 
-## [Unreleased]
+## [0.3.0] - 2026-11-11
 
 A front-page and install-path release: a stranger should get from the README to a working
 connection with two commands, and every place that explains installing should say the same thing.
@@ -27,6 +27,18 @@ connection with two commands, and every place that explains installing should sa
   question, the two commands and a link to the docs; details live in `docs/`. Image links are
   absolute so they render on PyPI and Glama. Internal project words were replaced with plain ones.
 - **New PyPI summary** in `pyproject.toml`, mirrored in `server.json`.
+- **`server.json` lists the PyPI package as stdio** (`uvx omniseek`, no port, no token), the way
+  the README installs it. The Docker image is the second entry: HTTP on `127.0.0.1:8765` with its
+  bearer token.
+- **Shorter server instructions.** Each connection gives the agent about 1,000 characters in plain
+  words (0.2.1 gave 12,670); every tool and returned field is described in `docs/TOOLS.md`.
+- **The FAQ says it plainly**, and says what OmniSeek does rather than what other tools cannot do.
+- **One tag releases everything.** Pushing `v<version>` runs one workflow, `release.yml`: install
+  and boot check, build, upload to PyPI (by Trusted Publishing, so no PyPI token is stored; a
+  version already on PyPI is left as it is), the GitHub Release with this changelog's section for
+  that version as its notes, the amd64 and arm64 image to GHCR, then `server.json` to the MCP
+  Registry. Each step runs only after the one before it passed. `publish-image.yml` is folded into
+  it.
 - **Site:** new tagline and quick start, install commands no longer cut off on phones, and six
   pages by capability (cross-lingual search, podcast transcription, Zhihu, research monitoring,
   citation graph, Bilibili), each with an example that was actually run. The capability cards on
@@ -85,6 +97,28 @@ connection with two commands, and every place that explains installing should sa
   `smoke-windows`). CI now checks what a stranger meets: the package installs, the server starts
   and answers a real MCP handshake on Linux and Windows, and the Docker image boots. A tagged
   release runs the same install-and-boot check before it publishes.
+
+### Fixed
+
+- **The HTTP service on loopback answers its clients.** Every request to `127.0.0.1` or
+  `localhost` got `421 Invalid Host header` while `/healthz` said ok.
+- **A start prints one line**: how many sources, which optional parts are installed, and how to add
+  the others. It used to print about 100 lines of module names ending in "senses online: none".
+- **Transcription checks its dependencies before it downloads any audio**, and one message names
+  everything missing. The command comes first as the install guide gives it,
+  `uv tool install "omniseek[asr]" --with torch --with torchaudio` (a pip line cannot reach a
+  `uv tool` install), then the pip steps with the torch build for your platform.
+- **Every optional part's install hint leads with uv**, not only transcription's: PDF reading,
+  semantic recall, OCR and the logged-in browser sources too. The uv command also names the extras
+  already installed, because a second `uv tool install` rebuilds the tool from that command alone
+  and would otherwise remove them.
+- **Xiaohongshu notes are read in full.** A xiaohongshu.com note link now opens on rednote.com, where
+  your logged-in session sees the whole comment thread, replies included. `docs/walled-sources.md`
+  now says to log in on rednote.com, where OmniSeek searches and reads.
+- **`deploy/profile.example.json` lists `walled.remember_retrievals`** (off), a setting the code
+  already read; the template now comes from the engine with the code.
+- **The first search after a start no longer waits out its whole time budget** while the semantic
+  index warms up: it answers from keyword recall and the live sources, and says so in `_meta.index`.
 
 ### Notes
 

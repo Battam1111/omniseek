@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "omniseek"
-version = "0.2.1"
+version = "0.3.0"
 description = "Give your AI agent the parts of the internet web search doesn't reach: podcasts and videos, Chinese communities, and research papers. An MCP server for Claude Code, Cursor, and Codex."
 requires-python = ">=3.11"
 readme = {file = "docs/pypi.md", content-type = "text/markdown"}

@@ -111,9 +111,7 @@ _MODEL_DISK_NOTE = ("The first transcription downloads the SenseVoice model (abo
                     f"{where.show(where.modelscope_cache())}); diarize=True downloads about 2.1 GB more on first use.")
 
 
-def _has_cuda_gpu() -> bool:
-    """Cheap, side-effect-free NVIDIA presence check (no torch needed: it is what is missing)."""
-    return bool(shutil.which("nvidia-smi")) or os.path.exists("/proc/driver/nvidia/version")
+_has_cuda_gpu = _optdep.has_cuda_gpu
 
 
 def _torch_install_hint(system: Optional[str] = None, cuda: Optional[bool] = None) -> str:
@@ -141,9 +139,16 @@ def _missing_asr_deps() -> list[str]:
             if importlib.util.find_spec(m) is None]
 
 
+def _uv_asr_install(system: Optional[str] = None, cuda: Optional[bool] = None) -> str:
+    """The install guide's one command for a `uv tool install`: the extra and torch together, plus
+    the extras already installed, which that command would otherwise drop (see _optdep.uv_install)."""
+    return _optdep.uv_install("asr", system, cuda)
+
+
 def _asr_install_message(missing: list[str], system: Optional[str] = None,
                          cuda: Optional[bool] = None) -> str:
-    """One actionable message for everything the transcription path lacks."""
+    """One actionable message for everything the transcription path lacks: the uv command first (the
+    install the guide leads with, where pip cannot reach the tool's environment), then the pip steps."""
     extra = [m for m in missing if m in ("funasr", "imageio_ffmpeg")]
     torch_missing = [m for m in missing if m in ("torch", "torchaudio")]
     steps = []
@@ -152,7 +157,8 @@ def _asr_install_message(missing: list[str], system: Optional[str] = None,
     if torch_missing:
         steps.append(_torch_install_hint(system, cuda))
     return (f"audio transcription is not installed (missing: {', '.join(missing)}). "
-            f"Install: {'; then '.join(steps)}. {_MODEL_DISK_NOTE}")
+            f"Install with uv: {_uv_asr_install(system, cuda)}. "
+            f"Installed with pip instead: {'; then '.join(steps)}. {_MODEL_DISK_NOTE}")
 
 
 def _model_cached(model_id: str) -> bool:

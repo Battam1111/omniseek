@@ -35,7 +35,7 @@ opening a tab: OmniSeek reaches only what you, the account holder, are already e
 ```
    your account                  a Chrome you run                    OmniSeek
   ─────────────       log in     ───────────────       CDP        ─────────────
-  xiaohongshu.com  ──────────▶   --remote-debugging   ◀────────   site adapter
+  rednote.com      ──────────▶   --remote-debugging   ◀────────   site adapter
   (your session)   (you, once)   --port=9223          connect     (omniseek_search, one named source)
                                   (session on disk)
 ```
@@ -62,7 +62,7 @@ python -m playwright install chromium
 | Source(s) | Port | Browser profile | Why isolated |
 |-----------|------|-----------------|--------------|
 | The shared majority (Zhihu, Yipin Sanfendi, CN forums, …) | **9222** | default | one login you reuse across these sources |
-| Xiaohongshu (international) | **9223** | isolated | account-rate-sensitive, strictly serial |
+| Xiaohongshu (log in at rednote.com) | **9223** | isolated | account-rate-sensitive, strictly serial |
 | Xiaohongshu (mainland) | **9224** | isolated | a second, independent login if you hold one |
 
 Sources that are NOT CDP browsers: **Discord** uses a bot token (see its adapter), and **WeChat**
@@ -74,8 +74,12 @@ Use the helper (it detects Chrome/Chromium on macOS and Linux):
 
 ```bash
 ./scripts/launch_cdp.sh 9222                                  # the shared Chrome
-./scripts/launch_cdp.sh 9223 ~/.omniseek/chrome-xhs https://www.xiaohongshu.com
+./scripts/launch_cdp.sh 9223 ~/.omniseek/chrome-xhs https://www.rednote.com
 ```
+
+Xiaohongshu is read through rednote.com, its international site (the same account works there). Log in on
+rednote.com: OmniSeek searches there and opens every note there, xiaohongshu.com links included, so a
+session on xiaohongshu.com alone is not used.
 
 Arguments: `launch_cdp.sh <port> [profile-dir] [url-to-open]`. The profile dir defaults to
 `~/.omniseek/chrome-<port>`; keeping it stable is what preserves your login across restarts.

@@ -10,8 +10,8 @@
 # Self-verifying: a residue gate (grep) runs at the end and FAILS the script
 # loudly. Never push a sync whose gate did not pass.
 #
-# Syncs:  src/  (minus polyu + mokahr_ats); the code-bound artifacts listed in step 3 (two docs, and
-#         the Docker build files with the version lock the image installs from).
+# Syncs:  src/  (minus polyu + mokahr_ats); the code-bound artifacts listed in step 3 (two docs, the
+#         Docker build files with the version lock the image installs from, and the profile template).
 #         The mirror carries no copy of the eye's tests: its CI checks that the package installs
 #         and the server starts (.github/workflows/ci.yml).
 # Keeps:  skills/, README*, CLAUDE.md, docs/, pyproject.toml, .github/, other scripts/, other deploy/
@@ -201,6 +201,8 @@ echo "    regenerating docs/sources.md ..."
 #     code's module paths, environment variables and data locations, so a copy kept by hand drifts the
 #     day the code changes; they ship with the code, and deploy/requirements.lock with them: the image
 #     installs every package at the version that file gives (only its name==version lines ship).
+#     deploy/profile.example.json documents the profile keys the code reads (the image and
+#     scripts/bootstrap.sh seed a new profile from it), so it ships with that code too.
 #     Where the public build differs (one state folder, the published image by default), the private
 #     half rewrites the copy, as for the docs.
 #     WHAT DOES NOT: the eye's tests (the mirror carries none; its CI checks install and boot), and
@@ -213,7 +215,8 @@ echo "    regenerating docs/sources.md ..."
 #     (from the private half) makes its exact-match rewrites of the passages that describe the
 #     operator's own deployment. ---
 SYNCED_ARTIFACTS=("docs/BUDGETS.md" "docs/TOOLS.md"
-  "Dockerfile" "Dockerfile.stdio" "docker-compose.yml" "deploy/docker-entrypoint.sh" "deploy/requirements.lock")
+  "Dockerfile" "Dockerfile.stdio" "docker-compose.yml" "deploy/docker-entrypoint.sh" "deploy/requirements.lock"
+  "deploy/profile.example.json")
 
 echo "  [3/5] syncing ${#SYNCED_ARTIFACTS[@]} code-bound artifact(s) ..."
 for rel in "${SYNCED_ARTIFACTS[@]}"; do

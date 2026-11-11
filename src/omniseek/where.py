@@ -67,7 +67,10 @@ def _read_table(start: str):
                                                    if isinstance(e, dict)})
                        for p, v in doc["parts"].items() if isinstance(v, dict) and v.get("home") and "target" not in v}
         up = os.path.dirname(d)
-        if up == d:
+        # A checkout's root (.git, a directory or a worktree's file) ends the search: a clone nested in
+        # another checkout, like the public mirror under 08_public_mirrors/, must not read the outer
+        # checkout's table (11-11: the mirror sync on the laptop died on NotRegistered that way).
+        if up == d or os.path.exists(os.path.join(d, ".git")):
             return None, None
         d = up
 

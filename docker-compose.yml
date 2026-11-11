@@ -27,7 +27,7 @@ services:
   # Default: the prebuilt multi-arch image (amd64 + arm64) of this release, pulled from GitHub's registry.
   omniseek:
     <<: *omniseek
-    image: ghcr.io/battam1111/omniseek:v0.2.1
+    image: ghcr.io/battam1111/omniseek:v0.3.0
 
   # Local build from this checkout, only with  --profile build.
   omniseek-build:

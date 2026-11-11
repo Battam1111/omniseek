@@ -7,26 +7,62 @@
     "url": "https://github.com/Battam1111/omniseek",
     "source": "github"
   },
-  "version": "0.2.1",
+  "version": "0.3.0",
   "websiteUrl": "https://battam1111.github.io/omniseek",
   "packages": [
     {
       "registryType": "pypi",
       "registryBaseUrl": "https://pypi.org",
       "identifier": "omniseek",
-      "version": "0.2.1",
-      "runtimeHint": "python",
+      "version": "0.3.0",
+      "runtimeHint": "uvx",
       "transport": {
-        "type": "streamable-http",
-        "url": "http://localhost:8765/mcp"
+        "type": "stdio"
       }
     },
     {
       "registryType": "oci",
-      "identifier": "ghcr.io/battam1111/omniseek:v0.2.1",
+      "identifier": "ghcr.io/battam1111/omniseek:v0.3.0",
+      "runtimeHint": "docker",
+      "runtimeArguments": [
+        {
+          "type": "named",
+          "name": "--publish",
+          "value": "127.0.0.1:8765:8765",
+          "description": "Serve HTTP on port 8765 of this machine only"
+        },
+        {
+          "type": "named",
+          "name": "--volume",
+          "value": "{data_dir}:/root/.omniseek",
+          "description": "Keep OmniSeek's state, including its bearer token, between runs",
+          "variables": {
+            "data_dir": {
+              "description": "A folder on this machine for OmniSeek's state",
+              "format": "filepath",
+              "default": "~/.omniseek-docker",
+              "isRequired": true
+            }
+          }
+        }
+      ],
       "transport": {
         "type": "streamable-http",
-        "url": "http://localhost:8765/mcp"
+        "url": "http://localhost:8765/mcp",
+        "headers": [
+          {
+            "name": "Authorization",
+            "value": "Bearer {token}",
+            "description": "The bearer token the container prints on its first start; it is also in credentials/omniseek_http.json inside the state folder",
+            "variables": {
+              "token": {
+                "description": "OmniSeek's bearer token",
+                "isRequired": true,
+                "isSecret": true
+              }
+            }
+          }
+        ]
       }
     }
   ]

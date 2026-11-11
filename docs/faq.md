@@ -12,18 +12,18 @@ own computer, and never thinks for you.**
 
 No. A harness (Claude Code, Codex CLI, Cursor's agent mode) wraps a model and drives the
 agent loop: prompts, tool dispatch, retries, context. OmniSeek contains no model and no
-loop. It is the search-and-read peripheral a harness mounts over MCP: the model thinks, the
-harness drives the loop, OmniSeek reaches. If "MCP server" reads unfamiliar, think
-peripheral, not framework: you plug it into whatever harness you already use.
+loop. It is a set of search-and-read tools that a harness connects to over MCP: the model
+thinks, the harness drives the loop, OmniSeek fetches. If "MCP server" is unfamiliar, think of
+it as an add-on, not a framework: you plug it into whatever harness you already use.
 
 ## Is this just a search wrapper?
 
 No. Search is one of the things it does, and the most visible, so it is the one people notice
-first. But retrieval is only half. Everything your agent reaches accretes into a persistent
-memory it can ask questions of later: what have I already seen, what is new since a date, how
+first. But retrieval is only half. Everything your agent finds is kept in a memory on your
+disk that it can ask questions of later: what have I already seen, what is new since a date, how
 do these two things connect, how many of these "independent" sources are actually one voice.
 A search wrapper answers a query and forgets it; OmniSeek answers a query and keeps it. The
-memory is a file on your disk that appreciates the more you use it.
+more you use it, the more that memory can answer.
 
 ## How is it different from Perplexity, or Exa / Tavily?
 
@@ -76,8 +76,8 @@ risk than others and are excluded from the default pack; see the source notes.
 No, by design. OmniSeek refuses three things permanently: it never generates (there is no model
 inside, so nothing hallucinated enters your data), it never judges (what counts as the same
 thing, what relates to what, what matters, your agent decides and OmniSeek records the decision
-with its evidence), and it never phones home. In a stack where every other layer is a model that
-can hallucinate, OmniSeek is the one layer that structurally cannot, because it never generates.
+with its evidence), and it never phones home. Everything it returns comes from a named source,
+so you can check it.
 
 ## What does it cost / how do I run it?
 

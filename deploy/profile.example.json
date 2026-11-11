@@ -1,5 +1,5 @@
 {
-  "_doc": "Copy this to ~/.omniseek/profile.json (or point OMNISEEK_PROFILE_PATH at it) and edit. With NO profile present, every NON-walled source is on and the whole WALLED tier is DENIED (enforced in code by profile.is_source_enabled, with or without this file). This template is the same posture made explicit: broad-default ON for benign sources, walled login-sources OFF until you bring your own account, curator idle. The profile is a sparse delta over the shipped source pack: only write what you change. See README.md (Configure) and SECURITY.md.",
+  "_doc": "Copy this to the profile path (python -m omniseek.where profile prints it; or point OMNISEEK_PROFILE_PATH at it) and edit. With NO profile present every NON-walled source is on and the whole WALLED tier is DENIED (enforced in code by profile.is_source_enabled, with or without this file). This template is the recommended OPEN-SOURCE starting point: broad-default ON for benign sources, WALLED login-sources OFF (bring your own account), curator idle. The profile is a sparse delta over the shipped source pack: only write what you change. See docs/configuration.md and docs/LEGAL-POSTURE.md.",
   "schema_version": 1,
   "profile_id": "example",
   "contact_email": null,
@@ -20,9 +20,10 @@
   },
 
   "walled": {
-    "_doc": "Login/CDP sources are OFF unless you set enabled=true AND opt in per source under bring_your_own. You bring your own account/session; the session/cookies live host-side (a CDP profile or ~/.omniseek/credentials), never in this file. Circumvention-class sources (access_tier=circumvention, e.g. ones that decrypt an encrypted response) are not in the public pack at all. CONSENT: setting enabled=true is your acknowledgment that you accept operator responsibility for using these sources within the law and each site's Terms of Service in your jurisdiction (see SECURITY.md). OmniSeek fetches as your own agent; off-by-default + this explicit opt-in IS the consent gate.",
+    "_doc": "Login/CDP sources are OFF unless you set enabled=true AND opt in per source under bring_your_own. You bring your own account/session; the session/cookies live host-side (a CDP profile or the credentials directory, python -m omniseek.where credentials), never in this file. Circumvention-class sources (access_tier=circumvention, e.g. ones that decrypt an encrypted response) are not in the public pack at all. CONSENT: setting enabled=true is your acknowledgment that you accept operator responsibility for using these sources within the law and each site's Terms of Service in your jurisdiction (see SECURITY.md + docs/LEGAL-POSTURE.md). OmniSeek fetches as your own agent; off-by-default + this explicit opt-in IS the consent gate. remember_retrievals=false (default) keeps what your logged-in account retrieved OUT of the graph's thin document memory; set true to let walled retrievals accumulate as (title+url) rows.",
     "enabled": false,
-    "bring_your_own": {}
+    "bring_your_own": {},
+    "remember_retrievals": false
   },
 
   "safety": {

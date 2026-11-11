@@ -44,7 +44,7 @@ jobs:
   # Verifies the Docker path on GitHub's runner (which has Docker preinstalled), so a maintainer
   # without local Docker still gets the image built + booted + smoke-tested on every push to main
   # (and on demand via workflow_dispatch). It builds THIS checkout through the compose `build`
-  # profile (docs/install.md), so a Dockerfile change is tested before publish-image ships it; the
+  # profile (docs/install.md), so a Dockerfile change is tested before the release workflow ships it; the
   # default compose service only pulls the published image. Skipped on PRs to avoid the
   # chromium-layer build cost on every review.
   docker:

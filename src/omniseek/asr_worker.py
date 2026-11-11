@@ -115,8 +115,9 @@ def _auto_model():
     try:
         import funasr
     except ImportError as exc:
+        from omniseek.core._optdep import install_hint  # loaded on this failure only
         raise RuntimeError("this feature needs the optional 'asr' dependencies (missing 'funasr'): "
-                           "pip install 'omniseek[asr]'") from exc
+                           f"{install_hint('asr')}") from exc
     return funasr.AutoModel
 
 

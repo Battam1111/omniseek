@@ -7,7 +7,7 @@
 #   port         the CDP port the adapter expects (9222 shared, 9223/9224 xiaohongshu)
 #   profile-dir  persistent browser profile; default ~/.omniseek/chrome-<port>. Keep it stable so
 #                your login survives restarts.
-#   url          optional page to open (e.g. https://www.xiaohongshu.com) so you can log in directly.
+#   url          optional page to open (e.g. https://www.rednote.com) so you can log in directly.
 #
 # After it opens: log into the platform by hand, then leave the browser running. OmniSeek connects
 # to http://127.0.0.1:<port>.

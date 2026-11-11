@@ -67,7 +67,7 @@ Local ASR, no cloud, 70 seconds of audio in 27 seconds. The creator, on the "you
 >
 > *(the scary "4-year cap" is the INITIAL admission period; extensions still exist, the approval just moved from your school to the immigration service)*
 
-That correction was spoken into a camera and never written down. Text search structurally cannot find it.
+That correction was spoken into a camera and never written down. OmniSeek found it by transcribing the video on your own machine.
 
 ### 4. Through the login wall
 

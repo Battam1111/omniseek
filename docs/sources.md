@@ -21,7 +21,7 @@ Descriptions are quoted in the language of each source's own audience; many are 
 because that is where those sources live. The always-English routing layer is the domain
 headers, the access levels, and the tags on every row.
 
-Generated from omniseek 0.2.1: 222 live sources across 34 domains.
+Generated from omniseek 0.3.0: 222 live sources across 34 domains.
 
 ## papers (66)
 

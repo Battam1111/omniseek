@@ -42,7 +42,7 @@ import threading
 import time
 from contextlib import contextmanager
 from typing import Optional
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 from bs4 import BeautifulSoup
 
@@ -70,8 +70,12 @@ logger = logging.getLogger(__name__)
 # "xiaohongshu.com 302s here" behavior is gone — www.xiaohongshu.com now serves
 # this profile directly, but as a GUEST (search there is login-walled; only
 # tokened note pages are guest-readable). So the search flow MUST ride
-# rednote.com, while fetch_url may fall back to xiaohongshu.com for the note
-# body when the host's egress blackholes rednote.com alone (a proxy MATCH-lane
+# rednote.com, and fetch_url reads every note on rednote.com too: a xiaohongshu.com
+# note link is navigated to rednote.com/explore/<id> with its query kept, because
+# read as given it got the guest view (2026-11-11: 19 of 41 comments, no reply
+# expansion; the same id and token on rednote.com read all 41). fetch_url may
+# still fall back to xiaohongshu.com for the note body when the host's egress
+# blackholes rednote.com alone (a proxy MATCH-lane
 # exit node dying takes rednote.com with it while xiaohongshu.com rides the
 # direct lane — the 2026-08-11 outage). The note DOM is identical on both hosts.
 HOME_URL = "https://www.rednote.com"
@@ -93,7 +97,8 @@ def _goto_note_dual_host(page, url: str) -> None:
     with its xsec_token is guest-readable on www.xiaohongshu.com too (verified
     2026-08-11: same URL, host swapped, renders the full body in this Chrome),
     so when rednote.com fails at the NETWORK layer the note is retried once on
-    the sibling host instead of losing the read. Non-network errors, and
+    the sibling host instead of losing the read. That fallback read is a GUEST one
+    (first comment page only, 2026-11-11), which beats losing the note. Non-network errors, and
     failures on non-rednote URLs, re-raise unchanged. Search deliberately has
     no such fallback: the logged session does not ride to xiaohongshu.com, and
     guest search is login-walled there (probed 2026-08-11)."""
@@ -248,8 +253,40 @@ def _image_urls(entries) -> list[str]:
 
 
 _STATE_RE = re.compile(r"window\.__INITIAL_STATE__\s*=\s*(\{.*?\})\s*;?\s*</script>", re.S)
-# The state is a JS literal, not JSON: it carries bare `undefined` values.
-_UNDEFINED_RE = re.compile(r"(?<=[:\[,])undefined(?=[,\]}])")
+
+
+def _js_state_to_json(text: str) -> str:
+    """The state is a JS literal, not JSON. Both hosts carry bare `undefined` values; rednote.com
+    also carries `new Set([...])` (its translate store: "originalCommentIds":new Set([]), seen on
+    a guest rednote.com note-route page 2026-11-11), which made json.loads fail there, so every
+    rednote.com read fell back to the DOM images. Outside strings: undefined -> null, and the
+    `new Set(` / `new Map(` wrappers and their closing `)` are dropped (a Set reads as its list, a
+    Map as its list of pairs; JSON has no other parentheses outside strings)."""
+    out: list[str] = []
+    i, n, in_str = 0, len(text), False
+    while i < n:
+        c = text[i]
+        if in_str:
+            if c == "\\":
+                out.append(text[i:i + 2])
+                i += 2
+                continue
+            in_str = c != '"'
+            out.append(c)
+        elif c == '"':
+            in_str = True
+            out.append(c)
+        elif text.startswith("undefined", i):
+            out.append("null")
+            i += len("undefined")
+            continue
+        elif text.startswith("new Set(", i) or text.startswith("new Map(", i):
+            i += len("new Set(")
+            continue
+        elif c != ")":
+            out.append(c)
+        i += 1
+    return "".join(out)
 
 
 def _pick_state_note(note_state, note_id: Optional[str]) -> Optional[dict]:
@@ -274,7 +311,7 @@ def _state_note_from_html(html: str, note_id: Optional[str]) -> Optional[dict]:
     if not m:
         return None
     try:
-        state = json.loads(_UNDEFINED_RE.sub("null", m.group(1)))
+        state = json.loads(_js_state_to_json(m.group(1)))
     except ValueError:
         return None
     return _pick_state_note(state.get("note") if isinstance(state, dict) else None, note_id)
@@ -309,48 +346,163 @@ def _comment_media(comments: list, dom_comment_images: list, body_media: list) -
     return out
 
 
-def _flatten_captured_comments(items: list) -> list[dict]:
-    """Captured /api/sns/web/v2/comment/page comment dicts -> the [{author,text,likes}] shape the
-    fetch_url doc-build renders, INCLUDING each comment's inline sub_comments (replies) as a "↳ "
-    line. Deduped by comment id (the same page can re-fire on scroll). A comment that posted
-    pictures also carries ``images`` (full-size URLs); a picture-only comment reads "[图片]".
+# Paths of the page's own comment requests (2026-11-11). The first page and the scroll pages of the
+# top-level thread come from comment/page, each top-level comment carrying its first one or two
+# replies inline (sub_comments). Clicking "查看 N 条回复" / "View N replies" makes the page fetch the
+# rest of that thread from comment/sub/page (query: note_id, root_comment_id, num, cursor; response
+# data.comments holds the replies). Matched on the exact path: a loose substring test is how the
+# reply pages went uncollected (".../comment/sub/page" does not contain ".../comment/page").
+_CMT_PAGE_PATH = "/api/sns/web/v2/comment/page"
+_CMT_SUB_PATH = "/api/sns/web/v2/comment/sub/page"
+
+
+def _comment_row(c: dict, reply: bool) -> Optional[dict]:
+    """One captured comment dict -> a {author,text,likes,id[,images]} row; None for an empty one."""
+    text = (c.get("content") or "").strip()
+    pics = _image_urls(c.get("pictures"))
+    if not (text or pics):
+        return None
+    row = {"author": (c.get("user_info") or {}).get("nickname") or "匿名",
+           "text": ("↳ " if reply else "") + (text or "[图片]"),
+           "likes": c.get("like_count") or "", "id": c.get("id") or ""}
+    if pics:
+        row["images"] = pics
+    return row
+
+
+def _flatten_comment_thread(items: list, replies: Optional[list] = None) -> tuple[list[dict], dict]:
+    """Captured comments -> rows in thread order, plus counts.
+
+    ``items`` are top-level comment dicts from comment/page; ``replies`` are (root id or None,
+    reply dict) pairs from comment/sub/page, the root id read off the request's root_comment_id.
+    Order: each top-level comment, then its inline sub_comments, then the replies its expanded
+    pages brought, every reply as a "↳ " row; one id appears once (the same page can re-fire on
+    scroll, and an expanded page repeats the inline replies). A reply whose request carried no
+    root id is placed by its own root_comment_id, else by target_comment.id (the comment it answers,
+    which may itself be a reply); one whose thread was never captured goes to the end.
     Pure decode, no judgment."""
-    out: list[dict] = []
-    seen: set = set()
+    order: list = []          # top-level comments, first occurrence, inline replies merged
+    by_id: dict = {}
     for c in (items or []):
         if not isinstance(c, dict):
             continue
         cid = c.get("id")
-        if cid and cid in seen:
+        if cid and cid in by_id:
+            by_id[cid]["inline"].extend(x for x in (c.get("sub_comments") or []) if isinstance(x, dict))
             continue
+        slot = {"c": c, "inline": [x for x in (c.get("sub_comments") or []) if isinstance(x, dict)],
+                "more": []}
+        order.append(slot)
+        if cid:
+            by_id[cid] = slot
+    reply_root: dict = {}     # reply id -> root id, to place a reply that names only its target
+    for slot in order:
+        for sc in slot["inline"]:
+            if sc.get("id") and slot["c"].get("id"):
+                reply_root[sc["id"]] = slot["c"]["id"]
+    for root, r in (replies or []):
+        if isinstance(r, dict) and root and r.get("id"):
+            reply_root.setdefault(r["id"], root)
+    orphans: list = []
+    for root, r in (replies or []):
+        if not isinstance(r, dict):
+            continue
+        if not root:
+            cand = r.get("root_comment_id") or (r.get("target_comment") or {}).get("id")
+            root = cand if cand in by_id else reply_root.get(cand)
+        if root in by_id:
+            by_id[root]["more"].append(r)
+        else:
+            orphans.append(r)
+
+    out: list[dict] = []
+    seen: set = set()
+    counts = {"main_comments": 0, "inline_replies": 0, "expanded_replies": 0}
+
+    def _emit(c: dict, reply: bool, key: str) -> None:
+        cid = c.get("id")
+        if cid and cid in seen:
+            return
         if cid:
             seen.add(cid)
-        text = (c.get("content") or "").strip()
-        pics = _image_urls(c.get("pictures"))
-        if text or pics:
-            row = {"author": (c.get("user_info") or {}).get("nickname") or "匿名",
-                   "text": text or "[图片]", "likes": c.get("like_count") or "", "id": cid or ""}
-            if pics:
-                row["images"] = pics
+        row = _comment_row(c, reply)
+        if row:
             out.append(row)
-        for sc in (c.get("sub_comments") or []):
-            if not isinstance(sc, dict):
-                continue
-            scid = sc.get("id")
-            if scid and scid in seen:
-                continue
-            if scid:
-                seen.add(scid)
-            stext = (sc.get("content") or "").strip()
-            spics = _image_urls(sc.get("pictures"))
-            if stext or spics:
-                row = {"author": (sc.get("user_info") or {}).get("nickname") or "匿名",
-                       "text": "↳ " + (stext or "[图片]"), "likes": sc.get("like_count") or "",
-                       "id": scid or ""}
-                if spics:
-                    row["images"] = spics
-                out.append(row)
-    return out
+            counts[key] += 1
+
+    for slot in order:
+        _emit(slot["c"], False, "main_comments")
+        for sc in slot["inline"]:
+            _emit(sc, True, "inline_replies")
+        for sc in slot["more"]:
+            _emit(sc, True, "expanded_replies")
+    for sc in orphans:
+        _emit(sc, True, "expanded_replies")
+    return out, counts
+
+
+def _flatten_captured_comments(items: list, replies: Optional[list] = None) -> list[dict]:
+    """Captured comment/page comment dicts (and optional comment/sub/page replies) -> the
+    [{author,text,likes,id[,images]}] rows the fetch_url doc-build renders; see
+    _flatten_comment_thread for the order. A picture-only comment reads "[图片]"."""
+    return _flatten_comment_thread(items, replies)[0]
+
+
+# Emoji in a comment travel as codes like "[笑哭R]" in the API text and as <img> in the page, which
+# innerText drops; whitespace differs between the two as well. Both are removed before comparing.
+_EMOJI_CODE_RE = re.compile(r"\[[^\[\]\s]{1,10}\]")
+
+
+def _comment_key_text(text: str) -> str:
+    t = (text or "").strip()
+    if t.startswith("↳"):
+        t = t[1:]
+    return re.sub(r"\s+", "", _EMOJI_CODE_RE.sub("", t))
+
+
+def _merge_comment_rows(captured: list, dom: list) -> tuple[list[dict], int]:
+    """The captured rows (structured, with ids) plus every page-read row they lack.
+
+    A page-read row is the same comment as a captured one when author and text match after
+    _comment_key_text, or when the same author's captured text ends its text (the page prints a
+    reply to a reply as "回复 某人 : 正文"). A missing row goes right after the row that precedes it
+    in the page list and is already in the result; with none before it, at the end. Returns
+    (rows, how many page-read rows were added)."""
+    keys: dict = {}
+    by_author: dict = {}
+    for i, c in enumerate(captured or []):
+        if not isinstance(c, dict):
+            continue
+        k = _comment_key_text(c.get("text") or "")
+        a = (c.get("author") or "").strip()
+        keys.setdefault((a, k), i)
+        if k:
+            by_author.setdefault(a, []).append((k, i))
+    after: dict = {}
+    tail: list = []
+    last: Optional[int] = None
+    added = 0
+    for d in (dom or []):
+        if not isinstance(d, dict):
+            continue
+        k = _comment_key_text(d.get("text") or "")
+        a = (d.get("author") or "").strip()
+        if not k:
+            continue
+        hit = keys.get((a, k))
+        if hit is None:
+            hit = next((i for ck, i in by_author.get(a, []) if len(ck) >= 2 and k.endswith(ck)), None)
+        if hit is not None:
+            last = hit
+            continue
+        (after.setdefault(last, []) if last is not None else tail).append(d)
+        added += 1
+    out: list[dict] = []
+    for i, c in enumerate(captured or []):
+        out.append(c)
+        out.extend(after.get(i, []))
+    out.extend(tail)
+    return out, added
 
 
 def _card_hint(comment_count: Optional[int]) -> str:
@@ -989,31 +1141,88 @@ _DECLARED_JS = r"""
 # Reply-expander matcher (text-based, class-name-proof). Deliberately reply-anchored
 # ("展开 X 条回复" / "更多回复" / "查看…回复" / "加载更多") so it never clicks a bare "回复"
 # (which would open a reply BOX — an interaction) or "查看全部评论" (which can navigate away).
-_EXPANDER_JS_RE = r"""/展开|更多回复|加载更多|查看.{0,8}回复/"""
+# The 小号 reads on rednote.com, whose interface may be English: "View 6 replies", "View more
+# replies", "Show more replies", "Load more" (2026-11-11); a bare "Reply" stays unmatched.
+_EXPANDER_JS_RE = (r"""/展开|更多回复|加载更多|查看.{0,8}回复"""
+                   r"""|\bview\s+(\d+\s+|more\s+)?repl(y|ies)\b|\bshow\s+more\s+repl(y|ies)\b"""
+                   r"""|\bload\s+more\b/i""")
+# Never clicked: these fold a thread back up.
+_COLLAPSER_JS_RE = r"""/收起|\bhide\b|\bcollapse\b/i"""
 
 
-def _load_comments(page, max_rounds: int = 40) -> None:
+_MAIN_LINE = ""  # key of the top-level thread in the has_more record; a reply chain is keyed by its root id
+
+
+def _note_line(lines: dict, key: str, has_more, cursor, from_sub: bool) -> None:
+    """Record one line's paging state from the page's own answer. ``key`` is _MAIN_LINE for the
+    top-level thread (comment/page data.has_more / data.cursor) or a root comment id for its reply
+    chain: from_sub=True for comment/sub/page data.has_more / data.cursor, False for what a
+    comment/page item carries (sub_comment_count above its inline sub_comments, the page's own
+    test, and sub_comment_cursor). has_more False is
+    final (the page said there is no next page; a re-fired earlier page must not reopen it), and a
+    reply chain's own sub/page answer is never overwritten by the item copy in a comment/page."""
+    old = lines.get(key)
+    if old is not None and (old["has_more"] is False or (old["from_sub"] and not from_sub)):
+        return
+    lines[key] = {"has_more": bool(has_more), "cursor": cursor or "", "from_sub": from_sub}
+
+
+def _lines_open(lines: Optional[dict]) -> tuple[int, int]:
+    """(lines still marked has_more, of them reply chains)."""
+    vals = [(k, v) for k, v in (lines or {}).items() if v.get("has_more")]
+    return len(vals), sum(1 for k, _ in vals if k != _MAIN_LINE)
+
+
+def _load_comments(page, max_rounds: int = 40, lines: Optional[dict] = None) -> dict:
     """Fully drill the comment thread: click EVERY 展开 X 条回复 / 更多回复 / 加载更多 expander
     and scroll the real container, until NO expander remains AND the comment+reply count is
     stable — i.e. every reply-chain is opened to its bottom. The operator's heuristic: the deepest
     sub-replies are where the conversation actually went in-depth, so we don't stop the moment
     the count plateaus (which strands collapsed deep threads); we stop when there is nothing
     left to expand. Read-only throughout (expanders only reveal content a human reader would —
-    no like/follow/comment/post). Bounded (max_rounds + stable-backstop) for account-safety."""
+    no like/follow/comment/post). Bounded (max_rounds + stable-backstop) for account-safety.
+
+    Each round clicks only the innermost element whose text reads as an expander (an outer span
+    or div wrapping the same words is skipped), so one button gets one click per round.
+
+    When to stop follows the page's own answers (2026-11-11): ``lines`` is the has_more record the
+    response listener keeps (_note_line), one entry for the top-level thread and one per reply
+    chain, read live while this loop runs. The bottom marker ("没有更多" / "THE END") only closes
+    the top-level thread: a reply chain the page still marks has_more keeps the loop going as long
+    as a round still finds an expander to click (an opened chain shows its next "展开更多回复" only
+    after the previous page lands; the 20-comment note read 16 of 20 when the loop stopped in the very
+    round the bottom showed, after one expander click). The round right after the bottom first shows always clicks once more, since
+    the scroll that reached the bottom may have rendered new expanders. Returns {"rounds",
+    "expander_clicks", "stop", "has_more_lines"}; stop is "bottom_marker", "count_stable",
+    "has_more_unclickable" (a line still has_more but a round after the bottom found no expander to
+    click), "max_rounds" or "page_error"; has_more_lines counts the lines still marked has_more at
+    the stop (top-level thread included)."""
     stable, prev = 0, -1
+    ended = False
+    stats = {"rounds": 0, "expander_clicks": 0, "stop": "max_rounds", "has_more_lines": 0}
     for _ in range(max_rounds):
+        stats["rounds"] += 1
+        was_ended = ended
+        clicked = 0
         try:  # 1) click every reply expander (JS .click reaches off-screen ones too)
-            page.evaluate(r"""()=>{
-              const re=%s;
+            clicked = int(page.evaluate(r"""()=>{
+              const re=%s, no=%s;
+              const hit=(el)=>{const x=(el.innerText||'').trim();
+                               return !!x && x.length<=20 && re.test(x) && !no.test(x);};
               let n=0;
               for(const el of document.querySelectorAll('span,a,div,button')){
-                const x=(el.innerText||'').trim();
-                if(x && x.length<=16 && re.test(x) && !/收起/.test(x)){ try{el.click();n++;}catch(e){} }
+                if(!hit(el)) continue;
+                let inner=false;
+                for(const ch of el.querySelectorAll('*')){ if(hit(ch)){inner=true;break;} }
+                if(inner) continue;
+                try{el.click();n++;}catch(e){}
                 if(n>=30) break;
               }
-            }""" % _EXPANDER_JS_RE)
+              return n;
+            }""" % (_EXPANDER_JS_RE, _COLLAPSER_JS_RE)) or 0)
         except Exception:  # noqa: BLE001
             pass
+        stats["expander_clicks"] += clicked
         try:  # 2) scroll the real (largest scrollable) comment container + last item into view
             page.evaluate(r"""()=>{
               const cs=[...document.querySelectorAll('.comments-el,.comments-container,[class*="comment-list"],[class*="comments"],[class*="scroller"]')];
@@ -1030,10 +1239,10 @@ def _load_comments(page, max_rounds: int = 40) -> None:
         try:
             n = page.evaluate(r"""()=>document.querySelectorAll('[class*="comment-item"],[class*="reply-item"]').length""")
         except Exception:  # noqa: BLE001
+            stats["stop"] = "page_error"
             break
-        ended = False
         try:
-            ended = bool(page.evaluate(r"""()=>/到底了|没有更多|已经到底|THE END/.test((document.body.innerText||'').slice(-500))"""))
+            ended = bool(page.evaluate(r"""()=>/到底了|没有更多|已经到底|THE END/.test((document.body.innerText||'').slice(-500))""")) or ended
         except Exception:  # noqa: BLE001
             pass
         if n == prev:
@@ -1042,10 +1251,24 @@ def _load_comments(page, max_rounds: int = 40) -> None:
             stable, prev = 0, n
         # Robust stop: a LONG plateau (async lazy-load is non-deterministic, so confirm the
         # ceiling over several rounds — a transient single-round stall must not stop us early)
-        # or an explicit end-marker. We keep clicking expanders every round regardless, so a
-        # late-appearing deep reply-chain still gets opened (and resets the plateau counter).
-        if ended or stable >= 6:
+        # or an explicit end-marker for the top-level thread. We keep clicking expanders every
+        # round regardless, so a late-appearing deep reply-chain still gets opened (and resets the
+        # plateau counter). The page evaluates above have run the response listener, so ``lines``
+        # holds every answer that landed during this round's settle.
+        if not (ended or stable >= 6):
+            continue
+        open_replies = _lines_open(lines)[1]
+        if not open_replies:
+            stats["stop"] = "bottom_marker" if ended else "count_stable"
             break
+        if was_ended and clicked == 0:
+            stats["stop"] = "has_more_unclickable"
+            break
+        if stable >= 6:
+            stats["stop"] = "count_stable"
+            break
+    stats["has_more_lines"] = _lines_open(lines)[0]
+    return stats
 
 
 class XiaohongshuAdapter(SourceBase):
@@ -1327,26 +1550,66 @@ class XiaohongshuAdapter(SourceBase):
         """Live (CDP) half of fetch_url(), run while holding the single 小号 slot (see
         _search_live / _live_slot). The ``with`` auto-releases on every return path below."""
         # This adapter owns rednote.com URLs, plus xiaohongshu.com URLs while the mainland 9224
-        # adapter is sealed (see fetch_url). A xiaohongshu.com link is navigated as given: a
-        # tokened note there is guest-readable in this Chrome (verified 2026-08-11), and the
-        # dual-host retry inside _goto_note_dual_host only ever goes rednote -> xiaohongshu.
-        nav_url = url
-        guest_host = (urlparse(url).hostname or "").endswith("xiaohongshu.com")
-        _id_m = re.search(r"/(?:explore|search_result|discovery/item)/([0-9a-f]{24})", url)
+        # adapter is sealed (see fetch_url). The 小号's login session lives on rednote.com only,
+        # so a xiaohongshu.com NOTE link is navigated to https://www.rednote.com/explore/<id> with
+        # its query string kept (xsec_token, xsec_source, ...). Read as given, xiaohongshu.com
+        # showed this Chrome the GUEST view: first comment page only, and the reply expanders send
+        # no request (2026-11-11, note 6af03ef1000000001a025bf5, 41 comments declared: the
+        # xiaohongshu.com link read 19 = 10 main + 9 inline replies, 1 page request, 0 reply
+        # requests after 28 expander clicks; the same id and token on rednote.com read all 41 =
+        # 16 + 13 inline + 12 expanded, 2 page and 4 reply requests). The returned document keeps
+        # the caller's url. _goto_note_dual_host still falls back rednote -> xiaohongshu when
+        # rednote.com fails at the network layer; whether a read is a guest one is decided by the
+        # host the page actually landed on (see _flow), never by the link passed in.
+        parsed = urlparse(url)
+        _id_m = re.search(r"/(?:explore|search_result|discovery/item)/([0-9a-f]{24})", parsed.path)
         nav_note_id = _id_m.group(1) if _id_m else None
+        nav_url = url
+        if nav_note_id and (parsed.hostname or "").endswith("xiaohongshu.com"):
+            nav_url = f"https://www.rednote.com/explore/{nav_note_id}" + (f"?{parsed.query}" if parsed.query else "")
 
         _cmt: list = []  # captured /comment/page comments (the listener appends from the CDP thread;
         #                  cdp_call's join() flushes the writes before we read it below)
+        _sub: list = []  # captured /comment/sub/page replies as (root_comment_id or None, reply)
+        _cmt_seen = {"page": 0, "sub": 0}  # comment/page and comment/sub/page responses captured
+        _lines: dict = {}  # has_more / cursor per line (_note_line), read by _load_comments while it runs
         _nav = {"landed": ""}  # a refused read's /404 address, written from the CDP thread like _cmt
 
         def _flow(page) -> tuple[str, Optional[str]]:
             if _USE_XHR_COMMENTS:
                 def _on_cmt(resp):
                     try:
-                        if "/api/sns/web/v2/comment/page" in (resp.url or ""):
-                            for it in ((resp.json().get("data") or {}).get("comments") or []):
+                        u = urlparse(resp.url or "")
+                        if u.path == _CMT_PAGE_PATH:
+                            _cmt_seen["page"] += 1
+                            data = resp.json().get("data") or {}
+                            if "has_more" in data:
+                                _note_line(_lines, _MAIN_LINE, data["has_more"], data.get("cursor"), True)
+                            for it in (data.get("comments") or []):
                                 if isinstance(it, dict) and (it.get("content") or it.get("pictures")):
                                     _cmt.append(it)
+                                if isinstance(it, dict) and it.get("id") and (
+                                        "sub_comment_count" in it or "sub_comment_has_more" in it):
+                                    # the page's own rule (rednote xhs-pc-web index.ec832f48.js,
+                                    # 2026-11-11): a thread has more while sub_comment_count exceeds
+                                    # the inline sub_comments
+                                    if "sub_comment_count" in it:
+                                        try:
+                                            more = int(it.get("sub_comment_count") or 0) > len(it.get("sub_comments") or [])
+                                        except (TypeError, ValueError):
+                                            more = bool(it.get("sub_comment_has_more"))
+                                    else:
+                                        more = bool(it.get("sub_comment_has_more"))
+                                    _note_line(_lines, it["id"], more, it.get("sub_comment_cursor"), False)
+                        elif u.path == _CMT_SUB_PATH:
+                            _cmt_seen["sub"] += 1
+                            root = (parse_qs(u.query).get("root_comment_id") or [None])[0]
+                            data = resp.json().get("data") or {}
+                            if root and "has_more" in data:
+                                _note_line(_lines, root, data["has_more"], data.get("cursor"), True)
+                            for it in (data.get("comments") or []):
+                                if isinstance(it, dict):
+                                    _sub.append((root, it))
                     except Exception:  # noqa: BLE001 — one unparseable XHR never breaks the fetch
                         pass
                 page.on("response", _on_cmt)
@@ -1387,9 +1650,10 @@ class XiaohongshuAdapter(SourceBase):
             except Exception:  # noqa: BLE001
                 has_content = False
             if not has_content and _login_wall(page):
-                if guest_host:
-                    # The 小号 session lives on rednote.com; a wall on a xiaohongshu.com page is
-                    # the GUEST view of one link, so it must not trip the 6h account backoff.
+                if (urlparse(page.url or "").hostname or "").endswith("xiaohongshu.com"):
+                    # The 小号 session lives on rednote.com; a wall on a page that LANDED on
+                    # xiaohongshu.com (the network-layer fallback, or a non-note link there) is the
+                    # GUEST view of one link, so it must not trip the 6h account backoff.
                     return ("guest_wall", None, [], {}, (None, None))
                 return ("login", None, [], {}, (None, None))
             _human.scroll_like_reading(page, screens=random.randint(1, 2))
@@ -1408,27 +1672,37 @@ class XiaohongshuAdapter(SourceBase):
             # eye hands over a URL a transcriber can fetch, and never a process-local handle.
             video = video_with_origin(page, seen_video)  # (url, "dom"|"wire"|"unresolved")
             # Comments carry the 经验. MAX-COMPLETENESS path (completeness is non-negotiable): run
-            # the EXHAUSTIVE _load_comments (scroll the comment container + click every 展开 expander
-            # until stable) so the page loads ALL comments + replies, WHILE _on_cmt above PASSIVELY
-            # captures the page's own signed /comment/page XHRs it fires (structured JSON, immune to
-            # DOM virtualization). Then keep whichever source is MORE complete: the captured JSON
-            # beats the DOM harvest when the list is virtualized; the DOM harvest beats capture when
-            # deeper expander replies only render in the DOM. So we are NEVER below the DOM path, and
-            # often above it. We forge nothing (the expander clicks reveal only what a human reader
-            # would, same READ-ONLY contract). The expander loop is the slow part, kept because full
-            # completeness requires it; speed is secondary to completeness here.
+            # the EXHAUSTIVE _load_comments (scroll the comment container + click every reply
+            # expander until stable) so the page loads ALL comments + replies, WHILE _on_cmt above
+            # PASSIVELY captures the page's own signed comment/page and comment/sub/page responses
+            # (structured JSON, immune to DOM virtualization). The two lists are then MERGED, not
+            # ranked: the captured thread is the base, and any comment the page showed that the
+            # capture lacks is slotted in after its neighbour (2026-11-11; keeping only the longer
+            # list lost whatever the other one alone had). We forge nothing (the expander clicks
+            # reveal only what a human reader would, same READ-ONLY contract).
             cdata = {"list": [], "declared": None, "dom_comment_images": dom_comment_images}
             dom_list: list = []
+            load = {"rounds": 0, "expander_clicks": 0, "stop": "not_run", "has_more_lines": 0}
             try:
-                _load_comments(page)  # exhaustive: every expander + container scroll, bounded by its own caps
+                load = _load_comments(page, lines=_lines)  # exhaustive: every expander + container scroll, bounded by its own caps
                 dom_list = page.evaluate(_COMMENTS_JS) or []
                 cdata["declared"] = page.evaluate(_DECLARED_JS)
             except Exception:  # noqa: BLE001
                 pass
-            cap_list = _flatten_captured_comments(_cmt) if _USE_XHR_COMMENTS else []
-            cdata["list"] = cap_list if len(cap_list) >= len(dom_list) else dom_list
-            # Comment pictures ride on the captured comments even when the DOM list wins above.
+            if _USE_XHR_COMMENTS:
+                cap_list, counts = _flatten_comment_thread(_cmt, _sub)
+            else:
+                cap_list, counts = [], {"main_comments": 0, "inline_replies": 0, "expanded_replies": 0}
+            cdata["list"], merged = _merge_comment_rows(cap_list, dom_list)
+            # Comment pictures ride on the captured comments.
             cdata["captured_images"] = [c for c in cap_list if c.get("images")]
+            # Counts only, for whoever checks or repairs this read.
+            cdata["harvest"] = {**counts,
+                                "page_responses": _cmt_seen["page"], "sub_responses": _cmt_seen["sub"],
+                                "dom_rows": len(dom_list), "merged_from_dom": merged,
+                                "expander_clicks": load.get("expander_clicks", 0),
+                                "rounds": load.get("rounds", 0), "stop": load.get("stop"),
+                                "has_more_lines": load.get("has_more_lines", 0)}
             return ("ok", page.content(), images, cdata, video)
 
         try:
@@ -1458,8 +1732,9 @@ class XiaohongshuAdapter(SourceBase):
             return None
         if status == "guest_wall":
             diag.note("xiaohongshu.guest_wall", url=url,
-                      body="xiaohongshu.com showed this link to a GUEST behind a login wall (the 小号 "
-                           "session lives on rednote.com). Nothing charged to the 小号; re-find the note "
+                      body="the page landed on xiaohongshu.com (rednote.com unreachable, or not a note "
+                           "link) and was shown to a GUEST behind a login wall (the 小号 session lives "
+                           "on rednote.com). Nothing charged to the 小号; re-find the note "
                            "with omniseek_search(sources=['xiaohongshu']) and read the rednote.com link it returns.")
             return None
         if status == "refused":
@@ -1564,6 +1839,7 @@ class XiaohongshuAdapter(SourceBase):
             media=([video_url] + images) if video_url else images,
             metadata={"comments": comments, "comment_count": len(comments),
                       "comments_declared": declared, "comment_media": comment_media,
+                      "comment_harvest": cdata.get("harvest") or {},
                       "media_source": media_source,
                       **video_metadata(video_url, video_src, has_player=is_video)},
         )
