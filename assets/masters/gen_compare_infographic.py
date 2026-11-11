@@ -1,214 +1,133 @@
-"""Comparison infographic: three questions, what web search gave, what the agent with OmniSeek gave.
+"""Comparison infographic: the three recorded questions, each drawn in its own shape.
 
     python assets/masters/gen_compare_infographic.py
     -> assets/demo/compare-table-{en,zh}-{light,dark}.png        (wide, 1200 CSS px at 2x)
-       assets/demo/compare-table-{en,zh}-{light,dark}-narrow.png (stacked, 400 CSS px at 2x)
+       assets/demo/compare-table-{en,zh}-{light,dark}-narrow.png (stacked, 440 CSS px at 2x)
 
-Every quoted line is cut from compare-demo-run.json (the recorded runs) by `cut()`, which stops if the
-cut is not in the record verbatim: lines are shortened with an ellipsis, never reworded. English
-translations of Chinese lines are typed in GLOSS and set in italics. Comment authors are never shown
-(the record does not carry them). Same palette, logo and checks as gen_compare_demo.py.
+compare-infographic.html draws it (the minute on the video's timeline, the comments by their likes, the
+papers that cite both as dots between two circles); this script hands it the words. Every quoted line is
+cut from compare-demo-run.json by cut(), which stops when the line is not in the record verbatim; English
+translations of Chinese lines are typed here. Comment authors are never shown, and the long comment in which
+a viewer writes about their own hearing is described, not quoted. Same browser and fonts as gen_seek_demo.py.
 """
-import html
-import tempfile
+
+from __future__ import annotations
+
+import asyncio
+import json
+import os
 from pathlib import Path
 
-import gen_compare_demo as D
+from playwright.async_api import async_playwright
 
-e = html.escape
-RUN, cut, hms = D.RUN, D.cut, D.hms
+HERE = Path(__file__).resolve().parent
+OUT = HERE.parent / "demo"
+PAGE = HERE / "compare-infographic.html"
+RUN = json.loads((HERE / "compare-demo-run.json").read_text(encoding="utf-8"))
 R01, R04, R08 = RUN["R01"], RUN["R04"], RUN["R08"]
-QUOTE, T_QUOTE = D.QUOTE, D.T_QUOTE
-WIDE, NARROW, SCALE = 1200, 400, 2
+SRC = {k: json.dumps(v, ensure_ascii=False) for k, v in RUN.items()}
 
-GLOSS = dict(D.GLOSS)
-GLOSS.update({
-    "顶级评论和弹幕主要分为以下几个类型": "“The top comments and bullet comments fall into these types”",
-    "对内容的褒奖和认可": "“praise and recognition of the content”",
-    "学习资料分享与交流": "“sharing and swapping study materials”",
-    "沐神一己之力拉高国内研究生教育水平[doge]": "“Mu Li single-handedly raised the level of graduate education in China [doge]”",
-    "Mu Li Is All You Need[doge]": None,
-})
+
+def cut(rec: str, part: str) -> str:
+    if part not in SRC[rec]:
+        raise SystemExit(f"not in {rec} verbatim: {part!r}")
+    return part
+
+
+HIT = next(h for h in R01["transcript_hits_写作"] if cut("R01", "这篇文章的写作是非常简洁的") in h["text"])
+WEB1, WEB2 = cut("R01", "大约在开头第1~8分钟"), cut("R01", "约在1分50秒-2分30秒之间")
+TYPES = [cut("R04", "对内容的褒奖和认可"), cut("R04", "学习资料分享与交流")]
+NOTHING = cut("R08", "I could not find a specific paper that directly cites both")
+DESCRIBED = {cut("R04", "你好，我是聋人"): {"en": "(a long comment asking for subtitles)",
+                                         "zh": "（一条请求加字幕的长评论）"}}
+GLOSS = {cut("R04", "沐神一己之力拉高国内研究生教育水平[doge]"):
+         "“Mu Li single-handedly raised the level of graduate education in China [doge]”"}
 
 T = {
     "en": {
-        "lang": "en", "title": "Same question, two agents",
-        "q": "Question", "web": "Agent with web search only", "omni": "Agent with OmniSeek",
-        "ask_zh": "Asked in Chinese (translated here)", "ask_en": "Asked in English",
-        "q1": D.T["en"]["question"],
-        "q2": R04["question_en"],
-        "q3": R08["web"][0]["query"],
-        "again": "asked again:", "exact": "searching his exact words:",
-        "nolikes": "No comment text with like counts in the answer.",
-        "likes": "{n:,} likes",
-        "shown": "{k} of the {n} comments returned, with their like counts; authors left out here",
-        "both": "papers in the returned citation graph cite both",
-        "eg": "for example",
-        "day": "Run {d}. Citing papers change every day.",
-        "foot": "Real runs, 2026-10-11. Quotes are cut from the recorded answers, not reworded; "
-                "translations in italics.",
-        "opens": "opens at {t}",
+        "title": "Three questions, two agents",
+        "sub": "Real runs on 2026-10-11: one agent with web search only, one with OmniSeek.",
+        "web": "Web search", "omni": "OmniSeek",
+        "h1": "The minute he said it",
+        "q1": "Asked in Chinese: in Mu Li's 87-minute Bilibili walkthrough of the Transformer paper, what does he "
+              "say about the paper's writing, and at what minute?",
+        "web1": "“Around minutes 1 to 8”",
+        "web2": "Asked again: “between about 1:50 and 2:30”",
+        "gloss1": "“The writing of this paper is very concise.”",
+        "cap1": "All 87 minutes, transcribed on your machine",
+        "h2": "The top comments",
+        "q2": "Asked in English: " + R04["question_en"],
+        "typesLead": "Sorted them into types, with no comment text and no likes:",
+        "types": ["“praise and recognition of the content”", "“sharing and swapping study materials”"],
+        "commentsLead": "The comments it returned, with their likes:",
+        "h3": "Papers that cite both",
+        "q3": "Asked in English: " + R08["question"],
+        "citeBoth": "papers cite both",
+        "citeWhere": "in the citation graph it returned",
+        "seeds": [["Leviathan", "et al. 2022"], ["Chen", "et al. 2023"]],
+        "foot": "Quotes are cut from the recorded answers, not reworded; comment authors are left out. "
+                "Citing papers change every day.",
     },
     "zh": {
-        "lang": "zh", "title": "同一个问题，两个 Agent",
-        "q": "问题", "web": "只有网页搜索的 Agent", "omni": "装了 OmniSeek 的 Agent",
-        "ask_zh": "用中文问", "ask_en": "用英文问",
-        "q1": R01["web"][0]["query"],
-        "q2": R04["question_en"],
-        "q3": R08["web"][0]["query"],
-        "again": "再问一次：", "exact": "搜原话：",
-        "nolikes": "回答里没有带点赞数的评论原文。",
-        "likes": "{n:,} 赞",
-        "shown": "返回的 {n} 条评论里的 {k} 条，带点赞数；这里不列作者",
-        "both": "篇同时引用了两篇（在返回的引用关系里）",
-        "eg": "例如",
-        "day": "{d} 实跑。引用它们的论文每天都在增加。",
-        "foot": "均为 2026-10-11 实跑。引文从记录里原样截取，没有改字。",
-        "opens": "从 {t} 播放",
+        "title": "三个问题，两个 Agent",
+        "sub": "2026-10-11 实跑：一个只有网页搜索的 Agent，一个装了 OmniSeek 的 Agent。",
+        "web": "网页搜索", "omni": "OmniSeek",
+        "h1": "他在第几分钟说的",
+        "q1": "用中文问：" + R01["question"],
+        "web1": f"「{WEB1}」",
+        "web2": f"再问一次：「{WEB2}」",
+        "gloss1": f"「{cut('R01', '这篇文章的写作是非常简洁的')}」",
+        "cap1": "整段 87 分钟，在你的电脑上转写",
+        "h2": "最热的评论",
+        "q2": "用英文问：" + R04["question_en"],
+        "typesLead": "只分了类型，没有评论原文，也没有点赞数：",
+        "types": [f"「{x}」" for x in TYPES],
+        "commentsLead": "它取回的评论原文，带点赞数：",
+        "h3": "同时引用两篇的论文",
+        "q3": "用英文问：" + R08["question"],
+        "citeBoth": "篇同时引用了这两篇",
+        "citeWhere": "在它取回的引用关系里",
+        "seeds": [["Leviathan", "et al. 2022"], ["Chen", "et al. 2023"]],
+        "foot": "引文从记录里原样截取，没有改字；不列评论作者。引用这两篇的论文每天都在增加。",
     },
 }
 
-CSS = """
-* { margin:0; padding:0; box-sizing:border-box; }
-html, body { background:transparent; }
-#stage { %(theme)s
-  width:%(w)spx; background:var(--bg); border:1px solid var(--line); border-radius:14px; overflow:hidden;
-  color:var(--fg); -webkit-font-smoothing:antialiased;
-  font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI","Helvetica Neue",Arial,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif; }
-.mono { font-family:ui-monospace,"SF Mono",Menlo,Consolas,"PingFang SC","Microsoft YaHei",monospace; }
-.top { display:flex; align-items:center; gap:12px; padding:16px 22px; border-bottom:1px solid var(--line); background:var(--bar); }
-.top svg { width:34px; height:34px; }
-.top h1 { font-size:24px; font-weight:800; letter-spacing:-.01em; }
-.hdr, .row { display:grid; grid-template-columns: 300px 1fr 1.2fr; }
-.hdr > div { padding:10px 18px; font-size:16px; font-weight:750; color:var(--muted); border-bottom:1px solid var(--line); }
-.hdr .o { color:var(--fn); display:flex; align-items:center; gap:7px; }
-.hdr svg { width:20px; height:20px; }
-.row + .row { border-top:1px solid var(--line); }
-.cell { padding:14px 18px 16px; min-width:0; }
-.cell + .cell { border-left:1px solid var(--line); }
-.cq { background:var(--bar); }
-.cw { background:var(--panel); }
-.co { background:var(--panel); }
-.ask { font-size:13.5px; font-weight:700; color:var(--fn); text-transform:none; }
-.qt { font-size:17px; font-weight:650; line-height:1.32; margin-top:4px; }
-.qr { font-size:16px; line-height:1.35; }
-.qr + .qr, .lab + .qr { margin-top:6px; }
-.big { font-size:21px; font-weight:700; line-height:1.3; }
-.lab { font-size:13.5px; color:var(--muted); font-weight:600; margin-top:9px; }
-.gl { font-size:14px; font-style:italic; color:var(--muted); line-height:1.32; margin-top:1px; }
-.note { font-size:13.5px; color:var(--muted); line-height:1.35; margin-top:8px; }
-.hit { background:var(--hl); border-radius:8px; padding:7px 10px; }
-.hit .at { color:var(--amber); font-weight:750; font-size:19px; }
-.cm { display:flex; gap:10px; align-items:baseline; margin-top:7px; }
-.cm .n { flex:0 0 auto; font-size:15px; font-weight:750; color:var(--amber); min-width:76px; }
-.cm .t { font-size:17px; line-height:1.3; }
-.num { font-size:30px; font-weight:800; color:var(--amber); line-height:1.1; }
-.ids { font-size:15.5px; color:var(--fn); margin-top:4px; line-height:1.45; }
-.foot { padding:10px 22px 12px; font-size:13px; color:var(--faint); border-top:1px solid var(--line); background:var(--bar); }
-.mini { display:none; font-size:12.5px; font-weight:750; color:var(--muted); margin-bottom:4px; }
-.mini.o { color:var(--fn); }
-/* narrow: stack the three cells of each row */
-.narrow .hdr { display:none; }
-.narrow .row { display:block; }
-.narrow .cell + .cell { border-left:0; border-top:1px dashed var(--line); }
-.narrow .mini { display:block; }
-.narrow .top h1 { font-size:21px; }
-.narrow .row + .row { border-top:6px solid var(--line); }
-"""
 
-
-def gl(lang, zh):
-    if lang != "en":
-        return ""
-    if zh not in GLOSS:
-        raise SystemExit(f"no English translation for {zh!r}")
-    return "" if GLOSS[zh] is None else f'<div class="gl">{e(GLOSS[zh])}</div>'
-
-
-def q(zh_text, part, more=True):
-    return e(cut(zh_text, part, more))
-
-
-def rows(lang):
+def data(lang: str) -> dict:
     t = T[lang]
-    w1, w2, w3 = R01["web"]
-    r1 = (
-        f'<div class="ask">{e(t["ask_zh"])}</div><div class="qt">{e(t["q1"])}</div>',
-        f'<div class="qr">「{q(w1["answer"], "这是一篇略短的文章，但是信息量巨大。")}」{q(w1["answer"], "（大意，")}</div>'
-        + gl(lang, "这是一篇略短的文章，但是信息量巨大。") + gl(lang, "（大意，")
-        + f'<div class="big" style="margin-top:6px">{q(w1["answer"], "大约在开头第1~8分钟", False)}</div>'
-        + gl(lang, "大约在开头第1~8分钟")
-        + f'<div class="lab">{e(t["again"])}</div><div class="qr"><b>{q(w3["answer"], "约在1分50秒-2分30秒之间", False)}</b></div>'
-        + gl(lang, "约在1分50秒-2分30秒之间")
-        + f'<div class="lab">{e(t["exact"])}</div><div class="qr mono">{q(w2["answer"], "No relevant web results found.", False)}</div>',
-        f'<div class="hit"><span class="at mono">{hms(T_QUOTE)}</span> '
-        f'<span class="big">{e(QUOTE["text"])}</span>{gl(lang, QUOTE["text"])}</div>'
-        f'<div class="ids mono">bilibili.com/video/BV1pu411o7BE?t={T_QUOTE}</div>'
-        f'<div class="note">omniseek_transcribe · {e(t["opens"].format(t=hms(T_QUOTE)))}</div>',
-    )
-    a = R04["web"][0]["answer"]
-    cms = sorted((c for c in R04["omniseek"]["comments"] if c["content"] in GLOSS), key=lambda c: -c["likes"])
-    r2 = (
-        f'<div class="ask">{e(t["ask_en"])}</div><div class="qt">{e(t["q2"])}</div>',
-        f'<div class="qr">「{q(a, "顶级评论和弹幕主要分为以下几个类型")}」</div>' + gl(lang, "顶级评论和弹幕主要分为以下几个类型")
-        + f'<div class="qr">1. {q(a, "对内容的褒奖和认可", False)}</div>' + gl(lang, "对内容的褒奖和认可")
-        + f'<div class="qr">2. {q(a, "学习资料分享与交流", False)} …</div>' + gl(lang, "学习资料分享与交流")
-        + f'<div class="note">{e(t["nolikes"])}</div>',
-        "".join(f'<div class="cm"><span class="n">{e(t["likes"].format(n=c["likes"]))}</span>'
-                f'<div><div class="t">{e(c["content"])}</div>{gl(lang, c["content"])}</div></div>' for c in cms)
-        + f'<div class="note">omniseek_search · {e(t["shown"].format(k=len(cms), n=len(R04["omniseek"]["comments"])))}</div>',
-    )
-    o8 = R08["omniseek"]
-    ids = [c["arxiv"] for c in o8["cite_both"] if c["arxiv"]][:3]
-    wa = R08["web"][0]["answer"]
-    r3 = (
-        f'<div class="ask">{e(t["ask_en"])}</div><div class="qt">{e(t["q3"])}</div>',
-        f'<div class="qr">“{e(cut(wa, "I could not find a specific paper that directly cites both"))}”</div>'
-        + f'<div class="qr">“{e(cut(wa, "no single publication from the web search is unambiguously confirmed to cite both papers together."))}”</div>',
-        f'<div class="qr"><span class="num">{o8["cite_both_count"]}</span> <b>{e(t["both"])}</b></div>'
-        f'<div class="lab">{e(t["eg"])}</div><div class="ids mono">' + "<br>".join(f"arXiv:{i}" for i in ids) + "</div>"
-        f'<div class="note">omniseek_field_skeleton · {e(t["day"].format(d=o8["run_date"]))}</div>',
-    )
-    return [r1, r2, r3]
+    comments = []
+    for c in sorted(R04["omniseek"]["comments"], key=lambda c: -c["likes"]):
+        desc = next((d[lang] for k, d in DESCRIBED.items() if c["content"].startswith(k)), None)
+        gloss = GLOSS.get(c["content"]) if lang == "en" else None
+        comments.append({"likes": c["likes"], "text": None if desc else c["content"], "desc": desc, "gloss": gloss})
+    doc = json.loads((HERE / "compare-demo-transcript.json").read_text(encoding="utf-8"))
+    return {
+        "lang": lang, "t": t, "types": t["types"], "comments": comments,
+        "dur": R01["video"]["duration_seconds"], "find": HIT["start"], "web": [60, 480],
+        "segs": [[s["start"], s["end"], len(s["text"])] for s in doc["segments"]],
+        "count": R08["omniseek"]["cite_both_count"], "seeds": t["seeds"],
+        "webQuote3": f"“{NOTHING}…”",
+    }
 
 
-def page(lang, theme, w, narrow):
-    t = T[lang]
-    body = "".join(
-        f'<div class="row"><div class="cell cq"><div class="mini">{e(t["q"])}</div>{c1}</div>'
-        f'<div class="cell cw"><div class="mini">{e(t["web"])}</div>{c2}</div>'
-        f'<div class="cell co"><div class="mini o">{e(t["omni"])}</div>{c3}</div></div>'
-        for c1, c2, c3 in rows(lang))
-    small_mark = D.MARK
-    return (f'<!doctype html><html lang="{t["lang"]}"><head><meta charset="utf-8"><style>'
-            + CSS % {"theme": D.THEMES[theme]["css"], "w": w} + "</style></head><body>"
-            f'<div id="stage" class="{"narrow" if narrow else ""}">'
-            f'<div class="top">{D.MARK}<h1>{e(t["title"])}</h1></div>'
-            f'<div class="hdr"><div>{e(t["q"])}</div><div>{e(t["web"])}</div><div class="o">{small_mark}{e(t["omni"])}</div></div>'
-            f'{body}<div class="foot">{e(t["foot"])}</div></div></body></html>')
-
-
-def main():
-    from playwright.sync_api import sync_playwright
-    D.OUT.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory() as td, sync_playwright() as p:
-        b = D.browser(p)
+async def main() -> None:
+    OUT.mkdir(parents=True, exist_ok=True)
+    channel = os.environ.get("OMNISEEK_BROWSER_CHANNEL", "msedge")
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(channel=channel)
         for lang in ("en", "zh"):
             for theme in ("light", "dark"):
-                for narrow in (False, True):
-                    w = NARROW if narrow else WIDE
-                    ctx = b.new_context(viewport={"width": w + 20, "height": 800}, device_scale_factor=SCALE)
-                    pg = ctx.new_page()
-                    f = Path(td) / "t.html"
-                    f.write_text(page(lang, theme, w, narrow), encoding="utf-8")
-                    pg.goto(f.as_uri())
-                    pg.wait_for_timeout(300)
-                    out = D.OUT / f"compare-table-{lang}-{theme}{'-narrow' if narrow else ''}.png"
-                    pg.locator("#stage").screenshot(path=str(out), omit_background=True)
-                    ctx.close()
-                    print(f"wrote {out.name}: {out.stat().st_size / 1e3:.0f} kB")
-        b.close()
+                for layout in ("wide", "narrow"):
+                    page = await browser.new_page(viewport={"width": 1240, "height": 1200}, device_scale_factor=2)
+                    await page.goto(PAGE.as_uri() + f"?theme={theme}&layout={layout}")
+                    await page.evaluate("() => window.ready")
+                    await page.evaluate("d => window.setData(d)", data(lang))
+                    out = OUT / f"compare-table-{lang}-{theme}{'-narrow' if layout == 'narrow' else ''}.png"
+                    await page.locator("#stage").screenshot(path=str(out))
+                    print(f"{out.name}: {out.stat().st_size / 1e3:.0f} kB")
+                    await page.close()
+        await browser.close()
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

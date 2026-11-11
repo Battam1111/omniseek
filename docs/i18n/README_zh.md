@@ -27,13 +27,13 @@ claude mcp add omniseek -- omniseek
 一个真实的问题：李沐在 B 站 87 分钟的 Transformer 论文精读里，怎么评价这篇论文的写作？原话是什么，在第几分钟？
 
 <p align="center">
-  <a href="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/seek-zh-light.gif?v=2026-11-11#gh-light-mode-only"><picture>
-    <source media="(max-width: 480px)" srcset="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/seek-zh-light-narrow.gif?v=2026-11-11#gh-light-mode-only">
-    <img src="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/seek-zh-light.gif?v=2026-11-11#gh-light-mode-only" width="720" alt="把 87 分钟的视频画成一条时间线。网页搜索的两个回答都指在开头：第 1 到 8 分钟，再问一次是 1 分 50 秒到 2 分 30 秒。OmniSeek 把 87 分钟整段转写，找到原话在 1:21:51。">
+  <a href="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/seek-zh-light.gif?v=2026-11-12#gh-light-mode-only"><picture>
+    <source media="(max-width: 480px)" srcset="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/seek-zh-light-narrow.gif?v=2026-11-12#gh-light-mode-only">
+    <img src="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/seek-zh-light.gif?v=2026-11-12#gh-light-mode-only" width="720" alt="把 87 分钟的视频画成一条时间线。网页搜索的两个回答都指在开头：第 1 到 8 分钟，再问一次是 1 分 50 秒到 2 分 30 秒。OmniSeek 把 87 分钟整段转写，找到原话在 1:21:51。">
   </picture></a>
-  <a href="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/seek-zh-dark.gif?v=2026-11-11#gh-dark-mode-only"><picture>
-    <source media="(max-width: 480px)" srcset="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/seek-zh-dark-narrow.gif?v=2026-11-11#gh-dark-mode-only">
-    <img src="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/seek-zh-dark.gif?v=2026-11-11#gh-dark-mode-only" width="720" alt="把 87 分钟的视频画成一条时间线。网页搜索的两个回答都指在开头：第 1 到 8 分钟，再问一次是 1 分 50 秒到 2 分 30 秒。OmniSeek 把 87 分钟整段转写，找到原话在 1:21:51。">
+  <a href="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/seek-zh-dark.gif?v=2026-11-12#gh-dark-mode-only"><picture>
+    <source media="(max-width: 480px)" srcset="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/seek-zh-dark-narrow.gif?v=2026-11-12#gh-dark-mode-only">
+    <img src="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/seek-zh-dark.gif?v=2026-11-12#gh-dark-mode-only" width="720" alt="把 87 分钟的视频画成一条时间线。网页搜索的两个回答都指在开头：第 1 到 8 分钟，再问一次是 1 分 50 秒到 2 分 30 秒。OmniSeek 把 87 分钟整段转写，找到原话在 1:21:51。">
   </picture></a>
 </p>
 

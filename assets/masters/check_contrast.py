@@ -51,7 +51,8 @@ JS = r"""
       const s = getComputedStyle(e);
       chain.unshift({bg: s.backgroundColor, op: parseFloat(s.opacity)});
     }
-    out.push({text: n.textContent.trim().slice(0, 40), color: getComputedStyle(el).color, chain,
+    const cs = getComputedStyle(el);   // SVG text is painted with fill, HTML text with color
+    out.push({text: n.textContent.trim().slice(0, 40), color: el instanceof SVGElement ? cs.fill : cs.color, chain,
               tags: [...(function* () { for (let e = el; e && e !== stage; e = e.parentElement) yield (e.className || '').toString(); })()]});
   }
   return out;
@@ -160,12 +161,11 @@ def measure(masters: Path, langs):
                 ctx.close()
                 if lang not in I.T:
                     continue
-                ctx = b.new_context(viewport={"width": I.WIDE + 20, "height": 800})
+                ctx = b.new_context(viewport={"width": 1240, "height": 1200})
                 pg = ctx.new_page()
-                f = Path(td) / "table.html"
-                f.write_text(I.page(lang, theme, I.WIDE, False), encoding="utf-8")
-                pg.goto(f.as_uri())
-                pg.wait_for_timeout(300)
+                pg.goto(I.PAGE.as_uri() + f"?theme={theme}&layout=wide")
+                pg.evaluate("() => window.ready")
+                pg.evaluate("d => window.setData(d)", I.data(lang))
                 for item in pg.evaluate(JS, "#stage"):
                     bg = paint(item["chain"], 0, page_rgb, None)
                     fg = paint(item["chain"], 0, page_rgb, item["color"])

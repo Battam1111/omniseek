@@ -30,7 +30,7 @@ Runs on your own computer. It plugs in through MCP, the standard way AI apps lik
 One real question, asked in Chinese: in Mu Li's 87-minute Bilibili walkthrough of the Transformer paper, what does he say about the paper's writing, and at what minute?
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/seek-en-light.gif?v=2026-11-11" width="720" alt="The 87-minute video as a timeline. Web search's two answers point near the start: minutes 1 to 8, then 1:50 to 2:30. OmniSeek transcribes all 87 minutes and finds the line at 1:21:51.">
+  <img src="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/seek-en-light.gif?v=2026-11-12" width="720" alt="The 87-minute video as a timeline. Web search's two answers point near the start: minutes 1 to 8, then 1:50 to 2:30. OmniSeek transcribes all 87 minutes and finds the line at 1:21:51.">
 </p>
 
 - **Web search** answered from other people's notes: "around minutes 1 to 8", and asked again, "between about 1:50 and 2:30". A search for his exact words found nothing.

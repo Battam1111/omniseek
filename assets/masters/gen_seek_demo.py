@@ -1,14 +1,18 @@
-"""Render the README "See the difference" figure from seek-demo.html, frame by frame.
+"""Render the README "See the difference" figure and its video from seek-demo.html, frame by frame.
 
     python gen_seek_demo.py gif                 # assets/demo/seek-{en,zh,ja}-{light,dark}[-narrow].gif
+    python gen_seek_demo.py video               # assets/demo/seek-{en,zh}-dark.mp4, seek-en-light.mp4 and
+                                                # their -poster.png (the last frame), 1920x1080
     python gen_seek_demo.py frames 0 3.6 6 8    # PNG stills at those seconds for review (SEEK_LANGS,
-                                                # SEEK_LAYOUTS pick which; default en, wide and narrow)
+                                                # SEEK_LAYOUTS pick which, default en, wide and narrow;
+                                                # SEEK_MODE=video for stills of the video)
 
 The page draws the run in compare-demo-run.json (R01) on the video's own timeline: one bar per slot of
-compare-demo-transcript.json, web search's two answers as brackets, OmniSeek's find as the amber point.
-Everything on screen is a function of time (renderAt(t)); this script only samples it. It drives an
-installed Chromium-family browser through Playwright (channel "msedge" by default, OMNISEEK_BROWSER_CHANNEL
-to change it) and needs network for the page's web fonts. Re-render instead of editing frames.
+compare-demo-transcript.json, web search's answers as a shaded stretch near the start, OmniSeek's find as
+the amber point. Everything on screen is a function of time (renderAt(t)); this script only samples it. It
+drives an installed Chromium-family browser through Playwright (channel "msedge" by default,
+OMNISEEK_BROWSER_CHANNEL to change it), needs network for the page's web fonts, and for the video
+imageio-ffmpeg (it ships an ffmpeg). Re-render instead of editing frames.
 """
 
 from __future__ import annotations
@@ -17,6 +21,7 @@ import asyncio
 import io
 import json
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -26,30 +31,34 @@ from playwright.async_api import async_playwright
 HERE = Path(__file__).resolve().parent
 OUT = HERE.parent / "demo"
 PAGE = HERE / "seek-demo.html"
-FPS = 25
+FPS, FPS_VIDEO, VIDEO_SCALE = 25, 30, 1.5
 LANGS = ("en", "zh", "ja")
 THEMES = ("light", "dark")
 LAYOUTS = ("wide", "narrow")
+VIDEOS = (("en", "dark"), ("zh", "dark"), ("en", "light"))
 
 
 def segments() -> list:
     doc = json.loads((HERE / "compare-demo-transcript.json").read_text(encoding="utf-8"))
-    return [[s["start"], s["end"], len(s["text"])] for s in doc["segments"]]
+    return [[s["start"], s["end"], len(s["text"]), s["text"]] for s in doc["segments"]]
 
 
-async def open_page(browser, lang: str, theme: str, layout: str):
-    page = await browser.new_page(viewport={"width": 1200, "height": 600}, device_scale_factor=1)
-    await page.goto(PAGE.as_uri() + f"?lang={lang}&theme={theme}&layout={layout}")
+async def open_page(browser, lang: str, theme: str, layout: str, mode: str = "loop", scale: float = 1):
+    page = await browser.new_page(viewport={"width": 1280, "height": 720}, device_scale_factor=scale)
+    await page.goto(PAGE.as_uri() + f"?lang={lang}&theme={theme}&layout={layout}&mode={mode}")
     await page.evaluate("() => window.ready")
     await page.evaluate("segs => window.setData(segs)", segments())
     size = await page.evaluate("() => window.SIZE")
     return page, size["W"], size["H"]
 
 
-async def shot(page, t: float, w: int, h: int) -> Image.Image:
+async def png(page, t: float, w: int, h: int) -> bytes:
     await page.evaluate(f"() => window.renderAt({t})")
-    png = await page.screenshot(clip={"x": 0, "y": 0, "width": w, "height": h})
-    return Image.open(io.BytesIO(png)).convert("RGB")
+    return await page.screenshot(clip={"x": 0, "y": 0, "width": w, "height": h})
+
+
+async def shot(page, t: float, w: int, h: int) -> Image.Image:
+    return Image.open(io.BytesIO(await png(page, t, w, h))).convert("RGB")
 
 
 def to_gif(frames: list, path: Path) -> int:
@@ -68,6 +77,24 @@ def to_gif(frames: list, path: Path) -> int:
     return path.stat().st_size
 
 
+async def to_mp4(page, w: int, h: int, path: Path) -> int:
+    import imageio_ffmpeg
+    n = round(float(await page.evaluate("() => window.END")) * FPS_VIDEO)
+    enc = subprocess.Popen([imageio_ffmpeg.get_ffmpeg_exe(), "-y", "-loglevel", "error", "-f", "image2pipe",
+                            "-framerate", str(FPS_VIDEO), "-i", "-", "-c:v", "libx264", "-pix_fmt", "yuv420p",
+                            "-crf", "20", "-preset", "slow", "-tune", "animation", "-movflags", "+faststart",
+                            str(path)], stdin=subprocess.PIPE)
+    last = b""
+    for i in range(n + 1):
+        last = await png(page, min(i / FPS_VIDEO, n / FPS_VIDEO), w, h)
+        enc.stdin.write(last)
+    enc.stdin.close()
+    if enc.wait():
+        raise SystemExit("ffmpeg failed")
+    path.with_name(path.stem + "-poster.png").write_bytes(last)
+    return path.stat().st_size
+
+
 def name(lang: str, theme: str, layout: str) -> str:
     return f"seek-{lang}-{theme}" + ("-narrow" if layout == "narrow" else "")
 
@@ -80,23 +107,31 @@ async def main(argv: list) -> None:
         if mode == "frames":
             times = [float(x) for x in argv[1:]] or [0.0]
             langs = os.environ.get("SEEK_LANGS", "en").split(",")
-            layouts = os.environ.get("SEEK_LAYOUTS", ",".join(LAYOUTS)).split(",")
+            pmode = os.environ.get("SEEK_MODE", "loop")
+            layouts = ["video"] if pmode == "video" else os.environ.get("SEEK_LAYOUTS", ",".join(LAYOUTS)).split(",")
             for lang in langs:
                 for layout in layouts:
                     for theme in THEMES:
-                        page, w, h = await open_page(browser, lang, theme, layout)
+                        page, w, h = await open_page(browser, lang, theme, layout, pmode)
                         for t in times:
-                            dst = HERE / "seek-frames" / f"{name(lang, theme, layout)}-{t:05.2f}.png"
+                            stem = f"seek-video-{lang}-{theme}" if pmode == "video" else name(lang, theme, layout)
+                            dst = HERE / "seek-frames" / f"{stem}-{t:05.2f}.png"
                             dst.parent.mkdir(exist_ok=True)
                             (await shot(page, t, w, h)).save(dst)
                             print(dst.name)
                         await page.close()
+        elif mode == "video":
+            for lang, theme in VIDEOS:
+                page, w, h = await open_page(browser, lang, theme, "video", "video", VIDEO_SCALE)
+                size = await to_mp4(page, w, h, OUT / f"seek-{lang}-{theme}.mp4")
+                print(f"seek-{lang}-{theme}.mp4  {size / 1e6:.2f} MB")
+                await page.close()
         else:
             for lang in LANGS:
                 for layout in LAYOUTS:
                     for theme in THEMES:
                         page, w, h = await open_page(browser, lang, theme, layout)
-                        n = round(float(await page.evaluate("() => T.end")) * FPS)
+                        n = round(float(await page.evaluate("() => window.END")) * FPS)
                         frames = [await shot(page, i / FPS, w, h) for i in range(n)]
                         size = to_gif(frames, OUT / f"{name(lang, theme, layout)}.gif")
                         print(f"{name(lang, theme, layout)}.gif  {w}x{h}  {n} frames  {size / 1e6:.2f} MB")

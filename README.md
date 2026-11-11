@@ -29,13 +29,13 @@ Runs on your own computer. It plugs in through MCP, the standard way AI apps lik
 One real question, asked in Chinese: in Mu Li's 87-minute Bilibili walkthrough of the Transformer paper, what does he say about the paper's writing, and at what minute?
 
 <p align="center">
-  <a href="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/seek-en-light.gif?v=2026-11-11#gh-light-mode-only"><picture>
-    <source media="(max-width: 480px)" srcset="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/seek-en-light-narrow.gif?v=2026-11-11#gh-light-mode-only">
-    <img src="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/seek-en-light.gif?v=2026-11-11#gh-light-mode-only" width="720" alt="The 87-minute video as a timeline. Web search's two answers point near the start: minutes 1 to 8, then 1:50 to 2:30. OmniSeek transcribes all 87 minutes and finds the line at 1:21:51.">
+  <a href="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/seek-en-light.gif?v=2026-11-12#gh-light-mode-only"><picture>
+    <source media="(max-width: 480px)" srcset="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/seek-en-light-narrow.gif?v=2026-11-12#gh-light-mode-only">
+    <img src="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/seek-en-light.gif?v=2026-11-12#gh-light-mode-only" width="720" alt="The 87-minute video as a timeline. Web search's two answers point near the start: minutes 1 to 8, then 1:50 to 2:30. OmniSeek transcribes all 87 minutes and finds the line at 1:21:51.">
   </picture></a>
-  <a href="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/seek-en-dark.gif?v=2026-11-11#gh-dark-mode-only"><picture>
-    <source media="(max-width: 480px)" srcset="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/seek-en-dark-narrow.gif?v=2026-11-11#gh-dark-mode-only">
-    <img src="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/seek-en-dark.gif?v=2026-11-11#gh-dark-mode-only" width="720" alt="The 87-minute video as a timeline. Web search's two answers point near the start: minutes 1 to 8, then 1:50 to 2:30. OmniSeek transcribes all 87 minutes and finds the line at 1:21:51.">
+  <a href="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/seek-en-dark.gif?v=2026-11-12#gh-dark-mode-only"><picture>
+    <source media="(max-width: 480px)" srcset="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/seek-en-dark-narrow.gif?v=2026-11-12#gh-dark-mode-only">
+    <img src="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/seek-en-dark.gif?v=2026-11-12#gh-dark-mode-only" width="720" alt="The 87-minute video as a timeline. Web search's two answers point near the start: minutes 1 to 8, then 1:50 to 2:30. OmniSeek transcribes all 87 minutes and finds the line at 1:21:51.">
   </picture></a>
 </p>
 

@@ -17,6 +17,12 @@ history and are kept as written.
   under the figure as text. 0.6 to 0.7 MB per GIF instead of 3.7 MB; rendered by
   `assets/masters/gen_seek_demo.py` from `assets/masters/seek-demo.html`. The side-by-side
   comparison GIFs stay in the repo for reference.
+- The infographic of the three recorded questions (`docs/compare.md`, `docs/compare.zh.md`, the site
+  home page) is redrawn in the same style, each question in its own shape: the minute on the video's
+  timeline, the comments as bars of their likes (all three that OmniSeek returned: 3,994, 1,954 and
+  1,271), the papers that cite both as one dot each where the two seed papers overlap. The 38-second
+  side-by-side video gives way to a 23-second one told on the same timeline
+  (`assets/demo/seek-{en,zh}-dark.mp4`, `seek-en-light.mp4`).
 
 ## [0.3.0] - 2026-11-11
 

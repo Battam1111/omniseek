@@ -27,13 +27,13 @@ claude mcp add omniseek -- omniseek
 実際の質問をひとつ（中国語で質問）：李沐（Mu Li）は Bilibili の 87 分の Transformer 論文解説で、論文の書き方をどう評したか。原文は何で、何分目か。
 
 <p align="center">
-  <a href="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/seek-ja-light.gif?v=2026-11-11#gh-light-mode-only"><picture>
-    <source media="(max-width: 480px)" srcset="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/seek-ja-light-narrow.gif?v=2026-11-11#gh-light-mode-only">
-    <img src="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/seek-ja-light.gif?v=2026-11-11#gh-light-mode-only" width="720" alt="87 分の動画を 1 本のタイムラインにしたもの。ウェブ検索の 2 つの答えはどちらも冒頭を指す（1〜8 分、もう一度聞くと 1 分 50 秒から 2 分 30 秒）。OmniSeek は 87 分をまるごと文字起こしし、その発言を 1:21:51 に見つける。">
+  <a href="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/seek-ja-light.gif?v=2026-11-12#gh-light-mode-only"><picture>
+    <source media="(max-width: 480px)" srcset="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/seek-ja-light-narrow.gif?v=2026-11-12#gh-light-mode-only">
+    <img src="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/seek-ja-light.gif?v=2026-11-12#gh-light-mode-only" width="720" alt="87 分の動画を 1 本のタイムラインにしたもの。ウェブ検索の 2 つの答えはどちらも冒頭を指す（1〜8 分、もう一度聞くと 1 分 50 秒から 2 分 30 秒）。OmniSeek は 87 分をまるごと文字起こしし、その発言を 1:21:51 に見つける。">
   </picture></a>
-  <a href="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/seek-ja-dark.gif?v=2026-11-11#gh-dark-mode-only"><picture>
-    <source media="(max-width: 480px)" srcset="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/seek-ja-dark-narrow.gif?v=2026-11-11#gh-dark-mode-only">
-    <img src="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/seek-ja-dark.gif?v=2026-11-11#gh-dark-mode-only" width="720" alt="87 分の動画を 1 本のタイムラインにしたもの。ウェブ検索の 2 つの答えはどちらも冒頭を指す（1〜8 分、もう一度聞くと 1 分 50 秒から 2 分 30 秒）。OmniSeek は 87 分をまるごと文字起こしし、その発言を 1:21:51 に見つける。">
+  <a href="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/seek-ja-dark.gif?v=2026-11-12#gh-dark-mode-only"><picture>
+    <source media="(max-width: 480px)" srcset="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/seek-ja-dark-narrow.gif?v=2026-11-12#gh-dark-mode-only">
+    <img src="https://raw.githubusercontent.com/Battam1111/omniseek/main/assets/demo/seek-ja-dark.gif?v=2026-11-12#gh-dark-mode-only" width="720" alt="87 分の動画を 1 本のタイムラインにしたもの。ウェブ検索の 2 つの答えはどちらも冒頭を指す（1〜8 分、もう一度聞くと 1 分 50 秒から 2 分 30 秒）。OmniSeek は 87 分をまるごと文字起こしし、その発言を 1:21:51 に見つける。">
   </picture></a>
 </p>
 

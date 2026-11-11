@@ -1,0 +1,212 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<!-- The comparison infographic: the three recorded questions (compare-demo-run.json R01, R04, R08), each
+     drawn in its own shape: the video's timeline for the minute he said it, the comments by their likes,
+     the two seed papers and the papers that cite both. Same palette and timeline as seek-demo.html.
+     Query: theme=light|dark, layout=wide|narrow (narrow is for screens under 600 px). The words come in
+     through setData() from gen_compare_infographic.py, which cuts every quoted line from the record. -->
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Noto+Sans+SC:wght@400;500;600&display=block">
+<style>
+  .light { --bg: #FFFFFF; --text: #0F172A; --muted: rgba(15,23,42,.60); --line: rgba(15,23,42,.10);
+           --band: rgba(15,23,42,.07); --blue: #3B82F6; --kick: #1D4ED8; --lead: rgba(15,23,42,.55);
+           --amber: #F59E0B; --track: rgba(59,130,246,.10); --venn: rgba(59,130,246,.06); --vennLine: rgba(59,130,246,.50); }
+  .dark  { --bg: #0F172A; --text: #FFFFFF; --muted: rgba(255,255,255,.64); --line: rgba(255,255,255,.12);
+           --band: rgba(255,255,255,.09); --blue: #3B82F6; --kick: #93C5FD; --lead: rgba(255,255,255,.60);
+           --amber: #F59E0B; --track: rgba(147,197,253,.12); --venn: rgba(147,197,253,.07); --vennLine: rgba(147,197,253,.55); }
+  html, body { margin: 0; padding: 0; background: transparent; }
+  #stage { background: var(--bg); color: var(--text); box-sizing: border-box;
+           font-family: Inter, "Noto Sans SC", sans-serif; -webkit-font-smoothing: antialiased; }
+  /* tabular figures only where numbers line up: Inter's tnum also widens the hyphen in running text */
+  .n, .big b, svg text.tn { font-variant-numeric: tabular-nums; }
+  .wide #stage { width: 1200px; padding: 40px 48px 28px; }
+  .narrow #stage { width: 440px; padding: 28px 24px 22px; }
+  h1 { margin: 0; font-size: 28px; font-weight: 600; letter-spacing: -.01em; line-height: 1.2; }
+  .sub { margin: 8px 0 24px; font-size: 16px; line-height: 1.45; color: var(--muted); }
+  .narrow h1 { font-size: 23px; }
+  .narrow .sub { font-size: 14.5px; margin-bottom: 18px; }
+  .row { border-top: 1px solid var(--line); padding: 26px 0 26px; }
+  .wide .row { display: grid; grid-template-columns: 300px 760px; column-gap: 44px; align-items: start; }
+  .narrow .row { padding: 22px 0; }
+  .narrow .viz { margin-top: 18px; }
+  .q { display: grid; grid-template-columns: 32px 1fr; align-items: baseline; }
+  .num { font-size: 24px; font-weight: 600; color: var(--kick); line-height: 1; }
+  h2 { margin: 0; font-size: 19px; font-weight: 600; line-height: 1.3; }
+  .ask { margin: 7px 0 0; font-size: 14.5px; line-height: 1.5; color: var(--muted); }
+  .narrow h2 { font-size: 18px; }
+  .narrow .ask { font-size: 14px; }
+  svg { display: block; overflow: visible; }
+  svg text { font-family: Inter, "Noto Sans SC", sans-serif; }
+  .kick { font-size: 13px; font-weight: 600; letter-spacing: .02em; color: var(--muted); }
+  .kick.omni { color: var(--kick); }
+  .lead { margin-top: 4px; font-size: 14.5px; line-height: 1.45; color: var(--muted); }
+  /* 2: web search's types as tags; OmniSeek's comments as bars of their likes */
+  .pills { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 9px; }
+  .pill { font-size: 13.5px; line-height: 1.3; color: var(--muted); border: 1px solid var(--line);
+          border-radius: 999px; padding: 4px 11px; }
+  .v2 .kick.omni { margin-top: 20px; }
+  .bars { display: grid; row-gap: 10px; margin-top: 10px; }
+  .item { display: grid; grid-template-columns: 280px 62px 1fr; column-gap: 14px; align-items: start; }
+  .track, .bar { height: 12px; border-radius: 3px; }
+  .track { background: var(--track); margin-top: 4.5px; }
+  .bar { background: var(--blue); }
+  .n { font-size: 15px; line-height: 1.35; font-weight: 600; text-align: right; white-space: nowrap; }
+  .t { font-size: 15px; line-height: 1.35; }
+  .t .g { display: block; margin-top: 1px; font-size: 13px; color: var(--muted); }
+  .t.desc { font-size: 14px; color: var(--muted); }
+  .narrow .item { grid-template-columns: 1fr 58px; row-gap: 5px; }
+  .narrow .item .t { grid-column: 1 / -1; font-size: 14px; }
+  /* 3: the two seed papers, and a dot for each paper that cites both */
+  .v3 { display: flex; align-items: center; gap: 40px; }
+  .narrow .v3 { flex-direction: column; align-items: stretch; gap: 16px; }
+  .narrow .v3 svg { align-self: center; }
+  .big { display: flex; align-items: baseline; gap: 12px; margin-top: 4px; }
+  .big b { font-size: 46px; font-weight: 600; line-height: 1; letter-spacing: -.01em; }
+  .big span { font-size: 17px; font-weight: 500; white-space: nowrap; }
+  .where { margin-top: 6px; font-size: 14px; color: var(--muted); }
+  .v3 .kick.web { display: block; margin-top: 18px; }
+  .quote { margin-top: 5px; font-size: 14.5px; line-height: 1.45; color: var(--muted); }
+  .foot { border-top: 1px solid var(--line); padding-top: 14px; font-size: 13px; line-height: 1.5; color: var(--muted); }
+</style>
+</head>
+<body>
+<div id="stage"><h1 id="title"></h1><p class="sub" id="sub"></p></div>
+<script>
+const Q = new URLSearchParams(location.search);
+const THEME = Q.get("theme") || "light", LAYOUT = Q.get("layout") || "wide";
+document.body.className = THEME + " " + LAYOUT;
+const NS = "http://www.w3.org/2000/svg";
+const stage = document.getElementById("stage");
+const css = v => getComputedStyle(stage).getPropertyValue(v).trim();
+const clamp01 = v => Math.max(0, Math.min(1, v));
+const hms = s => { s = Math.floor(s + 1e-6); const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), x = s % 60;
+                   return (h ? h + ":" + String(m).padStart(2, "0") : String(m)) + ":" + String(x).padStart(2, "0"); };
+const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls;
+                                 if (text != null) e.textContent = text; return e; };
+const sv = (tag, a = {}, text) => { const e = document.createElementNS(NS, tag);
+  for (const k in a) e.setAttribute(k, typeof a[k] === "number" ? +a[k].toFixed(2) : a[k]);
+  if (text != null) e.textContent = text; return e; };
+
+function row(n, head, ask, viz) {
+  const r = el("section", "row"), q = el("div", "q"), words = el("div"), v = el("div", "viz");
+  words.append(el("h2", null, head), el("p", "ask", ask));
+  q.append(el("div", "num", String(n)), words);
+  v.append(viz);
+  r.append(q, v);
+  return r;
+}
+
+// 1. The minute he said it: the 87 minutes as one line (bar height = how densely he speaks, from the
+// transcript, stretched between the 5th and 95th percentile), web search's stretch, OmniSeek's point.
+function viz1(D) {
+  const G = LAYOUT === "wide"
+    ? { W: 760, H: 202, MID: 146, HMAX: 24, webK: 14, web1: 42, web2: 66, omniK: 14, omniT: 54, omniG: 78, tick: 200,
+        fs: { k: 13, a: 19, s: 14, t: 34, tick: 13 } }
+    : { W: 392, H: 262, MID: 208, HMAX: 20, webK: 13, web1: 37, web2: 57, omniK: 97, omniT: 130, omniG: 152, tick: 258,
+        fs: { k: 13, a: 17, s: 13, t: 30, tick: 12.5 } };
+  const s = sv("svg", { width: G.W, height: G.H, viewBox: `0 0 ${G.W} ${G.H}` });
+  const xAt = t => G.W * t / D.dur, top = G.MID - G.HMAX - 8;
+  s.append(sv("rect", { x: xAt(D.web[0]), y: top, width: xAt(D.web[1]) - xAt(D.web[0]), height: 2 * G.HMAX + 16, rx: 3,
+                        fill: css("--band") }));
+  const n = Math.floor(G.W / 4), per = D.dur / n, rate = new Array(n).fill(0);
+  for (const [a, b, c] of D.segs) {
+    const cps = c / Math.max(1, b - a);
+    for (let i = Math.floor(a / per); i <= Math.min(n - 1, Math.floor(b / per)); i++) {
+      const lo = Math.max(a, i * per), hi = Math.min(b, (i + 1) * per);
+      if (hi > lo) rate[i] += cps * (hi - lo) / per;
+    }
+  }
+  const sorted = [...rate].sort((x, y) => x - y), p5 = sorted[Math.floor(n * .05)], p95 = sorted[Math.floor(n * .95)];
+  const g = sv("g", { fill: css("--blue") });
+  rate.forEach((r, i) => {
+    const h = 2.5 + (G.HMAX - 2.5) * Math.pow(clamp01((r - p5) / (p95 - p5)), .9);
+    g.append(sv("rect", { x: i * 4 + 1, width: 2, y: G.MID - h, height: 2 * h, rx: 1 }));
+  });
+  s.append(g);
+  const wx = (xAt(D.web[0]) + xAt(D.web[1])) / 2, fx = xAt(D.find);
+  const line = (x, y1, y2) => s.append(sv("line", { x1: x, x2: x, y1, y2, stroke: css("--lead"), "stroke-width": 1.25,
+                                                    "stroke-linecap": "round" }));
+  line(wx, G.web2 + 12, top);
+  line(fx, G.omniG + 12, G.MID - 13);
+  s.append(sv("circle", { cx: fx, cy: G.MID, r: 10.5, fill: css("--bg") }),
+           sv("circle", { cx: fx, cy: G.MID, r: 7, fill: css("--amber") }));
+  const T = (x, y, size, weight, fill, str, anchor = "start") =>
+    s.append(sv("text", { x, y, "font-size": size, "font-weight": weight, fill, "text-anchor": anchor,
+                          class: /^[\d:]+$/.test(str) ? "tn" : "" }, str));
+  T(0, G.webK, G.fs.k, 600, css("--muted"), D.t.web);
+  T(0, G.web1, G.fs.a, 500, css("--muted"), D.t.web1);
+  T(0, G.web2, G.fs.s, 400, css("--muted"), D.t.web2);
+  T(G.W, G.omniK, G.fs.k, 600, css("--kick"), D.t.omni, "end");
+  T(G.W, G.omniT, G.fs.t, 600, css("--text"), hms(D.find), "end");
+  T(G.W, G.omniG, G.fs.s, 400, css("--muted"), D.t.gloss1, "end");
+  T(0, G.tick, G.fs.tick, 500, css("--muted"), "0:00");
+  T(G.W, G.tick, G.fs.tick, 500, css("--muted"), hms(D.dur), "end");
+  if (LAYOUT === "wide") T(G.W / 2, G.tick, G.fs.tick, 400, css("--muted"), D.t.cap1, "middle");
+  return s;
+}
+
+// 2. The top comments: web search's answer as the types it named; OmniSeek's as the comments, by likes.
+function viz2(D) {
+  const v = el("div", "v2"), pills = el("div", "pills"), bars = el("div", "bars");
+  for (const x of D.types) pills.append(el("span", "pill", x));
+  const top = Math.max(...D.comments.map(c => c.likes));
+  for (const c of D.comments) {
+    const item = el("div", "item"), track = el("div", "track"), bar = el("div", "bar"), t = el("div", c.desc ? "t desc" : "t");
+    bar.style.width = (100 * c.likes / top).toFixed(2) + "%";
+    track.append(bar);
+    t.textContent = c.desc || c.text;
+    if (c.gloss) t.append(el("span", "g", c.gloss));
+    item.append(track, el("div", "n", c.likes.toLocaleString("en-US")), t);
+    bars.append(item);
+  }
+  v.append(el("div", "kick web", D.t.web), el("div", "lead", D.t.typesLead), pills,
+           el("div", "kick omni", D.t.omni), el("div", "lead", D.t.commentsLead), bars);
+  return v;
+}
+
+// 3. Papers that cite both: the two seed papers as two circles, one dot in the overlap for each paper that
+// cites both (the circles are not drawn to scale; only the dots are counted).
+function viz3(D) {
+  const v = el("div", "v3"), W = LAYOUT === "wide" ? 300 : 300, H = 190;
+  const s = sv("svg", { width: W, height: H, viewBox: `0 0 ${W} ${H}` });
+  const cx = W / 2, cy = 95, r = 74, d = 76, c1 = cx - d / 2, c2 = cx + d / 2;
+  for (const x of [c1, c2]) s.append(sv("circle", { cx: x, cy, r, fill: css("--venn"), stroke: css("--vennLine"), "stroke-width": 1.25 }));
+  const pts = [];
+  for (let j = -7; j <= 7; j++) for (let i = -7; i <= 7; i++) {
+    const x = cx + i * 11 + (j & 1 ? 5.5 : 0), y = cy + j * 9.5;
+    if (Math.hypot(x - c1, y - cy) < r - 8 && Math.hypot(x - c2, y - cy) < r - 8) pts.push([x, y]);
+  }
+  pts.sort((a, b) => Math.hypot(a[0] - cx, (a[1] - cy) * .8) - Math.hypot(b[0] - cx, (b[1] - cy) * .8));
+  const g = sv("g", { fill: css("--blue") });
+  for (const [x, y] of pts.slice(0, D.count)) g.append(sv("circle", { cx: x, cy: y, r: 3.2 }));
+  s.append(g);
+  const lab = (x, lines) => lines.forEach((str, k) => s.append(sv("text", { x, y: cy - 4 + k * 16, "font-size": 12.5,
+    "font-weight": k ? 400 : 500, fill: css("--muted"), "text-anchor": "middle" }, str)));
+  lab(cx - 74, D.seeds[0]);
+  lab(cx + 74, D.seeds[1]);
+  const words = el("div"), big = el("div", "big");
+  big.append(el("b", null, String(D.count)), el("span", null, D.t.citeBoth));
+  words.append(el("div", "kick omni", D.t.omni), big, el("div", "where", D.t.citeWhere),
+               el("div", "kick web", D.t.web), el("div", "quote", D.webQuote3));
+  v.append(s, words);
+  return v;
+}
+
+window.setData = D => {
+  document.getElementById("title").textContent = D.t.title;
+  document.getElementById("sub").textContent = D.t.sub;
+  document.documentElement.lang = D.lang;
+  stage.append(row(1, D.t.h1, D.t.q1, viz1(D)), row(2, D.t.h2, D.t.q2, viz2(D)), row(3, D.t.h3, D.t.q3, viz3(D)),
+               el("div", "foot", D.t.foot));
+};
+window.ready = (async () => {
+  await Promise.all(["400 15px Inter", "500 15px Inter", "600 15px Inter", "400 15px 'Noto Sans SC'",
+                     "500 15px 'Noto Sans SC'", "600 15px 'Noto Sans SC'"]
+                    .map(f => document.fonts.load(f, "写作评论OmniSeek0123")));
+  await document.fonts.ready;
+  return true;
+})();
+</script>
+</body>
+</html>
