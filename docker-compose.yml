@@ -12,22 +12,22 @@
 x-omniseek: &omniseek
   restart: unless-stopped
   ports:
-    - "127.0.0.1:8765:8765"   # host loopback only. OmniSeek drives tools that use your logins; do NOT
-                              # expose it to the internet. If you must reach it from another machine,
-                              # put a reverse proxy + firewall in front and keep the token secret.
+    - "127.0.0.1:8765:8765"   # HOST-LOOPBACK ONLY. OmniSeek drives credentialed tools; do NOT
+                              # expose it to the internet. Put a reverse proxy + firewall in front
+                              # if you must reach it off-box, and keep the bearer token secret.
   volumes:
-    - ./.omniseek:/root/.omniseek               # token, profile, credentials, cache, models
-    - ./.omniseek-inbox:/root/omniseek-inbox    # files for omniseek_read (copy them here)
+    - ./.omniseek:/root/.omniseek   # token, profile, credentials, cache, models, and inbox/: the files
+                                    # omniseek_read reads (copy them to ./.omniseek/inbox)
   environment:
-    OMNISEEK_HTTP_HOST: "0.0.0.0"   # bind inside the container; the port map above keeps it on host loopback
-    # OMNISEEK_CONTACT_EMAIL: "you@example.org"   # courtesy contact a few sources (Crossref, SEC, Unpaywall) reward with a faster lane
-    # OMNISEEK_ALLOW_NETS: ""                     # extra CIDRs the outbound address guard may reach (advanced)
+    OMNISEEK_HTTP_HOST: "0.0.0.0"   # bind inside the container; the port-map above keeps it host-loopback
+    # OMNISEEK_CONTACT_EMAIL: "you@example.org"   # polite-pool fast lane for OpenAlex/Crossref/etc (recommended)
+    # OMNISEEK_ALLOW_NETS: ""                     # extra CIDRs the SSRF guard may reach (advanced)
 
 services:
-  # Default: the prebuilt multi-arch image (amd64 + arm64), pulled from GitHub's registry.
+  # Default: the prebuilt multi-arch image (amd64 + arm64) of this release, pulled from GitHub's registry.
   omniseek:
     <<: *omniseek
-    image: ghcr.io/battam1111/omniseek
+    image: ghcr.io/battam1111/omniseek:v0.2.1
 
   # Local build from this checkout, only with  --profile build.
   omniseek-build:

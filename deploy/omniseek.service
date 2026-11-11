@@ -22,12 +22,12 @@ Environment=OMNISEEK_HTTP_HOST=127.0.0.1
 Environment=OMNISEEK_HTTP_PORT=8765
 # Environment=OMNISEEK_CONTACT_EMAIL=you@example.org   # courtesy contact for a faster lane; also quiets first-boot OpenAlex warnings (recommended)
 
-# Hardening: OmniSeek only needs to write its own state dir + inbox.
+# Hardening: OmniSeek only needs to write its own folder, ~/.omniseek (the document inbox is inbox/ in it).
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=read-only
-ReadWritePaths=%h/.omniseek %h/omniseek-inbox
+ReadWritePaths=%h/.omniseek
 
 [Install]
 WantedBy=multi-user.target

@@ -156,12 +156,12 @@ claude mcp add --transport http omniseek http://127.0.0.1:8765/mcp --header "Aut
 在 8765 端口跑 HTTP 服务。
 
 ```bash
-docker run -d --name omniseek -p 127.0.0.1:8765:8765 -v "$HOME/.omniseek-docker:/root/.omniseek" -v "$HOME/omniseek-inbox:/root/omniseek-inbox" ghcr.io/battam1111/omniseek
+docker run -d --name omniseek -p 127.0.0.1:8765:8765 -v "$HOME/.omniseek-docker:/root/.omniseek" ghcr.io/battam1111/omniseek
 ```
 
 第一次启动时它会生成 token，打印在 `docker logs omniseek` 里，并存到本机的
 `~/.omniseek-docker/credentials/omniseek_http.json`。配置、缓存和下载的模型也在这个目录里，
-`docker rm` 之后还在；要 OmniSeek 读的文件放进 `~/omniseek-inbox`。连接用上面那条
+`docker rm` 之后还在；要 OmniSeek 读的文件放进 `~/.omniseek-docker/inbox`。连接用上面那条
 `claude mcp add --transport http`。用 `curl http://127.0.0.1:8765/healthz` 看它起来没有。
 
 **docker compose。** 仓里的 `docker-compose.yml` 跑的是同一个预构建镜像，状态存在文件旁边的

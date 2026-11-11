@@ -10,10 +10,11 @@
 # Self-verifying: a residue gate (grep) runs at the end and FAILS the script
 # loudly. Never push a sync whose gate did not pass.
 #
-# Syncs:  src/  (minus polyu + mokahr_ats); the code-bound artifacts listed in step 3.
+# Syncs:  src/  (minus polyu + mokahr_ats); the code-bound artifacts listed in step 3 (two docs, and
+#         the Docker build files with the version lock the image installs from).
 #         The mirror carries no copy of the eye's tests: its CI checks that the package installs
 #         and the server starts (.github/workflows/ci.yml).
-# Keeps:  skills/, README*, CLAUDE.md, docs/, pyproject.toml, .github/, other scripts/
+# Keeps:  skills/, README*, CLAUDE.md, docs/, pyproject.toml, .github/, other scripts/, other deploy/
 #
 # Usage:  cd the mirror repo root && bash scripts/sync_from_eye.sh
 
@@ -196,6 +197,12 @@ echo "    regenerating docs/sources.md ..."
 #     docs/BUDGETS.md names each wall-clock budget by the constant that holds it. docs/TOOLS.md is
 #     the full tool and server reference: every tool description carries only its contract and ends
 #     with "More: omniseek docs/TOOLS.md, <tool>", so the reference ships with the code that cites it.
+#     The Docker build files (Dockerfile, Dockerfile.stdio, docker-compose.yml, the entrypoint) name the
+#     code's module paths, environment variables and data locations, so a copy kept by hand drifts the
+#     day the code changes; they ship with the code, and deploy/requirements.lock with them: the image
+#     installs every package at the version that file gives (only its name==version lines ship).
+#     Where the public build differs (one state folder, the published image by default), the private
+#     half rewrites the copy, as for the docs.
 #     WHAT DOES NOT: the eye's tests (the mirror carries none; its CI checks install and boot), and
 #     artifacts bound to the DEPLOYMENT. SERVICES.md and the launchd plists describe one operator's
 #     live fleet; the mirror ships no fleet.
@@ -205,7 +212,8 @@ echo "    regenerating docs/sources.md ..."
 #     land in that file and keep the wrong name. Before the rename rules, private_artifact_prepass
 #     (from the private half) makes its exact-match rewrites of the passages that describe the
 #     operator's own deployment. ---
-SYNCED_ARTIFACTS=("docs/BUDGETS.md" "docs/TOOLS.md")
+SYNCED_ARTIFACTS=("docs/BUDGETS.md" "docs/TOOLS.md"
+  "Dockerfile" "Dockerfile.stdio" "docker-compose.yml" "deploy/docker-entrypoint.sh" "deploy/requirements.lock")
 
 echo "  [3/5] syncing ${#SYNCED_ARTIFACTS[@]} code-bound artifact(s) ..."
 for rel in "${SYNCED_ARTIFACTS[@]}"; do

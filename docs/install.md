@@ -172,13 +172,13 @@ A prebuilt image is published for amd64 and arm64 as `ghcr.io/battam1111/omnisee
 unpacked; it includes Chromium). It runs the HTTP service on port 8765.
 
 ```bash
-docker run -d --name omniseek -p 127.0.0.1:8765:8765 -v "$HOME/.omniseek-docker:/root/.omniseek" -v "$HOME/omniseek-inbox:/root/omniseek-inbox" ghcr.io/battam1111/omniseek
+docker run -d --name omniseek -p 127.0.0.1:8765:8765 -v "$HOME/.omniseek-docker:/root/.omniseek" ghcr.io/battam1111/omniseek
 ```
 
 On first start it creates a token, prints it in `docker logs omniseek`, and saves it to
 `~/.omniseek-docker/credentials/omniseek_http.json` on your machine. Settings, cache and downloaded
 models live in that folder too, so they survive `docker rm`; files you want OmniSeek to read go in
-`~/omniseek-inbox`. Connect with the `claude mcp add
+`~/.omniseek-docker/inbox`. Connect with the `claude mcp add
 --transport http` line above. Check it is up with `curl http://127.0.0.1:8765/healthz`.
 
 **docker compose.** The repo's `docker-compose.yml` runs the same prebuilt image and keeps its state in
