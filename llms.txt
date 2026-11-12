@@ -1,0 +1,31 @@
+# omniseek
+
+> An MCP server that lets AI agents like Claude Code, Cursor, and Codex search sources web search doesn't reach: Chinese communities, podcasts and video transcripts, research papers, with local indexing and saved searches.
+
+Written in Python; install with uv and Python 3.11+, or via Cursor, Codex, pipx, or Docker. Runs locally with no cloud, no account, no telemetry; login-required sites use your own browser session and are off by default. Main tools: omniseek_search, omniseek_sources, the investigate prompt, and TOOLS.md for full parameter reference.
+
+## Docs
+
+- [omniseek README](https://raw.githubusercontent.com/Battam1111/omniseek/main/README.md): OmniSeek overview: an MCP add-on that lets AI agents search Bilibili, Zhihu, papers, and watch topics locally.
+- [Install options](https://raw.githubusercontent.com/Battam1111/omniseek/main/docs/install.md): How to install the omniseek command with uv, connect MCP clients, and set up optional extras.
+- [Configuration](https://raw.githubusercontent.com/Battam1111/omniseek/main/docs/configuration.md): Reference for profile.json, access tiers, API-key sources, and how to enable or disable the shipped source catalog.
+- [FAQ](https://raw.githubusercontent.com/Battam1111/omniseek/main/docs/faq.md): Short answers on what OmniSeek is, how it differs from an agent harness or a search wrapper.
+- [D1 adapter findings](https://raw.githubusercontent.com/Battam1111/omniseek/main/FINDINGS.md): Findings from an AST sweep of adapter error handlers, the judging rule, and fixes to the search backend.
+- [Installing OmniSeek (a guide written for AI agents)](https://raw.githubusercontent.com/Battam1111/omniseek/main/llms-install.md): Step-by-step MCP server install for AI agents: uv setup, PATH pitfalls, and client registration for Claude Code and Cursor.
+- [Honest empty result repair report](https://raw.githubusercontent.com/Battam1111/omniseek/main/REPORT.md): Repair changes D1-D3 for total adapter failures: fetcher outcome contract, fixed paths in _search_backend.py and xiaoyuzhou_source.py.
+- [Brand](https://raw.githubusercontent.com/Battam1111/omniseek/main/docs/BRAND.md): Canonical brand rules: the OmniSeek name capitalization, current and retired taglines in three languages, and palette.
+- [OmniSeek time budgets (the four clocks)](https://raw.githubusercontent.com/Battam1111/omniseek/main/docs/BUDGETS.md): The four wall-clock budgets bounding operations: fan-out deadline, cache_only pickup, gather batch, fetch_one backstop, with symbol provenance.
+- [Case study: the second investigation](https://raw.githubusercontent.com/Battam1111/omniseek/main/docs/case-study.md): Verbatim session showing how retrieval memory and the citation graph seed a second investigation into multi-agent credit assignment.
+- [Same question, two agents](https://raw.githubusercontent.com/Battam1111/omniseek/main/docs/compare.md): Recorded 2026-10-11 comparison of two agents answering three questions: video transcript line, comments, and citation-graph counts.
+- [Examples](https://raw.githubusercontent.com/Battam1111/omniseek/main/docs/examples.md): Real queries and outputs from one live instance, including an F-1 visa question chased through five access walls.
+- [Legal Posture](https://raw.githubusercontent.com/Battam1111/omniseek/main/docs/LEGAL-POSTURE.md): An engineering description of what the software does and does not do, so operators can verify claims against the code.
+- [Patterns](https://raw.githubusercontent.com/Battam1111/omniseek/main/docs/patterns.md): Query routing with omniseek_sources, handling named-only sources with _meta.excluded_relevant, and counting independent upstreams for corroboration.
+- [Privacy Posture](https://raw.githubusercontent.com/Battam1111/omniseek/main/docs/PRIVACY.md): How the engine handles data: no telemetry, self-hosted operation, and what the operator is responsible for.
+- [The source catalog](https://raw.githubusercontent.com/Battam1111/omniseek/main/docs/sources.md): The catalog of sources with access_tier levels, by-name-only rules, and Chinese-language descriptions.
+- [OmniSeek: tool and server reference](https://raw.githubusercontent.com/Battam1111/omniseek/main/docs/TOOLS.md): Full reference for each MCP tool: usage patterns, meaning of returned fields, and why a tool refuses.
+- [Sites behind a login: bring your own browser](https://raw.githubusercontent.com/Battam1111/omniseek/main/docs/walled-sources.md): How to reach login-walled sites like Zhihu and WeChat using your own Chrome browser over CDP.
+- [Self-hosting a WeChat RSS bridge (optional)](https://raw.githubusercontent.com/Battam1111/omniseek/main/docs/wewe-rss-self-host.md): How to self-host a wewe-rss bridge with Node.js, pnpm and SQLite, bind WeChat accounts, and wire feeds into OmniSeek.
+
+## Optional
+
+- [Changelog](https://raw.githubusercontent.com/Battam1111/omniseek/main/CHANGELOG.md): All notable OmniSeek changes in Keep a Changelog format with SemVer versioning, including entries under the former name penumbra.
