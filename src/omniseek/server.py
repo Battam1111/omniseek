@@ -253,9 +253,9 @@ except Exception:  # noqa: BLE001 - an identity string is never worth failing a 
 # cdp_call spawns its own fresh thread inside the body, unaffected. The blocking .result()
 # that L2 will add then lands on a worker thread, not the loop. Reversible: delete @_threaded.
 # The body waits (on the network, the portal, a CDP page), so it runs on the IO lane
-# (portal.IO_LANE, 256 tokens; ASYNC-CORE-DESIGN.md D14). A ceiling, not a target: real concurrency
+# (portal.IO_LANE, 256 tokens). A ceiling, not a target: real concurrency
 # is just the number of in-flight tool calls.
-# Since async step seven (2026-11-04) five bodies keep it, by design (ASYNC-CORE-DESIGN.md, S9 END
+# Since async step seven (2026-11-04) five bodies keep it, by design (S9 END
 # STATE): omniseek_transcribe (a subprocess download + local speech inference) and omniseek_curator_view,
 # omniseek_graph, omniseek_ruling, omniseek_statement (small JSON / SQLite file reads and writes only). Every other
 # tool body is `async def` and awaits the async core directly.
@@ -457,7 +457,7 @@ async def _eye_search_drill(source, query, limit, full, debug, fresh, cache_only
     # wait_s translates to the engine's deadline_s to bound the drill.
     _fetch_kw = {} if wait_s is None else {"deadline_s": wait_s}
     try:
-        # cache_only now threads into the drill (S1-C1): the fetch's guarded egresses short-circuit at
+        # cache_only now threads into the drill: the fetch's guarded egresses short-circuit at
         # the funnels, so a cache_only raw drill is genuinely zero-egress (like a ranked cache_only
         # search) instead of firing live and then appending a "has no effect" note after the fact.
         _as_of_meta = None
@@ -489,7 +489,7 @@ async def _eye_search_drill(source, query, limit, full, debug, fresh, cache_only
         out["_meta"] = {"diagnostic": diagnostic}
         if not docs and diagnostic.get("held"):
             # OmniSeek's own gate or host breaker sent nothing: say it at the top, so the empty list is
-            # not read as "this source has nothing" (EYE-NOT-SENT-EMPTY, 2026-11-03).
+            # not read as "this source has nothing" (2026-11-03).
             out["held"] = diagnostic["held"]
             note = ("nothing was sent: OmniSeek's own gate held this request back (held.why, and in "
                     "held.detail when it opens again); this empty answer says nothing about the topic. "
@@ -612,7 +612,7 @@ async def omniseek_search(query: str, sources: Optional[list[str]] = None, limit
     _meta.web_search_backend shows cooling, wait cooling_s before retrying.
     More: omniseek docs/TOOLS.md, omniseek_search.
     """
-    # SMALL-BATCH 18: the query leaves for machines that are not ours; the push outlet's rule masks it first
+    # the query leaves for machines that are not ours; the push outlet's rule masks it first
     # (omniseek_gather's omniseek_search calls come through here too).
     from omniseek import redact as _redact
     query = _redact.outward(query, "omniseek_search")
@@ -661,7 +661,7 @@ async def omniseek_search(query: str, sources: Optional[list[str]] = None, limit
 
     # Broad raw buckets: the old omniseek_search path (per-source, uncollapsed; limit acts per source).
     if raw:
-        # cache_only threads into the raw buckets too (S1-C1): asearch_many's per-source egresses
+        # cache_only threads into the raw buckets too: asearch_many's per-source egresses
         # short-circuit at the funnels, so a cache_only raw-buckets sweep is genuinely zero-egress
         # (the sibling of the drill fix above; no more "has no effect" after-the-fact note).
         # S4c-2: await the async twin ON the loop (fan-out children draw the shared pool; parent holds no token).
@@ -734,7 +734,7 @@ async def omniseek_search(query: str, sources: Optional[list[str]] = None, limit
         out["routing_hint"] = _rh
     if not docs and meta.get("held"):
         # an empty answer while OmniSeek's own gates held sources back is not "nothing there"
-        # (EYE-NOT-SENT-EMPTY, 2026-11-03)
+        # (2026-11-03)
         _note = ("nothing came back and %d of the asked sources were not sent: OmniSeek's own gate held them "
                  "back (_meta.held says why, and in detail when it opens again); this empty answer says "
                  "nothing about them. Re-run later" % len(meta["held"])) + ("; " + _note if _note else "")
@@ -2084,7 +2084,7 @@ def _eye_sensor_store(a: str, action: str, query: str, sources: Optional[list[st
             return {"error": "action=create requires query"}
         try:
             from omniseek import redact as _redact
-            query = _redact.outward(query, "omniseek_sensor")   # SMALL-BATCH 18: stored masked, so every run sends it masked
+            query = _redact.outward(query, "omniseek_sensor")   # stored masked, so every run sends it masked
             s = store.create(query=query, sources=sources, schedule=schedule, notify=bool(notify),
                              notify_if=notify_if or None, notify_if_match=notify_if_match,
                              detect_absence=bool(detect_absence), notify_source=notify_source)

@@ -163,7 +163,7 @@ def _record_key(pid: str) -> str:
 def _no_time_for_record() -> bool:
     """Not one more request when the caller's time left is shorter than that request's own timeout:
     the paper would come back after the caller has gone (seen with six broad searches at once on a
-    loaded host, each queueing 15 records behind one gate, EYE-2)."""
+    loaded host, each queueing 15 records behind one gate)."""
     dl = _guard.current_deadline()
     return dl is not None and dl - time.monotonic() < RECORD_TIMEOUT
 

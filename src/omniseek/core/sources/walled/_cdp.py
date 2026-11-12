@@ -71,11 +71,13 @@ import subprocess
 import sys
 import threading
 import time
-from contextlib import contextmanager, nullcontext
-from typing import Any, Callable, ContextManager, Iterator, Optional
+from contextlib import contextmanager
+from typing import Any, AsyncContextManager, Callable, Iterator, Optional
 from urllib.parse import urlsplit
 
-from omniseek.core import _probe, cache, diag, upstreams
+import anyio
+
+from omniseek.core import _probe, cache, diag, portal, upstreams
 from omniseek import where
 
 logger = logging.getLogger(__name__)
@@ -578,6 +580,45 @@ def _refuse_rate_limited_page(seen: Optional[list]) -> None:
         raise RateLimitedPage(_probe.rate_limited(urlsplit(url).hostname or url, retry_after))
 
 
+class _Turn:
+    """The host's declared gates of ONE render (``acdp_call``'s ``on_turn``), taken on the event loop
+    once the render HAS its turn at the Chrome, and held until the page work ends.
+
+    The thread that has the turn cannot take them itself. A pool worker is a Playwright sync thread:
+    once ``sync_playwright()`` has started there, ``asyncio.get_running_loop()`` on that thread answers
+    with Playwright's own loop, so a sync gate entry (``upstreams.egress``, two ``portal.call``) refuses
+    with "portal.run called from a thread running an event loop" and the render is lost (
+    11-12: every render row and ml_conferences came back empty from 11-11 on). So that thread only
+    asks (``ask``: a ``call_soon_threadsafe`` onto the caller's loop, then a wait on a plain queue),
+    and the caller's task on the loop enters the gates and answers (``answer``)."""
+
+    def __init__(self) -> None:
+        self._loop = asyncio.get_running_loop()
+        self.asked = anyio.Event()     # set on the loop when the thread with the turn asks
+        self.done = anyio.Event()      # set on the loop when the page work has ended (or was given up)
+        self._answer: "queue.Queue" = queue.Queue(maxsize=1)
+        self._answered = False         # read and written on the loop only
+
+    def ask(self, wait_s: float) -> Optional[BaseException]:
+        """On the thread that has the Chrome turn: ask for the gates and wait for the answer. None: go,
+        the gates are held. An exception: do not load the page, report it (a gate refused, the caller
+        gave up, or no answer within ``wait_s``)."""
+        try:
+            self._loop.call_soon_threadsafe(self.asked.set)
+        except RuntimeError as exc:   # the caller's loop has closed
+            return exc
+        try:
+            return self._answer.get(timeout=wait_s)
+        except queue.Empty:
+            return TimeoutError(f"CDP turn: no answer from the host's gates within {wait_s:.0f}s; not rendered")
+
+    def answer(self, refusal: Optional[BaseException]) -> None:
+        """On the loop: the one answer (None: go); later ones are ignored."""
+        if not self._answered:
+            self._answered = True
+            self._answer.put(refusal)
+
+
 class _CdpPool:
     """A pool of persistent worker threads for ONE Chrome (see block comment)."""
 
@@ -597,14 +638,13 @@ class _CdpPool:
                              name=f"cdp-pool-{self.cdp_url}-{i}", daemon=True).start()
 
     def submit(self, callback: Callable, initial_url: Optional[str], timeout: int,
-               queue_until: Optional[float] = None,
-               on_turn: Optional[Callable[[], ContextManager]] = None,
-               seen: Optional[list] = None) -> Any:
+               queue_until: Optional[float] = None, seen: Optional[list] = None,
+               turn: Optional[_Turn] = None) -> Any:
         with self._lock:
             q = self._q  # snapshot: a concurrent _recover swap must not split put/get across queues
         reply: "queue.Queue" = queue.Queue(maxsize=1)
         # the caller's context rides with the task: the callback runs in it (see cdp_call)
-        q.put((callback, contextvars.copy_context(), initial_url, reply, queue_until, on_turn, seen))
+        q.put((callback, contextvars.copy_context(), initial_url, reply, queue_until, turn, timeout, seen))
         try:
             status, payload = reply.get(timeout=timeout)
         except queue.Empty:
@@ -653,7 +693,7 @@ class _CdpPool:
             browser = pw.chromium.connect_over_cdp(self.cdp_url, timeout=10000)
 
         while True:
-            callback, caller_ctx, initial_url, reply, queue_until, on_turn, seen = q.get()
+            callback, caller_ctx, initial_url, reply, queue_until, turn, timeout, seen = q.get()
             if queue_until is not None and time.monotonic() > queue_until:
                 # Its turn came after the caller's budget ran out: do not load the page at all.
                 reply.put(("err", TimeoutError("CDP queue: the caller's time ran out before its turn; "
@@ -684,8 +724,12 @@ class _CdpPool:
                     try:
                         # the host's gates only now, for the page load itself (review F9), tried
                         # once: refused, this worker drops the task and takes the next (review P6);
-                        # leased, so a load stuck here gives the host back in time (review P1)
-                        with (on_turn() if on_turn is not None else nullcontext()):
+                        # leased, so a load stuck here gives the host back in time (review P1). Taken
+                        # by the caller on the loop (_Turn), never on this Playwright thread.
+                        refused = turn.ask(timeout) if turn is not None else None
+                        if refused is not None:
+                            reply.put(("err", refused))
+                        else:
                             if initial_url:
                                 page.goto(initial_url, wait_until="domcontentloaded", timeout=30000)
                             reply.put(("ok", caller_ctx.run(callback, page)))
@@ -711,8 +755,7 @@ def cdp_call(callback: Callable[[Page], Any], *,
              initial_url: Optional[str] = None,
              timeout: int = DEFAULT_THREAD_TIMEOUT,
              cdp_url: str = DEFAULT_CDP_URL,
-             queue_until: Optional[float] = None,
-             on_turn: Optional[Callable[[], ContextManager]] = None) -> Any:
+             queue_until: Optional[float] = None) -> Any:
     """Run a CDP-driven callback in a fresh thread (no asyncio loop).
 
     Use this from any adapter `search` / `fetch_url` / `health_check`
@@ -734,15 +777,17 @@ def cdp_call(callback: Callable[[Page], Any], *,
     listener the callback registers runs in a copy of the context it was registered in (module
     docstring), so a note made in a listener reaches the caller's diagnostic too.
 
+    The callback runs on a Playwright sync thread, where ``asyncio.get_running_loop()`` answers with
+    Playwright's own loop: it must not call a sync entry of OmniSeek (``http.get``, ``cache.get_once``,
+    ``upstreams.egress``, anything through ``portal``), which refuses there. A render that must hold a
+    host's declared gates uses ``acdp_call(on_turn=...)``, which takes them on the event loop.
+
     Args:
         callback: function `(page) -> Any`. Runs inside the worker thread, in the caller's context.
         initial_url: optional URL to `page.goto(...)` before invoking callback.
         timeout: max seconds for the entire operation (default 90).
         queue_until: optional monotonic time: the latest this call may wait for its turn at this
             Chrome (the caller's budget); past it, TimeoutError and nothing is loaded.
-        on_turn: optional context-manager factory entered only once the call HAS its turn, around the
-            page load (the host's declared gates: a render must not hold a host gate while it queues
-            behind other browser calls, review F9).
 
     Returns:
         Whatever the callback returns.
@@ -752,6 +797,62 @@ def cdp_call(callback: Callable[[Page], Any], *,
         CacheOnlyMiss: in cache-only mode (cache_only=True): a cache miss must not drive the browser.
         Any exception raised by the callback or Playwright setup.
     """
+    return _cdp_call(callback, initial_url, timeout, cdp_url, queue_until, None)
+
+
+async def acdp_call(callback: Callable[[Page], Any], *,
+                    initial_url: Optional[str] = None,
+                    timeout: int = DEFAULT_THREAD_TIMEOUT,
+                    cdp_url: str = DEFAULT_CDP_URL,
+                    queue_until: Optional[float] = None,
+                    on_turn: Optional[Callable[[], AsyncContextManager]] = None) -> Any:
+    """``cdp_call`` from the event loop. The browser work blocks, so it runs on a worker thread of the
+    IO lane (``portal.IO_LANE``: it waits on the Chrome), with the caller's context.
+
+    ``on_turn``: an async context-manager factory (``upstreams.abrowser_turn``) entered HERE, on the
+    loop, only once the call HAS its turn at the Chrome, around the page load and the callback, and
+    left when they end (the host's declared gates: a render must not hold a host gate while it queues
+    behind other browser calls, review F9). When it refuses (``UpstreamBusy``) the turn is given up at
+    once and nothing is loaded; that exception is raised here. The thread that has the turn only asks
+    for it (``_Turn``): it is a Playwright sync thread, where a sync gate entry refuses."""
+    run = functools.partial(_cdp_call, callback, initial_url, timeout, cdp_url, queue_until)
+    if on_turn is None:
+        return await anyio.to_thread.run_sync(run, None, limiter=portal.IO_LANE, abandon_on_cancel=True)
+    turn = _Turn()
+
+    async def _gates() -> None:
+        await turn.asked.wait()
+        if turn.done.is_set():
+            return
+        try:
+            async with on_turn():
+                turn.answer(None)
+                await turn.done.wait()
+        except Exception as exc:  # noqa: BLE001: a refusal is the render's answer, raised by the thread's side
+            if turn._answered:
+                logger.warning("CDP render %s: letting go of the host's gates failed: %s", initial_url, exc)
+            turn.answer(exc)
+
+    value: Any = None
+    err: Optional[BaseException] = None
+    async with anyio.create_task_group() as tg:
+        tg.start_soon(_gates)
+        try:
+            value = await anyio.to_thread.run_sync(run, turn, limiter=portal.IO_LANE, abandon_on_cancel=True)
+        except Exception as exc:  # noqa: BLE001: re-raised below, once the gates are let go
+            err = exc
+        finally:
+            turn.answer(TimeoutError("CDP render: the caller stopped waiting before its turn; not rendered"))
+            turn.done.set()
+            turn.asked.set()
+    if err is not None:
+        raise err
+    return value
+
+
+def _cdp_call(callback: Callable[[Page], Any], initial_url: Optional[str], timeout: int, cdp_url: str,
+              queue_until: Optional[float], turn: Optional[_Turn]) -> Any:
+    """``cdp_call`` itself; ``turn`` (``acdp_call``'s) is asked for once the call has its Chrome turn."""
     if cache.cache_only():
         # cache-only mode (cache_only=True): never drive the browser on a miss. Checked in the
         # CALLING thread (where fetcher set the flag), before the pool/worker thread is touched.
@@ -766,7 +867,7 @@ def cdp_call(callback: Callable[[Page], Any], *,
     seen: Optional[list] = [] if _probe.active() else None
     if _pool_enabled():  # Lever A: route to the persistent connection pool (else per-call below)
         try:
-            value = _pool_for(cdp_url).submit(callback, initial_url, timeout, queue_until, on_turn, seen)
+            value = _pool_for(cdp_url).submit(callback, initial_url, timeout, queue_until, seen, turn)
         finally:
             _record_seen(seen)
         _refuse_rate_limited_page(seen)
@@ -820,20 +921,21 @@ def cdp_call(callback: Callable[[Page], Any], *,
             diag.note("cdp_call", url=initial_url, exc=to)
             raise to
     try:
-        # ``on_turn`` tries the host's gates once (upstreams.browser_turn); when it refuses, the
-        # finally below gives the Chrome turn up at once and nothing is loaded (review P6)
-        with (on_turn() if on_turn is not None else nullcontext()):
-            t = threading.Thread(target=worker, daemon=True)
-            t.start()
-            t.join(timeout=timeout)
-            if t.is_alive():
-                to = TimeoutError(f"CDP call exceeded {timeout}s")
-                diag.note("cdp_call", url=initial_url, exc=to)
-                raise to
-            status, payload = result_queue.get_nowait()
-    except upstreams.UpstreamBusy as exc:
-        _note_failure(initial_url, exc)
-        raise
+        # with the Chrome turn, the host's gates tried once (``turn``, taken by acdp_call on the
+        # loop); when they refuse, the finally below gives the Chrome turn up at once and nothing is
+        # loaded (review P6)
+        refused = turn.ask(timeout) if turn is not None else None
+        if refused is not None:
+            _note_failure(initial_url, refused)
+            raise refused
+        t = threading.Thread(target=worker, daemon=True)
+        t.start()
+        t.join(timeout=timeout)
+        if t.is_alive():
+            to = TimeoutError(f"CDP call exceeded {timeout}s")
+            diag.note("cdp_call", url=initial_url, exc=to)
+            raise to
+        status, payload = result_queue.get_nowait()
     finally:
         gate.release()
         _record_seen(seen)

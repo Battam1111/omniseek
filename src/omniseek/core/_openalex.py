@@ -71,7 +71,7 @@ _BREAK_FOR_S = 120.0  # seconds the circuit stays open
 # cron, a workflow's cohort burst) can never spike the rate and 429 the shared key. The semaphore bounds
 # CONCURRENCY, the pacer bounds RATE; together a burst is impossible by construction (the root cause of
 # the self-DOS the all-at-once health probe used to cause). The numbers live in upstreams.json.
-# How long ONE caller may wait on the gate: until its own deadline (EYE-GATE-QUEUE, 2026-11-11), the
+# How long ONE caller may wait on the gate: until its own deadline (2026-11-11), the
 # start wait and the permit wait of an attempt together. An OA 429 / budget-exhaustion storm (40+ OA
 # sources fanning out, each retry re-reserving a slot) grows the backlog; a start past the caller's
 # deadline fails fast (raise OpenAlexDown → caller degrades to cache/empty) without reserving, so the

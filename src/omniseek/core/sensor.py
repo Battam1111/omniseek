@@ -340,7 +340,7 @@ async def arun_sensor(sensor: Sensor, store: SensorStore, limit: int = 15) -> di
     # missed for good once it scrolls out of the source's lookback). Sources without it keep the old
     # call exactly.
     window = _sensor_window(sensor.sources)
-    with _guard.initiator("盯梢"):   # a gate refusal names who asked (EYE-GATE-FIX G)
+    with _guard.initiator("盯梢"):   # a gate refusal names who asked
         if window:
             limit = max(limit, window)
             ranked, _meta = await fetcher.asearch_ranked(
@@ -516,7 +516,7 @@ def due_sensors(store: SensorStore, now: float, schedules: Optional[dict] = None
 # A deployment that keeps a shared table of its resident tasks can make it the one place that says
 # whether and when each sensor runs, since a sensor is a resident task too. A table row for a
 # sensor: 种类 内部调度, 标签或单元 omniseek.core.sensor:<id>, 何时跑 "眼内部调度 <spec>"; its 归谁 only says
-# who is responsible and is never read to pick the row (EYE-OWNER-KEY).
+# who is responsible and is never read to pick the row.
 # The table is read with the deployment's own reader (scripts/services.py), never a second parser.
 # A stored definition the table does not list is kept but never runs. The table being unreadable
 # stops this round loudly (see scheduler_tick_for_sensors).

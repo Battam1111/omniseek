@@ -80,8 +80,8 @@ DEFAULT_SEED: list[tuple[str, str, str]] = [
 def _load_watch_list() -> list[tuple[str, str, str]]:
     """Return [(name, institution, openalex_id)]. Deployer config replaces seed.
 
-    The config lives only in the keys directory (where.credentials(), registered in 01_docs/CREDS.tsv); NAME-3
-    (2026-10-20) dropped the second place, the user config directory of the retired application name."""
+    The config lives only in the keys directory (where.credentials(), registered in 01_docs/CREDS.tsv); on
+    2026-10-20 a change dropped the second place, the user config directory of the retired application name."""
     path = where.credentials() / "researcher_watch.json"
     if path.exists():
         try:

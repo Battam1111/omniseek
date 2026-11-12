@@ -147,7 +147,7 @@ async def _aunpaywall(doi: str) -> dict:
         loc = d.get("best_oa_location") or {}
         # is_oa is UNPAYWALL's verdict (oa_by), read from license metadata and the copies it has
         # found: a publisher page that shows a chapter free without an open license can still be
-        # "closed" here (EYE-RANK 2026-10-20: 10.1007/978-3-031-68397-8_11, a CRYPTO 2024 chapter
+        # "closed" here (2026-10-20: 10.1007/978-3-031-68397-8_11, a CRYPTO 2024 chapter
         # Springer labels "open access", © IACR, no license in Crossref; Unpaywall and OpenAlex both
         # say closed). False means "no free copy known to Unpaywall", not "unreadable".
         return {"is_oa": bool(d.get("is_oa")), "pdf_url": loc.get("url_for_pdf"),

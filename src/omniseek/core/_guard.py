@@ -31,7 +31,7 @@ from omniseek.core import _probe
 
 logger = logging.getLogger(__name__)
 
-# WHO HOLDS A GATE IS A CREDENTIAL (EYE-TWINS-2, 2026-11-11). A gate knows its holder only by the object
+# WHO HOLDS A GATE IS A CREDENTIAL (2026-11-11). A gate knows its holder only by the object
 # handed to it: re-entry (``held_by``), the lease and the give-back all name that object, never the task
 # or thread that happens to run the code. An async caller that hands none is held by its running task,
 # the convention of anyio's ``CapacityLimiter`` (``acquire`` borrows on behalf of ``current_task()``),
@@ -113,7 +113,7 @@ def renew_handles(handles: tuple) -> None:
         handle.renew()
 
 
-# SPACED AT THE DEPARTURE (SMALL-BATCH-12A). The start slot is when a hold's body begins; the request
+# SPACED AT THE DEPARTURE. The start slot is when a hold's body begins; the request
 # leaves later, after work that differs from one request to the next (the first builds its client:
 # about 10 ms), so two departures measured on the wire came 2.99 s apart behind arXiv's 3 s slots. The
 # moment a request is handed to the transport (OmniSeek's httpx request hook, the curl tier's send)
@@ -223,11 +223,11 @@ class FairPermits:
     anyone waits (a waiter wakes at the earliest expiry), so a stuck holder blocks a line no longer
     than its lease.
 
-    WHO HOLDS IT (review P2; EYE-TWINS-2). Every permit names its holder, the credential handed to
+    WHO HOLDS IT (review P2). Every permit names its holder, the credential handed to
     ``atake`` (see ``Holder``), and ``held_by(holder)`` reads the live leases, so a record never
     outlives its permit, whichever task gives the permit back. ``_value`` is the number of free permits
     and ``_initial_value`` the cap, as on a threading semaphore. (The sync ``take`` and the
-    threading-semaphore ``acquire``/``release`` were deleted in EYE-TWINS-2: a blocking caller holds a
+    threading-semaphore ``acquire``/``release`` were deleted: a blocking caller holds a
     gate through ``upstreams.egress``, which enters the async one with a credential of its own.)"""
 
     def __init__(self, n: int, name: str = "gate") -> None:
@@ -372,7 +372,7 @@ class FairPermits:
             self._reclaim_locked(time.monotonic())
 
 
-# THE CALLER'S DEADLINE (design decision 2, 2026-09-29; EYE-GATE-QUEUE, 2026-11-11). The caller's own
+# THE CALLER'S DEADLINE (design decision 2, 2026-09-29; 2026-11-11). The caller's own
 # deadline is the ONE bound on how long a declared gate keeps it waiting: a full gate is a line, the
 # permit wait and the start wait together run until the caller's deadline, across every gate one
 # request passes, and only then is the request turned away unsent. A shorter per-gate ceiling
@@ -416,7 +416,7 @@ def current_deadline() -> Optional[float]:
     return _deadline_var.get()
 
 
-# WHO ASKED (EYE-GATE-FIX G, 2026-10-20). A gate refusal says which part of OmniSeek sent the request
+# WHO ASKED (2026-10-20). A gate refusal says which part of OmniSeek sent the request
 # (检索 search, 收录 recall ingest, 健康检查 health check, 盯梢 sensor, 预热 prewarm, 读取 omniseek_read), so the
 # refusals can be counted per initiator instead of guessed from time windows. Set where the work
 # starts; like the deadline it rides a context variable (a pool thread is handed it explicitly).
@@ -593,7 +593,7 @@ class Reservation:
         self.start, self.wait, self.prev_next_at, self.next_at = start, wait, prev_next_at, next_at
 
 
-# WHAT THE BREAKER COUNTS (EYE-BREAKER-404, 2026-11-07). The breaker is there to stop sending to an
+# WHAT THE BREAKER COUNTS (2026-11-07). The breaker is there to stop sending to an
 # upstream that is down or calling a halt; it counts only failures that say so: no connection, a
 # timeout, a 5xx, a 429, the upstream's own rate-limit answer (``throttled``: GitHub's secondary-rate
 # 403, OpenAlex's budget 429), and any failure whose cause is not known. An answer that names the
@@ -630,7 +630,7 @@ def counts_against_upstream(exc: Optional[BaseException] = None, *, status: Opti
     return st not in NOT_UPSTREAM_FAULT_STATUS
 
 
-# RETRIES AND OTHER CHANNELS FOLLOW THE SAME RULE (EYE-RETRY-404, 2026-11-07). A failure the breaker
+# RETRIES AND OTHER CHANNELS FOLLOW THE SAME RULE (2026-11-07). A failure the breaker
 # does not count is an answer: sending the same request again, or the same request down another
 # channel (OpenAlex's second lane, Jina after a plain fetch), gets the same answer and spends the
 # upstream's budget for nothing. Before this, reading one GitHub issue that does not exist sent two
@@ -853,7 +853,7 @@ class BackendGuard:
         while waiting for the slot means every start is at least ``min_interval_s`` after the
         previous one, and with ``max_inflight=1`` the upstream sees exactly one request at a time.
 
-        ONE bound for both waits, the caller's deadline (EYE-GATE-QUEUE): a full gate is a line, and
+        ONE bound for both waits, the caller's deadline: a full gate is a line, and
         the permit wait (in the gate's one line, review N1, on a future of the running loop: no worker
         thread, no polling, and no cancellation can leave it taken) and the start wait (``await
         anyio.sleep``) together run until ``until`` (monotonic), by default the caller's deadline; with
@@ -867,7 +867,7 @@ class BackendGuard:
         end of the waiting bound (the caller's deadline; with none, the reserved start); then the gate
         takes the permit back even if this holder never returns.
 
-        HOLDER (EYE-TWINS-2): ``holder`` is the credential the permit is held by (default: the running
+        HOLDER: ``holder`` is the credential the permit is held by (default: the running
         task, see ``Holder``). A blocking caller hands its own, so this block may be entered in one
         task and left in another (``upstreams.egress`` enters and leaves it through two portal calls).
 

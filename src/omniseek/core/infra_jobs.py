@@ -142,7 +142,7 @@ CDP_LANE_EVERY_S = 24 * 3600            # the CDP lane's cadence, the old daily 
 
 # CDP (logged-in browser) sources -- probed INDIVIDUALLY + SERIALLY (login-state visibility).
 # xiaohongshu lives on the ISOLATED 9223 Chrome (小号); the rest on the shared 9222.
-# xianyu (EYE-XIANYU 2026-10-24): its check is a real search on a 小号 with a daily cap, so it rides the
+# xianyu (2026-10-24): its check is a real search on a 小号 with a daily cap, so it rides the
 # daily serial lane, not the 6-hourly one (four checks a day would be four account touches).
 _CDP_SOURCES = {"xiaohongshu", "xiaomuchong", "zhihu", "zhihu_users", "yipinsanfendi", "scrape_js_sites",
                 "xianyu"}
@@ -247,7 +247,7 @@ def _health_probe(adapter) -> tuple[Optional[bool], str, bool]:
 def _probe_tapped(name: str, adapter, noted: dict) -> tuple[Optional[bool], str, bool]:
     """``_health_probe`` under a diag tap: every failure record the probe's attempts noted (whatever the
     source's own check armed and drained inside it) lands in ``noted[name]``, so a source that failed
-    leaves the addresses it failed on for the exit-node sweep (EYE-EXIT). One list per source: each
+    leaves the addresses it failed on for the exit-node sweep. One list per source: each
     probe thread taps in its own context."""
     from omniseek.core import diag
     with diag.tap() as seen:
@@ -284,7 +284,7 @@ def _health_track(name: str, ok: Optional[bool], msg: str, fails: dict, alerts: 
     coincidental timeout or a busy gate. No alert either way. The run body records the name in
     ``unmeasured`` or ``unverified`` so the gap stays visible.
 
-    The one exception is evidence from outside the check (EYE-NONE-RESET, 2026-11-07): ``fail_at``
+    The one exception is evidence from outside the check (2026-11-07): ``fail_at``
     {name: epoch of its last failed check} is kept here, and ``fetched_at`` is the source's last live
     fetch that worked (fetcher.fetched_ok_at). A None after a fetch that worked LATER than the last
     failed check clears the count like a True would (recovered when it had been reported down).
@@ -358,7 +358,7 @@ def _track_probed(state: dict, results: dict, probed: list, retired: set, fails:
 def _gate_held_rounds(state: dict, results: dict, probed: list, fails: dict) -> None:
     """A source whose check said it failed, re-read as "not verified" only because one of OmniSeek's
     gates also refused a request (``_probe.held_by_gate``), N_CONSECUTIVE runs in a row, is reported
-    DOWN from that run on (EYE-GATE-FIX B, 2026-10-20). lobste.rs read "not verified" for two days
+    DOWN from that run on (2026-10-20). lobste.rs read "not verified" for two days
     while its host completed no handshake at all. A check that asked nothing (a busy gate in front of
     the whole check, a metered quota) is not this and stays not verified. The round count is kept in
     the state's ``gate_held`` map (merged like the other maps, so a run that did not probe a source
@@ -605,7 +605,7 @@ def run_source_health(scope: Optional[str] = None) -> dict:
     state["degraded"] = sorted(degraded_now if full
                                else (prev_degraded - set(probed)) | degraded_now)
 
-    # EXIT NODE (EYE-EXIT): sources that broke this run may have broken because the proxy node OmniSeek
+    # EXIT NODE: sources that broke this run may have broken because the proxy node OmniSeek
     # leaves through broke or got refused. Test the nodes and switch to one that reaches them
     # (eye.exit_node; it sends its own notice either way). What broke this run: a source down for the
     # first time (a re-nag of one long down is not new), a bundle that just lost members, and a source
@@ -1266,7 +1266,7 @@ def rotate_logs() -> int:
 
 
 def run_log_rotation() -> dict:
-    # EYE-CACHE-CAP (2026-11-03): the same daily pass deletes expired cache files. cache.clear_expired
+    # 2026-11-03: the same daily pass deletes expired cache files. cache.clear_expired
     # ran only at a (re)start (serve_http), so a stretch with no release kept dead JSON on disk. No
     # size cap on top: the TTLs bound the total (11-03: 1,060 files, ~157 MB, oldest from 10-21).
     from omniseek.core import cache
@@ -1279,7 +1279,7 @@ def run_log_rotation() -> dict:
 
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
-# JOB: aiid-snapshot   (weekly; task EYE-AIID-SNAP, 2026-10-20)
+# JOB: aiid-snapshot   (weekly; 2026-10-20)
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
 # The ai_incidents source answers from a local index built off the AI Incident Database's weekly
 # public snapshot. This job checks the snapshot page once a week and, only when a newer snapshot is

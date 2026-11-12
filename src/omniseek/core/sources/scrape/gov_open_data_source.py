@@ -24,7 +24,7 @@ Two portal shapes are handled (the config row says which):
     and keep the records whose name/description contain the query terms. Bounded to a few
     pages so a broad query stays cheap (the portal has ~4.4k datasets / ~440 pages). The pages do
     not depend on the query, so each is cached by its URL (``_url_json``): one paging serves every
-    query until the cache runs out (EYE-GATE-FIX A, 2026-10-20).
+    query until the cache runs out (2026-10-20).
 
 Emits one dataset doc per hit: title, content = the description + a one-line note on the
 resource formats, url = the human dataset page, metadata = {portal, organization}.

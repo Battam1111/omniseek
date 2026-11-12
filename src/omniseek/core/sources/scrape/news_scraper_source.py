@@ -28,7 +28,7 @@ from bs4 import BeautifulSoup
 
 from omniseek.core import cache, diag, http, portal, upstreams
 from omniseek.core.normalize import Document, jsonsafe, keyword_score_filter
-from omniseek.core.sources._base import SourceBase, ablocking, aparse
+from omniseek.core.sources._base import SourceBase, aparse
 from omniseek.core.web_fallback import _extract_text
 
 logger = logging.getLogger(__name__)
@@ -85,13 +85,15 @@ async def _aget(url: str) -> Optional[str]:
     return None
 
 
-def _render(url: str) -> Optional[str]:
+async def _arender(url: str) -> Optional[str]:
     """Fetch a JS-RENDERED page via the shared CDP Chrome — for SPAs whose content
     is absent from the initial HTML (NodeFlair-style runtime rendering). Lazy CDP
     import so non-render sites never load playwright/CDP. Read-only navigation of
-    public pages; the account-bearing sessions in the profile are untouched."""
+    public pages; the account-bearing sessions in the profile are untouched. The
+    browser work runs on a worker thread (acdp_call); the host's gates are awaited
+    here on the loop (upstreams.abrowser_turn)."""
     try:
-        from omniseek.core.sources.walled._cdp import cdp_call
+        from omniseek.core.sources.walled._cdp import acdp_call
     except Exception as exc:  # noqa: BLE001
         logger.warning("CDP unavailable for render of %s: %s", url, exc)
         return None
@@ -110,8 +112,8 @@ def _render(url: str) -> Optional[str]:
         render_s = 90
         upstreams.check_browser(url)
         until = upstreams.budget_until(url, default=render_s)
-        return cdp_call(_nav, initial_url=url, timeout=render_s, queue_until=until,
-                        on_turn=lambda: upstreams.browser_turn(url, render_s))
+        return await acdp_call(_nav, initial_url=url, timeout=render_s, queue_until=until,
+                               on_turn=lambda: upstreams.abrowser_turn(url, render_s))
     except Exception as exc:  # noqa: BLE001
         logger.warning("CDP render failed %s: %s", url, exc)
         return None
@@ -160,9 +162,9 @@ def _extract_pages(sites: list, pages: list) -> list[dict]:
 
 class _ScrapeSite(SourceBase):
     """An index-page scraper configured from a data row (one named source). Static pages come through
-    ``_aget`` (http.adirect, no worker thread); a ``render`` site's page from the shared CDP Chrome, a
-    blocking call, on a thread of the legacy lane (``ablocking``), whose turn takes the host's gates
-    (``_render``). Its ``search`` is SourceBase's, generated from ``asearch``."""
+    ``_aget`` (http.adirect, no worker thread); a ``render`` site's page from the shared CDP Chrome
+    (``_arender``: the browser on a worker thread, the host's gates awaited on the loop once the render
+    has its turn). Its ``search`` is SourceBase's, generated from ``asearch``."""
 
     needs_credentials = False
     kind = "stream"
@@ -206,7 +208,7 @@ class _ScrapeSite(SourceBase):
         async def render_all() -> None:
             for i, s in enumerate(self.sites):
                 if s.get("render"):
-                    pages[i] = await ablocking(_render, s["url"])
+                    pages[i] = await _arender(s["url"])
 
         async with anyio.create_task_group() as tg:
             for i, s in enumerate(self.sites):
@@ -215,8 +217,8 @@ class _ScrapeSite(SourceBase):
             if any(s.get("render") for s in self.sites):
                 tg.start_soon(render_all)
 
-        # The HTML parse is pure CPU: through aparse, the process lane for a long parse (ASYNC-CORE-DESIGN.md
-        # D14). One hop for all the row's pages: each hop waits its turn in the lane, and a broad search fills it.
+        # The HTML parse is pure CPU: through aparse, the process lane for a long parse.
+        # One hop for all the row's pages: each hop waits its turn in the lane, and a broad search fills it.
         return await aparse(sum(len(p) for p in pages if p), _extract_pages, self.sites, pages)
 
     def _items_key(self) -> str:
@@ -276,10 +278,10 @@ class _ScrapeSite(SourceBase):
         )
 
     async def ahealth_check(self) -> tuple[bool, str]:
-        """A render site's page comes from the shared CDP Chrome (blocking: a thread of the legacy lane),
-        a static one through ``_aget``; the parse through ``aparse``."""
+        """A render site's page comes from the shared CDP Chrome (``_arender``), a static one through
+        ``_aget``; the parse through ``aparse``."""
         for s in self.sites:
-            html = await ablocking(_render, s["url"]) if s.get("render") else await _aget(s["url"])
+            html = await _arender(s["url"]) if s.get("render") else await _aget(s["url"])
             if html and await aparse(len(html), _extract_links, html, s["url"], s.get("path_contains")):
                 return True, f"OK (scrape; {len(self.sites)} site(s), first yields items)"
         return False, f"0 items from {len(self.sites)} site(s) (JS-rendered? selector drift?)"

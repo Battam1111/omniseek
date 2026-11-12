@@ -67,7 +67,7 @@ _SE_KEY = (auth.load("stackexchange") or {}).get("key") or ""
 # than 30 a second from one IP are dropped), taken permit-first; a `backoff` in a response defers its
 # start slot for EVERY caller (the docs: the app MUST wait that many seconds); and its breaker (3 failures
 # in a row that say the API is unhealthy, then 300 s, both declared there) makes the cluster fast-skip a
-# spent quota. Until EYE-BREAKER-ONE (2026-11-07) the breaker was a count and cooldown of this module's
+# spent quota. Until 2026-11-07 the breaker was a count and cooldown of this module's
 # own, which also counted a bad_parameter answer; it now goes through the guard's one rule
 # (_guard.counts_against_upstream), see _se_failure.
 _se_guard = upstreams.guard("stackexchange", log=logger)

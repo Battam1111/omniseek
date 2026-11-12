@@ -1,6 +1,6 @@
 """Does this host name exist in public DNS? Asked only after a read failed before any answer.
 
-SMALL-BATCH-4 (2026-11-09). The host machine's main proxy runs in fake-ip mode: every name first resolves to
+2026-11-09. The host machine's main proxy runs in fake-ip mode: every name first resolves to
 a 30.0.x.x stand-in address, so a name that does not exist at all still "resolves", and the connection
 is cut at the TLS handshake. OmniSeek then reported SSL_ERROR_SYSCALL or ConnectError and the reader took
 it for a broken network (smartech.gatech.edu, gone since Georgia Tech moved to repository.gatech.edu,

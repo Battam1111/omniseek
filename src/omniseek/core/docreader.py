@@ -64,7 +64,7 @@ _CODE_EXTS = ("py", "pyi", "ts", "tsx", "js", "jsx", "mjs", "cjs", "rs", "go", "
               "sh", "bash", "zsh", "sql", "toml", "cfg", "ini", "conf", "yaml", "yml",
               "json", "xml", "html", "css", "tex", "rst", "dockerfile", "makefile")
 _SUPPORTED = ("pptx", "docx", "xlsx", "pdf", "txt", "md", "markdown", "csv", "htm") + _CODE_EXTS
-_MAX_DOWNLOAD = http.DOC_MAX_BYTES  # URL-download cap: the shared document cap (EYE-RSS-3; was 100MB here)
+_MAX_DOWNLOAD = http.DOC_MAX_BYTES  # URL-download cap: the shared document cap (was 100MB here)
 _MAX_TEXT_FILE = 2 * 1024 * 1024    # raw txt/md/csv read cap
 _XLSX_MAX_ROWS = 300                # per sheet — honest truncation, not silence
 _XLSX_MAX_COLS = 40
@@ -227,7 +227,7 @@ def _part_pattern(part: str) -> str:
     ment on the next line), so between two ASCII letters a line-end hyphen may sit; a hyphen of the
     term itself may be followed by the line break (agent-, then state). The extracted text keeps its
     hyphens: removing them at extraction (PyMuPDF TEXT_DEHYPHENATE) would also glue every compound
-    broken at a line end (agentstate), so the search tolerates the break instead (EYE-PDF-TEXT)."""
+    broken at a line end (agentstate), so the search tolerates the break instead."""
     out = []
     for i, c in enumerate(part):
         if c == "-":
@@ -612,8 +612,8 @@ def read_document(src: str, start_char: int = 0, max_chars: int = 24000,
     try:
         if is_url:
             ck_id = src
-            # an arXiv /pdf/ or /html/ link is read from export.arxiv.org under its full-text gate
-            # (EYE-RSS-3), not from arxiv.org under the 15 s Crawl-delay gate; the cache key stays src
+            # an arXiv /pdf/ or /html/ link is read from export.arxiv.org under its full-text gate,
+            # not from arxiv.org under the 15 s Crawl-delay gate; the cache key stays src
             from omniseek.core.sources.api import _arxiv_fulltext
             tmp, content_type, cd_filename = _download(_arxiv_fulltext.export_url(src) or src, fmt)
             path = tmp

@@ -1,6 +1,6 @@
 """Shared HTTP helpers — one User-Agent, one timeout policy, one error contract.
 
-One implementation, async (EYE-TWINS-1, 2026-11-10): every helper here is an ``a``-prefixed
+One implementation, async (2026-11-10): every helper here is an ``a``-prefixed
 coroutine; the sync names (``get``, ``get_json``, ``get_text``, ``post_json``, ``direct``,
 ``get_impersonated``, ``download_to_file``) are one-line entries for a caller on a thread, which
 run the coroutine on the event loop through ``portal.call``. Never call a sync entry on the event
@@ -238,7 +238,7 @@ def aprogress_hooks() -> dict:
     """The event hooks that give an ``httpx.AsyncClient`` of a module's own (one that takes its gates
     with ``ahold``/``aslot``/``upstreams.ahold`` around the request, or atproto's, bluesky_source) the
     lease renewal by progress: when the request has been sent, when its headers arrive, and at every
-    block of its body. (The sync ``progress_hooks`` and its four helpers went in EYE-TWINS-2 with
+    block of its body. (The sync ``progress_hooks`` and its four helpers went with
     their one user, bluesky's sync atproto client.)"""
     async def hook(response: "httpx.Response") -> None:
         _awatch_progress(response)
@@ -272,11 +272,11 @@ MAX_BYTES = 30 * 1024 * 1024  # 30MB hard cap on a single response body — a fe
                               # bigger than this is almost certainly a hijack/misconfig;
                               # stream + abort rather than buffer it all and OOM the daemon.
 # A DOCUMENT (a paper PDF, an arXiv HTML page, a slide deck) is not an API answer: it streams to a file
-# through download_to_file and never sits whole in memory, so it gets its own cap (EYE-RSS-3,
+# through download_to_file and never sits whole in memory, so it gets its own cap (
 # 2026-10-24: openreview.net/forum?id=jU7AbGq3se is 31,551,840 bytes and the 30MB answer cap above
 # refused it). PROVISIONAL: 200MB, below the 500MB the same download path allows for audio
-# (asr._AUDIO_DL_MAX_BYTES); calibrated against 20 arXiv and 20 OpenReview paper PDFs, readings in
-# out/EYE-RSS-3/report.md. Raise it from those readings, not by guess.
+# (asr._AUDIO_DL_MAX_BYTES); calibrated against 20 arXiv and 20 OpenReview paper PDFs on 2026-10-24.
+# Raise it from new readings, not by guess.
 DOC_MAX_BYTES = 200 * 1024 * 1024
 # Bytes of a non-2xx body kept for the diag capture: an error message fits many times over, and a
 # huge or endless error body costs at most this much read.
@@ -391,8 +391,8 @@ async def _acurl_tier_retry(method: str, url: str, timeout: int, headers: Option
     httpx's default ``*/*``. Chrome's own set (Accept ``text/html,...``, ``Sec-Fetch-Dest: document``)
     reads to a site as a page load, and an API can answer that with a web page: api.openreview.net/notes,
     keyless, answers ``*/*`` with 403 JSON (ChallengeRequiredError) but either of those two with a 302 to
-    openreview.net/challenge, whose 200 HTML this tier then served as the body (EYE-TWINS-1 live
-    evidence; re-measured with curl and curl_cffi 0.15.0, SMALL-BATCH-9).
+    openreview.net/challenge, whose 200 HTML this tier then served as the body (live evidence of
+    2026-11-10, re-measured with curl and curl_cffi 0.15.0).
     """
     if method.upper() not in _CURL_TIER_METHODS:
         return None
@@ -470,7 +470,7 @@ def ahop_hooks(original_ua: Optional[str] = None, *, defer_on_429: bool = True) 
 
 _UNSET: Any = object()
 
-# One TLS context for the one-shot clients of direct / adirect (EYE-ADIRECT-SSL, 2026-11-03). httpx builds a
+# One TLS context for the one-shot clients of direct / adirect (2026-11-03). httpx builds a
 # fresh context (loading the CA bundle) for every client it constructs: 6.36 ms per client on the host machine against
 # 0.05 ms with a shared one (measured 11-03 with OmniSeek's httpx 0.28.1), and a broad search builds about 20 of
 # them on the event loop through adirect. A context keeps no per-connection state; each client is still
@@ -622,7 +622,7 @@ async def adirect_stream(method: str, url: str, *, cookies: Any = None, timeout:
 
 
 # The sync entries of the shared helpers below (get, get_json, get_text, post_json): for a caller on a
-# thread, the async helper run on the event loop (portal.call), arguments as they are (EYE-TWINS-1).
+# thread, the async helper run on the event loop (portal.call), arguments as they are.
 def get(url: str, **kwargs: Any) -> Optional[httpx.Response]:
     """``aget`` from a thread. None on failure."""
     return portal.call(aget, url, **kwargs)
@@ -729,7 +729,7 @@ async def adownload_to_file(url: str, dest: str, *, max_bytes: int,
     transport error (unlike get()'s None: a fallback caller wants the reason). curl_cffi NOT httpx:
     this deployment's egress mangles openssl TLS to some CDNs (httpx -> 'UNEXPECTED_EOF_WHILE_READING'
     on cloudfront) while libcurl's handshake gets through -- the same tier get_impersonated uses. The
-    robust-fetch path for LARGE binaries (audio, and since EYE-RSS-3 every paper PDF / arXiv full text
+    robust-fetch path for LARGE binaries (audio, and since 2026-10-24 every paper PDF / arXiv full text
     under ``DOC_MAX_BYTES``) that the size-capped get() refuses AND that the bundled ffmpeg's own TLS
     cannot fetch. (Egress to some CDNs can be slow, so timeout defaults high.)
 
@@ -831,7 +831,7 @@ async def _aimpersonated_request(method: str, url: str, *, timeout: int = DEFAUL
     except Exception as exc:  # noqa: BLE001 — missing/broken dep -> degrade, never crash
         logger.warning("http impersonated tier unavailable (curl_cffi import failed): %s", exc)
         return None
-    # Mirror the _arequest_capped discipline at the curl_cffi tier (S1-C1): the single egress guard, the
+    # Mirror the _arequest_capped discipline at the curl_cffi tier: the single egress guard, the
     # SSRF pre-flight, and a MAX_BYTES cap. All three were absent here (an unbounded ``return r.content``).
     if cache.cache_only():
         return None  # cache-only mode (cache_only=True): do NO live HTTP, the single egress guard

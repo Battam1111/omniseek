@@ -10,14 +10,14 @@ Reads credentials from <credentials>/openreview.json:
 OpenReview is the unique source where we can read actual peer reviews,
 rebuttals, and meta-reviews — irreplaceable methodology learning material.
 
-Reviews (EYE-RSS-3, 2026-10-24): a reply note's document carries EVERY field of the note (venues name
+Reviews (2026-10-24): a reply note's document carries EVERY field of the note (venues name
 their review forms' fields differently) except the bookkeeping in OPENREVIEW_META_FIELDS, each under its
 name as a ``## `` heading; its kind comes from the invitation's last segment, rating / confidence from
 their generic names (see _review_note_to_document).
 
 Full text (2026-10-10): omniseek_read on an openreview.net /pdf?id= or /forum?id= link downloads the
 submission PDF through the logged-in session (the attachment endpoint the official openreview-py
-client uses), streamed to a temporary file under the document cap (http.DOC_MAX_BYTES, EYE-RSS-3),
+client uses), streamed to a temporary file under the document cap (http.DOC_MAX_BYTES),
 and extracts it with the pdf adapter's extractor. Anonymous access to every OpenReview
 entry now answers 403 ChallengeRequiredError, so without a session, or when the session is asked
 to verify too, the read falls back to the title and abstract and says why in
@@ -30,7 +30,7 @@ metadata.discussion_notes), abstract-only or not; /pdf?id= stays the paper alone
 discussion are fetched side by side after the one login (_read_forum), and a PDF not ready by the
 forum's cutoff (_forum_cutoff) leaves the abstract with the discussion instead of timing the read out.
 
-Search without logging in (EYE-FIX-1109): ``/notes/search`` answers anonymously again (measured 2026-11-08
+Search without logging in: ``/notes/search`` answers anonymously again (measured 2026-11-08
 and 11-09, with or without ``group=<venue>``), while ``/notes?id=``, ``/notes?forum=`` and
 ``/notes?content.venueid=`` still answer 403 ChallengeRequiredError without a session. So searching (words,
 with or without ``venue:``) never logs in unless the anonymous answer is refused; the reads that need the
@@ -131,7 +131,7 @@ _VENUE_ALIASES = {
 # is the unique-to-OpenReview signal (the raw material for peer-review analysis).
 # Accepts a bare forum id (`reviews:zzz123`) or an openreview.net/forum?id=… URL.
 _REVIEWS_RE = re.compile(r"(?:^|\s)reviews\s*:\s*(\S+)", re.IGNORECASE)
-# EVERY FIELD OF A REPLY NOTE IS KEPT (EYE-RSS-3, 2026-10-24). Each venue names its review form's
+# EVERY FIELD OF A REPLY NOTE IS KEPT (2026-10-24). Each venue names its review form's
 # fields its own way (ICML 2025: claims_and_evidence, questions_for_authors, overall_recommendation;
 # NeurIPS 2025: strengths_and_weaknesses, quality, clarity, significance, originality, limitations),
 # and a list of names written for one venue silently dropped the rest (an ICML 2025 review came back
@@ -351,7 +351,7 @@ class OpenReviewAdapter(SourceBase):
         return data
 
     async def _asearch_notes(self, params: dict) -> Optional[dict]:
-        """``/notes/search`` anonymously first (EYE-FIX-1109): it answers keyless (measured 2026-11-08 and
+        """``/notes/search`` anonymously first: it answers keyless (measured 2026-11-08 and
         11-09, with or without ``group``), while ``/login`` allows 3 attempts a window and a login that
         hit 429 used to cost the whole source its results. Only an anonymous answer of 401 / 403 (the
         ChallengeRequiredError wall OpenReview put on every anonymous request from 2026-10-10) falls back
@@ -539,7 +539,7 @@ class OpenReviewAdapter(SourceBase):
         kind = OpenReviewAdapter._kind_from_invitations(invitations)
         if kind is None:
             # No invitation names the kind: the old field-name sniff, which also decides whether the
-            # note is a review-like reply at all (as before EYE-RSS-3).
+            # note is a review-like reply at all (as before 2026-10-24).
             if not any(f in present for f in _KIND_FALLBACK_FIELDS):
                 return None
             if "metareview" in present or "meta_review" in present:
@@ -785,7 +785,7 @@ class OpenReviewAdapter(SourceBase):
 
         Returns ``(HTTP status or None, content type, bytes written or None, reason)``; the byte count
         is set only for a 2xx whose body starts with ``%PDF-`` and fits the DOCUMENT cap
-        (``http.DOC_MAX_BYTES``, EYE-RSS-3: the 30MB cap on an API answer refused a 31MB paper), else
+        (``http.DOC_MAX_BYTES``; the 30MB cap on an API answer refused a 31MB paper), else
         ``dest`` is left absent and the reason says what came back (a challenged request reads
         ``HTTP 403 ChallengeRequiredError: ...``). The reason never carries the token. The download is
         ``http.download_to_file`` (streamed to disk, never whole in memory): every redirect hop goes
@@ -821,8 +821,8 @@ class OpenReviewAdapter(SourceBase):
     def health_check(self) -> tuple[Optional[bool], str]:
         """Ask the search path itself, as search asks it: the same ``/notes/search`` request
         (``source=forum``), anonymously first, for ONE paper on a term that always has papers. Only
-        when the anonymous request is refused (401 / 403) does it go on with the login token, as before
-        (EYE-FIX-1109). Reusing a still-valid token is not evidence by itself (until 2026-10-04 it read
+        when the anonymous request is refused (401 / 403) does it go on with the login token, as before.
+        Reusing a still-valid token is not evidence by itself (until 2026-10-04 it read
         None, so a long-running process never verified this source); the token is reused, never re-made
         per check (the /login endpoint allows only 3 attempts per window, see OmniSeek-recon-openreview
         note).

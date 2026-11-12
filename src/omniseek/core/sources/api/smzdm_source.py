@@ -1,6 +1,6 @@
 """什么值得买 (smzdm.com) deal posts: dated, mall-attributed prices of NEW goods, by keyword.
 
-EYE-XIANYU 乙 (2026-10-24). Admission (the razor, STRUCTURE): for 「锐龙 5 5600 盒装」 web search gave one
+2026-10-24. Admission (the razor, STRUCTURE): for 「锐龙 5 5600 盒装」 web search gave one
 undated figure (「约839元」, citing a JD search page that needs a login), while this list gave per-post
 prices with the mall, the post time and whether the deal has expired (683.14元 京东自营 10-20; 799元 过期;
 1029元 抖音商城 套装 ...). A product's posts over time are the nearest thing to a price history that needs

@@ -88,7 +88,7 @@ class V2exAdapter(BaseScrapeAdapter):
     # merged multi-node feed locally against the query (term-less query keeps latest order).
     rank = True
     # The six node feeds are the same whatever the query: cached once by URL and node list, every
-    # query scores that one fetch (EYE-GATE-FIX A; keyed by query it re-fetched them for every new
+    # query scores that one fetch (keyed by query it re-fetched them for every new
     # query and used up the host's 120-per-hour gate window in minutes of a batch search).
     query_independent = True
 

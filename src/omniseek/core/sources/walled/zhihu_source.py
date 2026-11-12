@@ -277,7 +277,7 @@ class ZhihuAdapter(SourceBase):
         body_el = soup.select_one(".Post-RichTextContainer, .RichContent .RichText, .Post-RichText")
         body = body_el.get_text("\n", strip=True) if body_el else ""
 
-        # Not a question or article page (EYE-SRC-FAIL, 2026-11-04): for an article that does not exist or was
+        # Not a question or article page (2026-11-04): for an article that does not exist or was
         # deleted, 知乎 answers with its own error page (an h1 reading 你似乎来到了没有知识存在的荒原) that has
         # no question header, no article header and no body, and this reader used to hand that h1 back as the
         # document. Judged by structure (all three absent), not by the sentence, which 知乎 can reword.

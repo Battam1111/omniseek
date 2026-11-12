@@ -24,7 +24,7 @@ term frequency fixed BM25 falls monotonically as the title gets longer, so the s
 BM25 top of the whole match set. The first version took the most recent matches instead, and a known
 older paper (a 2017 title against 2026 to 2027 matches for a common word pair) never reached the pool.
 
-A SENTENCE IS RELAXED, NOT SENT WHOLE (EYE-PAPERS, 2026-10-18): every word must be in the title, so a
+A SENTENCE IS RELAXED, NOT SENT WHOLE (2026-10-18): every word must be in the title, so a
 sentence of six content words matched nothing and the source looked broken. When the full match is
 short, one more request asks the endpoint how many titles each word matches on its own
 (``word_counts_query``) and the shared plan in ``_relax`` drops the least distinctive word, one at a
@@ -81,7 +81,7 @@ _WORD_RE = re.compile(r"[^\W_]+")
 _TERM_RE = re.compile(r"[^\W_]+(?:-[^\W_]+)*")
 # The text index matches whole words only, so a query's "function" missed every title saying
 # "Functions" and "vrf" every "VRFs". A publication search sends each word of at least this many
-# characters as a prefix ("function*"). PROVISIONAL (measured 2026-10-18, out/EYE-PAPERS/report.md):
+# characters as a prefix ("function*"). PROVISIONAL (measured 2026-10-18):
 # two-letter prefixes explode (le* matched 2.19M titles, ai* 2.8x ai), three-letter ones grew 1.03x
 # (lwe*) to 3.6x (rag*), and the local BM25 ranking, which does not stem, keeps the exact-word
 # titles first.

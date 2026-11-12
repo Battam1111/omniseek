@@ -2,7 +2,7 @@
 
 The 时间敏感 piece of OmniSeek: residency application windows are rigid, and
 missing one means a year's wait. Programs live as ROWS in ``ai_residencies.json``
-(P1-4 rework, 2026-06-10: the former file hand-coded one fetcher per program,
+(rework of 2026-06-10: the former file hand-coded one fetcher per program,
 ~1050 lines; now there are five generic fetchers and adding a program is a one-row
 JSON edit, same as rss_bundles / org_watch / scrape_sites):
 

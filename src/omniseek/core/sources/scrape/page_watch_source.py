@@ -58,11 +58,12 @@ def _strip_to_text(html: str) -> str:
     return re.sub(r"\s+", " ", main.get_text(" ", strip=True)).strip()
 
 
-def _render_html(url: str) -> str:
+async def _arender_html(url: str) -> str:
     """JS-render a SPA through the shared CDP Chrome (for pages httpx can't read: docs sites /
     changelogs that client-render to an empty shell — e.g. Valyu/Exa changelogs). Returns rendered
-    HTML, '' on failure. cdp_call is serialized + gated, so this queues behind other walled work."""
-    from omniseek.core.sources.walled._cdp import cdp_call
+    HTML, '' on failure. The browser is serialized + gated, so this queues behind other walled work;
+    acdp_call runs it on a worker thread and the host's gates are awaited here on the loop."""
+    from omniseek.core.sources.walled._cdp import acdp_call
 
     def _flow(page):
         try:
@@ -79,8 +80,8 @@ def _render_html(url: str) -> str:
         render_s = 45
         upstreams.check_browser(url)
         until = upstreams.budget_until(url, default=render_s)
-        return cdp_call(_flow, initial_url=url, timeout=render_s, queue_until=until,
-                        on_turn=lambda: upstreams.browser_turn(url, render_s)) or ""
+        return await acdp_call(_flow, initial_url=url, timeout=render_s, queue_until=until,
+                               on_turn=lambda: upstreams.abrowser_turn(url, render_s)) or ""
     except Exception as exc:  # noqa: BLE001
         logger.warning("page_watch: render failed %s: %s", url, exc)
         return ""
@@ -89,11 +90,11 @@ def _render_html(url: str) -> str:
 async def _apage_text(url: str, render: bool = False) -> str:
     """Async replacement of the deleted sync ``_page_text`` (11-04, async step seven; this is the only one now). A NORMAL page goes native async through the shared leaf
     (``http.aget_text``: pooled client + SSRF guard + 30MB cap + cache_only, no thread held during the
-    network wait); a ``render`` page runs the sync CDP ``_render_html`` OFF the loop (cdp_call has no
-    async API and is serialized/gated — the _rss impersonate/guard_ip precedent). ``_strip_to_text``
+    network wait); a ``render`` page through ``_arender_html`` (the browser on a worker thread, the
+    host's gates on the loop). ``_strip_to_text``
     is pure CPU and stays ON the loop. Empty string on failure, the SAME contract as ``_page_text``."""
     if render:
-        html = await anyio.to_thread.run_sync(_render_html, url, limiter=portal.IO_LANE)  # sync CDP OFF the loop
+        html = await _arender_html(url)
         return _strip_to_text(html) if html else ""
     # http.aget_text passes our headers through (a passed UA WINS over the shared UA), so the bespoke
     # browser UA is preserved; the shared async client already follow_redirects=True (matching the sync

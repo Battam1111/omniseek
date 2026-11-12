@@ -28,7 +28,7 @@ from omniseek.core import filters as _filters
 # OMNISEEK_CACHE_DIR moves the whole cache elsewhere. The service leaves it unset; a test or one-off
 # run sets it to a throwaway directory so it never reads the live service's cache entries (state
 # such as reddit's cannot-search list, 2026-10-10) and never write into them. The application name is omniseek
-# (NAME-3, 2026-10-20); the deploy moves the old-named directory to the recycle area (10_deploy/parts.json retire_links).
+# (2026-10-20); the deploy moves the old-named directory to the recycle area (10_deploy/parts.json retire_links).
 CACHE_DIR = Path(os.environ.get("OMNISEEK_CACHE_DIR")
                  or Path(user_cache_dir("omniseek", appauthor=False)) / "omniseek_cache")
 DEFAULT_TTL = 900  # 15 minutes
@@ -231,7 +231,7 @@ def seconds_until_expiry(key: str) -> Optional[float]:
 
 
 # -----------------------------------------------------------------------------
-# ONE FETCH PER KEY AT A TIME (EYE-GATE-FIX A, 2026-10-20). Measured 2026-10-18 16:35 to 16:46: about 40
+# ONE FETCH PER KEY AT A TIME (2026-10-20). Measured 2026-10-18 16:35 to 16:46: about 40
 # queries fanned out at once and 285 requests were turned away by OmniSeek's own gates in 11 minutes,
 # much of it the same cache key fetched side by side (v2ex's six node listings, the data.gov.sg pages).
 # Inside a ``flight_scope`` (the fetcher opens one around every source call) a cache miss on a fetch
@@ -350,7 +350,7 @@ async def _await_flight(key: str) -> Optional[Any]:
 
 def get_docs(key: str):
     """Sync entry for a caller on a thread: ``aget_docs`` on the event loop (portal.call), so there is
-    one implementation of the single-flight read (EYE-TWINS-1)."""
+    one implementation of the single-flight read."""
     return portal.call(aget_docs, key)
 
 
@@ -417,7 +417,7 @@ def set_docs(key: str, docs, ttl: Optional[int] = None, empty_ttl: Optional[int]
 # reuse one download instead of fetching the page again each time. The value is the WHOLE document;
 # windowing (start_char / max_chars / grep / level / section) is cut after it comes out. Sources that
 # keep their own cache are untouched. The generic web read (web_fallback.py) kept a second copy of
-# the same page for the same hour; it was removed (EYE-CACHE-SECRET-R2, 2026-11-03): it duplicated
+# the same page for the same hour; it was removed (2026-11-03): it duplicated
 # this one and kept credential-bearing addresses on disk that this cache refuses.
 # -----------------------------------------------------------------------------
 

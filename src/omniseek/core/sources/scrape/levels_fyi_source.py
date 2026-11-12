@@ -25,7 +25,7 @@ Taxonomy note: only top-level title CATEGORIES resolve at /t/{cat}; ML-engineer 
 research-scientist are SUBTITLES under software-engineer; locations are COUNTRY-level,
 cities 404.
 
-WAF note (2026-11-01, LEVELS-FYI-FIX): www.levels.fyi is behind AWS WAF (CloudFront). The page
+WAF note (2026-11-01): www.levels.fyi is behind AWS WAF (CloudFront). The page
 structure did NOT change; what broke was the WAF: a request without browser navigation headers
 gets 405 + a "Human Verification" CAPTCHA page, and from a shared proxy-node IP even a
 browser-looking request gets 202 + ``x-amzn-waf-action: challenge`` (a JS proof-of-work page)
@@ -470,7 +470,7 @@ class LevelsFyiAdapter(SourceBase):
         # Probe BOTH paths: a role page (the fixed path) + the company page. A leg that fails leaves a
         # failure record with its address, status and the request headers sent (the exit-node sweep
         # refetches it on other nodes with them; the bare eye User-Agent gets 403 on every node).
-        # Before EYE-FIX-1109 neither leg noted anything, so a walled run left no address to refetch.
+        # Before 2026-11-09 neither leg noted anything, so a walled run left no address to refetch.
         legs = (("role", SUBTITLE_URL.format(cat="software-engineer", sub="machine-learning-engineer",
                                              loc="singapore")),
                 ("company", PAGE_URL.format(slug="google")))

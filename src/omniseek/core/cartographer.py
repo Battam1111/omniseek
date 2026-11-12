@@ -589,7 +589,7 @@ async def afield_skeleton(query: Optional[str] = None, seeds: Optional[list[str]
     deadline_at = t0 + (deadline_s if deadline_s is not None else _ASSEMBLE_DEADLINE_S)
     seed_report: dict = {}
     # The overall budget is also the caller's deadline at the S2 / OpenAlex gates: a call waits in
-    # their line until it, never past it (EYE-GATE-QUEUE).
+    # their line until it, never past it.
     with _guard.deadline_until(deadline_at):
         if source == "s2":
             seed_ids, works, deadline_hit = await _as2_assemble(query, seeds, n_seeds, citers_per_seed,

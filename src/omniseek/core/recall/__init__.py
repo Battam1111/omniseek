@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 _STOP = threading.Event()
 
 
-# FOREGROUND FIRST (EYE-FG-FIRST, 2026-10-24). While the boot warmup below runs (the model import and
+# FOREGROUND FIRST (2026-10-24). While the boot warmup below runs (the model import and
 # load under embed._load_lock, then the vec and chunk matrix builds under store._vec_lock and
 # _chunk_lock), a search does not run its vector arm: it would queue on those locks, and the search
 # joins its recall arm with the WHOLE remaining wait budget, so the first search after every restart
@@ -197,7 +197,7 @@ def _query_vector(query: str):
 
 # The RRF smoothing constant. One stored copy of a work, ranked first by both recall arms, gets
 # 2 / (RRF_C + 1); only a work held in several stored copies near the top of an arm gets more (each
-# copy adds its own 1 / (RRF_C + rank)). rank.merge_rank reads that bound (EYE-RELEVANCE).
+# copy adds its own 1 / (RRF_C + rank)). rank.merge_rank reads that bound.
 RRF_C = 60
 
 
@@ -286,7 +286,7 @@ def _ingest_step(src: str, fresh: bool = True) -> "fetcher.AdapterOutcome":
     Fetch the source as a first-class ``AdapterOutcome``, then advance the still_live watermark ONLY on
     a sweep that both COMPLETED and was COMPLETE (the whole enumeration fit inside the page). A
     timed_out sweep, a completed-but-truncated one (a full page: the source has more behind it), or one
-    a gate of OmniSeek held back in part (``oc.held``, EYE-GATE-FIX D) HOLDS the watermark. Rationale (pinned by the spec): a held watermark makes the source's
+    a gate of OmniSeek held back in part (``oc.held``) HOLDS the watermark. Rationale (pinned by the spec): a held watermark makes the source's
     live_feed_silent_days grow so the curator LOOKS at the source (a safe, visible failure), whereas a
     falsely-advanced watermark silently flips every indexed doc not re-seen this sweep to
     still_live=False (store.py: still_live = last_seen >= ran_at), an invisible false roll-off.
@@ -298,7 +298,7 @@ def _ingest_step(src: str, fresh: bool = True) -> "fetcher.AdapterOutcome":
     with _guard.initiator("收录"):   # carried into the coroutine with the rest of this thread's context
         oc = portal.run(fetcher.afetch_outcome, src, "", limit=50, fresh=fresh, deadline_s=90)
     # A sweep one of OmniSeek's gates (or an open host breaker) cut short is not complete, however few
-    # documents it returned (EYE-GATE-FIX D, 2026-10-20): advancing the watermark over it would mark the
+    # documents it returned (2026-10-20): advancing the watermark over it would mark the
     # documents it never asked for as no longer live.
     if oc.state == "completed" and oc.complete and not oc.held:
         mark_run(src, len(oc.docs))
@@ -334,7 +334,7 @@ def ingest_pass(interval_s: float, now: "float | None" = None) -> tuple[int, int
     """One pass over ingest_list(): sweep each source whose last sweep is ``interval_s`` old or more
     (or that was never swept), skip the rest. Returns (swept, skipped, seconds until the next one is
     due). The last sweep is persisted per source, so a restarted eye-http only makes up what is due
-    instead of sweeping every source again (EYE-RANK 2026-10-20: each of the 18-22 restarts a day re-ran a
+    instead of sweeping every source again (2026-10-20: each of the 18-22 restarts a day re-ran a
     full sweep; on 2026-10-18 to 10-20 that spent 86-88% of the keyed OpenAlex daily budget, ~8,700 of
     ~10,000 credits, before any person asked for anything). A source the prewarmer keeps cached is read
     from that cache (it is refreshed before it expires); a cold one is still fetched live."""

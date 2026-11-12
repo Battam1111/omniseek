@@ -1,4 +1,4 @@
-"""Test the proxy nodes and switch OmniSeek's exit node when sources broke because of it (EYE-EXIT).
+"""Test the proxy nodes and switch OmniSeek's exit node when sources broke because of it.
 
 OmniSeek reaches the web through the operator's proxy app (Clash Verge's mihomo, its TUN), and the app
 sends OmniSeek's hosts to ONE node, the one its selector ``where.PROXY_SELECTOR`` picks. When that node
@@ -23,7 +23,7 @@ or by hand (``python -m omniseek.core.exit_node <source> ...`` from the release 
   2. Through the test port, on the node the selector uses now, with OmniSeek's own User-Agent (never a
      browser's: zenodo refuses a faked browser), or, for an address whose failure record names the
      request headers its source sent (diag.note ``headers``: levels.fyi answers only a browser's
-     navigation request, EYE-FIX-1109), with those: every fetch answering (``_ok``) means it was a blip:
+     navigation request), with those: every fetch answering (``_ok``) means it was a blip:
      logged, no sweep, no notice (a notice per blip of a flapping feed would only be noise).
   3. Each node of the selector that is in egress2's own pool (the members of its region groups: the
      template's filters already leave out Hong Kong, the free and download-only nodes and the notice
@@ -44,7 +44,7 @@ or by hand (``python -m omniseek.core.exit_node <source> ...`` from the release 
      switch. Every sweep ends with one notice through the push outlet saying what it did and why.
   5. A switch that did not help (rolled back: the hosts still fail on the default route, so the proxy
      app's rules send them to another group, not the selector) is remembered in <state>/exit-node-futile.json:
-     the hosts that still failed and when (EYE-EXIT-FUTILE, 2026-11-06; before, every health run that
+     the hosts that still failed and when (2026-11-06; before, every health run that
      found the same hosts down switched for nothing and sent the same notice again). A later sweep whose
      failing hosts are all in one such batch, less than FUTILE_TTL_S old, fetches them once on the default
      route: if none answers it tests and switches nothing and says why (at most one notice per batch a
@@ -510,11 +510,11 @@ def _sweep_locked(failed: dict, deadline: float, why: str, L: float, tail: float
                 m.close()
 
 
-# EYE-EXIT-FUTILE (2026-11-06): the batches of hosts a switch did not help. One small file in OmniSeek's
+# 2026-11-06: the batches of hosts a switch did not help. One small file in OmniSeek's
 # state directory, read and written only under the sweep lock.
 _FUTILE_FILE = "exit-node-futile.json"
 # How long a batch is trusted: 7 days, PROVISIONAL. Basis: the proxy app's rules are the operator's and are
-# not changed by anything here (owner-decisions-home-machines row 12); a week without a rule change is the
+# not changed by anything here; a week without a rule change is the
 # usual case, so within it a host the rules send past the selector stays there. Past it the next sweep for
 # those hosts tests and switches again, which re-checks the record itself (a rule change in between shows
 # as a switch that helps). Recalibrate from the outcomes in exit-node-last.json and the notices: if the

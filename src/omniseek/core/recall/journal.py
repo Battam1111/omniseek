@@ -27,7 +27,7 @@ from omniseek import where
 logger = logging.getLogger(__name__)
 
 # How many events may be written after the last checkpoint before the journal writes the next one
-# (EYE-JOURNAL-CKPT, 2026-10-24). A boot reads the checkpoint and replays only the events after it,
+# (2026-10-24). A boot reads the checkpoint and replays only the events after it,
 # so this number bounds what a boot costs, however long the history gets. Derivation: the journal's
 # boot budget is 0.5 s (its share of the 3 s line the release check sets for an eye search); one
 # replayed event (JSON parse, canonical re-hash of the chain link, two index keys) costs up to 94 us
@@ -426,7 +426,7 @@ class ObservationJournal:
     1951 MB of phys_footprint and a 142 s load during which every maybe_ingest caller waited on the
     journal lock.
 
-    BOOT CONTRACT (EYE-JOURNAL-BOOT, 2026-10-24): the boot load reads the events only. It validates
+    BOOT CONTRACT (2026-10-24): the boot load reads the events only. It validates
     the hash chain line by line and builds the index, and reads no payload blob. A blob's existence
     and content hash are checked in two places instead: every read (``_read_blob``, which fails closed
     with JournalCorrupt) and ``scrub_blobs``, a pass over every referenced blob that the service runs
@@ -434,7 +434,7 @@ class ObservationJournal:
     anything. Reading every blob at boot cost 41.4 s on the live journal of 2026-10-24 (253345 blobs,
     574 MB), all of it inside the first maybe_ingest of every source after a restart.
 
-    CHECKPOINT (EYE-JOURNAL-CKPT, 2026-10-24): the index itself still cost one JSON parse and one
+    CHECKPOINT (2026-10-24): the index itself still cost one JSON parse and one
     canonical re-hash per event (282,319 events, 13.3 s on the live copy, about 47 us an event and
     growing with the history), under the lock the first searches wait on. So the four things the
     journal keeps in memory (the offsets, the two latest-seq indexes, the chain head with its end

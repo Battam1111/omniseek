@@ -107,7 +107,7 @@ _ERROR_SCREEN_MARKERS = (
 # error page. Seen 2026-11-04: https://www.python.org/<a missing path> answered 404, went to Jina as a
 # thin plain read and came back as a matched render:jina doc titled "Welcome to Python.org". Jina is
 # another channel to the same server, so OmniSeek's one rule for retries and channels decides
-# (_guard.counts_against_upstream, EYE-RETRY-404): 404 / 410, and 400 / 422 (the request itself refused),
+# (_guard.counts_against_upstream): 404 / 410, and 400 / 422 (the request itself refused),
 # are the server's answer and do not go to Jina.
 _NOT_THERE = (404, 410)
 # safe_fetch failures with no answer from the host: the connection or TLS handshake (fetch_error, timeout)
@@ -296,7 +296,7 @@ def read_via_fallback(url: str) -> Optional[Document]:
         return None  # respect the single egress guard
     # No page cache of its own: its one caller (fetcher.fetch_url_with_reason) keeps successful reads in
     # the whole-URL read cache, and a second copy kept credential-bearing addresses on disk
-    # (EYE-CACHE-SECRET-R2, 2026-11-03).
+    # (2026-11-03).
 
     # Plain fetch through the SSRF-pinned per-hop fetcher (safeurl.safe_fetch), NOT the shared
     # follow-redirects pool: this URL is attacker-influenceable (no adapter claimed it), so EVERY

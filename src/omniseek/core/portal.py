@@ -1,4 +1,4 @@
-"""The ONE bridge from a thread into OmniSeek's event loop (charter ASYNC-CORE-DESIGN.md D9).
+"""The ONE bridge from a thread into OmniSeek's event loop.
 
 Async migration step two. The fetch core is async; the callers that still run on a THREAD (the
 in-service background loops: cache warmer, recall ingest, the job scheduler's sensor tick; a sync
@@ -43,7 +43,7 @@ import anyio.to_thread
 # process that never binds: the stdio server, a test): an AnyIO worker thread then uses its own loop.
 _token: Optional[anyio.lowlevel.EventLoopToken] = None
 
-# --- The offload lanes (the reverse bridge: loop -> elsewhere; ASYNC-CORE-DESIGN.md D14) -----------
+# --- The offload lanes (the reverse bridge: loop -> elsewhere) -----------
 # PROCESS lane = run_cpu() below: CPU work whose input is already in memory (parse, score, convert)
 # runs in a worker PROCESS, never on a thread of this one. A thread doing pure Python here shares the
 # one GIL with the loop thread, and the loop, to get the GIL back, may wait a whole switch interval
@@ -59,7 +59,7 @@ _token: Optional[anyio.lowlevel.EventLoopToken] = None
 # Mixed (a legacy sync source's whole .search: waits on the network AND parses) stays on
 # fetcher._LEGACY_LIMITER.
 # PROC_LANE_TOKENS is PROVISIONAL (a replay picked it from 2 and 4); the
-# live probe on the host machine settles it. ASYNC-CORE-DESIGN.md D14 has the readings.
+# live probe on the host machine settles it.
 PROC_LANE_TOKENS = 2
 PROC_LANE = anyio.CapacityLimiter(PROC_LANE_TOKENS)
 # The process lane's worker pids, each reported by the worker itself with every result (_tagged), so the

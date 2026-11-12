@@ -39,7 +39,7 @@ main thread (time.sleep there wakes for SIGINT only), so the handler runs only a
 returns. There the drain cap is ALSO armed from a console control handler, which Windows runs on a
 thread of its own the moment Ctrl+Break / Ctrl+C / console close arrives (_win_console_ctrl_arm).
 
-Answers on exit (2026-10-24, SSE-DRAIN): the drain cap only helps a running MCP call if its answer
+Answers on exit (2026-10-24): the drain cap only helps a running MCP call if its answer
 can still be sent; sse_starlette cuts every SSE stream at the signal unless told not to.
 answer_running_calls_on_exit sets the cap on uvicorn's Config and turns that off, for the entry, the
 eye and the brain alike (the entry and the brain load this file by path).
@@ -513,7 +513,7 @@ def cap_lifespan_shutdown(uvicorn_lifespan, cap_s: Optional[float] = None,
 
 
 def answer_running_calls_on_exit(uvicorn_config, drain_s: float) -> bool:
-    """SSE-DRAIN (2026-10-24): on an exit signal, give the requests still running up to ``drain_s``
+    """2026-10-24: on an exit signal, give the requests still running up to ``drain_s``
     seconds to finish AND get their answer to the caller. The one copy for the services that
     stop this way; each calls it on its uvicorn Config before
     building the server object (capped_server_class reads the timeout in its __init__).
@@ -523,7 +523,7 @@ def answer_running_calls_on_exit(uvicorn_config, drain_s: float) -> bool:
     uvicorn's Server.handle_exit, so the first exit signal sets its AppStatus.should_exit and every
     open SSE stream is cancelled at once, mid-answer, while the tool keeps running in the background
     with nowhere to send its result (measured 2026-10-24 on the entry: IncompleteRead(0 bytes) 0.01 s
-    after SIGTERM; the same on OmniSeek and the brain, SSE-DRAIN report). uvicorn's own wait gave a
+    after SIGTERM; the same on OmniSeek and the brain). uvicorn's own wait gave a
     running call time to finish, never time to answer. So:
     1. ``uvicorn_config.timeout_graceful_shutdown = drain_s`` (None when ``drain_s`` <= 0, uvicorn's
        "wait forever"): uvicorn waits that long for the running requests, then cancels the rest;

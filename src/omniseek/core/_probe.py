@@ -24,7 +24,7 @@ one, recording is a no-op.
 ``reread`` turns a False into None when the ledger holds a 429, a rate-limit body or a gate refusal
 AND no other error answer (a 4xx / 5xx that is not a rate limit): that answer is real evidence, so
 the False stands. A True is never touched: an adapter that saw a served answer keeps it. Since
-EYE-GATE-FIX (2026-10-20) a connection that could not be made (``note_unreachable``) is evidence too,
+2026-10-20 a connection that could not be made (``note_unreachable``) is evidence too,
 and a check that met an open host breaker (``note_host_down``, ``upstreams.HostDown``) reads False.
 
 Context: the ledger rides a ContextVar, so a request made on another thread is recorded only when
@@ -150,7 +150,7 @@ def note_unreachable(where: str, detail: str) -> None:
     _count_answer(None, failed=True)
 
 
-# WHAT ONE SOURCE CALL HEARD FROM ITS UPSTREAM (EYE-NONE-RESET, 2026-11-07). The fetcher opens this
+# WHAT ONE SOURCE CALL HEARD FROM ITS UPSTREAM (2026-11-07). The fetcher opens this
 # around every source call (fetcher._dispatch_search) to tell a live fetch from one answered wholly
 # from cache: an answer read from cache passes no egress and so reaches none of the recorders above.
 # ``ok`` counts the answers with a status below 400; ``failed`` counts the error answers (400 and up,
@@ -194,7 +194,7 @@ def capture_answers():
             pass
 
 
-# WHAT HELD ONE SOURCE CALL BACK (EYE-GATE-FIX C/D, 2026-10-20). The search fan-out and the recall
+# WHAT HELD ONE SOURCE CALL BACK (2026-10-20). The search fan-out and the recall
 # ingest open a capture around each source call; every gate refusal and every open host breaker met
 # inside it lands there, whatever layer refused (the shared http helpers, a module's own guard, a
 # browser render). The fan-out names those sources in ``_meta.held`` instead of ``_meta.empty``; the
@@ -207,7 +207,7 @@ HELD_FULL = "闸满"          # a module's own in-process cap or breaker turned 
 HELD_LATE = "时限不够"      # a declared gate: the caller's deadline came before the request could start
 HELD_DOWN = "主机断路"      # the host's breaker is open (see upstreams.HostDown)
 
-# The words every declared gate's refusal carries (``_guard.deadline_refusal``, EYE-GATE-QUEUE): since a
+# The words every declared gate's refusal carries (``_guard.deadline_refusal``): since a
 # full gate is a line, the caller's deadline is the only reason a declared gate turns a request away.
 DEADLINE_WORDS = "no start before the caller's deadline"
 
@@ -305,7 +305,7 @@ def held_by_gate(msg: object) -> bool:
 def reread(ok: Optional[bool], msg: str, led: Optional[Ledger]) -> tuple[Optional[bool], str]:
     """``(ok, msg)`` re-read against what the check's ledger recorded (rules in the module docstring).
 
-    Two more rules (EYE-GATE-FIX B, 2026-10-20): a check that met an open host breaker reads False
+    Two more rules (2026-10-20): a check that met an open host breaker reads False
     (the host stopped answering; that is not "not verified"), unless the adapter saw a served answer;
     and a connection that could not be made is evidence like an error answer, so a False backed by
     one stands even when a gate also refused another request of the same check."""

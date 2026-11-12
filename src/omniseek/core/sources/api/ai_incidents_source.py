@@ -7,7 +7,7 @@ safety x STRUCTURE source: the cross-incident ledger web search cannot return.
 
 History: until 2026-10-20 this source queried the AIID GraphQL API. That API now answers every query
 with 401 API_LOGIN_REQUIRED, so the source was withdrawn (commit 507854d2). The AIID's own bulk
-export for research needs no login, so the source is back on it (task EYE-AIID-SNAP, 2026-10-20).
+export for research needs no login, so the source is back on it (2026-10-20).
 
 DESIGN: OmniSeek's bulk-file pattern (cordis_eu_source.py), with a local index on disk:
   * The snapshot page (``SNAPSHOT_PAGE``) lists one ``backup-<YYYYMMDDhhmmss>.tar.bz2`` a week (on
@@ -70,7 +70,7 @@ CITE_URL = "https://incidentdatabase.ai/cite/{iid}"
 TERMS_URL = "https://incidentdatabase.ai/terms-of-use/"
 CC_BY_SA_URL = "https://creativecommons.org/licenses/by-sa/4.0/"
 
-# Provisional (task EYE-AIID-SNAP): a snapshot a week, so stale = two missed snapshots. The page's
+# Provisional: a snapshot a week, so stale = two missed snapshots. The page's
 # whole history (284 snapshots, 2021-03 to 2026-10) has gaps over 14 days only before 2025-01.
 # Recalibrate after 2026-10-27 against the intervals check.json records.
 STALE_AFTER_DAYS = 14

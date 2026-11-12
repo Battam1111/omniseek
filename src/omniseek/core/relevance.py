@@ -238,14 +238,14 @@ def doc_scores(docs, query: str, *, empty_body_unknown: bool = False,
     shared by rank.merge_rank and keyword_score_filter, so search ranking and
     adapter-side filtering can never drift apart again.
 
-    ``empty_body_unknown`` (merge_rank, EYE-RANK 2026-10-20): a document whose body is empty (its
+    ``empty_body_unknown`` (merge_rank, 2026-10-20): a document whose body is empty (its
     source had none to give) counts as having a body of the average length of the non-empty bodies
     here. Its length is unknown, not zero: scored as zero length, BM25's length normalization made a
     bare title the strongest match of the batch (a crossref "VRF air-conditioner" book chapter with no
     abstract took relevance 0.98 of the best, measured on a recorded search). Which documents match
     is unchanged, so adapter-side filtering (the default) is unaffected.
 
-    ``pair_weight`` (merge_rank, EYE-RELEVANCE 2026-10-24): the query's adjacent word pairs count as
+    ``pair_weight`` (merge_rank, 2026-10-24): the query's adjacent word pairs count as
     extra BM25 terms at this weight (field_scores). A document that holds the query's words apart
     ("Point-Based Distributed Zeroth-Order Optimization" for "distributed point function") then
     scores below one that holds them as the query's phrase. Default 0: adapter-side filtering and

@@ -15,15 +15,15 @@ Native query syntax passes straight through: the API's ``search_query`` forwards
 string verbatim, so field prefixes + booleans work as-is — ``cat:cs.LG``, ``au:bengio``,
 ``ti:transformer``, ``abs:diffusion``, ``ti:llm AND cat:cs.CL``.
 
-A PLAIN SENTENCE IS NOT SENT VERBATIM (EYE-PAPERS, 2026-10-18): arXiv reads bare words as OR
+A PLAIN SENTENCE IS NOT SENT VERBATIM (2026-10-18): arXiv reads bare words as OR
 (its echo of "threshold verifiable random function post-quantum lattice" was ``all:threshold OR
 all:verifiable OR ...``), and its relevance ranked 2007 lattice-QCD physics first. A query with no
 field prefix, no boolean and no time window is sent as its content words ANDed under ``all:``
 (stopwords out: arXiv treats ``all:the`` as a filter). When that match is short, the shared plan in
 ``_relax`` asks how many records each word matches on its own and drops the least distinctive word,
 one at a time, until the match is long enough; the order stays arXiv's relevance. (Matching a
-relaxed set in the title, ``ti:``, was measured on 2026-10-18 and was not better: see
-out/EYE-PAPERS/report.md.) Each result carries
+relaxed set in the title, ``ti:``, was measured on 2026-10-18 and was not better.)
+Each result carries
 the word set it matched (``metadata.matched_words``); a legal empty answer leaves an
 ``arxiv.no_match`` diagnostic naming the word sets tried, and an answer that is not an Atom feed an
 ``arxiv.unparseable`` one.
@@ -36,7 +36,7 @@ preserves the server's order byte-for-byte (no local re-rank): ``sortBy=relevanc
 ``fetch_url`` (id_list by-id lookup) and ``health_check``
 (treats HTTP 429 as alive) are overridden because they differ from the base defaults.
 
-FULL TEXT (EYE-RSS-3, 2026-10-24): an arxiv.org ``/pdf/<id>`` or ``/html/<id>`` link is the paper's
+FULL TEXT (2026-10-24): an arxiv.org ``/pdf/<id>`` or ``/html/<id>`` link is the paper's
 whole text, read from export.arxiv.org (``_arxiv_fulltext``) under that host's own full-text gate, not
 through the API above and not under arxiv.org's 15 s Crawl-delay. ``/html/`` is arXiv's LaTeXML page
 as text with ``#`` section lines (omniseek_read level="head" cuts it, appendices included); a paper with no
@@ -107,7 +107,7 @@ _ARXIV_MIN_INTERVAL_S = _guard.min_interval_s    # 3.0 s between request starts,
 # transport (http._one_connection_transport, because the declared terms say max_concurrency 1), so no
 # idle connection is left open after a response in either the sync or the async pool.
 _CONNECTION_CLOSE = {"Connection": "close"}
-# HOW LONG A CALLER MAY WAIT (EYE-GATE-QUEUE, 2026-11-11): the gate is a line; the permit wait and the
+# HOW LONG A CALLER MAY WAIT (2026-11-11): the gate is a line; the permit wait and the
 # 3 s start wait together run until the caller's own deadline. The module keeps no wait constant of its
 # own (it had 20 s for the permit plus 12 s for the start, review F2; then the declared max_wait_s of
 # 12 s, which fit four requests and turned away the rest of an ordinary 8-question fan-out).
@@ -350,9 +350,9 @@ class ArxivAdapter(BaseAPIAdapter):
     rank_locally = False
     cache_ttl = 3600
     url_host = "arxiv.org"
-    # The full-text links are this adapter's own (EYE-RSS-3): when it cannot read one, nothing else
+    # The full-text links are this adapter's own: when it cannot read one, nothing else
     # may try it through arxiv.org (the generic web read would queue on the 15 s Crawl-delay gate for a
-    # copy of what export.arxiv.org just refused). The abstract pages too (EYE-ARXIV-ABS, 2026-11-03): when the
+    # copy of what export.arxiv.org just refused). The abstract pages too (2026-11-03): when the
     # API lookup was not sent or failed, an /abs/ link fell to the generic read, which returned the page's
     # chrome as a matched document (title "Computer Science > Software Engineering", the arXivLabs footer as
     # the abstract) and cached it for an hour. Other arxiv.org pages (listings, help) keep the generic read.

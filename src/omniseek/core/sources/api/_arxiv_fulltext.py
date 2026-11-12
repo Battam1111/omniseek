@@ -1,4 +1,4 @@
-"""arXiv full text through export.arxiv.org (EYE-RSS-3, 2026-10-24).
+"""arXiv full text through export.arxiv.org (2026-10-24).
 
 An arxiv.org /pdf/<id> or /html/<id> link is read from export.arxiv.org, the host arXiv sets aside for
 programs (info.arxiv.org/help/bulk_data.html: "specifically set aside for programmatic access"), under

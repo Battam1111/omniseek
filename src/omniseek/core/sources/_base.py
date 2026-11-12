@@ -22,7 +22,7 @@ failure is ``[]`` and is NOT cached, cache write): read off the loop, fetch, wri
 
 ``aparse`` is the ONE place that decides where parsing an answer runs: here on the loop when it is
 short (the answer's size times the parser's measured rate), in the process lane when it is long
-(ASYNC-CORE-DESIGN.md D14, the parse split). The scrape template base
+(the parse split). The scrape template base
 (``scrape._base.BaseScrapeAdapter``) calls it at its parse step with the bytes its fetch step read
 (``http.count_bytes``); a hand-written source calls it where it parses.
 
@@ -41,7 +41,7 @@ import anyio
 from omniseek.core import cache, portal
 from omniseek.core.normalize import Document
 
-# PARSE HERE OR IN THE PROCESS LANE (2026-11-04; ASYNC-CORE-DESIGN.md D14).
+# PARSE HERE OR IN THE PROCESS LANE (2026-11-04).
 # Parsing an answer is pure CPU: on the loop it holds every other request for as long as it runs; in
 # the process lane it costs a pickle of the input and of the result on the loop (about 1 ms per
 # 100 KB) and a wait for a free worker of the two. So a parse that would take long is sent there and a

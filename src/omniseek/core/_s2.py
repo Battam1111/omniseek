@@ -28,7 +28,7 @@ This is the symmetric twin of ``_openalex`` for the S2 backend:
                             asearch_paper / aget_recommended_papers / asearch_author /
                             aget_author_papers (the library's async client, awaited on the
                             loop; the sync ones were deleted 11-04, async step seven, and the
-                            last one, snippet_search, became asnippet_search on 11-10, EYE-TWINS-1)
+                            last one, snippet_search, became asnippet_search on 11-10)
                             — each with the semaphore + breaker, the
                             bounded-iteration page cap (the "limit == page size, iterating
                             a PaginatedResults pages through EVERY page" trap the
@@ -81,7 +81,7 @@ _BREAK_FOR_S = 120.0  # seconds the circuit stays open
 # 1.0s honors S2's ~1 RPS keyed guarantee exactly (the docstring's "even with the key 1 RPS"); S2
 # throttles far harder than OpenAlex's polite pool, hence the much wider interval than _openalex's 0.2.
 # (the value, 1.0 s, is declared in upstreams.json "s2" gate.min_interval_s; bound below)
-# How long ONE caller may wait on the gate: until its own deadline (EYE-GATE-QUEUE, 2026-11-11), the
+# How long ONE caller may wait on the gate: until its own deadline (2026-11-11), the
 # permit wait and the start wait together. A 429 storm (each failed call retries, and every attempt
 # reserves another 1s-apart slot) grows the backlog, and a caller with no deadline once sat 886s on the
 # gate (field_skeleton, which now carries its own deadline); a start past the caller's deadline is not

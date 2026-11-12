@@ -1,5 +1,5 @@
 {
- "_doc": "One entry per independent upstream OmniSeek sends requests to. terms = what the upstream publishes (a number, or 未公布 plus where_checked saying where we looked; url + checked date always). gate = what OmniSeek enforces through the shared BackendGuard (never looser than terms; http_gate false = enforced by the module's own pacer). terms.robots_crawl_delay_s = the Crawl-delay a host's robots.txt sets for User-agent *; each such host gets its own gate (one request at a time, starts at least the delay apart), taken after the upstream gate so the stricter always holds (design decision, 2026-09-29). terms.max_concurrency 1 also makes the shared http clients use a no-keep-alive HTTP/1.1 transport and send Connection: close for that upstream's hosts. user_agent = the User-Agent the upstream's policy requires: every shared egress layer sends exactly this string to the entry's hosts (redirect hops included) and the shared browser refuses them; the one place it is written (design decision, 2026-09-29). hosts = exact host names; an entry that starts with '.' is a domain suffix and matches every subdomain of that domain, not the bare domain (list that on its own); for one host a gated entry wins, then an exact entry, then the longest suffix (design decision, 2026-09-29). disabled = OmniSeek does not send to this upstream: {reason, source, checked, ...}; the code that would send reads it, sends nothing and reports the reason (design decision, 2026-09-29). pending = a published value not enforced yet and why. paths = path prefixes (each starting with '/'): the entry then owns only the URLs on its hosts whose path starts with one of them, ahead of the host's other entries; a Crawl-delay or a User-Agent cannot be scoped to a path (EYE-RSS-3, 2026-10-24: export.arxiv.org full text vs its API). gate.provisional = why a gate number is provisional and how it is to be recalibrated. gate.break_after / gate.break_for_s = the guard's circuit breaker: that many failures in a row that say the upstream is unhealthy (_guard.counts_against_upstream: a 404 / 410 / 400 / 422 answer is not one) open it for that many seconds (default 5 and 120); an upstream's breaker is this one, never a failure count and cooldown kept in the module (EYE-BREAKER-ONE, 2026-11-07; an adapter's account-safety breaker, which stops a logged-in account on captcha or risk signals, is a different thing and stays in the adapter). A new source must be listed under an existing upstream's sources (or its backend under backends) or get its own entry (the merge-gate test that failed otherwise was deleted in TEST-CUT; nothing checks it now). Terms research: task R, 2026-09-28; robots sweeps 2026-09-28.",
+ "_doc": "One entry per independent upstream OmniSeek sends requests to. terms = what the upstream publishes (a number, or 未公布 plus where_checked saying where we looked; url + checked date always). gate = what OmniSeek enforces through the shared BackendGuard (never looser than terms; http_gate false = enforced by the module's own pacer). terms.robots_crawl_delay_s = the Crawl-delay a host's robots.txt sets for User-agent *; each such host gets its own gate (one request at a time, starts at least the delay apart), taken after the upstream gate so the stricter always holds (design decision, 2026-09-29). terms.max_concurrency 1 also makes the shared http clients use a no-keep-alive HTTP/1.1 transport and send Connection: close for that upstream's hosts. user_agent = the User-Agent the upstream's policy requires: every shared egress layer sends exactly this string to the entry's hosts (redirect hops included) and the shared browser refuses them; the one place it is written (design decision, 2026-09-29). hosts = exact host names; an entry that starts with '.' is a domain suffix and matches every subdomain of that domain, not the bare domain (list that on its own); for one host a gated entry wins, then an exact entry, then the longest suffix (design decision, 2026-09-29). disabled = OmniSeek does not send to this upstream: {reason, source, checked, ...}; the code that would send reads it, sends nothing and reports the reason (design decision, 2026-09-29). pending = a published value not enforced yet and why. paths = path prefixes (each starting with '/'): the entry then owns only the URLs on its hosts whose path starts with one of them, ahead of the host's other entries; a Crawl-delay or a User-Agent cannot be scoped to a path (2026-10-24: export.arxiv.org full text vs its API). gate.provisional = why a gate number is provisional and how it is to be recalibrated. gate.break_after / gate.break_for_s = the guard's circuit breaker: that many failures in a row that say the upstream is unhealthy (_guard.counts_against_upstream: a 404 / 410 / 400 / 422 answer is not one) open it for that many seconds (default 5 and 120); an upstream's breaker is this one, never a failure count and cooldown kept in the module (2026-11-07; an adapter's account-safety breaker, which stops a logged-in account on captcha or risk signals, is a different thing and stays in the adapter). A new source must be listed under an existing upstream's sources (or its backend under backends) or get its own entry (the merge-gate test that failed otherwise was deleted; nothing checks it now). Terms research: task R, 2026-09-28; robots sweeps 2026-09-28.",
  "unpublished": "未公布",
  "optional_sources": {
   "_doc": "Sources a public build may leave out; a declaration may name them without the stale-name check failing there.",
@@ -45,13 +45,13 @@
     "quote": "specifically set aside for programmatic access",
     "url": "https://info.arxiv.org/help/bulk_data.html",
     "checked": "2026-10-24",
-    "where_checked": "info.arxiv.org/help/bulk_data.html read 2026-10-24: 'We ask that users intent on harvesting use the dedicated site export.arxiv.org for these purposes, which contains an up-to-date copy of the corpus and is specifically set aside for programmatic access' and 'we suggest that a reasonable rate to be bursts at 4 requests per second with a 1 second sleep, per burst' (a suggestion, no hard number, so the terms stay 未公布). The one-request-every-three-seconds rule of info.arxiv.org/help/api/tou.html is for the legacy APIs (the arxiv entry, /api/ on this host), not these pages. Measured 2026-10-24 (EYE-RSS-3): https://export.arxiv.org/pdf/2305.18290 200 application/pdf and https://export.arxiv.org/html/2305.18290v3 200 text/html, neither redirects. export.arxiv.org/robots.txt says 'User-agent: * Disallow: /' (read 2026-10-24); the bulk-data page names this host for programs, which is the instruction followed here",
+    "where_checked": "info.arxiv.org/help/bulk_data.html read 2026-10-24: 'We ask that users intent on harvesting use the dedicated site export.arxiv.org for these purposes, which contains an up-to-date copy of the corpus and is specifically set aside for programmatic access' and 'we suggest that a reasonable rate to be bursts at 4 requests per second with a 1 second sleep, per burst' (a suggestion, no hard number, so the terms stay 未公布). The one-request-every-three-seconds rule of info.arxiv.org/help/api/tou.html is for the legacy APIs (the arxiv entry, /api/ on this host), not these pages. Measured 2026-10-24: https://export.arxiv.org/pdf/2305.18290 200 application/pdf and https://export.arxiv.org/html/2305.18290v3 200 text/html, neither redirects. export.arxiv.org/robots.txt says 'User-agent: * Disallow: /' (read 2026-10-24); the bulk-data page names this host for programs, which is the instruction followed here",
     "notes": "Paths scoped (upstreams.py, 'paths'): /api/ and anything else on export.arxiv.org stay with the arxiv entry and its 3 s gate."
    },
    "gate": {
     "max_inflight": 1,
     "min_interval_s": 1.0,
-    "provisional": "EYE-RSS-3 2026-10-24: one at a time, starts at least 1 s apart, a quarter of the 4 requests per second the bulk-data page suggests for a burst; recalibrate from the gate's refusal lines and the full-text read counts after the first weeks (report out/EYE-RSS-3/report.md)."
+    "provisional": "2026-10-24: one at a time, starts at least 1 s apart, a quarter of the 4 requests per second the bulk-data page suggests for a burst; recalibrate from the gate's refusal lines and the full-text read counts after the first weeks."
    }
   },
   "arxiv_web": {
@@ -59,7 +59,7 @@
    "kind": "web",
    "hosts": ["arxiv.org"],
    "sources": ["pdf"],
-   "tools": ["the generic web read (web_fallback) and the document reader on arxiv.org links that are not /pdf/ or /html/ full text (those go to export.arxiv.org since EYE-RSS-3)"],
+   "tools": ["the generic web read (web_fallback) and the document reader on arxiv.org links that are not /pdf/ or /html/ full text (those go to export.arxiv.org since 2026-10-24)"],
    "terms": {
     "max_concurrency": "未公布",
     "min_interval_s": "未公布",
@@ -71,7 +71,7 @@
     "checked": "2026-09-28",
     "where_checked": "arxiv.org/robots.txt read 2026-09-28: Crawl-delay 15 s for User-agent *, enforced as the arxiv.org host gate (design decision, 2026-09-29). The API terms (info.arxiv.org/help/api/tou.html) cover the APIs, not /abs or /pdf pages; bulk PDF access is via the S3 bulk data",
     "robots_crawl_delay_s": {"arxiv.org": 15.0},
-    "notes": "pdf is listed for the coverage check (it reads any PDF link, no fixed upstream); since EYE-RSS-3 (2026-10-24) it leaves arXiv links to the arxiv source, which reads full text from export.arxiv.org (the arxiv_export entry)"
+    "notes": "pdf is listed for the coverage check (it reads any PDF link, no fixed upstream); since 2026-10-24 it leaves arXiv links to the arxiv source, which reads full text from export.arxiv.org (the arxiv_export entry)"
    }
   },
   "openalex": {
@@ -537,7 +537,7 @@
     "http_gate": false,
     "break_after": 5,
     "break_for_s": 120.0,
-    "provisional": "EYE-BREAKER-ONE 2026-11-07: the three numbers moved unchanged from reddit_source.py (its own in-flight semaphore, set 2026-06-20 after an 18-agent burst stormed the host into 429s; its own breaker of 5 failed subs then 120 s). http_gate false: reddit_source takes this guard's permits itself around each Arctic request (bounded_slot), the shared http layer does not take them a second time. Recalibrate from the 'arctic_shift circuit OPEN' log lines and Arctic's 429 / slow-down 422 counts"
+    "provisional": "2026-11-07: the three numbers moved unchanged from reddit_source.py (its own in-flight semaphore, set 2026-06-20 after an 18-agent burst stormed the host into 429s; its own breaker of 5 failed subs then 120 s). http_gate false: reddit_source takes this guard's permits itself around each Arctic request (bounded_slot), the shared http layer does not take them a second time. Recalibrate from the 'arctic_shift circuit OPEN' log lines and Arctic's 429 / slow-down 422 counts"
    }
   },
   "reddit_web": {
@@ -1623,7 +1623,7 @@
    "gate": {
     "max_inflight": 1,
     "min_interval_s": 5.0,
-    "provisional": "EYE-XIANYU 2026-10-24 (spec item 6): one at a time on the 小号; starts at least 5 s apart, the upper end of the 3 to 5 s a third-party 闲鱼 tool advises (seen only in a web-search summary, not opened). Recalibrate two weeks after going live from <state>/xianyu/risk-events.jsonl: no trip keeps it, any trip doubles min_interval_s (and halves the source's daily cap); the reading goes into brain note eye-recon-xianyu"
+    "provisional": "2026-10-24 (spec item 6): one at a time on the 小号; starts at least 5 s apart, the upper end of the 3 to 5 s a third-party 闲鱼 tool advises (seen only in a web-search summary, not opened). Recalibrate two weeks after going live from <state>/xianyu/risk-events.jsonl: no trip keeps it, any trip doubles min_interval_s (and halves the source's daily cap); the reading goes into brain note eye-recon-xianyu"
    }
   },
   "smzdm_api": {
@@ -1644,7 +1644,7 @@
    "gate": {
     "max_inflight": 1,
     "min_interval_s": 1.0,
-    "provisional": "EYE-XIANYU 2026-10-24: nothing published; one at a time, starts 1 s apart keeps a build list (about 7 parts, one request each) under 10 s while never bursting. Recalibrate from the gate's refusal lines and any 429 after the first weeks"
+    "provisional": "2026-10-24: nothing published; one at a time, starts 1 s apart keeps a build list (about 7 parts, one request each) under 10 s while never bursting. Recalibrate from the gate's refusal lines and any 429 after the first weeks"
    }
   },
   "yipinsanfendi_web": {

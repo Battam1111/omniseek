@@ -76,7 +76,7 @@ log = logging.getLogger("omniseek.core.memguard")
 #          guard restarts now, idle or not.
 #          The 680 MB the workers add is paid like the rest: the budget above left 1515 MB for OmniSeek at
 #          p50, so W0 was already over it, now by 680 MB more, in swap. The lever on that is the lane's
-#          size (PROC_LANE_TOKENS, ASYNC-CORE-DESIGN.md D14), not this line.
+#          size (PROC_LANE_TOKENS), not this line.
 #   No ASR allowance (2026-11-10). Until then hard rose by 3840 MB (to 9216) while an ASR model was
 #          loaded in this process, and soft waited for its idle unload. Recognition now runs in a speech
 #          worker process with its own cap (eye.asr_sched.worker_cap_mb), so OmniSeek's own footprint has

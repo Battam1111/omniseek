@@ -18,7 +18,7 @@ what the upstream actually reports:
                       2026-09-29: the whole Wikimedia family is one entry).
   paths               an entry may also list path prefixes ("paths": ["/pdf/", "/html/"]): it then owns
                       only the URLs on its hosts whose path starts with one of them, and wins those over
-                      the host's other entries (EYE-RSS-3, 2026-10-24: export.arxiv.org serves the API
+                      the host's other entries (2026-10-24: export.arxiv.org serves the API
                       under /api/ with one request every 3 s, and full text under /pdf/ and /html/,
                       which arXiv sets aside for programs with its own rate). A bare host (no path) and
                       every other path stay with the host's entry. Host-wide things (a robots.txt
@@ -30,15 +30,16 @@ what the upstream actually reports:
                       tools, threads and event loops.
   aegress(url)        the host gate for any direct egress: a no-op for an ungated host or when the
                       current holder already holds that upstream (the owning module's own hold).
-                      The sync ``egress`` is a thin wrapper over the same async gates (EYE-TWINS-2),
+                      The sync ``egress`` is a thin wrapper over the same async gates,
                       for egress that blocks in a thread OmniSeek cannot hand to the event loop
-                      mid-request: the shared Chrome's page load (``browser_turn``, entered by _cdp's
-                      pool thread once it has the browser's turn; xianyu's CDP read) and the system
-                      push outlet's sync ``send`` (notify). It holds the gates by a credential of its
-                      own (_guard.Holder), entered and let go through two portal calls.
+                      mid-request: xianyu's CDP read (entered on its calling thread, around the whole
+                      browser call) and the system push outlet's sync ``send`` (notify). It holds the
+                      gates by a credential of its own (_guard.Holder), entered and let go through two
+                      portal calls. A CDP render's page load takes its host's gates with
+                      ``abrowser_turn``, on the loop (_cdp.acdp_call), once it has the browser's turn.
   budget              a full gate is a line: a request's permit wait and start wait, over every gate
                       it passes, run until the caller's own deadline and only then is the request
-                      turned away unsent (EYE-GATE-QUEUE, 2026-11-11: the shorter declared
+                      turned away unsent (2026-11-11: the shorter declared
                       max_wait_s was removed). A caller with no deadline waits until served. See
                       _guard.deadline_refusal.
   redirects           AsyncHopGates holds the gates of the host a request is on: a redirect to the same
@@ -67,9 +68,9 @@ what the upstream actually reports:
   host liveness       HOST_DOWN_AFTER connections in a row that were not made (refused, handshake
                       timeout, EOF) open the host's breaker for HOST_DOWN_FOR_S: requests to it fail at
                       once with HostDown (an UpstreamBusy, nothing sent, no permit taken), and the health
-                      check reads that as down (EYE-GATE-FIX B, 2026-10-20). A run of failures opens it
+                      check reads that as down (2026-10-20). A run of failures opens it
                       only when some host answered after the run began: when nothing answers at all,
-                      this machine's network is down, not the host (EYE-BREAKER). Every refusal names
+                      this machine's network is down, not the host. Every refusal names
                       its URL (credentials masked) and the initiator (_guard.initiator).
   health_block(...)   declared vs gate vs observed, mismatches flagged, undeclared sources listed.
 
@@ -149,8 +150,7 @@ _guard.register_unsent(UpstreamBusy, DeclaredUserAgentRefused)
 # defer_on_429=False (design decision 3, 2026-09-29). Everywhere else the default holds: a response that
 # carries Retry-After defers the whole upstream for every caller. The exemption covers the upstream
 # gate only; the host's robots.txt Crawl-delay gate is deferred regardless (see observe).
-# Only the modules listed here may switch the deferral off (the test that enforced it was deleted in
-# TEST-CUT).
+# Only the modules listed here may switch the deferral off (the test that enforced it was deleted).
 SELF_BACKOFF = {
     "omniseek.core._openalex": (
         "per-lane budgets: a budget 429 marks that lane dry until the reset OpenAlex reports and the "
@@ -327,7 +327,7 @@ def crawl_delay_for(target: str) -> Optional[float]:
 
 def cache_ttl_for(ttl: float, urls: Iterable[str]) -> float:
     """A cache time for a fetch of ``urls`` that is never shorter than the longest Crawl-delay among
-    their hosts (EYE-GATE-FIX A): a cache that runs out before the host may be asked again only buys
+    their hosts: a cache that runs out before the host may be asked again only buys
     a refused request (statmodeling: Crawl-delay 3600 s against a 1800 s feed cache, 68 of 85 refused)."""
     delays = [d for d in (crawl_delay_for(str(u)) for u in urls) if d]
     return max([ttl, *delays]) if delays else ttl
@@ -468,8 +468,8 @@ def _gates_for_url(url: str) -> list:
 def _refusal(key: str, url: Optional[str] = None) -> Callable[[float], UpstreamBusy]:
     """The one way a gate turns a request away, raised BEFORE anything is sent: the caller's deadline
     came before the request could start (``_guard.deadline_refusal``). The message names the gate, how
-    long the request waited at it, the request's URL (credentials masked) and who asked
-    (EYE-GATE-FIX G), so every log line that prints the refusal can be counted by URL and initiator."""
+    long the request waited at it, the request's URL (credentials masked) and who asked,
+    so every log line that prints the refusal can be counted by URL and initiator."""
     tail = _refusal_tail(url)
 
     def on_refuse(waited: float) -> UpstreamBusy:
@@ -491,7 +491,7 @@ def _refusal_tail(url: Optional[str]) -> str:
     return f" [url={loggable_url(url)} by={who}]" if url else f" [by={who}]"
 
 
-# ── host liveness: a host that stopped answering opens its breaker (EYE-GATE-FIX B) ─────────────────
+# ── host liveness: a host that stopped answering opens its breaker ─────────────────
 # lobste.rs stopped completing TLS handshakes on 2026-10-18; for two days every request to it held the
 # host's one permit for the full 15 s timeout, the other two feed requests of the same bundle waited
 # 15 s and were refused, and the health check re-read that as "not verified". The ONE record of
@@ -499,7 +499,7 @@ def _refusal_tail(url: Optional[str]) -> str:
 # path that passes the AsyncHopGates (the shared http helpers, http.direct, the curl tier, CDP renders) and,
 # through the HostDown it raises, by the health check and the search _meta.
 #
-# PROVISIONAL (both numbers, 2026-10-20, spec EYE-GATE-FIX): HOST_DOWN_AFTER unreachable answers in a
+# PROVISIONAL (both numbers, 2026-10-20): HOST_DOWN_AFTER unreachable answers in a
 # row open the breaker; it stays open HOST_DOWN_FOR_S seconds, then the count starts again from zero.
 # Calibrate from the first week of logs: count the "host breaker OPEN" lines, and for each open window
 # check whether another path (a browser render, the curl tier, a later request) reached the host while
@@ -514,7 +514,7 @@ _host_live_lock = threading.Lock()
 # The last HTTP status each host answered and when (wall clock), whoever asked (observe records it): what
 # a check whose own request that host's gate held back can still say about the host. A feed host with a
 # one-hour Crawl-delay is asked by the hourly ingest and almost never by the health check, so without
-# this the check could only read it as dead without an address, or never see its 403 (EYE-FIX-1109).
+# this the check could only read it as dead without an address, or never see its 403.
 _last_answer: dict[str, tuple[int, float]] = {}
 
 
@@ -522,7 +522,7 @@ def last_answer(host: str) -> Optional[tuple[int, float]]:
     """``(HTTP status, wall-clock time)`` of the last answer ``host`` gave this process, or None."""
     return _last_answer.get(_host(host)) if host else None
 
-# A run of failures says the HOST is down only if the network worked meanwhile (EYE-BREAKER,
+# A run of failures says the HOST is down only if the network worked meanwhile (
 # 2026-10-20): when the host machine's own egress drops (it has flapped, brain
 # finding-egress-flap-investigation-2026-10-19) every host asked in that minute fails at once, and
 # without this each would sit behind a 600 s breaker after the network came back. ``_answered`` is the
@@ -597,7 +597,7 @@ def note_host_reached(host: str) -> None:
 
 def note_host_absent(host: str) -> None:
     """Public DNS says ``host`` does not exist (eye.dns_absence): its unreachable connections were an
-    answer, not a host that is down, so they are dropped and never open its breaker (SMALL-BATCH-4)."""
+    answer, not a host that is down, so they are dropped and never open its breaker."""
     h = _host(host) if host else ""
     if h and h in _host_live:
         with _host_live_lock:
@@ -682,7 +682,7 @@ class AsyncHopGates:
     ONE bound for the whole chain (a chain is one read; design decisions of 2026-09-29 on section 16.5,
     item 1, and on the objection in 16.8): the caller's deadline is the chain's absolute end, and the
     gates of every hop (the upstream's, then the host's Crawl-delay gate, in that fixed order) wait
-    in line until it (EYE-GATE-QUEUE: no shorter per-gate ceiling); without a deadline a hop waits
+    in line until it (no shorter per-gate ceiling); without a deadline a hop waits
     until served. One AsyncHopGates per request. ``request_s`` is the request's own timeout: each
     permit's lease ends that long after the chain's deadline (with none, after its hop's reserved
     start; review P1; None: no lease, the permit is held until given back). ``enter(url, wait=False)``
@@ -690,7 +690,7 @@ class AsyncHopGates:
     also hands back the reserved start, for a request that was never sent (review F8), unless a
     response already arrived for it (review N2, see ``_guard.mark_sent``).
 
-    ``holder`` (EYE-TWINS-2): the credential every gate of the chain is held by (``_guard.Holder``);
+    ``holder``: the credential every gate of the chain is held by (``_guard.Holder``);
     None, the task that enters each hop. ``egress`` hands one, so the chain may be entered and let go
     of in different tasks. ``handles`` are the holds of the current hop (``egress`` registers them in
     its thread's context, ``_guard.holding``)."""
@@ -789,9 +789,9 @@ async def ahop_gates(request_s: Optional[float] = None, *, check_host: bool = Tr
 def egress(url: str, *, browser: bool = False, until: Optional[float] = None, wait: bool = True,
            request_s: Optional[float] = None):
     """Sync entry for a blocking call that must hold ``url``'s declared gates the whole time it runs
-    (the CDP pool's page load, ``browser_turn``; xianyu's CDP read; notify's push outlet): the
-    upstream's gate, then the host's robots.txt Crawl-delay gate, within one budget, exactly as
-    ``aegress``. A thin wrapper (EYE-TWINS-2): it makes a holder credential (``_guard.Holder``), takes
+    (xianyu's CDP read, entered on its calling thread around the whole ``cdp_call``; notify's push
+    outlet): the upstream's gate, then the host's robots.txt Crawl-delay gate, within one budget, exactly as
+    ``aegress``. A thin wrapper: it makes a holder credential (``_guard.Holder``), takes
     the gates on the event loop through ``portal.call`` (``AsyncHopGates.enter``), runs the block on
     this thread with those holds registered in its context (``_guard.holding``), and lets go through
     another ``portal.call``, as the same holder. Yields the first gate's key (or None when nothing
@@ -799,7 +799,8 @@ def egress(url: str, *, browser: bool = False, until: Optional[float] = None, wa
     ``browser=True`` (a CDP page load) also raises ``DeclaredUserAgentRefused`` for a host whose
     upstream declares a User-Agent, since the shared browser cannot send it. ``request_s``: the
     request's own timeout, for the permits' leases. ``wait=False``: one try. Never call it on the
-    event loop's own thread (portal raises RuntimeError)."""
+    event loop's own thread, nor on a Playwright sync thread (a CDP callback, the pool's worker), which
+    reports Playwright's loop as running: portal raises RuntimeError there."""
     if browser:
         check_browser(url)
     gates = AsyncHopGates(request_s, holder=_guard.Holder())
@@ -826,14 +827,19 @@ async def aegress(url: str, *, until: Optional[float] = None, wait: bool = True,
         yield gates.key
 
 
-def browser_turn(url: str, request_s: float):
-    """What a CDP render enters once it HAS its turn at the browser (``cdp_call(on_turn=...)``): the
-    host's declared gates, tried ONCE without waiting (design decision of 2026-09-29 on review P6: a
-    caller holding the browser's turn must not wait in another line; no gate now means the turn is
-    given up at once and the page is not loaded, ``UpstreamBusy``). ``request_s`` is the render's
-    own timeout: the permits' lease, so a render stuck in its page load gives the host back when it
-    runs out (review P1, pooled or not)."""
-    return egress(url, browser=True, wait=False, request_s=request_s)
+@contextlib.asynccontextmanager
+async def abrowser_turn(url: str, request_s: float):
+    """What a CDP render enters once it HAS its turn at the browser (``acdp_call(on_turn=...)``, on the
+    event loop): the host's declared gates, tried ONCE without waiting (design decision of 2026-09-29
+    on review P6: a caller holding the browser's turn must not wait in another line; no gate now means
+    the turn is given up at once and the page is not loaded, ``UpstreamBusy``). ``request_s`` is the
+    render's own timeout: the permits' lease, so a render stuck in its page load gives the host back
+    when it runs out (review P1, pooled or not). Also refuses a host that declares a User-Agent
+    (``check_browser``). Async only: the thread that has the browser's turn is a Playwright sync thread,
+    where the sync ``egress`` refuses."""
+    check_browser(url)
+    async with aegress(url, wait=False, request_s=request_s) as key:
+        yield key
 
 
 # ── observation (what the upstream reports) ────────────────────────────────────────────────────
@@ -940,7 +946,7 @@ def observe(target: str, headers: Any, status: Optional[int] = None, *, lane: Op
         if ra and ra > 0:
             secs = min(ra, _DEFER_CAP_S)
             if status not in (429, 503):
-                # EYE-GATE-FIX E (2026-10-20): zenodo was measured at about one request a minute and
+                # 2026-10-20: zenodo was measured at about one request a minute and
                 # only a Retry-After on its 200 answers could explain it, but nothing showed the
                 # headers. Whether to stop deferring on a 2xx is decided once this line has been seen.
                 logger.info("upstream %s answered HTTP %s with Retry-After %.0fs: deferring every caller",
@@ -1130,7 +1136,7 @@ def source_on_site(source: str, target: str, backend: Optional[str] = None) -> b
     same host, or one a subdomain of the other, a leading "www." and a suffix entry's "." set aside
     (arxiv.org and export.arxiv.org; alphaxiv.org and api.alphaxiv.org). An entry covers a source the
     way ``coverage`` counts it: the source in its ``sources``, or ``backend`` (the source's backend,
-    fetcher.backend_of) in its ``backends`` (EYE-REG-CHECK: the OpenAlex slices). Read-only."""
+    fetcher.backend_of) in its ``backends`` (the OpenAlex slices). Read-only."""
     site = _site(_host(target))
     if "." not in site:   # never a bare label ("com" would sit under every .com host)
         return False

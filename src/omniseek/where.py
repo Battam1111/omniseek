@@ -245,7 +245,7 @@ def notify_outlet() -> Optional[Path]:
 
 def notify_redact() -> Optional[Path]:
     """The push outlet's masking rule (07_services/notify/redact.py as the services part installs it): OmniSeek runs
-    every query it sends to machines that are not ours through it (omniseek.redact.outward, SMALL-BATCH 18).
+    every query it sends to machines that are not ours through it (omniseek.redact.outward).
     None when the deployment has no such rule (the public build): queries then go out as they are, and that is
     not a fault. This return value is the ONE place that tells the two apart; a path that is set but cannot be
     loaded is a fault (omniseek.redact.outward logs an ERROR and alerts once)."""

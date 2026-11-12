@@ -30,7 +30,7 @@ The three terms (2026-10-20; measured on a recording of real searches):
              average body length of the batch), not as zero length, which made a bare title the
              strongest match (``empty_body_unknown``). Its words are still absent: only the title
              can match. (Sorting empty bodies after all others measured worse on the paper queries.)
-             The query's adjacent word pairs are extra BM25 terms at ``PHRASE_WEIGHT`` (EYE-RELEVANCE,
+             The query's adjacent word pairs are extra BM25 terms at ``PHRASE_WEIGHT`` (
              2026-10-24): words of the query that stand apart in a document ("Point-Based Distributed
              Zeroth-Order" for "distributed point function") count less than the query's phrase.
              The vector-recall prior (``recall_rrf``, perception-memory docs only) may stand in for
@@ -497,13 +497,13 @@ def _engagement(doc: Document) -> float:
     return min(1.0, math.log10(1 + s) / 4.0)  # ~1.0 at score≈10k
 
 
-# Heat caps (EYE-RANK, 2026-10-20). PROVISIONAL, calibrate 2026-10-27. Derivation: for every
+# Heat caps (2026-10-20). PROVISIONAL, calibrate 2026-10-27. Derivation: for every
 # attention-class signal name (engagement / citation) seen at least 20 times in a broad-search
-# recording plus EYE-2's two queries (27,156 + 873 recorded documents, out/EYE-RANK/scripts/
-# replay_rank.py derive_caps), the 95th percentile of its values. At or above its cap a signal counts
+# recording plus two more recorded queries (27,156 + 873 recorded documents),
+# the 95th percentile of its values. At or above its cap a signal counts
 # as full attention (1.0); below it, log1p(value) / log1p(cap). Read at p99 instead, the replay gave
-# the 23 paper queries 216 and the 20 control queries 121 on-topic in their top 10 (p95: 215, 121;
-# out/EYE-RANK/evidence/replay_summary.md), so the choice is not sharp; p95 was fixed before looking.
+# the 23 paper queries 216 and the 20 control queries 121 on-topic in their top 10 (p95: 215, 121),
+# so the choice is not sharp; p95 was fixed before looking.
 # A name not in this table is not on any known scale: it counts as no signal
 # (unknown heat), never as a guess. Recalibrate by re-running derive_caps on a newer recording.
 HEAT_CAPS: dict[str, float] = {
@@ -514,14 +514,14 @@ HEAT_CAPS: dict[str, float] = {
 }
 _ATTENTION = ("engagement", "citation")
 
-# Phrase pairs (EYE-RELEVANCE, 2026-10-24). PROVISIONAL, calibrate with the next replay. The query's
+# Phrase pairs (2026-10-24). PROVISIONAL, calibrate with the next replay. The query's
 # adjacent word pairs count as extra BM25 terms at this weight (relevance.doc_scores pair_weight):
 # 0.10 / 0.85, the ordered-window over single-term weight of the sequential dependence model
 # (Metzler & Croft, SIGIR 2005, the published default 0.85 / 0.10 / 0.05), fixed before the replay
-# was read. Replay of the 45 recorded queries (out/EYE-RELEVANCE/, with _prior_counts): weights
+# was read. Replay of the 45 recorded queries (with _prior_counts): weights
 # 0.0588 / 0.1176 / 0.1765 / 0.25 gave the 23 paper queries 216 / 217 / 218 / 219 on-topic in their top
 # 10 and the 20 control queries 125 / 126 / 126 / 125, so the choice is not sharp. Recalibrate by
-# re-running out/EYE-RELEVANCE/scripts/variants.py with pw:<x> on a newer recording.
+# re-running the replay with other pair weights on a newer recording.
 PHRASE_WEIGHT = 0.10 / 0.85
 
 
@@ -531,7 +531,7 @@ def _heat(doc: Document) -> Optional[float]:
 
     WHY per signal name (measured 2026-07-25, kept): 10k views is unremarkable, 10k citations is
     legendary, so one curve over attention_value() put youtube at 0.47-0.98 and papers at 0.08-0.35.
-    That fix used a percentile WITHIN each source's returned batch; EYE-RANK replaced it with this
+    That fix used a percentile WITHIN each source's returned batch; on 2026-10-20 it was replaced with this
     transform because a batch-relative number is not a property of the document (the same paper scored
     differently depending on its neighbours) and because the percentile gave a doc without any signal
     0.0, i.e. read "unknown" as "nobody looked at it" (an IACR ePrint paper with no counts at all fell
@@ -562,10 +562,10 @@ def _prior_counts(rel: float, rrf: float) -> bool:
 
     Always for a document with no lexical match (rel 0): lifting such hits is what the prior is for.
     For a document that matches lexically, only when the prior is above what ONE stored copy can get,
-    i.e. the index holds several copies of the work ranked high (EYE-RELEVANCE 2026-10-24). Up to that
+    i.e. the index holds several copies of the work ranked high (2026-10-24). Up to that
     bound the prior is only the document's rank among the index's own candidates: the index always has
     a first one, and divided by the batch's best prior it scored like the batch's best literal match.
-    Measured on the replay (out/EYE-RELEVANCE/report.md): seven pytorch commit records holding
+    Measured on the replay: seven pytorch commit records holding
     "pytorch" only inside link URLs and "compile" once took 7 of the top 10 for "PyTorch compile
     error" this way, over forum threads holding all three words in their titles."""
     return rel <= 0.0 or rrf > _RRF_ONE_COPY + 1e-12
@@ -608,8 +608,8 @@ def text_scores(texts: list[tuple[str, str, str]], survivors: list[int],
     content is tokenized ONCE and its tokens serve the topic check, the body length and the BM25 terms
     (the three of them tokenized every content again: about 3.8 passes over some 6.5 M characters of a
     broad search, 0.6 to 0.75 s, measured). Plain data in and out and
-    module-level, because asearch_ranked runs it in the process lane (portal.run_cpu, ASYNC-CORE-DESIGN
-    D14): on the event loop it held the loop for those 0.6 s, and for 0.14 to 0.35 s on a
+    module-level, because asearch_ranked runs it in the process lane (portal.run_cpu):
+    on the event loop it held the loop for those 0.6 s, and for 0.14 to 0.35 s on a
     single-source search whose recalled index documents are long."""
     terms = relevance.query_terms(query)
     if not terms:

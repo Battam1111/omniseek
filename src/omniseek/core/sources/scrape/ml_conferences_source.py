@@ -72,13 +72,14 @@ class MlConferencesAdapter(BaseScrapeAdapter):
     cache_ttl = 21600   # 6h: conference blogs post rarely, and every miss costs a CDP render
     rank = True         # BM25-filter the ~30 posts by the agent's query (venue / award / policy)
 
-    def _raw_fetch(self, query: str, limit: int) -> Optional[list]:
-        """Render all three blog indexes through the shared CDP browser.
+    async def _araw_fetch(self, query: str, limit: int) -> Optional[list]:
+        """Render all three blog indexes through the shared CDP browser (``acdp_call``: the browser on
+        a worker thread, the host's gates awaited here on the loop once the render has its turn).
 
         Serial on purpose: CDP is a single shared browser, so a fan-out would only queue anyway.
         A venue that fails is skipped (never sinks the other two), matching the old bundle's
         per-feed degrade."""
-        from omniseek.core.sources.walled._cdp import cdp_call
+        from omniseek.core.sources.walled._cdp import acdp_call
 
         def _nav(page):
             page.wait_for_load_state("domcontentloaded", timeout=30000)
@@ -98,8 +99,8 @@ class MlConferencesAdapter(BaseScrapeAdapter):
                 # gates tried once (review P6), leased for the render's own timeout (review P1).
                 upstreams.check_browser(url)
                 until = upstreams.budget_until(url, default=75)
-                html = cdp_call(_nav, initial_url=url, timeout=75, queue_until=until,
-                                on_turn=lambda u=url: upstreams.browser_turn(u, 75))
+                html = await acdp_call(_nav, initial_url=url, timeout=75, queue_until=until,
+                                       on_turn=lambda u=url: upstreams.abrowser_turn(u, 75))
                 if html:
                     out.append((venue, url, html))
             except Exception as exc:  # noqa: BLE001 — one venue down must not sink the rest

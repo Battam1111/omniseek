@@ -135,7 +135,7 @@ def redact_obj(obj: Any, mask: str = MASK, skip: Optional[Callable[[Any], bool]]
         return obj
 
 
-# ── queries sent out (SMALL-BATCH 18; the operator 2026-11-07 18:59:04, decision table row 107: what goes to machines
+# ── queries sent out (2026-11-07: what goes to machines
 # that are not ours is masked) ─────────────────────────────────────────────────────────────────────────────────
 # The rule is NOT this module's: it is the push outlet's 07_services/notify/redact.py (one rule for everything that
 # leaves for someone else's machine), loaded by file path as the services part installs it, else from the repo

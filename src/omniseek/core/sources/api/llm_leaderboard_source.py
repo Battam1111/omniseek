@@ -25,7 +25,7 @@ attribution required. Key: <credentials>/artificial_analysis.json
 per 24h window), so this is a named lookup (the full list is cached; local
 filtering costs no API calls).
 
-2026-11-07 (LLM-LB-PROBE): a failed read of the list is no longer an empty list. ``_amodels`` raises
+2026-11-07: a failed read of the list is no longer an empty list. ``_amodels`` raises
 ``ModelsUnavailable`` with what the API answered (HTTP status and body, e.g. the 410 Gone of the
 retired endpoint, which read for two days as "0 models (key invalid / API down)"), so a search
 reports the source as errored with that reason and the health check reports it. The health check

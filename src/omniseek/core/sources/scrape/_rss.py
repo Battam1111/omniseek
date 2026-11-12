@@ -308,7 +308,7 @@ class RSSAdapterBase(SourceBase):
                                   to decide whether this adapter claims a URL
         cache_ttl: int — cache duration in seconds (default 1800 = 30 min)
 
-    The async path parses through ``sources._base.aparse`` (ASYNC-CORE-DESIGN.md D14): the feeds are
+    The async path parses through ``sources._base.aparse``: the feeds are
     fetched as coroutines, then the whole bundle's feedparser + dedup + markdownify is ONE parse
     (``_parse_bundle``: a worker process when it would hold the loop past the budget), and BM25 runs in
     the PROCESS lane (``_pair_scores``, ``portal.run_cpu``). A subclass that adds its own
@@ -328,7 +328,7 @@ class RSSAdapterBase(SourceBase):
     def _bundle_ttl(self) -> float:
         """``cache_ttl``, never shorter than the longest Crawl-delay among the feed hosts: a bundle
         refreshed sooner than such a host may be asked again only buys a refused request (statmodeling,
-        Crawl-delay 3600 s against the 1800 s cache: 68 of 85 refused; EYE-GATE-FIX A)."""
+        Crawl-delay 3600 s against the 1800 s cache: 68 of 85 refused)."""
         from omniseek.core import upstreams
         return upstreams.cache_ttl_for(self.cache_ttl, self.feeds)
 
@@ -388,7 +388,7 @@ class RSSAdapterBase(SourceBase):
         raws = await asyncio.gather(*[_one(u) for u in self.feeds]) if self.feeds else []
 
         # The bundle's CPU (feedparser over every feed, dedup, markdownify) is pure Python: ONE parse
-        # through aparse, the process lane for a long one, never a thread of this process (ASYNC-CORE-DESIGN.md D14).
+        # through aparse, the process lane for a long one, never a thread of this process.
         docs, all_failed, events = await aparse(sum(len(r[1]) for r in raws if r[1]), _parse_bundle,
                                                 self.name, list(self.feeds), list(raws))
         for event in events:
@@ -451,7 +451,7 @@ class RSSAdapterBase(SourceBase):
         # had just asked: statmodeling's 3600 s) was not asked this run: it is not dead on that alone.
         # What the host last answered anyone in this process says what is known; a last answer that
         # was an error counts it dead, and its record carries the address (the exit-node sweep refetches
-        # it); otherwise it is only named as held. Before EYE-FIX-1109 every held feed read dead, so the
+        # it); otherwise it is only named as held. Before 2026-11-09 every held feed read dead, so the
         # bundle went "degraded" with no address to refetch, and a real 403 seen only by the ingest
         # never reached the check.
         held_urls = {str(rec.get("url")) for rec in captures

@@ -975,8 +975,8 @@ def _image_media(payload: dict) -> list[str]:
 # Self-heals: the breaker closes after its window and the first real response resets the count. The
 # count follows the guard's one rule (_guard.counts_against_upstream, see _arctic_outcome): a 404 / 410
 # / 400 or a 422 that is not the slow-down refusal is Arctic answering, not counted; a 429, a 5xx, a
-# timeout, the slow-down 422 and the soft throttle (200 with an ``error``) are. Until EYE-BREAKER-ONE
-# (2026-11-07) this was a count and cooldown of this module's own, which counted every failure.
+# timeout, the slow-down 422 and the soft throttle (200 with an ``error``) are. Until
+# 2026-11-07 this was a count and cooldown of this module's own, which counted every failure.
 #
 # The guard's permits are also the global in-flight cap on Arctic egress. Arctic is HOST-bound (ONE
 # mirror host) and 429s when hit too hard. A single search's 23-sub fan-out is already bounded to
@@ -1000,8 +1000,8 @@ _arctic_sema = _arctic_guard.sema
 # this way. That is the far end refusing us, like a 429: retrying the same request only adds load to
 # a host that just asked us to slow down. So such a 422 is not retried and counts toward the breaker
 # exactly like a fully retried 429 (one step per sub). A 422 with any other body, like a 404 / 410 /
-# 400, is an answer: not retried (_guard.answered, EYE-RETRY-404) and not counted by the breaker
-# (EYE-BREAKER-ONE). http.get_json returns None for every non-2xx, so the status and body are read from the
+# 400, is an answer: not retried (_guard.answered) and not counted by the breaker.
+# http.get_json returns None for every non-2xx, so the status and body are read from the
 # failure record the http layer writes through diag.note, captured privately around each request.
 # Until 2026-10-04 (spec 5) that record carried NO body: http read the error body of a streamed
 # response that was never read and got nothing. http now keeps a bounded copy of the error body, so

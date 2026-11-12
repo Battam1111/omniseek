@@ -46,10 +46,10 @@ _last_journal_failure: "str | None" = None
 _materialization_failures = 0
 _last_materialization_failure: "str | None" = None
 _JOURNAL_WAKE = threading.Event()
-# The boot blob scrub (EYE-JOURNAL-BOOT): None until it starts, then {"state": "running" | "done" |
+# The boot blob scrub: None until it starts, then {"state": "running" | "done" |
 # "failed", "checked", "bad": [{payload_hash, seq, error}], "seconds", "error"?}. Read by journal_health.
 _blob_scrub: "dict | None" = None
-# The background whole-chain check (EYE-JOURNAL-CKPT): None until it starts, then {"state": "running" |
+# The background whole-chain check: None until it starts, then {"state": "running" |
 # "done" | "failed", "ok", "checked", "first_bad_seq", "error", "seconds"}. Read by journal_health.
 _chain_check: "dict | None" = None
 _checkpoint_failures = 0
@@ -218,7 +218,7 @@ def scrub_journal_blobs(journal: "ObservationJournal | None" = None) -> dict:
 
 
 def checkpoint_journal_if_due(journal: "ObservationJournal | None" = None) -> "dict | None":
-    """Write the journal checkpoint when one is due (ObservationJournal.maybe_checkpoint, EYE-JOURNAL-CKPT).
+    """Write the journal checkpoint when one is due (ObservationJournal.maybe_checkpoint).
 
     Called on the recall-journal-boot thread once the journal is built, and on the recall-writer
     thread after every cycle (``_writer_loop``): never on the foreground path that records an
@@ -297,7 +297,7 @@ def _journal_boot() -> None:
 
 def start_journal_boot() -> threading.Thread:
     """Build the observation journal on its own thread at service start, write its checkpoint, check
-    the whole hash chain, then scrub its blobs (EYE-JOURNAL-BOOT, EYE-JOURNAL-CKPT). Built lazily, the
+    the whole hash chain, then scrub its blobs (2026-10-24). Built lazily, the
     first maybe_ingest of every source after a restart built it under _journal_lock inside that
     search's wait budget; a search that arrives while this thread is still building waits on the same
     lock, but only for the checkpoint read plus a tail of at most about CKPT_EVERY events (a full
@@ -573,7 +573,7 @@ def mark_run(source: str, count: int) -> None:
 def mark_swept(source: str) -> None:
     """Stamp when the ingest loop last swept ``source`` (any outcome; the still_live watermark is
     ``mark_run``'s and stays conditional). Read back by ``store.swept_at`` so a restarted process does
-    not sweep again what the one before it swept less than an interval ago (EYE-RANK, 2026-10-20).
+    not sweep again what the one before it swept less than an interval ago (2026-10-20).
     Routed through the writer queue (single writer). No-op unless writes are enabled."""
     if not WRITES_ENABLED or store._disabled:
         return

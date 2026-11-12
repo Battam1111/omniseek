@@ -121,8 +121,8 @@ class BaseScrapeAdapter(SourceBase):
             Convert the payload into Documents. Slice to ``limit`` here if the
             payload can over-return (the base does NOT re-slice, to preserve each
             source's exact "take first N items" semantics).
-            The async path runs it through ``sources._base.aparse`` (ASYNC-CORE-DESIGN.md
-            D14): on the loop for a small answer, in a worker process for one over
+            The async path runs it through ``sources._base.aparse``:
+            on the loop for a small answer, in a worker process for one over
             ``PARSE_INLINE_MAX_BYTES`` (the bytes the fetch hook read). The worker finds
             this source by ``name`` in its own registry, so the payload must pickle
             (plain data, not a parser object) and the method must not lean on state
@@ -153,7 +153,7 @@ class BaseScrapeAdapter(SourceBase):
     extract_schema: Optional[dict] = None
     fetch_html: bool = False
     base_url: str = ""
-    # QUERY-INDEPENDENT FETCH (EYE-GATE-FIX A, 2026-10-20). A source whose network fetch is the same
+    # QUERY-INDEPENDENT FETCH (2026-10-20). A source whose network fetch is the same
     # whatever the query (v2ex's node listings: the query only scores the merged topics locally) sets
     # this True. Its cache key then holds only what it fetches (``_fetch_identity``: the URLs and
     # parameters), never the query or the limit, so one fetch serves every query until the cache runs
@@ -344,7 +344,7 @@ class BaseScrapeAdapter(SourceBase):
         scored.sort(key=lambda x: x[0], reverse=True)
         return [d for _, d in scored]
 
-    # ── a query-independent page inside a query-dependent source (EYE-GATE-FIX A) ──────────────
+    # ── a query-independent page inside a query-dependent source ──────────────
     def _url_key(self, url: str, params: Optional[dict]) -> str:
         return cache.make_key(self.name, "url", url, *sorted(f"{k}={v}" for k, v in (params or {}).items()))
 

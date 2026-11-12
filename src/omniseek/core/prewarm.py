@@ -105,7 +105,7 @@ def warm_sources() -> tuple[int, int]:
         for src in srcs:
             t0 = time.monotonic()
             try:
-                with _guard.initiator("预热"):   # a gate refusal names who asked (EYE-GATE-FIX G)
+                with _guard.initiator("预热"):   # a gate refusal names who asked
                     docs = portal.run(fetcher.afetch_one, src, "", limit=50, deadline_s=None)
                 log.info("prewarm %s: %d docs in %.1fs", src, len(docs), time.monotonic() - t0)
             except Exception as exc:  # noqa: BLE001 — one bad source never blocks the rest

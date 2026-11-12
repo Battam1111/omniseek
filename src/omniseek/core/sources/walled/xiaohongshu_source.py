@@ -495,7 +495,7 @@ def _merge_comment_rows(captured: list, dom: list) -> tuple[list[dict], int]:
 
 
 def _card_hint(comment_count: Optional[int]) -> str:
-    """The card's read hint (``metadata.read_hint``; the body itself is empty, EYE-RANK 2026-10-20),
+    """The card's read hint (``metadata.read_hint``; the body itself is empty, 2026-10-20),
     naming what is MISSING, including the comment thread.
 
     On this platform the post is the hook and the COMMENTS are the dataset: a note whose body is one
@@ -1514,8 +1514,7 @@ class XiaohongshuAdapter(SourceBase):
             return None
         host = urlparse(url).hostname or ""
         # This adapter owns rednote.com and xiaohongshu.com note links, so every 小红书 read rides the
-        # international account (the mainland 9224 source, sealed 2026-10-07, was deleted in
-        # SMALL-BATCH-13).
+        # international account (the mainland 9224 source, sealed 2026-10-07, was deleted).
         if "rednote.com" not in host and not host.endswith("xiaohongshu.com"):
             return None
         if cache.cache_only():

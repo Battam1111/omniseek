@@ -172,7 +172,7 @@ def _is_secondary_rate(resp: "httpx.Response") -> bool:
 def get_json(path: str, params: Optional[dict] = None, headers: Optional[dict] = None,
              timeout: float = TIMEOUT) -> Optional[Any]:
     """Sync entry for a caller on a thread: ``aget_json`` run on the event loop (portal.call), so
-    there is one implementation of the GitHub request (EYE-TWINS-1)."""
+    there is one implementation of the GitHub request."""
     return portal.call(aget_json, path, params=params, headers=headers, timeout=timeout)
 
 

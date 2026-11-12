@@ -214,7 +214,7 @@ def alert(title: str, body: str, *, source: str | None = None, questions=None, *
     keeps working while the fleet converges; they mean nothing to WeCom.
 
     A lane that delivered NOTHING leaves a WARNING in the log. The durable delivery marker it also used
-    to write (a running undelivered streak) went with CHECK-PRUNE-5 on 2026-10-20: the guards that read
+    to write (a running undelivered streak) went on 2026-10-20: the guards that read
     it retired on 2026-10-19 and nothing read it after that.
 
     ``source`` and ``questions`` pass through to wecom_push (see there); they are forwarded only

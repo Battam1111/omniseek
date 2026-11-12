@@ -57,7 +57,7 @@ async def _aget_json_retry(url: str, params: dict, *, timeout: int = 20, tries: 
     ``http.get_json`` -> ``await http.aget_json``. Same None-on-failure contract (aget_json already
     returns None on any failure + honors cache_only + the 30MB cap). Stays ON the loop (epoll wait).
     A failure that is an answer (404 / 410 / 400 / 422, read from the failure record http noted;
-    _guard.answered) is not retried: CKAN would say the same again (EYE-RETRY-404)."""
+    _guard.answered) is not retried: CKAN would say the same again."""
     async def _attempt():
         with diag.tap() as seen:
             data = await http.aget_json(url, params=params, timeout=timeout)

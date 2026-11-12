@@ -1,9 +1,9 @@
 """闲鱼 (goofish.com): second-hand listings on sale, read through the operator's logged-in 闲鱼 小号 on 9222.
 
-Why a walled source (EYE-XIANYU, 2026-10-24): goofish.com answers an anonymous search with
-``RGV587_ERROR::SM`` and a passport login URL (the login wall; recorded in
-the xianyu fixtures that TEST-CUT removed, still in git at f1da87a4 under tests/fixtures/xianyu/), so plain HTTP and web search see none of the live
-listings, prices, seller credit or service tags. the operator asked for it (10-24 17:23:33).
+Why a walled source (2026-10-24): goofish.com answers an anonymous search with
+``RGV587_ERROR::SM`` and a passport login URL (the login wall,
+seen 2026-10-24), so plain HTTP and web search see none of the live
+listings, prices, seller credit or service tags. the operator asked for it (10-24).
 
 How it reads (the acquisition choice, recon 2026-10-24 on xy-site 0.0.179):
   * The search page ``www.goofish.com/search?q=<kw>`` fires its own signed mtop call
@@ -268,7 +268,7 @@ def _logged_in(cap: dict) -> Optional[bool]:
 
 
 # The search call answered with the Taobao login page itself (HTML, <title>登录</title>) instead of mtop JSON:
-# seen live 2026-10-24 in the 9222 browser while logged out (recorded in a fixture TEST-CUT removed; git f1da87a4).
+# seen live 2026-10-24 in the 9222 browser while logged out.
 _HTML_LOGIN_RE = re.compile(r"<title>\s*登录\s*</title>|login\.taobao\.com|passport\.goofish\.com", re.I)
 
 

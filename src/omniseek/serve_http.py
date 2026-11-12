@@ -220,8 +220,8 @@ def _start_background_services() -> None:
         from omniseek.core.recall import writer as _recall_writer
         if recall.init():
             _recall_writer.WRITES_ENABLED = True
-            # Build the observation journal now, on its own thread, then scrub its blobs there
-            # (EYE-JOURNAL-BOOT): built lazily it was built inside the first search's maybe_ingest,
+            # Build the observation journal now, on its own thread, then scrub its blobs there:
+            # built lazily it was built inside the first search's maybe_ingest,
             # under the journal lock, and every source of that search sat out its wait budget.
             recall.start_journal_boot()
             recall.start_writer()
@@ -239,7 +239,7 @@ def _start_background_services() -> None:
             # MISMATCH -> rollback). The thread keeps boot instant; a request that arrives before
             # warmup finishes takes the same lazy, fail-open path it always did, and once warm()
             # completes the first hybrid call drops from ~9s to well under a second. While it runs a
-            # search skips the vector arm instead of waiting on the warmup's locks (EYE-FG-FIRST:
+            # search skips the vector arm instead of waiting on the warmup's locks (
             # the first search after a restart used to sit out its whole wait budget); start_warm
             # sets that flag before the thread starts, see recall._WARMING.
             recall.start_backfill()
@@ -309,7 +309,7 @@ def main() -> None:
     # arming is not enough), and timeout_graceful_shutdown bounds the wait for connections
     # (a uvicorn.Config parameter, read in Server.shutdown; checked in the deployed 0.48.0; 0 here
     # passes None, uvicorn's "wait forever").
-    # SSE-DRAIN (2026-10-24): lifecycle.answer_running_calls_on_exit sets that timeout AND keeps
+    # 2026-10-24: lifecycle.answer_running_calls_on_exit sets that timeout AND keeps
     # sse_starlette from cutting every SSE stream at the signal, so a call running at a restart gets
     # its answer to the caller within the drain cap instead of the caller reading half a response.
     config = uvicorn.Config(app, host=HOST, port=PORT, log_level="info")

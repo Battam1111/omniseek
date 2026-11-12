@@ -41,7 +41,7 @@ logger = logging.getLogger(__name__)
 # residue) runs its one sync .search on a worker thread admitted by this ONE limiter on the service's
 # one event loop. A dedicated limiter, neither anyio's default one nor portal.IO_LANE (tool bodies), so
 # blocking sources take no other offload's tokens; a base source's blocking hook passes it too
-# (sources._base.ablocking; ASYNC-CORE-DESIGN.md D14). Sized like portal.IO_LANE_TOKENS, generously
+# (sources._base.ablocking). Sized like portal.IO_LANE_TOKENS, generously
 # above one broad search's ~90 sources, so it never throttles a SINGLE search; serve_http raises the
 # soft fd limit far above this. (The process-global threading semaphore and the private 64-thread pool
 # of the deleted sync fan-out, search_many, are gone with it: 11-04, S9.)
@@ -77,7 +77,7 @@ _SOURCE_DEADLINE_FRESH_S = 16
 _EXPLICIT_DEADLINE_S = 45  # When the caller NAMES sources, they chose them → wait for them;
                           # this is only a backstop against a genuinely hung source.
 # The paper sources of a broad sweep (domains facet "papers") are waited for as if the caller had
-# named them (EYE-2, 2026-10-20). Measured: with the host machine at load 40 to 50 on 10 cores, the 11 s
+# named them (2026-10-20). Measured: with the host machine at load 40 to 50 on 10 cores, the 11 s
 # broad deadline dropped arxiv / dblp / core (or their gates ran out of time), cryptography title
 # queries came back with no paper, and the workers' working remedy was to NAME the paper sources,
 # which gets the named budget. So the broad sweep gives them that same budget, no new number:
@@ -177,7 +177,7 @@ def sealed_reason(adapter: "SourceAdapter") -> str:
     (a reason string; the adapter's own flag decides it, so restoring is one edit in that adapter).
     A sealed source is out of the broad fan-out, never suggested as excluded_relevant, answers a
     named call with an empty result plus the reason, reads health "sealed" (not a failure) and is
-    skipped by the health sweep. First user: xiaohongshu_cn (2026-10-07; deleted in SMALL-BATCH-13)."""
+    skipped by the health sweep. First user: xiaohongshu_cn (2026-10-07; deleted)."""
     try:
         v = getattr(adapter, "sealed", "")
     except Exception:  # noqa: BLE001 (a broken property must never break routing)
@@ -533,7 +533,7 @@ def _fetch_url_adapter_order(adapters: list["SourceAdapter"]) -> list["SourceAda
 
 def _adapter_declares_fetch_url_host(adapter: "SourceAdapter", url: str) -> bool:
     """Whether an adapter explicitly owns the URL host for generic-fallback exclusion. A declared value
-    with a path ("arxiv.org/pdf/") owns only the URLs on that host whose path starts with it (EYE-RSS-3:
+    with a path ("arxiv.org/pdf/") owns only the URLs on that host whose path starts with it (
     the arXiv adapter owns the full-text links, not every arxiv.org page)."""
     declared = getattr(adapter, "fetch_url_hosts", ()) or ()
     if isinstance(declared, str):
@@ -599,7 +599,7 @@ class AdapterOutcome:
                    deliberately NOT the live exception object).
       ``captures`` the drained ``diag`` evidence, exactly what ``afetch_one_with_diag`` drains.
       ``held``     None, or ``{why, detail, n}`` when one of OmniSeek's gates refused a request of this
-                   run or a host breaker was open (``_probe.summarize_held``; EYE-GATE-FIX D): the
+                   run or a host breaker was open (``_probe.summarize_held``): the
                    run may have returned fewer documents than the source has.
     """
     docs: list
@@ -805,7 +805,7 @@ async def _afetch_one_core(source, query, limit, fresh, deadline_s, cache_only, 
                                    deadline_s=deadline_s)
     if outcome.held and diagnostic is not None:
         # what OmniSeek's own gates held back rides along, so a drill can tell "not sent" from "nothing
-        # there", as the fan-out does in _meta.held (EYE-NOT-SENT-EMPTY, 2026-11-03)
+        # there", as the fan-out does in _meta.held (2026-11-03)
         diagnostic["held"] = outcome.held
     return outcome.docs, diagnostic
 
@@ -1556,8 +1556,8 @@ def build_search_plan(catalog: dict, policy: PolicySnapshot, query: str,
 
 
 def _note_held(held: dict, src: str, cap: list, docs: list) -> bool:
-    """Record ``src`` in ``_meta.held`` when a gate or an open host breaker refused any of its requests
-    (EYE-GATE-FIX C): ``{why: 时限不够 | 闸满 | 主机断路, detail, n, partial}`` (``_probe.held_reason``), ``partial`` when documents
+    """Record ``src`` in ``_meta.held`` when a gate or an open host breaker refused any of its requests:
+    ``{why: 时限不够 | 闸满 | 主机断路, detail, n, partial}`` (``_probe.held_reason``), ``partial`` when documents
     came back anyway. Returns True when the source came back EMPTY because of it: such a source is not
     also listed in ``_meta.empty`` (it was not asked, which is not "nothing found")."""
     summary = _probe.summarize_held(cap)
@@ -1630,7 +1630,7 @@ async def _dispatch_search(adapter: "SourceAdapter", query: str, limit: int) -> 
     return docs
 
 
-# WHEN A SOURCE LAST FETCHED FOR REAL (EYE-NONE-RESET, 2026-11-07). The watchdog's consecutive-fail
+# WHEN A SOURCE LAST FETCHED FOR REAL (2026-11-07). The watchdog's consecutive-fail
 # count moves only on a check that verified something, and about fifteen checks answer "not probed"
 # while the source's listing is still cached. The recall ingest refetches that listing on its own
 # schedule, so after a fix every check landed on a warm cache and a repaired source read as down for
@@ -3192,7 +3192,7 @@ async def afetch_url_with_reason(url: str) -> "tuple[Optional[Document], Optiona
         receipt["fetched_at"] = fetched_at
         try:
             # an address carrying a credential (a omniseek.redact name) is not written to disk: the cached
-            # document would keep it verbatim in its url, source_id and text (EYE-CACHE-SECRET, 2026-11-03)
+            # document would keep it verbatim in its url, source_id and text (2026-11-03)
             if _redact.redact(url) == url and await anyio.to_thread.run_sync(
                     _cache.set_url_read, url, doc, fetched_at, limiter=portal.IO_LANE):
                 logger.info("url cache: stored %s", url)
@@ -3253,7 +3253,7 @@ async def _afetch_url_live_with_reason(url: str) -> "tuple[Optional[Document], O
         return None, None
 
 
-# EYE-READ-LOG (2026-11-03): one JSON line per live generic web read in <logs>/web-reads.log: the
+# 2026-11-03: one JSON line per live generic web read in <logs>/web-reads.log: the
 # url (credential values masked by omniseek.redact, OmniSeek's one list), which path answered
 # (render:plain / render:jina / format:json), how many characters came back, how long it took, or
 # why nothing came back. No body. infra_jobs.rotate_logs caps it like every other eye log. Before
@@ -3327,7 +3327,7 @@ async def ahealth_check_outcome(adapter: SourceAdapter,
     ``unmeasured``) versus the adapter finishing and reporting that, by design, it asked the upstream
     nothing this time (the watchdog's ``unverified``). The check runs as its own task
     (``_arun_bounded``); past ``timeout`` the wait ends and the running check is abandoned
-    (ASYNC-CORE-DESIGN.md D2: "running work is abandoned at its execution budget"): the task finishes
+    ("running work is abandoned at its execution budget"): the task finishes
     on its own, and so does a blocking source's thread inside it (opened by
     ``SourceBase._athreaded_health``), whatever it awaits, so a source whose check hangs is UNABLE to
     stall its caller. No thread is opened here: a native check awaits on the loop, and only the base

@@ -7,7 +7,7 @@ so anything that CAN die with the organ lives HERE as a declarative JOB ROW inst
 launchd cron. The test for what stays OUTSIDE the organ is "must this still run when the organ is
 dead?" -- only the browsers that must not die with it (the CDP launchers) stay external. Restarting a dead or
 hung organ is launchd's KeepAlive (a process that exits), the MCP front door's that forwards calls to OmniSeek
-(a process alive but not answering: it kickstarts the organ when a forwarded call fails, SENTINEL-RETIRE), and
+(a process alive but not answering: it kickstarts the organ when a forwarded call fails), and
 this module's own wedge watchdog (a live process whose scheduler thread stopped). Everything else is a row
 registered here.
 
@@ -61,7 +61,7 @@ INITIAL_DELAY_S = 120     # keep deploy restart-storms from firing jobs mid-rest
 # bounds a job whose last_run cannot be saved to one rerun a minute instead of a busy loop.
 LOOP_MIN_SLEEP_S = 60
 JOB_BARK_COOLDOWN_S = 24 * 3600   # Bark at most once per 24h per job on repeated exceptions
-# The wedge watchdog (SENTINEL-RETIRE C; until 10-20 an external watchdog script did this from outside): a heartbeat
+# The wedge watchdog (until 10-20 an external watchdog script did this from outside): a heartbeat
 # file older than WEDGE_FACTOR ticks means the scheduler thread wedged while the process lives on. The line is the
 # old one, unchanged (900 s x 2 = 1800 s; the tick publishes the heartbeat before and after every job, and
 # _MAX_JOB_BUDGET_S stays under the line). The watchdog then logs one line and exits the process with WEDGED_EXIT;
@@ -843,7 +843,7 @@ def register_shipped_jobs() -> None:
                  description="每日转超大日志、删过期的缓存文件")
     # The NSERC cache prime (monthly) and the weekly reading list (weekly, with its briefing agent)
     # were withdrawn on 2026-10-20 with the NSERC source.
-    # The AI Incident Database snapshot (task EYE-AIID-SNAP, 2026-10-20). The upstream publishes one a
+    # The AI Incident Database snapshot (2026-10-20). The upstream publishes one a
     # week on Mondays; the last 60 came out between 10:00 and 12:xx UTC, so 21:30 local (the host machine runs
     # on Beijing time, = 13:30 UTC) is the first slot after all of them. Process-isolated: it holds a
     # ~120 MB download and a full bzip2 pass. Budget: measured ~30-100 s under load on 2026-10-20.

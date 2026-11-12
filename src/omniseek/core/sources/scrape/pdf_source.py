@@ -7,7 +7,7 @@ read the full paper and synthesize itself. This is the thin "read the PDF" primi
 INSTEAD of a heavy synthesis engine: minimal code, max agent.
 
 The PDF streams to a temporary file (http.download_to_file) under the DOCUMENT cap,
-http.DOC_MAX_BYTES, not the 30MB cap on an API answer held in memory (EYE-RSS-3, 2026-10-24: a 31MB
+http.DOC_MAX_BYTES, not the 30MB cap on an API answer held in memory (2026-10-24: a 31MB
 paper was refused). arXiv links are not read here: the arxiv source reads them from export.arxiv.org
 (sources/api/_arxiv_fulltext.py), under that host's full-text gate.
 """
@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 
 _MAX_CHARS = 250_000  # extracted-text cap for a pathologically long PDF — keep the payload sane
 
-# TEXT-LAYER QUALITY (SMALL-BATCH-4, 2026-11-09). A PDF's text layer can be garbage while the page
+# TEXT-LAYER QUALITY (2026-11-09). A PDF's text layer can be garbage while the page
 # reads fine: a custom-encoded font gives symbol soup (Kakade and Langford 2002, aoarl.pdf), a dvips
 # Type3 font loses its ligatures and spaces words apart (Hauskrecht 2000, arXiv 1106.0234: "a tion",
 # "b elief", "c" turned into a space). Handed back as text, a reader searched it, found nothing, and
@@ -55,7 +55,7 @@ _MAX_CHARS = 250_000  # extracted-text cap for a pathologically long PDF — kee
 #     language share lowest 1905.11946 0.201, then 2302.13971 0.235, 2006.11239 0.244, highest
 #     math/0303109 0.374, the Chinese 0.561 to 0.967; stray letters highest math/0512047 0.028, then
 #     0903.0340 0.024, 1406.2661 0.020, math/0307245 0.019, math/0602302 0.018, the Chinese at most
-#     0.002. Every reading is in the SMALL-BATCH-4 report.
+#     0.002. Every reading was taken on 2026-11-09.
 # Each threshold is the midpoint between the two groups on that reading: language share
 # (0.004 + 0.201) / 2 = 0.10 (aoarl.pdf falls under it); stray letters (0.028 + 0.168) / 2 = 0.10
 # (1106.0234, whose language share is normal, goes over it).
@@ -191,7 +191,7 @@ class PdfAdapter(SourceBase):
             return None
 
         # SSRF (review finding H3): this CLAIMING adapter fetches an agent-controlled URL (any /pdf/
-        # path). Since EYE-RSS-3 it goes through http.download_to_file, whose libcurl tier checks every
+        # path). Since 2026-10-24 it goes through http.download_to_file, whose libcurl tier checks every
         # redirect hop against _netguard before sending it (http._acurl_hops), the same per-hop check
         # docreader and the audio download use; it does not pin the resolved IP the way the shared
         # httpx client's AsyncSSRFGuardTransport does (the DNS-rebind residual of those lanes). Every hop
