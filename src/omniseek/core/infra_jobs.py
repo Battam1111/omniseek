@@ -1,4 +1,4 @@
-"""Transplanted infra JOBS (P9): the movable services that used to be standalone launchd crons,
+"""Transplanted infra JOBS: the movable services that used to be standalone launchd crons,
 now zero-arg job fns the in-process scheduler (omniseek.core.jobs) runs on their declared schedules.
 
 WHY THEY MOVED (the derived architecture): the test for what stays OUTSIDE the organ is "must this

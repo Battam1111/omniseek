@@ -1,6 +1,6 @@
 """Overseas industry AI-lab full-time research roles (RS / RE / MTS).
 
-Phase 4 P14 (2026-05-29). Covers one job category the other adapters lack:
+Phase 4 (2026-05-29). Covers one job category the other adapters lack:
 **full-time research scientist / research engineer / member-of-technical-staff
 roles at overseas industry AI labs** — distinct from `ai_residencies`
 (early-career programs), `academic_jobs` (faculty/postdoc), and the Chinese ATS
@@ -448,7 +448,7 @@ class OverseasAIJobsAdapter(SourceBase):
         return docs
 
     async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async replacement of the deleted sync ``search`` (11-04, S9; this is the only one now) (routes this source to the fetcher's native dispatch
+        """Native-async replacement of the deleted sync ``search`` (11-04, this is the only one now) (routes this source to the fetcher's native dispatch
         branch): the async ``_a_all_docs`` egress runs on the loop, then the SAME
         ``keyword_score_filter`` (pure CPU) ranks + truncates, byte-identical to ``search``."""
         return keyword_score_filter(await self._a_all_docs(), query)[:limit]

@@ -156,7 +156,7 @@ class MLCollectiveAdapter(SourceBase):
         return items
 
     async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async replacement of the deleted sync ``search`` (11-04, S9; this is the only one now) (mirrors it line-for-line): the disk cache round-trip goes
+        """Native-async replacement of the deleted sync ``search`` (11-04, this is the only one now) (mirrors it line-for-line): the disk cache round-trip goes
         OFF the loop, the 3 index fetches run CONCURRENTLY through the async ``_ascrape_index``, and the
         pure-CPU keyword filter / newest-first sort / doc build stay ON the loop UNCHANGED. SAME
         ``"search2"`` cache key as ``search`` so async and sync share the cache.

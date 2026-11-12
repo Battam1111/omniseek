@@ -101,7 +101,7 @@ class UkCompaniesHouseAdapter(BaseAPIAdapter):
         return "search", q
 
     async def _araw_fetch(self, query: str, limit: int) -> Optional[list]:
-        """Async replacement of the deleted sync ``_raw_fetch`` (11-04, S9; this is the only one now): BYTE-FAITHFUL mirror — same verb routing, same clamp, same
+        """Async replacement of the deleted sync ``_raw_fetch`` (11-04, this is the only one now): BYTE-FAITHFUL mirror — same verb routing, same clamp, same
         endpoints / params, same kind+CRN record tagging, same None/[] contract. ONLY the shared-http
         egress is mirrored (self._get -> await self._aget, i.e. http.get_json -> await http.aget_json);
         control flow is unchanged (exactly one keyed GET per branch, as in the sync path)."""

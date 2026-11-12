@@ -105,7 +105,7 @@ def _has_embedded_v4(ip: "ipaddress.IPv4Address | ipaddress.IPv6Address") -> boo
     private / metadata v4 (``::ffff:169.254.169.254``, ``64:ff9b::a9fe:a9fe``, ``2002:a9fe:a9fe::``)
     past a v6-only is_private check (Python reports is_private=False for them), and all are
     deprecated / rare transit mechanisms a real source is essentially never served over. This is the
-    DNS-rebind-via-v6 closure (red-team wall-probe H2)."""
+    DNS-rebind-via-v6 closure (found by a red-team wall probe)."""
     if not isinstance(ip, ipaddress.IPv6Address):
         return False
     if ip.ipv4_mapped is not None or ip.sixtofour is not None or ip.teredo is not None:

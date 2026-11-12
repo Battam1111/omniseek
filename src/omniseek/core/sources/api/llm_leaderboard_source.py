@@ -188,7 +188,7 @@ class LLMLeaderboardAdapter(SourceBase):
         return slim
 
     async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async replacement of the deleted sync ``search`` (11-04, S9; this is the only one now) (S4b): the fan-out awaits this DIRECTLY (no pool thread),
+        """Native-async replacement of the deleted sync ``search`` (11-04, this is the only one now): the fan-out awaits this DIRECTLY (no pool thread),
         so this source's dominant NETWORK wait costs a coroutine, not a held thread. Mirrors ``search``
         line-for-line: only the cached fetch swaps to the async ``_amodels`` (async egress + off-loop
         cache); the term filter / intelligence-index sort / ``_to_doc`` map below is PURE CPU and stays

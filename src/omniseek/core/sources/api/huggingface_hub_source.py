@@ -59,7 +59,7 @@ class HuggingFaceHubAdapter(BaseAPIAdapter):
     rank_locally = False  # original applied no keyword filter — keep downloads order verbatim
 
     async def _araw_fetch(self, query: str, limit: int) -> list:
-        """Async replacement of the deleted sync ``_raw_fetch`` (11-04, S9; this is the only one now): the bounded 3-listing fan-out, run CONCURRENTLY.
+        """Async replacement of the deleted sync ``_raw_fetch`` (11-04, this is the only one now): the bounded 3-listing fan-out, run CONCURRENTLY.
 
         Same per-category budget, same three categories in the same order, same URL / params /
         timeout, same None → warn+skip contract, same merge + downloads-desc stable sort, same

@@ -303,7 +303,7 @@ def read_via_fallback(url: str) -> Optional[Document]:
     # redirect hop is IP-pinned + re-validated (a user URL that 302s to 169.254.169.254 can no longer
     # be followed). safe_fetch already read + decoded + capped the body, so we take res["text"]
     # directly (no httpx.Response handling here). Keep the old 30MB untrusted-read cap (http.MAX_BYTES)
-    # so C2 changes ONLY the SSRF posture, not the body ceiling (safe_fetch's own default is 5MB).
+    # so this changes ONLY the SSRF posture, not the body ceiling (safe_fetch's own default is 5MB).
     # max_redirects=20 preserves the OLD http.get ceiling (httpx's pooled default was 20, safe_fetch's
     # own default is 5): each of the 20 hops is still IP-pinned + revalidated, so a longer pinned chain
     # is safe and we do not silently reject a legitimate 6-to-20-hop redirect a real page used to reach.

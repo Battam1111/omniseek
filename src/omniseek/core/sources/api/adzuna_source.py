@@ -73,7 +73,7 @@ class AdzunaAdapter(BaseScrapeAdapter):
         return _DEFAULT_COUNTRY, (query or "").strip()
 
     async def _araw_fetch(self, query: str, limit: int) -> Optional[Any]:
-        """Async replacement of the deleted sync ``_raw_fetch`` (11-04, S9; this is the only one now): byte-faithful mirror (same URL / params / timeout / None
+        """Async replacement of the deleted sync ``_raw_fetch`` (11-04, this is the only one now): byte-faithful mirror (same URL / params / timeout / None
         contract); only the shared-http egress swaps get_json -> await aget_json."""
         app_id, app_key = self._creds()
         if not app_id or not app_key:

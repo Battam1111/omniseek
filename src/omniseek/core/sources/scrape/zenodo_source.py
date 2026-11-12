@@ -52,7 +52,7 @@ class ZenodoAdapter(BaseScrapeAdapter):
     modes = ["STRUCTURE"]
 
     async def _araw_fetch(self, query: str, limit: int) -> Optional[Any]:
-        # Async replacement of the deleted sync ``_raw_fetch`` (11-04, S9; this is the only one now): byte-faithful mirror, only http.get_json → await http.aget_json.
+        # Async replacement of the deleted sync ``_raw_fetch`` (11-04, this is the only one now): byte-faithful mirror, only http.get_json → await http.aget_json.
         return await http.aget_json(
             API_URL,
             params={"q": query, "size": min(max(limit, _CANDIDATE_POOL), _ZENODO_MAX_SIZE)},

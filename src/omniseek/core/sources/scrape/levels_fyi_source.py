@@ -1,7 +1,7 @@
 """levels.fyi — tech total-compensation (keyless), two query shapes.
 
-Phase 4 P15 (2026-05-30): originally the no-login `/salaries.md` LLM endpoint.
-P41 REBUILD (2026-06-11): that endpoint died; switched to the company page
+Phase 4 (2026-05-30): originally the no-login `/salaries.md` LLM endpoint.
+REBUILD (2026-06-11): that endpoint died; switched to the company page
 `/companies/{slug}/salaries` and its Next.js `__NEXT_DATA__` JSON (per-job-family
 per-level breakdown + median/highest/lowest). That path still works for a COMPANY
 name (US/USD benchmark).
@@ -357,7 +357,7 @@ class LevelsFyiAdapter(SourceBase):
         )
 
     async def _arole_search(self, query: str, role: tuple, country: Optional[str]) -> list[Document]:
-        """Native-async replacement of the deleted sync ``_role_search`` (11-04, S9; this is the only one now): BYTE-FAITHFUL mirror, changing ONLY the two blocking
+        """Native-async replacement of the deleted sync ``_role_search`` (11-04, this is the only one now): BYTE-FAITHFUL mirror, changing ONLY the two blocking
         legs. The URL build, the status-differentiated diag.notes, and the pure-CPU parse
         (``_meta_description`` / ``_parse_comp_meta`` / ``_role_doc``) are identical, on the loop.
           - the disk cache read + write -> ``anyio.to_thread.run_sync`` (get_docs / set_docs do file IO);
@@ -399,7 +399,7 @@ class LevelsFyiAdapter(SourceBase):
         return docs
 
     async def _acompany_search(self, query: str) -> list[Document]:
-        """Native-async replacement of the deleted sync ``_company_search`` (11-04, S9; this is the only one now): BYTE-FAITHFUL mirror, changing ONLY the two blocking
+        """Native-async replacement of the deleted sync ``_company_search`` (11-04, this is the only one now): BYTE-FAITHFUL mirror, changing ONLY the two blocking
         legs. The slug resolve, the ``status_code == 404`` legible note THEN ``raise_for_status`` for other
         non-2xx (caught by the generic except -> its diag.note), and the pure-CPU ``_next_data_pageprops``
         / ``_build_doc`` are identical, on the loop.
@@ -450,7 +450,7 @@ class LevelsFyiAdapter(SourceBase):
         return _slug(q or "google")
 
     async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async replacement of the deleted sync ``search`` (11-04, S9; this is the only one now) (S4b) -> AsyncSearchCapable, so the omniseek_search fan-out awaits
+        """Native-async replacement of the deleted sync ``search`` (11-04, this is the only one now) -> AsyncSearchCapable, so the omniseek_search fan-out awaits
         this DIRECTLY instead of pushing the sync ``.search`` onto the shared thread pool; the one
         network wait costs a COROUTINE, not a held pool thread. Mirrors ``search`` line-for-line: the
         SAME empty guard + the SAME ``_role`` / ``_location`` routing (pure CPU, on the loop), dispatching

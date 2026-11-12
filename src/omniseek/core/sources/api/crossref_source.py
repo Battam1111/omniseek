@@ -66,7 +66,7 @@ class CrossrefAdapter(BaseAPIAdapter):
 
     # ------------------------------------------------------------- async hooks
     async def _araw_fetch(self, query: str, limit: int) -> list:
-        """Async replacement of the deleted sync ``_raw_fetch`` (11-04, S9; this is the only one now): BYTE-FAITHFUL mirror — same endpoint/params/headers/timeout and the
+        """Async replacement of the deleted sync ``_raw_fetch`` (11-04, this is the only one now): BYTE-FAITHFUL mirror — same endpoint/params/headers/timeout and the
         same ``message.items`` walk + []-on-failure contract; ONLY the egress swaps (RAW
         ``httpx.get(...).json()`` -> ``await http.aget_json``, which buys the shared async pool + SSRF
         guard + cache_only + the 30MB cap for free). ``http.aget_json`` returns None on any failure /

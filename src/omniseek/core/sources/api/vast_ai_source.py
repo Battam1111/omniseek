@@ -57,7 +57,7 @@ class VastAIAdapter(BaseScrapeAdapter):
                      "not broad-fan-out fodder")
 
     async def _araw_fetch(self, query: str, limit: int) -> Optional[Any]:
-        # Async replacement of the deleted sync ``_raw_fetch`` (11-04, S9; this is the only one now): byte-faithful mirror (same URL, same q filter, same
+        # Async replacement of the deleted sync ``_raw_fetch`` (11-04, this is the only one now): byte-faithful mirror (same URL, same q filter, same
         # timeout); only the shared-http egress swaps to its async twin.
         flt: dict[str, Any] = {"order": [["dph_total", "asc"]]}
         if query and query.strip():

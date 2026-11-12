@@ -60,7 +60,7 @@ _MODELS: Optional[list[dict]] = None
 
 
 async def _aload_models() -> list[dict]:
-    """Async replacement of the deleted sync ``_load_models`` (11-04, S9; this is the only one now) (S4b): BYTE-FAITHFUL mirror changing ONLY the egress.
+    """Async replacement of the deleted sync ``_load_models`` (11-04, this is the only one now): BYTE-FAITHFUL mirror changing ONLY the egress.
     The raw ``httpx.get(CSV).text`` -> the shared async leaf ``http.aget_text`` (shared pool + SSRF
     guard + cache_only + a 30MB cap; the CSV is ~2MB, well under). It keeps the sync client's UA +
     timeout + follow_redirects (client-level), returns the decoded ``.text`` byte-identically to

@@ -89,7 +89,7 @@ def _core_refuse(waited: float) -> GateBusy:
     return GateBusy(deadline_refusal("CORE gate", waited))
 
 
-# ── ASYNC EGRESS TWIN (S4) ───────────────────────────────────────────────────────────────────────
+# ── ASYNC EGRESS TWIN ───────────────────────────────────────────────────────────────────────
 # CORE's search path goes native async. A DEDICATED module-level AsyncClient, NOT http.aget*, because
 # CORE's full-text search response (a page of whole document bodies — the fullText differentiator this
 # adapter exists for) can exceed http.aget*'s 30MB stream cap, which aborts + returns None -> [] on
@@ -157,7 +157,7 @@ class CoreAdapter(BaseAPIAdapter):
         }
 
     async def _araw_fetch(self, query: str, limit: int) -> list:
-        """Async replacement of the deleted sync ``_raw_fetch`` (11-04, S9; this is the only one now) (S4): the keyed GET /v3/search/works/ goes native async so the
+        """Async replacement of the deleted sync ``_raw_fetch`` (11-04, this is the only one now): the keyed GET /v3/search/works/ goes native async so the
         live async omniseek_search awaits it directly instead of parking a pool thread on the CORE round-trip.
         BYTE-FAITHFUL mirror of ``_raw_fetch`` — same no-key gate + warn, same endpoint / params / auth
         headers / timeout / follow_redirects, same ``results`` extraction, same failure -> [] contract.

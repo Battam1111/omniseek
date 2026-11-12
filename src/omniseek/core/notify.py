@@ -1,6 +1,6 @@
 """The ONE fail-open notification primitive OmniSeek's own daemons share.
 
-Extracted from sensor.py's push helper (P6) so the sensor tap and the generalized job registry push
+Extracted from sensor.py's push helper so the sensor tap and the generalized job registry push
 through ONE implementation instead of duplicating the credential read. This module is the
 IN-PROCESS push, used only by code already running inside the writer process (the old external
 watchdog's own copy retired with it on 10-20).

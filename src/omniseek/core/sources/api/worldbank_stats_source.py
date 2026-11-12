@@ -159,7 +159,7 @@ class WorldBankStatsAdapter(BaseAPIAdapter):
     )
 
     async def _araw_fetch(self, query: str, limit: int) -> list:
-        """Async replacement of the deleted sync ``_raw_fetch`` (11-04, S9; this is the only one now): byte-faithful mirror (same query parse, same URL / params /
+        """Async replacement of the deleted sync ``_raw_fetch`` (11-04, this is the only one now): byte-faithful mirror (same query parse, same URL / params /
         timeout, same ``_rows`` decode, same None/[] contract). ONLY the shared-http egress is swapped
         for its async twin (``http.get_json`` -> ``await http.aget_json``)."""
         parsed = _parse_query(query)

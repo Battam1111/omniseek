@@ -99,7 +99,7 @@ class GovOpenDataAdapter(BaseScrapeAdapter):
 
     # ── native-async egress twins (byte-faithful mirror of the sync fan-out) ─
     async def _araw_fetch(self, query: str, limit: int) -> Optional[Any]:
-        """Async replacement of the deleted sync ``_raw_fetch`` (11-04, S9; this is the only one now): the multi-portal fan-out, CONCURRENT like the sync twin.
+        """Async replacement of the deleted sync ``_raw_fetch`` (11-04, this is the only one now): the multi-portal fan-out, CONCURRENT like the sync twin.
 
         The three portals are unrelated hosts (SG, HK, CA), so a serial loop made this source's
         latency their SUM. Worse, the sync twin above has always been concurrent (ThreadPoolExecutor,
@@ -139,7 +139,7 @@ class GovOpenDataAdapter(BaseScrapeAdapter):
         return pairs
 
     async def _afetch_portal(self, portal: dict, query: str, limit: int) -> Optional[list[dict]]:
-        """Async replacement of the deleted sync ``_fetch_portal`` (11-04, S9; this is the only one now): same URL / params / timeout, egress swapped to http.aget_json."""
+        """Async replacement of the deleted sync ``_fetch_portal`` (11-04, this is the only one now): same URL / params / timeout, egress swapped to http.aget_json."""
         kind = portal["kind"]
         if kind == "ckan":
             raw = await http.aget_json(
@@ -157,7 +157,7 @@ class GovOpenDataAdapter(BaseScrapeAdapter):
         return None
 
     async def _afetch_sg(self, portal: dict, query: str, limit: int) -> Optional[list[dict]]:
-        """Async replacement of the deleted sync ``_fetch_sg`` (11-04, S9; this is the only one now): same SG_MAX_PAGES bound / local AND-filter / stop conditions,
+        """Async replacement of the deleted sync ``_fetch_sg`` (11-04, this is the only one now): same SG_MAX_PAGES bound / local AND-filter / stop conditions,
         egress swapped to http.aget_json."""
         terms = [t for t in query.lower().split() if t]
         hits: list[dict] = []

@@ -53,7 +53,7 @@ def _f(rec: dict, *aliases: str) -> str:
 
 
 async def _aget_json_retry(url: str, params: dict, *, timeout: int = 20, tries: int = 2):
-    """Async replacement of the deleted sync ``_get_json_retry`` (11-04, S9; this is the only one now) (S4b): SAME bounded retry, the egress swaps
+    """Async replacement of the deleted sync ``_get_json_retry`` (11-04, this is the only one now): SAME bounded retry, the egress swaps
     ``http.get_json`` -> ``await http.aget_json``. Same None-on-failure contract (aget_json already
     returns None on any failure + honors cache_only + the 30MB cap). Stays ON the loop (epoll wait).
     A failure that is an answer (404 / 410 / 400 / 422, read from the failure record http noted;
@@ -70,7 +70,7 @@ async def _aget_json_retry(url: str, params: dict, *, timeout: int = 20, tries: 
 
 
 async def _aresolve_latest_resource() -> Optional[tuple[str, int]]:
-    """Async replacement of the deleted sync ``_resolve_latest_resource`` (11-04, S9; this is the only one now) (S4b): mirrors it LINE-FOR-LINE with the two blocking
+    """Async replacement of the deleted sync ``_resolve_latest_resource`` (11-04, this is the only one now): mirrors it LINE-FOR-LINE with the two blocking
     syscalls moved OFF the loop and the CKAN package_search egress swapped to its async twin.
       - the disk cache read/write -> ``await anyio.to_thread.run_sync`` (cache.get/set do file IO);
       - the package_search egress -> ``await _aget_json_retry`` (-> http.aget_json), ON the loop;
@@ -151,7 +151,7 @@ class OntarioSunshineAdapter(SourceBase):
     )
 
     async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async replacement of the deleted sync ``search`` (11-04, S9; this is the only one now) (S4b): mirrors it LINE-FOR-LINE with three changes only, so
+        """Native-async replacement of the deleted sync ``search`` (11-04, this is the only one now): mirrors it LINE-FOR-LINE with three changes only, so
         this standalone lookup adapter routes to the fetcher's native async dispatch branch.
           1. the disk CACHE read/write hop OFF the loop (``await anyio.to_thread.run_sync``);
           2. the two CKAN egresses swap to their async twins (``_aresolve_latest_resource`` for the

@@ -183,9 +183,9 @@ def _stage4_live(candidate: dict) -> dict:
         "parse_error": None,
         "family_dryrun": _family_dryrun(family, row),
     }
-    # P1 does NOT register the candidate live (no overlay loader). We can only DRY-RUN: report
+    # phase 1 does NOT register the candidate live (no overlay loader). We can only DRY-RUN: report
     # the exact config row the family loader would consume. A genuine live parse requires the
-    # row to be registered, which P1 deliberately does not do. So fetched_ok stays False here
+    # row to be registered, which phase 1 deliberately does not do. So fetched_ok stays False here
     # unless a probe already fetched the URL (probe_reached) -- which we surface as live_reached.
     probe = candidate.get("_probe_cache") or {}
     if probe.get("probe_reached"):
@@ -310,9 +310,9 @@ def build_packet_for(cand: dict) -> dict:
     family = (cand.get("proposed_family") or "other").lower()
     row = _proposed_config_row(cand)
     reversibility = {
-        "auto_appliable": False,  # ALWAYS False in P1 (no live apply path); see apply.py
-        "reason": ("P1 ships no live auto-apply: config families register once at import, so a "
-                   "staged row stages to the operator. (P1.5 overlay loader required to ever flip "
+        "auto_appliable": False,  # ALWAYS False in phase 1 (no live apply path); see apply.py
+        "reason": ("phase 1 ships no live auto-apply: config families register once at import, so a "
+                   "staged row stages to the operator. (phase 1.5 overlay loader required to ever flip "
                    "this true.)"),
         "proposed_config_row": row,
         "config_file": _apply._FAMILY_CONFIG_FILE.get(family),

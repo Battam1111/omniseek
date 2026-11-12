@@ -125,7 +125,7 @@ def _sema_for(url: str) -> threading.BoundedSemaphore:
 
 
 async def _ahttp_get(url: str, *, timeout: int = TIMEOUT, **kwargs) -> Optional[httpx.Response]:
-    """Async replacement of the deleted sync ``_http_get`` (11-04, async step seven; this is the only one now) (S4b): the async egress leaf for asearch's per-row fan-out.
+    """Async replacement of the deleted sync ``_http_get`` (11-04, async step seven; this is the only one now): the async egress leaf for asearch's per-row fan-out.
     Mirrors ``_http_get`` faithfully, moving ONLY the blocking waits off the loop so no thread is held:
 
       - the per-host in-flight cap -> the SAME ``_sema_for`` threading BoundedSemaphore, acquired by
@@ -314,7 +314,7 @@ def _row_common(row: dict, *, title: str, url: str, status: str, summary: str,
 
 
 # ---------------------------------------------------------------------------
-# Native-async fetcher twins (S4b) — one per row ``kind``, awaited by asearch's
+# Native-async fetcher twins — one per row ``kind``, awaited by asearch's
 # asyncio.gather fan-out. Each mirrors its sync twin above LINE-FOR-LINE, changing
 # ONLY the egress: ``_http_get(...)`` -> ``await _ahttp_get(...)``. The response
 # parse (json walk / BeautifulSoup) is pure CPU and stays ON the loop, byte-identical.
@@ -513,7 +513,7 @@ class AIResidenciesAdapter(SourceBase):
     )
 
     async def _afetch_all_positions(self) -> list[ResidencyPosition]:
-        """Native-async twin of ``_fetch_all_positions`` (S4b): the per-row fan-out becomes CONCURRENT
+        """Native-async twin of ``_fetch_all_positions``: the per-row fan-out becomes CONCURRENT
         coroutines on the one loop instead of ThreadPoolExecutor worker threads, and each row's raw-httpx
         egress goes native async (``_ahttp_get``). Mirrors ``_fetch_all_positions`` line-for-line,
         changing ONLY the blocking waits:
@@ -557,7 +557,7 @@ class AIResidenciesAdapter(SourceBase):
         return positions
 
     async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async replacement of the deleted sync ``search`` (11-04, S9; this is the only one now) (S4b): awaits the async ``_afetch_all_positions`` (concurrent
+        """Native-async replacement of the deleted sync ``search`` (11-04, this is the only one now): awaits the async ``_afetch_all_positions`` (concurrent
         per-row egress) then runs the SAME tier/status/deadline scoring + lexical match, all pure CPU on
         the loop. Byte-identical to ``search`` below the fetch: the shared _afetch_all_positions and the
         pure-CPU relevance.query_terms / field_scores + sort guarantee no drift between the two paths."""

@@ -76,7 +76,7 @@ class UKRIGtRAdapter(BaseScrapeAdapter):
                      "not broad-fan-out fodder")
 
     async def _araw_fetch(self, query: str, limit: int) -> Optional[Any]:
-        """Async replacement of the deleted sync ``_raw_fetch`` (11-04, S9; this is the only one now): byte-faithful mirror (same URL, headers, params, timeout);
+        """Async replacement of the deleted sync ``_raw_fetch`` (11-04, this is the only one now): byte-faithful mirror (same URL, headers, params, timeout);
         ONLY the shared-http egress swaps to its async twin (http.get_json -> await http.aget_json)."""
         size = max(_MIN_SIZE, min(int(limit), _MAX_SIZE))  # API rejects size < 10
         return await http.aget_json(

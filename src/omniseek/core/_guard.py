@@ -1,7 +1,7 @@
 """Shared backend load-guard: one concurrency cap + one rate pacer + one circuit breaker.
 
 Extracts the byte-identical guard machinery that ``_openalex``, ``_s2`` and ``_github`` each
-carried verbatim (the 2026-07-01 parsimony audit, P1): an in-flight cap (now ``FairPermits``), a
+carried verbatim (the 2026-07-01 parsimony audit): an in-flight cap (now ``FairPermits``), a
 min-interval request-start pacer under its own lock, and a consecutive-failure circuit breaker
 over a ``{fails, open_until, last_429, ...}`` state dict guarded by its own lock. Those three
 modules differed ONLY in constants (concurrency cap, pace interval) and in how they wired these
@@ -60,7 +60,7 @@ def _holder_label(holder) -> str:
     return getattr(holder, "get_name", lambda: None)() or repr(holder)
 
 
-# REQUESTS THAT WERE SENT (review N2, design decision of 2026-09-29). A hold's reservation is handed back
+# REQUESTS THAT WERE SENT (design decision of 2026-09-29). A hold's reservation is handed back
 # only when nothing was sent after it was made. Every hold registers a handle in the current context
 # while it runs; recording a response (upstreams.observe calls mark_sent) marks every handle
 # registered in that context as sent. So a failure after a response (a same-host hop that cannot
@@ -178,7 +178,7 @@ def holding(handles: Iterable):
             pass
 
 
-# ONE LINE AND LEASES FOR EVERY GATE (design decision of 2026-09-29 on review N1 and P1).
+# ONE LINE AND LEASES FOR EVERY GATE (design decision of 2026-09-29 on two review findings).
 class _Lease:
     """One permit handed out by a ``FairPermits``: who holds it (a holder credential, see ``Holder``) and
     when its lease ends (None: not set yet). ``active`` turns False when it is given back or reclaimed."""
@@ -208,14 +208,14 @@ def _resolve(fut) -> None:
 class FairPermits:
     """The permits of one gate: a counting semaphore with three things a threading semaphore lacks.
 
-    FIRST COME, FIRST SERVED (review N1). Every caller waits in ONE line, and a permit that comes free
+    FIRST COME, FIRST SERVED. Every caller waits in ONE line, and a permit that comes free
     goes straight to the first of them, woken by ``call_soon_threadsafe`` on its own loop (a process
     may run more than one loop: the service's and portal's own). A newcomer never takes a permit while
     anyone is in line, so a caller that sends one request after another can no longer keep a
     single-permit gate to itself. A coroutine cancelled after a permit was handed to it passes the
     permit on.
 
-    LEASES (review P1). The gate does not trust a holder to give a permit back. A permit taken with
+    LEASES. The gate does not trust a holder to give a permit back. A permit taken with
     ``atake`` carries a lease ending at ``expires_at``; a ``BackendGuard`` hold sets it (``renew``) to
     the caller's deadline plus the request's own timeout; when it runs out, the pool takes the permit
     back, logs it and counts it (``reclaimed``), and the late holder's ``give_back`` is then a no-op,
@@ -223,7 +223,7 @@ class FairPermits:
     anyone waits (a waiter wakes at the earliest expiry), so a stuck holder blocks a line no longer
     than its lease.
 
-    WHO HOLDS IT (review P2). Every permit names its holder, the credential handed to
+    WHO HOLDS IT. Every permit names its holder, the credential handed to
     ``atake`` (see ``Holder``), and ``held_by(holder)`` reads the live leases, so a record never
     outlives its permit, whichever task gives the permit back. ``_value`` is the number of free permits
     and ``_initial_value`` the cap, as on a threading semaphore. (The sync ``take`` and the
@@ -476,7 +476,7 @@ class RequestNotSent(Exception):
     """Thrown into a hold to say its request never left (see upstreams.AsyncHopGates.close(unsent=True))."""
 
 
-# REQUESTS THAT NEVER LEFT (review F8). A hold reserves its start slot, and a place in every window,
+# REQUESTS THAT NEVER LEFT. A hold reserves its start slot, and a place in every window,
 # before its body runs. When the body ends in one of these exceptions the request was not sent (a later
 # gate refused it, the connection was never made, it was cancelled while still waiting), so the
 # reservation is handed back instead of starving the requests that do go out. Other layers register
@@ -490,7 +490,7 @@ def register_unsent(*types) -> None:
     _UNSENT = tuple(dict.fromkeys(_UNSENT + tuple(types)))
 
 
-# ASYNC ADMISSION WITHOUT A WORKER THREAD (review F1 and F4, 2026-09-29). The async twins used to wait
+# ASYNC ADMISSION WITHOUT A WORKER THREAD (2026-09-29). The async twins used to wait
 # for a permit in anyio.to_thread.run_sync(sema.acquire, True, max_wait) under a shield. asyncio's own
 # task.cancel() (asyncio.run cancelling a detached straggler when an omniseek_gather child returns) is not
 # stopped by AnyIO's shield: the coroutine ended, the worker thread went on to take the permit, and
@@ -539,11 +539,11 @@ async def bounded_async_slot(
     release, cancellation-safe: the permit is taken inside this coroutine (a ``FairPermits`` gate in
     its line with a lease, any other gate by polling, ``_apoll_acquire``), so no cancellation can leave
     it taken, and no worker thread waits. A saturated gate fails fast at ``max_wait`` (or the caller's
-    deadline); a deadline already past refuses at once (review N4)."""
+    deadline); a deadline already past refuses at once."""
     end = wait_until(max_wait)
     left = end - time.monotonic()
     if left <= 0:
-        # Nothing tried: the caller's time is already up (not a saturated gate, review N4)
+        # Nothing tried: the caller's time is already up (not a saturated gate)
         logger.info("gate not tried: past the caller's budget (free=%s) [by=%s]",
                     getattr(gate, "_value", "?"), _initiator_var.get() or "?")
         raise on_busy(0.0)
@@ -700,7 +700,7 @@ class BackendGuard:
 
         # Rate pacer: reserve the next request-start slot under this lock, then sleep (outside it).
         # ``floor``: the latest start a Retry-After (defer) asked for; a refund never rolls the next
-        # start back below it (review N3).
+        # start back below it.
         # ``sent_at``: when the latest request under this gate was handed to the transport (``adepart``).
         self.pace_state: dict = {"next_at": 0.0, "floor": 0.0, "sent_at": None}
         self.pace_lock = threading.Lock()
@@ -766,9 +766,9 @@ class BackendGuard:
             self.pace_state["sent_at"] = at if last is None else max(last, at)
 
     def refund(self, res: "Reservation") -> None:
-        """Hand back a reservation whose request never left (review F8): its place in every window,
+        """Hand back a reservation whose request never left: its place in every window,
         and the start slot itself when nothing has been reserved after it, never earlier than the
-        latest Retry-After asked for (review N3)."""
+        latest Retry-After asked for."""
         with self.pace_lock:
             for log in self._win_logs:
                 try:
@@ -815,7 +815,7 @@ class BackendGuard:
     # ── who holds it + permit-first hold (the one entry point for a declared upstream) ─────────────
     def held(self, holder=None) -> bool:
         """True iff ``holder`` (default: the running task, see ``Holder``) holds a live permit of this
-        guard. The record lives in the gate (review P2): it ends with the permit, whichever task gives
+        guard. The record lives in the gate: it ends with the permit, whichever task gives
         the permit back (or when the lease runs out). A child task is not the holder."""
         try:
             return self.sema.held_by(_holder(holder))
@@ -854,16 +854,16 @@ class BackendGuard:
         previous one, and with ``max_inflight=1`` the upstream sees exactly one request at a time.
 
         ONE bound for both waits, the caller's deadline: a full gate is a line, and
-        the permit wait (in the gate's one line, review N1, on a future of the running loop: no worker
+        the permit wait (in the gate's one line, on a future of the running loop: no worker
         thread, no polling, and no cancellation can leave it taken) and the start wait (``await
         anyio.sleep``) together run until ``until`` (monotonic), by default the caller's deadline; with
         neither, the caller waits until served. No permit by then, a start slot past it, or a deadline
         already gone before the gate is tried raises ``on_refuse(seconds waited at this gate)``,
         reserving nothing. ``wait=False`` tries once: a permit free now with nobody in line and a start
-        slot open now, else the same error at once (review P6: a caller holding a place in another
+        slot open now, else the same error at once (a caller holding a place in another
         line must not wait here).
 
-        LEASE (review P1): the permit's lease ends ``request_s`` (the request's own timeout) after the
+        LEASE: the permit's lease ends ``request_s`` (the request's own timeout) after the
         end of the waiting bound (the caller's deadline; with none, the reserved start); then the gate
         takes the permit back even if this holder never returns.
 
@@ -873,7 +873,7 @@ class BackendGuard:
 
         Yields a ``HoldHandle`` (None when re-entered). A request that never left (an exception
         registered with ``register_unsent``, or a cancel before the body) hands its reservation back,
-        unless a response already arrived for it while it was held (review N2).
+        unless a response already arrived for it while it was held.
         Re-entrant per holder: inside an outer hold of the same guard by the same holder it is a no-op."""
         holder = _holder(holder)
         if self.held(holder):
@@ -928,7 +928,7 @@ class BackendGuard:
                         for (n, s), u in zip(self.windows, used)],
             "backlog_s": round(backlog, 2),
             "breaker_open": self.is_open(),
-            # permits the gate took back from holders whose lease ran out (review P1)
+            # permits the gate took back from holders whose lease ran out
             "leases_reclaimed": int(getattr(self.sema, "reclaimed", 0)),
         }
 
@@ -946,7 +946,7 @@ class BackendGuard:
         permit; if none comes in time, raise ``on_refuse(seconds waited)`` (the caller degrades to
         []/None). No cancellation (AnyIO's or asyncio's own) can leave the permit taken and no worker
         thread waits. The permit's lease ends ``request_s`` after the caller's deadline (with none,
-        after it is taken; see ``ahold``); a deadline already past refuses at once (review N4). Guarantees release. (The sync ``slot`` was
+        after it is taken; see ``ahold``); a deadline already past refuses at once. Guarantees release. (The sync ``slot`` was
         deleted 11-04, async migration step seven: its last caller, the sync OpenAlex egress, went
         with it.)"""
         t0 = time.monotonic()

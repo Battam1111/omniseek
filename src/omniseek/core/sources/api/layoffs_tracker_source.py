@@ -221,7 +221,7 @@ class LayoffsTrackerAdapter(SourceBase):
         return rows
 
     async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async replacement of the deleted sync ``search`` (11-04, S9; this is the only one now) -> AsyncSearchCapable (the ~2.8MB handshake fetch costs a
+        """Native-async replacement of the deleted sync ``search`` (11-04, this is the only one now) -> AsyncSearchCapable (the ~2.8MB handshake fetch costs a
         COROUTINE, not a held pool thread). Awaits _arows (handshake + off-loop cache), then the SAME
         pure-CPU term filter + date sort + _to_doc map -> byte-identical to search."""
         rows = await self._arows()

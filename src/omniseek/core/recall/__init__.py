@@ -27,7 +27,7 @@ if TYPE_CHECKING:   # only for the _ingest_step return annotation; the runtime i
 
 logger = logging.getLogger(__name__)
 
-# S2 graceful-shutdown stop Event for the Path-C ingest loop: set on ASGI-lifespan shutdown so a
+# Graceful-shutdown stop Event for the Path-C ingest loop: set on ASGI-lifespan shutdown so a
 # stop wakes it out of its (6h) interval wait immediately (see omniseek.core.lifecycle). Additive: the
 # loop behaves identically until this is set, which only happens on shutdown.
 _STOP = threading.Event()
@@ -344,7 +344,7 @@ def ingest_pass(interval_s: float, now: "float | None" = None) -> tuple[int, int
     next_due = interval_s
     for src in ingest_list():
         if _STOP.is_set():
-            break   # S2 (F1): stop PROMPTLY mid-sweep so a shutdown drains no late enqueue
+            break   # stop PROMPTLY mid-sweep so a shutdown drains no late enqueue
                     # into the writer queue, and the sweep ends within the drain budget
                     # instead of running a full (6h) enumeration out.
         last = _last_swept(src)
@@ -371,7 +371,7 @@ def ingest_loop(interval_s: float = 21600.0) -> None:
     fetch holds it, so a partial sweep never falsely rolls off still-live docs. See ``_ingest_step``
     for the per-source gate. Mirrors prewarm.warm_loop.
 
-    S2: registers itself so a graceful shutdown can drain it, and waits on _STOP instead of sleeping
+    Registers itself so a graceful shutdown can drain it, and waits on _STOP instead of sleeping
     so a stop wakes it out of the interval immediately. Purely additive: identical until _STOP is
     set (only on shutdown)."""
     from omniseek.core import lifecycle

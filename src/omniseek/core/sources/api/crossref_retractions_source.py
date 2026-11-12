@@ -52,7 +52,7 @@ class CrossrefRetractionsAdapter(BaseAPIAdapter):
     modes = ["STRUCTURE", "MONITOR"]
 
     async def _araw_fetch(self, query: str, limit: int) -> list:
-        """Async replacement of the deleted sync ``_raw_fetch`` (11-04, S9; this is the only one now): BYTE-FAITHFUL mirror — same URL/params/headers, same isinstance
+        """Async replacement of the deleted sync ``_raw_fetch`` (11-04, this is the only one now): BYTE-FAITHFUL mirror — same URL/params/headers, same isinstance
         guard + None/[] contract; ONLY the shared-http egress is swapped (http.get_json -> await
         http.aget_json). Single get_json call, so nothing else changes."""
         params = {

@@ -92,7 +92,7 @@ def _faculty_rows(text: str) -> list[dict]:
 
 
 async def _aload_faculty() -> list[dict]:
-    """Native-async replacement of the deleted sync ``_load_faculty`` (11-04, S9; this is the only one now) (a PURE ADDITION): shares the SAME process-local
+    """Native-async replacement of the deleted sync ``_load_faculty`` (11-04, this is the only one now) (a PURE ADDITION): shares the SAME process-local
     ``_FACULTY`` cache (loaded once per process; last-writer-wins on a cold-start race, exactly like the
     lock-free sync twin), the ONLY change being the lone raw-httpx CSV GET -> ``await http.aget_text``
     (the shared pool + SSRF guard + cache_only + a 30MB cap for free; the ~4MB roster sits well under the
@@ -127,7 +127,7 @@ class CSRankingsAdapter(SourceBase):
     )
 
     async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async replacement of the deleted sync ``search`` (11-04, S9; this is the only one now) (a PURE ADDITION): mirrors it line-for-line, the ONLY change
+        """Native-async replacement of the deleted sync ``search`` (11-04, this is the only one now) (a PURE ADDITION): mirrors it line-for-line, the ONLY change
         being the roster egress (``_load_faculty`` -> ``await _aload_faculty``, whose lone raw-httpx CSV
         GET became ``await http.aget_text``). CSRankings keeps its roster in a process-local ``_FACULTY``
         global shared by both paths, NOT a disk cache, so there is no cache round-trip to push off the

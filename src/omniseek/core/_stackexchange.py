@@ -279,7 +279,7 @@ async def afetch_question_document(url: str, source: str, site: str, site_host: 
     return question_to_document(items[0], source, site_host)
 
 
-# ── async egress twins (S4d: the 6 SE sources go NATIVE async) ────────────────
+# ── async egress twins (the 6 SE sources go NATIVE async) ────────────────
 # Pure ADDITIONS mirroring the (since deleted) sync _se_get / search / fetch_answer_documents / build_documents. They REUSE
 # every existing pure-CPU mapper (question_to_document / _answer_to_document / _body_md / _ts) and the
 # SHARED guard (_se_guard: breaker + in-flight cap + start windows; _SE_KEY / TIMEOUT). The
@@ -326,7 +326,7 @@ async def _ase_get(url, params, timeout=TIMEOUT):
 
 
 async def asearch(query: str, limit: int, site: str) -> Optional[dict]:
-    """Async replacement of the deleted sync `search` (11-04, S9; this is the only one now) (the /search/advanced GET). Byte-identical params + the SAME no-items
+    """Async replacement of the deleted sync `search` (11-04, this is the only one now) (the /search/advanced GET). Byte-identical params + the SAME no-items
     diag.note. Returns parsed JSON or None (contract)."""
     params = {
         "order": "desc",
@@ -350,7 +350,7 @@ async def asearch(query: str, limit: int, site: str) -> Optional[dict]:
 
 async def afetch_answer_documents(question_item: dict, source: str, site: str,
                                   site_host: str) -> list[Document]:
-    """Async replacement of the deleted sync `fetch_answer_documents` (11-04, S9; this is the only one now): SAME keyless /questions/{id}/answers GET via `_ase_get`,
+    """Async replacement of the deleted sync `fetch_answer_documents` (11-04, this is the only one now): SAME keyless /questions/{id}/answers GET via `_ase_get`,
     SAME ANSWERS_PER_QUESTION cap, SAME `_answer_to_document` map (pure CPU, on loop). [] on failure."""
     question_id = question_item.get("question_id")
     if not question_id:
@@ -379,7 +379,7 @@ async def afetch_answer_documents(question_item: dict, source: str, site: str,
 
 async def abuild_documents(raw: dict, limit: int, source: str, site: str,
                            site_host: str) -> list[Document]:
-    """Async replacement of the deleted sync `build_documents` (11-04, S9; this is the only one now) (R1: the answer layer egresses). For each of the first `limit`
+    """Async replacement of the deleted sync `build_documents` (11-04, this is the only one now) (the answer layer egresses). For each of the first `limit`
     questions: build the question doc (`question_to_document`, pure CPU on loop) then AWAIT its answer
     docs (`afetch_answer_documents`). Keep the SAME doc ORDER as sync (q0, *a0, q1, *a1, ...) -> await
     answers SEQUENTIALLY per question (byte-identical order; no asyncio.gather -- ordering-parity over

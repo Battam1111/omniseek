@@ -1,6 +1,6 @@
 """RSS-bundle adapters — 24 pure feed-list sources, one data table.
 
-P16 refactor (2026-05-30). 24 adapters whose ONLY unique content was
+phase 16 refactor (2026-05-30). 24 adapters whose ONLY unique content was
 (name, description, feeds, cache_ttl, url_pattern) — each a ~50-line file with a
 class body + a register_adapter() call that were pure boilerplate — are now rows
 in ``rss_bundles.json``, registered by the single loop below. Adding an

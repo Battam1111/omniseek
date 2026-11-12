@@ -443,7 +443,7 @@ async def aget_json(path: str, params: Optional[dict] = None, timeout: float = T
                 sent = True
                 resp = await _aget_client().get(f"{BASE}{path}", params=p, timeout=timeout)
         except BaseException:
-            if not sent:  # refused or cancelled before sending: hand the slot back (review F8)
+            if not sent:  # refused or cancelled before sending: hand the slot back
                 _guard.refund(res)
             raise
         _note_remaining(lane_name, resp)

@@ -90,7 +90,7 @@ class SSHRCAwardsAdapter(BulkFundingBase):
                       "keywords": keywords, "file_id": cle},
         )
 
-    # ── NATIVE ASYNC TWIN (S4b) ──────────────────────────────────────────────
+    # ── NATIVE ASYNC TWIN ──────────────────────────────────────────────
     # A PURE ADDITION mirroring search / _subset_docs (BulkFundingBase) + _build_subset_docs /
     # _resolve_csv_url line-for-line, changing ONLY the egress + the disk-cache round-trip to be
     # non-blocking; every parse / map / filter is byte-identical and stays ON the loop. Adding asearch
@@ -98,7 +98,7 @@ class SSHRCAwardsAdapter(BulkFundingBase):
     # the dominant network wait) instead of pushing the sync .search onto the shared thread pool. The
     # sync search() / _subset_docs (base) are untouched and stay the legacy-runner path.
     async def _aresolve_csv_url(self) -> str:
-        """Async replacement of the deleted sync ``_resolve_csv_url`` (11-04, S9; this is the only one now): the CKAN package_show GET goes async (http.aget_json); the
+        """Async replacement of the deleted sync ``_resolve_csv_url`` (11-04, this is the only one now): the CKAN package_show GET goes async (http.aget_json); the
         resource pick (filter / sort / fallback) is pure CPU, byte-identical, on the loop."""
         data = await http.aget_json(_PKG_SHOW)
         if isinstance(data, dict):
@@ -111,7 +111,7 @@ class SSHRCAwardsAdapter(BulkFundingBase):
         return _FALLBACK_CSV
 
     async def _abuild_subset_docs(self) -> list[Document]:
-        """Async replacement of the deleted sync ``_build_subset_docs`` (11-04, S9; this is the only one now) The RAW httpx.get -> http.aget (the shared async leaf): the
+        """Async replacement of the deleted sync ``_build_subset_docs`` (11-04, this is the only one now) The RAW httpx.get -> http.aget (the shared async leaf): the
         FY2024 CSV is ~6.9MB, well under http's 30MB cap, so routing through it gains the pooled client +
         SSRF guard + cache_only for free; http.aget already logs + diag.notes a network / non-2xx failure
         (label "http.get"), so a None here is the same failure -> [] contract. The decode is kept EXACT as

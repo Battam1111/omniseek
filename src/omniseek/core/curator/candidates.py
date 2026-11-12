@@ -39,13 +39,13 @@ _builtin_list = list
 STATE_DIR = where.state() / "curator"
 CANDIDATES_PATH = STATE_DIR / "candidates.json"
 SEEN_HOSTS_PATH = STATE_DIR / "seen_hosts.json"
-# P4 anti-rediscovery: the canonical-host TERMINAL ledger. A host that ever reached a terminal
+# phase 4 anti-rediscovery: the canonical-host TERMINAL ledger. A host that ever reached a terminal
 # negative state (rejected / redline_blocked / parked_p2 / probe_dead) is recorded here by its
 # CANONICAL host (Attack-2), so the monthly discovery loop never re-surfaces it under a name/URL
 # variant (make_id is unstable across venue-name / www. / scheme / trailing-slash drift).
 TRIED_HOSTS_PATH = STATE_DIR / "tried_hosts.json"
 
-# One module-level lock so a future loop thread (P4) + an interactive MCP call can never
+# One module-level lock so a future loop thread + an interactive MCP call can never
 # interleave a lost update. All mutations go through _save_all() under this lock.
 _LOCK = threading.Lock()
 
@@ -60,11 +60,11 @@ STATES = frozenset({
 })
 
 # Terminal states: no FORWARD recovery edge (rejected/redline_blocked/parked_p2/probe_dead keep their
-# rationale so the loop never re-surfaces them; applied is a P1.5 terminal, unused in P1). parked_p2
-# is terminal for ANTI-REDISCOVERY (its host joins tried_hosts) yet has ONE forward edge, the P2
+# rationale so the loop never re-surfaces them; applied is a terminal, unused in phase 1). parked_p2
+# is terminal for ANTI-REDISCOVERY (its host joins tried_hosts) yet has ONE forward edge, the phase 2
 # wall-aware revival (parked_p2 -> awaiting_verdict) that re-judges the existing row after a jailed
 # render; the others keep only the universal "-> error" escape.
-# probe_dead (P4): a candidate whose probe failed K consecutive times (dead host / persistent
+# probe_dead: a candidate whose probe failed K consecutive times (dead host / persistent
 # SSRF block / always-timeout). Distinct from rejected (no agent judged it) and from an error
 # zombie re-probed forever; its canonical host joins tried_hosts.json.
 TERMINAL_STATES = frozenset({"rejected", "redline_blocked", "parked_p2", "probe_dead"})
@@ -73,8 +73,8 @@ TERMINAL_STATES = frozenset({"rejected", "redline_blocked", "parked_p2", "probe_
 #   new -> probed | redline_blocked | parked_p2 | error
 #   probed -> awaiting_verdict | error
 #   awaiting_verdict -> admitted | watching | rejected | error
-#   admitted -> owner_review        (P1: an admit ALWAYS stages to the operator; no live apply)
-#   watching -> probed                (re-probe on cadence: P4)
+#   admitted -> owner_review        (an admit ALWAYS stages to the operator; no live apply)
+#   watching -> probed                (re-probe on cadence: phase 4)
 #   parked_p2 -> awaiting_verdict | rejected   (revive on a render, or close it unrendered)
 #   error -> probed | awaiting_verdict | redline_blocked | parked_p2
 #                                     (a re-probe lands where a fresh probe lands; a transient
@@ -101,7 +101,7 @@ ALLOWED_TRANSITIONS = frozenset({
     ("admitted", "error"),
     ("watching", "probed"),
     ("watching", "error"),
-    # P4 (Attack-4): a watching candidate past its TTL / re-probe budget routes to rejected
+    # (Attack-4): a watching candidate past its TTL / re-probe budget routes to rejected
     # ("watch-expired"), so the recurring re-probe set cannot grow unbounded.
     ("watching", "rejected"),
     ("owner_review", "error"),
@@ -109,7 +109,7 @@ ALLOWED_TRANSITIONS = frozenset({
     # so the frozen set is total.
     ("redline_blocked", "error"),
     ("parked_p2", "error"),
-    # P2 wall-aware probe: a parked_p2 candidate (structurally invisible to the plain-HTTP probe)
+    # phase 2 wall-aware probe: a parked_p2 candidate (structurally invisible to the plain-HTTP probe)
     # is REVIVED to awaiting_verdict once the jailed-browser render (mode_probe walled=True) surfaces
     # its real content. parked_p2 stays the anti-rediscovery marker (its canonical host joins
     # tried_hosts so discovery never re-ADDS it); this edge revives the EXISTING row, not a re-find.
@@ -130,7 +130,7 @@ ALLOWED_TRANSITIONS = frozenset({
     ("error", "awaiting_verdict"),
     ("error", "redline_blocked"),
     ("error", "parked_p2"),
-    # P4 probe_dead (Attack-4): after K consecutive probe failures a candidate dies to the
+    # phase 4 probe_dead (Attack-4): after K consecutive probe failures a candidate dies to the
     # terminal probe_dead state (NOT rejected: no agent judged it). Reachable from error (the
     # K-th retry) and directly from new/probed (the K-th attempt was made in that state). Like the
     # other terminals it keeps the universal "-> error" escape hatch (a recorded thrown op), but no
@@ -211,7 +211,7 @@ def add(candidate: dict) -> str:
     fix). Returns the row id. A resubmit of the same (name, urls) refreshes the submitted
     fields but PRESERVES any existing state/evidence/verdict/history (idempotent).
 
-    A ``draft`` (foundry-grade, P10) is an optional WORKING artifact the submitter built
+    A ``draft`` (foundry-grade) is an optional WORKING artifact the submitter built
     ({"row": <sources.json-shape dict>, "fixture": {"raw", "expect"}, "probe_summary": str}),
     stored verbatim as a submitted field (additive; absent = today's behavior). The packet
     surfaces it for the judge and stage_commit prefers its row as the ready-to-paste block."""
@@ -347,7 +347,7 @@ def record_verdict(cid: str, verdict: dict, state: str, note: str = "") -> dict:
 
 
 def record_applied(cid: str, applied: dict, note: str = "") -> dict:
-    """P1.5 ONLY: record that a config row was written live. In P1 nothing calls this with a
+    """ONLY: record that a config row was written live. In phase 1 nothing calls this with a
     real live write: admits stage to owner_review and ``applied`` stays null."""
     with _LOCK:
         rows = _load_all()
@@ -392,7 +392,7 @@ def host_seen(host: str) -> bool:
         return False
 
 
-# ── canonical host + the terminal-host ledger (P4 anti-rediscovery, Attack-2) ─────
+# ── canonical host + the terminal-host ledger (phase 4 anti-rediscovery, Attack-2) ─────
 # Tracking query-param prefixes stripped during canonicalization (a re-emitted URL must collapse
 # to the same canonical host regardless of campaign/referrer noise; we only key on the HOST, but
 # canonicalize defensively so a future URL-level key stays stable).

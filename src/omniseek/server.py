@@ -59,7 +59,7 @@ _apply_log_level_env()
 # pure health noise, no gain; x_search (search-engine X) covers the use case. Drop the entry
 # to un-park when a reliable X path exists.
 # (levels_fyi un-parked 2026-06-11 same day: rebuilt to parse the live company page's
-# __NEXT_DATA__ instead of the dead /salaries.md endpoint — see levels_fyi_source.py P41.)
+# __NEXT_DATA__ instead of the dead /salaries.md endpoint — see levels_fyi_source.py.)
 _SKIP_SOURCES: set[str] = {"twitter_x_source"}
 
 
@@ -96,7 +96,7 @@ load_sources = _safe_import_sources
 # The upstream declarations first (design decision 4, 2026-09-29): OmniSeek does not run without them. An
 # unreadable upstreams.json raises upstreams.DeclarationUnreadable HERE, naming the file and the reason,
 # so the server refuses to start, instead of every source that builds its gate at import quietly
-# failing to load and the shared http client running with no gate at all (review F10).
+# failing to load and the shared http client running with no gate at all.
 from omniseek.core import upstreams as _upstreams  # noqa: E402
 _upstreams.declarations()
 
@@ -237,7 +237,7 @@ except Exception:  # noqa: BLE001 - an identity string is never worth failing a 
     log.debug("could not set the advertised MCP server version; the SDK default stands")
 
 
-# --- L1: run each sync tool body OFF the single event-loop thread -------------------------
+# --- Run each sync tool body OFF the single event-loop thread -------------------------
 # mcp 1.27 calls a sync @mcp.tool body DIRECTLY on the asyncio event-loop thread (verified on
 # the deployed stack: func_metadata does `return fn(**kw)` with no to_thread; serve_http runs ONE
 # uvicorn worker). So one tool that blocks the loop — a search_many wait() (up to the 16s broad
@@ -251,11 +251,11 @@ except Exception:  # noqa: BLE001 - an identity string is never worth failing a 
 # _is_async_callable sees the async wrapper and awaits it; anyio 4.13 to_thread COPIES the
 # context, so cache._fresh_var (fresh=True) still propagates into the worker thread; CDP's
 # cdp_call spawns its own fresh thread inside the body, unaffected. The blocking .result()
-# that L2 will add then lands on a worker thread, not the loop. Reversible: delete @_threaded.
+# that will add then lands on a worker thread, not the loop. Reversible: delete @_threaded.
 # The body waits (on the network, the portal, a CDP page), so it runs on the IO lane
 # (portal.IO_LANE, 256 tokens). A ceiling, not a target: real concurrency
 # is just the number of in-flight tool calls.
-# Since async step seven (2026-11-04) five bodies keep it, by design (S9 END
+# Since async step seven (2026-11-04) five bodies keep it, by design (the async design's end
 # STATE): omniseek_transcribe (a subprocess download + local speech inference) and omniseek_curator_view,
 # omniseek_graph, omniseek_ruling, omniseek_statement (small JSON / SQLite file reads and writes only). Every other
 # tool body is `async def` and awaits the async core directly.
@@ -444,7 +444,7 @@ async def _eye_search_drill(source, query, limit, full, debug, fresh, cache_only
     The fetch goes through the same capability dispatch as the fan-out (afetch_one_with_diag: a native
     asearch on the loop, a legacy search on a worker thread under the legacy limiter); a set wait_s
     bounds it (past it: [] + a timed-out diagnostic, the fetch finishes detached), wait_s=None keeps the
-    90 s single-source backstop. The CancelledError re-raise (D11) stays."""
+    90 s single-source backstop. The CancelledError re-raise stays."""
     if not fetcher.is_enabled_by_profile(source):
         out = {"source": source, "query": query, "count": 0, "documents": [],
                "_meta": {"disabled": (
@@ -470,7 +470,7 @@ async def _eye_search_drill(source, query, limit, full, debug, fresh, cache_only
                 source, query, limit, as_of=as_of, fresh=fresh, cache_only=cache_only,
                 **({"filters": filters} if filters else {}), **_fetch_kw)
     except BaseException as exc:  # noqa: BLE001 (a hard adapter error still surfaces, now WITH evidence)
-        if isinstance(exc, asyncio.CancelledError): raise  # D11: cancellation is not an adapter error
+        if isinstance(exc, asyncio.CancelledError): raise  # cancellation is not an adapter error
         diagnostic = getattr(exc, "_eye_diagnostic", None)
         if diagnostic is None:
             raise  # no diagnostic stashed (e.g. unknown-source ValueError) → propagate unchanged
@@ -1213,10 +1213,10 @@ async def omniseek_view(target: str, kind: str = "auto", sections: str = "", nam
 
 
 # -----------------------------------------------------------------------------
-# Curator P1: source-admission tools. Thin wrappers split along THE RAZOR: OmniSeek
+# Curator phase 1: source-admission tools. Thin wrappers split along THE RAZOR: OmniSeek
 # code only fetches/probes/measures/persists (MECHANICAL); the admit/watch/reject VERDICT is
 # the spawned AGENT writing omniseek_curator_decide after reading the neutral evidence packet +
-# running the probe-derived web-search baseline. P4 added the one-tap live-apply lane (below):
+# running the probe-derived web-search baseline. phase 4 added the one-tap live-apply lane (below):
 # a reversible overlay register; the durable in-tree commit stays the operator's hand. probe/apply
 # work runs bounded (_abounded) per OmniSeek's hung-source discipline; every other blocking step (the
 # candidate store, packet building, registry writes) runs on the IO lane (_io), so omniseek_curator_act is
@@ -1308,7 +1308,7 @@ async def _acurator_probe(candidate_id: str) -> dict:
     # Attach the probe output to the candidate (in-memory) so build_packet's stages can read it.
     cand["_probe_cache"] = probe_out
 
-    # UNWALL structurally-invisible (text_len ~ 0) -> parked_p2 (a deferred P2 wall-aware probe),
+    # UNWALL structurally-invisible (text_len ~ 0) -> parked_p2 (a deferred phase 2 wall-aware probe),
     # never a verdict, never the operator.
     next_state = "awaiting_verdict"
     if (probe_out.get("mode") == "UNWALL"
@@ -1324,7 +1324,7 @@ async def _acurator_probe(candidate_id: str) -> dict:
 
 
 async def _acurator_wall_probe(candidate_id: str) -> dict:
-    """P2 wall-aware re-probe: RENDER a candidate in the network-isolated jail (a colima container
+    """phase 2 wall-aware re-probe: RENDER a candidate in the network-isolated jail (a colima container
     whose ONLY egress is the SSRF-pin proxy) via mode_probe(walled=True), so a source whose real
     content the anonymous plain-HTTP probe MISSED (client-rendered SPA / anti-bot / soft-login-wall)
     is measured on its REAL rendered content.
@@ -1339,7 +1339,7 @@ async def _acurator_wall_probe(candidate_id: str) -> dict:
     parked_p2 is REVIVED; an awaiting_verdict is RE-ENRICHED in place); if it surfaces nothing (jail
     down / a hard-login-wall the render still cannot pass / genuinely empty) it stays in its current
     state with the reason recorded. The rendered facts are DERIVED FROM ATTACKER BYTES
-    (probe_via='wall_probe_jail'): the code never admits, it only surfaces for the agent (M7)."""
+    (probe_via='wall_probe_jail'): the code never admits, it only surfaces for the agent."""
     from omniseek.core.curator import candidates, evidence, probe
 
     cand = await _io(candidates.get, candidate_id)
@@ -1363,7 +1363,7 @@ async def _acurator_wall_probe(candidate_id: str) -> dict:
     # it from render_walled.ok, which is True only for non-empty rendered HTML), NOT on text_len_plain
     # -- that is an UNWALL-only diff field, so keying on it wrongly left every STRUCTURE / RECALL / ...
     # candidate "still_walled" even after a good render. A rendered login-wall still counts as surfaced
-    # (a non-empty page) -> it revives and the AGENT judges the login page (M7).
+    # (a non-empty page) -> it revives and the AGENT judges the login page.
     rendered_bytes = (probe_out.get("probe_fetch_meta", {}) or {}).get("bytes", 0) or 0
     surfaced = bool(probe_out.get("probe_reached"))
     if not surfaced:
@@ -1377,7 +1377,7 @@ async def _acurator_wall_probe(candidate_id: str) -> dict:
                 "wall_probe": "still_walled", "reason": reason}
 
     # Surfaced: build the packet on the RENDERED facts and land in awaiting_verdict for the agent to
-    # judge (parked_p2 -> awaiting_verdict revives via the P2 edge; awaiting_verdict -> awaiting_verdict
+    # judge (parked_p2 -> awaiting_verdict revives via the edge; awaiting_verdict -> awaiting_verdict
     # re-enriches in place).
     packet = await _io(evidence.build_packet_for, cand)
     digest = evidence.safety_digest(packet)
@@ -1422,7 +1422,7 @@ def _curator_decide(candidate_id: str, decision: str, reasons: str,
     its evidence is incomplete (a stage did not reach), baseline_ref is empty (you MUST fold in
     the web-search results for web_baseline_request.suggested_queries: it is a precondition of
     an admit, not a suggestion), or no packet was built. reject/watch on incomplete evidence is
-    allowed (rejecting unreachable junk is safe). In P1 an admit ALWAYS sets owner_review (no
+    allowed (rejecting unreachable junk is safe). In phase 1 an admit ALWAYS sets owner_review (no
     live apply); watch -> watching; reject -> rejected.
 
     Returns: {"candidate_id", "state", "verdict"}.
@@ -1449,11 +1449,11 @@ def _curator_decide(candidate_id: str, decision: str, reasons: str,
         if not baseline_ref:
             raise ValueError("cannot admit: baseline_ref is empty: run WebSearch for "
                              "web_baseline_request.suggested_queries and fold the results in")
-        # P4 8b (Attack-2): admitting a FIRST-SEEN host in a family whose recurring post-admission
+        # Attack-2: admitting a FIRST-SEEN host in a family whose recurring post-admission
         # fetch bypasses safe_fetch (org_watch / page_watch / news_scraper / search_index) forces
         # the agent to NAME the danger: baseline_ref.recurring_fetch_acknowledged must be true. This
         # keeps the verdict with the agent while making the dangerous subclass impossible to admit
-        # by reflex. (_auto_apply_ok is the separate P4 live-apply gate; this guards the staged-admit path itself.)
+        # by reflex. (_auto_apply_ok is the separate phase 4 live-apply gate; this guards the staged-admit path itself.)
         from omniseek.core.curator import apply as _apply_gate
         _family = (cand.get("proposed_family") or "other").lower()
         _first_seen = bool((packet.get("stage0_safety") or {}).get("first_seen_host"))
@@ -1472,7 +1472,7 @@ def _curator_decide(candidate_id: str, decision: str, reasons: str,
         # admit first transits awaiting_verdict -> admitted, then admitted -> owner_review.
         candidates.record_verdict(candidate_id, verdict, "admitted", note="agent admit")
         row = candidates.set_state(candidate_id, "owner_review",
-                                   note="P1: admit stages to the operator (no live apply)", by="agent")
+                                   note="phase 1: admit stages to the operator (no live apply)", by="agent")
     else:
         row = candidates.record_verdict(candidate_id, verdict, target_state, note=f"agent {decision}")
     return {"candidate_id": candidate_id, "state": row.get("state"), "verdict": row.get("verdict")}
@@ -1670,7 +1670,7 @@ def _curator_list(state: str = "") -> dict:
 
 
 # -----------------------------------------------------------------------------
-# Curator P3: source-audit tools. Same RAZOR as P1: OmniSeek gather is MECHANICAL (it joins yield +
+# Curator phase 3: source-audit tools. Same RAZOR as phase 1: OmniSeek gather is MECHANICAL (it joins yield +
 # ingest + watchdog + the facets coverage grid into a per-source NEUTRAL dossier with NO verdict
 # key); the KEEP / WATCH / PRUNE verdict is the spawned AGENT writing omniseek_curator_source_verdict.
 # record_source_verdict is the enforcement chokepoint: it RAISES on a prune the source's mechanical
@@ -1679,7 +1679,7 @@ def _curator_list(state: str = "") -> dict:
 
 
 async def _acurator_audit() -> dict:
-    """READ-ONLY: gather the per-source NEUTRAL audit dossier (P3). Joins the accumulated P2 yield +
+    """READ-ONLY: gather the per-source NEUTRAL audit dossier. Joins the accumulated phase 2 yield +
     recall ingest watermarks + watchdog failures + the (domain x mode) coverage grid into facts +
     LABELED descriptive ratios (sole_share / presence_rate / timeout_rate) + the 8 mechanical safety
     flags per source. Emits NO verdict key. The spawned audit agent reads this and renders KEEP /
@@ -2240,7 +2240,7 @@ def omniseek_statement(action: str, src: str = "", dst: str = "", type: str = ""
 
 # The capability index omniseek_sources hands back on its orient call, DERIVED (mechanism demoted to data,
 # the same move as _GATHER_TOOLS above): each entry is a registered tool's name -> its docstring's
-# FIRST LINE, over an EXPLICIT tuple of ALL EIGHTEEN tools (P8 added omniseek_statement). A hand-written
+# FIRST LINE, over an EXPLICIT tuple of ALL EIGHTEEN tools (phase 8 added omniseek_statement). A hand-written
 # dict drifted once already (a fixpoint rescan caught omniseek_graph missing); derivation cannot. Each
 # tool's first docstring line is written to READ as a capability blurb; the __wrapped__ unwrap reaches
 # the underlying sync body where the source docstring lives (past @_threaded's functools.wraps async
@@ -2366,7 +2366,7 @@ def _warm_heavy_imports() -> None:
     """Eagerly import the ranking/recall chain (numpy + the vector stack) BEFORE serving.
 
     The first ranked search otherwise pays these imports lazily ON the event-loop thread,
-    racing the S4a shadow probe's own first imports on a worker thread. On Windows (a fresh
+    racing the shadow probe's own first imports on a worker thread. On Windows (a fresh
     pip-install serving MCP over stdio) that race deadlocked inside numpy's extension-module
     init and the call never returned: no deadline applied, nothing logged (2026-08-16,
     reproduced twice on a clean venv; the faulthandler stack pinned the loop thread at

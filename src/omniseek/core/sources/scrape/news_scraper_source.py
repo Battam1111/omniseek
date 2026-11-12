@@ -37,7 +37,9 @@ _DATA = Path(__file__).with_name("scrape_sites.json")
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0 Safari/537.36"
 _HEADERS = {"User-Agent": UA, "Accept": "text/html,*/*"}
 TIMEOUT = 20
-_ART = re.compile(r"/(news|blog|research|insights|article|stories|story|press|updates|publication|work|post|jobs?|details)[/-]", re.I)
+# speeches: itib.gov.hk's news are /en/speeches/<year>/pr_*.html (0 items before)
+_ART = re.compile(r"/(news|blog|research|insights|article|stories|story|press|updates|publication|work|post|jobs?|details"
+                  r"|speeches)[/-]", re.I)
 _CJK = re.compile(r"[一-鿿]")
 _LABELS = {"read more", "learn more", "view all", "see all", "find out more", "about us",
            "contact us", "home", "subscribe", "careers", "privacy policy", "terms of use",
@@ -106,9 +108,9 @@ async def _arender(url: str) -> Optional[str]:
     try:
         # a render is a page load on that host: never a host that declares a User-Agent the browser
         # cannot send (DeclaredUserAgentRefused -> the except below); then the Chrome turn first,
-        # within the time left (no host gate held while queueing, review F9); once it has the turn,
-        # the host's declared gates tried once (no waiting while holding the turn, review P6), on a
-        # lease as long as the render may take (a stuck render gives the host back, review P1).
+        # within the time left (no host gate held while queueing); once it has the turn,
+        # the host's declared gates tried once (no waiting while holding the turn), on a
+        # lease as long as the render may take (a stuck render gives the host back).
         render_s = 90
         upstreams.check_browser(url)
         until = upstreams.budget_until(url, default=render_s)

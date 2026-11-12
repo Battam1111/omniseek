@@ -20,7 +20,7 @@ import logging
 import os
 import re
 import socket  # kept so the moved-fetcher goldens' probe.socket.getaddrinfo monkeypatch resolves
-import subprocess  # P2 wall-probe: cold-start the jail launcher (scripts/probe_jail.sh up) on demand
+import subprocess  # phase 2 wall-probe: cold-start the jail launcher (scripts/probe_jail.sh up) on demand
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -173,7 +173,7 @@ def _probe_structure(candidate: dict, fetch: dict) -> dict:
 def _probe_unwall(candidate: dict, fetch: dict) -> dict:
     """UNWALL: anonymous-stranger fetch (NEVER a logged-in/CDP session). NO looks_walled
     boolean (that is a thresholded quality verdict); emit raw facts only. A near-empty
-    text_len means the candidate is structurally invisible to P1 -> parked_p2 (handled by the
+    text_len means the candidate is structurally invisible to phase 1 -> parked_p2 (handled by the
     caller), never a verdict."""
     text = fetch.get("text") or ""
     stripped = text.strip()
@@ -186,7 +186,7 @@ def _probe_unwall(candidate: dict, fetch: dict) -> dict:
         "nextdata_empty": _nextdata_empty(text),
         "tombstone_phrase_hits": tombstone_hits,
         "wall_marker_is_whole_page": wall_marker_whole,
-        "cdp_path_exists": True,  # a CDP wall-aware probe EXISTS; P1 does not drive it (P2 does)
+        "cdp_path_exists": True,  # a CDP wall-aware probe EXISTS; phase 1 does not drive it (phase 2 does)
     }
     provenance = {k: "derived" for k in diff}
     provenance["cdp_path_exists"] = "claimed"
@@ -205,7 +205,7 @@ def _nextdata_empty(text: str) -> bool:
 
 
 def _probe_transcribe(candidate: dict, fetch: dict) -> dict:
-    """TRANSCRIBE: does NOT transcribe in P1 (cost). Parse the feed/page for media, then HEAD
+    """TRANSCRIBE: does NOT transcribe in phase 1 (cost). Parse the feed/page for media, then HEAD
     the media URL (declared != real). Hollowness (404 / length 0) becomes a visible fact."""
     text = fetch.get("text") or ""
     media_url = None
@@ -343,7 +343,7 @@ def _probe_recall(candidate: dict, fetch: dict) -> dict:
 
 def _probe_monitor(candidate: dict, fetch: dict) -> dict:
     """MONITOR: single-sample change-signal affordances. A true monitor judgment needs TWO
-    samples; P1 records only the affordance + a mandatory single-sample fact."""
+    samples; phase 1 records only the affordance + a mandatory single-sample fact."""
     text = fetch.get("text") or ""
     titles, _bodies, oldest, newest = _parse_feed_titles(text)
     # last_modified / etag would come from response headers; safe_fetch returns content_type but
@@ -385,12 +385,12 @@ def mode_probe(candidate: dict, *, deadline_s: float = 25.0, walled: bool = Fals
     list / unknown mode / probe exception -> probe_reached=False + probe_error, never an admit-shaped
     result.
 
-    ``walled`` selects the FETCH: False (P1) uses the anonymous ``safe_fetch`` (IP-pinned plain HTTP);
-    True (P2, the wall-aware re-probe) uses ``render_walled`` (the JAILED browser render), so a
+    ``walled`` selects the FETCH: False uses the anonymous ``safe_fetch`` (IP-pinned plain HTTP);
+    True (the wall-aware re-probe) uses ``render_walled`` (the JAILED browser render), so a
     candidate that was ``parked_p2`` because it is structurally invisible to plain HTTP (anti-bot /
     SPA / soft-login-wall) is measured on its REAL rendered content by the SAME per-mode probes. The
     wall-rendered facts are DERIVED FROM ATTACKER BYTES (a honeypot could author the DOM), so a single
-    render NEVER admits: probe_via='wall_probe_jail' flags this so the judge weights it as such (M7)."""
+    render NEVER admits: probe_via='wall_probe_jail' flags this so the judge weights it as such."""
     mode = (candidate.get("mode") or candidate.get("proposed_mode") or "").strip().upper()
     url = _first_url(candidate)
     base = {
@@ -411,7 +411,7 @@ def mode_probe(candidate: dict, *, deadline_s: float = 25.0, walled: bool = Fals
 
     if walled:
         fetch = render_walled(url, deadline_s=max(deadline_s, 45.0))
-        base["probe_via"] = "wall_probe_jail"  # facts are render-derived (attacker bytes): weight per M7
+        base["probe_via"] = "wall_probe_jail"  # facts are render-derived (attacker bytes): weight them so
     else:
         fetch = safe_fetch(url, timeout_total=min(deadline_s, 20.0))
     base["probe_fetch_meta"] = {
@@ -440,8 +440,8 @@ def mode_probe(candidate: dict, *, deadline_s: float = 25.0, walled: bool = Fals
     return base
 
 
-# ── P2: the wall-aware render (jailed browser) ─────────────────────────────────────
-# render_walled is the P2 FETCH: it swaps the anonymous plain-HTTP safe_fetch for a render in the
+# ── phase 2: the wall-aware render (jailed browser) ─────────────────────────────────────
+# render_walled is the FETCH: it swaps the anonymous plain-HTTP safe_fetch for a render in the
 # network-isolated jail (a colima container whose ONLY egress is the SSRF-pin proxy), so a candidate
 # structurally invisible to plain HTTP yields its REAL rendered content. It returns a safe_fetch-
 # SHAPED dict so the per-mode probes + build_packet consume it byte-identically.
@@ -483,7 +483,7 @@ def _ensure_jail_up() -> bool:
 def render_walled(url: str, *, deadline_s: float = 45.0) -> dict:
     """Render a WALLED candidate url in the jailed Chromium and return a ``safe_fetch``-SHAPED dict.
 
-    The P2 fetch: it executes the candidate's JS (passing anti-bot / SPA / soft-login-wall) in a
+    The fetch: it executes the candidate's JS (passing anti-bot / SPA / soft-login-wall) in a
     FRESH incognito context whose ONLY egress is the SSRF-pin proxy, so a page near-empty to
     ``safe_fetch`` yields its real rendered HTML here. Fail-closed: bad-shape url / jail down / render
     error / timeout -> a ``_blocked()`` dict (never a fabricated body). ``fetch['text']`` is the

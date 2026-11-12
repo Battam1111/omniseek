@@ -622,7 +622,7 @@ Use WHEN running the source-curation protocol (judge the admission queue or a so
 • what="packet" -> the last-built evidence packet for ``candidate_id`` (a fresh agent picks it up
   cold); {"error": ...}/{"state": ...} if none built yet. A foundry-grade ``draft`` (the
   submitter's WORKING row + fixture + probe summary) is surfaced verbatim under ``draft``.
-• what="audit" -> the per-source NEUTRAL audit dossier (P3): facts + LABELED descriptive ratios
+• what="audit" -> the per-source NEUTRAL audit dossier: facts + LABELED descriptive ratios
   + the mechanical safety flags per source, NO verdict key. Read this, then render KEEP / WATCH /
   PRUNE via omniseek_curator_act(verb="source_verdict", ...).
 
@@ -640,13 +640,13 @@ the action with ``verb``; each verb's REQUIRED args (see the /curator protocol):
   draft (foundry-grade) is a WORKING artifact ({"row", "fixture", "probe_summary"}) surfaced in
   the packet and preferred as stage_commit's ready-to-paste block.
 • probe   (candidate_id) -> run the MECHANICAL evidence-gatherers, persist + return the packet.
-• wall_probe (candidate_id) -> P2 re-probe: RENDER the candidate in the network-isolated jail
+• wall_probe (candidate_id) -> phase 2 re-probe: RENDER the candidate in the network-isolated jail
   (egress only via the SSRF-pin proxy) so a source whose real content the plain-HTTP probe MISSED
   (client-rendered SPA / anti-bot / soft-login-wall) is measured on its REAL content. Eligible on a
   parked_p2 candidate OR an awaiting_verdict one YOU judge to be a client-rendered shell (WHEN to
   spend a render is your call, not an auto-gate). Surfaces content -> lands in awaiting_verdict on
   the rendered packet (parked_p2 revives, awaiting_verdict re-enriches); nothing -> stays put with
-  the reason. Facts are render-derived (M7): the code never admits, only surfaces.
+  the reason. Facts are render-derived: the code never admits, only surfaces.
 • decide  (candidate_id, decision, reasons; baseline_ref required to admit) -> record the
   admit/watch/reject verdict. MECHANICALLY REFUSES an admit on hard red-line / incomplete evidence
   / empty baseline_ref / no packet. admit -> owner_review; watch -> watching; reject -> rejected.
@@ -742,9 +742,9 @@ surface is self-describing), and content is NEVER inlined (every view returns no
   anchor doc, method align:embed, by RANK (k is a budget, never a score threshold). PROPOSALS
   only, never collapsed by any policy; verify, then ratify with omniseek_ruling. Coverage: any doc with
   an embedded title, ranked across the UNION of the indexed vec matrix AND the thin-title vec_thin
-  matrix (P7), so a thin arXiv original and an indexed post rank in ONE space; candidates may be
+  matrix, so a thin arXiv original and an indexed post rank in ONE space; candidates may be
   thin docs. A doc with no vector in either store (un-embedded yet) -> an error naming that.
-  NON-GOAL: vec_thin does NOT feed search's recall arm (similar + future P5 consumers only).
+  NON-GOAL: vec_thin does NOT feed search's recall arm (similar + future phase 5 consumers only).
 A no-view call (view="") returns the live view catalog: each view's params + one-line blurb,
 DERIVED from the registry, so new views appear here without a client restart.
 Identity rulings are WRITTEN via omniseek_ruling (this tool stays read-only, hence gather-safe).
@@ -765,7 +765,7 @@ same-work edges are LIVE FROM DAY ONE (derived over recall's docs: the wall is b
 pre-populated by construction). Document THIN rows (title + url only, from NON-indexed sources)
 now accumulate from EVERY search (stats.node_kinds.document_thin), so the perception history is
 complete, not just the ~40 enumerable sources. Entity kinds (work / person / institution /
-venue / topic) still fill in as the P2/P3 write taps ship and calls happen; emptiness of those
+venue / topic) still fill in as the phase 2 and phase 3 write taps ship and calls happen; emptiness of those
 kinds early is CORRECT, not broken.
 
 BUDGETS (the no-silent-caps discipline): depth is clamped to <=2, max_nodes caps the node

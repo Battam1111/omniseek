@@ -6,7 +6,7 @@ navigates to the search URL, parses HTML. The operator logs in once via VNC.
 一亩三分地 is the core community for Chinese students doing PhD/Master's
 abroad. Particularly strong on application experiences and post-PhD careers.
 
-Migrated to ``BaseCDPAdapter`` (B2 template method): the base owns the
+Migrated to ``BaseCDPAdapter`` (template method): the base owns the
 cdp_call wrapping, the try/except→[] degrade, caching, and registration.
 The three hooks below carry every source-specific fact VERBATIM:
 ``_search_url`` (GBK-encoded Discuz search URL), ``_flow`` (the

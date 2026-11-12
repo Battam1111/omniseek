@@ -223,7 +223,7 @@ class _GitHubShed(RuntimeError):
 
 
 # Nothing was sent, so a gate taken before the one that refused (the code-search gate, when the
-# GitHub-wide gate turns a code search away) hands back its reserved start (review N5).
+# GitHub-wide gate turns a code search away) hands back its reserved start.
 _guard_mod.register_unsent(_GitHubShed)
 
 

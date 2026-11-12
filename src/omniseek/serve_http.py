@@ -147,7 +147,7 @@ app.add_middleware(TokenAuth)
 from omniseek.core.memguard import InflightMiddleware  # noqa: E402
 app.add_middleware(InflightMiddleware)
 
-# S2 graceful shutdown: COMPOSE the ASGI lifespan so a deploy restart (SIGTERM -> graceful uvicorn
+# Graceful shutdown: COMPOSE the ASGI lifespan so a deploy restart (SIGTERM -> graceful uvicorn
 # shutdown) DRAINS the background loops instead of SIGKILLing the recall single-writer queue mid-
 # flush. app.router.lifespan_context is ALREADY FastMCP's own session lifespan; compose_lifespan
 # delegates its startup + shutdown UNCHANGED (an inner `async with`; here _eye_lifespan, FastMCP's
@@ -200,7 +200,7 @@ def _start_background_services() -> None:
     # Background cache warmer, tied to THIS always-on service (replaces the standalone launchd
     # cron, which was observed to fire only once — see omniseek.core.prewarm): warm the
     # query-independent slow sources on startup + every 30min so Lever B's caches stay hot.
-    # P9 JUDGMENT (prewarm stays its OWN daemon, NOT folded into the jobs scheduler): the warmer is a
+    # JUDGMENT (prewarm stays its OWN daemon, NOT folded into the jobs scheduler): the warmer is a
     # continuous WARM LOOP with two properties the calendar/interval job model would break — it warms
     # ON ENTRY (kills the cold-herd the instant the service (re)starts, before any tick would fire),
     # and it carries a refresh-margin contextvar that must run on its own thread inline. Folding it
@@ -226,7 +226,7 @@ def _start_background_services() -> None:
             recall.start_journal_boot()
             recall.start_writer()
             threading.Thread(target=recall.ingest_loop, name="recall-ingest", daemon=True).start()
-            # Curator P2 yield tap: start its single drain daemon beside the recall writer, under
+            # Curator phase 2 yield tap: start its single drain daemon beside the recall writer, under
             # the SAME WRITES_ENABLED guard (idempotent). Cron/CLI processes leave WRITES_ENABLED
             # False → no drain thread runs there → no cross-process pollution of the yield statistic.
             from omniseek.core.curator import yield_tap as _yield_tap
@@ -247,12 +247,12 @@ def _start_background_services() -> None:
             logger.debug("recall index: writes enabled + ingest loop + vector backfill started")
     except Exception as exc:  # noqa: BLE001 — the index is best-effort; never block boot
         logger.warning("recall index disabled (init failed): %s", exc)
-    # In-process JOB scheduler (P9, generalizing the P6 sensor scheduler): every scheduled piece of
+    # In-process JOB scheduler (generalizing the sensor scheduler): every scheduled piece of
     # OmniSeek's self-maintenance (the sensor tick + the transplanted watchdogs / curator / audit /
     # digest) runs as a declarative row on ONE daemon loop in the process that writes memory. Start it
     # HERE (the writer process), AFTER writes are enabled above, so its WRITES_ENABLED guard passes; a
     # cron / CLI import never reaches this call site and its guard refuses anyway. Fail-open: a
-    # scheduler hiccup must never block boot. (This absorbs the deleted launchd crons + the P6 loop.)
+    # scheduler hiccup must never block boot. (This absorbs the deleted launchd crons + the loop.)
     try:
         from omniseek.core import jobs as _jobs
         if _jobs.start_scheduler() is not None:

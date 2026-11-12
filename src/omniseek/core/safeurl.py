@@ -121,9 +121,9 @@ async def asafe_fetch(url: str, *, method: str = "GET", render: bool = False,
                            bad_port|redirect_loop|cache_only|fetch_error|rate_gate|None}
     (rate_gate: a hop to a declared upstream whose gate did not admit it in time; nothing sent)
     A blocked fetch is RECORDED; it never silently judges the candidate. ``render`` is accepted
-    for signature parity but P1 NEVER drives a browser here (anonymous stranger only, no CDP).
+    for signature parity but phase 1 NEVER drives a browser here (anonymous stranger only, no CDP).
 
-    SAFE_FETCH BOUNDARY (spec 8c, SSRF pass): safe_fetch hardens the PROBE-TIME fetch ONLY -- the
+    SAFE_FETCH BOUNDARY (the SSRF pass): safe_fetch hardens the PROBE-TIME fetch ONLY -- the
     one fetch OmniSeek makes at a candidate URL before any verdict. The POST-ADMISSION recurring
     fetch a family adapter makes once a source is live (org_watch / page_watch / news_scraper /
     render) goes through the NORMAL fetcher and is NOT IP-pinned by this guard. That is exactly why
@@ -131,7 +131,7 @@ async def asafe_fetch(url: str, *, method: str = "GET", render: bool = False,
     must consciously acknowledge the unguarded recurring fetch (server.omniseek_curator_decide requires
     baseline_ref.recurring_fetch_acknowledged for a first-seen host in that subclass). Routing the
     enrich/OpenAlex resolution hosts through a fixed-API host allowlist is a flagged follow-up
-    hardening (the id regexes constrain path injection today), not a P4 blocker.
+    hardening (the id regexes constrain path injection today), not a blocker.
     """
     # cache.cache_only() (cache_only=True): do ZERO live egress.
     if cache.cache_only():
@@ -277,7 +277,7 @@ async def awalk_redirects_revalidated(client: "httpx.AsyncClient", method: str, 
     It deliberately does NOT IP-pin like safe_fetch: those callers never pinned, and per-hop
     security_block_reason matches their existing initial-URL guard and the mainline http egress; the
     arbitrary-user-URL lane that warrants full pinning already goes through safe_fetch. Streamed
-    (H1) vs buffered (H2) final-body handling stays in each caller; only the hop walk is shared.
+    vs buffered final-body handling stays in each caller; only the hop walk is shared.
 
     ``gates`` (an ``upstreams.AsyncHopGates`` the caller holds until it has read the body): every hop goes
     through the redirect rule, so a hop to a declared host takes that host's gates (raising
@@ -335,7 +335,7 @@ class AsyncSSRFGuardTransport(httpx.AsyncBaseTransport):
         self._wrapped = wrapped
 
     async def handle_async_request(self, request: "httpx.Request") -> "httpx.Response":
-        # OFF-LOOP (S4b): resolve_pin does getaddrinfo per hop (a BLOCKING syscall). On the async client
+        # OFF-LOOP: resolve_pin does getaddrinfo per hop (a BLOCKING syscall). On the async client
         # this would run ON the loop, so a slow/cold DNS would freeze EVERY coroutine. Push it to a worker
         # thread; the pin rewrite itself is pure CPU on the loop.
         ip, host, reason = await anyio.to_thread.run_sync(_netguard.resolve_pin, str(request.url), limiter=portal.IO_LANE)

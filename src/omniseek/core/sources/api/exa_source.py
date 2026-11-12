@@ -77,7 +77,7 @@ class ExaAdapter(SourceBase):
         return (auth.load("exa") or {}).get("api_key")
 
     async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async replacement of the deleted sync ``search`` (11-04, S9; this is the only one now) (mirrors it line-for-line): the fan-out awaits this
+        """Native-async replacement of the deleted sync ``search`` (11-04, this is the only one now) (mirrors it line-for-line): the fan-out awaits this
         DIRECTLY so Exa's billed POST costs a COROUTINE, not a held pool thread. Three changes only:
           - the disk CACHE read + write go OFF the loop (anyio.to_thread.run_sync: get_docs/set_docs
             do file IO), with the SAME cache key as search so async + sync share one cached bucket;

@@ -114,7 +114,7 @@ class DiscourseForumsAdapter(BaseScrapeAdapter):
         return docs[:limit] if limit and limit > 0 else docs
 
     async def _araw_fetch(self, query: str, limit: int) -> Optional[Any]:
-        """Async replacement of the deleted sync `_raw_fetch` (11-04, S9; this is the only one now), with ONE deliberate divergence: the instances are fetched
+        """Async replacement of the deleted sync `_raw_fetch` (11-04, this is the only one now), with ONE deliberate divergence: the instances are fetched
         CONCURRENTLY instead of one after another.
 
         "Gently" (the sync docstring's word) means one GET per instance, not one instance at a

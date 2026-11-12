@@ -151,7 +151,7 @@ class GitHubAdapter(SourceBase):
         return h
 
     async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async replacement of the deleted sync ``search`` (11-04, S9; this is the only one now) (S4b): OmniSeek's async fan-out awaits this DIRECTLY, so
+        """Native-async replacement of the deleted sync ``search`` (11-04, this is the only one now): OmniSeek's async fan-out awaits this DIRECTLY, so
         github's multi-surface egress costs a COROUTINE, not a held pool thread. Mirrors ``search``
         step-for-step; only the BLOCKING work moves:
           • the disk cache read/write → ``anyio.to_thread.run_sync`` (get_docs / set_docs do file IO);

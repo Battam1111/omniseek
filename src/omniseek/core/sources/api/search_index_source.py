@@ -124,7 +124,7 @@ class _SearchVenue(SourceBase):
                         f"sample dropped: {sample}"))
 
     async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async replacement of the deleted sync ``search`` (11-04, S9; this is the only one now) -> AsyncSearchCapable (routes to the fetcher's native
+        """Native-async replacement of the deleted sync ``search`` (11-04, this is the only one now) -> AsyncSearchCapable (routes to the fetcher's native
         dispatch branch). Mirrors ``search`` line-for-line, changing ONLY the blocking waits:
           - the disk CACHE read/write go OFF the loop (anyio.to_thread.run_sync, SAME cache key);
           - the egress ``search_web`` -> its async twin ``asearch_web`` (SAME Brave 1qps gate +

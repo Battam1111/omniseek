@@ -74,9 +74,9 @@ async def _arender_html(url: str) -> str:
     try:
         # a render is a page load on that host: never a host that declares a User-Agent the browser
         # cannot send (DeclaredUserAgentRefused -> the except below); then the Chrome turn first,
-        # within the time left (no host gate held while queueing, review F9); once it has the turn,
-        # the host's declared gates tried once (no waiting while holding the turn, review P6), on a
-        # lease as long as the render may take (a stuck render gives the host back, review P1).
+        # within the time left (no host gate held while queueing); once it has the turn,
+        # the host's declared gates tried once (no waiting while holding the turn), on a
+        # lease as long as the render may take (a stuck render gives the host back).
         render_s = 45
         upstreams.check_browser(url)
         until = upstreams.budget_until(url, default=render_s)
@@ -170,7 +170,7 @@ class PageWatchAdapter(SourceBase):
         )
 
     async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async replacement of the deleted sync ``search`` (11-04, S9; this is the only one now) -> AsyncSearchCapable (the fetcher awaits this directly
+        """Native-async replacement of the deleted sync ``search`` (11-04, this is the only one now) -> AsyncSearchCapable (the fetcher awaits this directly
         instead of pushing ``.search`` onto the shared thread pool). ``_rows`` (disk read + overlay
         import/validate) runs OFF the loop; the per-row docs are fetched as CONCURRENT coroutines
         (``asyncio.gather``, order-preserving so the result is byte-identical to search's sequential

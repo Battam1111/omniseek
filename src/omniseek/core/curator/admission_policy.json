@@ -4,6 +4,6 @@
   "auto_apply": {
     "families": ["rss"],
     "modes": ["STRUCTURE", "UNWALL", "TRANSCRIBE"],
-    "note": "Conservative floor for a FUTURE P1.5 live auto-apply. org_watch / page_watch / news_scraper / render-scrapers are EXCLUDED (their recurring post-admission fetch bypasses safe_fetch; org_watch is a turnkey people-tracker that 'delete the row' cannot un-harvest). In P1 there is NO live auto-apply at all: every admit stages to owner_review. Widening this list is a deliberate the operator edit."
+    "note": "Conservative floor for a FUTURE phase 1.5 live auto-apply. org_watch / page_watch / news_scraper / render-scrapers are EXCLUDED (their recurring post-admission fetch bypasses safe_fetch; org_watch is a turnkey people-tracker that 'delete the row' cannot un-harvest). In phase 1 there is NO live auto-apply at all: every admit stages to owner_review. Widening this list is a deliberate the operator edit."
   }
 }

@@ -61,7 +61,7 @@ class NIHReporterAdapter(BaseScrapeAdapter):
                      "(by topic / PI / organization), not broad-fan-out fodder")
 
     async def _araw_fetch(self, query: str, limit: int) -> Optional[Any]:
-        # Async replacement of the deleted sync ``_raw_fetch`` (11-04, S9; this is the only one now): BYTE-FAITHFUL mirror — same URL, same body, same timeout, same
+        # Async replacement of the deleted sync ``_raw_fetch`` (11-04, this is the only one now): BYTE-FAITHFUL mirror — same URL, same body, same timeout, same
         # None-return contract; ONLY the shared-http egress swaps sync post_json → async apost_json.
         body = {
             "criteria": {

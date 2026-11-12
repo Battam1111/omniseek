@@ -54,7 +54,7 @@ _VAD = _worker.VAD
 _DIAR_MODEL = _worker.DIAR_MODEL
 _SPK_MODEL = _worker.SPK_MODEL
 # Human-readable names for the configured model ids, so every hint that tells a user or an agent which
-# engine transcribes reads the id the code actually loads (OmniSeek R01: the bilibili hint said
+# engine transcribes reads the id the code actually loads (a showcase finding: the bilibili hint said
 # "Whisper" long after the engine became SenseVoice). An id missing here falls back to its own name.
 _MODEL_LABELS = {"iic/SenseVoiceSmall": "SenseVoice-Small", "paraformer-zh": "Paraformer-zh"}
 _SR = _worker.SR

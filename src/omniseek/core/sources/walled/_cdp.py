@@ -11,7 +11,7 @@ The persistent browser advantage:
 - No login automation needed (the operator logs in once via VNC)
 - Same browser handles all platforms — clean architecture
 
-## ⚠️ CDP-in-async fix (2026-05-28 P7)
+## ⚠️ CDP-in-async fix (2026-05-28 phase 7)
 
 FastMCP's `@mcp.tool()` decorator may run sync tool functions in a thread
 that has an asyncio event loop attached (from anyio/asyncio internals).
@@ -83,7 +83,7 @@ from omniseek import where
 logger = logging.getLogger(__name__)
 
 # Prefer patchright — a stealth-patched, API-identical Playwright drop-in that
-# removes the Runtime.enable CDP call + console leaks (P13 anti-detection
+# removes the Runtime.enable CDP call + console leaks (phase 13 anti-detection
 # overhaul, 2026-05-29). Falls back to vanilla playwright if patchright is
 # absent: both are pinned at 1.60.0 and the Runtime.enable leak was empirically
 # absent on our Chrome 148 even with vanilla, so the fallback is safe (it just
@@ -504,7 +504,7 @@ def _browser_instance(cdp_url: str) -> Optional[str]:
 
 def _note_failure(url: Optional[str], exc: BaseException) -> None:
     """The diagnostic of a failed call. A host gate that did not admit the render when its turn came
-    (``on_turn`` raised; the turn was given up at once, review P6) reads as what it is."""
+    (``on_turn`` raised; the turn was given up at once) reads as what it is."""
     if isinstance(exc, upstreams.UpstreamBusy):
         diag.note("cdp_call", url=url, body=f"declared upstream gate, request not sent: {exc}")
     else:
@@ -722,9 +722,9 @@ class _CdpPool:
                     page = ctx.new_page()
                     _watch(page, seen)   # a health check's ledger only (see _watch)
                     try:
-                        # the host's gates only now, for the page load itself (review F9), tried
-                        # once: refused, this worker drops the task and takes the next (review P6);
-                        # leased, so a load stuck here gives the host back in time (review P1). Taken
+                        # the host's gates only now, for the page load itself, tried
+                        # once: refused, this worker drops the task and takes the next;
+                        # leased, so a load stuck here gives the host back in time. Taken
                         # by the caller on the loop (_Turn), never on this Playwright thread.
                         refused = turn.ask(timeout) if turn is not None else None
                         if refused is not None:
@@ -812,7 +812,7 @@ async def acdp_call(callback: Callable[[Page], Any], *,
     ``on_turn``: an async context-manager factory (``upstreams.abrowser_turn``) entered HERE, on the
     loop, only once the call HAS its turn at the Chrome, around the page load and the callback, and
     left when they end (the host's declared gates: a render must not hold a host gate while it queues
-    behind other browser calls, review F9). When it refuses (``UpstreamBusy``) the turn is given up at
+    behind other browser calls). When it refuses (``UpstreamBusy``) the turn is given up at
     once and nothing is loaded; that exception is raised here. The thread that has the turn only asks
     for it (``_Turn``): it is a Playwright sync thread, where a sync gate entry refuses."""
     run = functools.partial(_cdp_call, callback, initial_url, timeout, cdp_url, queue_until)
@@ -923,7 +923,7 @@ def _cdp_call(callback: Callable[[Page], Any], initial_url: Optional[str], timeo
     try:
         # with the Chrome turn, the host's gates tried once (``turn``, taken by acdp_call on the
         # loop); when they refuse, the finally below gives the Chrome turn up at once and nothing is
-        # loaded (review P6)
+        # loaded
         refused = turn.ask(timeout) if turn is not None else None
         if refused is not None:
             _note_failure(initial_url, refused)
@@ -954,7 +954,7 @@ def cdp_render(callback: Callable[[Page], Any], *,
                cdp_url: str = DEFAULT_CDP_URL,
                wait_cloudflare: bool = True) -> Any:
     """Render an ATTACKER-INFLUENCEABLE url in a FRESH, EPHEMERAL incognito context, then run
-    ``callback(page)`` on the settled page. The wall-aware probe (P2) lane.
+    ``callback(page)`` on the settled page. The wall-aware probe lane.
 
     Unlike ``cdp_call`` (which reuses the persistent logged-in DEFAULT context of the credentialed
     cluster), this opens a NEW context per call and tears it DOWN after, so a hostile candidate page

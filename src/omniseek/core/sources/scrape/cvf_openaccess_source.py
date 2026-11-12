@@ -83,7 +83,7 @@ class CVFOpenAccessAdapter(SourceBase):
     )
 
     async def _apapers(self, conf: str) -> list[dict]:
-        """Async replacement of the deleted sync ``_papers`` (11-04, S9; this is the only one now) (S4b): BYTE-FAITHFUL mirror changing ONLY the blocking parts.
+        """Async replacement of the deleted sync ``_papers`` (11-04, this is the only one now): BYTE-FAITHFUL mirror changing ONLY the blocking parts.
           - the disk cache read + write -> ``anyio.to_thread.run_sync`` (SAME cache key, so the sync
             and async paths share one warmed per-conference entry);
           - the raw ``httpx.get`` listing fetch -> the shared async leaf ``http.aget_text`` (shared
@@ -156,7 +156,7 @@ class CVFOpenAccessAdapter(SourceBase):
         return papers
 
     async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async replacement of the deleted sync ``search`` (11-04, S9; this is the only one now) -> AsyncSearchCapable. Mirrors ``search`` line-for-line,
+        """Native-async replacement of the deleted sync ``search`` (11-04, this is the only one now) -> AsyncSearchCapable. Mirrors ``search`` line-for-line,
         awaiting ``_apapers`` (disk cache OFF the loop, listing fetch via the async leaf) instead of
         the sync ``_papers``. The ``_to_doc`` mapping + ``keyword_score_filter`` are pure CPU, so this
         is behavior-identical to ``search`` (same conference parse, same BM25 filter, same limit)."""

@@ -43,7 +43,7 @@ warmed caches silently expired (6h TTL) and Lever B's speedup evaporated in prod
 warmer to the always-on eye-http service (a daemon thread) makes it fire reliably. (That dead plist
 for that eye-prewarm cron was never installed on the service host and has since been REMOVED from the repo
 2026-06-16; the in-service daemon is the sole AUTOMATIC warmer. The standalone warm CLI moved INTO
-this module's ``__main__`` in the P9 rebuild -- ``python -m omniseek.core.prewarm`` -- so the manual
+this module's ``__main__`` in the rebuild -- ``python -m omniseek.core.prewarm`` -- so the manual
 one-shot lives beside the loop it warms, with no extra script to keep in sync.)
 """
 
@@ -55,7 +55,7 @@ import time
 
 log = logging.getLogger(__name__)
 
-# S2 graceful-shutdown stop Event: set on ASGI-lifespan shutdown so a stop wakes this loop out of its
+# Graceful-shutdown stop Event: set on ASGI-lifespan shutdown so a stop wakes this loop out of its
 # interval wait immediately (see omniseek.core.lifecycle). Additive: the loop behaves identically until
 # this is set, which only happens on shutdown.
 _STOP = threading.Event()
@@ -120,7 +120,7 @@ def warm_loop(interval_s: float = WARM_INTERVAL_S) -> None:
     """Forever: warm on entry (kills the cold-herd right after a service (re)start) then every
     ``interval_s``. Designed to run as a daemon thread inside the always-on eye-http service.
 
-    S2: registers itself so a graceful shutdown can drain it, and waits on _STOP instead of sleeping
+    Registers itself so a graceful shutdown can drain it, and waits on _STOP instead of sleeping
     so a stop wakes it out of the interval immediately. Purely additive: identical until _STOP is
     set (only on shutdown)."""
     from omniseek.core import lifecycle
@@ -136,7 +136,7 @@ def warm_loop(interval_s: float = WARM_INTERVAL_S) -> None:
 
 def _main() -> int:
     """Manual one-shot warm (``python -m omniseek.core.prewarm``) — the manual warm CLI, folded in
-    here in the P9 rebuild. The PRODUCTION warmer is the in-service daemon (serve_http starts
+    here in the rebuild. The PRODUCTION warmer is the in-service daemon (serve_http starts
     warm_loop); this is for a MANUAL warm right after a deploy, before the service's first cycle
     completes. Boots the registry the same way the service does (adapters self-register on import),
     warms once, and reports how many sources warmed. Exit: 0 all warmed / 1 some failed / 2 import."""

@@ -127,7 +127,7 @@ class StatCanWdsAdapter(BaseAPIAdapter):
                      "named on demand, not broad-fan-out fodder")
 
     async def _araw_fetch(self, query: str, limit: int) -> list:
-        """Async replacement of the deleted sync ``_raw_fetch`` (11-04, S9; this is the only one now): byte-faithful mirror (same URL / body / timeout, same SUCCESS
+        """Async replacement of the deleted sync ``_raw_fetch`` (11-04, this is the only one now): byte-faithful mirror (same URL / body / timeout, same SUCCESS
         gate + pair-up control flow, same None/[] contract), only the shared-http egress swapped for
         its async twin (http.post_json -> await http.apost_json)."""
         entries = _resolve(query)

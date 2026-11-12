@@ -101,7 +101,7 @@ class V2exAdapter(BaseScrapeAdapter):
     modes = ["UNWALL", "MONITOR"]
     regions = ["cn"]
 
-    # -- native async (S4) -----------------------------------------------------
+    # -- native async -----------------------------------------------------
     @staticmethod
     async def _aget_feed(slug: str) -> Optional[bytes]:
         """One node's Atom feed body, or None. The shared async leaf ``http.aget`` (pool, SSRF guard,

@@ -69,7 +69,7 @@
     "quote": "Indiscriminate automated downloads from this site are not permitted",
     "url": "https://arxiv.org/robots.txt",
     "checked": "2026-09-28",
-    "where_checked": "arxiv.org/robots.txt read 2026-09-28: Crawl-delay 15 s for User-agent *, enforced as the arxiv.org host gate (design decision, 2026-09-29). The API terms (info.arxiv.org/help/api/tou.html) cover the APIs, not /abs or /pdf pages; bulk PDF access is via the S3 bulk data",
+    "where_checked": "arxiv.org/robots.txt read 2026-09-28: Crawl-delay 15 s for User-agent *, enforced as the arxiv.org host gate (design decision, 2026-09-29). The API terms (info.arxiv.org/help/api/tou.html) cover the APIs, not /abs or /pdf pages; bulk PDF access is via the bulk data",
     "robots_crawl_delay_s": {"arxiv.org": 15.0},
     "notes": "pdf is listed for the coverage check (it reads any PDF link, no fixed upstream); since 2026-10-24 it leaves arXiv links to the arxiv source, which reads full text from export.arxiv.org (the arxiv_export entry)"
    }

@@ -9,7 +9,7 @@ Sensors are background cache warmers with novelty detection. Each sensor:
 A sensor is DECLARATIVE STATE OmniSeek executes mechanically; a run is an act of
 PERCEPTION, and perception must land on the wall, so execution belongs in the ONE
 process that can write memory (single-writer). The sensor tick runs IN-PROCESS on the
-eye-http service; in P9 the daemon loop that drives it lives in omniseek.core.jobs (the
+eye-http service; in phase 9 the daemon loop that drives it lives in omniseek.core.jobs (the
 ONE fleet scheduler, WRITES_ENABLED-guarded, so no other context can ever start it), and
 the sensor tick is registered there as job row #1. The MCP tool omniseek_sensor action=run
 triggers one sensor immediately for testing. The razor: the agent registers what to
@@ -40,7 +40,7 @@ from omniseek.core.recall import graph  # noqa: E402 (the graph write verb + min
 
 # Vocabulary this tap MINTS (vocabulary-by-minting, design section 3): declared on the tap itself,
 # registered at import, folded into ``graph.declared_vocabulary`` as the computed union; ACTUAL
-# graph data must stay within that union. The sensor tap is the P4 event layer: it mints
+# graph data must stay within that union. The sensor tap is the event layer: it mints
 # ONE sensor node + observed edges (sensor -> doc) for the results THIS RUN detected as new. THE
 # MINT RULE (design "Mint the product"): a sensor mints the RUN DIFF, not the baseline: the
 # baseline is state (it mints nothing), the diff is the product (the mint-the-product rule applied
@@ -266,7 +266,7 @@ class SensorStore:
             self._save(sensors)
 
 
-# ── graph write tap (design section 6 + P4 taps row): mint the RUN DIFF, never the baseline ──
+# ── graph write tap (design section 6 + phase 4 taps row): mint the RUN DIFF, never the baseline ──
 # THE MINT RULE (design "Mint the product, not the intermediate"): a sensor's PRODUCT is the set of
 # results THIS RUN newly detected (the diff); the baseline is state and mints nothing. The builder
 # below is PURE (takes the Sensor + the new (source, source_id) pairs + the run timestamp, returns
@@ -396,7 +396,7 @@ async def arun_sensor(sensor: Sensor, store: SensorStore, limit: int = 15) -> di
     sensor.total_runs += 1
     await anyio.to_thread.run_sync(store.update, sensor, limiter=portal.IO_LANE)
 
-    # FAIL-OPEN graph tap (design section 6 + P4): mint the RUN DIFF (observed edges sensor -> new
+    # FAIL-OPEN graph tap (design section 6 + phase 4): mint the RUN DIFF (observed edges sensor -> new
     # doc) here, where the new-result diff is final, BEFORE the summary returns. The baseline mints
     # nothing; an empty diff mints nothing (a no-news run is not an accretion event).
     _tap(sensor, list(new_keys), sensor.last_run_at)
@@ -451,10 +451,10 @@ def absence_diff(baseline: list[list[str]], current_keys: set,
     return base_ids - cur_ids
 
 
-# ── The in-process sensor tick (P6 perception; the P9 loop lives in jobs.py) ──────────────────────
+# ── The in-process sensor tick (phase 6 perception; the loop lives in jobs.py) ──────────────────────
 # A run is an act of PERCEPTION and perception must land on the wall, so execution belongs in the
 # ONE process that can write memory. due_sensors is PURE (unit-testable); scheduler_tick runs every
-# due sensor SERIALLY and isolates a failing sensor so one bad query never stops the rest. In P9 the
+# due sensor SERIALLY and isolates a failing sensor so one bad query never stops the rest. In phase 9 the
 # daemon LOOP that drives this tick moved into omniseek.core.jobs (the ONE scheduler for the whole
 # fleet): the sensor tick is now registered there as job row #1 (scheduler_tick_for_sensors), and the
 # WRITES_ENABLED + double-start guards that used to gate the sensor loop now gate jobs.start_scheduler.
@@ -692,7 +692,7 @@ def scheduler_tick(store: SensorStore, schedules: Optional[dict] = None) -> dict
 
 
 def scheduler_tick_for_sensors(table_path=None) -> dict:
-    """JOB-ROW ENTRY POINT (P9): the sensor tick as registered job #1 in omniseek.core.jobs, called
+    """JOB-ROW ENTRY POINT: the sensor tick as registered job #1 in omniseek.core.jobs, called
     with no argument every time the "sensors" row is due (``table_path`` is for tests; None means
     sensor_table_path's order: $OMNISEEK_SERVICES_TSV, then _DEFAULT_SENSOR_TABLE).
 
@@ -741,11 +741,11 @@ def scheduler_tick_for_sensors(table_path=None) -> dict:
     return out
 
 
-# ── Bark push (P6, ported from the deleted runner's _notify; the impl moved to notify.py in P9) ────
+# ── Bark push (ported from the deleted runner's _notify; the impl moved to notify.py in phase 9) ────
 # The runner pushed via scripts/_sentinel_common (urllib); in-process we use OmniSeek's EXISTING httpx
-# dependency and read the credential file the auth.py way (fail-open to no-op when absent). P9 lifted
+# dependency and read the credential file the auth.py way (fail-open to no-op when absent). phase 9 lifted
 # that impl into omniseek.core.notify so the generalized job registry shares ONE push primitive; this
-# thin alias keeps the P6 call sites (_bark_new_results) unchanged and the same fail-open contract +
+# thin alias keeps the call sites (_bark_new_results) unchanged and the same fail-open contract +
 # GROUP "OmniSeek" (spelled so the omniseek sync's OmniSeek->OmniSeek rename lands on both sides).
 
 def _alert(title: str, body: str, *, source: str | None = None) -> None:

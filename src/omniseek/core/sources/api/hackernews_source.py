@@ -1,6 +1,6 @@
 """Hacker News — tech news + community discussion via Algolia search API.
 
-Sub-agent's P0 reflection flagged this as missing from OmniSeek 的 25 个
+Sub-agent's phase 0 reflection flagged this as missing from OmniSeek 的 25 个
 精选 — HN is the highest-density tech news + threaded community discussion
 aggregator and crucially independent of social media platforms.
 
@@ -53,7 +53,7 @@ class HackerNewsAdapter(SourceBase):
     )
 
     async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async replacement of the deleted sync ``search`` (11-04, S9; this is the only one now) (S4b): mirrors ``search`` line-for-line so the fetcher's
+        """Native-async replacement of the deleted sync ``search`` (11-04, this is the only one now): mirrors ``search`` line-for-line so the fetcher's
         native async dispatch (``AsyncSearchCapable``) awaits it DIRECTLY, spending a coroutine on the
         two Algolia waits instead of a held pool thread. Three changes only vs ``search``:
           - the disk CACHE read/write go OFF the loop (anyio.to_thread.run_sync: get_docs / set_docs do

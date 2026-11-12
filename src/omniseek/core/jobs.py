@@ -1,7 +1,7 @@
-"""The in-process JOB REGISTRY + scheduler (P9): the ONE daemon loop that runs every scheduled
+"""The in-process JOB REGISTRY + scheduler: the ONE daemon loop that runs every scheduled
 piece of OmniSeek's self-maintenance inside the writer process.
 
-THE DERIVED ARCHITECTURE (P6 moved the fleet's center of gravity, P9 finishes the move): a run is
+THE DERIVED ARCHITECTURE (phase 6 moved the fleet's center of gravity, phase 9 finishes the move): a run is
 an act of PERCEPTION or self-maintenance and must land inside the ONE process that can write memory,
 so anything that CAN die with the organ lives HERE as a declarative JOB ROW instead of an external
 launchd cron. The test for what stays OUTSIDE the organ is "must this still run when the organ is
@@ -11,7 +11,7 @@ hung organ is launchd's KeepAlive (a process that exits), the MCP front door's t
 this module's own wedge watchdog (a live process whose scheduler thread stopped). Everything else is a row
 registered here.
 
-This generalizes the P6 sensors-only scheduler (sensor.py) into a registry with a mechanical
+This generalizes the sensors-only scheduler (sensor.py) into a registry with a mechanical
 schedule vocabulary. The sensor tick becomes job row #1; the transplanted health probe / session
 warmer / browser reaper / log rotation / AIID snapshot become the other rows (see
 infra_jobs.py). The graph_view / register_mints DNA
@@ -65,7 +65,7 @@ JOB_BARK_COOLDOWN_S = 24 * 3600   # Bark at most once per 24h per job on repeate
 # file older than WEDGE_FACTOR ticks means the scheduler thread wedged while the process lives on. The line is the
 # old one, unchanged (900 s x 2 = 1800 s; the tick publishes the heartbeat before and after every job, and
 # _MAX_JOB_BUDGET_S stays under the line). The watchdog then logs one line and exits the process with WEDGED_EXIT;
-# launchd restarts it (eye-http's unit is KeepAlive = true, 10_deploy/nix/modules/agents.nix), which respawns the
+# launchd restarts it (eye-http's unit is KeepAlive = true), which respawns the
 # thread. WATCHDOG_CHECK_S only bounds how late after the line it notices (the external one looked every 600 s).
 WEDGE_FACTOR = 2
 WEDGED_EXIT = 75          # EX_TEMPFAIL: any non-zero code; launchd's KeepAlive restarts on every exit
@@ -284,7 +284,7 @@ class JobRow:
     budget_s: int = 600      # wall-clock cap per run; a job past it is skipped, never waited on
     description: str = ""     # one-line human label for the fleet-status view (observability, no logic)
     process_entrypoint: Optional[tuple[str, str]] = None
-    needs: None = None       # reserved (spec: needs: none) -- no dependency edges in P9
+    needs: None = None       # reserved (spec: needs: none) -- no dependency edges in phase 9
 
 
 _REGISTRY: "dict[str, JobRow]" = {}
@@ -594,7 +594,7 @@ def _run_with_budget(row: JobRow) -> "tuple[str, object]":
             row.fn()
         except BaseException as exc:  # noqa: BLE001 -- carried to the caller across the thread
             if isinstance(exc, asyncio.CancelledError):
-                raise  # D11: never eat a cancellation
+                raise  # never eat a cancellation
             holder.append(exc)
     t = threading.Thread(target=_call, name=f"job-{row.name}", daemon=True)
     t.start()
@@ -622,12 +622,12 @@ def _bark_job_failure(row: JobRow, state: dict, now: float, kind: str = "raised"
         log.debug("job-failure bark swallowed (%s)", exc)
 
 
-# ── the ONE daemon loop (absorbs the P6 sensors-only loop; same two guards) ───────────────────────
+# ── the ONE daemon loop (absorbs the sensors-only loop; same two guards) ───────────────────────
 _scheduler_started = False
 _scheduler_lock = threading.Lock()
 _scheduler_heartbeat: Optional[SchedulerHeartbeat] = None
 _scheduler_contract_error: Optional[str] = None
-# S2 graceful-shutdown stop Event: set on ASGI-lifespan shutdown so the scheduler wakes out of its
+# Graceful-shutdown stop Event: set on ASGI-lifespan shutdown so the scheduler wakes out of its
 # initial-delay / tick wait immediately (see omniseek.core.lifecycle). Additive: the loop behaves
 # identically until this is set, which only happens on shutdown.
 _STOP = threading.Event()
@@ -698,7 +698,7 @@ def start_scheduler(interval_s: int = TICK_SECONDS,
     """Start the daemon scheduler thread (``sleep(initial_delay_s); while True: run_due_jobs; sleep until
     the next job is due, at most interval_s``). Registers the shipped rows first (idempotent).
 
-    Two guards make this the ONE self-maintenance path (unchanged from P6): (1) it REFUSES to start
+    Two guards make this the ONE self-maintenance path (unchanged from phase 6): (1) it REFUSES to start
     unless ``writer.WRITES_ENABLED`` is truthy (the scheduler only ever belongs in the writer
     process -- a cron / CLI import leaves it False, so no memory-less path ticks); (2) a
     module idempotence flag so a double call cannot start two threads. Returns the Thread it started,
@@ -803,7 +803,7 @@ _shipped_registered = False
 
 
 def register_shipped_jobs() -> None:
-    """Register every SHIPPED job row exactly once (idempotent). Row #1 is the P6 sensor tick,
+    """Register every SHIPPED job row exactly once (idempotent). Row #1 is the sensor tick,
     absorbed here unchanged (its own Bark-on-new logic stays inside sensor.arun_sensor /
     _bark_new_results). The rest are the transplanted infra jobs (infra_jobs.py). Import the fns
     INSIDE so a bare ``import jobs`` (e.g. a unit test of the parser) does not drag in the whole eye.

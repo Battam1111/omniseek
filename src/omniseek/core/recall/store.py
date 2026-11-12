@@ -83,14 +83,14 @@ CREATE TABLE IF NOT EXISTS vec(
   v             BLOB NOT NULL
 );
 CREATE INDEX IF NOT EXISTS vec_mv ON vec(model_version);
--- P7 thin-row title embeddings: one float32 L2-normalized embedding per THIN document node (a doc
+-- phase 7 thin-row title embeddings: one float32 L2-normalized embedding per THIN document node (a doc
 -- from a NON-indexed source, which has a title but no content row in docs). Keyed by the graph
 -- node_id (``doc:{source}:{source_id}``), NOT a docs.rowid (a thin row has none). Mirrors ``vec``'s
 -- format EXACTLY (model_version gates the live matrix; a model swap drops the old space out; the
 -- SAME embedder + MODEL_VERSION produce both), so ``similar`` can rank a thin title against an
--- indexed doc in ONE cosine space. This lets ``similar`` (P5) see the WHOLE perception history, not
+-- indexed doc in ONE cosine space. This lets ``similar`` see the WHOLE perception history, not
 -- just the indexed subset. DELIBERATE NON-GOAL: vec_thin does NOT feed omniseek_search's recall arm (see
--- the writer thin lane + the search-path tripwire); similar (and future P5 consumers) only.
+-- the writer thin lane + the search-path tripwire); similar (and future phase 5 consumers) only.
 CREATE TABLE IF NOT EXISTS vec_thin(
   node_id       TEXT PRIMARY KEY,
   model_version TEXT NOT NULL,
@@ -371,7 +371,7 @@ _vec_lock = threading.Lock()
 _VEC_DEBOUNCE = 20.0   # under a burst of ingest, rebuild the matrix at most every 20s and serve
                        # slightly-stale otherwise (it is RECALL; merge_rank re-scores anyway)
 
-# P7 thin matrix: the SAME cache pattern for vec_thin (thin-row title embeddings), a SEPARATE cache
+# phase 7 thin matrix: the SAME cache pattern for vec_thin (thin-row title embeddings), a SEPARATE cache
 # with its OWN invalidation (keyed on the _thin_write_gen counter), so a vec_thin write refreshes
 # this matrix without disturbing the docs vec matrix and vice versa. Same
 # model_version gate (a model swap drops the old space out of BOTH). Rows here key on the graph
@@ -782,7 +782,7 @@ def _ensure_matrix(con):
 
 
 def _ensure_thin_matrix(con):
-    """Build/refresh the cached THIN vector matrix for the CURRENT model_version (P7). The exact
+    """Build/refresh the cached THIN vector matrix for the CURRENT model_version. The exact
     mirror of ``_ensure_matrix`` for ``vec_thin`` — a SEPARATE cache + SEPARATE invalidation (keyed on
     the ``_thin_write_gen`` counter, plus the same debounce) so a thin write refreshes THIS matrix and
     a docs-vec write refreshes the OTHER, neither disturbing the other. Rows key on the
@@ -888,9 +888,9 @@ def vector_search(qvec, k: int = 60, sources: "Optional[frozenset[str]]" = None)
     applied AFTER the top-k would miss it. Masked (-inf) survivors are dropped from the final slice, so
     an all-masked matrix returns []. ``sources=None`` is byte-identical to the pre-Wave-2 path.
 
-    P7 DELIBERATE NON-GOAL: this is omniseek_search's recall arm, and it consults ONLY ``vec`` (the docs
+    DELIBERATE NON-GOAL: this is omniseek_search's recall arm, and it consults ONLY ``vec`` (the docs
     matrix) — NOT ``vec_thin``. Folding thin-title embeddings into search recall is a SEPARATE
-    decision with its own dogfood; do not add ``_ensure_thin_matrix`` here. vec_thin feeds ``graph.similar`` (and future P5 consumers) only."""
+    decision with its own dogfood; do not add ``_ensure_thin_matrix`` here. vec_thin feeds ``graph.similar`` (and future phase 5 consumers) only."""
     if _disabled or qvec is None or _np is None:
         return []
     con = _read_con()
@@ -995,13 +995,13 @@ def anchor_rowid(source: str, source_id: str) -> Optional[int]:
         return None
 
 
-# ── P7: the generalized anchor/neighbor engine (similar covers the WHOLE perception history) ──────
+# ── phase 7: the generalized anchor/neighbor engine (similar covers the WHOLE perception history) ──────
 # The engine resolves an anchor from EITHER store (docs vec by rowid, vec_thin by node id) and ranks
 # across the UNION of both matrices, so an indexed Chinese post and a thin arXiv original — exactly
 # the cross-boundary pair similar exists for — land in ONE cosine space. Identity is the graph
 # node_id string (``doc:{source}:{source_id}``) in both cases, so the caller never needs to know
 # which store a candidate came from. (The interim docs-only similar_by_rowid engine was deleted at
-# the P7 gate: no caller survived the migration, and dead code earns no slot.)
+# the gate: no caller survived the migration, and dead code earns no slot.)
 
 def _anchor_node_id(source: str, source_id: str) -> str:
     from omniseek.core.recall.graph import doc_node_id  # local: id scheme lives in graph
@@ -1009,7 +1009,7 @@ def _anchor_node_id(source: str, source_id: str) -> str:
 
 
 def similar_anchor(source: str, source_id: str):
-    """Resolve the anchor VECTOR for a doc from EITHER store (P7): the docs ``vec`` matrix by its
+    """Resolve the anchor VECTOR for a doc from EITHER store: the docs ``vec`` matrix by its
     docs.rowid FIRST (an indexed doc), else the ``vec_thin`` matrix by its graph node_id (a thin doc
     whose title was embedded as the writer caught up). Returns ``(anchor_vec, anchor_node_id)`` with
     the vector as the store's OWN L2-normalized row (never re-embedded — a model upgrade upgrades every

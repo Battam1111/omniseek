@@ -95,8 +95,8 @@ class MlConferencesAdapter(BaseScrapeAdapter):
                 # Declared host gate: each blog's robots.txt sets Crawl-delay 20 s. The three venues
                 # are three hosts, so they never wait on each other; a repeat within 20 s sheds.
                 # Never a host with a declared User-Agent; the Chrome turn first, within the time left
-                # (no host gate held while queueing, review F9); with the turn, the host's declared
-                # gates tried once (review P6), leased for the render's own timeout (review P1).
+                # (no host gate held while queueing); with the turn, the host's declared
+                # gates tried once, leased for the render's own timeout.
                 upstreams.check_browser(url)
                 until = upstreams.budget_until(url, default=75)
                 html = await acdp_call(_nav, initial_url=url, timeout=75, queue_until=until,

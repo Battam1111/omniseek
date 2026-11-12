@@ -28,7 +28,7 @@ from omniseek.core import filters as _filters
 # OMNISEEK_CACHE_DIR moves the whole cache elsewhere. The service leaves it unset; a test or one-off
 # run sets it to a throwaway directory so it never reads the live service's cache entries (state
 # such as reddit's cannot-search list, 2026-10-10) and never write into them. The application name is omniseek
-# (2026-10-20); the deploy moves the old-named directory to the recycle area (10_deploy/parts.json retire_links).
+# (2026-10-20); the deploy moves the old-named directory to the recycle area.
 CACHE_DIR = Path(os.environ.get("OMNISEEK_CACHE_DIR")
                  or Path(user_cache_dir("omniseek", appauthor=False)) / "omniseek_cache")
 DEFAULT_TTL = 900  # 15 minutes

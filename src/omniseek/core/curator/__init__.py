@@ -1,4 +1,4 @@
-"""Curator P1: the source-admission gate of the self-iterating eye.
+"""Curator phase 1: the source-admission gate of the self-iterating eye.
 
 Given a CANDIDATE source (name + URL(s) + a proposed mode/domain/family), the Curator gathers
 MECHANICAL evidence (safety / coverage / dedup / mode probe / live parse), persists a durable
@@ -13,9 +13,9 @@ Sub-modules (all mechanical):
   apply      : gate-only: _live_hosts / _validate_row / _auto_apply_ok + operator-case prep
   apply_live : the live-mutation core (reversible overlay register + runtime retire)
   evidence   : build_packet (the no-verdict contract)
-  source_audit : P3 existing-source dossier + the KEEP/WATCH/PRUNE verdict chokepoint
+  source_audit : phase 3 existing-source dossier + the KEEP/WATCH/PRUNE verdict chokepoint
 
-P4 shipped the live-apply lane (apply_live.py): an operator one-tap registers a REVERSIBLE overlay
+phase 4 shipped the live-apply lane (apply_live.py): an operator one-tap registers a REVERSIBLE overlay
 row into the RUNNING worker (no git, no restart, no in-tree write); the never-auto families stage
 a git commit instead, and the in-tree commit + redeploy stays the operator's hand only (code never
 runs git). See apply_live.py + apply.py for the live/durable split.

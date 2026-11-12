@@ -54,7 +54,7 @@ class KaggleAdapter(BaseScrapeAdapter):
     modes = ["STRUCTURE"]
 
     async def _araw_fetch(self, query: str, limit: int) -> Optional[Any]:
-        """Async replacement of the deleted sync ``_raw_fetch`` (11-04, S9; this is the only one now): byte-faithful mirror — same URL, params, timeout;
+        """Async replacement of the deleted sync ``_raw_fetch`` (11-04, this is the only one now): byte-faithful mirror — same URL, params, timeout;
         only the shared-http egress swaps to its async twin (http.get_json → aget_json)."""
         return await http.aget_json(
             API_URL,

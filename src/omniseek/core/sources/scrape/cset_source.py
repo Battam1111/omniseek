@@ -55,7 +55,7 @@ class CSETAdapter(BaseScrapeAdapter):
     modes = ["STRUCTURE", "RECALL"]
 
     async def _araw_fetch(self, query: str, limit: int) -> Optional[Any]:
-        # Byte-faithful async replacement of the deleted sync ``_raw_fetch`` (11-04, S9; this is the only one now): same URL/params/timeout, only the shared-http
+        # Byte-faithful async replacement of the deleted sync ``_raw_fetch`` (11-04, this is the only one now): same URL/params/timeout, only the shared-http
         # egress swaps get_json -> aget_json (single call, so a single mirror).
         return await http.aget_json(
             API_URL,

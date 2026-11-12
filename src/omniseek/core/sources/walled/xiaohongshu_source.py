@@ -3,7 +3,7 @@
 Connects (via `cdp_call`) to the persistent real Chrome over CDP and drives a
 search inside the logged-in session.
 
-## 🔒 SEALED 2026-05-29 → P13 stealth overhaul
+## 🔒 SEALED 2026-05-29 → phase 13 stealth overhaul
 
 This adapter was sealed after 小红书 officially warned that automated browsing
 was detected (ban risk). Two research passes (red team + blue team)
@@ -15,7 +15,7 @@ concluded:
 - The real detection vector was the **behavioral layer**: direct-goto search
   URLs, a fixed 3.5s wait, zero mouse/scroll/dwell, and no rate limiting.
 
-P13 fixes (this file):
+phase 13 fixes (this file):
 1. **Human navigation** — go to the homepage first, move the mouse to the
    search box, click, type the query character-by-character, press Enter
    (instead of `goto(search_result?keyword=...)`).
@@ -111,7 +111,7 @@ def _goto_note_dual_host(page, url: str) -> None:
 _XHS_CDP_URL = "http://127.0.0.1:9223"
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 🔓 UN-SEALED 2026-05-29 after the P13 stealth overhaul + a CLEAN single burner
+# 🔓 UN-SEALED 2026-05-29 after the stealth overhaul + a CLEAN single burner
 # test (rednote.com, 24 real results, no captcha / no login wall / no risk
 # signal — operator-approved). The frequency gate below keeps usage human-paced.
 # EMERGENCY RE-SEAL: set _SEALED = True — every entry point goes inert

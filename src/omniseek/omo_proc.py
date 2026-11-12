@@ -854,7 +854,7 @@ def group(tab, pgid):
 
 def group_state(pgid):
     """进程组还有没有活进程：ALIVE / GONE / UNKNOWN。
-    killpg(pgid, 0) 报 ESRCH 是没有，成功是有；EPERM（macOS 上只剩僵尸的组也报 EPERM，REL3 实测）时看进程表：
+    killpg(pgid, 0) 报 ESRCH 是没有，成功是有；EPERM（macOS 上只剩僵尸的组也报 EPERM，实测）时看进程表：
     组里有读得到的活进程算在，读得到的全是僵尸算不在，一个也读不到算查不出。"""
     if not _valid(pgid):
         return GONE

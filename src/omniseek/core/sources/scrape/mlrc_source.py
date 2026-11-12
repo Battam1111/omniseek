@@ -59,7 +59,7 @@ class MLRCAdapter(BaseScrapeAdapter):
     cache_ttl = 3600
 
     async def _aapi_get(self, path: str, params: dict) -> Optional[dict]:
-        """Async twin of ``_api_get`` (S4b): SAME optional-login-then-GET logic (a missing/broken login
+        """Async twin of ``_api_get``: SAME optional-login-then-GET logic (a missing/broken login
         still egresses to the public endpoint), only the raw ``httpx`` egress swaps for the shared async
         leaves — the login ``httpx.post`` → ``await http.apost_json`` and the data ``httpx.get`` →
         ``await http.aget_json`` (shared pool + SSRF guard + cache_only + 30MB cap + failure→None, each
@@ -81,7 +81,7 @@ class MLRCAdapter(BaseScrapeAdapter):
         )
 
     async def _araw_fetch(self, query: str, limit: int) -> Optional[Any]:
-        """Async replacement of the deleted sync ``_raw_fetch`` (11-04, S9; this is the only one now): SAME composite ``"{query} reproducibility"`` term + /notes/search
+        """Async replacement of the deleted sync ``_raw_fetch`` (11-04, this is the only one now): SAME composite ``"{query} reproducibility"`` term + /notes/search
         over-fetch (limit=100), only the egress goes async via ``_aapi_get``. None on no-data (base → [])."""
         # Compose query: user's terms + "reproducibility" as a sticky hook
         composite_query = f"{query} reproducibility"

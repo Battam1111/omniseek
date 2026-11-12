@@ -50,7 +50,7 @@ class DataGovSgPassesAdapter(BaseAPIAdapter):
     modes = ["STRUCTURE"]
 
     async def _araw_fetch(self, query: str, limit: int) -> list:
-        """Async replacement of the deleted sync ``_raw_fetch`` (11-04, S9; this is the only one now): byte-faithful mirror (same URL, same None/[]-guard control flow),
+        """Async replacement of the deleted sync ``_raw_fetch`` (11-04, this is the only one now): byte-faithful mirror (same URL, same None/[]-guard control flow),
         only the shared-http egress swapped for its async twin (http.get_json -> await http.aget_json)."""
         url = f"{_ENDPOINT}?resource_id={_RID}&limit=100"
         data = await http.aget_json(url)

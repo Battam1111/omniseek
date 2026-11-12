@@ -117,7 +117,7 @@ def _looks_like_video_ref(s: str) -> Optional[str]:
 
 
 async def _abvid_to_aid(bvid: str) -> Optional[int]:
-    """Async replacement of the deleted sync ``_bvid_to_aid`` (11-04, S9; this is the only one now): byte-faithful mirror (SAME cache key + 24h ttl, the ``code != 0``
+    """Async replacement of the deleted sync ``_bvid_to_aid`` (11-04, this is the only one now): byte-faithful mirror (SAME cache key + 24h ttl, the ``code != 0``
     guard, the ``aid > 0`` check, the failure -> None contract). The disk cache get/set go OFF the loop
     (``anyio.to_thread.run_sync``); the egress swaps to ``_abili_request``; ``resp.json()`` /
     ``raise_for_status`` are pure CPU on an already-read Response, so they stay on the loop."""
@@ -221,7 +221,7 @@ class BilibiliAdapter(BaseScrapeAdapter):
     rank = False
 
     async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async replacement of the deleted sync ``search`` (11-04, S9; this is the only one now) -> AsyncSearchCapable. SAME routing: a bare BV-id / bilibili
+        """Native-async replacement of the deleted sync ``search`` (11-04, this is the only one now) -> AsyncSearchCapable. SAME routing: a bare BV-id / bilibili
         video URL query returns that video's top comments as docs (async ``_acomments_search``); any other
         query goes the base async template path (``_asearch_via``: cache round-trip OFF the loop with the
         SAME cache key as ``search``, opt-in rank on the loop). Egress via ``_araw_fetch``; mapping via the
@@ -232,7 +232,7 @@ class BilibiliAdapter(BaseScrapeAdapter):
         return await self._asearch_via(query, limit)
 
     async def _acomments_search(self, bvid: str, limit: int) -> list[Document]:
-        """Async replacement of the deleted sync ``_comments_search`` (11-04, S9; this is the only one now): resolve the aid (async ``_abvid_to_aid``) then fetch the top
+        """Async replacement of the deleted sync ``_comments_search`` (11-04, this is the only one now): resolve the aid (async ``_abvid_to_aid``) then fetch the top
         comments (async ``_afetch_comments``, off-loop cache); the ``min(max(limit, 1), _MAX_COMMENTS)``
         cap, the ``replies[:limit]`` slice, and the per-comment ``_comment_to_document`` map (pure CPU, on
         the loop) are byte-identical to sync."""
@@ -250,7 +250,7 @@ class BilibiliAdapter(BaseScrapeAdapter):
         return docs
 
     async def _araw_fetch(self, query: str, limit: int) -> Optional[list]:
-        """Async replacement of the deleted sync ``_raw_fetch`` (11-04, S9; this is the only one now): byte-faithful mirror of the anti-bot search call — the SAME params
+        """Async replacement of the deleted sync ``_raw_fetch`` (11-04, this is the only one now): byte-faithful mirror of the anti-bot search call — the SAME params
         (``search_type``/``keyword``/``page``/``page_size=min(limit, 42)``/``order=totalrank``), the
         raise_for_status, the ``code != 0`` guard, and the failure/error -> None contract (so the base
         caches a success list but not a miss). ONLY the ``_bili_request`` egress swaps to ``_abili_request``."""

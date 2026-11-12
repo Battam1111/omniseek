@@ -67,10 +67,10 @@ class OecdAiPolicyAdapter(BulkFundingBase):
     _version = "v1-newest15"
 
     async def _abuild_subset_docs(self) -> list[Document]:
-        """Async egress replacement of the deleted sync ``_build_subset_docs`` (11-04, S9; this is the only one now) (S4b): byte-for-byte the same paginate / dedup /
+        """Async egress replacement of the deleted sync ``_build_subset_docs`` (11-04, this is the only one now): byte-for-byte the same paginate / dedup /
         map loop, the ONLY change being ``http.get_json`` -> ``await http.aget_json`` (the async network
         wait stays ON the loop via epoll, no held pool thread; the SSRF getaddrinfo in the async leaf is
-        moved off-loop by S4b Part 1). The elapsed-cap clock, the pure-CPU ``_row_to_doc`` map, the
+        moved off-loop by the async migration). The elapsed-cap clock, the pure-CPU ``_row_to_doc`` map, the
         seen-set dedup and the ``lastPage`` break all stay ON the loop, identical to the sync path."""
         docs: list[Document] = []
         seen: set[int] = set()

@@ -1,6 +1,6 @@
 """Researcher watch — track a deployer-supplied list of PIs' newest papers via OpenAlex.
 
-Phase 4 P12 (2026-05-28). Tracks the most recent work of a configured set of PIs:
+Phase 4 (2026-05-28). Tracks the most recent work of a configured set of PIs:
 the upstream signal for collaboration / postdoc / hiring scouting. Job boards
 (academic_jobs, ai_residencies) tell you when a position is *posted*; this
 tells you what a tracked PI is *working on right now*, often before a position
@@ -80,7 +80,7 @@ DEFAULT_SEED: list[tuple[str, str, str]] = [
 def _load_watch_list() -> list[tuple[str, str, str]]:
     """Return [(name, institution, openalex_id)]. Deployer config replaces seed.
 
-    The config lives only in the keys directory (where.credentials(), registered in 01_docs/CREDS.tsv); on
+    The config lives only in the keys directory (where.credentials()); on
     2026-10-20 a change dropped the second place, the user config directory of the retired application name."""
     path = where.credentials() / "researcher_watch.json"
     if path.exists():
@@ -146,7 +146,7 @@ class ResearcherWatchAdapter(SourceBase):
     )
 
     async def _afetch_pi_works(self, oaid: str) -> "tuple[list[dict], bool]":
-        """Native-async replacement of the deleted sync ``_fetch_pi_works`` (11-04, S9; this is the only one now) (byte-faithful): SAME cache keys + last-good
+        """Native-async replacement of the deleted sync ``_fetch_pi_works`` (11-04, this is the only one now) (byte-faithful): SAME cache keys + last-good
         logic, only the two BLOCKING primitives move off the loop —
           • the disk cache read/write → ``anyio.to_thread.run_sync`` (cache.get / cache.set do file IO;
             anyio copies the current context into the worker thread, so the ``fresh`` contextvar the
@@ -189,7 +189,7 @@ class ResearcherWatchAdapter(SourceBase):
         return works, False
 
     async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async replacement of the deleted sync ``search`` (11-04, S9; this is the only one now) (researcher_watch's per-PI OpenAlex fan-out goes native
+        """Native-async replacement of the deleted sync ``search`` (11-04, this is the only one now) (researcher_watch's per-PI OpenAlex fan-out goes native
         async), so the live async omniseek_search path awaits it DIRECTLY instead of parking a pool thread
         on the whole PI fan-out. It mirrors ``search`` step-for-step; only the BLOCKING work moves:
           • the per-PI OpenAlex round-trips (and their per-PI disk cache IO) → concurrent coroutines

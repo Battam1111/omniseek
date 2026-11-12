@@ -366,7 +366,7 @@ class IRCCProcessingTimesAdapter(SourceBase):
         return None  # structured lookup source; reach it via search
 
     def health_check(self) -> tuple[Optional[bool], str]:
-        # LIGHT: never a full CDP fetch in a health probe (the P19 lesson). Browser liveness is OUR
+        # LIGHT: never a full CDP fetch in a health probe (the lesson). Browser liveness is OUR
         # side and the cache is a past answer: neither asks the IRCC site anything, so a live browser
         # is None (not verified), not True. A dead browser stays False (the source cannot serve).
         try:

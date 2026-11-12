@@ -137,7 +137,7 @@ def redact_obj(obj: Any, mask: str = MASK, skip: Optional[Callable[[Any], bool]]
 
 # ── queries sent out (2026-11-07: what goes to machines
 # that are not ours is masked) ─────────────────────────────────────────────────────────────────────────────────
-# The rule is NOT this module's: it is the push outlet's 07_services/notify/redact.py (one rule for everything that
+# The rule is NOT this module's: it is the push outlet's own (one rule for everything that
 # leaves for someone else's machine), loaded by file path as the services part installs it, else from the repo
 # checkout beside this tree (tests, a hand run). Masked spans become "[已遮]"; the search goes on with what is left.
 # One log line per masked query, with the tool and the count, never the text. Fail-open like the rest of this
@@ -154,7 +154,7 @@ _outward_log = logging.getLogger("omniseek.outward")
 
 def _outward_rule(configured: "Path") -> Optional[Callable[[str], str]]:
     from pathlib import Path
-    for path in (configured, Path(__file__).resolve().parents[3] / "07_services" / "notify" / "redact.py"):
+    for path in (configured,):
         try:
             stamp = (str(path), path.stat().st_mtime_ns)
         except OSError:
@@ -198,7 +198,7 @@ def outward(text: Any, tool: str) -> Any:
                 # blocks and, when the outlet is out, sends through the loop itself (http.direct).
                 threading.Thread(
                     target=notify.alert, name="outward-alert", daemon=True,
-                    args=("眼往外发的查询没遮", "推送出口的遮挡规则（07_services/notify/redact.py，装在 "
+                    args=("眼往外发的查询没遮", "推送出口的遮挡规则（装在 "
                           "%s）载不进来（%s）：这个进程往外发的查询照原样发出，"
                           "直到规则装回、眼重启。只报一次。" % (where.show(configured), why)),
                     kwargs={"source": "eye.infra_jobs"}).start()   # 眼的设施毛病，同源体检一行去向（routes.tsv），表里没有的来源只记账

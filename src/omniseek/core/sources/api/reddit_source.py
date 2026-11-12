@@ -1463,7 +1463,7 @@ class RedditAdapter(SourceBase):
         return docs
 
     async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async replacement of the deleted sync ``search`` (11-04, S9; this is the only one now) (reddit's Arctic submission fan-out goes native async), so
+        """Native-async replacement of the deleted sync ``search`` (11-04, this is the only one now) (reddit's Arctic submission fan-out goes native async), so
         the live async omniseek_search path awaits it DIRECTLY instead of parking a pool thread on the whole
         fan-out. It mirrors ``search`` step-for-step; only the BLOCKING work moves:
           • the disk cache read/write → ``anyio.to_thread.run_sync`` (get_docs / set_docs do file IO);

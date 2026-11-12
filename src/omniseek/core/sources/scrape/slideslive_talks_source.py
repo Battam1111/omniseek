@@ -160,7 +160,7 @@ class SlidesLiveTalksAdapter(BaseScrapeAdapter):
     modes = ["TRANSCRIBE", "STRUCTURE"]
 
     async def _araw_fetch(self, query: str, limit: int) -> Optional[Any]:
-        """Async replacement of the deleted sync ``_raw_fetch`` (11-04, S9; this is the only one now). The keyword library search (what a broad search sends) is a
+        """Async replacement of the deleted sync ``_raw_fetch`` (11-04, this is the only one now). The keyword library search (what a broad search sends) is a
         coroutine; a talk URL / id goes to yt-dlp, a blocking library, so that one branch runs in a
         worker thread."""
         talk_id = _talk_id(query)
@@ -219,7 +219,7 @@ class SlidesLiveTalksAdapter(BaseScrapeAdapter):
 
     @staticmethod
     async def _asearch_presentations(query: str, limit: int) -> list[dict]:
-        """Async replacement of the deleted sync ``_search_presentations`` (11-04, S9; this is the only one now) (http.aget_text, same pages, same stop rules)."""
+        """Async replacement of the deleted sync ``_search_presentations`` (11-04, this is the only one now) (http.aget_text, same pages, same stop rules)."""
         from omniseek.core import http
         results: list[dict] = []
         seen: set[str] = set()

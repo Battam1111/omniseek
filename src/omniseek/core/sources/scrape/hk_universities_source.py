@@ -1,6 +1,6 @@
 """HK 5 大学 CS/CSE/COMP dept news HTML scrape — a regional academic signal.
 
-P10 实施：HK 大学系统普遍不暴露 RSS，但 dept-level news 页面是结构化 HTML 列表，
+实施：HK 大学系统普遍不暴露 RSS，但 dept-level news 页面是结构化 HTML 列表，
 可 BeautifulSoup 解析。覆盖 HK CS 院系动态 + 学术 peer 网络的核心信号源。
 
 站级现状 (2026-06-29 实测复核)：5 站异构且半数已衰变。HKUST CSE 仍是结构化静态
@@ -223,7 +223,7 @@ class HKUniversitiesAdapter(SourceBase):
     )
 
     async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async replacement of the deleted sync ``search`` (11-04, S9; this is the only one now): the async omniseek_search fan-out awaits this DIRECTLY (no
+        """Native-async replacement of the deleted sync ``search`` (11-04, this is the only one now): the async omniseek_search fan-out awaits this DIRECTLY (no
         held pool thread), so the dominant cost — 5 serial-in-sync dept-page downloads (CUHK ~175KB /
         CityU ~133KB / PolyU ~137KB) — becomes 5 CONCURRENT coroutines on the one loop. Mirrors
         ``search`` line-for-line, changing ONLY the blocking waits:

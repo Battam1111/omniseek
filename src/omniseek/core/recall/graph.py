@@ -46,7 +46,7 @@ RULINGS_PATH = where.state() / "graph_rulings.json"
 _RULINGS_LOCK = threading.Lock()
 _RULING_VERDICTS = frozenset({"same", "not_same"})
 
-# Typed agent STATEMENTS generalize the rulings idiom (P8): where a ruling is a pair-keyed, symmetric
+# Typed agent STATEMENTS generalize the rulings idiom: where a ruling is a pair-keyed, symmetric
 # IDENTITY judgment (consumed by the collapse machinery), a statement is a DIRECTED triple
 # (src, dst, type) with FREE agent vocabulary — "acquired_by", "advises", "refutes", anything the
 # judge names. Same store shape as rulings (a JSON list beside sensors.json / graph_rulings.json,
@@ -205,7 +205,7 @@ def _id_self_label(node_id: str) -> Optional[str]:
 # ``conservative`` trusts only exact-ID equality; ``working`` adds the agent's rulings; ``exploratory``
 # adds the fuzzy alignment candidates.
 #
-# THE LADDER, in one line (P8, now that the working tier carries BOTH judgment channels):
+# THE LADDER, in one line (now that the working tier carries BOTH judgment channels):
 #   conservative = the mechanical world (M facts + exact-id same_as);
 #   working      = + the agent's OWN judgments (rulings AND statements);
 #   exploratory  = + machine candidates (title_fp / name_match alignment).
@@ -234,7 +234,7 @@ def _policy_methods(policy: str) -> frozenset:
     return _POLICIES.get((policy or "").strip().lower(), CONSERVATIVE)
 
 
-# ── View registry (design P6: the open family gets an open ABI) ──────────────────────────────────
+# ── View registry (design phase 6: the open family gets an open ABI) ──────────────────────────────────
 # omniseek_graph is OmniSeek's ONE open-family verb: its intents (views) grow with the model and their
 # parameters are DISJOINT per view, so it gets an open ABI ``(view, args)``, frozen forever, with the
 # views as a REGISTRY (the same mechanism-demoted-to-data move as _GATHER_TOOLS / register_mints).
@@ -354,7 +354,7 @@ def _ruling_index(rulings: list[dict]) -> tuple[set, dict]:
     return not_same, same
 
 
-# ── Statements store (the rulings idiom generalized; P8) ────────────────────────────────────────
+# ── Statements store (the rulings idiom generalized) ────────────────────────────────────────
 # The DIRECTED, free-vocabulary sibling of the rulings store above. Every function mirrors its
 # rulings twin's shape and voice; the differences are the design's essence: the KEY is the directed
 # triple (src, dst, type) NOT a sorted pair (direction is the assertion, never normalized), endpoints
@@ -560,7 +560,7 @@ def similar_anchors(src: str, dst: str, statements: Optional[list] = None) -> di
     return out
 
 
-# ── The three P1 read functions (read-only over store's DB, fail-open to empty, budgeted) ───────
+# ── The three phase 1 read functions (read-only over store's DB, fail-open to empty, budgeted) ───────
 
 def _con() -> Optional["object"]:
     """The shared read connection from ``store`` (per-thread WAL, fail-open to None when disabled)."""
@@ -630,7 +630,7 @@ def find(label_query: str, kind: str = "", limit: int = 20) -> dict:
                 out.append({"id": nid, "kind": "document", "label": title})
         except Exception as exc:  # noqa: BLE001
             logger.debug("graph.find doc scan failed: %s", exc)
-    # (iii) STATEMENT endpoints (P8): a typed statement may name an id no tap ever minted (a
+    # (iii) STATEMENT endpoints: a typed statement may name an id no tap ever minted (a
     # label-keyed entity, or any id string). Scan both endpoints of every statement; match the query
     # tokens against the SELF-DESCRIBING part (a ``{kind}:label:{x}`` id matches on its label segment
     # x; any other id matches on its raw string). Deduped against the node/doc hits above, kind filter
@@ -665,14 +665,14 @@ def find(label_query: str, kind: str = "", limit: int = 20) -> dict:
 def stats() -> dict:
     """The cheap orientation call: counts by node kind (incl. the virtual docs count), edge counts
     by type and by tier, the rulings count, and the statements count. Fail-open — any sub-count that
-    fails is simply omitted / zero. NOTE the cold-start expectation (design section 10): at P1 the
+    fails is simply omitted / zero. NOTE the cold-start expectation (design section 10): at phase 1 the
     entity kinds are EMPTY and only document same_as edges exist (derived, so they do not appear in
     graph_edges either); empty entity kinds here are CORRECT, not broken. ``document`` counts the
-    virtual docs (indexed sources); ``document_thin`` counts the retrieval-anchored thin rows (P2.0 —
+    virtual docs (indexed sources); ``document_thin`` counts the retrieval-anchored thin rows (phase 2.0 —
     docs from non-indexed sources, title + url only) SEPARATELY so the cold-start story stays honest.
-    ``document_thin_embedded`` counts the vec_thin rows (P7 — thin titles that have an embedding, the
+    ``document_thin_embedded`` counts the vec_thin rows (phase 7 — thin titles that have an embedding, the
     mechanical coverage gauge for how much of the thin perception history ``similar`` can see).
-    ``statements`` counts the agent's typed statements (P8 — the volume gauge beside ``rulings``, so a
+    ``statements`` counts the agent's typed statements (phase 8 — the volume gauge beside ``rulings``, so a
     migration off the JSON file stays a measured decision, not a pre-emptive one)."""
     result: dict = {"node_kinds": {}, "edge_types": {}, "edge_tiers": {}, "rulings": 0,
                     "statements": 0}
@@ -692,7 +692,7 @@ def stats() -> dict:
         result["node_kinds"]["document"] = con.execute("SELECT count(*) FROM docs").fetchone()[0]
     except Exception as exc:  # noqa: BLE001
         logger.debug("graph.stats doc count failed: %s", exc)
-    try:  # P7 thin-title embedding coverage gauge: vec_thin rows (a mechanical count, no ratio, no
+    try:  # phase 7 thin-title embedding coverage gauge: vec_thin rows (a mechanical count, no ratio, no
         # judgment). Beside document_thin so "how much of the thin history similar can see" is visible.
         result["node_kinds"]["document_thin_embedded"] = con.execute(
             "SELECT count(*) FROM vec_thin").fetchone()[0]
@@ -782,7 +782,7 @@ def _stated_at_epoch(stated_at: str) -> Optional[float]:
 
 def _statements_since(anchor: str, types: Optional[list[str]], cutoff: float) -> list[dict]:
     """The agent's STATEMENTS touching ``anchor`` (either endpoint, one hop) whose ``stated_at`` is
-    >= ``cutoff`` — the statement arm of the ``since`` accretion log (P8: a judgment accreting is an
+    >= ``cutoff`` — the statement arm of the ``since`` accretion log (a judgment accreting is an
     EVENT). Returns the SAME edge-row shape as ``_stored_edges_since`` but with ``stated_at`` surfaced
     in place of ``first_seen`` (tier "J", method "statement"), respecting the optional ``types`` filter.
     UNLIKE the collapsing views, since threads NO policy here: a statement is surfaced with its honest
@@ -814,7 +814,7 @@ def _statements_since(anchor: str, types: Optional[list[str]], cutoff: float) ->
 
 def _anchor_fp(con, source: str, source_id: str) -> Optional[str]:
     """The title fingerprint of a frontier doc node — docs.fp if indexed, else the thin row's
-    ``attrs_json.fp`` (P2.0 thin-memory coverage). Returns the fp ONLY when it is a ``title:``
+    ``attrs_json.fp`` (phase 2.0 thin-memory coverage). Returns the fp ONLY when it is a ``title:``
     alignment (id-fallback fps never align cross-source); else None."""
     fp: Optional[str] = None
     try:
@@ -839,7 +839,7 @@ def _anchor_fp(con, source: str, source_id: str) -> Optional[str]:
 
 
 def _derived_title_fp_edges(con, frontier: list[str]) -> list[dict]:
-    """DERIVED same_as edges (design v2.0 + P2.0): a shared title fingerprint IS the title_fp same_as
+    """DERIVED same_as edges (design v2.0 + phase 2.0): a shared title fingerprint IS the title_fp same_as
     edge set, live and always current (no stored rows). Scoped to frontier DOC nodes each hop and
     keyed on the anchor's exact fp value (never a full-table cross join). method ``align:title_fp``,
     tier A (exploratory-only). Only ``title:`` fingerprints align (id-fallback fps are not). Coverage
@@ -884,7 +884,7 @@ def _derived_title_fp_edges(con, frontier: list[str]) -> list[dict]:
 
 def _id_eq_triple(con, source: str, source_id: str) -> Optional[tuple]:
     """The ``(openalex_id, doi, arxiv_id)`` for a frontier doc node — from the docs table if it is an
-    indexed doc, ELSE from its thin graph_nodes row's attrs_json (the P2.0 thin-memory coverage).
+    indexed doc, ELSE from its thin graph_nodes row's attrs_json (the thin-memory coverage).
     A given ``doc:{source}:{sid}`` is in exactly ONE store (indexable -> docs; non-indexed -> thin),
     so docs-first-then-thin never double-reads. The attrs_json keys are the SAME names writer.py's
     thin upsert lifts (``openalex_id`` / ``doi`` / ``arxiv_id``), read here at the FLAT attrs root
@@ -919,7 +919,7 @@ def _id_eq_triple(con, source: str, source_id: str) -> Optional[tuple]:
 def _derived_id_eq_edges(con, frontier: list[str]) -> list[dict]:
     """DERIVED doc->work id_eq same_as (design v2.0): a document's external ids equal a world
     entity's id. Query-time via json_extract, scoped to frontier DOC nodes, covering BOTH indexed
-    docs (docs.doc_json) and thin document nodes (graph_nodes.attrs_json — the P2.0 thin-memory arm).
+    docs (docs.doc_json) and thin document nodes (graph_nodes.attrs_json — the thin-memory arm).
     methods ``id_eq:openalex`` / ``id_eq:doi`` / ``id_eq:arxiv`` (conservative). This joins the
     perception atom (doc) to the bibliographic entity (work) WITHOUT collapsing them into one node."""
     doc_ids = [f for f in frontier if f.startswith("doc:")]
@@ -1101,7 +1101,7 @@ def neighborhood(anchor: str, depth: int = 1, types: Optional[list[str]] = None,
     return result
 
 
-# ── voices: the independence projection (design section 7 + the P3 amendment) ────────────────────
+# ── voices: the independence projection (design section 7 + the amendment) ────────────────────
 # THE ONE independence mechanism (the parsimony audit deleted the derived independence_score that
 # counted source NAMES, not upstream voices). voices collapses a DOC SET to distinct upstream VOICES
 # via same_as + authored, so "N sources agree" becomes "N INDEPENDENT voices agree" (or fewer). It
@@ -1415,7 +1415,7 @@ def between(a: str, b: str, types: Optional[list[str]] = None, policy: str = "co
     return result
 
 
-# ── since: the accretion log (design section 7 + the P4 sensor consumer) ─────────────────────────
+# ── since: the accretion log (design section 7 + the sensor consumer) ─────────────────────────
 # "What accreted around X after T." STORED edges only: derived edges (title_fp / id_eq same_as) are
 # computed live and carry NO timestamps, so they are structurally absent here — since projects a
 # fact STREAM (what changed), not an identity question, and it does NOT collapse identity (no policy,
@@ -1445,7 +1445,7 @@ def _parse_since_cutoff(date: str) -> Optional[float]:
 def since(anchor: str, date: str, types: Optional[list[str]] = None, max_nodes: int = 40) -> dict:
     """The ACCRETION LOG around a node: the STORED edges touching ``anchor`` (one hop, both
     directions, optional ``types`` filter) whose ``first_seen`` is >= the parsed cutoff, PLUS the
-    agent's typed STATEMENTS touching the anchor whose ``stated_at`` is >= the cutoff (P8: a judgment
+    agent's typed STATEMENTS touching the anchor whose ``stated_at`` is >= the cutoff (a judgment
     accreting is an event, surfaced with ``stated_at`` in place of ``first_seen``). DERIVED same_as
     edges (title_fp / doc-work id_eq) are computed live and carry NO timestamps, so they stay
     structurally absent. There is NO policy and NO rulings/statement COLLAPSE overlay: since projects
@@ -1474,7 +1474,7 @@ def since(anchor: str, date: str, types: Optional[list[str]] = None, max_nodes: 
         return result
     try:
         rows = _stored_edges_since(con, anchor, types, cutoff)
-        # The statement arm (P8): the agent's typed statements touching the anchor with stated_at >=
+        # The statement arm: the agent's typed statements touching the anchor with stated_at >=
         # cutoff, surfaced with stated_at in place of first_seen (a judgment accreting is an event).
         rows += _statements_since(anchor, types, cutoff)
 
@@ -1510,8 +1510,8 @@ def since(anchor: str, date: str, types: Optional[list[str]] = None, max_nodes: 
     return result
 
 
-# ── similar: the alignment CANDIDATES view (design "P5 shipped", the P5 sketch overturned) ────────
-# The earlier P5 sketch (a tap MINTING align:embed same_as candidate edges, exploratory-visible) is
+# ── similar: the alignment CANDIDATES view (design "phase 5 shipped", the sketch overturned) ────────
+# The earlier phase 5 sketch (a tap MINTING align:embed same_as candidate edges, exploratory-visible) is
 # overturned by two of this design's own principles, and the shipped form is a ZERO-WRITE view:
 #   (1) Durability: storing embedding neighbors freezes ONE model's judgment into the wall (the store
 #       must stay non-thinking so it appreciates as models improve), so candidates are DERIVED at
@@ -1529,7 +1529,7 @@ def similar(anchor: str, k: int = 10) -> dict:
     """Vector-NEAREST doc CANDIDATES for an anchor doc — PROPOSALS from embedding proximity, never
     collapsed by any policy. ``anchor`` must be a ``doc:{source}:{source_id}`` id of a doc that has an
     EMBEDDED vector in EITHER store: an INDEXED doc (the recall ``vec`` matrix) OR a THIN doc whose
-    title was embedded as the writer caught up (``vec_thin``, P7). Reuses the anchor's OWN stored
+    title was embedded as the writer caught up (``vec_thin``). Reuses the anchor's OWN stored
     vector by its identity (never re-embeds), ranks all other vectors across the UNION of both stores
     by cosine, and takes top-k BY RANK (k is a resource budget like max_nodes, NEVER a similarity
     threshold: rank, never a score cutoff — the RRF discipline).
@@ -1542,10 +1542,10 @@ def similar(anchor: str, k: int = 10) -> dict:
     pseudo-precision) and NO edges (candidates are a listing, not graph structure). An anchor that is
     NOT a ``doc:`` id, or has NO vector in EITHER store (un-embedded yet), returns ``{"error": ...}``
     naming the real condition. Fail-open to an empty candidate list on store failure. This view WRITES
-    NOTHING (the P1 zero-new-writes move, repeated).
+    NOTHING (the zero-new-writes move, repeated).
 
-    DELIBERATE NON-GOAL (P7): vec_thin does NOT feed omniseek_search's recall arm — that fold is a separate
-    decision with its own dogfood. similar (and future P5 consumers) read vec_thin; search does not."""
+    DELIBERATE NON-GOAL: vec_thin does NOT feed omniseek_search's recall arm — that fold is a separate
+    decision with its own dogfood. similar (and future phase 5 consumers) read vec_thin; search does not."""
     coverage = "docs with an embedded title (indexed vec OR thin vec_thin)"
     anchor = (anchor or "").strip()
     if not anchor.startswith("doc:"):
@@ -1597,7 +1597,7 @@ def _node_kind(node_id: str) -> str:
 def _hydrate_nodes(con, ids: set, anchor: str) -> list[dict]:
     """Attach {id, kind, label} for a set of node ids: entity labels from graph_nodes, document
     labels (titles) from the docs table, a ``{kind}:label:{x}`` id's SELF-DESCRIBED label read out of
-    the id when no row exists (P8), everything else labelled None. Fail-open per source."""
+    the id when no row exists, everything else labelled None. Fail-open per source."""
     labels: dict = {}
     kinds: dict = {}
     id_list = list(ids)
@@ -1632,7 +1632,7 @@ def _hydrate_nodes(con, ids: set, anchor: str) -> list[dict]:
     out: list[dict] = []
     for nid in id_list:
         # A ``{kind}:label:{x}`` id with no graph_nodes row is SELF-DESCRIBING (label = x): read the
-        # label straight out of the id (P8 — statement endpoints are often these never-minted ids).
+        # label straight out of the id (phase 8 — statement endpoints are often these never-minted ids).
         label = labels.get(nid)
         if label is None:
             label = _id_self_label(nid)
@@ -1684,7 +1684,7 @@ def _truncate_nodes(con, nodes: list[dict], max_nodes: int, anchor: str) -> list
     return keep[:max_nodes]
 
 
-# ── The open ABI: describe + dispatch, both DERIVED from the registry (design P6) ─────────────────
+# ── The open ABI: describe + dispatch, both DERIVED from the registry (design phase 6) ─────────────────
 # describe_views is the runtime self-description (a no-view call returns it, so the surface is
 # self-describing and future views appear WITHOUT a client restart). dispatch_view is the ONE
 # mechanical gate: unknown view, per-view arg validation (against the view's OWN signature), lenient

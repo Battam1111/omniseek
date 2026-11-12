@@ -50,7 +50,7 @@ class S2AuthorsAdapter(BaseScrapeAdapter):
                      "not broad-fan-out fodder (the keyless S2 pool is rate-limited)")
 
     async def _araw_fetch(self, query: str, limit: int) -> Optional[Any]:
-        """Async replacement of the deleted sync ``_raw_fetch`` (11-04, S9; this is the only one now): same URL, same params, same timeout; ONLY the shared-http
+        """Async replacement of the deleted sync ``_raw_fetch`` (11-04, this is the only one now): same URL, same params, same timeout; ONLY the shared-http
         egress swaps http.get_json -> await http.aget_json. Everything else verbatim."""
         return await http.aget_json(
             SEARCH_URL,

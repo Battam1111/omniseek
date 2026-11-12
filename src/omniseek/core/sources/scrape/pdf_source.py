@@ -190,7 +190,7 @@ class PdfAdapter(SourceBase):
             logger.warning("pdf adapter: PyMuPDF unavailable: %s", exc)
             return None
 
-        # SSRF (review finding H3): this CLAIMING adapter fetches an agent-controlled URL (any /pdf/
+        # SSRF: this CLAIMING adapter fetches an agent-controlled URL (any /pdf/
         # path). Since 2026-10-24 it goes through http.download_to_file, whose libcurl tier checks every
         # redirect hop against _netguard before sending it (http._acurl_hops), the same per-hop check
         # docreader and the audio download use; it does not pin the resolved IP the way the shared

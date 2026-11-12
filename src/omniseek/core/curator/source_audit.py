@@ -1,5 +1,5 @@
-"""Curator P3, the source audit: a READ-ONLY mechanical fact-gather that joins the accumulated
-P2 yield + recall ingest watermarks + watchdog failures + the facets (domain x mode) coverage grid
+"""Curator phase 3, the source audit: a READ-ONLY mechanical fact-gather that joins the accumulated
+phase 2 yield + recall ingest watermarks + watchdog failures + the facets (domain x mode) coverage grid
 into a per-source NEUTRAL dossier with NO verdict key. A spawned AGENT reads the dossier and renders
 KEEP / WATCH / PRUNE per source; a weekly sentinel surfaces candidates + empty cells to the operator.
 
@@ -44,7 +44,7 @@ _COVERAGE_TARGETS_PATH = Path(__file__).with_name("coverage_targets.json")
 # Guards ONLY the atomic write of source_verdicts.json (mirrors candidates._LOCK / yield_tap._LOCK).
 _LOCK = threading.Lock()
 
-# The set of keys NO gather path may emit at any depth. Identical to evidence.BANNED_KEYS + the P2/P3-specific judgment words.
+# The set of keys NO gather path may emit at any depth. Identical to evidence.BANNED_KEYS + the phase 2 and phase 3 judgment words.
 BANNED_KEYS = frozenset({
     "score", "verdict", "passes", "recommend", "admit", "reject", "good", "quality", "rating",
     "confidence", "decision", "redundant", "dead", "low_yield", "prune", "keep",
@@ -106,7 +106,7 @@ def load_policy() -> dict:
 def load_coverage_targets() -> list:
     """Read coverage_targets.json (operator DATA): the (domain x mode) cells OmniSeek INTENDS to
     cover, as a list of ``domainXmode`` strings, independent of what sources currently exist.
-    This DECOUPLES the P4 discovery gap signal + the STOP streak from the live roster (Attack-1):
+    This DECOUPLES the discovery gap signal + the STOP streak from the live roster (Attack-1):
     a cold-start domain no living source declares can still be a discovery target, and STOP means
     'all INTENDED cells filled', never the vacuous 'all cells some living source declares'.
 
@@ -150,7 +150,7 @@ def _ingest_watermark(source: str) -> dict:
 
 
 def _yield_rows() -> tuple[dict, int]:
-    """The accumulated P2 yield: (per-source counter rows, total_searches_observed). FRESH read of
+    """The accumulated phase 2 yield: (per-source counter rows, total_searches_observed). FRESH read of
     yield.json via yield_tap._load_all (corrupt -> empty, never raises)."""
     try:
         data = _yt._load_all()
@@ -172,7 +172,7 @@ _NO_LIVE_EVIDENCE = frozenset({"unknown", "unverified"})
 
 
 def _is_presumed_dark(silent_days, cadence_floor) -> bool:
-    """P3.1: a source whose health is 'unknown' (never probed by the watchdog, e.g. a CDP source) or
+    """phase 3.1: a source whose health is 'unknown' (never probed by the watchdog, e.g. a CDP source) or
     'unverified' (probed, but by design the probe asks the upstream nothing, so the watchdog holds no
     live evidence either way) is presumed-dark iff it has an ingest watermark that is SILENT past its
     cadence floor. A source with NO watermark (silent_days is None) is NOT presumed-dark (fail SAFE:
@@ -189,7 +189,7 @@ def _is_presumed_dark(silent_days, cadence_floor) -> bool:
 def _build_grid(roster: list, liveness_by_name: Optional[dict] = None) -> dict:
     """Map every (domain x mode) cell to its LIVE occupants from a FRESH list_sources roster.
     A cell's occupant must be LIVE: health != 'down' (a watchdog-dead source cannot hold a cell
-    open), AND not PRESUMED-DARK (P3.1: a health=='unknown' CDP source silent past its cadence floor
+    open), AND not PRESUMED-DARK (a health=='unknown' CDP source silent past its cadence floor
     stops shielding a cell, over-protecting a corpse falsely keeps coverage_critical True for a real
     empty cell). NEVER _index (the memory layer, filtered out upstream). Pure set membership.
 
@@ -207,7 +207,7 @@ def _build_grid(roster: list, liveness_by_name: Optional[dict] = None) -> dict:
         if s.get("health") == "down":
             continue  # a dead source does not count as a live occupant of its cells
         if (liveness_by_name.get(name) or {}).get("presumed_dark"):
-            continue  # P3.1: a presumed-dark (unknown + silent-past-floor) source is not an occupant
+            continue  # a presumed-dark (unknown + silent-past-floor) source is not an occupant
         for dom in (s.get("domains") or []):
             for mode in (s.get("modes") or []):
                 grid.setdefault(_facet_cell(dom, mode), []).append(name)
@@ -216,11 +216,11 @@ def _build_grid(roster: list, liveness_by_name: Optional[dict] = None) -> dict:
 
 def _build_grid_by_placement(roster: list) -> dict:
     """Map every (domain x mode) cell to its occupants by PLACEMENT, NOT health (Attack-1, the
-    P4 discovery + STOP gap signal). A cell counts as occupied iff a registered, non-retired
+    phase 4 discovery + STOP gap signal). A cell counts as occupied iff a registered, non-retired
     source DECLARES it (its facets domains x modes) -- independent of this month's watchdog
-    result. A source going ``health=='down'`` for a month is a watchdog/prune event (P3's job),
+    result. A source going ``health=='down'`` for a month is a watchdog/prune event (phase 3's job),
     NOT a coverage gap to re-discover, so the discovery signal does not oscillate on a health
-    flap. ``explicit_only='retired:...'`` (the P3 reversible-retire marker) un-declares the cell
+    flap. ``explicit_only='retired:...'`` (the reversible-retire marker) un-declares the cell
     (a retired source no longer holds a target cell open). _index is never an occupant. Pure set
     membership; renders NO verdict. (The prune-side _build_grid stays health-aware + conservative
     for the last-occupant rule; this is a SEPARATE view added beside it, no change to the prune
@@ -300,7 +300,7 @@ def gather_source_dossier() -> dict:
     # neutral fact-joiner; the agent re-renders the verdict from the live facts.
     prior_rows = _load_verdicts().get("verdicts") or {}
 
-    # P3.1: pre-compute per-source liveness (presumed-dark) so the prune-side grid can drop a
+    # pre-compute per-source liveness (presumed-dark) so the prune-side grid can drop a
     # health=='unknown' CDP corpse (or a health=='unverified' source, equally without live evidence)
     # silent past its cadence floor as a live occupant. A fresh ingest watermark + cadence floor read
     # per source; restricted to _NO_LIVE_EVIDENCE (never 'down'/'ok').
@@ -314,8 +314,8 @@ def gather_source_dossier() -> dict:
         pd = (s.get("health") in _NO_LIVE_EVIDENCE) and _is_presumed_dark(sd, cf)
         liveness_by_name[nm] = {"presumed_dark": bool(pd), "silent_days": sd, "cadence_floor": cf}
 
-    grid = _build_grid(roster, liveness_by_name)     # prune-side: health-aware + presumed-dark (P3.1)
-    grid_by_placement = _build_grid_by_placement(roster)  # P4 discovery-side: placement, not health
+    grid = _build_grid(roster, liveness_by_name)     # prune-side: health-aware + presumed-dark
+    grid_by_placement = _build_grid_by_placement(roster)  # phase 4 discovery-side: placement, not health
     coverage_targets = load_coverage_targets()       # operator DATA: the intended (domain x mode) cells
     fails, tracked, watchdog_as_of = fetcher._watchdog_health()
     yields, total_searches = _yield_rows()
@@ -463,7 +463,7 @@ def gather_source_dossier() -> dict:
             # recall ingest watermark (the low-yield seen-delta + silent-days fact)
             "ingest": ingest,
             "cadence_floor_days": cadence_floor,
-            # P3.1 liveness facts (NEUTRAL, no verdict token): is this a presumed-dark occupant?
+            # phase 3.1 liveness facts (NEUTRAL, no verdict token): is this a presumed-dark occupant?
             # (health=='unknown' AND silent past the cadence floor). Surfaced so the agent SEES why
             # a cell's occupant count dropped; the flag set (safety_flags) is frozen + unchanged.
             "liveness": {
@@ -513,7 +513,7 @@ def gather_source_dossier() -> dict:
     revalidation_candidates = sorted(
         s["name"] for s in sources if s["judgment_recency"]["revalidation_candidate"])
 
-    # P4 discovery gap signal (Attack-1, load-bearing): the INTENDED cells (coverage_targets, operator
+    # phase 4 discovery gap signal (Attack-1, load-bearing): the INTENDED cells (coverage_targets, operator
     # DATA) that no placement occupant declares. Decoupled from health + from the existing-roster
     # facets universe, so a cold-start domain can be a target and STOP means 'all intended cells
     # filled'. Ships EMPTY in scaffold mode (coverage_targets == []) -> no discovery target -> idle.
@@ -536,11 +536,11 @@ def gather_source_dossier() -> dict:
         # the stale-judgment re-look set (NEUTRAL names; the per-source judgment_recency block carries
         # the age/presence detail). The sentinel diff-gates the EDGE (newly-stale) of this set.
         "revalidation_candidates": revalidation_candidates,
-        # P3.1: the health=='unknown' sources silent past their cadence floor that the prune-side
+        # the health=='unknown' sources silent past their cadence floor that the prune-side
         # grid no longer counts as live occupants (a neutral fact list, no verdict token).
         "presumed_dark_sources": sorted(
             n for n, v in liveness_by_name.items() if v.get("presumed_dark")),
-        # P4 discovery-side keys (placement-based, decoupled from the live-roster health). Added
+        # phase 4 discovery-side keys (placement-based, decoupled from the live-roster health). Added
         # BESIDE the unchanged prune-side keys above; the prune path reads none of these.
         "coverage_targets": coverage_targets,
         "grid_by_placement": grid_by_placement,
@@ -696,7 +696,7 @@ def prepare_source_prune_case(name: str, reason: str) -> dict:
                         "omniseek_fetch-able + indexed + recoverable")},
         ],
         "coverage_impact": impact,
-        "note": ("Curator P3 stages this reversible retire for the operator: set explicit_only, "
+        "note": ("Curator phase 3 stages this reversible retire for the operator: set explicit_only, "
                  "commit, redeploy. It reduces broad fan-out cost; it does NOT delete "
                  "the adapter or its index history. Flip explicit_only back to fully reverse. "
                  "auto_appliable is always false; no code path applies this automatically."),

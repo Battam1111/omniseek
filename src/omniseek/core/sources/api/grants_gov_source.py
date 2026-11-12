@@ -54,7 +54,7 @@ class GrantsGovAdapter(BaseScrapeAdapter):
                      "not broad-fan-out fodder")
 
     async def _araw_fetch(self, query: str, limit: int) -> Optional[Any]:
-        # Async replacement of the deleted sync ``_raw_fetch`` (11-04, S9; this is the only one now): byte-faithful mirror; only http.post_json -> await http.apost_json.
+        # Async replacement of the deleted sync ``_raw_fetch`` (11-04, this is the only one now): byte-faithful mirror; only http.post_json -> await http.apost_json.
         body = {
             "keyword": query or "",
             "rows": max(1, min(int(limit), _MAX_ROWS)),

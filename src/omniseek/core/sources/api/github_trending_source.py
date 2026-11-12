@@ -18,7 +18,7 @@ Endpoint: GET /search/repositories?q=<query>+pushed:>YYYY-MM-DD&sort=stars
 Response item: name, full_name, description, html_url, stargazers_count,
 forks_count, language, topics[], owner.login, updated_at.
 
-Migrated to ``BaseAPIAdapter`` (B2 template method): the cache/registration/
+Migrated to ``BaseAPIAdapter`` (template method): the cache/registration/
 ranking boilerplate now lives in the base; the two hooks below carry every
 source-specific fact verbatim. ``rank_locally=False`` because the GitHub
 Search API already ranks server-side (sort=stars, order=desc) — the base
@@ -57,7 +57,7 @@ class GitHubTrendingAdapter(BaseAPIAdapter):
     search_label = "search"
 
     async def _araw_fetch(self, query: str, limit: int) -> list:
-        """Async replacement of the deleted sync ``_raw_fetch`` (11-04, S9; this is the only one now): BYTE-FAITHFUL mirror — same 30-day pushed filter, same q/params,
+        """Async replacement of the deleted sync ``_raw_fetch`` (11-04, this is the only one now): BYTE-FAITHFUL mirror — same 30-day pushed filter, same q/params,
         same None->[] contract; ONLY the shared _github egress is swapped (_github.get_json -> await
         _github.aget_json, which shares the SAME breaker / rate pacer / token auth). Single get_json
         call, so nothing else changes."""

@@ -5,7 +5,7 @@ arXiv has a free public API (``export.arxiv.org/api/query``) with no auth. We hi
 ``feedparser`` — the SAME parser the official ``arxiv`` package uses internally, so the
 field mapping is well-understood.
 
-**2026-06-04 (P29):** migrated OFF the ``arxiv`` library. That library fetches via
+**2026-06-04:** migrated OFF the ``arxiv`` library. That library fetches via
 ``urllib`` with NO request timeout (it blocked all the way to our outer ``fetch_one``
 deadline under arXiv's throttling) and uses its own dedicated User-Agent that arXiv
 rate-limits independently. Routing through ``http.py`` gives a real per-request timeout,
@@ -28,7 +28,7 @@ the word set it matched (``metadata.matched_words``); a legal empty answer leave
 ``arxiv.no_match`` diagnostic naming the word sets tried, and an answer that is not an Atom feed an
 ``arxiv.unparseable`` one.
 
-**B2 migration:** now rides ``BaseAPIAdapter`` (template-method base). The two hooks
+**Base-class migration:** now rides ``BaseAPIAdapter`` (template-method base). The two hooks
 ``_raw_fetch`` / ``_to_document`` carry the verbatim arXiv I/O + field mapping; the base
 supplies the cache-checked ``search`` skeleton + auto-registration. ``rank_locally=False``
 preserves the server's order byte-for-byte (no local re-rank): ``sortBy=relevance`` by default,
@@ -109,7 +109,7 @@ _ARXIV_MIN_INTERVAL_S = _guard.min_interval_s    # 3.0 s between request starts,
 _CONNECTION_CLOSE = {"Connection": "close"}
 # HOW LONG A CALLER MAY WAIT (2026-11-11): the gate is a line; the permit wait and the
 # 3 s start wait together run until the caller's own deadline. The module keeps no wait constant of its
-# own (it had 20 s for the permit plus 12 s for the start, review F2; then the declared max_wait_s of
+# own (it had 20 s for the permit plus 12 s for the start, then the declared max_wait_s of
 # 12 s, which fit four requests and turned away the rest of an ordinary 8-question fan-out).
 
 
@@ -177,7 +177,7 @@ async def _arxiv_aget_text(url: str, **kwargs):
     return r
 
 
-# RECENCY (2026-10-11, OmniSeek showcase R12): the API sorts by relevance, which for a plain topic
+# RECENCY (2026-10-11): the API sorts by relevance, which for a plain topic
 # query mixes every year (a 2022 paper led "speculative decoding"). Relevance stays the default, the
 # same as openalex / core / dblp and the base's server-side-relevance contract. A query that asks for
 # a time window is the case relevance cannot serve, so it is rewritten into arXiv's native form: the
@@ -437,7 +437,7 @@ class ArxivAdapter(BaseAPIAdapter):
 
     # ------------------------------------------------------------- async twins
     async def _araw_fetch(self, query: str, limit: int) -> list:
-        """Async replacement of the deleted sync ``_raw_fetch`` (11-04, S9; this is the only one now): BYTE-FAITHFUL mirror — same URL, same params (search_query,
+        """Async replacement of the deleted sync ``_raw_fetch`` (11-04, this is the only one now): BYTE-FAITHFUL mirror — same URL, same params (search_query,
         the max(1,min(limit,100)) clamp and the sort, all built by the one _search_params), the same
         relaxed plan (_relax.arun over the same search and count requests), same reader, same
         _finish. ONLY the shared-http egress is swapped for its async form: _arxiv_get_text -> await

@@ -367,7 +367,7 @@ class DBLPAdapter(BaseAPIAdapter):
     url_host = "dblp.org"
 
     async def _araw_fetch(self, query: str, limit: int) -> list:
-        """Async replacement of the deleted sync ``_raw_fetch`` (11-04, S9; this is the only one now): same words, same plan, same queries, same reader, same
+        """Async replacement of the deleted sync ``_raw_fetch`` (11-04, this is the only one now): same words, same plan, same queries, same reader, same
         ranking; only the egress is ``http.aget``."""
         terms = query_terms(query)
         if not terms:

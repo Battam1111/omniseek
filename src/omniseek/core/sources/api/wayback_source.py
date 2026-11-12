@@ -152,7 +152,7 @@ class WaybackAdapter(SourceBase):
     )
 
     async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async replacement of the deleted sync ``search`` (11-04, S9; this is the only one now) (S4b): the fan-out awaits this DIRECTLY, so a wayback
+        """Native-async replacement of the deleted sync ``search`` (11-04, this is the only one now): the fan-out awaits this DIRECTLY, so a wayback
         lookup's dominant NETWORK wait (CDX is legitimately slow) costs a COROUTINE, not a held pool
         thread. Mirrors ``search`` line for line; the only swaps are the two egress calls to their
         async twins (``await http.aget_json``). The URL guard and the pure payload-to-doc helpers stay

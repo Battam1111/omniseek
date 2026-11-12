@@ -69,7 +69,7 @@ from omniseek.core.recall import RRF_C as _RRF_C  # noqa: E402 (the recall fusio
 
 # Vocabulary this tap MINTS (vocabulary-by-minting, design section 3): declared on the tap itself,
 # registered at import, folded into ``_graph.declared_vocabulary`` as the computed union; ACTUAL
-# graph data must stay within that union. The conflicts tap is the P4 event layer's second
+# graph data must stay within that union. The conflicts tap is the event layer's second
 # half: it mints ``conflicts`` A-tier edges (doc <-> doc) where dedup already found same-work signal
 # DIVERGENCE across sources. NO node kinds (doc endpoints are virtual/thin), NO new methods beyond
 # ``signal:divergence``. The edge attrs carry the signal NAME and its KIND (e.g. "engagement"), so
@@ -113,7 +113,7 @@ def _divergence_ratio(v1: float, v2: float):
     categorical, e.g. a downvoted vs upvoted score). Returns ``None`` when the two values are
     EQUAL (equal is not a divergence, so it never ranks). Signals CAN be negative (a reddit
     score, a net loss), so the ratio is defined over |v|; a bare signed max/min would mis-rank
-    a real 5x divergence like -10 vs -2 as 0.2 and a sign flip as negative. Pure. The P7
+    a real 5x divergence like -10 vs -2 as 0.2 and a sign flip as negative. Pure. The phase 7
     detector RANKS by this ratio and no longer gates on it (rank, never a score gate)."""
     if v1 == v2:
         return None            # equal values are not a divergence
@@ -308,7 +308,7 @@ def dedup(docs: list[Document],
             #     remains, so any later cross-doc comparison compares DIFFERENT works — the
             #     2026-07-01 dogfood noise). Mechanical flag; never fed to ranking (the razor);
             #     fail-open.
-            #     P7 (2026-07-03): the 1.5x ratio GATE is gone. "How much divergence is worth
+            #     2026-07-03: the 1.5x ratio GATE is gone. "How much divergence is worth
             #     flagging" was the last judgment-shaped constant in OmniSeek; the detector now
             #     MEASURES every same-work numeric divergence (its max/min ratio), RANKS by that
             #     ratio DESC, and keeps the top-3 per doc — a RESOURCE cap, not an epistemic line
@@ -366,7 +366,7 @@ def dedup(docs: list[Document],
                     add["_conflict_pairs"] = [c[3] for c in _top]   # PRIVATE: fetcher pops it
             except Exception:  # noqa: BLE001 — one signal's failure never corrupts the merge
                 pass
-        # Curator P2 attribution stamps (pure facts, no judgment; stamped on EVERY survivor,
+        # Curator phase 2 attribution stamps (pure facts, no judgment; stamped on EVERY survivor,
         # singletons included, so the yield tap can TRUST field presence rather than infer absence).
         # live_sources: group members that were LIVE this run (a recall-index rehydration carries
         #   metadata.from_index=True and is NOT live: the live feed went quiet, recall carries it).
@@ -419,7 +419,7 @@ def dedup(docs: list[Document],
     return out
 
 
-# ── graph write tap (design section 6 + P4 taps row): mint conflicts edges from dedup divergence ──
+# ── graph write tap (design section 6 + phase 4 taps row): mint conflicts edges from dedup divergence ──
 # THE MINT RULE (design "Mint the product"): the tap mints what dedup RETURNS as a divergence
 # record, not its internal comparison material. Each record carries both members' full identities +
 # the signal's name + KIND + the two raw values (collected in ``dedup`` under the private
@@ -434,7 +434,7 @@ def _conflict_mints(records: list) -> tuple[list[dict], list[dict]]:
     doc <-> doc per record, method ``signal:divergence``, attrs {signal, kind, values, ratio}. ``kind``
     is the SIGNAL's kind field (e.g. "engagement") lifted from the diverging signals, so views/agents
     can mechanically filter the engagement-count noise class; ``ratio`` is the measured max/min
-    divergence (P7: the edge carries the number, materiality is the reader's). No nodes (doc endpoints
+    divergence (the edge carries the number, materiality is the reader's). No nodes (doc endpoints
     are virtual/thin). The writer normalizes the symmetric pair to src < dst, so do NOT pre-sort here.
     A record with a missing endpoint is skipped (fail-open). Pure."""
     edges: list[dict] = []

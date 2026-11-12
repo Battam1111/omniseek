@@ -36,7 +36,7 @@ EXPECTED_REDLINES = frozenset({
     "linkedin_trackb", "pii_email_query", "pii_employment_tracker", "scraper_data_broker",
 })
 
-# P4 (Attack-2 / spec 8a): for a CURATOR-DISCOVERED candidate (no human submitter to vet it),
+# Attack-2: for a CURATOR-DISCOVERED candidate (no human submitter to vet it),
 # these otherwise-soft lines are PROMOTED to hard so the cron cannot auto-route a privacy-adjacent
 # discovered candidate to awaiting_verdict without an agent's deliberate review. A human-submitted
 # candidate keeps the soft severity (a person consciously vetted it).
@@ -88,9 +88,9 @@ def _query_bearing_strings(candidate: dict) -> list:
 
 
 def _is_discovered(candidate: dict) -> bool:
-    """True iff this candidate came from the P4 discovery loop (no human submitter): it carries a
+    """True iff this candidate came from the discovery loop (no human submitter): it carries a
     ``_discovery`` provenance sub-dict OR was submitted_by the curator-loop. Used to PROMOTE the
-    privacy-adjacent soft lines to hard for discovered candidates (spec 8a)."""
+    privacy-adjacent soft lines to hard for discovered candidates."""
     if candidate.get("_discovery") or candidate.get("discovery"):
         return True
     return (candidate.get("submitted_by") or "") == "curator-loop"
@@ -166,7 +166,7 @@ def match(candidate: dict) -> list:
         hit = _match_one(rule, candidate)
         if hit is None:
             continue
-        # 8a: promote a privacy-adjacent soft line to hard for a discovered candidate (no human
+        # Promote a privacy-adjacent soft line to hard for a discovered candidate (no human
         # submitter vetted it). The on-disk rule stays soft; the promotion is per-candidate.
         if discovered and hit.get("id") in _PROMOTE_HARD_IF_DISCOVERED and hit.get("severity") == "soft":
             hit = {**hit, "severity": "hard", "promoted_for_discovered": True}

@@ -77,10 +77,10 @@ class TiebaAdapter(BaseScrapeAdapter):
     modes = ["UNWALL", "STRUCTURE"]
     regions = ["cn"]
 
-    # ── native async (S4) ────────────────────────────────────────────────────
+    # ── native async ────────────────────────────────────────────────────
     @staticmethod
     async def _aget_json(url: str, params: dict) -> Optional[dict]:
-        """Async replacement of the deleted sync ``_get_json`` (11-04, S9; this is the only one now): byte-faithful mirror (SAME quote()-built query string, mobile-UA
+        """Async replacement of the deleted sync ``_get_json`` (11-04, this is the only one now): byte-faithful mirror (SAME quote()-built query string, mobile-UA
         header, timeout, the ``no != 0`` envelope check, and the failure -> None contract). ONLY the raw
         ``httpx.get(...).json()`` egress swaps to the shared async leaf ``await http.aget_json`` (this is a
         standard keyless JSON GET, so it needs nothing httpx.aget cannot do; the leaf adds the shared pool +
@@ -99,7 +99,7 @@ class TiebaAdapter(BaseScrapeAdapter):
         return data
 
     async def _araw_fetch(self, query: str, limit: int) -> Optional[dict]:
-        """Async replacement of the deleted sync ``_raw_fetch`` (11-04, S9; this is the only one now): the same two mobile GETs (thread search + forum search) and the
+        """Async replacement of the deleted sync ``_raw_fetch`` (11-04, this is the only one now): the same two mobile GETs (thread search + forum search) and the
         same both-failed -> None contract, each egress via ``_aget_json``, with ONE deliberate divergence:
         the two run CONCURRENTLY.
 

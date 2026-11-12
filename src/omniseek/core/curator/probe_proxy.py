@@ -1,4 +1,4 @@
-"""SSRF-pin forward proxy for the curator wall-aware probe (P2).
+"""SSRF-pin forward proxy for the curator wall-aware probe.
 
 A localhost forward HTTP proxy the JAILED Probe Browser routes through
 (``chromium --proxy-server=http://HOST:PORT``). Every CONNECT / plain-HTTP request is

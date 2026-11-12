@@ -44,7 +44,7 @@ logger = logging.getLogger(__name__)
 # (sources._base.ablocking). Sized like portal.IO_LANE_TOKENS, generously
 # above one broad search's ~90 sources, so it never throttles a SINGLE search; serve_http raises the
 # soft fd limit far above this. (The process-global threading semaphore and the private 64-thread pool
-# of the deleted sync fan-out, search_many, are gone with it: 11-04, S9.)
+# of the deleted sync fan-out, search_many, are gone with it: 11-04.)
 _EGRESS_CAP = 256
 _LEGACY_LIMITER = anyio.CapacityLimiter(_EGRESS_CAP)
 
@@ -62,7 +62,7 @@ async def _aegress(adapter, query: str, limit: int) -> list:
 
 
 # BROAD (sources=None) cap. Two values, by freshness:
-#  - default (cache-allowed) path: 11s. MEASURED (2026-06-13, after the L1 slow-source
+#  - default (cache-allowed) path: 11s. MEASURED (2026-06-13, after the slow-source
 #    parallelization + OmniSeek-prewarm cron + the S2 API key): a broad on a NEW query
 #    completes EVERY source except reddit within ~10s — reddit (~25s, host-bound on the
 #    Arctic mirror) is the only straggler, and it is dropped at 16s too, then self-warms.
@@ -162,7 +162,7 @@ def retired_reason(adapter: "SourceAdapter") -> str:
     """The reversible retire-overlay reason for this adapter ('' = not retired). The ONE place that
     answers 'is this source retired, and why': the curator one-tap parks a source by writing a
     'retired:<reason> <date>' overlay row (apply_live / source_audit own the WRITE side). Every
-    consumer (the discovery grid, the P4 placement view, the health sweep) reads THIS instead of
+    consumer (the discovery grid, the placement view, the health sweep) reads THIS instead of
     each re-parsing a 'retired:' prefix off explicit_only. A retire is the STRONGEST exclusion fact:
     it takes precedence over a static explicit_only (see _explicit_only_reason), so retiring an
     already explicit_only source (a walled one, say) stays observable, not masked by the class reason.
@@ -329,7 +329,7 @@ def is_enabled_by_profile(name: str) -> bool:
     return a is None or _profile_enabled(name, a)
 
 
-# P19 health-watchdog state — surfaced (advisory) in list_sources so the agent can
+# phase 19 health-watchdog state — surfaced (advisory) in list_sources so the agent can
 # route around currently-dead sources. Recent, not instant (watchdog runs 6-hourly).
 _WATCHDOG_STATE = where.state() / "health-watchdog-state.json"
 
@@ -1277,7 +1277,7 @@ def _route_idf(catalog: dict, q_tokens: set) -> dict:
 # prove PARITY against the legacy sync fan-out broad-branch selection; Wave 2 is the cutover: the plan
 # is now the SINGLE choke point that the fan-out routes through (both the broad sweep and a named
 # search), and the legacy in-line re-derivation plus the shadow drift-check are gone (a plan comparing
-# to itself is meaningless once it IS the selection). The W1 REAL-registry parity golden keeps guarding
+# to itself is meaningless once it IS the selection). The REAL-registry parity golden keeps guarding
 # the semantics: it independently recomputes the legacy selection from fetcher's own derivations and
 # asserts the plan reproduces it, so it is now the frozen spec of record for this path.
 # Three layers:
@@ -1571,9 +1571,9 @@ def _note_held(held: dict, src: str, cap: list, docs: list) -> bool:
 # The fan-out (asearch_many / asearch_ranked): one asyncio.Task per source (create_task COPIES the
 # contextvars.Context, so each source's fresh / cache_only / diag is ISOLATED). A native source's
 # asearch is awaited on the loop; a source whose search can only block runs its one sync .search on a
-# worker thread admitted by _LEGACY_LIMITER (_aegress). The charter's D3 permit / D4 reservation
-# machinery is DEFERRED until a MEASURED need appears against it. (D14 met its measured need: the IO
-# lane and the process lane in portal.py.) There is no second, synchronous fan-out (11-04, S9): a
+# worker thread admitted by _LEGACY_LIMITER (_aegress). The charter's permit and reservation
+# machinery is DEFERRED until a MEASURED need appears against it. (the IO lane met its measured need: the IO
+# lane and the process lane in portal.py.) There is no second, synchronous fan-out (11-04): a
 # caller on a thread reaches this one through portal.run.
 # =============================================================================================
 
@@ -1597,9 +1597,9 @@ def _reap(t: "asyncio.Task") -> None:
 
 @runtime_checkable
 class AsyncSearchCapable(Protocol):
-    """A source adapter that has gone NATIVE async (S4b onward): it exposes an awaitable ``asearch``
+    """A source adapter that has gone NATIVE async (the async migration's fourth step onward): it exposes an awaitable ``asearch``
     that egresses off the loop by itself, so _dispatch_search awaits it directly instead of pushing
-    the sync .search onto the shared thread pool. In S4a NO adapter implements this, so every source
+    the sync .search onto the shared thread pool. When this was added NO adapter implemented it, so every source
     takes the legacy-runner branch; the native branch is built + goldened now (a stub adapter) so the
     dispatch is proven both ways before any real adapter converts."""
 
@@ -1607,7 +1607,7 @@ class AsyncSearchCapable(Protocol):
 
 
 async def _dispatch_search(adapter: "SourceAdapter", query: str, limit: int) -> list:
-    """D1 capability dispatch: prefer an adapter's NATIVE async asearch; else run its EXISTING sync
+    """Capability dispatch: prefer an adapter's NATIVE async asearch; else run its EXISTING sync
     .search on the bounded shared thread pool. anyio.to_thread.run_sync PROPAGATES the current
     contextvars.Context into the worker thread, so the sync adapter's cache.fresh() / cache_only() +
     diag reads observe THIS source's isolated context (golden pins that propagation). The pool is the
@@ -1616,12 +1616,12 @@ async def _dispatch_search(adapter: "SourceAdapter", query: str, limit: int) -> 
     Every source call of OmniSeek passes here (the fan-out, the one-source fetch, the recall ingest, the
     prewarmer), so this is where a live fetch that worked is recorded (``note_fetched_ok``)."""
     with _probe.capture_answers() as heard:
-        if isinstance(adapter, AsyncSearchCapable):        # native async adapter (S4b onward)
+        if isinstance(adapter, AsyncSearchCapable):        # native async adapter (the async migration's fourth step onward)
             from omniseek.core import cache  # local import: avoid package-init cycle
             with cache.flight_scope():                     # one fetch per cache key at a time (cache.py)
                 docs = await adapter.asearch(query, limit)
         else:
-            # LEGACY RUNNER (D3, simplified): the existing sync .search on the ONE bounded shared pool,
+            # LEGACY RUNNER (simplified): the existing sync .search on the ONE bounded shared pool,
             # its leaf network call gated by the process-global egress semaphore it shares with the sync
             # fan-out's own thread pools.
             docs = await _aegress(adapter, query, limit)
@@ -1757,7 +1757,7 @@ async def asearch_many(
     async def _aone_body(source: str) -> tuple[list[Document], list]:
         # Async + context-ISOLATED twin of _one. Runs in THIS task's COPIED context (create_task), so
         # the set_fresh / set_cache_only / diag.enable below touch only this source's context and never
-        # cross-pollinate another source's (the S3b no-leak contract, now at the fan-out level).
+        # cross-pollinate another source's (the no-leak contract, now at the fan-out level).
         from omniseek.core import cache, diag  # local import: avoid package-init cycle
         from omniseek.core import filters as _flt
         cache.set_fresh(fresh)  # in THIS task's copied context -> adapter's cache calls honor it
@@ -1771,7 +1771,7 @@ async def asearch_many(
         _flt.set_upstream(_up)  # this task's context only (copied into a worker thread by AnyIO)
         try:
             with _probe.capture_held() as _held:   # what the gates refused (_meta.held)
-                docs = await _dispatch_search(adapter, _q, limit_per_source)  # D1 dispatch
+                docs = await _dispatch_search(adapter, _q, limit_per_source)  # capability dispatch
             if not cache_only:  # Path A: index enumerable docs (skip during a cache-only collect).
                 # maybe_ingest durably appends observations before it enqueues the materializer wake.
                 # Keep that durability boundary awaited, but move its file writes and fsync calls off
@@ -1800,7 +1800,7 @@ async def asearch_many(
     paper_wait: Optional[dict] = None  # _meta.paper_wait: set only when late paper sources were waited for
     _who = _guard.current_initiator() or "检索"
 
-    # ORDERED source -> task mapping (upholds the SETTLED I2 invariant: results / errored /
+    # ORDERED source -> task mapping (upholds the SETTLED invariant: results / errored /
     # diagnostics follow CATALOG order, NOT the hash-unordered asyncio.wait done/pending SETS). Insertion
     # order == target/catalog order; create_task COPIES the context per source (per-source isolation).
     t0 = time.monotonic()
@@ -2020,7 +2020,7 @@ def _stamp_seen_before(ranked: list[Document], t0_wall: float) -> None:
     ranked doc: whether THIS deployment had retrieved the doc BEFORE this search (the wall's novelty
     stamp).
 
-    COMPLETENESS CONTRACT (P11 W2): every doc in a ranked response carries BOTH keys, NEVER absent.
+    COMPLETENESS CONTRACT: every doc in a ranked response carries BOTH keys, NEVER absent.
     The value set (Wave 3, 1.14) is now three-valued:
       - ``seen_before=True``  + the ISO ``first_seen_at``: the deployment retrieved this doc before.
       - ``seen_before=False`` + ``first_seen_at=None``: the lookup RAN and this is a verified
@@ -2076,7 +2076,7 @@ def _build_recall_arm(query: str, sources: Optional[list[str]], limit: int,
     """Build the perception-index recall ARM (scope + the callable that runs it), SHARED by both twins.
 
     Returns ``(route_catalog, route_policy, recall_task, index_skipped)``:
-      - ``route_catalog`` / ``route_policy``: the S0.3 one-request snapshot (the recall scope + the
+      - ``route_catalog`` / ``route_policy``: the one-request snapshot (the recall scope + the
         fan-out routing observe the SAME generation). Both None on a cache_only search, so the fan-out
         falls back to building its own (byte-identical there).
       - ``recall_task``: a zero-arg callable that runs the recall (semantic=False -> lexical only;
@@ -2168,7 +2168,7 @@ def _fold_recall_index(results: dict, meta: dict, idx: list, info: dict) -> None
 
 
 def _normalize_seen_before(ranked: list[Document]) -> None:
-    """S0.1 (P11 completeness): a stamp that raised PART-WAY leaves some docs with both keys and some
+    """(phase 11 completeness): a stamp that raised PART-WAY leaves some docs with both keys and some
     with neither. Normalize the SURVIVORS: any doc missing EITHER key gets the honest UNKNOWN
     (seen_before=None + first_seen_at=None), so EVERY ranked doc carries both keys even on a partial
     failure. The happy path is a no-op. SHARED, pure CPU (safe on the loop)."""
@@ -2546,8 +2546,8 @@ def _selfwarm_revisited(ranked: list[Document]) -> None:
 
 def _apply_ranked_enrichments(query: str, ranked: list[Document], results: dict, meta: dict,
                               record_yield: bool, cache_only: bool) -> None:
-    """The passive enrichments (#8 source_diversity, #11 conflicts), the P4 conflicts graph tap, and the
-    curator P2 yield tap -- each computed AFTER merge_rank on the already-ranked+deduped list, each a
+    """The passive enrichments (#8 source_diversity, #11 conflicts), the conflicts graph tap, and the
+    curator phase 2 yield tap -- each computed AFTER merge_rank on the already-ranked+deduped list, each a
     MECHANICAL measurement stamped as _meta for the agent (NEITHER fed to ranking; the razor). SHARED,
     each wrapped fail-open so one signal's failure never corrupts `ranked` or the other _meta. Pure CPU
     + enqueue-only taps (the conflict tap + the yield tap are non-blocking put_nowait / WRITES_ENABLED-
@@ -2570,7 +2570,7 @@ def _apply_ranked_enrichments(query: str, ranked: list[Document], results: dict,
     except Exception:  # noqa: BLE001 — an enrichment failure must never break the search
         pass
     try:
-        # P4 conflicts graph tap (fail-open): mint the doc<->doc conflicts edges from dedup's PRIVATE
+        # phase 4 conflicts graph tap (fail-open): mint the doc<->doc conflicts edges from dedup's PRIVATE
         # _conflict_pairs records (enqueue-only, NEVER blocking), then POP the private key so it never
         # reaches the agent (the STABILITY contract: the doc shape is byte-identical to pre-P4).
         _conf_pairs = [c for d in ranked for c in (d.metadata or {}).get("_conflict_pairs", [])]
@@ -2581,14 +2581,14 @@ def _apply_ranked_enrichments(query: str, ranked: list[Document], results: dict,
                 _d.metadata.pop("_conflict_pairs", None)   # private: never agent-facing
     except Exception:  # noqa: BLE001 — the tap NEVER touches the search result
         pass
-    # Curator P2 yield tap (fail-open): records each source's marginal contribution to this top-K.
+    # Curator phase 2 yield tap (fail-open): records each source's marginal contribution to this top-K.
     # Skipped for synthetic/in-process searches (record_yield=False) and cache-only pickups.
     if record_yield and not cache_only:
         try:
             from omniseek.core.curator import yield_tap
             yield_tap.record_search(query, ranked, results, meta)
         except BaseException as exc:  # noqa: BLE001 the tap NEVER touches search
-            if isinstance(exc, asyncio.CancelledError): raise  # D11: never eat a cancellation
+            if isinstance(exc, asyncio.CancelledError): raise  # never eat a cancellation
             pass
 
 
@@ -2665,7 +2665,7 @@ async def asearch_ranked(
         else:
             try:
                 idx, info = _recall_fut.result()
-            except asyncio.CancelledError:  # D11: never eat a cancellation
+            except asyncio.CancelledError:  # never eat a cancellation
                 raise
             except Exception as exc:  # noqa: BLE001 — recall is an enrichment; its failure must not break search
                 logger.debug("recall hybrid failed: %s", exc)
@@ -2712,7 +2712,7 @@ _DOWN_AFTER = 2  # consecutive watchdog failures before reporting "down" — mat
 
 
 def _watchdog_health() -> tuple[dict, set, Optional[str]]:
-    """From the P19 watchdog state: (consecutive-fail counts, tracked-source set, as_of).
+    """From the watchdog state: (consecutive-fail counts, tracked-source set, as_of).
     Advisory + ≤6h old. Keying off the CONSECUTIVE-fail count (not the last single run)
     means one bad run doesn't false-flag a healthy source as down."""
     try:
@@ -2724,7 +2724,7 @@ def _watchdog_health() -> tuple[dict, set, Optional[str]]:
 
 
 def _watchdog_side_map(key: str) -> dict:
-    """One per-source side map of the P19 watchdog state ({name: reason}). Fail-open: empty on any
+    """One per-source side map of the watchdog state ({name: reason}). Fail-open: empty on any
     read/parse error, so a missing file never invents a state."""
     try:
         data = json.loads(_WATCHDOG_STATE.read_text(encoding="utf-8"))
@@ -2788,7 +2788,7 @@ def list_sources(live: Optional[dict] = None, domain: Optional[str] = None,
     ticker, an author's full name — so a named call is filled right the first try; absent for a
     free-text source),
     a ``stability`` class (stable < keyed < scrape < walled — a neutral fragility FACT, NOT a
-    verdict: set expectations + prioritise repairs), and recent ``health`` from the P19 watchdog
+    verdict: set expectations + prioritise repairs), and recent ``health`` from the watchdog
     (advisory — never blocks a source). Pass ``live``, the readings of a fresh LIVE probe
     (``await aprobe_health()``, slow), to have them on every entry.
 
@@ -2844,7 +2844,7 @@ def list_sources(live: Optional[dict] = None, domain: Optional[str] = None,
             "needs_credentials": adapter.needs_credentials,
             "explicit_only": bool(_eo_reason),
             # The explicit_only REASON string, present only when excluded. This is the catalog side of
-            # the P11 _meta weight-class rule: search's per-query _meta ships only excluded_COUNT (the
+            # the _meta weight-class rule: search's per-query _meta ships only excluded_COUNT (the
             # ~100-entry name->reason map is deployment-static, not query info), so the full reason for
             # any excluded source stays exactly one omniseek_sources call away, never lost.
             **({"explicit_only_reason": _eo_reason} if _eo_reason else {}),
@@ -2871,7 +2871,7 @@ def list_sources(live: Optional[dict] = None, domain: Optional[str] = None,
         if _ph:
             entry["param_hint"] = _ph
         # Optional routing facets (kind: stream/lookup/proxy/portal; domains;
-        # regions; modes = the P0 acquisition-mode facet the Curator audit reads).
+        # regions; modes = the acquisition-mode facet the Curator audit reads).
         # The adapter's own declaration wins, facets.json fills the rest.
         fb = _FACETS.get(name) or {}
         for facet in ("kind", "domains", "regions", "modes"):

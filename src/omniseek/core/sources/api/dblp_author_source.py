@@ -141,7 +141,7 @@ class DBLPAuthorAdapter(BaseScrapeAdapter):
         return max(1, min(int(limit), 30))
 
     async def _araw_fetch(self, query: str, limit: int) -> Optional[Any]:
-        """Async replacement of the deleted sync ``_raw_fetch`` (11-04, S9; this is the only one now): same words, same query, same reader; only the egress is async."""
+        """Async replacement of the deleted sync ``_raw_fetch`` (11-04, this is the only one now): same words, same query, same reader; only the egress is async."""
         words = _dblp.query_words(query, drop_stopwords=False)
         if not words:
             return []

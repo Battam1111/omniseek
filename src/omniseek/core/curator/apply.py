@@ -1,6 +1,6 @@
-"""Apply gate: P1 ships NO live auto-apply; this is the gate-only + operator-case-prep layer.
+"""Apply gate: phase 1 ships NO live auto-apply; this is the gate-only + operator-case-prep layer.
 
-WHY no live apply in P1 (confirmed against the real code): every config family registers its
+WHY no live apply in phase 1 (confirmed against the real code): every config family registers its
 rows ONCE at import (rss_bundles_source._load_and_register, org_watch_source._load,
 page_watch_source, news_scraper_source._load), reading the in-tree JSON via
 Path(__file__).with_name(...). There is NO runtime overlay path, no importlib.reload, no
@@ -8,13 +8,13 @@ file-watch. So a row appended to a <state> overlay is read by NOTHING (a silent 
 marked 'applied' would be a lie nothing would notice), and appending to the in-tree file violates
 the read-only-deploy invariant and vanishes on the next deploy. THEREFORE: every admit stages
 to owner_review with a ready-to-paste config row + a git-patch note; the operator commits, the
-deploy restart picks it up. ``reversibility.auto_appliable`` is ALWAYS False in P1.
+deploy restart picks it up. ``reversibility.auto_appliable`` is ALWAYS False in phase 1.
 
 This module provides:
   * _live_hosts()   : the FRESH live-roster host set for dedup + first-seen (never stale)
   * _validate_row() : pure, network-free per-family required-field check
-  * _auto_apply_ok(): the GATE (reads policy DATA); built for P1.5 but NEVER drives a mutation
-                       in P1 (nothing calls it to write live config)
+  * _auto_apply_ok(): the GATE (reads policy DATA); built for phase 1.5 but NEVER drives a mutation
+                       in phase 1 (nothing calls it to write live config)
   * prepare_owner_case(): what omniseek_curator_stage_commit returns (render the row + patch note)
 """
 
@@ -66,7 +66,7 @@ def _auto_policy() -> dict:
     return _load_policy().get("auto_apply", {}) or {}
 
 
-# ── live-roster host derivation (forced fresh; encodes the P31 over-count fix) ────
+# ── live-roster host derivation (forced fresh; encodes the over-count fix) ────
 def _hosts_of_adapter(adapter) -> set:
     """Derive the host FQDNs an adapter serves. Host-LESS families (org_watch queries OpenAlex
     by free-text affiliation; search_index queries a search engine) contribute NO host. RSS
@@ -104,7 +104,7 @@ def _hosts_of_adapter(adapter) -> set:
 
 def _live_hosts() -> set:
     """The set of host FQDNs the LIVE roster currently serves. Forced FRESH from
-    fetcher.list_sources / get_adapter (NEVER a passed-in or cached list: the P31 stale-list
+    fetcher.list_sources / get_adapter (NEVER a passed-in or cached list: the stale-list
     over-count fix). Host-less families contribute nothing. Used for dedup + first-seen."""
     hosts: set = set()
     try:
@@ -178,7 +178,7 @@ def validate_row_typed(family: str, row: dict) -> list:
     return problems
 
 
-# ── the auto-apply GATE (reads policy DATA; gate-only in P1) ──────────────────────
+# ── the auto-apply GATE (reads policy DATA; gate-only in phase 1) ──────────────────────
 _NEVER_AUTO_FAMILIES = frozenset({"org_watch", "page_watch", "news_scraper", "search_index"})
 
 # Fixed API-resolver hosts: an rss row whose feed host is one of these is a relabeled people/paper
@@ -317,10 +317,10 @@ def _looks_declarative(row: dict) -> bool:
 
 
 def prepare_owner_case(cand: dict) -> dict:
-    """P1: PREPARE the operator case (render the ready-to-paste config row + a git-patch note).
+    """PREPARE the operator case (render the ready-to-paste config row + a git-patch note).
     Does NOT mutate live config. Re-checks the row validity. Never auto-applies.
 
-    FOUNDRY-GRADE (P10): when the candidate carries a ``draft`` (a WORKING artifact the submitter
+    FOUNDRY-GRADE: when the candidate carries a ``draft`` (a WORKING artifact the submitter
     built), the ready-to-paste block IS the draft's ``row`` verbatim (with a provenance line naming
     the submitting session), NOT the thin row re-derived from the candidate fields. A draft
     declarative row (transport mcp/http) targets sources.json; the rss-safe auto-apply lane is NOT
@@ -368,17 +368,17 @@ def prepare_owner_case(cand: dict) -> dict:
         patch_note = (
             f"Append this row to organs/eye/src/omniseek/core/sources/{config_file} "
             f"({loader_desc} registers it at the next service restart), commit, "
-            f"then redeploy. P1 stages this for the operator; it is NEVER applied automatically."
+            f"then redeploy. phase 1 stages this for the operator; it is NEVER applied automatically."
         )
     case = {
-        "auto_appliable": False,          # ALWAYS False in P1 (no live apply path exists)
+        "auto_appliable": False,          # ALWAYS False in phase 1 (no live apply path exists)
         "family": family,
         "config_file": config_file,
         "proposed_config_row": row,
         "row_valid": not problems,
         "row_problems": problems,
         "git_patch_note": patch_note,
-        "note": ("P1 has no live auto-apply: config families register once at import. This "
+        "note": ("phase 1 has no live auto-apply: config families register once at import. This "
                  "prepares an operator case; the operator commits + the deploy restart picks it up."),
     }
     if provenance is not None:

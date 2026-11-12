@@ -212,7 +212,7 @@ class IACREprintAdapter(SourceBase):
     _LISTING_KEY = cache.make_key("iacr_eprint", "listing")
 
     async def _alisting(self) -> Optional[dict]:
-        """Async replacement of the deleted sync ``_listing`` (11-04, S9; this is the only one now): the GET is a coroutine; the 6.6 MB regex parse goes through
+        """Async replacement of the deleted sync ``_listing`` (11-04, this is the only one now): the GET is a coroutine; the 6.6 MB regex parse goes through
         ``aparse`` (a worker process: about 1.3 s of regex)."""
         cached = await cache.aget_once(self._LISTING_KEY)
         if cached is not None:

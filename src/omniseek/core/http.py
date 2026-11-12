@@ -65,7 +65,7 @@ if importlib.util.find_spec("sniffio") is None:
 
 
 # A connection that was never made is a request that was never sent: the gate hands back its
-# reserved start (review F8).
+# reserved start.
 _guard.register_unsent(httpx.ConnectError, httpx.ConnectTimeout)
 
 
@@ -149,7 +149,7 @@ def _counted(resp: Any) -> Any:
 
 
 def _timeout_s(timeout: Any) -> Optional[float]:
-    """A request's own timeout in seconds, for the gates' leases (review P1): a number as it is; an
+    """A request's own timeout in seconds, for the gates' leases: a number as it is; an
     ``httpx.Timeout`` (or the dict httpx keeps in a request's extensions) its longest phase, which is
     per operation, so a long body can outlive it (the lease then ends early and the gate may admit one
     more request, never fewer); None when unknown (the permit then has no lease and is held until
@@ -191,7 +191,7 @@ class _AProgressStream(httpx.AsyncByteStream):
         await self._inner.aclose()
 
 
-# CONNECTED, SENT, AND THE HEADERS (design decisions of 2026-09-29 on review X section 12.8, Q1). Before
+# CONNECTED, SENT, AND THE HEADERS (design decisions of 2026-09-29 on review X section 12.8). Before
 # its first byte a request makes progress when its connection is made, when TLS is set up on it, when the
 # whole request has been written and when its response headers arrive. Each renews the leases of the
 # holds it runs under, so a slow connection or a slow first byte inside the request's own timeout keeps
@@ -590,7 +590,7 @@ class AsyncHopClient(httpx.AsyncClient):
 
     async def send(self, request: httpx.Request, **kwargs: Any) -> httpx.Response:
         # inside adirect, whose AsyncHopGates carries the gates; any other value is not this
-        # request's, and would take no gate (review P3)
+        # request's, and would take no gate
         if isinstance(_hops_var.get(), upstreams.AsyncHopGates):
             return self._record(request, await super().send(request, **kwargs))
         gates = upstreams.AsyncHopGates(request_s=_timeout_s(request.extensions.get("timeout")))
@@ -836,11 +836,11 @@ async def _aimpersonated_request(method: str, url: str, *, timeout: int = DEFAUL
     if cache.cache_only():
         return None  # cache-only mode (cache_only=True): do NO live HTTP, the single egress guard
     # SSRF pre-flight on the INITIAL url (same predicate as _arequest_capped). Per-hop redirect
-    # revalidation stays DEFERRED PAST C2 to a curl_cffi-exercisable cohort: get_impersonated is
+    # revalidation stays DEFERRED to a curl_cffi-exercisable cohort: get_impersonated is
     # curl_cffi (a DIFFERENT transport from safeurl.safe_fetch's httpx, so it cannot reuse that
     # per-hop walk) and serves only FIXED CONFIGURED public hosts (higheredjobs), whose redirect-SSRF
     # needs a DNS-rebind on a fixed host (lower probability than an arbitrary user URL); and curl_cffi
-    # is not importable in this dev env, so a manual redirect-walk cannot be verified here. C2
+    # is not importable in this dev env, so a manual redirect-walk cannot be verified here. This
     # closed the arbitrary-user-URL lane instead (omniseek_add_url -> web_fallback -> safeurl.safe_fetch,
     # IP-pinned per hop); this fixed-host tier keeps allow_redirects=True as a known residual.
     _blk = await anyio.to_thread.run_sync(_netguard.security_block_reason, url, limiter=portal.IO_LANE)
@@ -976,7 +976,7 @@ async def _arequest_capped(method: str, url: str, *, timeout: int, headers: dict
     # link-local/reserved IP. Redundant with the per-hop AsyncSSRFGuardTransport on the pooled client,
     # kept for the clear initial block message + diag.note evidence tap; the extra getaddrinfo is
     # OS-cached, so negligible. Residual (DNS-rebind TOCTOU): the IP-pinning lane stays safe_fetch.
-    # OFF-LOOP (S4b): security_block_reason resolves getaddrinfo (a BLOCKING syscall). On a native async
+    # OFF-LOOP: security_block_reason resolves getaddrinfo (a BLOCKING syscall). On a native async
     # method it runs ON the loop, so a slow/cold DNS would freeze EVERY coroutine. Push it to a worker
     # thread. IDENTICAL guard DECISION (same _netguard, same block reasons, same diag.note); only moved
     # off the loop.
@@ -1142,8 +1142,8 @@ async def aput_json(url: str, *, json: Any = None, timeout: int = DEFAULT_TIMEOU
 
 async def aclose_client() -> None:
     """Close the pooled async client (await its aclose) and reset it so a later build is clean. Fail-open
-    (never raises). NOTE: S4 must wire this into the ASGI lifespan shutdown when the FIRST async caller
-    lands. In S3b nothing builds _aclient, so nothing leaks yet; this is built here but NOT yet wired."""
+    (never raises). NOTE: the async migration must wire this into the ASGI lifespan shutdown when the FIRST async caller
+    lands. Until then nothing builds _aclient, so nothing leaks yet; this is built here but NOT yet wired."""
     global _aclient
     _ac = _aclient
     _aclient = None

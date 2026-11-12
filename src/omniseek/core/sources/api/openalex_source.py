@@ -149,7 +149,7 @@ class OpenAlexAdapter(SourceBase):
         return " ".join([(query or "").strip(), *toks]).strip()
 
     async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async replacement of the deleted sync ``search`` (11-04, S9; this is the only one now) (the OpenAlex sources go native async), so the live async
+        """Native-async replacement of the deleted sync ``search`` (11-04, this is the only one now) (the OpenAlex sources go native async), so the live async
         omniseek_search path awaits it DIRECTLY instead of parking a pool thread on the ``/works`` call. It
         mirrors ``search`` step-for-step; only the BLOCKING work moves:
           • the disk cache read/write → ``anyio.to_thread.run_sync`` (get_docs / set_docs do file IO);

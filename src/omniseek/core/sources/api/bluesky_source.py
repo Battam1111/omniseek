@@ -118,7 +118,7 @@ class BlueskyAdapter(SourceBase):
         """atproto (0.0.65) sends through an httpx.AsyncClient it keeps at ``client.request._client``:
         give it the lease renewal by progress (the request sent, its headers and each block of its body
         renew the Bluesky gate's lease, design decisions of 2026-09-29 on section 17.5, item 2, and on
-        review Q1) and read its timeout for the lease. None when
+        a review finding) and read its timeout for the lease. None when
         the library keeps it elsewhere: then the permit has no lease and is held until given back."""
         try:
             hc = client.request._client

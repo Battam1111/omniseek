@@ -153,7 +153,7 @@ class XiaoyuzhouAdapter(SourceBase):
         )
 
     async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async replacement of the deleted sync ``search`` (11-04, S9; this is the only one now) (mirrors it line-for-line). The async omniseek_search fan-out
+        """Native-async replacement of the deleted sync ``search`` (11-04, this is the only one now) (mirrors it line-for-line). The async omniseek_search fan-out
         awaits this DIRECTLY (no held pool thread), and the per-podcast egresses that ``search`` runs
         one after another become CONCURRENT coroutines on the one loop. Changes ONLY:
           - the per-podcast fetch loop -> ``asyncio.gather`` over ``_afetch_podcast`` (each does its

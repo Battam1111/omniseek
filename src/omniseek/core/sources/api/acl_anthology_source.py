@@ -71,7 +71,7 @@ class ACLAnthologyAdapter(SourceBase):
     )
 
     async def _apapers(self, coll: str) -> list[dict]:
-        """Async twin of ``_papers`` (S4b): BYTE-FAITHFUL mirror changing ONLY the blocking parts.
+        """Async twin of ``_papers``: BYTE-FAITHFUL mirror changing ONLY the blocking parts.
           - the disk cache read + write -> ``anyio.to_thread.run_sync`` (SAME cache key, so sync +
             async share one warmed collection entry);
           - the raw ``httpx.get`` XML fetch -> the shared async leaf ``http.aget`` (shared pool +
@@ -126,7 +126,7 @@ class ACLAnthologyAdapter(SourceBase):
         return papers
 
     async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async replacement of the deleted sync ``search`` (11-04, S9; this is the only one now) -> AsyncSearchCapable. Mirrors ``search`` line-for-line,
+        """Native-async replacement of the deleted sync ``search`` (11-04, this is the only one now) -> AsyncSearchCapable. Mirrors ``search`` line-for-line,
         awaiting ``_apapers`` (disk cache OFF the loop, XML fetch via the async leaf) instead of the
         sync ``_papers``. The ``_to_doc`` mapping + ``keyword_score_filter`` are pure CPU, so this is
         behavior-identical to ``search`` (same collection parse, same BM25 filter, same limit)."""

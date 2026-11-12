@@ -1,5 +1,5 @@
 {
-  "_doc": "Curator P3 RED-LINE coverage policy as DATA (the operator-owned). The mechanical safety flags in source_audit.py READ these numbers; the agent physically cannot cross them (record_source_verdict raises). Widening any number is a deliberate the operator edit. This file is NEVER read as a verdict: it carries only coverage-floor / cadence / cold-start thresholds, no keep/watch/prune word.",
+  "_doc": "Curator phase 3 RED-LINE coverage policy as DATA (the operator-owned). The mechanical safety flags in source_audit.py READ these numbers; the agent physically cannot cross them (record_source_verdict raises). Widening any number is a deliberate the operator edit. This file is NEVER read as a verdict: it carries only coverage-floor / cadence / cold-start thresholds, no keep/watch/prune word.",
   "version": 1,
 
   "coverage_floor": 1,

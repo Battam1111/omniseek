@@ -66,7 +66,7 @@ class OpenRouterRankingsAdapter(SourceBase):
     )
 
     async def _arankings(self) -> list[dict]:
-        """Async replacement of the deleted sync ``_rankings`` (11-04, async step seven; this is the only one now) (S4b): the SAME cache key + a byte-identical per-day
+        """Async replacement of the deleted sync ``_rankings`` (11-04, async step seven; this is the only one now): the SAME cache key + a byte-identical per-day
         aggregation, changing ONLY the egress path so the async fan-out awaits this without holding a
         pool thread. Off-loop discipline:
           - the disk cache read + write hop OFF the loop (``anyio.to_thread.run_sync``; cache.get/set do file IO);
@@ -128,7 +128,7 @@ class OpenRouterRankingsAdapter(SourceBase):
         return slim
 
     async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async replacement of the deleted sync ``search`` (11-04, S9; this is the only one now) (S4b): mirrors it line-for-line, awaiting ``_arankings``
+        """Native-async replacement of the deleted sync ``search`` (11-04, this is the only one now): mirrors it line-for-line, awaiting ``_arankings``
         (async cache + egress) instead of the sync ``_rankings``. The term filter + ``_to_doc`` map are
         PURE CPU and stay ON the loop, byte-identical to ``search`` so the two can never drift. Exposing
         ``asearch`` makes this adapter AsyncSearchCapable, routing it to the fetcher's native async branch."""

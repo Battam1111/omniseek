@@ -125,7 +125,7 @@ class SECEdgarAdapter(BaseScrapeAdapter):
         return p
 
     async def _araw_fetch(self, query: str, limit: int) -> Optional[Any]:
-        # Async replacement of the deleted sync ``_raw_fetch`` (11-04, S9; this is the only one now): byte-faithful mirror (same URL, params, UA header, timeout);
+        # Async replacement of the deleted sync ``_raw_fetch`` (11-04, this is the only one now): byte-faithful mirror (same URL, params, UA header, timeout);
         # ONLY the shared-http egress fn is swapped for its async twin (http.aget_json). The UA
         # override stays mandatory or SEC 403s (see module docstring).
         return await http.aget_json(

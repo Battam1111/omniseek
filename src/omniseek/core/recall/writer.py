@@ -55,7 +55,7 @@ _chain_check: "dict | None" = None
 _checkpoint_failures = 0
 _last_checkpoint_failure: "str | None" = None
 
-# S2 graceful-shutdown stop Event for the single-writer loop: set on ASGI-lifespan shutdown so the
+# Graceful-shutdown stop Event for the single-writer loop: set on ASGI-lifespan shutdown so the
 # writer stops polling and runs its FINAL FLUSH, draining the queue BEST-EFFORT within the shutdown
 # budget (committing incrementally so partial progress survives). Strictly better than the SIGKILL it
 # replaces, which lost the whole queue; a backlog that overruns the budget loses only its un-flushed
@@ -65,7 +65,7 @@ _last_checkpoint_failure: "str | None" = None
 _STOP = threading.Event()
 _STOP_POLL_S = 0.5
 
-# The P2.0 retrieval-anchored thin-memory lane IS a write tap, so it declares its vocabulary from day
+# The retrieval-anchored thin-memory lane IS a write tap, so it declares its vocabulary from day
 # one like every other tap (vocabulary-by-minting, design section 3): it mints ``document`` nodes
 # ONLY — no edge types (doc-doc same_as is a DERIVED view over docs.fp + external_ids, never a stored
 # edge), no methods (nodes carry no edge method). Registered at import so ``declared_vocabulary``
@@ -470,7 +470,7 @@ def maybe_ingest(docs) -> None:
     cron processes that hit the same fetcher chokepoint write nothing). JOURNAL-FIRST and NEVER
     raises into the caller (the fetcher hot path) — a raised exception here would break every search.
 
-    Two lanes, per the P2.0 retrieval-anchored thin-memory design:
+    Two lanes, per the retrieval-anchored thin-memory design:
       - ``indexable(source)`` -> the FULL row (title + content + vector), the existing path, enqueued
         as one batch (unchanged).
       - otherwise (query-keyed / walled sources recall deliberately excludes) -> a THIN document node
@@ -586,7 +586,7 @@ def mark_swept(source: str) -> None:
 def enqueue_graph(nodes: list[dict], edges: list[dict]) -> None:
     """The GENERAL graph write verb (design section 6): the write taps (cartographer, enrich, ...)
     hand mechanical FACTS + labeled ALIGNMENT candidates here as node + edge dicts. Generalizes the
-    P2.0 thin-document lane to entity nodes + M/A edges over the SAME single-writer daemon (same WAL
+    phase 2.0 thin-document lane to entity nodes + M/A edges over the SAME single-writer daemon (same WAL
     connection, same ``WRITES_ENABLED`` gate) — zero new concurrency surface. ENQUEUE-ONLY and NEVER
     raises into the caller (a tap sits on an EXISTING data path; a raised exception here would break
     field_skeleton / enrich / search — the fail-open razor). NO-OP unless writes are enabled (a cron
@@ -653,7 +653,7 @@ def _writer_loop() -> None:
             if time.time() - last_sweep > 3600:
                 _sweep(con)
                 last_sweep = time.time()
-            # P7 thin-title catch-up: ONLY at the idle point (queue drained), so a queued write is
+            # phase 7 thin-title catch-up: ONLY at the idle point (queue drained), so a queued write is
             # never delayed. One bounded page per idle cycle; monotone convergence to zero backlog,
             # then a cheap empty query. Fail-open (never raises into the loop).
             if _queue.empty():
@@ -821,7 +821,7 @@ def _apply(
                 if strict:
                     raise
                 logger.debug("recall upsert skipped one doc: %s", exc)
-    thin_staged: list = []   # (node_id, title) for thin rows whose title needs embedding (P7)
+    thin_staged: list = []   # (node_id, title) for thin rows whose title needs embedding
     for d in thin_docs:
         try:
             r = _upsert_thin(con, rank, d, now)   # graph_nodes document node, NEVER content
@@ -858,7 +858,7 @@ def _apply(
     if chunk_staged:
         _embed_and_store_chunk(con, chunk_staged)   # long-doc TAIL passages → vec_chunk, same txn
     if thin_staged:
-        _embed_and_store_thin(con, thin_staged)   # P7: thin TITLE vectors → vec_thin, same txn
+        _embed_and_store_thin(con, thin_staged)   # thin TITLE vectors → vec_thin, same txn
     if journal_checkpoint is not None:
         seq, event_hash = journal_checkpoint
         con.execute("INSERT OR REPLACE INTO meta(k, v) VALUES('journal_materialized_seq', ?)",
@@ -997,7 +997,7 @@ def _embed_and_store_chunk(con, doc_chunks) -> None:
 
 
 def _embed_and_store_thin(con, staged) -> None:
-    """P7: embed a staged ``(node_id, title)`` batch of THIN rows ONCE and write the vectors into
+    """phase 7: embed a staged ``(node_id, title)`` batch of THIN rows ONCE and write the vectors into
     ``vec_thin`` in the CURRENT transaction (atomic with the thin node upserts). Mirrors
     ``_embed_and_store`` for the thin lane: FAIL-OPEN at the ROW level (embedder disabled or a forward
     failure -> those thin rows stay un-embedded, a first-class state; ``similar`` just does not see
@@ -1030,7 +1030,7 @@ _THIN_CATCHUP_PAGE = 50   # thin rows the idle catch-up embeds per cycle (bounde
 
 
 def _thin_catchup(con) -> int:
-    """P7 self-converging catch-up (no script, no cron): embed up to ``_THIN_CATCHUP_PAGE`` thin rows
+    """phase 7 self-converging catch-up (no script, no cron): embed up to ``_THIN_CATCHUP_PAGE`` thin rows
     that HAVE a title (graph_nodes.label) but NO ``vec_thin`` row for the current model_version, in one
     bounded page + own transaction. Called at the writer's IDLE point (after the queue drains — see
     ``_writer_loop``), so it NEVER delays a queued write (drain first, then catch up). Monotone
@@ -1207,7 +1207,7 @@ _THIN_ID_KEYS = ("doi", "arxiv_id", "openalex_id")
 
 def _upsert_node(con, nid: str, kind: str, label: Optional[str], attrs_json: Optional[str],
                  now: float) -> None:
-    """The ONE graph_nodes upsert (extracted from the P2.0 thin lane so the thin-document lane and the
+    """The ONE graph_nodes upsert (extracted from the thin lane so the thin-document lane and the
     generalized entity lane share ONE code path, not two). ``first_seen`` is IMMUTABLE on conflict:
     the INSERT-supplied first_seen is ``excluded.first_seen`` = the new ``now``, and the DO UPDATE
     clause simply does NOT touch first_seen, so the original survives (docs' immutable-first_seen /
@@ -1223,7 +1223,7 @@ def _upsert_node(con, nid: str, kind: str, label: Optional[str], attrs_json: Opt
 
 
 def _upsert_thin(con, rank, d: Document, now: float):
-    """Upsert one THIN document node into ``graph_nodes`` (P2.0 retrieval-anchored perception).
+    """Upsert one THIN document node into ``graph_nodes`` (phase 2.0 retrieval-anchored perception).
 
     A thin row anchors a doc from a NON-indexed source in the graph with title + url + fp +
     external_ids ONLY — NEVER content (the graph never stores content). id = ``doc:{source}:{sid}``
@@ -1232,7 +1232,7 @@ def _upsert_thin(con, rank, d: Document, now: float):
     row exists); ``last_seen`` is bumped. An indexable doc NEVER reaches here (it gets a full docs
     row, which the union view already surfaces — no double node).
 
-    P7: returns ``(node_id, title)`` when the thin row HAS a title (so the caller can batch-embed the
+    returns ``(node_id, title)`` when the thin row HAS a title (so the caller can batch-embed the
     title into vec_thin, letting ``similar`` see the whole perception history), else ``None`` (no
     title -> nothing to embed). The embed itself is off the hot path (writer daemon thread, batched in
     ``_apply``) and fail-open, so a thin row is upserted whether or not its title ever embeds."""
@@ -1259,18 +1259,18 @@ def _upsert_thin(con, rank, d: Document, now: float):
             attrs[key] = val
     attrs_json = json.dumps(attrs, ensure_ascii=False, default=str)
     # The shared node upsert: first_seen preserved on conflict, last_seen bumped, label/attrs
-    # refreshed (last write wins) — the P2.0 semantics, now one code path for thin + entity lanes.
+    # refreshed (last write wins) — the semantics, now one code path for thin + entity lanes.
     _upsert_node(con, nid, "document", label, attrs_json, now)
-    # P7 title-embed staging: only when the row carries a title (the TITLE is embedded, not the url/fp).
+    # phase 7 title-embed staging: only when the row carries a title (the TITLE is embedded, not the url/fp).
     title = (d.title or "").strip()
     return (nid, title) if title else None
 
 
-# ── Graph lanes (design sections 4-6): generalize the P2.0 thin lane to entity nodes + M/A edges ──
+# ── Graph lanes (design sections 4-6): generalize the thin lane to entity nodes + M/A edges ──
 # The symmetric-relation set (design section 4): these types express an UNORDERED pair, so the writer
 # stores each ONCE with src < dst (lexicographic). Otherwise (A,B) and (B,A) are distinct rows under
-# the UNIQUE(src,dst,type,method) key and duplicates accrete. P2's minted types (cites/authored/
-# about/published_in) are all DIRECTED, so this fires on none of them yet — but P3's ``coauthored``
+# the UNIQUE(src,dst,type,method) key and duplicates accrete. phase 2's minted types (cites/authored/
+# about/published_in) are all DIRECTED, so this fires on none of them yet — but phase 3's ``coauthored``
 # will, so the helper lands NOW (built with the model, not retrofitted).
 _SYMMETRIC_EDGE_TYPES = frozenset({"same_as", "not_same_as", "coauthored", "conflicts"})
 _LEGAL_TIERS = frozenset({"M", "A"})   # J is STRUCTURALLY excluded (the SQL CHECK; validate early too)
@@ -1280,7 +1280,7 @@ def _normalize_edge_endpoints(src: str, dst: str, etype: str) -> tuple[str, str]
     """Symmetric-edge normalization (design section 4): for a SYMMETRIC type, return the endpoints
     reordered so ``src < dst`` (lexicographic) — so a reversed write (B,A) lands on the SAME row as
     (A,B) under the UNIQUE key instead of accreting a duplicate. DIRECTED types pass through as-is.
-    P3's ``coauthored`` is the first real consumer; implemented now per the spec (the model is
+    phase 3's ``coauthored`` is the first real consumer; implemented now per the spec (the model is
     complete now even though assembly is incremental)."""
     if etype in _SYMMETRIC_EDGE_TYPES and dst < src:
         return dst, src

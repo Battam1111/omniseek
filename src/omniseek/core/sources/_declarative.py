@@ -55,7 +55,7 @@ What a row declares (see ``sources.json`` for the live rows + per-key notes)::
                                               # "<field> <= as_of" through
     }
 
-TRANSPORT (the meta-source, P10): a row also declares HOW to move bytes. ``transport`` is
+TRANSPORT (the meta-source): a row also declares HOW to move bytes. ``transport`` is
 ``"http"`` (absent == "http", full back-compat: GET/POST the ``endpoint``, above) OR ``"mcp"``
 (wrap an external MCP server: the SAME row table, a different transport). A wrapped MCP server
 is NOT a new adapter species; it is this same declarative row with ``tools/call`` instead of a
@@ -292,7 +292,7 @@ class DeclarativeAPIAdapter(SourceBase):
             raise ValueError(
                 f"declarative source {name!r}: field_map must map at least 'title' and 'url'"
             )
-        # Transport slot (P10): "http" (default, full back-compat) or "mcp" (wrap an external MCP
+        # Transport slot: "http" (default, full back-compat) or "mcp" (wrap an external MCP
         # server via tools/call). Only the FETCH differs; the field walk / BM25 / cache are shared.
         self.transport = (transport or "http").lower()
         if self.transport not in ("http", "mcp"):
@@ -355,7 +355,7 @@ class DeclarativeAPIAdapter(SourceBase):
         untouched and numeric/bool literals are preserved verbatim. A value that is
         EXACTLY ``"{limit}"`` renders as the INT, not its string form: http query params
         encode either identically, but an mcp tools/call argument is TYPED, and a wrapped
-        tool whose inputSchema says integer would reject "5" (P10 gate catch)."""
+        tool whose inputSchema says integer would reject "5" (phase 10 gate catch)."""
         capped = min(int(limit), self.limit_cap)
         out: dict = {}
         for k, v in self.params_template.items():
@@ -455,7 +455,7 @@ class DeclarativeAPIAdapter(SourceBase):
         loop (await http.aget_json / apost_json use epoll, no held thread); the SYNC mcp transport is
         pushed OFF the loop via to_thread (a native-async mcp client is a later slice). The SSRF
         getaddrinfo inside the async leaf (http._arequest_capped + AsyncSSRFGuardTransport) is moved off
-        the loop by S4b Part 1, so this whole path holds no blocking syscall on the loop."""
+        the loop by the async migration, so this whole path holds no blocking syscall on the loop."""
         if self.transport == "mcp":
             return await anyio.to_thread.run_sync(self._mcp_fetch, params, limiter=fetcher._LEGACY_LIMITER)  # sync MCP off-loop
         hdrs = self._auth_headers()
@@ -630,7 +630,7 @@ class DeclarativeAPIAdapter(SourceBase):
         OFF-LOOP DISCIPLINE (the load-bearing rule): a native async method runs ON the loop, so every
         BLOCKING syscall must go OFF it or one slow call freezes every coroutine.
           - the disk cache read + write -> anyio.to_thread.run_sync (get_docs / set_docs do file IO);
-          - the SSRF getaddrinfo inside the async egress leaf -> moved off-loop by S4b Part 1;
+          - the SSRF getaddrinfo inside the async egress leaf -> moved off-loop by the async migration;
           - the async NETWORK egress stays ON the loop (await _afetch_response, epoll not a thread);
           - PURE CPU (_assemble_docs: parse/map/BM25) + the (ttl, auth) decision stay ON the loop (fast).
         The fresh / cache_only / refresh_margin contextvars propagate into the worker thread via anyio.

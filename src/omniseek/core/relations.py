@@ -81,7 +81,7 @@ from omniseek.core.recall import graph  # noqa: E402 — the graph write verb + 
 # Vocabulary this tap MINTS (vocabulary-by-minting, design section 3): declared on the tap itself,
 # registered at import, folded into ``graph.declared_vocabulary`` as the computed union; ACTUAL
 # graph data must stay within that union. relations owns the PERSON layer the cartographer
-# deferred (P3 taps table row): person/institution nodes, and the coauthored / affiliated / same_as
+# deferred (phase 3 taps table row): person/institution nodes, and the coauthored / affiliated / same_as
 # edges from the three clean-structured layers. THE MINT RULE (design "Mint the product"): a tap
 # mints what its tool RETURNS, never its internal fetch material — coauthors pulls up to 200 works
 # per author as COUNTING material and mints none of it; the returned top_coauthors / bridges /
@@ -232,7 +232,7 @@ def _likely_same_person(candidates: list[dict]) -> list[dict]:
     return out
 
 
-# ── graph write tap (design section 6 + P3 taps row): mint the PRODUCT the three layers return ──
+# ── graph write tap (design section 6 + phase 3 taps row): mint the PRODUCT the three layers return ──
 # THE MINT RULE (design "Mint the product, not the intermediate"): a tap mints what its tool RETURNS,
 # never its internal fetch material. coauthors pulls up to _MAX_WORKS works PER author purely as
 # counting material for the ranking — none of that mints; the returned top_coauthors / bridges /

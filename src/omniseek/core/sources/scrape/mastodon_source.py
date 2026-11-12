@@ -137,7 +137,7 @@ class MastodonAdapter(BaseScrapeAdapter):
         return docs[:limit] if limit and limit > 0 else docs
 
     async def _araw_fetch(self, query: str, limit: int) -> Optional[Any]:
-        """Async replacement of the deleted sync ``_raw_fetch`` (11-04, S9; this is the only one now): byte-faithful mirror (same URLs, params, timeout, control
+        """Async replacement of the deleted sync ``_raw_fetch`` (11-04, this is the only one now): byte-faithful mirror (same URLs, params, timeout, control
         flow, None-return contract); ONLY the shared-http egress swaps to its async twin
         (http.get_json -> await http.aget_json). Fans the derived hashtag out over each instance's
         keyless tag timeline (one GET each, gently)."""

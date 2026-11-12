@@ -127,7 +127,7 @@ class MarketCryptoAdapter(SourceBase):
     )
 
     async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async replacement of the deleted sync ``search`` (11-04, S9; this is the only one now) (S4b): mirrors it line-for-line so the fan-out awaits this
+        """Native-async replacement of the deleted sync ``search`` (11-04, this is the only one now): mirrors it line-for-line so the fan-out awaits this
         DIRECTLY instead of pushing the sync ``.search`` onto the shared pool. Only ONE line differs —
         the network egress swaps ``http.get_json`` -> ``await http.aget_json`` (epoll on the loop, no
         held thread). No disk-cache round-trip exists in ``search`` (this source caches at the fan-out

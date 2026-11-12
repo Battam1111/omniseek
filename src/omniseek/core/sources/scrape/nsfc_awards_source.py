@@ -59,7 +59,7 @@ _PORTAL_URL = "https://www.letpub.com.cn/index.php?page=grant"
 # The metadata row's 7 columns, in order (verified live 2026-07-10).
 _HEADERS = ("负责人", "单位", "金额", "项目编号", "项目类型", "所属学部", "批准年份")
 
-# Module-level async client for the POST-form egress (S4b native-async twin). The shared http module
+# Module-level async client for the POST-form egress (native-async twin). The shared http module
 # exposes NO form-POST->text leaf (its public async leaves are aget_json / aget_text (GET) and
 # apost_json (a JSON body -> parsed JSON) — none can POST x-www-form-urlencoded data and return HTML
 # text); this source's SYNC path went RAW httpx.post for exactly that reason, so its async twin keeps
@@ -195,7 +195,7 @@ class NSFCAwardsAdapter(BaseScrapeAdapter):
     _MAX_PAGES = 5     # cap the page walk (50 records) — plenty for a named drill; be a polite client
 
     async def _afetch_page(self, query: str, page: int) -> Optional[str]:
-        # Async replacement of the deleted sync ``_fetch_page`` (11-04, S9; this is the only one now): byte-faithful mirror (same url / form data / headers / timeout,
+        # Async replacement of the deleted sync ``_fetch_page`` (11-04, this is the only one now): byte-faithful mirror (same url / form data / headers / timeout,
         # and follow_redirects carried on the client). Only the RAW httpx.post egress swaps to the
         # module-level AsyncClient (see _aget_client above for why this source keeps its own client,
         # not a shared http leaf). The data + headers dicts are duplicated inline (not extracted to a
@@ -222,7 +222,7 @@ class NSFCAwardsAdapter(BaseScrapeAdapter):
             return None
 
     async def _araw_fetch(self, query: str, limit: int) -> Optional[list[str]]:
-        # Async replacement of the deleted sync ``_raw_fetch`` (11-04, S9; this is the only one now): same page-count math, same sequential page walk with the SAME
+        # Async replacement of the deleted sync ``_raw_fetch`` (11-04, this is the only one now): same page-count math, same sequential page walk with the SAME
         # early-break on a short page (fewer than a full page of grants parsed); pages are awaited in
         # order (not gathered) because the break depends on each page's parse. _parse_grants is pure
         # CPU on the loop (a small HTML fragment), byte-identical to the sync path.

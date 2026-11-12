@@ -63,7 +63,7 @@ from omniseek.core.recall import graph  # noqa: E402 — the graph write verb + 
 # work/person/topic/venue nodes and cites/authored/about/published_in edges, over the two academic
 # backends (api:openalex, api:s2). authored/person and about/topic are OpenAlex-only in the tap (the
 # S2 path has display-name-only authorships and id-less fields → mints NO person/topic there; the
-# relations tap owns persons properly at P3), but the DECLARATION is the tap's full vocabulary.
+# relations tap owns persons properly at phase 3), but the DECLARATION is the tap's full vocabulary.
 GRAPH_MINTS = {
     "kinds": ["work", "person", "topic", "venue"],
     "edge_types": ["cites", "authored", "about", "published_in"],
@@ -457,7 +457,7 @@ def _graph_tap(source: str, works: dict) -> None:
     existing max_nodes/caps (we mint only from what ``works`` already holds); upserts are idempotent
     so a cache-hit re-call re-mints = an honest last_seen bump.
 
-    What it mints (per the P2 row of the taps table + the vocabulary this tap declared):
+    What it mints (per the row of the taps table + the vocabulary this tap declared):
       • work nodes   — ``work:openalex:W…`` / ``work:s2:{id}`` per backend; label=title; attrs
                        {doi, year, cited_by}.
       • cites edges  — work→work for the IN-CORPUS referenced_works ``_build`` already intersects
@@ -467,7 +467,7 @@ def _graph_tap(source: str, works: dict) -> None:
       • authored     — OpenAlex authorships that carry an author id → ``person:openalex:A…`` nodes
                        (label=display_name) + work→person edges (M, api:openalex). The S2 path has
                        display-name-only authorships: mint NOTHING for those (the relations tap owns
-                       persons properly at P3; no label-persons here).
+                       persons properly at phase 3; no label-persons here).
       • about        — concepts WITH an OpenAlex id → ``topic:openalex:C…`` + work→topic (M). Concepts
                        without an id are SKIPPED (no label-topic pollution from this tap).
       • published_in — work→``venue:openalex:S…`` when primary_location carried a source id.
@@ -653,7 +653,7 @@ async def afield_skeleton(query: Optional[str] = None, seeds: Optional[list[str]
     }
     if unresolved:
         # Name every seed whose own record S2 did not return, and why, instead of silently demoting
-        # it to an ordinary node (OmniSeek R08: the Leviathan 2022 paperId came back is_seed=false
+        # it to an ordinary node (a showcase finding: the Leviathan 2022 paperId came back is_seed=false
         # with only partial:true to show for it; the cause was HTTP 429 on that one record call).
         result["_meta"]["seeds_unresolved"] = unresolved
         parts = []

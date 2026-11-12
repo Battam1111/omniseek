@@ -117,7 +117,7 @@ class PodcastIndexAdapter(BaseScrapeAdapter):
             return None
         return key, secret
 
-    # ── native-async twin (S4d: BOTH layers egress, so BOTH are mirrored) ────
+    # ── native-async twin (BOTH layers egress, so BOTH are mirrored) ────
     # This source is TWO-LAYER: `_raw_fetch` egresses (the byterm search GET) AND `_to_documents`
     # ITSELF egresses per-record (the TOP feed's transcript-routing /episodes hop, two methods deep:
     # `_feed_to_doc(enrich=True)` -> `_episode_transcript_routing` -> a second GET). So we cannot pass
@@ -127,7 +127,7 @@ class PodcastIndexAdapter(BaseScrapeAdapter):
     # UNTOUCHED; the pure-CPU helpers (`_unix_to_dt` / `_categories` / `_first_transcript_url` /
     # `mk_signal` / `jsonsafe`) are reused, not re-mirrored.
     async def _araw_fetch(self, query: str, limit: int) -> Optional[Any]:
-        """Async replacement of the deleted sync `_raw_fetch` (11-04, S9; this is the only one now): SAME creds gate (no key -> None -> [] the contract, SAME log),
+        """Async replacement of the deleted sync `_raw_fetch` (11-04, this is the only one now): SAME creds gate (no key -> None -> [] the contract, SAME log),
         now `await http.aget_json` for the byterm search GET."""
         creds = self._creds()
         if creds is None:
@@ -143,7 +143,7 @@ class PodcastIndexAdapter(BaseScrapeAdapter):
         )
 
     async def _ato_documents(self, raw: Any, query: str, limit: int) -> list[Document]:
-        """Async replacement of the deleted sync `_to_documents` (11-04, S9; this is the only one now) (this source's `_to_documents` ITSELF egresses per-record:
+        """Async replacement of the deleted sync `_to_documents` (11-04, this is the only one now) (this source's `_to_documents` ITSELF egresses per-record:
         the TOP feed's `_episode_transcript_routing` /episodes hop). Reproduced line-for-line, but the
         per-feed doc build is AWAITED (`_afeed_to_doc`, whose one enrichment GET is async). SAME
         top-feed-only enrich cap (idx == 0), SAME order, SAME per-record skip-on-fail. Only the TOP
@@ -163,7 +163,7 @@ class PodcastIndexAdapter(BaseScrapeAdapter):
         return docs
 
     async def _afeed_to_doc(self, feed: dict, *, enrich: bool, limit: int) -> Optional[Document]:
-        """Async replacement of the deleted sync `_feed_to_doc` (11-04, S9; this is the only one now): reproduced line-for-line, but the ONE enrichment egress
+        """Async replacement of the deleted sync `_feed_to_doc` (11-04, this is the only one now): reproduced line-for-line, but the ONE enrichment egress
         (`_episode_transcript_routing`) is AWAITED (`_aepisode_transcript_routing`). Everything else
         is pure CPU on the loop, so the built doc is byte-identical to `_feed_to_doc`."""
         title = (feed.get("title") or "").strip()
@@ -257,7 +257,7 @@ class PodcastIndexAdapter(BaseScrapeAdapter):
     async def _aepisode_transcript_routing(
         self, feed_id: Any, limit: int
     ) -> Optional[tuple[list[dict], list[dict]]]:
-        """Async replacement of the deleted sync `_episode_transcript_routing` (11-04, S9; this is the only one now): SAME creds gate, SAME /episodes/byfeedid GET
+        """Async replacement of the deleted sync `_episode_transcript_routing` (11-04, this is the only one now): SAME creds gate, SAME /episodes/byfeedid GET
         (now `await http.aget_json`), SAME max cap + SAME pure-CPU classification (already-ships-a-
         transcript vs enclosure-only). Best-effort: any failure returns None (the show doc still
         stands without the routing extra)."""

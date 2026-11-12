@@ -2,7 +2,7 @@
 path or URL) into readable, structured text + an HONEST media inventory.
 
 The third perception primitive: web pages (omniseek_add_url), speech (omniseek_transcribe),
-and now documents-as-files. Built P39 (2026-06-10) from a real 颜色框.pptx
+and now documents-as-files. Built (2026-06-10) from a real 颜色框.pptx
 (a 28-slide, 66-image figure-style reference deck): OmniSeek digests uploads the
 way it transcribes audio.
 
@@ -494,7 +494,7 @@ async def _adownload(url: str, fmt: str) -> tuple[Path, Optional[str], Optional[
     if _blk is not None:
         raise RuntimeError(f"refused SSRF-class url ({_blk}): {url[:120]}")
     # Follow redirects MANUALLY (follow_redirects=False) and re-validate EVERY hop's Location via
-    # _netguard before connecting (C2 UNTRUSTED_URL close): this URL is agent-controlled and the bytes
+    # _netguard before connecting (the UNTRUSTED_URL close): this URL is agent-controlled and the bytes
     # come back in-band, so a blind 302 -> 169.254.169.254 was an SSRF oracle. safeurl.awalk_redirects_
     # revalidated centralizes the per-hop guard (one _netguard decision, no forked SSRF logic) and hands
     # back the FINAL non-3xx response with its body unread so we still STREAM it under _MAX_DOWNLOAD.
@@ -885,7 +885,7 @@ def view_image_urls(urls, max_images: int = 8, max_dim: int = _VIEW_MAX_DIM) -> 
 
 async def _afetch_image(u: str, hdrs: dict) -> tuple[int, bytes]:
     """(status, body) of one image URL, on the event loop. Follow redirects MANUALLY + re-validate each
-    hop via _netguard (C2 UNTRUSTED_URL close): follow_redirects=True let a 302 -> 127.0.0.1:9222 reach
+    hop via _netguard (the UNTRUSTED_URL close): follow_redirects=True let a 302 -> 127.0.0.1:9222 reach
     the loopback CDP DevTools API and exfil its bytes in-band. safeurl.awalk_redirects_revalidated
     raises refused-SSRF on a blocked hop; the FINAL non-3xx response's bytes are used. The declared
     gates of every hop are held until the body is read."""

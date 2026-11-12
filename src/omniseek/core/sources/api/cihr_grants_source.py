@@ -46,7 +46,7 @@ def _clean(v) -> str:
     return "" if s == "None" else s
 
 
-# Module-level async client for the native-async twin (S4b). The annual XLSX is a BINARY bulk file
+# Module-level async client for the native-async twin. The annual XLSX is a BINARY bulk file
 # fetched with an uncapped raw httpx.get in the sync path (the NSERC/SSHRC/CORDIS bulk-file precedent),
 # so its async twin uses its OWN httpx.AsyncClient rather than the shared http.aget* leaf: aget* streams
 # a 30MB cap tuned for JSON/text, and a growing annual file must not silently cross that cap in asearch
@@ -80,7 +80,7 @@ class CIHRGrantsAdapter(BulkFundingBase):
     modes = ["STRUCTURE"]
     _version = "FY202526"
 
-    # ── native-async twins (S4b) ────────────────────────────────────────────
+    # ── native-async twins ────────────────────────────────────────────
     async def _aresolve_xlsx_url(self) -> Optional[str]:
         """Async twin of _resolve_xlsx_url: the package_show body is a small standard JSON, so it rides
         the shared async leaf (http.aget_json); SAME url + SAME resource walk as the sync path."""
@@ -95,7 +95,7 @@ class CIHRGrantsAdapter(BulkFundingBase):
         return inv[0]["url"] if inv else None
 
     async def _abuild_subset_docs(self) -> list[Document]:
-        """Async replacement of the deleted sync ``_build_subset_docs`` (11-04, S9; this is the only one now) ONLY the two egresses change: the package_show resolve
+        """Async replacement of the deleted sync ``_build_subset_docs`` (11-04, this is the only one now) ONLY the two egresses change: the package_show resolve
         rides http.aget_json, and the binary XLSX fetch rides the module-level uncapped AsyncClient
         (same UA + timeout + follow_redirects as the sync raw httpx.get). The openpyxl parse + row map
         + relevance filter is pure CPU, kept ON the loop byte-identical to the sync path."""

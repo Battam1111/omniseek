@@ -71,7 +71,7 @@ class OrcidAdapter(BaseScrapeAdapter):
                      "not broad-fan-out fodder (a topic query would waste the polite per-iD fan-out)")
 
     async def _araw_fetch(self, query: str, limit: int) -> Optional[list[tuple[str, dict]]]:
-        """Async replacement of the deleted sync ``_raw_fetch`` (11-04, S9; this is the only one now): same URLs, params, headers, timeouts, fan-out cap and
+        """Async replacement of the deleted sync ``_raw_fetch`` (11-04, this is the only one now): same URLs, params, headers, timeouts, fan-out cap and
         None-return contract, with the per-iD /record GETs run CONCURRENTLY rather than one at a time.
 
         The expanded-search stays FIRST and alone: its iD list is a REAL dependency, nothing can be

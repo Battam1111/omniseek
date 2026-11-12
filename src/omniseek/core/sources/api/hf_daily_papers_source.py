@@ -56,7 +56,7 @@ class HFDailyPapersAdapter(SourceBase):
     )
 
     async def _afetch_all(self) -> list[dict]:
-        """Async twin of ``_fetch_all`` (S4b): SAME cache key (async + sync share the disk cache),
+        """Async twin of ``_fetch_all``: SAME cache key (async + sync share the disk cache),
         the disk read/write pushed OFF the loop (cache.get/set do file IO), the ONE network egress
         swapped to its async twin (http.get_json -> await http.aget_json, epoll not a held thread).
         Byte-identical logic to ``_fetch_all``; only the blocking syscalls move off-loop."""
@@ -72,7 +72,7 @@ class HFDailyPapersAdapter(SourceBase):
         return data
 
     async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async replacement of the deleted sync ``search`` (11-04, S9; this is the only one now) (S4b): the fan-out awaits this DIRECTLY (no pool thread),
+        """Native-async replacement of the deleted sync ``search`` (11-04, this is the only one now): the fan-out awaits this DIRECTLY (no pool thread),
         so this source's dominant NETWORK wait costs a coroutine, not a held thread. Mirrors ``search``
         line-for-line: only the cached fetch swaps to the async ``_afetch_all`` (async egress + off-loop
         cache); the keyword score / sort / map below is PURE CPU and stays ON the loop, byte-identical."""

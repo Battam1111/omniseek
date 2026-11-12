@@ -193,7 +193,7 @@ class WikidataWikipediaAdapter(BaseScrapeAdapter):
     # discourse A2 idiom, not the Stack Exchange two-layer one, because the egress is in FETCH,
     # not in the doc mapper -- there is no doc-layer egress to make async.
     async def _araw_fetch(self, query: str, limit: int) -> Optional[Any]:
-        """Async replacement of the deleted sync `_raw_fetch` (11-04, S9; this is the only one now): SAME budget split, SAME both-empty->None contract; the
+        """Async replacement of the deleted sync `_raw_fetch` (11-04, this is the only one now): SAME budget split, SAME both-empty->None contract; the
         per-record enrichment egress goes native async via the async helper twins below.
 
         The two layers are fetched CONCURRENTLY (2026-08-30). They are DIFFERENT hosts
@@ -225,7 +225,7 @@ class WikidataWikipediaAdapter(BaseScrapeAdapter):
         return {"articles": articles, "entities": entities}
 
     async def _afetch_articles(self, query: str, n: int) -> list[dict]:
-        """Async replacement of the deleted sync `_fetch_articles` (11-04, S9; this is the only one now): Action-API search -> per-title REST summary. SAME
+        """Async replacement of the deleted sync `_fetch_articles` (11-04, this is the only one now): Action-API search -> per-title REST summary. SAME
         srlimit, SAME result order, SAME disambiguation drop + skip-on-fail.
 
         The per-title summaries are fetched CONCURRENTLY (2026-08-30). The search call still has
@@ -277,7 +277,7 @@ class WikidataWikipediaAdapter(BaseScrapeAdapter):
         return out
 
     async def _afetch_entities(self, query: str, n: int) -> list[dict]:
-        """Async replacement of the deleted sync `_fetch_entities` (11-04, S9; this is the only one now): wbsearchentities -> hits, top entity enriched with
+        """Async replacement of the deleted sync `_fetch_entities` (11-04, this is the only one now): wbsearchentities -> hits, top entity enriched with
         resolved key claims (ONE extra graph lookup, not n). Byte-faithful shape + order."""
         resp = await _wm_aget_json(
             WIKIDATA_API,
@@ -306,7 +306,7 @@ class WikidataWikipediaAdapter(BaseScrapeAdapter):
         return hits
 
     async def _afetch_key_claims(self, qid: str) -> list[tuple[str, str]]:
-        """Async replacement of the deleted sync `_fetch_key_claims` (11-04, S9; this is the only one now): wbgetentities claims -> keep KEY_CLAIM_PROPS ->
+        """Async replacement of the deleted sync `_fetch_key_claims` (11-04, this is the only one now): wbgetentities claims -> keep KEY_CLAIM_PROPS ->
         ONE batched label-resolve follow-up. SAME 3-per-prop cap, SAME order, [] on any failure."""
         ent_resp = await _wm_aget_json(
             WIKIDATA_API,
@@ -349,7 +349,7 @@ class WikidataWikipediaAdapter(BaseScrapeAdapter):
 
     @staticmethod
     async def _aresolve_labels(ids: list[str]) -> dict[str, str]:
-        """Async replacement of the deleted sync `_resolve_labels` (11-04, S9; this is the only one now): batch-resolve a mixed P-/Q-id list to English labels
+        """Async replacement of the deleted sync `_resolve_labels` (11-04, this is the only one now): batch-resolve a mixed P-/Q-id list to English labels
         in one call."""
         if not ids:
             return {}
@@ -572,7 +572,7 @@ class WikidataIdentityAdapter(BaseScrapeAdapter):
     # `await http.aget_json` (byte-faithful params / order / the SAME top-5-hit scan for the
     # first identity-bearing entity), and leaves the SAME sync `_to_documents` to the base's `_asearch_via`.
     async def _araw_fetch(self, query: str, limit: int) -> Optional[Any]:
-        """Async replacement of the deleted sync `_raw_fetch` (11-04, S9; this is the only one now): SAME top-5 scan + first-identity-bearing-hit selection,
+        """Async replacement of the deleted sync `_raw_fetch` (11-04, this is the only one now): SAME top-5 scan + first-identity-bearing-hit selection,
         SAME assemble+resolve, SAME None-when-none contract. Only the egress swaps to async; the
         pure-CPU `_extract_cluster` + `_has_instance` are reused unchanged."""
         for hit in await self._asearch_entities(query, 5):
@@ -596,7 +596,7 @@ class WikidataIdentityAdapter(BaseScrapeAdapter):
         return None
 
     async def _asearch_entities(self, query: str, n: int) -> list[dict]:
-        """Async replacement of the deleted sync `_search_entities` (11-04, S9; this is the only one now)."""
+        """Async replacement of the deleted sync `_search_entities` (11-04, this is the only one now)."""
         resp = await _wm_aget_json(
             WIKIDATA_API,
             params={"action": "wbsearchentities", "search": query, "language": "en",
@@ -608,7 +608,7 @@ class WikidataIdentityAdapter(BaseScrapeAdapter):
         return [h for h in (resp.get("search") or []) if isinstance(h, dict)]
 
     async def _afetch_claims(self, qid: str) -> dict:
-        """Async replacement of the deleted sync `_fetch_claims` (11-04, S9; this is the only one now)."""
+        """Async replacement of the deleted sync `_fetch_claims` (11-04, this is the only one now)."""
         resp = await _wm_aget_json(
             WIKIDATA_API,
             params={"action": "wbgetentities", "ids": qid, "languages": "en",
@@ -621,7 +621,7 @@ class WikidataIdentityAdapter(BaseScrapeAdapter):
         return claims if isinstance(claims, dict) else {}
 
     async def _aresolve_item_labels(self, cluster: dict) -> dict:
-        """Async replacement of the deleted sync `_resolve_item_labels` (11-04, S9; this is the only one now): batch-resolve every QID in the cluster (org/
+        """Async replacement of the deleted sync `_resolve_item_labels` (11-04, this is the only one now): batch-resolve every QID in the cluster (org/
         person items + stock exchanges) to an English label in ONE async follow-up call, in place."""
         ids: set[str] = set()
         for qids in cluster["items"].values():
@@ -709,7 +709,7 @@ def _has_instance(claims: dict, target_qid: str) -> bool:
 
 
 async def _aresolve_labels_batch(ids: list[str]) -> dict[str, str]:
-    """Async replacement of the deleted sync `_resolve_labels_batch` (11-04, S9; this is the only one now): batch-resolve a list of Q-/P-ids to their English
+    """Async replacement of the deleted sync `_resolve_labels_batch` (11-04, this is the only one now): batch-resolve a list of Q-/P-ids to their English
     labels in one call."""
     if not ids:
         return {}

@@ -5,7 +5,7 @@ its own.
 
 Where the data lives is not written here. A deployment that has a parts table (a release tree carries
 ``.omo_places.json`` at its root, generated from the table; a source checkout has
-``10_deploy/parts.json``) names every data location there, and each function below takes its location
+its parts table) names every data location there, and each function below takes its location
 from that table BY NAME: a name the table lacks raises NotRegistered, which says where to register it.
 Without a table (the public build), each function falls back to the default written next to it.
 
@@ -48,7 +48,7 @@ class NotRegistered(LookupError):
 
 def _read_table(start: str):
     """Look upward from start for the table: the release tree's PLACES_FILE, or a checkout's
-    10_deploy/parts.json. Returns (source, {part: (home, {name: path})}) or (None, None); paths are
+    parts table. Returns (source, {part: (home, {name: path})}) or (None, None); paths are
     as the table writes them (relative to the home directory unless absolute)."""
     import json
     d = start
@@ -59,16 +59,9 @@ def _read_table(start: str):
                 doc = json.load(h)
             return f, {p: (v["home"]["rel"], {n: e["rel"] for n, e in v["names"].items()})
                        for p, v in doc["parts"].items()}
-        f = os.path.join(d, "10_deploy", "parts.json")
-        if os.path.isfile(f):
-            with open(f, encoding="utf-8") as h:
-                doc = json.load(h)
-            return f, {p: (v["home"].rstrip("/"), {n: e["path"].rstrip("/") for n, e in (v.get("data") or {}).items()
-                                                   if isinstance(e, dict)})
-                       for p, v in doc["parts"].items() if isinstance(v, dict) and v.get("home") and "target" not in v}
         up = os.path.dirname(d)
         # A checkout's root (.git, a directory or a worktree's file) ends the search: a clone nested in
-        # another checkout, like the public mirror under 08_public_mirrors/, must not read the outer
+        # another checkout, like a mirror checked out inside the source tree, must not read the outer
         # checkout's table (11-11: the mirror sync on the laptop died on NotRegistered that way).
         if up == d or os.path.exists(os.path.join(d, ".git")):
             return None, None
@@ -95,7 +88,7 @@ def _at(name: str, default: Callable[[], Optional[Path]], part: str = OMO_LOCATI
         return default()
     names = t.get(part, (None, {}))[1]
     if name not in names:
-        raise NotRegistered(f"{name} is not registered: add it under parts.{part}.data in 10_deploy/parts.json, "
+        raise NotRegistered(f"{name} is not registered: add it under parts.{part}.data in the parts table, "
                             f"then release (table {src})")
     p = Path.home() / names[name]
     return p / child if child else p
@@ -122,8 +115,8 @@ def home() -> Path:
 
 # ── is this the live eye? ─────────────────────────────────────────────────────────────────────────
 # The launchd services (OmniSeek, its CDP browsers) are installed in the account's own home, the one the
-# system's user database names; the release tooling calls the same place the live home
-# (10_deploy/lib/omo_release.py live_home). A process started with any other HOME (a release rehearsal,
+# system's user database names; the release tooling calls the same place the live home.
+# A process started with any other HOME (a release rehearsal,
 # a test's temporary home) is not the live eye, and neither is one started with REHEARSAL_ENV set: such a
 # process must not start, stop or connect to the live services (_cdp.live_port_refusal reads this).
 REHEARSAL_ENV = "OMNISEEK_REHEARSAL"
@@ -244,7 +237,7 @@ def notify_outlet() -> Optional[Path]:
 
 
 def notify_redact() -> Optional[Path]:
-    """The push outlet's masking rule (07_services/notify/redact.py as the services part installs it): OmniSeek runs
+    """The push outlet's masking rule (as the services part installs it): OmniSeek runs
     every query it sends to machines that are not ours through it (omniseek.redact.outward).
     None when the deployment has no such rule (the public build): queries then go out as they are, and that is
     not a fault. This return value is the ONE place that tells the two apart; a path that is set but cannot be

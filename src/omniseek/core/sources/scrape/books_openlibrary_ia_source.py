@@ -86,7 +86,7 @@ class BooksOpenLibraryIAAdapter(BaseScrapeAdapter):
     modes = ["STRUCTURE", "UNWALL"]
 
     async def _araw_fetch(self, query: str, limit: int) -> Optional[dict]:
-        """Async replacement of the deleted sync ``_raw_fetch`` (11-04, S9; this is the only one now), with ONE deliberate divergence: the two surfaces are fetched
+        """Async replacement of the deleted sync ``_raw_fetch`` (11-04, this is the only one now), with ONE deliberate divergence: the two surfaces are fetched
         CONCURRENTLY instead of one after another. Same dual GET (Open Library + Internet Archive), same
         URLs, same params, same TIMEOUT, same limit-split, same partial-tolerance / both-miss->None
         contract; the shared-http egress is its async twin (``http.get_json`` -> ``await http.aget_json``).

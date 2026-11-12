@@ -74,7 +74,7 @@
    {"url": "https://www.ntu.edu.sg/computing/news-events/news", "render": true},
    {"url": "https://www.itib.gov.hk/en/new/", "render": true},
    {"url": "https://www.apolloresearch.ai/blog/", "render": true},
-   {"url": "https://www.sensetime.com/cn/news-press-release", "render": true}
+   {"url": "https://www.sensetime.com/cn/news/", "render": true}
   ],
   "cache_ttl": 21600,
   "url_pattern": null

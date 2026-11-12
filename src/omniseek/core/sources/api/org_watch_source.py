@@ -108,7 +108,7 @@ class _OrgWatchAdapter(SourceBase):
         return False
 
     async def _afetch(self) -> "tuple[list[dict], bool]":
-        """Native-async replacement of the deleted sync ``_fetch`` (11-04, S9; this is the only one now) (mirrors it line-for-line, same (works, stale) contract).
+        """Native-async replacement of the deleted sync ``_fetch`` (11-04, this is the only one now) (mirrors it line-for-line, same (works, stale) contract).
         Only the BLOCKING work moves: the disk cache read/write hops OFF the loop via
         ``anyio.to_thread.run_sync``, the OpenAlex egress swaps ``oa.get_json`` -> ``await oa.aget_json``,
         and the per-affiliation ThreadPoolExecutor fan-out becomes an ``asyncio.gather`` over async
@@ -167,7 +167,7 @@ class _OrgWatchAdapter(SourceBase):
         return out, False
 
     async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async replacement of the deleted sync ``search`` (11-04, S9; this is the only one now) (all 39 org_watch rows share this ONE _OrgWatchAdapter class,
+        """Native-async replacement of the deleted sync ``search`` (11-04, this is the only one now) (all 39 org_watch rows share this ONE _OrgWatchAdapter class,
         so this converts every row at once; the class is never subclassed, so no override can silently
         diverge). Awaits ``_afetch`` (native-async egress) instead of parking a pool thread on the whole
         affiliation fan-out. The parse/map/filter — ``_to_doc`` (oa.parse_work) + keyword_score_filter —

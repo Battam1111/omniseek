@@ -1,6 +1,6 @@
 """MyCareersFuture — Singapore's government job board (open API, salary-mandated).
 
-Phase 4 P15 (2026-05-30). MyCareersFuture (run by Workforce Singapore) is the
+Phase 4 (2026-05-30). MyCareersFuture (run by Workforce Singapore) is the
 canonical SG job board: every posting carries a mandated salary range + the
 hiring company's UEN, and the search API is fully public (no auth, no proxy).
 This complements `overseas_ai_jobs` (which only covers a fixed set of overseas
@@ -43,7 +43,7 @@ class MyCareersFutureAdapter(SourceBase):
     )
 
     async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async replacement of the deleted sync ``search`` (11-04, S9; this is the only one now) (S4b): mirrors ``search`` line-for-line so the fetcher's
+        """Native-async replacement of the deleted sync ``search`` (11-04, this is the only one now): mirrors ``search`` line-for-line so the fetcher's
         native async dispatch (``AsyncSearchCapable``) awaits it DIRECTLY, spending a coroutine on the
         MCF POST wait instead of a held pool thread. Three changes only vs ``search``:
           - the disk CACHE read/write go OFF the loop (anyio.to_thread.run_sync: get_docs / set_docs do

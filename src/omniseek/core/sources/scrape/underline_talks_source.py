@@ -109,7 +109,7 @@ class UnderlineTalksAdapter(BaseScrapeAdapter):
         return [doc] if doc is not None else []
 
     async def _araw_fetch(self, query: str, limit: int) -> Optional[dict]:
-        """Async replacement of the deleted sync ``_raw_fetch`` (11-04, S9; this is the only one now): resolve query -> lecture id (pure CPU) -> the JSON:API lecture
+        """Async replacement of the deleted sync ``_raw_fetch`` (11-04, this is the only one now): resolve query -> lecture id (pure CPU) -> the JSON:API lecture
         payload via the async resolve. A non-URL/non-id keyword query (or a failed resolve) -> None,
         which the base turns into [] (the same contract as the sync path)."""
         lecture_id = _lecture_id(query)

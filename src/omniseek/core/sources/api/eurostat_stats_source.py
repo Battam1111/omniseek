@@ -191,7 +191,7 @@ class EurostatStatsAdapter(BaseAPIAdapter):
                      "keyword, named on demand, not broad-fan-out fodder")
 
     async def _araw_fetch(self, query: str, limit: int) -> list:
-        """Async replacement of the deleted sync ``_raw_fetch`` (11-04, S9; this is the only one now): byte-faithful mirror (same query parse, same URL /
+        """Async replacement of the deleted sync ``_raw_fetch`` (11-04, this is the only one now): byte-faithful mirror (same query parse, same URL /
         params / timeout, same non-dict -> [] contract). ONLY the shared-http egress is
         swapped for its async twin (http.get_json -> await http.aget_json)."""
         parsed = _parse_query(query)

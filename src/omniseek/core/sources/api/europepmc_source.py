@@ -86,7 +86,7 @@ class EuropePMCAdapter(BaseScrapeAdapter):
                      "pull PubMed-flavoured hits into general ML retrieval")
 
     async def _araw_fetch(self, query: str, limit: int) -> Optional[Any]:
-        # Async replacement of the deleted sync ``_raw_fetch`` (11-04, S9; this is the only one now): byte-faithful mirror, only http.get_json → await http.aget_json.
+        # Async replacement of the deleted sync ``_raw_fetch`` (11-04, this is the only one now): byte-faithful mirror, only http.get_json → await http.aget_json.
         return await http.aget_json(
             SEARCH_URL,
             params={
@@ -99,7 +99,7 @@ class EuropePMCAdapter(BaseScrapeAdapter):
         )
 
     async def _ato_documents(self, raw: Any, query: str, limit: int) -> list[Document]:
-        """Async replacement of the deleted sync ``_to_documents`` (11-04, S9; this is the only one now) (TWO-LAYER: the per-record OA full-text enrichment
+        """Async replacement of the deleted sync ``_to_documents`` (11-04, this is the only one now) (TWO-LAYER: the per-record OA full-text enrichment
         egresses). SAME _MAX_FULLTEXT budget, SAME eligibility gate, SAME doc order, SAME
         per-record skip-on-fail (a miss keeps the abstract), SAME pure-CPU _result_to_doc /
         _strip_jats on the loop. The full-text pulls run CONCURRENTLY, in batches.
@@ -226,7 +226,7 @@ class EuropePMCAdapter(BaseScrapeAdapter):
         )
 
     async def _amaybe_fulltext(self, doc: Document, result: dict) -> bool:
-        """Async replacement of the deleted sync ``_maybe_fulltext`` (11-04, S9; this is the only one now): byte-faithful mirror, only http.get_text → await
+        """Async replacement of the deleted sync ``_maybe_fulltext`` (11-04, this is the only one now): byte-faithful mirror, only http.get_text → await
         http.aget_text. SAME eligibility guard, SAME _strip_jats (pure CPU, on loop), SAME
         _BODY_CAP, SAME failure → False fallback (doc keeps its abstract)."""
         src = result.get("source")

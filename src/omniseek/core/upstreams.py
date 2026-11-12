@@ -199,7 +199,7 @@ def _load() -> dict:
             _optional = set((raw.get("optional_sources") or {}).get("names") or ())
         except Exception as exc:  # noqa: BLE001 (re-raised as DeclarationUnreadable just below)
             # No built-in defaults (design decision 4): a silently empty declaration dropped every
-            # source that builds its gate at import and left the shared client ungated (review F10).
+            # source that builds its gate at import and left the shared client ungated.
             _load_error = f"{DECL_PATH}: {type(exc).__name__}: {exc}"
             logger.error("upstreams.json unreadable: %s", _load_error)
             raise DeclarationUnreadable(
@@ -674,8 +674,8 @@ class AsyncHopGates:
 
     ``enter(url)`` before every hop. A hop to the SAME host continues the same visit: no second
     permit, no second start slot (a same-host 301 used to wait a whole Crawl-delay, or be refused
-    outright past 15 s, review F3). A hop to ANOTHER host first lets go of the current host's gates,
-    then takes the new host's gates within the time left (review F5: a redirect used to land on a
+    outright past 15 s). A hop to ANOTHER host first lets go of the current host's gates,
+    then takes the new host's gates within the time left (a redirect used to land on a
     gated host without its gate). Two hosts' gates are never held at once, so two redirect chains can
     never wait on each other.
 
@@ -685,10 +685,10 @@ class AsyncHopGates:
     in line until it (no shorter per-gate ceiling); without a deadline a hop waits
     until served. One AsyncHopGates per request. ``request_s`` is the request's own timeout: each
     permit's lease ends that long after the chain's deadline (with none, after its hop's reserved
-    start; review P1; None: no lease, the permit is held until given back). ``enter(url, wait=False)``
-    tries each gate once without waiting (review P6). ``close()`` lets go; ``close(unsent=True)``
-    also hands back the reserved start, for a request that was never sent (review F8), unless a
-    response already arrived for it (review N2, see ``_guard.mark_sent``).
+    start; None: no lease, the permit is held until given back). ``enter(url, wait=False)``
+    tries each gate once without waiting. ``close()`` lets go; ``close(unsent=True)``
+    also hands back the reserved start, for a request that was never sent, unless a
+    response already arrived for it (see ``_guard.mark_sent``).
 
     ``holder``: the credential every gate of the chain is held by (``_guard.Holder``);
     None, the task that enters each hop. ``egress`` hands one, so the chain may be entered and let go
@@ -831,10 +831,10 @@ async def aegress(url: str, *, until: Optional[float] = None, wait: bool = True,
 async def abrowser_turn(url: str, request_s: float):
     """What a CDP render enters once it HAS its turn at the browser (``acdp_call(on_turn=...)``, on the
     event loop): the host's declared gates, tried ONCE without waiting (design decision of 2026-09-29
-    on review P6: a caller holding the browser's turn must not wait in another line; no gate now means
+    on a review finding: a caller holding the browser's turn must not wait in another line; no gate now means
     the turn is given up at once and the page is not loaded, ``UpstreamBusy``). ``request_s`` is the
     render's own timeout: the permits' lease, so a render stuck in its page load gives the host back
-    when it runs out (review P1, pooled or not). Also refuses a host that declares a User-Agent
+    when it runs out (pooled or not). Also refuses a host that declares a User-Agent
     (``check_browser``). Async only: the thread that has the browser's turn is a Playwright sync thread,
     where the sync ``egress`` refuses."""
     check_browser(url)
@@ -854,7 +854,7 @@ def parse_retry_after(value: Any) -> Optional[float]:
     """Seconds a Retry-After asks for, in either RFC 9110 form (section 10.2.3): delay-seconds, or an
     HTTP-date (a date already past is 0). ``value`` is the header's value, or a response's headers
     (anything with ``.get``: httpx Headers, a plain dict naming it in either case), read for
-    Retry-After. None when absent or neither form (review F7: the first number of a date used to be
+    Retry-After. None when absent or neither form (the first number of a date used to be
     read as seconds, so "Wed, 21 Oct 2026 07:28:00 GMT" deferred 21 s). OmniSeek's ONE Retry-After
     parser: every module that reads the header calls this."""
     if value is not None and not isinstance(value, str) and hasattr(value, "get"):
@@ -917,7 +917,7 @@ def observe(target: str, headers: Any, status: Optional[int] = None, *, lane: Op
     than its reason, and handling an upstream's 429 says nothing about courtesy to the host).
     Never raises."""
     try:
-        _guard.mark_sent()   # a response arrived: the holds of this context sent their request (N2)
+        _guard.mark_sent()   # a response arrived: the holds of this context sent their request
         d = _load()
         is_uid = target in d
         uid = target if is_uid else uid_for_host(target)

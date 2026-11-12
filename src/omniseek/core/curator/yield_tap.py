@@ -1,19 +1,19 @@
-"""Curator P2, the yield tap: a FAIL-OPEN, single-writer, WRITES_ENABLED-gated mechanical hook at
+"""Curator phase 2, the yield tap: a FAIL-OPEN, single-writer, WRITES_ENABLED-gated mechanical hook at
 the return of ``search_ranked`` that records, per source, its MARGINAL contribution to real top-K
 results. It records FACTS ONLY (integer counters + timestamps), NEVER a verdict. A later audit AGENT
-(P3) reads the accumulated facts and decides KEEP / WATCH / PRUNE; this module decides nothing.
+reads the accumulated facts and decides KEEP / WATCH / PRUNE; this module decides nothing.
 
 THE RAZOR holds here exactly as in recall/writer.py and curator/candidates.py: OmniSeek records /
 counts / measures; every judgment is the agent's. There is NO field named score / verdict /
 redundant / dead / low_yield / passes / recommend anywhere in the durable store; no ratio, no
-threshold. The ratio sole/appeared and any "redundant"/"low-yield" call is the audit agent's at P3.
+threshold. The ratio sole/appeared and any "redundant"/"low-yield" call is the audit agent's at phase 3.
 
 Concurrency (mirrors recall/writer.py, the proven primitive): ``search_ranked`` runs across
 uvicorn's anyio threads + the 64-wide fetch pool. ``record_search`` mutates NOTHING shared inline:
 it builds an immutable fact bundle (pure reads over ``ranked``, O(K)) and ``put_nowait``s it. ONE
 daemon drain thread (``yield-tap-writer``) owns the counters dict + ``yield.json`` exclusively (the
 only mutator and the only writer) so the folds need no lock (one mutator); ``_LOCK`` guards only
-the atomic write against a future P3 reader. Drop-oldest on ``queue.Full``. Batched debounced flush.
+the atomic write against a future phase 3 reader. Drop-oldest on ``queue.Full``. Batched debounced flush.
 
 Gating (REUSES recall.writer.WRITES_ENABLED, one source of truth, never a second "am I live"
 flag): ``record_search`` no-ops when WRITES_ENABLED is False, and the drain thread is started ONLY
@@ -55,14 +55,14 @@ _RANK_BUCKETS = ("0-2", "3-5", "6-9", "10+")
 _queue: "queue.Queue" = queue.Queue(maxsize=_QUEUE_MAX)
 _writer_started = False
 _start_lock = threading.Lock()
-# S2 graceful-shutdown stop Event for the single drain loop: set on ASGI-lifespan shutdown so it
+# Graceful-shutdown stop Event for the single drain loop: set on ASGI-lifespan shutdown so it
 # stops and runs a FINAL FLUSH of the un-persisted counter window (see omniseek.core.lifecycle).
 # _STOP_POLL_S caps the idle queue-get so a stop is noticed within it; the wall-time flush check is
 # unchanged, so flush cadence is unaffected beyond the sub-second poll granularity. Additive:
 # behavior is identical until _STOP is set, which only happens on shutdown.
 _STOP = threading.Event()
 _STOP_POLL_S = 0.5
-# Guards ONLY the atomic write of yield.json (so a future P3/curator reader can never read a torn
+# Guards ONLY the atomic write of yield.json (so a future phase 3/curator reader can never read a torn
 # file). The counters dict needs no lock: the single drain thread is its only mutator.
 _LOCK = threading.Lock()
 
@@ -289,7 +289,7 @@ def _idle_timeout(pending: int, last_flush: float, now: "float | None" = None) -
     the loop wakes in time to fire the time-based flush instead of overshooting it). When nothing is
     pending there is no scheduled flush, so it waits the full cadence (never a busy-spin).
 
-    F3: the pre-fix expression was ``min(_STOP_POLL_S, max(0.5, _FLUSH_SECONDS - elapsed))``. Since
+    the pre-fix expression was ``min(_STOP_POLL_S, max(0.5, _FLUSH_SECONDS - elapsed))``. Since
     ``_STOP_POLL_S == 0.5`` the inner ``max(0.5, ...)`` floor equalled the outer ``min`` cap, pinning
     the result to a constant 0.5 and making the wall-time term dead. The floor is now 0.0 so the
     wall-time term can shorten the wait, gated on ``pending`` so an idle loop still waits the full
@@ -318,7 +318,7 @@ def _drain_loop() -> None:
     queued OR >=_FLUSH_SECONDS elapsed, each flush one atomic _save_all. A crash loses at most the
     un-flushed window (acceptable for advisory statistics). Never dies (every cycle guarded).
 
-    S2: registers itself so a graceful shutdown can drain it; the idle queue-get is capped at
+    Registers itself so a graceful shutdown can drain it; the idle queue-get is capped at
     _STOP_POLL_S so a stop is noticed promptly, and on stop a FINAL FLUSH persists the last window.
     Additive: the wall-time flush check is unchanged, so flush cadence is unaffected beyond the
     sub-second poll granularity."""
@@ -329,7 +329,7 @@ def _drain_loop() -> None:
     last_flush = time.monotonic()
     while not _STOP.is_set():
         try:
-            timeout = _idle_timeout(pending, last_flush)   # F3: capped at the stop cadence, shortened
+            timeout = _idle_timeout(pending, last_flush)   # capped at the stop cadence, shortened
                                                            # when a flush is due sooner (not a dead 0.5)
             try:
                 bundle = _queue.get(timeout=timeout)

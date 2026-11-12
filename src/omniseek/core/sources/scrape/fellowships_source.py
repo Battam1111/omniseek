@@ -1,6 +1,6 @@
 """Fellowships — overseas PhD / postdoc funding (international-open awards).
 
-Phase 4 P14 (2026-05-29). The funding/fellowship dimension was a total blind
+Phase 4 (2026-05-29). The funding/fellowship dimension was a total blind
 spot. A research pass (40+ calls) mapped the landscape, verifying which awards
 are **open to international / HK applicants** (many are citizens-only → excluded)
 and which are feed-trackable.

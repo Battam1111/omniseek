@@ -137,7 +137,7 @@ class MarketQuoteAdapter(SourceBase):
     samples = [{"query": "AAPL"}, {"query": "$NVDA MSFT"}]
 
     async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async replacement of the deleted sync ``search`` (11-04, S9; this is the only one now) (S4b) → AsyncSearchCapable, so the async fan-out awaits
+        """Native-async replacement of the deleted sync ``search`` (11-04, this is the only one now) → AsyncSearchCapable, so the async fan-out awaits
         this DIRECTLY instead of pushing the sync .search onto the shared thread pool.
 
         Mirrors ``search`` LINE-FOR-LINE: the ONLY change is the shared-http egress swaps to its async

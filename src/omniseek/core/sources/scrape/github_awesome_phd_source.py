@@ -62,7 +62,7 @@ class GithubAwesomePhDAdapter(SourceBase):
         return None
 
     async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async replacement of the deleted sync ``search`` (11-04, S9; this is the only one now), with the six READMEs fetched CONCURRENTLY (2026-08-30).
+        """Native-async replacement of the deleted sync ``search`` (11-04, this is the only one now), with the six READMEs fetched CONCURRENTLY (2026-08-30).
 
         The per-repo egress is ``self._afetch_readme`` (its cache round-trip + http.aget_text run
         off/on the loop correctly). Everything after the fetch is the same PURE CPU code as

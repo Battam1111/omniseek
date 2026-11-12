@@ -123,7 +123,7 @@ async def _aload_ticker_map() -> tuple[dict[str, dict], list[tuple[str, str, str
 
 
 async def _aresolve(query: str) -> Optional[dict]:
-    """Async replacement of the deleted sync ``_resolve`` (11-04, S9; this is the only one now): BYTE-FAITHFUL mirror — same normalize, same resolution order
+    """Async replacement of the deleted sync ``_resolve`` (11-04, this is the only one now): BYTE-FAITHFUL mirror — same normalize, same resolution order
     (single-ticker exact hit -> exact case-insensitive title -> shortest substring title) and the
     same None fall-through. The ONLY change is the ticker-map load, which carries the sole egress,
     swaps to its async twin (``_load_ticker_map`` -> ``await _aload_ticker_map``); every other line is
@@ -239,7 +239,7 @@ class SECFinancialsAdapter(SourceBase):
     samples = [{"query": "AAPL"}, {"query": "Apple"}]
 
     async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async replacement of the deleted sync ``search`` (11-04, S9; this is the only one now) (S4b) -> AsyncSearchCapable, so the async fan-out awaits
+        """Native-async replacement of the deleted sync ``search`` (11-04, this is the only one now) -> AsyncSearchCapable, so the async fan-out awaits
         this DIRECTLY instead of pushing sync ``.search`` onto the shared thread pool. Mirrors
         ``search`` LINE-FOR-LINE: the two egress-carrying calls swap to their async twins
         (``_resolve`` -> ``await _aresolve``, ``self._build_doc`` -> ``await self._abuild_doc``), which
@@ -266,7 +266,7 @@ class SECFinancialsAdapter(SourceBase):
         return True, f"OK ({len(by_ticker)} tickers)"
 
     async def _abuild_doc(self, ident: dict) -> Optional[Document]:
-        """Async replacement of the deleted sync ``_build_doc`` (11-04, S9; this is the only one now): same URLs/headers/timeouts and the same both-None guard,
+        """Async replacement of the deleted sync ``_build_doc`` (11-04, this is the only one now): same URLs/headers/timeouts and the same both-None guard,
         with the two egress calls swapped to their async twins AND run CONCURRENTLY.
 
         submissions and companyfacts are two unrelated endpoints on ``data.sec.gov`` that share
