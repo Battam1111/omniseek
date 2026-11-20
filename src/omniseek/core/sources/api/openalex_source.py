@@ -149,7 +149,7 @@ class OpenAlexAdapter(SourceBase):
         return " ".join([(query or "").strip(), *toks]).strip()
 
     async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async replacement of the deleted sync ``search`` (11-04, this is the only one now) (the OpenAlex sources go native async), so the live async
+        """Native-async ``search`` (the OpenAlex sources go native async), so the live async
         omniseek_search path awaits it DIRECTLY instead of parking a pool thread on the ``/works`` call. It
         mirrors ``search`` step-for-step; only the BLOCKING work moves:
           • the disk cache read/write → ``anyio.to_thread.run_sync`` (get_docs / set_docs do file IO);
@@ -169,7 +169,7 @@ class OpenAlexAdapter(SourceBase):
         subclass with no per-subclass ``asearch`` needed, resolving the hazard in this one file.
         """
         # Pull any allowlisted OpenAlex `key:value` filters out of the query and route them to the
-        # API's `filter=` param. No recognized filter → behaviour unchanged (plain `search=` as before).
+        # API's `filter=` param. No recognized filter → behaviour unchanged (plain `search=`).
         search_text, filter_str = _parse_filters(query or "")
 
         # CRITICAL: the resolved filter is part of the cache identity (same as search) — otherwise

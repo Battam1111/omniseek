@@ -24,19 +24,18 @@ The chosen item's score is stamped into ``metadata._rank``; the corroborating
 sources into ``metadata.also_in`` + their count into ``metadata.corroboration`` —
 so the ranking is auditable, never a black box.
 
-The three terms (2026-10-20; measured on a recording of real searches):
+The three terms (2026-10-20; measured on the recording):
   relevance  BM25 (relevance.doc_scores, title 3x body) divided by the batch's best. A source with no
              body sends "" (never a placeholder text). An empty body is scored as UNKNOWN length (the
              average body length of the batch), not as zero length, which made a bare title the
              strongest match (``empty_body_unknown``). Its words are still absent: only the title
              can match. (Sorting empty bodies after all others measured worse on the paper queries.)
-             The query's adjacent word pairs are extra BM25 terms at ``PHRASE_WEIGHT`` (
-             2026-10-24): words of the query that stand apart in a document ("Point-Based Distributed
+             The query's adjacent word pairs are extra BM25 terms at ``PHRASE_WEIGHT``: words of the query that stand apart in a document ("Point-Based Distributed
              Zeroth-Order" for "distributed point function") count less than the query's phrase.
              The vector-recall prior (``recall_rrf``, perception-memory docs only) may stand in for
              relevance when it is higher; for a document that matches lexically only above what one
              stored copy can earn (``_prior_counts``), since below that it is only a rank inside the
-             index, whose first hit used to score like the batch's best literal match.
+             index, whose first hit would otherwise score like the batch's best literal match.
   recency    1.0 today, 0.5 at ~30 days (``_recency``). An undated document gets the batch's median.
   heat       a FIXED transform of the document's own attention signals (``_heat``):
              min(1, log1p(value) / log1p(cap of that signal name)), the best over its signals. The
@@ -47,7 +46,7 @@ The three terms (2026-10-20; measured on a recording of real searches):
 "The batch" for the statistics above (BM25's document count, term frequencies and average length,
 the best relevance, the two medians) is the documents of the sources that returned at least one
 document holding a query word. A source that answered nothing on the topic therefore moves nobody
-else's rank (it used to: adding such a source changed the order in 26 of 45 recorded queries).
+else's rank (counting it changed the order in 26 of 45 recorded queries).
 Browse mode (no query words) uses every document.
 """
 
@@ -114,7 +113,7 @@ def _divergence_ratio(v1: float, v2: float):
     EQUAL (equal is not a divergence, so it never ranks). Signals CAN be negative (a reddit
     score, a net loss), so the ratio is defined over |v|; a bare signed max/min would mis-rank
     a real 5x divergence like -10 vs -2 as 0.2 and a sign flip as negative. Pure. The phase 7
-    detector RANKS by this ratio and no longer gates on it (rank, never a score gate)."""
+    detector RANKS by this ratio and does not gate on it (rank, never a score gate)."""
     if v1 == v2:
         return None            # equal values are not a divergence
     if v1 * v2 < 0:
@@ -280,7 +279,7 @@ def dedup(docs: list[Document],
             backends = {backend_of(d.source) for d in grp} if backend_of else srcs
             if len(backends) > 1:
                 add["corroboration"] = len(backends)
-            # ① carry the RICHEST scholarly IDENTITY across the merge (2026-07-15): if the survivor is NOT
+            # ① carry the RICHEST scholarly IDENTITY across the merge: if the survivor is NOT
             #    the OpenAlex member but a collapsed OpenAlex duplicate carries structured authorships (exact
             #    person ids + institutions), preserve them so the placement lift
             #    (fetcher._place_scholarly_fields) surfaces the identity layer on the survivor -- else an S2 /
@@ -308,9 +307,8 @@ def dedup(docs: list[Document],
             #     remains, so any later cross-doc comparison compares DIFFERENT works — the
             #     2026-07-01 dogfood noise). Mechanical flag; never fed to ranking (the razor);
             #     fail-open.
-            #     2026-07-03: the 1.5x ratio GATE is gone. "How much divergence is worth
-            #     flagging" was the last judgment-shaped constant in OmniSeek; the detector now
-            #     MEASURES every same-work numeric divergence (its max/min ratio), RANKS by that
+            #     No ratio GATE: "how much divergence is worth flagging" is a judgment-shaped
+            #     constant; the detector MEASURES every same-work numeric divergence (its max/min ratio), RANKS by that
             #     ratio DESC, and keeps the top-3 per doc — a RESOURCE cap, not an epistemic line
             #     (the RRF discipline: rank, never a score gate). Equal values are not a divergence
             #     (skipped); a zero-vs-nonzero pair is an unbounded "inf" ratio and ranks first.
@@ -488,22 +486,13 @@ def _recency(doc: Document, now: datetime, unknown: float = 0.3) -> float:
     return 1.0 / (1.0 + age_days / 30.0)  # 1.0 today, 0.5 at ~30d
 
 
-def _engagement(doc: Document) -> float:
-    """Absolute attention on a log scale over attention_value(). Retained for direct callers; merge_rank
-    uses ``_heat`` below, because this one puts views and citations on one curve."""
-    s = doc.attention_value() or 0
-    if s <= 0:
-        return 0.0
-    return min(1.0, math.log10(1 + s) / 4.0)  # ~1.0 at score≈10k
-
-
 # Heat caps (2026-10-20). PROVISIONAL, calibrate 2026-10-27. Derivation: for every
 # attention-class signal name (engagement / citation) seen at least 20 times in a broad-search
 # recording plus two more recorded queries (27,156 + 873 recorded documents),
 # the 95th percentile of its values. At or above its cap a signal counts
 # as full attention (1.0); below it, log1p(value) / log1p(cap). Read at p99 instead, the replay gave
-# the 23 paper queries 216 and the 20 control queries 121 on-topic in their top 10 (p95: 215, 121),
-# so the choice is not sharp; p95 was fixed before looking.
+# the 23 paper queries 216 and the 20 control queries 121 on-topic in their top 10
+# (p95: 215, 121), so the choice is not sharp; p95 was fixed before looking.
 # A name not in this table is not on any known scale: it counts as no signal
 # (unknown heat), never as a guess. Recalibrate by re-running derive_caps on a newer recording.
 HEAT_CAPS: dict[str, float] = {
@@ -521,7 +510,7 @@ _ATTENTION = ("engagement", "citation")
 # was read. Replay of the 45 recorded queries (with _prior_counts): weights
 # 0.0588 / 0.1176 / 0.1765 / 0.25 gave the 23 paper queries 216 / 217 / 218 / 219 on-topic in their top
 # 10 and the 20 control queries 125 / 126 / 126 / 125, so the choice is not sharp. Recalibrate by
-# re-running the replay with other pair weights on a newer recording.
+# re-running the replay with other pair weights on a newer recording (pw:<x>).
 PHRASE_WEIGHT = 0.10 / 0.85
 
 
@@ -531,9 +520,9 @@ def _heat(doc: Document) -> Optional[float]:
 
     WHY per signal name (measured 2026-07-25, kept): 10k views is unremarkable, 10k citations is
     legendary, so one curve over attention_value() put youtube at 0.47-0.98 and papers at 0.08-0.35.
-    That fix used a percentile WITHIN each source's returned batch; on 2026-10-20 it was replaced with this
-    transform because a batch-relative number is not a property of the document (the same paper scored
-    differently depending on its neighbours) and because the percentile gave a doc without any signal
+    A percentile WITHIN each source's returned batch does not do: a batch-relative number is not a
+    property of the document (the same paper scored differently depending on its neighbours), and the
+    percentile gave a doc without any signal
     0.0, i.e. read "unknown" as "nobody looked at it" (an IACR ePrint paper with no counts at all fell
     behind every counted paper)."""
     best: Optional[float] = None
@@ -607,9 +596,9 @@ def text_scores(texts: list[tuple[str, str, str]], survivors: list[int],
     CJK-bigram-aware) so ranking and adapter-side filtering can never drift apart. Each title and
     content is tokenized ONCE and its tokens serve the topic check, the body length and the BM25 terms
     (the three of them tokenized every content again: about 3.8 passes over some 6.5 M characters of a
-    broad search, 0.6 to 0.75 s, measured). Plain data in and out and
-    module-level, because asearch_ranked runs it in the process lane (portal.run_cpu):
-    on the event loop it held the loop for those 0.6 s, and for 0.14 to 0.35 s on a
+    broad search, 0.6 to 0.75 s, measured). Plain data in and out and module-level, because
+    asearch_ranked runs it in the process lane (portal.run_cpu): on the
+    event loop it held the loop for those 0.6 s, and for 0.14 to 0.35 s on a
     single-source search whose recalled index documents are long."""
     terms = relevance.query_terms(query)
     if not terms:
@@ -644,18 +633,39 @@ def _merge_prep(results, backend_of):
     return kept, texts, [pos[id(d)] for d in kept]
 
 
+class RankTimeout(Exception):
+    """``amerge_rank``'s text scoring did not finish within its ``timeout``. ``docs`` holds the
+    deduplicated documents in their unranked order (flatten order: source by source, the recalled
+    index last), the first ``limit`` of them, unstamped."""
+
+    def __init__(self, docs: list) -> None:
+        super().__init__("text scoring did not finish within its budget")
+        self.docs = docs
+
+
 async def amerge_rank(results, query: str, limit: int = 15,
-                      backend_of: Optional[Callable[[str], str]] = None) -> list[Document]:
+                      backend_of: Optional[Callable[[str], str]] = None,
+                      timeout: Optional[float] = None) -> list[Document]:
     """Flatten → dedup → rank (the ranking step OmniSeek calls merge_rank), for a caller ON the event
     loop (fetcher.asearch_ranked). ``results`` is a search_many dict or a flat list. ``backend_of`` is
     passed through to ``dedup`` so corroboration counts distinct BACKENDS (injected by the caller to
     avoid a rank->fetcher import cycle; absent → the historical source-name count). text_scores runs
     in a worker process of the process lane (portal.run_cpu). Only the texts cross (pickled on the
     loop: about 6.5 MB for a broad search). A worker that dies raises anyio.BrokenWorkerProcess here;
-    nothing falls back to the loop."""
+    nothing falls back to the loop.
+
+    ``timeout`` (seconds, the wait for a slot of the lane included): past it the scoring is cancelled,
+    which ends its worker process (anyio's to_process with cancellable=True kills it and drops it from
+    the pool, so a stuck worker is replaced by a fresh one on the next call), and RankTimeout carries
+    the unranked documents. None waits as long as it takes."""
+    import anyio
     from omniseek.core import portal
     docs, texts, survivors = _merge_prep(results, backend_of)
-    inset, rels = await portal.run_cpu(text_scores, texts, survivors, query or "")
+    with anyio.move_on_after(timeout) as scope:
+        inset, rels = await portal.run_cpu(text_scores, texts, survivors, query or "",
+                                           cancellable=timeout is not None)
+    if scope.cancelled_caught:
+        raise RankTimeout(docs[:limit])
     return _merge_finish(docs, inset, rels, query, limit)
 
 

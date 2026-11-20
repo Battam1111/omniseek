@@ -385,7 +385,7 @@ class WechatAdapter(SourceBase):
         Order is preserved: ``ex.map`` keeps input order, so entries still enter the pool feed by
         feed in ``_all_feeds()`` order, which is what the STABLE score sort below falls back on for
         ties. A feed that fails is still skipped with its partial entries kept, and an
-        every-feed-failed run still falls through to the sogou breadth merge exactly as before.
+        every-feed-failed run still falls through to the sogou breadth merge.
         """
         key = cache.make_key("wechat", "search", query, limit)
         cached = cache.get_once(key)
@@ -502,7 +502,7 @@ class WechatAdapter(SourceBase):
             return True, f"OK (Layer A + Layer B: {len(feeds)} 公众号 feeds via wechat2rss)"
         if layer_a:
             # "degraded" is the marker source-health reads (infra_jobs.run_source_health): Layer B
-            # going dark fires 源降级 once. Since 2026-10-19 nothing else watches the wechat2rss feeds.
+            # going dark fires 源降级 once. Nothing else watches the wechat2rss feeds.
             return True, f"OK (degraded; Layer A; Layer B {len(feeds)} feeds unreachable)"
         return False, "WeChat unreachable"
 

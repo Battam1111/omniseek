@@ -81,7 +81,7 @@ class MLRCAdapter(BaseScrapeAdapter):
         )
 
     async def _araw_fetch(self, query: str, limit: int) -> Optional[Any]:
-        """Async replacement of the deleted sync ``_raw_fetch`` (11-04, this is the only one now): SAME composite ``"{query} reproducibility"`` term + /notes/search
+        """Async ``_raw_fetch``: SAME composite ``"{query} reproducibility"`` term + /notes/search
         over-fetch (limit=100), only the egress goes async via ``_aapi_get``. None on no-data (base → [])."""
         # Compose query: user's terms + "reproducibility" as a sticky hook
         composite_query = f"{query} reproducibility"

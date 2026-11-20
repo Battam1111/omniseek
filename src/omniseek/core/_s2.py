@@ -27,8 +27,7 @@ This is the symmetric twin of ``_openalex`` for the S2 backend:
   thin async wrappers       aget_paper / aget_paper_references / aget_paper_citations /
                             asearch_paper / aget_recommended_papers / asearch_author /
                             aget_author_papers (the library's async client, awaited on the
-                            loop; the sync ones were deleted 11-04, async step seven, and the
-                            last one, snippet_search, became asnippet_search on 11-10)
+                            loop; snippet search is asnippet_search)
                             — each with the semaphore + breaker, the
                             bounded-iteration page cap (the "limit == page size, iterating
                             a PaginatedResults pages through EVERY page" trap the
@@ -81,7 +80,7 @@ _BREAK_FOR_S = 120.0  # seconds the circuit stays open
 # 1.0s honors S2's ~1 RPS keyed guarantee exactly (the docstring's "even with the key 1 RPS"); S2
 # throttles far harder than OpenAlex's polite pool, hence the much wider interval than _openalex's 0.2.
 # (the value, 1.0 s, is declared in upstreams.json "s2" gate.min_interval_s; bound below)
-# How long ONE caller may wait on the gate: until its own deadline (2026-11-11), the
+# How long ONE caller may wait on the gate: until its own deadline, the
 # permit wait and the start wait together. A 429 storm (each failed call retries, and every attempt
 # reserves another 1s-apart slot) grows the backlog, and a caller with no deadline once sat 886s on the
 # gate (field_skeleton, which now carries its own deadline); a start past the caller's deadline is not
@@ -244,7 +243,7 @@ def _is_rate_limit(exc: Exception) -> bool:
     """True when ``exc`` is S2's 429 signature. The semanticscholar lib masks the HTTP
     status behind its tenacity backoff: a 429 surfaces as ConnectionRefusedError or a
     RetryError whose message carries "429" / "Too Many Requests". This is the ONE place
-    that detection lives (same pattern the source's hand-rolled loop used to inline)."""
+    that detection lives."""
     if isinstance(exc, ConnectionRefusedError):
         return True
     msg = str(exc)
@@ -291,7 +290,7 @@ def _rl_policy() -> dict:
 async def _aretry_rl(ado):
     """Await ``ado()``, retrying ONLY on a rate-limit (429 -> ConnectionRefusedError; see _is_rate_limit)
     with OmniSeek's own SHORT bounded backoff (``anyio.sleep``). Any other exception propagates on the
-    first occurrence. This is the retry budget the lib used to own (and overspent at ~250s); here it
+    first occurrence. This is the retry budget (the lib's own overspends at ~250s); here it
     is a handful of seconds, after which the caller degrades + the breaker takes over."""
     return await AsyncRetrying(sleep=anyio.sleep, **_rl_policy())(ado)
 
@@ -428,7 +427,7 @@ async def asnippet_search(query: str, limit: int = 20) -> list:
     cannot see the swallowed 429)."""
     async def _go():
         from omniseek.core import http
-        key = await anyio.to_thread.run_sync(_load_api_key, limiter=portal.IO_LANE)
+        _ok, key = await portal.run_io(_load_api_key)  # bounded; past it the call goes without the key
         headers = {"x-api-key": key} if key else {}
         # S2's snippet/search default response already carries paper.{corpusId,title,authors,
         # openAccessInfo} + snippet.{text,snippetKind,section,snippetOffset}; a custom ``fields`` param
@@ -540,7 +539,7 @@ async def ahealth(timeout: float = 8.0) -> tuple[Optional[bool], str]:
     connectivity + key validity + the breaker/rate state, cached 60s and single-flighted
     (``_probe.shared_verdict``) so N concurrent callers cause exactly ONE upstream call. A 429 is S2
     rate-limiting us: it answered, but not whether search serves, so the verdict is None (not
-    verified, 2026-10-04; it used to read healthy); a recent-429 stamp is surfaced in the message of a
+    verified); a recent-429 stamp is surfaced in the message of a
     healthy verdict so an active throttle stays legible.
 
     NOTE: the ``timeout`` arg is accepted for call-site parity with ``_openalex.ahealth``; the shared
@@ -569,7 +568,7 @@ async def _aprobe() -> tuple[Optional[bool], str]:
                          else f"not verified: OmniSeek shed the probe, nothing sent ({exc})")
     except Exception as exc:  # noqa: BLE001
         # A 429 is S2 rate-limiting us: it answered, but not whether search serves, so it is
-        # NOT verified (None), never healthy (it used to read True here) and never down. Any
+        # NOT verified (None), never healthy and never down. Any
         # other exception is a genuine outage.
         if _is_rate_limit(exc):
             ok, msg = None, f"{_probe.rate_limited('api.semanticscholar.org')}: {type(exc).__name__}"

@@ -5,7 +5,7 @@ LEAF module: it imports ONLY the stdlib (threading / logging / time / contextlib
 omniseek, so every loop module can import it without a cycle. The registry lets serve_http's shutdown
 drain every background loop uniformly, without any loop having to know about the others.
 
-Why this exists (S2 of the async-core migration): today serve_http is SIGKILLed on a deploy restart,
+Why this exists: today serve_http is SIGKILLed on a deploy restart,
 so the recall single-writer queue can lose queued writes mid-flush. Each forever-loop now carries a
 module-level stop Event and registers here when it starts; on shutdown the composed ASGI lifespan
 calls drain_all(), which sets every stop Event (so a loop parked in _STOP.wait wakes immediately)
@@ -15,7 +15,7 @@ UNCHANGED, and any drain error is logged, never raised (a drain fault must not c
 handshake). The stop machinery is purely ADDITIVE: a loop behaves identically until its stop is set,
 which only ever happens on shutdown.
 
-Shutdown cap (2026-10-11): uvicorn awaits the lifespan shutdown with NO timeout (its
+Shutdown cap: uvicorn awaits the lifespan shutdown with NO timeout (its
 timeout_graceful_shutdown only bounds the connection wait), and twice the process stalled right after
 "Waiting for application shutdown." without ever reaching the drain log line (10-10 15:55 for over
 3 minutes, 10-11 12:25 long enough to roll back a deploy). arm_shutdown_watchdog bounds that segment
@@ -24,7 +24,7 @@ phase reached and every thread still alive, dumps every thread's stack, and forc
 faulthandler backstop BACKSTOP_EXTRA_S later does the same from a C thread, for the case where the
 GIL itself is held and no Python thread (the watchdog included) can run.
 
-Drain cap (2026-10-11, eye-drain-cap): the segment BEFORE that, from SIGTERM until uvicorn has waited
+Drain cap (2026-10-11): the segment BEFORE that, from SIGTERM until uvicorn has waited
 for the open connections and running requests, is capped too. uvicorn's timeout_graceful_shutdown
 (DRAIN_CAP_S_DEFAULT) bounds it cooperatively (cancels the requests still running and moves on to the
 lifespan shutdown); arm_drain_watchdog, called from the server's signal handler, bounds it hard, for
@@ -39,7 +39,7 @@ main thread (time.sleep there wakes for SIGINT only), so the handler runs only a
 returns. There the drain cap is ALSO armed from a console control handler, which Windows runs on a
 thread of its own the moment Ctrl+Break / Ctrl+C / console close arrives (_win_console_ctrl_arm).
 
-Answers on exit (2026-10-24): the drain cap only helps a running MCP call if its answer
+Answers on exit: the drain cap only helps a running MCP call if its answer
 can still be sent; sse_starlette cuts every SSE stream at the signal unless told not to.
 answer_running_calls_on_exit sets the cap on uvicorn's Config and turns that off, for the entry, the
 eye and the brain alike (the entry and the brain load this file by path).
@@ -468,23 +468,6 @@ def arm_shutdown_watchdog(cap_s: Optional[float] = None,
         return None
 
 
-def disarm_shutdown_watchdog() -> None:
-    """Cancel the watchdog and the faulthandler backstop and reset the state (tests; a process that
-    shuts down for real keeps them armed until it exits)."""
-    with _wd_lock:
-        for key in ("cancel", "wake"):
-            ev = _wd_state.get(key)
-            if ev is not None:
-                ev.set()
-        if _wd_state.get("backstop"):
-            try:
-                faulthandler.cancel_dump_traceback_later()
-            except Exception:  # noqa: BLE001
-                pass
-        _wd_state.clear()
-        _wd_state.update(_wd_reset())
-
-
 def cap_lifespan_shutdown(uvicorn_lifespan, cap_s: Optional[float] = None,
                           exit_fn: Callable[[int], None] = os._exit, backstop: bool = True) -> bool:
     """Arm the shutdown cap in the SAME synchronous step in which uvicorn logs "Waiting for application
@@ -513,7 +496,7 @@ def cap_lifespan_shutdown(uvicorn_lifespan, cap_s: Optional[float] = None,
 
 
 def answer_running_calls_on_exit(uvicorn_config, drain_s: float) -> bool:
-    """2026-10-24: on an exit signal, give the requests still running up to ``drain_s``
+    """On an exit signal, give the requests still running up to ``drain_s``
     seconds to finish AND get their answer to the caller. The one copy for the services that
     stop this way; each calls it on its uvicorn Config before
     building the server object (capped_server_class reads the timeout in its __init__).
@@ -529,7 +512,7 @@ def answer_running_calls_on_exit(uvicorn_config, drain_s: float) -> bool:
        "wait forever"): uvicorn waits that long for the running requests, then cancels the rest;
     2. sse_starlette's automatic drain is switched off, so a stream ends when its answer is sent.
        Only with a cap: without one a stream that never ends would hold the shutdown forever, so
-       with ``drain_s`` <= 0 the streams are still cut at the signal, as before.
+       with ``drain_s`` <= 0 the streams are cut at the signal.
     sse_starlette is imported here, never at module level: this module stays stdlib only (the entry
     and the brain load it by path, without OmniSeek's dependencies). The switch is process-global.
     Returns True when the streams now outlive the signal. FAIL-OPEN: no sse_starlette (no SSE to
@@ -561,7 +544,7 @@ def capped_server_class(server_base, cap_s: Optional[float] = None,
       ``timeout_graceful_shutdown`` (uvicorn's own cooperative cap on the same wait; the caller sets
       it, drain_cap_s() in serve_http; None or 0 leaves this stage off); on Windows a console
       control handler registered at startup arms it too (see _win_console_ctrl_arm);
-    - lifespan stage: cap_lifespan_shutdown(``cap_s``) at startup, as before.
+    - lifespan stage: cap_lifespan_shutdown(``cap_s``) at startup.
 
     serve_http and the subprocess tests use this same class, so the tests run the production
     wiring. Only uvicorn's documented Server methods are overridden (handle_exit, startup, shutdown),

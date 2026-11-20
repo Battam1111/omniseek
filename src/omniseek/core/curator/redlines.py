@@ -172,10 +172,3 @@ def match(candidate: dict) -> list:
             hit = {**hit, "severity": "hard", "promoted_for_discovered": True}
         hits.append(hit)
     return hits
-
-
-def has_hard_hit(candidate_or_hits) -> bool:
-    """Convenience: True iff any HARD-severity line is hit. Accepts a candidate dict or a
-    pre-computed hits list."""
-    hits = candidate_or_hits if isinstance(candidate_or_hits, list) else match(candidate_or_hits)
-    return any(h.get("severity") == "hard" for h in hits)

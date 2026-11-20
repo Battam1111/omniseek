@@ -67,8 +67,7 @@ _SE_KEY = (auth.load("stackexchange") or {}).get("key") or ""
 # than 30 a second from one IP are dropped), taken permit-first; a `backoff` in a response defers its
 # start slot for EVERY caller (the docs: the app MUST wait that many seconds); and its breaker (3 failures
 # in a row that say the API is unhealthy, then 300 s, both declared there) makes the cluster fast-skip a
-# spent quota. Until 2026-11-07 the breaker was a count and cooldown of this module's
-# own, which also counted a bad_parameter answer; it now goes through the guard's one rule
+# spent quota. The breaker goes through the guard's one rule
 # (_guard.counts_against_upstream), see _se_failure.
 _se_guard = upstreams.guard("stackexchange", log=logger)
 _SE_MAX_INFLIGHT = _se_guard.max_inflight
@@ -125,10 +124,10 @@ def _se_open_s() -> float:
 def _cache_only_skip(url: str) -> bool:
     """True on a cache-only collect (omniseek_search staleness=cache_only): the Stack Exchange answer is
     cached per query by the caller, so a miss reaching here has nothing to read and must not touch
-    the network. http.get_json would return None without egress, but until 2026-10-08 that None went
-    through the gate (a permit and a pacing slot for a request that never happened) and was then
-    counted as a quota failure, so three cache-only misses opened the breaker and the next real
-    searches of all six Stack Exchange sources were skipped for the breaker's whole window."""
+    the network. http.get_json would return None without egress, but that None would go through the
+    gate (a permit and a pacing slot for a request that never happened) and count as a quota
+    failure: three cache-only misses opened the breaker and the next real searches of all six Stack
+    Exchange sources were skipped for the breaker's whole window."""
     if not cache.cache_only():
         return False
     diag.note("stackexchange.cache_only", url=url,
@@ -326,7 +325,7 @@ async def _ase_get(url, params, timeout=TIMEOUT):
 
 
 async def asearch(query: str, limit: int, site: str) -> Optional[dict]:
-    """Async replacement of the deleted sync `search` (11-04, this is the only one now) (the /search/advanced GET). Byte-identical params + the SAME no-items
+    """Async `search` (the /search/advanced GET). Byte-identical params + the SAME no-items
     diag.note. Returns parsed JSON or None (contract)."""
     params = {
         "order": "desc",
@@ -350,7 +349,7 @@ async def asearch(query: str, limit: int, site: str) -> Optional[dict]:
 
 async def afetch_answer_documents(question_item: dict, source: str, site: str,
                                   site_host: str) -> list[Document]:
-    """Async replacement of the deleted sync `fetch_answer_documents` (11-04, this is the only one now): SAME keyless /questions/{id}/answers GET via `_ase_get`,
+    """Async `fetch_answer_documents`: SAME keyless /questions/{id}/answers GET via `_ase_get`,
     SAME ANSWERS_PER_QUESTION cap, SAME `_answer_to_document` map (pure CPU, on loop). [] on failure."""
     question_id = question_item.get("question_id")
     if not question_id:
@@ -379,7 +378,7 @@ async def afetch_answer_documents(question_item: dict, source: str, site: str,
 
 async def abuild_documents(raw: dict, limit: int, source: str, site: str,
                            site_host: str) -> list[Document]:
-    """Async replacement of the deleted sync `build_documents` (11-04, this is the only one now) (the answer layer egresses). For each of the first `limit`
+    """Async `build_documents` (the answer layer egresses). For each of the first `limit`
     questions: build the question doc (`question_to_document`, pure CPU on loop) then AWAIT its answer
     docs (`afetch_answer_documents`). Keep the SAME doc ORDER as sync (q0, *a0, q1, *a1, ...) -> await
     answers SEQUENTIALLY per question (byte-identical order; no asyncio.gather -- ordering-parity over

@@ -55,7 +55,7 @@ _MAX_CHARS = 250_000  # extracted-text cap for a pathologically long PDF — kee
 #     language share lowest 1905.11946 0.201, then 2302.13971 0.235, 2006.11239 0.244, highest
 #     math/0303109 0.374, the Chinese 0.561 to 0.967; stray letters highest math/0512047 0.028, then
 #     0903.0340 0.024, 1406.2661 0.020, math/0307245 0.019, math/0602302 0.018, the Chinese at most
-#     0.002. Every reading was taken on 2026-11-09.
+#     0.002.
 # Each threshold is the midpoint between the two groups on that reading: language share
 # (0.004 + 0.201) / 2 = 0.10 (aoarl.pdf falls under it); stray letters (0.028 + 0.168) / 2 = 0.10
 # (1106.0234, whose language share is normal, goes over it).
@@ -191,7 +191,7 @@ class PdfAdapter(SourceBase):
             return None
 
         # SSRF: this CLAIMING adapter fetches an agent-controlled URL (any /pdf/
-        # path). Since 2026-10-24 it goes through http.download_to_file, whose libcurl tier checks every
+        # path). It goes through http.download_to_file, whose libcurl tier checks every
         # redirect hop against _netguard before sending it (http._acurl_hops), the same per-hop check
         # docreader and the audio download use; it does not pin the resolved IP the way the shared
         # httpx client's AsyncSSRFGuardTransport does (the DNS-rebind residual of those lanes). Every hop

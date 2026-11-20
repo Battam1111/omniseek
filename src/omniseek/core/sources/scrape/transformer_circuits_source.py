@@ -81,7 +81,7 @@ class TransformerCircuitsAdapter(SourceBase):
     _INDEX_KEY = cache.make_key("transformer_circuits", "index", "v1")
 
     async def _afetch_index(self) -> list[dict]:
-        """Async replacement of the deleted sync ``_fetch_index`` (11-04, async step seven; this is the only one now): same key, same parse, same cache-on-any-answer."""
+        """Async ``_fetch_index``: same key, same parse, same cache-on-any-answer."""
         cached = await cache.aget_once(self._INDEX_KEY)
         if cached is not None:
             return cached

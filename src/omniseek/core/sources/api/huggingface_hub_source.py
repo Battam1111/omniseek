@@ -59,7 +59,7 @@ class HuggingFaceHubAdapter(BaseAPIAdapter):
     rank_locally = False  # original applied no keyword filter — keep downloads order verbatim
 
     async def _araw_fetch(self, query: str, limit: int) -> list:
-        """Async replacement of the deleted sync ``_raw_fetch`` (11-04, this is the only one now): the bounded 3-listing fan-out, run CONCURRENTLY.
+        """Async ``_raw_fetch``: the bounded 3-listing fan-out, run CONCURRENTLY.
 
         Same per-category budget, same three categories in the same order, same URL / params /
         timeout, same None → warn+skip contract, same merge + downloads-desc stable sort, same
@@ -121,8 +121,8 @@ class HuggingFaceHubAdapter(BaseAPIAdapter):
           /datasets/<author>/<name>   → datasets
           /spaces/<author>/<name>     → spaces
         Any other address (/api/..., /blob/, /resolve/, /organizations/, /blog/ ...) is not ours: the
-        generic web read takes it. Before 2026-11-06 every path of two or more parts was looked up as a
-        model, so /api/datasets/<a>/<b>/commits/main became the repository "api/datasets" and came back
+        generic web read takes it. Looking every path of two or more parts up as a model would make
+        /api/datasets/<a>/<b>/commits/main the repository "api/datasets" and come back
         as HF's 401 "Invalid username or password"."""
         p = urlparse(url)
         host = (p.hostname or "").lower()

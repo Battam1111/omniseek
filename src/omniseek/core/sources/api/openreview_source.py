@@ -23,7 +23,7 @@ entry now answers 403 ChallengeRequiredError, so without a session, or when the 
 to verify too, the read falls back to the title and abstract and says why in
 metadata.fulltext_reason. OmniSeek never touches the anonymous challenge page. Reading the PDF needs
 the optional [pdf] extra (PyMuPDF); an install without it skips the download and falls back the
-same way, the reason naming what to install (pip install 'omniseek[pdf]'). Since 2026-11-09 a
+same way, the reason naming what to install (pip install 'omniseek[pdf]'). A
 /forum?id= link also appends the forum's discussion after the paper (every note ``fetch_reviews`` reads:
 reviews, author responses, meta-review, decision; who, kind, date, full text, oldest first; count in
 metadata.discussion_notes), abstract-only or not; /pdf?id= stays the paper alone. The paper and the
@@ -245,6 +245,18 @@ def _last_retry_after() -> Optional[float]:
     return upstreams.parse_retry_after((lane.get("fields") or {}).get("retry-after"))
 
 
+def _now_iso() -> str:
+    """Now, in the form omniseek_read's ``fetched_at`` takes (UTC, seconds)."""
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def _stamped(docs: list[Document], cached: bool, fetched_at: Optional[str]) -> list[Document]:
+    """``docs`` with ``metadata.cached`` and ``metadata.fetched_at`` set, the names omniseek_read reports."""
+    for d in docs:
+        d.metadata = {**(d.metadata or {}), "cached": cached, "fetched_at": fetched_at}
+    return docs
+
+
 class OpenReviewAdapter(SourceBase):
     name = "openreview"
     needs_credentials = True
@@ -353,7 +365,7 @@ class OpenReviewAdapter(SourceBase):
     async def _asearch_notes(self, params: dict) -> Optional[dict]:
         """``/notes/search`` anonymously first: it answers keyless (measured 2026-11-08 and
         11-09, with or without ``group``), while ``/login`` allows 3 attempts a window and a login that
-        hit 429 used to cost the whole source its results. Only an anonymous answer of 401 / 403 (the
+        hits 429 would cost the whole source its results. Only an anonymous answer of 401 / 403 (the
         ChallengeRequiredError wall OpenReview put on every anonymous request from 2026-10-10) falls back
         to the logged-in request; any other failure is noted with its address and returns None."""
         url = f"{API_BASE}/notes/search"
@@ -426,14 +438,21 @@ class OpenReviewAdapter(SourceBase):
         """Fetch the actual peer reviews / rebuttals / meta-reviews of one submission. The reply
         notes of a forum (``/notes?forum=<id>``) carry the reviewer ratings + text; we keep the
         ones whose content sniffs review-ish (a review/meta-review/rebuttal/decision). Public
-        forums are readable WITHOUT auth, so this degrades to keyless access."""
+        forums are readable WITHOUT auth, so this degrades to keyless access.
+
+        The answer is kept 1800 s with the time it was read; every document says in ``metadata.cached``
+        whether it came from that copy and in ``metadata.fetched_at`` when the forum was read, and a
+        kept copy used inside a URL read marks that read cached too (``fetcher.note_source_cache_hit``).
+        A fresh call (``cache.set_fresh``) reads the forum again."""
         forum_id = (forum_id or "").strip()
         if not forum_id:
             return []
         key = cache.make_key("openreview", "reviews", forum_id, limit)
-        cached = cache.get_once(key)
-        if cached is not None:
-            return [Document.model_validate(d) for d in cached]
+        kept = cache.get_once(key)
+        if isinstance(kept, dict) and isinstance(kept.get("docs"), list):
+            fetcher.note_source_cache_hit(kept.get("fetched_at"))
+            return _stamped([Document.model_validate(d) for d in kept["docs"]], True, kept.get("fetched_at"))
+        fetched_at = _now_iso()
         params = {"forum": forum_id, "limit": 200, "sort": "cdate:asc"}
         data = self._api_get("/notes", params)
         backend = "v2"
@@ -447,7 +466,7 @@ class OpenReviewAdapter(SourceBase):
             return []
         if not data["notes"]:
             # Genuinely on NEITHER backend: say so, so the drill does not read a wrong-backend miss
-            # (the old failure mode) or a dead forum id as a well-formed "this paper has no reviews".
+            # or a dead forum id as a well-formed "this paper has no reviews".
             diag.note("openreview.reviews",
                       url=f"{API_BASE}/notes?forum={forum_id}",
                       body=(f"forum {forum_id!r} returned 0 notes on BOTH backends "
@@ -473,8 +492,10 @@ class OpenReviewAdapter(SourceBase):
                             f"{limit}: the tail (author responses / meta-review / decision) is cut, "
                             f"pass a larger limit to get the whole thread"))
         docs = docs[:limit]
-        cache.set(key, [d.model_dump(mode="json") for d in docs], ttl=1800)
-        return docs
+        # an empty answer keeps the cache's short floor for empties (the wrapper itself is never empty)
+        cache.set(key, {"docs": [d.model_dump(mode="json") for d in docs], "fetched_at": fetched_at},
+                  ttl=1800 if docs else cache.EMPTY_TTL_CAP)
+        return _stamped(docs, False, fetched_at)
 
     @staticmethod
     def _kind_from_invitations(invitations: list) -> Optional[str]:
@@ -539,7 +560,7 @@ class OpenReviewAdapter(SourceBase):
         kind = OpenReviewAdapter._kind_from_invitations(invitations)
         if kind is None:
             # No invitation names the kind: the old field-name sniff, which also decides whether the
-            # note is a review-like reply at all (as before 2026-10-24).
+            # note is a review-like reply at all .
             if not any(f in present for f in _KIND_FALLBACK_FIELDS):
                 return None
             if "metareview" in present or "meta_review" in present:
@@ -599,7 +620,7 @@ class OpenReviewAdapter(SourceBase):
         """An openreview.net link (``/forum?id=`` or ``/pdf?id=``) as ONE document: the paper's whole
         text when the logged-in session can download its PDF, else the title and abstract with the
         reason in ``metadata.fulltext_reason`` (``metadata.fulltext`` says which). None when the
-        note itself cannot be read, as before. At most one /login per call: the notes request makes
+        note itself cannot be read, . At most one /login per call: the notes request makes
         it, the PDF request only reuses the token that login left (never a second attempt)."""
         host = urlparse(url).hostname or ""
         if "openreview.net" not in host:
@@ -630,11 +651,17 @@ class OpenReviewAdapter(SourceBase):
         to the generic web read). Both are waited for until ``_forum_cutoff``; a paper not ready by then
         comes back as its abstract with the reason in ``metadata.fulltext_reason`` (its download goes on
         in the background and keeps the full text for the next read), a discussion not ready as
-        ``metadata.discussion_reason``."""
+        ``metadata.discussion_reason``.
+
+        The kept copy carries the time of the oldest read behind it (the discussion may come from
+        ``fetch_reviews``'s own copy); a read answered from it is reported cached with that time
+        (``fetcher.note_source_cache_hit``), and a fresh read (omniseek_read staleness="fresh") skips it."""
         key = cache.make_key("openreview", "forum_thread", note_id)
-        cached = cache.get_once(key)
-        if cached is not None:
-            return Document.model_validate(cached)
+        kept = cache.get_once(key)
+        if isinstance(kept, dict) and isinstance(kept.get("doc"), dict):
+            fetcher.note_source_cache_hit(kept.get("fetched_at"))
+            return Document.model_validate(kept["doc"])
+        fetched_at = _now_iso()
         cutoff = self._forum_cutoff()
         self._get_token()  # the one /login of this read, before the two halves share its token
         pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="openreview-forum")
@@ -685,7 +712,8 @@ class OpenReviewAdapter(SourceBase):
             meta["discussion_reason"] = "the forum's discussion came back empty (no reply notes could be read)"
         doc = paper.model_copy(update={"content": content, "metadata": meta})
         if meta.get("fulltext") and parts:
-            cache.set(key, doc.model_dump(mode="json"), ttl=1800)
+            fetched_at = min([fetched_at] + [t for n in notes if (t := (n.metadata or {}).get("fetched_at"))])
+            cache.set(key, {"doc": doc.model_dump(mode="json"), "fetched_at": fetched_at}, ttl=1800)
         return doc
 
     def _forum_cutoff(self) -> float:
@@ -785,7 +813,7 @@ class OpenReviewAdapter(SourceBase):
 
         Returns ``(HTTP status or None, content type, bytes written or None, reason)``; the byte count
         is set only for a 2xx whose body starts with ``%PDF-`` and fits the DOCUMENT cap
-        (``http.DOC_MAX_BYTES``; the 30MB cap on an API answer refused a 31MB paper), else
+        (``http.DOC_MAX_BYTES``, the 30MB cap on an API answer refused a 31MB paper), else
         ``dest`` is left absent and the reason says what came back (a challenged request reads
         ``HTTP 403 ChallengeRequiredError: ...``). The reason never carries the token. The download is
         ``http.download_to_file`` (streamed to disk, never whole in memory): every redirect hop goes
@@ -821,9 +849,8 @@ class OpenReviewAdapter(SourceBase):
     def health_check(self) -> tuple[Optional[bool], str]:
         """Ask the search path itself, as search asks it: the same ``/notes/search`` request
         (``source=forum``), anonymously first, for ONE paper on a term that always has papers. Only
-        when the anonymous request is refused (401 / 403) does it go on with the login token, as before.
-        Reusing a still-valid token is not evidence by itself (until 2026-10-04 it read
-        None, so a long-running process never verified this source); the token is reused, never re-made
+        when the anonymous request is refused (401 / 403) does it go on with the login token.
+        Reusing a still-valid token is not evidence by itself; the token is reused, never re-made
         per check (the /login endpoint allows only 3 attempts per window, see OmniSeek-recon-openreview
         note).
 

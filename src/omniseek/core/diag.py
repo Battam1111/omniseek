@@ -18,7 +18,7 @@ Design (deliberately small):
     piece of work noted, however its inner steps arm and drain their own capture (a source's
     health check arms one around its fetch and keeps it to itself). The source-health job taps
     each probe, so a source that failed leaves the addresses it failed on for the exit-node
-    sweep (eye.exit_node). enable/drain behave exactly as before with or without a tap.
+    sweep (eye.exit_node). enable/drain behave the same with or without a tap.
 
 fail-open is absolute: every function here swallows its own errors. A bug in the
 diagnostic path must NEVER turn a working retrieval into a broken one. note() that raises
@@ -41,8 +41,8 @@ _trace_var: contextvars.ContextVar = contextvars.ContextVar("omniseek_eye_diag",
 # None = no tap. A tuple of lists = the open taps, outermost first: every note() made in this context
 # (and the tasks and threads that copy it) is also appended to each of them, whatever _trace_var holds
 # at that moment. A tap opened inside another adds its list and keeps the outer ones: an adapter tapping
-# its own page reads (llm_leaderboard, github, arxiv...) used to hide them from the health probe's tap,
-# so the exit-node sweep saw "no address" for that source (llm_leaderboard, 11-10).
+# its own page reads (llm_leaderboard, github, arxiv...) must not hide them from the health probe's tap,
+# or the exit-node sweep sees "no address" for that source (llm_leaderboard, 11-10).
 _tap_var: contextvars.ContextVar = contextvars.ContextVar("omniseek_eye_diag_tap", default=None)
 
 _MAX_BODY = 500       # a body snippet beyond this is truncated (a marker is appended)
@@ -86,9 +86,9 @@ def strip_secrets(url: Optional[str]) -> Optional[str]:
 
 def _strip_secrets(url: Optional[str]) -> Optional[str]:
     """Return ``url`` with any credential-bearing query-string VALUES replaced by ``<redacted>``,
-    keeping every other byte of the query VERBATIM. LOSSLESS by design: the old parse_qsl +
-    urlencode round-trip force-decoded percent-escapes as UTF-8 (errors=replace) and re-encoded
-    form-style, so a legacy-GBK query (Discuz srchtxt=%B2%A9%BA%F3) was displayed as %EF%BF%BD
+    keeping every other byte of the query VERBATIM. LOSSLESS by design: a parse_qsl +
+    urlencode round-trip force-decodes percent-escapes as UTF-8 (errors=replace) and re-encodes
+    form-style, so a legacy-GBK query (Discuz srchtxt=%B2%A9%BA%F3) shows as %EF%BF%BD
     garbage with + spaces: the diagnostic then LIED about the URL actually sent and misled a
     2026-07-09 investigation into a nonexistent adapter "encoding bug". A diagnostic must never
     alter the evidence it reports; only the secret VALUES are substituted. The rule is the shared
@@ -109,7 +109,8 @@ def _redact_text(text: Optional[str]) -> Optional[str]:
 
 def note(helper: str, *, url: Optional[str] = None, status: Optional[int] = None,
          body: Optional[object] = None, exc: Optional[BaseException] = None,
-         final: bool = False, headers: Optional[dict] = None) -> None:
+         final: bool = False, headers: Optional[dict] = None, method: Optional[str] = None,
+         tap_only: bool = False) -> None:
     """Append ONE failure record to the active trace (a no-op when capture is OFF).
 
     Called ONLY from the failure branches of the shared egress helpers (never the success
@@ -129,9 +130,18 @@ def note(helper: str, *, url: Optional[str] = None, status: Optional[int] = None
     ``headers`` are the request headers a refetch of ``url`` must send to get the same answer (levels.fyi
     serves its page only to a request carrying a browser's navigation headers): the record carries them
     as ``headers`` and the exit-node sweep refetches with them instead of OmniSeek's bare User-Agent.
-    Credential-bearing names (Authorization, Cookie, an API key...) are never recorded."""
+    Credential-bearing names (Authorization, Cookie, an API key...) are never recorded.
+
+    ``method`` is the request's HTTP method; a record carries it as ``method`` only when it is not GET,
+    and the exit-node sweep refetches ``url`` with it (a POST-only API answers a GET 404 or 405 on a
+    node that reaches it: mycareersfuture, statcan_wds). The request body is never recorded.
+
+    ``tap_only=True`` gives the record to the open taps only, not to the armed trace: the egress layer a
+    module drives itself (``http.adirect``, ``http.AsyncHopClient``) records every failed request this
+    way, so a failing health probe leaves the address and method for the exit-node sweep, while a named
+    drill's diagnostic and an ``omniseek_read`` reason keep coming from the module's own notes."""
     try:
-        trace = _trace_var.get()
+        trace = None if tap_only else _trace_var.get()
         taps = [t for t in (_tap_var.get() or ()) if final or len(t) < _MAX_CAPTURES]
         if trace is not None and len(trace) >= _MAX_CAPTURES and not final:
             trace = None  # this run already hit the cap
@@ -152,6 +162,8 @@ def note(helper: str, *, url: Optional[str] = None, status: Optional[int] = None
                 rec["body"] = text[:_MAX_BODY] + ("…(truncated)" if len(text) > _MAX_BODY else "")
         if exc is not None:
             rec["exc"] = (_redact_text(f"{type(exc).__name__}: {exc}") or "")[:_MAX_BODY]
+        if method and str(method).upper() != "GET":
+            rec["method"] = str(method).upper()
         if final:
             rec["final"] = True
         if headers:
@@ -180,6 +192,21 @@ def tap() -> Iterator[list]:
         yield seen
     finally:
         _tap_var.reset(token)
+
+
+def relay(records: Optional[list]) -> None:
+    """Hand records a shared probe noted in another context (records ``note`` made, so already redacted
+    and bounded) to the taps open here. A probe whose one result many callers share (the web-search
+    backend ping, one real request per 10 minutes for every search-index venue) leaves its records with
+    the caller whose context ran it; each other caller relays them, so its health probe names the address
+    too. Fail-open like ``note``."""
+    try:
+        for t in _tap_var.get() or ():
+            for rec in records or ():
+                if isinstance(rec, dict) and len(t) < _MAX_CAPTURES:
+                    t.append(dict(rec))
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def drain() -> list:

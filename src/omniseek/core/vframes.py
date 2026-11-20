@@ -2,7 +2,7 @@
 
 omniseek_transcribe gives OmniSeek a video's spoken WORDS; this gives it the PICTURE -- the slides,
 diagrams, on-screen code, charts, and UI demos a talk / lecture / explainer carries that audio
-alone drops (the visual-track gap: video used to be audio-only). It mirrors the document image
+alone drops (the visual-track gap of an audio-only read). It mirrors the document image
 path (docreader.view_images): OmniSeek RENDERS the pixels (samples frames), the agent's own
 vision reads what they MEAN.
 

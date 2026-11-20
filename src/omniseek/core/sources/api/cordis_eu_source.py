@@ -85,7 +85,7 @@ class CordisEuAdapter(BulkFundingBase):
     _version = "horizon-2021-2027"
 
     async def _abuild_subset_docs(self) -> list[Document]:
-        """Native-async replacement of the deleted sync ``_build_subset_docs`` (11-04, this is the only one now) ONLY the raw ~35MB httpx.get -> await
+        """Native-async ``_build_subset_docs`` ONLY the raw ~35MB httpx.get -> await
         _aget_client().get (same UA / timeout / follow_redirects); the zip parse + coordinator join +
         row->doc mapping below are pure CPU held ON the loop, byte-identical to _build_subset_docs (a
         monthly cache-miss event; the conversion pattern keeps csv/parse on the loop). KEEP IN SYNC

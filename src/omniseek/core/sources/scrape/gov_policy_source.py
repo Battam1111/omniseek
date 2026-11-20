@@ -5,11 +5,12 @@ WHY (STRUCTURE + UNWALL + MONITOR): sousuo.www.gov.cn's 政策库 is the AUTHORI
 vehicle (国发/国办发/国令) / theme. Google indexes individual gov.cn pages but cannot return a
 faceted, structured policy index keyed to 文号 + issuing-org + publish-date. No login, no token
 (verified 2026-06-18: q=数据安全 → 《网络数据安全管理条例》国令第790号 国务院 + the gov.cn 原文 url).
-Each hit's url is the full policy text on gov.cn → omniseek_read it for the body. Strongest telos
+Each hit's content is the document's own text, read from its gov.cn page (the API gives only a
+summary of the opening lines); a page that cannot be read keeps that summary. Strongest telos
 fit for Chinese-policy 信息差 / policy-trend (RECALL) work.
 
 SHAPE: a JSON GET endpoint (BaseScrapeAdapter, bespoke curl_cffi). search(query) → the 国务院
-policy library (t=zhengcelibrary_gw). Other libraries (部门文件 zhengcelibrary_bm, 地方 etc.) are
+policy library (t=zhengcelibrary_gw), then one GET per hit for its page (_PAGE_WORKERS at a time). Other libraries (部门文件 zhengcelibrary_bm, 地方 etc.) are
 a future facet via the `t` param.
 
 Recon trail: brain note eye-recon-gov_policy.
@@ -19,9 +20,10 @@ from __future__ import annotations
 
 import logging
 import re
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from typing import Optional
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
 from omniseek.core.normalize import Document
 from omniseek.core.sources.scrape._base import BaseScrapeAdapter
@@ -30,6 +32,13 @@ logger = logging.getLogger(__name__)
 
 _API = ("https://sousuo.www.gov.cn/search-gov/data?t=zhengcelibrary_gw&q={q}"
         "&p=1&n={n}&sort=score&sortType=1&searchfield=title:content")
+_PAGE_WORKERS = 4
+# The document text on a gov.cn policy page sits in <div id="UCAP-CONTENT"> (read 2026-11-20 on
+# /zhengce/zhengceku/202508/content_7037862.htm and /zhengce/content/202508/content_7037861.htm: the
+# static HTML carries the whole text there, about 6000 characters; the site's paging script only
+# splits it on screen). The rest of the page is the site header, breadcrumbs and the metadata table
+# the API already gives (文号, 发文机关, dates).
+_BODY_ID = "UCAP-CONTENT"
 _UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
        "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
 
@@ -48,6 +57,48 @@ def _strip_em(s: Optional[str]) -> str:
 def _list_of(j: dict) -> list:
     return (((j.get("searchVO") or {}).get("listVO"))
             or ((j.get("data") or {}).get("searchVO") or {}).get("listVO") or [])
+
+
+def _page_body(html: str) -> str:
+    """The document text of one gov.cn policy page (Markdown), "" when the page has no body box."""
+    from bs4 import BeautifulSoup
+    soup = BeautifulSoup(html, "lxml")
+    box = soup.find(id=_BODY_ID)
+    if box is None:
+        return ""
+    for tag in box(["script", "style", "noscript", "template"]):
+        tag.decompose()
+    try:
+        from markdownify import markdownify
+        text = markdownify(str(box), heading_style="ATX")
+    except Exception:  # noqa: BLE001 — markdownify can be picky; plain text is the safe fallback
+        text = box.get_text("\n", strip=True)
+    text = re.sub(r"[ \t\xa0]+\n", "\n", text)
+    return re.sub(r"\n{3,}", "\n\n", text).strip()
+
+
+def _is_gov_cn(url: str) -> bool:
+    try:
+        p = urlparse(url)
+    except Exception:  # noqa: BLE001
+        return False
+    host = (p.hostname or "").lower()
+    return p.scheme in ("http", "https") and (host == "gov.cn" or host.endswith(".gov.cn"))
+
+
+def _fetch_body(url: str) -> str:
+    """The document text behind one hit's url, "" when it cannot be read (the hit keeps its summary)."""
+    if not _is_gov_cn(url):
+        return ""
+    try:
+        r = _creq.get(url, headers={"user-agent": _UA, "referer": "https://www.gov.cn/"},
+                      impersonate="chrome", timeout=20)
+        if r.status_code != 200:
+            return ""
+        return _page_body(r.text or "")
+    except Exception as exc:  # noqa: BLE001 — a page that cannot be read leaves the summary
+        logger.info("gov_policy: page read failed (%s): %s", url, exc)
+        return ""
 
 
 def _doc_from_policy(it: dict) -> Optional[Document]:
@@ -70,7 +121,7 @@ def _doc_from_policy(it: dict) -> Optional[Document]:
         source_id=str(it.get("code") or it.get("id") or url),
         url=url,
         title=title,
-        content=_strip_em(it.get("summary")) or title,
+        content=it.get("_body") or _strip_em(it.get("summary")) or title,
         author=puborg,
         date=date,
         tags=[t for t in [puborg, _strip_em(it.get("childtype")) or None] if t],
@@ -83,7 +134,7 @@ class GovPolicyAdapter(BaseScrapeAdapter):
     name = "gov_policy"
     description = (
         "中国政府网 政策文件库 (gov.cn): the AUTHORITATIVE 国务院/国办 policy-document corpus (法规/条例/"
-        "通知/国令), keyword search with each hit linking the FULL policy text on gov.cn (omniseek_read it). "
+        "通知/国令), keyword search; each hit carries the FULL policy text read from its gov.cn page. "
         "Google can't return this faceted policy index keyed to 文号 + issuing-org + date. No login. Reach "
         "for Chinese central-government policy / 政策 on a topic (incl. policy-trend / longitudinal work)."
     )
@@ -106,10 +157,16 @@ class GovPolicyAdapter(BaseScrapeAdapter):
             if r.status_code != 200:  # an error answer is a failure, not an empty library (or a cached [])
                 logger.warning("gov_policy: HTTP %s", r.status_code)
                 return None
-            return _list_of(r.json() or {})
+            items = _list_of(r.json() or {})[:limit]
         except Exception as exc:  # noqa: BLE001 — failure → None → [] (adapter contract)
             logger.warning("gov_policy fetch failed: %s", exc)
             return None
+        urls = [it.get("url") or "" for it in items]
+        with ThreadPoolExecutor(max_workers=_PAGE_WORKERS) as pool:
+            for it, body in zip(items, pool.map(_fetch_body, urls)):
+                if body:
+                    it["_body"] = body
+        return items
 
     def _to_documents(self, raw, query, limit) -> list[Document]:
         return [d for it in raw[:limit] if (d := _doc_from_policy(it))]

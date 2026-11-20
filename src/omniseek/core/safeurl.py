@@ -31,8 +31,8 @@ import httpx
 from omniseek.core import _netguard, cache, http, portal, upstreams
 
 # ── SSRF guard: DELEGATED to omniseek.core._netguard (ONE guard, shared with the mainline egress) ──
-# The URL-shape (scheme/userinfo/port), IP-block, and host-suffix DECISIONS all live in _netguard;
-# this fetcher used to carry its own byte-identical copy. safeurl keeps only the RESOLUTION + connect
+# The URL-shape (scheme/userinfo/port), IP-block, and host-suffix DECISIONS all live in _netguard.
+# safeurl keeps only the RESOLUTION + connect
 # mechanics below (its own socket.getaddrinfo so it can pin the IP literal it connects to), and the
 # thin wrappers here forward to _netguard so the two paths can never drift. The 198.18.0.0/15
 # fake-IP-proxy allowance + every private/loopback/link-local/reserved block now come from there.
@@ -59,9 +59,8 @@ def _resolve_safe_ip(host: str) -> "tuple[Optional[str], Optional[int], Optional
     pin-the-IP: the caller CONNECTS to the returned literal IP (not the hostname), which closes
     the DNS-rebind/TOCTOU window (a 2nd lookup at connect time can't swap in a private IP).
 
-    THIN FORWARD to _netguard._resolve_safe_ip: this used to carry a byte-identical COPY of that
-    resolve+validate loop, the ONE helper here that re-implemented instead of forwarding, so a future
-    _netguard hardening (a new blocked range, a rebind-form fix) would NOT be inherited. Forwarding
+    THIN FORWARD to _netguard._resolve_safe_ip: a re-implemented COPY of that resolve+validate loop
+    would NOT inherit a future _netguard hardening (a new blocked range, a rebind-form fix). Forwarding
     makes the resolution + per-IP decision live ONCE in the shared guard. It stays a module-level
     name (not an import alias) so safe_fetch calls it by name and curator goldens that monkeypatch
     safeurl/probe._resolve_safe_ip still rebind a live name safe_fetch uses; and it calls
@@ -270,9 +269,9 @@ async def awalk_redirects_revalidated(client: "httpx.AsyncClient", method: str, 
 
     The shared per-hop guard for the two in-band-bytes callers that use their OWN httpx (NOT the
     IP-pinning safe_fetch): docreader._download (streams a document to a temp file) and
-    docreader.view_image_urls (buffers image bytes). Both previously followed redirects BLINDLY
-    (follow_redirects=True), so an attacker-influenceable URL that 302s to 169.254.169.254 / 127.0.0.1
-    was an SSRF/exfil oracle. This closes that with a _netguard check on each resolved Location.
+    docreader.view_image_urls (buffers image bytes). Following redirects BLINDLY
+    (follow_redirects=True) makes an attacker-influenceable URL that 302s to 169.254.169.254 / 127.0.0.1
+    an SSRF/exfil oracle. This closes that with a _netguard check on each resolved Location.
 
     It deliberately does NOT IP-pin like safe_fetch: those callers never pinned, and per-hop
     security_block_reason matches their existing initial-URL guard and the mainline http egress; the
@@ -307,6 +306,14 @@ async def awalk_redirects_revalidated(client: "httpx.AsyncClient", method: str, 
     raise RuntimeError(f"refused SSRF-class url (redirect_loop): {url[:120]}")
 
 
+def _connect_timeout_s(request: "httpx.Request") -> float:
+    """The request's own connect timeout (httpx keeps its timeouts in the request's extensions), the
+    bound of its name lookup; portal.IO_HOP_BUDGET_S when it has none."""
+    t = (request.extensions or {}).get("timeout") or {}
+    v = t.get("connect") if isinstance(t, dict) else None
+    return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0 else portal.IO_HOP_BUDGET_S
+
+
 class AsyncSSRFGuardTransport(httpx.AsyncBaseTransport):
     """An httpx transport wrapper that _netguard-validates EVERY request URL before delegating.
 
@@ -338,7 +345,16 @@ class AsyncSSRFGuardTransport(httpx.AsyncBaseTransport):
         # OFF-LOOP: resolve_pin does getaddrinfo per hop (a BLOCKING syscall). On the async client
         # this would run ON the loop, so a slow/cold DNS would freeze EVERY coroutine. Push it to a worker
         # thread; the pin rewrite itself is pure CPU on the loop.
-        ip, host, reason = await anyio.to_thread.run_sync(_netguard.resolve_pin, str(request.url), limiter=portal.IO_LANE)
+        # Bounded: by the request's own connect timeout, the phase DNS belongs to (httpx's
+        # timeouts cover only what httpcore does, not this hop); past it the request fails as a connect
+        # timeout instead of waiting for a slot of the IO lane without end, holding its gate permits.
+        _cap = _connect_timeout_s(request)
+        done, pinned = await portal.run_io(_netguard.resolve_pin, str(request.url), budget=_cap)
+        if not done:
+            raise httpx.ConnectTimeout(
+                f"name lookup did not finish within the {_cap:g}s connect timeout: {str(request.url)[:120]}",
+                request=request)
+        ip, host, reason = pinned
         if reason is not None and reason != "dns":
             raise httpx.ConnectError(
                 f"refused SSRF-class url ({reason}): {str(request.url)[:120]}", request=request)

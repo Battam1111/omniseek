@@ -17,9 +17,8 @@ from typing import TYPE_CHECKING
 from omniseek.core.recall import embed, graph, store, writer  # noqa: F401
 from omniseek.core.recall.store import as_of, doc_count, init, search, segment, vector_search  # noqa: F401
 from omniseek.core.recall.writer import (  # noqa: F401
-    ingest_produced, journal_health, last_write_ts, mark_run, mark_swept, maybe_ingest, start_backfill,
-    start_journal_boot, start_writer,
-    vec_embed_failures,
+    ingest_produced, last_write_ts, mark_run, mark_swept, maybe_ingest, observations_dropped,
+    start_writer, vec_embed_failures, vec_pending,
 )
 
 if TYPE_CHECKING:   # only for the _ingest_step return annotation; the runtime import stays lazy inside it
@@ -33,13 +32,13 @@ logger = logging.getLogger(__name__)
 _STOP = threading.Event()
 
 
-# FOREGROUND FIRST (2026-10-24). While the boot warmup below runs (the model import and
+# FOREGROUND FIRST. While the boot warmup below runs (the model import and
 # load under embed._load_lock, then the vec and chunk matrix builds under store._vec_lock and
 # _chunk_lock), a search does not run its vector arm: it would queue on those locks, and the search
 # joins its recall arm with the WHOLE remaining wait budget, so the first search after every restart
 # returned only at its deadline (the deploy check "眼的搜索": 20 s for wait_s=20 with cold model and
 # matrices, under 1 s warm). The search answers with the lexical recall plus the live sources and says
-# so in _meta.index (vector_skipped: "warming"); once the warmup is done the hybrid runs as before.
+# so in _meta.index (vector_skipped: "warming"); once the warmup is done the hybrid runs.
 # The flag is set BEFORE the warmup thread starts (start_warm), so a search that lands between the
 # thread's creation and its first line cannot reach the locks either; warm() itself clears it when it
 # returns, whatever happened, so a failed warmup falls back to the lazy path it always had.
@@ -298,7 +297,7 @@ def _ingest_step(src: str, fresh: bool = True) -> "fetcher.AdapterOutcome":
     with _guard.initiator("收录"):   # carried into the coroutine with the rest of this thread's context
         oc = portal.run(fetcher.afetch_outcome, src, "", limit=50, fresh=fresh, deadline_s=90)
     # A sweep one of OmniSeek's gates (or an open host breaker) cut short is not complete, however few
-    # documents it returned (2026-10-20): advancing the watermark over it would mark the
+    # documents it returned: advancing the watermark over it would mark the
     # documents it never asked for as no longer live.
     if oc.state == "completed" and oc.complete and not oc.held:
         mark_run(src, len(oc.docs))

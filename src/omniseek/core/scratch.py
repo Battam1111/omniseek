@@ -1,7 +1,7 @@
 """Per-process scratch: every eye process keeps its temporary files in a directory of its own, and what a
 process left behind is removed once that process is gone.
 
-Why (2026-11-10): the shared user temp directory had collected OmniSeek's leftovers from processes that
+Why: the shared user temp directory had collected OmniSeek's leftovers from processes that
 ended mid-call: 38 MB decoded WAVs of transcriptions cut off by a restart, empty download directories of
 failed fetches, a parser's temporary directory. A file removed in a ``finally`` is gone after every call
 that returns or raises, but not after a process that is killed (a memory restart, a deploy past its

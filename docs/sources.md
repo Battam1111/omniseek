@@ -21,7 +21,7 @@ Descriptions are quoted in the language of each source's own audience; many are 
 because that is where those sources live. The always-English routing layer is the domain
 headers, the access levels, and the tags on every row.
 
-Generated from omniseek 0.3.0: 221 live sources across 34 domains.
+Generated from omniseek 0.3.0: 223 live sources across 34 domains.
 
 ## papers (66)
 
@@ -122,7 +122,7 @@ Generated from omniseek 0.3.0: 221 live sources across 34 domains.
 - **zhihu_search** `free` `by-name-only` `proxy`: 知乎 经搜索索引 (keyless-via-Brave 稳健补充, 非 CDP)：中文海量一手经验: 读博/求职/公司内幕/签证/城市对比. 与 CDP zhihu 互补 (CDP 取登录全文, 此取引擎索引快照, CDP 挂时仍通). explicit_only (点名即达)
 - **zhihu_users** `walled` `by-name-only` `stream`: 知乎 followed researchers：张俊林 等 senior 中文 NLP/ML 作者跟踪 (via CDP, configurable via ~/.omniseek/credentials/zhihu_users.json)
 
-## jobs (13)
+## jobs (14)
 
 - **academic_job_boards** `free` `stream`: 学术职位板 (scrape, 实证 2026-06-10: 无 RSS, 静态列表可取)：jobs.ac.uk (英国/全球学术岗, ML+CS 关键词搜索页, 47 条干净条目验证). 开放性准则: 学术 track 永久在册, 不随职业分支砍. (AJO 已试: 通用 scraper 抽出的是表格代码碎片, 职位标题不在锚文本内 → 需小型专用解析器, 在 backlog.) 补 academic_jobs(Nature Careers) / higheredjobs_cs / jobrxiv_canada
 - **academic_jobs** `free` `stream`: Academic faculty / postdoc / staff scientist job RSS: Nature Careers per-country (Singapore / Canada / Hong Kong + UK / US / Australia backup). HK PhD → overseas placement signal.
@@ -133,8 +133,9 @@ Generated from omniseek 0.3.0: 221 live sources across 34 domains.
 - **higheredjobs_cs** `free` `by-name-only` `stream`: HigherEdJobs CS/IT：美国/北美 高校 CS·ML 教职 + 博后 + 研究岗 RSS (category 102). 学术 track 落地板, 补 academic_jobs(Nature Careers per-country)
 - **jobrxiv_canada** `free` `stream`: jobRxiv (加拿大)：学术研究岗位板 (博后/研究科学家/教职), 按地区过滤加拿大. 补 academic_jobs/vector_talent_hub 的加拿大研究岗覆盖
 - **layoffs_tracker** `free` `by-name-only` `stream`: 科技裁员追踪: layoffs.fyi (Roger Lee 的 Airtable, ~4500 起裁员事件, 2020 至今: 公司/总部/裁员人数/占比/日期/行业/融资阶段/累计融资/国家/新闻源). STRUCTURE: 空 query=按日期倒序; 关键词过滤公司/行业/国家/阶段 ('google' / 'crypto' / 'india' / 'Series C'). MONITOR: 新裁员事件=watchtower 新条目. Data by layoffs.fyi (attribution required)
+- **levels_fyi_jobs** `free` `by-name-only` `lookup`: levels.fyi 求职板 (官方 MCP, 免登录): 按关键词 + 城市查在招岗位, 带岗位标明的 base / 总包区间 (USD), 全球 7 万+ 岗位. 查询里写城市即按城市筛 ("machine learning hong kong" / "research scientist toronto"); omniseek_read 一个 levels.fyi/jobs?jobId=... 取全文. 薪资分位用 levels_fyi.
 - **mycareersfuture** `free` `lookup`: MyCareersFuture：新加坡政府求职板 (开放 API, **强制薪资范围** + 公司 UEN). SG 全境岗位 (本地/MNC/政府), 自由文本查询; 新加坡求职主板
-- **overseas_ai_jobs** `free` `stream`: 海外工业界 AI lab 全职研究岗 (RS/RE/MTS)：Cohere / DeepMind / Reka / Mistral / Anthropic / xAI / Together / Scale + 更多, 跨 Greenhouse/Ashby/Lever/SmartRecruiters/Workable; 标注 Singapore/Canada/remote (按部署方配置的目标地区)
+- **overseas_ai_jobs** `free` `stream`: 海外工业界 AI lab 全职研究岗 (RS/RE/MTS)：Cohere / DeepMind / Reka / Mistral / Anthropic / xAI / Together / Scale + 更多, 跨 Greenhouse/Ashby/Lever/SmartRecruiters/Workable/Google Careers; 标注 Singapore/Canada/remote (按部署方配置的目标地区)
 - **remotive** `free` `by-name-only` `lookup`: Remotive: curated REMOTE job board (category taxonomy, candidate-required-location, job type, salary, tags) via the keyless API; name it to drill remote AI/ML roles. STRUCTURE, keyless. Rate-limited (a few calls/day): a low-frequency curated drill, not a hot path.
 - **vector_talent_hub** `free` `stream`: Vector Institute Talent Hub：加拿大顶尖 AI 研究所策展的 AI 职位板 (research + industry, 多伦多/加拿大). 落地加拿大主信号; 与 overseas_ai_jobs(跨 lab ATS)/academic_jobs(Nature 教职) 互补
 
@@ -144,7 +145,7 @@ Generated from omniseek 0.3.0: 221 live sources across 34 domains.
 - **ai_newsletters** `free` `stream`: AI newsletter / long-form recap matrix: The Sequence / Last Week in AI / The Gradient / Nicholas Carlini / AI Weekly. Periodical ML research + security digest.
 - **canada_ai_research** `free` `stream`: 加拿大 AI 研究所 + tech ecosystem：Vector / CIFAR / UWaterloo CS / Layer 6 / BetaKit / Globe and Mail Tech / Mila / UofT Schwartz Reisman (Amii 经 scrape_js_sites; IVADO 经 ivado_news 源)
 - **frontier_labs** `free` `stream`: Frontier AI research labs: Anthropic / DeepMind / Hugging Face / OpenAI / Mistral / Meta FAIR / Microsoft Research / MSRA / Google Research / Apple ML / Ai2 / Sakana / Character.AI / PyTorch
-- **gov_policy** `free` `by-name-only` `lookup`: 中国政府网 政策文件库 (gov.cn): the AUTHORITATIVE 国务院/国办 policy-document corpus (法规/条例/通知/国令), keyword search with each hit linking the FULL policy text on gov.cn (omniseek_read it). Google can't return this faceted policy index keyed to 文号 + issuing-org + date. No login. Reach for Chinese central-government ...
+- **gov_policy** `free` `by-name-only` `lookup`: 中国政府网 政策文件库 (gov.cn): the AUTHORITATIVE 国务院/国办 policy-document corpus (法规/条例/通知/国令), keyword search; each hit carries the FULL policy text read from its gov.cn page. Google can't return this faceted policy index keyed to 文号 + issuing-org + date. No login. Reach for Chinese central-government policy ...
 - **hk_career_research** `free` `stream`: Hong Kong AI / career / 媒体信号：SCMP News + HKFP + info.gov.hk (SenseTime 经 scrape_js_sites). HK PhD 出海+本地路径专用
 - **hk_universities** `free` `stream`: HK 5 大学 CS/CSE/COMP dept news：HKU CS / HKUST CSE / CUHK CSE / CityU CS / PolyU COMP (HTML scrape，HK CS 院系动态信号)
 - **scrape_canada** `free` `by-name-only` `stream`: 加拿大工业界 AI lab (scrape, 无 RSS)：RBC Borealis research blog 博文 (加拿大最大工业 AI 实验室, Toronto/Edmonton, 落地招聘目标). 论文已由 rbc_borealis 覆盖,这里补 blog 长文
@@ -248,6 +249,13 @@ Generated from omniseek 0.3.0: 221 live sources across 34 domains.
 - **podcast_index** `keyed` `bring-your-own-login` `by-name-only` `lookup`: Podcast Index: cross-network podcast catalog; flags which episodes ship a podcast:transcript (read it, skip ASR) vs which need omniseek_transcribe (free key/secret)
 - **xiaoyuzhou** `free` `stream`: 小宇宙播客：张小珺商业访谈录 / OnBoard! / 42章经 等中文 AI/科技/创投深度访谈 (原生抓 xiaoyuzhoufm __NEXT_DATA__, 无需 RSSHub; 可配 ~/.omniseek/credentials/xiaoyuzhou.json)
 
+## policy (4)
+
+- **cset** `free` `lookup`: CSET (Georgetown): US AI-policy think-tank reports on compute/export controls, AI safety, and national security (keyless WordPress REST API)
+- **federal_register** `free` `by-name-only` `stream`: US Federal Register keyless JSON API (federalregister.gov/api/v1). Full-text term search over the daily journal of the US government: proposed and final Rules, Notices, and Presidential Documents (executive orders, proclamations). Each hit carries title, document type (Rule / Proposed Rule / Notice ...
+- **oecd_ai_policy** `free` `by-name-only` `lookup`: OECD.AI Policy Navigator：全球官方 AI 政策倡议活册 (STRUCTURE/MONITOR). 全世界最大的政府 AI 政策目录: 2364 项倡议, 覆盖 80+ 法域与政府间组织, 每项带 法域/工具类型/类别/约束力状态/起止年份 + 原始政策文件链接. 端点无全文检索且 perPage 固定 20 (119 页 × ~3s 无法在抓取窗口内快照全量), 故本源取 最新切片: 抓最新 ~300 项 (按加入时间倒序 = 最近新增/更新的倡议, 跨法域), 缓存 30 天, 逐查询 BM25 过滤. 这是对 谁在进入导航册 的 MONITOR 视角, 非全史注册表 ...
+- **uk_hansard** `free` `by-name-only` `lookup`: UK Parliament Hansard: the official record of House of Commons and House of Lords debates, ministerial statements and questions, keyless. Search matches debate TITLES (newest first); omniseek_read of a hansard.parliament.uk debate address returns the whole debate, every contribution with its speaker ...
+
 ## career (3)
 
 - **linkedin_posts** `free` `by-name-only` `proxy`: LinkedIn 公开招聘帖 经搜索索引 (仅 Track A 公开 /posts; 人脉/档案/国籍属法务封死的 Track B, 不碰)：具名 hiring manager 'we are hiring' = 最暖的当前招聘意图 + 直接暖介绍目标. explicit_only
@@ -257,7 +265,7 @@ Generated from omniseek 0.3.0: 221 live sources across 34 domains.
 ## compensation (3)
 
 - **canada_jobbank_wages** `free` `by-name-only` `lookup`: Job Bank 加拿大: 官方岗位现行时薪 (低/中位/高, 每小时; 全国 + 各省 + 经济区), 数据源EI 就业保险工资调查 / 加拿大统计局劳动力调查 (LFS). keyless. 传一个职业名 ("software engineer" / "registered nurse" / "electrician" / "data scientist") → 先经站内 Solr typeahead 解析成 Job Bank 职业 id, 再抓该职业的官方工资表. 用于加拿大薪酬参考、LMIA / Express Entry 现行工资锚点, 与 levels.fyi (美国众包总包) 互 ...
-- **levels_fyi** `free` `lookup`: levels.fyi：科技公司/岗位薪酬 (TC 黄金标准, keyless). 两种查法: (1) 岗位[+国家] ("machine learning engineer singapore" / "data scientist canada") → 该岗位在该国的中位 + 区间 (本币, location-accurate, 取自页面 og:description); (2) 公司名 ("bytedance") → 该公司各职位族/级别总包 (US/USD 基准). 用于谈 offer / 比较雇主薪酬参考.
+- **levels_fyi** `free` `lookup`: levels.fyi：科技公司/岗位薪酬 (TC 黄金标准, keyless). 两种查法: (1) 岗位[+地点] ("machine learning engineer singapore" / "data scientist toronto") → 该岗位在该地的中位 + 区间 (本币, location-accurate, 取自页面 og:description; 国家或 levels.fyi 自有的都会区页, 如 hong-kong-sar / greater-toronto-area; 认不出的地点照实报认不出, 不换成别国; 没写地点按美国并在标题注明); (2) 公司名 ("b ...
 - **ontario_sunshine** `free` `by-name-only` `lookup`: 安大略 Sunshine List: 公共部门薪酬披露 (>= CAD 10万, 含大学/教职, data.ontario.ca 官方 CKAN, keyless). 查人名/雇主/职称 → 该人薪资+福利+部门+年份. 安大略大学 PI/教职 薪酬的公开参考. 开放数据目前止于 2020 (2021+ 仅前端). 空 query 无意义 → 传人名或机构名 (如 'University of Toronto').
 
 ## deadlines (3)
@@ -277,12 +285,6 @@ Generated from omniseek 0.3.0: 221 live sources across 34 domains.
 - **blind** `free` `by-name-only` `proxy`: Blind 在职员工匿名爆料 (经搜索索引, 非爬墙)：按国籍的 EP/签证真实结果、firm 真实薪资、招聘冻结、内推渠道. 全 insider 层最高价值生信号 (HK/中国护照 EP 可批性). explicit_only; 查询里带 公司名 + EP/visa/offer/freeze/referral 薪资/offer 题用当事人晒 offer 的词 (日薪 / package / 总包 / 晒工资 / offer 对比), 别用招聘方的词 (招聘 / 内推 / 岗位).
 - **glassdoor** `free` `by-name-only` `proxy`: Glassdoor 面试经历 + 公司评价 + 文化 (经搜索索引)：按角色的真实面试 bar/流程/红旗 (Cohere/RBC Borealis/Google SG/DBS). 与 levels.fyi(薪酬) 互补, 定位面试 bar+文化. explicit_only 薪资/offer 题用当事人晒 offer 的词 (日薪 / package / 总包 / 晒工资 / offer 对比), 别用招聘方的词 (招聘 / 内推 / 岗位).
 - **maimai** `free` `by-name-only` `proxy`: 脉脉职言 经搜索索引 (仅 /article/detail 公开层, 评论登录墙不取)：CN-HQ 大厂(字节/Sea/Shopee)staffing SG/海外 的内幕: 内推/真实薪资/裁员风声/招聘冻结. CN-HQ-SG 切片最佳. explicit_only 薪资/offer 题用当事人晒 offer 的词 (日薪 / package / 总包 / 晒工资 / offer 对比), 别用招聘方的词 (招聘 / 内推 / 岗位).
-
-## policy (3)
-
-- **cset** `free` `lookup`: CSET (Georgetown): US AI-policy think-tank reports on compute/export controls, AI safety, and national security (keyless WordPress REST API)
-- **federal_register** `free` `by-name-only` `stream`: US Federal Register keyless JSON API (federalregister.gov/api/v1). Full-text term search over the daily journal of the US government: proposed and final Rules, Notices, and Presidential Documents (executive orders, proclamations). Each hit carries title, document type (Rule / Proposed Rule / Notice ...
-- **oecd_ai_policy** `free` `by-name-only` `lookup`: OECD.AI Policy Navigator：全球官方 AI 政策倡议活册 (STRUCTURE/MONITOR). 全世界最大的政府 AI 政策目录: 2364 项倡议, 覆盖 80+ 法域与政府间组织, 每项带 法域/工具类型/类别/约束力状态/起止年份 + 原始政策文件链接. 端点无全文检索且 perPage 固定 20 (119 页 × ~3s 无法在抓取窗口内快照全量), 故本源取 最新切片: 抓最新 ~300 项 (按加入时间倒序 = 最近新增/更新的倡议, 跨法域), 缓存 30 天, 逐查询 BM25 过滤. 这是对 谁在进入导航册 的 MONITOR 视角, 非全史注册表 ...
 
 ## social (3)
 

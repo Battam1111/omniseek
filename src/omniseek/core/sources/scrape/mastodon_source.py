@@ -137,7 +137,7 @@ class MastodonAdapter(BaseScrapeAdapter):
         return docs[:limit] if limit and limit > 0 else docs
 
     async def _araw_fetch(self, query: str, limit: int) -> Optional[Any]:
-        """Async replacement of the deleted sync ``_raw_fetch`` (11-04, this is the only one now): byte-faithful mirror (same URLs, params, timeout, control
+        """Async ``_raw_fetch``: byte-faithful mirror (same URLs, params, timeout, control
         flow, None-return contract); ONLY the shared-http egress swaps to its async twin
         (http.get_json -> await http.aget_json). Fans the derived hashtag out over each instance's
         keyless tag timeline (one GET each, gently)."""
@@ -148,8 +148,8 @@ class MastodonAdapter(BaseScrapeAdapter):
         # 40, so clamp into [1, 40] to stay within the documented bound.
         per = max(1, min(limit or 10, 40))
 
-        # CONCURRENT since 2026-08-30. The three instances are unrelated hosts, so awaiting them
-        # one at a time made this source's latency their SUM for no reason. "one GET each, gently"
+        # CONCURRENT. The three instances are unrelated hosts, so awaiting them
+        # one at a time would make this source's latency their SUM for no reason. "one GET each, gently"
         # means one request per instance, NOT one instance at a time: the politeness budget is
         # per-host and these are three different hosts. Same fix, same reasoning as
         # discourse_forums (2026-08-29), whose structure this file mirrors almost line for line.
@@ -177,7 +177,7 @@ class MastodonAdapter(BaseScrapeAdapter):
             if isinstance(item, BaseException):
                 # One instance raising must not take the others down. The serial loop could not
                 # raise here (aget_json returns None on failure), so this only fires on something
-                # unexpected, and swallowing it per-instance matches the old contract.
+                # unexpected, and swallowing it per-instance keeps one bad instance non-fatal.
                 logger.debug("mastodon: an instance raised: %s", item)
                 continue
             if item is not None:

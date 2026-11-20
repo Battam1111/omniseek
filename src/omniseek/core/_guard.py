@@ -31,7 +31,7 @@ from omniseek.core import _probe
 
 logger = logging.getLogger(__name__)
 
-# WHO HOLDS A GATE IS A CREDENTIAL (2026-11-11). A gate knows its holder only by the object
+# WHO HOLDS A GATE IS A CREDENTIAL. A gate knows its holder only by the object
 # handed to it: re-entry (``held_by``), the lease and the give-back all name that object, never the task
 # or thread that happens to run the code. An async caller that hands none is held by its running task,
 # the convention of anyio's ``CapacityLimiter`` (``acquire`` borrows on behalf of ``current_task()``),
@@ -372,12 +372,12 @@ class FairPermits:
             self._reclaim_locked(time.monotonic())
 
 
-# THE CALLER'S DEADLINE (design decision 2, 2026-09-29; 2026-11-11). The caller's own
+# THE CALLER'S DEADLINE (design decision 2). The caller's own
 # deadline is the ONE bound on how long a declared gate keeps it waiting: a full gate is a line, the
 # permit wait and the start wait together run until the caller's deadline, across every gate one
 # request passes, and only then is the request turned away unsent. A shorter per-gate ceiling
-# (gate.max_wait_s, 12 s for arXiv: four requests at one every 3 s) turned away half of an ordinary
-# 8-question fan-out that would have gone out had it queued, and was removed. The deadline rides this
+# (12 s for arXiv: four requests at one every 3 s) turned away half of an ordinary 8-question
+# fan-out that would have gone out had it queued. The deadline rides this
 # context variable from where it is decided (search, omniseek_read, the health probe, field_skeleton, the
 # curator's bounded steps) down to the gates; code with no deadline set waits in line until served.
 # Monotonic seconds (time.monotonic), absolute.
@@ -416,7 +416,7 @@ def current_deadline() -> Optional[float]:
     return _deadline_var.get()
 
 
-# WHO ASKED (2026-10-20). A gate refusal says which part of OmniSeek sent the request
+# WHO ASKED. A gate refusal says which part of OmniSeek sent the request
 # (检索 search, 收录 recall ingest, 健康检查 health check, 盯梢 sensor, 预热 prewarm, 读取 omniseek_read), so the
 # refusals can be counted per initiator instead of guessed from time windows. Set where the work
 # starts; like the deadline it rides a context variable (a pool thread is handed it explicitly).
@@ -490,13 +490,12 @@ def register_unsent(*types) -> None:
     _UNSENT = tuple(dict.fromkeys(_UNSENT + tuple(types)))
 
 
-# ASYNC ADMISSION WITHOUT A WORKER THREAD (2026-09-29). The async twins used to wait
-# for a permit in anyio.to_thread.run_sync(sema.acquire, True, max_wait) under a shield. asyncio's own
+# ASYNC ADMISSION WITHOUT A WORKER THREAD (2026-09-29). Waiting for a permit in
+# anyio.to_thread.run_sync(sema.acquire, True, max_wait) under a shield is unsafe: asyncio's own
 # task.cancel() (asyncio.run cancelling a detached straggler when an omniseek_gather child returns) is not
-# stopped by AnyIO's shield: the coroutine ended, the worker thread went on to take the permit, and
-# nothing ever gave it back, so a one-permit gate stayed full until a restart. The same wait also held
-# one of the loop's worker-thread tokens, which every to_thread call on that loop shares. A gate's
-# permits (FairPermits) are now waited for in its one line on a future (atake); a plain semaphore
+# stopped by AnyIO's shield, so the coroutine ends, the worker thread goes on to take the permit, and
+# nothing gives it back (a one-permit gate stays full until a restart); the wait also holds one of the
+# loop's worker-thread tokens. A gate's permits (FairPermits) are waited for in its one line on a future (atake); a plain semaphore
 # handed to bounded_async_slot is polled with a non-blocking acquire, the way fetcher._aegress admits
 # egress. Either way the permit is taken inside the coroutine or not at all, so no cancellation can
 # strand it, and no thread waits.
@@ -556,8 +555,8 @@ async def bounded_async_slot(
         # Record WHY the wait failed. A saturated gate reads the same to the caller whether the
         # permits are in flight (real load, self-shedding working) or stuck (nothing running, yet
         # nothing free), and the second case is a bug that only shows up as sources going dark:
-        # six Stack Exchange sources sat unusable behind a gate whose permits never came back
-        # (2026-09-09), and there was nothing in the logs to tell the two apart. _value is the
+        # six Stack Exchange sources sat unusable behind a gate whose permits never came back,
+        # and there was nothing in the logs to tell the two apart. _value is the
         # gate's free-permit counter, read defensively because a plain semaphore's is not API.
         logger.warning("gate saturated: no permit after %.1fs (free=%s) [by=%s]",
                        left, getattr(gate, "_value", "?"), _initiator_var.get() or "?")
@@ -593,7 +592,7 @@ class Reservation:
         self.start, self.wait, self.prev_next_at, self.next_at = start, wait, prev_next_at, next_at
 
 
-# WHAT THE BREAKER COUNTS (2026-11-07). The breaker is there to stop sending to an
+# WHAT THE BREAKER COUNTS. The breaker is there to stop sending to an
 # upstream that is down or calling a halt; it counts only failures that say so: no connection, a
 # timeout, a 5xx, a 429, the upstream's own rate-limit answer (``throttled``: GitHub's secondary-rate
 # 403, OpenAlex's budget 429), and any failure whose cause is not known. An answer that names the
@@ -630,7 +629,7 @@ def counts_against_upstream(exc: Optional[BaseException] = None, *, status: Opti
     return st not in NOT_UPSTREAM_FAULT_STATUS
 
 
-# RETRIES AND OTHER CHANNELS FOLLOW THE SAME RULE (2026-11-07). A failure the breaker
+# RETRIES AND OTHER CHANNELS FOLLOW THE SAME RULE. A failure the breaker
 # does not count is an answer: sending the same request again, or the same request down another
 # channel (OpenAlex's second lane, Jina after a plain fetch), gets the same answer and spends the
 # upstream's budget for nothing. Before this, reading one GitHub issue that does not exist sent two

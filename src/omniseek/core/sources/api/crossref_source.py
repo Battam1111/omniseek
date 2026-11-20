@@ -22,8 +22,7 @@ Migrated to ``BaseAPIAdapter`` (template method): the cache/search/registration
 boilerplate now lives in the base; the two hooks below (``_raw_fetch`` =
 ``/works?query=`` GET, ``_to_document`` = the verbatim item→doc mapping) carry
 every Crossref-specific fact. ``rank_locally=False`` keeps Crossref's
-server-relevance order byte-identical to the hand-written form (the old code
-never ran a local scorer). ``fetch_url`` (DOI/api lookup) and ``health_check``
+server-relevance order (no local scorer). ``fetch_url`` (DOI/api lookup) and ``health_check``
 stay overridden verbatim — they hit by-DOI / probe endpoints the base can't
 express generically.
 """
@@ -66,7 +65,7 @@ class CrossrefAdapter(BaseAPIAdapter):
 
     # ------------------------------------------------------------- async hooks
     async def _araw_fetch(self, query: str, limit: int) -> list:
-        """Async replacement of the deleted sync ``_raw_fetch`` (11-04, this is the only one now): BYTE-FAITHFUL mirror — same endpoint/params/headers/timeout and the
+        """Async ``_raw_fetch``: BYTE-FAITHFUL mirror — same endpoint/params/headers/timeout and the
         same ``message.items`` walk + []-on-failure contract; ONLY the egress swaps (RAW
         ``httpx.get(...).json()`` -> ``await http.aget_json``, which buys the shared async pool + SSRF
         guard + cache_only + the 30MB cap for free). ``http.aget_json`` returns None on any failure /

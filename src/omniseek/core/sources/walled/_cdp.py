@@ -53,7 +53,7 @@ next event's greenlet run the same listener before the first call returns, and
 one context cannot be entered twice at once; a context variable a listener sets
 therefore does not carry over to its next call (mutable values such as the
 diagnostic's record list are shared, as in any copy). `remove_listener(event, f)`
-takes off what `on(event, f)` put on, as before. Adapters register listeners the
+takes off what `on(event, f)` put on. Adapters register listeners the
 plain way; none wraps its own.
 """
 
@@ -397,8 +397,7 @@ _inflight_lock = threading.Lock()
 # SILENTLY caches the empty as success (the gap-③ false-empty; proven 2026-06-22: two parallel
 # 一亩三分地 fetches false-emptied one, while a serial fetch returned 35). The gate admits at most the
 # port's row of _CDP_MAX_CONNECTIONS (the same table the pool reads, so both paths hold the same
-# number of connections; until 2026-10-04 this gate was 1 for every port, while the pool gave 9222
-# three). Sites that must not see two flows at once keep their own serialization on top
+# number of connections). Sites that must not see two flows at once keep their own serialization on top
 # (yipinsanfendi's _run chokepoint). Keyed by cdp_url so different Chromes never block each other.
 _cdp_gates: dict[str, "threading.Semaphore"] = {}
 _cdp_gates_lock = threading.Lock()
@@ -457,7 +456,7 @@ def _sweep_excess_tabs(ctx, keep_recent: int = 6) -> None:
 # launchd restarted it): before reusing its connection a worker checks that the
 # Chrome on the port is still the one it connected to (_browser_instance) and reconnects if not, so
 # the first task after a restart already runs on the new browser; only a task in flight at the
-# moment Chrome dies fails, exactly as the old per-call path would. The
+# moment Chrome dies fails. The
 # flag defaults OFF → behavior is byte-identical to before unless explicitly enabled, so it ships
 # inert and is reversible by unsetting the env var.
 _POOL_ENV = "OMNISEEK_CDP_POOL"
@@ -489,7 +488,7 @@ def _browser_instance(cdp_url: str) -> Optional[str]:
     webSocketDebuggerUrl, so two reads compare equal only while the same process is up. This is the
     pool's reuse test. Browser.is_connected() cannot be: Playwright's sync API updates that flag
     only while a call is running on the connection's thread, so a worker parked in q.get() keeps
-    reading True for a Chrome that exited while it waited, and its next task used to fail with
+    reading True for a Chrome that exited while it waited, and its next task would fail with
     TargetClosedError before the one after it reconnected."""
     import httpx
 
@@ -587,8 +586,8 @@ class _Turn:
     The thread that has the turn cannot take them itself. A pool worker is a Playwright sync thread:
     once ``sync_playwright()`` has started there, ``asyncio.get_running_loop()`` on that thread answers
     with Playwright's own loop, so a sync gate entry (``upstreams.egress``, two ``portal.call``) refuses
-    with "portal.run called from a thread running an event loop" and the render is lost (
-    11-12: every render row and ml_conferences came back empty from 11-11 on). So that thread only
+    with "portal.run called from a thread running an event loop" and the render is lost (11-12:
+    every render row and ml_conferences came back empty from 11-11 on). So that thread only
     asks (``ask``: a ``call_soon_threadsafe`` onto the caller's loop, then a wait on a plain queue),
     and the caller's task on the loop enters the gates and answers (``answer``)."""
 
@@ -772,8 +771,8 @@ def cdp_call(callback: Callable[[Page], Any], *,
     The callback runs in a copy of the CALLER's context (contextvars.copy_context, the way
     asyncio.to_thread hands work to a thread), on the pooled and the per-call path alike: what the
     caller armed (diag capture and tap, cache-only, deadline, probe ledger) holds inside the flow, so
-    a diag.note made there reaches the caller's diagnostic. Before 2026-11-07 the worker thread
-    started with an empty context and every such note was dropped. A page.on(...) / page.once(...)
+    a diag.note made there reaches the caller's diagnostic. A worker thread started with an empty
+    context would drop every such note. A page.on(...) / page.once(...)
     listener the callback registers runs in a copy of the context it was registered in (module
     docstring), so a note made in a listener reaches the caller's diagnostic too.
 
@@ -1124,23 +1123,6 @@ def cdp_health(cdp_url: str = DEFAULT_CDP_URL, *, ensure: bool = False) -> tuple
         return False, f"HTTP {resp.status_code}"
     except Exception as exc:  # noqa: BLE001
         return False, f"{type(exc).__name__}: {exc}"
-
-
-def is_logged_in_zhihu(page: Page) -> bool:
-    """Heuristic: are we logged into 知乎 in this page's context?"""
-    try:
-        # Logged-in users have either: an avatar/notification element, or
-        # they get redirected to /signin if not authed.
-        # Cheap probe: check current URL doesn't include /signin
-        page.goto("https://www.zhihu.com/", wait_until="domcontentloaded", timeout=15000)
-        url = page.url
-        if "/signin" in url or "/login" in url:
-            return False
-        # More positive check: presence of user-area DOM
-        return page.locator("[data-za-detail-view-element_name='Avatar']").count() > 0 or \
-               page.locator(".AppHeader-userInfo").count() > 0
-    except Exception:  # noqa: BLE001
-        return False
 
 
 # ── the page's own JavaScript world (2026-10-24) ─────────────────────────────────────────────

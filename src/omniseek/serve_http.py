@@ -194,8 +194,8 @@ def _start_background_services() -> None:
     after the portal is bound, because the warmer, the recall ingest and the job scheduler's sensor tick
     reach the async core through omniseek.core.portal.run: started before the bind,
     their first calls would fail (a plain thread with no bound loop raises NoEventLoopError). The
-    lifespan startup runs before uvicorn opens the listener, as the pre-uvicorn start did, so the
-    boot stays as fast as before. Only this HTTP service starts them (the stdio path never does), so
+    lifespan startup runs before uvicorn opens the listener, so the
+    boot stays fast. Only this HTTP service starts them (the stdio path never does), so
     only this process ever writes."""
     # Background cache warmer, tied to THIS always-on service (replaces the standalone launchd
     # cron, which was observed to fire only once — see omniseek.core.prewarm): warm the
@@ -220,10 +220,7 @@ def _start_background_services() -> None:
         from omniseek.core.recall import writer as _recall_writer
         if recall.init():
             _recall_writer.WRITES_ENABLED = True
-            # Build the observation journal now, on its own thread, then scrub its blobs there:
-            # built lazily it was built inside the first search's maybe_ingest,
-            # under the journal lock, and every source of that search sat out its wait budget.
-            recall.start_journal_boot()
+            # The writer (observations into SQLite) and the embed worker (their vectors, afterwards).
             recall.start_writer()
             threading.Thread(target=recall.ingest_loop, name="recall-ingest", daemon=True).start()
             # Curator phase 2 yield tap: start its single drain daemon beside the recall writer, under
@@ -240,11 +237,10 @@ def _start_background_services() -> None:
             # warmup finishes takes the same lazy, fail-open path it always did, and once warm()
             # completes the first hybrid call drops from ~9s to well under a second. While it runs a
             # search skips the vector arm instead of waiting on the warmup's locks (
-            # the first search after a restart used to sit out its whole wait budget); start_warm
+            # otherwise the first search after a restart would sit out its whole wait budget); start_warm
             # sets that flag before the thread starts, see recall._WARMING.
-            recall.start_backfill()
             recall.start_warm()
-            logger.debug("recall index: writes enabled + ingest loop + vector backfill started")
+            logger.debug("recall index: writes enabled + ingest loop + embed worker started")
     except Exception as exc:  # noqa: BLE001 — the index is best-effort; never block boot
         logger.warning("recall index disabled (init failed): %s", exc)
     # In-process JOB scheduler (generalizing the sensor scheduler): every scheduled piece of
@@ -309,7 +305,7 @@ def main() -> None:
     # arming is not enough), and timeout_graceful_shutdown bounds the wait for connections
     # (a uvicorn.Config parameter, read in Server.shutdown; checked in the deployed 0.48.0; 0 here
     # passes None, uvicorn's "wait forever").
-    # 2026-10-24: lifecycle.answer_running_calls_on_exit sets that timeout AND keeps
+    # lifecycle.answer_running_calls_on_exit sets that timeout AND keeps
     # sse_starlette from cutting every SSE stream at the signal, so a call running at a restart gets
     # its answer to the caller within the drain cap instead of the caller reading half a response.
     config = uvicorn.Config(app, host=HOST, port=PORT, log_level="info")

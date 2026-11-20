@@ -105,7 +105,7 @@ def to_utc(v: Any) -> Optional[datetime]:
 
 
 def _doc_date(v: Any) -> Any:
-    """Document.date always leaves as aware UTC; what to_utc cannot read goes on to pydantic as before."""
+    """Document.date always leaves as aware UTC; what to_utc cannot read goes on to pydantic."""
     if v is None:
         return None
     m = to_utc(v)
@@ -194,39 +194,6 @@ def html_fragment_text(fragment: Any) -> str:
     return " ".join(soup.get_text(" ").split())
 
 
-# ── selector-drift DIAGNOSTIC (borrowed idea: Scrapling adaptive relocation, STRIPPED of the silent
-# auto-substitution that would fabricate a result). NEVER returns an element, only a candidate NAME,
-# so a caller can annotate /eye-fix without ever changing what it returns (honest-empty preserved). ──
-def selector_drift_hint(html: str, expected_item_selector: str) -> Optional[str]:
-    """When ``expected_item_selector`` matches nothing on an ok-but-empty page, name the LARGEST
-    repeated sibling-cluster's class as a candidate replacement selector (e.g. ``"note-card-v2 (23
-    siblings)"``), else None. Returns None when the selector still matches (no drift) or when no
-    repeated cluster (>=3 siblings) exists. Pure, stateless; names a candidate for a human to verify
-    in /eye-fix, and CANNOT drive a substitution (it returns a string, never an element)."""
-    try:
-        from bs4 import BeautifulSoup
-    except Exception:  # noqa: BLE001 -- a diagnostic must never break the caller
-        return None
-    try:
-        soup = BeautifulSoup(html or "", "lxml")
-        if soup.select(expected_item_selector):
-            return None  # the expected selector still matches -> no drift
-        from collections import Counter
-        best_cls: Optional[str] = None
-        best_cnt = 0
-        for parent in soup.find_all(True):
-            by_class: Counter = Counter()
-            for child in parent.find_all(["section", "article", "div", "li"], recursive=False):
-                for cls in (child.get("class") or []):
-                    by_class[cls] += 1
-            for cls, cnt in by_class.items():
-                if cnt >= 3 and cnt > best_cnt:  # a repeated sibling cluster = a likely card list
-                    best_cls, best_cnt = cls, cnt
-        return f"{best_cls} ({best_cnt} siblings)" if best_cls else None
-    except Exception:  # noqa: BLE001 -- best-effort hint, never raises into the fetch path
-        return None
-
-
 # ── declarative HTML extraction (borrowed: crawl4ai JsonCssExtractionStrategy, MINUS eval/LLM) ──
 def schema_extract(html: str, schema: dict) -> list[dict]:
     """Declarative HTML → list[dict] via CSS selectors. ``schema`` =
@@ -263,7 +230,7 @@ def schema_extract(html: str, schema: dict) -> list[dict]:
 class Signal(BaseModel):
     """One named, source-reported mechanical FACT about a document: a count, a rating, a salary.
     Not a judgment. OmniSeek records what a source asserted (with provenance); the agent / the
-    ranker decide what it is worth. Replaces the old fused score scalar (see docs/PHILOSOPHY.md)."""
+    ranker decide what it is worth (see docs/PHILOSOPHY.md)."""
 
     model_config = ConfigDict(frozen=True)
 
@@ -273,8 +240,7 @@ class Signal(BaseModel):
     unit: Optional[str] = None         # e.g. SGD/month, citations, stars
 
 
-# Signal kinds the ranker treats as ATTENTION (preserves the old score-fed engagement term:
-# social counts AND citations both fed it). compensation / other are NOT attention.
+# Signal kinds the ranker treats as ATTENTION (social counts AND citations). compensation / other are NOT attention.
 _ATTENTION_KINDS = frozenset({'engagement', 'citation'})
 
 
@@ -296,7 +262,7 @@ class Document(BaseModel):
 
     # Discovery signals: named, source-reported FACTS (a count, a citation tally, a salary), each
     # with provenance + a semantic kind. Never a judgment: the agent / the ranker decide worth.
-    # Replaces the old fused score / relevance scalars (see docs/PHILOSOPHY.md).
+    # No fused score / relevance scalar (see docs/PHILOSOPHY.md).
     signals: dict[str, Signal] = Field(default_factory=dict)
 
     # Categorization
@@ -342,7 +308,7 @@ class Document(BaseModel):
 
     def attention_value(self) -> Optional[float]:
         """Max value among ATTENTION-class signals (engagement + citation). The ranker engagement
-        term and the recall index read this; it replaces the old fused score. None if no such
+        term and the recall index read this. None if no such
         signal. Mechanical (a max over named facts), not a judgment."""
         vals = [s.value for s in self.signals.values()
                 if s.kind in _ATTENTION_KINDS and isinstance(s.value, (int, float))]
@@ -431,17 +397,9 @@ def keyword_score_filter(docs: list[Document], query: str) -> list[Document]:
 def mk_signal(name: str, value, kind: str = 'engagement', by: str = '', unit: Optional[str] = None) -> dict:
     """Build a one-entry {name: Signal} map for an adapter to pass as signals=. by is the
     source-side provenance (e.g. reddit/score), stamped as computed_by=source:<by>. Coerces a
-    numeric value to float, else None. Replaces the old score=<n> constructor kwarg."""
+    numeric value to float, else None."""
     val = float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
     return {name: Signal(value=val, kind=kind, computed_by=('source:' + by if by else ''), unit=unit)}
-
-
-# Comment/paragraph-level provenance (feature #3). Pure helpers: the agent reads them,
-# they do NOT feed composite()/ranking coefficients.
-def comment_anchor(source: str, source_id: str, comment_id: str) -> str:
-    """Build a stable per-comment provenance URI from (source, source_id, comment_id), so a
-    quoted comment can be cited back to its exact anchor. Pure string builder, no side effects."""
-    return f'{source}:{source_id}#comment-{comment_id}'
 
 
 # The keys each per-comment dict is guaranteed to carry in adapter output. Documents what

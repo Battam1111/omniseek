@@ -25,6 +25,11 @@ Access (keyless REST, POST-only):
 Response: a LIST of {"status": "SUCCESS", "object": {responseStatusCode, productId, coordinate,
   vectorId, vectorDataPoint: [{refPer, value, ...}]}}. A bad vector answers status SUCCESS with
   object.responseStatusCode == 4 and an empty vectorDataPoint (gated out to no doc).
+The health probe uses the GET twin of the same data call (same host, same list shape); the exit-node
+sweep refetches with the method the failure record names, so a POST probe would do as well:
+  GET {REST}/getDataFromVectorByReferencePeriodRange?vectorIds=1&startRefPeriod=<date>&endReferencePeriod=<date>
+Failure seen 2026-11-18: HTTP 403 with the WDS 「Vérification de sécurité / Security Check」 page on the
+eye's exit address only (check-host nodes and the worker exit 200): an exit wall, not an adapter break.
 
 Titles/units are NOT in the data response (getSeriesInfoFromVector returns thin labels like just
 "Canada"), so they come from the curated map: a hand-written geo+characteristic label per vector,
@@ -36,6 +41,7 @@ fan-out fodder (same posture as worldbank_stats).
 from __future__ import annotations
 
 import re
+from datetime import date
 from typing import Any, Optional
 
 from omniseek.core import http
@@ -127,7 +133,7 @@ class StatCanWdsAdapter(BaseAPIAdapter):
                      "named on demand, not broad-fan-out fodder")
 
     async def _araw_fetch(self, query: str, limit: int) -> list:
-        """Async replacement of the deleted sync ``_raw_fetch`` (11-04, this is the only one now): byte-faithful mirror (same URL / body / timeout, same SUCCESS
+        """Async ``_raw_fetch``: byte-faithful mirror (same URL / body / timeout, same SUCCESS
         gate + pair-up control flow, same None/[] contract), only the shared-http egress swapped for
         its async twin (http.post_json -> await http.apost_json)."""
         entries = _resolve(query)
@@ -215,15 +221,28 @@ class StatCanWdsAdapter(BaseAPIAdapter):
         )
 
     async def ahealth_check(self) -> tuple[bool, str]:
-        """POST-only endpoint: probe vector 1 (population) for the latest period; SUCCESS = alive.
+        """Probe vector 1 (population) over the last year through the GET twin of the data call; SUCCESS = alive.
+
+        GET, not the POST the fetch path sends (2026-11-18): the exit-node sweep then refetched
+        the address a failed probe left with a GET (exit_node._fetch_one) and read 405 as a wall, so a
+        probe on the POST-only DATA_URL could never pass on any node (the sweep now refetches
+        with the recorded method); from 11-18 03:47 the WDS answered
+        OmniSeek's exit 403 (its 「Vérification de sécurité / Security Check」 page) while another exit in
+        the same /24 got 200, and the 09:47 sweep that should have looked for such a node could not tell
+        one apart. getDataFromVectorByReferencePeriodRange returns the same SUCCESS list shape from the
+        same host and WAF, so it certifies the same thing and stays replayable.
 
         Same 20s budget the fetch paths use, not a tighter one. WDS is genuinely slow (12.2s for a
-        plain GET, measured 2026-09-09), so a 10s probe declared the source dead while the data path
-        it certifies would have waited and succeeded. A probe stricter than the operation it stands
-        for does not measure the source, it measures the probe.
+        plain GET, measured 2026-09-09; 9.5s for this one, 2026-11-18), so a 10s probe declared the
+        source dead while the data path it certifies would have waited and succeeded. A probe stricter
+        than the operation it stands for does not measure the source, it measures the probe.
         """
+        today = date.today()
+        url = (f"{REST}/getDataFromVectorByReferencePeriodRange?vectorIds=1"
+               f"&startRefPeriod={today.replace(year=today.year - 1, day=1).isoformat()}"
+               f"&endReferencePeriod={today.isoformat()}")
         try:
-            raw = await http.apost_json(DATA_URL, json=[{"vectorId": 1, "latestN": 1}], timeout=20)
+            raw = await http.aget_json(url, timeout=20)
         except Exception as exc:  # noqa: BLE001
             return False, f"{type(exc).__name__}: {str(exc)[:80]}"
         if isinstance(raw, list) and raw and isinstance(raw[0], dict) and raw[0].get("status") == "SUCCESS":

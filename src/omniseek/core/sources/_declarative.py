@@ -450,8 +450,7 @@ class DeclarativeAPIAdapter(SourceBase):
     async def _afetch_response(self, params: dict) -> Any:
         """Transport-specific fetch -> the raw response OBJECT (an http JSON body, or an mcp tool result),
         None on any failure (the source contract; mcp transport errors are caught in ``_mcp_fetch``).
-        A row's ``auth_header`` rides on the http request (the sync twin that was deleted on 11-04 sent
-        it and this one did not, so context7 went out keyless). Off-loop discipline: the async NETWORK wait stays ON the
+        A row's ``auth_header`` rides on the http request (without it context7 goes out keyless). Off-loop discipline: the async NETWORK wait stays ON the
         loop (await http.aget_json / apost_json use epoll, no held thread); the SYNC mcp transport is
         pushed OFF the loop via to_thread (a native-async mcp client is a later slice). The SSRF
         getaddrinfo inside the async leaf (http._arequest_capped + AsyncSSRFGuardTransport) is moved off
@@ -665,8 +664,8 @@ class DeclarativeAPIAdapter(SourceBase):
 
         Probes the raw response (``_afetch_response``, through the sync entry's bridge: this runs on a
         thread), not the item list, so a DOWN upstream is caught: the egress contract is
-        failure->None WITHOUT raising, so the old item-list path turned a 403 /
-        404 / 500 / timeout into an empty list and reported GREEN, making the entire declarative family
+        failure->None WITHOUT raising, so an item-list check would turn a 403 /
+        404 / 500 / timeout into an empty list and report GREEN, making the entire declarative family
         (the largest source family) invisible to the watchdog. None response = down; a reached
         response with an empty result list for a junk query is still "endpoint + shape OK"."""
         # A probe that SPENDS the thing it is checking must not run. Some rows are metered so tightly
@@ -676,7 +675,7 @@ class DeclarativeAPIAdapter(SourceBase):
         # itself caused. Same reasoning the health run already uses to skip RETIRED sources ("the retire
         # IS the decision; probing it is noise"), except here it is worse than noise.
         # Reporting None (not verified) keeps the source USABLE and honest: a False would park it in
-        # watchdog_down and hide it, and the True this used to return counted a source OmniSeek never
+        # watchdog_down and hide it, and a True would count a source OmniSeek never
         # tests as healthy forever. None is neither: the watchdog moves no counter and shows it as
         # `unverified`. Breakage still surfaces at USE time: a named drill emits the per-source /eye-fix
         # diagnostic, and these rows are named-only.

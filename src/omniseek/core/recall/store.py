@@ -116,6 +116,17 @@ CREATE TABLE IF NOT EXISTS vec_chunk(
 );
 CREATE INDEX IF NOT EXISTS vec_chunk_mv ON vec_chunk(model_version);
 CREATE INDEX IF NOT EXISTS vec_chunk_rowid ON vec_chunk(rowid);
+-- Rows written but not embedded yet (2026-11-18): the writer lists a row here when it needs vectors
+-- (lane 'doc': key docs.rowid, its head and passage vectors; lane 'thin': key graph_nodes.id, its
+-- title vector), and takes it off in the transaction that stores them (writer._apply_vecs). The embed
+-- worker reads it oldest first; a start lists what has no vector for a new model (writer._seed_vec_todo).
+CREATE TABLE IF NOT EXISTS vec_todo(
+  lane      TEXT NOT NULL,
+  key       TEXT NOT NULL,
+  queued_at REAL,
+  PRIMARY KEY (lane, key)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS vec_todo_queue ON vec_todo(lane, queued_at);
 -- The unified graph (docs/design/graph-unified-model.md v2.0): recall's RELATION index, additive
 -- inside recall.db (single-writer + join locality). Entity nodes + entity/sensor edges are the ONLY
 -- new persistence; doc-doc same_as stays DERIVED views over docs.fp + doc_json (never stored rows).
@@ -403,8 +414,8 @@ def _model_version() -> str:
 
 
 # Rebuild memory bound (measured 2026-10-08 on a copy of the live index: vec 107005 rows,
-# vec_thin 133195, vec_chunk 41750, 1024-d float32 = 1101 MB of matrices). The old one-shot build
-# held, at once, the previous matrix + fetchall()'s one bytes object per row + their b"".join + the
+# vec_thin 133195, vec_chunk 41750, 1024-d float32 = 1101 MB of matrices). A one-shot build
+# holds, at once, the previous matrix + fetchall()'s one bytes object per row + their b"".join + the
 # normalized quotient + its astype copy: about five times one matrix. Rebuilding thin alone lifted
 # the footprint +1.55 GB, all three together +2.0 GB, and the freed small blocks stayed in the
 # process footprint afterwards. _build_rows streams the cursor in _BUILD_BATCH-row batches into ONE
@@ -423,7 +434,7 @@ _BUILD_BATCH = 4096
 # back; the space returns when the mapping is closed (see _release). It is written out in full
 # before it is mapped, because writing a mapped page whose disk block was never allocated kills the
 # process (SIGBUS) when the disk is full; a full disk instead fails that write here and the rows go
-# to process memory, as before.
+# to process memory.
 _FILL_CHUNK = 16 << 20
 
 
@@ -455,7 +466,7 @@ def _alloc_rows(rows: int, dim: int):
     return _np.empty((rows, dim), dtype=_np.float32)
 
 
-# Releasing a replaced matrix (2026-10-13). The file behind a matrix has no name, so its disk space
+# Releasing a replaced matrix. The file behind a matrix has no name, so its disk space
 # returns only when its mapping and its descriptor close, and both close with the mmap object at the
 # bottom of the array's ``.base`` chain. Left to reference counting, one array still held anywhere (a
 # row view handed to a caller, a reader's frame waiting on SQLite) keeps the whole file on disk with
@@ -545,8 +556,8 @@ def _build_rows(con, count_sql: str, sql: str, params: tuple, int_ids: bool, wit
 
 
 # Monotonic write generations, bumped by the SINGLE recall-writer daemon on any vec / vec_thin
-# write. This REPLACES row-count as the matrix-invalidation key: a RE-EMBED (delete+reinsert the
-# same rowid) leaves count(*) unchanged, so the old count key served a STALE vector until an
+# write. Row-count cannot be the matrix-invalidation key: a RE-EMBED (delete+reinsert the
+# same rowid) leaves count(*) unchanged, so a count key would serve a STALE vector until an
 # unrelated INSERT drifted the count. The write-gen bumps on every write, so a re-embed invalidates
 # correctly. Single writer -> a plain int increment is race-free; readers only compare it.
 _vec_write_gen = 0
@@ -554,29 +565,7 @@ _thin_write_gen = 0
 _chunk_write_gen = 0
 
 
-def note_vec_write() -> None:
-    """Signal that vec rows changed in a way no staged change describes, so the docs matrix must be
-    rebuilt from SQLite (the writer itself stages its changes instead; see ``stage_vec``)."""
-    global _vec_write_gen
-    _vec_write_gen += 1
-    _mstate["vec"].unknown_gen = _vec_write_gen
-
-
-def note_thin_write() -> None:
-    """Signal an undescribed vec_thin change: the thin matrix is rebuilt from SQLite."""
-    global _thin_write_gen
-    _thin_write_gen += 1
-    _mstate["thin"].unknown_gen = _thin_write_gen
-
-
-def note_chunk_write() -> None:
-    """Signal an undescribed vec_chunk change: the chunk matrix is rebuilt from SQLite."""
-    global _chunk_write_gen
-    _chunk_write_gen += 1
-    _mstate["chunk"].unknown_gen = _chunk_write_gen
-
-
-# ── Incremental matrix update (2026-10-09) ────────────────────────────────────────────
+# ── Incremental matrix update ────────────────────────────────────────────
 # Measured under a replay of real ingest: after every committed write the writer re-read the WHOLE
 # matrix from SQLite (vec 438 MB, vec_thin 545 MB, vec_chunk 171 MB at the live row counts), at most
 # once per 20 s debounce per matrix. Under memory pressure that re-read was the writer's bottleneck
@@ -1000,8 +989,7 @@ def anchor_rowid(source: str, source_id: str) -> Optional[int]:
 # across the UNION of both matrices, so an indexed Chinese post and a thin arXiv original — exactly
 # the cross-boundary pair similar exists for — land in ONE cosine space. Identity is the graph
 # node_id string (``doc:{source}:{source_id}``) in both cases, so the caller never needs to know
-# which store a candidate came from. (The interim docs-only similar_by_rowid engine was deleted at
-# the gate: no caller survived the migration, and dead code earns no slot.)
+# which store a candidate came from.
 
 def _anchor_node_id(source: str, source_id: str) -> str:
     from omniseek.core.recall.graph import doc_node_id  # local: id scheme lives in graph

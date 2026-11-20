@@ -151,7 +151,7 @@ class GitHubAdapter(SourceBase):
         return h
 
     async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async replacement of the deleted sync ``search`` (11-04, this is the only one now): OmniSeek's async fan-out awaits this DIRECTLY, so
+        """Native-async ``search``: OmniSeek's async fan-out awaits this DIRECTLY, so
         github's multi-surface egress costs a COROUTINE, not a held pool thread. Mirrors ``search``
         step-for-step; only the BLOCKING work moves:
           • the disk cache read/write → ``anyio.to_thread.run_sync`` (get_docs / set_docs do file IO);
@@ -362,8 +362,7 @@ class GitHubAdapter(SourceBase):
             # Un-pinned: try git/trees/HEAD first (HEAD resolves the default branch server-side), so
             # the common case costs ONE call instead of a GET /repos default-branch round-trip + the
             # tree call. Only fall back to resolving the default branch by name when HEAD doesn't
-            # answer (None covers 404 / empty repo / any failure), so an odd repo still degrades the
-            # same as before.
+            # answer (None covers 404 / empty repo / any failure), so an odd repo still degrades.
             data = _github.get_json(f"/repos/{full}/git/trees/HEAD",
                                     params={"recursive": "1"}, timeout=TIMEOUT)
             if data:

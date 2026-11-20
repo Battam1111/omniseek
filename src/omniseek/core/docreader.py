@@ -2,7 +2,7 @@
 path or URL) into readable, structured text + an HONEST media inventory.
 
 The third perception primitive: web pages (omniseek_add_url), speech (omniseek_transcribe),
-and now documents-as-files. Built (2026-06-10) from a real 颜色框.pptx
+and now documents-as-files. Built phase 39 from a real 颜色框.pptx
 (a 28-slide, 66-image figure-style reference deck): OmniSeek digests uploads the
 way it transcribes audio.
 
@@ -510,7 +510,7 @@ async def _adownload(url: str, fmt: str) -> tuple[Path, Optional[str], Optional[
             content_type = r.headers.get("content-type")
             cd_filename = _cd_filename(r.headers.get("content-disposition"))
             # mkstemp only AFTER the final response is validated + 2xx-checked: a refused redirect (raise
-            # above) never leaves an empty temp file behind, unlike the old create-then-stream order.
+            # above) never leaves an empty temp file behind.
             tmp = await anyio.to_thread.run_sync(_new_temp, fmt, limiter=portal.IO_LANE)
             try:
                 size = 0

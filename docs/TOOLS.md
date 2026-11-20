@@ -13,7 +13,7 @@ QUICK START (one call, no setup): omniseek_search(query) does a ranked, cross-li
 
 (1) TOOL ROUTING: omniseek_search just works; call it directly. omniseek_sources() is the MAP when you want to route to a domain or drill a NAMED source (each tool's own name is omniseek_<verb>; the prefix in front of it (mcp__<name>__ in Claude Code, <name>- in Copilot) is YOUR MCP config's name for this server and differs from machine to machine, so never guess or copy one. If they are not in your tool list: ToolSearch "omniseek_search omniseek_read omniseek_sources" finds them under whatever prefix your config uses. A sub-agent reporting "OmniSeek is unavailable" has almost always typed a server name its config does not have; search by the bare tool name before concluding anything). omniseek_sources no-arg returns a BOUNDED orient: available_domains (the full domain vocabulary with counts) + capabilities verb-index + source_names (the bare inventory); it does NOT dump every source's facets. domain=/region=/query= narrow to the matching sources WITH facets+descriptions; verbose=True gives the full facet roster. check_health=True also returns a system block (recall index + openalex usage). Do NOT hardcode source lists; the adapter set grows.
 
-(2) VERBS AND WHEN: omniseek_sources (orient FIRST: roster, facets, capabilities, health). omniseek_search (sweep: ranked cross-lingual dedup by default; raw=True for per-source buckets; the drill idiom sources=[one]+raw=True+full=True replaces the old omniseek_fetch). omniseek_read (text from any URL or document file; auto-routes; on a failed read a reason flags walled-vs-empty). omniseek_view (SEE images / document figures / video frames; auto-routes; render_pages= renders whole PDF pages to images, for a visual / vector / table page you cannot parse as text). omniseek_transcribe (spoken audio -> text; opt-in segments=per-line timestamps, diarize=who-said-what speaker turns). omniseek_gather (run several read-only calls in ONE round-trip; wait_s budget, stragglers keep warming). omniseek_sensor (standing queries with novelty detection, + opt-in detect_absence for a watched item's takedown / disappearance; action=create/list/delete/run; scheduled runs execute in-process on the live service). omniseek_ruling (record/list/retract your identity rulings same_as|not_same_as; action=create/list/delete; the one judgment channel the graph's working policy applies). omniseek_statement (record/list/retract your typed, DIRECTED relation statements: free vocabulary, the general sibling of omniseek_ruling; identity types are refused, they belong to omniseek_ruling; action=create/list/delete; projected at read time under working/exploratory, never conservative). omniseek_graph (the memory of relations, one stable verb: view= + args={...}; a no-view call lists the views; find -> stats -> neighborhood -> between -> voices -> since -> similar; policies conservative|working|exploratory). Scholarly depth: omniseek_field_skeleton / omniseek_paper_recommend / omniseek_paper_enrich / omniseek_resolve_identity / omniseek_coauthors / omniseek_institution_cohort (per-tool contracts in their docstrings). Curator (source lifecycle): omniseek_curator_view + omniseek_curator_act. TIME AXES (omniseek_search + omniseek_gather today; other verbs keep simple defaults): wait_s = patience budget (None = sensible default); staleness = fresh | cached_ok | cache_only. Fire-then-collect = call once with a small wait_s, collect later with staleness=cache_only. Combined doc budget per gather stays ~10-12 docs.
+(2) VERBS AND WHEN: omniseek_sources (orient FIRST: roster, facets, capabilities, health). omniseek_search (sweep: ranked cross-lingual dedup by default; raw=True for per-source buckets; the drill idiom sources=[one]+raw=True+full=True replaces the old omniseek_fetch). omniseek_read (text from any URL or document file; auto-routes; on a failed read a reason flags walled-vs-empty). omniseek_view (SEE images / document figures / video frames; auto-routes; render_pages= renders whole PDF pages to images, for a visual / vector / table page you cannot parse as text). omniseek_transcribe (spoken audio -> text; opt-in segments=per-line timestamps, diarize=who-said-what speaker turns). omniseek_gather (run several read-only calls in ONE round-trip; wait_s budget, stragglers keep warming). omniseek_sensor (standing queries with novelty detection, + opt-in detect_absence for a watched item's takedown / disappearance; action=create/list/delete/run; scheduled runs execute in-process on the live service). omniseek_ruling (record/list/retract your identity rulings same_as|not_same_as; action=create/list/delete; the one judgment channel the graph's working policy applies). omniseek_statement (record/list/retract your typed, DIRECTED relation statements: free vocabulary, the general sibling of omniseek_ruling; identity types are refused, they belong to omniseek_ruling; action=create/list/delete; projected at read time under working/exploratory, never conservative). omniseek_graph (the memory of relations, one stable verb: view= + args={...}; a no-view call lists the views; find -> stats -> neighborhood -> between -> voices -> since -> similar; policies conservative|working|exploratory). Scholarly depth: omniseek_field_skeleton / omniseek_paper_recommend / omniseek_paper_enrich / omniseek_resolve_identity / omniseek_coauthors / omniseek_institution_cohort (per-tool contracts in their docstrings). Curator (source lifecycle): omniseek_curator_view + omniseek_curator_act. TIME AXES (omniseek_search + omniseek_gather today; other verbs keep simple defaults): wait_s = patience budget (None = sensible default); staleness = fresh | cached_ok | cache_only (omniseek_read takes fresh | cached_ok). Fire-then-collect = call once with a small wait_s, collect later with staleness=cache_only. Combined doc budget per gather stays ~10-12 docs.
 
 (3) PHASE A SIGNALS (stamped per-doc by omniseek_search, read via metadata.*): corroboration: int, how many DISTINCT source names surfaced this work (1 = singleton). also_in: which source names (beyond the survivor's own) merged into it. merge_basis: id = exact-id merge (doi/arxiv/url), title = title-fingerprint merge (weaker). Source names are NOT upstream independence (many org_watch sources share one backend); cross-reference also_in with omniseek_sources and judge. freshness_days / freshness_class: breaking (<=1d), recent (<=7d), current (<=30d), dated (<=365d), archival (>1y), null (no date). relevance_hook: one extractive sentence from the doc's own text showing why it matched (scan this for quick triage, not full content). seen_before / first_seen_at: whether THIS deployment had retrieved the doc before this search (the wall's novelty stamp). ALWAYS present on every ranked doc: seen_before=false + first_seen_at=null is the honest never-seen-before state (new to this deployment), not a gap.
 
@@ -54,8 +54,9 @@ you NARROW or ask verbose; reach for them on demand:
   when the deployment's source pack is geographic.
 • verbose=True → the full unfiltered list, WITH every description.
 check_health=True does a fresh LIVE probe of every source (slow) AND returns a `system` block:
-the recall-index health (indexed_docs / embedder_available / vec_embed_failures / last_write_age_s)
-plus the observation-journal durability head, materialization cursor, pending count, and failures.
+the recall-index health (indexed_docs / embedder_available / vec_embed_failures / vec_pending_rows /
+observations_dropped / last_write_age_s; vec_pending_rows = rows stored but not embedded yet, found by
+lexical recall until their vectors are written; observations_dropped = observations lost to a full writer queue)
 and the openalex_usage attribution (which component spent the shared daily budget + remaining),
 and `upstreams`: each upstream's declared terms (upstreams.json) beside the gate OmniSeek enforces
 and the rate-limit readings the upstream last reported, with mismatches flagged and any in-service
@@ -160,6 +161,16 @@ SHARED WEB-SEARCH BACKEND: naming any search-index venue or nowcoder draws on ON
 it is cooling the result carries _meta.web_search_backend {active, brave:{cooling_s}, ddg:{cooling_s},
 last_error}: wait cooling_s, do not retry earlier. Prefer <=2 such venues per gather.
 
+EYE BUSY (``_meta.omniseek_busy``): OmniSeek runs at most 3 broad searches
+(sources=None) at once; a broad call that finds them all running waits for one inside its own
+deadline (the broad one, or wait_s), and when none frees up in time it sends NOTHING and returns no
+documents with ``_meta.omniseek_busy`` = {retry_after_s, in_flight, limit, waited_s} and a "note" saying
+so. That empty answer says nothing about the topic. Wait retry_after_s seconds (when the earliest
+running broad search reaches the end of its planned waits; a lower bound, at least 1 s), then send the
+same call again; or name the sources you need: a search with sources=[...] never waits for a broad
+slot. A broad omniseek_sensor run that gets it changes nothing (no diff, no baseline change) and is
+retried on the next tick; its result carries the same ``omniseek_busy``.
+
 TIME + STALENESS: ``wait_s`` = patience budget (None = sensible default; the engine's deadline).
 ``staleness`` ∈ {"fresh","cached_ok","cache_only"} (default cached_ok): "fresh" bypasses the cache
 (live data); "cache_only" is the fire-then-collect PICKUP half (ranked shape): with NO live work it
@@ -172,8 +183,8 @@ omniseek_search(query, sources=[walled...], staleness="cache_only"); use the SAM
 FIRE-THEN-COLLECT IS NOT JUST FOR WALLED SOURCES: it is the BEST way to run an ORDINARY broad
 search, and it is both faster AND more complete than waiting. A plain broad call blocks ~16s for
 ~223 docs. Instead FIRE omniseek_search(query, wait_s=3) -> first results in ~3s, then COLLECT
-omniseek_search(query, staleness="cache_only") ~20s later -> ~296 docs. Measured over 3 quiesced reps
-(2026-07-25): 5x faster to first result AND ~33% MORE docs than the blocking call. It wins on both
+omniseek_search(query, staleness="cache_only") ~20s later -> ~296 docs. Measured over 3 quiesced reps:
+5x faster to first result AND ~33% MORE docs than the blocking call. It wins on both
 axes because sources the deadline would have cut keep running detached and warm the cache with no
 deadline over them, so the collect reads MORE than the 16s window could ever hold. The cache
 plateaus by ~+20s (no gain at +35s), so collecting later buys nothing. Same limit both calls.
@@ -443,7 +454,13 @@ URL branch returns: {"url", "matched": bool, "total_chars", "returned_chars", "s
 "truncated", "cached", "fetched_at"?, "document": Document as dict | None} (the four window
 fields only when matched; they come before the document, so an answer cut short keeps them). A successful read is kept for an hour, so repeat reads of one
 URL (head, then a section) do not download it again: ``cached`` says whether this answer came from
-that cache, ``fetched_at`` when the network read behind it happened (the #fragment is ignored). On
+that cache, ``fetched_at`` when the network read behind it happened (the #fragment is ignored). A
+source that keeps its own copy (an OpenReview /forum read and its discussion, 1800 s) reports the
+same way: an answer from that copy is ``cached`` true with the time of its read, even under a new URL
+(omniseek_search ``reviews:<forum id>`` on openreview says the same in each document's ``metadata.cached``
+and ``metadata.fetched_at``; its staleness="fresh" reads the forum again).
+``staleness="fresh"`` (default "cached_ok", the names omniseek_search uses) reads the page again past
+every kept copy; an unknown value is treated as cached_ok and a "note" is added. On
 matched:false a ``reason`` is added: walled (anti-bot challenge -> retry the source via CDP, e.g.
 omniseek_search(sources=[...], raw=True, full=True)) vs empty vs blocked, so you can tell "gated, drill it
 another way" from "genuinely nothing there".
@@ -532,7 +549,9 @@ a batched re-transcribe pass, so request it only when you need the offsets).
 
 Whole-item transcription remains right for short/dense items (a 10-min talk, a keynote clip);
 it is SLOW on first call for a long item, then cached forever. Reach for it deliberately on
-ONE item you've judged worth it, never as part of a broad sweep.
+ONE item you've judged worth it, never as part of a broad sweep. A local file is cached by its
+path together with its size and modification time: audio rewritten at the same path is
+transcribed again, an untouched file comes back from the cache.
 
 language: "" auto-detects; set "zh" / "en" to skip detection and sharpen accuracy when you
 already know the language.
@@ -648,16 +667,24 @@ the action with ``verb``; each verb's REQUIRED args (see the /curator protocol):
   the rendered packet (parked_p2 revives, awaiting_verdict re-enriches); nothing -> stays put with
   the reason. Facts are render-derived: the code never admits, only surfaces.
 • decide  (candidate_id, decision, reasons; baseline_ref required to admit) -> record the
-  admit/watch/reject verdict. MECHANICALLY REFUSES an admit on hard red-line / incomplete evidence
-  / empty baseline_ref / no packet. admit -> owner_review; watch -> watching; reject -> rejected.
-• apply_live      (candidate_id) -> ONE-TAP LIVE ADMIT (rss-safe subclass only): a REVERSIBLE
-  overlay row + live re-register, NO git. Non-auto families are refused (use stage_commit).
+  admit/watch/reject verdict. REFUSES an admit only on a hard red-line (checked from the red lines
+  themselves when no packet is built yet). Incomplete evidence, an
+  empty baseline_ref, no packet and an unacknowledged first-seen never-auto host do not refuse:
+  they come back in ``after_review`` (also stored on the verdict) for the operator to look at; an
+  admit only stages, and a reject undoes it. admit -> owner_review; watch -> watching; reject -> rejected.
+• apply_live      (candidate_id) -> ONE-TAP LIVE ADMIT: a REVERSIBLE overlay row + live
+  re-register, NO git; rollback_live undoes it. Refused only for what a rollback cannot take back
+  (``apply.apply_refusal``): a red-line hit, a never-auto family (org_watch / page_watch /
+  news_scraper / search_index: use stage_commit), a relabeled family. The rest
+  (a family or mode outside the auto_apply policy, a render site, a verified mode that differs,
+  incomplete evidence) goes ahead and is listed in the receipt's ``after_review``.
 • rollback_live   (name, family) -> full revert of a live-applied overlay row (unregister + drop).
 • stage_commit    (candidate_id) -> ONE-TAP STAGED COMMIT for the NON-auto subclass: prepares the
   git commit text (does NOT apply); the operator does the git add / commit / deploy by hand. When
   the candidate has a foundry draft, the draft row IS the ready-to-paste block (+ a provenance line).
-• retire_live     (name; confirm) -> ONE-TAP PRUNE (needs an existing PRUNE verdict): confirm=False
-  previews; confirm=True writes a reversible runtime explicit_only override + stages the git commit.
+• retire_live     (name; confirm) -> ONE-TAP PRUNE: confirm=False previews; confirm=True writes a
+  reversible runtime explicit_only override + stages the git commit. A source with
+  no PRUNE verdict on record is retired too, and ``after_review`` says so (rollback_retire undoes it).
 • rollback_retire (name) -> drop the runtime retire override so the source rejoins the fan-out.
 • source_verdict  (name, verdict, rationale; prune_class, coverage_impact) -> record KEEP / WATCH /
   PRUNE for an EXISTING source. MECHANICALLY REFUSES a PRUNE the source's safety flags forbid.

@@ -105,7 +105,7 @@ class DiscordCommunitiesAdapter(SourceBase):
 
         Nothing else moves. ``ex.map`` preserves input order, so channels still come back
         guild-by-guild in guild-list order; a guild that fails is skipped rather than fatal; and an
-        every-guild-failed run still returns (and caches) the empty list exactly as before."""
+        every-guild-failed run still returns (and caches) the empty list."""
         ck = cache.make_key("discord_communities", "channels")
         cached = cache.get_once(ck)
         if cached is not None:
@@ -188,7 +188,7 @@ class DiscordCommunitiesAdapter(SourceBase):
         Only the egress moves. ``ex.map`` preserves input order, so messages are still decoded
         channel-by-channel in ``channels`` order, which is what the STABLE newest-first sort below
         falls back on for equal (or absent) timestamps. ``_pull`` already swallows its own failures
-        and returns [], so a dead channel stays non-fatal exactly as before.
+        and returns [], so a dead channel stays non-fatal.
         """
         token, channels = self._config()
         if not token:

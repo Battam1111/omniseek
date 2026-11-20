@@ -72,7 +72,7 @@ class HFDailyPapersAdapter(SourceBase):
         return data
 
     async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async replacement of the deleted sync ``search`` (11-04, this is the only one now): the fan-out awaits this DIRECTLY (no pool thread),
+        """Native-async ``search``: the fan-out awaits this DIRECTLY (no pool thread),
         so this source's dominant NETWORK wait costs a coroutine, not a held thread. Mirrors ``search``
         line-for-line: only the cached fetch swaps to the async ``_afetch_all`` (async egress + off-loop
         cache); the keyword score / sort / map below is PURE CPU and stays ON the loop, byte-identical."""

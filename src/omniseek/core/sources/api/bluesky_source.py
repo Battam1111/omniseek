@@ -263,8 +263,7 @@ class BlueskyAdapter(SourceBase):
     async def ahealth_check(self) -> tuple[Optional[bool], str]:
         """Ask the search path itself: the same ``search_posts`` call, through the same client and
         login, for ONE post on a word that always has posts. Reusing the kept session is not
-        evidence by itself (until 2026-10-04 it read None and the source was never verified in a
-        long-running process); the session is reused, never re-made per check.
+        evidence by itself; the session is reused, never re-made per check.
 
         True: the answer parses into posts and has at least one. None: HTTP 429 or the declared gate
         busy (nothing sent). False: any other error, an unparseable answer, zero posts. A kept session

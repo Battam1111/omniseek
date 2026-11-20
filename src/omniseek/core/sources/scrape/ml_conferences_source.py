@@ -77,8 +77,7 @@ class MlConferencesAdapter(BaseScrapeAdapter):
         a worker thread, the host's gates awaited here on the loop once the render has its turn).
 
         Serial on purpose: CDP is a single shared browser, so a fan-out would only queue anyway.
-        A venue that fails is skipped (never sinks the other two), matching the old bundle's
-        per-feed degrade."""
+        A venue that fails is skipped (never sinks the other two)."""
         from omniseek.core.sources.walled._cdp import acdp_call
 
         def _nav(page):

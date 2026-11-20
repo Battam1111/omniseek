@@ -27,8 +27,8 @@ from omniseek.core import filters as _filters
 
 # OMNISEEK_CACHE_DIR moves the whole cache elsewhere. The service leaves it unset; a test or one-off
 # run sets it to a throwaway directory so it never reads the live service's cache entries (state
-# such as reddit's cannot-search list, 2026-10-10) and never write into them. The application name is omniseek
-# (2026-10-20); the deploy moves the old-named directory to the recycle area.
+# such as reddit's cannot-search list, 2026-10-10) and never write into them. The application name is omniseek;
+# the deploy moves the old-named directory to the recycle area.
 CACHE_DIR = Path(os.environ.get("OMNISEEK_CACHE_DIR")
                  or Path(user_cache_dir("omniseek", appauthor=False)) / "omniseek_cache")
 DEFAULT_TTL = 900  # 15 minutes
@@ -212,22 +212,6 @@ def clear() -> int:
 def make_key(*parts: str) -> str:
     """Helper to build a stable cache key from parts."""
     return "|".join(str(p) for p in parts)
-
-
-def seconds_until_expiry(key: str) -> Optional[float]:
-    """Seconds until ``key``'s entry expires, or None if it is missing / corrupt / already
-    expired. READ-ONLY (ignores the ``fresh`` and refresh-margin contextvars): it reports the
-    on-disk TTL state, it does not fetch. A negative result is never returned (a lapsed entry
-    is None, same as absent), so a caller can use ``v is None or v < margin`` as 'needs refresh'."""
-    path = _key_path(key)
-    if not path.exists():
-        return None
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
-    remaining = data.get("expires_at", 0) - time.time()
-    return remaining if remaining > 0 else None
 
 
 # -----------------------------------------------------------------------------
@@ -416,9 +400,8 @@ def set_docs(key: str, docs, ttl: Optional[int] = None, empty_ttl: Optional[int]
 # successful read here, so the layered reads an agent makes in a row (head, then a section or two)
 # reuse one download instead of fetching the page again each time. The value is the WHOLE document;
 # windowing (start_char / max_chars / grep / level / section) is cut after it comes out. Sources that
-# keep their own cache are untouched. The generic web read (web_fallback.py) kept a second copy of
-# the same page for the same hour; it was removed (2026-11-03): it duplicated
-# this one and kept credential-bearing addresses on disk that this cache refuses.
+# keep their own cache are untouched. The generic web read (web_fallback.py) keeps no second copy: it would
+# duplicate this one and keep credential-bearing addresses on disk that this cache refuses.
 # -----------------------------------------------------------------------------
 
 # One hour, the value the generic web read used for its own page cache before it was folded into

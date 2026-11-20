@@ -35,9 +35,9 @@ logger = logging.getLogger(__name__)
 DEFAULT_UA = "Mozilla/5.0 (compatible; OmniSeek/0.1)"
 FETCH_TIMEOUT = 15
 
-# BOUNDED FEED FAN-OUT (OmniSeek redo item 4, 2026-10-10). Each RSS source used to start every one of
-# its feeds at once, and a cold broad sweep runs dozens of RSS sources together: one measured cold
-# query sent 2,210 feed requests into the shared async pool (128 connections). The pool sat full with
+# BOUNDED FEED FAN-OUT. An RSS source that starts every one of its feeds at once, in a cold broad
+# sweep that runs dozens of RSS sources together, floods the pool: one measured cold query sent
+# 2,210 feed requests into the shared async pool (128 connections). The pool sat full with
 # 50 to 75 requests queued for seconds, the loop spent the sweep doing TLS handshakes for blog hosts,
 # and the API sources the caller actually waits for (arxiv, crossref, alphaxiv) queued behind them
 # and missed the broad deadline. So at most _FEED_CONCURRENCY feed fetches are in flight per event
@@ -93,7 +93,7 @@ def _parse_quiet(content, url: str, status: Optional[int] = None):
     (parsed or None, the event to report or None).
 
     feedparser turns ANY HTML page into a complaint-free zero-entry result, so a Cloudflare
-    interstitial or maintenance page served with HTTP 200 used to read as "feed is empty": silent,
+    interstitial or maintenance page served with HTTP 200 would read as "feed is empty": silent,
     and invisible to an armed diag capture. A real feed always carries a detected ``version``
     (rss20/atom10/...), and a genuinely empty feed keeps its version too, so version-less +
     entry-less = not a feed: None plus a "not_feed" event (egress evidence). Feeds WITH entries pass
@@ -344,7 +344,7 @@ class RSSAdapterBase(SourceBase):
         TLS) instead of ``http.aget``, then parse. A SEPARATE fetch tier under the heavy CDP browser.
 
         RSS shares the connection pool with the other open-API sources (one egress, less entropy):
-        same UA (http.USER_AGENT == the old DEFAULT_UA) + the Accept header below.
+        same UA (http.USER_AGENT) + the Accept header below.
 
         guard_ip (curator overlay-origin feeds ONLY; default OFF for the 143 in-tree sources, so their
         behavior is byte-identical): before fetching, resolve the feed host and reject it if ANY resolved
@@ -451,9 +451,7 @@ class RSSAdapterBase(SourceBase):
         # had just asked: statmodeling's 3600 s) was not asked this run: it is not dead on that alone.
         # What the host last answered anyone in this process says what is known; a last answer that
         # was an error counts it dead, and its record carries the address (the exit-node sweep refetches
-        # it); otherwise it is only named as held. Before 2026-11-09 every held feed read dead, so the
-        # bundle went "degraded" with no address to refetch, and a real 403 seen only by the ingest
-        # never reached the check.
+        # it); otherwise it is only named as held.
         held_urls = {str(rec.get("url")) for rec in captures
                      if "request not sent" in str(rec.get("body") or "")}
         held: list[str] = []

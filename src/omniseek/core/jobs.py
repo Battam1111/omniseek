@@ -55,15 +55,15 @@ HEARTBEAT_PATH = where.state() / "scheduler-heartbeat"
 TICK_SECONDS = 900        # the loop wakes when the next job is due, and at least every 15 min (the heartbeat)
 INITIAL_DELAY_S = 120     # keep deploy restart-storms from firing jobs mid-restart
 # After a tick the loop sleeps until the earliest next run of an enabled job, at most a tick and at least
-# LOOP_MIN_SLEEP_S. Until 11-04 it slept a fixed tick: cdp-reaper (every 600 s) really ran every 900 s, and a job not
-# yet due at the first tick after a restart waited a whole extra tick (97.4 h of logs read:
+# LOOP_MIN_SLEEP_S. With a fixed tick cdp-reaper (every 600 s) really runs every 900 s, and a job not
+# yet due at the first tick after a restart waits a whole extra tick (97.4 h of logs read on 11-04:
 # 11 gaps over two periods, all across restarts). 60 s is a tenth of the shortest registered period (600 s); it also
 # bounds a job whose last_run cannot be saved to one rerun a minute instead of a busy loop.
 LOOP_MIN_SLEEP_S = 60
 JOB_BARK_COOLDOWN_S = 24 * 3600   # Bark at most once per 24h per job on repeated exceptions
-# The wedge watchdog (until 10-20 an external watchdog script did this from outside): a heartbeat
-# file older than WEDGE_FACTOR ticks means the scheduler thread wedged while the process lives on. The line is the
-# old one, unchanged (900 s x 2 = 1800 s; the tick publishes the heartbeat before and after every job, and
+# The wedge watchdog: a heartbeat
+# file older than WEDGE_FACTOR ticks means the scheduler thread wedged while the process lives on. The line is
+# 900 s x 2 = 1800 s (the tick publishes the heartbeat before and after every job, and
 # _MAX_JOB_BUDGET_S stays under the line). The watchdog then logs one line and exits the process with WEDGED_EXIT;
 # launchd restarts it (eye-http's unit is KeepAlive = true), which respawns the
 # thread. WATCHDOG_CHECK_S only bounds how late after the line it notices (the external one looked every 600 s).
@@ -833,17 +833,17 @@ def register_shipped_jobs() -> None:
     register_job("session-warmer", "daily@09:17,14:17,19:17", infra_jobs.run_session_warmer,
                  budget_s=900, description="每日暖 CDP 登录态(小红书 / 9222 论坛)",
                  process_entrypoint=("omniseek.core.infra_jobs", "run_session_warmer"))
-    # On-demand CDP lifecycle (2026-08-29): the four browsers used to sit resident forever, holding
+    # On-demand CDP lifecycle: four browsers resident forever hold
     # 3.1 GB on a 16 GB machine for ~24 calls a day. This row stops the idle ones; _cdp.ensure_browser
     # brings one back in ~1s on the next call. Process-isolated so it reads last-use stamps off disk.
     register_job("cdp-reaper", "every:600s", infra_jobs.run_cdp_reaper, budget_s=120,
                  description="每 10min 停掉空闲的 CDP 浏览器(下次调用 1s 内自动拉起),并删 Chrome 留下的签名克隆",
                  process_entrypoint=("omniseek.core.infra_jobs", "run_cdp_reaper"))
     register_job("log-rotation", "daily@04:50", infra_jobs.run_log_rotation,
-                 description="每日转超大日志、删过期的缓存文件")
+                 description="每日转日志（整份压缩留 7 天，含登录判定记录）、删过期的缓存文件")
     # The NSERC cache prime (monthly) and the weekly reading list (weekly, with its briefing agent)
     # were withdrawn on 2026-10-20 with the NSERC source.
-    # The AI Incident Database snapshot (2026-10-20). The upstream publishes one a
+    # The AI Incident Database snapshot. The upstream publishes one a
     # week on Mondays; the last 60 came out between 10:00 and 12:xx UTC, so 21:30 local (the host machine runs
     # on Beijing time, = 13:30 UTC) is the first slot after all of them. Process-isolated: it holds a
     # ~120 MB download and a full bzip2 pass. Budget: measured ~30-100 s under load on 2026-10-20.

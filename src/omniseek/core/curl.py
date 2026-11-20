@@ -1,10 +1,10 @@
 """The shared curl_cffi entry point for modules that send through libcurl themselves.
 
 Some sources need curl_cffi's browser TLS fingerprint (anti-bot hosts) and keep their own request or
-session calls instead of the shared tier (``http.get_impersonated``). Before 2026-10-04 they imported
-``curl_cffi.requests`` directly, so their responses reached nothing of OmniSeek: no rate-limit readings
-for the upstream health block, no Retry-After deferral, and a health check that got HTTP 429 could
-only report "fetch failed" (down) instead of "not verified".
+session calls instead of the shared tier (``http.get_impersonated``). Importing ``curl_cffi.requests``
+directly, their responses would reach nothing of OmniSeek: no rate-limit readings for the upstream health
+block, no Retry-After deferral, and a health check that got HTTP 429 could only report "fetch failed"
+(down) instead of "not verified".
 
 They import this module instead (``from omniseek.core import curl as _creq``): the same ``get`` /
 ``post`` / ``request`` / ``Session`` they used, and every response is recorded once, on its own host,
@@ -41,14 +41,14 @@ def _record(method: str, url: str, resp: Any) -> Any:
             text = str(getattr(resp, "text", "") or "")[:_BODY_PEEK]
             if status != 429:
                 _probe.note_error_body(status, text, where=where)
-            diag.note(f"curl.{str(method).lower()}", url=where, status=status, body=text or None)
+            diag.note(f"curl.{str(method).lower()}", method=str(method), url=where, status=status, body=text or None)
     except Exception:  # noqa: BLE001 (recording must never break an egress)
         pass
     return resp
 
 
 def _failed(method: str, url: str, exc: BaseException) -> None:
-    diag.note(f"curl.{str(method).lower()}", url=url, exc=exc)
+    diag.note(f"curl.{str(method).lower()}", method=str(method), url=url, exc=exc)
 
 
 def failure(exc: BaseException) -> str:

@@ -1,8 +1,8 @@
 """The shared yt-dlp entry point for the sources that extract through yt-dlp.
 
-yt-dlp sends through its own HTTP stack, which reaches nothing of OmniSeek. Before 2026-10-04 a health
-check that yt-dlp's extraction failed on with HTTP 429 could only report the exception ("down"), and
-the guard sweep could not drive these sources at all. They build their extractor from this module
+yt-dlp sends through its own HTTP stack, which reaches nothing of OmniSeek: a health check that yt-dlp's
+extraction failed on with HTTP 429 could only report the exception ("down"), and the guard sweep
+could not drive these sources at all. So they build their extractor from this module
 instead (``from omniseek.core import ytdlp`` then ``ytdlp.YoutubeDL(opts)``): the same class, and every
 HTTP error answer yt-dlp gets (its ``HTTPError``, raised by ``YoutubeDL.urlopen`` for every request an
 extractor makes) is noted for a running health check's ledger (``_probe``: a 429 is "not verified",

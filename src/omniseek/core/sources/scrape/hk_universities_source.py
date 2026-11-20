@@ -223,7 +223,7 @@ class HKUniversitiesAdapter(SourceBase):
     )
 
     async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async replacement of the deleted sync ``search`` (11-04, this is the only one now): the async omniseek_search fan-out awaits this DIRECTLY (no
+        """Native-async ``search``: the async omniseek_search fan-out awaits this DIRECTLY (no
         held pool thread), so the dominant cost — 5 serial-in-sync dept-page downloads (CUHK ~175KB /
         CityU ~133KB / PolyU ~137KB) — becomes 5 CONCURRENT coroutines on the one loop. Mirrors
         ``search`` line-for-line, changing ONLY the blocking waits:

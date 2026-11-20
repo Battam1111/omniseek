@@ -22,6 +22,16 @@ Top Seed dataset 全景（subject IDs 2026-05-28 实测）：
 
 Sub-agent 还发现：同 endpoint 不同 `website-path` 切换字节系全部招聘 portal
 (`experienced` / `campus` / `school`)。当前实现聚焦 Top Seed，后续可推广。
+
+2026-11-19：「香港」查回 0 条。根因两层：查法上，地名被当成 keyword 送去，没走
+城市筛选（filters meta 的 `city_list` 有 `CT_159 中国香港`）；站上，Top Seed 两个 subject 在香港
+真没有岗位（按 `location_code_list=["CT_159"]` 筛也是 0，同日 Seed 共 153 岗，抽样在北京、上海、
+深圳；校招其他 subject 在香港有 5 岗）。现在查询里的地名按 `city_list`（中文名、去掉「中国」前缀
+的名、去掉括号的英文名）换成 `location_code_list`，其余词才作 keyword；查回 0 条时留一条
+`bytedance_seed.no_match` 记录说清是哪个地方、哪些 subject 没有，以及校招其他 subject 在那里有几岗；
+请求失败留 `bytedance_seed.search` 记录（失败与 0 条要分得开）。
+依赖：`/config/job/filters/3` 的 `city_list[].code/name/en_name` 与 `job_subject_list`；
+`/search/job/posts` 的 `location_code_list`、`subject_id_list` 与返回的 `data.count`。
 """
 
 from __future__ import annotations
@@ -37,7 +47,7 @@ import httpx
 
 import anyio
 
-from omniseek.core import _probe, cache, fetcher
+from omniseek.core import _probe, cache, diag, fetcher
 from omniseek.core.sources._base import SourceBase
 from omniseek.core.normalize import Document, jsonsafe
 
@@ -63,6 +73,29 @@ HEADERS = {
 
 # Default subject regex — matches Top Seed campus + intern + future cycles
 DEFAULT_TOP_SEED_REGEX = r"Seed.*(?:校招|实习|招)"
+
+
+def _places_in(query: str, meta: dict) -> tuple[list[str], list[str], str]:
+    """The campus portal's cities named in ``query`` -> (location codes, their names, the query without
+    them). A city is named by its Chinese name, that name without the 「中国」 prefix (中国香港 -> 香港),
+    or its English name without the bracket ("Hong Kong (China)" -> hong kong, whole words). Pure."""
+    rest = query or ""
+    codes: list[str] = []
+    names: list[str] = []
+    for c in ((meta or {}).get("data") or {}).get("city_list") or []:
+        if not isinstance(c, dict) or not c.get("code"):
+            continue
+        zh = str(c.get("name") or "")
+        en = re.sub(r"\s*\(.*?\)", "", str(c.get("en_name") or "")).strip()
+        cands = sorted({x for x in (zh, zh.removeprefix("中国"), en) if len(x) >= 2}, key=len, reverse=True)
+        for x in cands:
+            pat = (re.escape(x) if not x.isascii() else r"(?<![A-Za-z])" + re.escape(x) + r"(?![A-Za-z])")
+            if re.search(pat, rest, flags=re.IGNORECASE):
+                rest = re.sub(pat, " ", rest, flags=re.IGNORECASE)
+                codes.append(str(c["code"]))
+                names.append(zh or en)
+                break
+    return codes, names, " ".join(rest.split())
 
 
 class BytedanceSeedAdapter(SourceBase):
@@ -131,8 +164,10 @@ class BytedanceSeedAdapter(SourceBase):
             return ["7621018151002507573", "7621018569480046853"]
         return subjects
 
-    def _search_posts(self, keyword: str, subject_ids: list[str], limit: int, offset: int = 0) -> list[dict]:
-        """POST to /search/job/posts. Both query params AND body need same filters."""
+    def _search_posts(self, keyword: str, subject_ids: list[str], limit: int, offset: int = 0,
+                      location_codes: Optional[list] = None, _count: Optional[list] = None) -> Optional[list[dict]]:
+        """POST to /search/job/posts. Both query params AND body need same filters. None when the request
+        failed (noted), [] when it answered with no posting; ``_count`` gets the answer's ``data.count``."""
         common = {
             "keyword": keyword,
             "limit": limit,
@@ -144,7 +179,7 @@ class BytedanceSeedAdapter(SourceBase):
             **common,
             "job_category_id_list": [],
             "tag_id_list": [],
-            "location_code_list": [],
+            "location_code_list": list(location_codes or []),
             "subject_id_list": subject_ids,
             "recruitment_id_list": [],
             "job_function_id_list": [],
@@ -162,13 +197,33 @@ class BytedanceSeedAdapter(SourceBase):
             data = resp.json()
         except Exception as exc:  # noqa: BLE001
             logger.warning("bytedance search failed: %s", exc)
-            return []
+            diag.note("bytedance_seed.search", method="POST", url=f"{API_BASE}/search/job/posts",
+                      status=getattr(getattr(exc, "response", None), "status_code", None), exc=exc)
+            return None
 
         if data.get("code") != 0:
             logger.warning("bytedance search non-zero code: %s", data.get("code"))
-            return []
+            diag.note("bytedance_seed.search", method="POST", url=f"{API_BASE}/search/job/posts",
+                      status=resp.status_code, body=f"API answered code {data.get('code')}: {data.get('message')}")
+            return None
 
+        if _count is not None:
+            _count.append((data.get("data") or {}).get("count"))
         return ((data.get("data") or {}).get("job_post_list")) or []
+
+    def _note_no_match(self, keyword: str, codes: list[str], places: list[str], subject_ids: list[str]) -> None:
+        """Say why the Top Seed search came back empty: which place / keyword the Top Seed subjects have
+        nothing for, and (for a place) how many campus postings other subjects have there."""
+        what = (f"in {'/'.join(places)} (location {','.join(codes)})" if codes else "")
+        what += (f"{' ' if what else ''}matching keyword {keyword!r}" if keyword else "")
+        body = f"no Top Seed posting {what or 'at all'} (subjects {','.join(subject_ids)})"
+        if codes:
+            n: list = []
+            others = self._search_posts("", [], 1, location_codes=codes, _count=n)
+            if others is not None and n:
+                body += (f"; jobs.bytedance.com campus lists {n[0]} posting(s) there under other subjects "
+                         f"(not Top Seed)")
+        diag.note("bytedance_seed.no_match", url=f"{API_BASE}/search/job/posts", body=body)
 
     def search(self, query: str, limit: int = 10) -> list[Document]:
         key = cache.make_key("bytedance_seed", "search", query, limit)
@@ -177,15 +232,23 @@ class BytedanceSeedAdapter(SourceBase):
             return [Document.model_validate(d) for d in cached]
 
         subject_ids = self._resolve_top_seed_subject_ids()
+        # a place in the query is the portal's city filter, not a keyword (「香港」 as a keyword matched
+        # nothing in Top Seed and read as a silent 0)
+        codes, places, keyword = _places_in(query or "", self._fetch_filters_meta())
         posts = self._search_posts(
-            keyword=query if query else "",
+            keyword=keyword,
             subject_ids=subject_ids,
             limit=min(limit * 3, 100),  # over-fetch then filter for relevance
+            location_codes=codes,
         )
+        if posts is None:
+            return []   # failed and noted; not cached
+        if not posts:
+            self._note_no_match(keyword, codes, places, subject_ids)
 
         # If user gave a query, also filter client-side (subject filter is dataset-level)
-        if query and posts:
-            query_lower = query.lower()
+        if keyword and posts:
+            query_lower = keyword.lower()
             filtered = []
             for p in posts:
                 blob = (p.get("title", "") + " " +
@@ -202,7 +265,8 @@ class BytedanceSeedAdapter(SourceBase):
             except Exception as exc:  # noqa: BLE001
                 logger.debug("Skipping malformed bytedance post: %s", exc)
 
-        cache.set(key, [d.model_dump(mode="json") for d in docs], ttl=1800)
+        if docs:   # an empty answer is not kept: a cached [] would come back without its no_match reason
+            cache.set(key, [d.model_dump(mode="json") for d in docs], ttl=1800)
         return docs
 
     async def afetch_url(self, url: str) -> Optional[Document]:
@@ -285,6 +349,8 @@ class BytedanceSeedAdapter(SourceBase):
 
         city_info = post.get("city_info") or {}
         city = city_info.get("name") or ""
+        # every city the posting is open in (city_info is only the first; the location filter matches any)
+        cities = [str(c.get("name")) for c in (post.get("city_list") or []) if isinstance(c, dict) and c.get("name")]
 
         recruit_type = post.get("recruit_type") or {}
         recruit_name = recruit_type.get("name") or ""
@@ -314,8 +380,9 @@ class BytedanceSeedAdapter(SourceBase):
             tags.append("intern")
         if "Seed" in subject_name:
             tags.append("top-seed")
-        if city:
-            tags.append(f"location:{city}")
+        for c in dict.fromkeys([city, *cities]):
+            if c:
+                tags.append(f"location:{c}")
 
         return Document(
             source="bytedance_seed",
@@ -330,6 +397,7 @@ class BytedanceSeedAdapter(SourceBase):
                 "post_id": post_id,
                 "code": post.get("code"),
                 "city": city,
+                "cities": cities or ([city] if city else []),
                 "category": full_category,
                 "recruit_type": full_recruit,
                 "subject": subject_name,

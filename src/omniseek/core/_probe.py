@@ -13,7 +13,7 @@ Most adapters cannot tell either case from an outage: the shared http helpers re
 failure. So the egress records them here instead, at the places every request already passes:
 ``upstreams.observe`` sees every response's status, ``upstreams.UpstreamBusy`` and
 ``_guard.GateBusy`` are built only when a gate refuses, and ``http._arequest_capped`` reads the error
-body. Three egress paths that never reach ``upstreams.observe`` record here too (2026-10-04): the
+body. Three egress paths that never reach ``upstreams.observe`` record here too: the
 curl_cffi entry point (``omniseek.core.curl``), the browser helper (``_cdp.cdp_call``: the page's
 main-document answers and its in-page fetches' 429s, kept only while a ledger is open, see
 ``active``) and the yt-dlp entry point (``omniseek.core.ytdlp``: every HTTP error answer). A ledger is
@@ -23,8 +23,8 @@ one, recording is a no-op.
 
 ``reread`` turns a False into None when the ledger holds a 429, a rate-limit body or a gate refusal
 AND no other error answer (a 4xx / 5xx that is not a rate limit): that answer is real evidence, so
-the False stands. A True is never touched: an adapter that saw a served answer keeps it. Since
-2026-10-20 a connection that could not be made (``note_unreachable``) is evidence too,
+the False stands. A True is never touched: an adapter that saw a served answer keeps it. A
+connection that could not be made (``note_unreachable``) is evidence too,
 and a check that met an open host breaker (``note_host_down``, ``upstreams.HostDown``) reads False.
 
 Context: the ledger rides a ContextVar, so a request made on another thread is recorded only when
@@ -150,7 +150,7 @@ def note_unreachable(where: str, detail: str) -> None:
     _count_answer(None, failed=True)
 
 
-# WHAT ONE SOURCE CALL HEARD FROM ITS UPSTREAM (2026-11-07). The fetcher opens this
+# WHAT ONE SOURCE CALL HEARD FROM ITS UPSTREAM. The fetcher opens this
 # around every source call (fetcher._dispatch_search) to tell a live fetch from one answered wholly
 # from cache: an answer read from cache passes no egress and so reaches none of the recorders above.
 # ``ok`` counts the answers with a status below 400; ``failed`` counts the error answers (400 and up,
@@ -194,7 +194,7 @@ def capture_answers():
             pass
 
 
-# WHAT HELD ONE SOURCE CALL BACK (2026-10-20). The search fan-out and the recall
+# WHAT HELD ONE SOURCE CALL BACK. The search fan-out and the recall
 # ingest open a capture around each source call; every gate refusal and every open host breaker met
 # inside it lands there, whatever layer refused (the shared http helpers, a module's own guard, a
 # browser render). The fan-out names those sources in ``_meta.held`` instead of ``_meta.empty``; the
@@ -305,7 +305,7 @@ def held_by_gate(msg: object) -> bool:
 def reread(ok: Optional[bool], msg: str, led: Optional[Ledger]) -> tuple[Optional[bool], str]:
     """``(ok, msg)`` re-read against what the check's ledger recorded (rules in the module docstring).
 
-    Two more rules (2026-10-20): a check that met an open host breaker reads False
+    Two more rules: a check that met an open host breaker reads False
     (the host stopped answering; that is not "not verified"), unless the adapter saw a served answer;
     and a connection that could not be made is evidence like an error answer, so a False backed by
     one stands even when a gate also refused another request of the same check."""
@@ -325,7 +325,7 @@ async def shared_verdict(box: dict, ttl: float,
     seconds, else ``await aprobe()``, single-flighted: callers that arrive while it runs await the
     same task (``asyncio.shield``: one caller giving up never cancels the probe the others wait on), so
     N concurrent health checks cause exactly ONE upstream call. The probe runs in the first caller's
-    context (its ledger and deadline), as the sync probe used to run under the first caller's lock."""
+    context (its ledger and deadline)."""
     if box.get("result") is not None and time.monotonic() - box.get("at", 0.0) < ttl:
         return box["result"]
     loop = asyncio.get_running_loop()

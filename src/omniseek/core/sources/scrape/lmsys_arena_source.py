@@ -13,8 +13,8 @@ HTML path (``extract_schema`` + ``fetch_html``): CSS selectors as DATA, no hand-
 no code execution. The wrapping ``<a>`` carries the permalink while the inner ``<article>`` carries
 the title and the summary, hence the ``a:has(article)`` item selector.
 
-No live capability is lost in the move: the old row's ``url_pattern`` fetch_url claim resolved
-against cached FEED documents, and the feed had stopped producing any.
+A feed row's ``url_pattern`` fetch_url claim would resolve against cached FEED documents, and the
+feed produces none.
 """
 
 from __future__ import annotations

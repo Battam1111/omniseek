@@ -10,8 +10,9 @@ writer, no cross-process write contention (crons may only ever READ).
 
 ``maybe_ingest`` is the hook spliced into the fetcher return path (the true chokepoint — every
 adapter's ``search`` returns ``list[Document]`` there, regardless of its internal cache
-shape). It durably journals eligible observations before enqueueing a materializer wake, and it
-NEVER raises: a hook exception would break every search.
+shape). It queues eligible observations for the writer, which commits them to SQLite in batches; the
+vectors are computed afterwards by the embed worker (``_embed_loop``) from the rows the database lists
+as not embedded yet (``vec_todo``). It NEVER raises: a hook exception would break every search.
 """
 
 from __future__ import annotations
@@ -19,41 +20,45 @@ from __future__ import annotations
 import json
 import logging
 import queue
+import re
 import threading
 import time
-from typing import Optional
+from typing import Any, Optional
 
 from omniseek.core.normalize import Document
 from omniseek.core.recall import store
-from omniseek.core.recall.journal import JournalCorrupt, JournaledObservation, ObservationJournal, ObservationReceipt
 
 logger = logging.getLogger(__name__)
 
 WRITES_ENABLED = False          # flipped True ONCE in serve_http.main(); cron processes leave it False
 RETAIN_DAYS = 365               # roll-off age cap (immutable sources are never swept) — operator knob
-_QUEUE_MAX = 4000
-_DRAIN = 200                    # max items merged into one write transaction
+_DRAIN = 200                    # max queue items (observations) merged into one write transaction
+
+# ── Observations go straight into SQLite ─────────────────────────────────
+# No observation journal in front of SQLite: embedding is slow (2.9 to 4.6
+# observations a second with it on the host machine, against 1,104 a second for the SQLite writes alone in
+# transactions of _DRAIN, and 18 to 37 a second at the peak of the 11-17 replay), so a backlog waiting
+# for its vectors would sit only in memory and a hard restart would lose it. SQLite's WAL is that durable layer: the
+# writer commits observations as they arrive, at most _DRAIN to a transaction, and the vectors are
+# computed afterwards (the embed worker below) from the rows the database lists as not embedded yet. A
+# hard restart loses at most what the writer had queued and not committed.
+# The caller dumps each document HERE, on its own thread (ranking stamps it later), filtered by
+# _filter_private, and the writer validates it back into an Document.
+# _QUEUE_MAX is PROVISIONAL: one broad
+# search hands at most about 90 sources x 15 documents = 1350 observations, a payload averages 5.6 KB
+# (the journal's blob store: 2.0 GB in 357,095 blobs), so 10,000 queued observations hold about 56 MB
+# and cover seven such searches while the writer is busy elsewhere (the hourly roll-off, a matrix
+# rebuild). Past it an observation is dropped and counted (``observations_dropped``, in the health
+# reading), never waited for: a caller must not block on the index. Calibrate: a non-zero count means
+# the writer fell behind; read what it was doing at that time first.
+_QUEUE_MAX = 10000
 
 _queue: "queue.Queue" = queue.Queue(maxsize=_QUEUE_MAX)
 _writer_started = False
 _start_lock = threading.Lock()
 _last_write_ts: float = 0.0
 _IMMUTABLE = frozenset({"acl_anthology", "openreview", "ircc_ee_rounds"})
-_observation_journal: "ObservationJournal | None" = None
-_journal_lock = threading.Lock()
-_journal_failures = 0
-_last_journal_failure: "str | None" = None
-_materialization_failures = 0
-_last_materialization_failure: "str | None" = None
-_JOURNAL_WAKE = threading.Event()
-# The boot blob scrub: None until it starts, then {"state": "running" | "done" |
-# "failed", "checked", "bad": [{payload_hash, seq, error}], "seconds", "error"?}. Read by journal_health.
-_blob_scrub: "dict | None" = None
-# The background whole-chain check: None until it starts, then {"state": "running" |
-# "done" | "failed", "ok", "checked", "first_bad_seq", "error", "seconds"}. Read by journal_health.
-_chain_check: "dict | None" = None
-_checkpoint_failures = 0
-_last_checkpoint_failure: "str | None" = None
+_dropped = 0
 
 # Graceful-shutdown stop Event for the single-writer loop: set on ASGI-lifespan shutdown so the
 # writer stops polling and runs its FINAL FLUSH, draining the queue BEST-EFFORT within the shutdown
@@ -82,232 +87,49 @@ def last_write_ts() -> float:
     return _last_write_ts
 
 
-def journal_failures() -> int:
-    return _journal_failures
+def observations_dropped() -> int:
+    """Observations dropped because the writer queue was full (see _QUEUE_MAX)."""
+    return _dropped
 
 
-def last_journal_failure() -> "str | None":
-    return _last_journal_failure
-
-
-def materialization_failures() -> int:
-    return _materialization_failures
-
-
-def last_materialization_failure() -> "str | None":
-    return _last_materialization_failure
-
-
-def _blob_scrub_health() -> dict:
-    scrub = _blob_scrub
-    if scrub is None:
-        return {"journal_blob_scrub_state": "not_started", "journal_blobs_checked": None,
-                "journal_blobs_bad": None}
-    done = scrub["state"] == "done"
-    health = {
-        "journal_blob_scrub_state": scrub["state"],
-        "journal_blobs_checked": scrub.get("checked") if done else None,
-        "journal_blobs_bad": len(scrub.get("bad") or ()) if done else None,
-    }
-    if scrub.get("error"):
-        health["journal_blob_scrub_error"] = scrub["error"]
-    return health
-
-
-def _checkpoint_health(journal: "ObservationJournal") -> dict:
-    boot = getattr(journal, "boot_info", None) or {}
-    chain = _chain_check
-    done = bool(chain) and chain["state"] == "done"
-    health = {
-        "journal_boot_mode": boot.get("mode"),
-        "journal_boot_reason": boot.get("reason"),
-        "journal_boot_replayed": boot.get("replayed"),
-        "journal_boot_seconds": boot.get("seconds"),
-        "journal_checkpoint_seq": getattr(journal, "checkpoint_seq", None),
-        "journal_checkpoint_failures": _checkpoint_failures,
-        "journal_last_checkpoint_failure": _last_checkpoint_failure,
-        "journal_chain_check_state": chain["state"] if chain else "not_started",
-        "journal_chain_ok": chain.get("ok") if done else None,
-        "journal_chain_first_bad_seq": chain.get("first_bad_seq") if done else None,
-    }
-    if chain and chain.get("error"):
-        health["journal_chain_check_error"] = chain["error"]
-    return health
-
-
-def journal_health(
-    *,
-    journal: "ObservationJournal | None" = None,
-    con=None,
-) -> dict:
-    """Return observable Journal and SQLite materialization state without mutating either."""
-    active_journal = journal or _journal()
-    scrub = _blob_scrub_health()
-    scrub.update(_checkpoint_health(active_journal))
-    own_con = con is None
-    connection = con or store.connect()
+def vec_pending() -> "int | None":
+    """Rows the database lists as not embedded yet (vec_todo: documents and thin titles), or None when
+    the index cannot be read."""
     try:
-        head_seq = active_journal.head_seq
-        head_hash = active_journal.head_hash
-        last_seq = _materialization_cursor(connection, active_journal)
-        last_event = active_journal.event(last_seq) if last_seq else None
-        return {
-            "journal_head_seq": head_seq,
-            "journal_head_hash": head_hash,
-            "pending_materializations": max(0, head_seq - last_seq),
-            "last_materialized_seq": last_seq,
-            "last_materialized_hash": last_event["event_hash"] if last_event else None,
-            "journal_append_failures": _journal_failures,
-            "materialization_failures": _materialization_failures,
-            "failed_receipts": _journal_failures + _materialization_failures,
-            "last_failure": _last_materialization_failure or _last_journal_failure,
-            **scrub,
-        }
-    except Exception as exc:  # noqa: BLE001 -- health reports corruption instead of hiding it
-        return {
-            "journal_head_seq": active_journal.head_seq,
-            "journal_head_hash": active_journal.head_hash,
-            "pending_materializations": None,
-            "last_materialized_seq": None,
-            "last_materialized_hash": None,
-            "journal_append_failures": _journal_failures,
-            "materialization_failures": _materialization_failures,
-            "failed_receipts": _journal_failures + _materialization_failures,
-            "last_failure": _last_materialization_failure or _last_journal_failure,
-            **scrub,
-            "error": f"{type(exc).__name__}: {exc}",
-        }
-    finally:
-        if own_con:
-            try:
-                connection.close()
-            except Exception:  # noqa: BLE001
-                pass
-
-
-def _journal() -> ObservationJournal:
-    global _observation_journal
-    if _observation_journal is None:
-        with _journal_lock:
-            if _observation_journal is None:
-                _observation_journal = ObservationJournal()
-    return _observation_journal
-
-
-def scrub_journal_blobs(journal: "ObservationJournal | None" = None) -> dict:
-    """Check every referenced blob once (ObservationJournal.scrub_blobs), log ONE line with the
-    count, every bad blob and the time, and keep the result for journal_health. Never raises: a bad
-    blob is reported here and still fails closed when it is read, so the service keeps running."""
-    global _blob_scrub
-    _blob_scrub = {"state": "running"}
-    try:
-        active_journal = journal or _journal()
-        report = active_journal.scrub_blobs()
-    except Exception as exc:  # noqa: BLE001 -- a scrub failure is reported, never fatal
-        _blob_scrub = {"state": "failed", "error": f"{type(exc).__name__}: {exc}"}
-        logger.warning("observation journal blob scrub failed: %s", _blob_scrub["error"])
-        return _blob_scrub
-    _blob_scrub = {"state": "done", **report}
-    bad = report["bad"]
-    listed = ", ".join(f"{entry['payload_hash']} (seq {entry['seq']}: {entry['error']})" for entry in bad)
-    (logger.warning if bad else logger.info)(
-        "observation journal blob scrub: checked %d, bad %d%s, %.1fs",
-        report["checked"], len(bad), f" [{listed}]" if bad else "", report["seconds"],
-    )
-    return _blob_scrub
-
-
-def checkpoint_journal_if_due(journal: "ObservationJournal | None" = None) -> "dict | None":
-    """Write the journal checkpoint when one is due (ObservationJournal.maybe_checkpoint).
-
-    Called on the recall-journal-boot thread once the journal is built, and on the recall-writer
-    thread after every cycle (``_writer_loop``): never on the foreground path that records an
-    observation. Never builds the journal (does nothing until it is built) and never raises: a failed
-    write is logged, counted for journal_health, and tried again on the next cycle."""
-    global _checkpoint_failures, _last_checkpoint_failure
-    active_journal = journal or _observation_journal
-    if active_journal is None:
+        con = store._read_con()
+        return int(con.execute("SELECT COUNT(*) FROM vec_todo").fetchone()[0]) if con is not None else None
+    except Exception as exc:  # noqa: BLE001 -- a health read never raises
+        logger.debug("recall vec_pending unreadable: %s", exc)
         return None
-    try:
-        written = active_journal.maybe_checkpoint()
-    except Exception as exc:  # noqa: BLE001 -- a checkpoint is a cache; the events file stays the truth
-        _checkpoint_failures += 1
-        _last_checkpoint_failure = f"{type(exc).__name__}: {exc}"
-        logger.warning("observation journal checkpoint write failed: %s", _last_checkpoint_failure)
-        return None
-    if written:
-        logger.info("observation journal checkpoint written at seq %d (%d bytes, %.2fs)",
-                    written["seq"], written["bytes"], written["seconds"])
-    return written
 
 
-def verify_journal_chain(journal: "ObservationJournal | None" = None) -> dict:
-    """Validate the whole hash chain once (ObservationJournal.verify_chain), log ONE line, keep the
-    result for journal_health. Never raises and never stops the service: a break is reported with
-    the first bad seq; reads still check each line's seq (``_read_line``)."""
-    global _chain_check
-    _chain_check = {"state": "running"}
-    try:
-        active_journal = journal or _journal()
-        report = active_journal.verify_chain()
-    except Exception as exc:  # noqa: BLE001 -- a check failure is reported, never fatal
-        _chain_check = {"state": "failed", "error": f"{type(exc).__name__}: {exc}"}
-        logger.warning("observation journal chain check failed: %s", _chain_check["error"])
-        return _chain_check
-    _chain_check = {"state": "done", **report}
-    if report["ok"]:
-        logger.info("observation journal chain check: ok, %d events, %.1fs",
-                    report["checked"], report["seconds"])
-    else:
-        logger.warning("observation journal chain check: BROKEN at seq %d (%s), %d events validated, %.1fs",
-                       report["first_bad_seq"], report["error"], report["checked"], report["seconds"])
-    return _chain_check
+# Metadata keys never stored (the journal's privacy filter, kept as it was): an exact name or a suffix,
+# compared after lowercasing and folding every run of other characters to "_".
+_SENSITIVE_EXACT = frozenset({
+    "raw", "cookie", "cookies", "token", "password", "secret", "authorization", "credential",
+    "credentials", "api_key", "apikey", "set_cookie",
+})
+_SENSITIVE_SUFFIXES = ("_token", "_password", "_secret", "_authorization", "_credential")
+_KEY_NORMALIZE = re.compile(r"[^a-z0-9]+")
 
 
-def _journal_boot() -> None:
-    global _chain_check
-    started = time.monotonic()
-    try:
-        journal = _journal()
-    except Exception as exc:  # noqa: BLE001 -- a later maybe_ingest retries and records its own failure
-        _record_journal_failure("boot load", exc)
-        return
-    boot = journal.boot_info
-    if boot.get("mode") == "checkpoint":
-        logger.info("observation journal built at boot in %.2fs from checkpoint seq %d, "
-                    "replayed tail %d events in %.2fs (head %d, no blob read)",
-                    time.monotonic() - started, boot["checkpoint_seq"], boot["replayed"],
-                    boot["seconds"], journal.head_seq)
-    else:
-        logger.info("observation journal built at boot in %.2fs by a full build of %d events (%s, no blob read)",
-                    time.monotonic() - started, journal.head_seq, boot.get("reason") or boot.get("mode"))
-    checkpoint_journal_if_due(journal)
-    if boot.get("mode") == "checkpoint":
-        verify_journal_chain(journal)
-    else:
-        # a full build (or an empty journal) has just validated every event and derived the index
-        # from them, which is exactly what the background check would redo
-        _chain_check = {"state": "done", "ok": True, "checked": journal.head_seq,
-                        "head_seq": journal.head_seq, "first_bad_seq": None, "error": None,
-                        "seconds": 0.0, "by": "full build at boot"}
-        logger.info("observation journal chain check: ok, %d events, validated by the full build at boot",
-                    journal.head_seq)
-    scrub_journal_blobs(journal)
+def _is_sensitive_key(key: object) -> bool:
+    if not isinstance(key, str):
+        return False
+    normalized = _KEY_NORMALIZE.sub("_", key.lower()).strip("_")
+    return normalized in _SENSITIVE_EXACT or normalized.endswith(_SENSITIVE_SUFFIXES)
 
 
-def start_journal_boot() -> threading.Thread:
-    """Build the observation journal on its own thread at service start, write its checkpoint, check
-    the whole hash chain, then scrub its blobs (2026-10-24). Built lazily, the
-    first maybe_ingest of every source after a restart built it under _journal_lock inside that
-    search's wait budget; a search that arrives while this thread is still building waits on the same
-    lock, but only for the checkpoint read plus a tail of at most about CKPT_EVERY events (a full
-    build of every event when the checkpoint is missing or does not match)."""
-    t = threading.Thread(target=_journal_boot, name="recall-journal-boot", daemon=True)
-    t.start()
-    return t
+def _filter_private(value: Any) -> Any:
+    """Remove sensitive keys recursively without changing safe values."""
+    if isinstance(value, dict):
+        return {key: _filter_private(item) for key, item in value.items() if not _is_sensitive_key(key)}
+    if isinstance(value, (list, tuple)):
+        return [_filter_private(item) for item in value]
+    return value
 
 
-def _journal_payload(d: Document, lane: str) -> dict:
+def _payload(d: Document, lane: str) -> dict:
     data = d.model_dump(mode="json")
     if lane != "thin":
         return data
@@ -322,157 +144,39 @@ def _journal_payload(d: Document, lane: str) -> dict:
     }
 
 
-def _record_observation(
-    d,
-    *,
-    lane: str,
-    provenance: str,
-    privacy_namespace: str,
-) -> "ObservationReceipt | None":
+def _observation(d, lane: str) -> "tuple | None":
+    """One queue item for the writer, the document dumped HERE (on the caller's thread), so what is
+    stored is the document as it was retrieved. None when the document has no identity."""
     source = getattr(d, "source", None)
     source_id = str(getattr(d, "source_id", None) or getattr(d, "url", None) or "")
     if not source or not source_id or not hasattr(d, "model_dump"):
         return None
-    try:
-        return _journal().append_payload(
-            _journal_payload(d, lane),
-            source=source,
-            source_id=source_id,
-            observed_at=time.time(),
-            provenance=provenance,
-            privacy_namespace=privacy_namespace,
-            lane=lane,
-        )
-    except Exception as exc:  # noqa: BLE001 -- journal failure must not break perception
-        _record_journal_failure("observation append", exc)
-        return None
+    return ("__obs__", lane, _filter_private(_payload(d, lane)))
 
 
-def _record_journal_failure(context: str, exc: Exception) -> None:
-    global _journal_failures, _last_journal_failure
-    _journal_failures += 1
-    _last_journal_failure = f"{context}: {type(exc).__name__}: {exc}"
-    logger.warning("observation journal %s failed: %s", context, exc)
-
-
-def _materialization_cursor(con, journal: ObservationJournal) -> int:
-    rows = dict(con.execute(
-        "SELECT k, v FROM meta WHERE k IN ('journal_materialized_seq', 'journal_materialized_hash')"
-    ).fetchall())
-    raw_seq = rows.get("journal_materialized_seq", "0")
-    try:
-        seq = int(raw_seq)
-    except (TypeError, ValueError) as exc:
-        raise JournalCorrupt(f"invalid SQLite materialization cursor: {raw_seq!r}") from exc
-    if seq == 0:
-        if rows.get("journal_materialized_hash") not in (None, ""):
-            raise JournalCorrupt("SQLite materialization hash exists without a sequence")
-        return 0
-    event = journal.event(seq)
-    if event is None:
-        raise JournalCorrupt(f"SQLite materialization cursor {seq} is past the journal head")
-    if rows.get("journal_materialized_hash") != event["event_hash"]:
-        raise JournalCorrupt(f"SQLite materialization hash mismatch at seq {seq}")
-    return seq
-
-
-def _materialization_item(observation: JournaledObservation):
-    if observation.kind == "tombstone":
-        return ("__tombstone__", observation)
-    if observation.payload is None:
-        raise JournalCorrupt(f"observation {observation.journal_seq} has no payload")
-    doc = Document.model_validate(observation.payload)
-    if observation.lane == "full":
-        return [doc]
-    if observation.lane == "thin":
-        return ("__thin__", doc)
-    raise JournalCorrupt(f"unknown materialization lane {observation.lane!r}")
-
-
-def _materialize_pending(
-    con,
-    journal: "ObservationJournal | None" = None,
-    *,
-    limit: "int | None" = None,
-) -> int:
-    """Replay journal events in order and commit each SQLite cursor atomically with its event."""
-    global _materialization_failures, _last_materialization_failure
-    active_journal = journal or _journal()
-    cursor = _materialization_cursor(con, active_journal)
-    pending = active_journal.iter_pending(after_seq=cursor, limit=limit)
-    applied = 0
-    while True:
+def _hand_off(items: list) -> None:
+    """Queue observations for the writer and return at once; a full queue drops (and counts) the
+    observation, it never makes the caller wait."""
+    global _dropped
+    for item in items:
+        if item is None:
+            continue
         try:
-            observation = next(pending)
-        except StopIteration:
-            break
-        except Exception as exc:  # noqa: BLE001 -- an unreadable blob stops replay like a failed apply
-            _materialization_failures += 1
-            _last_materialization_failure = f"seq={cursor + applied + 1} {type(exc).__name__}: {exc}"
-            logger.warning("observation materialization stopped at seq %d: %s",
-                           cursor + applied + 1, exc)
-            break
-        try:
-            _apply(
-                con,
-                [_materialization_item(observation)],
-                strict=True,
-                journal_checkpoint=(observation.journal_seq, observation.event_hash),
-            )
-            applied += 1
-        except Exception as exc:  # noqa: BLE001 -- stop at the first unmaterialized sequence
-            try:
-                _rollback(con)
-            except Exception:  # noqa: BLE001
-                pass
-            _materialization_failures += 1
-            _last_materialization_failure = (
-                f"seq={observation.journal_seq} {type(exc).__name__}: {exc}"
-            )
-            logger.warning("observation materialization stopped at seq %d: %s",
-                           observation.journal_seq, exc)
-            break
-    return applied
-
-
-def _process_writer_items(
-    con,
-    items,
-    *,
-    journal: "ObservationJournal | None" = None,
-    force_journal: bool = False,
-) -> int:
-    """Treat journal queue entries as wake signals and replay the durable sequence in order."""
-    journal_markers = [
-        item for item in items
-        if isinstance(item, tuple) and item and item[0] == "__journal__"
-    ]
-    passthrough = [
-        item for item in items
-        if not (isinstance(item, tuple) and item and item[0] == "__journal__")
-    ]
-    applied = 0
-    if force_journal or journal_markers or _JOURNAL_WAKE.is_set():
-        active_journal = journal or _journal()
-        applied = _materialize_pending(con, active_journal, limit=_DRAIN)
-        cursor = _materialization_cursor(con, active_journal)
-        if cursor < active_journal.head_seq:
-            _JOURNAL_WAKE.set()
-        else:
-            _JOURNAL_WAKE.clear()
-    if passthrough:
-        _apply(con, passthrough)
-    return applied
+            _queue.put_nowait(item)
+        except queue.Full:
+            _dropped += 1
+            if _dropped == 1 or _dropped % 1000 == 0:
+                logger.warning("recall writer queue full (%d items): %d observation(s) dropped so far",
+                               _QUEUE_MAX, _dropped)
 
 
 def maybe_ingest(docs) -> None:
-    """Classify EVERY retrieved doc and enqueue it for the writer. NO-OP unless WRITES_ENABLED (so
-    cron processes that hit the same fetcher chokepoint write nothing). JOURNAL-FIRST and NEVER
-    raises into the caller (the fetcher hot path) — a raised exception here would break every search.
+    """Classify EVERY retrieved doc and queue it for the writer. NO-OP unless WRITES_ENABLED (so
+    cron processes that hit the same fetcher chokepoint write nothing). NEVER raises into the caller
+    (the fetcher hot path) — a raised exception here would break every search.
 
     Two lanes, per the retrieval-anchored thin-memory design:
-      - ``indexable(source)`` -> the FULL row (title + content + vector), the existing path, enqueued
-        as one batch (unchanged).
+      - ``indexable(source)`` -> the FULL row (title + content + vector).
       - otherwise (query-keyed / walled sources recall deliberately excludes) -> a THIN document node
         (title + url + fp + external_ids ONLY, never content), so the graph's perception history is
         COMPLETE, not just the ~40 enumerable sources. Walled / circumvention-tier docs are SKIPPED
@@ -484,48 +188,23 @@ def maybe_ingest(docs) -> None:
         from omniseek.core import fetcher, profile
         from omniseek.core.recall import indexable
         remember_walled = profile.remember_walled_retrievals()
-        full: list = []
-        thin: list = []
+        items = []
         for d in docs:
             source = getattr(d, "source", None)
             if not source:
                 continue
             if indexable(source):
-                full.append(d)          # full-memory lane (existing path, unchanged)
+                items.append(_observation(d, "full"))
             elif remember_walled or not fetcher.is_walled_source(source):
-                thin.append(d)          # thin document-node lane (retrieval-anchored perception)
-        if full:
-            journaled = []
-            for d in full:
-                receipt = _record_observation(
-                    d, lane="full", provenance="retrieved", privacy_namespace="public",
-                )
-                if receipt is not None:
-                    journaled.append((receipt.journal_seq, receipt.observation_id))
-            if journaled:
-                _JOURNAL_WAKE.set()
-                _enqueue(("__journal__", journaled))
-        for d in thin:
-            is_walled = fetcher.is_walled_source(getattr(d, "source", ""))
-            receipt = _record_observation(
-                d,
-                lane="thin",
-                provenance="retrieved",
-                privacy_namespace="walled" if is_walled else "public",
-            )
-            if receipt is not None:
-                _JOURNAL_WAKE.set()
-                _enqueue(("__journal__", [(receipt.journal_seq, receipt.observation_id)]))
+                items.append(_observation(d, "thin"))
+        _hand_off(items)
     except Exception as exc:  # noqa: BLE001 — never propagate into the fetcher
         logger.debug("maybe_ingest swallowed: %s", exc)
 
 
 def _enqueue(item) -> None:
-    """Put one wake or legacy item on the writer queue.
-
-    Journal wakes are disposable because the durable journal, not this queue, owns every observation.
-    On overflow the oldest wake may be dropped; the next retained wake replays every pending seq.
-    """
+    """Put one graph batch on the writer queue. Best-effort: on a full queue drop the OLDEST item
+    (search correctness is sacred, the index is not)."""
     try:
         _queue.put_nowait(item)
     except queue.Full:
@@ -541,20 +220,11 @@ def ingest_produced(docs) -> None:
     They are not fetchable sources (no adapter; Path C never sweeps them), so they bypass the
     indexable() classification — the memory contract is: ALL text OmniSeek itself produces must be
     findable later ("which podcast said X"). Same single-writer queue, same upsert (idempotent on
-    (source, source_id)), same gates (WRITES_ENABLED / fail-open); journal-first, never raises."""
+    (source, source_id)), same gates (WRITES_ENABLED / fail-open); never raises."""
     if not WRITES_ENABLED or store._disabled or not docs:
         return
     try:
-        journaled = []
-        for d in docs:
-            receipt = _record_observation(
-                d, lane="full", provenance="produced", privacy_namespace="public",
-            )
-            if receipt is not None:
-                journaled.append((receipt.journal_seq, receipt.observation_id))
-        if journaled:
-            _JOURNAL_WAKE.set()
-            _enqueue(("__journal__", journaled))
+        _hand_off([_observation(d, "full") for d in docs])
     except Exception as exc:  # noqa: BLE001 — memory must never break perception
         logger.debug("ingest_produced swallowed: %s", exc)
 
@@ -573,7 +243,7 @@ def mark_run(source: str, count: int) -> None:
 def mark_swept(source: str) -> None:
     """Stamp when the ingest loop last swept ``source`` (any outcome; the still_live watermark is
     ``mark_run``'s and stays conditional). Read back by ``store.swept_at`` so a restarted process does
-    not sweep again what the one before it swept less than an interval ago (2026-10-20).
+    not sweep again what the one before it swept less than an interval ago.
     Routed through the writer queue (single writer). No-op unless writes are enabled."""
     if not WRITES_ENABLED or store._disabled:
         return
@@ -604,13 +274,15 @@ def enqueue_graph(nodes: list[dict], edges: list[dict]) -> None:
 
 
 def start_writer() -> None:
-    """Start the single writer daemon (idempotent). Called once from serve_http.main()."""
+    """Start the single writer daemon and the embed worker (idempotent). Called once from
+    serve_http.main()."""
     global _writer_started
     with _start_lock:
         if _writer_started:
             return
         _writer_started = True
     threading.Thread(target=_writer_loop, name="recall-writer", daemon=True).start()
+    threading.Thread(target=_embed_loop, name="recall-embed", daemon=True).start()
 
 
 def _writer_loop() -> None:
@@ -624,50 +296,26 @@ def _writer_loop() -> None:
     # enqueue past the final flush below.
     from omniseek.core import lifecycle
     lifecycle.register_loop("recall-writer", _STOP, threading.current_thread(), drain_last=True)
+    _BOOTED["event"].set()
     last_sweep = 0.0
-    try:
-        _process_writer_items(con, [], force_journal=True)
-    except Exception as exc:  # noqa: BLE001 -- corruption is visible but never kills the writer thread
-        logger.warning("recall journal startup replay failed closed: %s", exc)
     while not _STOP.is_set():
         try:
             try:
                 item = _queue.get(timeout=_STOP_POLL_S)  # bounded so a stop wakes the idle loop;
                                                          # a real enqueue still returns instantly
             except queue.Empty:
-                items = []
-            else:
-                items = [item]
-                try:
-                    for _ in range(_DRAIN):
-                        items.append(_queue.get_nowait())
-                except queue.Empty:
-                    pass
-            if not items and not _JOURNAL_WAKE.is_set():
                 continue
-            _process_writer_items(con, items)
-            # the journal checkpoint, once CKPT_EVERY events were written after the last one: the
-            # copy is taken under the journal lock, the file is written here, off the foreground path
-            checkpoint_journal_if_due()
+            items = [item]
+            try:
+                while len(items) < _DRAIN:
+                    items.append(_queue.get_nowait())
+            except queue.Empty:
+                pass
+            _apply(con, items)
             # periodic roll-off sweep (cheap; once/hour of wall-time between batches)
             if time.time() - last_sweep > 3600:
                 _sweep(con)
                 last_sweep = time.time()
-            # phase 7 thin-title catch-up: ONLY at the idle point (queue drained), so a queued write is
-            # never delayed. One bounded page per idle cycle; monotone convergence to zero backlog,
-            # then a cheap empty query. Fail-open (never raises into the loop).
-            if _queue.empty():
-                try:
-                    _thin_catchup(con)
-                    # DRAIN the chunk backfill backlog while idle: keep chunking pages until caught up
-                    # (returns 0) OR real work arrives (queue non-empty), re-checking BETWEEN pages so a
-                    # queued write interrupts within ONE page (~a page's embed, ~1-2s). A big one-time
-                    # backlog thus clears in the first long idle window instead of one page every few
-                    # minutes over days; the per-page queue check keeps it responsive to live ingest.
-                    while _queue.empty() and _chunk_catchup(con) > 0:
-                        pass
-                except Exception as exc:  # noqa: BLE001 — a catch-up failure never breaks the writer
-                    logger.debug("recall thin/chunk catch-up cycle errored: %s", exc)
         except Exception as exc:  # noqa: BLE001 — never let the writer thread die
             logger.warning("recall writer cycle errored: %s", exc)
             try:
@@ -678,30 +326,77 @@ def _writer_loop() -> None:
     # the shutdown drain budget: _final_flush commits INCREMENTALLY in batches, so partial progress
     # survives even if a pathological backlog overruns the budget and the daemon is abandoned
     # mid-drain. Strictly better than the SIGKILL it replaces (which lost the whole queue); a backlog
-    # that exceeds the budget loses only its un-flushed tail.
+    # that exceeds the budget loses only its un-flushed tail. The embed worker stops first (its vectors
+    # not stored yet stay listed for the next process).
+    _EMBED_STOP.set()
     _final_flush(con)
+
+
+def _seed_vec_todo(con) -> None:
+    """List every row with no vector for the current model in vec_todo: once per model version (the
+    meta key ``vec_todo_model``). Runs on the embed worker: the three scans read the whole docs and graph_nodes tables
+    (2.7, 9.3 and 5.4 s cold on the 3 GB index of 2026-11-18, 45 s in all on a busy disk), so they run
+    on its read connection and the writer only inserts what they found (``__todo__``)."""
+    from omniseek.core.recall import embed
+    mv = embed.MODEL_VERSION
+    row = con.execute("SELECT v FROM meta WHERE k = 'vec_todo_model'").fetchone()
+    if row is not None and row[0] == mv:
+        return
+    t0 = time.monotonic()
+    heads = con.execute("SELECT d.rowid FROM docs d LEFT JOIN vec v ON v.rowid = d.rowid AND "
+                        "v.model_version = ? WHERE v.rowid IS NULL", (mv,)).fetchall()
+    tails = con.execute("SELECT d.rowid FROM docs d WHERE length(d.content) > ? AND NOT EXISTS "
+                        "(SELECT 1 FROM vec_chunk c WHERE c.rowid = d.rowid AND c.model_version = ?)",
+                        (_CHUNK_SIZE, mv)).fetchall()
+    titles = con.execute("SELECT g.id FROM graph_nodes g LEFT JOIN vec_thin t ON t.node_id = g.id AND "
+                         "t.model_version = ? WHERE g.kind = 'document' AND g.label IS NOT NULL AND "
+                         "TRIM(g.label) != '' AND t.node_id IS NULL", (mv,)).fetchall()
+    rows = ([("doc", str(r[0])) for r in heads] + [("doc", str(r[0])) for r in tails]
+            + [("thin", r[0]) for r in titles])
+    done = threading.Event()
+    _queue.put(("__todo__", rows, mv, done), timeout=_HANDOFF_WAIT_S)
+    done.wait(_HANDOFF_WAIT_S)
+    logger.info("recall vec_todo listed %d doc(s) without a head vector, %d long doc(s) without passage "
+                "vectors, %d thin title(s) without a vector (%s, %.1fs)",
+                len(heads), len(tails), len(titles), mv, time.monotonic() - t0)
+
+
+def _apply_todo(con, item) -> None:
+    """Writer side of ``_seed_vec_todo``: insert the found rows and note the model, one transaction."""
+    _tag, rows, mv, done = item
+    try:
+        now = time.time()
+        con.execute("BEGIN")
+        con.executemany("INSERT OR IGNORE INTO vec_todo(lane, key, queued_at) VALUES(?, ?, ?)",
+                        [(lane, key, now) for lane, key in rows])
+        con.execute("INSERT OR REPLACE INTO meta(k, v) VALUES('vec_todo_model', ?)", (mv,))
+        _commit(con)
+    except Exception as exc:  # noqa: BLE001 -- the next start lists them again
+        logger.warning("recall vec_todo listing not stored: %s", exc)
+        _rollback(con)
+    finally:
+        done.set()
 
 
 def _final_flush(con) -> None:
     """On STOP, drain and apply the remaining queued items in BATCHES, each batch its OWN _apply (its
     own commit). Best-effort within the shutdown drain budget: committing incrementally means a budget
     overrun (the daemon abandoned mid-drain) loses only the un-drained TAIL, never the batches already
-    committed. Reuses the normal loop's _apply + _DRAIN batch size (no new write logic). FAIL-OPEN per
-    batch: a batch error is logged + rolled back, then the drain continues to the next batch (one bad
-    batch never strands the rest). Nothing is raised out of the daemon (shutdown is already underway)."""
+    committed. FAIL-OPEN per batch: a batch error is logged + rolled back, then the drain continues to
+    the next batch (one bad batch never strands the rest). Nothing is raised out of the daemon."""
     total = 0
     batches = 0
     while True:
         batch: list = []
         try:
-            for _ in range(_DRAIN):
+            while len(batch) < _DRAIN:
                 batch.append(_queue.get_nowait())
         except queue.Empty:
             pass
         if not batch:
             break
         try:
-            _process_writer_items(con, batch)
+            _apply(con, batch)
             total += len(batch)
             batches += 1
         except Exception as exc:  # noqa: BLE001 -- a batch error must not crash shutdown or strand the tail
@@ -711,22 +406,14 @@ def _final_flush(con) -> None:
                 _rollback(con)
             except Exception:  # noqa: BLE001
                 pass
-    while _JOURNAL_WAKE.is_set():
-        try:
-            applied = _process_writer_items(con, [], force_journal=True)
-            if applied == 0:
-                break
-        except Exception as exc:  # noqa: BLE001 -- shutdown must not crash on a corrupt journal
-            logger.warning("recall writer final journal replay failed closed: %s", exc)
-            break
     if total:
         logger.info("recall writer final flush on stop: applied %d queued item(s) in %d batch(es)",
                     total, batches)
 
 
+
 _vec_fail = 0                  # persistent batch-embed failures (surfaced in health — a fail-open
                                # that's also fail-SILENT-forever is how the vector layer dies unseen)
-_BACKFILL_PAGE = 64
 
 
 def vec_embed_failures() -> int:
@@ -747,8 +434,14 @@ def _rollback(con) -> None:
         store.discard_staged()
 
 
+def _todo(con, lane: str, key) -> None:
+    """List one row as not embedded yet (the embed worker takes it from here)."""
+    con.execute("INSERT OR IGNORE INTO vec_todo(lane, key, queued_at) VALUES(?, ?, ?)",
+                (lane, str(key), time.time()))
+
+
 def _delete_observation(con, source: str, source_id: str) -> None:
-    """Materialize a tombstone across both full and thin recall projections."""
+    """Delete one identity from both the full and the thin recall projections (the roll-off)."""
     row = con.execute(
         "SELECT rowid, seg FROM docs WHERE source = ? AND source_id = ?",
         (source, source_id),
@@ -759,6 +452,7 @@ def _delete_observation(con, source: str, source_id: str) -> None:
         con.execute("DELETE FROM vec_chunk WHERE rowid = ?", (rowid,))
         con.execute("DELETE FROM vec WHERE rowid = ?", (rowid,))
         con.execute("DELETE FROM docs WHERE rowid = ?", (rowid,))
+        con.execute("DELETE FROM vec_todo WHERE lane = 'doc' AND key = ?", (str(rowid),))
         store.stage_vec(rowid)
         store.stage_chunks(rowid)
     from omniseek.core.recall.graph import doc_node_id
@@ -768,160 +462,287 @@ def _delete_observation(con, source: str, source_id: str) -> None:
         con.execute("DELETE FROM graph_edges WHERE src = ? OR dst = ?", (node_id, node_id))
         con.execute("DELETE FROM vec_thin WHERE node_id = ?", (node_id,))
         con.execute("DELETE FROM graph_nodes WHERE id = ?", (node_id,))
+        con.execute("DELETE FROM vec_todo WHERE lane = 'thin' AND key = ?", (node_id,))
         store.stage_thin(node_id)
 
 
-def _apply(
-    con,
-    items,
-    *,
-    strict: bool = False,
-    journal_checkpoint: "tuple[int, str] | None" = None,
-) -> None:
+def _apply(con, items) -> None:
+    """Apply one batch of queue items in ONE transaction (observations, roll-off deletes, graph
+    batches, watermarks), then the vectors the embed worker handed in (``__vecs__``, their own
+    transaction)."""
     global _last_write_ts
     from omniseek.core import rank
     now = time.time()
     marks: list[tuple] = []
-    doc_batches: list[list] = []
+    docs: list = []
     thin_docs: list = []
     graph_batches: list[tuple] = []   # ('__graph__', nodes, edges) from enqueue_graph (the taps)
-    tombstones: list[JournaledObservation] = []
-    do_backfill = False
+    tombstones: list[tuple] = []
+    vec_items: list[tuple] = []
     for it in items:
-        if isinstance(it, tuple) and it:
-            if it[0] in ("__mark__", "__swept__"):
-                marks.append(it)
-            elif it[0] == "__backfill__":
-                do_backfill = True
-            elif it[0] == "__thin__":
-                thin_docs.append(it[-1])   # journal metadata precedes the thin document
-            elif it[0] == "__full__":
-                doc_batches.append([entry[-1] for entry in it[1]])
-            elif it[0] == "__tombstone__":
-                tombstones.append(it[1])
-            elif it[0] == "__graph__":
-                graph_batches.append(it)  # entity nodes + M/A edges (cartographer / enrich taps)
-            else:
-                doc_batches.append(it)
-        else:
-            doc_batches.append(it)
-    con.execute("BEGIN")
-    staged: list = []   # (rowid, raw_text) for docs that need (re-)embedding
-    chunk_staged: list = []   # (rowid, [tail passages]) for LONG docs that need (re-)embedding
-    for batch in doc_batches:
-        for d in batch:
+        tag = it[0] if isinstance(it, tuple) and it else None
+        if tag in ("__mark__", "__swept__"):
+            marks.append(it)
+        elif tag == "__obs__":
             try:
-                r = _upsert(con, rank, d, now)
-                if r:
-                    staged.append(r)
-                    _p = _chunk_passages(getattr(d, "title", "") or "", getattr(d, "content", "") or "")
-                    if _p:
-                        chunk_staged.append((r[0], _p))  # only (re-)embedded long docs chunk; backfill covers the rest
-            except Exception as exc:  # noqa: BLE001 — one bad doc never aborts the batch
-                if strict:
-                    raise
-                logger.debug("recall upsert skipped one doc: %s", exc)
-    thin_staged: list = []   # (node_id, title) for thin rows whose title needs embedding
-    for d in thin_docs:
-        try:
-            r = _upsert_thin(con, rank, d, now)   # graph_nodes document node, NEVER content
-            if r:
-                thin_staged.append(r)
-        except Exception as exc:  # noqa: BLE001 — one bad thin doc never aborts the batch
-            if strict:
-                raise
-            logger.debug("recall thin upsert skipped one doc: %s", exc)
-    for observation in tombstones:
-        try:
-            _delete_observation(con, observation.source, observation.source_id)
-        except Exception as exc:  # noqa: BLE001 -- legacy queue writes remain fail-open
-            if strict:
-                raise
-            logger.debug("recall tombstone skipped: %s", exc)
-    for _tag, gnodes, gedges in graph_batches:
-        try:
-            _apply_graph(con, gnodes, gedges, now)   # entity nodes + M/A edges, same transaction
-        except Exception as exc:  # noqa: BLE001 — one bad graph batch never aborts the write
-            logger.debug("recall graph apply skipped one batch: %s", exc)
-    for _tag, source, count, ts in marks:
-        try:
-            if _tag == "__swept__":   # when the ingest loop last swept it, whatever came of the sweep
-                con.execute("INSERT OR REPLACE INTO meta(k, v) VALUES(?, ?)",
-                            (store.SWEPT_KEY + source, repr(float(ts))))
+                d = Document.model_validate(it[2])
+            except Exception as exc:  # noqa: BLE001 — one bad observation never aborts the batch
+                logger.debug("recall observation skipped (invalid payload): %s", exc)
                 continue
-            con.execute("INSERT OR REPLACE INTO ingest_runs(source, ran_at, doc_count) VALUES(?,?,?)",
-                        (source, ts, count))
-        except Exception:  # noqa: BLE001
-            pass
-    if staged:
-        _embed_and_store(con, staged)   # ONE batched embed → vec rows, in this same transaction
-    if chunk_staged:
-        _embed_and_store_chunk(con, chunk_staged)   # long-doc TAIL passages → vec_chunk, same txn
-    if thin_staged:
-        _embed_and_store_thin(con, thin_staged)   # thin TITLE vectors → vec_thin, same txn
-    if journal_checkpoint is not None:
-        seq, event_hash = journal_checkpoint
-        con.execute("INSERT OR REPLACE INTO meta(k, v) VALUES('journal_materialized_seq', ?)",
-                    (str(seq),))
-        con.execute("INSERT OR REPLACE INTO meta(k, v) VALUES('journal_materialized_hash', ?)",
-                    (event_hash,))
-    _commit(con)
-    # Bring the vector matrices up to date HERE, on the writer thread, so the work stops landing on a
-    # search READ thread. Since 2026-10-09 this applies the changes the commit just published to the
-    # cached matrices in place (store._apply_deltas); a full rebuild from SQLite happens only on the
-    # first build, a model change or an undescribed change. Best-effort + fail-open: the read path
-    # applies the same pending changes on demand if this is skipped, so correctness never depends on it.
-    if staged or thin_staged or chunk_staged:
-        try:
-            if staged:
-                store._ensure_matrix(con)
-            if chunk_staged:
-                store._ensure_chunk_matrix(con)
-            if thin_staged:
-                store._ensure_thin_matrix(con)
-        except Exception as exc:  # noqa: BLE001 — a warm failure must never break the write path
-            logger.debug("recall matrix warm skipped: %s", exc)
-    if doc_batches:
-        _last_write_ts = now
-    if do_backfill:
-        _backfill_page(con)             # one bounded page (own txn), re-enqueues itself if more remain
+            (thin_docs if it[1] == "thin" else docs).append(d)
+        elif tag == "__tombstone__":
+            tombstones.append((it[1], it[2]))
+        elif tag == "__graph__":
+            graph_batches.append(it)  # entity nodes + M/A edges (cartographer / enrich taps)
+        elif tag in ("__vecs__", "__todo__"):
+            vec_items.append(it)
+    if docs or thin_docs or tombstones or graph_batches or marks:
+        con.execute("BEGIN")
+        queued = False
+        for d in docs:
+            try:
+                queued = _upsert(con, rank, d, now) or queued
+            except Exception as exc:  # noqa: BLE001 — one bad doc never aborts the batch
+                logger.debug("recall upsert skipped one doc: %s", exc)
+        for d in thin_docs:
+            try:
+                queued = _upsert_thin(con, rank, d, now) or queued   # graph_nodes document node, NEVER content
+            except Exception as exc:  # noqa: BLE001 — one bad thin doc never aborts the batch
+                logger.debug("recall thin upsert skipped one doc: %s", exc)
+        for source, source_id in tombstones:
+            try:
+                _delete_observation(con, source, source_id)
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("recall tombstone skipped: %s", exc)
+        for _tag, gnodes, gedges in graph_batches:
+            try:
+                _apply_graph(con, gnodes, gedges, now)   # entity nodes + M/A edges, same transaction
+            except Exception as exc:  # noqa: BLE001 — one bad graph batch never aborts the write
+                logger.debug("recall graph apply skipped one batch: %s", exc)
+        for _tag, source, count, ts in marks:
+            try:
+                if _tag == "__swept__":   # when the ingest loop last swept it, whatever came of the sweep
+                    con.execute("INSERT OR REPLACE INTO meta(k, v) VALUES(?, ?)",
+                                (store.SWEPT_KEY + source, repr(float(ts))))
+                    continue
+                con.execute("INSERT OR REPLACE INTO ingest_runs(source, ran_at, doc_count) VALUES(?,?,?)",
+                            (source, ts, count))
+            except Exception:  # noqa: BLE001
+                pass
+        _commit(con)
+        if docs:
+            _last_write_ts = now
+        if queued:
+            _VEC_WAKE.set()
+    for it in vec_items:
+        (_apply_todo if it[0] == "__todo__" else _apply_vecs)(con, it)
 
 
-def _embed_and_store(con, staged) -> None:
-    """Embed the staged ``(rowid, text)`` batch ONCE and write the vectors in the CURRENT transaction
-    (atomic with the doc rows). FAIL-OPEN: embedder disabled or a forward failure → those docs stay
-    lexical-only (a first-class state, never an error), the failure is counted for health."""
-    global _vec_fail
+# ── Embedding, after the write ──────────────────────────────────────────────
+# A row that needs a vector is listed in vec_todo when it is written: lane 'doc' (key docs.rowid: its
+# head vector over title + content[:_CHUNK_SIZE], and its tail passages when it is long) and lane 'thin'
+# (key graph_nodes.id: its title). Until its vectors are written the row is found by the lexical recall
+# only. ONE embed worker (``_embed_loop``, thread recall-embed) reads a page of listed rows on its own
+# read connection, computes the vectors outside any transaction, and hands them to the writer
+# (``__vecs__``), which stores them only if the row is still what was embedded (docs.version, the thin
+# label) and takes the row off the list, in one transaction; so there is still one writer, and the
+# observation writes never wait on the model. Documents go before thin titles (the documents feed
+# omniseek_search's vector arm, the titles only ``similar``); within a lane the oldest listed goes first.
+# A page whose forward fails is set aside until the next start (the rows stay listed and are found
+# lexically).
+# _EMBED_PASSAGES (texts per page) is PROVISIONAL. The MPS memory does not depend on it: embed_passage
+# runs forwards of at most embed._PASSAGE_LOCK_CHUNK (4) texts, each forward's buffers stay under
+# embed._MPS_BUF_CAP (8 MiB) and the device cache is released after every forward, so the MPS peak is
+# the weights plus one forward of 4 whatever the page holds. What the page sets is how long a row waits
+# between its first forward and being stored, which is also the computed work a hard restart throws
+# away: at the calibrated 111 ms a text in forwards of 4 (embed.py), 64 texts is about 7 s. The writer
+# transaction that stores a page is 64 rows of 4 KB, milliseconds. A long document is up to
+# 1 + _CHUNK_MAX = 17 texts, so a page holds at least three of them; a document is never split across
+# pages. Calibrate from the replay readings (texts a second, the backlog curve): a larger page only
+# pays when the per-call cost dominates, which it does not past 4 texts a forward.
+_EMBED_PASSAGES = 64
+_VEC_WAKE = threading.Event()
+_EMBED_STOP = threading.Event()
+_HANDOFF_WAIT_S = 60.0
+_BOOTED = {"event": threading.Event()}   # set by the writer once it has its connection
+_vec_skip: set = set()          # (lane, key) whose forward failed in this process: retried after a restart
+
+
+def _embed_loop() -> None:
+    """The embed worker. Not registered with eye.lifecycle: it has nothing to flush (whatever it has
+    not stored stays listed in vec_todo for the next process), and a forward in progress must not
+    spend the shared shutdown budget the writer's final flush needs. The writer stops it."""
     from omniseek.core.recall import embed
-    if not embed.available():
-        return
-    vecs = embed.embed_passage([t for (_rid, t) in staged])
-    if vecs is None or len(vecs) != len(staged):
-        _vec_fail += 1
-        logger.debug("recall: batch embed failed/short → %d docs lexical-only", len(staged))
-        return
-    mv, dim = embed.MODEL_VERSION, embed.DIM
-    sources = _doc_sources(con, [rid for (rid, _t) in staged])
-    for (rid, _t), v in zip(staged, vecs):
+    con = None
+    seeded = False
+    while not _EMBED_STOP.is_set():
+        if not seeded:
+            if not _BOOTED["event"].wait(_STOP_POLL_S):
+                continue
+            try:
+                con = store.connect()
+                _seed_vec_todo(con)
+            except Exception as exc:  # noqa: BLE001 -- the next start lists them; new rows are listed anyway
+                logger.warning("recall vec_todo seeding failed: %s", exc)
+            seeded = True
+        did = 0
         try:
-            v32 = v.astype("float32")
+            from omniseek.core import recall
+            if embed.available() and not recall.warming():   # the boot warmup loads the model first
+                if con is None:
+                    con = store.connect()
+                did = _embed_page(con, embed)
+        except Exception as exc:  # noqa: BLE001 — never let the worker die
+            logger.warning("recall embed cycle errored: %s", exc)
+        if not did:
+            _VEC_WAKE.wait(_STOP_POLL_S)
+            _VEC_WAKE.clear()
+
+
+def _embed_page(con, embed) -> int:
+    """Embed one page of listed rows and hand the vectors to the writer; return how many rows it
+    settled (embedded, set aside or found gone), 0 when there was nothing to do."""
+    global _vec_fail
+    skip = _vec_skip
+    texts: list = []
+    plan_docs: list = []     # (rowid, version, first text index, passages)
+    plan_thin: list = []     # (node id, label, text index)
+    gone: list = []          # (lane, key) whose row is no longer there (or has no title)
+    rows = con.execute(
+        "SELECT t.key, d.rowid, d.version, d.title, d.content FROM vec_todo t "
+        "LEFT JOIN docs d ON d.rowid = CAST(t.key AS INTEGER) WHERE t.lane = 'doc' "
+        "ORDER BY t.queued_at LIMIT ?", (_EMBED_PASSAGES + len(skip),)).fetchall()
+    for key, rid, version, title, content in rows:
+        if ("doc", key) in skip:
+            continue
+        if rid is None:
+            gone.append(("doc", key))
+            continue
+        head = _embed_text(title, content)
+        passages = _chunk_passages(title or "", content or "")
+        if texts and len(texts) + 1 + len(passages) > _EMBED_PASSAGES:
+            break
+        plan_docs.append((rid, version, len(texts), len(passages)))
+        texts.append(head)
+        texts.extend(passages)
+    if len(texts) < _EMBED_PASSAGES:
+        rows = con.execute(
+            "SELECT t.key, g.label FROM vec_todo t LEFT JOIN graph_nodes g ON g.id = t.key "
+            "WHERE t.lane = 'thin' ORDER BY t.queued_at LIMIT ?",
+            (_EMBED_PASSAGES - len(texts) + len(skip),)).fetchall()
+        for key, label in rows:
+            if ("thin", key) in skip:
+                continue
+            label = (label or "").strip()
+            if not label:
+                gone.append(("thin", key))
+                continue
+            if len(texts) >= _EMBED_PASSAGES:
+                break
+            plan_thin.append((key, label, len(texts)))
+            texts.append(label)
+    if not texts and not gone:
+        return 0
+    keys = [("doc", str(p[0])) for p in plan_docs] + [("thin", p[0]) for p in plan_thin]
+    docs_out: list = []
+    thin_out: list = []
+    if texts:
+        vecs = embed.embed_passage(texts)
+        if vecs is None or len(vecs) != len(texts):
+            _vec_fail += 1
+            skip.update(keys)
+            logger.warning("recall embed: a page of %d text(s) failed; its %d row(s) stay lexical-only "
+                           "until the next start", len(texts), len(keys))
+            if not gone:
+                return len(keys)
+            keys = []
+            texts = []
+        else:
+            docs_out = [(rid, version, vecs[i], list(vecs[i + 1:i + 1 + n])) for rid, version, i, n in plan_docs]
+            thin_out = [(key, label, vecs[i]) for key, label, i in plan_thin]
+    done = threading.Event()
+    box: dict = {}
+    try:
+        _queue.put(("__vecs__", docs_out, thin_out, gone, done, box), timeout=_HANDOFF_WAIT_S)
+    except queue.Full:
+        return 0
+    deadline = time.monotonic() + _HANDOFF_WAIT_S
+    while not done.wait(_STOP_POLL_S):
+        if time.monotonic() > deadline:
+            return 0   # the writer is stuck or gone: the rows stay listed
+    if not box.get("ok"):
+        skip.update(keys)
+    return len(texts) + len(gone) or 1
+
+
+def _apply_vecs(con, item) -> None:
+    """Store the vectors the embed worker computed (writer thread, one transaction): only for rows
+    still as they were embedded; each stored row leaves vec_todo. Tells the worker when done."""
+    _tag, docs_out, thin_out, gone, done, box = item
+    from omniseek.core.recall import embed
+    mv, dim = embed.MODEL_VERSION, embed.DIM
+    wrote_doc = wrote_chunk = wrote_thin = False
+    try:
+        con.execute("BEGIN")
+        for rid, version, head, chunks in docs_out:
+            row = con.execute("SELECT version, source FROM docs WHERE rowid = ?", (rid,)).fetchone()
+            if row is None or row[0] != version:
+                continue   # deleted or rewritten since it was read: a rewrite listed it again
+            v32 = head.astype("float32")
             con.execute("INSERT OR REPLACE INTO vec(rowid, model_version, dim, v) VALUES(?,?,?,?)",
                         (rid, mv, dim, v32.tobytes()))
-            store.stage_vec(rid, v32, sources.get(rid), mv)  # applied to the matrix after commit
-        except Exception as exc:  # noqa: BLE001
-            logger.debug("recall vec write skipped: %s", exc)
-
-
-def _doc_sources(con, rowids) -> dict:
-    """``{docs.rowid: docs.source}`` for the given rowids (the matrices' per-row source scope)."""
-    out: dict = {}
-    rowids = list(rowids)
-    for i in range(0, len(rowids), 500):
-        part = rowids[i:i + 500]
-        marks = ",".join("?" * len(part))
-        for rid, src in con.execute(f"SELECT rowid, source FROM docs WHERE rowid IN ({marks})", part):
-            out[int(rid)] = src
-    return out
+            store.stage_vec(rid, v32, row[1], mv)
+            cleared = con.execute("DELETE FROM vec_chunk WHERE rowid = ?", (rid,)).rowcount
+            cvs = [c.astype("float32") for c in chunks]
+            for idx, c in enumerate(cvs):
+                con.execute("INSERT OR REPLACE INTO vec_chunk(rowid, chunk_idx, model_version, dim, v) "
+                            "VALUES(?,?,?,?,?)", (rid, idx, mv, dim, c.tobytes()))
+            if cvs or cleared:
+                store.stage_chunks(rid, cvs, row[1], mv)
+                wrote_chunk = True
+            con.execute("DELETE FROM vec_todo WHERE lane = 'doc' AND key = ?", (str(rid),))
+            wrote_doc = True
+        for key, label, v in thin_out:
+            row = con.execute("SELECT label FROM graph_nodes WHERE id = ?", (key,)).fetchone()
+            if row is None or (row[0] or "").strip() != label:
+                continue
+            v32 = v.astype("float32")
+            con.execute("INSERT OR REPLACE INTO vec_thin(node_id, model_version, dim, v) VALUES(?,?,?,?)",
+                        (key, mv, dim, v32.tobytes()))
+            store.stage_thin(key, v32, mv)
+            con.execute("DELETE FROM vec_todo WHERE lane = 'thin' AND key = ?", (key,))
+            wrote_thin = True
+        for lane, key in gone:
+            if lane == "doc":
+                if con.execute("SELECT 1 FROM docs WHERE rowid = ?", (int(key),)).fetchone() is None:
+                    con.execute("DELETE FROM vec_todo WHERE lane = 'doc' AND key = ?", (key,))
+            else:
+                row = con.execute("SELECT label FROM graph_nodes WHERE id = ?", (key,)).fetchone()
+                if row is None or not (row[0] or "").strip():
+                    con.execute("DELETE FROM vec_todo WHERE lane = 'thin' AND key = ?", (key,))
+        _commit(con)
+        box["ok"] = True
+    except Exception as exc:  # noqa: BLE001 — the rows stay listed
+        logger.warning("recall vector write failed: %s", exc)
+        try:
+            _rollback(con)
+        except Exception:  # noqa: BLE001
+            pass
+    finally:
+        done.set()
+    # Bring the vector matrices up to date HERE, on the writer thread, so the work stops landing on a
+    # search READ thread: the changes the commit just published are applied to the cached matrices in
+    # place (store._apply_deltas). Best-effort + fail-open: the read path applies the same pending
+    # changes on demand if this is skipped, so correctness never depends on it.
+    try:
+        if wrote_doc:
+            store._ensure_matrix(con)
+        if wrote_chunk:
+            store._ensure_chunk_matrix(con)
+        if wrote_thin:
+            store._ensure_thin_matrix(con)
+    except Exception as exc:  # noqa: BLE001 — a warm failure must never break the write path
+        logger.debug("recall matrix warm skipped: %s", exc)
 
 
 # ── chunk embeddings: a LONG doc's TAIL passages (content beyond the head vec's first _CHUNK_SIZE
@@ -952,229 +773,6 @@ def _chunk_passages(title: str, content: str) -> list:
     return out
 
 
-def _embed_and_store_chunk(con, doc_chunks) -> None:
-    """Embed a batch of long docs' TAIL passages ONCE and write them to ``vec_chunk`` in the CURRENT
-    transaction (atomic with the doc rows). ``doc_chunks`` = ``[(rowid, [passage, ...]), ...]``. Clears a
-    doc's OLD chunk rows first (a content change / re-embed) so chunk_idx stays contiguous and no stale
-    passages linger, then inserts the fresh set. FAIL-OPEN: an embed failure leaves those docs with just
-    their head vec (a first-class state), mirroring ``_embed_and_store``."""
-    global _vec_fail
-    from omniseek.core.recall import embed
-    if not embed.available():
-        return
-    flat = [(rid, idx, txt) for (rid, passages) in doc_chunks for idx, txt in enumerate(passages)]
-    if not flat:
-        return
-    vecs = embed.embed_passage([txt for (_r, _i, txt) in flat])
-    if vecs is None or len(vecs) != len(flat):
-        _vec_fail += 1
-        logger.debug("recall: chunk batch embed failed/short → %d passages skipped", len(flat))
-        return
-    mv, dim = embed.MODEL_VERSION, embed.DIM
-    cleared = set()
-    for (rid, _passages) in doc_chunks:
-        try:
-            con.execute("DELETE FROM vec_chunk WHERE rowid = ?", (rid,))  # drop stale passages first
-            cleared.add(rid)
-        except Exception as exc:  # noqa: BLE001
-            logger.debug("recall vec_chunk clear skipped: %s", exc)
-    written: dict = {}
-    for (rid, idx, _txt), v in zip(flat, vecs):
-        try:
-            v32 = v.astype("float32")
-            con.execute("INSERT OR REPLACE INTO vec_chunk(rowid, chunk_idx, model_version, dim, v) "
-                        "VALUES(?,?,?,?,?)", (rid, idx, mv, dim, v32.tobytes()))
-            written.setdefault(rid, []).append(v32)
-        except Exception as exc:  # noqa: BLE001
-            logger.debug("recall vec_chunk write skipped: %s", exc)
-    sources = _doc_sources(con, written.keys())
-    for rid in cleared | set(written):
-        if rid in cleared:
-            # The doc's chunk rows are now exactly what was written (applied to the matrix after commit).
-            store.stage_chunks(rid, written.get(rid, []), sources.get(rid), mv)
-        else:
-            store.note_chunk_write()  # the clear failed: old and new rows mix, so rebuild from SQLite
-
-
-def _embed_and_store_thin(con, staged) -> None:
-    """phase 7: embed a staged ``(node_id, title)`` batch of THIN rows ONCE and write the vectors into
-    ``vec_thin`` in the CURRENT transaction (atomic with the thin node upserts). Mirrors
-    ``_embed_and_store`` for the thin lane: FAIL-OPEN at the ROW level (embedder disabled or a forward
-    failure -> those thin rows stay un-embedded, a first-class state; ``similar`` just does not see
-    them until the catch-up embeds them; the coverage gauge is the visibility, not per-row logs). The
-    TITLE is the passage (a thin row has no content); same MODEL_VERSION + embedder as ``vec`` so both
-    live in ONE cosine space."""
-    global _vec_fail
-    from omniseek.core.recall import embed
-    if not embed.available():
-        return
-    titles = [t for (_nid, t) in staged]
-    vecs = embed.embed_passage(titles)
-    if vecs is None or len(vecs) != len(staged):
-        _vec_fail += 1
-        logger.debug("recall: thin batch embed failed/short → %d thin rows un-embedded", len(staged))
-        return
-    mv, dim = embed.MODEL_VERSION, embed.DIM
-    for (nid, _t), v in zip(staged, vecs):
-        try:
-            v32 = v.astype("float32")
-            con.execute(
-                "INSERT OR REPLACE INTO vec_thin(node_id, model_version, dim, v) VALUES(?,?,?,?)",
-                (nid, mv, dim, v32.tobytes()))
-            store.stage_thin(nid, v32, mv)  # applied to the thin matrix after commit
-        except Exception as exc:  # noqa: BLE001
-            logger.debug("recall vec_thin write skipped: %s", exc)
-
-
-_THIN_CATCHUP_PAGE = 50   # thin rows the idle catch-up embeds per cycle (bounded; monotone convergence)
-
-
-def _thin_catchup(con) -> int:
-    """phase 7 self-converging catch-up (no script, no cron): embed up to ``_THIN_CATCHUP_PAGE`` thin rows
-    that HAVE a title (graph_nodes.label) but NO ``vec_thin`` row for the current model_version, in one
-    bounded page + own transaction. Called at the writer's IDLE point (after the queue drains — see
-    ``_writer_loop``), so it NEVER delays a queued write (drain first, then catch up). Monotone
-    convergence: committed rows drop out of the WHERE, so each cycle shrinks the backlog until it hits
-    zero and then costs one cheap empty query. Returns the number embedded this cycle (0 when caught
-    up or the embedder is unavailable). FAIL-OPEN — a catch-up failure never touches search."""
-    from omniseek.core.recall import embed
-    if not embed.available():
-        return 0
-    mv = embed.MODEL_VERSION
-    try:
-        rows = con.execute(
-            "SELECT g.id, g.label FROM graph_nodes g "
-            "LEFT JOIN vec_thin t ON t.node_id = g.id AND t.model_version = ? "
-            "WHERE g.kind = 'document' AND g.label IS NOT NULL AND TRIM(g.label) != '' "
-            "AND t.node_id IS NULL LIMIT ?", (mv, _THIN_CATCHUP_PAGE),
-        ).fetchall()
-    except Exception as exc:  # noqa: BLE001
-        logger.debug("recall thin catch-up query failed: %s", exc)
-        return 0
-    if not rows:
-        return 0   # caught up: every titled thin row has a current-model vec_thin vector
-    staged = [(r[0], (r[1] or "").strip()) for r in rows if (r[1] or "").strip()]
-    # LEGACY whitespace-only labels (a pre-fix nbsp title survives SQLite's ASCII-only TRIM but
-    # Python-strips to empty): normalize them to NULL so they leave the WHERE clause permanently.
-    # Without this the same unembeddable page is re-fetched every idle cycle and can starve real
-    # titled rows out of the LIMIT. New rows store Python-stripped labels, so this arm only ever
-    # touches legacy data, then goes quiet (true convergence, not a filtered spin).
-    ghost = [r[0] for r in rows if not (r[1] or "").strip()]
-    if ghost:
-        try:
-            marks = ",".join("?" * len(ghost))
-            con.execute(f"UPDATE graph_nodes SET label = NULL WHERE id IN ({marks})", ghost)
-            _commit(con)
-        except Exception as exc:  # noqa: BLE001
-            logger.debug("recall thin catch-up label normalization failed: %s", exc)
-    if not staged:
-        return 0
-    try:
-        con.execute("BEGIN")
-        _embed_and_store_thin(con, staged)
-        _commit(con)
-    except Exception as exc:  # noqa: BLE001
-        logger.debug("recall thin catch-up write failed: %s", exc)
-        try:
-            _rollback(con)
-        except Exception:  # noqa: BLE001
-            pass
-        return 0
-    logger.info("recall thin catch-up: embedded a page of %d thin titles into vec_thin", len(staged))
-    return len(staged)
-
-
-_CHUNK_CATCHUP_PAGE = 40   # long docs the idle catch-up chunk-embeds per cycle (bounded; converges to 0)
-
-
-def _chunk_catchup(con) -> int:
-    """Self-converging catch-up (no script, no cron, SINGLE-WRITER safe): chunk-embed up to
-    ``_CHUNK_CATCHUP_PAGE`` LONG docs (content > _CHUNK_SIZE) that have NO ``vec_chunk`` row for the
-    current model_version, one bounded page + own transaction. Called at the writer's IDLE point (after
-    the queue drains + the thin catch-up), so it NEVER delays a queued write. This is how the PRE-EXISTING
-    long docs get their tail passages (new long docs chunk on ingest via _embed_and_store_chunk).
-    Monotone convergence: a chunked doc gains vec_chunk rows and drops out of the WHERE, so each cycle
-    shrinks the backlog to zero, then a cheap empty query. FAIL-OPEN — a catch-up failure never touches
-    search."""
-    from omniseek.core.recall import embed
-    if not embed.available():
-        return 0
-    mv = embed.MODEL_VERSION
-    try:
-        rows = con.execute(
-            "SELECT d.rowid, d.title, d.content FROM docs d "
-            "LEFT JOIN vec_chunk c ON c.rowid = d.rowid AND c.model_version = ? "
-            "WHERE c.rowid IS NULL AND length(d.content) > ? LIMIT ?",
-            (mv, _CHUNK_SIZE, _CHUNK_CATCHUP_PAGE),
-        ).fetchall()
-    except Exception as exc:  # noqa: BLE001
-        logger.debug("recall chunk catch-up query failed: %s", exc)
-        return 0
-    if not rows:
-        return 0   # caught up: every long doc has current-model chunk rows
-    doc_chunks = [(rid, p) for (rid, title, content) in rows
-                  if (p := _chunk_passages(title or "", content or ""))]
-    if not doc_chunks:
-        return 0   # a rare all-whitespace tail: nothing to embed this page (benign; re-checked next idle)
-    try:
-        con.execute("BEGIN")
-        _embed_and_store_chunk(con, doc_chunks)
-        _commit(con)
-    except Exception as exc:  # noqa: BLE001
-        logger.debug("recall chunk catch-up write failed: %s", exc)
-        try:
-            _rollback(con)
-        except Exception:  # noqa: BLE001
-            pass
-        return 0
-    logger.info("recall chunk catch-up: chunk-embedded a page of %d long docs into vec_chunk", len(doc_chunks))
-    return len(doc_chunks)
-
-
-def _backfill_page(con) -> None:
-    """Embed ONE bounded page of docs missing a current-model_version vector, commit, then re-enqueue
-    itself if more remain — so backfill interleaves with live ingest (one page per writer turn, never
-    starves it) and is restart-safe (committed rows drop out of the WHERE, so re-running resumes)."""
-    global _last_write_ts
-    from omniseek.core.recall import embed
-    if not embed.available():
-        return
-    mv = embed.MODEL_VERSION
-    try:
-        rows = con.execute(
-            "SELECT d.rowid, d.title, d.content FROM docs d "
-            "LEFT JOIN vec v ON v.rowid = d.rowid AND v.model_version = ? "
-            "WHERE v.rowid IS NULL LIMIT ?", (mv, _BACKFILL_PAGE),
-        ).fetchall()
-    except Exception as exc:  # noqa: BLE001
-        logger.debug("recall backfill query failed: %s", exc)
-        return
-    if not rows:
-        logger.info("recall backfill complete (every doc has a %s vector)", mv)
-        return
-    staged = [(r[0], ((r[1] or "") + "\n" + (r[2] or "")).strip()[:2000]) for r in rows]
-    con.execute("BEGIN")
-    _embed_and_store(con, staged)
-    _commit(con)
-    _last_write_ts = time.time()
-    logger.info("recall backfill: embedded a page of %d docs; re-enqueueing", len(staged))
-    try:
-        _queue.put_nowait(("__backfill__",))
-    except Exception:  # noqa: BLE001
-        pass
-
-
-def start_backfill() -> None:
-    """Kick off the page-at-a-time backfill of vectors for the existing corpus (and after a model
-    swap). No-op unless writes are enabled (eye-http process only)."""
-    if not WRITES_ENABLED or store._disabled:
-        return
-    try:
-        _queue.put_nowait(("__backfill__",))
-    except Exception:  # noqa: BLE001
-        pass
-
-
 def _doc_json(d: Document) -> str:
     data = d.model_dump(mode="json")
     md = data.get("metadata")
@@ -1192,10 +790,10 @@ def _dt(date) -> Optional[str]:
         return str(date)
 
 
-def _embed_text(d: Document) -> str:
+def _embed_text(title: "str | None", content: "str | None") -> str:
     """RAW title+content for the SEMANTIC embedder (NOT docs.seg, which is the lexical bigram
     shadow — feeding that to a semantic model is garbage). Capped so a giant doc can't stall a batch."""
-    return ((d.title or "") + "\n" + (d.content or "")).strip()[:2000]
+    return ((title or "") + "\n" + (content or "")).strip()[:2000]
 
 
 _THIN_LABEL_CAP = 200               # title cap for a thin document node's label (design section 3)
@@ -1232,20 +830,21 @@ def _upsert_thin(con, rank, d: Document, now: float):
     row exists); ``last_seen`` is bumped. An indexable doc NEVER reaches here (it gets a full docs
     row, which the union view already surfaces — no double node).
 
-    returns ``(node_id, title)`` when the thin row HAS a title (so the caller can batch-embed the
-    title into vec_thin, letting ``similar`` see the whole perception history), else ``None`` (no
-    title -> nothing to embed). The embed itself is off the hot path (writer daemon thread, batched in
-    ``_apply``) and fail-open, so a thin row is upserted whether or not its title ever embeds."""
+    its title (the label) is embedded into vec_thin, letting ``similar`` see the whole perception
+    history. Returns True when the row was listed for that (vec_todo, lane 'thin'): a new node with a
+    title, or a title that changed (whose old vector is dropped here). The embed itself is the embed
+    worker's, after the commit, and fail-open, so a thin row is upserted whether or not its title ever
+    embeds."""
     source = getattr(d, "source", None)
     sid = str(getattr(d, "source_id", None) or getattr(d, "url", None) or "")
     if not source or not sid:
-        return None
+        return False
     from omniseek.core.recall.graph import doc_node_id
     nid = doc_node_id(source, sid)
-    # STRIPPED before the cap: the embed staging + the catch-up SQL both key on "has a real
-    # title", and an unstripped whitespace-only label (e.g. an nbsp from scraped HTML) would
-    # pass the SQL's label != '' forever while the staging strip drops it -> a catch-up page
-    # that never converges. One strip here keeps every downstream predicate in agreement.
+    old = con.execute("SELECT label FROM graph_nodes WHERE id = ?", (nid,)).fetchone()
+    # STRIPPED before the cap: the vec_todo seeding SQL and the embed worker both key on "has a real
+    # title", and an unstripped whitespace-only label (e.g. an nbsp from scraped HTML) would pass the
+    # SQL's label != '' while the worker's strip drops it. One strip here keeps them in agreement.
     label = (d.title or "").strip()[:_THIN_LABEL_CAP] or None
     try:
         fp = rank.fingerprint(d)
@@ -1261,9 +860,16 @@ def _upsert_thin(con, rank, d: Document, now: float):
     # The shared node upsert: first_seen preserved on conflict, last_seen bumped, label/attrs
     # refreshed (last write wins) — the semantics, now one code path for thin + entity lanes.
     _upsert_node(con, nid, "document", label, attrs_json, now)
-    # phase 7 title-embed staging: only when the row carries a title (the TITLE is embedded, not the url/fp).
-    title = (d.title or "").strip()
-    return (nid, title) if title else None
+    # phase 7 title vector: listed only for a new title (the TITLE is embedded, not the url/fp); a
+    # re-observation with the same title keeps its vector (or its place on the list).
+    if old is not None and old[0] == label:
+        return False
+    if old is not None and con.execute("DELETE FROM vec_thin WHERE node_id = ?", (nid,)).rowcount:
+        store.stage_thin(nid)
+    if label:
+        _todo(con, "thin", nid)
+        return True
+    return False
 
 
 # ── Graph lanes (design sections 4-6): generalize the thin lane to entity nodes + M/A edges ──
@@ -1344,12 +950,13 @@ def _apply_graph(con, nodes: list, edges: list, now: float) -> None:
 
 
 def _upsert(con, rank, d: Document, now: float):
-    """Upsert one doc. Returns ``(rowid, raw_text)`` when the doc NEEDS (re-)embedding (new doc, or
-    content changed), else ``None`` (unchanged → just a last_seen bump, no re-embed)."""
+    """Upsert one doc. Returns True when the doc NEEDS (re-)embedding (new doc, or content changed)
+    and was listed in vec_todo for the embed worker, else False (unchanged → just a last_seen bump,
+    no re-embed)."""
     source = getattr(d, "source", None)
     sid = str(getattr(d, "source_id", None) or getattr(d, "url", None) or "")
     if not source or not sid:
-        return None
+        return False
     seg = store.segment_doc(d)              # title + content + TAGS (SEG_VERSION 2)
     sver = store.SEG_VERSION
     chash = store.content_hash(d)
@@ -1369,9 +976,10 @@ def _upsert(con, rank, d: Document, now: float):
         # older rule (e.g. without tags), so re-index it. (old_sver may be NULL on a legacy row.)
         if chash == old_hash and (old_sver or 1) >= sver:
             con.execute("UPDATE docs SET last_seen = ? WHERE rowid = ?", (now, rowid))
-            return None
+            return False
         # content (or seg derivation) changed -> version bump + rewrite row, the external-content FTS
-        # entry, AND drop the now-stale vector (a failed re-embed leaves NO vector, lexical-only).
+        # entry, AND drop the now-stale vectors (head and passages): the row is lexical-only until the
+        # embed worker writes the new ones.
         con.execute("INSERT INTO fts(fts, rowid, seg) VALUES('delete', ?, ?)", (rowid, old_seg))
         con.execute(
             "UPDATE docs SET fp=?, url=?, title=?, content=?, author=?, date=?, score=?, doc_json=?, "
@@ -1382,7 +990,10 @@ def _upsert(con, rank, d: Document, now: float):
         con.execute("INSERT INTO fts(rowid, seg) VALUES(?, ?)", (rowid, seg))
         con.execute("DELETE FROM vec WHERE rowid = ?", (rowid,))
         store.stage_vec(rowid)  # the stale vector leaves the matrix too (a re-embed stages the new one)
-        return (rowid, _embed_text(d))
+        if con.execute("DELETE FROM vec_chunk WHERE rowid = ?", (rowid,)).rowcount:
+            store.stage_chunks(rowid)
+        _todo(con, "doc", rowid)
+        return True
     cur = con.execute(
         "INSERT INTO docs(source, source_id, fp, url, title, content, author, date, score, "
         "doc_json, seg, seg_version, content_hash, first_seen, last_seen, version, immutable) "
@@ -1391,17 +1002,18 @@ def _upsert(con, rank, d: Document, now: float):
          sver, chash, now, now, 1 if source in _IMMUTABLE else 0),
     )
     con.execute("INSERT INTO fts(rowid, seg) VALUES(?, ?)", (cur.lastrowid, seg))
-    return (cur.lastrowid, _embed_text(d))
+    _todo(con, "doc", cur.lastrowid)
+    return True
 
 
 def _sweep(con) -> None:
-    """Journal mechanical roll-off before deleting either SQLite projection.
+    """Mechanical roll-off: delete what was last seen more than RETAIN_DAYS ago, in one transaction.
 
     Two lanes with the SAME cutoff: (1) full docs rows (never immutable ones); (2) THIN document
     nodes in graph_nodes (``kind='document'``) — a thin doc's perception memory rolls off on the
     same clock as content memory. NON-document graph_nodes kinds (entities: work / person / ...) are
     EXEMPT: entities persist indefinitely (design's lifecycle section — small rows, relation memory
-    may outlive content memory)."""
+    may outlive content memory). Each identity goes from both projections (``_delete_observation``)."""
     cutoff = time.time() - RETAIN_DAYS * 86400
     try:
         stale = con.execute(
@@ -1412,53 +1024,18 @@ def _sweep(con) -> None:
         ).fetchall()
         if not stale and not stale_thin:
             return
-        identities = {(source, source_id): "full" for source, source_id in stale}
+        identities = {(source, source_id) for source, source_id in stale}
         for (nid,) in stale_thin:
             parts = nid.split(":", 2)
             if len(parts) != 3 or parts[0] != "doc" or not parts[1] or not parts[2]:
                 logger.warning("recall roll-off kept malformed document node id %r", nid)
                 continue
-            identities.setdefault((parts[1], parts[2]), "thin")
-
-        journal = _journal()
-        materialized_through = _materialization_cursor(con, journal)
-        appended = 0
-        pending = 0
-        failed = 0
-        from omniseek.core import fetcher
-        for (source, source_id), lane in sorted(identities.items()):
-            privacy_namespace = "walled" if fetcher.is_walled_source(source) else "public"
-            try:
-                receipt = journal.append_tombstone(
-                    source=source,
-                    source_id=source_id,
-                    observed_at=time.time(),
-                    provenance="sweep",
-                    privacy_namespace=privacy_namespace,
-                    reason="expired",
-                    lane=lane,
-                    materialized_through=materialized_through,
-                )
-            except Exception as exc:  # noqa: BLE001 -- unjournaled rows must remain materialized
-                failed += 1
-                _record_journal_failure(f"sweep tombstone {source}:{source_id}", exc)
-                continue
-            if receipt is None:
-                pending += 1
-            else:
-                appended += 1
-                _JOURNAL_WAKE.set()
-
-        materialized = _materialize_pending(con, journal)
-        if _materialization_cursor(con, journal) < journal.head_seq:
-            _JOURNAL_WAKE.set()
-        else:
-            _JOURNAL_WAKE.clear()
-        logger.info(
-            "recall roll-off considered %d identities older than %dd: "
-            "journaled=%d pending=%d failed=%d materialized=%d",
-            len(identities), RETAIN_DAYS, appended, pending, failed, materialized,
-        )
+            identities.add((parts[1], parts[2]))
+        con.execute("BEGIN")
+        for source, source_id in sorted(identities):
+            _delete_observation(con, source, source_id)
+        _commit(con)
+        logger.info("recall roll-off deleted %d identities older than %dd", len(identities), RETAIN_DAYS)
     except Exception as exc:  # noqa: BLE001
         logger.debug("recall sweep skipped: %s", exc)
         try:

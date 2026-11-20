@@ -136,7 +136,7 @@ class MLCollectiveAdapter(SourceBase):
     description = "ML Collective: free ML research mentorship + research jams + DLCT reading group"
 
     async def _ascrape_index(self, path: str) -> list[dict]:
-        """Async replacement of the deleted sync ``_scrape_index`` (11-04, async step seven; this is the only one now) (mirrors it line-for-line): the disk cache round-trip goes
+        """Async ``_scrape_index`` (mirrors it line-for-line): the disk cache round-trip goes
         OFF the loop, the ``http.get_text`` egress swaps to ``http.aget_text``, and the BeautifulSoup
         parse / link-filter / ``_parse_date`` map (pure CPU) runs in the process lane. SAME cache key
         (``"index2"``) so async and sync share the per-index cache."""
@@ -156,12 +156,12 @@ class MLCollectiveAdapter(SourceBase):
         return items
 
     async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async replacement of the deleted sync ``search`` (11-04, this is the only one now) (mirrors it line-for-line): the disk cache round-trip goes
+        """Native-async ``search`` (mirrors it line-for-line): the disk cache round-trip goes
         OFF the loop, the 3 index fetches run CONCURRENTLY through the async ``_ascrape_index``, and the
         pure-CPU keyword filter / newest-first sort / doc build stay ON the loop UNCHANGED. SAME
         ``"search2"`` cache key as ``search`` so async and sync share the cache.
 
-        On the dedup order, which this fan-out used to be kept SEQUENTIAL for: the worry was that
+        On the dedup order (the reason to consider keeping this fan-out SEQUENTIAL): the worry is that
         ``uniq.setdefault`` gives the FIRST index path that claims a URL, so a reordered fan-out would
         change which path a shared URL is attributed to. Concurrency does not touch that, because the
         results are REPLAYED into ``uniq`` in ``INDEX_PATHS`` order after the gather, not in completion

@@ -100,7 +100,7 @@
       "https://layer6.ai/feed/",
       "https://betakit.com/feed/",
       "https://www.theglobeandmail.com/arc/outboundfeeds/rss/category/business/technology/",
-      "https://mila.quebec/rss.xml",
+      "https://mila.quebec/en/rss.xml",
       "https://srinstitute.utoronto.ca/news?format=rss"
     ],
     "cache_ttl": 7200,
@@ -323,7 +323,7 @@
   },
   {
     "name": "sg_immigration",
-    "explicit_only": "retired 2026-07-10: 两个 RSS 成员均上游死亡 (iasg.com.sg/feed 504 then connection-dead; singaporeexpats expat-forum RSS 403 walled)。无干净 SG 移民 RSS 替代 (probed 8; rikvin=incorporation/tax, incorp=ESG, sbr=broad business, MOM/ICA 无 RSS)。可逆: 命名 omniseek_search 仍可钻取 + 已索引可恢复; iasg 恢复或找到聚焦源即回滚。residual: scrape_singapore (Fragomen) + reddit + hardwarezone + datagovsg",
+    "explicit_only": "retired 2026-07-10: 两个 RSS 成员均上游死亡 (iasg.com.sg/feed 504 then connection-dead; singaporeexpats expat-forum RSS 403 walled)。无干净 SG 移民 RSS 替代 (probed 8; rikvin=incorporation/tax, incorp=ESG, sbr=broad business, MOM/ICA 无 RSS)。可逆: 命名 omniseek_search 仍可钻取 + 已索引可恢复; iasg 恢复或找到聚焦源即回滚。residual: scrape_singapore (Fragomen) + reddit + hardwarezone + datagovsg。复核 2026-11-18 (check-host 8 个外部节点, 对照 example.com 全 200): iasg.com.sg 区仍在 Cloudflare 但无 A 记录, 各节点均解析不到 (curl 35 同因); singaporeexpats 的 expat-forum.xml 与论坛 feed.php 对各节点都回 403 Cloudflare 挑战页, 不是我们出口的问题; 维持退役",
     "description": "新加坡移民/工准证落地信号：Immigration@SG (IASG 独立咨询: EP/PR 路径 + MOM/EDB 解读) + Singapore Expats Forum (申请人真实 EP/PR 审批时间线/COMPASS 结果). 政策解读+地面实情两层 (官方 MOM newsroom 无有效 RSS; Fragomen 经 scrape_singapore)",
     "feeds": [
       "https://iasg.com.sg/feed/",

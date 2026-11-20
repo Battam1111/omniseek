@@ -88,7 +88,7 @@ async def _arender_html(url: str) -> str:
 
 
 async def _apage_text(url: str, render: bool = False) -> str:
-    """Async replacement of the deleted sync ``_page_text`` (11-04, async step seven; this is the only one now). A NORMAL page goes native async through the shared leaf
+    """Async ``_page_text``. A NORMAL page goes native async through the shared leaf
     (``http.aget_text``: pooled client + SSRF guard + 30MB cap + cache_only, no thread held during the
     network wait); a ``render`` page through ``_arender_html`` (the browser on a worker thread, the
     host's gates on the loop). ``_strip_to_text``
@@ -143,7 +143,7 @@ class PageWatchAdapter(SourceBase):
         return rows
 
     async def _adoc_for(self, row: dict) -> Optional[Document]:
-        """Async replacement of the deleted sync ``_doc_for`` (11-04, async step seven; this is the only one now): the SAME per-row TEXT cache (SAME key + TTL) read/written
+        """Async ``_doc_for``: the SAME per-row TEXT cache (SAME key + TTL) read/written
         OFF the loop, the egress via the async ``_apage_text``, then the pure-CPU fingerprint +
         Document build kept ON the loop, byte-identical to ``_doc_for`` (a shared helper would
         have to touch sync code, so this small build is duplicated verbatim instead)."""
@@ -170,7 +170,7 @@ class PageWatchAdapter(SourceBase):
         )
 
     async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async replacement of the deleted sync ``search`` (11-04, this is the only one now) -> AsyncSearchCapable (the fetcher awaits this directly
+        """Native-async ``search`` -> AsyncSearchCapable (the fetcher awaits this directly
         instead of pushing ``.search`` onto the shared thread pool). ``_rows`` (disk read + overlay
         import/validate) runs OFF the loop; the per-row docs are fetched as CONCURRENT coroutines
         (``asyncio.gather``, order-preserving so the result is byte-identical to search's sequential

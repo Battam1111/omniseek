@@ -91,13 +91,15 @@ SGCA_RE = re.compile(
 REMOTE_RE = re.compile(r"\bremote\b|anywhere|distributed|work from home", re.IGNORECASE)
 
 # (label, ats_type, token) — tokens verified live 2026-05-29. Note the exact
-# slugs: togetherai / scaleai / inflectionai / deepmind (NOT together / scale-ai
-# / googledeepmind). health_check probes one; add new labs by appending a row.
+# slugs: togetherai / scaleai / inflectionai (NOT together / scale-ai). Moved 2026-11-18
+# (both old boards 404): Google DeepMind to Google's own careers site (the
+# "google" type, token = its company filter), Mistral from Lever to Ashby (board "mistral.ai",
+# linked from mistral.ai/careers). health_check probes one; add new labs by appending a row.
 SITES: list[tuple[str, str, str]] = [
     ("Cohere", "ashby", "cohere"),                 # ⭐ secondaryLocations Toronto/Montreal
-    ("Google DeepMind", "gh", "deepmind"),         # ⭐ RE Applied AI @ Singapore
+    ("Google DeepMind", "google", "DeepMind"),     # ⭐ RE Applied AI @ Singapore
     ("Reka", "ashby", "reka"),                     # ⭐ SG + all-remote
-    ("Mistral", "lever", "mistral"),               # SG Forward-Deployed
+    ("Mistral", "ashby", "mistral.ai"),            # SG Forward-Deployed
     ("Scale AI", "gh", "scaleai"),
     ("Perplexity", "ashby", "perplexity"),
     ("Anthropic", "gh", "anthropic"),
@@ -386,12 +388,71 @@ async def _aworkable(token: str, lab: str) -> list[_Job]:
                               _workable_jobs, token, lab)
 
 
+# Google's own careers site (2026-11-18): Google DeepMind left Greenhouse (the deepmind,
+# googledeepmind and gdm boards and job-boards.greenhouse.io/deepmind all answer 404) and its careers
+# page links google.com/about/careers/applications/jobs/results?company=DeepMind. No JSON API: the
+# results page is server-rendered and carries its jobs in AF_initDataCallback 'ds:1', data =
+# [rows, None, total, page_size]; a row is [id, title, apply-url, [None, responsibilities html],
+# [None, qualifications html], company path, None, company name, lang, [[location, ...], ...],
+# [None, about html], ...]. The job page is <results>/<id>. robots.txt (User-agent *) disallows the
+# paged results (?page= / &page=), so only page 1 (20 jobs) of each query is read; the research titles
+# and the target regions are each their own query (11-18: 95 research scientist, 143 research engineer,
+# 4 Singapore, 0 Canada). Now and then the page comes back thin, without 'ds:1' (one of six reads
+# 11-18): that query then gives nothing and leaves a diag note.
+_GOOGLE_RESULTS = "https://www.google.com/about/careers/applications/jobs/results"
+_GOOGLE_QUERIES = ("q=research%20scientist", "q=research%20engineer", "location=Singapore", "location=Canada")
+_GOOGLE_DS1 = re.compile(
+    r"AF_initDataCallback\(\{key: 'ds:1', hash: '[^']*', data:(.*?), sideChannel: \{\}\}\);</script>", re.S)
+
+
+def _google_jobs(body: bytes, token: str, lab: str) -> Optional[list[_Job]]:
+    """The research jobs of one Google careers results page, or None when the page carries no 'ds:1'."""
+    m = _GOOGLE_DS1.search(body.decode("utf-8", "replace"))
+    if not m:
+        return None
+    try:
+        data = json.loads(m.group(1))
+    except ValueError:
+        return None
+    rows = data[0] if isinstance(data, list) and data and isinstance(data[0], list) else []
+    out: list[_Job] = []
+    for j in rows:
+        if not isinstance(j, list) or len(j) < 11:
+            continue
+        jid, title = str(j[0] or ""), str(j[1] or "").strip()
+        if not jid or not RESEARCH_RE.search(title):
+            continue
+        locs = [loc[0] for loc in (j[9] or []) if isinstance(loc, list) and loc and isinstance(loc[0], str)]
+        about = j[10][1] if isinstance(j[10], list) and len(j[10]) > 1 and isinstance(j[10][1], str) else ""
+        out.append(_Job(lab, title, f"{_GOOGLE_RESULTS}/{jid}", locs, summary=html_fragment_text(about),
+                        raw={"row": j}))
+    return out
+
+
+async def _agoogle(token: str, lab: str) -> list[_Job]:
+    out: dict[str, _Job] = {}
+    for qs in _GOOGLE_QUERIES:
+        url = f"{_GOOGLE_RESULTS}?company={token}&{qs}"
+        body = await _aget_body(url)
+        if body is None:
+            continue
+        jobs = await aparse(len(body), _google_jobs, body, token, lab)
+        if jobs is None:
+            diag.note("overseas_ai_jobs.fetch", url=url, status=200, body=body[:2000].decode("utf-8", "replace"),
+                      exc=ValueError("no AF_initDataCallback 'ds:1' in the results page"))
+            continue
+        for job in jobs:
+            out.setdefault(job.url, job)
+    return list(out.values())
+
+
 AHELPERS = {
     "gh": _agh,
     "ashby": _aashby,
     "lever": _alever,
     "smartrecruiters": _asmartrecruiters,
     "workable": _aworkable,
+    "google": _agoogle,
 }
 
 
@@ -401,7 +462,7 @@ class OverseasAIJobsAdapter(SourceBase):
     description = (
         "海外工业界 AI lab 全职研究岗 (RS/RE/MTS)：Cohere / DeepMind / Reka / "
         "Mistral / Anthropic / xAI / Together / Scale + 更多, 跨 Greenhouse/Ashby/"
-        "Lever/SmartRecruiters/Workable; 标注 Singapore/Canada/remote (按部署方配置的目标地区)"
+        "Lever/SmartRecruiters/Workable/Google Careers; 标注 Singapore/Canada/remote (按部署方配置的目标地区)"
     )
 
     async def _a_all_docs(self) -> list[Document]:
@@ -448,7 +509,7 @@ class OverseasAIJobsAdapter(SourceBase):
         return docs
 
     async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async replacement of the deleted sync ``search`` (11-04, this is the only one now) (routes this source to the fetcher's native dispatch
+        """Native-async ``search`` (routes this source to the fetcher's native dispatch
         branch): the async ``_a_all_docs`` egress runs on the loop, then the SAME
         ``keyword_score_filter`` (pure CPU) ranks + truncates, byte-identical to ``search``."""
         return keyword_score_filter(await self._a_all_docs(), query)[:limit]
@@ -458,7 +519,7 @@ class OverseasAIJobsAdapter(SourceBase):
 
     async def ahealth_check(self) -> tuple[Optional[bool], str]:
         # The board itself must answer with its jobs list: _gh reads ANY failure as an empty board,
-        # so until 2026-10-04 this read True on a 429, a 5xx or a timeout. A failed GET is False here;
+        # which would read True on a 429, a 5xx or a timeout. A failed GET is False here;
         # the health funnel re-reads one that failed only on a 429 (or a busy gate) as not verified.
         url = "https://boards-api.greenhouse.io/v1/boards/anthropic/jobs?content=true"
         try:

@@ -98,7 +98,7 @@ def _load_token() -> Optional[str]:
     Classic OR fine-grained PAT (both accept ``Authorization: Bearer``). None when the
     file is absent / unreadable, so the Authorization injection is a no-op and behavior
     is the prior anonymous behavior (committing this before the key exists is safe). This
-    is the ONE place the loader lives (github_source previously carried its own copy)."""
+    is the ONE place the loader lives."""
     try:
         return json.loads(CRED.read_text(encoding="utf-8")).get("token") or None
     except (OSError, json.JSONDecodeError):
@@ -117,10 +117,6 @@ def _http2_ok() -> bool:
         return True
     except Exception:  # noqa: BLE001
         return False
-
-
-class GitHubDown(RuntimeError):
-    """Raised internally while the circuit is open (recent consecutive failures / a throttle)."""
 
 
 _RETRY_STATUS = (500, 502, 503)

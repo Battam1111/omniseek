@@ -675,7 +675,7 @@ _MONS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "
 
 
 def start_text(epoch):
-    """开始时刻写成 ps lstart 那样（本地时间，到秒）：'Fri Oct 10 12:34:56 2026'。"""
+    """开始时刻写成 ps lstart 那样（本地时间，到秒）：'Fri Oct 10 12:34:56 2026'；与写进 proc 记号的同一写法。"""
     if epoch is None:
         return ""
     lt = time.localtime(epoch)
@@ -1202,7 +1202,7 @@ def group_lines(pgid, tab=None):
 
 def main(argv=None):
     """omo_proc.py group <进程组号>：打出 group_lines 的行。退出码：0 列全了；1 列得不全（有进程读不到，或列不出全机进程号），
-    读得到的照样打；2 用法不对。shell 脚本用它列一个进程组的组员（原来是 ps -eo）。"""
+    读得到的照样打；2 用法不对。shell 脚本用它列一个进程组的组员。"""
     a = sys.argv[1:] if argv is None else argv
     if len(a) != 2 or a[0] != "group" or not a[1].isdigit() or int(a[1]) < 1:
         sys.stderr.write("用法：omo_proc.py group <进程组号>\n")

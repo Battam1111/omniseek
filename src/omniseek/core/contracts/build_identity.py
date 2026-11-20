@@ -50,10 +50,6 @@ def _source_fingerprint() -> str:
     return _cached_fingerprint
 
 
-def current_build_id() -> str:
-    return validate_build_id(EYE_BUILD_ID)
-
-
 def resolve_build_id() -> str:
     """The archived commit when this tree is a release; otherwise the source fingerprint."""
     if EYE_BUILD_ID != _PLACEHOLDER:

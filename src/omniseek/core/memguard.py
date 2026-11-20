@@ -13,15 +13,19 @@ ThrottleInterval=30) starts a fresh process.
 
 Two thresholds, both derived from the machine budget (see SOFT_MB_DEFAULT for the derivation and the
 calibration plan). Speech recognition is not under them: it runs in its own worker process with its
-own cap (eye.asr_sched), outside OmniSeek's footprint, since 2026-11-10.
-  soft: first release device caches; if still over, restart at the next idle moment (no call in
-        flight; the MCP clients' long-lived GET listening streams do not count as calls), so a restart
-        never lands in the middle of an agent's call.
-  hard: restart now, idle or not. The restart is the graceful one a deploy gets: SIGTERM to self, so
+own cap (eye.asr_sched), outside OmniSeek's footprint.
+  soft: first release (a full garbage collection, then the device caches); if still over, restart at
+        the next idle moment (no call in flight; the MCP clients' long-lived GET listening streams do
+        not count as calls), so a restart never lands in the middle of an agent's call.
+  hard: the first sample over it releases the same way; the next one still over it restarts now, idle
+        or not (a restart drops every call in flight, the callers retry together,
+        and that burst is what took the process over again on 11-17 at 21:05). The restart is the graceful one a deploy gets: SIGTERM to self, so
         eye.lifecycle's caps apply (in-flight calls get drain_cap_s() to finish, the lifespan shutdown
         shutdown_cap_s()); a call still running past them is dropped (the caller retries); documents
-        already handed to the recall writer are safe, because they reach the observation journal first
-        and the next process materializes them. Every restart also arms an exit watchdog
+        already committed by the recall writer are in SQLite, and its final flush commits what is
+        still queued in the drain; only a forced exit loses what was queued and not yet committed
+        (at most a few writer batches: it commits as observations arrive). Vectors not computed yet
+        are listed in the index and computed by the next process. Every restart also arms an exit watchdog
         (exit_grace_s(), 70 s with the default caps, under the plist's ExitTimeOut of 80 s) for the case
         where that path never starts.
 Every crossing writes ONE line (memguard: <what> | fp_mb rss_mb workers workers_mb inflight streams
@@ -39,6 +43,7 @@ Fail-open throughout: a platform without a footprint counter (not macOS), no loa
 
 from __future__ import annotations
 
+import gc
 import logging
 import os
 import signal
@@ -60,7 +65,7 @@ log = logging.getLogger("omniseek.core.memguard")
 # 6.6 GiB), so every MB OmniSeek holds above its healthy steady state is paid in swap, MB for MB. Hence:
 #   soft = W0 + one worker, rounded DOWN to a 256 MB step. W0 = the largest steady footprint of a clean
 #          production eye without ASR: 3261 MB for its own process (the local replay settled at 3071),
-#          plus its process-lane workers, which since 11-04 do the parsing and the ranking's text scoring
+#          plus its process-lane workers, which do the parsing and the ranking's text scoring
 #          and stay until 5 idle minutes end them: PROC_LANE_TOKENS = 2 workers at the size they keep after
 #          broad searches, about 340 MB each live (read 11-04 01:00 after the proc-lane deploy), 680 MB.
 #          W0 = 3261 + 680 = 3941 MB. (3261 is a process that had never loaded ASR, so moving ASR out of
@@ -77,11 +82,11 @@ log = logging.getLogger("omniseek.core.memguard")
 #          The 680 MB the workers add is paid like the rest: the budget above left 1515 MB for OmniSeek at
 #          p50, so W0 was already over it, now by 680 MB more, in swap. The lever on that is the lane's
 #          size (PROC_LANE_TOKENS), not this line.
-#   No ASR allowance (2026-11-10). Until then hard rose by 3840 MB (to 9216) while an ASR model was
+#   No ASR allowance. Until then hard rose by 3840 MB (to 9216) while an ASR model was
 #          loaded in this process, and soft waited for its idle unload. Recognition now runs in a speech
 #          worker process with its own cap (eye.asr_sched.worker_cap_mb), so OmniSeek's own footprint has
 #          no ASR term and the plain lines above hold at all times.
-# PROVISIONAL: soft and hard since 11-04, because the workers' 340 MB is one live reading of two workers.
+# PROVISIONAL: soft and hard, because the workers' 340 MB is one live reading of two workers.
 # Calibration plan for both: every crossing writes one line with fp, RSS, in flight and the MPS
 # allocations; after deploy, (a) a soft restart more often than once a day means W0 moved and the
 # memory path behind it needs a look before the line does; (b) a hard restart means a transient above
@@ -269,9 +274,18 @@ def _env_mb(name: str, default: int) -> int:
 
 
 def _release_device_caches() -> None:
-    """Give cached MPS blocks back to the system. Only touches torch if it is already imported (the
-    guard must not be the thing that loads it), and takes the embedder's forward lock so it never
-    runs inside an embedding forward."""
+    """Free what the process holds without needing it: first a full garbage collection, then the cached
+    MPS blocks. The collection frees reference cycles: a failed fetch leaves its
+    exception, traceback and frames in a cycle with the frames' locals (the answer, the parsed
+    documents), and with a large long-lived heap Python's own full collection comes rarely; after a
+    replay of 11-17's sessions one collection took the footprint from 4,892 to 3,142 MB, in 0.75 s (it
+    holds the interpreter that long, once per crossing). The MPS release only touches torch if it is
+    already imported (the guard must not be the thing that loads it), and takes the embedder's forward
+    lock so it never runs inside an embedding forward."""
+    try:
+        gc.collect()
+    except Exception as exc:  # noqa: BLE001
+        log.debug("memguard: garbage collection skipped (%s)", exc)
     torch = sys.modules.get("torch")
     if torch is None:
         return
@@ -440,6 +454,13 @@ class MemGuard:
         if self.low_hits >= SOFT_CONSECUTIVE:
             self.released = self.pending = False
         old_enough = self._clock() - self._born >= self.min_uptime_s
+        if self.hard_hits == 1 and HARD_CONSECUTIVE > 1:
+            # first sample over hard: release first (garbage, device caches), so the next sample decides
+            # on what the process really holds, not on cycles waiting for a collection
+            self._line(f"footprint {mb:.0f} MB over hard {hard} MB; collecting garbage and releasing device "
+                       "caches before the next sample decides", mb)
+            self._release()
+            return None
         if self.hard_hits >= HARD_CONSECUTIVE:
             if not old_enough:
                 log.warning("memguard: footprint %.0f MB over hard %d MB within %.0fs of start; "

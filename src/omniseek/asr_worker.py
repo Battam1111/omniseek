@@ -1,6 +1,6 @@
 """The speech-recognition worker: a child process OmniSeek starts to run the ASR models in.
 
-Why a child (2026-11-10): SenseVoice on MPS adds about 2.4 GB to the process that loads it and up to
+Why a child: SenseVoice on MPS adds about 2.4 GB to the process that loads it and up to
 another 2.35 GB while a generate runs. Unloading gives the device memory back, but the malloc heap
 MPSGraph builds per input shape stays with the process (560 / 1056 / 1305 MB after whole 10 / 30 / 87
 minute files, 2480 MB after a segmented 87 minute run; the 10-11 memory readings). Inside OmniSeek's

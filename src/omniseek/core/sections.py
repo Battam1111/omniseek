@@ -1,7 +1,6 @@
 """Layered reading for omniseek_read: brief / head / section over one normalized body.
 
-omniseek_read's two branches (URL, document) each end with one normalized text that the old reader only
-windowed by characters. This module is the one place that cuts that text into sections, so the head
+omniseek_read's two branches (URL, document) each end with one normalized text. This module is the one place that cuts that text into sections, so the head
 listing and the section body come from the same cut:
 
 * ``split`` finds heading lines and turns them into a PARTITION of the text: every section is a

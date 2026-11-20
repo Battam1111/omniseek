@@ -1,6 +1,6 @@
 """Shared HTTP helpers — one User-Agent, one timeout policy, one error contract.
 
-One implementation, async (2026-11-10): every helper here is an ``a``-prefixed
+One implementation, async: every helper here is an ``a``-prefixed
 coroutine; the sync names (``get``, ``get_json``, ``get_text``, ``post_json``, ``direct``,
 ``get_impersonated``, ``download_to_file``) are one-line entries for a caller on a thread, which
 run the coroutine on the event loop through ``portal.call``. Never call a sync entry on the event
@@ -20,7 +20,8 @@ pooling, the 30MB cap, and the SSRF guard. Some open-API adapters still fetch wi
 that cannot route through here (a genuinely oversized download, a non-JSON transport) must at
 least add a ``diag.note(...)`` in their own failure branch (the levels_fyi / rss precedent).
 Anti-bot / walled adapters (mokahr / feishu / xiaohongshu / bytedance) keep their own bespoke
-headers + signing and diag.note by hand — do NOT route those through here.
+headers + signing and diag.note by hand — do NOT route those through the shared pooled helpers;
+``adirect`` / ``direct`` keep a module's own headers (mokahr / feishu send through ``direct``).
 """
 
 from __future__ import annotations
@@ -71,7 +72,7 @@ _guard.register_unsent(httpx.ConnectError, httpx.ConnectTimeout)
 
 def _gate_note(method: str, url: str, exc: BaseException) -> None:
     logger.info("http.%s: %s", method.lower(), exc)
-    diag.note(f"http.{method.lower()}", url=url, status=None,
+    diag.note(f"http.{method.lower()}", method=method, url=url, status=None,
               body=f"declared upstream gate, request not sent: {exc}")
 
 
@@ -119,7 +120,7 @@ async def _aapply_hop_gates(request: "httpx.Request") -> None:
         await gates.enter(str(request.url))
 
 
-# HOW MUCH A FETCH STEP READ (2026-11-04). A source base opens
+# HOW MUCH A FETCH STEP READ. A source base opens
 # ``count_bytes()`` around its fetch step; every answer these helpers return while it is open (the
 # capped helpers and ``adirect``, with their sync entries) adds its body length, after content decoding. A task or a
 # worker thread started inside copies the context and so adds to the same tally. The parse step then
@@ -238,8 +239,7 @@ def aprogress_hooks() -> dict:
     """The event hooks that give an ``httpx.AsyncClient`` of a module's own (one that takes its gates
     with ``ahold``/``aslot``/``upstreams.ahold`` around the request, or atproto's, bluesky_source) the
     lease renewal by progress: when the request has been sent, when its headers arrive, and at every
-    block of its body. (The sync ``progress_hooks`` and its four helpers went with
-    their one user, bluesky's sync atproto client.)"""
+    block of its body."""
     async def hook(response: "httpx.Response") -> None:
         _awatch_progress(response)
     return {"request": [_awatch_send], "response": [hook]}
@@ -275,8 +275,8 @@ MAX_BYTES = 30 * 1024 * 1024  # 30MB hard cap on a single response body — a fe
 # through download_to_file and never sits whole in memory, so it gets its own cap (
 # 2026-10-24: openreview.net/forum?id=jU7AbGq3se is 31,551,840 bytes and the 30MB answer cap above
 # refused it). PROVISIONAL: 200MB, below the 500MB the same download path allows for audio
-# (asr._AUDIO_DL_MAX_BYTES); calibrated against 20 arXiv and 20 OpenReview paper PDFs on 2026-10-24.
-# Raise it from new readings, not by guess.
+# (asr._AUDIO_DL_MAX_BYTES); calibrated against 20 arXiv and 20 OpenReview paper
+# PDFs. Raise it from those readings, not by guess.
 DOC_MAX_BYTES = 200 * 1024 * 1024
 # Bytes of a non-2xx body kept for the diag capture: an error message fits many times over, and a
 # huge or endless error body costs at most this much read.
@@ -391,8 +391,8 @@ async def _acurl_tier_retry(method: str, url: str, timeout: int, headers: Option
     httpx's default ``*/*``. Chrome's own set (Accept ``text/html,...``, ``Sec-Fetch-Dest: document``)
     reads to a site as a page load, and an API can answer that with a web page: api.openreview.net/notes,
     keyless, answers ``*/*`` with 403 JSON (ChallengeRequiredError) but either of those two with a 302 to
-    openreview.net/challenge, whose 200 HTML this tier then served as the body (live evidence of
-    2026-11-10, re-measured with curl and curl_cffi 0.15.0).
+    openreview.net/challenge, whose 200 HTML this tier then served as the body (live
+    evidence; re-measured with curl and curl_cffi 0.15.0).
     """
     if method.upper() not in _CURL_TIER_METHODS:
         return None
@@ -470,7 +470,7 @@ def ahop_hooks(original_ua: Optional[str] = None, *, defer_on_429: bool = True) 
 
 _UNSET: Any = object()
 
-# One TLS context for the one-shot clients of direct / adirect (2026-11-03). httpx builds a
+# One TLS context for the one-shot clients of direct / adirect. httpx builds a
 # fresh context (loading the CA bundle) for every client it constructs: 6.36 ms per client on the host machine against
 # 0.05 ms with a shared one (measured 11-03 with OmniSeek's httpx 0.28.1), and a broad search builds about 20 of
 # them on the event loop through adirect. A context keeps no per-connection state; each client is still
@@ -492,6 +492,34 @@ def direct(method: str, url: str, **kwargs: Any) -> httpx.Response:
     """Sync entry for a caller on a thread: ``adirect`` on the event loop (portal.call), arguments as
     they are (a ``client`` must then be an ``httpx.AsyncClient`` built with ``ahop_hooks``)."""
     return portal.call(adirect, method, url, **kwargs)
+
+
+# A FAILED DIRECT REQUEST LEAVES A RECORD. The shared helpers note every failure with its
+# method; a module that drives its own request (``adirect``, an ``AsyncHopClient``) notes
+# nothing unless it writes a note itself, so a health probe that failed there (mycareersfuture's
+# POST, nsfc_awards, the DuckDuckGo backend of the search-index venues, feishu_jobs and mokahr_ats through
+# ``direct``) would leave the exit-node sweep no address (its ``no_url``). This layer notes every answer of
+# 400 or more and every exception, with the method and the address of the request that got it, for the
+# open taps only (``diag.note(tap_only=True)``): the module's own notes stay the drill's diagnostic and
+# the ``omniseek_read`` reason. A gate that sent nothing is noted as not sent, which the sweep skips.
+def _direct_failed(method: str, url: str, *, resp: Optional[httpx.Response] = None,
+                   exc: Optional[BaseException] = None) -> None:
+    try:
+        if exc is not None:
+            body = (f"declared upstream gate, request not sent: {exc}"
+                    if isinstance(exc, upstreams.UpstreamBusy) else None)
+            diag.note("http.direct", method=method, url=url, exc=None if body else exc, body=body,
+                      tap_only=True)
+        elif resp is not None and resp.status_code >= 400:
+            req = resp.request
+            try:
+                body = _decode_error_body(resp, resp.content[:_ERROR_BODY_CAP])
+            except httpx.ResponseNotRead:   # a stream the caller reads itself: the status alone
+                body = None
+            diag.note("http.direct", method=req.method, url=str(req.url), status=resp.status_code,
+                      body=body, tap_only=True)
+    except Exception:  # noqa: BLE001 (the record must never break the request it describes)
+        pass
 
 
 async def adirect(method: str, url: str, *, client: Optional[httpx.AsyncClient] = None,
@@ -523,7 +551,11 @@ async def adirect(method: str, url: str, *, client: Optional[httpx.AsyncClient] 
             finally:
                 _hops_var.reset(token)
         upstreams.observe_response(str(r.url), r)
+        _direct_failed(method, url, resp=r)
         return _counted(r)
+    except Exception as exc:
+        _direct_failed(method, url, exc=exc)
+        raise
     finally:
         if own:
             await c.aclose()
@@ -590,7 +622,7 @@ class AsyncHopClient(httpx.AsyncClient):
 
     async def send(self, request: httpx.Request, **kwargs: Any) -> httpx.Response:
         # inside adirect, whose AsyncHopGates carries the gates; any other value is not this
-        # request's, and would take no gate
+        # request's, and would take no gate. adirect notes that request's failure itself.
         if isinstance(_hops_var.get(), upstreams.AsyncHopGates):
             return self._record(request, await super().send(request, **kwargs))
         gates = upstreams.AsyncHopGates(request_s=_timeout_s(request.extensions.get("timeout")))
@@ -600,6 +632,8 @@ class AsyncHopClient(httpx.AsyncClient):
             resp = await super().send(request, **kwargs)
         except BaseException as exc:
             await gates._abort(exc)
+            if isinstance(exc, Exception):
+                _direct_failed(request.method, str(request.url), exc=exc)
             raise
         finally:
             _hops_var.reset(token)
@@ -607,6 +641,7 @@ class AsyncHopClient(httpx.AsyncClient):
             resp.stream = _AGatedStream(resp.stream, gates.close)
         else:
             await gates.close()
+        _direct_failed(request.method, str(request.url), resp=resp)
         return self._record(request, resp)
 
 
@@ -729,7 +764,7 @@ async def adownload_to_file(url: str, dest: str, *, max_bytes: int,
     transport error (unlike get()'s None: a fallback caller wants the reason). curl_cffi NOT httpx:
     this deployment's egress mangles openssl TLS to some CDNs (httpx -> 'UNEXPECTED_EOF_WHILE_READING'
     on cloudfront) while libcurl's handshake gets through -- the same tier get_impersonated uses. The
-    robust-fetch path for LARGE binaries (audio, and since 2026-10-24 every paper PDF / arXiv full text
+    robust-fetch path for LARGE binaries (audio, and every paper PDF / arXiv full text
     under ``DOC_MAX_BYTES``) that the size-capped get() refuses AND that the bundled ffmpeg's own TLS
     cannot fetch. (Egress to some CDNs can be slow, so timeout defaults high.)
 
@@ -807,7 +842,7 @@ async def _aimpersonated_request(method: str, url: str, *, timeout: int = DEFAUL
     """Request via curl_cffi with a real-browser TLS/JA3 fingerprint (Chrome impersonation); returns
     the raw response BYTES. None on failure OR if curl_cffi is unavailable.
 
-    Method-aware since 2026-09-09: the egress mangles openssl's handshake on POST endpoints too
+    Method-aware: the egress mangles openssl's handshake on POST endpoints too
     (statcan_wds POSTs its only data endpoint and read as down for it), and the guards below are
     method-independent, so keeping this GET-only would have meant a second copy of them.
 
@@ -840,7 +875,7 @@ async def _aimpersonated_request(method: str, url: str, *, timeout: int = DEFAUL
     # curl_cffi (a DIFFERENT transport from safeurl.safe_fetch's httpx, so it cannot reuse that
     # per-hop walk) and serves only FIXED CONFIGURED public hosts (higheredjobs), whose redirect-SSRF
     # needs a DNS-rebind on a fixed host (lower probability than an arbitrary user URL); and curl_cffi
-    # is not importable in this dev env, so a manual redirect-walk cannot be verified here. This
+    # is not importable in this dev env, so a manual redirect-walk cannot be verified here. The SSRF pass
     # closed the arbitrary-user-URL lane instead (omniseek_add_url -> web_fallback -> safeurl.safe_fetch,
     # IP-pinned per hop); this fixed-host tier keeps allow_redirects=True as a known residual.
     _blk = await anyio.to_thread.run_sync(_netguard.security_block_reason, url, limiter=portal.IO_LANE)
@@ -880,7 +915,7 @@ async def _aimpersonated_request(method: str, url: str, *, timeout: int = DEFAUL
         logger.warning("http impersonated tier failed (%s %s): %s", method.upper(), url, exc)
         _resp = getattr(exc, "response", None)
         _st = getattr(_resp, "status_code", None)
-        diag.note(f"http.impersonated_{method.lower()}", url=url,
+        diag.note(f"http.impersonated_{method.lower()}", method=method, url=url,
                   status=_st if isinstance(_st, int) and _st > 0 else None, exc=exc)
         return None
 
@@ -983,7 +1018,7 @@ async def _arequest_capped(method: str, url: str, *, timeout: int, headers: dict
     _blk = await anyio.to_thread.run_sync(_netguard.security_block_reason, url, limiter=portal.IO_LANE)
     if _blk is not None:
         logger.warning("http.%s blocked SSRF-class target (%s): %s", method.lower(), url, _blk)
-        diag.note(f"http.{method.lower()}", url=url, status=None, body=f"blocked SSRF-class target: {_blk}")
+        diag.note(f"http.{method.lower()}", method=method, url=url, status=None, body=f"blocked SSRF-class target: {_blk}")
         return None
     headers = upstreams.with_declared_user_agent(url, _with_connection_close(url, headers))
     err_body: list = [None]   # the last attempt's bounded error body, for the failure note below
@@ -1012,7 +1047,7 @@ async def _arequest_capped(method: str, url: str, *, timeout: int, headers: dict
                         if len(raw) > MAX_BYTES:
                             logger.warning("http.%s refused oversized response (%s): >%d bytes",
                                            method.lower(), url, MAX_BYTES)
-                            diag.note(f"http.{method.lower()}", url=url, status=r.status_code,
+                            diag.note(f"http.{method.lower()}", method=method, url=url, status=r.status_code,
                                       body=f"refused oversized response (>{MAX_BYTES} bytes)")
                             return None
             except Exception as exc:
@@ -1049,7 +1084,7 @@ async def _arequest_capped(method: str, url: str, *, timeout: int, headers: dict
         if served is not None:
             return served
         logger.warning("http.%s failed (%s): %s", method.lower(), url, exc)
-        diag.note(f"http.{method.lower()}", url=url, exc=exc)
+        diag.note(f"http.{method.lower()}", method=method, url=url, exc=exc)
         return None
     except Exception as exc:  # noqa: BLE001 , failure → None is the adapter contract
         served = await _curl_tier(exc)
@@ -1068,7 +1103,7 @@ async def _arequest_capped(method: str, url: str, *, timeout: int, headers: dict
             except Exception:  # noqa: BLE001
                 bd = None
         _probe.note_error_body(st, bd, where=url)
-        diag.note(f"http.{method.lower()}", url=url, status=st, body=bd, exc=exc)
+        diag.note(f"http.{method.lower()}", method=method, url=url, status=st, body=bd, exc=exc)
         return None
     finally:
         _count_unreached(deferred)   # no answer from either tier: counted as the hop gates count it
@@ -1118,7 +1153,7 @@ async def apost_json(url: str, *, json: Any = None, timeout: int = DEFAULT_TIMEO
         return resp.json()
     except Exception as exc:  # noqa: BLE001
         logger.warning("http.post_json parse failed (%s): %s", url, exc)
-        diag.note("http.post_json", url=url, status=resp.status_code, body=resp.text, exc=exc)
+        diag.note("http.post_json", method="POST", url=url, status=resp.status_code, body=resp.text, exc=exc)
         return None
 
 
@@ -1136,7 +1171,7 @@ async def aput_json(url: str, *, json: Any = None, timeout: int = DEFAULT_TIMEOU
         return resp.json()
     except Exception as exc:  # noqa: BLE001
         logger.warning("http.put_json parse failed (%s): %s", url, exc)
-        diag.note("http.put_json", url=url, status=resp.status_code, body=resp.text, exc=exc)
+        diag.note("http.put_json", method="PUT", url=url, status=resp.status_code, body=resp.text, exc=exc)
         return None
 
 

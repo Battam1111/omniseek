@@ -193,7 +193,7 @@ class NowcoderAdapter:
             site, site_unavailable = [], True
         except RuntimeError as exc:
             # The site search now runs on EVERY query, which puts the SHARED backend's cooldown in
-            # front of a path that used to be feed-only. Re-raise when there is nothing else to hand
+            # front of the feed path too. Re-raise when there is nothing else to hand
             # back (the error contract: an empty must never be published as "nowcoder has no such
             # 面经"), but a cooling backend must not DELETE feed matches we already hold — degrade to
             # them and capture why, so the caller reads a partial degrade instead of a dead source.

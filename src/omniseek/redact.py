@@ -135,7 +135,7 @@ def redact_obj(obj: Any, mask: str = MASK, skip: Optional[Callable[[Any], bool]]
         return obj
 
 
-# ── queries sent out (2026-11-07: what goes to machines
+# ── queries sent out (the operator 2026-11-07: what goes to machines
 # that are not ours is masked) ─────────────────────────────────────────────────────────────────────────────────
 # The rule is NOT this module's: it is the push outlet's own (one rule for everything that
 # leaves for someone else's machine), loaded by file path as the services part installs it, else from the repo

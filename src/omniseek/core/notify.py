@@ -2,13 +2,9 @@
 
 Extracted from sensor.py's push helper so the sensor tap and the generalized job registry push
 through ONE implementation instead of duplicating the credential read. This module is the
-IN-PROCESS push, used only by code already running inside the writer process (the old external
-watchdog's own copy retired with it on 10-20).
+IN-PROCESS push, used only by code already running inside the writer process.
 
-2026-08-12: Bark is RETIRED and deleted from the fleet. It had been unreachable from the service host
-(three probes, the connection never establishing, 20s timeouts) while every infra alarm pushed to
-it and to nothing else, so alarms were written, counted, logged as pushed, and delivered nowhere.
-WeCom answers in 0.06s and is the operator's actual channel (desktop + phone). One channel, and it works.
+One channel: WeCom answers in 0.06s and is the operator's actual channel (desktop + phone).
 
 FAIL-OPEN contract: an absent credentials file, a missing webhook, or any HTTP/parse failure is a
 log line and a return, NEVER an exception. A push failure must never break the run that emitted it.
@@ -140,7 +136,7 @@ def wecom_push(title: str, body: str, *, source: str | None = None, questions=No
     ``eye.<caller module>``. With no outlet configured (no OMNISEEK_NOTIFY_OUTLET and no default) the
     message goes out directly, quietly: that is a normal state, not a failure. OmniSeek's own masking and its declared WeCom gate (20 msg/min) still run
     first, and the masked title and body are what the outlet gets. If the outlet cannot be reached
-    (file missing, load failure, send() raising) the message goes out the old direct way with a
+    (file missing, load failure, send() raising) the message goes out directly with a
     warning: an alarm is never dropped for the outlet's sake. If the outlet answers False (its own
     rate limit or a failed send) nothing else is sent, so its limit is not bypassed and nothing is
     sent twice.
@@ -184,7 +180,7 @@ def wecom_push(title: str, body: str, *, source: str | None = None, questions=No
     failure = None
     try:
         from omniseek.core import upstreams
-        with upstreams.egress(url, request_s=5.0):  # OmniSeek's declared WeCom gate, as before
+        with upstreams.egress(url, request_s=5.0):  # OmniSeek's declared WeCom gate
             try:
                 if not asks:
                     ok = outlet.send(source, title, body)
@@ -194,7 +190,7 @@ def wecom_push(title: str, body: str, *, source: str | None = None, questions=No
                     ok = outlet.send(source, title, shown)
             except Exception as exc:  # noqa: BLE001 -- outlet broke mid-send: fall back below
                 failure = exc
-    except Exception as exc:  # noqa: BLE001 -- the gate refused the push: dropped, as before
+    except Exception as exc:  # noqa: BLE001 -- the gate refused the push: dropped
         log.debug("wecom push failed (%s)", exc)
         return False
     if failure is not None:
@@ -210,12 +206,10 @@ def wecom_push(title: str, body: str, *, source: str | None = None, questions=No
 def alert(title: str, body: str, *, source: str | None = None, questions=None, **_ignored) -> list:
     """Deliver ONE alarm. Returns the channels that took it (empty means nobody heard it).
 
-    ``_ignored`` absorbs the retired Bark hints (group / level) so a caller that still passes them
-    keeps working while the fleet converges; they mean nothing to WeCom.
+    ``_ignored`` absorbs group / level hints so a caller that passes them keeps working; they mean
+    nothing to WeCom.
 
-    A lane that delivered NOTHING leaves a WARNING in the log. The durable delivery marker it also used
-    to write (a running undelivered streak) went on 2026-10-20: the guards that read
-    it retired on 2026-10-19 and nothing read it after that.
+    A lane that delivered NOTHING leaves a WARNING in the log.
 
     ``source`` and ``questions`` pass through to wecom_push (see there); they are forwarded only
     when given, so the plain two-argument call is unchanged."""

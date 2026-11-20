@@ -1,5 +1,5 @@
 {
- "_doc": "One entry per independent upstream OmniSeek sends requests to. terms = what the upstream publishes (a number, or 未公布 plus where_checked saying where we looked; url + checked date always). gate = what OmniSeek enforces through the shared BackendGuard (never looser than terms; http_gate false = enforced by the module's own pacer). terms.robots_crawl_delay_s = the Crawl-delay a host's robots.txt sets for User-agent *; each such host gets its own gate (one request at a time, starts at least the delay apart), taken after the upstream gate so the stricter always holds (design decision, 2026-09-29). terms.max_concurrency 1 also makes the shared http clients use a no-keep-alive HTTP/1.1 transport and send Connection: close for that upstream's hosts. user_agent = the User-Agent the upstream's policy requires: every shared egress layer sends exactly this string to the entry's hosts (redirect hops included) and the shared browser refuses them; the one place it is written (design decision, 2026-09-29). hosts = exact host names; an entry that starts with '.' is a domain suffix and matches every subdomain of that domain, not the bare domain (list that on its own); for one host a gated entry wins, then an exact entry, then the longest suffix (design decision, 2026-09-29). disabled = OmniSeek does not send to this upstream: {reason, source, checked, ...}; the code that would send reads it, sends nothing and reports the reason (design decision, 2026-09-29). pending = a published value not enforced yet and why. paths = path prefixes (each starting with '/'): the entry then owns only the URLs on its hosts whose path starts with one of them, ahead of the host's other entries; a Crawl-delay or a User-Agent cannot be scoped to a path (2026-10-24: export.arxiv.org full text vs its API). gate.provisional = why a gate number is provisional and how it is to be recalibrated. gate.break_after / gate.break_for_s = the guard's circuit breaker: that many failures in a row that say the upstream is unhealthy (_guard.counts_against_upstream: a 404 / 410 / 400 / 422 answer is not one) open it for that many seconds (default 5 and 120); an upstream's breaker is this one, never a failure count and cooldown kept in the module (2026-11-07; an adapter's account-safety breaker, which stops a logged-in account on captcha or risk signals, is a different thing and stays in the adapter). A new source must be listed under an existing upstream's sources (or its backend under backends) or get its own entry (the merge-gate test that failed otherwise was deleted; nothing checks it now). Terms research: task R, 2026-09-28; robots sweeps 2026-09-28.",
+ "_doc": "One entry per independent upstream OmniSeek sends requests to. terms = what the upstream publishes (a number, or 未公布 plus where_checked saying where we looked; url + checked date always). gate = what OmniSeek enforces through the shared BackendGuard (never looser than terms; http_gate false = enforced by the module's own pacer). terms.robots_crawl_delay_s = the Crawl-delay a host's robots.txt sets for User-agent *; each such host gets its own gate (one request at a time, starts at least the delay apart), taken after the upstream gate so the stricter always holds (design decision, 2026-09-29). terms.max_concurrency 1 also makes the shared http clients use a no-keep-alive HTTP/1.1 transport and send Connection: close for that upstream's hosts. user_agent = the User-Agent the upstream's policy requires: every shared egress layer sends exactly this string to the entry's hosts (redirect hops included) and the shared browser refuses them; the one place it is written (design decision, 2026-09-29). hosts = exact host names; an entry that starts with '.' is a domain suffix and matches every subdomain of that domain, not the bare domain (list that on its own); for one host a gated entry wins, then an exact entry, then the longest suffix (design decision, 2026-09-29). disabled = OmniSeek does not send to this upstream: {reason, source, checked, ...}; the code that would send reads it, sends nothing and reports the reason (design decision, 2026-09-29). pending = a published value not enforced yet and why. paths = path prefixes (each starting with '/'): the entry then owns only the URLs on its hosts whose path starts with one of them, ahead of the host's other entries; a Crawl-delay or a User-Agent cannot be scoped to a path (export.arxiv.org full text vs its API). gate.provisional = why a gate number is provisional and how it is to be recalibrated. gate.break_after / gate.break_for_s = the guard's circuit breaker: that many failures in a row that say the upstream is unhealthy (_guard.counts_against_upstream: a 404 / 410 / 400 / 422 answer is not one) open it for that many seconds (default 5 and 120); an upstream's breaker is this one, never a failure count and cooldown kept in the module (an adapter's account-safety breaker, which stops a logged-in account on captcha or risk signals, is a different thing and stays in the adapter). A new source must be listed under an existing upstream's sources (or its backend under backends) or get its own entry (nothing checks it). Terms research: task R, 2026-09-28; robots sweeps 2026-09-28.",
  "unpublished": "未公布",
  "optional_sources": {
   "_doc": "Sources a public build may leave out; a declaration may name them without the stale-name check failing there.",
@@ -59,7 +59,7 @@
    "kind": "web",
    "hosts": ["arxiv.org"],
    "sources": ["pdf"],
-   "tools": ["the generic web read (web_fallback) and the document reader on arxiv.org links that are not /pdf/ or /html/ full text (those go to export.arxiv.org since 2026-10-24)"],
+   "tools": ["the generic web read (web_fallback) and the document reader on arxiv.org links that are not /pdf/ or /html/ full text (those go to export.arxiv.org)"],
    "terms": {
     "max_concurrency": "未公布",
     "min_interval_s": "未公布",
@@ -71,7 +71,7 @@
     "checked": "2026-09-28",
     "where_checked": "arxiv.org/robots.txt read 2026-09-28: Crawl-delay 15 s for User-agent *, enforced as the arxiv.org host gate (design decision, 2026-09-29). The API terms (info.arxiv.org/help/api/tou.html) cover the APIs, not /abs or /pdf pages; bulk PDF access is via the bulk data",
     "robots_crawl_delay_s": {"arxiv.org": 15.0},
-    "notes": "pdf is listed for the coverage check (it reads any PDF link, no fixed upstream); since 2026-10-24 it leaves arXiv links to the arxiv source, which reads full text from export.arxiv.org (the arxiv_export entry)"
+    "notes": "pdf is listed for the coverage check (it reads any PDF link, no fixed upstream); it leaves arXiv links to the arxiv source, which reads full text from export.arxiv.org (the arxiv_export entry)"
    }
   },
   "openalex": {
@@ -1439,6 +1439,40 @@
     "notes": "robots.txt could not be read on 2026-09-28: api.ashbyhq.com (401)"
    }
   },
+  "uk_hansard": {
+   "name": "UK Parliament Hansard API",
+   "kind": "api",
+   "hosts": ["hansard-api.parliament.uk", "hansard.parliament.uk"],
+   "sources": ["uk_hansard"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://hansard-api.parliament.uk/swagger/ui/index",
+    "checked": "2026-11-18",
+    "where_checked": "the API's Swagger page publishes no rate, concurrency or quota; hansard-api.parliament.uk/robots.txt answers 404 (read 2026-11-18). Content under the Open Parliament Licence. The web host hansard.parliament.uk is listed so a refused generic read of one of its pages names uk_hansard (web_fallback._site_readers); uk_hansard itself never sends to it: it answers programs with Cloudflare managed challenge (403)"
+   }
+  },
+  "google_careers": {
+   "name": "Google Careers job search (the results page, server-rendered)",
+   "kind": "web",
+   "hosts": ["www.google.com"],
+   "paths": ["/about/careers/"],
+   "sources": ["overseas_ai_jobs"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": "未公布",
+    "daily_quota": "未公布",
+    "auth": "未公布",
+    "url": "https://www.google.com/robots.txt",
+    "checked": "2026-11-18",
+    "where_checked": "no published rate or API for the careers search. www.google.com/robots.txt read 2026-11-18, User-agent * group: Disallow /about/careers/applications/jobs/results?page=, /results/?page=, /results?*&page=, /results/?*&page= (the paged results), no Crawl-delay; the unpaged results and the job pages /results/<id> are not disallowed for * (the whole /jobs/results is disallowed only for Yandex). overseas_ai_jobs reads page 1 of four queries for Google DeepMind per cache period (3 h) and never pages; the ATS per-host cap (4 in flight) applies",
+    "notes": "Google DeepMind moved here from Greenhouse (its boards answer 404)."
+   }
+  },
   "airtable_layoffs": {
    "name": "layoffs.fyi Airtable shared view",
    "kind": "api",
@@ -1623,7 +1657,7 @@
    "gate": {
     "max_inflight": 1,
     "min_interval_s": 5.0,
-    "provisional": "2026-10-24 (spec item 6): one at a time on the 小号; starts at least 5 s apart, the upper end of the 3 to 5 s a third-party 闲鱼 tool advises (seen only in a web-search summary, not opened). Recalibrate two weeks after going live from <state>/xianyu/risk-events.jsonl: no trip keeps it, any trip doubles min_interval_s (and halves the source's daily cap); the reading goes into brain note eye-recon-xianyu"
+    "provisional": "2026-10-24: one at a time on the 小号; starts at least 5 s apart, the upper end of the 3 to 5 s a third-party 闲鱼 tool advises (seen only in a web-search summary, not opened). Recalibrate two weeks after going live from <state>/xianyu/risk-events.jsonl: no trip keeps it, any trip doubles min_interval_s (and halves the source's daily cap); the reading goes into brain note eye-recon-xianyu"
    }
   },
   "smzdm_api": {
@@ -1933,6 +1967,30 @@
     "url": "https://www.levels.fyi/",
     "checked": "2026-09-28",
     "where_checked": "a website or app front end, not a documented API: no published request rate. OmniSeek's own pacing here: none beyond caching"
+   }
+  },
+  "levels_fyi_mcp": {
+   "name": "Levels.fyi MCP server (job board)",
+   "kind": "api",
+   "hosts": ["mcp.levels.fyi"],
+   "sources": ["levels_fyi_jobs"],
+   "terms": {
+    "max_concurrency": "未公布",
+    "min_interval_s": "未公布",
+    "windows": [
+     {"limit": 20, "seconds": 60, "text": "anonymous: tool calls a minute, shared with others on the same network; a free sign-in gives the user 60 of their own"}
+    ],
+    "daily_quota": "未公布",
+    "auth": "none needed; signing in (OAuth in the user's browser) raises the limit to 60 a minute and unlocks profile and resume tools",
+    "quote": "60 tool calls a minute of the user's own, instead of 20 a minute that can be shared with others on the same network",
+    "url": "https://www.levels.fyi/llms.txt",
+    "checked": "2026-11-19",
+    "where_checked": "concurrency, spacing and a daily quota: not stated in llms.txt or the server card (/.well-known/mcp/server-card.json)",
+    "notes": "One search is initialize + notifications/initialized (first use only; no session id is issued) and one tools/call; the gate counts HTTP requests, so it is stricter than the published per-tool-call window."
+   },
+   "gate": {
+    "max_inflight": 2,
+    "windows": [[20, 60.0]]
    }
   },
   "lmarena": {

@@ -30,7 +30,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, TypedDict
 
-from omniseek.core import relevance
 from omniseek.core.normalize import to_utc
 from omniseek.core.recall import store
 from omniseek import where
@@ -121,8 +120,7 @@ class ManifestEntry(TypedDict, total=False):
 
 
 # ── Vocabulary-by-minting (design section 3, "Vocabulary-by-minting") ────────────────────────────
-# The FIRST exercise of the rule that replaces the old central kind/edge-type enum + the grant
-# ceremony + the gap-ledger-as-debt. NOTHING mechanical depends on a central enum: kind and type are
+# No central kind/edge-type enum, grant ceremony or gap-ledger-as-debt. NOTHING mechanical depends on a central enum: kind and type are
 # TEXT columns, views filter by string. A kind/edge-type is not a central decision — it is a property
 # of the MINTING act (OpenAlex mints person/work ids; HF would mint model ids with lineage edges).
 # So each WRITE TAP declares, on itself, the kinds + edge types + methods it mints (the same pattern
@@ -172,18 +170,6 @@ def doc_node_id(source: str, source_id: str) -> str:
     recall); its node id namespaces the source so ``doc:openalex:W123`` (a search RESULT) stays
     distinct from the world entity ``work:openalex:W123``, joined only by a minted same_as."""
     return f"doc:{source}:{source_id}"
-
-
-def canon_label(label: str) -> str:
-    """The ONE shared canonicalizer for ``topic:label:{norm}`` / ``inst:label:{norm}`` ids: casefold
-    + strip, routed through the existing relevance tokenizer so ``topic:label:GRPO`` and
-    ``topic:label:grpo`` collapse to the same node (else duplicate nodes accrete silently). Tokens
-    are space-joined so multi-word labels ("mila quebec") normalize deterministically; falls back to
-    the bare casefold+strip when the tokenizer yields nothing (e.g. punctuation-only)."""
-    toks = relevance.tokenize(label or "")
-    if toks:
-        return " ".join(toks)
-    return (label or "").strip().casefold()
 
 
 def _id_self_label(node_id: str) -> Optional[str]:

@@ -17,7 +17,7 @@ A health check is written the same way, ONCE, as ``async def ahealth_check(self)
 writes a plain ``def health_check`` and SourceBase makes that its ``ahealth_check``, run on a thread of
 the legacy lane (``SourceBase._athreaded_health``).
 
-``_acached`` is the skeleton the hand-written sources each used to spell out (cache read, fetch, a
+``_acached`` is the skeleton of a hand-written source (cache read, fetch, a
 failure is ``[]`` and is NOT cached, cache write): read off the loop, fetch, write off the loop.
 
 ``aparse`` is the ONE place that decides where parsing an answer runs: here on the loop when it is
@@ -41,7 +41,7 @@ import anyio
 from omniseek.core import cache, portal
 from omniseek.core.normalize import Document
 
-# PARSE HERE OR IN THE PROCESS LANE (2026-11-04).
+# PARSE HERE OR IN THE PROCESS LANE.
 # Parsing an answer is pure CPU: on the loop it holds every other request for as long as it runs; in
 # the process lane it costs a pickle of the input and of the result on the loop (about 1 ms per
 # 100 KB) and a wait for a free worker of the two. So a parse that would take long is sent there and a

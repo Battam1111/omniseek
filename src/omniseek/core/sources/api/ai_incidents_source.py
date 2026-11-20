@@ -5,9 +5,8 @@ incidents (deepfake abuse, chatbot harms, autonomous-vehicle crashes, biased dep
 the alleged developer / deployer / harmed parties and the news reports behind it. It is OmniSeek's
 safety x STRUCTURE source: the cross-incident ledger web search cannot return.
 
-History: until 2026-10-20 this source queried the AIID GraphQL API. That API now answers every query
-with 401 API_LOGIN_REQUIRED, so the source was withdrawn (commit 507854d2). The AIID's own bulk
-export for research needs no login, so the source is back on it (2026-10-20).
+The AIID GraphQL API answers every query with 401 API_LOGIN_REQUIRED (2026-10-20). The AIID's own
+bulk export for research needs no login, so the source reads that.
 
 DESIGN: OmniSeek's bulk-file pattern (cordis_eu_source.py), with a local index on disk:
   * The snapshot page (``SNAPSHOT_PAGE``) lists one ``backup-<YYYYMMDDhhmmss>.tar.bz2`` a week (on

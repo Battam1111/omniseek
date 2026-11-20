@@ -1,6 +1,6 @@
 """Source spec: typed filters, coverage, license and samples (a source's machine-readable self-description).
 
-A source used to describe itself with one prose line (``param_hint``). That stays as a prose aid, but
+A source describes itself with one prose line (``param_hint``) as a prose aid, but
 what a source can FILTER on, which period it covers, under what terms its results come and which
 queries are known to return results now live as four class attributes an agent and a program can both
 read (the design follows the ``fa spec`` / ``-F`` filter syntax of DeepXiv's FA.md, sections 4 and 5):
@@ -57,17 +57,6 @@ from typing import Any, Optional
 
 from omniseek.core.normalize import to_utc
 
-TYPES = ("keyword", "int", "number", "bool", "date", "text")
-OPS = ("eq", "any", "gte", "lte", "range", "text")
-# Which operators make sense for which type (a declared spec outside this is a spec error).
-_TYPE_OPS = {
-    "keyword": {"eq", "any", "text"},
-    "text": {"eq", "text"},
-    "int": {"eq", "any", "gte", "lte", "range"},
-    "number": {"eq", "gte", "lte", "range"},
-    "bool": {"eq"},
-    "date": {"eq", "gte", "lte", "range"},
-}
 _EMPTY_COVERAGE = {"since": None, "until": None, "gaps": [], "note": None}
 
 
@@ -387,25 +376,6 @@ def as_of_field_of(adapter: Any) -> Optional[str]:
     return f if isinstance(f, str) and f else None
 
 
-def as_of_field_problems(name: str, adapter: Any) -> list[str]:
-    """Mechanical checks on a declared ``as_of_field``: it must name a declared date or int field that
-    takes an upper bound (``lte`` or ``range``). Used by the tests over every source."""
-    raw = getattr(adapter, "as_of_field", None)
-    if raw is None:
-        return []
-    if not isinstance(raw, str) or not raw:
-        return [f"{name}: as_of_field must be a field name"]
-    spec = declared_filters(adapter).get(raw)
-    if spec is None:
-        return [f"{name}: as_of_field {raw!r} is not a declared filter field"]
-    p = []
-    if spec.get("type") not in ("date", "int"):
-        p.append(f"{name}: as_of_field {raw!r} must be a date or int field")
-    if not ({"lte", "range"} & set(spec.get("ops") or ())):
-        p.append(f"{name}: as_of_field {raw!r} must allow lte or range")
-    return p
-
-
 def describe_fields(spec: dict) -> dict:
     """The agent-facing view of a filters spec (type / ops / values / desc), for error payloads."""
     out = {}
@@ -417,37 +387,6 @@ def describe_fields(spec: dict) -> dict:
             d["desc"] = v["desc"]
         out[k] = d
     return out
-
-
-def spec_problems(name: str, spec: dict) -> list[str]:
-    """Mechanical checks on a declared filters spec (used by the tests over every source)."""
-    p = []
-    if not isinstance(spec, dict):
-        return [f"{name}: filters must be a dict"]
-    for k, v in spec.items():
-        if not isinstance(v, dict):
-            p.append(f"{name}.{k}: field spec must be a dict")
-            continue
-        t = v.get("type")
-        if t not in TYPES:
-            p.append(f"{name}.{k}: type {t!r} not in {TYPES}")
-            continue
-        ops = v.get("ops") or []
-        if not ops:
-            p.append(f"{name}.{k}: no ops")
-        for o in ops:
-            if o not in OPS:
-                p.append(f"{name}.{k}: op {o!r} not in {OPS}")
-            elif o not in _TYPE_OPS[t]:
-                p.append(f"{name}.{k}: op {o!r} does not fit type {t}")
-        if v.get("values") is not None and t != "keyword":
-            p.append(f"{name}.{k}: values only for keyword fields")
-        if not v.get("desc"):
-            p.append(f"{name}.{k}: desc missing")
-        dk = v.get("doc_key")
-        if dk is not None and not re.fullmatch(r"[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)*", str(dk)):
-            p.append(f"{name}.{k}: doc_key {dk!r} must be a dotted path")
-    return p
 
 
 # ── coverage ──────────────────────────────────────────────────────────────────────────────────────

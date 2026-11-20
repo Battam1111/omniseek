@@ -43,7 +43,7 @@ _CJK = re.compile(r"[㐀-䶿一-鿿぀-ヿ가-힣]+")
 # One linear scan, three classes, first match at each position wins:
 #   continua (above) → bigrams; Latin letters (incl. diacritics) + digits → one word token ("café"
 #   was mangled to "caf", "über" to "ber"); ANY other Unicode letter run (Cyrillic, Greek, Arabic,
-#   Thai, ...) → one word token (previously dropped entirely). Space-separated scripts match their
+#   Thai, ...) → one word token. Space-separated scripts match their
 #   own word forms; Thai-class continua degrade to run-tokens (findable, coarser) — accepted.
 _TOKEN = re.compile(
     r"([㐀-䶿一-鿿぀-ヿ가-힣]+)"

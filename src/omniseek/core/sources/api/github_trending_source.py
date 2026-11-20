@@ -9,7 +9,7 @@ Egress routes through the shared ``_github`` client, so this source finally
 sends the token (off the unauth ~10/min Search ceiling onto the shared token),
 gets paced under the 30/min Search limit, and shares the 429 / Retry-After
 breaker + the single-flight /rate_limit health probe with the other GitHub
-adapters (it used to send NO token and have no pacing of its own).
+adapters.
 
 This is DIFFERENT from `github_awesome_phd` adapter which surfaces curated
 "awesome" lists. Here we surface dynamic / current-momentum repos.
@@ -57,7 +57,7 @@ class GitHubTrendingAdapter(BaseAPIAdapter):
     search_label = "search"
 
     async def _araw_fetch(self, query: str, limit: int) -> list:
-        """Async replacement of the deleted sync ``_raw_fetch`` (11-04, this is the only one now): BYTE-FAITHFUL mirror — same 30-day pushed filter, same q/params,
+        """Async ``_raw_fetch``: BYTE-FAITHFUL mirror — same 30-day pushed filter, same q/params,
         same None->[] contract; ONLY the shared _github egress is swapped (_github.get_json -> await
         _github.aget_json, which shares the SAME breaker / rate pacer / token auth). Single get_json
         call, so nothing else changes."""

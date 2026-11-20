@@ -18,7 +18,7 @@ what the upstream actually reports:
                       2026-09-29: the whole Wikimedia family is one entry).
   paths               an entry may also list path prefixes ("paths": ["/pdf/", "/html/"]): it then owns
                       only the URLs on its hosts whose path starts with one of them, and wins those over
-                      the host's other entries (2026-10-24: export.arxiv.org serves the API
+                      the host's other entries (export.arxiv.org serves the API
                       under /api/ with one request every 3 s, and full text under /pdf/ and /html/,
                       which arXiv sets aside for programs with its own rate). A bare host (no path) and
                       every other path stay with the host's entry. Host-wide things (a robots.txt
@@ -39,8 +39,7 @@ what the upstream actually reports:
                       ``abrowser_turn``, on the loop (_cdp.acdp_call), once it has the browser's turn.
   budget              a full gate is a line: a request's permit wait and start wait, over every gate
                       it passes, run until the caller's own deadline and only then is the request
-                      turned away unsent (2026-11-11: the shorter declared
-                      max_wait_s was removed). A caller with no deadline waits until served. See
+                      turned away unsent. A caller with no deadline waits until served. See
                       _guard.deadline_refusal.
   redirects           AsyncHopGates holds the gates of the host a request is on: a redirect to the same
                       host continues the same visit; a redirect to another host lets go of the first
@@ -68,7 +67,7 @@ what the upstream actually reports:
   host liveness       HOST_DOWN_AFTER connections in a row that were not made (refused, handshake
                       timeout, EOF) open the host's breaker for HOST_DOWN_FOR_S: requests to it fail at
                       once with HostDown (an UpstreamBusy, nothing sent, no permit taken), and the health
-                      check reads that as down (2026-10-20). A run of failures opens it
+                      check reads that as down. A run of failures opens it
                       only when some host answered after the run began: when nothing answers at all,
                       this machine's network is down, not the host. Every refusal names
                       its URL (credentials masked) and the initiator (_guard.initiator).
@@ -150,7 +149,7 @@ _guard.register_unsent(UpstreamBusy, DeclaredUserAgentRefused)
 # defer_on_429=False (design decision 3, 2026-09-29). Everywhere else the default holds: a response that
 # carries Retry-After defers the whole upstream for every caller. The exemption covers the upstream
 # gate only; the host's robots.txt Crawl-delay gate is deferred regardless (see observe).
-# Only the modules listed here may switch the deferral off (the test that enforced it was deleted).
+# Only the modules listed here may switch the deferral off (nothing checks it).
 SELF_BACKOFF = {
     "omniseek.core._openalex": (
         "per-lane budgets: a budget 429 marks that lane dry until the reset OpenAlex reports and the "
@@ -673,9 +672,9 @@ class AsyncHopGates:
     ONE place the redirect rule lives (design decision 1, 2026-09-29).
 
     ``enter(url)`` before every hop. A hop to the SAME host continues the same visit: no second
-    permit, no second start slot (a same-host 301 used to wait a whole Crawl-delay, or be refused
+    permit, no second start slot (otherwise a same-host 301 would wait a whole Crawl-delay, or be refused
     outright past 15 s). A hop to ANOTHER host first lets go of the current host's gates,
-    then takes the new host's gates within the time left (a redirect used to land on a
+    then takes the new host's gates within the time left (otherwise a redirect would land on a
     gated host without its gate). Two hosts' gates are never held at once, so two redirect chains can
     never wait on each other.
 
@@ -854,8 +853,8 @@ def parse_retry_after(value: Any) -> Optional[float]:
     """Seconds a Retry-After asks for, in either RFC 9110 form (section 10.2.3): delay-seconds, or an
     HTTP-date (a date already past is 0). ``value`` is the header's value, or a response's headers
     (anything with ``.get``: httpx Headers, a plain dict naming it in either case), read for
-    Retry-After. None when absent or neither form (the first number of a date used to be
-    read as seconds, so "Wed, 21 Oct 2026 07:28:00 GMT" deferred 21 s). OmniSeek's ONE Retry-After
+    Retry-After. None when absent or neither form (reading the first number of a date as
+    seconds would make "Wed, 21 Oct 2026 07:28:00 GMT" defer 21 s). OmniSeek's ONE Retry-After
     parser: every module that reads the header calls this."""
     if value is not None and not isinstance(value, str) and hasattr(value, "get"):
         value = value.get("retry-after") or value.get("Retry-After")
@@ -910,7 +909,7 @@ def observe(target: str, headers: Any, status: Optional[int] = None, *, lane: Op
     GitHub secondary-limit 403, any status) pushes the next allowed start by that long, for EVERY
     caller, capped at _DEFER_CAP_S: the upstream's gate, and the robots.txt Crawl-delay gate of the
     host the response came from (``host``, else ``target``'s host; design decision of 2026-09-29 on
-    section 16.5, item 5: a host with a Crawl-delay gate and no upstream gate used to defer nothing).
+    section 16.5, item 5: a host with a Crawl-delay gate and no upstream gate defers too).
     Only a module listed in SELF_BACKOFF, which honours that upstream's Retry-After itself, passes
     ``defer_on_429=False``, and that switches off the UPSTREAM gate's deferral only: the host's
     Crawl-delay gate is deferred regardless (design decision of 2026-09-29: an exemption is no wider

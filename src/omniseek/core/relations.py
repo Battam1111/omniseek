@@ -7,7 +7,7 @@ decides what a connection MEANS (advisor vs peer, real tie vs list-mate). This
 module is the channel; the agent is the network cartographer (same split as
 cartographer.py for citation graphs).
 
-Built from live probes against the real host (2026-06-10):
+Built from live probes against the real host:
   • Identity is the cross-cutting hard problem: every layer starts with name -> WHICH
     person. Senior authors resolve cleanly in OpenAlex; juniors/arXiv-frontier are
     ambiguous or missing there and need Semantic Scholar. So resolution returns
@@ -64,17 +64,19 @@ _MAX_WORKS = 200  # OpenAlex per-page hard max; one author's neighborhood in one
 _WORKS_TTL = 6 * 3600     # per-author work lists: the heavy fetch; a person's recent papers land slowly
 _RESOLVE_TTL = 3600       # name -> id map: stable, but short so a fresh ingestion is picked up within the hour
 _COHORT_TTL = 6 * 3600    # institution roster: an org's publishing cohort shifts slowly
-_FETCH_AUTHORS_AT_ONCE = 8  # coauthors: per-author work pulls in flight at once (the old thread pool's size)
+_FETCH_AUTHORS_AT_ONCE = 8  # coauthors: per-author work pulls in flight at once
 
 
 async def _cache_get(key: str):
-    """``cache.get`` off the loop (disk read on the IO lane)."""
-    return await anyio.to_thread.run_sync(cache.get, key, limiter=portal.IO_LANE)
+    """``cache.get`` off the loop (disk read on the IO lane), bounded (portal.run_io): a miss past it."""
+    ok, value = await portal.run_io(cache.get, key)
+    return value if ok else None
 
 
 async def _cache_set(key: str, value, ttl: int) -> None:
-    """``cache.set`` off the loop (disk write on the IO lane)."""
-    await anyio.to_thread.run_sync(functools.partial(cache.set, key, value, ttl=ttl), limiter=portal.IO_LANE)
+    """``cache.set`` off the loop (disk write on the IO lane), bounded (portal.run_io): past it the
+    write lands on its own."""
+    await portal.run_io(functools.partial(cache.set, key, value, ttl=ttl))
 
 from omniseek.core.recall import graph  # noqa: E402 — the graph write verb + mint registry
 

@@ -1,22 +1,16 @@
-"""Transplanted infra JOBS: the movable services that used to be standalone launchd crons,
-now zero-arg job fns the in-process scheduler (omniseek.core.jobs) runs on their declared schedules.
+"""Infra JOBS: zero-arg job fns the in-process scheduler (omniseek.core.jobs) runs on their declared
+schedules.
 
-WHY THEY MOVED (the derived architecture): the test for what stays OUTSIDE the organ is "must this
+WHY THEY ARE IN-PROCESS (the derived architecture): the test for what stays OUTSIDE the organ is "must this
 still run when the organ is dead?" These do NOT -- a source-health probe, an xhs session warm, the
-idle-browser reaper and log rotation are all self-maintenance of a LIVE eye. (The wechat2rss probe,
-the monthly curator pass and the weekly source audit were retired on 2026-10-19: wechat is probed
-with every other source by source-health, and the curator tools stay callable by hand. The NSERC
-cache prime and the weekly reading list were retired on 2026-10-20, with the NSERC source.) So each
-old script's LOOP body becomes a job fn here;
-its hard-won lessons (the consecutive-fail thresholds, the cooldowns, the state-file formats, the
-safety rationales) are transplanted verbatim, because those lessons are what kept the fleet quiet
-and safe. The push path changes from scripts/_sentinel_common (urllib, out-of-process) to
-omniseek.core.notify (httpx, in-process), keeping the same fail-open contract.
+idle-browser reaper and log rotation are all self-maintenance of a LIVE eye. Wechat is probed with
+every other source by source-health, and the curator tools are callable by hand. The consecutive-fail
+thresholds, the cooldowns, the state-file formats and the safety rationales are what keep the fleet
+quiet and safe. Pushes go through omniseek.core.notify (httpx, in-process), fail-open.
 
 Each job runs INSIDE the writer process on the ONE scheduler thread, wrapped by jobs.run_due_jobs in
 its own try/except (a failing job never stops the rest, and the scheduler alerts on an unhandled
-exception with a 24h cooldown). The state files these jobs keep are the SAME paths the old crons
-used, so the existing deployment's state carries across the migration unchanged.
+exception with a 24h cooldown).
 """
 
 from __future__ import annotations
@@ -41,9 +35,7 @@ _LOG_DIR = where.logs()
 
 
 # ── tiny local state helpers (the _sentinel_common load/save idiom, atomic) ───────────────────────
-# These were transplanted from the old external watchdog's helper module (scripts/_sentinel_common,
-# retired 10-20 with it) when the crons moved in-process; they keep its atomic load_state/save_state/should_alert so the state-file
-# FORMATS + cooldown semantics the old crons relied on are preserved byte-for-byte.
+# Atomic load_state/save_state/should_alert: the state-file FORMATS and cooldown semantics stay stable.
 
 def _load_state(path: Path) -> dict:
     if not path.exists():
@@ -88,15 +80,11 @@ def _should_alert(key: str, alerts: dict, cooldown: int) -> bool:
 
 
 def _alert(title: str, body: str, *, questions=None, **_ignored) -> None:
-    """Fail-open in-process ALARM. Retired Bark's group/level hints are absorbed and ignored.
+    """Fail-open in-process ALARM. Group/level hints are absorbed and ignored.
 
-    2026-08-12: Bark was deleted from the fleet. It had been unreachable from the service host (three
-    probes, the connection never establishing, 20s timeouts, nine "push failed" lines across the
-    logs) while EVERY infra alarm pushed to it and to nothing else. Alarms were written, counted,
-    logged as pushed, and delivered nowhere, which is worse than having no alarms because the quiet
-    reads as calm. One channel now, WeCom, which answers in 0.06s and is where the operator actually
-    reads. The contract is unchanged: never raise, a broken alarm must not break the job that
-    raised it.
+    One channel, WeCom (answers in 0.06s, and is where the operator actually reads): an alarm delivered
+    nowhere is worse than no alarm, because the quiet reads as calm. Never raise: a broken alarm must
+    not break the job that raised it.
 
     ``questions``: what the operator must do or answer; given, the push goes to the operator
     whatever eye.infra_jobs routes to (see notify.wecom_push)."""
@@ -125,11 +113,10 @@ def _alert(title: str, body: str, *, questions=None, **_ignored) -> None:
 # account-risky activity. A DEAD CDP Chrome is relaunched (its launchd KeepAlive is
 # SuccessfulExit=false, so a clean quit is not auto-relaunched); a FAILED self-heal escalates to an alert
 # (the CDP safety net itself is down).
-# ONE job, two lanes (2026-10-19; it used to be two jobs, a daily full run at 05:00 and a 6h fast
-# non-CDP run). Every 6h run probes the non-CDP sources, so a dead open-API/RSS source surfaces in
+# ONE job, two lanes. Every 6h run probes the non-CDP sources, so a dead open-API/RSS source surfaces in
 # ~6-12h (N_CONSECUTIVE=2). The CDP lane (heal + serial CDP probes + the Chrome liveness rows) rides
 # one run a day, decided by when a run last carried it (state "cdp_lane_at", the run's START epoch;
-# see _cdp_lane_due): every fourth run carries it, once a day as before, never twice.
+# see _cdp_lane_due): every fourth run carries it, once a day, never twice.
 # State: <state>/health-watchdog-state.json (unchanged path -> the existing state carries).
 _HEALTH_STATE = _STATE / "health-watchdog-state.json"
 N_CONSECUTIVE = 2                       # consecutive failed runs before alerting
@@ -138,7 +125,7 @@ REALERT_COOLDOWN_S = 3 * 24 * 3600      # while still down, re-nag at most every
 HEALTH_EVERY_S = 6 * 3600               # the job's interval (jobs.py registers every:21600s, a test pins it)
 HEALTH_BUDGET_S = 900                   # the job's wall-clock budget (jobs.py registers it from here); the
                                         # exit-node sweep a run may end with must finish inside it too
-CDP_LANE_EVERY_S = 24 * 3600            # the CDP lane's cadence, the old daily full run's
+CDP_LANE_EVERY_S = 24 * 3600            # the CDP lane's cadence: once a day
 
 # CDP (logged-in browser) sources -- probed INDIVIDUALLY + SERIALLY (login-state visibility).
 # xiaohongshu lives on the ISOLATED 9223 Chrome (小号); the rest on the shared 9222.
@@ -219,9 +206,8 @@ def _health_probe(adapter) -> tuple[Optional[bool], str, bool]:
     design, it asked the upstream nothing this run (a metered quota, a busy declared gate, a breaker,
     an answer from cache; recorded as ``unverified``). Neither is a failure.
 
-    This function used to declare ``-> tuple[bool, str]`` and flatten None into False on the last
-    line, so a probe we could not complete was recorded as a source that is down. On 2026-08-19 that
-    flattening had ten sources (all six Stack Exchange slices, github, github_trending,
+    Flattening None into False would record a probe we could not complete as a source that is
+    down. On 2026-08-19 that flattening had ten sources (all six Stack Exchange slices, github, github_trending,
     github_releases, reddit) soft-skipped out of every broad sweep while a paced re-probe found nine
     of them healthy. Propagating None keeps "we did not measure" separate from "it failed"; the caller
     must not move the consecutive-fail counter on None.
@@ -260,8 +246,7 @@ def _probe_tapped(name: str, adapter, noted: dict) -> tuple[Optional[bool], str,
 # "They refuse us" is not "we are broken", and the two were indistinguishable in the alert. A 403
 # from a WAF, a rate-ban, or a proof-of-work bot wall is the far end's decision: no code change here
 # fixes it, and reading it as a defect sends the reader hunting through our own adapter. The public
-# health page has counted `blocked` apart from `down` since 2026-08-18; the internal watchdog had
-# not. Measured 2026-09-09: zenodo "restricted due to unusual traffic from your network", cifar.ca
+# health page counts `blocked` apart from `down`. Measured 2026-09-09: zenodo "restricted due to unusual traffic from your network", cifar.ca
 # behind Sucuri, dblp behind an Anubis proof-of-work wall, all reported exactly like a real outage.
 _REFUSED_MARKERS = ("403", "401", "forbidden", "unusual traffic", "bot wall", "not a bot",
                     "captcha", "access denied", "rate limit", "too many requests")
@@ -284,7 +269,7 @@ def _health_track(name: str, ok: Optional[bool], msg: str, fails: dict, alerts: 
     coincidental timeout or a busy gate. No alert either way. The run body records the name in
     ``unmeasured`` or ``unverified`` so the gap stays visible.
 
-    The one exception is evidence from outside the check (2026-11-07): ``fail_at``
+    The one exception is evidence from outside the check: ``fail_at``
     {name: epoch of its last failed check} is kept here, and ``fetched_at`` is the source's last live
     fetch that worked (fetcher.fetched_ok_at). A None after a fetch that worked LATER than the last
     failed check clears the count like a True would (recovered when it had been reported down).
@@ -358,7 +343,7 @@ def _track_probed(state: dict, results: dict, probed: list, retired: set, fails:
 def _gate_held_rounds(state: dict, results: dict, probed: list, fails: dict) -> None:
     """A source whose check said it failed, re-read as "not verified" only because one of OmniSeek's
     gates also refused a request (``_probe.held_by_gate``), N_CONSECUTIVE runs in a row, is reported
-    DOWN from that run on (2026-10-20). lobste.rs read "not verified" for two days
+    DOWN from that run on. lobste.rs read "not verified" for two days
     while its host completed no handshake at all. A check that asked nothing (a busy gate in front of
     the whole check, a metered quota) is not this and stays not verified. The round count is kept in
     the state's ``gate_held`` map (merged like the other maps, so a run that did not probe a source
@@ -471,11 +456,11 @@ def run_source_health(scope: Optional[str] = None) -> dict:
     heal_failed = _heal_cdp_chrome() if full else []  # CDP heal rides the CDP lane only (needs a browser)
 
     names = sorted(fetcher.all_adapter_names())
-    # RETIRED sources are PROBED too (since 2026-10-04), and only watched for coming back: a curator
+    # RETIRED sources are PROBED too, and only watched for coming back: a curator
     # retire (reversible overlay, reason begins "retired...") parks a source as intentionally dead, so
     # its failing probe is the expected state and gets no fail streak, alert or status row (handled
     # after the probes). Its answering probe is the rollback signal its retire note asks for. Skipping
-    # them here, as this used to, made that signal dead code: higheredjobs_cs sat retired by a stale
+    # them here would make that signal dead code: higheredjobs_cs sat retired by a stale
     # overlay from 2026-06-18 to 2026-10-04 while healthy, and nothing flagged it.
     def _is_retired(n: str) -> bool:
         # fetcher.retired_reason is the ONE retire derivation. get_adapter may return None if a
@@ -585,7 +570,7 @@ def run_source_health(scope: Optional[str] = None) -> dict:
     # across runs and alert on a source's full->degraded transition once (a bundle names its dead feeds in
     # the health message via the "degraded" marker). Recovery to full clears it silently. Only a
     # VERIFIED True counts: an unverified None whose message says "degraded" (a busy gate, a breaker)
-    # lost no members, and before 2026-10-04 those read True and could fire this alert.
+    # lost no members; reading those as True could fire this alert.
     degraded_now = {n for n in probed
                     if n not in retired and results[n][0] is True and "degraded" in results[n][1].lower()}
     prev_degraded = set(state.get("degraded", []))
@@ -632,6 +617,13 @@ def run_source_health(scope: Optional[str] = None) -> dict:
             broke[n] = exit_node.only_hosts(noted.get(n, []), grew)
     state["dead_hosts"] = (dead_now if full
                            else {**{k: v for k, v in prev_dead.items() if k not in set(probed)}, **dead_now})
+    # dead_host_kinds {source: {host: [failure kinds]}}, same keys and scope rule: dead_hosts is
+    # every host a failing source touched, a logged-out source included; the health page lists as
+    # unreachable only the hosts whose every kind is exit_node.NETWORK, the rest with their kinds.
+    kinds_now = {n: exit_node.failed_host_kinds(noted.get(n, [])) for n in dead_now}
+    prev_kinds = state.get("dead_host_kinds") if isinstance(state.get("dead_host_kinds"), dict) else {}
+    state["dead_host_kinds"] = (kinds_now if full
+                                else {**{k: v for k, v in prev_kinds.items() if k not in set(probed)}, **kinds_now})
 
     # REFUSED set, same scope rule as `degraded`: which of the failing sources are failing because
     # the far end turned us away. Purely additive bookkeeping (the fail streaks and the alert
@@ -771,6 +763,10 @@ _WARMER_INSTANCES = {
         "https://www.rednote.com/search_result?keyword={kw}&type=51", "rednote", "xhs_search"),
 }
 
+# label -> the source whose account it warms (omniseek.core.login_log.ACCOUNTS: the login record and the
+# one-push-per-logout state are kept per account).
+_WARMER_SOURCE = {"小号-rednote": "xiaohongshu"}
+
 _DOM_JS = r"""(()=>({
   note_items: document.querySelectorAll("section.note-item, [class*='note-item'], a[href*='/explore/'], a[href*='/search_result/']").length,
   login_overlay: !!document.querySelector(".login-container,[class*='LoginModal'],.reds-mask"),
@@ -822,13 +818,13 @@ def _warm_one(p, label: str, cdp: str, home: str, search_tpl: str, key: str, pro
 
     ``unprobed`` is set when the browser could not be reached at all, or when the home or search page
     did not finish loading in time (a Page.goto timeout). Neither says anything about the login, so
-    the caller must not turn it into a "session degraded, re-login" alert (2026-09-26: it did, three
+    the caller must not turn it into a "session degraded, re-login" alert (it did, three
     times a day per account, for browsers the idle reaper had merely stopped; 2026-11-06: a home page
     that timed out was pushed as a re-scan). A page that loaded and shows a login wall still alerts."""
     from urllib.parse import quote
     from omniseek.core.sources.walled import _cdp
-    res = {"label": label, "ok": False, "unprobed": False, "reason": "",
-           "acw_tc": False, "web_session": False}
+    res = {"label": label, "source": _WARMER_SOURCE.get(label, ""), "ok": False, "unprobed": False,
+           "reason": "", "acw_tc": False, "web_session": False}
     # The idle reaper stops a browser nobody used for CDP_IDLE_TIMEOUT_S, and this job runs only
     # three times a day, so it usually finds its browser stopped. Start it the way every read does;
     # ensure_browser also stamps last-use, so the reaper leaves it running for the whole warm.
@@ -896,6 +892,13 @@ def _warm_one(p, label: str, cdp: str, home: str, search_tpl: str, key: str, pro
             except Exception as exc:  # noqa: BLE001
                 res["retry"] = f"goto failed: {exc!r}"
         res["kind"] = kind
+        if res["source"]:
+            from omniseek.core import login_log
+            login_log.record(res["source"], {"ok": "in", "login_wall": "out"}.get(kind, "unknown"),
+                             by="warmer", path="search_page", kind=kind,
+                             note_items=dom.get("note_items"), login_overlay=dom.get("login_overlay"),
+                             login_btn=dom.get("login_btn"), body_len=dom.get("body_len"),
+                             retry=res.get("retry"), web_session=res["web_session"], acw_tc=res["acw_tc"])
         res["dom_items"] = dom.get("note_items")
         res["body_len"] = dom.get("body_len")
         res["ok"] = kind == "ok"
@@ -934,7 +937,8 @@ def _warm_forum_one(source_name: str, label: str, query: str) -> dict:
     ``self_heals`` marks a source whose reactive search path already Barks (so the warmer skips a
     duplicate Bark for it). Never raises (per-instance isolation)."""
     from omniseek.core.fetcher import get_adapter
-    res = {"label": label, "ok": False, "reason": "",
+    from omniseek.core import login_log
+    res = {"label": label, "source": source_name, "ok": False, "reason": "",
            "acw_tc": False, "web_session": False, "self_heals": False}
     ad = get_adapter(source_name)
     if ad is None:
@@ -945,29 +949,56 @@ def _warm_forum_one(source_name: str, label: str, query: str) -> dict:
         docs = ad.search(query, 3) or []
     except Exception as exc:  # noqa: BLE001 -- per-instance isolation
         res["reason"] = f"search raised: {exc!r}"
+        login_log.record(source_name, "unknown", by="warmer", path="adapter_search", raised=repr(exc)[:200])
         return res
     res["ok"] = len(docs) > 0
+    # The warmer's own reading (the adapter's search above recorded what the site answered).
+    login_log.record(source_name, "in" if res["ok"] else "out", by="warmer", path="adapter_search",
+                     results=len(docs))
     if not res["ok"]:
         res["reason"] = f"degraded: {source_name} search returned 0 (logged out / blocked / empty)"
     return res
 
 
-# ── CDP idle reaper (2026-08-29) ──────────────────────────────────────────────────────────────
+# ── CDP idle reaper ──────────────────────────────────────────────────────────────
 # Stops CDP browsers nobody has used for a while, so a 16 GB machine is not permanently holding
 # 3.1 GB of idle Chrome. Pairs with _cdp.ensure_browser, which brings one back in ~1s on the next
 # call (measured). Runs process-isolated, so it reads last-use stamps off DISK: it has its own
 # interpreter and cannot see any in-process counter.
 #
-# ⚠️ CDP_IDLE_TIMEOUT_S is a PROBE VALUE, not derived from anything. Pre-registered calibration:
-# after two weeks of real traffic, compare the share of calls that had to cold-start against the
-# browsers' average daily uptime. Cold-start share above ~30% means the window is too short
-# (we are closing browsers people are still using) -> lengthen. Average uptime still above ~6h/day
-# means it is too long (we are not getting the memory back) -> shorten. Neither -> graduate it and
-# replace this notice with the measurement. Do NOT let it graduate silently.
-# Cold start costs 1 second, which is why getting this number wrong is cheap.
-CDP_IDLE_TIMEOUT_S = int(os.environ.get("OMNISEEK_CDP_IDLE_S", 30 * 60))
+# CDP_IDLE_TIMEOUT_S, derived 2026-11-18 from the reaper's own log (every tick logs each
+# up browser's idle minutes, so every use separated by more than one 10-minute tick is recovered to the
+# minute: 130 ticks, 01:34 to 23:06 of 11-18) and the on-demand start lines:
+#  - 9222 (shared browser: zhihu / douban / 一亩三分地 logins, and the JS renders of scrape_js_sites and
+#    news_scraper) is used every prewarm cycle (prewarm.WARM_INTERVAL_S, 30 min: the uses fall at :02 to
+#    :07 and :32 to :38) plus calls in between: 61 uses, 60 gaps, the longest 37 min (16 gaps of 30 to
+#    37 min). Never idle longer than one prewarm cycle plus its drift.
+#  - 9223 (xiaohongshu) is used by the session warmer (09:17, 14:17, 19:17) and named searches: 7 uses,
+#    gaps 6, 56, 108, 136, 293, 330 min.
+#  - A start costs 0.8 to 2 s (6 starts), once 6 s; Browser.close 1 to 2 s (CDP_CLOSE_WAIT_S below).
+#  - With 30 min (= the prewarm interval) the 30 to 37 min gaps of 9222 straddle the threshold:
+#    08:34 and 17:24 the reaper stopped it at 30 and 31 min idle and the next prewarm or call started it
+#    again 1 and 3 min later: two starts for 1 to 3 min of memory back.
+# So the threshold must sit above the prewarm rhythm, which is one prewarm interval plus the longest drift
+# seen (7 min), rounded up to the reaper's own tick (600 s, the cdp-reaper row in jobs.py), since a stop
+# can only happen on a tick anyway: 30 + 10 = 40 min. It must also stay below the shortest real idle
+# stretch, the 56 min gap of 9223, so that browser is still stopped in every one (measured: it would be
+# up about 1 h a day longer than with 30 min, 6 long gaps x 10 min). Any value in [40, 56) min makes the
+# same stops on this day; the low end is taken because each extra minute keeps 9223 up in every long gap.
+# What this does NOT buy: 9222 stays up around the clock (it did with 30 min too), because the prewarm
+# cycle renders through it every 30 min; getting its memory back means moving those renders off it or
+# lengthening their TTL, not changing this number. The per-browser memory (3.1 GB for the four browsers
+# of 08-29) was not re-measured (the worker sandbox cannot read process memory); it does not enter the
+# choice, which is set by the gap valley, only how much the 9223 hour costs.
+# PROVISIONAL: one day of readings. Recheck with 14 days of reaper lines: rebuild the uses per port the
+# same way; if a 9222 gap between 40 min and its prewarm interval + 10 min appears more than once a day,
+# or a real idle gap of 9223 shorter than 40 min appears, re-derive. If prewarm.WARM_INTERVAL_S changes,
+# this follows it.
+from omniseek.core.prewarm import WARM_INTERVAL_S as _WARM_INTERVAL_S  # noqa: E402 (light: logging/threading/time)
+_REAPER_TICK_S = 600   # the cdp-reaper row's schedule in jobs.py ("every:600s")
+CDP_IDLE_TIMEOUT_S = int(os.environ.get("OMNISEEK_CDP_IDLE_S", _WARM_INTERVAL_S + _REAPER_TICK_S))
 
-# How the reaper stops a browser (2026-10-05): the CDP command Browser.close first, then waits for
+# How the reaper stops a browser: the CDP command Browser.close first, then waits for
 # the main process to exit, and only falls back to `launchctl kill TERM` when that does not work.
 # TERM made Chrome skip the end of its shutdown and leave its app-bundle clone behind every time
 # (12 of 12 on the live host; Browser.close: 0 of 13; see _cdp.close_browser). KeepAlive does not
@@ -1202,7 +1233,11 @@ def run_session_warmer() -> dict:
                        questions=[f"有空请看一眼 {r['label']}：小红书搜索现在还出结果吗？"])
             continue
         streaks.pop(r["label"], None)
-        if _should_alert(f"session_degraded:{r['label']}", alerts, _WARMER_COOLDOWN_S):
+        # One push per logout of an account, shared with the adapters' own pushes and kept on disk
+        # (omniseek.core.login_log.claim_push): the 6h cooldown re-pushed the same logout.
+        from omniseek.core import login_log
+        if (login_log.claim_push(r["source"]) if login_log.account_of(r.get("source", ""))
+                else _should_alert(f"session_degraded:{r['label']}", alerts, _WARMER_COOLDOWN_S)):
             seen = "暖号搜索见到登录墙" if r.get("kind") == "login_wall" else "暖号验证失败"
             _alert(f"{r['label']} session 退化",
                   f"{seen}:{r['reason']}。登录态可能已失效,需 VNC 进主机重新扫码登录该账号"
@@ -1231,33 +1266,72 @@ def run_session_warmer() -> dict:
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
 # JOB: log rotation   (transplanted from omniseek_http_watchdog.py rotation half; daily@04:50)
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
-# Copytruncate any oversized log in <logs> so one chatty source can't grow a log unbounded
+# Copytruncate OmniSeek's logs in <logs> so one chatty source can't grow a log unbounded
 # (eye-http.err reached 63MB from a reddit Arctic-Shift 429 storm). launchd opens these redirects
 # with O_APPEND (verified 2026-06-20: truncate-in-place stayed small, no sparse hole), so this is
-# safe with the writer still running: it resumes appending at the new EOF, NO restart needed. The
-# last _LOG_KEEP_TAIL bytes are kept as <name>.1 for recent context.
-_LOG_MAX_BYTES = 30 * 1024 * 1024   # copytruncate any eye log over 30MB
-_LOG_KEEP_TAIL = 4 * 1024 * 1024    # keep the last 4MB of recent context after rotating
+# safe with the writer still running: it resumes appending at the new EOF, NO restart needed.
+#
+# KEEP: a rotated log is kept WHOLE, gzipped, as <name>.<YYYYMMDD-HHMMSS>.gz,
+# and a generation is deleted LOG_KEEP_DAYS after it was written. Until then only the last 4 MB were
+# kept (<name>.1), which covered about three hours of organ.eye-http.err: the 11-17 lines of the
+# reaper stopping the login browsers were gone by the time the 11-18 logout was looked into. A log
+# is rotated when it passes _LOG_MAX_BYTES or when its last rotation is LOG_KEEP_DAYS old, so a
+# quiet log is expired too, and every line stays on disk at least LOG_KEEP_DAYS (at most about twice
+# that). The same pass rotates the login-verdict record in <state> (omniseek.core.login_log).
+# LOG_KEEP_DAYS = 7 is PROVISIONAL: a logout is found by the warmer within 6 h or by the watchdog at
+# its daily 03:47 run, its cause is usually looked into within a day or two, plus room for a weekend.
+# Calibration: at the next two root-cause hunts, write down how far back the logs had to be read;
+# keep 7 if both fit well inside it, else set it to the longer of the two plus a weekend.
+# The <name>.1 files of the old rule are generations too: deleted once they are LOG_KEEP_DAYS old.
+_LOG_MAX_BYTES = 30 * 1024 * 1024   # rotate any eye log over 30MB at the daily pass
+LOG_KEEP_DAYS = 7
+
+
+def _log_generations(lg: Path) -> list:
+    return [g for g in lg.parent.glob(lg.name + ".*")
+            if g.name == lg.name + ".1" or (g.name.endswith(".gz") and g.name[len(lg.name) + 1:-3].count("-") == 1)]
+
+
+def _rotate_one(lg: Path, now: float) -> bool:
+    """Rotate one live log when due (see KEEP above), then delete its generations older than
+    LOG_KEEP_DAYS. Returns whether it rotated."""
+    import gzip
+    import shutil
+    keep_s = LOG_KEEP_DAYS * 86400
+    gens = _log_generations(lg)
+    st = lg.stat()
+    last = max((g.stat().st_mtime for g in gens), default=getattr(st, "st_birthtime", st.st_mtime))
+    rotated = False
+    if st.st_size > _LOG_MAX_BYTES or (st.st_size > 0 and now - last >= keep_s):
+        gen = lg.parent / f"{lg.name}.{datetime.fromtimestamp(now).strftime('%Y%m%d-%H%M%S')}.gz"
+        with open(lg, "rb") as src, gzip.open(gen, "wb") as dst:
+            shutil.copyfileobj(src, dst, 1024 * 1024)
+        with open(lg, "r+b") as f:  # truncate in place; the O_APPEND writer resumes at EOF=0
+            f.truncate(0)
+        rotated = True
+        log.info("rotated %s (%d bytes) into %s", lg.name, st.st_size, gen.name)
+    for g in _log_generations(lg):
+        if now - g.stat().st_mtime >= keep_s:
+            g.unlink()
+            log.info("log generation %s is %d days old: deleted", g.name, LOG_KEEP_DAYS)
+    return rotated
 
 
 def rotate_logs() -> int:
-    """Copytruncate every oversized log in <logs>. Returns how many it rotated. One bad log
-    never blocks the others; the whole pass is wrapped so log hygiene can never break the scheduler."""
+    """Rotate OmniSeek's logs in <logs> and the login-verdict record (see KEEP above). Returns how many
+    it rotated. One bad log never blocks the others; the whole pass is wrapped so log hygiene can
+    never break the scheduler."""
     rotated = 0
+    now = time.time()
     try:
-        for lg in (*_LOG_DIR.glob("*.err"), *_LOG_DIR.glob("*.log")):  # .1 generations are not re-matched
+        from omniseek.core import login_log
+        live = [*_LOG_DIR.glob("*.err"), *_LOG_DIR.glob("*.log")]  # generations are not re-matched
+        verdicts = login_log.verdicts_path()
+        if verdicts.exists():
+            live.append(verdicts)
+        for lg in live:
             try:
-                if lg.stat().st_size <= _LOG_MAX_BYTES:
-                    continue
-                with open(lg, "rb") as f:
-                    f.seek(-_LOG_KEEP_TAIL, os.SEEK_END)
-                    tail = f.read()
-                (lg.parent / (lg.name + ".1")).write_bytes(tail)
-                with open(lg, "r+b") as f:  # truncate in place; the O_APPEND writer resumes at EOF=0
-                    f.truncate(0)
-                rotated += 1
-                log.info("rotated %s (>%dMB, kept last %dMB as %s.1)",
-                         lg.name, _LOG_MAX_BYTES // (1024 * 1024), _LOG_KEEP_TAIL // (1024 * 1024), lg.name)
+                rotated += _rotate_one(lg, now)
             except Exception as exc:  # noqa: BLE001 -- one bad log must not block the others
                 log.warning("rotate %s failed: %s", lg.name, exc)
     except Exception as exc:  # noqa: BLE001 -- log hygiene must NEVER break the scheduler
@@ -1266,7 +1340,7 @@ def rotate_logs() -> int:
 
 
 def run_log_rotation() -> dict:
-    # 2026-11-03: the same daily pass deletes expired cache files. cache.clear_expired
+    # the same daily pass deletes expired cache files. cache.clear_expired
     # ran only at a (re)start (serve_http), so a stretch with no release kept dead JSON on disk. No
     # size cap on top: the TTLs bound the total (11-03: 1,060 files, ~157 MB, oldest from 10-21).
     from omniseek.core import cache
@@ -1279,7 +1353,7 @@ def run_log_rotation() -> dict:
 
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
-# JOB: aiid-snapshot   (weekly; 2026-10-20)
+# JOB: aiid-snapshot   (weekly)
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
 # The ai_incidents source answers from a local index built off the AI Incident Database's weekly
 # public snapshot. This job checks the snapshot page once a week and, only when a newer snapshot is

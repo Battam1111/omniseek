@@ -62,6 +62,27 @@ _NOT_AUTHOR = {
 }
 
 
+# What zhihu's own API says about the session: the status of /api/v4/me (the call zhihu's
+# pages make on load) and, when it refuses, its error code and message. Never the profile it returns
+# (only whether it carries an id), never a cookie. Recorded beside the URL verdict, not used for it.
+_ME_JS = r"""async () => {
+  try {
+    const r = await fetch('/api/v4/me', {credentials: 'include'});
+    let j = null; try { j = await r.json(); } catch (e) {}
+    const e = (j && j.error) || null;
+    return {status: r.status, error_code: e ? e.code : null, error_name: e ? e.name : null,
+            error_message: e ? e.message : null, has_id: !!(j && j.id)};
+  } catch (e) { return {fetch_error: String(e).slice(0, 120)}; }
+}"""
+
+
+def _me_answer(page) -> dict:
+    try:
+        return page.evaluate(_ME_JS) or {}
+    except Exception as exc:  # noqa: BLE001 -- the record is best-effort
+        return {"evaluate_error": repr(exc)[:120]}
+
+
 def _split_author_prefix(excerpt: str) -> tuple[Optional[str], str]:
     """LAST-RESORT author read: peel a leading '作者名：' off an excerpt.
 
@@ -201,12 +222,15 @@ class ZhihuAdapter(SourceBase):
                 # No result title: genuine-empty OR logged-out (the same silent-false-empty class the
                 # base sources self-heal). zhihu login is QR/SMS, so it CANNOT autofill-relogin like
                 # yipinsanfendi; the best reactive move is to FAIL LOUD (a typed diagnostic) so a []
-                # is never mis-read as 'nothing there', then propagate as before. Failure-path-only:
+                # is never mis-read as 'nothing there', then propagate. Failure-path-only:
                 # the success path below is byte-identical, so this cannot break a working search.
                 pu = page.url or ""
-                if ("/signin" in pu or "/login" in pu
-                        or page.query_selector(".SignFlow, .Modal .SignContainer, .signFlow")):
-                    from omniseek.core import diag
+                wall = bool(page.query_selector(".SignFlow, .Modal .SignContainer, .signFlow"))
+                if "/signin" in pu or "/login" in pu or wall:
+                    from urllib.parse import urlsplit
+                    from omniseek.core import diag, login_log
+                    login_log.record("zhihu", "out", by="adapter", path="search",
+                                     landed_on=urlsplit(pu).path, sign_flow_on_page=wall)
                     diag.note("zhihu.auth_expired", url=url, body=(
                         "AUTH_EXPIRED: zhihu shared-Chrome session logged out (login wall on search). "
                         "zhihu login is QR/SMS so it cannot autofill-relogin; needs a VNC re-login on "
@@ -225,6 +249,9 @@ class ZhihuAdapter(SourceBase):
 
         soup = BeautifulSoup(html, "lxml")
         cards = soup.select(".SearchResult-Card, .List-item")
+        if cards:
+            from omniseek.core import login_log
+            login_log.record("zhihu", "in", by="adapter", path="search", result_cards=len(cards))
 
         docs: list[Document] = []
         seen_urls: set[str] = set()
@@ -279,7 +306,7 @@ class ZhihuAdapter(SourceBase):
 
         # Not a question or article page (2026-11-04): for an article that does not exist or was
         # deleted, 知乎 answers with its own error page (an h1 reading 你似乎来到了没有知识存在的荒原) that has
-        # no question header, no article header and no body, and this reader used to hand that h1 back as the
+        # no question header, no article header and no body, and a reader would hand that h1 back as the
         # document. Judged by structure (all three absent), not by the sentence, which 知乎 can reword.
         if not body and not soup.select_one("h1.QuestionHeader-title, h1.Post-Title"):
             diag.note("zhihu.fetch_url", url=url,
@@ -327,8 +354,13 @@ class ZhihuAdapter(SourceBase):
         if not cdp_ok:
             return False, f"CDP not reachable: {cdp_msg}"
         try:
-            page_url = cdp_call(lambda p: p.url, initial_url="https://www.zhihu.com/")
-            if "/signin" in page_url or "/login" in page_url:
+            page_url, me = cdp_call(lambda p: (p.url, _me_answer(p)), initial_url="https://www.zhihu.com/")
+            out = "/signin" in page_url or "/login" in page_url
+            from urllib.parse import urlsplit
+            from omniseek.core import login_log
+            login_log.record("zhihu", "out" if out else "in", by="watchdog", path="health_check",
+                             landed_on=urlsplit(page_url).path, api_v4_me=me)
+            if out:
                 return False, "CDP Chrome not logged into Zhihu: the operator needs to VNC + log in"
             return True, "OK (CDP + Zhihu session)"
         except Exception as exc:  # noqa: BLE001

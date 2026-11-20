@@ -67,6 +67,7 @@
   "ai_residencies": {"domains": ["funding", "career"], "modes": ["STRUCTURE", "MONITOR"]},
   "fellowships": {"kind": "stream", "domains": ["funding"], "modes": ["RECALL", "MONITOR"]},
   "levels_fyi": {"kind": "lookup", "domains": ["compensation"], "modes": ["STRUCTURE"]},
+  "levels_fyi_jobs": {"kind": "lookup", "domains": ["jobs"], "modes": ["STRUCTURE"]},
   "ontario_sunshine": {"kind": "lookup", "domains": ["compensation"], "regions": ["ca"], "modes": ["STRUCTURE"]},
   "nowcoder": {"kind": "stream", "domains": ["career", "insider"], "regions": ["cn"], "modes": ["UNWALL", "RECALL"]},
 

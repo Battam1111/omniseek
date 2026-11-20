@@ -109,8 +109,8 @@ class _SearchVenue(SourceBase):
 
         "the engine returned 0" and "the engine returned 19 and url_filter dropped every one" are
         opposite facts — the first is evidence of absence, the second says the venue's indexed pages
-        for this query are all nav/profile shells. They used to collapse into one bare
-        ``captures: []``, and that ambiguity twice got a WORKING source diagnosed as broken."""
+        for this query are all nav/profile shells. Collapsed into one bare
+        ``captures: []``, that ambiguity twice got a WORKING source diagnosed as broken."""
         state = backend_state()
         if raw_n == 0:
             diag.note(f"{self.name}.engine_empty", url=q,
@@ -124,7 +124,7 @@ class _SearchVenue(SourceBase):
                         f"sample dropped: {sample}"))
 
     async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async replacement of the deleted sync ``search`` (11-04, this is the only one now) -> AsyncSearchCapable (routes to the fetcher's native
+        """Native-async ``search`` -> AsyncSearchCapable (routes to the fetcher's native
         dispatch branch). Mirrors ``search`` line-for-line, changing ONLY the blocking waits:
           - the disk CACHE read/write go OFF the loop (anyio.to_thread.run_sync, SAME cache key);
           - the egress ``search_web`` -> its async twin ``asearch_web`` (SAME Brave 1qps gate +

@@ -22,8 +22,10 @@ A role query that can't be resolved / 404s now records a diag note (legible), ne
 a silent empty.
 
 Taxonomy note: only top-level title CATEGORIES resolve at /t/{cat}; ML-engineer /
-research-scientist are SUBTITLES under software-engineer; locations are COUNTRY-level,
-cities 404.
+research-scientist are SUBTITLES under software-engineer; locations are countries plus some metro
+slugs of levels.fyi's own (hong-kong-sar, greater-toronto-area; a plain city name 404s). A place the
+lexicon does not know is tried as its own slug and, when that 404s, reported as not recognized; it is
+never replaced by another country (2026-11-18).
 
 WAF note (2026-11-01): www.levels.fyi is behind AWS WAF (CloudFront). The page
 structure did NOT change; what broke was the WAF: a request without browser navigation headers
@@ -34,6 +36,20 @@ check names a WAF block instead of "page structure changed". If the challenge pe
 eye's egress, the options are an egress the WAF does not challenge, or levels.fyi's official MCP
 endpoint https://mcp.levels.fyi/ (listed in /llms.txt; no WAF, anonymous 20 calls per 60 s, but
 USD only and no title filter, so "ML engineer @ Singapore" becomes the software-engineer family).
+
+URL read (2026-11-19): ``omniseek_read`` of a levels.fyi page (a city / role page such as
+/t/software-engineer/locations/greater-hong-kong-area, a company page, with or without a locale prefix
+like /zh-cn/) falling to the generic web read, which sends no navigation headers, gets the WAF's
+challenge and the read came back as "plain+jina both thin (plain=0 chars)". ``afetch_url``
+now claims those pages and reads them like the search does (HEADERS, the same client; a locale page
+is read at its English path, since the WAF challenges /zh-cn/... even with those headers): the page's
+description, the percentile JSON of __NEXT_DATA__ converted to the page's currency
+(``jobFamilyHistogram`` / ``serverJobTitlePercentiles`` / ``percentiles.tc``, USD per year times
+``locationExchangeRate``), the per-level averages, the top-paying companies and the page's FAQ
+(``...QuestionsAndAnswers`` or a ``...FaqSchema`` JSON-LD string). A WAF challenge is reported as one
+(``levels_fyi.fetch_url``), never as a thin page. Other paths (/jobs/..., /internships/...) are not claimed.
+Recon for a separate structured source (11-19): no public JSON API (api.levels.fyi wants a login
+token; the page's own data is __NEXT_DATA__, which this source already reads), so none was added.
 """
 
 from __future__ import annotations
@@ -50,7 +66,7 @@ import anyio
 import httpx
 
 from omniseek.core import cache, diag, http, portal
-from omniseek.core.normalize import Document, jsonsafe, mk_signal
+from omniseek.core.normalize import Document, html_fragment_text, jsonsafe, mk_signal
 from omniseek.core.sources._base import SourceBase, aparse
 
 logger = logging.getLogger(__name__)
@@ -61,7 +77,7 @@ SUBTITLE_URL = "https://www.levels.fyi/t/{cat}/title/{sub}/locations/{loc}"  # r
 TIMEOUT = 20
 # 2026-11-01: levels.fyi sits behind AWS WAF; a request without a browser's top-level-navigation
 # headers (Sec-Fetch-Site / Sec-Fetch-Dest / Upgrade-Insecure-Requests) gets a 405/202 "Human
-# Verification" CAPTCHA page instead of the salary page. With them the page is served as before.
+# Verification" CAPTCHA page instead of the salary page. With them the page is served.
 HEADERS = {
     "User-Agent": ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
                    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"),
@@ -91,22 +107,41 @@ _ROLE_RULES = [
      "software-engineer", None),
 ]
 
-# Location phrase -> levels.fyi COUNTRY slug (the /t/ pages are country-level; cities map up to country).
+# Location phrase -> levels.fyi location slug. Most /t/ pages are country-level, but levels.fyi also
+# keeps metro pages under its own slugs (checked 2026-11-18: china, hong-kong-sar, greater-toronto-area,
+# greater-vancouver and san-francisco-bay-area answer 200 with the location's own median;
+# new-york-city-area is linked from the US page; greater-montreal per the 11-18 loc1118 worker report).
+# "hong-kong" is a 404 (the slug is hong-kong-sar). A city with no metro slug listed here maps up to its
+# OWN country. A place not listed is never mapped to some other country: asearch tries it as a slug of
+# its own and says so when levels.fyi has no such page (the 11-18 "machine learning engineer china"
+# query came back as the United States page, a wrong number with no warning).
 _LOC_RULES = [
     (("singapore", "新加坡"), "singapore"),
-    (("toronto", "vancouver", "montreal", "waterloo", "ottawa", "ontario", "quebec",
-      "british columbia", "canada", "加拿大"), "canada"),
-    (("united states", "usa", "u.s.", " us ", "america", "bay area", "seattle", "new york"), "united-states"),
+    (("hong kong", "hongkong", "香港"), "hong-kong-sar"),
+    (("china", "中国", "mainland"), "china"),
+    (("toronto", "多伦多"), "greater-toronto-area"),
+    (("vancouver", "温哥华"), "greater-vancouver"),
+    (("montreal", "蒙特利尔"), "greater-montreal"),
+    (("waterloo", "ottawa", "ontario", "quebec", "british columbia", "canada", "加拿大"), "canada"),
+    (("bay area", "san francisco", "silicon valley"), "san-francisco-bay-area"),
+    (("new york", "nyc"), "new-york-city-area"),
+    (("united states", "usa", "u.s.", " us ", "america", "seattle"), "united-states"),
     (("united kingdom", "london", " uk ", "英国"), "united-kingdom"),
     (("india", "bangalore", "印度"), "india"),
     (("germany", "berlin", "munich"), "germany"),
     (("japan", "tokyo", "日本"), "japan"),
-    (("hong kong", "香港"), "hong-kong"),
 ]
+
+# Words of a role query that name neither the role nor a place: what is left after removing them and the
+# role phrases is the place the query asked for (see _place_residue).
+_FILLER = frozenset("""salary salaries comp compensation total tc pay pays paid median average avg range
+    in at for of the a an and or vs versus how much is what whats package offer offers base stock bonus
+    equity level levels senior staff junior entry new grad principal lead annual yearly per year
+    薪资 薪酬 工资 年薪 待遇""".split())
 
 # NB: no trailing \s? in the number group (it would eat the space before ' to ' and drop the range
 # high); decimals require digits after the dot (so a sentence-ending '.' is not captured).
-_MONEY = re.compile(r"(SGD|CAD|USD|GBP|EUR|INR|AUD|HKD|JPY|CA\$|US\$|S\$|A\$|HK\$|\$|£|€)\s?"
+_MONEY = re.compile(r"(SGD|CAD|USD|GBP|EUR|INR|AUD|HKD|JPY|CNY|CHF|CA\$|US\$|S\$|A\$|HK\$|NT\$|CN¥|JP¥|¥|₹|\$|£|€)\s?"
                     r"([0-9][0-9,]*(?:\.[0-9]+)?[KkMm]?)")
 
 # Module-level async client for the native-async twin (asearch). This source does NOT route through
@@ -138,6 +173,18 @@ def _aget_client() -> "httpx.AsyncClient":
     return _aclient
 
 
+def _waf_block(r) -> Optional[str]:
+    """What the AWS WAF did to this response, else None: its ``x-amzn-waf-action`` header, or the
+    202 / 405 "Human Verification" page it serves without one (11-18: the company page and the .md
+    page answered the host machine's exit 202 / 405)."""
+    waf = r.headers.get("x-amzn-waf-action")
+    if waf:
+        return waf
+    if r.status_code in (202, 405) or "Human Verification" in r.text[:600]:
+        return f"challenge (HTTP {r.status_code})"
+    return None
+
+
 def _slug(company: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", company.strip().lower()).strip("-")
 
@@ -153,13 +200,36 @@ def _role(query: str) -> Optional[tuple]:
 
 
 def _location(query: str) -> Optional[str]:
-    """The levels.fyi COUNTRY slug named in the query, else None."""
+    """The levels.fyi location slug of a place in _LOC_RULES named in the query, else None."""
     low = f" {(query or '').lower()} "
     for phrases, slug in _LOC_RULES:
         for p in phrases:
             if p in low:
                 return slug
     return None
+
+
+def _place_residue(query: str) -> str:
+    """What a role query says besides its role phrases and _FILLER words, lowercased: the place it asked
+    for when _location knows none ("" when it named no place). Pure."""
+    low = (query or "").lower()
+    phrases = sorted((p for ps, _c, _s in _ROLE_RULES for p in ps), key=len, reverse=True)
+    for p in phrases:
+        low = re.sub(r"(?<![a-z])" + re.escape(p) + r"(?![a-z])", " ", low)
+    toks = [t for t in re.split(r"[\s,;:/()|+]+", low) if t]
+    return " ".join(t for t in toks if t not in _FILLER and not t.isdigit())
+
+
+def _page_location(html: str) -> Optional[dict]:
+    """The page's own ``locationInfo`` ({slug, displayName, ...}) from __NEXT_DATA__, else None."""
+    m = re.search(r'"locationInfo":(\{[^{}]*\})', html)
+    if not m:
+        return None
+    try:
+        info = json.loads(m.group(1))
+    except Exception:  # noqa: BLE001
+        return None
+    return info if isinstance(info, dict) else None
 
 
 def _money(v) -> str:
@@ -175,14 +245,12 @@ def _money(v) -> str:
 
 def _num(money: str) -> Optional[int]:
     """'SGD 162,754' / 'CA$157,072' / '167K' / '1.18M' -> int. None if unparseable."""
-    s = re.sub(r"[^0-9.KkMm]", "", money or "")
-    if not s:
+    # the number and its own K/M suffix only: the K of a currency prefix (HK$) is not a thousand
+    m = re.search(r"([0-9][0-9,]*(?:\.[0-9]+)?)\s?([KkMm]?)", money or "")
+    if not m:
         return None
-    mult = 1
-    if s[-1] in "Kk":
-        mult, s = 1000, s[:-1]
-    elif s[-1] in "Mm":
-        mult, s = 1_000_000, s[:-1]
+    s, suf = m.group(1).replace(",", ""), m.group(2).lower()
+    mult = {"k": 1000, "m": 1_000_000}.get(suf, 1)
     try:
         return int(float(s) * mult)
     except (TypeError, ValueError):
@@ -315,20 +383,136 @@ def _build_doc(slug: str, url: str, pp: dict) -> Optional[Document]:
     )
 
 
+# A levels.fyi page this source reads by URL: an optional locale segment (/zh-cn/, /en-gb/), then a role /
+# location page (/t/...) or a company salary page (/companies/{slug}/salaries...).
+_URL_PATH = re.compile(r"^/(?:([a-z]{2}(?:-[a-z]{2,4})?)/)?(t/[^?#]+|companies/[^/?#]+/salaries(?:/[^?#]*)?)/?$", re.I)
+
+
+def _faq(pp: dict) -> list[tuple[str, str]]:
+    """The page's FAQ as (question, answer) pairs: a ``...QuestionsAndAnswers`` list, else the first
+    ``...FaqSchema`` JSON-LD string. Pure."""
+    for k, v in pp.items():
+        if k.endswith("QuestionsAndAnswers") and isinstance(v, list):
+            out = [(html_fragment_text(q.get("question", "")), html_fragment_text(q.get("answer", "")))
+                   for q in v if isinstance(q, dict)]
+            if out:
+                return out
+    for k, v in pp.items():
+        if k.endswith("FaqSchema") and isinstance(v, str):
+            try:
+                ents = (json.loads(v) or {}).get("mainEntity") or []
+            except Exception:  # noqa: BLE001
+                continue
+            out = [(html_fragment_text(e.get("name", "")), html_fragment_text((e.get("acceptedAnswer") or {}).get("text", "")))
+                   for e in ents if isinstance(e, dict)]
+            if out:
+                return out
+    return []
+
+
+def _page_doc(url: str, html: str) -> Optional[Document]:
+    """A levels.fyi role / location / company page as a document: its description, total-compensation
+    percentiles and per-level averages in the page's currency (the JSON is USD per year; times
+    ``locationExchangeRate``), top-paying companies and FAQ. None when the page carries none of them. Pure."""
+    pp = _next_data_pageprops(html) or {}
+    path = _URL_PATH.match(httpx.URL(url).path)
+    slug_m = re.match(r"companies/([^/]+)/salaries/?$", (path.group(2) if path else ""), re.I)
+    if slug_m and pp.get("company") and pp.get("overview") is not None:
+        return _build_doc(slug_m.group(1), url, pp)   # the plain company page: the search's own builder
+    m = re.search(r'<meta\s+property="og:title"\s+content="([^"]*)"', html) or re.search(r"<title>([^<]*)</title>", html)
+    title = _html.unescape(m.group(1)).strip() if m else url
+    desc = _meta_description(html) or ""
+    cur = pp.get("locationCurrency") or "USD"
+    try:
+        rate = float(pp.get("locationExchangeRate") or 1.0)
+    except (TypeError, ValueError):
+        rate = 1.0
+
+    def money(v) -> str:
+        try:
+            return f"{cur} {round(float(v) * rate):,}"
+        except (TypeError, ValueError):
+            return "?"
+
+    lines: list[str] = [desc] if desc else []
+    pct, n = None, None
+    for src in (pp.get("jobFamilyHistogram"), pp.get("serverJobTitlePercentiles"), pp.get("percentiles")):
+        if isinstance(src, dict):
+            tc = src.get("totalCompensation") or src.get("tc")
+            if isinstance(tc, dict) and tc.get("p50") is not None:
+                pct, n = src, src.get("count")
+                break
+    if pct:
+        for label, key in (("总包", ("totalCompensation", "tc")), ("base", ("baseSalary", "base_salary")),
+                           ("股票", ("stockGrant", "stock_grant")), ("奖金", ("bonus",))):
+            d = next((pct[k] for k in key if isinstance(pct.get(k), dict)), None)
+            if d:
+                cells = ", ".join(f"{q} {money(d[q])}" for q in ("p10", "p25", "p50", "p75", "p90") if d.get(q) is not None)
+                lines.append(f"{label}分位（年，{cur}{f'，n={n}' if n is not None else ''}）: {cells}")
+    avgs = [a for a in (pp.get("averages") or []) if isinstance(a, dict) and a.get("level")]
+    if avgs:
+        lines.append(f"\n各级别平均（年，{cur}）:")
+        for a in avgs[:20]:
+            lines.append(f"  - {a.get('level')}: 总包 {money(a.get('total'))}（base {money(a.get('base'))}, "
+                         f"股票 {money(a.get('stock'))}, 奖金 {money(a.get('bonus'))}; n={a.get('count', '?')}）")
+    tops = [t for t in (pp.get("topPayingCompanies") or []) if isinstance(t, dict) and t.get("name")]
+    if tops:
+        lines.append("\n薪酬最高的公司（年总包）: " + ", ".join(f"{t['name']} {money(t.get('totalCompensation'))}"
+                                                     for t in tops[:10]))
+    qa = _faq(pp)
+    if qa:
+        lines.append("\n常见问题（页面原文）:")
+        lines.extend(f"  Q: {q}\n  A: {a}" for q, a in qa[:8] if q and a)
+    if not (pct or avgs or tops or qa):
+        return None
+    comp = _parse_comp_meta(desc) if desc else {}
+    med_n = _num(comp.get("median") or "") if comp else None
+    if med_n is None and pct:
+        tc = pct.get("totalCompensation") or pct.get("tc") or {}
+        try:
+            med_n = round(float(tc["p50"]) * rate)
+        except (KeyError, TypeError, ValueError):
+            med_n = None
+    return Document(
+        source="levels_fyi",
+        source_id=httpx.URL(url).path.strip("/"),
+        url=url,
+        title=f"levels.fyi — {title}",
+        content="\n".join(lines).strip(),
+        author="levels.fyi",
+        signals=(mk_signal("median_total_comp", med_n, kind="other", by="levels_fyi/page", unit=cur)
+                 if med_n else {}),
+        tags=["compensation", "salary"],
+        metadata={"kind": "page", "currency": cur, "exchange_rate_from_usd": rate,
+                  "location": pp.get("location") or (pp.get("locationInfo") or pp.get("locationMeta") or {}).get("displayName"),
+                  "job_family": pp.get("jobFamily"), "count": n,
+                  "percentiles_usd": jsonsafe({k: pct.get(k) for k in ("totalCompensation", "tc", "baseSalary", "base_salary")
+                                               if pct and pct.get(k)}),
+                  "data_date": pp.get("dataDate")},
+    )
+
+
 class LevelsFyiAdapter(SourceBase):
     name = "levels_fyi"
     needs_credentials = False
     description = (
-        "levels.fyi：科技公司/岗位薪酬 (TC 黄金标准, keyless). 两种查法: (1) 岗位[+国家] "
-        "(\"machine learning engineer singapore\" / \"data scientist canada\") → 该岗位在该国的"
-        "中位 + 区间 (本币, location-accurate, 取自页面 og:description); (2) 公司名 (\"bytedance\") "
-        "→ 该公司各职位族/级别总包 (US/USD 基准). 用于谈 offer / 比较雇主薪酬参考."
+        "levels.fyi：科技公司/岗位薪酬 (TC 黄金标准, keyless). 两种查法: (1) 岗位[+地点] "
+        "(\"machine learning engineer singapore\" / \"data scientist toronto\") → 该岗位在该地的"
+        "中位 + 区间 (本币, location-accurate, 取自页面 og:description; 国家或 levels.fyi 自有的都会区页, "
+        "如 hong-kong-sar / greater-toronto-area; 认不出的地点照实报认不出, 不换成别国; 没写地点按美国并在标题注明); "
+        "(2) 公司名 (\"bytedance\") "
+        "→ 该公司各职位族/级别总包 (US/USD 基准). 用于谈 offer / 比较雇主薪酬参考. "
+        "omniseek_read 一个 levels.fyi 薪资页 (/t/... 城市或岗位页, /companies/.../salaries...) 取本币分位、各级别平均与页面 FAQ; "
+        "在招岗位用 levels_fyi_jobs."
     )
 
     @staticmethod
-    def _role_doc(query, cat, sub, loc, url, desc, comp) -> Optional[Document]:
+    def _role_doc(query, cat, sub, loc, url, desc, comp, loc_name=None,
+                  defaulted=False) -> Optional[Document]:
         role_disp = (sub or cat).replace("-", " ").title()
-        loc_disp = loc.replace("-", " ").title()
+        loc_disp = loc_name or loc.replace("-", " ").title()
+        if defaulted:  # the query named no place: say the page is the US one, not "the" answer
+            loc_disp += "（查询未指定地点，按美国）"
         cur = comp.get("currency") or ""
         bits = [f"{role_disp} @ {loc_disp}", desc]
         struct = []
@@ -351,13 +535,15 @@ class LevelsFyiAdapter(SourceBase):
             signals=sig,
             tags=["compensation", "salary", f"role:{sub or cat}", f"country:{loc}"],
             metadata={"kind": "role", "category": cat, "subtitle": sub, "country": loc,
+                      "location_name": loc_name, "location_defaulted": defaulted,
                       "currency": cur, "median": comp.get("median"),
                       "range_low": comp.get("low"), "range_high": comp.get("high"),
                       "og_description": desc},
         )
 
-    async def _arole_search(self, query: str, role: tuple, country: Optional[str]) -> list[Document]:
-        """Native-async replacement of the deleted sync ``_role_search`` (11-04, this is the only one now): BYTE-FAITHFUL mirror, changing ONLY the two blocking
+    async def _arole_search(self, query: str, role: tuple, country: Optional[str],
+                            asked: str = "") -> list[Document]:
+        """Native-async ``_role_search``: BYTE-FAITHFUL mirror, changing ONLY the two blocking
         legs. The URL build, the status-differentiated diag.notes, and the pure-CPU parse
         (``_meta_description`` / ``_parse_comp_meta`` / ``_role_doc``) are identical, on the loop.
           - the disk cache read + write -> ``anyio.to_thread.run_sync`` (get_docs / set_docs do file IO);
@@ -366,10 +552,12 @@ class LevelsFyiAdapter(SourceBase):
             ``r.status_code != 200`` taxonomy-miss branch keeps its exact legible diag.note (a shared
             http.aget* leaf would raise_for_status and lose that status)."""
         cat, sub = role
-        loc = country or "united-states"  # /t/ pages need a location; default to the US benchmark
+        # /t/ pages need a location: a query naming no place gets the US page, labelled as such; a place
+        # _LOC_RULES does not know comes in as ``asked`` with its own slug as ``country``.
+        loc = country or "united-states"
         url = (SUBTITLE_URL.format(cat=cat, sub=sub, loc=loc) if sub
                else TITLE_URL.format(cat=cat, loc=loc))
-        key = cache.make_key("levels_fyi", "role", cat, sub or "-", loc)
+        key = cache.make_key("levels_fyi", "role", cat, sub or "-", loc, "default" if country is None else "")
         cached = await anyio.to_thread.run_sync(cache.get_docs, key, limiter=portal.IO_LANE)  # disk read OFF loop
         if cached is not None:
             return cached
@@ -380,11 +568,18 @@ class LevelsFyiAdapter(SourceBase):
             return []
         if r.status_code != 200:
             # Legible, not silent: a WAF challenge on our egress is not a taxonomy miss (unmapped
-            # subtitle / unknown country); the header says which one it is.
-            waf = r.headers.get("x-amzn-waf-action")
+            # subtitle / unknown country); the header or the 202 / 405 status says which one it is.
+            waf = _waf_block(r)
             diag.note("levels_fyi", url=url, status=r.status_code,
                       body=(f"AWS WAF {waf} on the role page: our egress is challenged" if waf else
+                            f"place not recognized: levels.fyi has no location page {loc!r} for "
+                            f"{asked!r} in the query; no other location is substituted" if asked else
                             f"role page not found (cat={cat} sub={sub} loc={loc}); taxonomy miss"))
+            return []
+        info = _page_location(r.text) or {}
+        if info.get("slug") and info["slug"] != loc:  # the page is about another place: its number is not ours
+            diag.note("levels_fyi", url=url, status=200,
+                      body=f"asked for location {loc!r}, the page is about {info['slug']!r}; not used")
             return []
         desc = _meta_description(r.text)
         comp = _parse_comp_meta(desc) if desc else {}
@@ -392,14 +587,16 @@ class LevelsFyiAdapter(SourceBase):
             diag.note("levels_fyi", url=url, status=200,
                       body="200 but no parseable comp in og:description (page structure changed?)")
             return []
-        doc = self._role_doc(query, cat, sub, loc, url, desc, comp)
+        doc = self._role_doc(query, cat, sub, loc, url, desc, comp,
+                             loc_name=info.get("displayName") or info.get("name"),
+                             defaulted=country is None)
         docs = [doc] if doc else []
         await anyio.to_thread.run_sync(  # disk write OFF loop
             functools.partial(cache.set_docs, key, docs, ttl=CACHE_TTL), limiter=portal.IO_LANE)
         return docs
 
     async def _acompany_search(self, query: str) -> list[Document]:
-        """Native-async replacement of the deleted sync ``_company_search`` (11-04, this is the only one now): BYTE-FAITHFUL mirror, changing ONLY the two blocking
+        """Native-async ``_company_search``: BYTE-FAITHFUL mirror, changing ONLY the two blocking
         legs. The slug resolve, the ``status_code == 404`` legible note THEN ``raise_for_status`` for other
         non-2xx (caught by the generic except -> its diag.note), and the pure-CPU ``_next_data_pageprops``
         / ``_build_doc`` are identical, on the loop.
@@ -420,7 +617,7 @@ class LevelsFyiAdapter(SourceBase):
                 diag.note("levels_fyi", url=url, status=404,
                           body=f"no company page for slug={slug!r} (not a company? try a role+country query)")
                 return []
-            waf = r.headers.get("x-amzn-waf-action")
+            waf = _waf_block(r)
             if waf:  # a 202 challenge is 2xx: without this it read as "200 but no company data"
                 diag.note("levels_fyi", url=url, status=r.status_code,
                           body=f"AWS WAF {waf} on the company page: our egress is challenged")
@@ -450,7 +647,7 @@ class LevelsFyiAdapter(SourceBase):
         return _slug(q or "google")
 
     async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async replacement of the deleted sync ``search`` (11-04, this is the only one now) -> AsyncSearchCapable, so the omniseek_search fan-out awaits
+        """Native-async ``search`` -> AsyncSearchCapable, so the omniseek_search fan-out awaits
         this DIRECTLY instead of pushing the sync ``.search`` onto the shared thread pool; the one
         network wait costs a COROUTINE, not a held pool thread. Mirrors ``search`` line-for-line: the
         SAME empty guard + the SAME ``_role`` / ``_location`` routing (pure CPU, on the loop), dispatching
@@ -459,18 +656,69 @@ class LevelsFyiAdapter(SourceBase):
         if not (query or "").strip():
             return []
         role = _role(query)
-        if role:  # role[+country] query -> location-accurate /t/ page (the fix)
-            return await self._arole_search(query, role, _location(query))
+        if role:  # role[+place] query -> location-accurate /t/ page (the fix)
+            loc = _location(query)
+            if loc:
+                return await self._arole_search(query, role, loc)
+            asked = _place_residue(query)
+            if not asked:
+                return await self._arole_search(query, role, None)
+            slug = _slug(asked)
+            if not re.fullmatch(r"[a-z0-9-]+", asked.replace(" ", "-")) or not slug:
+                diag.note("levels_fyi", body=(f"place not recognized: {asked!r} in the query is not a "
+                                              "levels.fyi location; no other location is substituted"))
+                return []
+            return await self._arole_search(query, role, slug, asked=asked)
         return await self._acompany_search(query)  # else treat as a company name (US/USD benchmark)
 
     async def afetch_url(self, url: str) -> Optional[Document]:
-        return None  # search-only
+        """A levels.fyi role / location / company page (see the module docstring, URL read): read with the
+        navigation HEADERS the search uses. None for any other URL (not claimed) and on failure, with a
+        note saying which (a WAF challenge, a 404, a page without salary data)."""
+        try:
+            u = httpx.URL(url)
+        except Exception:  # noqa: BLE001
+            return None
+        m = _URL_PATH.match(u.path)
+        if (u.host or "").lower() not in ("www.levels.fyi", "levels.fyi") or not m:
+            return None
+        asked = url
+        if m.group(1):
+            # A locale page (/zh-cn/...) sits behind a stricter WAF rule (11-19, the sandbox exit: 405 captcha
+            # or 202 challenge with the navigation headers that pass the English page); the English page at
+            # the same path carries the same numbers, so that one is read.
+            url = str(u.copy_with(path="/" + m.group(2)))
+        try:
+            r = await _aget_client().get(url, headers=HEADERS, timeout=TIMEOUT)
+        except Exception as exc:  # noqa: BLE001
+            diag.note("levels_fyi.fetch_url", url=url, exc=exc, headers=HEADERS)
+            return None
+        waf = _waf_block(r)
+        if waf:
+            diag.note("levels_fyi.fetch_url", url=url, status=r.status_code, headers=HEADERS,
+                      body=(f"blocked: AWS WAF {waf} on our egress, levels.fyi answered its bot check, not "
+                            "the page; omniseek_search sources=['levels_fyi'] with a role and place reads the "
+                            "same numbers when the WAF lets it through"))
+            return None
+        if r.status_code == 404:
+            diag.note("levels_fyi.fetch_url", url=url, status=404, final=True,
+                      body="levels.fyi has no such page (HTTP 404)")
+            return None
+        if r.status_code != 200:
+            diag.note("levels_fyi.fetch_url", url=url, status=r.status_code, body=f"HTTP {r.status_code}")
+            return None
+        doc = await aparse(len(r.text), _page_doc, url, r.text)
+        if doc is not None and url != asked:
+            doc.metadata = {**(doc.metadata or {}), "requested_url": asked}
+        if doc is None:
+            diag.note("levels_fyi.fetch_url", url=url, status=200,
+                      body="200 but no salary data in the page (__NEXT_DATA__ / FAQ changed?)")
+        return doc
 
     async def ahealth_check(self) -> tuple[bool, str]:
         # Probe BOTH paths: a role page (the fixed path) + the company page. A leg that fails leaves a
         # failure record with its address, status and the request headers sent (the exit-node sweep
         # refetches it on other nodes with them; the bare eye User-Agent gets 403 on every node).
-        # Before 2026-11-09 neither leg noted anything, so a walled run left no address to refetch.
         legs = (("role", SUBTITLE_URL.format(cat="software-engineer", sub="machine-learning-engineer",
                                              loc="singapore")),
                 ("company", PAGE_URL.format(slug="google")))

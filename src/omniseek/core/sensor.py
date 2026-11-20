@@ -13,8 +13,7 @@ eye-http service; in phase 9 the daemon loop that drives it lives in omniseek.co
 ONE fleet scheduler, WRITES_ENABLED-guarded, so no other context can ever start it), and
 the sensor tick is registered there as job row #1. The MCP tool omniseek_sensor action=run
 triggers one sensor immediately for testing. The razor: the agent registers what to
-monitor (judgment); the diff is mechanical. (The old launchd cron runner was a second,
-memory-less perception path with writes disabled; it is deleted, not fixed.)
+monitor (judgment); the diff is mechanical.
 """
 
 from __future__ import annotations
@@ -331,7 +330,6 @@ async def arun_sensor(sensor: Sensor, store: SensorStore, limit: int = 15) -> di
     Awaited on the service's loop: the ranked search directly, the store write on the IO lane. The
     omniseek_sensor tool body awaits it; the job scheduler's sensor tick (a thread) reaches it through
     ``portal.run``."""
-    import anyio
     from omniseek.core import _guard, fetcher, portal
     from datetime import datetime, timezone
 
@@ -348,6 +346,13 @@ async def arun_sensor(sensor: Sensor, store: SensorStore, limit: int = 15) -> di
         else:
             ranked, _meta = await fetcher.asearch_ranked(
                 sensor.query, sources=sensor.sources, limit=limit)
+    if (_meta or {}).get("omniseek_busy"):
+        # a broad sensor that found no free slot sent nothing: no diff, no baseline change, no absence
+        # (an empty answer here is not "everything went dark"); last_run_at stays, so the next tick retries
+        return {"sensor_id": sensor.id, "query": sensor.query, "total_results": 0, "new_count": 0,
+                "new_titles": [], "notify_new_count": 0, "notify_titles": [], "gone_count": 0,
+                "gone_titles": [], "baseline_size": len(sensor.baseline), "run_at": sensor.last_run_at,
+                "omniseek_busy": _meta["omniseek_busy"]}
     current_keys = set()
     for doc in ranked:
         current_keys.add((doc.source, doc.source_id))
@@ -386,15 +391,15 @@ async def arun_sensor(sensor: Sensor, store: SensorStore, limit: int = 15) -> di
 
     # Bound the baseline (a fully-rewritten-every-tick list on an always-on service): current keys
     # ALWAYS survive at the front, so a still-visible item is never dropped (no false re-report); only
-    # keys that have scrolled out of the result window tail off past the cap. Replaces the old monotonic
-    # (baseline_set | current_keys) union that grew forever.
+    # keys that have scrolled out of the result window tail off past the cap (a monotonic
+    # baseline_set | current_keys union would grow forever).
     cap = max(limit * 10, 200)  # ~10 result windows of headroom before a still-visible key could fall out
     _ordered = list(current_keys) + [tuple(b) for b in sensor.baseline if tuple(b) not in current_keys]
     sensor.baseline = [list(k) for k in _ordered[:cap]]
     sensor.last_run_at = _now_iso
     sensor.last_new_count = len(new_keys)
     sensor.total_runs += 1
-    await anyio.to_thread.run_sync(store.update, sensor, limiter=portal.IO_LANE)
+    await portal.run_io(store.update, sensor)  # bounded; past it the write lands on its own
 
     # FAIL-OPEN graph tap (design section 6 + phase 4): mint the RUN DIFF (observed edges sensor -> new
     # doc) here, where the new-result diff is final, BEFORE the summary returns. The baseline mints
@@ -414,13 +419,6 @@ async def arun_sensor(sensor: Sensor, store: SensorStore, limit: int = 15) -> di
         "baseline_size": len(sensor.baseline),
         "run_at": sensor.last_run_at,
     }
-
-
-def compute_diff(results: list, baseline: list[list[str]]) -> list:
-    """Pure diff function for testing: returns (source, source_id) tuples not in baseline."""
-    baseline_set = {tuple(b) for b in baseline}
-    return [(r.source, r.source_id) for r in results
-            if (r.source, r.source_id) not in baseline_set]
 
 
 # ── absence / disappearance detection (borrowed idea: Huginn GapDetectorAgent, scoped noise-safe) ──
@@ -457,8 +455,8 @@ def absence_diff(baseline: list[list[str]], current_keys: set,
 # due sensor SERIALLY and isolates a failing sensor so one bad query never stops the rest. In phase 9 the
 # daemon LOOP that drives this tick moved into omniseek.core.jobs (the ONE scheduler for the whole
 # fleet): the sensor tick is now registered there as job row #1 (scheduler_tick_for_sensors), and the
-# WRITES_ENABLED + double-start guards that used to gate the sensor loop now gate jobs.start_scheduler.
-# The old launchd cron runner is deleted. sensor.py keeps only the sensor SEMANTICS (this tick).
+# WRITES_ENABLED + double-start guards gate jobs.start_scheduler.
+# sensor.py keeps only the sensor SEMANTICS (this tick).
 
 _SCHEDULE_SECONDS = {"hourly": 3600, "daily": 86400, "weekly": 604800}
 _UNKNOWN_SCHEDULE_LOGGED: set[str] = set()   # log an unknown schedule once per sensor id (debug)
@@ -749,8 +747,8 @@ def scheduler_tick_for_sensors(table_path=None) -> dict:
 # GROUP "OmniSeek" (spelled so the omniseek sync's OmniSeek->OmniSeek rename lands on both sides).
 
 def _alert(title: str, body: str, *, source: str | None = None) -> None:
-    """Fail-open alarm: delegates to notify.alert (WeCom; Bark was deleted 2026-08-12). Kept as a module-local
-    name so the existing _bark_new_results call site is untouched and any monkeypatch of this symbol
+    """Fail-open alarm: delegates to notify.alert (WeCom). A module-local
+    name so the _bark_new_results call site is untouched and any monkeypatch of this symbol
     in a test still works. ``source`` is passed only for a non-default source, so a
     default sensor's call is unchanged and still goes out tagged eye.sensor."""
     from omniseek.core import notify

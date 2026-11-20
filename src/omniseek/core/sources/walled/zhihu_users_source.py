@@ -62,7 +62,7 @@ auth.register_template(
 # A tracked researcher's recent posts don't depend on the search query, so cache them
 # query-INDEPENDENTLY per handle: the expensive CDP nav is paid once per handle per TTL and
 # reused by every query + the prewarmer (the watchlist generalization of the RSS "convert once"
-# pattern; the old code re-navved on EVERY different query). POSTS_PER_HANDLE caps recent posts.
+# pattern, instead of re-navving on EVERY different query). POSTS_PER_HANDLE caps recent posts.
 POSTS_PER_HANDLE = 25
 POSTS_TTL = 3600  # 1h: a researcher posts a few times/day at most; the prewarmer keeps it hot
 
@@ -131,8 +131,7 @@ class ZhihuUsersAdapter(SourceBase):
     def _fetch_user_posts(self, handle: str, display_name: str) -> list[Document]:
         """The expensive CDP nav, cached query-INDEPENDENTLY per handle (a researcher's recent
         posts don't depend on the search query). Paid once per handle per POSTS_TTL and reused by
-        every query + the prewarmer — instead of re-navving on each new query (the old behavior,
-        where this fetch lived inside the query-keyed search and so re-ran per distinct query)."""
+        every query + the prewarmer — instead of re-navving on each new query."""
         pkey = cache.make_key("zhihu_users", "posts", handle)
         pcached = cache.get_docs(pkey)
         if pcached is not None:
@@ -164,11 +163,15 @@ class ZhihuUsersAdapter(SourceBase):
             return []
 
         # Logged-out shared 9222 session bounces /people/<handle>/posts to /signin: the page loads
-        # cleanly (no exception) but yields zero anchors, so the old code cached [] as "no posts,"
-        # mis-reading an auth outage as an empty researcher. Fail LOUD like zhihu_source (typed diag,
+        # cleanly (no exception) but yields zero anchors, so caching [] as "no posts"
+        # would mis-read an auth outage as an empty researcher. Fail LOUD like zhihu_source (typed diag,
         # NO cache-poison), so /eye-fix and the shared session heal see the real cause. zhihu login is
         # QR/SMS (no autofill relogin), so surfacing it is the correct reactive move.
+        from urllib.parse import urlsplit
+        from omniseek.core import login_log
         if "/signin" in final_url or "/login" in final_url:
+            login_log.record("zhihu_users", "out", by="adapter", path="people_posts",
+                             landed_on=urlsplit(final_url).path)
             diag.note("zhihu_users.auth_expired", url=final_url, body=(
                 "AUTH_EXPIRED: zhihu shared-Chrome session logged out (login wall on /people posts). "
                 "Needs a VNC re-login on the host machine; QR/SMS login cannot autofill-relogin."))
@@ -181,6 +184,9 @@ class ZhihuUsersAdapter(SourceBase):
         if not anchors:
             anchors = soup.select("a[href*='zhuanlan.zhihu.com/p/'], a[href*='/p/']")
 
+        if anchors:
+            login_log.record("zhihu_users", "in", by="adapter", path="people_posts",
+                             landed_on=urlsplit(final_url).path, post_anchors=len(anchors))
         docs: list[Document] = []
         seen_urls: set[str] = set()
         for a in anchors:

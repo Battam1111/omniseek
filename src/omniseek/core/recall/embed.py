@@ -52,8 +52,26 @@ _fwd_lock = threading.Lock()   # serialize MPS forwards (query + ingest never co
 # absorb throughput was never the constraint, so the trade goes to the wait. Re-run the calibration
 # if the embedding model, its device, or the typical document length changes.
 _PASSAGE_LOCK_CHUNK = 4
+# FOREGROUND FIRST on the forward lock. Taking the lock per chunk only lets a
+# query in if the lock is fair, and threading.Lock is not: a thread that releases it and asks again at
+# once usually gets it back before the woken waiter runs. While the materializer embedded one document
+# per transaction (SQLite work between forwards) that rarely mattered; the embed worker runs up to 16
+# chunks back to back, and in one of two replays of 2026-11-18 named searches over indexed sources sat
+# out their whole 45 s budget for two minutes while it ran (2 to 8 s in the other three runs). So a
+# query embed says it is waiting (_queries_waiting) and a passage chunk does not start while one is,
+# for at most _YIELD_MAX_S per chunk, so the background still moves under a steady stream of queries.
+_queries_waiting = 0
+_queries_lock = threading.Lock()
+_YIELD_MAX_S = 2.0
 
-# Token-length LADDER every forward is padded up to (2026-10-08). On MPS, torch
+
+def _yield_to_queries() -> None:
+    """Before a passage chunk takes the forward lock: wait while a query embed is waiting or running."""
+    end = time.monotonic() + _YIELD_MAX_S
+    while _queries_waiting > 0 and time.monotonic() < end:
+        time.sleep(0.005)
+
+# Token-length LADDER every forward is padded up to. On MPS, torch
 # compiles and caches one MPSGraph per distinct input SHAPE and never evicts it; the cache lives in
 # CPU malloc (footprint category MALLOC_SMALL), and empty_cache() does not touch it. Measured on
 # this machine with batch-1 forwards: 150 calls at ONE length grew MALLOC_SMALL by 34 MB, 150 calls
@@ -74,7 +92,7 @@ _PASSAGE_LOCK_CHUNK = 4
 _LEN_LADDER = (16, 32, 64, 128, 256, 384, 512, 768, 1024, 1536, 2048)
 _LEN_STEP_PAST_LADDER = 1024
 # None until the first padded call decides it: False on a sentence-transformers too old to accept
-# per-call processing_kwargs (pre 5.x), which then runs unpadded exactly as before.
+# per-call processing_kwargs (pre 5.x), which then runs unpadded.
 _PAD_SUPPORTED: Optional[bool] = None
 
 
@@ -112,7 +130,7 @@ def _pad_kwargs(m, texts: list[str], longest: Optional[int] = None) -> dict:
         return {}
 
 
-# ONE FORWARD'S BUFFERS STAY UNDER 8 MiB (2026-10-09). torch's MPS allocator
+# ONE FORWARD'S BUFFERS STAY UNDER 8 MiB. torch's MPS allocator
 # packs requests under 10 MiB into 8 or 32 MiB heaps, but opens a fresh 1 GiB heap for any request
 # of 10 MiB or more on a unified-memory Mac (allocator trace, PYTORCH_DEBUG_MPS_ALLOCATOR: the
 # first 16 MiB request of a forward allocated "shared heap of size 1024.00 MiB", every 8 MiB one
@@ -140,7 +158,7 @@ def _pad_kwargs(m, texts: list[str], longest: Optional[int] = None) -> dict:
 # 96 real docs (the 48 longest plus 48 spread) every vector matched the unbounded path to cosine
 # 0.9999999, the same agreement as the bounded path against its own re-run.
 _MPS_BUF_CAP = 8 << 20
-# Set from the model config at load (MPS only); None means one forward per call as before.
+# Set from the model config at load (MPS only); None means one forward per call.
 _FWD_TOKENS: Optional[int] = None
 _ATTN_IMPL = "omniseek_bounded_sdpa"
 
@@ -194,7 +212,7 @@ def _forward(m, texts: list[str]):
         return _forward_one(m, texts)
     try:
         lens = _token_lens(m, texts)
-    except Exception as exc:  # noqa: BLE001 — no tokenizer: one forward, exactly as before
+    except Exception as exc:  # noqa: BLE001 — no tokenizer: one forward
         logger.debug("recall embed: token count skipped (%s)", exc)
         return _forward_one(m, texts)
     cap = getattr(m, "max_seq_length", None)
@@ -369,12 +387,13 @@ def _encode(texts: list[str], prefix: str, chunk: Optional[int] = None) -> Optio
     if m is None:
         return None
     if chunk and len(texts) > chunk:
-        # Take the lock PER CHUNK instead of once for the whole batch. The lock still serializes
-        # forwards exactly as before; what changes is that a bulk absorb can no longer hold it for
+        # Take the lock PER CHUNK instead of once for the whole batch. The lock serializes
+        # forwards; per chunk, a bulk absorb cannot hold it for
         # tens of seconds while a query embed that needs 25 ms waits behind it. Measured holds for a
         # single un-chunked call on this machine: 2.2 s at 16 docs, 6.8 s at 64, 41.5 s at 256.
         parts = []
         for i in range(0, len(texts), chunk):
+            _yield_to_queries()
             got = _encode(texts[i:i + chunk], prefix)
             if got is None:
                 return None
@@ -407,12 +426,24 @@ def embed_passage(texts: list[str]) -> Optional[np.ndarray]:
     query embed costs 25 to 49 ms here and must not queue behind tens of seconds of document
     work; searches feed the absorb path themselves, so an unbounded hold made heavy search
     degrade its own recall."""
-    return _encode(texts, prefix="", chunk=_PASSAGE_LOCK_CHUNK) if texts else None
+    if not texts:
+        return None
+    if len(texts) <= _PASSAGE_LOCK_CHUNK:
+        _yield_to_queries()
+    return _encode(texts, prefix="", chunk=_PASSAGE_LOCK_CHUNK)
 
 
 def embed_query(text: str) -> Optional[np.ndarray]:
-    """Embed ONE query (with the instruct prefix). Returns (DIM,) float32 or None."""
-    v = _encode([text or ""], prefix=_QUERY_PREFIX)
+    """Embed ONE query (with the instruct prefix). Returns (DIM,) float32 or None. Passage chunks give
+    way while it waits (_yield_to_queries)."""
+    global _queries_waiting
+    with _queries_lock:
+        _queries_waiting += 1
+    try:
+        v = _encode([text or ""], prefix=_QUERY_PREFIX)
+    finally:
+        with _queries_lock:
+            _queries_waiting -= 1
     return None if v is None else v[0]
 
 

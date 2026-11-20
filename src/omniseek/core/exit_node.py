@@ -2,7 +2,7 @@
 
 OmniSeek reaches the web through the operator's proxy app (Clash Verge's mihomo, its TUN), and the app
 sends OmniSeek's hosts to ONE node, the one its selector ``where.PROXY_SELECTOR`` picks. When that node
-breaks (2026-10-21: the Hong Kong nodes dropped every handshake to a batch of sites) or a site starts
+breaks (the Hong Kong nodes dropped every handshake to a batch of sites) or a site starts
 refusing its address (2026-11-04: SiteGround's captcha and v2ex turned away the Japan Z11 address), a
 batch of sources goes down until someone tests the nodes and switches by hand. This module does that.
 
@@ -23,7 +23,9 @@ or by hand (``python -m omniseek.core.exit_node <source> ...`` from the release 
   2. Through the test port, on the node the selector uses now, with OmniSeek's own User-Agent (never a
      browser's: zenodo refuses a faked browser), or, for an address whose failure record names the
      request headers its source sent (diag.note ``headers``: levels.fyi answers only a browser's
-     navigation request), with those: every fetch answering (``_ok``) means it was a blip:
+     navigation request), with those; and with the method the record names (diag.note
+     ``method``: a POST-only API answers a GET 404 or 405 on a node that reaches it, so the sweep used
+     to read it as a wall and no node could ever pass): every fetch answering (``_ok``) means it was a blip:
      logged, no sweep, no notice (a notice per blip of a flapping feed would only be noise).
   3. Each node of the selector that is in egress2's own pool (the members of its region groups: the
      template's filters already leave out Hong Kong, the free and download-only nodes and the notice
@@ -36,15 +38,17 @@ or by hand (``python -m omniseek.core.exit_node <source> ...`` from the release 
      node in that order where every fetch answers wins and the sweep stops there (11-04 live: testing
      every node to pick the fastest kept OmniSeek on the refused node for ten minutes, while the first
      node in egress2's order passed). "Answers" is 200, 401 (a keyed API refetched without its key,
-     ``_ok``), or a rate limit (429; 403 with x-ratelimit-remaining 0, which is how GitHub's unauthenticated API answers on an address whose
-     hourly allowance egress2's own health checks spend): the node reaches the site. A node is started
+     ``_ok``), a rate limit (429; 403 with x-ratelimit-remaining 0, which is how GitHub's unauthenticated API answers on an address whose
+     hourly allowance egress2's own health checks spend), or, for a refetch with a method other than GET
+     (sent without the body its source sent, which is never recorded), 400, 411, 415 or 422: the server
+     read the request and turned down its content. Each means the node reaches the site. A node is started
      only while its worst case and what must follow still fit before the deadline (see ``sweep``).
   4. A winner: switch the selector to it (only the selection; no rule, no config file), fetch the
-     addresses again on the default route; all 200 keeps it, anything else switches back. No winner: no
+     addresses again on the default route; every fetch answering keeps it, anything else switches back. No winner: no
      switch. Every sweep ends with one notice through the push outlet saying what it did and why.
   5. A switch that did not help (rolled back: the hosts still fail on the default route, so the proxy
      app's rules send them to another group, not the selector) is remembered in <state>/exit-node-futile.json:
-     the hosts that still failed and when (2026-11-06; before, every health run that
+     the hosts that still failed and when (before, every health run that
      found the same hosts down switched for nothing and sent the same notice again). A later sweep whose
      failing hosts are all in one such batch, less than FUTILE_TTL_S old, fetches them once on the default
      route: if none answers it tests and switches nothing and says why (at most one notice per batch a
@@ -130,6 +134,51 @@ def failed_hosts(records: list) -> set:
     return {urlparse(u).hostname for u in failed_urls(records)} - {None}
 
 
+# What a failure record says about the network. The health page listed every host a failing
+# source touched as "unreachable": 11-16 the Xianyu source was only logged out (its record is the
+# adapter's own xianyu.login note, the page itself answered) and www.goofish.com read as a dead host.
+# A record is a NETWORK failure only when no answer came back: no HTTP status, and the exception diag
+# recorded ("<type name>: <message>") is a transport one, from httpx, the socket layer, ssl, or libcurl
+# with a resolve / connect / timeout / TLS / empty-reply code. Anything else answered or is the
+# source's own verdict (login, risk control, parse), named by its status or its helper.
+NETWORK = "network"
+_NETWORK_EXC = frozenset({
+    "ConnectError", "ConnectTimeout", "ReadTimeout", "WriteTimeout", "PoolTimeout", "TimeoutException",
+    "NetworkError", "ReadError", "WriteError", "CloseError", "RemoteProtocolError", "ProxyError",
+    "TransportError", "ConnectionError", "ConnectionRefusedError", "ConnectionResetError",
+    "ConnectionAbortedError", "TimeoutError", "gaierror", "herror", "SSLError", "SSLCertVerificationError",
+    "SSLEOFError", "SSLZeroReturnError",
+})
+_CURL_NETWORK = re.compile(r"curl: \((?:5|6|7|28|35|52|55|56)\)")
+
+
+def failure_kind(rec: dict) -> str:
+    """One failure record's kind: ``NETWORK`` (no answer came back), ``HTTP <status>`` (the site
+    answered), else the helper that noted it (``xianyu.login``: the source's own verdict)."""
+    status = rec.get("status")
+    if isinstance(status, int):
+        return f"HTTP {status}"
+    exc = str(rec.get("exc") or "")
+    name = exc.split(":", 1)[0].strip().rsplit(".", 1)[-1]
+    if name in _NETWORK_EXC or (name in ("RequestsError", "CurlError") and _CURL_NETWORK.search(exc)):
+        return NETWORK
+    return str(rec.get("helper") or "?")
+
+
+def failed_host_kinds(records: list) -> dict:
+    """{host of ``failed_hosts(records)``: the sorted kinds (``failure_kind``) of its records}. A host
+    is unreachable on the network only when every kind is ``NETWORK``."""
+    keep = set(failed_urls(records))
+    out: dict = {}
+    for rec in records or ():
+        if not isinstance(rec, dict) or str(rec.get("url") or "") not in keep:
+            continue
+        host = urlparse(str(rec["url"])).hostname
+        if host:
+            out.setdefault(host, set()).add(failure_kind(rec))
+    return {h: sorted(k) for h, k in out.items()}
+
+
 def only_hosts(records: list, hosts: set) -> list:
     """The records whose address is on one of ``hosts``."""
     return [r for r in records or () if isinstance(r, dict) and urlparse(str(r.get("url") or "")).hostname in hosts]
@@ -146,18 +195,29 @@ def refetch_headers(records: list) -> dict:
     return out
 
 
+def refetch_methods(records: list) -> dict:
+    """{address: HTTP method} for the records that name one other than GET (diag.note ``method``). An
+    address without one is refetched with GET."""
+    out: dict = {}
+    for rec in records or ():
+        if isinstance(rec, dict) and isinstance(rec.get("method"), str) and rec.get("url"):
+            out.setdefault(str(rec["url"]), rec["method"].upper())
+    return out
+
+
 def _targets(failed: dict) -> tuple[list[str], dict, list[str], dict]:
     """``failed`` {source: [failure records]} -> (one address per host, {host: [sources]}, the sources
-    that left no address, {address: refetch headers} for the addresses whose record names them). One per
-    host: a node's address is refused or reached per host, and it keeps the number of fetches per node
-    at the number of hosts."""
+    that left no address, {address: {"headers": ..., "method": ...}} for the addresses whose record names
+    either). One per host: a node's address is refused or reached per host, and it keeps the number of
+    fetches per node at the number of hosts."""
     urls: list[str] = []
     by_host: dict[str, list[str]] = {}
     none: list[str] = []
-    headers: dict = {}
+    reqs: dict = {}
     for src in sorted(failed):
         mine = failed_urls(failed[src])
         hdrs = refetch_headers(failed[src])
+        meths = refetch_methods(failed[src])
         if not mine:
             none.append(src)
         for u in mine:
@@ -165,11 +225,12 @@ def _targets(failed: dict) -> tuple[list[str], dict, list[str], dict]:
             if h not in by_host:
                 by_host[h] = []
                 urls.append(u)
-                if u in hdrs:
-                    headers[u] = hdrs[u]
+                req = {k: v for k, v in (("headers", hdrs.get(u)), ("method", meths.get(u))) if v}
+                if req:
+                    reqs[u] = req
             if src not in by_host[h]:
                 by_host[h].append(src)
-    return urls, by_host, none, headers
+    return urls, by_host, none, reqs
 
 
 class _Mihomo:
@@ -202,27 +263,44 @@ class _Mihomo:
             raise RuntimeError(f"选了 {node}，组里现在是 {now}")
 
 
-def _fetch_one(client: httpx.Client, url: str, headers: Optional[dict] = None) -> tuple[Optional[int], float, str]:
+# What a server that was reached answers a request whose content it turns down: a malformed or empty body
+# (400), no Content-Length (411), no or another Content-Type (415), a body it cannot process (422). A
+# refetch with a method other than GET carries no body (diag never records one), so on a node that
+# reaches the site these are its answer (11-19: statcan_wds's POST-only call, sent bodiless, answered 415).
+# No wall in OmniSeek's records answers one of them: walls answer 202, 403 or 405 (SiteGround, Cloudflare,
+# AWS WAF in front of levels.fyi). 405 is not here: a refetch with the source's own method gets 405 only
+# from such a wall.
+_BODY_REFUSED = frozenset({400, 411, 415, 422})
+
+
+def _fetch_one(client: httpx.Client, url: str, req: Optional[dict] = None) -> tuple[Optional[int], float, str]:
+    """One refetch of ``url`` with the method and headers ``req`` names (GET and OmniSeek's own User-Agent
+    when it names none). The third part marks an answer ``_ok`` takes although its status is not 200 or
+    401: ``限流`` (a rate limit), ``不认请求`` (a bodiless non-GET refetch turned down, ``_BODY_REFUSED``)."""
+    req = req or {}
+    method = req.get("method") or "GET"
     t0 = time.monotonic()
     try:
-        with client.stream("GET", url, headers=headers or {"User-Agent": _user_agent(url)}) as r:
+        with client.stream(method, url, headers=req.get("headers") or {"User-Agent": _user_agent(url)}) as r:
             limited = r.status_code == 429 or (r.status_code == 403
                                                and r.headers.get("x-ratelimit-remaining") == "0")
-            return r.status_code, time.monotonic() - t0, "限流" if limited else ""
+            refused = method != "GET" and r.status_code in _BODY_REFUSED
+            return r.status_code, time.monotonic() - t0, "限流" if limited else ("不认请求" if refused else "")
     except Exception as exc:  # noqa: BLE001 -- any failure is a reading, never a crash of the sweep
         return None, time.monotonic() - t0, type(exc).__name__
 
 
-def _fetch_round(urls: list[str], proxy: Optional[str], limit_s: float, headers: Optional[dict] = None) -> dict:
+def _fetch_round(urls: list[str], proxy: Optional[str], limit_s: float, reqs: Optional[dict] = None) -> dict:
     """Fetch ``urls`` at once through ``proxy`` (None = this machine's default route, which is the
-    proxy app's TUN for OmniSeek), each with OmniSeek's own User-Agent, or with the headers ``headers``
-    {address: request headers} names for it (the ones its source sent), on fresh connections (a kept-alive
+    proxy app's TUN for OmniSeek), each with GET and OmniSeek's own User-Agent, or with the method and the
+    headers ``reqs`` {address: {"headers": ..., "method": ...}} names for it (the ones its source
+    sent, ``_targets``), on fresh connections (a kept-alive
     one would stay on the node it was opened on). Only the status is read. The round returns within
     ``limit_s``: a fetch still running then reads as timed out. {url: (status or None, seconds, error)}."""
     client = httpx.Client(proxy=proxy, trust_env=False, follow_redirects=True, timeout=limit_s,
                           limits=httpx.Limits(max_keepalive_connections=0))
     pool = ThreadPoolExecutor(max_workers=max(1, len(urls)), thread_name_prefix="exit-node")
-    futs = {pool.submit(_fetch_one, client, u, (headers or {}).get(u)): u for u in urls}
+    futs = {pool.submit(_fetch_one, client, u, (reqs or {}).get(u)): u for u in urls}
     done, pending = wait(futs, timeout=limit_s)
     out = {}
     for f, u in futs.items():
@@ -234,11 +312,11 @@ def _fetch_round(urls: list[str], proxy: Optional[str], limit_s: float, headers:
 
 
 def _ok(v) -> bool:
-    """One fetch answered: 200, a rate limit (``_fetch_one`` marks it), or 401: the node reaches the site.
-    A failure record never carries the key its source sent (diag.note drops credential headers), so a
-    keyed API answers every refetch 401 on a node that reaches it (llm_leaderboard, 11-10); a wall
-    answers 202, 403 or 405, never 401."""
-    return v[0] in (200, 401) or v[2] == "限流"
+    """One fetch answered: 200, 401, or what ``_fetch_one`` marks (a rate limit; a bodiless non-GET
+    refetch turned down for its content): the node reaches the site. A failure record never carries the
+    key its source sent (diag.note drops credential headers), so a keyed API answers every refetch 401
+    on a node that reaches it (llm_leaderboard, 11-10); a wall answers 202, 403 or 405, never 401."""
+    return v[0] in (200, 401) or v[2] in ("限流", "不认请求")
 
 
 def _all_ok(reading: dict) -> bool:
@@ -361,7 +439,7 @@ def sweep(failed: dict, deadline: float, *, why: str) -> dict:
 
 
 def _sweep_locked(failed: dict, deadline: float, why: str, L: float, tail: float) -> dict:
-    urls, by_host, no_url, hdrs = _targets(failed)
+    urls, by_host, no_url, reqs = _targets(failed)
     res: dict = {"why": why, "at": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "sources": sorted(failed),
                  "hosts": by_host, "no_url": no_url}
     head = f"为 {len(failed)} 个源（{why}）"
@@ -378,7 +456,7 @@ def _sweep_locked(failed: dict, deadline: float, why: str, L: float, tail: float
         # these hosts were found past the selector before: one round on the default route, and only a
         # host answering there lets the sweep go on (the batch is dropped); else no test, no switch
         if time.monotonic() + L <= deadline:
-            now_read = _fetch_round(urls, None, L, hdrs)
+            now_read = _fetch_round(urls, None, L, reqs)
             res["default_route"] = {u: list(v) for u, v in now_read.items()}
         else:
             now_read = {}
@@ -428,7 +506,7 @@ def _sweep_locked(failed: dict, deadline: float, why: str, L: float, tail: float
         if original in have and time.monotonic() + 2 * L + tail <= deadline:
             try:
                 egress.select(eg2["group"], original)
-                pre = _fetch_round(urls, proxy, L, hdrs)
+                pre = _fetch_round(urls, proxy, L, reqs)
             except Exception as exc:  # noqa: BLE001
                 pre = {u: (None, 0.0, type(exc).__name__) for u in urls}
             res["pre"] = {u: list(v) for u, v in pre.items()}
@@ -456,7 +534,7 @@ def _sweep_locked(failed: dict, deadline: float, why: str, L: float, tail: float
             except Exception as exc:  # noqa: BLE001
                 readings[node] = {"_switch": (None, 0.0, type(exc).__name__)}
                 continue
-            readings[node] = _fetch_round(urls + [r for r in REFERENCES if r not in urls], proxy, L, hdrs)
+            readings[node] = _fetch_round(urls + [r for r in REFERENCES if r not in urls], proxy, L, reqs)
             if _all_ok(readings[node]):
                 break  # the first passing node in egress2's order wins; the rest are not needed
         res["readings"] = {n: {u: list(v) for u, v in r.items()} for n, r in readings.items()}
@@ -481,7 +559,7 @@ def _sweep_locked(failed: dict, deadline: float, why: str, L: float, tail: float
             _notify("出口节点 · 没切成", f"{head}：按 egress2 的读数排第一个全通的是 {best}，经代理软件的控制口切「{where.PROXY_SELECTOR}」没成"
                     f"（{exc}），仍是 {original}。\n{summary}")
             return res
-        after = _fetch_round(urls, None, L, hdrs)
+        after = _fetch_round(urls, None, L, reqs)
         res["after"] = {u: list(v) for u, v in after.items()}
         _futile_forget(futile, after)
         if _all_ok(after):
@@ -489,7 +567,7 @@ def _sweep_locked(failed: dict, deadline: float, why: str, L: float, tail: float
             log.warning("exit-node: switched %s from %s to %s for %s", where.PROXY_SELECTOR, original, best,
                         ", ".join(sorted({s for v in by_host.values() for s in v})))
             _notify("出口节点 · 已切", f"「{where.PROXY_SELECTOR}」由 {original} 切到 {best}，{head}，"
-                    f"站：{hosts_line}。{pre_line}；切完在默认路由上重取都回 200。\n{summary}{left}")
+                    f"站：{hosts_line}。{pre_line}；切完在默认路由上重取都通。\n{summary}{left}")
             return res
         try:
             app.select(where.PROXY_SELECTOR, original)
@@ -510,7 +588,7 @@ def _sweep_locked(failed: dict, deadline: float, why: str, L: float, tail: float
                 m.close()
 
 
-# 2026-11-06: the batches of hosts a switch did not help. One small file in OmniSeek's
+# the batches of hosts a switch did not help. One small file in OmniSeek's
 # state directory, read and written only under the sweep lock.
 _FUTILE_FILE = "exit-node-futile.json"
 # How long a batch is trusted: 7 days, PROVISIONAL. Basis: the proxy app's rules are the operator's and are
@@ -529,7 +607,7 @@ def _futile_path() -> Path:
 
 
 def _futile_load() -> list[dict]:
-    """The batches still inside FUTILE_TTL_S; an unreadable file reads as none (the old behaviour)."""
+    """The batches still inside FUTILE_TTL_S; an unreadable file reads as none."""
     try:
         data = json.loads(_futile_path().read_text(encoding="utf-8"))
     except (OSError, ValueError):

@@ -73,8 +73,8 @@ auth.register_template(
 # module-global semaphore (held only around the egress, in _acore_get) caps concurrent requests so a
 # burst paces through instead of cascading into 429s, mirroring _s2 / _openalex / reddit.
 #
-# Since 2026-09-28 the cap is the registry's ONE CORE guard, built from the declaration (upstreams.json
-# "core"), and it also enforces CORE's published per-minute ceiling, which nothing enforced before:
+# The cap is the registry's ONE CORE guard, built from the declaration (upstreams.json
+# "core"), and it also enforces CORE's published per-minute ceiling:
 # api.core.ac.uk/docs/v3 gives registered personal keys 1,000 tokens/day at most 25 per minute and
 # registered academic keys 5,000/day at most 10 per minute. Which tier the host's key has is not
 # known here, so the gate takes the stricter: at most 10 request starts in any 60 s (free until the
@@ -119,7 +119,7 @@ def _acore_client() -> httpx.AsyncClient:
 
 
 async def _acore_get(url: str, **kwargs):
-    """Async replacement of the deleted sync ``_core_get`` (11-04, async step seven; this is the only one now): the SAME single CORE egress chokepoint, so the SHARED ``_core_sema``
+    """Async ``_core_get``: the SAME single CORE egress chokepoint, so the SHARED ``_core_sema``
     in-flight cap bounds sync + async requests TOGETHER against the one shared-key host (the reddit
     ``_arctic_sema`` precedent — ONE ``threading.BoundedSemaphore``, never a second ``asyncio`` one, so
     the async migration can never double the CORE burst). ``_core_guard.ahold`` waits for it in the
@@ -157,7 +157,7 @@ class CoreAdapter(BaseAPIAdapter):
         }
 
     async def _araw_fetch(self, query: str, limit: int) -> list:
-        """Async replacement of the deleted sync ``_raw_fetch`` (11-04, this is the only one now): the keyed GET /v3/search/works/ goes native async so the
+        """Async ``_raw_fetch``: the keyed GET /v3/search/works/ goes native async so the
         live async omniseek_search awaits it directly instead of parking a pool thread on the CORE round-trip.
         BYTE-FAITHFUL mirror of ``_raw_fetch`` — same no-key gate + warn, same endpoint / params / auth
         headers / timeout / follow_redirects, same ``results`` extraction, same failure -> [] contract.
@@ -230,7 +230,7 @@ class CoreAdapter(BaseAPIAdapter):
                              headers=self._headers(key), timeout=10,
                              follow_redirects=True)
             # 429 = CORE rate-limiting us (key valid, just paced): it answered, but not whether
-            # search serves, so it is not verified (None; until 2026-10-04 it read healthy).
+            # search serves, so it is not verified (None).
             if resp.status_code == 429:
                 return None, _probe.rate_limited("api.core.ac.uk", upstreams.parse_retry_after(resp.headers))
             return resp.status_code == 200, f"HTTP {resp.status_code}"

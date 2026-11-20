@@ -225,8 +225,9 @@ def apply_overlay_row(cand: dict) -> dict:
     in this exact order (any reordering reintroduces a documented break):
 
       1. validate the row TYPED (apply.validate_row_typed): abort if non-empty (never register junk)
-      2. re-derive the gate FRESH (apply._auto_apply_ok re-reads live roster/policy; TOCTOU guard) :
-         abort if False; defensively also abort if family in _NEVER_AUTO_FAMILIES
+      2. re-derive the refusal FRESH (apply.apply_refusal: red lines, _NEVER_AUTO_FAMILIES, relabel;
+         TOCTOU guard): abort if any. What moved after the action (apply.apply_gaps) is
+         recorded in the applied stamp and the receipt, not refused
       3. fetcher.register_adapter_live(adapter): register BEFORE the overlay write; an
          AdapterCollision aborts with NO overlay row written. page_watch: no register (an extra row),
          so the overlay append IS the live effect (PageWatchAdapter._rows reads it next call)
@@ -255,15 +256,11 @@ def apply_overlay_row(cand: dict) -> dict:
     if problems:
         raise ValueError(f"row failed typed validation, NOT applied: {problems}")
 
-    # 2. re-derive the gate FRESH against the live roster/policy (TOCTOU guard).
-    if family in _apply._NEVER_AUTO_FAMILIES:
-        raise ValueError(
-            f"refuse live apply: family {family!r} is in _NEVER_AUTO_FAMILIES "
-            "(recurring fetch bypasses safe_fetch); use omniseek_curator_stage_commit")
-    if not _apply._auto_apply_ok(cand):
-        raise ValueError(
-            "refuse live apply: the auto-apply gate is not satisfied (family/mode/redline/evidence/"
-            "render/classification). Use the git-commit path (omniseek_curator_stage_commit).")
+    # 2. re-derive the refusal FRESH (TOCTOU guard); the rest goes ahead and is reported.
+    refusal = _apply.apply_refusal(cand)
+    if refusal:
+        raise ValueError(f"refuse live apply: {refusal}; use omniseek_curator_stage_commit")
+    gaps = _apply.apply_gaps(cand)
 
     name = str(row["name"])
     # 3. register live BEFORE the overlay write (a collision aborts with nothing persisted).
@@ -297,6 +294,7 @@ def apply_overlay_row(cand: dict) -> dict:
         "name": name,
         "overlay_path": str(_path(family)),
         "git_committed": False,
+        "after_review": gaps,
     }
     try:
         _candidates.record_applied(cid, applied, note="applied live (overlay)")
@@ -312,6 +310,7 @@ def apply_overlay_row(cand: dict) -> dict:
         "overlay_record": rec,
         "git_committed": False,
         "live_registered": registered,
+        "after_review": gaps,
     }
 
 

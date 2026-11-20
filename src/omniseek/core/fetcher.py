@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import contextvars
+import functools
 import json
 import logging
 import math
@@ -19,6 +20,7 @@ import os
 import re
 import threading
 import time
+import traceback
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional, Protocol, runtime_checkable
@@ -62,12 +64,11 @@ async def _aegress(adapter, query: str, limit: int) -> list:
 
 
 # BROAD (sources=None) cap. Two values, by freshness:
-#  - default (cache-allowed) path: 11s. MEASURED (2026-06-13, after the slow-source
+#  - default (cache-allowed) path: 11s. MEASURED (after the slow-source
 #    parallelization + OmniSeek-prewarm cron + the S2 API key): a broad on a NEW query
 #    completes EVERY source except reddit within ~10s — reddit (~25s, host-bound on the
 #    Arctic mirror) is the only straggler, and it is dropped at 16s too, then self-warms.
-#    So 11s drops nothing 16s kept. (The old 16s was set to wait for "semantic_scholar ~12-15s";
-#    that comment is now stale — with the API key S2 is ~4s.)
+#    So 11s drops nothing 16s kept (with the API key S2 is ~4s).
 #  - fresh=True path: 16s. A caller asking for LIVE data opted out of the cache, so the
 #    pre-warmed sources are forced cold + contended; give that explicit-completeness path
 #    the original budget (it can still raise deadline_s). Keeps broad breadth fully intact
@@ -177,7 +178,7 @@ def sealed_reason(adapter: "SourceAdapter") -> str:
     (a reason string; the adapter's own flag decides it, so restoring is one edit in that adapter).
     A sealed source is out of the broad fan-out, never suggested as excluded_relevant, answers a
     named call with an empty result plus the reason, reads health "sealed" (not a failure) and is
-    skipped by the health sweep. First user: xiaohongshu_cn (2026-10-07; deleted)."""
+    skipped by the health sweep."""
     try:
         v = getattr(adapter, "sealed", "")
     except Exception:  # noqa: BLE001 (a broken property must never break routing)
@@ -533,8 +534,8 @@ def _fetch_url_adapter_order(adapters: list["SourceAdapter"]) -> list["SourceAda
 
 def _adapter_declares_fetch_url_host(adapter: "SourceAdapter", url: str) -> bool:
     """Whether an adapter explicitly owns the URL host for generic-fallback exclusion. A declared value
-    with a path ("arxiv.org/pdf/") owns only the URLs on that host whose path starts with it (
-    the arXiv adapter owns the full-text links, not every arxiv.org page)."""
+    with a path ("arxiv.org/pdf/") owns only the URLs on that host whose path starts with it (the
+    arXiv adapter owns the full-text links, not every arxiv.org page)."""
     declared = getattr(adapter, "fetch_url_hosts", ()) or ()
     if isinstance(declared, str):
         declared = (declared,)
@@ -577,10 +578,43 @@ async def _arun_bounded(coro, timeout: Optional[float]) -> tuple[bool, object]:
     return True, task.result()
 
 
+# The budgets of asearch_ranked's own steps, seconds, each the wait for a free
+# slot of its lane included. PROVISIONAL. Derivation (replays of the 11-17 21:02 burst, 24
+# broad searches in three waves, and the first 60 s of the 24 sessions of 11-17 23:24): each of these
+# steps ran at most 0.1 s itself (recall_arm 0.097, fold 0.042, seen_before 0.075, graph_presence 0.004;
+# as_of_cut is the same kind of batched SQLite read as seen_before), and a hop of the IO lane waited at
+# most 3.8 s for a slot during the bursts; budget = that wait + ten times the step's own worst, 3.8 + 1,
+# rounded up to 5 s. The ranking: alone its text half takes 0.6 to 0.75 s,
+# with the wait for a process-lane slot at most 8.6 s in the session replay; rounded up to 10 s.
+# Calibration: every timeout logs "<step> exceeded its N s budget" (the ranking "rank exceeded"); a step
+# whose own run time, not its wait, is past its budget there means the budget is too low for that step.
+_STEP_BUDGET_S = {
+    "recall_arm": 5.0,       # _build_recall_arm: the watchdog-state read + the indexable set
+    "as_of_cut": 5.0,        # _as_of_cut_recall_counts: first_seen of the recalled docs (as_of only)
+    "fold": 5.0,             # recall.as_of: max(ran_at) over ingest_runs
+    "seen_before": 5.0,      # _seen_before_lookup: batched first_seen over docs and thin nodes
+    "graph_presence": 5.0,   # _graph_presence_stamps: statements file + stored edges
+}
+_RANK_BUDGET_S = 10.0        # rank.amerge_rank's text scoring in the process lane, its wait for a slot included
+
+
+async def _abounded_step(late: dict, step: str, budget: float, fn, *args) -> tuple[bool, object]:
+    """One blocking step of a tool on a worker thread of the IO lane, waited at most ``budget`` seconds
+    (``_arun_bounded``: the wait for a free slot of the lane counts too). Returns ``(True, result)``, or
+    ``(False, None)`` past the budget, with ``late[step] = budget`` and one log line; the thread is
+    detached and finishes on its own, so ``fn`` must only READ shared state (the caller applies what it
+    returns). Re-raises ``fn``'s exception."""
+    ok, r = await _arun_bounded(anyio.to_thread.run_sync(fn, *args, limiter=portal.IO_LANE), budget)
+    if not ok:
+        late[step] = budget
+        logger.warning("%s exceeded its %.1fs budget; went on without it", step, budget)
+    return ok, r
+
+
 @dataclass(frozen=True)
 class AdapterOutcome:
     """The first-class OUTCOME of one bounded source fetch (Wave 3): what HAPPENED, not just what
-    came back. Makes the three conflations the old docs-only return hid impossible to miss: a
+    came back. Makes three conflations impossible to miss: a
     timeout, an adapter error, and a full page (possibly truncated) are all distinct states here.
 
     Fields:
@@ -658,7 +692,7 @@ async def _aderive_outcome(source: str, query: str, limit: int, fresh: bool,
                 docs = await _dispatch_search(adapter, _q, limit)
             if not cache_only:  # Path A: index enumerable docs (skip on a cache-only collect, mirroring
                 from omniseek.core import recall  # asearch_many; a cache_only read has NO side effects)
-                await anyio.to_thread.run_sync(recall.maybe_ingest, docs, limiter=portal.IO_LANE)  # its file writes stay off the loop
+                await anyio.to_thread.run_sync(recall.maybe_ingest, docs, limiter=portal.IO_LANE)  # its dumps stay off the loop
             _stamp_license(docs, source)
             return docs, diag.drain(), _probe.summarize_held(_held)
         except BaseException as exc:  # the adapter raised: note it, attach the trace, RE-RAISE
@@ -790,7 +824,7 @@ async def _afetch_one_core(source, query, limit, fresh, deadline_s, cache_only, 
     if raised is not None:
         # Preserve the historical error contract: build the diagnostic, stash it on the exception,
         # and RE-RAISE the original exception. afetch_outcome swallowed the fault into state="errored";
-        # this VIEW is the one that still raises exactly as before (same type, message, _eye_diag).
+        # this VIEW is the one that raises (same type, message, _eye_diag).
         diagnostic = _build_diagnostic(
             adapter, docs=[], captures=outcome.captures,
             timed_out=False, raised=raised, deadline_s=deadline_s)
@@ -805,7 +839,7 @@ async def _afetch_one_core(source, query, limit, fresh, deadline_s, cache_only, 
                                    deadline_s=deadline_s)
     if outcome.held and diagnostic is not None:
         # what OmniSeek's own gates held back rides along, so a drill can tell "not sent" from "nothing
-        # there", as the fan-out does in _meta.held (2026-11-03)
+        # there", as the fan-out does in _meta.held
         diagnostic["held"] = outcome.held
     return outcome.docs, diagnostic
 
@@ -1105,13 +1139,24 @@ def _as_of_cut_index(idx: list, as_of, tally: dict) -> list:
 
 def _as_of_cut_recall(idx: list, as_of, meta: dict) -> list:
     """Cut the joined recall (_as_of_cut_index) and add its counts to the fan-out's ``_meta.as_of``."""
+    kept, tally = _as_of_cut_recall_counts(idx, as_of)
+    _add_as_of_counts(meta, tally)
+    return kept
+
+
+def _as_of_cut_recall_counts(idx: list, as_of) -> tuple:
+    """The reading half of ``_as_of_cut_recall`` (it reads first_seen from SQLite): the kept docs and
+    the cut's counts, touching no shared state, so asearch_ranked can run it on a worker thread under
+    its step budget and add the counts on the loop."""
     tally = _as_of_tally()
-    kept = _as_of_cut_index(idx, as_of, tally)
+    return _as_of_cut_index(idx, as_of, tally), tally
+
+
+def _add_as_of_counts(meta: dict, tally: dict) -> None:
     m = meta.get("as_of")
     if isinstance(m, dict):
         for k, v in tally.items():
             m[k] = m.get(k, 0) + v
-    return kept
 
 
 def _stamp_as_of_meta(meta: dict, fplan, tally: dict) -> None:
@@ -1131,14 +1176,6 @@ def _stamp_as_of_meta(meta: dict, fplan, tally: dict) -> None:
         "dropped_unseen": tally["dropped_unseen"],
         "signals": _flt.AS_OF_SIGNALS,
     }
-
-
-def _field_doc_key(name: str, field_name: str) -> Optional[str]:
-    from omniseek.core import filters as _flt
-    with _registry_lock:
-        adapter = _adapters.get(name)
-    spec = _flt.declared_filters(adapter).get(field_name) or {}
-    return spec.get("doc_key")
 
 
 def field_values(name: str, field_name: str, limit: int = 30) -> dict:
@@ -1198,8 +1235,8 @@ def _adapter_match_surface(adapter: "SourceAdapter") -> tuple[set[str], set[str]
 def _query_overlap_count(query: str, adapter: "SourceAdapter") -> int:
     """How many distinct query tokens appear in an excluded source's surface (domains ∪ regions ∪
     description ∪ cross-lingual keywords). Tokens are ASCII words + CJK BIGRAMS (via
-    relevance.tokenize) so a CHINESE query matches a CHINESE source — the old ASCII-only split
-    silently dropped every CJK char, so a 中文 query never surfaced any 中文 walled source. The COUNT
+    relevance.tokenize) so a CHINESE query matches a CHINESE source — an ASCII-only split
+    would drop every CJK char, so a 中文 query would never surface any 中文 walled source. The COUNT
     (not just a bool) lets excluded_relevant rank the best-matched walled sources first instead of
     dumping the whole roster in registry order. Mechanical token overlap, no semantic ranking."""
     from omniseek.core import relevance  # local: leaf module, avoid any package-init cycle
@@ -1211,12 +1248,6 @@ def _query_overlap_count(query: str, adapter: "SourceAdapter") -> int:
     domains, regions, desc = _adapter_match_surface(adapter)
     surface = set(relevance.tokenize(" ".join([*domains, *regions, desc])))
     return len(q_tokens & surface)
-
-
-def _query_overlaps_source(query: str, adapter: "SourceAdapter") -> bool:
-    """True iff the query thematically matches an excluded source's facets/description (any token
-    overlap). Thin bool over _query_overlap_count for callers that only need presence."""
-    return _query_overlap_count(query, adapter) > 0
 
 
 # Function words carry ZERO routing signal, and unlike the document ranker's BM25 (which scores
@@ -1273,13 +1304,8 @@ def _route_idf(catalog: dict, q_tokens: set) -> dict:
 # -----------------------------------------------------------------------------
 # Routing SearchPlan (Wave 2: the AUTHORITATIVE routing selection)
 # -----------------------------------------------------------------------------
-# A UNIFIED, PURE routing-selection over two materialized input layers. Wave 1 ran this in shadow to
-# prove PARITY against the legacy sync fan-out broad-branch selection; Wave 2 is the cutover: the plan
-# is now the SINGLE choke point that the fan-out routes through (both the broad sweep and a named
-# search), and the legacy in-line re-derivation plus the shadow drift-check are gone (a plan comparing
-# to itself is meaningless once it IS the selection). The REAL-registry parity golden keeps guarding
-# the semantics: it independently recomputes the legacy selection from fetcher's own derivations and
-# asserts the plan reproduces it, so it is now the frozen spec of record for this path.
+# A UNIFIED, PURE routing-selection over two materialized input layers. The plan is the SINGLE choke
+# point that the fan-out routes through (both the broad sweep and a named search).
 # Three layers:
 #   Layer 1 CatalogRecord / _catalog_snapshot: frozen per-source query-INDEPENDENT facts, MATERIALIZED
 #           (cached), rebuilt per-entry under _registry_lock on a live register/unregister.
@@ -1544,7 +1570,7 @@ def build_search_plan(catalog: dict, policy: PolicySnapshot, query: str,
         else:
             broad_live.append(name)
     # Rank by RARITY-weighted score, not raw count, so one distinctive match outranks several
-    # boilerplate ones. Ties break by name (determinism, as before).
+    # boilerplate ones. Ties break by name (determinism).
     _er_scored.sort(key=lambda t: (-t[0], t[1]["name"]))
     excluded_relevant = [d for _, d in _er_scored[:6]]
     skipped_down = []  # type: list
@@ -1572,7 +1598,7 @@ def _note_held(held: dict, src: str, cap: list, docs: list) -> bool:
 # contextvars.Context, so each source's fresh / cache_only / diag is ISOLATED). A native source's
 # asearch is awaited on the loop; a source whose search can only block runs its one sync .search on a
 # worker thread admitted by _LEGACY_LIMITER (_aegress). The charter's permit and reservation
-# machinery is DEFERRED until a MEASURED need appears against it. (the IO lane met its measured need: the IO
+# machinery is DEFERRED until a MEASURED need appears against it. (The offload lanes met their measured need: the IO
 # lane and the process lane in portal.py.) There is no second, synchronous fan-out (11-04): a
 # caller on a thread reaches this one through portal.run.
 # =============================================================================================
@@ -1592,16 +1618,89 @@ def _reap(t: "asyncio.Task") -> None:
     twin must too."""
     _DETACHED.discard(t)              # drop the strong ref (else "Task was destroyed but pending")
     if not t.cancelled():
-        t.exception()                 # mark the exception retrieved -> suppress the ERROR log
+        _drop_frames(t.exception())   # mark the exception retrieved -> suppress the ERROR log
+
+
+def _drop_frames(exc: Optional[BaseException]) -> None:
+    """Clear the locals of the finished frames in ``exc``'s traceback once nobody needs more of it than
+    its type and message. The frame that caught and re-raised it holds it again
+    (``except ... as exc: ...; raise``), so the exception, its traceback and every frame on it form a
+    cycle that only a full collection frees, and the frames' locals go with it: the answer body, the
+    parsed documents, a soup tree. After a burst of failing sources (a gate refusing, a host down) the
+    replay of 11-17's sessions held 0.85 M such objects, 62,727 documents among them, until a full
+    collection, which a large long-lived heap makes rare: one gc.collect() then took the footprint
+    from 4,892 to 3,142 MB."""
+    if exc is not None:
+        try:
+            traceback.clear_frames(exc.__traceback__)
+        except Exception:  # noqa: BLE001 -- best effort; the full collection still frees it later
+            pass
+
+
+# ADMISSION of broad sweeps. On 11-17 (21:02 and 23:24) twenty to thirty calls,
+# each a few broad sweeps, arrived together; what a sweep holds while it runs (the answer bodies, the
+# parsed documents, the queued parse calls) grew with the number of sweeps running, with no bound, past
+# memguard's hard line. So at most _BROAD_SLOTS broad sweeps run at once. A broad sweep is a fan-out over
+# the default sources (sources=None), a cache_only one included: it sends nothing, but each source still
+# reads its cached answer and parses it in the process lane, so it holds the same memory (in the replay,
+# 55 broad fan-outs started between 120 and 200 s, most of them cache_only collects, took the footprint
+# to 6.5 GB while no admitted sweep was running). A NAMED search
+# never takes a slot: it fans out to the few sources its caller chose (at most 6 in the 11-17 record;
+# the deploy road's omniseek_search names 4), so it answers while the broad slots are full. A sweep holds its
+# slot from admission until EVERY source task it started has ended, the stragglers it detached at its
+# deadline included, because they hold the same memory after the caller has its answer. A call that
+# finds every slot taken waits for one within its own deadline (the broad deadline, or the caller's
+# wait_s); the wait is taken out of that deadline, so the call ends when it would have; past it the call
+# returns no documents and _meta.omniseek_busy (asearch_many below).
+# PROVISIONAL (2026-11-18): 3. Derived from whole-session replays of 11-17 23:24 (the 24
+# sessions' 795 eye calls over 34 minutes; the readings and the replay program are in the job's
+# report). "Memory" is memguard's number: OmniSeek's own footprint plus its process-lane workers.
+#  - Without a cap (main), three runs: 2,010 to 2,071 MB at the start; the burst at 40 to 75 s puts 24 to
+#    27 broad sweeps in flight and passes 7,000 MB (where the replay stops itself) at 55 to 76 s.
+#  - Per running sweep: while the first six ramp (nothing else running yet) the memory rises 170 to 251 MB
+#    a sweep ((3,046..3,577 - 2,032..2,071) / 6). By that figure alone, soft (4,352) less the start
+#    (2,071) is 2,281 MB, room for 9 sweeps.
+#  - The whole session with a cap does not follow that figure: 5 slots peaked at 5,296 MB, 3 slots at
+#    5,037 and 5,072 MB (two runs, so the noise band is about 35 MB); 8 slots, before cache_only sweeps
+#    counted, 6,851. So the peak falls about 130 MB a slot (5 -> 3: 224 to 259 MB), and soft is out of reach
+#    for this cap: after the first bursts the process keeps 3.9 to 4.0 GB of its own plus 0.4 GB of
+#    workers with no sweep running (RSS 1.9 to 2.8 GB, the rest compressed), and memguard's release
+#    (gc.collect, MPS empty_cache) took 94 MB of it. That floor is the heap kept after the bursts.
+#  - So the cap is set against hard (5,376), with one sweep's worst cost (251 MB) of margin: the peak must
+#    stay under 5,125 MB. 3 slots: 5,072 at most, kept. 5 slots: 5,296, over. 4 slots: about 5,170 to
+#    5,200 by the 130 MB a slot, over. With 3, 108 busy answers came back to 33 to 35 of the 795 calls,
+#    none to the deploy road's named omniseek_search; memguard's own check (run in the replay with the restart
+#    recorded, not done) would have restarted OmniSeek once, on soft, at an idle moment, never on hard.
+# Calibration: two weeks of live readings, then re-derive: how often _meta.omniseek_busy is answered (OmniSeek
+# log's "eye busy" warning lines) and memguard's crossing lines (their in_flight and workers_mb). Busy
+# answers and no hard crossing: the cap may rise by one while the peak keeps the 251 MB margin; a hard
+# crossing with the slots full: the per-sweep cost grew and the cap comes down.
+_BROAD_SLOTS = 3
+_BROAD_LIMITER = anyio.CapacityLimiter(_BROAD_SLOTS)
+_BROAD_ENDS: "dict[object, float]" = {}   # an admitted sweep's slot -> when its planned waits end (monotonic)
+
+
+def _broad_release(slot: object, _all: "asyncio.Future") -> None:
+    """Done-callback of the gather over one admitted sweep's source tasks: give its slot back."""
+    _BROAD_ENDS.pop(slot, None)
+    _BROAD_LIMITER.release_on_behalf_of(slot)
+
+
+def _eye_busy(waited: float) -> dict:
+    """_meta.omniseek_busy: how many broad sweeps hold a slot, and when the earliest of them reaches the end
+    of its planned waits (its stragglers may run past that, so it is a lower bound, at least 1 s)."""
+    ends = list(_BROAD_ENDS.values())
+    left = (min(ends) - time.monotonic()) if ends else 0.0
+    return {"retry_after_s": max(1, math.ceil(left)), "in_flight": _BROAD_LIMITER.borrowed_tokens,
+            "limit": _BROAD_SLOTS, "waited_s": round(waited, 1)}
 
 
 @runtime_checkable
 class AsyncSearchCapable(Protocol):
     """A source adapter that has gone NATIVE async (the async migration's fourth step onward): it exposes an awaitable ``asearch``
     that egresses off the loop by itself, so _dispatch_search awaits it directly instead of pushing
-    the sync .search onto the shared thread pool. When this was added NO adapter implemented it, so every source
-    takes the legacy-runner branch; the native branch is built + goldened now (a stub adapter) so the
-    dispatch is proven both ways before any real adapter converts."""
+    the sync .search onto the shared thread pool. A source without it takes the legacy-runner
+    branch."""
 
     async def asearch(self, query: str, limit: int) -> list: ...
 
@@ -1611,7 +1710,7 @@ async def _dispatch_search(adapter: "SourceAdapter", query: str, limit: int) -> 
     .search on the bounded shared thread pool. anyio.to_thread.run_sync PROPAGATES the current
     contextvars.Context into the worker thread, so the sync adapter's cache.fresh() / cache_only() +
     diag reads observe THIS source's isolated context (golden pins that propagation). The pool is the
-    256-token _LEGACY_LIMITER, so shared-pool backpressure replaces the per-search private 64-thread pool.
+    256-token _LEGACY_LIMITER, so shared-pool backpressure bounds it (no per-search private pool).
 
     Every source call of OmniSeek passes here (the fan-out, the one-source fetch, the recall ingest, the
     prewarmer), so this is where a live fetch that worked is recorded (``note_fetched_ok``)."""
@@ -1630,7 +1729,7 @@ async def _dispatch_search(adapter: "SourceAdapter", query: str, limit: int) -> 
     return docs
 
 
-# WHEN A SOURCE LAST FETCHED FOR REAL (2026-11-07). The watchdog's consecutive-fail
+# WHEN A SOURCE LAST FETCHED FOR REAL. The watchdog's consecutive-fail
 # count moves only on a check that verified something, and about fifteen checks answer "not probed"
 # while the source's listing is still cached. The recall ingest refetches that listing on its own
 # schedule, so after a fix every check landed on a warm cache and a repaired source read as down for
@@ -1700,13 +1799,18 @@ async def asearch_many(
     # loop: _build_policy_snapshot reads the watchdog-state JSON off disk (a blocking syscall), which on
     # a native async caller (e.g. a cache_only asearch_ranked, which threads in no snapshot) would stall
     # the loop. get_catalog_snapshot is in-memory but rides the same hop for simplicity.
+    _steps_late: dict = {}
     if _catalog is not None and _policy is not None:
         catalog, policy = _catalog, _policy
     else:
         def _build_snap():
             _c = get_catalog_snapshot() if _catalog is None else _catalog
             return _c, (_build_policy_snapshot(_c) if _policy is None else _policy)
-        catalog, policy = await anyio.to_thread.run_sync(_build_snap, limiter=portal.IO_LANE)
+        # Bounded like asearch_ranked's steps: what makes this hop slow is the wait for a
+        # free slot of the IO lane, not the read; past the budget the snapshot is built here on the loop
+        # (one small file read), so the routing never waits on the lane without end.
+        ok, snap = await _abounded_step(_steps_late, "route_snapshot", _STEP_BUDGET_S["recall_arm"], _build_snap)
+        catalog, policy = snap if ok else _build_snap()
     plan = build_search_plan(catalog, policy, query, sources=sources)
     target_sources = plan.broad_live
     excluded = plan.excluded
@@ -1740,7 +1844,34 @@ async def asearch_many(
                "progressive": {"fast": 0, "slow": 0, "timed_out": []}}
         _stamp_filter_meta(_m0, _fplan, _r0, [], _named, {}, deadline)
         _stamp_as_of_meta(_m0, _fplan, _tally)
+        if _steps_late:
+            _m0["steps_timed_out"] = dict(_steps_late)
         return _r0, _m0
+
+    # Admission (see _BROAD_SLOTS): a broad sweep waits here for a slot, within its deadline.
+    _slot = None
+    if sources is None:
+        _slot = object()
+        _admitted = False
+        _tq = time.monotonic()
+        with anyio.move_on_after(deadline):
+            await _BROAD_LIMITER.acquire_on_behalf_of(_slot)
+            _admitted = True
+        _waited = time.monotonic() - _tq
+        if not _admitted:
+            _busy = _eye_busy(_waited)
+            logger.warning("asearch_many: eye busy, %d broad sweeps running, no slot within %.1fs",
+                           _busy["in_flight"], _waited)
+            _mb = {"searched": 0, "elapsed_s": round(_waited, 1), "empty": [], "timed_out": [],
+                   "errored": {}, "excluded_count": len(excluded), "disabled": sorted(disabled),
+                   "excluded_relevant": excluded_relevant, "truncated": [],
+                   "skipped_down": skipped_down,
+                   "progressive": {"fast": 0, "slow": 0, "timed_out": []}, "omniseek_busy": _busy}
+            if _steps_late:
+                _mb["steps_timed_out"] = dict(_steps_late)
+            return {}, _mb
+        deadline = max(0.0, deadline - _waited)
+        _paper_deadline = max(0.0, _paper_deadline - _waited)
 
     # Progressive-return timing (#6): source -> completion monotonic time. Populated inside _aone in
     # THIS task's copied context; each task writes a DISTINCT key on the single loop thread (no lock).
@@ -1773,9 +1904,9 @@ async def asearch_many(
             with _probe.capture_held() as _held:   # what the gates refused (_meta.held)
                 docs = await _dispatch_search(adapter, _q, limit_per_source)  # capability dispatch
             if not cache_only:  # Path A: index enumerable docs (skip during a cache-only collect).
-                # maybe_ingest durably appends observations before it enqueues the materializer wake.
-                # Keep that durability boundary awaited, but move its file writes and fsync calls off
-                # the event loop. The writer daemon still owns every SQLite, vector, and graph write.
+                # maybe_ingest dumps each document and queues it for the recall writer, which commits
+                # it to SQLite; the dumps run off the event loop. The writer daemon owns every SQLite,
+                # vector, and graph write.
                 from omniseek.core import recall
                 await anyio.to_thread.run_sync(recall.maybe_ingest, docs, limiter=portal.IO_LANE)
             _stamp_license(docs, source)
@@ -1805,18 +1936,29 @@ async def asearch_many(
     # order == target/catalog order; create_task COPIES the context per source (per-source isolation).
     t0 = time.monotonic()
     _deadline_at = t0 + deadline  # a straggler's gate waits end here: it is not sent after the caller left
-    src_to_task: "dict[str, asyncio.Task]" = {
-        s: asyncio.create_task(_aone(s)) for s in target_sources}
-    # DEADLINE + PARTIAL-RETURN (as before: wait(timeout=deadline) -> done/not_done). Use
+    try:
+        src_to_task: "dict[str, asyncio.Task]" = {
+            s: asyncio.create_task(_aone(s)) for s in target_sources}
+        if _slot is not None:
+            # the slot comes back when the last source task ends, a detached straggler's included
+            _BROAD_ENDS[_slot] = t0 + (_paper_deadline if _paper_wait else deadline)
+            asyncio.gather(*src_to_task.values(), return_exceptions=True).add_done_callback(
+                functools.partial(_broad_release, _slot))
+    except BaseException:
+        if _slot is not None:
+            _BROAD_ENDS.pop(_slot, None)
+            _BROAD_LIMITER.release_on_behalf_of(_slot)
+        raise
+    # DEADLINE + PARTIAL-RETURN (wait(timeout=deadline) -> done/not_done). Use
     # done / pending ONLY for the membership test below; ASSEMBLE by the ordered src_to_task walk.
     done, pending = await asyncio.wait(src_to_task.values(), timeout=deadline)
     _task_src = {t: s for s, t in src_to_task.items()}
     _late = [t for t in pending if _task_src[t] in _paper_wait]
-    if _late:  # as before: the late paper sources get the rest of their budget
+    if _late:  # the late paper sources get the rest of their budget
         await asyncio.wait(_late, timeout=max(0.0, t0 + _paper_deadline - time.monotonic()))
         paper_wait = _paper_wait_meta(t0, _paper_deadline, [(_task_src[t], t.done()) for t in _late])
         pending = {t for t in pending if not t.done()}
-    for src, task in src_to_task.items():  # ORDERED walk (as before: future_to_source walk)
+    for src, task in src_to_task.items():  # ORDERED walk
         if task in pending:
             timed_out.append(src)
             # DETACH SAFELY + REAP: do NOT cancel (mirror executor.shutdown(wait=False); the straggler
@@ -1840,7 +1982,7 @@ async def asearch_many(
             r = []
             caps = list(getattr(exc, "_eye_diag", None) or [])
             raised_exc = exc
-        # as_of: the exit cut, as before (truncated + diagnostic read the uncut page).
+        # as_of: the exit cut (truncated + diagnostic read the uncut page).
         kept = r if _fplan is None or _fplan.as_of is None else _as_of_cut_into(r, _fplan.as_of, _tally)
         results[src] = kept
         if not _note_held(held, src, hcap, r) and not kept:
@@ -1852,6 +1994,7 @@ async def asearch_many(
                                   timed_out=False, raised=raised_exc, deadline_s=deadline)
             if d:
                 diagnostics[src] = d
+        _drop_frames(raised_exc)  # recorded above as text; its frames' data need not wait for a full collection
 
     # Progressive-return facets (#6, fail-open): same fast (< 3s) vs slow (>= 3s) partition as
     # the fan-out. The async model cannot double-count a timed_out straggler that stamps during the
@@ -1884,6 +2027,8 @@ async def asearch_many(
         meta["held"] = held
     if paper_wait:
         meta["paper_wait"] = paper_wait
+    if _steps_late:
+        meta["steps_timed_out"] = dict(_steps_late)
     _stamp_filter_meta(meta, _fplan, results, empty, _named, diagnostics, deadline)
     _stamp_as_of_meta(meta, _fplan, _tally)
     return results, meta
@@ -2028,19 +2173,29 @@ def _stamp_seen_before(ranked: list[Document], t0_wall: float) -> None:
         doc with no persisted row).
       - ``seen_before=None``  + ``first_seen_at=None``: the memory lookup was UNAVAILABLE (recall
         disabled / store down). JSON null = UNKNOWN, the honest degraded state. This never masquerades
-        as verified-new: "memory unavailable" and "verified never-seen" are now distinguishable.
-    The bug this fixes: a lookup FAILURE used to fail-open to an empty map, so every doc stamped
-    ``seen_before=False`` (memory unavailable masquerading as verified-new); and earlier still, the
-    stamp was presence-gated so a freshly live-fetched doc came back with no key at all.
+        as verified-new: "memory unavailable" and "verified never-seen" are distinguishable. A lookup
+    FAILURE does not fail-open to an empty map (that would stamp every doc ``seen_before=False``).
 
     ``seen_before`` is True iff a first_seen exists AND is strictly earlier than ``t0_wall`` (this
     search's start), so a doc THIS search is the first to see is False (its first_seen >= t0_wall, or
     absent). The lookup is one BATCHED first_seen probe across docs UNION thin graph_nodes; when it
-    returns ``None`` (unavailable) every doc gets the honest ``seen_before=None``, still stamped."""
+    returns ``None`` (unavailable) every doc gets the honest ``seen_before=None``, still stamped.
+
+    The lookup and the stamping are two halves (``_seen_before_lookup`` reads, ``_apply_seen_before``
+    writes the docs): asearch_ranked runs the read on a worker thread under its step budget and the
+    stamping on the loop, so a read detached past its budget can never write into a document that is
+    already on its way out."""
     if not ranked:
         return
+    _apply_seen_before(ranked, _seen_before_lookup(ranked), t0_wall)
+
+
+def _apply_seen_before(ranked: list[Document],
+                       first_seen: "Optional[dict[tuple[str, str], float]]", t0_wall: float) -> None:
+    """The stamping half of ``_stamp_seen_before``: pure CPU over the ranked docs, ``first_seen`` being
+    ``_seen_before_lookup``'s map, or None when the lookup was unavailable (or did not finish within
+    its budget): every doc then gets the honest ``seen_before=None``."""
     from datetime import datetime, timezone
-    first_seen = _seen_before_lookup(ranked)
     unavailable = first_seen is None  # None = the lookup could not run: novelty is UNKNOWN (null)
     for d in ranked:
         d.metadata = dict(d.metadata or {})
@@ -2089,7 +2244,7 @@ def _build_recall_arm(query: str, sources: Optional[list[str]], limit: int,
     caller runs the WHOLE helper OFF the loop via anyio.to_thread."""
     if cache_only:
         # cache_only pickup: skip the recall arm entirely (no embed, no future). The fan-out builds its
-        # own snapshot (byte-identical), so route_catalog/route_policy stay None -- exactly as before.
+        # own snapshot (byte-identical), so route_catalog/route_policy stay None.
         return None, None, None, None
     from omniseek.core import recall
     _k = max(50, 4 * limit)
@@ -2148,11 +2303,17 @@ def _recall_remaining_budget(deadline_s: Optional[float], fresh: bool,
     return max(0.5, _rank_budget - (time.time() - t0_wall))
 
 
-def _fold_recall_index(results: dict, meta: dict, idx: list, info: dict) -> None:
+_AS_OF_UNREAD = object()
+
+
+def _fold_recall_index(results: dict, meta: dict, idx: list, info: dict,
+                       index_as_of=_AS_OF_UNREAD) -> None:
     """Fold the joined recall into the SAME merge_rank/dedup the live path uses: index docs collapse
     against live twins by fingerprint, rolled-off docs resurface. SHARED. No-op on an empty idx (a
-    recall failure/timeout degrades to no-index, and meta carries an explicit degraded stamp). Contains
-    the as_of DB read, so the async caller runs this OFF the loop via anyio.to_thread."""
+    recall failure/timeout degrades to no-index, and meta carries an explicit degraded stamp).
+    ``index_as_of`` is the index watermark (recall.as_of, a SQLite read) when the caller already read
+    it: asearch_ranked reads it on a worker thread under its step budget and folds here on the loop
+    (None when the read did not finish in time). Not given, the fold reads it itself."""
     if not idx:
         # The caller already built an honest record of WHY there is no index (mode timeout / error,
         # or a hybrid that matched nothing). Discarding it here is what made a DEGRADED search
@@ -2162,9 +2323,11 @@ def _fold_recall_index(results: dict, meta: dict, idx: list, info: dict) -> None
         if info:
             meta["index"] = {**info, "candidates": 0}
         return
-    from omniseek.core import recall
+    if index_as_of is _AS_OF_UNREAD:
+        from omniseek.core import recall
+        index_as_of = recall.as_of()
     results["_index"] = idx
-    meta["index"] = {**info, "candidates": len(idx), "as_of": recall.as_of()}
+    meta["index"] = {**info, "candidates": len(idx), "as_of": index_as_of}
 
 
 def _normalize_seen_before(ranked: list[Document]) -> None:
@@ -2348,17 +2511,37 @@ def _place_graph_presence(ranked: list[Document]) -> None:
     with NO recorded judgment stamps ``judgments: []`` -- the conspicuous blank is the write-reflex cue (the
     gap-ledger's write-side mirror). ABSENT entirely when the store holds nothing about the hit AND no
     statement touches it (routing_hint discipline: silent when nothing clears).
-    Design: docs/design/ambient-placement-and-selfwarm.md."""
+    Design: docs/design/ambient-placement-and-selfwarm.md.
+
+    Two halves: ``_graph_presence_stamps`` reads the store and returns the
+    stamps without touching a document, ``_apply_graph_presence`` writes them. asearch_ranked runs the
+    reading on a worker thread under its step budget and the writing on the loop, so a read detached
+    past its budget never writes into a document that is already on its way out."""
+    _apply_graph_presence(_graph_presence_stamps(ranked))
+
+
+def _apply_graph_presence(stamps: list) -> None:
+    """The writing half of ``_place_graph_presence``: ``metadata["graph"]`` for each (doc, stamp)."""
+    for d, stamp in stamps:
+        try:
+            d.metadata["graph"] = stamp
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def _graph_presence_stamps(ranked: list[Document]) -> list:
+    """The reading half of ``_place_graph_presence``: the (doc, stamp) pairs it would write, [] when the
+    store is off or holds nothing about these hits. Reads the documents' metadata, writes nothing."""
     try:
         from omniseek.core.recall import store
         from omniseek.core.recall import graph as _g
         if store._disabled:
-            return
+            return []
         con = store._read_con()
         if con is None:
-            return
+            return []
     except Exception:  # noqa: BLE001
-        return
+        return []
     from collections import Counter
     from omniseek.core.recall.graph import doc_node_id
     # The agent's OWN typed statements (tier J): loaded + folded ONCE per search (fail-open to empty), then
@@ -2411,7 +2594,7 @@ def _place_graph_presence(ranked: list[Document]) -> None:
                 seen_f.add(w)
                 frontier.append(w)
     if not doc_rows:
-        return
+        return []
     edges_by_node: dict = {}
     if frontier:
         try:
@@ -2422,6 +2605,7 @@ def _place_graph_presence(ranked: list[Document]) -> None:
             for ep in (e.get("src"), e.get("dst")):
                 if ep in seen_f:
                     edges_by_node.setdefault(ep, []).append(e)
+    stamps: list = []
     for d, wids, stmt_ids in doc_rows:
         counts: Counter = Counter()
         seen_e: set = set()
@@ -2449,10 +2633,8 @@ def _place_graph_presence(ranked: list[Document]) -> None:
                                        "agent's judgment, not mechanical facts and not live)")
         elif counts:
             stamp["judgments"] = []   # in_graph but UNJUDGED: the conspicuous blank = the write-reflex cue
-        try:
-            d.metadata["graph"] = stamp
-        except Exception:  # noqa: BLE001
-            pass
+        stamps.append((d, stamp))
+    return stamps
 
 
 _WARM_PACE_MAX_S = 0.5   # self-warm ONLY when the shared OpenAlex rate gate is idle (< this) -> yields to real traffic
@@ -2619,6 +2801,16 @@ async def asearch_ranked(
         exception -> mode "error").
       - the recall FOLD (_fold_recall_index: recall.as_of SQLite read) -> OFF.
       - the seen_before stamp (_stamp_seen_before -> _seen_before_lookup: batched SQLite read) -> OFF.
+    EVERY STEP IS BOUNDED: the fan-out by the caller's deadline, the recall join
+    by the remaining budget, and each other step by its own budget (``_STEP_BUDGET_S``, ``_RANK_BUDGET_S``)
+    through ``_arun_bounded``. A worker-thread step past its budget is detached (it finishes on its own;
+    only its read runs there, the documents are stamped here on the loop) and the step takes its
+    fail-open path: no recall arm, no index watermark, no first_seen (seen_before null), no graph
+    stamps. The ranking past its budget ends its worker process (anyio's cancellable to_process, so a
+    stuck worker is replaced by a fresh one) and the documents come back deduplicated in their
+    unranked order with ``rank_error``. ``_meta.steps_timed_out`` names every step that ran out and its
+    budget. Before this a call whose step waited on a worker thread could wait forever: on 11-17 an
+    omniseek_search waited 89 minutes for a slot of the IO lane that never came free.
     Leaf helpers: _build_recall_arm / _recall_remaining_budget / _fold_recall_index / merge_rank /
     _stamp_seen_before / _normalize_seen_before / _apply_ranked_enrichments."""
     from omniseek.core import rank  # local import keeps the module graph acyclic
@@ -2627,15 +2819,23 @@ async def asearch_ranked(
     # persisted first_seen against this instant; this search's own ingest writes carry first_seen >=
     # t0_wall, so they can never flip a doc this very search is the first to retrieve to "seen before".
     t0_wall = time.time()
+    late: dict = {}  # step -> its budget (s), for every step that ran out (_meta.steps_timed_out)
     # per_source given (a sensor over a source that declares sensor_window) overrides the default
-    # per-source cap; the default keeps every other caller exactly as before.
+    # per-source cap; the default leaves every other caller unchanged.
     per_source = per_source if per_source else min(max(limit, 5), 15)
     # Build the recall arm OFF the loop (the watchdog-state disk read inside _build_policy_snapshot +
-    # indexable_set) via the SAME shared helper the deleted sync twin uses. Returns the request snapshot (routed
-    # into asearch_many so the scope + the fan-out observe one generation) + the arm callable + the
-    # honest skip stamp. contextvars (fresh / cache_only / diag) propagate through anyio.to_thread.
-    _route_catalog, _route_policy, _recall_task, _index_skipped = await anyio.to_thread.run_sync(
-        _build_recall_arm, query, sources, limit, semantic, cache_only, limiter=portal.IO_LANE)
+    # indexable_set). Returns the request snapshot (routed into asearch_many so the scope + the fan-out
+    # observe one generation) + the arm callable + the honest skip stamp. contextvars (fresh /
+    # cache_only / diag) propagate through anyio.to_thread. Past its budget: no arm this search (the
+    # fan-out builds its own snapshot).
+    ok, arm = await _abounded_step(late, "recall_arm", _STEP_BUDGET_S["recall_arm"],
+                                   _build_recall_arm, query, sources, limit, semantic, cache_only)
+    if ok:
+        _route_catalog, _route_policy, _recall_task, _index_skipped = arm
+    else:
+        _route_catalog = _route_policy = _recall_task = None
+        _index_skipped = {"lexical": 0, "vector": 0, "mode": "timeout",
+                          "reason": "the recall arm was not built within its budget"}
     if filters:
         _recall_task, _index_skipped = None, dict(_FILTERED_INDEX_SKIP)
     # Kick the recall OFF-LOOP concurrently with the fan-out (create_task over to_thread), BEFORE the
@@ -2648,6 +2848,15 @@ async def asearch_ranked(
                                        cache_only=cache_only, _catalog=_route_catalog,
                                        _policy=_route_policy, filters=filters,
                                        **({"as_of": as_of} if as_of is not None else {}))
+    if meta.get("omniseek_busy"):
+        # no slot within the deadline: nothing was sent, and nothing is ranked or recalled either (the
+        # recall already kicked finishes on its own, detached)
+        if _recall_fut is not None:
+            _DETACHED.add(_recall_fut)
+            _recall_fut.add_done_callback(_reap)
+        if late:
+            meta["steps_timed_out"] = {**(meta.get("steps_timed_out") or {}), **late}
+        return [], meta
     total_in = sum(len(v) for v in results.values())  # LIVE bucket count (before index injection)
     if _recall_fut is not None:
         # Join the overlapped recall with the SAME remaining-budget the deleted sync twin waits. Mirror the sync
@@ -2670,33 +2879,64 @@ async def asearch_ranked(
             except Exception as exc:  # noqa: BLE001 — recall is an enrichment; its failure must not break search
                 logger.debug("recall hybrid failed: %s", exc)
                 idx, info = [], {"lexical": 0, "vector": 0, "mode": "error"}
-        if as_of is not None:  # the first_seen read is SQLite -> OFF the loop
-            idx = await anyio.to_thread.run_sync(_as_of_cut_recall, idx, as_of, meta, limiter=portal.IO_LANE)
-        # The fold does the as_of SQLite read -> OFF the loop (no-op on an empty idx).
-        await anyio.to_thread.run_sync(_fold_recall_index, results, meta, idx, info, limiter=portal.IO_LANE)
+        if as_of is not None and idx:
+            # the first_seen read is SQLite -> OFF the loop. Past its budget the recalled docs cannot be
+            # checked against as_of, so none is kept (the cut is a correctness filter, not an enrichment).
+            ok, cut = await _abounded_step(late, "as_of_cut", _STEP_BUDGET_S["as_of_cut"],
+                                           _as_of_cut_recall_counts, idx, as_of)
+            if ok:
+                idx = cut[0]
+                _add_as_of_counts(meta, cut[1])
+            else:
+                idx, info = [], {**info, "mode": "timeout"}
+        # The fold's one blocking part, the index watermark (recall.as_of, a SQLite read) -> OFF the loop;
+        # the fold itself runs here. Past its budget the watermark is null.
+        _wm = None
+        if idx:
+            from omniseek.core import recall
+            ok, _wm = await _abounded_step(late, "fold", _STEP_BUDGET_S["fold"], recall.as_of)
+        _fold_recall_index(results, meta, idx, info, index_as_of=_wm)
     elif _index_skipped is not None:
         meta["index"] = _index_skipped  # pure, on-loop: the honest absence stamp (no arm ran)
     # merge_rank's text half (tokenize + BM25 over every document's title and content: 0.6 to 0.75 s
     # for a broad search, measured) runs in the process lane; dedup and the
     # blend stay here. A dead worker is recorded in _meta (rank_error) and nothing is ranked: the
-    # loop never takes the scoring back.
+    # loop never takes the scoring back. Past _RANK_BUDGET_S the worker is ended and the documents
+    # come back in their unranked (deduplicated) order.
     try:
-        ranked = await rank.amerge_rank(results, query, limit, backend_of=backend_of)
+        ranked = await rank.amerge_rank(results, query, limit, backend_of=backend_of, timeout=_RANK_BUDGET_S)
     except anyio.BrokenWorkerProcess as exc:
         meta["rank_error"] = f"BrokenWorkerProcess: {exc!r}"[:300]
         ranked = []
+    except rank.RankTimeout as exc:
+        late["rank"] = _RANK_BUDGET_S
+        meta["rank_error"] = (f"timeout: the text scoring did not finish within {_RANK_BUDGET_S:g}s; "
+                              "documents in their unranked order")
+        logger.warning("asearch_ranked: rank exceeded %.1fs, returning the unranked order", _RANK_BUDGET_S)
+        ranked = exc.docs
     _stamp_license(ranked)  # recalled index docs carry no stamp yet (live docs keep theirs)
     meta["deduped"] = {"in": total_in, "out": len(ranked)}
-    # seen_before stamp: the batched first_seen lookup is a BLOCKING SQLite read -> OFF the loop. Same
-    # fail-open outer guard (a stamp failure never breaks the search); the normalize below is pure CPU.
-    try:
-        await anyio.to_thread.run_sync(_stamp_seen_before, ranked, t0_wall, limiter=portal.IO_LANE)
-    except Exception:  # noqa: BLE001 — a stamp failure must never break the search
-        pass
-    try:
-        await anyio.to_thread.run_sync(_place_graph_presence, ranked, limiter=portal.IO_LANE)   # Phase 1: OFF-LOOP graph-presence stamp
-    except Exception:  # noqa: BLE001 — a placement failure must never break the search
-        pass
+    # seen_before stamp: the batched first_seen lookup is a BLOCKING SQLite read -> OFF the loop, the
+    # stamping here. Same fail-open outer guard (a stamp failure never breaks the search); a lookup past
+    # its budget stamps the honest unknown (null). The normalize below is pure CPU.
+    if ranked:
+        try:
+            ok, first_seen = await _abounded_step(late, "seen_before", _STEP_BUDGET_S["seen_before"],
+                                                  _seen_before_lookup, ranked)
+            _apply_seen_before(ranked, first_seen if ok else None, t0_wall)
+        except Exception:  # noqa: BLE001 — a stamp failure must never break the search
+            pass
+    if ranked:
+        try:
+            # Phase 1 graph-presence: the store read OFF the loop, the stamps written here
+            ok, stamps = await _abounded_step(late, "graph_presence", _STEP_BUDGET_S["graph_presence"],
+                                              _graph_presence_stamps, ranked)
+            if ok:
+                _apply_graph_presence(stamps)
+        except Exception:  # noqa: BLE001 — a placement failure must never break the search
+            pass
+    if late:
+        meta["steps_timed_out"] = {**(meta.get("steps_timed_out") or {}), **late}
     _normalize_seen_before(ranked)
     # Passive enrichments + the conflict/yield taps: pure CPU + enqueue-only (non-blocking) -> ON loop.
     _apply_ranked_enrichments(query, ranked, results, meta, record_yield, cache_only)
@@ -2736,8 +2976,8 @@ def _watchdog_side_map(key: str) -> dict:
 def _watchdog_unmeasured() -> dict:
     """Sources whose LAST watchdog probe did not complete: {name: reason}. A separate map because
     ``last_status`` is consumed as a KEY SET (see _watchdog_health), where a None value is
-    indistinguishable from True. Without this, "our probe timed out" would report as ``ok`` — the
-    false GREEN that replaces the false RED the None-as-failure bug used to produce. Fail-open:
+    indistinguishable from True. Without this, "our probe timed out" would report as ``ok`` — a
+    false GREEN. Fail-open:
     empty on any read/parse error, so a missing file never invents an unmeasured state."""
     return _watchdog_side_map("unmeasured")
 
@@ -2748,8 +2988,8 @@ def _watchdog_unverified() -> dict:
     spend, a declared gate or an open breaker holding the probe back, an answer served from cache or
     from stored state), or the upstream answered only that it is rate-limiting us (HTTP 429). Kept
     apart from ``unmeasured`` (our probe did not finish) and from ``ok``
-    (verified working): before 2026-10-04 these sources returned True and read as ``ok``, so a source
-    OmniSeek never tests (context7) counted as healthy forever. Fail-open like _watchdog_unmeasured."""
+    (verified working): reading these sources as ``ok`` would count a source
+    OmniSeek never tests (context7) as healthy forever. Fail-open like _watchdog_unmeasured."""
     return _watchdog_side_map("unverified")
 
 
@@ -2783,7 +3023,7 @@ def list_sources(live: Optional[dict] = None, domain: Optional[str] = None,
     Each entry carries: name, the routing FACETS (kind / domains / regions / modes),
     needs_credentials, ``explicit_only`` (excluded from broad search, name it to include) plus
     ``explicit_only_reason`` (the WHY string, present only when excluded; the full catalog of
-    exclusion reasons search's _meta.excluded_count no longer re-ships per query),
+    exclusion reasons search's _meta.excluded_count does not ship per query),
     an optional ``param_hint`` (the structured query a VERTICAL source wants — a stock code, a
     ticker, an author's full name — so a named call is filled right the first try; absent for a
     free-text source),
@@ -2903,9 +3143,9 @@ def list_sources(live: Optional[dict] = None, domain: Optional[str] = None,
     # Narrowing. domain: closed-vocab exact match (the caller surfaces the vocabulary + a
     # did_you_mean on a near-miss, so a wrong token is not a silent dead end). query: TOKEN-OVERLAP
     # (ASCII words + CJK bigrams via relevance.tokenize), ranked best-first — NOT a contiguous
-    # substring. The old substring test returned 0 for almost every multi-word query (incl. this
-    # tool's own "singapore visa" example) and an English query could never substring-match a
-    # Chinese description; token overlap (+ the facets.json cross-lingual keywords) fixes both.
+    # substring: a substring test returns 0 for almost every multi-word query (incl. this tool's own
+    # "singapore visa" example) and an English query can never substring-match a Chinese
+    # description; token overlap (+ the facets.json cross-lingual keywords) handles both.
     if domain:
         out = [e for e in out if domain in (e.get("domains") or [])]
         # General (broad-search-eligible) sources lead; explicit_only lab streams / walled sources
@@ -2948,8 +3188,8 @@ _SPEC_KEYS = ("filters", "coverage", "license", "samples", "as_of_field")
 def facet_vocabulary() -> dict:
     """The closed routing vocabularies (domain / region / kind → source count), from the live
     registry. Handed to the agent by omniseek_list_sources so domain= becomes a DISCOVERABLE router
-    instead of a token the agent must already know (a wrong guess used to return a silent empty
-    that read as 'OmniSeek has nothing here'). Cheap: facet read only, no health probe."""
+    instead of a token the agent must already know (a wrong guess would return a silent empty
+    that reads as 'OmniSeek has nothing here'). Cheap: facet read only, no health probe."""
     from collections import Counter
     doms, regs, kinds = Counter(), Counter(), Counter()
     with _registry_lock:
@@ -3133,6 +3373,19 @@ def url_read_receipt():
         _url_receipt_var.reset(token)
 
 
+def note_source_cache_hit(fetched_at: Optional[str]) -> None:
+    """An adapter answered the URL read in progress (or a part of it) from its own cache, kept from a
+    network read at ``fetched_at`` (ISO time): the receipt then says ``cached`` and keeps the earliest
+    such time, so omniseek_read reports the age of the oldest part of the answer. A no-op outside a URL read
+    (an omniseek_search that reaches the same adapter code)."""
+    receipt = _url_receipt_var.get()
+    if receipt is None:
+        return
+    receipt["cached"] = True
+    if fetched_at and (not receipt.get("fetched_at") or fetched_at < receipt["fetched_at"]):
+        receipt["fetched_at"] = fetched_at
+
+
 def _url_cache_trouble(receipt: dict, url: str, step: str, exc: BaseException) -> None:
     """A URL-cache read or write that raised: note it on the receipt and in the log, never fail the read."""
     msg = f"url cache {step} failed: {type(exc).__name__}: {exc}"
@@ -3159,12 +3412,17 @@ async def afetch_url_with_reason(url: str) -> "tuple[Optional[Document], Optiona
     comes from the cache and makes no network call. A failed, empty or stand-in read is never kept,
     nor one whose address carries a credential (it would sit on disk in the cached document).
     A cache that raises is passed over: the read goes out as usual and the trouble is noted. What the
-    cache did is reported through ``url_read_receipt`` when the caller opened one. The cache's file
-    reads and writes run on the IO lane, off the loop."""
+    cache did is reported through ``url_read_receipt`` when the caller opened one. An adapter that
+    answers from its own cache says so (``note_source_cache_hit``): the answer is then reported cached,
+    and kept here, with the time of the network read behind it, not the time of this call. The cache's
+    file reads and writes run on the IO lane, off the loop."""
     from omniseek.core import cache as _cache  # local import: avoid package-init import cycle
 
     receipt = _url_receipt_var.get()
-    receipt = {} if receipt is None else receipt
+    if receipt is None:
+        # an adapter's cache hit is noted on the receipt, so the read keeps one even when no caller opened it
+        with url_read_receipt():
+            return await afetch_url_with_reason(url)
     receipt["cached"] = False
     receipt.pop("fetched_at", None)
     try:
@@ -3187,12 +3445,16 @@ async def afetch_url_with_reason(url: str) -> "tuple[Optional[Document], Optiona
         logger.info("url cache: hit (fetched_at %s) %s", hit[1], url)
         return hit[0], None
     doc, reason = await _afetch_url_live_with_reason(url)
-    if doc is not None:
-        fetched_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    if doc is None:
+        receipt["cached"] = False
+        receipt.pop("fetched_at", None)
+    else:
+        # set when the adapter answered from its own cache (note_source_cache_hit)
+        fetched_at = receipt.get("fetched_at") or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         receipt["fetched_at"] = fetched_at
         try:
             # an address carrying a credential (a omniseek.redact name) is not written to disk: the cached
-            # document would keep it verbatim in its url, source_id and text (2026-11-03)
+            # document would keep it verbatim in its url, source_id and text
             if _redact.redact(url) == url and await anyio.to_thread.run_sync(
                     _cache.set_url_read, url, doc, fetched_at, limiter=portal.IO_LANE):
                 logger.info("url cache: stored %s", url)
@@ -3253,7 +3515,7 @@ async def _afetch_url_live_with_reason(url: str) -> "tuple[Optional[Document], O
         return None, None
 
 
-# 2026-11-03: one JSON line per live generic web read in <logs>/web-reads.log: the
+# one JSON line per live generic web read in <logs>/web-reads.log: the
 # url (credential values masked by omniseek.redact, OmniSeek's one list), which path answered
 # (render:plain / render:jina / format:json), how many characters came back, how long it took, or
 # why nothing came back. No body. infra_jobs.rotate_logs caps it like every other eye log. Before
@@ -3303,13 +3565,13 @@ async def _asafe_health(adapter: SourceAdapter) -> tuple[Optional[bool], str]:
 
 
 _HEALTH_TIMEOUT_S = 25   # DEFAULT per-source hard cap for a LIVE health probe. Bounds a genuinely
-                         # hung source (vs the old ∞ hang) without inflating the whole sweep: the
+                         # hung source without inflating the whole sweep: the
                          # daily source-health job has a 900s budget and the fast lane only 300s,
                          # so raising this globally to cover the few slow probes would risk the
                          # budget for all ~220. A source that legitimately needs longer declares
                          # ``health_timeout_s`` on its adapter instead (see _aprobe_all_health).
                          #
-                         # This comment used to assert "slowest legit ~18s". MEASURED 2026-08-19,
+                         # MEASURED 2026-08-19,
                          # sequentially and paced: rl_llm_frameworks 65.6s, github_releases 40.6s,
                          # vast_ai 28.3s, all answering healthy. The assertion had rotted, and every
                          # probe over the cap was being recorded as a source failure. Treat any
@@ -3337,7 +3599,7 @@ async def ahealth_check_outcome(adapter: SourceAdapter,
 
     ``timeout`` None means the adapter's declared ``health_timeout_s``, else ``_HEALTH_TIMEOUT_S``.
     Resolved HERE so every caller honours a declaration: the watchdog's ``_health_probe`` passes no
-    timeout, and until 2026-10-04 it cut every declaring source at the 25 s default."""
+    timeout."""
     if timeout is None:
         timeout = float(getattr(adapter, "health_timeout_s", None) or _HEALTH_TIMEOUT_S)
     until = time.monotonic() + max(0.0, float(timeout))

@@ -25,7 +25,6 @@ import time
 from collections import Counter
 from typing import Optional
 
-import anyio
 
 from omniseek.core import _openalex as oa
 from omniseek.core import _s2
@@ -84,7 +83,7 @@ async def _aget(path: str, params: dict) -> Optional[dict]:
     # sources. This was the ONE path bypassing them with a bare httpx.get, so a dead/over-quota
     # OpenAlex would have degraded cartographer unprotected (and not contributed to tripping the
     # shared breaker). Preserve cartographer's None-on-failure contract: OpenAlexDown (breaker
-    # open) and any error degrade to None, exactly as the old bare GET did.
+    # open) and any error degrade to None.
     try:
         return await oa.aget_json(path, params)
     except Exception as exc:  # noqa: BLE001 — incl. OpenAlexDown: degrade to None
@@ -309,8 +308,8 @@ async def _as2_assemble(query: Optional[str], seeds: Optional[list[str]],
         for r in await _s2.aget_paper_references(sid, _S2_REF_CAP, fields=F_EDGE):
             # edge seed → r.paper (the seed CITES this reference): add the neighbor, then record
             # the edge on the SEED (the "this work cites these ids" direction _build expects).
-            # Keyed by the RESOLVED paperId, not the input id: an arXiv / DOI seed used to lose
-            # every one of these edges because works[] is keyed by paperId.
+            # Keyed by the RESOLVED paperId, not the input id: works[] is keyed by paperId, so
+            # keying by an arXiv / DOI seed would lose every one of these edges.
             rp = getattr(r, "paper", None)
             add(rp, intents=getattr(r, "intents", None),
                 influential=getattr(r, "isInfluential", None),
@@ -359,7 +358,7 @@ def _build(seed_ids: list[str], works: dict, max_nodes: int, query: Optional[str
         for r in raw_refs:
             t = _wid(r)
             if t in works:
-                indeg[t] += 1              # in_degree semantics UNCHANGED (self-cite still counted as before)
+                indeg[t] += 1              # in_degree counts a self-cite too
                 if t != wid_:
                     edges.append([wid_, t])  # no self-loop in the exposed edge list
         # Seed-relative gap frequencies (LCN Top-Cited / Top-Citing, ranked by # DISTINCT seeds).
@@ -415,7 +414,7 @@ def _build(seed_ids: list[str], works: dict, max_nodes: int, query: Optional[str
     edges_capped = len(edges) > _EDGES_CAP
     edges = edges[:_EDGES_CAP]
     # BUDGETED PROJECTION (dogfood friction #11): the RAW citing sentences (`contexts`) are heavy polarity
-    # evidence -- field_skeleton used to inline EVERY node's full contexts, a ~150k-char dump that overflowed
+    # evidence -- inlining EVERY node's full contexts in field_skeleton is a ~150k-char dump that overflows
     # the tool channel, violating OmniSeek's "budgeted projections, never dump" discipline. Keep the citing
     # sentences ONLY for the top nodes worth reading (by in_degree order, seeds first), capped in count + length;
     # for the rest, drop them for a lean `has_contexts` flag (drill THAT paper for its full citing sentences).
@@ -582,8 +581,8 @@ async def afield_skeleton(query: Optional[str] = None, seeds: Optional[list[str]
     key = cache.make_key("cartographer", "nbhd", source, query or "",
                          seed_key, n_seeds, citers_per_seed)
     if not fresh:
-        cached = await anyio.to_thread.run_sync(cache.get, key, limiter=portal.IO_LANE)
-        if cached is not None:
+        ok, cached = await portal.run_io(cache.get, key)  # past its budget: a miss
+        if ok and cached is not None:
             return cached
     t0 = time.monotonic()
     deadline_at = t0 + (deadline_s if deadline_s is not None else _ASSEMBLE_DEADLINE_S)
@@ -681,8 +680,7 @@ async def afield_skeleton(query: Optional[str] = None, seeds: Optional[list[str]
     # a retry should resolve it, so that map is not cached either. not_found is permanent and caches.
     transient_seed = any(u["reason"] != "not_found" for u in unresolved)
     if not deadline_hit and not degraded and not transient_seed:
-        await anyio.to_thread.run_sync(functools.partial(cache.set, key, result, ttl=6 * 3600),
-                                       limiter=portal.IO_LANE)
+        await portal.run_io(functools.partial(cache.set, key, result, ttl=6 * 3600))
     return result
 
 
@@ -700,8 +698,8 @@ async def arecommend(seeds: Optional[list[str]] = None, limit: int = 20, fresh: 
     key = cache.make_key("cartographer", "recommend",
                          ",".join(sorted(_s2.norm_s2_id(s) for s in seeds)), limit)
     if not fresh:
-        cached = await anyio.to_thread.run_sync(cache.get, key, limiter=portal.IO_LANE)
-        if cached is not None:
+        ok, cached = await portal.run_io(cache.get, key)  # past its budget: a miss
+        if ok and cached is not None:
             return cached
     F = ["paperId", "title", "year", "publicationDate", "citationCount", "authors", "externalIds"]
     # _s2 wrappers normalize seeds + carry the breaker/semaphore + degrade to [] on failure.
@@ -749,5 +747,5 @@ async def arecommend(seeds: Optional[list[str]] = None, limit: int = 20, fresh: 
     # not a genuine 'no recs' — cache it briefly so it self-heals instead of pinning 6h. A non-empty
     # result, or a genuine empty from a HEALTHY S2, keeps the 6h TTL.
     ttl = 6 * 3600 if papers or not (_s2.breaker_open() or _s2.recently_throttled()) else cache.EMPTY_TTL_CAP
-    await anyio.to_thread.run_sync(functools.partial(cache.set, key, result, ttl=ttl), limiter=portal.IO_LANE)
+    await portal.run_io(functools.partial(cache.set, key, result, ttl=ttl))
     return result

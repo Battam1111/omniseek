@@ -4,8 +4,8 @@ OmniSeek otherwise forgets (fetch-live, TTL-cache). The Curator must NOT: a cand
 source submitted, probed, and awaiting a verdict has to survive a redeploy / restart /
 crash, or the work is lost (a prior bug lost candidates held only in transient task
 output). So this module owns ONE JSON file under ``<state>/curator/`` (the same
-tree as ``health-watchdog-state.json``; survives redeploys, is in no backup since the state
-backup retired on 2026-10-15, keeps the read-only deploy tree pristine).
+tree as ``health-watchdog-state.json``; survives redeploys, is in no backup, keeps the read-only
+deploy tree pristine).
 
 THE RAZOR holds here too: this module is pure STATE. It stores what was decided and hands
 it back. It NEVER computes a verdict: ``record_verdict`` is the AGENT's write-back; nothing
@@ -39,11 +39,6 @@ _builtin_list = list
 STATE_DIR = where.state() / "curator"
 CANDIDATES_PATH = STATE_DIR / "candidates.json"
 SEEN_HOSTS_PATH = STATE_DIR / "seen_hosts.json"
-# phase 4 anti-rediscovery: the canonical-host TERMINAL ledger. A host that ever reached a terminal
-# negative state (rejected / redline_blocked / parked_p2 / probe_dead) is recorded here by its
-# CANONICAL host (Attack-2), so the monthly discovery loop never re-surfaces it under a name/URL
-# variant (make_id is unstable across venue-name / www. / scheme / trailing-slash drift).
-TRIED_HOSTS_PATH = STATE_DIR / "tried_hosts.json"
 
 # One module-level lock so a future loop thread + an interactive MCP call can never
 # interleave a lost update. All mutations go through _save_all() under this lock.
@@ -61,12 +56,12 @@ STATES = frozenset({
 
 # Terminal states: no FORWARD recovery edge (rejected/redline_blocked/parked_p2/probe_dead keep their
 # rationale so the loop never re-surfaces them; applied is a terminal, unused in phase 1). parked_p2
-# is terminal for ANTI-REDISCOVERY (its host joins tried_hosts) yet has ONE forward edge, the phase 2
+# is terminal yet has ONE forward edge, the phase 2
 # wall-aware revival (parked_p2 -> awaiting_verdict) that re-judges the existing row after a jailed
 # render; the others keep only the universal "-> error" escape.
 # probe_dead: a candidate whose probe failed K consecutive times (dead host / persistent
 # SSRF block / always-timeout). Distinct from rejected (no agent judged it) and from an error
-# zombie re-probed forever; its canonical host joins tried_hosts.json.
+# zombie re-probed forever.
 TERMINAL_STATES = frozenset({"rejected", "redline_blocked", "parked_p2", "probe_dead"})
 
 # Frozen ALLOWED_TRANSITIONS edge set. (from_state, to_state).
@@ -111,8 +106,7 @@ ALLOWED_TRANSITIONS = frozenset({
     ("parked_p2", "error"),
     # phase 2 wall-aware probe: a parked_p2 candidate (structurally invisible to the plain-HTTP probe)
     # is REVIVED to awaiting_verdict once the jailed-browser render (mode_probe walled=True) surfaces
-    # its real content. parked_p2 stays the anti-rediscovery marker (its canonical host joins
-    # tried_hosts so discovery never re-ADDS it); this edge revives the EXISTING row, not a re-find.
+    # its real content. This edge revives the EXISTING row, not a re-find.
     ("parked_p2", "awaiting_verdict"),
     # A parked row is HELD, not closed: it waits for a render that may never be worth spending.
     # Without a close edge the agent cannot record "I read this, it is not worth a render" and the
@@ -390,70 +384,3 @@ def host_seen(host: str) -> bool:
     except Exception as exc:  # noqa: BLE001: a roster-derivation failure must not crash host_seen
         logger.debug("curator host_seen live-roster derivation failed: %s", exc)
         return False
-
-
-# ── canonical host + the terminal-host ledger (phase 4 anti-rediscovery, Attack-2) ─────
-# Tracking query-param prefixes stripped during canonicalization (a re-emitted URL must collapse
-# to the same canonical host regardless of campaign/referrer noise; we only key on the HOST, but
-# canonicalize defensively so a future URL-level key stays stable).
-def canonical_host(url_or_host: str) -> str:
-    """Canonicalize a URL or bare host to a stable comparison key: lowercase host, drop scheme +
-    userinfo + port, strip a leading ``www.``. A rejected/redline_blocked/parked_p2/probe_dead
-    host must collapse to the SAME key whether discovery re-guesses it as ``https://www.x.com/``,
-    ``http://x.com``, or ``x.com`` next month (make_id hashes name+urls, which drifts; the
-    canonical host is the durable anti-rediscovery key). Returns '' on an unparseable input."""
-    s = (url_or_host or "").strip().lower()
-    if not s:
-        return ""
-    host = s
-    if "://" in s or s.startswith("//"):
-        from urllib.parse import urlparse
-        host = (urlparse(s if "://" in s else "http:" + s).hostname or "")
-    else:
-        # bare host (possibly with a path / port / userinfo glued on): take the authority head.
-        host = s.split("/", 1)[0]
-        if "@" in host:
-            host = host.rsplit("@", 1)[-1]
-        host = host.split(":", 1)[0]
-    host = host.strip().strip(".")
-    if host.startswith("www."):
-        host = host[4:]
-    return host
-
-
-def _load_tried_hosts() -> set:
-    """Read the terminal-host ledger -> a set of canonical hosts. Tolerant: missing/corrupt ->
-    set() (mirrors _load_seen_hosts), logged, never raised into the caller."""
-    if not TRIED_HOSTS_PATH.exists():
-        return set()
-    try:
-        data = json.loads(TRIED_HOSTS_PATH.read_text(encoding="utf-8"))
-        return {h for h in data if isinstance(h, str)} if isinstance(data, _builtin_list) else set()
-    except (json.JSONDecodeError, OSError) as exc:
-        logger.warning("curator tried_hosts.json unreadable (%s) -> treating as empty set", exc)
-        return set()
-
-
-def host_is_tried(url_or_host: str) -> bool:
-    """True iff a candidate's canonical host ever reached a terminal NEGATIVE state. The durable
-    anti-rediscovery guarantee (Attack-2): the discovery loop drops such a host BEFORE re-adding
-    it, so the agent is never re-asked to judge a known-dead candidate."""
-    h = canonical_host(url_or_host)
-    return bool(h) and h in _load_tried_hosts()
-
-
-def record_tried_host(url_or_host: str) -> None:
-    """Append a candidate's canonical host to the terminal-host ledger (atomic, lock-guarded,
-    idempotent). Called when a candidate reaches rejected / redline_blocked / parked_p2 /
-    probe_dead. A no-op for an unparseable host."""
-    h = canonical_host(url_or_host)
-    if not h:
-        return
-    with _LOCK:
-        hosts = _load_tried_hosts()
-        if h in hosts:
-            return
-        hosts.add(h)
-        STATE_DIR.mkdir(parents=True, exist_ok=True)
-        cache._atomic_write_text(
-            TRIED_HOSTS_PATH, json.dumps(sorted(hosts), ensure_ascii=False, indent=1))

@@ -195,7 +195,7 @@ class NSFCAwardsAdapter(BaseScrapeAdapter):
     _MAX_PAGES = 5     # cap the page walk (50 records) — plenty for a named drill; be a polite client
 
     async def _afetch_page(self, query: str, page: int) -> Optional[str]:
-        # Async replacement of the deleted sync ``_fetch_page`` (11-04, this is the only one now): byte-faithful mirror (same url / form data / headers / timeout,
+        # Async ``_fetch_page``: byte-faithful mirror (same url / form data / headers / timeout,
         # and follow_redirects carried on the client). Only the RAW httpx.post egress swaps to the
         # module-level AsyncClient (see _aget_client above for why this source keeps its own client,
         # not a shared http leaf). The data + headers dicts are duplicated inline (not extracted to a
@@ -222,7 +222,7 @@ class NSFCAwardsAdapter(BaseScrapeAdapter):
             return None
 
     async def _araw_fetch(self, query: str, limit: int) -> Optional[list[str]]:
-        # Async replacement of the deleted sync ``_raw_fetch`` (11-04, this is the only one now): same page-count math, same sequential page walk with the SAME
+        # Async ``_raw_fetch``: same page-count math, same sequential page walk with the SAME
         # early-break on a short page (fewer than a full page of grants parsed); pages are awaited in
         # order (not gathered) because the break depends on each page's parse. _parse_grants is pure
         # CPU on the loop (a small HTML fragment), byte-identical to the sync path.

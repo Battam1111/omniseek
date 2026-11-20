@@ -13,8 +13,9 @@ deploy restart picks it up. ``reversibility.auto_appliable`` is ALWAYS False in 
 This module provides:
   * _live_hosts()   : the FRESH live-roster host set for dedup + first-seen (never stale)
   * _validate_row() : pure, network-free per-family required-field check
-  * _auto_apply_ok(): the GATE (reads policy DATA); built for phase 1.5 but NEVER drives a mutation
-                       in phase 1 (nothing calls it to write live config)
+  * apply_refusal() : what stays before a live apply (red lines, never-auto families, relabel)
+  * apply_gaps()    : what moved after it (policy family/mode, render, mode mismatch, verdict,
+                       evidence): reported in the receipt, reversible with rollback_live
   * prepare_owner_case(): what omniseek_curator_stage_commit returns (render the row + patch note)
 """
 
@@ -229,80 +230,67 @@ def _verified_mode(stage3: dict) -> str:
     return (stage3.get("mode") or "").upper()
 
 
-def _auto_apply_ok(cand: dict) -> bool:
-    """The gate the live auto-apply lane consults (apply_live.apply_overlay_row). Returns True ONLY
-    when family is in the policy auto_apply families AND mode is in the policy auto_apply modes AND
-    no render signal AND the PROBED reality does not contradict the declared family/mode AND the
-    agent's verdict is admit AND evidence_complete AND no red-line hit. org_watch / page_watch /
-    news_scraper / search_index / render-scrapers are structurally excluded. Reads policy DATA, not
-    code constants.
+def apply_refusal(cand: dict) -> str:
+    """Why a live apply of this candidate must NOT happen, or "" (only what
+    cannot be taken back stays before the action). Three things, all about data a rollback cannot
+    un-harvest: a red-line hit (hard or soft: personal data); a family in
+    _NEVER_AUTO_FAMILIES (its recurring post-admission fetch bypasses safe_fetch, and org_watch is a
+    people tracker that deleting the row cannot un-harvest: admission_policy.json); and a probed
+    reality that contradicts the declared family (a people/paper API query relabeled 'rss', the
+    classification hardening, _derived_family_disagrees). proposed_family / proposed_mode / urls are
+    submitter-supplied and UNTRUSTED; the relabel check derives the family from the probe artifact."""
+    family = (cand.get("proposed_family") or "other").lower()
+    if family in _NEVER_AUTO_FAMILIES:
+        return (f"family {family!r} is never live-applied (its recurring fetch bypasses safe_fetch; "
+                "deleting the row cannot un-harvest what it fetched)")
+    evidence = cand.get("evidence") or {}
+    safety = evidence.get("stage0_safety") or {}
+    if safety.get("hard_redline_blocked") or safety.get("redline_hits"):
+        return "a red line is hit (personal data cannot be un-harvested)"
+    if _derived_family_disagrees(family, safety.get("fetch") or {}):
+        return (f"the probed source contradicts the declared family {family!r} (a relabeled people or "
+                "paper query)")
+    return ""
 
-    THE RAZOR (corrected 2026-06-15): the AGENT's admit verdict IS the editorial + host-trust
-    judgment (it read the evidence packet, incl. the stage0 safe_fetch result + the stage3 mode
-    probe). This gate adds ONLY mechanical, non-judgment safety: the operator-owned auto_apply
-    family/mode POLICY (the reversible-harvest boundary, a legitimate operator value), the anti-relabel
-    classification check, and the no-render / no-red-line floors. It deliberately does NOT consult a
-    operator-curated host allowlist or a first-seen-host gate: those routed a JUDGMENT ('is this host
-    trustworthy') to a human, which the razor forbids. The one genuine safety reason the allowlist
-    existed (the overlay rss recurring fetch bypasses safe_fetch) is closed MECHANICALLY instead, by
-    the guard_ip IP-revalidation on overlay-origin _RSSBundle feeds (rss_bundles_source), so an
-    agent-admitted feed cannot become an unguarded SSRF on its recurring poll.
 
-    HARDENED (the classification hole): proposed_family / proposed_mode / urls are submitter-
-    supplied + UNTRUSTED. The gate derives family + mode from the probe artifact (the resolved
-    post-redirect final_url host + terminal content_type; the verified-provenance mode) and requires
-    agreement, so a people-tracker relabeled family='rss' over an OpenAlex query cannot pass.
-
-    Fires only when the agent has ADMITTED a candidate within the narrow auto_apply family/mode lane;
-    every other admit stages to owner_review for the durable git commit (the operator's irreversible
-    step). Inert until the loop is enabled AND an agent renders an admit.
-    """
+def apply_gaps(cand: dict) -> list:
+    """What the live apply of this candidate goes ahead WITHOUT, for the operator to look at
+    afterwards (these were refusals before; the apply is reversible with
+    rollback_live, so they moved after the action). Each entry is one short sentence:
+    the family or mode outside the operator-owned auto_apply policy (admission_policy.json), a render
+    site in the row, a verified mode that differs from the declared one, a verdict other than admit,
+    incomplete evidence. [] = nothing to look at."""
     policy = _auto_policy()
     fams = set(policy.get("families") or [])
     modes = set(policy.get("modes") or [])
-
     family = (cand.get("proposed_family") or "other").lower()
     mode = (cand.get("proposed_mode") or "").upper()
-
-    if family in _NEVER_AUTO_FAMILIES:
-        return False
-    if family not in fams:
-        return False
-    if mode not in modes:
-        return False
-
     evidence = cand.get("evidence") or {}
-    safety = evidence.get("stage0_safety") or {}
-    fetch = safety.get("fetch") or {}
     stage3 = evidence.get("stage3_mode_probe") or {}
-
-    # family-agnostic render / credential signal: inspect BOTH the declared row's sites AND the
-    # probed fetch, regardless of declared family (a render scrape never auto-applies).
     row = (evidence.get("reversibility") or {}).get("proposed_config_row") \
         or cand.get("proposed_config_row") or {}
-    sites = row.get("sites") or []
-    if any(isinstance(s, dict) and s.get("render") for s in sites):
-        return False
-
-    # the PROBED reality must not contradict the declared family (anti-relabel, the classification
-    # hardening), and when a verified mode is present it must equal the declared mode in policy.
-    if _derived_family_disagrees(family, fetch):
-        return False
+    gaps = []
+    if family not in fams:
+        gaps.append(f"family {family!r} is outside the auto_apply policy families {sorted(fams)}")
+    if mode not in modes:
+        gaps.append(f"mode {mode!r} is outside the auto_apply policy modes {sorted(modes)}")
+    if any(isinstance(s, dict) and s.get("render") for s in row.get("sites") or []):
+        gaps.append("the row has a render site")
     vmode = _verified_mode(stage3)
     if vmode and vmode != mode:
-        return False
-
-    # verdict must be an admit, evidence must be complete, no hard/soft red-line.
-    verdict = cand.get("verdict") or {}
-    if verdict.get("decision") != "admit":
-        return False
+        gaps.append(f"the probe verified mode {vmode!r}, the candidate declares {mode!r}")
+    if (cand.get("verdict") or {}).get("decision") != "admit":
+        gaps.append("the agent's verdict is not admit")
     if not evidence.get("evidence_complete"):
-        return False
-    if safety.get("redline_hits"):
-        return False
-    if safety.get("hard_redline_blocked"):
-        return False
-    return True
+        gaps.append("the evidence is incomplete (a probe stage did not reach)")
+    return gaps
+
+
+def _auto_apply_ok(cand: dict) -> bool:
+    """True when a live apply would go ahead with nothing to look at afterwards: no apply_refusal
+    and no apply_gaps. The live lane itself refuses only on
+    apply_refusal and reports apply_gaps in its receipt."""
+    return not apply_refusal(cand) and not apply_gaps(cand)
 
 
 # ── operator-case preparation (what omniseek_curator_stage_commit returns) ───────────────

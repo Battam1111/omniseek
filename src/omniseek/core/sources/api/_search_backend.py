@@ -38,7 +38,7 @@ import anyio
 import httpx
 from bs4 import BeautifulSoup
 
-from omniseek.core import _probe, http, portal, upstreams
+from omniseek.core import _probe, diag, http, portal, upstreams
 from omniseek import where
 
 logger = logging.getLogger(__name__)
@@ -391,13 +391,13 @@ def backend_state() -> dict:
     """PURE READ of the shared backend's ledger — sends NOTHING, judges nothing.
 
     The caller's missing half: when ten venues come back empty at once, "the backend is cooling for
-    another 84s" and "these venues have no such page" are opposite conclusions, and nothing used to
-    tell them apart. omniseek_search stamps this into ``_meta.web_search_backend`` when it is not nominal.
+    another 84s" and "these venues have no such page" are opposite conclusions, and only this
+    tells them apart. omniseek_search stamps this into ``_meta.web_search_backend`` when it is not nominal.
 
     ``active`` is the half a call would use RIGHT NOW ("none" = both closed, so a call sends
     nothing); ``cooling_s`` is the remaining seconds rounded UP, 0 when that half is open.
     ``ddg.disabled`` is the declared reason the fallback is out of service (None when it serves);
-    a disabled fallback is never ``active`` and its cooldown no longer decides ``nominal``."""
+    a disabled fallback is never ``active`` and its cooldown does not decide ``nominal``."""
     now = time.time()
     brave_left = max(0.0, _brave_cooldown_until - now)
     ddg_left = max(0.0, _ddg_cooldown_until - now)
@@ -419,22 +419,29 @@ def backend_state() -> dict:
     }
 
 
-_ping = {"t": 0.0, "ok": None, "msg": ""}
+_ping = {"t": 0.0, "ok": None, "msg": "", "noted": []}
 
 
 async def abackend_ping() -> tuple[Optional[bool], str]:
     """Cached (10 min) backend reachability — so N venues' health checks cost ~1 real hit
     (avoids a rate-limit storm when the watchdog probes every search-index venue). A cold or expired
     cache under concurrent probes makes ONE real hit: the callers await one shared task
-    (``asyncio.shield``: one caller giving up never cancels the probe the others wait on)."""
+    (``asyncio.shield``: one caller giving up never cancels the probe the others wait on).
+    A failed ping's records (the backend address and method, from the egress layer) are relayed to
+    every caller's health tap, not only to the one whose context ran it, so each venue that fails on
+    it names the address for the exit-node sweep."""
     now = time.time()
     if _ping["msg"] and now - _ping["t"] < 600:
-        return _ping["ok"], _ping["msg"]
-    loop = asyncio.get_running_loop()
-    task = _ping.get("task")
-    if task is None or task.done() or task.get_loop() is not loop:
-        task = _ping["task"] = loop.create_task(_aping())
-    return await asyncio.shield(task)
+        ok, msg = _ping["ok"], _ping["msg"]
+    else:
+        loop = asyncio.get_running_loop()
+        task = _ping.get("task")
+        if task is None or task.done() or task.get_loop() is not loop:
+            task = _ping["task"] = loop.create_task(_aping())
+        ok, msg = await asyncio.shield(task)
+    if ok is False:
+        diag.relay(_ping.get("noted"))
+    return ok, msg
 
 
 async def _aping() -> tuple[Optional[bool], str]:
@@ -448,12 +455,12 @@ async def _aping() -> tuple[Optional[bool], str]:
             # declaration enables a fallback). Down, and cached like any real probe result.
             ok, msg = False, (f"no web-search backend: brave unkeyed; {ddg_off} "
                               f"(upstreams.json {_FALLBACK_UID}.disabled)")
-            _ping.update(t=now, ok=ok, msg=msg)
+            _ping.update(t=now, ok=ok, msg=msg, noted=[])
             return ok, msg
         # A probe must not spend the very thing it is checking: both halves are closed, so send
         # NOTHING. None (not verified), deliberately: a cooldown is a transient state that
         # self-heals, a False here would let the watchdog mark all ten venues down and HIDE them
-        # for a blip, and the True this used to return claimed a check nobody ran. None moves no
+        # for a blip, and a True would claim a check nobody ran. None moves no
         # counter and reads as `unverified`. Deliberately NOT cached either, so the next probe
         # after the cooldown sees the truth.
         ddg_part = (f"ddg disabled: {ddg_off}" if ddg_off
@@ -461,7 +468,7 @@ async def _aping() -> tuple[Optional[bool], str]:
         return None, _probe.breaker_open(f"web-search backend cooling: brave "
                                          f"{state['brave']['cooling_s']}s / {ddg_part}; will self-heal")
     backend = "brave" if _brave_key() else "ddg"
-    with _probe.watching() as led:
+    with _probe.watching() as led, diag.tap() as noted:
         try:
             await asearch_web("site:example.com test", n=1)  # reachable if no exception (empty is fine)
             ok, msg = True, f"OK ({backend} backend)"
@@ -474,5 +481,5 @@ async def _aping() -> tuple[Optional[bool], str]:
                 ok, msg = None, f"not verified: rate-limited ({msg})"
     ok, msg = _probe.reread(ok, msg, led)
     msg = f"{msg} [active: {backend_state()['active']}]"
-    _ping.update(t=now, ok=ok, msg=msg)
+    _ping.update(t=now, ok=ok, msg=msg, noted=list(noted) if ok is False else [])
     return ok, msg

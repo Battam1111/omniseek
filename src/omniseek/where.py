@@ -62,7 +62,7 @@ def _read_table(start: str):
         up = os.path.dirname(d)
         # A checkout's root (.git, a directory or a worktree's file) ends the search: a clone nested in
         # another checkout, like a mirror checked out inside the source tree, must not read the outer
-        # checkout's table (11-11: the mirror sync on the laptop died on NotRegistered that way).
+        # checkout's table (the mirror sync on the laptop died on NotRegistered that way).
         if up == d or os.path.exists(os.path.join(d, ".git")):
             return None, None
         d = up
@@ -270,6 +270,30 @@ def proxy_control() -> Optional[Path]:
     return Path("/tmp/verge/verge-mihomo.sock")
 
 
+def toolchain_manifest() -> Path:
+    """The deployment's toolchain list, when it writes one: a ``tools``
+    section, name -> {version, path, bin, run}."""
+    return root() / "toolchain.json"
+
+
+LOGIN_CHROME_TOOL = "google-chrome"
+
+
+def login_chrome() -> Optional[Path]:
+    """The pinned Google Chrome the two login browsers (9222, 9223) run: the main executable of the
+    package the deployment pins, read from
+    the toolchain list. Not /Applications/Google Chrome.app: the auto-updater replaces that one, and a
+    new version once logged three sources out together. None when the list has no such
+    entry (the public build, or an older generation)."""
+    import json
+    try:
+        with open(toolchain_manifest(), encoding="utf-8") as h:
+            run = json.load(h)["tools"][LOGIN_CHROME_TOOL]["run"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    return Path(run)
+
+
 # ── names that are not locations, kept here so code asks one place ───────────────────────────────
 
 LABELS = {
@@ -303,11 +327,6 @@ def user_applications() -> Path:
 def icloud_drive() -> Path:
     """The iCloud Drive folder, when the operator enabled it (the retired backup's encrypted lane)."""
     return Path.home() / "Library" / "Mobile Documents" / "com~apple~CloudDocs"
-
-
-def launch_agent_plist(name: str) -> Path:
-    """The installed plist of one service, by its short name (see LABELS)."""
-    return launch_agents() / f"{label(name)}.plist"
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────────────────────────
@@ -348,6 +367,7 @@ NAMES: Dict[str, Callable[[], Optional[Path]]] = {
     "proxy-control": proxy_control,
     "launch-agents": launch_agents,
     "icloud-drive": icloud_drive,
+    "login-chrome": login_chrome,
 }
 
 

@@ -3,7 +3,7 @@
 Resolves a researcher NAME to a stable DBLP PID (the gateway to that author's full, already-ingested
 publication record) plus publication count, affiliation and award notes. OmniSeek's
 people-STRUCTURE reinforcement, CS-native and high-precision: a third researcher-identity source
-behind ORCID (self-asserted CV) and s2_authors (citation metrics), so the people domain is no longer
+behind ORCID (self-asserted CV) and s2_authors (citation metrics), so the people domain is not
 a single point.
 
 Access: the keyless dblp SPARQL endpoint (https://sparql.dblp.org/sparql, QLever), never dblp.org
@@ -141,7 +141,7 @@ class DBLPAuthorAdapter(BaseScrapeAdapter):
         return max(1, min(int(limit), 30))
 
     async def _araw_fetch(self, query: str, limit: int) -> Optional[Any]:
-        """Async replacement of the deleted sync ``_raw_fetch`` (11-04, this is the only one now): same words, same query, same reader; only the egress is async."""
+        """Async ``_raw_fetch``: same words, same query, same reader; only the egress is async."""
         words = _dblp.query_words(query, drop_stopwords=False)
         if not words:
             return []

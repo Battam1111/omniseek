@@ -23,7 +23,6 @@ import logging
 import re
 import urllib.parse
 
-import anyio
 import feedparser
 
 from omniseek.core import auth, cache, http, portal
@@ -285,8 +284,8 @@ async def aenrich(ids: list[str]) -> list[dict]:
     out: list[dict] = []
     for raw in (ids or [])[:_MAX_IDS]:
         key = cache.make_key("enrich", _canonical_key(raw))
-        cached = await anyio.to_thread.run_sync(cache.get, key, limiter=portal.IO_LANE)
-        if cached is not None:
+        ok, cached = await portal.run_io(cache.get, key)  # past its budget: a miss
+        if ok and cached is not None:
             rec = {**cached, "id": raw}  # share the resolved facts; echo the caller's own id form
             out.append(rec)
             _graph_tap(rec)   # a cache hit is still a successful enrich → honest re-observation
@@ -329,9 +328,8 @@ async def aenrich(ids: list[str]) -> list[dict]:
                 # retracted as a bool, so retracted=None means the Crossref call errored; is_oa=None
                 # means the Unpaywall call errored. Either -> cache briefly so it self-heals.
                 degraded = (integrity.get("retracted") is None) or (oa.get("is_oa") is None)
-        await anyio.to_thread.run_sync(
-            functools.partial(cache.set, key, rec, ttl=_TTL_DEGRADED if degraded else _TTL_OK),
-            limiter=portal.IO_LANE)
+        await portal.run_io(  # past its budget the write lands on its own
+            functools.partial(cache.set, key, rec, ttl=_TTL_DEGRADED if degraded else _TTL_OK))
         out.append(rec)
         _graph_tap(rec)          # mint the work node's integrity/OA facts (fail-open, enqueue-only)
     return out

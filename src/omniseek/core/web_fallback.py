@@ -52,7 +52,7 @@ _MAX_CHARS = 200_000        # keep a pathologically long render payload sane
 # EXACTLY _netguard's canonical SSRF-class reasons (private_ip / bad_scheme / bad_port / userinfo).
 # "dns" is deliberately NOT here: _netguard.security_block_reason treats a dns miss as non-blocking
 # ("not a security block, the real fetch will error itself"), so a merely-unresolvable URL falls
-# through to Jina (which may resolve what our resolver could not) exactly like the old plain-fetch-
+# through to Jina (which may resolve what our resolver could not) exactly like a plain-fetch-
 # failed path, staying consistent with that ONE _netguard decision. A benign failure (timeout /
 # fetch_error / oversize / redirect_loop) likewise falls through.
 _SSRF_REFUSE = _netguard.SECURITY_BLOCK_REASONS
@@ -86,6 +86,9 @@ _CHALLENGE_MARKERS = (
     # render or a cached copy that no longer carries the address.
     "/challenge?redirect=",
     "Complete the check below to continue to OpenReview",
+    # Cloudflare's WAF block page (403, titled "Attention Required! | Cloudflare"), seen 2026-11-18 on
+    # reformparty.uk from every exit we have and through Jina: no check to pass, the request is refused.
+    "Sorry, you have been blocked",
 )
 
 # Error screens a site's own framework shows when the page failed to load. Seen 2026-09-25 (routing
@@ -95,7 +98,7 @@ _CHALLENGE_MARKERS = (
 # Older Next.js (the v14.2 default GlobalError in error-boundary.tsx) shows "Application error: a
 # client-side / server-side exception has occurred" instead. Refused only when the page body is
 # thin, i.e. the screen IS the page: an article quoting the message keeps its real body and is
-# read as before.
+# read.
 _ERROR_SCREEN_MARKERS = (
     "This page couldn’t load",
     "Application error: a client-side exception has occurred",
@@ -210,6 +213,36 @@ def _is_known_walled_deep_link(url: str) -> bool:
     return bool(re.search(r"/(?:explore|discovery/item|search_result|mobile/question)/", parsed.path or ""))
 
 
+def _rejoin_after_body(soup) -> None:
+    """Put the content libxml2 left outside <body> back into it, as an HTML5 parser (every browser)
+    does. A stray </body> or </html> mid-page (a header template that closes its own document) makes
+    lxml end <body> there and hang the rest of the page beside it, or under a second <html>; taking
+    soup.body then reads only the part before the stray tag. gov.cn policy pages did this: one
+    </html> after the site header, so the read was the 621-character header and not the document."""
+    from bs4 import Doctype, Tag
+    body = soup.body
+    if body is None:
+        return
+    tail: list = []
+    node = body
+    while node is not None and node is not soup:
+        tail.extend(node.next_siblings)
+        node = node.parent
+
+    def _move(n) -> None:
+        if isinstance(n, Doctype) or (isinstance(n, Tag) and n.name == "head"):
+            return
+        if isinstance(n, Tag) and n.name in ("html", "body"):
+            for c in list(n.children):
+                _move(c)
+            n.decompose()
+        else:
+            body.append(n.extract())
+
+    for n in tail:
+        _move(n)
+
+
 def _extract_text(html: str) -> tuple[str, str]:
     """(title, markdown) from a static HTML page: OmniSeek's one whole-page extraction (this
     fallback and news_scraper's fetch_url both call it; a fragment of markup goes through
@@ -221,6 +254,7 @@ def _extract_text(html: str) -> tuple[str, str]:
         logger.warning("web_fallback: bs4 unavailable: %s", exc)
         return "", ""
     soup = BeautifulSoup(html, "lxml")
+    _rejoin_after_body(soup)
     for tag in soup(["script", "style", "noscript", "template"]):
         tag.decompose()
     title_el = soup.find(["h1"]) or soup.title
@@ -296,17 +330,17 @@ def read_via_fallback(url: str) -> Optional[Document]:
         return None  # respect the single egress guard
     # No page cache of its own: its one caller (fetcher.fetch_url_with_reason) keeps successful reads in
     # the whole-URL read cache, and a second copy kept credential-bearing addresses on disk
-    # (2026-11-03).
+    #.
 
     # Plain fetch through the SSRF-pinned per-hop fetcher (safeurl.safe_fetch), NOT the shared
     # follow-redirects pool: this URL is attacker-influenceable (no adapter claimed it), so EVERY
     # redirect hop is IP-pinned + re-validated (a user URL that 302s to 169.254.169.254 can no longer
     # be followed). safe_fetch already read + decoded + capped the body, so we take res["text"]
-    # directly (no httpx.Response handling here). Keep the old 30MB untrusted-read cap (http.MAX_BYTES)
+    # directly (no httpx.Response handling here). Keep the 30MB untrusted-read cap (http.MAX_BYTES)
     # so this changes ONLY the SSRF posture, not the body ceiling (safe_fetch's own default is 5MB).
     # max_redirects=20 preserves the OLD http.get ceiling (httpx's pooled default was 20, safe_fetch's
     # own default is 5): each of the 20 hops is still IP-pinned + revalidated, so a longer pinned chain
-    # is safe and we do not silently reject a legitimate 6-to-20-hop redirect a real page used to reach.
+    # is safe and we do not silently reject a legitimate 6-to-20-hop redirect a real page reaches.
     res = safeurl.safe_fetch(url, max_bytes=http.MAX_BYTES, max_redirects=20)
     if not res["ok"] and res["blocked_reason"] == "rate_gate":
         # A declared upstream's gate (upstreams.json) did not admit the read in time. Escalating to
@@ -318,7 +352,7 @@ def read_via_fallback(url: str) -> Optional[Document]:
     if not res["ok"] and res["blocked_reason"] in _SSRF_REFUSE:
         # An SSRF-refused target (private_ip / bad_scheme / userinfo / bad_port): return None and do
         # NOT escalate to Jina. A benign failure (timeout / fetch_error / oversize / redirect_loop /
-        # dns) is not in _SSRF_REFUSE, so it falls through to the Jina escalation like the old path.
+        # dns) is not in _SSRF_REFUSE, so it falls through to the Jina escalation like any other failure.
         diag.note("web_fallback", url=url,
                   body=f"refused untrusted target (safe_fetch blocked_reason="
                        f"{res['blocked_reason']}); not escalating to Jina")
@@ -326,7 +360,7 @@ def read_via_fallback(url: str) -> Optional[Document]:
     if not res["ok"] and res["blocked_reason"] in _NO_ANSWER and res["status"] is None:
         # Failed at the connection or TLS step (or the local resolver): the host machine's fake-ip proxy makes a
         # name that does not exist fail exactly like a broken network. Ask public DNS once; NXDOMAIN is
-        # a settled answer (final: no Jina, no retry, not an upstream fault). Else the old path below.
+        # a settled answer (final: no Jina, no retry, not an upstream fault). Else the path below.
         chain = res.get("redirect_chain") or []
         gone = dns_absence.absent(urlparse(chain[-1]["to"] if chain else url).hostname or "")
         if gone:
@@ -345,13 +379,19 @@ def read_via_fallback(url: str) -> Optional[Document]:
         diag.note("web_fallback", url=url, body=challenge_reason(url, "plain", marker))
         return None  # a challenge wall is a FAILURE, never content (and never cached)
     plain_title, plain_text = "", ""
+    # A non-2xx answer that IS a bot check (Cloudflare's 403 「Just a moment...」 page): Jina is still
+    # tried (its render gets through now and then), but when it brings back nothing usable this is the
+    # reason, not "both thin" (hansard.parliament.uk, whatdotheyknow.com and reformparty.uk
+    # read as "plain+jina both thin (plain=0 chars)", which hid a wall behind "the page is empty").
+    plain_wall = None
+    if res["ok"] and (res["status"] or 0) >= 400 and res["text"]:
+        plain_wall = challenge_marker(*_extract_text(res["text"]))
     # Gate the plain-extract on a 2xx status. safe_fetch returns ok=True for ANY terminal (non-3xx)
     # response regardless of status class, so a 4xx/5xx carries an error page in res["text"]. The OLD
     # http.get called raise_for_status(), turning a 4xx/5xx into None -> thin -> Jina; without this
     # gate we would extract the error body and could return it as a source='web' doc, never trying
     # Jina. Treating only a 2xx body as content leaves plain_text empty on a non-2xx, so the _THIN_CHARS
-    # trigger below escalates to Jina exactly like the old raise_for_status path. (The SSRF-refuse
-    # branch above is unchanged.)
+    # trigger below escalates to Jina exactly like a raise_for_status failure.
     if res["ok"] and 200 <= (res["status"] or 0) < 300:
         ctype = (res["content_type"] or "").lower()
         if _is_json_type(ctype) and (res["text"] or "").strip():
@@ -389,7 +429,8 @@ def read_via_fallback(url: str) -> Optional[Document]:
         err = _jina_target_error(md)
         if err is not None:
             diag.note("web_fallback", url=url,
-                      body=f"the Jina render is an error page (the target answered HTTP {err}), not content")
+                      body=(challenge_reason(url, "plain", plain_wall) if plain_wall else
+                            f"the Jina render is an error page (the target answered HTTP {err}), not content"))
             return None  # an error page is a FAILURE, never content (and never cached)
         if md and len(md) > len(plain_text):
             via, content = "jina", md[:_MAX_CHARS]
@@ -402,7 +443,8 @@ def read_via_fallback(url: str) -> Optional[Document]:
 
     if not content:
         diag.note("web_fallback", url=url,
-                  body=f"plain+jina both thin (plain={len(plain_text)} chars)")
+                  body=(challenge_reason(url, "plain", plain_wall) if plain_wall
+                        else f"plain+jina both thin (plain={len(plain_text)} chars)"))
         return None  # genuinely nothing: keep matched=false, never a fake empty doc
 
     head = f"{title}\n{content[:1500]}"

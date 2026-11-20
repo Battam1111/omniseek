@@ -50,12 +50,11 @@ _BREAK_FOR_S = 120.0  # seconds the circuit stays open
 
 # OpenAlex's usage model, CURRENT terms (read 2026-09-28; the declaration "openalex" in upstreams.json
 # carries the sources): help.openalex.org/api-reference/authentication (updated 2026-08-19) and
-# /access/example-costs/ (2026-08-09) say a free api_key gets $1.00 of usage per day and a caller WITHOUT
+# /access/example-costs/ say a free api_key gets $1.00 of usage per day and a caller WITHOUT
 # a key gets $0.10 per day ("a free key raises your daily budget 10x"), both resetting at midnight UTC,
 # counted separately. Cost per call: get-by-id free, list+filter $0.0001, search $0.001, content $0.01.
 # A keyless call on 2026-09-28 answered x-ratelimit-limit 1000 / x-ratelimit-limit-usd 0.1, i.e. the
-# keyless bucket is ONE TENTH of the keyed one. (The comment here until 2026-09-28 said "each bucket
-# $1/day, ~2x daily capacity": that was the 2026-06-17 reading and is no longer true.)
+# keyless bucket is ONE TENTH of the keyed one.
 #
 # So the keyless lane is a small overflow, not a second budget: aget_json tries the keyed lane first and
 # spills to the keyless lane on a budget-429, and it decides from READINGS, not from an assumed size:
@@ -69,9 +68,9 @@ _BREAK_FOR_S = 120.0  # seconds the circuit stays open
 # Load bounds: the declared gate (8 in flight, request starts >= 0.2 s apart, i.e. <= 5/s against the
 # published 100/s) so a fan-out across the 40+ OpenAlex-backed sources (the health sweep, the org_watch
 # cron, a workflow's cohort burst) can never spike the rate and 429 the shared key. The semaphore bounds
-# CONCURRENCY, the pacer bounds RATE; together a burst is impossible by construction (the root cause of
-# the self-DOS the all-at-once health probe used to cause). The numbers live in upstreams.json.
-# How long ONE caller may wait on the gate: until its own deadline (2026-11-11), the
+# CONCURRENCY, the pacer bounds RATE; together a burst is impossible by construction (an all-at-once
+# health probe self-DOSes the upstream). The numbers live in upstreams.json.
+# How long ONE caller may wait on the gate: until its own deadline, the
 # start wait and the permit wait of an attempt together. An OA 429 / budget-exhaustion storm (40+ OA
 # sources fanning out, each retry re-reserving a slot) grows the backlog; a start past the caller's
 # deadline fails fast (raise OpenAlexDown → caller degrades to cache/empty) without reserving, so the
@@ -362,7 +361,7 @@ def usage_stats() -> dict:
         }
 
 
-# --- the one OpenAlex egress (async; the sync get_json and its client were deleted 11-04) ----------
+# --- the one OpenAlex egress (async) ----------
 # aget_json goes through the module's _guard (breaker + rate pacer + concurrency sema) and the 2-lane
 # budget state; no wait holds a thread.
 _aclient: Optional["httpx.AsyncClient"] = None
@@ -387,9 +386,8 @@ def _aget_client() -> "httpx.AsyncClient":
 
 
 async def aget_json(path: str, params: Optional[dict] = None, timeout: float = TIMEOUT) -> dict:
-    """GET api.openalex.org``path`` and return the parsed JSON: the ONE OpenAlex egress (the sync
-    ``get_json`` was deleted 11-04, async migration step seven; a thread reaches this through
-    ``portal.call``). Host-pinned, behind the shared breaker / rate pacer / concurrency cap / 2-lane
+    """GET api.openalex.org``path`` and return the parsed JSON: the ONE OpenAlex egress (a thread
+    reaches this through ``portal.call``). Host-pinned, behind the shared breaker / rate pacer / concurrency cap / 2-lane
     budget / retry: ONE load guard and ONE budget ledger. No wait holds a thread:
       - the rate-gate wait -> ``_guard.reserve_pace_slot()`` (reserve the slot, sync + brief) then
         ``await anyio.sleep`` (NOT time.sleep on the loop; the SAME shared pace state, NOT a new primitive);

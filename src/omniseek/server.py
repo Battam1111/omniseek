@@ -194,7 +194,7 @@ def _tool_name_doc(fn):
     surface named the server. That fix spelled one fully-qualified name (mcp__<server>__<tool>),
     which is right on only one machine: OmniSeek is reached under a different name on each (the
     laptop's entry has one name, the host machine's workers use another; their MCP configs name
-    them), and a real ToolSearch of the bare tool name on the laptop (2026-10-19) came back with
+    them), and a real ToolSearch of the bare tool name on the laptop came back with
     omniseek_read under the entry's prefix while this paragraph spelled the server's own one. So the
     paragraph names the tool, says the prefix is the caller's own config name, and points at the
     search that finds the tool under ANY prefix (the brain's text does the same). Sits between
@@ -255,8 +255,8 @@ except Exception:  # noqa: BLE001 - an identity string is never worth failing a 
 # The body waits (on the network, the portal, a CDP page), so it runs on the IO lane
 # (portal.IO_LANE, 256 tokens). A ceiling, not a target: real concurrency
 # is just the number of in-flight tool calls.
-# Since async step seven (2026-11-04) five bodies keep it, by design (the async design's end
-# STATE): omniseek_transcribe (a subprocess download + local speech inference) and omniseek_curator_view,
+# Since async step seven five bodies keep it, by design (the async design's end state):
+# omniseek_transcribe (a subprocess download + local speech inference) and omniseek_curator_view,
 # omniseek_graph, omniseek_ruling, omniseek_statement (small JSON / SQLite file reads and writes only). Every other
 # tool body is `async def` and awaits the async core directly.
 
@@ -377,9 +377,10 @@ def _eye_sources_view(domain: str, query: str, verbose: bool, region: str, field
                 "indexed_docs": recall.doc_count(),
                 "embedder_available": recall.embed.available(),
                 "vec_embed_failures": recall.vec_embed_failures(),
+                "vec_pending_rows": recall.vec_pending(),
+                "observations_dropped": recall.observations_dropped(),
                 "last_write_age_s": round(_time.time() - lw, 1) if lw else None,
             }
-            recall_status["observation_journal"] = recall.journal_health()
         except Exception as exc:  # noqa: BLE001
             recall_status = {"error": str(exc)[:80]}
         # OpenAlex usage attribution: which eye component spent the shared daily credit budget (by_caller),
@@ -453,7 +454,7 @@ async def _eye_search_drill(source, query, limit, full, debug, fresh, cache_only
         if note:
             out["note"] = note
         return out
-    # wait_s=None keeps the old omniseek_fetch behavior (the generous single-source backstop); a set
+    # wait_s=None keeps the generous single-source backstop; a set
     # wait_s translates to the engine's deadline_s to bound the drill.
     _fetch_kw = {} if wait_s is None else {"deadline_s": wait_s}
     try:
@@ -489,7 +490,7 @@ async def _eye_search_drill(source, query, limit, full, debug, fresh, cache_only
         out["_meta"] = {"diagnostic": diagnostic}
         if not docs and diagnostic.get("held"):
             # OmniSeek's own gate or host breaker sent nothing: say it at the top, so the empty list is
-            # not read as "this source has nothing" (2026-11-03).
+            # not read as "this source has nothing".
             out["held"] = diagnostic["held"]
             note = ("nothing was sent: OmniSeek's own gate held this request back (held.why, and in "
                     "held.detail when it opens again); this empty answer says nothing about the topic. "
@@ -505,7 +506,7 @@ async def _eye_search_drill(source, query, limit, full, debug, fresh, cache_only
 def _draws_on_search_backend(names) -> bool:
     """True iff any NAMED source draws on the ONE shared web-search backend: a search-index venue
     (read off the adapter's declared ``fetch_url_class``, so a new row is covered the day it
-    registers), nowcoder's site search, or reddit's reddit-wide search (since 2026-11-10). Never a
+    registers), nowcoder's site search, or reddit's reddit-wide search. Never a
     hand-copied list of the search-index venues."""
     for n in names or []:
         if n in ("nowcoder", "reddit"):
@@ -573,6 +574,19 @@ def _routing_hint(meta: dict) -> Optional[dict]:
     }
 
 
+def _busy_note(meta: dict) -> Optional[str]:
+    """The sentence for a broad sweep that found no free slot (fetcher._BROAD_SLOTS): it sent
+    nothing, so its empty answer says nothing about the topic. None when the call was admitted."""
+    b = (meta or {}).get("omniseek_busy")
+    if not b:
+        return None
+    return ("OmniSeek is busy: %d broad searches (the most it runs at once) were running and none ended "
+            "within this call's %.0fs, so nothing was sent and this empty answer says nothing about the "
+            "topic. Retry after %ds (_meta.omniseek_busy.retry_after_s), or name the sources you need: a "
+            "search with sources=[...] does not wait for a broad slot" % (b["in_flight"], b["waited_s"],
+                                                                         b["retry_after_s"]))
+
+
 @mcp.tool()
 @_tool_name_doc
 async def omniseek_search(query: str, sources: Optional[list[str]] = None, limit: Optional[LenientInt] = None,
@@ -609,7 +623,9 @@ async def omniseek_search(query: str, sources: Optional[list[str]] = None, limit
     _meta names timed_out / empty / errored / held sources (held = not tried, says nothing about the
     topic) and excluded_relevant walled sources worth naming. A bad filter returns error,
     filter_problems and available_filters and sends nothing; a bad as_of returns error. When
-    _meta.web_search_backend shows cooling, wait cooling_s before retrying.
+    _meta.web_search_backend shows cooling, wait cooling_s before retrying. When _meta.omniseek_busy is
+    present ({retry_after_s, in_flight, limit, waited_s}), OmniSeek was running its most broad searches
+    at once and this one sent nothing: retry after retry_after_s, or name sources.
     More: omniseek docs/TOOLS.md, omniseek_search.
     """
     # the query leaves for machines that are not ours; the push outlet's rule masks it first
@@ -635,7 +651,11 @@ async def omniseek_search(query: str, sources: Optional[list[str]] = None, limit
         _filters = _flt.parse(filters)
         _as_of = _flt.parse_as_of(as_of)
         if _filters or _as_of is not None:
-            await anyio.to_thread.run_sync(fetcher.check_filters, query, sources, _filters, _as_of, limiter=portal.IO_LANE)
+            # bounded (portal.run_io); past it the same check runs here (a refusal still returns the
+            # payload below, and the engine checks again before its first egress anyway)
+            _ok, _ = await portal.run_io(fetcher.check_filters, query, sources, _filters, _as_of)
+            if not _ok:
+                fetcher.check_filters(query, sources, _filters, _as_of)
     except _flt.FilterError as exc:
         return {"query": query, "count": 0, "documents": [], **exc.payload()}
     _fkw = {"filters": _filters} if _filters else {}  # an unfiltered call passes exactly what it did before
@@ -659,7 +679,7 @@ async def omniseek_search(query: str, sources: Optional[list[str]] = None, limit
         _stamp_backend_state(out, [source])
         return out
 
-    # Broad raw buckets: the old omniseek_search path (per-source, uncollapsed; limit acts per source).
+    # Broad raw buckets (per-source, uncollapsed; limit acts per source).
     if raw:
         # cache_only threads into the raw buckets too: asearch_many's per-source egresses
         # short-circuit at the funnels, so a cache_only raw-buckets sweep is genuinely zero-egress
@@ -674,10 +694,10 @@ async def omniseek_search(query: str, sources: Optional[list[str]] = None, limit
             # Bucket-triage view across MANY uncollapsed sources: a tight content preview keeps the
             # whole per-source coverage (every bucket + doc identity/signals) inside the MCP per-result
             # cap. Drill a chosen doc with omniseek_read (whole content), or drop raw for the ranked list.
-            # `full` is HONORED here (2026-07-25). It used to be dropped on this branch, so the
+            # `full` is HONORED here. Dropping it on this branch would make the
             # idiom this server's own instructions advertise as the named drill --
-            # omniseek_search(q, sources=[one], raw=True, full=True) -- silently truncated every doc to 500
-            # chars. The parameter was accepted, raised nothing, and changed nothing, which is the
+            # omniseek_search(q, sources=[one], raw=True, full=True) -- silently truncate every doc to 500
+            # chars: a parameter accepted that raises nothing and changes nothing is the
             # worst failure shape: an agent believes it holds the whole document and stops digging.
             # The 500-char cap remains the DEFAULT, and it is still the right default: a broad raw
             # sweep is a bucket-triage view over many uncollapsed sources, and full bodies there would
@@ -711,12 +731,15 @@ async def omniseek_search(query: str, sources: Optional[list[str]] = None, limit
         _rh = _routing_hint(meta)
         if _rh:
             out["routing_hint"] = _rh
+        _bn = _busy_note(meta)
+        if _bn:
+            _note = _bn + ("; " + _note if _note else "")
         if _note:
             out["note"] = _note
         _stamp_backend_state(out, sources)
         return out
 
-    # Default: the old omniseek_search_ranked path (dedup + rank into one list).
+    # Default: dedup + rank into one list.
     _deadline_s = wait_s
     if _cache_only and _deadline_s is None:
         _deadline_s = 8  # cache-only pickup: a defensive ceiling (egresses short-circuit anyway)
@@ -734,10 +757,13 @@ async def omniseek_search(query: str, sources: Optional[list[str]] = None, limit
         out["routing_hint"] = _rh
     if not docs and meta.get("held"):
         # an empty answer while OmniSeek's own gates held sources back is not "nothing there"
-        # (2026-11-03)
+        #
         _note = ("nothing came back and %d of the asked sources were not sent: OmniSeek's own gate held them "
                  "back (_meta.held says why, and in detail when it opens again); this empty answer says "
                  "nothing about them. Re-run later" % len(meta["held"])) + ("; " + _note if _note else "")
+    _bn = _busy_note(meta)
+    if _bn:
+        _note = _bn + ("; " + _note if _note else "")
     if _note:
         out["note"] = _note
     _stamp_backend_state(out, sources)
@@ -918,7 +944,8 @@ async def omniseek_read(target: str, start_char: LenientInt = 0, max_chars: Leni
              export_media: LenientBool = False, ocr: LenientBool = False,
              grep: Optional[Union[str, list[str]]] = None,
              level: str = "full", section: str | int = "",
-             grep_word: LenientBool = False, grep_case: LenientBool = False) -> dict:
+             grep_word: LenientBool = False, grep_case: LenientBool = False,
+             staleness: str = "cached_ok") -> dict:
     """Read text from any URL OR document FILE: OmniSeek's single "read this deep" verb. AUTO-ROUTES.
 
     A local path, or a name ending in .pdf/.pptx/.docx/.xlsx/.txt/.md/.csv (and a local .html/.htm),
@@ -937,9 +964,10 @@ async def omniseek_read(target: str, start_char: LenientInt = 0, max_chars: Leni
       grep_case: grep matches case.
       export_media: (documents) export the embedded images.
       ocr: (documents) OCR every embedded image and append its text.
+      staleness: (URLs) "cached_ok" (default) | "fresh" (read the page again, past every kept copy).
 
     Returns (URL) {url, matched, total_chars, returned_chars, start_char, truncated, cached,
-    fetched_at?, text_quality?, document, reason?}: matched false carries reason walled (drill the
+    fetched_at?, text_quality?, document, reason?, note?}: matched false carries reason walled (drill the
     source by name with omniseek_search) | empty | blocked. Returns (document) {source, total_chars,
     returned_chars, start_char, truncated, cached, format, title, outline, media_total, media,
     media_dir, ocr_images?, text_quality?, text} or {source, error, inbox_files?}. text_quality (a
@@ -959,7 +987,7 @@ async def omniseek_read(target: str, start_char: LenientInt = 0, max_chars: Leni
     # The body runs on the loop: the URL read is awaited (each adapter's afetch_url, then the generic
     # web read), and the windowing / sections / grep below are a few ms of CPU on the fetched text
     # (measured 2026-11-04: 12 ms for a grep over 180k characters). The document branch (a download,
-    # a parser that blocks) stays on a worker thread of the IO lane, as the whole body used to.
+    # a parser that blocks) stays on a worker thread of the IO lane.
     if _is_document_target(target):
         from omniseek.core import docreader
         if docreader.grep_terms(grep):
@@ -971,16 +999,28 @@ async def omniseek_read(target: str, start_char: LenientInt = 0, max_chars: Leni
                                      max_chars=max_chars, export_media=export_media, ocr=ocr,
                                      level=lvl, section=section)
         return await anyio.to_thread.run_sync(call, limiter=portal.IO_LANE)
-    with fetcher.url_read_receipt() as receipt:
-        doc, reason = await fetcher.afetch_url_with_reason(target)
-    # cached / fetched_at: whether this answer came from the short URL cache, and when the network
-    # read behind it happened (diagnostic only when the cache itself had trouble).
+    # staleness: the enum omniseek_search takes; "fresh" turns every cache read in this read into a miss
+    # (the URL cache and an adapter's own copies alike), and the fresh answer is kept as usual.
+    _stale = (staleness or "cached_ok").strip().lower()
+    note_fields = {} if _stale in ("fresh", "cached_ok") else {
+        "note": f"unknown staleness {staleness!r}; treated as 'cached_ok' (valid: fresh | cached_ok)"}
+    from omniseek.core import cache as _cache
+    fresh_token = _cache._fresh_var.set(True) if _stale == "fresh" else None
+    try:
+        with fetcher.url_read_receipt() as receipt:
+            doc, reason = await fetcher.afetch_url_with_reason(target)
+    finally:
+        if fresh_token is not None:
+            _cache._fresh_var.reset(fresh_token)
+    # cached / fetched_at: whether this answer came from a kept copy (the URL cache, or the adapter's
+    # own), and when the network read behind it happened (diagnostic only when the cache itself had trouble).
     # The small fields go before ``document`` / ``grep`` / the section text in every answer below: a
     # caller that cuts a long answer short keeps them (the window, the cache stamp), losing only body.
     cache_fields = {"cached": bool(receipt.get("cached"))}
     if receipt.get("fetched_at"):
         cache_fields["fetched_at"] = receipt["fetched_at"]
     diag_fields = {"diagnostic": receipt["diagnostic"]} if receipt.get("diagnostic") else {}
+    diag_fields.update(note_fields)
     if doc is None:
         # reason distinguishes walled (anti-bot challenge -> retry via CDP) / genuinely-empty /
         # SSRF-blocked, instead of one undifferentiated matched:false null.
@@ -1368,7 +1408,7 @@ async def _acurator_wall_probe(candidate_id: str) -> dict:
     surfaced = bool(probe_out.get("probe_reached"))
     if not surfaced:
         # Still invisible after a jailed render: keep the CURRENT state (idempotent self-edge). Record
-        # WHY for the operator; a parked_p2's canonical host stays in tried_hosts (no re-discovery).
+        # WHY for the operator.
         reason = (probe_out.get("probe_error")
                   or (probe_out.get("probe_fetch_meta", {}) or {}).get("blocked_reason")
                   or "render surfaced no content")
@@ -1418,14 +1458,16 @@ def _curator_decide(candidate_id: str, decision: str, reasons: str,
                     baseline_ref: Optional[dict] = None) -> dict:
     """Record the AGENT's admit/watch/reject verdict. OmniSeek stores it; it never computes one.
 
-    MECHANICALLY REFUSES (raises) an admit when ANY of: the candidate has a HARD red-line hit,
-    its evidence is incomplete (a stage did not reach), baseline_ref is empty (you MUST fold in
-    the web-search results for web_baseline_request.suggested_queries: it is a precondition of
-    an admit, not a suggestion), or no packet was built. reject/watch on incomplete evidence is
-    allowed (rejecting unreachable junk is safe). In phase 1 an admit ALWAYS sets owner_review (no
-    live apply); watch -> watching; reject -> rejected.
+    REFUSES (raises) an admit only when the candidate has a HARD red-line hit (personal data
+    cannot be un-harvested), read from the packet or, with no packet built yet, from the red lines
+    themselves. The rest comes after the action: an admit only stages to
+    owner_review, which nothing harvests from and a reject undoes, so incomplete evidence, an empty
+    baseline_ref (fold in the web-search results for web_baseline_request.suggested_queries), no
+    packet, or a first-seen host of a never-auto family without
+    baseline_ref.recurring_fetch_acknowledged are recorded in verdict.after_review and returned for
+    the operator to look at. watch -> watching; reject -> rejected.
 
-    Returns: {"candidate_id", "state", "verdict"}.
+    Returns: {"candidate_id", "state", "verdict", "after_review"?}.
     """
     from omniseek.core.curator import candidates
 
@@ -1437,37 +1479,39 @@ def _curator_decide(candidate_id: str, decision: str, reasons: str,
         raise KeyError(f"unknown candidate id {candidate_id!r}")
     packet = cand.get("evidence")
 
+    after_review = []
     if decision == "admit":
-        if packet is None:
-            raise ValueError("cannot admit: no evidence packet built (run omniseek_curator_act(verb='probe'))")
-        if (packet.get("stage0_safety") or {}).get("hard_redline_blocked"):
+        from omniseek.core.curator import apply as _apply_gate
+        from omniseek.core.curator import redlines as _redlines
+        safety = (packet or {}).get("stage0_safety") or {}
+        hard = safety.get("hard_redline_blocked") if packet is not None else any(
+            h.get("severity") == "hard" for h in _redlines.match(cand))
+        if hard:
             raise ValueError("cannot admit: a HARD red-line is hit (operator ToS/PII line; "
                              "agent cannot override)")
-        if not packet.get("evidence_complete"):
-            raise ValueError("cannot admit: evidence incomplete (a stage did not reach); "
-                             "reject or watch instead")
+        if packet is None:
+            after_review.append("no evidence packet built (run omniseek_curator_act(verb='probe'))")
+        elif not packet.get("evidence_complete"):
+            after_review.append("evidence incomplete (a stage did not reach)")
         if not baseline_ref:
-            raise ValueError("cannot admit: baseline_ref is empty: run WebSearch for "
-                             "web_baseline_request.suggested_queries and fold the results in")
-        # Attack-2: admitting a FIRST-SEEN host in a family whose recurring post-admission
-        # fetch bypasses safe_fetch (org_watch / page_watch / news_scraper / search_index) forces
-        # the agent to NAME the danger: baseline_ref.recurring_fetch_acknowledged must be true. This
-        # keeps the verdict with the agent while making the dangerous subclass impossible to admit
-        # by reflex. (_auto_apply_ok is the separate phase 4 live-apply gate; this guards the staged-admit path itself.)
-        from omniseek.core.curator import apply as _apply_gate
+            after_review.append("baseline_ref is empty: the web-search results for "
+                                "web_baseline_request.suggested_queries were not folded in")
+        # 8b (Attack-2): a FIRST-SEEN host in a family whose recurring post-admission fetch
+        # bypasses safe_fetch: the agent names the danger with baseline_ref.recurring_fetch_acknowledged.
+        # The harvest only starts with the operator's hand-made commit (stage_commit), so a missing
+        # acknowledgement is reported to the operator, not refused.
         _family = (cand.get("proposed_family") or "other").lower()
-        _first_seen = bool((packet.get("stage0_safety") or {}).get("first_seen_host"))
-        if _family in _apply_gate._NEVER_AUTO_FAMILIES and _first_seen:
-            if not (isinstance(baseline_ref, dict)
-                    and baseline_ref.get("recurring_fetch_acknowledged") is True):
-                raise ValueError(
-                    f"cannot admit: family {_family!r} on a FIRST-SEEN host makes an unguarded "
-                    "recurring post-admission fetch (bypasses safe_fetch). Set "
-                    "baseline_ref.recurring_fetch_acknowledged=true to consciously accept that the "
-                    "live fetch is not IP-pinned and that row deletion cannot un-harvest indexed data.")
+        if _family in _apply_gate._NEVER_AUTO_FAMILIES and safety.get("first_seen_host") and not (
+                isinstance(baseline_ref, dict) and baseline_ref.get("recurring_fetch_acknowledged") is True):
+            after_review.append(
+                f"family {_family!r} on a FIRST-SEEN host makes an unguarded recurring fetch (bypasses "
+                "safe_fetch) and baseline_ref.recurring_fetch_acknowledged is not true: the live fetch "
+                "is not IP-pinned and row deletion cannot un-harvest indexed data")
 
     target_state = {"admit": "owner_review", "watch": "watching", "reject": "rejected"}[decision]
     verdict = {"decision": decision, "reasons": reasons, "baseline_ref": baseline_ref or {}}
+    if after_review:
+        verdict["after_review"] = after_review
     if decision == "admit":
         # admit first transits awaiting_verdict -> admitted, then admitted -> owner_review.
         candidates.record_verdict(candidate_id, verdict, "admitted", note="agent admit")
@@ -1475,7 +1519,10 @@ def _curator_decide(candidate_id: str, decision: str, reasons: str,
                                    note="phase 1: admit stages to the operator (no live apply)", by="agent")
     else:
         row = candidates.record_verdict(candidate_id, verdict, target_state, note=f"agent {decision}")
-    return {"candidate_id": candidate_id, "state": row.get("state"), "verdict": row.get("verdict")}
+    out = {"candidate_id": candidate_id, "state": row.get("state"), "verdict": row.get("verdict")}
+    if after_review:
+        out["after_review"] = after_review
+    return out
 
 
 # -----------------------------------------------------------------------------
@@ -1490,17 +1537,18 @@ def _curator_decide(candidate_id: str, decision: str, reasons: str,
 
 
 async def _acurator_apply_live(candidate_id: str) -> dict:
-    """ONE-TAP LIVE ADMIT (rss-safe subclass only). The operator's single tool call IS the sanction, it
-    does NOT re-prompt (the owner_review precondition + the hardened gate + the rss-only subclass
-    ARE the safety). Applies a REVERSIBLE overlay row + a live re-register into the running worker:
-    NO git, NO restart, NO in-tree write. The candidate must be in owner_review (an agent-admitted,
-    operator-surfaced case). If the hardened auto-apply gate is not satisfied (wrong family/mode,
-    redline, incomplete evidence, render, family/mode relabel) it returns applied:false and points at
-    the git-commit path (omniseek_curator_stage_commit); it NEVER auto-applies a non-auto family. State
-    stays owner_review with the `applied` field populated.
+    """ONE-TAP LIVE ADMIT. The operator's single tool call IS the sanction, it does NOT re-prompt.
+    Applies a REVERSIBLE overlay row + a live re-register into the running worker: NO git, NO
+    restart, NO in-tree write; rollback_live undoes it. The candidate must be in owner_review (an
+    agent-admitted, operator-surfaced case). Refused (applied:false, pointing at the git-commit path
+    omniseek_curator_stage_commit) only for what a rollback cannot take back (apply.apply_refusal): a
+    red-line hit, a never-auto family (org_watch / page_watch / news_scraper / search_index), a
+    relabeled family. The rest (policy family/mode, render, mode mismatch, incomplete evidence)
+    moved after the action: the receipt's after_review lists it. State stays
+    owner_review with the `applied` field populated.
 
-    Returns a receipt: {applied, family, name, row, before/after roster count delta, git_committed:
-    false, durability_note}.
+    Returns a receipt: {applied, family, name, row, after_review, before/after roster count delta,
+    git_committed: false, durability_note}.
     """
     from omniseek.core.curator import apply as _apply
     from omniseek.core.curator import apply_live as _apply_live
@@ -1514,16 +1562,9 @@ async def _acurator_apply_live(candidate_id: str) -> dict:
             f"refuse live apply: candidate {candidate_id!r} is in {cand.get('state')!r}, not "
             "'owner_review' (only an agent-admitted, operator-surfaced case is eligible)")
 
-    family = (cand.get("proposed_family") or "other").lower()
-    # Defensive double-check (even if a doctored policy widened auto_apply.families).
-    if family in _apply._NEVER_AUTO_FAMILIES:
-        return {"candidate_id": candidate_id, "applied": False,
-                "reason": f"family {family!r} is never live-applied (recurring fetch bypasses "
-                          "safe_fetch)", "must_use": "omniseek_curator_act(verb='stage_commit') (git commit path)"}
-    if not await _io(_apply._auto_apply_ok, cand):
-        return {"candidate_id": candidate_id, "applied": False,
-                "reason": "auto-apply gate not satisfied (family/mode/redline/evidence/render/"
-                          "classification)",
+    refusal = await _io(_apply.apply_refusal, cand)
+    if refusal:
+        return {"candidate_id": candidate_id, "applied": False, "reason": refusal,
                 "must_use": "omniseek_curator_act(verb='stage_commit') (git commit path)"}
 
     before = len(fetcher.all_adapter_names())
@@ -1602,8 +1643,10 @@ async def _acurator_stage_commit(candidate_id: str) -> dict:
 
 
 async def _acurator_retire_live(name: str, confirm: LenientBool =False) -> dict:
-    """ONE-TAP PRUNE (the live half reversible, the durable half staged). Requires an EXISTING agent
-    PRUNE verdict in source_verdicts.json (one-tap never invents a prune). confirm=False -> a dry-run
+    """ONE-TAP PRUNE (the live half reversible, the durable half staged). Reads the agent's PRUNE
+    verdict in source_verdicts.json for the reason; with none on record it goes ahead and says so in
+    after_review (the live half is reversible with rollback_retire, so the
+    missing verdict moved after the action). confirm=False -> a dry-run
     preview with the coverage_impact block (mutates nothing). confirm=True -> applies the LIVE half
     REVERSIBLY: writes a runtime explicit_only override (the source leaves the broad fan-out at once,
     no restart, no git) + resets the recall cache. The DURABLE half (the in-tree explicit_only edit)
@@ -1617,19 +1660,22 @@ async def _acurator_retire_live(name: str, confirm: LenientBool =False) -> dict:
 
     verdicts = (await _io(source_audit._load_verdicts)).get("verdicts", {})
     v = verdicts.get(name) or {}
+    after_review = []
     if v.get("verdict") != "prune":
-        raise ValueError(
-            f"refuse retire: source {name!r} has no agent PRUNE verdict on record "
-            "(one-tap never invents a prune; run omniseek_curator_act(verb='source_verdict') first)")
-    reason = (v.get("rationale") or "agent prune")[:120]
+        after_review.append(f"source {name!r} has no agent PRUNE verdict on record "
+                            "(omniseek_curator_act(verb='source_verdict') records one)")
+        reason = "operator retire, no prune verdict"
+    else:
+        reason = (v.get("rationale") or "agent prune")[:120]
 
     ok, case = await _abounded(functools.partial(source_audit.prepare_source_prune_case, name, reason), 30.0)
     if not ok:
         return {"name": name, "error": "prune-case prep exceeded deadline"}
+    extra = {"after_review": after_review} if after_review else {}
     if not confirm:
-        return {"name": name, "confirm": False, "preview": True, **case}
+        return {"name": name, "confirm": False, "preview": True, **case, **extra}
     receipt = await _io(_apply_live.retire_live, name, reason)
-    return {"name": name, "confirm": True, **case, "runtime_retire": receipt,
+    return {"name": name, "confirm": True, **case, **extra, "runtime_retire": receipt,
             "durable_half_note": ("the live half is applied reversibly (runtime explicit_only "
                                   "override). The DURABLE half (the in-tree explicit_only edit) "
                                   "is the operator's git commit, staged in the "
@@ -1752,11 +1798,11 @@ async def omniseek_curator_act(verb: str, candidate_id: str = "", name: str = ""
       submit (name, urls, mode, domain, family; optional kind, regions, rationale, draft): add a candidate; mode is STRUCTURE / UNWALL / TRANSCRIBE / RECALL / MONITOR.
       probe (candidate_id): gather the evidence; returns the packet.
       wall_probe (candidate_id): re-probe by rendering it in the isolated browser (a parked_p2 candidate, or one you judge a client-rendered shell).
-      decide (candidate_id, decision, reasons; baseline_ref to admit): admit / watch / reject. Refused: an admit with a hard red line, incomplete evidence, an empty baseline_ref or no packet.
-      apply_live (candidate_id): reversible live admit, rss-safe families only (others use stage_commit).
+      decide (candidate_id, decision, reasons; baseline_ref to admit): admit / watch / reject. Refused: an admit with a hard red line; incomplete evidence, an empty baseline_ref or no packet come back in after_review.
+      apply_live (candidate_id): reversible live admit; refused for a red line, a never-auto family (use stage_commit) or a relabel; the rest comes back in after_review.
       rollback_live (name, family): undo apply_live.
       stage_commit (candidate_id): prepare the git commit text for a non-auto family; the operator commits.
-      retire_live (name; confirm): needs a PRUNE verdict; confirm=False previews, True writes a reversible override.
+      retire_live (name; confirm): confirm=False previews, True writes a reversible override; no PRUNE verdict on record comes back in after_review.
       rollback_retire (name): undo retire_live.
       source_verdict (name, verdict, rationale; prune_class, coverage_impact): KEEP / WATCH / PRUNE an existing source. Refused: a PRUNE its safety flags forbid.
 
@@ -1872,8 +1918,8 @@ def _count_shared_backend_targets(calls: list[dict]) -> int:
     """How many of a gather's calls NAME a shared-backend venue.
 
     Those calls serialize through one paced backend (~2s each) and can trip its cooldown — a
-    five-venue fan-out is exactly the batch shape that took every search-index venue down at once
-    (2026-09-10). PURE: reads the call specs, touches no state, sends nothing."""
+    five-venue fan-out is exactly the batch shape that took every search-index venue down at once.
+    PURE: reads the call specs, touches no state, sends nothing."""
     venues = _shared_backend_venues()
     n = 0
     for spec in calls or []:
@@ -1955,7 +2001,10 @@ async def omniseek_gather(calls: list[dict], wait_s: LenientInt = 60) -> dict:
     tasks: dict[asyncio.Task, int] = {}
     loop = asyncio.get_running_loop()
     # The shared-backend count reads the adapter registry; it stays off the loop, in one worker hop.
-    shared = await anyio.to_thread.run_sync(lambda: _count_shared_backend_targets(calls), limiter=portal.IO_LANE)
+    # Bounded (portal.run_io): past it the count (in-memory registry reads) is made here instead.
+    _ok, shared = await portal.run_io(_count_shared_backend_targets, calls)
+    if not _ok:
+        shared = _count_shared_backend_targets(calls)
     for i, c in enumerate(calls):
         t = loop.create_task(_run_one(i, c))
         _GATHER_RUNNING.add(t)  # strong reference: a child past wait_s keeps running and warms the cache
@@ -2016,7 +2065,7 @@ def omniseek_graph(view: str = "", args: Optional[dict] = None) -> dict:
     return recall.graph.dispatch_view(view, args)
 
 
-# The gather whitelist, as explicit DATA (mechanism demoted from the old regex scan): the TWELVE
+# The gather whitelist, as explicit DATA: the TWELVE
 # READ-ONLY tools that are safe to batch. sensor / curator / gather are excluded BY OMISSION (sensor
 # run mutates baselines, curator tools write, gather can't nest). Each value is the underlying body
 # (unwrapped past @_threaded's async wrapper): _run_one awaits a coroutine body (omniseek_search, omniseek_read,
@@ -2257,7 +2306,7 @@ _OMNISEEK_VERBS: dict[str, str] = {
 }
 
 
-# Each registered tool's MCP readOnlyHint (2026-10-29), DERIVED from the gather whitelist like the index
+# Each registered tool's MCP readOnlyHint, DERIVED from the gather whitelist like the index
 # above: true for the tools gather may batch, for gather itself (it runs only those) and for the curator's
 # view; every other tool (the sensor, the rulings, the statements, curator_act, and a later tool neither
 # names) is announced as a write. An MCP gateway can give a key that may only read OmniSeek (the work
@@ -2368,8 +2417,8 @@ def _warm_heavy_imports() -> None:
     The first ranked search otherwise pays these imports lazily ON the event-loop thread,
     racing the shadow probe's own first imports on a worker thread. On Windows (a fresh
     pip-install serving MCP over stdio) that race deadlocked inside numpy's extension-module
-    init and the call never returned: no deadline applied, nothing logged (2026-08-16,
-    reproduced twice on a clean venv; the faulthandler stack pinned the loop thread at
+    init and the call never returned: no deadline applied, nothing logged
+    (reproduced twice on a clean venv; the faulthandler stack pinned the loop thread at
     recall/embed's ``import numpy`` under ``create_module``, and this warm-up turned the
     same probe from an endless hang into a 9.5s budgeted return). Standalone the chain
     imports in ~2s, so boot pays a moment and no call path ever races a first import."""
@@ -2431,9 +2480,8 @@ def _source_counts() -> "tuple[int, int]":
 def _boot_summary(where: str = "", probe=importlib.util.find_spec) -> str:
     """The ONE human-readable INFO line a fresh start prints (stranger report item 8).
 
-    A first-time user read the old boot log (two 'unavailable' notices, ~100 lines of module names,
-    then 'senses online: none') as a broken install. Everything that was there is still logged, at
-    DEBUG; this line says what works, what is optional and how to add it."""
+    A boot log of two 'unavailable' notices, ~100 lines of module names, then 'senses online: none'
+    reads to a first-time user as a broken install. Those lines are logged at DEBUG; this line says what works, what is optional and how to add it."""
     total, swept = _source_counts()
     online, missing = _sense_status(probe)
     line = f"OmniSeek MCP server ready{where}: {total} sources available"

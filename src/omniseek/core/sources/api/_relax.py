@@ -12,7 +12,7 @@ nothing goes before all of them, since every AND that keeps it is empty.
 The adapters own the I/O (what a search or a count request is for their upstream); this module owns
 only the plan, written once as a generator so the sync and the async driver cannot drift apart.
 
-PROVISIONAL NUMBERS (measured 2026-10-18):
+PROVISIONAL NUMBERS (measured 2026-10-18, with a calibration plan):
 ``MIN_HITS`` and ``MAX_DROP``. ``MIN_WORDS`` is not a tunable: a result is on topic when its title
 holds at least two of the query's content words, so a one-word match cannot be on topic by that rule.
 """

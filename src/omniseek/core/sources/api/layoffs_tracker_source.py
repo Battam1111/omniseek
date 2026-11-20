@@ -17,7 +17,8 @@ ACCESS (verified live 2026-07-10, no credentials): the shared view walls the raw
 readSharedViewData JSON behind a two-step handshake. Step 1: GET the embed page
 airtable.com/embed/app1PaujS9zxVGUZ4/shroKsHx3SdYYOzeh, which bakes in urlWithParams
 (the signed readSharedViewData path carrying accessPolicy + signature), the
-applicationId, and a pageLoadId. Step 2: GET airtable.com + that path with the
+applicationId, and a pageLoadId (since 2026-11 the path sits in ``var urlWithParams = "..."``,
+no longer ``urlWithParams: "..."``; the response shape did not change). Step 2: GET airtable.com + that path with the
 x-airtable-application-id / x-airtable-page-load-id / x-time-zone headers. Hitting
 readSharedViewData without the handshake 302s to /login; the signature self-refreshes
 on every embed load, so we redo the handshake each cache miss rather than pinning a
@@ -66,18 +67,25 @@ _COL_COUNTRY = "Country"
 _COL_DATE_ADDED = "Date Added"
 
 
-def _js_string_after(text: str, marker: str) -> Optional[str]:
-    """Read the JS/JSON string literal that follows ``marker`` in ``text``.
+# The embed page's prefetch script names the signed path ``urlWithParams``. Until 2026-11 it
+# was an object key (``urlWithParams: "..."``); since then it is a variable
+# (``var urlWithParams = "...";``) that the stash object only references. Match the name
+# followed by either ``:`` or ``=`` and an opening quote, so a bare reference never matches.
+_URL_WITH_PARAMS_RE = re.compile(r'urlWithParams\s*[:=]\s*"')
 
-    The embed page stashes ``urlWithParams: "\\u002Fv0.3\\u002F..."`` as a
-    backslash-escaped JS string. Scan from the marker to the next UNescaped double
-    quote, then resolve the \\uXXXX / \\/ escapes. Returns None if the marker or a
-    closing quote is missing.
+
+def _js_string_after(text: str, marker: "re.Pattern[str]") -> Optional[str]:
+    """Read the JS/JSON string literal that follows the first ``marker`` match in ``text``.
+
+    The embed page stashes ``var urlWithParams = "\\u002Fv0.3\\u002F..."`` as a
+    backslash-escaped JS string; ``marker`` matches up to and including the opening quote.
+    Scan from there to the next UNescaped double quote, then resolve the \\uXXXX / \\/
+    escapes. Returns None if the marker or a closing quote is missing.
     """
-    i = text.find(marker)
-    if i < 0:
+    m = marker.search(text)
+    if not m:
         return None
-    i += len(marker)
+    i = m.end()
     out: list[str] = []
     n = len(text)
     while i < n:
@@ -107,7 +115,7 @@ async def _ahandshake_fetch() -> Optional[dict]:
     if not html:
         logger.info("layoffs_tracker: embed page fetch failed")
         return None
-    path = _js_string_after(html, 'urlWithParams: "')
+    path = _js_string_after(html, _URL_WITH_PARAMS_RE)
     app_m = re.search(r'"applicationId":"(app[A-Za-z0-9]+)"', html)
     pll_m = re.search(r'"pageLoadId":"([^"]+)"', html)
     if not (path and app_m and pll_m):
@@ -221,7 +229,7 @@ class LayoffsTrackerAdapter(SourceBase):
         return rows
 
     async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async replacement of the deleted sync ``search`` (11-04, this is the only one now) -> AsyncSearchCapable (the ~2.8MB handshake fetch costs a
+        """Native-async ``search`` -> AsyncSearchCapable (the ~2.8MB handshake fetch costs a
         COROUTINE, not a held pool thread). Awaits _arows (handshake + off-loop cache), then the SAME
         pure-CPU term filter + date sort + _to_doc map -> byte-identical to search."""
         rows = await self._arows()

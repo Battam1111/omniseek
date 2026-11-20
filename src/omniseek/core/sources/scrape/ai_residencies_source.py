@@ -125,7 +125,7 @@ def _sema_for(url: str) -> threading.BoundedSemaphore:
 
 
 async def _ahttp_get(url: str, *, timeout: int = TIMEOUT, **kwargs) -> Optional[httpx.Response]:
-    """Async replacement of the deleted sync ``_http_get`` (11-04, async step seven; this is the only one now): the async egress leaf for asearch's per-row fan-out.
+    """Async ``_http_get``: the async egress leaf for asearch's per-row fan-out.
     Mirrors ``_http_get`` faithfully, moving ONLY the blocking waits off the loop so no thread is held:
 
       - the per-host in-flight cap -> the SAME ``_sema_for`` threading BoundedSemaphore, acquired by
@@ -322,7 +322,7 @@ def _row_common(row: dict, *, title: str, url: str, status: str, summary: str,
 
 
 async def _afetch_greenhouse(row: dict) -> list[ResidencyPosition]:
-    """Async replacement of the deleted sync ``_fetch_greenhouse`` (11-04, async step seven; this is the only one now) (egress via ``_ahttp_get``; parse identical)."""
+    """Async ``_fetch_greenhouse`` (egress via ``_ahttp_get``; parse identical)."""
     resp = await _ahttp_get(f"https://boards-api.greenhouse.io/v1/boards/{row['slug']}/jobs?content=true")
     if resp is None:
         return []
@@ -347,7 +347,7 @@ async def _afetch_greenhouse(row: dict) -> list[ResidencyPosition]:
 
 
 async def _afetch_ashby(row: dict) -> list[ResidencyPosition]:
-    """Async replacement of the deleted sync ``_fetch_ashby`` (11-04, async step seven; this is the only one now) (egress via ``_ahttp_get``; parse identical)."""
+    """Async ``_fetch_ashby`` (egress via ``_ahttp_get``; parse identical)."""
     resp = await _ahttp_get(f"https://api.ashbyhq.com/posting-api/job-board/{row['slug']}", timeout=30)
     if resp is None:
         return []
@@ -371,7 +371,7 @@ async def _afetch_ashby(row: dict) -> list[ResidencyPosition]:
 
 
 async def _afetch_lever(row: dict) -> list[ResidencyPosition]:
-    """Async replacement of the deleted sync ``_fetch_lever`` (11-04, async step seven; this is the only one now) (egress via ``_ahttp_get``; parse identical)."""
+    """Async ``_fetch_lever`` (egress via ``_ahttp_get``; parse identical)."""
     resp = await _ahttp_get(f"https://api.lever.co/v0/postings/{row['slug']}?mode=json", timeout=30)
     if resp is None:
         return []
@@ -396,7 +396,7 @@ async def _afetch_lever(row: dict) -> list[ResidencyPosition]:
 
 
 async def _afetch_workable(row: dict) -> list[ResidencyPosition]:
-    """Async replacement of the deleted sync ``_fetch_workable`` (11-04, async step seven; this is the only one now) (egress via ``_ahttp_get``; parse identical)."""
+    """Async ``_fetch_workable`` (egress via ``_ahttp_get``; parse identical)."""
     resp = await _ahttp_get(f"https://apply.workable.com/api/v1/widget/accounts/{row['slug']}", timeout=20)
     if resp is None:
         return []
@@ -443,7 +443,7 @@ def _page_text(html: str) -> str:
 
 
 async def _afetch_static(row: dict) -> list[ResidencyPosition]:
-    """Async replacement of the deleted sync ``_fetch_static`` (11-04, async step seven; this is the only one now) (egress via ``_ahttp_get``; BeautifulSoup parse through ``aparse``)."""
+    """Async ``_fetch_static`` (egress via ``_ahttp_get``; BeautifulSoup parse through ``aparse``)."""
     resp = await _ahttp_get(row["url"])
     if resp is None:
         return []
@@ -557,7 +557,7 @@ class AIResidenciesAdapter(SourceBase):
         return positions
 
     async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async replacement of the deleted sync ``search`` (11-04, this is the only one now): awaits the async ``_afetch_all_positions`` (concurrent
+        """Native-async ``search``: awaits the async ``_afetch_all_positions`` (concurrent
         per-row egress) then runs the SAME tier/status/deadline scoring + lexical match, all pure CPU on
         the loop. Byte-identical to ``search`` below the fetch: the shared _afetch_all_positions and the
         pure-CPU relevance.query_terms / field_scores + sort guarantee no drift between the two paths."""
@@ -592,8 +592,8 @@ class AIResidenciesAdapter(SourceBase):
     async def afetch_url(self, url: str) -> Optional[Document]:
         # Claim a URL only when it IS one of this source's pages (a configured program page, or a
         # posting a board returned), compared by _url_key. Another page on the same site is not
-        # ours. The host fallback that used to follow the exact match accepted the same host, a
-        # subdomain or a parent domain, and returned whichever row matched first: a link on
+        # ours. A host fallback after the exact match would accept the same host, a
+        # subdomain or a parent domain, and return whichever row matched first: a link on
         # openai.com itself came back as the OpenAI Safety Fellowship row (alignment.openai.com
         # ends with ".openai.com").
         want = _url_key(url)

@@ -15,7 +15,7 @@ adapter just declares its site/facets and wires the hooks.
 
 Each returned question yields its own doc PLUS its top-3 votes-ranked answer docs (source_id
 "{qid}a{aid}", title "A: <title>", metadata.is_accepted) — the accepted answer is the actual gold,
-which the old question-body-only mapping silently dropped. rank stays default-False so the
+which a question-body-only mapping would silently drop. rank stays default-False so the
 endpoint's own ``sort=relevance`` order is preserved.
 """
 

@@ -55,7 +55,7 @@ import httpx
 
 import anyio
 
-from omniseek.core import _probe, cache, diag, fetcher, upstreams
+from omniseek.core import _probe, cache, diag, fetcher, http, upstreams
 from omniseek.core.sources._base import SourceBase
 from omniseek.core.normalize import Document, jsonsafe, keyword_score_filter
 
@@ -77,10 +77,12 @@ _feishu_sema = threading.BoundedSemaphore(_FEISHU_MAX_INFLIGHT)
 
 
 def _feishu_post(url: str, **kwargs):
-    """Single Feishu egress chokepoint: both httpx.post to *.jobs.feishu.cn pass through here so the
-    global in-flight cap (_feishu_sema) bounds concurrent requests to the shared Feishu hiring backend."""
+    """Single Feishu egress chokepoint: both POSTs to *.jobs.feishu.cn pass through here so the
+    global in-flight cap (_feishu_sema) bounds concurrent requests to the shared Feishu hiring backend.
+    Sent through ``http.direct`` (was a bare ``httpx.post``): the redirect rule, and a failed
+    request leaves its address and method for the exit-node sweep; same arguments, same raises."""
     with _feishu_sema:
-        return httpx.post(url, **kwargs)
+        return http.direct("POST", url, **kwargs)
 
 # Chrome desktop UA — 短 UA 会被 Feishu 反爬 block 成 HTML
 USER_AGENT = (
@@ -280,7 +282,7 @@ class FeishuJobsAdapter(SourceBase):
         all_docs: list[Document] = []
         # Run each portal in a COPY of the caller's context so an armed diag capture (a drill's
         # contextvar) reaches the worker threads: a plain ex.map loses worker-thread failure notes,
-        # so an all-portals-down drill used to report captures: [] (the RSS diag-loss class).
+        # so an all-portals-down drill would report captures: [] (the RSS diag-loss class).
         portals = [(s, contextvars.copy_context()) for s in SITES]
         with ThreadPoolExecutor(max_workers=len(SITES)) as ex:
             for docs in ex.map(lambda p: p[1].run(_one, p[0]), portals):
@@ -303,7 +305,7 @@ class FeishuJobsAdapter(SourceBase):
     async def afetch_url(self, url: str) -> Optional[Document]:
         if not (urlparse(url).hostname or "").lower().endswith(".jobs.feishu.cn"):
             return None
-        # the portal listing is read with the sync httpx client this source shares with its search: a worker thread
+        # the portal listing is read with the sync egress this source shares with its search: a worker thread
         return await anyio.to_thread.run_sync(self._read_url, url, limiter=fetcher._LEGACY_LIMITER)
 
     def _read_url(self, url: str) -> Optional[Document]:

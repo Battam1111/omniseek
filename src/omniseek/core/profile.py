@@ -83,13 +83,11 @@ def is_source_enabled(name: str, *, stability: str = "",
     # Walled/login tier: OFF unless the deployer turned it on AND opted in. Derived from the
     # adapter's STABILITY (not its per-adapter flag), so a new walled source can't leak in.
     #
-    # DENY-BY-DEFAULT, profile or not (2026-08-12). The old code returned True for EVERYTHING when
-    # no profile file existed, which is precisely the state of a fresh clone: the public mirror
-    # therefore shipped walled adapters that would drive logged-in sessions without any deployment
-    # having decided to. profile.example.json has always documented the opposite, so the doc was
-    # describing a gate the default path did not run. Reaching a walled source means using somebody's
+    # DENY-BY-DEFAULT, profile or not. Returning True for EVERYTHING when no profile file exists
+    # (the state of a fresh clone) would ship walled adapters that drive logged-in sessions without
+    # any deployment having decided to. Reaching a walled source means using somebody's
     # account, and that is a decision a deployment makes explicitly; it must never be inherited from
-    # the absence of a config file. Non-walled sources keep the old no-profile behaviour exactly.
+    # the absence of a config file. Non-walled sources are allowed without a profile.
     #
     # bring_your_own accepts `true` (every walled source here) as well as the per-source map. The map
     # alone would force a host that wants its existing reach to enumerate all of them by hand, where

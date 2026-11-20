@@ -275,16 +275,24 @@ class BaseCDPAdapter(SourceBase):
         return fresh
 
     def _alert_auth_fail(self) -> None:
-        """Best-effort push: tell the operator a source needs a manual VNC re-login (once per 6h).
+        """Best-effort push: tell the operator a source needs a manual VNC re-login (once per logout of a
+        login source's account, omniseek.core.login_log.claim_push; once per 6h per process for any other).
 
         The cooldown check + bookkeeping stay synchronous; the push itself runs on a daemon thread so
         a slow outlet (worst case ~28.5s of retries) never stalls the omniseek_search that tripped it."""
         import threading
         import time as _t
-        now = _t.time()
-        if now - _AUTH_BARK_LAST.get(self.name, 0.0) < _AUTH_ALERT_COOLDOWN_S:
-            return
-        _AUTH_BARK_LAST[self.name] = now
+        from omniseek.core import login_log
+        if login_log.account_of(self.name):
+            # One push per logout, shared with the session-warmer and kept on disk: the
+            # in-memory cooldown below reset with every process, so one logout was pushed four times.
+            if not login_log.claim_push(self.name):
+                return
+        else:
+            now = _t.time()
+            if now - _AUTH_BARK_LAST.get(self.name, 0.0) < _AUTH_ALERT_COOLDOWN_S:
+                return
+            _AUTH_BARK_LAST[self.name] = now
         name = self.name
 
         def _send() -> None:
@@ -319,10 +327,15 @@ class BaseCDPAdapter(SourceBase):
         # authoritative-empty (this class of silent-false-empty misled a diagnosis 2026-07-06). If the
         # source is autofill-backed, drive Chrome's own credential autofill to relogin + retry once;
         # either way fail LOUD (typed diagnostic) so a [] is never read as 'nothing there'.
-        if self.login_url and self._is_logged_out(raw):
+        logged_out = bool(self.login_url) and self._is_logged_out(raw)
+        if logged_out:
             healed = self._auth_heal(url)
             if healed is not None:
                 raw = healed
+                logged_out = self._is_logged_out(raw)
+                self._record_login("out" if logged_out else "in", raw, relogin="succeeded")
+            else:
+                self._record_login("out", raw, relogin="failed or in cooldown")
 
         try:
             docs = self._to_documents(raw, query, limit) or []
@@ -332,6 +345,8 @@ class BaseCDPAdapter(SourceBase):
 
         if self.rank and docs:
             docs = self._rank(docs, query)
+        if self.login_url and docs and not logged_out:
+            self._record_login("in", raw, results=len(docs))
 
         if not docs:  # distinguish a BLOCK (anti-bot / flood-control) from an authoritative empty
             html = raw[0] if isinstance(raw, tuple) else raw
@@ -345,6 +360,14 @@ class BaseCDPAdapter(SourceBase):
         # must not blind this query for cache_ttl (and EMPTY_TTL spares the session a retry-storm).
         cache.set_docs(key, docs, ttl=self.cache_ttl if docs else EMPTY_TTL)
         return docs
+
+    def _record_login(self, verdict: str, raw: Any, **seen) -> None:
+        """One login verdict of a search (omniseek.core.login_log): which logged-out markers the page
+        carried (none on a logged-in page)."""
+        from omniseek.core import login_log
+        html = raw[0] if isinstance(raw, tuple) else raw
+        marks = [m for m in self.logged_out_markers if isinstance(html, str) and m in html]
+        login_log.record(self.name, verdict, by="adapter", path="search", logged_out_marks=marks, **seen)
 
     @staticmethod
     def _rank(docs: list[Document], query: str) -> list[Document]:
@@ -399,7 +422,13 @@ class BaseCDPAdapter(SourceBase):
             page_url = self._run(lambda p: p.url, self._health_url())
         except Exception as exc:  # noqa: BLE001
             return False, f"{type(exc).__name__}: {str(exc)[:80]}"
-        if "/signin" in page_url or "/login" in page_url:
+        from urllib.parse import urlsplit
+        from omniseek.core import login_log
+        out = "/signin" in page_url or "/login" in page_url
+        if login_log.account_of(self.name):
+            login_log.record(self.name, "out" if out else "in", by="watchdog", path="health_check",
+                             landed_on=urlsplit(page_url).path)
+        if out:
             return False, f"CDP Chrome not logged into {self.name}: the operator needs to VNC + log in"
         return True, f"OK (CDP + {self.name} session)"
 

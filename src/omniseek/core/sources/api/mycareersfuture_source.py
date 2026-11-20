@@ -43,7 +43,7 @@ class MyCareersFutureAdapter(SourceBase):
     )
 
     async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async replacement of the deleted sync ``search`` (11-04, this is the only one now): mirrors ``search`` line-for-line so the fetcher's
+        """Native-async ``search``: mirrors ``search`` line-for-line so the fetcher's
         native async dispatch (``AsyncSearchCapable``) awaits it DIRECTLY, spending a coroutine on the
         MCF POST wait instead of a held pool thread. Three changes only vs ``search``:
           - the disk CACHE read/write go OFF the loop (anyio.to_thread.run_sync: get_docs / set_docs do

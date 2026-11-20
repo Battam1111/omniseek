@@ -14,7 +14,7 @@ for long-form → strip the model's audio-event / emotion tags → cache FOREVER
 changes). youtube does NOT route here (its adapter already returns captions). ASR is heavy to load +
 slow-ish on long media, so it is an explicit, agent-driven tool (omniseek_transcribe), never a broad sweep.
 
-Time-range transcription (2026-06-10): start/duration slice the audio BEFORE ASR (ffmpeg -ss/-t;
+Time-range transcription: start/duration slice the audio BEFORE ASR (ffmpeg -ss/-t;
 on direct/enclosure URLs -ss uses HTTP range seeking, so only the slice region is even downloaded).
 The unit of transcription becomes "the segment judged worth hearing" (e.g. one chapter from a
 podcast's shownotes timestamps) instead of a whole 3-hour episode nobody reads.
@@ -32,6 +32,7 @@ import platform
 import random
 import re
 import shutil
+import stat
 import subprocess
 import tempfile
 import threading
@@ -89,7 +90,7 @@ def engine_label(diarize: bool = False) -> str:
     return name(_MODEL)
 
 
-# ── where recognition runs (2026-11-10) ───────────────────────────────────────────────────────
+# ── where recognition runs ───────────────────────────────────────────────────────
 # Not in this process. The models load in a speech worker process (omniseek.asr_worker) that
 # omniseek.core.asr_sched starts, feeds one job at a time and ends when it is idle, too big for another
 # job, or has to be stopped. The measures that bounded the models inside OmniSeek (release the MPS cache
@@ -159,11 +160,6 @@ def _asr_install_message(missing: list[str], system: Optional[str] = None,
     return (f"audio transcription is not installed (missing: {', '.join(missing)}). "
             f"Install with uv: {_uv_asr_install(system, cuda)}. "
             f"Installed with pip instead: {'; then '.join(steps)}. {_MODEL_DISK_NOTE}")
-
-
-def _model_cached(model_id: str) -> bool:
-    root = os.environ.get("MODELSCOPE_CACHE") or str(where.modelscope_cache() / "hub")
-    return any(os.path.isdir(os.path.join(root, sub, model_id)) for sub in ("models", ""))
 
 
 def _ffmpeg_exe() -> str:
@@ -312,7 +308,7 @@ def _xiaoyuzhou_audio(url: str) -> tuple[Optional[str], dict]:
 # feeding it the activated cookies STILL 412s, because it re-fetches webpage/nav and loses the
 # activation binding. So bilibili bypasses yt-dlp entirely: we drive the full browser-style
 # bootstrap in ONE cookie session, then download the DASH audio CDN directly. Proven end-to-end
-# from our US-egress IP, no login + no China IP needed (2026-06-17): the 412 is risk-control /
+# from our US-egress IP, no login + no China IP needed: the 412 is risk-control /
 # session-trust, NOT an IP block (popular/view/nav all return 200 from the same IP; only the
 # un-activated playurl is gated). The two magic constants below are bilibili-controlled and DO
 # rotate — if this 412s again, re-verify THESE first (the activation STRUCTURE is the durable part):
@@ -543,7 +539,7 @@ DOUYIN_UNSUPPORTED = "抖音视频暂不支持转写（登录浏览器已撤）"
 
 
 def _remember_transcript(rec: dict) -> None:
-    """Perception-produced text enters OmniSeek's MEMORY (2026-07-05): a transcript is text OmniSeek
+    """Perception-produced text enters OmniSeek's MEMORY: a transcript is text OmniSeek
     itself produced, so it must be findable later ("which podcast said X") exactly like fetched
     text — before this, a transcript lived only in the URL-keyed cache, unreachable by content.
     Full-lane ingest via recall.writer.ingest_produced (same single-writer queue; WRITES_ENABLED /
@@ -693,6 +689,24 @@ def _follow(job, url) -> dict:
     return rec
 
 
+def _local_file_stamp(url: str) -> str:
+    """For a local audio path, its size and modification time in ns, so the transcript cache knows the
+    file's content and not only its path: a file regenerated at the same path is a new key, an untouched
+    file keeps its key. Size plus mtime, not a content hash: a stat costs nothing while hashing reads the
+    whole file (up to hundreds of MB) on every call, cache hits included; rewriting a file always moves
+    its ns mtime, and copying another clip over it nearly always changes the size too. A remote URL, or a
+    path that is not a regular file, gets "" (the key stays as it was)."""
+    if "://" in url:
+        return ""
+    try:
+        st = os.stat(url)
+    except OSError:
+        return ""
+    if not stat.S_ISREG(st.st_mode):
+        return ""
+    return f"file{st.st_size}-{st.st_mtime_ns}"
+
+
 def transcribe_url(url: str, language: Optional[str] = None,
                    start=None, duration=None, segments: bool = False, diarize: bool = False,
                    speakers: Optional[int] = None, caller: Optional[str] = None) -> dict:
@@ -727,6 +741,9 @@ def transcribe_url(url: str, language: Optional[str] = None,
     ck = cache.make_key("asr", _MODEL, url, language or "auto",
                         f"{start_s or 0}-{dur_s or 'full'}", f"seg{int(bool(segments))}",
                         f"diar{int(bool(diarize))}", f"spk{int(speakers or 0)}")
+    stamp = _local_file_stamp(url)
+    if stamp:
+        ck = cache.make_key(ck, stamp)
     cached = cache.get(ck)
     if cached is not None:
         rec = {**cached, "cached": True}

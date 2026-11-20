@@ -82,7 +82,7 @@ def _pad_cik(cik: Any) -> str:
 
 
 async def _aload_ticker_map() -> tuple[dict[str, dict], list[tuple[str, str, str]]]:
-    """Async replacement of the deleted sync ``_load_ticker_map`` (11-04, async step seven; this is the only one now): BYTE-FAITHFUL mirror — same lock-free fast path, same
+    """Async ``_load_ticker_map``: BYTE-FAITHFUL mirror — same lock-free fast path, same
     double-checked module cache, same map build + logging + empty-on-failure (unset-cache retry)
     contract. TWO off-loop changes only: (1) the SAME process-wide ``_MAP_LOCK`` is acquired by the
     shared bounded, cancellation-safe async gate helper, NEVER ``with _MAP_LOCK:`` on the loop and
@@ -123,7 +123,7 @@ async def _aload_ticker_map() -> tuple[dict[str, dict], list[tuple[str, str, str
 
 
 async def _aresolve(query: str) -> Optional[dict]:
-    """Async replacement of the deleted sync ``_resolve`` (11-04, this is the only one now): BYTE-FAITHFUL mirror — same normalize, same resolution order
+    """Async ``_resolve``: BYTE-FAITHFUL mirror — same normalize, same resolution order
     (single-ticker exact hit -> exact case-insensitive title -> shortest substring title) and the
     same None fall-through. The ONLY change is the ticker-map load, which carries the sole egress,
     swaps to its async twin (``_load_ticker_map`` -> ``await _aload_ticker_map``); every other line is
@@ -239,7 +239,7 @@ class SECFinancialsAdapter(SourceBase):
     samples = [{"query": "AAPL"}, {"query": "Apple"}]
 
     async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async replacement of the deleted sync ``search`` (11-04, this is the only one now) -> AsyncSearchCapable, so the async fan-out awaits
+        """Native-async ``search`` -> AsyncSearchCapable, so the async fan-out awaits
         this DIRECTLY instead of pushing sync ``.search`` onto the shared thread pool. Mirrors
         ``search`` LINE-FOR-LINE: the two egress-carrying calls swap to their async twins
         (``_resolve`` -> ``await _aresolve``, ``self._build_doc`` -> ``await self._abuild_doc``), which
@@ -259,14 +259,14 @@ class SECFinancialsAdapter(SourceBase):
     async def ahealth_check(self) -> tuple[Optional[bool], str]:
         try:
             by_ticker, _ = await _aload_ticker_map()
-        except GateBusy as exc:   # the gate sent nothing: not verified (until 2026-10-04 this read False)
+        except GateBusy as exc:   # the gate sent nothing: not verified
             return None, f"not verified: an eye gate held the request back, nothing sent ({exc})"
         if not by_ticker:
             return False, "ticker map fetch failed (UA gating or endpoint change?)"
         return True, f"OK ({len(by_ticker)} tickers)"
 
     async def _abuild_doc(self, ident: dict) -> Optional[Document]:
-        """Async replacement of the deleted sync ``_build_doc`` (11-04, this is the only one now): same URLs/headers/timeouts and the same both-None guard,
+        """Async ``_build_doc``: same URLs/headers/timeouts and the same both-None guard,
         with the two egress calls swapped to their async twins AND run CONCURRENTLY.
 
         submissions and companyfacts are two unrelated endpoints on ``data.sec.gov`` that share
@@ -281,7 +281,7 @@ class SECFinancialsAdapter(SourceBase):
         (``_latest_fact``/``_fmt_usd``/``mk_signal``), ``_recent_filings`` (pure CPU, no egress), and
         the ``Document`` assembly — is PURE CPU and stays ON the loop, byte-identical to
         ``_build_doc``. An endpoint that RAISES is folded to None, i.e. treated as the failure the
-        both-None guard already handles, so one exploding endpoint no longer discards the other's
+        both-None guard already handles, so one exploding endpoint does not discard the other's
         answer."""
         cik = ident["cik"]
         ticker = ident.get("ticker") or ""

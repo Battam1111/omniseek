@@ -110,7 +110,10 @@ class DoubanGroupsAdapter(SourceBase):
         # must NEVER read as 'no results': emit a typed diagnostic (the session-warmer/health Bark it) and
         # fall through to the SHORT-TTL empty so it self-heals after a VNC re-login. douban login is
         # account/password (no autofill-relogin), needs a human on the 9222 Chrome — the zhihu pattern.
+        from omniseek.core import login_log
         if isinstance(data, dict) and (data.get("code") == 103 or data.get("msg") == "need_login"):
+            login_log.record("douban_groups", "out", by="adapter", path="rexxar_search",
+                             code=data.get("code"), msg=data.get("msg"))
             diag.note("douban_groups.auth_expired", url=_SEARCH, body=(
                 "AUTH_EXPIRED: the 9222 Chrome's douban session is logged out (rexxar need_login). Needs a "
                 "VNC re-login on the host machine (the 9222 cn-forums Chrome, douban.com). NOT authoritative-empty."))
@@ -134,6 +137,9 @@ class DoubanGroupsAdapter(SourceBase):
                 break
 
         docs = docs[:limit]
+        if docs and isinstance(data, dict):
+            login_log.record("douban_groups", "in", by="adapter", path="rexxar_search",
+                             code=data.get("code"), msg=data.get("msg"), results=len(docs))
         # Real results → full TTL; empty → the short floor (a transient blip / expired session must not
         # blind the query for 15 min; it self-heals on the next call after a re-login).
         ttl = 900 if docs else EMPTY_TTL

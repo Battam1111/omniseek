@@ -99,14 +99,14 @@ class GovOpenDataAdapter(BaseScrapeAdapter):
 
     # ── native-async egress twins (byte-faithful mirror of the sync fan-out) ─
     async def _araw_fetch(self, query: str, limit: int) -> Optional[Any]:
-        """Async replacement of the deleted sync ``_raw_fetch`` (11-04, this is the only one now): the multi-portal fan-out, CONCURRENT like the sync twin.
+        """Async ``_raw_fetch``: the multi-portal fan-out, CONCURRENT like the sync twin.
 
         The three portals are unrelated hosts (SG, HK, CA), so a serial loop made this source's
         latency their SUM. Worse, the sync twin above has always been concurrent (ThreadPoolExecutor,
         line ~126) while this one was a for-loop, and fetcher dispatches to the ASYNC path whenever
         an adapter has asearch: the sync fan-out was dead code and the concurrency it bought was
         silently lost (measured 2026-08-30). The SG portal additionally pages up to SG_MAX_PAGES
-        internally, and that whole chain used to hang off the first link of the serial chain.
+        internally, and that whole chain would otherwise hang off the first link of a serial chain.
 
         Everything else is unchanged: per-portal failure stays non-fatal, all-portals-failed still
         returns None, and results are restored in PORTALS order (the sync twin's zip at line ~128
@@ -139,7 +139,7 @@ class GovOpenDataAdapter(BaseScrapeAdapter):
         return pairs
 
     async def _afetch_portal(self, portal: dict, query: str, limit: int) -> Optional[list[dict]]:
-        """Async replacement of the deleted sync ``_fetch_portal`` (11-04, this is the only one now): same URL / params / timeout, egress swapped to http.aget_json."""
+        """Async ``_fetch_portal``: same URL / params / timeout, egress swapped to http.aget_json."""
         kind = portal["kind"]
         if kind == "ckan":
             raw = await http.aget_json(
@@ -157,7 +157,7 @@ class GovOpenDataAdapter(BaseScrapeAdapter):
         return None
 
     async def _afetch_sg(self, portal: dict, query: str, limit: int) -> Optional[list[dict]]:
-        """Async replacement of the deleted sync ``_fetch_sg`` (11-04, this is the only one now): same SG_MAX_PAGES bound / local AND-filter / stop conditions,
+        """Async ``_fetch_sg``: same SG_MAX_PAGES bound / local AND-filter / stop conditions,
         egress swapped to http.aget_json."""
         terms = [t for t in query.lower().split() if t]
         hits: list[dict] = []

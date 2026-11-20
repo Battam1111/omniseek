@@ -1,4 +1,4 @@
-"""Delete the app-bundle clones that Google Chrome leaves behind on macOS (2026-10-05).
+"""Delete the app-bundle clones that Google Chrome leaves behind on macOS.
 
 What they are. At startup every Google Chrome browser process clones its own app bundle into
 ``<user dir>/X/com.google.Chrome.code_sign_clone/code_sign_clone.XXXXXX`` (an APFS clone; the main
@@ -14,8 +14,7 @@ What this module does. One pass over the clone root, run by the cdp-reaper job (
   * only the direct children of the root whose name is exactly ``code_sign_clone.`` plus six letters
     or digits, that are real directories (not symlinks) and whose resolved path is still in the root;
   * a clone is IN USE, and kept, when a process has a file under it open or mapped. One scan of
-    every open and mapped file of this user's processes (omo_proc.scan_open_files; it was
-    one full lsof before), read two ways. (A) By path: a name the kernel reports under the clone.
+    every open and mapped file of this user's processes (omo_proc.scan_open_files), read two ways. (A) By path: a name the kernel reports under the clone.
     (B) By file identity (device + inode) of the clone's main executable, because that executable is
     a hard link of the running binary and the kernel reports just one of its names (under
     /Applications, or under any other clone of the same binary; measured on the live host with lsof,
@@ -24,8 +23,9 @@ What this module does. One pass over the clone root, run by the cdp-reaper job (
     clone for as long as any such browser runs. (B) therefore counts a process only when it is the
     clone's maker (it started at most MAKER_WINDOW_S before the clone was born; measured: the clone
     appears 0.3 s after the browser starts), or when the executable is no longer the one installed
-    in Google Chrome.app (an old version still running, like a desktop Chrome left open across an
-    update: every clone of its binary is kept, since those clones are now its only copies);
+    in Google Chrome.app nor the pinned login Chrome (an old version still running, like a desktop
+    Chrome left open across an update: every clone of its binary is kept, since those clones are now
+    its only copies);
   * a clone born less than an hour ago is kept (the browser that made it may still be starting);
   * everything else is deleted, one log line each (name, birth time, seconds taken). Any error is
     logged and the pass goes on; nothing here raises to the caller.
@@ -74,11 +74,20 @@ MIN_PASS_S = 15                          # with less time than this left, a pass
 CHROME_EXE_IN_APPS = "Google Chrome.app/Contents/MacOS/Google Chrome"
 
 
-def installed_exes() -> Tuple[str, str]:
-    """The system-wide and the per-user install of Google Chrome (the per-user Applications folder is
-    omniseek.where's, imported here and not at the top: the file is also loaded on its own by path)."""
+def installed_exes() -> Tuple[str, ...]:
+    """The system-wide and the per-user install of Google Chrome, plus the pinned one the two login
+    browsers run from the Nix store (where.login_chrome). Its
+    clones count as current like those of /Applications: without it every clone of the pinned binary
+    would read as an old binary's and be kept while any login browser runs. (The store is its own APFS
+    volume, so Chrome may not manage to clone it into the per-user X directory at all; then nothing of
+    it shows up here.) omniseek.where is imported here and not at the top: the file is also loaded on its
+    own by path."""
     from omniseek import where
-    return ("/Applications/" + CHROME_EXE_IN_APPS, str(where.user_applications() / CHROME_EXE_IN_APPS))
+    exes = ["/Applications/" + CHROME_EXE_IN_APPS, str(where.user_applications() / CHROME_EXE_IN_APPS)]
+    pinned = where.login_chrome()
+    if pinned is not None:
+        exes.append(str(pinned))
+    return tuple(exes)
 
 
 def _tool(name: str, path: str) -> str:

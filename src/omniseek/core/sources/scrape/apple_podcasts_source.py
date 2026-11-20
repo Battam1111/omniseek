@@ -41,7 +41,7 @@ SEARCH_URL = "https://itunes.apple.com/search"
 
 
 async def _alatest_episode_mp3(feed_url: str) -> Optional[str]:
-    """Async replacement of the deleted sync ``_latest_episode_mp3`` (11-04, this is the only one now): SAME best-effort RSS fetch (now
+    """Async ``_latest_episode_mp3``: SAME best-effort RSS fetch (now
     ``await http.aget_text``, a COROUTINE not a held pool thread) + the SAME pure-CPU XML parse /
     enclosure pick (``_feed_latest_mp3``, through ``aparse``: a show's feed with years of episodes runs
     to megabytes, so a large one is parsed in the process lane). Any failure returns None."""
@@ -94,7 +94,7 @@ class ApplePodcastsAdapter(BaseScrapeAdapter):
     # BOTH layers get an async mirror, like `_stackexchange`'s abuild_documents awaiting the answer
     # fetch. The sync `_raw_fetch` / `_to_documents` / `search` are UNTOUCHED.
     async def _araw_fetch(self, query: str, limit: int) -> Optional[Any]:
-        """Async replacement of the deleted sync `_raw_fetch` (11-04, this is the only one now): SAME keyless iTunes Search GET, now `await http.aget_json`."""
+        """Async `_raw_fetch`: SAME keyless iTunes Search GET, now `await http.aget_json`."""
         return await http.aget_json(
             SEARCH_URL,
             params={"media": "podcast", "term": query, "limit": limit},
@@ -102,7 +102,7 @@ class ApplePodcastsAdapter(BaseScrapeAdapter):
         )
 
     async def _ato_documents(self, raw: Any, query: str, limit: int) -> list[Document]:
-        """Async replacement of the deleted sync `_to_documents` (11-04, this is the only one now) (this source's `_to_documents` ITSELF egresses per-record:
+        """Async `_to_documents` (this source's `_to_documents` ITSELF egresses per-record:
         the TOP show's `_latest_episode_mp3` RSS fetch). Reproduced line-for-line, but that one
         enrichment egress is AWAITED (`_alatest_episode_mp3`). SAME top-result-only cap (idx == 0),
         SAME order, SAME per-record skip-on-fail, SAME markdownify-free content build (pure CPU, on

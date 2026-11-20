@@ -18,7 +18,7 @@ COLT, COLM, CoRL, ICRA, IROS, KR, LOG, WACV, ... — and rank each conference by
 its **nearest upcoming deadline**. Conferences whose latest known deadline has
 passed (awaiting next CFP) sort last but still appear, so the venue is visible.
 
-Requires PyYAML (added to pyproject in phase 12).
+Requires PyYAML.
 """
 
 from __future__ import annotations
@@ -144,7 +144,7 @@ class ConferenceDeadlinesAdapter(SourceBase):
         return " ".join([(query or "").strip(), *toks]).strip()
 
     async def _afetch_confs(self) -> list[dict]:
-        """Async replacement of the deleted sync ``_fetch_confs`` (11-04, async step seven; this is the only one now). SAME cache key + TTL + INCLUDE_SUBS
+        """Async ``_fetch_confs``. SAME cache key + TTL + INCLUDE_SUBS
         filter as the sync path; only the two blocking legs change:
           - the disk cache read + write -> anyio.to_thread.run_sync (get/set do file IO);
           - the raw ``httpx.get`` -> ``http.aget`` (shared pool + SSRF guard + cache_only + the
@@ -200,7 +200,7 @@ class ConferenceDeadlinesAdapter(SourceBase):
         return None
 
     async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async replacement of the deleted sync ``search`` (11-04, this is the only one now): the async omniseek_search fan-out awaits this DIRECTLY
+        """Native-async ``search``: the async omniseek_search fan-out awaits this DIRECTLY
         (no held pool thread), so the dominant NETWORK wait — the one ~346KB YAML fetch — costs a
         COROUTINE, not a thread. Mirrors ``search`` line-for-line, changing ONLY the egress+cache
         leg: it awaits ``_afetch_confs`` (shared async leaf + off-loop disk cache, SAME cache key)

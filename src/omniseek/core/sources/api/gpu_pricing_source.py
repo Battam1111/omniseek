@@ -42,11 +42,11 @@ def _price(s) -> Optional[float]:
 
 
 async def _aload() -> list[dict]:
-    """Native-async replacement of the deleted sync ``_load`` (11-04, this is the only one now): SAME in-memory ``_ROWS`` cache (async + sync share the
+    """Native-async ``_load``: SAME in-memory ``_ROWS`` cache (async + sync share the
     process global; there is NO disk cache here, so nothing hops off the loop), and the RAW
     ``httpx.get(...).text`` egress swapped to the shared async leaf (``await http.aget_text`` → the
     shared pool + SSRF guard + cache_only + 30MB cap; a failure is already logged + diag.note'd by the
-    leaf, so the source's own ``diag.note("gpu_pricing.csv", ...)`` is no longer re-implemented). Byte-
+    leaf, so the source's own ``diag.note("gpu_pricing.csv", ...)`` is not re-implemented). Byte-
     identical otherwise: the ``_ROWS`` short-circuit, the CSV parse (pure CPU, a few-KB file) and the
     ``_ROWS`` write stay ON the loop, exactly as ``_load`` does them. A None (fetch failed) returns []
     WITHOUT populating ``_ROWS``, exactly as ``_load``'s except branch returns [] without caching."""
@@ -80,7 +80,7 @@ class GPUPricingAdapter(SourceBase):
     )
 
     async def asearch(self, query: str, limit: int = 12) -> list[Document]:
-        """Native-async replacement of the deleted sync ``search`` (11-04, this is the only one now): the fan-out awaits this DIRECTLY (no pool thread), so
+        """Native-async ``search``: the fan-out awaits this DIRECTLY (no pool thread), so
         this source's dominant NETWORK wait (the one-time CSV fetch) costs a coroutine, not a held
         thread. Mirrors ``search`` line-for-line: only the load swaps to the async ``_aload`` (async
         egress; the in-memory ``_ROWS`` cache is shared with ``search``); the term filter / cheapest-

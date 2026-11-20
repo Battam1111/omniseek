@@ -72,22 +72,17 @@ _API = "https://export.arxiv.org/api/query"
 _MATCHED_KEY = "omniseek_matched_words"
 
 # arXiv load-guard: the shared BackendGuard (the concurrency cap + rate pacer + circuit breaker that
-# _s2 / _openalex / _github already ride). arXiv rate-limits the export host aggressively (this adapter
-# migrated off the arxiv lib for exactly that). The OLD sema bounded CONCURRENCY but NOT req/s, so 4
-# concurrent workers could still burst past arXiv's ~3/s politeness line into a 429, and a throttled/dead
-# host made every request eat the full timeout. The guard adds a min-interval RATE pacer (spaces request
+# _s2 / _openalex / _github already ride). arXiv rate-limits the export host aggressively. A semaphore
+# bounds CONCURRENCY but NOT req/s, so 4 concurrent workers could still burst past arXiv's politeness
+# line into a 429, and a throttled/dead host would make every request eat the full timeout. The guard adds a min-interval RATE pacer (spaces request
 # STARTS so a fan-out can't spike the rate), a breaker (consecutive failures -> fail fast + serve cache
 # instead of hammering), and backlog fail-fast. SHARED sync<->async so the async path cannot double
 # the concurrency OR the rate. Order: breaker -> permit -> start slot -> record ok/fail (the
-# permit-first hold, see _guard.BackendGuard.ahold). The in-flight cap was 4 until 2026-09-28 and is
-# now the declared 1 (see below).
+# permit-first hold, see _guard.BackendGuard.ahold). The in-flight cap is the declared 1 (see below).
 #
 # THE RATE IS arXiv's NUMBER, NOT A TUNABLE. arXiv's API terms say ONE request every THREE seconds.
-# This constant read 0.35 until 2026-08-19, with a comment calling that "arXiv's politeness rate":
-# the 3 was read as 3 req/s instead of 1 req/3s, so we ran ~9x over the line. The comment also
-# recorded the reason it was set that wide, "too wide would get arXiv deadline-dropped in the
-# ~95-source sweep", which is the actual root cause: a published rate limit was traded away for
-# sweep coverage. arXiv collected on 2026-08-19 by escalating our egress from slow (17s) to
+# Reading the 3 as 3 req/s (0.35 s) runs ~9x over the line, trading a published rate limit for sweep
+# coverage; on 2026-08-19 arXiv answered by escalating our egress from slow (17s) to
 # HTTP 429 "Rate exceeded." to no response at all, and because every failure path below degraded
 # to [], every arxiv query returned an EMPTY RESULT instead of an alarm.
 # So: being deadline-dropped in a wide sweep costs the queued callers; being rate-limited costs
@@ -95,8 +90,8 @@ _MATCHED_KEY = "omniseek_matched_words"
 #
 # THE NUMBERS NOW LIVE IN THE DECLARATION (upstreams.json "arxiv", checked 2026-09-28 against
 # info.arxiv.org/help/api/tou.html): "make no more than one request every three seconds, and limit
-# requests to a single connection at a time". Until 2026-09-28 this module allowed 4 requests in
-# flight, which the 3 s start spacing does not cover: a request slower than 3 s overlaps the next.
+# requests to a single connection at a time". 4 requests in flight would not be
+# covered by the 3 s start spacing: a request slower than 3 s overlaps the next.
 # The guard is the registry's ONE arXiv guard, so arxiv search, fetch_url, the health probe and
 # enrich's integrity lookup (through the shared http client's host gate) all queue on it.
 _guard = upstreams.guard("arxiv", log=logger)
@@ -437,7 +432,7 @@ class ArxivAdapter(BaseAPIAdapter):
 
     # ------------------------------------------------------------- async twins
     async def _araw_fetch(self, query: str, limit: int) -> list:
-        """Async replacement of the deleted sync ``_raw_fetch`` (11-04, this is the only one now): BYTE-FAITHFUL mirror — same URL, same params (search_query,
+        """Async ``_raw_fetch``: BYTE-FAITHFUL mirror — same URL, same params (search_query,
         the max(1,min(limit,100)) clamp and the sort, all built by the one _search_params), the same
         relaxed plan (_relax.arun over the same search and count requests), same reader, same
         _finish. ONLY the shared-http egress is swapped for its async form: _arxiv_get_text -> await
@@ -608,16 +603,15 @@ class ArxivAdapter(BaseAPIAdapter):
     async def ahealth_check(self) -> tuple[Optional[bool], str]:
         # Light DIRECT probe with its OWN short timeout.
         #
-        # A 429 is NOT health, however alive the host is. Until 2026-08-19 this returned True on
-        # 429, reasoning "API alive, merely throttling us -> search falls back to cache / degrades".
-        # But a rate-limited arXiv serves NOTHING live: the guard's breaker opens and every search
-        # returns []. Calling that ok is precisely what let a 9x-over-rate adapter sit green through
+        # A 429 is NOT health, however alive the host is ("API alive, merely throttling us" is the
+        # wrong reading): a rate-limited arXiv serves NOTHING live: the guard's breaker opens and every search
+        # returns []. Calling that ok let a 9x-over-rate adapter sit green through
         # a real outage. Same shape as the `blocked` class in the public health sweep: "answered,
         # but refused us" is its OWN state, not healthy and not down.
         #
         # A single probe also cannot see a RATE failure (one request gets through while real traffic
         # is refused), so check the breaker FIRST: it is the only thing here that reflects load. Open,
-        # it sends nothing, so nothing is verified: None (until 2026-10-04 this read False), with the
+        # it sends nothing, so nothing is verified: None, with the
         # reopening time; the searches it holds back return empty meanwhile.
         if _guard.is_open():
             return None, (_probe.breaker_open("arXiv, consecutive failures, typically HTTP 429",
@@ -625,7 +619,7 @@ class ArxivAdapter(BaseAPIAdapter):
                           + "; live searches return empty until it closes")
         try:
             # The probe is a real API request: it takes the same permit AND the same 3 s start slot
-            # as a search (it used to take only the in-flight permit, so a health sweep could land
+            # as a search (with only the in-flight permit a health sweep could land
             # inside another request's 3 s). Bounded by the check's deadline: no turn by then reports
             # "not probed" (None, not verified), never down and never healthy.
             async with _guard.ahold(_refuse, request_s=15):

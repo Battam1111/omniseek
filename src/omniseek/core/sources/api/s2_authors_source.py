@@ -2,7 +2,7 @@
 
 Resolves a researcher NAME to disambiguated author entities with the citation metrics ORCID
 lacks (h-index / citation count / paper count). OmniSeek's people-STRUCTURE reinforcement:
-the people domain previously rested on ORCID alone (a keyless single point flagged
+ORCID alone would be a keyless single point (flagged
 coverage_critical); this adds a SECOND, different-backend researcher-identity source, and pairs
 with omniseek_resolve_identity (OpenAlex) for cross-backend author disambiguation.
 
@@ -50,7 +50,7 @@ class S2AuthorsAdapter(BaseScrapeAdapter):
                      "not broad-fan-out fodder (the keyless S2 pool is rate-limited)")
 
     async def _araw_fetch(self, query: str, limit: int) -> Optional[Any]:
-        """Async replacement of the deleted sync ``_raw_fetch`` (11-04, this is the only one now): same URL, same params, same timeout; ONLY the shared-http
+        """Async ``_raw_fetch``: same URL, same params, same timeout; ONLY the shared-http
         egress swaps http.get_json -> await http.aget_json. Everything else verbatim."""
         return await http.aget_json(
             SEARCH_URL,
@@ -116,7 +116,7 @@ class S2AuthorsAdapter(BaseScrapeAdapter):
     async def ahealth_check(self) -> tuple[Optional[bool], str]:
         """Liveness via a tiny author search. The shared keyless S2 pool 429s under load; a 429 is
         S2 rate-limiting us: it answered, but not whether author search serves, so it is NOT
-        verified (None; until 2026-10-04 it read healthy). http.get_json raise_for_status-es a 429
+        verified (None). http.get_json raise_for_status-es a 429
         down to None (losing the status), so probe with a direct call here that does NOT raise, and
         read the status itself. A busy declared gate sends nothing, so that case is None too."""
         try:

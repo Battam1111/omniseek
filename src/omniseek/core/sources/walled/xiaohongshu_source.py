@@ -189,9 +189,9 @@ def _parse_count(s) -> Optional[int]:
 
 
 # ── note images: the page's own initial data, not what the page has drawn (2026-10-08) ─────────
-# The old read scanned the DOM <img> tags after one or two screens of scrolling, so a carousel note
-# returned only the slides the page had already rendered (4 of 17 on a real note), capped at 12, and
-# also picked up images posted in the comments. The note page ships its whole note in
+# Scanning the DOM <img> tags after one or two screens of scrolling returns only the slides the page
+# has already rendered (4 of 17 on a real note), capped at 12, and also picks up images posted in the
+# comments. The note page ships its whole note in
 # window.__INITIAL_STATE__.note.noteDetailMap[<note id>].note, and that object's imageList holds
 # every slide in order. Reading it costs no request and no carousel click: it is already in the page.
 _IMAGE_SCENE_DEFAULT = "WB_DFT"  # the full-size scene; WB_PRV is the small preview
@@ -430,13 +430,6 @@ def _flatten_comment_thread(items: list, replies: Optional[list] = None) -> tupl
     return out, counts
 
 
-def _flatten_captured_comments(items: list, replies: Optional[list] = None) -> list[dict]:
-    """Captured comment/page comment dicts (and optional comment/sub/page replies) -> the
-    [{author,text,likes,id[,images]}] rows the fetch_url doc-build renders; see
-    _flatten_comment_thread for the order. A picture-only comment reads "[图片]"."""
-    return _flatten_comment_thread(items, replies)[0]
-
-
 # Emoji in a comment travel as codes like "[笑哭R]" in the API text and as <img> in the page, which
 # innerText drops; whitespace differs between the two as well. Both are removed before comparing.
 _EMOJI_CODE_RE = re.compile(r"\[[^\[\]\s]{1,10}\]")
@@ -499,9 +492,9 @@ def _card_hint(comment_count: Optional[int]) -> str:
     naming what is MISSING, including the comment thread.
 
     On this platform the post is the hook and the COMMENTS are the dataset: a note whose body is one
-    line plus a screenshot routinely carries the actual numbers in 50+ replies. The old text only
-    promised a "full note body", so an agent that skipped omniseek_read believed it had merely lost some
-    prose, when it had lost the substance. Naming the count (when the card carries one) also lets the
+    line plus a screenshot routinely carries the actual numbers in 50+ replies. A hint that only
+    promises a "full note body" lets an agent that skipped omniseek_read believe it merely lost some
+    prose, when it lost the substance. Naming the count (when the card carries one) also lets the
     agent pick WHICH notes to open instead of opening in like-order."""
     if comment_count is None:
         return ("(card preview; call omniseek_read on this url for the full note body AND its comment "
@@ -871,7 +864,7 @@ def _note_scene(page, boxes: list, responses: list) -> None:
 
 # Jittered min-interval between LIVE calls (burst guard). A FIXED interval is itself a bot
 # signature (humans aren't metronomic), so roll a fresh value per call. The operator set the 5-11s
-# band (2026-06-11): drops the old fixed-15s signature, ~1.7x faster, still leaves a safety
+# band (2026-06-11): no fixed signature, ~1.7x faster than a fixed 15s, still leaves a safety
 # margin on the penalized 小号 (vs a flat 5s).
 MIN_INTERVAL_LO, MIN_INTERVAL_HI = 5.0, 11.0
 # Additive-only anti-ban jitter ON TOP of the operator's tuned 5-11s base band (never replaces it).
@@ -907,11 +900,11 @@ def _live_slot(timeout: float = _GATE_QUEUE_TIMEOUT):
     """Acquire the single live-call slot for the isolated 小号 Chrome (9223): serialize every
     live call + enforce the jittered min-interval by WAITING in a queue, never by rejecting.
 
-    Fixes the two concurrency bugs in the old _gate_ok()/_mark_call() pair: (a) reject dropped
-    BREADTH — a concurrent name-called xhs call within the interval got [] (silently, looking
-    like 'no results') instead of waiting its turn (铁律 1); (b) check-then-act was NON-ATOMIC —
-    two concurrent calls could both pass _gate_ok() before either _mark_call()'d, then fire at
-    once → a burst that bans the penalized 小号. Here both are impossible: one flow at a time,
+    Two concurrency faults this rules out: (a) rejecting drops BREADTH — a concurrent name-called
+    xhs call within the interval would get [] (silently, looking like 'no results') instead of
+    waiting its turn (铁律 1); (b) a NON-ATOMIC check-then-act lets two concurrent calls both pass
+    the check before either marks, then fire at once → a burst that bans the penalized 小号. Here
+    both are impossible: one flow at a time,
     each spaced a full jittered interval AFTER the previous flow ended.
 
     Yields ``(ok, reason)``. On ok=True the caller runs its live flow inside the ``with``; the
@@ -1074,6 +1067,25 @@ def _login_wall(page) -> bool:
         pass
     # No real search box at all ⇒ can't search anyway; treat as wall.
     return True
+
+
+def _login_marks(page) -> dict:
+    """What _login_wall read, for the login-verdict record (omniseek.core.login_log): whether a login
+    overlay is visible, the real search box's placeholder (the site's own words: "搜索小红书" logged in,
+    "登录探索更多内容" a guest) and the page's path."""
+    from urllib.parse import urlsplit
+    marks: dict = {"login_overlay": _login_overlay(page), "search_placeholder": None}
+    try:
+        real = page.locator("input#search-input").first
+        if real.count() > 0:
+            marks["search_placeholder"] = real.get_attribute("placeholder") or ""
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        marks["path"] = urlsplit(page.url or "").path
+    except Exception:  # noqa: BLE001
+        pass
+    return marks
 
 
 # ── comment extraction (2026-06-11, exhaustive v2 2026-06-11) ─────────────────
@@ -1281,8 +1293,8 @@ class XiaohongshuAdapter(SourceBase):
             return [Document.model_validate(d) for d in cached]
         if cache.cache_only():
             # A cache-only collect that missed is a miss, not a browser failure: stop BEFORE the
-            # live slot. Before 2026-10-07 the miss went on into cdp_call, which raised
-            # CacheOnlyMiss, and the except below counted it as a CDP failure; three such
+            # live slot. Going on into cdp_call raises
+            # CacheOnlyMiss, which the except below would count as a CDP failure; three such
             # collects in 20s tripped the 6h 小号 backoff (2026-10-07 17:45 CST).
             diag.note("xiaohongshu.cache_only", body="cache-only collect: no cached result yet (no live call, not a query miss)")
             return []
@@ -1310,6 +1322,7 @@ class XiaohongshuAdapter(SourceBase):
         boxes: list = []
         responses: list = []
         _v2_seen: list = []
+        marks: dict = {}   # the login-wall marks of a page read as a wall (_login_marks)
 
         def _flow(page) -> tuple[str, Optional[str]]:
             result = None
@@ -1363,6 +1376,7 @@ class XiaohongshuAdapter(SourceBase):
             _cdp.goto_retrying(page, HOME_URL, timeout=30000, budget_s=_NAV_BUDGET_S)
             _human.read_dwell()
             if _login_wall(page):
+                marks.update(_login_marks(page))
                 return ("login", None)
             # 2) Locate the search box; human mouse-move + click + type + Enter.
             box, sel = _find_search_box(page)
@@ -1401,6 +1415,7 @@ class XiaohongshuAdapter(SourceBase):
                 # not the classic ones, so only a visible login overlay counts as a wall here (the
                 # classic check reads a missing input#search-input as logged out).
                 if _login_overlay(page):
+                    marks.update(_login_marks(page))
                     return ("login", None)
             else:
                 try:
@@ -1411,6 +1426,7 @@ class XiaohongshuAdapter(SourceBase):
                 except Exception:  # noqa: BLE001
                     pass
                 if _login_wall(page):
+                    marks.update(_login_marks(page))
                     return ("login", None)
             _human.action_pause()
             # 4) Scroll the feed ADAPTIVELY. Each scroll fires one paginated /search/notes XHR
@@ -1440,6 +1456,12 @@ class XiaohongshuAdapter(SourceBase):
             diag.note("xiaohongshu.cdp", exc=exc, body="CDP search flow raised (9223 Chrome wedged / timeout?)")
             return []
 
+        if status in ("login", "ok"):
+            from omniseek.core import login_log
+            answers = [{k: r.get(k) for k in ("v", "status", "code", "success", "msg", "items") if k in r}
+                       for r in responses[-3:]]
+            login_log.record("xiaohongshu", "out" if status == "login" else "in", by="adapter",
+                             path="search", search_notes_answers=answers, **marks)
         if status == "login":
             _trip_backoff("login wall during search")
             logger.warning("Xiaohongshu login wall — re-login needed in CDP Chrome")
@@ -1505,7 +1527,7 @@ class XiaohongshuAdapter(SourceBase):
         host = urlparse(url).hostname or ""
         if not _SEALED and "rednote.com" not in host and not host.endswith("xiaohongshu.com"):
             return None
-        # the CDP read blocks (and while sealed, _read_url says so in the log, as before): a worker thread
+        # the CDP read blocks (and while sealed, _read_url says so in the log): a worker thread
         return await anyio.to_thread.run_sync(self._read_url, url, limiter=portal.IO_LANE)
 
     def _read_url(self, url: str) -> Optional[Document]:
@@ -1514,7 +1536,7 @@ class XiaohongshuAdapter(SourceBase):
             return None
         host = urlparse(url).hostname or ""
         # This adapter owns rednote.com and xiaohongshu.com note links, so every 小红书 read rides the
-        # international account (the mainland 9224 source, sealed 2026-10-07, was deleted).
+        # international account.
         if "rednote.com" not in host and not host.endswith("xiaohongshu.com"):
             return None
         if cache.cache_only():
@@ -1544,6 +1566,7 @@ class XiaohongshuAdapter(SourceBase):
         # the caller's url. _goto_note_dual_host still falls back rednote -> xiaohongshu when
         # rednote.com fails at the network layer; whether a read is a guest one is decided by the
         # host the page actually landed on (see _flow), never by the link passed in.
+        fetch_marks: dict = {}   # the login-wall marks of a page read as a wall (_login_marks)
         parsed = urlparse(url)
         _id_m = re.search(r"/(?:explore|search_result|discovery/item)/([0-9a-f]{24})", parsed.path)
         nav_note_id = _id_m.group(1) if _id_m else None
@@ -1638,6 +1661,7 @@ class XiaohongshuAdapter(SourceBase):
                     # xiaohongshu.com (the network-layer fallback, or a non-note link there) is the
                     # GUEST view of one link, so it must not trip the 6h account backoff.
                     return ("guest_wall", None, [], {}, (None, None))
+                fetch_marks.update(_login_marks(page))
                 return ("login", None, [], {}, (None, None))
             _human.scroll_like_reading(page, screens=random.randint(1, 2))
             _human.read_dwell()
@@ -1709,6 +1733,8 @@ class XiaohongshuAdapter(SourceBase):
         video_url, video_src = video
 
         if status == "login":
+            from omniseek.core import login_log
+            login_log.record("xiaohongshu", "out", by="adapter", path="fetch_url", **fetch_marks)
             _trip_backoff("login wall during fetch_url")
             diag.note("xiaohongshu.login_wall",
                       body="小号 logged OUT of the 9223 CDP Chrome — re-login via VNC required (note body unreadable until then)")
@@ -1744,9 +1770,9 @@ class XiaohongshuAdapter(SourceBase):
 
         # The note's images: the page's own state when it has them (every slide, in order), else
         # the DOM scan. Comment pictures never enter media; they go to metadata.comment_media.
-        # The state comes from the page HTML. The live read through page.evaluate this flow used to
-        # make never saw window.__INITIAL_STATE__ (patchright's isolated world, see
-        # _cdp.page_world_evaluate), so the HTML copy is the one that has always answered.
+        # The state comes from the page HTML. A live read through page.evaluate never sees
+        # window.__INITIAL_STATE__ (patchright's isolated world, see _cdp.page_world_evaluate), so
+        # the HTML copy is the one that answers.
         state_note = _state_note_from_html(html, nav_note_id)
         state_video = bool(state_note) and state_note.get("type") == "video"
         state_images = _image_urls(state_note.get("imageList")) if state_note else []
@@ -1762,7 +1788,7 @@ class XiaohongshuAdapter(SourceBase):
             list(cdata.get("captured_images") or []) + [c for c in comments if isinstance(c, dict)],
             cdata.get("dom_comment_images") or [], images)
         if not _detail_has_substance(title, body, images, comments):
-            # NAME THE CAUSE. The old message ("navigation succeeded but returned nothing") is true
+            # NAME THE CAUSE. A message like "navigation succeeded but returned nothing" is true
             # and useless: it tells the caller a page was blank, not why or what to do instead, so
             # a real caller spent a long session hunting the wrong layer and nearly patched the MCP
             # handler. The dominant cause is a URL with no xsec_token: 小红书 note pages are only
@@ -1797,13 +1823,13 @@ class XiaohongshuAdapter(SourceBase):
             content = body or ""
 
         # Comments carry the crowd-sourced 经验, and they are returned ONCE: structured, in
-        # metadata.comments. They used to ALSO be rendered into the body, so every note shipped its
-        # whole comment thread twice; a 4-note omniseek_gather measured 68,106 chars, about half of it the
-        # same text again, which overflowed the tool channel and effectively halved how many notes a
-        # call could carry. Nothing is lost by dropping the inline copy: the structured list is
+        # metadata.comments. Rendering them into the body too would ship every note's whole comment
+        # thread twice: a 4-note omniseek_gather measured 68,106 chars, about half of it the same text
+        # again, which overflowed the tool channel and effectively halved how many notes a call could
+        # carry. Nothing is lost without the inline copy: the structured list is
         # strictly richer (per-comment author / text / likes, machine-readable), and this path does
         # NOT feed the recall index (only adapter.search results are ingested), so comment text stays
-        # exactly as searchable as before. The "取到 N / 共 M" completeness signal survives here,
+        # exactly as searchable. The "取到 N / 共 M" completeness signal survives here,
         # because an incomplete harvest must stay VISIBLE.
         if comments:
             short = f" / 共 {declared} 条" if declared else ""
@@ -1830,11 +1856,10 @@ class XiaohongshuAdapter(SourceBase):
     def health_check(self) -> tuple[Optional[bool], str]:
         """Probe transport state only, without touching the account session.
 
-        The old probe navigated the international homepage, waited like a human, and then
-        inspected the login wall. That is a capability probe with a 60s CDP budget, while the
-        source-health fan-out has a 25s hard deadline. It therefore reported ``timeout`` even
-        when named search/read calls were healthy, and it added an unnecessary account touch to
-        every health sweep. Named search/read remains the capability oracle; this probe only
+        Navigating the international homepage, waiting like a human and inspecting the login
+        wall is a capability probe with a 60s CDP budget, while the source-health fan-out has a
+        25s hard deadline: it would report ``timeout`` even when named search/read calls are
+        healthy, and add an unnecessary account touch to every health sweep. Named search/read remains the capability oracle; this probe only
         answers whether the isolated CDP transport is reachable. That transport is OUR browser,
         not xiaohongshu, so a reachable one is None (not verified), never True.
         """

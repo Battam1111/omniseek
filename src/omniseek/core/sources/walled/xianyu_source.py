@@ -1,8 +1,8 @@
 """闲鱼 (goofish.com): second-hand listings on sale, read through the operator's logged-in 闲鱼 小号 on 9222.
 
 Why a walled source (2026-10-24): goofish.com answers an anonymous search with
-``RGV587_ERROR::SM`` and a passport login URL (the login wall,
-seen 2026-10-24), so plain HTTP and web search see none of the live
+``RGV587_ERROR::SM`` and a passport login URL (the login wall; recorded in
+the xianyu fixtures in git at f1da87a4 under tests/fixtures/xianyu/), so plain HTTP and web search see none of the live
 listings, prices, seller credit or service tags. the operator asked for it (10-24).
 
 How it reads (the acquisition choice, recon 2026-10-24 on xy-site 0.0.179):
@@ -268,7 +268,7 @@ def _logged_in(cap: dict) -> Optional[bool]:
 
 
 # The search call answered with the Taobao login page itself (HTML, <title>登录</title>) instead of mtop JSON:
-# seen live 2026-10-24 in the 9222 browser while logged out.
+# seen live 2026-10-24 in the 9222 browser while logged out (recorded in a fixture in git at f1da87a4).
 _HTML_LOGIN_RE = re.compile(r"<title>\s*登录\s*</title>|login\.taobao\.com|passport\.goofish\.com", re.I)
 
 
@@ -336,6 +336,38 @@ def classify(cap: dict) -> tuple[str, str, Any]:
         if c in ret:
             return "risk", f"{c} ({ret[:60]})", None
     return "unknown", f"search ret {ret[:80]!r} not recognised", text
+
+
+def _record_login(cap: dict, kind: str, detail: str) -> None:
+    """One login verdict (omniseek.core.login_log) from what this browser call saw: loginuser.get's HTTP
+    status and ret (mtop's "CODE::message"), the search answer's status and ret, the page's path and the
+    verification marks. Never the answer's data (the account's nickname and id ride in it)."""
+    from omniseek.core import login_log
+    seen: dict = {"kind": kind, "detail": detail, "page": urlsplit(str(cap.get("page_url") or "")).path}
+    row = cap.get("login") or {}
+    if row:
+        seen["loginuser_get_status"] = row.get("status")
+        try:
+            seen["loginuser_get_ret"] = _ret(json.loads(row.get("text") or ""))
+        except ValueError:
+            seen["loginuser_get_ret"] = "not JSON"
+    rows = list(cap.get("search") or [])
+    if rows:
+        seen["search_status"] = rows[-1].get("status")
+        try:
+            seen["search_ret"] = _ret(json.loads(rows[-1].get("text") or ""))
+        except ValueError:
+            seen["search_ret"] = "login page (HTML)" if _html_login_page(rows[-1].get("text") or "") else "not JSON"
+    dom = cap.get("dom") or {}
+    seen.update({k: dom.get(k) for k in ("baxia", "middleware") if k in dom})
+    logged = _logged_in(cap)
+    if kind == "login":
+        verdict = "out"
+    elif kind == "ok" or logged:
+        verdict = "in"
+    else:
+        verdict = "unknown"
+    login_log.record(NAME, verdict, by="adapter", path="search", **seen)
 
 
 # ── decoding listings ────────────────────────────────────────────────────────────────────────────
@@ -721,6 +753,7 @@ class XianyuAdapter(BaseCDPAdapter):
             diag.note(f"{NAME}.daily_cap", url=url, body=msg)
             return "capped", [], msg
         kind, detail, payload = classify(cap)
+        _record_login(cap, kind, detail)
         if kind == "login":
             diag.note(f"{NAME}.login", url=url, body=LOGIN_MSG)
             return "login", [], LOGIN_MSG + f"（{detail}）"

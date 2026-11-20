@@ -15,7 +15,7 @@ fan-out. Only sources whose cache key excludes the query qualify (warming once h
     LOGGED-IN zhihu access on the warm cadence, low-rate + human-plausible, same kind as the
     watchtower's periodic CDP probes)
 
-REFRESH-IF-NEAR-EXPIRY (2026-06-16): each warm uses a cache REFRESH MARGIN, not a blanket
+REFRESH-IF-NEAR-EXPIRY: each warm uses a cache REFRESH MARGIN, not a blanket
 fresh=True. fresh=True FORCE-bypasses the cache, so it re-paid the full live cost EVERY 30-min
 cycle on data whose TTL is 2h to 6h: researcher_watch + the ~39 org_watch labs are OpenAlex-
 backed, so the warmer self-generated ~72 OpenAlex calls/cycle x 48 cycles/day ~= 3,456 calls/day
@@ -32,12 +32,11 @@ it changes no result, only whether a later broad pays the live cost.
 
 WHY deadline_s=None on the warm fetch: the warmer is a background daemon whose job is to pay slow
 costs off the critical path, so no per-call backstop cuts a slow source short; each source keeps its
-own internal timeouts + the per-source try/except below, and warm_loop wraps the whole cycle. (It was
-first chosen because the old thread backstop dropped contextvars; the fetch now runs on the service
+own internal timeouts + the per-source try/except below, and warm_loop wraps the whole cycle. (The fetch runs on the service
 loop through omniseek.core.portal, which carries this thread's whole context, the refresh margin and the
 initiator included, into the coroutine.)
 
-WHY in-service (2026-06-14): the standalone launchd cron (eye-prewarm) was observed
+WHY in-service: the standalone launchd cron (eye-prewarm) was observed
 to fire only ONCE at load and never on its 30-min StartInterval (runs=1 after 14.5h), so the
 warmed caches silently expired (6h TTL) and Lever B's speedup evaporated in production. Tying the
 warmer to the always-on eye-http service (a daemon thread) makes it fire reliably. (That dead plist
@@ -75,8 +74,8 @@ WARM_INTERVAL_S = 1800  # 30 min — well under every warmed source's TTL (2h/3h
 # (plus slack for the warm pass's own duration + scheduling jitter) so any key that would lapse
 # before the NEXT cycle is refreshed THIS cycle: caches never go cold, yet a comfortably-warm key
 # is left untouched. With a 6h TTL this turns ~every-cycle refetch into ~once-per-TTL (~11 cycles),
-# i.e. ~11x fewer warm OpenAlex calls. The old fresh=True (full bypass every cycle) was a ~12x
-# over-refresh of the OpenAlex-backed sources (researcher_watch + the org_watch labs).
+# i.e. ~11x fewer warm OpenAlex calls (fresh=True, a full bypass every cycle, would over-refresh the
+# OpenAlex-backed sources, researcher_watch + the org_watch labs, about 12x).
 REFRESH_MARGIN_S = WARM_INTERVAL_S + 300
 
 

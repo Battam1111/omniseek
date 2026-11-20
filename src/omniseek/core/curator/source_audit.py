@@ -383,8 +383,8 @@ def gather_source_dossier() -> dict:
         is_cdp_or_credentialed = needs_credentials
         # 5b. watchdog_untracked: the watchdog never probed it (CDP / explicit_only / brand-new →
         #    health 'unknown'), so there is NO failure evidence to call it DEAD on. SPLIT OUT of
-        #    is_cdp_or_credentialed (which used to be `needs_credentials OR not-tracked` and so
-        #    mislabeled public no-auth APIs like crossref/nserc as 'credentialed'). BOTH stay
+        #    is_cdp_or_credentialed (`needs_credentials OR not-tracked` would mislabel public no-auth
+        #    APIs like crossref/nserc as 'credentialed'). BOTH stay
         #    DEAD-exempt (see _RAISE_MATRIX["DEAD"]), so the prune protection is byte-unchanged.
         watchdog_untracked = name not in tracked
         # 6. deadline_starved: high timeout_rate ⇒ the yield was never fairly measured.

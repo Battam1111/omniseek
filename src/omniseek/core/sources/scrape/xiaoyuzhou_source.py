@@ -83,7 +83,7 @@ class XiaoyuzhouAdapter(SourceBase):
         return DEFAULT_PODCASTS
 
     async def _afetch_podcast(self, pid: str, name: str) -> list[Document]:
-        """Async replacement of the deleted sync ``_fetch_podcast`` (11-04, async step seven; this is the only one now) (mirrored line-for-line). Changes ONLY the two
+        """Async ``_fetch_podcast`` (mirrored line-for-line). Changes ONLY the two
         blocking waits per the conversion pattern:
           - the per-podcast disk cache read + write -> ``anyio.to_thread.run_sync`` (SAME cache key
             ``xiaoyuzhou/podcast/<pid>``, SAME ttl), so the file IO never runs on the event loop;
@@ -153,7 +153,7 @@ class XiaoyuzhouAdapter(SourceBase):
         )
 
     async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async replacement of the deleted sync ``search`` (11-04, this is the only one now) (mirrors it line-for-line). The async omniseek_search fan-out
+        """Native-async ``search`` (mirrors it line-for-line). The async omniseek_search fan-out
         awaits this DIRECTLY (no held pool thread), and the per-podcast egresses that ``search`` runs
         one after another become CONCURRENT coroutines on the one loop. Changes ONLY:
           - the per-podcast fetch loop -> ``asyncio.gather`` over ``_afetch_podcast`` (each does its

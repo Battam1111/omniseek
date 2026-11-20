@@ -17,11 +17,10 @@ Endpoints:
         Fetch posts by base36 id — used by fetch_url.
 
 Response shape: ``{"data": [<native Reddit submission JSON>]}`` — every field we
-need carries its original Reddit name, so the document mapping is unchanged from
-the old .json adapter. Throttle/errors come back as ``{"data": null, "error": …}``
+need carries its original Reddit name. Throttle/errors come back as ``{"data": null, "error": …}``
 with HTTP 200; we retry once.
 
-Behaviour note vs the old adapter: Arctic Shift has no relevance ranking, so we
+Behaviour note: Arctic Shift has no relevance ranking, so we
 sort keyword matches by recency (newest first) — which is what a monitor wants.
 
 Query semantics (probed live 2026-06-10): ``query`` is a STRICT AND of every
@@ -40,14 +39,14 @@ full-text ``query`` parameter answers HTTP 422 ``{"error": "Timeout. Maybe slow 
 a bit"}`` in about 1.2 s every time (r/PhD ``query=advisor``), while ``title=advisor``
 answers 200 with 25 items in 8 to 9 s on r/PhD, r/MachineLearning and r/GradSchool.
 Every keyword call therefore sends the same terms (same tiers, same relaxation) as
-``title``. Recall narrows to post titles (selftext is no longer searched), and the
+``title``. Recall narrows to post titles (selftext is not searched), and the
 docs say title search is not supported for very active subreddits (r/cscareerquestions
-timed out with 422 after about 6 s). Since 2026-10-05 a sub refused that way while its siblings in
+timed out with 422 after about 6 s). A sub refused that way while its siblings in
 the same round answered goes on a 24 h cannot-search list and is searched through the browser
 instead (see _settle_round); the CDP fallback still covers an all-empty fan-out. A Latin query that
-routes to no subreddit at all gets one reddit-wide search, marked ``sitewide``; since 2026-11-09 so
+routes to no subreddit at all gets one reddit-wide search, marked ``sitewide``; so
 does one whose routed subreddits all refused or matched nothing (those hits also carry
-``metadata.sitewide_reason`` and ``routed_subreddits``). Since 2026-11-10 the reddit-wide search is
+``metadata.sitewide_reason`` and ``routed_subreddits``). The reddit-wide search is
 ``site:reddit.com <query>`` through OmniSeek's shared web-search backend, the posts it names read from
 Arctic's ``/posts/ids`` (reddit 403s its own search.json in the browser); see _SITEWIDE_SITE. A
 search that was blocked or failed is noted as such (``reddit.cdp_search_blocked`` / ``_error``,
@@ -111,7 +110,7 @@ _SEARCH_TIMEOUT = 18
 # retries + relaxation ladder + the full 23-sub set + per-sub limit are all unchanged.
 _FANOUT_WORKERS = 5
 
-# Highest-value subs: PhD methodology + ML/AI + 海外长期落地 (SG/Canada). Since 2026-10-05 search
+# Highest-value subs: PhD methodology + ML/AI + 海外长期落地 (SG/Canada). Search
 # routing does not read this list (it uses the topic groups below); it stays for the other users of a
 # fixed curated set, and the subs added for routing are not appended here.
 DEFAULT_SUBREDDITS = [
@@ -773,8 +772,8 @@ def _sitewide_eligible(q: str, override_subs: Optional[list[str]]) -> bool:
 
 
 # ── Reddit-wide search: the shared web-search backend finds the posts, Arctic reads them ─────────
-# Until 2026-11-10 the reddit-wide step loaded www.reddit.com/search.json in the shared browser;
-# reddit answered it 403 (live, 11-09 23:53, "sim2real"). Now OmniSeek's shared web-search backend
+# reddit answers www.reddit.com/search.json 403 in the shared browser (live, 11-09 23:53,
+# "sim2real"). So OmniSeek's shared web-search backend
 # (_search_backend.asearch_web: its pacing, breakers and cooldowns, no request path of our own) runs
 # `site:reddit.com <query>`, the post ids come out of the result URLs, and Arctic's /posts/ids (the
 # lookup that keeps working while its search sheds load) returns the posts themselves.
@@ -855,9 +854,10 @@ def _note_sitewide_unsent(sent: str, exc: BaseException) -> None:
 
 
 def _note_sitewide_arctic_failed(ids: list[str]) -> None:
-    """Web search named posts but Arctic's id lookup failed (breaker open, refused, gate busy)."""
-    why = (f"the Arctic breaker is open for {_arctic_open_s():.0f}s more" if _arctic_guard.is_open()
-           else "the Arctic Shift /posts/ids lookup failed")
+    """Web search named posts but Arctic's id lookup failed (refused, gate busy, host down). The lookup
+    is sent even while the breaker is open (see _asearch_sitewide), so this is its own failure."""
+    why = "the Arctic Shift /posts/ids lookup failed" + (
+        f" (the breaker is open for {_arctic_open_s():.0f}s more)" if _arctic_guard.is_open() else "")
     diag.note("reddit.sitewide_arctic_failed",
               body=f"web search named {len(ids)} reddit posts but {why}, so none were read; "
                    "post URLs: " + " ".join(f"https://www.reddit.com/comments/{i}/" for i in ids))
@@ -865,12 +865,12 @@ def _note_sitewide_arctic_failed(ids: list[str]) -> None:
 
 def _cache_only_skip(where: str) -> bool:
     """True on a cache-only collect (omniseek_search staleness=cache_only) that missed the cache: reddit
-    then has nothing to read and must do no live work. Until 2026-10-08 such a miss ran the whole live
-    path: the reddit-wide branch reported a misleading ``reddit.sitewide_empty`` ("found nothing")
-    for a search that never ran; the Arctic fan-out slept through its retry backoffs and fed the
-    Arctic breaker with failures that never happened (enough of them tripped it for everyone); the
-    empty answer was then written under the query key (and an empty discovery list under each probed
-    term), which the next live search served as reddit's answer. Callers check this right after
+    then has nothing to read and must do no live work. Running the whole live path on such a miss
+    would make the reddit-wide branch report a misleading ``reddit.sitewide_empty`` ("found nothing")
+    for a search that never ran; the Arctic fan-out would sleep through its retry backoffs and feed the
+    Arctic breaker with failures that never happened (enough of them trip it for everyone); the
+    empty answer would be written under the query key (and an empty discovery list under each probed
+    term), which the next live search would serve as reddit's answer. Callers check this right after
     their cache miss; it writes nothing and records nothing."""
     if not cache.cache_only():
         return False
@@ -885,9 +885,9 @@ def _sitewide_key(q: str, limit: int) -> str:
 
 
 # ── Finance routing (the finance topic group) ────────────────────────────────────────────────
-# A finance query ("$NVDA earnings", "Oracle stock buyback") used to land in the career subs
-# (r/cscareerquestions / r/csMajors) because discovery keyed on generic-looking words and never
-# reached r/stocks. So when a query carries a FINANCE SIGNAL the topic route adds this small
+# A finance query ("$NVDA earnings", "Oracle stock buyback") would land in the career subs
+# (r/cscareerquestions / r/csMajors) because discovery keys on generic-looking words and never
+# reaches r/stocks. So when a query carries a FINANCE SIGNAL the topic route adds this small
 # curated finance set, after the place, immigration and career groups and before the machine
 # learning and academic groups (_topic_subreddits). Kept to 5: reddit is HOST-bound (one Arctic
 # host, see _FANOUT_WORKERS) so fan-out width is the cost, and these 5 are the highest-signal
@@ -975,8 +975,7 @@ def _image_media(payload: dict) -> list[str]:
 # Self-heals: the breaker closes after its window and the first real response resets the count. The
 # count follows the guard's one rule (_guard.counts_against_upstream, see _arctic_outcome): a 404 / 410
 # / 400 or a 422 that is not the slow-down refusal is Arctic answering, not counted; a 429, a 5xx, a
-# timeout, the slow-down 422 and the soft throttle (200 with an ``error``) are. Until
-# 2026-11-07 this was a count and cooldown of this module's own, which counted every failure.
+# timeout, the slow-down 422 and the soft throttle (200 with an ``error``) are.
 #
 # The guard's permits are also the global in-flight cap on Arctic egress. Arctic is HOST-bound (ONE
 # mirror host) and 429s when hit too hard. A single search's 23-sub fan-out is already bounded to
@@ -1003,8 +1002,8 @@ _arctic_sema = _arctic_guard.sema
 # 400, is an answer: not retried (_guard.answered) and not counted by the breaker.
 # http.get_json returns None for every non-2xx, so the status and body are read from the
 # failure record the http layer writes through diag.note, captured privately around each request.
-# Until 2026-10-04 (spec 5) that record carried NO body: http read the error body of a streamed
-# response that was never read and got nothing. http now keeps a bounded copy of the error body, so
+# http keeps a bounded copy of the error body (reading the error body of a streamed response that
+# was never read gets nothing), so
 # the refusal is read from what Arctic actually said. A 422 whose body still could not be read is
 # read as the refusal too, as the fallback: every 422 Arctic has sent us so far (the 2026-10-04 live
 # checks and manual probes, the 2026-06-25 comment endpoint probe) carried the slow-down body. Messages
@@ -1114,7 +1113,7 @@ def _arctic_open_s() -> float:
 # 200 and another sub refused that way, the refusal is about that sub, not about our load: the
 # sub goes on this list for a day, the refusal is taken back out of the breaker's count, and the
 # list's subs are searched through the browser instead. A round in which nothing answered 200 is
-# the far end throttling us, and counts toward the breaker as before.
+# the far end throttling us, and counts toward the breaker.
 _UNSEARCHABLE_TTL = 86400
 
 
@@ -1193,7 +1192,7 @@ def _arctic_get(path: str, params: dict, **kwargs) -> Optional[list]:
 
 
 async def _aarctic_get(path: str, params: dict, *, retries: int = 1, timeout: int = 20,
-                       outcome: Optional[list] = None) -> Optional[list]:
+                       outcome: Optional[list] = None, through_open: bool = False) -> Optional[list]:
     """GET an Arctic Shift endpoint → its ``data`` list (or None on failure).
 
     The mirror throttles the per-sub fan-out under burst load TWO ways, both transient:
@@ -1208,8 +1207,14 @@ async def _aarctic_get(path: str, params: dict, *, retries: int = 1, timeout: in
     The global in-flight cap is ``_arctic_sema`` (the guard's permits); ``bounded_async_slot`` takes it
     inside this coroutine, in the gate's one line on the loop (no thread waits), with the request
     timeout as the finite queue budget, so no cancellation can separate the acquire from the release.
+
+    ``through_open`` sends the request while the breaker is open (one try, no retry: _arctic_again
+    stops on an open breaker). Only the reddit-wide /posts/ids read uses it: what opens the breaker is
+    the title-search fan-out (its slow-down 422s), and the id lookup keeps answering while the search
+    sheds load (probed 2026-07-11); on 11-18 the routed fan-out opened the breaker first and the 20 post
+    ids the web search had found were never read.
     """
-    if _arctic_guard.is_open():
+    if _arctic_guard.is_open() and not through_open:
         return None  # breaker open: skip the throttled mirror entirely (instant, silent, no retry)
     if cache.cache_only():
         return None  # no egress, so no retry sleep and nothing for the breaker (see _cache_only_skip)
@@ -1245,13 +1250,12 @@ async def _aarctic_get(path: str, params: dict, *, retries: int = 1, timeout: in
 # www.reddit.com/search.json returns HTTP 200 relevance-ranked results. ONE call does a
 # relevance-ranked search, and it fires ONLY on an arctic miss, so a healthy mirror never pays the
 # browser cost.
-# Scoped to the resolved subreddits since 2026-10-04: the global search ignored them, even an explicit
+# Scoped to the resolved subreddits: the global search ignored them, even an explicit
 # `subreddit:PhD`, and a PhD-advisor query came back with r/AITAH and r/BestofRedditorUpdates. With a
 # sub list it is reddit's multireddit search (/r/A+B/search.json?restrict_sr=1), still ONE request.
-# Until 2026-11-09 the tab opened reddit's home page (wait_until="commit") and ran a fetch() in it;
-# the home page went on to navigate, which destroyed the execution context under page.evaluate
-# ("Execution context was destroyed, most likely because of a navigation"), and that failure, a
-# non-200 and a non-JSON wall page all came back as [] and were reported as "nothing found". Now
+# A fetch() run in reddit's home page (wait_until="commit") dies when the home page goes on to
+# navigate ("Execution context was destroyed, most likely because of a navigation"), and that
+# failure, a non-200 and a non-JSON wall page would all read as "nothing found". So
 # the tab loads the search JSON itself and reads that navigation's own response (Chrome's network,
 # TLS and cookies, no page script involved), and the outcome says whether reddit answered.
 _REDDIT_WEB = "https://www.reddit.com"
@@ -1450,7 +1454,7 @@ class RedditAdapter(SourceBase):
         if not ids:
             _note_sitewide_empty(sent, len(hits), ids)
             return []
-        items = await _aarctic_get("/posts/ids", {"ids": ",".join(ids)})
+        items = await _aarctic_get("/posts/ids", {"ids": ",".join(ids)}, through_open=True)
         if items is None:
             _note_sitewide_arctic_failed(ids)
             return []
@@ -1463,7 +1467,7 @@ class RedditAdapter(SourceBase):
         return docs
 
     async def asearch(self, query: str, limit: int = 10) -> list[Document]:
-        """Native-async replacement of the deleted sync ``search`` (11-04, this is the only one now) (reddit's Arctic submission fan-out goes native async), so
+        """Native-async ``search`` (reddit's Arctic submission fan-out goes native async), so
         the live async omniseek_search path awaits it DIRECTLY instead of parking a pool thread on the whole
         fan-out. It mirrors ``search`` step-for-step; only the BLOCKING work moves:
           • the disk cache read/write → ``anyio.to_thread.run_sync`` (get_docs / set_docs do file IO);
@@ -1516,10 +1520,11 @@ class RedditAdapter(SourceBase):
             per_sub = min(max(limit, 1), 100)
             blocked = await anyio.to_thread.run_sync(_arctic_unsearchable, subreddits, limiter=portal.IO_LANE)  # cache IO OFF loop
 
-            async def _aone_round(tq: str) -> list[dict]:
+            async def _aone_round(tq: str) -> Optional[list[dict]]:
+                """The round's hits; None when every sub is on the cannot-search list (nothing sent)."""
                 targets = [s for s in subreddits if s.lower() not in blocked]
                 if not targets:
-                    return None  # a failure: not cached
+                    return None
                 events: list[tuple[str, str]] = []
                 # Bound the per-round fan-out WIDTH to _FANOUT_WORKERS, mirroring the sync
                 # ThreadPoolExecutor(max_workers=min(len(subreddits), _FANOUT_WORKERS)). This is the fan-out
@@ -1567,7 +1572,10 @@ class RedditAdapter(SourceBase):
             sent = q
             for tq in _search_tiers(q, subreddits):
                 sent = tq
-                merged = _on_topic(await _aone_round(tq), topic)
+                got = await _aone_round(tq)
+                if got is None:  # every sub is on the cannot-search list: the browser search below takes them
+                    break
+                merged = _on_topic(got, topic)
                 if merged:
                     break
 
@@ -1786,8 +1794,7 @@ class RedditAdapter(SourceBase):
             return False, "Arctic Shift returned 0 items for the r/PhD title=advisor probe (data path degraded)"
         if _arctic_refused(captures):
             # The far end refused the probe under load, the same verdict as a 429: it answered, but
-            # not whether the mirror serves, so it is not verified (None; until 2026-10-04 this read
-            # False). Arctic's message is quoted only when the http layer kept the body.
+            # not whether the mirror serves, so it is not verified (None). Arctic's message is quoted only when the http layer kept the body.
             words = _arctic_refusal_words(_arctic_observed_message(captures))
             return None, (f"not verified: rate-limited (Arctic Shift: {words}; the far end's load-based "
                           "rate limit refused the probe; not retried)")

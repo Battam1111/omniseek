@@ -95,7 +95,7 @@ class CIHRGrantsAdapter(BulkFundingBase):
         return inv[0]["url"] if inv else None
 
     async def _abuild_subset_docs(self) -> list[Document]:
-        """Async replacement of the deleted sync ``_build_subset_docs`` (11-04, this is the only one now) ONLY the two egresses change: the package_show resolve
+        """Async ``_build_subset_docs`` ONLY the two egresses change: the package_show resolve
         rides http.aget_json, and the binary XLSX fetch rides the module-level uncapped AsyncClient
         (same UA + timeout + follow_redirects as the sync raw httpx.get). The openpyxl parse + row map
         + relevance filter is pure CPU, kept ON the loop byte-identical to the sync path."""

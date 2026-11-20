@@ -3,7 +3,7 @@
 ModelScope is Alibaba's model/dataset hub: the China-side analog of HuggingFace Hub, indexing
 the Chinese AI ecosystem (Qwen, iic/FunASR, DeepSeek mirrors, Chinese-language models) that HF
 does NOT surface. OmniSeek's models-STRUCTURE reinforcement: a second, disjoint model hub so
-the "what models exist + adoption" facet no longer rests on huggingface_hub alone, with a
+the "what models exist + adoption" facet does not rest on huggingface_hub alone, with a
 distinct China-AI cut (bilingual task taxonomy, download counts on the China side).
 
 Access via the public Hub API (no token for read):
@@ -47,7 +47,7 @@ class ModelScopeAdapter(BaseScrapeAdapter):
                      "broad-fan-out fodder")
 
     async def _araw_fetch(self, query: str, limit: int) -> Optional[Any]:
-        """Async replacement of the deleted sync ``_raw_fetch`` (11-04, this is the only one now): byte-faithful mirror -- same PUT, same body, same timeout;
+        """Async ``_raw_fetch``: byte-faithful mirror -- same PUT, same body, same timeout;
         only the shared-http egress swaps to its async twin (the deleted sync http.put_json -> await http.aput_json)."""
         body: dict[str, Any] = {
             "PageNumber": 1,
