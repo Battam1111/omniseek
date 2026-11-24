@@ -29,7 +29,7 @@ dependencies = [
     # so an unpinned FRESH install resolves 2.x and the server dies at import. Local venvs never
     # see it (already installed); only a stranger's first build does, which is what CI's docker
     # boot job exists to catch, and did.
-    "mcp[cli]>=1.0.0,<2",
+    "mcp[cli]>=1.0.0,<3",
     # Recent anyio releases no longer depend on sniffio, so a fresh resolve leaves it out, while
     # parts of the async stack (httpcore, httpx, dnspython) still import it to detect the event
     # loop. Declared explicitly so every install has it.
