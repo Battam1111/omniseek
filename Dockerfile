@@ -4,7 +4,7 @@
 # the tag: it is what the tag python:3.12.16-slim-bookworm pointed to on 2026-11-11 (Docker Hub's tag
 # API). An unpinned slim tag once moved under the build (2026-11-11: the new base lacked libatomic and
 # playwright's node would not start).
-FROM python:3.12.16-slim-bookworm@sha256:935c3c5b12357a7e10caa9c1e6ca5692344d97cf229832ef584be2cec9fc03df
+FROM python:3.15.1-slim-bookworm@sha256:575f8bc12ec26542e0678bc6b60e385218248019d433157ec327264a78c3a853
 
 ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
